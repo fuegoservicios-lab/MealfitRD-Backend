@@ -16,6 +16,7 @@ from llm_provider import (
     ChatDeepSeek as _ChatDeepSeekBase,
     DEEPSEEK_FLASH,
     DEEPSEEK_PRO,
+    GLM_FLASH,
     PAID_TIERS,
     get_user_tier,
 )
@@ -5286,6 +5287,49 @@ DAYGEN_EASY_MODEL = _env_str("MEALFIT_DAYGEN_EASY_MODEL", _FLASH_LITE_DEFAULT) o
 # degradado es peor UX que un plan PRO bien generado).
 BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 
+# [P1-GLM-CASCADE · 2026-06-29] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO: intenta primero
+# glm-4.7-flash (Zhipu, ~gratis) y, SOLO si falla (error/timeout/CB-open/quota 429), cae a deepseek-v4-flash y luego a
+# deepseek-v4-pro (última instancia). Cada fallo avanza al siguiente modelo (vía los 3 reintentos de tenacity del day-gen).
+# Bariátrico → directo a deepseek-v4-pro (perfil clínico más difícil; sin glm/flash). El revisor médico/fact-checker NO usan
+# la cascada (siguen en pro — son la red de seguridad). Default ON; rollback sin redeploy: MEALFIT_GLM_DAYGEN=false → la
+# cascada arranca en deepseek-v4-flash (comportamiento previo). Los IDs son overrideables por knob (P3-PREVIEW-MODEL-KNOB).
+GLM_DAYGEN_ENABLED = _env_bool("MEALFIT_GLM_DAYGEN", True)
+GLM_DAYGEN_MODEL = _env_str("MEALFIT_GLM_DAYGEN_MODEL", GLM_FLASH) or GLM_FLASH
+
+
+def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None) -> list:
+    """[P1-GLM-CASCADE · 2026-06-29] Devuelve la CADENA de modelos a intentar en orden para generar UN día, por COSTO
+    creciente: [glm-4.7-flash, deepseek-v4-flash, deepseek-v4-pro]. El day-gen avanza al siguiente en cada fallo (cada
+    reintento de tenacity) o si el CB del modelo actual está abierto. Garantías:
+      - BARIÁTRICO → [deepseek-v4-pro] (chain de 1; perfil clínico más difícil, sin capas baratas). Reusa
+        _is_bariatric_condition + BARIATRIC_DAYGEN_PRO (simetría con P1-BARIATRIC-DAYGEN-PRO).
+      - Skeleton-fidelity rejection en retry (P4-MODEL-1) → arranca directo en deepseek-v4-pro.
+      - GLM off / no configurado → arranca en deepseek-v4-flash.
+    Dedup preservando orden (en prod _FLASH_MODEL_NAME puede == PRO). La cadena SIEMPRE termina en deepseek-v4-pro (calidad
+    garantizada como última instancia; el revisor médico re-gatea cada intento)."""
+    # Bariátrico: directo a PRO (sin capas baratas).
+    if BARIATRIC_DAYGEN_PRO:
+        try:
+            if _is_bariatric_condition(form_data):
+                return [_PRO_MODEL_NAME]
+        except Exception:
+            pass
+    # Retry por skeleton-fidelity → PRO directo (el LLM débil ya falló la fidelidad).
+    if attempt > 1 and DAY_GEN_RETRY_USE_PRO and _is_skeleton_fidelity_rejection(prev_rejection_reasons):
+        return [_PRO_MODEL_NAME]
+    chain = []
+    if GLM_DAYGEN_ENABLED:
+        chain.append(GLM_DAYGEN_MODEL)               # glm-4.7-flash (barato)
+    chain.append(DEEPSEEK_FLASH)                      # deepseek-v4-flash (medio)
+    chain.append(_PRO_MODEL_NAME)                     # deepseek-v4-pro (última instancia)
+    # dedup preservando orden
+    _seen, _out = set(), []
+    for m in chain:
+        if m and m not in _seen:
+            _seen.add(m)
+            _out.append(m)
+    return _out
+
 
 def _route_model_for_day_generator(
     form_data: dict,
@@ -6393,44 +6437,35 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         else:
             prompt_text = dynamic_day_prompt + DAY_GENERATOR_SYSTEM_PROMPT
 
-        # [P4-MODEL-1] Usar router especializado del day generator que
-        # escala a Pro en retry cuando el rechazo previo fue skeleton
-        # fidelity. Para attempt #1 o causas no-skeleton, routing default
-        # (Flash si easy, Pro si clinical complex).
-        day_model = _route_model_for_day_generator(
+        # [P1-GLM-CASCADE · 2026-06-29] CADENA de modelos por costo: glm-4.7-flash → deepseek-v4-flash → deepseek-v4-pro
+        # (bariátrico → [deepseek-v4-pro]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
+        # el CB del modelo actual está abierto. Reusa el escalado skeleton-fidelity de P4-MODEL-1 dentro de _day_model_chain.
+        _day_chain = _day_model_chain(
             form_data,
             attempt,
             prev_rejection_reasons=state.get("rejection_reasons") or [],
         )
-        # P1-Q3: CB per-modelo. Cada día puede usar pro o flash según routing;
-        # la salud de cada modelo se rastrea independientemente.
-        _day_cb = _get_circuit_breaker(day_model)
+        _chain_state = {"idx": 0}  # avanza en cada fallo → siguiente modelo del chain
 
-        _day_llm_kwargs = dict(
-            model=day_model,
-            temperature=temp_override if temp_override is not None else (base_temp if attempt == 1 else (base_temp + 0.1)),
-            max_retries=0,
-            timeout=90,
-        )
-        if DAYGEN_JSON_MODE:
-            # [P1-DEEPSEEK-JSON-MODE · 2026-06-13] Fuerza salida JSON válida —
-            # sin esto DeepSeek emite prosa-reasoning y el parse falla.
-            _day_llm_kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
-        day_llm = ChatDeepSeek(**_day_llm_kwargs)
-
-        # Enlazar herramientas (Mejora 3)
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
-        # [P1-DEEPSEEK-JSON-MODE] JSON mode es incompatible con tool-calling
-        # streaming → no bindear tools cuando está activo. La tabla nutricional
-        # ya viaja en el SystemMessage cacheado, así que el modelo no la necesita.
-        if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
-            day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)
-        else:
-            # [L1-UNBIND-NUTRITION-TOOL] Tool des-enlazada: el modelo no puede
-            # invocar consultar_nutricion → cero rondas de tool (el loop rompe en
-            # iter 0 vía el `else: break`); la tabla pre-computada del SystemMessage
-            # es la fuente autoritativa. Sin tool schema en cada call.
-            day_llm_with_tools = day_llm
+
+        def _build_day_llm(_model: str):
+            """[P1-GLM-CASCADE] Construye el LLM (+tools/json) para UN modelo del chain. ChatDeepSeek rutea el provider
+            por prefijo (glm* → GLM, resto → DeepSeek). JSON mode incompatible con tool-calling → no bindea tools."""
+            _kw = dict(
+                model=_model,
+                temperature=temp_override if temp_override is not None else (base_temp if attempt == 1 else (base_temp + 0.1)),
+                max_retries=0,
+                timeout=90,
+            )
+            if DAYGEN_JSON_MODE:
+                # [P1-DEEPSEEK-JSON-MODE · 2026-06-13] Fuerza salida JSON válida (GLM y DeepSeek lo soportan).
+                _kw["model_kwargs"] = {"response_format": {"type": "json_object"}}
+            _llm = ChatDeepSeek(**_kw)
+            if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
+                return _llm.bind_tools(NUTRITION_TOOLS)
+            # [L1-UNBIND-NUTRITION-TOOL] tool des-enlazada (la tabla viaja en el SystemMessage cacheado).
+            return _llm
 
         # [P1-PROMPT-CACHE-STAGGER · 2026-05-16] System instruction
         # pre-computado a nivel módulo (`_DAY_SYSTEM_INSTRUCTION_CACHED` /
@@ -6461,8 +6496,23 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             before_sleep=lambda rs: logger.warning(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
         )
         async def invoke_day():
+            # [P1-GLM-CASCADE] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
+            # el CB de ese modelo está abierto, salta al siguiente del chain DENTRO de esta misma llamada. Construye el
+            # LLM (provider correcto por prefijo) para el modelo elegido.
+            _idx = min(_chain_state["idx"], len(_day_chain) - 1)
+            day_model = _day_chain[_idx]
+            _day_cb = _get_circuit_breaker(day_model)
+            while not await _day_cb.acan_proceed() and _idx < len(_day_chain) - 1:
+                _idx += 1
+                day_model = _day_chain[_idx]
+                _day_cb = _get_circuit_breaker(day_model)
+            _chain_state["idx"] = _idx
             if not await _day_cb.acan_proceed():
-                raise Exception(f"Circuit Breaker OPEN para {day_model} - LLM cascade failure prevented")
+                raise Exception(f"Circuit Breaker OPEN para todo el chain {_day_chain} - LLM cascade failure prevented")
+            day_llm_with_tools = _build_day_llm(day_model)
+            if _idx > 0:
+                logger.info(f"🔻 [P1-GLM-CASCADE] DÍA {day_num}: cascada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
+                            f"tras fallo del anterior.")
             try:
                 # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] SystemMessage al
                 # inicio cuando el knob está habilitado — Gemini lo trata
@@ -6563,6 +6613,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # [P1-ORCH-1/2 · 2026-05-28] Helper centralizado: excluye 5xx
                 # transitorios + 429 spending-cap (y activa el latch del cap).
                 await _record_cb_failure_unless_transient(_day_cb, e)  # P1-Q3
+                # [P1-GLM-CASCADE] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
+                # deepseek-v4-flash y luego deepseek-v4-pro (cascada por costo: barato primero, pro como última instancia).
+                _chain_state["idx"] = _idx + 1
                 raise e
 
         day_result = await invoke_day()
