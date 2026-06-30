@@ -85,5 +85,7 @@ def test_p1_6_raw_staple_is_separate_from_low_quality_gate():
     assert rep["low_quality_ratio"] == 0.0
     assert rep["raw_staple_meals"] == 1, "pero SÍ es un staple sin transformar"
     assert rep["raw_staple_ratio"] == 1.0
-    # el soft-gate de dish-quality sigue OFF (la heurística es advisory, A/B-pending para promover a gate)
+    # el soft-gate de dish-quality sigue OFF (A/B-pending); aun encendido usaría SOLO low_quality_ratio, NUNCA
+    # raw_staple → "Arroz Blanco" con receta real nunca dispararía el gate (cero falso positivo).
     assert g.DISH_QUALITY_SOFT_GATE_ENABLED is False
+    assert rep["low_quality_ratio"] == 0.0  # raw-staple NO entra al signal del gate

@@ -61,6 +61,8 @@ def test_wired_in_persist_boundary_and_assemble():
 
 # ───────────────────────── P2-7 ─────────────────────────
 def test_dish_quality_soft_gate_off_by_default():
+    # Default OFF (A/B-pending): encenderlo cambia review_plan_node para cualquier receta no-sustantiva (blast
+    # radius amplio). Los disparates conocidos los cubren los fixes deterministas + el prompt P1-DISH-PALATABILITY.
     assert g.DISH_QUALITY_SOFT_GATE_ENABLED is False
     assert 0.1 <= g.DISH_QUALITY_REJECT_RATIO <= 1.0
 

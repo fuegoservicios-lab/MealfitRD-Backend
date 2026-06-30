@@ -62,3 +62,35 @@ def test_palatability_guard_in_prompt():
     assert "p1-dish-palatability" in low
     assert "disparate" in low
     assert "salteado salado" in low or "avena con guisantes" in low
+
+
+# ───────────────────────── P1-CLOSER-NO-DUP-CHEESE (#1) ─────────────────────────
+def test_closer_no_dup_cheese_wired():
+    assert g.CLOSER_NO_DUP_PROTEIN is True
+    assert hasattr(g, "_CLOSER_CHEESE_HINT") and "ricotta" in g._CLOSER_CHEESE_HINT and "cottage" in g._CLOSER_CHEESE_HINT
+    assert "P1-CLOSER-NO-DUP-CHEESE" in _GRAPH
+    # el guard prefiere un alt no-queso de la categoría del slot
+    assert "_pref2 = _DAIRY_EGG_PROTEIN_HINT if light else _MEAT_PROTEIN_HINT" in _GRAPH
+
+
+# ───────────────────────── P1-RECIPE-OFFCATALOG-CONDIMENT strip (#2a) ─────────────────────────
+def test_offcatalog_condiment_stripped_from_recipe_text():
+    assert g.RECIPE_OFFCATALOG_STRIP_ENABLED is True
+    meal = {"name": "Salteado de Guisantes y Avena",
+            "ingredients": ["100 g de Guisantes", "20 g de Avena", "Sal al gusto"],  # salsa de soya NO está
+            "recipe": ["Mise en place: pica la cebolla.",
+                       "El Toque de Fuego: saltea los guisantes y la avena. Añade la salsa de soya, sal y pimienta y saltea 1 minuto."]}
+    n = g._strip_offcatalog_condiments_from_recipe(meal)
+    assert n == 1, "debe limpiar el paso con salsa de soya"
+    joined = " ".join(meal["recipe"]).lower()
+    assert "salsa de soya" not in joined, "la salsa de soya off-catálogo debe salir del texto"
+    assert "sal y pimienta" in joined, "el resto del paso (sal, pimienta) se preserva"
+    # idempotente
+    assert g._strip_offcatalog_condiments_from_recipe(meal) == 0
+
+
+def test_offcatalog_strip_noop_when_in_ingredients():
+    # si el ingrediente SÍ está listado (caso hipotético), NO se borra del texto
+    meal = {"name": "X", "ingredients": ["10 ml de Salsa de soya"],
+            "recipe": ["El Toque de Fuego: añade la salsa de soya."]}
+    assert g._strip_offcatalog_condiments_from_recipe(meal) == 0

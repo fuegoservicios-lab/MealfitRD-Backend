@@ -9438,6 +9438,10 @@ DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", Tru
 # SUAVE: si la fracción de platos placeholder/crudos supera el umbral, rechaza para retry (degrada a advisory en
 # el intento final, nunca cero-plan). Default OFF (opt-in) — el lever upstream (prompt+catálogo) ya da 0% fallback
 # en el happy-path; activar tras A/B para no inundar de retries. Umbral 0.34 = ≥1/3 de los platos genuinamente pobres.
+# [P2-DISH-QUALITY-GATE · 2026-06-29] Gate suave de placeholder/crudo. Default OFF (A/B-pending): encenderlo cambia
+# review_plan_node para CUALQUIER plan con receta no-sustantiva (blast radius amplio; en prod los backstops lo evitan,
+# pero requiere validar la tasa de fallback con A/B antes del flip). Los disparates conocidos (avena salada, proteína
+# bolt-on) ya los cubren los fixes deterministas P1-CLOSER-NO-DUP-CHEESE + el prompt P1-DISH-PALATABILITY.
 DISH_QUALITY_SOFT_GATE_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_SOFT_GATE", False)
 DISH_QUALITY_REJECT_RATIO = max(0.1, min(1.0, _env_float("MEALFIT_DISH_QUALITY_REJECT_RATIO", 0.34)))
 
@@ -11729,6 +11733,13 @@ _LIGHT_MEAL_HINT = ("desayuno", "merienda", "avena", "batido", "smoothie", "licu
                     "tostada", "yogur", "fruta", "panqueque", "omelet", "tortilla", "revoltillo",
                     "cereal", "granola", "bowl", "snack")
 _DAIRY_EGG_PROTEIN_HINT = ("huevo", "clara", "yogur", "yogurt", "queso", "ricotta", "whey", "proteina", "proteína")
+# [P1-CLOSER-NO-DUP-CHEESE · 2026-06-30] (audit recetas en vivo, R4) Tokens de QUESO: si el plato ya tiene un queso y
+# el closer iba a pegar OTRO queso (cottage sobre ricotta = 2º queso incoherente), prefiere un candidato NO-queso de
+# la MISMA categoría del slot (ligero→lácteo/huevo no-queso; principal→carne). Sin alternativa → mantiene el queso (no
+# sacrifica el piso de proteína). Default ON; rollback: MEALFIT_CLOSER_NO_DUP_PROTEIN=false. tooltip-anchor: P1-CLOSER-NO-DUP-CHEESE
+_CLOSER_CHEESE_HINT = ("queso", "ricotta", "mozzarella", "cottage", "cheddar", "parmesano", "gouda", "requeson",
+                       "requesón", "feta", "cheese", "freir", "freír")
+CLOSER_NO_DUP_PROTEIN = _env_bool("MEALFIT_CLOSER_NO_DUP_PROTEIN", True)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Palabras GENÉRICAS de proteína que NO sirven para congruencia (las comparten
 # varios alimentos → "queso" matchea ricotta Y mozzarella). La congruencia exige un token ESPECÍFICO fuera de esta lista.
 _CLOSER_GENERIC_PROTEIN_WORDS = frozenset((
@@ -12217,6 +12228,22 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                     break
         if chosen is None:
             chosen = _pool[0][0]  # la más magra (candidates ya viene ordenado)
+        # [P1-CLOSER-NO-DUP-CHEESE · 2026-06-30] Evita el 2º queso: si el plato YA tiene queso y `chosen` es OTRO
+        # queso, prefiere un candidato NO-queso de la categoría apropiada al slot (ligero→lácteo/huevo; principal→
+        # carne) → respeta la coherencia de slot (no mete carne en una merienda). Si no hay alternativa → mantiene
+        # `chosen` (no sacrifica el piso de proteína). tooltip-anchor: P1-CLOSER-NO-DUP-CHEESE
+        if CLOSER_NO_DUP_PROTEIN and chosen is not None:
+            _ch_low = _sa(str(chosen.name).lower())
+            if any(h in _ch_low for h in _CLOSER_CHEESE_HINT) and any(h in meal_text for h in _CLOSER_CHEESE_HINT):
+                _pref2 = _DAIRY_EGG_PROTEIN_HINT if light else _MEAT_PROTEIN_HINT
+                _alt = next((info for (info, nlow) in _pool
+                             if any(h in nlow for h in _pref2)
+                             and not any(h in nlow for h in _CLOSER_CHEESE_HINT)
+                             and float(getattr(info, "protein", 0) or 0) >= 12), None)
+                if _alt is not None and _sa(str(_alt.name).lower()) != _ch_low:
+                    logger.info(f"🧀 [P1-CLOSER-NO-DUP-CHEESE] plato ya tiene queso → uso '{_alt.name}' en vez de un "
+                                f"2º queso ('{chosen.name}') | meal={str(meal.get('name'))[:30]}")
+                    chosen = _alt
         gap = target - cur_p
         grams = int(round(gap / (chosen.protein / 100.0)))
         grams = min(grams, max_add_g)
@@ -13206,6 +13233,73 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         return len(missing)
     except Exception as _rc_e:
         logger.warning(f"[P2-RECIPE-REVERSE-COHERENCE] falló (no bloquea): {type(_rc_e).__name__}: {_rc_e}")
+        return 0
+
+
+# [P1-RECIPE-OFFCATALOG-CONDIMENT · 2026-06-30] (audit recetas en vivo, R5) Condimentos-salsa OFF-catálogo que el LLM
+# nombra en los pasos pero que el verified-only BORRA de la lista de compras → quedan en el texto pero el usuario no
+# los compró (receta rota: "añade la salsa de soya"). Lista curada de SALSAS sustantivas (no especias 'al gusto'). El
+# backstop determinista las quita del texto del paso cuando NO están en `ingredients`. tooltip-anchor: P1-RECIPE-OFFCATALOG-CONDIMENT
+_OFFCATALOG_CONDIMENT_PHRASES = (
+    "salsa de soya", "salsa de soja", "salsa inglesa", "salsa worcestershire", "worcestershire",
+    "salsa de pescado", "salsa teriyaki", "teriyaki", "salsa bbq", "salsa barbacoa", "salsa de ostras",
+    "salsa hoisin", "salsa sriracha", "sriracha", "salsa de pescado",
+)
+RECIPE_OFFCATALOG_STRIP_ENABLED = _env_bool("MEALFIT_RECIPE_OFFCATALOG_STRIP", True)
+
+
+def _strip_offcatalog_condiments_from_recipe(meal: dict) -> int:
+    """[P1-RECIPE-OFFCATALOG-CONDIMENT · 2026-06-30] Quita del TEXTO de la receta las salsas off-catálogo (curadas)
+    que NO están en `ingredients` → el paso deja de pedir algo que el usuario no compró. CONSERVADOR: solo la lista
+    curada de SALSAS; limpia artefactos de puntuación. Idempotente, fail-safe. Gated por RECIPE_OFFCATALOG_STRIP_ENABLED.
+    Muta meal. Retorna nº de pasos modificados. tooltip-anchor: P1-RECIPE-OFFCATALOG-CONDIMENT"""
+    if not RECIPE_OFFCATALOG_STRIP_ENABLED or not isinstance(meal, dict):
+        return 0
+    try:
+        import re as _re3
+        from constants import strip_accents as _sa
+        recipe = meal.get("recipe")
+        steps = list(recipe) if isinstance(recipe, list) else ([recipe] if isinstance(recipe, str) and recipe else [])
+        if not steps:
+            return 0
+        ings_low = _sa(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
+        # solo actuar sobre salsas que NO estén en ingredients (si el LLM la listó, no la borramos del texto)
+        targets = [ph for ph in _OFFCATALOG_CONDIMENT_PHRASES if ph not in ings_low]
+        if not targets:
+            return 0
+        changed = 0
+        out = []
+        for step in steps:
+            if not isinstance(step, str):
+                out.append(step)
+                continue
+            s = step
+            for ph in targets:
+                if _sa(s.lower()).find(ph) < 0:
+                    continue
+                # quita "(la|el|de|con|un|una) <frase>" y luego la frase suelta (case/acento-insensible aprox.)
+                s = _re3.sub(r"(?i)\b(?:la|el|de|con|un|una)\s+" + _re3.escape(ph), "", s)
+                s = _re3.sub(r"(?i)" + _re3.escape(ph), "", s)
+            if s != step:
+                # limpieza de artefactos de puntuación tras quitar la frase
+                s = _re3.sub(r"\s*,\s*,", ",", s)
+                s = _re3.sub(r"\s*,\s*y\s+", " y ", s)
+                s = _re3.sub(r"\s{2,}", " ", s)
+                s = _re3.sub(r"\s+([,.;])", r"\1", s)
+                s = _re3.sub(r"(?i)\b(añade|agrega|incorpora|vierte|sazona con)\s*,", r"\1", s)
+                s = _re3.sub(r"(?i)\b(añade|agrega|incorpora|vierte)\s+y\b", r"\1", s)
+                s = s.strip().strip(",").strip()
+                out.append(s)
+                changed += 1
+            else:
+                out.append(step)
+        if changed:
+            meal["recipe"] = out if isinstance(recipe, list) else (out[0] if out else "")
+            logger.info(f"🧂 [P1-RECIPE-OFFCATALOG-CONDIMENT] {changed} paso(s) sin salsa off-catálogo | "
+                        f"meal={str(meal.get('name'))[:40]}")
+        return changed
+    except Exception as _oc_e:
+        logger.warning(f"[P1-RECIPE-OFFCATALOG-CONDIMENT] strip falló (no bloquea): {type(_oc_e).__name__}: {_oc_e}")
         return 0
 
 
@@ -15428,6 +15522,12 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             total += _ensure_ingredients_used_in_recipe(meal)
         except Exception as _erc:
             logger.warning(f"[P2-RECIPE-REVERSE-COHERENCE] guard en finalizador de update no-op: {type(_erc).__name__}: {_erc}")
+        # [P1-RECIPE-OFFCATALOG-CONDIMENT · 2026-06-30] quita salsas off-catálogo del texto de la receta (que la lista
+        # de compras borró) → el paso no pide algo que el usuario no compró.
+        try:
+            total += _strip_offcatalog_condiments_from_recipe(meal)
+        except Exception as _eoc:
+            logger.warning(f"[P1-RECIPE-OFFCATALOG-CONDIMENT] strip en finalizador de update no-op: {type(_eoc).__name__}: {_eoc}")
         # [P2-APPET-UPD-SANITY · 2026-06-29] (re-audit objetivo · P2 APPET-UPD-SANITY-2) El autofix de artefactos
         # de generación (dropea almidón/huevo INCONGRUENTE en un batido + nombres GLITCHEADOS/irresolubles) corría
         # SOLO en form-gen assemble; un swap/modify/regen podía persistir el mismo artefacto (recipe↔lista divergente).
@@ -17158,6 +17258,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 logger.info(f"⚖️ [P2-QTY-PRESENCE-GUARD] {_qg} ingrediente(s) sin cantidad → porción default (pre-engine).")
         except Exception as _qge:
             logger.warning(f"[P2-QTY-PRESENCE-GUARD] callsite en assemble no-op: {type(_qge).__name__}: {_qge}")
+
+    # [P1-RECIPE-OFFCATALOG-CONDIMENT · 2026-06-30] (audit recetas en vivo) Quita salsas off-catálogo del texto de la
+    # receta (salsa de soya/inglesa/etc.) que el verified-only borra de la lista → el paso no pide algo no comprado.
+    if RECIPE_OFFCATALOG_STRIP_ENABLED:
+        try:
+            _oc = sum(_strip_offcatalog_condiments_from_recipe(_m)
+                      for _d in days for _m in (_d.get("meals") or []) if isinstance(_m, dict))
+            if _oc:
+                logger.info(f"🧂 [P1-RECIPE-OFFCATALOG-CONDIMENT] {_oc} paso(s) sin salsa off-catálogo (assemble).")
+        except Exception as _oce:
+            logger.warning(f"[P1-RECIPE-OFFCATALOG-CONDIMENT] callsite en assemble no-op: {type(_oce).__name__}: {_oce}")
 
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
 

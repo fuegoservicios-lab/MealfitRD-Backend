@@ -61,6 +61,9 @@ _FORM = {"mainGoal": "gain_muscle"}
 
 def test_backstop_sustituye_fallback_cuando_bajo_piso(monkeypatch):
     monkeypatch.setattr(go, "PROTEIN_FLOOR_FAILHARD_GATE", True)
+    # [stale-fix 2026-06-30] PROTEIN_FLOOR_DELIVER_DEGRADED (default ON desde 2026-06-26) supersede al FAILHARD
+    # entregando el plan ORIGINAL degradado; este test valida la ruta de SUSTITUCIÓN por fallback → aíslala.
+    monkeypatch.setattr(go, "PROTEIN_FLOOR_DELIVER_DEGRADED", False)
     state = {
         "review_passed": False,
         "_rejection_severity": "high",
