@@ -795,6 +795,35 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _vcc_e:
             logger.debug(f"[P2-VERIFIED-ONLY-UPDATE] verified catalog chat-modify falló (no bloquea): {_vcc_e}")
 
+    # [P2-CHATMODIFY-CROSS-DAY-VARIETY · 2026-06-29] (audit objetivo · P2-10) Paridad con regen-day (plans.py:5268)
+    # y form-gen (self_critique): chat-modify no sembraba variedad cross-día → un modify del día 3 podía repetir la
+    # proteína de los días 1/2 ("pollo en los 3 días"). Añade una directiva SOFT con las proteínas canónicas de los
+    # OTROS días; advisory (no exclusión dura) → honra el deseo explícito del usuario. Gated por el mismo knob que
+    # regen-day. tooltip-anchor: P2-CHATMODIFY-CROSS-DAY-VARIETY
+    if os.environ.get("MEALFIT_UPDATE_CROSS_DAY_VARIETY", "true").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            _PROT_CANON = {
+                "pollo": ("pollo", "pechuga", "muslo"), "cerdo": ("cerdo", "chuleta", "longaniza"),
+                "res": ("carne de res", "bistec", "molida", " res"), "pescado": ("pescado", "tilapia", "salmon", "mero", "bacalao", "filete"),
+                "pavo": ("pavo",), "camarones": ("camaron",), "atun": ("atun",), "huevo": ("huevo", "tortilla", "revoltillo"),
+                "legumbres": ("lenteja", "garbanzo", "habichuela"),
+            }
+            _avoid = set()
+            for _od in (plan_data.get("days") or []):
+                if not isinstance(_od, dict) or _od.get("day") == day_number:
+                    continue
+                for _om in (_od.get("meals") or []):
+                    _nm = " " + strip_accents(str((_om or {}).get("name", "")).lower())
+                    for _canon, _syns in _PROT_CANON.items():
+                        if any(_s in _nm for _s in _syns):
+                            _avoid.add(_canon)
+            if _avoid:
+                context_extras += ("\n- 🎲 VARIEDAD CROSS-DÍA (preferencia suave): el plan ya usa "
+                                   + ", ".join(sorted(_avoid)) + " en otros días — prefiere una proteína/base "
+                                   "DISTINTA salvo que el usuario la haya pedido explícitamente.")
+        except Exception as _xcd:
+            logger.debug(f"[P2-CHATMODIFY-CROSS-DAY-VARIETY] no-op: {type(_xcd).__name__}: {_xcd}")
+
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
@@ -1054,6 +1083,36 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     f"{type(_slot_exc).__name__}: {_slot_exc}"
                 )
 
+        # [P2-CHATMODIFY-CLASH-RETRY · 2026-06-29] (audit objetivo · P2-9) Paridad con swap (agent.py:1374): chat-
+        # modify trataba el pareo fruta-dulce+salado SOLO como advisory post-hoc (línea ~1240) → un 'Arroz con Mango'
+        # NO pedido se persistía. Ahora, si el plato modificado tiene el clash Y el usuario NO pidió la fruta en
+        # `changes`, presiona un retry (mismo counter acotado `_slot_attempt` → degrada al advisory existente en el
+        # intento final, nunca aborta). Honra el deseo explícito del usuario. tooltip-anchor: P2-CHATMODIFY-CLASH-RETRY
+        try:
+            from graph_orchestrator import (_meal_has_sweet_savory_clash as _clash_fn,
+                                            _SWEET_DOMINANT_FRUITS as _sweet_fruits,
+                                            UPDATE_APPETIBILITY_GUARD as _appet_guard)
+            if _appet_guard:
+                _meal_dump_c = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                if _clash_fn(_meal_dump_c):
+                    _ch_low = strip_accents(str(changes or "").lower())
+                    _user_wants_fruit = any(_fr in _ch_low for _fr in _sweet_fruits)
+                    if not _user_wants_fruit and _slot_attempt[0] < 3:
+                        logger.warning(
+                            f"🍓 [P2-CHATMODIFY-CLASH-RETRY] modify produjo pareo fruta+salado NO pedido → retry | "
+                            f"meal={str(_meal_dump_c.get('name'))[:40]} attempt={_slot_attempt[0]}"
+                        )
+                        current_prompt[0] = modify_prompt + (
+                            "\n\n🛑 COHERENCIA DE SABOR: el plato que devolviste combina una fruta dulce con una base "
+                            "salada (pareo chocante que el usuario NO pidió). Rehazlo SIN esa combinación — usa la "
+                            "fruta como merienda aparte o cámbiala por un acompañante salado coherente."
+                        )
+                        raise ValueError("SWEET_SAVORY_CLASH no pedido en modify")
+        except ValueError:
+            raise
+        except Exception as _clash_exc:
+            logger.warning(f"[P2-CHATMODIFY-CLASH-RETRY] clash-retry en modify falló (no aborta): {type(_clash_exc).__name__}: {_clash_exc}")
+
         return res
 
     try:
@@ -1248,10 +1307,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # macro ORIGINAL del plato (original_protein/carbs/fats, capturados arriba) → un modify no deja caer el
         # macro bajo el del plato previo. SKIP en pantry-strict (el closer AÑADE proteína = comida fuera de la
         # nevera) y en renal (cap KDIGO manda). El finalizer (abajo) re-cuantiza lo añadido. tooltip-anchor: P2-MACRO-UPD-1
+        # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] ambos knobs flipped OFF→ON (paridad con swap/regen-day): rebalance =
+        # re-escalador never-worse; protein-closer anclado al macro ORIGINAL del plato + skip pantry/renal. Rollback por env.
         _ps_macro = bool(clean_ingredients) and not allow_pantry_expansion
         _is_renal_macro = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
         if (not _ps_macro and not _is_renal_macro
-                and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+                and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "true").strip().lower() in ("1", "true", "yes", "on")
                 and (original_protein or original_carbs or original_fats)):
             try:
                 from graph_orchestrator import _rebalance_day_macros_to_target as _rb_m
@@ -1261,7 +1322,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             except Exception as _rbm_e:
                 logger.warning(f"[P2-MACRO-UPD-1] rebalance en modify falló (no bloquea): {type(_rbm_e).__name__}: {_rbm_e}")
         if (not _ps_macro and not _is_renal_macro
-                and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "false").strip().lower() in ("1", "true", "yes", "on")
+                and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "true").strip().lower() in ("1", "true", "yes", "on")
                 and original_protein and float(original_protein or 0) > 0
                 and float(new_meal_data.get("protein") or 0) < float(original_protein)):
             try:

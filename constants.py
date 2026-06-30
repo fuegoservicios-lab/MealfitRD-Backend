@@ -1584,9 +1584,16 @@ _SLOT_RICE_EXCLUDE = (
     # falso positivo de "arroz de noche". Reduce el ruido sin tocar el detector. tooltip-anchor: P2-SLOT-RICE-TANGENTIAL
     "toque de arroz", "crocante de arroz", "arroz inflado", "crujiente de arroz",
 )
+# [P2-SLOT-RICE-SYNONYMS · 2026-06-29] (audit objetivo · P2) El detector es name-based: un plato de arroz cuyo
+# NOMBRE no contiene el substring "arroz" (chofán/chaufa = arroz frito; paella/risotto/congrí/mamposteao = arroz
+# como base) se colaba como "arroz de noche" sin que el gate determinista lo cazara — solo el prompt (advisory)
+# lo desalentaba. SSOT compartido por desayuno (hard) y cena (soft). Tokens normalizados (sin acento, minúscula).
+# tooltip-anchor: P2-SLOT-RICE-SYNONYMS
+_SLOT_RICE_TOKENS = ("arroz", "locrio", "moro", "morito", "chofan", "chaufa", "paella",
+                     "congri", "mamposteao", "mampostea", "risotto")
 SLOT_INAPPROPRIATE_FOODS = {
     "desayuno": [
-        {"label": "arroz/locrio/moro", "tokens": ("arroz", "locrio", "moro", "morito"),
+        {"label": "arroz/locrio/moro", "tokens": _SLOT_RICE_TOKENS,
          "hardness": "hard", "exclude": _SLOT_RICE_EXCLUDE},
         {"label": "pasta/espaguetis/lasaña", "tokens": (
             "espagueti", "espaguetis", "macarron", "macarrones", "lasana", "coditos",
@@ -1596,7 +1603,7 @@ SLOT_INAPPROPRIATE_FOODS = {
             "sancocho", "asopao", "mondongo"), "hardness": "hard"},
     ],
     "cena": [
-        {"label": "arroz/locrio/moro (\"arroz de noche\")", "tokens": ("arroz", "locrio", "moro", "morito"),
+        {"label": "arroz/locrio/moro (\"arroz de noche\")", "tokens": _SLOT_RICE_TOKENS,
          "hardness": "soft", "exclude": _SLOT_RICE_EXCLUDE},
         # [P1-SLOT-CENA-PASTA-OK · 2026-06-27] La PASTA/espagueti SÍ va en la cena dominicana (carbo ligero de
         # digestión rápida; "cenar espaguetis" es común) → NO se bloquea de noche. Solo queda inapropiada en el

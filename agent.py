@@ -1553,11 +1553,13 @@ def swap_meal(form_data: dict):
     # que ACEPTA el drift sin re-escalar → la proteína se erosiona hacia el borde al cambiar varios
     # platos). regenerate-day lo hereda vía el loop de swap_meal (el ledger se decrementa con el meal YA
     # rebalanceado, sin desync). RIESGO PANTRY: escalar porciones puede exceder la Nevera → re-validamos
-    # pantry y REVERTIMOS si rompe. Default OFF (validar A/B con scripts/macro_sizing_replay antes de
-    # flip): MEALFIT_UPDATE_MACRO_REBALANCE=true. Fail-safe: error → deja el meal del LLM intacto.
+    # pantry y REVERTIMOS si rompe. [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] Default flipped OFF→ON: es un
+    # RE-ESCALADOR (no añade ingredientes; reverte si rompe pantry) = never-worse-than-current por construcción,
+    # espejo del MEALFIT_REGEN_DAY_MACRO_REBALANCE que ya era ON → cierra la asimetría de banda en updates.
+    # Rollback sin redeploy: MEALFIT_UPDATE_MACRO_REBALANCE=false. Fail-safe: error → deja el meal del LLM intacto.
     if (
         isinstance(_out, dict)
-        and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+        and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "true").strip().lower() in ("1", "true", "yes", "on")
         and (target_protein or target_carbs or target_fats)
     ):
         try:
@@ -1589,12 +1591,14 @@ def swap_meal(form_data: dict):
     # plato pasó el gate pero quedó bajo el target del slot, rellena la proteína al ~target con proteína de
     # alta densidad allergen-safe (reusa el closer determinista de S1, espejo del piso de proteína). RIESGO
     # PANTRY: el closer AÑADE un ingrediente → re-validamos la Nevera y REVERTIMOS si rompe (never-worse-
-    # than-current). Renal EXENTO (el trim renal manda — no subir proteína). Default OFF: misma cautela de
-    # portion/ingredient-scaling que P1-2; A/B con scripts/macro_sizing_replay antes de flip ON.
+    # than-current). Renal EXENTO (el trim renal manda — no subir proteína). [P1-OBJECTIVE-LEVERS-ON · 2026-06-29]
+    # Default flipped OFF→ON: es el MISMO closer determinista de S1 (validado en benchmark: proteína entregada
+    # 85%→98-103%); mueve la proteína HACIA el target del slot (no la aleja), con pantry-revert + skip renal →
+    # cierra la erosión de proteína en swaps repetidos. Rollback sin redeploy: MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER=false.
     # regenerate-day (S2, P2-3) lo hereda vía el loop de swap_meal. Fail-safe: error → deja el meal del LLM.
     if (
         isinstance(_out, dict)
-        and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "false").strip().lower() in ("1", "true", "yes", "on")
+        and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "true").strip().lower() in ("1", "true", "yes", "on")
         and target_protein and float(target_protein or 0) > 0
         and not _renal_capped
     ):

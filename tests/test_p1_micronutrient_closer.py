@@ -26,10 +26,12 @@ _GRAPH = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
 # ---------------------------------------------------------------------------
 # 1. Parser/estructura: knob OFF por default, mapping, wiring en assemble
 # ---------------------------------------------------------------------------
-def test_knob_off_by_default():
-    """El closer añade kcal → debe nacer OFF (opt-in tras A/B), igual que los closers de swap."""
+def test_knob_on_by_default():
+    """[P1-OBJECTIVE-LEVERS-ON · 2026-06-29] flipped OFF→ON: con el fix P1-MICRO-CLOSER-RAW-SYNC el closer
+    REFLEJA su efecto en el panel/lista/macros; riesgo de banda acotado (≤80 kcal/día compartido + UL + skip
+    renal + MACRO_REBALANCE re-apunta). Rollback: MEALFIT_MICRONUTRIENT_CLOSER=false."""
     assert hasattr(g, "MICRONUTRIENT_CLOSER_ENABLED")
-    assert g.MICRONUTRIENT_CLOSER_ENABLED is False, "el micro-closer debe estar OFF por default (A/B-pending)"
+    assert g.MICRONUTRIENT_CLOSER_ENABLED is True, "el micro-closer ahora es ON por default (P1-OBJECTIVE-LEVERS-ON)"
 
 
 def test_keys_and_mapping():

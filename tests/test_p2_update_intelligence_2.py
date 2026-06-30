@@ -55,10 +55,12 @@ def test_p2_1_food_safety_wired_in_swap_and_modify():
 
 
 # ── P2-2 / P2-3: closer de proteína per-meal (default OFF, A/B) ────────────────
-def test_p2_2_swap_protein_closer_wired_off_with_pantry_revert():
+def test_p2_2_swap_protein_closer_wired_on_with_pantry_revert():
     src = _func_src(AGENT, "swap_meal")
     assert "MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER" in src
-    assert re.search(r'MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER["\']\s*,\s*["\']false', src), "P2-2 default OFF (A/B con P1-2)"
+    # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] flipped OFF→ON: closer de S1 (proteína 85%→98-103%), anclado al
+    # target con pantry-revert + skip renal → mueve la proteína HACIA banda. Rollback: env=false.
+    assert re.search(r'MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER["\']\s*,\s*["\']true', src), "P2-2 ahora default ON (P1-OBJECTIVE-LEVERS-ON)"
     assert "_close_protein_gap_for_meal" in src, "debe reusar el closer determinista de S1"
     # re-validación pantry + revert (never-worse-than-current)
     assert "validate_ingredients_against_pantry" in src and "_snap_cl" in src

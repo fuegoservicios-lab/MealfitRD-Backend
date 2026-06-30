@@ -27,7 +27,9 @@ _PLANGEN = (_BACKEND / "prompts" / "plan_generator.py").read_text(encoding="utf-
 
 # ───────────────────────── knobs default-safe ─────────────────────────
 def test_new_knobs_default_off():
-    assert g.CARB_FLOOR_ENABLED is False, "MEALFIT_CARB_FLOOR debe nacer OFF (A/B-pending)"
+    # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] CARB_FLOOR flipped OFF→ON: solo dispara con carbos MUY bajo banda
+    # (reconcile saturado) → mueve carbos HACIA la banda + re-cuantiza. Rollback: MEALFIT_CARB_FLOOR=false.
+    assert g.CARB_FLOOR_ENABLED is True, "MEALFIT_CARB_FLOOR ahora ON por default (P1-OBJECTIVE-LEVERS-ON)"
     assert g.BAND_GATE_PER_MACRO is False, "MEALFIT_BAND_GATE_PER_MACRO debe nacer OFF (A/B-pending)"
     assert 0.0 <= g.BAND_GATE_PER_MACRO_THRESHOLD <= 1.0
     assert g.CARB_FLOOR_MAX_SCALE >= 1.8
@@ -99,7 +101,10 @@ class _CarbDB:
         return None
 
 
-def test_carb_floor_noop_when_disabled():
+def test_carb_floor_noop_when_disabled(monkeypatch):
+    # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] el knob ahora es ON por default → para probar el path noop hay que
+    # apagarlo explícitamente (rollback sin redeploy: MEALFIT_CARB_FLOOR=false).
+    monkeypatch.setattr(g, "CARB_FLOOR_ENABLED", False)
     meals = [{"name": "Arroz", "ingredients": ["100g Arroz"], "carbs": 28, "cals": 130, "protein": 2, "fats": 0}]
     assert g._close_carb_gap_for_day(meals, 60.0, 500.0, _CarbDB()) is False  # knob OFF
 

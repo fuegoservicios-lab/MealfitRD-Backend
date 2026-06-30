@@ -48,8 +48,8 @@ def test_p1_2_swap_runs_macro_rebalancer_with_pantry_revert():
     src = _func_src(AGENT, "swap_meal")
     assert "_rebalance_day_macros_to_target" in src, "swap_meal debe correr el rebalanceador de macros"
     assert "MEALFIT_UPDATE_MACRO_REBALANCE" in src
-    # default OFF (riesgo pantry): el knob se lee con default 'false'
-    assert re.search(r'MEALFIT_UPDATE_MACRO_REBALANCE["\']\s*,\s*["\']false', src), "P1-2 debe ser default OFF"
+    # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] default ON: re-escalador never-worse (revert si rompe pantry)
+    assert re.search(r'MEALFIT_UPDATE_MACRO_REBALANCE["\']\s*,\s*["\']true', src), "P1-2 ahora default ON (revert lo hace seguro)"
     # re-validación de pantry + revert si rompe
     assert "validate_ingredients_against_pantry" in src and "_snapshot" in src
 

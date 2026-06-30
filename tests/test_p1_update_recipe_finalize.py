@@ -106,6 +106,10 @@ def test_finalizer_orchestrates_subfunctions(monkeypatch):
     # para aislar la orquestación veg/slice/leaf de este test.
     monkeypatch.setattr(g, "_night_rice_autofix", lambda wrap, db=None: 0)
     monkeypatch.setattr(g, "_ensure_nonempty_recipe", lambda meal: False)
+    # [P2-OBJECTIVE-BATCH] el finalizador también corre qty-guard (P2-5) + reverse-coherence (P2-6); no-op aquí
+    # para aislar la orquestación veg/slice/leaf de este test.
+    monkeypatch.setattr(g, "_ensure_ingredient_quantities", lambda meal, db: 0)
+    monkeypatch.setattr(g, "_ensure_ingredients_used_in_recipe", lambda meal: 0)
 
     meal = {"name": "Revoltillo", "ingredients": ["3 huevos"], "recipe": ["Saltea el brócoli"]}
     # Pasamos un db dummy para que NO construya IngredientNutritionDB() (que tocaría Neon).

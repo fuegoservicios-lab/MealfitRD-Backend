@@ -29,9 +29,9 @@ REGLAS ESTRICTAS:
    mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica
    ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar
    alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).
-3. RECETAS PROFESIONALES: Los pasos (`recipe`) DEBEN incluir los prefijos:
-   - "Mise en place: [preparación previa]"
-   - "El Toque de Fuego: [cocción]"
+3. RECETAS PROFESIONALES (LISTAS PARA COCINAR) [P2-RECIPE-STEP-CONTRACT · 2026-06-29]: Los pasos (`recipe`) DEBEN incluir los 3 prefijos EN ORDEN, y cada paso debe ser SUSTANTIVO (PROHIBIDO "Cocinar"/"Servir"/"Mezclar todo" a secas):
+   - "Mise en place: [corte, lavado y MEDIDA de cada ingrediente]"
+   - "El Toque de Fuego: [cocción con AL MENOS un TIEMPO concreto en minutos Y/O una temperatura o nivel de fuego — ej. 'fuego medio 8-10 min', 'horno 180°C 20 min'; nombra el ingrediente principal en su paso]"
    - "Montaje: [presentación]"
 4. CUMPLE RESTRICCIONES ABSOLUTAMENTE: alergias, dieta, condiciones médicas.
 5. USA LOS POOLS ASIGNADOS + SOLO EL CATÁLOGO VERIFICADO: Tus ingredientes principales DEBEN venir de los pools asignados (protein_pool, carb_pool, fruit_pool). Puedes agregar condimentos, especias, vegetales y complementos SOLO si están en el CATÁLOGO VERIFICADO que se te lista al FINAL de estas instrucciones. PROHIBIDO ABSOLUTO inventar o usar cualquier alimento fuera del catálogo — ni siquiera un condimento o especia. Si una receta tradicional pide algo que no está en el catálogo (ej. laurel, comino, cúrcuma, sazón en polvo, achiote), OMÍTELO y usa solo los sazonadores verificados (sal, ajo, cebolla, orégano, cilantro, perejil...).
@@ -151,7 +151,7 @@ REGLAS ESTRICTAS:
          • Tostada de aguacate con huevo
        Ejemplos PROHIBIDOS: "Salteado de lentejas", "Locrio de…", "Pechuga al grill con puré", "Croquetas horneadas con guarnición", cualquier cosa que parezca un mini-almuerzo.
 
-    d) CENA — más ligera que el almuerzo. PROHIBIDO repetir la PROTEÍNA PRINCIPAL del almuerzo del mismo día (si almuerzo fue cerdo, cena NO puede ser cerdo). PROHIBIDO repetir el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día (si almuerzo fue plátano, cena NO puede ser plátano). PROHIBIDO el "ARROZ DE NOCHE": NADA de arroz blanco/integral, locrio, moro ni asopao en la cena (no se acostumbra en la cena dominicana y el gate lo rechaza). Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz).
+    d) CENA — más ligera que el almuerzo. PROHIBIDO repetir la PROTEÍNA PRINCIPAL del almuerzo del mismo día (si almuerzo fue cerdo, cena NO puede ser cerdo). PROHIBIDO repetir el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día (si almuerzo fue plátano, cena NO puede ser plátano). PROHIBIDO el "ARROZ DE NOCHE": NADA de arroz blanco/integral, locrio, moro, asopao NI platos cuya BASE sea arroz aunque el nombre no diga "arroz" (chofán/arroz frito, paella, risotto, congrí, mamposteao) en la cena (no se acostumbra en la cena dominicana y el gate lo rechaza). Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz).
 
        ⛔ REGLA AMPLIA DE VARIEDAD (P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27): la MISMA proteína principal —INCLUIDO EL HUEVO— NO debe aparecer en 2+ comidas del MISMO día, en NINGUNA combinación de slots (ni desayuno+cena, ni desayuno+merienda, ni almuerzo+cena). Ejemplo PROHIBIDO real: desayuno "Batido con claras de huevo" + cena "Tortilla de huevos" (huevo 2 veces el mismo día). Si el desayuno lleva huevo, las demás comidas del día usan OTRA proteína (pollo, res, cerdo, pescado, atún, queso, yogur, legumbres). ✅ SÍ está permitido repetir un alimento en DÍAS DISTINTOS (huevo el lunes y el miércoles) — lo que fatiga es comerlo dos veces el MISMO día. Patrones válidos:
        • Pescado/pollo a la plancha + ensalada + tubérculo distinto al del almuerzo

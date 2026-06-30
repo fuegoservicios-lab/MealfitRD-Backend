@@ -51,8 +51,13 @@ def test_templates_still_format_cleanly():
 
 
 def test_last_known_pfix_bumped():
+    # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] NO hardcodear un marker específico: quedaba stale en cada bump
+    # posterior (este test ya fallaba tras P2-REGEN-DAY-BIOMETRICS-PROPAGATE). El SSOT del valor del marker es
+    # test_p3_1_last_known_pfix_freshness; acá solo verificamos que el marker existe y está fechado.
     with open(os.path.join(BACKEND, "app.py"), encoding="utf-8") as f:
-        assert "P3-RECIPE-SPECIES-COHERENCE" in f.read()
+        src = f.read()
+    assert '_LAST_KNOWN_PFIX = "' in src and "· 20" in src, \
+        "app.py debe tener _LAST_KNOWN_PFIX fechado (SSOT: test_p3_1_last_known_pfix_freshness)"
 
 
 if __name__ == "__main__":
