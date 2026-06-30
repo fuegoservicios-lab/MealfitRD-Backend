@@ -17126,7 +17126,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # del plato falsamente bajas. Inyecta una porción default plausible para que el motor la dimensione al target.
     if QTY_PRESENCE_GUARD_ENABLED:
         try:
-            _qg = sum(_ensure_ingredient_quantities(_m, db)
+            from nutrition_db import IngredientNutritionDB as _QGDB
+            _qg_db = _QGDB()  # assemble no expone db en este scope (el motor construye la suya después)
+            _qg = sum(_ensure_ingredient_quantities(_m, _qg_db)
                       for _d in days for _m in (_d.get("meals") or []) if isinstance(_m, dict))
             if _qg:
                 logger.info(f"⚖️ [P2-QTY-PRESENCE-GUARD] {_qg} ingrediente(s) sin cantidad → porción default (pre-engine).")

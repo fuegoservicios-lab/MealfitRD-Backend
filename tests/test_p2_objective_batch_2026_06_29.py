@@ -67,6 +67,17 @@ def test_p2_5_knob_on():
     assert g.QTY_PRESENCE_GUARD_ENABLED is True
 
 
+def test_p2_5_assemble_callsite_constructs_its_own_db():
+    # regresión del NameError visto en prod (corr=e4f3febe 2026-06-30): assemble NO expone `db`/`_db` en ese
+    # scope (el motor construye la suya después) → el callsite DEBE construir su propia IngredientNutritionDB.
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index("P2-QTY-PRESENCE-GUARD] {_qg}")          # ancla al callsite de assemble (no el del finalizer)
+    block = src[i - 600:i]
+    assert "_QGDB()" in block or "IngredientNutritionDB()" in block, \
+        "el callsite de assemble debe construir su propio db (assemble no expone db en ese scope)"
+    assert "_ensure_ingredient_quantities(_m, db)" not in src, "no usar un `db` indefinido en assemble (NameError)"
+
+
 # ───────────────────────── P2-6: coherencia inversa ─────────────────────────
 def test_p2_6_adds_step_for_unused_ingredient():
     meal = {"name": "Bowl de Pollo",
