@@ -11701,6 +11701,27 @@ _NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "ricotta", "requeson", "cottage
 # "como proteína del plato" miente cuando son un añadido. Para esos → wording "Incorpora ... y mézclalo" (honesto sea
 # principal o añadido). Default True; flip a False revierte al wording previo.
 PROTEIN_STEP_SOFT_DAIRY_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_SOFT_DAIRY_WORDING", True)
+# [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] (audit recetas en vivo) Alimentos que vienen YA cocidos (enlatados/
+# ahumados): el paso "Cocina X a la plancha o hervido" es ABSURDO — caso real del owner: "💪 Cocina sardinas en lata
+# a la plancha o hervido". Para estos → escurrir e incorporar SIN cocción. tooltip-anchor: P1-CLOSER-PRECOOKED-WORDING
+_PRECOOKED_PROTEIN_HINT = ("en lata", "enlatad", "atun en agua", "atun en aceite", "sardina", "ahumad")
+
+
+def _closer_protein_step_text(nm: str, no_cook: bool) -> str:
+    """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
+    naturaleza del alimento: lácteo blando/no-cook → 'Incorpora ... mézclalo'; enlatado/pre-cocido → 'Escurre e
+    incorpora (ya viene cocido)'; resto → 'Cocina a la plancha o hervido'. SSOT de los sitios del closer que anexan
+    el paso '💪'. Pura, fail-safe. tooltip-anchor: P1-CLOSER-PRECOOKED-WORDING"""
+    try:
+        from constants import strip_accents as _sa2
+        _nm_sa = _sa2(str(nm).lower())
+    except Exception:
+        _nm_sa = str(nm).lower()
+    if no_cook or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
+        return f"Incorpora {nm} a la preparación y mézclalo antes de servir."
+    if any(h in _nm_sa for h in _PRECOOKED_PROTEIN_HINT):
+        return f"Escurre e incorpora {nm} (ya viene cocido) a la preparación antes de servir."
+    return f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
 # [P3-PROTEIN-FLOOR] Dish-fit del closer: comidas ligeras (desayuno/merienda) prefieren
 # proteína de huevo/lácteo; las principales prefieren carne — evita combos incongruentes
 # (camarón en un revoltillo de desayuno). Congruencia (proteína ya en el plato) gana primero.
@@ -12221,7 +12242,15 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         grams = max((PROTEIN_CLOSER_MIN_GRAMS if enforce_min_threshold else 10), min(grams, max_add_g))
         f = grams / 100.0
         nm = str(chosen.name).lower()
-        cook = "" if no_cook else " cocido"
+        # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] No añadir " cocido" a un alimento que YA viene cocido (enlatado):
+        # "sardinas en lata cocido" es redundante. Idéntico al criterio del wording del paso de receta.
+        try:
+            from constants import strip_accents as _sa3
+            _nm_strip = _sa3(nm)
+        except Exception:
+            _nm_strip = nm
+        _pre_cooked = any(h in _nm_strip for h in _PRECOOKED_PROTEIN_HINT)
+        cook = "" if (no_cook or _pre_cooked) else " cocido"
         line = f"{grams}g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
@@ -12238,11 +12267,8 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             # relleno del solver). Sin gramaje hardcodeado (el ingrediente es la fuente de verdad tras el quantize).
             # [P1-PROTEIN-STEP-SOFT-DAIRY · 2026-06-29] Lácteos blandos (cottage/ricotta/yogur/requesón/whey) → wording
             # honesto: NO van "a la plancha/hervido" (se desarman) y la frase es válida sean proteína principal o añadido.
-            _nm_sa = _sa(nm)
-            if no_cook or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
-                _step = f"Incorpora {nm} a la preparación y mézclalo antes de servir."
-            else:
-                _step = f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
+            # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] wording coherente (lácteo blando / enlatado pre-cocido / cocción)
+            _step = _closer_protein_step_text(nm, no_cook)
             meal["recipe"] = rec + [f"💪 {_step}"]
         # [P2-DISH-COHERENCE] El closer acaba de meter `chosen` como proteína PRINCIPAL: refléjala
         # en el nombre si no estaba (no esconder la proteína principal del plato).
@@ -14599,11 +14625,9 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         target_meal["macros"] = [f"P:{round(tp)}g", f"C:{round(tc)}g", f"G:{round(tf)}g"]
         rec = target_meal.get("recipe")
         if isinstance(rec, list):
-            # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] paso natural (no robótico).
-            if no_cook:
-                _step = f"Incorpora {nm} a la preparación y mezcla bien antes de servir."
-            else:
-                _step = f"Cocina {nm} a la plancha o hervido y sírvelo como proteína magra del plato."
+            # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28 + P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] paso natural
+            # y coherente con la naturaleza del alimento (lácteo blando / enlatado pre-cocido / cocción).
+            _step = _closer_protein_step_text(nm, no_cook)
             target_meal["recipe"] = rec + [f"💪 {_step}"]
         # 2) quitar kcal_add/4 gramos de carbos → mantiene kcal CONSTANTE (reusa el carb-trim cuantizador)
         carbs_g_to_remove = kcal_add / 4.0

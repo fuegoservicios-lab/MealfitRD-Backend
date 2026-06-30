@@ -29,12 +29,17 @@ REGLAS ESTRICTAS:
    mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica
    ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar
    alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).
+   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el paladar dominicano,
+   NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un
+   "salteado salado" raro (avena con guisantes y soya = disparate). NO pegues una proteína que no encaje con el plato
+   (sardinas/atún en lata dentro de un revoltillo de huevo; marisco en un plato dulce). Si la comida es ligera y ya
+   tiene proteína coherente (huevo, queso), NO le añadas una 2ª proteína incongruente solo para subir gramos.
 3. RECETAS PROFESIONALES (LISTAS PARA COCINAR) [P2-RECIPE-STEP-CONTRACT · 2026-06-29]: Los pasos (`recipe`) DEBEN incluir los 3 prefijos EN ORDEN, y cada paso debe ser SUSTANTIVO (PROHIBIDO "Cocinar"/"Servir"/"Mezclar todo" a secas):
    - "Mise en place: [corte, lavado y MEDIDA de cada ingrediente]"
    - "El Toque de Fuego: [cocción con AL MENOS un TIEMPO concreto en minutos Y/O una temperatura o nivel de fuego — ej. 'fuego medio 8-10 min', 'horno 180°C 20 min'; nombra el ingrediente principal en su paso]"
    - "Montaje: [presentación]"
 4. CUMPLE RESTRICCIONES ABSOLUTAMENTE: alergias, dieta, condiciones médicas.
-5. USA LOS POOLS ASIGNADOS + SOLO EL CATÁLOGO VERIFICADO: Tus ingredientes principales DEBEN venir de los pools asignados (protein_pool, carb_pool, fruit_pool). Puedes agregar condimentos, especias, vegetales y complementos SOLO si están en el CATÁLOGO VERIFICADO que se te lista al FINAL de estas instrucciones. PROHIBIDO ABSOLUTO inventar o usar cualquier alimento fuera del catálogo — ni siquiera un condimento o especia. Si una receta tradicional pide algo que no está en el catálogo (ej. laurel, comino, cúrcuma, sazón en polvo, achiote), OMÍTELO y usa solo los sazonadores verificados (sal, ajo, cebolla, orégano, cilantro, perejil...).
+5. USA LOS POOLS ASIGNADOS + SOLO EL CATÁLOGO VERIFICADO: Tus ingredientes principales DEBEN venir de los pools asignados (protein_pool, carb_pool, fruit_pool). Puedes agregar condimentos, especias, vegetales y complementos SOLO si están en el CATÁLOGO VERIFICADO que se te lista al FINAL de estas instrucciones. PROHIBIDO ABSOLUTO inventar o usar cualquier alimento fuera del catálogo — ni siquiera un condimento o especia. Si una receta tradicional pide algo que no está en el catálogo (ej. laurel, comino, cúrcuma, sazón en polvo, achiote, SALSA DE SOYA, salsa inglesa/Worcestershire, salsa de pescado, teriyaki, BBQ, mostaza, miel si no está listada), OMÍTELO y usa solo los sazonadores verificados (sal, ajo, cebolla, orégano, cilantro, perejil...). CRÍTICO [P1-RECIPE-OFFCATALOG-CONDIMENT · 2026-06-30]: si MENCIONAS en los PASOS un condimento fuera del catálogo, el sistema lo BORRA de la lista de compras pero NO de tu texto → el usuario lee "añade salsa de soya" pero nunca la compró (receta ROTA). Por eso: NUNCA nombres en los pasos un alimento que no esté en `ingredients` y en el catálogo.
 6. APLICA LA TÉCNICA DE COCCIÓN asignada a la comida principal (Almuerzo o Cena).
 7. PESO EMOCIONAL (INTENSIDAD): Respeta las intensidades del perfil de gustos.
 8. ESTRUCTURA DE INGREDIENTES Y MEDIDAS CASERAS DOMINICANAS:

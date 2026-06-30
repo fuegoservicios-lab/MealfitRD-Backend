@@ -91,4 +91,6 @@ def test_e_light_meal_wording_natural():
     # "incorpora el X indicado en los ingredientes para reforzar la proteína" → paso natural integrado.
     assert "como fuente principal de \n" not in _SRC
     assert "indicado en los ingredientes para reforzar la proteína" not in _SRC
-    assert "Incorpora" in _SRC and "mezcla bien antes de servir" in _SRC
+    # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] el wording se unificó en el helper SSOT `_closer_protein_step_text`
+    # ("Incorpora ... mézclalo antes de servir") — sigue siendo natural, ya no robótico.
+    assert "Incorpora" in _SRC and "mézclalo antes de servir" in _SRC
