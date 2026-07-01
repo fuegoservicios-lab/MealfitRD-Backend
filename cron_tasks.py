@@ -1552,6 +1552,118 @@ def _aggregate_coherence_block_history_metrics():
             )
 
 
+def _creativity_kpi_job():
+    """[P2-CREATIVITY-KPI · 2026-07-01] (audit v2 creatividad GAP-2/GAP-5, batch P2-AUDIT-V2-BATCH)
+    Agregador diario del KPI de CREATIVIDAD/CALIDAD DE PLATO + drops VERIFIED-ONLY.
+
+    Por qué existe: `dish_quality_report` (raw_staple_ratio = staples desnudos "pollo a la plancha
+    + arroz blanco"; low_quality_ratio = placeholders; contract_ratio = pasos con estructura) se
+    computa y persiste PER-PLAN desde 2026-06-27, pero ningún proceso lo agregaba a nivel flota →
+    el objetivo del owner ("creatividad+personalización") era invisible en prod y la decisión de
+    encender el soft-gate (DISH_QUALITY_SOFT_GATE, hoy OFF por riesgo retry-storm) no tenía datos.
+    Este cron emite el agregado a pipeline_metrics (node='_creativity_kpi_job') + el top-N de
+    ingredientes dropeados por VERIFIED-ONLY (sink P2-VERIFIED-DROP-TELEMETRY) → con 1-2 semanas
+    de serie, el owner decide el A/B del gate y qué synonyms/altas de catálogo priorizar.
+
+    Read-only sobre meal_plans (+ snapshot/reset del contador in-process de drops). NO emite
+    system_alerts (informacional puro). Knobs:
+      MEALFIT_CREATIVITY_KPI_INTERVAL_MIN (default 1440) — frecuencia.
+      MEALFIT_CREATIVITY_KPI_LOOKBACK_H   (default 24)   — ventana.
+      MEALFIT_CREATIVITY_KPI_MAX_PLANS    (default 1000) — cap defensivo.
+    tooltip-anchor: P2-CREATIVITY-KPI"""
+    _ck_skip_reason: str | None = None
+    _ck_plans_examined = 0
+    _ck_plans_with_report = 0
+    _ck_avgs: dict = {}
+    _ck_top_drops: list = []
+    _ck_lookback_h = 24.0
+    try:
+        lookback_h = _env_float("MEALFIT_CREATIVITY_KPI_LOOKBACK_H", 24.0,
+                                validator=lambda v: v > 0 and math.isfinite(v))
+        _ck_lookback_h = lookback_h
+        max_plans = _env_int("MEALFIT_CREATIVITY_KPI_MAX_PLANS", 1000)
+        if max_plans <= 0:
+            max_plans = 1000
+        try:
+            from db_core import connection_pool as _ck_pool
+        except Exception as e:
+            logger.warning(f"[P2-CREATIVITY-KPI] db_core import falló: {e}")
+            _ck_skip_reason = "db_core_import_failed"
+            return
+        if not _ck_pool:
+            _ck_skip_reason = "db_not_initialized"
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_h)
+        try:
+            plans = execute_sql_query(
+                """
+                SELECT id::text AS id, plan_data->'dish_quality_report' AS dqr
+                FROM public.meal_plans
+                WHERE updated_at >= %s AND plan_data ? 'dish_quality_report'
+                LIMIT %s
+                """,
+                (cutoff, max_plans),
+                fetch_all=True,
+            ) or []
+        except Exception as e:
+            logger.warning(f"[P2-CREATIVITY-KPI] fetch planes falló: {e}")
+            _ck_skip_reason = "fetch_plans_failed"
+            return
+        _sums = {"raw_staple_ratio": 0.0, "low_quality_ratio": 0.0, "contract_ratio": 0.0}
+        _ns = {k: 0 for k in _sums}
+        for rec in plans:
+            _ck_plans_examined += 1
+            dqr = rec.get("dqr")
+            if isinstance(dqr, str):
+                try:
+                    dqr = json.loads(dqr)
+                except Exception:
+                    continue
+            if not isinstance(dqr, dict):
+                continue
+            _ck_plans_with_report += 1
+            for k in _sums:
+                v = dqr.get(k)
+                if isinstance(v, (int, float)):
+                    _sums[k] += float(v)
+                    _ns[k] += 1
+        _ck_avgs = {f"avg_{k}": (round(_sums[k] / _ns[k], 4) if _ns[k] else None) for k in _sums}
+        try:
+            from shopping_calculator import snapshot_and_reset_verified_only_drops
+            _drops = snapshot_and_reset_verified_only_drops() or {}
+            _ck_top_drops = sorted(_drops.items(), key=lambda kv: -kv[1])[:15]
+        except Exception as _dr_e:
+            logger.debug(f"[P2-CREATIVITY-KPI] snapshot drops falló: {_dr_e}")
+        logger.info(
+            f"[P2-CREATIVITY-KPI lookback={lookback_h}h] plans={_ck_plans_examined} "
+            f"with_report={_ck_plans_with_report} {_ck_avgs} top_drops={_ck_top_drops[:5]}"
+        )
+    except Exception as _ck_err:
+        logger.error(f"[P2-CREATIVITY-KPI] excepción no atrapada: {_ck_err!r}", exc_info=True)
+        _ck_skip_reason = _ck_skip_reason or "unhandled_exception"
+    finally:
+        # Tick observable SIEMPRE (patrón P1-CRON-TOP-LEVEL-TRY).
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+                "duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    None, "__cron__", "_creativity_kpi_job", 0, 0, 0, 1.0,
+                    json.dumps({
+                        "lookback_h": _ck_lookback_h,
+                        "plans_examined": _ck_plans_examined,
+                        "plans_with_report": _ck_plans_with_report,
+                        **_ck_avgs,
+                        "top_verified_only_drops": _ck_top_drops,
+                        "skip_reason": _ck_skip_reason,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _ck_pm_err:
+            logger.debug(f"[P2-CREATIVITY-KPI] pipeline_metrics INSERT falló (best-effort): {_ck_pm_err!r}")
+
+
 # ---------------------------------------------------------------------------
 # [P0-1-DEPLOY-LAG · 2026-05-10] Detector de deriva de despliegue.
 #
@@ -6946,6 +7058,20 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             # [P2-NEW-7 · 2026-05-11] Cron delay-tolerant — agregador horario
             # tolera 5min de retraso sin pérdida funcional. Sube grace_time
             # para reducir false-MISSED bajo carga del pool.
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        # [P2-CREATIVITY-KPI · 2026-07-01] agregador diario de dish-quality + drops VERIFIED-ONLY.
+        _CREAT_KPI_INT = _env_int("MEALFIT_CREATIVITY_KPI_INTERVAL_MIN", 1440)
+        if _CREAT_KPI_INT < 60:
+            _CREAT_KPI_INT = 1440
+        _add_job_jittered(scheduler,
+            _creativity_kpi_job,
+            "interval",
+            minutes=_CREAT_KPI_INT,
+            id="creativity_kpi_job",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
             misfire_grace_time=_aggregator_misfire_grace_s(),
         )
         logger.info(

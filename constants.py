@@ -1800,6 +1800,37 @@ def slot_violations_for_meal_name(name: str, slot_key: str) -> list:
     return out
 
 
+def slot_ingredient_violations(ingredients, slot_key) -> list:
+    """[P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1, batch P2-AUDIT-V2-BATCH) Detector
+    INGREDIENT-LEVEL solo para la regla más dura del owner: ARROZ EN EL DESAYUNO (hardness=hard). El
+    detector de nombre (`slot_violations_for_meal_name`) es name-only A PROPÓSITO (anti-falso-positivo:
+    "Panqueques de harina de arroz" no debe flagear), pero eso dejaba evadible el gate hard con un
+    nombre inocuo: 'Bowl energético criollo' + '150g arroz blanco' en ingredients pasaba en TODAS las
+    superficies. Scope deliberadamente ESTRECHO: solo desayuno + tokens SSOT de arroz + excludes SSOT
+    (harina/leche/vinagre de arroz, toque de arroz...). La CENA NO va aquí: ya tiene su pase
+    ingredient-driven con AUTOFIX (`_night_rice_autofix` sustituye en vez de rechazar, porque cena-arroz
+    es soft). Devuelve [{'label','hard','ingredient'}]. Fail-safe → []. tooltip-anchor: P2-SLOT-INGREDIENT-RICE"""
+    try:
+        slot = canonical_slot_key(slot_key) or (slot_key if slot_key in SLOT_INAPPROPRIATE_FOODS else None)
+        if slot != "desayuno" or not ingredients:
+            return []
+        out = []
+        for ing in ingredients:
+            ilow = strip_accents(str(ing).lower())
+            if not ilow.strip():
+                continue
+            if any(exc in ilow for exc in _SLOT_RICE_EXCLUDE):
+                continue
+            for tok in _SLOT_RICE_TOKENS:
+                if re.search(r"\b" + re.escape(tok), ilow):
+                    out.append({"label": "arroz/locrio/moro en los INGREDIENTES del desayuno",
+                                "hard": True, "ingredient": str(ing)[:80]})
+                    break
+        return out
+    except Exception:
+        return []
+
+
 def build_meal_timing_rules(meal_type: str) -> str:
     """[P1-SLOT-APPROPRIATENESS] SSOT del directivo compacto de coherencia de HORARIO para los
     prompts de UPDATE (swap S3 / chat-modify): qué NO va en este slot + guía positiva es-DO.

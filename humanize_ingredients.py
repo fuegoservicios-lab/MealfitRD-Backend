@@ -317,4 +317,94 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                     humanized = humanize_ingredient(ing_clean)
                     humanized_ingredients.append(humanized)
                 meal["ingredients"] = humanized_ingredients
+                # [P2-STEP-HOUSEHOLD-SYNC · 2026-07-01] armoniza las menciones de los PASOS con la
+                # medida casera recién aplicada a la lista (ver docstring del helper).
+                try:
+                    sync_recipe_steps_to_household(meal)
+                except Exception:
+                    pass
     return plan_result
+
+
+# Captura del alimento ACOTADA a ≤3 palabras con lookahead de conectores (y/con/para/hasta/en/o) →
+# "150 g de arroz y lávalo" captura solo "arroz" y el resto del paso queda intacto tras el replace.
+_STEP_GRAMS_MENTION_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+de\s+"
+    r"([a-záéíóúñü][\wáéíóúñü]*(?:\s+(?!y\b|con\b|para\b|hasta\b|en\b|o\b)[\wáéíóúñü]+){0,2})",
+    re.IGNORECASE)
+
+
+def sync_recipe_steps_to_household(meal: dict) -> int:
+    """[P2-STEP-HOUSEHOLD-SYNC · 2026-07-01] (audit v2 recetas GAP-5, batch P2-AUDIT-V2-BATCH)
+    Armoniza las UNIDADES entre lista y pasos: `humanize_ingredient` convierte la LISTA a medida
+    casera ("¾ taza de arroz") pero los PASOS quedaban en gramos post-qty-sync ("pesa 80 g de
+    arroz") → el usuario leía dos unidades distintas para el mismo alimento. Reescribe la mención
+    del paso a la medida casera CON los gramos entre paréntesis — "¾ taza de arroz (80 g)" — ambas
+    unidades visibles (cocinable con taza O balanza).
+
+    Diseño conservador (espejo anti-falso-positivo de _sync_recipe_step_quantities):
+      - Solo menciones `<qty> g de <alimento>` cuya qty COINCIDE con la cantidad líder RAW del
+        ingrediente (no toca cantidades parciales tipo "espolvorea 10 g de arroz").
+      - El alimento se matchea por token principal (primera palabra ≥4 chars); tokens compartidos
+        por dos ingredientes se descartan (ambiguo).
+      - Solo ingredientes cuya forma humanizada DIFIERE del raw (si humanize no convirtió, no hay
+        nada que armonizar). Notas ⚠/💡/⚕ intactas. Idempotente (la mención reescrita ya no
+        matchea el patrón `g de`). Fail-safe → 0. Muta `meal`. tooltip-anchor: P2-STEP-HOUSEHOLD-SYNC"""
+    try:
+        ings = meal.get("ingredients")
+        raws = meal.get("ingredients_raw")
+        recipe = meal.get("recipe")
+        if not (isinstance(ings, list) and isinstance(raws, list) and isinstance(recipe, list)
+                and len(ings) == len(raws) and recipe):
+            return 0
+        token_map = {}
+        ambiguous = set()
+        for h, r in zip(ings, raws):
+            h_s, r_s = str(h).strip(), str(r).strip()
+            if not h_s or h_s == r_s:
+                continue
+            m = re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+(?:de\s+)?(.+)$", r_s, re.IGNORECASE)
+            if not m:
+                continue
+            raw_qty = m.group(1).replace(",", ".")
+            food = strip_accents(m.group(2).strip().lower())
+            toks = [t for t in re.split(r"[^\wáéíóúñü]+", food) if len(t) >= 4]
+            if not toks:
+                continue
+            tok = toks[0]
+            if tok in token_map:
+                ambiguous.add(tok)
+                continue
+            token_map[tok] = (raw_qty, h_s)
+        for tok in ambiguous:
+            token_map.pop(tok, None)
+        if not token_map:
+            return 0
+        fixed = 0
+        new_steps = []
+        for step in recipe:
+            s = str(step)
+            if not isinstance(step, str) or ("⚠" in s) or ("💡" in s) or ("⚕" in s):
+                new_steps.append(step)
+                continue
+
+            def _sub(mm):
+                nonlocal fixed
+                food_m = strip_accents(mm.group(2).strip().lower())
+                toks_m = [t for t in re.split(r"[^\wáéíóúñü]+", food_m) if len(t) >= 4]
+                for ft in toks_m[:2]:
+                    entry = token_map.get(ft)
+                    if entry:
+                        raw_qty, human = entry
+                        if mm.group(1).replace(",", ".") == raw_qty:
+                            fixed += 1
+                            return f"{human} ({mm.group(1)} g)"
+                        break
+                return mm.group(0)
+
+            new_steps.append(_STEP_GRAMS_MENTION_RE.sub(_sub, step))
+        if fixed:
+            meal["recipe"] = new_steps
+        return fixed
+    except Exception:
+        return 0

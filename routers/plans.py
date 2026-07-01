@@ -4162,6 +4162,66 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
             logger.warning(f"[P1-RECIPE-EXPAND-COHERENCE] validador falló (no bloquea persistencia): "
                            f"{type(_ce).__name__}: {_ce}")
 
+        # [P2-EXPAND-OFFCATALOG-STRIP · 2026-07-01] (audit v2 expand GAP-3, batch P2-AUDIT-V2-BATCH) El strip de
+        # salsas off-catálogo (soya/inglesa/teriyaki/sriracha/BBQ) corría en el finalizer de updates y en el persist
+        # boundary pero NO en expand → el Chef podía persistir "añade salsa de soya al gusto" sin que esté en
+        # ingredients[] ni en la lista (VERIFIED-ONLY la borró de compras) = receta no cocinable tal cual. Se aplica
+        # EN ORIGEN sobre `expanded_steps` (cubre persist Y la respuesta a guests). Idempotente, fail-safe.
+        # tooltip-anchor: P2-EXPAND-OFFCATALOG-STRIP
+        try:
+            from graph_orchestrator import _strip_offcatalog_condiments_from_recipe as _oc_strip_exp
+            _oc_meal_exp = {"ingredients": [str(_i) for _i in (data.get("ingredients") or [])],
+                            "recipe": list(expanded_steps)}
+            if _oc_strip_exp(_oc_meal_exp):
+                expanded_steps = [str(_s) for _s in (_oc_meal_exp.get("recipe") or []) if str(_s).strip()]
+                logger.info(f"🧂 [P2-EXPAND-OFFCATALOG-STRIP] salsas off-catálogo removidas de los pasos "
+                            f"expandidos | meal='{req_name}'")
+        except Exception as _oc_exp_e:
+            logger.debug(f"[P2-EXPAND-OFFCATALOG-STRIP] strip en expand no-op: {type(_oc_exp_e).__name__}: {_oc_exp_e}")
+
+        # [P2-EXPAND-UNCOUNTED-ADDITION · 2026-07-01] (audit v2 expand GAP-2, batch P2-AUDIT-V2-BATCH) El Chef
+        # podía añadir en los PASOS grasa/edulcorante SUSTANTIVO no contado ("sofríe en 3 cucharadas de aceite"
+        # ≈ 270 kcal) — no entra a ingredients[], ni a macros, ni a compras → el plato declara macros falsamente
+        # bajas y la receta pide algo no comprado. El validador de coherencia excluye aceite/mantequilla/azúcar
+        # A PROPÓSITO (no son proteínas canónicas) y el veg-guard solo añade vegetales ≤60 kcal. Detector
+        # determinista: token de grasa/edulcorante + indicador de CANTIDAD en el MISMO paso, ausente del haystack
+        # de ingredients[] → soft-fail (patrón del resto de guards de expand: sin cobro, sin persist, retry).
+        # Salta pasos-nota (⚠/💡/⚕) y respeta negaciones ("sin aceite"). Knob: MEALFIT_EXPAND_UNCOUNTED_GUARD.
+        # tooltip-anchor: P2-EXPAND-UNCOUNTED-ADDITION
+        if os.environ.get("MEALFIT_EXPAND_UNCOUNTED_GUARD", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                from constants import strip_accents as _sa_unc
+                _unc_tokens = ("aceite", "mantequilla", "margarina", "manteca", "mayonesa",
+                               "azucar", "miel", "sirope", "crema de leche")
+                _unc_qty = ("cucharada", "cda", "cdta", "cucharadita", "taza", "chorro generoso")
+                _unc_negs = ("sin aceite", "sin azucar", "sin mantequilla", "sin miel", "no anadas", "no agregues", "evita")
+                _ings_hay_unc = _sa_unc(" ".join(str(_i) for _i in (data.get("ingredients") or [])).lower())
+                _unc_hits = []
+                for _st in expanded_steps:
+                    _st_s = str(_st)
+                    if ("⚠" in _st_s) or ("💡" in _st_s) or ("⚕" in _st_s):
+                        continue
+                    _st_low = _sa_unc(_st_s.lower())
+                    if any(_n in _st_low for _n in _unc_negs):
+                        continue
+                    for _tk in _unc_tokens:
+                        if _tk in _st_low and _tk not in _ings_hay_unc and any(_q in _st_low for _q in _unc_qty):
+                            _unc_hits.append(f"'{_tk}' con cantidad en un paso pero ausente de los ingredientes")
+                            break
+                if _unc_hits:
+                    logger.warning(f"🧈 [P2-EXPAND-UNCOUNTED-ADDITION] expansión rechazada: añade calorías no "
+                                   f"contadas | meal='{req_name}' plan={req_plan_id} | {_unc_hits[:3]}")
+                    return {
+                        "success": False,
+                        "operation_failed": True,
+                        "coherence_check_failed": True,
+                        "expanded_recipe": req_recipe_original or [],
+                        "detail": "El Chef intentó añadir ingredientes (aceite/azúcar) que no están en tu plato. "
+                                  "Mostramos la receta original; intenta de nuevo.",
+                    }
+            except Exception as _unc_e:
+                logger.debug(f"[P2-EXPAND-UNCOUNTED-ADDITION] detector no-op: {type(_unc_e).__name__}: {_unc_e}")
+
         # [P0-EXPAND-CLINICAL-GUARD · 2026-07-01] (audit P0-1) Scan clínico DETERMINISTA de los PASOS expandidos
         # ANTES de cobrar/persistir. El Chef AI reemplaza recipe[] completo y es prompt-trustable, NO enforced
         # (misma clase que P0-AGENT-1): podía re-introducir un alérgeno IgE o un prohibido de condición/dieta que
@@ -5052,6 +5112,35 @@ def api_swap_meal_persist(
                 new_meal["isExpanded"] = False
             meals[meal_index] = new_meal
 
+            # [P2-SWAP-PERSIST-FINALIZE · 2026-07-01] (audit v2 paridad GAP-3, batch P2-AUDIT-V2-BATCH)
+            # El persist es el ÚNICO round-trip con edición CLIENTE entre generación validada y escritura:
+            # re-validaba SOLO lo clínico (P0-SWAP-PERSIST-CLINICAL, 422 arriba) y escribía el resto del
+            # `new_meal` verbatim → un cliente stale/buggy o llamada API directa podía persistir macros
+            # infladas sin truth-up, receta sin los fixes del finalizer (veg-fantasma / slice-grams /
+            # qty-sync) o plato fuera de horario. Defensa-en-profundidad idempotente y barata:
+            # finalizer SSOT de updates + truth-up de macros desde strings + flag `_slot_advisory`
+            # (advisory, NO 422 — la calidad es fail-open; lo clínico ya abortó arriba). Best-effort.
+            # tooltip-anchor: P2-SWAP-PERSIST-FINALIZE
+            if isinstance(new_meal, dict):
+                try:
+                    from graph_orchestrator import (finalize_single_meal_recipe_coherence as _fin_sp,
+                                                    _truth_up_meal_macros_from_strings as _tu_sp,
+                                                    slot_coherence_backstop_for_meal as _slot_sp)
+                    from nutrition_db import IngredientNutritionDB as _FDB_sp
+                    _fdb_sp = _FDB_sp()
+                    _ps_sp = bool(new_meal.get("pantry_constrained"))
+                    _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies)
+                    _tu_sp(new_meal, _fdb_sp)
+                    try:
+                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""))
+                        if _slot_viols_sp:
+                            new_meal["_slot_advisory"] = True
+                    except Exception:
+                        pass
+                except Exception as _fin_sp_e:
+                    logger.debug(f"[P2-SWAP-PERSIST-FINALIZE] finalize en persist falló (no bloquea): "
+                                 f"{type(_fin_sp_e).__name__}: {_fin_sp_e}")
+
             # Strip las 4 aggregated_shopping_list* para forzar recalc
             # downstream (mismo contrato que el SQL legacy — el frontend
             # invoca `/recalculate-shopping-list` inmediatamente después).
@@ -5097,7 +5186,23 @@ def api_swap_meal_persist(
                         try:
                             from graph_orchestrator import _apply_portion_quantization as _qz_swap
                             from nutrition_db import IngredientNutritionDB as _QDB_swap
-                            _qz_swap(plan_data, _QDB_swap())
+                            _qdb_swap = _QDB_swap()
+                            # [P2-UPDATES-CARB-RETRIM · 2026-07-01] (audit v2 micros GAP-4, batch P2-AUDIT-V2-
+                            # BATCH) espejo del re-trim de assemble (MICROCLOSER_BAND_RECHECK): el closer añade
+                            # hasta ~80 kcal de carbos → sin re-trim el día podía salir de banda macro sin
+                            # re-check. Trim ANTES del quantize (mismo orden que assemble). Best-effort.
+                            try:
+                                from graph_orchestrator import (_trim_day_carbs_to_target as _tct_sw,
+                                                                _meal_macro_num as _mmn_sw,
+                                                                CARB_TARGET_TRIM_TOL as _ctol_sw,
+                                                                MICROCLOSER_BAND_RECHECK_ENABLED as _mbr_sw)
+                                _tc_sw = _mmn_sw((plan_data.get("macros") or {}).get("carbs"))
+                                if _mbr_sw and _tc_sw > 0:
+                                    for _d_sw in plan_data.get("days", []) or []:
+                                        _tct_sw(_d_sw.get("meals", []) or [], _tc_sw, _qdb_swap, tol=_ctol_sw)
+                            except Exception as _rt_sw_e:
+                                logger.debug(f"[P2-UPDATES-CARB-RETRIM] re-trim (swap) falló: {_rt_sw_e}")
+                            _qz_swap(plan_data, _qdb_swap)
                         except Exception as _qz_e:
                             logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (swap) falló: {_qz_e}")
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)

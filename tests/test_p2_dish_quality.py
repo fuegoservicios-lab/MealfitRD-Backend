@@ -70,10 +70,14 @@ def test_report_counts_and_ratio():
 def test_report_failsafe_on_garbage():
     # [P1-DISH-RAW-STAPLE · 2026-06-29] el reporte añade el canal SEPARADO raw_staple_* (advisory de creatividad,
     # NO entra en low_quality_ratio → no toca el soft-gate).
+    # [P2-AUDIT-V2-BATCH · 2026-07-01] ancla actualizada: el canal contract_* (P2-RECIPE-STEP-CONTRACT-GATE,
+    # lote 2026-07-01) ya estaba en prod pero este test de garbage no se actualizó en aquel lote.
     assert go.compute_dish_quality_report({}) == {"total_meals": 0, "low_quality_meals": 0,
                                                   "low_quality_ratio": None, "issues": [],
                                                   "raw_staple_meals": 0, "raw_staple_ratio": None,
-                                                  "raw_staple_issues": []}
+                                                  "raw_staple_issues": [],
+                                                  "contract_meals": 0, "contract_ratio": None,
+                                                  "contract_issues": []}
 
 
 def test_knob_default_on():

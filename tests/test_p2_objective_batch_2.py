@@ -184,7 +184,9 @@ def test_step_contract_lint():
 
 def test_persist_boundary_includes_reverse_and_offcatalog():
     i = _GRAPH.find("def finalize_plan_data_coherence")
-    seg = _GRAPH[i:i + 7000]
+    # [P2-AUDIT-V2-BATCH · 2026-07-01] ventana 7000→9000: el bloque qty-presence (P2-QTY-PRESENCE-PERSIST)
+    # se insertó antes del strip; el contrato anclado (reverse + offcatalog en el boundary) no cambió.
+    seg = _GRAPH[i:i + 9000]
     assert "_ensure_ingredients_used_in_recipe" in seg and "_strip_offcatalog_condiments_from_recipe" in seg, \
         "persist boundary sin reverse-coherence/off-catalog strip (P2-PERSIST-BOUNDARY-COHERENCE)"
 

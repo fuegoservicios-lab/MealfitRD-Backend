@@ -1627,6 +1627,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
 
             meals_fresh[target_idx_fresh] = new_meal_data
 
+            # [P2-CHATMODIFY-MODIFIED-AT · 2026-07-01] (audit v2 paridad GAP-1, batch P2-AUDIT-V2-BATCH)
+            # Sello CAS semántico que el sort del Historial usa (ORDER BY GREATEST(created_at,
+            # _plan_modified_at)) + banner "última edición" + detección de PDF stale. Todas las demás
+            # superficies de update lo sellan (swap-persist, regen-day, recalculate, restore-local);
+            # chat-modify era la única mutación real sin sello → el plan no subía en el Historial.
+            from datetime import datetime as _dt_cm, timezone as _tz_cm
+            plan_data_fresh["_plan_modified_at"] = _dt_cm.now(_tz_cm.utc).isoformat()
+
             # [P1-CHATMODIFY-CLOSER-ORDER · 2026-07-01] closer + panel ANTES de asignar listas y correr el
             # guard (ver bloque pre-listas fuera del lock): el mismo closer determinista sobre el fresh
             # converge al estado que las listas precomputadas ya reflejan → el guard mide el estado FINAL.
@@ -1641,7 +1649,23 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                         try:
                             from graph_orchestrator import _apply_portion_quantization as _qz_cm
                             from nutrition_db import IngredientNutritionDB as _QDB_cm
-                            _qz_cm(plan_data_fresh, _QDB_cm())
+                            _qdb_cm = _QDB_cm()
+                            # [P2-UPDATES-CARB-RETRIM · 2026-07-01] (audit v2 micros GAP-4, batch P2-AUDIT-V2-
+                            # BATCH) espejo del re-trim de assemble (MICROCLOSER_BAND_RECHECK): el closer añade
+                            # hasta ~80 kcal de carbos → sin re-trim el día podía salir de banda macro sin
+                            # re-check. Trim ANTES del quantize (mismo orden que assemble). Best-effort.
+                            try:
+                                from graph_orchestrator import (_trim_day_carbs_to_target as _tct_cm,
+                                                                _meal_macro_num as _mmn_cm,
+                                                                CARB_TARGET_TRIM_TOL as _ctol_cm,
+                                                                MICROCLOSER_BAND_RECHECK_ENABLED as _mbr_cm)
+                                _tc_cm = _mmn_cm((plan_data_fresh.get("macros") or {}).get("carbs"))
+                                if _mbr_cm and _tc_cm > 0:
+                                    for _d_cm in plan_data_fresh.get("days", []) or []:
+                                        _tct_cm(_d_cm.get("meals", []) or [], _tc_cm, _qdb_cm, tol=_ctol_cm)
+                            except Exception as _rt_cm_e:
+                                logger.debug(f"[P2-UPDATES-CARB-RETRIM] re-trim (chat) falló: {_rt_cm_e}")
+                            _qz_cm(plan_data_fresh, _qdb_cm)
                         except Exception as _qz_cm_e:
                             logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (chat) falló: {_qz_cm_e}")
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)

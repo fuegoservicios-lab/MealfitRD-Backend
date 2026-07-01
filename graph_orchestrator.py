@@ -8073,6 +8073,27 @@ def _detect_slot_appropriateness(days: list) -> list:
                         f"Cámbialo por un plato propio del horario. {_fix}"
                     ),
                 })
+            # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1, batch P2-AUDIT-V2-BATCH) El
+            # detector de arriba es name-only → un desayuno con nombre inocuo ("Bowl energético criollo")
+            # y "150g arroz blanco" en ingredients evadía la regla MÁS DURA del owner (desayuno-arroz =
+            # hard, sin degradación). Pase ingredient-level SSOT, scope estrecho (solo desayuno + arroz
+            # con excludes) — la cena ya tiene su pase ingredient-driven con autofix (_night_rice_autofix).
+            try:
+                from constants import slot_ingredient_violations as _siv
+                for v in _siv(m.get("ingredients") or [], slot_key):
+                    _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
+                    issues.append({
+                        "day": day_num, "slot": slot_key, "name": name,
+                        "label": v["label"], "hard": v["hard"],
+                        "text": (
+                            f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
+                            f"{slot_key}: «{name}» lleva {v.get('ingredient', 'arroz')} en los ingredientes — "
+                            f"arroz/locrio no corresponde al desayuno dominicano aunque el nombre no lo diga. "
+                            f"Cámbialo por un plato propio del horario. {_fix}"
+                        ),
+                    })
+            except Exception:
+                pass
     return issues
 
 
@@ -9017,6 +9038,10 @@ RAW_SEAFOOD_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_SEAFOOD_SAFETY", True)
 # absuelve el caso COCIDO, que en es-DO es la inmensa mayoría → falsos-positivos mínimos. Macro-preservante (solo nota, como
 # el seafood). Default True (seguridad); flip a False revierte. Anchor: P1-RAW-VIVER-SAFETY.
 RAW_VIVER_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_VIVER_SAFETY", True)
+# [P2-UNDERCOOK-TIME-NOTE · 2026-07-01] (audit v2 recetas GAP-4, batch P2-AUDIT-V2-BATCH) Lint de
+# plausibilidad de tiempos de cocción para pollo/cerdo — nota de seguridad si el tiempo del paso es
+# implausiblemente corto (< MEALFIT_MIN_COOK_MINUTES_POULTRY_PORK, default 5). Ver _apply_food_safety_fixes.
+UNDERCOOK_TIME_NOTE_ENABLED = _env_bool("MEALFIT_UNDERCOOK_TIME_NOTE", True)
 
 # [P3-PORTION-QUANTIZE · 2026-06-13] Redondea las porciones del plan a unidades de cocina
 # medibles (¼ taza, ¼ cda, ½ unidad discreta, 5 g) ajustando los macros por el delta exacto.
@@ -9696,6 +9721,13 @@ _MICRO_CLOSER_KEYS = frozenset({
     # podía cerrarlos — asimetría steer↔closer; sus fuentes (nueces/semillas/linaza/aceites) son escalables con
     # el mismo mecanismo (el kcal-budget compartido las acota por densidad). tooltip-anchor: P2-MICRO-CLOSER-KEYS-EXT
     "potassium_mg", "vit_e_mg", "omega3_g",
+    # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] (audit v2 micros GAP-3, batch P2-AUDIT-V2-BATCH) VIT A y SELENIO
+    # eran los únicos micros con piso DRI en el panel SIN palanca (ni closer ni steer — "informativos"): vit A
+    # es food-achievable con lo que ya está en el plato DD (zanahoria/auyama/batata/huevo) y selenio con
+    # pescado/huevo/carnes. MISMO mecanismo (solo escala existentes, kcal-budget compartido) + TECHO UL
+    # OBLIGATORIO abajo: vit A 3000 mcg RAE (hepatotóxica/teratogénica — el UL aplica a retinol preformado;
+    # usarlo sobre RAE total es el techo CONSERVADOR correcto) y selenio 400 mcg (IOM). Renal-skip abajo.
+    "vit_a_mcg", "selenium_mcg",
 })
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
@@ -9712,6 +9744,8 @@ _MICRO_CLOSER_INGREDIENT_KEY = {
     "iron_mg": "iron_mg", "folate_mcg": "folate_mcg", "zinc_mg": "zinc_mg", "vit_c_mg": "vit_c_mg",
     # [P2-MICRO-CLOSER-KEYS-EXT] identidad (verificado contra nutrition_db.micros_from_ingredient_string:572-585).
     "potassium_mg": "potassium_mg", "vit_e_mg": "vit_e_mg", "omega3_g": "omega3_g",
+    # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] identidad (nutrition_db.micros_from_ingredient_string:580/:584).
+    "vit_a_mcg": "vit_a_mcg", "selenium_mcg": "selenium_mcg",
 }
 # TECHOS UL (Tolerable Upper Intake Level, IOM) por micro — el closer NUNCA escala un ingrediente más allá del UL
 # del día (defensa contra escalar hígado/vísceras al cerrar hierro). Fibra/Mg/Ca NO llevan UL aquí: el UL de Mg
@@ -9720,7 +9754,11 @@ _MICRO_CLOSER_INGREDIENT_KEY = {
 _MICRO_CLOSER_UL = {"iron_mg": 45.0, "zinc_mg": 40.0, "folate_mcg": 1000.0, "vit_c_mg": 2000.0,
                     # [P2-MICRO-CLOSER-KEYS-EXT] vit E UL 1000mg (IOM, α-tocoferol). Potasio/omega-3 de COMIDA
                     # sin UL (el riesgo K es renal/K-med → skip explícito en el closer, no techo).
-                    "vit_e_mg": 1000.0}
+                    "vit_e_mg": 1000.0,
+                    # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] vit A 3000 mcg RAE (UL IOM de retinol preformado,
+                    # aplicado sobre RAE total = conservador; hepatotóxica y teratogénica en embarazo) y
+                    # selenio 400 mcg (UL IOM; selenosis). OBLIGATORIOS al añadir estas keys al closer.
+                    "vit_a_mcg": 3000.0, "selenium_mcg": 400.0}
 # (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura alta (mitiga el falso positivo de sal 'al gusto'):
 SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", False)
 SODIUM_SUGAR_DEGRADE_MIN_COVERAGE = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_COVERAGE", 0.75)
@@ -10689,6 +10727,14 @@ def slot_coherence_backstop_for_meal(meal: dict, meal_type: str) -> list:
         out = []
         for v in slot_violations_for_meal_name(meal.get("name", ""), slot_key):
             out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
+        # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1) paridad updates: el mismo pase
+        # ingredient-level del productor S1 (arroz oculto en ingredients de un DESAYUNO con nombre inocuo).
+        try:
+            from constants import slot_ingredient_violations as _siv_b
+            for v in _siv_b(meal.get("ingredients") or [], slot_key):
+                out.append(f"{v['label']} (coherencia de horario es-DO)")
+        except Exception:
+            pass
         return out
     except Exception:
         return []
@@ -10876,6 +10922,9 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
             age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev,
         )
         plan["micronutrient_report"] = _mn
+        # [P2-DELIVERED-MACROS · 2026-07-01] este hook corre en las 3 superficies de update → los campos
+        # "entregado real" no quedan stale tras swap/chat-modify/regen-day.
+        refresh_delivered_macros(plan)
         if SUPPLEMENT_ADVICE_ENABLED:
             try:
                 from micronutrients import build_supplement_recommendations
@@ -10984,8 +11033,11 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             # renal-aware + el gate de nefrólogo, no este lever de "ir de compras".
             # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] las keys nuevas también quedan fuera en ERC (K contraindicado;
             # vit E/omega-3 vía nueces/semillas cargan K/P).
+            # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] vit A se ACUMULA en ERC (excreción renal reducida →
+            # hipervitaminosis A es hallazgo común en CKD; KDOQI desaconseja suplementarla) y selenio sigue
+            # el patrón "solo calcio cerrable en renal" del resto de keys.
             if _renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
-                                "potassium_mg", "vit_e_mg", "omega3_g"):
+                                "potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg"):
                 continue
             # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] potasio NUNCA se cierra bajo medicamento K-elevador
             # (espironolactona/IECA free-text incluidos vía P1-MICRO-CLINICAL-FREETEXT) — hiperkalemia iatrogénica.
@@ -11647,6 +11699,52 @@ def _apply_food_safety_fixes(plan: dict) -> int:
             meal["recipe"] = rec + [_vnote]
             meal["_food_safety_viver"] = "blended" if _blended else "raw"
             fixed += 1
+    # [P2-UNDERCOOK-TIME-NOTE · 2026-07-01] (audit v2 recetas GAP-4, batch P2-AUDIT-V2-BATCH) Plausibilidad
+    # de TIEMPOS: el contrato de pasos solo verifica PRESENCIA de un token de tiempo — "cocina el pollo 2
+    # minutos" pasaba sin señal (riesgo microbiológico de subcocción en pollo/cerdo). Lint determinista:
+    # paso con proteína de riesgo (pollo/cerdo) + verbo de cocción PRINCIPAL (no sellar/dorar, que son pasos
+    # cortos legítimos) + tiempo cuyo MÁXIMO < piso (default 5 min) → NOTA de seguridad (macro-preservante,
+    # idempotente, mismo patrón que huevo/seafood/víver; una nota de más es inocua, una subcocción no).
+    # Excluye menciones tangenciales (caldo/cubito/consomé de pollo). Knob: MEALFIT_UNDERCOOK_TIME_NOTE.
+    if UNDERCOOK_TIME_NOTE_ENABLED:
+        try:
+            _uc_floor = max(2, min(30, _env_int("MEALFIT_MIN_COOK_MINUTES_POULTRY_PORK", 5)))
+            for _d_uc in plan.get("days", []) or []:
+                for meal in (_d_uc.get("meals") or []) if isinstance(_d_uc, dict) else []:
+                    if not isinstance(meal, dict):
+                        continue
+                    rec = meal.get("recipe")
+                    if not isinstance(rec, list):
+                        continue
+                    if any("debe cocinarse por completo" in str(s) for s in rec):
+                        continue  # idempotente
+                    _flag_uc = False
+                    for _s_uc in rec:
+                        _sl_uc = strip_accents(str(_s_uc).lower())
+                        if ("⚠" in str(_s_uc)) or ("💡" in str(_s_uc)):
+                            continue
+                        if not _re.search(r"\b(?:pollo|cerdo|chuleta|longaniza)\b", _sl_uc):
+                            continue
+                        if any(t in _sl_uc for t in ("caldo", "cubito", "consome", "sella", "dora")):
+                            continue
+                        if not _re.search(r"\b(?:cocina|cocinar|cuece|hierve|fri[et]|saltea|plancha|hornea)", _sl_uc):
+                            continue
+                        _m_uc = _re.search(r"(\d+)(?:\s*-\s*(\d+))?\s*min", _sl_uc)
+                        if _m_uc:
+                            _max_min = int(_m_uc.group(2) or _m_uc.group(1))
+                            if _max_min < _uc_floor:
+                                _flag_uc = True
+                                break
+                    if _flag_uc:
+                        meal["recipe"] = rec + [
+                            "⚠️ Seguridad alimentaria: el pollo/cerdo debe cocinarse por completo (interior "
+                            "sin partes rosadas, ~74°C). Si el tiempo indicado no basta para tu corte, "
+                            "extiéndelo hasta que esté bien cocido."
+                        ]
+                        meal["_food_safety_undercook_time"] = True
+                        fixed += 1
+        except Exception as _uc_e:
+            logger.debug(f"[P2-UNDERCOOK-TIME-NOTE] lint no-op: {type(_uc_e).__name__}: {_uc_e}")
     return fixed
 
 
@@ -13579,10 +13677,15 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
         name = str(meal.get("name") or "").strip() or "el plato"
         ings = [str(i).strip() for i in (meal.get("ingredients") or []) if str(i).strip()]
         ings_txt = ", ".join(ings[:6]) if ings else "los ingredientes de la receta"
+        # [P2-NONEMPTY-TEMPLATE-TIME · 2026-07-01] (audit v2 recetas GAP-6, batch P2-AUDIT-V2-BATCH) La
+        # plantilla decía "hasta el punto deseado" SIN tiempo → violaba el propio contrato que el sistema
+        # mide (`_recipe_step_contract_issues`: "Toque de Fuego sin tiempo/temperatura"). Rango genérico
+        # plausible 10-15 min a fuego medio (paridad con `_fallback_recipe_steps`, que sí trae tiempos).
         meal["recipe"] = [
             f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de cocinar.",
             f"El Toque de Fuego: Cocina los ingredientes principales de «{name}» con la técnica indicada "
-            f"(plancha, horno o hervido) a fuego medio hasta el punto deseado, sazonando al gusto.",
+            f"(plancha, horno o hervido) a fuego medio 10-15 minutos, hasta que estén bien cocidos por "
+            f"dentro, sazonando al gusto.",
             f"Montaje: Emplata «{name}», rectifica la sal y sirve a la temperatura adecuada.",
         ]
         meal["_dish_quality_degraded"] = True
@@ -13593,6 +13696,12 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
 
 _CONTRACT_TIME_RE = _re.compile(
     r"\d+\s*(?:-\s*\d+\s*)?(?:min|minuto|hora)|°\s*c|grados|fuego\s+(?:alto|medio|bajo)|horno", _re.I)
+
+# [P2-RECIPE-ENGLISH-LINT · 2026-07-01] tokens de cocina EN de alta frecuencia (word-boundary, frases de
+# ≥2 palabras donde una sola sería ambigua). NO incluye palabras que colisionan con es-DO ("pan", "sal(t)een").
+_RECIPE_ENGLISH_RE = _re.compile(
+    r"\b(?:add the|cook until|stir in|stir well|heat the|bring to a boil|simmer for|combine the|"
+    r"set aside|serve with|season with|until golden|over medium heat|in a pan|the chicken|the onion)\b", _re.I)
 
 
 def _recipe_step_contract_issues(meal: dict) -> list:
@@ -13626,6 +13735,14 @@ def _recipe_step_contract_issues(meal: dict) -> list:
             out.append("prefijos fuera de orden")
         if i_f != -1 and not _CONTRACT_TIME_RE.search(steps[i_f]):
             out.append("Toque de Fuego sin tiempo/temperatura concreta")
+        # [P2-RECIPE-ENGLISH-LINT · 2026-07-01] (audit v2 recetas GAP-8, batch P2-AUDIT-V2-BATCH) Inglés
+        # residual del LLM en los pasos ("add the chicken and cook until golden") persistía en app + PDF
+        # sin señal. Tokens de cocina EN de alta frecuencia, word-boundary (no matchean es-DO: "olla"≠
+        # "roll", "aderezo"≠"dress"). Telemetría (contract_ratio) — mismo contrato NUNCA-gate del lint.
+        for _s_en in steps:
+            if _RECIPE_ENGLISH_RE.search(_s_en):
+                out.append("paso con inglés residual")
+                break
         return out
     except Exception:
         return []
@@ -15788,6 +15905,24 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                     pass
     except Exception as _e0:
         logger.warning(f"[P1-COHERENCE-FINALIZE] veg-guard no-op: {type(_e0).__name__}: {_e0}")
+    # [P2-QTY-PRESENCE-PERSIST · 2026-07-01] (audit v2 recetas GAP-7, batch P2-AUDIT-V2-BATCH) El persist
+    # boundary omitía `_ensure_ingredient_quantities` (corría solo en assemble + finalizador de updates) →
+    # un chunk degradado/partial/SSE-fallback podía persistir "Pollo" sin cantidad líder = no cocinable +
+    # macro ≈0 silencioso. Corre ANTES de slice/quantize (la porción default entra al redondeo). Idempotente.
+    try:
+        if QTY_PRESENCE_GUARD_ENABLED:
+            if db is None:
+                from nutrition_db import IngredientNutritionDB as _QGDB2
+                db = _QGDB2()
+            _nqp = 0
+            for _d in days or []:
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict):
+                        _nqp += _ensure_ingredient_quantities(_m, db)
+            if _nqp:
+                total += _nqp; parts.append(f"qty_presence={_nqp}")
+    except Exception as _eqp:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] qty-presence no-op: {type(_eqp).__name__}: {_eqp}")
     try:
         if RECIPE_SLICE_GRAMS_ENABLED:
             _n = _recipe_slice_units_to_grams(days, db)
@@ -18018,6 +18153,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result = await _adb(humanize_plan_ingredients, result)
     except Exception as e:
         logger.warning(f"⚠️ [HUMANIZE] Error al humanizar ingredientes: {e}")
+
+    # [P2-DELIVERED-MACROS · 2026-07-01] campos honestos "entregado real" junto al header-target.
+    refresh_delivered_macros(result)
 
     # Guardar técnicas seleccionadas para persistencia en DB
     result["_selected_techniques"] = skeleton.get("_selected_techniques", [])
@@ -23674,13 +23812,25 @@ def _fallback_restricted_tokens(form_data: dict) -> frozenset:
     return frozenset(tokens)
 
 
-def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset):
-    """[P0-ORCH-1] Primera plantilla del pool cuyos tokens NO intersectan las
-    restricciones. El último elemento de cada pool es neutral (tokens vacíos),
-    así que SIEMPRE hay un retorno seguro."""
-    for tmpl in pool:
-        if not (tmpl[1] & restricted_tokens):
-            return tmpl
+def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset, day_number: int = 1):
+    """[P0-ORCH-1] Plantilla del pool cuyos tokens NO intersectan las restricciones.
+    El último elemento de cada pool es neutral (tokens vacíos), así que SIEMPRE hay
+    un retorno seguro.
+
+    [P2-FALLBACK-DAY-ROTATION · 2026-07-01] (audit v2 creatividad GAP-1, batch P2-AUDIT-V2-BATCH)
+    Antes devolvía SIEMPRE la primera plantilla segura (`pool[0]`) y `_build_fallback_day` no usaba
+    el día → un plan fallback de 7 días era byte-idéntico ("Pollo y Arroz" × 7), exactamente el
+    anti-patrón de monotonía que el owner quiere erradicar. Ahora ROTA entre las plantillas SEGURAS
+    por número de día: `safe[(day_number-1) % len(safe)]`. Determinista (mismo día → misma plantilla,
+    preserva idempotencia del fallback) y cubre también el pool bariátrico curado (mismo callsite).
+    tooltip-anchor: P2-FALLBACK-DAY-ROTATION"""
+    safe = [tmpl for tmpl in (pool or []) if not (tmpl[1] & restricted_tokens)]
+    if safe:
+        try:
+            _idx = (int(day_number) - 1) % len(safe)
+        except Exception:
+            _idx = 0
+        return safe[_idx]
     # Inalcanzable en la práctica (pool[-1] es neutral); defensa por si un
     # refactor futuro elimina la entrada neutral.
     return pool[-1] if pool else None
@@ -23889,7 +24039,8 @@ def _build_fallback_day(nutr: dict, day_number: int,
     meals = []
     for meal_type, r in _slots:
         _slot_pool = _pool.get(meal_type) or _FALLBACK_MEAL_POOLS.get(meal_type)
-        tmpl = _select_safe_fallback_meal(_slot_pool, restricted_tokens)
+        # [P2-FALLBACK-DAY-ROTATION · 2026-07-01] rota por día entre plantillas seguras (anti-monotonía).
+        tmpl = _select_safe_fallback_meal(_slot_pool, restricted_tokens, day_number=day_number)
         meals.append(create_meal(tmpl, r, r, r, r, meal_type))
 
     # [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] (audit macros GAP-5) Los macros del fallback eran ASERTADOS
@@ -24131,6 +24282,45 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
         )
 
     return repaired
+
+
+def refresh_delivered_macros(plan: dict) -> bool:
+    """[P2-DELIVERED-MACROS · 2026-07-01] (audit v2 macros GAP-3, batch P2-AUDIT-V2-BATCH) El header del
+    plan (`calories`/`macros`) se fija al TARGET en assemble y nunca se reconcilia → si el entregado real
+    es 132g de proteína con target 150g, el header declara 150g (drift declarado-vs-real a nivel de
+    totales). Decisión: el header SIGUE siendo la meta (contrato del frontend); este helper añade los
+    campos HONESTOS `delivered_macros` + `delivered_calories` = PROMEDIO DIARIO realmente entregado
+    (suma de comidas / nº días), para que UI/PDF puedan mostrar "objetivo vs real" sin recomputar.
+    Se refresca en assemble y en el hook post-update (recompute_micronutrient_report_for_plan) → no
+    queda stale tras swap/chat/regen-day. Puro sobre meals, fail-safe. tooltip-anchor: P2-DELIVERED-MACROS"""
+    try:
+        days = plan.get("days") if isinstance(plan, dict) else None
+        if not isinstance(days, list) or not days:
+            return False
+        tp = tc = tf = tk = 0.0
+        ndays = 0
+        for d in days:
+            meals = (d.get("meals") or []) if isinstance(d, dict) else []
+            if not meals:
+                continue
+            ndays += 1
+            for m in meals:
+                if isinstance(m, dict):
+                    tp += _meal_macro_num(m.get("protein"))
+                    tc += _meal_macro_num(m.get("carbs"))
+                    tf += _meal_macro_num(m.get("fats"))
+                    tk += _meal_macro_num(m.get("cals"))
+        if not ndays:
+            return False
+        plan["delivered_macros"] = {
+            "protein": int(round(tp / ndays)),
+            "carbs": int(round(tc / ndays)),
+            "fats": int(round(tf / ndays)),
+        }
+        plan["delivered_calories"] = int(round(tk / ndays))
+        return True
+    except Exception:
+        return False
 
 
 def compute_clinical_band_score(plan: dict, nutrition: dict, *,

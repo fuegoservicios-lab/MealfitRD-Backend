@@ -576,6 +576,37 @@ def _verified_ingredients_only_enabled() -> bool:
     return _knob_env_bool("MEALFIT_VERIFIED_INGREDIENTS_ONLY", False)
 
 
+# [P2-VERIFIED-DROP-TELEMETRY · 2026-07-01] (audit v2 creatividad GAP-5, batch P2-AUDIT-V2-BATCH)
+# Contador in-process (bounded) de los ingredientes dropeados por VERIFIED-ONLY. El WARN grep-able
+# (P1-VERIFIED-ONLY-OBSERVABILITY) sigue siendo la fuente forense; este sink da el AGREGADO que faltaba:
+# el cron `_creativity_kpi_job` (cron_tasks) toma snapshot+reset y emite el top-N a pipeline_metrics →
+# "qué synonyms/altas de catálogo faltan" deja de requerir grep de logs. In-memory a propósito (drops
+# son raros por diseño; un restart pierde el parcial del día — aceptable para telemetría direccional).
+_VERIFIED_ONLY_DROP_COUNTS: dict = {}
+_VERIFIED_ONLY_DROP_MAX_KEYS = 200
+
+
+def record_verified_only_drop(name) -> None:
+    """Suma 1 al contador del ingrediente dropeado (key lower/trim, cap 200 keys anti-runaway)."""
+    try:
+        key = str(name or "").strip().lower()[:80]
+        if not key:
+            return
+        if key not in _VERIFIED_ONLY_DROP_COUNTS and len(_VERIFIED_ONLY_DROP_COUNTS) >= _VERIFIED_ONLY_DROP_MAX_KEYS:
+            return
+        _VERIFIED_ONLY_DROP_COUNTS[key] = _VERIFIED_ONLY_DROP_COUNTS.get(key, 0) + 1
+    except Exception:
+        pass
+
+
+def snapshot_and_reset_verified_only_drops() -> dict:
+    """Devuelve el contador acumulado y lo resetea (consumido por el cron de KPI de creatividad)."""
+    global _VERIFIED_ONLY_DROP_COUNTS
+    snap = _VERIFIED_ONLY_DROP_COUNTS
+    _VERIFIED_ONLY_DROP_COUNTS = {}
+    return snap
+
+
 _VERIFIED_SHOPPING_NAMES = None
 _VERIFIED_SHOPPING_NAMES_TS = 0.0
 
@@ -8021,6 +8052,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 "Si es sustantivo, la lista de compras queda incompleta (defensa primaria: prompt upstream).",
                 name,
             )
+            # [P2-VERIFIED-DROP-TELEMETRY · 2026-07-01] (audit v2 creatividad GAP-5, batch P2-AUDIT-V2-BATCH)
+            # sink estructurado además del WARN grep-able: el cron `_creativity_kpi_job` agrega el top-N de
+            # drops a pipeline_metrics → el owner decide synonyms/altas de catálogo con datos, no greps.
+            record_verified_only_drop(name)
             continue
 
         # [PROTEIN-UNIT-FALLBACK] Aplica ANTES de la extracción de peso.

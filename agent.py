@@ -2502,7 +2502,36 @@ def execute_tools(state: ChatState):
                             _tool_warnings = parsed_mod.get("_coherence_warnings")
                             if isinstance(_tool_warnings, list) and _tool_warnings:
                                 coherence_warnings.extend(_tool_warnings)
-                            tool_result = f"La comida fue modificada exitosamente. La nueva comida es: {parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. Dile al usuario que su plan ya fue actualizado."
+                            # [P2-CHATMODIFY-BAND-WARN · 2026-07-01] (audit v2 paridad GAP-2, batch
+                            # P2-AUDIT-V2-BATCH) Los flags de honestidad `_macro_band_low` (drift >15% vs el
+                            # plato original, e.g. closer sin palanca en pantry-strict) y `_slot_advisory`
+                            # (horario) SE PERSISTÍAN en el meal pero este branch los pisaba con "modificada
+                            # exitosamente" — el mismo patrón silencioso que P2-SWAP-BAND-WARNING cerró para
+                            # swap. Ahora: (a) toast no-bloqueante vía coherence_warnings (mismo canal SSE
+                            # `done` que ya consume el frontend), (b) el coach recibe la instrucción de
+                            # avisarlo en su respuesta. tooltip-anchor: P2-CHATMODIFY-BAND-WARN
+                            _mod_meal_flags = parsed_mod.get("modified_meal") or {}
+                            _band_warn_bits = []
+                            if _mod_meal_flags.get("_macro_band_low"):
+                                _band_warn_bits.append(
+                                    "El plato nuevo quedó algo alejado de tu objetivo de macros "
+                                    "(los ingredientes disponibles no alcanzaron el balance exacto)."
+                                )
+                            if _mod_meal_flags.get("_slot_advisory"):
+                                _band_warn_bits.append(
+                                    "El plato queda algo inusual para ese horario de comida."
+                                )
+                            if _band_warn_bits:
+                                coherence_warnings.extend(_band_warn_bits)
+                            tool_result = (
+                                f"La comida fue modificada exitosamente. La nueva comida es: "
+                                f"{parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. "
+                                f"Dile al usuario que su plan ya fue actualizado."
+                                + ((" IMPORTANTE — avísale también, en tono honesto y breve: "
+                                    + " ".join(_band_warn_bits)
+                                    + " Puede volver a pedir el cambio con otras palabras si quiere afinarlo.")
+                                   if _band_warn_bits else "")
+                            )
                     except Exception as _mod_exc:
                         # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
                         # `modified_meal` ausente: el agente NO hidrata el plan
