@@ -9404,9 +9404,23 @@ BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
 # [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) El band-score headline incluye la celda kcal (casi
 # siempre en banda por el reconcile) → infla ~25% vs precisión de macros. `compute_clinical_band_score` ya
 # expone `score_macros_only` (excluye kcal). Este knob hace que el band-GATE puntúe sobre macros-only.
-# Default FALSE: el umbral 0.5 está tuneado contra la distribución MIXTA (avg 0.707 en prod); flipear a True
-# SIN re-tunear el umbral inundaría de banners. Activar tras medir la distribución macros-only en prod.
-BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", False)
+# [P1-BAND-GATE-ALL4 · 2026-07-01] (audit objetivo v2 · P1-1) Flip ON: el gate agregado puntuaba sobre el
+# score kcal-inflado → un plan con carbs en banda solo 3/7 días (macros-only ~0.43) podía dar agregado 0.6
+# y entregarse sin retry ni banner. Con el flip, ambos gates (retry + banner) puntúan la precisión REAL de
+# macros. El umbral NO se reusa a ciegas (la advertencia histórica de este comment): los gates usan los
+# umbrales RE-TUNEADOS *_MACROS_ONLY de abajo — kcal≈1.0 siempre implica combined 0.5 ≈ macros-only 0.33,
+# así que 0.45 macros-only ≈ ligeramente más duro que el 0.5 combinado previo, sin mass-retry (avg macros-only
+# estimado ~0.61 sobre la distribución 2026-06-15, HOY mejor tras solver/closers/quantize del ciclo 06-21→07-01).
+# Encendido bajo la autorización estándar del owner (patrón P1-OBJECTIVE-LEVERS-ON: reversible por env,
+# vigilar retry-rate post-deploy vía pipeline_metrics node='clinical_band', que ya emite score_macros_only +
+# per_macro). Rollback exacto al comportamiento previo: MEALFIT_BAND_GATE_USE_MACROS_ONLY=false (los umbrales
+# combinados originales quedan intactos). tooltip-anchor: P1-BAND-GATE-ALL4
+BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", True)
+# [P1-BAND-GATE-ALL4 · 2026-07-01] Umbrales re-tuneados para la distribución macros-only (ver nota arriba).
+# Solo aplican cuando BAND_GATE_USE_MACROS_ONLY=True Y el score macros-only está disponible; en cualquier
+# otro caso los gates siguen usando BAND_RETRY_THRESHOLD / BAND_SCORE_GATE_THRESHOLD (combinados).
+BAND_RETRY_THRESHOLD_MACROS_ONLY = _env_float("MEALFIT_BAND_RETRY_THRESHOLD_MACROS_ONLY", 0.45)
+BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY", 0.45)
 
 # [P2-BAND-RETRY-GATE · 2026-06-21] (Fase 6 del build "todo terreno") La banda de macros como GATE DE
 # RETRY, no solo banner. El band-score gate existente (BAND_SCORE_GATE) marca `_quality_degraded`
@@ -9435,7 +9449,13 @@ BAND_RETRY_THRESHOLD = _env_float("MEALFIT_BAND_RETRY_THRESHOLD", 0.5)
 # (patrón P1-OBJECTIVE-LEVERS-ON: sin A/B previo, reversible por env, vigilar retry-rate post-deploy vía
 # pipeline_metrics/clinical_band). Rollback sin redeploy: MEALFIT_BAND_GATE_PER_MACRO=false.
 BAND_GATE_PER_MACRO = _env_bool("MEALFIT_BAND_GATE_PER_MACRO", True)
-BAND_GATE_PER_MACRO_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_PER_MACRO_THRESHOLD", 0.34)))
+# [P1-BAND-GATE-ALL4 · 2026-07-01] (audit objetivo v2 · P1-1) Umbral 0.34 → 0.5: con 0.34, un plan con carbs
+# en banda solo 3/7 días (0.43) se entregaba sin retry ni banner — el piso silencioso efectivo era "≥34% de
+# días por macro", no "all-4". Con 0.5, CUALQUIER macro con menos de la mitad de sus días en banda fuerza
+# retry (y banner honesto en agotamiento). `all4_ratio` sigue siendo KPI-only A PROPÓSITO: el techo físico
+# medido de all-4 es ~66.7% (granularidad de porción cocinable — no existen 0.73 huevos), gatearlo a 1.0
+# sería mass-retry inútil; el enforcement "100% dentro de lo posible" = per-macro ≥0.5 + macros-only ≥0.45.
+BAND_GATE_PER_MACRO_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_PER_MACRO_THRESHOLD", 0.5)))
 # [P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer aditivo de CARBOS para
 # el caso en que el reconcile (clamp [0.4,1.8]) se satura (carbos del día muy por debajo de la banda, p.ej. <56%
 # del target → necesita >1.8×). Escala el ingrediente CARBO-dominante existente más rico hacia el target con un
@@ -20148,23 +20168,27 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if BAND_RETRY_GATE_ENABLED:
         try:
             _bsr = compute_clinical_band_score(plan, {})
-            _bsr_val = (_bsr.get("score_macros_only")
-                        if BAND_GATE_USE_MACROS_ONLY and _bsr.get("score_macros_only") is not None
-                        else _bsr.get("score"))
+            # [P1-BAND-GATE-ALL4 · 2026-07-01] el umbral acompaña al score elegido: macros-only usa el umbral
+            # RE-TUNEADO (0.45; combined 0.5 ≈ macros-only 0.33 por la celda kcal≈1.0 — reusar 0.5 a ciegas
+            # sería mass-retry). Rollback MEALFIT_BAND_GATE_USE_MACROS_ONLY=false → score+umbral combinados.
+            _bsr_used_mo = bool(BAND_GATE_USE_MACROS_ONLY and _bsr.get("score_macros_only") is not None)
+            _bsr_val = _bsr.get("score_macros_only") if _bsr_used_mo else _bsr.get("score")
+            _bsr_thr = BAND_RETRY_THRESHOLD_MACROS_ONLY if _bsr_used_mo else BAND_RETRY_THRESHOLD
             _per_macro = _bsr.get("per_macro") or {}
-            _agg_trigger = (_bsr_val is not None and _bsr_val < BAND_RETRY_THRESHOLD)
+            _agg_trigger = (_bsr_val is not None and _bsr_val < _bsr_thr)
             # [P2-BAND-GATE-PER-MACRO · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-BANDGATE-LOOSE) El score
             # AGREGADO es kcal-inflado → solo dispara con <1/3 de celdas en banda. Además, si CUALQUIER macro
             # individual tiene <PER_MACRO_THRESHOLD de sus celdas en banda (un macro entero fuera de banda casi
-            # todos los días), fuerza retry. Default OFF (subir volumen de retry requiere A/B vs pipeline_metrics).
+            # todos los días), fuerza retry. ON desde P1-BAND-PER-MACRO-ON; umbral 0.5 desde P1-BAND-GATE-ALL4.
             _per_macro_low = [k for k, v in _per_macro.items()
                               if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
             _per_macro_trigger = bool(BAND_GATE_PER_MACRO and _per_macro_low)
             if _agg_trigger or _per_macro_trigger:
                 _low = [k for k, v in _per_macro.items()
                         if v is not None and v < 0.5 and k != "kcal"]
-                logger.warning(f"📊 [P2-BAND-RETRY-GATE] band_score={_bsr_val} < {BAND_RETRY_THRESHOLD} "
-                               f"(agg={_agg_trigger} per_macro_trigger={_per_macro_trigger} low={_per_macro_low} "
+                logger.warning(f"📊 [P2-BAND-RETRY-GATE] band_score={_bsr_val} < {_bsr_thr} "
+                               f"(macros_only={_bsr_used_mo} agg={_agg_trigger} "
+                               f"per_macro_trigger={_per_macro_trigger} low={_per_macro_low} "
                                f"per_macro={_per_macro}) → rechazo para reintentar el balanceo de macros.")
                 approved = False
                 issues.append(
@@ -24182,7 +24206,7 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
 
 
 def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: bool, attempt: int,
-                                  band_payload: dict = None) -> bool:
+                                  band_payload: dict = None, score_threshold: float = None) -> bool:
     """[P2-BAND-SCORE-GATE · 2026-06-15] Marca `plan._quality_degraded=True` (reason=low_band_score) si la
     precisión MEDIDA (`clinical_band_score`) cae bajo `BAND_SCORE_GATE_THRESHOLD`, NO es fallback, y el
     plan no estaba ya marcado por una razón peor → dispara el banner de degradación existente del
@@ -24195,19 +24219,24 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
     < BAND_GATE_PER_MACRO_THRESHOLD de sus celdas en banda (un macro entero fuera de banda casi todos los
     días, p.ej. carbs 0/7), marca reason=`low_band_macro:<macros>` — cierra la rama "rechazable-pero-
     entregado-sin-señal" cuando el retry per-macro se agotó. Mismo knob/umbral que el retry-gate
-    (BAND_GATE_PER_MACRO) → semántica consistente retry↔banner."""
+    (BAND_GATE_PER_MACRO) → semántica consistente retry↔banner.
+
+    [P1-BAND-GATE-ALL4 · 2026-07-01] `score_threshold` opcional: el caller lo fija al umbral que acompaña
+    al score que pasó en `band_val` (macros-only → BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY; combinado →
+    BAND_SCORE_GATE_THRESHOLD). Sin el param, cae al combinado global (compat con callers/tests previos)."""
     try:
         if not BAND_SCORE_GATE_ENABLED or delivered_was_fallback or band_val is None:
             return False
+        _score_thr = score_threshold if score_threshold is not None else BAND_SCORE_GATE_THRESHOLD
         _pm_low = []
         if BAND_GATE_PER_MACRO and isinstance(band_payload, dict):
             _pm = band_payload.get("per_macro") or {}
             _pm_low = sorted(k for k, v in _pm.items()
                              if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD)
-        if (band_val >= BAND_SCORE_GATE_THRESHOLD and not _pm_low) or plan.get("_quality_degraded"):
+        if (band_val >= _score_thr and not _pm_low) or plan.get("_quality_degraded"):
             return False
         plan["_quality_degraded"] = True
-        if band_val < BAND_SCORE_GATE_THRESHOLD:
+        if band_val < _score_thr:
             plan["_quality_degraded_reason"] = "low_band_score"
         else:
             plan["_quality_degraded_reason"] = "low_band_macro:" + ",".join(_pm_low)
@@ -24560,16 +24589,21 @@ def _compute_pipeline_holistic_score_and_emit(
                     # [P2-BAND-SCORE-GATE · 2026-06-15] Si la precisión medida cae bajo el umbral marca el plan
                     # degradado → dispara el banner de degradación existente del frontend (honestidad).
                     # [P2-BAND-MACROS-ONLY · 2026-06-16] (P2-9) el gate puntúa sobre score_macros_only cuando
-                    # BAND_GATE_USE_MACROS_ONLY (default False hasta re-tunear el umbral vs la dist. macros-only).
-                    _band_gate_val = (_band.get("score_macros_only")
-                                      if BAND_GATE_USE_MACROS_ONLY and _band.get("score_macros_only") is not None
-                                      else _band_val)
+                    # BAND_GATE_USE_MACROS_ONLY.
+                    # [P1-BAND-GATE-ALL4 · 2026-07-01] flip ON + el umbral acompaña al score elegido
+                    # (macros-only → *_MACROS_ONLY re-tuneado; combinado → el original). Espejo del retry-gate.
+                    _band_used_mo = bool(BAND_GATE_USE_MACROS_ONLY and _band.get("score_macros_only") is not None)
+                    _band_gate_val = _band.get("score_macros_only") if _band_used_mo else _band_val
+                    _band_gate_thr = (BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY if _band_used_mo
+                                      else BAND_SCORE_GATE_THRESHOLD)
                     # [P1-BAND-PER-MACRO-ON · 2026-07-01] band_payload → banner per-macro en agotamiento.
                     if _maybe_mark_low_band_degraded(plan, _band_gate_val, delivered_was_fallback,
-                                                     final_state.get("attempt", 1), band_payload=_band):
+                                                     final_state.get("attempt", 1), band_payload=_band,
+                                                     score_threshold=_band_gate_thr):
                         logger.warning(
                             f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
-                            f"{BAND_SCORE_GATE_THRESHOLD} → plan marcado _quality_degraded (low_band_score)")
+                            f"{_band_gate_thr} (macros_only={_band_used_mo}) → plan marcado _quality_degraded "
+                            f"(reason={plan.get('_quality_degraded_reason')})")
                 # [P2-11-DEGRADED-GATES-UNCONDITIONAL · 2026-06-16] (gap-audit P2-11) Estos 3 gates NO dependen
                 # de _band_val (cada uno guarda internamente delivered_was_fallback + no pisa razón peor) →
                 # DESINDENTADOS fuera del `if _band_val is not None:` para que corran AUNQUE

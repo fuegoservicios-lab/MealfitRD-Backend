@@ -62,7 +62,9 @@ def test_gate_ancla_en_review():
     # El gate debe: computar el score, comparar contra el umbral, y forzar retry (severity high).
     idx = src.find("if BAND_RETRY_GATE_ENABLED:")
     assert idx > -1, "El gate de retry de banda debe existir en review_plan_node."
-    region = src[idx: idx + 1400]
+    # [P1-BAND-GATE-ALL4 · 2026-07-01] ventana 1400→3000: los comments del umbral macros-only re-tuneado
+    # desplazaron el cierre del gate (severity a offset ~2643); el contrato anclado no cambió.
+    region = src[idx: idx + 3000]
     assert "compute_clinical_band_score(plan" in region
     assert "BAND_RETRY_THRESHOLD" in region
     assert "_severity_max(severity, \"high\")" in region

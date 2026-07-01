@@ -47,8 +47,13 @@ def test_p2_9_score_macros_only_excludes_kcal(go):
 
 
 def test_p2_9_knob_default_false(go):
-    # default seguro: el gate sigue puntuando sobre el mixto hasta re-tunear el umbral vs macros-only.
-    assert go.BAND_GATE_USE_MACROS_ONLY is False
+    # [P1-BAND-GATE-ALL4 · 2026-07-01] SUPERSEDED: el default era False "hasta re-tunear el umbral vs
+    # macros-only" — el re-tuning ocurrió (umbrales dedicados *_MACROS_ONLY=0.45) y el flip es ON.
+    # El ancla ahora protege el par flip+umbral: si alguien revierte el flip o borra los umbrales
+    # re-tuneados sin pasar por una decisión explícita, esto falla.
+    assert go.BAND_GATE_USE_MACROS_ONLY is True
+    assert go.BAND_RETRY_THRESHOLD_MACROS_ONLY == 0.45
+    assert go.BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY == 0.45
 
 
 # ───────────────────────── P2-5: truth-up de macros desde strings ─────────────────────────
