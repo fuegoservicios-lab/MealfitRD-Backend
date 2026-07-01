@@ -13,8 +13,20 @@ backfill, re-corre backfill_extended_micros.py) vs los SIN fdc_id (= necesitan v
 owner decide: si la cobertura verificada está <~90%, completar; documentar el resultado en food_db_integration.md.
 
     NEON_DATABASE_URL(_POOLED) en .env.  python scripts/check_extended_micro_coverage.py
+
+[P1-EXTENDED-MICROS-GUARD · 2026-07-01] El gap descrito arriba quedó CERRADO: la migración
+p1_extended_micros_zero_null_guard_2026_07_01.sql backfilleó la última fila NULL (Gandules
+vitE/vitK, proxy leguminosa conservador) y añadió el DO-block cero-NULL espejo del base.
+Este script queda como diagnóstico ops. Dos fixes del mismo P-fix: (a) stdout forzado a
+utf-8 (crasheaba en consola Windows cp1252 al imprimir '→'); (b) la tabla muestra el CONTEO
+exacto de NULLs por columna — el formato `:.0%` redondeaba 201/202 a "100%" y ocultó la
+única fila NULL del audit 2026-07-01.
 """
 import os, sys
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # [P1-EXTENDED-MICROS-GUARD] consola Windows cp1252
+except Exception:
+    pass
 try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -41,8 +53,10 @@ def main():
         total = conn.execute("SELECT count(*) FROM public.master_ingredients").fetchone()[0]
         verified = conn.execute(f"SELECT count(*) FROM public.master_ingredients WHERE {verified_pred}").fetchone()[0]
         print(f"[P2-EXTENDED-MICRO-COVERAGE] master_ingredients: total={total}, verificados(precio>0)={verified}\n")
-        print(f"{'columna':<28} {'cobertura_global':>16} {'cobertura_verificada':>22}")
-        print("-" * 70)
+        # [P1-EXTENDED-MICROS-GUARD · 2026-07-01] columna `nulls` con el CONTEO EXACTO: el formato `:.0%`
+        # redondeaba 201/202 a "100%" y ocultaba filas NULL sueltas (así se escondió Gandules en el audit).
+        print(f"{'columna':<28} {'cobertura_global':>16} {'cobertura_verificada':>22} {'nulls':>6}")
+        print("-" * 78)
         below = []
         for col in _EXTENDED_COLS:
             g = conn.execute(f"SELECT count(*) FROM public.master_ingredients WHERE {col} IS NOT NULL").fetchone()[0]
@@ -51,8 +65,9 @@ def main():
             ).fetchone()[0]
             cov_g = (g / total) if total else 0.0
             cov_v = (v / verified) if verified else 0.0
-            flag = "  ⚠️ BAJO" if cov_v < COVERAGE_FLOOR else ""
-            print(f"{col:<28} {cov_g:>15.0%} {cov_v:>21.0%}{flag}")
+            n_null = total - g
+            flag = "  ⚠️ BAJO" if cov_v < COVERAGE_FLOOR else ("  ⚠️ NULLS" if n_null else "")
+            print(f"{col:<28} {cov_g:>15.0%} {cov_v:>21.0%} {n_null:>6}{flag}")
             if cov_v < COVERAGE_FLOOR:
                 below.append((col, cov_v))
 
@@ -73,13 +88,19 @@ def main():
         print("  " + (", ".join(r[0] for r in no_fdc[:40]) + (" …" if len(no_fdc) > 40 else "") if no_fdc else "(ninguno)"))
 
         print("\n" + ("=" * 70))
-        if below:
-            print(f"RESULTADO: {len(below)} columna(s) bajo el piso de cobertura {COVERAGE_FLOOR:.0%} sobre verificados.")
+        # [P1-EXTENDED-MICROS-GUARD · 2026-07-01] el contrato ya no es "≥90%": es CERO-NULL (DO-block en
+        # p1_extended_micros_zero_null_guard_2026_07_01.sql). Cualquier fila NULL = exit 2.
+        n_any_null = len(with_fdc) + len(no_fdc)
+        if below or n_any_null:
+            if below:
+                print(f"RESULTADO: {len(below)} columna(s) bajo el piso de cobertura {COVERAGE_FLOOR:.0%} sobre verificados.")
+            if n_any_null:
+                print(f"RESULTADO: {n_any_null} fila(s) verificada(s) con algún micro extendido NULL (contrato = cero-NULL).")
             print("Acción: (1) re-corre backfill_extended_micros.py para los con fdc_id; (2) backfill MANUAL para")
-            print("los sin fdc_id; (3) documenta la cobertura final en backend/docs/food_db_integration.md.")
+            print("los sin fdc_id; (3) re-aplica p1_extended_micros_zero_null_guard_2026_07_01.sql (idempotente).")
             sys.exit(2)
         else:
-            print(f"RESULTADO: todas las 8 columnas ≥ {COVERAGE_FLOOR:.0%} sobre verificados. Cobertura sana.")
+            print(f"RESULTADO: cero-NULL en las 8 columnas extendidas (contrato P1-EXTENDED-MICROS-GUARD). Cobertura sana.")
 
 
 if __name__ == "__main__":
