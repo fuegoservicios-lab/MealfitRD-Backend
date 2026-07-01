@@ -2,7 +2,7 @@
 VERIFIED_INGREDIENTS_ONLY.
 
 Contexto (audit presupuesto↔calidad 2026-06-21): con MEALFIT_VERIFIED_INGREDIENTS_ONLY
-ON (prod), un ingrediente de receta fuera del catálogo de 119 se dropea de la lista de
+ON (prod), un ingrediente de receta fuera del catálogo verificado (~202) se dropea de la lista de
 compras Y el coherence guard se filtra a sí mismo el mismo ingrediente (espejo
 expected_raw) → cero divergencia → cero retry → cero señal. Resultado: "lista de compras
 incompleta entregada sin aviso" — el escenario exacto que preocupa al owner.

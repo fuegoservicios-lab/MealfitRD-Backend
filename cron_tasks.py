@@ -661,6 +661,10 @@ P0_4_T2_INCREMENTAL_KEYS = (
     '_quality_degraded_severity',
     '_quality_degraded_attempts',
     '_quality_degraded_band_score',
+    # [P3-BAND-PERMACRO-CHUNK-PROPAGATE · 2026-07-01] (audit v2 macros GAP-5, batch P3-AUDIT-V2-RESIDUALS)
+    # El array estructurado del banner per-macro (P1-BAND-PER-MACRO-ON) se perdía en el overlay T2 para
+    # semanas 2+ (el reason string sobrevivía, el detalle no) — asimetría de telemetría vs semana 1.
+    '_quality_degraded_band_per_macro_low',
     '_quality_degraded_panel_detail',
     '_quality_degraded_clinical_detail',
     '_quality_degraded_resolution_pct',
@@ -1662,6 +1666,113 @@ def _creativity_kpi_job():
             )
         except Exception as _ck_pm_err:
             logger.debug(f"[P2-CREATIVITY-KPI] pipeline_metrics INSERT falló (best-effort): {_ck_pm_err!r}")
+
+
+def _micro_floor_kpi_job():
+    """[P3-MICRO-FLOOR-KPI · 2026-07-01] (audit v2 micros GAP-5, batch P3-AUDIT-V2-RESIDUALS)
+    Agregador diario de la COBERTURA DE PISOS DRI a nivel flota. El panel per-plan
+    (`micronutrient_report`) es honesto pero nadie lo sumaba: no había forma de saber qué fracción
+    de planes cumple los pisos ni qué micros quedan crónicamente `bajo`/`estimado_bajo` (los levers
+    closer/steer son advisory — sin este KPI su efectividad era invisible). Emite a pipeline_metrics
+    (node='_micro_floor_kpi_job'): conteos de gaps de PISO por micro (status bajo vs estimado_bajo)
+    + fracción de planes sin ningún gap de piso. Los gaps de TECHO ('alto'/'estimado_alto') se
+    cuentan aparte. Read-only, informacional (sin system_alerts). Knobs:
+      MEALFIT_MICRO_KPI_INTERVAL_MIN (default 1440) · MEALFIT_MICRO_KPI_LOOKBACK_H (default 24)
+      · MEALFIT_MICRO_KPI_MAX_PLANS (default 1000). tooltip-anchor: P3-MICRO-FLOOR-KPI"""
+    _mk_skip: str | None = None
+    _mk_examined = 0
+    _mk_with_report = 0
+    _mk_floor_ok = 0
+    _mk_floor_counts: dict = {}
+    _mk_ceiling_gaps = 0
+    _mk_lookback = 24.0
+    try:
+        lookback_h = _env_float("MEALFIT_MICRO_KPI_LOOKBACK_H", 24.0,
+                                validator=lambda v: v > 0 and math.isfinite(v))
+        _mk_lookback = lookback_h
+        max_plans = _env_int("MEALFIT_MICRO_KPI_MAX_PLANS", 1000)
+        if max_plans <= 0:
+            max_plans = 1000
+        try:
+            from db_core import connection_pool as _mk_pool
+        except Exception as e:
+            logger.warning(f"[P3-MICRO-FLOOR-KPI] db_core import falló: {e}")
+            _mk_skip = "db_core_import_failed"
+            return
+        if not _mk_pool:
+            _mk_skip = "db_not_initialized"
+            return
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_h)
+        try:
+            plans = execute_sql_query(
+                """
+                SELECT id::text AS id, plan_data->'micronutrient_report'->'gaps' AS gaps
+                FROM public.meal_plans
+                WHERE updated_at >= %s AND plan_data ? 'micronutrient_report'
+                LIMIT %s
+                """,
+                (cutoff, max_plans),
+                fetch_all=True,
+            ) or []
+        except Exception as e:
+            logger.warning(f"[P3-MICRO-FLOOR-KPI] fetch planes falló: {e}")
+            _mk_skip = "fetch_plans_failed"
+            return
+        for rec in plans:
+            _mk_examined += 1
+            gaps = rec.get("gaps")
+            if isinstance(gaps, str):
+                try:
+                    gaps = json.loads(gaps)
+                except Exception:
+                    continue
+            if not isinstance(gaps, list):
+                continue
+            _mk_with_report += 1
+            _floor_gap_here = False
+            for g in gaps:
+                if not isinstance(g, dict):
+                    continue
+                _st = g.get("status")
+                _k = g.get("key") or "?"
+                if _st in ("bajo", "estimado_bajo"):
+                    _floor_gap_here = True
+                    _b = _mk_floor_counts.setdefault(_k, {"bajo": 0, "estimado_bajo": 0})
+                    _b[_st] += 1
+                elif _st in ("alto", "estimado_alto"):
+                    _mk_ceiling_gaps += 1
+            if not _floor_gap_here:
+                _mk_floor_ok += 1
+        logger.info(
+            f"[P3-MICRO-FLOOR-KPI lookback={lookback_h}h] plans={_mk_examined} with_report={_mk_with_report} "
+            f"all_floors_ok={_mk_floor_ok} floor_gaps={_mk_floor_counts} ceiling_gaps={_mk_ceiling_gaps}"
+        )
+    except Exception as _mk_err:
+        logger.error(f"[P3-MICRO-FLOOR-KPI] excepción no atrapada: {_mk_err!r}", exc_info=True)
+        _mk_skip = _mk_skip or "unhandled_exception"
+    finally:
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+                "duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    None, "__cron__", "_micro_floor_kpi_job", 0, 0, 0, 1.0,
+                    json.dumps({
+                        "lookback_h": _mk_lookback,
+                        "plans_examined": _mk_examined,
+                        "plans_with_report": _mk_with_report,
+                        "plans_all_floors_ok": _mk_floor_ok,
+                        "all_floors_ok_ratio": (round(_mk_floor_ok / _mk_with_report, 3)
+                                                if _mk_with_report else None),
+                        "floor_gap_counts": _mk_floor_counts,
+                        "ceiling_gaps_total": _mk_ceiling_gaps,
+                        "skip_reason": _mk_skip,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _mk_pm_err:
+            logger.debug(f"[P3-MICRO-FLOOR-KPI] pipeline_metrics INSERT falló (best-effort): {_mk_pm_err!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -7069,6 +7180,20 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             "interval",
             minutes=_CREAT_KPI_INT,
             id="creativity_kpi_job",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        # [P3-MICRO-FLOOR-KPI · 2026-07-01] agregador diario de cobertura de pisos DRI a nivel flota.
+        _MICRO_KPI_INT = _env_int("MEALFIT_MICRO_KPI_INTERVAL_MIN", 1440)
+        if _MICRO_KPI_INT < 60:
+            _MICRO_KPI_INT = 1440
+        _add_job_jittered(scheduler,
+            _micro_floor_kpi_job,
+            "interval",
+            minutes=_MICRO_KPI_INT,
+            id="micro_floor_kpi_job",
             max_instances=1,
             coalesce=True,
             replace_existing=True,
@@ -30998,8 +31123,11 @@ def process_plan_chunk_queue(target_plan_id=None):
                 # smart-shuffle path → NameError-guard (mismo patrón que el bloque P2-CHUNK-6).
                 try:
                     if isinstance(result, dict) and result.get('_quality_degraded'):
+                        # [P3-BAND-PERMACRO-CHUNK-PROPAGATE · 2026-07-01] + band_per_macro_low (detalle
+                        # estructurado del banner per-macro; paridad con semana 1).
                         for _qd_k in ('_quality_degraded', '_quality_degraded_reason', '_quality_degraded_severity',
                                       '_quality_degraded_attempts', '_quality_degraded_band_score',
+                                      '_quality_degraded_band_per_macro_low',
                                       '_quality_degraded_panel_detail', '_quality_degraded_clinical_detail',
                                       '_quality_degraded_resolution_pct'):
                             if _qd_k in result:

@@ -12784,6 +12784,12 @@ def _macro_aware_day_reconcile(meals: list, target_carbs: float, target_fats: fl
         return False
 
 
+# [P3-CALS-CATALOG-DECISION · 2026-07-01] (audit v2 macros GAP-4, batch P3-AUDIT-V2-RESIDUALS) DECISIÓN,
+# no gap: tras el truth-up/quantize, `meal["cals"]` es el kcal de CATÁLOGO (master_ingredients, base USDA)
+# y en general 4·P + 4·C + 9·F ≠ cals — los factores Atwater genéricos son MENOS precisos que el kcal
+# medido por alimento (fibra, alcoholes de azúcar, factores específicos). Cualquier UI/PDF debe mostrar
+# `cals` tal cual y NO recomputar 4/4/9 (si algún surface lo hace, el bug está en ese surface). El pase
+# 4/4/9 de P1-30 corre ANTES del engine a propósito (sanea números ASERTADOS por el LLM, no física).
 def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
     """[P2-MACRO-TRUTHUP · 2026-06-16] (gap-audit P2-5) Recomputa el NÚMERO de macros del meal sumando
     `db.macros_from_ingredient_string` sobre los strings FINALES de `meal['ingredients']` (post reconcile/
@@ -12915,13 +12921,29 @@ def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float
         if cur >= target_carbs * (1.0 - tol):
             return False  # ya en/sobre el piso de banda → nada que cerrar
         best = None  # (carbs_contrib, meal, idx, ing_str)
+        # [P3-CARBFLOOR-NIGHT-RICE-SKIP · 2026-07-01] (audit v2 slots GAP-4, batch P3-AUDIT-V2-RESIDUALS)
+        # Un arroz TANGENCIAL superviviente en la cena ("toque de arroz", gate-excluido por diseño) podía
+        # ser el carbo más rico del día → el closer lo inflaba ×2.5 = porción significativa de arroz
+        # nocturno que el gate name-based no caza. El arroz de una CENA nunca es target de escalado
+        # (los demás carbos del día siguen disponibles). Tokens/excludes SSOT de constants.
+        try:
+            from constants import (_SLOT_RICE_TOKENS as _crt, _SLOT_RICE_EXCLUDE as _cre,
+                                   canonical_slot_key as _csk_cf, strip_accents as _sa_cf)
+        except Exception:
+            _crt, _cre, _csk_cf, _sa_cf = (), (), (lambda x: None), (lambda x: x)
         for m in meals:
             ings = m.get("ingredients")
             if not isinstance(ings, list):
                 continue
+            _is_cena_cf = (_csk_cf(str(m.get("meal") or "")) == "cena")
             for idx, ing in enumerate(ings):
                 if _ingredient_macro_group(str(ing), db) != "carbs":
                     continue
+                if _is_cena_cf:
+                    _il_cf = _sa_cf(str(ing).lower())
+                    if (not any(e in _il_cf for e in _cre)
+                            and any(_re.search(r"\b" + _re.escape(t), _il_cf) for t in _crt)):
+                        continue  # arroz en cena: jamás escalarlo hacia el piso
                 _c = (db.macros_from_ingredient_string(str(ing)) or {}).get("carbs") or 0.0
                 if _c > 0 and (best is None or _c > best[0]):
                     best = (float(_c), m, idx, str(ing))

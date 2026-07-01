@@ -1704,6 +1704,11 @@ SLOT_INAPPROPRIATE_FOODS = {
         # 'guisada'/'frito' (falso positivo en cenas ligeras legítimas). tooltip-anchor: P2-SLOT-CENA-HEAVY-SOUP
         {"label": "sopón/guiso pesado de noche (sancocho/asopao/mondongo)", "tokens": (
             "sancocho", "asopao", "mondongo"), "hardness": "soft"},
+        # [P3-SLOT-NAME-HONESTY · 2026-07-01] (audit v2 slots nota P3, batch P3-AUDIT-V2-RESIDUALS) Un plato
+        # de CENA literalmente nombrado "Desayuno ..." ("Cena: Desayuno criollo") pasaba el gate (token-de-
+        # alimento, no token-de-slot). Token estrecho: solo la palabra "desayuno" en el NOMBRE. soft.
+        {"label": "plato nombrado 'desayuno' servido en la cena", "tokens": ("desayuno",),
+         "hardness": "soft"},
     ],
     # [P2-SLOT-ALMUERZO · 2026-06-29] (re-audit objetivo · P2) El almuerzo es el plato fuerte; un desayuno
     # (panqueque/cereal/granola) o un postre standalone (helado/flan) como PLATO PRINCIPAL del almuerzo es
@@ -1712,9 +1717,15 @@ SLOT_INAPPROPRIATE_FOODS = {
     # soft (nunca cero-plan). Estos tokens van en desayuno/merienda (F2 creatividad: panqueques de avena/harina),
     # pero como PLATO PRINCIPAL del almuerzo son incoherentes. tooltip-anchor: P2-SLOT-ALMUERZO
     "almuerzo": [
-        {"label": "comida de desayuno como plato principal del almuerzo (cereal/panqueque/waffle)", "tokens": (
-            "cereal", "hojuelas", "granola", "panqueque", "pancake", "waffle"),
-         "hardness": "soft"},
+        # [P3-SLOT-ALMUERZO-AVENA · 2026-07-01] (audit v2 slots P3-2, batch P3-AUDIT-V2-RESIDUALS) + "avena":
+        # el propósito declarado del set era cazar "comida de desayuno como plato principal" pero omitía la
+        # más icónica RD. Excludes protegen usos legítimos de avena-como-INGREDIENTE en un plato fuerte
+        # (costra/empanizado) y las formas harina/leche (F2 creatividad).
+        {"label": "comida de desayuno como plato principal del almuerzo (cereal/panqueque/waffle/avena)", "tokens": (
+            "cereal", "hojuelas", "granola", "panqueque", "pancake", "waffle", "avena"),
+         "hardness": "soft",
+         "exclude": ("harina de avena", "leche de avena", "costra de avena", "empanizado de avena",
+                     "empanizada de avena", "apanado de avena")},
         {"label": "postre standalone como plato principal del almuerzo (helado/flan)", "tokens": (
             "helado", "flan"), "hardness": "soft"},
     ],

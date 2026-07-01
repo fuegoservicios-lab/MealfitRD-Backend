@@ -1,8 +1,10 @@
 """[P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] SOLO alimentos verificados con precio
-La Sirena (los 119 de master_ingredients) pueden aparecer en la lista de compras.
-Decisión del owner: "no quiero que el LLM invente alimentos; solo los 119 verificados
-deben estar en la lista". Un ingrediente inventado por el LLM (laurel, comino, cúrcuma,
-sazón en polvo, achiote...) no resuelve a un master con precio → se EXCLUYE de la lista.
+La Sirena (los ~202 verificados de master_ingredients (era 119 pre-expansion 2026-06-26)) pueden aparecer en la lista de compras.
+Decisión del owner: "no quiero que el LLM invente alimentos; solo los verificados del catalogo (~202)
+deben estar en la lista". Un ingrediente inventado por el LLM (achiote, sazón en polvo,
+clavo dulce...) no resuelve a un master con precio → se EXCLUYE de la lista.
+[P3-AUDIT-V2-RESIDUALS · 2026-07-01] laurel/comino/cúrcuma ya NO sirven como fixtures de
+"inventado": P1-SPICES-CATALOG-SYNC los promovió al catálogo con precio.
 
 Diseño (verificado contra Neon prod 2026-06-20):
   - El drop (aggregate_and_deduct_shopping_list) y el espejo (run_shopping_coherence_guard,
@@ -85,15 +87,21 @@ def _force_enforcement(monkeypatch):
 @pytest.mark.skipif(not _DB, reason="requiere connection_pool a Neon prod")
 def test_helper_classifies_invented_vs_verified():
     from shopping_calculator import _is_verified_for_shopping
-    # invenciones del LLM (no en el catálogo de 119) → False
-    assert _is_verified_for_shopping("laurel") is False
-    assert _is_verified_for_shopping("comino molido") is False
-    assert _is_verified_for_shopping("curcuma") is False
+    # [P3-AUDIT-V2-RESIDUALS · 2026-07-01] fixtures actualizados: laurel/comino/cúrcuma fueron
+    # PROMOVIDOS al catálogo con precio por P1-SPICES-CATALOG-SYNC (lote 2026-07-01) — este test
+    # (que corre contra el dato VIVO) quedó stale usando esas especias como "inventadas". Los
+    # off-catálogo estables son los que el prompt del day-gen prohíbe explícitamente.
+    # invenciones del LLM (no en el catálogo verificado (~202)) → False
+    assert _is_verified_for_shopping("achiote") is False
+    assert _is_verified_for_shopping("sazon en polvo") is False
+    assert _is_verified_for_shopping("clavo dulce") is False
     # verificados (resuelven a master con precio) → True
     assert _is_verified_for_shopping("oregano") is True
     assert _is_verified_for_shopping("pechuga de pollo") is True
     assert _is_verified_for_shopping("arroz blanco") is True
     assert _is_verified_for_shopping("cilantro") is True  # el sofrito SÍ está
+    assert _is_verified_for_shopping("laurel") is True    # promovido P1-SPICES-CATALOG-SYNC
+    assert _is_verified_for_shopping("comino") is True    # promovido P1-SPICES-CATALOG-SYNC
 
 
 @pytest.mark.skipif(not _DB, reason="requiere connection_pool a Neon prod")
@@ -101,12 +109,12 @@ def test_aggregator_drops_unverified_keeps_verified(_force_enforcement):
     from shopping_calculator import aggregate_and_deduct_shopping_list
     res = aggregate_and_deduct_shopping_list(
         ["120g de pechuga de pollo", "70g de arroz blanco",
-         "2 hojas de laurel", "1 cdta de comino molido", "1 cdta de oregano"],
+         "1 cdta de achiote", "1 cdta de sazon en polvo", "1 cdta de oregano"],
         structured=True,
     )
     names = [str(i.get("name")).lower() for i in res]
-    assert not any("aurel" in n for n in names), "laurel (inventado) debe dropearse"
-    assert not any("omino" in n for n in names), "comino (inventado) debe dropearse"
+    assert not any("chiote" in n for n in names), "achiote (off-catálogo) debe dropearse"
+    assert not any("sazon en polvo" in n for n in names), "sazón en polvo (off-catálogo) debe dropearse"
     assert any("ollo" in n for n in names), "pollo (verificado) debe quedar"
     assert any("rroz" in n for n in names), "arroz (verificado) debe quedar"
     assert any("gano" in n for n in names), "orégano (verificado) debe quedar"
@@ -118,7 +126,7 @@ def test_guard_mirror_no_expected_only_for_dropped(_force_enforcement):
     divergencia expected_only (la única que fuerza retry en modo=block)."""
     from shopping_calculator import aggregate_and_deduct_shopping_list, run_shopping_coherence_guard
     ings = ["120g de pechuga de pollo", "70g de arroz blanco",
-            "2 hojas de laurel", "1 cdta de comino molido"]
+            "1 cdta de achiote", "1 cdta de sazon en polvo"]
     agg = aggregate_and_deduct_shopping_list(ings, structured=True)
     plan_result = {
         "days": [{"meals": [{"meal": "Almuerzo", "ingredients": ings}]}],
@@ -127,9 +135,9 @@ def test_guard_mirror_no_expected_only_for_dropped(_force_enforcement):
     }
     divs = run_shopping_coherence_guard(plan_result, mode_override="block", multiplier=1.0)
     expected_only = [str(d.get("food")).lower() for d in divs if d.get("side") == "expected_only"]
-    assert not any("aurel" in f for f in expected_only), (
-        "laurel NO debe ser expected_only — el espejo lo filtra de expected_raw"
+    assert not any("chiote" in f for f in expected_only), (
+        "achiote NO debe ser expected_only — el espejo lo filtra de expected_raw"
     )
-    assert not any("omino" in f for f in expected_only), (
-        "comino NO debe ser expected_only — el espejo lo filtra de expected_raw"
+    assert not any("sazon en polvo" in f for f in expected_only), (
+        "sazón en polvo NO debe ser expected_only — el espejo lo filtra de expected_raw"
     )

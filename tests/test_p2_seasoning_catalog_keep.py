@@ -4,7 +4,7 @@ solo en cantidad nominal (pizca/al gusto, sin peso) se LISTA con 1 empaque míni
 Caso en vivo (2026-06-22, plan de angelobrito500): un plan de ganancia muscular salió excelente
 (macros band 1.0) pero la lista de compras NO incluía cilantro ni orégano dominicano — el LLM los
 emitió como "pizca", y el AGGREGATE-DROP los descartaba por no tener peso. Ambos SÍ están en el
-catálogo de 119 (son alimentos reales y comprables). Es la misma clase que el bug de la mantequilla
+catálogo verificado (~202; era 119) (son alimentos reales y comprables). Es la misma clase que el bug de la mantequilla
 de maní: la receta dice X, la lista no tiene X.
 
 Fix: en el drop por cantidad-nominal, si el ingrediente resuelve al catálogo verificado, asignarle

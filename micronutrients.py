@@ -516,6 +516,16 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                     entry["nota"] = _FIBER_RENAL_NOTE   # [P2-RENAL-FIBER-NOTE] no empujar leguminosas en ERC
                 else:
                     entry["nota"] = _SUPPLEMENT_NOTE.get(key, "")
+                # [P3-FLOOR-ESTIMADO-CAVEAT · 2026-07-01] (audit v2 micros GAP-6, batch P3-AUDIT-V2-
+                # RESIDUALS) Asimetría de honestidad: la rama ceiling tiene nota dedicada para lo
+                # INCIERTO (_CEILING_ESTIMADO_NOTE) pero el piso mostraba la MISMA nota de "come más X"
+                # para 'bajo' confiado y 'estimado_bajo' (que puede ser solo dato faltante del catálogo,
+                # no un déficit real). Caveat simétrico anexado, sin reemplazar el consejo (sigue siendo
+                # accionable si el déficit es real).
+                if status == "estimado_bajo" and entry.get("nota"):
+                    entry["nota"] = (str(entry["nota"]).rstrip() +
+                                     " (Dato estimado: algunos ingredientes de tu plan no tienen este "
+                                     "nutriente medido en el catálogo — el valor real puede ser mayor.)")
                 gaps.append(entry)
         panel.append(entry)
     return {

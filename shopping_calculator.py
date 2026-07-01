@@ -557,9 +557,9 @@ def get_master_ingredients():
 
 # ============================================================
 # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Enforcement: SOLO alimentos
-# verificados con precio La Sirena (los 119 de master_ingredients) pueden
+# verificados con precio La Sirena (los ~202 verificados de master_ingredients (era 119 pre-expansion 2026-06-26)) pueden
 # aparecer en la lista de compras. Decisión del owner: "no quiero que el LLM
-# invente alimentos; solo los 119 verificados deben estar en la lista".
+# invente alimentos; solo los verificados del catalogo (~202) deben estar en la lista".
 # Dos puntos consumen la MISMA `_is_verified_for_shopping` → simetría garantizada:
 #   (1) drop en `aggregate_and_deduct_shopping_list` (excluye de la lista), y
 #   (2) espejo en `run_shopping_coherence_guard` (filtra expected_raw) — sin el
@@ -571,8 +571,9 @@ def get_master_ingredients():
 def _verified_ingredients_only_enabled() -> bool:
     # Default OFF en CÓDIGO (safe-by-default): así los tests de coherencia base no se
     # alteran y el rollback es trivial. Se ACTIVA en producción vía el .env del VPS
-    # (MEALFIT_VERIFIED_INGREDIENTS_ONLY=true) — decisión del owner: solo los 119
-    # alimentos verificados con precio La Sirena pueden aparecer en la lista.
+    # (MEALFIT_VERIFIED_INGREDIENTS_ONLY=true) — decisión del owner: solo los alimentos
+    # verificados con precio del catálogo (~202 tras la expansión 2026-06-26; era 119)
+    # pueden aparecer en la lista. [P3-STALE-119-COMMENTS · 2026-07-01]
     return _knob_env_bool("MEALFIT_VERIFIED_INGREDIENTS_ONLY", False)
 
 
@@ -5237,7 +5238,7 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         # (decisión: no bloquear por condimentos raros como laurel/comino), pero ANTES
         # era 100% silencioso: si el LLM desobedeció la instrucción upstream
         # (_get_verified_catalog_instruction) y metió un ingrediente SUSTANTIVO fuera de
-        # los 119, desaparecía de la lista Y del lado esperado del guard → cero señal →
+        # el catalogo verificado, desaparecía de la lista Y del lado esperado del guard → cero señal →
         # "lista de compras incompleta entregada sin aviso" (el miedo del owner). Ahora
         # capturamos lo filtrado ANTES de descartarlo y emitimos un WARNING grep-able para
         # medir la tasa real de desobediencia (si es alta, hay que ampliar catálogo o
@@ -8028,7 +8029,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         price_per_unit = float(master_item.get("price_per_unit", 0) or 0)
 
         # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Solo alimentos verificados con
-        # precio La Sirena (los 119 de master_ingredients) pueden aparecer en la lista.
+        # precio La Sirena (los ~202 verificados de master_ingredients (era 119 pre-expansion 2026-06-26)) pueden aparecer en la lista.
         # Un ingrediente inventado por el LLM (laurel, comino, cúrcuma...) que NO resuelve
         # a master con precio se EXCLUYE. El espejo en run_shopping_coherence_guard filtra
         # expected_raw con la MISMA `_is_verified_for_shopping`, así que este drop es un
@@ -8038,7 +8039,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 and price_per_lb <= 0 and price_per_unit <= 0):
             # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
             # drop sea grep-able en prod: este es el punto exacto donde un ingrediente de
-            # receta fuera de los 119 desaparece de la lista. Espejo del guard (P1-VERIFIED-ONLY-OBSERVABILITY).
+            # receta fuera del catalogo verificado desaparece de la lista. Espejo del guard (P1-VERIFIED-ONLY-OBSERVABILITY).
             # [P2-OFF-CATALOG-SNAP-RESOLVED · 2026-06-29] (re-audit objetivo · P2 F4) El "snap fuzzy al master más
             # cercano" que un audit podría proponer YA ocurrió: `_is_verified_for_shopping(name)` → `normalize_name`
             # aplica regex + FUZZY difflib (INTENTO 5, ratio≥0.87) + embedding ANTES de devolver False. Si llegamos
