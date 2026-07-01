@@ -111,7 +111,10 @@ def test_wired_in_swap():
 
 
 def test_wired_in_chat_modify():
-    assert "allergies=_clin_allergies)" in _TOOLS and "P0-VEG-GUARD-ALLERGEN" in _TOOLS, \
+    # Sin paréntesis de cierre: P2-CHAT-EXPLICIT-SLOT-WISH añadió `skip_night_rice=` después de
+    # `allergies=` en el mismo call → el match exacto con `)` quedó stale. El contrato es que el
+    # finalizer reciba las allergies del perfil, no la forma exacta del call.
+    assert "allergies=_clin_allergies" in _TOOLS and "P0-VEG-GUARD-ALLERGEN" in _TOOLS, \
         "chat-modify (tools.py) no pasa allergies al finalizer"
 
 
