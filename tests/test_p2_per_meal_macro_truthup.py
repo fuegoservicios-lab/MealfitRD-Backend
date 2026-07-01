@@ -82,10 +82,21 @@ def test_no_toca_cuando_cobertura_baja():
 
 
 def test_knob_off_no_hace_nada(monkeypatch):
-    monkeypatch.setattr(go, "MACRO_TRUTHUP_ENABLED", False)
+    # [P2-TRUTHUP-KNOB-SPLIT · 2026-07-01] el consumidor per-meal ahora lee su binding PROPIO
+    # (antes MACRO_TRUTHUP_ENABLED, que era pisado por MEALFIT_MACRO_TRUTHUP → knob muerto).
+    monkeypatch.setattr(go, "PER_MEAL_MACRO_TRUTHUP_ENABLED", False)
     m = _eggs_meal(41)
     assert _truth_up_meal_macros_from_catalog(m, _FakeDB()) is False
     assert m["protein"] == 41  # intacto
+
+
+def test_knob_split_bindings_are_independent():
+    """[P2-TRUTHUP-KNOB-SPLIT] los dos truth-ups tienen bindings separados: apagar el global
+    (MEALFIT_MACRO_TRUTHUP) ya NO apaga el per-meal, y viceversa."""
+    assert hasattr(go, "PER_MEAL_MACRO_TRUTHUP_ENABLED")
+    assert hasattr(go, "MACRO_TRUTHUP_ENABLED")
+    assert go.PER_MEAL_MACRO_TRUTHUP_ENABLED is True
+    assert go.MACRO_TRUTHUP_ENABLED is True
 
 
 def test_knob_registrado():

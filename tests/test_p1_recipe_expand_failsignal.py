@@ -228,5 +228,13 @@ def test_frontend_recipe_coercion_helper():
         "toRecipeSteps en Recipes.jsx (coerción recipe string→array)."
     )
     # El render y el PDF usan la coerción, no `.recipe.map` crudo en el render.
-    assert "activeRecipeSteps.map(" in src
+    # [2026-07-01] El render se componentizó (RecipesView.jsx recibe `steps` ya coercionados y hace
+    # `steps.map(`); Recipes.jsx sigue siendo el dueño de la coerción (`toRecipeSteps(...)`) y pasa
+    # `steps: activeRecipeSteps`. El assert acepta ambas formas (pre/post componentización).
+    assert ("activeRecipeSteps.map(" in src) or ("steps: activeRecipeSteps" in src), (
+        "el render ya no consume los pasos coercionados (activeRecipeSteps) — regresión de coerción"
+    )
     assert "toRecipeSteps(meal.recipe)" in src
+    assert ".recipe.map(" not in src, (
+        "P2-RECIPE-DISCLAIMER-LIST regresión: render con `.recipe.map` crudo (sin coerción)."
+    )

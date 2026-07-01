@@ -47,8 +47,10 @@ def test_ul_caps_present():
 
 
 def test_renal_skip_includes_new_micros_in_source():
-    # el renal-skip del closer debe listar los 4 nuevos micros además de Mg/fibra.
-    assert '("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg")' in _GRAPH
+    # el renal-skip del closer debe listar los micros cerrables además de Mg/fibra.
+    # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] la tupla se reformateó multilinea al añadir K/vitE/omega-3.
+    assert '_renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",' in _GRAPH
+    assert '"potassium_mg", "vit_e_mg", "omega3_g")' in _GRAPH
 
 
 def test_shared_kcal_budget_and_ul_clamp_in_source():

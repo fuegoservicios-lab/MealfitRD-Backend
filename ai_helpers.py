@@ -1086,12 +1086,19 @@ def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:
 
         response = _invoke()
         steps = getattr(response, "recipe", None) if response is not None else None
-        # Aceptar solo una lista no-vacía con ≥1 paso string no-blank.
+        # [P2-RECIPE-STEP-CONTRACT-GATE · 2026-07-01] (audit recetas P2-2) El check aceptaba ≥1 paso pese a
+        # que ExpandedRecipeModel exige exactamente 3 → una "expansión" degenerada de 1 paso REEMPLAZABA una
+        # receta completa y quedaba isExpanded=true (sin retry posible). Ahora exige ≥3 pasos sustantivos;
+        # menos → fallo señalizado (None: sin cobro, sin persist, el cliente puede reintentar).
         if isinstance(steps, list):
             clean_steps = [s for s in steps if isinstance(s, str) and s.strip()]
-            if clean_steps:
+            if len(clean_steps) >= 3:
                 logger.info("✅ [CHEF AGENT] Receta expandida con éxito.")
                 return clean_steps
+            if clean_steps:
+                logger.warning(f"⚠️ [CHEF AGENT] Expansión degenerada ({len(clean_steps)} paso(s) < 3) → "
+                               f"fallo señalizado (no reemplaza la receta completa).")
+                return None
         logger.warning("⚠️ [CHEF AGENT] El modelo no regresó una lista 'recipe' válida. Señalizando fallo (None).")
         return None
 

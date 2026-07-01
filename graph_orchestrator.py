@@ -4781,9 +4781,14 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             "DEBES construir TODAS las comidas (y sus `ingredients`) usando ÚNICAMENTE los alimentos "
             "de la lista de abajo. PROHIBIDO ABSOLUTO inventar o agregar cualquier alimento fuera de "
             "esta lista — ni proteínas, ni vegetales, ni frutas, ni granos, NI CONDIMENTOS NI ESPECIAS. "
-            "Si una receta tradicional pide algo que no está aquí (ej. laurel, comino, cúrcuma, sazón en "
-            "polvo, achiote, pimienta de olor), OMÍTELO por completo — usa solo los sazonadores verificados "
-            "de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, etc.). "
+            # [P1-SPICES-CATALOG-SYNC · 2026-07-01] Los ejemplos de "prohibido" NO deben nombrar especias que
+            # el lote 2 del catálogo (2026-06-26) verificó (comino/cúrcuma/laurel/tomillo/curry): la instrucción
+            # era auto-contradictoria (aparecían en la lista "USA EXCLUSIVAMENTE" Y como ejemplo de prohibido) →
+            # el LLM omitía sazones legítimas y los guisos salían desabridos. tooltip-anchor: P1-SPICES-CATALOG-SYNC
+            "Si una receta tradicional pide algo que no está aquí (ej. achiote, sazón en polvo, clavo "
+            "dulce, pimienta de olor, salsa de soya), OMÍTELO por completo — usa solo los sazonadores "
+            "verificados de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, y si aparecen abajo: "
+            "comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor criollo real). "
             f"Lista de {len(names)} alimentos verificados (cada ingrediente que emitas DEBE corresponder a "
             "uno de estos):\n"
             + ", ".join(names)
@@ -8773,7 +8778,11 @@ MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", True)
 # protein-closer SALTE esa comida (cree que ya cumple el piso) → el día queda bajo el piso con un
 # número mentiroso por-comida. Band-safe: corre ANTES del solver/closer/reconcile, que siguen
 # enforzando el target diario aguas abajo. Flip a False revierte. Anchor: P2-PER-MEAL-MACRO-TRUTHUP.
-MACRO_TRUTHUP_ENABLED = _env_bool("MEALFIT_PER_MEAL_MACRO_TRUTHUP", True)
+# [P2-TRUTHUP-KNOB-SPLIT · 2026-07-01] (audit macros GAP-2) Esta variable se llamaba MACRO_TRUTHUP_ENABLED y era
+# RE-ASIGNADA ~50 líneas abajo por el knob MEALFIT_MACRO_TRUTHUP → MEALFIT_PER_MEAL_MACRO_TRUTHUP era un knob
+# MUERTO (el rollback documentado no hacía nada) y MEALFIT_MACRO_TRUTHUP apagaba AMBOS truth-ups a la vez.
+# Binding propio → cada knob controla su pasada. tooltip-anchor: P2-TRUTHUP-KNOB-SPLIT
+PER_MEAL_MACRO_TRUTHUP_ENABLED = _env_bool("MEALFIT_PER_MEAL_MACRO_TRUTHUP", True)
 
 # [P3-PROTEIN-TOPUP · 2026-06-13] Tras el escalado del solver, si una comida sigue corta
 # de proteína, añade una porción de la proteína más magra del pool aprobado del día para
@@ -8868,6 +8877,20 @@ GEN_SANITY_AUTOFIX_ENABLED = _env_bool("MEALFIT_GEN_SANITY_AUTOFIX", True)
 # la cena por tubérculo nocturno ANTES del reviewer → evita el retry más común del gate P1-SLOT-APPROPRIATENESS
 # (ahorra una regeneración completa de tokens). El gate queda como backstop. Flip a False revierte a solo-gate.
 NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
+# [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
+# (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
+# 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
+# matchea \barroz\b (fuera de _SLOT_RICE_EXCLUDE) con gramaje ≥ MIN_G, se sustituye por el tubérculo rotado SIN
+# tocar el nombre (el nombre no delata arroz). Hereda a updates vía el finalizer. MIN_G evita tocar guarniciones
+# tangenciales que las exclusiones no cubran. tooltip-anchor: P1-NIGHT-RICE-INGREDIENT
+NIGHT_RICE_INGREDIENT_PASS = _env_bool("MEALFIT_NIGHT_RICE_INGREDIENT_PASS", True)
+NIGHT_RICE_INGREDIENT_MIN_G = max(20, min(200, _env_int("MEALFIT_NIGHT_RICE_INGREDIENT_MIN_G", 60)))
+# [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Moro/locrio/chofán en cena degradaba a advisory
+# en el intento final y SE ENTREGABA (el autofix declaraba "NO toca moro/locrio"). En la rama advisory-final del
+# gate, el modo compound convierte el plato compuesto a su versión guisada con tubérculo (nombre + arroz→tubérculo
+# + pasos) en vez de entregar el disparate de horario. Solo corre en el último intento (los intentos 1..N-1
+# conservan el retry, que da al LLM la oportunidad de un plato mejor). tooltip-anchor: P1-NIGHT-RICE-COMPOUND-FINAL
+NIGHT_RICE_COMPOUND_FINAL = _env_bool("MEALFIT_NIGHT_RICE_COMPOUND_FINAL", True)
 # [P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Guard UNIVERSAL: vegetales del catálogo mencionados en los PASOS de la
 # receta pero ausentes de ingredients[] (bug en vivo: "calabacín" en los pasos de un revoltillo, sin estar en la lista →
 # no entra a compras ni a macros). Macro-safe por construcción: solo category=='Vegetales' AND kcal/100g ≤ MAX_KCAL
@@ -8887,6 +8910,13 @@ ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
 # ¿qué significa media lonja de algo vago?) a GRAMOS medibles ('15 g de queso'). El usuario lo señaló como
 # incoherente. Default ON. Rollback: MEALFIT_RECIPE_SLICE_GRAMS=false. tooltip-anchor: P1-RECIPE-SLICE-GRAMS
 RECIPE_SLICE_GRAMS_ENABLED = _env_bool("MEALFIT_RECIPE_SLICE_GRAMS", True)
+# [P1-RECIPE-QTY-SYNC · 2026-07-01] (audit recetas P1-A) El prompt exige MEDIDAS en los pasos ("Mise en place:
+# ... 50 g de arroz") pero solver/caps/closers/quantize reescalan ingredients[] DESPUÉS de escritos los pasos y
+# nunca tocan recipe[] → el paso decía 50 g mientras ingredients/lista decían 80 g: el usuario cocinaba mal el
+# plato con macros "clavados". Sincronizador determinista post-quantize: reescribe la MENCIÓN "<qty> <unit> de
+# <alimento>" del paso a la cantidad ACTUAL del ingrediente (match conservador por token principal; las notas
+# ⚠/💡 no se tocan). Rollback: MEALFIT_RECIPE_STEP_QTY_SYNC=false. tooltip-anchor: P1-RECIPE-QTY-SYNC
+RECIPE_STEP_QTY_SYNC_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_QTY_SYNC", True)
 # [P3-LEAF-VOLUME-CAP · 2026-06-28] El solver clasifica las hojas crudas (rúcula/lechuga/espinaca) como grupo "carbs"
 # (su macro dominante por kcal) y las escala para clavar el target de carbs → "5.5 taza de rúcula (165g)" en un
 # revoltillo (montaña de hojas). Las hojas son ~5 kcal/taza → recortarlas NO mueve macros pero sí la coherencia/UX.
@@ -9399,7 +9429,12 @@ BAND_RETRY_THRESHOLD = _env_float("MEALFIT_BAND_RETRY_THRESHOLD", 0.5)
 # CUALQUIER macro individual (proteína/carbs/grasas) tiene <`PER_MACRO_THRESHOLD` de sus celdas en banda, fuerza
 # retry. Default OFF (subir el volumen de retry requiere A/B contra pipeline_metrics de prod, igual que BAND_RETRY).
 # tooltip-anchor: P2-BAND-GATE-PER-MACRO
-BAND_GATE_PER_MACRO = _env_bool("MEALFIT_BAND_GATE_PER_MACRO", False)
+# [P1-BAND-PER-MACRO-ON · 2026-07-01] (audit macros GAP-1) Flip ON: con el gate solo-agregado, un macro entero
+# podía fallar 7/7 días (carbs al 120% todos los días → score 0.75 > 0.5) y el plan se entregaba SIN retry NI
+# banner — el hueco dominante contra el objetivo "100% all-4". Encendido bajo la autorización estándar del owner
+# (patrón P1-OBJECTIVE-LEVERS-ON: sin A/B previo, reversible por env, vigilar retry-rate post-deploy vía
+# pipeline_metrics/clinical_band). Rollback sin redeploy: MEALFIT_BAND_GATE_PER_MACRO=false.
+BAND_GATE_PER_MACRO = _env_bool("MEALFIT_BAND_GATE_PER_MACRO", True)
 BAND_GATE_PER_MACRO_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_PER_MACRO_THRESHOLD", 0.34)))
 # [P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer aditivo de CARBOS para
 # el caso en que el reconcile (clamp [0.4,1.8]) se satura (carbos del día muy por debajo de la banda, p.ej. <56%
@@ -9634,20 +9669,38 @@ MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", True)
 _MICRO_CLOSER_KEYS = frozenset({
     "fiber_g", "magnesium_mg", "calcium_mg",
     "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+    # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] (audit micros GAP-3/GAP-4) POTASIO: el déficit poblacional más
+    # común del panel quedaba solo con prompt+medidor pese a que sus guards (renal, K-elevating med) ya se
+    # computan dentro del closer — se cierra con skip explícito renal/K-med (K de comida no tiene UL en sanos).
+    # VIT E + OMEGA-3: el steer los empuja como "alcanzables" (P1-MICRO-STEER-OMEGA3-VITE) pero el closer no
+    # podía cerrarlos — asimetría steer↔closer; sus fuentes (nueces/semillas/linaza/aceites) son escalables con
+    # el mismo mecanismo (el kcal-budget compartido las acota por densidad). tooltip-anchor: P2-MICRO-CLOSER-KEYS-EXT
+    "potassium_mg", "vit_e_mg", "omega3_g",
 })
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
+# [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
+# a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
+MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK", True)
+# [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] reescala las plantillas del fallback hacia las kcal del slot +
+# truth-up físico (los números dejan de ser asertados). Default ON. tooltip-anchor: P2-FALLBACK-PHYSICAL-MACROS
+FALLBACK_PHYSICAL_MACROS_ENABLED = _env_bool("MEALFIT_FALLBACK_PHYSICAL_MACROS", True)
 MICRONUTRIENT_CLOSER_MAX_SCALE = max(1.1, min(3.0, _env_float("MEALFIT_MICRONUTRIENT_CLOSER_MAX_SCALE", 1.6)))
 # map report-key → key del dict de db.micros_from_ingredient_string (la fibra allá es 'fiber', no 'fiber_g';
 # el resto son identidad — verificado contra micronutrients.py:295-308 / nutrition_db.micros_from_ingredient_string).
 _MICRO_CLOSER_INGREDIENT_KEY = {
     "fiber_g": "fiber", "magnesium_mg": "magnesium_mg", "calcium_mg": "calcium_mg",
     "iron_mg": "iron_mg", "folate_mcg": "folate_mcg", "zinc_mg": "zinc_mg", "vit_c_mg": "vit_c_mg",
+    # [P2-MICRO-CLOSER-KEYS-EXT] identidad (verificado contra nutrition_db.micros_from_ingredient_string:572-585).
+    "potassium_mg": "potassium_mg", "vit_e_mg": "vit_e_mg", "omega3_g": "omega3_g",
 }
 # TECHOS UL (Tolerable Upper Intake Level, IOM) por micro — el closer NUNCA escala un ingrediente más allá del UL
 # del día (defensa contra escalar hígado/vísceras al cerrar hierro). Fibra/Mg/Ca NO llevan UL aquí: el UL de Mg
 # (350mg) aplica solo a SUPLEMENTOS, no a comida, y fibra no tiene UL → escalar comida es seguro. Folato UL 1000mcg
 # es de ácido fólico SINTÉTICO (el folato de comida no tiene UL), pero lo aplicamos como techo conservador.
-_MICRO_CLOSER_UL = {"iron_mg": 45.0, "zinc_mg": 40.0, "folate_mcg": 1000.0, "vit_c_mg": 2000.0}
+_MICRO_CLOSER_UL = {"iron_mg": 45.0, "zinc_mg": 40.0, "folate_mcg": 1000.0, "vit_c_mg": 2000.0,
+                    # [P2-MICRO-CLOSER-KEYS-EXT] vit E UL 1000mg (IOM, α-tocoferol). Potasio/omega-3 de COMIDA
+                    # sin UL (el riesgo K es renal/K-med → skip explícito en el closer, no techo).
+                    "vit_e_mg": 1000.0}
 # (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura alta (mitiga el falso positivo de sal 'al gusto'):
 SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", False)
 SODIUM_SUGAR_DEGRADE_MIN_COVERAGE = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_COVERAGE", 0.75)
@@ -9750,11 +9803,12 @@ def _protein_floor_shortfall(plan, *, renal_capped: bool, form_data: dict = None
     finalizar). Devuelve lista de (day_label, protein_g, target_g); vacía si cumple, está
     exento (renal o gate off), o no hay target válido.
 
-    Mide la proteína DECLARADA por comida (`_meal_macro_num`) — la MISMA medida que usan el
-    gate de review Y el fallback matemático (cuyos macros declarados = target por
-    construcción: `_build_fallback_day` asigna protein=target×ratio, ratios suman 1.0). Así,
-    un fallback sustituido SIEMPRE pasa esta verificación (la garantía es coherente con la
-    medida). Tooltip-anchor: P2-PROTEIN-FLOOR-FAILHARD."""
+    Mide la proteína DECLARADA por comida (`_meal_macro_num`) — la MISMA medida que usa el
+    gate de review. [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] Los macros del fallback ahora
+    son FÍSICOS (plantillas reescaladas + truth-up), no target×ratio asertado — un fallback
+    podría medir bajo el piso, pero NUNCA se re-verifica: el backstop fail-hard está gateado
+    por `not already_fallback` (cero riesgo de loop de sustitución).
+    Tooltip-anchor: P2-PROTEIN-FLOOR-FAILHARD."""
     if not PROTEIN_FLOOR_HARD_GATE or renal_capped or not isinstance(plan, dict):
         return []
     try:
@@ -10515,6 +10569,13 @@ UPDATE_CONDITION_SUBST_ENABLED = _env_bool("MEALFIT_UPDATE_CONDITION_SUBST", Tru
 # Rollback granular sin tocar el knob clínico general: MEALFIT_UPDATE_MERCURY_GUARD=false.
 MERCURY_UPDATE_GUARD = _env_bool("MEALFIT_UPDATE_MERCURY_GUARD", True)
 
+# [P0-EXPAND-CONDITION-GUARD · 2026-07-01] (audit objetivo v2 · P0-1) Knob del scan ABORTIVO de términos
+# contraindicados por CONDICIÓN médica (DM2/HTA/dislipidemia/embarazo-mercurio) sobre pasos de receta
+# generados por LLM FUERA del grafo (/recipe/expand). El backstop sustitutivo
+# (`condition_substitution_backstop_for_meal`) opera sobre `ingredients[]` — NO cubre prosa de pasos;
+# este detector cierra ese hueco. Default ON (clínico). Rollback sin redeploy.
+EXPAND_CONDITION_GUARD = _env_bool("MEALFIT_EXPAND_CONDITION_GUARD", True)
+
 
 def _scan_mercury_pregnancy_violations(meal: dict, form_data) -> list:
     """[P1-MERCURY-UPDATE-GUARD · 2026-06-24] Detecta pescado ALTO en mercurio en un meal cuando el perfil
@@ -10702,6 +10763,55 @@ def condition_substitution_backstop_for_meal(meal: dict, form_data: dict) -> int
         return 0
 
 
+def condition_prohibited_violations_for_meal(meal: dict, form_data: dict) -> list:
+    """[P0-EXPAND-CONDITION-GUARD · 2026-07-01] (audit objetivo v2 · P0-1) Detección ABORTIVA de términos
+    contraindicados por CONDICIÓN médica (DM2 miel/azúcar/refinados-IG, HTA cubitos/embutidos/sazones,
+    dislipidemia mantequilla/lácteos enteros, embarazo pescado alto en mercurio) en los items de
+    `meal['ingredients']`. Reusa el SSOT `condition_rules.collect_substitutions` — los MISMOS
+    tokens+negatives que el Guard 3 de S1 (`_apply_condition_substitutions`) y que
+    `condition_substitution_backstop_for_meal` — pero DETECTA en vez de sustituir: pensado para
+    superficies donde el contenido ofensor vive en PROSA de pasos (p.ej. /recipe/expand, que pasa los
+    pasos del Chef como `ingredients`). Reescribir prosa es frágil; rechazar es barato (soft-fail 200 +
+    retry, patrón del scan de alérgenos de expand).
+
+    Diferencias DELIBERADAS vs el backstop sustitutivo:
+    (a) NO escanea `name`: en expand el nombre es PRE-existente y ya validado por S1 — incluirlo
+        bloquearía el retry para siempre (el nombre no cambia entre reintentos del Chef).
+    (b) SALTA pasos-nota deterministas (⚠/💡/⚕): la nota clínica "se sustituyó miel → Stevia" contiene
+        el token ofensor POR DISEÑO y no es instrucción de cocción.
+    Best-effort (espejo P1-MERCURY-UPDATE-GUARD): cualquier error → [] — la sustitución de S1 + la
+    directiva-prompt siguen como defensa; el fail-secure abortivo queda para alérgenos IgE
+    (`clinical_backstop_for_meal`). Devuelve strings legibles de violación (vacío = seguro).
+    tooltip-anchor: P0-EXPAND-CONDITION-GUARD"""
+    if not EXPAND_CONDITION_GUARD or not CONDITION_RULES_ENABLED or not isinstance(meal, dict):
+        return []
+    try:
+        from condition_rules import collect_substitutions
+        from constants import strip_accents
+        subs = collect_substitutions(form_data or {})
+        if not subs:
+            return []
+        out = []
+        for _item in (meal.get("ingredients") or []):
+            _s = str(_item)
+            if _is_recipe_safety_note_step(_s) or "⚕" in _s:
+                continue
+            _il = strip_accents(_s.lower())
+            for s in subs:
+                if any(_n and _n in _il for _n in (s.get("negatives") or ())):
+                    continue
+                if any(_t and strip_accents(str(_t).lower()) in _il for _t in (s.get("tokens") or ())):
+                    out.append(
+                        f"{s.get('label')} (contraindicado por condición '{s.get('condition')}'): '{_s[:120]}'"
+                    )
+                    break
+        return out
+    except Exception as _cpv_e:
+        logger.warning(f"[P0-EXPAND-CONDITION-GUARD] scan de condición no-op (no bloquea): "
+                       f"{type(_cpv_e).__name__}: {_cpv_e}")
+        return []
+
+
 def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None) -> bool:
     """[P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Recomputa
     `plan['micronutrient_report']` (+ `micronutrient_supplement_advice`) tras un update de platos
@@ -10852,7 +10962,14 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             # vit C: sus fuentes (legumbres/hígado/cítricos) cargan K/P/proteína contraindicados. Solo calcio queda
             # cerrable (preserva comportamiento previo). La adecuación de micros en renal la maneja el panel
             # renal-aware + el gate de nefrólogo, no este lever de "ir de compras".
-            if _renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg"):
+            # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] las keys nuevas también quedan fuera en ERC (K contraindicado;
+            # vit E/omega-3 vía nueces/semillas cargan K/P).
+            if _renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+                                "potassium_mg", "vit_e_mg", "omega3_g"):
+                continue
+            # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] potasio NUNCA se cierra bajo medicamento K-elevador
+            # (espironolactona/IECA free-text incluidos vía P1-MICRO-CLINICAL-FREETEXT) — hiperkalemia iatrogénica.
+            if k == "potassium_mg" and _k_elev:
                 continue
             try:
                 floors[k] = float(g.get("piso") or 0)
@@ -10863,6 +10980,26 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         f"status=estimado_bajo (cobertura incierta; lever real: backfill de NULLs en el catálogo)")
         if not floors:
             return 0
+        # [P2-MICRO-CLOSER-CEILINGS · 2026-07-01] (audit micros GAP-5) El closer era CIEGO a los techos al
+        # escalar: en dislipidemia/HTA el contribuyente más rico en calcio suele ser QUESO → 1.6× añadía
+        # satfat/sodio y el propio closer disparaba después el banner condition_panel_gap (degradación
+        # auto-infligida); en ERC la rama calcio escalaba lácteo cargando K/P sin check. Guard token-based
+        # determinista: bajo esas condiciones se SALTAN los contribuyentes de riesgo (el siguiente contribuyente
+        # richest-first toma su lugar; si no hay, el residual se loguea como antes). tooltip-anchor: P2-MICRO-CLOSER-CEILINGS
+        _cstr = " ".join(str(c).lower() for c in (_conditions or []))
+        _dyslip_or_hta = any(t in _cstr for t in ("dislip", "colesterol", "hiperlip", "hipertens", "hta",
+                                                  "presion alta", "presión alta"))
+        _CEIL_RISK_TOKENS = ("queso", "tocino", "salami", "embutido", "jamon", "jamón", "mantequilla",
+                             "longaniza", "chorizo", "salchich", "manteca")
+        _DAIRY_TOKENS = ("queso", "leche", "yogur", "lacteo", "lácteo", "ricotta", "cottage", "requeson", "requesón")
+
+        def _ceiling_risky_contributor(_k_micro: str, _ing_low: str) -> bool:
+            if _dyslip_or_hta and any(t in _ing_low for t in _CEIL_RISK_TOKENS):
+                return True
+            if _renal and _k_micro == "calcium_mg" and any(t in _ing_low for t in _DAIRY_TOKENS):
+                return True
+            return False
+
         adjustments = 0
         # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] DÍA-por-fuera con presupuesto de kcal COMPARTIDO entre micros →
         # el total añadido por día está acotado a MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY sin importar cuántos micros
@@ -10916,6 +11053,13 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 for contrib, meal, idx, ing_str, kcal_now in contributors:
                     if day_total >= floor or kcal_budget_left <= 1.0:
                         break
+                    # [P2-MICRO-CLOSER-CEILINGS] contribuyente de riesgo para un techo activo → saltar.
+                    try:
+                        from constants import strip_accents as _sa_ceil
+                        if _ceiling_risky_contributor(k, _sa_ceil(str(ing_str).lower())):
+                            continue
+                    except Exception:
+                        pass
                     deficit = floor - day_total
                     factor = min(MICRONUTRIENT_CLOSER_MAX_SCALE, 1.0 + (deficit / contrib))
                     if kcal_now > 0:
@@ -11381,6 +11525,36 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
     return changed
 
 
+def _is_recipe_safety_note_step(step) -> bool:
+    """[P0-EXPAND-CLINICAL-GUARD · 2026-07-01] True si el paso es una NOTA determinista, no un paso de cocción:
+    food-safety (⚠ "Seguridad alimentaria": huevo/pescado/víver crudos) o disclaimer del solver (💡 "Ajustamos...").
+    Las superficies que REEMPLAZAN `recipe[]` completo (p.ej. /recipe/expand con los pasos del Chef AI) DEBEN
+    preservar estos pasos: los generaron guards deterministas de S1/updates y el LLM de expansión no los re-deriva
+    — perderlos deja a un usuario con ceviche sin la advertencia de cocción. tooltip-anchor: P0-EXPAND-CLINICAL-GUARD"""
+    try:
+        s = str(step or "")
+    except Exception:
+        return False
+    return ("⚠" in s) or ("💡" in s) or ("Seguridad alimentaria" in s)
+
+
+def _insert_step_before_montaje(steps: list, new_step: str) -> list:
+    """[P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] (audit recetas P2-3) Los guards que APPENDEAN pasos
+    (closer de proteína 💪, reverse-coherence 'Toque complemento') los ponían AL FINAL, después de
+    "Montaje" → el usuario leía un paso de cocción después de emplatar. Inserta el paso ANTES del primer
+    paso "Montaje" (si existe y no hay notas ⚠/💡 antes que él, se inserta en su índice; sin Montaje →
+    append como antes). Puro, fail-safe. tooltip-anchor: P2-STEP-INSERT-BEFORE-MONTAJE"""
+    try:
+        if not isinstance(steps, list):
+            return [new_step]
+        for i, s in enumerate(steps):
+            if isinstance(s, str) and s.strip().lower().startswith("montaje"):
+                return steps[:i] + [new_step] + steps[i:]
+        return steps + [new_step]
+    except Exception:
+        return (steps if isinstance(steps, list) else []) + [new_step]
+
+
 def _apply_food_safety_fixes(plan: dict) -> int:
     """[P3-FOOD-SAFETY · 2026-06-13] Aplica mitigación determinista a las violaciones de
     huevo crudo detectadas por `_scan_raw_egg_violations`. Macro-PRESERVANTE (no toca
@@ -11502,7 +11676,8 @@ def _truth_up_meal_macros_from_catalog(meal: dict, db, *, min_coverage: float = 
     Corre ANTES del solver/closer → band-safe (el target diario lo siguen enforzando aguas abajo).
     Mutates `meal`. Retorna True si corrigió. Anchor: P2-PER-MEAL-MACRO-TRUTHUP."""
     try:
-        if not MACRO_TRUTHUP_ENABLED:
+        # [P2-TRUTHUP-KNOB-SPLIT · 2026-07-01] binding propio (antes leía el global pisado por MEALFIT_MACRO_TRUTHUP).
+        if not PER_MEAL_MACRO_TRUTHUP_ENABLED:
             return False
         raw = meal.get("ingredients_raw")
         if not isinstance(raw, list) or not raw:
@@ -11676,9 +11851,10 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
         rec = meal.get("recipe")
         if isinstance(rec, list):
-            meal["recipe"] = rec + [
+            # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] antes del Montaje, no después de emplatar.
+            meal["recipe"] = _insert_step_before_montaje(rec, (
                 f"💪 Nota del Nutricionista AI: añade {grams}g de {name_disp} "
-                f"para completar tu objetivo de proteína."]
+                f"para completar tu objetivo de proteína."))
         # [P2-DISH-COHERENCE] Refleja en el nombre la proteína de rescate (no esconderla).
         _reflect_added_protein_in_name(meal, info.name, _sa)
         return grams
@@ -11913,11 +12089,32 @@ _PHANTOM_PROTEIN_SYNS = {
     "salami": ["salami"],
     "camaron": ["camaron", "camarón", "camarones"],
     "atun": ["atun", "atún"],
+    # [P2-NAME-HONESTY-EXT · 2026-07-01] (audit slots GAP-6) El detector solo conocía 8 proteínas cárnicas →
+    # «Chivo guisado» sin chivo, «Tortilla de huevos» sin huevo o «Casabe con queso» sin queso no recibían ni
+    # rename ni flag. Líderes nuevos DETECTABLES; huevo/queso NUNCA actúan como REEMPLAZO (decisión previa:
+    # dairy-as-protein no se toca — ver _PHANTOM_PROTEIN_REPLACEMENT_OK). "tortilla" NO es sinónimo de huevo
+    # aquí a propósito (falso positivo con Tortilla de trigo). tooltip-anchor: P2-NAME-HONESTY-EXT
+    "chivo": ["chivo", "carne de chivo"],
+    "cordero": ["cordero"],
+    "conejo": ["conejo"],
+    "jamon": ["jamon", "jamón", "jamoneta"],
+    "huevo": ["huevo", "huevos", "revoltillo de huevo"],
+    "queso": ["queso", "mozzarella", "cheddar", "ricotta", "cottage", "gouda", "parmesano",
+              "requeson", "requesón"],
 }
 _PHANTOM_PROTEIN_DISPLAY = {
     "pollo": "Pollo", "cerdo": "Cerdo", "res": "Res", "pescado": "Pescado",
     "pavo": "Pavo", "salami": "Salami", "camaron": "Camarones", "atun": "Atún",
+    "chivo": "Chivo", "cordero": "Cordero", "conejo": "Conejo", "jamon": "Jamón",
+    "huevo": "Huevo", "queso": "Queso",
 }
+# [P2-NAME-HONESTY-EXT · 2026-07-01] Solo carnes reales pueden SUSTITUIR a la fantasma en el título; renombrar
+# hacia huevo/queso mentiría distinto (el plato sería huevo/queso-céntrico) — esos casos van al flag
+# _name_honesty_degraded (P2-NAME-HONESTY-DEGRADED), no al rename.
+_PHANTOM_PROTEIN_REPLACEMENT_OK = frozenset({
+    "pollo", "cerdo", "res", "pescado", "pavo", "salami", "camaron", "atun",
+    "chivo", "cordero", "conejo", "jamon",
+})
 
 
 def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
@@ -11962,7 +12159,9 @@ def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
         lead_canon = in_name[0][0]
         if _present(lead_canon, il):
             return False  # la proteína líder SÍ está → no es fantasma
-        real = next((c for c in _PHANTOM_PROTEIN_SYNS if c != lead_canon and _present(c, il)), None)
+        # [P2-NAME-HONESTY-EXT · 2026-07-01] solo carnes reales sustituyen (huevo/queso → flag, no rename).
+        real = next((c for c in _PHANTOM_PROTEIN_SYNS
+                     if c != lead_canon and c in _PHANTOM_PROTEIN_REPLACEMENT_OK and _present(c, il)), None)
         if not real:
             # [P2-NAME-HONESTY-DEGRADED · 2026-06-29] sin OTRA carne real para sustituir (proteína real =
             # lácteo/legumbre/none) → un rename mentiría igual. Marcamos el nombre como NO-honesto (observable)
@@ -12296,7 +12495,8 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             # honesto: NO van "a la plancha/hervido" (se desarman) y la frase es válida sean proteína principal o añadido.
             # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] wording coherente (lácteo blando / enlatado pre-cocido / cocción)
             _step = _closer_protein_step_text(nm, no_cook)
-            meal["recipe"] = rec + [f"💪 {_step}"]
+            # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] antes del Montaje, no después de emplatar.
+            meal["recipe"] = _insert_step_before_montaje(rec, f"💪 {_step}")
         # [P2-DISH-COHERENCE] El closer acaba de meter `chosen` como proteína PRINCIPAL: refléjala
         # en el nombre si no estaba (no esconder la proteína principal del plato).
         _reflect_added_protein_in_name(meal, chosen.name, _sa)
@@ -12760,11 +12960,18 @@ def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
 # ingredientes premium (cap de apariciones) + descriptor sobre-usado. Advisory, no gate.
 _VARIETY_BASE_DISHES = ("revoltillo", "revuelto", "tortilla", "batido", "smoothie",
                         "licuado", "wrap", "ensalada", "sopa", "sancocho", "guiso",
-                        "guisad", "salteado", "horneado", "plancha", "pure")
+                        "guisad", "salteado", "horneado", "plancha", "pure",
+                        # [P2-CROSSDAY-PREP-DIVERSITY · 2026-07-01] (audit creatividad G5/G6) las preparaciones
+                        # criollas que el prompt 2.5 PROMUEVE no eran visibles para el conteo de plato-base →
+                        # ni el intra-día ni el nuevo contador cross-day veían "panqueques 4 días seguidos".
+                        "panqueque", "pancake", "bollo", "arepa", "arepita", "mangu",
+                        "mofongo", "locrio", "moro", "overnight", "empanada", "tostones")
 # Sinónimos del mismo plato-base → token canónico (revuelto/revoltillo = huevo revuelto;
 # smoothie/licuado = batido) para que la detección intra-día no los trate como distintos.
 _VARIETY_BASE_CANON = {"revuelto": "revoltillo", "smoothie": "batido",
-                       "licuado": "batido", "guisad": "guiso"}
+                       "licuado": "batido", "guisad": "guiso",
+                       # [P2-CROSSDAY-PREP-DIVERSITY] variantes de la misma preparación.
+                       "pancake": "panqueque", "arepita": "arepa"}
 _PREMIUM_INGREDIENTS = ("ricotta", "yogur griego", "yogurt griego", "queso parmesano",
                         "queso mozzarella", "salmon", "salmón")
 # [P2-DISH-COHERENCE · 2026-06-25] Frutas FEATURED (dulces) para la detección de repetición intra-día.
@@ -12894,6 +13101,11 @@ def build_variety_report(plan: dict) -> dict:
     total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = sweet_savory_clash = 0
     same_day_protein_repeats = 0
     meals_per_day_max = 0  # [P2-VARIETY-HIGH-MEALCOUNT-RELAX] mayor nº de comidas en un día (relaja gates en 5-6 comidas)
+    # [P2-CROSSDAY-PREP-DIVERSITY · 2026-07-01] (audit creatividad G5) preparación → set de días en que aparece.
+    # Antes NO existía medida de diversidad de PREPARACIONES dentro del plan: 7 cenas "a la plancha" o 5
+    # meriendas "batido" pasaban todos los gates deterministas. Advisory-only (campo `cross_day_preps`, umbral
+    # ≥4 días) — mismo criterio que cross_day_proteins; promoción a gate = decisión aparte.
+    prep_days: dict = {}
     issues = []
     for day in plan.get("days", []) or []:
         meals = day.get("meals", []) or []
@@ -12914,6 +13126,11 @@ def build_variety_report(plan: dict) -> dict:
                 premium += 1
             tok = next((t for t in _VARIETY_BASE_DISHES if t in name_low), None)
             if tok:
+                # [P2-CROSSDAY-PREP-DIVERSITY] misma preparación repartida en varios días (canónica).
+                try:
+                    prep_days.setdefault(_VARIETY_BASE_CANON.get(tok, tok), set()).add(day.get("day", "?"))
+                except Exception:
+                    pass
                 tok = _VARIETY_BASE_CANON.get(tok, tok)  # colapsa sinónimos del mismo plato
                 day_tokens[tok] = day_tokens.get(tok, 0) + 1
             # [P2-DISH-COHERENCE] Cuenta frutas FEATURED por su mención en el NOMBRE (1 por meal):
@@ -12974,12 +13191,20 @@ def build_variety_report(plan: dict) -> dict:
                 issues.append(f"Proteína '{_lbl}' repetida en {_n} días (monotonía cross-day)")
     except Exception:
         cross_day_proteins = {}
+    # [P2-CROSSDAY-PREP-DIVERSITY · 2026-07-01] preparaciones presentes en ≥4 días (advisory, espejo de
+    # cross_day_proteins; NO toca issues/ok hasta una promoción deliberada a gate).
+    cross_day_preps = {}
+    try:
+        cross_day_preps = {t: len(ds) for t, ds in prep_days.items() if len(ds) >= 4}
+    except Exception:
+        cross_day_preps = {}
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
             "same_day_protein_repeats": same_day_protein_repeats,
             "meals_per_day": meals_per_day_max,
-            "cross_day_proteins": cross_day_proteins, "issues": issues,
+            "cross_day_proteins": cross_day_proteins,
+            "cross_day_preps": cross_day_preps, "issues": issues,
             "ok": not issues}
 
 
@@ -13225,7 +13450,8 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         new_step = (f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación, "
                     f"integrándolo al plato de forma coherente.")
         if isinstance(recipe, list):
-            meal["recipe"] = steps + [new_step]
+            # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] paso de cocción ANTES del Montaje.
+            meal["recipe"] = _insert_step_before_montaje(steps, new_step)
         else:
             meal["recipe"] = ((str(recipe) + " ") if recipe else "") + new_step
         logger.info(f"🍳 [P2-RECIPE-REVERSE-COHERENCE] {len(missing)} ingrediente(s) no usados en pasos → paso de "
@@ -13345,6 +13571,46 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
         return False
 
 
+_CONTRACT_TIME_RE = _re.compile(
+    r"\d+\s*(?:-\s*\d+\s*)?(?:min|minuto|hora)|°\s*c|grados|fuego\s+(?:alto|medio|bajo)|horno", _re.I)
+
+
+def _recipe_step_contract_issues(meal: dict) -> list:
+    """[P2-RECIPE-STEP-CONTRACT-GATE · 2026-07-01] (audit recetas P2-2) Lint DETERMINISTA barato del contrato
+    de pasos que antes solo vivía en prompts (day_generator §3): los 3 prefijos (Mise en place → El Toque de
+    Fuego → Montaje) EN ORDEN + al menos un tiempo/temperatura en el Toque de Fuego. Telemetría (NUNCA gate,
+    espejo de dish-quality): alimenta `dish_quality_report.contract_*` para medir cuánto obedece el LLM antes
+    de promover a gate. Las notas ⚠/💡 no cuentan como pasos. Fail-safe → []. tooltip-anchor: P2-RECIPE-STEP-CONTRACT-GATE"""
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return ["receta ausente"]
+        steps = [str(s) for s in rec if isinstance(s, str) and not _is_recipe_safety_note_step(s)]
+        low = [s.strip().lower() for s in steps]
+
+        def _idx(prefix):
+            for i, s in enumerate(low):
+                if s.startswith(prefix):
+                    return i
+            return -1
+
+        i_m, i_f, i_mo = _idx("mise en place"), _idx("el toque de fuego"), _idx("montaje")
+        out = []
+        if i_m == -1:
+            out.append("falta 'Mise en place'")
+        if i_f == -1:
+            out.append("falta 'El Toque de Fuego'")
+        if i_mo == -1:
+            out.append("falta 'Montaje'")
+        if i_m != -1 and i_f != -1 and i_mo != -1 and not (i_m < i_f < i_mo):
+            out.append("prefijos fuera de orden")
+        if i_f != -1 and not _CONTRACT_TIME_RE.search(steps[i_f]):
+            out.append("Toque de Fuego sin tiempo/temperatura concreta")
+        return out
+    except Exception:
+        return []
+
+
 def compute_dish_quality_report(plan: dict) -> dict:
     """[P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Telemetría ADVISORY de 'realness' de los platos:
     cuántos parecen placeholder/crudo en vez de platos reales cocinados. Mide G5 (creatividad/apetecibilidad)
@@ -13353,8 +13619,10 @@ def compute_dish_quality_report(plan: dict) -> dict:
     try:
         total = low = 0
         raw_staple = 0
+        contract_bad = 0
         issues = []
         raw_staple_issues = []
+        contract_issues = []
         for day in plan.get("days", []) or []:
             if not isinstance(day, dict):
                 continue
@@ -13374,6 +13642,13 @@ def compute_dish_quality_report(plan: dict) -> dict:
                     raw_staple += 1
                     if len(raw_staple_issues) < 20:
                         raw_staple_issues.append(f"Día {day.get('day', '?')}: «{str(m.get('name'))[:40]}» — {_rswhy}")
+                # [P2-RECIPE-STEP-CONTRACT-GATE · 2026-07-01] señal SEPARADA (telemetría, nunca gate; NO entra
+                # en low_quality_ratio hasta una promoción deliberada — espejo de raw_staple).
+                _ci = _recipe_step_contract_issues(m)
+                if _ci:
+                    contract_bad += 1
+                    if len(contract_issues) < 20:
+                        contract_issues.append(f"Día {day.get('day', '?')}: «{str(m.get('name'))[:40]}» — {_ci[0]}")
         return {
             "total_meals": total,
             "low_quality_meals": low,
@@ -13382,6 +13657,9 @@ def compute_dish_quality_report(plan: dict) -> dict:
             "raw_staple_meals": raw_staple,
             "raw_staple_ratio": round(raw_staple / total, 3) if total else None,
             "raw_staple_issues": raw_staple_issues,
+            "contract_meals": contract_bad,
+            "contract_ratio": round(contract_bad / total, 3) if total else None,
+            "contract_issues": contract_issues,
         }
     except Exception as _dq_e:
         logger.warning(f"[P2-DISH-QUALITY] report falló: {type(_dq_e).__name__}: {_dq_e}")
@@ -14239,7 +14517,11 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 # re-chequeo. Re-trim de carbos (recorta OTRAS fuentes carbo-dominantes hacia el target, preservando
                 # el cierre del micro y la proteína) + re-quantize de los días tocados. Idempotente (no-op si ya en
                 # banda), fail-safe. Reusa el target/knobs de Guard 4b. tooltip-anchor: P2-MICROCLOSER-BAND-RECHECK
-                if CARB_TARGET_TRIM_ENABLED:
+                # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] (audit macros GAP-4) El re-check estaba gateado por
+                # CARB_TARGET_TRIM_ENABLED (default False) → MUERTO con defaults; solo lo mitigaba de facto
+                # MACRO_REBALANCE (ON) más abajo — acoplamiento no documentado y ausente en el path fallback.
+                # Knob propio default ON; el marker dejaba falsa sensación de cobertura.
+                if MICROCLOSER_BAND_RECHECK_ENABLED:
                     try:
                         _tc_mc = _meal_macro_num(active_macros.get("carbs_str"))
                         if _tc_mc > 0:
@@ -14722,7 +15004,8 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
             # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28 + P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] paso natural
             # y coherente con la naturaleza del alimento (lácteo blando / enlatado pre-cocido / cocción).
             _step = _closer_protein_step_text(nm, no_cook)
-            target_meal["recipe"] = rec + [f"💪 {_step}"]
+            # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] antes del Montaje, no después de emplatar.
+            target_meal["recipe"] = _insert_step_before_montaje(rec, f"💪 {_step}")
         # 2) quitar kcal_add/4 gramos de carbos → mantiene kcal CONSTANTE (reusa el carb-trim cuantizador)
         carbs_g_to_remove = kcal_add / 4.0
         new_carb_day_target = max(0.0, (day_c + c_add) - carbs_g_to_remove)
@@ -15368,7 +15651,86 @@ _SLICE_GRAMS_PER_UNIT = 25   # 1 lonja/pedazo de queso/embutido ≈ 25g
 _SLICE_GRAMS_FLOOR = 15      # mínimo medible
 
 
-def finalize_plan_data_coherence(days: list, db=None) -> tuple:
+_STEP_QTY_UNITS = (r"g|gr|gramos?|kg|ml|l|taza(?:s)?|cda(?:s)?|cdta(?:s)?|cucharada(?:s)?|"
+                   r"cucharadita(?:s)?|unidad(?:es)?|oz|lb|lonja(?:s)?|rebanada(?:s)?")
+_STEP_QTY_MENTION_RE = _re.compile(
+    r"(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s+de\s+"
+    r"(?P<food>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*(?:\s+[\wáéíóúñü]+){0,2})")
+_ING_LEAD_QTY_RE = _re.compile(
+    r"^\s*(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s*(?:de\s+|del\s+)?"
+    r"(?P<food>.+)$", _re.I)
+
+
+def _sync_recipe_step_quantities(meal: dict) -> int:
+    """[P1-RECIPE-QTY-SYNC · 2026-07-01] (audit recetas P1-A) Re-sincroniza las CANTIDADES mencionadas en los
+    PASOS de receta con la cantidad ACTUAL de `ingredients[]`, post-quantize (la última mutación de porciones).
+    El paso "pesa 50 g de arroz" se reescribe a "pesa 80 g de arroz" cuando el motor reescaló el ingrediente.
+
+    Diseño conservador anti-falso-positivo: (1) solo toca menciones con la forma `<qty> <unit> de <alimento>`;
+    (2) el <alimento> del paso debe matchear el TOKEN PRINCIPAL (primera palabra ≥4 chars) de un ingrediente
+    con cantidad líder parseable — sin match, el texto queda intacto; (3) las notas deterministas (⚠/💡) no se
+    tocan; (4) si dos ingredientes comparten token principal, el token se descarta (ambiguo). Muta `meal`
+    in-place; devuelve nº de menciones reescritas. Fail-safe (error → 0, texto intacto). Gateado por
+    RECIPE_STEP_QTY_SYNC_ENABLED. tooltip-anchor: P1-RECIPE-QTY-SYNC"""
+    if not RECIPE_STEP_QTY_SYNC_ENABLED or not isinstance(meal, dict):
+        return 0
+    try:
+        from constants import strip_accents as _sa
+        ings = meal.get("ingredients")
+        recipe = meal.get("recipe")
+        if not isinstance(ings, list) or not isinstance(recipe, list) or not recipe:
+            return 0
+        food_qty = {}
+        _ambiguous = set()
+        for ing in ings:
+            m = _ING_LEAD_QTY_RE.match(str(ing))
+            if not m:
+                continue
+            _food = _sa(str(m.group("food")).strip().lower())
+            _toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _food) if len(t) >= 4]
+            if not _toks:
+                continue
+            _tok = _toks[0]
+            if _tok in food_qty:
+                _ambiguous.add(_tok)  # dos ingredientes con el mismo token → no reescribir (ambiguo)
+                continue
+            food_qty[_tok] = (str(m.group("qty")).replace(",", "."), str(m.group("unit")).lower())
+        for _tok in _ambiguous:
+            food_qty.pop(_tok, None)
+        if not food_qty:
+            return 0
+        fixed = 0
+        new_steps = []
+        for step in recipe:
+            if not isinstance(step, str) or _is_recipe_safety_note_step(step):
+                new_steps.append(step)
+                continue
+
+            def _sub(mm):
+                nonlocal fixed
+                _f = _sa(str(mm.group("food")).strip().lower())
+                _ftoks = [t for t in _re.split(r"[^\wáéíóúñü]+", _f) if len(t) >= 4]
+                for _ft in _ftoks[:2]:
+                    if _ft in food_qty:
+                        _q, _u = food_qty[_ft]
+                        _cur_q = str(mm.group("qty")).replace(",", ".")
+                        _cur_u = str(mm.group("unit")).lower()
+                        if _cur_q != _q or _cur_u.rstrip("s") != _u.rstrip("s"):
+                            fixed += 1
+                            return f"{_q} {_u} de {mm.group('food')}"
+                        break
+                return mm.group(0)
+
+            new_steps.append(_STEP_QTY_MENTION_RE.sub(_sub, step))
+        if fixed:
+            meal["recipe"] = new_steps
+        return fixed
+    except Exception as _sq_e:
+        logger.warning(f"[P1-RECIPE-QTY-SYNC] sync de cantidades en pasos no-op: {type(_sq_e).__name__}: {_sq_e}")
+        return 0
+
+
+def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
     """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
     forma DEFENSIVA antes de cualquier persist, para los paths que saltan assemble_plan_node (partial/degradado/SSE-fallback/
     chunk). ORDEN load-bearing: slice-grams ANTES de quantize ("1¼ lonja de queso"→"30 g" antes de redondear gramos);
@@ -15385,8 +15747,10 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
         # boundary (cubre el sliver degradado/partial/SSE-fallback que salta assemble). Idempotente (no-op si el
         # veg ya está en la lista, p.ej. un plan que SÍ pasó por assemble). Si añade, truth-up de los meals tocados
         # (assemble lo cuenta vía macro engine; aquí no hay engine). Corre PRIMERO para que el veg entre a slice/quantize.
+        # [P0-VEG-GUARD-ALLERGEN] `allergies` opcional (los persist boundaries actuales no hidratan perfil → None;
+        # el filtro aplica cuando un caller futuro las pase). El path form-gen re-escanea post-assemble igual.
         if RECIPE_STEP_VEG_GUARD_ENABLED:
-            _nv = _add_missing_recipe_step_vegetables(days)
+            _nv = _add_missing_recipe_step_vegetables(days, allergies=allergies)
             if _nv:
                 total += _nv; parts.append(f"veg={_nv}")
                 try:
@@ -15426,6 +15790,18 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
                 total += _n; parts.append(f"quantize={_n}")
     except Exception as _e3:
         logger.warning(f"[P1-COHERENCE-FINALIZE] quantize no-op: {type(_e3).__name__}: {_e3}")
+    # [P1-RECIPE-QTY-SYNC · 2026-07-01] post-quantize: los pasos reflejan las cantidades actuales (paridad
+    # con assemble/finalizador de updates; el persist boundary cubre partial/degradado/SSE-fallback).
+    try:
+        _nsq = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if isinstance(_m, dict):
+                    _nsq += _sync_recipe_step_quantities(_m)
+        if _nsq:
+            total += _nsq; parts.append(f"qty_sync={_nsq}")
+    except Exception as _e5:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] qty-sync no-op: {type(_e5).__name__}: {_e5}")
     # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Persist boundary (INSERT/chunk degradado/SSE-fallback que salta
     # assemble): ningún plato debe persistirse con receta vacía/no-sustantiva. Idempotente (no toca receta real).
     try:
@@ -15439,10 +15815,36 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
                 total += _nrf; parts.append(f"recipe_fill={_nrf}")
     except Exception as _e4:
         logger.warning(f"[P1-COHERENCE-FINALIZE] recipe-nonempty no-op: {type(_e4).__name__}: {_e4}")
+    # [P2-PERSIST-BOUNDARY-COHERENCE · 2026-07-01] (audit recetas P2-4) El persist boundary omitía la
+    # coherencia INVERSA (ingrediente listado sin paso de uso) y el strip de condimentos off-catálogo →
+    # un plan degradado/partial/SSE-fallback podía persistir "añade la salsa de soya" (borrada de la lista)
+    # o ingredientes jamás usados. Ambos guards son idempotentes/fail-safe (re-correr donde assemble ya los
+    # aplicó = no-op). Corren tras el nonempty (ya hay receta). tooltip-anchor: P2-PERSIST-BOUNDARY-COHERENCE
+    try:
+        _nrc = 0
+        _noc = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if isinstance(_m, dict):
+                    try:
+                        _nrc += _ensure_ingredients_used_in_recipe(_m)
+                    except Exception:
+                        pass
+                    try:
+                        _noc += _strip_offcatalog_condiments_from_recipe(_m)
+                    except Exception:
+                        pass
+        if _nrc:
+            total += _nrc; parts.append(f"reverse_coh={_nrc}")
+        if _noc:
+            total += _noc; parts.append(f"offcatalog={_noc}")
+    except Exception as _e6:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] reverse/offcatalog no-op: {type(_e6).__name__}: {_e6}")
     return (total, ", ".join(parts))
 
 
-def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False) -> int:
+def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False, allergies=None,
+                                          skip_night_rice: bool = False) -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -15482,8 +15884,10 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             # ingredients[]. En un update PANTRY-STRICT (cocinar desde la nevera) eso introduce un alimento que
             # el usuario NO tiene → dobla la invariante "cocina de tu nevera". Se SALTA en pantry-strict (el
             # resto del finalizer sigue corriendo). En no-pantry-strict (va de compras) el veg sí se añade.
+            # [P0-VEG-GUARD-ALLERGEN] `allergies` (hidratadas server-side por el caller) filtran los candidatos:
+            # este finalizer corre DESPUÉS del backstop clínico en updates → sin filtro inyectaba alérgeno post-scan.
             if RECIPE_STEP_VEG_GUARD_ENABLED and not pantry_strict:
-                _nv = _add_missing_recipe_step_vegetables(_wrap)
+                _nv = _add_missing_recipe_step_vegetables(_wrap, allergies=allergies)
                 if _nv:
                     total += _nv
                     try:
@@ -15505,8 +15909,13 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # corrige a tubérculo nocturno (batata/yuca/casabe) — ingrediente + NOMBRE + pasos de receta + macros — en
         # vez de entregar el disparate de horario. Solo actúa sobre cena con arroz simple (no moro/locrio). Reusa
         # el MISMO corrector de form-gen (ahora recipe-coherente). Gated por NIGHT_RICE_AUTOFIX_ENABLED, fail-open.
+        # [P2-CHAT-EXPLICIT-SLOT-WISH · 2026-07-01] (audit slots GAP-3) `skip_night_rice=True` cuando el
+        # USUARIO pidió explícitamente la violación ("ponme arroz en la cena"): el backstop del chat honra
+        # el deseo pero este finalizer lo PISABA en silencio (arroz→batata sin avisar) — el usuario recibía
+        # lo contrario de lo que pidió. Su deseo explícito gana también aquí.
         try:
-            total += _night_rice_autofix(_wrap, db)
+            if not skip_night_rice:
+                total += _night_rice_autofix(_wrap, db)
         except Exception as _enr:
             logger.warning(f"[P2-SLOT-CORRECTOR] night-rice en finalizador de update no-op: {type(_enr).__name__}: {_enr}")
         # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Garantiza pasos cocinables si el LLM del update degradó.
@@ -15555,6 +15964,12 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                     total += _nq
         except Exception as _eq:
             logger.warning(f"[P1-RECIPE-QUANTIZE-UPDATES] quantize en finalizador de update no-op: {type(_eq).__name__}: {_eq}")
+        # [P1-RECIPE-QTY-SYNC · 2026-07-01] tras el quantize (última mutación de porciones del plato), los
+        # PASOS reflejan las cantidades actuales de ingredients[] — paridad con assemble; antes de humanize.
+        try:
+            total += _sync_recipe_step_quantities(meal)
+        except Exception as _sq_up_e:
+            logger.warning(f"[P1-RECIPE-QTY-SYNC] sync en finalizador de update no-op: {type(_sq_up_e).__name__}: {_sq_up_e}")
         # [P2-RECIPE-HUMANIZE-UPDATES · 2026-06-29] (re-audit objetivo · P2 RECIPE-HUMANIZE-UPDATES-2) La
         # humanización de display (colapso de doble-fracción, '1 huevos'→'1 huevo', '¼ cda'→'1 cdta', medidas
         # caseras) corría SOLO en form-gen (g_o.py:16929 sobre el result SSE); los platos editados mostraban
@@ -15725,7 +16140,7 @@ _RECIPE_STEP_VEG_CONDIMENT_STOPLIST = frozenset({
 _RECIPE_STEP_VEG_HARD_STOP = frozenset({"agua", "sal", "hielo"})
 
 
-def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) -> int:
+def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3, allergies=None) -> int:
     """[P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Guard UNIVERSAL determinista: detecta VEGETALES del catálogo
     verificado mencionados en los PASOS (recipe[]) pero AUSENTES de ingredients[] y los agrega con porción 100g, para que
     entren a la lista de compras + macros. Bug en vivo (plan normal): "Revoltillo" cuyos pasos dicen "agrega el calabacín
@@ -15733,6 +16148,13 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) 
 
     Corre ANTES de `_apply_macro_engine` → el vegetal agregado pasa por allergen scan + reconcile + truth-up + quantize +
     shopping + coherence guard (simetría I6/I7 preservada: ambos lados del guard ven el ingrediente).
+
+    [P0-VEG-GUARD-ALLERGEN · 2026-07-01] `allergies`: en las superficies de UPDATE (swap/chat-modify/recalculate/
+    expand) este guard corre DESPUÉS del backstop de alérgenos (P0-UPDATE-CLINICAL-GUARD) — en form-gen el orden es
+    el inverso y el scan posterior lo cubre. Sin el filtro, el guard podía MATERIALIZAR un alérgeno IgE post-scan
+    (alergia a apio/tomate + paso que los menciona → "100g Apio" inyectado sin re-scan). Con `allergies` no-vacío,
+    los candidatos que disparan `_scan_allergen_violations` (SSOT sinónimos DD) se EXCLUYEN; fail-secure
+    per-candidato (error del scanner → candidato no se añade). tooltip-anchor: P0-VEG-GUARD-ALLERGEN
 
     Macro-safe POR CONSTRUCCIÓN: solo `category=='Vegetales'` AND `kcal/100g ≤ max_kcal` → excluye proteína/lácteo/víver/
     fruta/despensa (aceite 900, lentejas 361, maní 630) y vegetales densos. Excluye hierbas/aromáticos (cilantro/perejil/
@@ -15764,6 +16186,25 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) 
             continue
     if not veg:
         return 0
+    # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] Excluir candidatos que matchean una alergia declarada (ver docstring).
+    _allergy_list = [str(a).strip() for a in (allergies or []) if str(a).strip()]
+    if _allergy_list:
+        _dropped = []
+        for tok in list(veg.keys()):
+            try:
+                _probe = {"days": [{"meals": [{"name": "_veg_probe", "ingredients": [f"100g {veg[tok]}"]}]}]}
+                if _scan_allergen_violations(_probe, _allergy_list):
+                    _dropped.append(veg.pop(tok))
+            except Exception:
+                veg.pop(tok, None)
+                _dropped.append(tok)
+        if _dropped:
+            logger.warning(
+                f"🛡 [P0-VEG-GUARD-ALLERGEN] veg-guard: {len(_dropped)} candidato(s) excluido(s) por alergia "
+                f"declarada: {_dropped}"
+            )
+        if not veg:
+            return 0
     added_total = 0
     for day in (days or []):
         for meal in (day.get("meals") or []):
@@ -15811,15 +16252,25 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) 
     return added_total
 
 
-def _night_rice_autofix(days: list, db=None) -> int:
+def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
     """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
     ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
     — corre ANTES del macro engine para que el motor dimensione el tubérculo y el reviewer (gate
     P1-SLOT-APPROPRIATENESS) NO dispare el retry de 'arroz de noche' (la causa #1 de retries → ahorra una
-    regeneración completa de tokens). NO toca moro/locrio/morito (platos compuestos → se dejan al gate; raros).
-    Respeta las exclusiones de modificadores (harina/leche/vinagre de arroz). Carb-matched (~×1.4), idempotente
-    (tras el fix el nombre ya no dice 'arroz'), fail-safe. El gate sigue como backstop. Gateado por
-    NIGHT_RICE_AUTOFIX_ENABLED. tooltip-anchor: P1-NIGHT-RICE-AUTOFIX"""
+    regeneración completa de tokens). Respeta las exclusiones de modificadores (harina/leche/vinagre de arroz).
+    Carb-matched (~×1.4), idempotente (tras el fix el nombre ya no dice 'arroz'), fail-safe. El gate sigue como
+    backstop. Gateado por NIGHT_RICE_AUTOFIX_ENABLED. tooltip-anchor: P1-NIGHT-RICE-AUTOFIX
+
+    [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] Segundo pase ingredient-driven (knob NIGHT_RICE_INGREDIENT_PASS):
+    aunque el NOMBRE no diga arroz («Bowl criollo de pollo»), un ingrediente `\\barroz\\b` ≥ MIN_G en la cena se
+    sustituye por el tubérculo rotado (sin renombrar; los pasos que digan arroz sí se reescriben). Cierra la
+    clase invisible a los detectores name-only.
+
+    [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] `compound=True` (SOLO desde la rama advisory-final del gate):
+    convierte moro/locrio/morito/chofán/chaufa de la cena a su versión guisada con tubérculo — «Moro de gandules
+    con pollo» → «Guiso de gandules con pollo» + arroz→tubérculo en ingredientes/pasos — en vez de entregar el
+    disparate de horario. En el flujo normal (compound=False) los compuestos se dejan al gate (retry da al LLM
+    la oportunidad de un plato mejor)."""
     if not NIGHT_RICE_AUTOFIX_ENABLED:
         return 0
     try:
@@ -15827,6 +16278,7 @@ def _night_rice_autofix(days: list, db=None) -> int:
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
+        _COMPOUND_TOKENS = ("moro", "morito", "locrio", "chofan", "chaufa", "congri", "mamposteao")
         fixed = 0
         for di, day in enumerate(days or []):
             if not isinstance(day, dict):
@@ -15838,17 +16290,28 @@ def _night_rice_autofix(days: list, db=None) -> int:
                     continue
                 name = str(m.get("name") or "")
                 name_low = _sa(name.lower())
-                if "arroz" not in name_low or any(_ex in name_low for _ex in _SLOT_RICE_EXCLUDE):
-                    continue  # sin arroz en el nombre, o es 'harina/leche de arroz' (modificador) → no tocar
                 sub = _NIGHT_RICE_SUB_ROTATION[di % len(_NIGHT_RICE_SUB_ROTATION)]
                 _sub_low = _sa(sub.lower())
                 ings = m.get("ingredients")
                 if not isinstance(ings, list):
                     continue
+
+                _name_has_rice = "arroz" in name_low and not any(_ex in name_low for _ex in _SLOT_RICE_EXCLUDE)
+                _name_compound = any(_re.search(r"\b" + t + r"\b", name_low) for t in _COMPOUND_TOKENS)
+                _rename = _name_has_rice or (compound and NIGHT_RICE_COMPOUND_FINAL and _name_compound)
+                # Modo del pase de ingredientes: (a) nombre con arroz → pase clásico (cualquier gramaje);
+                # (b) nombre sin arroz → pase ingredient-driven [P1-NIGHT-RICE-INGREDIENT] con piso MIN_G
+                #     (word-boundary; no tocar guarniciones tangenciales chicas);
+                # (c) compuesto sin compound=True → se deja al gate (comportamiento original).
+                _ing_pass = _name_has_rice or _rename or (NIGHT_RICE_INGREDIENT_PASS and not _name_compound)
+                if not _ing_pass:
+                    continue
+                _min_g = 0 if (_name_has_rice or _rename) else NIGHT_RICE_INGREDIENT_MIN_G
+
                 _changed = False
                 for j, ing in enumerate(ings):
                     ing_low = _sa(str(ing).lower())
-                    if "arroz" not in ing_low or any(_ex in ing_low for _ex in _SLOT_RICE_EXCLUDE):
+                    if not _re.search(r"\barroz\b", ing_low) or any(_ex in ing_low for _ex in _SLOT_RICE_EXCLUDE):
                         continue
                     if _sub_low in ing_low:  # ya es el tubérculo → idempotencia
                         continue
@@ -15856,13 +16319,22 @@ def _night_rice_autofix(days: list, db=None) -> int:
                         _g = db.grams_from_ingredient_string(str(ing)) or 0
                     except Exception:
                         _g = 0
+                    if _min_g and _g and _g < _min_g:
+                        continue  # guarnición tangencial → no tocar (solo aplica al pase ingredient-driven)
                     _new_g = int(round(_g * _NIGHT_RICE_CARB_FACTOR)) if _g > 0 else 150
                     ings[j] = f"{_new_g} g de {sub}"
                     _changed = True
-                _new_name = _NIGHT_RICE_NAME_RE.sub(sub, name)
-                if _new_name != name:
-                    m["name"] = _new_name
-                    _changed = True
+                if _rename:
+                    _new_name = _NIGHT_RICE_NAME_RE.sub(sub, name)
+                    if compound and NIGHT_RICE_COMPOUND_FINAL and _name_compound:
+                        # [P1-NIGHT-RICE-COMPOUND-FINAL] «Moro/Locrio de X» → «Guiso de X»; chofán/chaufa →
+                        # «Salteado criollo»; el tubérculo ya entró por el pase de ingredientes.
+                        _new_name = _re.sub(r"(?i)\b(moro|morito|locrio|congri|mamposteao)\b\s*(de)?", r"Guiso \2", _new_name)
+                        _new_name = _re.sub(r"(?i)\b(chofan|chofán|chaufa)\b(\s+de)?", r"Salteado criollo\2", _new_name)
+                        _new_name = _re.sub(r"\s{2,}", " ", _new_name).strip()
+                    if _new_name != name:
+                        m["name"] = _new_name
+                        _changed = True
                 # [P2-SLOT-CORRECTOR · 2026-06-29] (audit objetivo · P2-10) Reescribe también los PASOS de
                 # receta (arroz→tubérculo): sin esto el autofix renombraba el plato y cambiaba el ingrediente
                 # pero dejaba "cocina el arroz" en los steps → incoherencia receta↔ingrediente latente. Con esto
@@ -17354,6 +17826,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _q_n = _apply_portion_quantization({"days": days}, _QDB())
             if _q_n:
                 logger.info(f"📏 [P1-CLOSER-COHERENCE] quantize final: porciones humanas en {_q_n} comida(s) post-engine.")
+            # [P1-RECIPE-QTY-SYNC · 2026-07-01] tras la ÚLTIMA mutación de porciones, re-sincroniza las
+            # cantidades mencionadas en los PASOS con ingredients[] (el paso "50 g de arroz" refleja los 80 g
+            # reescalados). Corre ANTES de la lista de compras/humanize (que no tocan números de pasos).
+            try:
+                _sq_total = 0
+                for _sq_day in days or []:
+                    for _sq_m in (_sq_day.get("meals") or []) if isinstance(_sq_day, dict) else []:
+                        if isinstance(_sq_m, dict):
+                            _sq_total += _sync_recipe_step_quantities(_sq_m)
+                if _sq_total:
+                    logger.info(f"📏 [P1-RECIPE-QTY-SYNC] {_sq_total} mención(es) de cantidad en pasos re-sincronizadas post-quantize.")
+            except Exception as _sq_as_e:
+                logger.warning(f"[P1-RECIPE-QTY-SYNC] sync en assemble no-op: {type(_sq_as_e).__name__}: {_sq_as_e}")
         except Exception as _fq_e:
             logger.warning(f"[P1-CLOSER-COHERENCE] quantize final en assemble falló (no bloquea): {type(_fq_e).__name__}: {_fq_e}")
 
@@ -17704,6 +18189,16 @@ def _auto_patch_ingredient_coherence(plan: dict, errors: list) -> int:
                 meal["ingredients"] = new_ings
                 if len(new_ings) < len(ings):
                     patched += 1
+                    # [P2-REVIEW-PATCH-TRUTHUP · 2026-07-01] (audit macros GAP-3) Este patch corre en review
+                    # DESPUÉS del band gate y BORRA ingredientes cuyo aporte el truth-up final YA sumó → el plan
+                    # persistía macros que la comida física ya no contenía (y el band score de entrega leía los
+                    # números stale). Espejo del gen-sanity autofix: truth-up del meal tocado (misma llamada).
+                    # tooltip-anchor: P2-REVIEW-PATCH-TRUTHUP
+                    try:
+                        from nutrition_db import IngredientNutritionDB as _TPDB
+                        _truth_up_meal_macros_from_strings(meal, _TPDB())
+                    except Exception as _tp_e:
+                        logger.warning(f"[P2-REVIEW-PATCH-TRUTHUP] truth-up post-patch falló (no bloquea): {_tp_e}")
                 break
     return patched
 
@@ -19554,14 +20049,33 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # arroz/locrio = siempre duro por decisión de producto). Mezcla hard+soft en intento
                 # final → rechaza igual (el plan se entrega como best-attempt con banner degraded).
                 if _sa_is_final and not _sa_has_hard:
-                    logger.warning(
-                        f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
-                        f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
-                        f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
-                        f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
-                    )
-                    if isinstance(plan, dict):
-                        plan["_slot_appropriateness_advisory_final"] = True
+                    # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Antes de degradar a
+                    # advisory Y ENTREGAR un moro/locrio/chofán en la cena, intento de autofix compuesto de
+                    # último recurso (nombre→guiso + arroz→tubérculo + pasos, determinista y coherente).
+                    # Si limpia las violaciones, el plan sale SIN el disparate de horario; si no, advisory
+                    # como antes (nunca cero-plan). Fail-open. tooltip-anchor: P1-NIGHT-RICE-COMPOUND-FINAL
+                    if NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
+                        try:
+                            _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True)
+                            if _nrc_fixed:
+                                _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []))
+                                logger.info(
+                                    f"🕒 [P1-NIGHT-RICE-COMPOUND-FINAL] {_nrc_fixed} plato(s) compuesto(s) "
+                                    f"de cena convertidos a guiso+tubérculo en intento final; "
+                                    f"violaciones restantes: {len(_slot_app_issues)}"
+                                )
+                        except Exception as _nrc_e:
+                            logger.warning(f"[P1-NIGHT-RICE-COMPOUND-FINAL] autofix compuesto falló (no bloquea): "
+                                           f"{type(_nrc_e).__name__}: {_nrc_e}")
+                    if _slot_app_issues:
+                        logger.warning(
+                            f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
+                            f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
+                            f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
+                            f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
+                        )
+                        if isinstance(plan, dict):
+                            plan["_slot_appropriateness_advisory_final"] = True
                 else:
                     for _sa in _slot_app_issues:
                         logger.warning(
@@ -23262,6 +23776,35 @@ _FALLBACK_MEAL_POOLS_BARIATRIC = {
 }
 
 
+def _fallback_recipe_steps(meal_type: str, ingredients: list) -> list:
+    """[P2-FALLBACK-RECIPE-SLOT-TEMPLATE · 2026-07-01] (audit recetas P2-5) El fallback shippeaba la receta
+    template "Cocinar la proteína" (sin técnica/tiempo real) — honesto pero no cocinable. Pasos deterministas
+    por CATEGORÍA de ingredientes (detección por token), respetando el contrato de 3 prefijos con tiempo
+    concreto. Fail-safe → template genérico. tooltip-anchor: P2-FALLBACK-RECIPE-SLOT-TEMPLATE"""
+    try:
+        from constants import strip_accents as _sa_fb
+        _txt = _sa_fb(" ".join(str(i) for i in (ingredients or [])).lower())
+        _mise = "Mise en place: lava, pica y pesa cada ingrediente según las cantidades listadas."
+        # avena ANTES del heurístico de batido: avena+leche es AVENA COCIDA, no un licuado.
+        if "avena" in _txt:
+            return [_mise, "El Toque de Fuego: cocina la avena con el líquido a fuego medio 5 minutos, removiendo hasta cremosa.",
+                    "Montaje: sirve en bowl y corona con el resto de ingredientes."]
+        if any(t in _txt for t in ("batido", "licuado")) or (
+                any(t in _txt for t in ("yogur", "leche")) and any(t in _txt for t in ("guineo", "fruta", "fresa", "mango"))):
+            return [_mise, "El Toque de Fuego: licúa todos los ingredientes 1 minuto a velocidad alta hasta quedar homogéneo.",
+                    "Montaje: sirve frío de inmediato."]
+        if "huevo" in _txt:
+            return [_mise, "El Toque de Fuego: bate los huevos y cuájalos a fuego medio 3-4 minutos junto a los vegetales (yema y clara firmes).",
+                    "Montaje: sirve caliente con el acompañante."]
+        if any(t in _txt for t in ("pollo", "res", "cerdo", "pescado", "tilapia", "mero", "atun", "pavo", "camaron")):
+            return [_mise, "El Toque de Fuego: sazona la proteína con sal, ajo y orégano; cocina a la plancha a fuego medio-alto 6-8 minutos por lado hasta dorar; hierve el víver/carbohidrato 15-20 minutos hasta ablandar.",
+                    "Montaje: sirve la proteína con el carbohidrato y la ensalada/vegetales."]
+        return [_mise, "El Toque de Fuego: cocina los ingredientes principales a fuego medio 10-12 minutos hasta que estén tiernos.",
+                "Montaje: sirve y ajusta sal al gusto."]
+    except Exception:
+        return ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar la proteína", "Montaje: Servir"]
+
+
 def _build_fallback_day(nutr: dict, day_number: int,
                         restricted_tokens: frozenset = frozenset(),
                         form_data: dict = None) -> dict:
@@ -23300,7 +23843,8 @@ def _build_fallback_day(nutr: dict, day_number: int,
             "fats": int(target_fat * f_ratio),
             "macros": ["Plan Matemático"],
             "ingredients": list(ingredients),
-            "recipe": ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar la proteína", "Montaje: Servir"]
+            # [P2-FALLBACK-RECIPE-SLOT-TEMPLATE · 2026-07-01] pasos por categoría (cocinables), no placeholder.
+            "recipe": _fallback_recipe_steps(meal_type, ingredients),
         }
 
     # [P1-FALLBACK-BARIATRIC-CURATED · 2026-06-28] Bariátrico → 6 comidas del pool curado; si no → 3 comidas genéricas
@@ -23323,6 +23867,33 @@ def _build_fallback_day(nutr: dict, day_number: int,
         _slot_pool = _pool.get(meal_type) or _FALLBACK_MEAL_POOLS.get(meal_type)
         tmpl = _select_safe_fallback_meal(_slot_pool, restricted_tokens)
         meals.append(create_meal(tmpl, r, r, r, r, meal_type))
+
+    # [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] (audit macros GAP-5) Los macros del fallback eran ASERTADOS
+    # (target×ratio) sobre plantillas ESTÁTICAS sin escalar → "180 g de pollo fijos" con target de 190 g de
+    # proteína no sumaba lo declarado y nadie lo medía. Pase determinista: (1) reescala los ingredientes de
+    # cada plantilla hacia las kcal asertadas del slot (factor clamp [0.5, 2.5] — preserva la proporción de la
+    # plantilla); (2) truth-up desde strings → los números persistidos son FÍSICOS. Fail-safe (error → números
+    # asertados como antes). tooltip-anchor: P2-FALLBACK-PHYSICAL-MACROS
+    if FALLBACK_PHYSICAL_MACROS_ENABLED:
+        try:
+            from nutrition_db import IngredientNutritionDB as _FBDB, rescale_ingredient_string as _resc_fb
+            _fdb = _FBDB()
+            for _m in meals:
+                try:
+                    _phys_kcal = 0.0
+                    for _ing in (_m.get("ingredients") or []):
+                        _mac = _fdb.macros_from_ingredient_string(str(_ing))
+                        _phys_kcal += float(_mac.get("kcal") or 0) if _mac else 0.0
+                    _tgt_kcal = float(_m.get("cals") or 0)
+                    if _phys_kcal > 0 and _tgt_kcal > 0:
+                        _f_fb = max(0.5, min(2.5, _tgt_kcal / _phys_kcal))
+                        if abs(_f_fb - 1.0) > 0.05:
+                            _m["ingredients"] = [(_resc_fb(str(_i), _f_fb) or _i) for _i in _m["ingredients"]]
+                    _truth_up_meal_macros_from_strings(_m, _fdb)
+                except Exception:
+                    continue
+        except Exception as _fb_e:
+            logger.warning(f"[P2-FALLBACK-PHYSICAL-MACROS] rescale del fallback no-op: {type(_fb_e).__name__}: {_fb_e}")
 
     return {
         "day": day_number,
@@ -23561,6 +24132,10 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
         }
         bands = {"protein": (lo_m, hi_m), "carbs": (lo_m, hi_m), "fats": (lo_m, hi_m), "kcal": (0.95, 1.05)}
         per = {k: {"in": 0, "total": 0} for k in targets}
+        # [P1-ALL4-KPI · 2026-07-01] (audit macros GAP-7) KPI conjunto "all-4 en banda por día": los marginales
+        # per_macro NO permiten derivar la tasa conjunta (el benchmark all-4 66.7% solo se medía offline).
+        all4_days = 0
+        days_total = 0
         for day in plan.get("days", []) or []:
             meals = day.get("meals", []) or []
             delivered = {
@@ -23569,12 +24144,20 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
                 "fats": sum(_meal_macro_num(m.get("fats")) for m in meals),
                 "kcal": sum(_meal_macro_num(m.get("cals")) for m in meals),
             }
+            _day_cells = 0
+            _day_in = 0
             for k, t in targets.items():
                 if t and t > 0:
                     lo, hi = bands[k]
                     per[k]["total"] += 1
+                    _day_cells += 1
                     if lo * t <= delivered[k] <= hi * t:
                         per[k]["in"] += 1
+                        _day_in += 1
+            if _day_cells:
+                days_total += 1
+                if _day_cells >= 4 and _day_in == _day_cells:
+                    all4_days += 1
         cin = sum(v["in"] for v in per.values())
         ctot = sum(v["total"] for v in per.values())
         # [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) Score SOLO de macros (excluye la celda kcal,
@@ -23589,26 +24172,46 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             "cells_in_band_macros": cin_m, "cells_total_macros": ctot_m,
             "band_macros": [lo_m, hi_m], "band_kcal": [0.95, 1.05],
             "per_macro": {k: (round(v["in"] / v["total"], 3) if v["total"] else None) for k, v in per.items()},
+            # [P1-ALL4-KPI · 2026-07-01] tasa conjunta all-4 por día (KPI del objetivo "100% macros").
+            "all4_days": all4_days, "days_total": days_total,
+            "all4_ratio": round(all4_days / days_total, 3) if days_total else None,
         }
     except Exception as _bs_e:
         logger.warning(f"[P4-SCOREBOARD] compute_clinical_band_score falló: {type(_bs_e).__name__}: {_bs_e}")
         return {"score": None, "cells_in_band": 0, "cells_total": 0, "error": True}
 
 
-def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: bool, attempt: int) -> bool:
+def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: bool, attempt: int,
+                                  band_payload: dict = None) -> bool:
     """[P2-BAND-SCORE-GATE · 2026-06-15] Marca `plan._quality_degraded=True` (reason=low_band_score) si la
     precisión MEDIDA (`clinical_band_score`) cae bajo `BAND_SCORE_GATE_THRESHOLD`, NO es fallback, y el
     plan no estaba ya marcado por una razón peor → dispara el banner de degradación existente del
     frontend (honestidad: la precisión de macros fue baja). NO fuerza retry (corre post-scoring, fuera
     del grafo). Gateado por `BAND_SCORE_GATE_ENABLED` (default ON tras P1-BAND-SCORE-GATE-ON · 2026-06-15,
-    umbral 0.5 tuneado contra prod). Retorna True si marcó. Puro + fail-safe (no lanza). Anchor: P2-BAND-SCORE-GATE."""
+    umbral 0.5 tuneado contra prod). Retorna True si marcó. Puro + fail-safe (no lanza). Anchor: P2-BAND-SCORE-GATE.
+
+    [P1-BAND-PER-MACRO-ON · 2026-07-01] (audit macros GAP-1) `band_payload` opcional (el dict completo de
+    `compute_clinical_band_score`): si el AGREGADO pasa (≥ umbral) pero un macro individual quedó con
+    < BAND_GATE_PER_MACRO_THRESHOLD de sus celdas en banda (un macro entero fuera de banda casi todos los
+    días, p.ej. carbs 0/7), marca reason=`low_band_macro:<macros>` — cierra la rama "rechazable-pero-
+    entregado-sin-señal" cuando el retry per-macro se agotó. Mismo knob/umbral que el retry-gate
+    (BAND_GATE_PER_MACRO) → semántica consistente retry↔banner."""
     try:
         if not BAND_SCORE_GATE_ENABLED or delivered_was_fallback or band_val is None:
             return False
-        if band_val >= BAND_SCORE_GATE_THRESHOLD or plan.get("_quality_degraded"):
+        _pm_low = []
+        if BAND_GATE_PER_MACRO and isinstance(band_payload, dict):
+            _pm = band_payload.get("per_macro") or {}
+            _pm_low = sorted(k for k, v in _pm.items()
+                             if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD)
+        if (band_val >= BAND_SCORE_GATE_THRESHOLD and not _pm_low) or plan.get("_quality_degraded"):
             return False
         plan["_quality_degraded"] = True
-        plan["_quality_degraded_reason"] = "low_band_score"
+        if band_val < BAND_SCORE_GATE_THRESHOLD:
+            plan["_quality_degraded_reason"] = "low_band_score"
+        else:
+            plan["_quality_degraded_reason"] = "low_band_macro:" + ",".join(_pm_low)
+            plan["_quality_degraded_band_per_macro_low"] = _pm_low
         plan["_quality_degraded_severity"] = "minor"
         plan["_quality_degraded_attempts"] = attempt
         plan["_quality_degraded_band_score"] = band_val
@@ -23961,8 +24564,9 @@ def _compute_pipeline_holistic_score_and_emit(
                     _band_gate_val = (_band.get("score_macros_only")
                                       if BAND_GATE_USE_MACROS_ONLY and _band.get("score_macros_only") is not None
                                       else _band_val)
+                    # [P1-BAND-PER-MACRO-ON · 2026-07-01] band_payload → banner per-macro en agotamiento.
                     if _maybe_mark_low_band_degraded(plan, _band_gate_val, delivered_was_fallback,
-                                                     final_state.get("attempt", 1)):
+                                                     final_state.get("attempt", 1), band_payload=_band):
                         logger.warning(
                             f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
                             f"{BAND_SCORE_GATE_THRESHOLD} → plan marcado _quality_degraded (low_band_score)")
@@ -24262,10 +24866,12 @@ def _apply_critical_review_guardrails(
             # alcanzó el piso de proteína tras agotar los intentos. Disclaimer honesto +
             # `_fallback_reason` específico para el banner (Fase 7) y la telemetría.
             fallback_plan["_fallback_reason"] = "protein_floor"
+            # [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] copy honesto: el fallback APROXIMA los macros
+            # (plantillas reescaladas + truth-up físico), no los "cumple" con precisión de solver.
             fallback_plan["_review_disclaimer"] = (
                 "El plan generado por la IA no alcanzaba el mínimo de proteína para tus metas "
-                "tras varios intentos. Este es un plan de contingencia matemático que SÍ cumple "
-                "tus macros. Por favor regenera para una versión más variada."
+                "tras varios intentos. Este es un plan de contingencia matemático, aproximado a "
+                "tus macros. Por favor regenera para una versión más precisa y variada."
             )
         else:
             fallback_plan["_fallback_reason"] = "medical_critical"

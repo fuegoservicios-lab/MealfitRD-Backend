@@ -1127,6 +1127,21 @@ def normalize_name(orig_name: str) -> str:
     if re.search(r'\byogur(t)?\b', _opl):
         return 'Yogurt'
 
+    # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] Preparaciones "harina de X"/"tortilla de maíz"/"crema de coco"
+    # son PRODUCTOS DISTINTOS del alimento base (lección P1-NUT-BUTTER-DISTINCT generalizada). Sin este guard
+    # temprano, el alias 'harina' (Harina de trigo) ganaba en el Tier-2 → "harina de avena" resolvía a TRIGO
+    # (gluten para un celíaco) y "harina de plátano" a Plátano fresco (macros ~3× sub-contados). Con
+    # equivalente real → canoniza; sin fila propia → pass-through (no matchea master → verified-only lo
+    # dropea; coherencia simétrica porque ambos lados pasan por aquí). tooltip-anchor: P1-PREP-COLLAPSE-GUARD
+    _prep_handled, _prep_canon = resolve_preparation_distinct(orig_name)
+    if _prep_handled:
+        if _prep_canon:
+            return _prep_canon
+        _prep_disp = re.sub(r'\(.*?\)', '', str(orig_name)).strip()
+        if _prep_disp:
+            return _prep_disp[0].upper() + _prep_disp[1:]
+        return n
+
     n_stripped = strip_accents(n)
     clean_n_stripped = strip_accents(clean_n)
     
@@ -3936,6 +3951,61 @@ def canonicalize_legumino(name) -> str | None:
     return None
 
 
+# [P1-PREP-COLLAPSE-GUARD · 2026-07-01] (audit creatividad G3/G4, confirmado en vivo contra el catálogo)
+# Una PREPARACIÓN "harina de X" es un PRODUCTO DISTINTO de X fresco (SKU, precio, macros ~3× en harinas de
+# vívere) — generalización de la lección P1-NUT-BUTTER-DISTINCT. Sin este guard: (a) el alias 'harina'
+# (Harina de trigo) ganaba por longest-first en el Tier-2 de normalize_name/_match_row → "harina de avena"
+# resolvía a HARINA DE TRIGO (lista con gluten para un celíaco sin que el allergen-guard dispare — el string
+# no dice "trigo"); (b) "harina de plátano" → Plátano verde fresco (macros sub-contados ~3×) vía Tier-2 y
+# vía canonicalize_musaceae; (c) "tortilla de maíz" → Maíz dulce en granos (producto distinto; el catálogo
+# solo tiene tortillas de trigo). Resolución explícita: preparaciones con equivalente real en el catálogo
+# se canonizan (harina de avena→Avena molida ≈ mismos macros; harina de maíz→Harina de maíz precocida;
+# harina de trigo→su propia fila); el resto se marca DISTINTO-sin-fila → normalize_name devuelve el nombre
+# passthrough (no matchea master → verified-only lo dropea y el guard de coherencia ve ambos lados igual) y
+# nutrition_db devuelve None (no computar macros del producto equivocado). tooltip-anchor: P1-PREP-COLLAPSE-GUARD
+_PREP_FLOUR_RE = re.compile(r"\bharinas?\s+de\s+([a-z]+)")
+_PREP_FLOUR_CANON = {
+    "avena": "Avena",
+    "maiz": "Harina de maíz precocida",
+    "trigo": "Harina de trigo",
+}
+_PREP_FLOUR_DISTINCT = (
+    "platano", "platanos", "yuca", "arroz", "coco",
+    "almendra", "almendras", "garbanzo", "garbanzos", "cebada", "quinoa",
+)
+_PREP_TORTILLA_MAIZ_RE = re.compile(r"\btortillas?\s+de\s+maiz\b")
+_PREP_CREMA_COCO_RE = re.compile(r"\bcremas?\s+de\s+coco\b")
+
+
+def resolve_preparation_distinct(name) -> tuple:
+    """[P1-PREP-COLLAPSE-GUARD · 2026-07-01] Devuelve `(handled, canonical)`:
+      - `(True, "<master name>")` → la preparación tiene equivalente real en el catálogo; resolver ahí.
+      - `(True, None)` → producto DISTINTO sin fila propia; NO colapsar al alimento base (drop/pass-through).
+      - `(False, None)` → no es una preparación cubierta; seguir con los tiers normales.
+    Puro y determinista (sin catálogo) para que normalize_name, nutrition_db._match_row y los
+    canonicalizers compartan exactamente las mismas reglas. tooltip-anchor: P1-PREP-COLLAPSE-GUARD"""
+    if not name:
+        return (False, None)
+    try:
+        from constants import strip_accents as _sa_prep
+        low = _sa_prep(str(name).lower())
+    except Exception:
+        low = str(name).lower()
+    m = _PREP_FLOUR_RE.search(low)
+    if m:
+        base = m.group(1)
+        if base in _PREP_FLOUR_CANON:
+            return (True, _PREP_FLOUR_CANON[base])
+        if base in _PREP_FLOUR_DISTINCT:
+            return (True, None)
+        return (False, None)  # "harina de negrito" etc. → resuelven por su propia fila en los tiers
+    if _PREP_TORTILLA_MAIZ_RE.search(low):
+        return (True, None)  # el catálogo solo tiene tortillas de TRIGO — no colapsar a Maíz dulce
+    if _PREP_CREMA_COCO_RE.search(low):
+        return (True, None)  # crema de coco ≠ coco fresco (SKU distinto)
+    return (False, None)
+
+
 def canonicalize_viveres(name) -> str | None:
     """[P3-NEW-6 · 2026-05-11] Canonicaliza víveres dominicanos
     (tubérculos y raíces) a un canónico shopping fijo.
@@ -3973,6 +4043,9 @@ def canonicalize_viveres(name) -> str | None:
         cae al siguiente canonicalizer o al fallback singularize/strip.
     """
     if not name:
+        return None
+    # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] "harina de yuca" NO es yuca fresca — no colapsar.
+    if resolve_preparation_distinct(name)[0]:
         return None
     n_low = str(name).lower()
     if re.search(r'\byucas?\b', n_low):
@@ -4017,6 +4090,9 @@ def canonicalize_musaceae(name) -> str | None:
         Canonical name fijo si matchea; `None` si no aplica.
     """
     if not name:
+        return None
+    # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] "harina de plátano" NO es plátano fresco (~3× kcal) — no colapsar.
+    if resolve_preparation_distinct(name)[0]:
         return None
     n_low = str(name).lower()
     if re.search(r'\bpl[áa]tanos?\b', n_low):

@@ -1384,6 +1384,48 @@ def swap_meal(form_data: dict):
                 )
                 raise ValueError("SWEET_SAVORY_CLASH")
 
+        # [P2-UPDATE-SAMEDAY-VARIETY · 2026-07-01] (audit slots GAP-4 / paridad GAP-4) La variedad same-day en
+        # swap era SOLO prompt ("preferencia") → «cámbiame la cena» devolvía pechuga cuando el almuerzo YA era
+        # pollo — exactamente la asimetría que P1-VARIETY-SAME-DAY-PROTEIN cerró en form-gen (gate). Backstop
+        # determinista: si la proteína principal del plato nuevo coincide con la de otra comida de HOY → 1 retry
+        # (marker en el prompt evita loops); en el reintento se entrega con log advisory (repetir es cosmético;
+        # NUNCA fallback por esto). Word-boundary anti-'res'-en-'fresas'. Skip en strict_pantry (repetir puede
+        # ser inevitable cocinando de la nevera). tooltip-anchor: P2-UPDATE-SAMEDAY-VARIETY
+        if UPDATE_APPETIBILITY_GUARD and same_day_other_meals and not strict_pantry:
+            try:
+                import re as _re_sd
+                from constants import strip_accents as _sa_sd
+                _SD_PROT = {
+                    "pollo": ("pollo", "pechuga", "muslo"), "cerdo": ("cerdo", "chuleta", "longaniza"),
+                    "res": ("res", "bistec", "molida", "churrasco"), "pavo": ("pavo",),
+                    "pescado": ("pescado", "tilapia", "salmon", "mero", "bacalao", "chillo", "merluza"),
+                    "camarones": ("camaron", "camarones"), "atun": ("atun",),
+                    "huevo": ("huevo", "huevos", "revoltillo"),
+                }
+                _sd_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                _sd_name = _sa_sd(str(_sd_dump.get("name", "")).lower())
+                _new_prot = next((c for c, syns in _SD_PROT.items()
+                                  if any(_re_sd.search(r"\b" + s + r"\b", _sd_name) for s in syns)), None)
+                if _new_prot:
+                    _other_blob = _sa_sd(" ".join(str(x) for x in same_day_other_meals).lower())
+                    _repeats = any(_re_sd.search(r"\b" + s + r"\b", _other_blob) for s in _SD_PROT[_new_prot])
+                    if _repeats:
+                        _SD_MARKER = "🔄 RETRY VARIEDAD DEL DÍA"
+                        if _SD_MARKER not in str(_current_prompt[0]):
+                            _current_prompt[0] = prompt_text + (
+                                f"\n\n{_SD_MARKER} (OBLIGATORIO): el plato anterior repite la proteína "
+                                f"«{_new_prot}» que OTRA comida de HOY ya usa ({', '.join(same_day_other_meals[:3])}). "
+                                f"Propón un plato con una proteína principal DISTINTA. Mantén los macros objetivo."
+                            )
+                            raise ValueError(f"SAME_DAY_PROTEIN_REPEAT: {_new_prot}")
+                        logger.info(f"🔄 [P2-UPDATE-SAMEDAY-VARIETY] swap repite '{_new_prot}' tras el retry — "
+                                    f"entregado con advisory | meal_type={meal_type}")
+            except ValueError:
+                raise
+            except Exception as _sd_e:
+                logger.warning(f"[P2-UPDATE-SAMEDAY-VARIETY] backstop same-day falló (no bloquea): "
+                               f"{type(_sd_e).__name__}: {_sd_e}")
+
         return res
 
     try:
@@ -1726,7 +1768,9 @@ def swap_meal(form_data: dict):
             from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc
             # [P2-STEPVEG-PANTRY-GUARD · 2026-06-29] pantry-strict = el swap está armado desde la Nevera
             # (clean_ingredients no vacío) → el finalizer NO añade veg de catálogo (no se puede comprar más).
-            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients))
+            # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] allergies (enriquecidas server-side) → el veg-guard del
+            # finalizer NO inyecta un alérgeno post-backstop (este bloque corre DESPUÉS del scan clínico).
+            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies)
             if _nfix:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix} fix(es) de coherencia de receta en plato de swap | meal_type={meal_type}")
         except Exception as _fin_e:

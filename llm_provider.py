@@ -87,6 +87,24 @@ def _deepseek_base_url() -> str:
     return _env_str("MEALFIT_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 
+def _is_deepseek_provider(base_url: Optional[str] = None) -> bool:
+    """True si el `base_url` efectivo apunta a DeepSeek.
+
+    [MULTI-PROVIDER · 2026-07-01] El `extra_body={"thinking": ...}` que este
+    wrapper inyecta es un parámetro ESPECÍFICO del API DeepSeek. Otros back-ends
+    OpenAI-compatibles usados para testing/experimentos (Google AI Studio, Groq,
+    etc.) rechazan campos desconocidos con HTTP 400 (`Unknown name "thinking"`).
+    Por eso el `thinking` solo se inyecta cuando el provider es DeepSeek; para
+    cualquier otro base_url el wrapper se comporta como un ChatOpenAI estándar.
+
+    Como los callsites productivos NUNCA pasan un `base_url` propio (viene del
+    knob `MEALFIT_DEEPSEEK_BASE_URL`), inspeccionar el knob basta; se acepta un
+    `base_url` explícito para cubrir el path del constructor.
+    """
+    resolved = (base_url or _deepseek_base_url() or "").lower()
+    return "deepseek" in resolved
+
+
 def _deepseek_api_key() -> str:
     """API key desde env `DEEPSEEK_API_KEY`.
 
@@ -261,13 +279,22 @@ class ChatDeepSeek(ChatOpenAI):
     ):
         for _legacy in _LEGACY_SWALLOWED_KWARGS:
             kwargs.pop(_legacy, None)
+        # [MULTI-PROVIDER · 2026-07-01] Override GLOBAL de modelo para testing con un
+        # back-end OpenAI-compatible NO-DeepSeek. Los ~12 knobs MEALFIT_*_MODEL
+        # (planner, daygen, reviewer, self-critique, judge, …) resuelven a IDs
+        # deepseek-v4-* que el otro provider no reconoce; en vez de overridear cada
+        # knob, remapeamos CUALQUIER `model` al del provider de test. Default vacío =
+        # no-op → prod (DeepSeek) intacto. Solo aplica si el provider NO es DeepSeek.
+        _model_override = _env_str("MEALFIT_LLM_MODEL_OVERRIDE", "")
+        if _model_override and not _is_deepseek_provider(base_url):
+            model = _model_override
         if max_output_tokens is not None and "max_tokens" not in kwargs:
             kwargs["max_tokens"] = max_output_tokens
         kwargs.setdefault("stream_usage", True)
         # [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] Desactiva thinking mode por
         # default en TODOS los runnables (no solo structured-output). Merge
         # no-destructivo: si el callsite ya pasó `extra_body.thinking`, gana.
-        if _DEEPSEEK_THINKING_DISABLED:
+        if _DEEPSEEK_THINKING_DISABLED and _is_deepseek_provider(base_url):
             _extra = dict(kwargs.get("extra_body") or {})
             _extra.setdefault("thinking", {"type": "disabled"})
             kwargs["extra_body"] = _extra
@@ -298,7 +325,7 @@ class ChatDeepSeek(ChatOpenAI):
         """
         kwargs.setdefault("method", "function_calling")
         base = self
-        if kwargs["method"] == "function_calling":
+        if kwargs["method"] == "function_calling" and _is_deepseek_provider():
             merged_extra = dict(self.extra_body or {})
             merged_extra.setdefault("thinking", {"type": "disabled"})
             base = self.model_copy(update={"extra_body": merged_extra})

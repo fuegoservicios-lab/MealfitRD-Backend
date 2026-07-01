@@ -35,10 +35,12 @@ def test_knob_on_by_default():
 
 
 def test_keys_and_mapping():
-    # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] el set base (fibra/Mg/Ca) + los 4 nuevos food-achievable.
+    # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] el set base (fibra/Mg/Ca) + los 4 food-achievable.
+    # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] + potasio (skip renal/K-med) + vit E (UL 1000) + omega-3.
     assert g._MICRO_CLOSER_KEYS == frozenset({
         "fiber_g", "magnesium_mg", "calcium_mg",
         "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+        "potassium_mg", "vit_e_mg", "omega3_g",
     })
     # La fibra en el dict de micros_from_ingredient_string es 'fiber', no 'fiber_g'; el resto identidad.
     assert g._MICRO_CLOSER_INGREDIENT_KEY["fiber_g"] == "fiber"

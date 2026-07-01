@@ -30,7 +30,10 @@ def test_new_knobs_default_off():
     # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] CARB_FLOOR flipped OFF→ON: solo dispara con carbos MUY bajo banda
     # (reconcile saturado) → mueve carbos HACIA la banda + re-cuantiza. Rollback: MEALFIT_CARB_FLOOR=false.
     assert g.CARB_FLOOR_ENABLED is True, "MEALFIT_CARB_FLOOR ahora ON por default (P1-OBJECTIVE-LEVERS-ON)"
-    assert g.BAND_GATE_PER_MACRO is False, "MEALFIT_BAND_GATE_PER_MACRO debe nacer OFF (A/B-pending)"
+    # [P1-BAND-PER-MACRO-ON · 2026-07-01] flipped OFF→ON (autorización estándar del owner, patrón
+    # P1-OBJECTIVE-LEVERS-ON): el gate solo-agregado dejaba pasar un macro entero fuera de banda 7/7 días.
+    # Rollback sin redeploy: MEALFIT_BAND_GATE_PER_MACRO=false.
+    assert g.BAND_GATE_PER_MACRO is True, "MEALFIT_BAND_GATE_PER_MACRO ahora ON por default (P1-BAND-PER-MACRO-ON)"
     assert 0.0 <= g.BAND_GATE_PER_MACRO_THRESHOLD <= 1.0
     assert g.CARB_FLOOR_MAX_SCALE >= 1.8
 

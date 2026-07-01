@@ -366,6 +366,27 @@ class IngredientNutritionDB:
         self._ensure_loaded()
         if not raw_name:
             return None
+        # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] Espejo del guard de normalize_name: "harina de avena" NO debe
+        # computar macros de HARINA DE TRIGO (alias 'harina' ganaba el Tier-2) ni "harina de plátano" los del
+        # plátano fresco (~3× drift). Con equivalente real → resuelve esa fila; producto distinto sin fila →
+        # None (no computar macros del producto equivocado). Fail-open al matching normal si el helper falla.
+        # tooltip-anchor: P1-PREP-COLLAPSE-GUARD
+        try:
+            from shopping_calculator import resolve_preparation_distinct as _rpd
+            _prep_handled, _prep_canon = _rpd(raw_name)
+            if _prep_handled:
+                if not _prep_canon:
+                    return None
+                _row = self._by_name.get(_prep_canon)
+                if _row is not None:
+                    return _row
+                _cs = _strip_accents(str(_prep_canon).strip().lower())
+                for alias_stripped, r in self._aliases:
+                    if alias_stripped == _cs:
+                        return r
+                return None
+        except Exception:
+            pass
         n = re.sub(r"\(.*?\)", "", str(raw_name).lower()).strip()
         n_stripped = _strip_accents(n)
         # Tier 1: match exacto sobre el texto crudo

@@ -1412,12 +1412,22 @@ DOMINICAN_CARBS = [
     "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía",
     # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Carbos/granos verificados del catálogo añadidos a la rotación.
     "Quinoa", "Pasta integral", "Bulgur", "Cebada", "Casabe", "Mapuey", "Tortilla integral", "Harina de Negrito",
+    # [P1-FLOURS-POOLS · 2026-07-01] (audit creatividad G2) Las HARINAS y el maíz verificados NO rotaban en los
+    # pools → el ejemplo flagship del owner ("con la harina haces panqueques, bollos, arepas") casi no podía
+    # ocurrir como plato principal fuera del desayuno, pese a que la regla 2.5 de creatividad los promueve.
+    # El round-robin ahora los ofrece como carb-base; el day-gen los transforma (panqueques/bollos/arepitas/
+    # empanadas al horno). Nombres = catálogo verificado (resuelven en la lista). tooltip-anchor: P1-FLOURS-POOLS
+    "Harina de trigo", "Harina de maíz precocida", "Maíz dulce en granos", "Tortilla de trigo",
 ]
 
 PROTEIN_SYNONYMS = {
-    "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo"],
-    "cerdo": ["cerdo", "masita", "chicharrón de cerdo", "lomo", "pernil", "costilla"],
-    "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res"],
+    # [P1-FLOURS-POOLS · 2026-07-01] Backfill: los items del pool P1-VARIETY-CATALOG-POOLS que no resolvían
+    # en el synonym system (ni key ni variant) se añaden como VARIANT de su base cuando son el mismo alimento
+    # (muslo de pollo→pollo) o como base propia cuando son alimento distinto (conejo, chivo, mariscos, quesos).
+    "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo", "muslo de pollo"],
+    "cerdo": ["cerdo", "masita", "chicharrón de cerdo", "lomo", "pernil", "costilla", "costilla de cerdo"],
+    "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res",
+            "hígado de res", "higado de res"],
     # [P2-COH-1] Lista expandida con peces comunes en RD/Caribe (merluza,
     # róbalo, pargo, corvina, mahi-mahi, lubina, carite, jurel, lambí). Sin
     # estos, el coherence check en `graph_orchestrator._run_assembly_validations`
@@ -1432,9 +1442,9 @@ PROTEIN_SYNONYMS = {
                 "merluza", "filete de merluza",
                 "róbalo", "robalo", "pargo", "corvina",
                 "mahi-mahi", "mahi mahi", "mahimahi",
-                "lubina", "carite", "jurel", "lambí", "lambi"],
+                "lubina", "carite", "jurel", "lambí", "lambi", "arenque"],
     "atún": ["atún", "atun", "atun en agua", "atun en lata"],
-    "sardina": ["sardina", "sardinas", "sardina en lata"],
+    "sardina": ["sardina", "sardinas", "sardina en lata", "sardinas en lata"],
     "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
     "queso de freír": ["queso de freír", "queso de freir", "queso frito", "queso de hoja"],
     "salami dominicano": ["salami dominicano", "salami", "salchichón"],
@@ -1448,7 +1458,7 @@ PROTEIN_SYNONYMS = {
     "queso ricotta": ["queso ricotta", "ricotta", "queso ricotta descremado", "ricotta descremada", "ricotta light"],
     "yogurt": ["yogurt", "yogur", "yogurt griego", "yogurt natural", "yogurt griego natural",
                "yogurt griego sin azucar", "yogurt griego sin azúcar", "yogurt sin azucar",
-               "yogurt descremado", "greek yogurt"],
+               "yogurt descremado", "greek yogurt", "yogurt griego entero"],
     "queso blanco": ["queso blanco", "queso blanco fresco", "queso de pasta", "queso fresco",
                      "queso de mano", "queso crema", "queso campesino"],
     "queso mozzarella": ["queso mozzarella", "mozzarella", "mozzarella fresca", "queso mozarela",
@@ -1456,7 +1466,23 @@ PROTEIN_SYNONYMS = {
     "gandules": ["gandules", "guandules", "gandul", "guandul"],
     "lentejas": ["lentejas", "lenteja"],
     "garbanzos": ["garbanzos", "garbanzo", "hummus", "puré de garbanzos"],
-    "soya/tofu": ["soya/tofu", "soya", "tofu", "carne de soya", "tofu/soya", "tofu/soya firme", "tofu firme", "soya firme"],
+    "soya/tofu": ["soya/tofu", "soya", "tofu", "carne de soya", "tofu/soya", "tofu/soya firme", "tofu firme",
+                  "soya firme", "soya texturizada"],
+    # [P1-FLOURS-POOLS · 2026-07-01] Bases propias para items del pool sin base semántica existente.
+    "conejo": ["conejo"],
+    "chivo": ["chivo", "carne de chivo", "chivo guisado"],
+    "pulpo": ["pulpo"],
+    "calamar": ["calamar", "calamares"],
+    "mejillones": ["mejillones", "mejillón", "mejillon"],
+    "cangrejo": ["cangrejo", "jaiba"],
+    "edamame": ["edamame", "edamames"],
+    "frijoles pintos": ["frijoles pintos", "habichuelas pintas"],
+    "habas": ["habas", "haba"],
+    "guisantes secos": ["guisantes secos", "guisantes partidos", "arvejas secas"],
+    "queso cottage": ["queso cottage", "cottage"],
+    "queso parmesano": ["queso parmesano", "parmesano", "parmesano rallado"],
+    "queso cheddar": ["queso cheddar", "cheddar"],
+    "queso gouda": ["queso gouda", "gouda"],
     # [P3-PAVO-SYNONYM-KEY · 2026-06-22] Key renombrada "pavo"→"pechuga de pavo" para alinear con
     # el catálogo (DOMINICAN_PROTEINS usa "Pechuga de pavo" verificado desde P3-CONDIMENT-CONSOLIDATION).
     # test_synonyms::test_catalog_lists_match_synonym_keys exige que cada item del catálogo tenga key
@@ -1479,7 +1505,24 @@ CARB_SYNONYMS = {
     "guineítos verdes": ["guineítos verdes", "guineítos", "guineitos", "guineos verdes", "guineito verde", "guineitos verdes"],
     "ñame": ["ñame", "name", "ñame hervido"],
     "yautía": ["yautía", "yautia", "yautía hervida"],
-    "batata": ["batata", "puré de batata", "batata hervida", "boniato"]
+    "batata": ["batata", "puré de batata", "batata hervida", "boniato"],
+    # [P1-FLOURS-POOLS · 2026-07-01] Entradas para los items del pool que NO resolvían en el synonym system
+    # (los del lote P1-VARIETY-CATALOG-POOLS que no eran variant de ninguna base + las harinas nuevas). Sin
+    # entrada, la variedad/fatiga/coherencia no los reconocen. NO se añade "harina" ni "maíz" a secas como
+    # variant: colapsarían preparaciones ("harina de avena") a la base equivocada (lección P1-NUT-BUTTER-DISTINCT).
+    "bulgur": ["bulgur", "trigo bulgur"],
+    "cebada": ["cebada", "cebada perlada"],
+    "mapuey": ["mapuey"],
+    "tortilla integral": ["tortilla integral", "wrap integral"],
+    "harina de negrito": ["harina de negrito", "negrito"],
+    "harina de trigo": ["harina de trigo", "harina blanca", "harina todo uso", "panqueques de harina",
+                        "bollos de harina"],
+    "harina de maíz precocida": ["harina de maíz precocida", "harina de maiz precocida", "harina de maíz",
+                                 "harina de maiz", "harina pan", "arepa", "arepas", "arepitas de maíz",
+                                 "arepitas de maiz"],
+    "maíz dulce en granos": ["maíz dulce en granos", "maiz dulce en granos", "maíz dulce", "maiz dulce",
+                             "maíz en granos", "maiz en granos"],
+    "tortilla de trigo": ["tortilla de trigo", "wrap", "wraps", "tortillas de trigo"],
 }
 
 DOMINICAN_VEGGIES_FATS = [
@@ -1515,7 +1558,37 @@ VEGGIE_FAT_SYNONYMS = {
     "ajíes": ["ajíes", "ají", "pimientos", "pimiento", "pimiento morrón", "pimiento morron", "ajies"],
     "auyama": ["auyama", "calabaza", "zapallo", "squash", "ahuyama"],
     "aceite de oliva": ["aceite de oliva", "aceite verde"],
-    "nueces/almendras": ["nueces/almendras", "nueces", "almendras", "maní"]
+    "nueces/almendras": ["nueces/almendras", "nueces", "almendras", "maní", "almendras fileteadas"],
+    # [P1-FLOURS-POOLS · 2026-07-01] Backfill de los vegetales/grasas del pool P1-VARIETY-CATALOG-POOLS
+    # que no resolvían en el synonym system (variedad/fatiga/coherencia eran ciegas a ellos).
+    "apio": ["apio"],
+    "espárragos": ["espárragos", "esparragos", "espárrago", "esparrago"],
+    "champiñones": ["champiñones", "champinones", "champiñón", "champinon", "hongos", "setas"],
+    "remolacha": ["remolacha", "betabel"],
+    "kale": ["kale", "col rizada"],
+    "rúcula": ["rúcula", "rucula", "arúgula", "arugula"],
+    "berro": ["berro", "berros"],
+    "calabacín": ["calabacín", "calabacin", "zucchini"],
+    "repollo morado": ["repollo morado", "col morada"],
+    "rábano": ["rábano", "rabano", "rábanos", "rabanos"],
+    "coles de bruselas": ["coles de bruselas", "repollitos de bruselas"],
+    "puerro": ["puerro", "puerros"],
+    "bok choy": ["bok choy", "pak choi"],
+    "nabo": ["nabo", "nabos"],
+    "alcachofa": ["alcachofa", "alcachofas"],
+    "palmito": ["palmito", "palmitos"],
+    "cebollín": ["cebollín", "cebollin"],
+    "cundeamor": ["cundeamor"],
+    "merey": ["merey", "anacardo", "cajuil", "marañón", "maranon"],
+    "pistachos": ["pistachos", "pistacho"],
+    "semillas de chía": ["semillas de chía", "semillas de chia", "chía", "chia"],
+    "semillas de girasol": ["semillas de girasol", "pipas de girasol"],
+    "semillas de calabaza": ["semillas de calabaza", "pepitas de calabaza"],
+    "linaza": ["linaza", "semillas de lino", "lino molido"],
+    "mantequilla de maní": ["mantequilla de maní", "mantequilla de mani", "crema de maní", "crema de mani",
+                            "peanut butter"],
+    "mantequilla de almendras": ["mantequilla de almendras", "crema de almendras"],
+    "ajonjolí": ["ajonjolí", "ajonjoli", "sésamo", "sesamo", "semillas de sésamo", "semillas de sesamo"],
 }
 
 DOMINICAN_FRUITS = [
@@ -1538,7 +1611,20 @@ FRUIT_SYNONYMS = {
     "fresa": ["fresa", "fresas", "frutilla"],
     "naranja": ["naranja", "naranjas", "jugo de naranja"],
     "sandía": ["sandía", "sandia", "patilla"],
-    "melón": ["melón", "melon"]
+    "melón": ["melón", "melon"],
+    # [P1-FLOURS-POOLS · 2026-07-01] Backfill de las frutas frescas del pool P1-VARIETY-CATALOG-POOLS
+    # que no resolvían en el synonym system (el gate de fruta repetida era ciego a ellas).
+    "manzana": ["manzana", "manzanas", "manzana verde", "manzana roja"],
+    "guayaba": ["guayaba", "guayabas"],
+    "guanábana": ["guanábana", "guanabana"],
+    "níspero": ["níspero", "nispero"],
+    "mandarina": ["mandarina", "mandarinas"],
+    "toronja": ["toronja", "pomelo"],
+    "uva": ["uva", "uvas"],
+    "pera": ["pera", "peras"],
+    "kiwi": ["kiwi", "kiwis"],
+    "ciruela": ["ciruela", "ciruelas"],
+    "arándanos": ["arándanos", "arandanos", "arándano", "arandano", "blueberries"],
 }
 
 NUTRITIONAL_CATEGORIES = {

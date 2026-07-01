@@ -823,6 +823,25 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                    "DISTINTA salvo que el usuario la haya pedido explícitamente.")
         except Exception as _xcd:
             logger.debug(f"[P2-CHATMODIFY-CROSS-DAY-VARIETY] no-op: {type(_xcd).__name__}: {_xcd}")
+        # [P2-UPDATE-SAMEDAY-VARIETY · 2026-07-01] (audit paridad GAP-4) el seed de arriba SALTA el día propio
+        # a propósito (cross-day) → "cámbiame la cena del día 3" podía devolver pollo cuando el ALMUERZO del
+        # día 3 ya era pollo (el bug que P1-SWAP-SAME-DAY-VARIETY cerró en swap). Inyecta las OTRAS comidas del
+        # MISMO día como preferencia suave (espejo de agent.py). tooltip-anchor: P2-UPDATE-SAMEDAY-VARIETY
+        try:
+            _same_day_names = []
+            for _od in (plan_data.get("days") or []):
+                if isinstance(_od, dict) and _od.get("day") == day_number:
+                    for _om in (_od.get("meals") or []):
+                        if isinstance(_om, dict) and _om is not target_meal and str(_om.get("name", "")).strip():
+                            if str(_om.get("meal", "")).lower().strip() != str(meal_type).lower().strip():
+                                _same_day_names.append(str(_om.get("name")))
+                    break
+            if _same_day_names:
+                context_extras += ("\n- 🔄 VARIEDAD DEL DÍA (preferencia fuerte): las OTRAS comidas de ESE día son: "
+                                   + ", ".join(_same_day_names[:5]) + ". PREFIERE una proteína/alimento principal "
+                                   "DISTINTO al de esas comidas, salvo que el usuario lo haya pedido explícitamente.")
+        except Exception as _sdv_e:
+            logger.debug(f"[P2-UPDATE-SAMEDAY-VARIETY] seed same-day no-op: {type(_sdv_e).__name__}: {_sdv_e}")
 
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
@@ -1369,13 +1388,75 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # [P2-STEPVEG-PANTRY-GUARD · 2026-06-29] pantry-strict = cocinar desde la nevera (señal canónica del
             # modify) → el finalizer NO añade veg de catálogo que el usuario no tiene.
             _ps_fin = bool(clean_ingredients) and not allow_pantry_expansion
-            _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin)
+            # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] _clin_allergies (perfil server-side) → el veg-guard del
+            # finalizer NO inyecta un alérgeno post-backstop (este bloque corre DESPUÉS del scan clínico).
+            # [P2-CHAT-EXPLICIT-SLOT-WISH · 2026-07-01] si el usuario PIDIÓ la violación de horario en su
+            # texto ("ponme arroz en la cena"), el finalizer NO pisa su deseo con el night-rice autofix
+            # (mismo SSOT name-based del backstop P1-CHAT-SLOT-BACKSTOP aplicado al pedido).
+            _wish_slot = False
+            try:
+                _sk_fin = canonical_slot_key(meal_type)
+                if _sk_fin:
+                    _wish_slot = bool(slot_violations_for_meal_name(changes or "", _sk_fin))
+            except Exception:
+                _wish_slot = False
+            _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies,
+                                skip_night_rice=_wish_slot)
             if _nfix_m:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] finalizador de receta en modify falló (no bloquea): {type(_fin_me).__name__}: {_fin_me}")
 
         target_day["meals"][target_meal_index] = new_meal_data
+
+        # [P1-CHATMODIFY-CLOSER-ORDER · 2026-07-01] (audit micros P1-3) El micro-closer corría DESPUÉS de
+        # computar+asignar las aggregated lists y del coherence guard → sus escalados (hasta 1.6× de un
+        # ingrediente en cualquier día) quedaban en la receta persistida pero NO en la lista, y el guard
+        # (que existe exactamente para medir ese drift) ya había corrido → divergencia invisible. Fix en dos
+        # mitades: (1) AQUÍ el closer corre sobre la copia local ANTES de computar las listas → las listas
+        # nacen closer-aware; (2) el callback re-corre el MISMO closer determinista sobre el fresh ANTES de
+        # asignar listas y correr el guard → receta persistida ↔ lista coherentes y el guard mide el estado
+        # final. `_micro_form_cm`/`_ps_cm` se construyen aquí y viajan por closure al callback.
+        # tooltip-anchor: P1-CHATMODIFY-CLOSER-ORDER
+        _micro_form_cm: dict = {}
+        _ps_cm = bool(clean_ingredients) and not allow_pantry_expansion
+        _recompute_micros_on = os.environ.get(
+            "MEALFIT_UPDATE_RECOMPUTE_MICROS", "true"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if _recompute_micros_on:
+            try:
+                from graph_orchestrator import _close_micro_gaps_for_plan as _cmg_pre
+                # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] merge estilo P1-FORM-6: otherConditions
+                # (free-text) se pliega en medicalConditions → renal-skip del closer + techo K renal
+                # ven condiciones declaradas a mano; otherMedications alimenta el detector K-elevador.
+                _mc_cm = _hp.get("medicalConditions") or _hp.get("medical_conditions") or []
+                if isinstance(_mc_cm, str):
+                    _mc_cm = [_mc_cm]
+                _oc_cm = _hp.get("otherConditions") or _hp.get("other_conditions")
+                if _oc_cm and str(_oc_cm).strip():
+                    _mc_cm = list(_mc_cm) + [str(_oc_cm).strip()]
+                _micro_form_cm = {
+                    "gender": _hp.get("gender") or _hp.get("sex"),
+                    "age": _hp.get("age"),
+                    "medicalConditions": _mc_cm,
+                    "medications": _hp.get("medications"),
+                    "otherConditions": _oc_cm,
+                    "otherMedications": _hp.get("otherMedications") or _hp.get("other_medications"),
+                }
+                # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] pantry-strict (cocinar desde la nevera) → skip
+                # interno del closer; self-guards en MICRONUTRIENT_CLOSER_ENABLED, kcal/UL-bounded, renal-skip.
+                _adj_pre = _cmg_pre(plan_data, _micro_form_cm, db=None, pantry_strict=_ps_cm)
+                # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] mismo quantize que el callback → las listas
+                # (computadas de esta copia) y el fresh persistido convergen a las MISMAS porciones.
+                if _adj_pre:
+                    try:
+                        from graph_orchestrator import _apply_portion_quantization as _qz_pre
+                        from nutrition_db import IngredientNutritionDB as _QDB_pre
+                        _qz_pre(plan_data, _QDB_pre())
+                    except Exception as _qz_pre_e:
+                        logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (pre-listas) falló: {_qz_pre_e}")
+            except Exception as _cm_pre_e:
+                logger.debug(f"[P1-CHATMODIFY-CLOSER-ORDER] closer pre-listas falló (no bloquea): {_cm_pre_e}")
 
         # [P1-AUDIT-1 · 2026-05-15] Inicialización a None para que el callback
         # `_apply_meal_modification` pueda preservar las keys del fresh si la
@@ -1546,6 +1627,27 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
 
             meals_fresh[target_idx_fresh] = new_meal_data
 
+            # [P1-CHATMODIFY-CLOSER-ORDER · 2026-07-01] closer + panel ANTES de asignar listas y correr el
+            # guard (ver bloque pre-listas fuera del lock): el mismo closer determinista sobre el fresh
+            # converge al estado que las listas precomputadas ya reflejan → el guard mide el estado FINAL.
+            # tooltip-anchor: P2-CHATMODIFY-MICROS-STALE (bloque movido aquí desde después del guard)
+            if _recompute_micros_on:
+                try:
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
+                    _adj_cm = _close_micro_gaps_for_plan(plan_data_fresh, _micro_form_cm, db=None, pantry_strict=_ps_cm)
+                    # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] re-quantize si el closer escaló (porciones
+                    # medibles; espejo del persist de swap). Determinista → converge con el pre-listas.
+                    if _adj_cm:
+                        try:
+                            from graph_orchestrator import _apply_portion_quantization as _qz_cm
+                            from nutrition_db import IngredientNutritionDB as _QDB_cm
+                            _qz_cm(plan_data_fresh, _QDB_cm())
+                        except Exception as _qz_cm_e:
+                            logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (chat) falló: {_qz_cm_e}")
+                    recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
+                except Exception as _cm_micro_e:
+                    logger.debug(f"[P2-CHATMODIFY-MICROS-STALE] recompute (chat-modify) falló: {_cm_micro_e}")
+
             # Aggregated lists (overwrite — el agent_tool es source-of-truth
             # de estas keys tras una modificación). Solo escribimos si la
             # recomputación FUERA del lock tuvo éxito; si falló (variables
@@ -1579,34 +1681,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             except Exception as _coh_agent_e:
                 logger.warning(f"[TOOL] coherence guard helper fallo (no aborta): {_coh_agent_e}")
 
-            # [P2-CHATMODIFY-MICROS-STALE · 2026-06-24] (re-audit P2-2) Recomputar el panel de micros sobre
-            # el plan mutado → Dashboard/PDF no quedan stale. chat-modify PERSISTE el plan él mismo (este
-            # callback) sin etapa downstream que refresque micros (a diferencia del swap, cuyo recalc
-            # client-side al menos corre después). Espejo de regenerate-day P1-7. `_hp` ya cargado en el
-            # closure (health_profile, ~tools.py:640). Best-effort. Knob compartido MEALFIT_UPDATE_RECOMPUTE_MICROS.
-            # tooltip-anchor: P2-CHATMODIFY-MICROS-STALE
-            if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
-                try:
-                    from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
-                    _micro_form_cm = {
-                        "gender": _hp.get("gender") or _hp.get("sex"),
-                        "age": _hp.get("age"),
-                        "medicalConditions": _hp.get("medicalConditions") or _hp.get("medical_conditions"),
-                        "medications": _hp.get("medications"),
-                    }
-                    # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] (re-audit objetivo · P1) Cierre DETERMINISTA de micros
-                    # alcanzables ANTES de recomputar el panel → chat-modify no re-abre en silencio un déficit que
-                    # form-gen había cerrado. pantry-strict = la misma señal canónica del resto del flujo del modify
-                    # (`clean_ingredients and not allow_pantry_expansion`): cocinar desde la nevera NO puede "comprar
-                    # más" → se SALTA. Self-guards en MICRONUTRIENT_CLOSER_ENABLED, kcal/UL-bounded, renal-skip interno.
-                    # tooltip-anchor: P1-MICRO-CLOSER-UPDATES
-                    _ps_cm = bool(clean_ingredients) and not allow_pantry_expansion
-                    _close_micro_gaps_for_plan(plan_data_fresh, _micro_form_cm, db=None, pantry_strict=_ps_cm)
-                    recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
-                except Exception as _cm_micro_e:
-                    logger.debug(f"[P2-CHATMODIFY-MICROS-STALE] recompute (chat-modify) falló: {_cm_micro_e}")
-                # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2) Recomputa el agregado
-                # plan-level dish_quality_report tras el modify (no stale en Dashboard/PDF). Best-effort.
+            # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2) Recomputa el agregado
+            # plan-level dish_quality_report tras el modify (no stale en Dashboard/PDF). Best-effort.
+            # [P1-CHATMODIFY-CLOSER-ORDER] el bloque closer/panel que vivía aquí se movió ANTES de las
+            # listas + guard (ver arriba); dish-quality conserva su gating original.
+            if _recompute_micros_on:
                 try:
                     from graph_orchestrator import compute_dish_quality_report, DISH_QUALITY_TELEMETRY_ENABLED as _dqt_c
                     if _dqt_c:

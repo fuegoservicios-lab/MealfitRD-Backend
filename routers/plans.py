@@ -4082,6 +4082,26 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 "detail": "El Chef AI no pudo detallar esta receta ahora. Mostrando la versión original; intenta de nuevo en un momento.",
             }
 
+        # [P0-EXPAND-CLINICAL-GUARD · 2026-07-01] (audit P0-1) Hidratar alergias/dieta/condiciones SERVER-SIDE
+        # (UNION body+perfil vía `_enrich_clinical_from_profile`, no-op para guests) ANTES de cualquier uso de los
+        # pasos expandidos: (a) el veg-guard de abajo INYECTA ingredientes → debe filtrar alérgenos; (b) el scan
+        # clínico de los pasos (más abajo) valida contra la VERDAD del perfil, nunca solo contra el body.
+        # Fail-open a lo que traiga el body (espejo del enrich del resto de updates). tooltip-anchor: P0-EXPAND-CLINICAL-GUARD
+        _expand_clin = {
+            "allergies": data.get("allergies") or [],
+            "dietType": data.get("dietType") or data.get("diet_type"),
+            # [P0-EXPAND-CONDITION-GUARD · 2026-07-01] seed de condiciones desde el body (guests/clientes
+            # que las manden). Para autenticados `_enrich_clinical_from_profile` hidrata medicalConditions/
+            # medications/otherConditions desde health_profile (el body vacío NO pisa el perfil).
+            "medicalConditions": data.get("medicalConditions") or data.get("medical_conditions") or [],
+        }
+        try:
+            _enrich_clinical_from_profile(_expand_clin, user_id)
+        except Exception as _exp_enr_e:
+            logger.warning(f"[P0-EXPAND-CLINICAL-GUARD] enrich perfil en expand falló (no bloquea): {_exp_enr_e}")
+        _expand_allergies = [str(a).strip() for a in (_expand_clin.get("allergies") or []) if str(a).strip()]
+        _expand_diet = _expand_clin.get("diet_type") or _expand_clin.get("dietType")
+
         # [P2-EXPAND-FINALIZE · 2026-06-29] (re-audit objetivo · P2 RECIPE-EXPAND-NO-FINALIZE-4) ANTES de validar/
         # persistir, corre la coherencia veg-en-pasos↔ingredients del finalizer sobre los pasos expandidos del Chef
         # AI: si introdujo un VEGETAL en los PASOS ausente de ingredients[] (ventana sinónimo-vs-catálogo que el
@@ -4099,7 +4119,8 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 _base_ings = [str(i) for i in (data.get("ingredients") or [])]
                 _wrap_exp = [{"meals": [{"name": req_name, "ingredients": list(_base_ings),
                                          "recipe": list(expanded_steps)}]}]
-                if _veg_exp(_wrap_exp):
+                # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] filtra candidatos que matchean alergias del perfil.
+                if _veg_exp(_wrap_exp, allergies=_expand_allergies):
                     _fin_ings = _wrap_exp[0]["meals"][0].get("ingredients") or []
                     _expand_added_ings = [str(x) for x in _fin_ings[len(_base_ings):]]
                     if _expand_added_ings:
@@ -4140,6 +4161,70 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         except Exception as _ce:
             logger.warning(f"[P1-RECIPE-EXPAND-COHERENCE] validador falló (no bloquea persistencia): "
                            f"{type(_ce).__name__}: {_ce}")
+
+        # [P0-EXPAND-CLINICAL-GUARD · 2026-07-01] (audit P0-1) Scan clínico DETERMINISTA de los PASOS expandidos
+        # ANTES de cobrar/persistir. El Chef AI reemplaza recipe[] completo y es prompt-trustable, NO enforced
+        # (misma clase que P0-AGENT-1): podía re-introducir un alérgeno IgE o un prohibido de condición/dieta que
+        # la generación había sustituido ("endulza con miel" a un DM2, camarones a un alérgico). Reusa el SSOT
+        # `clinical_backstop_for_meal` (alérgenos C2 + dieta + mercurio-embarazo) tratando cada paso como haystack
+        # (+ los veg añadidos por el finalizer) MÁS el detector de condición P0-EXPAND-CONDITION-GUARD (abajo).
+        # Violación → soft-fail HTTP 200 (patrón P3-SWAP-SOFT-FAIL-200,
+        # espejo del check de coherencia): sin cobro, sin persist, sin isExpanded → el cliente puede reintentar.
+        # Knob de rollback sin redeploy: MEALFIT_EXPAND_CLINICAL_GUARD. tooltip-anchor: P0-EXPAND-CLINICAL-GUARD
+        if os.environ.get("MEALFIT_EXPAND_CLINICAL_GUARD", "true").strip().lower() in ("1", "true", "yes", "on"):
+            _exp_viols = []
+            try:
+                from graph_orchestrator import clinical_backstop_for_meal as _cbm_exp
+                _exp_viols = _cbm_exp(
+                    {
+                        "name": req_name,
+                        "ingredients": [str(_s) for _s in expanded_steps]
+                        + [str(_x) for _x in _expand_added_ings],
+                    },
+                    allergies=_expand_allergies,
+                    diet_type=_expand_diet,
+                    form_data=_expand_clin,
+                )
+            except Exception as _cbm_exp_e:
+                logger.warning(
+                    f"[P0-EXPAND-CLINICAL-GUARD] backstop no disponible (no bloquea): "
+                    f"{type(_cbm_exp_e).__name__}: {_cbm_exp_e}"
+                )
+            # [P0-EXPAND-CONDITION-GUARD · 2026-07-01] (audit objetivo v2 · P0-1) `clinical_backstop_for_meal`
+            # cubre alérgeno+dieta+mercurio pero NO condición (DM2/HTA/dislipidemia): "endulza con 2 cucharadas
+            # de miel" a un DM2 pasaba el scan y se persistía contraindicado. El backstop sustitutivo de updates
+            # (`condition_substitution_backstop_for_meal`) opera sobre ingredients[], no sobre prosa de pasos →
+            # detector dedicado sobre los MISMOS tokens SSOT (`collect_substitutions`), abortivo: la violación
+            # se suma a `_exp_viols` y cae en el MISMO soft-fail de arriba (sin cobro, sin persist, retry).
+            # NO escanea el nombre (pre-existente, bloquearía el retry para siempre) ni pasos-nota ⚠/💡/⚕.
+            # Knob de rollback: MEALFIT_EXPAND_CONDITION_GUARD. tooltip-anchor: P0-EXPAND-CONDITION-GUARD
+            try:
+                from graph_orchestrator import condition_prohibited_violations_for_meal as _cpv_exp
+                _exp_viols.extend(_cpv_exp(
+                    {
+                        "ingredients": [str(_s) for _s in expanded_steps]
+                        + [str(_x) for _x in _expand_added_ings],
+                    },
+                    _expand_clin,
+                ))
+            except Exception as _cpv_exp_e:
+                logger.warning(
+                    f"[P0-EXPAND-CONDITION-GUARD] scan de condición no disponible (no bloquea): "
+                    f"{type(_cpv_exp_e).__name__}: {_cpv_exp_e}"
+                )
+            if _exp_viols:
+                logger.warning(
+                    f"🛡 [P0-EXPAND-CLINICAL-GUARD] expansión rechazada: pasos del Chef violan el perfil "
+                    f"clínico | meal='{req_name}' plan={req_plan_id} | viol={_exp_viols[:3]}"
+                )
+                return {
+                    "success": False,
+                    "operation_failed": True,
+                    "clinical_check_failed": True,
+                    "expanded_recipe": req_recipe_original or [],
+                    "detail": "El Chef propuso pasos que no van con tu perfil (alergias/condición). "
+                              "Mostramos la receta original; intenta de nuevo.",
+                }
 
         # Éxito real: cobrar cuota ahora (no antes — ver nota arriba).
         if user_id and user_id != "guest":
@@ -4247,11 +4332,49 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             return
                         _ex = _meal.setdefault("ingredients", [])
                         _ex_low = {str(x).strip().lower() for x in _ex}
+                        _added_any = False
                         for _ai in _expand_added_ings:
                             if str(_ai).strip().lower() not in _ex_low:
                                 _ex.append(_ai)
+                                _added_any = True
                                 if isinstance(_meal.get("ingredients_raw"), list):
                                     _meal["ingredients_raw"].append(_ai)
+                        # [P2-EXPAND-VEG-TRUTHUP · 2026-07-01] (audit recetas P2-1) el append no recomputaba
+                        # macros → el veg añadido (≤60 kcal/100g) quedaba fuera de protein/carbs/fats/cals del
+                        # meal persistido. Truth-up del meal tocado (las listas agregadas las reconcilia el
+                        # próximo /recalculate — mismo contrato diferido que el swap). tooltip-anchor: P2-EXPAND-VEG-TRUTHUP
+                        if _added_any:
+                            try:
+                                from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu_exp
+                                from nutrition_db import IngredientNutritionDB as _TUDB
+                                _tu_exp(_meal, _TUDB())
+                            except Exception as _tu_e:
+                                logger.debug(f"[P2-EXPAND-VEG-TRUTHUP] truth-up post-append falló: {_tu_e}")
+
+                    def _set_expanded_recipe_preserving_notes(_meal: dict) -> None:
+                        # [P0-EXPAND-CLINICAL-GUARD · 2026-07-01] (audit P0-1) La expansión REEMPLAZA recipe[]
+                        # completo, pero las notas deterministas de seguridad (⚠ food-safety: huevo/pescado/víver
+                        # crudos) y los disclaimers del solver (💡) viven COMO pasos → sin esto, expandir un
+                        # ceviche BORRABA la advertencia de cocción. Preservamos los pasos-nota del recipe
+                        # original que la expansión no re-incluyó, y re-derivamos food-safety desde ingredients
+                        # (idempotente — no duplica notas ya presentes). tooltip-anchor: P0-EXPAND-CLINICAL-GUARD
+                        _orig_steps = _meal.get("recipe") if isinstance(_meal.get("recipe"), list) else []
+                        _kept = []
+                        try:
+                            from graph_orchestrator import _is_recipe_safety_note_step as _is_note
+                            _new_txt = " ".join(str(x) for x in expanded_steps)
+                            for _s in _orig_steps:
+                                if _is_note(_s) and str(_s).strip() and str(_s).strip() not in _new_txt:
+                                    _kept.append(str(_s))
+                        except Exception:
+                            _kept = []
+                        _meal["recipe"] = list(expanded_steps) + _kept
+                        _meal["isExpanded"] = True
+                        try:
+                            from graph_orchestrator import food_safety_backstop_for_meal as _fsb_exp
+                            _fsb_exp(_meal)
+                        except Exception:
+                            pass
 
                     updated_in_callback = False
 
@@ -4270,8 +4393,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                         if 0 <= req_meal_index < len(meals):
                             target_meal_fresh = meals[req_meal_index]
                             if isinstance(target_meal_fresh, dict) and target_meal_fresh.get("name") == req_name:
-                                target_meal_fresh["recipe"] = expanded_steps
-                                target_meal_fresh["isExpanded"] = True
+                                _set_expanded_recipe_preserving_notes(target_meal_fresh)
                                 _append_expand_veg(target_meal_fresh)
                                 updated_in_callback = True
 
@@ -4290,8 +4412,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                 if not isinstance(m, dict):
                                     continue
                                 if m.get("name") == req_name and m.get("recipe") == req_recipe_original:
-                                    m["recipe"] = expanded_steps
-                                    m["isExpanded"] = True
+                                    _set_expanded_recipe_preserving_notes(m)
                                     _append_expand_veg(m)
                                     updated_in_callback = True
                                     # NO break: propagamos a todas las ocurrencias.
@@ -4315,7 +4436,19 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 )
         # P1-HIST-RECIPE-1-END
 
-        return {"success": True, "expanded_recipe": expanded_steps}
+        # [P0-EXPAND-CLINICAL-GUARD · 2026-07-01] La respuesta refleja lo persistido: pasos del Chef + las
+        # notas deterministas (⚠/💡) del recipe original del request que la expansión no re-incluyó.
+        _resp_steps = list(expanded_steps)
+        try:
+            from graph_orchestrator import _is_recipe_safety_note_step as _is_note_resp
+            _resp_txt = " ".join(str(x) for x in expanded_steps)
+            for _s0 in (req_recipe_original or []):
+                if _is_note_resp(_s0) and str(_s0).strip() and str(_s0).strip() not in _resp_txt:
+                    _resp_steps.append(str(_s0))
+        except Exception:
+            pass
+
+        return {"success": True, "expanded_recipe": _resp_steps}
     except HTTPException:
         raise
     except Exception as e:
@@ -4377,11 +4510,26 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
             data["super_personalization"] = hp.get("super_personalization")
         # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Adjuntar condiciones/medicamentos
         # del perfil → los updates inyectan directivas de condición + pisos de micro (paridad con S1).
+        # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] (audit micros P1-2) + otherConditions/otherMedications:
+        # el texto libre clínico ("tengo ERC", "tomo espironolactona") era INVISIBLE en updates — S1 lo
+        # mergea vía P1-FORM-6, pero swap/regen-day/chat-modify solo hidrataban medicalConditions/medications
+        # → el closer escalaba K/fibra contraindicados y el panel perdía el techo renal K≤3000.
         for _src, _dst in (("medicalConditions", "medicalConditions"), ("medical_conditions", "medicalConditions"),
-                           ("medications", "medications")):
+                           ("medications", "medications"),
+                           ("otherConditions", "otherConditions"), ("other_conditions", "otherConditions"),
+                           ("otherMedications", "otherMedications"), ("other_medications", "otherMedications")):
             _v = hp.get(_src)
             if _v and not data.get(_dst):
                 data[_dst] = _v
+        # Merge estilo P1-FORM-6: el free-text de condiciones se PLIEGA en medicalConditions para que los
+        # detectores que solo leen esa key (renal-skip del closer, _condition_strings) lo vean.
+        _oc_enr = data.get("otherConditions")
+        if _oc_enr and str(_oc_enr).strip():
+            _mc_enr = data.get("medicalConditions") or []
+            if isinstance(_mc_enr, str):
+                _mc_enr = [_mc_enr]
+            if str(_oc_enr).strip() not in [str(x).strip() for x in _mc_enr]:
+                data["medicalConditions"] = list(_mc_enr) + [str(_oc_enr).strip()]
         # [P2-UPDATE-HYDRATE-BIOMETRICS · 2026-06-23] (audit inteligencia P2-12) Hidratar biométricos
         # del perfil cuando el body no los trae. El frontend `regenerateSingleMeal` NO envía
         # gender/age/weight/height/activityLevel/weightUnit/goal → el gate de suficiencia caía a defaults
@@ -4549,6 +4697,16 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # Sus modos de fallo (retries/clínico/breaker/rate-limit) levantan ANTES de aquí → no se cobra.
         if user_id and user_id != "guest" and _swap_charge_on_success_only:
             log_api_usage(user_id, "llm_swap_meal")
+        # [P2-SWAP-BAND-WARNING · 2026-07-01] (audit paridad GAP-5) `_macro_band_low` era telemetría muda: el
+        # frontend no la renderizaba → un plato materialmente fuera de banda de proteína (drift >15% tras
+        # retries+fallback) se entregaba EN SILENCIO (patrón "rechazado-pero-entregado sin banner"). Copy
+        # accionable en el response (regen-day ya tiene su day_quality_warning; el swap no tenía nada).
+        # tooltip-anchor: P2-SWAP-BAND-WARNING
+        if isinstance(result, dict) and result.get("_macro_band_low"):
+            result["swap_quality_warning"] = (
+                "Este plato quedó algo alejado de tu objetivo de proteína para esta comida. "
+                "Puedes volver a cambiarlo si prefieres más precisión."
+            )
         return result
     except HTTPException:
         raise
@@ -4763,17 +4921,74 @@ def api_swap_meal_persist(
         # embarazada vería hierro/folato sin el bump gestacional). Best-effort; fail-open a {} (el recompute
         # cae a defaults DRI base, mejor que nada). tooltip-anchor: P2-SWAP-MICROS-STALE
         _micro_form = {}
+        _persist_allergies: list = []
+        _persist_diet = None
         try:
             from db import get_user_profile as _gup_micro
             _hp_micro = (_gup_micro(verified_user_id) or {}).get("health_profile") or {}
+            # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] merge estilo P1-FORM-6: el free-text clínico
+            # (otherConditions) se pliega en medicalConditions → el renal-skip del closer y el techo
+            # K≤3000 del panel ven un "ERC" declarado a mano; otherMedications alimenta el detector
+            # de medicamentos K-elevadores (espironolactona free-text).
+            _mc_sp = _hp_micro.get("medicalConditions") or _hp_micro.get("medical_conditions") or []
+            if isinstance(_mc_sp, str):
+                _mc_sp = [_mc_sp]
+            _oc_sp = _hp_micro.get("otherConditions") or _hp_micro.get("other_conditions")
+            if _oc_sp and str(_oc_sp).strip():
+                _mc_sp = list(_mc_sp) + [str(_oc_sp).strip()]
             _micro_form = {
                 "gender": _hp_micro.get("gender") or _hp_micro.get("sex"),
                 "age": _hp_micro.get("age"),
-                "medicalConditions": _hp_micro.get("medicalConditions") or _hp_micro.get("medical_conditions"),
+                "medicalConditions": _mc_sp,
                 "medications": _hp_micro.get("medications"),
+                "otherConditions": _oc_sp,
+                "otherMedications": _hp_micro.get("otherMedications") or _hp_micro.get("other_medications"),
             }
+            # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] Alergias + dieta del PERFIL (server-side) para el
+            # backstop clínico de abajo — nunca del body del cliente (espejo de I2 / P0-UPDATE-CLINICAL-GUARD).
+            _persist_allergies = [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()]
+            _persist_diet = _hp_micro.get("dietType") or _hp_micro.get("diet_type")
         except Exception as _micro_form_e:
             logger.debug(f"[P2-SWAP-MICROS-STALE] no se pudo hidratar _micro_form: {_micro_form_e}")
+
+        # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] (audit P0-3) `/swap-meal/persist` era la ÚNICA superficie de
+        # update con round-trip CLIENTE entre la generación validada y la persistencia: el body `new_meal` se
+        # escribía verbatim (solo bounds/nombre/tamaño) → un cliente buggy/stale o una llamada API directa podía
+        # persistir un plato JAMÁS validado (incl. un alérgeno IgE declarado) en un plan que S1 sí validó.
+        # Re-validación DETERMINISTA server-side con el MISMO SSOT del resto de updates
+        # (`clinical_backstop_for_meal`: alérgenos C2 + dieta P1-DIET-HARD-GUARD + mercurio-embarazo), contra el
+        # PERFIL hidratado arriba. Violación → 422 (el plato original, ya validado, se preserva client-side).
+        # El backstop en sí es FAIL-SECURE (error del scanner → violación sintética); el try/except de fuera solo
+        # cubre fallo de import/infra (fail-open logueado — paridad con el enrich fail-open del resto de updates).
+        # Knob de rollback sin redeploy: MEALFIT_SWAP_PERSIST_CLINICAL_GUARD. tooltip-anchor: P0-SWAP-PERSIST-CLINICAL
+        if os.environ.get("MEALFIT_SWAP_PERSIST_CLINICAL_GUARD", "true").strip().lower() in ("1", "true", "yes", "on"):
+            _persist_viols = []
+            try:
+                from graph_orchestrator import clinical_backstop_for_meal as _cbm_persist
+                _persist_viols = _cbm_persist(
+                    new_meal,
+                    allergies=_persist_allergies,
+                    diet_type=_persist_diet,
+                    form_data=_micro_form,
+                )
+            except Exception as _cbm_e:
+                logger.warning(
+                    f"[P0-SWAP-PERSIST-CLINICAL] backstop no disponible (no bloquea): "
+                    f"{type(_cbm_e).__name__}: {_cbm_e}"
+                )
+            if _persist_viols:
+                logger.warning(
+                    f"🛡 [P0-SWAP-PERSIST-CLINICAL] persist rechazado: new_meal viola el perfil clínico | "
+                    f"plan={plan_id} day={day_index} meal={meal_index} | viol={_persist_viols[:3]}"
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "El plato a guardar no es compatible con tu perfil clínico ("
+                        + "; ".join(_persist_viols[:3])
+                        + "). No se guardó — genera otra opción."
+                    ),
+                )
 
         # [P1-SWAP-PERSIST-ATOMIC · 2026-05-22] Migrado el UPDATE plano
         # (`execute_sql_write` con `jsonb_set` chained) a
@@ -4873,7 +5088,18 @@ def api_swap_meal_persist(
                     # "comprar más" cocinando desde la nevera. Self-guards en MICRONUTRIENT_CLOSER_ENABLED (ON en prod),
                     # kcal/UL-bounded, renal-skip interno. tooltip-anchor: P1-MICRO-CLOSER-UPDATES
                     _ps_swap = bool(isinstance(new_meal, dict) and new_meal.get("pantry_constrained"))
-                    _close_micro_gaps_for_plan(plan_data, _micro_form, db=None, pantry_strict=_ps_swap)
+                    _adj_swap = _close_micro_gaps_for_plan(plan_data, _micro_form, db=None, pantry_strict=_ps_swap)
+                    # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] (audit macros GAP-4) el closer usa
+                    # rescale_ingredient_string (sin snap) → "0.65 taza"/"137g" persistidos violaban la
+                    # lección P3-PORTION-QUANTIZE. Re-quantize de porciones si el closer escaló algo
+                    # (idempotente; ajusta macros por delta exacto). tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
+                    if _adj_swap:
+                        try:
+                            from graph_orchestrator import _apply_portion_quantization as _qz_swap
+                            from nutrition_db import IngredientNutritionDB as _QDB_swap
+                            _qz_swap(plan_data, _QDB_swap())
+                        except Exception as _qz_e:
+                            logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (swap) falló: {_qz_e}")
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
                 except Exception as _mfe:
                     logger.debug(f"[P2-SWAP-MICROS-STALE] recompute (swap) falló: {_mfe}")
@@ -5573,11 +5799,16 @@ def api_regenerate_day(
             if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
                 try:
                     from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
+                    # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] `data` viene post-enrich (P0-UPDATE-CLINICAL-
+                    # GUARD ya plegó otherConditions en medicalConditions); se propagan también las keys crudas
+                    # para el detector de medicamentos K-elevadores.
                     _micro_form = {
                         "gender": data.get("gender") or data.get("sex"),
                         "age": data.get("age"),
                         "medicalConditions": data.get("medicalConditions"),
                         "medications": data.get("medications"),
+                        "otherConditions": data.get("otherConditions"),
+                        "otherMedications": data.get("otherMedications"),
                     }
                     # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] (re-audit objetivo · P1) regenerate-day es
                     # PANTRY-STRICT por diseño (loop de swaps cocinando desde la nevera) → `pantry_strict=True`:
@@ -7277,11 +7508,21 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE
         try:
             from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc_rc
+            # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] Hidratar alergias del perfil server-side para que el
+            # veg-guard del finalizer NO inyecte un alérgeno (el /recalculate corre sin backstop posterior).
+            # Best-effort fail-open a [] (sin alergias conocidas el filtro es no-op, como pre-fix).
+            _rc_allergies = []
+            try:
+                from db import get_user_profile as _gup_rc
+                _hp_rc = (_gup_rc(user_id) or {}).get("health_profile") or {}
+                _rc_allergies = [str(a).strip() for a in (_hp_rc.get("allergies") or []) if str(a).strip()]
+            except Exception as _rc_al_e:
+                logger.debug(f"[P0-VEG-GUARD-ALLERGEN] no se pudo hidratar alergias en /recalculate: {_rc_al_e}")
             _rc_fixed = 0
             for _d in (plan_data.get("days") or []):
                 for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                     if isinstance(_m, dict):
-                        _rc_fixed += _fin_rc_rc(_m)
+                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies)
             if _rc_fixed:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_rc_fixed} fix(es) de coherencia de receta en /recalculate (lista canónica)")
         except Exception as _rc_fin_e:

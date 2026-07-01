@@ -89,8 +89,15 @@ class TestSynonymIntegrity(unittest.TestCase):
                     )
     
     def test_catalog_lists_match_synonym_keys(self):
-        """Las listas de catálogo (DOMINICAN_PROTEINS etc.) deben tener 
-        una entrada correspondiente en su mapa de sinónimos."""
+        """Las listas de catálogo (DOMINICAN_PROTEINS etc.) deben tener
+        una entrada correspondiente en su mapa de sinónimos.
+
+        [P1-FLOURS-POOLS · 2026-07-01] Criterio actualizado a key-O-VARIANT: el modelo de
+        datos usa variants a propósito (ej. "Casabe" del pool vive como variant de "yuca",
+        "Mero" como variant de "pescado" — hacerlos key propia duplicaría la variant en dos
+        bases y rompería test_no_duplicate_variants). La invariante real es "ningún item del
+        pool es DESCONOCIDO para el synonym system" (si no resuelve, variedad/fatiga/
+        coherencia son ciegas a él)."""
         catalog_to_synonym = {
             "DOMINICAN_PROTEINS": (DOMINICAN_PROTEINS, PROTEIN_SYNONYMS),
             "DOMINICAN_CARBS": (DOMINICAN_CARBS, CARB_SYNONYMS),
@@ -98,11 +105,14 @@ class TestSynonymIntegrity(unittest.TestCase):
             "DOMINICAN_FRUITS": (DOMINICAN_FRUITS, FRUIT_SYNONYMS),
         }
         for list_name, (catalog_list, syn_map) in catalog_to_synonym.items():
-            syn_keys = {k.lower() for k in syn_map.keys()}
+            known = {k.lower() for k in syn_map.keys()}
+            for variants in syn_map.values():
+                known.update(str(v).lower() for v in variants)
             for item in catalog_list:
                 self.assertIn(
-                    item.lower(), syn_keys,
-                    f"[{list_name}] '{item}' está en el catálogo pero NO tiene sinónimos definidos"
+                    item.lower(), known,
+                    f"[{list_name}] '{item}' está en el catálogo pero NO resuelve en su synonym map "
+                    f"(ni como key ni como variant) — variedad/fatiga/coherencia serán ciegas a él"
                 )
 
 

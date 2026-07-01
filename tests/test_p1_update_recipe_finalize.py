@@ -55,7 +55,8 @@ def test_veg_guard_added_to_persist_boundary():
     """finalize_plan_data_coherence (persist boundary: INSERT/chunk degradado) debe incluir el
     veg-guard, no solo slice/leaf/quantize."""
     # El bloque del veg-guard dentro de finalize_plan_data_coherence.
-    assert "_add_missing_recipe_step_vegetables(days)" in _GRAPH, \
+    # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] el callsite ahora pasa allergies= (filtro de alérgenos).
+    assert "_add_missing_recipe_step_vegetables(days, allergies=allergies)" in _GRAPH, \
         "el veg-guard no se añadió al persist boundary finalize_plan_data_coherence"
 
 
