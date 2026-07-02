@@ -16,10 +16,12 @@ que el supermercado pueda contener productos aún sin mapear).
 | Pieza | Archivo | Notas |
 |---|---|---|
 | Migración SSOT | `migrations/p1_supermarket_db_2026_07_02.sql` (ambos dirs, P3-MIGRATIONS-SSOT) | `CREATE TABLE IF NOT EXISTS` + unique index de variante `uq_supermarket_products_variant` (lower(food_name), lower(brand), lower(presentation)) + DO $$ sanity. Aplicada a Neon 2026-07-02. |
+| Migración media (fase 2) | `migrations/p1_supermarket_media_2026_07_02.sql` (ambos dirs) | `image_url` (NULL ⇒ placeholder por categoría en el frontend) + `description` (specs del SKU para el modal de detalle). Aplicada a Neon 2026-07-02. |
 | Router | `backend/routers/supermarket.py` (prefix `/api/supermarket`) | Ver contrato abajo. |
-| Seed | `backend/scripts/seed_supermarket_2026_07_02.py` | Dry-run default, `--commit` para escribir. Idempotente (`ON CONFLICT DO NOTHING`) — re-ejecutar NO pisa ediciones de la admin UI. 237 filas ejecutadas 2026-07-02. |
-| Página landing | `frontend/src/pages/SupermarketPage.jsx` (+ `Supermarket.module.css`) | Ruta `/supermercado` (App.jsx), link en Footer ("Empresas" → "Supermercado RD"), título/description en RouteTitle. |
-| Test ancla | `backend/tests/test_p1_supermarket_db.py` | Import+prefix, migración dual-dir idéntica/idempotente, gate admin por handler, GET sin paywall, frontend backend-only, seed gateado. |
+| Seed base | `backend/scripts/seed_supermarket_2026_07_02.py` | Dry-run default, `--commit` para escribir. Idempotente (`ON CONFLICT DO NOTHING`) — re-ejecutar NO pisa ediciones de la admin UI. 237 filas genéricas ejecutadas 2026-07-02. |
+| Seed leches (fase 2) | `backend/scripts/seed_supermarket_leches_2026_07_02.py` | 114 SKUs de leche con MARCA real (catálogo La Sirena 2026-07): 13 tipos de leche × 35 marcas, con `description`. Primera familia con variantes; patrón a replicar para carnes/arroz/etc. |
+| Página landing | `frontend/src/pages/SupermarketPage.jsx` (+ `Supermarket.module.css`) | Ruta `/supermercado` (App.jsx), link en Footer ("Empresas" → "Supermercado RD"), título/description en RouteTitle. Fase 2: catálogo estilo supermercado online — tarjeta por SKU (imagen o placeholder-emoji por categoría) → modal de detalle con specs + otras variantes del mismo alimento; filtros por categoría/marca, orden por precio, paginación "Mostrar más" (48). |
+| Test ancla | `backend/tests/test_p1_supermarket_db.py` | Import+prefix, migraciones dual-dir idénticas/idempotentes (base + media), gate admin por handler, GET sin paywall, frontend backend-only, seed gateado. |
 
 ## Contrato de endpoints
 

@@ -73,6 +73,21 @@ def test_migration_ssot_both_dirs_and_identical():
     )
 
 
+def test_media_migration_ssot_both_dirs():
+    """[fase 2 catálogo] image_url + description para el modal de detalle."""
+    name = "p1_supermarket_media_2026_07_02.sql"
+    backend_copy = _BACKEND / "migrations" / name
+    root_copy = _REPO_ROOT / "migrations" / name
+    assert backend_copy.exists() and root_copy.exists(), (
+        "P1-SUPERMARKET-DB violation: la migración de media (image_url/description) "
+        "debe vivir en ambos dirs (P3-MIGRATIONS-SSOT)."
+    )
+    source = backend_copy.read_text(encoding="utf-8")
+    assert "ADD COLUMN IF NOT EXISTS image_url" in source
+    assert "ADD COLUMN IF NOT EXISTS description" in source
+    assert backend_copy.read_text(encoding="utf-8") == root_copy.read_text(encoding="utf-8")
+
+
 def test_migration_idempotent_with_sanity():
     source = (_BACKEND / "migrations" / _MIGRATION_NAME).read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS public.supermarket_products" in source, (

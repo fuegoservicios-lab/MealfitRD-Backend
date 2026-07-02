@@ -55,6 +55,8 @@ _SELECT_COLS = """
     notes,
     category,
     master_food_name,
+    image_url,
+    description,
     is_verified,
     active,
     to_jsonb(created_at)#>>'{}' AS created_at,
@@ -63,7 +65,8 @@ _SELECT_COLS = """
 
 _MUTABLE_FIELDS = (
     "food_name", "brand", "presentation", "portion_label", "duration_label",
-    "price_rd", "notes", "category", "master_food_name", "is_verified", "active",
+    "price_rd", "notes", "category", "master_food_name", "image_url",
+    "description", "is_verified", "active",
 )
 
 
@@ -77,6 +80,8 @@ class SupermarketProductIn(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
     category: Optional[str] = Field(default=None, max_length=80)
     master_food_name: Optional[str] = Field(default=None, max_length=120)
+    image_url: Optional[str] = Field(default=None, max_length=800)
+    description: Optional[str] = Field(default=None, max_length=800)
     is_verified: bool = True
     active: bool = True
 
@@ -91,6 +96,8 @@ class SupermarketProductPatch(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
     category: Optional[str] = Field(default=None, max_length=80)
     master_food_name: Optional[str] = Field(default=None, max_length=120)
+    image_url: Optional[str] = Field(default=None, max_length=800)
+    description: Optional[str] = Field(default=None, max_length=800)
     is_verified: Optional[bool] = None
     active: Optional[bool] = None
 
@@ -186,8 +193,9 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
             f"""
             INSERT INTO public.supermarket_products
                 (food_name, brand, presentation, portion_label, duration_label,
-                 price_rd, notes, category, master_food_name, is_verified, active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 price_rd, notes, category, master_food_name, image_url,
+                 description, is_verified, active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (lower(food_name), lower(coalesce(brand,'')), lower(coalesce(presentation,'')))
             DO NOTHING
             RETURNING {_SELECT_COLS}
@@ -196,6 +204,7 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
                 _clean(body.food_name), _clean(body.brand), _clean(body.presentation),
                 _clean(body.portion_label), _clean(body.duration_label), body.price_rd,
                 _clean(body.notes), _clean(body.category), _clean(body.master_food_name),
+                _clean(body.image_url), _clean(body.description),
                 body.is_verified, body.active,
             ),
             returning=True,
