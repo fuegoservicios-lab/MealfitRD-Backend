@@ -1624,6 +1624,17 @@ def _is_pool_timeout_error(exc: Exception) -> bool:
     )
 
 
+class LLMCircuitOpenError(Exception):
+    """[P2-REVIEWER-CB-TRANSIENT · 2026-07-02] (test clínico gemini, batch P2-ENGINE-CLINICAL-SAVERS)
+    Excepción DEDICADA para "circuit breaker abierto" en los guards de invocación LLM (antes
+    `Exception` genérica con mensaje). Razón: `_is_reviewer_transient_error` clasifica por TIPO
+    (nunca por substring, para no enmascarar rechazos clínicos) → un breaker abierto en el REVISOR
+    caía a la rama fail-closed "Error en la estructura del revisor médico" con severity=critical y
+    abort inmediato del plan entero, cuando un breaker abierto es transitorio POR DEFINICIÓN
+    (existe para shed load). Subclase de Exception → los `except Exception` existentes la siguen
+    atrapando sin cambios. tooltip-anchor: P2-REVIEWER-CB-TRANSIENT"""
+
+
 def _is_reviewer_transient_error(exc) -> bool:
     """[P1-REVIEWER-TRANSIENT-RETRY · 2026-06-27] (arquitectura, FASE B) True si el fallo del reviewer es de
     INFRAESTRUCTURA (timeout/5xx/pool/parse del structured-output) y NO un rechazo clínico. Whitelist de TIPOS de
@@ -1633,6 +1644,11 @@ def _is_reviewer_transient_error(exc) -> bool:
     DETERMINISTAS de seguridad —alérgenos/renal/caps/piso proteico— ya corrieron). tooltip-anchor: P1-REVIEWER-TRANSIENT-RETRY"""
     try:
         if _is_transient_upstream_error(exc) or _is_pool_timeout_error(exc):
+            return True
+        # [P2-REVIEWER-CB-TRANSIENT · 2026-07-02] breaker abierto = infraestructura transitoria por
+        # definición (caso real: 429s de Gemini abrieron el breaker del reviewer → el plan vegano
+        # entero se abortó como "estructura del revisor" critical). Tipo dedicado, no substring.
+        if isinstance(exc, LLMCircuitOpenError):
             return True
         import json as _json
         import asyncio as _aio
@@ -5938,7 +5954,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # para poder reintentar con PRO si flash falla (espejo del self-critique pro-fallback).
     async def _do_planner_invoke(_llm, _cb, _model_label):
         if not await _cb.acan_proceed():
-            raise Exception(f"Circuit Breaker OPEN para {_model_label} - LLM cascade failure prevented")
+            raise LLMCircuitOpenError(f"Circuit Breaker OPEN para {_model_label} - LLM cascade failure prevented")
         try:
             logger.info(f"⏳ [PLANIFICADOR] Generando esqueleto del plan ({_model_label})...")
             # P0-4: Hard timeout con cancelación graceful. El constructor pone
@@ -6515,7 +6531,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _day_cb = _get_circuit_breaker(day_model)
             _chain_state["idx"] = _idx
             if not await _day_cb.acan_proceed():
-                raise Exception(f"Circuit Breaker OPEN para todo el chain {_day_chain} - LLM cascade failure prevented")
+                raise LLMCircuitOpenError(f"Circuit Breaker OPEN para todo el chain {_day_chain} - LLM cascade failure prevented")
             day_llm_with_tools = _build_day_llm(day_model)
             if _idx > 0:
                 logger.info(f"🔻 [P1-DEEPSEEK-FLASH-FIRST] DÍA {day_num}: escalada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
@@ -7667,7 +7683,7 @@ mencionando explícitamente cuál criterio (1-4) fue decisivo.
 
     try:
         if not await _judge_cb.acan_proceed():  # P1-Q3
-            raise Exception(f"Circuit Breaker OPEN para {_judge_model} - LLM cascade failure prevented")
+            raise LLMCircuitOpenError(f"Circuit Breaker OPEN para {_judge_model} - LLM cascade failure prevented")
 
         # P0-4: Hard timeout con cancelación graceful. Decisión binaria con
         # structured output, debería responder rápido. Si excede 30s, default a
@@ -8281,7 +8297,7 @@ PLAN A EVALUAR (días generados):
 
     try:
         if not await _evaluator_cb.acan_proceed():  # P1-Q3
-            raise Exception(f"Circuit Breaker OPEN para {_evaluator_model} - LLM cascade failure prevented")
+            raise LLMCircuitOpenError(f"Circuit Breaker OPEN para {_evaluator_model} - LLM cascade failure prevented")
         try:
             # P0-4: Hard timeout con cancelación graceful. Self-critique es
             # opcional/quality-of-life; 30s es suficiente para Flash con
@@ -10711,6 +10727,54 @@ MERCURY_UPDATE_GUARD = _env_bool("MEALFIT_UPDATE_MERCURY_GUARD", True)
 # (`condition_substitution_backstop_for_meal`) opera sobre `ingredients[]` — NO cubre prosa de pasos;
 # este detector cierra ese hueco. Default ON (clínico). Rollback sin redeploy.
 EXPAND_CONDITION_GUARD = _env_bool("MEALFIT_EXPAND_CONDITION_GUARD", True)
+# [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini, batch P2-ENGINE-CLINICAL-SAVERS) Nota
+# determinista "bajo en sodio/enjuaga enlatados" en comidas con enlatados/quesos para HTA/ERC — la 2ª
+# razón de rechazo del revisor es satisfacible con nota (macro-preservante, patrón food-safety).
+HTA_LOWSODIUM_NOTE_ENABLED = _env_bool("MEALFIT_HTA_LOWSODIUM_NOTE", True)
+
+# tokens de riesgo de sodio "oculto" (enlatados/salados/quesos) — accent-free lowercase, estrechos.
+_LOWSODIUM_NOTE_TOKENS = ("atun", "sardina", "en lata", "enlatad", "habichuelas cocidas",
+                          "garbanzos cocidos", "lentejas cocidas", "queso blanco", "queso fresco",
+                          "queso de hoja", "aceitunas", "alcaparras")
+_LOWSODIUM_NOTE_SENTINEL = "bajas en sodio y enjuaga"
+_LOWSODIUM_NOTE = ("⚠️ Sodio (hipertensión/riñón): elige versiones bajas en sodio y enjuaga los "
+                   "enlatados (atún, granos) antes de usarlos; el queso, mejor fresco y bajo en sal.")
+
+
+def _apply_low_sodium_canned_notes(plan: dict, form_data: dict) -> int:
+    """[P2-HTA-SALT-NORMALIZE · 2026-07-02] Nota determinista de bajo-sodio en comidas con
+    enlatados/quesos cuando el perfil declara HTA o ERC. Cierra la 2ª razón del rechazo real del
+    revisor (test gemini 2026-07-02): "atún en agua/habichuelas/garbanzos/queso sin especificar bajo
+    en sodio o enjuague". Macro-preservante (solo añade una nota a recipe[], patrón food-safety),
+    idempotente por sentinel, 1 nota máx por comida. Fail-safe → 0. Muta plan.
+    tooltip-anchor: P2-HTA-SALT-NORMALIZE"""
+    if not HTA_LOWSODIUM_NOTE_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from condition_rules import detect_active_rules
+        _ids = {r.id for r in detect_active_rules(form_data or {})}
+        if not (_ids & {"hta", "renal"}):
+            return 0
+        from constants import strip_accents as _sa_ls
+        fixed = 0
+        for _d in plan.get("days", []) or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list):
+                    rec = [] if rec is None else [str(rec)]
+                if any(_LOWSODIUM_NOTE_SENTINEL in str(s) for s in rec):
+                    continue  # idempotente
+                _hay = _sa_ls(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
+                if any(t in _hay for t in _LOWSODIUM_NOTE_TOKENS):
+                    meal["recipe"] = rec + [_LOWSODIUM_NOTE]
+                    meal["_lowsodium_note"] = True
+                    fixed += 1
+        return fixed
+    except Exception as _ls_e:
+        logger.warning(f"[P2-HTA-SALT-NORMALIZE] nota falló (no bloquea): {type(_ls_e).__name__}: {_ls_e}")
+        return 0
 
 
 def _scan_mercury_pregnancy_violations(meal: dict, form_data) -> list:
@@ -10901,7 +10965,14 @@ def condition_substitution_backstop_for_meal(meal: dict, form_data: dict) -> int
     if not UPDATE_CONDITION_SUBST_ENABLED or not DM2_SUGAR_GUARD or not isinstance(meal, dict):
         return 0
     try:
-        return _apply_condition_substitutions({"days": [{"meals": [meal]}]}, form_data or {})
+        _n_cs = _apply_condition_substitutions({"days": [{"meals": [meal]}]}, form_data or {})
+        # [P2-HTA-SALT-NORMALIZE · 2026-07-02] paridad updates: la nota de bajo-sodio/enjuague para
+        # enlatados/quesos también corre en swap/regen-day/chat-modify (mismo mini-plan wrap).
+        try:
+            _n_cs += _apply_low_sodium_canned_notes({"days": [{"meals": [meal]}]}, form_data or {})
+        except Exception:
+            pass
+        return _n_cs
     except Exception as _cs_e:
         logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst backstop falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
         return 0
@@ -14727,6 +14798,17 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                f"(azúcar/sodio/satfat) en {_sg_n} comida(s)")
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
+
+    # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini) Nota determinista de bajo-sodio para
+    # enlatados/quesos en HTA/ERC — la 2ª razón del rechazo del revisor ("atún en agua/habichuelas/queso
+    # sin especificar bajo en sodio o enjuague") es satisfacible con una nota, no requiere sustitución.
+    if HTA_LOWSODIUM_NOTE_ENABLED:
+        try:
+            _ls_n = _apply_low_sodium_canned_notes(plan, form_data)
+            if _ls_n:
+                logger.info(f"🧂 [P2-HTA-SALT-NORMALIZE] nota de bajo-sodio/enjuague añadida en {_ls_n} comida(s) (HTA/ERC).")
+        except Exception as _ls_e:
+            logger.warning(f"[P2-HTA-SALT-NORMALIZE] nota no-op: {type(_ls_e).__name__}: {_ls_e}")
 
     # ── Guard 3.5 (P2-12 · 2026-06-16, gap-audit P2-12): re-aplica allergen subs DESPUÉS de Guard 3. ──
     # Las subs por condición (HTA/dislipidemia) pueden REINTRODUCIR un alérgeno que Guard 2.5 ya limpió
@@ -20699,7 +20781,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         )
         async def invoke_with_retry():
             if not await _reviewer_cb.acan_proceed():  # P1-Q3
-                raise Exception(f"Circuit Breaker OPEN para {_reviewer_model} - LLM cascade failure prevented")
+                raise LLMCircuitOpenError(f"Circuit Breaker OPEN para {_reviewer_model} - LLM cascade failure prevented")
             try:
                 # P0-4: Hard timeout con cancelación graceful. El revisor es el
                 # LLM más pesado del pipeline (prompt grande + structured output).
@@ -22161,7 +22243,7 @@ async def reflection_node(state: PlanState) -> dict:
         """
         
         if not await _reflector_cb.acan_proceed():  # P1-Q3
-            raise Exception(f"Circuit Breaker OPEN para {_reflector_model} - LLM cascade failure prevented")
+            raise LLMCircuitOpenError(f"Circuit Breaker OPEN para {_reflector_model} - LLM cascade failure prevented")
         try:
             # P0-4: Hard timeout con cancelación graceful. Diagnóstico de una
             # sola oración con structured output, debería completar en <15s;

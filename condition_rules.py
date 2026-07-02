@@ -91,6 +91,19 @@ _DM2_GLYCEMIC_SUBS = (
 )
 
 _HTA_SODIUM_SUBS = (
+    # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini, batch P2-ENGINE-CLINICAL-SAVERS)
+    # "Sal al gusto"/"pizca de sal" PLANAS: el prompt HTA exige "sal medida mínima" pero el LLM las
+    # emite igual y el revisor rechaza el plan ENTERO como crítico (caso real: 7 comidas con 'Sal al
+    # gusto' → rechazo total del plan de una hipertensa). Normalización determinista pre-review a la
+    # forma que el propio revisor pide. Tokens = FRASES completas (jamás 'sal' desnuda: colisionaría
+    # con salsa/salmón/salteado). Aplica a HTA y ERC (renal reusa este set). La fila de frase más
+    # larga va PRIMERO (el matcher devuelve la primera fila que matchea). 'Sal mínima' no re-matchea
+    # ningún token → idempotente.
+    (("sal y pimienta al gusto", "sal y pimienta negra al gusto"),
+     "Sal mínima (¼ cdta) y pimienta al gusto", "sal sin medida", False),
+    (("sal al gusto", "sal a gusto", "sal marina al gusto", "sal gruesa al gusto",
+      "pizca de sal", "pizcas de sal", "sal fina al gusto"),
+     "Sal mínima (¼ cdta)", "sal sin medida", False),
     (("embutido", "salami", "longaniza", "salchicha", "mortadela", "tocineta",
       "bacon", "chorizo", "jamon", "jamón"), "Pechuga de pollo", "embutidos", True),
     # OJO: tokens estrechos para no colisionar con proteína legítima — 'cubito de' (NO 'cubito', que
