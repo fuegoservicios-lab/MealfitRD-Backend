@@ -569,12 +569,16 @@ def get_master_ingredients():
 # Tooltip-anchor: P3-VERIFIED-INGREDIENTS-ONLY.
 # ------------------------------------------------------------
 def _verified_ingredients_only_enabled() -> bool:
-    # Default OFF en CÓDIGO (safe-by-default): así los tests de coherencia base no se
-    # alteran y el rollback es trivial. Se ACTIVA en producción vía el .env del VPS
-    # (MEALFIT_VERIFIED_INGREDIENTS_ONLY=true) — decisión del owner: solo los alimentos
-    # verificados con precio del catálogo (~202 tras la expansión 2026-06-26; era 119)
+    # [P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] Default ON en CÓDIGO. Antes era OFF-en-código /
+    # ON-solo-en-.env-del-VPS → un deploy limpio que resetee el .env lo apagaba EN SILENCIO y el
+    # LLM volvía a inventar alimentos off-catálogo (drops de lista, costeo incompleto, palancas de
+    # presupuesto sin base). El knob es load-bearing para la garantía "coherente + costeable" desde
+    # 2026-06-20 (prod) → el default de código ahora refleja el contrato real. El baseline histórico
+    # de los tests se preserva vía tests/conftest.py (setdefault a false — los tests del knob lo
+    # activan con monkeypatch). Rollback sin redeploy: MEALFIT_VERIFIED_INGREDIENTS_ONLY=false.
+    # Solo los alimentos verificados con precio del catálogo (~202 tras la expansión 2026-06-26)
     # pueden aparecer en la lista. [P3-STALE-119-COMMENTS · 2026-07-01]
-    return _knob_env_bool("MEALFIT_VERIFIED_INGREDIENTS_ONLY", False)
+    return _knob_env_bool("MEALFIT_VERIFIED_INGREDIENTS_ONLY", True)
 
 
 # [P2-VERIFIED-DROP-TELEMETRY · 2026-07-01] (audit v2 creatividad GAP-5, batch P2-AUDIT-V2-BATCH)
@@ -2175,6 +2179,184 @@ def _resolve_brand_pref(name: str, prefs: dict):
             if best_k is None or len(k) > len(best_k):
                 best_k = k
     return prefs[best_k] if best_k else None
+
+
+# ============================================================
+# [P1-BUDGET-COST-SSOT · 2026-07-02] Resumen de costo de la lista — SSOT backend.
+# ------------------------------------------------------------
+# Antes: `aggregate_and_deduct_shopping_list` acumulaba `total_estimated_cost`
+# y lo DESCARTABA (los `return` solo devuelven ítems); el frontend re-sumaba
+# `estimated_cost_rd` por su cuenta (Dashboard.jsx `_shopTotalCost` +
+# `_fullCycleCost`) → drift posible y CERO punto backend contra el cual
+# comparar el presupuesto del formulario (P1-BUDGET-RECONCILE).
+# Ahora el backend computa y persiste `plan_data.shopping_cost_summary` en
+# los mismos persist-sites que escriben `aggregated_shopping_list*`
+# (generación / recalc / chat-modify / swap / regen-day).
+# Semántica de ciclo (espejo del frontend P3-CYCLE-COST-TOTAL): las listas
+# biweekly/monthly son HÍBRIDAS (estables del periodo completo + perecederos
+# de 1 semana) → costo real del ciclo = estables 1× + perecederos × semanas.
+# Reversible sin redeploy: MEALFIT_SHOPPING_COST_SUMMARY=false.
+# Fail-open SIEMPRE: cualquier error → None (el caller no persiste la key).
+# Tooltip-anchor: P1-BUDGET-COST-SSOT. Test: test_p1_budget_intelligence.py.
+# ============================================================
+
+_CYCLE_WEEKS_BY_DURATION = {"weekly": 1, "biweekly": 2, "monthly": 4}
+
+
+def _cost_summary_enabled() -> bool:
+    return _knob_env_bool("MEALFIT_SHOPPING_COST_SUMMARY", True)
+
+
+def _sum_shopping_list_costs(items) -> dict:
+    """Suma `estimated_cost_rd` de una lista estructurada, particionando por
+    `is_perishable` (flag SSOT P1-PDF-2; ítems sin flag → estables, mismo
+    default que el aggregator). Ítems sin precio NO suman (honesto)."""
+    total = stable = perishable = 0.0
+    priced = 0
+    count = 0
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        count += 1
+        raw_cost = it.get("estimated_cost_rd")
+        try:
+            cost = float(raw_cost)
+        except (TypeError, ValueError):
+            cost = 0.0
+        if not (cost > 0) or math.isnan(cost) or math.isinf(cost):
+            continue
+        priced += 1
+        total += cost
+        if it.get("is_perishable") is True:
+            perishable += cost
+        else:
+            stable += cost
+    return {
+        "total": total,
+        "stable": stable,
+        "perishable": perishable,
+        "priced": priced,
+        "count": count,
+    }
+
+
+# [P1-BUDGET-TIER-LEVERS · 2026-07-02] Piso de precios del Supermercado RD:
+# variante ACTIVA más barata por alimento (food_name + master_food_name como
+# claves), para las sugerencias de ahorro de la reconciliación de presupuesto.
+# Cache TTL 300s (mismo orden que el cache del catálogo master). Fail-open: {}.
+_SUPERMARKET_FLOOR_CACHE: dict = {"at": 0.0, "map": None}
+_SUPERMARKET_FLOOR_TTL_S = 300.0
+
+
+def _fetch_supermarket_price_floor_map() -> dict:
+    now = _time.time()
+    cached = _SUPERMARKET_FLOOR_CACHE.get("map")
+    if cached is not None and (now - _SUPERMARKET_FLOOR_CACHE.get("at", 0.0)) < _SUPERMARKET_FLOOR_TTL_S:
+        return cached
+    floor_map: dict = {}
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT food_name, master_food_name, brand, presentation,
+                   price_rd::float8 AS price_rd
+            FROM public.supermarket_products
+            WHERE active AND price_rd IS NOT NULL AND price_rd > 0
+            """,
+            fetch_all=True,
+        ) or []
+        for r in rows:
+            try:
+                price = float(r.get("price_rd"))
+            except (TypeError, ValueError):
+                continue
+            if price <= 0:
+                continue
+            entry = {
+                "food_name": r.get("food_name"),
+                "brand": (r.get("brand") or "").strip(),
+                "presentation": (r.get("presentation") or "").strip(),
+                "price_rd": price,
+            }
+            for key_src in (r.get("food_name"), r.get("master_food_name")):
+                key = _norm_pref_food(key_src)
+                if not key:
+                    continue
+                current = floor_map.get(key)
+                if current is None or price < current["price_rd"]:
+                    floor_map[key] = entry
+    except Exception as exc:
+        logging.warning(f"⚠️ [P1-BUDGET-TIER-LEVERS] price-floor del súper no disponible (fail-open): {exc}")
+        return cached or {}
+    _SUPERMARKET_FLOOR_CACHE["map"] = floor_map
+    _SUPERMARKET_FLOOR_CACHE["at"] = now
+    return floor_map
+
+
+def cheapest_supermarket_variant(item_name: str) -> dict | None:
+    """Variante activa más barata del Supermercado RD para un ítem de la lista
+    (misma escalera de matching que las preferencias de marca). None si no hay
+    match o el catálogo no está disponible."""
+    try:
+        floor_map = _fetch_supermarket_price_floor_map()
+        if not floor_map:
+            return None
+        return _resolve_brand_pref(item_name, floor_map)
+    except Exception:
+        return None
+
+
+def compute_shopping_cost_summary(
+    weekly_list,
+    biweekly_hybrid_list,
+    monthly_hybrid_list,
+    active_duration: str = "weekly",
+) -> dict | None:
+    """SSOT del costo de la lista para las 3 duraciones. `cycle_total_rd` =
+    estables 1× + perecederos × semanas del ciclo (las listas 15/30 ya son
+    híbridas: estables al periodo, perecederos semanales). `trip_total_rd` =
+    lo que cuesta ESTA ida al súper (suma cruda de la lista)."""
+    if not _cost_summary_enabled():
+        return None
+    try:
+        by_duration: dict = {}
+        for duration, items in (
+            ("weekly", weekly_list),
+            ("biweekly", biweekly_hybrid_list),
+            ("monthly", monthly_hybrid_list),
+        ):
+            sums = _sum_shopping_list_costs(items)
+            weeks = _CYCLE_WEEKS_BY_DURATION[duration]
+            cycle_total = sums["stable"] + sums["perishable"] * weeks
+            by_duration[duration] = {
+                "trip_total_rd": round(sums["total"], 2),
+                "stable_rd": round(sums["stable"], 2),
+                "perishable_rd": round(sums["perishable"], 2),
+                "cycle_weeks": weeks,
+                "cycle_total_rd": round(cycle_total, 2),
+                "items_priced": sums["priced"],
+                "items_total": sums["count"],
+            }
+        active = str(active_duration or "weekly").strip().lower()
+        if active not in _CYCLE_WEEKS_BY_DURATION:
+            active = "weekly"
+        from datetime import datetime, timezone
+        summary = {
+            "version": 1,
+            "source": "backend",
+            "active_duration": active,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+            "by_duration": by_duration,
+        }
+        _active_totals = by_duration[active]
+        logging.info(
+            f"💵 [P1-BUDGET-COST-SSOT] summary {active}: trip=RD${_active_totals['trip_total_rd']:.0f} "
+            f"cycle=RD${_active_totals['cycle_total_rd']:.0f} "
+            f"({_active_totals['items_priced']}/{_active_totals['items_total']} con precio)"
+        )
+        return summary
+    except Exception as exc:
+        logging.warning(f"⚠️ [P1-BUDGET-COST-SSOT] summary falló (fail-open): {exc}")
+        return None
 
 
 def to_unicode_fraction(frac_str: str) -> str:

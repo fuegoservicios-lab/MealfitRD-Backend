@@ -36,13 +36,20 @@ def test_anchor_and_helper_present():
     assert "MEALFIT_VERIFIED_INGREDIENTS_ONLY" in src
 
 
-def test_default_off_in_code():
-    """Default OFF en CÓDIGO (safe-by-default: no altera los tests de coherencia base,
-    rollback trivial). Se ACTIVA en prod vía el .env del VPS
-    (MEALFIT_VERIFIED_INGREDIENTS_ONLY=true) — decisión del owner."""
+def test_default_on_in_code():
+    """[P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] Default ON en CÓDIGO: el knob es load-bearing
+    para la garantía coherente+costeable (prod lo corre ON desde 2026-06-20); OFF-en-código dejaba
+    la regresión silenciosa ".env reseteado ⇒ enforcement apagado". El baseline de la suite se
+    preserva vía tests/conftest.py (setdefault a false)."""
     src = _SC.read_text(encoding="utf-8")
-    assert '"MEALFIT_VERIFIED_INGREDIENTS_ONLY", False' in src, (
-        "el default EN CÓDIGO debe ser False; el enforcement se activa en prod vía .env"
+    assert '"MEALFIT_VERIFIED_INGREDIENTS_ONLY", True' in src, (
+        "el default EN CÓDIGO debe ser True (P1-VERIFIED-ONLY-DEFAULT-ON); "
+        "rollback operacional: MEALFIT_VERIFIED_INGREDIENTS_ONLY=false en el .env"
+    )
+    # El baseline de la suite queda fijado explícito en conftest (los tests base asumen OFF).
+    _conftest = _SC.parent / "tests" / "conftest.py"
+    assert 'environ.setdefault("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")' in _conftest.read_text(encoding="utf-8"), (
+        "tests/conftest.py debe fijar el baseline OFF para la suite histórica"
     )
 
 

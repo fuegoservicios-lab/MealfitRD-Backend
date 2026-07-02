@@ -63,7 +63,14 @@ def _minimal_plan(*, with_block=None, with_schema_invalid=False):
         "macros": {"protein": 150, "carbs": 200, "fats": 67},
         "days": [
             {"day": 1, "meals": [
+                # [P1-OBJECTIVE-V4-BATCH · 2026-07-02] receta sustantiva (3 pilares + tiempo):
+                # el flip ON del dish-quality gate (P1-DISH-QUALITY-GATE-ON, mismo día) rechazaba
+                # este fixture SIN receta con severity=high y contaminaba las 4 pruebas del
+                # consumer (rojo pre-existente en HEAD — patrón "knob-flip sin actualizar test").
                 {"meal": "almuerzo", "name": "Pollo con arroz", "ingredients": ["200 g pollo", "150 g arroz"],
+                 "recipe": ["Mise en place: pesa el pollo y lava el arroz.",
+                            "El Toque de Fuego: cocina el pollo 8-10 min a fuego medio y hierve el arroz 15 min.",
+                            "Montaje: sirve el pollo sobre el arroz."],
                  "protein": 150, "carbs": 200, "fats": 67, "cals": 2000}
             ]}
         ],

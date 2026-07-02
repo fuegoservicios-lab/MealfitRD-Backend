@@ -421,6 +421,89 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         except Exception:
             pass
 
+    # [P1-BUDGET-TIER-LEVERS · 2026-07-02] (audit v4 presupuesto) Ponderación ECONÓMICA del sorteo:
+    # el tier del formulario era señal solo-prompt (advisory). Cuando el presupuesto pide economía
+    # (low "Económico" o custom ajustado — SSOT nutrition_calculator.budget_prefers_economy), las
+    # proteínas/carbos del TERCIO MÁS BARATO del pool (precio/lb-equivalente del catálogo master)
+    # reciben boost multiplicativo (default 2.0×). Sigue siendo sorteo ponderado — jamás remueve
+    # ítems ni toca filtros clínicos/alergias (esos ya corrieron aguas arriba). Ítems sin precio
+    # resoluble → peso intacto. Rollback sin redeploy: MEALFIT_BUDGET_POOL_WEIGHT=1.0.
+    # tooltip-anchor: P1-BUDGET-TIER-LEVERS (pool weighting)
+    try:
+        import os as _os_bw
+        _bud_boost = max(1.0, min(5.0, float(_os_bw.environ.get("MEALFIT_BUDGET_POOL_WEIGHT", "2.0"))))
+    except Exception:
+        _bud_boost = 2.0
+    if _bud_boost > 1.0:
+        try:
+            from nutrition_calculator import budget_prefers_economy as _bpe_bw
+            if _bpe_bw(form_data or {}):
+                from shopping_calculator import get_master_ingredients as _gmi_bw
+                from constants import strip_accents as _sa_bw
+
+                def _bw_price_map() -> dict:
+                    _out = {}
+                    for _row in _gmi_bw() or []:
+                        try:
+                            _price = float(_row.get("price_per_lb") or 0)
+                        except (TypeError, ValueError):
+                            _price = 0.0
+                        if _price <= 0:
+                            try:
+                                _ppu = float(_row.get("price_per_unit") or 0)
+                                _basis = (float(_row.get("density_g_per_unit") or 0)
+                                          or float(_row.get("container_weight_g") or 0))
+                                if _ppu > 0 and _basis > 0:
+                                    _price = _ppu * 453.592 / _basis
+                            except (TypeError, ValueError):
+                                _price = 0.0
+                        if _price <= 0:
+                            continue
+                        _names = [_row.get("name") or ""]
+                        if isinstance(_row.get("aliases"), list):
+                            _names.extend(str(_a) for _a in _row.get("aliases"))
+                        for _n in _names:
+                            _k = _sa_bw(str(_n).strip().lower())
+                            if _k:
+                                _out.setdefault(_k, _price)
+                    return _out
+
+                def _bw_resolve(_name, _pmap):
+                    _k = _sa_bw(str(_name or "").strip().lower())
+                    if not _k:
+                        return None
+                    if _k in _pmap:
+                        return _pmap[_k]
+                    _padded = f" {_k} "
+                    _best = None
+                    for _mk in _pmap:
+                        if len(_mk) >= 4 and f" {_mk} " in _padded:
+                            if _best is None or len(_mk) > len(_best):
+                                _best = _mk
+                    return _pmap.get(_best) if _best else None
+
+                def _bw_boost_cheapest(_names, _weights, _pmap):
+                    _prices = [_bw_resolve(_n, _pmap) for _n in _names]
+                    _valid = sorted(_p for _p in _prices if _p and _p > 0)
+                    if len(_valid) < 4:
+                        return _weights
+                    _p33 = _valid[max(0, int(0.33 * (len(_valid) - 1)))]
+                    return [
+                        _w * (_bud_boost if (_p and _p <= _p33) else 1.0)
+                        for _w, _p in zip(_weights, _prices)
+                    ]
+
+                _pmap_bw = _bw_price_map()
+                if _pmap_bw:
+                    protein_weights = _bw_boost_cheapest(available_proteins, protein_weights, _pmap_bw)
+                    carb_weights = _bw_boost_cheapest(available_carbs, carb_weights, _pmap_bw)
+                    logger.info(
+                        f"💰 [P1-BUDGET-TIER-LEVERS] Presupuesto económico → boost {_bud_boost:.1f}× "
+                        f"a proteínas/carbos del tercio más barato del catálogo en el sorteo."
+                    )
+        except Exception as _bw_e:
+            logger.debug(f"[P1-BUDGET-TIER-LEVERS] pool weighting no-op: {_bw_e}")
+
     # Penalización de embutidos según objetivo nutricional.
     # Salami/longaniza/jamón/chorizo/tocineta/salchichón son procesados con sodio
     # alto y grasas saturadas — apropiados ocasionalmente en perfiles 'balanced'

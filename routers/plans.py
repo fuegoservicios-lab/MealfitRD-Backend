@@ -4198,6 +4198,19 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         except Exception as _sq_exp_e:
             logger.debug(f"[P1-EXPAND-QTY-SYNC] qty-sync en expand no-op: {type(_sq_exp_e).__name__}: {_sq_exp_e}")
 
+        # [P1-RECIPE-CONTRACT-GATE · 2026-07-02] Backstop tiempo/temp EN ORIGEN (cubre persist + guests):
+        # el Chef reescribe los 3 pasos y podía dejar "El Toque de Fuego" sin tiempo/temperatura concreta
+        # (el contrato del expand solo valida ≥3 pasos) → default por técnica, texto puro, idempotente.
+        try:
+            from graph_orchestrator import _inject_recipe_time_temp_defaults as _tt_exp
+            _tt_meal_exp = {"name": req_name, "recipe": list(expanded_steps)}
+            if _tt_exp(_tt_meal_exp):
+                expanded_steps = [str(_s) for _s in (_tt_meal_exp.get("recipe") or []) if str(_s).strip()]
+                logger.info(f"⏲️ [P1-RECIPE-CONTRACT-GATE] tiempo/temp default inyectado en pasos "
+                            f"expandidos | meal='{req_name}'")
+        except Exception as _tt_exp_e:
+            logger.debug(f"[P1-RECIPE-CONTRACT-GATE] backstop en expand no-op: {type(_tt_exp_e).__name__}: {_tt_exp_e}")
+
         # [P2-EXPAND-FINALIZE-PARITY · 2026-07-02] (audit v3 recetas GAP-4) paridad de finalización EN ORIGEN
         # (cubre persist Y guests): (a) coherencia INVERSA — un ingrediente comprado que ningún paso del Chef
         # usa recibe su paso de uso (mismo guard del persist boundary); (b) display — colapsa dobles
@@ -4958,6 +4971,104 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+def _rebuild_plan_shopping_lists_inline(
+    plan_data: dict,
+    user_id,
+    surface: str,
+    plan_id_hint=None,
+) -> bool:
+    """[P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] Rebuild inline de las 4
+    `aggregated_shopping_list*` DENTRO del mutator atómico de un update
+    (swap-persist / regen-day), como ÚLTIMO paso (post closer/requantize/
+    qty-sync → las listas reflejan los ingredientes finales).
+
+    Cierra la ventana "listas vacías": el contrato previo strippeaba las
+    listas y delegaba el recompute al frontend (/recalculate-shopping-list);
+    si la pestaña moría post-persist, el plan quedaba con recetas nuevas y
+    CERO lista de compras indefinidamente (violación de la invariante
+    recetas↔lista). Misma matemática canónica que el recalc: is_new_plan=True
+    (listas canónicas sin deducir inventario), multiplier/duración persistidos
+    del plan, híbrido 15/30 con restock flags. Corre el coherence guard warn
+    sobre la lista canónica de 1 semana (P3-COHERENCE-RECALC-CANONICAL) y
+    reusa `action_taken="warn_only_recalc"` — ES la matemática del recalc
+    inline; mantiene cerrado el set canónico de action_taken. Refresca además
+    `shopping_cost_summary` + `budget_reconciliation` (P1-BUDGET-COST-SSOT /
+    P1-BUDGET-RECONCILE).
+
+    Fail-open: False ⇒ el caller conserva el contrato legacy (listas
+    strippeadas + recalc del frontend). Knob: MEALFIT_UPDATE_INLINE_LIST_RECALC.
+    tooltip-anchor: P1-UPDATE-LIST-INLINE-RECALC. Test: test_p1_update_inline_recalc.py.
+    """
+    if os.environ.get("MEALFIT_UPDATE_INLINE_LIST_RECALC", "true").strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    try:
+        from shopping_calculator import (
+            get_shopping_list_delta as _gsld_il,
+            _build_hybrid_shopping_list as _hyb_il,
+            compute_shopping_cost_summary as _ccs_il,
+        )
+        try:
+            mult = float(plan_data.get("calc_household_multiplier") or 1.0)
+        except (TypeError, ValueError):
+            mult = 1.0
+        if not (0.0 < mult <= 50.0):
+            mult = 1.0
+        duration = str(plan_data.get("calc_grocery_duration") or "weekly").strip().lower()
+        s7 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult)
+        s15 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult * 2.0)
+        s30 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult * 4.0)
+        _restocked_at = plan_data.get("restocked_at_iso") if plan_data.get("is_restocked") else None
+        _restocked_items = (
+            plan_data.get("restocked_items")
+            if isinstance(plan_data.get("restocked_items"), dict) else None
+        )
+        s15h = _hyb_il(s7, s15, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if s15 else s15
+        s30h = _hyb_il(s7, s30, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if s30 else s30
+        active = s15h if duration == "biweekly" else (s30h if duration == "monthly" else s7)
+        plan_data["aggregated_shopping_list"] = active
+        plan_data["aggregated_shopping_list_weekly"] = s7
+        plan_data["aggregated_shopping_list_biweekly"] = s15h
+        plan_data["aggregated_shopping_list_monthly"] = s30h
+        # Guard de coherencia sobre la lista CANÓNICA de 1 semana (scaled_7) —
+        # mismo swap temporal que el recalc (P3-COHERENCE-RECALC-CANONICAL).
+        try:
+            from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_il
+            _prev_active_il = plan_data.get("aggregated_shopping_list")
+            plan_data["aggregated_shopping_list"] = s7 if s7 else _prev_active_il
+            try:
+                _coh_il(
+                    plan_data,
+                    multiplier=mult,
+                    mode_override="warn",
+                    attempt=1,
+                    action_taken="warn_only_recalc",
+                    plan_id_hint=plan_id_hint,
+                )
+            finally:
+                plan_data["aggregated_shopping_list"] = _prev_active_il
+        except Exception as _coh_il_e:
+            logger.warning(f"[P1-UPDATE-LIST-INLINE-RECALC] guard no-op ({surface}): {_coh_il_e}")
+        try:
+            from nutrition_calculator import refresh_budget_reconciliation as _rbr_il
+            _sum_il = _ccs_il(s7, s15h, s30h, duration)
+            if _sum_il:
+                plan_data["shopping_cost_summary"] = _sum_il
+                _rbr_il(plan_data)
+        except Exception as _sum_il_e:
+            logger.debug(f"[P1-UPDATE-LIST-INLINE-RECALC] summary no-op ({surface}): {_sum_il_e}")
+        logger.info(
+            f"🛒 [P1-UPDATE-LIST-INLINE-RECALC] listas rebuild inline ({surface}): "
+            f"{len(s7 or [])} ítems semanales, duración activa={duration}."
+        )
+        return True
+    except Exception as _il_e:
+        logger.warning(
+            f"[P1-UPDATE-LIST-INLINE-RECALC] rebuild falló ({surface}) → fallback strip: "
+            f"{type(_il_e).__name__}: {_il_e}"
+        )
+        return False
+
+
 @router.post("/{plan_id}/swap-meal/persist")
 def api_swap_meal_persist(
     plan_id: str,
@@ -5342,6 +5453,14 @@ def api_swap_meal_persist(
                 _ubp_sw(plan_data, surface="swap_persist", pantry_limited=_pl_sw)
             except Exception as _bp_sw_e:
                 logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (swap) no-op: {_bp_sw_e}")
+
+            # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
+            # inline de las listas (post closer/requantize/qty-sync → reflejan los
+            # ingredientes finales). El strip de arriba queda como estado de FALLBACK si
+            # este rebuild falla (contrato legacy: el frontend recalcula).
+            _rebuild_plan_shopping_lists_inline(
+                plan_data, verified_user_id, surface="swap_persist", plan_id_hint=plan_id
+            )
 
             return plan_data
 
@@ -6073,6 +6192,12 @@ def api_regenerate_day(
                 _ubp_rd(pd, surface="regen_day", pantry_limited=bool(_pantry_limited))
             except Exception as _bp_rd_e:
                 logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (regen-day) no-op: {_bp_rd_e}")
+            # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
+            # inline de las listas del plan con el día regenerado (el strip de arriba queda
+            # como fallback si falla — contrato legacy con recalc del frontend).
+            _rebuild_plan_shopping_lists_inline(
+                pd, verified_user_id, surface="regen_day", plan_id_hint=plan_id
+            )
             return pd
 
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
@@ -7934,6 +8059,59 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             plan_data_fresh["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
             plan_data_fresh["aggregated_shopping_list_monthly"] = scaled_30_hybrid
 
+            # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
+            # escalada. Antes, /recalculate-shopping-list persistía
+            # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —
+            # un recalc cliente (Pantry add/delete + Dashboard) podía dejar la
+            # lista divergente vs recetas sin retry ni telemetría.
+            # [P1-OBJECTIVE-V4-BATCH · 2026-07-02] Bloque movido AQUÍ (inmediatamente
+            # tras los writes): el crecimiento de los comentarios intermedios había
+            # empujado el guard fuera de la ventana ±80 del contrato
+            # test_p1_next_2_guard_at_persist_sites (rojo pre-existente en HEAD).
+            #
+            # Modo: `warn` porque el caller es síncrono y bloquear con 400
+            # rompe UX cuando la divergencia viene de un edge case del
+            # multiplier escalado (P3-A ya cubre escala lineal). Si
+            # divergencias críticas aparecen sistémicamente, el cron diario
+            # las alertará; cliente sigue viendo lista usable.
+            # `action_taken="warn_only_recalc"` distingue origen post-mortem.
+            # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` vía
+            # closure list (`_captured_divergences`) para retornar
+            # `_coherence_warnings` en la response.
+            try:
+                from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_recalc
+                # [P3-COHERENCE-RECALC-CANONICAL · 2026-06-23] El guard DEBE evaluar la
+                # lista CANÓNICA de 1 semana (`scaled_7`), NO `active_list`. Para
+                # biweekly/monthly `active_list` es el HÍBRIDO escalado ×N y, si el
+                # usuario hizo restock, RESTOCK-DEDUCIDO (via `_build_hybrid` con
+                # `restocked_items`). Comparar las recetas (scope = 1 semana de menú)
+                # contra esa lista producía DOS clases de falsos positivos:
+                #   (a) magnitud: recetas×1sem vs lista×4 (mensual) → unknown/unit_mismatch.
+                #   (b) presencia: items YA comprados (deducidos del híbrido) marcados
+                #       como `cap_swallowed_modifier` ("faltan de la lista") → el toast
+                #       "tu lista tuvo N revisiones automáticas" salía SIN razón real.
+                # `scaled_7` = needs canónicos de 1 semana a multiplier base (is_new_plan
+                # → sin deducir inventario), alineado con el scope de `days`. Restauramos
+                # `active_list` después para persistir la lista correcta en la columna.
+                # Tooltip-anchor: P3-COHERENCE-RECALC-CANONICAL.
+                _list_for_guard = scaled_7 if scaled_7 else plan_data_fresh.get("aggregated_shopping_list")
+                _active_for_persist = plan_data_fresh.get("aggregated_shopping_list")
+                plan_data_fresh["aggregated_shopping_list"] = _list_for_guard
+                try:
+                    divs, _ = _coh_recalc(
+                        plan_data_fresh,
+                        multiplier=household_multiplier,
+                        mode_override="warn",
+                        attempt=1,
+                        action_taken="warn_only_recalc",
+                        plan_id_hint=plan_id,
+                    )
+                    _captured_divergences.extend(divs or [])
+                finally:
+                    plan_data_fresh["aggregated_shopping_list"] = _active_for_persist
+            except Exception as _coh_recalc_e:
+                logger.warning(f"[RECALC] coherence guard helper falló (no aborta): {_coh_recalc_e}")
+
             # Comparar contra calc_* del FRESH (no del initial). Un recalc
             # concurrente del mismo user pudo haber dejado is_restocked
             # consistente con los nuevos params — en ese caso has_changed
@@ -8001,54 +8179,22 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             elif _preserve_restock and (has_changed or _empty_pantry_heal):
                 logger.info("🔄 [RECALC] is_restocked PRESERVADO (preserve_restock=tweak pantry-strict, Nevera no vacía)")
 
-            # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
-            # escalada. Antes, /recalculate-shopping-list persistía
-            # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —
-            # un recalc cliente (Pantry add/delete + Dashboard) podía dejar la
-            # lista divergente vs recetas sin retry ni telemetría.
-            #
-            # Modo: `warn` porque el caller es síncrono y bloquear con 400
-            # rompe UX cuando la divergencia viene de un edge case del
-            # multiplier escalado (P3-A ya cubre escala lineal). Si
-            # divergencias críticas aparecen sistémicamente, el cron diario
-            # las alertará; cliente sigue viendo lista usable.
-            # `action_taken="warn_only_recalc"` distingue origen post-mortem.
-            # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` vía
-            # closure list (`_captured_divergences`) para retornar
-            # `_coherence_warnings` en la response.
+            # [P1-BUDGET-COST-SSOT · 2026-07-02] Refresco del resumen de costo
+            # backend + re-reconciliación contra la referencia de presupuesto
+            # persistida (P1-BUDGET-RECONCILE; recalc no tiene form_data, así
+            # que `refresh_budget_reconciliation` reusa la referencia del plan).
+            # Corre DESPUÉS del coherence guard (el write de listas y el guard
+            # deben quedar en la misma ventana del contrato P1-NEXT-2).
+            # Fail-open: error → keys previas intactas.
             try:
-                from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_recalc
-                # [P3-COHERENCE-RECALC-CANONICAL · 2026-06-23] El guard DEBE evaluar la
-                # lista CANÓNICA de 1 semana (`scaled_7`), NO `active_list`. Para
-                # biweekly/monthly `active_list` es el HÍBRIDO escalado ×N y, si el
-                # usuario hizo restock, RESTOCK-DEDUCIDO (via `_build_hybrid` con
-                # `restocked_items`). Comparar las recetas (scope = 1 semana de menú)
-                # contra esa lista producía DOS clases de falsos positivos:
-                #   (a) magnitud: recetas×1sem vs lista×4 (mensual) → unknown/unit_mismatch.
-                #   (b) presencia: items YA comprados (deducidos del híbrido) marcados
-                #       como `cap_swallowed_modifier` ("faltan de la lista") → el toast
-                #       "tu lista tuvo N revisiones automáticas" salía SIN razón real.
-                # `scaled_7` = needs canónicos de 1 semana a multiplier base (is_new_plan
-                # → sin deducir inventario), alineado con el scope de `days`. Restauramos
-                # `active_list` después para persistir la lista correcta en la columna.
-                # Tooltip-anchor: P3-COHERENCE-RECALC-CANONICAL.
-                _list_for_guard = scaled_7 if scaled_7 else plan_data_fresh.get("aggregated_shopping_list")
-                _active_for_persist = plan_data_fresh.get("aggregated_shopping_list")
-                plan_data_fresh["aggregated_shopping_list"] = _list_for_guard
-                try:
-                    divs, _ = _coh_recalc(
-                        plan_data_fresh,
-                        multiplier=household_multiplier,
-                        mode_override="warn",
-                        attempt=1,
-                        action_taken="warn_only_recalc",
-                        plan_id_hint=plan_id,
-                    )
-                    _captured_divergences.extend(divs or [])
-                finally:
-                    plan_data_fresh["aggregated_shopping_list"] = _active_for_persist
-            except Exception as _coh_recalc_e:
-                logger.warning(f"[RECALC] coherence guard helper falló (no aborta): {_coh_recalc_e}")
+                from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs
+                from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr
+                _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration)
+                if _p1b_summary:
+                    plan_data_fresh["shopping_cost_summary"] = _p1b_summary
+                    _p1b_rbr(plan_data_fresh)
+            except Exception as _p1b_e:
+                logger.warning(f"[P1-BUDGET-COST-SSOT] recalc summary no-op: {_p1b_e}")
 
             # [P3-SHOPPING-2 · 2026-05-14] Fingerprint de debug solo en non-prod.
             # Antes esto se persistía SIEMPRE a `plan_data._debug_recalc` —

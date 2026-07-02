@@ -108,9 +108,12 @@ def test_rebalance_knob_default_on():
 
 def test_swap_per_meal_closers_flipped_on_except_target_from_slot():
     """[P1-OBJECTIVE-LEVERS-ON · 2026-06-29] El rebalance y el protein-closer per-comida del swap se flipearon
-    OFF→ON (re-escalador never-worse + closer anclado al target con pantry-revert/skip-renal). SWAP_TARGET_FROM_SLOT
-    SIGUE OFF (no se flipeó: tiene un modo de sobre-asignación conocido sin biométricos). Rollback por env."""
+    OFF→ON (re-escalador never-worse + closer anclado al target con pantry-revert/skip-renal).
+    [P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] SWAP_TARGET_FROM_SLOT también promovido a ON-en-código
+    (corría ON-solo-en-.env desde 2026-06-27; la sobre-asignación sin biométricos quedó mitigada por el
+    skip de regen-day P2-REGEN-DAY-SLOT-OVERRIDE-SKIP). Rollback por env."""
     agent_src = _src(_BACKEND / "agent.py")
     for knob in ("MEALFIT_UPDATE_MACRO_REBALANCE", "MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER"):
         assert f'os.environ.get("{knob}", "true")' in agent_src, f"{knob} ahora default true (P1-OBJECTIVE-LEVERS-ON)"
-    assert 'os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "false")' in agent_src, "SWAP_TARGET_FROM_SLOT sigue OFF"
+    assert 'os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "true")' in agent_src, \
+        "SWAP_TARGET_FROM_SLOT ahora default ON (P1-VERIFIED-ONLY-DEFAULT-ON)"

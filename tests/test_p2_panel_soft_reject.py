@@ -26,11 +26,14 @@ def _plan(gaps, coverage=0.85):
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 def test_knob_defaults(go):
     # [P2-SATFAT-CEILING-OBSERVABLE] el sub-check de condición fue flippeado ON (honestidad accionable del
-    # build todo-terreno); micros-soft-reject y sodio/azúcar siguen OFF (A/B-pending). Este test anclaba
-    # "los 3 OFF" pre-flip — actualizado al estado vigente (fallaba rojo desde el flip sin que nadie lo viera).
+    # build todo-terreno); micros-soft-reject sigue OFF (A/B-pending).
+    # [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] sodio/azúcar flippeado ON para TODOS (con umbral
+    # anti-ruido MIN_RATIO=1.25 — solo excesos materiales marcan). El gate de retry sigue OFF.
     assert go.CONDITION_PANEL_DEGRADE_ENABLED is True
     assert go.MICRONUTRIENT_SOFT_REJECT_ENABLED is False
-    assert go.SODIUM_SUGAR_DEGRADE_ENABLED is False
+    assert go.SODIUM_SUGAR_DEGRADE_ENABLED is True
+    assert go.SODIUM_EXCESS_GATE_ENABLED is False
+    assert go.MICRO_PERDAY_DEGRADE_ENABLED is True
 
 
 def test_off_does_not_mark(go, monkeypatch):
@@ -104,6 +107,28 @@ def test_high_sodium_low_coverage_not_marked(go, monkeypatch):
     monkeypatch.setattr(go, "SODIUM_SUGAR_DEGRADE_ENABLED", True)
     plan = _plan([{"key": "sodium_mg", "status": "alto", "valor": 3000, "techo": 2000}], coverage=0.5)
     assert go._maybe_mark_panel_degraded(plan, {}, False, 1) is False
+
+
+def test_marginal_sodium_excess_not_marked(go, monkeypatch):
+    """[P1-SODIUM-SUGAR-EXCESS-ON] Exceso MARGINAL (techo×1.05 < MIN_RATIO 1.25) NO marca —
+    lección P1-COHERENCE-BANNER-NOISE: surface solo lo accionable."""
+    monkeypatch.setattr(go, "SODIUM_SUGAR_DEGRADE_ENABLED", True)
+    plan = _plan([{"key": "sodium_mg", "status": "alto", "valor": 2100, "techo": 2000}], coverage=0.85)
+    assert go._maybe_mark_panel_degraded(plan, {}, False, 1) is False
+
+
+def test_micro_worst_day_marks(go, monkeypatch):
+    """[P1-MICRO-PERDAY-FLOOR] per_day_floors.flagged=True (peor día con ≥2 micros bajo el ratio)
+    → banner micro_worst_day con el detalle del día."""
+    monkeypatch.setattr(go, "MICRO_PERDAY_DEGRADE_ENABLED", True)
+    plan = {"micronutrient_report": {
+        "gaps": [], "coverage": 0.9,
+        "per_day_floors": {"flagged": True, "days_below": 1,
+                           "worst_day": {"day_index": 2, "low": ["iron_mg", "calcium_mg"]}},
+    }}
+    assert go._maybe_mark_panel_degraded(plan, {}, False, 1) is True
+    assert plan["_quality_degraded_reason"] == "micro_worst_day"
+    assert "día 3" in plan["_quality_degraded_panel_detail"]
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

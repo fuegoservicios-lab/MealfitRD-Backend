@@ -48,8 +48,10 @@ def test_p1_4_update_macro_closers_on_in_agent_and_tools():
     for src, name in ((_AGENT, "agent.py"), (_TOOLS, "tools.py")):
         assert re.search(r'MEALFIT_UPDATE_MACRO_REBALANCE"\s*,\s*"true"', src), f"{name}: rebalance default ON"
         assert re.search(r'MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER"\s*,\s*"true"', src), f"{name}: protein-closer default ON"
-    # SWAP_TARGET_FROM_SLOT NO se flipeó (modo de sobre-asignación conocido)
-    assert 'os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "false")' in _AGENT
+    # [P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] SWAP_TARGET_FROM_SLOT promovido a ON-en-código
+    # (corría ON-solo-en-.env desde 2026-06-27; el modo de sobre-asignación quedó mitigado por el
+    # skip explícito de regen-day P2-REGEN-DAY-SLOT-OVERRIDE-SKIP). Rollback por env.
+    assert 'os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "true")' in _AGENT
 
 
 # ───────────────────────── P1-5: creatividad en los prompts de update ─────────────────────────

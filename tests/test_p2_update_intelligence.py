@@ -41,8 +41,9 @@ def test_p2_8_swap_slot_target_wired_and_default_off():
     src = _func_src(AGENT, "swap_meal")
     assert "MEALFIT_SWAP_TARGET_FROM_SLOT" in src
     assert "allocate_macros_per_slot" in src and "get_nutrition_targets" in src
-    # default OFF (riesgo de más fallos pantry-strict): el knob se lee con default 'false'
-    assert '"MEALFIT_SWAP_TARGET_FROM_SLOT", "false"' in src
+    # [P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] default ON-en-código (corría ON-solo-en-.env
+    # desde 2026-06-27; el riesgo pantry-strict quedó mitigado por el skip de regen-day).
+    assert '"MEALFIT_SWAP_TARGET_FROM_SLOT", "true"' in src
 
 
 # ── P2-9: gain_muscle proteína de alta densidad en updates ────────────────────

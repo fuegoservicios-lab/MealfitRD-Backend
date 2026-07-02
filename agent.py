@@ -496,13 +496,17 @@ def swap_meal(form_data: dict):
     # (derivado del objetivo diario del usuario) en vez del plato ACTUAL, que puede venir drifteado
     # (un desayuno a 12g cuando el slot pide 30g → todo swap se ancla a ~12g → el drift se vuelve
     # permanente). form_data trae biométricos hidratados server-side por el router (P2-12). REEMPLAZA
-    # los target_* heredados; fallback a ellos si no hay daily targets / error. Default OFF: subir el
-    # target puede aumentar fallos de swap pantry-strict (el usuario priorizó variedad sobre clavar la
-    # macro del slot) → validar A/B antes de flip. Knob MEALFIT_SWAP_TARGET_FROM_SLOT.
+    # los target_* heredados; fallback a ellos si no hay daily targets / error.
+    # [P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] Default OFF→ON en código: el knob corre ON en prod
+    # vía .env desde 2026-06-27 (activación P1-SLOT-APPROPRIATENESS Fase 2-resto) y el anclaje al slot
+    # es el contrato vigente (P2-CHATMOD-TARGET-ANCHOR ancla proteína al slot en chat-modify) — dejarlo
+    # OFF-en-código era la regresión silenciosa ".env reseteado ⇒ target drifteado vuelve". El riesgo
+    # pantry-strict citado para el A/B quedó mitigado por el skip explícito de regen-day (abajo).
+    # Rollback sin redeploy: MEALFIT_SWAP_TARGET_FROM_SLOT=false. Knob MEALFIT_SWAP_TARGET_FROM_SLOT.
     _p28_uid = form_data.get("user_id")
     if (
         _p28_uid and _p28_uid != "guest"
-        and os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "false").strip().lower() in ("1", "true", "yes", "on")
+        and os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "true").strip().lower() in ("1", "true", "yes", "on")
         # [P2-REGEN-DAY-SLOT-OVERRIDE-SKIP · 2026-06-29] regenerate-day YA retargetea cada plato hacia el
         # objetivo del DÍA (P1-REGEN-DAY-RETARGET, contra el target REAL del plan) y pasa esos targets per-comida
         # en target_*. El slot-override re-deriva el target con `get_nutrition_targets(form_data)`, PERO el

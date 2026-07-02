@@ -9854,8 +9854,24 @@ _MICRO_CLOSER_UL = {"iron_mg": 45.0, "zinc_mg": 40.0, "folate_mcg": 1000.0, "vit
                     # selenio 400 mcg (UL IOM; selenosis). OBLIGATORIOS al añadir estas keys al closer.
                     "vit_a_mcg": 3000.0, "selenium_mcg": 400.0}
 # (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura alta (mitiga el falso positivo de sal 'al gusto'):
-SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", False)
+# [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] (audit v4 micros) Flip OFF→ON: para el usuario SIN condición
+# declarada el EXCESO de sodio/azúcar ni siquiera marcaba banner (el techo WHO del panel era advisory puro
+# — asimetría vs déficits, que sí degradan/cierran). Anti-ruido (lección P1-COHERENCE-BANNER-NOISE): solo
+# marca cuando el exceso supera el techo × MIN_RATIO (default 1.25 = +25%), no cualquier rebase marginal.
+# Rollback sin redeploy: MEALFIT_SODIUM_SUGAR_DEGRADE=false. tooltip-anchor: P1-SODIUM-SUGAR-EXCESS-ON
+SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", True)
 SODIUM_SUGAR_DEGRADE_MIN_COVERAGE = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_COVERAGE", 0.75)
+SODIUM_SUGAR_DEGRADE_MIN_RATIO = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_RATIO", 1.25)
+# [P1-SODIUM-SUGAR-EXCESS-ON] Gate de retry para exceso FLAGRANTE de sodio (>techo×RATIO, default 1.5).
+# Default OFF: es un gate NUEVO — se enciende con datos de flota (mismo playbook que P1-DISH-QUALITY-GATE-ON:
+# la telemetría del banner de arriba mide la tasa real antes del flip). Advisory en intento final al activarse.
+SODIUM_EXCESS_GATE_ENABLED = _env_bool("MEALFIT_SODIUM_EXCESS_GATE", False)
+SODIUM_EXCESS_GATE_RATIO = _env_float("MEALFIT_SODIUM_EXCESS_GATE_RATIO", 1.5)
+# [P1-MICRO-PERDAY-FLOOR · 2026-07-02] (audit v4 micros) Consumo del resumen worst-day del panel
+# (micronutrients.build_micronutrient_report → per_day_floors): un plan que cumple los pisos EN PROMEDIO
+# pero con un día individual <60% del piso en ≥2 micros accionables marca banner honesto (banner-only,
+# jamás retry — corre fuera del grafo). Thresholds en micronutrients (MEALFIT_MICRO_PERDAY_RATIO/_MIN_MICROS).
+MICRO_PERDAY_DEGRADE_ENABLED = _env_bool("MEALFIT_MICRO_PERDAY_DEGRADE", True)
 
 
 def _protein_gkg_ceiling(goal) -> float:
@@ -13993,6 +14009,69 @@ _RECIPE_ENGLISH_RE = _re.compile(
     r"set aside|serve with|season with|until golden|over medium heat|in a pan|the chicken|the onion)\b", _re.I)
 
 
+# [P1-RECIPE-CONTRACT-GATE · 2026-07-02] (audit v4 recetas) "El Toque de Fuego" DEBE llevar tiempo/
+# temperatura concreta para que la receta sea production-ready — el contrato vivía solo en prompt +
+# telemetría (NUNCA gate) → una receta sin tiempos se entregaba sin que nada la rescatara. Dos capas:
+#   (a) BACKSTOP determinista (default ON): si el Toque de Fuego no trae tiempo/temp, inyecta un default
+#       sensato POR TÉCNICA (plancha 3-4 min/lado, horno 18-20 min a 180 °C, guiso 20-25 min…) — texto
+#       puro, cero interacción con cantidades/quantize. Marca `_recipe_timetemp_injected` (honestidad).
+#   (b) GATE de retry por contract_ratio (default OFF): se enciende con datos de flota de la serie
+#       `contract_ratio` (playbook P1-DISH-QUALITY-GATE-ON — medir antes de flip). Al activarse: rechaza
+#       si ≥ ratio de platos violan el contrato de pasos, advisory en intento final.
+# Rollback sin redeploy: MEALFIT_RECIPE_TIMETEMP_BACKSTOP=false / MEALFIT_RECIPE_CONTRACT_GATE=false.
+# tooltip-anchor: P1-RECIPE-CONTRACT-GATE. Test: test_p1_recipe_contract_gate.py.
+RECIPE_TIMETEMP_BACKSTOP_ENABLED = _env_bool("MEALFIT_RECIPE_TIMETEMP_BACKSTOP", True)
+RECIPE_CONTRACT_GATE_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_GATE", False)
+RECIPE_CONTRACT_GATE_RATIO = _env_float("MEALFIT_RECIPE_CONTRACT_GATE_RATIO", 0.5)
+
+# (tokens accent-stripped de técnica → default de tiempo/temp es-DO). Orden = precedencia,
+# de técnica ESPECÍFICA a genérica ("dorar" aparece en casi todas → NO es token; la plancha
+# va última para no capturar pasos de horno/guiso que mencionan sartén de sellado).
+_TIMETEMP_TECHNIQUE_DEFAULTS = (
+    (("horno", "hornea", "gratina", "rostiza"), "18-20 min a 180 °C"),
+    (("hierve", "hervir", "sancocha", "cuece"), "12-15 min en agua hirviendo"),
+    (("guisa", "guiso", "estofa", "brasea"), "20-25 min a fuego medio tapado"),
+    (("vapor",), "8-10 min al vapor"),
+    (("frie", "fritura", "freidora", "airfryer", "tosta"), "6-8 min hasta dorar"),
+    (("revuelto", "revuelve", "panqueque", "arepita", "tortilla de huevo"), "2-3 min por lado a fuego medio"),
+    (("plancha", "sarten", "saltea", "sofrie", "sella"), "3-4 min por lado a fuego medio-alto"),
+)
+_TIMETEMP_FALLBACK_DEFAULT = "10-12 min a fuego medio"
+
+
+def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
+    """[P1-RECIPE-CONTRACT-GATE] Backstop determinista: añade un tiempo/temperatura default por
+    técnica al paso 'El Toque de Fuego' cuando el LLM lo omitió. Idempotente (si ya hay tiempo/
+    temp vía _CONTRACT_TIME_RE → no-op), texto puro (no toca cantidades — cero interacción con
+    qty-sync/quantize), fail-open. Muta `meal` in-place; True si inyectó."""
+    if not RECIPE_TIMETEMP_BACKSTOP_ENABLED or not isinstance(meal, dict):
+        return False
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return False
+        from constants import strip_accents as _sa_tt
+        for i, step in enumerate(rec):
+            if not isinstance(step, str) or _is_recipe_safety_note_step(step):
+                continue
+            if not step.strip().lower().startswith("el toque de fuego"):
+                continue
+            if _CONTRACT_TIME_RE.search(step):
+                return False  # ya trae tiempo/temp — contrato cumplido
+            hay = _sa_tt((str(meal.get("name") or "") + " " + step).lower())
+            default = _TIMETEMP_FALLBACK_DEFAULT
+            for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
+                if any(t in hay for t in tokens):
+                    default = technique_default
+                    break
+            rec[i] = step.rstrip().rstrip(".") + f" (~{default})."
+            meal["_recipe_timetemp_injected"] = True
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def _recipe_step_contract_issues(meal: dict) -> list:
     """[P2-RECIPE-STEP-CONTRACT-GATE · 2026-07-01] (audit recetas P2-2) Lint DETERMINISTA barato del contrato
     de pasos que antes solo vivía en prompts (day_generator §3): los 3 prefijos (Mise en place → El Toque de
@@ -16484,6 +16563,13 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                 total += 1
         except Exception as _ei0:
             logger.warning(f"[P1-INGREDIENTS-NONEMPTY] backstop en finalizador de update no-op: {type(_ei0).__name__}: {_ei0}")
+        # [P1-RECIPE-CONTRACT-GATE · 2026-07-02] Backstop tiempo/temp del Toque de Fuego — texto puro,
+        # ANTES de los pasos que tocan cantidades (lejos del quantize-última-mutación anclado por test).
+        try:
+            if _inject_recipe_time_temp_defaults(meal):
+                total += 1
+        except Exception as _tt0:
+            logger.debug(f"[P1-RECIPE-CONTRACT-GATE] backstop en finalizador no-op: {type(_tt0).__name__}: {_tt0}")
         # [P2-QTY-PRESENCE-GUARD · 2026-06-29] (audit objetivo · P2-5) PRIMERO: si el plato editado trae un alimento
         # verificado sin cantidad líder ('Pollo' suelto), inyecta una porción default para que (a) sea cocinable y
         # (b) cuente en macros — corre ANTES del slice-grams/quantize/truth-up para que esos pasos vean la porción.
@@ -17385,6 +17471,180 @@ def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
         return added
     except Exception as _cg_e:
         logger.warning(f"[P2-STEP-CARB-GHOST] guard no-op: {type(_cg_e).__name__}: {_cg_e}")
+        return 0
+
+
+# [P1-BUDGET-TIER-LEVERS · 2026-07-02] Backstop determinista del tier "Económico".
+# El prompt ya guía al LLM hacia ingredientes económicos (build_budget_context), pero
+# es advisory: cuando se cuela un premium (salmón/almendras/quinoa) en un plan cuyo
+# formulario pidió "Económico — lo básico y esencial" (o `custom` con monto ajustado,
+# ver nutrition_calculator.budget_prefers_economy), este pase lo sustituye por un
+# equivalente CULINARIO de la misma categoría, macro-similar y verificado del catálogo.
+# Corre PRE-engine (mismo racional que veg-guard/carb-ghost: la sustitución entra al
+# allergen scan, sizing, quantize, closers, compras y coherence — coherente E2E).
+# NUNCA toca pisos clínicos ni alergias (candidato pasa _scan_allergen_violations y
+# dislikes; sin resolución de precio en catálogo → skip). Acotado (max subs por plan)
+# + marcado honesto: meal._budget_substitutions + plan._budget_adjusted (la
+# reconciliación P1-BUDGET-RECONCILE lo expone al usuario).
+# Rollback sin redeploy: MEALFIT_BUDGET_CHEAPEN_PASS=false.
+# Tooltip-anchor: P1-BUDGET-TIER-LEVERS. Test: test_p1_budget_intelligence.py.
+BUDGET_CHEAPEN_PASS_ENABLED = _env_bool("MEALFIT_BUDGET_CHEAPEN_PASS", True)
+BUDGET_CHEAPEN_MAX_SUBS = _env_int("MEALFIT_BUDGET_CHEAPEN_MAX_SUBS", 3, lambda v: 0 <= v <= 10)
+
+# (regex del alimento premium, candidato económico del catálogo, excludes accent-stripped).
+# Misma categoría culinaria SIEMPRE (pescado→pescado, semilla→semilla, grano→grano) —
+# sustituir cross-categoría cambia el plato y eso es decisión del LLM/usuario, no nuestra.
+_BUDGET_CHEAP_EQUIVALENTS = (
+    (r"salm[oó]n", "Filete de pescado blanco", ()),
+    (r"camar[oó]n(?:es)?", "Filete de pescado blanco", ()),
+    (r"bacalao", "Filete de pescado blanco", ()),
+    (r"almendras?", "Maní", ("leche de almendra", "harina de almendra")),
+    (r"nueces|nuez", "Maní", ("nuez moscada",)),
+    (r"ch[ií]a", "Linaza", ()),
+    (r"quinoa|quinua", "Arroz integral", ()),
+    (r"yogurt griego|yogur griego", "Yogurt natural", ()),
+)
+
+
+def _budget_master_price_per_lb(name: str, master_map: dict) -> float:
+    """Precio/lb-equivalente de un alimento vía el catálogo master (exacto →
+    contención word-boundary). 0.0 si no resuelve (fail-open)."""
+    try:
+        from constants import strip_accents as _sa
+        key = _sa(str(name or "").strip().lower())
+        if not key:
+            return 0.0
+        entry = master_map.get(key)
+        if entry is None:
+            padded = f" {key} "
+            best = None
+            for mk in master_map:
+                if len(mk) >= 4 and f" {mk} " in padded:
+                    if best is None or len(mk) > len(best):
+                        best = mk
+            entry = master_map.get(best) if best else None
+        return float(entry) if entry else 0.0
+    except Exception:
+        return 0.0
+
+
+def _budget_build_master_price_map() -> dict:
+    """{nombre/alias accent-stripped → precio/lb-equivalente} del catálogo master.
+    Per-unit → per-lb vía density/container. Fail-open: {}."""
+    try:
+        from shopping_calculator import get_master_ingredients
+        from constants import strip_accents as _sa
+        out: dict = {}
+        for row in get_master_ingredients() or []:
+            try:
+                price = float(row.get("price_per_lb") or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+            if price <= 0:
+                try:
+                    ppu = float(row.get("price_per_unit") or 0)
+                    basis = float(row.get("density_g_per_unit") or 0) or float(row.get("container_weight_g") or 0)
+                    if ppu > 0 and basis > 0:
+                        price = ppu * 453.592 / basis
+                except (TypeError, ValueError):
+                    price = 0.0
+            if price <= 0:
+                continue
+            names = [row.get("name") or ""]
+            aliases = row.get("aliases")
+            if isinstance(aliases, list):
+                names.extend(str(a) for a in aliases)
+            for n in names:
+                k = _sa(str(n).strip().lower())
+                if k:
+                    out.setdefault(k, price)
+        return out
+    except Exception:
+        return {}
+
+
+def _apply_budget_cheapen_pass(days, form_data) -> int:
+    """Sustituye hasta BUDGET_CHEAPEN_MAX_SUBS ingredientes premium por su
+    equivalente económico cuando el presupuesto pide economía. Retorna nº de
+    sustituciones. Fail-open total (0 y plan intacto ante cualquier duda)."""
+    if not BUDGET_CHEAPEN_PASS_ENABLED or BUDGET_CHEAPEN_MAX_SUBS <= 0 or not days:
+        return 0
+    try:
+        from nutrition_calculator import budget_prefers_economy
+        if not budget_prefers_economy(form_data or {}):
+            return 0
+    except Exception:
+        return 0
+    try:
+        from constants import strip_accents as _sa
+        master_map = _budget_build_master_price_map()
+        allergies = (form_data or {}).get("allergies")
+        dislikes = {_sa(str(d).strip().lower()) for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()}
+        subs = 0
+        for _d in days:
+            if subs >= BUDGET_CHEAPEN_MAX_SUBS:
+                break
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if subs >= BUDGET_CHEAPEN_MAX_SUBS:
+                    break
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                for idx, ing in enumerate(ings):
+                    if subs >= BUDGET_CHEAPEN_MAX_SUBS:
+                        break
+                    if not isinstance(ing, str):
+                        continue
+                    low = _sa(ing.lower())
+                    for rx, candidate, excludes in _BUDGET_CHEAP_EQUIVALENTS:
+                        if any(ex in low for ex in excludes):
+                            continue
+                        m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
+                        if not m:
+                            continue
+                        cand_low = _sa(candidate.lower())
+                        # El candidato debe: existir con precio en catálogo, ser realmente
+                        # más barato que el original (si el original resuelve), no estar
+                        # en dislikes y no violar alergias declaradas.
+                        cand_price = _budget_master_price_per_lb(candidate, master_map)
+                        if cand_price <= 0:
+                            continue
+                        orig_price = _budget_master_price_per_lb(m.group(0), master_map)
+                        if orig_price > 0 and cand_price >= orig_price * 0.7:
+                            continue
+                        if any(dk and dk in cand_low for dk in dislikes):
+                            continue
+                        if allergies:
+                            try:
+                                if _scan_allergen_violations(
+                                    {"days": [{"meals": [{"ingredients": [candidate]}]}]}, allergies
+                                ):
+                                    continue
+                            except Exception:
+                                continue  # scan falló → conservador: no sustituir
+                        new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
+                        if new_line == ing:
+                            continue
+                        ings[idx] = new_line
+                        raw = meal.get("ingredients_raw")
+                        if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
+                            raw[idx] = _re.sub(rf"\b(?:{rx})\b", candidate, raw[idx], count=1, flags=_re.IGNORECASE)
+                        # Nombre honesto del plato: si menciona el premium, renombrar
+                        # (el phantom-protein namefix corre después como backstop).
+                        name = meal.get("name")
+                        if isinstance(name, str) and _re.search(rf"\b(?:{rx})\b", name, _re.IGNORECASE):
+                            meal["name"] = _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE)
+                        note = f"{m.group(0)} → {candidate}"
+                        meal.setdefault("_budget_substitutions", []).append(note)
+                        logger.info(f"💰 [P1-BUDGET-TIER-LEVERS] Sustitución económica: {note} "
+                                    f"(RD${orig_price:.0f}/lb → RD${cand_price:.0f}/lb)")
+                        subs += 1
+                        break
+        return subs
+    except Exception as _bcp_e:
+        logger.warning(f"[P1-BUDGET-TIER-LEVERS] cheapen-pass no-op: {type(_bcp_e).__name__}: {_bcp_e}")
         return 0
 
 
@@ -18656,6 +18916,36 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _cge:
             logger.warning(f"[P2-STEP-CARB-GHOST] guard en assemble no-op: {type(_cge).__name__}: {_cge}")
 
+    # [P1-BUDGET-TIER-LEVERS · 2026-07-02] Backstop "Económico": si el formulario pidió presupuesto
+    # económico (low / custom ajustado) y el LLM coló ingredientes premium, sustituirlos por el
+    # equivalente económico de la misma categoría ANTES del engine (la sustitución entra a sizing,
+    # closers, compras y coherence). Marcado honesto en el plan; jamás toca pisos clínicos/alergias.
+    if BUDGET_CHEAPEN_PASS_ENABLED:
+        try:
+            _bcp_subs = _apply_budget_cheapen_pass(days, form_data)
+            if _bcp_subs:
+                result["_budget_adjusted"] = True
+                logger.info(f"💰 [P1-BUDGET-TIER-LEVERS] {_bcp_subs} ingrediente(s) premium sustituido(s) "
+                            f"por equivalentes económicos (presupuesto económico/ajustado).")
+        except Exception as _bcp_call_e:
+            logger.warning(f"[P1-BUDGET-TIER-LEVERS] cheapen-pass en assemble no-op: {type(_bcp_call_e).__name__}: {_bcp_call_e}")
+
+    # [P1-RECIPE-CONTRACT-GATE · 2026-07-02] Backstop tiempo/temp en form-gen: CADA receta cuyo
+    # "El Toque de Fuego" venga sin tiempo/temperatura recibe un default sensato por técnica —
+    # "recetas production-ready" deja de depender solo del prompt. Texto puro (cero interacción
+    # con cantidades/engine).
+    if RECIPE_TIMETEMP_BACKSTOP_ENABLED:
+        try:
+            _tt_n = sum(
+                1 for _d in days for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else [])
+                if isinstance(_m, dict) and _inject_recipe_time_temp_defaults(_m)
+            )
+            if _tt_n:
+                logger.info(f"⏲️ [P1-RECIPE-CONTRACT-GATE] {_tt_n} receta(s) sin tiempo/temp → "
+                            f"default por técnica inyectado en El Toque de Fuego.")
+        except Exception as _tt_asm_e:
+            logger.warning(f"[P1-RECIPE-CONTRACT-GATE] backstop en assemble no-op: {type(_tt_asm_e).__name__}: {_tt_asm_e}")
+
     # [P2-QTY-PRESENCE-GUARD · 2026-06-29] (audit objetivo · P2-5) ANTES del macro engine: un alimento verificado
     # sin cantidad líder ('Pollo' suelto) cuenta ~0 en el solver (no se puede escalar 0×factor) y vuelve las macros
     # del plato falsamente bajas. Inyecta una porción default plausible para que el motor la dimensione al target.
@@ -18954,6 +19244,75 @@ async def assemble_plan_node(state: PlanState) -> dict:
         # (capa magnitudes) pueda escalar `expected_sum_from_recipes` simétricamente
         # al aggregated. Espejo de la convención cron_tasks/routers/plans.
         result["calc_household_multiplier"] = float(household)
+
+        # [P1-BUDGET-COST-SSOT · 2026-07-02] SSOT backend del costo de la lista:
+        # el total ya no se descarta — se persiste `shopping_cost_summary`
+        # (trip/cycle por duración) junto a las listas. Con el summary presente,
+        # [P1-BUDGET-RECONCILE] compara el costo real del ciclo contra el
+        # presupuesto del formulario (custom → monto; tiers → banda del piso de
+        # metas) y persiste `budget_reconciliation` con status honesto. Ambos
+        # fail-open: cualquier error → el plan sale sin las keys, jamás aborta.
+        try:
+            from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs
+            _p1b_summary = _p1b_ccs(
+                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration
+            )
+            if _p1b_summary:
+                result["shopping_cost_summary"] = _p1b_summary
+                try:
+                    from nutrition_calculator import compute_budget_reconciliation as _p1b_cbr
+                    _p1b_rec = _p1b_cbr(form_data, _p1b_summary)
+                    if _p1b_rec:
+                        # [P1-BUDGET-TIER-LEVERS] Honestidad: si el cheapen-pass sustituyó
+                        # ingredientes premium, la reconciliación lo declara con la lista
+                        # de sustituciones (el frontend las muestra bajo el banner).
+                        if result.get("_budget_adjusted"):
+                            _p1b_rec["adjusted"] = True
+                            _p1b_rec["substitutions"] = [
+                                s
+                                for _bd in (result.get("days") or [])
+                                for _bm in ((_bd.get("meals") or []) if isinstance(_bd, dict) else [])
+                                if isinstance(_bm, dict)
+                                for s in (_bm.get("_budget_substitutions") or [])
+                            ][:6]
+                        # [P1-BUDGET-TIER-LEVERS] Sugerencias accionables al excederse:
+                        # variante más barata del Supermercado RD para los ítems más
+                        # caros de la lista semanal (usa el matching de marcas existente).
+                        if _p1b_rec.get("status") == "excedido":
+                            try:
+                                from shopping_calculator import cheapest_supermarket_variant as _p1b_csv
+                                _p1b_sugs = []
+                                _p1b_priced = [
+                                    it for it in (result.get("aggregated_shopping_list_weekly") or [])
+                                    if isinstance(it, dict) and (it.get("estimated_cost_rd") or 0) > 0
+                                ]
+                                _p1b_priced.sort(key=lambda x: x.get("estimated_cost_rd") or 0, reverse=True)
+                                for _p1b_it in _p1b_priced[:5]:
+                                    _p1b_name = str(_p1b_it.get("name") or "").strip()
+                                    if not _p1b_name:
+                                        continue
+                                    _p1b_var = _p1b_csv(_p1b_name)
+                                    if _p1b_var and _p1b_var.get("brand"):
+                                        _p1b_sugs.append({
+                                            "type": "marca",
+                                            "item": _p1b_name,
+                                            "text": (
+                                                f"{_p1b_name}: la opción más económica del súper es "
+                                                f"{_p1b_var['brand']} {_p1b_var['presentation']} "
+                                                f"(RD${_p1b_var['price_rd']:.0f})"
+                                            ),
+                                        })
+                                    if len(_p1b_sugs) >= 5:
+                                        break
+                                if _p1b_sugs:
+                                    _p1b_rec["suggestions"] = _p1b_sugs
+                            except Exception as _p1b_sug_e:
+                                logger.debug(f"[P1-BUDGET-TIER-LEVERS] sugerencias no-op: {_p1b_sug_e}")
+                        result["budget_reconciliation"] = _p1b_rec
+                except Exception as _p1b_rec_e:
+                    logger.warning(f"⚠️ [P1-BUDGET-RECONCILE] no-op en assemble: {_p1b_rec_e}")
+        except Exception as _p1b_ccs_e:
+            logger.warning(f"⚠️ [P1-BUDGET-COST-SSOT] summary no-op en assemble: {_p1b_ccs_e}")
     except Exception as e:
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15] Mantenemos `WARNING` (no
         # `ERROR`) porque el bloque siguiente degrada graceful con listas
@@ -21115,6 +21474,81 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     severity = _severity_max(severity, "high")
         except Exception as _dqg_e:
             logger.warning(f"[P2-DISH-QUALITY-GATE] gate falló: {type(_dqg_e).__name__}: {_dqg_e}")
+
+    # [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] Gate SUAVE de EXCESO FLAGRANTE de sodio (> techo WHO ×
+    # SODIUM_EXCESS_GATE_RATIO, default 1.5) sobre el panel ya computado en assemble. Default OFF (gate
+    # NUEVO — se enciende con datos de flota del banner high_sodium_sugar, playbook P1-DISH-QUALITY-GATE-ON).
+    # Al activarse: rechazo → retry, advisory en intento final (espejo slot/dish-quality; nunca cero-plan).
+    if SODIUM_EXCESS_GATE_ENABLED:
+        try:
+            _sx_mn = plan.get("micronutrient_report") if isinstance(plan, dict) else None
+            _sx_cov = (_sx_mn or {}).get("coverage")
+            if isinstance(_sx_cov, (int, float)) and _sx_cov >= SODIUM_SUGAR_DEGRADE_MIN_COVERAGE:
+                for _sx_g in ((_sx_mn or {}).get("gaps") or []):
+                    if _sx_g.get("key") != "sodium_mg" or _sx_g.get("status") != "alto":
+                        continue
+                    try:
+                        _sx_val = float(_sx_g.get("valor") or 0.0)
+                        _sx_ceil = float(_sx_g.get("techo") or 0.0)
+                    except (TypeError, ValueError):
+                        break
+                    if _sx_ceil > 0 and _sx_val > _sx_ceil * SODIUM_EXCESS_GATE_RATIO:
+                        _sx_attempt = int(state.get("attempt", 1))
+                        if _sx_attempt >= MAX_ATTEMPTS:
+                            logger.warning(
+                                f"🧂 [P1-SODIUM-SUGAR-EXCESS-ON] sodio {_sx_val:.0f}mg > techo×{SODIUM_EXCESS_GATE_RATIO} "
+                                f"en intento final ({_sx_attempt}/{MAX_ATTEMPTS}) → ADVISORY (entrego el plan)."
+                            )
+                            if isinstance(plan, dict):
+                                plan["_sodium_excess_advisory_final"] = True
+                        else:
+                            logger.warning(
+                                f"🧂 [P1-SODIUM-SUGAR-EXCESS-ON] sodio {_sx_val:.0f}mg/día supera el techo OMS "
+                                f"({_sx_ceil:.0f}mg) en más de {int((SODIUM_EXCESS_GATE_RATIO - 1) * 100)}% → rechazo (retry)."
+                            )
+                            approved = False
+                            issues.append(
+                                f"SODIO EXCESIVO: {_sx_val:.0f}mg/día promedio supera el techo OMS "
+                                f"({_sx_ceil:.0f}mg) en más de {int((SODIUM_EXCESS_GATE_RATIO - 1) * 100)}%. "
+                                "Reduce embutidos/quesos salados/sal añadida y sazona con ajo, orégano, "
+                                "cebolla y limón."
+                            )
+                            severity = _severity_max(severity, "high")
+                    break
+        except Exception as _sx_e:
+            logger.warning(f"[P1-SODIUM-SUGAR-EXCESS-ON] gate falló: {type(_sx_e).__name__}: {_sx_e}")
+
+    # [P1-RECIPE-CONTRACT-GATE · 2026-07-02] Gate por contract_ratio del plan (default OFF — se
+    # enciende con datos de la serie `contract_ratio`, playbook P1-DISH-QUALITY-GATE-ON). El backstop
+    # determinista de tiempo/temp ya corrió en assemble; este gate cubre prefijos/orden/inglés.
+    if RECIPE_CONTRACT_GATE_ENABLED:
+        try:
+            _rcg = compute_dish_quality_report(plan)
+            _rcg_ratio = _rcg.get("contract_ratio")
+            if _rcg_ratio is not None and _rcg_ratio >= RECIPE_CONTRACT_GATE_RATIO:
+                _rcg_attempt = int(state.get("attempt", 1))
+                if _rcg_attempt >= MAX_ATTEMPTS:
+                    logger.warning(
+                        f"📋 [P1-RECIPE-CONTRACT-GATE] contract_ratio={_rcg_ratio:.0%} en intento final "
+                        f"({_rcg_attempt}/{MAX_ATTEMPTS}) → ADVISORY (entrego el plan)."
+                    )
+                    if isinstance(plan, dict):
+                        plan["_recipe_contract_advisory_final"] = True
+                else:
+                    logger.warning(
+                        f"📋 [P1-RECIPE-CONTRACT-GATE] {_rcg_ratio:.0%} de recetas violan el contrato de "
+                        f"pasos (≥{RECIPE_CONTRACT_GATE_RATIO:.0%}) → rechazo (retry)."
+                    )
+                    approved = False
+                    issues.append(
+                        f"{int(round(_rcg_ratio * 100))}% de las recetas violan el contrato de pasos. "
+                        "Reescribe CADA receta con los 3 pilares EN ORDEN — 'Mise en place:', "
+                        "'El Toque de Fuego:' (con tiempo Y/O temperatura concreta) y 'Montaje:' — "
+                        "en español dominicano."
+                    )
+                    severity = _severity_max(severity, "high")
+        except Exception as _rcg_e:
+            logger.warning(f"[P1-RECIPE-CONTRACT-GATE] gate falló: {type(_rcg_e).__name__}: {_rcg_e}")
 
     # [P2-SHOPPING-COMPLETENESS · 2026-06-21] Gate de lista de compras VACÍA — INDEPENDIENTE del
     # modo del coherence guard (en warn/off el guard no rechaza; este gate sí). Si el plan tiene
@@ -25502,14 +25936,32 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
                 if g.get("key") in _MICRO_SOFT_REJECT_KEYS and g.get("status") == "bajo":
                     reason, detail = "low_micros", g.get("key")
                     break
+        # 2b) [P1-MICRO-PERDAY-FLOOR · 2026-07-02] Worst-day: promedio del plan OK pero un día
+        # individual con ≥N micros accionables <ratio del piso (resumen compacto `per_day_floors`
+        # computado por el panel con cobertura cierta + exclusiones clínicas). Banner-only.
+        if not reason and MICRO_PERDAY_DEGRADE_ENABLED:
+            _pdf = _mn.get("per_day_floors")
+            if isinstance(_pdf, dict) and _pdf.get("flagged"):
+                _wd = _pdf.get("worst_day") or {}
+                reason = "micro_worst_day"
+                detail = f"día {int(_wd.get('day_index', 0)) + 1}: {','.join(_wd.get('low') or [])}"
         # 3) (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura del catálogo alta (anti falso-positivo).
+        # [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] Con el flip ON para todos, el trigger exige además que
+        # el exceso sea MATERIAL (valor > techo × MIN_RATIO, default +25%) — un rebase marginal del techo
+        # WHO no amerita banner (lección P1-COHERENCE-BANNER-NOISE: surface SOLO accionable).
         if not reason and SODIUM_SUGAR_DEGRADE_ENABLED:
             _cov = _mn.get("coverage")
             if isinstance(_cov, (int, float)) and _cov >= SODIUM_SUGAR_DEGRADE_MIN_COVERAGE:
                 for g in gaps:
                     if g.get("key") in ("sodium_mg", "free_sugars_g") and g.get("status") == "alto":
-                        reason, detail = "high_sodium_sugar", g.get("key")
-                        break
+                        try:
+                            _val_ss = float(g.get("valor") or 0.0)
+                            _ceil_ss = float(g.get("techo") or 0.0)
+                        except (TypeError, ValueError):
+                            continue
+                        if _ceil_ss > 0 and _val_ss > _ceil_ss * SODIUM_SUGAR_DEGRADE_MIN_RATIO:
+                            reason, detail = "high_sodium_sugar", g.get("key")
+                            break
         # 4) [P2-WARFARIN-VITK-CONSUME · 2026-06-19] (audit fresco P2, cluster S1) Consume el monitor de
         # consistencia de vit-K (Guard 8d): para un anticoagulante, una hoja verde MUY variable día a día
         # desestabiliza el INR (sangrado/coágulos). Marca _quality_degraded (banner, NO retry) para revisión.

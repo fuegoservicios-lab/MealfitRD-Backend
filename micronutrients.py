@@ -275,7 +275,13 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
                 "selenium_mcg": "selenium_mcg", "omega3_g": "omega3_g"}
     present = {k: 0 for k in _SRC_KEY}
     total_ings = resolved_ings = 0
+    # [P1-MICRO-PERDAY-FLOOR · 2026-07-02] Acumulación POR DÍA además del promedio del plan.
+    # El panel se evaluaba SOLO sobre el promedio (v/num_days) — un plan con varianza alta
+    # podía "cumplir" en promedio con días individuales deficitarios (asimetría vs macros,
+    # que se evalúan per-día×celda). `per_day` alimenta el resumen worst-day del reporte.
+    per_day: list = []
     for day in days:
+        day_acc = {k: 0.0 for k in acc}
         for meal in day.get("meals", []) or []:
             # [P1-MICRONUTRIENT-RAW-INGREDIENTS · 2026-06-25] Prefiere `ingredients_raw` (forma CANÓNICA
             # con gramaje explícito + nombre real del protein-closer: "20g de queso mozzarella cocido")
@@ -292,38 +298,43 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
                 if not m:
                     continue
                 resolved_ings += 1
-                acc["fiber_g"] += m.get("fiber") or 0.0
-                acc["sodium_mg"] += m.get("sodium_mg") or 0.0
-                acc["vit_d_mcg"] += m.get("vit_d_mcg") or 0.0
-                acc["calcium_mg"] += m.get("calcium_mg") or 0.0
-                acc["iron_mg"] += m.get("iron_mg") or 0.0
-                acc["b12_mcg"] += m.get("b12_mcg") or 0.0
-                acc["potassium_mg"] += m.get("potassium_mg") or 0.0
-                acc["magnesium_mg"] += m.get("magnesium_mg") or 0.0           # [P4-UNIFIED-RESOLVER]
-                acc["saturated_fat_g"] += m.get("saturated_fat_g") or 0.0     # [P4-UNIFIED-RESOLVER]
+                day_acc["fiber_g"] += m.get("fiber") or 0.0
+                day_acc["sodium_mg"] += m.get("sodium_mg") or 0.0
+                day_acc["vit_d_mcg"] += m.get("vit_d_mcg") or 0.0
+                day_acc["calcium_mg"] += m.get("calcium_mg") or 0.0
+                day_acc["iron_mg"] += m.get("iron_mg") or 0.0
+                day_acc["b12_mcg"] += m.get("b12_mcg") or 0.0
+                day_acc["potassium_mg"] += m.get("potassium_mg") or 0.0
+                day_acc["magnesium_mg"] += m.get("magnesium_mg") or 0.0           # [P4-UNIFIED-RESOLVER]
+                day_acc["saturated_fat_g"] += m.get("saturated_fat_g") or 0.0     # [P4-UNIFIED-RESOLVER]
                 # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo
-                acc["zinc_mg"] += m.get("zinc_mg") or 0.0
-                acc["folate_mcg"] += m.get("folate_mcg") or 0.0
-                acc["vit_a_mcg"] += m.get("vit_a_mcg") or 0.0
-                acc["vit_c_mg"] += m.get("vit_c_mg") or 0.0
-                acc["vit_e_mg"] += m.get("vit_e_mg") or 0.0
-                acc["vit_k_mcg"] += m.get("vit_k_mcg") or 0.0
-                acc["selenium_mcg"] += m.get("selenium_mcg") or 0.0
-                acc["omega3_g"] += m.get("omega3_g") or 0.0
+                day_acc["zinc_mg"] += m.get("zinc_mg") or 0.0
+                day_acc["folate_mcg"] += m.get("folate_mcg") or 0.0
+                day_acc["vit_a_mcg"] += m.get("vit_a_mcg") or 0.0
+                day_acc["vit_c_mg"] += m.get("vit_c_mg") or 0.0
+                day_acc["vit_e_mg"] += m.get("vit_e_mg") or 0.0
+                day_acc["vit_k_mcg"] += m.get("vit_k_mcg") or 0.0
+                day_acc["selenium_mcg"] += m.get("selenium_mcg") or 0.0
+                day_acc["omega3_g"] += m.get("omega3_g") or 0.0
                 # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] cuenta presencia NO-NULL por micro (G5).
                 for _ak, _sk in _SRC_KEY.items():
                     if m.get(_sk) is not None:
                         present[_ak] += 1
                 ing_low = str(ing).lower()
                 if any(t in ing_low for t in _ADDED_SUGAR_TERMS):
-                    acc["free_sugars_g"] += m.get("sugars_g") or 0.0
+                    day_acc["free_sugars_g"] += m.get("sugars_g") or 0.0
+        # [P1-MICRO-PERDAY-FLOOR] merge del día al acumulador del plan + snapshot per-día.
+        for _dk, _dv in day_acc.items():
+            acc[_dk] += _dv
+        per_day.append({_dk: round(_dv, 1) for _dk, _dv in day_acc.items()})
     daily = {k: round(v / num_days, 1) for k, v in acc.items()}
     coverage = round(resolved_ings / total_ings, 2) if total_ings else 0.0
     # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (G5) fracción de resueltos con dato NO-NULL por micro.
     nutrient_coverage = {k: (round(present[k] / resolved_ings, 2) if resolved_ings else 0.0)
                          for k in present}
     return {"daily": daily, "coverage": coverage, "nutrient_coverage": nutrient_coverage,
-            "resolved_ings": resolved_ings, "total_ings": total_ings, "num_days": num_days}
+            "resolved_ings": resolved_ings, "total_ings": total_ings, "num_days": num_days,
+            "per_day": per_day}  # [P1-MICRO-PERDAY-FLOOR]
 
 
 def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
@@ -528,6 +539,51 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                                      "nutriente medido en el catálogo — el valor real puede ser mayor.)")
                 gaps.append(entry)
         panel.append(entry)
+    # [P1-MICRO-PERDAY-FLOOR · 2026-07-02] Resumen worst-day: el panel de arriba evalúa el
+    # PROMEDIO del plan; aquí evaluamos cada día contra los pisos y resumimos el peor día
+    # (compacto — NO persistimos la matriz 17×N). Solo pisos con cobertura CIERTA (misma
+    # semántica que 'bajo' vs 'estimado_bajo') y solo micros accionables con comida:
+    # vit D / B12 (inalcanzables, regla de oro del panel) y vit K (consistencia INR — no
+    # nudgear hojas verdes) quedan FUERA; potasio queda fuera bajo fármaco K-elevador.
+    per_day_floors = None
+    try:
+        import os as _os_pd
+        _pd_ratio = min(1.0, max(0.1, float(_os_pd.environ.get("MEALFIT_MICRO_PERDAY_RATIO", "0.6"))))
+        _pd_min = max(1, int(float(_os_pd.environ.get("MEALFIT_MICRO_PERDAY_MIN_MICROS", "2"))))
+        _pd_days = totals.get("per_day") or []
+        _pd_excluded = {"vit_d_mcg", "b12_mcg", "vit_k_mcg"}
+        if k_elevating_med:
+            _pd_excluded.add("potassium_mg")
+        if len(_pd_days) >= 2 and coverage >= 0.6:
+            _pd_low_by_day = []
+            for _pd_vals in _pd_days:
+                _lows = []
+                for _pk, _ptgt in targets.items():
+                    if "ceiling" in _ptgt or _pk in _pd_excluded:
+                        continue
+                    if nutrient_coverage.get(_pk, coverage) < _CEILING_COVERAGE_FLOOR:
+                        continue  # cobertura por-nutriente incierta → no acusar el día
+                    try:
+                        if float(_pd_vals.get(_pk, 0.0)) < float(_ptgt["floor"]) * _pd_ratio:
+                            _lows.append(_pk)
+                    except (TypeError, ValueError):
+                        continue
+                _pd_low_by_day.append(_lows)
+            _worst_idx = max(range(len(_pd_low_by_day)), key=lambda i: len(_pd_low_by_day[i]))
+            _days_below = sum(1 for _l in _pd_low_by_day if len(_l) >= _pd_min)
+            per_day_floors = {
+                "days_evaluated": len(_pd_days),
+                "low_ratio_threshold": _pd_ratio,
+                "min_micros": _pd_min,
+                "worst_day": {
+                    "day_index": _worst_idx,
+                    "low": _pd_low_by_day[_worst_idx],
+                },
+                "days_below": _days_below,
+                "flagged": len(_pd_low_by_day[_worst_idx]) >= _pd_min,
+            }
+    except Exception:
+        per_day_floors = None
     return {
         "panel": panel,
         "gaps": gaps,
@@ -536,6 +592,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
         "total_ings": totals["total_ings"],
         "sex": "M" if str(sex or "").strip().lower() in _MALE_TERMS else "F",
         "condition_targets": condition_targets,
+        "per_day_floors": per_day_floors,  # [P1-MICRO-PERDAY-FLOOR]
         "disclaimer": ("Estimado desde el catálogo nutricional (cobertura "
                        f"{int(coverage*100)}%); NO incluye la sal añadida 'al gusto'. "
                        "Orientativo, no sustituye evaluación de un nutricionista."),

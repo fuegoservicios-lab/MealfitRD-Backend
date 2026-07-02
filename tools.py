@@ -1742,6 +1742,23 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             if aggr_30_hybrid is not None:
                 plan_data_fresh["aggregated_shopping_list_monthly"] = aggr_30_hybrid
 
+            # [P1-BUDGET-COST-SSOT · 2026-07-02] Refresco del resumen de costo +
+            # re-reconciliación de presupuesto (P1-BUDGET-RECONCILE) tras el
+            # recompute de listas del chat-modify. Fail-open.
+            if aggr_7 is not None:
+                try:
+                    from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs_cm
+                    from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr_cm
+                    _p1b_sum_cm = _p1b_ccs_cm(
+                        aggr_7, aggr_15_hybrid, aggr_30_hybrid,
+                        plan_data_fresh.get("calc_grocery_duration") or "weekly",
+                    )
+                    if _p1b_sum_cm:
+                        plan_data_fresh["shopping_cost_summary"] = _p1b_sum_cm
+                        _p1b_rbr_cm(plan_data_fresh)
+                except Exception as _p1b_cm_e:
+                    logger.debug(f"[P1-BUDGET-COST-SSOT] (chat) summary no-op: {_p1b_cm_e}")
+
             # [P1-NEXT-2 · 2026-05-11] Coherence guard tras recompute por agent.
             # `action_taken="warn_only_agent_tool"` distingue origen post-mortem.
             # Mode warn intencional — el agente ya entregó respuesta al usuario.

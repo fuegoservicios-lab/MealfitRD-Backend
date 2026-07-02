@@ -1672,3 +1672,221 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
     except Exception as e:
         logger.warning(f"[P2-BUDGET-FLOOR] validate_budget_sufficient falló ({type(e).__name__}: {e}); fail-open")
         return True, None
+
+
+# ============================================================
+# [P1-BUDGET-RECONCILE · 2026-07-02] Reconciliación costo real vs presupuesto.
+# ------------------------------------------------------------
+# Cierra el gap del audit v4: el 422 pre-stream (P2-BUDGET-FLOOR) solo valida
+# `custom` contra un MÍNIMO; el costo REAL de la lista generada nunca se
+# comparaba contra el tier/monto del formulario. Ahora, con el
+# `shopping_cost_summary` del backend (P1-BUDGET-COST-SSOT), computamos una
+# reconciliación honesta y la persistimos en `plan_data.budget_reconciliation`:
+#   - custom → referencia = monto declarado (USD→DOP via knob).
+#   - low/medium/high → banda de referencia derivada del piso escalado por
+#     metas (`min_budget_for_goals` × factor por tier, knobs MEALFIT_BUDGET_BAND_*).
+#   - unlimited → sin referencia (status "sin_limite").
+# NUNCA degrada calidad (todoterreno intacto): es honestidad + feedback.
+# La referencia se persiste junto al resultado para que recalc/updates (que no
+# tienen form_data) puedan refrescar solo el lado del costo
+# (`refresh_budget_reconciliation`). Reversible: MEALFIT_BUDGET_RECONCILE=false.
+# Tooltip-anchor: P1-BUDGET-RECONCILE. Test: test_p1_budget_intelligence.py.
+# ============================================================
+
+_BUDGET_TIER_BAND_DEFAULTS = {"low": "1.15", "medium": "1.6", "high": "2.5"}
+_BUDGET_VALID_TIERS = ("low", "medium", "high", "unlimited", "custom")
+
+
+def _budget_reconcile_enabled() -> bool:
+    return os.environ.get("MEALFIT_BUDGET_RECONCILE", "true").lower() != "false"
+
+
+def _budget_reconcile_tolerance_pct() -> float:
+    """Margen sobre la referencia antes de marcar `excedido` (default 10%)."""
+    try:
+        v = float(os.environ.get("MEALFIT_BUDGET_RECONCILE_TOL_PCT", "0.10"))
+        return min(0.5, max(0.0, v))
+    except (TypeError, ValueError):
+        return 0.10
+
+
+def _budget_tier_band_factor(tier: str) -> float | None:
+    """Factor × piso-de-metas que define la referencia de cada tier categórico.
+    `unlimited` → None (sin techo). Knobs: MEALFIT_BUDGET_BAND_{LOW,MEDIUM,HIGH}."""
+    default = _BUDGET_TIER_BAND_DEFAULTS.get(tier)
+    if default is None:
+        return None
+    try:
+        return max(1.0, float(os.environ.get(f"MEALFIT_BUDGET_BAND_{tier.upper()}", default)))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def build_budget_reference(form_data: dict) -> dict | None:
+    """Referencia persistible contra la que se compara el costo real del ciclo.
+    Devuelve None si el formulario no declaró presupuesto (fail-open)."""
+    try:
+        tier = str(form_data.get("budget") or "").strip().lower()
+        if tier not in _BUDGET_VALID_TIERS:
+            return None
+        info = min_budget_for_goals(form_data)
+        floor_rd = float(info["min_budget_dop"])
+        basis = tier
+        reference_rd: float | None = None
+        currency = str(form_data.get("budgetCurrency") or "DOP").upper()
+        if currency not in ("DOP", "USD"):
+            currency = "DOP"
+        if tier == "custom":
+            try:
+                declared = float(str(form_data.get("budgetAmount")).replace(",", "").strip())
+            except (TypeError, ValueError):
+                declared = 0.0
+            if declared > 0:
+                reference_rd = declared * _budget_usd_to_dop() if currency == "USD" else declared
+            else:
+                # custom sin monto válido: mismo fallback que build_budget_context (medium).
+                basis = "medium"
+                factor = _budget_tier_band_factor("medium") or 1.6
+                reference_rd = floor_rd * factor
+        elif tier == "unlimited":
+            reference_rd = None
+        else:
+            factor = _budget_tier_band_factor(tier)
+            reference_rd = floor_rd * factor if factor else None
+        return {
+            "tier": tier,
+            "basis": basis,
+            "currency": currency,
+            "reference_rd": round(reference_rd) if reference_rd else None,
+            "floor_rd": round(floor_rd),
+            "days": info["days"],
+            "household": info["household"],
+        }
+    except Exception as e:
+        logger.warning(f"[P1-BUDGET-RECONCILE] build_budget_reference falló ({type(e).__name__}: {e}); fail-open")
+        return None
+
+
+def reconcile_budget_with_cost(reference: dict, cost_summary: dict) -> dict | None:
+    """Cruza una referencia (de `build_budget_reference` o persistida) con el
+    `shopping_cost_summary` activo → status {dentro|cerca|excedido|sin_limite}.
+    Sin precios suficientes (cycle_total<=0) → None (mejor callar que inventar)."""
+    if not _budget_reconcile_enabled():
+        return None
+    if not isinstance(reference, dict) or not isinstance(cost_summary, dict):
+        return None
+    try:
+        active = str(cost_summary.get("active_duration") or "weekly").strip().lower()
+        duration_totals = (cost_summary.get("by_duration") or {}).get(active) or {}
+        estimated = float(duration_totals.get("cycle_total_rd") or 0.0)
+        if estimated <= 0:
+            return None
+        out = {
+            "tier": reference.get("tier"),
+            "basis": reference.get("basis") or reference.get("tier"),
+            "currency": reference.get("currency") or "DOP",
+            "reference_rd": reference.get("reference_rd"),
+            "floor_rd": reference.get("floor_rd"),
+            "days": reference.get("days"),
+            "household": reference.get("household"),
+            "active_duration": active,
+            "estimated_cycle_rd": round(estimated),
+            "items_priced": duration_totals.get("items_priced"),
+            "items_total": duration_totals.get("items_total"),
+        }
+        reference_rd = reference.get("reference_rd")
+        try:
+            reference_rd = float(reference_rd) if reference_rd else None
+        except (TypeError, ValueError):
+            reference_rd = None
+        if not reference_rd:
+            out.update({"status": "sin_limite", "ratio": None, "delta_rd": None})
+        else:
+            ratio = estimated / reference_rd
+            tol = _budget_reconcile_tolerance_pct()
+            if ratio <= 1.0:
+                status = "dentro"
+            elif ratio <= 1.0 + tol:
+                status = "cerca"
+            else:
+                status = "excedido"
+            out.update({
+                "status": status,
+                "ratio": round(ratio, 3),
+                "delta_rd": round(estimated - reference_rd),
+            })
+        from datetime import datetime, timezone
+        out["computed_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info(
+            f"💰 [P1-BUDGET-RECONCILE] tier={out['tier']} status={out['status']} "
+            f"est=RD${out['estimated_cycle_rd']} ref=RD${out.get('reference_rd')} "
+            f"ratio={out.get('ratio')} dur={active}"
+        )
+        return out
+    except Exception as e:
+        logger.warning(f"[P1-BUDGET-RECONCILE] reconcile falló ({type(e).__name__}: {e}); fail-open")
+        return None
+
+
+def compute_budget_reconciliation(form_data: dict, cost_summary: dict) -> dict | None:
+    """Path de GENERACIÓN (hay form_data): referencia fresca + costo del summary."""
+    reference = build_budget_reference(form_data)
+    if not reference:
+        return None
+    return reconcile_budget_with_cost(reference, cost_summary)
+
+
+def refresh_budget_reconciliation(plan_data: dict) -> None:
+    """Path de RECALC/UPDATES (sin form_data): reusa la referencia persistida en
+    `plan_data.budget_reconciliation` y refresca solo el lado del costo con el
+    `shopping_cost_summary` recién recomputado. No-op si falta cualquiera de
+    los dos (planes legacy). Preserva `suggestions` previas si existen."""
+    try:
+        previous = plan_data.get("budget_reconciliation")
+        cost_summary = plan_data.get("shopping_cost_summary")
+        if not isinstance(previous, dict) or not isinstance(cost_summary, dict):
+            return
+        refreshed = reconcile_budget_with_cost(previous, cost_summary)
+        if not refreshed:
+            return
+        if previous.get("suggestions") and "suggestions" not in refreshed:
+            refreshed["suggestions"] = previous["suggestions"]
+        plan_data["budget_reconciliation"] = refreshed
+    except Exception as e:
+        logger.warning(f"[P1-BUDGET-RECONCILE] refresh falló ({type(e).__name__}: {e}); no-op")
+
+
+def _budget_tight_custom_factor() -> float:
+    """Factor × piso-de-metas bajo el cual un monto `custom` se considera
+    AJUSTADO (activa las palancas de economía). Knob MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR."""
+    try:
+        v = float(os.environ.get("MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR", "1.3"))
+        return min(3.0, max(1.0, v))
+    except (TypeError, ValueError):
+        return 1.3
+
+
+def budget_prefers_economy(form_data: dict) -> bool:
+    """[P1-BUDGET-TIER-LEVERS · 2026-07-02] True si el presupuesto del formulario
+    pide ECONOMÍA de forma determinista: tier `low` ("Económico — lo básico y
+    esencial") o `custom` con monto ajustado (< piso-de-metas × factor). SSOT
+    compartido por el sorteo de pools (ai_helpers) y el cheapen-pass de assemble
+    (graph_orchestrator). Fail-open a False (sin señal → sin palanca)."""
+    try:
+        tier = str((form_data or {}).get("budget") or "").strip().lower()
+        if tier == "low":
+            return True
+        if tier != "custom":
+            return False
+        try:
+            declared = float(str(form_data.get("budgetAmount")).replace(",", "").strip())
+        except (TypeError, ValueError):
+            return False
+        if declared <= 0:
+            return False
+        currency = str(form_data.get("budgetCurrency") or "DOP").upper()
+        declared_dop = declared * _budget_usd_to_dop() if currency == "USD" else declared
+        floor_rd = float(min_budget_for_goals(form_data)["min_budget_dop"])
+        return declared_dop < floor_rd * _budget_tight_custom_factor()
+    except Exception:
+        return False
