@@ -45,6 +45,14 @@ def test_endpoints_exist_with_user_auth():
         assert "Depends(get_verified_user_id)" in body, (
             f"{route} sin get_verified_user_id — abriría lectura/escritura anónima de preferencias."
         )
+        # CRÍTICO: get_verified_user_id retorna None para anónimos (contrato
+        # P0-AUDIT-1, NO lanza) — el endpoint DEBE rechazar explícitamente.
+        # Bug real atrapado en el deploy 2026-07-02: sin este guard, GET
+        # respondía 200 vacío a anónimos y el cliente asumía persistencia server.
+        assert re.search(r"if not user_id:\s*\n\s*raise HTTPException\(status_code=40[13]", body), (
+            f"{route} no rechaza user_id=None — get_verified_user_id retorna None "
+            "para anónimos y el caller debe levantar 401/403 (fail-secure)."
+        )
         assert "_PREFS_LIMITER" in body, f"{route} sin RateLimiter propio"
         assert "verify_api_quota" not in body, (
             "preferencias = cero costo LLM → RateLimiter, NO paywall (historial-quota-exemption)."

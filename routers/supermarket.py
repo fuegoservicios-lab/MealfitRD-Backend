@@ -328,10 +328,15 @@ class BrandPreferenceIn(BaseModel):
 
 @router.get("/preferences")
 async def api_get_brand_preferences(
-    user_id: str = Depends(get_verified_user_id),
+    user_id: Optional[str] = Depends(get_verified_user_id),
     _rl: Any = Depends(_PREFS_LIMITER),
 ):
     """Preferencias de marca del usuario autenticado, con el producto hidratado."""
+    # get_verified_user_id retorna None para anónimos (contrato P0-AUDIT-1) —
+    # el caller DEBE rechazar. Sin este guard, el GET respondía 200 vacío y el
+    # cliente creería que el guest tiene persistencia server-side.
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Inicia sesión para guardar tus marcas preferidas.")
 
     def _fetch() -> Dict[str, Any]:
         rows = execute_sql_query(
@@ -360,10 +365,14 @@ async def api_get_brand_preferences(
 @router.put("/preferences")
 async def api_put_brand_preference(
     body: BrandPreferenceIn,
-    user_id: str = Depends(get_verified_user_id),
+    user_id: Optional[str] = Depends(get_verified_user_id),
     _rl: Any = Depends(_PREFS_LIMITER),
 ):
     """Upsert (o borrado con product_id=null) de la marca preferida de UN alimento."""
+    # Fail-secure (contrato P0-AUDIT-1): None = anónimo → rechazar. Los guests
+    # persisten en localStorage del cliente, jamás server-side.
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Inicia sesión para guardar tus marcas preferidas.")
     food_key = _norm_food(body.food_key)
     if not food_key:
         raise HTTPException(status_code=422, detail="food_key inválido.")
