@@ -92,6 +92,12 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ---
 
+## Supermercado RD artificial
+
+[P1-SUPERMARKET-DB · 2026-07-02] Tabla `supermarket_products` (Neon): presentaciones comprables de los +200 alimentos verificados (+variantes de marca futuras), navegable en `/supermercado` (landing, link en Footer) y editable ahí mismo con gate admin (Bearer `CRON_SECRET`, mutaciones SOLO vía [`backend/routers/supermarket.py`](backend/routers/supermarket.py) — simétrica a I6). Roadmap: conexión a lista de compras vía `master_food_name` (elegir marca de yogurt/carnes/arroz). Doc canónica (schema/endpoints/seed/roadmap): [`backend/docs/supermarket_db.md`](backend/docs/supermarket_db.md). Test ancla: [`test_p1_supermarket_db.py`](backend/tests/test_p1_supermarket_db.py).
+
+---
+
 ## Convenciones del repo
 
 - **Knobs operacionales**: env vars `MEALFIT_*` con defaults seguros, registrados en `_KNOBS_REGISTRY` (`graph_orchestrator.py`). Cambios de comportamiento que pueden necesitar revertirse sin redeploy van como knob, no como hardcode.
