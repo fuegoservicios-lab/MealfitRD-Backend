@@ -1990,6 +1990,193 @@ def _choose_egg_carton(total_eggs: float, egg_packages):
     return {"units": best[1], "count": best[2], "price": best[3], "label": best[4]}
 
 
+# ============================================================
+# [P1-SUPERMARKET-COSTING · 2026-07-02] Marca preferida del súper → costeo real.
+# ------------------------------------------------------------
+# Fase 3 de la conexión Supermercado RD ↔ lista de compras: si el usuario eligió
+# una marca/presentación en el panel "Marcas del súper" (tabla
+# `user_brand_preferences`, P1-SUPERMARKET-PREFS), el costeo de ese ítem usa ESE
+# envase (tamaño + precio de `supermarket_products`) en lugar del market_package
+# genérico. Implementación mínimamente invasiva: overlay del `market_packages`
+# del master_item con UNA entrada (la preferida) justo antes de
+# `apply_smart_market_units` → `_select_market_package` compra
+# ceil(g_total/grams) del envase elegido y `_cost_from_market` costea con su
+# precio real. El efecto en cantidades es de la MISMA clase que el redondeo por
+# envase que ya existe (P1-PKG) — el coherence guard lo tolera igual.
+#
+# Reversible sin redeploy: MEALFIT_BRAND_PREF_COSTING=false.
+# Fail-open SIEMPRE: cualquier error (DB caída, presentación no parseable, food
+# sin match) → costeo estándar sin la preferencia.
+# Tooltip-anchor: P1-SUPERMARKET-COSTING. Test: test_p1_supermarket_costing.py.
+# ============================================================
+
+def _brand_pref_costing_enabled() -> bool:
+    # [P2-1] `_env_bool` registra en `_KNOBS_REGISTRY`.
+    return _knob_env_bool("MEALFIT_BRAND_PREF_COSTING", True)
+
+
+def _norm_pref_food(value) -> str:
+    """Normalización SIMÉTRICA a routers/supermarket.py::_norm_food y al
+    foodKeyOf del frontend (minúsculas + sin acentos + espacios colapsados).
+    Las claves de `user_brand_preferences.food_key` nacen de _norm_food —
+    mantener las tres en sync."""
+    import unicodedata
+    s = unicodedata.normalize("NFD", str(value or "").strip().lower())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return " ".join(s.split())
+
+
+def _singular_pref_key(s: str) -> str:
+    """Heurística ligera es-DO (misma que routers/supermarket.py::_singular)."""
+    if len(s) > 4 and s.endswith("es"):
+        return s[:-2]
+    if len(s) > 3 and s.endswith("s"):
+        return s[:-1]
+    return s
+
+
+# Tamaño del envase desde el texto libre de `presentation`. NOTA: la "L" suelta
+# es AMBIGUA en el catálogo (PDF usa "L" para libra en produce Y litro en leche)
+# → NO se parsea (fail-open al costeo estándar). Los líquidos del catálogo con
+# marca usan "Lt"/"Ml" explícitos. El lookbehind `(?<![/\d.,])` evita que la
+# notación de carnicería "80/20 Lb" / "96/4 Lb" (ratio magro/grasa) se lea como
+# "20 Lb"/"4 Lb" — esos caen al fallback venta-por-libra (453.59 g).
+_PRES_SIZE_RX = re.compile(
+    r"(?<![/\d.,])(\d+(?:[.,]\d+)?)\s*(kg|grs?|g|onz|oz|lbs?|libras?|ml|lts?)\b",
+    re.IGNORECASE,
+)
+_PRES_UNIT_G = {
+    "kg": 1000.0, "g": 1.0, "gr": 1.0, "grs": 1.0,
+    "oz": 28.3495, "onz": 28.3495,
+    "lb": 453.592, "lbs": 453.592, "libra": 453.592, "libras": 453.592,
+    # Líquidos ≈ densidad 1 (leches/aceites 0.9-1.03 — margen aceptable de costeo).
+    "ml": 1.0, "lt": 1000.0, "lts": 1000.0,
+}
+_PRES_CONTAINER_WORDS = {
+    "funda", "lata", "paquete", "botella", "frasco", "tarro", "pote", "caja",
+    "carton", "brik", "sobre", "bandeja", "clamshell", "cubo", "barra", "tubo",
+    "pieza", "malla", "tetra",
+}
+
+
+def _parse_presentation_grams(presentation) -> float | None:
+    """'Funda 800 gr'→800 · 'Lata 15 Oz'→425.2 · '1.47 Lb'→666.8 · 'Brik 290 Ml'→290
+    · 'Botella 1 Lt'→1000 · 'Criolla Lb' (venta por libra)→453.6 · resto→None."""
+    text = str(presentation or "")
+    if not text.strip():
+        return None
+    m = _PRES_SIZE_RX.search(text)
+    if m:
+        try:
+            qty = float(m.group(1).replace(",", "."))
+        except ValueError:
+            return None
+        base = _PRES_UNIT_G.get(m.group(2).lower())
+        if base and qty > 0:
+            grams = qty * base
+            # Sanity: 1 g – 50 kg (fuera de eso = parse errado, mejor fail-open).
+            if 1.0 <= grams <= 50000.0:
+                return grams
+        return None
+    # "Lb"/"Libra" sin número = venta por libra (carnicería/produce).
+    if re.search(r"\b(lb|libra)\b", text, re.IGNORECASE):
+        return 453.592
+    return None
+
+
+def _pref_container_word(presentation) -> str:
+    """Primera palabra de la presentación si es un envase conocido; 'libra' para
+    venta-por-libra; fallback 'paquete'."""
+    text = _norm_pref_food(presentation)
+    first = text.split(" ")[0] if text else ""
+    if first in _PRES_CONTAINER_WORDS:
+        return first
+    if re.search(r"\b(lb|libra)\b", text) and not _PRES_SIZE_RX.search(text):
+        return "libra"
+    return "paquete"
+
+
+def fetch_brand_pref_packages(user_id: str) -> dict:
+    """Preferencias de marca del usuario como packages costeables:
+    {food_key_normalizado: {"grams", "price", "label", "unit"}}.
+    Doble clave: el `food_key` persistido Y el food_name del producto (por si
+    difieren). Solo productos activos con precio y presentación parseable.
+    Fail-open: {} ante cualquier error."""
+    if not user_id:
+        return {}
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT p.food_key, sp.food_name, sp.brand, sp.presentation,
+                   sp.price_rd::float8 AS price_rd
+            FROM public.user_brand_preferences p
+            JOIN public.supermarket_products sp ON sp.id = p.product_id
+            WHERE p.user_id = %s AND sp.active AND sp.price_rd IS NOT NULL
+            """,
+            (user_id,),
+            fetch_all=True,
+        ) or []
+    except Exception as exc:
+        logging.warning(f"⚠️ [P1-SUPERMARKET-COSTING] fetch prefs falló (fail-open): {exc}")
+        return {}
+    out: dict = {}
+    for r in rows:
+        grams = _parse_presentation_grams(r.get("presentation"))
+        if not grams:
+            logging.info(
+                f"🏷️ [P1-SUPERMARKET-COSTING] pref '{r.get('food_key')}' sin tamaño parseable "
+                f"('{r.get('presentation')}') → costeo estándar para ese ítem."
+            )
+            continue
+        try:
+            price = float(r.get("price_rd"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        pres = str(r.get("presentation") or "").strip()
+        brand = (r.get("brand") or "").strip()
+        # Label para el display "(...)": tamaño + marca — ej. "800 gr · La Sanjuanera".
+        size_part = pres.split(" ", 1)[1] if (
+            pres and _norm_pref_food(pres).split(" ")[0] in _PRES_CONTAINER_WORDS and " " in pres
+        ) else pres
+        label = f"{size_part} · {brand}" if brand else size_part
+        pkg = {
+            "grams": grams,
+            "price": price,
+            "label": label.strip(" ·"),
+            "unit": _pref_container_word(pres),
+        }
+        for key in {_norm_pref_food(r.get("food_key")), _norm_pref_food(r.get("food_name"))}:
+            if key:
+                out.setdefault(key, pkg)
+    return out
+
+
+def _resolve_brand_pref(name: str, prefs: dict):
+    """Resuelve el nombre de un ítem del plan contra las preferencias — misma
+    escalera que POST /api/supermarket/match: exacto → singular → contención
+    word-boundary bidireccional (padding con espacios: 'sal' NO matchea
+    'salsa'). Empate → la clave más larga (más específica)."""
+    if not prefs:
+        return None
+    key = _norm_pref_food(name)
+    if not key:
+        return None
+    for probe in (key, _singular_pref_key(key)):
+        if probe in prefs:
+            return prefs[probe]
+    if len(key) < 4:
+        return None
+    padded = f" {key} "
+    best_k = None
+    for k in prefs:
+        if len(k) >= 4 and (f" {k} " in padded or f" {key} " in f" {k} "):
+            if best_k is None or len(k) > len(best_k):
+                best_k = k
+    return prefs[best_k] if best_k else None
+
+
 def to_unicode_fraction(frac_str: str) -> str:
     mapping = {"1/4": "¼", "1/2": "½", "3/4": "¾"}
     return mapping.get(frac_str, frac_str)
@@ -5889,7 +6076,7 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None):
     # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
     # inicio de cada run del aggregator. Los caps que se apliquen durante
     # este run (P3-HERB-CAP, P5-VEG-CAP, P6-LEGUMES-DRY-CAP, P6-EGGS-AGGREGATE-CAP,
@@ -8053,6 +8240,24 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if _should_ignore_shopping(name):
             continue
 
+        # [P1-SUPERMARKET-COSTING · 2026-07-02] Overlay de la marca preferida:
+        # si el usuario eligió marca/presentación para este alimento, su envase
+        # (tamaño+precio del súper) REEMPLAZA los market_packages del master —
+        # `_select_market_package` comprará N de ESE envase y el costo sale de
+        # su precio real. Copia superficial del master_item para no mutar el
+        # cache global. Sin preferencia (o knob off) → comportamiento idéntico.
+        if brand_prefs:
+            _pref_pkg = _resolve_brand_pref(name, brand_prefs)
+            if _pref_pkg:
+                master_item = dict(master_item)
+                master_item["market_packages"] = [_pref_pkg]
+                # El path por packages exige container+peso — completarlos con
+                # los del envase elegido cuando el master no los tenga.
+                if not master_item.get("market_container"):
+                    master_item["market_container"] = _pref_pkg.get("unit") or "paquete"
+                if not master_item.get("container_weight_g"):
+                    master_item["container_weight_g"] = _pref_pkg["grams"]
+
         weight_in_lbs = 0.0
         has_weight = False
         cat = master_item.get("category") or "Otros"
@@ -8462,6 +8667,18 @@ def get_shopping_list_delta(
     `consumed_meals_since` — produciendo deltas inconsistentes que el
     frontend muestra al usuario al cambiar `groceryDuration`.
     """
+    # [P1-SUPERMARKET-COSTING · 2026-07-02] Marca preferida del usuario → costeo
+    # con el envase elegido. Fetch UNA vez por run (todas las superficies —
+    # generación, recalc, chat, crons — pasan por este cuello). Guests/errores →
+    # None (fail-open, costeo estándar). Knob: MEALFIT_BRAND_PREF_COSTING.
+    brand_prefs = None
+    if _brand_pref_costing_enabled():
+        try:
+            brand_prefs = fetch_brand_pref_packages(user_id) or None
+        except Exception as _bp_exc:
+            logging.warning(f"⚠️ [P1-SUPERMARKET-COSTING] prefs no disponibles (fail-open): {_bp_exc}")
+            brand_prefs = None
+
     all_ingredients = []
     days = plan_result.get("days", [])
     if not days and plan_result.get("meals"):
@@ -8563,7 +8780,7 @@ def get_shopping_list_delta(
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
         
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs)
     
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
     urgent_items = plan_result.get("_pantry_supplement_required", [])
