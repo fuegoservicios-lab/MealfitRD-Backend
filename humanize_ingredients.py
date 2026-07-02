@@ -316,7 +316,10 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                     ing_clean = _collapse_double_fraction(ing) if INGREDIENT_DOUBLE_FRACTION_FIX else ing
                     humanized = humanize_ingredient(ing_clean)
                     humanized_ingredients.append(humanized)
-                meal["ingredients"] = humanized_ingredients
+                # [P2-DISPLAY-FRACTIONS · 2026-07-01] (batch P1-DISH-REALISM-BATCH) pulido final de
+                # display: "0.5 papa"→"½ papa", "1.75 cdta"→"1¾ cdta", "1 cdas"→"1 cda", "1 tallos"→
+                # "1 tallo". Display-only (ingredients_raw intacto para compras).
+                meal["ingredients"] = [_prettify_quantity_display(h) for h in humanized_ingredients]
                 # [P2-STEP-HOUSEHOLD-SYNC · 2026-07-01] armoniza las menciones de los PASOS con la
                 # medida casera recién aplicada a la lista (ver docstring del helper).
                 try:
@@ -324,6 +327,48 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                 except Exception:
                     pass
     return plan_result
+
+
+# [P2-DISPLAY-FRACTIONS · 2026-07-01] unidades/sustantivos que se singularizan tras "1 " (curado,
+# anti-falso-positivo: nada de despluralizar palabras arbitrarias).
+_DISPLAY_SINGULAR = {
+    "cdas": "cda", "cdtas": "cdta", "tazas": "taza", "tallos": "tallo", "rebanadas": "rebanada",
+    "hojas": "hoja", "dientes": "diente", "latas": "lata", "paquetes": "paquete", "unidades": "unidad",
+    "lonjas": "lonja", "cucharadas": "cucharada", "cucharaditas": "cucharadita",
+}
+_DISPLAY_LEAD_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(\S+)(.*)$")
+
+
+def _prettify_quantity_display(s: str) -> str:
+    """[P2-DISPLAY-FRACTIONS · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Pulido cosmético del lead:
+    (a) decimales de cuarto (0.25/0.5/0.75/1.5/1.75...) → fracción unicode vía number_to_fraction_str
+    ("0.5 papa mediana"→"½ papa mediana", "1.75 cdta"→"1¾ cdta"); (b) concordancia "1 <plural>" →
+    "1 <singular>" para el set curado ("1 cdas de aceite"→"1 cda de aceite"). Display-only, fail-safe
+    (cualquier duda → string intacto). NO toca strings que ya llevan fracción unicode."""
+    try:
+        m = _DISPLAY_LEAD_RE.match(str(s))
+        if not m:
+            return s
+        qty_str, word, rest = m.group(1), m.group(2), m.group(3)
+        qty = float(qty_str.replace(",", "."))
+        frac_part = qty - int(qty)
+        out_qty = qty_str
+        if 0 < qty < 10 and (abs(frac_part - 0.25) < 1e-6 or abs(frac_part - 0.5) < 1e-6
+                             or abs(frac_part - 0.75) < 1e-6):
+            try:
+                pretty = number_to_fraction_str(qty)
+                if pretty:
+                    out_qty = pretty
+            except Exception:
+                pass
+        out_word = word
+        if abs(qty - 1.0) < 1e-6 and word.lower() in _DISPLAY_SINGULAR:
+            out_word = _DISPLAY_SINGULAR[word.lower()]
+        if out_qty == qty_str and out_word == word:
+            return s
+        return f"{out_qty} {out_word}{rest}"
+    except Exception:
+        return s
 
 
 # Captura del alimento ACOTADA a ≤3 palabras con lookahead de conectores (y/con/para/hasta/en/o) →

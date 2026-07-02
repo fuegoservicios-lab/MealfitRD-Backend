@@ -9180,6 +9180,28 @@ PROTEIN_CLOSER_MIN_PROTEIN_G = _env_float("MEALFIT_PROTEIN_CLOSER_MIN_PROTEIN_G"
 # bolt-on. Clamp ≤2×, respeta headroom calórico. Si no hay proteína escalable → cae al pool/append actual. Rollback:
 # MEALFIT_PROTEIN_CLOSER_SCALE_FIRST=false. tooltip-anchor: P3-PROTEIN-CLOSER-SCALE-FIRST
 PROTEIN_CLOSER_SCALE_FIRST = _env_bool("MEALFIT_PROTEIN_CLOSER_SCALE_FIRST", True)
+# [P1-CLOSER-COOKABLE-MIN · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH) Piso de
+# porción COCINABLE para lo que el closer PEGA como ingrediente nuevo. El bypass de FASE A
+# (enforce_min_threshold=False, piso 10g) producía "10g de pechuga de pollo cocido" + un paso entero
+# instruyendo cocinarlo a la plancha — un disparate culinario que cierra ~2-3g de proteína. Bajo este piso,
+# el add se SALTA (la banda per-macro tolera ese residuo; el piso se cubre donde haya espacio real).
+CLOSER_COOKABLE_MIN_G = _env_int("MEALFIT_CLOSER_COOKABLE_MIN_G", 40, validator=lambda v: 10 <= v <= 120)
+# [P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH) Techos de
+# porción REALISTA per-ingrediente post-sizing: el solver/closers escalan un ingrediente hasta su clamp
+# matemático sin noción de plato servible → "505g de calamar", "1.75 taza de ají morrón" para 1 huevo,
+# "1.5 taza de perejil" (¡guarnición!). Cuadra en macros pero nadie se lo come. El cap recorta al techo por
+# clase + truth-up; el reparador de proteína post-caps (FASE A) y el carb-floor re-cierran redistribuyendo.
+PORTION_REALISM_CAP_ENABLED = _env_bool("MEALFIT_PORTION_REALISM_CAP", True)
+PORTION_CAP_PROTEIN_G = _env_int("MEALFIT_PORTION_CAP_PROTEIN_G", 300, validator=lambda v: 150 <= v <= 600)
+# [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) espejo del veg-guard para CARBS fantasma:
+# "Revoltillo con Avena" cuyos pasos cocinan avena que NO está en ingredients[] (no se cuenta ni se compra).
+# Solo carbs slot-neutros curados (avena/casabe/batata/yuca) — arroz/pasta EXCLUIDOS (slot-sensitivos: el
+# night-rice autofix y el gate de desayuno mandan). Porción modesta + truth-up; la banda re-mide en review.
+RECIPE_STEP_CARB_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_CARB_GUARD", True)
+# [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] (batch P1-DISH-REALISM-BATCH) "15 g de queso" + "40 g de
+# queso" como líneas separadas (LLM + closer) → una sola línea sumada. Conservador: solo gramos + mismo
+# nombre EXACTO normalizado; lockstep con ingredients_raw o no toca.
+INGREDIENT_LINE_CONSOLIDATE_ENABLED = _env_bool("MEALFIT_INGREDIENT_LINE_CONSOLIDATE", True)
 # [P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura, auditoría workflow) Re-cierre FINAL del piso de
 # proteína DESPUÉS de los caps clínicos. Raíz del déficit recurrente (64g/80g): el closer del motor corre PRE-cap;
 # los caps DM2/bariátrica recortan lácteos (queso=proteína) y recuperan kcal escalando carbos/veg → el % de
@@ -12573,8 +12595,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _cur_cal = _meal_macro_num(meal.get("cals"))
             _head = slot_cal_target - _cur_cal
             grams = min(grams, int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
-            if grams < 10:
-                return 0  # sin headroom calórico → no añadir aquí (el piso se cubre en otra comida con espacio)
+            # [P1-CLOSER-COOKABLE-MIN · 2026-07-01] antes `< 10`: un headroom que solo permite 10-39g
+            # produce un add no-cocinable ("10g de pechuga" + paso dedicado). Bajo el piso cocinable →
+            # no añadir aquí (el residuo de proteína lo tolera la banda / se cubre en otra comida).
+            if grams < CLOSER_COOKABLE_MIN_G:
+                return 0
         # [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] No PEGAR proteína TRIVIAL como ingrediente extra (10g camarón
         # de relleno) — coherencia en la generación normal. PERO el reparador del PISO de proteína (FASE A) pasa
         # enforce_min_threshold=False: es prioridad CLÍNICA cumplir el piso (≥90% de 80g), y bloquear sus cierres
@@ -12583,7 +12608,12 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         _p_contrib = grams * (float(getattr(chosen, "protein", 0) or 0) / 100.0)
         if enforce_min_threshold and (grams < PROTEIN_CLOSER_MIN_GRAMS or _p_contrib < PROTEIN_CLOSER_MIN_PROTEIN_G):
             return 0
-        grams = max((PROTEIN_CLOSER_MIN_GRAMS if enforce_min_threshold else 10), min(grams, max_add_g))
+        # [P1-CLOSER-COOKABLE-MIN · 2026-07-01] El bypass de FASE A (enforce_min_threshold=False) floor-eaba
+        # a 10g → "10g de pechuga cocido" persistido como ingrediente + un paso entero para cocinarlo. Todo
+        # add que SÍ procede se SUBE al piso COCINABLE (40g servibles > 10g absurdos; el leve overshoot de
+        # proteína lo tolera la banda y el reconcile aguas abajo). El caso sin-headroom ya retornó 0 arriba
+        # (nunca se infla por encima del techo calórico del slot). tooltip-anchor: P1-CLOSER-COOKABLE-MIN
+        grams = max(CLOSER_COOKABLE_MIN_G, min(grams, max_add_g))
         f = grams / 100.0
         nm = str(chosen.name).lower()
         # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] No añadir " cocido" a un alimento que YA viene cocido (enlatado):
@@ -15819,6 +15849,19 @@ _ING_LEAD_QTY_RE = _re.compile(
     r"^\s*(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s*(?:de\s+|del\s+)?"
     r"(?P<food>.+)$", _re.I)
 
+# [P2-QTYSYNC-COUNT-NOUNS · 2026-07-01] (batch P1-DISH-REALISM-BATCH) sustantivos CONTABLES curados para
+# el 2º pase del qty-sync: noun normalizado → (display singular, display plural, patrón regex que matchea
+# ambas formas con/sin acento). Set estrecho a propósito (anti-falso-positivo).
+_QTYSYNC_COUNT_NOUNS = {
+    "huevo": ("huevo", "huevos", r"huevos?"),
+    "clara": ("clara", "claras", r"claras?"),
+    "papa": ("papa", "papas", r"papas?"),
+    "platano": ("plátano", "plátanos", r"pl[aá]tanos?"),
+    "guineo": ("guineo", "guineos", r"guineos?"),
+    "mandarina": ("mandarina", "mandarinas", r"mandarinas?"),
+    "aguacate": ("aguacate", "aguacates", r"aguacates?"),
+}
+
 
 def _sync_recipe_step_quantities(meal: dict) -> int:
     """[P1-RECIPE-QTY-SYNC · 2026-07-01] (audit recetas P1-A) Re-sincroniza las CANTIDADES mencionadas en los
@@ -15881,6 +15924,54 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                 return mm.group(0)
 
             new_steps.append(_STEP_QTY_MENTION_RE.sub(_sub, step))
+        # [P2-QTYSYNC-COUNT-NOUNS · 2026-07-01] (batch P1-DISH-REALISM-BATCH) El pase de arriba solo cubre
+        # "<qty> <unit> de <food>" → una mención COUNT sin unidad ("batir los 3 huevos" con "1 huevo entero"
+        # en ingredients) quedaba sin sincronizar y el usuario cocinaba el triple. Segundo pase para un set
+        # CURADO de sustantivos contables (huevo/clara/papa/plátano...) con concordancia gramatical
+        # (artículo + singular/plural). Conservador: solo reescribe si el conteo del paso ≠ el del
+        # ingrediente y el conteo del ingrediente es ENTERO (0.5 papa → no tocar texto).
+        try:
+            _count_map = {}
+            _count_amb = set()
+            for ing in ings:
+                m_cn = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s+([a-zñ]+)", _sa(str(ing).lower()))
+                if not m_cn:
+                    continue
+                _noun = m_cn.group(2).rstrip("s")
+                if _noun not in _QTYSYNC_COUNT_NOUNS:
+                    continue
+                _cnt = float(m_cn.group(1).replace(",", "."))
+                if _cnt != int(_cnt):
+                    continue  # "0.5 papa" → no reescribir texto con fracciones
+                if _noun in _count_map:
+                    _count_amb.add(_noun)
+                    continue
+                _count_map[_noun] = int(_cnt)
+            for _noun in _count_amb:
+                _count_map.pop(_noun, None)
+            if _count_map:
+                _steps2 = []
+                for step in new_steps:
+                    if not isinstance(step, str) or _is_recipe_safety_note_step(step):
+                        _steps2.append(step)
+                        continue
+                    s2 = step
+                    for _noun, _cnt in _count_map.items():
+                        _sing, _plur, _pat = _QTYSYNC_COUNT_NOUNS[_noun]
+
+                        def _sub_cnt(mm):
+                            nonlocal fixed
+                            if int(mm.group(1)) == _cnt:
+                                return mm.group(0)
+                            fixed += 1
+                            return f"{_cnt} {_sing if _cnt == 1 else _plur}"
+
+                        s2 = _re.sub(rf"\b(?:l[oa]s\s+)?(\d+)\s+(?:{_pat})\b",
+                                     _sub_cnt, s2, flags=_re.IGNORECASE)
+                    _steps2.append(s2)
+                new_steps = _steps2
+        except Exception:
+            pass
         if fixed:
             meal["recipe"] = new_steps
         return fixed
@@ -15927,6 +16018,37 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                     pass
     except Exception as _e0:
         logger.warning(f"[P1-COHERENCE-FINALIZE] veg-guard no-op: {type(_e0).__name__}: {_e0}")
+    # [P2-STEP-CARB-GHOST + P1-PORTION-REALISM-CAP + P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01]
+    # (batch P1-DISH-REALISM-BATCH) paridad del persist boundary: carbs fantasma materializados,
+    # techo de porción realista y fusión de líneas duplicadas también en los paths degradado/partial/
+    # SSE-fallback/chunk. Todos idempotentes; truth-up incluido en el cap / caller.
+    try:
+        if RECIPE_STEP_CARB_GUARD_ENABLED:
+            _ncgp = _add_missing_recipe_step_carbs(days, db=db, allergies=allergies)
+            if _ncgp:
+                total += _ncgp; parts.append(f"carb_ghost={_ncgp}")
+                try:
+                    if db is None:
+                        from nutrition_db import IngredientNutritionDB as _CGDB
+                        db = _CGDB()
+                    for _d in days or []:
+                        for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                            if isinstance(_m, dict):
+                                try:
+                                    _truth_up_meal_macros_from_strings(_m, db)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+    except Exception as _ecgp:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] carb-ghost no-op: {type(_ecgp).__name__}: {_ecgp}")
+    try:
+        if PORTION_REALISM_CAP_ENABLED:
+            _nprp = _cap_unrealistic_portions(days, db=db)
+            if _nprp:
+                total += _nprp; parts.append(f"realism_cap={_nprp}")
+    except Exception as _eprp:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] realism-cap no-op: {type(_eprp).__name__}: {_eprp}")
     # [P2-QTY-PRESENCE-PERSIST · 2026-07-01] (audit v2 recetas GAP-7, batch P2-AUDIT-V2-BATCH) El persist
     # boundary omitía `_ensure_ingredient_quantities` (corría solo en assemble + finalizador de updates) →
     # un chunk degradado/partial/SSE-fallback podía persistir "Pollo" sin cantidad líder = no cocinable +
@@ -15959,6 +16081,16 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                 total += _n; parts.append(f"leaf={_n}")
     except Exception as _e2:
         logger.warning(f"[P1-COHERENCE-FINALIZE] leaf-cap no-op: {type(_e2).__name__}: {_e2}")
+    # [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] DESPUÉS de slice-grams (las "lonjas de queso" ya son
+    # líneas en gramos → la fusión las ve en la MISMA pasada; correrlo antes rompía la idempotencia entre
+    # pasadas) y ANTES del quantize (la línea fusionada entra al redondeo).
+    try:
+        if INGREDIENT_LINE_CONSOLIDATE_ENABLED:
+            _ndup = _consolidate_duplicate_gram_lines(days)
+            if _ndup:
+                total += _ndup; parts.append(f"consolidate={_ndup}")
+    except Exception as _edup:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] consolidate no-op: {type(_edup).__name__}: {_edup}")
     try:
         if ASSEMBLE_FINAL_QUANTIZE:
             from nutrition_db import IngredientNutritionDB as _QDB
@@ -16073,6 +16205,26 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                         pass
         except Exception as _ev:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] veg-guard no-op: {type(_ev).__name__}: {_ev}")
+        # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) carbs fantasma también en updates
+        # (mismo skip pantry-strict que el veg-guard: materializar añade comida que el usuario no tiene).
+        try:
+            if RECIPE_STEP_CARB_GUARD_ENABLED and not pantry_strict:
+                _ncg = _add_missing_recipe_step_carbs(_wrap, db=db, allergies=allergies)
+                if _ncg:
+                    total += _ncg
+                    try:
+                        _truth_up_meal_macros_from_strings(meal, db)
+                    except Exception:
+                        pass
+        except Exception as _ecg:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] carb-ghost no-op: {type(_ecg).__name__}: {_ecg}")
+        # [P1-PORTION-REALISM-CAP · 2026-07-01] techo de porción realista también en updates (un swap/modify
+        # con proteína inflada al clamp o taza absurda de aromático no debe persistirse).
+        try:
+            if PORTION_REALISM_CAP_ENABLED:
+                total += _cap_unrealistic_portions(_wrap, db=db)
+        except Exception as _epr:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] realism-cap no-op: {type(_epr).__name__}: {_epr}")
         try:
             total += _recipe_slice_units_to_grams(_wrap, db)
         except Exception as _es:
@@ -16081,6 +16233,13 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             total += _cap_leaf_volume_in_meals(_wrap, db)
         except Exception as _el:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] leaf-cap no-op: {type(_el).__name__}: {_el}")
+        # [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] fusiona líneas duplicadas del mismo alimento.
+        # DESPUÉS de slice-grams (las "lonjas" ya son gramos → idempotente entre pasadas).
+        try:
+            if INGREDIENT_LINE_CONSOLIDATE_ENABLED:
+                total += _consolidate_duplicate_gram_lines(_wrap)
+        except Exception as _edp:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] consolidate no-op: {type(_edp).__name__}: {_edp}")
         # [P2-SLOT-CORRECTOR · 2026-06-29] (audit objetivo · P2-10) Corrector DETERMINISTA de slot en updates:
         # un swap/modify/regen que entrega "arroz simple" en la CENA tras agotar los retries del slot-backstop se
         # corrige a tubérculo nocturno (batata/yuca/casabe) — ingrediente + NOMBRE + pasos de receta + macros — en
@@ -16692,6 +16851,212 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
         return added_kcal
     except Exception as _dk_e:
         logger.warning(f"[P1-BARIATRIC-DAY-KCAL-FLOOR] falló (no bloquea): {type(_dk_e).__name__}: {_dk_e}")
+        return 0
+
+
+# [P1-PORTION-REALISM-CAP · 2026-07-01] Techos por clase. Tazas: aromáticos ≤1 taza (cebolla/ají para un
+# revoltillo de 1 huevo NO son plato principal), hierbas ≤¼ taza (perejil/cilantro son GUARNICIÓN — el caso
+# "1.5 taza de perejil" de la Ropa Vieja). Conteos: víveres/frutas count-based con techos servibles.
+_REALISM_AROMATIC_TOKENS = ("cebolla", "aji", "pimiento", "morron", "puerro", "apio")
+_REALISM_HERB_TOKENS = ("perejil", "cilantro", "cilantrico", "albahaca")
+_REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0))
+_REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0, "clara": 8.0,
+                       "mandarina": 3.0, "aguacate": 1.0, "guineo": 2.0}
+
+
+def _cap_unrealistic_portions(days, db=None) -> int:
+    """[P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH)
+    Techo de porción REALISTA per-ingrediente, post-sizing. El solver escala el ingrediente dominante
+    hasta su clamp matemático para clavar el target ("505g de calamar" = P71 en un almuerzo, flag
+    `_solver_clamp_saturated`) — banda perfecta, plato no-servible. Recorta al techo por clase
+    (proteína en gramos ≤ PORTION_CAP_PROTEIN_G; aromáticos/hierbas en tazas; víveres/huevos por
+    conteo) reescalando el STRING (lockstep ingredients_raw) + truth-up del meal → los números vuelven
+    a ser físicos y HONESTOS. El déficit que el recorte abre lo re-cierran los closers aguas abajo
+    (FASE A proteína, carb-floor) REDISTRIBUYENDO en vez de inflar un solo alimento; si no alcanzan,
+    la banda per-macro lo mide y el gate decide (retry con feedback > plato absurdo). Idempotente
+    (techo), fail-safe, muta in-place. Marca `_portion_realism_capped`. Devuelve nº de recortes.
+    tooltip-anchor: P1-PORTION-REALISM-CAP"""
+    if not PORTION_REALISM_CAP_ENABLED or not days:
+        return 0
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        from constants import strip_accents as _sa
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        capped = 0
+        for _d in days:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                raw = meal.get("ingredients_raw")
+                _lockstep = isinstance(raw, list) and len(raw) == len(ings)
+                _meal_touched = False
+                for idx, ing in enumerate(ings):
+                    s = str(ing)
+                    il = _sa(s.lower())
+                    factor = None
+                    # 1) proteína en gramos sobre el techo (505g calamar → 300g)
+                    m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                    if m_g:
+                        cur_g = float(m_g.group(1).replace(",", "."))
+                        if cur_g > PORTION_CAP_PROTEIN_G and _ingredient_macro_group(s, db) == "protein":
+                            factor = PORTION_CAP_PROTEIN_G / cur_g
+                    # 2) tazas de aromáticos/hierbas sobre el techo
+                    if factor is None:
+                        m_c = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*tazas?\b", il)
+                        if m_c:
+                            cur_c = float(m_c.group(1).replace(",", "."))
+                            for _toks, _cap in _REALISM_CUP_CAPS:
+                                if any(_re.search(r"\b" + t, il) for t in _toks):
+                                    if cur_c > _cap:
+                                        factor = _cap / cur_c
+                                    break
+                    # 3) conteos servibles (3.5 papas → 3; 8 claras ok; 5 huevos → 4)
+                    if factor is None:
+                        m_n = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s+([a-zñ]+)", il)
+                        if m_n:
+                            _noun = m_n.group(2).rstrip("s")
+                            _cap_n = _REALISM_COUNT_CAPS.get(_noun)
+                            if _cap_n:
+                                cur_n = float(m_n.group(1).replace(",", "."))
+                                if cur_n > _cap_n:
+                                    factor = _cap_n / cur_n
+                    if factor is not None and factor < 0.999:
+                        try:
+                            _new = _resc(s, factor)
+                            if _new and _new != s:
+                                ings[idx] = _new
+                                if _lockstep:
+                                    raw[idx] = _resc(str(raw[idx]), factor)
+                                capped += 1
+                                _meal_touched = True
+                        except Exception:
+                            continue
+                if _meal_touched:
+                    try:
+                        _truth_up_meal_macros_from_strings(meal, db)
+                    except Exception:
+                        pass
+                    meal["_portion_realism_capped"] = True
+        return capped
+    except Exception as _prc_e:
+        logger.warning(f"[P1-PORTION-REALISM-CAP] cap no-op: {type(_prc_e).__name__}: {_prc_e}")
+        return 0
+
+
+# [P2-STEP-CARB-GHOST · 2026-07-01] carbs slot-neutros curados: (token, línea a materializar, excludes).
+# Arroz/pasta EXCLUIDOS a propósito (slot-sensitivos). Porciones modestas — el truth-up las cuenta y la
+# banda re-mide en review.
+_STEP_CARB_GHOSTS = (
+    ("avena", "40g de avena en hojuelas", ("harina de avena", "leche de avena", "agua de avena")),
+    ("casabe", "30g de casabe", ()),
+    ("batata", "150g de batata", ("harina de batata",)),
+    ("yuca", "150g de yuca", ("harina de yuca", "almidon de yuca", "casabe")),
+)
+
+
+def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
+    """[P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Espejo del veg-guard para CARBS
+    fantasma: "Revoltillo Criollo con Queso y AVENA" cuyos pasos dicen "cocinar la avena" y "servir junto
+    a la avena cremosa" pero avena NO está en ingredients[] → ni se cuenta ni se compra (receta rota). El
+    veg-guard solo materializa vegetales (≤60 kcal) y el name-fix solo proteínas fantasma — los carbs se
+    escapaban. Materializa una porción MODESTA del carb (curado, slot-neutro) cuando el token aparece en
+    el NOMBRE o en ≥1 paso de cocción y no hay exclude ("harina de avena"). Truth-up en el caller (patrón
+    veg-guard). Filtro de alérgenos vía SSOT scan sobre la línea candidata (avena/gluten). Idempotente.
+    tooltip-anchor: P2-STEP-CARB-GHOST"""
+    if not RECIPE_STEP_CARB_GUARD_ENABLED or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa
+        added = 0
+        for _d in days:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                rec = meal.get("recipe") if isinstance(meal.get("recipe"), list) else []
+                hay = _sa((str(meal.get("name") or "") + " "
+                           + " ".join(str(s) for s in rec if not _is_recipe_safety_note_step(s))).lower())
+                ing_hay = _sa(" ".join(str(i) for i in ings).lower())
+                for token, line, excludes in _STEP_CARB_GHOSTS:
+                    if not _re.search(r"\b" + token, hay):
+                        continue
+                    if _re.search(r"\b" + token, ing_hay):
+                        continue  # ya está en ingredientes
+                    if any(ex in hay or ex in ing_hay for ex in excludes):
+                        continue
+                    if allergies:
+                        try:
+                            if _scan_allergen_violations({"days": [{"meals": [{"ingredients": [line]}]}]},
+                                                         allergies):
+                                continue  # el carb candidato viola una alergia declarada (avena→gluten)
+                        except Exception:
+                            continue  # scan falló → conservador: no materializar
+                    ings.append(line)
+                    if isinstance(meal.get("ingredients_raw"), list):
+                        meal["ingredients_raw"].append(line)
+                    added += 1
+        return added
+    except Exception as _cg_e:
+        logger.warning(f"[P2-STEP-CARB-GHOST] guard no-op: {type(_cg_e).__name__}: {_cg_e}")
+        return 0
+
+
+def _consolidate_duplicate_gram_lines(days) -> int:
+    """[P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Fusiona líneas de
+    ingredientes DUPLICADAS en gramos con el MISMO nombre normalizado ("15 g de queso" + "40 g de queso"
+    → "55g de queso") — el patrón LLM + closer que dejaba dos líneas del mismo alimento. Conservador:
+    solo lead en gramos y nombre EXACTO post-normalización ("queso" ≠ "queso fresco"). Macros del meal
+    intactos (misma suma). Lockstep: solo consolida si ingredients_raw alinea 1:1 (o no existe); si no,
+    no toca (evita desync con la lista de compras). Idempotente. tooltip-anchor: P2-INGREDIENT-LINE-CONSOLIDATE"""
+    if not INGREDIENT_LINE_CONSOLIDATE_ENABLED or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa
+        _lead = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\s+(?:de\s+)?(.+?)\s*$", _re.IGNORECASE)
+        merged = 0
+        for _d in days:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list) or len(ings) < 2:
+                    continue
+                raw = meal.get("ingredients_raw")
+                if isinstance(raw, list) and len(raw) != len(ings):
+                    continue  # desalineado → no tocar
+                groups = {}
+                for idx, ing in enumerate(ings):
+                    m = _lead.match(str(ing))
+                    if m:
+                        groups.setdefault(_sa(m.group(2).strip().lower()), []).append(
+                            (idx, float(m.group(1).replace(",", "."))))
+                drop = set()
+                for key, entries in groups.items():
+                    if len(entries) < 2:
+                        continue
+                    total = sum(g for _, g in entries)
+                    first_idx = entries[0][0]
+                    food_txt = _lead.match(str(ings[first_idx])).group(2).strip()
+                    new_line = f"{int(round(total))}g de {food_txt}"
+                    ings[first_idx] = new_line
+                    if isinstance(raw, list):
+                        raw[first_idx] = new_line
+                    drop.update(idx for idx, _ in entries[1:])
+                    merged += len(entries) - 1
+                if drop:
+                    meal["ingredients"] = [x for i, x in enumerate(ings) if i not in drop]
+                    if isinstance(raw, list):
+                        meal["ingredients_raw"] = [x for i, x in enumerate(raw) if i not in drop]
+        return merged
+    except Exception as _cons_e:
+        logger.warning(f"[P2-INGREDIENT-LINE-CONSOLIDATE] no-op: {type(_cons_e).__name__}: {_cons_e}")
         return 0
 
 
@@ -17894,6 +18259,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _rsv:
             logger.warning(f"[P1-RECIPE-STEP-INGREDIENT-COHERENCE] guard falló (no bloquea): {type(_rsv).__name__}: {_rsv}")
 
+    # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Carbs fantasma en nombre/pasos
+    # (avena del "Revoltillo con Avena") → materializar ANTES del engine (mismo racional que el veg-guard:
+    # entran a allergen scan + sizing + shopping + coherence).
+    if RECIPE_STEP_CARB_GUARD_ENABLED:
+        try:
+            _cg_added = _add_missing_recipe_step_carbs(days, allergies=form_data.get("allergies"))
+            if _cg_added:
+                logger.info(f"🌾 [P2-STEP-CARB-GHOST] {_cg_added} carb(s) fantasma de nombre/pasos "
+                            f"materializado(s) en ingredients[] (entran a compras + macros).")
+        except Exception as _cge:
+            logger.warning(f"[P2-STEP-CARB-GHOST] guard en assemble no-op: {type(_cge).__name__}: {_cge}")
+
     # [P2-QTY-PRESENCE-GUARD · 2026-06-29] (audit objetivo · P2-5) ANTES del macro engine: un alimento verificado
     # sin cantidad líder ('Pollo' suelto) cuenta ~0 en el solver (no se puede escalar 0×factor) y vuelve las macros
     # del plato falsamente bajas. Inyecta una porción default plausible para que el motor la dimensione al target.
@@ -17948,6 +18325,20 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _bgc:
             logger.warning(f"[P1-BARIATRIC-PORTION-CAP] cap en assemble falló (no bloquea): {type(_bgc).__name__}: {_bgc}")
 
+    # [P1-PORTION-REALISM-CAP · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Techo de porción REALISTA
+    # post-sizing y ANTES de FASE A: si el solver infló un solo ingrediente al clamp ("505g de calamar",
+    # "1.75 taza de ají"), se recorta aquí y el reparador de proteína de abajo re-cierra REDISTRIBUYENDO
+    # (añade otra proteína) en vez de dejar el plato absurdo. Universal (no gateado a condición).
+    if PORTION_REALISM_CAP_ENABLED:
+        try:
+            _pr_capped = _cap_unrealistic_portions(days)
+            if _pr_capped:
+                logger.info(f"🍽️ [P1-PORTION-REALISM-CAP] {_pr_capped} porción(es) recortada(s) a techo "
+                            f"realista (proteína ≤{PORTION_CAP_PROTEIN_G}g, aromáticos ≤1 taza, "
+                            f"hierbas ≤¼ taza, conteos servibles) + truth-up.")
+        except Exception as _prc:
+            logger.warning(f"[P1-PORTION-REALISM-CAP] cap en assemble falló (no bloquea): {type(_prc).__name__}: {_prc}")
+
     # [P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
     # clínicos: los caps recortan lácteos (=proteína) → déficit recurrente (64g/80g). Re-cierra con proteína animal
     # DENSA NO-LÁCTEA + reconcile C/F. RENAL skip (fail-secure). Reusa closer + reconcile probados. Última garantía
@@ -17960,6 +18351,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"(re-cierre del piso tras recorte de lácteos) + reconcile C/F.")
         except Exception as _rp:
             logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] en assemble falló (no bloquea): {type(_rp).__name__}: {_rp}")
+
+    # [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] (batch P1-DISH-REALISM-BATCH) POST-closers: fusiona
+    # líneas duplicadas del mismo alimento en gramos ("15 g de queso" del LLM + "40 g de queso" del closer
+    # → "55g de queso"). Macros intactos; lockstep con ingredients_raw.
+    if INGREDIENT_LINE_CONSOLIDATE_ENABLED:
+        try:
+            _dupm = _consolidate_duplicate_gram_lines(days)
+            if _dupm:
+                logger.info(f"🧾 [P2-INGREDIENT-LINE-CONSOLIDATE] {_dupm} línea(s) duplicada(s) fusionada(s).")
+        except Exception as _dpe:
+            logger.warning(f"[P2-INGREDIENT-LINE-CONSOLIDATE] en assemble falló (no bloquea): {type(_dpe).__name__}: {_dpe}")
 
     # [P1-BARIATRIC-DAY-KCAL-FLOOR · 2026-06-28] Tras cerrar PROTEÍNA (FASE A), cierra KCAL: si un día bariátrico quedó
     # bajo el piso de banda (0.95×target del scorer) — típicamente porque ya cumplía proteína y FASE A no lo tocó, + el

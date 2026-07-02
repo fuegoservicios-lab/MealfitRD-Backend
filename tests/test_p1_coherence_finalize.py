@@ -39,7 +39,11 @@ def test_converts_vague_units(monkeypatch):
     assert n >= 3
     joined = " ".join(d[0]["meals"][0]["ingredients"]).lower()
     assert "lonja" not in joined and "¼" not in joined and "¾" not in joined
-    assert "30 g de queso" in joined or "20 g de queso" in joined
+    # [P2-INGREDIENT-LINE-CONSOLIDATE · 2026-07-01] las DOS lonjas de queso ahora se convierten a gramos
+    # (slice) Y se fusionan en UNA línea sumada en la misma pasada — antes quedaban "30 g" + "20 g" separadas.
+    _queso_lines = [i for i in d[0]["meals"][0]["ingredients"] if "queso" in str(i).lower()]
+    assert len(_queso_lines) == 1, f"debe quedar UNA línea de queso consolidada: {_queso_lines}"
+    assert "g de queso" in joined
 
 
 def test_idempotent_band_safe(monkeypatch):
@@ -89,9 +93,10 @@ def test_order_slice_before_quantize():
     # recipe-nonempty backstop DESPUÉS; la ventana se amplía a 4000 chars para abarcar la fn completa,
     # pero la invariante slice→leaf→quantize sigue intacta.
     # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] +comment del filtro de alérgenos → ventana a 5000 chars.
+    # [P1-DISH-REALISM-BATCH · 2026-07-01] +carb-ghost/realism-cap/consolidate en el boundary → 9500 chars.
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def finalize_plan_data_coherence")
-    body = src[i:i + 5000]
+    body = src[i:i + 9500]
     p_slice = body.index("_recipe_slice_units_to_grams")
     p_leaf = body.index("_cap_leaf_volume_in_meals")
     p_quant = body.index("_apply_portion_quantization")
