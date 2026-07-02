@@ -182,6 +182,116 @@ async def api_supermarket_list(
         raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
 
 
+# ── [P1-SUPERMARKET-MATCH · 2026-07-02] lista de compras → variantes del súper ──
+# Dado el set de nombres de la `aggregated_shopping_list`, devuelve los alimentos
+# del catálogo que calzan (con TODAS sus variantes de marca/presentación activas)
+# para que el Dashboard muestre marcas y precios reales por ítem. Público sin
+# paywall (cero costo LLM — misma razón que GET /products); RateLimiter propio.
+# Matching insensible a acentos/mayúsculas contra food_name Y master_food_name
+# (el link suave a master_ingredients), con fallback singular/plural y por
+# prefijo ("arroz" → "Arroz blanco", "Arroz integral", …).
+_MATCH_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_MATCH_MAX_NAMES = 200
+_MATCH_MAX_FOODS_PER_NAME = 4
+
+
+class SupermarketMatchIn(BaseModel):
+    names: List[str] = Field(min_length=1, max_length=_MATCH_MAX_NAMES)
+
+
+def _norm_food(value: Optional[str]) -> str:
+    """minúsculas + sin acentos + espacios colapsados (simétrica al frontend)."""
+    import unicodedata
+    s = unicodedata.normalize("NFD", (value or "").strip().lower())
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return " ".join(s.split())
+
+
+def _singular(s: str) -> str:
+    """Heurística ligera es-DO: 'zanahorias'→'zanahoria', 'coles'→'col'."""
+    if len(s) > 4 and s.endswith("es"):
+        return s[:-2]
+    if len(s) > 3 and s.endswith("s"):
+        return s[:-1]
+    return s
+
+
+@router.post("/match")
+async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MATCH_LIMITER)):
+    """Matching de nombres de la lista de compras contra el catálogo del súper."""
+
+    def _match() -> Dict[str, Any]:
+        rows = execute_sql_query(
+            """
+            SELECT id::text AS id, food_name, brand, presentation,
+                   price_rd::float8 AS price_rd, category, is_verified
+            FROM public.supermarket_products
+            WHERE active
+            ORDER BY lower(food_name), (brand IS NOT NULL), price_rd NULLS LAST
+            """,
+            fetch_all=True,
+        ) or []
+
+        # Índice food normalizado → {food_name, category, variants[]}. master_food_name
+        # (si difiere) apunta al MISMO grupo — alias de resolución, no grupo aparte.
+        foods: Dict[str, Dict[str, Any]] = {}
+        alias: Dict[str, str] = {}
+        for r in rows:
+            key = _norm_food(r["food_name"])
+            g = foods.setdefault(key, {"food_name": r["food_name"], "category": r.get("category"), "variants": []})
+            g["variants"].append({
+                "id": r["id"], "brand": r.get("brand"), "presentation": r.get("presentation"),
+                "price_rd": r.get("price_rd"), "is_verified": bool(r.get("is_verified")),
+            })
+
+        master_rows = execute_sql_query(
+            """
+            SELECT DISTINCT master_food_name, food_name
+            FROM public.supermarket_products
+            WHERE active AND master_food_name IS NOT NULL
+            """,
+            fetch_all=True,
+        ) or []
+        for r in master_rows:
+            mk, fk = _norm_food(r["master_food_name"]), _norm_food(r["food_name"])
+            if mk and mk not in foods and fk in foods:
+                alias[mk] = fk
+
+        def _resolve(raw: str) -> List[Dict[str, Any]]:
+            name = _norm_food(raw)
+            if not name:
+                return []
+            candidates: List[str] = []
+            for probe in (name, _singular(name)):
+                if probe in foods and probe not in candidates:
+                    candidates.append(probe)
+                elif probe in alias and alias[probe] not in candidates:
+                    candidates.append(alias[probe])
+            if not candidates and len(name) >= 4:
+                # prefijo con límite de palabra: "arroz" → "arroz blanco"
+                prefix = name + " "
+                candidates = sorted(k for k in foods if k.startswith(prefix))
+            return [foods[k] for k in candidates[:_MATCH_MAX_FOODS_PER_NAME]]
+
+        seen: set = set()
+        matches: Dict[str, Any] = {}
+        for raw in body.names:
+            raw = (raw or "").strip()
+            if not raw or raw.lower() in seen:
+                continue
+            seen.add(raw.lower())
+            found = _resolve(raw)
+            if found:
+                matches[raw] = found
+        return {"matches": matches, "catalog_size": len(rows)}
+
+    try:
+        return await asyncio.to_thread(_match)
+    except Exception as exc:
+        logger.error(f"❌ [P1-SUPERMARKET-MATCH] match falló: {exc}")
+        raise HTTPException(status_code=500, detail="No se pudo consultar el supermercado.")
+
+
 @router.post("/products")
 async def api_supermarket_create(request: Request, body: SupermarketProductIn):
     """Crea un producto/variante. Admin only (Bearer CRON_SECRET)."""

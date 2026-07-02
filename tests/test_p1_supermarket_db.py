@@ -127,6 +127,19 @@ def test_all_mutations_require_admin_token():
         "P1-SUPERMARKET-DB violation: se esperaban al menos POST+PATCH+DELETE."
     )
     for (verb, _), body in mutating.items():
+        # [P1-SUPERMARKET-MATCH · 2026-07-02] Única exención: POST /match es
+        # read-only público a propósito (matching lista de compras → catálogo;
+        # el POST solo transporta el body). El contrato compensatorio es que
+        # JAMÁS escriba: cero execute_sql_write en su cuerpo + RateLimiter propio.
+        if '@router.post("/match")' in body:
+            assert "execute_sql_write" not in body, (
+                "P1-SUPERMARKET-MATCH violation: /match es read-only — si necesita "
+                "escribir, debe pasar al gate _verify_admin_token como las demás."
+            )
+            assert "_MATCH_LIMITER" in body, (
+                "P1-SUPERMARKET-MATCH violation: /match debe llevar su RateLimiter."
+            )
+            continue
         assert "_verify_admin_token(" in body, (
             f"P1-SUPERMARKET-DB violation: el handler {verb.upper()} NO llama "
             "_verify_admin_token — abriría escritura pública a supermarket_products."
