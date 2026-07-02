@@ -268,9 +268,26 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
                 elif probe in alias and alias[probe] not in candidates:
                     candidates.append(alias[probe])
             if not candidates and len(name) >= 4:
-                # prefijo con límite de palabra: "arroz" → "arroz blanco"
-                prefix = name + " "
-                candidates = sorted(k for k in foods if k.startswith(prefix))
+                # Contención con límite de palabra, en ambas direcciones:
+                #   food ⊇ nombre: "pechuga de pollo" → "Filete pechuga de pollo",
+                #                  "arroz" → "Arroz blanco", "Arroz integral", …
+                #   nombre ⊇ food: "filete de salmon fresco" → "Salmón".
+                # El padding con espacios evita falsos positivos por substring
+                # ("sal" NO matchea "salsa de tomate").
+                scored = []
+                for probe in dict.fromkeys((name, _singular(name))):
+                    padded_probe = f" {probe} "
+                    for k in foods:
+                        padded_food = f" {k} "
+                        if padded_probe in padded_food:
+                            scored.append((0, k))
+                        elif len(k) >= 4 and padded_food in padded_probe:
+                            scored.append((1, k))
+                    if scored:
+                        break
+                for _, k in sorted(scored):
+                    if k not in candidates:
+                        candidates.append(k)
             return [foods[k] for k in candidates[:_MATCH_MAX_FOODS_PER_NAME]]
 
         seen: set = set()
