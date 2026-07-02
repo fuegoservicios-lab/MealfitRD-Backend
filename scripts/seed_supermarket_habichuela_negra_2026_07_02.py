@@ -1,8 +1,9 @@
 """[P1-SUPERMARKET-DB · 2026-07-02 · fase 2 catálogo] Seed de variantes de HABICHUELA NEGRA.
 
-Vigesimosexta familia con variantes de MARCA del Supermercado RD: 8 SKUs transcritos
-del catálogo de La Sirena (capturas del owner, 2026-07-02) — Wala (funda + lata),
-Goya, Giselle (400/800 gr), La Famosa (con coco), Linda y La Sanjuanera.
+Vigesimosexta familia con variantes de MARCA del Supermercado RD: 13 SKUs transcritos
+del catálogo de La Sirena (capturas del owner, 2026-07-02, en 2 tandas) — Wala
+(funda + lata), Goya (lata + funda 16 Oz + lata guisadas), Giselle (400/800 gr),
+La Famosa (plain + con coco), Linda, La Sanjuanera, Rica (tetra) y Victorina.
 
 Mismo criterio que rojas/blancas/lenteja: secas (funda) y enlatadas (lata) bajo el
 MISMO food "Habichuela negra" (singular, grafía del catálogo genérico).
@@ -12,6 +13,9 @@ Notas:
     Paquete 800gr RD$105 = Wala funda.
   * Linda 15 Oz se carga a precio de LISTA RD$67 (promo -10% RD$60 transitoria).
   * La Famosa con coco queda en familia con descripción honesta (precedente rojas).
+  * Tanda 2: Goya Guisadas 15 Oz es "Black Bean Soup" (preparadas con aceite de
+    oliva, ají y cebolla) — en familia con descripción honesta (precedente blancas
+    Goya Guisadas). Victorina 15 Oz "No disponible" incluido como referencia.
 
 Idempotente: ON CONFLICT (variante) DO NOTHING — no pisa ediciones de la admin UI.
 
@@ -51,6 +55,12 @@ ROWS = [
     ("La Famosa", "Lata con Coco 15 Oz", 138, "Habichuelas negras con coco (black beans with coconut)"),
     ("Linda", "Lata 15 Oz", 67, "Habichuelas negras enlatadas"),
     ("La Sanjuanera", "Funda 800 gr", 129, "Habichuelas negras secas, línea Premium"),
+    # ── Tanda 2 (capturas 2026-07-02) ──
+    ("La Famosa", "Lata 15 Oz", 88, "Habichuelas negras enlatadas"),
+    ("Goya", "Funda 16 Oz", 130, "Habichuelas negras secas (frijoles negros)"),
+    ("Goya", "Lata Guisadas 15 Oz", 97, "Habichuelas negras guisadas (black bean soup), preparadas con aceite de oliva, ají y cebolla"),
+    ("Rica", "Cartón Tetra 400 gr", 78, "Habichuelas negras listas para usar, cartón fácil de abrir y guardar"),
+    ("Victorina", "Lata 15 Oz", 68, "Habichuelas negras enlatadas"),
 ]
 
 _INSERT = """
