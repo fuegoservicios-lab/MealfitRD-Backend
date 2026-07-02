@@ -24,13 +24,18 @@ def _plan(gaps, coverage=0.85):
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # Defaults OFF + no-op
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-def test_all_knobs_default_off(go):
-    assert go.CONDITION_PANEL_DEGRADE_ENABLED is False
+def test_knob_defaults(go):
+    # [P2-SATFAT-CEILING-OBSERVABLE] el sub-check de condición fue flippeado ON (honestidad accionable del
+    # build todo-terreno); micros-soft-reject y sodio/azúcar siguen OFF (A/B-pending). Este test anclaba
+    # "los 3 OFF" pre-flip — actualizado al estado vigente (fallaba rojo desde el flip sin que nadie lo viera).
+    assert go.CONDITION_PANEL_DEGRADE_ENABLED is True
     assert go.MICRONUTRIENT_SOFT_REJECT_ENABLED is False
     assert go.SODIUM_SUGAR_DEGRADE_ENABLED is False
 
 
-def test_off_does_not_mark(go):
+def test_off_does_not_mark(go, monkeypatch):
+    # comportamiento con el sub-check apagado (rollback path MEALFIT_CONDITION_PANEL_DEGRADE=false)
+    monkeypatch.setattr(go, "CONDITION_PANEL_DEGRADE_ENABLED", False)
     plan = _plan([{"key": "saturated_fat_g", "status": "alto", "valor": 40, "techo": 15}])
     assert go._maybe_mark_panel_degraded(plan, {"medicalConditions": ["Colesterol alto"]}, False, 1) is False
     assert "_quality_degraded" not in plan

@@ -4179,6 +4179,25 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         except Exception as _oc_exp_e:
             logger.debug(f"[P2-EXPAND-OFFCATALOG-STRIP] strip en expand no-op: {type(_oc_exp_e).__name__}: {_oc_exp_e}")
 
+        # [P1-EXPAND-QTY-SYNC · 2026-07-01] (audit v3 recetas GAP-2) El Chef REEMPLAZA los 3 pasos y el
+        # validador de coherencia es presence-based (proteína en pasos ⊆ ingredientes) — NO valida cantidades
+        # ni conteos: ingredients dice "3 huevos" y el paso podía decir "bate los 4 huevos" sin corrección.
+        # `_sync_recipe_step_quantities` (el count/qty-sync que ya corre en todas las demás superficies vía
+        # finalizer) se aplica EN ORIGEN sobre `expanded_steps` (cubre persist Y respuesta a guests), con la
+        # base de ingredientes post-persist (originales + veg añadidos por P2-EXPAND-FINALIZE). Conservador
+        # anti-falso-positivo, idempotente, fail-safe. tooltip-anchor: P1-EXPAND-QTY-SYNC
+        try:
+            from graph_orchestrator import _sync_recipe_step_quantities as _sq_exp
+            _sq_meal_exp = {"name": req_name,
+                            "ingredients": [str(_i) for _i in (data.get("ingredients") or [])] + list(_expand_added_ings),
+                            "recipe": list(expanded_steps)}
+            if _sq_exp(_sq_meal_exp):
+                expanded_steps = [str(_s) for _s in (_sq_meal_exp.get("recipe") or []) if str(_s).strip()]
+                logger.info(f"🔢 [P1-EXPAND-QTY-SYNC] cantidades de pasos expandidos re-sincronizadas con "
+                            f"ingredients[] | meal='{req_name}'")
+        except Exception as _sq_exp_e:
+            logger.debug(f"[P1-EXPAND-QTY-SYNC] qty-sync en expand no-op: {type(_sq_exp_e).__name__}: {_sq_exp_e}")
+
         # [P2-EXPAND-UNCOUNTED-ADDITION · 2026-07-01] (audit v2 expand GAP-2, batch P2-AUDIT-V2-BATCH) El Chef
         # podía añadir en los PASOS grasa/edulcorante SUSTANTIVO no contado ("sofríe en 3 cucharadas de aceite"
         # ≈ 270 kcal) — no entra a ingredients[], ni a macros, ni a compras → el plato declara macros falsamente
@@ -5205,7 +5224,31 @@ def api_swap_meal_persist(
                             _qz_swap(plan_data, _qdb_swap)
                         except Exception as _qz_e:
                             logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (swap) falló: {_qz_e}")
+                        # [P1-STEPS-STALE-POSTCLOSER · 2026-07-01] (audit v3 recetas GAP-1) El finalizer ya
+                        # sincronizó los pasos ARRIBA (:_fin_sp), pero el closer/retrim/requantize acaban de
+                        # reescalar ingredientes → "pesa 80 g de arroz"/"los 3 huevos" quedaban stale en
+                        # CUALQUIER comida del plan que el closer tocó (blast radius plan-wide, no solo la
+                        # swapeada). Re-sync espejo del orden de assemble (closer → quantize → qty-sync como
+                        # ÚLTIMA mutación). Idempotente, anti-falso-positivo, fail-safe.
+                        # tooltip-anchor: P1-STEPS-STALE-POSTCLOSER
+                        try:
+                            from graph_orchestrator import _sync_recipe_step_quantities as _sq_swap
+                            for _d_sq in plan_data.get("days", []) or []:
+                                for _m_sq in (_d_sq.get("meals", []) or []):
+                                    if isinstance(_m_sq, dict):
+                                        _sq_swap(_m_sq)
+                        except Exception as _sq_e:
+                            logger.debug(f"[P1-STEPS-STALE-POSTCLOSER] qty-sync (swap) falló: {_sq_e}")
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
+                    # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica los
+                    # techos/pisos por condición (sodio/HTA, satfat/dislipidemia, K/Mg/fibra) sobre el panel
+                    # RECOMPUTADO — antes un swap a plato alto en sodio no dejaba banner. Corre ANTES del
+                    # band-parity (precedencia clínica > banda, orden S1).
+                    try:
+                        from graph_orchestrator import apply_update_condition_ceilings as _ucc_sw
+                        _ucc_sw(plan_data, _micro_form, surface="swap_persist")
+                    except Exception as _cc_sw_e:
+                        logger.debug(f"[P1-CONDITION-CEILINGS-UPDATES] (swap) no-op: {_cc_sw_e}")
                 except Exception as _mfe:
                     logger.debug(f"[P2-SWAP-MICROS-STALE] recompute (swap) falló: {_mfe}")
                 # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2 XCUT-DISHQUAL-NOT-SURFACED)
@@ -5218,6 +5261,18 @@ def api_swap_meal_persist(
                         plan_data["dish_quality_report"] = compute_dish_quality_report(plan_data)
                 except Exception as _dqs_e:
                     logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (swap) falló: {_dqs_e}")
+
+            # [P1-BAND-PARITY-UPDATES · 2026-07-01] (audit v3 macros GAP-1) contrato de banda de S1 en el
+            # persist del swap: marca/limpia `_quality_degraded` (mismas keys del banner) según el plan
+            # mutado quede fuera/dentro de banda. `_pantry_limited` (set por los reverts de agent.py,
+            # P1-PANTRY-DEGRADED-SIGNAL) o el swap desde Nevera atribuyen la causa a inventario.
+            try:
+                from graph_orchestrator import apply_update_band_parity as _ubp_sw
+                _pl_sw = bool(isinstance(new_meal, dict)
+                              and (new_meal.get("_pantry_limited") or new_meal.get("pantry_constrained")))
+                _ubp_sw(plan_data, surface="swap_persist", pantry_limited=_pl_sw)
+            except Exception as _bp_sw_e:
+                logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (swap) no-op: {_bp_sw_e}")
 
             return plan_data
 
@@ -5922,6 +5977,14 @@ def api_regenerate_day(
                     # La adecuación de micros del día regenerado depende de lo disponible en la nevera (correcto).
                     _close_micro_gaps_for_plan(pd, _micro_form, db=_db, pantry_strict=True)
                     recompute_micronutrient_report_for_plan(pd, _micro_form, db=_db)
+                    # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica
+                    # techos/pisos por condición sobre el panel recomputado del día regenerado (antes solo
+                    # DM2-cap/FASE-A tenían paridad — sodio/satfat quedaban sin banner). Antes del band-parity.
+                    try:
+                        from graph_orchestrator import apply_update_condition_ceilings as _ucc_rd
+                        _ucc_rd(pd, _micro_form, surface="regen_day")
+                    except Exception as _cc_rd_e:
+                        logger.debug(f"[P1-CONDITION-CEILINGS-UPDATES] (regen-day) no-op: {_cc_rd_e}")
                 except Exception as _mfe:
                     logger.debug(f"[P1-UPDATE-MICROS] recompute (regen-day) falló: {_mfe}")
                 # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2) Recomputa el agregado
@@ -5932,6 +5995,15 @@ def api_regenerate_day(
                         pd["dish_quality_report"] = compute_dish_quality_report(pd)
                 except Exception as _dqr_e:
                     logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (regen-day) falló: {_dqr_e}")
+            # [P1-BAND-PARITY-UPDATES · 2026-07-01] (audit v3 macros GAP-1) contrato de banda de S1 en el
+            # persist del día regenerado: el aviso prosa de la respuesta (day_quality_warning) NO persiste;
+            # esto marca/limpia `_quality_degraded` en el plan (banner tras reload, paridad con form-gen).
+            # `_pantry_limited` atribuye la causa a la Nevera (regen-day es pantry-strict por diseño).
+            try:
+                from graph_orchestrator import apply_update_band_parity as _ubp_rd
+                _ubp_rd(pd, surface="regen_day", pantry_limited=bool(_pantry_limited))
+            except Exception as _bp_rd_e:
+                logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (regen-day) no-op: {_bp_rd_e}")
             return pd
 
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)

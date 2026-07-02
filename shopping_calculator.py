@@ -658,6 +658,39 @@ def _seasoning_catalog_keep_enabled() -> bool:
 _SEASONING_DEFAULT_G = 40.0
 
 
+# [P1-BAKING-STAPLES · 2026-07-01] (audit v3 creatividad GAP-3) "Despensa básica" de horneado: agentes
+# leudantes/aroma que los transforms insignia del owner (panqueques de avena/harina, bollos de yuca,
+# arepitas) NECESITAN y que no están en el catálogo verificado con precio. VERIFIED-ONLY los amputaba en
+# SILENCIO de la lista (la receta los usa, la compra no los trae → receta no cocinable tal cual; el
+# backstop de texto solo cubría salsas). En vez de dropear: se listan como ~1 empaque pequeño SIN precio
+# (estimated_cost_rd=None) bajo "DESPENSA BÁSICA". El coherence guard NO los escala a crítico (fantasma
+# delta=inf excluido por diseño — ver "pueden ser staples no marcados" en run_shopping_coherence_guard).
+# Si el owner los sube al catálogo con precio, resuelven como items normales y este keep es no-op
+# (_is_verified_for_shopping gana primero). Rollback: MEALFIT_BAKING_STAPLES_KEEP=false → drop histórico.
+# tooltip-anchor: P1-BAKING-STAPLES
+_BAKING_PANTRY_STAPLE_TOKENS = (
+    "polvo de hornear", "polvo para hornear", "levadura", "bicarbonato",
+    "extracto de vainilla", "esencia de vainilla", "vainilla",
+)
+_BAKING_STAPLE_DEFAULT_G = 100.0
+
+
+def _baking_staples_keep_enabled() -> bool:
+    return _knob_env_bool("MEALFIT_BAKING_STAPLES_KEEP", True)
+
+
+def is_baking_pantry_staple(name) -> bool:
+    """True si `name` es un staple de horneado de la despensa básica (match substring accent-insensitive).
+    Usado por el keep del aggregator (P1-BAKING-STAPLES); NO altera el filtro expected del guard (los
+    staples quedan warn-only fantasma a propósito — jamás fuerzan retry)."""
+    try:
+        from constants import strip_accents as _sa
+        low = _sa(str(name or "").lower())
+        return any(tok in low for tok in _BAKING_PANTRY_STAPLE_TOKENS)
+    except Exception:
+        return False
+
+
 DEFAULT_G_PER_TAZA = 150
 
 # ============================================================
@@ -8037,27 +8070,41 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if (_verified_ingredients_only_enabled()
                 and not _is_verified_for_shopping(name)
                 and price_per_lb <= 0 and price_per_unit <= 0):
-            # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
-            # drop sea grep-able en prod: este es el punto exacto donde un ingrediente de
-            # receta fuera del catalogo verificado desaparece de la lista. Espejo del guard (P1-VERIFIED-ONLY-OBSERVABILITY).
-            # [P2-OFF-CATALOG-SNAP-RESOLVED · 2026-06-29] (re-audit objetivo · P2 F4) El "snap fuzzy al master más
-            # cercano" que un audit podría proponer YA ocurrió: `_is_verified_for_shopping(name)` → `normalize_name`
-            # aplica regex + FUZZY difflib (INTENTO 5, ratio≥0.87) + embedding ANTES de devolver False. Si llegamos
-            # aquí, NINGÚN tier resolvió el nombre a un master verificado → es off-catálogo GENUINO (garble/alimento
-            # no vendido), y dropear es lo CORRECTO (costear un fantasma con price=0 descuadraría el total). La
-            # defensa primaria es upstream (P2-VERIFIED-ONLY-UPDATE inyecta el catálogo al swap/chat-modify). NO
-            # re-implementar un snap aquí: arriesgaría mis-snap en un subsistema de coherencia. tooltip-anchor: P2-OFF-CATALOG-SNAP-RESOLVED
-            logging.warning(
-                "[VERIFIED-ONLY-DROP] '%s' excluido de la lista: fuera del catálogo "
-                "verificado (ni regex/fuzzy/embedding lo resolvieron → off-catálogo genuino). "
-                "Si es sustantivo, la lista de compras queda incompleta (defensa primaria: prompt upstream).",
-                name,
-            )
-            # [P2-VERIFIED-DROP-TELEMETRY · 2026-07-01] (audit v2 creatividad GAP-5, batch P2-AUDIT-V2-BATCH)
-            # sink estructurado además del WARN grep-able: el cron `_creativity_kpi_job` agrega el top-N de
-            # drops a pipeline_metrics → el owner decide synonyms/altas de catálogo con datos, no greps.
-            record_verified_only_drop(name)
-            continue
+            # [P1-BAKING-STAPLES · 2026-07-01] Staple de horneado (polvo de hornear/levadura/bicarbonato/
+            # vainilla) → NO dropear: listar como ~1 empaque sin precio bajo "DESPENSA BÁSICA" para que la
+            # receta insignia (panqueques/bollos) sea comprable tal cual. Cae al procesamiento normal.
+            if _baking_staples_keep_enabled() and is_baking_pantry_staple(name):
+                weight_in_lbs = _BAKING_STAPLE_DEFAULT_G / 453.592
+                has_weight = True
+                units = {}
+                display_cat = "DESPENSA BÁSICA"
+                logging.info(
+                    f"🧁 [P1-BAKING-STAPLES] '{name}' fuera del catálogo con precio pero es staple de "
+                    f"horneado → listado como ~1 empaque (~{_BAKING_STAPLE_DEFAULT_G:.0f}g, sin precio) "
+                    f"en DESPENSA BÁSICA en vez de dropearlo."
+                )
+            else:
+                # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
+                # drop sea grep-able en prod: este es el punto exacto donde un ingrediente de
+                # receta fuera del catalogo verificado desaparece de la lista. Espejo del guard (P1-VERIFIED-ONLY-OBSERVABILITY).
+                # [P2-OFF-CATALOG-SNAP-RESOLVED · 2026-06-29] (re-audit objetivo · P2 F4) El "snap fuzzy al master más
+                # cercano" que un audit podría proponer YA ocurrió: `_is_verified_for_shopping(name)` → `normalize_name`
+                # aplica regex + FUZZY difflib (INTENTO 5, ratio≥0.87) + embedding ANTES de devolver False. Si llegamos
+                # aquí, NINGÚN tier resolvió el nombre a un master verificado → es off-catálogo GENUINO (garble/alimento
+                # no vendido), y dropear es lo CORRECTO (costear un fantasma con price=0 descuadraría el total). La
+                # defensa primaria es upstream (P2-VERIFIED-ONLY-UPDATE inyecta el catálogo al swap/chat-modify). NO
+                # re-implementar un snap aquí: arriesgaría mis-snap en un subsistema de coherencia. tooltip-anchor: P2-OFF-CATALOG-SNAP-RESOLVED
+                logging.warning(
+                    "[VERIFIED-ONLY-DROP] '%s' excluido de la lista: fuera del catálogo "
+                    "verificado (ni regex/fuzzy/embedding lo resolvieron → off-catálogo genuino). "
+                    "Si es sustantivo, la lista de compras queda incompleta (defensa primaria: prompt upstream).",
+                    name,
+                )
+                # [P2-VERIFIED-DROP-TELEMETRY · 2026-07-01] (audit v2 creatividad GAP-5, batch P2-AUDIT-V2-BATCH)
+                # sink estructurado además del WARN grep-able: el cron `_creativity_kpi_job` agrega el top-N de
+                # drops a pipeline_metrics → el owner decide synonyms/altas de catálogo con datos, no greps.
+                record_verified_only_drop(name)
+                continue
 
         # [PROTEIN-UNIT-FALLBACK] Aplica ANTES de la extracción de peso.
         # Solo convierte si: (a) cat=Proteínas, (b) master.default_unit='lb',

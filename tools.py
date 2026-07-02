@@ -1668,9 +1668,40 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                             _qz_cm(plan_data_fresh, _qdb_cm)
                         except Exception as _qz_cm_e:
                             logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (chat) falló: {_qz_cm_e}")
+                        # [P1-STEPS-STALE-POSTCLOSER · 2026-07-01] (audit v3 recetas GAP-1) espejo del persist
+                        # de swap: el closer/retrim/requantize reescalan ingredientes DESPUÉS del finalizer
+                        # (tools.py bloque pre-lock) → los pasos "pesa N g"/"los N huevos" quedaban stale en
+                        # cualquier comida tocada. qty-sync como última mutación (orden de assemble).
+                        # tooltip-anchor: P1-STEPS-STALE-POSTCLOSER
+                        try:
+                            from graph_orchestrator import _sync_recipe_step_quantities as _sq_cm
+                            for _d_sq in plan_data_fresh.get("days", []) or []:
+                                for _m_sq in (_d_sq.get("meals", []) or []):
+                                    if isinstance(_m_sq, dict):
+                                        _sq_cm(_m_sq)
+                        except Exception as _sq_cm_e:
+                            logger.debug(f"[P1-STEPS-STALE-POSTCLOSER] qty-sync (chat) falló: {_sq_cm_e}")
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
+                    # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica
+                    # techos/pisos por condición sobre el panel recomputado (sodio/HTA, satfat/dislipidemia).
+                    # Antes del band-parity (precedencia clínica > banda, orden S1).
+                    try:
+                        from graph_orchestrator import apply_update_condition_ceilings as _ucc_cm
+                        _ucc_cm(plan_data_fresh, _micro_form_cm, surface="chat_modify")
+                    except Exception as _cc_cm_e:
+                        logger.debug(f"[P1-CONDITION-CEILINGS-UPDATES] (chat-modify) no-op: {_cc_cm_e}")
                 except Exception as _cm_micro_e:
                     logger.debug(f"[P2-CHATMODIFY-MICROS-STALE] recompute (chat-modify) falló: {_cm_micro_e}")
+
+            # [P1-BAND-PARITY-UPDATES · 2026-07-01] (audit v3 macros GAP-1) contrato de banda de S1 en el
+            # persist de chat-modify: antes solo telemetría `_macro_band_low` ("no bloquea") — el mismo miss
+            # que en form-gen levanta banner aquí no dejaba rastro persistido. pantry-strict atribuye a Nevera.
+            try:
+                from graph_orchestrator import apply_update_band_parity as _ubp_cm
+                _pl_cm = bool(_ps_cm or (isinstance(new_meal_data, dict) and new_meal_data.get("_pantry_limited")))
+                _ubp_cm(plan_data_fresh, surface="chat_modify", pantry_limited=_pl_cm)
+            except Exception as _bp_cm_e:
+                logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (chat-modify) no-op: {_bp_cm_e}")
 
             # Aggregated lists (overwrite — el agent_tool es source-of-truth
             # de estas keys tras una modificación). Solo escribimos si la

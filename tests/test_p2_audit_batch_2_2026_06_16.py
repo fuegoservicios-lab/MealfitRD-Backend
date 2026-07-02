@@ -134,7 +134,11 @@ def test_p2_10_chunk_propagates_quality_degraded():
     assert "result.get('_quality_degraded')" in _CRON_SRC
     # las 8 keys deben estar en P0_4_T2_INCREMENTAL_KEYS
     start = _CRON_SRC.find("P0_4_T2_INCREMENTAL_KEYS = (")
-    block = _CRON_SRC[start: start + 2000]
+    # ventana 2000→5000: el comentario P3-BAND-PERMACRO-CHUNK-PROPAGATE (2026-07-01) dentro del tuple
+    # empujó las últimas keys fuera de la ventana original (fallo pre-existente de windowing del test,
+    # no de producción — el tuple sigue completo). Cerrar en el cierre real del tuple sería frágil
+    # frente a paréntesis en comentarios; 5000 da holgura para varios comentarios más.
+    block = _CRON_SRC[start: start + 5000]
     for k in ("_quality_degraded", "_quality_degraded_reason", "_quality_degraded_severity",
               "_quality_degraded_attempts", "_quality_degraded_band_score", "_quality_degraded_panel_detail",
               "_quality_degraded_clinical_detail", "_quality_degraded_resolution_pct"):

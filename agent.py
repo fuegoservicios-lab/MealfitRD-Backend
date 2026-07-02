@@ -1623,6 +1623,10 @@ def swap_meal(form_data: dict):
                     logger.info(f"🎚 [P1-UPDATE-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_reval}")
                     _out.clear()
                     _out.update(_snapshot)
+                    # [P1-PANTRY-DEGRADED-SIGNAL · 2026-07-01] (audit v3 macros GAP-2) señal ESTRUCTURADA
+                    # (no solo log): el meal viaja con la marca → el persist atribuye el gap de banda a la
+                    # Nevera (_quality_degraded_pantry_limited) y el frontend puede accionar "agrega ítems".
+                    _out["_pantry_limited"] = True
                 else:
                     logger.info(f"🎚 [P1-UPDATE-MACRO-REBALANCE] macros re-apuntadas al slot | meal_type={meal_type}")
         except Exception as _rb_e:
@@ -1661,6 +1665,8 @@ def swap_meal(form_data: dict):
                         logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] closer rompió pantry → revertido | {_reval_cl}")
                         _out.clear()
                         _out.update(_snap_cl)
+                        # [P1-PANTRY-DEGRADED-SIGNAL · 2026-07-01] espejo del revert del rebalance.
+                        _out["_pantry_limited"] = True
                     else:
                         logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] proteína cerrada al target | meal_type={meal_type}")
                 elif _added:

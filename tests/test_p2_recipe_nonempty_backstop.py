@@ -60,10 +60,12 @@ def test_wired_in_persist_boundary_and_assemble():
 
 
 # ───────────────────────── P2-7 ─────────────────────────
-def test_dish_quality_soft_gate_off_by_default():
-    # Default OFF (A/B-pending): encenderlo cambia review_plan_node para cualquier receta no-sustantiva (blast
-    # radius amplio). Los disparates conocidos los cubren los fixes deterministas + el prompt P1-DISH-PALATABILITY.
-    assert g.DISH_QUALITY_SOFT_GATE_ENABLED is False
+def test_dish_quality_soft_gate_on_by_default():
+    # [P1-DISH-QUALITY-GATE-ON · 2026-07-02] Default flipped OFF→ON con datos de la serie _creativity_kpi_job
+    # (low_quality_ratio=0.0 en la flota → tasa de disparo ~0; red determinista, soft: advisory en intento
+    # final, nunca cero-plan). Rollback sin redeploy: MEALFIT_DISH_QUALITY_SOFT_GATE=false.
+    # Ver test_p1_audit_v3_batch.py (supersede el assert OFF original A/B-pending).
+    assert g.DISH_QUALITY_SOFT_GATE_ENABLED is True
     assert 0.1 <= g.DISH_QUALITY_REJECT_RATIO <= 1.0
 
 

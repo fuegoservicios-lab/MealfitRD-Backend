@@ -4789,6 +4789,15 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             "dulce, pimienta de olor, salsa de soya), OMÍTELO por completo — usa solo los sazonadores "
             "verificados de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, y si aparecen abajo: "
             "comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor criollo real). "
+            # [P1-BAKING-STAPLES · 2026-07-01] (audit v3 creatividad GAP-3) EXCEPCIÓN de despensa básica:
+            # sin esto el "OMÍTELO" aplanaba los transforms insignia (panqueques sin leudante = crepa
+            # triste) o el LLM los emitía igual y VERIFIED-ONLY los amputaba de la lista en silencio.
+            # El aggregator ahora los lista como "DESPENSA BÁSICA" (~1 empaque, sin precio) → coherencia
+            # receta↔lista garantizada. tooltip-anchor: P1-BAKING-STAPLES
+            "EXCEPCIÓN (despensa básica de horneado): SÍ puedes usar polvo de hornear, levadura, "
+            "bicarbonato y vainilla en recetas horneadas o batidos (panqueques, bollos, arepitas, "
+            "tortitas) aunque no estén en la lista — inclúyelos en `ingredients` con su cantidad "
+            "(ej. '1 cdta de polvo de hornear') y aparecerán en la lista de compras como Despensa Básica. "
             f"Lista de {len(names)} alimentos verificados (cada ingrediente que emitas DEBE corresponder a "
             "uno de estos):\n"
             + ", ".join(names)
@@ -8886,6 +8895,8 @@ RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
 # receta vacía/no-sustantiva (el LLM degradado bajo presión de tokens/CB puede emitir recipe=[] o un solo paso
 # genérico). Rellena con un template estructurado de 3 pilares derivado de name+ingredients. Rollback: =false.
 RECIPE_NONEMPTY_BACKSTOP_ENABLED = _env_bool("MEALFIT_RECIPE_NONEMPTY_BACKSTOP", True)
+# [P1-INGREDIENTS-NONEMPTY · 2026-07-01] invariante de comida mínima viable: ingredients jamás vacío en entrega.
+INGREDIENTS_NONEMPTY_BACKSTOP_ENABLED = _env_bool("MEALFIT_INGREDIENTS_NONEMPTY_BACKSTOP", True)
 
 # [P3-GEN-SANITY-AUTOFIX · 2026-06-27] Autofix determinista post-assemble de DOS artefactos de generación del
 # LLM que el revisor médico cazaba (corr=579fb9a3, workflow de investigación): (#4) ingrediente INCONGRUENTE
@@ -9447,6 +9458,9 @@ BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
 # no-fallback ≤~0.42; idéntico set a 0.45 (distribución discreta). Rollback sin redeploy:
 # MEALFIT_BAND_SCORE_GATE=False. Tras G4 (re-reconcile post-cuantización) la fracción marcada debe bajar.
 BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", True)
+# [P1-BAND-PARITY-UPDATES · 2026-07-01] paridad del contrato de banda S1 (banner _quality_degraded) en las
+# superficies de UPDATE (regen-day/swap-persist/chat-modify). Kill-switch independiente del banner de S1.
+UPDATE_BAND_PARITY_ENABLED = _env_bool("MEALFIT_UPDATE_BAND_PARITY", True)
 BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
 # [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) El band-score headline incluye la celda kcal (casi
 # siempre en banda por el reconcile) → infla ~25% vs precisión de macros. `compute_clinical_band_score` ya
@@ -9540,11 +9554,17 @@ DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", Tru
 # SUAVE: si la fracción de platos placeholder/crudos supera el umbral, rechaza para retry (degrada a advisory en
 # el intento final, nunca cero-plan). Default OFF (opt-in) — el lever upstream (prompt+catálogo) ya da 0% fallback
 # en el happy-path; activar tras A/B para no inundar de retries. Umbral 0.34 = ≥1/3 de los platos genuinamente pobres.
-# [P2-DISH-QUALITY-GATE · 2026-06-29] Gate suave de placeholder/crudo. Default OFF (A/B-pending): encenderlo cambia
-# review_plan_node para CUALQUIER plan con receta no-sustantiva (blast radius amplio; en prod los backstops lo evitan,
-# pero requiere validar la tasa de fallback con A/B antes del flip). Los disparates conocidos (avena salada, proteína
-# bolt-on) ya los cubren los fixes deterministas P1-CLOSER-NO-DUP-CHEESE + el prompt P1-DISH-PALATABILITY.
-DISH_QUALITY_SOFT_GATE_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_SOFT_GATE", False)
+# [P2-DISH-QUALITY-GATE · 2026-06-29] Gate suave de placeholder/crudo. Los disparates conocidos (avena salada,
+# proteína bolt-on) ya los cubren los fixes deterministas P1-CLOSER-NO-DUP-CHEESE + el prompt P1-DISH-PALATABILITY.
+# [P1-DISH-QUALITY-GATE-ON · 2026-07-01] (audit v3 creatividad cross-cutting) Default flipped OFF→ON con datos
+# de la serie `_creativity_kpi_job` (pipeline_metrics): low_quality_ratio=0.0 y raw_staple_ratio=0.0 en TODOS
+# los planes/agregados recientes de la flota → con umbral 0.34 la tasa de disparo esperada es ~0 en happy path
+# (cero riesgo de mass-retry); el gate queda como RED DETERMINISTA si un lote degradado de placeholders
+# reaparece (antes: la calidad se MEDÍA pero nada la enforzaba — un plan de 12 "pollo a la plancha + arroz
+# blanco" pasaba todos los gates duros). Soft por construcción: retry con degrade a advisory en intento
+# final, nunca cero-plan. Vigilar retry-rate (patrón P1-OBJECTIVE-LEVERS-ON). Rollback sin redeploy:
+# MEALFIT_DISH_QUALITY_SOFT_GATE=false. tooltip-anchor: P1-DISH-QUALITY-GATE-ON
+DISH_QUALITY_SOFT_GATE_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_SOFT_GATE", True)
 DISH_QUALITY_REJECT_RATIO = max(0.1, min(1.0, _env_float("MEALFIT_DISH_QUALITY_REJECT_RATIO", 0.34)))
 
 # [P2-UPDATE-MICRO-STEER · 2026-06-27] (audit G2) Inyecta los pisos de micros (Mg/Fe/Ca/fibra/K) al prompt
@@ -13699,6 +13719,61 @@ def _strip_offcatalog_condiments_from_recipe(meal: dict) -> int:
         return 0
 
 
+# [P1-INGREDIENTS-NONEMPTY] separadores de segmentos de nombre de plato + filler no-alimento.
+_ING_NAME_SPLIT_RE = _re.compile(r"\s+con\s+|\s+y\s+|\s*,\s*|\s+sobre\s+", _re.I)
+_ING_NAME_FILLER = frozenset({
+    "ligera", "ligero", "criolla", "criollo", "casera", "casero", "tradicional", "dominicana",
+    "dominicano", "saludable", "fit", "especial", "fresca", "fresco", "al gusto", "mixta", "mixto",
+})
+
+
+def _ensure_nonempty_ingredients(meal: dict) -> bool:
+    """[P1-INGREDIENTS-NONEMPTY · 2026-07-01] (audit v3 recetas GAP-3; pendiente conocido del audit de 5
+    perfiles 2026-07-01) Invariante de comida mínima viable: un plato JAMÁS se entrega con `ingredients`
+    vacío. Modo de fallo real (path degradado/partial/SSE-fallback): meal con `name` + receta rellenada por
+    `_ensure_nonempty_recipe` pero ingredients=[] → nada que comprar, macros≈0 silencioso, no cocinable.
+
+    Materializa líneas de ingredientes DERIVADAS de los segmentos del nombre («Pollo Guisado con Yuca» →
+    ["Pollo Guisado", "Yuca"], máx 3) SIN inventar cantidades: `_ensure_ingredient_quantities` (que corre
+    DESPUÉS en el mismo chain de ambos finalizers) inyecta la porción default y truth-up/quantize downstream
+    las dimensionan. Marca `_dish_quality_degraded` + `_ingredients_backfilled` (honestidad — frontend/PDF/
+    telemetría pueden señalizarlo). Un `ingredients` string no-vacío se normaliza a lista (no cuenta como
+    fill). Idempotente (no toca un plato con ingredientes), fail-safe (error → False, meal intacto).
+    Gateado por INGREDIENTS_NONEMPTY_BACKSTOP_ENABLED. tooltip-anchor: P1-INGREDIENTS-NONEMPTY"""
+    if not INGREDIENTS_NONEMPTY_BACKSTOP_ENABLED or not isinstance(meal, dict):
+        return False
+    try:
+        ings = meal.get("ingredients")
+        if isinstance(ings, str) and ings.strip():
+            meal["ingredients"] = [ings.strip()]   # normalización, no fill
+            return False
+        if isinstance(ings, list) and any(str(i).strip() for i in ings):
+            return False  # ya tiene ingredientes → no tocar
+        name = str(meal.get("name") or "").strip()
+        if not name or len(name) < 4:
+            meal["_dish_quality_degraded"] = True  # sin nombre no hay derivación honesta; visible en telemetría
+            return False
+        segs = []
+        for seg in _ING_NAME_SPLIT_RE.split(name):
+            seg = str(seg or "").strip(" .,;·-")
+            if len(seg) < 3 or strip_accents(seg.lower()) in _ING_NAME_FILLER:
+                continue
+            segs.append(seg)
+            if len(segs) >= 3:
+                break
+        if not segs:
+            meal["_dish_quality_degraded"] = True
+            return False
+        meal["ingredients"] = list(segs)
+        meal["_dish_quality_degraded"] = True
+        meal["_ingredients_backfilled"] = True
+        logger.warning(f"🧩 [P1-INGREDIENTS-NONEMPTY] plato «{name}» llegó con ingredients vacío — "
+                       f"{len(segs)} materializado(s) desde el nombre (porción default downstream)")
+        return True
+    except Exception:
+        return False
+
+
 def _ensure_nonempty_recipe(meal: dict) -> bool:
     """[P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] (audit objetivo · P2-11) Backstop DETERMINISTA de receta
     cocinable: si un plato llega con receta VACÍA (`recipe` ausente o `[]`) o NO sustantiva (<2 pasos reales —
@@ -16068,6 +16143,21 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                 total += _nprp; parts.append(f"realism_cap={_nprp}")
     except Exception as _eprp:
         logger.warning(f"[P1-COHERENCE-FINALIZE] realism-cap no-op: {type(_eprp).__name__}: {_eprp}")
+    # [P1-INGREDIENTS-NONEMPTY · 2026-07-01] (audit v3 recetas GAP-3) ANTES del qty-presence: un plato hueco
+    # (ingredients=[]) del path degradado/partial/SSE-fallback materializa ingredientes desde el nombre; el
+    # qty-presence de abajo les inyecta porciones y quantize/truth-up las dimensionan. Sin esto la comida se
+    # entregaba con receta plausible, nada que comprar y macros≈0 silencioso.
+    try:
+        if INGREDIENTS_NONEMPTY_BACKSTOP_ENABLED:
+            _nif = 0
+            for _d in days or []:
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict) and _ensure_nonempty_ingredients(_m):
+                        _nif += 1
+            if _nif:
+                total += _nif; parts.append(f"ingredients_fill={_nif}")
+    except Exception as _eif:
+        logger.warning(f"[P1-INGREDIENTS-NONEMPTY] backstop en persist boundary no-op: {type(_eif).__name__}: {_eif}")
     # [P2-QTY-PRESENCE-PERSIST · 2026-07-01] (audit v2 recetas GAP-7, batch P2-AUDIT-V2-BATCH) El persist
     # boundary omitía `_ensure_ingredient_quantities` (corría solo en assemble + finalizador de updates) →
     # un chunk degradado/partial/SSE-fallback podía persistir "Pollo" sin cantidad líder = no cocinable +
@@ -16199,6 +16289,13 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             db = IngredientNutritionDB()
         _wrap = [{"meals": [meal]}]
         total = 0
+        # [P1-INGREDIENTS-NONEMPTY · 2026-07-01] CERO-ésimo: si el plato llegó hueco (ingredients=[]),
+        # materializa desde el nombre ANTES del qty-presence (que solo inyecta porciones en líneas existentes).
+        try:
+            if _ensure_nonempty_ingredients(meal):
+                total += 1
+        except Exception as _ei0:
+            logger.warning(f"[P1-INGREDIENTS-NONEMPTY] backstop en finalizador de update no-op: {type(_ei0).__name__}: {_ei0}")
         # [P2-QTY-PRESENCE-GUARD · 2026-06-29] (audit objetivo · P2-5) PRIMERO: si el plato editado trae un alimento
         # verificado sin cantidad líder ('Pollo' suelto), inyecta una porción default para que (a) sea cocinable y
         # (b) cuente en macros — corre ANTES del slice-grams/quantize/truth-up para que esos pasos vean la porción.
@@ -24893,6 +24990,111 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
         plan["_quality_degraded_band_score"] = band_val
         return True
     except Exception:
+        return False
+
+
+def apply_update_band_parity(plan_data: dict, *, surface: str, pantry_limited: bool = False,
+                             attempt: int = 1):
+    """[P1-BAND-PARITY-UPDATES · 2026-07-01] (audit v3 macros GAP-1/GAP-2) Paridad del contrato de banda de
+    S1 en superficies de UPDATE (regen-day / swap-persist / chat-modify). Antes el MISMO miss de macros que
+    en form-gen dispara retry + banner `_quality_degraded` se entregaba en updates con (a lo sumo) un aviso
+    prosa NO persistido — tras un reload el usuario no veía nada. Computa `compute_clinical_band_score`
+    sobre el plan COMPLETO mutado (dentro del mutador atómico del caller) y:
+      - fuera de banda → `_maybe_mark_low_band_degraded` (MISMAS keys del banner S1) + meta del surface
+        (`_quality_degraded_surface`) y atribución pantry (`_quality_degraded_pantry_limited`,
+        P1-PANTRY-DEGRADED-SIGNAL: el frontend puede accionar "agrega ítems a tu Nevera" en vez de un
+        banner genérico cuando los closers se auto-revirtieron por inventario).
+      - de vuelta EN banda con flag previo low_band_* → LIMPIA el contrato (el update REPARÓ la precisión;
+        mantener el banner sería deshonesto en la dirección opuesta). Razones no-banda (clínicas, fallback,
+        max_attempts) JAMÁS se tocan.
+    Devuelve el payload del band score (telemetría del caller) o None (off/fail). Gates: knob propio
+    MEALFIT_UPDATE_BAND_PARITY + BAND_SCORE_GATE_ENABLED (mismo kill-switch del banner S1). Umbrales
+    idénticos a S1 (macros-only/combined + per-macro). Fail-safe. tooltip-anchor: P1-BAND-PARITY-UPDATES"""
+    if not (UPDATE_BAND_PARITY_ENABLED and BAND_SCORE_GATE_ENABLED and isinstance(plan_data, dict)):
+        return None
+    try:
+        _bs = compute_clinical_band_score(plan_data, {})
+        _use_mo = bool(BAND_GATE_USE_MACROS_ONLY and _bs.get("score_macros_only") is not None)
+        _val = _bs.get("score_macros_only") if _use_mo else _bs.get("score")
+        _thr = BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY if _use_mo else BAND_SCORE_GATE_THRESHOLD
+        if _val is None:
+            return _bs
+        _pm = _bs.get("per_macro") or {}
+        _pm_low = ([k for k, v in _pm.items()
+                    if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
+                   if BAND_GATE_PER_MACRO else [])
+        _prev_reason = str(plan_data.get("_quality_degraded_reason") or "")
+        _was_fallback = bool(plan_data.get("_is_fallback"))
+        if _val < _thr or _pm_low:
+            # asignación + if (NO `if _maybe_mark_low_band_degraded(`): el layout del bloque post-scoring
+            # de S1 está anclado por regex de indentación en test_p2_11_gates_dedented_below_band_val_check.
+            _marked_band = _maybe_mark_low_band_degraded(plan_data, _val, _was_fallback, attempt,
+                                                         band_payload=_bs, score_threshold=_thr)
+            if _marked_band:
+                plan_data["_quality_degraded_surface"] = surface
+                if pantry_limited:
+                    plan_data["_quality_degraded_pantry_limited"] = True
+                logger.warning(f"📊 [P1-BAND-PARITY-UPDATES] update dejó el plan fuera de banda "
+                               f"(surface={surface} score={_val} thr={_thr} per_macro_low={_pm_low} "
+                               f"pantry_limited={pantry_limited}) → _quality_degraded persistido")
+        elif plan_data.get("_quality_degraded") and (
+                _prev_reason.startswith("low_band_score") or _prev_reason.startswith("low_band_macro")):
+            for _k in ("_quality_degraded", "_quality_degraded_reason", "_quality_degraded_severity",
+                       "_quality_degraded_attempts", "_quality_degraded_band_score",
+                       "_quality_degraded_band_per_macro_low", "_quality_degraded_surface",
+                       "_quality_degraded_pantry_limited"):
+                plan_data.pop(_k, None)
+            logger.info(f"📊 [P1-BAND-PARITY-UPDATES] update devolvió el plan A banda (surface={surface} "
+                        f"score={_val}) → banner low_band limpiado")
+        return _bs
+    except Exception as _ubp_e:
+        logger.debug(f"[P1-BAND-PARITY-UPDATES] no-op: {type(_ubp_e).__name__}: {_ubp_e}")
+        return None
+
+
+# [P1-CONDITION-CEILINGS-UPDATES] razones que produce _maybe_mark_panel_degraded (las únicas que este
+# wrapper puede limpiar/re-evaluar; cualquier otra razón previa se respeta intacta).
+_PANEL_DEGRADED_REASONS = ("condition_panel_gap", "low_micros", "high_sodium_sugar", "vitamin_k_inconsistent")
+
+
+def apply_update_condition_ceilings(plan_data: dict, form_data: dict, *, surface: str) -> bool:
+    """[P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) Los techos por condición
+    (sodio/HTA+renal, grasa saturada/dislipidemia, pisos K/Mg/fibra) solo se verificaban en form-gen
+    (`_maybe_mark_panel_degraded`, un único callsite post-scoring): un hipertenso que swapeaba a un plato
+    alto en sodio recibía el panel recomputado ('alto') pero NINGÚN banner ni enforcement. Este wrapper
+    re-corre el MISMO sub-check S1 sobre el panel RECOMPUTADO tras el update y:
+      - dispara → marca `_quality_degraded` (contrato S1 idéntico) + `_quality_degraded_surface`.
+      - un reason panel-* previo que YA NO dispara tras el update → se LIMPIA (el swap reparó el techo;
+        re-evaluación honesta bidireccional). Razones ajenas (banda, clínicas duras, max_attempts) jamás
+        se tocan (el sub-check respeta `_quality_degraded` existente).
+    Llamar DESPUÉS de `recompute_micronutrient_report_for_plan` (panel fresco) y ANTES de
+    `apply_update_band_parity` (precedencia clínica > banda, espejo del orden S1). Fail-safe.
+    tooltip-anchor: P1-CONDITION-CEILINGS-UPDATES"""
+    if not isinstance(plan_data, dict):
+        return False
+    try:
+        _prev = str(plan_data.get("_quality_degraded_reason") or "")
+        _prev_is_panel = bool(plan_data.get("_quality_degraded")) and any(
+            _prev.startswith(_r) for _r in _PANEL_DEGRADED_REASONS)
+        if _prev_is_panel:
+            # limpiar para re-evaluar sobre el panel fresco — el marker se re-pone si sigue disparando.
+            for _k in ("_quality_degraded", "_quality_degraded_reason", "_quality_degraded_severity",
+                       "_quality_degraded_attempts", "_quality_degraded_detail", "_quality_degraded_surface",
+                       "_quality_degraded_pantry_limited"):
+                plan_data.pop(_k, None)
+        _marked = _maybe_mark_panel_degraded(plan_data, form_data or {},
+                                             bool(plan_data.get("_is_fallback")), 1)
+        if _marked:
+            plan_data["_quality_degraded_surface"] = surface
+            logger.warning(f"⚕️ [P1-CONDITION-CEILINGS-UPDATES] techo/piso de condición fuera de banda tras "
+                           f"update (surface={surface} reason={plan_data.get('_quality_degraded_reason')}) "
+                           f"→ _quality_degraded persistido")
+        elif _prev_is_panel:
+            logger.info(f"⚕️ [P1-CONDITION-CEILINGS-UPDATES] el update reparó el gap de condición "
+                        f"(surface={surface} prev={_prev}) → banner limpiado")
+        return bool(_marked)
+    except Exception as _ucc_e:
+        logger.debug(f"[P1-CONDITION-CEILINGS-UPDATES] no-op: {type(_ucc_e).__name__}: {_ucc_e}")
         return False
 
 
