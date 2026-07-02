@@ -479,8 +479,10 @@ _MAIN_GOAL_ENUM = frozenset({
 # porque ningún downstream defaultea silenciosamente a un valor erróneo:
 #   - `scheduleType` → solo lo lee `build_time_context` para hint del LLM (texto).
 #   - `cookingTime` → idem, hint textual al LLM y al filtro de complejidad.
-#   - `budget` → influye en `_get_fast_filtered_catalogs` (catálogo de
-#      ingredientes); valor desconocido = catálogo completo (no peligroso).
+#   - `budget` → señal al prompt (`build_budget_context`) + palancas deterministas
+#      P1-BUDGET-TIER-LEVERS (boost del sorteo / cheapen-pass / reconciliación).
+#      NO filtra `_get_fast_filtered_catalogs` (comment previo estaba desactualizado
+#      — P2-KNOB-DOC-DRIFT); valor desconocido = sin palanca (no peligroso).
 #   - `groceryDuration` → en frontend rige `getTotalDaysByGroceryDuration`
 #      (defaultea a 'weekly' = 7 días); en backend afecta scaling de la lista
 #      de compras (defaultea a 'weekly').
@@ -5377,11 +5379,36 @@ def api_swap_meal_persist(
                     # kcal/UL-bounded, renal-skip interno. tooltip-anchor: P1-MICRO-CLOSER-UPDATES
                     _ps_swap = bool(isinstance(new_meal, dict) and new_meal.get("pantry_constrained"))
                     _adj_swap = _close_micro_gaps_for_plan(plan_data, _micro_form, db=None, pantry_strict=_ps_swap)
+                    # [P2-CARB-FLOOR-UPDATES · 2026-07-02] (audit v4 macros GAP-2) Paridad del closer
+                    # ADITIVO de carbos: S1 lo corre en la capa clínica; el swap solo re-escalaba HACIA
+                    # ABAJO (retrim) — un plato del LLM intrínsecamente bajo en carbos dejaba el día
+                    # bajo banda sin palanca aditiva. Mismo skip pantry-strict del micro-closer
+                    # (escalar = "comprar más"). Rollback: MEALFIT_CARB_FLOOR_UPDATES=false.
+                    # tooltip-anchor: P2-CARB-FLOOR-UPDATES
+                    _floor_swap = False
+                    if (not _ps_swap
+                            and os.environ.get("MEALFIT_CARB_FLOOR_UPDATES", "true").strip().lower()
+                            in ("1", "true", "yes", "on")):
+                        try:
+                            from graph_orchestrator import (_close_carb_gap_for_day as _ccg_sw,
+                                                            _meal_macro_num as _mmn_cf_sw)
+                            from nutrition_db import IngredientNutritionDB as _CFDB_sw
+                            _tc_cf_sw = _mmn_cf_sw((plan_data.get("macros") or {}).get("carbs"))
+                            _tk_cf_sw = _mmn_cf_sw(plan_data.get("calories"))
+                            if _tc_cf_sw and _tc_cf_sw > 0:
+                                _cfdb_sw = _CFDB_sw()
+                                for _d_cf_sw in plan_data.get("days", []) or []:
+                                    if isinstance(_d_cf_sw, dict) and _ccg_sw(
+                                        _d_cf_sw.get("meals", []) or [], _tc_cf_sw, _tk_cf_sw, _cfdb_sw
+                                    ):
+                                        _floor_swap = True
+                        except Exception as _cf_sw_e:
+                            logger.debug(f"[P2-CARB-FLOOR-UPDATES] (swap) no-op: {_cf_sw_e}")
                     # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] (audit macros GAP-4) el closer usa
                     # rescale_ingredient_string (sin snap) → "0.65 taza"/"137g" persistidos violaban la
                     # lección P3-PORTION-QUANTIZE. Re-quantize de porciones si el closer escaló algo
                     # (idempotente; ajusta macros por delta exacto). tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
-                    if _adj_swap:
+                    if _adj_swap or _floor_swap:
                         try:
                             from graph_orchestrator import _apply_portion_quantization as _qz_swap
                             from nutrition_db import IngredientNutritionDB as _QDB_swap
@@ -6163,6 +6190,9 @@ def api_regenerate_day(
                     # el closer se SALTA (escalar un ingrediente añadiría comida que el usuario no tiene). Se cablea
                     # por simetría con swap/chat-modify + documentación + future-proof si aparece un path no-strict.
                     # La adecuación de micros del día regenerado depende de lo disponible en la nevera (correcto).
+                    # [P2-CARB-FLOOR-UPDATES · 2026-07-02] mismo diseño para el floor ADITIVO de carbos:
+                    # en regen-day se OMITE a propósito (pantry-strict — escalar carbos = "comprar más");
+                    # swap/chat-modify sí lo corren cuando no son pantry-strict.
                     _close_micro_gaps_for_plan(pd, _micro_form, db=_db, pantry_strict=True)
                     recompute_micronutrient_report_for_plan(pd, _micro_form, db=_db)
                     # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica

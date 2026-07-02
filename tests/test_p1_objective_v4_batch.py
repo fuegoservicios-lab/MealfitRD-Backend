@@ -19,7 +19,19 @@ def _read(rel: str) -> str:
 
 
 def test_marker_bumped_in_app():
-    assert 'P1-OBJECTIVE-V4-BATCH · 2026-07-02' in _read("app.py")
+    """Supersession-proof (lección P1-AUDIT-V3-BATCH: el marker avanza el mismo día):
+    exige que `_LAST_KNOWN_PFIX` sea ESTE batch o uno POSTERIOR (fecha ≥ 2026-07-02)."""
+    import re as _re
+    src = _read("app.py")
+    m = _re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
+    assert m, "falta _LAST_KNOWN_PFIX"
+    marker = m.group(1)
+    if "P1-OBJECTIVE-V4-BATCH" in marker:
+        return
+    fecha = _re.search(r"(\d{4}-\d{2}-\d{2})", marker)
+    assert fecha and fecha.group(1) >= "2026-07-02", (
+        f"marker {marker!r} anterior al batch P1-OBJECTIVE-V4-BATCH · 2026-07-02"
+    )
 
 
 def test_all_eight_submarkers_present():

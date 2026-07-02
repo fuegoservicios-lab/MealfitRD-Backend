@@ -2112,7 +2112,8 @@ def fetch_brand_pref_packages(user_id: str) -> dict:
         rows = execute_sql_query(
             """
             SELECT p.food_key, sp.food_name, sp.brand, sp.presentation,
-                   sp.price_rd::float8 AS price_rd
+                   sp.price_rd::float8 AS price_rd,
+                   sp.size_grams::float8 AS size_grams
             FROM public.user_brand_preferences p
             JOIN public.supermarket_products sp ON sp.id = p.product_id
             WHERE p.user_id = %s AND sp.active AND sp.price_rd IS NOT NULL
@@ -2125,11 +2126,22 @@ def fetch_brand_pref_packages(user_id: str) -> dict:
         return {}
     out: dict = {}
     for r in rows:
-        grams = _parse_presentation_grams(r.get("presentation"))
+        # [P2-BRANDPREF-SIZE-COLUMN · 2026-07-02] `size_grams` explícito (admin UI) es la fuente
+        # AUTORITATIVA del tamaño del envase; el parser del texto libre `presentation` queda como
+        # fallback (la "L" suelta es ambigua libra/litro → antes esos productos PERDÍAN el overlay).
+        try:
+            grams = float(r.get("size_grams") or 0) or None
+        except (TypeError, ValueError):
+            grams = None
+        if grams is not None and not (1.0 <= grams <= 50000.0):
+            grams = None  # sanity fuera de rango → fallback al parser
+        if grams is None:
+            grams = _parse_presentation_grams(r.get("presentation"))
         if not grams:
             logging.info(
                 f"🏷️ [P1-SUPERMARKET-COSTING] pref '{r.get('food_key')}' sin tamaño parseable "
-                f"('{r.get('presentation')}') → costeo estándar para ese ítem."
+                f"('{r.get('presentation')}', size_grams NULL) → costeo estándar para ese ítem. "
+                f"Lever: poblar size_grams en /supermercado (P2-BRANDPREF-SIZE-COLUMN)."
             )
             continue
         try:

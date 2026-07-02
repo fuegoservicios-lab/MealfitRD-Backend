@@ -1449,6 +1449,35 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         _recompute_micros_on = os.environ.get(
             "MEALFIT_UPDATE_RECOMPUTE_MICROS", "true"
         ).strip().lower() in ("1", "true", "yes", "on")
+
+        # [P2-CARB-FLOOR-UPDATES · 2026-07-02] (audit v4 macros GAP-2) Paridad del closer ADITIVO de
+        # carbos: S1 lo corre en la capa clínica (`_close_carb_gap_for_day`, CARB_FLOOR_ENABLED ON);
+        # los updates solo re-escalaban HACIA ABAJO (retrim) — un plato del usuario intrínsecamente
+        # bajo en carbos dejaba el día bajo banda sin palanca aditiva. Mismo skip pantry-strict del
+        # micro-closer (escalar un ingrediente = "comprar más"). Corre en las DOS pasadas del patrón
+        # closer-order (pre-listas + callback) para que listas y fresh converjan. Rollback:
+        # MEALFIT_CARB_FLOOR_UPDATES=false. tooltip-anchor: P2-CARB-FLOOR-UPDATES
+        def _carb_floor_updates_cm(_pd_cf: dict) -> bool:
+            if _ps_cm or os.environ.get(
+                "MEALFIT_CARB_FLOOR_UPDATES", "true"
+            ).strip().lower() not in ("1", "true", "yes", "on"):
+                return False
+            try:
+                from graph_orchestrator import _close_carb_gap_for_day as _ccg_cf, _meal_macro_num as _mmn_cf
+                from nutrition_db import IngredientNutritionDB as _CFDB_cm
+                _tc_cf = _mmn_cf((_pd_cf.get("macros") or {}).get("carbs"))
+                _tk_cf = _mmn_cf(_pd_cf.get("calories"))
+                if not _tc_cf or _tc_cf <= 0:
+                    return False
+                _cfdb_cm = _CFDB_cm()
+                _hit_cf = False
+                for _d_cf in _pd_cf.get("days", []) or []:
+                    if isinstance(_d_cf, dict) and _ccg_cf(_d_cf.get("meals", []) or [], _tc_cf, _tk_cf, _cfdb_cm):
+                        _hit_cf = True
+                return _hit_cf
+            except Exception as _cf_cm_e:
+                logger.debug(f"[P2-CARB-FLOOR-UPDATES] (chat) no-op: {_cf_cm_e}")
+                return False
         if _recompute_micros_on:
             try:
                 from graph_orchestrator import _close_micro_gaps_for_plan as _cmg_pre
@@ -1472,9 +1501,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] pantry-strict (cocinar desde la nevera) → skip
                 # interno del closer; self-guards en MICRONUTRIENT_CLOSER_ENABLED, kcal/UL-bounded, renal-skip.
                 _adj_pre = _cmg_pre(plan_data, _micro_form_cm, db=None, pantry_strict=_ps_cm)
+                # [P2-CARB-FLOOR-UPDATES · 2026-07-02] floor aditivo de carbos en la MISMA pasada.
+                _floor_pre = _carb_floor_updates_cm(plan_data)
                 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] mismo quantize que el callback → las listas
                 # (computadas de esta copia) y el fresh persistido convergen a las MISMAS porciones.
-                if _adj_pre:
+                if _adj_pre or _floor_pre:
                     try:
                         from graph_orchestrator import _apply_portion_quantization as _qz_pre
                         from nutrition_db import IngredientNutritionDB as _QDB_pre
@@ -1669,9 +1700,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 try:
                     from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
                     _adj_cm = _close_micro_gaps_for_plan(plan_data_fresh, _micro_form_cm, db=None, pantry_strict=_ps_cm)
+                    # [P2-CARB-FLOOR-UPDATES · 2026-07-02] floor aditivo sobre el fresh (converge con pre-listas).
+                    _floor_cm = _carb_floor_updates_cm(plan_data_fresh)
                     # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] re-quantize si el closer escaló (porciones
                     # medibles; espejo del persist de swap). Determinista → converge con el pre-listas.
-                    if _adj_cm:
+                    if _adj_cm or _floor_cm:
                         try:
                             from graph_orchestrator import _apply_portion_quantization as _qz_cm
                             from nutrition_db import IngredientNutritionDB as _QDB_cm

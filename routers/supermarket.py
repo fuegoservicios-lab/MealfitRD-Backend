@@ -53,6 +53,7 @@ _SELECT_COLS = """
     portion_label,
     duration_label,
     price_rd::float8 AS price_rd,
+    size_grams::float8 AS size_grams,
     notes,
     category,
     master_food_name,
@@ -64,9 +65,14 @@ _SELECT_COLS = """
     to_jsonb(updated_at)#>>'{}' AS updated_at
 """
 
+# [P2-BRANDPREF-SIZE-COLUMN · 2026-07-02] `size_grams` = tamaño EXPLÍCITO del envase en gramos
+# (líquidos ≈ ml). Cierra el fail-open del parser de presentaciones: la "L" suelta es ambigua
+# (libra/litro en el PDF) → esos productos PERDÍAN el overlay de costeo de marca preferida
+# (P1-SUPERMARKET-COSTING). Con size_grams poblado (admin UI), el costeo lo usa DIRECTO y el
+# parser queda como fallback. Migración: p2_supermarket_size_grams_2026_07_02.sql (ambos dirs).
 _MUTABLE_FIELDS = (
     "food_name", "brand", "presentation", "portion_label", "duration_label",
-    "price_rd", "notes", "category", "master_food_name", "image_url",
+    "price_rd", "size_grams", "notes", "category", "master_food_name", "image_url",
     "description", "is_verified", "active",
 )
 
@@ -78,6 +84,7 @@ class SupermarketProductIn(BaseModel):
     portion_label: Optional[str] = Field(default=None, max_length=60)
     duration_label: Optional[str] = Field(default=None, max_length=60)
     price_rd: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    size_grams: Optional[float] = Field(default=None, gt=0, le=50_000)  # [P2-BRANDPREF-SIZE-COLUMN]
     notes: Optional[str] = Field(default=None, max_length=500)
     category: Optional[str] = Field(default=None, max_length=80)
     master_food_name: Optional[str] = Field(default=None, max_length=120)
@@ -94,6 +101,7 @@ class SupermarketProductPatch(BaseModel):
     portion_label: Optional[str] = Field(default=None, max_length=60)
     duration_label: Optional[str] = Field(default=None, max_length=60)
     price_rd: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    size_grams: Optional[float] = Field(default=None, gt=0, le=50_000)  # [P2-BRANDPREF-SIZE-COLUMN]
     notes: Optional[str] = Field(default=None, max_length=500)
     category: Optional[str] = Field(default=None, max_length=80)
     master_food_name: Optional[str] = Field(default=None, max_length=120)

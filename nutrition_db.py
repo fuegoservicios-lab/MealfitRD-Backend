@@ -47,6 +47,59 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod
         os.environ.get("MEALFIT_NUTRITION_UNIFIED_RESOLVER", "true").strip().lower()
         not in ("0", "false", "no", "off"))
 
+# [P2-COMPOUND-DISH-RESOLUTION · 2026-07-02] (audit v4 macros) Tier FINAL de resolución para platos
+# criollos COMPUESTOS (moro/mangú/locrio/sancocho/tostones…): la biblioteca `data/dominican_dishes.json`
+# (G17: macros per-100g reconstruidas de constituyentes CC0, cross-check FNDDS) estaba MUERTA como
+# generador POR DISEÑO (el LLM itemiza, no emite "locrío" como línea — decisión D-3), pero eso dejaba el
+# "0 silencioso": una línea "300g de moro" (chat/usuario/planes legacy) no resolvía → 0 macros → el
+# solver no la re-porcionaba y el panel la perdía. Aquí se revive como activo de RESOLUCIÓN: solo
+# macros (micros None → nutrient_coverage la marca 'estimado', honesto). Rollback sin redeploy:
+# MEALFIT_COMPOUND_DISH_RESOLUTION=false. tooltip-anchor: P2-COMPOUND-DISH-RESOLUTION
+try:
+    _COMPOUND_DISH_ENABLED = _ndb_env_bool("MEALFIT_COMPOUND_DISH_RESOLUTION", True)
+except Exception:  # pragma: no cover
+    _COMPOUND_DISH_ENABLED = (
+        os.environ.get("MEALFIT_COMPOUND_DISH_RESOLUTION", "true").strip().lower()
+        not in ("0", "false", "no", "off"))
+
+_COMPOUND_DISHES_CACHE: Optional[dict] = None
+
+
+def _load_compound_dishes() -> dict:
+    """{token_normalizado: {label, kcal, protein, carbs, fats}} desde data/dominican_dishes.json.
+    Lazy, 1 sola carga por proceso, fail-open → {} (el lookup degrada a None como antes)."""
+    global _COMPOUND_DISHES_CACHE
+    if _COMPOUND_DISHES_CACHE is not None:
+        return _COMPOUND_DISHES_CACHE
+    out: dict = {}
+    try:
+        import json
+        from pathlib import Path
+        path = Path(__file__).resolve().parent / "data" / "dominican_dishes.json"
+        dishes = (json.loads(path.read_text(encoding="utf-8")) or {}).get("dishes") or {}
+        for key, dish in dishes.items():
+            per100 = (dish or {}).get("per_100g") or {}
+            kcal = per100.get("kcal")
+            if not isinstance(kcal, (int, float)) or kcal <= 0:
+                continue
+            entry = {
+                "label": dish.get("label") or str(key),
+                "kcal": float(kcal),
+                "protein": float(per100.get("protein") or 0.0),
+                "carbs": float(per100.get("carbs") or 0.0),
+                "fats": float(per100.get("fats") or 0.0),
+            }
+            for token in {_strip_accents(str(key).strip().lower()),
+                          _strip_accents(str(dish.get("label") or "").strip().lower())}:
+                token = token.replace("_", " ").strip()
+                if token and len(token) >= 4:
+                    out.setdefault(token, entry)
+    except Exception as _cd_e:
+        logger.debug(f"[P2-COMPOUND-DISH-RESOLUTION] biblioteca no disponible (fail-open): {_cd_e}")
+        out = {}
+    _COMPOUND_DISHES_CACHE = out
+    return out
+
 
 def _strip_accents(s: str) -> str:
     try:
@@ -423,10 +476,13 @@ class IngredientNutritionDB:
         el row no tiene macros poblados (kcal_per_100g IS NULL)."""
         row = self._match_row(raw_name)
         if not row:
-            return None
+            # [P2-COMPOUND-DISH-RESOLUTION · 2026-07-02] tier FINAL: plato criollo compuesto
+            # (moro/mangú/sancocho…) desde la biblioteca G17. Solo cuando el catálogo NO resolvió.
+            return self._compound_dish_lookup(raw_name)
         kcal = _num(row.get("kcal_per_100g"))
         if kcal is None:
-            return None  # sin macros poblados → degradar (no inventar)
+            # sin macros poblados → intenta el tier compuesto antes de degradar (no inventar).
+            return self._compound_dish_lookup(raw_name)
         return NutritionInfo(
             name=row.get("name"),
             kcal=kcal,
@@ -461,6 +517,44 @@ class IngredientNutritionDB:
             selenium_mcg=_num(row.get("selenium_mcg_per_100g")),
             omega3_g=_num(row.get("omega3_ala_g_per_100g")),
         )
+
+    def _compound_dish_lookup(self, raw_name: str) -> Optional[NutritionInfo]:
+        """[P2-COMPOUND-DISH-RESOLUTION · 2026-07-02] Fallback FINAL: macros per-100g de un plato
+        criollo COMPUESTO desde data/dominican_dishes.json. Match exacto → contención word-boundary
+        (la clave más larga gana; padding con espacios evita 'moro'⊂'morrón' — el \\b implícito).
+        Micros ausentes a propósito (None → cobertura honesta). Fail-open → None."""
+        if not _COMPOUND_DISH_ENABLED:
+            return None
+        try:
+            dishes = _load_compound_dishes()
+            if not dishes:
+                return None
+            probe = _strip_accents(str(raw_name or "").strip().lower())
+            if not probe:
+                return None
+            entry = dishes.get(probe)
+            if entry is None:
+                padded = f" {probe} "
+                best = None
+                for token in dishes:
+                    if f" {token} " in padded and (best is None or len(token) > len(best)):
+                        best = token
+                entry = dishes.get(best) if best else None
+            if entry is None:
+                return None
+            logger.info(f"🍲 [P2-COMPOUND-DISH-RESOLUTION] '{str(raw_name)[:48]}' → "
+                        f"{entry['label']} ({entry['kcal']:.0f} kcal/100g, biblioteca G17)")
+            return NutritionInfo(
+                name=entry["label"],
+                kcal=entry["kcal"],
+                protein=entry["protein"],
+                carbs=entry["carbs"],
+                fats=entry["fats"],
+                source="dominican_dish_decomp",
+                is_dominican=True,
+            )
+        except Exception:
+            return None
 
     # ---- conversión a gramos -------------------------------------------
     def to_grams(self, qty, unit, info: NutritionInfo) -> Optional[float]:

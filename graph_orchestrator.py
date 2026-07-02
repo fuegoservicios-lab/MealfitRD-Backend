@@ -8105,11 +8105,21 @@ def _detect_slot_appropriateness(days: list) -> list:
             # con excludes) — la cena ya tiene su pase ingredient-driven con autofix (_night_rice_autofix).
             try:
                 from constants import slot_ingredient_violations as _siv
+                _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key))
                 for v in _siv(m.get("ingredients") or [], slot_key):
                     _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
+                    # [P2-SLOT-EVASION-TELEMETRY · 2026-07-02] (audit v4 slots) Evasión por nombre novel:
+                    # el pase ingredient-level cazó lo que el name-level NO vio. Serie greppable para
+                    # calibrar la cobertura semántica de tokens (¿faltan tokens de nombre? ¿qué evade?).
+                    if not _name_flagged:
+                        logger.info(
+                            f"🕵️ [P2-SLOT-EVASION-TELEMETRY] evasión name-level cazada por ingredient-level: "
+                            f"día {day_num} {slot_key} «{str(name)[:60]}» → {v.get('ingredient', 'arroz')}"
+                        )
                     issues.append({
                         "day": day_num, "slot": slot_key, "name": name,
                         "label": v["label"], "hard": v["hard"],
+                        "name_evaded": not _name_flagged,  # [P2-SLOT-EVASION-TELEMETRY]
                         "text": (
                             f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
                             f"{slot_key}: «{name}» lleva {v.get('ingredient', 'arroz')} en los ingredientes — "
@@ -9552,11 +9562,18 @@ BAND_GATE_PER_MACRO = _env_bool("MEALFIT_BAND_GATE_PER_MACRO", True)
 # medido de all-4 es ~66.7% (granularidad de porción cocinable — no existen 0.73 huevos), gatearlo a 1.0
 # sería mass-retry inútil; el enforcement "100% dentro de lo posible" = per-macro ≥0.5 + macros-only ≥0.45.
 BAND_GATE_PER_MACRO_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_PER_MACRO_THRESHOLD", 0.5)))
+# [P2-KCAL-GATE-BACKSTOP · 2026-07-02] (audit v4 macros) La celda kcal está EXCLUIDA del score macros-only
+# y del pase per-macro (P/C/F la acoplan aritméticamente 4/4/9 — si las 3 están en banda, kcal lo está) pero
+# si el cal-reconcile determinista degradara, NADA la vigilaba a nivel retry. Cinturón-y-tirantes: si la
+# fracción de días con kcal en banda cae bajo el umbral (catastrófico, ~nunca con el motor sano), fuerza
+# retry. Rollback sin redeploy: MEALFIT_BAND_GATE_KCAL_BACKSTOP=false. tooltip-anchor: P2-KCAL-GATE-BACKSTOP
+BAND_GATE_KCAL_BACKSTOP = _env_bool("MEALFIT_BAND_GATE_KCAL_BACKSTOP", True)
+BAND_GATE_KCAL_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_KCAL_THRESHOLD", 0.5)))
 # [P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer aditivo de CARBOS para
 # el caso en que el reconcile (clamp [0.4,1.8]) se satura (carbos del día muy por debajo de la banda, p.ej. <56%
 # del target → necesita >1.8×). Escala el ingrediente CARBO-dominante existente más rico hacia el target con un
 # clamp más alto, acotado por techo calórico (no rompe kcal). Espejo del closer de proteína (asimetría: proteína
-# tiene 3 closers, carbs/grasas ninguno). Default OFF (añade kcal → A/B de banda antes de activar). El fat-floor
+# tiene 3 closers, carbs/grasas ninguno). Nació OFF (añade kcal → A/B de banda antes de activar). El fat-floor
 # reusa `_topup_healthy_fat_to_band_floor` standalone bajo el mismo knob. tooltip-anchor: P2-CARB-FLOOR
 # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] Default flipped OFF→ON: el carb-floor SOLO dispara cuando el reconcile
 # (clamp 1.8) se satura y los carbos del día quedan MUY bajo la banda → mueve los carbos HACIA la banda (no los
@@ -9587,7 +9604,7 @@ UPDATE_APPETIBILITY_GUARD = _env_bool("MEALFIT_UPDATE_APPETIBILITY_GUARD", True)
 DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", True)
 # [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Promueve dish_quality de telemetría pura a GATE
 # SUAVE: si la fracción de platos placeholder/crudos supera el umbral, rechaza para retry (degrada a advisory en
-# el intento final, nunca cero-plan). Default OFF (opt-in) — el lever upstream (prompt+catálogo) ya da 0% fallback
+# el intento final, nunca cero-plan). Nació OFF (opt-in; ON desde P1-DISH-QUALITY-GATE-ON abajo) — el lever upstream (prompt+catálogo) ya da 0% fallback
 # en el happy-path; activar tras A/B para no inundar de retries. Umbral 0.34 = ≥1/3 de los platos genuinamente pobres.
 # [P2-DISH-QUALITY-GATE · 2026-06-29] Gate suave de placeholder/crudo. Los disparates conocidos (avena salada,
 # proteína bolt-on) ya los cubren los fixes deterministas P1-CLOSER-NO-DUP-CHEESE + el prompt P1-DISH-PALATABILITY.
@@ -11135,8 +11152,8 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
     K/P/proteína contraindicados — la adecuación de micros en ERC la maneja el panel renal-aware + el gate de
     nefrólogo); solo calcio queda cerrable (comportamiento previo). `pantry_strict=True` → SKIP total: escalar un
     ingrediente añade comida, contraindicado al cocinar ESTRICTAMENTE desde la nevera (la superficie pantry-strict
-    no puede "comprar más" — el closer es una inteligencia de "ir de compras"). Default OFF
-    (`MICRONUTRIENT_CLOSER_ENABLED`): añade kcal → requiere A/B de banda macro antes de activar en prod (mismo rollout
+    no puede "comprar más" — el closer es una inteligencia de "ir de compras"). ON por default
+    (`MICRONUTRIENT_CLOSER_ENABLED`, nació OFF; flip P1-OBJECTIVE-LEVERS-ON 2026-06-29 — mismo rollout
     que los closers de swap y el soft-reject). Idempotente en la práctica (tras cerrar, el día ya cumple → no
     re-escala), fail-open. Muta `plan` in-place. Devuelve nº de ajustes. tooltip-anchor: P1-MICRONUTRIENT-CLOSER"""
     if not MICRONUTRIENT_CLOSER_ENABLED or pantry_strict or not isinstance(plan, dict):
@@ -13106,7 +13123,8 @@ def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float
     saturó, ESCALA el ingrediente CARBO-dominante existente más rico hacia el target con un clamp más alto
     (`max_scale`), acotado por el techo calórico (no excede 1.12×target_kcal → no rompe kcal ni desplaza proteína)
     y re-cuantiza. NO añade ingredientes nuevos (coherencia receta↔lista intacta). Recompute HONESTO de macros
-    desde el string reescalado. Mutates meals. Retorna True si escaló. Default OFF (CARB_FLOOR_ENABLED). Fail-safe.
+    desde el string reescalado. Mutates meals. Retorna True si escaló. Gateado por CARB_FLOOR_ENABLED
+    (ON desde P1-OBJECTIVE-LEVERS-ON 2026-06-29). Fail-safe.
     tooltip-anchor: P2-CARB-FLOOR"""
     if not CARB_FLOOR_ENABLED or target_carbs <= 0:
         return False
@@ -14023,6 +14041,15 @@ _RECIPE_ENGLISH_RE = _re.compile(
 RECIPE_TIMETEMP_BACKSTOP_ENABLED = _env_bool("MEALFIT_RECIPE_TIMETEMP_BACKSTOP", True)
 RECIPE_CONTRACT_GATE_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_GATE", False)
 RECIPE_CONTRACT_GATE_RATIO = _env_float("MEALFIT_RECIPE_CONTRACT_GATE_RATIO", 0.5)
+
+# [P2-RAW-STAPLE-PRESSURE · 2026-07-02] (audit v4 creatividad) `raw_staple_ratio` ("pollo hervido +
+# arroz blanco" sin transformar — plato correcto pero CERO creatividad) era advisory puro: no alimentaba
+# ningún gate, así que un plan entero de staples desnudos solo se rechazaba si además era placeholder
+# (low_quality_ratio). La flota mide 0.0 en la serie creativity_kpi → este gate es BACKSTOP sin riesgo
+# de retry-storm: umbral alto (½ de los platos) + advisory en intento final (espejo dish-quality).
+# Rollback sin redeploy: MEALFIT_RAW_STAPLE_SOFT_GATE=false. tooltip-anchor: P2-RAW-STAPLE-PRESSURE
+RAW_STAPLE_SOFT_GATE_ENABLED = _env_bool("MEALFIT_RAW_STAPLE_SOFT_GATE", True)
+RAW_STAPLE_REJECT_RATIO = max(0.05, min(1.0, _env_float("MEALFIT_RAW_STAPLE_REJECT_RATIO", 0.5)))
 
 # (tokens accent-stripped de técnica → default de tiempo/temp es-DO). Orden = precedencia,
 # de técnica ESPECÍFICA a genérica ("dorar" aparece en casi todas → NO es token; la plancha
@@ -14982,7 +15009,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # ── Guard 4b-2 (P2-CARB-FLOOR · re-audit objetivo): closer ADITIVO de carbos cuando el reconcile (clamp 1.8)
     # se satura y los carbos del día quedan MUY bajo la banda. Espejo del closer de proteína (cierra la asimetría:
     # proteína 3 closers, carbos ninguno). Escala el carbo-dominante existente más rico + re-cuantiza, acotado por
-    # techo calórico. Default OFF (CARB_FLOOR_ENABLED → añade kcal, A/B antes de activar). El lado GRASA ya lo cubre
+    # techo calórico. Gateado por CARB_FLOOR_ENABLED (ON desde P1-OBJECTIVE-LEVERS-ON). El lado GRASA ya lo cubre
     # `_topup_healthy_fat_to_band_floor` (FASE A). Fail-safe.
     if CARB_FLOOR_ENABLED and _db is not None:
         try:
@@ -15053,8 +15080,9 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             _k_elev_med = False
 
     # [P1-MICRONUTRIENT-CLOSER · 2026-06-29] (audit objetivo · P1-4) Closer DETERMINISTA de micros alcanzables
-    # (fibra/Mg/Ca) ANTES del panel (Guard 5) → el reporte final refleja sus ajustes. Default OFF (opt-in,
-    # A/B-pending): escala un ingrediente existente rico en el micro deficitario, kcal-bounded, renal-skip.
+    # (fibra/Mg/Ca) ANTES del panel (Guard 5) → el reporte final refleja sus ajustes. ON por default
+    # (P1-OBJECTIVE-LEVERS-ON; nació opt-in): escala un ingrediente existente rico en el micro deficitario,
+    # kcal-bounded, renal-skip.
     # Cierra la asimetría "proteína=lever determinista; micros=solo nudge". No-op si el knob está OFF.
     if MICRONUTRIENT_CLOSER_ENABLED and _db is not None:
         try:
@@ -18002,7 +18030,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
 
     # [P3-MACRO-REBALANCE · 2026-06-19] Tras swap + cuantización: re-apunta carbos/grasas al target diario,
     # cerrando el error de redondeo que la cuantización independiente acumula (carbos/grasas continuos casi
-    # perfectos → ~7%/5% tras redondear). Determinista, protein-preserving, gated OFF hasta confirmar el A/B.
+    # perfectos → ~7%/5% tras redondear). Determinista, protein-preserving, ON por default (A/B confirmado
+    # all4 53.7→87.0 — ver def del knob).
     if MACRO_REBALANCE_ENABLED and _cg and _fg:
         try:
             from nutrition_db import IngredientNutritionDB as _RebNDB
@@ -21447,7 +21476,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # ≥ DISH_QUALITY_REJECT_RATIO de los platos son placeholder/crudos (nombre genérico, ingredientes 'Proteína
     # magra al gusto', receta no sustantiva que el backstop determinista no pudo rescatar), rechaza para retry,
     # degradando a advisory en el intento final (nunca cero-plan; espejo de los gates de slot/variedad). Recompute
-    # FRESCO sobre el plan ENTREGADO (post-backstops/fill). Default OFF (opt-in). Anchor: P2-DISH-QUALITY-GATE.
+    # FRESCO sobre el plan ENTREGADO (post-backstops/fill). ON desde P1-DISH-QUALITY-GATE-ON (nació
+    # opt-in). Anchor: P2-DISH-QUALITY-GATE.
     if DISH_QUALITY_SOFT_GATE_ENABLED:
         try:
             _dqg = compute_dish_quality_report(plan)
@@ -21474,6 +21504,40 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     severity = _severity_max(severity, "high")
         except Exception as _dqg_e:
             logger.warning(f"[P2-DISH-QUALITY-GATE] gate falló: {type(_dqg_e).__name__}: {_dqg_e}")
+
+    # [P2-RAW-STAPLE-PRESSURE · 2026-07-02] Gate SUAVE de creatividad: si ≥ ratio de los platos son
+    # staples DESNUDOS sin transformación ("pollo hervido + arroz blanco" — correcto pero cero cocina),
+    # rechaza para que el LLM proponga preparaciones reales (panqueques/guisos/bollitos). Flota en 0.0
+    # → backstop; advisory en intento final (nunca cero-plan).
+    if RAW_STAPLE_SOFT_GATE_ENABLED:
+        try:
+            _rsg = compute_dish_quality_report(plan)
+            _rsg_ratio = _rsg.get("raw_staple_ratio")
+            if _rsg_ratio is not None and _rsg_ratio >= RAW_STAPLE_REJECT_RATIO:
+                _rsg_attempt = int(state.get("attempt", 1))
+                if _rsg_attempt >= MAX_ATTEMPTS:
+                    logger.warning(
+                        f"🍚 [P2-RAW-STAPLE-PRESSURE] raw_staple_ratio={_rsg_ratio:.0%} en intento final "
+                        f"({_rsg_attempt}/{MAX_ATTEMPTS}) → ADVISORY (entrego el plan)."
+                    )
+                    if isinstance(plan, dict):
+                        plan["_raw_staple_advisory_final"] = True
+                else:
+                    logger.warning(
+                        f"🍚 [P2-RAW-STAPLE-PRESSURE] {_rsg_ratio:.0%} de platos son staples sin transformar "
+                        f"(≥{RAW_STAPLE_REJECT_RATIO:.0%}) → rechazo para subir la creatividad culinaria."
+                    )
+                    approved = False
+                    issues.append(
+                        f"{_rsg.get('raw_staple_meals')} plato(s) son ingredientes crudos/hervidos sin "
+                        "transformación culinaria (proteína plancha + carbo blanco + vegetal suelto). "
+                        "Convierte los platos en PREPARACIONES dominicanas reales: guisos, locrios (almuerzo), "
+                        "panqueques/arepitas con las harinas, bollitos de yuca, revoltillos, ensaladas compuestas — "
+                        "manteniendo los mismos macros."
+                    )
+                    severity = _severity_max(severity, "high")
+        except Exception as _rsg_e:
+            logger.warning(f"[P2-RAW-STAPLE-PRESSURE] gate falló: {type(_rsg_e).__name__}: {_rsg_e}")
 
     # [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] Gate SUAVE de EXCESO FLAGRANTE de sodio (> techo WHO ×
     # SODIUM_EXCESS_GATE_RATIO, default 1.5) sobre el panel ya computado en assemble. Default OFF (gate
@@ -21593,18 +21657,27 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _per_macro_low = [k for k, v in _per_macro.items()
                               if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
             _per_macro_trigger = bool(BAND_GATE_PER_MACRO and _per_macro_low)
-            if _agg_trigger or _per_macro_trigger:
+            # [P2-KCAL-GATE-BACKSTOP · 2026-07-02] La celda kcal (excluida del pase per-macro de arriba)
+            # recibe su propio backstop: <umbral de días con kcal en banda = fallo catastrófico del
+            # reconcile → retry. Con el motor sano jamás dispara (P/C/F en banda ⇒ kcal en banda).
+            _kcal_cell = _per_macro.get("kcal")
+            _kcal_trigger = bool(BAND_GATE_KCAL_BACKSTOP and _kcal_cell is not None
+                                 and _kcal_cell < BAND_GATE_KCAL_THRESHOLD)
+            if _agg_trigger or _per_macro_trigger or _kcal_trigger:
                 _low = [k for k, v in _per_macro.items()
                         if v is not None and v < 0.5 and k != "kcal"]
                 logger.warning(f"📊 [P2-BAND-RETRY-GATE] band_score={_bsr_val} < {_bsr_thr} "
                                f"(macros_only={_bsr_used_mo} agg={_agg_trigger} "
-                               f"per_macro_trigger={_per_macro_trigger} low={_per_macro_low} "
+                               f"per_macro_trigger={_per_macro_trigger} kcal_trigger={_kcal_trigger} "
+                               f"low={_per_macro_low} "
                                f"per_macro={_per_macro}) → rechazo para reintentar el balanceo de macros.")
                 approved = False
                 issues.append(
                     "PRECISIÓN DE MACROS BAJA: varios días tienen macros fuera de la banda objetivo "
                     "(90-112% del target diario)"
                     + (f", especialmente {', '.join(_low)}" if _low else "")
+                    + (" — y las CALORÍAS diarias quedaron lejos del objetivo en la mayoría de los días"
+                       if _kcal_trigger else "")
                     + ". Reajusta las PORCIONES (gramos) de cada comida para que la suma diaria de "
                     "proteína, carbohidratos y grasas caiga dentro de la banda objetivo, sin cambiar los platos."
                 )
@@ -25886,7 +25959,8 @@ def _maybe_mark_shopping_incomplete_degraded(plan: dict, delivered_was_fallback:
 def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallback: bool, attempt: int) -> bool:
     """[P2-PANEL-SOFT-REJECT · 2026-06-15] Soft-reject OBSERVABLE post-scoring sobre el panel de micros ya
     computado (`plan['micronutrient_report']`). Cubre 4 gaps del audit como sub-checks (cada uno tras SU
-    knob, default OFF): condición declarada con target cuantitativo fuera de banda (P2-4/P2-13 →
+    knob; defaults vigentes: condición ON, micros OFF, sodio/azúcar ON — P1-SODIUM-SUGAR-EXCESS-ON,
+    per-día ON — P1-MICRO-PERDAY-FLOOR): condición declarada con target cuantitativo fuera de banda (P2-4/P2-13 →
     reason=condition_panel_gap), micros alcanzables bajo piso (P2-5 → low_micros), sodio/azúcar sobre techo
     con cobertura alta (P2-8 → high_sodium_sugar). Marca _quality_degraded (banner existente) con la razón
     del PRIMER sub-check que dispara (precedencia: condición > micros > sodio/azúcar); NO pisa una razón
@@ -26039,7 +26113,7 @@ def _maybe_mark_low_resolution_degraded(plan: dict, delivered_was_fallback: bool
     criollos compuestos no-resueltos son el "0-silencioso" — el solver no re-porciona lo que no resuelve, así
     que los macros ASERTADOS pueden divergir de los físicos. Señal de TRANSPARENCIA (no necesariamente macro
     malo: los números se fuerzan al target). NO pisa una razón previa peor. Gateado por
-    MEALFIT_RESOLUTION_COVERAGE_GATE (default OFF — opt-in tras medir la distribución). Puro. Anchor:
+    MEALFIT_RESOLUTION_COVERAGE_GATE (default ON — red de transparencia; nació opt-in). Puro. Anchor:
     P2-RESOLUTION-COVERAGE-GATE."""
     try:
         if not RESOLUTION_COVERAGE_GATE_ENABLED or delivered_was_fallback or plan.get("_quality_degraded"):
@@ -26244,7 +26318,8 @@ def _compute_pipeline_holistic_score_and_emit(
                 # clinical_band_score=None (nutrition malformado / scorer falló). Cierra el hueco donde el G8
                 # fail-secure y los gates panel/resolución quedaban inalcanzables justo cuando los datos fallan.
                 # [P2-PANEL-SOFT-REJECT · 2026-06-15] degrada (observable) si el panel de micros deja un target
-                # de condición/micro/sodio-azúcar fuera de banda (cada sub-check tras su knob, default OFF).
+                # de condición/micro/sodio-azúcar fuera de banda (cada sub-check tras su knob; defaults
+                # vigentes en el docstring de _maybe_mark_panel_degraded).
                 if _maybe_mark_panel_degraded(plan, actual_form_data, delivered_was_fallback,
                                               final_state.get("attempt", 1)):
                     logger.warning(

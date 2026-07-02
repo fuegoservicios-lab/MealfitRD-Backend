@@ -38,10 +38,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: Guard — skip si no hay secrets configurados
         id: guard
+        # [P2-NIGHTLY-BENCH-ACTIVATE · 2026-07-02] Skip RUIDOSO: antes el auto-skip era un ::notice
+        # perdido en el log → el gate de no-regresión llevaba semanas sin correr sin que nadie lo
+        # notara ("verde" que en realidad era skip). Ahora el skip se escribe al STEP SUMMARY (visible
+        # en la lista de runs) con el puntero al SOP de activación (docs/nightly_benchmark_activation.md).
         run: |
           if [ -z "$DEEPSEEK_API_KEY" ] || [ -z "$NEON_DATABASE_URL_POOLED" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Secrets ausentes (DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED) — job auto-saltado."
+            echo "::warning::Job AUTO-SALTADO — secrets ausentes (DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED). El gate de no-regresión de macros NO está corriendo."
+            {
+              echo "## ⚠️ Benchmark nightly SALTADO (no corrió)"
+              echo ""
+              echo "Faltan secrets del repo — el gate de no-regresión de precisión de macros **no está activo**."
+              echo ""
+              echo "**Activación (owner):** Settings → Secrets and variables → Actions → New repository secret:"
+              echo "- \`DEEPSEEK_API_KEY\` · \`NEON_DATABASE_URL_POOLED\` · \`NEON_DATABASE_URL\` · \`COHERE_API_KEY\` (opcional)"
+              echo ""
+              echo "SOP completo: \`docs/nightly_benchmark_activation.md\`."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -63,3 +77,15 @@ jobs:
             --concurrency 2 \
             --baseline tests/fixtures/macro_baseline.json \
             --max-mape-rise 5 --max-band-drop 10
+      - name: Resumen de REGRESIÓN (solo en fallo)
+        if: failure() && steps.guard.outputs.skip == 'false'
+        # [P2-NIGHTLY-BENCH-ACTIVATE] Fallo visible en el summary del run (el owner mira la lista
+        # de Actions, no los logs). SOP de diagnóstico en docs/nightly_benchmark_activation.md.
+        run: |
+          {
+            echo "## 🛑 REGRESIÓN de precisión de macros detectada"
+            echo ""
+            echo "El benchmark N=20 salió de tolerancia vs \`tests/fixtures/macro_baseline.json\`"
+            echo "(--max-mape-rise 5 / --max-band-drop 10). Revisa el log del paso anterior y"
+            echo "el SOP en \`docs/nightly_benchmark_activation.md\` (sección Diagnóstico)."
+          } >> "$GITHUB_STEP_SUMMARY"

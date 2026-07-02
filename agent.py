@@ -1388,6 +1388,35 @@ def swap_meal(form_data: dict):
                 )
                 raise ValueError("SWEET_SAVORY_CLASH")
 
+        # [P2-UPDATE-DISHQUALITY-PRESSURE · 2026-07-02] (audit v4 paridad) El detector per-comida de
+        # dish-quality (nombre placeholder / ingredientes 'Proteína magra al gusto' / receta hueca) corría
+        # en updates solo como finalizer+telemetría — el swap TIENE retry-loop barato y no lo usaba: un
+        # plato placeholder se entregaba sin presión de mejora. Espejo del backstop de slot/clash: feedback
+        # al prompt + retry (fail-open, no 422 en strict_pantry-sin-inventario, el ValueError NO cuenta como
+        # CB failure por P2-CB-GUARDRAIL-NOT-FAILURE). chat-modify queda advisory (el deseo del usuario
+        # manda — mismo criterio que slot). Rollback: MEALFIT_SWAP_DISH_QUALITY_PRESSURE=false.
+        # tooltip-anchor: P2-UPDATE-DISHQUALITY-PRESSURE
+        if (os.environ.get("MEALFIT_SWAP_DISH_QUALITY_PRESSURE", "true").strip().lower() in ("1", "true", "yes", "on")
+                and not (strict_pantry and not clean_ingredients)):
+            try:
+                from graph_orchestrator import _meal_dish_quality_issue as _mdqi_sw
+                _dq_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                _dq_low, _dq_reason = _mdqi_sw(_dq_dump)
+            except Exception:
+                _dq_low, _dq_reason = False, None
+            if _dq_low:
+                logger.warning(
+                    f"🍽️ [P2-UPDATE-DISHQUALITY-PRESSURE] swap con plato placeholder/hueco "
+                    f"({str(_dq_reason)[:80]}) | meal_type={meal_type}"
+                )
+                _current_prompt[0] = prompt_text + (
+                    "\n\n🍽️ CALIDAD DE PLATO (OBLIGATORIO): el plato anterior parece un placeholder o viene "
+                    f"incompleto ({str(_dq_reason)[:100]}). Entrega un plato REAL y cocinable: nombre específico "
+                    "es-DO (no genérico), ingredientes concretos con cantidades, y receta con los 3 pilares "
+                    "(Mise en place / El Toque de Fuego con tiempo / Montaje). Mantén los macros objetivo."
+                )
+                raise ValueError("DISH_QUALITY: " + str(_dq_reason)[:100])
+
         # [P2-UPDATE-SAMEDAY-VARIETY · 2026-07-01] (audit slots GAP-4 / paridad GAP-4) La variedad same-day en
         # swap era SOLO prompt ("preferencia") → «cámbiame la cena» devolvía pechuga cuando el almuerzo YA era
         # pollo — exactamente la asimetría que P1-VARIETY-SAME-DAY-PROTEIN cerró en form-gen (gate). Backstop
