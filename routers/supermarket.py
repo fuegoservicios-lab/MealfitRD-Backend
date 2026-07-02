@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from auth import get_verified_user_id
 from db import execute_sql_query, execute_sql_write
 from rate_limiter import RateLimiter
 from routers.plans import _check_admin_rate_limit, _verify_admin_token
@@ -307,6 +308,100 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
     except Exception as exc:
         logger.error(f"❌ [P1-SUPERMARKET-MATCH] match falló: {exc}")
         raise HTTPException(status_code=500, detail="No se pudo consultar el supermercado.")
+
+
+# ── [P1-SUPERMARKET-PREFS · 2026-07-02] marca preferida por usuario (fase 2) ──
+# Tabla `user_brand_preferences` (migración p1_supermarket_prefs_2026_07_02.sql):
+# una fila por (user_id, food_key normalizado) → producto del súper elegido.
+# Auth con `get_verified_user_id` (guests usan localStorage en el cliente, sin
+# persistencia server-side). NO usa `verify_api_quota` (cero costo LLM — misma
+# razón que la historial-quota-exemption); anti-spam via RateLimiter propio.
+# Invariante I2: toda query filtra `WHERE user_id = %s`.
+_PREFS_LIMITER = RateLimiter(max_calls=40, period_seconds=60)
+
+
+class BrandPreferenceIn(BaseModel):
+    food_key: str = Field(min_length=1, max_length=120)
+    # None = borrar la preferencia de ese alimento.
+    product_id: Optional[str] = Field(default=None, max_length=64)
+
+
+@router.get("/preferences")
+async def api_get_brand_preferences(
+    user_id: str = Depends(get_verified_user_id),
+    _rl: Any = Depends(_PREFS_LIMITER),
+):
+    """Preferencias de marca del usuario autenticado, con el producto hidratado."""
+
+    def _fetch() -> Dict[str, Any]:
+        rows = execute_sql_query(
+            """
+            SELECT p.food_key,
+                   sp.id::text AS product_id,
+                   sp.food_name, sp.brand, sp.presentation,
+                   sp.price_rd::float8 AS price_rd, sp.active
+            FROM public.user_brand_preferences p
+            JOIN public.supermarket_products sp ON sp.id = p.product_id
+            WHERE p.user_id = %s
+            ORDER BY p.food_key
+            """,
+            (user_id,),
+            fetch_all=True,
+        ) or []
+        return {"preferences": {r["food_key"]: r for r in rows}}
+
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception as exc:
+        logger.error(f"❌ [P1-SUPERMARKET-PREFS] get falló: {exc}")
+        raise HTTPException(status_code=500, detail="No se pudieron cargar tus preferencias.")
+
+
+@router.put("/preferences")
+async def api_put_brand_preference(
+    body: BrandPreferenceIn,
+    user_id: str = Depends(get_verified_user_id),
+    _rl: Any = Depends(_PREFS_LIMITER),
+):
+    """Upsert (o borrado con product_id=null) de la marca preferida de UN alimento."""
+    food_key = _norm_food(body.food_key)
+    if not food_key:
+        raise HTTPException(status_code=422, detail="food_key inválido.")
+
+    def _write() -> Dict[str, Any]:
+        if body.product_id is None:
+            execute_sql_write(
+                "DELETE FROM public.user_brand_preferences WHERE user_id = %s AND food_key = %s",
+                (user_id, food_key),
+            )
+            return {"ok": True, "food_key": food_key, "product_id": None}
+        # El producto debe existir y estar visible al público — un id inventado
+        # o un producto oculto por la admin UI no puede quedar como preferencia.
+        product = execute_sql_query(
+            "SELECT id::text AS id FROM public.supermarket_products WHERE id = %s::uuid AND active",
+            (body.product_id,),
+            fetch_one=True,
+        )
+        if not product:
+            raise HTTPException(status_code=404, detail="Producto no encontrado en el supermercado.")
+        execute_sql_write(
+            """
+            INSERT INTO public.user_brand_preferences (user_id, food_key, product_id)
+            VALUES (%s, %s, %s::uuid)
+            ON CONFLICT (user_id, food_key)
+            DO UPDATE SET product_id = EXCLUDED.product_id, updated_at = now()
+            """,
+            (user_id, food_key, body.product_id),
+        )
+        return {"ok": True, "food_key": food_key, "product_id": body.product_id}
+
+    try:
+        return await asyncio.to_thread(_write)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [P1-SUPERMARKET-PREFS] put falló: {exc}")
+        raise HTTPException(status_code=500, detail="No se pudo guardar tu preferencia.")
 
 
 @router.post("/products")

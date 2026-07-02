@@ -110,7 +110,7 @@ def test_migration_idempotent_with_sanity():
 def _handler_bodies(source: str) -> dict:
     """{(verbo, offset) → cuerpo} por handler @router.<verb>; cada cuerpo corta
     en el siguiente decorador (o EOF)."""
-    matches = list(re.finditer(r"@router\.(get|post|patch|delete)\(", source))
+    matches = list(re.finditer(r"@router\.(get|post|put|patch|delete)\(", source))
     bodies = {}
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(source)
@@ -122,12 +122,12 @@ def test_all_mutations_require_admin_token():
     source = _ROUTER.read_text(encoding="utf-8")
     bodies = _handler_bodies(source)
     mutating = {(verb, off): body for (verb, off), body in bodies.items()
-                if verb in ("post", "patch", "delete")}
+                if verb in ("post", "put", "patch", "delete")}
     assert len(mutating) >= 3, (
         "P1-SUPERMARKET-DB violation: se esperaban al menos POST+PATCH+DELETE."
     )
     for (verb, _), body in mutating.items():
-        # [P1-SUPERMARKET-MATCH · 2026-07-02] Única exención: POST /match es
+        # [P1-SUPERMARKET-MATCH · 2026-07-02] Exención 1: POST /match es
         # read-only público a propósito (matching lista de compras → catálogo;
         # el POST solo transporta el body). El contrato compensatorio es que
         # JAMÁS escriba: cero execute_sql_write en su cuerpo + RateLimiter propio.
@@ -138,6 +138,24 @@ def test_all_mutations_require_admin_token():
             )
             assert "_MATCH_LIMITER" in body, (
                 "P1-SUPERMARKET-MATCH violation: /match debe llevar su RateLimiter."
+            )
+            continue
+        # [P1-SUPERMARKET-PREFS · 2026-07-02] Exención 2: PUT /preferences es una
+        # mutación USER-SCOPED (marca preferida) — el gate correcto es
+        # get_verified_user_id + filtro user_id (I2), NO el token admin. Contrato
+        # compensatorio: jamás escribe supermarket_products y toda query sobre
+        # user_brand_preferences va anclada al user_id autenticado.
+        if '@router.put("/preferences")' in body:
+            assert "Depends(get_verified_user_id)" in body, (
+                "P1-SUPERMARKET-PREFS violation: /preferences sin get_verified_user_id."
+            )
+            assert "user_brand_preferences" in body and "user_id = %s" in body, (
+                "P1-SUPERMARKET-PREFS violation: la escritura debe ir a "
+                "user_brand_preferences con filtro user_id (I2)."
+            )
+            assert not re.search(r"(UPDATE|INSERT INTO|DELETE FROM)\s+public\.supermarket_products", body), (
+                "P1-SUPERMARKET-PREFS violation: /preferences NO puede escribir "
+                "supermarket_products — eso exige el gate admin."
             )
             continue
         assert "_verify_admin_token(" in body, (
