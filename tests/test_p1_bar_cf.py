@@ -60,6 +60,10 @@ def test_clinical_layer_calls_caps_when_bariatric(monkeypatch):
 
 def test_non_bariatric_noop(monkeypatch):
     monkeypatch.setattr(g, "_truth_up_meal_macros_from_strings", lambda m, db: True)
+    # El intent de este test son los CAPS bariátricos (no-bariátrico → sin recorte). Desde el flip ON del
+    # micro-closer (P1-OBJECTIVE-LEVERS-ON · 2026-06-29) la capa clínica escala legítimamente el queso
+    # (+~80 kcal de budget para cerrar un floor de micros) → aislarlo para que el assert mida solo los caps.
+    monkeypatch.setattr(g, "MICRONUTRIENT_CLOSER_ENABLED", False)
     plan = {"days": [{"day": 1, "meals": [{"meal": "Merienda", "name": "Q", "ingredients": ["920 g de queso fresco"]}]}]}
     g._apply_deterministic_clinical_layer(plan, {"medicalConditions": ["Ninguna"], "allergies": []})
     assert "920" in plan["days"][0]["meals"][0]["ingredients"][0]  # no-bariátrico → intacto

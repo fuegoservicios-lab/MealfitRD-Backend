@@ -14465,6 +14465,25 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         logger.error("🛑 [P2-CLINICAL-LAYER-FAILSAFE] Capa clínica INCOMPLETA (DB de nutrición no "
                      "disponible) — plan marcado _clinical_layer_incomplete.")
 
+    # ── Guard 0.5 (slot): arroz de noche — autofix determinista también en esta capa ──
+    # [P0-FALLBACK-CENA-ARROZ · 2026-07-01] Los paths de entrega fallback (critical/max-attempts, callsites
+    # 25620/26930/27053) bypassean assemble_plan_node → nunca corrían _night_rice_autofix ni el gate
+    # P1-SLOT-APPROPRIATENESS: cualquier day que llegue aquí sin assemble podía entregar arroz en la CENA
+    # (el pool bariátrico curado lo hacía determinista el día 3/7). Correrlo aquí cierra la clase entera:
+    # en el happy path (vía _apply_macro_engine, que corre DESPUÉS del autofix de assemble) es no-op
+    # idempotente, y los guards downstream (renal/quantize/carb-floor/micro-closer/truth-up) dimensionan el
+    # tubérculo final. compound=False: moro/locrio se dejan al gate en el happy path (retry da un plato
+    # mejor); los pools fallback no contienen compuestos. Rollback: NIGHT_RICE_AUTOFIX_ENABLED (mismo knob
+    # del autofix — la función retorna 0 con el knob off). tooltip-anchor: P0-FALLBACK-CENA-ARROZ
+    try:
+        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db)
+        if _nr_layer:
+            logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
+                           f"{_nr_layer} cena(s) (path sin assemble)")
+    except Exception as _nr_e:
+        logger.warning(f"[P0-FALLBACK-CENA-ARROZ] night-rice en capa clínica falló (no bloquea): "
+                       f"{type(_nr_e).__name__}: {_nr_e}")
+
     # [P4-CONSTRAINT-ABC · 2026-06-14] Motor de constraints declarativo (posición-preservante): despacha
     # los guards condition-específicos (Guard 1 renal, Guard 3 sustituciones) vía constraints en orden de
     # precedencia, SIN reordenar (food-safety sigue físicamente entre ambos). El cap renal NO se
@@ -24353,9 +24372,14 @@ _FALLBACK_MEAL_POOLS_BARIATRIC = {
         ("Huevos con Berenjena Asada", frozenset({"egg"}),
          "Huevos cocidos con berenjena asada. Proteína MOIST blanda, bajo volumen.",
          ["2 unidades huevo", "100g berenjena asada"]),
-        ("Habichuelas Guisadas con Arroz", frozenset({"legume"}),
-         "Habichuelas guisadas con arroz blanco. Proteína vegetal.",
-         ["80g habichuelas guisadas", "80g arroz blanco cocido"]),
+        # [P0-FALLBACK-CENA-ARROZ · 2026-07-01] Era "Habichuelas Guisadas con Arroz" (80g arroz blanco cocido):
+        # arroz en la CENA — la violación cultural #1 del slot-appropriateness — servida DETERMINISTA el día 3/7
+        # de todo plan fallback bariátrico multi-día (rotación P2-FALLBACK-DAY-ROTATION), porque el fallback
+        # crítico bypassa assemble (sin _night_rice_autofix ni gate). Tubérculo nocturno en su lugar; "yuca
+        # cocida" ya está verificada en el catálogo por este mismo pool. tooltip-anchor: P0-FALLBACK-CENA-ARROZ
+        ("Habichuelas Guisadas con Yuca", frozenset({"legume"}),
+         "Habichuelas guisadas con yuca cocida. Proteína vegetal.",
+         ["80g habichuelas guisadas", "80g yuca cocida"]),
         ("Auyama con Vainitas", frozenset(),
          "Auyama cocida con vainitas. Cena vegetal suave.",
          ["120g auyama cocida", "80g vainitas cocidas"]),
@@ -24448,7 +24472,8 @@ def _build_fallback_day(nutr: dict, day_number: int,
     # [P1-FALLBACK-BARIATRIC-CURATED · 2026-06-28] Bariátrico → 6 comidas del pool curado; si no → 3 comidas genéricas
     # (histórico, byte-idéntico). Fail-safe: slot ausente en el pool curado cae al genérico; ratio único por slot aplicado
     # a cal/pro/car/fat (igual que el genérico).
-    if _fallback_is_bariatric(form_data):
+    _is_bar_fb = _fallback_is_bariatric(form_data)
+    if _is_bar_fb:
         from nutrition_calculator import meal_types_for_count
         _n = FALLBACK_BARIATRIC_MEAL_COUNT
         _slot_names = meal_types_for_count(_n)
@@ -24486,6 +24511,14 @@ def _build_fallback_day(nutr: dict, day_number: int,
                     _tgt_kcal = float(_m.get("cals") or 0)
                     if _phys_kcal > 0 and _tgt_kcal > 0:
                         _f_fb = max(0.5, min(2.5, _tgt_kcal / _phys_kcal))
+                        # [P1-FALLBACK-RESCALE-BARIATRIC-CAP · 2026-07-01] En bariátrico el factor solo puede
+                        # REDUCIR (≤1.0): el pool curado ES el contrato de porciones (pouch, caps queso30/
+                        # yogurt120/volumen300 "vetados por construcción" — invariante test_cap_is_noop).
+                        # Escalar hacia el target kcal producía 370g de mero / 203g de yogurt / 2.54 huevos,
+                        # que el cap luego recortaba a residuos absurdos (19.78g papa). "Ligeramente bajo
+                        # banda es el lado seguro post-bariátrico" (P1-FALLBACK-BAND-AWARE).
+                        if _is_bar_fb:
+                            _f_fb = min(_f_fb, 1.0)
                         if abs(_f_fb - 1.0) > 0.05:
                             _m["ingredients"] = [(_resc_fb(str(_i), _f_fb) or _i) for _i in _m["ingredients"]]
                     _truth_up_meal_macros_from_strings(_m, _fdb)
