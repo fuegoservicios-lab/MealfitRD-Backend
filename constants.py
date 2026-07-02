@@ -1687,6 +1687,16 @@ SLOT_INAPPROPRIATE_FOODS = {
          "hardness": "hard"},
         {"label": "sopón de almuerzo (sancocho/asopao/mondongo)", "tokens": (
             "sancocho", "asopao", "mondongo"), "hardness": "hard"},
+        # [P2-SLOT-DESAYUNO-GUISADOS · 2026-07-02] (audit v3 slots GAP-B) el prompt (plan_generator regla
+        # cultural) prohíbe legumbres y proteínas GUISADAS pesadas al desayuno pero el validador no lo
+        # enforzaba (prompt-only, sin red determinista). Tokens COMPUESTOS para las proteínas (salami
+        # guisado / huevos guisados SÍ son desayuno RD legítimo — no van sueltos "guisado") + legumbres
+        # standalone. Exclude: "habichuelas con dulce" (postre criollo — fuera del alcance de la regla).
+        # hardness=soft (degrada a advisory en intento final). tooltip-anchor: P2-SLOT-DESAYUNO-GUISADOS
+        {"label": "guiso pesado/legumbres de almuerzo en el desayuno", "tokens": (
+            "pollo guisado", "pescado guisado", "cerdo guisado", "res guisada", "carne guisada",
+            "chuleta guisada", "habichuela", "lenteja", "guandul", "gandule"),
+         "hardness": "soft", "exclude": ("habichuelas con dulce", "habichuela con dulce")},
     ],
     "cena": [
         {"label": "arroz/locrio/moro (\"arroz de noche\")", "tokens": _SLOT_RICE_TOKENS,
@@ -1694,8 +1704,22 @@ SLOT_INAPPROPRIATE_FOODS = {
         # [P1-SLOT-CENA-PASTA-OK · 2026-06-27] La PASTA/espagueti SÍ va en la cena dominicana (carbo ligero de
         # digestión rápida; "cenar espaguetis" es común) → NO se bloquea de noche. Solo queda inapropiada en el
         # DESAYUNO. Decisión del owner. Antes estaba como soft-block en cena (suposición cultural incorrecta).
-        {"label": "comida de desayuno en la cena (cereal/panqueque/waffle)", "tokens": (
-            "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa"),
+        # [P2-SLOT-CENA-AVENA · 2026-07-02] (audit v3 slots GAP-D) + "avena": el almuerzo ya la tenía
+        # (P3-SLOT-ALMUERZO-AVENA) pero la cena no — "Avena con frutas" de cena pasaba mientras la misma
+        # de almuerzo flageaba (asimetría). Mismos excludes (harina/leche/costra de avena legítimos).
+        {"label": "comida de desayuno en la cena (cereal/panqueque/waffle/avena)", "tokens": (
+            "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa", "avena"),
+         "hardness": "soft",
+         "exclude": ("harina de avena", "leche de avena", "costra de avena", "empanizado de avena",
+                     "empanizada de avena", "apanado de avena")},
+        # [P2-SLOT-CENA-FRITURA · 2026-07-02] (audit v3 slots GAP-C) "frituras pesadas de noche" era
+        # prompt-only (day_generator §15d) — 'frito'/'frita' sueltos se omiten A PROPÓSITO (falso positivo
+        # en tostones/queso frito como acompañante). Tokens COMPUESTOS de fritura-de-proteína-como-plato
+        # (inequívocos) + chicharrón (plato fuerte frito; como merienda sigue legítimo — regla solo cena).
+        # hardness=soft. tooltip-anchor: P2-SLOT-CENA-FRITURA
+        {"label": "fritura pesada de proteína como plato de la cena", "tokens": (
+            "pollo frito", "pescado frito", "cerdo frito", "chuleta frita", "costilla frita",
+            "salami frito", "carne frita", "chicharron"),
          "hardness": "soft"},
         # [P2-SLOT-CENA-HEAVY-SOUP · 2026-06-29] (re-audit objetivo · P2) El prompt prohíbe los sopones
         # pesados de noche pero el gate no los enforzaba (asimetría vs la regla "sopón de almuerzo" del

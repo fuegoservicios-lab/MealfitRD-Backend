@@ -198,6 +198,27 @@ REGLAS ESTRICTAS:
          PROHIBIDOS salvo que sean un plato reconocido.
 """
 
+# [P2-SLOT-SSOT-PROMPT · 2026-07-02] (audit v3 slots GAP-F) Bloque de reglas de horario DERIVADO del SSOT
+# del validador (constants.SLOT_INAPPROPRIATE_FOODS + SLOT_POSITIVE_HINT vía build_meal_timing_rules) y
+# APPENDEADO al system prompt a IMPORT-time. Antes el §15 hardcodeaba su propia copia de las reglas: el
+# prompt prohibía MÁS de lo que el validador enforzaba (causa raíz de GAPs B/C/D) y endurecer el validador
+# NO propagaba al prompt de form-gen (los prompts de UPDATE sí derivan del SSOT). Import-time = string
+# estático por deploy → el prompt-cache del SystemMessage queda INTACTO (P1-PROMPT-CACHE). La prosa
+# creativa del §15 se mantiene; este bloque añade el contrato EXACTO que el gate rechaza. Fail-safe.
+# tooltip-anchor: P2-SLOT-SSOT-PROMPT
+try:
+    from constants import build_meal_timing_rules as _bmtr_ssot
+    _SLOT_SSOT_RULES_BLOCK = "\n".join(
+        _b for _b in (_bmtr_ssot(_s) for _s in ("Desayuno", "Almuerzo", "Cena", "Merienda")) if _b
+    ).strip()
+except Exception:
+    _SLOT_SSOT_RULES_BLOCK = ""
+if _SLOT_SSOT_RULES_BLOCK:
+    DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
+        "\n16. CONTRATO EXACTO DEL VALIDADOR DE HORARIO (derivado del SSOT — el gate rechaza "
+        "exactamente esto, sin excepciones):\n    " + _SLOT_SSOT_RULES_BLOCK + "\n"
+    )
+
 
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.
 # Clave: término de búsqueda en el pool (lowercase). Valor: etiqueta para el LLM.

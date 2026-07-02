@@ -1674,6 +1674,28 @@ def swap_meal(form_data: dict):
         except Exception as _cl_e:
             logger.warning(f"[P2-SWAP-PROTEIN-CLOSER] closer falló (no bloquea): {type(_cl_e).__name__}: {_cl_e}")
 
+    # [P2-PANTRY-VARIETY-ADVISORY · 2026-07-02] (audit v3 creatividad GAP-5) el guard same-day de variedad
+    # se SALTA entero en pantry-strict (repetir puede ser inevitable cocinando de la nevera — correcto para
+    # el RETRY), pero eso también silenciaba la SEÑAL. Advisory-only en pantry-strict: si la proteína del
+    # plato entregado repite otra comida de hoy → flag `_same_day_protein_advisory` (telemetría/frontend,
+    # jamás retry ni bloqueo). tooltip-anchor: P2-PANTRY-VARIETY-ADVISORY
+    if isinstance(_out, dict) and strict_pantry and same_day_other_meals:
+        try:
+            import re as _re_pv
+            from constants import strip_accents as _sa_pv
+            _PV_PROT = ("pollo", "pechuga", "cerdo", "chuleta", "res", "bistec", "pavo", "pescado",
+                        "tilapia", "salmon", "bacalao", "camaron", "atun", "huevo", "revoltillo")
+            _pv_name = _sa_pv(str(_out.get("name", "")).lower())
+            _pv_hit = next((t for t in _PV_PROT if _re_pv.search(r"\b" + t, _pv_name)), None)
+            if _pv_hit:
+                _pv_blob = _sa_pv(" ".join(str(x) for x in same_day_other_meals).lower())
+                if _re_pv.search(r"\b" + _pv_hit, _pv_blob):
+                    _out["_same_day_protein_advisory"] = True
+                    logger.info(f"🔄 [P2-PANTRY-VARIETY-ADVISORY] proteína '{_pv_hit}' repetida hoy "
+                                f"(pantry-strict → advisory, sin retry)")
+        except Exception:
+            pass
+
     # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Guard FINAL defensa-en-profundidad: el path de
     # "Plato Fallback" (knob MEALFIT_SWAP_EMIT_FALLBACK_DISH=true) arma el plato desde
     # clean_ingredients[:4] sin pasar por el check del retry loop → podría contener un alérgeno

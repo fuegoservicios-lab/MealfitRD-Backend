@@ -1330,27 +1330,53 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # re-escalador never-worse; protein-closer anclado al macro ORIGINAL del plato + skip pantry/renal. Rollback por env.
         _ps_macro = bool(clean_ingredients) and not allow_pantry_expansion
         _is_renal_macro = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
+        # [P2-CHATMOD-TARGET-ANCHOR · 2026-07-02] (audit v3 macros GAP-6) los closers anclaban al macro
+        # ORIGINAL del plato: si ese plato heredaba un shortfall (plan degradado previo / erosión de swaps
+        # repetidos), el modify lo PRESERVABA en vez de moverlo hacia el target — asimetría vs swap (S3
+        # ancla al target del slot). Anchor de PROTEÍNA = max(original, target canónico del slot: header ×
+        # fracción fisiológica _canonical_slot_fractions). Solo SUBE el anchor (never-worse); C/F conservan
+        # el original (el usuario pudo pedir un plato más liviano). Pantry/renal exentos (mismos guards).
+        _anchor_p = float(original_protein or 0)
+        if not _ps_macro and not _is_renal_macro:
+            try:
+                from graph_orchestrator import _canonical_slot_fractions as _csf_m, _meal_macro_num as _mmn_m
+                _day_meals_anchor = next(
+                    ((_d_a.get("meals") or []) for _d_a in (plan_data.get("days") or [])
+                     if isinstance(_d_a, dict) and _d_a.get("day") == day_number), None)
+                if _day_meals_anchor:
+                    _fr_a = _csf_m(_day_meals_anchor)
+                    _idx_a = next((i for i, m in enumerate(_day_meals_anchor)
+                                   if isinstance(m, dict)
+                                   and str(m.get("meal", "")).lower().strip() == meal_type.lower().strip()), None)
+                    if _fr_a and _idx_a is not None and _idx_a < len(_fr_a):
+                        _slot_tp = _mmn_m((plan_data.get("macros") or {}).get("protein")) * float(_fr_a[_idx_a] or 0)
+                        if _slot_tp > _anchor_p:
+                            logger.info(f"🎯 [P2-CHATMOD-TARGET-ANCHOR] anchor de proteína {_anchor_p:.0f}g → "
+                                        f"{_slot_tp:.0f}g (target canónico del slot {meal_type})")
+                            _anchor_p = _slot_tp
+            except Exception as _ta_e:
+                logger.debug(f"[P2-CHATMOD-TARGET-ANCHOR] no-op: {_ta_e}")
         if (not _ps_macro and not _is_renal_macro
                 and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "true").strip().lower() in ("1", "true", "yes", "on")
-                and (original_protein or original_carbs or original_fats)):
+                and (_anchor_p or original_carbs or original_fats)):
             try:
                 from graph_orchestrator import _rebalance_day_macros_to_target as _rb_m
                 from nutrition_db import IngredientNutritionDB as _RbDBm
                 _rb_m([new_meal_data], float(original_carbs or 0), float(original_fats or 0), _RbDBm(),
-                      target_protein=float(original_protein or 0))
+                      target_protein=float(_anchor_p or 0))
             except Exception as _rbm_e:
                 logger.warning(f"[P2-MACRO-UPD-1] rebalance en modify falló (no bloquea): {type(_rbm_e).__name__}: {_rbm_e}")
         if (not _ps_macro and not _is_renal_macro
                 and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "true").strip().lower() in ("1", "true", "yes", "on")
-                and original_protein and float(original_protein or 0) > 0
-                and float(new_meal_data.get("protein") or 0) < float(original_protein)):
+                and _anchor_p and float(_anchor_p or 0) > 0
+                and float(new_meal_data.get("protein") or 0) < float(_anchor_p)):
             try:
                 from graph_orchestrator import _close_protein_gap_for_meal as _cpg_m, _safe_high_density_proteins as _shdp_m
                 from nutrition_db import IngredientNutritionDB as _ClDBm
                 _cl_db_m = _ClDBm()
                 _cands_m = _shdp_m(_clin_allergies, _cl_db_m, min_protein=18.0)
                 if _cands_m:
-                    _cpg_m(new_meal_data, float(original_protein), _cl_db_m, _cands_m)
+                    _cpg_m(new_meal_data, float(_anchor_p), _cl_db_m, _cands_m)
             except Exception as _cpgm_e:
                 logger.warning(f"[P2-MACRO-UPD-1] protein-closer en modify falló (no bloquea): {type(_cpgm_e).__name__}: {_cpgm_e}")
         # [P2-MACRO-UPD-3 · 2026-06-29] (re-audit objetivo · P2) Telemetría de banda per-comida (paridad del canal

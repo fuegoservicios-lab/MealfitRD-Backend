@@ -4198,6 +4198,28 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         except Exception as _sq_exp_e:
             logger.debug(f"[P1-EXPAND-QTY-SYNC] qty-sync en expand no-op: {type(_sq_exp_e).__name__}: {_sq_exp_e}")
 
+        # [P2-EXPAND-FINALIZE-PARITY · 2026-07-02] (audit v3 recetas GAP-4) paridad de finalización EN ORIGEN
+        # (cubre persist Y guests): (a) coherencia INVERSA — un ingrediente comprado que ningún paso del Chef
+        # usa recibe su paso de uso (mismo guard del persist boundary); (b) display — colapsa dobles
+        # fracciones en los pasos (el frontend renderiza steps verbatim, sin prettifier step-level). Fail-safe.
+        # tooltip-anchor: P2-EXPAND-FINALIZE-PARITY
+        try:
+            from graph_orchestrator import _ensure_ingredients_used_in_recipe as _eiu_exp
+            _eiu_meal = {"name": req_name,
+                         "ingredients": [str(_i) for _i in (data.get("ingredients") or [])] + list(_expand_added_ings),
+                         "recipe": list(expanded_steps)}
+            if _eiu_exp(_eiu_meal):
+                expanded_steps = [str(_s) for _s in (_eiu_meal.get("recipe") or []) if str(_s).strip()]
+                logger.info(f"🔁 [P2-EXPAND-FINALIZE-PARITY] coherencia inversa aplicada a pasos expandidos "
+                            f"| meal='{req_name}'")
+        except Exception as _eiu_e:
+            logger.debug(f"[P2-EXPAND-FINALIZE-PARITY] reverse-coherence no-op: {_eiu_e}")
+        try:
+            from humanize_ingredients import _collapse_double_fraction as _cdf_exp
+            expanded_steps = [_cdf_exp(str(_s)) for _s in expanded_steps]
+        except Exception:
+            pass
+
         # [P2-EXPAND-UNCOUNTED-ADDITION · 2026-07-01] (audit v2 expand GAP-2, batch P2-AUDIT-V2-BATCH) El Chef
         # podía añadir en los PASOS grasa/edulcorante SUSTANTIVO no contado ("sofríe en 3 cucharadas de aceite"
         # ≈ 270 kcal) — no entra a ingredients[], ni a macros, ni a compras → el plato declara macros falsamente
@@ -4305,9 +4327,12 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                               "Mostramos la receta original; intenta de nuevo.",
                 }
 
-        # Éxito real: cobrar cuota ahora (no antes — ver nota arriba).
-        if user_id and user_id != "guest":
-            log_api_usage(user_id, "llm_recipe_expand")
+        # [P2-EXPAND-QUOTA-ABORT · 2026-07-02] (audit v3 expand GAP-5) el cobro corría AQUÍ, ANTES del
+        # persist — pero el callback puede ABORTAR (target raced: un swap/modify concurrente cambió el
+        # nombre/receta) → usuario cobrado + success:true con pasos de una receta que ya no existe en el
+        # plan. Ahora el cobro se difiere a DESPUÉS del persist (flag del callback); abort → sin cobro +
+        # soft-fail `stale_target` (el cliente refetch-ea). tooltip-anchor: P2-EXPAND-QUOTA-ABORT
+        _expand_persisted = {"ok": False}
 
         if user_id and user_id != "guest":
             # [P1-HIST-RECIPE-1] Resolver el plan target. Si el cliente
@@ -4502,6 +4527,19 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                         # sin escribir).
                         return False
 
+                    # [P2-EXPAND-MICRO-RECOMPUTE · 2026-07-02] (audit v3 micros GAP-2) el veg añadido ya entró
+                    # a ingredients/_raw con truth-up de macros, pero el panel de micros persistido quedaba
+                    # STALE (folato/vitA/fibra/vitC — exactamente lo que aporta el veg). Era la ÚNICA superficie
+                    # que mutaba ingredients sin recompute. Best-effort, mismo knob de los updates.
+                    if _expand_added_ings and os.environ.get(
+                            "MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
+                        try:
+                            from graph_orchestrator import recompute_micronutrient_report_for_plan as _rmr_exp
+                            _rmr_exp(plan_data_fresh, _expand_clin, db=None)
+                        except Exception as _rmr_e:
+                            logger.debug(f"[P2-EXPAND-MICRO-RECOMPUTE] no-op: {_rmr_e}")
+                    # [P2-EXPAND-QUOTA-ABORT] señal para el caller: hubo escritura real → cobrar.
+                    _expand_persisted["ok"] = True
                     return plan_data_fresh
 
                 # [P2-OPEN-1] user_id ya validado al inicio del handler
@@ -4513,6 +4551,22 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 update_plan_data_atomic(
                     target_plan_id, _apply_recipe_expansion, user_id=user_id
                 )
+                # [P2-EXPAND-QUOTA-ABORT · 2026-07-02] callback abortó (target raced por swap/modify
+                # concurrente) → SIN cobro + soft-fail para que el cliente refetch-ee el plan fresco.
+                if not _expand_persisted["ok"]:
+                    logger.info(f"⏭️ [P2-EXPAND-QUOTA-ABORT] persist de expand abortado (target raced) — "
+                                f"sin cobro | meal='{req_name}' plan={target_plan_id}")
+                    return {
+                        "success": False,
+                        "operation_failed": True,
+                        "stale_target": True,
+                        "expanded_recipe": req_recipe_original or [],
+                        "detail": "El plato cambió mientras el Chef detallaba la receta. "
+                                  "Actualiza la página e intenta de nuevo (no se descontó tu crédito).",
+                    }
+            # Cobro DIFERIDO post-persist: persist OK, o no había plan target que persistir (el usuario
+            # igual recibió los pasos del Chef — mismo contrato de valor que antes).
+            log_api_usage(user_id, "llm_recipe_expand")
         # P1-HIST-RECIPE-1-END
 
         # [P0-EXPAND-CLINICAL-GUARD · 2026-07-01] La respuesta refleja lo persistido: pasos del Chef + las
@@ -4524,6 +4578,21 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
             for _s0 in (req_recipe_original or []):
                 if _is_note_resp(_s0) and str(_s0).strip() and str(_s0).strip() not in _resp_txt:
                     _resp_steps.append(str(_s0))
+        except Exception:
+            pass
+
+        # [P2-EXPAND-GUEST-SAFETY · 2026-07-02] (audit v3 recetas GAP-6) re-deriva las notas de food-safety
+        # (huevo/pescado/víver crudos) sobre los pasos de la RESPUESTA: los guests NO pasan por el persist
+        # (donde sí corre el backstop) y dependían de que la receta original ya trajera la nota. Idempotente
+        # para autenticados (no duplica notas presentes). tooltip-anchor: P2-EXPAND-GUEST-SAFETY
+        try:
+            from graph_orchestrator import food_safety_backstop_for_meal as _fsb_resp
+            _fsb_meal_resp = {"name": req_name,
+                              "ingredients": [str(_i) for _i in (data.get("ingredients") or [])],
+                              "recipe": list(_resp_steps)}
+            _fsb_resp(_fsb_meal_resp)
+            if isinstance(_fsb_meal_resp.get("recipe"), list) and _fsb_meal_resp["recipe"]:
+                _resp_steps = _fsb_meal_resp["recipe"]
         except Exception:
             pass
 

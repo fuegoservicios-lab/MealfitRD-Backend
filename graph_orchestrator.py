@@ -8909,6 +8909,10 @@ GEN_SANITY_AUTOFIX_ENABLED = _env_bool("MEALFIT_GEN_SANITY_AUTOFIX", True)
 # la cena por tubérculo nocturno ANTES del reviewer → evita el retry más común del gate P1-SLOT-APPROPRIATENESS
 # (ahorra una regeneración completa de tokens). El gate queda como backstop. Flip a False revierte a solo-gate.
 NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
+# [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) la regla MÁS DURA del slot-gate (arroz en
+# el DESAYUNO) no tenía corrector determinista — dependía solo de presión de retry (asimetría: la cena, regla
+# SUAVE, sí tiene autofix). Espejo de night-rice acotado al desayuno (base matutina criolla rotada).
+BREAKFAST_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_BREAKFAST_RICE_AUTOFIX", True)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -9133,6 +9137,15 @@ VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)
 # legítimamente el mismo día (pollo a la plancha + pescado a la plancha) → gatear-las sobre-reintentaría.
 VARIETY_GATE_FRUIT_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_REPEAT", True)
 VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT", False)
+# [P2-CROSSDAY-VARIETY-GATE · 2026-07-02] (audit v3 creatividad GAP-4) el MISMO plato-base en ≥3 días de la
+# ventana revisada era invisible a los gates (variedad solo same-day; cross_day_preps era telemetría dormida
+# ≥4 días). Gate SUAVE (retry acotado, advisory en intento final, mismo patrón del resto). Umbral 3 = todos
+# los días de un chunk de 3. Rollback: MEALFIT_CROSS_DAY_DISH_GATE=false.
+VARIETY_GATE_CROSS_DAY_DISH = _env_bool("MEALFIT_CROSS_DAY_DISH_GATE", True)
+CROSS_DAY_DISH_GATE_MIN_DAYS = max(2, min(7, _env_int("MEALFIT_CROSS_DAY_DISH_MIN_DAYS", 3)))
+# [P2-LIGHTNAME-ADVISORY · 2026-07-02] (audit v3 slots GAP-E) honestidad nombre↔plato: "Cena ligera" con
+# kcal por encima del techo se cuenta como advisory (telemetría, NO gate).
+LIGHT_NAME_KCAL_CEILING = max(300, min(1200, _env_int("MEALFIT_LIGHT_NAME_KCAL_CEILING", 550)))
 # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (auditoría gap #5) Pareo intra-plato chocante: fruta dulce dominante
 # + base salada (almidón/huevo-salado/crucífera) en el NOMBRE del MISMO plato (caso del owner: "mango con
 # arroz"). El prompt (day_generator 15f) ya lo prohíbe pero era 100% advisory → sin red determinista. Esto
@@ -9480,8 +9493,14 @@ BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", True)
 # [P1-BAND-GATE-ALL4 · 2026-07-01] Umbrales re-tuneados para la distribución macros-only (ver nota arriba).
 # Solo aplican cuando BAND_GATE_USE_MACROS_ONLY=True Y el score macros-only está disponible; en cualquier
 # otro caso los gates siguen usando BAND_RETRY_THRESHOLD / BAND_SCORE_GATE_THRESHOLD (combinados).
-BAND_RETRY_THRESHOLD_MACROS_ONLY = _env_float("MEALFIT_BAND_RETRY_THRESHOLD_MACROS_ONLY", 0.45)
-BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY", 0.45)
+# [P2-BAND-THRESHOLDS · 2026-07-02] (audit v3 macros GAP-8) 0.45 → 0.60 con datos de flota (pipeline_metrics
+# node=clinical_band, 30 entregas recientes): TODO plan entregado no-fallback puntúa macros_only ≥ 0.667
+# (típico 0.889-1.0; los 0.0 son fallbacks, excluidos del gate por diseño; el único <0.45 ya era
+# review_passed=false → retry). Subir a 0.60 endurece el piso enforced hacia el objetivo "100% en banda"
+# con CERO retries/banners extra sobre la distribución observada — solo caza colas genuinamente pobres.
+# Vigilar retry-rate tras el deploy (patrón P1-BAND-GATE-ALL4); rollback sin redeploy vía env.
+BAND_RETRY_THRESHOLD_MACROS_ONLY = _env_float("MEALFIT_BAND_RETRY_THRESHOLD_MACROS_ONLY", 0.60)
+BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY", 0.60)
 
 # [P2-BAND-RETRY-GATE · 2026-06-21] (Fase 6 del build "todo terreno") La banda de macros como GATE DE
 # RETRY, no solo banner. El band-score gate existente (BAND_SCORE_GATE) marca `_quality_degraded`
@@ -9770,14 +9789,29 @@ _MICRO_CLOSER_KEYS = frozenset({
     # OBLIGATORIO abajo: vit A 3000 mcg RAE (hepatotóxica/teratogénica — el UL aplica a retinol preformado;
     # usarlo sobre RAE total es el techo CONSERVADOR correcto) y selenio 400 mcg (IOM). Renal-skip abajo.
     "vit_a_mcg", "selenium_mcg",
+    # [P2-VITK-LEVER · 2026-07-02] (audit v3 micros GAP-5) VIT K era el único micro con piso DRI (90/120 mcg AI)
+    # sin lever ni tarjeta de suplemento — food-achievable con hoja verde ya en el plato. Guards: skip TOTAL bajo
+    # anticoagulante (warfarina: el riesgo es la INCONSISTENCIA del INR, no el bajo absoluto — escalar rompería
+    # la estabilidad que vigila P1-WARFARIN-VITAMIN-K) + renal-skip (hoja verde carga K). Sin entry en
+    # _MICRO_CLOSER_UL: la IOM NO establece UL para vit K (sin toxicidad conocida por comida).
+    "vit_k_mcg",
 })
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
 MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK", True)
+# [P2-POSTQUANTIZE-RECHECK · 2026-07-02] (audit v3 macros GAP-4) el quantize final re-introduce el drift de
+# redondeo que MACRO-REBALANCE cerró (corría ANTES del quantize). Pase corrector acotado: día con C/F/P a
+# >TOL del target post-quantize → UN rebalance + UN re-quantize (una sola iteración — el drift del segundo
+# quantize es de segundo orden). Default ON. tooltip-anchor: P2-POSTQUANTIZE-RECHECK
+POSTQUANTIZE_RECHECK_ENABLED = _env_bool("MEALFIT_POSTQUANTIZE_RECHECK", True)
+POSTQUANTIZE_RECHECK_TOL = max(0.01, min(0.2, _env_float("MEALFIT_POSTQUANTIZE_RECHECK_TOL", 0.04)))
 # [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] reescala las plantillas del fallback hacia las kcal del slot +
 # truth-up físico (los números dejan de ser asertados). Default ON. tooltip-anchor: P2-FALLBACK-PHYSICAL-MACROS
 FALLBACK_PHYSICAL_MACROS_ENABLED = _env_bool("MEALFIT_FALLBACK_PHYSICAL_MACROS", True)
+# [P2-FALLBACK-MACRO-ENGINE · 2026-07-02] rebalance C/F/P determinista del día fallback post-rescale
+# (bariátrico exento — contrato de porciones). Default ON. tooltip-anchor: P2-FALLBACK-MACRO-ENGINE
+FALLBACK_MACRO_REBALANCE_ENABLED = _env_bool("MEALFIT_FALLBACK_MACRO_REBALANCE", True)
 MICRONUTRIENT_CLOSER_MAX_SCALE = max(1.1, min(3.0, _env_float("MEALFIT_MICRONUTRIENT_CLOSER_MAX_SCALE", 1.6)))
 # map report-key → key del dict de db.micros_from_ingredient_string (la fibra allá es 'fiber', no 'fiber_g';
 # el resto son identidad — verificado contra micronutrients.py:295-308 / nutrition_db.micros_from_ingredient_string).
@@ -9788,6 +9822,8 @@ _MICRO_CLOSER_INGREDIENT_KEY = {
     "potassium_mg": "potassium_mg", "vit_e_mg": "vit_e_mg", "omega3_g": "omega3_g",
     # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] identidad (nutrition_db.micros_from_ingredient_string:580/:584).
     "vit_a_mcg": "vit_a_mcg", "selenium_mcg": "selenium_mcg",
+    # [P2-VITK-LEVER · 2026-07-02] identidad (nutrition_db.micros_from_ingredient_string:583).
+    "vit_k_mcg": "vit_k_mcg",
 }
 # TECHOS UL (Tolerable Upper Intake Level, IOM) por micro — el closer NUNCA escala un ingrediente más allá del UL
 # del día (defensa contra escalar hígado/vísceras al cerrar hierro). Fibra/Mg/Ca NO llevan UL aquí: el UL de Mg
@@ -11037,6 +11073,14 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             _k_elev = bool(detect_potassium_elevating_med(_fd))
         except Exception:
             _k_elev = False
+        # [P2-VITK-LEVER · 2026-07-02] anticoagulante declarado → vit K jamás se cierra (consistencia INR).
+        # Fail-secure: si la detección falla, asumimos anticoagulante (no escalar vit K sobre duda clínica).
+        _anticoag = True
+        try:
+            from medication_rules import detect_anticoagulant
+            _anticoag = bool(detect_anticoagulant(_fd))
+        except Exception:
+            _anticoag = True
         _conditions = _condition_strings(_fd)
         _renal = any(("renal" in str(c).lower() or "erc" in str(c).lower()) for c in (_conditions or []))
         _days = plan.get("days") or []
@@ -11079,11 +11123,15 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             # hipervitaminosis A es hallazgo común en CKD; KDOQI desaconseja suplementarla) y selenio sigue
             # el patrón "solo calcio cerrable en renal" del resto de keys.
             if _renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
-                                "potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg"):
+                                "potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg",
+                                "vit_k_mcg"):
                 continue
             # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] potasio NUNCA se cierra bajo medicamento K-elevador
             # (espironolactona/IECA free-text incluidos vía P1-MICRO-CLINICAL-FREETEXT) — hiperkalemia iatrogénica.
             if k == "potassium_mg" and _k_elev:
+                continue
+            # [P2-VITK-LEVER · 2026-07-02] vit K jamás bajo anticoagulante (consistencia INR > cerrar el piso).
+            if k == "vit_k_mcg" and _anticoag:
                 continue
             try:
                 floors[k] = float(g.get("piso") or 0)
@@ -11142,11 +11190,21 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                     ings = _m.get("ingredients")
                     if not isinstance(ings, list):
                         continue
+                    # [P2-MICRO-CLOSER-RAW-BASIS · 2026-07-02] (audit v3 micros GAP-3) MEDIR sobre la misma
+                    # base que el panel/intake real: `ingredients_raw` preferido (micronutrients.py:289 —
+                    # display como "¾ lonja de queso" no resuelve). Antes déficit Y headroom del UL se
+                    # computaban sobre display: sub-resolución → sobre-escala (acotada) y, peor, el guard de
+                    # toxicidad UL medía en la base equivocada. La ESCALA sigue aplicándose a AMBAS formas
+                    # (display + raw-sync abajo, mismo factor). Requiere alineación posicional (len ==);
+                    # sin raw alineado → display (comportamiento previo). tooltip-anchor: P2-MICRO-CLOSER-RAW-BASIS
+                    _raw_m = _m.get("ingredients_raw")
+                    _raw_ok = isinstance(_raw_m, list) and len(_raw_m) == len(ings)
                     for i, ing in enumerate(ings):
                         if not isinstance(ing, str):
                             continue
+                        _meas = _raw_m[i] if (_raw_ok and isinstance(_raw_m[i], str) and _raw_m[i].strip()) else ing
                         try:
-                            mic = db.micros_from_ingredient_string(ing)
+                            mic = db.micros_from_ingredient_string(_meas)
                         except Exception:
                             mic = None
                         if not mic:
@@ -11156,7 +11214,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             continue
                         day_total += float(c)
                         try:
-                            _mac = db.macros_from_ingredient_string(ing)
+                            _mac = db.macros_from_ingredient_string(_meas)
                             _kc = float(_mac.get("kcal") or 0) if _mac else 0.0
                         except Exception:
                             _kc = 0.0
@@ -13388,13 +13446,46 @@ def build_variety_report(plan: dict) -> dict:
         cross_day_preps = {t: len(ds) for t, ds in prep_days.items() if len(ds) >= 4}
     except Exception:
         cross_day_preps = {}
+    # [P2-CROSSDAY-VARIETY-GATE · 2026-07-02] el MISMO plato-base en ≥CROSS_DAY_DISH_GATE_MIN_DAYS días de la
+    # ventana → alimenta el gate suave (_variety_repeat_gate_issues). Campo separado de cross_day_preps
+    # (umbral 4, telemetría) para no cambiar la semántica del existente.
+    cross_day_dishes = {}
+    try:
+        cross_day_dishes = {t: len(ds) for t, ds in prep_days.items()
+                            if len(ds) >= CROSS_DAY_DISH_GATE_MIN_DAYS}
+    except Exception:
+        cross_day_dishes = {}
+    # [P2-SWEETFISH-ADVISORY · 2026-07-02] (audit v3 creatividad GAP-6) dulce+pescado ("Tilapia con Mango")
+    # está EXCLUIDO del clash gate a propósito (fruta+proteína tropical suele ser aceptable). Telemetría
+    # advisory-only para que el owner decida con datos si lo considera disparate — jamás gate.
+    sweet_fish_pairings = 0
+    # [P2-LIGHTNAME-ADVISORY · 2026-07-02] "ligera/light" en el nombre con kcal > techo (advisory-only).
+    light_name_heavy_meals = 0
+    try:
+        _FISH_TOKENS_ADV = ("tilapia", "salmon", "mero", "bacalao", "pescado", "atun", "sardina",
+                            "dorado", "chillo", "camaron", "calamar", "pulpo")
+        for _d_adv in plan.get("days", []) or []:
+            for _m_adv in (_d_adv.get("meals", []) or []):
+                _nm_adv = strip_accents(str(_m_adv.get("name", "")).lower())
+                if any(f in _nm_adv for f in _FISH_TOKENS_ADV) and any(fr in _nm_adv for fr in _FEATURED_FRUITS):
+                    sweet_fish_pairings += 1
+                if any(t in _nm_adv for t in ("ligera", "ligero", "light")):
+                    _kc_adv = _meal_macro_num(_m_adv.get("cals"))
+                    if _kc_adv and _kc_adv > LIGHT_NAME_KCAL_CEILING:
+                        light_name_heavy_meals += 1
+    except Exception:
+        pass
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
             "same_day_protein_repeats": same_day_protein_repeats,
             "meals_per_day": meals_per_day_max,
             "cross_day_proteins": cross_day_proteins,
-            "cross_day_preps": cross_day_preps, "issues": issues,
+            "cross_day_preps": cross_day_preps,
+            "cross_day_dishes": cross_day_dishes,
+            "sweet_fish_pairings": sweet_fish_pairings,
+            "light_name_heavy_meals": light_name_heavy_meals,
+            "issues": issues,
             "ok": not issues}
 
 
@@ -13970,6 +14061,16 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
                 "PLATO-BASE REPETIDO EL MISMO DÍA (rechazo de variedad): el mismo tipo de plato "
                 "(p.ej. revoltillo/huevos revueltos, batido) aparece 2+ veces el mismo día. Rota a "
                 "preparaciones distintas en cada comida del día."
+            )
+        # [P2-CROSSDAY-VARIETY-GATE · 2026-07-02] mismo plato-base en ≥N días de la ventana → rechazo suave
+        # (retry acotado; advisory en intento final como el resto — nunca cero-plan).
+        _cdd = variety_report.get("cross_day_dishes") or {}
+        if VARIETY_GATE_CROSS_DAY_DISH and _cdd:
+            _cdd_txt = ", ".join(f"'{t}' en {n} días" for t, n in sorted(_cdd.items()))
+            out.append(
+                f"MISMO PLATO REPETIDO ENTRE DÍAS (rechazo de variedad): {_cdd_txt}. El mismo plato-base "
+                f"no debe repetirse en {CROSS_DAY_DISH_GATE_MIN_DAYS}+ días del plan — varía la preparación "
+                "(guisado, al horno, a la plancha, en tortitas/croquetas) o cambia la base entre días."
             )
         # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] La MISMA proteína principal (huevo/pollo/pavo/cerdo/res/
         # pescado/atún) en 2+ comidas del mismo día fatiga → rechazo (retry acotado; advisory en intento final).
@@ -14555,6 +14656,11 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         if _nr_layer:
             logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
                            f"{_nr_layer} cena(s) (path sin assemble)")
+        # [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] espejo matutino en la misma capa (paths sin assemble).
+        _br_layer = _breakfast_rice_autofix(plan.get("days") or [], _db)
+        if _br_layer:
+            logger.warning(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] capa clínica reescribió arroz de desayuno en "
+                           f"{_br_layer} comida(s) (path sin assemble)")
     except Exception as _nr_e:
         logger.warning(f"[P0-FALLBACK-CENA-ARROZ] night-rice en capa clínica falló (no bloquea): "
                        f"{type(_nr_e).__name__}: {_nr_e}")
@@ -16811,6 +16917,82 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
         return 0
 
 
+# [P2-DESAYUNO-ARROZ-AUTOFIX] rotación de bases matutinas criollas (sustituto del arroz en desayuno).
+_BREAKFAST_RICE_SUB_ROTATION = ("Puré de plátano", "Yuca cocida", "Batata cocida")
+
+
+def _breakfast_rice_autofix(days: list, db=None) -> int:
+    """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
+    DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
+    degrada a advisory), pero sin corrector un LLM emperrado la entregaba degradada tras agotar retries,
+    mientras la cena (regla suave) sí tenía red determinista. Reescribe arroz simple (nombre + ingrediente +
+    pasos) por una base matutina criolla (puré de plátano/yuca/batata, rotada por día), carb-matched
+    (~×{factor}). NO toca compuestos (moro/locrio al desayuno → al gate hard). Respeta exclusiones de
+    modificadores (harina/leche/vinagre de arroz). Idempotente, fail-safe.
+    Rollback: MEALFIT_BREAKFAST_RICE_AUTOFIX. tooltip-anchor: P2-DESAYUNO-ARROZ-AUTOFIX"""
+    if not BREAKFAST_RICE_AUTOFIX_ENABLED:
+        return 0
+    try:
+        from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _COMPOUND = ("moro", "morito", "locrio", "chofan", "chaufa", "congri", "mamposteao")
+        fixed = 0
+        for di, day in enumerate(days or []):
+            if not isinstance(day, dict):
+                continue
+            for m in day.get("meals", []) or []:
+                if not isinstance(m, dict):
+                    continue
+                if canonical_slot_key(m.get("meal", "")) != "desayuno":
+                    continue
+                name = str(m.get("name") or "")
+                name_low = _sa(name.lower())
+                if any(_re.search(r"\b" + t + r"\b", name_low) for t in _COMPOUND):
+                    continue  # compuestos → al gate (hard reject, plato mejor vía retry)
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                sub = _BREAKFAST_RICE_SUB_ROTATION[di % len(_BREAKFAST_RICE_SUB_ROTATION)]
+                _sub_low = _sa(sub.lower())
+                _changed = False
+                for j, ing in enumerate(ings):
+                    ing_low = _sa(str(ing).lower())
+                    if not _re.search(r"\barroz\b", ing_low) or any(_ex in ing_low for _ex in _SLOT_RICE_EXCLUDE):
+                        continue
+                    if _sub_low in ing_low:  # idempotencia
+                        continue
+                    try:
+                        _g = db.grams_from_ingredient_string(str(ing)) or 0
+                    except Exception:
+                        _g = 0
+                    _new_g = int(round(_g * _NIGHT_RICE_CARB_FACTOR)) if _g > 0 else 150
+                    ings[j] = f"{_new_g} g de {sub}"
+                    _changed = True
+                _name_has_rice = "arroz" in name_low and not any(_ex in name_low for _ex in _SLOT_RICE_EXCLUDE)
+                if _name_has_rice:
+                    _new_name = _NIGHT_RICE_NAME_RE.sub(sub, name)
+                    if _new_name != name:
+                        m["name"] = _new_name
+                        _changed = True
+                if _changed:
+                    _recipe = m.get("recipe")
+                    if isinstance(_recipe, list):
+                        m["recipe"] = [_NIGHT_RICE_NAME_RE.sub(sub, s) if isinstance(s, str) else s for s in _recipe]
+                    elif isinstance(_recipe, str) and _recipe:
+                        m["recipe"] = _NIGHT_RICE_NAME_RE.sub(sub, _recipe)
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+                    fixed += 1
+        return fixed
+    except Exception as _bra_e:
+        logger.warning(f"[P2-DESAYUNO-ARROZ-AUTOFIX] falló (no bloquea): {type(_bra_e).__name__}: {_bra_e}")
+        return 0
+
+
 def _topup_healthy_fat_to_band_floor(meals: list, target_fats: float, target_kcal: float, db, *, is_bariatric: bool) -> int:
     """[P1-FASE-A-FAT-TOPUP · 2026-06-28] Tras FASE A + reconcile, si la grasa del DÍA sigue bajo el PISO de banda
     (FASE_A_FAT_TOPUP_FLOOR_PCT×target), añade aceite de oliva virgen extra (MUFA, dumping-risk mínimo vs frito/saturado/
@@ -18359,6 +18541,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _nr_fixed:
                 logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
                             f"a tubérculo nocturno (batata/yuca/casabe) pre-reviewer.")
+            # [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] espejo matutino, mismo punto (pre-macro-engine).
+            _br_fixed = _breakfast_rice_autofix(days)
+            if _br_fixed:
+                logger.info(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] {_br_fixed} desayuno(s) con arroz reescrito(s) "
+                            f"a base matutina criolla pre-reviewer.")
         except Exception as _nra_c:
             logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
 
@@ -18521,6 +18708,35 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _q_n = _apply_portion_quantization({"days": days}, _QDB())
             if _q_n:
                 logger.info(f"📏 [P1-CLOSER-COHERENCE] quantize final: porciones humanas en {_q_n} comida(s) post-engine.")
+            # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] (audit v3 macros GAP-4) el redondeo a fracciones
+            # servibles pudo re-abrir el drift que MACRO-REBALANCE cerró antes del quantize. Si un día
+            # quedó con C/F/P a >TOL del target → UN rebalance + UN re-quantize (iteración única). El
+            # qty-sync de abajo sigue siendo la última mutación textual (ve el estado final).
+            if POSTQUANTIZE_RECHECK_ENABLED and (_pg or _cg or _fg):
+                try:
+                    _rq_db = _QDB()
+                    _rq_fixed = 0
+                    for _rq_d in days or []:
+                        _rq_meals = (_rq_d.get("meals") or []) if isinstance(_rq_d, dict) else []
+                        if not _rq_meals:
+                            continue
+                        _sp = sum(_meal_macro_num(_m2.get("protein")) for _m2 in _rq_meals if isinstance(_m2, dict))
+                        _sc = sum(_meal_macro_num(_m2.get("carbs")) for _m2 in _rq_meals if isinstance(_m2, dict))
+                        _sf = sum(_meal_macro_num(_m2.get("fats")) for _m2 in _rq_meals if isinstance(_m2, dict))
+                        _drift = any(
+                            _t > 0 and abs(_v - _t) / _t > POSTQUANTIZE_RECHECK_TOL
+                            for _v, _t in ((_sp, float(_pg or 0)), (_sc, float(_cg or 0)), (_sf, float(_fg or 0)))
+                        )
+                        if _drift and _rebalance_day_macros_to_target(
+                                [_rq_d], float(_cg or 0), float(_fg or 0), _rq_db,
+                                target_protein=float(_pg or 0)):
+                            _rq_fixed += 1
+                    if _rq_fixed:
+                        _apply_portion_quantization({"days": days}, _rq_db)
+                        logger.info(f"🎚 [P2-POSTQUANTIZE-RECHECK] {_rq_fixed} día(s) re-balanceado(s) "
+                                    f"post-quantize (drift de redondeo >{POSTQUANTIZE_RECHECK_TOL:.0%}) + re-quantize.")
+                except Exception as _rq_e:
+                    logger.warning(f"[P2-POSTQUANTIZE-RECHECK] no-op: {type(_rq_e).__name__}: {_rq_e}")
             # [P1-RECIPE-QTY-SYNC · 2026-07-01] tras la ÚLTIMA mutación de porciones, re-sincroniza las
             # cantidades mencionadas en los PASOS con ingredients[] (el paso "50 g de arroz" refleja los 80 g
             # reescalados). Corre ANTES de la lista de compras/humanize (que no tocan números de pasos).
@@ -24624,6 +24840,26 @@ def _build_fallback_day(nutr: dict, day_number: int,
         except Exception as _fb_e:
             logger.warning(f"[P2-FALLBACK-PHYSICAL-MACROS] rescale del fallback no-op: {type(_fb_e).__name__}: {_fb_e}")
 
+    # [P2-FALLBACK-MACRO-ENGINE · 2026-07-02] (audit v3 macros GAP-3) El fallback bypassa assemble → jamás
+    # recibía el rebalance C/F del macro engine: el rescale de arriba clava las KCAL del slot pero la mezcla
+    # de macros de la plantilla podía quedar lejos del split del usuario. Pase de día completo con el MISMO
+    # rebalanceador determinista de S1 (re-escala existentes, no añade). BARIÁTRICO EXENTO: el pool curado es
+    # el contrato de porciones (P1-FALLBACK-RESCALE-BARIATRIC-CAP) — subir porciones hacia el target rompería
+    # los caps. El plan sigue flaggeado _is_fallback (banner propio; el band-gate lo excluye by-design).
+    # Rollback: MEALFIT_FALLBACK_MACRO_REBALANCE=false. tooltip-anchor: P2-FALLBACK-MACRO-ENGINE
+    if FALLBACK_MACRO_REBALANCE_ENABLED and not _is_bar_fb:
+        try:
+            from nutrition_db import IngredientNutritionDB as _RBDB
+            _rb_fb = _rebalance_day_macros_to_target(
+                [{"meals": meals}], float(target_car or 0), float(target_fat or 0),
+                _RBDB(), target_protein=float(target_pro or 0),
+            )
+            if _rb_fb:
+                logger.info(f"🎚 [P2-FALLBACK-MACRO-ENGINE] fallback día {day_number}: macros re-apuntadas "
+                            f"al split del usuario (rebalance determinista post-rescale)")
+        except Exception as _rb_fb_e:
+            logger.warning(f"[P2-FALLBACK-MACRO-ENGINE] rebalance del fallback no-op: {type(_rb_fb_e).__name__}: {_rb_fb_e}")
+
     return {
         "day": day_number,
         "daily_summary": "Plan de Contingencia de Emergencia (Generado Matemáticamente)",
@@ -25013,6 +25249,13 @@ def apply_update_band_parity(plan_data: dict, *, surface: str, pantry_limited: b
     if not (UPDATE_BAND_PARITY_ENABLED and BAND_SCORE_GATE_ENABLED and isinstance(plan_data, dict)):
         return None
     try:
+        # [P2-DELIVERED-REFRESH-ALWAYS · 2026-07-02] (audit v3 macros GAP-5) delivered_macros se refresca
+        # aquí INCONDICIONAL en las 3 superficies de update (antes solo vía el hook de micros, gateado por
+        # MEALFIT_UPDATE_RECOMPUTE_MICROS → knob off = delivered stale tras el update).
+        try:
+            refresh_delivered_macros(plan_data)
+        except Exception:
+            pass
         _bs = compute_clinical_band_score(plan_data, {})
         _use_mo = bool(BAND_GATE_USE_MACROS_ONLY and _bs.get("score_macros_only") is not None)
         _val = _bs.get("score_macros_only") if _use_mo else _bs.get("score")
@@ -25411,6 +25654,14 @@ def _compute_pipeline_holistic_score_and_emit(
             # fallback se marca en metadata para que la agregación lo excluya (sus macros son ~target
             # por construcción → score engañosamente alto). Fail-safe: no afecta al plan entregado.
             try:
+                # [P2-DELIVERED-REFRESH-ALWAYS · 2026-07-02] (audit v3 macros GAP-5) re-refresh POST-review:
+                # assemble refresca delivered_macros pero review muta después (auto-patch forward-coherence,
+                # re-trim renal, best-attempt swap) y nunca re-refrescaba → delivered podía quedar stale en
+                # la ENTREGA de S1. Este punto corre sobre el plan final ya elegido. Idempotente, fail-safe.
+                try:
+                    refresh_delivered_macros(plan)
+                except Exception:
+                    pass
                 _band = compute_clinical_band_score(plan, nutrition)
                 plan["clinical_band_score"] = _band
                 _band_val = _band.get("score")

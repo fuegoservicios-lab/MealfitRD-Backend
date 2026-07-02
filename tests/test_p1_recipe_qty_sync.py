@@ -101,6 +101,12 @@ def test_wired_in_three_surfaces():
 def test_runs_after_final_quantize_in_assemble():
     i_q = _GRAPH.find('logger.info(f"📏 [P1-CLOSER-COHERENCE] quantize final')
     assert i_q != -1
-    seg = _GRAPH[i_q:i_q + 1500]
+    # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] entre el quantize y el qty-sync ahora vive el pase corrector
+    # de drift de redondeo (rebalance+requantize acotado) → ventana ampliada 1500→4500. El ORDEN sigue
+    # anclado: quantize → recheck → qty-sync (el sync ve el estado final).
+    seg = _GRAPH[i_q:i_q + 4500]
     assert "_sync_recipe_step_quantities" in seg, \
-        "el sync debe correr justo tras el quantize final de assemble (última mutación de porciones)"
+        "el sync debe correr tras el quantize final de assemble (última mutación de porciones)"
+    i_rq = seg.find("P2-POSTQUANTIZE-RECHECK")
+    i_sync = seg.find("_sync_recipe_step_quantities")
+    assert i_rq != -1 and i_rq < i_sync, "el recheck post-quantize corre ANTES del qty-sync"

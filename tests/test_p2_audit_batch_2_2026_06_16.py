@@ -52,8 +52,10 @@ def test_p2_9_knob_default_false(go):
     # El ancla ahora protege el par flip+umbral: si alguien revierte el flip o borra los umbrales
     # re-tuneados sin pasar por una decisión explícita, esto falla.
     assert go.BAND_GATE_USE_MACROS_ONLY is True
-    assert go.BAND_RETRY_THRESHOLD_MACROS_ONLY == 0.45
-    assert go.BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY == 0.45
+    # [P2-BAND-THRESHOLDS · 2026-07-02] 0.45 → 0.60 con datos de flota (todo plan entregado no-fallback
+    # puntúa ≥0.667 → cero retries extra; ver test_p2_audit_v3_batch.py). Vigilar retry-rate.
+    assert go.BAND_RETRY_THRESHOLD_MACROS_ONLY == 0.60
+    assert go.BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY == 0.60
 
 
 # ───────────────────────── P2-5: truth-up de macros desde strings ─────────────────────────

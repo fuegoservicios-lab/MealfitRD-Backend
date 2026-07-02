@@ -1747,6 +1747,45 @@ def _micro_floor_kpi_job():
             f"[P3-MICRO-FLOOR-KPI lookback={lookback_h}h] plans={_mk_examined} with_report={_mk_with_report} "
             f"all_floors_ok={_mk_floor_ok} floor_gaps={_mk_floor_counts} ceiling_gaps={_mk_ceiling_gaps}"
         )
+        # [P2-MICRO-KPI-ALERT · 2026-07-02] (audit v3 micros GAP-7) `estimado_bajo` CRÓNICO significa que el
+        # closer NO puede actuar (cobertura incierta por NULLs del catálogo) y el lever real — backfill de
+        # densidades — era invisible salvo grep de logs. Si una fracción ≥ umbral de los planes examinados
+        # trae el MISMO micro en estimado_bajo → alert accionable (modelo Auto-implicit: el cron re-emite
+        # mientras la condición exista; el operador la resuelve backfilleando el catálogo). Mínimo muestral
+        # anti-ruido. tooltip-anchor: P2-MICRO-KPI-ALERT
+        try:
+            _al_frac = _env_float("MEALFIT_MICRO_KPI_ESTIMADO_ALERT_FRACTION", 0.5,
+                                  validator=lambda v: 0 < v <= 1)
+            _al_min = _env_int("MEALFIT_MICRO_KPI_ESTIMADO_ALERT_MIN_PLANS", 5)
+            if _mk_with_report >= max(1, _al_min):
+                _chronic = {k: c.get("estimado_bajo", 0) for k, c in _mk_floor_counts.items()
+                            if c.get("estimado_bajo", 0) / max(1, _mk_with_report) >= _al_frac}
+                if _chronic:
+                    execute_sql_write(
+                        """
+                        INSERT INTO system_alerts
+                            (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                        VALUES (%s, 'micro_estimado_bajo_chronic', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                        ON CONFLICT (alert_key) DO UPDATE
+                        SET triggered_at = NOW(),
+                            metadata = EXCLUDED.metadata,
+                            resolved_at = NULL
+                        """,
+                        (
+                            "micro_estimado_bajo_chronic",
+                            "Micros con cobertura incierta crónica (estimado_bajo)",
+                            (f"{sorted(_chronic)} en ≥{_al_frac:.0%} de {_mk_with_report} planes "
+                             f"(lookback {_mk_lookback}h). El closer NO actúa sobre datos inciertos: "
+                             f"backfillear densidades NULL del catálogo (check_extended_micro_coverage.py)."),
+                            json.dumps({"chronic": _chronic, "plans_with_report": _mk_with_report,
+                                        "fraction_threshold": _al_frac, "lookback_h": _mk_lookback}),
+                            json.dumps([]),
+                        ),
+                    )
+                    logger.warning(f"🧪 [P2-MICRO-KPI-ALERT] estimado_bajo crónico: {_chronic} "
+                                   f"(≥{_al_frac:.0%} de {_mk_with_report} planes) → system_alert emitida")
+        except Exception as _al_e:
+            logger.warning(f"[P2-MICRO-KPI-ALERT] emit falló (no bloquea): {_al_e}")
     except Exception as _mk_err:
         logger.error(f"[P3-MICRO-FLOOR-KPI] excepción no atrapada: {_mk_err!r}", exc_info=True)
         _mk_skip = _mk_skip or "unhandled_exception"

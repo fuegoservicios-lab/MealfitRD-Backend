@@ -51,7 +51,9 @@ def test_renal_skip_includes_new_micros_in_source():
     # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] la tupla se reformateó multilinea al añadir K/vitE/omega-3.
     assert '_renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",' in _GRAPH
     # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] + vit A (se acumula en ERC) y selenio.
-    assert '"potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg")' in _GRAPH
+    # [P2-VITK-LEVER · 2026-07-02] + vit K (hoja verde carga K — renal-skip obligatorio del lever nuevo).
+    assert '"potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg",' in _GRAPH
+    assert '"vit_k_mcg"):' in _GRAPH
 
 
 def test_shared_kcal_budget_and_ul_clamp_in_source():

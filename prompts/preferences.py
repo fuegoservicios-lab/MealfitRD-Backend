@@ -29,6 +29,9 @@ Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccio
 - 🔵 OPCIÓN B (Alternativa 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_1b}. Fruta sugerida: {fruit_1}.
 - 🟢 OPCIÓN C (Alternativa 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_2b}. Fruta sugerida: {fruit_2}.
 
+🥞 REGLA DE BASES TRANSFORMABLES (creatividad real, no plato combinatorio):
+Los carbohidratos asignados ({carb_0}/{carb_1}/{carb_2}) son BASES A TRANSFORMAR según el slot, no solo "hervido como acompañante". Si la base del día es harina de trigo, harina de maíz o avena — que NO se sirven hervidas como plato fuerte — úsala TRANSFORMADA en el desayuno o la merienda de ese día (panqueques de avena/harina, arepitas, tortitas, bollitos al horno) y pon en el plato fuerte un carbo apropiado de almuerzo (arroz/víver/pasta). Si la base es yuca/plátano/víver, además del hervido clásico puedes transformarla (bollitos de yuca, majado, arepitas de yuca, mangú). La MISMA base puede repetirse entre días SOLO como platos DISTINTOS (harina→panqueques el lunes, arepitas el jueves — jamás el mismo plato dos días).
+
 ⛔ REGLA DE PROTEÍNA EXCLUSIVA POR DÍA (CRÍTICA — el day_generator la enforced):
 La proteína asignada a CADA día (Opción A→{protein_0}, B→{protein_1}, C→{protein_2}) es la ÚNICA carne/leguminosa principal permitida ese día. NO sustituyas ni complementes con otra carne distinta:
    - Si la Opción A dice "{protein_0}", el día A NO puede tener cerdo, pollo, res ni pescado salvo que esa sea la proteína {protein_0}.

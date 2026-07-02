@@ -399,6 +399,28 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     carb_weights = [1.0 / (carb_freq.get(c, 0) + 1) for c in available_carbs]
     veggie_weights = [1.0 / (veggie_freq.get(v, 0) + 1) for v in available_veggies]
 
+    # [P2-TRANSFORM-BASE-BOOST · 2026-07-02] (audit v3 creatividad GAP-2) Las bases TRANSFORMABLES
+    # (harinas/maíz, P1-FLOURS-POOLS) compiten con ~15 carbs por 2-3 cupos por chunk con peso solo de
+    # frecuencia-inversa → los transforms insignia del owner (panqueques/arepitas/bollitos) casi nunca
+    # podían emerger porque la base jamás ganaba un cupo. Boost multiplicativo del peso (default 2.0×) —
+    # sigue siendo sorteo ponderado (no forzado); el efecto se valida con la serie del KPI de creatividad.
+    # Rollback sin redeploy: MEALFIT_TRANSFORM_BASE_BOOST=1.0. tooltip-anchor: P2-TRANSFORM-BASE-BOOST
+    try:
+        import os as _os_tb
+        _tb_boost = max(1.0, min(5.0, float(_os_tb.environ.get("MEALFIT_TRANSFORM_BASE_BOOST", "2.0"))))
+    except Exception:
+        _tb_boost = 2.0
+    if _tb_boost > 1.0 and available_carbs:
+        try:
+            from constants import strip_accents as _sa_tb
+            _TRANSFORM_BASE_TOKENS = ("harina", "maiz", "tortilla de trigo")
+            carb_weights = [
+                w * (_tb_boost if any(t in _sa_tb(str(c).lower()) for t in _TRANSFORM_BASE_TOKENS) else 1.0)
+                for w, c in zip(carb_weights, available_carbs)
+            ]
+        except Exception:
+            pass
+
     # Penalización de embutidos según objetivo nutricional.
     # Salami/longaniza/jamón/chorizo/tocineta/salchichón son procesados con sodio
     # alto y grasas saturadas — apropiados ocasionalmente en perfiles 'balanced'
