@@ -408,6 +408,16 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     breakfast_cat = skeleton_day.get('breakfast_category', '')
     breakfast_block = f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {breakfast_cat}\n  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. NO uses mangú/tubérculos si la categoría asignada es otra)." if breakfast_cat else ""
 
+    # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (LIBRARY) Inspiración curada por slot (elige-y-adapta
+    # sobre un espacio verificado — creatividad por recombinación, prioriza transformadas).
+    # Determinista por (día, pool) → prompt-cache preservado. Fail-open → ''.
+    dish_library_block = ""
+    try:
+        from dish_library import build_dish_library_context
+        dish_library_block = build_dish_library_context(skeleton_day, day_num) or ""
+    except Exception:
+        dish_library_block = ""
+
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}
@@ -416,7 +426,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Carbohidratos Asignados: {', '.join(skeleton_day.get('carb_pool', []))}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}
 • Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}
-{prohibited_block}
+{dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,
 vegetales complementarios y líquidos (aceite, leche, etc).

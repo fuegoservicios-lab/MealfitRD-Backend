@@ -369,3 +369,162 @@ def solve_meal_macros(
         "unresolved": len(ingredient_strings) - resolved,
         "converged": converged,
     }
+
+
+# ============================================================
+# [P1-NEXT-LEVEL-BATCH · 2026-07-02] Refinador GLOBAL entero del día.
+# ------------------------------------------------------------
+# La precisión era una cadena SECUENCIAL (solver per-meal → closers → caps →
+# quantize → recheck) donde cada pasada des-hace un poco a la anterior, y el
+# rebalance del recheck es CONTINUO + re-quantize (el redondeo re-abre drift).
+# Este refinador opera DIRECTO sobre el estado post-quantize en PASOS ENTEROS
+# de 5g (las porciones siguen humanas — cero re-quantize) optimizando el DÍA
+# COMPLETO de forma conjunta: local search greedy que en cada iteración aplica
+# el movimiento ±step de UNA línea que más reduce el error ponderado de banda
+# (kcal+P+C+F simultáneos). Determinista, sin dependencias, ~O(iters × líneas).
+#
+# Respeta el plato: bounds por línea [max(floor_g, 0.5×orig), min(cap_g, 2×orig)]
+# — jamás convierte una guarnición en plato ni un plato en migaja. Las líneas
+# exentas (condimentos/aceites vía exempt_tokens del caller) no se tocan.
+# tooltip-anchor: P1-NEXT-LEVEL-SOLVER. Test: test_p1_next_level_batch.py.
+# ============================================================
+
+_REFINE_WEIGHTS = {"kcal": 1.0, "protein": 1.5, "carbs": 1.0, "fats": 1.2}
+
+
+def _refine_error(delivered: dict, targets: dict) -> float:
+    err = 0.0
+    for k, w in _REFINE_WEIGHTS.items():
+        t = float(targets.get(k) or 0.0)
+        if t <= 0:
+            continue
+        err += w * ((float(delivered.get(k) or 0.0) - t) / t) ** 2
+    return err
+
+
+def refine_day_portions_integer(
+    meals: list,
+    targets: dict,
+    db,
+    step_g: float = 5.0,
+    floor_g: float = 15.0,
+    cap_g: float = 300.0,
+    exempt_tokens: tuple = (),
+    max_iters: int = 250,
+) -> int:
+    """Refina las porciones del DÍA en pasos enteros de `step_g` para clavar la banda
+    all-4 (kcal/P/C/F conjuntos). Muta `ingredients` (+`ingredients_raw` lockstep) y
+    NO toca los macros del meal (el caller hace truth-up por meal tocado — mismo
+    contrato que _cap_unrealistic_portions). Devuelve nº de movimientos aplicados.
+
+    `targets`: {"kcal","protein","carbs","fats"} en unidades absolutas del día.
+    Fail-safe: cualquier error → 0 movimientos (día intacto)."""
+    import re as _re
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                return s
+
+        # 1) Censo de líneas móviles: gram-based, resolubles, no exentas.
+        lines = []  # dicts: meal, idx, grams, per_g {kcal,p,c,f}, orig_grams
+        delivered = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0}
+        for meal in meals or []:
+            if not isinstance(meal, dict):
+                continue
+            ings = meal.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            for idx, ing in enumerate(ings):
+                s = str(ing)
+                mc = None
+                try:
+                    mc = db.macros_from_ingredient_string(s)
+                except Exception:
+                    mc = None
+                if mc:
+                    delivered["kcal"] += float(mc.get("kcal") or 0.0)
+                    delivered["protein"] += float(mc.get("protein") or 0.0)
+                    delivered["carbs"] += float(mc.get("carbs") or 0.0)
+                    delivered["fats"] += float(mc.get("fats") or 0.0)
+                il = _sa(s.lower())
+                if "al gusto" in il or "opcional" in il:
+                    continue
+                if any(tok and tok in il for tok in exempt_tokens):
+                    continue
+                m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                if not m_g or not mc:
+                    continue
+                grams = float(m_g.group(1).replace(",", "."))
+                if grams <= 0:
+                    continue
+                per_g = {k: float(mc.get(k2) or 0.0) / grams
+                         for k, k2 in (("kcal", "kcal"), ("protein", "protein"),
+                                       ("carbs", "carbs"), ("fats", "fats"))}
+                if all(abs(v) < 1e-9 for v in per_g.values()):
+                    continue
+                lines.append({"meal": meal, "idx": idx, "grams": grams,
+                              "orig": grams, "per_g": per_g})
+        if not lines:
+            return 0
+        tg = {k: float(targets.get(k) or 0.0) for k in ("kcal", "protein", "carbs", "fats")}
+        if not any(v > 0 for v in tg.values()):
+            return 0
+
+        # 2) Greedy: el mejor movimiento ±step por iteración hasta converger.
+        moves = 0
+        err = _refine_error(delivered, tg)
+        for _ in range(int(max_iters)):
+            best = None  # (new_err, line, direction)
+            for ln in lines:
+                lo = max(float(floor_g), 0.5 * ln["orig"])
+                hi = min(float(cap_g), 2.0 * ln["orig"])
+                for direction in (+1.0, -1.0):
+                    ng = ln["grams"] + direction * float(step_g)
+                    if ng < lo - 1e-9 or ng > hi + 1e-9:
+                        continue
+                    cand = {k: delivered[k] + direction * float(step_g) * ln["per_g"][k]
+                            for k in delivered}
+                    ne = _refine_error(cand, tg)
+                    if ne < err - 1e-9 and (best is None or ne < best[0]):
+                        best = (ne, ln, direction)
+            if best is None:
+                break
+            ne, ln, direction = best
+            ln["grams"] += direction * float(step_g)
+            for k in delivered:
+                delivered[k] += direction * float(step_g) * ln["per_g"][k]
+            err = ne
+            moves += 1
+
+        if not moves:
+            return 0
+
+        # 3) Aplicar los cambios a los strings (lockstep raw) por línea tocada.
+        touched_meals = set()
+        for ln in lines:
+            if abs(ln["grams"] - ln["orig"]) < 1e-9:
+                continue
+            meal = ln["meal"]
+            idx = ln["idx"]
+            factor = ln["grams"] / ln["orig"]
+            try:
+                s = str(meal["ingredients"][idx])
+                new_s = _resc(s, factor)
+                if new_s and new_s != s:
+                    meal["ingredients"][idx] = new_s
+                    raw = meal.get("ingredients_raw")
+                    if isinstance(raw, list) and idx < len(raw):
+                        try:
+                            raw[idx] = _resc(str(raw[idx]), factor)
+                        except Exception:
+                            pass
+                    touched_meals.add(id(meal))
+                    meal["_global_refine_applied"] = True
+            except Exception:
+                continue
+        return moves if touched_meals else 0
+    except Exception:
+        return 0

@@ -2005,6 +2005,17 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         )
         if merged_plan_data:
             logger.info(f"[TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
+            # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido del reemplazo
+            # confirmado vía chat: fuerte si `changes` contiene negación explícita del token
+            # ("no me gusta el pollo"), débil si solo cambió la proteína. Fail-open.
+            try:
+                from taste_model import record_chat_replace
+                record_chat_replace(
+                    user_id, str((target_meal or {}).get("name") or ""),
+                    str(new_meal_data.get("name") or ""), changes,
+                )
+            except Exception as _taste_cm_e:
+                logger.debug(f"[P1-NEXT-LEVEL-TASTE] señal chat no-op: {_taste_cm_e}")
             # [P2-COHERENCE-1 · 2026-05-11] _coherence_warnings opcional —
             # presente solo si el guard reportó divergencias post-modificación.
             # El frontend (AgentPage) puede mostrar toast no-bloqueante.

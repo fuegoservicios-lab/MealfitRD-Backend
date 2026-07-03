@@ -5295,6 +5295,10 @@ def api_swap_meal_persist(
         # `is_restocked` opcional. Defensa-en-profundidad: el UPDATE
         # interno del helper también incluye `AND user_id = %s` (espejo
         # del SELECT inicial). Tooltip-anchor: P1-SWAP-PERSIST-ATOMIC.
+        # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) buffer del nombre del plato reemplazado
+        # (lo llena el mutator bajo el lock) → señal de gusto aprendido post-persist.
+        _taste_old_name = [""]
+
         def _swap_mutator(plan_data: dict) -> dict:
             # Sanity: el plan real DEBE tener `days[day_index].meals[meal_index]`.
             # Si el plan está corrupted (días faltantes) levantamos
@@ -5332,6 +5336,13 @@ def api_swap_meal_persist(
             # aquí cubre clientes futuros/legacy que omitan el reset.
             if isinstance(new_meal, dict):
                 new_meal["isExpanded"] = False
+            # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) captura el nombre del plato REEMPLAZADO
+            # (fresh, bajo el lock) para la señal de gusto aprendido post-persist.
+            try:
+                if isinstance(meals[meal_index], dict):
+                    _taste_old_name[0] = str(meals[meal_index].get("name") or "")
+            except Exception:
+                pass
             meals[meal_index] = new_meal
 
             # [P2-SWAP-PERSIST-FINALIZE · 2026-07-01] (audit v2 paridad GAP-3, batch P2-AUDIT-V2-BATCH)
@@ -5523,6 +5534,14 @@ def api_swap_meal_persist(
             raise HTTPException(
                 status_code=404, detail="Plan no encontrado"
             )
+        # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido: el usuario
+        # CONFIRMÓ el reemplazo (persistió). Solo registra si cambió la proteína principal
+        # (anti-ruido — si la mantuvo, el swap no era sobre ella). Fail-open, best-effort.
+        try:
+            from taste_model import record_swap_away
+            record_swap_away(verified_user_id, _taste_old_name[0], str(new_meal_name or ""))
+        except Exception as _taste_e:
+            logger.debug(f"[P1-NEXT-LEVEL-TASTE] señal swap no-op: {_taste_e}")
         return {"success": True}
         # P0-NEW-A-END / P1-SWAP-PERSIST-ATOMIC-END
 

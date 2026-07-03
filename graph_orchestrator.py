@@ -4285,6 +4285,19 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     _uid = form_data.get("user_id") or form_data.get("session_id")
     if _uid == "guest": _uid = None
 
+    # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Preferencias APRENDIDAS del uso (swap-away /
+    # chat-replace agregadas con umbral+ventana por taste_model) se appendean al taste_profile
+    # declarado → fluyen al planner (pools del esqueleto) Y al day-generator sin tocar sus
+    # prompts. Usuarios sin señal → '' (byte-equivalente, preserva el prompt-cache). Fail-open.
+    if _uid:
+        try:
+            from taste_model import build_taste_context as _btc_learned
+            _learned_taste = _btc_learned(_uid)
+            if _learned_taste:
+                taste_profile = (taste_profile or "") + "\n" + _learned_taste
+        except Exception as _lt_e:
+            logger.debug(f"[P1-NEXT-LEVEL-TASTE] contexto aprendido no-op: {_lt_e}")
+
     rejection_reasons = state.get("rejection_reasons", [])
 
     from ai_helpers import get_deterministic_variety_prompt
@@ -9251,6 +9264,13 @@ PORTION_CAP_PROTEIN_G = _env_int("MEALFIT_PORTION_CAP_PROTEIN_G", 300, validator
 # headroom kcal; sin headroom → drop de la línea (jamás dejar la comida sin ingredientes).
 PORTION_SHRINK_FLOOR_ENABLED = _env_bool("MEALFIT_PORTION_SHRINK_FLOOR", True)
 PORTION_SHRINK_FLOOR_G = _env_float("MEALFIT_PORTION_SHRINK_FLOOR_G", 15.0, validator=lambda v: 5.0 <= v <= 40.0)
+# [P1-NEXT-LEVEL-BATCH · 2026-07-02] (SOLVER) Refinador GLOBAL entero del día: local search
+# en pasos de 5g sobre el estado POST-quantize que optimiza kcal+P+C+F conjuntos (rompe el
+# techo de la cadena secuencial solver→closers→quantize donde cada pasada des-hace a la
+# anterior y el rebalance continuo re-abre drift al re-quantizar). Porciones siguen humanas
+# (múltiplos de step) → cero re-quantize. Rollback: MEALFIT_GLOBAL_DAY_REFINE=false.
+GLOBAL_DAY_REFINE_ENABLED = _env_bool("MEALFIT_GLOBAL_DAY_REFINE", True)
+GLOBAL_DAY_REFINE_MAX_ITERS = _env_int("MEALFIT_GLOBAL_DAY_REFINE_MAX_ITERS", 250, validator=lambda v: 20 <= v <= 2000)
 # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) espejo del veg-guard para CARBS fantasma:
 # "Revoltillo con Avena" cuyos pasos cocinan avena que NO está en ingredients[] (no se cuenta ni se compra).
 # Solo carbs slot-neutros curados (avena/casabe/batata/yuca) — arroz/pasta EXCLUIDOS (slot-sensitivos: el
@@ -19314,6 +19334,52 @@ async def assemble_plan_node(state: PlanState) -> dict:
                                     f"bump/drop al piso cocinable ({PORTION_SHRINK_FLOOR_G:.0f}g).")
                 except Exception as _sfl_e:
                     logger.warning(f"[P2-AUDIT-V5-BATCH] (GAP-05) shrink-floor en assemble no-op: {_sfl_e}")
+            # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (SOLVER) Refinador GLOBAL entero: para cada día
+            # fuera de banda tras el quantize, local search en pasos de 5g que optimiza kcal+P+C+F
+            # CONJUNTOS (porciones siguen humanas → sin re-quantize). Corre ANTES del recheck
+            # (que queda como fallback continuo) y del qty-sync final (que ve el estado final).
+            if GLOBAL_DAY_REFINE_ENABLED and (_pg or _cg or _fg):
+                try:
+                    from portion_solver import refine_day_portions_integer as _rdi
+                    _ref_db = _QDB()
+                    _ref_targets = {
+                        "kcal": 4.0 * (float(_pg or 0) + float(_cg or 0)) + 9.0 * float(_fg or 0),
+                        "protein": float(_pg or 0), "carbs": float(_cg or 0), "fats": float(_fg or 0),
+                    }
+                    _ref_moves = 0
+                    for _rd in days or []:
+                        _rd_meals = (_rd.get("meals") or []) if isinstance(_rd, dict) else []
+                        if not _rd_meals:
+                            continue
+                        _sp_r = sum(_meal_macro_num(_m3.get("protein")) for _m3 in _rd_meals if isinstance(_m3, dict))
+                        _sc_r = sum(_meal_macro_num(_m3.get("carbs")) for _m3 in _rd_meals if isinstance(_m3, dict))
+                        _sf_r = sum(_meal_macro_num(_m3.get("fats")) for _m3 in _rd_meals if isinstance(_m3, dict))
+                        _out_of_band = any(
+                            _t > 0 and not (0.90 <= (_v / _t) <= 1.12)
+                            for _v, _t in ((_sp_r, float(_pg or 0)), (_sc_r, float(_cg or 0)), (_sf_r, float(_fg or 0)))
+                        )
+                        if not _out_of_band:
+                            continue
+                        _mv = _rdi(
+                            _rd_meals, _ref_targets, _ref_db,
+                            step_g=5.0, floor_g=float(PORTION_SHRINK_FLOOR_G),
+                            cap_g=float(PORTION_CAP_PROTEIN_G),
+                            exempt_tokens=_SHRINK_FLOOR_EXEMPT_TOKENS,
+                            max_iters=int(GLOBAL_DAY_REFINE_MAX_ITERS),
+                        )
+                        if _mv:
+                            _ref_moves += _mv
+                            for _m3 in _rd_meals:
+                                if isinstance(_m3, dict) and _m3.pop("_global_refine_applied", None):
+                                    try:
+                                        _truth_up_meal_macros_from_strings(_m3, _ref_db)
+                                    except Exception:
+                                        pass
+                    if _ref_moves:
+                        logger.info(f"🎯 [P1-NEXT-LEVEL-SOLVER] refinador global entero: {_ref_moves} "
+                                    f"movimiento(s) de 5g para clavar la banda all-4 (sin re-quantize).")
+                except Exception as _ref_e:
+                    logger.warning(f"[P1-NEXT-LEVEL-SOLVER] refinador global no-op: {type(_ref_e).__name__}: {_ref_e}")
             # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] (audit v3 macros GAP-4) el redondeo a fracciones
             # servibles pudo re-abrir el drift que MACRO-REBALANCE cerró antes del quantize. Si un día
             # quedó con C/F/P a >TOL del target → UN rebalance + UN re-quantize (iteración única). El
