@@ -1767,10 +1767,30 @@ def build_budget_reference(form_data: dict) -> dict | None:
         return None
 
 
-def reconcile_budget_with_cost(reference: dict, cost_summary: dict) -> dict | None:
+def reconcile_budget_with_cost(
+    reference: dict, cost_summary: dict, active_household: int | None = None
+) -> dict | None:
     """Cruza una referencia (de `build_budget_reference` o persistida) con el
     `shopping_cost_summary` activo → status {dentro|cerca|excedido|sin_limite}.
-    Sin precios suficientes (cycle_total<=0) → None (mejor callar que inventar)."""
+    Sin precios suficientes (cycle_total<=0) → None (mejor callar que inventar).
+
+    [P1-BUDGET-REF-RESCALE · 2026-07-02] (audit v5 · GAP-01) La referencia nace
+    atada al `groceryDuration`/`householdSize` de la GENERACIÓN; si el usuario
+    cambia duración u hogar post-gen (dropdown del Dashboard → /recalculate),
+    comparar el costo del ciclo NUEVO contra la referencia vieja daba veredicto
+    falso ×2.5-4 (weekly→monthly marcaba `excedido` rojo; el inverso, verde
+    falso). Re-escalado ANTES de comparar:
+      - basis tier (low/medium/high) → ratio NO lineal del piso por ciclo
+        (`_budget_cycle_floor_dop(activo)/_budget_cycle_floor_dop(ref)` —
+        consistente con cómo nació la referencia; lineal sobre-estimaría ~32%),
+        y por hogar `activo/ref` cuando `active_household` viene del caller.
+      - basis custom → lineal per-día (el monto declarado era un total; se
+        marca `rescaled_from_days` para que el frontend pueda añadir caveat).
+        El hogar NO re-escala un custom (el monto declarado ya era total).
+    El dict de salida persiste `days`/`household` ACTIVOS → la referencia
+    migra y el próximo refresh con la misma duración es no-op. Provenance
+    `rescaled_from_days`/`rescaled_from_household` se preserva entre refreshes.
+    """
     if not _budget_reconcile_enabled():
         return None
     if not isinstance(reference, dict) or not isinstance(cost_summary, dict):
@@ -1781,24 +1801,75 @@ def reconcile_budget_with_cost(reference: dict, cost_summary: dict) -> dict | No
         estimated = float(duration_totals.get("cycle_total_rd") or 0.0)
         if estimated <= 0:
             return None
-        out = {
-            "tier": reference.get("tier"),
-            "basis": reference.get("basis") or reference.get("tier"),
-            "currency": reference.get("currency") or "DOP",
-            "reference_rd": reference.get("reference_rd"),
-            "floor_rd": reference.get("floor_rd"),
-            "days": reference.get("days"),
-            "household": reference.get("household"),
-            "active_duration": active,
-            "estimated_cycle_rd": round(estimated),
-            "items_priced": duration_totals.get("items_priced"),
-            "items_total": duration_totals.get("items_total"),
-        }
         reference_rd = reference.get("reference_rd")
         try:
             reference_rd = float(reference_rd) if reference_rd else None
         except (TypeError, ValueError):
             reference_rd = None
+        floor_rd = reference.get("floor_rd")
+        try:
+            floor_rd = float(floor_rd) if floor_rd else None
+        except (TypeError, ValueError):
+            floor_rd = None
+        basis = str(reference.get("basis") or reference.get("tier") or "").strip().lower()
+        # ── [P1-BUDGET-REF-RESCALE] duración: referencia → días activos ──
+        try:
+            ref_days = int(reference.get("days") or 0)
+        except (TypeError, ValueError):
+            ref_days = 0
+        out_days = ref_days or reference.get("days")
+        rescaled_from_days = reference.get("rescaled_from_days")
+        active_days = _GROCERY_DURATION_DAYS.get(active)
+        if active_days and ref_days > 0 and active_days != ref_days:
+            ref_cycle_floor = _budget_cycle_floor_dop(ref_days)
+            floor_ratio = (
+                _budget_cycle_floor_dop(active_days) / ref_cycle_floor
+                if ref_cycle_floor > 0 else None
+            )
+            if floor_ratio:
+                if floor_rd:
+                    floor_rd *= floor_ratio
+                if reference_rd:
+                    reference_rd *= (
+                        active_days / ref_days if basis == "custom" else floor_ratio
+                    )
+                rescaled_from_days = rescaled_from_days or ref_days
+                out_days = active_days
+        # ── [P1-BUDGET-REF-RESCALE] hogar: solo tier-basis (custom = total declarado) ──
+        try:
+            ref_household = int(reference.get("household") or 0)
+        except (TypeError, ValueError):
+            ref_household = 0
+        out_household = ref_household or reference.get("household")
+        rescaled_from_household = reference.get("rescaled_from_household")
+        if active_household and ref_household > 0 and basis != "custom":
+            # Mismo clamp que min_budget_for_goals (la referencia nació con él).
+            _hh = min(12, max(1, int(active_household)))
+            if _hh != ref_household:
+                scale = _hh / ref_household
+                if reference_rd:
+                    reference_rd *= scale
+                if floor_rd:
+                    floor_rd *= scale
+                rescaled_from_household = rescaled_from_household or ref_household
+                out_household = _hh
+        out = {
+            "tier": reference.get("tier"),
+            "basis": reference.get("basis") or reference.get("tier"),
+            "currency": reference.get("currency") or "DOP",
+            "reference_rd": round(reference_rd) if reference_rd else reference.get("reference_rd"),
+            "floor_rd": round(floor_rd) if floor_rd else reference.get("floor_rd"),
+            "days": out_days,
+            "household": out_household,
+            "active_duration": active,
+            "estimated_cycle_rd": round(estimated),
+            "items_priced": duration_totals.get("items_priced"),
+            "items_total": duration_totals.get("items_total"),
+        }
+        if rescaled_from_days:
+            out["rescaled_from_days"] = rescaled_from_days
+        if rescaled_from_household:
+            out["rescaled_from_household"] = rescaled_from_household
         if not reference_rd:
             out.update({"status": "sin_limite", "ratio": None, "delta_rd": None})
         else:
@@ -1836,17 +1907,19 @@ def compute_budget_reconciliation(form_data: dict, cost_summary: dict) -> dict |
     return reconcile_budget_with_cost(reference, cost_summary)
 
 
-def refresh_budget_reconciliation(plan_data: dict) -> None:
+def refresh_budget_reconciliation(plan_data: dict, active_household: int | None = None) -> None:
     """Path de RECALC/UPDATES (sin form_data): reusa la referencia persistida en
     `plan_data.budget_reconciliation` y refresca solo el lado del costo con el
     `shopping_cost_summary` recién recomputado. No-op si falta cualquiera de
-    los dos (planes legacy). Preserva `suggestions` previas si existen."""
+    los dos (planes legacy). Preserva `suggestions` previas si existen.
+    [P1-BUDGET-REF-RESCALE · 2026-07-02] `active_household` (recalc lo recibe
+    del body) permite re-escalar la referencia tier-basis al hogar nuevo."""
     try:
         previous = plan_data.get("budget_reconciliation")
         cost_summary = plan_data.get("shopping_cost_summary")
         if not isinstance(previous, dict) or not isinstance(cost_summary, dict):
             return
-        refreshed = reconcile_budget_with_cost(previous, cost_summary)
+        refreshed = reconcile_budget_with_cost(previous, cost_summary, active_household=active_household)
         if not refreshed:
             return
         if previous.get("suggestions") and "suggestions" not in refreshed:

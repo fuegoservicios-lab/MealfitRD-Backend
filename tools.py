@@ -1524,11 +1524,37 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         aggr_15_hybrid = None
         aggr_30_hybrid = None
         aggr_list = None
-        household = max(1, int(form_data.get("householdSize", 1) or 1) if form_data else 1)
+        # [P1-CHATMODIFY-LISTS-SSOT · 2026-07-02] (audit v5 · GAP-02) Antes: householdSize
+        # entero crudo del form (ignoraba householdComposition y el multiplier persistido)
+        # y groceryDuration del form (ignoraba calc_grocery_duration del /recalculate) →
+        # un hogar {2 adultos + 2 niños} sin key legacy reescribía las 4 listas a escala
+        # 1.0 (vs 3.2) y podía flipear la lista activa monthly→weekly. Precedencia SSOT,
+        # espejo de _rebuild_plan_shopping_lists_inline (plans.py) y del propio cost
+        # summary/guard de este archivo (que ya usaban calc_*): multiplier persistido →
+        # compute_household_multiplier(form) → 1.0; duración persistida → form → weekly.
+        try:
+            household = float(plan_data.get("calc_household_multiplier") or 0.0)
+        except (TypeError, ValueError):
+            household = 0.0
+        if not (0.0 < household <= 50.0):
+            try:
+                from constants import compute_household_multiplier as _chm_cm
+                household = float(_chm_cm(form_data)) if form_data else 1.0
+            except Exception:
+                try:
+                    household = max(1.0, float(int(form_data.get("householdSize", 1) or 1)))
+                except (TypeError, ValueError):
+                    household = 1.0
+        if not (0.0 < household <= 50.0):
+            household = 1.0
 
         # 4.5 Recalcular la lista de compras consolidada para mantener coherencia
         try:
-            grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
+            grocery_duration = str(
+                plan_data.get("calc_grocery_duration")
+                or (form_data.get("groceryDuration") if form_data else None)
+                or "weekly"
+            ).strip().lower()
             
             from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
             # [P1-AUDIT-1 · 2026-05-15] `household` ya inicializado arriba del

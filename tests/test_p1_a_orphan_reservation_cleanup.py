@@ -94,6 +94,9 @@ _install_stub(
     _env_int=lambda _name, default=0, *_a, **_kw: default,
     _env_float=lambda _name, default=0.0, *_a, **_kw: default,
     _env_bool=lambda _name, default=False, *_a, **_kw: default,
+    # [test fix] cron_tasks importa tambien _env_str desde graph_orchestrator
+    # (drift del stub detectado en audit v5 2026-07-02).
+    _env_str=lambda _name, default=False, *_a, **_kw: str(default) if default is not None else "",
 )
 _install_stub("memory_manager", build_memory_context=lambda *_a, **_kw: "")
 _install_stub("services", _save_plan_and_track_background=lambda *_a, **_kw: None)

@@ -35,7 +35,21 @@ _SUP = _read("routers/supermarket.py")
 # Marker + presencia de los 13 sub-markers
 # ════════════════════════════════════════════════════════════════════════════
 def test_marker_bumped():
-    assert "P2-OBJECTIVE-V4-BATCH · 2026-07-02" in _read("app.py")
+    """Supersession-proof (mismo patrón que test_p1_objective_v4_batch, lección
+    P1-AUDIT-V3-BATCH): el marker DEBE ser este batch o uno POSTERIOR (fecha ≥).
+    El anchor literal original rompía con el bump inmediato siguiente
+    (P1-AUDIT-V5-BATCH · 2026-07-02, mismo día)."""
+    import re as _re
+    src = _read("app.py")
+    m = _re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
+    assert m, "falta _LAST_KNOWN_PFIX"
+    marker = m.group(1)
+    if "P2-OBJECTIVE-V4-BATCH" in marker:
+        return
+    fecha = _re.search(r"(\d{4}-\d{2}-\d{2})", marker)
+    assert fecha and fecha.group(1) >= "2026-07-02", (
+        f"marker {marker!r} anterior al batch P2-OBJECTIVE-V4-BATCH · 2026-07-02"
+    )
 
 
 def test_all_submarkers_present():

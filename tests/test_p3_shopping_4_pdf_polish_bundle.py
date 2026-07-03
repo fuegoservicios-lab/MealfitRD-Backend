@@ -140,12 +140,14 @@ def test_p3_shopping_2_debug_recalc_gated_by_environment(plans_src: str):
     O si el knob `MEALFIT_PERSIST_DEBUG_RECALC` está activo.
     """
     # Localizar el bloque _debug_recalc. La función completa
-    # `api_recalculate_shopping_list` mide ~230 líneas; usamos 30000
-    # chars para cubrirla holgadamente sin riesgo de truncar el bloque
-    # del fingerprint que está al final.
+    # `api_recalculate_shopping_list` creció con los batches (P1-BUDGET-COST-SSOT
+    # 2026-07-02 empujó el fingerprint a ~30.1k chars y el window de 30000
+    # empezó a truncarlo — falso rojo detectado en audit v5). 40000 chars
+    # cubre con holgura; no hay otro `_debug_recalc` aguas abajo que pueda
+    # dar falso positivo (3 ocurrencias, todas en esta función).
     fn_idx = plans_src.find("def api_recalculate_shopping_list")
     assert fn_idx > 0
-    body = plans_src[fn_idx:fn_idx + 30000]
+    body = plans_src[fn_idx:fn_idx + 40000]
     # Aceptar tanto `plan_data["_debug_recalc"]` (pre P1-RECALC-LOSTUPDATE)
     # como `plan_data_fresh["_debug_recalc"]` (post 2026-05-14 — el callback
     # `_apply_recalc` muta la copia fresh re-SELECTada bajo FOR UPDATE row

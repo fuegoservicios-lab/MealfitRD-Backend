@@ -5668,7 +5668,7 @@ def api_regenerate_day(
 
     Flujo: ownership → gate de suficiencia (scope=day, target = suma de macros del día
     del plan) → si insuficiente, soft-fail 200 SIN cuota → si alcanza, swap por meal con
-    reserva de inventario → persist `days[i].meals[*]` vía update_plan_data_atomic (I6/I7)
+    reserva de inventario → persist `days[i].meals[*]` vía `update_plan_data_atomic` (I6/I7)
     → 1 crédito. Gate detrás de `_pantry_sufficiency_gate_on()`.
     """
     try:
@@ -8222,7 +8222,8 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration)
                 if _p1b_summary:
                     plan_data_fresh["shopping_cost_summary"] = _p1b_summary
-                    _p1b_rbr(plan_data_fresh)
+                    # [P1-BUDGET-REF-RESCALE · 2026-07-02] hogar nuevo → re-escala tier-basis.
+                    _p1b_rbr(plan_data_fresh, active_household=household_size)
             except Exception as _p1b_e:
                 logger.warning(f"[P1-BUDGET-COST-SSOT] recalc summary no-op: {_p1b_e}")
 
