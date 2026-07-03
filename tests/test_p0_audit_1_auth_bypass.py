@@ -109,13 +109,20 @@ def test_b_neon_auth_verify_is_invoked(auth_src: str):
     )
 
 
-def test_c_no_unused_base64_import(auth_src: str):
-    """auth.py no importa `base64` (el legacy lo usaba solo para el bypass)."""
-    pattern_top_level = re.compile(r"^\s*(?:import\s+base64|from\s+base64\s+import)", re.MULTILINE)
-    pattern_local = re.compile(r"^\s+(?:import\s+base64|from\s+base64\s+import)", re.MULTILINE)
-    assert not pattern_top_level.search(auth_src) and not pattern_local.search(auth_src), (
-        "P0-AUDIT-1 defense-in-depth: auth.py importa `base64` sin razón. "
-        "Si necesitas base64 legítimo, documentar y eliminar este test."
+def test_c_base64_only_encode_never_decode(auth_src: str):
+    """[Actualizado 2026-07-03, siguiendo la instrucción del test original] `base64`
+    ganó un uso LEGÍTIMO en auth.py: `derive_form_key` (P1-FORM-KEY · 2026-06-21) codifica
+    el HMAC de la llave del form con `urlsafe_b64encode`. El peligro real de P0-AUDIT-1
+    era DECODIFICAR el payload de un JWT sin verificar firma (`urlsafe_b64decode(...)` →
+    `payload["sub"]` = account takeover) → la defensa vigente prohíbe todo *decode* de
+    base64 en auth.py; el encode del form key queda permitido y anclado."""
+    assert "urlsafe_b64encode" in auth_src, (
+        "derive_form_key (P1-FORM-KEY) debería seguir usando urlsafe_b64encode; si se "
+        "eliminó, restaurar la prohibición total del import base64 (test original)."
+    )
+    assert "b64decode" not in auth_src, (
+        "P0-AUDIT-1: decodificar base64 en auth.py es el primer paso del bypass "
+        "'leer sub del JWT sin verificar firma' — prohibido."
     )
 
 

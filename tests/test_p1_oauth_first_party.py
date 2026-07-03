@@ -65,6 +65,9 @@ class _FakeAsyncClient:
         return _FakeAsyncClient.resp
 
 
+_ENSURED = []
+
+
 def _client(monkeypatch, *, neon_resp, cookies_enabled=True):
     import neon_auth
     monkeypatch.setattr(neon_auth, "NEON_AUTH_BASE_URL", "https://fake.neonauth.test/neondb/auth")
@@ -73,6 +76,9 @@ def _client(monkeypatch, *, neon_resp, cookies_enabled=True):
     monkeypatch.setattr(auth_session, "session_cookies_enabled", lambda: cookies_enabled)
     monkeypatch.setattr(auth_session, "set_session_cookie", lambda resp, uid, iat=None: f"mf-token-{uid}")
     monkeypatch.setattr(auth_session, "derive_form_key", lambda uid: f"fk-{uid}")
+    _ENSURED.clear()
+    monkeypatch.setattr(auth_session, "ensure_user_profile_exists",
+                        lambda uid, email=None, name=None: _ENSURED.append((uid, email)))
     app = FastAPI()
     app.include_router(auth_session.router)
     app.dependency_overrides[get_neon_bearer_user_id] = lambda: None
@@ -89,6 +95,9 @@ def test_valid_verifier_mints_first_party_session(monkeypatch):
     assert body["token"] == "mf-token-user-9"
     assert _FakeAsyncClient.last_url.endswith("/get-session")
     assert _FakeAsyncClient.last_params == {"neon_auth_session_verifier": "abc123"}
+    # el primer login por Google puede resolverse SOLO vía este adopt (sin Bearer) →
+    # la fila espejo de user_profiles debe garantizarse aquí (paridad con el path Bearer).
+    assert _ENSURED == [("user-9", "g@x.co")]
 
 
 def test_consumed_or_invalid_verifier_returns_401(monkeypatch):

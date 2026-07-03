@@ -14,11 +14,19 @@ verificado por esta cookie.
   POST /api/auth/email-otp/verify — [P1-OTP-FIRST-PARTY · 2026-07-03] verifica el código
       OTP contra Neon Auth SERVER-SIDE y emite la sesión first-party directo.
 """
+import asyncio
 import logging
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Body, Depends, Response, Cookie, Header
+
+# [P1-OTP-FIRST-PARTY / P1-OAUTH-FIRST-PARTY · 2026-07-03] La fila espejo de
+# `user_profiles` se creaba SOLO en el path Bearer de auth.py — un usuario NUEVO
+# que entra por OTP/OAuth first-party jamás presenta un Bearer → sin fila, todo
+# INSERT con FK a user_profiles (health_profile del assessment, marcas, taste)
+# fallaría. Los endpoints de abajo la garantizan igual que el path Bearer.
+from db import ensure_user_profile_exists
 
 from auth import (
     get_verified_user_id,
@@ -167,6 +175,12 @@ async def email_otp_verify(
         # server-side; mejor error explícito que un 200 que no loguea.
         logger.error("[P1-OTP-FIRST-PARTY] session_cookies deshabilitadas — el login OTP requiere la feature.")
         return Response(status_code=503)
+    # [P1-OTP-FIRST-PARTY] fila espejo de user_profiles (paridad con el path Bearer;
+    # un usuario nuevo por OTP jamás presenta Bearer). Best-effort: el OTP ya validó.
+    try:
+        await asyncio.to_thread(ensure_user_profile_exists, uid, user.get("email") or email, user.get("name"))
+    except Exception as _ens_e:
+        logger.warning(f"[P1-OTP-FIRST-PARTY] ensure_user_profile_exists lanzó {type(_ens_e).__name__} (auth continúa)")
     token = set_session_cookie(response, uid)
     if not token:
         return Response(status_code=503)
@@ -237,6 +251,12 @@ async def oauth_adopt(
     if not session_cookies_enabled():
         logger.error("[P1-OAUTH-FIRST-PARTY] session_cookies deshabilitadas — el adopt requiere la feature.")
         return Response(status_code=503)
+    # [P1-OAUTH-FIRST-PARTY] fila espejo de user_profiles (paridad con el path Bearer;
+    # el primer login por Google puede resolverse SOLO vía este adopt). Best-effort.
+    try:
+        await asyncio.to_thread(ensure_user_profile_exists, uid, user.get("email"), user.get("name"))
+    except Exception as _ens_e:
+        logger.warning(f"[P1-OAUTH-FIRST-PARTY] ensure_user_profile_exists lanzó {type(_ens_e).__name__} (auth continúa)")
     token = set_session_cookie(response, uid)
     if not token:
         return Response(status_code=503)

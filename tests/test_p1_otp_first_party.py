@@ -66,6 +66,9 @@ class _FakeAsyncClient:
         return _FakeAsyncClient.resp
 
 
+_ENSURED = []
+
+
 def _client(monkeypatch, *, neon_resp, cookies_enabled=True, base_url="https://fake.neonauth.test/neondb/auth"):
     import neon_auth
     monkeypatch.setattr(neon_auth, "NEON_AUTH_BASE_URL", base_url)
@@ -74,6 +77,9 @@ def _client(monkeypatch, *, neon_resp, cookies_enabled=True, base_url="https://f
     monkeypatch.setattr(auth_session, "session_cookies_enabled", lambda: cookies_enabled)
     monkeypatch.setattr(auth_session, "set_session_cookie", lambda resp, uid, iat=None: f"mf-token-{uid}")
     monkeypatch.setattr(auth_session, "derive_form_key", lambda uid: f"fk-{uid}")
+    _ENSURED.clear()
+    monkeypatch.setattr(auth_session, "ensure_user_profile_exists",
+                        lambda uid, email=None, name=None: _ENSURED.append((uid, email)))
     app = FastAPI()
     app.include_router(auth_session.router)
     app.dependency_overrides[get_neon_bearer_user_id] = lambda: None
@@ -91,6 +97,9 @@ def test_valid_otp_mints_first_party_session(monkeypatch):
     assert body["form_key"] == "fk-user-123"
     assert _FakeAsyncClient.last_url.endswith("/sign-in/email-otp")
     assert _FakeAsyncClient.last_json == {"email": "a@b.co", "otp": "123456"}
+    # un usuario NUEVO por OTP jamás presenta Bearer → la fila espejo de user_profiles
+    # debe garantizarse AQUÍ (sin ella, el INSERT del assessment fallaría por FK).
+    assert _ENSURED == [("user-123", "a@b.co")]
 
 
 def test_invalid_otp_returns_401_without_session(monkeypatch):
