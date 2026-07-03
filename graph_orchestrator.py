@@ -3580,6 +3580,7 @@ from prompts.plan_generator import (
     build_prev_chunk_adherence_context,
     build_pantry_correction_context,
     build_pantry_drift_context,
+    build_clinical_profile_context,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 from prompts.planner import PLANNER_SYSTEM_PROMPT
@@ -4329,6 +4330,15 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
             clinical_directives += build_medication_context(form_data)
         except Exception:
             pass
+    # [P1-CLINICAL-PANEL · 2026-07-03] Perfil clínico avanzado opt-in (labs, historia
+    # ponderal, síntomas GI, entrenamiento — health_profile.clinical_profile). "" si
+    # el usuario no llenó el panel → no-op transparente (prompt-cache preservado).
+    # Viaja con las directivas clínicas → planner Y day-gen; el revisor médico lo
+    # recibe en su propio prompt (review_plan_node). tooltip-anchor: P1-CLINICAL-PANEL
+    try:
+        clinical_directives += build_clinical_profile_context(form_data)
+    except Exception:
+        pass
     variety_prompt = (variety_prompt or "") + clinical_directives
     adherence_hint = form_data.get("_adherence_hint", "")
     meal_level_adherence = form_data.get("_meal_level_adherence", {})
@@ -21434,12 +21444,21 @@ async def review_plan_node(state: PlanState) -> dict:
         except Exception:
             _baria_note = ""
 
+        # [P1-CLINICAL-PANEL · 2026-07-03] El revisor médico también ve el perfil
+        # clínico avanzado opt-in (labs con flags, pérdida no intencional, GI) —
+        # puede pesar riesgos que las condiciones DECLARADAS no capturan. "" si el
+        # usuario no llenó el panel (prompt byte-idéntico → cache preservado).
+        try:
+            _clinical_panel_note = build_clinical_profile_context(form_data)
+        except Exception:
+            _clinical_panel_note = ""
+
         review_human_content = f"""--- RESTRICCIONES DEL PACIENTE ---
 Alergias declaradas: {json.dumps(allergies) if allergies else "Ninguna"}
 Condiciones médicas: {json.dumps(medical_conditions) if medical_conditions else "Ninguna"}
 Tipo de dieta: {diet_type}
 Alimentos que no le gustan: {json.dumps(dislikes) if dislikes else "Ninguno"}
-{_baria_note}
+{_baria_note}{_clinical_panel_note}
 --- REPORTE DE INVESTIGACIÓN CLÍNICA (FACT-CHECKING) ---
 {fact_check_report}
 

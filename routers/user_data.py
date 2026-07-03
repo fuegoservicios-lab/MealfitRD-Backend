@@ -605,3 +605,211 @@ async def api_put_super_personalization(
             )
 
     return {"super_personalization": cleaned}
+
+
+# ---------------------------------------------------------------------------
+# Perfil Clínico Avanzado (health_profile.clinical_profile)
+# [P1-CLINICAL-PANEL · 2026-07-03]
+# ---------------------------------------------------------------------------
+# Panel opt-in (Ajustes) con las dimensiones clínicas que el wizard NO captura
+# (P1 restantes del audit clínico 2026-07-03): laboratorios recientes, historia
+# ponderal, síntomas digestivos y entrenamiento (tipo/hora/frecuencia) + texto
+# libre. Persiste como sub-key JSONB de health_profile (sin migración, patrón
+# P1-SUPERPERSONALIZATION-1). Se inyecta a plan-gen (planner + day-gen vía
+# clinical_directives) y al revisor médico vía `build_clinical_profile_context`
+# (prompts/plan_generator.py). ADITIVO: NO reemplaza condiciones/alergias/
+# medicamentos del wizard — los labs generan GUÍA de prompt (flags honestos
+# "compatible con X, requiere confirmación profesional"), nunca diagnóstico.
+
+_CLINPROF_LAB_RANGES: Dict[str, tuple] = {
+    # key → (min, max) permisivo-pero-sano; fuera de rango = 422 (typo probable).
+    "glucosa_ayunas":   (40.0, 500.0),    # mg/dL
+    "hba1c":            (3.0, 15.0),      # %
+    "colesterol_total": (80.0, 500.0),    # mg/dL
+    "ldl":              (30.0, 400.0),    # mg/dL
+    "hdl":              (10.0, 150.0),    # mg/dL
+    "trigliceridos":    (30.0, 2000.0),   # mg/dL
+    "creatinina":       (0.2, 15.0),      # mg/dL
+    "tfg":              (5.0, 150.0),     # mL/min/1.73m²
+    "tsh":              (0.01, 100.0),    # µUI/mL
+    "acido_urico":      (1.0, 15.0),      # mg/dL
+    "hemoglobina":      (5.0, 22.0),      # g/dL
+    "vitamina_d":       (4.0, 150.0),     # ng/mL
+}
+_CLINPROF_GI_VALUES = {"estrenimiento", "diarrea", "reflujo", "distension", "ninguno"}
+_CLINPROF_TRAINING_TYPES = {"", "fuerza", "cardio", "mixto", "crossfit", "calistenia", "deporte"}
+_CLINPROF_TRAINING_TIMES = {"", "manana", "mediodia", "tarde", "noche"}
+_CLINPROF_WEIGHT_UNITS = {"", "lb", "kg"}
+_CLINPROF_WEIGHT_RANGE = (20.0, 700.0)  # genérico lb/kg — solo anti-typo
+_CLINPROF_MAX_FREETEXT = 1500
+_CLINPROF_MAX_LABS_DATE = 20
+
+
+def _clinprof_num(raw: Any, key: str, lo: float, hi: float) -> Optional[float]:
+    """Parsea un numérico opcional ('' / None → None). Coma decimal es-DO
+    normalizada. Fuera de rango → 422 accionable con el nombre del campo."""
+    if raw is None or raw == "":
+        return None
+    try:
+        v = float(str(raw).replace(",", "."))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail=f"'{key}' debe ser numérico.")
+    if not (lo <= v <= hi):
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{key}' fuera de rango plausible ({lo}-{hi}). ¿Typo?",
+        )
+    return v
+
+
+def _clean_clinical_profile(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Valida + normaliza el payload del panel clínico. 422 ante shapes/rangos
+    inválidos. Campos vacíos se OMITEN (el builder de contexto es no-op sin
+    datos accionables)."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Payload inválido.")
+    out: Dict[str, Any] = {}
+
+    labs_in = payload.get("labs") or {}
+    if not isinstance(labs_in, dict):
+        raise HTTPException(status_code=422, detail="'labs' debe ser un objeto.")
+    labs_out: Dict[str, Any] = {}
+    for key, (lo, hi) in _CLINPROF_LAB_RANGES.items():
+        v = _clinprof_num(labs_in.get(key), key, lo, hi)
+        if v is not None:
+            labs_out[key] = v
+    labs_date = str(labs_in.get("labsDate") or "").strip()[:_CLINPROF_MAX_LABS_DATE]
+    if labs_date:
+        labs_out["labsDate"] = labs_date
+    out["labs"] = labs_out
+
+    wh_in = payload.get("weightHistory") or {}
+    if not isinstance(wh_in, dict):
+        raise HTTPException(status_code=422, detail="'weightHistory' debe ser un objeto.")
+    wh_out: Dict[str, Any] = {}
+    unit = str(wh_in.get("unit") or "").strip().lower()
+    if unit not in _CLINPROF_WEIGHT_UNITS:
+        raise HTTPException(status_code=422, detail="weightHistory.unit inválida (lb|kg).")
+    _wlo, _whi = _CLINPROF_WEIGHT_RANGE
+    for wkey in ("maxWeight", "minWeight", "weight6mAgo"):
+        v = _clinprof_num(wh_in.get(wkey), f"weightHistory.{wkey}", _wlo, _whi)
+        if v is not None:
+            wh_out[wkey] = v
+    if wh_out and not unit:
+        raise HTTPException(status_code=422, detail="weightHistory.unit requerida si das pesos.")
+    if unit:
+        wh_out["unit"] = unit
+    wh_out["unintentionalLoss"] = bool(wh_in.get("unintentionalLoss"))
+    out["weightHistory"] = wh_out
+
+    gi_in = payload.get("giSymptoms") or []
+    if not isinstance(gi_in, list):
+        raise HTTPException(status_code=422, detail="'giSymptoms' debe ser una lista.")
+    gi_out = []
+    for x in gi_in[:8]:
+        s = str(x).strip().lower()
+        if s and s not in _CLINPROF_GI_VALUES:
+            raise HTTPException(status_code=422, detail=f"giSymptoms '{s}' inválido.")
+        if s and s not in gi_out:
+            gi_out.append(s)
+    # Sentinel 'ninguno' exclusivo (misma regla que los multi-select del wizard).
+    if "ninguno" in gi_out and len(gi_out) > 1:
+        gi_out = [s for s in gi_out if s != "ninguno"]
+    out["giSymptoms"] = gi_out
+
+    tr_in = payload.get("training") or {}
+    if not isinstance(tr_in, dict):
+        raise HTTPException(status_code=422, detail="'training' debe ser un objeto.")
+    tr_type = str(tr_in.get("type") or "").strip().lower()
+    if tr_type not in _CLINPROF_TRAINING_TYPES:
+        raise HTTPException(status_code=422, detail="training.type inválido.")
+    tr_time = str(tr_in.get("timeOfDay") or "").strip().lower()
+    if tr_time not in _CLINPROF_TRAINING_TIMES:
+        raise HTTPException(status_code=422, detail="training.timeOfDay inválido.")
+    days_raw = tr_in.get("daysPerWeek")
+    tr_days = 0
+    if days_raw not in (None, ""):
+        try:
+            tr_days = int(float(str(days_raw)))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="training.daysPerWeek debe ser 0-7.")
+        if not (0 <= tr_days <= 7):
+            raise HTTPException(status_code=422, detail="training.daysPerWeek debe ser 0-7.")
+    out["training"] = {"type": tr_type, "timeOfDay": tr_time, "daysPerWeek": tr_days}
+
+    free = payload.get("freeText") or ""
+    if not isinstance(free, str):
+        raise HTTPException(status_code=422, detail="freeText debe ser texto.")
+    out["freeText"] = free.strip()[:_CLINPROF_MAX_FREETEXT]
+    return out
+
+
+@router.get("/user/preferences/clinical-profile")
+async def api_get_clinical_profile(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Devuelve el perfil clínico avanzado del usuario (o {} si no lo llenó).
+    Read-only, cero costo LLM (misma exención que /user/preferences)."""
+    uid = _require_user(verified_user_id)
+    from db import get_user_profile
+
+    profile = await asyncio.to_thread(get_user_profile, uid)
+    hp = (profile or {}).get("health_profile") or {}
+    cp = hp.get("clinical_profile") if isinstance(hp, dict) else None
+    return {"clinical_profile": cp if isinstance(cp, dict) else {}}
+
+
+class ClinicalProfileBody(BaseModel):
+    labs: Optional[Dict[str, Any]] = None
+    weightHistory: Optional[Dict[str, Any]] = None
+    giSymptoms: Optional[list] = None
+    training: Optional[Dict[str, Any]] = None
+    freeText: Optional[str] = None
+
+
+@router.put("/user/preferences/clinical-profile")
+async def api_put_clinical_profile(
+    background_tasks: BackgroundTasks,
+    body: ClinicalProfileBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Persiste el payload validado en health_profile.clinical_profile vía
+    update_user_health_profile_atomic (FOR UPDATE + callback, I7). Filtra por
+    user_id autenticado (I2). freeText nuevo → extracción de facts en
+    background (mismo pipeline/knob que súper personalización)."""
+    uid = _require_user(verified_user_id)
+    cleaned = _clean_clinical_profile(body.model_dump())
+
+    from datetime import datetime, timezone
+    cleaned["updatedAt"] = datetime.now(timezone.utc).isoformat()
+
+    from db import update_user_health_profile_atomic
+
+    _state = {"freetext_changed": False}
+
+    def _mutator(hp):
+        if not isinstance(hp, dict):
+            hp = {}
+        prev = hp.get("clinical_profile")
+        prev_free = prev.get("freeText") if isinstance(prev, dict) else ""
+        new_free = cleaned.get("freeText") or ""
+        _state["freetext_changed"] = bool(new_free) and new_free != (prev_free or "")
+        hp["clinical_profile"] = cleaned
+        return hp
+
+    new_hp = await asyncio.to_thread(update_user_health_profile_atomic, uid, _mutator)
+    if new_hp is None:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+    if _SUPERPERS_EXTRACT_FACTS and _state["freetext_changed"]:
+        try:
+            from fact_extractor import async_extract_and_save_facts
+            background_tasks.add_task(async_extract_and_save_facts, uid, cleaned["freeText"])
+            logger.info(
+                f"[P1-CLINICAL-PANEL] Extracción de facts encolada para user {uid} "
+                f"(freeText clínico {len(cleaned['freeText'])} chars)."
+            )
+        except Exception as _fx_err:  # noqa: BLE001 — best-effort, no rompe el guardado
+            logger.warning(f"[P1-CLINICAL-PANEL] No se pudo encolar extracción de facts: {_fx_err}")
+
+    return {"clinical_profile": cleaned}

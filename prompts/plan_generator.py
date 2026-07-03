@@ -522,6 +522,189 @@ def build_super_personalization_context(form_data: dict) -> str:
     )
 
 
+# [P1-CLINICAL-PANEL · 2026-07-03] Perfil clínico avanzado opt-in
+# (health_profile.clinical_profile — labs, historia ponderal, síntomas GI,
+# entrenamiento). Los FLAGS de labs son GUÍA honesta, nunca diagnóstico: el
+# copy siempre acompaña "requiere confirmación profesional" cuando un valor
+# es compatible con una condición NO declarada. Las condiciones DECLARADAS
+# siguen siendo el gatillo de las reglas deterministas (condition_rules) —
+# este bloque solo sesga la selección y alerta al revisor. tooltip-anchor:
+# P1-CLINICAL-PANEL
+
+_CLINPROF_TRAINING_LABELS = {
+    "fuerza": "fuerza/pesas", "cardio": "cardio", "mixto": "fuerza + cardio",
+    "crossfit": "CrossFit/funcional", "calistenia": "calistenia", "deporte": "deporte",
+}
+_CLINPROF_TIME_LABELS = {
+    "manana": "en la mañana", "mediodia": "al mediodía", "tarde": "en la tarde", "noche": "en la noche",
+}
+_CLINPROF_GI_DIRECTIVES = {
+    "reflujo": ("Reflujo/acidez: cena LIGERA y temprana; evita fritos, muy picante, exceso de "
+                "grasa y cítricos/café tarde en el día."),
+    "estrenimiento": ("Estreñimiento: prioriza fibra (25-35g/día — avena, leguminosas, frutas con "
+                      "cáscara, vegetales) + recuerda hidratación en las notas."),
+    "diarrea": ("Episodios de diarrea frecuentes: prioriza fibra SOLUBLE (avena, guineo maduro, "
+                "papa/yuca), modera lácteos con lactosa, fritos y muy condimentado."),
+    "distension": ("Distensión/gases: porciones moderadas; introduce leguminosas y crucíferas en "
+                   "cantidades pequeñas y bien cocidas (no las elimines)."),
+}
+
+
+def build_clinical_profile_context(form_data: dict) -> str:
+    """[P1-CLINICAL-PANEL] Bloque del perfil clínico avanzado. Lee
+    `form_data["clinical_profile"]` (o anidado en health_profile — mismos dos
+    transportes que súper personalización). Retorna "" si no hay datos
+    accionables (no-op transparente, preserva prompt-cache)."""
+    if not isinstance(form_data, dict):
+        return ""
+    cp = form_data.get("clinical_profile")
+    if not isinstance(cp, dict) or not cp:
+        hp = form_data.get("health_profile")
+        if isinstance(hp, dict):
+            cp = hp.get("clinical_profile")
+    if not isinstance(cp, dict) or not cp:
+        return ""
+
+    lines = []
+
+    # --- Laboratorios: valores + flags honestos --------------------------------
+    labs = cp.get("labs") if isinstance(cp.get("labs"), dict) else {}
+
+    def _lab(key):
+        v = labs.get(key)
+        try:
+            return float(v) if v is not None and v != "" else None
+        except (TypeError, ValueError):
+            return None
+
+    lab_vals = []
+    for key, label, unit in (
+        ("glucosa_ayunas", "glucosa ayunas", "mg/dL"), ("hba1c", "HbA1c", "%"),
+        ("colesterol_total", "colesterol total", "mg/dL"), ("ldl", "LDL", "mg/dL"),
+        ("hdl", "HDL", "mg/dL"), ("trigliceridos", "triglicéridos", "mg/dL"),
+        ("creatinina", "creatinina", "mg/dL"), ("tfg", "TFG", "mL/min"),
+        ("tsh", "TSH", "µUI/mL"), ("acido_urico", "ácido úrico", "mg/dL"),
+        ("hemoglobina", "hemoglobina", "g/dL"), ("vitamina_d", "vitamina D", "ng/mL"),
+    ):
+        v = _lab(key)
+        if v is not None:
+            lab_vals.append(f"{label} {v:g} {unit}")
+    if lab_vals:
+        _date = str(labs.get("labsDate") or "").strip()
+        lines.append(f"🧪 Laboratorios{f' ({_date})' if _date else ''}: {'; '.join(lab_vals)}.")
+
+    hba1c, glucosa = _lab("hba1c"), _lab("glucosa_ayunas")
+    if (hba1c is not None and hba1c >= 6.5) or (glucosa is not None and glucosa >= 126):
+        lines.append(
+            "🩸 Glucemia en rango COMPATIBLE CON DIABETES (no declarada como condición): aplica "
+            "criterios glucémicos estrictos (carbohidratos integrales de baja carga, CERO azúcar "
+            "libre/miel/jugos) y el plan REQUIERE confirmación con un profesional de salud."
+        )
+    elif (hba1c is not None and hba1c >= 5.7) or (glucosa is not None and glucosa >= 100):
+        lines.append(
+            "🩸 Glucemia en rango de PREDIABETES: prioriza baja carga glucémica, fibra alta y "
+            "carbohidratos integrales; evita azúcar libre."
+        )
+    ldl, ct, tg = _lab("ldl"), _lab("colesterol_total"), _lab("trigliceridos")
+    if (ldl is not None and ldl >= 160) or (ct is not None and ct >= 240) or (tg is not None and tg >= 200):
+        lines.append(
+            "🫀 Perfil lipídico elevado: limita grasa saturada y frituras; prioriza pescado "
+            "(omega-3), aguacate, aceite de oliva y fibra soluble (avena, leguminosas)."
+        )
+    tfg = _lab("tfg")
+    if tfg is not None and tfg < 60:
+        lines.append(
+            f"🫘 TFG {tfg:g} mL/min (función renal reducida, no declarada como condición): MODERA "
+            "la carga de proteína y el sodio; NO uses sustitutos de sal (potasio); el plan "
+            "REQUIERE evaluación por nefrólogo/profesional antes de seguirse."
+        )
+    au = _lab("acido_urico")
+    if au is not None and au >= 7:
+        lines.append(
+            "🦶 Ácido úrico elevado: limita vísceras, mariscos y cerveza; modera carnes rojas; "
+            "prioriza lácteos bajos en grasa y cerezas/frutas."
+        )
+    hb = _lab("hemoglobina")
+    if hb is not None and hb < 12:
+        lines.append(
+            "🩹 Hemoglobina baja (posible anemia): prioriza hierro hem (res magra, hígado si no "
+            "está en rechazos, sardinas) + vitamina C en la misma comida; sugiere evaluación profesional."
+        )
+    vd = _lab("vitamina_d")
+    if vd is not None and vd < 20:
+        lines.append("☀️ Vitamina D baja: prioriza pescados grasos, huevo entero y lácteos fortificados.")
+    tsh = _lab("tsh")
+    if tsh is not None and tsh > 4.5:
+        lines.append(
+            "🦋 TSH elevada (perfil tiroideo a vigilar): asegura fuentes de yodo y selenio; "
+            "las crucíferas van COCIDAS, no crudas en exceso."
+        )
+
+    # --- Historia ponderal ------------------------------------------------------
+    wh = cp.get("weightHistory") if isinstance(cp.get("weightHistory"), dict) else {}
+    if wh.get("unintentionalLoss"):
+        lines.append(
+            "⚠️ PÉRDIDA DE PESO NO INTENCIONAL reciente (señal clínica): NO apliques déficit "
+            "agresivo; el plan debe priorizar densidad nutricional y el usuario DEBE evaluarse "
+            "con un médico."
+        )
+    _wh_parts = []
+    _unit = str(wh.get("unit") or "").strip()
+    for wkey, wlabel in (("maxWeight", "máximo"), ("minWeight", "mínimo adulto"), ("weight6mAgo", "hace 6 meses")):
+        v = wh.get(wkey)
+        if v not in (None, ""):
+            _wh_parts.append(f"{wlabel} {v} {_unit}".strip())
+    if _wh_parts:
+        lines.append(
+            f"⚖️ Historia ponderal: {'; '.join(_wh_parts)}. Si viene de pérdidas grandes/dietas "
+            "repetidas, asume posible adaptación metabólica: prefiere el extremo conservador del "
+            "déficit y proteína alta para preservar músculo."
+        )
+
+    # --- Síntomas digestivos ------------------------------------------------------
+    gi = cp.get("giSymptoms") if isinstance(cp.get("giSymptoms"), list) else []
+    for s in gi:
+        d = _CLINPROF_GI_DIRECTIVES.get(str(s).strip().lower())
+        if d:
+            lines.append(f"🫃 {d}")
+
+    # --- Entrenamiento ------------------------------------------------------------
+    tr = cp.get("training") if isinstance(cp.get("training"), dict) else {}
+    tr_type = _CLINPROF_TRAINING_LABELS.get(str(tr.get("type") or "").strip().lower())
+    tr_time = _CLINPROF_TIME_LABELS.get(str(tr.get("timeOfDay") or "").strip().lower())
+    tr_days = tr.get("daysPerWeek") or 0
+    if tr_type:
+        _freq = f" {tr_days}x/semana" if tr_days else ""
+        _cuando = f" {tr_time}" if tr_time else ""
+        lines.append(
+            f"🏋️ Entrena {tr_type}{_freq}{_cuando}: coloca carbohidrato complejo en las comidas "
+            f"alrededor del entreno y 25-40g de proteína en la comida posterior"
+            + (f" (la {'del desayuno' if tr.get('timeOfDay') == 'manana' else 'siguiente al horario de entreno'})" if tr_time else "")
+            + "."
+        )
+
+    free_t = _scrub_superpers_text(cp.get("freeText") or "")
+    if free_t:
+        if len(free_t) > 1200:
+            free_t = free_t[:1200] + "…"
+        lines.append(f'📝 Contexto clínico en sus palabras: "{free_t}"')
+
+    if not lines:
+        return ""
+
+    body = "\n".join(lines)
+    return (
+        "\n--- PERFIL CLÍNICO AVANZADO (OPT-IN DEL USUARIO) ---\n"
+        f"{body}\n\n"
+        "INSTRUCCIÓN: Estos datos los aportó el usuario voluntariamente (no sustituyen "
+        "diagnóstico). Úsalos para SESGAR la selección de alimentos y el timing dentro de las "
+        "reglas ya permitidas. Los flags de laboratorio NO crean condiciones nuevas — si un "
+        "valor sugiere una condición no declarada, ajusta con prudencia Y recomienda "
+        "confirmación profesional en las notas del plan.\n"
+        "----------------------------------------------------\n"
+    )
+
+
 # [P3-CONDITION-ENGINE · 2026-06-14] Delegado al MOTOR de constraints clínicos declarativo
 # (`condition_rules.py`), SSOT del comportamiento por condición (DM2/ERC/HTA/dislipidemia/anemia).
 # Antes la lógica DM2/ERC vivía inline aquí; ahora el registro la dirige → añadir una condición es
