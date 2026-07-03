@@ -9247,6 +9247,16 @@ FRUIT_DEDUP_ENABLED = _env_bool("MEALFIT_FRUIT_DEDUP", True)
 # fruta); en el intento final entrega el plan con la repetición (advisory) en vez de cero-plan. Flip a
 # False → comportamiento previo (rechazo en TODOS los intentos, riesgo de "saturada" recurrente).
 VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY = _env_bool("MEALFIT_VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY", True)
+# [P1-FIDELITY-FINAL-ADVISORY · 2026-07-03] (follow-up del gym baseline, eje "entrega" 45.5) El gate
+# de skeleton-fidelity era el ÚNICO gate de calidad SIN degradación a advisory en intento final: un
+# día que no usa ≥2 proteínas del pool asignado dejaba review_passed=False → el plan se entregaba con
+# `_review_failed_but_delivered` + alert I5 aunque slots/creatividad/coherencia puntuaran ~99. La serie
+# midió 13/20 planes flaggeados (63 rechazos, dominante absoluto) — el day-gen moderno DIVERGE del pool
+# legítimamente (gates de variedad same-day, biblioteca de transformaciones, taste, apetecibilidad). En
+# intentos 1..N-1 el gate sigue presionando con retry (severity high intacta); en el FINAL degrada a
+# advisory `_skeleton_fidelity_advisory_final` (espejo exacto de slot/variety/dish/sodium). El usuario
+# nunca vio el skeleton — la divergencia de pool no es daño user-facing. Rollback sin redeploy.
+SKELETON_FIDELITY_FINAL_ADVISORY = _env_bool("MEALFIT_SKELETON_FIDELITY_FINAL_ADVISORY", True)
 
 # [P3-PROTEIN-FLOOR · 2026-06-13] Cierre DURO del déficit de proteína (la re-auditoría del
 # plan fresco encontró que se entregaba 68% del target). El closer rellena cada comida a
@@ -22489,24 +22499,47 @@ Responde ÚNICAMENTE con el JSON de revisión.
     assembly_errors = skeleton_fidelity_errors + structural_coherence_errors
     if assembly_errors:
         logger.error(f"❌ [REVISOR] Errores deterministas de ensamblaje detectados: {assembly_errors}")
-        approved = False
-        issues.extend(assembly_errors)
-        # P1-6: severidad diferenciada por TIPO de error.
-        # Antes ambos tipos se marcaban como "minor", lo que activaba retry incluso
-        # cuando el LLM había omitido proteínas prescritas por el skeleton — un
-        # retry produciría el mismo error con alta probabilidad (consume budget de
-        # tiempo y attempts sin beneficio, terminando en fallback matemático).
-        #   - skeleton_fidelity_errors → "high": el LLM ignoró la asignación de
-        #     proteína; retry tiende a repetir el patrón. Mejor abortar y entregar
-        #     plan marcado para que el usuario decida regenerar manualmente.
-        #   - structural_coherence_errors → "minor": ingrediente listado pero
-        #     no usado, receta incompleta, etc. Corregible vía retry.
-        # _severity_max preserva el máximo previo (un "critical" del LLM no se
-        # degrada a "high" por un assembly_error secundario).
-        if skeleton_fidelity_errors:
-            severity = _severity_max(severity, "high")
+        # [P1-FIDELITY-FINAL-ADVISORY · 2026-07-03] (gym baseline: 13/20 planes entregados con
+        # `_review_failed_but_delivered` por ESTE gate — 63 rechazos, dominante absoluto; el day-gen
+        # moderno diverge del pool legítimamente por variedad/biblioteca/taste). En el intento FINAL,
+        # si el ÚNICO error de ensamblaje es fidelity de pool (sin errores estructurales), degrada a
+        # advisory (espejo de slot/variety/dish/sodium): el plan se entrega SIN review_passed=False
+        # ni alert I5. Intentos 1..N-1 conservan el retry con severity high (presión intacta).
+        _sf_attempt = int(state.get("attempt", 1))
+        _sf_final_advisory = (
+            SKELETON_FIDELITY_FINAL_ADVISORY
+            and bool(skeleton_fidelity_errors)
+            and not structural_coherence_errors
+            and _sf_attempt >= MAX_ATTEMPTS
+        )
+        if _sf_final_advisory:
+            if isinstance(plan, dict):
+                plan["_skeleton_fidelity_advisory_final"] = True
+            logger.warning(
+                f"🧬 [P1-FIDELITY-FINAL-ADVISORY] fidelity de pool en intento final "
+                f"({_sf_attempt}/{MAX_ATTEMPTS}) sin errores estructurales → ADVISORY "
+                f"(entrego el plan; la divergencia de pool no es daño user-facing). "
+                f"{len(skeleton_fidelity_errors)} día(s): {skeleton_fidelity_errors[0][:80]}…"
+            )
         else:
-            severity = _severity_max(severity, "minor")
+            approved = False
+            issues.extend(assembly_errors)
+            # P1-6: severidad diferenciada por TIPO de error.
+            # Antes ambos tipos se marcaban como "minor", lo que activaba retry incluso
+            # cuando el LLM había omitido proteínas prescritas por el skeleton — un
+            # retry produciría el mismo error con alta probabilidad (consume budget de
+            # tiempo y attempts sin beneficio, terminando en fallback matemático).
+            #   - skeleton_fidelity_errors → "high": el LLM ignoró la asignación de
+            #     proteína; retry tiende a repetir el patrón (en el intento final este
+            #     caso degrada a advisory arriba — P1-FIDELITY-FINAL-ADVISORY).
+            #   - structural_coherence_errors → "minor": ingrediente listado pero
+            #     no usado, receta incompleta, etc. Corregible vía retry.
+            # _severity_max preserva el máximo previo (un "critical" del LLM no se
+            # degrada a "high" por un assembly_error secundario).
+            if skeleton_fidelity_errors:
+                severity = _severity_max(severity, "high")
+            else:
+                severity = _severity_max(severity, "minor")
     
     # ============================================================
     # VALIDACIÓN DETERMINISTA DE DESPENSA Y ANTI-REPETICIÓN (Post-LLM)
