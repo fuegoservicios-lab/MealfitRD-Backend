@@ -2065,9 +2065,16 @@ def refresh_budget_reconciliation(plan_data: dict, active_household: int | None 
     """Path de RECALC/UPDATES (sin form_data): reusa la referencia persistida en
     `plan_data.budget_reconciliation` y refresca solo el lado del costo con el
     `shopping_cost_summary` recién recomputado. No-op si falta cualquiera de
-    los dos (planes legacy). Preserva `suggestions` previas si existen.
+    los dos (planes legacy).
     [P1-BUDGET-REF-RESCALE · 2026-07-02] `active_household` (recalc lo recibe
-    del body) permite re-escalar la referencia tier-basis al hogar nuevo."""
+    del body) permite re-escalar la referencia tier-basis al hogar nuevo.
+    [P1-BUDGET-CONVERGENCE · 2026-07-03] (audit v6 · P1-3) dos gaps del refresh:
+      - `adjusted`/`substitutions` son hechos del PLAN (no dependen de duración/hogar)
+        pero se PERDÍAN en cada refresh → el usuario dejaba de ver "ajustamos X → Y".
+      - `suggestions` se reusaban stale de la generación: si el flip a `excedido`
+        ocurría EN el refresh (ej. weekly→monthly), no aparecía ninguna. Ahora se
+        recomputan del estado ACTUAL (lista semanal fresca en plan_data) con
+        fallback a las previas. Fuera de `excedido` no se adjuntan (no aplican)."""
     try:
         previous = plan_data.get("budget_reconciliation")
         cost_summary = plan_data.get("shopping_cost_summary")
@@ -2076,8 +2083,19 @@ def refresh_budget_reconciliation(plan_data: dict, active_household: int | None 
         refreshed = reconcile_budget_with_cost(previous, cost_summary, active_household=active_household)
         if not refreshed:
             return
-        if previous.get("suggestions") and "suggestions" not in refreshed:
-            refreshed["suggestions"] = previous["suggestions"]
+        for _k in ("adjusted", "substitutions", "converged_pass"):
+            if previous.get(_k) is not None and _k not in refreshed:
+                refreshed[_k] = previous[_k]
+        if refreshed.get("status") == "excedido":
+            try:
+                from shopping_calculator import build_budget_suggestions
+                _sugs = build_budget_suggestions(plan_data.get("aggregated_shopping_list_weekly") or [])
+                if _sugs:
+                    refreshed["suggestions"] = _sugs
+            except Exception:
+                pass
+            if "suggestions" not in refreshed and previous.get("suggestions"):
+                refreshed["suggestions"] = previous["suggestions"]
         plan_data["budget_reconciliation"] = refreshed
     except Exception as e:
         logger.warning(f"[P1-BUDGET-RECONCILE] refresh falló ({type(e).__name__}: {e}); no-op")

@@ -2317,6 +2317,42 @@ def cheapest_supermarket_variant(item_name: str) -> dict | None:
         return None
 
 
+def build_budget_suggestions(weekly_list, limit: int = 5) -> list:
+    """[P1-BUDGET-CONVERGENCE · 2026-07-03] (audit v6 · P1-3) Sugerencias de ahorro accionables
+    para el banner `excedido`: variante más barata del Supermercado RD para los ítems más caros
+    de la lista SEMANAL. Helper SSOT extraído del inline de assemble para que el refresh de
+    recalc/updates (nutrition_calculator.refresh_budget_reconciliation) recompute sugerencias
+    del estado ACTUAL en vez de reusar las stale de la generación. Fail-open: [].
+    tooltip-anchor: P1-BUDGET-CONVERGENCE"""
+    try:
+        priced = [
+            it for it in (weekly_list or [])
+            if isinstance(it, dict) and (it.get("estimated_cost_rd") or 0) > 0
+        ]
+        priced.sort(key=lambda x: x.get("estimated_cost_rd") or 0, reverse=True)
+        sugs = []
+        for it in priced[: max(1, int(limit)) * 3]:
+            name = str(it.get("name") or "").strip()
+            if not name:
+                continue
+            var = cheapest_supermarket_variant(name)
+            if var and var.get("brand"):
+                sugs.append({
+                    "type": "marca",
+                    "item": name,
+                    "text": (
+                        f"{name}: la opción más económica del súper es "
+                        f"{var['brand']} {var['presentation']} "
+                        f"(RD${var['price_rd']:.0f})"
+                    ),
+                })
+            if len(sugs) >= max(1, int(limit)):
+                break
+        return sugs
+    except Exception:
+        return []
+
+
 def compute_shopping_cost_summary(
     weekly_list,
     biweekly_hybrid_list,

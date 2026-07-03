@@ -17757,6 +17757,11 @@ def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
 # Tooltip-anchor: P1-BUDGET-TIER-LEVERS. Test: test_p1_budget_intelligence.py.
 BUDGET_CHEAPEN_PASS_ENABLED = _env_bool("MEALFIT_BUDGET_CHEAPEN_PASS", True)
 BUDGET_CHEAPEN_MAX_SUBS = _env_int("MEALFIT_BUDGET_CHEAPEN_MAX_SUBS", 3, lambda v: 0 <= v <= 10)
+# [P1-BUDGET-CONVERGENCE · 2026-07-03] (audit v6 · P1-3) Pasada de convergencia POST-costeo:
+# conocido el costo real, si la reconciliación dio `excedido` (CUALQUIER tier con referencia,
+# no solo economía) → una pasada extra del cheapen (force) → re-banda → rebuild de listas →
+# re-costeo → re-reconciliación. Acotado a 1 pasada. Ver bloque en assemble_plan_node.
+BUDGET_CONVERGENCE_ENABLED = _env_bool("MEALFIT_BUDGET_CONVERGENCE", True)
 
 # (regex del alimento premium, candidato económico del catálogo, excludes accent-stripped).
 # Misma categoría culinaria SIEMPRE (pescado→pescado, semilla→semilla, grano→grano) —
@@ -17830,18 +17835,22 @@ def _budget_build_master_price_map() -> dict:
         return {}
 
 
-def _apply_budget_cheapen_pass(days, form_data) -> int:
+def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
     """Sustituye hasta BUDGET_CHEAPEN_MAX_SUBS ingredientes premium por su
     equivalente económico cuando el presupuesto pide economía. Retorna nº de
-    sustituciones. Fail-open total (0 y plan intacto ante cualquier duda)."""
+    sustituciones. Fail-open total (0 y plan intacto ante cualquier duda).
+    [P1-BUDGET-CONVERGENCE · 2026-07-03] `force=True` (pasada post-costeo) salta el
+    gate de economía: el caller YA sabe que el plan excede su referencia (cualquier
+    tier) — los guards de alergia/dislike/≥30%-más-barato/max-subs siguen intactos."""
     if not BUDGET_CHEAPEN_PASS_ENABLED or BUDGET_CHEAPEN_MAX_SUBS <= 0 or not days:
         return 0
-    try:
-        from nutrition_calculator import budget_prefers_economy
-        if not budget_prefers_economy(form_data or {}):
+    if not force:
+        try:
+            from nutrition_calculator import budget_prefers_economy
+            if not budget_prefers_economy(form_data or {}):
+                return 0
+        except Exception:
             return 0
-    except Exception:
-        return 0
     try:
         from constants import strip_accents as _sa
         master_map = _budget_build_master_price_map()
@@ -19665,6 +19674,95 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     logger.warning(f"⚠️ [P1-BUDGET-RECONCILE] no-op en assemble: {_p1b_rec_e}")
         except Exception as _p1b_ccs_e:
             logger.warning(f"⚠️ [P1-BUDGET-COST-SSOT] summary no-op en assemble: {_p1b_ccs_e}")
+
+        # [P1-BUDGET-CONVERGENCE · 2026-07-03] (audit v6 · P1-3) Loop de convergencia presupuesto→plan.
+        # El cheapen-pass pre-engine corre A CIEGAS (solo mira el tier, jamás el costo real) y solo para
+        # economía — un plan medium/high/custom-holgado que EXCEDE su referencia recibía banner rojo y
+        # CERO acción correctiva. Ahora, conocido el costo real: si la reconciliación dio `excedido`,
+        # UNA pasada extra del cheapen (force=True salta el gate de economía; mismos guards de alergia/
+        # dislike/≥30%-más-barato/max-subs) → truth-up de macros → re-banda (motor de updates, P1-UPDATE-
+        # MACRO-PARITY) → rebuild de listas → re-costeo → re-reconciliación honesta. Acotado: 1 pasada,
+        # jamás loop. Los pisos clínicos siguen budget-blind. Fail-open TOTAL (cualquier error → estado
+        # de la 1ª pasada intacto). Rollback: MEALFIT_BUDGET_CONVERGENCE=false.
+        # tooltip-anchor: P1-BUDGET-CONVERGENCE
+        try:
+            _bc_rec0 = result.get("budget_reconciliation") or {}
+            if BUDGET_CONVERGENCE_ENABLED and str(_bc_rec0.get("status") or "") == "excedido":
+                _bc_subs = _apply_budget_cheapen_pass(result.get("days") or [], form_data, force=True)
+                if _bc_subs:
+                    result["_budget_adjusted"] = True
+                    # truth-up post-sustitución (el string conservó gramos; el alimento cambió) +
+                    # re-banda de los días que la sustitución macro-similar dejó fuera.
+                    try:
+                        from nutrition_db import IngredientNutritionDB as _BCDB
+                        _bc_db = _BCDB()
+                        for _bc_d in result.get("days") or []:
+                            for _bc_m in (_bc_d.get("meals") or []) if isinstance(_bc_d, dict) else []:
+                                if isinstance(_bc_m, dict) and _bc_m.get("_budget_substitutions"):
+                                    _truth_up_meal_macros_from_strings(_bc_m, _bc_db)
+                        apply_update_macro_engine(result, surface="budget_convergence", db=_bc_db)
+                    except Exception as _bc_tu_e:
+                        logger.debug(f"[P1-BUDGET-CONVERGENCE] truth-up/re-banda no-op: {_bc_tu_e}")
+                    # rebuild de listas (mismos snapshots de la 1ª pasada) → re-costeo → re-reconcile.
+                    if _uid:
+                        _bc7, _bc15, _bc30 = await asyncio.gather(
+                            _adb(get_shopping_list_delta, _uid, result, True, False, True, 1.0 * household,
+                                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                            _adb(get_shopping_list_delta, _uid, result, True, False, True, 2.0 * household,
+                                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                            _adb(get_shopping_list_delta, _uid, result, True, False, True, 4.0 * household,
+                                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                        )
+                    else:
+                        _bc7, _bc15, _bc30 = await asyncio.gather(
+                            _adb(get_shopping_list_delta, None, result, True, False, True, 1.0 * household,
+                                 inventory_override=[], consumed_override=[]),
+                            _adb(get_shopping_list_delta, None, result, True, False, True, 2.0 * household,
+                                 inventory_override=[], consumed_override=[]),
+                            _adb(get_shopping_list_delta, None, result, True, False, True, 4.0 * household,
+                                 inventory_override=[], consumed_override=[]),
+                        )
+                    from shopping_calculator import _build_hybrid_shopping_list as _bc_hybrid
+                    _bc15h = _bc_hybrid(_bc7, _bc15) if _bc15 else _bc15
+                    _bc30h = _bc_hybrid(_bc7, _bc30) if _bc30 else _bc30
+                    result["aggregated_shopping_list_weekly"] = _bc7
+                    result["aggregated_shopping_list_biweekly"] = _bc15h
+                    result["aggregated_shopping_list_monthly"] = _bc30h
+                    result["aggregated_shopping_list"] = (
+                        _bc15h if grocery_duration == "biweekly"
+                        else _bc30h if grocery_duration == "monthly" else _bc7
+                    )
+                    from shopping_calculator import compute_shopping_cost_summary as _bc_ccs
+                    _bc_sum = _bc_ccs(_bc7, _bc15h, _bc30h, grocery_duration)
+                    if _bc_sum:
+                        result["shopping_cost_summary"] = _bc_sum
+                        from nutrition_calculator import compute_budget_reconciliation as _bc_cbr
+                        _bc_rec = _bc_cbr(form_data, _bc_sum)
+                        if _bc_rec:
+                            _bc_rec["adjusted"] = True
+                            _bc_rec["converged_pass"] = True
+                            _bc_rec["substitutions"] = [
+                                s
+                                for _bd in (result.get("days") or [])
+                                for _bm in ((_bd.get("meals") or []) if isinstance(_bd, dict) else [])
+                                if isinstance(_bm, dict)
+                                for s in (_bm.get("_budget_substitutions") or [])
+                            ][:6]
+                            if _bc_rec.get("status") == "excedido":
+                                try:
+                                    from shopping_calculator import build_budget_suggestions as _bc_sug
+                                    _bc_s = _bc_sug(_bc7)
+                                    if _bc_s:
+                                        _bc_rec["suggestions"] = _bc_s
+                                except Exception:
+                                    pass
+                            result["budget_reconciliation"] = _bc_rec
+                    logger.info(
+                        f"💰 [P1-BUDGET-CONVERGENCE] pasada de convergencia: {_bc_subs} sustitución(es) → "
+                        f"status={str((result.get('budget_reconciliation') or {}).get('status'))} (antes=excedido)"
+                    )
+        except Exception as _bc_e:
+            logger.warning(f"[P1-BUDGET-CONVERGENCE] pasada de convergencia no-op: {type(_bc_e).__name__}: {_bc_e}")
     except Exception as e:
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15] Mantenemos `WARNING` (no
         # `ERROR`) porque el bloque siguiente degrada graceful con listas
