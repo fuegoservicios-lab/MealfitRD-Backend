@@ -54,6 +54,20 @@ async def _run_one(profile, sem):
 
 
 async def _main(n: int, conc: int) -> dict:
+    # Los pools nacen con open=False (se abren en el lifespan de la app); un script
+    # standalone debe abrirlos explícitamente o shopping/costo degradan a PoolClosed.
+    try:
+        from db_core import connection_pool
+        if connection_pool is not None:
+            connection_pool.open()
+    except Exception as _pe:
+        print(f"(aviso) pool sync no disponible: {_pe} — ejes de costo/lista degradarán")
+    try:
+        from db_core import async_connection_pool
+        if async_connection_pool is not None:
+            await async_connection_pool.open()
+    except Exception:
+        pass
     sem = asyncio.Semaphore(conc)
     profiles = PROFILES[:n] if n else PROFILES
     results = await asyncio.gather(*[_run_one(p, sem) for p in profiles])
@@ -61,6 +75,12 @@ async def _main(n: int, conc: int) -> dict:
 
 
 def main():
+    # Consolas Windows default a cp1252 → los glifos del resumen crasheaban el print
+    # DESPUÉS de gastar la corrida LLM completa (incidente smoke 2026-07-02).
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("n", nargs="?", type=int, default=0, help="límite de perfiles (0 = todos)")
     ap.add_argument("--conc", type=int, default=2)
@@ -69,7 +89,13 @@ def main():
     out = asyncio.run(_main(args.n, max(1, args.conc)))
     agg = out["aggregate"]
 
-    print("\n══════════ PLAN GYM — resumen ══════════")
+    # El JSON se escribe ANTES del resumen humano: si un print falla, la corrida
+    # (que cuesta minutos de LLM) ya quedó persistida.
+    out_path = os.environ.get("GYM_OUT") or f"gym_report_{os.getpid()}.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=1, default=str)
+
+    print("\n========== PLAN GYM - resumen ==========")
     print(f"perfiles: {agg.get('n', 0)} | global medio: {agg.get('global_mean')}")
     for ax in ("banda", "micros", "slots", "creatividad", "coherencia", "presupuesto", "entrega"):
         s = agg.get(ax)
@@ -77,13 +103,9 @@ def main():
             print(f"  {ax:<12} mean={s['mean']:>5}  min={s['min']:>5}  (n={s['n']})")
     errs = [r for r in out["results"] if r.get("error")]
     if errs:
-        print(f"  errores: {len(errs)} → {[(e['id'], e['error'][:60]) for e in errs]}")
+        print(f"  errores: {len(errs)} -> {[(e['id'], e['error'][:60]) for e in errs]}")
     for w in agg.get("worst_profiles", []):
         print(f"  peor: perfil {w['id']} global={w['global']} ejes flojos={w['axes']}")
-
-    out_path = os.environ.get("GYM_OUT") or f"gym_report_{os.getpid()}.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1, default=str)
     print(f"\nJSON completo: {out_path}")
 
 
