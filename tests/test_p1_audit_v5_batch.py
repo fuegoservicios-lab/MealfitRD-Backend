@@ -124,8 +124,10 @@ def test_refresh_migrates_reference_and_next_refresh_is_stable(nc):
 def test_recalc_endpoint_passes_active_household():
     """Anchor: el recalc (única superficie que cambia hogar) pasa active_household."""
     assert "P1-BUDGET-REF-RESCALE" in _PL_SRC, "falta el marker en plans.py"
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) el callsite ahora pasa además user_id
+    # (sugerencias brand-aware) — el anchor acepta kwargs extra tras active_household.
     assert re.search(
-        r"_p1b_rbr\(\s*plan_data_fresh\s*,\s*active_household\s*=\s*household_size\s*\)",
+        r"_p1b_rbr\(\s*plan_data_fresh\s*,\s*active_household\s*=\s*household_size\s*[,)]",
         _PL_SRC,
     ), "el recalc debe pasar active_household=household_size a refresh_budget_reconciliation"
     assert "P1-BUDGET-REF-RESCALE" in _NC_SRC, "falta el marker en nutrition_calculator.py"

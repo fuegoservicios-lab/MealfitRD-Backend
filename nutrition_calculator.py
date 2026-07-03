@@ -2061,7 +2061,8 @@ def compute_budget_reconciliation(form_data: dict, cost_summary: dict) -> dict |
     return reconcile_budget_with_cost(reference, cost_summary)
 
 
-def refresh_budget_reconciliation(plan_data: dict, active_household: int | None = None) -> None:
+def refresh_budget_reconciliation(plan_data: dict, active_household: int | None = None,
+                                  user_id=None) -> None:
     """Path de RECALC/UPDATES (sin form_data): reusa la referencia persistida en
     `plan_data.budget_reconciliation` y refresca solo el lado del costo con el
     `shopping_cost_summary` recién recomputado. No-op si falta cualquiera de
@@ -2089,7 +2090,10 @@ def refresh_budget_reconciliation(plan_data: dict, active_household: int | None 
         if refreshed.get("status") == "excedido":
             try:
                 from shopping_calculator import build_budget_suggestions
-                _sugs = build_budget_suggestions(plan_data.get("aggregated_shopping_list_weekly") or [])
+                # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) brand-aware cuando el caller conoce al usuario.
+                _sugs = build_budget_suggestions(
+                    plan_data.get("aggregated_shopping_list_weekly") or [], user_id=user_id
+                )
                 if _sugs:
                     refreshed["suggestions"] = _sugs
             except Exception:

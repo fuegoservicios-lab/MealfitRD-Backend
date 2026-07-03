@@ -216,8 +216,12 @@ def test_tier_lever_anchors_and_defaults(go):
     assert 'MEALFIT_BUDGET_POOL_WEIGHT", "2.0"' in _AI_SRC
     assert "budget_prefers_economy" in _AI_SRC
     # Sugerencias de ahorro con el Supermercado RD (assemble) + helper con cache.
-    assert "cheapest_supermarket_variant" in _GO_SRC
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) el inline de assemble se refactorizó al helper SSOT
+    # build_budget_suggestions (brand-aware); cheapest_supermarket_variant sigue siendo el motor,
+    # ahora DENTRO del helper en shopping_calculator.
+    assert "build_budget_suggestions" in _GO_SRC
     assert "def cheapest_supermarket_variant" in _SC_SRC
+    assert "cheapest_supermarket_variant" in _SC_SRC[_SC_SRC.index("def build_budget_suggestions"):]
     assert "_fetch_supermarket_price_floor_map" in _SC_SRC
     # SSOT compartido del trigger de economía.
     assert "def budget_prefers_economy" in _NC_SRC

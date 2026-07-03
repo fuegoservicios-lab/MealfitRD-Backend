@@ -177,7 +177,7 @@ def test_refresh_preserves_adjusted_and_substitutions(nc):
 def test_refresh_recomputes_suggestions_on_flip_to_excedido(nc, monkeypatch):
     import shopping_calculator as _sc
     monkeypatch.setattr(_sc, "build_budget_suggestions",
-                        lambda weekly, limit=5: [{"type": "marca", "item": "Salmón", "text": "fresco"}])
+                        lambda weekly, limit=5, user_id=None: [{"type": "marca", "item": "Salmón", "text": "fresco"}])
     plan = {
         "budget_reconciliation": {"tier": "custom", "basis": "custom", "reference_rd": 10000,
                                   "floor_rd": 4000, "status": "dentro"},
@@ -193,7 +193,7 @@ def test_refresh_recomputes_suggestions_on_flip_to_excedido(nc, monkeypatch):
 
 def test_refresh_fallback_to_previous_suggestions(nc, monkeypatch):
     import shopping_calculator as _sc
-    monkeypatch.setattr(_sc, "build_budget_suggestions", lambda weekly, limit=5: [])
+    monkeypatch.setattr(_sc, "build_budget_suggestions", lambda weekly, limit=5, user_id=None: [])
     plan = {
         "budget_reconciliation": {"tier": "custom", "basis": "custom", "reference_rd": 10000,
                                   "floor_rd": 4000, "status": "dentro",

@@ -3902,6 +3902,20 @@ async def api_budget_floor(
         usd_dop = _budget_usd_to_dop()
         min_dop = float(info["min_budget_dop"])
         min_in_currency = round(min_dop / usd_dop) if currency == "USD" else round(min_dop)
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-I) Transparencia de la referencia por tier: el banner
+        # dentro/excedido compara contra piso×banda {low/medium/high} — un RD$Y que el usuario nunca
+        # declaró. Exponerlo AQUÍ permite al formulario mostrar "≈ RD$X por ciclo" bajo cada tier al
+        # elegirlo (misma fórmula exacta de build_budget_reference → cero drift form↔banner).
+        tier_refs = {}
+        try:
+            from nutrition_calculator import _budget_tier_band_factor
+            for _tier in ("low", "medium", "high"):
+                _f = _budget_tier_band_factor(_tier)
+                if _f:
+                    _ref_dop = min_dop * float(_f)
+                    tier_refs[_tier] = int(round(_ref_dop / usd_dop) if currency == "USD" else round(_ref_dop))
+        except Exception:
+            tier_refs = {}
         return {
             "ok": True,
             "min_budget": int(min_in_currency),
@@ -3910,6 +3924,7 @@ async def api_budget_floor(
             "days": int(info["days"]),
             "household": int(info["household"]),
             "target_calories": int(info["target_calories"]),
+            "tier_references": tier_refs,
         }
     except Exception as e:
         logger.warning(f"[P1-BUDGET-FLOOR-PERSONALIZED] /budget-floor error: {e!r}")
@@ -4763,6 +4778,49 @@ def _same_day_other_meals_for_swap(user_id, rejected_meal):
         return []
 
 
+def _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type, cap: int = 8):
+    """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) Nombres del MISMO slot en los OTROS días del plan
+    activo → el swap deja de ser ciego cross-day (solo veía el mismo día): el plato nuevo puede
+    evitar repetir lo que el usuario ya come ese slot el resto de la semana. Fail-open: [] ante
+    cualquier error (el swap procede sin la señal). tooltip-anchor: P2-AUDIT-V6-BATCH (P2-F)"""
+    if not user_id or user_id == "guest" or not meal_type:
+        return []
+    try:
+        from db_core import execute_sql_query as _exq
+        from constants import strip_accents as _sa
+        import json as _json
+        row = _exq("SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+                   (user_id,), fetch_one=True)
+        if not row:
+            return []
+        pd = row.get("plan_data")
+        if isinstance(pd, str):
+            pd = _json.loads(pd)
+        if not isinstance(pd, dict):
+            return []
+        rn = _sa(str(rejected_meal or "").lower()).strip()
+        mt = _sa(str(meal_type).lower()).strip()
+        out, seen = [], set()
+        for day in pd.get("days", []) or []:
+            for m in (day.get("meals", []) or []):
+                if not isinstance(m, dict):
+                    continue
+                if _sa(str(m.get("meal", "")).lower()).strip() != mt:
+                    continue
+                name = str(m.get("name", "")).strip()
+                key = _sa(name.lower()).strip()
+                if not name or key == rn or key in seen:
+                    continue
+                seen.add(key)
+                out.append(name)
+                if len(out) >= cap:
+                    return out
+        return out
+    except Exception as _e:
+        logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) cross-day no derivable (no bloquea): {_e}")
+        return []
+
+
 @router.post("/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     try:
@@ -4875,6 +4933,15 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 logger.info(f"🔄 [SWAP SAME-DAY-VARIETY] Otras comidas del día (evitar repetir proteína): {_same_day}")
         except Exception as _sdv_e:
             logger.debug(f"[P1-SWAP-SAME-DAY-VARIETY] inyección falló (no bloquea): {_sdv_e}")
+
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) variedad CROSS-DAY: nombres del mismo slot en los
+        # otros días → el plato nuevo evita repetir lo que ya se come ese slot el resto de la semana.
+        try:
+            _cross_day = _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type)
+            if _cross_day:
+                data["cross_day_meal_names"] = _cross_day
+        except Exception as _cdv_e:
+            logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inyección cross-day falló (no bloquea): {_cdv_e}")
 
         result = swap_meal(data)
         # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (default): swap_meal entregó un plato.
@@ -5076,7 +5143,8 @@ def _rebuild_plan_shopping_lists_inline(
             _sum_il = _ccs_il(s7, s15h, s30h, duration)
             if _sum_il:
                 plan_data["shopping_cost_summary"] = _sum_il
-                _rbr_il(plan_data)
+                # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) user_id → sugerencias brand-aware.
+                _rbr_il(plan_data, user_id=user_id)
         except Exception as _sum_il_e:
             logger.debug(f"[P1-UPDATE-LIST-INLINE-RECALC] summary no-op ({surface}): {_sum_il_e}")
         logger.info(
@@ -5553,6 +5621,13 @@ def api_swap_meal_persist(
             record_swap_away(verified_user_id, _taste_old_name[0], str(new_meal_name or ""))
         except Exception as _taste_e:
             logger.debug(f"[P1-NEXT-LEVEL-TASTE] señal swap no-op: {_taste_e}")
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-G) señal POSITIVA sobre la proteína ELEGIDA
+        # (el usuario confirmó el plato nuevo al persistir). Fail-open, best-effort.
+        try:
+            from taste_model import record_swap_to
+            record_swap_to(verified_user_id, _taste_old_name[0], str(new_meal_name or ""))
+        except Exception as _taste_p_e:
+            logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-G) señal swap-to no-op: {_taste_p_e}")
         return {"success": True}
         # P0-NEW-A-END / P1-SWAP-PERSIST-ATOMIC-END
 
@@ -8341,7 +8416,8 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 if _p1b_summary:
                     plan_data_fresh["shopping_cost_summary"] = _p1b_summary
                     # [P1-BUDGET-REF-RESCALE · 2026-07-02] hogar nuevo → re-escala tier-basis.
-                    _p1b_rbr(plan_data_fresh, active_household=household_size)
+                    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) user_id → sugerencias brand-aware.
+                    _p1b_rbr(plan_data_fresh, active_household=household_size, user_id=verified_user_id)
             except Exception as _p1b_e:
                 logger.warning(f"[P1-BUDGET-COST-SSOT] recalc summary no-op: {_p1b_e}")
 

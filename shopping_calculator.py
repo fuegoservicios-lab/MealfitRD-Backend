@@ -2317,14 +2317,23 @@ def cheapest_supermarket_variant(item_name: str) -> dict | None:
         return None
 
 
-def build_budget_suggestions(weekly_list, limit: int = 5) -> list:
+def build_budget_suggestions(weekly_list, limit: int = 5, user_id=None) -> list:
     """[P1-BUDGET-CONVERGENCE · 2026-07-03] (audit v6 · P1-3) Sugerencias de ahorro accionables
     para el banner `excedido`: variante más barata del Supermercado RD para los ítems más caros
     de la lista SEMANAL. Helper SSOT extraído del inline de assemble para que el refresh de
     recalc/updates (nutrition_calculator.refresh_budget_reconciliation) recompute sugerencias
     del estado ACTUAL en vez de reusar las stale de la generación. Fail-open: [].
+    [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) brand-aware: si el usuario YA eligió marca para un
+    ítem (user_brand_preferences), NO se sugiere el piso absoluto de ese ítem — sugerir contra
+    su elección es ruido. Guests/None → sin filtro (comportamiento previo).
     tooltip-anchor: P1-BUDGET-CONVERGENCE"""
     try:
+        prefs = {}
+        if user_id:
+            try:
+                prefs = fetch_brand_pref_packages(user_id) or {}
+            except Exception:
+                prefs = {}
         priced = [
             it for it in (weekly_list or [])
             if isinstance(it, dict) and (it.get("estimated_cost_rd") or 0) > 0
@@ -2335,6 +2344,8 @@ def build_budget_suggestions(weekly_list, limit: int = 5) -> list:
             name = str(it.get("name") or "").strip()
             if not name:
                 continue
+            if prefs and _resolve_brand_pref(name, prefs):
+                continue  # [P2-H] el usuario ya eligió marca para este ítem — respetar su decisión
             var = cheapest_supermarket_variant(name)
             if var and var.get("brand"):
                 sugs.append({

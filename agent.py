@@ -585,6 +585,30 @@ def swap_meal(form_data: dict):
             f"prioriza un plato VÁLIDO y coherente aunque repita (no inventes ingredientes que no tengas)."
         )
 
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) variedad CROSS-DAY (preferencia suave): el swap era
+    # ciego a los otros días — podía proponer el mismo plato que el usuario ya come ese slot 3 veces
+    # esta semana. Soft (nunca pelea con la Nevera): mismo espíritu del same-day de arriba.
+    _cross_day_names = form_data.get("cross_day_meal_names") or []
+    if _cross_day_names:
+        context_extras += (
+            f"\n    - 📅 VARIEDAD ENTRE DÍAS (preferencia): este horario ya tiene en otros días del plan: "
+            f"{', '.join(str(n) for n in _cross_day_names[:8])}. PREFIERE un plato DISTINTO a esos, "
+            f"si los ingredientes disponibles lo permiten."
+        )
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) inspiración de la biblioteca curada también en swap
+    # (antes solo el day-gen de form-gen la recibía): 2 plantillas del slot, determinista, soft.
+    try:
+        from dish_library import build_swap_inspiration_context as _bsi_swap
+        _insp_swap = _bsi_swap(
+            form_data.get("meal_type") or "",
+            seed=len(str(form_data.get("rejected_meal") or "")) + len(_cross_day_names) + 1,
+            avoid_names=list(_cross_day_names) + [form_data.get("rejected_meal") or ""],
+        )
+        if _insp_swap:
+            context_extras += _insp_swap
+    except Exception as _insp_e:
+        logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración swap no-op: {_insp_e}")
+
     swap_reason = form_data.get("swap_reason", "dislike")
     
     if swap_reason == 'variety':

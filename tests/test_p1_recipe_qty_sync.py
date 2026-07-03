@@ -104,7 +104,10 @@ def test_runs_after_final_quantize_in_assemble():
     # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] entre el quantize y el qty-sync ahora vive el pase corrector
     # de drift de redondeo (rebalance+requantize acotado) → ventana ampliada 1500→4500. El ORDEN sigue
     # anclado: quantize → recheck → qty-sync (el sync ve el estado final).
-    seg = _GRAPH[i_q:i_q + 4500]
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] la ventana quedó corta tras los bloques shrink-floor (GAP-05)
+    # + refinador global (P1-NEXT-LEVEL-SOLVER) del 2026-07-02 y el bugfix del recheck (P1-UPDATE-
+    # MACRO-PARITY) → 4500→9000. El contrato REAL son los asserts de ORDEN de abajo, no el tamaño.
+    seg = _GRAPH[i_q:i_q + 9000]
     assert "_sync_recipe_step_quantities" in seg, \
         "el sync debe correr tras el quantize final de assemble (última mutación de porciones)"
     i_rq = seg.find("P2-POSTQUANTIZE-RECHECK")

@@ -14175,15 +14175,98 @@ _TIMETEMP_TECHNIQUE_DEFAULTS = (
 )
 _TIMETEMP_FALLBACK_DEFAULT = "10-12 min a fuego medio"
 
+# [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) Plausibilidad de tiempos/temperaturas PRESENTES: el
+# backstop solo rellenaba AUSENCIAS — un "hornea 200 min" o "a 450 °C" existente se entregaba
+# intacto. Techos por técnica (mismos tokens/orden del backstop) + techo absoluto. Solo clamp
+# hacia ABAJO de outliers extremos (la cota INFERIOR microbiológica ya la cubre
+# P2-UNDERCOOK-TIME-NOTE). Rollback: MEALFIT_RECIPE_TIMETEMP_PLAUSIBILITY=false.
+RECIPE_TIMETEMP_PLAUSIBILITY_ENABLED = _env_bool("MEALFIT_RECIPE_TIMETEMP_PLAUSIBILITY", True)
+_TIMETEMP_TECHNIQUE_MAX_MIN = (
+    (("horno", "hornea", "gratina", "rostiza"), 90),
+    (("hierve", "hervir", "sancocha", "cuece"), 90),
+    (("guisa", "guiso", "estofa", "brasea"), 120),
+    (("vapor",), 45),
+    (("frie", "fritura", "freidora", "airfryer", "tosta"), 30),
+    (("revuelto", "revuelve", "panqueque", "arepita", "tortilla de huevo"), 15),
+    (("plancha", "sarten", "saltea", "sofrie", "sella"), 30),
+)
+_TIMETEMP_ABS_MAX_MIN = 180   # nada en este producto cocina >3h
+_TIMETEMP_MAX_TEMP_C = 260    # horno doméstico
+_TT_MIN_RE = _re.compile(r"(\d{1,3})\s*(?:-\s*(\d{1,3})\s*)?min", _re.I)
+_TT_HORA_RE = _re.compile(r"(\d{1,2})\s*(?:-\s*\d{1,2}\s*)?horas?", _re.I)
+_TT_TEMP_RE = _re.compile(r"(\d{2,3})\s*(?:°\s*c|grados)", _re.I)
+
+
+def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
+    """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) Clamp determinista de outliers de tiempo/temp en el
+    paso 'El Toque de Fuego': tiempo > techo de la técnica (o >3h absoluto) → reescribe al default
+    de la técnica; temperatura > 260 °C → 220 °C. Texto puro, idempotente, fail-open. Marca
+    `_recipe_timetemp_clamped` (honestidad/telemetría). Muta `meal` in-place; True si clampó."""
+    if not RECIPE_TIMETEMP_PLAUSIBILITY_ENABLED or not isinstance(meal, dict):
+        return False
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return False
+        from constants import strip_accents as _sa_cl
+        changed = False
+        for i, step in enumerate(rec):
+            if not isinstance(step, str) or _is_recipe_safety_note_step(step):
+                continue
+            if not step.strip().lower().startswith("el toque de fuego"):
+                continue
+            new_step = step
+            hay = _sa_cl((str(meal.get("name") or "") + " " + step).lower())
+            cap_min = _TIMETEMP_ABS_MAX_MIN
+            default = _TIMETEMP_FALLBACK_DEFAULT
+            for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
+                if any(t in hay for t in tokens):
+                    default = technique_default
+                    break
+            for tokens, tech_cap in _TIMETEMP_TECHNIQUE_MAX_MIN:
+                if any(t in hay for t in tokens):
+                    cap_min = min(cap_min, tech_cap)
+                    break
+            # horas absurdas ("cocina 5 horas") → minutos del default de la técnica
+            for m_h in list(_TT_HORA_RE.finditer(new_step)):
+                if int(m_h.group(1)) * 60 > cap_min:
+                    new_step = new_step[:m_h.start()] + default + new_step[m_h.end():]
+                    break
+            # minutos por encima del techo de técnica/absoluto → default de la técnica
+            for m_t in list(_TT_MIN_RE.finditer(new_step)):
+                hi = max(int(m_t.group(1)), int(m_t.group(2) or 0))
+                if hi > cap_min:
+                    new_step = new_step[:m_t.start()] + default + new_step[m_t.end():]
+                    break
+            # temperatura de horno industrial → techo doméstico
+            for m_c in list(_TT_TEMP_RE.finditer(new_step)):
+                if int(m_c.group(1)) > _TIMETEMP_MAX_TEMP_C:
+                    new_step = new_step[:m_c.start()] + "220 °C" + new_step[m_c.end():]
+                    break
+            if new_step != step:
+                rec[i] = new_step
+                meal["_recipe_timetemp_clamped"] = True
+                changed = True
+            break  # solo el Toque de Fuego
+        return changed
+    except Exception:
+        return False
+
 
 def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
     """[P1-RECIPE-CONTRACT-GATE] Backstop determinista: añade un tiempo/temperatura default por
     técnica al paso 'El Toque de Fuego' cuando el LLM lo omitió. Idempotente (si ya hay tiempo/
     temp vía _CONTRACT_TIME_RE → no-op), texto puro (no toca cantidades — cero interacción con
-    qty-sync/quantize), fail-open. Muta `meal` in-place; True si inyectó."""
+    qty-sync/quantize), fail-open. Muta `meal` in-place; True si inyectó.
+    [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) además clampa outliers PRESENTES (tiempo/temp absurdos)
+    vía `_clamp_recipe_time_temp_outliers` — mismo seam en las 4 superficies que ya llaman aquí."""
     if not RECIPE_TIMETEMP_BACKSTOP_ENABLED or not isinstance(meal, dict):
         return False
     try:
+        try:
+            _clamp_recipe_time_temp_outliers(meal)
+        except Exception:
+            pass
         rec = meal.get("recipe")
         if not isinstance(rec, list) or not rec:
             return False
@@ -14253,15 +14336,29 @@ def _recipe_step_contract_issues(meal: dict) -> list:
         return []
 
 
+# [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) Tokens accent-stripped de preparaciones TRANSFORMADAS
+# (masa/horneado/recombinación — la creatividad insignia: panqueques de avena, bollitos de yuca,
+# arepitas, domplines...). KPI `transform_ratio` en dish_quality_report: medir→actuar antes de
+# presionar (mismo playbook de raw_staple/contract). Curado, word-agnostic (substring sobre nombre).
+_TRANSFORM_NAME_TOKENS = (
+    "panqueque", "pancake", "arepita", "arepa", "bollito", "bolita", "crepe", "creps",
+    "domplin", "pastelon", "quipe", "kipe", "catibia", "tortita", "torta", "croqueta",
+    "albondiga", "empanada", "waffle", "muffin", "budin", "majarete", "mangu",
+    "hamburguesa", "taco", "wrap", "burrito", "pizza casera", "lasana", "mofongo",
+)
+
+
 def compute_dish_quality_report(plan: dict) -> dict:
     """[P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Telemetría ADVISORY de 'realness' de los platos:
     cuántos parecen placeholder/crudo en vez de platos reales cocinados. Mide G5 (creatividad/apetecibilidad)
     análogo a `compute_clinical_band_score` para macros — antes G5 no tenía NINGUNA medición. NUNCA gate.
     Fail-safe → {}. tooltip-anchor: P2-DISH-QUALITY"""
     try:
+        from constants import strip_accents as _sa_dq
         total = low = 0
         raw_staple = 0
         contract_bad = 0
+        transform = 0
         issues = []
         raw_staple_issues = []
         contract_issues = []
@@ -14272,6 +14369,13 @@ def compute_dish_quality_report(plan: dict) -> dict:
                 if not isinstance(m, dict):
                     continue
                 total += 1
+                # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) KPI de creatividad por transformación.
+                try:
+                    _nm_tf = _sa_dq(str(m.get("name") or "").lower())
+                    if any(t in _nm_tf for t in _TRANSFORM_NAME_TOKENS):
+                        transform += 1
+                except Exception:
+                    pass
                 _lo, _why = _meal_dish_quality_issue(m)
                 if _lo:
                     low += 1
@@ -14302,6 +14406,9 @@ def compute_dish_quality_report(plan: dict) -> dict:
             "contract_meals": contract_bad,
             "contract_ratio": round(contract_bad / total, 3) if total else None,
             "contract_issues": contract_issues,
+            # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) creatividad por transformación (medir→actuar).
+            "transform_meals": transform,
+            "transform_ratio": round(transform / total, 3) if total else None,
         }
     except Exception as _dq_e:
         logger.warning(f"[P2-DISH-QUALITY] report falló: {type(_dq_e).__name__}: {_dq_e}")
@@ -16681,6 +16788,42 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                 total += _ntt; parts.append(f"timetemp={_ntt}")
     except Exception as _e7:
         logger.warning(f"[P1-COHERENCE-FINALIZE] timetemp no-op: {type(_e7).__name__}: {_e7}")
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-A) Piso sub-servible también en el persist boundary
+    # (partial/degradado/SSE-fallback/chunks semana 2+): el quantize de arriba puede dejar líneas
+    # macro-bearing de 5-15g que assemble ya barrería. Re-sync de pasos de los meals (idempotente)
+    # porque el floor muta cantidades DESPUÉS del qty-sync de arriba.
+    try:
+        if PORTION_SHRINK_FLOOR_ENABLED:
+            _nsfb = _floor_subservible_portions(days, day_kcal_target=None, db=db)
+            if _nsfb:
+                total += _nsfb; parts.append(f"shrink_floor={_nsfb}")
+                for _d in days or []:
+                    for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                        if isinstance(_m, dict):
+                            try:
+                                _sync_recipe_step_quantities(_m)
+                            except Exception:
+                                pass
+    except Exception as _e8:
+        logger.warning(f"[P2-AUDIT-V6-BATCH] (P2-A) shrink-floor en persist boundary no-op: {type(_e8).__name__}: {_e8}")
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
+    # chunks semana 2+ no pasan por review_plan_node → el contrato de pasos (prefijos/orden/tiempo/
+    # inglés) no dejaba rastro fuera de form-gen semana 1. Advisory persistido (LECTURA, jamás gate).
+    try:
+        _nca = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if isinstance(_m, dict):
+                    _ci = _recipe_step_contract_issues(_m)
+                    if _ci:
+                        _m["_recipe_contract_advisory"] = _ci[:4]
+                        _nca += 1
+                    else:
+                        _m.pop("_recipe_contract_advisory", None)
+        if _nca:
+            parts.append(f"contract_advisory={_nca}")
+    except Exception as _e9:
+        logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-C) contract-lint boundary no-op: {type(_e9).__name__}: {_e9}")
     return (total, ", ".join(parts))
 
 
@@ -16846,6 +16989,18 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                     total += _nq
         except Exception as _eq:
             logger.warning(f"[P1-RECIPE-QUANTIZE-UPDATES] quantize en finalizador de update no-op: {type(_eq).__name__}: {_eq}")
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-A) Piso sub-servible también en updates/expand: el techo
+        # (`_cap_unrealistic_portions`) ya corría aquí pero el PISO (`_floor_subservible_portions`, GAP-05
+        # del batch v5) solo existía en assemble/requantize de form-gen → un closer/quantize de update
+        # podía persistir líneas macro-bearing de 5-15g ("5g de mozzarella"). Mismo orden que assemble:
+        # DESPUÉS del quantize (que es quien puede crear el residuo), ANTES del qty-sync (que ve el final).
+        try:
+            if PORTION_SHRINK_FLOOR_ENABLED:
+                _nsf = _floor_subservible_portions(_wrap, day_kcal_target=None, db=db)
+                if _nsf:
+                    total += _nsf
+        except Exception as _esf:
+            logger.warning(f"[P2-AUDIT-V6-BATCH] (P2-A) shrink-floor en finalizador de update no-op: {type(_esf).__name__}: {_esf}")
         # [P1-RECIPE-QTY-SYNC · 2026-07-01] tras el quantize (última mutación de porciones del plato), los
         # PASOS reflejan las cantidades actuales de ingredients[] — paridad con assemble; antes de humanize.
         try:
@@ -16885,6 +17040,20 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
                 logger.warning(f"🍽️ [P2-DISH-QUALITY-GATE] plato de update placeholder/crudo (advisory): {_dq_why}")
         except Exception as _dqu:
             logger.warning(f"[P2-DISH-QUALITY-GATE] advisory de dish-quality en update no-op: {type(_dqu).__name__}: {_dqu}")
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal también en updates: el lint de
+        # prefijos/orden/tiempo-temp/inglés (`_recipe_step_contract_issues`) solo alimentaba el report
+        # plan-level de form-gen — un plato editado con pasos rotos no dejaba rastro. Advisory + flag
+        # persistido (jamás bloquea; el backstop timetemp de arriba ya rellenó ausencias). LECTURA pura.
+        try:
+            _rc_issues = _recipe_step_contract_issues(meal)
+            if _rc_issues:
+                meal["_recipe_contract_advisory"] = _rc_issues[:4]
+                logger.info(f"📋 [P2-AUDIT-V6-BATCH] (P2-C) plato de update con contrato de pasos incompleto "
+                            f"(advisory): {'; '.join(_rc_issues[:3])}")
+            else:
+                meal.pop("_recipe_contract_advisory", None)
+        except Exception as _erl:
+            logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-C) contract-lint en update no-op: {type(_erl).__name__}: {_erl}")
         if total:
             logger.info(
                 f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {total} fix(es) de coherencia de receta en plato de update "
@@ -19639,32 +19808,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         # [P1-BUDGET-TIER-LEVERS] Sugerencias accionables al excederse:
                         # variante más barata del Supermercado RD para los ítems más
                         # caros de la lista semanal (usa el matching de marcas existente).
+                        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) refactor al helper SSOT
+                        # `build_budget_suggestions` (shopping_calculator, mismo comportamiento
+                        # vía cheapest_supermarket_variant) + brand-aware: respeta las marcas
+                        # que el usuario YA eligió (user_brand_preferences) — no le sugiere
+                        # el piso absoluto de un ítem que ya decidió.
                         if _p1b_rec.get("status") == "excedido":
                             try:
-                                from shopping_calculator import cheapest_supermarket_variant as _p1b_csv
-                                _p1b_sugs = []
-                                _p1b_priced = [
-                                    it for it in (result.get("aggregated_shopping_list_weekly") or [])
-                                    if isinstance(it, dict) and (it.get("estimated_cost_rd") or 0) > 0
-                                ]
-                                _p1b_priced.sort(key=lambda x: x.get("estimated_cost_rd") or 0, reverse=True)
-                                for _p1b_it in _p1b_priced[:5]:
-                                    _p1b_name = str(_p1b_it.get("name") or "").strip()
-                                    if not _p1b_name:
-                                        continue
-                                    _p1b_var = _p1b_csv(_p1b_name)
-                                    if _p1b_var and _p1b_var.get("brand"):
-                                        _p1b_sugs.append({
-                                            "type": "marca",
-                                            "item": _p1b_name,
-                                            "text": (
-                                                f"{_p1b_name}: la opción más económica del súper es "
-                                                f"{_p1b_var['brand']} {_p1b_var['presentation']} "
-                                                f"(RD${_p1b_var['price_rd']:.0f})"
-                                            ),
-                                        })
-                                    if len(_p1b_sugs) >= 5:
-                                        break
+                                from shopping_calculator import build_budget_suggestions as _p1b_bbs
+                                _p1b_sugs = _p1b_bbs(
+                                    result.get("aggregated_shopping_list_weekly") or [],
+                                    user_id=_uid,
+                                )
                                 if _p1b_sugs:
                                     _p1b_rec["suggestions"] = _p1b_sugs
                             except Exception as _p1b_sug_e:
@@ -19751,7 +19906,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             if _bc_rec.get("status") == "excedido":
                                 try:
                                     from shopping_calculator import build_budget_suggestions as _bc_sug
-                                    _bc_s = _bc_sug(_bc7)
+                                    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) brand-aware (respeta marcas elegidas)
+                                    _bc_s = _bc_sug(_bc7, user_id=_uid)
                                     if _bc_s:
                                         _bc_rec["suggestions"] = _bc_s
                                 except Exception:
@@ -21917,29 +22073,35 @@ Responde ÚNICAMENTE con el JSON de revisión.
             if _slot_app_issues:
                 _sa_attempt = int(state.get("attempt", 1))
                 _sa_is_final = _sa_attempt >= MAX_ATTEMPTS
+                # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Antes de degradar a
+                # advisory Y ENTREGAR un moro/locrio/chofán en la cena, intento de autofix compuesto de
+                # último recurso (nombre→guiso + arroz→tubérculo + pasos, determinista y coherente).
+                # Si limpia las violaciones, el plan sale SIN el disparate de horario; si no, advisory
+                # como antes (nunca cero-plan). Fail-open. tooltip-anchor: P1-NIGHT-RICE-COMPOUND-FINAL
+                # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-D) el autofix corre en el intento final AUNQUE
+                # haya violación dura: antes la mezcla hard+soft caía a la rama de rechazo SIN intentar
+                # el autofix → el plan degradado best-attempt se entregaba CON el arroz nocturno que el
+                # autofix sí sabía limpiar. Garantía cena-sin-arroz: todo lo determinísticamente
+                # limpiable se limpia antes de entregar, pase lo que pase con el veredicto.
+                if _sa_is_final and NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
+                    try:
+                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True)
+                        if _nrc_fixed:
+                            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []))
+                            logger.info(
+                                f"🕒 [P1-NIGHT-RICE-COMPOUND-FINAL] {_nrc_fixed} plato(s) compuesto(s) "
+                                f"de cena convertidos a guiso+tubérculo en intento final; "
+                                f"violaciones restantes: {len(_slot_app_issues)}"
+                            )
+                    except Exception as _nrc_e:
+                        logger.warning(f"[P1-NIGHT-RICE-COMPOUND-FINAL] autofix compuesto falló (no bloquea): "
+                                       f"{type(_nrc_e).__name__}: {_nrc_e}")
                 _sa_has_hard = any(i.get("hard") for i in _slot_app_issues)
                 # Degrada a advisory en el intento FINAL solo si NO hay violación dura (desayuno con
                 # arroz/locrio = siempre duro por decisión de producto). Mezcla hard+soft en intento
-                # final → rechaza igual (el plan se entrega como best-attempt con banner degraded).
+                # final → rechaza igual (el plan se entrega como best-attempt con banner degraded,
+                # pero YA sin el arroz nocturno limpiable — P2-D arriba).
                 if _sa_is_final and not _sa_has_hard:
-                    # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Antes de degradar a
-                    # advisory Y ENTREGAR un moro/locrio/chofán en la cena, intento de autofix compuesto de
-                    # último recurso (nombre→guiso + arroz→tubérculo + pasos, determinista y coherente).
-                    # Si limpia las violaciones, el plan sale SIN el disparate de horario; si no, advisory
-                    # como antes (nunca cero-plan). Fail-open. tooltip-anchor: P1-NIGHT-RICE-COMPOUND-FINAL
-                    if NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
-                        try:
-                            _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True)
-                            if _nrc_fixed:
-                                _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []))
-                                logger.info(
-                                    f"🕒 [P1-NIGHT-RICE-COMPOUND-FINAL] {_nrc_fixed} plato(s) compuesto(s) "
-                                    f"de cena convertidos a guiso+tubérculo en intento final; "
-                                    f"violaciones restantes: {len(_slot_app_issues)}"
-                                )
-                        except Exception as _nrc_e:
-                            logger.warning(f"[P1-NIGHT-RICE-COMPOUND-FINAL] autofix compuesto falló (no bloquea): "
-                                           f"{type(_nrc_e).__name__}: {_nrc_e}")
                     if _slot_app_issues:
                         logger.warning(
                             f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "

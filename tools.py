@@ -897,6 +897,18 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _sdv_e:
             logger.debug(f"[P2-UPDATE-SAMEDAY-VARIETY] seed same-day no-op: {type(_sdv_e).__name__}: {_sdv_e}")
 
+    # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) inspiración de la biblioteca curada también en
+    # chat-modify (antes solo el day-gen de form-gen): 2 plantillas del slot, determinista, soft
+    # — el plato modificado recupera la creatividad por recombinación de las 87 plantillas.
+    try:
+        from dish_library import build_swap_inspiration_context as _bsi_cm
+        _insp_cm = _bsi_cm(str(meal_type or ""), seed=int(day_number or 1),
+                           avoid_names=[str(target_meal.get("name") or "")])
+        if _insp_cm:
+            context_extras += _insp_cm
+    except Exception as _insp_cm_e:
+        logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración chat-modify no-op: {_insp_cm_e}")
+
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
@@ -1974,7 +1986,8 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     )
                     if _p1b_sum_cm:
                         plan_data_fresh["shopping_cost_summary"] = _p1b_sum_cm
-                        _p1b_rbr_cm(plan_data_fresh)
+                        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) user_id → sugerencias brand-aware.
+                        _p1b_rbr_cm(plan_data_fresh, user_id=user_id)
                 except Exception as _p1b_cm_e:
                     logger.debug(f"[P1-BUDGET-COST-SSOT] (chat) summary no-op: {_p1b_cm_e}")
 
@@ -2032,6 +2045,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     user_id, str((target_meal or {}).get("name") or ""),
                     str(new_meal_data.get("name") or ""), changes,
                 )
+                # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-G) señal POSITIVA fuerte si el usuario
+                # PIDIÓ la proteína entregada ("ponme camarones") — guard anti-negación interno.
+                from taste_model import record_chat_request_positive
+                record_chat_request_positive(user_id, str(new_meal_data.get("name") or ""), changes)
             except Exception as _taste_cm_e:
                 logger.debug(f"[P1-NEXT-LEVEL-TASTE] señal chat no-op: {_taste_cm_e}")
             # [P2-COHERENCE-1 · 2026-05-11] _coherence_warnings opcional —

@@ -30181,6 +30181,17 @@ def process_plan_chunk_queue(target_plan_id=None):
                             except Exception as _fce_ck:
                                 logger.warning(f"[P1-COHERENCE-FINALIZE] chunk T1 no-op: {type(_fce_ck).__name__}: {_fce_ck}")
 
+                            # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) dish_quality_report también en chunk T1:
+                            # los chunks semana 2+ no pasan por review_plan_node → el report plan-level quedaba
+                            # congelado en la semana 1 (Dashboard/PDF stale al crecer el plan). Best-effort.
+                            try:
+                                from graph_orchestrator import (compute_dish_quality_report as _dqr_ck,
+                                                                DISH_QUALITY_TELEMETRY_ENABLED as _dqt_ck)
+                                if _dqt_ck and isinstance(plan_data.get("days"), list):
+                                    plan_data["dish_quality_report"] = _dqr_ck(plan_data)
+                            except Exception as _dqe_ck:
+                                logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-C) dish-quality chunk T1 no-op: {type(_dqe_ck).__name__}: {_dqe_ck}")
+
                             # [P1-MICRONUTRIENT-CHUNK-RECOMPUTE · 2026-06-24] Recalcula el panel de micros
                             # sobre el plan COMPLETO tras anexar el chunk. Antes el reporte se computaba 1
                             # sola vez en assemble (semana 1) y NUNCA se recalculaba al crecer el plan → un

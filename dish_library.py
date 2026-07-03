@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 DISH_LIBRARY_ENABLED = _env_bool("MEALFIT_DISH_LIBRARY", True)
 DISH_LIBRARY_PER_SLOT = _env_int("MEALFIT_DISH_LIBRARY_PER_SLOT", 2, validator=lambda v: 1 <= v <= 5)
+# [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) Mínimo diario de platos TRANSFORMADOS pedido al day-gen
+# (prompt-side, soft — el LLM conserva libertad; el KPI transform_ratio del dish_quality_report mide
+# obediencia). 0 = solo la priorización genérica previa. Clamp [0, 3].
+DISH_LIBRARY_TRANSFORM_MIN = _env_int("MEALFIT_DISH_LIBRARY_TRANSFORM_MIN", 1, validator=lambda v: 0 <= v <= 3)
 
 _TEMPLATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
 _CACHE: list | None = None
@@ -114,13 +118,61 @@ def build_dish_library_context(skeleton_day: dict, day_num: int) -> str:
             lines.append(f"   • {_SLOT_LABELS[slot]}: {entries}")
         if not lines:
             return ""
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) pedido explícito de mínimo transformado por día
+        # (soft): "elige y adapta" era inspiración pura y el LLM podía ignorarla sin costo.
+        _tf_min = int(DISH_LIBRARY_TRANSFORM_MIN)
+        _tf_line = (
+            f"\n   🎯 Incluye HOY al menos {_tf_min} plato(s) TRANSFORMADO(s) (panqueques/arepitas/"
+            "bollitos/guiso u horneado con nombre propio) siempre que encaje con los macros, el "
+            "horario y las reglas clínicas del día.\n"
+        ) if _tf_min > 0 else "\n"
         return (
             "\n🍽️ INSPIRACIÓN DOMINICANA (biblioteca curada — ELIGE Y ADAPTA una, o crea un plato "
             "equivalente en espíritu; ajusta porciones a los macros del día):\n"
             + "\n".join(lines)
             + "\n   💡 Prioriza preparaciones TRANSFORMADAS (masas, guisos, rellenos, horneados) "
-              "sobre staples sueltos — un plato con nombre propio se disfruta y se repite.\n"
+              "sobre staples sueltos — un plato con nombre propio se disfruta y se repite."
+            + _tf_line
         )
     except Exception as _e:
         logger.debug(f"[P1-NEXT-LEVEL-LIBRARY] contexto no-op: {type(_e).__name__}: {_e}")
+        return ""
+
+
+# [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) pool amplio para inspiración en updates: el swap/chat no
+# tiene el protein_pool del planner; sin pool, las plantillas proteína-específicas se filtrarían.
+_BROAD_POOL_ASCII = "pollo pescado res cerdo pavo atun camarones salmon huevo queso legumbre"
+
+
+def build_swap_inspiration_context(meal_type: str, seed: int = 1, avoid_names=None) -> str:
+    """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) Inspiración compacta de la biblioteca para las
+    superficies de UPDATE (swap / chat-modify) — antes solo el day-gen de form-gen la recibía,
+    así que un plato actualizado perdía la creatividad por recombinación de las 87 plantillas.
+    Soft ('elige y adapta si encaja'), determinista por seed, '' si knob OFF / slot desconocido.
+    tooltip-anchor: P2-AUDIT-V6-BATCH (P2-F)"""
+    if not DISH_LIBRARY_ENABLED:
+        return ""
+    try:
+        from constants import strip_accents
+        slot = strip_accents(str(meal_type or "").strip().lower())
+        if slot not in _SLOT_LABELS:
+            for k in _SLOT_LABELS:
+                if k in slot:
+                    slot = k
+                    break
+        if slot not in _SLOT_LABELS:
+            return ""
+        avoid = tuple(strip_accents(str(n).lower())[:30] for n in (avoid_names or [])[:10] if str(n).strip())
+        picks = sample_templates_for_slot(slot, _BROAD_POOL_ASCII, int(DISH_LIBRARY_PER_SLOT),
+                                          int(seed or 1), avoid_tokens=avoid)
+        if not picks:
+            return ""
+        entries = "; ".join(f"{t['name']} ({t.get('technique', 'libre')})" for t in picks)
+        return (
+            f"\n    - 🍽️ INSPIRACIÓN ({_SLOT_LABELS[slot]}, biblioteca curada): {entries} — "
+            "ELIGE Y ADAPTA una si encaja con los ingredientes disponibles, o crea un plato "
+            "equivalente en espíritu. Prefiere preparaciones con nombre propio sobre staples sueltos."
+        )
+    except Exception as _e:
+        logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración de update no-op: {type(_e).__name__}: {_e}")
         return ""
