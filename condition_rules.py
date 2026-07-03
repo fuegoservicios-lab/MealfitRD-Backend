@@ -442,6 +442,16 @@ CONDITION_RULES: tuple = (
 
 _RULES_BY_ID = {r.id: r for r in CONDITION_RULES}
 
+# [P1-FORM-AUDIT-BATCH · 2026-07-03] (C2) Condiciones donde el alcohol recurrente
+# es agravante clínico DIRECTO (no meramente "calorías vacías"): presión arterial
+# (hta), ácido úrico (gout), mucosa gástrica/reflujo (gastritis), hígado (nafld),
+# glucemia con medicación (dm2), teratogenia (pregnancy — el block ya dice CERO,
+# esto surfacea que el usuario declaró que SÍ bebe). Valores de `habitAlcohol`
+# del wizard QHabits: nunca|ocasional|semanal|diario — solo los recurrentes
+# disparan la directiva (ocasional/social no amerita mención en el plan).
+_ALCOHOL_SENSITIVE_RULE_IDS = {"hta", "gout", "gastritis", "nafld", "dm2", "pregnancy"}
+_ALCOHOL_RECURRENT_VALUES = {"semanal", "diario"}
+
 
 def _norm_conditions(form_data) -> list:
     """Lista normalizada (lower + strip_accents, sin sentinel) de las condiciones del form."""
@@ -513,6 +523,28 @@ def build_condition_prompt(form_data) -> str:
             f"⚖️ PRECEDENCIA CLÍNICA — CONDICIONES MÚLTIPLES ({labels}): cuando dos reglas chocan, gana la MÁS "
             "RESTRICTIVA en dirección de seguridad (el techo más bajo de sodio, proteína o grasa saturada). "
             "Este plan es orientativo; el balance individual lo define tu profesional de salud.")
+    # [P1-FORM-AUDIT-BATCH · 2026-07-03] (C2) Cruce determinista hábito × condición.
+    # QHabits (P1-CLINICAL-INTAKE) captura `habitAlcohol` pero la señal solo llegaba
+    # al prompt como JSON pasivo: los prompt_blocks dicen "CERO alcohol" sin saber si
+    # el usuario declaró que BEBE. Con consumo recurrente (semanal/diario) + condición
+    # donde el alcohol es agravante directo, el generador recibe la directiva explícita
+    # con el dato declarado — coherencia accionable, no sermón genérico.
+    # tooltip-anchor: P1-FORM-AUDIT-BATCH-ALCOHOL
+    _alcohol_raw = str((form_data or {}).get("habitAlcohol") or "").strip().lower()
+    if _alcohol_raw in _ALCOHOL_RECURRENT_VALUES:
+        _alcohol_hits = [r for r in active if r.id in _ALCOHOL_SENSITIVE_RULE_IDS]
+        if _alcohol_hits:
+            _hit_labels = ", ".join(r.label for r in _alcohol_hits)
+            blocks.append(
+                f"🍺 HÁBITO DECLARADO — ALCOHOL {_alcohol_raw.upper()} + {_hit_labels}:\n"
+                "   • El usuario declaró consumo recurrente de alcohol. Con su(s) condición(es), el alcohol "
+                "es agravante DIRECTO (presión arterial, ácido úrico, mucosa gástrica, hígado, glucemia según "
+                "aplique).\n"
+                "   • El plan NO incluye bebidas alcohólicas ni recetas con alcohol. En las notas del plan, "
+                "menciona de forma respetuosa y concreta que reducir el consumo acelera el objetivo y protege "
+                "su condición — sin sermonear, una sola mención.\n"
+                "   • Considera las calorías líquidas del hábito declarado al ajustar los snacks (no las "
+                "'compenses' recortando comida real).")
     return ("\n--- REGLAS NUTRICIONALES POR CONDICIÓN MÉDICA (DETERMINISTAS, CITABLES) ---\n"
             + "\n\n".join(blocks)
             + "\n----------------------------------------\n")

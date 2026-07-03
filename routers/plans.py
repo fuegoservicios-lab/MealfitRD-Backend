@@ -644,6 +644,21 @@ _BIO_RANGES = {
     "household": (1, 12),         # personas; cap protege contra typos / payloads bogus
 }
 
+# [P1-FORM-AUDIT-BATCH · 2026-07-03] Enum del ritmo hacia la meta (QGoalTarget).
+# Paridad con `PACE_ADJUSTMENTS` en nutrition_calculator.py (gradual/moderado/
+# decidido) — valor fuera del enum ahí es no-op silencioso, acá es 422.
+_GOAL_PACE_ENUM = {"gradual", "moderado", "decidido"}
+
+# [P1-FORM-AUDIT-BATCH · 2026-07-03] Freetext del wizard SIN límite de longitud
+# previo. 600 chars cubre historiales médicos legítimos pegados (el freeText
+# de super_personalization tiene su propio cap 1200 en plan_generator.py).
+# Truncado in-place con log — NO 422 (input largo es legítimo, no bogus).
+_FREETEXT_MAX_CHARS = 600
+_FREETEXT_CAP_FIELDS = (
+    "otherConditions", "otherAllergies", "otherMedications",
+    "otherDislikes", "otherStruggles", "motivation",
+)
+
 
 def _coerce_numeric(raw, *, kind: str = "float"):
     """[P1-3] Convierte un valor del payload a int/float si es parseable.
@@ -969,6 +984,137 @@ def _validate_form_data_ranges(data: dict) -> tuple[bool, list[dict]]:
                         "accepted_range": sorted(_SUPPLEMENT_ENUM),
                         "unit": "list of strings (enum)",
                     })
+
+    # --- targetWeight + goalPace (P1-FORM-AUDIT-BATCH · 2026-07-03, C3) ---
+    # El wizard (QGoalTarget) captura peso meta + ritmo. ANTES no se validaba
+    # dirección ni rango: `mainGoal=lose_fat` + `targetWeight=250` (sobre un
+    # peso actual de 180 lb) pasaba silencioso — el ETA (P1-GOAL-ETA) simplemente
+    # no emitía (delta negativo) pero el usuario nunca se enteraba de que su
+    # meta contradecía su objetivo. Igual filosofía que P0-FORM-5: contradicción
+    # detectable → 422 accionable, NO silencio.
+    #   - `targetWeightAuto` truthy (sentinel "Sin meta") → skip total.
+    #   - Misma unidad que `weight` (`weightUnit`) — ver P1-GOAL-ETA
+    #     nutrition_calculator.py (interpreta targetWeight en weight_unit).
+    #   - Solo validamos dirección si weight/weightUnit ya pasaron sus checks
+    #     (evita segundo error confuso cuya causa real es el peso base).
+    #   - Igualdad exacta NO se rechaza (borderline legítimo; el ETA no emite).
+    # tooltip-anchor: P1-FORM-AUDIT-BATCH-TARGETWEIGHT
+    tw_raw = data.get("targetWeight")
+    if not data.get("targetWeightAuto") and tw_raw not in (None, ""):
+        tw = _coerce_numeric(tw_raw, kind="float")
+        weight_unit_ok = str(data.get("weightUnit") or "").lower().strip() in _WEIGHT_UNIT_ACCEPTED
+        if tw is None:
+            errors.append({
+                "field": "targetWeight",
+                "value": tw_raw,
+                "accepted_range": "numérico > 0",
+                "unit": "misma unidad que weight (weightUnit)",
+            })
+        elif weight_unit_ok:
+            _tw_unit = str(data.get("weightUnit")).lower().strip()
+            tw_kg = tw / 2.20462 if _tw_unit == "lb" else tw
+            w_min, w_max = _BIO_RANGES["weight_kg"]
+            if not (w_min <= tw_kg <= w_max):
+                errors.append({
+                    "field": "targetWeight",
+                    "value": tw_raw,
+                    "accepted_range": [int(w_min), int(w_max)],
+                    "unit": f"kg (input recibido en {_tw_unit})",
+                })
+            else:
+                cur_w = _coerce_numeric(data.get("weight"), kind="float")
+                if cur_w is not None:
+                    cur_w_kg = cur_w / 2.20462 if _tw_unit == "lb" else cur_w
+                    goal_norm = str(data.get("mainGoal") or "").strip().lower()
+                    if goal_norm == "lose_fat" and tw_kg > cur_w_kg:
+                        errors.append({
+                            "field": "targetWeight",
+                            "value": tw_raw,
+                            "accepted_range": f"< peso actual ({data.get('weight')} {_tw_unit})",
+                            "unit": _tw_unit,
+                            "reason": (
+                                "P1-FORM-AUDIT-BATCH: mainGoal='lose_fat' pero el peso meta "
+                                "es MAYOR que el peso actual. Corrige la meta o cambia el "
+                                "objetivo a 'gain_muscle'."
+                            ),
+                        })
+                    elif goal_norm == "gain_muscle" and tw_kg < cur_w_kg:
+                        errors.append({
+                            "field": "targetWeight",
+                            "value": tw_raw,
+                            "accepted_range": f"> peso actual ({data.get('weight')} {_tw_unit})",
+                            "unit": _tw_unit,
+                            "reason": (
+                                "P1-FORM-AUDIT-BATCH: mainGoal='gain_muscle' pero el peso meta "
+                                "es MENOR que el peso actual. Corrige la meta o cambia el "
+                                "objetivo a 'lose_fat'."
+                            ),
+                        })
+    # goalPace: enum estricto si presente. Paridad con PACE_ADJUSTMENTS
+    # (nutrition_calculator.py) — valor desconocido ahí es no-op silencioso
+    # (el usuario eligió "decidido" con typo → recibía déficit legacy sin aviso).
+    pace_raw = data.get("goalPace")
+    if pace_raw not in (None, ""):
+        pace_norm = str(pace_raw).strip().lower() if isinstance(pace_raw, str) else None
+        if pace_norm not in _GOAL_PACE_ENUM:
+            errors.append({
+                "field": "goalPace",
+                "value": pace_raw,
+                "accepted_range": sorted(_GOAL_PACE_ENUM),
+                "unit": "string (enum: gradual|moderado|decidido)",
+            })
+
+    # --- householdComposition (P1-FORM-AUDIT-BATCH · 2026-07-03, C5) ---
+    # `compute_household_multiplier` (constants.py) ya clampa internamente
+    # (cap knob MEALFIT_MAX_HOUSEHOLD_SIZE=20) así que NO hay riesgo OOM,
+    # pero un payload `{adults: 500, children: 500}` se clampaba SILENCIOSO
+    # a 20 — el usuario recibía una lista para 20 sin saber por qué. Igual
+    # rango que householdSize legacy (total 1..12, P1-FORM-12) para paridad.
+    # tooltip-anchor: P1-FORM-AUDIT-BATCH-HOUSEHOLDCOMP
+    hc_raw = data.get("householdComposition")
+    if hc_raw not in (None, ""):
+        if not isinstance(hc_raw, dict):
+            errors.append({
+                "field": "householdComposition",
+                "value": hc_raw,
+                "accepted_range": "{adults: int, children: int}",
+                "unit": "objeto",
+            })
+        else:
+            hc_adults = _coerce_numeric(hc_raw.get("adults"), kind="int")
+            hc_children = _coerce_numeric(hc_raw.get("children"), kind="int")
+            h_min, h_max = _BIO_RANGES["household"]
+            _hc_bad = (
+                hc_adults is None or hc_children is None
+                or not (0 <= hc_adults <= h_max)
+                or not (0 <= hc_children <= h_max)
+                or not (h_min <= (hc_adults + hc_children) <= h_max)
+            )
+            if _hc_bad:
+                errors.append({
+                    "field": "householdComposition",
+                    "value": hc_raw,
+                    "accepted_range": [h_min, h_max],
+                    "unit": "personas (adults 0..12, children 0..12, total 1..12)",
+                })
+
+    # --- Caps de longitud en freetext (P1-FORM-AUDIT-BATCH · 2026-07-03, C4) ---
+    # `super_personalization.freeText` ya tiene cap 1200 (plan_generator.py:505)
+    # pero los other* del wizard NO tenían límite: 500KB de texto en
+    # `otherConditions` viajaba íntegro al prompt del planner (token bloat +
+    # vector de prompt-stuffing). Truncamos in-place (NO 422 — un historial
+    # médico largo pegado es input legítimo; rechazar sería hostil) + log
+    # para observabilidad. La sanitización P1-Q8 downstream sigue aplicando.
+    # tooltip-anchor: P1-FORM-AUDIT-BATCH-FREETEXT-CAP
+    for _ft_field in _FREETEXT_CAP_FIELDS:
+        _ft_val = data.get(_ft_field)
+        if isinstance(_ft_val, str) and len(_ft_val) > _FREETEXT_MAX_CHARS:
+            data[_ft_field] = _ft_val[:_FREETEXT_MAX_CHARS]
+            logger.warning(
+                f"[P1-FORM-AUDIT-BATCH] freetext '{_ft_field}' truncado "
+                f"{len(_ft_val)} → {_FREETEXT_MAX_CHARS} chars. "
+                f"user_id={data.get('user_id')}, session_id={data.get('session_id')}"
+            )
 
     return (len(errors) == 0, errors)
 

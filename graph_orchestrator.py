@@ -6094,6 +6094,42 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     _SKELETON_RESTRICTED = ['atún', 'atun', 'salami', 'longaniza', 'chorizo']
     _EMBUTIDO_KEYS = ['salami', 'longaniza', 'chorizo']
 
+    # [P1-FORM-AUDIT-BATCH · 2026-07-03] (C1) Escalera de fallback de proteína consciente de
+    # alergias + dieta. Cada candidato lista sus tokens gatillo (si algún token aparece en las
+    # alergias declaradas, el candidato se descarta). Orden = preferencia (plant primero: es
+    # el fallback histórico y sirve a TODAS las dietas; huevo solo no-vegan; pollo solo dieta
+    # sin restricción vegetal).
+    def _allergy_safe_fallback_protein(_fd: dict):
+        try:
+            from constants import strip_accents as _sa_fb
+            _alg_parts = []
+            for _key in ("allergies", "otherAllergies"):
+                _v = (_fd or {}).get(_key)
+                if isinstance(_v, list):
+                    _alg_parts.extend(str(x) for x in _v)
+                elif _v:
+                    _alg_parts.append(str(_v))
+            _alg_blob = _sa_fb(" ".join(_alg_parts).lower())
+            _diet = _sa_fb(str((_fd or {}).get("dietType") or "").lower())
+            _is_vegan = "vegan" in _diet
+            _is_veget = "vegetarian" in _diet or "vegetariano" in _diet or "vegetariana" in _diet
+            _ladder = [
+                ("Lentejas", ("lentej", "legumbre")),
+                ("Garbanzos", ("garbanzo", "legumbre")),
+                ("Habichuelas rojas", ("habichuela", "frijol", "legumbre")),
+                ("Quinoa", ("quinoa", "quinua")),
+            ]
+            if not _is_vegan:
+                _ladder.append(("Huevos", ("huevo",)))
+            if not _is_vegan and not _is_veget:
+                _ladder.append(("Pollo", ("pollo",)))
+            for _cand, _triggers in _ladder:
+                if not any(_t in _alg_blob for _t in _triggers):
+                    return _cand
+            return None
+        except Exception:
+            return "Lentejas"  # fail-open al comportamiento histórico
+
     skel_days = skeleton.get('days', [])
 
     # 1. Cada proteína restringida aparece en MÁXIMO 1 día — remover del resto
@@ -6124,12 +6160,25 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             logger.info(f"🧹 [SKELETON SCRUB] Día {d.get('day')}: eliminados embutidos "
                   f"{embutidos_in_pool} (conflicto con atún presente)")
 
-    # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar Lentejas como proteína segura
+    # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar una proteína SEGURA.
+    # [P1-FORM-AUDIT-BATCH · 2026-07-03] (audit form · contradicción C1) El fallback era
+    # 'Lentejas' INCONDICIONAL — ciego a las alergias declaradas: un vegano alérgico a
+    # legumbres cuyo pool quedara vacío recibía lentejas reinyectadas al esqueleto (y el
+    # allergen-guard downstream tenía que rescatarlo). Escalera de candidatos filtrada por
+    # alergias (accent-insensitive) y por dieta (vegan → solo plant; vegetariano → +huevo).
+    # Si NINGÚN candidato sobrevive, el pool queda VACÍO a propósito: mejor que inyectar un
+    # alérgeno — el day-gen elige del catálogo ya filtrado y los guards duros validan.
     for d in skel_days:
         if not d.get('protein_pool'):
-            d['protein_pool'] = ['Lentejas']
-            logger.warning(f"⚠️ [SKELETON SCRUB] Día {d.get('day')}: protein_pool vacío tras scrub, "
-                  f"inyectado 'Lentejas' como fallback")
+            _fb_protein = _allergy_safe_fallback_protein(form_data)
+            if _fb_protein:
+                d['protein_pool'] = [_fb_protein]
+                logger.warning(f"⚠️ [SKELETON SCRUB] Día {d.get('day')}: protein_pool vacío tras scrub, "
+                      f"inyectado '{_fb_protein}' como fallback (allergy-aware)")
+            else:
+                logger.warning(f"⚠️ [SKELETON SCRUB] Día {d.get('day')}: protein_pool vacío y NINGÚN "
+                      f"candidato de fallback pasa alergias+dieta → pool queda vacío (day-gen elige "
+                      f"del catálogo filtrado; guards duros validan)")
 
     # 4. [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Enforcement DETERMINISTA de la cantidad de comidas/día
     # clínica: forzamos `meal_types` de cada día a la decisión computada arriba (no depende de que el
