@@ -52,11 +52,28 @@ JAMÁS escribe directo a la tabla (simétrica a la invariante I6).
   "Relativa" → "Relativo". Strings compuestos ("Paquete 2L", "Cartón L", "1.47 L")
   VERBATIM — se curan desde la admin UI.
 
+## Roadmap — estado
+
+1. **Variantes de marca** — ✅ cargadas (capturas La Sirena + Nacional, ~1,800 productos /
+   ~128 familias, 2026-07-02). Nuevas marcas: owner vía admin UI.
+2. **Conexión lista de compras** — ✅ CERRADA (P1-SUPERMARKET-MATCH + P1-SUPERMARKET-PREFS +
+   P1-SUPERMARKET-COSTING · 2026-07-02): `POST /api/supermarket/match` + panel "Marcas del
+   súper" (Dashboard) + `user_brand_preferences` + overlay del envase preferido en el costeo
+   (`fetch_brand_pref_packages`, knob `MEALFIT_BRAND_PREF_COSTING`).
+3. **Sync a `market_packages`** — ✅ (fill-only-empty + reconciliación de precios report-first:
+   `scripts/sync_supermarket_to_market_packages_2026_07_02.py` y
+   `scripts/sync_supermarket_prices_report_2026_07_02.py`).
+4. **Conexión a la GENERACIÓN de platos** — ✅ fase 1 (P1-SUPERMARKET-PERSONALIZATION ·
+   2026-07-03, audit v6 · P1-2): las marcas preferidas del usuario se inyectan como señal de
+   preferencia POSITIVA al planner/day-gen vía [`backend/brand_personalization.py`](../brand_personalization.py)
+   (`build_brand_pref_context`, canal `taste_profile` — mismo patrón del taste aprendido; knob
+   `MEALFIT_BRAND_PREF_PERSONALIZATION`, señal suave que jamás fuerza platos ni rompe clínica).
+   Gap-report de familias sin master verificado (candidatos de expansión de catálogo):
+   `scripts/supermarket_family_gap_report_2026_07_03.py` (read-only). Test ancla:
+   `test_p1_supermarket_personalization.py`.
+
 ## Roadmap (pendiente)
 
-1. **Variantes de marca**: cargar marcas reales por alimento (owner, vía admin UI).
-2. **Conexión lista de compras**: resolver `master_food_name` → `master_ingredients`
-   (match case-insensitive + aliases) y exponer selección de marca/presentación en la
-   lista de compras del plan (preferencia de usuario + recosteo por `price_rd`).
-3. Posible sync `supermarket_products` → `master_ingredients.market_packages` para que
-   el costeo P1-PKG use los mismos precios que muestra el supermercado.
+- Imágenes de producto + cadencia de actualización de precios + más familias (owner-side).
+- Fase 2 de generación: derivar masters verificados nuevos desde las familias del gap-report
+  (patrón USDA→JSON→owner PRICES→--commit).

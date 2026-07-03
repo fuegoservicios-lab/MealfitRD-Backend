@@ -4299,6 +4299,17 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
                 taste_profile = (taste_profile or "") + "\n" + _learned_taste
         except Exception as _lt_e:
             logger.debug(f"[P1-NEXT-LEVEL-TASTE] contexto aprendido no-op: {_lt_e}")
+        # [P1-SUPERMARKET-PERSONALIZATION · 2026-07-03] (audit v6 · P1-2) Las marcas que el usuario
+        # eligió en "Marcas del súper" (user_brand_preferences ⋈ supermarket_products) se inyectan
+        # como señal de preferencia POSITIVA por el mismo canal (taste_profile → planner + day-gen).
+        # Usuarios sin preferencias → '' (byte-equivalente → prompt-cache preservado). Fail-open.
+        try:
+            from brand_personalization import build_brand_pref_context as _bbc_prefs
+            _brand_ctx = _bbc_prefs(_uid)
+            if _brand_ctx:
+                taste_profile = (taste_profile or "") + "\n" + _brand_ctx
+        except Exception as _bp_e:
+            logger.debug(f"[P1-SUPERMARKET-PERSONALIZATION] contexto no-op: {_bp_e}")
 
     rejection_reasons = state.get("rejection_reasons", [])
 
