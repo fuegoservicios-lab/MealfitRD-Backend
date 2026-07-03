@@ -67,9 +67,11 @@ def test_batch_knob_defaults_snapshot():
     assert '"MEALFIT_RECIPE_TIMETEMP_BACKSTOP", True' in go
     assert '"MEALFIT_SWAP_TARGET_FROM_SLOT", "true"' in ag
     assert '"MEALFIT_UPDATE_INLINE_LIST_RECALC", "true"' in pl
-    # OFF por diseño (gates nuevos — flip con datos de flota, playbook dish-quality):
-    assert '"MEALFIT_SODIUM_EXCESS_GATE", False' in go
-    assert '"MEALFIT_RECIPE_CONTRACT_GATE", False' in go
+    # [P1-GATES-FLIP-ON · 2026-07-03] (audit v6 · P1-4) los gates nacieron OFF (playbook
+    # medir→actuar) y pasaron a ON con la serie del gym baseline (contract 0/20 retry,
+    # ceiling 4/20). El baseline de la suite sigue OFF vía conftest.
+    assert '"MEALFIT_SODIUM_EXCESS_GATE", True' in go
+    assert '"MEALFIT_RECIPE_CONTRACT_GATE", True' in go
 
 
 def test_frontend_consumes_reconciliation():

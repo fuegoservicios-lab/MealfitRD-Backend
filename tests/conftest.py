@@ -17,6 +17,15 @@ _os_conftest.environ.setdefault("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
 # CÓDIGO pasó a True en agent.py (cierra ".env reseteado ⇒ cravings/weekend vuelven a permitir
 # ingredientes externos"); los tests legacy de cravings/weekend asumen el baseline OFF.
 _os_conftest.environ.setdefault("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "false")
+# [P1-GATES-FLIP-ON · 2026-07-03] (audit v6 · P1-4) Los 3 gates OFF-de-nacimiento pasaron a ON
+# en código con la serie del gym baseline (20 perfiles: contract 0/20 retry, ceiling 4/20,
+# per-day floor 9/20). El baseline HISTÓRICO de la suite se escribió con los gates OFF (los
+# fixtures construyen planes sintéticos que dispararían el sodio/contract gate a propósito) →
+# se fijan OFF aquí. Los tests del flip (test_p1_gates_flip_on) verifican el default de CÓDIGO
+# por source-parse y activan el path ON con monkeypatch. setdefault: env real del operador gana.
+_os_conftest.environ.setdefault("MEALFIT_SODIUM_EXCESS_GATE", "false")
+_os_conftest.environ.setdefault("MEALFIT_RECIPE_CONTRACT_GATE", "false")
+_os_conftest.environ.setdefault("MEALFIT_MICRO_CLOSER_PERDAY", "false")
 
 # [P0-5] Eagerly resolve real `langgraph` BEFORE any test module loads. Several
 # test files do `sys.modules.setdefault('langgraph', MagicMock())` to support

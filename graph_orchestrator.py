@@ -9952,7 +9952,10 @@ SODIUM_SUGAR_DEGRADE_MIN_RATIO = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_RA
 # [P1-SODIUM-SUGAR-EXCESS-ON] Gate de retry para exceso FLAGRANTE de sodio (>techo×RATIO, default 1.5).
 # Default OFF: es un gate NUEVO — se enciende con datos de flota (mismo playbook que P1-DISH-QUALITY-GATE-ON:
 # la telemetría del banner de arriba mide la tasa real antes del flip). Advisory en intento final al activarse.
-SODIUM_EXCESS_GATE_ENABLED = _env_bool("MEALFIT_SODIUM_EXCESS_GATE", False)
+# [P1-GATES-FLIP-ON · 2026-07-03] (audit v6 · P1-4) OFF→ON con serie del gym baseline (20 perfiles,
+# 2026-07-03): worst-day ceiling en 4/20; el trigger del gate (promedio >techo×1.5) es más raro aún
+# y degrada a advisory en intento final → sin riesgo de retry-storm. Baseline tests OFF en conftest.
+SODIUM_EXCESS_GATE_ENABLED = _env_bool("MEALFIT_SODIUM_EXCESS_GATE", True)
 SODIUM_EXCESS_GATE_RATIO = _env_float("MEALFIT_SODIUM_EXCESS_GATE_RATIO", 1.5)
 # [P1-MICRO-PERDAY-FLOOR · 2026-07-02] (audit v4 micros) Consumo del resumen worst-day del panel
 # (micronutrients.build_micronutrient_report → per_day_floors): un plan que cumple los pisos EN PROMEDIO
@@ -9964,7 +9967,10 @@ MICRO_PERDAY_DEGRADE_ENABLED = _env_bool("MEALFIT_MICRO_PERDAY_DEGRADE", True)
 # set de floors del closer (el loop per-día interno solo escala los DÍAS deficientes). Nace OFF por
 # el playbook medir→actuar: la serie del banner `micro_worst_day` (knob de arriba, ON) dimensiona
 # la frecuencia real antes del flip. NO baja los umbrales 0.6/≥2 del detector.
-MICRO_CLOSER_PERDAY_ENABLED = _env_bool("MEALFIT_MICRO_CLOSER_PERDAY", False)
+# [P1-GATES-FLIP-ON · 2026-07-03] (audit v6 · P1-4) OFF→ON con serie del gym baseline: 9/20 planes
+# con worst-day floor flaggeado (el eje micros es el más débil: mean 57.5) — el closer per-día tiene
+# trabajo real y NO es gate (determinista, kcal/UL-bounded, renal-skip) → cero riesgo de retry.
+MICRO_CLOSER_PERDAY_ENABLED = _env_bool("MEALFIT_MICRO_CLOSER_PERDAY", True)
 
 
 def _protein_gkg_ceiling(goal) -> float:
@@ -14149,7 +14155,10 @@ _RECIPE_ENGLISH_RE = _re.compile(
 # Rollback sin redeploy: MEALFIT_RECIPE_TIMETEMP_BACKSTOP=false / MEALFIT_RECIPE_CONTRACT_GATE=false.
 # tooltip-anchor: P1-RECIPE-CONTRACT-GATE. Test: test_p1_recipe_contract_gate.py.
 RECIPE_TIMETEMP_BACKSTOP_ENABLED = _env_bool("MEALFIT_RECIPE_TIMETEMP_BACKSTOP", True)
-RECIPE_CONTRACT_GATE_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_GATE", False)
+# [P1-GATES-FLIP-ON · 2026-07-03] (audit v6 · P1-4) OFF→ON con serie del gym baseline: contract_ratio
+# 0.0 en 19/20 planes y 0.333 en 1 (< umbral 0.5) → el gate habría disparado retry en 0/20. El backstop
+# determinista mantiene el ratio ~0; el gate queda como red de seguridad sin costo.
+RECIPE_CONTRACT_GATE_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_GATE", True)
 RECIPE_CONTRACT_GATE_RATIO = _env_float("MEALFIT_RECIPE_CONTRACT_GATE_RATIO", 0.5)
 
 # [P2-RAW-STAPLE-PRESSURE · 2026-07-02] (audit v4 creatividad) `raw_staple_ratio` ("pollo hervido +

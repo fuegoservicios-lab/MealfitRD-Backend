@@ -332,10 +332,17 @@ def test_gapm1_consumer_banner_only():
     assert "_maybe_mark_panel_degraded" in ctx or "MICRO_PERDAY_DEGRADE_ENABLED" in ctx
 
 
-# ── GAP-M2: micro-closer per-día (knob OFF) ──────────────────────────────────
+# ── GAP-M2: micro-closer per-día ─────────────────────────────────────────────
 def test_gapm2_knob_born_off(go):
+    # [P1-GATES-FLIP-ON · 2026-07-03] (audit v6 · P1-4) el playbook medir→actuar se COMPLETÓ:
+    # el gym baseline midió 9/20 planes con worst-day floor → default de CÓDIGO ahora True.
+    # El runtime de la suite sigue OFF (baseline conftest) — este assert verifica ambos lados.
+    import re as _re_m2
+    _go_src_m2 = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert _re_m2.search(r'MICRO_CLOSER_PERDAY_ENABLED\s*=\s*_env_bool\("MEALFIT_MICRO_CLOSER_PERDAY",\s*True\)',
+                         _go_src_m2), "default de código ON tras P1-GATES-FLIP-ON"
     assert go.MICRO_CLOSER_PERDAY_ENABLED is False, \
-        "MEALFIT_MICRO_CLOSER_PERDAY nace OFF (playbook medir→actuar)"
+        "baseline de la suite OFF (conftest) — los fixtures históricos asumen closer promedio-only"
 
 
 def test_gapm2_floors_extension_wired():

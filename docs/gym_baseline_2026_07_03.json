@@ -1,0 +1,1323 @@
+{
+ "results": [
+  {
+   "id": 1,
+   "goal": "gain_muscle",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 693.0,
+   "score": {
+    "global": 93.2,
+    "axes": {
+     "banda": 100.0,
+     "micros": 75.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 70.0
+    },
+    "detail": {
+     "banda": {
+      "score": 100.0,
+      "cells_in_band_pct": 1.0,
+      "all4_days_pct": 1.0
+     },
+     "micros": {
+      "score": 75.0,
+      "gaps_bajo": 1,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": true,
+      "coverage": 0.83
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 15
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.562,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 70.0,
+      "state": "degraded_minor",
+      "reason": "micro_worst_day_ceiling"
+     }
+    }
+   }
+  },
+  {
+   "id": 2,
+   "goal": "gain_muscle",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 946.7,
+   "score": {
+    "global": 88.8,
+    "axes": {
+     "banda": 100.0,
+     "micros": 45.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 70.0
+    },
+    "detail": {
+     "banda": {
+      "score": 100.0,
+      "cells_in_band_pct": 1.0,
+      "all4_days_pct": 1.0
+     },
+     "micros": {
+      "score": 45.0,
+      "gaps_bajo": 4,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.82
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 15
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.49,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 70.0,
+      "state": "degraded_minor",
+      "reason": "micro_worst_day"
+     }
+    }
+   }
+  },
+  {
+   "id": 3,
+   "goal": "lose_fat",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 1212.4,
+   "score": {
+    "global": 84.6,
+    "axes": {
+     "banda": 83.33333333333334,
+     "micros": 53.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 88.33333333333333,
+     "presupuesto": 100.0,
+     "entrega": 70.0
+    },
+    "detail": {
+     "banda": {
+      "score": 83.33333333333334,
+      "cells_in_band_pct": 0.833,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 53.0,
+      "gaps_bajo": 2,
+      "gaps_alto": 1,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": true,
+      "coverage": 0.85
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 12
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 88.33333333333333,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.333,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.605,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 70.0,
+      "state": "degraded_minor",
+      "reason": "micro_worst_day_ceiling"
+     }
+    }
+   }
+  },
+  {
+   "id": 4,
+   "goal": "lose_fat",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 460.0,
+   "score": {
+    "global": 82.3,
+    "axes": {
+     "banda": 83.33333333333334,
+     "micros": 50.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 83.33333333333334,
+      "cells_in_band_pct": 0.833,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 50.0,
+      "gaps_bajo": 5,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.83
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 12
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.721,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 5,
+   "goal": "maintenance",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 745.9,
+   "score": {
+    "global": 78.5,
+    "axes": {
+     "banda": 50.0,
+     "micros": 80.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 50.0,
+      "cells_in_band_pct": 0.5,
+      "all4_days_pct": 0.333
+     },
+     "micros": {
+      "score": 80.0,
+      "gaps_bajo": 2,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.82
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 12
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.698,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 6,
+   "goal": "maintenance",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 646.3,
+   "score": {
+    "global": 74.4,
+    "axes": {
+     "banda": 66.66666666666666,
+     "micros": 25.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 66.66666666666666,
+      "cells_in_band_pct": 0.667,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 25.0,
+      "gaps_bajo": 6,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.73
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 11
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.656,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 7,
+   "goal": "gain_muscle",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 610.8,
+   "score": {
+    "global": 74.9,
+    "axes": {
+     "banda": 66.66666666666666,
+     "micros": 28.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 66.66666666666666,
+      "cells_in_band_pct": 0.667,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 28.0,
+      "gaps_bajo": 3,
+      "gaps_alto": 1,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": true,
+      "coverage": 0.84
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 11
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.576,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 8,
+   "goal": "lose_fat",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 775.7,
+   "score": {
+    "global": 81.0,
+    "axes": {
+     "banda": 75.0,
+     "micros": 55.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 75.0,
+      "cells_in_band_pct": 0.75,
+      "all4_days_pct": 0.333
+     },
+     "micros": {
+      "score": 55.0,
+      "gaps_bajo": 3,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.85
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 12
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.603,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 9,
+   "goal": "lose_fat",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 470.5,
+   "score": {
+    "global": 82.3,
+    "axes": {
+     "banda": 100.0,
+     "micros": 5.0,
+     "slots": 100.0,
+     "creatividad": 97.08333333333333,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 70.0
+    },
+    "detail": {
+     "banda": {
+      "score": 100.0,
+      "cells_in_band_pct": 1.0,
+      "all4_days_pct": 1.0
+     },
+     "micros": {
+      "score": 5.0,
+      "gaps_bajo": 8,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.83
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 12
+     },
+     "creatividad": {
+      "score": 97.08333333333333,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.083,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.666,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 70.0,
+      "state": "degraded_minor",
+      "reason": "micro_worst_day"
+     }
+    }
+   }
+  },
+  {
+   "id": 10,
+   "goal": "lose_fat",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 292.1,
+   "score": {
+    "global": 88.6,
+    "axes": {
+     "banda": 91.66666666666666,
+     "micros": 78.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 91.66666666666666,
+      "cells_in_band_pct": 0.917,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 78.0,
+      "gaps_bajo": 1,
+      "gaps_alto": 1,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.75
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 12
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.734,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 11,
+   "goal": "maintenance",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 678.6,
+   "score": {
+    "global": 77.4,
+    "axes": {
+     "banda": 66.66666666666666,
+     "micros": 45.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 66.66666666666666,
+      "cells_in_band_pct": 0.667,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 45.0,
+      "gaps_bajo": 4,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.78
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 11
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.645,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 12,
+   "goal": "maintenance",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 320.3,
+   "score": {
+    "global": 40.0,
+    "axes": {
+     "banda": 91.66666666666666,
+     "micros": 100.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": null,
+     "entrega": 0.0
+    },
+    "detail": {
+     "banda": {
+      "score": 91.66666666666666,
+      "cells_in_band_pct": 0.917,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 100.0,
+      "gaps_bajo": 0,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.15
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 9
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": null,
+     "entrega": {
+      "score": 0.0,
+      "state": "fallback"
+     }
+    }
+   }
+  },
+  {
+   "id": 13,
+   "goal": "lose_fat",
+   "conditions": [
+    "Diabetes tipo 2"
+   ],
+   "duration_s": 384.2,
+   "score": {
+    "global": 75.0,
+    "axes": {
+     "banda": 75.0,
+     "micros": 15.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 75.0,
+      "cells_in_band_pct": 0.75,
+      "all4_days_pct": 0.333
+     },
+     "micros": {
+      "score": 15.0,
+      "gaps_bajo": 7,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.81
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 9
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.649,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 14,
+   "goal": "lose_fat",
+   "conditions": [
+    "Diabetes tipo 2"
+   ],
+   "duration_s": 521.2,
+   "score": {
+    "global": 84.0,
+    "axes": {
+     "banda": 100.0,
+     "micros": 45.0,
+     "slots": 88.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 100.0,
+      "cells_in_band_pct": 1.0,
+      "all4_days_pct": 1.0
+     },
+     "micros": {
+      "score": 45.0,
+      "gaps_bajo": 4,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.69
+     },
+     "slots": {
+      "score": 88.0,
+      "hard_violations": 0,
+      "soft_violations": 1,
+      "meals_evaluated": 9
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.68,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 15,
+   "goal": "maintenance",
+   "conditions": [
+    "Hipertensión"
+   ],
+   "duration_s": 40.7,
+   "score": {
+    "global": 40.0,
+    "axes": {
+     "banda": 91.66666666666666,
+     "micros": 100.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": null,
+     "entrega": 0.0
+    },
+    "detail": {
+     "banda": {
+      "score": 91.66666666666666,
+      "cells_in_band_pct": 0.917,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 100.0,
+      "gaps_bajo": 0,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.15
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 9
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": null,
+     "entrega": {
+      "score": 0.0,
+      "state": "fallback"
+     }
+    }
+   }
+  },
+  {
+   "id": 16,
+   "goal": "lose_fat",
+   "conditions": [
+    "Hipertensión"
+   ],
+   "duration_s": 730.7,
+   "score": {
+    "global": 74.4,
+    "axes": {
+     "banda": 66.66666666666666,
+     "micros": 25.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 66.66666666666666,
+      "cells_in_band_pct": 0.667,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 25.0,
+      "gaps_bajo": 6,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.76
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 11
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.577,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 17,
+   "goal": "maintenance",
+   "conditions": [
+    "Enfermedad renal crónica"
+   ],
+   "duration_s": 591.2,
+   "score": {
+    "global": 69.2,
+    "axes": {
+     "banda": 50.0,
+     "micros": 18.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 50.0,
+      "cells_in_band_pct": 0.5,
+      "all4_days_pct": 0.333
+     },
+     "micros": {
+      "score": 18.0,
+      "gaps_bajo": 4,
+      "gaps_alto": 1,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": true,
+      "coverage": 0.69
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 10
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.522,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 18,
+   "goal": "maintenance",
+   "conditions": [
+    "Diabetes tipo 2",
+    "Hipertensión"
+   ],
+   "duration_s": 576.3,
+   "score": {
+    "global": 92.5,
+    "axes": {
+     "banda": 100.0,
+     "micros": 90.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 100.0,
+      "cells_in_band_pct": 1.0,
+      "all4_days_pct": 1.0
+     },
+     "micros": {
+      "score": 90.0,
+      "gaps_bajo": 1,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": false,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.75
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 9
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.65,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 19,
+   "goal": "performance",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 543.5,
+   "score": {
+    "global": 73.7,
+    "axes": {
+     "banda": 66.66666666666666,
+     "micros": 20.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 66.66666666666666,
+      "cells_in_band_pct": 0.667,
+      "all4_days_pct": 0.667
+     },
+     "micros": {
+      "score": 20.0,
+      "gaps_bajo": 5,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": true,
+      "coverage": 0.87
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 13
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.533,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  },
+  {
+   "id": 20,
+   "goal": "gain_muscle",
+   "conditions": [
+    "Ninguna"
+   ],
+   "duration_s": 261.8,
+   "score": {
+    "global": 71.2,
+    "axes": {
+     "banda": 41.66666666666667,
+     "micros": 45.0,
+     "slots": 100.0,
+     "creatividad": 100.0,
+     "coherencia": 100.0,
+     "presupuesto": 100.0,
+     "entrega": 40.0
+    },
+    "detail": {
+     "banda": {
+      "score": 41.66666666666667,
+      "cells_in_band_pct": 0.417,
+      "all4_days_pct": 0.333
+     },
+     "micros": {
+      "score": 45.0,
+      "gaps_bajo": 4,
+      "gaps_alto": 0,
+      "worst_day_floor_flag": true,
+      "worst_day_ceiling_flag": false,
+      "coverage": 0.74
+     },
+     "slots": {
+      "score": 100.0,
+      "hard_violations": 0,
+      "soft_violations": 0,
+      "meals_evaluated": 10
+     },
+     "creatividad": {
+      "score": 100.0,
+      "raw_staple_ratio": 0.0,
+      "low_quality_ratio": 0.0,
+      "unique_dish_ratio": 1.0
+     },
+     "coherencia": {
+      "score": 100.0,
+      "shopping_coherence_block": false,
+      "recipe_contract_violation_ratio": 0.0,
+      "empty_recipes": 0
+     },
+     "presupuesto": {
+      "score": 100.0,
+      "status": "dentro",
+      "ratio": 0.609,
+      "partial_pricing": false
+     },
+     "entrega": {
+      "score": 40.0,
+      "state": "review_failed_delivered"
+     }
+    }
+   }
+  }
+ ],
+ "aggregate": {
+  "n": 20,
+  "global_mean": 76.3,
+  "banda": {
+   "mean": 78.3,
+   "min": 41.7,
+   "n": 20
+  },
+  "micros": {
+   "mean": 49.9,
+   "min": 5.0,
+   "n": 20
+  },
+  "slots": {
+   "mean": 99.4,
+   "min": 88.0,
+   "n": 20
+  },
+  "creatividad": {
+   "mean": 99.9,
+   "min": 97.1,
+   "n": 20
+  },
+  "coherencia": {
+   "mean": 99.4,
+   "min": 88.3,
+   "n": 20
+  },
+  "presupuesto": {
+   "mean": 100.0,
+   "min": 100.0,
+   "n": 18
+  },
+  "entrega": {
+   "mean": 42.0,
+   "min": 0.0,
+   "n": 20
+  },
+  "worst_profiles": [
+   {
+    "id": 12,
+    "global": 40.0,
+    "axes": {
+     "entrega": 0.0
+    }
+   },
+   {
+    "id": 15,
+    "global": 40.0,
+    "axes": {
+     "entrega": 0.0
+    }
+   },
+   {
+    "id": 17,
+    "global": 69.2,
+    "axes": {
+     "banda": 50.0,
+     "micros": 18.0,
+     "entrega": 40.0
+    }
+   }
+  ]
+ }
+}
