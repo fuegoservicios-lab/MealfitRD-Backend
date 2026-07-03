@@ -672,6 +672,11 @@ P0_4_T2_INCREMENTAL_KEYS = (
     # Set in T1 by the worker (cron_tasks.py:16124) and must survive T2's
     # fresh-read overlay so the UI/admin sees the chunk-level annotation.
     '_pantry_quantity_violations',
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Costo + reconciliación de presupuesto
+    # recomputados en T2 post-merge junto a las listas (sin estas keys, el overlay
+    # descartaba el refresh y el Dashboard quedaba anclado a la extrapolación semana 1).
+    'shopping_cost_summary',
+    'budget_reconciliation',
 )
 
 
@@ -11382,6 +11387,41 @@ def _extract_missing_ingredients_from_violation(violation_str) -> list:
     return out
 
 
+def _compute_cost_summary_jsonb_extras(plan_data, aggr_7, aggr_15, aggr_30, grocery_duration, *, label=""):
+    """[P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Recomputa `shopping_cost_summary` +
+    `budget_reconciliation` cuando un sitio cron reescribe las 4 listas vía jsonb_set,
+    y devuelve `(keys, params)` para anexar como jsonb_set adicionales al UPDATE.
+    Sin esto, los sitios cron (pantry-supplement persist/clear, recovery GAP-F, T2)
+    dejaban el total del Dashboard y el banner de presupuesto anclados al costo viejo.
+    Muta `plan_data` in-place (summary + reconciliación refrescada). Si el summary es
+    None (knob OFF / sin precios) devuelve vacío — jamás clobbear con null. Fail-open."""
+    keys, params = [], []
+    try:
+        from shopping_calculator import compute_shopping_cost_summary as _ccs_extras
+        from nutrition_calculator import refresh_budget_reconciliation as _rbr_extras
+        _sum = _ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration)
+        if _sum:
+            plan_data["shopping_cost_summary"] = _sum
+            keys.append("shopping_cost_summary")
+            params.append(json.dumps(_sum, ensure_ascii=False))
+            _rbr_extras(plan_data)
+            _rec = plan_data.get("budget_reconciliation")
+            if isinstance(_rec, dict):
+                keys.append("budget_reconciliation")
+                params.append(json.dumps(_rec, ensure_ascii=False))
+    except Exception as _extras_e:
+        logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-C1{label}) cost summary no-op: {_extras_e}")
+    return keys, params
+
+
+def _wrap_jsonb_set_expr(base_expr: str, keys) -> str:
+    """[P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Envuelve una expresión jsonb_set con
+    keys adicionales (set cerrado interno — nunca user input)."""
+    for _k in keys:
+        base_expr = "jsonb_set(" + base_expr + ", '{" + _k + "}', %s::jsonb, true)"
+    return base_expr
+
+
 def _persist_pantry_supplement_to_plan_data(
     meal_plan_id, user_id, missing_list: list, *, source: str = "chunk_worker"
 ) -> bool:
@@ -11508,10 +11548,12 @@ def _persist_pantry_supplement_to_plan_data(
             logger.warning(f"[P2-COHERENCE-PANTRY-SUPPLEMENT] guard de coherencia falló (no bloquea): "
                            f"{type(_coh_e).__name__}: {_coh_e}")
 
-        execute_sql_write(
-            """
-            UPDATE meal_plans
-            SET plan_data = jsonb_set(
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Costo + reconciliación junto a las listas.
+        _ps_extra_keys, _ps_extra_params = _compute_cost_summary_jsonb_extras(
+            plan_data, aggr_7, aggr_15, aggr_30, grocery_duration, label="/pantry-supplement",
+        )
+        _ps_set_expr = _wrap_jsonb_set_expr(
+            """jsonb_set(
                     jsonb_set(
                         jsonb_set(
                             jsonb_set(
@@ -11536,18 +11578,19 @@ def _persist_pantry_supplement_to_plan_data(
                     '{aggregated_shopping_list}',
                     %s::jsonb,
                     true
-                )
-            WHERE id = %s AND user_id = %s
-            """,
-            (
+                )""",
+            _ps_extra_keys,
+        )
+        execute_sql_write(
+            "UPDATE meal_plans SET plan_data = " + _ps_set_expr +
+            " WHERE id = %s AND user_id = %s",
+            tuple([
                 json.dumps(merged, ensure_ascii=False),
                 json.dumps(aggr_7, ensure_ascii=False),
                 json.dumps(aggr_15, ensure_ascii=False),
                 json.dumps(aggr_30, ensure_ascii=False),
                 json.dumps(aggr_active, ensure_ascii=False),
-                meal_plan_id,
-                user_id,  # [NG-4] I2
-            ),
+            ] + _ps_extra_params + [meal_plan_id, user_id]),  # [NG-4] I2
         )
         logger.info(
             f"[P0-A/{source}] _pantry_supplement_required persistido a plan "
@@ -11642,10 +11685,12 @@ def _clear_pantry_supplement_from_plan_data(
                 logger.warning(f"[P2-COHERENCE-PANTRY-SUPPLEMENT] guard de coherencia falló (no bloquea): "
                                f"{type(_coh_e).__name__}: {_coh_e}")
 
-            execute_sql_write(
-                """
-                UPDATE meal_plans
-                SET plan_data = jsonb_set(
+            # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Costo + reconciliación junto a las listas.
+            _cs_extra_keys, _cs_extra_params = _compute_cost_summary_jsonb_extras(
+                plan_data, aggr_7, aggr_15, aggr_30, grocery_duration, label="/pantry-clear",
+            )
+            _cs_set_expr = _wrap_jsonb_set_expr(
+                """jsonb_set(
                         jsonb_set(
                             jsonb_set(
                                 jsonb_set(
@@ -11665,17 +11710,18 @@ def _clear_pantry_supplement_from_plan_data(
                         '{aggregated_shopping_list}',
                         %s::jsonb,
                         true
-                    )
-                WHERE id = %s AND user_id = %s
-                """,
-                (
+                    )""",
+                _cs_extra_keys,
+            )
+            execute_sql_write(
+                "UPDATE meal_plans SET plan_data = " + _cs_set_expr +
+                " WHERE id = %s AND user_id = %s",
+                tuple([
                     json.dumps(aggr_7, ensure_ascii=False),
                     json.dumps(aggr_15, ensure_ascii=False),
                     json.dumps(aggr_30, ensure_ascii=False),
                     json.dumps(aggr_active, ensure_ascii=False),
-                    meal_plan_id,
-                    user_id,  # [NG-4] I2
-                ),
+                ] + _cs_extra_params + [meal_plan_id, user_id]),  # [NG-4] I2
             )
         except Exception as _calc_err:
             # Si el recálculo falla, al menos quita el flag del plan_data; el
@@ -18369,14 +18415,20 @@ def _process_pending_shopping_lists():
                     aggr_15_hybrid = aggr_15
                     aggr_30_hybrid = aggr_30
 
-                grocery_duration = form_data.get("groceryDuration", "weekly")
+                # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C2) SSOT calc_grocery_duration primero
+                # (plan_data viene del row de meal_plans, no del snapshot congelado): si el usuario
+                # cambió duración vía /recalculate, este recovery revertía el puntero de lista activa.
+                grocery_duration = (
+                    plan_data.get("calc_grocery_duration")
+                    or (form_data or {}).get("groceryDuration", "weekly")
+                )
                 if grocery_duration == "biweekly":
                     aggr_active = aggr_15_hybrid
                 elif grocery_duration == "monthly":
                     aggr_active = aggr_30_hybrid
                 else:
                     aggr_active = aggr_7
-                    
+
                 # [P2-COHERENCE-RECOVERY-GAP-F · 2026-06-18] (audit fresco P2) Telemetría de coherencia
                 # write-time para el recovery de planes 'partial_no_shopping' (reconstruye las 4 listas con
                 # el mismo aggregator que assemble). Modo WARN (no bloquea: recovery cron, sin LLM en loop;
@@ -18405,15 +18457,21 @@ def _process_pending_shopping_lists():
                 # contra el riesgo de reusar este UPDATE como template para
                 # un endpoint user-facing futuro (donde la omisión sí abriría
                 # IDOR). El `user_id` ya viene del SELECT inicial (línea ~14218).
+                # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Costo + reconciliación recomputados
+                # junto a las listas (antes el recovery persistía listas nuevas con el summary
+                # viejo). jsonb_set condicional vía helper compartido — jamás clobbear con null.
+                _gapf_extra_keys, _gapf_extra_params = _compute_cost_summary_jsonb_extras(
+                    plan_data, aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,
+                    label="/recovery-gap-f",
+                )
+
                 # [P2-RECOVERY-CRON-STALE-WINDOW · 2026-06-22] (audit fresco P2-19) `generation_status` se
                 # computa AHORA con un CASE en SQL que relee `total_days_generated`/`total_days_requested`
                 # FRESCOS del row al momento del UPDATE — no del snapshot Python del SELECT inicial. Cierra la
                 # ventana stale donde /shift-plan o el chunk worker T2 modificaban `total_days_generated`
                 # entre el SELECT y este WRITE → status incoherente. jsonb_set sigue siendo key-surgical
                 # (I7-exento) + AND user_id (I2) + CHECK I8 lo respalda. tooltip-anchor: P2-RECOVERY-CRON-STALE-WINDOW
-                execute_sql_write("""
-                    UPDATE meal_plans
-                    SET plan_data = jsonb_set(
+                _gapf_set_expr = """jsonb_set(
                         jsonb_set(
                             jsonb_set(
                                 jsonb_set(
@@ -18430,16 +18488,18 @@ def _process_pending_shopping_lists():
                                       >= COALESCE(NULLIF(plan_data->>'total_days_requested', '')::int, 7)
                                  THEN 'complete' ELSE 'partial' END
                         )
-                    )
-                    WHERE id = %s AND user_id = %s
-                """, (
-                    json.dumps(aggr_7, ensure_ascii=False),
-                    json.dumps(aggr_15_hybrid, ensure_ascii=False),
-                    json.dumps(aggr_30_hybrid, ensure_ascii=False),
-                    json.dumps(aggr_active, ensure_ascii=False),
-                    meal_plan_id,
-                    user_id,
-                ))
+                    )"""
+                _gapf_set_expr = _wrap_jsonb_set_expr(_gapf_set_expr, _gapf_extra_keys)
+                execute_sql_write(
+                    "UPDATE meal_plans SET plan_data = " + _gapf_set_expr +
+                    " WHERE id = %s AND user_id = %s",
+                    tuple([
+                        json.dumps(aggr_7, ensure_ascii=False),
+                        json.dumps(aggr_15_hybrid, ensure_ascii=False),
+                        json.dumps(aggr_30_hybrid, ensure_ascii=False),
+                        json.dumps(aggr_active, ensure_ascii=False),
+                    ] + _gapf_extra_params + [meal_plan_id, user_id]),
+                )
                 logger.info(f" [GAP F] Shopping list recuperada para plan {meal_plan_id} "
                             f"(status snapshot={_snapshot_status}; el WRITE recomputó fresco en SQL).")
             except Exception as e:
@@ -30861,7 +30921,16 @@ def process_plan_chunk_queue(target_plan_id=None):
                         aggr_15_hybrid = aggr_15
                         aggr_30_hybrid = aggr_30
 
-                    grocery_duration = form_data.get("groceryDuration", "weekly")
+                    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C2) SSOT calc_grocery_duration primero:
+                    # si el usuario cambió duración vía /recalculate mid-cycle, el form_data del
+                    # pipeline_snapshot está congelado en la duración de generación y este persist
+                    # revertía el puntero de lista activa (SupermarketBrands + guard consumían la
+                    # duración stale). Mismo patrón que el shift background (:11483) y plans.py:5018.
+                    # full_plan_data viene del RETURNING fresco del UPDATE atómico (:30802).
+                    grocery_duration = (
+                        full_plan_data.get("calc_grocery_duration")
+                        or (form_data or {}).get("groceryDuration", "weekly")
+                    )
                     if grocery_duration == "biweekly":
                         aggr_active = aggr_15_hybrid
                     elif grocery_duration == "monthly":
@@ -30924,6 +30993,22 @@ def process_plan_chunk_queue(target_plan_id=None):
                             f"(plan={meal_plan_id}, week={week_number}, divergences={len(_t2_divergences or [])}); "
                             f"retry vía _SHOP_MAX_RETRIES."
                         )
+
+                    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Refresco de shopping_cost_summary +
+                    # budget_reconciliation tras reescribir las 4 listas (P1-BUDGET-COST-SSOT no cubría
+                    # los sitios cron): sin esto, en planes biweekly/monthly el total del Dashboard y el
+                    # banner dentro/cerca/excedido quedaban anclados a la extrapolación de la semana 1.
+                    # full_plan_data se persiste después bajo el lock I7 de T2 → mutar el dict basta.
+                    # Fail-open (mismo patrón que plans.py:5053-5059).
+                    try:
+                        from shopping_calculator import compute_shopping_cost_summary as _ccs_t2
+                        from nutrition_calculator import refresh_budget_reconciliation as _rbr_t2
+                        _sum_t2 = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration)
+                        if _sum_t2:
+                            full_plan_data["shopping_cost_summary"] = _sum_t2
+                            _rbr_t2(full_plan_data)
+                    except Exception as _sum_t2_e:
+                        logger.debug(f"[P2-AUDIT-V5-BATCH] (T2) cost summary no-op: {_sum_t2_e}")
 
                     shopping_list_ok = True
                     logger.info(f"[CHUNK/GAP2] Shopping list consolidada recalculada para {new_total} dias (intento {_shop_attempt}).")

@@ -584,6 +584,50 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             }
     except Exception:
         per_day_floors = None
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M1) Resumen worst-day de TECHOS — espejo compacto de
+    # per_day_floors, que saltaba explícitamente todo target con 'ceiling': un día-pico de sodio
+    # (6 días a 1500mg + 1 a 4400mg → promedio 1914 "ok") o de POTASIO en ERC (donde el riesgo de
+    # hiperkalemia es AGUDO per-día y la conversión floor→ceiling lo sacaba del único chequeo
+    # per-día existente) era invisible para todos los consumidores (todos leen el promedio).
+    # SOLO observabilidad/banner — jamás retry ni trim (respeta la decisión G9 techo-no-duro y
+    # P2-RENAL-POTASSIUM-DETERMINISTIC). El per-día de sodio hereda la subestimación por
+    # sal-al-gusto (misma semántica 'estimado' del panel). Un solo micro excedido ya flaggea
+    # (los excesos agudos no requieren co-ocurrencia, a diferencia de los pisos).
+    per_day_ceilings = None
+    try:
+        import os as _os_pc
+        _pc_ratio = min(3.0, max(1.0, float(_os_pc.environ.get("MEALFIT_MICRO_PERDAY_CEILING_RATIO", "1.5"))))
+        _pc_days = totals.get("per_day") or []
+        if len(_pc_days) >= 2 and coverage >= 0.6:
+            _pc_high_by_day = []
+            for _pc_vals in _pc_days:
+                _highs = []
+                for _pk, _ptgt in targets.items():
+                    if "ceiling" not in _ptgt:
+                        continue
+                    if nutrient_coverage.get(_pk, coverage) < _CEILING_COVERAGE_FLOOR:
+                        continue  # cobertura por-nutriente incierta → no acusar el día
+                    try:
+                        _ceil_v = float(_ptgt["ceiling"])
+                        if _ceil_v > 0 and float(_pc_vals.get(_pk, 0.0)) > _ceil_v * _pc_ratio:
+                            _highs.append(_pk)
+                    except (TypeError, ValueError):
+                        continue
+                _pc_high_by_day.append(_highs)
+            _worst_c_idx = max(range(len(_pc_high_by_day)), key=lambda i: len(_pc_high_by_day[i]))
+            _days_above = sum(1 for _h in _pc_high_by_day if _h)
+            per_day_ceilings = {
+                "days_evaluated": len(_pc_days),
+                "high_ratio_threshold": _pc_ratio,
+                "worst_day": {
+                    "day_index": _worst_c_idx,
+                    "high": _pc_high_by_day[_worst_c_idx],
+                },
+                "days_above": _days_above,
+                "flagged": bool(_pc_high_by_day[_worst_c_idx]),
+            }
+    except Exception:
+        per_day_ceilings = None
     return {
         "panel": panel,
         "gaps": gaps,
@@ -592,6 +636,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
         "total_ings": totals["total_ings"],
         "sex": "M" if str(sex or "").strip().lower() in _MALE_TERMS else "F",
         "condition_targets": condition_targets,
+        "per_day_ceilings": per_day_ceilings,  # [P2-AUDIT-V5-BATCH GAP-M1]
         "per_day_floors": per_day_floors,  # [P1-MICRO-PERDAY-FLOOR]
         "disclaimer": ("Estimado desde el catálogo nutricional (cobertura "
                        f"{int(coverage*100)}%); NO incluye la sal añadida 'al gusto'. "

@@ -529,6 +529,32 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 # TOOL: Modificar una comida individual del plan activo
 # ============================================================
 
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-11) Detección de proteína principal repetida same-day —
+# espejo del backstop de swap (agent.py, P2-UPDATE-SAMEDAY-VARIETY). Mantener el dict de sinónimos
+# en sync MANUAL con el _SD_PROT de agent.py. Word-boundary + accent-strip (anti 'res'-en-'fresas').
+_SD_PROT_SYNS_CM = {
+    "pollo": ("pollo", "pechuga", "muslo"), "cerdo": ("cerdo", "chuleta", "longaniza"),
+    "res": ("res", "bistec", "molida", "churrasco"), "pavo": ("pavo",),
+    "pescado": ("pescado", "tilapia", "salmon", "mero", "bacalao", "chillo", "merluza"),
+    "camarones": ("camaron", "camarones"), "atun": ("atun",),
+    "huevo": ("huevo", "huevos", "revoltillo"),
+}
+
+
+def _detect_same_day_protein_repeat(meal_name: str, other_names: list) -> str | None:
+    """(GAP-11) Devuelve la proteína canónica si `meal_name` repite la proteína principal de
+    alguna de las `other_names` (otras comidas del mismo día); None si no hay repetición."""
+    _name = strip_accents(str(meal_name or "").lower())
+    _prot = next((c for c, syns in _SD_PROT_SYNS_CM.items()
+                  if any(re.search(r"\b" + s + r"\b", _name) for s in syns)), None)
+    if not _prot:
+        return None
+    _blob = strip_accents(" ".join(str(x) for x in (other_names or [])).lower())
+    if any(re.search(r"\b" + s + r"\b", _blob) for s in _SD_PROT_SYNS_CM[_prot]):
+        return _prot
+    return None
+
+
 def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str, form_data: dict = None, allow_pantry_expansion: bool = False) -> str:
     """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
     logger.debug(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
@@ -663,6 +689,34 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 )
         except Exception as _clin_load_e:
             logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se procesó perfil clínico (no bloquea): {_clin_load_e}")
+
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-07) Presupuesto en chat-modify con expansión: la única
+    # superficie de update que realmente "va de compras" no llevaba señal de presupuesto — la tabla
+    # de precios (arriba) solo se usaba "si el usuario pide opciones económicas". Paridad con
+    # form-gen (build_budget_context + cheapen-pass, g_o). El form_data del chat puede venir sin
+    # budget → hidratamos desde health_profile antes de evaluar budget_prefers_economy.
+    _bud_form = dict(form_data or {})
+    if isinstance(_hp, dict):
+        for _bk in ("budget", "budgetAmount", "budgetCurrency", "groceryDuration", "householdSize"):
+            if not _bud_form.get(_bk) and _hp.get(_bk) is not None:
+                _bud_form[_bk] = _hp.get(_bk)
+    _bud_economy = False
+    if allow_pantry_expansion:
+        try:
+            from nutrition_calculator import budget_prefers_economy as _bpe_cm
+            _bud_economy = bool(_bpe_cm(_bud_form))
+            if _bud_economy:
+                from prompts.plan_generator import build_budget_context as _bbc_cm
+                _bud_block = _bbc_cm(_bud_form) or ""
+                context_extras = (
+                    ("\n" + _bud_block.strip() + "\n" if _bud_block.strip() else "\n")
+                    + "💰 OBLIGATORIO (presupuesto ajustado): al elegir ingredientes nuevos para este "
+                      "plato, prioriza los más económicos de la tabla de precios — evita cortes premium "
+                      "(salmón, lomo fino, almendras) si existe un equivalente nutricional más barato.\n"
+                    + context_extras
+                )
+        except Exception as _bud_ctx_e:
+            logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-07) budget context (modify) falló: {_bud_ctx_e}")
 
     # [P1-UPDATE-SUPERPERS · 2026-06-23] (audit inteligencia P1-4) Inyectar súper-personalización
     # (gustos/cocina/religión/equipo) al prompt del modify — paridad con S1 y con swap.
@@ -924,6 +978,25 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # fail-open — en el abort duro de "FALLO POR INVENTARIO"). tooltip-anchor: P1-CHAT-SLOT-BACKSTOP
     _slot_attempt = [0]
 
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-11) Nombres de las OTRAS comidas del MISMO día —
+    # compartido por el backstop determinista same-day (dentro de invoke_with_retry) y el
+    # advisory final. El seed del prompt (P2-UPDATE-SAMEDAY-VARIETY) era solo "preferencia
+    # fuerte"; swap ya tenía el backstop (agent.py) y chat-modify no.
+    def _sd_other_names_cm() -> list:
+        _names = []
+        try:
+            for _od_sd in (plan_data.get("days") or []):
+                if isinstance(_od_sd, dict) and _od_sd.get("day") == day_number:
+                    for _om_sd in (_od_sd.get("meals") or []):
+                        if (isinstance(_om_sd, dict) and _om_sd is not target_meal
+                                and str(_om_sd.get("meal", "")).lower().strip() != str(meal_type).lower().strip()
+                                and str(_om_sd.get("name", "")).strip()):
+                            _names.append(str(_om_sd.get("name")))
+                    break
+        except Exception:
+            return []
+        return _names
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
@@ -1131,6 +1204,41 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             raise
         except Exception as _clash_exc:
             logger.warning(f"[P2-CHATMODIFY-CLASH-RETRY] clash-retry en modify falló (no aborta): {type(_clash_exc).__name__}: {_clash_exc}")
+
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-11) Backstop determinista de proteína repetida
+        # same-day — espejo de agent.py (P2-UPDATE-SAMEDAY-VARIETY, backstop de swap): el seed
+        # del prompt era solo "preferencia fuerte" y si el LLM lo ignoraba el plato repetido se
+        # entregaba sin retry ni telemetría. Skip pantry-strict (repetir puede ser inevitable
+        # cocinando de la nevera — mismo criterio que swap) y skip si el usuario pidió esa
+        # proteína explícitamente en `changes`. Single-retry vía marker (anti-loop); en el
+        # intento final degrada al advisory post-loop. NUNCA fallback por esto.
+        try:
+            from graph_orchestrator import UPDATE_APPETIBILITY_GUARD as _sd_guard_cm
+            if _sd_guard_cm and not (clean_ingredients and not allow_pantry_expansion):
+                _sd_dump_m = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                _sd_others_m = _sd_other_names_cm()
+                _rep_prot_m = _detect_same_day_protein_repeat(_sd_dump_m.get("name", ""), _sd_others_m)
+                if _rep_prot_m:
+                    _ch_low_sd = strip_accents(str(changes or "").lower())
+                    _user_asked_sd = any(
+                        re.search(r"\b" + _s + r"\b", _ch_low_sd) for _s in _SD_PROT_SYNS_CM[_rep_prot_m]
+                    )
+                    _SD_MARKER_CM = "🔄 RETRY VARIEDAD DEL DÍA"
+                    if not _user_asked_sd:
+                        if _SD_MARKER_CM not in str(current_prompt[0]) and _slot_attempt[0] < 3:
+                            current_prompt[0] = modify_prompt + (
+                                f"\n\n{_SD_MARKER_CM} (OBLIGATORIO): el plato que devolviste repite la proteína "
+                                f"«{_rep_prot_m}» que OTRA comida de ESE día ya usa ({', '.join(_sd_others_m[:3])}). "
+                                f"Propón un plato con una proteína principal DISTINTA. Mantén los macros objetivo."
+                            )
+                            raise ValueError(f"SAME_DAY_PROTEIN_REPEAT: {_rep_prot_m}")
+                        logger.info(f"🔄 [P2-AUDIT-V5-BATCH] (GAP-11) modify repite '{_rep_prot_m}' tras el retry — "
+                                    f"entregado con advisory | day={day_number} meal={meal_type}")
+        except ValueError:
+            raise
+        except Exception as _sd_cm_e:
+            logger.warning(f"[P2-AUDIT-V5-BATCH] (GAP-11) backstop same-day en modify falló (no aborta): "
+                           f"{type(_sd_cm_e).__name__}: {_sd_cm_e}")
 
         return res
 
@@ -1405,6 +1513,19 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             except Exception as _slf_e:
                 logger.warning(f"[P1-CHAT-SLOT-BACKSTOP] flag advisory de slot en modify falló (no bloquea): {type(_slf_e).__name__}: {_slf_e}")
 
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-11) Advisory final same-day — espejo del flag
+        # `_same_day_protein_advisory` de swap (agent.py): si tras el retry el plato entregado
+        # AÚN repite la proteína de otra comida del día, marca telemetría. No bloquea.
+        try:
+            from graph_orchestrator import UPDATE_APPETIBILITY_GUARD as _sd_gf_cm
+            if _sd_gf_cm and _detect_same_day_protein_repeat(
+                    new_meal_data.get("name", ""), _sd_other_names_cm()):
+                new_meal_data["_same_day_protein_advisory"] = True
+                logger.info(f"🔄 [P2-AUDIT-V5-BATCH] (GAP-11) plato de modify repite proteína del día "
+                            f"(advisory) | day={day_number} meal={meal_type}")
+        except Exception as _sd_gf_e:
+            logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-11) advisory same-day en modify no-op: {_sd_gf_e}")
+
         # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Finalizadores de
         # coherencia de RECETA que assemble corre en form-gen pero el chat-modify no: veg-fantasma en los PASOS →
         # ingredients[] (se compra + cuenta macros), 'lonja de queso' → gramos, cap de hojas infladas. Espejo per-meal
@@ -1432,6 +1553,27 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] finalizador de receta en modify falló (no bloquea): {type(_fin_me).__name__}: {_fin_me}")
+
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-07) Backstop determinista de economía: cuando el
+        # usuario autorizó expansión ("va de compras") y su presupuesto es ajustado, el cheapen-pass
+        # de form-gen (sustituciones curadas premium→económico, allergen/dislike-safe) corre sobre el
+        # plato ANTES de colocarlo en plan_data — así las listas, el cost summary y la reconciliación
+        # de abajo reflejan las sustituciones. Si sustituyó, re-truth-up de macros del plato (los
+        # macros persistidos no quedan del ingrediente premium original). Fail-open.
+        if allow_pantry_expansion and _bud_economy and isinstance(new_meal_data, dict):
+            try:
+                from graph_orchestrator import _apply_budget_cheapen_pass as _cheapen_cm
+                _n_cheap = _cheapen_cm([{"meals": [new_meal_data]}], _bud_form)
+                if _n_cheap:
+                    try:
+                        from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu_cheap
+                        from nutrition_db import IngredientNutritionDB as _CHDB
+                        _tu_cheap(new_meal_data, _CHDB())
+                    except Exception as _tu_ch_e:
+                        logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-07) truth-up post-cheapen falló: {_tu_ch_e}")
+                    logger.info(f"💰 [P2-AUDIT-V5-BATCH] (GAP-07) cheapen-pass en chat-modify: {_n_cheap} sustitución(es) económica(s)")
+            except Exception as _cheap_cm_e:
+                logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-07) cheapen-pass (chat) no-op: {_cheap_cm_e}")
 
         target_day["meals"][target_meal_index] = new_meal_data
 

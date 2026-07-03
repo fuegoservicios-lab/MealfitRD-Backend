@@ -68,11 +68,14 @@ def test_b3_vita_selenium_closer_keys_with_ul():
 
 
 def test_b3_vita_selenium_renal_skip():
-    i = _GRAPH.find('if _renal and k in ("magnesium_mg"')
-    assert i != -1
-    seg = _GRAPH[i:i + 300]
-    assert "vit_a_mcg" in seg and "selenium_mcg" in seg, \
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M2) el tuple inline del skip renal se extrajo al
+    # SSOT `_MICRO_CLOSER_RENAL_EXCLUDED` (compartido con el targeting per-día del closer);
+    # el anchor verifica la misma invariante sobre el frozenset + su uso en el loop de floors.
+    assert "vit_a_mcg" in go._MICRO_CLOSER_RENAL_EXCLUDED and \
+        "selenium_mcg" in go._MICRO_CLOSER_RENAL_EXCLUDED, \
         "vit A se acumula en ERC — debe estar en el skip renal del closer"
+    assert "if _renal and k in _MICRO_CLOSER_RENAL_EXCLUDED" in _GRAPH, \
+        "el loop de floors del closer debe usar el SSOT del skip renal"
 
 
 # ───────────────────────────── Grupo C · slots ─────────────────────────────

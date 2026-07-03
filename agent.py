@@ -1060,9 +1060,14 @@ def swap_meal(form_data: dict):
     # actualizar platos cocinan con lo que hay en la NEVERA — TODOS los motivos deben ser
     # pantry-strict, incluidos cravings/weekend (antes exentos para permitir ingredientes
     # externos). `swap_meal` es EXCLUSIVO de esos botones (el chat usa
-    # execute_modify_single_meal), así que el cambio no afecta otros surfaces. Dark-ship:
-    # default OFF en código (preserva legacy + tests cravings/weekend) → ON en prod vía .env.
-    _strict_all = os.environ.get("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "false").strip().lower() in ("1", "true", "yes", "on")
+    # execute_modify_single_meal), así que el cambio no afecta otros surfaces.
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-14) Default OFF→ON en código, mismo patrón
+    # P1-VERIFIED-ONLY-DEFAULT-ON: el knob corre ON en prod vía .env desde 2026-06-23
+    # (decisión D2 del owner "strict-pantry todos los motivos") y el dark-ship OFF-en-código
+    # era la regresión silenciosa ".env reseteado ⇒ cravings/weekend vuelven a comprar".
+    # Baseline legacy preservado en tests/conftest.py. Rollback sin redeploy:
+    # MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS=false.
+    _strict_all = os.environ.get("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "true").strip().lower() in ("1", "true", "yes", "on")
     strict_pantry = True if _strict_all else (swap_reason not in ("cravings", "weekend"))
 
     # [P2-SWAP-CONSISTENCY · 2026-05-22] Tolerancia de ingredientes externos
@@ -1416,6 +1421,38 @@ def swap_meal(form_data: dict):
                     "(Mise en place / El Toque de Fuego con tiempo / Montaje). Mantén los macros objetivo."
                 )
                 raise ValueError("DISH_QUALITY: " + str(_dq_reason)[:100])
+
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-13) Presión anti-raw-staple en swap: form-gen subió
+        # el detector a soft-gate ON (P2-RAW-STAPLE-PRESSURE) pero el swap solo corría dish-quality,
+        # que POR DISEÑO no ve staples desnudos ("un 'Pollo a la Plancha' real puntuaba alto",
+        # comentario del detector). En swap el output es UNA comida (ratio efectivo 1.0) y es la
+        # superficie donde el usuario pidió explícitamente cambiar el plato — merece la presión de
+        # creatividad. Single-retry vía marker (cosmético: en el reintento se entrega con log
+        # advisory, NUNCA fallback); skip pantry-strict (transformar exige ingredientes que quizá
+        # no hay); el ValueError NO cuenta como CB failure (P2-CB-GUARDRAIL-NOT-FAILURE).
+        # Rollback sin redeploy: MEALFIT_SWAP_RAW_STAPLE_PRESSURE=false. chat-modify queda advisory
+        # (deseo del usuario manda — mismo criterio que slot/dish-quality).
+        # tooltip-anchor: P2-AUDIT-V5-BATCH-RAW-STAPLE-SWAP
+        if (os.environ.get("MEALFIT_SWAP_RAW_STAPLE_PRESSURE", "true").strip().lower() in ("1", "true", "yes", "on")
+                and not (strict_pantry and not clean_ingredients)):
+            try:
+                from graph_orchestrator import _meal_raw_staple_issue as _mrsi_sw
+                _rs_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                _rs_raw, _rs_reason = _mrsi_sw(_rs_dump)
+            except Exception:
+                _rs_raw, _rs_reason = False, None
+            if _rs_raw:
+                _RS_MARKER = "🍳 RETRY PLATO TRANSFORMADO"
+                if _RS_MARKER not in str(_current_prompt[0]):
+                    _current_prompt[0] = prompt_text + (
+                        f"\n\n{_RS_MARKER} (OBLIGATORIO): el plato anterior es un staple sin transformar "
+                        f"({str(_rs_reason)[:80]}). Conviértelo en una preparación dominicana REAL — guiso, "
+                        "locrio, revoltillo, arepitas, bollitos, al horno con majado — manteniendo los "
+                        "macros objetivo y los mismos ingredientes base."
+                    )
+                    raise ValueError("RAW_STAPLE: " + str(_rs_reason)[:100])
+                logger.info(f"🍳 [P2-AUDIT-V5-BATCH] (GAP-13) swap sigue raw-staple tras el retry — "
+                            f"entregado con advisory | meal_type={meal_type}")
 
         # [P2-UPDATE-SAMEDAY-VARIETY · 2026-07-01] (audit slots GAP-4 / paridad GAP-4) La variedad same-day en
         # swap era SOLO prompt ("preferencia") → «cámbiame la cena» devolvía pechuga cuando el almuerzo YA era

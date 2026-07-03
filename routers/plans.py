@@ -4444,6 +4444,11 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     if not isinstance(days_fresh, list):
                         return False
 
+                    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C3) flag mutable: True si el append
+                    # realmente añadió ingredientes (el dedup laxo puede hacerlo no-op) → dispara
+                    # el rebuild inline de listas al final del callback.
+                    _expand_list_dirty = {"v": False}
+
                     def _append_expand_veg(_meal: dict) -> None:
                         # [P2-EXPAND-FINALIZE] persiste los veg que el finalizer añadió desde los pasos
                         # expandidos (APPEND-only + dedup laxo → no clobbea ingredients/ingredients_raw existentes).
@@ -4460,9 +4465,12 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                     _meal["ingredients_raw"].append(_ai)
                         # [P2-EXPAND-VEG-TRUTHUP · 2026-07-01] (audit recetas P2-1) el append no recomputaba
                         # macros → el veg añadido (≤60 kcal/100g) quedaba fuera de protein/carbs/fats/cals del
-                        # meal persistido. Truth-up del meal tocado (las listas agregadas las reconcilia el
-                        # próximo /recalculate — mismo contrato diferido que el swap). tooltip-anchor: P2-EXPAND-VEG-TRUTHUP
+                        # meal persistido. Truth-up del meal tocado. Las listas agregadas se rebuild-ean
+                        # inline al final del callback (P2-AUDIT-V5-BATCH GAP-C3 — el contrato diferido
+                        # al /recalculate del frontend que citaba este comment fue reemplazado por
+                        # P1-UPDATE-LIST-INLINE-RECALC y quedó solo como fallback). tooltip-anchor: P2-EXPAND-VEG-TRUTHUP
                         if _added_any:
+                            _expand_list_dirty["v"] = True
                             try:
                                 from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu_exp
                                 from nutrition_db import IngredientNutritionDB as _TUDB
@@ -4553,6 +4561,19 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             _rmr_exp(plan_data_fresh, _expand_clin, db=None)
                         except Exception as _rmr_e:
                             logger.debug(f"[P2-EXPAND-MICRO-RECOMPUTE] no-op: {_rmr_e}")
+                    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C3) Rebuild inline de las 4 listas si el
+                    # veg del finalizer entró a ingredients — expand era la ÚNICA superficie mutadora
+                    # de ingredients sin recalc (el veg faltaba de la lista todo el ciclo, violando
+                    # la invariante recetas↔lista). Mismo helper/knob que swap-persist y regen-day
+                    # (MEALFIT_UPDATE_INLINE_LIST_RECALC); fail-open → contrato diferido legacy.
+                    if _expand_list_dirty["v"]:
+                        try:
+                            _rebuild_plan_shopping_lists_inline(
+                                plan_data_fresh, user_id,
+                                surface="recipe_expand", plan_id_hint=target_plan_id,
+                            )
+                        except Exception as _rbl_exp_e:
+                            logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-C3) rebuild inline no-op: {_rbl_exp_e}")
                     # [P2-EXPAND-QUOTA-ABORT] señal para el caller: hubo escritura real → cobrar.
                     _expand_persisted["ok"] = True
                     return plan_data_fresh
@@ -6159,6 +6180,21 @@ def api_regenerate_day(
                     _rtu(new_meals, float(_rcap.get("protein_g")), db=_db, renal_capped=True)
             except Exception as _renal_day_e:
                 logger.debug(f"[P1-RENAL-UPDATE-ENFORCE] trim renal del día falló (no bloquea): {_renal_day_e}")
+            # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-10) Re-sincronizar cantidades en los PASOS:
+            # el rebalance del día (P2-REGEN-DAY-MACRO-REBALANCE), los caps DM2/bariátrica
+            # (P1-REGEN-DAY-CLINICAL-PARITY) y el trim renal de arriba mutan porciones DESPUÉS
+            # del qty-sync per-meal que cada plato trajo de swap_meal → "pesa los 80 g" con
+            # 120 g reales en app/PDF. regen-day era la única superficie sin este sync (form-gen
+            # g_o, swap-persist, chat-modify y expand ya lo corren como última mutación).
+            # Incondicional (cubre el trim renal y futuros mutadores): la función es no-op si
+            # el conteo ya es correcto. Best-effort, espejo de swap-persist.
+            try:
+                from graph_orchestrator import _sync_recipe_step_quantities as _sq_rd
+                for _m_rd in new_meals:
+                    if isinstance(_m_rd, dict):
+                        _sq_rd(_m_rd)
+            except Exception as _sq_rd_e:
+                logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-10) qty-sync regen-day no-op: {_sq_rd_e}")
             for _k in (
                 "aggregated_shopping_list",
                 "aggregated_shopping_list_weekly",

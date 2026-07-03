@@ -1710,6 +1710,19 @@ def _budget_reconcile_tolerance_pct() -> float:
         return 0.10
 
 
+def _budget_reconcile_min_coverage() -> float:
+    """[P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-06) Cobertura mínima de precios
+    (items_priced/items_total) bajo la cual el veredicto se marca
+    `partial_pricing=True` (estimado parcial — el banner verde podría
+    subestimar). NO cambia el status (más informativo que callar); el
+    frontend baja el tono y anexa el caveat. Knob clamp [0.0, 1.0]."""
+    try:
+        v = float(os.environ.get("MEALFIT_BUDGET_RECONCILE_MIN_COVERAGE", "0.7"))
+        return min(1.0, max(0.0, v))
+    except (TypeError, ValueError):
+        return 0.7
+
+
 def _budget_tier_band_factor(tier: str) -> float | None:
     """Factor × piso-de-metas que define la referencia de cada tier categórico.
     `unlimited` → None (sin techo). Knobs: MEALFIT_BUDGET_BAND_{LOW,MEDIUM,HIGH}."""
@@ -1870,6 +1883,20 @@ def reconcile_budget_with_cost(
             out["rescaled_from_days"] = rescaled_from_days
         if rescaled_from_household:
             out["rescaled_from_household"] = rescaled_from_household
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-06) Gate de cobertura de precios:
+        # items_priced/items_total viajaban en el payload pero nada los consultaba —
+        # con cobertura parcial (drift de matching, granel sin package) el banner
+        # verde subestimaba en silencio. Flag informativo, el status se mantiene.
+        try:
+            _ip = int(out.get("items_priced") or 0)
+            _it = int(out.get("items_total") or 0)
+            if _it > 0:
+                _cov = _ip / _it
+                if _cov < _budget_reconcile_min_coverage():
+                    out["partial_pricing"] = True
+                    out["price_coverage"] = round(_cov, 3)
+        except (TypeError, ValueError):
+            pass
         if not reference_rd:
             out.update({"status": "sin_limite", "ratio": None, "delta_rd": None})
         else:

@@ -13,6 +13,10 @@ due to missing DB data.
 # monkeypatch cuando prueban el path ON. setdefault: una env var real del operador SIEMPRE gana.
 import os as _os_conftest
 _os_conftest.environ.setdefault("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-14) Mismo patrón para strict-all-reasons: el default de
+# CÓDIGO pasó a True en agent.py (cierra ".env reseteado ⇒ cravings/weekend vuelven a permitir
+# ingredientes externos"); los tests legacy de cravings/weekend asumen el baseline OFF.
+_os_conftest.environ.setdefault("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "false")
 
 # [P0-5] Eagerly resolve real `langgraph` BEFORE any test module loads. Several
 # test files do `sys.modules.setdefault('langgraph', MagicMock())` to support

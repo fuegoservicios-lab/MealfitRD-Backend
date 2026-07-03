@@ -23,12 +23,15 @@ def test_knob_gates_strict_pantry():
     ), "strict_pantry no respeta el knob strict-all"
 
 
-def test_default_off_preserves_legacy():
-    # Default 'false' → no rompe el comportamiento (ni los tests) de cravings/weekend.
+def test_default_on_in_code():
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-14) Invertido: default 'true' en código (patrón
+    # P1-VERIFIED-ONLY-DEFAULT-ON — el dark-ship OFF-en-código era la regresión silenciosa
+    # ".env reseteado ⇒ cravings/weekend vuelven a comprar"). El baseline legacy de los tests
+    # de cravings/weekend vive en tests/conftest.py (setdefault "false").
     assert re.search(
-        r'os\.environ\.get\(\s*"MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS"\s*,\s*"false"',
+        r'os\.environ\.get\(\s*"MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS"\s*,\s*"true"',
         _AGENT,
-    ), "el knob debe default a 'false' (dark-ship: ON en prod vía .env)"
+    ), "el knob debe default a 'true' en código (rollback sin redeploy via .env)"
 
 
 def test_external_tolerance_zero_when_strict_all():

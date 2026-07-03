@@ -9243,6 +9243,14 @@ CLOSER_COOKABLE_MIN_G = _env_int("MEALFIT_CLOSER_COOKABLE_MIN_G", 40, validator=
 # clase + truth-up; el reparador de proteína post-caps (FASE A) y el carb-floor re-cierran redistribuyendo.
 PORTION_REALISM_CAP_ENABLED = _env_bool("MEALFIT_PORTION_REALISM_CAP", True)
 PORTION_CAP_PROTEIN_G = _env_int("MEALFIT_PORTION_CAP_PROTEIN_G", 300, validator=lambda v: 150 <= v <= 600)
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Piso cocinable del lado SHRINK — espejo-floor del cap de
+# arriba: solver (min 0.3) × reconcile (0.4) × rebalance (0.3) COMPONEN factores entre pasadas y el
+# quantize gram-path preserva múltiplos de 5g → líneas macro-bearing de 5-15g no servibles llegaban
+# al plato ("4.73g de mozzarella" → 5g entregado, caso real de prod). El único piso previo
+# (CLOSER_COOKABLE_MIN_G) cubría SOLO las adiciones del closer. Bump al piso si el día tiene
+# headroom kcal; sin headroom → drop de la línea (jamás dejar la comida sin ingredientes).
+PORTION_SHRINK_FLOOR_ENABLED = _env_bool("MEALFIT_PORTION_SHRINK_FLOOR", True)
+PORTION_SHRINK_FLOOR_G = _env_float("MEALFIT_PORTION_SHRINK_FLOOR_G", 15.0, validator=lambda v: 5.0 <= v <= 40.0)
 # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) espejo del veg-guard para CARBS fantasma:
 # "Revoltillo con Avena" cuyos pasos cocinan avena que NO está en ingredients[] (no se cuenta ni se compra).
 # Solo carbs slot-neutros curados (avena/casabe/batata/yuca) — arroz/pasta EXCLUIDOS (slot-sensitivos: el
@@ -9829,6 +9837,12 @@ _MICRO_CLOSER_KEYS = frozenset({
     # _MICRO_CLOSER_UL: la IOM NO establece UL para vit K (sin toxicidad conocida por comida).
     "vit_k_mcg",
 })
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M2) SSOT de las keys que el closer NO cierra en ERC —
+# extraído del inline del loop de floors para compartirlo con el targeting per-día (evita drift).
+_MICRO_CLOSER_RENAL_EXCLUDED = frozenset({
+    "magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+    "potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg", "vit_k_mcg",
+})
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
@@ -9889,6 +9903,12 @@ SODIUM_EXCESS_GATE_RATIO = _env_float("MEALFIT_SODIUM_EXCESS_GATE_RATIO", 1.5)
 # pero con un día individual <60% del piso en ≥2 micros accionables marca banner honesto (banner-only,
 # jamás retry — corre fuera del grafo). Thresholds en micronutrients (MEALFIT_MICRO_PERDAY_RATIO/_MIN_MICROS).
 MICRO_PERDAY_DEGRADE_ENABLED = _env_bool("MEALFIT_MICRO_PERDAY_DEGRADE", True)
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M2) Targeting per-día del micro-closer — el follow-up que
+# P1-MICRO-PERDAY-FLOOR declaró explícitamente: los micros "low" del worst-day flaggeado entran al
+# set de floors del closer (el loop per-día interno solo escala los DÍAS deficientes). Nace OFF por
+# el playbook medir→actuar: la serie del banner `micro_worst_day` (knob de arriba, ON) dimensiona
+# la frecuencia real antes del flip. NO baja los umbrales 0.6/≥2 del detector.
+MICRO_CLOSER_PERDAY_ENABLED = _env_bool("MEALFIT_MICRO_CLOSER_PERDAY", False)
 
 
 def _protein_gkg_ceiling(goal) -> float:
@@ -11226,9 +11246,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] vit A se ACUMULA en ERC (excreción renal reducida →
             # hipervitaminosis A es hallazgo común en CKD; KDOQI desaconseja suplementarla) y selenio sigue
             # el patrón "solo calcio cerrable en renal" del resto de keys.
-            if _renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
-                                "potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg",
-                                "vit_k_mcg"):
+            if _renal and k in _MICRO_CLOSER_RENAL_EXCLUDED:
                 continue
             # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] potasio NUNCA se cierra bajo medicamento K-elevador
             # (espironolactona/IECA free-text incluidos vía P1-MICRO-CLINICAL-FREETEXT) — hiperkalemia iatrogénica.
@@ -11244,6 +11262,37 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         if _estimado_bajo_skipped:
             logger.info(f"🧪 [P2-MICRO-ESTIMADO-BAJO] {_estimado_bajo_skipped} micro(s) cerrable(s) omitido(s) por "
                         f"status=estimado_bajo (cobertura incierta; lever real: backfill de NULLs en el catálogo)")
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M2) Targeting per-día (follow-up declarado por
+        # P1-MICRO-PERDAY-FLOOR): los micros "low" del worst-day flaggeado (<60% del piso en ≥2
+        # micros — umbrales del detector INTACTOS) entran al set de floors aunque el PROMEDIO del
+        # plan cumpla. El loop per-día de abajo solo escala los DÍAS deficientes (día con
+        # day_total >= floor hace `continue`) → los días OK no se tocan. Mismas exclusiones
+        # clínicas del loop de arriba. Knob OFF por rollout (medir→actuar con la serie del banner).
+        if MICRO_CLOSER_PERDAY_ENABLED:
+            try:
+                _pdf_cl = _report.get("per_day_floors") if isinstance(_report, dict) else None
+                if isinstance(_pdf_cl, dict) and _pdf_cl.get("flagged"):
+                    _pd_low_cl = ((_pdf_cl.get("worst_day") or {}).get("low")) or []
+                    _panel_by_key = {p.get("key"): p for p in (_report.get("panel") or []) if isinstance(p, dict)}
+                    for k in _pd_low_cl:
+                        if k in floors or k not in _MICRO_CLOSER_KEYS:
+                            continue
+                        if _renal and k in _MICRO_CLOSER_RENAL_EXCLUDED:
+                            continue
+                        if k == "potassium_mg" and _k_elev:
+                            continue
+                        if k == "vit_k_mcg" and _anticoag:
+                            continue
+                        try:
+                            _fv_cl = float((_panel_by_key.get(k) or {}).get("piso") or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if _fv_cl > 0:
+                            floors[k] = _fv_cl
+                            logger.info(f"🧪 [P2-AUDIT-V5-BATCH] (GAP-M2) micro '{k}' entra al closer por "
+                                        f"worst-day (promedio OK, día deficiente)")
+            except Exception as _pdcl_e:
+                logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-M2) targeting per-día no-op: {_pdcl_e}")
         if not floors:
             return 0
         # [P2-MICRO-CLOSER-CEILINGS · 2026-07-01] (audit micros GAP-5) El closer era CIEGO a los techos al
@@ -14017,8 +14066,13 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
         return False
 
 
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-09a) Eliminado el token suelto `|horno`: un paso
+# "cocina el pollo en el horno hasta dorar" matcheaba SIN tiempo/temp → suprimía la inyección
+# del default y el lint no lo contaba como violación — contradiciendo la propia tabla
+# _TIMETEMP_TECHNIQUE_DEFAULTS que lista "horno" como técnica que NECESITA default. Un paso
+# de horno legítimo con tiempo sigue matcheando vía `\d+ min` / `°c` / `grados`.
 _CONTRACT_TIME_RE = _re.compile(
-    r"\d+\s*(?:-\s*\d+\s*)?(?:min|minuto|hora)|°\s*c|grados|fuego\s+(?:alto|medio|bajo)|horno", _re.I)
+    r"\d+\s*(?:-\s*\d+\s*)?(?:min|minuto|hora)|°\s*c|grados|fuego\s+(?:alto|medio|bajo)", _re.I)
 
 # [P2-RECIPE-ENGLISH-LINT · 2026-07-01] tokens de cocina EN de alta frecuencia (word-boundary, frases de
 # ≥2 palabras donde una sola sería ambigua). NO incluye palabras que colisionan con es-DO ("pan", "sal(t)een").
@@ -16553,6 +16607,24 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
             total += _noc; parts.append(f"offcatalog={_noc}")
     except Exception as _e6:
         logger.warning(f"[P1-COHERENCE-FINALIZE] reverse/offcatalog no-op: {type(_e6).__name__}: {_e6}")
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-09b) Backstop tiempo/temp en el persist boundary:
+    # los otros 13 guards de receta ya tenían paridad aquí pero _inject_recipe_time_temp_defaults
+    # solo corría en assemble/finalizer-single/expand → el sliver que salta assemble
+    # (partial/degradado/SSE-fallback vía db_plans) persistía Toques de Fuego sin tiempo ni
+    # temperatura. Corre DESPUÉS del recipe-nonempty (las recetas rellenadas ya existen y su
+    # plantilla trae tiempo). Texto puro — cero interacción con el contrato quantize-última-
+    # mutación-de-cantidades. Idempotente, fail-open.
+    try:
+        if RECIPE_TIMETEMP_BACKSTOP_ENABLED:
+            _ntt = 0
+            for _d in days or []:
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict) and _inject_recipe_time_temp_defaults(_m):
+                        _ntt += 1
+            if _ntt:
+                total += _ntt; parts.append(f"timetemp={_ntt}")
+    except Exception as _e7:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] timetemp no-op: {type(_e7).__name__}: {_e7}")
     return (total, ", ".join(parts))
 
 
@@ -17442,6 +17514,117 @@ def _cap_unrealistic_portions(days, db=None) -> int:
         return 0
 
 
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Exentos del piso SHRINK: condimentos/aceites/semillas/
+# endulzantes legítimamente medibles en cucharaditas (5g de aceite = 1 cdta REAL — el piso es para
+# COMIDA, no para condimentos) + queso rallado/parmesano (guarnición). Accent-stripped.
+_SHRINK_FLOOR_EXEMPT_TOKENS = (
+    "aceite", "mantequilla", "margarina", "manteca", "miel", "azucar", "sal", "salsa", "vinagre",
+    "limon", "ajo", "jengibre", "especias", "oregano", "canela", "comino", "pimienta", "achiote",
+    "vainilla", "cacao", "levadura", "polvo de hornear", "mayonesa", "mostaza", "sazon",
+    "semillas", "chia", "linaza", "ajonjoli", "rallado", "parmesano", "sofrito", "caldo", "cubito",
+)
+
+
+def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
+    """[P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Piso cocinable del lado SHRINK — espejo-floor de
+    `_cap_unrealistic_portions` (techo puro): solver/reconcile/rebalance componen factores (hasta
+    0.3×0.4) y el quantize gram-path preserva 5g → líneas macro-bearing de 5-15g no servibles
+    llegaban al plato ("4.73g de mozzarella" → 5g entregado, caso real). Por línea gram-based
+    macro-bearing con gramos < PORTION_SHRINK_FLOOR_G:
+      (a) headroom kcal del día disponible (target − actual ≥ aporte del bump, medido con
+          `db.macros_from_ingredient_string`) → BUMP al piso (rescale + lockstep ingredients_raw);
+      (b) sin headroom → DROP de la línea (nunca dejar la comida sin ingredientes: exige ≥2 restantes).
+    Truth-up del meal tocado; POSTQUANTIZE/banda re-miden el delta aguas abajo. Exentos: 'al gusto'/
+    'opcional' + _SHRINK_FLOOR_EXEMPT_TOKENS. Marca `_portion_floor_adjusted`. Idempotente, fail-safe.
+    tooltip-anchor: P2-AUDIT-V5-BATCH-SHRINK-FLOOR"""
+    if not PORTION_SHRINK_FLOOR_ENABLED or not days:
+        return 0
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        from constants import strip_accents as _sa
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        floor_g = float(PORTION_SHRINK_FLOOR_G)
+        touched = 0
+        for _d in days:
+            meals = (_d.get("meals") or []) if isinstance(_d, dict) else []
+            if not meals:
+                continue
+            _headroom = None
+            if day_kcal_target and float(day_kcal_target) > 0:
+                _day_kcal = sum(_meal_macro_num(_m.get("cals")) for _m in meals if isinstance(_m, dict))
+                _headroom = float(day_kcal_target) - _day_kcal
+            for meal in meals:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list) or not ings:
+                    continue
+                raw = meal.get("ingredients_raw")
+                _lockstep = isinstance(raw, list) and len(raw) == len(ings)
+                _meal_touched = False
+                _drop_idx = []
+                for idx, ing in enumerate(ings):
+                    s = str(ing)
+                    il = _sa(s.lower())
+                    if "al gusto" in il or "opcional" in il:
+                        continue
+                    if any(tok in il for tok in _SHRINK_FLOOR_EXEMPT_TOKENS):
+                        continue
+                    m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                    if not m_g:
+                        continue
+                    cur_g = float(m_g.group(1).replace(",", "."))
+                    if cur_g <= 0 or cur_g >= floor_g:
+                        continue
+                    if _ingredient_macro_group(s, db) is None:
+                        continue
+                    factor = floor_g / cur_g
+                    _bump_kcal = 0.0
+                    try:
+                        _mc_fl = db.macros_from_ingredient_string(s)
+                        if _mc_fl:
+                            _bump_kcal = float(_mc_fl.get("kcal") or 0) * (factor - 1.0)
+                    except Exception:
+                        _bump_kcal = 0.0
+                    if _headroom is None or _bump_kcal <= max(0.0, _headroom):
+                        try:
+                            _new = _resc(s, factor)
+                        except Exception:
+                            continue
+                        if _new and _new != s:
+                            ings[idx] = _new
+                            if _lockstep:
+                                try:
+                                    raw[idx] = _resc(str(raw[idx]), factor)
+                                except Exception:
+                                    pass
+                            if _headroom is not None:
+                                _headroom -= _bump_kcal
+                            touched += 1
+                            _meal_touched = True
+                    else:
+                        _drop_idx.append(idx)
+                if _drop_idx and (len(ings) - len(_drop_idx)) >= 2:
+                    for _di in sorted(_drop_idx, reverse=True):
+                        ings.pop(_di)
+                        if _lockstep and _di < len(raw):
+                            raw.pop(_di)
+                    touched += len(_drop_idx)
+                    _meal_touched = True
+                if _meal_touched:
+                    try:
+                        _truth_up_meal_macros_from_strings(meal, db)
+                    except Exception:
+                        pass
+                    meal["_portion_floor_adjusted"] = True
+        return touched
+    except Exception as _psf_e:
+        logger.warning(f"[P2-AUDIT-V5-BATCH] (GAP-05) shrink-floor no-op: {type(_psf_e).__name__}: {_psf_e}")
+        return 0
+
+
 # [P2-STEP-CARB-GHOST · 2026-07-01] carbs slot-neutros curados: (token, línea a materializar, excludes).
 # Arroz/pasta EXCLUIDOS a propósito (slot-sensitivos). Porciones modestas — el truth-up las cuenta y la
 # banda re-mide en review.
@@ -17666,6 +17849,16 @@ def _apply_budget_cheapen_pass(days, form_data) -> int:
                             meal["name"] = _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE)
                         note = f"{m.group(0)} → {candidate}"
                         meal.setdefault("_budget_substitutions", []).append(note)
+                        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-08) Reescribir también los PASOS de la
+                        # receta: sin esto, "sella el salmón" sobrevivía con ingredients ya en pescado
+                        # blanco (el pase tocaba ings/raw/name pero jamás meal['recipe']). Mismo helper
+                        # conservador y mismo knob del path clínico (accent-loose, skip-tokens,
+                        # idempotente, solo toca meal['recipe']). m.group(0) = forma exacta matcheada.
+                        if SUBST_RECIPE_REWRITE_ENABLED:
+                            try:
+                                _rewrite_recipe_steps_after_subs(meal, [([m.group(0)], candidate)])
+                            except Exception:
+                                pass
                         logger.info(f"💰 [P1-BUDGET-TIER-LEVERS] Sustitución económica: {note} "
                                     f"(RD${orig_price:.0f}/lb → RD${cand_price:.0f}/lb)")
                         subs += 1
@@ -19109,6 +19302,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _q_n = _apply_portion_quantization({"days": days}, _QDB())
             if _q_n:
                 logger.info(f"📏 [P1-CLOSER-COHERENCE] quantize final: porciones humanas en {_q_n} comida(s) post-engine.")
+            # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) Piso cocinable SHRINK post-quantize: bump/drop
+            # de líneas macro-bearing sub-servibles (<PORTION_SHRINK_FLOOR_G). Target kcal del día por
+            # coherencia 4-4-9 desde los targets de gramos (mismo criterio del engine).
+            if PORTION_SHRINK_FLOOR_ENABLED:
+                try:
+                    _sfl_kcal = (4.0 * (float(_pg or 0) + float(_cg or 0)) + 9.0 * float(_fg or 0)) or None
+                    _sfl_n = _floor_subservible_portions(days, day_kcal_target=_sfl_kcal, db=_QDB())
+                    if _sfl_n:
+                        logger.info(f"📏 [P2-AUDIT-V5-BATCH] (GAP-05) {_sfl_n} línea(s) sub-servible(s) "
+                                    f"bump/drop al piso cocinable ({PORTION_SHRINK_FLOOR_G:.0f}g).")
+                except Exception as _sfl_e:
+                    logger.warning(f"[P2-AUDIT-V5-BATCH] (GAP-05) shrink-floor en assemble no-op: {_sfl_e}")
             # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] (audit v3 macros GAP-4) el redondeo a fracciones
             # servibles pudo re-abrir el drift que MACRO-REBALANCE cerró antes del quantize. Si un día
             # quedó con C/F/P a >TOL del target → UN rebalance + UN re-quantize (iteración única). El
@@ -19136,6 +19341,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         _apply_portion_quantization({"days": days}, _rq_db)
                         logger.info(f"🎚 [P2-POSTQUANTIZE-RECHECK] {_rq_fixed} día(s) re-balanceado(s) "
                                     f"post-quantize (drift de redondeo >{POSTQUANTIZE_RECHECK_TOL:.0%}) + re-quantize.")
+                        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-05) el rebalance [0.3,2.5] + re-quantize
+                        # pueden re-introducir líneas sub-servibles — segunda pasada del piso.
+                        if PORTION_SHRINK_FLOOR_ENABLED:
+                            try:
+                                _sfl_kcal2 = (4.0 * (float(_pg or 0) + float(_cg or 0)) + 9.0 * float(_fg or 0)) or None
+                                _floor_subservible_portions(days, day_kcal_target=_sfl_kcal2, db=_rq_db)
+                            except Exception as _sfl2_e:
+                                logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-05) shrink-floor post-recheck no-op: {_sfl2_e}")
                 except Exception as _rq_e:
                     logger.warning(f"[P2-POSTQUANTIZE-RECHECK] no-op: {type(_rq_e).__name__}: {_rq_e}")
             # [P1-RECIPE-QTY-SYNC · 2026-07-01] tras la ÚLTIMA mutación de porciones, re-sincroniza las
@@ -19573,6 +19786,17 @@ def _auto_patch_ingredient_coherence(plan: dict, errors: list) -> int:
                 meal["ingredients"] = new_ings
                 if len(new_ings) < len(ings):
                     patched += 1
+                    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-04) Telemetría de removidos: este patch
+                    # corre en review DESPUÉS de que assemble construyó aggregated_shopping_list* y
+                    # corrió el coherence guard → sin re-agregación, el ingrediente removido queda
+                    # como renglón fantasma en la lista entregada. El seam de salida del pipeline
+                    # consume este marker para invocar _recompute_aggregates_after_swap.
+                    try:
+                        plan.setdefault("_review_patch_removed_ingredients", []).extend(
+                            [str(i) for i in ings if i not in new_ings]
+                        )
+                    except Exception:
+                        pass
                     # [P2-REVIEW-PATCH-TRUTHUP · 2026-07-01] (audit macros GAP-3) Este patch corre en review
                     # DESPUÉS del band gate y BORRA ingredientes cuyo aporte el truth-up final YA sumó → el plan
                     # persistía macros que la comida física ya no contenía (y el band score de entrega leía los
@@ -19896,6 +20120,24 @@ def _collect_unresolved_marker_days(plan_result) -> list[int]:
     return sorted(out)
 
 
+def _collect_day_fallback_days(plan_result) -> list[int]:
+    """[P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Gemelo de `_collect_unresolved_marker_days`
+    para el marker `_day_fallback=True` (día de plantilla matemática por worker LLM muerto).
+    Consumido por should_retry (ruta al surgical) y surgical_marker_regen_node (re-genera)."""
+    if not isinstance(plan_result, dict):
+        return []
+    days = plan_result.get("days") or []
+    if not isinstance(days, list):
+        return []
+    out = []
+    for d in days:
+        if isinstance(d, dict) and d.get("_day_fallback") is True:
+            day_num = d.get("day")
+            if isinstance(day_num, int):
+                out.append(day_num)
+    return sorted(out)
+
+
 @_node_label("surgical_marker")
 async def surgical_marker_regen_node(state: PlanState) -> dict:
     """[P5-MARKER-APPROVED-1] Re-corrige días con `_critique_unresolved`
@@ -19929,6 +20171,11 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         return {"_marker_regen_attempted": True}
 
     marker_day_nums = _collect_unresolved_marker_days(plan_result)
+    # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Incluir días de plantilla matemática
+    # (_day_fallback) — el surgical los re-genera con LLM; el dump del corrector no
+    # arrastra la key (SingleDayPlanModel no la tiene) → éxito = marker limpio.
+    if DAY_FALLBACK_HONESTY:
+        marker_day_nums = sorted(set(marker_day_nums) | set(_collect_day_fallback_days(plan_result)))
     if not marker_day_nums:
         # Defensa: should_retry ya filtra este caso pero el nodo es resiliente.
         return {"_marker_regen_attempted": True}
@@ -19971,6 +20218,14 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
             return day_num, None
         marker = target_day.get("_critique_unresolved") or {}
         original_issue = marker.get("issue") or ""
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Día de plantilla matemática sin issue del
+        # critique: sintetizar el problema para que el corrector regenere un día real.
+        if not original_issue and target_day.get("_day_fallback"):
+            original_issue = (
+                "Este día fue generado por una plantilla matemática de emergencia (el generador LLM "
+                "falló): los platos son genéricos y repetitivos. Re-genera el día COMPLETO con platos "
+                "dominicanos reales, creativos y cocinables, respetando la asignación del planificador."
+            )
 
         if not await _corrector_cb.acan_proceed():
             logger.warning(
@@ -20010,7 +20265,7 @@ REGLA BIDIRECCIONAL CRÍTICA:
 - Si un ingrediente no se usa en la receta, elimínalo de `ingredients`.
 
 Día {day_num} actual (JSON):
-{json.dumps({k: v for k, v in target_day.items() if k != "_critique_unresolved"}, ensure_ascii=False)}
+{json.dumps({k: v for k, v in target_day.items() if k not in ("_critique_unresolved", "_day_fallback")}, ensure_ascii=False)}
 
 Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y los mismos targets calóricos."""
 
@@ -22461,6 +22716,13 @@ def _mark_plan_result_quality_degraded(state: PlanState, reason: str, severity: 
 # Con el knob ON marcamos `_quality_degraded` (minor) para que el usuario sepa que puede haber
 # repetición y use Cambiar Plato. Rollback: MEALFIT_MARKER_UNRESOLVED_HONESTY=false.
 MARKER_UNRESOLVED_HONESTY = _env_bool("MEALFIT_MARKER_UNRESOLVED_HONESTY", True)
+# [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) `_day_fallback` era un marker write-only: días de
+# plantilla matemática (worker de día muerto tras hedging) se entregaban como plan plenamente
+# aprobado — sin surgical regen, sin banner, sin telemetría — pese a que el comentario del
+# productor (generate_days_parallel) prometía "para que review/scoring puedan degradar calidad".
+# Con el knob ON: (1) el surgical regen intenta re-generar esos días con LLM; (2) si el surgical
+# ya corrió (o vuelve a fallar), el plan se marca _quality_degraded(reason="day_fallback", minor).
+DAY_FALLBACK_HONESTY = _env_bool("MEALFIT_DAY_FALLBACK_HONESTY", True)
 
 
 def should_retry(state: PlanState) -> str:
@@ -22509,11 +22771,16 @@ def should_retry(state: PlanState) -> str:
         # todavía, enrutamos al gate. Una sola pasada por gate (flag).
         if not state.get("_marker_regen_attempted", False):
             marker_days = _collect_unresolved_marker_days(state.get("plan_result"))
-            if marker_days:
+            # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Días de plantilla matemática también
+            # rutean al surgical regen (antes: _day_fallback era write-only y el día genérico
+            # se entregaba como plan plenamente aprobado).
+            _fb_days = _collect_day_fallback_days(state.get("plan_result")) if DAY_FALLBACK_HONESTY else []
+            if marker_days or _fb_days:
                 logger.info(
                     f"🩹 [ORQUESTADOR] Revisión aprobada PERO {len(marker_days)} "
-                    f"día(s) con `_critique_unresolved` (días {marker_days}) → "
-                    f"surgical regen antes de enviar al usuario."
+                    f"día(s) con `_critique_unresolved` (días {marker_days})"
+                    + (f" + {len(_fb_days)} día(s) `_day_fallback` (días {_fb_days})" if _fb_days else "")
+                    + " → surgical regen antes de enviar al usuario."
                 )
                 return "marker_regen"
         elif MARKER_UNRESOLVED_HONESTY:
@@ -22531,6 +22798,19 @@ def should_retry(state: PlanState) -> str:
                 _mark_plan_result_quality_degraded(
                     state, reason="slot_coherence_unresolved", severity="minor"
                 )
+            # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Residual de días fallback tras el
+            # surgical: banner honesto en vez de entrega silenciosa de plantilla matemática.
+            if DAY_FALLBACK_HONESTY:
+                _residual_fb = _collect_day_fallback_days(state.get("plan_result"))
+                if _residual_fb:
+                    logger.warning(
+                        f"🩹 [P2-AUDIT-V5-BATCH] (GAP-03) surgical regen agotado pero "
+                        f"{len(_residual_fb)} día(s) siguen con `_day_fallback` "
+                        f"(días {_residual_fb}) → marcando _quality_degraded (minor)."
+                    )
+                    _mark_plan_result_quality_degraded(
+                        state, reason="day_fallback", severity="minor"
+                    )
         logger.info("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
         return "end"
 
@@ -26019,6 +26299,17 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
                 _wd = _pdf.get("worst_day") or {}
                 reason = "micro_worst_day"
                 detail = f"día {int(_wd.get('day_index', 0)) + 1}: {','.join(_wd.get('low') or [])}"
+        # 2c) [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M1) Worst-day de TECHOS: promedio OK pero un
+        # día-pico excede un techo (sodio/azúcar/satfat/K-renal) × ratio. El caso de mayor valor
+        # clínico es el K en ERC (riesgo agudo de hiperkalemia — la propia justificación de
+        # P1-RENAL-K-CEILING) que la conversión floor→ceiling sacaba del chequeo per-día.
+        # Banner-only, jamás retry/trim (decisión G9). Mismo knob banner del worst-day de pisos.
+        if not reason and MICRO_PERDAY_DEGRADE_ENABLED:
+            _pdc = _mn.get("per_day_ceilings")
+            if isinstance(_pdc, dict) and _pdc.get("flagged"):
+                _wdc = _pdc.get("worst_day") or {}
+                reason = "micro_worst_day_ceiling"
+                detail = f"día {int(_wdc.get('day_index', 0)) + 1}: {','.join(_wdc.get('high') or [])}"
         # 3) (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura del catálogo alta (anti falso-positivo).
         # [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] Con el flip ON para todos, el trigger exige además que
         # el exceso sea MATERIAL (valor > techo × MIN_RATIO, default +25%) — un rebase marginal del techo
@@ -28005,6 +28296,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
         # restaurar el mejor antes de aplicar guardrails y antes del print
         # final — para que el banner de "Aprobado:" refleje el plan que el
         # usuario realmente recibirá.
+        _swapped = False
         try:
             _swapped = _swap_to_best_attempt_if_better(final_state)
             if _swapped:
@@ -28055,6 +28347,30 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 f"⚠️ [P0-PIPE-1] _swap_to_best_attempt_if_better falló "
                 f"(best-effort): {type(_swap_err).__name__}: {_swap_err}. "
                 f"Continuando con plan_result actual sin swap."
+            )
+
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-04) Re-agregación cuando el auto-patch de
+        # huérfanos del review (_auto_patch_ingredient_coherence) removió ingredientes DESPUÉS
+        # de que assemble construyó las listas y corrió el coherence guard: sin esto, el plan
+        # aprobado-con-patch se entregaba con renglones fantasma en la lista de compras y
+        # telemetría de coherencia stale. Si hubo swap, _recompute_aggregates_after_swap ya
+        # corrió arriba (cubre también este caso). Best-effort — mismo trade-off que el swap.
+        try:
+            _rp_plan = final_state.get("plan_result")
+            if (
+                not _swapped
+                and isinstance(_rp_plan, dict)
+                and _rp_plan.get("_review_patch_removed_ingredients")
+            ):
+                await _recompute_aggregates_after_swap(final_state)
+                logger.info(
+                    f"🛒 [P2-AUDIT-V5-BATCH] (GAP-04) listas re-agregadas tras review-patch "
+                    f"({len(_rp_plan.get('_review_patch_removed_ingredients') or [])} ingrediente(s) removido(s))."
+                )
+        except Exception as _rp_agg_err:
+            logger.warning(
+                f"[P2-AUDIT-V5-BATCH] (GAP-04) re-agregación post-review-patch falló "
+                f"(best-effort): {type(_rp_agg_err).__name__}: {_rp_agg_err}."
             )
 
         logger.info(f"\n{'🔗' * 30}")
