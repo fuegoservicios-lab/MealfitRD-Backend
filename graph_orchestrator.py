@@ -3581,6 +3581,7 @@ from prompts.plan_generator import (
     build_pantry_correction_context,
     build_pantry_drift_context,
     build_clinical_profile_context,
+    clinical_profile_active_flags,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 from prompts.planner import PLANNER_SYSTEM_PROMPT
@@ -9480,6 +9481,15 @@ FOLD_RESTRICTION_ALIASES = _env_bool("MEALFIT_FOLD_RESTRICTION_ALIASES", True)
 # generador (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe) + gate FS9. Safety
 # gate (defensa-en-profundidad clínica) → default True; flip a False desactiva el motor. Anchor: P1-MEDICATION-RULES.
 MEDICATION_RULES_ENABLED = _env_bool("MEALFIT_MEDICATION_RULES", True)
+# [P2-CLINICAL-REVIEW-GATE · 2026-07-03] Flags clínicos activos del panel opt-in
+# (labs fuera de rango / pérdida no intencional — `clinical_profile_active_flags`,
+# SSOT en prompts/plan_generator.py) FUERZAN la revisión LLM aunque el perfil no
+# tenga condiciones/alergias DECLARADAS. Cierra el hallazgo del smoke E2E
+# 2026-07-03: HbA1c prediabética sin condición declarada influía la generación
+# pero el reviewer se bypasseaba ("Sin restricciones declaradas"). Los síntomas
+# GI/entrenamiento NO fuerzan (guía blanda). Flip a False restaura el bypass
+# legacy sin redeploy. Anchor: P2-CLINICAL-REVIEW-GATE.
+CLINICAL_FLAGS_FORCE_REVIEW = _env_bool("MEALFIT_CLINICAL_FLAGS_FORCE_REVIEW", True)
 # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Hace el panel de micros consciente de los
 # fármacos que ELEVAN el potasio (ahorrador de potasio / IECA-ARA-II): cuando hay uno, NO eleva el piso DASH
 # de potasio (4700) ni emite la nota "come más guineo/aguacate" — antes el panel determinista empujaba a más
@@ -21246,13 +21256,30 @@ async def review_plan_node(state: PlanState) -> dict:
     # [P2-MEDICAL-FACTCHECK-GATE] `_has_real_medical_flags` filtra el sentinel "Ninguna"
     # (el form manda allergies=["Ninguna"], que era truthy) — antes el bypass nunca
     # disparaba para usuarios sin restricciones reales.
-    if not _has_real_medical_flags(allergies) and not _has_real_medical_flags(medical_conditions) and diet_type == "balanced" and not _has_real_medical_flags(dislikes) and not taste_profile:
+    # [P2-CLINICAL-REVIEW-GATE · 2026-07-03] Flags clínicos activos del panel opt-in
+    # (labs fuera de rango / pérdida no intencional) también VETAN el bypass: el
+    # reviewer LLM corre y ve la nota clínica (_clinical_panel_note) aunque no haya
+    # condiciones declaradas. tooltip-anchor: P2-CLINICAL-REVIEW-GATE
+    _clinical_flags: list = []
+    if CLINICAL_FLAGS_FORCE_REVIEW:
+        try:
+            _clinical_flags = clinical_profile_active_flags(form_data)
+        except Exception:
+            _clinical_flags = []
+    if not _has_real_medical_flags(allergies) and not _has_real_medical_flags(medical_conditions) and diet_type == "balanced" and not _has_real_medical_flags(dislikes) and not taste_profile and not _clinical_flags:
         logger.info("✅ [REVISOR] Sin restricciones declaradas → Bypassing LLM Reviewer, procediendo a validaciones deterministas.")
         approved = True
         issues = []
         severity = "none"
         fact_check_report = "N/A"
     else:
+        # [P2-CLINICAL-REVIEW-GATE] Telemetría: cuando SOLO los flags del panel
+        # clínico vetaron el bypass, dejar rastro para medir el costo del gate.
+        if _clinical_flags and not _has_real_medical_flags(allergies) and not _has_real_medical_flags(medical_conditions) and diet_type == "balanced" and not _has_real_medical_flags(dislikes) and not taste_profile:
+            logger.info(
+                f"🩺 [P2-CLINICAL-REVIEW-GATE] Flags clínicos activos {_clinical_flags} → "
+                f"reviewer LLM corre aunque no hay condiciones declaradas."
+            )
         # ============================================================
         # FASE 1: AGENTE DE FACT-CHECKING (INVESTIGACIÓN CLÍNICA)
         # ============================================================

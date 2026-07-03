@@ -550,11 +550,75 @@ _CLINPROF_GI_DIRECTIVES = {
 }
 
 
+def clinical_profile_active_flags(form_data: dict) -> list:
+    """[P2-CLINICAL-REVIEW-GATE · 2026-07-03] Flags clínicos ACTIVOS del perfil
+    opt-in: labs fuera de rango + pérdida de peso no intencional. SSOT de los
+    umbrales — `build_clinical_profile_context` los consume para decidir qué
+    texto emitir, y el gate del bypass del reviewer (`review_plan_node`) los
+    consume para forzar la revisión LLM aunque NO haya condiciones DECLARADAS
+    (hallazgo del smoke E2E 2026-07-03: HbA1c prediabética sin condición
+    declarada influía la generación pero el reviewer se bypasseaba).
+
+    Los síntomas GI y el entrenamiento NO generan flag (guía blanda de
+    selección, no riesgo que el reviewer deba verificar). Retorna [] si el
+    panel no se llenó. tooltip-anchor: P2-CLINICAL-REVIEW-GATE"""
+    if not isinstance(form_data, dict):
+        return []
+    cp = form_data.get("clinical_profile")
+    if not isinstance(cp, dict) or not cp:
+        hp = form_data.get("health_profile")
+        if isinstance(hp, dict):
+            cp = hp.get("clinical_profile")
+    if not isinstance(cp, dict) or not cp:
+        return []
+    labs = cp.get("labs") if isinstance(cp.get("labs"), dict) else {}
+
+    def _lab(key):
+        v = labs.get(key)
+        try:
+            return float(v) if v is not None and v != "" else None
+        except (TypeError, ValueError):
+            return None
+
+    flags = []
+    hba1c, glucosa = _lab("hba1c"), _lab("glucosa_ayunas")
+    if (hba1c is not None and hba1c >= 6.5) or (glucosa is not None and glucosa >= 126):
+        flags.append("glucemia_rango_diabetes")
+    elif (hba1c is not None and hba1c >= 5.7) or (glucosa is not None and glucosa >= 100):
+        flags.append("glucemia_prediabetes")
+    ldl, ct, tg = _lab("ldl"), _lab("colesterol_total"), _lab("trigliceridos")
+    if (ldl is not None and ldl >= 160) or (ct is not None and ct >= 240) or (tg is not None and tg >= 200):
+        flags.append("lipidos_elevados")
+    tfg = _lab("tfg")
+    if tfg is not None and tfg < 60:
+        flags.append("tfg_reducido")
+    au = _lab("acido_urico")
+    if au is not None and au >= 7:
+        flags.append("acido_urico_elevado")
+    hb = _lab("hemoglobina")
+    if hb is not None and hb < 12:
+        flags.append("hemoglobina_baja")
+    vd = _lab("vitamina_d")
+    if vd is not None and vd < 20:
+        flags.append("vitamina_d_baja")
+    tsh = _lab("tsh")
+    if tsh is not None and tsh > 4.5:
+        flags.append("tsh_elevada")
+    wh = cp.get("weightHistory") if isinstance(cp.get("weightHistory"), dict) else {}
+    if wh.get("unintentionalLoss"):
+        flags.append("perdida_no_intencional")
+    return flags
+
+
 def build_clinical_profile_context(form_data: dict) -> str:
     """[P1-CLINICAL-PANEL] Bloque del perfil clínico avanzado. Lee
     `form_data["clinical_profile"]` (o anidado en health_profile — mismos dos
     transportes que súper personalización). Retorna "" si no hay datos
-    accionables (no-op transparente, preserva prompt-cache)."""
+    accionables (no-op transparente, preserva prompt-cache).
+
+    [P2-CLINICAL-REVIEW-GATE] Los umbrales de los flags viven en
+    `clinical_profile_active_flags` (SSOT) — este builder solo decide el TEXTO
+    por flag; cambiar un umbral allí cambia texto Y gate del reviewer juntos."""
     if not isinstance(form_data, dict):
         return ""
     cp = form_data.get("clinical_profile")
@@ -593,48 +657,45 @@ def build_clinical_profile_context(form_data: dict) -> str:
         _date = str(labs.get("labsDate") or "").strip()
         lines.append(f"🧪 Laboratorios{f' ({_date})' if _date else ''}: {'; '.join(lab_vals)}.")
 
-    hba1c, glucosa = _lab("hba1c"), _lab("glucosa_ayunas")
-    if (hba1c is not None and hba1c >= 6.5) or (glucosa is not None and glucosa >= 126):
+    # [P2-CLINICAL-REVIEW-GATE] Umbrales en clinical_profile_active_flags (SSOT);
+    # aquí solo se decide el texto por flag activo.
+    _flags = clinical_profile_active_flags(form_data)
+    if "glucemia_rango_diabetes" in _flags:
         lines.append(
             "🩸 Glucemia en rango COMPATIBLE CON DIABETES (no declarada como condición): aplica "
             "criterios glucémicos estrictos (carbohidratos integrales de baja carga, CERO azúcar "
             "libre/miel/jugos) y el plan REQUIERE confirmación con un profesional de salud."
         )
-    elif (hba1c is not None and hba1c >= 5.7) or (glucosa is not None and glucosa >= 100):
+    elif "glucemia_prediabetes" in _flags:
         lines.append(
             "🩸 Glucemia en rango de PREDIABETES: prioriza baja carga glucémica, fibra alta y "
             "carbohidratos integrales; evita azúcar libre."
         )
-    ldl, ct, tg = _lab("ldl"), _lab("colesterol_total"), _lab("trigliceridos")
-    if (ldl is not None and ldl >= 160) or (ct is not None and ct >= 240) or (tg is not None and tg >= 200):
+    if "lipidos_elevados" in _flags:
         lines.append(
             "🫀 Perfil lipídico elevado: limita grasa saturada y frituras; prioriza pescado "
             "(omega-3), aguacate, aceite de oliva y fibra soluble (avena, leguminosas)."
         )
-    tfg = _lab("tfg")
-    if tfg is not None and tfg < 60:
+    if "tfg_reducido" in _flags:
+        tfg = _lab("tfg")
         lines.append(
             f"🫘 TFG {tfg:g} mL/min (función renal reducida, no declarada como condición): MODERA "
             "la carga de proteína y el sodio; NO uses sustitutos de sal (potasio); el plan "
             "REQUIERE evaluación por nefrólogo/profesional antes de seguirse."
         )
-    au = _lab("acido_urico")
-    if au is not None and au >= 7:
+    if "acido_urico_elevado" in _flags:
         lines.append(
             "🦶 Ácido úrico elevado: limita vísceras, mariscos y cerveza; modera carnes rojas; "
             "prioriza lácteos bajos en grasa y cerezas/frutas."
         )
-    hb = _lab("hemoglobina")
-    if hb is not None and hb < 12:
+    if "hemoglobina_baja" in _flags:
         lines.append(
             "🩹 Hemoglobina baja (posible anemia): prioriza hierro hem (res magra, hígado si no "
             "está en rechazos, sardinas) + vitamina C en la misma comida; sugiere evaluación profesional."
         )
-    vd = _lab("vitamina_d")
-    if vd is not None and vd < 20:
+    if "vitamina_d_baja" in _flags:
         lines.append("☀️ Vitamina D baja: prioriza pescados grasos, huevo entero y lácteos fortificados.")
-    tsh = _lab("tsh")
-    if tsh is not None and tsh > 4.5:
+    if "tsh_elevada" in _flags:
         lines.append(
             "🦋 TSH elevada (perfil tiroideo a vigilar): asegura fuentes de yodo y selenio; "
             "las crucíferas van COCIDAS, no crudas en exceso."
@@ -642,7 +703,7 @@ def build_clinical_profile_context(form_data: dict) -> str:
 
     # --- Historia ponderal ------------------------------------------------------
     wh = cp.get("weightHistory") if isinstance(cp.get("weightHistory"), dict) else {}
-    if wh.get("unintentionalLoss"):
+    if "perdida_no_intencional" in _flags:
         lines.append(
             "⚠️ PÉRDIDA DE PESO NO INTENCIONAL reciente (señal clínica): NO apliques déficit "
             "agresivo; el plan debe priorizar densidad nutricional y el usuario DEBE evaluarse "
