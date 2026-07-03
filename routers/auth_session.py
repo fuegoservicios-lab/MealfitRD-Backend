@@ -181,6 +181,76 @@ async def email_otp_verify(
     }
 
 
+# [P1-OAUTH-FIRST-PARTY · 2026-07-03] Mismo throttle-perfil que el OTP verify: canjear un
+# verifier es un intento de login.
+_OAUTH_ADOPT_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
+@router.post("/oauth/adopt")
+async def oauth_adopt(
+    response: Response,
+    data: dict = Body(...),
+    _rl: object = Depends(_OAUTH_ADOPT_LIMITER),
+):
+    """[P1-OAUTH-FIRST-PARTY · 2026-07-03] Canjea el `neon_auth_session_verifier` (query param
+    con el que Neon Auth regresa del OAuth de Google) por la sesión first-party, SERVER-SIDE.
+
+    Por qué: el SDK canjea ese verifier client-side pegándole a `<neon>/get-session` — pero el
+    verifier es DE UN SOLO USO. En móvil, si esa primera petición se pierde (timeout de red /
+    getSessionWithTimeout corto), el verifier queda consumido sin sesión y NINGÚN retry puede
+    resolverla (y sin cookie de Neon utilizable — third-party) → el usuario debía pulsar
+    "Continuar con Google" una SEGUNDA vez para obtener un verifier fresco. Canjeándolo aquí
+    (server-a-server, timeout generoso, sin third-party cookies) y emitiendo `__Host-mf_session`,
+    el primer click SIEMPRE termina logueado — mismo patrón de P1-OTP-FIRST-PARTY.
+
+    Fail-secure: verifier ausente/basura, Neon non-200 o sin user.id → 401 sin cookie.
+    tooltip-anchor: P1-OAUTH-FIRST-PARTY"""
+    from neon_auth import NEON_AUTH_BASE_URL
+
+    verifier = str((data or {}).get("verifier") or "").strip()
+    if not verifier or len(verifier) > 512:
+        return Response(status_code=401)
+    if not NEON_AUTH_BASE_URL:
+        logger.error("[P1-OAUTH-FIRST-PARTY] NEON_AUTH_BASE_URL ausente — no se puede canjear el verifier.")
+        return Response(status_code=503)
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(
+                f"{NEON_AUTH_BASE_URL}/get-session",
+                params={"neon_auth_session_verifier": verifier},
+            )
+    except Exception as e:
+        logger.warning(f"[P1-OAUTH-FIRST-PARTY] Neon Auth inalcanzable canjeando verifier: {type(e).__name__}: {e}")
+        return Response(status_code=502)
+    if r.status_code != 200:
+        logger.info(f"[P1-OAUTH-FIRST-PARTY] canje rechazado por Neon (HTTP {r.status_code}).")
+        return Response(status_code=401)
+    try:
+        payload = r.json() or {}
+    except Exception:
+        payload = {}
+    user = payload.get("user") or {}
+    uid = str(user.get("id") or "").strip()
+    if not uid:
+        logger.warning("[P1-OAUTH-FIRST-PARTY] Neon respondió 200 sin user.id — fail-secure 401.")
+        return Response(status_code=401)
+    if not session_cookies_enabled():
+        logger.error("[P1-OAUTH-FIRST-PARTY] session_cookies deshabilitadas — el adopt requiere la feature.")
+        return Response(status_code=503)
+    token = set_session_cookie(response, uid)
+    if not token:
+        return Response(status_code=503)
+    logger.info(f"🔐 [P1-OAUTH-FIRST-PARTY] verifier canjeado server-side → sesión first-party (uid={uid[:8]}…).")
+    return {
+        "ok": True,
+        "user_id": uid,
+        "email": user.get("email") or None,
+        "token": token,
+        "form_key": derive_form_key(uid),
+        "session_cookie": True,
+    }
+
+
 @router.post("/logout")
 async def session_logout(response: Response):
     """Borra la cookie first-party. Sin auth a propósito: borrar la propia sesión
