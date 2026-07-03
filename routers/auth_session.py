@@ -11,11 +11,14 @@ verificado por esta cookie.
   POST /api/auth/session  — Bearer Neon válido → emite/renueva la cookie (iat fresco).
   GET  /api/auth/me       — cookie/Bearer → {user_id} + re-issue deslizante (cap absoluto).
   POST /api/auth/logout   — borra la cookie.
+  POST /api/auth/email-otp/verify — [P1-OTP-FIRST-PARTY · 2026-07-03] verifica el código
+      OTP contra Neon Auth SERVER-SIDE y emite la sesión first-party directo.
 """
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Response, Cookie, Header
+import httpx
+from fastapi import APIRouter, Body, Depends, Response, Cookie, Header
 
 from auth import (
     get_verified_user_id,
@@ -95,6 +98,87 @@ async def session_me(
     # /session). Se entrega en /me para que el cliente la tenga al reabrir la app
     # vía sesión first-party (cuando ya no hay sesión de Neon ni access_token).
     return {"user_id": uid, "token": new_token, "form_key": derive_form_key(uid)}
+
+
+# [P1-OTP-FIRST-PARTY · 2026-07-03] Throttle propio, más estricto que el de sesión:
+# este endpoint proxya un intento de login (email+código) — 10/60s corta fuerza bruta
+# de códigos sin estorbar el uso legítimo (1 verify por login).
+_OTP_VERIFY_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
+@router.post("/email-otp/verify")
+async def email_otp_verify(
+    response: Response,
+    data: dict = Body(...),
+    _rl: object = Depends(_OTP_VERIFY_LIMITER),
+):
+    """[P1-OTP-FIRST-PARTY · 2026-07-03] Verifica el código OTP contra Neon Auth
+    SERVER-SIDE y, si es válido, emite la sesión first-party (`__Host-mf_session`
+    + token en body) SIN depender de la cookie cross-origin de Neon.
+
+    Por qué: el flujo previo verificaba el OTP con un fetch directo del navegador a
+    Neon Auth (`/sign-in/email-otp`, credentials:include). La cookie de sesión que
+    Neon setea en esa respuesta es THIRD-PARTY (dominio neonauth ≠ app.mealfitrd.com)
+    y viene de un XHR, no de una navegación top-level → los navegadores móviles la
+    BLOQUEAN (iOS siempre; Chrome con el phase-out de third-party cookies). Tras el
+    reload, getSession() no encontraba nada → rebote a /login ("pongo el código y no
+    entro"). Google OAuth sí funciona porque su cookie nace en el redirect top-level.
+
+    Este proxy verifica el código servidor-a-servidor (sin browser de por medio) y
+    emite NUESTRA sesión first-party — el mismo mecanismo que ya sostiene el PWA iOS
+    (P1-FIRST-PARTY-SESSION): el provider la resuelve vía _resolveViaFirstParty y
+    todas las fetches autenticadas funcionan por cookie/X-MF-Session.
+
+    Fail-secure: cualquier respuesta no-OK de Neon, o sin user.id → 401 sin cookie.
+    tooltip-anchor: P1-OTP-FIRST-PARTY"""
+    from neon_auth import NEON_AUTH_BASE_URL
+
+    email = str((data or {}).get("email") or "").strip()
+    otp = str((data or {}).get("otp") or "").strip()
+    if not email or "@" not in email or not otp or not (4 <= len(otp) <= 12):
+        return Response(status_code=401)
+    if not NEON_AUTH_BASE_URL:
+        logger.error("[P1-OTP-FIRST-PARTY] NEON_AUTH_BASE_URL ausente — no se puede verificar OTP.")
+        return Response(status_code=503)
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.post(
+                f"{NEON_AUTH_BASE_URL}/sign-in/email-otp",
+                json={"email": email, "otp": otp},
+            )
+    except Exception as e:
+        logger.warning(f"[P1-OTP-FIRST-PARTY] Neon Auth inalcanzable verificando OTP: {type(e).__name__}: {e}")
+        return Response(status_code=502)
+    if r.status_code != 200:
+        # Código inválido/expirado (o email desconocido) — mismo mensaje neutro.
+        logger.info(f"[P1-OTP-FIRST-PARTY] verify rechazado por Neon (HTTP {r.status_code}).")
+        return Response(status_code=401)
+    try:
+        payload = r.json() or {}
+    except Exception:
+        payload = {}
+    user = payload.get("user") or {}
+    uid = str(user.get("id") or "").strip()
+    if not uid:
+        logger.warning("[P1-OTP-FIRST-PARTY] Neon respondió 200 sin user.id — fail-secure 401.")
+        return Response(status_code=401)
+    if not session_cookies_enabled():
+        # Sin secreto de sesión first-party no hay forma de sostener este login
+        # server-side; mejor error explícito que un 200 que no loguea.
+        logger.error("[P1-OTP-FIRST-PARTY] session_cookies deshabilitadas — el login OTP requiere la feature.")
+        return Response(status_code=503)
+    token = set_session_cookie(response, uid)
+    if not token:
+        return Response(status_code=503)
+    logger.info(f"🔐 [P1-OTP-FIRST-PARTY] OTP verificado server-side → sesión first-party emitida (uid={uid[:8]}…).")
+    return {
+        "ok": True,
+        "user_id": uid,
+        "email": user.get("email") or email,
+        "token": token,
+        "form_key": derive_form_key(uid),
+        "session_cookie": True,
+    }
 
 
 @router.post("/logout")
