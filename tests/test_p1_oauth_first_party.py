@@ -134,3 +134,17 @@ def test_frontend_wired_adopt_before_getsession():
     fps = (_FRONT / "utils" / "firstPartySession.js").read_text(encoding="utf-8")
     assert "export async function adoptOAuthVerifierFirstParty" in fps
     assert "/api/auth/oauth/adopt" in fps
+
+
+def test_frontend_verifier_stashed_before_react_mounts():
+    """El <Navigate to="/dashboard" replace/> de '/' descarta el query en el PRIMER ciclo de
+    render (efectos hijo corren antes que el del provider) → el verifier debe capturarse en
+    main.jsx ANTES de montar React, y el provider debe leer el stash como fallback."""
+    main = (_FRONT / "main.jsx").read_text(encoding="utf-8")
+    assert "neon_auth_session_verifier" in main, "main.jsx debe capturar el verifier pre-mount"
+    assert "sessionStorage.setItem('mf_oauth_verifier'" in main
+    ctx = (_FRONT / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+    blk = ctx[ctx.index("const _adoptOAuthVerifier"):ctx.index("_adoptOAuthVerifier()")]
+    assert "sessionStorage.getItem('mf_oauth_verifier')" in blk, "el provider debe leer el stash"
+    assert "sessionStorage.removeItem('mf_oauth_verifier')" in blk, \
+        "el stash es single-use: consumirlo SIEMPRE (aunque el adopt falle)"
