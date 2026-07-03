@@ -5366,9 +5366,11 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     flash SUFICIENTE por default, pro SOLO cuando no alcanza. El day-gen avanza al siguiente en cada fallo (reintentos de
     tenacity) o si el CB del modelo está abierto.
       - BARIÁTRICO → [deepseek-v4-pro] (perfil clínico más difícil; sin capa flash). Reusa _is_bariatric_condition.
-      - RETRY (attempt>1 = el plan anterior de flash fue rechazado → flash insuficiente) → [deepseek-v4-pro].
+      - RETRY (attempt>1 = el plan anterior de flash fue rechazado → flash insuficiente) → [deepseek-v4-pro,
+        deepseek-v4-flash] (P1-DAYGEN-RETRY-FLASH-NET: flash como red si el breaker de pro está abierto —
+        antes el chain era [pro] a secas y un breaker abierto mataba TODOS los workers → fallback matemático).
       - attempt 1 → [deepseek-v4-flash, deepseek-v4-pro]: flash primario, pro SOLO si el call de flash falla (reliability).
-    Dedup preservando orden (si MEALFIT_FLASH_MODEL==pro, queda [pro]). SIEMPRE termina en pro (última instancia)."""
+    Dedup preservando orden (si MEALFIT_FLASH_MODEL==pro, queda [pro])."""
     # Bariátrico: directo a PRO (sin capa flash).
     if BARIATRIC_DAYGEN_PRO:
         try:
@@ -5377,10 +5379,21 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
         except Exception:
             pass
     # Retry tras rechazo: flash no fue suficiente → PRO para el reintento.
+    # [P1-DAYGEN-RETRY-FLASH-NET · 2026-07-03] (residuo del gym baseline: 2/20 planes cayeron a
+    # fallback MATEMÁTICO total — uno maintenance SIN condiciones) El chain de retry era [pro]
+    # A SECAS: con el circuit breaker de deepseek-v4-pro abierto (rate-limit/fallos en ráfaga),
+    # los intentos 2..N no tenían NINGÚN modelo utilizable → "Circuit Breaker OPEN para todo el
+    # chain ['deepseek-v4-pro']" → todos los workers muertos → plan de contingencia matemático.
+    # Flash queda como RED de última instancia del retry: un día real generado por flash (que
+    # los gates de review validan igual) es estrictamente mejor que un día matemático. PRO
+    # sigue PRIMERO (calidad del retry intacta con breaker sano); el cascade solo cae a flash
+    # con pro caído/abierto. Bariátrico NO cambia (arriba: [pro] deliberado — su fallback
+    # matemático está curado clínicamente, P1-FALLBACK-BARIATRIC-CURATED).
     if attempt > 1 and DAY_GEN_RETRY_USE_PRO:
-        return [_PRO_MODEL_NAME]
-    # attempt 1: flash primario (suficiente por default), pro SOLO como fallback si el call de flash falla.
-    chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
+        chain = [_PRO_MODEL_NAME, _FLASH_MODEL_NAME]
+    else:
+        # attempt 1: flash primario (suficiente por default), pro SOLO como fallback si el call de flash falla.
+        chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
     _seen, _out = set(), []
     for m in chain:
         if m and m not in _seen:

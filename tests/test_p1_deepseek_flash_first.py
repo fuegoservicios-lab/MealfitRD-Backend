@@ -28,8 +28,11 @@ def test_attempt1_flash_primary_pro_fallback(monkeypatch):
 
 def test_retry_escalates_to_pro(monkeypatch):
     _patch_flash(monkeypatch)
-    # plan de flash rechazado → reintento usa pro (flash no fue suficiente)
-    assert g._day_model_chain(_NON, 2) == ["deepseek-v4-pro"]
+    # plan de flash rechazado → reintento usa pro PRIMERO (flash no fue suficiente).
+    # [P1-DAYGEN-RETRY-FLASH-NET · 2026-07-03] flash queda como RED de última instancia:
+    # con el breaker de pro abierto, [pro] a secas mataba TODOS los workers del retry
+    # → fallback matemático (gym baseline: 2/20 planes, uno maintenance sin condiciones).
+    assert g._day_model_chain(_NON, 2) == ["deepseek-v4-pro", "deepseek-v4-flash"]
 
 
 def test_bariatric_direct_pro(monkeypatch):
