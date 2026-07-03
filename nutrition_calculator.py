@@ -69,6 +69,29 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-s
     BARIATRIC_KCAL_CEILING_ENABLED = True
     BARIATRIC_KCAL_CEILING_KCAL = 2000
 
+# [P1-GOAL-PACE-DEFICIT · 2026-07-03] El ritmo elegido en el wizard (`goalPace`:
+# gradual/moderado/decidido, step "Tu meta de peso" P1-CLINICAL-INTAKE frontend)
+# modula el déficit/superávit DETERMINISTA. Antes solo influía vía prompt — el
+# LLM no fija calorías, así que el ritmo no cambiaba números. Sin `goalPace`
+# (perfiles viejos, chip "Sin meta específica") → GOAL_ADJUSTMENTS legacy
+# intacto (-20%/+15%). Solo aplica a lose_fat/gain_muscle: los gates de
+# embarazo/menor reescriben `goal` a 'maintenance' ANTES del lookup, así que
+# una embarazada/menor jamás recibe déficit por ritmo; los pisos clínicos
+# (TDEE embarazo/menor, MIN-CALORIE-FLOOR + FS9) corren DESPUÉS y ganan.
+# Superávit "decidido" NO excede el legacy +15% (más superávit = más grasa,
+# no más músculo). Rollback sin redeploy: MEALFIT_GOAL_PACE_ENABLED=false.
+# Auto-registrado en _KNOBS_REGISTRY. tooltip-anchor: P1-GOAL-PACE-DEFICIT
+try:
+    from knobs import _env_bool as _nc_env_bool_pace
+    GOAL_PACE_ENABLED = _nc_env_bool_pace("MEALFIT_GOAL_PACE_ENABLED", True)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON
+    GOAL_PACE_ENABLED = True
+
+PACE_ADJUSTMENTS = {
+    "lose_fat":    {"gradual": -0.12, "moderado": -0.17, "decidido": -0.22},
+    "gain_muscle": {"gradual": +0.08, "moderado": +0.12, "decidido": +0.15},
+}
+
 
 def _min_target_kcal(gender) -> int:
     """[P1-MIN-CALORIE-FLOOR · 2026-06-15] Piso clínico de calorías por sexo (mujer 1200 / hombre 1500).
@@ -1286,7 +1309,31 @@ def get_nutrition_targets(form_data: dict) -> dict:
     
     # 3. Calorías objetivo (con ajuste por meta)
     target_calories = apply_goal_adjustment(tdee, goal)
-    
+
+    # [P1-GOAL-PACE-DEFICIT · 2026-07-03] Modulación del ajuste por el ritmo elegido.
+    # `goal` ya pasó los gates de embarazo/menor (si aplicaron, es 'maintenance' y el
+    # lookup no matchea). El déficit dinámico (metabolismo evolutivo) y TODOS los
+    # pisos/techos clínicos corren después sobre el target modulado, igual que antes.
+    _goal_pace_applied = None
+    if GOAL_PACE_ENABLED:
+        _pace_raw = str(form_data.get("goalPace") or "").strip().lower()
+        _pace_adj = PACE_ADJUSTMENTS.get(goal, {}).get(_pace_raw)
+        if _pace_adj is not None:
+            _pre_pace_calories = target_calories
+            target_calories = int(round((tdee * (1 + _pace_adj)) / 50) * 50)
+            _goal_pace_applied = {
+                "applied": True,
+                "pace": _pace_raw,
+                "adjustment_pct": _pace_adj,
+                "base_adjustment_pct": GOAL_ADJUSTMENTS.get(goal, 0.0),
+                "pre_pace_calories": _pre_pace_calories,
+            }
+            logger.info(
+                f"🎚️ [P1-GOAL-PACE-DEFICIT] ritmo '{_pace_raw}' → ajuste {_pace_adj:+.0%} "
+                f"(legacy {GOAL_ADJUSTMENTS.get(goal, 0.0):+.0%}): "
+                f"{_pre_pace_calories} → {target_calories} kcal."
+            )
+
     # --- MEJORA 4: METABOLISMO EVOLUTIVO (AJUSTE DINÁMICO DE MACROS) ---
     weight_history = form_data.get("weight_history", [])
     metabolism_notes = ""
@@ -1446,6 +1493,12 @@ def get_nutrition_targets(form_data: dict) -> dict:
         f"TDEE ({activity_level}, ×{ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)}): {tdee} kcal | "
         f"Objetivo ({goal}): {target_calories} kcal"
     )
+    # [P1-GOAL-PACE-DEFICIT] El ritmo elegido queda visible en el detalle del cálculo
+    # (dashboard + prompt) — el usuario ve que su elección movió el número.
+    if _goal_pace_applied:
+        calculation_details_str += (
+            f" | Ritmo ({_goal_pace_applied['pace']}): ajuste {_goal_pace_applied['adjustment_pct']:+.0%}"
+        )
     if metabolism_notes:
         calculation_details_str += f"\n{metabolism_notes}"
 
@@ -1497,18 +1550,30 @@ def get_nutrition_targets(form_data: dict) -> dict:
         "maintenance": "Mantenimiento",
         "performance": "Rendimiento Deportivo (Superávit 10%)",
     }
-    
+    _goal_label = goal_labels.get(goal, goal)
+    # [P1-GOAL-PACE-DEFICIT] Con ritmo aplicado, el label refleja el % REAL (el
+    # estático "Déficit 20%" mentiría en el dashboard si el usuario eligió gradual).
+    if _goal_pace_applied:
+        _pace_pct_label = abs(int(round(_goal_pace_applied["adjustment_pct"] * 100)))
+        _goal_label = (
+            f"Pérdida de Grasa (Déficit {_pace_pct_label}% · ritmo {_goal_pace_applied['pace']})"
+            if goal == "lose_fat"
+            else f"Ganancia Muscular (Superávit {_pace_pct_label}% · ritmo {_goal_pace_applied['pace']})"
+        )
+
     result = {
         "bmr": bmr,
         "tdee": tdee,
         "target_calories": target_calories,
         "total_daily_calories": original_target_calories,
         "total_daily_macros": original_macros,
-        "goal_label": goal_labels.get(goal, goal),
+        "goal_label": _goal_label,
         "macros": macros,
         "calculation_details": calculation_details_str,
         "kinematics": velocity_data if 'velocity_data' in locals() else None
     }
+    if _goal_pace_applied:
+        result["goal_pace_applied"] = _goal_pace_applied  # [P1-GOAL-PACE-DEFICIT]
     if _pregnancy_safety:
         result["pregnancy_lactation_safety"] = _pregnancy_safety
     if _low_calorie_floored:
