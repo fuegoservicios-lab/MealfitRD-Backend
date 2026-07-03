@@ -1654,6 +1654,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                         _qz_pre(plan_data, _QDB_pre())
                     except Exception as _qz_pre_e:
                         logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (pre-listas) falló: {_qz_pre_e}")
+                # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Motor de macros de S1
+                # (rebalance C/F/P + refine entero de 5g) en la pasada PRE-LISTAS → las listas
+                # precomputadas reflejan las porciones finales (mismo patrón closer-order:
+                # determinista, converge con el callback fresh de abajo). Skip pantry-strict.
+                try:
+                    from graph_orchestrator import apply_update_macro_engine as _ume_pre
+                    _ume_pre(plan_data, surface="chat_modify", pantry_strict=_ps_cm)
+                except Exception as _ume_pre_e:
+                    logger.debug(f"[P1-UPDATE-MACRO-PARITY] (pre-listas) no-op: {_ume_pre_e}")
             except Exception as _cm_pre_e:
                 logger.debug(f"[P1-CHATMODIFY-CLOSER-ORDER] closer pre-listas falló (no bloquea): {_cm_pre_e}")
 
@@ -1908,6 +1917,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                         _sq_cm(_m_sq)
                         except Exception as _sq_cm_e:
                             logger.debug(f"[P1-STEPS-STALE-POSTCLOSER] qty-sync (chat) falló: {_sq_cm_e}")
+                    # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) espejo del motor de
+                    # macros de la pasada pre-listas sobre el FRESH (determinista → converge a las
+                    # mismas porciones que las listas precomputadas ya reflejan). ANTES del recompute
+                    # de micros (panel ve estado final) y del band-parity (puede limpiar el banner).
+                    try:
+                        from graph_orchestrator import apply_update_macro_engine as _ume_cm
+                        _ume_cm(plan_data_fresh, surface="chat_modify", pantry_strict=_ps_cm)
+                    except Exception as _ume_cm_e:
+                        logger.debug(f"[P1-UPDATE-MACRO-PARITY] (chat fresh) no-op: {_ume_cm_e}")
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
                     # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica
                     # techos/pisos por condición sobre el panel recomputado (sodio/HTA, satfat/dislipidemia).

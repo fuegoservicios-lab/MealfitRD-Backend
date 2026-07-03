@@ -9282,6 +9282,11 @@ PORTION_SHRINK_FLOOR_G = _env_float("MEALFIT_PORTION_SHRINK_FLOOR_G", 15.0, vali
 # (múltiplos de step) → cero re-quantize. Rollback: MEALFIT_GLOBAL_DAY_REFINE=false.
 GLOBAL_DAY_REFINE_ENABLED = _env_bool("MEALFIT_GLOBAL_DAY_REFINE", True)
 GLOBAL_DAY_REFINE_MAX_ITERS = _env_int("MEALFIT_GLOBAL_DAY_REFINE_MAX_ITERS", 250, validator=lambda v: 20 <= v <= 2000)
+# [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Motor de macros de S1 (rebalance C/F/P al
+# target + refine entero de 5g) en las superficies de UPDATE (swap-persist / chat-modify / regen-day).
+# Antes el motor corría SOLO en form-gen: un update que dejaba el día fuera de banda se entregaba con
+# banner (band-parity) pero sin palanca correctiva de proteína/grasa. Ver apply_update_macro_engine.
+UPDATE_MACRO_ENGINE_ENABLED = _env_bool("MEALFIT_UPDATE_MACRO_ENGINE", True)
 # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) espejo del veg-guard para CARBS fantasma:
 # "Revoltillo con Avena" cuyos pasos cocinan avena que NO está en ingredients[] (no se cuenta ni se compra).
 # Solo carbs slot-neutros curados (avena/casabe/batata/yuca) — arroz/pasta EXCLUIDOS (slot-sensitivos: el
@@ -19424,8 +19429,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             _t > 0 and abs(_v - _t) / _t > POSTQUANTIZE_RECHECK_TOL
                             for _v, _t in ((_sp, float(_pg or 0)), (_sc, float(_cg or 0)), (_sf, float(_fg or 0)))
                         )
+                        # [P1-UPDATE-MACRO-PARITY · 2026-07-03] fix: se pasaba `[_rq_d]` (el dict del DÍA)
+                        # donde la función espera la LISTA DE MEALS → `movable=0` siempre y el recheck
+                        # post-quantize era un no-op silencioso desde su introducción. `_rq_meals` correcto.
                         if _drift and _rebalance_day_macros_to_target(
-                                [_rq_d], float(_cg or 0), float(_fg or 0), _rq_db,
+                                _rq_meals, float(_cg or 0), float(_fg or 0), _rq_db,
                                 target_protein=float(_pg or 0)):
                             _rq_fixed += 1
                     if _rq_fixed:
@@ -26213,6 +26221,92 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
         return True
     except Exception:
         return False
+
+
+def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
+                              pantry_strict: bool = False) -> int:
+    """[P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Paridad del MOTOR de macros de S1 en las
+    superficies de update. `_apply_macro_engine` + el refinador global entero corrían SOLO en form-gen:
+    un swap/chat-modify que dejaba el día fuera de banda se entregaba con banner (band-parity) pero sin
+    NINGUNA palanca correctiva de P/C/F a nivel día (solo carb-floor aditivo + micro-closer). Este helper
+    SSOT corre dentro del mutador atómico del caller, por cada día del plan fuera de banda [0.90, 1.12]:
+      1. `_rebalance_day_macros_to_target` — re-apunta C/F(/P) al target diario (re-cuantiza interno,
+         bidireccional [0.3, 2.5], never-worse: solo escala líneas macro-dominantes EXISTENTES).
+      2. si el día SIGUE fuera de banda → `refine_day_portions_integer` en pasos enteros de 5g
+         (all-4 conjunto, porciones siguen humanas, sin re-quantize) + truth-up per-meal.
+      3. qty-sync de pasos de receta de los meals del día tocado (última mutación textual).
+    Guards:
+      - `pantry_strict` → skip TOTAL (escalar = "comprar más"; mismo trade-off documentado del
+        carb-floor/micro-closer en updates — la banda queda atribuida a Nevera por band-parity).
+      - renal (`renal_protein_cap.applied`) → protein-preserving: `target_protein=0` en el rebalance y
+        SIN refine (el refine mueve líneas proteína-dominantes; el cap KDIGO manda).
+    Llamar ANTES de `recompute_micronutrient_report_for_plan` (panel ve el estado final) y de
+    `apply_update_band_parity` (que puede LIMPIAR el banner si el motor reparó la banda).
+    Devuelve nº de días tocados. Fail-safe: cualquier error → 0 (plan intacto).
+    Rollback: MEALFIT_UPDATE_MACRO_ENGINE=false. tooltip-anchor: P1-UPDATE-MACRO-PARITY"""
+    if not (UPDATE_MACRO_ENGINE_ENABLED and isinstance(plan_data, dict)) or pantry_strict:
+        return 0
+    try:
+        _mx = plan_data.get("macros") or {}
+        _pg = _meal_macro_num(_mx.get("protein"))
+        _cg = _meal_macro_num(_mx.get("carbs"))
+        _fg = _meal_macro_num(_mx.get("fats"))
+        if not any(v > 0 for v in (_pg, _cg, _fg)):
+            return 0
+        _renal = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
+        _tp = 0.0 if _renal else _pg
+        if db is None:
+            from nutrition_db import IngredientNutritionDB as _EngDB
+            db = _EngDB()
+
+        def _out_of_band(_meals: list) -> bool:
+            _sp = sum(_meal_macro_num(m.get("protein")) for m in _meals if isinstance(m, dict))
+            _sc = sum(_meal_macro_num(m.get("carbs")) for m in _meals if isinstance(m, dict))
+            _sf = sum(_meal_macro_num(m.get("fats")) for m in _meals if isinstance(m, dict))
+            _pairs = [(_sc, _cg), (_sf, _fg)] + ([] if _renal else [(_sp, _pg)])
+            return any(t > 0 and not (0.90 <= (v / t) <= 1.12) for v, t in _pairs)
+
+        touched = 0
+        for _day in plan_data.get("days") or []:
+            if not isinstance(_day, dict):
+                continue
+            _meals = [m for m in (_day.get("meals") or []) if isinstance(m, dict)]
+            if not _meals or not _out_of_band(_meals):
+                continue
+            _hit = bool(_rebalance_day_macros_to_target(_meals, _cg, _fg, db, target_protein=_tp))
+            if not _renal and GLOBAL_DAY_REFINE_ENABLED and _out_of_band(_meals):
+                try:
+                    from portion_solver import refine_day_portions_integer as _rdi_u
+                    _tgt = {"kcal": 4.0 * (_pg + _cg) + 9.0 * _fg,
+                            "protein": _pg, "carbs": _cg, "fats": _fg}
+                    if _rdi_u(_meals, _tgt, db, step_g=5.0,
+                              floor_g=float(PORTION_SHRINK_FLOOR_G),
+                              cap_g=float(PORTION_CAP_PROTEIN_G),
+                              exempt_tokens=_SHRINK_FLOOR_EXEMPT_TOKENS,
+                              max_iters=int(GLOBAL_DAY_REFINE_MAX_ITERS)):
+                        _hit = True
+                        for _m in _meals:
+                            if _m.pop("_global_refine_applied", None):
+                                try:
+                                    _truth_up_meal_macros_from_strings(_m, db)
+                                except Exception:
+                                    pass
+                except Exception as _rdi_e:
+                    logger.debug(f"[P1-UPDATE-MACRO-PARITY] refine no-op: {type(_rdi_e).__name__}: {_rdi_e}")
+            if _hit:
+                touched += 1
+                for _m in _meals:
+                    try:
+                        _sync_recipe_step_quantities(_m)
+                    except Exception:
+                        pass
+        if touched:
+            logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] motor de macros en update: {touched} día(s) "
+                        f"re-apuntado(s) hacia banda (surface={surface})")
+        return touched
+    except Exception as _ume_e:
+        logger.debug(f"[P1-UPDATE-MACRO-PARITY] no-op: {type(_ume_e).__name__}: {_ume_e}")
+        return 0
 
 
 def apply_update_band_parity(plan_data: dict, *, surface: str, pantry_limited: bool = False,

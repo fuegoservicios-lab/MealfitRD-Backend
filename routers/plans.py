@@ -5478,6 +5478,17 @@ def api_swap_meal_persist(
                                         _sq_swap(_m_sq)
                         except Exception as _sq_e:
                             logger.debug(f"[P1-STEPS-STALE-POSTCLOSER] qty-sync (swap) falló: {_sq_e}")
+                    # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Motor de macros de S1 en el
+                    # persist del swap: si el plato swapeado (o los closers de arriba) dejaron CUALQUIER
+                    # día fuera de banda [0.90,1.12], rebalance C/F/P al target + refine entero de 5g —
+                    # antes el swap NO tenía palanca de proteína/grasa a nivel día (solo banner). Corre
+                    # ANTES del recompute de micros (el panel ve el estado final) y del band-parity (que
+                    # ahora puede LIMPIAR el banner si el motor reparó la banda). Skip pantry-strict.
+                    try:
+                        from graph_orchestrator import apply_update_macro_engine as _ume_sw
+                        _ume_sw(plan_data, surface="swap_persist", pantry_strict=_ps_swap)
+                    except Exception as _ume_sw_e:
+                        logger.debug(f"[P1-UPDATE-MACRO-PARITY] (swap) no-op: {_ume_sw_e}")
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
                     # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica los
                     # techos/pisos por condición (sodio/HTA, satfat/dislipidemia, K/Mg/fibra) sobre el panel
@@ -6121,6 +6132,58 @@ def api_regenerate_day(
                         logger.info("🎚 [P2-REGEN-DAY-MACRO-REBALANCE] macros del día re-apuntadas al target")
             except Exception as _rbd_e:
                 logger.warning(f"[P2-REGEN-DAY-MACRO-REBALANCE] rebalance del día falló (no bloquea): {type(_rbd_e).__name__}: {_rbd_e}")
+
+        # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Refinador GLOBAL entero de 5g del día
+        # regenerado (paridad con assemble: rebalance → refine): si tras el rebalance el día sigue fuera
+        # de banda all-4, local search en pasos de 5g (porciones siguen humanas, sin re-quantize).
+        # Mismo guard pantry never-worse-than-current del rebalance (el refine puede escalar UP hasta 2×
+        # una línea → revalidar contra la Nevera ORIGINAL y revertir si rompe). Renal: skip (el refine
+        # mueve líneas proteína-dominantes; el cap KDIGO manda — mismo criterio del helper SSOT).
+        if (
+            regenerated > 0 and not _ai_unavailable and not _renal_capped
+            and os.environ.get("MEALFIT_UPDATE_MACRO_ENGINE", "true").strip().lower() in ("1", "true", "yes", "on")
+            and (day_target.get("protein_g") or day_target.get("carbs_g") or day_target.get("fats_g"))
+        ):
+            try:
+                from graph_orchestrator import (_meal_macro_num as _mmn_rf,
+                                                _truth_up_meal_macros_from_strings as _tu_rf,
+                                                PORTION_SHRINK_FLOOR_G as _fl_rf,
+                                                PORTION_CAP_PROTEIN_G as _cap_rf,
+                                                _SHRINK_FLOOR_EXEMPT_TOKENS as _ex_rf,
+                                                GLOBAL_DAY_REFINE_MAX_ITERS as _it_rf)
+                from portion_solver import refine_day_portions_integer as _rdi_rd
+                import copy as _copy_rf
+                _pg_rf = float(day_target.get("protein_g") or 0)
+                _cg_rf = float(day_target.get("carbs_g") or 0)
+                _fg_rf = float(day_target.get("fats_g") or 0)
+                _real_rf = [m for m in new_meals if isinstance(m, dict)]
+                _sp_rf = sum(_mmn_rf(m.get("protein")) for m in _real_rf)
+                _sc_rf = sum(_mmn_rf(m.get("carbs")) for m in _real_rf)
+                _sf_rf = sum(_mmn_rf(m.get("fats")) for m in _real_rf)
+                _oob_rf = any(t > 0 and not (0.90 <= v / t <= 1.12)
+                              for v, t in ((_sp_rf, _pg_rf), (_sc_rf, _cg_rf), (_sf_rf, _fg_rf)))
+                if _oob_rf:
+                    _pre_rf = _copy_rf.deepcopy(new_meals)
+                    _tgt_rf = {"kcal": 4.0 * (_pg_rf + _cg_rf) + 9.0 * _fg_rf,
+                               "protein": _pg_rf, "carbs": _cg_rf, "fats": _fg_rf}
+                    _mv_rf = _rdi_rd(_real_rf, _tgt_rf, _db, step_g=5.0, floor_g=float(_fl_rf),
+                                     cap_g=float(_cap_rf), exempt_tokens=_ex_rf, max_iters=int(_it_rf))
+                    if _mv_rf:
+                        for _m_rf in _real_rf:
+                            if _m_rf.pop("_global_refine_applied", None):
+                                try:
+                                    _tu_rf(_m_rf, _db)
+                                except Exception:
+                                    pass
+                        _exc_rf, _why_rf = _day_exceeds_pantry(new_meals, _orig_ledger_grams, _db)
+                        if _exc_rf:
+                            logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] refine rompió pantry → revertido | {_why_rf}")
+                            new_meals[:] = _pre_rf
+                            _pantry_limited = True  # el déficit residual es por Nevera (deficit-honesty)
+                        else:
+                            logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] refine 5g del día regenerado: {_mv_rf} movimiento(s)")
+            except Exception as _rf_e:
+                logger.warning(f"[P1-UPDATE-MACRO-PARITY] refine regen-day falló (no bloquea): {type(_rf_e).__name__}: {_rf_e}")
 
         # [P1-REGEN-DAY-CLINICAL-PARITY · 2026-06-27] Paridad S1↔S2: el día regenerado pasa por la MISMA
         # maquinaria clínica de assemble_plan_node — caps de porción DM2/bariátrica (anti-dumping + volumen del
