@@ -18558,6 +18558,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
         "fats": active_macros["fats_str"],
     }
     result["main_goal"] = nutrition["goal_label"]
+    # [P1-GOAL-ETA · 2026-07-03] Plazo estimado hasta la meta de peso (calculado en
+    # nutrition_calculator con el déficit REAL post pisos/techos). Viaja en plan_data
+    # para que el Dashboard lo muestre ("Meta: 140 lb · ~14 semanas a tu ritmo").
+    if nutrition.get("goal_eta"):
+        result["goal_eta"] = nutrition["goal_eta"]
 
     # [P3-CONDITION-RULES · 2026-06-14] ERC — CAP DE SEGURIDAD de proteína (KDIGO 2024). En
     # enfermedad renal G3-G5 no-diálisis la proteína se LIMITA a ~0.8 g/kg — lo OPUESTO al piso

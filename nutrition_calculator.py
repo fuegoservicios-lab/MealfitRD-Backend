@@ -92,6 +92,26 @@ PACE_ADJUSTMENTS = {
     "gain_muscle": {"gradual": +0.08, "moderado": +0.12, "decidido": +0.15},
 }
 
+# [P1-GOAL-ETA · 2026-07-03] Plazo estimado honesto hasta la meta de peso
+# (`targetWeight` del step "Tu meta de peso", P1-CLINICAL-INTAKE frontend).
+# Estimación energética de primer orden: ~7,700 kcal ≈ 1 kg de masa corporal,
+# sobre el gap TDEE↔target FINAL (post ritmo + pisos + techos — si el
+# MIN-CALORIE-FLOOR redujo el déficit real, el ETA lo refleja, no miente).
+# Solo lose_fat/gain_muscle con targetWeight válido, delta ≥ 0.5 kg y gap
+# ≥ 100 kcal/día (bajo eso el plan es mantenimiento efectivo y un ETA sería
+# ficción). La nota deja claro que es estimación (agua, adherencia,
+# adaptación metabólica). Rollback: MEALFIT_GOAL_ETA_ENABLED=false.
+# Auto-registrado en _KNOBS_REGISTRY. tooltip-anchor: P1-GOAL-ETA
+try:
+    from knobs import _env_bool as _nc_env_bool_eta
+    GOAL_ETA_ENABLED = _nc_env_bool_eta("MEALFIT_GOAL_ETA_ENABLED", True)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON
+    GOAL_ETA_ENABLED = True
+
+_KCAL_PER_KG = 7700.0
+_ETA_MIN_DELTA_KG = 0.5
+_ETA_MIN_DAILY_GAP_KCAL = 100.0
+
 
 def _min_target_kcal(gender) -> int:
     """[P1-MIN-CALORIE-FLOOR · 2026-06-15] Piso clínico de calorías por sexo (mujer 1200 / hombre 1500).
@@ -1488,11 +1508,51 @@ def get_nutrition_targets(form_data: dict) -> dict:
             logger.info(f"🔻 [P1-BARIATRIC-KCAL-CEILING] target {_pre_ceiling} → {BARIATRIC_KCAL_CEILING_KCAL} kcal "
                         f"(pouch realista; alinea el denominador del band con la realidad fisiológica).")
 
+    # [P1-GOAL-ETA · 2026-07-03] Plazo estimado hasta la meta — corre DESPUÉS de
+    # pisos/techos para usar el déficit/superávit REAL entregado (si el floor
+    # recortó el déficit, el ETA se alarga en consecuencia — honestidad primero).
+    # Los gates de embarazo/menor ya forzaron goal='maintenance' → no hay ETA.
+    _goal_eta = None
+    if GOAL_ETA_ENABLED and goal in ("lose_fat", "gain_muscle"):
+        try:
+            _tw_raw = form_data.get("targetWeight")
+            _tw = float(str(_tw_raw).replace(",", ".")) if _tw_raw not in (None, "") else None
+        except (ValueError, TypeError):
+            _tw = None
+        if _tw is not None and _tw > 0:
+            _tw_kg = _tw if weight_unit == "kg" else round(_tw / 2.20462, 1)
+            _delta_kg = round((weight - _tw_kg) if goal == "lose_fat" else (_tw_kg - weight), 1)
+            _daily_gap = float((tdee - target_calories) if goal == "lose_fat" else (target_calories - tdee))
+            if _delta_kg >= _ETA_MIN_DELTA_KG and _daily_gap >= _ETA_MIN_DAILY_GAP_KCAL:
+                _weekly_rate_kg = round((_daily_gap * 7) / _KCAL_PER_KG, 2)
+                _weeks = max(1, int(round((_delta_kg * _KCAL_PER_KG) / (_daily_gap * 7))))
+                _goal_eta = {
+                    "target_weight_kg": _tw_kg,
+                    "target_weight_display": f"{_tw_raw} {weight_unit}",
+                    "current_weight_kg": weight,
+                    "delta_kg": _delta_kg,
+                    "weekly_rate_kg": _weekly_rate_kg,
+                    "weeks_estimate": _weeks,
+                    "pace": (_goal_pace_applied or {}).get("pace"),
+                    "direction": "down" if goal == "lose_fat" else "up",
+                    "note": ("Estimación energética (~7,700 kcal ≈ 1 kg): el ritmo real varía con la "
+                             "adherencia, la retención de agua y la adaptación metabólica."),
+                }
+                logger.info(
+                    f"🗓️ [P1-GOAL-ETA] meta {_tw_raw}{weight_unit} (Δ{_delta_kg}kg, "
+                    f"{_weekly_rate_kg}kg/sem) → ~{_weeks} semanas."
+                )
+
     calculation_details_str = (
         f"BMR (Mifflin-St Jeor): {bmr} kcal | "
         f"TDEE ({activity_level}, ×{ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)}): {tdee} kcal | "
         f"Objetivo ({goal}): {target_calories} kcal"
     )
+    # [P1-GOAL-ETA] La meta cuantificada viaja en el detalle (dashboard + prompt).
+    if _goal_eta:
+        calculation_details_str += (
+            f" | Meta: {_goal_eta['target_weight_display']} → ~{_goal_eta['weeks_estimate']} semanas"
+        )
     # [P1-GOAL-PACE-DEFICIT] El ritmo elegido queda visible en el detalle del cálculo
     # (dashboard + prompt) — el usuario ve que su elección movió el número.
     if _goal_pace_applied:
@@ -1574,6 +1634,8 @@ def get_nutrition_targets(form_data: dict) -> dict:
     }
     if _goal_pace_applied:
         result["goal_pace_applied"] = _goal_pace_applied  # [P1-GOAL-PACE-DEFICIT]
+    if _goal_eta:
+        result["goal_eta"] = _goal_eta  # [P1-GOAL-ETA]
     if _pregnancy_safety:
         result["pregnancy_lactation_safety"] = _pregnancy_safety
     if _low_calorie_floored:
