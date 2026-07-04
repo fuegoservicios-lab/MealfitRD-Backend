@@ -115,12 +115,19 @@ def test_a2_requirements_swapped():
 # B. Router por tier
 # ------------------------------------------------------------------
 
-def test_b_resolve_model_for_tier_matrix():
+def test_b_resolve_model_for_tier_matrix(monkeypatch):
     from llm_provider import (
         DEEPSEEK_FLASH,
         DEEPSEEK_PRO,
         resolve_model_for_tier,
     )
+
+    # [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] El contrato son los defaults del
+    # CÓDIGO, no el .env del dev: el .env local fuerza flash-económico en ambos
+    # tiers a propósito (decisión owner 2026-07-04), lo que dejaba este test
+    # rojo por ambiente. Prod (VPS) no lleva esos overrides.
+    monkeypatch.delenv("MEALFIT_MODEL_FREE_TIER", raising=False)
+    monkeypatch.delenv("MEALFIT_MODEL_PAID_TIER", raising=False)
 
     # Decisión de producto 2026-06-12: free → flash, pagado → pro.
     assert resolve_model_for_tier("gratis") == DEEPSEEK_FLASH
@@ -136,6 +143,13 @@ def test_b_resolve_model_for_tier_matrix():
 
 def test_b2_resolve_model_for_user_paths(monkeypatch):
     import llm_provider
+    import db  # noqa: F401 — fuerza el load_dotenv de la cadena de import ANTES del delenv
+
+    # [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] Env-independiente (ver test_b).
+    # OJO orden: importar `db` primero — su cadena de import corre load_dotenv()
+    # y re-setearía las vars si el delenv corriera antes.
+    monkeypatch.delenv("MEALFIT_MODEL_FREE_TIER", raising=False)
+    monkeypatch.delenv("MEALFIT_MODEL_PAID_TIER", raising=False)
 
     llm_provider.invalidate_tier_cache()
 

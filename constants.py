@@ -172,9 +172,12 @@ CHUNK_MIN_FRESH_PANTRY_ITEMS = max(1, int(os.environ.get("CHUNK_MIN_FRESH_PANTRY
 # al usuario a surtir mejor su nevera y que sus planes la aprovechen. Desacoplado
 # del piso duro de arriba — subirlo NO afecta la generación, solo el copy. Clamp
 # [piso, 100]. Knob `MEALFIT_PANTRY_RECOMMENDED_ITEMS` para A/B sin redeploy.
+# [P1-BUDGET-DRIVER-AWARE · 2026-07-04, boy-scout] Migrado de raw os.environ.get
+# al helper de knobs (registro en _KNOBS_REGISTRY + visible en /health/version);
+# clamp [piso, 100] preservado.
 PANTRY_RECOMMENDED_ITEMS = max(
     CHUNK_MIN_FRESH_PANTRY_ITEMS,
-    min(100, int(os.environ.get("MEALFIT_PANTRY_RECOMMENDED_ITEMS", "20"))),
+    min(100, _env_int("MEALFIT_PANTRY_RECOMMENDED_ITEMS", 20)),
 )
 CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
 CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))

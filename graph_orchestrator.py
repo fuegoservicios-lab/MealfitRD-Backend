@@ -4962,17 +4962,100 @@ def _profile_has_medical_risk(form_data) -> bool:
     return False
 
 
+# [P1-DEEPSEEK-ONLY-RESTORE · 2026-07-04] Guard observacional del gate clínico.
+# Lección medida (E2E 2026-07-04): con el reviewer médico corriendo en un modelo
+# débil (flash forzado / override Gemini flash-lite) un plan DM2 pasó con carbos
+# +99% sin rechazo — el reviewer risk-tier es el ÚNICO gate LLM de seguridad
+# clínica y degradarlo EN SILENCIO re-introduce esa clase de fallo. Este guard
+# NO bloquea ni cambia el routing (los knobs per-feature siguen ganando,
+# convención P3-PREVIEW-MODEL-KNOB): emite WARN una vez por proceso por
+# (nodo, modelo) + system_alert idempotente para que el operador SEPA que el
+# gate clínico corre por debajo del risk-tier. Si el downgrade es intencional
+# (A/B, economía), la alert se resuelve manual y no re-dispara hasta el
+# próximo restart del worker. Tooltip-anchor: P1-DEEPSEEK-ONLY-RESTORE.
+_CLINICAL_MODEL_GUARD_WARNED: set = set()
+
+
+def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
+    """Emite WARN + `system_alerts` cuando un perfil con riesgo médico va a
+    ser revisado por un modelo distinto del risk-tier (`deepseek-v4-pro`).
+    Best-effort: jamás rompe el routing de modelos."""
+    resolved = (resolved_model or "").strip()
+    if resolved == _REVIEWER_RISK_TIER_DEFAULT:
+        return
+    dedup = (node, resolved)
+    if dedup in _CLINICAL_MODEL_GUARD_WARNED:
+        return
+    _CLINICAL_MODEL_GUARD_WARNED.add(dedup)
+    logger.warning(
+        f"⚠ [P1-DEEPSEEK-ONLY-RESTORE] Gate clínico DEGRADADO: nodo '{node}' "
+        f"resolvió '{resolved}' para perfil con riesgo médico (risk-tier "
+        f"esperado '{_REVIEWER_RISK_TIER_DEFAULT}'). Revisar knobs "
+        f"MEALFIT_{node.upper()}_MODEL / MEALFIT_{node.upper()}_RISK_TIER_MODEL "
+        f"en el .env del worker; si es intencional, resolver la alert manual."
+    )
+    try:
+        from db import execute_sql_write
+        import json as _json
+
+        alert_key = f"llm_clinical_reviewer_downgraded:{node}"
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'llm_config', 'warning', %s, %s, %s::jsonb, '[]'::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                f"Gate clínico degradado: {node} fuera del risk-tier",
+                (
+                    f"El nodo clínico '{node}' está resolviendo al modelo "
+                    f"'{resolved}' para perfiles con alergias/condiciones "
+                    f"médicas (risk-tier esperado "
+                    f"'{_REVIEWER_RISK_TIER_DEFAULT}'). Un modelo débil en "
+                    f"este gate deja pasar violaciones clínicas (caso medido: "
+                    f"DM2 carbos +99%). Corregir knobs o resolver manual si "
+                    f"es intencional."
+                ),
+                _json.dumps(
+                    {
+                        "node": node,
+                        "resolved_model": resolved,
+                        "expected_model": _REVIEWER_RISK_TIER_DEFAULT,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    except Exception as e:
+        logger.debug(
+            f"[P1-DEEPSEEK-ONLY-RESTORE] alert emit falló (best-effort): {e}"
+        )
+
+
 def _fact_checker_model_name(form_data=None) -> str:
     """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del fact-checker clínico.
     Hard-override `MEALFIT_FACT_CHECKER_MODEL` siempre gana. Si el perfil tiene
     alergias/condiciones → risk-tier (`MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`,
-    default `gemini-3.5-flash`); de lo contrario Flash-Lite."""
+    default `deepseek-v4-pro`); de lo contrario Flash (default barato).
+    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
+    WARN + system_alert (observacional, el knob sigue ganando)."""
     _override = _env_str("MEALFIT_FACT_CHECKER_MODEL", "")
+    _risk = _profile_has_medical_risk(form_data)
     if _override:
+        if _risk:
+            _warn_if_clinical_model_downgraded("fact_checker", _override)
         return _override
-    if _profile_has_medical_risk(form_data):
-        return (_env_str("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
-                or _REVIEWER_RISK_TIER_DEFAULT)
+    if _risk:
+        _resolved = (_env_str("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
+                     or _REVIEWER_RISK_TIER_DEFAULT)
+        _warn_if_clinical_model_downgraded("fact_checker", _resolved)
+        return _resolved
     return _FLASH_LITE_DEFAULT
 
 
@@ -4980,14 +5063,21 @@ def _reviewer_model_name(form_data=None) -> str:
     """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del reviewer (pipeline_holistic).
     Hard-override `MEALFIT_REVIEWER_MODEL` siempre gana. Si el perfil tiene
     alergias/condiciones médicas → risk-tier (`MEALFIT_REVIEWER_RISK_TIER_MODEL`,
-    default `gemini-3.5-flash`, más capaz que Lite para razonamiento clínico);
-    de lo contrario Flash-Lite (`ReviewResult` schema strict, temp=0.1)."""
+    default `deepseek-v4-pro`, más capaz para razonamiento clínico);
+    de lo contrario Flash (`ReviewResult` schema strict, temp=0.1).
+    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
+    WARN + system_alert (observacional, el knob sigue ganando)."""
     _override = _env_str("MEALFIT_REVIEWER_MODEL", "")
+    _risk = _profile_has_medical_risk(form_data)
     if _override:
+        if _risk:
+            _warn_if_clinical_model_downgraded("reviewer", _override)
         return _override
-    if _profile_has_medical_risk(form_data):
-        return (_env_str("MEALFIT_REVIEWER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
-                or _REVIEWER_RISK_TIER_DEFAULT)
+    if _risk:
+        _resolved = (_env_str("MEALFIT_REVIEWER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
+                     or _REVIEWER_RISK_TIER_DEFAULT)
+        _warn_if_clinical_model_downgraded("reviewer", _resolved)
+        return _resolved
     return _FLASH_LITE_DEFAULT
 
 
@@ -18012,6 +18102,24 @@ BUDGET_CHEAPEN_MAX_SUBS = _env_int("MEALFIT_BUDGET_CHEAPEN_MAX_SUBS", 3, lambda 
 # no solo economía) → una pasada extra del cheapen (force) → re-banda → rebuild de listas →
 # re-costeo → re-reconciliación. Acotado a 1 pasada. Ver bloque en assemble_plan_node.
 BUDGET_CONVERGENCE_ENABLED = _env_bool("MEALFIT_BUDGET_CONVERGENCE", True)
+# [P1-BUDGET-DRIVER-AWARE · 2026-07-04] (audit v7 · P1-2) El cerebro de la convergencia deja
+# de ser ciego: en vez de barrer días en orden contra la tabla estática de 8 pares, RANKEA los
+# ítems que realmente encarecen la lista costeada (`estimated_cost_rd` desc) y ataca esos
+# drivers con familias culinarias curadas (pescado→pescado, queso→queso, fruta→fruta...) cuyo
+# candidato se valida contra el precio VIVO del catálogo master (≥30% más barato). Cierra el
+# gap del audit v7: "un plan `excedido` cuyos ítems caros no están entre los 8 pares recibe
+# 0 sustituciones y permanece excedido tras la convergencia". La tabla estática queda como
+# BACKSTOP (corre después, idempotente — los tokens ya sustituidos no re-matchean).
+# Rollback sin redeploy: MEALFIT_BUDGET_DRIVER_AWARE=false.
+# Tooltip-anchor: P1-BUDGET-DRIVER-AWARE. Test: test_p1_budget_driver_aware.py.
+BUDGET_DRIVER_AWARE_ENABLED = _env_bool("MEALFIT_BUDGET_DRIVER_AWARE", True)
+BUDGET_DRIVER_AWARE_MAX_SUBS = _env_int("MEALFIT_BUDGET_DRIVER_AWARE_MAX_SUBS", 5, lambda v: 0 <= v <= 12)
+BUDGET_DRIVER_AWARE_TOP_ITEMS = _env_int("MEALFIT_BUDGET_DRIVER_AWARE_TOP_ITEMS", 8, lambda v: 1 <= v <= 25)
+# Ahorro mínimo por libra para que la sustitución valga (candidato < original × (1 - pct)).
+# Mismo umbral 30% de la tabla estática (`cand_price >= orig_price * 0.7 → skip`).
+BUDGET_DRIVER_AWARE_MIN_SAVING_PCT = _env_float(
+    "MEALFIT_BUDGET_DRIVER_AWARE_MIN_SAVING_PCT", 0.30, lambda v: 0.0 <= v <= 0.9
+)
 
 # (regex del alimento premium, candidato económico del catálogo, excludes accent-stripped).
 # Misma categoría culinaria SIEMPRE (pescado→pescado, semilla→semilla, grano→grano) —
@@ -18181,6 +18289,161 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
         return subs
     except Exception as _bcp_e:
         logger.warning(f"[P1-BUDGET-TIER-LEVERS] cheapen-pass no-op: {type(_bcp_e).__name__}: {_bcp_e}")
+        return 0
+
+
+# [P1-BUDGET-DRIVER-AWARE · 2026-07-04] Familias culinarias para la sustitución driver-aware.
+# Cada regla: (regex del driver caro, tuple de candidatos económicos EN ORDEN DE PREFERENCIA
+# culinaria, excludes accent-stripped). Doctrina intacta de P1-BUDGET-TIER-LEVERS: misma
+# categoría culinaria SIEMPRE (cross-categoría cambia el plato — decisión del LLM/usuario).
+# El orden de candidatos codifica juicio culinario (pescado blanco antes que sardina); el
+# primer candidato que RESUELVE con precio en el catálogo master + pasa guards + ahorra
+# ≥MIN_SAVING_PCT gana. Candidatos que no existen en el catálogo → skip silencioso
+# (fail-open), así la tabla tolera drift del catálogo sin romper nada. Clínico: candidatos
+# elegidos neutrales (sin altos-K tipo guineo — perfil renal), y el allergen-scan + dislikes
+# del pase se aplican igual que en la tabla estática.
+_BUDGET_DRIVER_FAMILIES = (
+    (r"salm[oó]n|camar[oó]n(?:es)?|bacalao|mero|chillo|pulpo|langosta|at[uú]n\s+fresco",
+     ("Filete de pescado blanco",), ()),
+    (r"filete\s+de\s+res|lomo\s+de\s+res|churrasco|solomillo",
+     ("Carne de res molida",), ()),
+    (r"queso\s+(?:cheddar|gouda|parmesano|mozzarella|manchego|suizo|azul|brie)",
+     ("Queso blanco", "Queso de freír"), ()),
+    (r"almendras?|nueces|nuez|pistachos?|avellanas?|semillas?\s+de\s+cajuil|maca(?:damia)?s?",
+     ("Maní",), ("leche de almendra", "harina de almendra", "nuez moscada")),
+    (r"ch[ií]a", ("Linaza",), ()),
+    (r"quinoa|quinua", ("Arroz integral",), ()),
+    (r"yogurt\s+griego|yogur\s+griego", ("Yogurt natural",), ()),
+    (r"fresas?|ar[aá]ndanos?|frambuesas?|moras?\b",
+     ("Lechosa", "Piña"), ()),
+)
+
+
+def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
+    """[P1-BUDGET-DRIVER-AWARE · 2026-07-04] (audit v7 · P1-2) Sustitución económica
+    guiada por el COSTO REAL: rankea los ítems más caros de la lista semanal costeada
+    (`estimated_cost_rd` desc, top BUDGET_DRIVER_AWARE_TOP_ITEMS), resuelve la familia
+    culinaria de cada driver y sustituye sus apariciones en el plan por el candidato
+    económico preferido que valide contra el precio vivo del catálogo master. Retorna
+    nº de líneas sustituidas (cap BUDGET_DRIVER_AWARE_MAX_SUBS). Guards idénticos a
+    `_apply_budget_cheapen_pass`: alergias (`_scan_allergen_violations`), dislikes,
+    ahorro mínimo, marcado honesto (`_budget_substitutions`), rewrite de nombre y de
+    pasos de receta. Fail-open TOTAL (0 y plan intacto ante cualquier duda).
+    tooltip-anchor: P1-BUDGET-DRIVER-AWARE"""
+    if not BUDGET_DRIVER_AWARE_ENABLED or BUDGET_DRIVER_AWARE_MAX_SUBS <= 0:
+        return 0
+    if not days or not weekly_list:
+        return 0
+    try:
+        from constants import strip_accents as _sa
+        master_map = _budget_build_master_price_map()
+        if not master_map:
+            return 0
+        allergies = (form_data or {}).get("allergies")
+        dislikes = {_sa(str(d).strip().lower()) for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()}
+
+        # 1. Drivers: ítems con precio, de mayor a menor costo.
+        priced = [
+            it for it in weekly_list
+            if isinstance(it, dict) and str(it.get("name") or "").strip()
+        ]
+        priced.sort(key=lambda x: float(x.get("estimated_cost_rd") or 0) or 0.0, reverse=True)
+        drivers = [
+            str(it.get("name")).strip()
+            for it in priced[: max(1, BUDGET_DRIVER_AWARE_TOP_ITEMS)]
+            if float(it.get("estimated_cost_rd") or 0) > 0
+        ]
+        if not drivers:
+            return 0
+
+        # 2. Resolver (regex, candidato validado) por driver, en orden de costo.
+        resolved: list = []  # (rx, candidate)
+        seen_rx: set = set()
+        for drv in drivers:
+            for rx, candidates, excludes in _BUDGET_DRIVER_FAMILIES:
+                if rx in seen_rx:
+                    continue
+                if not _re.search(rf"\b(?:{rx})\b", drv, _re.IGNORECASE):
+                    continue
+                drv_low = _sa(drv.lower())
+                if any(ex in drv_low for ex in excludes):
+                    continue
+                orig_price = _budget_master_price_per_lb(drv, master_map)
+                for candidate in candidates:
+                    cand_price = _budget_master_price_per_lb(candidate, master_map)
+                    if cand_price <= 0:
+                        continue  # candidato sin precio en catálogo → siguiente preferencia
+                    if orig_price > 0 and cand_price >= orig_price * (1.0 - BUDGET_DRIVER_AWARE_MIN_SAVING_PCT):
+                        continue  # no ahorra lo suficiente
+                    cand_low = _sa(candidate.lower())
+                    if any(dk and dk in cand_low for dk in dislikes):
+                        continue
+                    if allergies:
+                        try:
+                            if _scan_allergen_violations(
+                                {"days": [{"meals": [{"ingredients": [candidate]}]}]}, allergies
+                            ):
+                                continue
+                        except Exception:
+                            continue  # scan falló → conservador: no sustituir
+                    resolved.append((rx, candidate, excludes, orig_price, cand_price))
+                    seen_rx.add(rx)
+                    break
+                break  # primera familia que matchea el driver decide
+        if not resolved:
+            return 0
+
+        # 3. Sustituir apariciones en el plan (misma maquinaria del pase estático).
+        subs = 0
+        for _d in days:
+            if subs >= BUDGET_DRIVER_AWARE_MAX_SUBS:
+                break
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if subs >= BUDGET_DRIVER_AWARE_MAX_SUBS:
+                    break
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                for idx, ing in enumerate(ings):
+                    if subs >= BUDGET_DRIVER_AWARE_MAX_SUBS:
+                        break
+                    if not isinstance(ing, str):
+                        continue
+                    low = _sa(ing.lower())
+                    for rx, candidate, excludes, orig_price, cand_price in resolved:
+                        if any(ex in low for ex in excludes):
+                            continue
+                        m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
+                        if not m:
+                            continue
+                        new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
+                        if new_line == ing:
+                            continue
+                        ings[idx] = new_line
+                        raw = meal.get("ingredients_raw")
+                        if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
+                            raw[idx] = _re.sub(rf"\b(?:{rx})\b", candidate, raw[idx], count=1, flags=_re.IGNORECASE)
+                        name = meal.get("name")
+                        if isinstance(name, str) and _re.search(rf"\b(?:{rx})\b", name, _re.IGNORECASE):
+                            meal["name"] = _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE)
+                        note = f"{m.group(0)} → {candidate}"
+                        meal.setdefault("_budget_substitutions", []).append(note)
+                        if SUBST_RECIPE_REWRITE_ENABLED:
+                            try:
+                                _rewrite_recipe_steps_after_subs(meal, [([m.group(0)], candidate)])
+                            except Exception:
+                                pass
+                        logger.info(
+                            f"💰 [P1-BUDGET-DRIVER-AWARE] Sustitución driver-aware: {note} "
+                            f"(RD${orig_price:.0f}/lb → RD${cand_price:.0f}/lb)"
+                        )
+                        subs += 1
+                        break
+        return subs
+    except Exception as _bda_e:
+        logger.warning(f"[P1-BUDGET-DRIVER-AWARE] pase no-op: {type(_bda_e).__name__}: {_bda_e}")
         return 0
 
 
@@ -19924,7 +20187,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             _bc_rec0 = result.get("budget_reconciliation") or {}
             if BUDGET_CONVERGENCE_ENABLED and str(_bc_rec0.get("status") or "") == "excedido":
-                _bc_subs = _apply_budget_cheapen_pass(result.get("days") or [], form_data, force=True)
+                # [P1-BUDGET-DRIVER-AWARE · 2026-07-04] (audit v7 · P1-2) Primero el pase
+                # driver-aware (rankea los ítems caros de la lista COSTEADA y ataca esos
+                # drivers con familias curadas + precio vivo del catálogo); el pase estático
+                # de 8 pares queda como backstop (idempotente: los tokens ya sustituidos no
+                # re-matchean). Rollback: MEALFIT_BUDGET_DRIVER_AWARE=false → solo estático.
+                _bc_days = result.get("days") or []
+                _bc_subs = 0
+                if BUDGET_DRIVER_AWARE_ENABLED:
+                    _bc_subs = _apply_budget_driver_aware_pass(
+                        _bc_days, form_data,
+                        result.get("aggregated_shopping_list_weekly") or [],
+                    )
+                _bc_subs += _apply_budget_cheapen_pass(_bc_days, form_data, force=True)
                 if _bc_subs:
                     result["_budget_adjusted"] = True
                     # truth-up post-sustitución (el string conservó gramos; el alimento cambió) +
