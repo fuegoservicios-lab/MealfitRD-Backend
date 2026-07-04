@@ -21883,10 +21883,20 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
             #     que la receta SÍ menciona (modo de fallo más actionable).
             #   - magnitude con |delta_pct| > 0.30: error de cantidad severo.
             critical_cap = int(hyp_counter.get("cap_swallowed_modifier", 0))
+            # [P2-COH-WEEKLY-BASIS · 2026-07-04] Solo deltas FINITOS cuentan como
+            # magnitud crítica: `inf > 0.30` es True, así que los fantasmas/splits de
+            # unidad (delta=inf, el ruido que el block-mode de assemble YA clasifica
+            # como no-accionable) inflaban critical_count y escalaban al banner del
+            # usuario ("71 detalles" en un plan recién renovado — caso vivo 2026-07-04).
+            def _coh_finite_delta(_dv):
+                try:
+                    _v = float(_dv.get("delta_pct") or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+                return _v if _v == _v and abs(_v) != float("inf") else 0.0
             critical_magnitudes = sum(
                 1 for d in coh_div
-                if d.get("magnitude")
-                and abs(float(d.get("delta_pct") or 0.0)) > 0.30
+                if d.get("magnitude") and abs(_coh_finite_delta(d)) > 0.30
             )
             critical_total = critical_cap + critical_magnitudes
 
@@ -21939,7 +21949,8 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
                 for _d in coh_div[:5]:
                     if (
                         _d.get("hypothesis") == "cap_swallowed_modifier"
-                        or (_d.get("magnitude") and abs(float(_d.get("delta_pct") or 0.0)) > 0.30)
+                        # [P2-COH-WEEKLY-BASIS] misma vara finita del critical_count.
+                        or (_d.get("magnitude") and abs(_coh_finite_delta(_d)) > 0.30)
                     ):
                         # [P1-INF-RESPONSE-500 · 2026-07-04] `delta_pct=inf` es contrato del
                         # detector (expected=0 y actual>0 → divergencia "infinita"), pero NO es
@@ -21953,7 +21964,10 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
                         _dp_raw = float(_d.get("delta_pct") or 0.0)
                         _dp_finite = _dp_raw == _dp_raw and abs(_dp_raw) != float("inf")
                         _severe_summary.append({
-                            "ingredient": str(_d.get("ingredient") or _d.get("canonical_name") or "?")[:80],
+                            # [P2-COH-WEEKLY-BASIS · 2026-07-04] la key real del guard es
+                            # `food` — leer `ingredient` producía "?" en todo el summary.
+                            "ingredient": str(_d.get("food") or _d.get("ingredient")
+                                              or _d.get("canonical_name") or "?")[:80],
                             "hypothesis": str(_d.get("hypothesis") or "unknown"),
                             "delta_pct": round(_dp_raw, 3) if _dp_finite else None,
                         })

@@ -5715,7 +5715,16 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
                 len(_dropped_recipe_ingredients), sorted(_dropped_recipe_ingredients)[:25],
             )
 
-    aggregated_list = plan_result.get("aggregated_shopping_list") or []
+    # [P2-COH-WEEKLY-BASIS · 2026-07-04] Base CANÓNICA del guard = lista SEMANAL.
+    # `expected_sum_from_recipes` suma los días del plan (~1 semana de recetas) ×
+    # household — comparar eso contra la lista ACTIVA de un usuario quincenal/mensual
+    # (híbrida: estables ×2/×4 semanas) hacía diverger ~100-300% a TODOS los estables +
+    # una fila `inf` por split de unidad → 71 divergencias fantasma en un plan recién
+    # renovado (caso vivo 2026-07-04, plan c5d800fd: 38 unknown + 33 unit_mismatch,
+    # todas ruido de base). La lista semanal ES la misma base que expected; la activa
+    # queda como fallback para fixtures/planes legacy sin la key semanal.
+    aggregated_list = (plan_result.get("aggregated_shopping_list_weekly")
+                       or plan_result.get("aggregated_shopping_list") or [])
     aggregated_names_raw = set()
     for item in aggregated_list:
         if not isinstance(item, dict):
