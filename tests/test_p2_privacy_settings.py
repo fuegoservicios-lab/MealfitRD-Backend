@@ -111,3 +111,18 @@ def test_frontend_privacy_section_wired():
     # Enlaces de políticas del apex.
     for path in ("/data-protection", "/ai-policy"):
         assert path in src, f"Falta el enlace de política {path} en la sección."
+
+
+def test_frontend_analytics_opt_out_real():
+    """El toggle "Ayuda a mejorar MealfitRD" debe ser un opt-out REAL:
+    trackEvent gatea en isAnalyticsOptedOut (no un switch decorativo)."""
+    analytics = _read(_REPO_ROOT / "frontend" / "src" / "utils" / "analytics.js")
+    assert "ANALYTICS_OPT_OUT_KEY" in analytics
+    assert re.search(r"if\s*\(\s*isAnalyticsOptedOut\(\)\s*\)\s*return", analytics), (
+        "trackEvent debe cortar en isAnalyticsOptedOut() — sin el gate, el "
+        "toggle de Privacidad sería un ajuste falso."
+    )
+    settings = _read(_SETTINGS)
+    assert "ANALYTICS_OPT_OUT_KEY" in settings and "handleToggleAnalytics" in settings, (
+        "Falta el toggle de analytics en la sección Privacidad."
+    )
