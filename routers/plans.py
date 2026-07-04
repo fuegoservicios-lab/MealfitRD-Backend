@@ -2841,7 +2841,15 @@ def api_analyze(
         # ambos sitios sin ambigüedad.
         result["_pantry_degraded_summary"] = _attach_pantry_degraded_response_meta(response, result)
 
-        return result
+        # [P1-INF-RESPONSE-500 · 2026-07-04] Defensa blanket de serialización: un solo
+        # NaN/Inf residual en plan_result (incidente vivo: `_swap_coherence_warnings.
+        # summary[].delta_pct=inf`) hacía que Starlette (json.dumps allow_nan=False)
+        # devolviera 500 DESPUÉS de persistir el plan y encolar chunks → el frontend
+        # reintentaba la generación completa en loop (3 planes + 2 colas de chunks en
+        # 10 min, cuota quemada). El fix de FUENTE va en el builder del summary
+        # (graph_orchestrator); esto cubre cualquier futura división-entre-cero igual
+        # que ya hace /recalculate-shopping-list (P3-NAN-INF-SANITIZE). Idempotente.
+        return _sanitize_floats_for_json(result)
     except HTTPException:
         raise
     except Exception as e:

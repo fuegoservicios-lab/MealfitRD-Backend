@@ -21941,10 +21941,21 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
                         _d.get("hypothesis") == "cap_swallowed_modifier"
                         or (_d.get("magnitude") and abs(float(_d.get("delta_pct") or 0.0)) > 0.30)
                     ):
+                        # [P1-INF-RESPONSE-500 · 2026-07-04] `delta_pct=inf` es contrato del
+                        # detector (expected=0 y actual>0 → divergencia "infinita"), pero NO es
+                        # JSON-compliant: el json.dumps de la RESPONSE (allow_nan=False en
+                        # Starlette) tiraba ValueError → 500 en /analyze DESPUÉS de persistir,
+                        # y el payload del SSE llegaba imparseable al browser → el frontend
+                        # caía al endpoint sync, recibía el 500 y RE-GENERABA el plan completo
+                        # (loop de cuota — incidente vivo 2026-07-04 21:57-22:06, 3 planes).
+                        # El INSERT sobrevivía solo por P2-PERSIST-NAN-GUARD. None = "divergencia
+                        # total" para el frontend (solo consume critical_count; el % es opcional).
+                        _dp_raw = float(_d.get("delta_pct") or 0.0)
+                        _dp_finite = _dp_raw == _dp_raw and abs(_dp_raw) != float("inf")
                         _severe_summary.append({
                             "ingredient": str(_d.get("ingredient") or _d.get("canonical_name") or "?")[:80],
                             "hypothesis": str(_d.get("hypothesis") or "unknown"),
-                            "delta_pct": round(float(_d.get("delta_pct") or 0.0), 3),
+                            "delta_pct": round(_dp_raw, 3) if _dp_finite else None,
                         })
                 plan_result["_swap_coherence_warnings"] = {
                     "critical_count": critical_total,
