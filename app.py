@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-HELP-CHATBOT · 2026-07-04"
+_LAST_KNOWN_PFIX = "P2-PRIVACY-SETTINGS · 2026-07-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2148,6 +2148,9 @@ _AUTH_MIGRATE_LIMITER = RateLimiter(max_calls=5, period_seconds=300)
 # [P1-ACCOUNT-DELETE-1 · 2026-06-22] Borrado de cuenta = destructivo + irreversible
 # → throttle estricto (3/5min) para cortar replay/loop/CSRF accidental.
 _ACCOUNT_DELETE_LIMITER = RateLimiter(max_calls=3, period_seconds=300)
+# [P2-PRIVACY-SETTINGS · 2026-07-04] Export de datos = query pesada (planes con
+# plan_data completo) → mismo throttle estricto que el delete.
+_ACCOUNT_EXPORT_LIMITER = RateLimiter(max_calls=3, period_seconds=300)
 
 # [P2-CORS-NARROW · 2026-05-12] Setup CORS para el frontend React.
 #
@@ -2460,6 +2463,86 @@ async def api_delete_my_account(
     except Exception as e:
         logger.error(f"❌ [P1-ACCOUNT-DELETE-1] Error eliminando cuenta {verified_user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+# [P2-PRIVACY-SETTINGS · 2026-07-04] Tablas incluidas en el export de datos del
+# usuario (sección Privacidad de Configuración). Best-effort per-tabla: una tabla
+# renombrada/faltante se salta (queda en `skipped`) sin tumbar el export completo.
+# Caps de filas por tabla — acotan payload (plan_data puede pesar MBs) sin
+# recortar al usuario típico. Si un cap se alcanza, la tabla se lista en
+# `truncated` para que el usuario sepa que hay más data que la exportada.
+_ACCOUNT_EXPORT_TABLES = (
+    ("user_profiles", "id", 1),
+    ("meal_plans", "user_id", 50),
+    ("user_inventory", "user_id", 2000),
+    ("user_depleted_items", "user_id", 2000),
+    ("consumed_meals", "user_id", 5000),
+    ("user_facts", "user_id", 2000),
+    ("user_taste_events", "user_id", 2000),
+    ("agent_sessions", "user_id", 200),
+    ("agent_messages", "user_id", 5000),
+)
+
+# Columnas internas sin valor para el usuario y costosas de serializar
+# (vectores pgvector de 1536 floats). Se eliminan de cada fila exportada.
+_ACCOUNT_EXPORT_STRIPPED_KEYS = ("embedding",)
+
+
+@app.get("/api/account/export")
+async def api_export_my_account(
+    verified_user_id: Optional[str] = Depends(_ACCOUNT_EXPORT_LIMITER),
+):
+    """[P2-PRIVACY-SETTINGS · 2026-07-04] Export self-service de los datos del
+    usuario (sección Privacidad de Configuración) — copia JSON de perfil, planes,
+    nevera, comidas registradas, memoria del agente y conversaciones.
+
+    Contrato (espejo de P1-ACCOUNT-DELETE-1):
+      - `verified_user_id` SOLO del JWT verificado (vía RateLimiter). NUNCA se
+        acepta user_id del cliente → no IDOR (simétrico I2 / P0-AGENT-1).
+      - Read-only: cero mutaciones.
+      - Quota-exempt: NO `verify_api_quota` ni `log_api_usage` (lección
+        P1-NEVERA-QUOTA-EXEMPT — exportar tus datos es un derecho, no un
+        consumo de IA; el throttle es `_ACCOUNT_EXPORT_LIMITER` 3/5min).
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        raise HTTPException(status_code=401, detail="Autenticación requerida.")
+
+    def _collect() -> dict:
+        payload: dict = {"data": {}, "counts": {}, "truncated": [], "skipped": []}
+        for tbl, col, cap in _ACCOUNT_EXPORT_TABLES:
+            try:
+                rows = execute_sql_query(
+                    f"SELECT * FROM {tbl} WHERE {col} = %s LIMIT {int(cap)}",
+                    (verified_user_id,),
+                    fetch_all=True,
+                ) or []
+                for row in rows:
+                    for key in _ACCOUNT_EXPORT_STRIPPED_KEYS:
+                        row.pop(key, None)
+                payload["data"][tbl] = rows
+                payload["counts"][tbl] = len(rows)
+                if cap > 1 and len(rows) >= cap:
+                    payload["truncated"].append(tbl)
+            except Exception as exc:
+                # Best-effort: tabla faltante/renombrada no tumba el export.
+                logger.debug(f"[P2-PRIVACY-SETTINGS] export saltó {tbl}: {exc}")
+                payload["skipped"].append(tbl)
+        return payload
+
+    payload = await asyncio.to_thread(_collect)
+    payload["app"] = "MealfitRD"
+    payload["format_version"] = 1
+    payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+    payload["notes"] = (
+        "Copia de tus datos en MealfitRD. Las tablas en `truncated` tienen más "
+        "filas que el límite exportado; `skipped` no aplican a tu cuenta o "
+        "no existen en esta versión."
+    )
+    logger.info(
+        f"[P2-PRIVACY-SETTINGS] export generado para {verified_user_id} "
+        f"(tablas={len(payload['counts'])}, skipped={len(payload['skipped'])})"
+    )
+    return payload
+
 
 @app.post("/api/webhooks/process-pending-facts")
 def api_webhook_process_pending_facts(
