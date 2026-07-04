@@ -9126,6 +9126,14 @@ NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
 # el DESAYUNO) no tenía corrector determinista — dependía solo de presión de retry (asimetría: la cena, regla
 # SUAVE, sí tiene autofix). Espejo de night-rice acotado al desayuno (base matutina criolla rotada).
 BREAKFAST_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_BREAKFAST_RICE_AUTOFIX", True)
+# [P1-APPETIT-AUTOFIX · 2026-07-04] Dos correctores deterministas nuevos, mismo patrón night-rice
+# (reescritura pre-reviewer → el gate no dispara → se ahorra el retry). Evidencia en vivo 2026-07-04:
+# (a) "Pollo Frito con Yuca" de CENA costó un retry completo de generación; (b) el pareo fruta-dulce+
+# base-salada (huevo+mango, revoltillo+guayaba) REINCIDIÓ tras la directiva del retry y se entregó
+# como advisory-final. Ambos gates quedan como backstop. Updates (swap/chat) NO los corren — ahí
+# manda el deseo explícito del usuario (misma doctrina del slot advisory-only en chat-modify).
+CENA_FRY_AUTOFIX_ENABLED = _env_bool("MEALFIT_CENA_FRY_AUTOFIX", True)
+FRUIT_SAVORY_AUTOFIX_ENABLED = _env_bool("MEALFIT_FRUIT_SAVORY_AUTOFIX", True)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -17702,6 +17710,150 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
 _BREAKFAST_RICE_SUB_ROTATION = ("Puré de plátano", "Yuca cocida", "Batata cocida")
 
 
+# [P1-APPETIT-AUTOFIX · 2026-07-04] Reescrituras cena-fritura → técnica ligera. Tokens ESPEJO de la
+# regla soft del gate (`constants.SLOT_INAPPROPRIATE_FOODS` cena → "fritura pesada de proteína como
+# plato de la cena", tooltip P2-SLOT-CENA-FRITURA) — el test de paridad falla si el gate añade un
+# token sin rewrite acá. `chicharron` se OMITE a propósito: convertirlo a plancha destruye la
+# identidad del plato (chicharrón ES la fritura) → ese caso lo decide el gate (retry/advisory).
+_FRY_DINNER_REWRITES = (
+    ("pollo frito", "pollo a la plancha"),
+    ("pescado frito", "pescado a la plancha"),
+    ("cerdo frito", "cerdo a la plancha"),
+    ("chuleta frita", "chuleta a la plancha"),
+    ("costilla frita", "costilla al horno"),
+    ("salami frito", "salami a la plancha"),
+    ("carne frita", "carne a la plancha"),
+)
+
+_FRY_STEP_SOFTEN = (
+    (r"\bfr[ií]e(?:lo|la|los|las)?\b", "cocina a la plancha"),
+    (r"\ben\s+abundante\s+aceite\b", "con poco aceite"),
+    (r"\bfritura\s+profunda\b", "plancha"),
+)
+
+
+def _dinner_fry_autofix(days: list) -> int:
+    """[P1-APPETIT-AUTOFIX · 2026-07-04] Autofix DETERMINISTA de la fritura pesada de proteína en la
+    CENA (patrón night-rice): reescribe nombre + pasos a técnica ligera (plancha/horno) ANTES del
+    reviewer → el gate soft P2-SLOT-CENA-FRITURA no dispara y se ahorra el retry (caso vivo
+    2026-07-04: 'Pollo Frito con Yuca' de cena costó una regeneración completa). Los ingredientes NO
+    cambian (la proteína es la misma; el aceite queda como línea normal de plancha) → macros
+    intactos, cero interacción con el motor. Idempotente (post-fix el nombre ya no dice 'frito').
+    Fail-safe. Gate como backstop. tooltip-anchor: P1-APPETIT-AUTOFIX"""
+    if not CENA_FRY_AUTOFIX_ENABLED or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_fry
+        fixed = 0
+        for _d in days if isinstance(days, list) else []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                if "cena" not in str(meal.get("meal", "")).lower():
+                    continue
+                name = str(meal.get("name") or "")
+                name_low = _sa_fry(name.lower())
+                for token, repl in _FRY_DINNER_REWRITES:
+                    if not _name_has_token(token, name_low):
+                        continue
+                    _pat = _re.compile(_accent_flex_pattern(token), _re.IGNORECASE)
+                    # capitaliza solo la primera letra ("Pollo a la plancha" — title() daría "A La").
+                    _repl_disp = (repl[:1].upper() + repl[1:]) if name[:1].isupper() else repl
+                    new_name = _pat.sub(_repl_disp, name)
+                    if new_name != name:
+                        meal["name"] = new_name
+                    rec = meal.get("recipe")
+                    if isinstance(rec, list):
+                        new_rec = []
+                        for st in rec:
+                            s = str(st)
+                            s = _pat.sub(repl, s)
+                            for vrx, vrepl in _FRY_STEP_SOFTEN:
+                                s = _re.sub(vrx, vrepl, s, flags=_re.IGNORECASE)
+                            new_rec.append(s)
+                        meal["recipe"] = new_rec
+                    meal["_slot_autofix_applied"] = "fry_dinner"
+                    fixed += 1
+                    break
+        return fixed
+    except Exception as _fry_e:
+        logger.warning(f"[P1-APPETIT-AUTOFIX] fry-autofix no-op: {type(_fry_e).__name__}: {_fry_e}")
+        return 0
+
+
+def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
+    """[P1-APPETIT-AUTOFIX · 2026-07-04] Autofix DETERMINISTA del pareo fruta-dulce+base-salada
+    (huevo+mango, revoltillo+guayaba, arroz+piña) — el clash que el reviewer rechaza y que el LLM
+    REINCIDE incluso tras la directiva del retry (medido en vivo 2026-07-04: se entregó como
+    advisory-final). Reusa el detector SSOT `_meal_has_sweet_savory_clash` (name-based,
+    anti-falso-positivo: fruta+pescado NO es clash — cocina caribeña legítima) y reemplaza la fruta
+    por un acompañante salado-compatible: Aguacate (clásico con huevo/salado) → Batata si dislike/
+    alergia. Reescribe nombre + ingredients + raw + pasos y hace truth-up de macros (fruta→aguacate
+    mueve carbos→grasas; corre PRE-motor → el solver/rebalance dimensiona el resultado). Idempotente
+    (post-fix el nombre ya no trae la fruta). Fail-safe. tooltip-anchor: P1-APPETIT-AUTOFIX"""
+    if not FRUIT_SAVORY_AUTOFIX_ENABLED or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_fs
+        _fd = form_data or {}
+        dislikes = {_sa_fs(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        allergies = _fd.get("allergies")
+
+        def _replacement_ok(cand: str) -> bool:
+            cand_low = _sa_fs(cand.lower())
+            if any(dk and dk in cand_low for dk in dislikes):
+                return False
+            if allergies:
+                try:
+                    if _scan_allergen_violations(
+                        {"days": [{"meals": [{"ingredients": [cand]}]}]}, allergies
+                    ):
+                        return False
+                except Exception:
+                    return False  # conservador: duda → no usar el candidato
+            return True
+
+        repl = next((c for c in ("Aguacate", "Batata") if _replacement_ok(c)), None)
+        if repl is None:
+            return 0
+
+        fixed = 0
+        for _d in days if isinstance(days, list) else []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict) or not _meal_has_sweet_savory_clash(meal):
+                    continue
+                name = str(meal.get("name") or "")
+                name_low = _sa_fs(name.lower())
+                fruit = next((fr for fr in _SWEET_DOMINANT_FRUITS if _name_has_token(fr, name_low)), None)
+                if not fruit:
+                    continue
+                _pat = _re.compile(_accent_flex_pattern(fruit) + r"\w*", _re.IGNORECASE)
+                meal["name"] = _pat.sub(repl, name)
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = meal.get(_key)
+                    if isinstance(_lst, list):
+                        meal[_key] = [
+                            _pat.sub(repl.lower(), s) if isinstance(s, str) else s for s in _lst
+                        ]
+                try:
+                    _rewrite_recipe_steps_after_subs(meal, [([fruit], repl)])
+                except Exception:
+                    pass
+                try:
+                    if db is None:
+                        from nutrition_db import IngredientNutritionDB as _FSDB
+                        db = _FSDB()
+                    _truth_up_meal_macros_from_strings(meal, db)
+                except Exception:
+                    pass
+                meal["_slot_autofix_applied"] = "fruit_savory"
+                fixed += 1
+        return fixed
+    except Exception as _fs_e:
+        logger.warning(f"[P1-APPETIT-AUTOFIX] fruit-savory-autofix no-op: {type(_fs_e).__name__}: {_fs_e}")
+        return 0
+
+
 def _breakfast_rice_autofix(days: list, db=None) -> int:
     """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
     DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
@@ -19810,6 +19962,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _br_fixed:
                 logger.info(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] {_br_fixed} desayuno(s) con arroz reescrito(s) "
                             f"a base matutina criolla pre-reviewer.")
+            # [P1-APPETIT-AUTOFIX · 2026-07-04] mismos ahorradores de retry, dos modos de fallo
+            # medidos en vivo: fritura pesada de cena (costó un retry completo) y pareo
+            # fruta-dulce+salado (reincidía tras la directiva → advisory-final). Pre-motor:
+            # el solver dimensiona el resultado (aguacate en vez de mango) correctamente.
+            _fry_fixed = _dinner_fry_autofix(days)
+            if _fry_fixed:
+                logger.info(f"🍳 [P1-APPETIT-AUTOFIX] {_fry_fixed} cena(s) de fritura pesada reescrita(s) "
+                            f"a plancha/horno pre-reviewer.")
+            _fs_fixed = _fruit_savory_autofix(days, form_data)
+            if _fs_fixed:
+                logger.info(f"🥑 [P1-APPETIT-AUTOFIX] {_fs_fixed} pareo(s) fruta-dulce+salado reescrito(s) "
+                            f"(fruta → aguacate/batata) pre-reviewer.")
         except Exception as _nra_c:
             logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
 
