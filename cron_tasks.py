@@ -30192,6 +30192,35 @@ def process_plan_chunk_queue(target_plan_id=None):
                             except Exception as _dqe_ck:
                                 logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-C) dish-quality chunk T1 no-op: {type(_dqe_ck).__name__}: {_dqe_ck}")
 
+                            # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-6) Coherencia culinaria CROSS-SEMANA
+                            # determinista en el merge: el review del chunk corre aislado (no ve las otras
+                            # semanas) y la variedad inter-chunk solo iba prompt-steered. Detecta platos del
+                            # chunk nuevo repetidos en el MISMO slot de días previos → report plan-level +
+                            # chip `_cross_week_repeat` per-meal (advisory, jamás gate — el chunk ya está
+                            # generado; la palanca es "Cambiar Plato"). Mismo write del merge. Best-effort.
+                            try:
+                                from graph_orchestrator import (compute_cross_week_repeat_report as _xwr_ck,
+                                                                CROSS_WEEK_REPEAT_CHECK_ENABLED as _xwc_on,
+                                                                CROSS_WEEK_REPEAT_WARN_RATIO as _xwc_warn)
+                                if _xwc_on and isinstance(plan_data.get("days"), list):
+                                    _xw_new_nums = [
+                                        _nd.get("day") for _nd in (new_days or [])
+                                        if isinstance(_nd, dict) and _nd.get("day") is not None
+                                    ]
+                                    _xw_rep = _xwr_ck(plan_data["days"], _xw_new_nums)
+                                    if _xw_rep:
+                                        plan_data["_cross_week_repeat_report"] = _xw_rep
+                                        _xw_ratio = _xw_rep.get("repeat_ratio")
+                                        if _xw_ratio is not None and _xw_ratio >= _xwc_warn:
+                                            logger.warning(
+                                                f"🔁 [P2-AUDIT-V7-BATCH] (P2-6) chunk semana {week_number} plan "
+                                                f"{meal_plan_id}: {_xw_rep.get('repeat_count')}/"
+                                                f"{_xw_rep.get('checked_meals')} plato(s) repiten el mismo slot "
+                                                f"de semanas previas (ratio {_xw_ratio:.0%})."
+                                            )
+                            except Exception as _xwe_ck:
+                                logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-6) cross-week chunk T1 no-op: {type(_xwe_ck).__name__}: {_xwe_ck}")
+
                             # [P1-MICRONUTRIENT-CHUNK-RECOMPUTE · 2026-06-24] Recalcula el panel de micros
                             # sobre el plan COMPLETO tras anexar el chunk. Antes el reporte se computaba 1
                             # sola vez en assemble (semana 1) y NUNCA se recalculaba al crecer el plan → un

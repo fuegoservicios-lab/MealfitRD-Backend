@@ -48,12 +48,21 @@ def test_ul_caps_present():
 
 def test_renal_skip_includes_new_micros_in_source():
     # el renal-skip del closer debe listar los micros cerrables además de Mg/fibra.
-    # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] la tupla se reformateó multilinea al añadir K/vitE/omega-3.
-    assert '_renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",' in _GRAPH
-    # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] + vit A (se acumula en ERC) y selenio.
-    # [P2-VITK-LEVER · 2026-07-02] + vit K (hoja verde carga K — renal-skip obligatorio del lever nuevo).
-    assert '"potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg",' in _GRAPH
-    assert '"vit_k_mcg"):' in _GRAPH
+    # [P2-AUDIT-V7-BATCH · 2026-07-04, boy-scout] la tupla inline migró a la constante SSOT
+    # `_MICRO_CLOSER_RENAL_EXCLUDED` (frozenset) — este test quedó rojo anclando el literal
+    # viejo. Ahora ancla la CONSTANTE (contrato más robusto que el formato del source) y que
+    # el closer la consuma en su branch renal.
+    _excl = g._MICRO_CLOSER_RENAL_EXCLUDED
+    for _k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+               # [P2-MICRO-CLOSER-KEYS-EXT · 2026-07-01] + K/vitE/omega-3.
+               "potassium_mg", "vit_e_mg", "omega3_g",
+               # [P2-MICRO-CLOSER-VITA-SE · 2026-07-01] + vit A (se acumula en ERC) y selenio.
+               "vit_a_mcg", "selenium_mcg",
+               # [P2-VITK-LEVER · 2026-07-02] + vit K (hoja verde carga K).
+               "vit_k_mcg"):
+        assert _k in _excl, f"micro '{_k}' ausente del renal-skip del closer"
+    assert "_renal and k in _MICRO_CLOSER_RENAL_EXCLUDED" in _GRAPH, \
+        "el closer debe consumir la constante SSOT en su branch renal"
 
 
 def test_shared_kcal_budget_and_ul_clamp_in_source():

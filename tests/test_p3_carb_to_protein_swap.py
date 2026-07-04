@@ -62,9 +62,12 @@ def test_swap_wired_gated_and_skips_renal():
 
 
 def test_swap_knobs_safe_defaults():
-    """Knobs auto-registrables con defaults SEGUROS: enabled OFF (validar por A/B antes de flip), floor 1.0."""
-    assert re.search(r'CARB_TO_PROTEIN_SWAP_ENABLED\s*=\s*_env_bool\("MEALFIT_CARB_TO_PROTEIN_SWAP",\s*False\)', SRC), \
-        "el swap NO está OFF por default (debe validarse por A/B antes de encender)"
+    """Knobs auto-registrables. [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-3) el A/B YA se corrió
+    (corpus determinista 18 planes, 2026-06-19: all4 +1.8 / proteína MAPE −1.3 / kcal-neutral /
+    cero regresión) y el knob vivía ON en prod vía .env del VPS desde entonces → default de
+    código flipeado a True para que un deploy limpio no pierda la palanca. Floor sigue 1.0."""
+    assert re.search(r'CARB_TO_PROTEIN_SWAP_ENABLED\s*=\s*_env_bool\("MEALFIT_CARB_TO_PROTEIN_SWAP",\s*True\)', SRC), \
+        "el swap debe estar ON por default tras P2-AUDIT-V7-BATCH (P2-3); rollback = env var, no default"
     assert re.search(r'CARB_TO_PROTEIN_SWAP_FLOOR_PCT\s*=\s*_env_float\([^)]*,\s*1\.0\)', SRC), \
         "el floor del swap no es 1.0 (el A/B del harness mostró f1.0 > f0.95)"
 

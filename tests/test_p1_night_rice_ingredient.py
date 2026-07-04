@@ -108,7 +108,10 @@ def test_compound_knob_off_no_conversion(monkeypatch):
 def test_review_gate_wires_compound_in_advisory_final():
     i = _GRAPH.find("(audit slots GAP-2) Antes de degradar")
     assert i != -1, "la rama advisory-final del gate de slot no intenta el autofix compuesto"
-    seg = _GRAPH[i:i + 1200]
+    # [P2-AUDIT-V7-BATCH · 2026-07-04, boy-scout] ventana 1200→2600: el comentario del fix
+    # P2-D (v6, autofix-aunque-haya-hard) creció el bloque y dejó el re-detect fuera de la
+    # ventana — el contrato (compound → re-detect) sigue intacto en prod.
+    seg = _GRAPH[i:i + 2600]
     assert "compound=True" in seg and "_detect_slot_appropriateness" in seg, \
         "el autofix compuesto debe correr y RE-DETECTAR antes de degradar a advisory"
 

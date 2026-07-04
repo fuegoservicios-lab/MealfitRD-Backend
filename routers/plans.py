@@ -4711,6 +4711,17 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                         # sin escribir).
                         return False
 
+                    # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-4) Paridad de MOTOR en expand: era la única
+                    # superficie mutadora de `ingredients` sin re-verificación de banda — el veg añadido
+                    # es aditivo/pequeño (≤60 kcal/100g) pero podía dejar un día fuera de banda sin
+                    # palanca correctiva NI banner. Mismo orden que swap-persist: motor → micros →
+                    # band-parity (que limpia o marca el banner honesto). Fail-open por bloque.
+                    if _expand_added_ings:
+                        try:
+                            from graph_orchestrator import apply_update_macro_engine as _ume_exp
+                            _ume_exp(plan_data_fresh, surface="recipe_expand")
+                        except Exception as _ume_exp_e:
+                            logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) motor en expand no-op: {_ume_exp_e}")
                     # [P2-EXPAND-MICRO-RECOMPUTE · 2026-07-02] (audit v3 micros GAP-2) el veg añadido ya entró
                     # a ingredients/_raw con truth-up de macros, pero el panel de micros persistido quedaba
                     # STALE (folato/vitA/fibra/vitC — exactamente lo que aporta el veg). Era la ÚNICA superficie
@@ -4722,6 +4733,14 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             _rmr_exp(plan_data_fresh, _expand_clin, db=None)
                         except Exception as _rmr_e:
                             logger.debug(f"[P2-EXPAND-MICRO-RECOMPUTE] no-op: {_rmr_e}")
+                    # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-4) band-parity tras el motor: marca (o limpia)
+                    # el banner de banda con las MISMAS keys de S1 + atribución de superficie.
+                    if _expand_added_ings:
+                        try:
+                            from graph_orchestrator import apply_update_band_parity as _ubp_exp
+                            _ubp_exp(plan_data_fresh, surface="recipe_expand")
+                        except Exception as _ubp_exp_e:
+                            logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) band-parity en expand no-op: {_ubp_exp_e}")
                     # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C3) Rebuild inline de las 4 listas si el
                     # veg del finalizer entró a ingredients — expand era la ÚNICA superficie mutadora
                     # de ingredients sin recalc (el veg faltaba de la lista todo el ciclo, violando
@@ -6360,6 +6379,13 @@ def api_regenerate_day(
         # Mismo guard pantry never-worse-than-current del rebalance (el refine puede escalar UP hasta 2×
         # una línea → revalidar contra la Nevera ORIGINAL y revertir si rompe). Renal: skip (el refine
         # mueve líneas proteína-dominantes; el cap KDIGO manda — mismo criterio del helper SSOT).
+        # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-11) CONTRATO DE SINCRONÍA con el helper SSOT
+        # `apply_update_macro_engine` (graph_orchestrator): este inline existe porque regen-day
+        # necesita el guard pantry never-worse (deepcopy+revert) que el helper NO tiene (skip
+        # total en pantry-strict). AMBOS deben compartir: banda [0.90, 1.12], step_g=5.0, y los
+        # knobs SSOT (PORTION_SHRINK_FLOOR_G / PORTION_CAP_PROTEIN_G / _SHRINK_FLOOR_EXEMPT_TOKENS /
+        # GLOBAL_DAY_REFINE_MAX_ITERS — importados, no copiados). Si cambias la orquestación de uno,
+        # cambia el otro — test de sincronía en test_p2_audit_v7_batch.py.
         if (
             regenerated > 0 and not _ai_unavailable and not _renal_capped
             and os.environ.get("MEALFIT_UPDATE_MACRO_ENGINE", "true").strip().lower() in ("1", "true", "yes", "on")

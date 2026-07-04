@@ -875,6 +875,25 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 context_extras += ("\n- 🎲 VARIEDAD CROSS-DÍA (preferencia suave): el plan ya usa "
                                    + ", ".join(sorted(_avoid)) + " en otros días — prefiere una proteína/base "
                                    "DISTINTA salvo que el usuario la haya pedido explícitamente.")
+            # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-10) Paridad exacta con el swap (agent.py, P2-F):
+            # además de las proteínas canónicas, inyecta los NOMBRES de plato que este MISMO slot ya
+            # tiene en los otros días — el modify de "cena del día 3" veía las proteínas pero no que
+            # "Pescado guisado" ya se repite en las cenas del 1 y el 5. Soft, mismo knob.
+            _slot_names_cd = []
+            _mt_cd = str(meal_type or "").lower().strip()
+            for _od in (plan_data.get("days") or []):
+                if not isinstance(_od, dict) or _od.get("day") == day_number:
+                    continue
+                for _om in (_od.get("meals") or []):
+                    if (isinstance(_om, dict) and str(_om.get("meal", "")).lower().strip() == _mt_cd
+                            and str(_om.get("name", "")).strip()):
+                        _slot_names_cd.append(str(_om.get("name")).strip())
+            if _slot_names_cd:
+                context_extras += (
+                    "\n- 📅 VARIEDAD ENTRE DÍAS (preferencia): este horario ya tiene en otros días del plan: "
+                    + ", ".join(_slot_names_cd[:8]) + ". PREFIERE un plato DISTINTO a esos, "
+                    "salvo que el usuario lo haya pedido explícitamente."
+                )
         except Exception as _xcd:
             logger.debug(f"[P2-CHATMODIFY-CROSS-DAY-VARIETY] no-op: {type(_xcd).__name__}: {_xcd}")
         # [P2-UPDATE-SAMEDAY-VARIETY · 2026-07-01] (audit paridad GAP-4) el seed de arriba SALTA el día propio

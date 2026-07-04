@@ -201,7 +201,10 @@ def test_expand_charge_deferred_after_persist():
 
 def test_expand_micro_recompute_in_callback():
     i_cb = _PLANS.index("def _apply_recipe_expansion")
-    body = _PLANS[i_cb:i_cb + 9000]
+    # [P2-AUDIT-V7-BATCH · 2026-07-04] ventana 9000→14000: P2-4 insertó el motor de macros +
+    # band-parity ANTES/DESPUÉS del recompute (~35 líneas) — el contrato real es el ORDEN
+    # (anclado en test_p2_audit_v7_batch.py::test_p2_4_expand_engine_and_band_parity_order).
+    body = _PLANS[i_cb:i_cb + 14000]
     assert "P2-EXPAND-MICRO-RECOMPUTE" in body
     assert "recompute_micronutrient_report_for_plan" in body
 

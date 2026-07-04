@@ -9521,9 +9521,13 @@ SHOPPING_MIN_DISTINCT_CAP = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_CAP", 16)
 # (scripts/macro_sizing_replay.py): en días con déficit de proteína (<floor_pct×target) Y exceso de carbos
 # (>(1+tol)×target), convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Cierra el déficit que
 # el closer per-meal (capado por fill_pct + idempotencia _protein_closed) deja abierto en days carbo-pesados
-# — medido: ~la mitad de los días deficitarios son swappables (lose_fat carbo-pesado). Default OFF (validar
-# por A/B antes de flip). Diagnóstico: subir fill_pct solo es suma-cero a kcal fijo; el swap arregla AMBOS macros.
-CARB_TO_PROTEIN_SWAP_ENABLED = _env_bool("MEALFIT_CARB_TO_PROTEIN_SWAP", False)
+# — medido: ~la mitad de los días deficitarios son swappables (lose_fat carbo-pesado). Diagnóstico: subir
+# fill_pct solo es suma-cero a kcal fijo; el swap arregla AMBOS macros.
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-3) Default flipeado a True: el A/B determinista (corpus 18 planes,
+# 2026-06-19) validó all4 +1.8 / proteína MAPE −1.3 / carbos w10 +3.7 / kcal-neutral / CERO regresión, y
+# el knob vivía ON en prod vía .env del VPS desde entonces — el default False solo arriesgaba que un deploy
+# limpio (sin .env heredado) perdiera la palanca en silencio. Rollback: MEALFIT_CARB_TO_PROTEIN_SWAP=false.
+CARB_TO_PROTEIN_SWAP_ENABLED = _env_bool("MEALFIT_CARB_TO_PROTEIN_SWAP", True)
 CARB_TO_PROTEIN_SWAP_FLOOR_PCT = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_FLOOR_PCT", 1.0)  # A/B harness: f1.0 > f0.95
 CARB_TO_PROTEIN_SWAP_CARB_TOL = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_CARB_TOL", 0.05)
 # [P3-MACRO-REBALANCE · 2026-06-19] Re-apunta las 3 macros al target DESPUÉS de la cuantización (cierra el
@@ -10071,6 +10075,17 @@ MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK",
 # quantize es de segundo orden). Default ON. tooltip-anchor: P2-POSTQUANTIZE-RECHECK
 POSTQUANTIZE_RECHECK_ENABLED = _env_bool("MEALFIT_POSTQUANTIZE_RECHECK", True)
 POSTQUANTIZE_RECHECK_TOL = max(0.01, min(0.2, _env_float("MEALFIT_POSTQUANTIZE_RECHECK_TOL", 0.04)))
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-2) Re-fire ÚNICO del micro-closer tras las pasadas macro
+# finales de assemble (swap C→P / macro-rebalance / refine 5g / recheck post-quantize), que corren
+# DESPUÉS del closer y son micro-agnósticas: pueden encoger la línea micro-rica que el closer creció
+# (borde: única línea macro-movible del día). Idempotente (solo actúa si un piso se re-abrió) +
+# re-trim de carbos preservando el cierre (mismo patrón P2-MICROCLOSER-BAND-RECHECK) + re-quantize.
+MICRO_POSTENGINE_RECHECK_ENABLED = _env_bool("MEALFIT_MICRO_POSTENGINE_RECHECK", True)
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Recompute del panel de micros al FINAL del motor en
+# form-gen (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE): el panel se computa dentro de
+# la capa clínica (Guard 5) pero swap/rebalance/refine/recheck re-escalan ingredientes micro-portadores
+# DESPUÉS → el panel mostrado y el sodium-excess-gate del review evaluaban el estado mid-engine.
+MICRO_POSTENGINE_RECOMPUTE_ENABLED = _env_bool("MEALFIT_MICRO_POSTENGINE_RECOMPUTE", True)
 # [P2-FALLBACK-PHYSICAL-MACROS · 2026-07-01] reescala las plantillas del fallback hacia las kcal del slot +
 # truth-up físico (los números dejan de ser asertados). Default ON. tooltip-anchor: P2-FALLBACK-PHYSICAL-MACROS
 FALLBACK_PHYSICAL_MACROS_ENABLED = _env_bool("MEALFIT_FALLBACK_PHYSICAL_MACROS", True)
@@ -14331,6 +14346,14 @@ RECIPE_CONTRACT_GATE_RATIO = _env_float("MEALFIT_RECIPE_CONTRACT_GATE_RATIO", 0.
 # Rollback sin redeploy: MEALFIT_RAW_STAPLE_SOFT_GATE=false. tooltip-anchor: P2-RAW-STAPLE-PRESSURE
 RAW_STAPLE_SOFT_GATE_ENABLED = _env_bool("MEALFIT_RAW_STAPLE_SOFT_GATE", True)
 RAW_STAPLE_REJECT_RATIO = max(0.05, min(1.0, _env_float("MEALFIT_RAW_STAPLE_REJECT_RATIO", 0.5)))
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-5) Gate SUAVE de TRANSFORMACIÓN: `transform_ratio` era
+# telemetría pura y el TRANSFORM_MIN un pedido de prompt — un plan con CERO platos transformados
+# (ni un panqueque de avena, arepita, bollito, guiso) pasaba todos los gates. Conservador: dispara
+# solo si el plan ENTERO trae menos de MIN_COUNT transformaciones (default 1 → solo el caso "cero
+# creatividad"); advisory en intento final (nunca cero-plan, espejo dish-quality/raw-staple).
+# Rollback sin redeploy: MEALFIT_TRANSFORM_SOFT_GATE=false.
+TRANSFORM_SOFT_GATE_ENABLED = _env_bool("MEALFIT_TRANSFORM_SOFT_GATE", True)
+TRANSFORM_GATE_MIN_COUNT = _env_int("MEALFIT_TRANSFORM_GATE_MIN_COUNT", 1, lambda v: 0 <= v <= 10)
 
 # (tokens accent-stripped de técnica → default de tiempo/temp es-DO). Orden = precedencia,
 # de técnica ESPECÍFICA a genérica ("dorar" aparece en casi todas → NO es token; la plancha
@@ -14367,12 +14390,23 @@ _TT_MIN_RE = _re.compile(r"(\d{1,3})\s*(?:-\s*(\d{1,3})\s*)?min", _re.I)
 _TT_HORA_RE = _re.compile(r"(\d{1,2})\s*(?:-\s*\d{1,2}\s*)?horas?", _re.I)
 _TT_TEMP_RE = _re.compile(r"(\d{2,3})\s*(?:°\s*c|grados)", _re.I)
 
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-7) Pasos PASIVOS con tiempos largos LEGÍTIMOS ("marina 4
+# horas", "refrigera toda la noche", "deja reposar la masa 1 hora") — exentos del clamp de tiempo
+# (la temperatura >260 °C se clampa igual en todos los pasos). Tokens accent-stripped.
+_TT_PASSIVE_TOKENS = ("marina", "marinar", "adoba", "reposa", "reposar", "refrigera", "nevera",
+                      "congela", "descongela", "remoja", "remojo", "fermenta", "leuda", "enfria",
+                      "macera", "overnight", "toda la noche")
+
 
 def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
-    """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) Clamp determinista de outliers de tiempo/temp en el
-    paso 'El Toque de Fuego': tiempo > techo de la técnica (o >3h absoluto) → reescribe al default
-    de la técnica; temperatura > 260 °C → 220 °C. Texto puro, idempotente, fail-open. Marca
-    `_recipe_timetemp_clamped` (honestidad/telemetría). Muta `meal` in-place; True si clampó."""
+    """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) Clamp determinista de outliers de tiempo/temp:
+    tiempo > techo de la técnica (o >3h absoluto) → reescribe al default de la técnica;
+    temperatura > 260 °C → 220 °C. Texto puro, idempotente, fail-open. Marca
+    `_recipe_timetemp_clamped` (honestidad/telemetría). Muta `meal` in-place; True si clampó.
+    [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-7) Cubre TODOS los pasos de cocción — no solo 'El Toque
+    de Fuego' (un "hornea 200 min" en el Montaje o en un paso extra de receta expandida escapaba
+    al clamp). Los pasos PASIVOS (marinar/reposar/refrigerar, `_TT_PASSIVE_TOKENS`) quedan exentos
+    del clamp de TIEMPO (sus horas largas son legítimas); el techo de temperatura aplica siempre."""
     if not RECIPE_TIMETEMP_PLAUSIBILITY_ENABLED or not isinstance(meal, dict):
         return False
     try:
@@ -14384,32 +14418,33 @@ def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
         for i, step in enumerate(rec):
             if not isinstance(step, str) or _is_recipe_safety_note_step(step):
                 continue
-            if not step.strip().lower().startswith("el toque de fuego"):
-                continue
             new_step = step
             hay = _sa_cl((str(meal.get("name") or "") + " " + step).lower())
-            cap_min = _TIMETEMP_ABS_MAX_MIN
-            default = _TIMETEMP_FALLBACK_DEFAULT
-            for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
-                if any(t in hay for t in tokens):
-                    default = technique_default
-                    break
-            for tokens, tech_cap in _TIMETEMP_TECHNIQUE_MAX_MIN:
-                if any(t in hay for t in tokens):
-                    cap_min = min(cap_min, tech_cap)
-                    break
-            # horas absurdas ("cocina 5 horas") → minutos del default de la técnica
-            for m_h in list(_TT_HORA_RE.finditer(new_step)):
-                if int(m_h.group(1)) * 60 > cap_min:
-                    new_step = new_step[:m_h.start()] + default + new_step[m_h.end():]
-                    break
-            # minutos por encima del techo de técnica/absoluto → default de la técnica
-            for m_t in list(_TT_MIN_RE.finditer(new_step)):
-                hi = max(int(m_t.group(1)), int(m_t.group(2) or 0))
-                if hi > cap_min:
-                    new_step = new_step[:m_t.start()] + default + new_step[m_t.end():]
-                    break
-            # temperatura de horno industrial → techo doméstico
+            _step_hay = _sa_cl(step.lower())
+            _passive = any(t in _step_hay for t in _TT_PASSIVE_TOKENS)
+            if not _passive:
+                cap_min = _TIMETEMP_ABS_MAX_MIN
+                default = _TIMETEMP_FALLBACK_DEFAULT
+                for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
+                    if any(t in hay for t in tokens):
+                        default = technique_default
+                        break
+                for tokens, tech_cap in _TIMETEMP_TECHNIQUE_MAX_MIN:
+                    if any(t in hay for t in tokens):
+                        cap_min = min(cap_min, tech_cap)
+                        break
+                # horas absurdas ("cocina 5 horas") → minutos del default de la técnica
+                for m_h in list(_TT_HORA_RE.finditer(new_step)):
+                    if int(m_h.group(1)) * 60 > cap_min:
+                        new_step = new_step[:m_h.start()] + default + new_step[m_h.end():]
+                        break
+                # minutos por encima del techo de técnica/absoluto → default de la técnica
+                for m_t in list(_TT_MIN_RE.finditer(new_step)):
+                    hi = max(int(m_t.group(1)), int(m_t.group(2) or 0))
+                    if hi > cap_min:
+                        new_step = new_step[:m_t.start()] + default + new_step[m_t.end():]
+                        break
+            # temperatura de horno industrial → techo doméstico (aplica también a pasos pasivos)
             for m_c in list(_TT_TEMP_RE.finditer(new_step)):
                 if int(m_c.group(1)) > _TIMETEMP_MAX_TEMP_C:
                     new_step = new_step[:m_c.start()] + "220 °C" + new_step[m_c.end():]
@@ -14418,7 +14453,6 @@ def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
                 rec[i] = new_step
                 meal["_recipe_timetemp_clamped"] = True
                 changed = True
-            break  # solo el Toque de Fuego
         return changed
     except Exception:
         return False
@@ -14583,6 +14617,89 @@ def compute_dish_quality_report(plan: dict) -> dict:
         }
     except Exception as _dq_e:
         logger.warning(f"[P2-DISH-QUALITY] report falló: {type(_dq_e).__name__}: {_dq_e}")
+        return {}
+
+
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-6) Coherencia culinaria CROSS-SEMANA determinista: el review
+# LLM de un chunk corre sobre SUS 3 días en aislamiento — la variedad entre semanas solo iba
+# prompt-steered (contexto anti-aburrimiento) sin verificación. Este check corre en el merge T1
+# (CPU-only, bajo el mismo lock/write del chunk): detecta platos del chunk NUEVO cuyo nombre
+# normalizado ya existe en el MISMO slot de días previos, persiste el report (telemetría plan-level)
+# y marca `_cross_week_repeat` en el meal (chip advisory — NUNCA gate: el chunk ya está generado y
+# re-generarlo en el merge costaría tokens; la palanca correctiva es "Cambiar Plato").
+CROSS_WEEK_REPEAT_CHECK_ENABLED = _env_bool("MEALFIT_CROSS_WEEK_REPEAT_CHECK", True)
+CROSS_WEEK_REPEAT_WARN_RATIO = max(0.05, min(1.0, _env_float("MEALFIT_CROSS_WEEK_REPEAT_WARN_RATIO", 0.34)))
+
+
+def compute_cross_week_repeat_report(days: list, new_day_numbers) -> dict:
+    """[P2-AUDIT-V7-BATCH · 2026-07-04] (P2-6) Report determinista de repetición cross-semana.
+    `days` = days del plan COMPLETO ya mergeado; `new_day_numbers` = números de día del chunk
+    recién anexado. Un plato del chunk repite si su nombre normalizado (accent-stripped, lower)
+    ya aparece en el MISMO slot de un día PREVIO (no del chunk). Match por nombre EXACTO
+    normalizado — conservador (cero falsos positivos por platos parecidos). Marca
+    `meal['_cross_week_repeat']=True` en los repetidos del chunk. Fail-safe → {}."""
+    try:
+        if not CROSS_WEEK_REPEAT_CHECK_ENABLED or not isinstance(days, list) or not days:
+            return {}
+        from constants import strip_accents as _sa_xw
+        _new_set = {int(n) for n in (new_day_numbers or []) if str(n).strip().isdigit() or isinstance(n, (int, float))}
+        if not _new_set:
+            return {}
+
+        def _norm(_s):
+            return _sa_xw(str(_s or "").strip().lower())
+
+        prior: dict = {}  # (slot_norm, name_norm) -> [day_nums previos]
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            try:
+                _dn = int(_d.get("day"))
+            except (TypeError, ValueError):
+                continue
+            if _dn in _new_set:
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                _key = (_norm(_m.get("meal")), _norm(_m.get("name")))
+                if _key[1]:
+                    prior.setdefault(_key, []).append(_dn)
+
+        repeats = []
+        checked = 0
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            try:
+                _dn = int(_d.get("day"))
+            except (TypeError, ValueError):
+                continue
+            if _dn not in _new_set:
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict) or not _norm(_m.get("name")):
+                    continue
+                checked += 1
+                _key = (_norm(_m.get("meal")), _norm(_m.get("name")))
+                _hits = prior.get(_key)
+                if _hits:
+                    _m["_cross_week_repeat"] = True
+                    if len(repeats) < 20:
+                        repeats.append({
+                            "day": _dn,
+                            "slot": str(_m.get("meal") or ""),
+                            "name": str(_m.get("name") or "")[:60],
+                            "repeats_days": sorted(_hits)[:6],
+                        })
+        return {
+            "checked_meals": checked,
+            "repeat_count": len(repeats),
+            "repeat_ratio": round(len(repeats) / checked, 3) if checked else None,
+            "repeats": repeats,
+        }
+    except Exception as _xw_e:
+        logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-6) cross-week report falló: {type(_xw_e).__name__}: {_xw_e}")
         return {}
 
 
@@ -19999,6 +20116,47 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _fq_e:
             logger.warning(f"[P1-CLOSER-COHERENCE] quantize final en assemble falló (no bloquea): {type(_fq_e).__name__}: {_fq_e}")
 
+    # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-2) Micro-recheck post-motor: las pasadas de arriba
+    # (swap C→P + rebalance dentro del engine, refine 5g, recheck post-quantize) son micro-agnósticas
+    # y pueden haber encogido la línea micro-rica que el closer creció en la capa clínica. Re-fire
+    # ÚNICO del closer (idempotente — 0 ajustes si los pisos siguen cerrados); si actuó, re-trim de
+    # carbos de OTRAS fuentes (preserva el cierre, patrón P2-MICROCLOSER-BAND-RECHECK) + re-quantize
+    # + qty-sync de pasos. Acotado a una iteración, fail-open.
+    if MICRO_POSTENGINE_RECHECK_ENABLED:
+        try:
+            from nutrition_db import IngredientNutritionDB as _PEDB
+            _pe_db = _PEDB()
+            _pe_adj = _close_micro_gaps_for_plan(result, form_data, _pe_db)
+            if _pe_adj:
+                _pe_retrim = 0
+                _pe_tc = float(_cg or 0)
+                if _pe_tc > 0:
+                    for _pe_d in days or []:
+                        if _trim_day_carbs_to_target(
+                                (_pe_d.get("meals") or []) if isinstance(_pe_d, dict) else [],
+                                _pe_tc, _pe_db, tol=CARB_TARGET_TRIM_TOL):
+                            _pe_retrim += 1
+                if PORTION_QUANTIZE_ENABLED:
+                    _apply_portion_quantization({"days": days}, _pe_db)
+                for _pe_d in days or []:
+                    for _pe_m in (_pe_d.get("meals") or []) if isinstance(_pe_d, dict) else []:
+                        if isinstance(_pe_m, dict):
+                            _sync_recipe_step_quantities(_pe_m)
+                logger.info(f"🧪 [P2-AUDIT-V7-BATCH] (P2-2) micro-recheck post-motor: {_pe_adj} ajuste(s) "
+                            f"re-abiertos por el rebalance/refine, re-trim en {_pe_retrim} día(s).")
+        except Exception as _pe_e:
+            logger.warning(f"[P2-AUDIT-V7-BATCH] (P2-2) micro-recheck post-motor no-op: {type(_pe_e).__name__}: {_pe_e}")
+
+    # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Panel de micros FRESCO al final del motor: recompute
+    # vía helper SSOT (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE) para que el panel
+    # mostrado, los floors per-día y el sodium-excess-gate del review evalúen el plato realmente
+    # entregado — no el estado mid-engine de la capa clínica (Guard 5).
+    if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
+        try:
+            recompute_micronutrient_report_for_plan(result, form_data)
+        except Exception as _pe_mn_e:
+            logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-1) recompute de micros post-motor no-op: {_pe_mn_e}")
+
     # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer
     # (que ya reflejó en el nombre la proteína de rescate vía `_reflect_added_protein_in_name`). Corrige
     # títulos que LIDERAN con una proteína cárnica AUSENTE de los ingredientes (el LLM la inventó, p.ej.
@@ -20212,6 +20370,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
                                 if isinstance(_bc_m, dict) and _bc_m.get("_budget_substitutions"):
                                     _truth_up_meal_macros_from_strings(_bc_m, _bc_db)
                         apply_update_macro_engine(result, surface="budget_convergence", db=_bc_db)
+                        # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) las sustituciones económicas cambian
+                        # el perfil de micros del plato (salmón→pescado blanco pierde omega-3/vit D) —
+                        # panel fresco también en este path.
+                        if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
+                            recompute_micronutrient_report_for_plan(result, form_data, db=_bc_db)
                     except Exception as _bc_tu_e:
                         logger.debug(f"[P1-BUDGET-CONVERGENCE] truth-up/re-banda no-op: {_bc_tu_e}")
                     # rebuild de listas (mismos snapshots de la 1ª pasada) → re-costeo → re-reconcile.
@@ -22546,6 +22709,39 @@ Responde ÚNICAMENTE con el JSON de revisión.
         except Exception as _rsg_e:
             logger.warning(f"[P2-RAW-STAPLE-PRESSURE] gate falló: {type(_rsg_e).__name__}: {_rsg_e}")
 
+    # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-5) Gate SUAVE de TRANSFORMACIÓN culinaria: garantiza el
+    # mínimo de creatividad que el prompt solo PEDÍA (TRANSFORM_MIN). Dispara únicamente en el caso
+    # extremo (plan entero con < MIN_COUNT platos transformados); advisory en intento final.
+    if TRANSFORM_SOFT_GATE_ENABLED and TRANSFORM_GATE_MIN_COUNT > 0:
+        try:
+            _tfg = compute_dish_quality_report(plan)
+            _tfg_n = _tfg.get("transform_meals")
+            _tfg_total = int(_tfg.get("total_meals") or 0)
+            if _tfg_n is not None and _tfg_total >= 3 and int(_tfg_n) < TRANSFORM_GATE_MIN_COUNT:
+                _tfg_attempt = int(state.get("attempt", 1))
+                if _tfg_attempt >= MAX_ATTEMPTS:
+                    logger.warning(
+                        f"🥞 [P2-AUDIT-V7-BATCH] (P2-5) transform_meals={_tfg_n} en intento final "
+                        f"({_tfg_attempt}/{MAX_ATTEMPTS}) → ADVISORY (entrego el plan)."
+                    )
+                    if isinstance(plan, dict):
+                        plan["_transform_gate_advisory_final"] = True
+                else:
+                    logger.warning(
+                        f"🥞 [P2-AUDIT-V7-BATCH] (P2-5) el plan trae {_tfg_n} plato(s) transformado(s) "
+                        f"(mínimo {TRANSFORM_GATE_MIN_COUNT}) → rechazo para subir la creatividad."
+                    )
+                    approved = False
+                    issues.append(
+                        "El plan no incluye NINGUNA preparación transformada: incluye al menos una "
+                        "preparación real con los mismos macros (panqueques de avena, arepitas, "
+                        "bollitos de yuca, revoltillo, guiso, locrio de almuerzo) en vez de solo "
+                        "staples servidos."
+                    )
+                    severity = _severity_max(severity, "high")
+        except Exception as _tfg_e:
+            logger.warning(f"[P2-AUDIT-V7-BATCH] (P2-5) transform gate falló: {type(_tfg_e).__name__}: {_tfg_e}")
+
     # [P1-SODIUM-SUGAR-EXCESS-ON · 2026-07-02] Gate SUAVE de EXCESO FLAGRANTE de sodio (> techo WHO ×
     # SODIUM_EXCESS_GATE_RATIO, default 1.5) sobre el panel ya computado en assemble. Default OFF (gate
     # NUEVO — se enciende con datos de flota del banner high_sodium_sugar, playbook P1-DISH-QUALITY-GATE-ON).
@@ -23358,7 +23554,7 @@ def _emit_plan_quality_degraded_alert(
         caller_context = form_data.get("_caller_context") or "initial_generate"
 
         metadata = {
-            "exit_reason": exit_reason,  # 'critical' | 'high_contextual' | 'max_attempts' | 'invalid_pipeline_start' | 'budget_exhausted'
+            "exit_reason": exit_reason,  # 'critical' | 'high_contextual' | 'max_attempts' | 'invalid_pipeline_start' | 'budget_exhausted' | 'approved_with_residual' (P2-AUDIT-V7-BATCH · P2-12)
             "rejection_severity": severity,
             "attempts": attempts,
             "review_passed": bool(state.get("review_passed")),
@@ -23498,6 +23694,10 @@ MARKER_UNRESOLVED_HONESTY = _env_bool("MEALFIT_MARKER_UNRESOLVED_HONESTY", True)
 # Con el knob ON: (1) el surgical regen intenta re-generar esos días con LLM; (2) si el surgical
 # ya corrió (o vuelve a fallar), el plan se marca _quality_degraded(reason="day_fallback", minor).
 DAY_FALLBACK_HONESTY = _env_bool("MEALFIT_DAY_FALLBACK_HONESTY", True)
+# [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-12) Alert I5 per-plan también en el path approved-con-residuo
+# (review aprobó pero quedan días `_critique_unresolved`/`_day_fallback` tras el surgical). El usuario
+# ya veía banner; el operador solo tenía el agregado 24h. exit_reason=`approved_with_residual`.
+APPROVED_RESIDUAL_ALERT_ENABLED = _env_bool("MEALFIT_APPROVED_RESIDUAL_ALERT", True)
 
 
 def should_retry(state: PlanState) -> str:
@@ -23575,6 +23775,7 @@ def should_retry(state: PlanState) -> str:
                 )
             # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Residual de días fallback tras el
             # surgical: banner honesto en vez de entrega silenciosa de plantilla matemática.
+            _residual_fb = []
             if DAY_FALLBACK_HONESTY:
                 _residual_fb = _collect_day_fallback_days(state.get("plan_result"))
                 if _residual_fb:
@@ -23586,6 +23787,13 @@ def should_retry(state: PlanState) -> str:
                     _mark_plan_result_quality_degraded(
                         state, reason="day_fallback", severity="minor"
                     )
+            # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-12) El usuario ya veía el banner en este path
+            # approved-con-residuo, pero el operador NO recibía alert I5 per-plan (solo el agregado
+            # 24h `degraded_rate_high`) — asimetría de telemetría del audit v7. Emit idempotente
+            # (mismo alert_key coalesced que las 5 ramas review_passed=False) con exit_reason
+            # propio para que SRE filtre "aprobado pero con días residuales" del resto.
+            if APPROVED_RESIDUAL_ALERT_ENABLED and (_residual_markers or _residual_fb):
+                _emit_plan_quality_degraded_alert(state, "approved_with_residual", severity="minor")
         logger.info("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
         return "end"
 
@@ -26893,6 +27101,11 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
     Llamar ANTES de `recompute_micronutrient_report_for_plan` (panel ve el estado final) y de
     `apply_update_band_parity` (que puede LIMPIAR el banner si el motor reparó la banda).
     Devuelve nº de días tocados. Fail-safe: cualquier error → 0 (plan intacto).
+    [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-11) CONTRATO DE SINCRONÍA: regen-day (routers/plans.py)
+    inlinea esta misma orquestación (rebalance → refine 5g → truth-up) porque necesita el guard
+    pantry never-worse (deepcopy+revert) que este helper no tiene. Banda/step/knobs son SSOT
+    compartido — si cambias la secuencia aquí, actualiza el inline de regen-day (y viceversa);
+    test de sincronía en test_p2_audit_v7_batch.py.
     Rollback: MEALFIT_UPDATE_MACRO_ENGINE=false. tooltip-anchor: P1-UPDATE-MACRO-PARITY"""
     if not (UPDATE_MACRO_ENGINE_ENABLED and isinstance(plan_data, dict)) or pantry_strict:
         return 0
