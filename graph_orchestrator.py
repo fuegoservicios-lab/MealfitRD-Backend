@@ -7184,6 +7184,26 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     if attempt > 1:
         use_adversarial = False
 
+    # [P1-PRECISION-LEVERS · 2026-07-04] (lever 2) Los días se generan en PARALELO y no se ven
+    # entre sí — "salteado ×3"/"revoltillo ×3" solo lo frenaba el retry del gate de variedad.
+    # Inyectamos a cada skeleton_day un brief DETERMINISTA de los OTROS días (técnica asignada +
+    # categoría de desayuno); `build_day_assignment_context` lo convierte en la instrucción
+    # anti-repetición explícita. Mismo dict → los contextos de retry/surgical lo heredan gratis.
+    try:
+        _abd_days = skeleton_days[:days_in_chunk]
+        for _abd_i, _abd_sd in enumerate(_abd_days):
+            if isinstance(_abd_sd, dict):
+                _abd_sd["_other_days_brief"] = [
+                    {
+                        "technique": str((_abd_od or {}).get("assigned_technique") or "").strip(),
+                        "breakfast": str((_abd_od or {}).get("breakfast_category") or "").strip(),
+                    }
+                    for _abd_j, _abd_od in enumerate(_abd_days)
+                    if _abd_j != _abd_i and isinstance(_abd_od, dict)
+                ]
+    except Exception as _abd_e:
+        logger.debug(f"[P1-PRECISION-LEVERS] other-days brief no-op: {_abd_e}")
+
     async def _generate_candidate(temp_override=None):
         generated_days = []
         day_coros = []

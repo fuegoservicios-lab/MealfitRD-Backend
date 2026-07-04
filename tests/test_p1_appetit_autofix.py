@@ -174,6 +174,7 @@ def test_fruit_savory_knob_off(go, monkeypatch):
 # marker
 # ---------------------------------------------------------------------------
 
-def test_marker_bumped():
-    app = _read("app.py")
-    assert '_LAST_KNOWN_PFIX = "P1-APPETIT-AUTOFIX · 2026-07-04"' in app
+def test_marker_anchored_in_source():
+    # NO pineamos _LAST_KNOWN_PFIX (cada P-fix posterior lo bumpea y rompería en cadena);
+    # el contrato marker↔test lo enforza test_p2_hist_audit_14. Anclamos el marker en el SOURCE.
+    assert "P1-APPETIT-AUTOFIX" in _GO

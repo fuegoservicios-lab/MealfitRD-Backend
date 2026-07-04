@@ -109,6 +109,7 @@ def test_summary_reads_food_key():
 # marker
 # ---------------------------------------------------------------------------
 
-def test_marker_bumped():
-    app = _read("app.py")
-    assert '_LAST_KNOWN_PFIX = "P2-COH-WEEKLY-BASIS · 2026-07-04"' in app
+def test_marker_anchored_in_source():
+    # NO pineamos _LAST_KNOWN_PFIX (cada P-fix posterior lo bumpea y rompería en cadena);
+    # el contrato marker↔test lo enforza test_p2_hist_audit_14. Anclamos el marker en el SOURCE.
+    assert "P2-COH-WEEKLY-BASIS" in _SC and "P2-COH-WEEKLY-BASIS" in _GO

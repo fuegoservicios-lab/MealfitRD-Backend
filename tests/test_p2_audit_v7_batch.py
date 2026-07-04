@@ -286,6 +286,7 @@ def test_p2_6_chip_cross_week_in_meal_advisories():
 # Marker bump
 # ---------------------------------------------------------------------------
 
-def test_marker_bumped():
-    app = _read(_BACKEND, "app.py")
-    assert '_LAST_KNOWN_PFIX = "P2-AUDIT-V7-BATCH · 2026-07-04"' in app
+def test_marker_anchored_in_source():
+    # NO pineamos _LAST_KNOWN_PFIX (cada P-fix posterior lo bumpea y rompería en cadena);
+    # el contrato marker↔test lo enforza test_p2_hist_audit_14. Anclamos el marker en el SOURCE.
+    assert "P2-AUDIT-V7-BATCH" in _GO

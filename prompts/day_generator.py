@@ -219,6 +219,23 @@ if _SLOT_SSOT_RULES_BLOCK:
         "exactamente esto, sin excepciones):\n    " + _SLOT_SSOT_RULES_BLOCK + "\n"
     )
 
+# [P1-PRECISION-LEVERS · 2026-07-04] (lever 1) Presupuesto CUANTITATIVO de sodio en el system
+# prompt. Evidencia en vivo 2026-07-04: un intento salió con 4,261 mg/día (el gate de sodio lo
+# rechazó → retry completo pagado) porque el prompt solo decía "modera la sal" sin números ni
+# reglas de conteo. String ESTÁTICO a import-time → prompt-cache del SystemMessage intacto
+# (P1-PROMPT-CACHE). El gate MEALFIT_SODIUM_EXCESS_GATE queda como backstop.
+DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
+    "\n17. PRESUPUESTO DE SODIO (el panel lo MIDE y el validador RECHAZA el exceso flagrante):\n"
+    "    - Techo diario: ≤2000 mg de sodio (OMS). Planifica el día completo con ese número en mente.\n"
+    "    - Máximo UN ítem enlatado en TODO el día (atún, sardinas, maíz o habichuela de lata): cada\n"
+    "      lata carga 400-700 mg. Dos enlatados en un día casi garantizan pasarse.\n"
+    "    - Queso (blanco/de freír) y embutidos son cargas grandes de sodio: si un plato los lleva,\n"
+    "      NO añadas sal en los pasos de ese plato y no los combines con enlatado en el mismo día.\n"
+    "    - Sazona con ajo, cebolla, orégano, limón, cilantro y ají — NO con cubitos ni sazón completo\n"
+    "      (un cubito ≈ 1000 mg de sodio: revienta el presupuesto él solo).\n"
+    "    - Los pasos de receta solo dicen 'sal' UNA vez por plato como máximo ('pizca de sal').\n"
+)
+
 
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.
 # Clave: término de búsqueda en el pool (lowercase). Valor: etiqueta para el LLM.
@@ -408,6 +425,33 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     breakfast_cat = skeleton_day.get('breakfast_category', '')
     breakfast_block = f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {breakfast_cat}\n  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. NO uses mangú/tubérculos si la categoría asignada es otra)." if breakfast_cat else ""
 
+    # [P1-PRECISION-LEVERS · 2026-07-04] (lever 2) Anti-repetición ENTRE DÍAS: los días se generan
+    # en PARALELO (asyncio.gather) y no se ven entre sí — el "salteado ×3" / "revoltillo ×3" solo lo
+    # frenaba el retry del gate de variedad (tokens pagados). El dispatch inyecta en cada
+    # skeleton_day un brief DETERMINISTA de los otros días (`_other_days_brief`: técnica asignada +
+    # categoría de desayuno) y aquí lo convertimos en instrucción negativa explícita. Determinista
+    # por skeleton → prompt-cache per-día estable. Fail-open → ''.
+    cross_day_block = ""
+    try:
+        _others = []
+        for _od in (skeleton_day.get("_other_days_brief") or []):
+            _t = str((_od or {}).get("technique") or "").strip()
+            _b = str((_od or {}).get("breakfast") or "").strip()
+            if _t or _b:
+                _others.append((_t or "libre") + (f" (desayuno: {_b})" if _b else ""))
+        if _others:
+            cross_day_block = (
+                f"\n• 🔀 ANTI-REPETICIÓN ENTRE DÍAS — los OTROS días de este plan ya usan: "
+                f"{'; '.join(_others)}.\n"
+                f"  ⚠️ Tu día debe DISTINGUIRSE: tu técnica asignada es la identidad de tu plato fuerte. "
+                f"NO produzcas el mismo plato-base que esos días van a producir (si otro día es "
+                f"'salteado', el tuyo NO es otro salteado; si otro desayuno es revoltillo/huevo, el "
+                f"tuyo usa una base distinta DE TU categoría asignada). El validador rechaza el mismo "
+                f"plato-base en 3+ días — y ese retry es evitable respetando esta línea."
+            )
+    except Exception:
+        cross_day_block = ""
+
     # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (LIBRARY) Inspiración curada por slot (elige-y-adapta
     # sobre un espacio verificado — creatividad por recombinación, prioriza transformadas).
     # Determinista por (día, pool) → prompt-cache preservado. Fail-open → ''.
@@ -420,7 +464,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
-• Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}
+• Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(skeleton_day.get('carb_pool', []))}

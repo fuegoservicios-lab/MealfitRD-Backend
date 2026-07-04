@@ -57,14 +57,16 @@ def test_planner_callsite_uses_systemmessage_under_knob():
     `_safe_ainvoke` debe construir `[SystemMessage(content=PLANNER_SYSTEM_PROMPT),
     HumanMessage(content=...)]` cuando `PROMPT_CACHE_SYSTEM_MESSAGE` está True."""
     text = _read_graph()
-    # Localizar la región de `invoke_planner` por anchor del log + el callsite
-    # `_safe_ainvoke(planner_llm, ...)`.
+    # [P1-PRECISION-LEVERS · 2026-07-04, boy-scout] El refactor P1-PLANNER-PRO-FALLBACK
+    # (2026-06-26) movió el core del invoke a `_do_planner_invoke(_llm, ...)` — este test
+    # quedó rojo anclando el patrón viejo (`invoke_planner` + `_safe_ainvoke(planner_llm`).
+    # El CONTRATO (SystemMessage bajo knob) sigue intacto en la función nueva.
     region_match = re.search(
-        r"async def invoke_planner.*?await _safe_ainvoke\(planner_llm,.*?\)",
+        r"async def _do_planner_invoke.*?await _safe_ainvoke\(_llm,.*?\)",
         text,
         re.DOTALL,
     )
-    assert region_match, "No encontré `invoke_planner` + callsite a `_safe_ainvoke`."
+    assert region_match, "No encontré `_do_planner_invoke` + callsite a `_safe_ainvoke`."
     region = region_match.group(0)
     assert "PROMPT_CACHE_SYSTEM_MESSAGE" in region, (
         "El callsite del planner debe gatear por `PROMPT_CACHE_SYSTEM_MESSAGE`."
