@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-FORM-AUDIT-BATCH · 2026-07-03"
+_LAST_KNOWN_PFIX = "P2-HELP-CHATBOT · 2026-07-04"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1613,6 +1613,11 @@ app.include_router(auth_session_router)
 # (/supermercado) y editable con gate admin (Bearer CRON_SECRET).
 from routers.supermarket import router as supermarket_router
 app.include_router(supermarket_router)
+# [P2-HELP-CHATBOT · 2026-07-04] Chatbot de ayuda del menú "Obtener ayuda":
+# Q&A de producto sin acceso a datos del usuario (cero tools/DB), fail-cheap
+# (flash), quota-exempt (RateLimiter, NO verify_api_quota/log_api_usage).
+from routers.help_chat import router as help_chat_router
+app.include_router(help_chat_router)
 
 @app.get("/")
 @app.get("/health")
