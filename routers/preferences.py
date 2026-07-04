@@ -26,6 +26,7 @@ from db_profiles import (
     update_long_term_memory_enabled,
     update_water_tracker_enabled,
     get_water_tracker_enabled,
+    update_ai_training_consent,
 )
 
 # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] Los 4 handlers async de este router
@@ -145,3 +146,55 @@ async def api_get_water_tracker_enabled(
         raise HTTPException(status_code=401, detail="No autenticado.")
     enabled = await asyncio.to_thread(get_water_tracker_enabled, verified_user_id)
     return {"water_tracker_enabled": enabled}
+
+
+# [P2-AI-TRAINING-CONSENT · 2026-07-04] Consentimiento OPT-IN para uso futuro
+# de datos en entrenamiento de modelos propios de MealfitRD (Configuración →
+# Privacidad). DEFAULT FALSE fail-secure: perfil ausente / campo NULL / error
+# = NO consiente. El corpus futuro DEBE filtrar por
+# db_profiles.get_ai_training_consented_user_ids() (gate SSOT).
+# Migración SSOT: migrations/p2_ai_training_consent_2026_07_04.sql.
+
+
+class AiTrainingConsentBody(BaseModel):
+    ai_training_consent: bool
+
+
+@router.patch("/ai-training")
+async def api_set_ai_training_consent(
+    body: AiTrainingConsentBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Actualiza el consentimiento de training del usuario autenticado."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+
+    ok = await asyncio.to_thread(
+        update_ai_training_consent, verified_user_id, body.ai_training_consent
+    )
+    if not ok:
+        logger.warning(
+            f"[P2-AI-TRAINING-CONSENT] update falló para user={verified_user_id} "
+            f"consent={body.ai_training_consent} (sin fila afectada)"
+        )
+        raise HTTPException(status_code=500, detail="No se pudo actualizar la preferencia.")
+
+    logger.info(
+        f"[P2-AI-TRAINING-CONSENT] user={verified_user_id} "
+        f"ai_training_consent={body.ai_training_consent}"
+    )
+    return {"ai_training_consent": body.ai_training_consent}
+
+
+@router.get("/ai-training")
+async def api_get_ai_training_consent(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Devuelve el consentimiento actual. Default FALSE (opt-in fail-secure)
+    si el perfil no existe o el campo es NULL (perfiles pre-migración)."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+
+    profile = await asyncio.to_thread(get_user_profile, verified_user_id)
+    consent = bool(profile.get("ai_training_consent")) if profile else False
+    return {"ai_training_consent": consent}

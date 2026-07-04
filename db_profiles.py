@@ -1119,6 +1119,50 @@ def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
         return False
 
 
+# [P2-AI-TRAINING-CONSENT · 2026-07-04] Consentimiento OPT-IN para uso futuro
+# de datos en entrenamiento de modelos propios. Migración SSOT:
+# migrations/p2_ai_training_consent_2026_07_04.sql. DEFAULT false (fail-secure).
+def update_ai_training_consent(user_id: str, enabled: bool) -> bool:
+    """Actualiza el flag `ai_training_consent` en user_profiles.
+
+    Devuelve True si el UPDATE afectó una fila. Filtrado por user_id
+    (invariante I2: toda mutación a user_profiles requiere user_id explícito).
+    """
+    if not connection_pool:
+        return False
+    try:
+        res = execute_sql_write(
+            "UPDATE user_profiles SET ai_training_consent = %s WHERE id = %s RETURNING id",
+            (bool(enabled), user_id),
+            returning=True,
+        )
+        return bool(res)
+    except Exception as e:
+        logger.error(f"❌ Error update_ai_training_consent({user_id}, {enabled}): {e}")
+        return False
+
+
+def get_ai_training_consented_user_ids() -> list:
+    """[P2-AI-TRAINING-CONSENT · 2026-07-04] **Gate SSOT del corpus de training.**
+
+    TODO pipeline futuro que recolecte/exporte datos de usuarios para entrenar
+    modelos propios DEBE obtener su universo de usuarios de esta función —
+    NUNCA de un SELECT propio sin el filtro de consentimiento. Fail-secure:
+    error de DB → lista vacía (nadie consintió).
+    """
+    if not connection_pool:
+        return []
+    try:
+        rows = execute_sql_query(
+            "SELECT id FROM user_profiles WHERE ai_training_consent IS TRUE",
+            fetch_all=True,
+        ) or []
+        return [str(r["id"]) for r in rows]
+    except Exception as e:
+        logger.error(f"❌ Error get_ai_training_consented_user_ids: {e}")
+        return []
+
+
 # [P3-WATER-TRACKER · 2026-05-16] Helper para el toggle del tracker de
 # hidratación. Migración SSOT: migrations/add_water_tracker_enabled_2026_05_16.sql
 def update_water_tracker_enabled(user_id: str, enabled: bool) -> bool:
