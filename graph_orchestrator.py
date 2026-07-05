@@ -22155,20 +22155,34 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
                             "hypothesis": str(_d.get("hypothesis") or "unknown"),
                             "delta_pct": round(_dp_raw, 3) if _dp_finite else None,
                         })
-                plan_result["_swap_coherence_warnings"] = {
-                    "critical_count": critical_total,
-                    "summary": _severe_summary,
-                    "detected_at": entry["ts"],
-                }
-                # Telemetría adicional para que el cron P3-B pueda
-                # distinguir escalaciones inline-user-visible de las
-                # warn-only históricas. NO altera contrato de buckets.
-                entry["escalated_user_visible"] = True
-                logger.warning(
-                    f"⚠️ [P1-SWAP-COHERENCE-ESCALATE] critical_total={critical_total} "
-                    f"→ _swap_coherence_warnings inyectado al plan (severe_n="
-                    f"{len(_severe_summary)})."
-                )
+                # [P2-COH-WEEKLY-BASIS · 2026-07-04, follow-up] Banner SOLO si hay algo
+                # accionable que mostrar: tras el filtro finito, un plan puede quedar con
+                # critical_count > 0 hecho de puro split de unidades (expected en gramos vs
+                # lista en Uds/lb — 60 filas, summary VACÍO, caso vivo plan bb595697 "(32
+                # detalles)" sin detalle alguno). Doctrina COHERENCE-BANNER-NOISE: surface
+                # solo accionable — la telemetría completa (entry) sigue yendo al history/cron.
+                # Fix profundo pendiente (P2 próxima ronda): unit-normalizar el comparador.
+                if _severe_summary:
+                    plan_result["_swap_coherence_warnings"] = {
+                        "critical_count": len(_severe_summary),
+                        "summary": _severe_summary,
+                        "detected_at": entry["ts"],
+                    }
+                    # Telemetría adicional para que el cron P3-B pueda
+                    # distinguir escalaciones inline-user-visible de las
+                    # warn-only históricas. NO altera contrato de buckets.
+                    entry["escalated_user_visible"] = True
+                    logger.warning(
+                        f"⚠️ [P1-SWAP-COHERENCE-ESCALATE] critical_total={critical_total} "
+                        f"→ _swap_coherence_warnings inyectado al plan (severe_n="
+                        f"{len(_severe_summary)})."
+                    )
+                else:
+                    logger.info(
+                        f"🔇 [P2-COH-WEEKLY-BASIS] critical_total={critical_total} pero 0 filas "
+                        f"accionables tras el filtro finito (split de unidades) → banner NO "
+                        f"inyectado; telemetría completa en history."
+                    )
 
             # [P2-2 · 2026-05-08] Escalación inline a system_alerts cuando
             # critical_total >= threshold. Best-effort: cualquier fallo

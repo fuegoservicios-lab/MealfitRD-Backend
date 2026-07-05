@@ -105,6 +105,19 @@ def test_summary_reads_food_key():
     assert '_d.get("food")' in blk, 'el summary debe leer `food` (key real del guard)'
 
 
+def test_banner_only_when_actionable_summary():
+    """[follow-up] critical_count>0 hecho de puro split de unidades (summary vacío tras el
+    filtro finito) NO inyecta el banner al usuario — caso vivo plan bb595697: "(32 detalles)"
+    sin ningún detalle que mostrar. La telemetría completa sigue en el history/cron."""
+    i = _GO.index('plan_result["_swap_coherence_warnings"] = {')
+    blk = _GO[max(0, i - 900):i + 1600]
+    assert "if _severe_summary:" in blk, "el banner debe gatearse por summary accionable no-vacío"
+    assert '"critical_count": len(_severe_summary)' in blk, \
+        "el conteo user-facing debe ser el de filas ACCIONABLES (no el total con ruido de unidades)"
+    assert "escalated_user_visible" in blk.split("if _severe_summary:", 1)[1], \
+        "la telemetría escalated_user_visible debe seguir la misma condición del banner"
+
+
 # ---------------------------------------------------------------------------
 # marker
 # ---------------------------------------------------------------------------
