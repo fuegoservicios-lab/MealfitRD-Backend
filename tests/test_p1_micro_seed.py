@@ -49,8 +49,14 @@ class _FakeDB:
         out = {}
         if "linaza" in low:
             out = {"omega3_g": 0.6, "vit_e_mg": 0.1}
+        elif "chia" in low:
+            out = {"omega3_g": 0.5, "vit_e_mg": 0.0}
         elif "nueces" in low:
             out = {"omega3_g": 0.9, "vit_e_mg": 0.2}
+        elif "girasol" in low:
+            out = {"vit_e_mg": 3.5, "omega3_g": 0.0}
+        elif "almendras" in low:
+            out = {"vit_e_mg": 2.6, "omega3_g": 0.0}
         elif "mani" in low:
             out = {"vit_e_mg": 0.8, "omega3_g": 0.0}
         return out or {"omega3_g": 0.0, "vit_e_mg": 0.0}
@@ -93,8 +99,9 @@ def _run(go, monkeypatch, key="omega3_g", piso=1.0, form=None):
 
 def test_knob_and_sources():
     assert '_env_bool("MEALFIT_MICRO_SEED", True)' in _GO
+    # [P1-MICRO-SEED-DENSITY · 2026-07-05] escaleras re-ordenadas por densidad del micro.
     assert '"omega3_g": ("10 g de semillas de linaza"' in _GO
-    assert '"vit_e_mg": ("10 g de maní"' in _GO
+    assert '"vit_e_mg": ("10 g de semillas de girasol"' in _GO
 
 
 def test_seeds_when_day_has_no_carrier(go, monkeypatch):
@@ -108,24 +115,26 @@ def test_seeds_when_day_has_no_carrier(go, monkeypatch):
     assert len(merienda["ingredients"]) == len(merienda["ingredients_raw"])
 
 
-def test_allergy_ladder_nuts_to_seeds(go, monkeypatch):
-    # alergia a maní → para vit E cae al segundo candidato (linaza).
+def test_allergy_ladder_skips_flagged_candidates(go, monkeypatch):
+    # [P1-MICRO-SEED-DENSITY] alergia a frutos secos (girasol/almendras/maní flaggeados por el
+    # scan) → para vit E NO se siembra ninguna (fail-safe: escalera agotada = sin seed).
     monkeypatch.setattr(
         go, "_scan_allergen_violations",
-        lambda plan, allergies: (["maní"] if any("maní" in str(i) for d in plan["days"]
-                                                 for m in d["meals"] for i in m["ingredients"]) else []),
+        lambda plan, allergies: (["frutos secos"] if any(
+            any(t in str(i).lower() for t in ("girasol", "almendras", "maní"))
+            for d in plan["days"] for m in d["meals"] for i in m["ingredients"]) else []),
     )
-    n, plan = _run(go, monkeypatch, key="vit_e_mg", piso=0.5, form={"allergies": ["maní"]})
-    assert n >= 1
+    n, plan = _run(go, monkeypatch, key="vit_e_mg", piso=0.5, form={"allergies": ["frutos secos"]})
     joined = " ".join(plan["days"][0]["meals"][1]["ingredients"])
-    assert "maní" not in joined and "linaza" in joined
+    assert "girasol" not in joined and "almendras" not in joined and "maní" not in joined
 
 
 def test_dislike_ladder(go, monkeypatch):
+    # dislike linaza → omega-3 cae al 2º candidato (chía, seed-safe).
     n, plan = _run(go, monkeypatch, key="omega3_g", piso=1.0, form={"dislikes": ["linaza"]})
     assert n >= 1
     joined = " ".join(plan["days"][0]["meals"][1]["ingredients"])
-    assert "linaza" not in joined and "nueces" in joined
+    assert "linaza" not in joined and "chía" in joined
 
 
 def test_knob_off_no_seed(go, monkeypatch):

@@ -10178,11 +10178,24 @@ MICRO_SEED_ENABLED = _env_bool("MEALFIT_MICRO_SEED", True)
 # que el seed v1, gateado a "sin portadores", no podía evitar). Default 0.6 = alineado con
 # `low_ratio_threshold` del banner per-día: si el día sería flaggeado, se siembra. 0 = off (v1).
 MICRO_SEED_BELOW_RATIO = max(0.0, min(0.95, _env_float("MEALFIT_MICRO_SEED_BELOW_RATIO", 0.6)))
+# [P1-MICRO-SEED-DENSITY · 2026-07-05] Escaleras re-ordenadas por DENSIDAD del micro (forense del
+# catálogo vivo, /100g): vit E — girasol 35.2mg ≫ almendras 25.6 ≫ maní 9.1 (la escalera vieja
+# maní→linaza era 4-100× más débil: linaza tiene 0.3mg de vit E — semilla casi inútil para ese
+# piso). omega-3 — linaza 22.8g ≫ chía 17.8 ≫ nueces ~9 (chía entra como 2ª opción seed-safe para
+# alérgicos a frutos secos). Nombres EXACTOS del catálogo verificado (lookup de micros los resuelve).
 _MICRO_SEED_SOURCES = {
-    "omega3_g": ("10 g de semillas de linaza", "10 g de nueces"),
-    "vit_e_mg": ("10 g de maní", "10 g de semillas de linaza"),
+    "omega3_g": ("10 g de semillas de linaza", "10 g de semillas de chía", "10 g de nueces"),
+    "vit_e_mg": ("10 g de semillas de girasol", "10 g de almendras fileteadas", "10 g de maní"),
 }
-MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
+# [P1-MICRO-SEED-DENSITY] Refuerzo post-erosión: si el día YA sembrado sigue corto en el re-check
+# post-motor (el solver/quantize erosionó la semilla o el gap era 2-3×), UNA re-escalada de la
+# línea sembrada (cap 30 g, una vez por día/micro). Espejo del patrón sodio/micros post-motor.
+MICRO_SEED_REINFORCE_ENABLED = _env_bool("MEALFIT_MICRO_SEED_REINFORCE", True)
+# [P1-MICRO-SEED-DENSITY] 80 → 120: con 80, dos semillas del mismo día (linaza 53 kcal + girasol
+# 58 kcal) NO cabían (el guard >30 bloqueaba la 2ª) — caso vivo plan 176ca62c: Día 3 corto en
+# omega-3 Y vit E solo recibió la semilla de omega-3. El re-trim de carbos post-closer (P2-2)
+# compensa el drift; rollback vía env sin redeploy.
+MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 120)))
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
 MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK", True)
@@ -11746,8 +11759,10 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 _seed_trigger = (not contributors) or (
                     MICRO_SEED_BELOW_RATIO > 0 and day_total < MICRO_SEED_BELOW_RATIO * floor
                 )
+                # [P1-MICRO-SEED-DENSITY · 2026-07-05] guard 30→25: linaza (53 kcal) dejaba 67 de
+                # los 120 del budget — la 2ª semilla del día (girasol 58) debe caber.
                 if _seed_trigger and not _already_seeded and MICRO_SEED_ENABLED \
-                        and k in _MICRO_SEED_SOURCES and kcal_budget_left > 30.0:
+                        and k in _MICRO_SEED_SOURCES and kcal_budget_left > 25.0:
                     try:
                         from constants import strip_accents as _sa_seed
                         _seed_dislikes = {_sa_seed(str(x).strip().lower())
@@ -11814,6 +11829,74 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                             f"sembrado '{_seed_line}' (el closer lo escala al piso)")
                     except Exception as _seed_e:
                         logger.debug(f"[P1-MICRO-SEED] seed no-op: {type(_seed_e).__name__}: {_seed_e}")
+                elif _seed_trigger and _already_seeded and MICRO_SEED_REINFORCE_ENABLED \
+                        and MICRO_SEED_ENABLED and k in _MICRO_SEED_SOURCES:
+                    # [P1-MICRO-SEED-DENSITY · 2026-07-05] REFUERZO post-erosión: el día ya fue
+                    # sembrado para este micro pero sigue bajo el umbral (el motor/quantize
+                    # erosionó la semilla, o el gap era 2-3×). UNA re-escalada de la línea
+                    # sembrada (cap 30 g; una vez por día/micro vía _micro_seed_reinforced).
+                    # No se toca day_total/contributors: el loop de escala de abajo y el
+                    # recompute final del panel (P2-1) miden la verdad fresca.
+                    try:
+                        import re as _re_rs
+                        _cand_foods = tuple(
+                            c.split(" de ", 1)[1].lower() for c in _MICRO_SEED_SOURCES[k]
+                            if " de " in c
+                        )
+                        for _rm in (_d.get("meals") or []):
+                            if not (isinstance(_rm, dict) and _rm.get("_micro_seed_applied") == k):
+                                continue
+                            if _rm.get("_micro_seed_reinforced") == k:
+                                break  # ya reforzado — no crecer sin límite
+                            _r_ings = _rm.get("ingredients")
+                            if not isinstance(_r_ings, list):
+                                break
+                            for _ri, _rline in enumerate(_r_ings):
+                                if not isinstance(_rline, str) or not any(
+                                        cf in _rline.lower() for cf in _cand_foods):
+                                    continue
+                                _m_g = _re_rs.match(r"^\s*(\d+(?:[.,]\d+)?)\s*g\b", _rline)
+                                if not _m_g:
+                                    continue
+                                _g_now = float(_m_g.group(1).replace(",", "."))
+                                _g_new = min(30.0, max(_g_now * 1.8, _g_now + 8.0))
+                                if _g_new <= _g_now + 0.5:
+                                    break
+                                _new_line = _re_rs.sub(r"^\s*\d+(?:[.,]\d+)?\s*g",
+                                                       f"{int(round(_g_new))} g", _rline, count=1)
+                                _r_ings[_ri] = _new_line
+                                _r_raw = _rm.get("ingredients_raw")
+                                if isinstance(_r_raw, list) and _ri < len(_r_raw) \
+                                        and isinstance(_r_raw[_ri], str):
+                                    _r_raw[_ri] = _new_line
+                                try:
+                                    _truth_up_meal_macros_from_strings(_rm, db)
+                                except Exception:
+                                    pass
+                                _rm["_micro_seed_reinforced"] = k
+                                adjustments += 1
+                                # actualizar el contributor correspondiente: sin esto, el loop de
+                                # escala de abajo re-escala desde el string VIEJO (10 g × MAX_SCALE)
+                                # y PISA el refuerzo (18→16 g, medido en test).
+                                try:
+                                    _mic_rs = db.micros_from_ingredient_string(_new_line) or {}
+                                    _c_rs = float(_mic_rs.get(ing_key) or 0.0)
+                                except Exception:
+                                    _c_rs = 0.0
+                                for _ci, (_cc, _cm, _cix, _cs, _ckc) in enumerate(contributors):
+                                    if _cm is _rm and _cix == _ri:
+                                        if _c_rs > _cc:
+                                            day_total += (_c_rs - _cc)
+                                        contributors[_ci] = (
+                                            _c_rs if _c_rs > 0 else _cc, _cm, _cix, _new_line, _ckc)
+                                        break
+                                logger.info(f"🌱 [P1-MICRO-SEED] refuerzo post-erosión de '{k}': "
+                                            f"semilla re-escalada a {int(round(_g_new))} g "
+                                            f"(el día seguía bajo el umbral).")
+                                break
+                            break
+                    except Exception as _rs_e:
+                        logger.debug(f"[P1-MICRO-SEED] refuerzo no-op: {type(_rs_e).__name__}: {_rs_e}")
                 if not contributors:
                     continue
                 contributors.sort(key=lambda t: t[0], reverse=True)  # richest-first
