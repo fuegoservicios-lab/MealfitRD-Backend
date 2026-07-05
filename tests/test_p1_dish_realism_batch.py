@@ -102,12 +102,16 @@ def test_realism_cap_aromatics_herbs_and_counts():
                         "protein": 20, "carbs": 40, "fats": 10, "cals": 350}]}]
     n = go._cap_unrealistic_portions(days, db=_StubDB())
     ings = days[0]["meals"][0]["ingredients"]
-    assert n == 3, f"esperados 3 recortes (ají/perejil/papas), got {n}: {ings}"
+    # [P2-CLARAS-CAP-KNOB-PARITY · 2026-07-05] el techo de claras dejó de ser 8.0 hardcoded y
+    # sigue a MEALFIT_MAX_EGG_WHITES_PER_MEAL (6) — "8 claras" ahora SÍ se recorta (4º recorte;
+    # el plato vivo "8 claras (267g)" pasaba al ras mientras el motor decía 6).
+    assert n == 4, f"esperados 4 recortes (ají/perejil/papas/claras), got {n}: {ings}"
     assert float(re.match(r"([\d.]+)", ings[0]).group(1)) <= 1.0, f"aromático sin cap: {ings[0]}"
     assert float(re.match(r"([\d.]+)", ings[1]).group(1)) <= 0.25, f"hierba sin cap: {ings[1]}"
     assert float(re.match(r"([\d.]+)", ings[2]).group(1)) <= 3.0, f"papas sin cap: {ings[2]}"
     assert ings[3].startswith("1 taza de repollo"), "repollo (veg principal) NO debe caparse a 1 taza"
-    assert ings[4].startswith("8 claras"), "8 claras está dentro del techo (no tocar)"
+    assert float(re.match(r"([\d.]+)", ings[4]).group(1)) <= float(go.MAX_EGG_WHITES_PER_MEAL), \
+        f"claras sobre el knob ({go.MAX_EGG_WHITES_PER_MEAL}) deben recortarse: {ings[4]}"
 
 
 def test_realism_cap_idempotent():

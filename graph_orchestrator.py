@@ -12383,7 +12383,11 @@ _RAW_ANIMAL_PROTEIN_TERMS = ("pescado", "atun", "salmon", "res", "carne", "terne
                              "pollo", "ave", "pavo", "gallina",
                              # [P2-RAW-SEAFOOD-SPECIES · 2026-06-19] (audit fresco P2-9) Especies RD que faltaban
                              # en la co-ocurrencia (un 'carpaccio de corvina'/'tartar de langosta' escapaba).
-                             "corvina", "dorado", "langosta", "cangrejo", "lambi", "concha")
+                             "corvina", "dorado", "langosta", "cangrejo", "lambi", "concha",
+                             # [P1-SEAFOOD-MARINADE-BLANCH · 2026-07-05] "Ceviche de calamar" en vivo (plan
+                             # e49d44c3): el calamar NO estaba en la co-ocurrencia → la rama ambigua no
+                             # flageaba y el plato salió crudo con "el ácido del limón cocinará el calamar".
+                             "calamar", "sepia", "chipiron")
 # [P2-RAW-POULTRY-SAFETY · 2026-06-19] (review) La rama ambigua (tartar/carpaccio) matchea por LÍMITE DE PALABRA,
 # no por substring: evita falsos-positivos en vegetales seguros — 'ave'⊄avena (granola), 'pollo'⊄repollo (col),
 # 'res'⊄fresa (este último era un latente PRE-EXISTENTE de la lista original). El standalone sigue por substring
@@ -12397,6 +12401,99 @@ _FOOD_SAFETY_NOTE_RAW_SEAFOOD = (
     "embarazo o si tu sistema inmune está comprometido. Usa pescado previamente congelado de fuente "
     "confiable, o elige una preparación COCIDA (a la plancha / al horno / guisada)."
 )
+
+# [P1-SEAFOOD-MARINADE-BLANCH · 2026-07-05] (review visual, plan e49d44c3) "Ceviche de calamar" cuyos
+# pasos JAMÁS aplican calor y afirman "el ácido del limón cocinará el calamar" — falso y riesgo real
+# (el ácido desnaturaliza proteína pero NO mata anisakis/Vibrio). La nota ⚠ existente advierte pero
+# deja la receta rota; este fix la REPARA: inyecta blanqueo 1-2 min pre-marinado + reescribe la
+# afirmación del cítrico. Solo mariscos/pescados con marinado cítrico sin fuego propio; conservador
+# (plato que SÍ cocina el marisco → solo se corrige la frase). tooltip-anchor: P1-SEAFOOD-MARINADE-BLANCH
+SEAFOOD_MARINADE_BLANCH_ENABLED = _env_bool("MEALFIT_SEAFOOD_MARINADE_BLANCH", True)
+_SEAFOOD_BLANCHABLE_TOKENS = (
+    "calamar", "sepia", "chipiron", "camaron", "langostino", "pulpo", "pescado", "atun", "salmon",
+    "mero", "tilapia", "chillo", "corvina", "dorado", "lambi", "vieira", "marisco", "langosta",
+    "cangrejo", "jaiba", "almeja", "mejillon", "concha", "ostra",
+)
+# La afirmación falsa, tolerante a acentos, parentizada o en frase corrida ("el ácido del limón
+# cocinará el calamar" / "el limón cocina el pescado" / "el cítrico cuece los camarones").
+_CITRUS_COOKS_CLAIM_RE = _re.compile(
+    r"\(?\s*el\s+(?:[áa]cido|c[íi]trico|lim[óo]n|jugo\s+de\s+lim[óo]n)"
+    r"[^().]{0,60}?(?:cocinar[áa]|cocina|cuece|cocer[áa])[^().]{0,50}?\)?", _re.IGNORECASE)
+_SEAFOOD_HEAT_VERBS = ("hierve", "hervir", "blanquea", "blanquear", "cocina", "saltea", "sofrie",
+                       "plancha", "asa", "hornea", "frie", "guisa", "sella", "vapor")
+_FOOD_SAFETY_NOTE_SEAFOOD_BLANCHED = (
+    "⚠️ Seguridad alimentaria: el cítrico del ceviche NO cuece el marisco — por eso esta receta lo "
+    "blanquea 1-2 minutos en agua hirviendo antes de marinar. No saltes ese paso; en embarazo o con "
+    "sistema inmune comprometido prefiere preparaciones completamente cocidas."
+)
+
+
+def _inject_blanch_for_citrus_marinade(meal: dict) -> bool:
+    """[P1-SEAFOOD-MARINADE-BLANCH · 2026-07-05] Repara el ceviche/marinado crudo de marisco: si el
+    plato marina un marisco en cítrico SIN aplicarle calor, (a) inyecta blanqueo 1-2 min antes del
+    marinado y (b) reescribe la afirmación "el ácido cocinará ..." (falsa). Si el marisco SÍ recibe
+    fuego en los pasos, solo corrige la frase. Idempotente ("blanquea" presente → no-op de inyección),
+    fail-safe, muta meal. Marca `_seafood_blanch_injected`. tooltip-anchor: P1-SEAFOOD-MARINADE-BLANCH"""
+    if not SEAFOOD_MARINADE_BLANCH_ENABLED or not isinstance(meal, dict):
+        return False
+    try:
+        from constants import strip_accents as _sa_bl
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return False
+        name_low = _sa_bl(str(meal.get("name") or "").lower())
+        steps_low = _sa_bl(" ".join(str(s) for s in rec if isinstance(s, str)).lower())
+        blob = name_low + " " + steps_low
+        _tok = next((t for t in _SEAFOOD_BLANCHABLE_TOKENS
+                     if _re.search(r"\b" + t, blob)), None)
+        if not _tok:
+            return False
+        _has_claim = bool(_CITRUS_COOKS_CLAIM_RE.search(" ".join(str(s) for s in rec if isinstance(s, str))))
+        _is_ceviche = any(k in name_low for k in ("ceviche", "cebiche", "tiradito", "aguachile"))
+        if not (_has_claim or (_is_ceviche and "marina" in steps_low)):
+            return False
+        changed = False
+        # (b) la afirmación falsa se corrige SIEMPRE que exista.
+        if _has_claim:
+            for i, s in enumerate(rec):
+                if isinstance(s, str) and _CITRUS_COOKS_CLAIM_RE.search(s):
+                    rec[i] = _CITRUS_COOKS_CLAIM_RE.sub(
+                        "(el cítrico solo aporta sabor — NO sustituye la cocción)", s)
+                    changed = True
+        # (a) blanqueo solo si el marisco no recibe calor en ningún paso y aún no hay blanqueo.
+        _heated = any(_re.search(r"(?:" + "|".join(_SEAFOOD_HEAT_VERBS) + r")[^.]{0,50}\b" + _tok, _sa_bl(str(s).lower()))
+                      for s in rec if isinstance(s, str))
+        if not _heated and "blanquea" not in steps_low:
+            _food_disp = _tok
+            for _ing in (meal.get("ingredients") or []):
+                _il = _sa_bl(str(_ing).lower())
+                if _re.search(r"\b" + _tok, _il):
+                    _bare = _re.sub(r"\([^)]*\)", "", str(_ing))
+                    _bare = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?", "",
+                                    _bare).strip(" ,.-")
+                    if _bare:
+                        _food_disp = _bare
+                    break
+            _art = "la" if (_sa_bl(_food_disp.split()[0].lower()).endswith("a")
+                            and not _sa_bl(_food_disp.lower()).startswith("agua")) else "el"
+            _blanch = (f"Blanquea {_art} {_food_disp} en agua hirviendo 1-2 minutos y escúrrelo "
+                       f"bien antes de marinar (el cítrico solo marina, no cuece).")
+            _target = next((i for i, s in enumerate(rec)
+                            if isinstance(s, str) and "marina" in _sa_bl(s.lower())), None)
+            if _target is not None:
+                rec[_target] = _blanch + " " + str(rec[_target])
+            else:
+                rec.insert(min(1, len(rec)), _blanch)
+            meal["_seafood_blanch_injected"] = _tok
+            changed = True
+        if changed:
+            logger.info(f"🦑 [P1-SEAFOOD-MARINADE-BLANCH] marinado cítrico de '{_tok}' reparado "
+                        f"(blanqueo={'si' if meal.get('_seafood_blanch_injected') else 'no'}) | "
+                        f"meal={str(meal.get('name'))[:40]}")
+        return changed
+    except Exception as _bl_e:
+        logger.warning(f"[P1-SEAFOOD-MARINADE-BLANCH] no-op: {type(_bl_e).__name__}: {_bl_e}")
+        return False
 
 
 def _scan_raw_seafood_meat_violations(plan: dict) -> list:
@@ -12641,12 +12738,29 @@ def _apply_food_safety_fixes(plan: dict) -> int:
                 meal = plan["days"][di]["meals"][mi]
             except (KeyError, IndexError, TypeError):
                 continue
+            # [P1-SEAFOOD-MARINADE-BLANCH · 2026-07-05] REPARAR antes de advertir: blanqueo pre-marinado
+            # + corrección del claim "el ácido cocinará". Corre incluso si la nota ya existe (repara
+            # planes persistidos con la nota vieja sin blanqueo).
+            _blanched = False
+            try:
+                _inject_blanch_for_citrus_marinade(meal)
+                _blanched = bool(meal.get("_seafood_blanch_injected"))
+            except Exception:
+                pass
             rec = meal.get("recipe")
             if not isinstance(rec, list):
                 rec = [] if rec is None else [str(rec)]
-            if any("pescado/marisco o carne CRUDOS" in str(s) for s in rec):
-                continue  # idempotente
-            meal["recipe"] = rec + [_FOOD_SAFETY_NOTE_RAW_SEAFOOD]
+            if any(("pescado/marisco o carne CRUDOS" in str(s))
+                   or ("por eso esta receta lo blanquea" in str(s)) for s in rec):
+                # idempotente (nota cruda clásica o nota blanqueada). Si el blanqueo se acaba de
+                # inyectar sobre un plan persistido con la nota cruda VIEJA, la nota se actualiza.
+                if _blanched:
+                    meal["recipe"] = [(_FOOD_SAFETY_NOTE_SEAFOOD_BLANCHED
+                                       if "pescado/marisco o carne CRUDOS" in str(s) else s)
+                                      for s in rec]
+                continue
+            meal["recipe"] = rec + [_FOOD_SAFETY_NOTE_SEAFOOD_BLANCHED if _blanched
+                                    else _FOOD_SAFETY_NOTE_RAW_SEAFOOD]
             meal["_food_safety_seafood"] = True   # campo propio: NO pisa `_food_safety_fixed` del huevo si coexisten
             fixed += 1
     # [P1-RAW-VIVER-SAFETY · 2026-06-28] Víveres cianogénicos (yuca/cassava/yautía/ñame) + leguminosas secas servidos
@@ -14758,8 +14872,15 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         if not missing:
             return 0
         _list = ", ".join(missing[:6])
-        new_step = (f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación, "
-                    f"integrándolo al plato de forma coherente.")
+        # [P1-NOCOOK-COMPLEMENT-TDF · 2026-07-05] (review visual, plan e49d44c3) En un plato FRÍO
+        # (guineo con mantequilla de maní) el prefijo "El Toque de Fuego (complemento)" invitaba al
+        # backstop de tiempo a inyectar "(~10-12 min a fuego medio)" — fuego falso en plato frío.
+        # Sin cocción → paso de integración fría sin prefijo de fuego.
+        if RECIPE_CONTRACT_NOCOOK_ENABLED and _meal_is_no_cook(meal):
+            new_step = f"Incorpora también {_list} al plato antes de servir, integrándolo de forma coherente."
+        else:
+            new_step = (f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación, "
+                        f"integrándolo al plato de forma coherente.")
         if isinstance(recipe, list):
             # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] paso de cocción ANTES del Montaje.
             meal["recipe"] = _insert_step_before_montaje(steps, new_step)
@@ -15142,6 +15263,23 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                 continue
             if not step.strip().lower().startswith("el toque de fuego"):
                 continue
+            # [P1-NOCOOK-COMPLEMENT-TDF · 2026-07-05] TdF "(complemento)" (reverse-coherence) en un
+            # plato FRÍO: el cuerpo solo integra un ingrediente sin fuego — reescribir a integración
+            # fría (sin prefijo de fuego) y quitar el tiempo falso ya inyectado ("guineo con
+            # mantequilla de maní ~10-12 min a fuego medio", plan e49d44c3). Cubre planes ya
+            # persistidos; el generador (reverse-coherence) ya no produce el prefijo en fríos.
+            if (RECIPE_NOCOOK_TDF_STRIP_ENABLED
+                    and step.strip().lower().startswith("el toque de fuego (complemento)")):
+                _body = step.split(":", 1)[1].strip() if ":" in step else ""
+                _body_clean = _re.sub(r"\s*\(~[^)]*\)\s*\.?\s*$", ".", _body).strip()
+                _rest_steps = [s2 for j, s2 in enumerate(rec) if j != i]
+                if (_body_clean and len(_body_clean) > 3
+                        and _meal_is_no_cook({"name": meal.get("name"), "recipe": _rest_steps})
+                        and not _NOCOOK_COOK_SIGNAL_RE.search(_sa_tt(_body_clean.lower()))):
+                    rec[i] = _body_clean[0].upper() + _body_clean[1:]
+                    meal["_nocook_complement_rewritten"] = True
+                    return True
+                # plato con fuego real (u otro cuerpo) → flujo normal de inyección abajo
             # [P1-NOCOOK-TDF-STRIP · 2026-07-05] TdF PLACEHOLDER ("No requiere cocción"): jamás
             # inyectarle un tiempo de fuego falso. Si el resto del plato tampoco tiene señales de
             # cocción, el paso se elimina (contrato de 2 pilares); si el plato SÍ cocina en otros
@@ -17509,7 +17647,9 @@ _STEP_QTY_UNITS = (r"g|gr|gramos?|kg|ml|l|taza(?:s)?|cda(?:s)?|cdta(?:s)?|cuchar
 # producía basura tipo "con 1/1.25 cda" / "1/¾ cda" (3 avistamientos en planes vivos: corridas
 # 99583727 y f938c091). Con el guard, esas menciones quedan intactas (conservador anti-corrupción).
 _STEP_QTY_MENTION_RE = _re.compile(
-    r"(?<![\d/])(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s+de\s+"
+    # [P2-QTYSYNC-CADA-TOTAL · 2026-07-05] + números MIXTOS "2½ cdas" (antes el lookbehind
+    # bloqueaba la fracción pegada al dígito y la mención entera era invisible al sync).
+    r"(?<![\d/])(?P<qty>\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s+de\s+"
     r"(?P<food>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*(?:\s+[\wáéíóúñü]+){0,2})")
 _ING_LEAD_QTY_RE = _re.compile(
     r"^\s*(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s*(?:de\s+|del\s+)?"
@@ -17527,6 +17667,41 @@ _QTYSYNC_COUNT_NOUNS = {
     "mandarina": ("mandarina", "mandarinas", r"mandarinas?"),
     "aguacate": ("aguacate", "aguacates", r"aguacates?"),
 }
+
+# [P2-QTYSYNC-MULTIUSE + P2-QTYSYNC-CADA-TOTAL · 2026-07-05] Helpers del qty-sync: parser de
+# cantidad a float (decimales, fracción unicode sola y número mixto "2½" — el lead regex clásico
+# no parsea mixtos y la línea "2½ cdas de mantequilla" quedaba sin total), normalizador de unidad
+# (cda≡cucharada, g≡gr≡gramos) y stopwords para recortar el food capturado de más ("aceite y
+# sofríe" → "aceite"). tooltip-anchor: P2-QTYSYNC-MULTIUSE
+_QTYSYNC_FRAC_MAP = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
+_QTYSYNC_STOPWORDS = frozenset(("y", "con", "en", "a", "al", "hasta", "para", "por", "sobre",
+                                "que", "e", "o", "u"))
+_ING_LEAD_QTY_MIXED_RE = _re.compile(
+    r"^\s*(?P<qty>\d+(?:[.,]\d+)?\s*[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s*(?P<unit>" + _STEP_QTY_UNITS +
+    r")\.?\s*(?:de\s+|del\s+)?(?P<food>.+)$", _re.I)
+
+
+def _qtysync_qty_to_float(q) -> float | None:
+    """Cantidad de paso/línea → float. Soporta '2.5', '2,5', '½' y mixtos '2½'. None si no parsea."""
+    try:
+        q = str(q).strip()
+        if q in _QTYSYNC_FRAC_MAP:
+            return _QTYSYNC_FRAC_MAP[q]
+        m = _re.match(r"^(\d+(?:[.,]\d+)?)\s*([½¼¾⅓⅔])?$", q)
+        if not m:
+            return None
+        v = float(m.group(1).replace(",", "."))
+        if m.group(2):
+            v += _QTYSYNC_FRAC_MAP[m.group(2)]
+        return v
+    except Exception:
+        return None
+
+
+def _qtysync_unit_norm(u) -> str:
+    """Familia de unidad normalizada: cda≡cucharada, cdta≡cucharadita, g≡gr≡gramo(s)."""
+    u = str(u).lower().strip().rstrip(".").rstrip("s")
+    return {"gr": "g", "gramo": "g", "cucharada": "cda", "cucharadita": "cdta"}.get(u, u)
 
 
 def _sync_recipe_step_quantities(meal: dict) -> int:
@@ -17565,17 +17740,107 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
             food_qty[_tok] = (str(m.group("qty")).replace(",", "."), str(m.group("unit")).lower())
         for _tok in _ambiguous:
             food_qty.pop(_tok, None)
-        if not food_qty:
+        # [P2-QTYSYNC-CADA-TOTAL · 2026-07-05] Mapa paralelo de TOTALES en float (parsea también
+        # mixtos "2½ cdas" que el lead clásico no ve) para los pases multiuso/cada-total.
+        food_total_f = {}
+        _tot_amb = set()
+        for ing in ings:
+            m_tf = _ING_LEAD_QTY_MIXED_RE.match(str(ing))
+            if not m_tf:
+                continue
+            _fv = _qtysync_qty_to_float(m_tf.group("qty"))
+            if _fv is None:
+                continue
+            _ftf = _sa(str(m_tf.group("food")).strip().lower())
+            _ttoks = [t for t in _re.split(r"[^\wáéíóúñü]+", _ftf) if len(t) >= 4]
+            if not _ttoks:
+                continue
+            _tt = _ttoks[0]
+            if _tt in food_total_f:
+                _tot_amb.add(_tt)
+                continue
+            food_total_f[_tt] = (_fv, _qtysync_unit_norm(m_tf.group("unit")))
+        for _tt in _tot_amb:
+            food_total_f.pop(_tt, None)
+        if not food_qty and not food_total_f:
             return 0
         fixed = 0
+        # [P2-QTYSYNC-MULTIUSE · 2026-07-05] (plato vivo "Frijoles Pintos": línea "½ cda de aceite",
+        # pasos "calienta ½ cdas de aceite... cocina con ½ cdas de aceite" = 2× la línea) Mismo
+        # ingrediente con ≥2 menciones cuantificadas: sincronizar cada mención al TOTAL duplica el
+        # ingrediente → el token se EXCLUYE del sync directo, y si cada mención ya es el TOTAL, la
+        # 2ª+ se reescribe a "<alimento> restante" (jamás se excede lo comprado).
+        recipe_work = list(recipe)
+        try:
+            _mention_count = {}
+            for _st in recipe_work:
+                if not isinstance(_st, str) or _is_recipe_safety_note_step(_st):
+                    continue
+                for _mm in _STEP_QTY_MENTION_RE.finditer(_st):
+                    _mf = _sa(str(_mm.group("food")).strip().lower())
+                    _mtoks = [t for t in _re.split(r"[^\wáéíóúñü]+", _mf) if len(t) >= 4]
+                    for _mt in _mtoks[:2]:
+                        if _mt in food_qty or _mt in food_total_f:
+                            _mention_count.setdefault(_mt, []).append(
+                                (_qtysync_qty_to_float(_mm.group("qty")),
+                                 _qtysync_unit_norm(_mm.group("unit"))))
+                            break
+            for _mt, _mens in _mention_count.items():
+                if len(_mens) < 2:
+                    continue
+                food_qty.pop(_mt, None)  # multi-mención → sync directo prohibido (duplicaría)
+                _tot = food_total_f.get(_mt)
+                if not _tot or not all(_qv is not None and abs(_qv - _tot[0]) < 1e-6
+                                       and _uu == _tot[1] for _qv, _uu in _mens):
+                    continue
+                _seen = {"n": 0}
+
+                def _sub_rest(mm, _mt=_mt):
+                    _mf2 = _sa(str(mm.group("food")).strip().lower())
+                    _mtoks2 = [t for t in _re.split(r"[^\wáéíóúñü]+", _mf2) if len(t) >= 4]
+                    if not any(t == _mt for t in _mtoks2[:2]):
+                        return mm.group(0)
+                    _seen["n"] += 1
+                    if _seen["n"] < 2:
+                        return mm.group(0)  # la 1ª mención se queda (usa el total/parte)
+                    _words = str(mm.group("food")).split()
+                    _k = len(_words)
+                    for _wi, _w in enumerate(_words):
+                        if _sa(_w.lower()) in _QTYSYNC_STOPWORDS:
+                            _k = _wi
+                            break
+                    _core = " ".join(_words[:_k]) if _k else str(mm.group("food"))
+                    _tail = (" " + " ".join(_words[_k:])) if _k < len(_words) else ""
+                    _art = "la" if (_sa(_core.split()[0].lower()).endswith("a")
+                                    and not _sa(_core.lower()).startswith("agua")) else "el"
+                    return f"{_art} {_core} restante{_tail}"
+
+                _rw2 = []
+                for _st in recipe_work:
+                    if not isinstance(_st, str) or _is_recipe_safety_note_step(_st):
+                        _rw2.append(_st)
+                        continue
+                    _new_st = _STEP_QTY_MENTION_RE.sub(_sub_rest, _st)
+                    if _new_st != _st:
+                        fixed += 1
+                    _rw2.append(_new_st)
+                recipe_work = _rw2
+        except Exception:
+            recipe_work = list(recipe)
         new_steps = []
-        for step in recipe:
+        for step in recipe_work:
             if not isinstance(step, str) or _is_recipe_safety_note_step(step):
                 new_steps.append(step)
                 continue
 
             def _sub(mm):
                 nonlocal fixed
+                # [P2-QTYSYNC-CADA-TOTAL · 2026-07-05] mención precedida de "cada <unidad>": la
+                # cantidad es PER-UNIDAD por semántica — sobreescribirla con el TOTAL de la línea
+                # fue lo que produjo "unta CADA tortilla con 2½ cdas" en vivo. Se deja intacta;
+                # el pase cada-total de abajo la anota si de verdad es el total.
+                if _re.search(r"\bcada\s+[^.;:]{0,40}$", _sa(step[:mm.start()].lower())):
+                    return mm.group(0)
                 _f = _sa(str(mm.group("food")).strip().lower())
                 _ftoks = [t for t in _re.split(r"[^\wáéíóúñü]+", _f) if len(t) >= 4]
                 for _ft in _ftoks[:2]:
@@ -17636,6 +17901,46 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                                      _sub_cnt, s2, flags=_re.IGNORECASE)
                     _steps2.append(s2)
                 new_steps = _steps2
+        except Exception:
+            pass
+        # [P2-QTYSYNC-CADA-TOTAL · 2026-07-05] (plato vivo "Tortillas con mantequilla de maní":
+        # "Unta CADA tortilla con 2.5 cdas de mantequilla" con línea-total 2½ cdas → leído
+        # per-unidad TRIPLICA la grasa) Mención cuantificada precedida de "cada <unidad>" cuya
+        # cantidad ES el total de la línea → se anota "(en total)". Conservador: exige match de
+        # alimento + cantidad + familia de unidad; idempotente por substring.
+        try:
+            _steps3 = []
+            for step in new_steps:
+                if (not isinstance(step, str) or _is_recipe_safety_note_step(step)
+                        or "(en total" in step.lower()):
+                    _steps3.append(step)
+                    continue
+                s3 = step
+                for _mm in list(_STEP_QTY_MENTION_RE.finditer(step)):
+                    _pre = _sa(step[:_mm.start()].lower())
+                    if not _re.search(r"\bcada\s+[^.;:]{0,40}$", _pre):
+                        continue
+                    _mf3 = _sa(str(_mm.group("food")).strip().lower())
+                    _mtoks3 = [t for t in _re.split(r"[^\wáéíóúñü]+", _mf3) if len(t) >= 4]
+                    _tot3 = next((food_total_f[_t] for _t in _mtoks3[:2] if _t in food_total_f), None)
+                    if not _tot3:
+                        continue
+                    _qv3 = _qtysync_qty_to_float(_mm.group("qty"))
+                    if (_qv3 is None or abs(_qv3 - _tot3[0]) > 1e-6
+                            or _qtysync_unit_norm(_mm.group("unit")) != _tot3[1]):
+                        continue
+                    _words3 = str(mm_food3 := _mm.group("food")).split()
+                    _k3 = len(_words3)
+                    for _wi3, _w3 in enumerate(_words3):
+                        if _sa(_w3.lower()) in _QTYSYNC_STOPWORDS:
+                            _k3 = _wi3
+                            break
+                    _ins = _mm.start("food") + len(" ".join(_words3[:_k3])) if _k3 else _mm.end("food")
+                    s3 = step[:_ins] + " (en total)" + step[_ins:]
+                    fixed += 1
+                    break
+                _steps3.append(s3)
+            new_steps = _steps3
         except Exception:
             pass
         if fixed:
@@ -17877,6 +18182,46 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
         _rewrite_cured_ghost_protein_steps(days)
     except Exception as _cg_pb_e:
         logger.warning(f"[P1-CURED-GHOST-STEPS] boundary no-op: {type(_cg_pb_e).__name__}: {_cg_pb_e}")
+    # [P2-COOKED-RAW-ANNOTATION + P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] también en el boundary.
+    try:
+        _ncra = _fix_cooked_raw_annotations(days)
+        _nal = 0
+        for _d_al in days or []:
+            for _m_al in (_d_al.get("meals") or []) if isinstance(_d_al, dict) else []:
+                if isinstance(_m_al, dict):
+                    _nal += _align_closer_note_food_names(_m_al)
+        if _ncra:
+            total += _ncra; parts.append(f"cooked_raw={_ncra}")
+        if _nal:
+            total += _nal; parts.append(f"note_align={_nal}")
+    except Exception as _cra_pb_e:
+        logger.warning(f"[P2-COOKED-RAW-ANNOTATION] boundary no-op: {type(_cra_pb_e).__name__}: {_cra_pb_e}")
+    # [P2-BOUNDARY-DISPLAY-POLISH · 2026-07-05] (plato vivo "Cdta de miel (opcional)" PERSISTIDO:
+    # el prettify de humanize resuelve ese string, pero solo corría en assemble/finalizer-de-updates
+    # — cualquier pase posterior que reescriba/añada líneas de display dejaba el texto crudo en DB).
+    # SOLO el prettify cosmético (unitless-lead, fracciones, concordancia) — NO el humanize completo:
+    # la conversión a medidas caseras re-introduciría "lonjas" que slice-grams acaba de convertir.
+    # Display-only (ingredients_raw/compras intactos), idempotente.
+    try:
+        from humanize_ingredients import _prettify_quantity_display as _pb_prettify
+        _npd = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if not isinstance(_m, dict):
+                    continue
+                _pings = _m.get("ingredients")
+                if not isinstance(_pings, list):
+                    continue
+                for _pi, _ps in enumerate(_pings):
+                    if isinstance(_ps, str):
+                        _pnew = _pb_prettify(_ps)
+                        if _pnew != _ps:
+                            _pings[_pi] = _pnew
+                            _npd += 1
+        if _npd:
+            total += _npd; parts.append(f"display_polish={_npd}")
+    except Exception as _hpb_e:
+        logger.warning(f"[P2-BOUNDARY-DISPLAY-POLISH] prettify en boundary no-op: {type(_hpb_e).__name__}: {_hpb_e}")
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
     # chunks semana 2+ no pasan por review_plan_node → el contrato de pasos (prefijos/orden/tiempo/
     # inglés) no dejaba rastro fuera de form-gen semana 1. Advisory persistido (LECTURA, jamás gate).
@@ -19736,7 +20081,11 @@ REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
 # legítimos). La clase 47.5-tallos/1250-g muere por construcción, no por whitelist.
 LINE_GRAM_HARD_CAP = _env_int("MEALFIT_LINE_GRAM_HARD_CAP", 600, lambda v: 300 <= v <= 2000)
 _LINE_GRAM_CAP_EXEMPT = ("agua", "caldo")
-_REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0, "clara": 8.0,
+_REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
+                       # [P2-CLARAS-CAP-KNOB-PARITY · 2026-07-05] era 8.0 hardcoded y el plato vivo
+                       # "8 claras de huevo (267g)" pasó justo al ras mientras el knob del motor dice
+                       # MEALFIT_MAX_EGG_WHITES_PER_MEAL=6 — el techo servible sigue al knob (SSOT).
+                       "clara": float(MAX_EGG_WHITES_PER_MEAL),
                        "mandarina": 3.0, "aguacate": 1.0, "guineo": 2.0,
                        # [P1-REALISM-CAPS-EXT] tomate entero ≤3/comida; frutas de conteo chico.
                        "tomate": 3.0, "uva": 20.0, "aceituna": 12.0, "fresa": 10.0,
@@ -20650,6 +20999,142 @@ def _reconcile_display_missing_in_raw(days) -> int:
         return added
     except Exception as _rr_e:
         logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] no-op: {type(_rr_e).__name__}: {_rr_e}")
+        return 0
+
+
+# [P2-COOKED-RAW-ANNOTATION · 2026-07-05] (plato vivo "Cerdo con bok choy": "⅓ taza de arroz
+# integral cocido (62g cocido, 60g raw)" — 60g de arroz crudo rinden ~1 taza cocida, así que el
+# crudo de ⅓ taza es ~22g: la anotación inflaba la compra 3× y encima en inglés). Sanea la
+# anotación doble cocido/crudo de GRANOS con ratio imposible (crudo ≥ 55% del cocido — los granos
+# absorben ~2.8×) recomputando crudo = cocido/2.8, y traduce el token inglés "raw" → "crudo" en
+# cualquier anotación "<n>g raw". Aplica a display, raw y pasos. tooltip-anchor: P2-COOKED-RAW-ANNOTATION
+COOKED_RAW_ANNOTATION_FIX_ENABLED = _env_bool("MEALFIT_COOKED_RAW_ANNOTATION_FIX", True)
+_GRAIN_ABSORB_TOKENS = ("arroz", "pasta", "espagueti", "fideo", "quinoa", "cuscus", "couscous",
+                        "trigo burgol", "bulgur", "avena")
+_GRAIN_ABSORB_FACTOR = 2.8
+_COOKED_RAW_PAIR_RE = _re.compile(
+    r"\((\d+(?:[.,]\d+)?)\s*g\s*cocid[oa]s?\s*,\s*(\d+(?:[.,]\d+)?)\s*g\s*(?:raw|crud[oa]s?)\)",
+    _re.IGNORECASE)
+_RAW_TOKEN_EN_RE = _re.compile(r"(\d(?:[.,\d]*)\s*(?:g|gr|ml))\s+raw\b", _re.IGNORECASE)
+
+
+def _fix_cooked_raw_annotations(days) -> int:
+    """[P2-COOKED-RAW-ANNOTATION · 2026-07-05] Ver comment del knob. Muta ingredients,
+    ingredients_raw y recipe. Idempotente (ratio ya plausible + 'crudo' en español → no-op).
+    Devuelve nº de strings corregidos. tooltip-anchor: P2-COOKED-RAW-ANNOTATION"""
+    if not COOKED_RAW_ANNOTATION_FIX_ENABLED:
+        return 0
+    try:
+        from constants import strip_accents as _sa_cr
+        fixed = 0
+
+        def _fix_str(s: str) -> str:
+            out = s
+            _low = _sa_cr(out.lower())
+            if any(t in _low for t in _GRAIN_ABSORB_TOKENS):
+                def _pair_sub(mm):
+                    _ck = float(mm.group(1).replace(",", "."))
+                    _rw = float(mm.group(2).replace(",", "."))
+                    if _ck > 0 and _rw >= _ck * 0.55:
+                        _rw_fix = max(5, round(_ck / _GRAIN_ABSORB_FACTOR))
+                        return f"({round(_ck)}g cocido, {_rw_fix}g crudo)"
+                    return mm.group(0)
+                out = _COOKED_RAW_PAIR_RE.sub(_pair_sub, out)
+            out = _RAW_TOKEN_EN_RE.sub(r"\1 crudo", out)
+            return out
+
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = meal.get(_key)
+                    if isinstance(_lst, list):
+                        for _i, _s in enumerate(_lst):
+                            if isinstance(_s, str):
+                                _new = _fix_str(_s)
+                                if _new != _s:
+                                    _lst[_i] = _new
+                                    fixed += 1
+                rec = meal.get("recipe")
+                if isinstance(rec, list):
+                    for _i, _s in enumerate(rec):
+                        if isinstance(_s, str):
+                            _new = _fix_str(_s)
+                            if _new != _s:
+                                rec[_i] = _new
+                                fixed += 1
+        if fixed:
+            logger.info(f"🌾 [P2-COOKED-RAW-ANNOTATION] {fixed} anotación(es) cocido/crudo saneada(s) "
+                        f"(ratio imposible recomputado y/o 'raw'→'crudo').")
+        return fixed
+    except Exception as _cr_e:
+        logger.warning(f"[P2-COOKED-RAW-ANNOTATION] no-op: {type(_cr_e).__name__}: {_cr_e}")
+        return 0
+
+
+# [P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] (platos vivos ×3 del plan e49d44c3: nota "💪 Incorpora
+# queso cottage a la preparación" con línea "110 g de queso") La nota del closer usa el nombre
+# interno del catálogo; la línea humanizada muestra el genérico — el usuario no sabe qué comprar.
+# La LÍNEA es la verdad (compras) → la nota adopta el nombre de la línea cuando comparten token
+# principal y difieren. tooltip-anchor: P2-NOTE-LINE-NAME-ALIGN
+NOTE_LINE_NAME_ALIGN_ENABLED = _env_bool("MEALFIT_NOTE_LINE_NAME_ALIGN", True)
+_CLOSER_NOTE_FOOD_RE = _re.compile(
+    r"^(?P<pre>(?:💪\s*)?(?:Escurre e incorpora|Incorpora|Cocina)\s+)"
+    r"(?P<food>.+?)"
+    r"(?P<post>\s+\(ya viene cocido\)\s+a la preparación|\s+a la preparación|\s+a la plancha)")
+
+
+def _align_closer_note_food_names(meal: dict) -> int:
+    """[P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] Ver comment del knob. La nota del closer (💪) adopta
+    el nombre del alimento tal como aparece en la LÍNEA de ingredientes (verdad de compras) cuando
+    ambos comparten token principal (≥4 chars) y el texto difiere. Conservador: un solo candidato
+    de línea; sin match → intacto. Idempotente, fail-safe, muta meal. Devuelve nº de notas
+    alineadas. tooltip-anchor: P2-NOTE-LINE-NAME-ALIGN"""
+    if not NOTE_LINE_NAME_ALIGN_ENABLED or not isinstance(meal, dict):
+        return 0
+    try:
+        from constants import strip_accents as _sa_al
+        rec = meal.get("recipe")
+        ings = meal.get("ingredients")
+        if not isinstance(rec, list) or not isinstance(ings, list) or not ings:
+            return 0
+        fixed = 0
+        for _i, step in enumerate(rec):
+            if not isinstance(step, str):
+                continue
+            m_n = _CLOSER_NOTE_FOOD_RE.match(step.strip())
+            if not m_n:
+                continue
+            _note_food = m_n.group("food").strip()
+            _note_toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _sa_al(_note_food.lower()))
+                          if len(t) >= 4]
+            if not _note_toks:
+                continue
+            _cands = []
+            for _ing in ings:
+                _bare = _re.sub(r"\([^)]*\)", "", str(_ing))
+                _bare = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?", "",
+                                _bare).strip(" ,.-")
+                if not _bare:
+                    continue
+                _bare_toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _sa_al(_bare.lower()))
+                              if len(t) >= 4]
+                if _bare_toks and _bare_toks[0] == _note_toks[0]:
+                    _cands.append(_bare)
+            if len(_cands) != 1:
+                continue  # 0 o ≥2 líneas con el mismo token → ambiguo, no tocar
+            _line_food = _cands[0]
+            if _sa_al(_line_food.lower()) == _sa_al(_note_food.lower()):
+                continue  # ya alineados
+            rec[_i] = step.replace(m_n.group("food"), _line_food, 1)
+            fixed += 1
+        if fixed:
+            logger.info(f"🏷️ [P2-NOTE-LINE-NAME-ALIGN] {fixed} nota(s) del closer alineada(s) al "
+                        f"nombre de la línea de compras | meal={str(meal.get('name'))[:40]}")
+        return fixed
+    except Exception as _al_e:
+        logger.warning(f"[P2-NOTE-LINE-NAME-ALIGN] no-op: {type(_al_e).__name__}: {_al_e}")
         return 0
 
 
@@ -22347,6 +22832,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
         _rewrite_cured_ghost_protein_steps(days)
     except Exception as _cg_as_e:
         logger.warning(f"[P1-CURED-GHOST-STEPS] assemble no-op: {type(_cg_as_e).__name__}: {_cg_as_e}")
+    # [P2-COOKED-RAW-ANNOTATION + P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] anotación cocido/crudo
+    # imposible saneada ANTES de que compras parsee el raw + nota 💪 alineada a la línea.
+    try:
+        _fix_cooked_raw_annotations(days)
+        for _d_al in days or []:
+            for _m_al in (_d_al.get("meals") or []) if isinstance(_d_al, dict) else []:
+                if isinstance(_m_al, dict):
+                    _align_closer_note_food_names(_m_al)
+    except Exception as _cra_as_e:
+        logger.warning(f"[P2-COOKED-RAW-ANNOTATION] assemble no-op: {type(_cra_as_e).__name__}: {_cra_as_e}")
 
     # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Panel de micros FRESCO al final del motor: recompute
     # vía helper SSOT (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE) para que el panel
