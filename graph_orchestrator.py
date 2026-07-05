@@ -10102,6 +10102,18 @@ _MICRO_CLOSER_RENAL_EXCLUDED = frozenset({
     "magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
     "potassium_mg", "vit_e_mg", "omega3_g", "vit_a_mcg", "selenium_mcg", "vit_k_mcg",
 })
+# [P1-MICRO-SEED · 2026-07-04] El closer solo ESCALA fuentes existentes: un día sin NINGÚN
+# portador del micro deficitario quedaba corto sin remedio (caso vivo: Día 1 <60% en vit E y
+# omega-3 → banner micro_worst_day con chips promedio verdes). Con el seed, el closer SIEMBRA
+# una línea pequeña verificada del catálogo (~60 kcal, dentro del presupuesto kcal del día) y
+# el loop normal la escala hacia el piso. Escalera por micro respetando alergias/dislikes
+# (frutos secos → semillas). Solo aplica a micros ya-cerrables (renal/K-med/anticoag heredan
+# las exclusiones del closer). Rollback: MEALFIT_MICRO_SEED=false.
+MICRO_SEED_ENABLED = _env_bool("MEALFIT_MICRO_SEED", True)
+_MICRO_SEED_SOURCES = {
+    "omega3_g": ("10 g de semillas de linaza", "10 g de nueces"),
+    "vit_e_mg": ("10 g de maní", "10 g de semillas de linaza"),
+}
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
@@ -11648,7 +11660,78 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         except Exception:
                             _kc = 0.0
                         contributors.append((float(c), _m, i, ing, _kc))
-                if day_total >= floor or not contributors:
+                if day_total >= floor:
+                    continue
+                # [P1-MICRO-SEED · 2026-07-04] día SIN portador del micro → nada que escalar
+                # (el residual quedaba abierto → banner micro_worst_day). Siembra UNA línea
+                # pequeña del catálogo (alergia/dislike-aware) y la registra como contribuyente;
+                # el loop richest-first de abajo la escala hacia el piso dentro del presupuesto.
+                if not contributors and MICRO_SEED_ENABLED and k in _MICRO_SEED_SOURCES \
+                        and kcal_budget_left > 30.0:
+                    try:
+                        from constants import strip_accents as _sa_seed
+                        _seed_dislikes = {_sa_seed(str(x).strip().lower())
+                                          for x in (_fd.get("dislikes") or []) if str(x).strip()}
+                        _seed_line = None
+                        for _cand in _MICRO_SEED_SOURCES[k]:
+                            _cand_low = _sa_seed(_cand.lower())
+                            if any(dk and dk in _cand_low for dk in _seed_dislikes):
+                                continue
+                            if _fd.get("allergies"):
+                                try:
+                                    if _scan_allergen_violations(
+                                        {"days": [{"meals": [{"ingredients": [_cand]}]}]},
+                                        _fd.get("allergies"),
+                                    ):
+                                        continue
+                                except Exception:
+                                    continue  # conservador: duda → no sembrar este candidato
+                            _seed_line = _cand
+                            break
+                        if _seed_line:
+                            _seed_meal = next(
+                                (m for m in (_d.get("meals") or []) if isinstance(m, dict)
+                                 and "merienda" in str(m.get("meal", "")).lower()
+                                 and isinstance(m.get("ingredients"), list)),
+                                None,
+                            ) or next(
+                                (m for m in (_d.get("meals") or []) if isinstance(m, dict)
+                                 and isinstance(m.get("ingredients"), list)),
+                                None,
+                            )
+                            if _seed_meal is not None:
+                                _seed_meal["ingredients"].append(_seed_line)
+                                _seed_raw = _seed_meal.get("ingredients_raw")
+                                if isinstance(_seed_raw, list):
+                                    _seed_raw.append(_seed_line)  # preserva alineación posicional
+                                try:
+                                    _seed_mic = db.micros_from_ingredient_string(_seed_line) or {}
+                                    _c_seed = float(_seed_mic.get(ing_key) or 0.0)
+                                except Exception:
+                                    _c_seed = 0.0
+                                try:
+                                    _seed_mac = db.macros_from_ingredient_string(_seed_line) or {}
+                                    _kc_seed = float(_seed_mac.get("kcal") or 0.0)
+                                except Exception:
+                                    _kc_seed = 0.0
+                                try:
+                                    _truth_up_meal_macros_from_strings(_seed_meal, db)
+                                except Exception:
+                                    pass
+                                if _c_seed > 0:
+                                    contributors.append((
+                                        _c_seed, _seed_meal,
+                                        len(_seed_meal["ingredients"]) - 1, _seed_line, _kc_seed,
+                                    ))
+                                    day_total += _c_seed
+                                kcal_budget_left -= _kc_seed
+                                _seed_meal["_micro_seed_applied"] = k
+                                adjustments += 1
+                                logger.info(f"🌱 [P1-MICRO-SEED] día sin portador de '{k}' → "
+                                            f"sembrado '{_seed_line}' (el closer lo escala al piso)")
+                    except Exception as _seed_e:
+                        logger.debug(f"[P1-MICRO-SEED] seed no-op: {type(_seed_e).__name__}: {_seed_e}")
+                if not contributors:
                     continue
                 contributors.sort(key=lambda t: t[0], reverse=True)  # richest-first
                 for contrib, meal, idx, ing_str, kcal_now in contributors:
