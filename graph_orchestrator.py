@@ -10200,6 +10200,11 @@ MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", True)
 # es del protocolo de SUPLEMENTACIÓN de por vida (ASMBS; el panel/tarjetas lo muestran), no de
 # "comer más volumen" — mismo racional del skip pantry_strict. Rollback sin redeploy: =false.
 MICRO_CLOSER_BARIATRIC_SKIP = _env_bool("MEALFIT_MICRO_CLOSER_BARIATRIC_SKIP", True)
+# [P2-CLOSER-SNACK-CAP · 2026-07-05] Techo físico del añadido del closer de proteína en
+# meriendas/platos ligeros (145-155g de cottage sobre fruta, plan 7e4e5570). El déficit
+# restante se cubre en comidas fuertes. Clamp [40, 300].
+CLOSER_SNACK_MAX_ADD_G = _env_int("MEALFIT_CLOSER_SNACK_MAX_ADD_G", 100,
+                                  validator=lambda v: 40 <= v <= 300)
 # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] (re-audit objetivo · P1) El closer cubría solo 3 de los 18 micros del
 # panel (fibra/Mg/Ca). HIERRO (piso 18mg en mujeres menstruantes / 27mg en embarazo) y FOLATO (600mcg embarazo)
 # son los déficits poblacionales de MAYOR consecuencia y vivían SOLO con un nudge al prompt — la misma debilidad
@@ -13533,6 +13538,12 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         gap = target - cur_p
         grams = int(round(gap / (chosen.protein / 100.0)))
         grams = min(grams, max_add_g)
+        # [P2-CLOSER-SNACK-CAP · 2026-07-05] (plan vivo 7e4e5570: 145-155g de cottage sobre un
+        # plato de fruta — macro-perfecto, culinariamente plano). En meriendas/platos ligeros el
+        # añadido del closer se capea físicamente; el déficit restante se cubre en las comidas
+        # fuertes (mismo racional del calorie-aware). Rollback: MEALFIT_CLOSER_SNACK_MAX_ADD_G alto.
+        if light:
+            grams = min(grams, int(CLOSER_SNACK_MAX_ADD_G))
         # [P1-CLOSER-CALORIE-AWARE · 2026-06-27] No exceder el headroom calórico del slot: añadir proteína sube kcal,
         # y en bariátrica (caps recortan mucho lácteo → +110g re-añadido) eso rompía la banda de calorías (band 0.58,
         # kcal fuera). Si el slot ya está en/sobre su target de kcal → no añadir aquí (el piso se cubre donde haya
@@ -19845,6 +19856,12 @@ _SHRINK_FLOOR_EXEMPT_TOKENS = (
 # (5 ml). La exención de condimentos del shrink-floor lo dejaba pasar intacto.
 _MICRO_OIL_LEAD_RE = _re.compile(r"^\s*(?:¼|½|0[.,]25|0[.,]5|1/4|1/2)\s*(?:cdta|cucharadita)s?\b",
                                  _re.IGNORECASE)
+# [P2-AROMATIC-MICRO-BUMP · 2026-07-05] "1 cdta de cebolla picada (2g)" (plan 7e4e5570): micro-
+# línea de aromático que el piso no ve (solo cubre leads en gramos). Con hint ≤5g → bump al
+# mínimo cocinable (2 cdas / 20g).
+_MICRO_AROMATIC_LEAD_RE = _re.compile(r"^\s*(?:1|½|¼|0[.,]5|0[.,]25)\s*(?:cdta|cucharadita)s?\b",
+                                      _re.IGNORECASE)
+_MICRO_AROMATIC_HINT_RE = _re.compile(r"\(\s*(\d+(?:[.,]\d+)?)\s*g\s*\)")
 
 
 def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
@@ -19907,6 +19924,22 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             touched += 1
                             _meal_touched = True
                         continue
+                    # [P2-AROMATIC-MICRO-BUMP · 2026-07-05] aromático en cdta con hint ≤5g
+                    # ("1 cdta de cebolla picada (2g)") → 2 cdas (20g), lockstep raw.
+                    if any(t in il for t in ("cebolla", "cebollin", "puerro")) \
+                            and _MICRO_AROMATIC_LEAD_RE.match(s):
+                        _mh = _MICRO_AROMATIC_HINT_RE.search(s)
+                        if _mh and float(_mh.group(1).replace(",", ".")) <= 5.0:
+                            _new_ar = _MICRO_AROMATIC_LEAD_RE.sub("2 cdas", s, count=1)
+                            _new_ar = _MICRO_AROMATIC_HINT_RE.sub("(20g)", _new_ar, count=1)
+                            if _new_ar != s:
+                                ings[idx] = _new_ar
+                                if _lockstep and isinstance(raw[idx], str):
+                                    _new_ar_raw = _MICRO_AROMATIC_LEAD_RE.sub("2 cdas", str(raw[idx]), count=1)
+                                    raw[idx] = _MICRO_AROMATIC_HINT_RE.sub("(20g)", _new_ar_raw, count=1)
+                                touched += 1
+                                _meal_touched = True
+                            continue
                     if any(tok in il for tok in _SHRINK_FLOOR_EXEMPT_TOKENS):
                         continue
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)

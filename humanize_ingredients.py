@@ -320,6 +320,12 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                 # display: "0.5 papa"→"½ papa", "1.75 cdta"→"1¾ cdta", "1 cdas"→"1 cda", "1 tallos"→
                 # "1 tallo". Display-only (ingredients_raw intacto para compras).
                 meal["ingredients"] = [_prettify_quantity_display(h) for h in humanized_ingredients]
+                # [P2-DISPLAY-NAME-SPECIFICITY · 2026-07-05] el display puede perder calificadores
+                # del alimento ("145 g de queso" vs raw "145g de queso cottage cocido", plan
+                # 7e4e5570 — compras BIEN, usuario veía el genérico). Restaura el nombre específico
+                # desde raw por índice (display-only).
+                meal["ingredients"] = _restore_gram_name_specificity(
+                    meal["ingredients"], meal.get("ingredients_raw"))
                 # [P2-STEP-HOUSEHOLD-SYNC · 2026-07-01] armoniza las menciones de los PASOS con la
                 # medida casera recién aplicada a la lista (ver docstring del helper).
                 try:
@@ -358,9 +364,61 @@ _DISPLAY_LEAD_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(\S+)(.*)$")
 # "jugo de 0.5 limón" → "jugo de ½ limón" (el lead-prettify no los veía: esa línea no tiene
 # cantidad líder) + tercios en el lead ("0.33 taza de harina" → "⅓ taza"). Display-only.
 _DEC_FRAC_MAP = {"0.25": "¼", "0,25": "¼", "0.33": "⅓", "0,33": "⅓", "0.5": "½", "0,5": "½",
-                 "0.66": "⅔", "0,66": "⅔", "0.67": "⅔", "0,67": "⅔", "0.75": "¾", "0,75": "¾"}
-_INNER_DECIMAL_FRAC_RE = re.compile(r"\bde\s+(0[.,](?:25|33|5|66|67|75))(?=\s)")
+                 "0.66": "⅔", "0,66": "⅔", "0.67": "⅔", "0,67": "⅔", "0.75": "¾", "0,75": "¾",
+                 # [P2-INNER-ASCII-FRAC · 2026-07-05] "Jugo de 1/2 limón" / "de 1/4 limón"
+                 # (plan 7e4e5570) — el prettify interno solo cubría decimales.
+                 "1/2": "½", "1/4": "¼", "3/4": "¾", "1/3": "⅓", "2/3": "⅔"}
+_INNER_DECIMAL_FRAC_RE = re.compile(
+    r"\bde\s+(0[.,](?:25|33|5|66|67|75)|1/2|1/4|3/4|1/3|2/3)(?=\s)")
 _LEAD_THIRDS = ((1.0 / 3.0, "⅓"), (2.0 / 3.0, "⅔"))
+# [P2-CDAS-TO-CUPS · 2026-07-05] "11 cdas de harina de trigo (77g)" (plan 7e4e5570): medible pero
+# ridículo — ≥6 cdas se promueve a tazas (conversión de VOLUMEN exacta: 16 cdas = 1 taza, sin
+# densidad), snap a cuartos/tercios. Display-only (raw intacto para compras).
+_CUPS_SNAP = tuple(sorted({k / 4.0 for k in range(1, 13)} | {k / 3.0 for k in range(1, 10)}))
+_CUPS_FRAC = {0.25: "¼", 1.0 / 3.0: "⅓", 0.5: "½", 2.0 / 3.0: "⅔", 0.75: "¾"}
+
+
+def _cups_from_spoons(qty_cdas: float) -> str:
+    """Convierte cdas → string de tazas snapeado (¼/⅓/½/⅔/¾ + enteros). '' si no snapea bien."""
+    cups = qty_cdas / 16.0
+    best = min(_CUPS_SNAP, key=lambda c: abs(c - cups))
+    if abs(best - cups) > 0.09:
+        return ""
+    whole = int(best + 1e-9)
+    rem = best - whole
+    frac = ""
+    for fv, fc in _CUPS_FRAC.items():
+        if abs(rem - fv) < 0.02:
+            frac = fc
+            break
+    if rem > 0.02 and not frac:
+        return ""
+    return (str(whole) if whole else "") + frac
+
+
+def _restore_gram_name_specificity(display_list, raw_list):
+    """[P2-DISPLAY-NAME-SPECIFICITY · 2026-07-05] Reparación mecánica por índice: mismo lead en
+    gramos y el food del raw EXTIENDE al del display → el display adopta el nombre específico
+    (limpiando el sufijo ' cocido/a' — ruido de catálogo). La lista de compras (raw) ya estaba
+    bien; esto alinea lo que el usuario VE con lo que compra. Display-only, fail-safe."""
+    if not (isinstance(display_list, list) and isinstance(raw_list, list)
+            and len(display_list) == len(raw_list)):
+        return display_list
+    _g_re = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*g\s+de\s+(.+)$", re.IGNORECASE)
+    out = []
+    for d, r in zip(display_list, raw_list):
+        try:
+            md, mr = _g_re.match(str(d)), _g_re.match(str(r))
+            if md and mr and md.group(1).replace(",", ".") == mr.group(1).replace(",", "."):
+                fd = md.group(2).strip().rstrip(".")
+                fr = re.sub(r"\s+cocid[oa]s?\s*$", "", mr.group(2).strip().rstrip("."), flags=re.IGNORECASE)
+                if fr.lower().startswith(fd.lower()) and len(fr) > len(fd):
+                    out.append(f"{md.group(1)} g de {fr}")
+                    continue
+        except Exception:
+            pass
+        out.append(d)
+    return out
 
 
 def _prettify_quantity_display(s: str) -> str:
@@ -405,6 +463,12 @@ def _prettify_quantity_display(s: str) -> str:
         # [P2-PLURAL-CONCORDANCE] "2 huevo" → "2 huevos" (solo conteos ENTEROS >1, mapa curado).
         elif qty > 1.0 + 1e-6 and abs(frac_part) < 1e-6 and word.lower() in _DISPLAY_PLURAL:
             out_word = _DISPLAY_PLURAL[word.lower()]
+        # [P2-CDAS-TO-CUPS · 2026-07-05] ≥6 cdas → tazas (16 cdas = 1 taza, volumen exacto).
+        if word.lower() in ("cda", "cdas", "cucharada", "cucharadas") and qty >= 6:
+            _cups = _cups_from_spoons(qty)
+            if _cups:
+                _cup_word = "taza" if _cups in ("¼", "⅓", "½", "⅔", "¾", "1") else "tazas"
+                return f"{_cups} {_cup_word}{rest}"
         if out_qty == qty_str and out_word == word:
             return s0
         return f"{out_qty} {out_word}{rest}"
