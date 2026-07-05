@@ -9210,6 +9210,17 @@ PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MA
 # el plan completo (planner + N días + review = ~5-10× el costo). Los días buenos quedan intactos —
 # pedido explícito del owner 2026-07-05 ("si el desayuno está mal, deja los otros horarios activos").
 # Una pasada por attempt; si la re-review vuelve a rechazar, cae al retry completo de siempre.
+# [P1-EGG-CAP-AUTOFIX · 2026-07-05] Corrector determinista del SOBREUSO de huevo (gate
+# P3-VARIETY-HARD-GATE: huevo en >cap comidas, cap = max(3, 25% de las comidas)). Causa #1 de
+# retry COMPLETO medida 2026-07-05 (2 firings en una corrida: "huevo en 5 de 12"): el day-gen
+# usa huevo como relleno proteico por defecto en meriendas/bowls. El autofix reescribe el huevo
+# SOLO donde es relleno (NO en el nombre del plato, NO en platos donde es aglutinante —
+# croquetas/panqueques/tortas) hacia proteínas verificadas slot-aware (merienda→yogurt griego,
+# desayuno→queso, comidas fuertes→pollo/queso), con guards de alergia/dislike y anti-colisión
+# same-day. Los platos huevo-protagonista (revoltillo, tortilla) JAMÁS se tocan — si el exceso
+# vive ahí, decide el gate (retry). Marca `_protein_autofix_applied="huevo->X"` → el
+# fidelity-discount lo reconoce como mutación legítima.
+EGG_CAP_AUTOFIX_ENABLED = _env_bool("MEALFIT_EGG_CAP_AUTOFIX", True)
 SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
@@ -18500,6 +18511,149 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         return 0
 
 
+# [P1-EGG-CAP-AUTOFIX · 2026-07-05] Platos donde el huevo es AGLUTINANTE funcional — jamás
+# reemplazarlo ahí (rompería la receta). Mismo racional que P2-SLOT-CROQUETA-BINDER.
+_EGG_BINDER_DISH_TOKENS = ("croqueta", "albondiga", "panqueque", "pancake", "arepita",
+                           "torta", "bollito", "waffle", "empanizad", "apanad")
+# Reemplazos slot-aware, nombres EXACTOS del catálogo verificado (lookup de micros/costos los
+# resuelve). El label del marker alimenta el fidelity-discount y el guard anti-colisión.
+_EGG_REPLACEMENT_LADDER = {
+    "merienda": (("170 g de yogurt griego entero", "yogurt"), ("60 g de queso blanco", "queso")),
+    "desayuno": (("60 g de queso blanco", "queso"), ("170 g de yogurt griego entero", "yogurt")),
+    "_fuerte": (("120 g de pechuga de pollo", "pollo"), ("60 g de queso blanco", "queso"),
+                ("170 g de yogurt griego entero", "yogurt")),
+}
+
+
+def _egg_cap_autofix(days: list, form_data=None, db=None) -> int:
+    """[P1-EGG-CAP-AUTOFIX · 2026-07-05] Reduce el conteo de comidas-con-huevo al cap del gate
+    (max(3, 25%)) reescribiendo SOLO los huevos-relleno: huevo en ingredients pero NO en el
+    nombre y NO en platos-aglutinante. Detector espejo del reporte (`_meal_has_egg`). Prioriza
+    meriendas→cenas→almuerzos (el desayuno es el hogar cultural del huevo). Reemplazo slot-aware
+    del catálogo con guards de alergia/dislike y anti-colisión same-day (si el día ya tiene
+    pollo, cae a queso/yogurt — re-escaneado POR candidato para no crear repetición nueva).
+    Pre-motor: el solver dimensiona el reemplazo. Idempotente, fail-safe.
+    tooltip-anchor: P1-EGG-CAP-AUTOFIX"""
+    if not EGG_CAP_AUTOFIX_ENABLED or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_egg
+        _fd = form_data or {}
+        dislikes = {_sa_egg(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        allergies = _fd.get("allergies")
+
+        meals_all = [(d, m) for d in days if isinstance(d, dict)
+                     for m in (d.get("meals") or []) if isinstance(m, dict)]
+        total = len(meals_all)
+        if not total:
+            return 0
+        egg_meals = [(d, m) for d, m in meals_all if _meal_has_egg(m, _sa_egg)]
+        cap = max(3, round(total * 0.25))  # espejo exacto del gate P3-VARIETY-HARD-GATE
+        excess = len(egg_meals) - cap
+        if excess <= 0:
+            return 0
+
+        def _egg_is_protagonist(m) -> bool:
+            _nl = _sa_egg(str(m.get("name", "")).lower())
+            return bool(_re.search(r"\bhuevos?\b|\bclaras?\b|revoltillo|tortilla|omelet", _nl))
+
+        def _is_binder_dish(m) -> bool:
+            _nl = _sa_egg(str(m.get("name", "")).lower())
+            return any(t in _nl for t in _EGG_BINDER_DISH_TOKENS)
+
+        candidates = [(d, m) for d, m in egg_meals
+                      if not _egg_is_protagonist(m) and not _is_binder_dish(m)]
+        _slot_rank = {"merienda": 0, "cena": 1, "almuerzo": 2, "desayuno": 3}
+
+        def _rank(dm):
+            _sl = _sa_egg(str(dm[1].get("meal", "")).lower())
+            return next((r for s, r in _slot_rank.items() if s in _sl), 2)
+
+        candidates.sort(key=_rank)
+
+        def _candidate_ok(day, line, label) -> bool:
+            _low = _sa_egg(line.lower())
+            if any(dk and dk in _low for dk in dislikes):
+                return False
+            if label == "pollo":
+                # anti-colisión same-day: escaneo FRESCO del día (incluye reemplazos previos).
+                _blob = _sa_egg(" ".join(
+                    str(mm.get("name", "")) + " " + " ".join(str(i) for i in mm.get("ingredients") or [])
+                    for mm in (day.get("meals") or []) if isinstance(mm, dict)).lower())
+                if any(_name_has_token(_sa_egg(a), _blob)
+                       for a in _MAIN_PROTEIN_ALIASES.get("pollo", ())):
+                    return False
+            if allergies:
+                try:
+                    if _scan_allergen_violations(
+                        {"days": [{"meals": [{"ingredients": [line]}]}]}, allergies
+                    ):
+                        return False
+                except Exception:
+                    return False  # conservador
+            return True
+
+        fixed = 0
+        for d, m in candidates:
+            if fixed >= excess:
+                break
+            _sl = _sa_egg(str(m.get("meal", "")).lower())
+            _ladder_key = ("merienda" if "merienda" in _sl
+                           else "desayuno" if "desayuno" in _sl else "_fuerte")
+            _pick = next(((ln, lb) for ln, lb in _EGG_REPLACEMENT_LADDER[_ladder_key]
+                          if _candidate_ok(d, ln, lb)), None)
+            if _pick is None:
+                continue
+            _line, _label = _pick
+            ings = m.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            raw = m.get("ingredients_raw")
+            raw_ok = isinstance(raw, list) and len(raw) == len(ings)
+            new_ings, new_raw, done = [], [], False
+            for i, s in enumerate(ings):
+                _is_egg = isinstance(s, str) and _re.search(
+                    r"\bhuevos?\b|\bclaras?\b|\byemas?\b", _sa_egg(s.lower()))
+                if _is_egg and not done:
+                    new_ings.append(_line)
+                    new_raw.append(_line)
+                    done = True
+                elif _is_egg:
+                    continue  # línea extra de huevo se elimina (el reemplazo ya cubre)
+                else:
+                    new_ings.append(s)
+                    new_raw.append(raw[i] if raw_ok else s)
+            if not done:
+                continue
+            m["ingredients"] = new_ings
+            if raw_ok:
+                m["ingredients_raw"] = new_raw
+            _food = _line.split(" de ", 1)[1] if " de " in _line else _line
+            try:
+                _rewrite_recipe_steps_after_subs(
+                    m, [(["huevo", "huevos", "clara", "claras", "yema", "yemas"], _food)])
+            except Exception:
+                pass
+            try:
+                _db = db
+                if _db is None:
+                    from nutrition_db import IngredientNutritionDB as _EggDB
+                    _db = _EggDB()
+                _truth_up_meal_macros_from_strings(m, _db)
+            except Exception:
+                pass
+            m["_protein_autofix_applied"] = f"huevo->{_label}"
+            fixed += 1
+        if fixed:
+            logger.info(f"🥚 [P1-EGG-CAP-AUTOFIX] {fixed} huevo(s)-relleno reescrito(s) a proteína "
+                        f"slot-aware (huevo en {len(egg_meals)}/{total} comidas, cap {cap}) — "
+                        f"protagonistas/aglutinantes intactos.")
+        return fixed
+    except Exception as _egg_e:
+        logger.warning(f"[P1-EGG-CAP-AUTOFIX] no-op: {type(_egg_e).__name__}: {_egg_e}")
+        return 0
+
+
 def _breakfast_rice_autofix(days: list, db=None) -> int:
     """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
     DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
@@ -20627,6 +20781,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _na_fixed:
                 logger.info(f"🧂 [P1-SODIUM-DAY-AUTOFIX] {_na_fixed} acción(es) de sodio per-día "
                             f"aplicada(s) pre-reviewer.")
+            # [P1-EGG-CAP-AUTOFIX · 2026-07-05] causa #1 de retry COMPLETO medida hoy (huevo en
+            # 5/12 comidas): reescribe los huevos-RELLENO al cap del gate. Corre ANTES del
+            # autofix de proteína repetida — al quitar huevos de relleno también elimina
+            # repeticiones same-day de huevo (el label excluido del autofix de proteína v1).
+            _egg_fixed = _egg_cap_autofix(days, form_data)
+            if _egg_fixed:
+                logger.info(f"🥚 [P1-EGG-CAP-AUTOFIX] {_egg_fixed} comida(s) con huevo-relleno "
+                            f"diversificada(s) pre-reviewer.")
             # [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] causa #1 restante de retries medida en vivo
             # (4 firings en 2 renovaciones): la MISMA proteína principal en 2+ comidas del mismo día.
             # Los días se generan en paralelo y a ciegas entre sí → el LLM reincide; corrector

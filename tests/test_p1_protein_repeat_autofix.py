@@ -61,10 +61,14 @@ def test_knobs_defaults():
 
 
 def test_wired_in_assemble_pre_engine_after_sodium():
+    # [2026-07-05] window 1000→2200: P1-EGG-CAP-AUTOFIX se insertó en el seam entre el pase
+    # de sodio y este autofix (orden deliberado: el egg-fix limpia repeticiones de huevo antes).
     i = _GO.index("acción(es) de sodio per-día \"\n                            f\"aplicada(s) pre-reviewer")
-    win = _GO[i:i + 1000]
+    win = _GO[i:i + 2200]
     assert "_protein_repeat_autofix(days, form_data)" in win, \
         "el autofix corre en el mismo seam pre-motor, después del pase de sodio"
+    assert "_egg_cap_autofix(days, form_data)" in win, \
+        "el egg-fix vive en el mismo seam, antes del protein-repeat"
 
 
 def test_wired_after_budget_passes():
