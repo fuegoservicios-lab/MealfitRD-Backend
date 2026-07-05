@@ -5340,12 +5340,26 @@ async def _attempt_pro_critique_correction(
             f"🔄 {log_prefix} Día {day_num} reintentando con {_PRO_MODEL_NAME} "
             f"(timeout={CRITIQUE_PRO_FALLBACK_TIMEOUT_S:.0f}s)..."
         )
-        pro_corrector = ChatDeepSeek(
-            model=_PRO_MODEL_NAME,
-            temperature=0.3,
-            max_retries=0,
-            timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
-        ).with_structured_output(SingleDayPlanModel)
+        # [P1-REVIEWER-THINKING · 2026-07-05] Escalada "inténtalo más duro" con razonamiento
+        # nativo: este path solo dispara tras fallo de flash, así que el costo extra vive
+        # exclusivamente en el camino infeliz. thinking no soporta el tool_choice forzado de
+        # function_calling → json_mode (el prompt ya exige "misma estructura JSON" y adjunta el
+        # día actual como plantilla). Si el parse falla → None, mismo contrato fail-safe de hoy.
+        if SURGICAL_PRO_THINKING_ENABLED:
+            pro_corrector = ChatDeepSeek(
+                model=_PRO_MODEL_NAME,
+                temperature=0.3,
+                max_retries=0,
+                timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
+                extra_body={"thinking": {"type": "enabled"}},
+            ).with_structured_output(SingleDayPlanModel, method="json_mode")
+        else:
+            pro_corrector = ChatDeepSeek(
+                model=_PRO_MODEL_NAME,
+                temperature=0.3,
+                max_retries=0,
+                timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
+            ).with_structured_output(SingleDayPlanModel)
         result = await _safe_ainvoke(
             pro_corrector,
             correction_prompt,
@@ -9191,6 +9205,17 @@ PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MA
 SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
+# [P1-REVIEWER-THINKING · 2026-07-05] Thinking mode (razonamiento nativo V4) SOLO en superficies de
+# JUICIO clínico de bajo volumen — JAMÁS en day-gen/planner (P1-DEEPSEEK-THINKING-OFF midió >170s/día
+# → fallback matemático). Restricción del API calibrada en vivo: thinking NO soporta el tool_choice
+# forzado de function_calling → structured output vía method="json_mode" (smoke 2026-07-05 en v4-pro:
+# 17.5s, ~2.6k reasoning-tokens ≈ $0.0025/llamada, veredicto ERC correcto con 4 hallazgos KDIGO).
+# Superficie 1: reviewer médico, SOLO perfiles risk-tier (alergias/condiciones — donde juicio=seguridad).
+# Superficie 2: escalada a Pro del corrector quirúrgico (path "inténtalo más duro", solo tras fallo).
+# Ambos nacen OFF (convención medir→actuar); flip por env sin redeploy. Fail-open al reviewer estándar.
+REVIEWER_THINKING_ENABLED = _env_bool("MEALFIT_REVIEWER_THINKING", False)
+REVIEWER_THINKING_TIMEOUT_S = _env_int("MEALFIT_REVIEWER_THINKING_TIMEOUT_S", 90, lambda v: 30 <= v <= 300)
+SURGICAL_PRO_THINKING_ENABLED = _env_bool("MEALFIT_SURGICAL_PRO_THINKING", False)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -23142,12 +23167,28 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # Pro en perfiles clínicos. Override por knob si regresión.
         _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
-        reviewer_llm = ChatDeepSeek(
-            model=_reviewer_model,
-            temperature=0.1,  # Temperatura muy baja para ser preciso
-            max_retries=0,
-            timeout=60
-        ).with_structured_output(ReviewResult)
+        # [P1-REVIEWER-THINKING · 2026-07-05] Rama thinking SOLO para perfiles con riesgo médico
+        # (los que ya enrutan a pro): razonamiento nativo antes del veredicto clínico. El API no
+        # soporta thinking + tool_choice forzado → json_mode (el contrato JSON ya vive literal en
+        # REVIEWER_SYSTEM_PROMPT; ReviewResult tiene defaults en todos los campos opcionales).
+        _rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data))
+        if _rev_thinking:
+            reviewer_llm = ChatDeepSeek(
+                model=_reviewer_model,
+                temperature=0.1,
+                max_retries=0,
+                timeout=int(REVIEWER_THINKING_TIMEOUT_S),
+                extra_body={"thinking": {"type": "enabled"}},
+            ).with_structured_output(ReviewResult, method="json_mode")
+            logger.info(f"🧠 [P1-REVIEWER-THINKING] Reviewer clínico con thinking mode "
+                        f"({_reviewer_model}, timeout={REVIEWER_THINKING_TIMEOUT_S}s).")
+        else:
+            reviewer_llm = ChatDeepSeek(
+                model=_reviewer_model,
+                temperature=0.1,  # Temperatura muy baja para ser preciso
+                max_retries=0,
+                timeout=60
+            ).with_structured_output(ReviewResult)
 
         # Invocar con reintentos automáticos
         @retry(
@@ -23166,8 +23207,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # Constructor tiene timeout=60 pero el SDK no siempre lo respeta;
                 # cap explícito a 70s/intento. Worst case con tenacity (3 intentos):
                 # ~210s + backoff = aceptable vs el GLOBAL_TIMEOUT de 600s.
+                # [P1-REVIEWER-THINKING] rama thinking: cap = knob + 10s de gracia
+                # (reasoning tarda 15-40s medidos; worst case 3×100s sigue < GLOBAL).
                 res = await _safe_ainvoke(
-                    reviewer_llm, review_prompt, timeout=70.0
+                    reviewer_llm, review_prompt,
+                    timeout=(float(REVIEWER_THINKING_TIMEOUT_S) + 10.0) if _rev_thinking else 70.0,
                 )
                 await _reviewer_cb.arecord_success()  # P1-Q3
                 return res
@@ -23176,7 +23220,27 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 raise e
         
         try:
-            result: ReviewResult = await invoke_with_retry()
+            try:
+                result: ReviewResult = await invoke_with_retry()
+            except Exception as _thk_e:
+                # [P1-REVIEWER-THINKING · 2026-07-05] Fail-open hacia el reviewer ESTÁNDAR
+                # (NUNCA hacia aprobar): si la rama thinking+json_mode rompe (cambio del API,
+                # parse), el gate clínico sigue vivo con function_calling sin thinking. El
+                # closure `invoke_with_retry` lee `reviewer_llm` re-asignado (late-binding).
+                if not (_rev_thinking and not _is_plan_spend_cap_error(_thk_e)):
+                    raise
+                logger.warning(
+                    f"⚠ [P1-REVIEWER-THINKING] Rama thinking falló ({type(_thk_e).__name__}: "
+                    f"{str(_thk_e)[:120]}) → fallback al reviewer estándar sin thinking."
+                )
+                _rev_thinking = False
+                reviewer_llm = ChatDeepSeek(
+                    model=_reviewer_model,
+                    temperature=0.1,
+                    max_retries=0,
+                    timeout=60,
+                ).with_structured_output(ReviewResult)
+                result = await invoke_with_retry()
             approved = result.approved
             issues = result.issues
             severity = result.severity
