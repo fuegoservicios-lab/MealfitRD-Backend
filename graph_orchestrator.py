@@ -11723,11 +11723,20 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         # se cierren (con 7 micros un budget per-micro permitía hasta 7× el techo → rompía la banda macro). El aporte
         # por micro se recomputa DESPUÉS de cada escala (re-lee ingredients) → si una hoja cubre fibra+folato+hierro,
         # escalarla una vez baja el déficit de los 3.
+        # [P1-CLOSER-SEED-PRIORITY · 2026-07-05] Los micros SEMBRABLES van PRIMERO en la cola del
+        # día: el presupuesto kcal (120) es COMPARTIDO entre todos los micros del día y se consume
+        # en orden de iteración — que era el orden del PANEL, con vit E/omega-3 al final. Caso vivo
+        # plan a5c9983d: Día 1 en 7.2/15 de vit E y 0.41/1.6 de omega-3 (ambos bajo el umbral del
+        # banner), la semilla NUNCA entró (cero 🌱 en la corrida) porque los micros tempranos
+        # (fibra/calcio/magnesio) agotaron el presupuesto escalando → guard de semilla (>25 kcal)
+        # sin fondos → banner micro_worst_day pese a tener el arsenal completo. Las semillas son
+        # el cierre más kcal-eficiente (girasol 3.5mg vit E por 58 kcal) — van primero.
+        _floors_ordered = sorted(floors.items(), key=lambda kv: kv[0] not in _MICRO_SEED_SOURCES)
         for _d in _days:
             if not isinstance(_d, dict):
                 continue
             kcal_budget_left = float(MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY)
-            for k, floor in floors.items():
+            for k, floor in _floors_ordered:
                 if kcal_budget_left <= 1.0:
                     break  # presupuesto kcal del día agotado → no más escalas hoy
                 ing_key = _MICRO_CLOSER_INGREDIENT_KEY[k]
