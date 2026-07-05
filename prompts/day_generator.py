@@ -226,7 +226,8 @@ if _SLOT_SSOT_RULES_BLOCK:
 # (P1-PROMPT-CACHE). El gate MEALFIT_SODIUM_EXCESS_GATE queda como backstop.
 DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
     "\n17. PRESUPUESTO DE SODIO (el panel lo MIDE y el validador RECHAZA el exceso flagrante):\n"
-    "    - Techo diario: ≤2000 mg de sodio (OMS). Planifica el día completo con ese número en mente.\n"
+    "    - Techo diario: ≤2000 mg de sodio (OMS). El techo aplica a CADA DÍA por separado — un día\n"
+    "      salado NO se compensa con otro día bajo (el usuario come días, no promedios).\n"
     "    - Máximo UN ítem enlatado en TODO el día (atún, sardinas, maíz o habichuela de lata): cada\n"
     "      lata carga 400-700 mg. Dos enlatados en un día casi garantizan pasarse.\n"
     "    - Queso (blanco/de freír) y embutidos son cargas grandes de sodio: si un plato los lleva,\n"

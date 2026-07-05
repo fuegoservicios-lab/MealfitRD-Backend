@@ -9154,6 +9154,15 @@ BREAKFAST_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_BREAKFAST_RICE_AUTOFIX", Tru
 # manda el deseo explícito del usuario (misma doctrina del slot advisory-only en chat-modify).
 CENA_FRY_AUTOFIX_ENABLED = _env_bool("MEALFIT_CENA_FRY_AUTOFIX", True)
 FRUIT_SAVORY_AUTOFIX_ENABLED = _env_bool("MEALFIT_FRUIT_SAVORY_AUTOFIX", True)
+# [P1-SODIUM-DAY-AUTOFIX · 2026-07-04] Corrector determinista del techo de sodio POR DÍA — el
+# simétrico faltante del micro-closer (que solo SUBE pisos; nada BAJABA un día sobre el techo).
+# Caso vivo: plan aprobado con promedio 1,818mg "bajo control" pero 2 de 3 días > 2,000mg
+# (per_day_ceilings.flagged). Escalera: (1) strip de cubitos/sazón completo (≈1000mg, cero rol
+# de macros); (2) swap del enlatado más rico en sodio → pescado fresco del catálogo (pre-motor:
+# el solver re-dimensiona los gramos al slot). El detector per-día + banner quedan como backstop.
+SODIUM_DAY_AUTOFIX_ENABLED = _env_bool("MEALFIT_SODIUM_DAY_AUTOFIX", True)
+SODIUM_DAY_CEILING_MG = _env_int("MEALFIT_SODIUM_DAY_CEILING_MG", 2000, lambda v: 1000 <= v <= 5000)
+SODIUM_DAY_AUTOFIX_MAX_SWAPS = _env_int("MEALFIT_SODIUM_DAY_AUTOFIX_MAX_SWAPS", 1, lambda v: 0 <= v <= 3)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -17874,6 +17883,158 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
         return 0
 
 
+# [P1-SODIUM-DAY-AUTOFIX · 2026-07-04] Bombas de sodio sin rol de macros (strip directo) y
+# enlatados swapeables a fresco (mismo pescado, sodio 10-50× menor). El swap conserva la
+# identidad culinaria (pescado→pescado); embutidos/queso NO se tocan (identidad del plato —
+# el §17 del prompt ya los presupuesta y el banner per-día los señala).
+_SODIUM_STRIP_TOKENS = ("cubito", "sazon completo", "sazón completo", "sopita", "caldo concentrado")
+_SODIUM_SWAP_LADDER = (
+    (r"sardinas?\s*(?:en\s*lata|enlatad\w*)?", "Filete de pescado blanco"),
+    (r"at[uú]n\s*(?:en\s*(?:agua|aceite|lata)|enlatad\w*)", "Filete de pescado blanco"),
+)
+
+
+def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
+    """[P1-SODIUM-DAY-AUTOFIX · 2026-07-04] Corrector determinista del techo de sodio POR DÍA.
+    Para cada día cuyo sodio medido (raw preferido, mismo medidor del panel) supere
+    SODIUM_DAY_CEILING_MG: (1) elimina líneas de cubito/sazón completo (≈1000mg c/u, cero
+    macros) reescribiendo su mención en pasos a sazón natural; (2) si el día SIGUE sobre el
+    techo, swapea el enlatado más rico en sodio → pescado fresco (línea completa "150 g de X" —
+    corre PRE-motor: el solver re-dimensiona los gramos al slot). Respeta alergias (pescado) y
+    dislikes. Truth-up de macros en meals tocados. Idempotente, fail-open, gate/banner per-día
+    como backstop. Devuelve nº de acciones. tooltip-anchor: P1-SODIUM-DAY-AUTOFIX"""
+    if not SODIUM_DAY_AUTOFIX_ENABLED or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_na
+        if db is None:
+            from nutrition_db import IngredientNutritionDB as _NaDB
+            db = _NaDB()
+        _fd = form_data or {}
+        dislikes = {_sa_na(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        _swap_repl = "Filete de pescado blanco"
+        _swap_ok = not any(dk and dk in _sa_na(_swap_repl.lower()) for dk in dislikes)
+        if _swap_ok and _fd.get("allergies"):
+            try:
+                if _scan_allergen_violations(
+                    {"days": [{"meals": [{"ingredients": [_swap_repl]}]}]}, _fd.get("allergies")
+                ):
+                    _swap_ok = False
+            except Exception:
+                _swap_ok = False  # conservador: duda → no swapear (el strip sigue)
+
+        def _line_sodium(_s: str) -> float:
+            try:
+                mic = db.micros_from_ingredient_string(str(_s))
+                return float((mic or {}).get("sodium_mg") or 0.0)
+            except Exception:
+                return 0.0
+
+        def _day_sodium(_meals: list) -> float:
+            total = 0.0
+            for _m in _meals:
+                if not isinstance(_m, dict):
+                    continue
+                _ings = _m.get("ingredients_raw") if isinstance(_m.get("ingredients_raw"), list) else _m.get("ingredients")
+                for _s in _ings or []:
+                    if isinstance(_s, str):
+                        total += _line_sodium(_s)
+            return total
+
+        actions = 0
+        for _d in days if isinstance(days, list) else []:
+            meals = (_d.get("meals") or []) if isinstance(_d, dict) else []
+            if not meals or _day_sodium(meals) <= float(SODIUM_DAY_CEILING_MG):
+                continue
+            # (1) strip de bombas de sodio sin rol de macros.
+            for _m in meals:
+                if not isinstance(_m, dict):
+                    continue
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = _m.get(_key)
+                    if not isinstance(_lst, list):
+                        continue
+                    _kept = []
+                    for _s in _lst:
+                        _low = _sa_na(str(_s).lower()) if isinstance(_s, str) else ""
+                        if _low and any(t in _low for t in (_sa_na(x) for x in _SODIUM_STRIP_TOKENS)):
+                            if _key == "ingredients":  # contar una vez por línea
+                                actions += 1
+                                _m["_sodium_autofix_applied"] = "strip_cubito"
+                            continue
+                        _kept.append(_s)
+                    if len(_kept) != len(_lst):
+                        _m[_key] = _kept
+                if _m.get("_sodium_autofix_applied") == "strip_cubito":
+                    # reemplazo DIRECTO en pasos: el rewriter compartido skipea "cubito"
+                    # a propósito (_SUBST_REWRITE_SKIP_TOKENS lo trata como unidad).
+                    _rec = _m.get("recipe")
+                    if isinstance(_rec, list):
+                        _m["recipe"] = [
+                            _re.sub(
+                                r"\b(?:cubito|cubitos|sopita|caldo\s+concentrado)\b(?:\s+de\s+\w+)?",
+                                "sazón natural (ajo, orégano, cebolla)",
+                                str(_st), flags=_re.IGNORECASE,
+                            ) if isinstance(_st, str) else _st
+                            for _st in _rec
+                        ]
+            # (2) swap del enlatado más rico si el día sigue sobre el techo.
+            _swaps_left = int(SODIUM_DAY_AUTOFIX_MAX_SWAPS)
+            while _swap_ok and _swaps_left > 0 and _day_sodium(meals) > float(SODIUM_DAY_CEILING_MG):
+                _best = None  # (sodium, meal, key->idx pairs, matched_token)
+                for _m in meals:
+                    if not isinstance(_m, dict) or not isinstance(_m.get("ingredients"), list):
+                        continue
+                    for _idx, _s in enumerate(_m["ingredients"]):
+                        if not isinstance(_s, str):
+                            continue
+                        for _rx, _repl in _SODIUM_SWAP_LADDER:
+                            _mm = _re.search(_rx, _sa_na(_s.lower()), _re.IGNORECASE)
+                            if not _mm:
+                                continue
+                            _na = _line_sodium(
+                                (_m.get("ingredients_raw") or _m["ingredients"])[_idx]
+                                if isinstance(_m.get("ingredients_raw"), list)
+                                and _idx < len(_m.get("ingredients_raw") or [])
+                                else _s
+                            )
+                            if _best is None or _na > _best[0]:
+                                _best = (_na, _m, _idx, _mm.group(0))
+                            break
+                if _best is None:
+                    break
+                _, _bm, _bidx, _btok = _best
+                _new_line = f"150 g de {_swap_repl.lower()}"
+                _bm["ingredients"][_bidx] = _new_line
+                _raw = _bm.get("ingredients_raw")
+                if isinstance(_raw, list) and _bidx < len(_raw):
+                    _raw[_bidx] = _new_line
+                _name = str(_bm.get("name") or "")
+                if _re.search(r"sardina|at[uú]n", _name, _re.IGNORECASE):
+                    _bm["name"] = _re.sub(
+                        r"(?:sardinas?|at[uú]n)(?:\s+en\s+(?:agua|aceite|lata))?",
+                        "Pescado blanco", _name, count=1, flags=_re.IGNORECASE,
+                    )
+                try:
+                    _rewrite_recipe_steps_after_subs(_bm, [(["sardina", "sardinas", "atun"], _swap_repl)])
+                except Exception:
+                    pass
+                try:
+                    _truth_up_meal_macros_from_strings(_bm, db)
+                except Exception:
+                    pass
+                _bm["_sodium_autofix_applied"] = "swap_canned"
+                actions += 1
+                _swaps_left -= 1
+        if actions:
+            logger.info(f"🧂 [P1-SODIUM-DAY-AUTOFIX] {actions} acción(es) de sodio per-día "
+                        f"(strip cubito / swap enlatado→fresco) pre-motor.")
+        return actions
+    except Exception as _na_e:
+        logger.warning(f"[P1-SODIUM-DAY-AUTOFIX] no-op: {type(_na_e).__name__}: {_na_e}")
+        return 0
+
+
 def _breakfast_rice_autofix(days: list, db=None) -> int:
     """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
     DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
@@ -19994,6 +20155,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _fs_fixed:
                 logger.info(f"🥑 [P1-APPETIT-AUTOFIX] {_fs_fixed} pareo(s) fruta-dulce+salado reescrito(s) "
                             f"(fruta → aguacate/batata) pre-reviewer.")
+            # [P1-SODIUM-DAY-AUTOFIX · 2026-07-04] techo de sodio POR DÍA (el promedio esconde
+            # días altos — caso vivo: 2 de 3 días > 2000mg con promedio 1818 "bajo control").
+            # Pre-motor: el solver re-dimensiona el pescado fresco del swap al slot.
+            _na_fixed = _day_sodium_autofix(days, form_data)
+            if _na_fixed:
+                logger.info(f"🧂 [P1-SODIUM-DAY-AUTOFIX] {_na_fixed} acción(es) de sodio per-día "
+                            f"aplicada(s) pre-reviewer.")
         except Exception as _nra_c:
             logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
 
