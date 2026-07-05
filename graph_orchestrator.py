@@ -10171,6 +10171,13 @@ _MICRO_CLOSER_RENAL_EXCLUDED = frozenset({
 # (frutos secos → semillas). Solo aplica a micros ya-cerrables (renal/K-med/anticoag heredan
 # las exclusiones del closer). Rollback: MEALFIT_MICRO_SEED=false.
 MICRO_SEED_ENABLED = _env_bool("MEALFIT_MICRO_SEED", True)
+# [P1-MICRO-SEED-CAPPED · 2026-07-05] v2: sembrar TAMBIÉN cuando el día SÍ tiene portadores
+# pero está PROFUNDAMENTE corto (< ratio × piso): el escalado richest-first está acotado por
+# MAX_SCALE/UL/presupuesto kcal y no puede cerrar un gap de 2-3× (caso vivo plan 08ed036d:
+# Día 1 con sardinas como portador de omega-3 quedó en 0.44× del piso → banner micro_worst_day
+# que el seed v1, gateado a "sin portadores", no podía evitar). Default 0.6 = alineado con
+# `low_ratio_threshold` del banner per-día: si el día sería flaggeado, se siembra. 0 = off (v1).
+MICRO_SEED_BELOW_RATIO = max(0.0, min(0.95, _env_float("MEALFIT_MICRO_SEED_BELOW_RATIO", 0.6)))
 _MICRO_SEED_SOURCES = {
     "omega3_g": ("10 g de semillas de linaza", "10 g de nueces"),
     "vit_e_mg": ("10 g de maní", "10 g de semillas de linaza"),
@@ -11727,8 +11734,20 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 # (el residual quedaba abierto → banner micro_worst_day). Siembra UNA línea
                 # pequeña del catálogo (alergia/dislike-aware) y la registra como contribuyente;
                 # el loop richest-first de abajo la escala hacia el piso dentro del presupuesto.
-                if not contributors and MICRO_SEED_ENABLED and k in _MICRO_SEED_SOURCES \
-                        and kcal_budget_left > 30.0:
+                # [P1-MICRO-SEED-CAPPED · 2026-07-05] v2: también con portadores PROFUNDAMENTE
+                # cortos (< MICRO_SEED_BELOW_RATIO × piso) — el escalado acotado por MAX_SCALE/
+                # kcal no cierra gaps 2-3× (caso vivo 08ed036d: sardinas presentes, omega-3 0.44×).
+                # Anti-doble-siembra: si el día ya tiene comida sembrada para este micro, skip.
+                _had_carriers = bool(contributors)
+                _already_seeded = any(
+                    isinstance(m, dict) and m.get("_micro_seed_applied") == k
+                    for m in (_d.get("meals") or [])
+                )
+                _seed_trigger = (not contributors) or (
+                    MICRO_SEED_BELOW_RATIO > 0 and day_total < MICRO_SEED_BELOW_RATIO * floor
+                )
+                if _seed_trigger and not _already_seeded and MICRO_SEED_ENABLED \
+                        and k in _MICRO_SEED_SOURCES and kcal_budget_left > 30.0:
                     try:
                         from constants import strip_accents as _sa_seed
                         _seed_dislikes = {_sa_seed(str(x).strip().lower())
@@ -11788,7 +11807,10 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                 kcal_budget_left -= _kc_seed
                                 _seed_meal["_micro_seed_applied"] = k
                                 adjustments += 1
-                                logger.info(f"🌱 [P1-MICRO-SEED] día sin portador de '{k}' → "
+                                _seed_why = ("día sin portador" if not _had_carriers else
+                                             f"portadores muy cortos ({day_total - _c_seed:.2g} < "
+                                             f"{MICRO_SEED_BELOW_RATIO}×{floor:.2g})")
+                                logger.info(f"🌱 [P1-MICRO-SEED] {_seed_why} de '{k}' → "
                                             f"sembrado '{_seed_line}' (el closer lo escala al piso)")
                     except Exception as _seed_e:
                         logger.debug(f"[P1-MICRO-SEED] seed no-op: {type(_seed_e).__name__}: {_seed_e}")
@@ -12933,15 +12955,20 @@ def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
         il = strip_accents_fn(" ".join(str(i) for i in ings).lower())
         nl = strip_accents_fn(name.lower())
 
+        # [P2-NAME-HONESTY-PLURAL · 2026-07-05] Sufijo plural español opcional en AMBOS lados:
+        # caso vivo plan 08ed036d — nombre "Croquetas de Sardina" (singular, syn 'sardina' de
+        # pescado) vs ingrediente "½ lata de sardinaS en agua" → \bsardina\b NO matcheaba el
+        # plural → "proteína ausente" falso → flag _name_honesty_degraded + chip en la UI
+        # sobre un plato perfectamente honesto.
         def _present(canon, text):
-            return any(re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"\b", text)
+            return any(re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"(?:s|es)?\b", text)
                        for s in _PHANTOM_PROTEIN_SYNS[canon])
 
         # proteínas cárnicas en el NOMBRE, ordenadas por posición (la líder primero)
         in_name = []
         for canon in _PHANTOM_PROTEIN_SYNS:
             positions = [m.start() for s in _PHANTOM_PROTEIN_SYNS[canon]
-                         for m in [re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"\b", nl)] if m]
+                         for m in [re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"(?:s|es)?\b", nl)] if m]
             if positions:
                 in_name.append((canon, min(positions)))
         if not in_name:
