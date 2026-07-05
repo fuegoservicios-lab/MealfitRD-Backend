@@ -25,7 +25,9 @@ with open(os.path.join(_BACKEND, "graph_orchestrator.py"), encoding="utf-8") as 
 def test_precedence_block_is_mode_conditional():
     i = _GO.index("[P1-SURGICAL-POOL-SWAP · 2026-07-05]")
     win = _GO[i:i + 2600]
-    assert "if _reject_mode:" in win
+    # [P1-SURGICAL-MODE-COLLISION] la condición ahora es POR DÍA (unión de modos): la regla
+    # permisiva aplica solo al día que tiene issues de reject.
+    assert "if _reject_mode and _reject_issues.get(day_num):" in win
     assert "_precedence_block = (" in win
     # variante reject: redistribuir dentro del pool está PERMITIDO.
     assert "SUSTITÚYELA" in win and "DEL POOL" in win

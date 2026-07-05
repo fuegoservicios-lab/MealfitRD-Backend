@@ -22260,17 +22260,24 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # arrastra la key (SingleDayPlanModel no la tiene) → éxito = marker limpio.
     if DAY_FALLBACK_HONESTY:
         marker_day_nums = sorted(set(marker_day_nums) | set(_collect_day_fallback_days(plan_result)))
-    # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Modo RECHAZO: sin markers y con review_passed=False,
-    # este nodo fue enrutado por el clasificador quirúrgico — re-derivar los días culpables con el
-    # MISMO helper que usó el router (anti-drift) y llevar sus issues específicos al corrector.
+    # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Modo RECHAZO: con review_passed=False, este nodo
+    # fue enrutado por el clasificador quirúrgico — re-derivar los días culpables con el MISMO
+    # helper que usó el router (anti-drift) y llevar sus issues específicos al corrector.
+    # [P1-SURGICAL-MODE-COLLISION · 2026-07-05] UNIÓN de modos, NO prioridad: antes un
+    # `_critique_unresolved` stale SECUESTRABA la pasada (marker mode ganaba) y se reparaba el
+    # día EQUIVOCADO con el prompt equivocado — caso vivo corr=200c69f3: el router atribuyó el
+    # Día [1] (proteína repetida) y el nodo corrigió el Día [3] (marker viejo) → la repetición
+    # sobrevivió a la re-review y solo un re-enrutamiento fortuito (el flag reject nunca se
+    # seteó) dio segunda oportunidad. Ahora ambos conjuntos se corrigen en la MISMA pasada;
+    # `_re_correct_one` elige el issue apto por día (reject si lo tiene, marker si no).
     _reject_mode = False
     _reject_issues: dict = {}
-    if not marker_day_nums and not state.get("review_passed", False) and SURGICAL_REJECT_RETRY_ENABLED:
+    if not state.get("review_passed", False) and SURGICAL_REJECT_RETRY_ENABLED:
         _srj = _surgical_reject_targets(state)
         if _srj:
             _reject_mode = True
             _reject_issues = _srj["issues_by_day"]
-            marker_day_nums = _srj["days"]
+            marker_day_nums = sorted(set(marker_day_nums) | set(_srj["days"]))
     if not marker_day_nums:
         # Defensa: should_retry ya filtra este caso pero el nodo es resiliente.
         # Ambos flags: sin esto, un enrutamiento reject-mode que llegue aquí sin
@@ -22324,7 +22331,9 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Modo rechazo: el issue viene del clasificador
         # (los problemas ESPECÍFICOS de este día) + regla de mínima intervención — las comidas
         # sanas se conservan LITERALES; solo cambia el plato culpable (pedido del owner).
-        if _reject_mode:
+        # [P1-SURGICAL-MODE-COLLISION] solo si ESTE día tiene issues de reject — los días-marker
+        # de la unión conservan su issue original (el del critique) y su prompt propio.
+        if _reject_mode and _reject_issues.get(day_num):
             _day_issues = _reject_issues.get(day_num) or []
             original_issue = (
                 "El plan fue RECHAZADO por el revisor por estos problemas ESPECÍFICOS de este día:\n- "
@@ -22371,7 +22380,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         # a ahorrar). La variante reject permite REDISTRIBUIR proteínas DENTRO del pool asignado
         # del día (el pool trae 3 opciones; usar otra para la comida no-protagonista resuelve la
         # repetición Y pasa el PROTEIN-POOL-SCRUB post-corrección). Fuera del pool sigue prohibido.
-        if _reject_mode:
+        if _reject_mode and _reject_issues.get(day_num):
             _precedence_block = (
                 "REGLA DE PRECEDENCIA (si hay conflicto, gana esta):\n"
                 "- Los ingredientes deben salir del POOL ASIGNADO del planificador (arriba) — NUNCA "
