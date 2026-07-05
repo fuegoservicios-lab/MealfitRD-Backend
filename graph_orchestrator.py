@@ -10221,6 +10221,14 @@ MICRO_SEED_REINFORCE_ENABLED = _env_bool("MEALFIT_MICRO_SEED_REINFORCE", True)
 # omega-3 Y vit E solo recibió la semilla de omega-3. El re-trim de carbos post-closer (P2-2)
 # compensa el drift; rollback vía env sin redeploy.
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 120)))
+# [P1-CLOSER-LINE-CLAMP · 2026-07-05] CAP ABSOLUTO de gramos por línea escalada por el closer.
+# El factor por-pasada (MAX_SCALE ~1.6) COMPONE entre pasadas: pre-motor + recheck P2-2 +
+# assemble post-surgical + días RECICLADOS entre attempts re-pasan por todo → 1.6^N explota.
+# Caso vivo (plan fdfeba33, Día 2): "47.5 tallos de apio" ≈ 1.9 kg, 1,520 mg de sodio → banner
+# micro_worst_day_ceiling con promedio "bajo control", y una receta absurda de paso. El clamp
+# corta el crecimiento VITALICIO sin tocar la lógica por-pasada: la línea jamás supera su techo
+# físico (semillas/frutos secos 40 g; resto MICRO_CLOSER_LINE_MAX_G).
+MICRO_CLOSER_LINE_MAX_G = _env_int("MEALFIT_MICRO_CLOSER_LINE_MAX_G", 250, lambda v: 100 <= v <= 600)
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
 MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK", True)
@@ -11948,6 +11956,25 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         factor = min(factor, 1.0 + (headroom / contrib))
                     if factor <= 1.0 + 1e-3:
                         continue  # este contribuyente no aporta margen útil → probar el siguiente
+                    # [P1-CLOSER-LINE-CLAMP · 2026-07-05] techo ABSOLUTO de la línea (el factor
+                    # por-pasada compone entre pasadas → "47.5 tallos de apio" en vivo). Si la
+                    # línea ya está en su techo físico, se salta; si el factor la excedería, se
+                    # recorta al techo. Semillas/frutos secos: 40 g (densos en kcal/grasa).
+                    try:
+                        _g_now = float(db.grams_from_ingredient_string(ing_str) or 0.0)
+                    except Exception:
+                        _g_now = 0.0
+                    if _g_now > 0:
+                        _line_low = str(ing_str).lower()
+                        _line_cap = 40.0 if any(t in _line_low for t in (
+                            "linaza", "chia", "chía", "girasol", "nuez", "nueces", "almendra",
+                            "maní", "mani", "pistacho", "semilla", "ajonjolí", "ajonjoli")) \
+                            else float(MICRO_CLOSER_LINE_MAX_G)
+                        if _g_now >= _line_cap:
+                            continue  # línea en su techo vitalicio → probar el siguiente
+                        factor = min(factor, _line_cap / _g_now)
+                        if factor <= 1.0 + 1e-3:
+                            continue
                     new_ing = _resc(ing_str, factor)
                     if not new_ing or new_ing == ing_str:
                         continue
