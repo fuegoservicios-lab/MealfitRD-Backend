@@ -9163,6 +9163,16 @@ FRUIT_SAVORY_AUTOFIX_ENABLED = _env_bool("MEALFIT_FRUIT_SAVORY_AUTOFIX", True)
 SODIUM_DAY_AUTOFIX_ENABLED = _env_bool("MEALFIT_SODIUM_DAY_AUTOFIX", True)
 SODIUM_DAY_CEILING_MG = _env_int("MEALFIT_SODIUM_DAY_CEILING_MG", 2000, lambda v: 1000 <= v <= 5000)
 SODIUM_DAY_AUTOFIX_MAX_SWAPS = _env_int("MEALFIT_SODIUM_DAY_AUTOFIX_MAX_SWAPS", 1, lambda v: 0 <= v <= 3)
+# [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Corrector determinista de la causa #1 RESTANTE de retries
+# medida en vivo (4 firings en las últimas 2 renovaciones): la MISMA proteína principal en 2+ comidas
+# del MISMO día (gate P1-VARIETY-SAME-DAY-PROTEIN). Los días se generan en PARALELO y a ciegas entre
+# sí — el LLM reincide incluso tras la directiva del retry. Pre-reviewer: conserva la comida donde la
+# proteína es identidad del plato (en el NOMBRE) y reescribe la(s) otra(s) a una proteína alternativa
+# del catálogo (escalera por cercanía culinaria, alergia/dislike-aware, sin crear repetición nueva).
+# El gate queda como backstop. HUEVO y ATÚN excluidos v1 (huevo = platos-identidad tipo revoltillo;
+# atún = línea enlatada cuya sustitución textual produce disparates "lata de pescado blanco").
+PROTEIN_REPEAT_AUTOFIX_ENABLED = _env_bool("MEALFIT_PROTEIN_REPEAT_AUTOFIX", True)
+PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY", 2, lambda v: 0 <= v <= 4)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -18137,6 +18147,147 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
         return 0
 
 
+# [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Escalera de destino por proteína FUENTE, ordenada por
+# cercanía culinaria (los marcos de plato dominicanos son intercambiables: guisado/plancha/horno/
+# molido). El destino se filtra contra las proteínas YA presentes ese día (no crear repetición
+# nueva) + alergias + dislikes. HUEVO y ATÚN sin entry a propósito (ver knob).
+_PROTEIN_REPEAT_SWAP_LADDER = {
+    "pollo": ("pavo", "pescado", "cerdo"),
+    "pavo": ("pollo", "pescado", "cerdo"),
+    "cerdo": ("pollo", "pavo", "res"),
+    "res": ("cerdo", "pollo", "pavo"),
+    "pescado": ("pollo", "pavo"),
+}
+# Formas textuales del label DESTINO: el alias molido va a molido (croqueta/albóndiga/taco conservan
+# identidad), los compuestos (pechuga/filete/lomo/bistec/tilapia…) van a la forma canónica verificada,
+# y el token suelto va al token suelto (mínima intervención en nombres tipo "Wrap de pollo").
+_PROTEIN_TARGET_FORMS = {
+    "pollo": {"bare": "pollo", "default": "pechuga de pollo", "molido": "pollo molido"},
+    "pavo": {"bare": "pavo", "default": "pechuga de pavo", "molido": "pavo molido"},
+    "cerdo": {"bare": "cerdo", "default": "lomo de cerdo", "molido": "cerdo molido"},
+    "res": {"bare": "res", "default": "carne de res", "molido": "carne molida"},
+    "pescado": {"bare": "pescado", "default": "filete de pescado blanco",
+                "molido": "filete de pescado blanco"},
+}
+
+
+def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
+    """[P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Autofix DETERMINISTA de la proteína principal repetida
+    el MISMO día (detector espejo del gate P1-VARIETY-SAME-DAY-PROTEIN: mismos labels, mismos aliases,
+    mismo word-boundary y mismo relax de alto meal-count — si el gate no dispararía, esto no toca nada).
+    Conserva la comida donde la proteína aparece en el NOMBRE (identidad del plato) y reescribe las
+    demás: nombre + ingredients + raw (alias→forma destino, cantidades intactas) + pasos + truth-up de
+    macros. Corre PRE-motor → el solver dimensiona la proteína nueva al slot. Idempotente (post-fix el
+    label fuente ya no repite). Fail-safe. tooltip-anchor: P1-PROTEIN-REPEAT-AUTOFIX"""
+    if not (PROTEIN_REPEAT_AUTOFIX_ENABLED and VARIETY_GATE_SAME_DAY_PROTEIN) or not days:
+        return 0
+    try:
+        from constants import strip_accents as _sa_pr
+        _fd = form_data or {}
+        dislikes = {_sa_pr(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        allergies = _fd.get("allergies")
+
+        def _target_ok(label: str) -> bool:
+            probe = _PROTEIN_TARGET_FORMS[label]["default"]
+            probe_low = _sa_pr(probe.lower())
+            if any(dk and dk in probe_low for dk in dislikes):
+                return False
+            if any(dk and dk in _sa_pr(label) for dk in dislikes):
+                return False
+            if allergies:
+                try:
+                    if _scan_allergen_violations(
+                        {"days": [{"meals": [{"ingredients": [probe]}]}]}, allergies
+                    ):
+                        return False
+                except Exception:
+                    return False  # conservador: duda → no usar el candidato
+            return True
+
+        def _alias_hit(meal: dict, label: str):
+            """Alias del label presente en el meal (nombre o ingredientes) o None."""
+            name_low = _sa_pr(str(meal.get("name", "")).lower())
+            ings_low = _sa_pr(" ".join(str(i) for i in meal.get("ingredients") or []).lower())
+            blob = name_low + " " + ings_low
+            for _al in _MAIN_PROTEIN_ALIASES.get(label, ()):
+                if _name_has_token(_sa_pr(_al), blob):
+                    return _al, _name_has_token(_sa_pr(_al), name_low)
+            return None
+
+        def _rewrite_meal(meal: dict, src: str, tgt: str) -> None:
+            forms = _PROTEIN_TARGET_FORMS[tgt]
+            # aliases del label fuente, largo-primero ("pechuga de pollo" antes que "pollo").
+            for _al in sorted(_MAIN_PROTEIN_ALIASES.get(src, ()), key=len, reverse=True):
+                repl = (forms["molido"] if "molid" in _sa_pr(_al)
+                        else forms["bare"] if " " not in _al and _al == src
+                        else forms["default"])
+                # \b inicial obligatorio: sin ancla, 'pollo' matchearía dentro de 'repollo'
+                # (el detector usa _name_has_token con \b; la sustitución debe ser simétrica).
+                _pat = _re.compile(r"\b" + _accent_flex_pattern(_al) + r"\w*", _re.IGNORECASE)
+                name = str(meal.get("name") or "")
+                _repl_disp = (repl[:1].upper() + repl[1:]) if name[:1].isupper() else repl
+                meal["name"] = _pat.sub(_repl_disp, name)
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = meal.get(_key)
+                    if isinstance(_lst, list):
+                        meal[_key] = [
+                            _pat.sub(repl, s) if isinstance(s, str) else s for s in _lst
+                        ]
+            try:
+                _rewrite_recipe_steps_after_subs(
+                    meal, [(list(_MAIN_PROTEIN_ALIASES.get(src, ())), forms["default"])])
+            except Exception:
+                pass
+            try:
+                _db = db
+                if _db is None:
+                    from nutrition_db import IngredientNutritionDB as _PRDB
+                    _db = _PRDB()
+                _truth_up_meal_macros_from_strings(meal, _db)
+            except Exception:
+                pass
+            meal["_protein_autofix_applied"] = f"{src}->{tgt}"
+
+        fixed = 0
+        for _d in days if isinstance(days, list) else []:
+            meals = (_d.get("meals") or []) if isinstance(_d, dict) else []
+            # espejo del relax del gate: con 5+ comidas la repetición es advisory → no tocar.
+            if VARIETY_GATE_HIGH_MEALCOUNT_RELAX and len(meals) >= VARIETY_GATE_RELAX_MIN_MEALS:
+                continue
+            day_hits: dict = {}
+            day_labels: set = set()
+            for meal in meals:
+                if not isinstance(meal, dict):
+                    continue
+                for _lbl in _SAME_DAY_PROTEIN_GATE_LABELS:
+                    _hit = _alias_hit(meal, _lbl)
+                    if _hit is not None:
+                        day_labels.add(_lbl)
+                        day_hits.setdefault(_lbl, []).append((meal, _hit[1]))
+            fixes_left = PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY
+            for _lbl, hits in day_hits.items():
+                if len(hits) < 2 or _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
+                    continue  # huevo/atún: gate como backstop (v1)
+                # conservar la PRIMERA comida con la proteína en el nombre (identidad); si ninguna
+                # la lleva en el nombre, conservar la primera aparición.
+                _keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)
+                for i, (_meal, _) in enumerate(hits):
+                    if i == _keep_idx or fixes_left <= 0:
+                        continue
+                    tgt = next((t for t in _PROTEIN_REPEAT_SWAP_LADDER[_lbl]
+                                if t not in day_labels and _target_ok(t)), None)
+                    if tgt is None:
+                        break  # sin destino seguro → deja el gate decidir
+                    _rewrite_meal(_meal, _lbl, tgt)
+                    day_labels.add(tgt)
+                    fixes_left -= 1
+                    fixed += 1
+        return fixed
+    except Exception as _pr_e:
+        logger.warning(f"[P1-PROTEIN-REPEAT-AUTOFIX] no-op: {type(_pr_e).__name__}: {_pr_e}")
+        return 0
+
+
 def _breakfast_rice_autofix(days: list, db=None) -> int:
     """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
     DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
@@ -20264,6 +20415,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _na_fixed:
                 logger.info(f"🧂 [P1-SODIUM-DAY-AUTOFIX] {_na_fixed} acción(es) de sodio per-día "
                             f"aplicada(s) pre-reviewer.")
+            # [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] causa #1 restante de retries medida en vivo
+            # (4 firings en 2 renovaciones): la MISMA proteína principal en 2+ comidas del mismo día.
+            # Los días se generan en paralelo y a ciegas entre sí → el LLM reincide; corrector
+            # determinista pre-motor (el solver dimensiona la proteína nueva al slot).
+            _pr_fixed = _protein_repeat_autofix(days, form_data)
+            if _pr_fixed:
+                logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] {_pr_fixed} comida(s) con proteína repetida "
+                            f"same-day reescrita(s) a proteína alternativa pre-reviewer.")
         except Exception as _nra_c:
             logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
 

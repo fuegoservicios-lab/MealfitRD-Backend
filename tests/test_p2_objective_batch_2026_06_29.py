@@ -75,7 +75,11 @@ def test_p2_5_assemble_callsite_constructs_its_own_db():
     block = src[i - 600:i]
     assert "_QGDB()" in block or "IngredientNutritionDB()" in block, \
         "el callsite de assemble debe construir su propio db (assemble no expone db en ese scope)"
-    assert "_ensure_ingredient_quantities(_m, db)" not in src, "no usar un `db` indefinido en assemble (NameError)"
+    # Acotado a la VENTANA de assemble (no file-wide): desde P2-QTY-PRESENCE-PERSIST · 2026-07-01
+    # existe un segundo callsite legítimo `(_m, db)` en `finalize_plan_data_coherence`, donde `db`
+    # es parámetro con guard `if db is None: db = _QGDB2()` — el assert global daba falso positivo.
+    assert "_ensure_ingredient_quantities(_m, db)" not in block, \
+        "no usar un `db` indefinido en assemble (NameError)"
 
 
 # ───────────────────────── P2-6: coherencia inversa ─────────────────────────

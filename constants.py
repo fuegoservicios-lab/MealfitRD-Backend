@@ -1710,11 +1710,15 @@ SLOT_INAPPROPRIATE_FOODS = {
         # [P2-SLOT-CENA-AVENA · 2026-07-02] (audit v3 slots GAP-D) + "avena": el almuerzo ya la tenía
         # (P3-SLOT-ALMUERZO-AVENA) pero la cena no — "Avena con frutas" de cena pasaba mientras la misma
         # de almuerzo flageaba (asimetría). Mismos excludes (harina/leche/costra de avena legítimos).
+        # [P2-SLOT-CROQUETA-BINDER · 2026-07-04] + croqueta/albóndiga a los excludes: avena como
+        # AGLUTINANTE de un plato fuerte de proteína es legítima (falso positivo vivo 2026-07-04:
+        # "Croquetas de Pavo Molido con Avena" rechazada en almuerzo — costó presión de retry).
+        # Mismo racional que empanizado/costra. tooltip-anchor: P2-SLOT-CROQUETA-BINDER
         {"label": "comida de desayuno en la cena (cereal/panqueque/waffle/avena)", "tokens": (
             "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa", "avena"),
          "hardness": "soft",
          "exclude": ("harina de avena", "leche de avena", "costra de avena", "empanizado de avena",
-                     "empanizada de avena", "apanado de avena")},
+                     "empanizada de avena", "apanado de avena", "croqueta", "albondiga", "albóndiga")},
         # [P2-SLOT-CENA-FRITURA · 2026-07-02] (audit v3 slots GAP-C) "frituras pesadas de noche" era
         # prompt-only (day_generator §15d) — 'frito'/'frita' sueltos se omiten A PROPÓSITO (falso positivo
         # en tostones/queso frito como acompañante). Tokens COMPUESTOS de fritura-de-proteína-como-plato
@@ -1748,11 +1752,12 @@ SLOT_INAPPROPRIATE_FOODS = {
         # el propósito declarado del set era cazar "comida de desayuno como plato principal" pero omitía la
         # más icónica RD. Excludes protegen usos legítimos de avena-como-INGREDIENTE en un plato fuerte
         # (costra/empanizado) y las formas harina/leche (F2 creatividad).
+        # [P2-SLOT-CROQUETA-BINDER · 2026-07-04] mismo exclude que la cena (avena-aglutinante).
         {"label": "comida de desayuno como plato principal del almuerzo (cereal/panqueque/waffle/avena)", "tokens": (
             "cereal", "hojuelas", "granola", "panqueque", "pancake", "waffle", "avena"),
          "hardness": "soft",
          "exclude": ("harina de avena", "leche de avena", "costra de avena", "empanizado de avena",
-                     "empanizada de avena", "apanado de avena")},
+                     "empanizada de avena", "apanado de avena", "croqueta", "albondiga", "albóndiga")},
         {"label": "postre standalone como plato principal del almuerzo (helado/flan)", "tokens": (
             "helado", "flan"), "hardness": "soft"},
     ],
