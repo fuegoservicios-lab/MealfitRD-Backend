@@ -54,8 +54,10 @@ def test_p2_3_carb_to_protein_swap_default_on():
 def test_p2_1_knobs_and_wiring():
     assert '_env_bool("MEALFIT_MICRO_POSTENGINE_RECOMPUTE", True)' in _GO
     # el recompute post-motor corre en assemble DESPUÉS del qty-sync final (ventana acotada).
+    # [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] ventana 4500→6000: el re-trim de grasas se insertó
+    # en el bloque P2-2 (que vive entre el qty-sync y el recompute P2-1). El orden anclado no cambió.
     _sync = _GO.index("mención(es) de cantidad en pasos re-sincronizadas post-quantize")
-    _win = _GO[_sync:_sync + 4500]
+    _win = _GO[_sync:_sync + 6000]
     assert "recompute_micronutrient_report_for_plan(result, form_data)" in _win, \
         "falta el recompute del panel post-motor en assemble (P2-1)"
     # y también en la convergencia de presupuesto (las sustituciones cambian micros).
@@ -66,7 +68,10 @@ def test_p2_1_knobs_and_wiring():
 def test_p2_2_postengine_recheck_block():
     assert '_env_bool("MEALFIT_MICRO_POSTENGINE_RECHECK", True)' in _GO
     _blk_start = _GO.index("(P2-2) Micro-recheck post-motor")
-    _blk = _GO[_blk_start:_blk_start + 2200]
+    # [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] ventana 2200→3600: el re-trim de GRASAS (espejo del
+    # de carbos) se insertó dentro del bloque, entre el carb-trim y el quantize. El contrato anclado
+    # (closer re-fire + re-trim + re-quantize + qty-sync) no cambió.
+    _blk = _GO[_blk_start:_blk_start + 3600]
     assert "_close_micro_gaps_for_plan(result, form_data, _pe_db)" in _blk
     assert "_trim_day_carbs_to_target" in _blk, "el re-trim preserva el cierre (patrón BAND-RECHECK)"
     assert "_apply_portion_quantization" in _blk

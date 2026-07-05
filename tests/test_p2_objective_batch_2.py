@@ -47,8 +47,12 @@ def test_knob_defaults():
 
 def test_band_recheck_decoupled_from_carb_trim():
     """[P2-MICROCLOSER-REQUANTIZE] el re-check post-closer tiene knob PROPIO (antes gateado por
-    CARB_TARGET_TRIM_ENABLED=False → muerto con defaults)."""
-    i = _GRAPH.find("P2-MICROCLOSER-BAND-RECHECK")
+    CARB_TARGET_TRIM_ENABLED=False → muerto con defaults).
+    [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] re-anclado a la forma FECHADA del marker (única del
+    callsite): el comment del knob P2-AUDIT-V7 (2026-07-04, "mismo patrón P2-MICROCLOSER-BAND-
+    RECHECK") secuestraba la primera ocurrencia del marker sin fecha → rojo preexistente en HEAD."""
+    i = _GRAPH.find("[P2-MICROCLOSER-BAND-RECHECK · 2026-06-29]")
+    assert i != -1, "marker fechado del callsite no encontrado"
     seg = _GRAPH[i:i + 1200]
     assert "if MICROCLOSER_BAND_RECHECK_ENABLED:" in seg, \
         "el re-check sigue acoplado a CARB_TARGET_TRIM_ENABLED"

@@ -38,6 +38,7 @@ REGLAS ESTRICTAS:
    - "Mise en place: [corte, lavado y MEDIDA de cada ingrediente]"
    - "El Toque de Fuego: [cocción con AL MENOS un TIEMPO concreto en minutos Y/O una temperatura o nivel de fuego — ej. 'fuego medio 8-10 min', 'horno 180°C 20 min'; nombra el ingrediente principal en su paso]"
    - "Montaje: [presentación]"
+   - EXCEPCIÓN SIN COCCIÓN [P1-RECIPE-CONTRACT-NOCOOK · 2026-07-05]: si el plato NO lleva cocción alguna (fruta fresca con yogurt/cottage, ensalada fría con todo listo, overnight oats, parfait), OMITE "El Toque de Fuego" y emite solo "Mise en place" y "Montaje" — JAMÁS inventes un tiempo de fuego falso para un plato frío. Si CUALQUIER ingrediente requiere fuego (tostar, hervir un huevo, dorar), el plato SÍ lleva los 3 prefijos completos.
 4. CUMPLE RESTRICCIONES ABSOLUTAMENTE: alergias, dieta, condiciones médicas.
 5. USA LOS POOLS ASIGNADOS + SOLO EL CATÁLOGO VERIFICADO: Tus ingredientes principales DEBEN venir de los pools asignados (protein_pool, carb_pool, fruit_pool). Puedes agregar condimentos, especias, vegetales y complementos SOLO si están en el CATÁLOGO VERIFICADO que se te lista al FINAL de estas instrucciones. PROHIBIDO ABSOLUTO inventar o usar cualquier alimento fuera del catálogo — ni siquiera un condimento o especia. Si una receta tradicional pide algo que no está en el catálogo (ej. achiote, sazón en polvo, clavo dulce, pimienta de olor, SALSA DE SOYA, salsa inglesa/Worcestershire, salsa de pescado, teriyaki, BBQ, mostaza, miel si no está listada), OMÍTELO y usa solo los sazonadores verificados. SAZONA CON SABOR [P1-SPICES-CATALOG-SYNC · 2026-07-01]: comino, cúrcuma, laurel, tomillo, curry y cebolla en polvo SÍ son verificados (además de sal, ajo, cebolla, orégano, cilantro, perejil) — úsalos activamente para dar sabor criollo real a guisos, locrios y habichuelas cuando aparezcan en el catálogo listado. CRÍTICO [P1-RECIPE-OFFCATALOG-CONDIMENT · 2026-06-30]: si MENCIONAS en los PASOS un condimento fuera del catálogo, el sistema lo BORRA de la lista de compras pero NO de tu texto → el usuario lee "añade salsa de soya" pero nunca la compró (receta ROTA). Por eso: NUNCA nombres en los pasos un alimento que no esté en `ingredients` y en el catálogo.
 6. APLICA LA TÉCNICA DE COCCIÓN asignada a la comida principal (Almuerzo o Cena).
@@ -239,6 +240,28 @@ DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
     # = 2,358 mg de sodio — una sola línea revienta el techo del día completo.
     "    - Si listas sal en `ingredients`, escribe SIEMPRE 'Sal al gusto' — JAMÁS cantidades\n"
     "      ('1 cdta de sal' = 2,358 mg de sodio: más que el techo del día entero en una línea).\n"
+)
+
+# [P1-DAYGEN-FATS-BUDGET · 2026-07-05] (espejo del §17 de sodio) Presupuesto CUANTITATIVO de
+# GRASAS per-día. Medido en vivo (corridas 2026-07-04/05): días con grasas 141-166% del target
+# saturan el clamp del solver [0.3, 3.5] y el del reconcile [0.4, 1.8] — con el clamp saturado,
+# NINGÚN corrector determinista aguas abajo alcanza la banda [0.90, 1.12] → banner
+# low_band_macro:fats en el plan entregado. El target numérico del día viaja en el tramo
+# dinámico (nutrition_context); esta sección enseña las REGLAS DE CONTEO que el LLM no conocía.
+# String ESTÁTICO a import-time → prompt-cache del SystemMessage intacto (P1-PROMPT-CACHE).
+DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
+    "\n18. PRESUPUESTO DE GRASAS (el motor MIDE la banda ±10% POR DÍA; un exceso profundo NO es corregible):\n"
+    "    - Tu target de grasas del día viene en los macros objetivo del contexto. Respétalo POR DÍA —\n"
+    "      un día grasoso NO se compensa con otro día magro (el usuario come días, no promedios).\n"
+    "    - Máximo DOS fuentes grasas DENSAS en TODO el día entre: aguacate, aceite (si pasa de 1 cda),\n"
+    "      mantequilla de maní, frutos secos/semillas (>15g), queso de freír/amarillo, coco/leche de coco.\n"
+    "      La tercera fuente densa casi garantiza reventar la banda del día.\n"
+    "    - Aceite de cocinar: máximo 1 cda (15 ml) por plato — y CUENTA como grasa del día, no es 'gratis'.\n"
+    "    - Cuenta las grasas OCULTAS de la proteína: salmón, res molida 80/20, muslo/pollo con piel,\n"
+    "      huevo (~5g c/u), leche entera. Si el plato lleva proteína grasa, NO le añadas además\n"
+    "      aguacate NI frutos secos NI queso — elige UNA grasa protagonista por plato.\n"
+    "    - Si el día va cargado de grasa, prefiere métodos magros: plancha/horno/vapor sin aceite extra\n"
+    "      y proteínas magras (pechuga, pescado blanco, claras, yogurt descremado).\n"
 )
 
 

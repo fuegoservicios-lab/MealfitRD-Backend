@@ -10151,6 +10151,14 @@ _MICRO_SOFT_REJECT_KEYS = frozenset({"fiber_g", "potassium_mg", "magnesium_mg", 
 # micro, escala un ingrediente YA presente (no toca alérgenos/lista), skip renal, y el MACRO_REBALANCE (ON) re-
 # apunta los macros después. Rollback sin redeploy: MEALFIT_MICRONUTRIENT_CLOSER=false.
 MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", True)
+# [P1-CLOSER-BARIATRIC-GUARD · 2026-07-05] Post-cirugía bariátrica → SKIP TOTAL del closer/seeder
+# de micros. Razones: (1) el pouch limita el VOLUMEN — escalar 1.6× una línea o sembrar frutos
+# secos/semillas choca con los caps de porción bariátricos (BARIATRIC_NUT_CAP_G=20g, textura por
+# fase post-op) que la capa clínica aplica ANTES; el re-fire P2-2 corre DESPUÉS de esa capa → lo
+# que el closer añada quedaría SIN re-validación bariátrica. (2) La adecuación de micros post-op
+# es del protocolo de SUPLEMENTACIÓN de por vida (ASMBS; el panel/tarjetas lo muestran), no de
+# "comer más volumen" — mismo racional del skip pantry_strict. Rollback sin redeploy: =false.
+MICRO_CLOSER_BARIATRIC_SKIP = _env_bool("MEALFIT_MICRO_CLOSER_BARIATRIC_SKIP", True)
 # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] (re-audit objetivo · P1) El closer cubría solo 3 de los 18 micros del
 # panel (fibra/Mg/Ca). HIERRO (piso 18mg en mujeres menstruantes / 27mg en embarazo) y FOLATO (600mcg embarazo)
 # son los déficits poblacionales de MAYOR consecuencia y vivían SOLO con un nudge al prompt — la misma debilidad
@@ -10225,10 +10233,27 @@ MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRO
 # El factor por-pasada (MAX_SCALE ~1.6) COMPONE entre pasadas: pre-motor + recheck P2-2 +
 # assemble post-surgical + días RECICLADOS entre attempts re-pasan por todo → 1.6^N explota.
 # Caso vivo (plan fdfeba33, Día 2): "47.5 tallos de apio" ≈ 1.9 kg, 1,520 mg de sodio → banner
-# micro_worst_day_ceiling con promedio "bajo control", y una receta absurda de paso. El clamp
+# de techos worst-day con promedio "bajo control", y una receta absurda de paso. (Sin nombrar el
+# reason literal acá: el anchor del test v5 GAP-M1 exige que su PRIMERA ocurrencia viva en
+# _maybe_mark_panel_degraded.) El clamp
 # corta el crecimiento VITALICIO sin tocar la lógica por-pasada: la línea jamás supera su techo
 # físico (semillas/frutos secos 40 g; resto MICRO_CLOSER_LINE_MAX_G).
 MICRO_CLOSER_LINE_MAX_G = _env_int("MEALFIT_MICRO_CLOSER_LINE_MAX_G", 250, lambda v: 100 <= v <= 600)
+# [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] Tokens de semillas/frutos secos — SSOT compartido entre
+# el clamp de línea del closer (techo 40 g) y la PROTECCIÓN del re-trim de grasas post-motor
+# (`_trim_day_fats_to_target` jamás encoge al portador del cierre de vit E/omega-3).
+_SEED_NUT_TOKENS = ("linaza", "chia", "chía", "girasol", "nuez", "nueces", "almendra",
+                    "maní", "mani", "pistacho", "semilla", "ajonjolí", "ajonjoli")
+# [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] Espejo de GRASAS del re-trim de carbos del micro-recheck
+# P2-2. El material que el closer siembra/escala es GRASA-denso (girasol 51% grasa, linaza 42%,
+# maní 49%) y el re-fire P2-2 corre DESPUÉS del último rebalance del motor → la grasa (y sus kcal)
+# quedaba SIN compensar (medido en vivo corrida 7f99b955: aprobado en intento 1 pero per_macro
+# fats 0.333 + kcal 0.333 → banner low_band_macro:fats en un plan por lo demás limpio). El pase
+# recorta grasa de OTRAS fuentes grasa-dominantes (aceite/mantequilla/aguacate/queso) SIN tocar
+# líneas con _SEED_NUT_TOKENS — mismo patrón "re-trim de otras fuentes preservando el cierre" que
+# el carb-trim del propio bloque P2-2. Rollback sin redeploy: MEALFIT_FATS_POSTCLOSER_RELEVEL=false.
+FATS_POSTCLOSER_RELEVEL_ENABLED = _env_bool("MEALFIT_FATS_POSTCLOSER_RELEVEL", True)
+FATS_POSTCLOSER_RELEVEL_TOL = max(0.02, min(0.2, _env_float("MEALFIT_FATS_POSTCLOSER_RELEVEL_TOL", 0.08)))
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
 MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK", True)
@@ -11583,10 +11608,18 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
     try:
         from micronutrients import build_micronutrient_report
         from nutrition_db import rescale_ingredient_string as _resc
+        _fd = form_data or {}
+        # [P1-CLOSER-BARIATRIC-GUARD · 2026-07-05] bariátrico → skip TOTAL (seed + escala), ANTES
+        # de instanciar el catálogo. El closer añade volumen/gramos que los caps bariátricos de la
+        # capa clínica ya no re-validan (el re-fire P2-2 corre después de ella); los micros post-op
+        # van por protocolo de suplementación, no por "comer más". Ver knob para el detalle.
+        if MICRO_CLOSER_BARIATRIC_SKIP and _is_bariatric_condition(_fd):
+            logger.info("🧪 [P1-CLOSER-BARIATRIC-GUARD] perfil bariátrico → micro-closer/seeder "
+                        "omitido (volumen/textura post-op; micros por protocolo de suplementación)")
+            return 0
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
-        _fd = form_data or {}
         _sex = _fd.get("gender") or "female"
         try:
             from nutrition_calculator import _is_pregnancy_or_lactation as _ipl
@@ -11968,16 +12001,16 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                     # [P1-CLOSER-LINE-CLAMP · 2026-07-05] techo ABSOLUTO de la línea (el factor
                     # por-pasada compone entre pasadas → "47.5 tallos de apio" en vivo). Si la
                     # línea ya está en su techo físico, se salta; si el factor la excedería, se
-                    # recorta al techo. Semillas/frutos secos: 40 g (densos en kcal/grasa).
+                    # recorta al techo. Semillas/frutos secos (linaza/girasol/almendras/maní...):
+                    # 40.0 g — densos en kcal/grasa. Tokens SSOT `_SEED_NUT_TOKENS`, compartidos
+                    # con la protección del re-trim de grasas (P1-FATS-POSTCLOSER-RELEVEL).
                     try:
                         _g_now = float(db.grams_from_ingredient_string(ing_str) or 0.0)
                     except Exception:
                         _g_now = 0.0
                     if _g_now > 0:
                         _line_low = str(ing_str).lower()
-                        _line_cap = 40.0 if any(t in _line_low for t in (
-                            "linaza", "chia", "chía", "girasol", "nuez", "nueces", "almendra",
-                            "maní", "mani", "pistacho", "semilla", "ajonjolí", "ajonjoli")) \
+                        _line_cap = 40.0 if any(t in _line_low for t in _SEED_NUT_TOKENS) \
                             else float(MICRO_CLOSER_LINE_MAX_G)
                         if _g_now >= _line_cap:
                             continue  # línea en su techo vitalicio → probar el siguiente
@@ -13754,6 +13787,84 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
         return False
 
 
+def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float = 0.08,
+                             protected_tokens: tuple = None) -> bool:
+    """[P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] Espejo de GRASAS de `_trim_day_carbs_to_target`,
+    diseñado para el seam post-micro-recheck P2-2 (la ÚLTIMA pasada macro-mutante del motor). El
+    closer/seeder añade material GRASA-denso (semillas/frutos secos) DESPUÉS del último rebalance
+    y solo se re-trimaban carbos → la grasa y sus kcal quedaban sin compensar (banner
+    low_band_macro:fats — corrida 7f99b955). Si el día entrega grasas > target*(1+tol), reduce las
+    porciones de ingredientes GRASA-dominantes hacia el target y re-cuantiza cada uno — EXCEPTO las
+    líneas con `protected_tokens` (default `_SEED_NUT_TOKENS`): son los portadores del cierre de
+    micros (vit E/omega-3) y encogerlos re-abriría el piso que el closer acaba de cerrar; la grasa
+    se recorta de las OTRAS fuentes (aceite, mantequilla, aguacate, queso...). La grasa atrapada en
+    proteína-dominantes (salmón, res, huevo) queda intacta (mismo contrato del carb-trim: no tocar
+    la proteína). Recompute HONESTO de macros por delta del string cuantizado + raw en lockstep.
+    Mutates meals. Retorna True si trimó. Fail-safe. tooltip-anchor: P1-FATS-POSTCLOSER-RELEVEL"""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        try:
+            from constants import strip_accents as _sa_ft
+        except Exception:
+            def _sa_ft(s):
+                return s
+        if protected_tokens is None:
+            protected_tokens = _SEED_NUT_TOKENS
+        _prot_ascii = tuple(_sa_ft(str(t).lower()) for t in (protected_tokens or ()) if t)
+        cur = sum(_meal_macro_num(m.get("fats")) for m in meals)
+        if target_fats <= 0 or cur <= target_fats * (1.0 + tol):
+            return False
+        # Masa de grasa MOVIBLE: solo grasa-dominantes NO protegidos. La grasa de semillas/frutos
+        # secos (cierre de micros) y la embebida en proteína-dominantes es irreducible aquí.
+        items, movable = [], 0.0
+        for m in meals:
+            ings = m.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            for idx, ing in enumerate(ings):
+                if _ingredient_macro_group(str(ing), db) != "fats":
+                    continue
+                _il_ft = _sa_ft(str(ing).lower())
+                if any(t in _il_ft for t in _prot_ascii):
+                    continue  # portador del cierre de micros → jamás encogerlo
+                _mc = db.macros_from_ingredient_string(str(ing)) or {}
+                _fv = _mc.get("fats") or 0.0
+                if _fv > 0:
+                    movable += _fv
+                    items.append((m, idx))
+        if movable <= 0:
+            return False
+        excess = cur - target_fats
+        factor = max(0.3, min(1.0, (movable - excess) / movable))
+        if factor >= 0.999:
+            return False
+        applied = False
+        for m, idx in items:
+            ings = m.get("ingredients")
+            orig = str(ings[idx])
+            quant, _f = _quant(_resc(orig, factor))   # escala hacia target + re-snap a cocinable
+            if quant == orig:
+                continue
+            _mo = db.macros_from_ingredient_string(orig) or {}
+            _mn = db.macros_from_ingredient_string(quant) or {}
+            _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+            _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+            _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+            m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+            m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+            m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+            ings[idx] = quant
+            raw = m.get("ingredients_raw")
+            if isinstance(raw, list) and len(raw) == len(ings):
+                # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
+                raw[idx] = _resc(str(raw[idx]), factor * _f)
+            applied = True
+        return applied
+    except Exception as e:
+        logger.warning(f"[P1-FATS-POSTCLOSER-RELEVEL] trim de grasas falló: {type(e).__name__}: {e}")
+        return False
+
+
 def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
                             tol: float = 0.10, max_scale: float = 2.5) -> bool:
     """[P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer ADITIVO de carbos —
@@ -14689,6 +14800,16 @@ RECIPE_TIMETEMP_BACKSTOP_ENABLED = _env_bool("MEALFIT_RECIPE_TIMETEMP_BACKSTOP",
 # determinista mantiene el ratio ~0; el gate queda como red de seguridad sin costo.
 RECIPE_CONTRACT_GATE_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_GATE", True)
 RECIPE_CONTRACT_GATE_RATIO = _env_float("MEALFIT_RECIPE_CONTRACT_GATE_RATIO", 0.5)
+# [P1-RECIPE-CONTRACT-NOCOOK · 2026-07-05] El lint exigía "El Toque de Fuego" + tiempo/temperatura
+# a TODOS los platos, pero un plato honesto SIN cocción (fruta fresca + yogurt/cottage, batidos,
+# ensaladas frías, overnight oats) no puede cumplirlo — y el backstop timetemp solo AUMENTA un paso
+# de fuego existente, no lo crea → chip amarillo "Receta con pasos incompletos" en platos perfectos
+# (caso vivo: merienda "Mango Fresco con Maní Tostado y Queso Cottage"). Con el knob ON, un plato
+# sin NINGUNA señal de cocción (verbos/técnicas en pasos no-nota + nombre) acepta el contrato de
+# 2 pilares (Mise en place → Montaje) sin exigir fuego ni tiempo. El §3 del prompt enseña la
+# variante al LLM. Conservador: CUALQUIER señal de fuego → contrato completo de 3 pilares (el
+# comportamiento previo). Rollback sin redeploy: MEALFIT_RECIPE_CONTRACT_NOCOOK=false.
+RECIPE_CONTRACT_NOCOOK_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_NOCOOK", True)
 
 # [P2-RAW-STAPLE-PRESSURE · 2026-07-02] (audit v4 creatividad) `raw_staple_ratio` ("pollo hervido +
 # arroz blanco" sin transformar — plato correcto pero CERO creatividad) era advisory puro: no alimentaba
@@ -14849,12 +14970,55 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
         return False
 
 
+# [P1-RECIPE-CONTRACT-NOCOOK · 2026-07-05] Señales de COCCIÓN (sobre pasos no-nota + nombre,
+# accent-stripped). CUALQUIER hit clasifica el plato como COCINADO → contrato completo de 3
+# pilares (sesgo conservador: la exención de fuego solo aplica a platos genuinamente fríos).
+# `guis(?!ante)` — "guisantes" (arvejas) no es un guiso. tooltip-anchor: P1-RECIPE-CONTRACT-NOCOOK
+_NOCOOK_COOK_SIGNAL_RE = _re.compile(
+    r"\b(?:cocin\w*|coccion|cuece\w*|cocer|hierv\w*|herv\w*|hornea\w*|hornear|horno|"
+    r"sofri\w*|sofre\w*|sofrit\w*|salte\w*|plancha|sarten|caldero|frie\w*|freir|frit\w*|"
+    r"dora\w*|dorar|tuesta\w*|tostar|asa|asar|asad\w*|sancoch\w*|guis(?!ante)\w*|vapor|"
+    r"microondas|calienta\w*|calentar|fuego|grill\w*|parrilla|brasa\w*|hervor|rehoga\w*|"
+    r"sella\w*|revoltillo|revuelto|omelet\w*)\b")
+
+
+def _meal_is_no_cook(meal: dict) -> bool:
+    """[P1-RECIPE-CONTRACT-NOCOOK · 2026-07-05] True si el plato NO involucra cocción: cero señales
+    de fuego en el NOMBRE y en los pasos NO-nota (⚠/💡/💪/🌱 son inyecciones de guards deterministas
+    — no describen la técnica del plato). Sesgo conservador: cualquier señal (o error) → cocinado
+    (contrato de 3 pilares, comportamiento previo). tooltip-anchor: P1-RECIPE-CONTRACT-NOCOOK"""
+    try:
+        try:
+            from constants import strip_accents as _sa_nc
+        except Exception:
+            def _sa_nc(s):
+                return s
+        rec = meal.get("recipe")
+        parts = [str(meal.get("name") or "")]
+        if isinstance(rec, list):
+            for s in rec:
+                if not isinstance(s, str):
+                    continue
+                if _is_recipe_safety_note_step(s) or "💪" in s or "🌱" in s:
+                    continue
+                parts.append(s)
+        blob = _sa_nc(" ".join(parts).lower())
+        return not _NOCOOK_COOK_SIGNAL_RE.search(blob)
+    except Exception:
+        return False
+
+
 def _recipe_step_contract_issues(meal: dict) -> list:
     """[P2-RECIPE-STEP-CONTRACT-GATE · 2026-07-01] (audit recetas P2-2) Lint DETERMINISTA barato del contrato
     de pasos que antes solo vivía en prompts (day_generator §3): los 3 prefijos (Mise en place → El Toque de
     Fuego → Montaje) EN ORDEN + al menos un tiempo/temperatura en el Toque de Fuego. Telemetría (NUNCA gate,
     espejo de dish-quality): alimenta `dish_quality_report.contract_*` para medir cuánto obedece el LLM antes
-    de promover a gate. Las notas ⚠/💡 no cuentan como pasos. Fail-safe → []. tooltip-anchor: P2-RECIPE-STEP-CONTRACT-GATE"""
+    de promover a gate. Las notas ⚠/💡 no cuentan como pasos. Fail-safe → []. tooltip-anchor: P2-RECIPE-STEP-CONTRACT-GATE
+    [P1-RECIPE-CONTRACT-NOCOOK · 2026-07-05] Platos SIN cocción (cero señales de fuego, ver
+    `_meal_is_no_cook`) que no emitieron paso de fuego → contrato de 2 pilares (Mise en place →
+    Montaje): exigirles "El Toque de Fuego" con tiempo era un falso positivo estructural (chip
+    amarillo en una merienda de fruta fresca perfecta — el backstop timetemp no puede crear el
+    paso, solo aumentarlo)."""
     try:
         rec = meal.get("recipe")
         if not isinstance(rec, list) or not rec:
@@ -14869,14 +15033,20 @@ def _recipe_step_contract_issues(meal: dict) -> list:
             return -1
 
         i_m, i_f, i_mo = _idx("mise en place"), _idx("el toque de fuego"), _idx("montaje")
+        # [P1-RECIPE-CONTRACT-NOCOOK · 2026-07-05] sin paso de fuego emitido Y sin señal de cocción
+        # → contrato de 2 pilares (no se exige fuego ni tiempo: inventarlos sería mentir). Si el LLM
+        # SÍ emitió "El Toque de Fuego", aplican los checks completos de siempre.
+        _no_cook = (RECIPE_CONTRACT_NOCOOK_ENABLED and i_f == -1 and _meal_is_no_cook(meal))
         out = []
         if i_m == -1:
             out.append("falta 'Mise en place'")
-        if i_f == -1:
+        if i_f == -1 and not _no_cook:
             out.append("falta 'El Toque de Fuego'")
         if i_mo == -1:
             out.append("falta 'Montaje'")
         if i_m != -1 and i_f != -1 and i_mo != -1 and not (i_m < i_f < i_mo):
+            out.append("prefijos fuera de orden")
+        elif _no_cook and i_m != -1 and i_mo != -1 and not (i_m < i_mo):
             out.append("prefijos fuera de orden")
         if i_f != -1 and not _CONTRACT_TIME_RE.search(steps[i_f]):
             out.append("Toque de Fuego sin tiempo/temperatura concreta")
@@ -21392,6 +21562,21 @@ async def assemble_plan_node(state: PlanState) -> dict:
                                 (_pe_d.get("meals") or []) if isinstance(_pe_d, dict) else [],
                                 _pe_tc, _pe_db, tol=CARB_TARGET_TRIM_TOL):
                             _pe_retrim += 1
+                # [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] espejo de GRASAS del re-trim: lo que el
+                # closer siembra/escala es grasa-denso y este seam es post-último-rebalance → sin
+                # este pase la grasa quedaba sin compensar (banner low_band_macro:fats). Recorta
+                # grasa de fuentes NO-portadoras (_SEED_NUT_TOKENS protegidos).
+                _pe_ftrim = 0
+                _pe_tf = float(_fg or 0)
+                if FATS_POSTCLOSER_RELEVEL_ENABLED and _pe_tf > 0:
+                    for _pe_d in days or []:
+                        if _trim_day_fats_to_target(
+                                (_pe_d.get("meals") or []) if isinstance(_pe_d, dict) else [],
+                                _pe_tf, _pe_db, tol=FATS_POSTCLOSER_RELEVEL_TOL):
+                            _pe_ftrim += 1
+                    if _pe_ftrim:
+                        logger.info(f"🥜 [P1-FATS-POSTCLOSER-RELEVEL] re-trim de grasas en {_pe_ftrim} "
+                                    f"día(s) post-closer (semillas/portadores protegidos).")
                 if PORTION_QUANTIZE_ENABLED:
                     _apply_portion_quantization({"days": days}, _pe_db)
                 for _pe_d in days or []:
