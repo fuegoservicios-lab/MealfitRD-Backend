@@ -469,6 +469,19 @@ def _prettify_quantity_display(s: str) -> str:
             if _cups:
                 _cup_word = "taza" if _cups in ("¼", "⅓", "½", "⅔", "¾", "1") else "tazas"
                 return f"{_cups} {_cup_word}{rest}"
+        # [P2-TSP-TO-TBSP · 2026-07-05] ≥3 cdta → cdas ("8¾ cdta de miel" → "3 cdas de miel";
+        # 3 cdta = 1 cda, volumen exacto). Snap a cuartos/tercios; sin snap limpio → intacto.
+        if word.lower() in ("cdta", "cdtas", "cucharadita", "cucharaditas") and qty >= 3:
+            _tbsp_val = qty / 3.0
+            _tbsp_best = min(_CUPS_SNAP, key=lambda c: abs(c - _tbsp_val))
+            if abs(_tbsp_best - _tbsp_val) <= 0.09:
+                _tw = int(_tbsp_best + 1e-9)
+                _tr = _tbsp_best - _tw
+                _tf = next((fc for fv, fc in _CUPS_FRAC.items() if abs(_tr - fv) < 0.02), "")
+                if _tr <= 0.02 or _tf:
+                    _tbsp_str = (str(_tw) if _tw else "") + _tf
+                    _tbsp_word = "cda" if _tbsp_best <= 1.0 else "cdas"
+                    return f"{_tbsp_str} {_tbsp_word}{rest}"
         if out_qty == qty_str and out_word == word:
             return s0
         return f"{out_qty} {out_word}{rest}"

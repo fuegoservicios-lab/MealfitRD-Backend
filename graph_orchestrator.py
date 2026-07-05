@@ -17863,6 +17863,12 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                                 pass
     except Exception as _e8:
         logger.warning(f"[P2-AUDIT-V6-BATCH] (P2-A) shrink-floor en persist boundary no-op: {type(_e8).__name__}: {_e8}")
+    # [P2-RAW-DISPLAY-RECONCILE · 2026-07-05] también en el persist boundary (updates/chunks 2+):
+    # display sin contraparte en raw → raw la adopta (compras/medidores ven la verdad).
+    try:
+        _reconcile_display_missing_in_raw(days)
+    except Exception as _rr_pb_e:
+        logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] boundary no-op: {type(_rr_pb_e).__name__}: {_rr_pb_e}")
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
     # chunks semana 2+ no pasan por review_plan_node → el contrato de pasos (prefijos/orden/tiempo/
     # inglés) no dejaba rastro fuera de form-gen semana 1. Advisory persistido (LECTURA, jamás gate).
@@ -19724,7 +19730,12 @@ _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0, "clara": 8.0,
                        # [P2-CEBOLLA-COUNT-CAP · 2026-07-05] "3 cebolla grande (450g)" para una
                        # tortilla de 1 persona (plan 3aa6e58a) — el cap de aromáticos solo cubría
                        # líneas en TAZAS; el conteo entero se escapaba.
-                       "cebolla": 2.0, "zanahoria": 3.0}
+                       "cebolla": 2.0, "zanahoria": 3.0,
+                       # [P2-BIGFRUIT-COUNT-CAP · 2026-07-05] "2 Lechosa" (~3kg) para un aderezo
+                       # de 1 persona (plan 55846e5e) — el cap de frutas-volumen cubre tazas/
+                       # gramos pero no CONTEOS de frutas grandes.
+                       "lechosa": 1.0, "papaya": 1.0, "melon": 1.0, "sandia": 1.0,
+                       "pina": 1.0, "mango": 2.0}
 # [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
 # captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
 # cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
@@ -20462,6 +20473,49 @@ def _dedup_unit_noun_collision(text: str) -> str:
         return _SUBST_UNIT_DEDUP_RE.sub(lambda m: f"{m.group(1)}{m.group(2) or ''} de ", str(text))
     except Exception:
         return text
+
+
+def _reconcile_display_missing_in_raw(days) -> int:
+    """[P2-RAW-DISPLAY-RECONCILE · 2026-07-05] (plan vivo 55846e5e: "8¾ cdta de miel" existía SOLO
+    en `ingredients` — sin contraparte en `ingredients_raw`). La lista de compras Y los medidores
+    (azúcares añadidos, micros, sodio) leen raw preferido → 62g de miel eran INVISIBLES (panel
+    0/25 con la miel en el plato). Causa-clase: pases históricos mutaban display y raw de forma
+    independiente (misalignment ya medido también en 3aa6e58a). Reconciliación CONSERVADORA:
+    línea de display cuyo token principal (≥4 chars) no aparece en NINGUNA línea del raw → se
+    APPENDEA al raw. Dirección segura: compras/medidores solo GANAN visibilidad; jamás se borra
+    ni se modifica una línea existente del raw. Idempotente. Devuelve nº de líneas añadidas.
+    tooltip-anchor: P2-RAW-DISPLAY-RECONCILE"""
+    try:
+        from constants import strip_accents as _sa_rr
+        added = 0
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                raw = meal.get("ingredients_raw")
+                if not isinstance(ings, list) or not isinstance(raw, list):
+                    continue
+                _raw_blob = _sa_rr(" ".join(str(r) for r in raw).lower())
+                for s in ings:
+                    if not isinstance(s, str) or not s.strip():
+                        continue
+                    _food = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?",
+                                    "", _sa_rr(s.lower())).strip()
+                    _toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _food) if len(t) >= 4]
+                    if not _toks:
+                        continue
+                    if _toks[0] not in _raw_blob:
+                        raw.append(s)
+                        _raw_blob += " " + _sa_rr(s.lower())
+                        added += 1
+        if added:
+            logger.info(f"🧾 [P2-RAW-DISPLAY-RECONCILE] {added} línea(s) de display sin contraparte "
+                        f"en raw → añadidas (compras/medidores recuperan visibilidad).")
+        return added
+    except Exception as _rr_e:
+        logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] no-op: {type(_rr_e).__name__}: {_rr_e}")
+        return 0
 
 
 def _consolidate_duplicate_gram_lines(days) -> int:
@@ -22144,6 +22198,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"había re-inflado sodio tras el pase pre-motor.")
         except Exception as _na_pm_e:
             logger.warning(f"[P1-SODIUM-POSTMOTOR] post-motor no-op: {type(_na_pm_e).__name__}: {_na_pm_e}")
+
+    # [P2-RAW-DISPLAY-RECONCILE · 2026-07-05] ANTES del recompute del panel y de la agregación de
+    # compras: toda línea de display sin contraparte en raw se añade al raw (la miel invisible
+    # del plan 55846e5e — el medidor de azúcares y la lista leen raw).
+    try:
+        _reconcile_display_missing_in_raw(days)
+    except Exception as _rr_as_e:
+        logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] assemble no-op: {type(_rr_as_e).__name__}: {_rr_as_e}")
 
     # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Panel de micros FRESCO al final del motor: recompute
     # vía helper SSOT (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE) para que el panel
