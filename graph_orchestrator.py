@@ -7235,6 +7235,14 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             if surgical_mode and day_num not in affected_days:
                 recycled_day = recycled_days_cache.get(day_num)
                 if recycled_day:
+                    # [P1-FIDELITY-MUTATION-AWARE · 2026-07-05] El día reciclado fue generado
+                    # contra el skeleton del attempt ANTERIOR (el planner re-planifica en cada
+                    # attempt) → validarlo contra el skeleton NUEVO es un error de categoría.
+                    # Caso vivo corr=38719947: Día 2 reciclado "omitió" arenque/almendras que
+                    # JAMÁS le fueron asignadas (eran del skeleton nuevo) → falso rechazo
+                    # post-surgical que quemó el retry completo. El marker exime al día del
+                    # skeleton-fidelity check (ya validó contra SU skeleton en su attempt).
+                    recycled_day["_recycled_from_prior_attempt"] = True
                     generated_days.append(recycled_day)
                     if temp_override is None or temp_override == 0.7:
                         logger.info(f"♻️ [SURGICAL FIX] Día {day_num} reciclado con éxito.")
@@ -15071,6 +15079,13 @@ def _run_assembly_validations(
         day_num = day.get("day", i + 1)
         if affected_days_set and day_num not in affected_days_set:
             continue
+        # [P1-FIDELITY-MUTATION-AWARE · 2026-07-05] Día RECICLADO de un attempt anterior
+        # (surgical fix del retry): su contrato de fidelidad es el skeleton de SU attempt,
+        # contra el que ya validó — compararlo con el skeleton re-planificado del attempt
+        # actual produce "omitió X" falsos (X nunca le fue asignado). Skip SOLO fidelity;
+        # las demás validaciones (coherence, schema) siguen aplicando abajo.
+        if day.get("_recycled_from_prior_attempt"):
+            continue
         skeleton_day = next((s for s in skeleton_days if s.get("day") == day_num), {})
         assigned_proteins = [_flatten_ingredient(p).lower() for p in skeleton_day.get("protein_pool", [])]
         if not assigned_proteins:
@@ -15086,6 +15101,40 @@ def _run_assembly_validations(
             p for p in assigned_proteins
             if not _skeleton_protein_present(p, day_ingredients_text)
         ]
+        # [P1-FIDELITY-MUTATION-AWARE · 2026-07-05] Descuento por mutaciones DETERMINISTAS
+        # legítimas del propio pipeline: si una proteína asignada falta porque un pase
+        # nuestro la REEMPLAZÓ (presupuesto: "salmón → pescado blanco"; autofix de
+        # proteína repetida: "pescado->pollo"; sodio: enlatado→fresco), la asignación SÍ
+        # fue honrada en generación — el gate debe cazar la desobediencia del day-gen,
+        # no las correcciones deliberadas del sistema. Se re-usa el MISMO matcher
+        # tolerante sobre el blob de "reemplazados".
+        if missing_proteins:
+            _replaced_blob = []
+            for meal in day.get("meals", []) or []:
+                if not isinstance(meal, dict):
+                    continue
+                for _bs in (meal.get("_budget_substitutions") or []):
+                    _replaced_blob.append(str(_bs).split("→")[0])
+                _pa = meal.get("_protein_autofix_applied")
+                if isinstance(_pa, str) and "->" in _pa:
+                    _src_lbl = _pa.split("->", 1)[0].strip()
+                    _replaced_blob.extend(_MAIN_PROTEIN_ALIASES.get(_src_lbl, (_src_lbl,)))
+                if meal.get("_sodium_autofix_applied") == "swap_canned":
+                    _replaced_blob.append("sardinas atún sardina atun enlatado")
+            _replaced_text = " ".join(s.lower() for s in _replaced_blob)
+            if _replaced_text:
+                _n_missing_raw = len(missing_proteins)
+                missing_proteins = [
+                    p for p in missing_proteins
+                    if not _skeleton_protein_present(p, _replaced_text)
+                ]
+                if len(missing_proteins) < _n_missing_raw:
+                    logger.info(
+                        f"🧾 [P1-FIDELITY-MUTATION-AWARE] Día {day_num}: "
+                        f"{_n_missing_raw - len(missing_proteins)} proteína(s) asignada(s) "
+                        f"descontada(s) de 'omitidas' — fueron reemplazadas por mutaciones "
+                        f"deterministas del pipeline (presupuesto/autofix), no ignoradas."
+                    )
         # [P3-SKELETON-FIDELITY-CRITIQUE-AWARE · 2026-05-16] Threshold dinámico
         # según si self_critique modificó el día. Pre-fix: threshold hardcoded
         # >=2 missing → rechazo crítico cuando self_critique legítimamente
