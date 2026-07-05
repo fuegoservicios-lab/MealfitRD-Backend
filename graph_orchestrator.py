@@ -14993,8 +14993,11 @@ RECIPE_CONTRACT_NOCOOK_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_NOCOOK", Tru
 # placeholder se ELIMINA (el contrato de 2 pilares P1-RECIPE-CONTRACT-NOCOOK ya permite su
 # ausencia). Plato con fuego real en otros pasos → placeholder intacto (lo caza el lint).
 RECIPE_NOCOOK_TDF_STRIP_ENABLED = _env_bool("MEALFIT_RECIPE_NOCOOK_TDF_STRIP", True)
+# [P2-NOCOOK-TDF-APLICA · 2026-07-05] +variante "No aplica (preparación en frío)" medida en el
+# plan 55846e5e ×2 — el backstop le inyectó "(~10-12 min a fuego medio)" porque el regex solo
+# cubría "no requiere/necesita/lleva cocción".
 _NOCOOK_TDF_PLACEHOLDER_RE = _re.compile(
-    r"no\s+(?:requiere|necesita|lleva|hay)\s+(?:coccion|cocinar|fuego)|sin\s+coccion")
+    r"no\s+aplica\b|no\s+(?:requiere|necesita|lleva|hay)\s+(?:coccion|cocinar|fuego)|sin\s+coccion")
 
 # [P2-RAW-STAPLE-PRESSURE · 2026-07-02] (audit v4 creatividad) `raw_staple_ratio` ("pollo hervido +
 # arroz blanco" sin transformar — plato correcto pero CERO creatividad) era advisory puro: no alimentaba
@@ -17869,6 +17872,11 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
         _reconcile_display_missing_in_raw(days)
     except Exception as _rr_pb_e:
         logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] boundary no-op: {type(_rr_pb_e).__name__}: {_rr_pb_e}")
+    # [P1-CURED-GHOST-STEPS · 2026-07-05] también en el boundary.
+    try:
+        _rewrite_cured_ghost_protein_steps(days)
+    except Exception as _cg_pb_e:
+        logger.warning(f"[P1-CURED-GHOST-STEPS] boundary no-op: {type(_cg_pb_e).__name__}: {_cg_pb_e}")
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
     # chunks semana 2+ no pasan por review_plan_node → el contrato de pasos (prefijos/orden/tiempo/
     # inglés) no dejaba rastro fuera de form-gen semana 1. Advisory persistido (LECTURA, jamás gate).
@@ -18878,10 +18886,16 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 except Exception:
                     pass
                 # [P1-SODIUM-BOMB-POOL] marker por familia (el fidelity-discount distingue ambos).
-                _bm["_sodium_autofix_applied"] = (
-                    "swap_saltcured"
-                    if any(t in _sa_na(str(_btok).lower()) for t in _SALTCURED_TOKEN_SET)
-                    else "swap_canned")
+                _is_saltcured_swap = any(t in _sa_na(str(_btok).lower()) for t in _SALTCURED_TOKEN_SET)
+                _bm["_sodium_autofix_applied"] = "swap_saltcured" if _is_saltcured_swap else "swap_canned"
+                # [P1-CURED-GHOST-STEPS · 2026-07-05] curado→fresco: las frases de desalado
+                # quedan absurdas sobre pescado fresco ("Desala el filete de pescado blanco
+                # remojándolo 2 horas", plan 55846e5e) → strip.
+                if _is_saltcured_swap:
+                    try:
+                        _strip_desalt_instructions(_bm)
+                    except Exception:
+                        pass
                 actions += 1
                 _swaps_left -= 1
         if actions:
@@ -20029,6 +20043,19 @@ _STEP_NUT_GHOSTS = (
     ("pistacho", "10g de pistachos", ()),
     ("mani", "10g de maní", ("mantequilla de mani",)),
 )
+# [P2-STEP-FRUIT-GHOST · 2026-07-05] (plan 55846e5e: "Lava las uvas… Distribuye las uvas" con
+# CERO uvas en ingredients[] — no se compran, receta rota). Misma clase que veg/carb/nut ghost,
+# ahora para FRUTAS frescas (dirección segura: materializar una porción modesta; el scan de
+# alérgenos del guard aplica igual). Rollback: MEALFIT_RECIPE_STEP_FRUIT_GUARD=false.
+RECIPE_STEP_FRUIT_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_FRUIT_GUARD", True)
+_STEP_FRUIT_GHOSTS = (
+    ("uvas", "¼ taza de uvas (43g)", ("uva pasa", "pasas")),
+    ("fresas", "50 g de fresas", ()),
+    ("kiwi", "1 kiwi", ()),
+    ("manzana", "½ manzana", ("vinagre de manzana", "manzanilla")),
+    ("guineo", "1 guineo", ("guineo verde",)),
+    ("mango", "½ mango", ("mangu",)),
+)
 
 
 def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
@@ -20058,7 +20085,10 @@ def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
                 ing_hay = _sa(" ".join(str(i) for i in ings).lower())
                 # [P1-STEP-NUT-GHOST · 2026-07-05] frutos secos fantasma comparten el mecanismo
                 # completo del carb-ghost (detección nombre+pasos, excludes, scan de alérgenos).
-                _ghosts = _STEP_CARB_GHOSTS + (_STEP_NUT_GHOSTS if RECIPE_STEP_NUT_GUARD_ENABLED else ())
+                # [P2-STEP-FRUIT-GHOST · 2026-07-05] + frutas frescas (uvas del plan 55846e5e).
+                _ghosts = (_STEP_CARB_GHOSTS
+                           + (_STEP_NUT_GHOSTS if RECIPE_STEP_NUT_GUARD_ENABLED else ())
+                           + (_STEP_FRUIT_GHOSTS if RECIPE_STEP_FRUIT_GUARD_ENABLED else ()))
                 for token, line, excludes in _ghosts:
                     if not _re.search(r"\b" + token, hay):
                         continue
@@ -20473,6 +20503,111 @@ def _dedup_unit_noun_collision(text: str) -> str:
         return _SUBST_UNIT_DEDUP_RE.sub(lambda m: f"{m.group(1)}{m.group(2) or ''} de ", str(text))
     except Exception:
         return text
+
+
+# [P1-CURED-GHOST-STEPS · 2026-07-05] frases de DESALADO (aplican a curados; absurdas sobre
+# fresco: "Desala el filete de pescado blanco remojándolo 2 horas" — plan 55846e5e).
+_DESALT_PHRASE_RE = _re.compile(
+    r"[^.:]*\b(?:desala\w*|remoj[aá]\w*|cambiando\s+el\s+agua)\b[^.]*\.?\s*", _re.IGNORECASE)
+_PILLAR_PREFIX_RE = _re.compile(r"^\s*(mise en place|el toque de fuego|montaje)\s*:?\s*", _re.IGNORECASE)
+
+
+def _strip_desalt_instructions(meal: dict) -> int:
+    """[P1-CURED-GHOST-STEPS · 2026-07-05] Elimina las FRASES de desalado/remojo de los pasos
+    (preservando el prefijo del pilar). Se invoca cuando la proteína curada fue swapeada a
+    fresca o cuando sus menciones fantasma se reescriben. Fail-safe → 0."""
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            return 0
+        fixed = 0
+        out = []
+        for s in rec:
+            if not isinstance(s, str) or _is_recipe_safety_note_step(s) \
+                    or not _re.search(r"desala|remoj", s, _re.IGNORECASE):
+                out.append(s)
+                continue
+            _mpref = _PILLAR_PREFIX_RE.match(s)
+            _pref = s[:_mpref.end()] if _mpref else ""
+            _body = s[_mpref.end():] if _mpref else s
+            _new_body = _DESALT_PHRASE_RE.sub("", _body).strip()
+            if _new_body:
+                out.append((_pref + _new_body) if _pref else _new_body)
+                fixed += 1
+            elif _pref:
+                out.append(_pref.rstrip(": ") + ": continúa con la preparación.")
+                fixed += 1
+            else:
+                fixed += 1  # paso íntegramente de desalado → se elimina
+        if fixed:
+            meal["recipe"] = out
+        return fixed
+    except Exception:
+        return 0
+
+
+_GHOST_CURED_TOKENS = ("arenque", "bacalao", "salami", "salchichon", "pepperoni",
+                       "mortadela", "tocino", "panceta", "longaniza", "chorizo")
+_GHOST_PRESENT_PROTEIN_TOKENS = ("sardina", "atun", "pescado", "pollo", "pavo", "res",
+                                 "cerdo", "camaron", "huevo", "queso", "yogur")
+
+
+def _rewrite_cured_ghost_protein_steps(days) -> int:
+    """[P1-CURED-GHOST-STEPS · 2026-07-05] (plan 55846e5e: pasos guisando ARENQUE que NO está en
+    la lista — la línea curada fue removida/swapeada por otro pase y sus pasos sobrevivieron:
+    "Desala el arenque… Incorpora el arenque desmenuzado" cocinando un fantasma). Dirección
+    INVERSA al ghost de frutas/frutos secos: materializar un curado-en-sal regalaría el sodio de
+    vuelta → se REESCRIBEN las menciones hacia la proteína que SÍ está en el plato (nombre +
+    pasos) y se eliminan las frases de desalado. Sin proteína presente → solo strip de desalado
+    (conservador: jamás inventar). Idempotente. tooltip-anchor: P1-CURED-GHOST-STEPS"""
+    try:
+        from constants import strip_accents as _sa_cg
+        fixed = 0
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                rec = meal.get("recipe") if isinstance(meal.get("recipe"), list) else []
+                blob = _sa_cg((str(meal.get("name") or "") + " "
+                               + " ".join(str(s) for s in rec
+                                          if not _is_recipe_safety_note_step(s))).lower())
+                ing_blob = _sa_cg(" ".join(str(i) for i in ings).lower())
+                for tok in _GHOST_CURED_TOKENS:
+                    if not _re.search(r"\b" + tok, blob) or _re.search(r"\b" + tok, ing_blob):
+                        continue
+                    # proteína PRESENTE en la lista → destino del rewrite.
+                    _repl_food = None
+                    for pt in _GHOST_PRESENT_PROTEIN_TOKENS:
+                        _line = next((str(i) for i in ings
+                                      if isinstance(i, str) and pt in _sa_cg(i.lower())), None)
+                        if _line:
+                            _repl_food = _re.sub(
+                                r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?", "",
+                                _re.sub(r"\([^)]*\)", "", _line)).strip(" ,.-")
+                            break
+                    if _repl_food:
+                        try:
+                            _rewrite_recipe_steps_after_subs(meal, [([tok], _repl_food)])
+                        except Exception:
+                            pass
+                        _nm = str(meal.get("name") or "")
+                        _pat_cg = _re.compile(r"\b" + _accent_flex_pattern(tok) + r"\w*", _re.IGNORECASE)
+                        if _pat_cg.search(_nm):
+                            meal["name"] = _pat_cg.sub(
+                                _repl_food[:1].upper() + _repl_food[1:], _nm, count=1)
+                    _strip_desalt_instructions(meal)
+                    meal["_cured_ghost_rewritten"] = tok
+                    fixed += 1
+                    logger.info(f"🐟 [P1-CURED-GHOST-STEPS] '{tok}' fantasma en pasos (sin línea en "
+                                f"la lista) → {'reescrito a ' + repr(_repl_food) if _repl_food else 'desalado eliminado'} "
+                                f"| meal={str(meal.get('name'))[:40]}")
+        return fixed
+    except Exception as _cg_e:
+        logger.warning(f"[P1-CURED-GHOST-STEPS] no-op: {type(_cg_e).__name__}: {_cg_e}")
+        return 0
 
 
 def _reconcile_display_missing_in_raw(days) -> int:
@@ -22206,6 +22341,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
         _reconcile_display_missing_in_raw(days)
     except Exception as _rr_as_e:
         logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] assemble no-op: {type(_rr_as_e).__name__}: {_rr_as_e}")
+    # [P1-CURED-GHOST-STEPS · 2026-07-05] proteína curada fantasma en pasos (arenque del plan
+    # 55846e5e) → reescribir hacia la proteína presente + strip de desalado.
+    try:
+        _rewrite_cured_ghost_protein_steps(days)
+    except Exception as _cg_as_e:
+        logger.warning(f"[P1-CURED-GHOST-STEPS] assemble no-op: {type(_cg_as_e).__name__}: {_cg_as_e}")
 
     # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Panel de micros FRESCO al final del motor: recompute
     # vía helper SSOT (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE) para que el panel
