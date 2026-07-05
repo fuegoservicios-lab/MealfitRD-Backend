@@ -5707,6 +5707,15 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         _expected_before_filter = set(expected_raw.keys())
         expected_raw = {k: v for k, v in expected_raw.items() if _is_verified_for_shopping(k)}
         _dropped_recipe_ingredients = _expected_before_filter - set(expected_raw.keys())
+        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05] "Agua"/"hielo"/"caldo..." NO son comprables
+        # (agua de grifo): su drop del catálogo verificado es comportamiento correcto, no
+        # desobediencia del LLM. Ruido medido en vivo (plan e49d44c3: WARN ×2 solo por 'Agua').
+        # Match EXACTO para agua/hielo ('aguacate' no matchea); prefijo para caldos.
+        _dropped_recipe_ingredients = {
+            x for x in _dropped_recipe_ingredients
+            if str(x).strip().lower() not in ("agua", "hielo")
+            and not str(x).strip().lower().startswith("caldo")
+        }
         if _dropped_recipe_ingredients:
             logging.warning(
                 "[VERIFIED-ONLY-GUARD-BLIND] %d ingrediente(s) de RECETAS fuera del catálogo "

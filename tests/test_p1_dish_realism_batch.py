@@ -199,7 +199,9 @@ def test_display_fractions_and_plural_agreement():
     assert _prettify_quantity_display("1 cdas de aceite de oliva") == "1 cda de aceite de oliva"
     assert _prettify_quantity_display("1 tallos de puerro picado") == "1 tallo de puerro picado"
     assert _prettify_quantity_display("3 papas medianas") == "3 papas medianas"
-    assert _prettify_quantity_display("1½ taza de yogurt griego") == "1½ taza de yogurt griego"
+    # [P3-DISPLAY-GRAMMAR · 2026-07-05] retune: cantidades >1 (incluidas fraccionarias) llevan
+    # plural en español ("1,5 tazas", RAE) — el "no tocar" conservador previo queda superseded.
+    assert _prettify_quantity_display("1½ taza de yogurt griego") == "1½ tazas de yogurt griego"
 
 
 # ── wiring ──────────────────────────────────────────────────────────────────

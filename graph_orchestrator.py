@@ -12350,6 +12350,15 @@ _FOOD_SAFETY_NOTE_NOCOOK = (
     "⚠️ Seguridad alimentaria: cocina el huevo por completo (≥71°C, yema y clara firmes, "
     "sin partes líquidas) antes de servir; evita el huevo crudo o poco cocido."
 )
+# [P3-EGG-BATTER-NOTE · 2026-07-05] (review visual #6: panqueques con la nota "yema y clara
+# firmes" — wording de huevo ENTERO sobre una MASA batida). Variante coherente cuando el huevo va
+# integrado en masa/mezcla (panqueques/arepitas/bizcocho): lo que debe quedar cocido es la masa.
+_FOOD_SAFETY_NOTE_EGG_BATTER = (
+    "⚠️ Seguridad alimentaria: cocina la preparación con huevo POR COMPLETO — la masa no debe "
+    "quedar líquida ni cruda en el centro (≥71°C); evita probar la mezcla cruda."
+)
+_EGG_BATTER_CONTEXT_TOKENS = ("panqueque", "pancake", "waffle", "crepe", "crepa", "arepita",
+                              "bizcocho", "muffin", "torta", "masa", "mezcla homogenea")
 # [P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Nota cuando la mitigación fue a nivel de composición (swap real).
 _FOOD_SAFETY_NOTE_BLENDED_SUBBED = (
     "⚠️ Seguridad alimentaria: se reemplazó el huevo crudo del batido por yogur griego "
@@ -12727,6 +12736,17 @@ def _apply_food_safety_fixes(plan: dict) -> int:
             meal["_food_safety_fixed"] = "blended_substituted"
         else:
             note = _FOOD_SAFETY_NOTE_BLENDED if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
+            # [P3-EGG-BATTER-NOTE · 2026-07-05] huevo integrado en MASA (panqueques/arepitas):
+            # la nota "yema y clara firmes" es wording de huevo entero → variante de masa cocida.
+            if kind != "blended":
+                try:
+                    from constants import strip_accents as _sa_eb
+                    _eb_blob = _sa_eb((str(meal.get("name") or "") + " "
+                                       + " ".join(str(s) for s in rec if isinstance(s, str))).lower())
+                    if any(t in _eb_blob for t in _EGG_BATTER_CONTEXT_TOKENS):
+                        note = _FOOD_SAFETY_NOTE_EGG_BATTER
+                except Exception:
+                    pass
             meal["_food_safety_fixed"] = kind
         meal["recipe"] = rec + [note]
         fixed += 1
@@ -18204,20 +18224,29 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
     # Display-only (ingredients_raw/compras intactos), idempotente.
     try:
         from humanize_ingredients import _prettify_quantity_display as _pb_prettify
+        from humanize_ingredients import prettify_step_fractions as _pb_stepfrac
         _npd = 0
         for _d in days or []:
             for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                 if not isinstance(_m, dict):
                     continue
                 _pings = _m.get("ingredients")
-                if not isinstance(_pings, list):
-                    continue
-                for _pi, _ps in enumerate(_pings):
-                    if isinstance(_ps, str):
-                        _pnew = _pb_prettify(_ps)
-                        if _pnew != _ps:
-                            _pings[_pi] = _pnew
-                            _npd += 1
+                if isinstance(_pings, list):
+                    for _pi, _ps in enumerate(_pings):
+                        if isinstance(_ps, str):
+                            _pnew = _pb_prettify(_ps)
+                            if _pnew != _ps:
+                                _pings[_pi] = _pnew
+                                _npd += 1
+                # [P3-STEP-FRACTIONS · 2026-07-05] paridad boundary: fracciones unicode en pasos.
+                _prec = _m.get("recipe")
+                if isinstance(_prec, list):
+                    for _pi, _ps in enumerate(_prec):
+                        if isinstance(_ps, str):
+                            _pnew = _pb_stepfrac(_ps)
+                            if _pnew != _ps:
+                                _prec[_pi] = _pnew
+                                _npd += 1
         if _npd:
             total += _npd; parts.append(f"display_polish={_npd}")
     except Exception as _hpb_e:
@@ -20225,6 +20254,10 @@ _SHRINK_FLOOR_EXEMPT_TOKENS = (
     "vainilla", "cacao", "levadura", "polvo de hornear", "mayonesa", "mostaza", "sazon",
     "semillas", "chia", "linaza", "ajonjoli", "rallado", "parmesano", "sofrito", "caldo", "cubito",
 )
+# [P3-CANNED-MIN-SERVIBLE · 2026-07-05] (review visual #6: "20g de sardinas en lata") Nadie abre
+# una lata para 20g — la proteína enlatada/pre-cocida bajo el mínimo servible se bumpea a
+# CANNED_MIN_SERVIBLE_G (~media lata pequeña). El delta de macros lo re-mide truth-up + banda.
+CANNED_MIN_SERVIBLE_G = _env_int("MEALFIT_CANNED_MIN_SERVIBLE_G", 40, lambda v: 20 <= v <= 120)
 # [P2-OIL-MICRO-BUMP · 2026-07-05] Lead de aceite BAJO 1 cdta ("¼ cdta de aceite de oliva (1ml)",
 # medido ×2 en el plan vivo 23c958bb): nadie mide 1 ml — el mínimo servible del aceite es 1 cdta
 # (5 ml). La exención de condimentos del shrink-floor lo dejaba pasar intacto.
@@ -20314,6 +20347,28 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                 touched += 1
                                 _meal_touched = True
                             continue
+                    # [P3-CANNED-MIN-SERVIBLE · 2026-07-05] proteína enlatada/pre-cocida bajo el
+                    # mínimo de lata ("20g de sardinas en lata") → bump a CANNED_MIN_SERVIBLE_G.
+                    if any(h in il for h in _PRECOOKED_PROTEIN_HINT):
+                        m_cg = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                        if m_cg:
+                            _cg = float(m_cg.group(1).replace(",", "."))
+                            if 0 < _cg < float(CANNED_MIN_SERVIBLE_G):
+                                try:
+                                    _cf = float(CANNED_MIN_SERVIBLE_G) / _cg
+                                    _new_cn = _resc(s, _cf)
+                                except Exception:
+                                    _new_cn = None
+                                if _new_cn and _new_cn != s:
+                                    ings[idx] = _new_cn
+                                    if _lockstep and isinstance(raw[idx], str):
+                                        try:
+                                            raw[idx] = _resc(str(raw[idx]), _cf)
+                                        except Exception:
+                                            pass
+                                    touched += 1
+                                    _meal_touched = True
+                        continue
                     if any(tok in il for tok in _SHRINK_FLOOR_EXEMPT_TOKENS):
                         continue
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)

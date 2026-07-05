@@ -332,6 +332,15 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                     sync_recipe_steps_to_household(meal)
                 except Exception:
                     pass
+                # [P3-STEP-FRACTIONS · 2026-07-05] "2.5 cdas"/"0.5 taza"/"1/4 de la masa" en pasos
+                # → fracciones unicode (paridad visual con la lista). Display-only, fail-safe.
+                try:
+                    _rec_pf = meal.get("recipe")
+                    if isinstance(_rec_pf, list):
+                        meal["recipe"] = [prettify_step_fractions(_s) if isinstance(_s, str) else _s
+                                          for _s in _rec_pf]
+                except Exception:
+                    pass
     return plan_result
 
 
@@ -351,7 +360,133 @@ _DISPLAY_PLURAL.update({
     "huevo": "huevos", "cebolla": "cebollas", "tomate": "tomates", "zanahoria": "zanahorias",
     "papa": "papas", "kiwi": "kiwis", "limon": "limones", "limón": "limones",
     "guineo": "guineos", "manzana": "manzanas", "fresa": "fresas", "pepino": "pepinos",
+    # [P3-DISPLAY-GRAMMAR · 2026-07-05] (review visual #6: "2½ tomate", "1 chuletas",
+    # "1 Lechosa mediano") + alimentos contables frecuentes del catálogo.
+    "chuleta": "chuletas", "tortilla": "tortillas", "lechosa": "lechosas", "batata": "batatas",
+    "mango": "mangos", "naranja": "naranjas", "pera": "peras", "aguacate": "aguacates",
+    "clara": "claras", "sardina": "sardinas", "arepita": "arepitas", "mandarina": "mandarinas",
 })
+
+# [P3-DISPLAY-GRAMMAR · 2026-07-05] Concordancia número/género de leads con FRACCIÓN/mixto
+# ("2½ tomate" → "2½ tomates", "½ cdas" → "½ cda", "1 chuletas" → "1 chuleta") + adjetivo
+# ADYACENTE curado ("2 guineos mediano" → "medianos"; "1 Lechosa mediano" → "1 lechosa mediana")
+# + minúscula de alimentos conocidos capitalizados. El lead decimal ya lo cubría el prettify;
+# esta capa ve fracciones unicode y mixtos que _DISPLAY_LEAD_RE no parsea. Curado y conservador:
+# adjetivo desconocido en -o/-a adyacente → el sustantivo NO se toca (jamás crear un mismatch).
+_GRAMMAR_FRAC_MAP = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
+_GRAMMAR_LEAD_RE = re.compile(
+    r"^\s*(?P<lead>\d+(?:[.,]\d+)?\s?[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s+"
+    r"(?P<word>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*)(?P<rest>.*)$")
+_GRAMMAR_UNITS = {"cda", "cdta", "taza", "cucharada", "cucharadita"}
+_GRAMMAR_PLURAL_TO_SING = {v: k for k, v in _DISPLAY_PLURAL.items()}
+_GRAMMAR_ADJ_GENDER_STEMS = ("median", "pequeñ", "pequen", "madur", "fresc", "magr", "pelad",
+                             "picad", "rallad", "cocid", "hervid", "tostad", "asad", "enter")
+_GRAMMAR_ADJ_INVARIANT = ("grande", "verde")
+_GRAMMAR_ADJ_ADJACENT_RE = re.compile(r"^(\s+)([a-záéíóúñü]+)(\b.*)$")
+_GRAMMAR_CONNECTORS = {"de", "del", "con", "en", "al", "para", "y", "o", "u", "sin"}
+
+
+def _grammar_lead_value(lead: str):
+    lead = str(lead).strip()
+    if lead in _GRAMMAR_FRAC_MAP:
+        return _GRAMMAR_FRAC_MAP[lead]
+    m = re.match(r"^(\d+(?:[.,]\d+)?)\s?([½¼¾⅓⅔])?$", lead)
+    if not m:
+        return None
+    v = float(m.group(1).replace(",", "."))
+    if m.group(2):
+        v += _GRAMMAR_FRAC_MAP[m.group(2)]
+    return v
+
+
+def _grammar_inflect_adj(adj_low: str, plural: bool, feminine: bool):
+    """Adjetivo del set curado concordado en género/número; None si no es del set."""
+    base = adj_low.rstrip("s")
+    if base in _GRAMMAR_ADJ_INVARIANT:
+        return base + ("s" if plural else "")
+    for stem in _GRAMMAR_ADJ_GENDER_STEMS:
+        if base in (stem + "o", stem + "a"):
+            return stem + ("a" if feminine else "o") + ("s" if plural else "")
+    return None
+
+
+def _fix_display_grammar(s: str) -> str:
+    """[P3-DISPLAY-GRAMMAR · 2026-07-05] Ver comment del bloque. Display-only, fail-safe."""
+    try:
+        m = _GRAMMAR_LEAD_RE.match(s)
+        if not m:
+            return s
+        val = _grammar_lead_value(m.group("lead"))
+        if val is None or val <= 0:
+            return s
+        word, rest = m.group("word"), m.group("rest")
+        w_orig_low = word.lower()
+        _known = (w_orig_low in _DISPLAY_PLURAL or w_orig_low in _GRAMMAR_PLURAL_TO_SING
+                  or w_orig_low.rstrip("s") in _GRAMMAR_UNITS)
+        # 0) alimento/unidad conocidos capitalizados a mitad de línea → minúscula
+        _case_fixed_word = w_orig_low if (word[:1].isupper() and _known) else word
+        plural_target = val > 1.0 + 1e-9
+        is_unit = w_orig_low.rstrip("s") in _GRAMMAR_UNITS
+        new_word = _case_fixed_word
+        if is_unit:
+            new_word = w_orig_low.rstrip("s") + ("s" if plural_target else "")
+        elif plural_target and w_orig_low in _DISPLAY_PLURAL:
+            new_word = _DISPLAY_PLURAL[w_orig_low]
+        elif not plural_target and w_orig_low in _GRAMMAR_PLURAL_TO_SING:
+            new_word = _GRAMMAR_PLURAL_TO_SING[w_orig_low]
+        new_rest = rest
+        if not is_unit:
+            _sing_form = _GRAMMAR_PLURAL_TO_SING.get(new_word.lower(), new_word.lower())
+            _feminine = _sing_form.endswith("a")
+            _noun_plural = new_word.lower() in _GRAMMAR_PLURAL_TO_SING
+            m_adj = _GRAMMAR_ADJ_ADJACENT_RE.match(rest)
+            if m_adj and m_adj.group(2) not in _GRAMMAR_CONNECTORS:
+                _adj_low = m_adj.group(2).lower()
+                _infl = _grammar_inflect_adj(_adj_low, _noun_plural, _feminine)
+                if _infl is not None:
+                    if _infl != _adj_low:
+                        new_rest = m_adj.group(1) + _infl + m_adj.group(3)
+                elif (re.fullmatch(r"[a-záéíóúñü]+[oa]s?", _adj_low)
+                      and new_word.lower() != w_orig_low):
+                    # adjetivo DESCONOCIDO en -o/-a adyacente y cambio de NÚMERO planeado:
+                    # pluralizar el sustantivo crearía un mismatch nuevo ("2½ tomates picado")
+                    # → se revierte el número; el lowercase-fix sí se queda.
+                    new_word = _case_fixed_word
+        if new_word == word and new_rest == rest:
+            return s
+        return s[:m.start("word")] + new_word + new_rest
+    except Exception:
+        return s
+
+
+# [P3-STEP-FRACTIONS · 2026-07-05] (review visual #6: "2.5 cdas de mantequilla", "0.5 taza de
+# agua tibia", "vierte 1/4 de la masa" en PASOS mientras la lista muestra fracciones unicode)
+# Decimales de fracción y fracciones ASCII en pasos → unicode. Lookarounds anti-rango/fecha
+# ("8-10 minutos", "10/12" intactos); temperaturas enteras no matchean.
+_STEP_DEC_TAIL = {".5": "½", ",5": "½", ".25": "¼", ",25": "¼", ".75": "¾", ",75": "¾",
+                  ".33": "⅓", ",33": "⅓", ".67": "⅔", ",67": "⅔", ".66": "⅔", ",66": "⅔"}
+_STEP_ASCII_FRAC_MAP = {"1/2": "½", "1/4": "¼", "3/4": "¾", "1/3": "⅓", "2/3": "⅔"}
+_STEP_ASCII_FRAC_RE = re.compile(r"(?<![\d/.,])(1/2|1/4|3/4|1/3|2/3)(?![\d/])")
+_STEP_DECIMAL_RE = re.compile(r"(?<![\d/.,])(\d*)([.,](?:25|33|5|66|67|75))(?=[\s)])")
+
+
+def prettify_step_fractions(step: str) -> str:
+    """[P3-STEP-FRACTIONS · 2026-07-05] Pulido cosmético de fracciones en pasos de receta.
+    Display-only (los pasos son texto humano; qty-sync ya soporta mixtos unicode). Fail-safe."""
+    try:
+        s = str(step)
+        s = _STEP_ASCII_FRAC_RE.sub(lambda mm: _STEP_ASCII_FRAC_MAP[mm.group(1)], s)
+
+        def _dec(mm):
+            frac = _STEP_DEC_TAIL.get(mm.group(2))
+            if frac is None:
+                return mm.group(0)
+            whole = mm.group(1)
+            return (whole if whole and whole != "0" else "") + frac
+
+        return _STEP_DECIMAL_RE.sub(_dec, s)
+    except Exception:
+        return str(step)
 # [P2-UNITLESS-SPOON-LEAD · 2026-07-05] ("Cda de miel (opcional)", "Cdta de miel") — unidad de
 # cuchara/taza SIN número líder: se asume 1 ("1 cda de miel"). Solo unidades de medida (jamás
 # alimentos); "Sal al gusto" no matchea.
@@ -436,6 +571,9 @@ def _prettify_quantity_display(s: str) -> str:
         if _UNITLESS_SPOON_LEAD_RE.match(s0):
             s0 = _UNITLESS_SPOON_LEAD_RE.sub(
                 lambda mm: f"1 {mm.group(1).lower()} de ", s0, count=1)
+        # [P3-DISPLAY-GRAMMAR · 2026-07-05] concordancia número/género de leads fraccionarios
+        # ("2½ tomate"→"2½ tomates", "½ cdas"→"½ cda", "1 Lechosa mediano"→"1 lechosa mediana").
+        s0 = _fix_display_grammar(s0)
         m = _DISPLAY_LEAD_RE.match(s0)
         if not m:
             return s0
