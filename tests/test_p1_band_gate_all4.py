@@ -34,8 +34,12 @@ def test_macros_only_gate_default_on():
 
 
 def test_retuned_macros_only_thresholds():
-    assert go.BAND_RETRY_THRESHOLD_MACROS_ONLY == 0.45
-    assert go.BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY == 0.45
+    # [P2-BAND-THRESHOLDS · 2026-07-02] 0.45 → 0.60 con datos de flota (todo plan entregado
+    # no-fallback puntúa macros_only ≥ 0.667 → 0.60 endurece el piso con CERO retries extra).
+    # El re-tuneo no actualizó esta expectativa → rojo preexistente en HEAD, re-anclado
+    # 2026-07-05 durante el batch P2 del audit solver+seeder.
+    assert go.BAND_RETRY_THRESHOLD_MACROS_ONLY == 0.60
+    assert go.BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY == 0.60
 
 
 def test_combined_thresholds_untouched_for_rollback():

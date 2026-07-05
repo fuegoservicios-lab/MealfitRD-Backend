@@ -9651,6 +9651,17 @@ SHOPPING_MIN_DISTINCT_CAP = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_CAP", 16)
 # el knob vivía ON en prod vía .env del VPS desde entonces — el default False solo arriesgaba que un deploy
 # limpio (sin .env heredado) perdiera la palanca en silencio. Rollback: MEALFIT_CARB_TO_PROTEIN_SWAP=false.
 CARB_TO_PROTEIN_SWAP_ENABLED = _env_bool("MEALFIT_CARB_TO_PROTEIN_SWAP", True)
+# [P2-FAT-LEAN-SWAP · 2026-07-05] (audit solver+seeder P2-1) Zona muerta del rebalance de grasas:
+# cuando la grasa NO-movible (embebida en líneas proteína-dominantes: salmón, res 80/20, muslo/
+# piel) ya excede el target del día, `_rebalance_day_macros_to_target` no tiene palanca y retorna
+# en silencio (telemetría ⚠ P2-FAT-DEADZONE la mide). Este lever swapea la proteína grasa a su
+# forma MAGRA de la MISMA especie (salmón→filete de pescado blanco, muslo/con-piel→pechuga,
+# costilla/chuleta→lomo) con gramos intactos — allergen-neutral POR CONSTRUCCIÓN (misma especie),
+# dislikes chequeados, nombre/pasos/raw reescritos (patrón _rewrite_meal) + truth-up + marker
+# `_protein_autofix_applied` (el fidelity-discount lo reconoce). Nace OFF: cambia la identidad
+# del plato → flip solo con la serie P2-FAT-DEADZONE + A/B (playbook medir→actuar).
+FAT_LEAN_SWAP_ENABLED = _env_bool("MEALFIT_FAT_LEAN_SWAP", False)
+FAT_LEAN_SWAP_TOL = max(0.02, min(0.3, _env_float("MEALFIT_FAT_LEAN_SWAP_TOL", 0.10)))
 CARB_TO_PROTEIN_SWAP_FLOOR_PCT = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_FLOOR_PCT", 1.0)  # A/B harness: f1.0 > f0.95
 CARB_TO_PROTEIN_SWAP_CARB_TOL = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_CARB_TOL", 0.05)
 # [P3-MACRO-REBALANCE · 2026-06-19] Re-apunta las 3 macros al target DESPUÉS de la cuantización (cierra el
@@ -10224,6 +10235,20 @@ _MICRO_SEED_SOURCES = {
 # post-motor (el solver/quantize erosionó la semilla o el gap era 2-3×), UNA re-escalada de la
 # línea sembrada (cap 30 g, una vez por día/micro). Espejo del patrón sodio/micros post-motor.
 MICRO_SEED_REINFORCE_ENABLED = _env_bool("MEALFIT_MICRO_SEED_REINFORCE", True)
+# [P2-SEED-MEAL-SELECTION · 2026-07-05] (audit solver+seeder P2-3) El seed caía SIEMPRE en la
+# PRIMERA merienda → concentración de añadidos en un solo plato (merienda de 765 kcal observada:
+# mango + maní + cottage + semillas). Con el knob ON, el seed reparte: preferencia meriendas SIN
+# seed previo → cualquier meal sin seed → merienda → cualquiera; dentro del pool gana la de MENOS
+# kcal actuales (más headroom físico). Rollback: =false (vuelve a primera-merienda).
+MICRO_SEED_SPREAD_ENABLED = _env_bool("MEALFIT_MICRO_SEED_SPREAD", True)
+# [P2-SEED-STEP-NOTE · 2026-07-05] (audit solver+seeder P2-2) La línea sembrada no se mencionaba
+# en los pasos ("10 g de linaza" en ingredients y la receta muda → incoherencia receta↔pasos).
+# Nota 🌱 insertada ANTES del Montaje (espejo de la nota 💪 del closer de proteína); el qty-sync
+# posterior mantiene la cantidad del paso alineada cuando el closer escala la semilla. Las notas
+# 🌱 están excluidas del detector no-cook y no llevan prefijo → cero interacción con el contrato
+# de pasos. Rollback: =false.
+MICRO_SEED_STEP_NOTE_ENABLED = _env_bool("MEALFIT_MICRO_SEED_STEP_NOTE", True)
+_MICRO_SEED_HUMAN = {"omega3_g": "omega-3", "vit_e_mg": "vitamina E"}
 # [P1-MICRO-SEED-DENSITY] 80 → 120: con 80, dos semillas del mismo día (linaza 53 kcal + girasol
 # 58 kcal) NO cabían (el guard >30 bloqueaba la 2ª) — caso vivo plan 176ca62c: Día 3 corto en
 # omega-3 Y vit E solo recibió la semilla de omega-3. El re-trim de carbos post-closer (P2-2)
@@ -11739,6 +11764,21 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         _cstr = " ".join(str(c).lower() for c in (_conditions or []))
         _dyslip_or_hta = any(t in _cstr for t in ("dislip", "colesterol", "hiperlip", "hipertens", "hta",
                                                   "presion alta", "presión alta"))
+        # [P2-CLOSER-DM2-GI-GUARD · 2026-07-05] (audit solver+seeder P2-4) El closer era DM2-ciego al
+        # escalar: cerrar potasio/vit C podía inflar 1.6× la fruta alto-IG de un diabético (guineo
+        # maduro/mango/piña = azúcar). Mismo patrón token-based del guard dislip/HTA: bajo DM2 se
+        # SALTAN los contribuyentes alto-IG (el siguiente richest-first toma su lugar; sin
+        # alternativa, el residual se loguea como siempre). Tokens accent-stripped (el callsite pasa
+        # `_ing_low` ya normalizado); "mangu" NO matchea "mango".
+        _dm2 = any(t in _cstr for t in ("diabet", "dm2", "glicem", "glucem", "prediabet",
+                                        "resistencia a la insulina"))
+        # Word-boundary OBLIGATORIO (lección 'res'↔'fresas' de CATALOG-POOLS): "pina" como
+        # substring matchea dentro de "es-PINA-ca" y bloquearía justo la alternativa verde.
+        # Plural opcional (`s?`): uvas/pasas/mangos.
+        _DM2_HIGHGI_TOKENS = ("guineo", "platano maduro", "mango", "pina", "uva",
+                              "pasa", "sandia", "melon", "miel")
+        _dm2_gi_re = _re.compile(
+            r"\b(?:" + "|".join(_re.escape(t) for t in _DM2_HIGHGI_TOKENS) + r")s?\b")
         _CEIL_RISK_TOKENS = ("queso", "tocino", "salami", "embutido", "jamon", "jamón", "mantequilla",
                              "longaniza", "chorizo", "salchich", "manteca")
         _DAIRY_TOKENS = ("queso", "leche", "yogur", "lacteo", "lácteo", "ricotta", "cottage", "requeson", "requesón")
@@ -11747,6 +11787,9 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             if _dyslip_or_hta and any(t in _ing_low for t in _CEIL_RISK_TOKENS):
                 return True
             if _renal and _k_micro == "calcium_mg" and any(t in _ing_low for t in _DAIRY_TOKENS):
+                return True
+            # [P2-CLOSER-DM2-GI-GUARD] fruta/azúcar alto-IG jamás es target de escalado en DM2.
+            if _dm2 and _dm2_gi_re.search(_ing_low):
                 return True
             return False
 
@@ -11859,16 +11902,24 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             _seed_line = _cand
                             break
                         if _seed_line:
-                            _seed_meal = next(
-                                (m for m in (_d.get("meals") or []) if isinstance(m, dict)
-                                 and "merienda" in str(m.get("meal", "")).lower()
-                                 and isinstance(m.get("ingredients"), list)),
-                                None,
-                            ) or next(
-                                (m for m in (_d.get("meals") or []) if isinstance(m, dict)
-                                 and isinstance(m.get("ingredients"), list)),
-                                None,
-                            )
+                            _seed_cands = [m for m in (_d.get("meals") or [])
+                                           if isinstance(m, dict) and isinstance(m.get("ingredients"), list)]
+                            if MICRO_SEED_SPREAD_ENABLED and _seed_cands:
+                                # [P2-SEED-MEAL-SELECTION · 2026-07-05] repartir: merienda sin seed →
+                                # meal sin seed → merienda → cualquiera; gana la de MENOS kcal (headroom).
+                                _seed_mers = [m for m in _seed_cands
+                                              if "merienda" in str(m.get("meal", "")).lower()]
+                                _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
+                                              or [m for m in _seed_cands if not m.get("_micro_seed_applied")]
+                                              or _seed_mers or _seed_cands)
+                                _seed_meal = min(_seed_pool,
+                                                 key=lambda m: _meal_macro_num(m.get("cals")))
+                            else:
+                                _seed_meal = next(
+                                    (m for m in _seed_cands
+                                     if "merienda" in str(m.get("meal", "")).lower()),
+                                    None,
+                                ) or (_seed_cands[0] if _seed_cands else None)
                             if _seed_meal is not None:
                                 _seed_meal["ingredients"].append(_seed_line)
                                 _seed_raw = _seed_meal.get("ingredients_raw")
@@ -11896,6 +11947,17 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     day_total += _c_seed
                                 kcal_budget_left -= _kc_seed
                                 _seed_meal["_micro_seed_applied"] = k
+                                # [P2-SEED-STEP-NOTE · 2026-07-05] la semilla también vive en los
+                                # pasos (antes: ingrediente huérfano que la receta jamás nombraba).
+                                # El qty-sync post-escala alinea la cantidad del paso con la final.
+                                if MICRO_SEED_STEP_NOTE_ENABLED:
+                                    _rec_seed = _seed_meal.get("recipe")
+                                    if isinstance(_rec_seed, list):
+                                        _seed_meal["recipe"] = _insert_step_before_montaje(
+                                            _rec_seed,
+                                            f"🌱 Nota del Nutricionista AI: espolvorea {_seed_line} "
+                                            f"sobre el plato al servir — cierra tu "
+                                            f"{_MICRO_SEED_HUMAN.get(k, k)} del día.")
                                 adjustments += 1
                                 _seed_why = ("día sin portador" if not _had_carriers else
                                              f"portadores muy cortos ({day_total - _c_seed:.2g} < "
@@ -13962,6 +14024,7 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
     try:
         from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
         applied_any = False
+        _fat_dz_logged = [False]  # [P2-FAT-DEADZONE] una sola línea por invocación (3 pases)
 
         def _one(macro_key, target):
             nonlocal applied_any
@@ -13982,9 +14045,26 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
                         movable += _v
                         items.append((m, idx))
             if movable <= 0:
+                # [P2-FAT-DEADZONE · 2026-07-05] (audit solver+seeder P2-1) telemetría de la zona
+                # muerta: grasas sobre el target con CERO masa grasa-dominante movible (toda la
+                # grasa embebida en proteína-dominantes: salmón/res 80/20/piel) → el rebalance no
+                # tiene palanca y retornaba en SILENCIO. Serie para decidir el flip de
+                # MEALFIT_FAT_LEAN_SWAP (playbook medir→actuar).
+                if macro_key == "fats" and cur > target and not _fat_dz_logged[0]:
+                    _fat_dz_logged[0] = True
+                    logger.warning(f"⚠ [P2-FAT-DEADZONE] grasas {cur:.0f}g > target {target:.0f}g "
+                                   f"con 0g movibles (grasa embebida en proteína-dominantes) → "
+                                   f"día sin palanca de rebalance.")
                 return
             desired_movable = target - (cur - movable)   # cuánto deben aportar los movibles
             if desired_movable <= 0:
+                # [P2-FAT-DEADZONE] ni reduciendo a CERO los grasa-dominantes movibles se alcanza
+                # el target: la grasa no-movible ya lo excede.
+                if macro_key == "fats" and not _fat_dz_logged[0]:
+                    _fat_dz_logged[0] = True
+                    logger.warning(f"⚠ [P2-FAT-DEADZONE] grasa no-movible {cur - movable:.0f}g ≥ "
+                                   f"target {target:.0f}g (embebida en proteína-dominantes) → "
+                                   f"reducir a cero los movibles no alcanza la banda.")
                 return
             factor = max(0.3, min(2.5, desired_movable / movable))   # BIDIRECCIONAL (sube y baja)
             if abs(factor - 1.0) < 0.02:
@@ -18647,6 +18727,113 @@ _PROTEIN_SOURCE_COMPOUNDS = {
     "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado"),
 }
 
+# [P2-FAT-LEAN-SWAP · 2026-07-05] Escalera grasa→magra de la MISMA especie (allergen-neutral por
+# construcción; formas destino del catálogo verificado — las mismas de _PROTEIN_TARGET_FORMS).
+# Compuestos largos primero (el token suelto interior produciría disparates).
+_FAT_LEAN_SWAP_LADDER = (
+    ("muslo de pollo", "pechuga de pollo"),
+    ("pollo con piel", "pechuga de pollo"),
+    ("costilla de cerdo", "lomo de cerdo"),
+    ("chuleta de cerdo", "lomo de cerdo"),
+    ("salmon", "filete de pescado blanco"),
+)
+
+
+def _swap_fat_dense_protein_to_lean_for_day(meals: list, target_fats: float, db,
+                                            form_data=None, *, tol: float = None) -> int:
+    """[P2-FAT-LEAN-SWAP · 2026-07-05] (audit solver+seeder P2-1) Lever de la ZONA MUERTA del
+    rebalance de grasas: cuando la grasa embebida en líneas proteína-dominantes excede el target
+    del día, ningún trim/rebalance protein-preserving puede alcanzar la banda (telemetría
+    P2-FAT-DEADZONE). Swapea la proteína grasa a su forma MAGRA de la MISMA especie
+    (`_FAT_LEAN_SWAP_LADDER`), gramos intactos: reescribe línea + raw + nombre + pasos con el
+    patrón accent-flex de `_rewrite_meal`, aplica el delta HONESTO de macros (y truth-up si los
+    strings resuelven), y marca `_protein_autofix_applied="src->tgt"` (fidelity-discount lo
+    reconoce). Solo swapea si el resultado ACERCA al target (jamás sobre-corrige bajo banda).
+    Dislikes chequeados sobre el reemplazo; alérgenos neutrales (misma especie). Gated por
+    FAT_LEAN_SWAP_ENABLED (OFF — cambia la identidad del plato; flip con la serie deadzone).
+    Mutates meals. Retorna nº de swaps. Fail-safe. tooltip-anchor: P2-FAT-LEAN-SWAP"""
+    try:
+        if tol is None:
+            tol = FAT_LEAN_SWAP_TOL
+        if not target_fats or target_fats <= 0 or not meals:
+            return 0
+        try:
+            from constants import strip_accents as _sa_fl
+        except Exception:
+            def _sa_fl(s):
+                return s
+        _fd = form_data or {}
+        dislikes = {_sa_fl(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        cur = sum(_meal_macro_num(m.get("fats")) for m in meals if isinstance(m, dict))
+        if cur <= target_fats * (1.0 + tol):
+            return 0
+        swapped = 0
+        for m in meals:
+            if cur <= target_fats * (1.0 + tol):
+                break
+            if not isinstance(m, dict):
+                continue
+            ings = m.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            for idx, ing in enumerate(ings):
+                if cur <= target_fats * (1.0 + tol):
+                    break
+                line = str(ing)
+                _low = _sa_fl(line.lower())
+                for src, repl in _FAT_LEAN_SWAP_LADDER:
+                    if src not in _low:
+                        continue
+                    _repl_low = _sa_fl(repl.lower())
+                    if any(dk and dk in _repl_low for dk in dislikes):
+                        continue
+                    _pat = _re.compile(r"\b" + _accent_flex_pattern(src) + r"\w*", _re.IGNORECASE)
+                    new_line = _pat.sub(repl, line)
+                    if new_line == line:
+                        continue
+                    _mo = db.macros_from_ingredient_string(line) or {}
+                    _mn = db.macros_from_ingredient_string(new_line) or {}
+                    _delta_f = (_mo.get("fats") or 0.0) - (_mn.get("fats") or 0.0)
+                    if not _mn or _delta_f <= 0.5:
+                        continue  # el reemplazo no resuelve o no ahorra grasa real → no tocar
+                    _after = cur - _delta_f
+                    if abs(_after - target_fats) >= abs(cur - target_fats):
+                        continue  # el swap no ACERCA al target (sobre-corregiría) → no vale
+                    ings[idx] = new_line
+                    raw = m.get("ingredients_raw")
+                    if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
+                        raw[idx] = _pat.sub(repl, raw[idx])
+                    _nm = str(m.get("name") or "")
+                    _repl_disp = (repl[:1].upper() + repl[1:]) if _nm[:1].isupper() else repl
+                    m["name"] = _pat.sub(_repl_disp, _nm)
+                    rec = m.get("recipe")
+                    if isinstance(rec, list):
+                        m["recipe"] = [_pat.sub(repl, s) if isinstance(s, str) else s for s in rec]
+                    # delta HONESTO de macros del meal (truth-up lo refina si los strings resuelven).
+                    _dp = (_mn.get("protein") or 0.0) - (_mo.get("protein") or 0.0)
+                    _dk = (_mn.get("kcal") or 0.0) - (_mo.get("kcal") or 0.0)
+                    m["fats"] = max(0, round(_meal_macro_num(m.get("fats")) - _delta_f))
+                    m["protein"] = max(0, round(_meal_macro_num(m.get("protein")) + _dp))
+                    m["cals"] = max(0, round(_meal_macro_num(m.get("cals")) + _dk))
+                    m["macros"] = [f"P:{m['protein']}g",
+                                   f"C:{round(_meal_macro_num(m.get('carbs')))}g",
+                                   f"G:{m['fats']}g"]
+                    m["_protein_autofix_applied"] = f"{src}->{repl}"
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+                    cur = sum(_meal_macro_num(mm.get("fats")) for mm in meals if isinstance(mm, dict))
+                    swapped += 1
+                    logger.info(f"🫒 [P2-FAT-LEAN-SWAP] '{src}' → '{repl}' en "
+                                f"«{str(m.get('name'))[:40]}» (−{_delta_f:.0f}g de grasa; "
+                                f"día {cur:.0f}g vs target {target_fats:.0f}g)")
+                    break
+        return swapped
+    except Exception as e:
+        logger.warning(f"[P2-FAT-LEAN-SWAP] swap falló: {type(e).__name__}: {e}")
+        return 0
+
 
 def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None) -> str | None:
     """[P1-EGG-SAMEDAY-AUTOFIX · 2026-07-05] Reemplaza las líneas de huevo de UN meal por
@@ -20299,6 +20486,24 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
         except Exception as _swap_e:
             logger.warning(f"[P3-CARB-TO-PROTEIN-SWAP] deshabilitado por error: "
                            f"{type(_swap_e).__name__}: {_swap_e}")
+
+    # [P2-FAT-LEAN-SWAP · 2026-07-05] (audit solver+seeder P2-1) Lever OFF-default de la zona
+    # muerta del rebalance de grasas: proteína grasa → forma magra de la misma especie. Corre
+    # ANTES del rebalance/quantize → el motor downstream dimensiona la proteína magra nueva.
+    if FAT_LEAN_SWAP_ENABLED and _fg:
+        try:
+            from nutrition_db import IngredientNutritionDB as _FlsNDB
+            _fls_db = _FlsNDB()
+            _fls_n = 0
+            for _d in (days or []):
+                _fls_n += _swap_fat_dense_protein_to_lean_for_day(
+                    (_d.get("meals") or []) if isinstance(_d, dict) else [],
+                    float(_fg), _fls_db, form_data)
+            if _fls_n:
+                logger.info(f"🫒 [P2-FAT-LEAN-SWAP] {_fls_n} swap(s) grasa→magra "
+                            f"(día(s) en zona muerta del rebalance de grasas)")
+        except Exception as _fls_e:
+            logger.warning(f"[P2-FAT-LEAN-SWAP] deshabilitado por error: {type(_fls_e).__name__}: {_fls_e}")
 
     # [P3-MACRO-REBALANCE · 2026-06-19] Tras swap + cuantización: re-apunta carbos/grasas al target diario,
     # cerrando el error de redondeo que la cuantización independiente acumula (carbos/grasas continuos casi
@@ -24569,7 +24774,20 @@ Responde ÚNICAMENTE con el JSON de revisión.
             if _agg_trigger or _per_macro_trigger or _kcal_trigger:
                 _low = [k for k, v in _per_macro.items()
                         if v is not None and v < 0.5 and k != "kcal"]
-                logger.warning(f"📊 [P2-BAND-RETRY-GATE] band_score={_bsr_val} < {_bsr_thr} "
+                # [P2-BAND-RETRY-GATE-LOG · 2026-07-05] mensaje BRANCH-AWARE (espejo de
+                # P3-BAND-GATE-LOG-HONESTY en el banner-gate): antes imprimía
+                # "band_score=0.67 < 0.6" aunque el agregado hubiera PASADO y la rama real
+                # fuera per-macro/kcal-backstop — diagnóstico falso en prod.
+                if _agg_trigger:
+                    _bsr_head = f"band_score={_bsr_val} < {_bsr_thr}"
+                elif _per_macro_trigger:
+                    _bsr_head = (f"agregado {_bsr_val} ≥ umbral {_bsr_thr} PERO macro(s) "
+                                 f"{_per_macro_low} bajo {BAND_GATE_PER_MACRO_THRESHOLD} "
+                                 f"de celdas en banda")
+                else:
+                    _bsr_head = (f"agregado {_bsr_val} ≥ umbral {_bsr_thr} PERO kcal "
+                                 f"{_kcal_cell} < {BAND_GATE_KCAL_THRESHOLD} (backstop)")
+                logger.warning(f"📊 [P2-BAND-RETRY-GATE] {_bsr_head} "
                                f"(macros_only={_bsr_used_mo} agg={_agg_trigger} "
                                f"per_macro_trigger={_per_macro_trigger} kcal_trigger={_kcal_trigger} "
                                f"low={_per_macro_low} "
@@ -29460,6 +29678,34 @@ def _compute_pipeline_holistic_score_and_emit(
                     logger.warning(
                         "🛒 [P2-FASE7-HONESTY] lista de compras vacía con recetas → plan marcado "
                         "_quality_degraded (reason=shopping_list_incomplete)")
+                # [P2-SOLVER-CLAMP-ACTION · 2026-07-05] (audit solver+seeder P2-6) Agrega la
+                # telemetría per-meal de P2-SOLVER-CLAMP-TELEMETRY (`_solver_clamp_saturated`) a
+                # una métrica per-run (node='solver_clamp', confidence=fracción saturada). La
+                # serie decide con DATOS la opción (b) documentada en el knob del solver: subir
+                # max_scale para proteína-dominantes. Emite SIEMPRE que haya meals (los ceros
+                # son el denominador de la tasa de flota). Fail-safe.
+                try:
+                    _clamp_meals = [_m4 for _d4 in (plan.get("days") or []) if isinstance(_d4, dict)
+                                    for _m4 in (_d4.get("meals") or []) if isinstance(_m4, dict)]
+                    _clamp_sat = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_clamp_saturated"))
+                    if _clamp_meals:
+                        _emit_progress(initial_state, "metric", {
+                            "node": "solver_clamp",
+                            "duration_ms": 0,
+                            "retries": final_state.get("attempt", 1) - 1,
+                            "tokens_estimated": 0,
+                            "confidence": round(_clamp_sat / len(_clamp_meals), 3),
+                            "metadata": {
+                                "saturated_meals": _clamp_sat,
+                                "total_meals": len(_clamp_meals),
+                                "delivered_was_fallback": delivered_was_fallback,
+                            },
+                        })
+                        if _clamp_sat:
+                            logger.info(f"📐 [P2-SOLVER-CLAMP-ACTION] {_clamp_sat}/{len(_clamp_meals)} "
+                                        f"meals con clamp del solver saturado en el plan entregado.")
+                except Exception:
+                    pass
                 # [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) métrica de flota por-meal (NO hard-gate):
                 # emite solo si hay ≥1 meal bajo el floor de cobertura (telemetría, no banner).
                 _low_cov = plan.get("low_coverage_meals") or []
