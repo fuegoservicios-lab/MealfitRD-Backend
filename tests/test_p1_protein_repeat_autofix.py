@@ -67,6 +67,26 @@ def test_wired_in_assemble_pre_engine_after_sodium():
         "el autofix corre en el mismo seam pre-motor, después del pase de sodio"
 
 
+def test_wired_after_budget_passes():
+    """[2026-07-05] Los pases de presupuesto REESCRIBEN proteínas después del pase pre-motor y
+    pueden COLAPSAR dos proteínas distintas del mismo día en el mismo equivalente económico
+    (caso vivo corr=2f37b6b4: camarones+pulpo→'Filete de pescado blanco' → 2 retries seguidos
+    del gate de variedad = 2 generaciones cobradas). Re-fire espejo en AMBOS callsites."""
+    # 1) cheapen pre-engine (P1-BUDGET-TIER-LEVERS)
+    i = _GO.index("por equivalentes económicos (presupuesto económico/ajustado)")
+    win = _GO[i:i + 700]
+    assert "_protein_repeat_autofix(days, form_data)" in win, \
+        "re-fire tras el cheapen-pass pre-engine"
+    # 2) convergencia driver-aware (P1-BUDGET-CONVERGENCE) — ANTES del truth-up/re-banda/rebuild
+    j = _GO.index("_apply_budget_cheapen_pass(_bc_days, form_data, force=True)")
+    win2 = _GO[j:j + 1400]
+    assert "_protein_repeat_autofix(_bc_days, form_data)" in win2, \
+        "re-fire tras la convergencia de presupuesto"
+    assert win2.index("_protein_repeat_autofix(_bc_days, form_data)") < win2.index(
+        "truth-up post-sustitución"), \
+        "el re-fire debe correr ANTES del truth-up/re-banda para que downstream vea la corrección"
+
+
 # ---------------------------------------------------------------------------
 # funcional
 # ---------------------------------------------------------------------------
@@ -176,6 +196,24 @@ def test_idempotent(go):
     days = _mk_days_pollo_x2()
     assert go._protein_repeat_autofix(days, {}, db=object()) == 1
     assert go._protein_repeat_autofix(days, {}, db=object()) == 0
+
+
+def test_budget_collision_two_pescado_same_day(go):
+    """Estado post-budget del caso vivo: dos mariscos del mismo día colapsados al mismo
+    'filete de pescado blanco' → el re-fire diversifica el segundo a pollo (escalera)."""
+    days = [{"day": 1, "meals": [
+        _meal("Almuerzo", "Filete de Pescado Blanco al Ajillo",
+              ["150 g de filete de pescado blanco", "150 g de arroz"]),
+        _meal("Cena", "Filete de Pescado Blanco Guisado",
+              ["120 g de filete de pescado blanco", "100 g de batata"]),
+    ]}]
+    n = go._protein_repeat_autofix(days, {}, db=object())
+    assert n == 1
+    lunch, dinner = days[0]["meals"]
+    assert "pescado" in lunch["name"].lower(), "la primera aparición (identidad) se conserva"
+    assert dinner["_protein_autofix_applied"] == "pescado->pollo"
+    assert "pechuga de pollo" in " ".join(dinner["ingredients"]).lower()
+    assert "pescado" not in dinner["name"].lower()
 
 
 # ---------------------------------------------------------------------------

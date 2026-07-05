@@ -18169,6 +18169,13 @@ _PROTEIN_TARGET_FORMS = {
     "pescado": {"bare": "pescado", "default": "filete de pescado blanco",
                 "molido": "filete de pescado blanco"},
 }
+# Compuestos del label FUENTE que NO están en _MAIN_PROTEIN_ALIASES pero deben sustituirse
+# COMPLETOS (largo-primero) — si solo se reemplaza el token suelto interior queda un disparate:
+# "filete de PESCADO blanco" + bare 'pollo' → "filete de pollo blanco". Caso del pase de
+# presupuesto, que emite exactamente "Filete de pescado blanco".
+_PROTEIN_SOURCE_COMPOUNDS = {
+    "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado"),
+}
 
 
 def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
@@ -18216,8 +18223,11 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
 
         def _rewrite_meal(meal: dict, src: str, tgt: str) -> None:
             forms = _PROTEIN_TARGET_FORMS[tgt]
-            # aliases del label fuente, largo-primero ("pechuga de pollo" antes que "pollo").
-            for _al in sorted(_MAIN_PROTEIN_ALIASES.get(src, ()), key=len, reverse=True):
+            # aliases del label fuente + compuestos conocidos, largo-primero
+            # ("filete de pescado blanco" antes que "pescado"; "pechuga de pollo" antes que "pollo").
+            _all_aliases = tuple(_MAIN_PROTEIN_ALIASES.get(src, ())) + \
+                _PROTEIN_SOURCE_COMPOUNDS.get(src, ())
+            for _al in sorted(_all_aliases, key=len, reverse=True):
                 repl = (forms["molido"] if "molid" in _sa_pr(_al)
                         else forms["bare"] if " " not in _al and _al == src
                         else forms["default"])
@@ -20462,6 +20472,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 result["_budget_adjusted"] = True
                 logger.info(f"💰 [P1-BUDGET-TIER-LEVERS] {_bcp_subs} ingrediente(s) premium sustituido(s) "
                             f"por equivalentes económicos (presupuesto económico/ajustado).")
+                # [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-05] el cheapen puede COLAPSAR proteínas
+                # distintas del mismo día en el mismo equivalente económico → re-fire espejo del
+                # autofix (idempotente, no-op si no nació repetición).
+                _bcp_pr = _protein_repeat_autofix(days, form_data)
+                if _bcp_pr:
+                    logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] post-cheapen: {_bcp_pr} comida(s) con "
+                                f"proteína colapsada por presupuesto re-diversificada(s).")
         except Exception as _bcp_call_e:
             logger.warning(f"[P1-BUDGET-TIER-LEVERS] cheapen-pass en assemble no-op: {type(_bcp_call_e).__name__}: {_bcp_call_e}")
 
@@ -20996,6 +21013,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 _bc_subs += _apply_budget_cheapen_pass(_bc_days, form_data, force=True)
                 if _bc_subs:
                     result["_budget_adjusted"] = True
+                    # [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-05] el pase driver-aware colapsa mariscos/
+                    # pescados caros al MISMO "Filete de pescado blanco" — si caen 2 el mismo día NACE
+                    # una repetición same-day que el pase pre-motor nunca vio (caso vivo corr=2f37b6b4:
+                    # camarones+pulpo→pescado ×4 → 2 retries consecutivos del gate de variedad = 2
+                    # generaciones cobradas). Re-fire espejo ANTES del truth-up/re-banda/rebuild de
+                    # listas para que todo lo downstream (y el reviewer) vea la proteína corregida.
+                    _bc_pr = _protein_repeat_autofix(_bc_days, form_data)
+                    if _bc_pr:
+                        logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] post-budget: {_bc_pr} comida(s) con "
+                                    f"proteína colapsada por la convergencia re-diversificada(s).")
                     # truth-up post-sustitución (el string conservó gramos; el alimento cambió) +
                     # re-banda de los días que la sustitución macro-similar dejó fuera.
                     try:
@@ -28348,10 +28375,23 @@ def _compute_pipeline_holistic_score_and_emit(
                     if _maybe_mark_low_band_degraded(plan, _band_gate_val, delivered_was_fallback,
                                                      final_state.get("attempt", 1), band_payload=_band,
                                                      score_threshold=_band_gate_thr):
-                        logger.warning(
-                            f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
-                            f"{_band_gate_thr} (macros_only={_band_used_mo}) → plan marcado _quality_degraded "
-                            f"(reason={plan.get('_quality_degraded_reason')})")
+                        # [P3-BAND-GATE-LOG-HONESTY · 2026-07-05] el mensaje distingue la rama que
+                        # disparó: agregado bajo umbral vs per-macro (antes imprimía "0.78 < 0.6",
+                        # falso cuando la rama era per-macro — confundía el diagnóstico en prod).
+                        _bg_reason = str(plan.get("_quality_degraded_reason") or "")
+                        if _bg_reason.startswith("low_band_macro:"):
+                            _bg_pm = _band.get("per_macro") or {}
+                            logger.warning(
+                                f"⚠️ [P2-BAND-SCORE-GATE] agregado {_band_gate_val:.2f} ≥ umbral "
+                                f"{_band_gate_thr} PERO macro(s) individual(es) bajo "
+                                f"{BAND_GATE_PER_MACRO_THRESHOLD} de celdas en banda "
+                                f"({_bg_reason.split(':', 1)[1]}: per_macro={_bg_pm}) → plan marcado "
+                                f"_quality_degraded (reason={_bg_reason})")
+                        else:
+                            logger.warning(
+                                f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
+                                f"{_band_gate_thr} (macros_only={_band_used_mo}) → plan marcado "
+                                f"_quality_degraded (reason={_bg_reason})")
                 # [P2-11-DEGRADED-GATES-UNCONDITIONAL · 2026-06-16] (gap-audit P2-11) Estos 3 gates NO dependen
                 # de _band_val (cada uno guarda internamente delivered_was_fallback + no pisa razón peor) →
                 # DESINDENTADOS fuera del `if _band_val is not None:` para que corran AUNQUE
