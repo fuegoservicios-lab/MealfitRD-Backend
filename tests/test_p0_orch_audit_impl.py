@@ -55,14 +55,17 @@ def test_p0_orch_1_helpers_present():
 
 
 def test_p0_orch_1_fallback_threads_restricted_tokens():
-    # Builders aceptan restricted_tokens.
+    # Builders aceptan restricted_tokens. [2026-07-05] anchors actualizados a las firmas
+    # vigentes: los builders ganaron el param `form_data` después (fallback clinical-aware),
+    # así que `restricted_tokens` ya no cierra la signature — la invariante (aceptan y
+    # propagan los tokens) sigue intacta.
     assert "def _build_fallback_day(nutr: dict, day_number: int," in _G
-    assert "restricted_tokens: frozenset = frozenset()) -> dict:" in _G
-    assert "restricted_tokens: frozenset = frozenset()) -> dict:" in _G  # _get_extreme_fallback_plan
+    assert "restricted_tokens: frozenset = frozenset()," in _G
+    assert "restricted_tokens: frozenset = frozenset(), form_data: dict = None) -> dict:" in _G  # _get_extreme_fallback_plan
     # La rama CRÍTICA (rechazo médico) pasa los tokens del usuario.
     assert "restricted_tokens=_fallback_restricted_tokens(actual_form_data)" in _G
     # _repair_partial_plan también propaga.
-    assert "restricted_tokens: frozenset = frozenset()) -> bool:" in _G
+    assert "restricted_tokens: frozenset = frozenset(), form_data: dict = None) -> bool:" in _G
 
 
 def test_p0_orch_1_historic_menu_preserved_as_pool_head():
@@ -183,7 +186,8 @@ def test_p2_orch_2_threshold_knob_and_stats():
 # ===========================================================================
 def test_p2_orch_3_no_verbatim_clone():
     assert "valid_day_template = generated_days[0]" not in _G
-    assert "fb_day = _build_fallback_day(nutrition, f_day, _restricted)" in _G
+    # [2026-07-05] anchor actualizado: el callsite ganó `form_data=` (fallback clinical-aware).
+    assert "fb_day = _build_fallback_day(nutrition, f_day, _restricted, form_data=form_data)" in _G
     assert 'fb_day["_day_fallback"] = True' in _G
 
 
@@ -308,10 +312,13 @@ def test_l1_bind_nutrition_tool_knob():
     # [L1-UNBIND-NUTRITION-TOOL] bind_tools gateado por knob (default True).
     # [P1-DEEPSEEK-JSON-MODE] el gate ahora también excluye JSON mode (tool-calling incompatible con
     # streaming JSON) → `if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:`. El knob sigue gateando.
+    # [2026-07-05] anchors actualizados: el bind vive ahora en el helper `_build_day_llm`
+    # (P1-DEEPSEEK-FLASH-FIRST) — `return _llm.bind_tools(...)` / `return _llm` (rama unbound).
+    # La invariante (knob + exclusión JSON-mode gatean el bind) sigue intacta.
     assert 'DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)' in _G
     assert "if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:" in _G
-    assert "day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)" in _G
-    assert "day_llm_with_tools = day_llm\n" in _G  # rama unbound
+    assert "return _llm.bind_tools(NUTRITION_TOOLS)" in _G
+    assert "return _llm\n" in _G  # rama unbound
 
 
 def test_z2_z3_meal_model_optional_standalone():

@@ -3344,6 +3344,14 @@ class PlanState(TypedDict):
     # su propia oportunidad de surgical regen.
     _marker_regen_attempted: bool
 
+    # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Flag de re-entrada del path
+    # quirúrgico sobre RECHAZO (hermano del anterior, que cubre el path
+    # approved-con-markers): cuando el reviewer rechaza y TODAS las causas
+    # son atribuibles a días concretos, `should_retry` enruta al surgical
+    # en vez de regenerar el plan completo. Una pasada por attempt (el
+    # reset vive en `retry_reflection_node`, igual que el hermano).
+    _surgical_reject_attempted: bool
+
     # ============================================================
     # [P2-CANDIDATE-A · 2026-05-08] CONTRATO: claves que NO viven en PlanState.
     # ------------------------------------------------------------
@@ -9173,6 +9181,16 @@ SODIUM_DAY_AUTOFIX_MAX_SWAPS = _env_int("MEALFIT_SODIUM_DAY_AUTOFIX_MAX_SWAPS", 
 # atún = línea enlatada cuya sustitución textual produce disparates "lata de pescado blanco").
 PROTEIN_REPEAT_AUTOFIX_ENABLED = _env_bool("MEALFIT_PROTEIN_REPEAT_AUTOFIX", True)
 PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY", 2, lambda v: 0 <= v <= 4)
+# [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Retry QUIRÚRGICO sobre rechazo: cuando el reviewer rechaza
+# y TODAS las causas son deterministas y atribuibles a días concretos (proteína/fruta/plato repetido
+# same-day, pareo fruta+salado, comida fuera de horario), `should_retry` enruta al surgical regen
+# (corrector LLM SOLO sobre los días culpables, conservando las comidas sanas) en vez de regenerar
+# el plan completo (planner + N días + review = ~5-10× el costo). Los días buenos quedan intactos —
+# pedido explícito del owner 2026-07-05 ("si el desayuno está mal, deja los otros horarios activos").
+# Una pasada por attempt; si la re-review vuelve a rechazar, cae al retry completo de siempre.
+SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
+# Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
+SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -20780,7 +20798,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # [P1-SODIUM-POSTMOTOR · 2026-07-04] Segunda pasada POST-motor: el autofix
     # pre-motor deja los días bajo techo, pero el solver/rebalance/refine son SODIO-CIEGOS y
     # pueden re-inflar líneas saladas al dimensionar macros (caso vivo plan ed6db673: días
-    # nacieron limpios, el motor dejó el Día 3 sobre 2,000 → banner micro_worst_day_ceiling).
+    # nacieron limpios, el motor dejó el Día 3 sobre 2,000 → banner de techo worst-day).
     # Mismo patrón del micro-recheck P2-2. El swap preserva gramos dimensionados; quantize +
     # qty-sync del estado final; corre ANTES del recompute del panel (el soft-reject lee el
     # estado ya reparado).
@@ -21684,6 +21702,70 @@ def _collect_day_fallback_days(plan_result) -> list[int]:
     return sorted(out)
 
 
+# [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Prefijos (accent-stripped, lowercase) de las razones de
+# rechazo que el path quirúrgico sabe reparar POR DÍA. Son exactamente los gates DETERMINISTAS cuyo
+# detector nombra al día culpable. Todo lo demás (skeleton fidelity, banda de macros, clínica,
+# prosa del reviewer LLM, cross-day) va al retry completo — conservador a propósito.
+_SURGICAL_REJECT_SAFE_PREFIXES = (
+    "misma proteina repetida el mismo dia",
+    "fruta repetida el mismo dia",
+    "pareo chocante fruta+salado",
+    "plato-base repetido el mismo dia",
+    "comida fuera de horario",
+)
+
+
+def _surgical_reject_targets(state) -> dict | None:
+    """[P1-SURGICAL-REJECT-RETRY · 2026-07-05] Clasifica un rechazo como quirúrgicamente reparable.
+
+    Devuelve {"days": [day_nums], "issues_by_day": {day: [issue_str, ...]}} cuando:
+      1. TODAS las `rejection_reasons` matchean la whitelist determinista (una sola razón
+         no-atribuible → None: el retry completo es la herramienta correcta).
+      2. Re-corriendo los detectores deterministas (build_variety_report +
+         _detect_slot_appropriateness — puros y baratos, cero LLM) se identifica el subconjunto
+         ESTRICTO de días culpables (todos los días malos → None, la regen completa cuesta igual).
+
+    Helper compartido entre `should_retry` (decide ruta) y `surgical_marker_regen_node`
+    (ejecuta) — mismo patrón anti-drift que `_collect_unresolved_marker_days`.
+    Fail-safe: cualquier error → None (path normal). tooltip-anchor: P1-SURGICAL-REJECT-RETRY"""
+    try:
+        from constants import strip_accents as _sa_sr
+        reasons = state.get("rejection_reasons") or []
+        plan_result = state.get("plan_result") or {}
+        days = plan_result.get("days") or []
+        if not reasons or not isinstance(days, list) or len(days) < 2:
+            return None
+        for _r in reasons:
+            _r_low = _sa_sr(str(_r).lower())
+            if not any(p in _r_low for p in _SURGICAL_REJECT_SAFE_PREFIXES):
+                return None
+        issues_by_day: dict = {}
+        try:
+            _rep = build_variety_report(plan_result)
+            for _iss in (_rep.get("issues") or []):
+                _m = _re.match(r"D[ií]a (\d+):", str(_iss))
+                if _m:
+                    issues_by_day.setdefault(int(_m.group(1)), []).append(str(_iss))
+        except Exception:
+            pass
+        try:
+            for _v in _detect_slot_appropriateness(days) or []:
+                _dnum = _v.get("day")
+                if isinstance(_dnum, int):
+                    issues_by_day.setdefault(_dnum, []).append(
+                        str(_v.get("text") or _v.get("label") or ""))
+        except Exception:
+            pass
+        _valid_days = {d.get("day") for d in days if isinstance(d, dict)}
+        issues_by_day = {d: [s for s in v if s] for d, v in issues_by_day.items()
+                         if d in _valid_days and v}
+        if not issues_by_day or len(issues_by_day) >= len(days):
+            return None
+        return {"days": sorted(issues_by_day), "issues_by_day": issues_by_day}
+    except Exception:
+        return None
+
+
 @_node_label("surgical_marker")
 async def surgical_marker_regen_node(state: PlanState) -> dict:
     """[P5-MARKER-APPROVED-1] Re-corrige días con `_critique_unresolved`
@@ -21714,7 +21796,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     """
     plan_result = state.get("plan_result") or {}
     if not isinstance(plan_result, dict):
-        return {"_marker_regen_attempted": True}
+        return {"_marker_regen_attempted": True, "_surgical_reject_attempted": True}
 
     marker_day_nums = _collect_unresolved_marker_days(plan_result)
     # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Incluir días de plantilla matemática
@@ -21722,9 +21804,22 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # arrastra la key (SingleDayPlanModel no la tiene) → éxito = marker limpio.
     if DAY_FALLBACK_HONESTY:
         marker_day_nums = sorted(set(marker_day_nums) | set(_collect_day_fallback_days(plan_result)))
+    # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Modo RECHAZO: sin markers y con review_passed=False,
+    # este nodo fue enrutado por el clasificador quirúrgico — re-derivar los días culpables con el
+    # MISMO helper que usó el router (anti-drift) y llevar sus issues específicos al corrector.
+    _reject_mode = False
+    _reject_issues: dict = {}
+    if not marker_day_nums and not state.get("review_passed", False) and SURGICAL_REJECT_RETRY_ENABLED:
+        _srj = _surgical_reject_targets(state)
+        if _srj:
+            _reject_mode = True
+            _reject_issues = _srj["issues_by_day"]
+            marker_day_nums = _srj["days"]
     if not marker_day_nums:
         # Defensa: should_retry ya filtra este caso pero el nodo es resiliente.
-        return {"_marker_regen_attempted": True}
+        # Ambos flags: sin esto, un enrutamiento reject-mode que llegue aquí sin
+        # targets re-derivables entraría en loop router→nodo-no-op→re-review.
+        return {"_marker_regen_attempted": True, "_surgical_reject_attempted": True}
 
     days = list(plan_result.get("days") or [])
     form_data = state.get("form_data") or {}
@@ -21740,10 +21835,16 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     skeleton = plan_result.get("_skeleton") or state.get("plan_skeleton") or {}
     skeleton_days = skeleton.get("days", []) if isinstance(skeleton, dict) else []
 
-    logger.info(
-        f"🩹 [P5-MARKER-REGEN] Re-corrigiendo {len(marker_day_nums)} día(s) "
-        f"con `_critique_unresolved` tras approved: {marker_day_nums}"
-    )
+    if _reject_mode:
+        logger.info(
+            f"🩹 [P1-SURGICAL-REJECT-RETRY] Reparación quirúrgica de {len(marker_day_nums)} día(s) "
+            f"culpable(s) del rechazo {marker_day_nums} — los demás días quedan intactos."
+        )
+    else:
+        logger.info(
+            f"🩹 [P5-MARKER-REGEN] Re-corrigiendo {len(marker_day_nums)} día(s) "
+            f"con `_critique_unresolved` tras approved: {marker_day_nums}"
+        )
     start_time = time.time()
 
     # Setup del corrector — paridad con self_critique_node line ~5124.
@@ -21764,6 +21865,19 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
             return day_num, None
         marker = target_day.get("_critique_unresolved") or {}
         original_issue = marker.get("issue") or ""
+        # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Modo rechazo: el issue viene del clasificador
+        # (los problemas ESPECÍFICOS de este día) + regla de mínima intervención — las comidas
+        # sanas se conservan LITERALES; solo cambia el plato culpable (pedido del owner).
+        if _reject_mode:
+            _day_issues = _reject_issues.get(day_num) or []
+            original_issue = (
+                "El plan fue RECHAZADO por el revisor por estos problemas ESPECÍFICOS de este día:\n- "
+                + "\n- ".join(str(s) for s in _day_issues[:6])
+                + "\n\nREGLA DE MÍNIMA INTERVENCIÓN (obligatoria): las comidas SIN problema deben "
+                  "quedar EXACTAMENTE iguales (mismo nombre, mismos ingredientes, misma receta, "
+                  "mismas calorías). Modifica ÚNICAMENTE la(s) comida(s) implicadas en los "
+                  "problemas listados, manteniendo sus targets calóricos y de macros."
+            )
         # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Día de plantilla matemática sin issue del
         # critique: sintetizar el problema para que el corrector regenere un día real.
         if not original_issue and target_day.get("_day_fallback"):
@@ -21983,6 +22097,16 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
     # APRUEBA, el branch `if approved` en review_plan_node sobrescribe
     # best con el plan re-aprobado — no hay regresión.
     # ============================================================
+    # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] En modo RECHAZO el flag propio evita el loop
+    # router→nodo dentro del mismo attempt y NO se toca `_marker_regen_attempted` (el path
+    # approved-con-markers conserva su oportunidad). La PROMOCIÓN a 'approved' tampoco aplica:
+    # el plan venía RECHAZADO — la re-review fresca decide; promover saltaría el veredicto.
+    if _reject_mode:
+        state_update = {
+            "plan_result": new_plan_result,
+            "_surgical_reject_attempted": True,
+        }
+        return state_update
     state_update = {
         "plan_result": new_plan_result,
         "_marker_regen_attempted": True,
@@ -24561,6 +24685,36 @@ def should_retry(state: PlanState) -> str:
             f"{(state.get('rejection_reasons') or [])[:2]}"
         )
 
+    # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Antes de quemar una regeneración COMPLETA (planner +
+    # N días + review ≈ 5-10× el costo): si TODAS las causas del rechazo son deterministas y
+    # atribuibles a un subconjunto de días (proteína/fruta/plato repetido same-day, pareo
+    # fruta+salado, comida fuera de horario), enrutar al surgical regen — corrige SOLO los días
+    # culpables conservando las comidas sanas. Corre ANTES del check de MAX_ATTEMPTS a propósito:
+    # también sirve como reparación de último intento (reparar > entregar degradado con banner).
+    # Una pasada por attempt (flag, reset en retry_reflection); si la re-review vuelve a rechazar,
+    # cae aquí de nuevo y sigue el path normal. Crítico/contextual ya retornaron arriba.
+    if SURGICAL_REJECT_RETRY_ENABLED and not state.get("_surgical_reject_attempted", False):
+        _srj = _surgical_reject_targets(state)
+        if _srj:
+            _srj_start = state.get("pipeline_start")
+            _srj_remaining = (
+                (GLOBAL_TIMEOUT - (time.time() - _srj_start))
+                if isinstance(_srj_start, (int, float)) and _srj_start > 0 else -1.0
+            )
+            if _srj_remaining >= SURGICAL_REJECT_MIN_BUDGET_S:
+                _srj_total = len((state.get("plan_result") or {}).get("days") or [])
+                logger.info(
+                    f"🩹 [P1-SURGICAL-REJECT-RETRY] Rechazo atribuible a {len(_srj['days'])} de "
+                    f"{_srj_total} día(s) {_srj['days']} → reparación quirúrgica (solo esos días) "
+                    f"en vez de regeneración completa."
+                )
+                return "marker_regen"
+            logger.info(
+                f"⏰ [P1-SURGICAL-REJECT-RETRY] Días culpables {_srj['days']} identificados pero sin "
+                f"presupuesto quirúrgico ({_srj_remaining:.0f}s < {SURGICAL_REJECT_MIN_BUDGET_S}s) → "
+                f"path normal de retry/entrega."
+            )
+
     # P1-X4: default `attempt=1` para alinear con el resto del archivo
     # (initial_state lo setea a 1; otros nodos leen `state.get("attempt", 1)`).
     # En el path normal no cambia el comportamiento — `initial_state` siempre
@@ -25053,6 +25207,10 @@ async def retry_reflection_node(state: PlanState) -> dict:
         # aprobado-con-markers iría directo a "end" porque arrastraría
         # el flag del attempt #1.
         "_marker_regen_attempted": False,
+        # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Mismo racional para el path
+        # quirúrgico sobre rechazo: cada attempt fresco merece una reparación
+        # barata antes de quemar otra regeneración completa.
+        "_surgical_reject_attempted": False,
     }
     if reasons:
         directive = f"El plan anterior fue RECHAZADO por: {'; '.join(reasons)}. MUTA DRÁSTICAMENTE la estrategia."
@@ -29880,6 +30038,9 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # enrute a `surgical_marker_regen`. Reset a False también en
             # `retry_reflection_node` para nuevos attempts.
             "_marker_regen_attempted": False,
+            # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] flag hermano del path
+            # quirúrgico sobre rechazo (reparar solo los días culpables).
+            "_surgical_reject_attempted": False,
             # P0-ORQ-3: declarado en PlanState (línea ~1872) y escrito por
             # `review_node` (línea ~5794) para alimentar la corrección quirúrgica
             # (`assemble_plan_node` línea ~5087, `_chunked_generation` línea ~2933).
