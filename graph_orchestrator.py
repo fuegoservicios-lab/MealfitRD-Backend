@@ -18087,7 +18087,26 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 if _best is None:
                     break
                 _, _bm, _bidx, _btok = _best
-                _new_line = f"150 g de {_swap_repl.lower()}"
+                # [P1-SODIUM-POSTMOTOR · 2026-07-04] gramos PRESERVADOS de la línea
+                # original (medidos vía DB): en el seam post-motor los gramos ya están
+                # dimensionados por el solver y un "150 g" fijo introduciría drift de macros.
+                # Pre-motor da igual (el solver re-dimensiona después). Fallback 150 g si la
+                # línea no resuelve a gramos (lata sin peso).
+                _orig_g = None
+                try:
+                    _raw_line = (
+                        (_bm.get("ingredients_raw") or _bm["ingredients"])[_bidx]
+                        if isinstance(_bm.get("ingredients_raw"), list)
+                        and _bidx < len(_bm.get("ingredients_raw") or [])
+                        else _bm["ingredients"][_bidx]
+                    )
+                    _orig_g = db.grams_from_ingredient_string(str(_raw_line))
+                except Exception:
+                    _orig_g = None
+                _new_line = (
+                    f"{int(round(_orig_g))} g de {_swap_repl.lower()}"
+                    if _orig_g and _orig_g > 0 else f"150 g de {_swap_repl.lower()}"
+                )
                 _bm["ingredients"][_bidx] = _new_line
                 _raw = _bm.get("ingredients_raw")
                 if isinstance(_raw, list) and _bidx < len(_raw):
@@ -18111,7 +18130,7 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 _swaps_left -= 1
         if actions:
             logger.info(f"🧂 [P1-SODIUM-DAY-AUTOFIX] {actions} acción(es) de sodio per-día "
-                        f"(strip cubito / swap enlatado→fresco) pre-motor.")
+                        f"(strip cubito / swap enlatado→fresco).")
         return actions
     except Exception as _na_e:
         logger.warning(f"[P1-SODIUM-DAY-AUTOFIX] no-op: {type(_na_e).__name__}: {_na_e}")
@@ -20581,6 +20600,29 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"re-abiertos por el rebalance/refine, re-trim en {_pe_retrim} día(s).")
         except Exception as _pe_e:
             logger.warning(f"[P2-AUDIT-V7-BATCH] (P2-2) micro-recheck post-motor no-op: {type(_pe_e).__name__}: {_pe_e}")
+
+    # [P1-SODIUM-POSTMOTOR · 2026-07-04] Segunda pasada POST-motor: el autofix
+    # pre-motor deja los días bajo techo, pero el solver/rebalance/refine son SODIO-CIEGOS y
+    # pueden re-inflar líneas saladas al dimensionar macros (caso vivo plan ed6db673: días
+    # nacieron limpios, el motor dejó el Día 3 sobre 2,000 → banner micro_worst_day_ceiling).
+    # Mismo patrón del micro-recheck P2-2. El swap preserva gramos dimensionados; quantize +
+    # qty-sync del estado final; corre ANTES del recompute del panel (el soft-reject lee el
+    # estado ya reparado).
+    if SODIUM_DAY_AUTOFIX_ENABLED:
+        try:
+            _na_pm = _day_sodium_autofix(days, form_data)
+            if _na_pm:
+                if PORTION_QUANTIZE_ENABLED:
+                    from nutrition_db import IngredientNutritionDB as _NaPmDB
+                    _apply_portion_quantization({"days": days}, _NaPmDB())
+                for _na_d in days or []:
+                    for _na_m in (_na_d.get("meals") or []) if isinstance(_na_d, dict) else []:
+                        if isinstance(_na_m, dict) and _na_m.get("_sodium_autofix_applied"):
+                            _sync_recipe_step_quantities(_na_m)
+                logger.info(f"🧂 [P1-SODIUM-POSTMOTOR] post-motor: {_na_pm} acción(es) — el motor "
+                            f"había re-inflado sodio tras el pase pre-motor.")
+        except Exception as _na_pm_e:
+            logger.warning(f"[P1-SODIUM-POSTMOTOR] post-motor no-op: {type(_na_pm_e).__name__}: {_na_pm_e}")
 
     # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Panel de micros FRESCO al final del motor: recompute
     # vía helper SSOT (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE) para que el panel
