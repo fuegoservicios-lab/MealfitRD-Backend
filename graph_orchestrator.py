@@ -14890,6 +14890,17 @@ RECIPE_CONTRACT_GATE_RATIO = _env_float("MEALFIT_RECIPE_CONTRACT_GATE_RATIO", 0.
 # variante al LLM. Conservador: CUALQUIER señal de fuego → contrato completo de 3 pilares (el
 # comportamiento previo). Rollback sin redeploy: MEALFIT_RECIPE_CONTRACT_NOCOOK=false.
 RECIPE_CONTRACT_NOCOOK_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_NOCOOK", True)
+# [P1-NOCOOK-TDF-STRIP · 2026-07-05] (screenshots del plan vivo 23c958bb) El LLM a veces emite el
+# pilar de fuego como PLACEHOLDER en platos fríos ("El Toque de Fuego: No requiere cocción") y el
+# backstop timetemp le appendeaba un tiempo de fuego FALSO ("(~10-12 min a fuego medio)") porque
+# solo chequea "falta tiempo", no el contenido → paso auto-contradictorio en producción (2 de 6
+# recetas del plan 23c958bb). Con el knob ON: (a) el backstop JAMÁS inyecta tiempo sobre un TdF
+# que declara sin-cocción; (b) si el resto del plato tampoco tiene señales de fuego, el paso
+# placeholder se ELIMINA (el contrato de 2 pilares P1-RECIPE-CONTRACT-NOCOOK ya permite su
+# ausencia). Plato con fuego real en otros pasos → placeholder intacto (lo caza el lint).
+RECIPE_NOCOOK_TDF_STRIP_ENABLED = _env_bool("MEALFIT_RECIPE_NOCOOK_TDF_STRIP", True)
+_NOCOOK_TDF_PLACEHOLDER_RE = _re.compile(
+    r"no\s+(?:requiere|necesita|lleva|hay)\s+(?:coccion|cocinar|fuego)|sin\s+coccion")
 
 # [P2-RAW-STAPLE-PRESSURE · 2026-07-02] (audit v4 creatividad) `raw_staple_ratio` ("pollo hervido +
 # arroz blanco" sin transformar — plato correcto pero CERO creatividad) era advisory puro: no alimentaba
@@ -15034,6 +15045,18 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                 continue
             if not step.strip().lower().startswith("el toque de fuego"):
                 continue
+            # [P1-NOCOOK-TDF-STRIP · 2026-07-05] TdF PLACEHOLDER ("No requiere cocción"): jamás
+            # inyectarle un tiempo de fuego falso. Si el resto del plato tampoco tiene señales de
+            # cocción, el paso se elimina (contrato de 2 pilares); si el plato SÍ cocina en otros
+            # pasos, se deja intacto (contradicción del LLM → la caza el lint, no la maquillamos).
+            if RECIPE_NOCOOK_TDF_STRIP_ENABLED and _NOCOOK_TDF_PLACEHOLDER_RE.search(
+                    _sa_tt(step.lower())):
+                _rest_steps = [s2 for j, s2 in enumerate(rec) if j != i]
+                if _meal_is_no_cook({"name": meal.get("name"), "recipe": _rest_steps}):
+                    rec.pop(i)
+                    meal["_nocook_tdf_stripped"] = True
+                    return True
+                return False
             if _CONTRACT_TIME_RE.search(step):
                 return False  # ya trae tiempo/temp — contrato cumplido
             hay = _sa_tt((str(meal.get("name") or "") + " " + step).lower())
@@ -19509,9 +19532,28 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
 # "1.5 taza de perejil" de la Ropa Vieja). Conteos: víveres/frutas count-based con techos servibles.
 _REALISM_AROMATIC_TOKENS = ("cebolla", "aji", "pimiento", "morron", "puerro", "apio")
 _REALISM_HERB_TOKENS = ("perejil", "cilantro", "cilantrico", "albahaca")
-_REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0))
+# [P1-REALISM-CAPS-EXT · 2026-07-05] (screenshots del plan vivo 23c958bb) Frutas ACUOSAS de volumen:
+# el solver/rebalance las infla para llenar kcal/micros — "3¾ taza de melón (562g)" en UN batido.
+# Techo 2 tazas / REALISM_FRUIT_VOLUME_CAP_G gramos por comida: más allá es no-servible aunque la
+# banda quede perfecta (misma filosofía del cap de proteína "505g de calamar").
+_REALISM_VOLUME_FRUIT_TOKENS = ("melon", "sandia", "patilla", "lechosa", "papaya", "pina")
+_REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0),
+                     (_REALISM_VOLUME_FRUIT_TOKENS, 2.0))
+REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
+                                      lambda v: 150 <= v <= 600)
 _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0, "clara": 8.0,
-                       "mandarina": 3.0, "aguacate": 1.0, "guineo": 2.0}
+                       "mandarina": 3.0, "aguacate": 1.0, "guineo": 2.0,
+                       # [P1-REALISM-CAPS-EXT] tomate entero ≤3/comida; frutas de conteo chico.
+                       "tomate": 3.0, "uva": 20.0, "aceituna": 12.0, "fresa": 10.0,
+                       "arandano": 30.0, "cereza": 15.0, "limon": 3.0}
+# [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
+# captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
+# cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
+_REALISM_COMPOUND_COUNT_CAPS = (("tomate cherry", 10.0), ("tomates cherry", 10.0))
+# Lead en tazas con fracción unicode/mixta ("3¾ taza") — el regex decimal previo no lo veía y las
+# líneas cuantizadas (post-quantize re-runs) usan esas fracciones.
+_REALISM_CUP_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*tazas?\b")
+_REALISM_FRAC_MAP = {"¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
 
 
 def _cap_unrealistic_portions(days, db=None) -> int:
@@ -19555,22 +19597,39 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         cur_g = float(m_g.group(1).replace(",", "."))
                         if cur_g > PORTION_CAP_PROTEIN_G and _ingredient_macro_group(s, db) == "protein":
                             factor = PORTION_CAP_PROTEIN_G / cur_g
-                    # 2) tazas de aromáticos/hierbas sobre el techo
+                        # [P1-REALISM-CAPS-EXT · 2026-07-05] 1.5) fruta acuosa de volumen en gramos
+                        # ("562g de melón") sobre el techo servible por comida.
+                        elif (cur_g > float(REALISM_FRUIT_VOLUME_CAP_G)
+                              and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_FRUIT_TOKENS)):
+                            factor = float(REALISM_FRUIT_VOLUME_CAP_G) / cur_g
+                    # 2) tazas de aromáticos/hierbas/frutas-volumen sobre el techo
+                    # [P1-REALISM-CAPS-EXT] lead con fracción unicode/mixta ("3¾ taza de melón") —
+                    # el regex decimal previo no la parseaba y las líneas post-quantize la usan.
                     if factor is None:
-                        m_c = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*tazas?\b", il)
-                        if m_c:
-                            cur_c = float(m_c.group(1).replace(",", "."))
-                            for _toks, _cap in _REALISM_CUP_CAPS:
-                                if any(_re.search(r"\b" + t, il) for t in _toks):
-                                    if cur_c > _cap:
-                                        factor = _cap / cur_c
-                                    break
-                    # 3) conteos servibles (3.5 papas → 3; 8 claras ok; 5 huevos → 4)
+                        m_c = _REALISM_CUP_LEAD_RE.match(il)
+                        if m_c and (m_c.group(1) or m_c.group(2)):
+                            cur_c = float((m_c.group(1) or "0").replace(",", "."))
+                            cur_c += _REALISM_FRAC_MAP.get(m_c.group(2) or "", 0.0)
+                            if cur_c > 0:
+                                for _toks, _cap in _REALISM_CUP_CAPS:
+                                    if any(_re.search(r"\b" + t, il) for t in _toks):
+                                        if cur_c > _cap:
+                                            factor = _cap / cur_c
+                                        break
+                    # 3) conteos servibles (3.5 papas → 3; 8 claras ok; 5 huevos → 4).
+                    # [P1-REALISM-CAPS-EXT] compuestos ANTES del sustantivo genérico
+                    # ("36.5 tomates cherry" → cap cherry 10, no cap tomate 3).
                     if factor is None:
                         m_n = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s+([a-zñ]+)", il)
                         if m_n:
-                            _noun = m_n.group(2).rstrip("s")
-                            _cap_n = _REALISM_COUNT_CAPS.get(_noun)
+                            _cap_n = None
+                            for _ct, _cv in _REALISM_COMPOUND_COUNT_CAPS:
+                                if _ct in il:
+                                    _cap_n = _cv
+                                    break
+                            if _cap_n is None:
+                                _noun = m_n.group(2).rstrip("s")
+                                _cap_n = _REALISM_COUNT_CAPS.get(_noun)
                             if _cap_n:
                                 cur_n = float(m_n.group(1).replace(",", "."))
                                 if cur_n > _cap_n:
@@ -19607,6 +19666,11 @@ _SHRINK_FLOOR_EXEMPT_TOKENS = (
     "vainilla", "cacao", "levadura", "polvo de hornear", "mayonesa", "mostaza", "sazon",
     "semillas", "chia", "linaza", "ajonjoli", "rallado", "parmesano", "sofrito", "caldo", "cubito",
 )
+# [P2-OIL-MICRO-BUMP · 2026-07-05] Lead de aceite BAJO 1 cdta ("¼ cdta de aceite de oliva (1ml)",
+# medido ×2 en el plan vivo 23c958bb): nadie mide 1 ml — el mínimo servible del aceite es 1 cdta
+# (5 ml). La exención de condimentos del shrink-floor lo dejaba pasar intacto.
+_MICRO_OIL_LEAD_RE = _re.compile(r"^\s*(?:¼|½|0[.,]25|0[.,]5|1/4|1/2)\s*(?:cdta|cucharadita)s?\b",
+                                 _re.IGNORECASE)
 
 
 def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
@@ -19653,6 +19717,21 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                     s = str(ing)
                     il = _sa(s.lower())
                     if "al gusto" in il or "opcional" in il:
+                        continue
+                    # [P2-OIL-MICRO-BUMP · 2026-07-05] aceite bajo 1 cdta → bump al mínimo
+                    # servible (1 cdta / 5ml), ANTES de la exención de condimentos que lo
+                    # dejaba pasar. String-surgery pura + lockstep raw; truth-up del meal abajo.
+                    if "aceite" in il and _MICRO_OIL_LEAD_RE.match(s):
+                        _new_oil = _MICRO_OIL_LEAD_RE.sub("1 cdta", s, count=1)
+                        _new_oil = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*ml\s*\)", "(5ml)", _new_oil, count=1)
+                        if _new_oil != s:
+                            ings[idx] = _new_oil
+                            if _lockstep and isinstance(raw[idx], str):
+                                _new_oil_raw = _MICRO_OIL_LEAD_RE.sub("1 cdta", str(raw[idx]), count=1)
+                                raw[idx] = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*ml\s*\)", "(5ml)",
+                                                   _new_oil_raw, count=1)
+                            touched += 1
+                            _meal_touched = True
                         continue
                     if any(tok in il for tok in _SHRINK_FLOOR_EXEMPT_TOKENS):
                         continue
@@ -20109,18 +20188,28 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
                         new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
                         if new_line == ing:
                             continue
-                        ings[idx] = new_line
+                        # [P2-SUBST-UNIT-DEDUP · 2026-07-05] "½ filete de mero" → candidato con la
+                        # misma unidad líder → "filete de Filete de..." — colapsar en línea/raw/
+                        # nombre/pasos (caso vivo del plan 23c958bb).
+                        ings[idx] = _dedup_unit_noun_collision(new_line)
                         raw = meal.get("ingredients_raw")
                         if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
-                            raw[idx] = _re.sub(rf"\b(?:{rx})\b", candidate, raw[idx], count=1, flags=_re.IGNORECASE)
+                            raw[idx] = _dedup_unit_noun_collision(
+                                _re.sub(rf"\b(?:{rx})\b", candidate, raw[idx], count=1, flags=_re.IGNORECASE))
                         name = meal.get("name")
                         if isinstance(name, str) and _re.search(rf"\b(?:{rx})\b", name, _re.IGNORECASE):
-                            meal["name"] = _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE)
+                            meal["name"] = _dedup_unit_noun_collision(
+                                _re.sub(rf"\b(?:{rx})\b", candidate, name, count=1, flags=_re.IGNORECASE))
                         note = f"{m.group(0)} → {candidate}"
                         meal.setdefault("_budget_substitutions", []).append(note)
                         if SUBST_RECIPE_REWRITE_ENABLED:
                             try:
                                 _rewrite_recipe_steps_after_subs(meal, [([m.group(0)], candidate)])
+                                _rec_dd = meal.get("recipe")
+                                if isinstance(_rec_dd, list):
+                                    meal["recipe"] = [
+                                        _dedup_unit_noun_collision(s2) if isinstance(s2, str) else s2
+                                        for s2 in _rec_dd]
                             except Exception:
                                 pass
                         logger.info(
@@ -20133,6 +20222,22 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
     except Exception as _bda_e:
         logger.warning(f"[P1-BUDGET-DRIVER-AWARE] pase no-op: {type(_bda_e).__name__}: {_bda_e}")
         return 0
+
+
+# [P2-SUBST-UNIT-DEDUP · 2026-07-05] (screenshot del plan vivo 23c958bb) "½ filete de mero" +
+# candidato "Filete de pescado blanco" → "½ filete de Filete de pescado blanco": la sustitución
+# textual no ve que la UNIDAD del lead ya es el sustantivo líder del candidato. Colapsa
+# "<unidad> de <misma-unidad> de" → "<unidad> de" (case/acento-insensible), preservando plural.
+_SUBST_UNIT_DEDUP_RE = _re.compile(
+    r"\b(filete|pieza|lonja|rodaja|taza|lata)(s)?\s+de\s+\1\s+de\s+", _re.IGNORECASE)
+
+
+def _dedup_unit_noun_collision(text: str) -> str:
+    """[P2-SUBST-UNIT-DEDUP · 2026-07-05] SSOT del colapso post-sustitución. Puro, fail-safe."""
+    try:
+        return _SUBST_UNIT_DEDUP_RE.sub(lambda m: f"{m.group(1)}{m.group(2) or ''} de ", str(text))
+    except Exception:
+        return text
 
 
 def _consolidate_duplicate_gram_lines(days) -> int:

@@ -339,16 +339,29 @@ _DISPLAY_SINGULAR = {
 _DISPLAY_LEAD_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(\S+)(.*)$")
 
 
+# [P2-DISPLAY-THIRDS · 2026-07-05] (screenshots del plan vivo 23c958bb) Decimales INTERNOS
+# "jugo de 0.5 limón" → "jugo de ½ limón" (el lead-prettify no los veía: esa línea no tiene
+# cantidad líder) + tercios en el lead ("0.33 taza de harina" → "⅓ taza"). Display-only.
+_DEC_FRAC_MAP = {"0.25": "¼", "0,25": "¼", "0.33": "⅓", "0,33": "⅓", "0.5": "½", "0,5": "½",
+                 "0.66": "⅔", "0,66": "⅔", "0.67": "⅔", "0,67": "⅔", "0.75": "¾", "0,75": "¾"}
+_INNER_DECIMAL_FRAC_RE = re.compile(r"\bde\s+(0[.,](?:25|33|5|66|67|75))(?=\s)")
+_LEAD_THIRDS = ((1.0 / 3.0, "⅓"), (2.0 / 3.0, "⅔"))
+
+
 def _prettify_quantity_display(s: str) -> str:
     """[P2-DISPLAY-FRACTIONS · 2026-07-01] (batch P1-DISH-REALISM-BATCH) Pulido cosmético del lead:
     (a) decimales de cuarto (0.25/0.5/0.75/1.5/1.75...) → fracción unicode vía number_to_fraction_str
     ("0.5 papa mediana"→"½ papa mediana", "1.75 cdta"→"1¾ cdta"); (b) concordancia "1 <plural>" →
     "1 <singular>" para el set curado ("1 cdas de aceite"→"1 cda de aceite"). Display-only, fail-safe
-    (cualquier duda → string intacto). NO toca strings que ya llevan fracción unicode."""
+    (cualquier duda → string intacto). NO toca strings que ya llevan fracción unicode.
+    [P2-DISPLAY-THIRDS · 2026-07-05] + tercios en el lead (0.33→⅓, 0.67→⅔) y decimales INTERNOS
+    ("de 0.5 limón" → "de ½ limón") aunque la línea no tenga cantidad líder."""
     try:
-        m = _DISPLAY_LEAD_RE.match(str(s))
+        s0 = str(s)
+        s0 = _INNER_DECIMAL_FRAC_RE.sub(lambda mm: "de " + _DEC_FRAC_MAP[mm.group(1)], s0)
+        m = _DISPLAY_LEAD_RE.match(s0)
         if not m:
-            return s
+            return s0
         qty_str, word, rest = m.group(1), m.group(2), m.group(3)
         qty = float(qty_str.replace(",", "."))
         frac_part = qty - int(qty)
@@ -361,11 +374,17 @@ def _prettify_quantity_display(s: str) -> str:
                     out_qty = pretty
             except Exception:
                 pass
+        elif 0 < qty < 10:
+            # [P2-DISPLAY-THIRDS] 0.33→⅓, 1.67→1⅔ (redondeo a cuartos no los cubre).
+            for _tv, _tc in _LEAD_THIRDS:
+                if abs(frac_part - _tv) < 0.02:
+                    out_qty = (str(int(qty)) if int(qty) else "") + _tc
+                    break
         out_word = word
         if abs(qty - 1.0) < 1e-6 and word.lower() in _DISPLAY_SINGULAR:
             out_word = _DISPLAY_SINGULAR[word.lower()]
         if out_qty == qty_str and out_word == word:
-            return s
+            return s0
         return f"{out_qty} {out_word}{rest}"
     except Exception:
         return s
