@@ -336,6 +336,21 @@ _DISPLAY_SINGULAR = {
     "hojas": "hoja", "dientes": "diente", "latas": "lata", "paquetes": "paquete", "unidades": "unidad",
     "lonjas": "lonja", "cucharadas": "cucharada", "cucharaditas": "cucharadita",
 }
+# [P2-PLURAL-CONCORDANCE · 2026-07-05] (screenshots plan 3aa6e58a: "2 huevo", "3 hoja de laurel",
+# "3 cebolla grande") El singularizador solo cubría "1 <plural>" → "1 <singular>"; el camino
+# inverso (N>1 con sustantivo singular) quedaba agramatical. Mapa curado: unidades (inverso del
+# de arriba) + alimentos contables frecuentes. Solo aplica a conteos ENTEROS >1.
+_DISPLAY_PLURAL = {v: k for k, v in _DISPLAY_SINGULAR.items()}
+_DISPLAY_PLURAL.update({
+    "huevo": "huevos", "cebolla": "cebollas", "tomate": "tomates", "zanahoria": "zanahorias",
+    "papa": "papas", "kiwi": "kiwis", "limon": "limones", "limón": "limones",
+    "guineo": "guineos", "manzana": "manzanas", "fresa": "fresas", "pepino": "pepinos",
+})
+# [P2-UNITLESS-SPOON-LEAD · 2026-07-05] ("Cda de miel (opcional)", "Cdta de miel") — unidad de
+# cuchara/taza SIN número líder: se asume 1 ("1 cda de miel"). Solo unidades de medida (jamás
+# alimentos); "Sal al gusto" no matchea.
+_UNITLESS_SPOON_LEAD_RE = re.compile(r"^\s*(cda|cdta|cucharada|cucharadita|taza)(s?)\s+de\s+",
+                                     re.IGNORECASE)
 _DISPLAY_LEAD_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(\S+)(.*)$")
 
 
@@ -359,6 +374,10 @@ def _prettify_quantity_display(s: str) -> str:
     try:
         s0 = str(s)
         s0 = _INNER_DECIMAL_FRAC_RE.sub(lambda mm: "de " + _DEC_FRAC_MAP[mm.group(1)], s0)
+        # [P2-UNITLESS-SPOON-LEAD] "Cda de miel (opcional)" → "1 cda de miel (opcional)".
+        if _UNITLESS_SPOON_LEAD_RE.match(s0):
+            s0 = _UNITLESS_SPOON_LEAD_RE.sub(
+                lambda mm: f"1 {mm.group(1).lower()} de ", s0, count=1)
         m = _DISPLAY_LEAD_RE.match(s0)
         if not m:
             return s0
@@ -383,6 +402,9 @@ def _prettify_quantity_display(s: str) -> str:
         out_word = word
         if abs(qty - 1.0) < 1e-6 and word.lower() in _DISPLAY_SINGULAR:
             out_word = _DISPLAY_SINGULAR[word.lower()]
+        # [P2-PLURAL-CONCORDANCE] "2 huevo" → "2 huevos" (solo conteos ENTEROS >1, mapa curado).
+        elif qty > 1.0 + 1e-6 and abs(frac_part) < 1e-6 and word.lower() in _DISPLAY_PLURAL:
+            out_word = _DISPLAY_PLURAL[word.lower()]
         if out_qty == qty_str and out_word == word:
             return s0
         return f"{out_qty} {out_word}{rest}"

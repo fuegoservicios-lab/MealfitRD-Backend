@@ -8684,6 +8684,30 @@ PLAN A EVALUAR (días generados):
                     # violación. La regla explícita instruye al LLM: skeleton
                     # GANA, resolver slot por OTRO medio (cambiar carbo,
                     # técnica, vegetal — NUNCA la proteína asignada).
+                    # [P1-CRITIQUE-VARIETY-CONTRACT · 2026-07-05] (corrida b1b95537: el corrector
+                    # "arregló" queso-repetido metiendo revoltillos en los 3 días → SOBREUSO DE
+                    # HUEVO 5/12 + 'revoltillo' ×3 días + same-day → 3 intentos completos quemados;
+                    # los autofixes de huevo declinan correctamente sobre PROTAGONISTAS). El
+                    # corrector solo veía SU día y ninguna regla de variedad: whack-a-mole
+                    # garantizado. Se le inyecta el contrato EXACTO de los gates + un resumen de
+                    # los platos de los OTROS días para que la corrección no colisione cross-day.
+                    _other_days_block = ""
+                    try:
+                        _ods = []
+                        for _od in days:
+                            if not isinstance(_od, dict) or _od.get("day") == day_num:
+                                continue
+                            _ods.append(f"Día {_od.get('day')}: " + "; ".join(
+                                str(_om.get("name"))[:48] for _om in (_od.get("meals") or [])
+                                if isinstance(_om, dict)))
+                        if _ods:
+                            _other_days_block = (
+                                "\nPLATOS DE LOS OTROS DÍAS (NO repitas sus preparaciones-base ni "
+                                "satures sus proteínas):\n"
+                                + "\n".join("  - " + s for s in _ods) + "\n")
+                    except Exception:
+                        _other_days_block = ""
+
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}
@@ -8700,6 +8724,12 @@ REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
   • Cambia la PRESENTACIÓN (bowl→wrap, plato→pita).
 - Solo si NINGUNA proteína está duplicada en el skeleton (ej. skeleton dice "pavo" Y "queso") puedes alternarlas entre slots.
 
+CONTRATO DE VARIEDAD (los validadores RECHAZAN el plan COMPLETO si tu corrección lo viola):
+- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día. NO resuelvas una repetición metiendo huevo/revoltillo — usa pollo, pescado, res, yogurt, queso o habichuelas.
+- La MISMA proteína principal NO puede aparecer en 2+ comidas del MISMO día.
+- El MISMO plato-base (revoltillo, batido, ensalada, wrap, panqueques, arepitas...) NO puede repetirse en 3+ días del plan — revisa los platos de los otros días abajo antes de elegir.
+- La MISMA fruta dulce NO puede aparecer en 2+ comidas del mismo día.
+{_other_days_block}
 REGLA BIDIRECCIONAL CRÍTICA:
 - Todo ingrediente en `ingredients` DEBE aparecer nombrado en la receta (Mise en place, El Toque de Fuego o Montaje).
 - Todo alimento nombrado en la receta DEBE estar en `ingredients`.
@@ -17460,8 +17490,12 @@ _SLICE_GRAMS_FLOOR = 15      # mínimo medible
 
 _STEP_QTY_UNITS = (r"g|gr|gramos?|kg|ml|l|taza(?:s)?|cda(?:s)?|cdta(?:s)?|cucharada(?:s)?|"
                    r"cucharadita(?:s)?|unidad(?:es)?|oz|lb|lonja(?:s)?|rebanada(?:s)?")
+# [P2-QTYSYNC-FRACTION-GUARD · 2026-07-05] lookbehind `(?<![\d/])`: en pasos con fracción ASCII
+# ("con 1/2 cda de aceite") el qty matcheaba SOLO el denominador ("2 cda de...") y la reescritura
+# producía basura tipo "con 1/1.25 cda" / "1/¾ cda" (3 avistamientos en planes vivos: corridas
+# 99583727 y f938c091). Con el guard, esas menciones quedan intactas (conservador anti-corrupción).
 _STEP_QTY_MENTION_RE = _re.compile(
-    r"(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s+de\s+"
+    r"(?<![\d/])(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s+de\s+"
     r"(?P<food>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*(?:\s+[\wáéíóúñü]+){0,2})")
 _ING_LEAD_QTY_RE = _re.compile(
     r"^\s*(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s*(?:de\s+|del\s+)?"
@@ -19675,7 +19709,11 @@ _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0, "clara": 8.0,
                        "mandarina": 3.0, "aguacate": 1.0, "guineo": 2.0,
                        # [P1-REALISM-CAPS-EXT] tomate entero ≤3/comida; frutas de conteo chico.
                        "tomate": 3.0, "uva": 20.0, "aceituna": 12.0, "fresa": 10.0,
-                       "arandano": 30.0, "cereza": 15.0, "limon": 3.0}
+                       "arandano": 30.0, "cereza": 15.0, "limon": 3.0,
+                       # [P2-CEBOLLA-COUNT-CAP · 2026-07-05] "3 cebolla grande (450g)" para una
+                       # tortilla de 1 persona (plan 3aa6e58a) — el cap de aromáticos solo cubría
+                       # líneas en TAZAS; el conteo entero se escapaba.
+                       "cebolla": 2.0, "zanahoria": 3.0}
 # [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
 # captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
 # cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
