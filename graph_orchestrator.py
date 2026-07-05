@@ -22394,6 +22394,14 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                 corrected_day["day"] = day_num
                 # IMPORTANTE: NO copiar `_critique_unresolved` — la corrección
                 # es el evento que limpia el marker.
+                # [P1-SURGICAL-CRITIQUE-FLAG · 2026-07-05] Paridad con el pro-fallback (línea
+                # ~5379): el día REESCRITO por el corrector deviene legítimamente del skeleton
+                # (swap de proteína para resolver repetición/slot) → `_critique_applied=True`
+                # relaja el threshold de SKELETON-FIDELITY a 3 (semántica documentada
+                # P3-SKELETON-FIDELITY-CRITIQUE-AWARE). Caso vivo corr=214635d9: el path flash
+                # NO seteaba el flag → "Día 1 omitió [conejo, huevos]" (2 = threshold estricto)
+                # mató una reparación quirúrgica válida y quemó el retry completo.
+                corrected_day["_critique_applied"] = True
                 logger.info(f"✅ [P5-MARKER-REGEN] Día {day_num} re-corregido exitosamente.")
                 # [PROTEIN-POOL-SCRUB 2026-05-07] Aplicar cleanup + scan tras
                 # surgical regen — caso plan 089e541c: surgical metió "Pechuga
