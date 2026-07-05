@@ -21933,6 +21933,33 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         # [P6-CRITIQUE-VS-SKELETON] Misma regla de precedencia inviolable
         # que el corrector — el surgical regen también puede recibir
         # "issue" del critique original que pidió cambiar protein asignada.
+        # [P1-SURGICAL-POOL-SWAP · 2026-07-05] En modo RECHAZO la regla inviolable original
+        # BLOQUEABA exactamente la reparación (caso vivo corr=093ec919: pool del Día 2 incluía
+        # 'Huevos' → huevo repetido en 2 comidas era "asignado" → el corrector lo mantuvo en
+        # ambas → re-review rechazó igual y se quemó el retry completo que el quirúrgico venía
+        # a ahorrar). La variante reject permite REDISTRIBUIR proteínas DENTRO del pool asignado
+        # del día (el pool trae 3 opciones; usar otra para la comida no-protagonista resuelve la
+        # repetición Y pasa el PROTEIN-POOL-SCRUB post-corrección). Fuera del pool sigue prohibido.
+        if _reject_mode:
+            _precedence_block = (
+                "REGLA DE PRECEDENCIA (si hay conflicto, gana esta):\n"
+                "- Los ingredientes deben salir del POOL ASIGNADO del planificador (arriba) — NUNCA "
+                "introduzcas una proteína que no esté en el pool del día.\n"
+                "- Si el problema es una PROTEÍNA REPETIDA en 2+ comidas del día: mantenla en la comida "
+                "donde es protagonista y SUSTITÚYELA en la(s) otra(s) por OTRA proteína DEL POOL "
+                "ASIGNADO del día (el pool trae varias opciones). Redistribuir dentro del pool está "
+                "PERMITIDO y es la solución esperada; ajusta la cantidad para conservar los macros de "
+                "esa comida."
+            )
+        else:
+            _precedence_block = (
+                "REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):\n"
+                "- La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el "
+                "problema previo pida cambiar una proteína/carbohidrato asignado.\n"
+                "- Si el problema sugiere cambiar proteína de almuerzo o cena para resolver slot "
+                "coherence, pero esa proteína FUE ASIGNADA por el planificador, MANTÉN la proteína y "
+                "resuelve por OTRO medio: cambiar carbohidrato, técnica, vegetal o presentación."
+            )
         correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO (sin resolver en pasada anterior): {original_issue}
@@ -21940,9 +21967,7 @@ PROBLEMA DETECTADO (sin resolver en pasada anterior): {original_issue}
 RESTRICCIONES NUTRICIONALES (respétalas siempre):
 {ctx['nutrition_context_minimal']}
 {skeleton_block}
-REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
-- La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el problema previo pida cambiar una proteína/carbohidrato asignado.
-- Si el problema sugiere cambiar proteína de almuerzo o cena para resolver slot coherence, pero esa proteína FUE ASIGNADA por el planificador, MANTÉN la proteína y resuelve por OTRO medio: cambiar carbohidrato, técnica, vegetal o presentación.
+{_precedence_block}
 
 REGLA BIDIRECCIONAL CRÍTICA:
 - Todo ingrediente en `ingredients` DEBE aparecer nombrado en la receta (Mise en place, El Toque de Fuego o Montaje).
