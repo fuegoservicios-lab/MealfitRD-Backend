@@ -18478,6 +18478,90 @@ _PROTEIN_SOURCE_COMPOUNDS = {
 }
 
 
+def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None) -> str | None:
+    """[P1-EGG-SAMEDAY-AUTOFIX · 2026-07-05] Reemplaza las líneas de huevo de UN meal por
+    proteína slot-aware del catálogo (misma maquinaria del egg-cap: escalera merienda→yogurt,
+    desayuno→queso, fuertes→pollo/queso; guards alergia/dislike + anti-colisión pollo same-day
+    re-escaneada). Retorna el label usado o None (sin candidato seguro / sin línea de huevo).
+    Marca `_protein_autofix_applied="huevo->X"` (fidelity-discount lo reconoce)."""
+    try:
+        from constants import strip_accents as _sa_e2
+        _fd = form_data or {}
+        dislikes = {_sa_e2(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        allergies = _fd.get("allergies")
+        _sl = _sa_e2(str(meal.get("meal", "")).lower())
+        _ladder_key = ("merienda" if "merienda" in _sl
+                       else "desayuno" if "desayuno" in _sl else "_fuerte")
+
+        def _ok(line: str, label: str) -> bool:
+            _low = _sa_e2(line.lower())
+            if any(dk and dk in _low for dk in dislikes):
+                return False
+            if label == "pollo":
+                _blob = _sa_e2(" ".join(
+                    str(mm.get("name", "")) + " " + " ".join(str(i) for i in mm.get("ingredients") or [])
+                    for mm in (day.get("meals") or []) if isinstance(mm, dict)).lower())
+                if any(_name_has_token(_sa_e2(a), _blob)
+                       for a in _MAIN_PROTEIN_ALIASES.get("pollo", ())):
+                    return False
+            if allergies:
+                try:
+                    if _scan_allergen_violations(
+                        {"days": [{"meals": [{"ingredients": [line]}]}]}, allergies
+                    ):
+                        return False
+                except Exception:
+                    return False
+            return True
+
+        _pick = next(((ln, lb) for ln, lb in _EGG_REPLACEMENT_LADDER[_ladder_key]
+                      if _ok(ln, lb)), None)
+        if _pick is None:
+            return None
+        _line, _label = _pick
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list):
+            return None
+        raw = meal.get("ingredients_raw")
+        raw_ok = isinstance(raw, list) and len(raw) == len(ings)
+        new_ings, new_raw, done = [], [], False
+        for i, s in enumerate(ings):
+            _is_egg = isinstance(s, str) and _re.search(
+                r"\bhuevos?\b|\bclaras?\b|\byemas?\b", _sa_e2(s.lower()))
+            if _is_egg and not done:
+                new_ings.append(_line)
+                new_raw.append(_line)
+                done = True
+            elif _is_egg:
+                continue
+            else:
+                new_ings.append(s)
+                new_raw.append(raw[i] if raw_ok else s)
+        if not done:
+            return None
+        meal["ingredients"] = new_ings
+        if raw_ok:
+            meal["ingredients_raw"] = new_raw
+        _food = _line.split(" de ", 1)[1] if " de " in _line else _line
+        try:
+            _rewrite_recipe_steps_after_subs(
+                meal, [(["huevo", "huevos", "clara", "claras", "yema", "yemas"], _food)])
+        except Exception:
+            pass
+        try:
+            _db = db
+            if _db is None:
+                from nutrition_db import IngredientNutritionDB as _E2DB
+                _db = _E2DB()
+            _truth_up_meal_macros_from_strings(meal, _db)
+        except Exception:
+            pass
+        meal["_protein_autofix_applied"] = f"huevo->{_label}"
+        return _label
+    except Exception:
+        return None
+
+
 def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
     """[P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Autofix DETERMINISTA de la proteína principal repetida
     el MISMO día (detector espejo del gate P1-VARIETY-SAME-DAY-PROTEIN: mismos labels, mismos aliases,
@@ -18576,8 +18660,30 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                         day_hits.setdefault(_lbl, []).append((meal, _hit[1]))
             fixes_left = PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY
             for _lbl, hits in day_hits.items():
-                if len(hits) < 2 or _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
-                    continue  # huevo/atún: gate como backstop (v1)
+                if len(hits) < 2 or fixes_left <= 0:
+                    continue
+                # [P1-EGG-SAMEDAY-AUTOFIX · 2026-07-05] HUEVO deja de estar excluido: era el
+                # label residual que sobrevivía al 🍗, al 🩹 y al egg-cap (que solo mira el CAP
+                # global, no la repetición same-day) — medido en corridas 200c69f3/2e0cb836.
+                # Se reescribe la comida NO-protagonista (huevo fuera del nombre, no
+                # aglutinante) con la maquinaria slot-aware del egg-cap; si ambas comidas son
+                # protagonistas (revoltillo + tortilla el mismo día), decide el corrector/gate.
+                if _lbl == "huevo":
+                    from constants import strip_accents as _sa_eh
+                    for _meal, _in_name in hits[1:]:
+                        if fixes_left <= 0:
+                            break
+                        _nl_eh = _sa_eh(str(_meal.get("name", "")).lower())
+                        if _re.search(r"\bhuevos?\b|\bclaras?\b|revoltillo|tortilla|omelet", _nl_eh):
+                            continue  # protagonista — jamás tocar
+                        if any(t in _nl_eh for t in _EGG_BINDER_DISH_TOKENS):
+                            continue  # aglutinante — funcional
+                        if _replace_meal_egg_lines(_d, _meal, form_data, db) is not None:
+                            fixes_left -= 1
+                            fixed += 1
+                    continue
+                if _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
+                    continue  # atún: gate como backstop (v1)
                 # conservar la PRIMERA comida con la proteína en el nombre (identidad); si ninguna
                 # la lleva en el nombre, conservar la primera aparición.
                 _keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)
