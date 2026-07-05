@@ -7226,6 +7226,10 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     except Exception as _abd_e:
         logger.debug(f"[P1-PRECISION-LEVERS] other-days brief no-op: {_abd_e}")
 
+    # [P1-EGG-POOL-DIVERSIFIER · 2026-07-05] ANTES de day-gen: limita el huevo a
+    # ≤ EGG_POOL_MAX_DAYS pools — prompt, scrub y fidelity leen el mismo pool mutado.
+    _diversify_egg_pools(skeleton_days[:days_in_chunk], form_data)
+
     async def _generate_candidate(temp_override=None):
         generated_days = []
         day_coros = []
@@ -9221,6 +9225,16 @@ PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MA
 # vive ahí, decide el gate (retry). Marca `_protein_autofix_applied="huevo->X"` → el
 # fidelity-discount lo reconoce como mutación legítima.
 EGG_CAP_AUTOFIX_ENABLED = _env_bool("MEALFIT_EGG_CAP_AUTOFIX", True)
+# [P1-EGG-POOL-DIVERSIFIER · 2026-07-05] RAÍZ del sobreuso de huevo (corrida 1b2d7696: huevo en
+# 6/12 comidas + 'revoltillo' ×3 días + repeticiones same-day = 3 gates distintos y 2 intentos
+# quemados en UNA renovación): el PLANNER asigna 'Huevos/Claras' al pool de TODOS los días → el
+# day-gen cocina huevo a diario como protagonista, y los correctores downstream (egg-cap, 🍗)
+# respetan protagonistas por diseño. Pase determinista post-skeleton: huevo permitido en
+# ≤ EGG_POOL_MAX_DAYS pools; en los días excedentes la entry huevo/claras se reemplaza por una
+# proteína ligera verificada rotada (diet-aware: vegano → legumbres) que no esté ya en el pool.
+# Corre ANTES de day-gen → prompt, scrub y fidelity leen el MISMO pool mutado (coherencia E2E).
+EGG_POOL_DIVERSIFIER_ENABLED = _env_bool("MEALFIT_EGG_POOL_DIVERSIFIER", True)
+EGG_POOL_MAX_DAYS = _env_int("MEALFIT_EGG_POOL_MAX_DAYS", 2, lambda v: 1 <= v <= 7)
 SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
@@ -18508,6 +18522,75 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         return fixed
     except Exception as _pr_e:
         logger.warning(f"[P1-PROTEIN-REPEAT-AUTOFIX] no-op: {type(_pr_e).__name__}: {_pr_e}")
+        return 0
+
+
+def _diversify_egg_pools(skeleton_days: list, form_data=None) -> int:
+    """[P1-EGG-POOL-DIVERSIFIER · 2026-07-05] Limita el huevo a ≤ EGG_POOL_MAX_DAYS pools del
+    skeleton: en los días excedentes reemplaza la(s) entry(s) huevo/claras por UNA proteína
+    ligera verificada rotada que no esté ya en ese pool (diet-aware: vegano → legumbres;
+    respeta alergias vía el scan SSOT). Muta skeleton_days in-place; retorna nº de pools
+    diversificados. Fail-safe. tooltip-anchor: P1-EGG-POOL-DIVERSIFIER"""
+    if not EGG_POOL_DIVERSIFIER_ENABLED or not isinstance(skeleton_days, list):
+        return 0
+    try:
+        from constants import strip_accents as _sa_ep
+        _fd = form_data or {}
+        _diet = _sa_ep(str(_fd.get("dietType") or "").lower())
+        if "vegan" in _diet:
+            _rotation = ("Habichuelas rojas", "Lentejas", "Garbanzos")
+        else:
+            _rotation = ("Queso blanco", "Yogurt griego entero", "Habichuelas rojas")
+        allergies = _fd.get("allergies")
+
+        def _cand_ok(cand: str) -> bool:
+            if not allergies:
+                return True
+            try:
+                return not _scan_allergen_violations(
+                    {"days": [{"meals": [{"ingredients": [cand]}]}]}, allergies)
+            except Exception:
+                return False  # conservador
+
+        _egg_days = 0
+        _rot_i = 0
+        diversified = 0
+        for _sd in skeleton_days:
+            if not isinstance(_sd, dict):
+                continue
+            _pool = _sd.get("protein_pool")
+            if not isinstance(_pool, list):
+                continue
+            _has_egg = any(_re.search(r"\bhuevos?\b|\bclaras?\b", _sa_ep(str(p).lower()))
+                           for p in _pool)
+            if not _has_egg:
+                continue
+            _egg_days += 1
+            if _egg_days <= EGG_POOL_MAX_DAYS:
+                continue
+            _pool_low = _sa_ep(" ".join(str(p) for p in _pool).lower())
+            _repl = next((c for c in (_rotation[_rot_i:] + _rotation[:_rot_i])
+                          if _sa_ep(c.lower()) not in _pool_low and _cand_ok(c)), None)
+            _rot_i = (_rot_i + 1) % len(_rotation)
+            if _repl is None:
+                continue  # sin candidato seguro → pool intacto (gates como backstop)
+            _new_pool, _replaced = [], False
+            for p in _pool:
+                if _re.search(r"\bhuevos?\b|\bclaras?\b", _sa_ep(str(p).lower())):
+                    if not _replaced:
+                        _new_pool.append(_repl)
+                        _replaced = True
+                    # entries extra de huevo (Huevos + Claras) colapsan en el reemplazo único
+                else:
+                    _new_pool.append(p)
+            _sd["protein_pool"] = _new_pool
+            diversified += 1
+            logger.info(f"🥚 [P1-EGG-POOL-DIVERSIFIER] Día {_sd.get('day', '?')}: huevo en el pool "
+                        f"del día-huevo #{_egg_days} (cap {EGG_POOL_MAX_DAYS}) → '{_repl}' "
+                        f"(el day-gen ya no puede cocinar huevo a diario).")
+        return diversified
+    except Exception as _ep_e:
+        logger.warning(f"[P1-EGG-POOL-DIVERSIFIER] no-op: {type(_ep_e).__name__}: {_ep_e}")
         return 0
 
 
