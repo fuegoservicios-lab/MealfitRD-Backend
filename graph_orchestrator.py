@@ -14217,12 +14217,48 @@ def _accent_flex_pattern(stripped_word: str) -> str:
     return "".join(_ACCENT_FLEX_MAP.get(ch, _re.escape(ch)) for ch in stripped_word)
 
 
+def _plan_has_same_day_fruit_repeat(plan: dict) -> bool:
+    """[P1-FRUIT-DEDUP-GATE-PARITY · 2026-07-05] Detector con la MISMA base que el gate
+    (`build_variety_report`: fruta FEATURED contada por mención-substring en el NOMBRE, 1 por
+    meal; repetición = la misma fruta en ≥2 comidas del mismo día). SSOT de la auto-verificación
+    del de-dup: si esto retorna True, el gate P2-VARIETY-GATE-REPEAT va a rechazar. Puro,
+    fail-safe → False. tooltip-anchor: P1-FRUIT-DEDUP-GATE-PARITY"""
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        def _sa(s):
+            return s
+    try:
+        for day in plan.get("days", []) or []:
+            counts: dict = {}
+            for meal in (day.get("meals", []) or []):
+                if not isinstance(meal, dict):
+                    continue
+                nl = _sa(str(meal.get("name", "")).lower())
+                for fr in _FEATURED_FRUITS:
+                    if fr in nl:
+                        counts[fr] = counts.get(fr, 0) + 1
+                        if counts[fr] >= 2:
+                            return True
+        return False
+    except Exception:
+        return False
+
+
 def dedup_featured_fruits_in_plan(plan: dict) -> int:
     """[P1-FRUIT-DEDUP · 2026-06-26] (audit gap #7) Reescribe determinísticamente la 2ª+ aparición de una
     fruta dulce FEATURED repetida el MISMO día a una fruta del pool no usada ese día (en el NOMBRE + los
     ingredientes). Retorna nº de swaps; mutates `plan` in-place. Fail-safe TOTAL (cualquier error → plan
     intacto). Corre en la capa clínica ANTES de build_variety_report + de la agregación de compras → la lista
-    refleja el swap (coherente receta↔lista). El drift de macros es despreciable (frutas iso-calóricas)."""
+    refleja el swap (coherente receta↔lista). El drift de macros es despreciable (frutas iso-calóricas).
+    [P1-FRUIT-DEDUP-GATE-PARITY · 2026-07-05] Paridad con el detector del GATE (medido en vivo,
+    corrida 99583727: el de-dup reportó "1 fruta reescrita" y la re-review post-quirúrgica volvió a
+    rechazar FRUTA REPETIDA — intento quemado):
+      (a) procesa TODAS las frutas del nombre (antes solo la PRIMERA — un nombre con dos frutas
+          dejaba la 2ª invisible mientras el gate sí la contaba);
+      (b) reescribe también `ingredients_raw` y los PASOS (la lista de compras lee raw);
+      (c) auto-verificación post-rewrite con la MISMA base del gate (2ª pasada si quedó
+          repetición; residual → warning honesto — jamás un "fix" silencioso que el gate desmiente)."""
     if not isinstance(plan, dict):
         return 0
     try:
@@ -14233,38 +14269,55 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
     swaps = 0
     pool = [(_sa(f.lower()), f) for f in _FRUIT_DEDUP_POOL]
     try:
-        for day in plan.get("days", []) or []:
-            seen = set()  # frutas featured ya usadas este día (accent-stripped)
-            for meal in (day.get("meals", []) or []):
-                if not isinstance(meal, dict):
-                    continue
-                name = str(meal.get("name", ""))
-                name_low = _sa(name.lower())
-                fr = next((f for f in _FEATURED_FRUITS if f in name_low), None)
-                if not fr:
-                    continue
-                if fr not in seen:
-                    seen.add(fr)
-                    continue
-                # fruta REPETIDA el mismo día → reemplazar por una del pool no usada ese día
-                repl = next((orig for low, orig in pool if low not in seen and low != fr), None)
-                if not repl:
-                    continue
-                try:
-                    pat = _re.compile(r"(?i)" + _accent_flex_pattern(fr) + r"s?")
-                    new_name, n = pat.subn(repl, name, count=1)
-                    if n == 0:
-                        continue  # no se pudo localizar la forma superficial en el nombre → no tocar (seguro)
-                    meal["name"] = new_name
-                    ings = meal.get("ingredients")
-                    if isinstance(ings, list):
-                        meal["ingredients"] = [
-                            (pat.sub(repl, str(i), count=1) if fr in _sa(str(i).lower()) else i) for i in ings
-                        ]
-                    seen.add(_sa(repl.lower()))
-                    swaps += 1
-                except Exception:
-                    continue
+        for _pass in range(2):  # [P1-FRUIT-DEDUP-GATE-PARITY] 2ª pasada si la verificación falla
+            for day in plan.get("days", []) or []:
+                seen = set()  # frutas featured ya usadas este día (accent-stripped)
+                for meal in (day.get("meals", []) or []):
+                    if not isinstance(meal, dict):
+                        continue
+                    _frs = [f for f in _FEATURED_FRUITS if f in _sa(str(meal.get("name", "")).lower())]
+                    for fr in _frs:
+                        name = str(meal.get("name", ""))
+                        if fr not in _sa(name.lower()):
+                            continue  # ya reescrita por un swap previo de este mismo meal
+                        if fr not in seen:
+                            seen.add(fr)
+                            continue
+                        # fruta REPETIDA el mismo día → reemplazar por una del pool no usada ese
+                        # día NI presente en este nombre (evita crear una colisión nueva in-place).
+                        repl = next((orig for low, orig in pool
+                                     if low not in seen and low != fr
+                                     and low not in _sa(name.lower())), None)
+                        if not repl:
+                            continue
+                        try:
+                            pat = _re.compile(r"(?i)" + _accent_flex_pattern(fr) + r"s?")
+                            new_name, n = pat.subn(repl, name, count=1)
+                            if n == 0:
+                                continue  # forma superficial no localizable → no tocar (seguro)
+                            meal["name"] = new_name
+                            for _key in ("ingredients", "ingredients_raw"):
+                                _lst = meal.get(_key)
+                                if isinstance(_lst, list):
+                                    meal[_key] = [
+                                        (pat.sub(repl, str(i), count=1)
+                                         if fr in _sa(str(i).lower()) else i)
+                                        for i in _lst
+                                    ]
+                            try:
+                                _rewrite_recipe_steps_after_subs(meal, [([fr], repl)])
+                            except Exception:
+                                pass
+                            seen.add(_sa(repl.lower()))
+                            swaps += 1
+                        except Exception:
+                            continue
+            if not _plan_has_same_day_fruit_repeat(plan):
+                break
+        if _plan_has_same_day_fruit_repeat(plan):
+            logger.warning("🍓 [P1-FRUIT-DEDUP-GATE-PARITY] repetición de fruta RESIDUAL tras el "
+                           "de-dup (pool agotado o nombre no-reescribible) → decidirá el gate "
+                           "(honesto: sin este aviso el log decía 'reescrita' y el gate rechazaba).")
     except Exception:
         return swaps
     return swaps
@@ -15565,6 +15618,11 @@ def _run_assembly_validations(
                     _replaced_blob.extend(_MAIN_PROTEIN_ALIASES.get(_src_lbl, (_src_lbl,)))
                 if meal.get("_sodium_autofix_applied") == "swap_canned":
                     _replaced_blob.append("sardinas atún sardina atun enlatado")
+                # [P1-SODIUM-BOMB-POOL · 2026-07-05] el swap de curados-en-sal también descuenta
+                # la proteína fuente del check de fidelity (mismo contrato que swap_canned).
+                if meal.get("_sodium_autofix_applied") == "swap_saltcured":
+                    _replaced_blob.append("bacalao arenque salami salchichon salchichón "
+                                          "pepperoni mortadela tocino panceta longaniza chorizo")
             _replaced_text = " ".join(s.lower() for s in _replaced_blob)
             if _replaced_text:
                 _n_missing_raw = len(missing_proteins)
@@ -18514,13 +18572,37 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
 
 # [P1-SODIUM-DAY-AUTOFIX · 2026-07-04] Bombas de sodio sin rol de macros (strip directo) y
 # enlatados swapeables a fresco (mismo pescado, sodio 10-50× menor). El swap conserva la
-# identidad culinaria (pescado→pescado); embutidos/queso NO se tocan (identidad del plato —
-# el §17 del prompt ya los presupuesta y el banner per-día los señala).
+# identidad culinaria (pescado→pescado); el queso NO se toca (identidad del plato —
+# el §17 del prompt ya lo presupuesta y el banner per-día lo señala).
 _SODIUM_STRIP_TOKENS = ("cubito", "sazon completo", "sazón completo", "sopita", "caldo concentrado")
 _SODIUM_SWAP_LADDER = (
     (r"sardinas?\s*(?:en\s*lata|enlatad\w*)?", "Filete de pescado blanco"),
     (r"at[uú]n\s*(?:en\s*(?:agua|aceite|lata)|enlatad\w*)", "Filete de pescado blanco"),
+    # [P1-SODIUM-BOMB-POOL · 2026-07-05] proteínas CURADAS EN SAL — la proteína ES sal (bacalao
+    # se cura en salmuera: miles de mg/100g; salami/tocino/longaniza igual). Ninguna rung previa
+    # tenía palanca y el plan 3aa6e58a salió con 4,576mg + banner worst-day. Mismo mecanismo
+    # grams-preserving del swap de enlatados; identidad culinaria más cercana del catálogo
+    # (pescado curado→pescado fresco; embutido→ave). Los patterns matchean sobre texto
+    # accent-stripped lowercase (por eso van en ascii).
+    (r"bacalao", "Filete de pescado blanco"),
+    (r"arenques?(?:\s+(?:ahumado|salado))?", "Filete de pescado blanco"),
+    (r"salami(?:\s+dominicano)?", "Pechuga de pollo"),
+    (r"salchichon", "Pechuga de pollo"),
+    (r"pepperoni", "Pechuga de pollo"),
+    (r"mortadela", "Pechuga de pollo"),
+    (r"tocino|panceta", "Pechuga de pollo"),
+    (r"longaniza|chorizo", "Pollo molido"),
 )
+# [P1-SODIUM-BOMB-POOL] tokens del subconjunto curado-en-sal (marker `swap_saltcured` — el
+# fidelity-discount los reconoce aparte del `swap_canned` histórico) + display corto del
+# reemplazo para el NOMBRE del plato.
+_SALTCURED_TOKEN_SET = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
+                        "mortadela", "tocino", "panceta", "longaniza", "chorizo")
+_SODIUM_SWAP_NAME_RX = (r"(?:sardinas?|at[uú]n(?:\s+en\s+(?:agua|aceite|lata))?|bacalao|"
+                        r"arenques?|salami(?:\s+dominicano)?|salchich[oó]n|pepperoni|"
+                        r"mortadela|tocino|panceta|longaniza|chorizo)")
+_SODIUM_SWAP_NAME_DISPLAY = {"Filete de pescado blanco": "Pescado blanco",
+                             "Pechuga de pollo": "Pollo", "Pollo molido": "Pollo"}
 
 
 def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
@@ -18541,16 +18623,25 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
             db = _NaDB()
         _fd = form_data or {}
         dislikes = {_sa_na(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
-        _swap_repl = "Filete de pescado blanco"
-        _swap_ok = not any(dk and dk in _sa_na(_swap_repl.lower()) for dk in dislikes)
-        if _swap_ok and _fd.get("allergies"):
-            try:
-                if _scan_allergen_violations(
-                    {"days": [{"meals": [{"ingredients": [_swap_repl]}]}]}, _fd.get("allergies")
-                ):
-                    _swap_ok = False
-            except Exception:
-                _swap_ok = False  # conservador: duda → no swapear (el strip sigue)
+        # [P1-SODIUM-BOMB-POOL · 2026-07-05] check de reemplazo PER-ENTRY (antes un único
+        # "Filete de pescado blanco" hardcodeado): alergia a pescado bloquea el swap de
+        # bacalao/enlatados pero salami→pollo sigue disponible. Cache por candidato.
+        _repl_ok_cache: dict = {}
+
+        def _repl_allowed(_r: str) -> bool:
+            if _r in _repl_ok_cache:
+                return _repl_ok_cache[_r]
+            _ok = not any(dk and dk in _sa_na(_r.lower()) for dk in dislikes)
+            if _ok and _fd.get("allergies"):
+                try:
+                    if _scan_allergen_violations(
+                        {"days": [{"meals": [{"ingredients": [_r]}]}]}, _fd.get("allergies")
+                    ):
+                        _ok = False
+                except Exception:
+                    _ok = False  # conservador: duda → no swapear con este candidato (el strip sigue)
+            _repl_ok_cache[_r] = _ok
+            return _ok
 
         def _line_sodium(_s: str) -> float:
             try:
@@ -18644,10 +18735,10 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                             ) if isinstance(_st, str) else _st
                             for _st in _rec
                         ]
-            # (2) swap del enlatado más rico si el día sigue sobre el techo.
+            # (2) swap del enlatado/curado-en-sal más rico si el día sigue sobre el techo.
             _swaps_left = int(SODIUM_DAY_AUTOFIX_MAX_SWAPS)
-            while _swap_ok and _swaps_left > 0 and _day_sodium(meals) > float(SODIUM_DAY_CEILING_MG):
-                _best = None  # (sodium, meal, key->idx pairs, matched_token)
+            while _swaps_left > 0 and _day_sodium(meals) > float(SODIUM_DAY_CEILING_MG):
+                _best = None  # (sodium, meal, idx, matched_token, replacement)
                 for _m in meals:
                     if not isinstance(_m, dict) or not isinstance(_m.get("ingredients"), list):
                         continue
@@ -18658,6 +18749,9 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                             _mm = _re.search(_rx, _sa_na(_s.lower()), _re.IGNORECASE)
                             if not _mm:
                                 continue
+                            # [P1-SODIUM-BOMB-POOL] alergia/dislike del reemplazo por entry.
+                            if not _repl_allowed(_repl):
+                                break
                             _na = _line_sodium(
                                 (_m.get("ingredients_raw") or _m["ingredients"])[_idx]
                                 if isinstance(_m.get("ingredients_raw"), list)
@@ -18665,11 +18759,11 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                                 else _s
                             )
                             if _best is None or _na > _best[0]:
-                                _best = (_na, _m, _idx, _mm.group(0))
+                                _best = (_na, _m, _idx, _mm.group(0), _repl)
                             break
                 if _best is None:
                     break
-                _, _bm, _bidx, _btok = _best
+                _, _bm, _bidx, _btok, _swap_repl = _best
                 # [P1-SODIUM-POSTMOTOR · 2026-07-04] gramos PRESERVADOS de la línea
                 # original (medidos vía DB): en el seam post-motor los gramos ya están
                 # dimensionados por el solver y un "150 g" fijo introduciría drift de macros.
@@ -18695,25 +18789,31 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 if isinstance(_raw, list) and _bidx < len(_raw):
                     _raw[_bidx] = _new_line
                 _name = str(_bm.get("name") or "")
-                if _re.search(r"sardina|at[uú]n", _name, _re.IGNORECASE):
+                if _re.search(_SODIUM_SWAP_NAME_RX, _sa_na(_name.lower()), _re.IGNORECASE):
                     _bm["name"] = _re.sub(
-                        r"(?:sardinas?|at[uú]n)(?:\s+en\s+(?:agua|aceite|lata))?",
-                        "Pescado blanco", _name, count=1, flags=_re.IGNORECASE,
+                        _SODIUM_SWAP_NAME_RX,
+                        _SODIUM_SWAP_NAME_DISPLAY.get(_swap_repl, _swap_repl),
+                        _name, count=1, flags=_re.IGNORECASE,
                     )
                 try:
-                    _rewrite_recipe_steps_after_subs(_bm, [(["sardina", "sardinas", "atun"], _swap_repl)])
+                    _rewrite_recipe_steps_after_subs(
+                        _bm, [(["sardina", "sardinas", "atun", _sa_na(str(_btok))], _swap_repl)])
                 except Exception:
                     pass
                 try:
                     _truth_up_meal_macros_from_strings(_bm, db)
                 except Exception:
                     pass
-                _bm["_sodium_autofix_applied"] = "swap_canned"
+                # [P1-SODIUM-BOMB-POOL] marker por familia (el fidelity-discount distingue ambos).
+                _bm["_sodium_autofix_applied"] = (
+                    "swap_saltcured"
+                    if any(t in _sa_na(str(_btok).lower()) for t in _SALTCURED_TOKEN_SET)
+                    else "swap_canned")
                 actions += 1
                 _swaps_left -= 1
         if actions:
             logger.info(f"🧂 [P1-SODIUM-DAY-AUTOFIX] {actions} acción(es) de sodio per-día "
-                        f"(strip cubito / swap enlatado→fresco).")
+                        f"(strip cubito / sal→al gusto / swap enlatado·curado→fresco).")
         return actions
     except Exception as _na_e:
         logger.warning(f"[P1-SODIUM-DAY-AUTOFIX] no-op: {type(_na_e).__name__}: {_na_e}")

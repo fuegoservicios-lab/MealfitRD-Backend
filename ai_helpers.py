@@ -592,6 +592,36 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 f"🥩 [GOAL PENALTY-FATTY] Carnes grasas frescas (chuleta/costilla/panceta) "
                 f"penalizadas ×0.3 ({_fatty_penalized_count} items) por goal='{_main_goal}'."
             )
+    # [P1-SODIUM-BOMB-POOL · 2026-07-05] Proteínas CURADAS EN SAL (bacalao/arenque/salami/tocino/
+    # longaniza...) — penalty UNIVERSAL en el sorteo (todos los goals: el presupuesto OMS de
+    # 2000mg de sodio no depende del objetivo). La proteína ES sal: un solo día con bacalao o
+    # salami revienta el techo aunque el §17 del prompt y el autofix de sodio hagan todo bien
+    # (medido en vivo: plan 3aa6e58a con pools Salami Dominicano + Bacalao → 4,576mg + banner
+    # micro_worst_day_ceiling + 3 intentos). Se APILA con el penalty de embutidos por goal
+    # (salami en gain_muscle queda ×0.01 — prácticamente excluido). Graceful: si el catálogo/
+    # gustos solo dejan curados, igual pueden salir. Rollback sin redeploy:
+    # MEALFIT_SODIUM_BOMB_POOL_PENALTY=1.0. tooltip-anchor: P1-SODIUM-BOMB-POOL
+    try:
+        from knobs import _env_float as _sb_envf
+        _sb_penalty = max(0.0, min(1.0, _sb_envf("MEALFIT_SODIUM_BOMB_POOL_PENALTY", 0.1)))
+    except Exception:
+        _sb_penalty = 0.1
+    if _sb_penalty < 1.0:
+        _SALT_CURED_PROTEIN_TOKENS = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
+                                      "mortadela", "tocino", "panceta", "longaniza", "chorizo",
+                                      "salchicha", "embutido", "jamon")
+        _salt_penalized = 0
+        for i, p in enumerate(available_proteins):
+            p_norm = strip_accents(p.lower())
+            if any(kw in p_norm for kw in _SALT_CURED_PROTEIN_TOKENS):
+                protein_weights[i] *= _sb_penalty
+                _salt_penalized += 1
+        if _salt_penalized:
+            logger.info(
+                f"🧂 [P1-SODIUM-BOMB-POOL] {_salt_penalized} proteína(s) curada(s) en sal "
+                f"penalizada(s) ×{_sb_penalty} en el sorteo (presupuesto de sodio OMS: "
+                f"bacalao/salami revientan el techo del día ellos solos)."
+            )
     
     fruit_weights = []
     if available_fruits:
