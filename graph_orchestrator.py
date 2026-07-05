@@ -18334,6 +18334,43 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                             ) if isinstance(_st, str) else _st
                             for _st in _rec
                         ]
+            # [P1-SALT-LINE-AUTOFIX · 2026-07-05] (1.5) SAL CUANTIFICADA → "Sal al gusto".
+            # El "sodio fantasma" de 6.5-10.8g/día promedio (rechazos en corridas 214635d9 y
+            # 0b04c3c9) no era fantasma: el LLM escribe "1 cdta de sal" como ingrediente
+            # (= 2,358mg de sodio — química correcta del medidor) y una sola línea revienta el
+            # techo del día. La escalera solo cubría cubitos/enlatados. Cuando el día supera el
+            # techo, toda línea de sal CUANTIFICADA (cdta/cda/gramos) pasa a "Sal al gusto" —
+            # culinariamente honesto en cocina es-DO (se sala al probar) y el panel deja de
+            # asumir la cucharada completa. "Sal al gusto"/"pizca de sal" existentes no se tocan.
+            _SALT_QTY_RX = (r"^\s*(?:\d+(?:[.,]\d+)?|[½¼¾])\s*"
+                            r"(?:cdtas?|cdas?|cucharaditas?|cucharadas?|g|gramos?)\s+de\s+sal\b")
+            for _m in meals:
+                if not isinstance(_m, dict):
+                    continue
+                _salted = False
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = _m.get(_key)
+                    if not isinstance(_lst, list):
+                        continue
+                    for _si, _s in enumerate(_lst):
+                        if isinstance(_s, str) and _re.match(_SALT_QTY_RX, _sa_na(_s.lower()),
+                                                             _re.IGNORECASE):
+                            _lst[_si] = "Sal al gusto"
+                            if _key == "ingredients":  # contar una vez por línea
+                                _salted = True
+                if _salted:
+                    actions += 1
+                    _m["_sodium_autofix_applied"] = "salt_to_taste"
+                    _rec = _m.get("recipe")
+                    if isinstance(_rec, list):
+                        _m["recipe"] = [
+                            _re.sub(
+                                r"(?:\d+(?:[.,]\d+)?|[½¼¾])\s*(?:cdtas?|cdas?|cucharaditas?|"
+                                r"cucharadas?)\s+de\s+sal\b",
+                                "sal al gusto", str(_st), flags=_re.IGNORECASE,
+                            ) if isinstance(_st, str) else _st
+                            for _st in _rec
+                        ]
             # (2) swap del enlatado más rico si el día sigue sobre el techo.
             _swaps_left = int(SODIUM_DAY_AUTOFIX_MAX_SWAPS)
             while _swap_ok and _swaps_left > 0 and _day_sodium(meals) > float(SODIUM_DAY_CEILING_MG):

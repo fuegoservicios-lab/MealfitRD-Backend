@@ -235,6 +235,10 @@ DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
     "    - Sazona con ajo, cebolla, orégano, limón, cilantro y ají — NO con cubitos ni sazón completo\n"
     "      (un cubito ≈ 1000 mg de sodio: revienta el presupuesto él solo).\n"
     "    - Los pasos de receta solo dicen 'sal' UNA vez por plato como máximo ('pizca de sal').\n"
+    # [P1-SALT-LINE-AUTOFIX · 2026-07-05] medido en vivo: '1 cdta de sal' como INGREDIENTE
+    # = 2,358 mg de sodio — una sola línea revienta el techo del día completo.
+    "    - Si listas sal en `ingredients`, escribe SIEMPRE 'Sal al gusto' — JAMÁS cantidades\n"
+    "      ('1 cdta de sal' = 2,358 mg de sodio: más que el techo del día entero en una línea).\n"
 )
 
 
