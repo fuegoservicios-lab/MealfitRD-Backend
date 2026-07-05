@@ -18106,6 +18106,13 @@ def _recipe_slice_units_to_grams(days: list, db=None) -> int:
                     low = _norm_text(ing)
                     if not any(u in low for u in _VAGUE_SLICE_UNITS):
                         continue
+                    # [P1-SLICE-GRAMS-GUARD · 2026-07-05] la línea YA es métrica: "50 g de queso
+                    # blanco en lonjas finas" tiene lead 50 GRAMOS, no 50 lonjas — multiplicarlo
+                    # ×25 fabricó "1250 g de queso blanco" EN VIVO (plan 3aa6e58a, Día 3, macros
+                    # ciegos a la línea). Solo se convierte cuando el lead NO trae unidad métrica.
+                    if _re.match(r"^\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|kg|ml)\b",
+                                 _nuf(ing.strip()), _re.IGNORECASE):
+                        continue
                     _mf = _VAGUE_SLICE_FOOD_RE.search(ing)
                     if not _mf:
                         continue  # unidad vaga pero no es queso/embutido → no tocar (ej. 'pedazo de pollo')
@@ -18122,10 +18129,25 @@ def _recipe_slice_units_to_grams(days: list, db=None) -> int:
                     if qty <= 0:
                         continue
                     grams = max(_SLICE_GRAMS_FLOOR, int(round(qty * _SLICE_GRAMS_PER_UNIT / 5.0) * 5))
+                    # [P1-SLICE-GRAMS-GUARD] techo de sanidad: una conversión de lonjas jamás
+                    # produce >250 g (10 lonjas de 25 g); sobre eso el lead no era un conteo real.
+                    grams = min(grams, 250)
                     name = _re.sub(r"\([^)]*\)", "", _mf.group(0)).strip(" ,.-")  # 'queso cottage' (sin hint '(Ng)')
                     if not name:
                         continue
-                    ings[i] = f"{grams} g de {name}"
+                    _new_sg = f"{grams} g de {name}"
+                    # [P1-SLICE-GRAMS-GUARD] raw en LOCKSTEP: antes solo se reescribía display →
+                    # divergencia display/raw medida en vivo ("75 g de queso" vs raw "75g de queso
+                    # cottage cocido") y la lista de compras (que lee raw) no veía la conversión.
+                    # Conservador: solo el elemento del raw textualmente idéntico al original.
+                    _raw_sg = m.get("ingredients_raw")
+                    if isinstance(_raw_sg, list):
+                        _old_norm_sg = _norm_text(ing)
+                        for _ri_sg, _rl_sg in enumerate(_raw_sg):
+                            if isinstance(_rl_sg, str) and _norm_text(_rl_sg) == _old_norm_sg:
+                                _raw_sg[_ri_sg] = _new_sg
+                                break
+                    ings[i] = _new_sg
                     _ch = True
                     fixed += 1
                 if _ch:
@@ -19641,6 +19663,14 @@ _REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.
                      (_REALISM_VOLUME_FRUIT_TOKENS, 2.0))
 REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
                                       lambda v: 150 <= v <= 600)
+# [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
+# clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
+# (lookup miss) o una pasada TARDÍA infla la línea después de los caps por clase, NINGUNA línea
+# individual de comida supera este techo — nadie sirve >600 g de un solo alimento a 1 persona.
+# Corre también en el persist boundary (última palabra). Exentos: agua/caldo (volúmenes líquidos
+# legítimos). La clase 47.5-tallos/1250-g muere por construcción, no por whitelist.
+LINE_GRAM_HARD_CAP = _env_int("MEALFIT_LINE_GRAM_HARD_CAP", 600, lambda v: 300 <= v <= 2000)
+_LINE_GRAM_CAP_EXEMPT = ("agua", "caldo")
 _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0, "clara": 8.0,
                        "mandarina": 3.0, "aguacate": 1.0, "guineo": 2.0,
                        # [P1-REALISM-CAPS-EXT] tomate entero ≤3/comida; frutas de conteo chico.
@@ -19695,7 +19725,13 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
                     if m_g:
                         cur_g = float(m_g.group(1).replace(",", "."))
-                        if cur_g > PORTION_CAP_PROTEIN_G and _ingredient_macro_group(s, db) == "protein":
+                        # [P1-LINE-GRAM-CEILING · 2026-07-05] 0) techo DURO genérico — no depende
+                        # de resolver el grupo/token (el "1250 g de queso blanco" evadió el cap de
+                        # proteína justo porque la clasificación no aplicó). Backstop absoluto.
+                        if cur_g > float(LINE_GRAM_HARD_CAP) and not any(
+                                t in il for t in _LINE_GRAM_CAP_EXEMPT):
+                            factor = float(LINE_GRAM_HARD_CAP) / cur_g
+                        elif cur_g > PORTION_CAP_PROTEIN_G and _ingredient_macro_group(s, db) == "protein":
                             factor = PORTION_CAP_PROTEIN_G / cur_g
                         # [P1-REALISM-CAPS-EXT · 2026-07-05] 1.5) fruta acuosa de volumen en gramos
                         # ("562g de melón") sobre el techo servible por comida.
@@ -19897,6 +19933,20 @@ _STEP_CARB_GHOSTS = (
     ("batata", "150g de batata", ("harina de batata",)),
     ("yuca", "150g de yuca", ("harina de yuca", "almidon de yuca", "casabe")),
 )
+# [P1-STEP-NUT-GHOST · 2026-07-05] (screenshots plan 3aa6e58a: panqueques con "pica los MEREYES /
+# espolvorea los mereyes" y CERO mereyes en ingredients[] → no se compran, receta rota al cocinar).
+# Espejo de _STEP_CARB_GHOSTS para frutos secos/semillas: el veg-guard solo materializa vegetales
+# y el carb-ghost solo carbs curados — los frutos secos se escapaban. El scan de alérgenos del
+# guard (SSOT) bloquea la línea ante alergia a frutos secos (fail-secure: jamás materializar un
+# alérgeno). Porciones modestas (10 g); truth-up en el caller. Rollback: MEALFIT_RECIPE_STEP_NUT_GUARD=false.
+RECIPE_STEP_NUT_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_NUT_GUARD", True)
+_STEP_NUT_GHOSTS = (
+    ("merey", "10g de mereyes", ()),
+    ("nueces", "10g de nueces", ()),
+    ("almendra", "10g de almendras fileteadas", ("leche de almendra", "harina de almendra")),
+    ("pistacho", "10g de pistachos", ()),
+    ("mani", "10g de maní", ("mantequilla de mani",)),
+)
 
 
 def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
@@ -19924,7 +19974,10 @@ def _add_missing_recipe_step_carbs(days, db=None, allergies=None) -> int:
                 hay = _sa((str(meal.get("name") or "") + " "
                            + " ".join(str(s) for s in rec if not _is_recipe_safety_note_step(s))).lower())
                 ing_hay = _sa(" ".join(str(i) for i in ings).lower())
-                for token, line, excludes in _STEP_CARB_GHOSTS:
+                # [P1-STEP-NUT-GHOST · 2026-07-05] frutos secos fantasma comparten el mecanismo
+                # completo del carb-ghost (detección nombre+pasos, excludes, scan de alérgenos).
+                _ghosts = _STEP_CARB_GHOSTS + (_STEP_NUT_GHOSTS if RECIPE_STEP_NUT_GUARD_ENABLED else ())
+                for token, line, excludes in _ghosts:
                     if not _re.search(r"\b" + token, hay):
                         continue
                     if _re.search(r"\b" + token, ing_hay):
