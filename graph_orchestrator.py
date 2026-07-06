@@ -20022,7 +20022,17 @@ _PROTEIN_REPEAT_SWAP_LADDER = {
     "cerdo": ("pollo", "pavo", "res"),
     "res": ("cerdo", "pollo", "pavo"),
     "pescado": ("pollo", "pavo"),
+    # atún sin entry a propósito: el swap textual atún→carne produce "lata de pollo en agua"
+    # (incoherente); atún×2 same-day → gate como backstop (raro; el gate degrada a advisory).
 }
+# [P1-PROTEIN-REPEAT-FALLBACK-NONGATED · 2026-07-06] Cuando la escalera de CARNES se agota (todas
+# presentes ese día O bloqueadas por dislikes/alergias), cae a proteínas NO-gated: legumbres/queso
+# NO cuentan en el gate same-day (por cultura arroz-con-habichuela/queso se repiten) y son platos
+# DR coherentes. Cierra el residual medido en el plan del owner (día con Tilapia + pollo×2 → el
+# pescado ya estaba tomado, pavo/cerdo/res fuera → `tgt None` → 3 intentos quemados en la semana 2).
+# El fallback es diet-aware (vegano excluye queso) y pasa por `_target_ok` (dislikes/alergias).
+PROTEIN_REPEAT_FALLBACK_NONGATED = _env_bool("MEALFIT_PROTEIN_REPEAT_FALLBACK_NONGATED", True)
+_PROTEIN_REPEAT_NONGATED_FALLBACK = ("habichuelas", "lentejas", "queso")
 # Formas textuales del label DESTINO: el alias molido va a molido (croqueta/albóndiga/taco conservan
 # identidad), los compuestos (pechuga/filete/lomo/bistec/tilapia…) van a la forma canónica verificada,
 # y el token suelto va al token suelto (mínima intervención en nombres tipo "Wrap de pollo").
@@ -20033,6 +20043,13 @@ _PROTEIN_TARGET_FORMS = {
     "res": {"bare": "res", "default": "carne de res", "molido": "carne molida"},
     "pescado": {"bare": "pescado", "default": "filete de pescado blanco",
                 "molido": "filete de pescado blanco"},
+    # [P1-PROTEIN-REPEAT-FALLBACK-NONGATED · 2026-07-06] formas destino de los fallbacks no-gated
+    # (legumbre guisada / queso blanco): plato DR coherente, verificado en el catálogo.
+    "habichuelas": {"bare": "habichuelas", "default": "habichuelas rojas guisadas",
+                    "molido": "habichuelas rojas guisadas"},
+    "lentejas": {"bare": "lentejas", "default": "lentejas guisadas",
+                 "molido": "lentejas guisadas"},
+    "queso": {"bare": "queso", "default": "queso blanco", "molido": "queso blanco"},
 }
 # Compuestos del label FUENTE que NO están en _MAIN_PROTEIN_ALIASES pero deben sustituirse
 # COMPLETOS (largo-primero) — si solo se reemplaza el token suelto interior queda un disparate:
@@ -20298,6 +20315,7 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         _fd = form_data or {}
         dislikes = {_sa_pr(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
         allergies = _fd.get("allergies")
+        _diet = _sa_pr(str(_fd.get("dietType") or "").lower())  # fallback diet-aware
 
         def _target_ok(label: str) -> bool:
             probe = _PROTEIN_TARGET_FORMS[label]["default"]
@@ -20457,14 +20475,23 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                             f"(conserva 1 comida-huevo, cierra el gate same-day)")
                     continue
                 if _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
-                    continue  # atún: gate como backstop (v1)
+                    continue  # label sin escalera → deja el gate decidir (backstop)
+                # [P1-PROTEIN-REPEAT-FALLBACK-NONGATED · 2026-07-06] escalera efectiva = carnes +
+                # fallback no-gated (legumbre/queso) cuando las carnes se agotan. Diet-aware:
+                # vegano excluye queso (lácteo).
+                _eff_ladder = _PROTEIN_REPEAT_SWAP_LADDER[_lbl]
+                if PROTEIN_REPEAT_FALLBACK_NONGATED:
+                    _fb = _PROTEIN_REPEAT_NONGATED_FALLBACK
+                    if "vegan" in _diet:
+                        _fb = tuple(f for f in _fb if f != "queso")
+                    _eff_ladder = _eff_ladder + _fb
                 # conservar la PRIMERA comida con la proteína en el nombre (identidad); si ninguna
                 # la lleva en el nombre, conservar la primera aparición.
                 _keep_idx = next((i for i, (_, _in_name) in enumerate(hits) if _in_name), 0)
                 for i, (_meal, _) in enumerate(hits):
                     if i == _keep_idx or fixes_left <= 0:
                         continue
-                    tgt = next((t for t in _PROTEIN_REPEAT_SWAP_LADDER[_lbl]
+                    tgt = next((t for t in _eff_ladder
                                 if t not in day_labels and _target_ok(t)), None)
                     if tgt is None:
                         break  # sin destino seguro → deja el gate decidir
