@@ -9265,6 +9265,14 @@ EGG_CAP_AUTOFIX_ENABLED = _env_bool("MEALFIT_EGG_CAP_AUTOFIX", True)
 # Corre ANTES de day-gen → prompt, scrub y fidelity leen el MISMO pool mutado (coherencia E2E).
 EGG_POOL_DIVERSIFIER_ENABLED = _env_bool("MEALFIT_EGG_POOL_DIVERSIFIER", True)
 EGG_POOL_MAX_DAYS = _env_int("MEALFIT_EGG_POOL_MAX_DAYS", 2, lambda v: 1 <= v <= 7)
+# [P1-EGG-PROTAGONIST-SURPLUS · 2026-07-06] Cierra el ÚLTIMO hueco medido en vivo del gate
+# same-day-protein (3 rechazos consecutivos en la sesión, día con "Puré de Batata con Huevos
+# Revueltos" + "Arepitas con Huevo" + "Revoltillo de Huevo"): el egg-cap y el 🍗 saltan a
+# TODO protagonista, pero solo el revoltillo/tortilla/omelet es huevo-INTRÍNSECO — los "X con
+# Huevo" son almidón + huevo como proteína nombrada, renombrables limpio. Cuando el día aún
+# tiene ≥2 comidas-huevo tras el pase de relleno, reasigna las AÑADIDAS conservando 1 (prioridad
+# al intrínseco). Rollback: =false → vuelve al comportamiento "gate/retry decide".
+EGG_PROTAGONIST_SURPLUS_ENABLED = _env_bool("MEALFIT_EGG_PROTAGONIST_SURPLUS", True)
 SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
@@ -20207,6 +20215,50 @@ def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None) -> s
         return None
 
 
+# [P1-EGG-PROTAGONIST-SURPLUS · 2026-07-06] Distingue el huevo-INTRÍNSECO (revoltillo/tortilla/
+# omelet/frittata: el huevo ES el plato — quitarlo destruye la identidad) del huevo-AÑADIDO
+# ("Puré de Batata con Huevos Revueltos", "Arepitas con Huevo": base de almidón + huevo como
+# proteína NOMBRADA → renombrable limpio). tooltip-anchor: P1-EGG-PROTAGONIST-SURPLUS
+_EGG_INTRINSIC_HEAD_RX = _re.compile(
+    r"^\s*(?:revoltillo|revuelto|tortilla|omelet|omelette|frittata|huevos?\b)", _re.IGNORECASE)
+_EGG_NAME_DESCRIPTOR_RX = _re.compile(
+    r"\s*(?:,\s*)?\b(?:con|y|a\s+la|al|sobre|acompañad[oa]s?\s+de|rellen[oa]s?\s+de)\s+"
+    r"huevos?(?:\s+(?:revueltos?|fritos?|duros?|cocidos?|escalfados?|pochados?|"
+    r"estrellados?|tibios?|pasados?\s+por\s+agua|a\s+la\s+plancha))?",
+    _re.IGNORECASE)
+_EGG_LABEL_DISPLAY = {"pollo": "Pechuga de pollo", "queso": "Queso blanco",
+                      "yogurt": "Yogurt griego"}
+# El huevo NOMBRADO con modo de cocción ("con Huevo Revuelto/Frito/Duro") es un acompañante
+# claro, reasignable aunque el plato base sea binder-token (arepita/torta): en "Arepitas con
+# Huevo Revuelto" el huevo es la guarnición, no el ligante de la masa.
+_EGG_SIDE_MODIFIER_RX = _re.compile(
+    r"huevos?\s+(?:revueltos?|fritos?|duros?|cocidos?|escalfados?|pochados?|"
+    r"estrellados?|tibios?)", _re.IGNORECASE)
+
+
+def _egg_is_intrinsic_dish(name) -> bool:
+    """El huevo es la IDENTIDAD del plato (revoltillo/tortilla/omelet/frittata como cabeza)."""
+    from constants import strip_accents as _sa_id
+    return bool(_EGG_INTRINSIC_HEAD_RX.match(_sa_id(str(name or "").strip())))
+
+
+def _strip_egg_from_name(name):
+    """Quita el descriptor de huevo del nombre ('X con Huevos Revueltos' → 'X'). Devuelve el
+    nombre limpio SOLO si realmente quitó el huevo (queda un nombre no vacío sin 'huevo'
+    residual), o None (deja al gate/retry decidir sin renombrar mal)."""
+    from constants import strip_accents as _sa_sn
+    orig = str(name or "").strip()
+    if not orig or not _EGG_NAME_DESCRIPTOR_RX.search(orig):
+        return None  # no hay descriptor de huevo NOMBRADO que quitar
+    cleaned = _EGG_NAME_DESCRIPTOR_RX.sub("", orig)
+    # conector colgante tras remover ("Arepitas  y Guineo" → "Arepitas y Guineo")
+    cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip(" ,·-")
+    cleaned = _re.sub(r"^\s*(?:con|y|de)\s+", "", cleaned, flags=_re.IGNORECASE).strip()
+    if not cleaned or _re.search(r"\bhuevos?\b", _sa_sn(cleaned.lower())):
+        return None
+    return cleaned
+
+
 def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
     """[P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Autofix DETERMINISTA de la proteína principal repetida
     el MISMO día (detector espejo del gate P1-VARIETY-SAME-DAY-PROTEIN: mismos labels, mismos aliases,
@@ -20324,17 +20376,59 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 # protagonistas (revoltillo + tortilla el mismo día), decide el corrector/gate.
                 if _lbl == "huevo":
                     from constants import strip_accents as _sa_eh
+                    # (1) pase relleno: reasigna huevo NO-protagonista (huevo fuera del nombre).
                     for _meal, _in_name in hits[1:]:
                         if fixes_left <= 0:
                             break
                         _nl_eh = _sa_eh(str(_meal.get("name", "")).lower())
                         if _re.search(r"\bhuevos?\b|\bclaras?\b|revoltillo|tortilla|omelet", _nl_eh):
-                            continue  # protagonista — jamás tocar
+                            continue  # protagonista — el pase (2) decide
                         if any(t in _nl_eh for t in _EGG_BINDER_DISH_TOKENS):
                             continue  # aglutinante — funcional
                         if _replace_meal_egg_lines(_d, _meal, form_data, db) is not None:
                             fixes_left -= 1
                             fixed += 1
+                    # (2) [P1-EGG-PROTAGONIST-SURPLUS · 2026-07-06] si el día AÚN tiene ≥2
+                    # comidas-huevo, reasigna las de huevo NOMBRADO renombrable ("X con Huevos")
+                    # — NO las intrínsecas (revoltillo/tortilla) ni las aglutinantes (croqueta:
+                    # el huevo liga la masa). Cierra "3 desayunos-huevo el mismo día" (3 rechazos
+                    # vivos). El "keeper" es un huevo INEVITABLE (intrínseco/aglutinante) si existe;
+                    # si TODAS son renombrables, conserva la primera.
+                    if EGG_PROTAGONIST_SURPLUS_ENABLED and fixes_left > 0:
+                        _egg_now = [m for m in meals if isinstance(m, dict)
+                                    and _alias_hit(m, "huevo") is not None]
+                        if len(_egg_now) >= 2:
+                            def _protected_binder(m):
+                                # binder-token dish protegido SOLO si el huevo del nombre NO trae
+                                # modo de cocción (sin 'revuelto/frito/...' podría ser el ligante).
+                                _nl = _sa_eh(str(m.get("name", "")).lower())
+                                return (any(t in _nl for t in _EGG_BINDER_DISH_TOKENS)
+                                        and not _EGG_SIDE_MODIFIER_RX.search(_nl))
+                            _renameable = [
+                                m for m in _egg_now
+                                if not _egg_is_intrinsic_dish(m.get("name"))
+                                and not _protected_binder(m) and _strip_egg_from_name(m.get("name"))]
+                            # comidas-huevo que quedarán si reasigno TODAS las renombrables:
+                            _unavoidable = [m for m in _egg_now if m not in _renameable]
+                            # si NINGUNA es inevitable, conserva la 1ª renombrable (≥1 comida-huevo ok).
+                            _to_reassign = _renameable if _unavoidable else _renameable[1:]
+                            for _meal in _to_reassign:
+                                if fixes_left <= 0:
+                                    break
+                                _clean = _strip_egg_from_name(_meal.get("name"))
+                                if not _clean:
+                                    continue
+                                _lab = _replace_meal_egg_lines(_d, _meal, form_data, db)
+                                if _lab is None:
+                                    continue
+                                _meal["name"] = _clean
+                                _reflect_added_protein_in_name(
+                                    _meal, _EGG_LABEL_DISPLAY.get(_lab, _lab), _sa_eh)
+                                fixes_left -= 1
+                                fixed += 1
+                                logger.info(f"🍳 [P1-EGG-PROTAGONIST-SURPLUS] Día {_d.get('day', '?')}: "
+                                            f"huevo-nombrado excedente → '{_lab}' "
+                                            f"(conserva 1 comida-huevo, cierra el gate same-day)")
                     continue
                 if _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
                     continue  # atún: gate como backstop (v1)
