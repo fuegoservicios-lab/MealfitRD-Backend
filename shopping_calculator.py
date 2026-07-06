@@ -1935,14 +1935,16 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
             # paquete (lata/paquete/sobre/pote) cuando difiere del market_container genérico.
             # Cierra el wart "1 lata (800 g seco)" cuando un mismo ítem (habichuelas) se vende
             # en lata Y en bolsa. Sin `unit` → fallback a db_container (comportamiento previo).
-            pkgs.append((g, pr, str(p.get("label") or ""), str(p.get("unit") or "")))
+            # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] `id` opcional (producto del súper)
+            # se arrastra al envase elegido → item.brand_product_id → picker pre-selecciona.
+            pkgs.append((g, pr, str(p.get("label") or ""), str(p.get("unit") or ""), str(p.get("id") or "")))
     if not pkgs:
         return None
-    sizes = [g for (g, _, _, _) in pkgs]
+    sizes = [g for (g, _, _, _, _) in pkgs]
     if g_total <= 0:
         # Sin necesidad calculable: 1 unidad del envase más pequeño.
-        g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: t[0])
-        return {"count": 1, "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
+        g_sel, pr_sel, lbl_sel, unit_sel, id_sel = min(pkgs, key=lambda t: t[0])
+        return {"count": 1, "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel, "id": id_sel}
     if len(sizes) > 1:
         # [P1-PKG-COST-OPTIMAL · 2026-06-22] Elegir por COSTO total mínimo, no por
         # desperdicio+conteo (el path legacy `_find_best_sku` penaliza el nº de paquetes,
@@ -1956,7 +1958,7 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
         # P1-PKG-COST-OPTIMAL.
         best_key = None
         chosen = None
-        for (g, pr, lbl, unit) in pkgs:
+        for (g, pr, lbl, unit, pid) in pkgs:
             raw = g_total / g
             floor_c = math.floor(raw)
             if floor_c >= 1:
@@ -1971,13 +1973,13 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
             key = (round(cost_c, 4), round(waste, 4), count_c, -g)
             if best_key is None or key < best_key:
                 best_key = key
-                chosen = {"count": int(count_c), "grams": g, "price": pr, "label": lbl, "unit": unit}
+                chosen = {"count": int(count_c), "grams": g, "price": pr, "label": lbl, "unit": unit, "id": pid}
         return chosen
     else:
         size_g = sizes[0]
         count = max(1, math.ceil(g_total / size_g))
-        g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
-        return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
+        g_sel, pr_sel, lbl_sel, unit_sel, id_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
+        return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel, "id": id_sel}
 
 
 def _choose_egg_carton(total_eggs: float, egg_packages):
@@ -2161,7 +2163,7 @@ def fetch_brand_pref_packages(user_id: str) -> dict:
     try:
         rows = execute_sql_query(
             """
-            SELECT p.food_key, sp.food_name, sp.brand, sp.presentation,
+            SELECT sp.id::text AS id, p.food_key, sp.food_name, sp.brand, sp.presentation,
                    sp.price_rd::float8 AS price_rd,
                    sp.size_grams::float8 AS size_grams
             FROM public.user_brand_preferences p
@@ -2250,6 +2252,10 @@ def _pkg_from_product_row(r) -> dict | None:
         "label": label.strip(" ·"),
         "unit": _pref_container_word(pres),
         "per_lb": not _explicit_size,
+        # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] identidad del producto del
+        # súper — viaja al ítem como `brand_product_id` para que el picker
+        # pre-seleccione la marca que la lista está usando.
+        "id": str(r.get("id") or "") or None,
     }
 
 
@@ -2297,7 +2303,7 @@ def fetch_brand_default_packages() -> dict:
     try:
         rows = execute_sql_query(
             """
-            SELECT sp.food_name, sp.brand, sp.presentation,
+            SELECT sp.id::text AS id, sp.food_name, sp.brand, sp.presentation,
                    sp.price_rd::float8 AS price_rd,
                    sp.size_grams::float8 AS size_grams
             FROM public.supermarket_products sp
@@ -2832,6 +2838,10 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     # viaja al ítem como `package_grams` para que el picker de marcas filtre las
     # variantes del súper al MISMO tamaño que la lista muestra (ej. 2 lb).
     _pkg_size_g = None
+    # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] Identidad del producto del súper
+    # que el costeo usó (default más barato O preferencia) → `brand_product_id`
+    # del ítem → el picker lo pre-selecciona ("la marca que tu lista está usando").
+    _pkg_product_id = None
 
     # Guards mínimos para Bloques 2 y 3 (solo 2 regex, eliminados los 15+ anteriores)
     is_meat_seafood = bool(re.search(r'\b(pollo|cerdo|carne|res|pescado|camar[oó]n|camarones|mariscos?|filetes?|chuletas?|longanizas?|salamis?|jam[oó]n|pavo|tocineta|bacon|salchichas?)\b', n_lower))
@@ -2884,6 +2894,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             sku_label = _mp_sel["label"] or _sku_size_label(sku_size_g, db_container)
             market_pkg_price = _mp_sel["price"]
             _pkg_size_g = sku_size_g
+            _pkg_product_id = _mp_sel.get("id") or None
             # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidad de DISPLAY = la forma del envase
             # elegido (lata vs paquete) cuando difiere del market_container genérico. Sin
             # `unit` en el package → fallback a db_container (comportamiento previo).
@@ -3392,6 +3403,9 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             result["package_grams"] = round(float(_pkg_size_g), 2)
         except (TypeError, ValueError):
             pass
+    # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] producto del súper que la lista usa.
+    if _pkg_product_id:
+        result["brand_product_id"] = _pkg_product_id
     # [P1-PKG-DURATION-PRICING] Precio del envase real elegido (RD$/paquete). Consumido por
     # `_cost_from_market` para costear por tamaño (count × precio), cerrando el sobrecobro
     # de precio plano en staples con descuento por volumen.
