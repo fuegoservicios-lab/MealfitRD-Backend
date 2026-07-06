@@ -12648,16 +12648,33 @@ def _inject_blanch_for_citrus_marinade(meal: dict) -> bool:
         _heated = any(_re.search(r"(?:" + "|".join(_SEAFOOD_HEAT_VERBS) + r")[^.]{0,50}\b" + _tok, _sa_bl(str(s).lower()))
                       for s in rec if isinstance(s, str))
         if not _heated and "blanquea" not in steps_low:
-            _food_disp = _tok
-            for _ing in (meal.get("ingredients") or []):
-                _il = _sa_bl(str(_ing).lower())
-                if _re.search(r"\b" + _tok, _il):
-                    _bare = _re.sub(r"\([^)]*\)", "", str(_ing))
-                    _bare = _re.sub(_LEAD_QTY_UNIT_STRIP_RE, "",
-                                    _bare).strip(" ,.-")
-                    if _bare:
-                        _food_disp = _bare
+            # [P2-BLANCH-INGREDIENT-TRUTH · 2026-07-06] El nombre del blanqueo sale del
+            # INGREDIENTE real — la mención en pasos puede ser HUÉRFANA (el autofix de
+            # coherencia renombra camarón→pescado en pasos, pero este inyector usaba el
+            # token del TEXTO: "Blanquea el camaron" con cero camarón en el plato —
+            # ceviche del plan cd4ae3c3). Prioridad: línea que respalde el token del
+            # texto → cualquier marisco blanqueable en ingredients → pescado genérico.
+            _food_disp = None
+            def _bare_of(_ing_s):
+                _b = _re.sub(r"\([^)]*\)", "", str(_ing_s))
+                return _re.sub(_LEAD_QTY_UNIT_STRIP_RE, "", _b).strip(" ,.-")
+            _ings_bl = [i for i in (meal.get("ingredients") or []) if isinstance(i, str)]
+            for _ing in _ings_bl:
+                if _re.search(r"\b" + _tok, _sa_bl(_ing.lower())):
+                    _food_disp = _bare_of(_ing) or _tok
                     break
+            if _food_disp is None:
+                for _ing in _ings_bl:
+                    _il = _sa_bl(_ing.lower())
+                    _t2 = next((t for t in _SEAFOOD_BLANCHABLE_TOKENS
+                                if _re.search(r"\b" + t, _il)), None)
+                    if _t2 is None and _re.search(r"\bpescad|\bfilete", _il):
+                        _t2 = "pescado"
+                    if _t2:
+                        _food_disp = _bare_of(_ing) or _t2
+                        break
+            if _food_disp is None:
+                _food_disp = _tok  # sin respaldo (raro) — comportamiento previo
             _art = "la" if (_sa_bl(_food_disp.split()[0].lower()).endswith("a")
                             and not _sa_bl(_food_disp.lower()).startswith("agua")) else "el"
             _blanch = (f"Blanquea {_art} {_food_disp} en agua hirviendo 1-2 minutos y escúrrelo "
@@ -15468,7 +15485,10 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
 # _TIMETEMP_TECHNIQUE_DEFAULTS que lista "horno" como técnica que NECESITA default. Un paso
 # de horno legítimo con tiempo sigue matcheando vía `\d+ min` / `°c` / `grados`.
 _CONTRACT_TIME_RE = _re.compile(
-    r"\d+\s*(?:-\s*\d+\s*)?(?:min|minuto|hora)|°\s*c|grados|fuego\s+(?:alto|medio|bajo)", _re.I)
+    # [P2-SEGUNDOS-ES-TIEMPO · 2026-07-06] "segundos" cuenta como tiempo: el blanqueo/sellado
+    # de mariscos usa "60 a 90 segundos" y el backstop le apendeaba "(~12-15 min en agua
+    # hirviendo)" — contradicción visible en el ceviche del plan cd4ae3c3.
+    r"\d+\s*(?:a\s*\d+\s*)?(?:-\s*\d+\s*)?(?:min|minuto|hora|segundo)|°\s*c|grados|fuego\s+(?:alto|medio|bajo)", _re.I)
 
 # [P2-RECIPE-ENGLISH-LINT · 2026-07-01] tokens de cocina EN de alta frecuencia (word-boundary, frases de
 # ≥2 palabras donde una sola sería ambigua). NO incluye palabras que colisionan con es-DO ("pan", "sal(t)een").
@@ -16449,16 +16469,46 @@ def _run_assembly_validations(
                 if RECIPE_COHERENCE_AUTOFIX and _recipe_steps:
                     # [P3-RECIPE-COHERENCE-AUTOFIX] Reemplaza la mención huérfana por la
                     # proteína real del meal (o "proteína") → coherente, sin retry.
+                    # [P2-AUTOFIX-NOTE-EXEMPT · 2026-07-06] Las NOTAS deterministas (⚠
+                    # seguridad, Nota del Nutricionista, "se reemplazó X por Y") citan el
+                    # alimento ORIGINAL a propósito — reemplazar dentro rompía sentido y
+                    # gramática ("se reemplazó el proteína crudo", batido del plan
+                    # cd4ae3c3). Patrón tolerante a acento/plural: el paso inyectado del
+                    # blanqueo escribía 'camaron' (sin tilde) y `\bcamarón\b` no lo veía.
                     _repl = _actual_protein or "proteína"
+                    from constants import strip_accents as _sa_af
+                    def _orphan_pat(_cp):
+                        _alt = {_re.escape(_cp), _re.escape(_sa_af(_cp))}
+                        return _re.compile(r'\b(?:' + '|'.join(_alt) + r')(?:es|s)?\b', _re.IGNORECASE)
+                    _pats = [_orphan_pat(_cp) for _cp in _orphan_keys]
+                    def _is_det_note(_s):
+                        _low = _sa_af(str(_s).lower())
+                        return (str(_s).strip().startswith(("⚠", "💡", "💪", "🌱", "🧉"))
+                                or "seguridad alimentaria" in _low
+                                or "nota del nutricionista" in _low
+                                or "se reemplazo" in _low)
                     _new_steps = []
                     for _step in _recipe_steps:
                         _s = str(_step)
-                        for _cp in _orphan_keys:
-                            _s = _re.sub(r'\b' + _re.escape(_cp) + r'\b', _repl, _s, flags=_re.IGNORECASE)
+                        if _is_det_note(_s):
+                            _new_steps.append(_s)
+                            continue
+                        for _p in _pats:
+                            _s = _p.sub(_repl, _s)
                         _new_steps.append(_re.sub(r'\s{2,}', ' ', _s).strip())
                     _recipe_steps = _new_steps
                     meal["recipe"] = _new_steps
                     recipe = " ".join(_new_steps).lower()
+                    # [P2-AUTOFIX-DESC · 2026-07-06] la DESCRIPTION también vende el plato
+                    # ("Camarones cocidos al limón" en un ceviche sin camarón) — mismo
+                    # reemplazo tolerante.
+                    _desc_af = meal.get("description")
+                    if isinstance(_desc_af, str) and _desc_af.strip():
+                        _d2 = _desc_af
+                        for _p in _pats:
+                            _d2 = _p.sub(_repl, _d2)
+                        if _d2 != _desc_af:
+                            meal["description"] = _re.sub(r'\s{2,}', ' ', _d2).strip()
                     logger.info(f"🩹 [RECIPE-COHERENCE-AUTOFIX] Día {day.get('day')} "
                                 f"{str(meal.get('name'))[:30]!r}: mención(es) huérfana(s) "
                                 f"{_orphan_keys} → {_repl!r} (evita retry, retry_penalty=1.0)")

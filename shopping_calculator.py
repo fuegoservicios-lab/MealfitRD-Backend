@@ -2356,6 +2356,11 @@ _BRAND_DEFAULT_MODIFIER_TOKENS = (
     # catálogo mezcla descriptores en inglés ("Roasted Salted") — "salted" es
     # el "con sal" inglés (sodio); "honey" cubre honey-roasted/glazed.
     "japones", "japonesa", "baby", "salted", "honey",
+    # [plan cd4ae3c3] "Aceite de oliva" → "Blend Girasol 750 Ml · Wala": una
+    # MEZCLA con girasol no es aceite de oliva (perfil graso distinto — el plan
+    # cuenta MUFA de oliva). blend/mezcla/girasol fuera del default salvo que el
+    # nombre del ítem los pida.
+    "blend", "mezcla", "girasol",
 )
 
 
