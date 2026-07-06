@@ -7058,6 +7058,27 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _cab and _cab > 0:
                 units['paquete (4 uds.)'] = units.get('paquete (4 uds.)', 0) + math.ceil(_cab / 4.0)
 
+        # [P1-LAUREL-LEAF-UNIT · 2026-07-06] "N hojas de laurel" → gramos.
+        # Las recetas piden laurel en HOJAS (count unit) y ninguna conversión lo
+        # llevaba a peso → el Bloque 1 de envases (master: pote 100 g, RD$150,
+        # market_packages poblado) jamás corría y el costeo caía al fallback
+        # count × price_per_unit: "4.67 hojas × RD$150 (precio del POTE aplicado
+        # POR HOJA) = RD$701" en el PDF del owner. Con la conversión (density
+        # 0.6 g/hoja del master; fallback 0.5) el flujo normal compra 1 pote
+        # (100 g) = RD$150 una sola vez, como cualquier especia.
+        if 'laurel' in name.lower():
+            _leaf_qty = 0.0
+            for k in list(units.keys()):
+                if k.strip().lower() in ('hoja', 'hojas'):
+                    _leaf_qty += units.pop(k)
+            if _leaf_qty > 0:
+                _g_leaf = g_per_u if 0 < g_per_u <= 5.0 else 0.5
+                units['g'] = units.get('g', 0.0) + _leaf_qty * _g_leaf
+                logging.info(
+                    f"🌿 [P1-LAUREL-LEAF-UNIT] {name}: {_leaf_qty:.2f} hojas → "
+                    f"{_leaf_qty * _g_leaf:.1f}g (density {_g_leaf} g/hoja) → path de envases"
+                )
+
         # Empaque comercial mínimo para Huevos (Cartones en RD)
         # PRE-PASO: Convertir cualquier peso/volumen de huevos a unidades
         # (ej: "150ml de claras de huevo" ≈ 5 huevos, "100g de huevo" ≈ 2 huevos)
