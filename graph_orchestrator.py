@@ -9389,6 +9389,15 @@ BARIATRIC_CLINICAL_FINALIZE_ENABLED = _env_bool("MEALFIT_BARIATRIC_CLINICAL_FINA
 BARIATRIC_DAY_KCAL_FLOOR_ENABLED = _env_bool("MEALFIT_BARIATRIC_DAY_KCAL_FLOOR", True)
 BARIATRIC_DAY_KCAL_FLOOR_PCT = max(0.90, min(1.0, _env_float("MEALFIT_BARIATRIC_DAY_KCAL_FLOOR_PCT", 0.96)))
 DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G = max(8, min(20, _env_int("MEALFIT_DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G", 15)))
+# [P1-GAINMUSCLE-KCAL-FLOOR · 2026-07-06] (review de logs, plan del owner 4339544f gain_muscle
+# DEGRADADO por kcal) el cerrador de kcal existía SOLO para bariátrico (añade aceite). Ganancia
+# muscular (superávit) también se queda bajo banda de kcal — el solver clampea (no puede escalar
+# proteína animal infinitamente) y no había cerrador. Este añade CARBOHIDRATO denso (arroz blanco
+# cocido, ~1.3 kcal/g) a comidas PRINCIPALES no-dulces hasta el piso — macro-apropiado para músculo
+# (superávit carb-driven; el aceite sesgaría las grasas fuera de banda). Respeta techos kcal Y carbs.
+GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED = _env_bool("MEALFIT_GAINMUSCLE_DAY_KCAL_FLOOR", True)
+GAINMUSCLE_DAY_KCAL_FLOOR_PCT = max(0.90, min(1.0, _env_float("MEALFIT_GAINMUSCLE_DAY_KCAL_FLOOR_PCT", 0.95)))
+GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G = max(30, min(180, _env_int("MEALFIT_GAINMUSCLE_KCAL_FLOOR_MAX_CARB_G", 100)))
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -21046,6 +21055,95 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
         return 0
 
 
+# arroz blanco cocido por gramo (USDA): 1.3 kcal, 0.28g carb, 0.027g prot, ~0.003g grasa.
+_GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G = 1.3, 0.28, 0.027
+
+
+def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None) -> int:
+    """[P1-GAINMUSCLE-KCAL-FLOOR · 2026-07-06] (plan del owner 4339544f gain_muscle degradado por
+    kcal) Espejo del cerrador bariátrico de kcal PERO para ganancia muscular (superávit): un día
+    bajo el piso de banda de kcal (típicamente porque la proteína ya cumplía y el solver clampea —
+    no escala carne infinitamente) recibe CARBOHIDRATO denso (arroz blanco cocido) en comidas
+    PRINCIPALES no-dulces hasta ~0.95×target. Carbo (no aceite) porque el superávit muscular es
+    carb-driven y el aceite sacaría las grasas de banda. Respeta el techo de kcal (1.05×) Y el de
+    carbs (1.10×) para no romper otra celda de la banda. NO toca días ya en banda. RENAL skip.
+    Idempotente (`_gainmuscle_kcal_floor`). Fail-safe. tooltip-anchor: P1-GAINMUSCLE-KCAL-FLOOR"""
+    if not GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED:
+        return 0
+    try:
+        from constants import strip_accents as _sa_gm
+        if _is_renal_condition(form_data):
+            return 0
+        _goal = _sa_gm(str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").lower())
+        if not ("gain_muscle" in _goal or "ganar_musculo" in _goal or "ganancia" in _goal or "bulk" in _goal):
+            return 0
+        macros = (nutrition or {}).get("macros") or {}
+        _pg = float(macros.get("protein_g") or 0)
+        _cg = float(macros.get("carbs_g") or 0)
+        _fg = float(macros.get("fats_g") or 0)
+        target_kcal = 4.0 * _pg + 4.0 * _cg + 9.0 * _fg
+        if target_kcal <= 0 or _cg <= 0:
+            return 0
+        floor = target_kcal * GAINMUSCLE_DAY_KCAL_FLOOR_PCT
+        kcal_ceiling = 1.05 * target_kcal
+        carb_ceiling_g = 1.10 * _cg  # no empujar carbos sobre banda superior
+        import math as _mgm
+        added_kcal = 0
+        _slot_rank = {"almuerzo": 0, "cena": 1, "desayuno": 2}
+        for d in days or []:
+            if not isinstance(d, dict):
+                continue
+            ms = [m for m in (d.get("meals") or []) if isinstance(m, dict)]
+            if not ms:
+                continue
+            day_kcal = sum(_meal_macro_num(m.get("cals")) for m in ms)
+            day_carbs = sum(_meal_macro_num(m.get("carbs")) for m in ms)
+            if day_kcal >= floor:
+                continue  # ya en/sobre banda → no tocar (protege el caso bueno)
+            _mains = sorted(
+                (m for m in ms if not _is_sweet_meal(m, _sa_gm)
+                 and not any(b in _sa_gm(str(m.get("name", "")).lower()) for b in _BEVERAGE_MEAL_MARKERS)),
+                key=lambda mm: next((r for s, r in _slot_rank.items()
+                                     if s in _sa_gm(str(mm.get("meal", "")).lower())), 3))
+            for m in _mains:
+                if day_kcal >= floor:
+                    break
+                if m.get("_gainmuscle_kcal_floor"):
+                    continue
+                _kcal_room = kcal_ceiling - day_kcal
+                _carb_room = carb_ceiling_g - day_carbs
+                if _kcal_room < 40 or _carb_room < 10:
+                    break
+                _need_k = floor - day_kcal
+                add_g = int(min(float(GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G),
+                                _mgm.ceil(_need_k / _GM_RICE_KCAL_G),
+                                _mgm.floor(_kcal_room / _GM_RICE_KCAL_G),
+                                _mgm.floor(_carb_room / _GM_RICE_CARB_G)))
+                if add_g < 20:
+                    continue
+                line = f"{add_g}g de arroz blanco cocido"
+                m.setdefault("ingredients", []).append(line)
+                if isinstance(m.get("ingredients_raw"), list):
+                    m["ingredients_raw"].append(line)
+                _dk = add_g * _GM_RICE_KCAL_G
+                m["carbs"] = round(_meal_macro_num(m.get("carbs")) + add_g * _GM_RICE_CARB_G)
+                m["protein"] = round(_meal_macro_num(m.get("protein")) + add_g * _GM_RICE_PROT_G)
+                m["cals"] = round(_meal_macro_num(m.get("cals")) + _dk)
+                m["macros"] = [f"P:{m['protein']}g", f"C:{m['carbs']}g", f"G:{round(_meal_macro_num(m.get('fats')))}g"]
+                m["_gainmuscle_kcal_floor"] = True
+                day_kcal += _dk
+                day_carbs += add_g * _GM_RICE_CARB_G
+                added_kcal += _dk
+        if added_kcal:
+            logger.info(f"🍚 [P1-GAINMUSCLE-KCAL-FLOOR] +{round(added_kcal)} kcal (arroz cocido en comidas "
+                        f"principales) para subir días de superávit muscular bajo banda "
+                        f"({int(GAINMUSCLE_DAY_KCAL_FLOOR_PCT*100)}% de {round(target_kcal)} kcal).")
+        return int(round(added_kcal))
+    except Exception as _gm_e:
+        logger.warning(f"[P1-GAINMUSCLE-KCAL-FLOOR] falló (no bloquea): {type(_gm_e).__name__}: {_gm_e}")
+        return 0
+
+
 # [P1-PORTION-REALISM-CAP · 2026-07-01] Techos por clase. Tazas: aromáticos ≤1 taza (cebolla/ají para un
 # revoltillo de 1 huevo NO son plato principal), hierbas ≤¼ taza (perejil/cilantro son GUARNICIÓN — el caso
 # "1.5 taza de perejil" de la Ropa Vieja). Conteos: víveres/frutas count-based con techos servibles.
@@ -24164,6 +24262,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 logger.info(f"🍳 [P1-BARIATRIC-DAY-KCAL-FLOOR] +{round(_dk_added)} kcal para subir días bajo banda.")
         except Exception as _dk:
             logger.warning(f"[P1-BARIATRIC-DAY-KCAL-FLOOR] en assemble falló (no bloquea): {type(_dk).__name__}: {_dk}")
+
+    # [P1-GAINMUSCLE-KCAL-FLOOR · 2026-07-06] espejo para ganancia muscular: días de superávit bajo
+    # banda de kcal (el solver clampea la proteína) → arroz cocido en comidas principales. Carbo,
+    # no aceite (superávit carb-driven; el aceite sesga las grasas). Respeta techos kcal + carbs.
+    if GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED:
+        try:
+            _gm_added = _repair_gainmuscle_day_kcal(days, nutrition, form_data)
+            if _gm_added:
+                logger.info(f"🍚 [P1-GAINMUSCLE-KCAL-FLOOR] +{round(_gm_added)} kcal (arroz) para subir días de "
+                            f"superávit muscular bajo banda.")
+        except Exception as _gm:
+            logger.warning(f"[P1-GAINMUSCLE-KCAL-FLOOR] en assemble falló (no bloquea): {type(_gm).__name__}: {_gm}")
 
     # [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Convierte 'X lonja/pedazo/tajada de queso/embutido' a GRAMOS antes del
     # quantize final ('0.5 lonja/pedazo de queso' → '15 g de queso') — el usuario lo señaló como incoherente.
