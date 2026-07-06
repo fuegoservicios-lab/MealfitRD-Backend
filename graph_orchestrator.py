@@ -21258,6 +21258,36 @@ _REALISM_COMPOUND_COUNT_CAPS = (("tomate cherry", 10.0), ("tomates cherry", 10.0
 # líneas cuantizadas (post-quantize re-runs) usan esas fracciones.
 _REALISM_CUP_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*tazas?\b")
 _REALISM_FRAC_MAP = {"¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
+# [P1-BIGFRUIT-GRAM-HINT · 2026-07-06] Las frutas grandes tienen peso POR-UNIDAD = fruta ENTERA en el
+# catálogo → `macros_from_ingredient_string("1 lechosa") = 711 kcal / 162g carbs` (papaya de ~700g). Un
+# conteo PELADO en un meal ("1 lechosa", sin gramaje) es un FANTASMA: corrompe el census del refinador
+# (que suma macros de cada string), el coherence guard receta↔lista y la lista de compras, y deja la línea
+# NO-movible por el refinador (solo mueve gram-leads). Fix: a un conteo pelado de fruta grande se le fija
+# una PORCIÓN servible con gramaje explícito — el hint gana sobre el conteo en el parser (verificado:
+# "1 lechosa (200g)" → 71 kcal). Solo estas frutas volumétricas (guineo/mango/uva ya tienen peso por-unidad
+# correcto). El display "1 lechosa (200g)" es honesto (≈ 1 lechosa mediana). tooltip-anchor: P1-BIGFRUIT-GRAM-HINT
+BIGFRUIT_GRAM_HINT_ENABLED = _env_bool("MEALFIT_BIGFRUIT_GRAM_HINT", True)
+BIGFRUIT_SERVING_G = _env_int("MEALFIT_BIGFRUIT_SERVING_G", 200, lambda v: 100 <= v <= 300)
+_BIGFRUIT_PHANTOM_TOKENS = ("lechosa", "papaya", "melon", "sandia", "patilla", "pina")
+
+
+def _bigfruit_bare_count_serving(s: str, il: str):
+    """[P1-BIGFRUIT-GRAM-HINT · 2026-07-06] Si `s` es un conteo PELADO de fruta grande sin gramaje
+    ("2 lechosa en cubos") → devuelve la línea con el conteo capado a 1 + gramaje de porción servible
+    ("1 lechosa en cubos (200g)") para que el parser lea la porción REAL (el hint gana sobre el conteo
+    fantasma). Devuelve None si: ya tiene gramaje, es gram/taza/cda-lead (otras ramas lo capan), o el
+    sustantivo no es fruta volumétrica. `il` = `s` con acentos-stripped+lower (detección). tooltip-anchor:
+    P1-BIGFRUIT-GRAM-HINT."""
+    if _re.search(r"\(\s*\d+(?:[.,]\d+)?\s*g", il):          # ya tiene hint de gramos
+        return None
+    if _re.match(r"^\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|taza|tazas|cda|cdas|cdta|cdtas)\b", il):
+        return None                                         # gram/taza/cda-lead → ramas existentes
+    m = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s+(?:de\s+)?([a-zñ]+)", il)
+    if not m or not any(m.group(2).startswith(t) for t in _BIGFRUIT_PHANTOM_TOKENS):
+        return None
+    # conteo → 1 en el string ORIGINAL (preserva nombre/rest/acentos), + hint de porción servible.
+    _new = _re.sub(r"^(\s*)\d+(?:[.,]\d+)?(\s+)", r"\g<1>1\g<2>", s, count=1)
+    return f"{_new.rstrip()} ({BIGFRUIT_SERVING_G}g)"
 
 
 def _cap_unrealistic_portions(days, db=None) -> int:
@@ -21294,6 +21324,19 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                 for idx, ing in enumerate(ings):
                     s = str(ing)
                     il = _sa(s.lower())
+                    # [P1-BIGFRUIT-GRAM-HINT · 2026-07-06] conteo pelado de fruta grande ("1 lechosa") → fija
+                    # una porción servible con gramaje (el parser lo lee como fruta entera ~700g = fantasma
+                    # que corrompe census/coherencia/lista). Corre ANTES de las ramas factor (reescribe directo).
+                    if BIGFRUIT_GRAM_HINT_ENABLED:
+                        _bf_new = _bigfruit_bare_count_serving(s, il)
+                        if _bf_new and _bf_new != s:
+                            ings[idx] = _bf_new
+                            if _lockstep:
+                                _rs = str(raw[idx])
+                                raw[idx] = _bigfruit_bare_count_serving(_rs, _sa(_rs.lower())) or _rs
+                            capped += 1
+                            _meal_touched = True
+                            continue
                     factor = None
                     # 1) proteína en gramos sobre el techo (505g calamar → 300g)
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
