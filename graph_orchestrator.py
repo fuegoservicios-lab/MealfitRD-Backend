@@ -21551,6 +21551,12 @@ _BUDGET_CHEAP_EQUIVALENTS = (
     (r"ch[ií]a", "Linaza", ()),
     (r"quinoa|quinua", "Arroz integral", ()),
     (r"yogurt griego|yogur griego", "Yogurt natural", ()),
+    # [P2-HABAS-CHEAPEN · 2026-07-06] (review #14, plan 17c3fa8f) Habas RD$205/lb = 3-4× más
+    # caras que otras legumbres (habichuelas rojas ~RD$53/lb, frijoles ~RD$72/lb) — driver #1
+    # del exceso de presupuesto (RD$820, 4 paquetes). Misma familia (legumbre→legumbre guisada):
+    # "habas guisadas" → "habichuelas rojas guisadas" es coherente es-DO. `\b` evita matchear
+    # "habichuelas". Solo dispara sobre planes EXCEDIDOS (el cheapen no toca planes en presupuesto).
+    (r"\bhabas?\b", "Habichuelas rojas", ("habichuela",)),
 )
 
 
