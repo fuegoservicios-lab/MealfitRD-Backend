@@ -42,7 +42,8 @@ def test_minimal_total_line_survives():
     # Anchor en el banner de la UI ("costo real") — el mismo comment existe en
     # variante PDF más arriba en el archivo (línea ~2783) y confundía el index.
     banner = src.index("Estado honesto del presupuesto: costo real")
-    win = src[banner:banner + 9000]
+    # 9000→13000: el gate post-restock (P3-BUDGET-BANNER-POST-RESTOCK) creció el bloque.
+    win = src[banner:banner + 13000]
     assert "Esta ida al súper:" in win, (
         "el total 'esta ida' es dato ÚNICO (≠ total del ciclo) — vive en el banner de presupuesto"
     )
