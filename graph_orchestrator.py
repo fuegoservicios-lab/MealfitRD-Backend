@@ -14790,10 +14790,17 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
                 for meal in (day.get("meals", []) or []):
                     if not isinstance(meal, dict):
                         continue
-                    _frs = [f for f in _FEATURED_FRUITS if f in _sa(str(meal.get("name", "")).lower())]
+                    # [P2-FRUIT-DEDUP-BOUNDED · 2026-07-06] ('Eslechosacas' VIVO en el guard-blind:
+                    # "Es-PINA-cas" con "pina"→"lechosa" sustituido SIN límite de palabra — la
+                    # detección Y el rewrite eran substring). \b...s?\b en ambos (lección
+                    # 'res'↔'fresas', cuarta aparición de la clase).
+                    def _fr_bounded(tok, txt):
+                        return bool(_re.search(r"\b" + _re.escape(tok) + r"s?\b", txt))
+                    _frs = [f for f in _FEATURED_FRUITS
+                            if _fr_bounded(f, _sa(str(meal.get("name", "")).lower()))]
                     for fr in _frs:
                         name = str(meal.get("name", ""))
-                        if fr not in _sa(name.lower()):
+                        if not _fr_bounded(fr, _sa(name.lower())):
                             continue  # ya reescrita por un swap previo de este mismo meal
                         if fr not in seen:
                             seen.add(fr)
@@ -14802,11 +14809,11 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
                         # día NI presente en este nombre (evita crear una colisión nueva in-place).
                         repl = next((orig for low, orig in pool
                                      if low not in seen and low != fr
-                                     and low not in _sa(name.lower())), None)
+                                     and not _fr_bounded(low, _sa(name.lower()))), None)
                         if not repl:
                             continue
                         try:
-                            pat = _re.compile(r"(?i)" + _accent_flex_pattern(fr) + r"s?")
+                            pat = _re.compile(r"(?i)\b" + _accent_flex_pattern(fr) + r"s?\b")
                             new_name, n = pat.subn(repl, name, count=1)
                             if n == 0:
                                 continue  # forma superficial no localizable → no tocar (seguro)
@@ -14816,7 +14823,7 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
                                 if isinstance(_lst, list):
                                     meal[_key] = [
                                         (pat.sub(repl, str(i), count=1)
-                                         if fr in _sa(str(i).lower()) else i)
+                                         if _fr_bounded(fr, _sa(str(i).lower())) else i)
                                         for i in _lst
                                     ]
                             try:
@@ -18037,10 +18044,16 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                     continue
                 name_low = _norm_text(m.get("name", ""))
                 is_batido = any(t in name_low for t in _GEN_BATIDO_NAME_TOKENS)
-                keep, changed = [], False
-                for ing in ings:
+                # [P1-GEN-SANITY-RAW-SYNC · 2026-07-06] ACTOR #2 del desalineador crónico (el
+                # tracer lo bracketeó en post_humanize→boundary): este autofix reconstruía SOLO
+                # `ingredients` — cada drop dejaba el glitch VIVO en el raw y desalineaba a mitad
+                # de lista (raw congelado con 'Eslechosacas'/incongruentes para siempre). Ahora
+                # trackea los índices conservados y filtra el raw en lockstep.
+                keep, keep_idx, changed = [], [], False
+                for _gs_i, ing in enumerate(ings):
                     if not isinstance(ing, str):
                         keep.append(ing)
+                        keep_idx.append(_gs_i)
                         continue
                     low = _norm_text(ing)
                     # #4: almidón/huevo dentro de un batido → incongruente. PERO nunca dropear una FRUTA (un batido
@@ -18089,7 +18102,13 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                                     fixed += 1
                                     continue
                     keep.append(ing)
+                    keep_idx.append(_gs_i)
                 if changed and keep:  # nunca dejar la comida sin ingredientes
+                    _gs_raw = m.get("ingredients_raw")
+                    # [P1-GEN-SANITY-RAW-SYNC · 2026-07-06] lockstep del raw por índices
+                    # conservados (solo con alineación 1:1 previa — regla-clase del batch 16).
+                    if isinstance(_gs_raw, list) and len(_gs_raw) == len(ings):
+                        m["ingredients_raw"] = [_gs_raw[_ki] for _ki in keep_idx]
                     m["ingredients"] = keep
                     try:
                         _truth_up_meal_macros_from_strings(m, db)
@@ -24012,6 +24031,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 logger.info(f"🩹 [P3-GEN-SANITY-AUTOFIX] {_gsa_n} ingrediente(s) glitcheado(s)/incongruente(s) dropeado(s).")
         except Exception as _gsa:
             logger.warning(f"[P3-GEN-SANITY-AUTOFIX] en assemble falló (no bloquea): {type(_gsa).__name__}: {_gsa}")
+    _trace_misalign(result.get("days"), "post_gen_sanity")  # [P1-RAW-MISALIGN-TRACE] actor #2 fixeado aquí
 
     # [P1-shop-coh-1 · 2026-05-07 / P1-C v2 · 2026-05-07] Guard recetas↔lista.
     # v1: presence/absence (cap_swallowed_modifier, fantasmas).
