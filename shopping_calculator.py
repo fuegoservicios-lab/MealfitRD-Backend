@@ -1259,7 +1259,13 @@ def normalize_name(orig_name: str) -> str:
     # le quitan contexto: "platanno maduro"→"platanno", "pechuga de poyo"→"poyo"). Comparamos contra el
     # crudo, el limpio Y el original (solo parens removidos) y tomamos el mejor ratio por alias.
     _orig_fuzz = strip_accents(re.sub(r'\(.*?\)', '', str(orig_name).lower()).strip())
-    _fuzz_forms = {f for f in (n_stripped, clean_n_stripped, _orig_fuzz) if f and len(f) > 3}
+    # [P2-MIXED-FRACTION-PARSE · 2026-07-06] Forma SIN prefijo de cantidad
+    # ("1½ cebollas pequeñas" → "cebollas pequeñas"): callers que pasan display
+    # strings crudos (coherence guard, inventario tipeado) no deben perder el
+    # match léxico por el número — ni pagar el embedding de INTENTO 6 con un
+    # query contaminado.
+    _noqty = re.sub(r'^[\d\s.,/½¼¾⅓⅔⅕]+(?:de\s+)?', '', _orig_fuzz).strip()
+    _fuzz_forms = {f for f in (n_stripped, clean_n_stripped, _orig_fuzz, _noqty) if f and len(f) > 3}
     if _fuzz_forms:
         _fuzz_best, _fuzz_name = 0.0, None
         for alias_stripped, master_name in all_aliases:
@@ -1278,10 +1284,13 @@ def normalize_name(orig_name: str) -> str:
         cache = get_semantic_cache()
         if cache:
             try:
+                # [P2-MIXED-FRACTION-PARSE] query sin prefijo de cantidad — un
+                # "1½ " al frente solo mete ruido al embedding.
+                _sem_q = _noqty if len(_noqty) > 3 else n
                 # Calculamos el vector del texto no reconocido
                 query_vector = _gemini_call_with_retry(
-                    cache["embeddings_client"].embed_query, n,
-                    _label=f"embed_query (semantic match: {n[:40]!r})",
+                    cache["embeddings_client"].embed_query, _sem_q,
+                    _label=f"embed_query (semantic match: {_sem_q[:40]!r})",
                 )
                 best_score = -1.0
                 best_match = None
@@ -1316,10 +1325,25 @@ def _preprocess_nlp_quantities(s: str) -> str:
         u"\u2154": "2/3",  # ⅔
         u"\u2155": "1/5"   # ⅕
     }
+    _frac_touched = False
     for k, v in fraction_map.items():
         if s_lower.startswith(k):
             s_lower = s_lower.replace(k, v + " ", 1)
-            
+            _frac_touched = True
+
+    # [P2-MIXED-FRACTION-PARSE · 2026-07-06] Número MIXTO con fracción unicode
+    # PEGADA ("1½ cebollas pequeñas"): el startswith de arriba solo cubre la
+    # fracción SOLA ("½ taza"). Sin esto, el regex principal de _parse_quantity
+    # no matchea → qty=0.0 nominal (la cebolla se SUB-CUENTA en la lista) y el
+    # string ENTERO entra como nombre a normalize_name, cuyos tiers léxicos
+    # fallan por el prefijo numérico → quemaba una llamada Cohere por recalc
+    # (timeout de 15s observado en prod, corr=2eeca23b · 2026-07-06).
+    # "1½" → "1 1/2" (el parser principal ya soporta mixtos con espacio).
+    _mx = re.match(r'^(\d+)\s*([½¼¾⅓⅔⅕])', s_lower)
+    if _mx:
+        _out = f"{_mx.group(1)} {fraction_map[_mx.group(2)]}{s_lower[_mx.end():]}"
+        return re.sub(r'\s{2,}', ' ', _out).strip()
+
     replacements = [
         # [JUICE-PREFIX-FIX 2026-05-06] Strip de prefijos descriptivos que no
         # son cantidades. El LLM emite "Zumo de 1 limón" / "Jugo de 1 limón" /
@@ -1374,7 +1398,14 @@ def _preprocess_nlp_quantities(s: str) -> str:
         new_s = re.sub(pattern, repl, s_lower, count=1)
         if new_s != s_lower:
             return new_s.strip()
-            
+
+    # [P2-MIXED-FRACTION-PARSE · 2026-07-06] La expansión de fracción unicode
+    # SOLA ("½ taza" → "1/2 taza") estaba MUERTA desde siempre: el loop de
+    # arriba mutaba s_lower pero este return devolvía el `s` ORIGINAL cuando
+    # ningún replacement posterior matcheaba → "½ taza de arroz" caía al
+    # fallback qty=0.0 'cantidad necesaria' (ítem nominal sub-contado).
+    if _frac_touched:
+        return re.sub(r'\s{2,}', ' ', s_lower).strip()
     return s.strip()
 
 def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = False) -> float:
