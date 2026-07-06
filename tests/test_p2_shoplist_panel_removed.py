@@ -34,12 +34,15 @@ def test_dashboard_does_not_mount_panel():
 
 
 def test_minimal_total_line_survives():
+    # [2026-07-06 · iteración 3 de la colocación] la línea suelta "se veía
+    # huérfana" (owner) → el total vive DENTRO del banner de presupuesto (la
+    # caja del dinero: ciclo arriba, esta-ida abajo, mismos colores).
     src = _dash()
     assert "P2-SHOPLIST-PANEL-REMOVED" in src, "lápida documentando la decisión del owner"
-    i = src.index("P2-SHOPLIST-PANEL-REMOVED")
-    win = src[i:i + 2400]
-    assert "esta ida al súper" in win, (
-        "el total 'esta ida' es dato ÚNICO (≠ total del ciclo del banner) — sobrevive como línea"
+    banner = src.index("P1-BUDGET-RECONCILE · 2026-07-02] Estado honesto")
+    win = src[banner:banner + 9000]
+    assert "Esta ida al súper:" in win, (
+        "el total 'esta ida' es dato ÚNICO (≠ total del ciclo) — vive en el banner de presupuesto"
     )
     assert "estimated_cost_rd" in win, "suma desde la lista agregada (misma fuente que tenía el panel)"
     assert "el detalle está en el PDF" in win, "la línea apunta al PDF como fuente del detalle"
