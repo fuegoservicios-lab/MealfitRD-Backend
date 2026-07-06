@@ -26,6 +26,23 @@ BRANDS_JSX = (BACKEND.parent / "frontend" / "src" / "components" / "dashboard"
               / "SupermarketBrands.jsx").read_text(encoding="utf-8")
 
 
+# [P1-BRAND-DEFAULT-GUARDS] master hermético: el default SOLO aplica a ítems que
+# el master ya vende en envase — el stub garantiza el gate sin depender de DB.
+_MASTER_STUB = [
+    {"name": "Arroz blanco", "category": "Despensa", "market_container": "paquete",
+     "container_weight_g": 907.0, "price_per_lb": 40.0, "default_unit": "paquete",
+     "shelf_life_days": 365, "aliases": []},
+]
+
+
+@pytest.fixture()
+def master_stub(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: list(_MASTER_STUB))
+    sc.invalidate_master_cache()
+    yield
+    sc.invalidate_master_cache()
+
+
 # ---------------------------------------------------------------------------
 # 1. Parser: "L" tras envase sólido = libra; resto sigue fail-open
 # ---------------------------------------------------------------------------
@@ -67,7 +84,7 @@ _DEFAULTS = {
 }
 
 
-def test_item_carries_package_grams():
+def test_item_carries_package_grams(master_stub):
     result = sc.aggregate_and_deduct_shopping_list(
         ["800g de arroz blanco"], [], structured=True, brand_defaults=_DEFAULTS,
     )

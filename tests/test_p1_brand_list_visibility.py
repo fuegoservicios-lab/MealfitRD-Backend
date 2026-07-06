@@ -145,6 +145,22 @@ _DEFAULTS = {
     ],
 }
 
+# [P1-BRAND-DEFAULT-GUARDS] master hermético: el default SOLO aplica a ítems que
+# el master ya vende en envase — el stub garantiza el gate sin depender de DB.
+_MASTER = [
+    {"name": "Arroz blanco", "category": "Despensa", "market_container": "paquete",
+     "container_weight_g": 907.0, "price_per_lb": 40.0, "default_unit": "paquete",
+     "shelf_life_days": 365, "aliases": []},
+]
+
+
+@pytest.fixture()
+def master_stub(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: list(_MASTER))
+    sc.invalidate_master_cache()
+    yield
+    sc.invalidate_master_cache()
+
 
 def _find_item(result, needle):
     for r in result:
@@ -153,7 +169,7 @@ def _find_item(result, needle):
     return None
 
 
-def test_default_brand_shows_in_display():
+def test_default_brand_shows_in_display(master_stub):
     result = sc.aggregate_and_deduct_shopping_list(
         ["800g de arroz blanco"], [], structured=True, brand_defaults=_DEFAULTS,
     )
@@ -165,7 +181,7 @@ def test_default_brand_shows_in_display():
     assert float(item.get("estimated_cost_rd") or item.get("estimated_cost") or 0) == 145.0
 
 
-def test_manual_pref_wins_over_default_and_raises_cost():
+def test_manual_pref_wins_over_default_and_raises_cost(master_stub):
     pref = {"arroz blanco": {"grams": 907.0, "price": 210.0, "label": "2 Lb · Premium", "unit": "paquete"}}
     result = sc.aggregate_and_deduct_shopping_list(
         ["800g de arroz blanco"], [], structured=True,
@@ -182,7 +198,7 @@ def test_manual_pref_wins_over_default_and_raises_cost():
     )
 
 
-def test_no_defaults_keeps_previous_behavior():
+def test_no_defaults_keeps_previous_behavior(master_stub):
     """brand_defaults=None (knob off / fail-open) → display idéntico al previo (sin marca)."""
     result = sc.aggregate_and_deduct_shopping_list(
         ["800g de arroz blanco"], [], structured=True, brand_defaults=None,
@@ -213,7 +229,7 @@ def test_aggregate_accepts_brand_defaults_kwarg():
 def test_overlay_pref_wins_ordering_in_source():
     m = re.search(r"if _pref_pkg is None and brand_defaults:", SRC)
     assert m, "el overlay de defaults debe estar gated por ausencia de preferencia manual"
-    window = SRC[m.start():m.start() + 900]
+    window = SRC[m.start():m.start() + 2200]
     assert "master_item = dict(master_item)" in window, (
         "el overlay de defaults debe COPIAR master_item — mutarlo corrompería el cache global."
     )

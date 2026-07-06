@@ -8,10 +8,29 @@ fallback que el picker) → display "1 paquete (2 lb · Genérico)" en lista y P
 """
 from pathlib import Path
 
+import pytest
+
 import shopping_calculator as sc
 
 BACKEND = Path(__file__).resolve().parents[1]
 SRC = (BACKEND / "shopping_calculator.py").read_text(encoding="utf-8")
+
+
+# [P1-BRAND-DEFAULT-GUARDS] master hermético: el default SOLO aplica a ítems que
+# el master ya vende en envase — el stub garantiza el gate sin depender de DB.
+_MASTER_STUB = [
+    {"name": "Arroz blanco", "category": "Despensa", "market_container": "paquete",
+     "container_weight_g": 907.0, "price_per_lb": 40.0, "default_unit": "paquete",
+     "shelf_life_days": 365, "aliases": []},
+]
+
+
+@pytest.fixture()
+def master_stub(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: list(_MASTER_STUB))
+    sc.invalidate_master_cache()
+    yield
+    sc.invalidate_master_cache()
 
 
 def test_brandless_product_labeled_generico():
@@ -30,7 +49,7 @@ def test_real_brand_unaffected():
     assert pkg is not None and pkg["label"].endswith("· Wala")
 
 
-def test_generico_flows_to_display():
+def test_generico_flows_to_display(master_stub):
     defaults = {"arroz blanco": [
         {"grams": 907.184, "price": 165.0, "label": "2L · Genérico", "unit": "paquete"},
     ]}

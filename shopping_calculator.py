@@ -2314,6 +2314,9 @@ _BRAND_DEFAULT_HERB_RX = re.compile(
 _BRAND_DEFAULT_MODIFIER_TOKENS = (
     "molido", "molida", "semilla", "semillas", "con pasas", "con sal", "con azucar",
     "azucarado", "endulzado", "sazonado", "adobado", "ahumado", "frito", "frita",
+    # [verificado vs plan vivo] "Maní Japonés" (recubierto) no es maní a secas;
+    # "Baby" (zanahoria baby 12 Oz RD$175 vs ½ lb RD$14) es specialty.
+    "japones", "japonesa", "baby",
 )
 
 
@@ -8726,7 +8729,18 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if _pref_pkg is None and brand_defaults:
             # [P1-BRAND-DEFAULT-GUARDS] resolución conservadora (exacto/singular/
             # food⊆nombre + guards hierbas/modificadores) — NO la escalera de prefs.
-            _def_pkgs = _resolve_brand_default(name, brand_defaults)
+            # Gate adicional (verificado vs plan vivo ff673061): el default SOLO
+            # aplica a ítems cuyo master YA se vende en ENVASE. El mostrador
+            # fresco/deli fraccional conserva sus paths nativos — sin este gate,
+            # Zanahoria ½ lb RD$14 → "funda Baby 12 Oz" RD$175, Cebolla 1¼ lb
+            # RD$59 → "3 mallas Perla Roja" RD$750, Queso blanco ¼ lb RD$68 →
+            # "paquete 1 lb" RD$270 (la variante empacada del catálogo es
+            # specialty, no el producto que el plan costea a granel).
+            _mi_has_container = bool(master_item.get("market_container")) or (
+                (str(master_item.get("default_unit") or "").strip().lower() in _CONTAINER_UNIT_ALIASES)
+                and bool(master_item.get("container_weight_g"))
+            )
+            _def_pkgs = _resolve_brand_default(name, brand_defaults) if _mi_has_container else None
             if _def_pkgs and isinstance(_def_pkgs, list):
                 master_item = dict(master_item)
                 master_item["market_packages"] = list(_def_pkgs)

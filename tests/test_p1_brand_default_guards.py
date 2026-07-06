@@ -28,6 +28,29 @@ def _fresh_defaults_cache():
     sc._brand_defaults_cache["at"] = 0.0
 
 
+# Master hermético: arroz SE VENDE en envase (recibe default); perejil y queso
+# blanco NO tienen envase en master (mazo / deli fraccional → jamás default).
+_MASTER = [
+    {"name": "Arroz blanco", "category": "Despensa", "market_container": "paquete",
+     "container_weight_g": 907.0, "price_per_lb": 40.0, "default_unit": "paquete",
+     "shelf_life_days": 365, "aliases": []},
+    {"name": "Perejil", "category": "Vegetales", "market_container": None,
+     "container_weight_g": None, "price_per_lb": 44.0, "default_unit": "mazo",
+     "shelf_life_days": 5, "aliases": []},
+    {"name": "Queso blanco", "category": "Lácteos", "market_container": None,
+     "container_weight_g": None, "price_per_lb": 270.0, "default_unit": "lb",
+     "shelf_life_days": 14, "aliases": []},
+]
+
+
+@pytest.fixture()
+def master_stub(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: list(_MASTER))
+    sc.invalidate_master_cache()
+    yield
+    sc.invalidate_master_cache()
+
+
 # ─────────────────── per-libra fuera del default ───────────────────
 
 def test_bare_lb_product_marked_per_lb():
@@ -135,9 +158,9 @@ def test_solid_L_label_normalized_to_lb():
     )
 
 
-# ─────────────────── E2E: los 4 guards en el aggregator ───────────────────
+# ─────────────────── E2E: los guards en el aggregator ───────────────────
 
-def test_overlay_uses_conservative_resolver_e2e():
+def test_overlay_uses_conservative_resolver_e2e(master_stub):
     defaults = {
         "perejil": [{"grams": 141.7, "price": 215.0, "label": "Molido 5 Oz · Badia", "unit": "frasco"}],
         "arroz blanco": [{"grams": 907.0, "price": 145.0, "label": "2 lb · Cariño", "unit": "paquete"}],
@@ -152,3 +175,21 @@ def test_overlay_uses_conservative_resolver_e2e():
         assert "Badia" not in str(perejil.get("display_qty", "")), (
             f"el perejil fresco jamás se costea como frasco molido: {perejil.get('display_qty')}"
         )
+
+
+def test_no_container_master_never_gets_default(master_stub):
+    """Deli/mostrador fraccional (master sin envase): 'Queso blanco ¼ lb RD$68'
+    jamás se convierte en 'paquete 1 lb RD$270' aunque el catálogo tenga la
+    variante empacada (gate master-en-envase, verificado vs plan vivo)."""
+    defaults = {"queso blanco": [
+        {"grams": 453.592, "price": 270.0, "label": "1 lb · Genérico", "unit": "paquete"},
+    ]}
+    result = sc.aggregate_and_deduct_shopping_list(
+        ["100g de queso blanco"], [], structured=True, brand_defaults=defaults,
+    )
+    queso = next((r for r in result if isinstance(r, dict) and "queso" in str(r.get("name", "")).lower()), None)
+    assert queso is not None
+    disp = str(queso.get("display_qty", ""))
+    assert "Genérico" not in disp and "·" not in disp, (
+        f"master sin envase (venta fraccional) no recibe default: {disp}"
+    )
