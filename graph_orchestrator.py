@@ -10396,6 +10396,16 @@ _SEED_NUT_TOKENS = ("linaza", "chia", "chía", "girasol", "nuez", "nueces", "alm
 # el carb-trim del propio bloque P2-2. Rollback sin redeploy: MEALFIT_FATS_POSTCLOSER_RELEVEL=false.
 FATS_POSTCLOSER_RELEVEL_ENABLED = _env_bool("MEALFIT_FATS_POSTCLOSER_RELEVEL", True)
 FATS_POSTCLOSER_RELEVEL_TOL = max(0.02, min(0.2, _env_float("MEALFIT_FATS_POSTCLOSER_RELEVEL_TOL", 0.08)))
+# [P1-FATS-RELEVEL-UNIVERSAL · 2026-07-06] El re-trim de grasas de arriba SOLO corría dentro del micro-recheck
+# P2-2 (gated por `if _pe_adj`: SOLO si el micro-closer actuó). Pero el forense (18/18 días con celda fats
+# fuera de banda) mostró que el exceso vive en FUENTES DE GRASA AÑADIDA (aceite/queso/aguacate/semillas) del
+# day-gen, INDEPENDIENTE de los micros → un día fats-out con micros OK nunca se relevelea. El refinador global
+# NO puede: exime las fuentes de grasa (_SHRINK_FLOOR_EXEMPT_TOKENS). Este knob corre `_trim_day_fats_to_target`
+# INCONDICIONAL por cada día sobre banda (portadores de micros protegidos). La celda fats (fuera 39% de los días)
+# ARRASTRA la de kcal (fuera 53%) por Atwater 9 kcal/g → cerrar fats cierra kcal. Validado en 18 días reales:
+# 13/18 celda fats CERRADA, 16/18 all-4 mejora, 0 regresiones, kcal→~100% en cada uno (da7bb310 d2: 186%→105%,
+# kcal 125%→100%, 2/4→4/4). Rollback: MEALFIT_FATS_RELEVEL_UNIVERSAL=false. tooltip-anchor: P1-FATS-RELEVEL-UNIVERSAL
+FATS_RELEVEL_UNIVERSAL_ENABLED = _env_bool("MEALFIT_FATS_RELEVEL_UNIVERSAL", True)
 # [P2-MICROCLOSER-REQUANTIZE · 2026-07-01] knob PROPIO del re-trim+re-quantize post-micro-closer (antes acoplado
 # a MEALFIT_CARB_TARGET_TRIM=False → muerto con defaults). Default ON. tooltip-anchor: P2-MICROCLOSER-REQUANTIZE
 MICROCLOSER_BAND_RECHECK_ENABLED = _env_bool("MEALFIT_MICROCLOSER_BAND_RECHECK", True)
@@ -14564,6 +14574,47 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
     except Exception as e:
         logger.warning(f"[P1-FATS-POSTCLOSER-RELEVEL] trim de grasas falló: {type(e).__name__}: {e}")
         return False
+
+
+def _relevel_fats_universal(days, target_fats, db) -> int:
+    """[P1-FATS-RELEVEL-UNIVERSAL · 2026-07-06] SSOT del re-trim de grasas INCONDICIONAL (S1 assemble +
+    update helper + regen-day). Corre `_trim_day_fats_to_target` por CADA día con grasas sobre banda —
+    NO gated por el micro-closer (a diferencia del callsite P2-2 dentro de `if _pe_adj`). Recorta las
+    fuentes de grasa AÑADIDA (aceite/queso/aguacate; portadores de micros `_SEED_NUT_TOKENS` protegidos)
+    hacia el target; cierra la celda fats y arrastra kcal hacia ~100% (Atwater). Re-quantize + qty-sync
+    de los días tocados. Devuelve nº de días releveleados. Gated por FATS_RELEVEL_UNIVERSAL_ENABLED.
+    Fail-safe (cualquier error → los días quedan intactos). tooltip-anchor: P1-FATS-RELEVEL-UNIVERSAL"""
+    if not FATS_RELEVEL_UNIVERSAL_ENABLED or not days:
+        return 0
+    try:
+        _tf = float(target_fats or 0)
+    except (TypeError, ValueError):
+        return 0
+    if _tf <= 0:
+        return 0
+    n = 0
+    try:
+        for _d in days:
+            _meals = (_d.get("meals") or []) if isinstance(_d, dict) else []
+            if _meals and _trim_day_fats_to_target(_meals, _tf, db, tol=FATS_POSTCLOSER_RELEVEL_TOL):
+                n += 1
+        if n:
+            try:
+                _apply_portion_quantization({"days": days}, db)
+            except Exception:
+                pass
+            for _d in days:
+                for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                    if isinstance(_m, dict):
+                        try:
+                            _sync_recipe_step_quantities(_m)
+                        except Exception:
+                            pass
+            logger.info(f"🥑 [P1-FATS-RELEVEL-UNIVERSAL] re-trim de grasas en {n} día(s) sobre banda "
+                        f"(fuentes añadidas; portadores de micros protegidos).")
+    except Exception as _e:
+        logger.warning(f"[P1-FATS-RELEVEL-UNIVERSAL] no-op: {type(_e).__name__}: {_e}")
+    return n
 
 
 def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
@@ -24460,6 +24511,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
                                     f"movimiento(s) de 5g para clavar la banda all-4 (sin re-quantize).")
                 except Exception as _ref_e:
                     logger.warning(f"[P1-NEXT-LEVEL-SOLVER] refinador global no-op: {type(_ref_e).__name__}: {_ref_e}")
+            # [P1-FATS-RELEVEL-UNIVERSAL · 2026-07-06] tras el refinador (que EXIME las fuentes de grasa del
+            # trim), recorta INCONDICIONAL las grasas AÑADIDAS de los días sobre banda → cierra la celda fats
+            # (fuera 39% de los días) y arrastra kcal hacia ~100%. Validado en 18 días reales: 0 regresiones.
+            if FATS_RELEVEL_UNIVERSAL_ENABLED and float(_fg or 0) > 0:
+                try:
+                    _relevel_fats_universal(days, _fg, _QDB())
+                except Exception as _fru_e:
+                    logger.warning(f"[P1-FATS-RELEVEL-UNIVERSAL] assemble no-op: {type(_fru_e).__name__}: {_fru_e}")
             # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] (audit v3 macros GAP-4) el redondeo a fracciones
             # servibles pudo re-abrir el drift que MACRO-REBALANCE cerró antes del quantize. Si un día
             # quedó con C/F/P a >TOL del target → UN rebalance + UN re-quantize (iteración única). El
@@ -31963,6 +32022,15 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                                     pass
                 except Exception as _rdi_e:
                     logger.debug(f"[P1-UPDATE-MACRO-PARITY] refine no-op: {type(_rdi_e).__name__}: {_rdi_e}")
+            # [P1-FATS-RELEVEL-UNIVERSAL · 2026-07-06] paridad con S1: recorta grasas AÑADIDAS del día sobre
+            # banda (el refine las exime). Solo toca fat-dominantes no-portadoras → seguro bajo renal (no mueve
+            # proteína). Cierra fats + arrastra kcal. No-op si fats ya en banda.
+            if FATS_RELEVEL_UNIVERSAL_ENABLED and _fg > 0:
+                try:
+                    if _trim_day_fats_to_target(_meals, float(_fg), db, tol=FATS_POSTCLOSER_RELEVEL_TOL):
+                        _hit = True
+                except Exception:
+                    pass
             if _hit:
                 touched += 1
                 for _m in _meals:

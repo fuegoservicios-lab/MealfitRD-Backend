@@ -6407,7 +6407,10 @@ def api_regenerate_day(
                                                 _SHRINK_FLOOR_EXEMPT_TOKENS as _ex_rf,
                                                 GLOBAL_DAY_REFINE_MAX_ITERS as _it_rf,
                                                 REFINE_KCAL_AWARE as _rka_rf,
-                                                _day_kcal_out_of_refine_band as _kob_rf)
+                                                _day_kcal_out_of_refine_band as _kob_rf,
+                                                _trim_day_fats_to_target as _trim_fats_rd,
+                                                FATS_RELEVEL_UNIVERSAL_ENABLED as _fru_rd,
+                                                FATS_POSTCLOSER_RELEVEL_TOL as _frtol_rd)
                 from portion_solver import refine_day_portions_integer as _rdi_rd
                 import copy as _copy_rf
                 _pg_rf = float(day_target.get("protein_g") or 0)
@@ -6443,6 +6446,14 @@ def api_regenerate_day(
                             _pantry_limited = True  # el déficit residual es por Nevera (deficit-honesty)
                         else:
                             logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] refine 5g del día regenerado: {_mv_rf} movimiento(s)")
+                    # [P1-FATS-RELEVEL-UNIVERSAL · 2026-07-06] recorta grasas AÑADIDAS del día sobre banda
+                    # (paridad S1/update; el refine las exime). Solo shrink de fat-dominantes → pantry-safe
+                    # (usa menos, jamás rompe la Nevera). Cierra fats + arrastra kcal. No-op si fats en banda.
+                    if _fru_rd and _fg_rf > 0:
+                        try:
+                            _trim_fats_rd(_real_rf, float(_fg_rf), _db, tol=_frtol_rd)
+                        except Exception:
+                            pass
             except Exception as _rf_e:
                 logger.warning(f"[P1-UPDATE-MACRO-PARITY] refine regen-day falló (no bloquea): {type(_rf_e).__name__}: {_rf_e}")
 
