@@ -54,6 +54,23 @@ def test_raw_orphan_not_in_steps_left_alone():
     assert not any("alcaparra" in str(x).lower() for x in meal["ingredients"]), (
         "raw-only que la receta NO usa → no se restaura (conservador)"
     )
+    # [P2-RAW-PHANTOM-DROP] y además se REMUEVE del raw: es compra fantasma
+    # (cuantificada, sin uso en display ni pasos — los "camarones cocido" de
+    # los bollitos de queso del plan fcc7a9f0).
+    assert not any("alcaparra" in str(x).lower() for x in meal["ingredients_raw"]), (
+        "fantasma cuantificado fuera del raw (la lista no compra lo que nadie usa)"
+    )
+
+
+def test_unquantified_al_gusto_raw_kept_when_unused():
+    plan = _wrap_meal()
+    meal = plan["days"][0]["meals"][0]
+    meal["recipe"] = ["Mise en place: corta la mozzarella.",
+                      "Montaje: arma el wrap con la mozzarella."]  # sin sal en pasos
+    go._restore_display_from_raw_orphans(plan["days"])
+    assert any("sal al gusto" in str(x).lower() for x in meal["ingredients_raw"]), (
+        "'Sal al gusto' (sin cantidad) se queda en raw — despensa implícita, no fantasma"
+    )
 
 
 def test_no_restore_when_aligned():

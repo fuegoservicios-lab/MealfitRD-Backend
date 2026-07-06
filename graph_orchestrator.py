@@ -21741,6 +21741,7 @@ def _restore_display_from_raw_orphans(days) -> int:
                     and not str(s).strip().startswith(("💡", "💪", "🌱", "🧉", "🏷"))
                 ).lower())
                 _meal_restored = 0
+                _phantoms = []
                 for r in raw:
                     if _meal_restored >= 3:
                         break
@@ -21767,7 +21768,15 @@ def _restore_display_from_raw_orphans(days) -> int:
                     if _hit(_disp_blob):
                         continue  # el display ya cubre este alimento
                     if not _hit(_steps_blob):
-                        continue  # raw-only que la receta tampoco usa → no restaurar
+                        # [P2-RAW-PHANTOM-DROP · 2026-07-06] raw-huérfano que NI el display
+                        # NI los pasos usan: si trae cantidad CUANTIFICADA ("50g de
+                        # camarones cocido" en unos bollitos de queso, plan fcc7a9f0) es
+                        # un fantasma de COMPRA — la lista lo compraría para una receta
+                        # que no lo usa. Se marca para remover del raw. Los "al gusto"
+                        # sin cantidad (sal/pimienta) se quedan (despensa implícita).
+                        if _re.match(r"^\s*\d", str(r)):
+                            _phantoms.append(r)
+                        continue
                     try:
                         _line = _pretty_rd(str(r))
                     except Exception:
@@ -21776,6 +21785,13 @@ def _restore_display_from_raw_orphans(days) -> int:
                     _disp_blob += " " + _sa_rd(str(_line).lower())
                     restored += 1
                     _meal_restored += 1
+                # [P2-RAW-PHANTOM-DROP] remover los fantasmas cuantificados del raw.
+                if _phantoms:
+                    meal["ingredients_raw"] = [x for x in raw if x not in _phantoms]
+                    logger.info(
+                        f"🧾 [P2-RAW-PHANTOM-DROP] {len(_phantoms)} fila(s) raw cuantificadas sin "
+                        f"uso en display NI pasos removidas (compra fantasma) | "
+                        f"meal={str(meal.get('name'))[:40]} | {[str(p)[:38] for p in _phantoms]}")
         if restored:
             logger.info(f"🧾 [P1-DISPLAY-RESTORE-FROM-RAW] {restored} línea(s) usadas en pasos "
                         f"restauradas al display (los droppers de raíz siguen bajo WARN misalign).")
