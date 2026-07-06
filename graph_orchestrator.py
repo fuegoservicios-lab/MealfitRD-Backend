@@ -21303,6 +21303,24 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                             touched += 1
                             _meal_touched = True
                         continue
+                    # [P2-NUTBUTTER-MICRO-BUMP · 2026-07-06] (review #14: "¼ cdta de mantequilla de
+                    # maní" ~1g) las cremas de fruto seco (maní/almendra) bajo 1 cdta son inservibles
+                    # como untar/topping → bump al mínimo servible (1 cdta / 5g). Mismo racional que
+                    # el aceite; la exención de "mantequilla" del shrink-floor lo dejaba pasar.
+                    if ("mantequilla de mani" in il or "crema de mani" in il
+                            or "mantequilla de almendra" in il or "crema de almendra" in il) \
+                            and _MICRO_OIL_LEAD_RE.match(s):
+                        _new_nb = _MICRO_OIL_LEAD_RE.sub("1 cdta", s, count=1)
+                        _new_nb = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*(?:g|ml)\s*\)", "(5g)", _new_nb, count=1)
+                        if _new_nb != s:
+                            ings[idx] = _new_nb
+                            if _lockstep and isinstance(raw[idx], str):
+                                _new_nb_raw = _MICRO_OIL_LEAD_RE.sub("1 cdta", str(raw[idx]), count=1)
+                                raw[idx] = _re.sub(r"\(\s*\d+(?:[.,]\d+)?\s*(?:g|ml)\s*\)", "(5g)",
+                                                   _new_nb_raw, count=1)
+                            touched += 1
+                            _meal_touched = True
+                        continue
                     # [P2-AROMATIC-MICRO-BUMP · 2026-07-05] aromático en cdta con hint ≤5g
                     # ("1 cdta de cebolla picada (2g)") → 2 cdas (20g), lockstep raw.
                     if any(t in il for t in ("cebolla", "cebollin", "puerro")) \
