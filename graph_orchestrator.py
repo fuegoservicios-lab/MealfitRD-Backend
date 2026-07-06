@@ -10265,7 +10265,26 @@ MICRO_SEED_BELOW_RATIO = max(0.0, min(0.95, _env_float("MEALFIT_MICRO_SEED_BELOW
 _MICRO_SEED_SOURCES = {
     "omega3_g": ("10 g de semillas de linaza", "10 g de semillas de chía", "10 g de nueces"),
     "vit_e_mg": ("10 g de semillas de girasol", "10 g de almendras fileteadas", "10 g de maní"),
+    # [P2-MICRO-SEED-VITA · 2026-07-06] (chip vivo plan 6ffffd39: "Vitamina A ⚠ Día 2" — el día
+    # solo tenía leche como portador → nada que escalar). Zanahoria = portador top (~835 mcg/100g,
+    # carotenoides sin riesgo de toxicidad); escalera con auyama/espinacas para dislikes/alergias.
+    "vit_a_mcg": ("50 g de zanahoria rallada", "50 g de auyama en cubos", "50 g de espinacas"),
 }
+# [P2-MICRO-SEED-VITA · 2026-07-06] Seeds SALADOS (zanahoria/auyama/espinaca): sembrarlos en una
+# merienda dulce (yogurt con fruta) es incoherente — su pool preferido es almuerzo/cena, y la
+# nota 🌱 usa "acompaña el plato con" en vez de "espolvorea".
+_MICRO_SEED_SAVORY_KEYS = ("vit_a_mcg",)
+# [P1-MICRO-FATSWAP · 2026-07-06] (banner vivo plan 6ffffd39: omega-3 1.2<1.6 y vit E 13.8<15 con
+# grasas del día YA sobre el target) Los portadores de estos micros SON grasas → cuando el budget
+# kcal compartido se agota, el closer queda "insuficiente" y el panel marca micro_worst_day. El
+# fatswap concede un presupuesto EXTRA solo a los micros grasa-basados y ejecuta el ESPEJO
+# inmediato: re-trim de grasas del día a target (_trim_day_fats_to_target protege los portadores
+# _SEED_NUT_TOKENS y recorta grasa genérica) → intercambio grasa-genérica→grasa-portadora, día
+# macro-neutral. Rollback: MEALFIT_MICRO_FATSWAP=false.
+MICRO_FATSWAP_ENABLED = _env_bool("MEALFIT_MICRO_FATSWAP", True)
+MICRO_FATSWAP_EXTRA_KCAL = _env_int("MEALFIT_MICRO_FATSWAP_EXTRA_KCAL", 120,
+                                    lambda v: 0 <= v <= 400)
+_FAT_BASED_MICROS = ("omega3_g", "vit_e_mg")
 # [P1-MICRO-SEED-DENSITY] Refuerzo post-erosión: si el día YA sembrado sigue corto en el re-check
 # post-motor (el solver/quantize erosionó la semilla o el gap era 2-3×), UNA re-escalada de la
 # línea sembrada (cap 30 g, una vez por día/micro). Espejo del patrón sodio/micros post-motor.
@@ -10283,7 +10302,7 @@ MICRO_SEED_SPREAD_ENABLED = _env_bool("MEALFIT_MICRO_SEED_SPREAD", True)
 # 🌱 están excluidas del detector no-cook y no llevan prefijo → cero interacción con el contrato
 # de pasos. Rollback: =false.
 MICRO_SEED_STEP_NOTE_ENABLED = _env_bool("MEALFIT_MICRO_SEED_STEP_NOTE", True)
-_MICRO_SEED_HUMAN = {"omega3_g": "omega-3", "vit_e_mg": "vitamina E"}
+_MICRO_SEED_HUMAN = {"omega3_g": "omega-3", "vit_e_mg": "vitamina E", "vit_a_mcg": "vitamina A"}
 # [P1-MICRO-SEED-DENSITY] 80 → 120: con 80, dos semillas del mismo día (linaza 53 kcal + girasol
 # 58 kcal) NO cabían (el guard >30 bloqueaba la 2ª) — caso vivo plan 176ca62c: Día 3 corto en
 # omega-3 Y vit E solo recibió la semilla de omega-3. El re-trim de carbos post-closer (P2-2)
@@ -11942,8 +11961,15 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             if MICRO_SEED_SPREAD_ENABLED and _seed_cands:
                                 # [P2-SEED-MEAL-SELECTION · 2026-07-05] repartir: merienda sin seed →
                                 # meal sin seed → merienda → cualquiera; gana la de MENOS kcal (headroom).
-                                _seed_mers = [m for m in _seed_cands
-                                              if "merienda" in str(m.get("meal", "")).lower()]
+                                # [P2-MICRO-SEED-VITA · 2026-07-06] seeds SALADOS (zanahoria/auyama) →
+                                # pool preferido almuerzo/cena (no una merienda dulce).
+                                if k in _MICRO_SEED_SAVORY_KEYS:
+                                    _seed_mers = [m for m in _seed_cands
+                                                  if any(t in str(m.get("meal", "")).lower()
+                                                         for t in ("almuerzo", "cena", "comida"))]
+                                else:
+                                    _seed_mers = [m for m in _seed_cands
+                                                  if "merienda" in str(m.get("meal", "")).lower()]
                                 _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
                                               or [m for m in _seed_cands if not m.get("_micro_seed_applied")]
                                               or _seed_mers or _seed_cands)
@@ -11988,10 +12014,16 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                 if MICRO_SEED_STEP_NOTE_ENABLED:
                                     _rec_seed = _seed_meal.get("recipe")
                                     if isinstance(_rec_seed, list):
+                                        # [P2-MICRO-SEED-VITA · 2026-07-06] seeds salados no se
+                                        # "espolvorean" — acompañan el plato.
+                                        _seed_verb = ("acompaña el plato con" if k in _MICRO_SEED_SAVORY_KEYS
+                                                      else "espolvorea")
+                                        _seed_tail = ("" if k in _MICRO_SEED_SAVORY_KEYS
+                                                      else " sobre el plato al servir")
                                         _seed_meal["recipe"] = _insert_step_before_montaje(
                                             _rec_seed,
-                                            f"🌱 Nota del Nutricionista AI: espolvorea {_seed_line} "
-                                            f"sobre el plato al servir — cierra tu "
+                                            f"🌱 Nota del Nutricionista AI: {_seed_verb} {_seed_line}"
+                                            f"{_seed_tail} — cierra tu "
                                             f"{_MICRO_SEED_HUMAN.get(k, k)} del día.")
                                 adjustments += 1
                                 _seed_why = ("día sin portador" if not _had_carriers else
@@ -12140,6 +12172,90 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         kcal_budget_left -= kcal_now * (factor - 1.0)
                     day_total += contrib * (factor - 1.0)  # el micro sube por el aporte reescalado
                     adjustments += 1
+                # [P1-MICRO-FATSWAP · 2026-07-06] (banner vivo plan 6ffffd39) micros GRASA-basados
+                # (omega-3/vit E) cortos porque el budget kcal compartido se agotó: sus portadores
+                # SON grasas y el día suele estar ya al techo de grasas → nunca hay headroom. El
+                # fatswap concede presupuesto EXTRA propio, escala el portador más rico (frescos,
+                # con los mismos techos de línea) y ejecuta el ESPEJO inmediato: re-trim de grasas
+                # del día a target (protege portadores _SEED_NUT_TOKENS, recorta grasa genérica)
+                # → intercambio neto grasa-genérica→portadora. tooltip-anchor: P1-MICRO-FATSWAP
+                if (day_total < floor and MICRO_FATSWAP_ENABLED and k in _FAT_BASED_MICROS):
+                    try:
+                        _fs_budget = float(MICRO_FATSWAP_EXTRA_KCAL)
+                        _fs_scaled = False
+                        _fs_cands = []
+                        for _fm in (_d.get("meals") or []):
+                            if not isinstance(_fm, dict) or not isinstance(_fm.get("ingredients"), list):
+                                continue
+                            for _fi, _fing in enumerate(_fm["ingredients"]):
+                                try:
+                                    _fmic = db.micros_from_ingredient_string(str(_fing)) or {}
+                                    _fc = float(_fmic.get(ing_key) or 0.0)
+                                except Exception:
+                                    _fc = 0.0
+                                if _fc > 0:
+                                    _fs_cands.append((_fc, _fm, _fi, str(_fing)))
+                        _fs_cands.sort(key=lambda t: -t[0])
+                        for _fc, _fm, _fi, _fing in _fs_cands:
+                            if day_total >= floor or _fs_budget <= 5.0:
+                                break
+                            try:
+                                _g_now = float(db.grams_from_ingredient_string(_fing) or 0.0)
+                            except Exception:
+                                _g_now = 0.0
+                            _line_cap = 40.0 if any(t in _fing.lower() for t in _SEED_NUT_TOKENS) \
+                                else float(MICRO_CLOSER_LINE_MAX_G)
+                            if _g_now <= 0 or _g_now >= _line_cap:
+                                continue
+                            try:
+                                _fmac = db.macros_from_ingredient_string(_fing) or {}
+                                _fk = float(_fmac.get("kcal") or 0.0)
+                            except Exception:
+                                _fk = 0.0
+                            factor = min(MICRONUTRIENT_CLOSER_MAX_SCALE,
+                                         1.0 + (floor - day_total) / _fc,
+                                         _line_cap / _g_now)
+                            if _fk > 0:
+                                factor = min(factor, 1.0 + _fs_budget / _fk)
+                            if factor <= 1.0 + 1e-3:
+                                continue
+                            _new_f = _resc(_fing, factor)
+                            if not _new_f or _new_f == _fing:
+                                continue
+                            _fm["ingredients"][_fi] = _new_f
+                            _fraw = _fm.get("ingredients_raw")
+                            if isinstance(_fraw, list) and _fi < len(_fraw) \
+                                    and isinstance(_fraw[_fi], str):
+                                try:
+                                    _nr = _resc(_fraw[_fi], factor)
+                                    if _nr:
+                                        _fraw[_fi] = _nr
+                                except Exception:
+                                    pass
+                            try:
+                                _truth_up_meal_macros_from_strings(_fm, db)
+                            except Exception:
+                                pass
+                            if _fk > 0:
+                                _fs_budget -= _fk * (factor - 1.0)
+                            day_total += _fc * (factor - 1.0)
+                            adjustments += 1
+                            _fs_scaled = True
+                        if _fs_scaled:
+                            _fs_tf = _meal_macro_num((plan.get("macros") or {}).get("fats"))
+                            _fs_trimmed = False
+                            if _fs_tf and float(_fs_tf) > 0:
+                                try:
+                                    _fs_trimmed = _trim_day_fats_to_target(
+                                        (_d.get("meals") or []), float(_fs_tf), db,
+                                        tol=FATS_POSTCLOSER_RELEVEL_TOL)
+                                except Exception:
+                                    pass
+                            logger.info(f"🔄 [P1-MICRO-FATSWAP] '{k}' cerrado con presupuesto extra "
+                                        f"(≈{day_total:.1f} vs piso {floor:.1f}) + re-trim espejo de "
+                                        f"grasas del día ({'aplicado' if _fs_trimmed else 'no-necesario'}).")
+                    except Exception as _fs_e:
+                        logger.warning(f"[P1-MICRO-FATSWAP] no-op: {type(_fs_e).__name__}: {_fs_e}")
                 if day_total < floor:
                     logger.info(f"🧪 [P2-MICRO-CLOSER-RESIDUAL] {k}: el día sigue bajo el piso tras el cierre "
                                 f"(≈{day_total:.1f} < {floor:.1f}); closer insuficiente (budget/UL/contribuyentes)")
@@ -15366,6 +15482,64 @@ def _meal_is_no_cook(meal: dict) -> bool:
         return False
 
 
+# [P2-MISE-COOK-SPLIT · 2026-07-06] (chip vivo "Receta con pasos incompletos" en las Tostadas del
+# plan 6ffffd39: el LLM puso el tostado DENTRO del Mise en place — receta completa y cocinable,
+# pero sin pilar "El Toque de Fuego" → el lint emitía un advisory que para el usuario lee como
+# receta rota). Si NO hay TdF y el Mise contiene oraciones de COCCIÓN, se separan verbatim a un
+# TdF sintetizado (el backstop le añade tiempo por técnica). Rollback: MEALFIT_MISE_COOK_SPLIT=false.
+MISE_COOK_SPLIT_ENABLED = _env_bool("MEALFIT_MISE_COOK_SPLIT", True)
+_MISE_COOK_VERB_RE = _re.compile(
+    r"^(?:tuesta|hierve|cocina|cuece|calienta|saltea|sofrie|hornea|asa|dora|"
+    r"sella|frie|sancocha|guisa|revuelve|cuaja)\w*\b", _re.IGNORECASE)
+
+
+def _split_cooking_from_mise(meal: dict) -> bool:
+    """[P2-MISE-COOK-SPLIT · 2026-07-06] Mueve las oraciones de cocción del Mise en place a un
+    'El Toque de Fuego:' sintetizado cuando el pilar falta (contrato de 3 pilares). Verbatim (no
+    inventa texto), exige que el Mise retenga ≥1 oración de prep. Idempotente (con TdF presente →
+    no-op), fail-safe, muta meal. Marca `_mise_cook_split`. tooltip-anchor: P2-MISE-COOK-SPLIT"""
+    if not MISE_COOK_SPLIT_ENABLED or not isinstance(meal, dict):
+        return False
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return False
+        from constants import strip_accents as _sa_ms
+        for s in rec:
+            if isinstance(s, str) and not _is_recipe_safety_note_step(s) \
+                    and s.strip().lower().startswith("el toque de fuego"):
+                return False  # ya hay pilar de fuego (real o complemento) → nada que sintetizar
+        _mi_idx = next((i for i, s in enumerate(rec) if isinstance(s, str)
+                        and _sa_ms(s.strip().lower()).startswith("mise en place")), None)
+        if _mi_idx is None:
+            return False
+        _mise = str(rec[_mi_idx])
+        _body = _mise.split(":", 1)[1].strip() if ":" in _mise else ""
+        if not _body:
+            return False
+        _sents = [x.strip() for x in _re.split(r"(?<=\.)\s+", _body) if x.strip()]
+        if len(_sents) < 2:
+            return False  # una sola oración → moverla vaciaría el Mise
+        _cook, _prep = [], []
+        for _s in _sents:
+            (_cook if _MISE_COOK_VERB_RE.match(_sa_ms(_s)) else _prep).append(_s)
+        if not _cook or not _prep:
+            return False
+        rec[_mi_idx] = "Mise en place: " + " ".join(_prep)
+        rec.insert(_mi_idx + 1, "El Toque de Fuego: " + " ".join(_cook))
+        meal["_mise_cook_split"] = True
+        try:
+            _inject_recipe_time_temp_defaults(meal)
+        except Exception:
+            pass
+        logger.info(f"🔥 [P2-MISE-COOK-SPLIT] cocción movida del Mise a un TdF sintetizado | "
+                    f"meal={str(meal.get('name'))[:40]}")
+        return True
+    except Exception as _ms_e:
+        logger.warning(f"[P2-MISE-COOK-SPLIT] no-op: {type(_ms_e).__name__}: {_ms_e}")
+        return False
+
+
 def _recipe_step_contract_issues(meal: dict) -> list:
     """[P2-RECIPE-STEP-CONTRACT-GATE · 2026-07-01] (audit recetas P2-2) Lint DETERMINISTA barato del contrato
     de pasos que antes solo vivía en prompts (day_generator §3): los 3 prefijos (Mise en place → El Toque de
@@ -18251,6 +18425,19 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
             total += _npd; parts.append(f"display_polish={_npd}")
     except Exception as _hpb_e:
         logger.warning(f"[P2-BOUNDARY-DISPLAY-POLISH] prettify en boundary no-op: {type(_hpb_e).__name__}: {_hpb_e}")
+    # [P2-MISE-COOK-SPLIT · 2026-07-06] cocción atrapada en el Mise sin pilar TdF → split ANTES
+    # del lint (el advisory "falta El Toque de Fuego" era falso-positivo para el usuario).
+    try:
+        if MISE_COOK_SPLIT_ENABLED:
+            _nms = 0
+            for _d in days or []:
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict) and _split_cooking_from_mise(_m):
+                        _nms += 1
+            if _nms:
+                total += _nms; parts.append(f"mise_split={_nms}")
+    except Exception as _ems:
+        logger.warning(f"[P2-MISE-COOK-SPLIT] boundary no-op: {type(_ems).__name__}: {_ems}")
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
     # chunks semana 2+ no pasan por review_plan_node → el contrato de pasos (prefijos/orden/tiempo/
     # inglés) no dejaba rastro fuera de form-gen semana 1. Advisory persistido (LECTURA, jamás gate).
@@ -18489,6 +18676,12 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # prefijos/orden/tiempo-temp/inglés (`_recipe_step_contract_issues`) solo alimentaba el report
         # plan-level de form-gen — un plato editado con pasos rotos no dejaba rastro. Advisory + flag
         # persistido (jamás bloquea; el backstop timetemp de arriba ya rellenó ausencias). LECTURA pura.
+        # [P2-MISE-COOK-SPLIT · 2026-07-06] antes del lint: cocción en Mise → TdF sintetizado.
+        try:
+            if _split_cooking_from_mise(meal):
+                total += 1
+        except Exception:
+            pass
         try:
             _rc_issues = _recipe_step_contract_issues(meal)
             if _rc_issues:
@@ -22889,12 +23082,15 @@ async def assemble_plan_node(state: PlanState) -> dict:
         logger.warning(f"[P1-CURED-GHOST-STEPS] assemble no-op: {type(_cg_as_e).__name__}: {_cg_as_e}")
     # [P2-COOKED-RAW-ANNOTATION + P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] anotación cocido/crudo
     # imposible saneada ANTES de que compras parsee el raw + nota 💪 alineada a la línea.
+    # [P2-MISE-COOK-SPLIT · 2026-07-06] + cocción atrapada en el Mise → TdF sintetizado (el gate
+    # del contrato en review y el lint del boundary dejan de ver un falso "falta TdF").
     try:
         _fix_cooked_raw_annotations(days)
         for _d_al in days or []:
             for _m_al in (_d_al.get("meals") or []) if isinstance(_d_al, dict) else []:
                 if isinstance(_m_al, dict):
                     _align_closer_note_food_names(_m_al)
+                    _split_cooking_from_mise(_m_al)
     except Exception as _cra_as_e:
         logger.warning(f"[P2-COOKED-RAW-ANNOTATION] assemble no-op: {type(_cra_as_e).__name__}: {_cra_as_e}")
 
