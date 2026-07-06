@@ -6405,7 +6405,9 @@ def api_regenerate_day(
                                                 PORTION_SHRINK_FLOOR_G as _fl_rf,
                                                 PORTION_CAP_PROTEIN_G as _cap_rf,
                                                 _SHRINK_FLOOR_EXEMPT_TOKENS as _ex_rf,
-                                                GLOBAL_DAY_REFINE_MAX_ITERS as _it_rf)
+                                                GLOBAL_DAY_REFINE_MAX_ITERS as _it_rf,
+                                                REFINE_KCAL_AWARE as _rka_rf,
+                                                _day_kcal_out_of_refine_band as _kob_rf)
                 from portion_solver import refine_day_portions_integer as _rdi_rd
                 import copy as _copy_rf
                 _pg_rf = float(day_target.get("protein_g") or 0)
@@ -6417,6 +6419,10 @@ def api_regenerate_day(
                 _sf_rf = sum(_mmn_rf(m.get("fats")) for m in _real_rf)
                 _oob_rf = any(t > 0 and not (0.90 <= v / t <= 1.12)
                               for v, t in ((_sp_rf, _pg_rf), (_sc_rf, _cg_rf), (_sf_rf, _fg_rf)))
+                # [P1-REFINE-KCAL-AWARE · 2026-07-06] arm kcal: banda estrecha ±5% [0.95,1.05] (paridad SSOT
+                # con S1/update — el macro-band ±10/12% no cubre un día macro-in pero kcal-out).
+                if not _oob_rf and _rka_rf:
+                    _oob_rf = _kob_rf(_sp_rf, _sc_rf, _sf_rf, _pg_rf, _cg_rf, _fg_rf)
                 if _oob_rf:
                     _pre_rf = _copy_rf.deepcopy(new_meals)
                     _tgt_rf = {"kcal": 4.0 * (_pg_rf + _cg_rf) + 9.0 * _fg_rf,

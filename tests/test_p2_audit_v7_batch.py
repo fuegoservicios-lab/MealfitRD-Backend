@@ -202,6 +202,11 @@ def test_p2_11_sync_contract_banda_and_step():
         assert token in helper, f"banda {token} ausente del helper SSOT"
         assert token in _fn_block(_PL, "_oob_rf = any", span=400), f"banda {token} ausente del inline regen-day"
     assert "step_g=5.0" in helper and "step_g=5.0" in inline, "step de refine divergió (5g)"
+    # [P1-REFINE-KCAL-AWARE · 2026-07-06] ambos sitios extienden el trigger con el arm kcal (banda ±5%).
+    assert "REFINE_KCAL_AWARE" in helper or "_day_kcal_out_of_refine_band" in helper, \
+        "el helper SSOT dejó de aplicar el arm kcal del trigger de refine"
+    assert "_rka_rf" in inline or "_kob_rf" in inline, \
+        "regen-day inline dejó de aplicar el arm kcal (divergió del helper SSOT)"
     # el inline importa los knobs SSOT (no copia valores).
     for knob in ("PORTION_SHRINK_FLOOR_G", "PORTION_CAP_PROTEIN_G",
                  "_SHRINK_FLOOR_EXEMPT_TOKENS", "GLOBAL_DAY_REFINE_MAX_ITERS"):

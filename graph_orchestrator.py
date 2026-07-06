@@ -9647,6 +9647,15 @@ PORTION_SHRINK_FLOOR_G = _env_float("MEALFIT_PORTION_SHRINK_FLOOR_G", 15.0, vali
 # (múltiplos de step) → cero re-quantize. Rollback: MEALFIT_GLOBAL_DAY_REFINE=false.
 GLOBAL_DAY_REFINE_ENABLED = _env_bool("MEALFIT_GLOBAL_DAY_REFINE", True)
 GLOBAL_DAY_REFINE_MAX_ITERS = _env_int("MEALFIT_GLOBAL_DAY_REFINE_MAX_ITERS", 250, validator=lambda v: 20 <= v <= 2000)
+# [P1-REFINE-KCAL-AWARE · 2026-07-06] El trigger del refinador global (S1 + update helper + regen-day) miraba
+# SOLO P/C/F contra [0.90,1.12]. Como la banda de kcal del scoreboard (±5% [0.95,1.05]) es MÁS ESTRECHA que la
+# de macros (±10/12%), un día con P/C/F dentro de la banda laxa pero kcal fuera del techo estrecho —el miss de
+# banda MÁS COMÚN (forense 20 planes: celda kcal fuera en 53% de los días vs fats 39%, protein/carbs 11%)— se
+# SALTABA el refinador, que SÍ pondera kcal (peso 1.0) y puede cerrarlo. Validado en la ruta de producción
+# (refiner+truth-up) sobre 3 días reales: fcc7a9f0 d3 pasó 3/4→4/4 (kcal 105%→104%), CERO regresión (el gate
+# conservador del truth-up neutraliza la inflación fantasma de conteos sin gramaje). El arm kcal extiende el
+# trigger; el refinador y sus bounds no cambian. Rollback: MEALFIT_REFINE_KCAL_AWARE=false.
+REFINE_KCAL_AWARE = _env_bool("MEALFIT_REFINE_KCAL_AWARE", True)
 # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Motor de macros de S1 (rebalance C/F/P al
 # target + refine entero de 5g) en las superficies de UPDATE (swap-persist / chat-modify / regen-day).
 # Antes el motor corría SOLO en form-gen: un update que dejaba el día fuera de banda se entregaba con
@@ -13270,11 +13279,21 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
         # closer (contribuye al techo de all-4-band ~66.7%). Solo telemetría (flag + log) — NO cambia el plan;
         # mide la frecuencia real antes de considerar subir max_scale para proteína-dominantes (opción b).
         try:
-            _sat = sum(1 for _f in factors if isinstance(_f, (int, float)) and (_f <= 0.301 or _f >= 3.499))
+            # [P1-SOLVER-CLAMP-DIRECTION · 2026-07-06] Desglose ARRIBA (≥3.5×, el solver quería MÁS del
+            # ingrediente pero el clamp lo frenó → sub-entrega) vs ABAJO (≤0.3×, quería MENOS → sobre-entrega).
+            # La "opción (b)" (subir max_scale para proteína-dominantes) SOLO ayuda si la saturación es de
+            # ARRIBA; si es de abajo, el lever correcto es otro (bajar min_scale / swap a forma menos densa).
+            # El desglose per-meal se agrega a la métrica per-run `solver_clamp` → decisión data-driven.
+            _sat_hi = sum(1 for _f in factors if isinstance(_f, (int, float)) and _f >= 3.499)
+            _sat_lo = sum(1 for _f in factors if isinstance(_f, (int, float)) and _f <= 0.301)
+            _sat = _sat_hi + _sat_lo
             if _sat:
                 meal["_solver_clamp_saturated"] = _sat
+                meal["_solver_clamp_saturated_hi"] = _sat_hi
+                meal["_solver_clamp_saturated_lo"] = _sat_lo
                 logger.info(f"📐 [P2-SOLVER-CLAMP-TELEMETRY] {_sat}/{len(factors)} factor(es) saturaron el clamp "
-                            f"[0.3,3.5] en meal {str(meal.get('name'))[:40]!r} (slot fuera de banda pre-closer).")
+                            f"[0.3,3.5] ({_sat_hi}↑ quería-más / {_sat_lo}↓ quería-menos) en meal "
+                            f"{str(meal.get('name'))[:40]!r} (slot fuera de banda pre-closer).")
         except Exception:
             pass
         raw = meal.get("ingredients_raw")
@@ -14316,6 +14335,21 @@ def _macro_aware_day_reconcile(meals: list, target_carbs: float, target_fats: fl
 # medido por alimento (fibra, alcoholes de azúcar, factores específicos). Cualquier UI/PDF debe mostrar
 # `cals` tal cual y NO recomputar 4/4/9 (si algún surface lo hace, el bug está en ese surface). El pase
 # 4/4/9 de P1-30 corre ANTES del engine a propósito (sanea números ASERTADOS por el LLM, no física).
+def _day_kcal_out_of_refine_band(sp: float, sc: float, sf: float,
+                                 pg: float, cg: float, fg: float) -> bool:
+    """[P1-REFINE-KCAL-AWARE · 2026-07-06] True si las kcal ENTREGADAS del día (Atwater 4·P+4·C+9·F sobre las
+    sumas de macros del día) caen fuera de la banda ESTRECHA [0.95,1.05] del target kcal (4·pg+4·cg+9·fg).
+    Es el "arm kcal" del trigger del refinador global — complementa el chequeo P/C/F [0.90,1.12] en los 3
+    sitios (S1 assemble / update helper / regen-day). kcal derivado de P/C/F (no de `cals`) → self-consistente
+    con el target que optimiza `refine_day_portions_integer`. El callsite lo gatea con `REFINE_KCAL_AWARE`.
+    Puro/fail-safe (target ≤0 → False). tooltip-anchor: P1-REFINE-KCAL-AWARE."""
+    _tk = 4.0 * (float(pg) + float(cg)) + 9.0 * float(fg)
+    if _tk <= 0:
+        return False
+    _dk = 4.0 * (float(sp) + float(sc)) + 9.0 * float(sf)
+    return not (0.95 <= _dk / _tk <= 1.05)
+
+
 def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
     """[P2-MACRO-TRUTHUP · 2026-06-16] (gap-audit P2-5) Recomputa el NÚMERO de macros del meal sumando
     `db.macros_from_ingredient_string` sobre los strings FINALES de `meal['ingredients']` (post reconcile/
@@ -24356,6 +24390,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             _t > 0 and not (0.90 <= (_v / _t) <= 1.12)
                             for _v, _t in ((_sp_r, float(_pg or 0)), (_sc_r, float(_cg or 0)), (_sf_r, float(_fg or 0)))
                         )
+                        # [P1-REFINE-KCAL-AWARE · 2026-07-06] arm kcal: la banda kcal ±5% [0.95,1.05] es más
+                        # estrecha que la de macros ±10/12% → un día macro-in pero kcal-out se saltaba el refine.
+                        if not _out_of_band and REFINE_KCAL_AWARE:
+                            _out_of_band = _day_kcal_out_of_refine_band(
+                                _sp_r, _sc_r, _sf_r, float(_pg or 0), float(_cg or 0), float(_fg or 0))
                         if not _out_of_band:
                             continue
                         _mv = _rdi(
@@ -31846,7 +31885,13 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
             _sc = sum(_meal_macro_num(m.get("carbs")) for m in _meals if isinstance(m, dict))
             _sf = sum(_meal_macro_num(m.get("fats")) for m in _meals if isinstance(m, dict))
             _pairs = [(_sc, _cg), (_sf, _fg)] + ([] if _renal else [(_sp, _pg)])
-            return any(t > 0 and not (0.90 <= (v / t) <= 1.12) for v, t in _pairs)
+            if any(t > 0 and not (0.90 <= (v / t) <= 1.12) for v, t in _pairs):
+                return True
+            # [P1-REFINE-KCAL-AWARE · 2026-07-06] arm kcal: banda estrecha ±5%. El target kcal incluye proteína
+            # aun en renal (se consume, solo capada por KDIGO) → 4·pg+4·cg+9·fg con pg completo.
+            if REFINE_KCAL_AWARE and _day_kcal_out_of_refine_band(_sp, _sc, _sf, _pg, _cg, _fg):
+                return True
+            return False
 
         touched = 0
         for _day in plan_data.get("days") or []:
@@ -32455,6 +32500,10 @@ def _compute_pipeline_holistic_score_and_emit(
                     _clamp_meals = [_m4 for _d4 in (plan.get("days") or []) if isinstance(_d4, dict)
                                     for _m4 in (_d4.get("meals") or []) if isinstance(_m4, dict)]
                     _clamp_sat = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_clamp_saturated"))
+                    # [P1-SOLVER-CLAMP-DIRECTION · 2026-07-06] meals saturados ARRIBA (quería más → sub-entrega)
+                    # vs ABAJO (quería menos → sobre-entrega). Desambigua la opción (b) del solver con datos de flota.
+                    _clamp_hi = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_clamp_saturated_hi"))
+                    _clamp_lo = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_clamp_saturated_lo"))
                     if _clamp_meals:
                         _emit_progress(initial_state, "metric", {
                             "node": "solver_clamp",
@@ -32464,6 +32513,8 @@ def _compute_pipeline_holistic_score_and_emit(
                             "confidence": round(_clamp_sat / len(_clamp_meals), 3),
                             "metadata": {
                                 "saturated_meals": _clamp_sat,
+                                "saturated_meals_hi": _clamp_hi,  # clamp arriba (3.5×): subir max_scale ayudaría
+                                "saturated_meals_lo": _clamp_lo,  # clamp abajo (0.3×): otro lever
                                 "total_meals": len(_clamp_meals),
                                 "delivered_was_fallback": delivered_was_fallback,
                             },
