@@ -39,7 +39,9 @@ def test_minimal_total_line_survives():
     # caja del dinero: ciclo arriba, esta-ida abajo, mismos colores).
     src = _dash()
     assert "P2-SHOPLIST-PANEL-REMOVED" in src, "lápida documentando la decisión del owner"
-    banner = src.index("P1-BUDGET-RECONCILE · 2026-07-02] Estado honesto")
+    # Anchor en el banner de la UI ("costo real") — el mismo comment existe en
+    # variante PDF más arriba en el archivo (línea ~2783) y confundía el index.
+    banner = src.index("Estado honesto del presupuesto: costo real")
     win = src[banner:banner + 9000]
     assert "Esta ida al súper:" in win, (
         "el total 'esta ida' es dato ÚNICO (≠ total del ciclo) — vive en el banner de presupuesto"
