@@ -9533,6 +9533,12 @@ VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT
 # los días de un chunk de 3. Rollback: MEALFIT_CROSS_DAY_DISH_GATE=false.
 VARIETY_GATE_CROSS_DAY_DISH = _env_bool("MEALFIT_CROSS_DAY_DISH_GATE", True)
 CROSS_DAY_DISH_GATE_MIN_DAYS = max(2, min(7, _env_int("MEALFIT_CROSS_DAY_DISH_MIN_DAYS", 3)))
+# [P1-CROSSDAY-DISH-DIVERSIFY · 2026-07-06] Diversificador determinista de plato-base cross-día:
+# cuando una CABEZA de plato renombrable ("Ensalada de X"/"Guiso de X"/"Puré de X"/"Wrap de X")
+# se repite en ≥ MIN_DAYS días, renombra la forma limpia "Base de X" → sinónimo HONESTO en los
+# días excedentes (conserva las primeras MIN-1), sin tocar ingredientes/macros ni adjetivos con
+# género. Cierra el retry cross-día para el caso genuino sin regenerar. Rollback: =false.
+CROSS_DAY_DISH_DIVERSIFY_ENABLED = _env_bool("MEALFIT_CROSS_DAY_DISH_DIVERSIFY", True)
 # [P2-LIGHTNAME-ADVISORY · 2026-07-02] (audit v3 slots GAP-E) honestidad nombre↔plato: "Cena ligera" con
 # kcal por encima del techo se cuenta como advisory (telemetría, NO gate).
 LIGHT_NAME_KCAL_CEILING = max(300, min(1200, _env_int("MEALFIT_LIGHT_NAME_KCAL_CEILING", 550)))
@@ -14731,6 +14737,25 @@ _VARIETY_BASE_CANON = {"revuelto": "revoltillo", "smoothie": "batido",
                        "licuado": "batido", "guisad": "guiso",
                        # [P2-CROSSDAY-PREP-DIVERSITY] variantes de la misma preparación.
                        "pancake": "panqueque", "arepita": "arepa"}
+# [P1-CROSSDAY-DISH-HEAD-ANCHOR · 2026-07-06] El gate de plato-base (intra Y cross-día) contaba
+# el token base como SUBSTRING en cualquier parte del nombre → una GUARNICIÓN ("Yautía al Ajillo
+# con Queso y Ensalada", "Mejillones al Vapor y Ensalada") se contaba como si el plato FUERA
+# ensalada → falso "ensalada en 3 días" (3 rechazos vivos en la sesión 2026-07-06). El plato-base
+# real es la CABEZA del nombre (antes del primer conector de acompañante 'con/y/sobre/...'). Este
+# es el mismo falso-positivo por el que el gate INTRA-día (VARIETY_GATE_BASE_DISH_REPEAT) nació OFF;
+# el cross-día (P2-CROSSDAY-VARIETY-GATE) lo reintrodujo al usar la misma detección substring.
+_DISH_SIDE_SPLIT_RX = _re.compile(
+    r"\s+(?:con|y|sobre|acompanad[oa]s?\s+de|al\s+lado|servid[oa]s?\s+con|junto\s+a)\s+|,",
+    _re.IGNORECASE)
+
+
+def _head_dish_base_token(name_low_sa: str):
+    """Token base-de-plato canónico de la CABEZA del nombre (antes del 1er conector de
+    acompañante), o None. `name_low_sa` ya viene en minúscula sin acentos. Espejo SSOT usado
+    por el reporte de variedad (gate) y el diversificador cross-día."""
+    head = _DISH_SIDE_SPLIT_RX.split(str(name_low_sa), 1)[0]
+    tok = next((t for t in _VARIETY_BASE_DISHES if t in head), None)
+    return _VARIETY_BASE_CANON.get(tok, tok) if tok else None
 _PREMIUM_INGREDIENTS = ("ricotta", "yogur griego", "yogurt griego", "queso parmesano",
                         "queso mozzarella", "salmon", "salmón")
 # [P2-DISH-COHERENCE · 2026-06-25] Frutas FEATURED (dulces) para la detección de repetición intra-día.
@@ -14954,14 +14979,15 @@ def build_variety_report(plan: dict) -> dict:
             ings_low = strip_accents(" ".join(str(i) for i in meal.get("ingredients", []) or []).lower())
             if any(p in name_low or p in ings_low for p in _PREMIUM_INGREDIENTS):
                 premium += 1
-            tok = next((t for t in _VARIETY_BASE_DISHES if t in name_low), None)
+            # [P1-CROSSDAY-DISH-HEAD-ANCHOR · 2026-07-06] token base de la CABEZA del plato (no
+            # una guarnición mencionada tras 'con/y') → cierra el falso "ensalada en 3 días".
+            tok = _head_dish_base_token(name_low)
             if tok:
                 # [P2-CROSSDAY-PREP-DIVERSITY] misma preparación repartida en varios días (canónica).
                 try:
-                    prep_days.setdefault(_VARIETY_BASE_CANON.get(tok, tok), set()).add(day.get("day", "?"))
+                    prep_days.setdefault(tok, set()).add(day.get("day", "?"))
                 except Exception:
                     pass
-                tok = _VARIETY_BASE_CANON.get(tok, tok)  # colapsa sinónimos del mismo plato
                 day_tokens[tok] = day_tokens.get(tok, 0) + 1
             # [P2-DISH-COHERENCE] Cuenta frutas FEATURED por su mención en el NOMBRE (1 por meal):
             # detecta la misma fruta dulce repartida en ≥2 comidas del mismo día (mango ×2).
@@ -20452,6 +20478,77 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         return 0
 
 
+# [P1-CROSSDAY-DISH-DIVERSIFY · 2026-07-06] Sinónimos HONESTOS de plato-base para renombrar la
+# forma limpia "Base de X" en los días excedentes. Bases sin sinónimo honesto y limpio se omiten:
+# revoltillo/tortilla (huevo-identidad), mangu/locrio/moro/mofongo/tostones (platos específicos),
+# panqueque/arepa (masa específica), plancha/horneado/salteado (métodos, no cabeza "de X").
+_CROSS_DAY_DISH_RENAME = {
+    "ensalada": "Bowl",      # composición fría: un bowl es honesto
+    "guiso": "Estofado",     # sinónimo exacto
+    "pure": "Majado",        # sinónimo dominicano exacto
+    "wrap": "Enrollado",     # sinónimo (enrollado = wrap)
+    "batido": "Bebida",      # un batido es una bebida
+    "sopa": "Caldo",         # caldo/sopa intercambiables en es-DO
+}
+
+
+def _diversify_cross_day_dishes(days: list) -> int:
+    """[P1-CROSSDAY-DISH-DIVERSIFY · 2026-07-06] Cuando una CABEZA de plato renombrable se
+    repite en ≥ CROSS_DAY_DISH_GATE_MIN_DAYS días, renombra la forma limpia "Base de X" →
+    sinónimo honesto en los días EXCEDENTES (conserva las primeras MIN-1 apariciones). NO toca
+    ingredientes/macros ni adjetivos con género (solo la forma "Base de X" donde el sinónimo es
+    gramaticalmente neutro). Espejo de la detección head-anchored del gate. Idempotente
+    (post-rename el token base ya no está). Fail-safe. tooltip-anchor: P1-CROSSDAY-DISH-DIVERSIFY"""
+    if not (CROSS_DAY_DISH_DIVERSIFY_ENABLED and days):
+        return 0
+    try:
+        from constants import strip_accents as _sa_cd
+        min_days = CROSS_DAY_DISH_GATE_MIN_DAYS
+        by_canon: dict = {}  # base canónico → [(day_idx, meal, raw_token)]
+        for _di, _d in enumerate(days if isinstance(days, list) else []):
+            if not isinstance(_d, dict):
+                continue
+            for meal in _d.get("meals") or []:
+                if not isinstance(meal, dict):
+                    continue
+                nm_sa = _sa_cd(str(meal.get("name", "")).lower())
+                head = _DISH_SIDE_SPLIT_RX.split(nm_sa, 1)[0]
+                raw = next((t for t in _VARIETY_BASE_DISHES if t in head), None)
+                if not raw:
+                    continue
+                canon = _VARIETY_BASE_CANON.get(raw, raw)
+                if canon not in _CROSS_DAY_DISH_RENAME:
+                    continue
+                # solo la forma limpia "Base de X" (cabeza + ' de ') — sin adjetivo con género.
+                if not _re.match(r"^\s*" + raw + r"[a-zà-ÿ]*\s+de\s+", nm_sa):
+                    continue
+                by_canon.setdefault(canon, []).append((_di, meal, raw))
+        renamed = 0
+        for canon, entries in by_canon.items():
+            days_with = sorted({di for di, _, _ in entries})
+            if len(days_with) < min_days:
+                continue
+            keep = set(days_with[:min_days - 1])  # conserva las primeras MIN-1
+            syn = _CROSS_DAY_DISH_RENAME[canon]
+            for _di, meal, raw in entries:
+                if _di in keep:
+                    continue
+                orig = str(meal.get("name", ""))
+                # reemplaza la 1ª palabra (la base) preservando " de X..." intacto.
+                mo = _re.match(r"^(\s*)(\S+)(\s+de\s+)", orig, _re.IGNORECASE)
+                if not mo:
+                    continue
+                meal["name"] = mo.group(1) + syn + orig[mo.end(2):]
+                meal["_crossday_dish_diversified"] = f"{canon}->{syn.lower()}"
+                renamed += 1
+                logger.info(f"🍽️ [P1-CROSSDAY-DISH-DIVERSIFY] '{canon}' en {len(days_with)} días → "
+                            f"'{syn}' en día excedente | {orig[:40]!r} → {meal['name'][:40]!r}")
+        return renamed
+    except Exception as _cd_e:
+        logger.warning(f"[P1-CROSSDAY-DISH-DIVERSIFY] no-op: {type(_cd_e).__name__}: {_cd_e}")
+        return 0
+
+
 def _diversify_egg_pools(skeleton_days: list, form_data=None) -> int:
     """[P1-EGG-POOL-DIVERSIFIER · 2026-07-05] Limita el huevo a ≤ EGG_POOL_MAX_DAYS pools del
     skeleton: en los días excedentes reemplaza la(s) entry(s) huevo/claras por UNA proteína
@@ -23753,6 +23850,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _pr_fixed:
                 logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] {_pr_fixed} comida(s) con proteína repetida "
                             f"same-day reescrita(s) a proteína alternativa pre-reviewer.")
+            # [P1-CROSSDAY-DISH-DIVERSIFY · 2026-07-06] plato-base renombrable repetido en ≥N días
+            # → sinónimo honesto en los días excedentes (espejo del gate cross-día head-anchored).
+            _cd_fixed = _diversify_cross_day_dishes(days)
+            if _cd_fixed:
+                logger.info(f"🍽️ [P1-CROSSDAY-DISH-DIVERSIFY] {_cd_fixed} plato(s)-base excedente(s) "
+                            f"renombrado(s) a sinónimo honesto pre-reviewer.")
         except Exception as _nra_c:
             logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
 
