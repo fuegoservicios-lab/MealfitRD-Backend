@@ -1226,7 +1226,7 @@ def _consume_reserved_inventory(user_id: str, ingredient_name: str, quantity: fl
 
     return False
 
-def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: float, unit: str, mutation_type: str = "manual", source: str = "manual"):
+def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: float, unit: str, mutation_type: str = "manual", source: str = "manual", brand: str = None):
     """
     Agrega o actualiza un ingrediente en la despensa del usuario.
     Resuelve empates de unidades (ej. si hay kg y pides restar g, restará del kg correctamente).
@@ -1412,6 +1412,18 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                         updated = True
                     break
 
+        # [P2-NEVERA-BRANDS · 2026-07-06] La compra repetida cae al path RPC
+        # (merge de qty sobre fila existente) que NO toca `brand` — refrescarla
+        # para que la Nevera diga la marca de la ÚLTIMA compra. Fail-open.
+        if updated and brand:
+            try:
+                execute_sql_write(
+                    "UPDATE user_inventory SET brand = %s WHERE user_id = %s AND ingredient_name = %s",
+                    (str(brand).strip(), user_id, ingredient_name),
+                )
+            except Exception as _br_e:
+                logger.debug(f"[P2-NEVERA-BRANDS] brand refresh no-op: {_br_e}")
+
         # Si no se encontró un registro compatible o no existía, insertamos uno nuevo.
         # [P3-PROD-AUDIT-2 · 2026-05-30 · cerrado P1-NEON-DB-MIGRATION 2026-06-12]
         # La race cross-call aceptada (dos escritores concurrentes del MISMO item
@@ -1423,16 +1435,20 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
         # wins (P0.2).
         if not updated:
             if quantity >= 0.01:
+                # [P2-NEVERA-BRANDS · 2026-07-06] `brand` = marca comprada (resuelta
+                # en /restock desde brand_product_id). Última compra gana; NULL no
+                # borra la marca previa (COALESCE).
                 execute_sql_write(
                     """
                     INSERT INTO user_inventory
                         (user_id, ingredient_name, quantity, unit,
-                         master_ingredient_id, last_mutation_type, source)
-                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s)
+                         master_ingredient_id, last_mutation_type, source, brand)
+                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s, %s)
                     ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE
                         SET quantity = user_inventory.quantity + EXCLUDED.quantity,
                             master_ingredient_id = COALESCE(EXCLUDED.master_ingredient_id, user_inventory.master_ingredient_id),
-                            last_mutation_type = EXCLUDED.last_mutation_type
+                            last_mutation_type = EXCLUDED.last_mutation_type,
+                            brand = COALESCE(EXCLUDED.brand, user_inventory.brand)
                     """,
                     (
                         user_id,
@@ -1442,6 +1458,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                         master_id,
                         mutation_type,
                         source,
+                        (str(brand).strip() or None) if brand else None,
                     ),
                 )
             elif quantity < 0 and existing_rows:
@@ -1964,7 +1981,10 @@ def restock_inventory(user_id: str, ingredients_list: list):
                 if qty > 0:
                     # [P0.2] source='shopping_list' marca la fila para que la lógica
                     # de "MERGE inteligente" pueda distinguirla de items manuales.
-                    res = add_or_update_inventory_item(user_id, name, qty, unit, source='shopping_list')
+                    # [P2-NEVERA-BRANDS · 2026-07-06] la marca comprada (resuelta en
+                    # /restock) viaja a la fila del inventario.
+                    _item_brand = str(item.get("brand") or "").strip() or None
+                    res = add_or_update_inventory_item(user_id, name, qty, unit, source='shopping_list', brand=_item_brand)
                     if res:
                         items_saved += 1
                         persisted_names.append(name)

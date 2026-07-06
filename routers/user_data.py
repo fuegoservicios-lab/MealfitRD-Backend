@@ -70,6 +70,7 @@ _INVENTORY_SELECT = """
         ui.master_ingredient_id::text AS master_ingredient_id,
         ui.source,
         ui.category,
+        ui.brand,
         CASE WHEN mi.id IS NULL THEN NULL ELSE jsonb_build_object(
             'name', mi.name,
             'category', mi.category,

@@ -7505,6 +7505,32 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         if not filtered_ingredients:
             return {"success": True, "message": "Todos los items ya estaban registrados en este ciclo."}
 
+        # [P2-NEVERA-BRANDS · 2026-07-06] Resolver la MARCA comprada: los items
+        # estructurados traen `brand_product_id` (el producto que la lista usó —
+        # default más barato o preferencia manual, P1-BRAND-DEFAULT-PRESELECTED).
+        # Un solo SELECT id→brand y se inyecta `brand` para que la Nevera la
+        # enseñe. Fail-open TOTAL: cualquier error → restock sin marcas.
+        try:
+            _bp_ids = {
+                str(it.get("brand_product_id")) for it in filtered_ingredients
+                if isinstance(it, dict) and it.get("brand_product_id")
+            }
+            if _bp_ids:
+                _bp_rows = execute_sql_query(
+                    "SELECT id::text AS id, brand FROM public.supermarket_products "
+                    "WHERE id = ANY(%s::uuid[])",
+                    (list(_bp_ids),),
+                    fetch_all=True,
+                ) or []
+                _bp_map = {r["id"]: (str(r.get("brand") or "").strip() or "Genérico") for r in _bp_rows}
+                for it in filtered_ingredients:
+                    if isinstance(it, dict) and it.get("brand_product_id"):
+                        _b = _bp_map.get(str(it["brand_product_id"]))
+                        if _b:
+                            it["brand"] = _b
+        except Exception as _bp_exc:
+            logger.warning(f"⚠️ [P2-NEVERA-BRANDS] resolución de marcas no-op (fail-open): {_bp_exc}")
+
         # Validación MURO Omitida: Ahora confiamos en el Delta Shopping del frontend.
         # El frontend solo envía los ingredientes que no están en la Nevera.
         # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory ahora retorna
