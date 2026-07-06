@@ -2082,6 +2082,25 @@ def _parse_presentation_grams(presentation) -> float | None:
             if 1.0 <= grams <= 50000.0:
                 return grams
         return None
+    # [P1-BRAND-SIZE-FILTER · 2026-07-06] "L" suelta TRAS ENVASE SÓLIDO = libra.
+    # La "L" sigue siendo ambigua en general (libra en produce / litro en leche),
+    # pero los líquidos del catálogo usan "Lt"/"Ml" explícitos (ver nota arriba de
+    # _PRES_SIZE_RX) — un "Paquete 2L"/"Funda 5L" de staple seco es LIBRA con alta
+    # confianza. Cierra el gap donde los genéricos del sync (arroz "Paquete 2L")
+    # perdían el overlay de costeo Y quedaban fuera del filtro por tamaño del
+    # picker de marcas. "Botella 2L" sigue fail-open (litro probable).
+    m2 = re.search(r"(?<![/\d.,])(\d+(?:[.,]\d+)?)\s*l\b", text, re.IGNORECASE)
+    if m2:
+        first = _norm_pref_food(text).split(" ")[0] if text.strip() else ""
+        if first in ("paquete", "funda", "saco", "sobre", "caja"):
+            try:
+                qty = float(m2.group(1).replace(",", "."))
+            except ValueError:
+                return None
+            grams = qty * 453.592
+            if 1.0 <= grams <= 50000.0:
+                return grams
+        return None
     # "Lb"/"Libra" sin número = venta por libra (carnicería/produce).
     if re.search(r"\b(lb|libra)\b", text, re.IGNORECASE):
         return 453.592
@@ -2695,6 +2714,10 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     market_unit = "lbs" if weight_in_lbs > 0 else unit_str
     confidence = 0.5  # Default: raw fallback
     sku_label = None   # None = no SKU optimization applied
+    # [P1-BRAND-SIZE-FILTER · 2026-07-06] Tamaño en gramos del ENVASE elegido —
+    # viaja al ítem como `package_grams` para que el picker de marcas filtre las
+    # variantes del súper al MISMO tamaño que la lista muestra (ej. 2 lb).
+    _pkg_size_g = None
 
     # Guards mínimos para Bloques 2 y 3 (solo 2 regex, eliminados los 15+ anteriores)
     is_meat_seafood = bool(re.search(r'\b(pollo|cerdo|carne|res|pescado|camar[oó]n|camarones|mariscos?|filetes?|chuletas?|longanizas?|salamis?|jam[oó]n|pavo|tocineta|bacon|salchichas?)\b', n_lower))
@@ -2746,6 +2769,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             sku_size_g = _mp_sel["grams"]
             sku_label = _mp_sel["label"] or _sku_size_label(sku_size_g, db_container)
             market_pkg_price = _mp_sel["price"]
+            _pkg_size_g = sku_size_g
             # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidad de DISPLAY = la forma del envase
             # elegido (lata vs paquete) cuando difiere del market_container genérico. Sin
             # `unit` en el package → fallback a db_container (comportamiento previo).
@@ -2762,6 +2786,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         elif available_sizes and isinstance(available_sizes, list) and len(available_sizes) > 1:
             sku_count, sku_size_g = _find_best_sku(g_total, available_sizes, ANTI_WASTE_THRESHOLD)
             sku_label = _sku_size_label(sku_size_g, db_container)
+            _pkg_size_g = sku_size_g
             # [P1-PDF-5] Sufijo "c/u" cuando count > 1 para evitar lectura
             # ambigua: "9 potes (16 oz)" → "9 potes (16 oz c/u)".
             display_qty = (
@@ -2802,6 +2827,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                     units_needed = max(1, math.ceil(raw_units))
                 
                 sku_label = _sku_size_label(container_weight_g, db_container)
+                _pkg_size_g = container_weight_g
                 # [P1-PDF-5] Sufijo "c/u" cuando units_needed > 1 — ver
                 # docstring de `_format_pkg_suffix`. Antes "13 sobres (14g)"
                 # leía como "14g totales", ahora "13 sobres (14g c/u)".
@@ -3245,6 +3271,13 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     }
     if sku_label:
         result["sku_size_label"] = sku_label
+    # [P1-BRAND-SIZE-FILTER · 2026-07-06] Tamaño del envase elegido → el picker de
+    # marcas (SupermarketBrands) filtra variantes del súper al tamaño de la lista.
+    if _pkg_size_g:
+        try:
+            result["package_grams"] = round(float(_pkg_size_g), 2)
+        except (TypeError, ValueError):
+            pass
     # [P1-PKG-DURATION-PRICING] Precio del envase real elegido (RD$/paquete). Consumido por
     # `_cost_from_market` para costear por tamaño (count × precio), cerrando el sobrecobro
     # de precio plano en staples con descuento por volumen.

@@ -42,7 +42,9 @@ def test_parse_presentation_grams_ok(pres, expected):
 
 
 @pytest.mark.parametrize("pres", [
-    "Paquete 2L",        # "L" suelta AMBIGUA (libra en produce / litro en leche) → skip
+    # [P1-BRAND-SIZE-FILTER · 2026-07-06] "Paquete 2L" YA parsea (L tras envase
+    # sólido = libra; ver test_p1_brand_size_filter). "Botella 2L" sigue ambigua.
+    "Botella 2L",
     "Cartón L",
     "Caja 20 unid",      # conteos → path propio (huevos), no gramos
     "Malla Mini 5 unid",

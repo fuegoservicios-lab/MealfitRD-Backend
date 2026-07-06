@@ -233,13 +233,33 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
         rows = execute_sql_query(
             """
             SELECT id::text AS id, food_name, brand, presentation,
-                   price_rd::float8 AS price_rd, category, is_verified
+                   price_rd::float8 AS price_rd,
+                   size_grams::float8 AS size_grams,
+                   category, is_verified
             FROM public.supermarket_products
             WHERE active
             ORDER BY lower(food_name), (brand IS NOT NULL), price_rd NULLS LAST
             """,
             fetch_all=True,
         ) or []
+
+        # [P1-BRAND-SIZE-FILTER · 2026-07-06] `size_g` efectivo por variante:
+        # size_grams (admin UI) autoritativo; fallback al parser SSOT del costeo
+        # (`_parse_presentation_grams`, misma lógica que el overlay de marcas).
+        # El frontend lo usa para filtrar variantes al tamaño del envase que la
+        # lista de compras ya eligió (`package_grams` del ítem).
+        from shopping_calculator import _parse_presentation_grams
+
+        def _size_g(r: Dict[str, Any]) -> Optional[float]:
+            try:
+                g = float(r.get("size_grams") or 0) or None
+            except (TypeError, ValueError):
+                g = None
+            if g is not None and not (1.0 <= g <= 50000.0):
+                g = None
+            if g is None:
+                g = _parse_presentation_grams(r.get("presentation"))
+            return g
 
         # Índice food normalizado → {food_name, category, variants[]}. master_food_name
         # (si difiere) apunta al MISMO grupo — alias de resolución, no grupo aparte.
@@ -251,6 +271,7 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
             g["variants"].append({
                 "id": r["id"], "brand": r.get("brand"), "presentation": r.get("presentation"),
                 "price_rd": r.get("price_rd"), "is_verified": bool(r.get("is_verified")),
+                "size_g": _size_g(r),
             })
 
         master_rows = execute_sql_query(

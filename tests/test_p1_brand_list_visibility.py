@@ -61,7 +61,9 @@ def test_pkg_row_brandless_label():
 
 
 @pytest.mark.parametrize("row", [
-    {"presentation": "Paquete 2L", "brand": "X", "price_rd": 100.0, "size_grams": None},  # L ambigua
+    # [P1-BRAND-SIZE-FILTER] "Paquete 2L" ya parsea (L tras envase sólido = libra);
+    # "Botella 2L" sigue siendo la ambigua canónica (litro probable).
+    {"presentation": "Botella 2L", "brand": "X", "price_rd": 100.0, "size_grams": None},
     {"presentation": "Funda 800 gr", "brand": "X", "price_rd": 0, "size_grams": None},     # sin precio
     {"presentation": "Funda 800 gr", "brand": "X", "price_rd": None, "size_grams": None},
     {"presentation": "", "brand": "X", "price_rd": 100.0, "size_grams": None},             # sin tamaño
