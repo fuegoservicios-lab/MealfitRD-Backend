@@ -15695,8 +15695,13 @@ _MISE_COOK_VERB_RE = _re.compile(
 def _split_cooking_from_mise(meal: dict) -> bool:
     """[P2-MISE-COOK-SPLIT · 2026-07-06] Mueve las oraciones de cocción del Mise en place a un
     'El Toque de Fuego:' sintetizado cuando el pilar falta (contrato de 3 pilares). Verbatim (no
-    inventa texto), exige que el Mise retenga ≥1 oración de prep. Idempotente (con TdF presente →
-    no-op), fail-safe, muta meal. Marca `_mise_cook_split`. tooltip-anchor: P2-MISE-COOK-SPLIT"""
+    inventa texto), exige que la fuente retenga ≥1 oración propia. Idempotente (con TdF real →
+    no-op), fail-safe, muta meal. Marca `_mise_cook_split`. tooltip-anchor: P2-MISE-COOK-SPLIT
+    [P2-MONTAJE-COOK-SPLIT · 2026-07-06] (chip vivo en el Casabe del plan d4a001eb: "Tuesta
+    ligeramente los trozos de casabe…" vivía en el MONTAJE) v2: extrae cocción también del
+    Montaje, y si el TdF existente es un PLACEHOLDER ("No aplica…") con cocción real en
+    Mise/Montaje, el placeholder se REEMPLAZA por esa cocción (mata el contradictorio
+    "No requiere cocción (el pan se tuesta…)")."""
     if not MISE_COOK_SPLIT_ENABLED or not isinstance(meal, dict):
         return False
     try:
@@ -15704,34 +15709,55 @@ def _split_cooking_from_mise(meal: dict) -> bool:
         if not isinstance(rec, list) or not rec:
             return False
         from constants import strip_accents as _sa_ms
-        for s in rec:
-            if isinstance(s, str) and not _is_recipe_safety_note_step(s) \
-                    and s.strip().lower().startswith("el toque de fuego"):
-                return False  # ya hay pilar de fuego (real o complemento) → nada que sintetizar
-        _mi_idx = next((i for i, s in enumerate(rec) if isinstance(s, str)
-                        and _sa_ms(s.strip().lower()).startswith("mise en place")), None)
-        if _mi_idx is None:
+        _tdf_idx = next((i for i, s in enumerate(rec)
+                         if isinstance(s, str) and not _is_recipe_safety_note_step(s)
+                         and s.strip().lower().startswith("el toque de fuego")), None)
+        _tdf_placeholder = (_tdf_idx is not None
+                            and bool(_NOCOOK_TDF_PLACEHOLDER_RE.search(_sa_ms(str(rec[_tdf_idx]).lower()))))
+        if _tdf_idx is not None and not _tdf_placeholder:
+            return False  # pilar de fuego REAL presente → nada que sintetizar
+        _cook_all = []
+        for _si, _s in enumerate(list(rec)):
+            if not isinstance(_s, str) or _is_recipe_safety_note_step(_s):
+                continue
+            _low_p = _sa_ms(_s.strip().lower())
+            if _low_p.startswith("mise en place"):
+                _prefix = "Mise en place"
+            elif _low_p.startswith("montaje"):
+                _prefix = "Montaje"
+            else:
+                continue
+            _body = _s.split(":", 1)[1].strip() if ":" in _s else ""
+            if not _body:
+                continue
+            _sents = [x.strip() for x in _re.split(r"(?<=\.)\s+", _body) if x.strip()]
+            if len(_sents) < 2:
+                continue  # una sola oración → moverla vaciaría el pilar
+            _cook, _keep = [], []
+            for _sn in _sents:
+                (_cook if _MISE_COOK_VERB_RE.match(_sa_ms(_sn)) else _keep).append(_sn)
+            if not _cook or not _keep:
+                continue
+            rec[_si] = f"{_prefix}: " + " ".join(_keep)
+            _cook_all.extend(_cook)
+        if not _cook_all:
             return False
-        _mise = str(rec[_mi_idx])
-        _body = _mise.split(":", 1)[1].strip() if ":" in _mise else ""
-        if not _body:
-            return False
-        _sents = [x.strip() for x in _re.split(r"(?<=\.)\s+", _body) if x.strip()]
-        if len(_sents) < 2:
-            return False  # una sola oración → moverla vaciaría el Mise
-        _cook, _prep = [], []
-        for _s in _sents:
-            (_cook if _MISE_COOK_VERB_RE.match(_sa_ms(_s)) else _prep).append(_s)
-        if not _cook or not _prep:
-            return False
-        rec[_mi_idx] = "Mise en place: " + " ".join(_prep)
-        rec.insert(_mi_idx + 1, "El Toque de Fuego: " + " ".join(_cook))
+        _tdf_step = "El Toque de Fuego: " + " ".join(_cook_all)
+        if _tdf_idx is not None:
+            rec[_tdf_idx] = _tdf_step  # placeholder contradictorio → cocción real
+        else:
+            _mo_idx = next((i for i, s in enumerate(rec) if isinstance(s, str)
+                            and _sa_ms(s.strip().lower()).startswith("montaje")), None)
+            _mi_idx = next((i for i, s in enumerate(rec) if isinstance(s, str)
+                            and _sa_ms(s.strip().lower()).startswith("mise en place")), None)
+            _ins_at = _mo_idx if _mo_idx is not None else ((_mi_idx + 1) if _mi_idx is not None else len(rec))
+            rec.insert(_ins_at, _tdf_step)
         meal["_mise_cook_split"] = True
         try:
             _inject_recipe_time_temp_defaults(meal)
         except Exception:
             pass
-        logger.info(f"🔥 [P2-MISE-COOK-SPLIT] cocción movida del Mise a un TdF sintetizado | "
+        logger.info(f"🔥 [P2-MISE-COOK-SPLIT] cocción movida a un TdF sintetizado | "
                     f"meal={str(meal.get('name'))[:40]}")
         return True
     except Exception as _ms_e:
@@ -19181,7 +19207,17 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3, 
                             continue
                     except Exception:
                         pass
-                    meal.setdefault("ingredients", []).append(f"100g {nm}")
+                    # [P1-VEG-GHOST-RAW-SYNC · 2026-07-06] ROOT del desalineador crónico display↔raw
+                    # (forense plan d4a001eb: 7-10 de 12 meals con len distinto): este guard — el más
+                    # viejo de los ghosts — appendeaba SOLO a `ingredients`, jamás al raw → len
+                    # mismatch → los locksteps guardados degradan y el drop del shrink-floor saca
+                    # líneas solo del display → desalineación a MITAD de lista que corrompe todo
+                    # pase posicional. Ahora appendea a AMBAS listas (patrón carb-ghost) + formato
+                    # con "de" y minúscula ("100g Cebolla" → "100g de cebolla").
+                    _veg_line = f"100g de {str(nm).lower()}"
+                    meal.setdefault("ingredients", []).append(_veg_line)
+                    if isinstance(meal.get("ingredients_raw"), list):
+                        meal["ingredients_raw"].append(_veg_line)
                     try:
                         present.add(normalize_name(nm))
                     except Exception:
@@ -21775,17 +21811,16 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                                 continue
                             _s_cf = str(ing)
                             _il_cf = _sa(_s_cf.lower())
-                            m_c2 = _re.match(r"^\s*(\d+(?:[.,]\d+)?|[½¼¾])\s+([a-záéíóúñü]+)", _il_cf)
+                            # [P1-VEG-GHOST-RAW-SYNC · 2026-07-06] + conteos MIXTOS ("1½ cebollas"
+                            # pequeñas + "100g Cebolla" del plan d4a001eb — el regex previo no veía "1½").
+                            m_c2 = _re.match(r"^\s*(\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s+([a-záéíóúñü]+)", _il_cf)
                             m_g2 = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b\.?\s*(?:de\s+)?(.+)$", _il_cf)
                             if m_g2 and _sa(m_g2.group(2).split()[0].lower()).rstrip("s") == _noun_cf \
                                     and len(m_g2.group(2).split()) == 1 and _gram_idx is None:
                                 _gram_idx, _gram_val = idx, float(m_g2.group(1).replace(",", "."))
                             elif m_c2 and _sa(m_c2.group(2).lower()).rstrip("s") == _noun_cf \
                                     and _cnt_idx is None:
-                                try:
-                                    _cnt_val = float(str(m_c2.group(1)).replace(",", "."))
-                                except ValueError:
-                                    _cnt_val = _QTYSYNC_FRAC_MAP.get(m_c2.group(1), 0.0)
+                                _cnt_val = _qtysync_qty_to_float(m_c2.group(1)) or 0.0
                                 _cnt_idx = idx
                         if _cnt_idx is None or _gram_idx is None or _gram_val <= 0:
                             continue

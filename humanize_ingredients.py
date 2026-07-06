@@ -365,6 +365,8 @@ _DISPLAY_PLURAL.update({
     "chuleta": "chuletas", "tortilla": "tortillas", "lechosa": "lechosas", "batata": "batatas",
     "mango": "mangos", "naranja": "naranjas", "pera": "peras", "aguacate": "aguacates",
     "clara": "claras", "sardina": "sardinas", "arepita": "arepitas", "mandarina": "mandarinas",
+    # [P1-VEG-GHOST-RAW-SYNC · 2026-07-06] (review #9: "8½ aceitunas verde") + contables vistos.
+    "aceituna": "aceitunas", "casabe": "casabes", "molondron": "molondrones",
 })
 
 # [P3-DISPLAY-GRAMMAR · 2026-07-05] Concordancia número/género de leads con FRACCIÓN/mixto
