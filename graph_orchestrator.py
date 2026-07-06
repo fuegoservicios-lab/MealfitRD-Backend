@@ -21666,7 +21666,20 @@ def _reconcile_display_missing_in_raw(days) -> int:
                     # [P2-STEM-BOUNDED · 2026-07-06] token bounded (agua⊄aguacate): el substring
                     # abierto hacía que una línea de agua/atún-en-agua pareciera presente en un
                     # raw que solo tenía aguacate → la línea jamás ganaba visibilidad en compras.
-                    if not _re.search(r"\b" + _re.escape(_toks[0]) + r"(?:s|es)?\b", _raw_blob):
+                    # [P2-RECONCILE-PLURAL-STEM · 2026-07-06] el display humanizado viene en
+                    # PLURAL ('4 tortillas integrales') y el raw crudo en singular ('4 tortilla
+                    # integral') — 'tortillas(?:s|es)?' JAMÁS matchea 'tortilla' → append
+                    # duplicado (pepino/tortillas/claras contados DOBLE en compras; verificado
+                    # en el plan vivo cd4ae3c3, 9 meals raw>display). Candidatos singularizados
+                    # + sufijo (es|e|s) cubren ambas direcciones (tomates↔tomate, limones↔limón).
+                    _t0 = _toks[0]
+                    _cands = {_t0}
+                    if len(_t0) > 4 and _t0.endswith("s"):
+                        _cands.add(_t0[:-1])
+                    if len(_t0) > 5 and _t0.endswith("es"):
+                        _cands.add(_t0[:-2])
+                    if not any(_re.search(r"\b" + _re.escape(_c) + r"(?:es|e|s)?\b", _raw_blob)
+                               for _c in _cands):
                         raw.append(s)
                         _raw_blob += " " + _sa_rr(s.lower())
                         added += 1
