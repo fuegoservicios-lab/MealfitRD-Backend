@@ -82,6 +82,12 @@ def test_pantry_shows_brand_chip_both_layouts():
     assert "P2-NEVERA-BRANDS" in pantry
     assert pantry.count("Marca comprada:") >= 2, "chip en renderRow (desktop) Y renderMobileCard"
     assert "item.brand &&" in pantry, "sin marca (ítem manual) → sin chip"
+    # [polish 2026-07-06] identidad visual propia: índigo+Tag (≠ chip de unidad
+    # que usa el color de zona); "Genérico" apagado — las marcas reales resaltan.
+    assert "brandChip" in pantry and "brandChipGeneric" in pantry
+    for css in ("Pantry.fridge.module.css", "Pantry.mobileFridge.module.css"):
+        sheet = _read(_FRONTEND, "src", "pages", css)
+        assert ".brandChip" in sheet and ".brandChipGeneric" in sheet, f"clases del chip en {css}"
 
 
 def test_dashboard_restock_payload_carries_product_id():
