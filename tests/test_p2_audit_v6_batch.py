@@ -117,7 +117,10 @@ def test_p2c_contract_advisory_in_finalizer_and_boundary():
     fin = _GO.index("def finalize_single_meal_recipe_coherence")
     assert '_recipe_contract_advisory"] = _rc_issues[:4]' in _GO[fin:fin + 22000]
     fpc = _GO.index("def finalize_plan_data_coherence")
-    assert "contract_advisory=" in _GO[fpc:fpc + 17000]
+    # [2026-07-06] ventana 17000→26000: el boundary creció con los seams de la
+    # madrugada 07-05/06 (cured-ghost, mise-split, note-align, tracer) y el
+    # callsite quedó a offset ~18.9k del def — drift de ventana, no ausencia.
+    assert "contract_advisory=" in _GO[fpc:fpc + 26000]
 
 
 def test_p2c_dish_quality_report_in_chunk_t1():

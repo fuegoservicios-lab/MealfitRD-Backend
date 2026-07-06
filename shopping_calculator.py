@@ -2126,46 +2126,131 @@ def fetch_brand_pref_packages(user_id: str) -> dict:
         return {}
     out: dict = {}
     for r in rows:
-        # [P2-BRANDPREF-SIZE-COLUMN · 2026-07-02] `size_grams` explícito (admin UI) es la fuente
-        # AUTORITATIVA del tamaño del envase; el parser del texto libre `presentation` queda como
-        # fallback (la "L" suelta es ambigua libra/litro → antes esos productos PERDÍAN el overlay).
-        try:
-            grams = float(r.get("size_grams") or 0) or None
-        except (TypeError, ValueError):
-            grams = None
-        if grams is not None and not (1.0 <= grams <= 50000.0):
-            grams = None  # sanity fuera de rango → fallback al parser
-        if grams is None:
-            grams = _parse_presentation_grams(r.get("presentation"))
-        if not grams:
+        pkg = _pkg_from_product_row(r)
+        if pkg is None:
             logging.info(
-                f"🏷️ [P1-SUPERMARKET-COSTING] pref '{r.get('food_key')}' sin tamaño parseable "
+                f"🏷️ [P1-SUPERMARKET-COSTING] pref '{r.get('food_key')}' sin tamaño/precio usable "
                 f"('{r.get('presentation')}', size_grams NULL) → costeo estándar para ese ítem. "
                 f"Lever: poblar size_grams en /supermercado (P2-BRANDPREF-SIZE-COLUMN)."
             )
             continue
-        try:
-            price = float(r.get("price_rd"))
-        except (TypeError, ValueError):
-            continue
-        if price <= 0:
-            continue
-        pres = str(r.get("presentation") or "").strip()
-        brand = (r.get("brand") or "").strip()
-        # Label para el display "(...)": tamaño + marca — ej. "800 gr · La Sanjuanera".
-        size_part = pres.split(" ", 1)[1] if (
-            pres and _norm_pref_food(pres).split(" ")[0] in _PRES_CONTAINER_WORDS and " " in pres
-        ) else pres
-        label = f"{size_part} · {brand}" if brand else size_part
-        pkg = {
-            "grams": grams,
-            "price": price,
-            "label": label.strip(" ·"),
-            "unit": _pref_container_word(pres),
-        }
         for key in {_norm_pref_food(r.get("food_key")), _norm_pref_food(r.get("food_name"))}:
             if key:
                 out.setdefault(key, pkg)
+    return out
+
+
+def _pkg_from_product_row(r) -> dict | None:
+    """[P1-BRAND-LIST-VISIBILITY · 2026-07-06] Producto del súper → package costeable
+    `{"grams","price","label","unit"}` o None (fail-open del ítem). SSOT compartido entre
+    `fetch_brand_pref_packages` (marca ELEGIDA por el usuario) y
+    `fetch_brand_default_packages` (marcas default). El `label` "tamaño · Marca"
+    (ej. "800 gr · La Sanjuanera") es lo que el display del ítem enseña entre
+    paréntesis — la MARCA visible en lista y PDF.
+
+    [P2-BRANDPREF-SIZE-COLUMN · 2026-07-02] `size_grams` explícito (admin UI) es la fuente
+    AUTORITATIVA del tamaño del envase; el parser del texto libre `presentation` queda como
+    fallback (la "L" suelta es ambigua libra/litro → antes esos productos PERDÍAN el overlay)."""
+    try:
+        grams = float(r.get("size_grams") or 0) or None
+    except (TypeError, ValueError):
+        grams = None
+    if grams is not None and not (1.0 <= grams <= 50000.0):
+        grams = None  # sanity fuera de rango → fallback al parser
+    if grams is None:
+        grams = _parse_presentation_grams(r.get("presentation"))
+    if not grams:
+        return None
+    try:
+        price = float(r.get("price_rd"))
+    except (TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    pres = str(r.get("presentation") or "").strip()
+    brand = (r.get("brand") or "").strip()
+    # Label para el display "(...)": tamaño + marca — ej. "800 gr · La Sanjuanera".
+    size_part = pres.split(" ", 1)[1] if (
+        pres and _norm_pref_food(pres).split(" ")[0] in _PRES_CONTAINER_WORDS and " " in pres
+    ) else pres
+    label = f"{size_part} · {brand}" if brand else size_part
+    return {
+        "grams": grams,
+        "price": price,
+        "label": label.strip(" ·"),
+        "unit": _pref_container_word(pres),
+    }
+
+
+# ============================================================
+# [P1-BRAND-LIST-VISIBILITY · 2026-07-06] Marcas default del súper → lista/PDF.
+# ------------------------------------------------------------
+# Pedido del owner: (a) la lista debe ENSEÑAR la marca de cada alimento, no solo
+# el envase genérico; (b) por default la IA usa la marca MÁS BARATA; (c) si el
+# usuario elige otra marca en "Marcas del súper", esa gana y el total sube.
+#
+# Implementación: para los ítems SIN preferencia del usuario, el overlay del
+# aggregator reemplaza los `market_packages` genéricos del master con los
+# productos REALES (marca + presentación + precio vivo) de `supermarket_products`.
+# `_select_market_package` ya es costo-óptimo (P1-PKG-COST-OPTIMAL) → elige la
+# marca/tamaño más barato para la necesidad del ciclo, y su `label` ("2 lb · La
+# Garza") fluye a `display_qty` → panel por pasillo + PDF enseñan la marca.
+# La preferencia manual del usuario (P1-SUPERMARKET-COSTING) SIEMPRE gana.
+#
+# Las marcas default son GLOBALES (no per-user) → cache in-process con TTL para
+# no re-consultar ~2k productos en cada recalc/cron.
+# Reversible sin redeploy: MEALFIT_BRAND_DEFAULT_PACKAGES=false.
+# Fail-open SIEMPRE: error/DB caída → {} (costeo estándar sin marcas).
+# Tooltip-anchor: P1-BRAND-LIST-VISIBILITY. Test: test_p1_brand_list_visibility.py.
+# ============================================================
+
+def _brand_default_packages_enabled() -> bool:
+    return _knob_env_bool("MEALFIT_BRAND_DEFAULT_PACKAGES", True)
+
+
+_BRAND_DEFAULTS_TTL_S = 600.0  # 10 min — precios del súper cambian a ritmo de cron, no de request
+_BRAND_DEFAULTS_MAX_PER_FOOD = 12  # techo de variantes por alimento que ve el selector
+_brand_defaults_cache: dict = {"at": 0.0, "data": None}
+
+
+def fetch_brand_default_packages() -> dict:
+    """Packages costeables de TODOS los productos activos del súper, agrupados por
+    alimento: {food_key_normalizado: [pkg, ...]} con cada lista ordenada por precio
+    ascendente (la más barata primero) y capada a `_BRAND_DEFAULTS_MAX_PER_FOOD`.
+    Cache global TTL 10 min. Fail-open: {} ante cualquier error."""
+    import time as _time
+    now = _time.monotonic()
+    cached = _brand_defaults_cache.get("data")
+    if cached is not None and (now - _brand_defaults_cache.get("at", 0.0)) < _BRAND_DEFAULTS_TTL_S:
+        return cached
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT sp.food_name, sp.brand, sp.presentation,
+                   sp.price_rd::float8 AS price_rd,
+                   sp.size_grams::float8 AS size_grams
+            FROM public.supermarket_products sp
+            WHERE sp.active AND sp.price_rd IS NOT NULL
+            """,
+            (),
+            fetch_all=True,
+        ) or []
+    except Exception as exc:
+        logging.warning(f"⚠️ [P1-BRAND-LIST-VISIBILITY] fetch defaults falló (fail-open): {exc}")
+        return {}
+    out: dict = {}
+    for r in rows:
+        pkg = _pkg_from_product_row(r)
+        if pkg is None:
+            continue  # sin tamaño/precio usable → ese producto no participa del default
+        key = _norm_pref_food(r.get("food_name"))
+        if key:
+            out.setdefault(key, []).append(pkg)
+    for key, pkgs in out.items():
+        pkgs.sort(key=lambda p: (p["price"], p["grams"]))
+        del pkgs[_BRAND_DEFAULTS_MAX_PER_FOOD:]
+    _brand_defaults_cache["data"] = out
+    _brand_defaults_cache["at"] = now
     return out
 
 
@@ -6339,7 +6424,7 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None):
     # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
     # inicio de cada run del aggregator. Los caps que se apliquen durante
     # este run (P3-HERB-CAP, P5-VEG-CAP, P6-LEGUMES-DRY-CAP, P6-EGGS-AGGREGATE-CAP,
@@ -8509,6 +8594,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # `_select_market_package` comprará N de ESE envase y el costo sale de
         # su precio real. Copia superficial del master_item para no mutar el
         # cache global. Sin preferencia (o knob off) → comportamiento idéntico.
+        _pref_pkg = None
         if brand_prefs:
             _pref_pkg = _resolve_brand_pref(name, brand_prefs)
             if _pref_pkg:
@@ -8520,6 +8606,21 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     master_item["market_container"] = _pref_pkg.get("unit") or "paquete"
                 if not master_item.get("container_weight_g"):
                     master_item["container_weight_g"] = _pref_pkg["grams"]
+        # [P1-BRAND-LIST-VISIBILITY · 2026-07-06] Sin preferencia manual → los
+        # productos REALES del súper (marca + precio vivo) reemplazan el envase
+        # genérico. `_select_market_package` (costo-óptimo, P1-PKG-COST-OPTIMAL)
+        # elige la marca/tamaño MÁS BARATO para la necesidad del ciclo y su label
+        # "2 lb · La Garza" fluye a display_qty → la lista y el PDF enseñan la
+        # marca. La preferencia del usuario (bloque de arriba) SIEMPRE gana.
+        if _pref_pkg is None and brand_defaults:
+            _def_pkgs = _resolve_brand_pref(name, brand_defaults)
+            if _def_pkgs and isinstance(_def_pkgs, list):
+                master_item = dict(master_item)
+                master_item["market_packages"] = list(_def_pkgs)
+                if not master_item.get("market_container"):
+                    master_item["market_container"] = _def_pkgs[0].get("unit") or "paquete"
+                if not master_item.get("container_weight_g"):
+                    master_item["container_weight_g"] = _def_pkgs[0]["grams"]
 
         weight_in_lbs = 0.0
         has_weight = False
@@ -8941,6 +9042,16 @@ def get_shopping_list_delta(
         except Exception as _bp_exc:
             logging.warning(f"⚠️ [P1-SUPERMARKET-COSTING] prefs no disponibles (fail-open): {_bp_exc}")
             brand_prefs = None
+    # [P1-BRAND-LIST-VISIBILITY · 2026-07-06] Marcas default (más baratas) para los
+    # ítems sin preferencia manual — la lista/PDF enseñan marca en cada alimento
+    # con productos del súper. Global + cacheado (TTL 10 min). Fail-open: None.
+    brand_defaults = None
+    if _brand_default_packages_enabled():
+        try:
+            brand_defaults = fetch_brand_default_packages() or None
+        except Exception as _bd_exc:
+            logging.warning(f"⚠️ [P1-BRAND-LIST-VISIBILITY] defaults no disponibles (fail-open): {_bd_exc}")
+            brand_defaults = None
 
     all_ingredients = []
     days = plan_result.get("days", [])
@@ -9043,7 +9154,7 @@ def get_shopping_list_delta(
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
         
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults)
     
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
     urgent_items = plan_result.get("_pantry_supplement_required", [])
