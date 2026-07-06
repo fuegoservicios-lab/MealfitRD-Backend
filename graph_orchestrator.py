@@ -12018,8 +12018,14 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         # "espolvorean" — acompañan el plato.
                                         _seed_verb = ("acompaña el plato con" if k in _MICRO_SEED_SAVORY_KEYS
                                                       else "espolvorea")
+                                        # [P3-RECIPE-POLISH-4 · 2026-07-06] en BEBIDAS (batido/
+                                        # licuado) no hay "plato" — el tail cae a "al servir".
+                                        _seed_is_drink = any(
+                                            t in _sa_seed(str(_seed_meal.get("name", "")).lower())
+                                            for t in ("batido", "batida", "licuado", "smoothie", "jugo"))
                                         _seed_tail = ("" if k in _MICRO_SEED_SAVORY_KEYS
-                                                      else " sobre el plato al servir")
+                                                      else (" al servir" if _seed_is_drink
+                                                            else " sobre el plato al servir"))
                                         _seed_meal["recipe"] = _insert_step_before_montaje(
                                             _rec_seed,
                                             f"🌱 Nota del Nutricionista AI: {_seed_verb} {_seed_line}"
@@ -12474,7 +12480,10 @@ _FOOD_SAFETY_NOTE_EGG_BATTER = (
     "quedar líquida ni cruda en el centro (≥71°C); evita probar la mezcla cruda."
 )
 _EGG_BATTER_CONTEXT_TOKENS = ("panqueque", "pancake", "waffle", "crepe", "crepa", "arepita",
-                              "bizcocho", "muffin", "torta", "masa", "mezcla homogenea")
+                              "bizcocho", "muffin", "torta", "masa", "mezcla homogenea",
+                              # [P3-RECIPE-POLISH-4 · 2026-07-06] bollitos de yautía/yuca con
+                              # huevo en el puré (vivo: nota "yema y clara firmes" sobre masa).
+                              "bollito", "croqueta", "pure de")
 # [P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Nota cuando la mitigación fue a nivel de composición (swap real).
 _FOOD_SAFETY_NOTE_BLENDED_SUBBED = (
     "⚠️ Seguridad alimentaria: se reemplazó el huevo crudo del batido por yogur griego "
@@ -18189,11 +18198,15 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
             if _tt in food_total_f:
                 _tot_amb.add(_tt)
                 continue
-            food_total_f[_tt] = (_fv, _qtysync_unit_norm(m_tf.group("unit")))
+            # [P3-RECIPE-POLISH-4 · 2026-07-06] [2] = display "qty unit" de la línea (para
+            # reescribir menciones per-unidad desbordadas al total legible).
+            food_total_f[_tt] = (_fv, _qtysync_unit_norm(m_tf.group("unit")),
+                                 f"{str(m_tf.group('qty')).strip()} {m_tf.group('unit')}")
         for _tt in _tot_amb:
             food_total_f.pop(_tt, None)
-        if not food_qty and not food_total_f:
-            return 0
+        # [P3-RECIPE-POLISH-4 · 2026-07-06] NO cortar cuando no hay líneas con unidad: el pase
+        # de CONTEOS (huevos/claras — "Bate los huevos" con "1 huevo") no las necesita; los
+        # pases con unidad hacen no-op natural con los mapas vacíos.
         fixed = 0
         # [P2-QTYSYNC-MULTIUSE · 2026-07-05] (plato vivo "Frijoles Pintos": línea "½ cda de aceite",
         # pasos "calienta ½ cdas de aceite... cocina con ½ cdas de aceite" = 2× la línea) Mismo
@@ -18329,6 +18342,17 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
 
                         s2 = _re.sub(rf"\b(?:l[oa]s\s+)?(\d+)\s+(?:{_pat})\b",
                                      _sub_cnt, s2, flags=_re.IGNORECASE)
+                        # [P3-RECIPE-POLISH-4 · 2026-07-06] concordancia de ARTÍCULO sin número:
+                        # "Bate los huevos" con "1 huevo" en la lista (vivo, plan d4a001eb) →
+                        # "Bate el huevo". Solo plural→singular con conteo==1 (conservador).
+                        if _cnt == 1:
+                            _art_p = "las" if _sing.endswith("a") else "los"
+                            _art_s = "la" if _sing.endswith("a") else "el"
+                            _s2_new = _re.sub(rf"\b{_art_p}\s+(?:{_pat})\b",
+                                              f"{_art_s} {_sing}", s2, flags=_re.IGNORECASE)
+                            if _s2_new != s2:
+                                fixed += 1
+                                s2 = _s2_new
                     _steps2.append(s2)
                 new_steps = _steps2
         except Exception:
@@ -18339,6 +18363,14 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
         # cantidad ES el total de la línea → se anota "(en total)". Conservador: exige match de
         # alimento + cantidad + familia de unidad; idempotente por substring.
         try:
+            # [P3-RECIPE-POLISH-4 · 2026-07-06] conteos por sustantivo de la lista ("6 lonjas",
+            # "8 tortillas") para detectar "cada <noun> con <qty>" cuyo per-unidad × K desborda
+            # el total de la línea ("unta cada tostada con 1 cda" × 6 vs 1½ cdas totales).
+            _noun_counts = {}
+            for ing in ings:
+                m_nc = _re.match(r"^\s*(\d+)\s+([a-záéíóúñü]+)", _sa(str(ing).lower()))
+                if m_nc:
+                    _noun_counts[m_nc.group(2).rstrip("s")] = int(m_nc.group(1))
             _steps3 = []
             for step in new_steps:
                 if (not isinstance(step, str) or _is_recipe_safety_note_step(step)
@@ -18348,7 +18380,8 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                 s3 = step
                 for _mm in list(_STEP_QTY_MENTION_RE.finditer(step)):
                     _pre = _sa(step[:_mm.start()].lower())
-                    if not _re.search(r"\bcada\s+[^.;:]{0,40}$", _pre):
+                    m_cada = _re.search(r"\bcada\s+([a-záéíóúñü]+)\b[^.;:]{0,40}$", _pre)
+                    if not m_cada:
                         continue
                     _mf3 = _sa(str(_mm.group("food")).strip().lower())
                     _mtoks3 = [t for t in _re.split(r"[^\wáéíóúñü]+", _mf3) if len(t) >= 4]
@@ -18356,19 +18389,28 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                     if not _tot3:
                         continue
                     _qv3 = _qtysync_qty_to_float(_mm.group("qty"))
-                    if (_qv3 is None or abs(_qv3 - _tot3[0]) > 1e-6
-                            or _qtysync_unit_norm(_mm.group("unit")) != _tot3[1]):
+                    if _qv3 is None or _qtysync_unit_norm(_mm.group("unit")) != _tot3[1]:
                         continue
-                    _words3 = str(mm_food3 := _mm.group("food")).split()
+                    _words3 = str(_mm.group("food")).split()
                     _k3 = len(_words3)
                     for _wi3, _w3 in enumerate(_words3):
                         if _sa(_w3.lower()) in _QTYSYNC_STOPWORDS:
                             _k3 = _wi3
                             break
                     _ins = _mm.start("food") + len(" ".join(_words3[:_k3])) if _k3 else _mm.end("food")
-                    s3 = step[:_ins] + " (en total)" + step[_ins:]
-                    fixed += 1
-                    break
+                    if abs(_qv3 - _tot3[0]) <= 1e-6:
+                        # la mención ES el total → anotar "(en total)".
+                        s3 = step[:_ins] + " (en total)" + step[_ins:]
+                        fixed += 1
+                        break
+                    _kq = _noun_counts.get(m_cada.group(1).rstrip("s"))
+                    if _kq and _kq >= 2 and _qv3 * _kq > _tot3[0] * 1.15:
+                        # per-unidad × K desborda el total → reescribir al total "(en total)".
+                        _food_txt = " ".join(_words3[:_k3]) if _k3 else str(_mm.group("food"))
+                        s3 = (step[:_mm.start("qty")] + f"{_tot3[2]} de {_food_txt} (en total)"
+                              + step[_ins:])
+                        fixed += 1
+                        break
                 _steps3.append(s3)
             new_steps = _steps3
         except Exception:
@@ -20557,8 +20599,11 @@ _REALISM_HERB_TOKENS = ("perejil", "cilantro", "cilantrico", "albahaca")
 # Techo 2 tazas / REALISM_FRUIT_VOLUME_CAP_G gramos por comida: más allá es no-servible aunque la
 # banda quede perfecta (misma filosofía del cap de proteína "505g de calamar").
 _REALISM_VOLUME_FRUIT_TOKENS = ("melon", "sandia", "patilla", "lechosa", "papaya", "pina")
+# [P3-RECIPE-POLISH-4 · 2026-07-06] LÍQUIDOS lácteos: "2½ tazas de leche descremada (599 ml)"
+# en UNA batida (vivo, plan d4a001eb) — nadie sirve >2 tazas de leche en un plato/vaso.
+_REALISM_LIQUID_TOKENS = ("leche",)
 _REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.0),
-                     (_REALISM_VOLUME_FRUIT_TOKENS, 2.0))
+                     (_REALISM_VOLUME_FRUIT_TOKENS, 2.0), (_REALISM_LIQUID_TOKENS, 2.0))
 REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
                                       lambda v: 150 <= v <= 600)
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
@@ -21607,6 +21652,11 @@ def _fix_cooked_raw_annotations(days) -> int:
                     return mm.group(0)
                 out = _RINDEN_CLAIM_RE.sub(_rinden_sub, out)
             out = _RAW_TOKEN_EN_RE.sub(r"\1 crudo", out)
+            # [P3-RECIPE-POLISH-4 · 2026-07-06] paréntesis CONTRADICTORIO de fruta ("1 taza de
+            # Guineo (papaya) en cubos" vivo — el guineo no es papaya): se elimina el paréntesis
+            # que nombra OTRA fruta. Curado a los cruces guineo/lechosa/papaya/plátano.
+            out = _re.sub(r"\b([Gg]uineos?)\s*\(\s*(?:papaya|lechosa)\s*\)", r"\1", out)
+            out = _re.sub(r"\b([Ll]echosas?|[Pp]apayas?)\s*\(\s*(?:guineo|banana|pl[áa]tano)\s*\)", r"\1", out)
             # [P2-CU-TOTAL-MISLABEL · 2026-07-06] "(240 g c/u)" con lead-conteo 8 → "en total".
             m_k = _re.match(r"^\s*(\d+)\s+[a-záéíóúñü]", out, _re.IGNORECASE)
             if m_k:

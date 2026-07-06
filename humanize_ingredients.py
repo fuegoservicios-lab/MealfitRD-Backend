@@ -384,6 +384,9 @@ _GRAMMAR_PLURAL_TO_SING = {v: k for k, v in _DISPLAY_PLURAL.items()}
 _GRAMMAR_ADJ_GENDER_STEMS = ("median", "pequeñ", "pequen", "madur", "fresc", "magr", "pelad",
                              "picad", "rallad", "cocid", "hervid", "tostad", "asad", "enter")
 _GRAMMAR_ADJ_INVARIANT = ("grande", "verde")
+# [P3-RECIPE-POLISH-4 · 2026-07-06] invariantes de género con plural en -es ("1 tortilla
+# integrales" vivo → "integral"; "integrales" no se deriva con rstrip('s')).
+_GRAMMAR_ADJ_INVARIANT_ES = ("integral",)
 _GRAMMAR_ADJ_ADJACENT_RE = re.compile(r"^(\s+)([a-záéíóúñü]+)(\b.*)$")
 _GRAMMAR_CONNECTORS = {"de", "del", "con", "en", "al", "para", "y", "o", "u", "sin"}
 
@@ -403,6 +406,10 @@ def _grammar_lead_value(lead: str):
 
 def _grammar_inflect_adj(adj_low: str, plural: bool, feminine: bool):
     """Adjetivo del set curado concordado en género/número; None si no es del set."""
+    # [P3-RECIPE-POLISH-4 · 2026-07-06] invariantes con plural en -es ("integral"/"integrales").
+    _base_es = adj_low[:-2] if adj_low.endswith("es") else adj_low
+    if _base_es in _GRAMMAR_ADJ_INVARIANT_ES:
+        return _base_es + ("es" if plural else "")
     base = adj_low.rstrip("s")
     if base in _GRAMMAR_ADJ_INVARIANT:
         return base + ("s" if plural else "")
@@ -437,6 +444,28 @@ def _fix_display_grammar(s: str) -> str:
         elif not plural_target and w_orig_low in _GRAMMAR_PLURAL_TO_SING:
             new_word = _GRAMMAR_PLURAL_TO_SING[w_orig_low]
         new_rest = rest
+        if is_unit:
+            # [P3-RECIPE-POLISH-4 · 2026-07-06] "2 tazas de Lechosa frescos" — concordancia del
+            # ALIMENTO tras la unidad: minúscula del alimento conocido + adjetivo con el número/
+            # género del alimento (no de la unidad).
+            m_uf = re.match(r"^(\s+de\s+)(?P<f>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*)"
+                            r"(?P<a>\s+[a-záéíóúñü]+)?(?P<tail>.*)$", rest)
+            if m_uf:
+                _fw = m_uf.group("f")
+                _fw_low = _fw.lower()
+                _known_f = _fw_low in _DISPLAY_PLURAL or _fw_low in _GRAMMAR_PLURAL_TO_SING
+                _new_fw = _fw_low if (_fw[:1].isupper() and _known_f) else _fw
+                _adj_part = m_uf.group("a") or ""
+                _new_adj_part = _adj_part
+                if _known_f and _adj_part:
+                    _f_plural = _fw_low in _GRAMMAR_PLURAL_TO_SING
+                    _f_sing = _GRAMMAR_PLURAL_TO_SING.get(_fw_low, _fw_low)
+                    _adj_low2 = _adj_part.strip().lower()
+                    _infl2 = _grammar_inflect_adj(_adj_low2, _f_plural, _f_sing.endswith("a"))
+                    if _infl2 and _infl2 != _adj_low2:
+                        _new_adj_part = " " + _infl2
+                if _new_fw != _fw or _new_adj_part != _adj_part:
+                    new_rest = m_uf.group(1) + _new_fw + _new_adj_part + m_uf.group("tail")
         if not is_unit:
             _sing_form = _GRAMMAR_PLURAL_TO_SING.get(new_word.lower(), new_word.lower())
             _feminine = _sing_form.endswith("a")
@@ -573,6 +602,11 @@ def _prettify_quantity_display(s: str) -> str:
         if _UNITLESS_SPOON_LEAD_RE.match(s0):
             s0 = _UNITLESS_SPOON_LEAD_RE.sub(
                 lambda mm: f"1 {mm.group(1).lower()} de ", s0, count=1)
+        # [P3-RECIPE-POLISH-4 · 2026-07-06] "½ de cebolla" → "½ cebolla" (el 'de' sobra ante un
+        # contable conocido; "¼ de taza" — partitivo legítimo — queda intacto por el lookahead).
+        s0 = re.sub(r"^(\s*[½¼¾⅓⅔])\s+de\s+(?=(?:cebolla|tomate|huevo|papa|zanahoria|"
+                    r"lim[oó]n|guineo|manzana|aguacate|lechosa|batata|mandarina|pepino|"
+                    r"aj[ií]|pl[aá]tano)s?\b)", r"\1 ", s0)
         # [P3-DISPLAY-GRAMMAR · 2026-07-05] concordancia número/género de leads fraccionarios
         # ("2½ tomate"→"2½ tomates", "½ cdas"→"½ cda", "1 Lechosa mediano"→"1 lechosa mediana").
         s0 = _fix_display_grammar(s0)
