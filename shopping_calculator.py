@@ -7792,6 +7792,12 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # (cabeza DR mediana, similar a coliflor).
         'brocoli':   (1, 500.0),
         'brocolis':  (1, 500.0),
+        # [P2-RABANO-CAP · 2026-07-06] (review #14, plan 17c3fa8f) Rábano es GUARNICIÓN (rodajas
+        # encurtidas al lado): la receta pedía 135g/porción × ~13 repeticiones en 30 días → 9
+        # paquetes = RD$765 por un adorno. 2/persona/sem, density default 40g (rábano pequeño DR;
+        # el master corrigió su density errónea de 4.5g→25g, paquete 200g/8 unid). Cap ~1 paquete.
+        'rabano':   (2, 40.0),
+        'rabanos':  (2, 40.0),
     }
 
     for _name, _units in list(aggregated.items()):

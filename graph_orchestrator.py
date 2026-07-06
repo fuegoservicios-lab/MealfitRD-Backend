@@ -18924,6 +18924,14 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
             parts.append(f"display_polished={_n_pol}")
     except Exception:
         pass
+    # [P2-STEP-PHRASE-DEDUP · 2026-07-06] "queso blanco y queso blanco" → "queso blanco" (review #14).
+    try:
+        _n_dd2 = _dedup_repeated_phrases_in_plan(days)
+        if _n_dd2:
+            total += _n_dd2
+            parts.append(f"phrase_deduped={_n_dd2}")
+    except Exception:
+        pass
     # [P2-CLOSER-STEP-BOUNDARY-DEDUP · 2026-07-06] pasos 💪 "Incorpora X…" que otros pasos
     # reales dejaron redundantes (ordering-independiente, espejo de P1-CLOSER-HYGIENE).
     try:
@@ -21395,6 +21403,17 @@ _STEP_CARB_GHOSTS = (
     # pan en ingredients — fallout del desalineador; el ghost lo materializa venga de donde venga).
     ("lonjas de pan", "2 lonjas de pan integral", ()),
     ("pan integral", "2 lonjas de pan integral", ("lonjas de pan",)),
+    # [P1-STEP-HARINA-GHOST · 2026-07-06] (review #14, plan 17c3fa8f) empanizado fantasma:
+    # el "Muslo de Pollo Horneado" pasa el muslo "por la harina sazonada" pero harina NO está
+    # en ingredients[] → costra incocinable + harina no se compra. El token bare 'harina' se
+    # materializa como harina de trigo (empanizado ~20g) SOLO si ninguna harina COMPUESTA
+    # (maíz/avena/yuca/almendra/coco/plátano/batata/arroz) está presente — esas son otros
+    # ingredientes o ya materializados por sus propios ghosts. El scan de alérgenos bloquea
+    # ante gluten/trigo (fail-secure).
+    ("harina", "20g de harina de trigo",
+     ("harina de maiz", "harina de avena", "harina de yuca", "harina de almendra",
+      "harina de coco", "harina de platano", "harina de batata", "harina de arroz",
+      "harina de garbanzo")),
 )
 # [P1-STEP-NUT-GHOST · 2026-07-05] (screenshots plan 3aa6e58a: panqueques con "pica los MEREYES /
 # espolvorea los mereyes" y CERO mereyes en ingredients[] → no se compran, receta rota al cocinar).
@@ -22083,6 +22102,50 @@ _BRAND_PAREN_RE = _re.compile(r"\s*\(\s*[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñü]{
 _UNIT_FOOD_DUP_RE = _re.compile(r"\b(\w+)\s+de\s+\1\s+de\b", _re.IGNORECASE)
 _CITRUS_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(limón|limon|limones|lima|limas)\b",
                               _re.IGNORECASE)
+
+
+# [P2-STEP-PHRASE-DEDUP · 2026-07-06] (review #14) frase de alimento duplicada adyacente en pasos:
+# "mezcla con queso blanco y queso blanco batidos" (batata rellena, plan 17c3fa8f) — artefacto del
+# LLM. Colapsa "X y X" (X = 1-3 palabras idénticas, backref exacto) → "X". No toca "X y Y" (Y≠X).
+_REPEATED_PHRASE_RX = _re.compile(
+    r"\b([a-záéíóúñü]+(?: [a-záéíóúñü]+){0,2}) y \1\b", _re.IGNORECASE)
+
+
+def _dedup_repeated_phrase(text: str) -> str:
+    prev = None
+    out = str(text)
+    # itera hasta punto fijo (por si hay "X y X y X")
+    while out != prev:
+        prev = out
+        out = _REPEATED_PHRASE_RX.sub(r"\1", out)
+    return _re.sub(r"\s{2,}", " ", out)
+
+
+def _dedup_repeated_phrases_in_plan(days) -> int:
+    """[P2-STEP-PHRASE-DEDUP · 2026-07-06] Colapsa "alimento y alimento" duplicado en pasos e
+    ingredientes. Idempotente. Fail-safe. tooltip-anchor: P2-STEP-PHRASE-DEDUP"""
+    try:
+        n = 0
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                for _key in ("recipe", "ingredients", "ingredients_raw"):
+                    _lst = meal.get(_key)
+                    if not isinstance(_lst, list):
+                        continue
+                    for i, s in enumerate(_lst):
+                        if isinstance(s, str) and " y " in s:
+                            _new = _dedup_repeated_phrase(s)
+                            if _new != s:
+                                _lst[i] = _new
+                                n += 1
+        if n:
+            logger.info(f"🪶 [P2-STEP-PHRASE-DEDUP] {n} frase(s) 'X y X' duplicada(s) colapsada(s).")
+        return n
+    except Exception as _dp_e:
+        logger.warning(f"[P2-STEP-PHRASE-DEDUP] no-op: {type(_dp_e).__name__}: {_dp_e}")
+        return 0
 
 
 def _polish_finalize_display(days) -> int:
