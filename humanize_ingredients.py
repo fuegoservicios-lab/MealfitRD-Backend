@@ -374,6 +374,18 @@ _DISPLAY_PLURAL.update({
     # [P2-BLANCH-INGREDIENT-TRUTH batch · 2026-07-06] review #12: "20 g de Maní fileteadas"
     # (renombre almendras→maní dejó el adjetivo femenino plural sobre sustantivo masc sing).
     "maní": "maníes", "mani": "manies",
+    # [P2-COUNTFRUIT-GRAMMAR · 2026-07-06] (review #14: "1 ciruelas (50 g)") frutas CONTABLES
+    # que el singularizador de "1 <plural>" no cubría (solo tenía unidades). Concordancia
+    # bidireccional: "1 ciruelas"→"1 ciruela", "2 ciruela"→"2 ciruelas".
+    "ciruela": "ciruelas", "uva": "uvas", "durazno": "duraznos", "mandarina": "mandarinas",
+    "chinola": "chinolas", "guineo": "guineos", "melocoton": "melocotones", "higo": "higos",
+})
+# [P2-COUNTFRUIT-GRAMMAR · 2026-07-06] las frutas contables también al singularizador "1 <plural>"
+# (el mapa base _DISPLAY_SINGULAR solo tenía unidades; el inverso auto-generado no las incluía
+# porque se definieron en el .update de _DISPLAY_PLURAL, no en el base).
+_DISPLAY_SINGULAR.update({
+    "ciruelas": "ciruela", "uvas": "uva", "duraznos": "durazno", "mandarinas": "mandarina",
+    "chinolas": "chinola", "melocotones": "melocoton", "higos": "higo",
 })
 
 # [P3-DISPLAY-GRAMMAR · 2026-07-05] Concordancia número/género de leads con FRACCIÓN/mixto

@@ -18898,6 +18898,11 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                     for _pi, _ps in enumerate(_prec):
                         if isinstance(_ps, str):
                             _pnew = _pb_stepfrac(_ps)
+                            # [P2-MANI-GENDER-STEP · 2026-07-06] (review #14: "Tuesta maní
+                            # fileteadas") maní/maíz son masc mass-noun → adjetivo masc singular
+                            # en la PROSA del paso (el display de ingredientes ya lo hacía en el
+                            # lead; los pasos no). Conservador: solo estos adjetivos de cocción.
+                            _pnew = _MANI_GENDER_STEP_RX.sub(lambda _mm: f"{_mm.group(1)} {_mm.group(2)}o", _pnew)
                             if _pnew != _ps:
                                 _prec[_pi] = _pnew
                                 _npd += 1
@@ -22108,6 +22113,11 @@ _BRAND_PAREN_RE = _re.compile(r"\s*\(\s*[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñü]{
 _UNIT_FOOD_DUP_RE = _re.compile(r"\b(\w+)\s+de\s+\1\s+de\b", _re.IGNORECASE)
 _CITRUS_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(limón|limon|limones|lima|limas)\b",
                               _re.IGNORECASE)
+# [P2-MANI-GENDER-STEP · 2026-07-06] "maní" (masc mass-noun) + adjetivo de cocción con género/
+# número errado en la prosa de un paso → masc singular ("maní fileteadas" → "maní fileteado").
+_MANI_GENDER_STEP_RX = _re.compile(
+    r"\b(man[ií])\s+(filetead|tostad|picad|molid|pelad|salad|dorad|frit|asad)[oa]s?\b",
+    _re.IGNORECASE)
 
 
 # [P2-STEP-PHRASE-DEDUP · 2026-07-06] (review #14) frase de alimento duplicada adyacente en pasos:
