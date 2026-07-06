@@ -142,6 +142,36 @@ def test_diversify_knob_off(monkeypatch):
     assert go._diversify_cross_day_dishes(days) == 0
 
 
+def test_diversify_handles_adjective_form():
+    # [P2-CROSSDAY-DIVERSIFY-ADJ] "Batido Cremoso de X" / "Batido Tropical de X" (con adjetivo
+    # entre la base y el ' de ') antes se saltaban → gate 'batido en 3 días' disparaba en vivo.
+    days = [
+        {"day": 1, "meals": [_meal("Batido Cremoso de Pera y Yogurt", ["pera"])]},
+        {"day": 2, "meals": [_meal("Batido de Mango", ["mango"])]},
+        {"day": 3, "meals": [_meal("Batido Tropical de Fresa", ["fresa"])]},
+    ]
+    assert build_variety_report({"days": days})["cross_day_dishes"].get("batido") == 3
+    n = go._diversify_cross_day_dishes(days)
+    assert n == 1, "renombra el día excedente (batido con adjetivo ahora elegible)"
+    assert days[2]["meals"][0]["name"] == "Bebida de Fresa", (
+        f"dropea el adjetivo, género limpio: {days[2]['meals'][0]['name']}"
+    )
+    assert "batido" not in build_variety_report({"days": days})["cross_day_dishes"]
+
+
+def test_diversify_adjective_keeps_main_ingredient():
+    # el (?!de) evita agarrar un 'de' tardío: "Guiso Espeso de Pollo de Corral" → keep 'Pollo'.
+    days = [
+        {"day": 1, "meals": [_meal("Guiso de Res", ["res"])]},
+        {"day": 2, "meals": [_meal("Guiso Criollo de Cerdo", ["cerdo"])]},
+        {"day": 3, "meals": [_meal("Guiso Espeso de Pollo de Corral", ["pollo"])]},
+    ]
+    go._diversify_cross_day_dishes(days)
+    assert days[2]["meals"][0]["name"] == "Estofado de Pollo de Corral", (
+        f"dropea 'Espeso' pero conserva 'Pollo de Corral': {days[2]['meals'][0]['name']}"
+    )
+
+
 def test_marker_anchored_in_source():
     src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "graph_orchestrator.py"), encoding="utf-8").read()

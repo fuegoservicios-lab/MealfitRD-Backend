@@ -20329,6 +20329,7 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
         dislikes = {_sa_pr(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
         allergies = _fd.get("allergies")
         _diet = _sa_pr(str(_fd.get("dietType") or "").lower())  # fallback diet-aware
+        _goal = _sa_pr(str(_fd.get("mainGoal") or _fd.get("goal") or "").lower())  # goal-aware
 
         def _target_ok(label: str) -> bool:
             probe = _PROTEIN_TARGET_FORMS[label]["default"]
@@ -20493,7 +20494,16 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 # fallback no-gated (legumbre/queso) cuando las carnes se agotan. Diet-aware:
                 # vegano excluye queso (lácteo).
                 _eff_ladder = _PROTEIN_REPEAT_SWAP_LADDER[_lbl]
-                if PROTEIN_REPEAT_FALLBACK_NONGATED:
+                # [P2-FALLBACK-NONGATED-GAINMUSCLE · 2026-07-06] (review de logs, plan del owner
+                # 4339544f gain_muscle degradado) el fallback no-gated (legumbre/queso) BAJA la
+                # densidad proteica — contraproducente en ganancia muscular, que exige fuente
+                # animal densa por comida principal (el gate de déficit de proteína lo confirma).
+                # Para gain_muscle NO se añade el fallback: la escalera de CARNES sigue; si se
+                # agota, tgt None → el retry regenera el día con una proteína ANIMAL distinta
+                # (mejor outcome para músculo que un swap a legumbre).
+                _is_gainmuscle = ("gain_muscle" in _goal or "ganar_musculo" in _goal
+                                  or "ganancia" in _goal or "bulk" in _goal)
+                if PROTEIN_REPEAT_FALLBACK_NONGATED and not _is_gainmuscle:
                     _fb = _PROTEIN_REPEAT_NONGATED_FALLBACK
                     if "vegan" in _diet:
                         _fb = tuple(f for f in _fb if f != "queso")
@@ -20559,8 +20569,11 @@ def _diversify_cross_day_dishes(days: list) -> int:
                 canon = _VARIETY_BASE_CANON.get(raw, raw)
                 if canon not in _CROSS_DAY_DISH_RENAME:
                     continue
-                # solo la forma limpia "Base de X" (cabeza + ' de ') — sin adjetivo con género.
-                if not _re.match(r"^\s*" + raw + r"[a-zà-ÿ]*\s+de\s+", nm_sa):
+                # [P2-CROSSDAY-DIVERSIFY-ADJ · 2026-07-06] (review de logs: "'batido' en 3 días")
+                # forma "Base [adjetivo] de X" — hasta 2 palabras NO-'de' entre la base y el ' de '
+                # ("Batido Cremoso de Pera", "Batido Tropical de Mango"). El rename dropea el
+                # adjetivo → "Bebida de Pera" (género limpio). El (?!de) evita agarrar un 'de' tardío.
+                if not _re.match(r"^\s*" + raw + r"[a-zà-ÿ]*(?:\s+(?!de\b)[a-zà-ÿ]+){0,2}\s+de\s+", nm_sa):
                     continue
                 by_canon.setdefault(canon, []).append((_di, meal, raw))
         renamed = 0
@@ -20574,8 +20587,9 @@ def _diversify_cross_day_dishes(days: list) -> int:
                 if _di in keep:
                     continue
                 orig = str(meal.get("name", ""))
-                # reemplaza la 1ª palabra (la base) preservando " de X..." intacto.
-                mo = _re.match(r"^(\s*)(\S+)(\s+de\s+)", orig, _re.IGNORECASE)
+                # reemplaza la base (+ adjetivos NO-'de', dropeados) preservando " de X..." intacto:
+                # "Batido Cremoso de Pera" → "Bebida de Pera".
+                mo = _re.match(r"^(\s*)(\S+(?:\s+(?!de\b)\S+){0,2})(\s+de\s+)", orig, _re.IGNORECASE)
                 if not mo:
                     continue
                 meal["name"] = mo.group(1) + syn + orig[mo.end(2):]
