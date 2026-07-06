@@ -8415,6 +8415,18 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             _restocked_at = plan_data.get("restocked_at_iso") if plan_data.get("is_restocked") else None
             # [P1-2] Item-level: precedencia sobre el blanket legacy.
             _restocked_items = plan_data.get("restocked_items") if isinstance(plan_data.get("restocked_items"), dict) else None
+            # [P2-RECALC-STALE-FLAGS-ORDER · 2026-07-06] Si la nevera está VACÍA
+            # AHORA, los flags de restock heredados son stale por definición
+            # (mismo invariante P3-RESTOCK-STALE-RECALC-HEAL) — pero el self-heal
+            # corre en el CALLBACK de persistencia, DESPUÉS de que los híbridos
+            # ya se filtraron con esos flags muertos. Caso real (plan ff673061):
+            # restock total → deleteAll de la Nevera → recalc persistió flags
+            # limpios + monthly/biweekly = 0 ítems (filtrados por restocked_items
+            # que ese mismo request declaró stale). No filtrar híbridos con
+            # flags que este request va a limpiar.
+            if _inv_count_at_recalc == 0:
+                _restocked_at = None
+                _restocked_items = None
             scaled_15_hybrid = _build_hybrid(scaled_7, scaled_15, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_15 else scaled_15  # pyright: ignore[reportArgumentType]  (structured=True ⇒ scaled_* son list)
             scaled_30_hybrid = _build_hybrid(scaled_7, scaled_30, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_30 else scaled_30  # pyright: ignore[reportArgumentType]  (structured=True ⇒ scaled_* son list)
         except Exception as _hyb_e:
