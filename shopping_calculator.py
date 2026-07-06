@@ -2389,10 +2389,20 @@ def _resolve_brand_default(name: str, defaults: dict):
             pkgs = defaults[best_k]
     if not pkgs:
         return None
+    # [P2-LEGUME-NO-LATA-DEFAULT · 2026-07-06] Legumbres: el aggregator convierte
+    # las cantidades COCIDAS de la receta a SECAS (yield 0.35×, P2-PDF-1) porque
+    # el SKU histórico es seco — un default en LATA (producto ya cocido) hereda
+    # esa necesidad seca y sub-compra ~3× ("Habichuelas rojas: 1 lata 15 Oz"
+    # para ~10 porciones del ciclo, plan cd4ae3c3). Latas fuera del default de
+    # legumbres; la funda seca del master sigue siendo la base coherente.
+    _is_legume = bool(re.search(
+        r"\b(habichuela|frijol|lenteja|garbanzo|guandul|arveja)", key))
     out = []
     for p in pkgs:
         lbl = _norm_pref_food(p.get("label"))
         if any(t in lbl and t not in key for t in _BRAND_DEFAULT_MODIFIER_TOKENS):
+            continue
+        if _is_legume and str(p.get("unit") or "").strip().lower() == "lata":
             continue
         out.append(p)
     return out or None

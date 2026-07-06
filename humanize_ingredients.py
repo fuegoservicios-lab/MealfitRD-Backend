@@ -371,6 +371,9 @@ _DISPLAY_PLURAL.update({
     "puerro": "puerros",
     # [P2-STEM-FILLER-TOKENS · 2026-07-06] review #11: "½ guayabas fresco", "1 filetes de pescado".
     "guayaba": "guayabas", "filete": "filetes",
+    # [P2-BLANCH-INGREDIENT-TRUTH batch · 2026-07-06] review #12: "20 g de Maní fileteadas"
+    # (renombre almendras→maní dejó el adjetivo femenino plural sobre sustantivo masc sing).
+    "maní": "maníes", "mani": "manies",
 })
 
 # [P3-DISPLAY-GRAMMAR · 2026-07-05] Concordancia número/género de leads con FRACCIÓN/mixto
@@ -383,10 +386,14 @@ _GRAMMAR_FRAC_MAP = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔":
 _GRAMMAR_LEAD_RE = re.compile(
     r"^\s*(?P<lead>\d+(?:[.,]\d+)?\s?[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s+"
     r"(?P<word>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*)(?P<rest>.*)$")
-_GRAMMAR_UNITS = {"cda", "cdta", "taza", "cucharada", "cucharadita"}
+# [review #12] + unidades de peso/volumen: "20 g de Maní fileteadas" necesitaba la
+# rama de unidad para concordar el alimento tras "de".
+_GRAMMAR_UNITS = {"cda", "cdta", "taza", "cucharada", "cucharadita", "g", "gr", "gramos", "ml", "kg"}
 _GRAMMAR_PLURAL_TO_SING = {v: k for k, v in _DISPLAY_PLURAL.items()}
 _GRAMMAR_ADJ_GENDER_STEMS = ("median", "pequeñ", "pequen", "madur", "fresc", "magr", "pelad",
-                             "picad", "rallad", "cocid", "hervid", "tostad", "asad", "enter")
+                             "picad", "rallad", "cocid", "hervid", "tostad", "asad", "enter",
+                             # [review #12] "Maní fileteadas" → "Maní fileteado".
+                             "filetead")
 _GRAMMAR_ADJ_INVARIANT = ("grande", "verde")
 # [P3-RECIPE-POLISH-4 · 2026-07-06] invariantes de género con plural en -es ("1 tortilla
 # integrales" vivo → "integral"; "integrales" no se deriva con rstrip('s')).
@@ -441,7 +448,11 @@ def _fix_display_grammar(s: str) -> str:
         plural_target = val > 1.0 + 1e-9
         is_unit = w_orig_low.rstrip("s") in _GRAMMAR_UNITS
         new_word = _case_fixed_word
-        if is_unit:
+        # [review #12] unidades de peso/volumen INVARIANTES: "20 g" jamás "20 gs".
+        _UNIT_INVARIANT = {"g", "gr", "gramos", "ml", "kg"}
+        if is_unit and w_orig_low in _UNIT_INVARIANT:
+            new_word = w_orig_low
+        elif is_unit:
             new_word = w_orig_low.rstrip("s") + ("s" if plural_target else "")
         elif plural_target and w_orig_low in _DISPLAY_PLURAL:
             new_word = _DISPLAY_PLURAL[w_orig_low]

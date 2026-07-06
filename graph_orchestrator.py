@@ -13433,12 +13433,24 @@ def _scale_congruent_protein_line(meal: dict, nm: str, grams: float, db) -> bool
         for idx, ing in enumerate(ings):
             s = str(ing)
             _il = _sa_cg(s.lower())
-            m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _il)
             # [P2-STEM-BOUNDED · 2026-07-06] límite final (agua⊄aguacate).
-            if not m_g or not _re.search(r"\b" + _re.escape(_stem) + r"(?:s|es)?\b", _il):
+            if not _re.search(r"\b" + _re.escape(_stem) + r"(?:s|es)?\b", _il):
                 continue
-            _g_line = float(m_g.group(1).replace(",", "."))
-            if _g_line <= 0:
+            m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _il)
+            _g_line = None
+            if m_g:
+                _g_line = float(m_g.group(1).replace(",", "."))
+            else:
+                # [P2-CLOSER-FAMILY-ANNOT · 2026-07-06] línea NO gram-lead pero con
+                # anotación de gramos ("½ taza de queso ricotta (105g)", "1⅓ tazas de
+                # yogurt griego (309g)") — el closer/repair añadía una SEGUNDA línea
+                # genérica ("75 g de queso", "90 g de Yogurt...") que ningún paso usa
+                # (batido/tostadas del plan cd4ae3c3). La anotación da la base y
+                # rescale escala lead + anotación juntos.
+                m_an = _re.search(r"\((\d+(?:[.,]\d+)?)\s*g\b", _il)
+                if m_an:
+                    _g_line = float(m_an.group(1).replace(",", "."))
+            if not _g_line or _g_line <= 0:
                 continue
             _factor = (_g_line + float(grams)) / _g_line
             _new = _resc_cg(s, _factor)
@@ -18839,6 +18851,15 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
             total += _npd; parts.append(f"display_polish={_npd}")
     except Exception as _hpb_e:
         logger.warning(f"[P2-BOUNDARY-DISPLAY-POLISH] prettify en boundary no-op: {type(_hpb_e).__name__}: {_hpb_e}")
+    # [P1-DISPLAY-RESTORE-FROM-RAW · 2026-07-06] Mitigación del P1 crónico ANTES de medir:
+    # las líneas raw-huérfanas que los PASOS usan vuelven al display (mozzarella/sal).
+    try:
+        _n_rest = _restore_display_from_raw_orphans(days)
+        if _n_rest:
+            total += _n_rest
+            parts.append(f"display_restored={_n_rest}")
+    except Exception:
+        pass
     # [P1-INTEGRATE-ALIGN-GUARD · 2026-07-06] TELEMETRÍA de desalineación display↔raw: crónica
     # (7-10 de 12 meals en los planes recientes — raw con "Sal al gusto"/"ajo" que display no
     # tiene, longitudes distintas) y ROMPE todo pase posicional (lockstep por idx). Este WARN
@@ -21680,6 +21701,87 @@ def _rewrite_cured_ghost_protein_steps(days) -> int:
         return fixed
     except Exception as _cg_e:
         logger.warning(f"[P1-CURED-GHOST-STEPS] no-op: {type(_cg_e).__name__}: {_cg_e}")
+        return 0
+
+
+def _restore_display_from_raw_orphans(days) -> int:
+    """[P1-DISPLAY-RESTORE-FROM-RAW · 2026-07-06] La mitad INVERSA de
+    P2-RAW-DISPLAY-RECONCILE — cierra (mitigando) el P1 crónico de los
+    display-droppers: pases históricos QUITAN/renombran líneas del display sin
+    tocar raw (la mozzarella del wrap con Mise y Montaje que la usan; el 'Sal
+    al gusto' del autofix de sodio) → el usuario no ve en Ingredientes algo que
+    la receta usa y la lista compra. Reparación conservadora en la FRONTERA:
+    fila de raw cuyo stem no aparece en NINGUNA línea del display Y SÍ se usa
+    en los pasos no-nota → se re-AÑADE al display (prettificada). Cap 3/meal.
+    El WARN [P1-RAW-MISALIGN] sigue emitiéndose para cazar al dropper de raíz.
+    tooltip-anchor: P1-DISPLAY-RESTORE-FROM-RAW"""
+    try:
+        from constants import strip_accents as _sa_rd
+        try:
+            from humanize_ingredients import _prettify_quantity_display as _pretty_rd
+        except Exception:
+            def _pretty_rd(s):
+                return s
+        restored = 0
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                raw = meal.get("ingredients_raw")
+                rec = meal.get("recipe")
+                if not isinstance(ings, list) or not isinstance(raw, list) or not isinstance(rec, list):
+                    continue
+                if len(raw) <= len(ings):
+                    continue  # solo la dirección raw>display (droppers)
+                _disp_blob = _sa_rd(" ".join(str(x) for x in ings).lower())
+                _steps_blob = _sa_rd(" ".join(
+                    str(s) for s in rec
+                    if isinstance(s, str) and not _is_recipe_safety_note_step(s)
+                    and not str(s).strip().startswith(("💡", "💪", "🌱", "🧉", "🏷"))
+                ).lower())
+                _meal_restored = 0
+                for r in raw:
+                    if _meal_restored >= 3:
+                        break
+                    if not isinstance(r, str) or not r.strip():
+                        continue
+                    _food = _re.sub(_LEAD_QTY_UNIT_STRIP_RE, "", _sa_rd(r.lower())).strip()
+                    # Tokens del ALIMENTO (todos, no solo el primero: "queso mozzarella"
+                    # con pasos que dicen solo "mozzarella"). 'gusto'/'aprox' fuera
+                    # ("Sal al gusto" no debe matchear el "al gusto" de otra línea).
+                    _toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _food)
+                             if len(t) >= 3 and t not in ("gusto", "aprox", "aproximadamente")]
+                    if not _toks:
+                        continue
+                    _cands = set()
+                    for _t0 in _toks:
+                        _cands.add(_t0)
+                        if len(_t0) > 4 and _t0.endswith("s"):
+                            _cands.add(_t0[:-1])
+                        if len(_t0) > 5 and _t0.endswith("es"):
+                            _cands.add(_t0[:-2])
+                    def _hit(blob):
+                        return any(_re.search(r"\b" + _re.escape(c) + r"(?:es|e|s)?\b", blob)
+                                   for c in _cands)
+                    if _hit(_disp_blob):
+                        continue  # el display ya cubre este alimento
+                    if not _hit(_steps_blob):
+                        continue  # raw-only que la receta tampoco usa → no restaurar
+                    try:
+                        _line = _pretty_rd(str(r))
+                    except Exception:
+                        _line = str(r)
+                    ings.append(_line)
+                    _disp_blob += " " + _sa_rd(str(_line).lower())
+                    restored += 1
+                    _meal_restored += 1
+        if restored:
+            logger.info(f"🧾 [P1-DISPLAY-RESTORE-FROM-RAW] {restored} línea(s) usadas en pasos "
+                        f"restauradas al display (los droppers de raíz siguen bajo WARN misalign).")
+        return restored
+    except Exception as _rd_e:
+        logger.warning(f"[P1-DISPLAY-RESTORE-FROM-RAW] no-op: {type(_rd_e).__name__}: {_rd_e}")
         return 0
 
 
