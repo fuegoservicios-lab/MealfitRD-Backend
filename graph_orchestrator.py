@@ -24624,6 +24624,22 @@ def _emit_post_swap_coherence_alert(
             "delta_pct": d.get("delta_pct"),
         })
 
+    # [P2-ALERT-JSON-FINITE · 2026-07-05] (bug vivo, corr=237cf108) `delta_pct` puede ser
+    # float('inf') (lado esperado 0 → división; misma clase del INF-RESPONSE-500 de 2026-07-04).
+    # `json.dumps` serializa inf/nan como Infinity/NaN — JSON INVÁLIDO para Postgres `::jsonb`
+    # (InvalidTextRepresentation) → la alerta se perdía en silencio best-effort. Sanitizar
+    # no-finitos a None antes del dump; `allow_nan=False` abajo garantiza que ningún no-finito
+    # vuelva a colarse (si se cuela, ValueError → lo reporta el except del INSERT).
+    def _json_finite(obj):
+        import math as _math
+        if isinstance(obj, float):
+            return obj if _math.isfinite(obj) else None
+        if isinstance(obj, dict):
+            return {k: _json_finite(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_json_finite(v) for v in obj]
+        return obj
+
     metadata = {
         "user_id": str(user_id) if user_id else None,
         "plan_id": str(plan_id) if plan_id else None,
@@ -24668,8 +24684,8 @@ def _emit_post_swap_coherence_alert(
             """,
             (
                 alert_key, title, message,
-                json.dumps(metadata, ensure_ascii=False),
-                json.dumps(affected, ensure_ascii=False),
+                json.dumps(_json_finite(metadata), ensure_ascii=False, allow_nan=False),
+                json.dumps(affected, ensure_ascii=False, allow_nan=False),
             ),
         )
         return True
