@@ -2315,8 +2315,10 @@ _BRAND_DEFAULT_MODIFIER_TOKENS = (
     "molido", "molida", "semilla", "semillas", "con pasas", "con sal", "con azucar",
     "azucarado", "endulzado", "sazonado", "adobado", "ahumado", "frito", "frita",
     # [verificado vs plan vivo] "Maní Japonés" (recubierto) no es maní a secas;
-    # "Baby" (zanahoria baby 12 Oz RD$175 vs ½ lb RD$14) es specialty.
-    "japones", "japonesa", "baby",
+    # "Baby" (zanahoria baby 12 Oz RD$175 vs ½ lb RD$14) es specialty. El
+    # catálogo mezcla descriptores en inglés ("Roasted Salted") — "salted" es
+    # el "con sal" inglés (sodio); "honey" cubre honey-roasted/glazed.
+    "japones", "japonesa", "baby", "salted", "honey",
 )
 
 

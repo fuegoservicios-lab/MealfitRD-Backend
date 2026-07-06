@@ -138,6 +138,16 @@ def test_all_variants_foreign_means_no_overlay():
     assert sc._resolve_brand_default("Maní", defaults) is None
 
 
+def test_english_salted_variant_dropped():
+    """El catálogo mezcla descriptores en inglés: "Roasted Salted" = "con sal"."""
+    defaults = {"mani": [
+        {"grams": 150.0, "price": 159.0, "label": "Roasted Salted 150 gr · Nut Walker", "unit": "lata"},
+        {"grams": 300.0, "price": 185.0, "label": "300 gr · Cashitas", "unit": "pote"},
+    ]}
+    got = sc._resolve_brand_default("Maní", defaults)
+    assert got is not None and len(got) == 1 and "Salted" not in got[0]["label"]
+
+
 def test_modifier_allowed_when_in_item_name():
     defaults = {"semillas de girasol": [
         {"grams": 400.0, "price": 145.0, "label": "Semillas 400 gr · Genérico", "unit": "paquete"},
