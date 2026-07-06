@@ -57,7 +57,10 @@ def test_p2_1_knobs_and_wiring():
     # [P1-FATS-POSTCLOSER-RELEVEL · 2026-07-05] ventana 4500→6000: el re-trim de grasas se insertó
     # en el bloque P2-2 (que vive entre el qty-sync y el recompute P2-1). El orden anclado no cambió.
     _sync = _GO.index("mención(es) de cantidad en pasos re-sincronizadas post-quantize")
-    _win = _GO[_sync:_sync + 6000]
+    # [2026-07-06] ventana 6000→12000: los seams de la madrugada 07-05/06
+    # (cooked-raw, note-align) empujaron el recompute a offset ~7.1k — drift
+    # de ventana, no ausencia (verificado: graph_orchestrator limpio vs HEAD).
+    _win = _GO[_sync:_sync + 12000]
     assert "recompute_micronutrient_report_for_plan(result, form_data)" in _win, \
         "falta el recompute del panel post-motor en assemble (P2-1)"
     # y también en la convergencia de presupuesto (las sustituciones cambian micros).
@@ -263,12 +266,17 @@ _HAS_FRONTEND = os.path.isdir(_FRONTEND)
 
 @pytest.mark.skipif(not _HAS_FRONTEND, reason="workspace sin frontend/ (repo backend aislado)")
 def test_p2_8_shopping_list_panel_component():
-    panel = _read(_FRONTEND, "src", "components", "dashboard", "ShoppingListPanel.jsx")
-    assert "is_perishable" in panel, "prioridad 1: flag SSOT del backend"
-    assert "shelf_life_days" in panel, "prioridad 2: umbral shelf_life (mismo que backend)"
-    assert "display_category" in panel, "categoría = display_category SSOT"
+    # [P2-SHOPLIST-PANEL-REMOVED · 2026-07-06] P2-8 SUPERSEDED por decisión del
+    # owner: el panel por pasillo duplicaba el PDF y engordaba el hero. Queda una
+    # línea mínima con el total "esta ida al súper" (dato único vs banner de
+    # presupuesto, que muestra el ciclo). Detalle: test_p2_shoplist_panel_removed.py.
+    import os as _os
+    assert not _os.path.exists(_os.path.join(
+        _FRONTEND, "src", "components", "dashboard", "ShoppingListPanel.jsx"
+    )), "el panel fue eliminado por decisión del owner — no re-añadir sin consenso"
     dash = _read(_FRONTEND, "src", "pages", "Dashboard.jsx")
-    assert "ShoppingListPanel" in dash and "<ShoppingListPanel" in dash, "el panel debe montarse en Dashboard"
+    assert "<ShoppingListPanel" not in dash
+    assert "esta ida al súper" in dash, "el total 'esta ida' sobrevive como línea mínima"
 
 
 @pytest.mark.skipif(not _HAS_FRONTEND, reason="workspace sin frontend/ (repo backend aislado)")
