@@ -19,7 +19,8 @@ def test_brandless_product_labeled_generico():
         "presentation": "Paquete 2L", "brand": None, "price_rd": 165.0, "size_grams": None,
     })
     assert pkg is not None
-    assert pkg["label"] == "2L · Genérico", f"brand NULL debe decir Genérico: {pkg['label']}"
+    # [P1-BRAND-DEFAULT-GUARDS] la L-libra se normaliza a "lb" en el label.
+    assert pkg["label"] == "2 lb · Genérico", f"brand NULL debe decir Genérico: {pkg['label']}"
 
 
 def test_real_brand_unaffected():

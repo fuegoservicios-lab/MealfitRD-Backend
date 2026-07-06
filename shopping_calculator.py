@@ -2196,12 +2196,29 @@ def _pkg_from_product_row(r) -> dict | None:
     size_part = pres.split(" ", 1)[1] if (
         pres and _norm_pref_food(pres).split(" ")[0] in _PRES_CONTAINER_WORDS and " " in pres
     ) else pres
+    _first_word = _norm_pref_food(pres).split(" ")[0] if pres else ""
+    if _first_word in ("paquete", "funda", "saco", "sobre", "caja"):
+        # [P1-BRAND-DEFAULT-GUARDS · 2026-07-06] La "L" que el parser leyó como
+        # LIBRA (envase sólido) no puede quedarse como "2 L" en el display — se
+        # leería litros. Normalizar el label a "2 lb".
+        size_part = re.sub(r"(?i)(?<![/\d.,])(\d+(?:[.,]\d+)?)\s*l\b", r"\1 lb", size_part)
     label = f"{size_part} · {brand}" if brand else size_part
+    # [P1-BRAND-DEFAULT-GUARDS · 2026-07-06] Venta-por-libra (presentación "Lb"
+    # sin tamaño explícito): marcar el pkg. El DEFAULT lo excluye — es mostrador
+    # fresco (carnes/produce, casi siempre Genérico), forzarlo como "envase" de
+    # 1 lb rompe los conteos nativos (Uds/Cabezas/¼ lb) y sobre-compra (guayaba
+    # ¼ lb → 1 lb, chivo ¼ lb RD$75 → 1 lb RD$299). La PREFERENCIA manual sí lo
+    # respeta (elección explícita del usuario — comportamiento pre-existente).
+    _explicit_size = bool(r.get("size_grams")) or bool(_PRES_SIZE_RX.search(pres)) or (
+        _first_word in ("paquete", "funda", "saco", "sobre", "caja")
+        and re.search(r"(?<![/\d.,])\d+(?:[.,]\d+)?\s*l\b", pres, re.IGNORECASE)
+    )
     return {
         "grams": grams,
         "price": price,
         "label": label.strip(" ·"),
         "unit": _pref_container_word(pres),
+        "per_lb": not _explicit_size,
     }
 
 
@@ -2266,6 +2283,10 @@ def fetch_brand_default_packages() -> dict:
         pkg = _pkg_from_product_row(r)
         if pkg is None:
             continue  # sin tamaño/precio usable → ese producto no participa del default
+        if pkg.get("per_lb"):
+            # [P1-BRAND-DEFAULT-GUARDS] mostrador fresco (venta por libra) fuera
+            # del default — ver nota en _pkg_from_product_row.
+            continue
         key = _norm_pref_food(r.get("food_name"))
         if key:
             out.setdefault(key, []).append(pkg)
@@ -2275,6 +2296,59 @@ def fetch_brand_default_packages() -> dict:
     _brand_defaults_cache["data"] = out
     _brand_defaults_cache["at"] = now
     return out
+
+
+# [P1-BRAND-DEFAULT-GUARDS · 2026-07-06] Guards del matching de DEFAULTS (la
+# preferencia manual sigue usando la escalera completa de _resolve_brand_pref):
+#  - Hierbas frescas se venden por MAZO (path nativo) — un default las convertía
+#    en frasco de perejil MOLIDO Badia RD$215 o semillas de cilantro (verificado
+#    contra plan vivo ff673061). Jamás overlay.
+#  - Contención SOLO food⊆nombre ("arroz blanco premium" → "arroz blanco"). La
+#    dirección inversa (nombre⊆food) hacía que "Yogurt" agarrara "Yogurt de
+#    cabra" en frascos 4 Oz → 8 frascos RD$880 vs pote 1.96 kg RD$220.
+#  - Variantes con MODIFICADOR ajeno al nombre del ítem fuera ("Maní" ≠ "Con
+#    Pasas"; "Semillas de girasol" sí admite "semillas").
+_BRAND_DEFAULT_HERB_RX = re.compile(
+    r"\b(cilantro|cilantrico|puerro|perejil|menta|albahaca|romero|verdura|verdurita|recao|eneldo)\b"
+)
+_BRAND_DEFAULT_MODIFIER_TOKENS = (
+    "molido", "molida", "semilla", "semillas", "con pasas", "con sal", "con azucar",
+    "azucarado", "endulzado", "sazonado", "adobado", "ahumado", "frito", "frita",
+)
+
+
+def _resolve_brand_default(name: str, defaults: dict):
+    """Packages default para un ítem del plan, o None. Más conservador que
+    `_resolve_brand_pref` — un default equivocado degrada la lista solo; una
+    preferencia la eligió el usuario a sabiendas."""
+    if not defaults:
+        return None
+    key = _norm_pref_food(name)
+    if not key or _BRAND_DEFAULT_HERB_RX.search(key):
+        return None
+    pkgs = None
+    for probe in (key, _singular_pref_key(key)):
+        if probe in defaults:
+            pkgs = defaults[probe]
+            break
+    if pkgs is None and len(key) >= 4:
+        padded_name = f" {key} "
+        best_k = None
+        for k in defaults:
+            if len(k) >= 4 and f" {k} " in padded_name:
+                if best_k is None or len(k) > len(best_k):
+                    best_k = k
+        if best_k:
+            pkgs = defaults[best_k]
+    if not pkgs:
+        return None
+    out = []
+    for p in pkgs:
+        lbl = _norm_pref_food(p.get("label"))
+        if any(t in lbl and t not in key for t in _BRAND_DEFAULT_MODIFIER_TOKENS):
+            continue
+        out.append(p)
+    return out or None
 
 
 def _resolve_brand_pref(name: str, prefs: dict):
@@ -8650,7 +8724,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # "2 lb · La Garza" fluye a display_qty → la lista y el PDF enseñan la
         # marca. La preferencia del usuario (bloque de arriba) SIEMPRE gana.
         if _pref_pkg is None and brand_defaults:
-            _def_pkgs = _resolve_brand_pref(name, brand_defaults)
+            # [P1-BRAND-DEFAULT-GUARDS] resolución conservadora (exacto/singular/
+            # food⊆nombre + guards hierbas/modificadores) — NO la escalera de prefs.
+            _def_pkgs = _resolve_brand_default(name, brand_defaults)
             if _def_pkgs and isinstance(_def_pkgs, list):
                 master_item = dict(master_item)
                 master_item["market_packages"] = list(_def_pkgs)
