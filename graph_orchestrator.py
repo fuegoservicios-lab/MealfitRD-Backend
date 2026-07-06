@@ -12552,6 +12552,21 @@ _FOOD_SAFETY_NOTE_SEAFOOD_BLANCHED = (
     "sistema inmune comprometido prefiere preparaciones completamente cocidas."
 )
 
+# [P2-LEAD-STRIP-UNITS · 2026-07-06] SSOT del strip de "cantidad + unidad + de" al extraer el
+# nombre de una línea. El eater viejo `[a-záéíóúñ]*` era GOLOSO sin unidad: "½ filete de pescado"
+# → se comía "filete" y el "de" → bare="pescado" (rompió el note-align del plan cb5f8480). Solo
+# unidades REALES con límite de palabra; sin unidad, el grupo matchea vacío y el nombre queda
+# íntegro. Usado por note-align, cured-ghost, blanch y reconcile display→raw.
+_LEAD_QTY_UNIT_STRIP_RE = _re.compile(
+    r"^\s*[\d¼½¾⅓⅔.,/]+\s*(?:g|gr|gramos?|kg|ml|l|tazas?|cdas?|cdtas?|cucharadas?|cucharaditas?|"
+    r"unidad(?:es)?|lonjas?|latas?|hojas?|dientes?|rebanadas?|pedazos?|tajadas?)?\b\.?\s*"
+    r"(?:de\s+|del\s+)?", _re.IGNORECASE)
+# [P2-CROSSFORM-CONSOLIDATE · 2026-07-06] pesos unitarios (g) del set curado de contables — para
+# fusionar "2 cebollas" + "100g Cebolla" (→ "2½ cebollas") sin inventar densidades por comida.
+_COUNT_UNIT_WEIGHT_G = {"huevo": 50.0, "cebolla": 150.0, "tomate": 120.0, "papa": 150.0,
+                        "zanahoria": 60.0, "guineo": 120.0, "platano": 150.0, "aguacate": 200.0,
+                        "manzana": 180.0, "mandarina": 100.0}
+
 
 def _inject_blanch_for_citrus_marinade(meal: dict) -> bool:
     """[P1-SEAFOOD-MARINADE-BLANCH · 2026-07-05] Repara el ceviche/marinado crudo de marisco: si el
@@ -12594,7 +12609,7 @@ def _inject_blanch_for_citrus_marinade(meal: dict) -> bool:
                 _il = _sa_bl(str(_ing).lower())
                 if _re.search(r"\b" + _tok, _il):
                     _bare = _re.sub(r"\([^)]*\)", "", str(_ing))
-                    _bare = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?", "",
+                    _bare = _re.sub(_LEAD_QTY_UNIT_STRIP_RE, "",
                                     _bare).strip(" ,.-")
                     if _bare:
                         _food_disp = _bare
@@ -12638,7 +12653,12 @@ def _scan_raw_seafood_meat_violations(plan: dict) -> list:
             parts = [str(meal.get("name", ""))]
             rec = meal.get("recipe")
             if isinstance(rec, list):
-                parts.extend(str(s) for s in rec)
+                # [P1-RAW-COOKED-ABSOLUTION · 2026-07-06] las NOTAS ⚠ inyectadas se excluyen del
+                # texto escaneado: la propia nota contiene "ceviche, sushi, tartar" → el flag se
+                # AUTO-PERPETUABA leyendo su nota anterior (vivo, plan cb5f8480: pollo hervido 20
+                # min con banner "pollo CRUDO" renombrado por el step-rewriter de una sustitución).
+                parts.extend(str(s) for s in rec
+                             if not (isinstance(s, str) and _is_recipe_safety_note_step(s)))
             for ing in (meal.get("ingredients", []) or []):
                 parts.append(str(ing))
             text = strip_accents(" ".join(parts).lower())
@@ -12646,7 +12666,25 @@ def _scan_raw_seafood_meat_violations(plan: dict) -> list:
             if not hit and any(t in text for t in _RAW_PREP_AMBIGUOUS):
                 # tartar/carpaccio solo cuentan con proteína animal en el plato (no 'tartar de remolacha').
                 # [P2-RAW-POULTRY-SAFETY] match por límite de palabra (no substring → 'pollo'⊄repollo, 'ave'⊄avena).
-                hit = bool(_RAW_ANIMAL_PROTEIN_RE.search(text))
+                # [P1-RAW-COOKED-ABSOLUTION · 2026-07-06] estado-de-cocción: una proteína con
+                # evidencia de CALOR en los pasos ("cocina el muslo de pollo en agua... 20 min")
+                # queda ABSUELTA; el flag solo sobrevive si queda alguna proteína sin calor.
+                # Cierra el follow-up declarado en P2-RAW-SEAFOOD-FALSE-POSITIVE (2026-06-28).
+                _prot_toks = set(_RAW_ANIMAL_PROTEIN_RE.findall(text))
+                # el claim falso "el ácido del limón COCINARÁ el calamar" contiene un verbo de
+                # calor — se EXCLUYE del texto de absolución (el cítrico jamás cuece; sin este
+                # strip, el propio claim absolvía al ceviche crudo — lo cazó el test del blanch).
+                _text_abs = _CITRUS_COOKS_CLAIM_RE.sub(" ", text)
+                _unabsolved = []
+                for _pt in _prot_toks:
+                    _heat_pat = (r"(?:" + "|".join(_SEAFOOD_HEAT_VERBS) + r")[^.]{0,60}\b"
+                                 + _fs_re.escape(_pt)
+                                 + r"|\b" + _fs_re.escape(_pt)
+                                 + r"[^.]{0,50}(?:se\s+cocina|hervid|cocid|a la plancha|al horno|"
+                                 r"guisad|saltead|hornead|frit)")
+                    if not _fs_re.search(_heat_pat, _text_abs):
+                        _unabsolved.append(_pt)
+                hit = bool(_unabsolved)
             if hit:
                 out.append((di, mi, meal.get("name", "?")))
     return out
@@ -12869,6 +12907,28 @@ def _apply_food_safety_fixes(plan: dict) -> int:
     # [P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Pescado/carne crudos → nota de seguridad
     # determinista (macro-preservante; idempotente por substring específico, no choca con la nota de huevo).
     if RAW_SEAFOOD_SAFETY_ENABLED:
+        # [P1-RAW-COOKED-ABSOLUTION · 2026-07-06] notas STALE: un plato que dejó de calificar
+        # (sustitución a proteína cocida, absolución por cocción) conservaba la nota "CRUDOS"
+        # para siempre — nada la removía y encima el step-rewriter la renombraba ("pollo CRUDO"
+        # sobre pollo hervido, plan cb5f8480). Con el flag fresco: nota sin flag → se remueve.
+        try:
+            _flagged_rs = {(di, mi) for di, mi, _ in _scan_raw_seafood_meat_violations(plan)}
+            for di, day in enumerate(plan.get("days") or []):
+                for mi, meal in enumerate((day.get("meals") or []) if isinstance(day, dict) else []):
+                    if (di, mi) in _flagged_rs or not isinstance(meal, dict):
+                        continue
+                    rec = meal.get("recipe")
+                    if not isinstance(rec, list):
+                        continue
+                    _keep = [s for s in rec
+                             if not (isinstance(s, str) and "o carne CRUDOS (ceviche" in s)]
+                    if len(_keep) != len(rec):
+                        meal["recipe"] = _keep
+                        meal.pop("_food_safety_seafood", None)
+                        logger.info(f"🧹 [P1-RAW-COOKED-ABSOLUTION] nota 'CRUDOS' stale removida "
+                                    f"(el plato ya no califica) | meal={str(meal.get('name'))[:40]}")
+        except Exception as _st_e:
+            logger.warning(f"[P1-RAW-COOKED-ABSOLUTION] limpieza stale no-op: {type(_st_e).__name__}: {_st_e}")
         for di, mi, _sname in _scan_raw_seafood_meat_violations(plan):
             try:
                 meal = plan["days"][di]["meals"][mi]
@@ -13272,6 +13332,50 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
             return False  # (a) dup exacto
         meal["recipe"] = _insert_step_before_montaje(rec, _step)
         return True
+    except Exception:
+        return False
+
+
+def _scale_congruent_protein_line(meal: dict, nm: str, grams: float, db) -> bool:
+    """[P1-CLOSER-INTEGRATE · 2026-07-06] Integrar, NO apilar: si la proteína elegida por el
+    closer YA existe como línea gram-based del plato ("15 g de queso blanco" y el closer eligió
+    queso), la línea existente se ESCALA (+grams) en vez de añadir una segunda línea que ningún
+    paso usa ("200 g de queso" fantasma del plan cb5f8480; "4 huevos"+"1 huevo" del da7bb310).
+    Stems singular/plural. Lockstep raw. Muta meal; True si escaló (el caller NO añade línea).
+    tooltip-anchor: P1-CLOSER-INTEGRATE"""
+    try:
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list) or float(grams) <= 0:
+            return False
+        from nutrition_db import rescale_ingredient_string as _resc_cg
+        from constants import strip_accents as _sa_cg
+        _toks = [t for t in _re.split(r"[^a-z]+", _sa_cg(str(nm).lower()))
+                 if len(t) >= 4 and t not in ("cocido", "cocida", "cocidos", "cocidas")]
+        if not _toks:
+            return False
+        _stem = _toks[0][:-1] if (_toks[0].endswith("s") and len(_toks[0]) > 4) else _toks[0]
+        for idx, ing in enumerate(ings):
+            s = str(ing)
+            _il = _sa_cg(s.lower())
+            m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _il)
+            if not m_g or not _re.search(r"\b" + _re.escape(_stem), _il):
+                continue
+            _g_line = float(m_g.group(1).replace(",", "."))
+            if _g_line <= 0:
+                continue
+            _factor = (_g_line + float(grams)) / _g_line
+            _new = _resc_cg(s, _factor)
+            if not _new or _new == s:
+                return False
+            ings[idx] = _new
+            raw = meal.get("ingredients_raw")
+            if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
+                try:
+                    raw[idx] = _resc_cg(str(raw[idx]), _factor)
+                except Exception:
+                    pass
+            return True
+        return False
     except Exception:
         return False
 # [P3-PROTEIN-FLOOR] Dish-fit del closer: comidas ligeras (desayuno/merienda) prefieren
@@ -13872,10 +13976,13 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # traen "cocid" tampoco (doble sufijo).
         _dairy_nm = any(h in _nm_strip for h in _NO_COOK_SAFE_PROTEIN_HINT)
         cook = "" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip) else " cocido"
-        line = f"{grams}g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
-        meal.setdefault("ingredients", []).append(line)
-        if isinstance(meal.get("ingredients_raw"), list):
-            meal["ingredients_raw"].append(line)
+        # [P1-CLOSER-INTEGRATE · 2026-07-06] línea congruente existente → se ESCALA (jamás una
+        # segunda línea "200 g de queso" que ningún paso usa).
+        if not _scale_congruent_protein_line(meal, nm, grams, db):
+            line = f"{grams}g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
+            meal.setdefault("ingredients", []).append(line)
+            if isinstance(meal.get("ingredients_raw"), list):
+                meal["ingredients_raw"].append(line)
         meal["_protein_closed"] = True  # [P3-PROTEIN-IDEMPOTENT] no re-cerrar en re-assemble
         meal["protein"] = round(cur_p + chosen.protein * f)
         meal["carbs"] = round(_meal_macro_num(meal.get("carbs")) + chosen.carbs * f)
@@ -14148,7 +14255,20 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
         for m, idx in items:
             ings = m.get("ingredients")
             orig = str(ings[idx])
-            quant, _f = _quant(_resc(orig, factor))   # escala hacia target + re-snap a cocinable
+            # [P2-TRIM-DUST-FLOOR · 2026-07-06] piso per-línea 5g: el trim jamás deja una línea
+            # decorativa ("¼ cdta de mantequilla de maní (1g)" vivo, plan cb5f8480). Línea ya al
+            # piso → no se trima más; el factor por-línea se acota para no cruzarlo.
+            _factor_line = factor
+            try:
+                _g_fn = getattr(db, "grams_from_ingredient_string", None)
+                _g_orig = float(_g_fn(orig) or 0.0) if _g_fn else 0.0
+            except Exception:
+                _g_orig = 0.0
+            if _g_orig and _g_orig > 0:
+                if _g_orig <= 5.0:
+                    continue
+                _factor_line = max(factor, 5.0 / _g_orig)
+            quant, _f = _quant(_resc(orig, _factor_line))   # escala hacia target + re-snap a cocinable
             if quant == orig:
                 continue
             _mo = db.macros_from_ingredient_string(orig) or {}
@@ -14167,7 +14287,7 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
                 # escalarse por el MISMO factor efectivo, no solo por `factor` — si no, la lista de compras
                 # (que prefiere ingredients_raw) diverge en magnitud de la receta cuantizada. Espejo del
                 # lockstep de _apply_portion_quantization.
-                raw[idx] = _resc(str(raw[idx]), factor * _f)
+                raw[idx] = _resc(str(raw[idx]), _factor_line * _f)
             applied = True
         return applied
     except Exception as e:
@@ -14230,7 +14350,20 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
         for m, idx in items:
             ings = m.get("ingredients")
             orig = str(ings[idx])
-            quant, _f = _quant(_resc(orig, factor))   # escala hacia target + re-snap a cocinable
+            # [P2-TRIM-DUST-FLOOR · 2026-07-06] piso per-línea 5g: el trim jamás deja una línea
+            # decorativa ("¼ cdta de mantequilla de maní (1g)" vivo, plan cb5f8480). Línea ya al
+            # piso → no se trima más; el factor por-línea se acota para no cruzarlo.
+            _factor_line = factor
+            try:
+                _g_fn = getattr(db, "grams_from_ingredient_string", None)
+                _g_orig = float(_g_fn(orig) or 0.0) if _g_fn else 0.0
+            except Exception:
+                _g_orig = 0.0
+            if _g_orig and _g_orig > 0:
+                if _g_orig <= 5.0:
+                    continue
+                _factor_line = max(factor, 5.0 / _g_orig)
+            quant, _f = _quant(_resc(orig, _factor_line))   # escala hacia target + re-snap a cocinable
             if quant == orig:
                 continue
             _mo = db.macros_from_ingredient_string(orig) or {}
@@ -14245,7 +14378,7 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
             raw = m.get("ingredients_raw")
             if isinstance(raw, list) and len(raw) == len(ings):
                 # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
-                raw[idx] = _resc(str(raw[idx]), factor * _f)
+                raw[idx] = _resc(str(raw[idx]), _factor_line * _f)
             applied = True
         return applied
     except Exception as e:
@@ -17240,10 +17373,13 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         _skip_cook_pf = (no_cook or "cocid" in _nm_pf
                          or any(h in _nm_pf for h in _NO_COOK_SAFE_PROTEIN_HINT)
                          or any(h in _nm_pf for h in _PRECOOKED_PROTEIN_HINT))
-        line = f"{grams_food}g de {nm}{'' if _skip_cook_pf else ' cocido'}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
-        target_meal.setdefault("ingredients", []).append(line)
-        if isinstance(target_meal.get("ingredients_raw"), list):
-            target_meal["ingredients_raw"].append(line)
+        # [P1-CLOSER-INTEGRATE · 2026-07-06] mismo contrato del callsite principal: escalar la
+        # línea congruente existente antes que apilar una nueva.
+        if not _scale_congruent_protein_line(target_meal, nm, grams_food, db):
+            line = f"{grams_food}g de {nm}{'' if _skip_cook_pf else ' cocido'}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
+            target_meal.setdefault("ingredients", []).append(line)
+            if isinstance(target_meal.get("ingredients_raw"), list):
+                target_meal["ingredients_raw"].append(line)
         tp = _meal_macro_num(target_meal.get("protein")) + p_add
         tc = _meal_macro_num(target_meal.get("carbs")) + c_add
         tf = _meal_macro_num(target_meal.get("fats")) + f_add
@@ -21259,7 +21395,7 @@ def _rewrite_cured_ghost_protein_steps(days) -> int:
                                       if isinstance(i, str) and pt in _sa_cg(i.lower())), None)
                         if _line:
                             _repl_food = _re.sub(
-                                r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?", "",
+                                _LEAD_QTY_UNIT_STRIP_RE, "",
                                 _re.sub(r"\([^)]*\)", "", _line)).strip(" ,.-")
                             break
                     if _repl_food:
@@ -21309,7 +21445,7 @@ def _reconcile_display_missing_in_raw(days) -> int:
                 for s in ings:
                     if not isinstance(s, str) or not s.strip():
                         continue
-                    _food = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?",
+                    _food = _re.sub(_LEAD_QTY_UNIT_STRIP_RE,
                                     "", _sa_rr(s.lower())).strip()
                     _toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _food) if len(t) >= 4]
                     if not _toks:
@@ -21493,8 +21629,11 @@ def _align_closer_note_food_names(meal: dict) -> int:
             _cands = []
             for _ing in ings:
                 _bare = _re.sub(r"\([^)]*\)", "", str(_ing))
-                _bare = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+|del\s+)?", "",
+                _bare = _re.sub(_LEAD_QTY_UNIT_STRIP_RE, "",
                                 _bare).strip(" ,.-")
+                # [P2-LEAD-STRIP-UNITS · 2026-07-06] jamás copiar el sufijo " cocido" de la
+                # línea al paso ("Cocina filete de pescado blanco cocido a la plancha" vivo).
+                _bare = _re.sub(r"\s+cocid[oa]s?\s*$", "", _bare, flags=_re.IGNORECASE).strip()
                 if not _bare:
                     continue
                 _bare_toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _sa_al(_bare.lower()))
@@ -21575,7 +21714,10 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                     _noun = _sa(m_cn.group(2).lower()).rstrip("s")
                     if _noun not in _QTYSYNC_COUNT_NOUNS:
                         continue
+                    # [P1-CLOSER-INTEGRATE · 2026-07-06] tails IGNORABLES: "4 huevos enteros" +
+                    # "1 huevo" son el mismo alimento ("entero" no discrimina — vivo en cb5f8480).
                     _tail = _sa((m_cn.group(3) or "").strip().lower())
+                    _tail = " ".join(w for w in _tail.split() if not w.startswith("enter"))
                     cgroups.setdefault((_noun, _tail), []).append(
                         (idx, int(m_cn.group(1)), (m_cn.group(3) or "").rstrip()))
                 for (_noun, _tail), entries in cgroups.items():
@@ -21584,12 +21726,60 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                     total_n = sum(n for _, n, _t in entries)
                     first_idx = entries[0][0]
                     _sing, _plur, _pat = _QTYSYNC_COUNT_NOUNS[_noun]
-                    new_line = f"{total_n} {_sing if total_n == 1 else _plur}{entries[0][2]}"
+                    # el tail más largo del grupo preserva el calificativo ("enteros").
+                    _out_tail = max((t for _, _n, t in entries), key=len)
+                    new_line = f"{total_n} {_sing if total_n == 1 else _plur}{_out_tail}"
                     ings[first_idx] = new_line
                     if isinstance(raw, list):
                         raw[first_idx] = new_line
                     drop.update(idx for idx, _n, _t in entries[1:])
                     merged += len(entries) - 1
+                # [P2-CROSSFORM-CONSOLIDATE · 2026-07-06] ("2 cebollas" + "100g Cebolla" del plan
+                # cb5f8480 — el rebalance añade en gramos lo que el LLM listó por conteo) Merge
+                # CROSS-FORMA para el set curado con peso unitario conocido: los gramos se
+                # convierten a unidades (redondeo a ½) y se suman a la línea de conteo.
+                try:
+                    for _noun_cf, _uw in _COUNT_UNIT_WEIGHT_G.items():
+                        _cnt_idx = _gram_idx = None
+                        _cnt_val = _gram_val = 0.0
+                        for idx, ing in enumerate(ings):
+                            if idx in drop:
+                                continue
+                            _s_cf = str(ing)
+                            _il_cf = _sa(_s_cf.lower())
+                            m_c2 = _re.match(r"^\s*(\d+(?:[.,]\d+)?|[½¼¾])\s+([a-záéíóúñü]+)", _il_cf)
+                            m_g2 = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b\.?\s*(?:de\s+)?(.+)$", _il_cf)
+                            if m_g2 and _sa(m_g2.group(2).split()[0].lower()).rstrip("s") == _noun_cf \
+                                    and len(m_g2.group(2).split()) == 1 and _gram_idx is None:
+                                _gram_idx, _gram_val = idx, float(m_g2.group(1).replace(",", "."))
+                            elif m_c2 and _sa(m_c2.group(2).lower()).rstrip("s") == _noun_cf \
+                                    and _cnt_idx is None:
+                                try:
+                                    _cnt_val = float(str(m_c2.group(1)).replace(",", "."))
+                                except ValueError:
+                                    _cnt_val = _QTYSYNC_FRAC_MAP.get(m_c2.group(1), 0.0)
+                                _cnt_idx = idx
+                        if _cnt_idx is None or _gram_idx is None or _gram_val <= 0:
+                            continue
+                        _units = _gram_val / float(_uw)
+                        _total_u = round((_cnt_val + _units) * 2.0) / 2.0
+                        if _total_u <= 0:
+                            continue
+                        _int_u = int(_total_u)
+                        _half = abs(_total_u - _int_u - 0.5) < 1e-6
+                        _disp_n = (f"{_int_u}½" if (_half and _int_u) else ("½" if _half else str(_int_u)))
+                        if _noun_cf in _QTYSYNC_COUNT_NOUNS:
+                            _sing2, _plur2, _p2 = _QTYSYNC_COUNT_NOUNS[_noun_cf]
+                        else:
+                            _sing2, _plur2 = _noun_cf, _noun_cf + "s"
+                        new_line = f"{_disp_n} {_plur2 if _total_u > 1 else _sing2}"
+                        ings[_cnt_idx] = new_line
+                        if isinstance(raw, list):
+                            raw[_cnt_idx] = new_line
+                        drop.add(_gram_idx)
+                        merged += 1
+                except Exception:
+                    pass
                 if drop:
                     meal["ingredients"] = [x for i, x in enumerate(ings) if i not in drop]
                     if isinstance(raw, list):
