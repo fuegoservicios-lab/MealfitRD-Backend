@@ -9278,6 +9278,14 @@ SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 
 # Ambos nacen OFF (convención medir→actuar); flip por env sin redeploy. Fail-open al reviewer estándar.
 REVIEWER_THINKING_ENABLED = _env_bool("MEALFIT_REVIEWER_THINKING", False)
 REVIEWER_THINKING_TIMEOUT_S = _env_int("MEALFIT_REVIEWER_THINKING_TIMEOUT_S", 90, lambda v: 30 <= v <= 300)
+# [P2-THINKING-EFFORT · 2026-07-06] (sugerencia del owner) DeepSeek V4 permite GRADUAR el
+# esfuerzo del thinking (low→max). Knob opcional: vacío = comportamiento actual (enabled sin
+# effort); "low"/"medium"/"high"/"max" añade `effort` al extra_body del reviewer thinking.
+# Fail-open: si el API rechaza el campo, el except del reviewer cae al estándar (sin thinking).
+# A/B sin redeploy — subir a "high"/"max" en perfiles clínicos complejos si el veredicto lo pide.
+REVIEWER_THINKING_EFFORT = str(_env_str("MEALFIT_REVIEWER_THINKING_EFFORT", "")).strip().lower()
+if REVIEWER_THINKING_EFFORT not in ("", "low", "medium", "high", "max"):
+    REVIEWER_THINKING_EFFORT = ""
 SURGICAL_PRO_THINKING_ENABLED = _env_bool("MEALFIT_SURGICAL_PRO_THINKING", False)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
@@ -12576,6 +12584,33 @@ _COUNT_UNIT_WEIGHT_G = {"huevo": 50.0, "cebolla": 150.0, "tomate": 120.0, "papa"
                         "zanahoria": 60.0, "guineo": 120.0, "platano": 150.0, "aguacate": 200.0,
                         "manzana": 180.0, "mandarina": 100.0}
 
+# [P1-RAW-MISALIGN-TRACE · 2026-07-06] Tracer de PRIMERA divergencia display↔raw: la corrida de
+# validación (plan 6a078619) confirmó un 2º desalineador post-veg-ghost (raw congelado en un
+# snapshot pre-quantize con decimales del solver mientras el display siguió evolucionando —
+# tostadas sin pan en la lista). Cada probe marca el meal con el stage donde la divergencia
+# apareció por PRIMERA vez (`_misalign_traced`, persiste al plan) → el próximo forense nombra al
+# actor por intervalo. Telemetría pura, O(len) por probe. Rollback: MEALFIT_RAW_MISALIGN_TRACER=false.
+RAW_MISALIGN_TRACER_ENABLED = _env_bool("MEALFIT_RAW_MISALIGN_TRACER", True)
+
+
+def _trace_misalign(days, stage: str) -> None:
+    """[P1-RAW-MISALIGN-TRACE · 2026-07-06] Ver comment del knob. Marca solo la PRIMERA vez."""
+    if not RAW_MISALIGN_TRACER_ENABLED:
+        return
+    try:
+        for _d in days or []:
+            for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(_m, dict) or _m.get("_misalign_traced"):
+                    continue
+                _a = _m.get("ingredients")
+                _b = _m.get("ingredients_raw")
+                if isinstance(_a, list) and isinstance(_b, list) and len(_a) != len(_b):
+                    _m["_misalign_traced"] = stage
+                    logger.warning(f"[P1-RAW-MISALIGN-TRACE] PRIMERA divergencia en stage='{stage}' "
+                                   f"display={len(_a)} raw={len(_b)} | meal={str(_m.get('name'))[:45]}")
+    except Exception:
+        pass
+
 
 def _inject_blanch_for_citrus_marinade(meal: dict) -> bool:
     """[P1-SEAFOOD-MARINADE-BLANCH · 2026-07-05] Repara el ceviche/marinado crudo de marisco: si el
@@ -13334,7 +13369,10 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         _steps_blob = _sa_cs(" ".join(
             str(s) for s in rec
             if isinstance(s, str) and not _is_recipe_safety_note_step(s) and "💪" not in s).lower())
-        if _stems and any(_re.search(r"\b" + _re.escape(st), _steps_blob) for st in _stems):
+        # [P2-STEM-BOUNDED · 2026-07-06] límite final ("agua"⊄"aguacate" — el atún-en-agua del
+        # plan 6a078619 quedó sin paso porque el Montaje decía "cubos de aguacate").
+        if _stems and any(_re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _steps_blob)
+                          for st in _stems):
             return False  # (b) la receta ya trabaja el alimento → sin paso genérico
         _step = f"💪 {_closer_protein_step_text(nm, no_cook)}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
@@ -13376,7 +13414,8 @@ def _scale_congruent_protein_line(meal: dict, nm: str, grams: float, db) -> bool
             s = str(ing)
             _il = _sa_cg(s.lower())
             m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _il)
-            if not m_g or not _re.search(r"\b" + _re.escape(_stem), _il):
+            # [P2-STEM-BOUNDED · 2026-07-06] límite final (agua⊄aguacate).
+            if not m_g or not _re.search(r"\b" + _re.escape(_stem) + r"(?:s|es)?\b", _il):
                 continue
             _g_line = float(m_g.group(1).replace(",", "."))
             if _g_line <= 0:
@@ -15198,7 +15237,10 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
                     _stems.add(t[:-2])
                 if t.endswith("s") and len(t) > 4:
                     _stems.add(t[:-1])
-            if any(_re2.search(r"\b" + _re2.escape(st), recipe_low) for st in _stems):
+            # [P2-STEM-BOUNDED · 2026-07-06] límite de palabra al FINAL también (solo plural
+            # opcional): el prefijo abierto hacía "agua"⊂"aguacate" → "atún en agua" contaba
+            # como usado porque el Montaje decía "cubos de aguacate" (vivo, plan 6a078619).
+            if any(_re2.search(r"\b" + _re2.escape(st) + r"(?:s|es)?\b", recipe_low) for st in _stems):
                 continue  # algún token del ingrediente SÍ aparece en los pasos (singular o plural)
             missing.append(str(bare).strip())
         if not missing:
@@ -20619,6 +20661,12 @@ _LINE_GRAM_CAP_EXEMPT = ("agua", "caldo")
 # después sin re-fire). Techo servible de QUESO en meriendas; yogurt exento (un bowl de 200g es
 # normal). Corre en el realism-cap (assemble + boundary) → cubre el origen que sea.
 SNACK_CHEESE_CAP_G = _env_int("MEALFIT_SNACK_CHEESE_CAP_G", 120, lambda v: 60 <= v <= 300)
+# [P2-ORGAN-MEAT-CAP · 2026-07-06] (vivo: "215 g de hígado de res" en UNA comida — porción
+# culturalmente ~100-150g Y prudencia de retinol: hígado ≈5.7mg vit A/100g, 215g ≈ 12mg
+# preformados en un plato). Techo per-línea de vísceras; el déficit lo re-cierra el closer
+# redistribuyendo (patrón del cap de proteína).
+ORGAN_MEAT_CAP_G = _env_int("MEALFIT_ORGAN_MEAT_CAP_G", 150, lambda v: 80 <= v <= 300)
+_ORGAN_MEAT_TOKENS = ("higado", "molleja", "rinon", "riñon", "viscera", "mondongo", "pana")
 _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
                        # [P2-CLARAS-CAP-KNOB-PARITY · 2026-07-05] era 8.0 hardcoded y el plato vivo
                        # "8 claras de huevo (267g)" pasó justo al ras mientras el knob del motor dice
@@ -20636,7 +20684,10 @@ _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
                        # de 1 persona (plan 55846e5e) — el cap de frutas-volumen cubre tazas/
                        # gramos pero no CONTEOS de frutas grandes.
                        "lechosa": 1.0, "papaya": 1.0, "melon": 1.0, "sandia": 1.0,
-                       "pina": 1.0, "mango": 2.0}
+                       "pina": 1.0, "mango": 2.0,
+                       # [P2-ORGAN-MEAT-CAP · 2026-07-06] "2½ puerro mediano (249 g)" para unos
+                       # bollitos con 55g de yuca (vivo) — el aromático solo tenía cap en tazas.
+                       "puerro": 1.0}
 # [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
 # captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
 # cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
@@ -20705,6 +20756,11 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                               and "merienda" in _sa(str(meal.get("meal", "")).lower())
                               and _re.search(r"\bqueso", il)):
                             factor = float(SNACK_CHEESE_CAP_G) / cur_g
+                        # [P2-ORGAN-MEAT-CAP · 2026-07-06] 1.8) vísceras sobre el techo per-línea
+                        # ("215 g de hígado de res" — porción cultural + prudencia de retinol).
+                        elif (cur_g > float(ORGAN_MEAT_CAP_G)
+                              and any(_re.search(r"\b" + t, il) for t in _ORGAN_MEAT_TOKENS)):
+                            factor = float(ORGAN_MEAT_CAP_G) / cur_g
                     # 2) tazas de aromáticos/hierbas/frutas-volumen sobre el techo
                     # [P1-REALISM-CAPS-EXT] lead con fracción unicode/mixta ("3¾ taza de melón") —
                     # el regex decimal previo no la parseaba y las líneas post-quantize la usan.
@@ -20947,6 +21003,10 @@ _STEP_CARB_GHOSTS = (
     ("casabe", "30g de casabe", ()),
     ("batata", "150g de batata", ("harina de batata",)),
     ("yuca", "150g de yuca", ("harina de yuca", "almidon de yuca", "casabe")),
+    # [P2-STEM-BOUNDED · 2026-07-06] (vivo, plan 6a078619: "Tuesta las lonjas de pan…" con CERO
+    # pan en ingredients — fallout del desalineador; el ghost lo materializa venga de donde venga).
+    ("lonjas de pan", "2 lonjas de pan integral", ()),
+    ("pan integral", "2 lonjas de pan integral", ("lonjas de pan",)),
 )
 # [P1-STEP-NUT-GHOST · 2026-07-05] (screenshots plan 3aa6e58a: panqueques con "pica los MEREYES /
 # espolvorea los mereyes" y CERO mereyes en ingredients[] → no se compran, receta rota al cocinar).
@@ -21559,7 +21619,10 @@ def _reconcile_display_missing_in_raw(days) -> int:
                     _toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _food) if len(t) >= 4]
                     if not _toks:
                         continue
-                    if _toks[0] not in _raw_blob:
+                    # [P2-STEM-BOUNDED · 2026-07-06] token bounded (agua⊄aguacate): el substring
+                    # abierto hacía que una línea de agua/atún-en-agua pareciera presente en un
+                    # raw que solo tenía aguacate → la línea jamás ganaba visibilidad en compras.
+                    if not _re.search(r"\b" + _re.escape(_toks[0]) + r"(?:s|es)?\b", _raw_blob):
                         raw.append(s)
                         _raw_blob += " " + _sa_rr(s.lower())
                         added += 1
@@ -21690,6 +21753,22 @@ def _fix_cooked_raw_annotations(days) -> int:
                     for _i, _s in enumerate(rec):
                         if isinstance(_s, str):
                             _new = _fix_str(_s)
+                            if _new != _s:
+                                rec[_i] = _new
+                                fixed += 1
+                    # [P2-SPECIES-VERB-CLEANUP · 2026-07-06] (vivo: "Pela filete de pescado
+                    # blanco y desvena si es necesario… cocina hasta que estén rosados" — la
+                    # sustitución camarón→pescado renombró el alimento pero dejó los verbos de
+                    # ESPECIE). Sin camarón/langostino en el plato: strip de "desvena…" y
+                    # "hasta que estén rosados" → "hasta que esté bien cocido".
+                    _ings_sv = _sa_cr(" ".join(str(x) for x in (meal.get("ingredients") or [])).lower())
+                    if not _re.search(r"\b(?:camaron|langostino|gamba)", _ings_sv):
+                        for _i, _s in enumerate(rec):
+                            if not isinstance(_s, str):
+                                continue
+                            _new = _re.sub(r"\s*(?:y\s+)?[Dd]esvena(?:r|l[oa]s?)?[^.,;]*", "", _s)
+                            _new = _re.sub(r"hasta que est[eé]n?\s+rosad[oa]s?",
+                                           "hasta que esté bien cocido", _new)
                             if _new != _s:
                                 rec[_i] = _new
                                 fixed += 1
@@ -23240,7 +23319,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _oce:
             logger.warning(f"[P1-RECIPE-OFFCATALOG-CONDIMENT] callsite en assemble no-op: {type(_oce).__name__}: {_oce}")
 
+    _trace_misalign(days, "pre_engine")  # [P1-RAW-MISALIGN-TRACE] estado post day-gen/critique
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
+    _trace_misalign(days, "post_macro_engine")
 
     # [P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Cap DURO de porción de víver alto-IG (batata/yuca/papa/
     # plátano maduro/mangú/casabe) ≤150g por comida para DM2 — corre POST-sizing (el motor ya cuadró los
@@ -23545,6 +23626,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         _rewrite_cured_ghost_protein_steps(days)
     except Exception as _cg_as_e:
         logger.warning(f"[P1-CURED-GHOST-STEPS] assemble no-op: {type(_cg_as_e).__name__}: {_cg_as_e}")
+    _trace_misalign(days, "post_engine_seam")  # [P1-RAW-MISALIGN-TRACE] tras closers/trims/sodio
     # [P2-COOKED-RAW-ANNOTATION + P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] anotación cocido/crudo
     # imposible saneada ANTES de que compras parsee el raw + nota 💪 alineada a la línea.
     # [P2-MISE-COOK-SPLIT · 2026-07-06] + cocción atrapada en el Mise → TdF sintetizado (el gate
@@ -23897,6 +23979,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result = await _adb(humanize_plan_ingredients, result)
     except Exception as e:
         logger.warning(f"⚠️ [HUMANIZE] Error al humanizar ingredientes: {e}")
+    _trace_misalign(result.get("days"), "post_humanize")  # [P1-RAW-MISALIGN-TRACE]
 
     # [P2-DELIVERED-MACROS · 2026-07-01] campos honestos "entregado real" junto al header-target.
     refresh_delivered_macros(result)
@@ -25947,15 +26030,20 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # REVIEWER_SYSTEM_PROMPT; ReviewResult tiene defaults en todos los campos opcionales).
         _rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data))
         if _rev_thinking:
+            # [P2-THINKING-EFFORT · 2026-07-06] effort graduable (low→max) vía knob opcional.
+            _think_body = {"type": "enabled"}
+            if REVIEWER_THINKING_EFFORT:
+                _think_body["effort"] = REVIEWER_THINKING_EFFORT
             reviewer_llm = ChatDeepSeek(
                 model=_reviewer_model,
                 temperature=0.1,
                 max_retries=0,
                 timeout=int(REVIEWER_THINKING_TIMEOUT_S),
-                extra_body={"thinking": {"type": "enabled"}},
+                extra_body={"thinking": _think_body},
             ).with_structured_output(ReviewResult, method="json_mode")
             logger.info(f"🧠 [P1-REVIEWER-THINKING] Reviewer clínico con thinking mode "
-                        f"({_reviewer_model}, timeout={REVIEWER_THINKING_TIMEOUT_S}s).")
+                        f"({_reviewer_model}, timeout={REVIEWER_THINKING_TIMEOUT_S}s"
+                        f"{', effort=' + REVIEWER_THINKING_EFFORT if REVIEWER_THINKING_EFFORT else ''}).")
         else:
             reviewer_llm = ChatDeepSeek(
                 model=_reviewer_model,
