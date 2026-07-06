@@ -13347,6 +13347,15 @@ def _scale_congruent_protein_line(meal: dict, nm: str, grams: float, db) -> bool
         ings = meal.get("ingredients")
         if not isinstance(ings, list) or float(grams) <= 0:
             return False
+        # [P1-INTEGRATE-ALIGN-GUARD · 2026-07-06] (regresión vivida: plan d4a001eb, protein
+        # 0.333) la sincronización del raw es POSICIONAL — con display/raw DESALINEADOS (crónico:
+        # 7-10 de 12 meals en los planes recientes) el idx escala la línea EQUIVOCADA del raw y
+        # el truth-up (raw-preferido) revierte la proteína cerrada. Desalineado → False: el
+        # caller APPENDEA a ambos extremos (posición-independiente, el comportamiento seguro
+        # previo). El integrate solo aplica cuando ambas listas alinean 1:1.
+        raw = meal.get("ingredients_raw")
+        if isinstance(raw, list) and len(raw) != len(ings):
+            return False
         from nutrition_db import rescale_ingredient_string as _resc_cg
         from constants import strip_accents as _sa_cg
         _toks = [t for t in _re.split(r"[^a-z]+", _sa_cg(str(nm).lower()))
@@ -13368,7 +13377,6 @@ def _scale_congruent_protein_line(meal: dict, nm: str, grams: float, db) -> bool
             if not _new or _new == s:
                 return False
             ings[idx] = _new
-            raw = meal.get("ingredients_raw")
             if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
                 try:
                     raw[idx] = _resc_cg(str(raw[idx]), _factor)
@@ -18627,6 +18635,26 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
             total += _npd; parts.append(f"display_polish={_npd}")
     except Exception as _hpb_e:
         logger.warning(f"[P2-BOUNDARY-DISPLAY-POLISH] prettify en boundary no-op: {type(_hpb_e).__name__}: {_hpb_e}")
+    # [P1-INTEGRATE-ALIGN-GUARD · 2026-07-06] TELEMETRÍA de desalineación display↔raw: crónica
+    # (7-10 de 12 meals en los planes recientes — raw con "Sal al gusto"/"ajo" que display no
+    # tiene, longitudes distintas) y ROMPE todo pase posicional (lockstep por idx). Este WARN
+    # per-meal es la data para cazar al pase culpable; el fix de raíz es el P1 abierto.
+    try:
+        _mis_n = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if not isinstance(_m, dict):
+                    continue
+                _a = _m.get("ingredients")
+                _b = _m.get("ingredients_raw")
+                if isinstance(_a, list) and isinstance(_b, list) and len(_a) != len(_b):
+                    _mis_n += 1
+                    logger.warning(f"[P1-RAW-MISALIGN] display={len(_a)} raw={len(_b)} | "
+                                   f"meal={str(_m.get('name'))[:45]}")
+        if _mis_n:
+            parts.append(f"raw_misalign={_mis_n}")
+    except Exception:
+        pass
     # [P2-MISE-COOK-SPLIT · 2026-07-06] cocción atrapada en el Mise sin pilar TdF → split ANTES
     # del lint (el advisory "falta El Toque de Fuego" era falso-positivo para el usuario).
     try:
