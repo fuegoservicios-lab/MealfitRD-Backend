@@ -20247,13 +20247,28 @@ def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None) -> s
 # proteína NOMBRADA → renombrable limpio). tooltip-anchor: P1-EGG-PROTAGONIST-SURPLUS
 _EGG_INTRINSIC_HEAD_RX = _re.compile(
     r"^\s*(?:revoltillo|revuelto|tortilla|omelet|omelette|frittata|huevos?\b)", _re.IGNORECASE)
-_EGG_NAME_DESCRIPTOR_RX = _re.compile(
-    r"\s*(?:,\s*)?\b(?:con|y|a\s+la|al|sobre|acompañad[oa]s?\s+de|rellen[oa]s?\s+de)\s+"
-    r"huevos?(?:\s+(?:revueltos?|fritos?|duros?|cocidos?|escalfados?|pochados?|"
-    r"estrellados?|tibios?|pasados?\s+por\s+agua|a\s+la\s+plancha))?",
+# [P1-EGG-CLARAS-PHRASE · 2026-07-06] Frase de huevo NOMBRADA (sustantivo huevo/claras/yema +
+# modo de cocción opcional) para reemplazo IN-PLACE por la proteína nueva. Cierra el residual
+# medido en vivo: "Bowl de Claras Revueltas con Berro" (cabeza 'bowl', NO intrínseco) + "Tortilla
+# de Claras" el mismo día → el gate seguía viendo HUEVO×2. El descriptor previo solo reconocía
+# "con huevo"; "de Claras" y el sustantivo 'claras'/'yemas' se escapaban. Reemplazo in-place →
+# "Bowl de Queso blanco con Berro" (limpio, sin manglear multi-componente).
+_EGG_NAME_PHRASE_RX = _re.compile(
+    r"\b(?:huevos?|claras?|yemas?)\b(?:\s+(?:revueltos?|revueltas?|fritos?|fritas?|duros?|"
+    r"duras?|cocidos?|cocidas?|escalfad[oa]s?|pochad[oa]s?|estrellad[oa]s?|tibios?|tibias?))?",
     _re.IGNORECASE)
 _EGG_LABEL_DISPLAY = {"pollo": "Pechuga de pollo", "queso": "Queso blanco",
                       "yogurt": "Yogurt griego"}
+
+
+def _replace_egg_phrase_in_name(name, new_disp):
+    """Reemplaza la 1ª frase de huevo del nombre por `new_disp` (in-place, preserva el resto).
+    None si el nombre no menciona huevo/claras/yema (nada que renombrar)."""
+    orig = str(name or "")
+    if not _EGG_NAME_PHRASE_RX.search(orig):
+        return None
+    out = _EGG_NAME_PHRASE_RX.sub(lambda _m: new_disp, orig, count=1)
+    return _re.sub(r"\s{2,}", " ", out).strip(" ,·-")
 # El huevo NOMBRADO con modo de cocción ("con Huevo Revuelto/Frito/Duro") es un acompañante
 # claro, reasignable aunque el plato base sea binder-token (arepita/torta): en "Arepitas con
 # Huevo Revuelto" el huevo es la guarnición, no el ligante de la masa.
@@ -20266,23 +20281,6 @@ def _egg_is_intrinsic_dish(name) -> bool:
     """El huevo es la IDENTIDAD del plato (revoltillo/tortilla/omelet/frittata como cabeza)."""
     from constants import strip_accents as _sa_id
     return bool(_EGG_INTRINSIC_HEAD_RX.match(_sa_id(str(name or "").strip())))
-
-
-def _strip_egg_from_name(name):
-    """Quita el descriptor de huevo del nombre ('X con Huevos Revueltos' → 'X'). Devuelve el
-    nombre limpio SOLO si realmente quitó el huevo (queda un nombre no vacío sin 'huevo'
-    residual), o None (deja al gate/retry decidir sin renombrar mal)."""
-    from constants import strip_accents as _sa_sn
-    orig = str(name or "").strip()
-    if not orig or not _EGG_NAME_DESCRIPTOR_RX.search(orig):
-        return None  # no hay descriptor de huevo NOMBRADO que quitar
-    cleaned = _EGG_NAME_DESCRIPTOR_RX.sub("", orig)
-    # conector colgante tras remover ("Arepitas  y Guineo" → "Arepitas y Guineo")
-    cleaned = _re.sub(r"\s{2,}", " ", cleaned).strip(" ,·-")
-    cleaned = _re.sub(r"^\s*(?:con|y|de)\s+", "", cleaned, flags=_re.IGNORECASE).strip()
-    if not cleaned or _re.search(r"\bhuevos?\b", _sa_sn(cleaned.lower())):
-        return None
-    return cleaned
 
 
 def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
@@ -20430,10 +20428,14 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                 _nl = _sa_eh(str(m.get("name", "")).lower())
                                 return (any(t in _nl for t in _EGG_BINDER_DISH_TOKENS)
                                         and not _EGG_SIDE_MODIFIER_RX.search(_nl))
+                            # renombrable: huevo/claras/yema NOMBRADO en el nombre, cabeza NO
+                            # intrínseca (revoltillo/tortilla/omelet), no aglutinante. La frase de
+                            # huevo se reemplaza in-place por la proteína nueva.
                             _renameable = [
                                 m for m in _egg_now
-                                if not _egg_is_intrinsic_dish(m.get("name"))
-                                and not _protected_binder(m) and _strip_egg_from_name(m.get("name"))]
+                                if _EGG_NAME_PHRASE_RX.search(str(m.get("name", "")))
+                                and not _egg_is_intrinsic_dish(m.get("name"))
+                                and not _protected_binder(m)]
                             # comidas-huevo que quedarán si reasigno TODAS las renombrables:
                             _unavoidable = [m for m in _egg_now if m not in _renameable]
                             # si NINGUNA es inevitable, conserva la 1ª renombrable (≥1 comida-huevo ok).
@@ -20441,15 +20443,13 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                             for _meal in _to_reassign:
                                 if fixes_left <= 0:
                                     break
-                                _clean = _strip_egg_from_name(_meal.get("name"))
-                                if not _clean:
-                                    continue
                                 _lab = _replace_meal_egg_lines(_d, _meal, form_data, db)
                                 if _lab is None:
                                     continue
-                                _meal["name"] = _clean
-                                _reflect_added_protein_in_name(
-                                    _meal, _EGG_LABEL_DISPLAY.get(_lab, _lab), _sa_eh)
+                                _nm2 = _replace_egg_phrase_in_name(
+                                    _meal.get("name"), _EGG_LABEL_DISPLAY.get(_lab, _lab))
+                                if _nm2:
+                                    _meal["name"] = _nm2
                                 fixes_left -= 1
                                 fixed += 1
                                 logger.info(f"🍳 [P1-EGG-PROTAGONIST-SURPLUS] Día {_d.get('day', '?')}: "

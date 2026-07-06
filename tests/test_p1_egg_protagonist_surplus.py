@@ -56,12 +56,7 @@ def test_intrinsic_vs_added_classification(go):
     assert not go._egg_is_intrinsic_dish("Arepitas con Huevo Revuelto")
 
 
-def test_strip_egg_from_name(go):
-    assert go._strip_egg_from_name("Puré de Batata con Huevos Revueltos") == "Puré de Batata"
-    assert go._strip_egg_from_name("Ensalada Fresca con Huevo Duro") == "Ensalada Fresca"
-    # sin descriptor de huevo en el nombre → None (no renombra a ciegas)
-    assert go._strip_egg_from_name("Croquetas de Yuca") is None
-    assert go._strip_egg_from_name("Revoltillo de Huevo") is None  # quedaría vacío/residual
+# (los tests del reemplazo de frase huevo/claras viven en test_p1_egg_claras_phrase.py)
 
 
 # ─────────── el caso vivo: 3 comidas-huevo, mezcla intrínseco + añadido ───────────
