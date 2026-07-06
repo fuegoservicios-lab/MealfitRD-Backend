@@ -2397,14 +2397,29 @@ def _resolve_brand_default(name: str, defaults: dict):
     # legumbres; la funda seca del master sigue siendo la base coherente.
     _is_legume = bool(re.search(
         r"\b(habichuela|frijol|lenteja|garbanzo|guandul|arveja)", key))
+    # [P2-SPICE-MOLIDO-DEFAULT · 2026-07-06] (review #13) Especias: la forma MOLIDA es
+    # la canónica de cocina (la receta pide "comino molido") — excluirla por el token
+    # 'molido' dejaba como default "Comino Entero 1 Oz" (el entero no sustituye al
+    # molido sin molinillo). Para especias: 'molido/molida' deja de ser modifier, y
+    # 'entero/entera' pasa a descartarse cuando existe alternativa (fail-open si solo
+    # hay entero).
+    _is_spice = bool(re.search(
+        r"\b(comino|oregano|pimienta|canela|curcuma|jengibre|nuez moscada|clavo)\b", key))
+    _mod_toks = _BRAND_DEFAULT_MODIFIER_TOKENS if not _is_spice else tuple(
+        t for t in _BRAND_DEFAULT_MODIFIER_TOKENS if t not in ("molido", "molida"))
     out = []
     for p in pkgs:
         lbl = _norm_pref_food(p.get("label"))
-        if any(t in lbl and t not in key for t in _BRAND_DEFAULT_MODIFIER_TOKENS):
+        if any(t in lbl and t not in key for t in _mod_toks):
             continue
         if _is_legume and str(p.get("unit") or "").strip().lower() == "lata":
             continue
         out.append(p)
+    if _is_spice and out:
+        _sin_entero = [p for p in out
+                       if not re.search(r"\benter[oa]s?\b", _norm_pref_food(p.get("label")))]
+        if _sin_entero:
+            out = _sin_entero
     return out or None
 
 
@@ -2908,6 +2923,28 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             sku_size_g = _mp_sel["grams"]
             sku_label = _mp_sel["label"] or _sku_size_label(sku_size_g, db_container)
             market_pkg_price = _mp_sel["price"]
+            # [P2-PACK-UNITS-MATCH · 2026-07-06] (review #13) El envase declara sus UNIDADES
+            # ("Burrito 5 unid 356 gr") y la demanda del ítem nació CONTABLE (el aggregator
+            # convirtió unidades→gramos con la density del MASTER). Si esa density (48g/
+            # tortilla) difiere de la real del SKU (356/5 = 71g), contar por gramos
+            # sub-compra: 4 paquetes = 20 tortillas para ~30 necesarias. Recontar por
+            # unidades reales: ceil(unidades_necesarias / unid_por_envase).
+            _upp_m = re.search(r"(\d+)\s*unid", str(sku_label), re.IGNORECASE)
+            if _upp_m and density_per_u and float(density_per_u) > 0:
+                try:
+                    _upp = int(_upp_m.group(1))
+                    _units_needed = g_total / float(density_per_u)
+                    if _upp > 0 and _units_needed >= 1.0:
+                        _cnt_u = max(1, math.ceil(_units_needed / _upp - 0.02))
+                        if _cnt_u != sku_count:
+                            logging.info(
+                                f"🧮 [P2-PACK-UNITS-MATCH] '{name}': {sku_count}→{_cnt_u} paquete(s) "
+                                f"por unidades reales del envase ({_upp}/envase, necesita "
+                                f"≈{_units_needed:.1f} uds; density master {float(density_per_u):.0f}g "
+                                f"vs SKU {sku_size_g / _upp:.0f}g)")
+                            sku_count = _cnt_u
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
             _pkg_size_g = sku_size_g
             _pkg_product_id = _mp_sel.get("id") or None
             # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidad de DISPLAY = la forma del envase

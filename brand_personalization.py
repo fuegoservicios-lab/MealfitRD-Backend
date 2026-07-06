@@ -85,7 +85,12 @@ def build_brand_pref_context(user_id) -> str:
             "Son señal de preferencia POSITIVA: le gustan y los tiene a mano. Cuando un plato "
             "admita uno de estos alimentos con naturalidad, PREFIÉRELO sobre un equivalente "
             "(ej. si el desayuno lleva yogurt y eligió yogurt griego, usa yogurt griego). "
-            "NO los fuerces en cada plato ni sacrifiques variedad, horarios ni reglas clínicas."
+            "NO los fuerces en cada plato ni sacrifiques variedad, horarios ni reglas clínicas. "
+            # [P2-BRAND-NOT-IN-RECIPE · 2026-07-06] (review #13) el day-gen copiaba el formato
+            # "arroz blanco (Campos)" del contexto a la línea de ingredientes de la RECETA —
+            # la marca vive en la lista/Nevera. Backstop determinista: _polish_finalize_display.
+            "IMPORTANTE: la MARCA es solo contexto de compra — JAMÁS escribas la marca ni "
+            "paréntesis de marca en los ingredientes, pasos o nombres de las recetas."
         )
     except Exception as _e:
         logger.debug(f"[P1-SUPERMARKET-PERSONALIZATION] contexto no-op: {type(_e).__name__}: {_e}")

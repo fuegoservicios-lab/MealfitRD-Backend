@@ -9316,6 +9316,14 @@ RECIPE_STEP_GUARD_MAX_PER_MEAL = _env_int("MEALFIT_RECIPE_STEP_GUARD_MAX_PER_MEA
 # de assemble — el quantize previo corre antes del macro engine, cuyo solver re-introduce decimales absurdos
 # ("37.87 g de lechosa", "4.73g de mozzarella"). Flip a False revierte. tooltip-anchor: P1-CLOSER-COHERENCE
 ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
+# [P1-FINALIZE-COUNTABLE-POLISH · 2026-07-06] Pulido de frontera del display (review #13):
+# re-quantize display-only de decimales no-medibles ("2.97 limones") que el re-trim de banda
+# re-introduce DESPUÉS del quantize final, dup unidad-alimento ("filete de Filete de"),
+# marca del súper filtrada de la receta ("(Campos)") y cap cítrico por comida.
+FINALIZE_DISPLAY_POLISH = _env_bool("MEALFIT_FINALIZE_DISPLAY_POLISH", True)
+# Cap de limones/limas por comida-porción (espejo receta del P6-CITRUS-CAP de la lista:
+# 3/persona/SEMANA es uso intensivo — una receta pidiendo 3 para un filete es inflación).
+CITRUS_MEAL_CAP_UNITS = max(1.0, min(6.0, _env_float("MEALFIT_CITRUS_MEAL_CAP_UNITS", 2.0)))
 # [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Convierte unidades VAGAS de queso/embutido ('0.5 lonja/pedazo de queso' —
 # ¿qué significa media lonja de algo vago?) a GRAMOS medibles ('15 g de queso'). El usuario lo señaló como
 # incoherente. Default ON. Rollback: MEALFIT_RECIPE_SLICE_GRAMS=false. tooltip-anchor: P1-RECIPE-SLICE-GRAMS
@@ -10839,6 +10847,11 @@ def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
     steps = list(rec) if isinstance(rec, list) else ([] if rec is None else [str(rec)])
     if not steps or not token_subs:
         return False
+    try:
+        from constants import strip_accents as _sa_steps_note
+    except Exception:
+        def _sa_steps_note(x):
+            return x
     pats = []  # (compiled_pattern, new_display) ordenados por longitud de token DESC
     _seen = set()
     for tokens, new in token_subs:
@@ -10861,6 +10874,13 @@ def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
     out = []
     for st in steps:
         s = str(st)
+        # [P2-SUBST-NOTE-PROVENANCE · 2026-07-06] las notas "se reemplazó X por Y" citan el
+        # alimento ORIGINAL a propósito — reescribirlas rompe la procedencia ("se reemplazó
+        # el proteína crudo", batido cd4ae3c3). Exentas del replace; el resto de notas
+        # deterministas (💪 closer de proteína) SÍ deben seguir al swap.
+        if "se reemplaz" in _sa_steps_note(s.lower()):
+            out.append(s)
+            continue
         for _ln, pat, new_disp in pats:
             def _rep(m, _nd=new_disp):
                 # descapitaliza salvo inicio de paso (preserva prosa es-DO: "vierte stevia", no "vierte Stevia")
@@ -18860,6 +18880,25 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
             parts.append(f"display_restored={_n_rest}")
     except Exception:
         pass
+    # [P1-FINALIZE-COUNTABLE-POLISH · 2026-07-06] Última pasada de frontera: decimales
+    # contables re-introducidos por el re-trim de banda, dup unidad-alimento, marca del
+    # súper en receta y cap cítrico por comida (review #13).
+    try:
+        _n_pol = _polish_finalize_display(days)
+        if _n_pol:
+            total += _n_pol
+            parts.append(f"display_polished={_n_pol}")
+    except Exception:
+        pass
+    # [P2-CLOSER-STEP-BOUNDARY-DEDUP · 2026-07-06] pasos 💪 "Incorpora X…" que otros pasos
+    # reales dejaron redundantes (ordering-independiente, espejo de P1-CLOSER-HYGIENE).
+    try:
+        _n_dd = _dedup_redundant_closer_steps(days)
+        if _n_dd:
+            total += _n_dd
+            parts.append(f"closer_steps_deduped={_n_dd}")
+    except Exception:
+        pass
     # [P1-INTEGRATE-ALIGN-GUARD · 2026-07-06] TELEMETRÍA de desalineación display↔raw: crónica
     # (7-10 de 12 meals en los planes recientes — raw con "Sal al gusto"/"ajo" que display no
     # tiene, longitudes distintas) y ROMPE todo pase posicional (lockstep por idx). Este WARN
@@ -19968,6 +20007,13 @@ _PROTEIN_TARGET_FORMS = {
 _PROTEIN_SOURCE_COMPOUNDS = {
     "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado"),
 }
+# [P1-REWRITE-DORADO-HOMONYM · 2026-07-06] Aliases EXCLUIDOS de la REESCRITURA de texto
+# (la DETECCIÓN de repetición los sigue usando): "dorado" es pez en
+# _MAIN_PROTEIN_ALIASES['pescado'] pero también participio culinario universal. El
+# rewriter del autofix los sustituía por la proteína destino — "hasta que estén
+# pechuga de pollo y crujientes por fuera" (bollitos del plan fcc7a9f0). Un alias de
+# este set JAMÁS se usa como patrón de sustitución en nombre/ingredients/raw/pasos.
+_PROTEIN_ALIAS_REWRITE_HOMONYMS = {"dorado"}
 
 # [P2-FAT-LEAN-SWAP · 2026-07-05] Escalera grasa→magra de la MISMA especie (allergen-neutral por
 # construcción; formas destino del catálogo verificado — las mismas de _PROTEIN_TARGET_FORMS).
@@ -20208,8 +20254,13 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
             forms = _PROTEIN_TARGET_FORMS[tgt]
             # aliases del label fuente + compuestos conocidos, largo-primero
             # ("filete de pescado blanco" antes que "pescado"; "pechuga de pollo" antes que "pollo").
-            _all_aliases = tuple(_MAIN_PROTEIN_ALIASES.get(src, ())) + \
-                _PROTEIN_SOURCE_COMPOUNDS.get(src, ())
+            # [P1-REWRITE-DORADO-HOMONYM · 2026-07-06] los homónimos culinarios ("dorado")
+            # se excluyen de la REESCRITURA — detección intacta arriba.
+            _all_aliases = tuple(
+                _al for _al in (tuple(_MAIN_PROTEIN_ALIASES.get(src, ())) +
+                                _PROTEIN_SOURCE_COMPOUNDS.get(src, ()))
+                if _sa_pr(str(_al).lower()) not in _PROTEIN_ALIAS_REWRITE_HOMONYMS
+            )
             for _al in sorted(_all_aliases, key=len, reverse=True):
                 repl = (forms["molido"] if "molid" in _sa_pr(_al)
                         else forms["bare"] if " " not in _al and _al == src
@@ -20227,8 +20278,12 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                             _pat.sub(repl, s) if isinstance(s, str) else s for s in _lst
                         ]
             try:
+                # [P1-REWRITE-COMPOUNDS-IN-STEPS · 2026-07-06] los pasos reciben TAMBIÉN los
+                # compuestos (largo-primero dentro del rewriter): sin ellos, "Cocina filete
+                # de pescado blanco…" reemplazaba solo 'pescado' → "filete de pechuga de
+                # pollo blanco" (bollitos fcc7a9f0). Mismo set filtrado de homónimos.
                 _rewrite_recipe_steps_after_subs(
-                    meal, [(list(_MAIN_PROTEIN_ALIASES.get(src, ())), forms["default"])])
+                    meal, [(list(_all_aliases), forms["default"])])
             except Exception:
                 pass
             try:
@@ -21798,6 +21853,156 @@ def _restore_display_from_raw_orphans(days) -> int:
         return restored
     except Exception as _rd_e:
         logger.warning(f"[P1-DISPLAY-RESTORE-FROM-RAW] no-op: {type(_rd_e).__name__}: {_rd_e}")
+        return 0
+
+
+# [P1-FINALIZE-COUNTABLE-POLISH] Marca del súper en línea de receta: UN token capitalizado
+# solo entre paréntesis ("(Campos)", "(Wala)"). Las anotaciones legítimas van en minúscula
+# o con dígitos ("(105g)", "(jugo)", "(porción)", "(37 g crudo)") → no matchean.
+_BRAND_PAREN_RE = _re.compile(r"\s*\(\s*[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñü]{2,}\s*\)")
+# Dup unidad-alimento: "1 filete de Filete de pescado blanco" (el pase de presupuesto insertó
+# la forma canónica dentro de una línea que ya traía la unidad homónima).
+_UNIT_FOOD_DUP_RE = _re.compile(r"\b(\w+)\s+de\s+\1\s+de\b", _re.IGNORECASE)
+_CITRUS_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(limón|limon|limones|lima|limas)\b",
+                              _re.IGNORECASE)
+
+
+def _polish_finalize_display(days) -> int:
+    """[P1-FINALIZE-COUNTABLE-POLISH · 2026-07-06] Pulido de FRONTERA tras la última mutación
+    de cantidades (review #13). Cuatro reglas:
+    1. Decimales no-medibles en el DISPLAY → re-quantize display-only ("2.97 limones"→"3
+       limones", "1.49 dientes"→"1½ dientes", "3.39 dientes"→"3½"): el re-trim de banda
+       post-quantize re-escala líneas (3×0.99=2.97) y nadie re-redondea. El RAW no se toca
+       (fuente de macros/lista) — drift visual acotado por guard de factor [0.6, 1.67].
+    2. "1 filete de Filete de pescado blanco" → "1 filete de pescado blanco" (display+raw).
+    3. Marca del súper fuera de la receta: "arroz blanco (Campos)" → "arroz blanco"
+       (display+raw; la marca vive en lista/Nevera — acá la copió el LLM del contexto de
+       personalización de marcas).
+    4. Cap cítrico por comida (espejo receta del P6-CITRUS-CAP): lead > CITRUS_MEAL_CAP_UNITS
+       limones/limas → clamp (display+raw; ≤12 kcal de drift, la lista deja de sobre-demandar
+       contra el cap semanal). tooltip-anchor: P1-FINALIZE-COUNTABLE-POLISH"""
+    if not FINALIZE_DISPLAY_POLISH:
+        return 0
+    try:
+        from nutrition_db import quantize_ingredient_string as _qis
+        try:
+            from humanize_ingredients import _prettify_quantity_display as _pretty_pf
+        except Exception:
+            def _pretty_pf(s):
+                return s
+        changed = 0
+
+        def _shared_clean(s: str) -> str:
+            """Reglas 2+3+4 — aplican a display Y raw."""
+            out = _BRAND_PAREN_RE.sub("", s)
+            out = _UNIT_FOOD_DUP_RE.sub(r"\1 de", out)
+            _mc = _CITRUS_LEAD_RE.match(out)
+            if _mc:
+                try:
+                    _q = float(_mc.group(1).replace(",", "."))
+                    if _q > CITRUS_MEAL_CAP_UNITS:
+                        _cap_txt = (f"{CITRUS_MEAL_CAP_UNITS:g}")
+                        out = out[:_mc.start(1)] + _cap_txt + out[_mc.end(1):]
+                except (TypeError, ValueError):
+                    pass
+            return _re.sub(r"\s{2,}", " ", out).strip()
+
+        def _messy_decimal(s: str) -> bool:
+            # Cualquier lead decimal ("1.49", "2.97", "3.39") se re-quantiza: aunque el
+            # VALOR esté cerca de la grilla (1.49≈1.5), el STRING no es forma de cocina.
+            # quantize es no-op (factor 1.0) para valores ya en grilla.
+            return bool(_re.match(r"\s*\d+\.\d+\b", str(s)))
+
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = meal.get(_key)
+                    if not isinstance(_lst, list):
+                        continue
+                    for i, s in enumerate(_lst):
+                        if not isinstance(s, str) or not s.strip():
+                            continue
+                        new_s = _shared_clean(s)
+                        # Regla 1 SOLO display: raw es fuente de macros/lista.
+                        if _key == "ingredients" and _messy_decimal(new_s):
+                            try:
+                                _snapped, _fac = _qis(new_s)
+                                if 0.6 <= _fac <= 1.67:
+                                    new_s = _snapped
+                            except Exception:
+                                pass
+                        if _key == "ingredients":
+                            try:
+                                new_s = _pretty_pf(new_s)
+                            except Exception:
+                                pass
+                        if new_s != s:
+                            _lst[i] = new_s
+                            changed += 1
+        if changed:
+            logger.info(f"🪄 [P1-FINALIZE-COUNTABLE-POLISH] {changed} línea(s) pulidas en frontera "
+                        f"(decimales/dup-unidad/marca/cap-cítrico).")
+        return changed
+    except Exception as _pf_e:
+        logger.warning(f"[P1-FINALIZE-COUNTABLE-POLISH] no-op: {type(_pf_e).__name__}: {_pf_e}")
+        return 0
+
+
+# [P2-CLOSER-STEP-BOUNDARY-DEDUP] Solo las variantes NO-cocción del paso 💪 (mezclar/escurrir
+# no aportan información si la receta ya trabaja el alimento). "Cocina X..." se conserva:
+# puede ser la única instrucción de cocción aunque el Montaje mencione el alimento al servir.
+_CLOSER_MIX_STEP_RE = _re.compile(
+    r"^💪\s*(?:Escurre e incorpora|Incorpora)\s+(.+?)\s*(?:\(ya viene cocido\)\s*)?"
+    r"a la preparación", _re.IGNORECASE)
+
+
+def _dedup_redundant_closer_steps(days) -> int:
+    """[P2-CLOSER-STEP-BOUNDARY-DEDUP · 2026-07-06] Espejo de FRONTERA del check
+    P1-CLOSER-HYGIENE: si un paso 💪 tipo "Incorpora X a la preparación…" quedó
+    REDUNDANTE porque otros pasos reales ya trabajan X (el Montaje de la piña dice
+    "añade el queso cottage" y el 💪 "Incorpora queso" sobra — review #13, plan
+    fcc7a9f0), se remueve. El check del injector corre en INSERT-time; pases
+    posteriores pueden crear la redundancia después — este pase la caza al final,
+    sea cual sea el ordering. tooltip-anchor: P2-CLOSER-STEP-BOUNDARY-DEDUP"""
+    try:
+        from constants import strip_accents as _sa_dd
+        removed = 0
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list) or len(rec) < 2:
+                    continue
+                _others_blob = _sa_dd(" ".join(
+                    str(s) for s in rec
+                    if isinstance(s, str) and "💪" not in s
+                    and not _is_recipe_safety_note_step(s)).lower())
+                keep = []
+                for s in rec:
+                    _m = _CLOSER_MIX_STEP_RE.match(str(s).strip()) if isinstance(s, str) else None
+                    if _m:
+                        _toks = [t for t in _re.split(r"[^a-z]+", _sa_dd(_m.group(1).lower()))
+                                 if len(t) >= 4 and t not in ("cocido", "cocida", "cocidos",
+                                                              "cocidas", "agua", "aceite",
+                                                              "lata", "latas")]
+                        _stems = {t[:-1] if (t.endswith("s") and len(t) > 4) else t for t in _toks}
+                        if _stems and any(
+                                _re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _others_blob)
+                                for st in _stems):
+                            removed += 1
+                            logger.info(f"🧹 [P2-CLOSER-STEP-BOUNDARY-DEDUP] paso 💪 redundante "
+                                        f"removido (la receta ya trabaja el alimento) | "
+                                        f"meal={str(meal.get('name'))[:40]} | {str(s)[:60]}")
+                            continue
+                    keep.append(s)
+                if len(keep) != len(rec):
+                    meal["recipe"] = keep
+        return removed
+    except Exception as _dd_e:
+        logger.warning(f"[P2-CLOSER-STEP-BOUNDARY-DEDUP] no-op: {type(_dd_e).__name__}: {_dd_e}")
         return 0
 
 
