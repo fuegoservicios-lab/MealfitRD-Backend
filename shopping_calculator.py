@@ -2187,7 +2187,11 @@ def _pkg_from_product_row(r) -> dict | None:
     if price <= 0:
         return None
     pres = str(r.get("presentation") or "").strip()
-    brand = (r.get("brand") or "").strip()
+    # [P1-BRAND-GENERIC-LABEL · 2026-07-06] Producto sin marca en el catálogo =
+    # la opción "Genérico" (mismo fallback que enseña el picker de marcas). El
+    # owner pidió que la lista SIEMPRE diga la marca que está usando — un label
+    # solo-tamaño ("2 lb") era indistinguible del costeo sin marcas.
+    brand = (r.get("brand") or "").strip() or "Genérico"
     # Label para el display "(...)": tamaño + marca — ej. "800 gr · La Sanjuanera".
     size_part = pres.split(" ", 1)[1] if (
         pres and _norm_pref_food(pres).split(" ")[0] in _PRES_CONTAINER_WORDS and " " in pres

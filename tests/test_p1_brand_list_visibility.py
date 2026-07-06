@@ -54,10 +54,13 @@ def test_pkg_row_presentation_fallback_and_label():
 
 
 def test_pkg_row_brandless_label():
+    # [P1-BRAND-GENERIC-LABEL · 2026-07-06] sin marca → "Genérico" explícito (el
+    # owner pidió que la lista SIEMPRE diga la marca que usa; el picker ya
+    # enseñaba 'Genérico' para brand NULL — ahora la lista/PDF son consistentes).
     pkg = sc._pkg_from_product_row({
         "presentation": "Paquete 2 Lb", "brand": "", "price_rd": 165.0, "size_grams": None,
     })
-    assert pkg is not None and pkg["label"] == "2 Lb", "sin marca → label solo tamaño (sin ' ·' colgando)"
+    assert pkg is not None and pkg["label"] == "2 Lb · Genérico"
 
 
 @pytest.mark.parametrize("row", [
