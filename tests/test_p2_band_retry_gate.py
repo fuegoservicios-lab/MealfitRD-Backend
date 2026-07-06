@@ -64,7 +64,9 @@ def test_gate_ancla_en_review():
     assert idx > -1, "El gate de retry de banda debe existir en review_plan_node."
     # [P1-BAND-GATE-ALL4 · 2026-07-01] ventana 1400→3000: los comments del umbral macros-only re-tuneado
     # desplazaron el cierre del gate (severity a offset ~2643); el contrato anclado no cambió.
-    region = src[idx: idx + 3000]
+    # [P1-GAINMUSCLE-KCAL-BAND · 2026-07-06] 3000→4600: el logging branch-aware (P2-BAND-RETRY-GATE-LOG
+    # 2026-07-05, if/elif/else con f-strings largos) empujó `_severity_max` a offset ~4282; contrato intacto.
+    region = src[idx: idx + 4600]
     assert "compute_clinical_band_score(plan" in region
     assert "BAND_RETRY_THRESHOLD" in region
     assert "_severity_max(severity, \"high\")" in region

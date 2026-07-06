@@ -10002,6 +10002,21 @@ BAND_GATE_PER_MACRO_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_
 # retry. Rollback sin redeploy: MEALFIT_BAND_GATE_KCAL_BACKSTOP=false. tooltip-anchor: P2-KCAL-GATE-BACKSTOP
 BAND_GATE_KCAL_BACKSTOP = _env_bool("MEALFIT_BAND_GATE_KCAL_BACKSTOP", True)
 BAND_GATE_KCAL_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_KCAL_THRESHOLD", 0.5)))
+# [P1-GAINMUSCLE-KCAL-BAND · 2026-07-06] Banda kcal DIRECCIONAL por objetivo. La banda kcal por defecto
+# [0.95, 1.05] (±5%) asume que el reconcile clava las calorías — cierto en déficit/mantenimiento, donde
+# PASARSE de kcal ES el defecto. Pero en GANANCIA MUSCULAR (superávit) el piso de proteína (prioridad
+# clínica correcta) empuja las kcal levemente sobre un target modesto y el solver clampea (no recorta bajo
+# el mínimo servible) → un superávit leve (5-10%) es el ESTADO BUSCADO de un bulk, no un defecto. Verificado
+# en vivo (plan 4339544f, gain_muscle, target 2100): D1 107% + D2 105% caían fuera de [0.95,1.05] → la celda
+# kcal (0.333) disparaba el backstop de retry (BAND_GATE_KCAL_THRESHOLD) → 3 intentos agotados → max_attempts
+# + banner de degradación, AUN con macros 8/9 en banda. Techo laxo SOLO para gain; el piso 0.95 se conserva
+# (no infra-comer en un bulk daña la ganancia). Rollback sin redeploy: MEALFIT_GAINMUSCLE_KCAL_BAND_UPPER=1.05.
+# Complementa el cerrador de undershoot _repair_gainmuscle_day_kcal (piso 0.95): juntos acotan la celda kcal de
+# gain por ambos lados. tooltip-anchor: P1-GAINMUSCLE-KCAL-BAND
+GAINMUSCLE_KCAL_BAND_UPPER = max(1.05, min(1.20, _env_float("MEALFIT_GAINMUSCLE_KCAL_BAND_UPPER", 1.10)))
+# Mismos tokens que la detección de gain del autofix de proteína (consistencia clasificador); "superavit" extra
+# porque el goal_label literal es "Ganancia Muscular (Superávit 15% ...)".
+_GAINMUSCLE_GOAL_TOKENS = ("gain_muscle", "ganar_musculo", "ganancia", "bulk", "superavit")
 # [P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer aditivo de CARBOS para
 # el caso en que el reconcile (clamp [0.4,1.8]) se satura (carbos del día muy por debajo de la banda, p.ej. <56%
 # del target → necesita >1.8×). Escala el ingrediente CARBO-dominante existente más rico hacia el target con un
@@ -31640,13 +31655,37 @@ def refresh_delivered_macros(plan: dict) -> bool:
         return False
 
 
+def _plan_goal_is_gainmuscle(plan: dict, explicit_goal=None) -> bool:
+    """[P1-GAINMUSCLE-KCAL-BAND · 2026-07-06] True si el objetivo del plan es ganancia muscular (bulk).
+    Fuente robusta y verificada: `explicit_goal` → `plan['main_goal']` (top-level, presente en assemble
+    `result["main_goal"] = nutrition["goal_label"]` Y en el plan persistido — OJO: `form_data` se VACÍA al
+    persistir, por eso NO se puede derivar de form_data.mainGoal en superficies de re-score) → `form_data`
+    (runtime, por si el caller lo pasa lleno). Normaliza acentos+minúsculas (`_norm_text`) y matchea tokens
+    es-DO/eng. Fail-safe → False (banda estricta por defecto: no laxar por error)."""
+    try:
+        raw = explicit_goal
+        if not raw and isinstance(plan, dict):
+            raw = (plan.get("main_goal")
+                   or (plan.get("form_data") or {}).get("mainGoal")
+                   or (plan.get("form_data") or {}).get("goal"))
+        if not raw:
+            return False
+        g = _norm_text(raw)
+        return any(tok in g for tok in _GAINMUSCLE_GOAL_TOKENS)
+    except Exception:
+        return False
+
+
 def compute_clinical_band_score(plan: dict, nutrition: dict, *,
-                                lower: float = None, upper: float = None) -> dict:
+                                lower: float = None, upper: float = None, goal: str = None) -> dict:
     """[P4-SCOREBOARD · 2026-06-14] Score DETERMINISTA de precisión por-plan: la fracción de celdas
     (día × macro) en que el macro ENTREGADO (suma de las comidas del día) cae en la banda
     [lower, upper] × target diario. Mide la precisión REAL del plan entregado → la precisión deja de ser
     AUTOAFIRMADA (antes el "90-112%" era un claim sin medición por-plan). kcal usa una banda más estrecha
     ([0.95, 1.05]) porque el reconcile clava las calorías y deja que los macros absorban el residual.
+    [P1-GAINMUSCLE-KCAL-BAND · 2026-07-06] EXCEPCIÓN direccional: en ganancia muscular el techo kcal se
+    afloja a GAINMUSCLE_KCAL_BAND_UPPER (default 1.10) — un superávit leve es el estado buscado de un bulk,
+    no un defecto; el piso 0.95 se conserva. El objetivo se deriva de `goal`/`plan['main_goal']`.
     Cero LLM. Retorna {score, cells_in_band, cells_total, per_macro, band_*}. Fail-safe → score=None."""
     try:
         lo_m = BAND_SCORE_LOWER if lower is None else lower
@@ -31661,7 +31700,12 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             "kcal": _meal_macro_num((nutrition or {}).get("total_daily_calories")
                                     or (nutrition or {}).get("target_calories")) or _meal_macro_num(plan.get("calories")),
         }
-        bands = {"protein": (lo_m, hi_m), "carbs": (lo_m, hi_m), "fats": (lo_m, hi_m), "kcal": (0.95, 1.05)}
+        # [P1-GAINMUSCLE-KCAL-BAND · 2026-07-06] techo kcal laxo SOLO para bulk (superávit leve = estado
+        # buscado, no defecto); piso 0.95 intacto. Deficit/mantenimiento/salud → banda estricta [0.95,1.05].
+        _kcal_lo, _kcal_hi = 0.95, 1.05
+        if _plan_goal_is_gainmuscle(plan, goal):
+            _kcal_hi = GAINMUSCLE_KCAL_BAND_UPPER
+        bands = {"protein": (lo_m, hi_m), "carbs": (lo_m, hi_m), "fats": (lo_m, hi_m), "kcal": (_kcal_lo, _kcal_hi)}
         per = {k: {"in": 0, "total": 0} for k in targets}
         # [P1-ALL4-KPI · 2026-07-01] (audit macros GAP-7) KPI conjunto "all-4 en banda por día": los marginales
         # per_macro NO permiten derivar la tasa conjunta (el benchmark all-4 66.7% solo se medía offline).
@@ -31701,7 +31745,7 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             "cells_in_band": cin, "cells_total": ctot,
             "score_macros_only": round(cin_m / ctot_m, 3) if ctot_m else None,
             "cells_in_band_macros": cin_m, "cells_total_macros": ctot_m,
-            "band_macros": [lo_m, hi_m], "band_kcal": [0.95, 1.05],
+            "band_macros": [lo_m, hi_m], "band_kcal": [_kcal_lo, _kcal_hi],
             "per_macro": {k: (round(v["in"] / v["total"], 3) if v["total"] else None) for k, v in per.items()},
             # [P1-ALL4-KPI · 2026-07-01] tasa conjunta all-4 por día (KPI del objetivo "100% macros").
             "all4_days": all4_days, "days_total": days_total,
