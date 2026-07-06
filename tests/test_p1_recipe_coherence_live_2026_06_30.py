@@ -37,15 +37,19 @@ def test_precooked_protein_step_wording():
 def test_precooked_hint_and_helper_wired():
     assert hasattr(g, "_PRECOOKED_PROTEIN_HINT")
     assert "sardina" in g._PRECOOKED_PROTEIN_HINT and "en lata" in g._PRECOOKED_PROTEIN_HINT
-    # los sitios del closer usan el helper (no el branch inline viejo)
-    assert _GRAPH.count("_closer_protein_step_text(nm, no_cook)") >= 2
+    # [P1-CLOSER-HYGIENE · 2026-07-06] re-anclado: los DOS callsites ahora pasan por el SSOT
+    # anti-dup/anti-redundante (_append_closer_protein_step), que internamente usa el builder.
+    assert _GRAPH.count("_append_closer_protein_step(") >= 3, "def + 2 callsites"
+    assert "_closer_protein_step_text(nm, no_cook)" in _GRAPH, "el builder sigue siendo el SSOT del texto"
     # ya no debe quedar el branch hardcodeado "Cocina {nm} a la plancha o hervido" inline en los call sites
     assert "P1-CLOSER-PRECOOKED-WORDING" in _GRAPH
 
 
 def test_precooked_ingredient_no_redundant_cocido():
     # el sufijo " cocido" no se añade a un enlatado (evita "sardinas en lata cocido")
-    assert 'cook = "" if (no_cook or _pre_cooked) else " cocido"' in _GRAPH
+    # [P1-CLOSER-HYGIENE · 2026-07-06] re-anclado: el guard creció (lácteos + nombres con "cocid"
+    # tampoco llevan el sufijo — "½ taza de yogurt cocido" vivo en da7bb310).
+    assert 'cook = "" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip) else " cocido"' in _GRAPH
 
 
 # ───────────────────────── P1-RECIPE-OFFCATALOG-CONDIMENT (prompt) ─────────────────────────

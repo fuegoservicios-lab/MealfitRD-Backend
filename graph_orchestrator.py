@@ -13234,11 +13234,46 @@ def _closer_protein_step_text(nm: str, no_cook: bool) -> str:
         _nm_sa = _sa2(str(nm).lower())
     except Exception:
         _nm_sa = str(nm).lower()
-    if no_cook or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
+    # [P1-CLOSER-HYGIENE · 2026-07-06] (plan vivo da7bb310: "Cocina huevo cocido a la plancha o
+    # hervido") nombres de catálogo que YA traen "cocido" (huevo cocido, guisantes cocidos) jamás
+    # reciben el wording "Cocina X..." — cocinar lo cocido es absurdo user-facing.
+    if no_cook or "cocid" in _nm_sa \
+            or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
         return f"Incorpora {nm} a la preparación y mézclalo antes de servir."
     if any(h in _nm_sa for h in _PRECOOKED_PROTEIN_HINT):
         return f"Escurre e incorpora {nm} (ya viene cocido) a la preparación antes de servir."
     return f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
+
+
+def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
+    """[P1-CLOSER-HYGIENE · 2026-07-06] SSOT de los DOS callsites que anexan el paso 💪 del closer.
+    Cierra dos modos de fallo medidos en vivo (plan da7bb310):
+    (a) paso DUPLICADO idéntico — el closer corre en assemble Y en el re-cierre post-caps, y cada
+        uno anexaba su paso sin chequear ("Cocina guisantes..." ×2 en el mismo plato);
+    (b) paso REDUNDANTE — la receta YA usa/cocina el alimento en sus pasos reales (huevos de un
+        revoltillo, guisantes del guiso) → el paso genérico "Cocina X / Incorpora X" solo ensucia.
+    Stems singular/plural por prefijo (lección P1-REVERSE-COH-PLURAL). Muta meal; True si anexó.
+    tooltip-anchor: P1-CLOSER-HYGIENE"""
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            return False
+        from constants import strip_accents as _sa_cs
+        _toks = [t for t in _re.split(r"[^a-z]+", _sa_cs(str(nm).lower()))
+                 if len(t) >= 4 and t not in ("cocido", "cocida", "cocidos", "cocidas")]
+        _stems = {t[:-1] if (t.endswith("s") and len(t) > 4) else t for t in _toks}
+        _steps_blob = _sa_cs(" ".join(
+            str(s) for s in rec
+            if isinstance(s, str) and not _is_recipe_safety_note_step(s) and "💪" not in s).lower())
+        if _stems and any(_re.search(r"\b" + _re.escape(st), _steps_blob) for st in _stems):
+            return False  # (b) la receta ya trabaja el alimento → sin paso genérico
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook)}"
+        if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
+            return False  # (a) dup exacto
+        meal["recipe"] = _insert_step_before_montaje(rec, _step)
+        return True
+    except Exception:
+        return False
 # [P3-PROTEIN-FLOOR] Dish-fit del closer: comidas ligeras (desayuno/merienda) prefieren
 # proteína de huevo/lácteo; las principales prefieren carne — evita combos incongruentes
 # (camarón en un revoltillo de desayuno). Congruencia (proteína ya en el plato) gana primero.
@@ -13832,7 +13867,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         except Exception:
             _nm_strip = nm
         _pre_cooked = any(h in _nm_strip for h in _PRECOOKED_PROTEIN_HINT)
-        cook = "" if (no_cook or _pre_cooked) else " cocido"
+        # [P1-CLOSER-HYGIENE · 2026-07-06] lácteos jamás llevan sufijo " cocido" ("½ taza de
+        # yogurt cocido" en vivo — el yogurt no se cocina ni se compra cocido); nombres que ya
+        # traen "cocid" tampoco (doble sufijo).
+        _dairy_nm = any(h in _nm_strip for h in _NO_COOK_SAFE_PROTEIN_HINT)
+        cook = "" if (no_cook or _pre_cooked or _dairy_nm or "cocid" in _nm_strip) else " cocido"
         line = f"{grams}g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
@@ -13847,12 +13886,8 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         if isinstance(rec, list):
             # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] Paso de receta NATURAL (no el robótico que delataba el
             # relleno del solver). Sin gramaje hardcodeado (el ingrediente es la fuente de verdad tras el quantize).
-            # [P1-PROTEIN-STEP-SOFT-DAIRY · 2026-06-29] Lácteos blandos (cottage/ricotta/yogur/requesón/whey) → wording
-            # honesto: NO van "a la plancha/hervido" (se desarman) y la frase es válida sean proteína principal o añadido.
-            # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] wording coherente (lácteo blando / enlatado pre-cocido / cocción)
-            _step = _closer_protein_step_text(nm, no_cook)
-            # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] antes del Montaje, no después de emplatar.
-            meal["recipe"] = _insert_step_before_montaje(rec, f"💪 {_step}")
+            # [P1-CLOSER-HYGIENE · 2026-07-06] SSOT anti-dup/anti-redundante (wording coherente incluido).
+            _append_closer_protein_step(meal, nm, no_cook)
         # [P2-DISH-COHERENCE] El closer acaba de meter `chosen` como proteína PRINCIPAL: refléjala
         # en el nombre si no estaba (no esconder la proteína principal del plato).
         _reflect_added_protein_in_name(meal, chosen.name, _sa)
@@ -15002,8 +15037,19 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             toks = [t for t in _re2.split(r"[^a-z]+", bare_low) if len(t) >= 4 and t not in ("para", "tipo")]
             if not toks:
                 continue  # nombre demasiado corto/ambiguo → no arriesgar falso positivo
-            if any(_re2.search(r"\b" + _re2.escape(t), recipe_low) for t in toks):
-                continue  # algún token del ingrediente SÍ aparece en los pasos
+            # [P1-REVERSE-COH-PLURAL · 2026-07-06] (plan vivo da7bb310 ×2) la línea "1½ tomates
+            # medianos" (plural) vs pasos "agrega el tomate" (singular) NO matcheaba → paso de
+            # complemento ESPURIO en un plato que ya usaba el ingrediente. Stems singular/plural
+            # por token ("tomates"→"tomate", "limones"→"limon") con búsqueda por prefijo.
+            _stems = set()
+            for t in toks:
+                _stems.add(t)
+                if t.endswith("es") and len(t) > 5:
+                    _stems.add(t[:-2])
+                if t.endswith("s") and len(t) > 4:
+                    _stems.add(t[:-1])
+            if any(_re2.search(r"\b" + _re2.escape(st), recipe_low) for st in _stems):
+                continue  # algún token del ingrediente SÍ aparece en los pasos (singular o plural)
             missing.append(str(bare).strip())
         if not missing:
             return 0
@@ -15283,6 +15329,11 @@ _TIMETEMP_TECHNIQUE_DEFAULTS = (
     (("vapor",), "8-10 min al vapor"),
     (("frie", "fritura", "freidora", "airfryer", "tosta"), "6-8 min hasta dorar"),
     (("revuelto", "revuelve", "panqueque", "arepita", "tortilla de huevo"), "2-3 min por lado a fuego medio"),
+    # [P2-LICUADO-TIMETEMP · 2026-07-06] (vivo: "Licúa a máxima velocidad... (~10-12 min a fuego
+    # medio)" en un batido de licuadora) la técnica licuado no existía → caía al fallback de
+    # fuego. Va ANTES de plancha (un batido puede mencionar "vaso"/"sartén" jamás, pero el orden
+    # revuelto→licua evita capturar revoltillos con "huevo batido").
+    (("licua", "licuadora", "procesa", "batido", "smoothie"), "1-2 min de licuado a velocidad alta"),
     (("plancha", "sarten", "saltea", "sofrie", "sella"), "3-4 min por lado a fuego medio-alto"),
 )
 _TIMETEMP_FALLBACK_DEFAULT = "10-12 min a fuego medio"
@@ -15300,6 +15351,9 @@ _TIMETEMP_TECHNIQUE_MAX_MIN = (
     (("vapor",), 45),
     (("frie", "fritura", "freidora", "airfryer", "tosta"), 30),
     (("revuelto", "revuelve", "panqueque", "arepita", "tortilla de huevo"), 15),
+    # [P2-LICUADO-TIMETEMP · 2026-07-06] techo 5 min: los "(~10-12 min a fuego medio)" ya
+    # persistidos en pasos de licuadora se re-clampan al default de licuado en el boundary.
+    (("licua", "licuadora", "procesa", "batido", "smoothie"), 5),
     (("plancha", "sarten", "saltea", "sofrie", "sella"), 30),
 )
 _TIMETEMP_ABS_MAX_MIN = 180   # nada en este producto cocina >3h
@@ -15367,6 +15421,10 @@ def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
                 if int(m_c.group(1)) > _TIMETEMP_MAX_TEMP_C:
                     new_step = new_step[:m_c.start()] + "220 °C" + new_step[m_c.end():]
                     break
+            # [P2-LICUADO-TIMETEMP · 2026-07-06] si el clamp reescribió a licuado, el residuo
+            # "a fuego medio" del texto original queda absurdo → strip.
+            if new_step != step and "de licuado" in new_step:
+                new_step = _re.sub(r"\s*a fuego\s+\S+", "", new_step)
             if new_step != step:
                 rec[i] = new_step
                 meal["_recipe_timetemp_clamped"] = True
@@ -17172,7 +17230,17 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         c_add = (chosen.carbs or 0.0) * f
         f_add = (chosen.fats or 0.0) * f
         kcal_add = 4 * p_add + 4 * c_add + 9 * f_add
-        line = f"{grams_food}g de {nm}{'' if no_cook else ' cocido'}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
+        # [P1-CLOSER-HYGIENE · 2026-07-06] mismo guard del callsite principal: lácteos/nombres
+        # con "cocid" jamás llevan el sufijo " cocido".
+        try:
+            from constants import strip_accents as _sa_pf
+            _nm_pf = _sa_pf(str(nm).lower())
+        except Exception:
+            _nm_pf = str(nm).lower()
+        _skip_cook_pf = (no_cook or "cocid" in _nm_pf
+                         or any(h in _nm_pf for h in _NO_COOK_SAFE_PROTEIN_HINT)
+                         or any(h in _nm_pf for h in _PRECOOKED_PROTEIN_HINT))
+        line = f"{grams_food}g de {nm}{'' if _skip_cook_pf else ' cocido'}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
         target_meal.setdefault("ingredients", []).append(line)
         if isinstance(target_meal.get("ingredients_raw"), list):
             target_meal["ingredients_raw"].append(line)
@@ -17184,11 +17252,9 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         target_meal["macros"] = [f"P:{round(tp)}g", f"C:{round(tc)}g", f"G:{round(tf)}g"]
         rec = target_meal.get("recipe")
         if isinstance(rec, list):
-            # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28 + P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] paso natural
-            # y coherente con la naturaleza del alimento (lácteo blando / enlatado pre-cocido / cocción).
-            _step = _closer_protein_step_text(nm, no_cook)
-            # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] antes del Montaje, no después de emplatar.
-            target_meal["recipe"] = _insert_step_before_montaje(rec, f"💪 {_step}")
+            # [P1-CLOSER-HYGIENE · 2026-07-06] SSOT anti-dup/anti-redundante (el paso duplicado
+            # "Cocina guisantes... ×2" del plan da7bb310 nacía justo de este 2º callsite).
+            _append_closer_protein_step(target_meal, nm, no_cook)
         # 2) quitar kcal_add/4 gramos de carbos → mantiene kcal CONSTANTE (reusa el carb-trim cuantizador)
         carbs_g_to_remove = kcal_add / 4.0
         new_carb_day_target = max(0.0, (day_c + c_add) - carbs_g_to_remove)
@@ -20303,6 +20369,11 @@ REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
 # legítimos). La clase 47.5-tallos/1250-g muere por construcción, no por whitelist.
 LINE_GRAM_HARD_CAP = _env_int("MEALFIT_LINE_GRAM_HARD_CAP", 600, lambda v: 300 <= v <= 2000)
 _LINE_GRAM_CAP_EXEMPT = ("agua", "caldo")
+# [P2-SNACK-CHEESE-CAP · 2026-07-06] (vivo: "210 g de queso" junto a ½ lechosa en una MERIENDA —
+# el snack-cap limita lo que el closer AÑADE (100g) pero el solver/rebalance re-infló la línea
+# después sin re-fire). Techo servible de QUESO en meriendas; yogurt exento (un bowl de 200g es
+# normal). Corre en el realism-cap (assemble + boundary) → cubre el origen que sea.
+SNACK_CHEESE_CAP_G = _env_int("MEALFIT_SNACK_CHEESE_CAP_G", 120, lambda v: 60 <= v <= 300)
 _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
                        # [P2-CLARAS-CAP-KNOB-PARITY · 2026-07-05] era 8.0 hardcoded y el plato vivo
                        # "8 claras de huevo (267g)" pasó justo al ras mientras el knob del motor dice
@@ -20383,6 +20454,12 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         elif (cur_g > float(REALISM_FRUIT_VOLUME_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_FRUIT_TOKENS)):
                             factor = float(REALISM_FRUIT_VOLUME_CAP_G) / cur_g
+                        # [P2-SNACK-CHEESE-CAP · 2026-07-06] 1.7) queso en MERIENDA sobre el techo
+                        # servible ("210 g de queso" con ½ lechosa). Yogurt exento.
+                        elif (cur_g > float(SNACK_CHEESE_CAP_G)
+                              and "merienda" in _sa(str(meal.get("meal", "")).lower())
+                              and _re.search(r"\bqueso", il)):
+                            factor = float(SNACK_CHEESE_CAP_G) / cur_g
                     # 2) tazas de aromáticos/hierbas/frutas-volumen sobre el techo
                     # [P1-REALISM-CAPS-EXT] lead con fracción unicode/mixta ("3¾ taza de melón") —
                     # el regex decimal previo no la parseaba y las líneas post-quantize la usan.
@@ -21260,10 +21337,24 @@ COOKED_RAW_ANNOTATION_FIX_ENABLED = _env_bool("MEALFIT_COOKED_RAW_ANNOTATION_FIX
 _GRAIN_ABSORB_TOKENS = ("arroz", "pasta", "espagueti", "fideo", "quinoa", "cuscus", "couscous",
                         "trigo burgol", "bulgur", "avena")
 _GRAIN_ABSORB_FACTOR = 2.8
+# [P2-GRAIN-RAW-SINGLE · 2026-07-06] gramos de grano COCIDO por taza (arroz cocido ≈158g/taza) —
+# base para recomputar la forma SINGLE "(Ng crudo)" de líneas "X taza ... cocido" y el claim
+# "Ng crudo rinden ~X taza cocida" de los pasos (vivo: "¼ taza cocido (40g crudo)" — ¼ taza
+# necesita ~14g crudos; la compra iba 3× inflada).
+_GRAIN_COOKED_G_PER_CUP = 160.0
 _COOKED_RAW_PAIR_RE = _re.compile(
     r"\((\d+(?:[.,]\d+)?)\s*g\s*cocid[oa]s?\s*,\s*(\d+(?:[.,]\d+)?)\s*g\s*(?:raw|crud[oa]s?)\)",
     _re.IGNORECASE)
 _RAW_TOKEN_EN_RE = _re.compile(r"(\d(?:[.,\d]*)\s*(?:g|gr|ml))\s+raw\b", _re.IGNORECASE)
+_RAW_SINGLE_RE = _re.compile(r"\((\d+(?:[.,]\d+)?)\s*g\s*crud[oa]s?\)", _re.IGNORECASE)
+_CUP_LEAD_MIXED_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?\s?[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s*tazas?\b")
+_RINDEN_CLAIM_RE = _re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*g\s*crud[oa]s?\s+(?:rinden|equivalen a)\s*~?\s*"
+    r"([¼½¾⅓⅔]|\d+(?:[.,]\d+)?\s?[½¼¾⅓⅔]?)\s*tazas?\s*cocid[oa]s?", _re.IGNORECASE)
+# [P2-CU-TOTAL-MISLABEL · 2026-07-06] "8 tortillas integrales (240 g c/u)" — 240g es el TOTAL
+# (30g por tortilla) etiquetado como cada-una = 1.9kg leídos literalmente. Con lead-conteo K≥2,
+# N≥150 y N/K en rango de unidad plausible (10-120g) → "en total".
+_CU_ANNOT_RE = _re.compile(r"\((\d+(?:[.,]\d+)?)\s*g\s*c/u\)", _re.IGNORECASE)
 
 
 def _fix_cooked_raw_annotations(days) -> int:
@@ -21288,7 +21379,47 @@ def _fix_cooked_raw_annotations(days) -> int:
                         return f"({round(_ck)}g cocido, {_rw_fix}g crudo)"
                     return mm.group(0)
                 out = _COOKED_RAW_PAIR_RE.sub(_pair_sub, out)
+                # [P2-GRAIN-RAW-SINGLE · 2026-07-06] forma SINGLE "(Ng crudo)" en línea de grano
+                # "X taza ... cocido": crudo real ≈ (tazas × 160) / 2.8. "¼ taza (40g crudo)" → 14g.
+                if "cocid" in _low:
+                    m_cup = _CUP_LEAD_MIXED_RE.match(out)
+                    _cups = _qtysync_qty_to_float(m_cup.group(1)) if m_cup else None
+                    if _cups and _cups > 0:
+                        _cooked_g = _cups * _GRAIN_COOKED_G_PER_CUP
+
+                        def _single_sub(mm):
+                            _rw = float(mm.group(1).replace(",", "."))
+                            if _rw >= _cooked_g * 0.55:
+                                return f"({max(5, round(_cooked_g / _GRAIN_ABSORB_FACTOR))}g crudos)"
+                            return mm.group(0)
+                        out = _RAW_SINGLE_RE.sub(_single_sub, out)
+                # claim de los pasos "Ng crudo rinden ~X taza cocida" con N imposible → recomputa.
+                def _rinden_sub(mm):
+                    _rw = float(mm.group(1).replace(",", "."))
+                    _cups2 = _qtysync_qty_to_float(mm.group(2))
+                    if not _cups2 or _cups2 <= 0:
+                        return mm.group(0)
+                    _ck2 = _cups2 * _GRAIN_COOKED_G_PER_CUP
+                    if _rw >= _ck2 * 0.55:
+                        _rw_fix2 = max(5, round(_ck2 / _GRAIN_ABSORB_FACTOR))
+                        _tz = "taza cocida" if _cups2 <= 1.0 + 1e-6 else "tazas cocidas"
+                        return f"{_rw_fix2} g crudos rinden ~{mm.group(2)} {_tz}"
+                    return mm.group(0)
+                out = _RINDEN_CLAIM_RE.sub(_rinden_sub, out)
             out = _RAW_TOKEN_EN_RE.sub(r"\1 crudo", out)
+            # [P2-CU-TOTAL-MISLABEL · 2026-07-06] "(240 g c/u)" con lead-conteo 8 → "en total".
+            m_k = _re.match(r"^\s*(\d+)\s+[a-záéíóúñü]", out, _re.IGNORECASE)
+            if m_k:
+                _k_n = int(m_k.group(1))
+
+                def _cu_sub(mm):
+                    _n_cu = float(mm.group(1).replace(",", "."))
+                    # K≥4: nadie sirve 4+ unidades de alimentos pesados (batatas/plátanos) — con
+                    # conteos altos, un "c/u" ≥150g solo puede ser el TOTAL mal etiquetado.
+                    if _k_n >= 4 and _n_cu >= 150 and 10 <= (_n_cu / _k_n) <= 120:
+                        return f"({mm.group(1)} g en total)"
+                    return mm.group(0)
+                out = _CU_ANNOT_RE.sub(_cu_sub, out)
             return out
 
         for _d in days or []:
@@ -21427,6 +21558,37 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                     if isinstance(raw, list):
                         raw[first_idx] = new_line
                     drop.update(idx for idx, _ in entries[1:])
+                    merged += len(entries) - 1
+                # [P1-CLOSER-HYGIENE · 2026-07-06] (plan vivo da7bb310: "4 huevos" + "1 huevo" —
+                # el closer añade su línea de proteína como CONTEO y la fusión solo veía gramos)
+                # 2º pase: líneas de CONTEO entero del set curado de sustantivos contables, mismo
+                # resto-de-nombre → se suman ("4 huevos"+"1 huevo"→"5 huevos"). Conservador:
+                # enteros puros, sustantivo en _QTYSYNC_COUNT_NOUNS, tail idéntico normalizado.
+                _cnt_lead = _re.compile(r"^\s*(\d+)\s+([a-záéíóúñü]+)(\s+.*)?$", _re.IGNORECASE)
+                cgroups = {}
+                for idx, ing in enumerate(ings):
+                    if idx in drop:
+                        continue
+                    m_cn = _cnt_lead.match(str(ing))
+                    if not m_cn:
+                        continue
+                    _noun = _sa(m_cn.group(2).lower()).rstrip("s")
+                    if _noun not in _QTYSYNC_COUNT_NOUNS:
+                        continue
+                    _tail = _sa((m_cn.group(3) or "").strip().lower())
+                    cgroups.setdefault((_noun, _tail), []).append(
+                        (idx, int(m_cn.group(1)), (m_cn.group(3) or "").rstrip()))
+                for (_noun, _tail), entries in cgroups.items():
+                    if len(entries) < 2:
+                        continue
+                    total_n = sum(n for _, n, _t in entries)
+                    first_idx = entries[0][0]
+                    _sing, _plur, _pat = _QTYSYNC_COUNT_NOUNS[_noun]
+                    new_line = f"{total_n} {_sing if total_n == 1 else _plur}{entries[0][2]}"
+                    ings[first_idx] = new_line
+                    if isinstance(raw, list):
+                        raw[first_idx] = new_line
+                    drop.update(idx for idx, _n, _t in entries[1:])
                     merged += len(entries) - 1
                 if drop:
                     meal["ingredients"] = [x for i, x in enumerate(ings) if i not in drop]
