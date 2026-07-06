@@ -369,6 +369,8 @@ _DISPLAY_PLURAL.update({
     "aceituna": "aceitunas", "casabe": "casabes", "molondron": "molondrones",
     # [P2-ORGAN-MEAT-CAP · 2026-07-06] "2½ puerro mediano" (review #10).
     "puerro": "puerros",
+    # [P2-STEM-FILLER-TOKENS · 2026-07-06] review #11: "½ guayabas fresco", "1 filetes de pescado".
+    "guayaba": "guayabas", "filete": "filetes",
 })
 
 # [P3-DISPLAY-GRAMMAR · 2026-07-05] Concordancia número/género de leads con FRACCIÓN/mixto

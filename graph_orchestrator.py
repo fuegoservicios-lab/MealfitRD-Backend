@@ -13363,8 +13363,11 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         if not isinstance(rec, list):
             return False
         from constants import strip_accents as _sa_cs
+        # [P2-STEM-FILLER-TOKENS · 2026-07-06] agua/aceite/lata jamás son evidencia de uso (el
+        # "atún en agua" quedaba sin paso porque la masa de las arepitas usaba agua real).
         _toks = [t for t in _re.split(r"[^a-z]+", _sa_cs(str(nm).lower()))
-                 if len(t) >= 4 and t not in ("cocido", "cocida", "cocidos", "cocidas")]
+                 if len(t) >= 4 and t not in ("cocido", "cocida", "cocidos", "cocidas",
+                                              "agua", "aceite", "lata", "latas")]
         _stems = {t[:-1] if (t.endswith("s") and len(t) > 4) else t for t in _toks}
         _steps_blob = _sa_cs(" ".join(
             str(s) for s in rec
@@ -14805,6 +14808,17 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
                         if fr not in seen:
                             seen.add(fr)
                             continue
+                        # [P2-FRUIT-DEDUP-COMPOUND · 2026-07-06] ('harina de Negrito' VIVO: el
+                        # swap guineo→Negrito reescribió "harina de guineo" — ahí la fruta es
+                        # BASE ESTRUCTURAL de la masa, no una fruta servida). Si la fruta aparece
+                        # como compuesto (harina/almidón/casabe/puré de X) en los ingredientes,
+                        # el swap de este plato se salta entero (renombrar solo el nombre dejaría
+                        # nombre↔ingredientes incoherentes).
+                        _ings_blob_fd = _sa(" ".join(
+                            str(x) for x in (meal.get("ingredients") or [])).lower())
+                        if _re.search(r"\b(?:harina|almidon|casabe|pure)\s+de\s+" + _re.escape(fr),
+                                      _ings_blob_fd):
+                            continue
                         # fruta REPETIDA el mismo día → reemplazar por una del pool no usada ese
                         # día NI presente en este nombre (evita crear una colisión nueva in-place).
                         repl = next((orig for low, orig in pool
@@ -15230,7 +15244,11 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             bare_low = _sa(str(bare).lower())
             if any(_seas in bare_low for _seas in _QTY_GUARD_SEASONING_SKIP):
                 continue  # sazonador → puede no estar en pasos legítimamente
-            toks = [t for t in _re2.split(r"[^a-z]+", bare_low) if len(t) >= 4 and t not in ("para", "tipo")]
+            # [P2-STEM-FILLER-TOKENS · 2026-07-06] (vivo ×2: "atún en agua" sin paso porque los
+            # pasos SÍ usan "agua" — la del masa/aguacate) tokens FILLER (agua/aceite/lata) jamás
+            # son evidencia de uso: el token principal del alimento es el que manda.
+            toks = [t for t in _re2.split(r"[^a-z]+", bare_low)
+                    if len(t) >= 4 and t not in ("para", "tipo", "agua", "aceite", "lata", "latas")]
             if not toks:
                 continue  # nombre demasiado corto/ambiguo → no arriesgar falso positivo
             # [P1-REVERSE-COH-PLURAL · 2026-07-06] (plan vivo da7bb310 ×2) la línea "1½ tomates
@@ -17450,6 +17468,13 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
             return 0  # batido/frío → no forzar una proteína de cocción; sale sin tocar el día
         grams_food = int(round(swap_g / (chosen.protein / 100.0)))
         grams_food = max(10, min(grams_food, 300))
+        # [P2-REPAIR-LIGHT-CAP · 2026-07-06] (vivo: "140 g de queso" en unas bolitas de MERIENDA,
+        # sobre el techo de 120) el repair corre DESPUÉS de los caps por diseño → sus adiciones
+        # deben heredar el cap LIGHT del closer (CLOSER_SNACK_MAX_ADD_G) en desayuno/merienda —
+        # la clase mirror-refire aplicada al propio repair.
+        _slot_low = _sa(str(target_meal.get("meal", "")).lower() + " " + name_low)
+        if any(h in _slot_low for h in _LIGHT_MEAL_HINT):
+            grams_food = min(grams_food, int(CLOSER_SNACK_MAX_ADD_G))
         f = grams_food / 100.0
         p_add = chosen.protein * f
         c_add = (chosen.carbs or 0.0) * f
