@@ -14628,6 +14628,21 @@ def _day_kcal_out_of_refine_band(sp: float, sc: float, sf: float,
     return not (0.95 <= _dk / _tk <= 1.05)
 
 
+# [P1-TRUTHUP-NEGLIGIBLE-SKIP · 2026-07-07] (forense plan vivo 766893f4: el "Bowl de Soya Ceviche"
+# reportaba 8g grasa / 576 kcal pero sus strings suman 41g / 935 kcal — 34g de grasa del aguacate
+# SIN CONTAR. Causa: el gate conservador de `_truth_up_meal_macros_from_strings` ABORTA el meal
+# completo si UN ingrediente resuelve por nombre pero su cantidad no convierte a gramos. El "0.25 taza
+# de cilantro" (hierba sin density_g_per_cup → gramos=None) disparaba el abort → los macros nunca se
+# refrescaban desde los strings finales → el aguacate de 34g quedaba invisible para relevel/banda/gate.)
+# Umbrales para clasificar un ingrediente no-convertible como DESPRECIABLE (hierba/hoja): kcal y grasa
+# por-100g bajos → saltarlo NO under-cuenta materialmente. Un no-convertible SIGNIFICATIVO (proteína
+# enlatada, lácteo denso) sigue abortando (preserva la intención conservadora original P2-MACRO-TRUTHUP).
+TRUTHUP_NEGLIGIBLE_KCAL_100 = _env_float("MEALFIT_TRUTHUP_NEGLIGIBLE_KCAL_100", 40.0,
+                                         lambda v: 0.0 <= v <= 200.0)
+TRUTHUP_NEGLIGIBLE_FAT_100 = _env_float("MEALFIT_TRUTHUP_NEGLIGIBLE_FAT_100", 1.5,
+                                        lambda v: 0.0 <= v <= 20.0)
+
+
 def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
     """[P2-MACRO-TRUTHUP · 2026-06-16] (gap-audit P2-5) Recomputa el NÚMERO de macros del meal sumando
     `db.macros_from_ingredient_string` sobre los strings FINALES de `meal['ingredients']` (post reconcile/
@@ -14648,7 +14663,17 @@ def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
             if mc is None:
                 # No resuelve por nombre O cantidad no-convertible ('al gusto'/'1 lata'). Si el NOMBRE
                 # resuelve pero la cantidad no → hay masa real no sumable → NO override (conservador).
-                if db.lookup(str(ing)) is not None:
+                _info_nc = db.lookup(str(ing))
+                if _info_nc is not None:
+                    # [P1-TRUTHUP-NEGLIGIBLE-SKIP · 2026-07-07] EXCEPCIÓN: si el alimento es de aporte
+                    # macro DESPRECIABLE por-100g (hierba/hoja: cilantro/perejil/lechuga en "taza" sin
+                    # densidad), saltarlo NO under-cuenta materialmente → seguir en vez de abortar. Antes,
+                    # un cilantro en "taza" bloqueaba el truth-up de TODO el meal y dejaba grasa real (34g
+                    # de aguacate) sin contar (plan vivo 766893f4). Macro-significativo → abort conservador.
+                    _kc100 = _meal_macro_num(getattr(_info_nc, "kcal", None))
+                    _f100 = _meal_macro_num(getattr(_info_nc, "fats", None))
+                    if _kc100 <= TRUTHUP_NEGLIGIBLE_KCAL_100 and _f100 <= TRUTHUP_NEGLIGIBLE_FAT_100:
+                        continue
                     return False
                 continue  # nombre no resuelve (condimento/criollo) → aporte ~despreciable, seguir
             any_resolved = True
@@ -14844,6 +14869,11 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
         return False
 
 
+# [P1-TRUTHUP-BEFORE-RELEVEL · 2026-07-07] Kill switch del refresh de macros pre-relevel (P1-CHUNK-
+# FINALIZE-PARITY + este cierre). Flip a False revierte al comportamiento previo (relevel lee macros stored).
+TRUTHUP_BEFORE_RELEVEL_ENABLED = _env_bool("MEALFIT_TRUTHUP_BEFORE_RELEVEL", True)
+
+
 def _relevel_fats_universal(days, target_fats, db) -> int:
     """[P1-FATS-RELEVEL-UNIVERSAL · 2026-07-06] SSOT del re-trim de grasas INCONDICIONAL (S1 assemble +
     update helper + regen-day). Corre `_trim_day_fats_to_target` por CADA día con grasas sobre banda —
@@ -14862,6 +14892,20 @@ def _relevel_fats_universal(days, target_fats, db) -> int:
         return 0
     n = 0
     try:
+        # [P1-TRUTHUP-BEFORE-RELEVEL · 2026-07-07] `_trim_day_fats_to_target` mide el día con
+        # `sum(m.get("fats"))` (macros STORED). Si un meal UNDER-cuenta su grasa (aguacate count-based
+        # cuyo truth-up abortó por una hierba no-convertible — plan vivo 766893f4: 8g reportado vs 41g
+        # real), relevel lo veía "bajo target" y NO trimaba → el aguacate de 34g sobrevivía sin contar.
+        # Refrescar los macros desde los strings ANTES de medir cierra la ceguera (con el gate
+        # P1-TRUTHUP-NEGLIGIBLE-SKIP el truth-up ya no aborta por la hierba). No-op donde ya honestos.
+        if TRUTHUP_BEFORE_RELEVEL_ENABLED:
+            for _d in days:
+                for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                    if isinstance(_m, dict):
+                        try:
+                            _truth_up_meal_macros_from_strings(_m, db)
+                        except Exception:
+                            pass
         for _d in days:
             _meals = (_d.get("meals") or []) if isinstance(_d, dict) else []
             if _meals and _trim_day_fats_to_target(_meals, _tf, db, tol=FATS_POSTCLOSER_RELEVEL_TOL):
