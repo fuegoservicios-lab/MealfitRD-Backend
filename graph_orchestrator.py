@@ -21657,6 +21657,13 @@ _REALISM_CUP_CAPS = ((_REALISM_HERB_TOKENS, 0.25), (_REALISM_AROMATIC_TOKENS, 1.
                      (_REALISM_VOLUME_FRUIT_TOKENS, 2.0), (_REALISM_LIQUID_TOKENS, 2.0))
 REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
                                       lambda v: 150 <= v <= 600)
+# [P1-VEG-VOLUME-CAP · 2026-07-07] (review plan vivo 4e7b8dbb: "545 g de pepino" + "580 g de pepino"
+# en ensaladas de acompañamiento — el solver/rebalance infla vegetales ACUOSOS de bajo-caloría para
+# llenar volumen/fibra sin cap: ni el volume-FRUIT ni el leaf-cap (leafy) cubren el pepino). Techo
+# servible por comida (una ensalada generosa de pepino ≈ 1 pepino/200g; >½ kg es no-servible). Cap por
+# gramos (el solver los escribe en gramos). Yogurt/leche exentos por construcción (no son estos tokens).
+_REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito")
+REALISM_VEG_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_VEG_VOLUME_CAP_G", 250, lambda v: 100 <= v <= 500)
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
 # clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
 # (lookup miss) o una pasada TARDÍA infla la línea después de los caps por clase, NINGUNA línea
@@ -21941,6 +21948,11 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         elif (cur_g > float(REALISM_FRUIT_VOLUME_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_FRUIT_TOKENS)):
                             factor = float(REALISM_FRUIT_VOLUME_CAP_G) / cur_g
+                        # [P1-VEG-VOLUME-CAP · 2026-07-07] 1.6) vegetal ACUOSO de volumen en gramos
+                        # ("545 g de pepino" en una ensalada de acompañamiento, plan vivo 4e7b8dbb).
+                        elif (cur_g > float(REALISM_VEG_VOLUME_CAP_G)
+                              and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_VEG_TOKENS)):
+                            factor = float(REALISM_VEG_VOLUME_CAP_G) / cur_g
                         # [P2-SNACK-CHEESE-CAP · 2026-07-06] 1.7) queso en MERIENDA sobre el techo
                         # servible ("210 g de queso" con ½ lechosa). Yogurt exento.
                         elif (cur_g > float(SNACK_CHEESE_CAP_G)
@@ -23507,6 +23519,42 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                     if isinstance(raw, list):
                         raw[first_idx] = new_line
                     drop.update(idx for idx, _ in entries[1:])
+                    merged += len(entries) - 1
+                # [P1-UNIT-LINE-CONSOLIDATE · 2026-07-07] (review plan vivo 4e7b8dbb: "1 cdta de aceite
+                # de oliva" DUPLICADA — el closer/rebalance añade su línea de aceite y la fusión de
+                # gramos/conteo no ve las UNIDADES de cuchara). Mismo (unidad, alimento) → suma. Ej: dos
+                # "1 cdta de aceite de oliva" → "2 cdtas de aceite de oliva". Conservador (unidad + tail
+                # idénticos post-normalización). Pluralización simple del token de cuchara/taza.
+                _UNIT_SING_PLUR = {"cdta": "cdtas", "cucharadita": "cucharaditas", "cda": "cdas",
+                                   "cucharada": "cucharadas", "taza": "tazas"}
+                _unit_lead = _re.compile(
+                    r"^\s*(\d+(?:[.,]\d+)?)\s*(cdtas?|cucharaditas?|cdas?|cucharadas?|tazas?)\s+"
+                    r"(?:de\s+)?(.+?)\s*$", _re.IGNORECASE)
+                ugroups = {}
+                for idx, ing in enumerate(ings):
+                    if idx in drop:
+                        continue
+                    m_u = _unit_lead.match(str(ing))
+                    if not m_u:
+                        continue
+                    _unit_n = _sa(m_u.group(2).lower()).rstrip("s")
+                    _food_n = _sa(m_u.group(3).strip().lower())
+                    ugroups.setdefault((_unit_n, _food_n), []).append(
+                        (idx, float(m_u.group(1).replace(",", ".")), m_u.group(3).strip()))
+                for (_unit_n, _food_n), entries in ugroups.items():
+                    if len(entries) < 2:
+                        continue
+                    total_u = sum(q for _, q, _t in entries)
+                    first_idx = entries[0][0]
+                    _sing = _unit_n
+                    _plur = _UNIT_SING_PLUR.get(_unit_n, _unit_n + "s")
+                    _food_txt = entries[0][2]
+                    _num_txt = str(int(total_u)) if float(total_u).is_integer() else f"{total_u:g}"
+                    new_line = f"{_num_txt} {_sing if total_u == 1 else _plur} de {_food_txt}"
+                    ings[first_idx] = new_line
+                    if isinstance(raw, list):
+                        raw[first_idx] = new_line
+                    drop.update(idx for idx, _q, _t in entries[1:])
                     merged += len(entries) - 1
                 # [P1-CLOSER-HYGIENE · 2026-07-06] (plan vivo da7bb310: "4 huevos" + "1 huevo" —
                 # el closer añade su línea de proteína como CONTEO y la fusión solo veía gramos)
