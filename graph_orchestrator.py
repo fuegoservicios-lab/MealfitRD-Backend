@@ -13432,16 +13432,21 @@ PROTEIN_STEP_SOFT_DAIRY_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_SOFT_DAIRY_WOR
 _PRECOOKED_PROTEIN_HINT = ("en lata", "enlatad", "atun en agua", "atun en aceite", "sardina", "ahumad")
 
 
-def _closer_protein_step_text(nm: str, no_cook: bool) -> str:
+def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> str:
     """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
-    naturaleza del alimento: lácteo blando/no-cook → 'Incorpora ... mézclalo'; enlatado/pre-cocido → 'Escurre e
-    incorpora (ya viene cocido)'; resto → 'Cocina a la plancha o hervido'. SSOT de los sitios del closer que anexan
-    el paso '💪'. Pura, fail-safe. tooltip-anchor: P1-CLOSER-PRECOOKED-WORDING"""
+    naturaleza del alimento: licuado → 'Agrega ... a la licuadora'; lácteo blando/no-cook → 'Incorpora ... mézclalo';
+    enlatado/pre-cocido → 'Escurre e incorpora (ya viene cocido)'; resto → 'Cocina a la plancha o hervido'. SSOT de
+    los sitios del closer que anexan el paso '💪'. Pura, fail-safe. tooltip-anchor: P1-CLOSER-PRECOOKED-WORDING"""
     try:
         from constants import strip_accents as _sa2
         _nm_sa = _sa2(str(nm).lower())
     except Exception:
         _nm_sa = str(nm).lower()
+    # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] (review visual, batido verde con queso) En un batido
+    # la proteína blanda va A LA LICUADORA: "Incorpora queso a la preparación y mézclalo antes de
+    # servir" en un licuado lee robótico y contradice el Montaje (que ya licúa todo). Wording natural.
+    if blended:
+        return f"Agrega {nm} a la licuadora y licúa hasta integrar."
     # [P1-CLOSER-HYGIENE · 2026-07-06] (plan vivo da7bb310: "Cocina huevo cocido a la plancha o
     # hervido") nombres de catálogo que YA traen "cocido" (huevo cocido, guisantes cocidos) jamás
     # reciben el wording "Cocina X..." — cocinar lo cocido es absurdo user-facing.
@@ -13481,7 +13486,10 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         if _stems and any(_re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _steps_blob)
                           for st in _stems):
             return False  # (b) la receta ya trabaja el alimento → sin paso genérico
-        _step = f"💪 {_closer_protein_step_text(nm, no_cook)}"
+        # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] licuado → wording "Agrega X a la licuadora".
+        _blended = ("licuadora" in _steps_blob or "licua" in _steps_blob
+                    or any(b in _sa_cs(str(meal.get("name", "")).lower()) for b in _NO_COOK_BLENDED))
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended)}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
         meal["recipe"] = _insert_step_before_montaje(rec, _step)
@@ -15436,6 +15444,15 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             bare_low = _sa(str(bare).lower())
             if any(_seas in bare_low for _seas in _QTY_GUARD_SEASONING_SKIP):
                 continue  # sazonador → puede no estar en pasos legítimamente
+            # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] (review visual, batido verde plan de 30d)
+            # agua/hielo son triviales: no requieren un paso de uso explícito y su identidad
+            # NO es el descriptor de temperatura. "1 taza de agua fría" → bare="agua fria" →
+            # el único token ≥4 chars es "fria" (temperatura), que casi nunca aparece literal
+            # en los pasos (el Montaje dice "el agua", no "agua fría") → paso ESPURIO
+            # "Incorpora también agua fría al plato antes de servir". El agua/hielo se añaden
+            # solos; jamás son un ingrediente que la receta "olvide usar".
+            if bare_low in ("agua", "hielo") or bare_low.startswith("agua "):
+                continue
             # [P2-STEM-FILLER-TOKENS · 2026-07-06] (vivo ×2: "atún en agua" sin paso porque los
             # pasos SÍ usan "agua" — la del masa/aguacate) tokens FILLER (agua/aceite/lata) jamás
             # son evidencia de uso: el token principal del alimento es el que manda.
@@ -15463,11 +15480,19 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         if not missing:
             return 0
         _list = ", ".join(missing[:6])
+        # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] En una preparación LICUADA (batido/jugo/smoothie)
+        # el ingrediente ausente va A LA LICUADORA, no "al plato": "Incorpora también X al plato
+        # antes de servir" en un batido lee robótico (review visual). Detecta licuadora en pasos o
+        # batido/jugo en el nombre → wording natural de licuado.
+        _blended = ("licuadora" in recipe_low or "licua" in recipe_low
+                    or any(b in _sa(str(meal.get("name", "")).lower()) for b in _NO_COOK_BLENDED))
         # [P1-NOCOOK-COMPLEMENT-TDF · 2026-07-05] (review visual, plan e49d44c3) En un plato FRÍO
         # (guineo con mantequilla de maní) el prefijo "El Toque de Fuego (complemento)" invitaba al
         # backstop de tiempo a inyectar "(~10-12 min a fuego medio)" — fuego falso en plato frío.
         # Sin cocción → paso de integración fría sin prefijo de fuego.
-        if RECIPE_CONTRACT_NOCOOK_ENABLED and _meal_is_no_cook(meal):
+        if _blended:
+            new_step = f"Agrega también {_list} a la licuadora antes de licuar."
+        elif RECIPE_CONTRACT_NOCOOK_ENABLED and _meal_is_no_cook(meal):
             new_step = f"Incorpora también {_list} al plato antes de servir, integrándolo de forma coherente."
         else:
             new_step = (f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación, "

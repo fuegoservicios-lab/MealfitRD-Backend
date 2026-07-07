@@ -844,7 +844,16 @@ _DESPENSA_PERISHABLE_EXCEPTIONS = frozenset({
     'pan de agua',
     'pan blanco',
     'pan dulce',
-    # NO incluir: casabe (deshidratado), galletas (selladas, secas), pan tostado.
+    # [P1-TORTILLA-PERECEDERO · 2026-07-06] (review visual del plan de 30 días) Las
+    # tortillas/wraps integrales de trigo (Toufayan, etc.) tienen category="Despensa"
+    # en master pero son pan blando: duran ~1 semana refrigeradas, se enmohecen mucho
+    # antes de los 30 días. Aparecían en "DESPENSA DEL MES — COMPRA UNA SOLA VEZ"
+    # (12 wraps comprados el día 1 para todo el mes) → se dañan. El substring 'tortilla'
+    # cubre "tortilla integral"/"tortilla de trigo"/"tortilla de maíz" (todas frescas).
+    'tortilla',
+    # NO incluir: casabe (deshidratado), galletas (selladas, secas), pan tostado,
+    # tostones/chips de tortilla (secos, sellados — no contienen 'tortilla' salvo
+    # "chips de tortilla", ausente del catálogo verificado RD).
 })
 
 # Heurística por nombre cuando category es ambigua (Lácteos/Víveres/Proteínas).
@@ -1697,7 +1706,7 @@ PERISHABLE_CATEGORY_PREFIXES = frozenset({
 PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS = 7
 
 
-def is_perishable_category(category: str | None, shelf_life_days=None) -> bool:
+def is_perishable_category(category: str | None, shelf_life_days=None, name: str | None = None) -> bool:
     """[P1-PDF-2] Determina si un item de la lista de compras es perecedero.
 
     Helper canónico que reemplaza la heurística de substring duplicada en
@@ -1738,6 +1747,19 @@ def is_perishable_category(category: str | None, shelf_life_days=None) -> bool:
     from constants import strip_accents
     cat_lower = str(category or "").strip().lower()
     cat_norm = strip_accents(cat_lower)
+
+    # [P1-TORTILLA-PERECEDERO · 2026-07-06] Override por nombre — espejo del que
+    # `_classify_perishability` aplica dentro de la rama `_STAPLE_CATEGORIES`.
+    # Este clasificador (SSOT del flag `is_perishable` que consume el frontend/PDF,
+    # path weekly) era category-only y NO tenía hook por nombre: panes/tortillas
+    # frescos catalogados como "Despensa" caían a la Regla 1 (stable) SIEMPRE.
+    # Sin este override, la tortilla integral quedaba en "estables — compra una
+    # sola vez" en el weekly aunque `_classify_perishability` ya la trate como
+    # perecedera en biweekly/monthly → inconsistencia visible cross-duración.
+    if name:
+        _name_norm = strip_accents(str(name).lower().strip())
+        if any(exc in _name_norm for exc in _DESPENSA_PERISHABLE_EXCEPTIONS):
+            return True
 
     # Pre-parse shelf_life para usar en múltiples reglas.
     shelf_int = None
@@ -9115,7 +9137,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # perecederos (inconsistencia visible).
                 _cat_for_perish = cat if (cat and cat.lower() != "otros") else display_cat
                 market_obj["is_perishable"] = is_perishable_category(
-                    _cat_for_perish, market_obj.get("shelf_life_days")
+                    _cat_for_perish, market_obj.get("shelf_life_days"), name=name
                 )
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
                 # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
@@ -9157,7 +9179,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # perecederos (inconsistencia visible).
                 _cat_for_perish = cat if (cat and cat.lower() != "otros") else display_cat
                 market_obj["is_perishable"] = is_perishable_category(
-                    _cat_for_perish, market_obj.get("shelf_life_days")
+                    _cat_for_perish, market_obj.get("shelf_life_days"), name=name
                 )
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
                 # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
