@@ -12243,9 +12243,21 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         _seed_tail = ("" if k in _MICRO_SEED_SAVORY_KEYS
                                                       else (" al servir" if _seed_is_drink
                                                             else " sobre el plato al servir"))
+                                        # [P3-9 · 2026-07-07] la nota 🌱 está EXCLUIDA del qty-sync (por
+                                        # diseño) → si embebe la cantidad del seed ("50 g de zanahoria
+                                        # rallada"), el closer la escala (→65g) y humanize reforma la
+                                        # LÍNEA de ingrediente ("½ zanahoria") mientras la nota queda
+                                        # congelada = triple divergencia (nota "¾ zanahoria (65g)" vs
+                                        # display "½ zanahoria" vs raw "65g", plan vivo 766893f4). La
+                                        # cantidad vive en la línea de ingrediente (fuente de verdad); la
+                                        # nota solo NOMBRA el alimento. Strip del lead qty/unit/"de".
+                                        _seed_food = _re.sub(
+                                            r"^\s*\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|ml|kg|taza|tazas|"
+                                            r"cda|cdas|cdta|cdtas|unidad|unidades)?\s*(?:de\s+)?", "",
+                                            _seed_line, flags=_re.IGNORECASE).strip() or _seed_line
                                         _seed_meal["recipe"] = _insert_step_before_montaje(
                                             _rec_seed,
-                                            f"🌱 Nota del Nutricionista AI: {_seed_verb} {_seed_line}"
+                                            f"🌱 Nota del Nutricionista AI: {_seed_verb} {_seed_food}"
                                             f"{_seed_tail} — cierra tu "
                                             f"{_MICRO_SEED_HUMAN.get(k, k)} del día.")
                                     adjustments += 1
@@ -19024,14 +19036,16 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
         return 0
 
 
-def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
+def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None) -> tuple:
     """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
     forma DEFENSIVA antes de cualquier persist, para los paths que saltan assemble_plan_node (partial/degradado/SSE-fallback/
     chunk). ORDEN load-bearing: slice-grams ANTES de quantize ("1¼ lonja de queso"→"30 g" antes de redondear gramos);
     leaf-cap antes de quantize. Las 3 fns son idempotentes + fail-safe → re-correr donde assemble ya las aplicó es no-op
     (NO toca el band 1.00 del caso bueno). NO incluye los caps clínicos DM2/bariátrico ni FASE A (necesitan form_data/
-    nutrition, ausentes en el persist boundary; quedan en assemble). Muta `days` in-place. Devuelve (total_fixed, summary).
-    tooltip-anchor: P1-COHERENCE-FINALIZE"""
+    nutrition, ausentes en el persist boundary; quedan en assemble). `target_fats` (g/día, opcional): si se provee,
+    corre `_relevel_fats_universal` + `_cap_cheese_dumps_final` para paridad con assemble (P1-CHUNK-FINALIZE-PARITY);
+    sin él, el relevel se salta (el cheese-final corre igual, no necesita target). Muta `days` in-place. Devuelve
+    (total_fixed, summary). tooltip-anchor: P1-COHERENCE-FINALIZE"""
     if not COHERENCE_FINALIZE_ENABLED or not isinstance(days, list) or not days:
         return (0, "")
     total = 0
@@ -19158,6 +19172,32 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
                 total += _n; parts.append(f"quantize={_n}")
     except Exception as _e3:
         logger.warning(f"[P1-COHERENCE-FINALIZE] quantize no-op: {type(_e3).__name__}: {_e3}")
+    # [P1-CHUNK-FINALIZE-PARITY · 2026-07-07] (forense plan vivo 766893f4, goal ganancia muscular:
+    # day2 = path chunk/partial → F141 total vs 58 target, y "Tostadas PB+Mango+Queso" 67g grasa SIN
+    # capear). `_relevel_fats_universal` y `_cap_cheese_dumps_final` solo corrían en assemble → los
+    # días de semanas 2+ (y todo path degradado/partial/SSE-fallback) nunca releveleaban grasa ni
+    # capeaban el queso bolt-oneado por el closer. Ambos idempotentes → no-op donde assemble ya los
+    # aplicó (band 1.00 del caso bueno intacto). relevel gated por `target_fats` provisto por el caller
+    # (el chunk worker lo deriva de plan_data['macros']['fats']); sin target → skip (fail-safe). Corre
+    # tras el quantize (ve gramos finales) y ANTES del qty-sync de abajo (que re-sincroniza los pasos).
+    # tooltip-anchor: P1-CHUNK-FINALIZE-PARITY
+    try:
+        if FATS_RELEVEL_UNIVERSAL_ENABLED and target_fats:
+            if db is None:
+                from nutrition_db import IngredientNutritionDB as _RLDB
+                db = _RLDB()
+            _nrl = _relevel_fats_universal(days, target_fats, db)
+            if _nrl:
+                total += _nrl; parts.append(f"fats_relevel={_nrl}")
+    except Exception as _erl:
+        logger.warning(f"[P1-CHUNK-FINALIZE-PARITY] fats-relevel no-op: {type(_erl).__name__}: {_erl}")
+    try:
+        if CHEESE_DUMP_FINAL_ENABLED:
+            _ncf = _cap_cheese_dumps_final(days, db=db)
+            if _ncf:
+                total += _ncf; parts.append(f"cheese_final={_ncf}")
+    except Exception as _ecf:
+        logger.warning(f"[P1-CHUNK-FINALIZE-PARITY] cheese-final no-op: {type(_ecf).__name__}: {_ecf}")
     # [P1-RECIPE-QTY-SYNC · 2026-07-01] post-quantize: los pasos reflejan las cantidades actuales (paridad
     # con assemble/finalizador de updates; el persist boundary cubre partial/degradado/SSE-fallback).
     try:
@@ -19250,6 +19290,14 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None) -> tuple:
         _reconcile_display_missing_in_raw(days)
     except Exception as _rr_pb_e:
         logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] boundary no-op: {type(_rr_pb_e).__name__}: {_rr_pb_e}")
+    # [P1-RAW-DISPLAY-RECONCILE-RECIPROCAL · 2026-07-07] dirección opuesta: raw sin contraparte en
+    # display → el display la adopta (el chunk path dropeaba "0.5 diente de ajo" del display).
+    try:
+        _nrd = _reconcile_raw_missing_in_display(days)
+        if _nrd:
+            total += _nrd; parts.append(f"raw_display_recip={_nrd}")
+    except Exception as _rrd_pb_e:
+        logger.warning(f"[P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] boundary no-op: {type(_rrd_pb_e).__name__}: {_rrd_pb_e}")
     # [P1-CURED-GHOST-STEPS · 2026-07-05] también en el boundary.
     try:
         _rewrite_cured_ghost_protein_steps(days)
@@ -21608,6 +21656,16 @@ _REALISM_COMPOUND_COUNT_CAPS = (("tomate cherry", 10.0), ("tomates cherry", 10.0
 # líneas cuantizadas (post-quantize re-runs) usan esas fracciones.
 _REALISM_CUP_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*tazas?\b")
 _REALISM_FRAC_MAP = {"¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
+# [P1-COUNT-UNICODE-FRAC · 2026-07-07] (forense plan vivo 766893f4: "1½ aguacates (221 g)" quedó SIN
+# capear — el count-cap `aguacate:1.0` sí existía pero el regex `\d+\s+noun` exige espacio tras el
+# dígito, y la fracción unicode "1½" (sin espacio) lo evadía; el raw "1.5 aguacate" SÍ parseaba pero
+# el cap corre sobre el DISPLAY humanizado). Lead entero opcional + fracción unicode opcional + noun,
+# espejo de `_REALISM_CUP_LEAD_RE`. Cubre "1½ aguacates"→1.5, "½ zanahoria"→0.5, "4½ huevos"→4.5,
+# y sigue parseando "1.5 aguacate"/"2 cebollas". `\s*` (no `\s+`) antes del noun: el `\s*` pre-fracción
+# es greedy y se come el único espacio de "1 tomate" → `\s+` dejaría el noun sin match. Ningún noun
+# capeado es unidad (g/ml/taza/cda) → matchear "g" como noun en líneas-gramo es inocuo (cap None).
+# tooltip-anchor: P1-COUNT-UNICODE-FRAC
+_REALISM_COUNT_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*([a-zñ]+)")
 # [P1-BIGFRUIT-GRAM-HINT · 2026-07-06] Las frutas grandes tienen peso POR-UNIDAD = fruta ENTERA en el
 # catálogo → `macros_from_ingredient_string("1 lechosa") = 711 kcal / 162g carbs` (papaya de ~700g). Un
 # conteo PELADO en un meal ("1 lechosa", sin gramaje) es un FANTASMA: corrompe el census del refinador
@@ -21861,18 +21919,19 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                     # [P1-REALISM-CAPS-EXT] compuestos ANTES del sustantivo genérico
                     # ("36.5 tomates cherry" → cap cherry 10, no cap tomate 3).
                     if factor is None:
-                        m_n = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s+([a-zñ]+)", il)
-                        if m_n:
+                        m_n = _REALISM_COUNT_LEAD_RE.match(il)
+                        if m_n and (m_n.group(1) or m_n.group(2)):  # [P1-COUNT-UNICODE-FRAC] exige nº o fracción
                             _cap_n = None
                             for _ct, _cv in _REALISM_COMPOUND_COUNT_CAPS:
                                 if _ct in il:
                                     _cap_n = _cv
                                     break
                             if _cap_n is None:
-                                _noun = m_n.group(2).rstrip("s")
+                                _noun = m_n.group(3).rstrip("s")
                                 _cap_n = _REALISM_COUNT_CAPS.get(_noun)
                             if _cap_n:
-                                cur_n = float(m_n.group(1).replace(",", "."))
+                                cur_n = float((m_n.group(1) or "0").replace(",", "."))
+                                cur_n += _REALISM_FRAC_MAP.get(m_n.group(2) or "", 0.0)  # "1½"→1.5
                                 if cur_n > _cap_n:
                                     factor = _cap_n / cur_n
                     if factor is not None and factor < 0.999:
@@ -23058,6 +23117,63 @@ def _reconcile_display_missing_in_raw(days) -> int:
         return added
     except Exception as _rr_e:
         logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] no-op: {type(_rr_e).__name__}: {_rr_e}")
+        return 0
+
+
+# [P1-RAW-DISPLAY-RECONCILE-RECIPROCAL · 2026-07-07] (forense plan vivo 766893f4: "Puré de Sardinas"
+# tenía ingredients_raw=10 líneas con "0.5 diente de ajo picado" que el DISPLAY humanizado (9 líneas)
+# DROPEÓ — el usuario no veía el ajo en la receta aunque la lista de compras SÍ lo tenía). Es la
+# dirección OPUESTA a `_reconcile_display_missing_in_raw` (que cubre display→raw): aquí una línea del
+# RAW cuyo token principal no aparece en NINGUNA línea del display → se APPENDEA al display. Dirección
+# segura: el display solo GANA la línea que ya está en raw/compras (la verdad); jamás se borra ni se
+# muta una línea existente. Cierra la clase "24 divergencias de magnitud del coherence guard" cuando
+# raw>display. Corre TARDE (tras los caps, junto al reconcile hermano) → no rompe lockstep posicional
+# de caps aguas arriba. Idempotente. tooltip-anchor: P1-RAW-DISPLAY-RECONCILE-RECIPROCAL
+RAW_DISPLAY_RECONCILE_RECIPROCAL_ENABLED = _env_bool("MEALFIT_RAW_DISPLAY_RECONCILE_RECIPROCAL", True)
+
+
+def _reconcile_raw_missing_in_display(days) -> int:
+    """Espejo de `_reconcile_display_missing_in_raw`: línea de RAW sin contraparte en el DISPLAY →
+    se añade al display (el usuario ve el ingrediente que la lista/macros ya cuentan). Conservador
+    (solo APPEND al display), idempotente, fail-safe. tooltip-anchor: P1-RAW-DISPLAY-RECONCILE-RECIPROCAL"""
+    if not RAW_DISPLAY_RECONCILE_RECIPROCAL_ENABLED:
+        return 0
+    try:
+        from constants import strip_accents as _sa_rd
+        added = 0
+        for _d in days or []:
+            for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                raw = meal.get("ingredients_raw")
+                if not isinstance(ings, list) or not isinstance(raw, list):
+                    continue
+                _disp_blob = _sa_rd(" ".join(str(x) for x in ings).lower())
+                for s in raw:
+                    if not isinstance(s, str) or not s.strip():
+                        continue
+                    _food = _re.sub(_LEAD_QTY_UNIT_STRIP_RE, "", _sa_rd(s.lower())).strip()
+                    _toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _food) if len(t) >= 4]
+                    if not _toks:
+                        continue
+                    _t0 = _toks[0]
+                    _cands = {_t0}
+                    if len(_t0) > 4 and _t0.endswith("s"):
+                        _cands.add(_t0[:-1])
+                    if len(_t0) > 5 and _t0.endswith("es"):
+                        _cands.add(_t0[:-2])
+                    if not any(_re.search(r"\b" + _re.escape(_c) + r"(?:es|e|s)?\b", _disp_blob)
+                               for _c in _cands):
+                        ings.append(s)
+                        _disp_blob += " " + _sa_rd(s.lower())
+                        added += 1
+        if added:
+            logger.info(f"🧾 [P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] {added} línea(s) de raw sin contraparte "
+                        f"en display → añadidas (el usuario ve el ingrediente que la lista ya cuenta).")
+        return added
+    except Exception as _rrd_e:
+        logger.warning(f"[P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] no-op: {type(_rrd_e).__name__}: {_rrd_e}")
         return 0
 
 
@@ -25105,6 +25221,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
         _reconcile_display_missing_in_raw(days)
     except Exception as _rr_as_e:
         logger.warning(f"[P2-RAW-DISPLAY-RECONCILE] assemble no-op: {type(_rr_as_e).__name__}: {_rr_as_e}")
+    # [P1-RAW-DISPLAY-RECONCILE-RECIPROCAL · 2026-07-07] dirección opuesta (raw→display): el aromático
+    # presente en raw+lista pero dropeado del display humanizado (ajo del "Puré de Sardinas") se restaura.
+    try:
+        _reconcile_raw_missing_in_display(days)
+    except Exception as _rrd_as_e:
+        logger.warning(f"[P1-RAW-DISPLAY-RECONCILE-RECIPROCAL] assemble no-op: {type(_rrd_as_e).__name__}: {_rrd_as_e}")
     # [P1-CURED-GHOST-STEPS · 2026-07-05] proteína curada fantasma en pasos (arenque del plan
     # 55846e5e) → reescribir hacia la proteína presente + strip de desalado.
     try:

@@ -840,7 +840,19 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
             _pd = data["plan_data"]
             if isinstance(_pd, dict) and isinstance(_pd.get("days"), list):
                 from graph_orchestrator import finalize_plan_data_coherence as _fpc
-                _n, _summ = _fpc(_pd["days"])
+                # [P1-CHUNK-FINALIZE-PARITY · 2026-07-07] deriva target de grasa del plan → el shield
+                # pre-INSERT corre relevel + cheese-final en planes que saltan assemble (partial/
+                # rechazado-pero-entregado/SSE-fallback), no solo el slice/quantize.
+                _tf_ins = None
+                try:
+                    import re as _re_ins
+                    _mfats_ins = (_pd.get("macros") or {}).get("fats")
+                    if _mfats_ins is not None:
+                        _mm_ins = _re_ins.search(r"(\d+(?:\.\d+)?)", str(_mfats_ins))
+                        _tf_ins = float(_mm_ins.group(1)) if _mm_ins else None
+                except Exception:
+                    _tf_ins = None
+                _n, _summ = _fpc(_pd["days"], target_fats=_tf_ins)
                 if _n:
                     logger.info(f"🧩 [P1-COHERENCE-FINALIZE] pre-INSERT aplicó coherencia a un plan no-finalizado ({_summ}).")
         except Exception as _fce:

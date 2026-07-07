@@ -30174,7 +30174,19 @@ def process_plan_chunk_queue(target_plan_id=None):
                             try:
                                 if isinstance(plan_data.get("days"), list):
                                     from graph_orchestrator import finalize_plan_data_coherence as _fpc_chunk
-                                    _n_ck, _summ_ck = _fpc_chunk(plan_data["days"])
+                                    # [P1-CHUNK-FINALIZE-PARITY · 2026-07-07] deriva el target de grasa del
+                                    # día (plan_data['macros']['fats'] = "58g") → el finalizer corre relevel
+                                    # + cheese-final en los días de semanas 2+ (antes solo en assemble → day2
+                                    # llegaba a F141 vs 58 con "Tostadas PB+Mango+Queso" 67g SIN capear).
+                                    _tf_ck = None
+                                    try:
+                                        _mfats = (plan_data.get("macros") or {}).get("fats")
+                                        if _mfats is not None:
+                                            _mm_tf = re.search(r"(\d+(?:\.\d+)?)", str(_mfats))
+                                            _tf_ck = float(_mm_tf.group(1)) if _mm_tf else None
+                                    except Exception:
+                                        _tf_ck = None
+                                    _n_ck, _summ_ck = _fpc_chunk(plan_data["days"], target_fats=_tf_ck)
                                     if _n_ck:
                                         logger.info(f"🧩 [P1-COHERENCE-FINALIZE] chunk T1 plan {meal_plan_id} semana "
                                                     f"{week_number} ({_summ_ck}).")
