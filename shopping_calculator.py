@@ -5951,18 +5951,22 @@ def _canonicalize_for_coherence(food_names) -> set:
     return out
 
 
-# [P1-COHERENCE-PACKAGING-NOISE · 2026-07-07] Alimentos cuya cantidad en la lista
-# la dicta el ENVASE MÍNIMO vendible, NO la receta: condimentos/especias (se usan
-# "al gusto"/cdta), aceites (cdta/cda → botella), y semillas (10-20g → funda de
-# 200g). Su sobre-oferta en el coherence guard es ruido estructural, no una falta.
-# Match word-boundary (`\bsal\b` NO matchea salmón/salsa/ensalada). Solo se usan
-# para FILTRAR sobre-oferta (act > exp); jamás ocultan una FALTA. Comida real
-# (pavo/pollo/arroz/res/pescado) NO está aquí → su sobre-oferta sigue siendo señal.
-_COHERENCE_PACKAGED_MIN_KEYWORDS = (
-    "aceite", "vinagre", "sal", "pimienta", "oregano", "comino", "canela",
-    "sazon", "curcuma", "laurel", "clavo", "nuez moscada", "jengibre",
-    "pimenton", "paprika", "curry", "azafran", "tomillo", "especias",
-    "condimento", "semilla", "linaza", "chia", "ajonjoli", "sesamo",
+# [P1-COHERENCE-OVERSUPPLY-STAPLES · 2026-07-07] (extiende P1-COHERENCE-PACKAGING-NOISE)
+# En el coherence guard, la SOBRE-oferta (lista > receta) es RUIDO de granularidad de
+# envase para CASI TODO: granos/staples (arroz/avena/pasta/cebada), condimentos/aceites/
+# semillas, y vegetales/aromáticos por unidad entera (ajo/repollo/lechuga) se compran por
+# bolsa o cabeza → SIEMPRE hay "de sobra" y la receta es cocinable. La ÚNICA sobre-oferta
+# que sigue siendo SEÑAL es la de PROTEÍNA vendida por PESO (carne/pescado/aves): comprar
+# 4× el pollo de la receta es un over-buy real de costo (test_pavo_v3). Enlatados/huevos
+# (rounding de lata/cartón) y frutas/veg (caps P5/P6 + cap-aware) NO están aquí → su
+# sobre-oferta se filtra. Antes solo filtrábamos condimentos → arroz/repollo/ajo/avena
+# quedaban como warn ruidoso (67/plan). `\w*` cubre plurales/compuestos ("filetes",
+# "pechuga de pollo"). Solo FILTRA sobre-oferta; jamás oculta una FALTA (under-supply).
+_COHERENCE_OVERSUPPLY_PROTEIN_KEEP_RE = re.compile(
+    r"\b(pollo|pavo|cerdo|res|carne|bistec|chuleta|lomo|molid|costilla|longaniza|"
+    r"salchicha|salami|tocineta|jamon|pechuga|muslo|pescado|tilapia|mero|salmon|atun|"
+    r"sardina|bacalao|camaron|mariscos|mejillon|calamar|pulpo|cangrejo|langosta|"
+    r"filete|higado)\w*"
 )
 
 
@@ -6264,14 +6268,14 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     #       no convertible ("3 lonjas de pan"→745g, "1 sobre" pimienta, funda de
     #       mejillón vs g). Ya se excluye del block (P2-COHERENCE-PACKAGE-UNITS); es
     #       igual de ruidoso en warn.
-    #   (b) SOBRE-oferta (actual > expected) de un CONDIMENTO/ACEITE/SEMILLA de envase
-    #       mínimo: la receta pide 20g de semillas pero el mínimo vendible es la funda
-    #       de 200g; 1 cdta de aceite → botella de 125ml. La lista TIENE de sobra → la
-    #       receta es cocinable, no hay divergencia real. NO se filtra la sobre-oferta
-    #       de comida real (pavo 4×, pollo 2.4×, arroz 3%) — esas siguen siendo señal.
-    # Se PRESERVAN: yield_uncovered (banda diagnóstica), pantry_overdeduct y unknown
-    # POR DEBAJO (falta real "qty mitad"), sobre-oferta de proteína/carbo real, y toda
-    # la capa presence. Reversible: MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER=false.
+    #   (b) [P1-COHERENCE-OVERSUPPLY-STAPLES] SOBRE-oferta (actual > expected) de cualquier
+    #       alimento que NO sea proteína por peso: la receta pide 20g de semillas / 3 lonjas
+    #       de pan / ½ cabeza de repollo pero el mínimo vendible es la funda/paquete/cabeza
+    #       entera → la lista TIENE de sobra, la receta es cocinable, no hay divergencia real.
+    #       La sobre-oferta de PROTEÍNA por peso (pollo/pescado/pavo 4×) SÍ se preserva (over-buy).
+    # Se PRESERVAN: yield_uncovered (banda diagnóstica), pantry_overdeduct y unknown POR DEBAJO
+    # (falta real "qty mitad"), sobre-oferta de PROTEÍNA por peso, y toda la capa presence.
+    # Reversible: MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER=false.
     if _knob_env_bool("MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER", True) and magnitude_divs:
         try:
             from constants import strip_accents as _sa_pkg
@@ -6283,23 +6287,25 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
                     _act_q = float(d.get("actual_qty") or 0)
                 except (TypeError, ValueError):
                     return False
-                # Solo sobre-oferta (la lista tiene MÁS) de un ítem de envase-mínimo.
+                # Solo sobre-oferta (la lista tiene MÁS que la receta).
                 if not (_exp_q > 0 and _act_q > _exp_q):
                     return False
                 _food_norm = _sa_pkg(str(d.get("food") or "").lower())
-                return any(
-                    re.search(r"\b" + re.escape(kw) + r"s?\b", _food_norm)
-                    for kw in _COHERENCE_PACKAGED_MIN_KEYWORDS
-                )
+                # Sobre-oferta de PROTEÍNA real (por peso) = over-buy → SEÑAL, no ruido.
+                if _COHERENCE_OVERSUPPLY_PROTEIN_KEEP_RE.search(_food_norm):
+                    return False
+                # Cualquier otra sobre-oferta (grano/staple/veg/lácteo/condimento por envase
+                # o unidad entera) = granularidad de envase → ruido.
+                return True
             _pre_pkg = len(magnitude_divs)
             _pkg_noise = [d for d in magnitude_divs if _is_packaging_noise(d)]
             if _pkg_noise:
                 magnitude_divs = [d for d in magnitude_divs if not _is_packaging_noise(d)]
                 logging.info(
                     f"🛒 [COH-GUARD/pkg-noise] Filtradas {len(_pkg_noise)} divergencias magnitud "
-                    f"estructurales (unit_mismatch + sobre-oferta de condimento/aceite/semilla de "
-                    f"envase) de {_pre_pkg} (P1-COHERENCE-PACKAGING-NOISE). Restantes accionables: "
-                    f"{len(magnitude_divs)}"
+                    f"estructurales (unit_mismatch + sobre-oferta de envase de no-proteína) de "
+                    f"{_pre_pkg} (P1-COHERENCE-PACKAGING-NOISE / P1-COHERENCE-OVERSUPPLY-STAPLES). "
+                    f"Restantes accionables: {len(magnitude_divs)}"
                 )
         except Exception as e:
             logging.warning(f"[COH-GUARD/pkg-noise] filter falló (no aborta): {e}")

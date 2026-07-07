@@ -763,12 +763,15 @@ class TestMagnitudeCoherence:
         assert "_shopping_coherence_block" not in plan
 
     def test_tolerance_pct_strict_blocks_small_delta(self, no_master_db, monkeypatch):
-        """Knob TOLERANCE_PCT=0.01 → 3% delta supera tolerance, magnitude reporta."""
+        """Knob TOLERANCE_PCT=0.01 → 3% delta supera tolerance, magnitude reporta.
+        [P1-COHERENCE-OVERSUPPLY-STAPLES · 2026-07-07] Vehículo cambiado de Arroz a Pollo:
+        la sobre-oferta de STAPLES (arroz por bolsa) ahora se filtra como ruido de envase;
+        el mecanismo del knob de tolerancia se prueba con una PROTEÍNA por peso (no filtrada)."""
         monkeypatch.delenv("MEALFIT_SHOPPING_COHERENCE_GUARD", raising=False)
         monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT", "0.01")
         plan = self._make_plan(
-            ["1000 g arroz"],
-            [{"name": "Arroz", "market_qty_numeric": 1030, "market_unit": "g"}],  # 3% delta
+            ["1000 g pollo"],
+            [{"name": "Pollo", "market_qty_numeric": 1030, "market_unit": "g"}],  # 3% delta
         )
         divs = run_shopping_coherence_guard(plan, multiplier=1.0)
         mag = [d for d in divs if d.get("magnitude")]
