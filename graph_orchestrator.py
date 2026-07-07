@@ -21701,7 +21701,7 @@ REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
 # llenar volumen/fibra sin cap: ni el volume-FRUIT ni el leaf-cap (leafy) cubren el pepino). Techo
 # servible por comida (una ensalada generosa de pepino ≈ 1 pepino/200g; >½ kg es no-servible). Cap por
 # gramos (el solver los escribe en gramos). Yogurt/leche exentos por construcción (no son estos tokens).
-_REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito")
+_REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito", "apio")
 REALISM_VEG_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_VEG_VOLUME_CAP_G", 250, lambda v: 100 <= v <= 500)
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
 # clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
@@ -21755,7 +21755,12 @@ _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
 # [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
 # captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
 # cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
-_REALISM_COMPOUND_COUNT_CAPS = (("tomate cherry", 10.0), ("tomates cherry", 10.0))
+# [P1-APIO-STALK-CAP · 2026-07-07] (review plan vivo 4b9291fe: "9½ tallos de apio (285g)" en un
+# gratinado para 1 persona) — el apio es aromático (cup-cap ≤1 taza) pero por CONTEO de tallos o en
+# GRAMOS se escapaba; ~4 tallos (150g) es una ración generosa. Compuesto (matchea el conteo de tallos)
+# + apio en _REALISM_VOLUME_VEG_TOKENS (forma en gramos). tooltip-anchor: P1-APIO-STALK-CAP
+_REALISM_COMPOUND_COUNT_CAPS = (("tomate cherry", 10.0), ("tomates cherry", 10.0),
+                                ("tallo de apio", 4.0), ("tallos de apio", 4.0))
 # Lead en tazas con fracción unicode/mixta ("3¾ taza") — el regex decimal previo no lo veía y las
 # líneas cuantizadas (post-quantize re-runs) usan esas fracciones.
 _REALISM_CUP_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*tazas?\b")
