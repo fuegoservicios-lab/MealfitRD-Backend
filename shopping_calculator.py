@@ -4703,7 +4703,10 @@ def canonicalize_lacteo(name) -> str | None:
     # Leche: cualquier variante con descriptor entera/descremada/light.
     # No matchear "leche de coco" / "leche evaporada" / "leche condensada"
     # (productos distintos con cantidades propias).
-    if re.search(r'\bleche\s+de\s+(coco|almendra|soja|soya|avena)\b', n_low):
+    # [P1-NUT-MILK-DISTINCT · 2026-07-07] `almendras?` (plural) + maní/anacardo/arroz: la
+    # receta dice "leche de almendraS" y el `almendra\b` singular NO matcheaba el plural →
+    # caía a "Leche" (leche de vaca). Las leches vegetales NO son leche de vaca ni el fruto.
+    if re.search(r'\bleche\s+de\s+(coco|almendras?|soja|soya|avena|man[íi]|anacardos?|arroz)\b', n_low):
         return None
     if re.search(r'\bleche\s+(evaporada|condensada|en\s+polvo)\b', n_low):
         return None
@@ -5340,7 +5343,13 @@ def canonicalize_frutos_secos(name) -> str | None:
     # contradecía la receta (la receta decía mantequilla de maní, la lista mostraba maní crudo
     # — el usuario compraría el producto equivocado). Simétrico en el coherence guard porque
     # ambos lados (recetas y lista) pasan por esta misma función. Tooltip-anchor: P1-NUT-BUTTER-DISTINCT.
-    if re.search(r'\b(mantequilla|crema|pasta)\s+de\s+\w', n_low) or 'peanut butter' in n_low or 'almond butter' in n_low:
+    # [P1-NUT-MILK-DISTINCT · 2026-07-07] (review visual: "leche de almendras" → "Almendras
+    # fileteadas" × 19 paquetes = RD$5,491, reventando el presupuesto) La LECHE de un fruto
+    # seco es una BEBIDA distinta (cartón, cat. Lácteos, RD$260), NO el fruto seco crudo.
+    # Sin este guard, "leche de almendras" caía al `\balmendras?\b` de abajo → "Almendras" →
+    # consolidada a "Almendras fileteadas". Añadido "leche" al guard existente de
+    # mantequilla/crema/pasta → None para que el master resuelva "Leche de almendras" exacto.
+    if re.search(r'\b(mantequilla|crema|pasta|leche)\s+de\s+\w', n_low) or 'peanut butter' in n_low or 'almond butter' in n_low or 'almond milk' in n_low:
         return None
     if re.search(r'\balmendras?\b', n_low):
         return 'Almendras'
