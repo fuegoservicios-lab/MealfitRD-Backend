@@ -9165,6 +9165,14 @@ MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", Tru
 # las resueltas no se inflen cubriendo masa invisible. Rollback sin redeploy: MEALFIT_SOLVER_MIN_COVERAGE=0.0.
 SOLVER_MIN_COVERAGE = _env_float("MEALFIT_SOLVER_MIN_COVERAGE", 0.6, validator=lambda v: 0.0 <= v <= 1.0)
 SOLVER_PARTIAL_MAX_SCALE = _env_float("MEALFIT_SOLVER_PARTIAL_MAX_SCALE", 2.0, validator=lambda v: 1.0 <= v <= 3.5)
+# [P1-SOLVER-COVERAGE-BENIGN · 2026-07-07] (forense post-deploy: 32% de meals caían a "parcial" solo
+# por tener "½ taza de agua" o "1 cda de cilantro") El agua NO aporta macros y las hierbas puras
+# (cilantro/perejil/albahaca) son guarnición despreciable → NO son "masa oculta" y no deben arrastrar
+# la cobertura del gate hacia abajo. Se EXCLUYEN del denominador (como los condimentos "al gusto").
+# Word-boundary OBLIGATORIO (lección 'res'↔'fresas'): `\bagua\b` NO matchea "aguacate". NO incluye
+# vegetales/frutas vagas ("ensalada verde"/"frutas variadas") — esas SÍ son masa no-resuelta legítima.
+_SOLVER_COV_BENIGN_RE = _re.compile(
+    r"\b(?:agua|hielo|perejil|cilantro|cilantrico|culantro|albahaca|hierbabuena|cebollin|cebollino)\b")
 
 # [P1-MACRO-AWARE-RECONCILE · 2026-06-15] El reconcile de día actual (`_protein_preserving_day_reconcile`)
 # es protein-preserving pero SINGLE-FACTOR: escala carbos+grasas JUNTOS por un factor isocalórico (solo
@@ -13395,7 +13403,11 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                 return s
         _n_quant = _n_res = 0
         for _cs in _ing_strs:
-            if any(_h in _sa_cov(_cs.lower()) for _h in _TRUTHUP_CONDIMENT_HINTS):
+            _cs_low = _sa_cov(_cs.lower())
+            # condimentos "al gusto" + benignos no-bulk (agua/hierbas) fuera del denominador
+            # [P1-SOLVER-COVERAGE-BENIGN · 2026-07-07].
+            if (any(_h in _cs_low for _h in _TRUTHUP_CONDIMENT_HINTS)
+                    or _SOLVER_COV_BENIGN_RE.search(_cs_low)):
                 continue
             _n_quant += 1
             try:
