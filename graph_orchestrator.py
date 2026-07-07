@@ -9154,6 +9154,18 @@ MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", Tru
 # solver ON. Clamp de seguridad para no producir porciones absurdas.
 MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", True)
 
+# [P1-SOLVER-COVERAGE-GATE · 2026-07-07] El solver per-meal (`solve_meal_macros`) arma su LSQ SOLO con las
+# líneas que el catálogo resuelve; la masa NO-resuelta (un plato compuesto/criollo que el catálogo no ve)
+# es invisible. Con cobertura baja el LSQ infla las líneas resueltas (×hasta 3.5) para clavar el target del
+# slot ELLAS SOLAS → el plato SOBRE-entrega (resueltas infladas + masa no-resuelta intacta) mientras
+# `_apply_macro_solver_to_meal` sobrescribe el display con la suma resuelta-sola = "on-target" engañoso.
+# Espejo de la abstención de `_truth_up_meal_macros_from_catalog` (mismo `min_coverage` 0.6 y mismo criterio
+# de líneas-con-cantidad excluyendo condimentos): cobertura < piso → el solver se abstiene (el closer/
+# rebalance downstream dimensionan igual); cobertura parcial (<1.0) → cap de escala más estricto para que
+# las resueltas no se inflen cubriendo masa invisible. Rollback sin redeploy: MEALFIT_SOLVER_MIN_COVERAGE=0.0.
+SOLVER_MIN_COVERAGE = _env_float("MEALFIT_SOLVER_MIN_COVERAGE", 0.6, validator=lambda v: 0.0 <= v <= 1.0)
+SOLVER_PARTIAL_MAX_SCALE = _env_float("MEALFIT_SOLVER_PARTIAL_MAX_SCALE", 2.0, validator=lambda v: 1.0 <= v <= 3.5)
+
 # [P1-MACRO-AWARE-RECONCILE · 2026-06-15] El reconcile de día actual (`_protein_preserving_day_reconcile`)
 # es protein-preserving pero SINGLE-FACTOR: escala carbos+grasas JUNTOS por un factor isocalórico (solo
 # clava kcal), lo que DISTORSIONA el split C:F que el solver logró → el benchmark midió carbos 19% / grasas
@@ -10396,6 +10408,32 @@ MICRO_SEED_SPREAD_ENABLED = _env_bool("MEALFIT_MICRO_SEED_SPREAD", True)
 # de pasos. Rollback: =false.
 MICRO_SEED_STEP_NOTE_ENABLED = _env_bool("MEALFIT_MICRO_SEED_STEP_NOTE", True)
 _MICRO_SEED_HUMAN = {"omega3_g": "omega-3", "vit_e_mg": "vitamina E", "vit_a_mcg": "vitamina A"}
+# [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] El presupuesto kcal COMPARTIDO del closer (120/día) se
+# consumía en el orden de `_floors_ordered`, que ponía TODOS los seedables (omega3/vitE/vitA) primero
+# (P1-CLOSER-SEED-PRIORITY, correcto ANTES del fatswap). Post-fatswap, omega3/vitE tienen su PROPIO budget
+# (MICRO_FATSWAP_EXTRA_KCAL para escalar) + una reserva de seed (abajo) → doble-servidos, mientras hierro/
+# folato ("de mayor consecuencia", sin backstop) quedaban al final y se quedaban sin budget en el worst-day
+# típico. Nuevo orden vía `_micro_budget_rank`: vitA (seedable sin backstop graso) → no-grasa-no-seedable
+# (hierro/folato) → grasa-basados (omega3/vitE, backstop propio) al final. Rollback: =False (orden viejo).
+MICRO_BUDGET_NONFAT_FIRST = _env_bool("MEALFIT_MICRO_BUDGET_NONFAT_FIRST", True)
+# Reserva kcal DEDICADA para el SEED (caso día-sin-portador) de micros grasa-basados, para que ponerlos al
+# final del budget compartido NUNCA mate su siembra: el fatswap solo ESCALA portadores existentes, no
+# siembra. Espejo de MICRO_FATSWAP_EXTRA_KCAL. tooltip-anchor: P1-MICRO-BUDGET-NONFAT-FIRST
+MICRO_FAT_SEED_RESERVE_KCAL = _env_int("MEALFIT_MICRO_FAT_SEED_RESERVE_KCAL", 120, lambda v: 0 <= v <= 400)
+
+
+def _micro_budget_rank(micro_key: str) -> int:
+    """[P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] Orden de consumo del presupuesto kcal COMPARTIDO del
+    micro-closer. 0 = seedable sin backstop graso (vitA: la siembra es el cierre más kcal-eficiente y no
+    tiene fatswap) → primero; 1 = no-grasa no-seedable (hierro/folato/vitC/K/Ca/Mg/fibra/zinc/selenio: su
+    ÚNICO cierre es escalar portadores con el budget compartido, y son los de mayor consecuencia) → medio;
+    2 = grasa-basados (omega3/vitE: backstop DEDICADO — fatswap para escalar + reserva para sembrar) → al
+    final. SSOT testeable del sort de `_floors_ordered`. tooltip-anchor: P1-MICRO-BUDGET-NONFAT-FIRST"""
+    if micro_key in _FAT_BASED_MICROS:
+        return 2
+    if micro_key in _MICRO_SEED_SOURCES:
+        return 0
+    return 1
 # [P1-MICRO-SEED-DENSITY] 80 → 120: con 80, dos semillas del mismo día (linaza 53 kcal + girasol
 # 58 kcal) NO cabían (el guard >30 bloqueaba la 2ª) — caso vivo plan 176ca62c: Día 3 corto en
 # omega-3 Y vit E solo recibió la semilla de omega-3. El re-trim de carbos post-closer (P2-2)
@@ -11976,14 +12014,28 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         # (fibra/calcio/magnesio) agotaron el presupuesto escalando → guard de semilla (>25 kcal)
         # sin fondos → banner micro_worst_day pese a tener el arsenal completo. Las semillas son
         # el cierre más kcal-eficiente (girasol 3.5mg vit E por 58 kcal) — van primero.
-        _floors_ordered = sorted(floors.items(), key=lambda kv: kv[0] not in _MICRO_SEED_SOURCES)
+        # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] los grasa-basados (omega3/vitE) tienen backstop propio
+        # (fatswap para escalar + reserva para sembrar) → van al FINAL del budget compartido; hierro/folato
+        # (sin backstop, mayor consecuencia) y vitA (seed kcal-eficiente) primero. Rollback knob → orden viejo.
+        if MICRO_BUDGET_NONFAT_FIRST:
+            _floors_ordered = sorted(floors.items(), key=lambda kv: _micro_budget_rank(kv[0]))
+        else:
+            _floors_ordered = sorted(floors.items(), key=lambda kv: kv[0] not in _MICRO_SEED_SOURCES)
         for _d in _days:
             if not isinstance(_d, dict):
                 continue
             kcal_budget_left = float(MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY)
+            # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] reserva DEDICADA para el seed de micros
+            # grasa-basados (día-sin-portador) → ponerlos al final del budget compartido no mata su siembra.
+            _fat_seed_reserve = float(MICRO_FAT_SEED_RESERVE_KCAL)
             for k, floor in _floors_ordered:
-                if kcal_budget_left <= 1.0:
-                    break  # presupuesto kcal del día agotado → no más escalas hoy
+                if kcal_budget_left <= 1.0 and k not in _FAT_BASED_MICROS:
+                    # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] budget compartido agotado: los micros
+                    # NO-grasa (que solo cierran escalando con el compartido) se saltan; los grasa-basados
+                    # (al FINAL del orden nuevo) SIGUEN — tienen backstop propio (fatswap para escalar el
+                    # portador con su budget, reserva para sembrar si no hay portador). Antes era un `break`
+                    # universal → ponerlos al final los habría dejado SIN cierre alguno.
+                    continue
                 ing_key = _MICRO_CLOSER_INGREDIENT_KEY[k]
                 _ul = _MICRO_CLOSER_UL.get(k)
                 # [P2-MICRO-MULTISOURCE · 2026-06-29] (re-audit objetivo · P2 MICRO-CLOSER-SINGLE-INGREDIENT)
@@ -12048,8 +12100,14 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 )
                 # [P1-MICRO-SEED-DENSITY · 2026-07-05] guard 30→25: linaza (53 kcal) dejaba 67 de
                 # los 120 del budget — la 2ª semilla del día (girasol 58) debe caber.
+                # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] micro grasa-basado SIN PORTADOR y sin budget
+                # compartido → puede sembrar desde la reserva dedicada. Restringido a `not _had_carriers`:
+                # el caso CON portador (deeply-short) lo cierra el fatswap escalando el portador existente
+                # con su propio budget → la reserva es SOLO para el caso no-carrier (que el fatswap no cubre).
+                _seed_from_reserve = (k in _FAT_BASED_MICROS and not _had_carriers
+                                      and kcal_budget_left <= 25.0 and _fat_seed_reserve > 25.0)
                 if _seed_trigger and not _already_seeded and MICRO_SEED_ENABLED \
-                        and k in _MICRO_SEED_SOURCES and kcal_budget_left > 25.0:
+                        and k in _MICRO_SEED_SOURCES and (kcal_budget_left > 25.0 or _seed_from_reserve):
                     try:
                         from constants import strip_accents as _sa_seed
                         _seed_dislikes = {_sa_seed(str(x).strip().lower())
@@ -12121,7 +12179,12 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         len(_seed_meal["ingredients"]) - 1, _seed_line, _kc_seed,
                                     ))
                                     day_total += _c_seed
-                                kcal_budget_left -= _kc_seed
+                                # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] descuenta del budget correcto:
+                                # la reserva dedicada si el seed grasa-basado no tenía budget compartido.
+                                if _seed_from_reserve:
+                                    _fat_seed_reserve -= _kc_seed
+                                else:
+                                    kcal_budget_left -= _kc_seed
                                 _seed_meal["_micro_seed_applied"] = k
                                 # [P2-SEED-STEP-NOTE · 2026-07-05] la semilla también vive en los
                                 # pasos (antes: ingrediente huérfano que la receta jamás nombraba).
@@ -12320,6 +12383,16 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         for _fc, _fm, _fi, _fing in _fs_cands:
                             if day_total >= floor or _fs_budget <= 5.0:
                                 break
+                            # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] el reorder saca los micros
+                            # grasa-basados del budget compartido → el fatswap es ahora su path PRINCIPAL de
+                            # escalado y DEBE honrar el mismo guard clínico que el loop principal (12234): en
+                            # dislipidemia/HTA jamás escalar queso/mantequilla (satfat) para cerrar vitE.
+                            try:
+                                from constants import strip_accents as _sa_fs
+                                if _ceiling_risky_contributor(k, _sa_fs(str(_fing).lower())):
+                                    continue
+                            except Exception:
+                                pass
                             try:
                                 _g_now = float(db.grams_from_ingredient_string(_fing) or 0.0)
                             except Exception:
@@ -13309,7 +13382,36 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
             return False
         from portion_solver import solve_meal_macros
         from nutrition_db import rescale_ingredient_string
-        res = solve_meal_macros([str(x) for x in ings], slot_target, db=db)
+        _ing_strs = [str(x) for x in ings]
+        # [P1-SOLVER-COVERAGE-GATE · 2026-07-07] Cobertura de resolución del catálogo (MISMO criterio que
+        # `_truth_up_meal_macros_from_catalog`: líneas resueltas / líneas-con-cantidad, excluyendo condimentos
+        # "al gusto"). Con masa no-resuelta significativa el solver inflaría las líneas resueltas para cubrir
+        # lo invisible → sobre-entrega física con display "on-target". Se abstiene bajo el piso (el closer/
+        # rebalance downstream siguen dimensionando el día); parcial → cap de escala más estricto abajo.
+        try:
+            from constants import strip_accents as _sa_cov
+        except Exception:
+            def _sa_cov(s):
+                return s
+        _n_quant = _n_res = 0
+        for _cs in _ing_strs:
+            if any(_h in _sa_cov(_cs.lower()) for _h in _TRUTHUP_CONDIMENT_HINTS):
+                continue
+            _n_quant += 1
+            try:
+                if db.macros_from_ingredient_string(_cs):
+                    _n_res += 1
+            except Exception:
+                pass
+        _cov = (_n_res / _n_quant) if _n_quant else 1.0
+        if _cov < SOLVER_MIN_COVERAGE:
+            logger.warning(f"🔎 [P1-SOLVER-COVERAGE-GATE] cobertura {_cov:.2f} < {SOLVER_MIN_COVERAGE} "
+                           f"({_n_res}/{_n_quant} líneas) en meal {str(meal.get('name'))[:40]!r} — solver se "
+                           f"abstiene (masa no-resuelta significativa; downstream closer/rebalance dimensionan).")
+            return False
+        res = (solve_meal_macros(_ing_strs, slot_target, db=db, max_scale=SOLVER_PARTIAL_MAX_SCALE)
+               if _cov < 0.999 else
+               solve_meal_macros(_ing_strs, slot_target, db=db))
         if res.get("resolved_count", 0) == 0:
             return False  # nada resoluble → no tocar (degradación grácil)
         meal["ingredients"] = res["ingredients"]

@@ -74,9 +74,15 @@ def _mk_plan():
 
 
 def test_ordered_iteration_anchored():
+    # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] SUPERSEDED: el orden seedable-first quedó como el
+    # ROLLBACK (rama else) detrás del knob MICRO_BUDGET_NONFAT_FIRST; el path activo ordena por
+    # `_micro_budget_rank` (fat-micros al final, con backstop propio). La regresión que este test
+    # protegía (fat-micro sin budget) la cierra ahora la reserva dedicada — ver
+    # test_p1_micro_budget_nonfat_first.py.
     i = _GO.index("[P1-CLOSER-SEED-PRIORITY · 2026-07-05]")
-    win = _GO[i:i + 1600]
-    assert "_floors_ordered = sorted(floors.items(), key=lambda kv: kv[0] not in _MICRO_SEED_SOURCES)" in win
+    win = _GO[i:i + 2200]
+    assert "if MICRO_BUDGET_NONFAT_FIRST:" in win  # knob que supersede el orden viejo
+    assert "_floors_ordered = sorted(floors.items(), key=lambda kv: kv[0] not in _MICRO_SEED_SOURCES)" in win  # rollback
     assert "for k, floor in _floors_ordered:" in win
 
 
