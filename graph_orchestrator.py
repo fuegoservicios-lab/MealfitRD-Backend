@@ -12294,6 +12294,15 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                     except Exception as _rs_e:
                         logger.debug(f"[P1-MICRO-SEED] refuerzo no-op: {type(_rs_e).__name__}: {_rs_e}")
                 if not contributors:
+                    # [Sd-P2-c / P2-MICRO-RESIDUAL-NOCARRIER · 2026-07-07] día SIN portador y sin siembra
+                    # materializada (micro no-sembrable como hierro/folato, o el seed no entró por alérgeno/
+                    # budget) → el closer NO pudo ni intentar. Antes se saltaba SILENCIOSO (el residual log de
+                    # abajo solo cubría el caso has-carrier-but-short) → ops ciego a la limitación de MAYOR
+                    # consecuencia. Telemetría del gap estructural (el banner ya lo ve el user).
+                    _why_nc = ("micro no-sembrable" if k not in _MICRO_SEED_SOURCES
+                               else "seed no materializó (alérgeno/budget/dislike)")
+                    logger.info(f"🧪 [P2-MICRO-CLOSER-RESIDUAL] {k}: día SIN portador ({_why_nc}; piso {floor:.2g}) "
+                                f"→ no_carrier_no_seed — el closer no pudo actuar.")
                     continue
                 contributors.sort(key=lambda t: t[0], reverse=True)  # richest-first
                 for contrib, meal, idx, ing_str, kcal_now in contributors:
@@ -12388,6 +12397,36 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                 if _fc > 0:
                                     _fs_cands.append((_fc, _fm, _fi, str(_fing)))
                         _fs_cands.sort(key=lambda t: -t[0])
+                        # [Sd-P2-b / P2-FATSWAP-BAND-GUARD · 2026-07-07] budget de GRASA del fatswap: la grasa
+                        # que AÑADE ≤ headroom de banda + grasa movible-no-protegida (lo que el mirror-trim SÍ
+                        # puede recortar). Sin esto, en día nut/seed-heavy (toda la grasa en portadores
+                        # protegidos) el fatswap REVIENTA la banda (el trim no tiene qué quitar → banner
+                        # low_band_macro:fats en plan limpio). Sin fat-target → sin cap.
+                        _fs_fat_tgt = _meal_macro_num((plan.get("macros") or {}).get("fats")) or 0.0
+                        _fs_fat_budget = None
+                        _fs_fat_added = 0.0
+                        if _fs_fat_tgt > 0:
+                            try:
+                                from constants import strip_accents as _sa_fsb
+                            except Exception:
+                                def _sa_fsb(_x):
+                                    return _x
+                            _fs_day_fat = sum(_meal_macro_num(_mm.get("fats"))
+                                              for _mm in (_d.get("meals") or []) if isinstance(_mm, dict))
+                            _fs_movable = 0.0
+                            for _mm in (_d.get("meals") or []):
+                                if not isinstance(_mm, dict) or not isinstance(_mm.get("ingredients"), list):
+                                    continue
+                                for _mi in _mm["ingredients"]:
+                                    _mil = str(_mi)
+                                    if _ingredient_macro_group(_mil, db) != "fats":
+                                        continue
+                                    _mil_sa = _sa_fsb(_mil.lower())
+                                    if any(_sa_fsb(_t) in _mil_sa for _t in _SEED_NUT_TOKENS):
+                                        continue  # portador protegido → el trim no lo recorta
+                                    _fs_movable += float((db.macros_from_ingredient_string(_mil) or {}).get("fats") or 0.0)
+                            _fs_fat_budget = max(0.0, _fs_fat_tgt * (1.0 + FATS_POSTCLOSER_RELEVEL_TOL)
+                                                 - _fs_day_fat) + _fs_movable
                         for _fc, _fm, _fi, _fing in _fs_cands:
                             if day_total >= floor or _fs_budget <= 5.0:
                                 break
@@ -12419,6 +12458,14 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                          _line_cap / _g_now)
                             if _fk > 0:
                                 factor = min(factor, 1.0 + _fs_budget / _fk)
+                            # [Sd-P2-b] cap por banda de grasa: la grasa que este escalado añade
+                            # (fat_portador × (factor−1)) no debe exceder lo que el trim puede compensar.
+                            _cand_fat = float((_fmac or {}).get("fats") or 0.0)
+                            if _fs_fat_budget is not None and _cand_fat > 0:
+                                _fat_room = _fs_fat_budget - _fs_fat_added
+                                if _fat_room <= 0:
+                                    break  # sin headroom de grasa → parar (no reventar la banda)
+                                factor = min(factor, 1.0 + _fat_room / _cand_fat)
                             if factor <= 1.0 + 1e-3:
                                 continue
                             _new_f = _resc(_fing, factor)
@@ -12440,6 +12487,8 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                 pass
                             if _fk > 0:
                                 _fs_budget -= _fk * (factor - 1.0)
+                            if _fs_fat_budget is not None:
+                                _fs_fat_added += _cand_fat * (factor - 1.0)
                             day_total += _fc * (factor - 1.0)
                             adjustments += 1
                             _fs_scaled = True
@@ -12453,9 +12502,20 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         tol=FATS_POSTCLOSER_RELEVEL_TOL)
                                 except Exception:
                                     pass
+                            # [Sd-P2-b] distinguir "no-necesario" (grasa ya en banda) de "NO-PUDO"
+                            # (movable<=0, grasa en portadores protegidos → banda abierta pese al trim). El
+                            # 'no-necesario' viejo conflaba ambos → un blowout se leía como éxito.
+                            _fs_over = False
+                            if _fs_tf and float(_fs_tf) > 0:
+                                _fs_day_fat_post = sum(_meal_macro_num(_mm.get("fats"))
+                                                       for _mm in (_d.get("meals") or []) if isinstance(_mm, dict))
+                                _fs_over = _fs_day_fat_post > float(_fs_tf) * (1.0 + FATS_POSTCLOSER_RELEVEL_TOL)
+                            _fs_state = ("aplicado" if _fs_trimmed else
+                                         ("NO-PUDO: grasa en portadores protegidos, banda abierta" if _fs_over
+                                          else "no-necesario"))
                             logger.info(f"🔄 [P1-MICRO-FATSWAP] '{k}' cerrado con presupuesto extra "
                                         f"(≈{day_total:.1f} vs piso {floor:.1f}) + re-trim espejo de "
-                                        f"grasas del día ({'aplicado' if _fs_trimmed else 'no-necesario'}).")
+                                        f"grasas del día ({_fs_state}).")
                     except Exception as _fs_e:
                         logger.warning(f"[P1-MICRO-FATSWAP] no-op: {type(_fs_e).__name__}: {_fs_e}")
                 if day_total < floor:
@@ -13421,7 +13481,9 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                            f"({_n_res}/{_n_quant} líneas) en meal {str(meal.get('name'))[:40]!r} — solver se "
                            f"abstiene (masa no-resuelta significativa; downstream closer/rebalance dimensionan).")
             return False
-        res = (solve_meal_macros(_ing_strs, slot_target, db=db, max_scale=SOLVER_PARTIAL_MAX_SCALE)
+        res = (solve_meal_macros(_ing_strs, slot_target, db=db,
+                                 max_scale=SOLVER_PARTIAL_MAX_SCALE,
+                                 max_scale_protein=SOLVER_PARTIAL_MAX_SCALE)
                if _cov < 0.999 else
                solve_meal_macros(_ing_strs, slot_target, db=db))
         if res.get("resolved_count", 0) == 0:
@@ -13433,21 +13495,32 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
         # closer (contribuye al techo de all-4-band ~66.7%). Solo telemetría (flag + log) — NO cambia el plan;
         # mide la frecuencia real antes de considerar subir max_scale para proteína-dominantes (opción b).
         try:
-            # [P1-SOLVER-CLAMP-DIRECTION · 2026-07-06] Desglose ARRIBA (≥3.5×, el solver quería MÁS del
-            # ingrediente pero el clamp lo frenó → sub-entrega) vs ABAJO (≤0.3×, quería MENOS → sobre-entrega).
-            # La "opción (b)" (subir max_scale para proteína-dominantes) SOLO ayuda si la saturación es de
-            # ARRIBA; si es de abajo, el lever correcto es otro (bajar min_scale / swap a forma menos densa).
+            # [S-P2-a · 2026-07-07] El conteo de saturación ahora viene del SOLVER (`saturated_hi/lo`),
+            # medido contra el bound PER-LÍNEA (proteína-dominante usa max_scale mayor) — el umbral fijo 3.499
+            # sobre-contaba tras subir el techo de proteína. `hi` = quería-MÁS (sub-entrega); `lo` = quería-MENOS.
             # El desglose per-meal se agrega a la métrica per-run `solver_clamp` → decisión data-driven.
-            _sat_hi = sum(1 for _f in factors if isinstance(_f, (int, float)) and _f >= 3.499)
-            _sat_lo = sum(1 for _f in factors if isinstance(_f, (int, float)) and _f <= 0.301)
+            _sat_hi = int(res.get("saturated_hi") or 0)
+            _sat_lo = int(res.get("saturated_lo") or 0)
             _sat = _sat_hi + _sat_lo
             if _sat:
                 meal["_solver_clamp_saturated"] = _sat
                 meal["_solver_clamp_saturated_hi"] = _sat_hi
                 meal["_solver_clamp_saturated_lo"] = _sat_lo
                 logger.info(f"📐 [P2-SOLVER-CLAMP-TELEMETRY] {_sat}/{len(factors)} factor(es) saturaron el clamp "
-                            f"[0.3,3.5] ({_sat_hi}↑ quería-más / {_sat_lo}↓ quería-menos) en meal "
+                            f"({_sat_hi}↑ quería-más / {_sat_lo}↓ quería-menos) en meal "
                             f"{str(meal.get('name'))[:40]!r} (slot fuera de banda pre-closer).")
+            # [S-P2-b / P2-SOLVER-METHOD-OBS · 2026-07-07] converged/method eran telemetría MUERTA (el wiring
+            # no las leía). Ahora: un meal que cayó SILENCIOSO al greedy (el algoritmo inferior que el LSQ
+            # reemplaza — desacopla la grasa embebida) o que NO convergió deja flag + log. Observabilidad pura
+            # (no cambia el plan): un pico de greedy_fallback delata excepciones del LSQ.
+            if res.get("method") == "greedy":
+                meal["_solver_greedy_fallback"] = True
+                logger.warning(f"⚠ [P2-SOLVER-METHOD-OBS] meal {str(meal.get('name'))[:40]!r} cayó al GREEDY "
+                               f"(LSQ lanzó excepción o está OFF) — el greedy por-grupo puede driftear la grasa.")
+            if not res.get("converged", True):
+                meal["_solver_not_converged"] = True
+                logger.info(f"📐 [P2-SOLVER-METHOD-OBS] meal {str(meal.get('name'))[:40]!r} NO convergió "
+                            f"(método={res.get('method')}; el clamp no clavó el target — closer/rebalance cierran).")
         except Exception:
             pass
         raw = meal.get("ingredients_raw")

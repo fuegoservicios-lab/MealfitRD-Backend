@@ -68,6 +68,19 @@ SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4)
 # ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
 SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10)
 
+# [S-P2-a / P2-SOLVER-SCALE-KNOBS · 2026-07-07] (audit solver+seeder v2) El clamp de escala del solver eran
+# params default PLANOS (0.3/3.5), NO knobs → invisibles en /health/version y sin rollback/A-B sin redeploy
+# (viola la convención del repo: "cambios de comportamiento reversibles van como knob"). Promovidos a knobs.
+# Además `max_scale` para líneas PROTEÍNA-dominantes sube a 5.0 (la "opción b" del audit): la telemetría
+# `solver_clamp` mostró ~74% de meals saturando el clamp, mayormente ARRIBA (sub-entrega de proteína). Con un
+# techo mayor SOLO para la proteína, el solver clava la proteína ESCALANDO la línea existente antes de que el
+# closer AÑADA una línea nueva (mejor coherencia/variedad). Acotado aguas abajo por los realism-caps
+# (PORTION_CAP_PROTEIN_G / _cap_unrealistic_portions) y el protein-ceiling-trim (g/kg goal-aware). Rollback:
+# MEALFIT_SOLVER_MAX_SCALE_PROTEIN=3.5 (iguala al general → comportamiento previo).
+SOLVER_MIN_SCALE = _envf("MEALFIT_SOLVER_MIN_SCALE", 0.3)
+SOLVER_MAX_SCALE = _envf("MEALFIT_SOLVER_MAX_SCALE", 3.5)
+SOLVER_MAX_SCALE_PROTEIN = _envf("MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0)
+
 
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
              reg: float, iters: int = 150) -> list:
@@ -80,6 +93,9 @@ def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
     x = [1.0] * n
     if n == 0:
         return x
+    # [S-P2-a] lo/hi por-COORDENADA (protein-dominante → hi mayor) o escalar (retro-compat).
+    _lo = list(lo) if isinstance(lo, (list, tuple)) else [lo] * n
+    _hi = list(hi) if isinstance(hi, (list, tuple)) else [hi] * n
     denom = [reg + sum(weights[r] * A_rows[r][i] ** 2 for r in range(nrows)) for i in range(n)]
     res = [sum(A_rows[r][i] * x[i] for i in range(n)) - b[r] for r in range(nrows)]  # Σ A·x − b
     for _ in range(iters):
@@ -93,7 +109,7 @@ def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
                 if a != 0.0:
                     num -= weights[r] * a * (res[r] - a * x[i])  # c_r = res_r − a·x_i
             xi = num / denom[i]
-            xi = lo if xi < lo else (hi if xi > hi else xi)
+            xi = _lo[i] if xi < _lo[i] else (_hi[i] if xi > _hi[i] else xi)
             d = xi - x[i]
             if d != 0.0:
                 for r in range(nrows):
@@ -106,14 +122,20 @@ def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
     return x
 
 
-def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale: float) -> tuple:
+def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale: float,
+                           max_scale_protein: float = None) -> tuple:
     """Factor de escalado POR-INGREDIENTE (alineado con `entries`). Usa el solver LSQ multi-macro
     si está habilitado; si no (o si falla), cae al greedy por-grupo. `entries[i]` debe tener
-    `macros` ({kcal,protein,carbs,fats}|None) y `group` (macro dominante|None). Retorna (factors, method)."""
+    `macros` ({kcal,protein,carbs,fats}|None) y `group` (macro dominante|None).
+    [S-P2-a] `hi` por-COORDENADA: las líneas PROTEÍNA-dominantes usan `max_scale_protein` (≥ max_scale);
+    el resto `max_scale`. Retorna (factors, method, saturated_hi, saturated_lo) — `saturated_*` cuenta los
+    factores clavados en su bound per-línea (telemetría exacta, no un umbral fijo)."""
     factors = [1.0] * len(entries)
     sc = [i for i, e in enumerate(entries) if e.get("macros") and e.get("group")]
     if not sc:
-        return factors, "none"
+        return factors, "none", 0, 0
+    _mxp = max_scale if max_scale_protein is None else max_scale_protein
+    _hi_sc = [(_mxp if entries[i]["group"] == "protein" else max_scale) for i in sc]  # hi por-coordenada
     if SOLVER_LSQ:
         try:
             _w = {"kcal": SOLVER_W_KCAL, "protein": SOLVER_W_PROTEIN,
@@ -125,10 +147,15 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                     brow.append(float(tgt[m]))
                     wrow.append(_w[m])
             if A_rows:
-                xs = _box_lsq(A_rows, brow, wrow, min_scale, max_scale, SOLVER_LSQ_REG)
+                xs = _box_lsq(A_rows, brow, wrow, min_scale, _hi_sc, SOLVER_LSQ_REG)
+                sat_hi = sat_lo = 0
                 for j, i in enumerate(sc):
                     factors[i] = xs[j]
-                return factors, "lsq"
+                    if xs[j] >= _hi_sc[j] * 0.999:
+                        sat_hi += 1
+                    elif xs[j] <= min_scale * 1.001:
+                        sat_lo += 1
+                return factors, "lsq", sat_hi, sat_lo
         except Exception:
             pass
     # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
@@ -136,10 +163,17 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     for macro in _KCAL_PER_G:
         current = sum(entries[i]["macros"][macro] for i in sc if entries[i]["group"] == macro)
         tv = tgt.get(macro, 0)
-        gf[macro] = max(min_scale, min(max_scale, tv / current)) if (current > 0 and tv > 0) else 1.0
+        _hi_m = _mxp if macro == "protein" else max_scale
+        gf[macro] = max(min_scale, min(_hi_m, tv / current)) if (current > 0 and tv > 0) else 1.0
+    sat_hi = sat_lo = 0
     for i in sc:
         factors[i] = gf[entries[i]["group"]]
-    return factors, "greedy"
+        _hi_i = _mxp if entries[i]["group"] == "protein" else max_scale
+        if factors[i] >= _hi_i * 0.999:
+            sat_hi += 1
+        elif factors[i] <= min_scale * 1.001:
+            sat_lo += 1
+    return factors, "greedy", sat_hi, sat_lo
 
 
 def _get(d: dict, *keys, default=0.0):
@@ -185,8 +219,9 @@ def solve_portion_macros(
     target: dict,
     db=None,
     *,
-    min_scale: float = 0.3,
-    max_scale: float = 3.5,
+    min_scale: float = None,
+    max_scale: float = None,
+    max_scale_protein: float = None,
     tolerance_pct: float = 0.10,
 ) -> dict:
     """Re-escala porciones para clavar el target de macros del slot.
@@ -211,6 +246,10 @@ def solve_portion_macros(
         from nutrition_db import IngredientNutritionDB
         db = IngredientNutritionDB()
     tgt = _target_macros(target)
+    # [S-P2-a] defaults desde knobs (None → knob).
+    min_scale = SOLVER_MIN_SCALE if min_scale is None else min_scale
+    max_scale = SOLVER_MAX_SCALE if max_scale is None else max_scale
+    max_scale_protein = SOLVER_MAX_SCALE_PROTEIN if max_scale_protein is None else max_scale_protein
 
     # 1) computar macros por ingrediente + clasificar por macro dominante.
     entries = []  # cada uno: {idx, qty, unit, name, macros|None, group|None}
@@ -228,7 +267,8 @@ def solve_portion_macros(
 
     # 2) factor de escalado POR-INGREDIENTE (LSQ multi-macro; greedy fallback). El `report`
     #    greedy por-macro se conserva como telemetría.
-    ing_factors, method = _compute_scale_factors(entries, tgt, min_scale, max_scale)
+    ing_factors, method, _sat_hi, _sat_lo = _compute_scale_factors(
+        entries, tgt, min_scale, max_scale, max_scale_protein)
     report = {}
     for macro in _KCAL_PER_G:  # protein, carbs, fats
         current = sum(e["macros"][macro] for e in entries
@@ -280,6 +320,8 @@ def solve_portion_macros(
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
         "converged": converged,
+        "saturated_hi": _sat_hi,
+        "saturated_lo": _sat_lo,
     }
 
 
@@ -288,8 +330,9 @@ def solve_meal_macros(
     target: dict,
     db=None,
     *,
-    min_scale: float = 0.3,
-    max_scale: float = 3.5,
+    min_scale: float = None,
+    max_scale: float = None,
+    max_scale_protein: float = None,
     tolerance_pct: float = 0.10,
 ) -> dict:
     """Variante para los ingredientes-STRING de un meal del plan ("0.5 taza de avena
@@ -305,6 +348,10 @@ def solve_meal_macros(
         db = IngredientNutritionDB()
     from nutrition_db import rescale_ingredient_string
     tgt = _target_macros(target)
+    # [S-P2-a] defaults desde knobs (None → knob; el caller override, e.g. cobertura parcial pasa 2.0).
+    min_scale = SOLVER_MIN_SCALE if min_scale is None else min_scale
+    max_scale = SOLVER_MAX_SCALE if max_scale is None else max_scale
+    max_scale_protein = SOLVER_MAX_SCALE_PROTEIN if max_scale_protein is None else max_scale_protein
 
     entries = []
     for s in ingredient_strings:
@@ -318,7 +365,8 @@ def solve_meal_macros(
 
     # [M2-SOLVER-NNLS] Factor POR-INGREDIENTE (LSQ multi-macro; greedy fallback). Reemplaza el
     # factor único por-grupo. El `report` greedy se conserva como telemetría por-macro.
-    ing_factors, method = _compute_scale_factors(entries, tgt, min_scale, max_scale)
+    ing_factors, method, _sat_hi, _sat_lo = _compute_scale_factors(
+        entries, tgt, min_scale, max_scale, max_scale_protein)
     report = {}
     for macro in _KCAL_PER_G:
         current = sum(e["macros"][macro] for e in entries
@@ -368,6 +416,8 @@ def solve_meal_macros(
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
         "converged": converged,
+        "saturated_hi": _sat_hi,
+        "saturated_lo": _sat_lo,
     }
 
 
@@ -388,6 +438,15 @@ def solve_meal_macros(
 # exentas (condimentos/aceites vía exempt_tokens del caller) no se tocan.
 # tooltip-anchor: P1-NEXT-LEVEL-SOLVER. Test: test_p1_next_level_batch.py.
 # ============================================================
+
+# [S-P2-c / P2-REFINE-HOUSEHOLD · 2026-07-07] (audit solver+seeder v2) El refinador SOLO movía líneas
+# gram-led ("150 g de X"); las líneas en unidad CASERA ("1 taza de arroz (150g)") — la mayoría de
+# carbos/grasas — quedaban fuera, JUSTO cuando el rebalance unit-agnóstico ya saturó. Con el knob, el
+# refinador también las mueve (grams desde el hint via grams_from_ingredient_string) pero re-renderiza
+# vía quantize (el lead casero se mantiene HUMANO). Nace OFF: el quantize re-introduce un snap que puede
+# desviar el delta predicho por el greedy (aproximación acotada por los bounds [0.5×,2×] + el truth-up
+# del caller) → requiere A/B antes de flipear. Rollback/estado actual: MEALFIT_REFINE_HOUSEHOLD_LINES=false.
+REFINE_HOUSEHOLD_LINES = _envb("MEALFIT_REFINE_HOUSEHOLD_LINES", False)
 
 _REFINE_WEIGHTS = {"kcal": 1.0, "protein": 1.5, "carbs": 1.0, "fats": 1.2}
 
@@ -421,7 +480,7 @@ def refine_day_portions_integer(
     Fail-safe: cualquier error → 0 movimientos (día intacto)."""
     import re as _re
     try:
-        from nutrition_db import rescale_ingredient_string as _resc
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
         try:
             from constants import strip_accents as _sa
         except Exception:
@@ -455,9 +514,18 @@ def refine_day_portions_integer(
                 if any(tok and tok in il for tok in exempt_tokens):
                     continue
                 m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
-                if not m_g or not mc:
+                _gram_led = bool(m_g)
+                # [S-P2-c] gram-led → mueve directo (queda humano). Unidad casera con hint de gramos
+                # ("1 taza de arroz (150g)") → movible SOLO con el knob (re-render vía quantize abajo).
+                if not mc or (not _gram_led and not REFINE_HOUSEHOLD_LINES):
                     continue
-                grams = float(m_g.group(1).replace(",", "."))
+                if _gram_led:
+                    grams = float(m_g.group(1).replace(",", "."))
+                else:
+                    try:
+                        grams = float(db.grams_from_ingredient_string(s) or 0.0)
+                    except Exception:
+                        grams = 0.0
                 if grams <= 0:
                     continue
                 per_g = {k: float(mc.get(k2) or 0.0) / grams
@@ -466,7 +534,7 @@ def refine_day_portions_integer(
                 if all(abs(v) < 1e-9 for v in per_g.values()):
                     continue
                 lines.append({"meal": meal, "idx": idx, "grams": grams,
-                              "orig": grams, "per_g": per_g})
+                              "orig": grams, "per_g": per_g, "gram_led": _gram_led})
         if not lines:
             return 0
         tg = {k: float(targets.get(k) or 0.0) for k in ("kcal", "protein", "carbs", "fats")}
@@ -510,15 +578,19 @@ def refine_day_portions_integer(
             meal = ln["meal"]
             idx = ln["idx"]
             factor = ln["grams"] / ln["orig"]
+            _hh = not ln.get("gram_led", True)  # línea en unidad casera → re-render vía quantize
             try:
                 s = str(meal["ingredients"][idx])
-                new_s = _resc(s, factor)
+                # [S-P2-c] gram-led → rescale directo (humano). Unidad casera → rescale + quantize
+                # (el lead casero se re-renderiza a porción humana; el caller hace truth-up de macros).
+                new_s = _quant(_resc(s, factor))[0] if _hh else _resc(s, factor)
                 if new_s and new_s != s:
                     meal["ingredients"][idx] = new_s
                     raw = meal.get("ingredients_raw")
                     if isinstance(raw, list) and idx < len(raw):
                         try:
-                            raw[idx] = _resc(str(raw[idx]), factor)
+                            _rw = _resc(str(raw[idx]), factor)
+                            raw[idx] = _quant(_rw)[0] if _hh else _rw
                         except Exception:
                             pass
                     touched_meals.add(id(meal))
