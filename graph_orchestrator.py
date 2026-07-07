@@ -8235,13 +8235,21 @@ def _norm_text(s: str) -> str:
 
 def _detect_main_items(meal: dict, aliases: dict) -> set:
     """Devuelve el conjunto de etiquetas canónicas (proteínas o carbos) presentes
-    en una comida, mirando nombre + lista de ingredientes."""
+    en una comida, mirando nombre + lista de ingredientes.
+
+    [P1-SLOT-PROTEIN-WORDBOUNDARY · 2026-07-07] Match con FRONTERA DE PALABRA
+    (`_name_has_token`, mismo SSOT que build_variety_report), NO substring. El
+    substring hacía que el alias 'res' matcheara "Queso FRESco"/"FRESas"/"puRÉS" →
+    `_detect_slot_incoherence` reportaba "res aparece en 4 comidas" en platos SIN res,
+    inyectando correcciones FALSAS al self-critique → regens innecesarios (quema
+    DeepSeek, observado en el benchmark). `\bres` no matchea "fresco" (la 'f' precede)
+    pero sí tolera plurales ("huevos", "frijoles")."""
     blob = _norm_text(meal.get("name", ""))
     for ing in meal.get("ingredients", []) or []:
         blob += " " + _norm_text(ing)
     found = set()
     for label, alias_list in aliases.items():
-        if any(_norm_text(a) in blob for a in alias_list):
+        if any(_name_has_token(_norm_text(a), blob) for a in alias_list):
             found.add(label)
     return found
 
