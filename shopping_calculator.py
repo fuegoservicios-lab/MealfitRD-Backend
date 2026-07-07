@@ -4055,6 +4055,18 @@ def _has_severe_divergence(divergences: list) -> bool:
         if d.get("hypothesis") == "cap_swallowed_modifier":
             return True
         if d.get("magnitude") is True:
+            # [P1-COHERENCE-SEVERE-NO-NOISE · 2026-07-07] (plan vivo 72c8b965 wk2: 67
+            # divergencias `unknown` de SOBRE-oferta de envase — arroz/lechuga/ajo/calamar
+            # comprados por paquete — escalaban el chunk T2 warn→block en FALSO, 3 retries +
+            # re-encolado, quemando DeepSeek). El docstring de arriba YA declara `unknown` y
+            # `pantry_overdeduct` NO-severas, pero este check de magnitud las capturaba igual
+            # cuando |delta|>0.50. Semántica: `unknown` de magnitud es SIEMPRE sobre-oferta
+            # (act>exp; el sub-suministro severo se clasifica `pantry_overdeduct`), y la
+            # sobre-oferta de envase NUNCA hace el plan incocinable → no debe forzar retry.
+            # Solo cap_swallowed (falta real, arriba) + magnitudes severas de tipos accionables
+            # (yield_uncovered/unit_mismatch) escalan. Alinea el CÓDIGO con el docstring.
+            if d.get("hypothesis") in ("unknown", "pantry_overdeduct"):
+                continue
             try:
                 delta = float(d.get("delta_pct") or 0)
             except (TypeError, ValueError):
