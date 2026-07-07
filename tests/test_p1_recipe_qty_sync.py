@@ -106,8 +106,10 @@ def test_runs_after_final_quantize_in_assemble():
     # anclado: quantize → recheck → qty-sync (el sync ve el estado final).
     # [P2-AUDIT-V6-BATCH · 2026-07-03] la ventana quedó corta tras los bloques shrink-floor (GAP-05)
     # + refinador global (P1-NEXT-LEVEL-SOLVER) del 2026-07-02 y el bugfix del recheck (P1-UPDATE-
-    # MACRO-PARITY) → 4500→9000. El contrato REAL son los asserts de ORDEN de abajo, no el tamaño.
-    seg = _GRAPH[i_q:i_q + 9000]
+    # MACRO-PARITY) → 4500→9000. [P1-CHEESE-DUMP-FINAL · 2026-07-07] el cap final de queso + strip de
+    # azúcar entre el relevel y el recheck empujó el qty-sync final → 9000→10500. El contrato REAL son
+    # los asserts de ORDEN de abajo, no el tamaño.
+    seg = _GRAPH[i_q:i_q + 10500]
     assert "_sync_recipe_step_quantities" in seg, \
         "el sync debe correr tras el quantize final de assemble (última mutación de porciones)"
     i_rq = seg.find("P2-POSTQUANTIZE-RECHECK")

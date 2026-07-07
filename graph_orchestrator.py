@@ -12235,7 +12235,8 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         # [P2-MICRO-SEED-VITA · 2026-07-06] seeds salados no se "espolvorean".
                                         _seed_verb = ("acompaña el plato con" if k in _MICRO_SEED_SAVORY_KEYS
                                                       else "espolvorea")
-                                        # [P3-RECIPE-POLISH-4] en BEBIDAS no hay "plato" → tail "al servir".
+                                        # [P3-RECIPE-POLISH-4 · 2026-07-06] en BEBIDAS (batido/licuado) no
+                                        # hay "plato" → tail "al servir".
                                         _seed_is_drink = any(
                                             t in _sa_seed(str(_seed_meal.get("name", "")).lower())
                                             for t in ("batido", "batida", "licuado", "smoothie", "jugo"))
@@ -15756,10 +15757,11 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         if _blended:
             new_step = f"Agrega también {_list} a la licuadora antes de licuar."
         elif RECIPE_CONTRACT_NOCOOK_ENABLED and _meal_is_no_cook(meal):
-            new_step = f"Incorpora también {_list} al plato antes de servir, integrándolo de forma coherente."
+            # [P1-COMPLEMENT-WORDING · 2026-07-07] (review visual plan 766893f4: "integrándolo al plato de
+            # forma coherente" lee robótico/IA) — muletilla eliminada; el paso queda natural.
+            new_step = f"Incorpora también {_list} al plato antes de servir."
         else:
-            new_step = (f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación, "
-                        f"integrándolo al plato de forma coherente.")
+            new_step = f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación."
         if isinstance(recipe, list):
             # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] paso de cocción ANTES del Montaje.
             meal["recipe"] = _insert_step_before_montaje(steps, new_step)
@@ -21638,6 +21640,126 @@ def _bigfruit_bare_count_serving(s: str, il: str):
     return f"{_new.rstrip()} ({BIGFRUIT_SERVING_G}g)"
 
 
+# [P1-CHEESE-DUMP-FINAL · 2026-07-07] (review visual plan 766893f4: "190 g de queso" en un DESAYUNO dulce
+# de mantequilla-de-maní+mango, "130 g de queso" en un batido) El cap de queso de `_cap_unrealistic_portions`
+# corre ANTES del quantize/refiner/relevel, que RE-INFLAN la línea gram-led de queso (fat-dominante → el
+# reconcile/refiner la escalan hacia macros). Este cap corre AL FINAL (tras TODOS los pases de macro) y es
+# SWEET-AWARE: un plato de carácter dulce (mantequilla de maní/mango/batido/avena/fruta) usa el techo de
+# MERIENDA (120g) aunque su meal_field sea "Desayuno" — un pan dulce con 190g de queso rompe la coherencia.
+# Recompute HONESTO de macros por delta de string + lockstep raw. Rollback: MEALFIT_CHEESE_DUMP_FINAL=false.
+CHEESE_DUMP_FINAL_ENABLED = _env_bool("MEALFIT_CHEESE_DUMP_FINAL", True)
+_SWEET_DISH_TOKENS = ("mantequilla de mani", "mango", "batido", "batida", "licuado", "smoothie",
+                      "avena", "fruta", "fresa", "guineo", "yogur", "miel", "dulce", "panqueque", "tostada")
+
+
+def _cap_cheese_dumps_final(days, db=None) -> int:
+    """Cap FINAL del queso bolt-oneado por el closer (sweet-aware). Corre tras el refiner/relevel para
+    cazar la re-inflación. Recompute honesto + lockstep raw. Fail-safe. tooltip-anchor: P1-CHEESE-DUMP-FINAL"""
+    if not CHEESE_DUMP_FINAL_ENABLED:
+        return 0
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                return s
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        capped = 0
+        for d in days or []:
+            for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+                if not isinstance(m, dict) or not isinstance(m.get("ingredients"), list):
+                    continue
+                _sweet = ("merienda" in _sa(str(m.get("meal", "")).lower())
+                          or any(t in _sa(str(m.get("name", "")).lower()) for t in _SWEET_DISH_TOKENS))
+                _cap = float(SNACK_CHEESE_CAP_G) if _sweet else float(MEAL_CHEESE_CAP_G)
+                ings = m["ingredients"]
+                for idx, ing in enumerate(ings):
+                    il = _sa(str(ing).lower())
+                    if not _re.search(r"\bqueso", il) or "yogur" in il:
+                        continue  # yogurt exento
+                    m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                    if not m_g:
+                        continue
+                    cur_g = float(m_g.group(1).replace(",", "."))
+                    if cur_g <= _cap:
+                        continue
+                    orig = str(ing)
+                    new_s = _resc(orig, _cap / cur_g)
+                    if not new_s or new_s == orig:
+                        continue
+                    _mo = db.macros_from_ingredient_string(orig) or {}
+                    _mn = db.macros_from_ingredient_string(new_s) or {}
+                    _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+                    _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+                    _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+                    m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+                    m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+                    m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+                    ings[idx] = new_s
+                    raw = m.get("ingredients_raw")
+                    if isinstance(raw, list) and len(raw) == len(ings):
+                        raw[idx] = _resc(str(raw[idx]), _cap / cur_g)
+                    capped += 1
+                    logger.info(f"🧀 [P1-CHEESE-DUMP-FINAL] {str(m.get('name'))[:34]!r}: queso {cur_g:.0f}g → "
+                                f"{_cap:.0f}g ({'dulce/merienda' if _sweet else 'principal'}).")
+        return capped
+    except Exception as _e:
+        logger.warning(f"[P1-CHEESE-DUMP-FINAL] no-op: {type(_e).__name__}: {_e}")
+        return 0
+
+
+# [P1-STEP-SUGAR-GHOST · 2026-07-07] (review visual plan 766893f4: "derrite la mantequilla con el azúcar"
+# en un mangú, azúcar NO en ingredients) A diferencia del carb-ghost (que MATERIALIZA), el azúcar fantasma
+# se STRIPEA de los pasos — materializarlo metería azúcar en un plan de dieta. Caso típico: caramelizar
+# cebolla "con azúcar"; sin azúcar se caramelizan igual a fuego lento. Solo actúa si NINGUNA forma de
+# azúcar/miel/sirope/panela está en ingredients. Rollback: MEALFIT_STEP_SUGAR_GHOST_STRIP=false.
+STEP_SUGAR_GHOST_STRIP_ENABLED = _env_bool("MEALFIT_STEP_SUGAR_GHOST_STRIP", True)
+_STEP_SUGAR_RE = _re.compile(
+    r"\s*(?:con|y|,|añad(?:e|iendo)|agrega(?:ndo)?)\s+(?:el\s+|la\s+|una\s+pizca\s+de\s+|un\s+poco\s+de\s+)?az[úu]car\b",
+    _re.IGNORECASE)
+
+
+def _strip_phantom_sugar_from_steps(days) -> int:
+    """Strip de azúcar fantasma en pasos (mencionada pero ausente de ingredients). Fail-safe.
+    tooltip-anchor: P1-STEP-SUGAR-GHOST"""
+    if not STEP_SUGAR_GHOST_STRIP_ENABLED:
+        return 0
+    try:
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                return s
+        n = 0
+        for d in days or []:
+            for m in (d.get("meals") or []) if isinstance(d, dict) else []:
+                if not isinstance(m, dict):
+                    continue
+                ing_low = " ".join(_sa(str(x).lower()) for x in (m.get("ingredients") or []))
+                if any(t in ing_low for t in ("azucar", "miel", "sirope", "panela", "melaza")):
+                    continue  # el plato SÍ compra endulzante → no tocar
+                rec = m.get("recipe")
+                if not isinstance(rec, list):
+                    continue
+                for si, step in enumerate(rec):
+                    if not isinstance(step, str) or "azucar" not in _sa(step.lower()):
+                        continue
+                    new = _STEP_SUGAR_RE.sub("", step)
+                    new = _re.sub(r"\s{2,}", " ", new).replace(" ,", ",").replace(" .", ".").strip()
+                    if new and new != step:
+                        rec[si] = new
+                        n += 1
+        if n:
+            logger.info(f"🧹 [P1-STEP-SUGAR-GHOST] {n} paso(s) con azúcar fantasma stripeado(s) (no en ingredients).")
+        return n
+    except Exception as _e:
+        logger.warning(f"[P1-STEP-SUGAR-GHOST] no-op: {type(_e).__name__}: {_e}")
+        return 0
+
+
 def _cap_unrealistic_portions(days, db=None) -> int:
     """[P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH)
     Techo de porción REALISTA per-ingrediente, post-sizing. El solver escala el ingrediente dominante
@@ -24840,6 +24962,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     _relevel_fats_universal(days, _fg, _QDB())
                 except Exception as _fru_e:
                     logger.warning(f"[P1-FATS-RELEVEL-UNIVERSAL] assemble no-op: {type(_fru_e).__name__}: {_fru_e}")
+            # [P1-CHEESE-DUMP-FINAL · 2026-07-07] cap FINAL del queso (sweet-aware) tras TODOS los pases de
+            # macro → caza la re-inflación post-cap del closer (190g de queso en un pan dulce). El qty-sync
+            # FINAL de más abajo (post-recheck) ve el cambio. [P1-STEP-SUGAR-GHOST] strip de azúcar fantasma.
+            try:
+                _cap_cheese_dumps_final(days, _QDB())
+            except Exception as _cc_e:
+                logger.warning(f"[P1-CHEESE-DUMP-FINAL] assemble no-op: {type(_cc_e).__name__}: {_cc_e}")
+            try:
+                _strip_phantom_sugar_from_steps(days)
+            except Exception as _sg_e:
+                logger.warning(f"[P1-STEP-SUGAR-GHOST] assemble no-op: {type(_sg_e).__name__}: {_sg_e}")
             # [P2-POSTQUANTIZE-RECHECK · 2026-07-02] (audit v3 macros GAP-4) el redondeo a fracciones
             # servibles pudo re-abrir el drift que MACRO-REBALANCE cerró antes del quantize. Si un día
             # quedó con C/F/P a >TOL del target → UN rebalance + UN re-quantize (iteración única). El
