@@ -216,19 +216,27 @@ def test_handle_add_handles_23505_unique_violation():
 # ---------------------------------------------------------------------------
 def test_unit_chip_uses_clean_copy():
     src = _read_pantry()
-    # Anti-regresión del copy viejo.
+    # Anti-regresión del copy viejo (jerga de DB filtrándose a la UI).
     assert "Unidad base: {item.unit}" not in src, (
         "El chip de unidad NO debe leer 'Unidad base: X' — es jerga de DB. "
-        "Usa solo {item.unit} y deja que la CSS .nevera-item-unit-tag lo "
-        "capitalice."
+        "Usa solo la unidad y deja que la CSS la capitalice."
     )
-    # CSS debe declarar capitalize para que '{item.unit}' (lowercase) se
-    # muestre como 'Cartón'/'Botella' sin tocar los strings.
-    assert "text-transform: capitalize" in src, (
-        "`.nevera-item-unit-tag` debe usar `text-transform: capitalize` para "
-        "que la unidad cruda lowercase quede presentable. Sin esto, el chip "
-        "muestra 'cartón' en vez de 'Cartón'."
-    )
+    # [P3-PANTRY-FRIDGE-REDESIGN · 2026-06-24] La capitalización de la unidad se
+    # movió del inline `.nevera-item-unit-tag` (eliminado) a la clase `.unit` de
+    # los CSS modules (desktop + móvil dedicado). Debe seguir existiendo para que
+    # la unidad cruda lowercase ('cartón') se muestre presentable ('Cartón') sin
+    # tocar el string. [P3-PANTRY-ADD-UX anchor vive junto a la regla `.unit`.]
+    for css_name in ("Pantry.fridge.module.css", "Pantry.mobileFridge.module.css"):
+        css_path = _PANTRY_JSX.parent / css_name
+        assert css_path.exists(), f"CSS module esperado: {css_path}"
+        css = css_path.read_text(encoding="utf-8")
+        m = re.search(r"\.unit\s*\{([^}]*)\}", css)
+        assert m, f"Regla `.unit {{...}}` no encontrada en {css_name}."
+        assert "text-transform: capitalize" in m.group(1), (
+            f"`.unit` en {css_name} debe usar `text-transform: capitalize` para "
+            "que la unidad cruda lowercase quede presentable ('cartón' → 'Cartón'). "
+            "Sin esto, el chip de unidad muestra jerga lowercase de la DB."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -314,11 +322,17 @@ def test_no_trash_icon_in_counter_at_min_quantity():
 
 def test_minus_button_disabled_at_min_quantity():
     src = _read_pantry()
-    # El botón `-` debe declarar `disabled={item.quantity <= 1}` para que
-    # el user vea visualmente que llegó al mínimo (cursor not-allowed +
-    # color gris) en lugar de ofrecer una acción destructiva escondida.
-    assert re.search(r"disabled\s*=\s*\{\s*item\.quantity\s*<=\s*1\s*\}", src), (
-        "El botón '-' del counter debe declarar "
-        "`disabled={item.quantity <= 1}` cuando llega a qty mínima. "
-        "Esto deja la eliminación exclusivamente por 'Agotar'."
+    # [P3-PANTRY-FRIDGE-REDESIGN · 2026-06-24] El counter se refactorizó a un flag
+    # `atFloor = item.quantity <= 1` reusado por el botón `-` (disabled), su
+    # aria-label y su title. El botón `-` debe quedar deshabilitado en qty mínima
+    # para que el user vea que llegó al mínimo (cursor not-allowed + gris) en vez
+    # de ofrecer una acción destructiva escondida — la eliminación va
+    # exclusivamente por 'Agotar'.
+    assert re.search(r"const\s+atFloor\s*=\s*item\.quantity\s*<=\s*1", src), (
+        "Se espera el flag `const atFloor = item.quantity <= 1` del counter "
+        "(P3-PANTRY-FRIDGE-REDESIGN). Si se renombra, revisar el botón '-'."
+    )
+    assert re.search(r"disabled\s*=\s*\{\s*atFloor\s*\}", src), (
+        "El botón '-' del counter debe declarar `disabled={atFloor}` cuando "
+        "llega a qty mínima. Esto deja la eliminación exclusivamente por 'Agotar'."
     )
