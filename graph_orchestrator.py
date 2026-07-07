@@ -21321,6 +21321,15 @@ _LINE_GRAM_CAP_EXEMPT = ("agua", "caldo")
 # después sin re-fire). Techo servible de QUESO en meriendas; yogurt exento (un bowl de 200g es
 # normal). Corre en el realism-cap (assemble + boundary) → cubre el origen que sea.
 SNACK_CHEESE_CAP_G = _env_int("MEALFIT_SNACK_CHEESE_CAP_G", 120, lambda v: 60 <= v <= 300)
+# [P1-MEAL-CHEESE-CAP · 2026-07-07] (review visual plan 30d, goal ganancia muscular: un batido
+# con "245 g de queso" ≈ 68g grasa en UNA comida → banda de grasa del día 148% del target; el
+# fat-trimmer NO toca queso proteína-dominante por diseño y FAT-LEAN-SWAP está apagado). Techo
+# servible de queso en COMIDAS PRINCIPALES (la merienda ya usa SNACK_CHEESE_CAP_G=120). GENEROSO
+# a propósito (180g): caza solo bombas de grasa EXTREMAS sin tocar el uso normal ≤150g. El déficit
+# de proteína lo re-cierra el protein-floor/closer. SENSIBLE AL BENCHMARK de macros (queso aporta
+# proteína+grasa para ganancia muscular) → bajar el knob aprieta la grasa a costa de densidad
+# proteica; validar contra el benchmark vivo. tooltip-anchor: P1-MEAL-CHEESE-CAP.
+MEAL_CHEESE_CAP_G = _env_int("MEALFIT_MEAL_CHEESE_CAP_G", 180, lambda v: 120 <= v <= 400)
 # [P2-ORGAN-MEAT-CAP · 2026-07-06] (vivo: "215 g de hígado de res" en UNA comida — porción
 # culturalmente ~100-150g Y prudencia de retinol: hígado ≈5.7mg vit A/100g, 215g ≈ 12mg
 # preformados en un plato). Techo per-línea de vísceras; el déficit lo re-cierra el closer
@@ -21459,6 +21468,13 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                               and "merienda" in _sa(str(meal.get("meal", "")).lower())
                               and _re.search(r"\bqueso", il)):
                             factor = float(SNACK_CHEESE_CAP_G) / cur_g
+                        # [P1-MEAL-CHEESE-CAP · 2026-07-07] 1.7b) queso en COMIDA PRINCIPAL sobre el
+                        # techo servible (batido con "245 g de queso" ≈ 68g grasa → banda de grasa
+                        # rota). Generoso (180g): solo caza bombas extremas. Yogurt exento (\bqueso).
+                        elif (cur_g > float(MEAL_CHEESE_CAP_G)
+                              and "merienda" not in _sa(str(meal.get("meal", "")).lower())
+                              and _re.search(r"\bqueso", il)):
+                            factor = float(MEAL_CHEESE_CAP_G) / cur_g
                         # [P2-ORGAN-MEAT-CAP · 2026-07-06] 1.8) vísceras sobre el techo per-línea
                         # ("215 g de hígado de res" — porción cultural + prudencia de retinol).
                         elif (cur_g > float(ORGAN_MEAT_CAP_G)
