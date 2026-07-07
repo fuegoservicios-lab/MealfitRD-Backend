@@ -2618,6 +2618,33 @@ def cheapest_supermarket_variant(item_name: str) -> dict | None:
         return None
 
 
+# [P1-BUDGET-BRAND-PREMIUM · 2026-07-07] (decisión de producto del owner, ablanda levemente P2-H): en
+# el banner 'excedido' — y SOLO ahí, este helper solo corre en ese caso — informar cuánto CUESTA la
+# elección de marcas premium del usuario vs la opción más económica, como UN total accionable ("RD$X de
+# tu sobrecosto son tus marcas premium"). NO nag per-ítem (respeta el espíritu de P2-H: no molestar con
+# cada marca elegida); solo un resumen cuando el premium es material. Reversible: MEALFIT_BUDGET_BRAND_PREMIUM_SURFACE=false.
+def _budget_brand_premium_surface_enabled() -> bool:
+    return _knob_env_bool("MEALFIT_BUDGET_BRAND_PREMIUM_SURFACE", True)
+
+
+_BUDGET_BRAND_PREMIUM_MIN_RD = 40.0  # premium total mínimo (RD$) para surfacearlo (ruido si menos)
+
+
+def _variant_price_per_g(v) -> float | None:
+    """Precio/gramo de un variant del súper. Acepta ambos formatos: pkg ({grams, price}) y
+    floor-variant ({price_rd, presentation → gramos parseables}). None si no resuelve."""
+    if not isinstance(v, dict):
+        return None
+    price = v.get("price") if v.get("price") is not None else v.get("price_rd")
+    grams = v.get("grams") or v.get("size_grams") or _parse_presentation_grams(v.get("presentation"))
+    try:
+        price = float(price)
+        grams = float(grams)
+    except (TypeError, ValueError):
+        return None
+    return price / grams if (price > 0 and grams > 0) else None
+
+
 def build_budget_suggestions(weekly_list, limit: int = 5, user_id=None) -> list:
     """[P1-BUDGET-CONVERGENCE · 2026-07-03] (audit v6 · P1-3) Sugerencias de ahorro accionables
     para el banner `excedido`: variante más barata del Supermercado RD para los ítems más caros
@@ -2641,12 +2668,26 @@ def build_budget_suggestions(weekly_list, limit: int = 5, user_id=None) -> list:
         ]
         priced.sort(key=lambda x: x.get("estimated_cost_rd") or 0, reverse=True)
         sugs = []
+        _brand_premium_total = 0.0  # [P1-BUDGET-BRAND-PREMIUM] costo extra de las marcas premium elegidas
         for it in priced[: max(1, int(limit)) * 3]:
             name = str(it.get("name") or "").strip()
             if not name:
                 continue
-            if prefs and _resolve_brand_pref(name, prefs):
-                continue  # [P2-H] el usuario ya eligió marca para este ítem — respetar su decisión
+            _pref_var = _resolve_brand_pref(name, prefs) if prefs else None
+            if _pref_var:
+                # [P1-BUDGET-BRAND-PREMIUM · 2026-07-07] el usuario ELIGIÓ marca para este ítem. NO
+                # sugerimos per-ítem (P2-H: no molestar con su elección), pero SÍ acumulamos cuánto le
+                # cuesta esa elección vs la más económica → un solo resumen accionable al final.
+                if _budget_brand_premium_surface_enabled():
+                    try:
+                        _cheap = cheapest_supermarket_variant(name)
+                        _pppg = _variant_price_per_g(_pref_var)
+                        _cppg = _variant_price_per_g(_cheap)
+                        if _cheap and _pppg and _cppg and _cppg < _pppg * 0.92:
+                            _brand_premium_total += float(it.get("estimated_cost_rd") or 0) * (1.0 - _cppg / _pppg)
+                    except Exception:
+                        pass
+                continue  # respetar la elección del usuario (sin sugerencia per-ítem)
             var = cheapest_supermarket_variant(name)
             if var and var.get("brand"):
                 sugs.append({
@@ -2660,6 +2701,16 @@ def build_budget_suggestions(weekly_list, limit: int = 5, user_id=None) -> list:
                 })
             if len(sugs) >= max(1, int(limit)):
                 break
+        # [P1-BUDGET-BRAND-PREMIUM] resumen accionable del sobrecosto por marcas premium elegidas.
+        # PREPEND (no append): el frontend muestra solo las primeras 3 sugerencias (Dashboard.jsx
+        # `_sugs.slice(0,3)`) → este resumen es el mensaje más importante, va primero.
+        if _brand_premium_total >= _BUDGET_BRAND_PREMIUM_MIN_RD:
+            sugs.insert(0, {
+                "type": "marca_premium_total",
+                "saving_rd": round(_brand_premium_total),
+                "text": (f"~RD${round(_brand_premium_total)} de tu sobrecosto son tus marcas premium "
+                         f"elegidas — cámbialas en /supermercado por la opción más económica para ahorrar."),
+            })
         return sugs
     except Exception:
         return []
