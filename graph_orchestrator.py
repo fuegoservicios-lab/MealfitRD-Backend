@@ -1489,7 +1489,7 @@ from nutrition_calculator import get_nutrition_targets
 # Production-grade backend NO usa print(). Anchor: P2-LOGGER-MIGRATION.
 logger = logging.getLogger(__name__)
 
-from cache_manager import redis_client, redis_async_client
+from cache_manager import redis_client, redis_async_client, get_redis_async
 from db_core import execute_sql_query, execute_sql_write, aexecute_sql_query, aexecute_sql_write
 
 
@@ -2102,12 +2102,18 @@ class LLMCircuitBreaker:
         with self._local_state_lock:
             self._local_healthy = False
             self._failure_propagated_at = time.time()
-        if redis_async_client:
+        # [P1-REDIS-ASYNC-PERLOOP-CB · 2026-07-07] Cliente Redis PER-LOOP (get_redis_async),
+        # NO el module-global. La generación corre en un loop fresco (asyncio.run); reusar
+        # el cliente global atado al loop de import lanzaba "Future attached to a different
+        # loop" en cada CB write (~25/30min en prod). Completa la migración P2-REDIS-ASYNC-PERLOOP
+        # que solo cubrió los semáforos. Fail-soft: get_redis_async()→None cae al path DB.
+        _rc = get_redis_async()
+        if _rc:
             try:
-                failures = await redis_async_client.incr(self._failures_key)
-                await redis_async_client.expire(self._failures_key, self.reset_timeout)
+                failures = await _rc.incr(self._failures_key)
+                await _rc.expire(self._failures_key, self.reset_timeout)
                 if failures >= self.threshold:
-                    await redis_async_client.set(self._open_key, "1", ex=self.reset_timeout)
+                    await _rc.set(self._open_key, "1", ex=self.reset_timeout)
                 return
             except Exception as e:
                 logger.warning(f"Redis async CB write error: {e}")
@@ -2137,9 +2143,11 @@ class LLMCircuitBreaker:
         if is_healthy and (time.time() - last_check) < self._local_health_ttl:
             return  # Debounce
 
-        if redis_async_client:
+        # [P1-REDIS-ASYNC-PERLOOP-CB · 2026-07-07] cliente per-loop (ver arecord_failure).
+        _rc = get_redis_async()
+        if _rc:
             try:
-                await redis_async_client.delete(self._failures_key, self._open_key)
+                await _rc.delete(self._failures_key, self._open_key)
                 with self._local_state_lock:
                     self._local_healthy = True
                     self._last_db_check = time.time()
@@ -2192,9 +2200,11 @@ class LLMCircuitBreaker:
         if is_healthy and (time.time() - last_check) < self._local_health_ttl:
             return True
 
-        if redis_async_client:
+        # [P1-REDIS-ASYNC-PERLOOP-CB · 2026-07-07] cliente per-loop (ver arecord_failure).
+        _rc = get_redis_async()
+        if _rc:
             try:
-                is_open = await redis_async_client.get(self._open_key)
+                is_open = await _rc.get(self._open_key)
                 if not is_open:
                     with self._local_state_lock:
                         self._local_healthy = True
@@ -3149,9 +3159,11 @@ class PersistentLLMCache:
         return default
 
     async def aget(self, key, default=None):
-        if redis_async_client:
+        # [P1-REDIS-ASYNC-PERLOOP-CB · 2026-07-07] cliente per-loop (ver LLMCircuitBreaker).
+        _rc = get_redis_async()
+        if _rc:
             try:
-                val = await redis_async_client.get(key)
+                val = await _rc.get(key)
                 if val:
                     return json.loads(val)
             except Exception as e:
@@ -3203,9 +3215,11 @@ class PersistentLLMCache:
             logger.warning(f"DB cache write error: {e}")
 
     async def aset(self, key, value):
-        if redis_async_client:
+        # [P1-REDIS-ASYNC-PERLOOP-CB · 2026-07-07] cliente per-loop (ver LLMCircuitBreaker).
+        _rc = get_redis_async()
+        if _rc:
             try:
-                await redis_async_client.setex(key, self.ttl, json.dumps(value))
+                await _rc.setex(key, self.ttl, json.dumps(value))
             except Exception as e:
                 logger.warning(f"Redis async cache write error: {e}")
         # [P1-BESTEFFORT-DB-CB · 2026-05-21] Mismo gate que aget: fail-fast
