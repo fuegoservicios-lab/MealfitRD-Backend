@@ -24,7 +24,10 @@ class _DB:
 
 
 def _wire(monkeypatch):
-    monkeypatch.setattr(g, "_truth_up_meal_macros_from_strings", lambda m, db: True)
+    # [P1-FINALIZE-TRUTHUP-ALL · 2026-07-07] El truth-up REAL es idempotente: retorna False cuando las
+    # macros ya = string-sum (el caso band-1.00 que test_idempotent_band_safe representa). El stub debe
+    # modelar eso (antes era `lambda: True` siempre → rompía el conteo del truth-up final incondicional).
+    monkeypatch.setattr(g, "_truth_up_meal_macros_from_strings", lambda m, db: False)
 
 
 def _days():

@@ -9416,6 +9416,16 @@ SUBST_RECIPE_REWRITE_ENABLED = _env_bool("MEALFIT_SUBST_RECIPE_REWRITE", True)
 # se persistía con unidades vagas ("1¼ lonjas de queso"). `finalize_plan_data_coherence` los aplica DEFENSIVAMENTE antes de
 # persistir (INSERT chokepoint). Idempotente → no-op donde assemble ya corrió (band 1.00 intacto). Rollback: =false.
 COHERENCE_FINALIZE_ENABLED = _env_bool("MEALFIT_COHERENCE_FINALIZE", True)
+# [P1-FINALIZE-TRUTHUP-ALL · 2026-07-07] (forense plan vivo 4b9291fe degradado) Pasada FINAL incondicional
+# de truth-up macros↔strings al cierre del finalizer, DESPUÉS de todos los pases que mutan strings
+# (realism-cap, quantize, relevel, reconcile display↔raw, etc.). El truth-up del finalizer solo corría
+# CONDICIONALMENTE (dentro de los `if _nv:`/`if _ncgp:` de veg/carb-ghost) y TEMPRANO → un plato cuyas macros
+# quedaron desincronizadas aguas arriba (ej. "Pera Fresca": 300g de pera en el string, ausentes de las macros
+# C3) y cuyo día no dispara veg/carb-ghost NUNCA recibía truth-up final → el band score leía macros subcontadas
+# → degradado. El abort-gate conservador del truth-up (P1-TRUTHUP-ALGUSTO/NEGLIGIBLE) protege platos con
+# ingredientes no resolubles (mantiene macros existentes); idempotente donde assemble ya sincronizó (band 1.00
+# intacto). Flip a False revierte sin redeploy.
+FINALIZE_TRUTHUP_ALL_ENABLED = _env_bool("MEALFIT_FINALIZE_TRUTHUP_ALL", True)
 # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Los finalizadores de
 # coherencia de RECETA de assemble (veg-fantasma en pasos → ingredients[], slice-grams, leaf-cap) NO corrían en
 # NINGUNA superficie de update → reaparecía el bug ghost-vegetal (un vegetal en los pasos ausente de la lista no
@@ -19541,6 +19551,30 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"contract_advisory={_nca}")
     except Exception as _e9:
         logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-C) contract-lint boundary no-op: {type(_e9).__name__}: {_e9}")
+    # [P1-FINALIZE-TRUTHUP-ALL · 2026-07-07] ÚLTIMA pasada: reconcilia macros↔strings en TODOS los meals,
+    # tras todas las mutaciones de string de arriba. Sin esto, un plato desincronizado aguas arriba (macros
+    # que no cuentan un ingrediente presente en el string, ej. "Pera Fresca" C3 con 300g de pera listados)
+    # persistía con macros subcontadas → band degradado (forense plan vivo 4b9291fe). El truth-up aborta y
+    # mantiene las macros existentes si algún ingrediente no resuelve (fail-safe), y es no-op donde las macros
+    # ya = string-sum (band 1.00 del caso bueno intacto). tooltip-anchor: P1-FINALIZE-TRUTHUP-ALL
+    try:
+        if FINALIZE_TRUTHUP_ALL_ENABLED:
+            if db is None:
+                from nutrition_db import IngredientNutritionDB as _TUDB
+                db = _TUDB()
+            _ntu = 0
+            for _d in days or []:
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict):
+                        try:
+                            if _truth_up_meal_macros_from_strings(_m, db):
+                                _ntu += 1
+                        except Exception:
+                            pass
+            if _ntu:
+                total += _ntu; parts.append(f"final_truthup={_ntu}")
+    except Exception as _etu:
+        logger.warning(f"[P1-FINALIZE-TRUTHUP-ALL] final truth-up no-op: {type(_etu).__name__}: {_etu}")
     return (total, ", ".join(parts))
 
 

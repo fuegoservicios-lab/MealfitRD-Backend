@@ -263,12 +263,14 @@ def test_p2h_suggestions_skip_user_branded_items(monkeypatch):
                         lambda name: {"brand": "MarcaX", "presentation": "1 lb", "price_rd": 99.0})
     weekly = [{"name": "Salmón", "estimated_cost_rd": 900}, {"name": "Pollo", "estimated_cost_rd": 300}]
     sugs = sc.build_budget_suggestions(weekly, user_id="11111111-2222-3333-4444-555555555555")
-    items = [s["item"] for s in sugs]
+    # [P1-BUDGET-BRAND-PREMIUM · 2026-07-07] build_budget_suggestions puede prepender un resumen
+    # {"type":"marca_premium_total", ...} SIN clave "item" → filtrar a las sugerencias per-ítem.
+    items = [s["item"] for s in sugs if "item" in s]
     assert "Salmón" not in items, "el usuario YA eligió marca de salmón — no sugerir contra su decisión"
     assert "Pollo" in items
     # sin user_id → comportamiento previo (ambos)
     sugs_anon = sc.build_budget_suggestions(weekly)
-    assert {"Salmón", "Pollo"} == {s["item"] for s in sugs_anon}
+    assert {"Salmón", "Pollo"} == {s["item"] for s in sugs_anon if "item" in s}
 
 
 def test_p2h_user_id_wired_through_refresh_and_callsites():
