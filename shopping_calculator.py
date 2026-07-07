@@ -2933,7 +2933,13 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     is_mega_fruit = bool(re.search(r'\b(aguacates?|pi[ñn]as?|sand[ií]as?|mel[oó]n|melones|lechosas?|papayas?)\b', n_lower))
     is_native_weighable = bool(re.search(r'\b(zanahorias?|tomates?|aj[ií]es?|cebollas?|papas?|yucas?|batatas?|berenjenas?|tayotas?|remolachas?|calabac[ií]nes?|calabac[ií]n|auyamas?|vegetales|[ñn]ames?|yaut[ií]as?|pimientos?|chiles?)\b', n_lower))
     is_native_cabeza = bool(re.search(r'\b(br[oó]colis?|coliflor|repollos?|lechugas?)\b', n_lower))
-    is_herb_mazo = bool(re.search(r'\b(cilantro|cilantrico|puerro|perejil|menta|albahaca|romero|verdura|verdurita|recao|eneldo)\b', n_lower))
+    # [P1-CEBOLLIN-HERB-GARNISH · 2026-07-07] cebollín (chives) es hierba aromática de
+    # guarnición — el clasificador ya lo trata como 'Cebollín' aparte, pero estaba OMITIDO
+    # de is_herb_mazo (y de _HERB_NAMES_FOR_CAP) → "cebollín al gusto" caía a SEASONING-KEEP
+    # con el paquete completo del master (375g) → "1 paquete (25 unid) RD$229" × ciclo. Con
+    # esto va al BLOQUE 1.5 (mazo ~50g) + al cap por persona-semana. `\bcebollin` NO matchea
+    # 'cebolla' (onion). tooltip-anchor: P1-CEBOLLIN-HERB-GARNISH
+    is_herb_mazo = bool(re.search(r'\b(cilantro|cilantrico|puerro|perejil|menta|albahaca|romero|verdura|verdurita|recao|eneldo|cebollin|cebollín|cebollines|cebollínes)\b', n_lower))
 
     # ═══════════════════════════════════════════════════════════════
     # BLOQUE 1: Resolución Data-Driven (PRIORIDAD MÁXIMA)
@@ -7489,6 +7495,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         'cilantro', 'cilantrico', 'culantro', 'puerro', 'perejil',
         'menta', 'albahaca', 'romero', 'verdura', 'verdurita',
         'recao', 'eneldo', 'tomillo', 'laurel',
+        # [P1-CEBOLLIN-HERB-GARNISH · 2026-07-07] clave sin acento (strip_accents aplicado
+        # abajo) — cap por persona-semana para que cebollín de guarnición no se multiplique
+        # ×ciclo como paquete de 375g. Ver is_herb_mazo (apply_smart_market_units).
+        'cebollin',
     }
     _HERB_MAZO_GRAMS = 50.0  # 1 mazo de hierba ≈ 50g
 

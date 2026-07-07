@@ -22861,6 +22861,23 @@ def _align_closer_note_food_names(meal: dict) -> int:
             if len(_cands) != 1:
                 continue  # 0 o ≥2 líneas con el mismo token → ambiguo, no tocar
             _line_food = _cands[0]
+            # [P1-CLOSER-FRESH-COCIDO · 2026-07-07] (review visual plan 30d, plato "Catibías...
+            # y Pescado blanco": "💪 Escurre e incorpora filete de pescado (ya viene cocido)")
+            # Si el paso trae el wording de enlatado/pre-cocido "(ya viene cocido)" pero el
+            # alimento de la LÍNEA (verdad de compras) es FRESCO — NO matchea _PRECOOKED_PROTEIN_HINT
+            # ("½ filete de pescado" fresco) — un simple replace del nombre dejaría "filete de
+            # pescado (ya viene cocido)": pescado fresco declarado ya-cocido = incoherente + riesgo
+            # food-safety (servir pescado sin cocer). Re-renderizamos el paso ENTERO con el wording
+            # correcto vía el SSOT `_closer_protein_step_text` → "Cocina filete de pescado a la
+            # plancha o hervido". Cubre también el caso ya-alineado-pero-cocido. tooltip-anchor:
+            # P1-CLOSER-FRESH-COCIDO
+            if "(ya viene cocido)" in step and not any(
+                    _h in _sa_al(_line_food.lower()) for _h in _PRECOOKED_PROTEIN_HINT):
+                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal))}"
+                if _rebuilt.strip() != step.strip():
+                    rec[_i] = _rebuilt
+                    fixed += 1
+                continue
             if _sa_al(_line_food.lower()) == _sa_al(_note_food.lower()):
                 continue  # ya alineados
             rec[_i] = step.replace(m_n.group("food"), _line_food, 1)

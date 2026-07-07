@@ -40,7 +40,9 @@ def test_precooked_hint_and_helper_wired():
     # [P1-CLOSER-HYGIENE · 2026-07-06] re-anclado: los DOS callsites ahora pasan por el SSOT
     # anti-dup/anti-redundante (_append_closer_protein_step), que internamente usa el builder.
     assert _GRAPH.count("_append_closer_protein_step(") >= 3, "def + 2 callsites"
-    assert "_closer_protein_step_text(nm, no_cook)" in _GRAPH, "el builder sigue siendo el SSOT del texto"
+    # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] el builder ganó un 3er param `blended` (batidos);
+    # el callsite del SSOT ahora pasa blended=_blended. Sigue siendo el único builder del texto.
+    assert "_closer_protein_step_text(nm, no_cook, blended=" in _GRAPH, "el builder sigue siendo el SSOT del texto"
     # ya no debe quedar el branch hardcodeado "Cocina {nm} a la plancha o hervido" inline en los call sites
     assert "P1-CLOSER-PRECOOKED-WORDING" in _GRAPH
 
