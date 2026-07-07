@@ -10375,6 +10375,13 @@ MICRO_SEED_BELOW_RATIO = max(0.0, min(0.95, _env_float("MEALFIT_MICRO_SEED_BELOW
 # maní→linaza era 4-100× más débil: linaza tiene 0.3mg de vit E — semilla casi inútil para ese
 # piso). omega-3 — linaza 22.8g ≫ chía 17.8 ≫ nueces ~9 (chía entra como 2ª opción seed-safe para
 # alérgicos a frutos secos). Nombres EXACTOS del catálogo verificado (lookup de micros los resuelve).
+# [P3-1 · 2026-07-07] LIMITACIÓN DOCUMENTADA: solo 3 de los ~13 micros del closer son SEMBRABLES
+# (omega3/vitE/vitA). Los otros 10 (hierro/folato/vitC/K/Ca/Mg/fibra/zinc/selenio) son SCALE-ONLY: un día
+# sin portador de esos NO se puede cerrar (residual → banner; telemetría `no_carrier_no_seed`, Sd-P2-c).
+# Es parcialmente por diseño (una línea de hierro necesita hígado/vísceras → UL/coherencia; una de folato,
+# legumbre → K/P renal). Expandir el catálogo ("50g de lentejas"→hierro/folato, "100g de brócoli"→vitC/K)
+# EXIGE añadir el guard clínico (`_ceiling_risky_contributor` + renal/K-med) al PATH DE SEED — hoy solo
+# checa alergia/dislike/dieta (el scaling SÍ tiene el guard, el seed no). Follow-up P1/P2, no P3.
 _MICRO_SEED_SOURCES = {
     "omega3_g": ("10 g de semillas de linaza", "10 g de semillas de chía", "10 g de nueces"),
     "vit_e_mg": ("10 g de semillas de girasol", "10 g de almendras fileteadas", "10 g de maní"),
@@ -12134,6 +12141,17 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         continue
                                 except Exception:
                                     continue  # conservador: duda → no sembrar este candidato
+                            # [P3-5 · 2026-07-07] guard de dieta (veg/vegan/pescetariano): moot hoy (seeds
+                            # plant-based) pero fail-secure PREVENTIVO si algún día entra un seed animal
+                            # (hígado→hierro, pescado→omega-3). Espejo del allergen-scan de arriba.
+                            _seed_diet = _fd.get("dietType") or _fd.get("diet_type")
+                            if _seed_diet:
+                                try:
+                                    if _scan_diet_violations(
+                                        {"days": [{"meals": [{"ingredients": [_cand]}]}]}, _seed_diet):
+                                        continue
+                                except Exception:
+                                    continue  # conservador: duda → no sembrar
                             _seed_line = _cand
                             break
                         if _seed_line:
@@ -12148,14 +12166,20 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     _seed_mers = [m for m in _seed_cands
                                                   if any(t in str(m.get("meal", "")).lower()
                                                          for t in ("almuerzo", "cena", "comida"))]
+                                    # [P3-3 · 2026-07-07] seed SALADO (zanahoria/auyama/espinaca) sin comida
+                                    # salada (día solo con meriendas dulces) → NO sembrar: mejor el residual
+                                    # honesto que "zanahoria rallada" en un yogurt-con-fruta. Pool = solo
+                                    # saladas (sin fallback a cualquier meal → _seed_pool vacío → skip).
+                                    _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
+                                                  or _seed_mers)
                                 else:
                                     _seed_mers = [m for m in _seed_cands
                                                   if "merienda" in str(m.get("meal", "")).lower()]
-                                _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
-                                              or [m for m in _seed_cands if not m.get("_micro_seed_applied")]
-                                              or _seed_mers or _seed_cands)
-                                _seed_meal = min(_seed_pool,
-                                                 key=lambda m: _meal_macro_num(m.get("cals")))
+                                    _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
+                                                  or [m for m in _seed_cands if not m.get("_micro_seed_applied")]
+                                                  or _seed_mers or _seed_cands)
+                                _seed_meal = (min(_seed_pool, key=lambda m: _meal_macro_num(m.get("cals")))
+                                              if _seed_pool else None)
                             else:
                                 _seed_meal = next(
                                     (m for m in _seed_cands
@@ -12163,10 +12187,10 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     None,
                                 ) or (_seed_cands[0] if _seed_cands else None)
                             if _seed_meal is not None:
-                                _seed_meal["ingredients"].append(_seed_line)
-                                _seed_raw = _seed_meal.get("ingredients_raw")
-                                if isinstance(_seed_raw, list):
-                                    _seed_raw.append(_seed_line)  # preserva alineación posicional
+                                # [P3-2 · 2026-07-07] resolver el micro ANTES de appendear: un seed que no
+                                # resuelve en el catálogo (drift) dejaba una línea FANTASMA con nota 🌱 (0
+                                # micros), descontaba budget y ponía _micro_seed_applied (bloqueaba re-seed)
+                                # → el gap quedaba abierto Y silencioso. Fail-secure: no resuelve → no sembrar.
                                 try:
                                     _seed_mic = db.micros_from_ingredient_string(_seed_line) or {}
                                     _c_seed = float(_seed_mic.get(ing_key) or 0.0)
@@ -12177,35 +12201,41 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     _kc_seed = float(_seed_mac.get("kcal") or 0.0)
                                 except Exception:
                                     _kc_seed = 0.0
-                                try:
-                                    _truth_up_meal_macros_from_strings(_seed_meal, db)
-                                except Exception:
-                                    pass
-                                if _c_seed > 0:
+                                if _c_seed <= 0:
+                                    logger.info(f"🌱 [P1-MICRO-SEED] seed '{_seed_line}' de '{k}' no resuelve "
+                                                f"en el catálogo → NO sembrado (fail-secure vs catalog-drift).")
+                                else:
+                                    _seed_meal["ingredients"].append(_seed_line)
+                                    _seed_raw = _seed_meal.get("ingredients_raw")
+                                    if isinstance(_seed_raw, list):
+                                        _seed_raw.append(_seed_line)  # preserva alineación posicional
+                                    try:
+                                        _truth_up_meal_macros_from_strings(_seed_meal, db)
+                                    except Exception:
+                                        pass
                                     contributors.append((
                                         _c_seed, _seed_meal,
                                         len(_seed_meal["ingredients"]) - 1, _seed_line, _kc_seed,
                                     ))
                                     day_total += _c_seed
-                                # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] descuenta del budget correcto:
-                                # la reserva dedicada si el seed grasa-basado no tenía budget compartido.
-                                if _seed_from_reserve:
-                                    _fat_seed_reserve -= _kc_seed
-                                else:
-                                    kcal_budget_left -= _kc_seed
-                                _seed_meal["_micro_seed_applied"] = k
-                                # [P2-SEED-STEP-NOTE · 2026-07-05] la semilla también vive en los
-                                # pasos (antes: ingrediente huérfano que la receta jamás nombraba).
-                                # El qty-sync post-escala alinea la cantidad del paso con la final.
-                                if MICRO_SEED_STEP_NOTE_ENABLED:
-                                    _rec_seed = _seed_meal.get("recipe")
-                                    if isinstance(_rec_seed, list):
-                                        # [P2-MICRO-SEED-VITA · 2026-07-06] seeds salados no se
-                                        # "espolvorean" — acompañan el plato.
+                                    # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] descuenta del budget correcto:
+                                    # la reserva dedicada si el seed grasa-basado no tenía budget compartido.
+                                    if _seed_from_reserve:
+                                        _fat_seed_reserve -= _kc_seed
+                                    else:
+                                        kcal_budget_left -= _kc_seed
+                                    _seed_meal["_micro_seed_applied"] = k
+                                    # [P2-SEED-STEP-NOTE · 2026-07-05] la semilla también vive en los pasos.
+                                    if MICRO_SEED_STEP_NOTE_ENABLED:
+                                        _rec_seed = _seed_meal.get("recipe")
+                                        # [P3-4 · 2026-07-07] coacciona recipe a lista (None/str) para no
+                                        # dropear la nota 🌱 en silencio (→ ingrediente sembrado sin mención).
+                                        if not isinstance(_rec_seed, list):
+                                            _rec_seed = [str(_rec_seed)] if (_rec_seed and str(_rec_seed).strip()) else []
+                                        # [P2-MICRO-SEED-VITA · 2026-07-06] seeds salados no se "espolvorean".
                                         _seed_verb = ("acompaña el plato con" if k in _MICRO_SEED_SAVORY_KEYS
                                                       else "espolvorea")
-                                        # [P3-RECIPE-POLISH-4 · 2026-07-06] en BEBIDAS (batido/
-                                        # licuado) no hay "plato" — el tail cae a "al servir".
+                                        # [P3-RECIPE-POLISH-4] en BEBIDAS no hay "plato" → tail "al servir".
                                         _seed_is_drink = any(
                                             t in _sa_seed(str(_seed_meal.get("name", "")).lower())
                                             for t in ("batido", "batida", "licuado", "smoothie", "jugo"))
@@ -12217,12 +12247,12 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                             f"🌱 Nota del Nutricionista AI: {_seed_verb} {_seed_line}"
                                             f"{_seed_tail} — cierra tu "
                                             f"{_MICRO_SEED_HUMAN.get(k, k)} del día.")
-                                adjustments += 1
-                                _seed_why = ("día sin portador" if not _had_carriers else
-                                             f"portadores muy cortos ({day_total - _c_seed:.2g} < "
-                                             f"{MICRO_SEED_BELOW_RATIO}×{floor:.2g})")
-                                logger.info(f"🌱 [P1-MICRO-SEED] {_seed_why} de '{k}' → "
-                                            f"sembrado '{_seed_line}' (el closer lo escala al piso)")
+                                    adjustments += 1
+                                    _seed_why = ("día sin portador" if not _had_carriers else
+                                                 f"portadores muy cortos ({day_total - _c_seed:.2g} < "
+                                                 f"{MICRO_SEED_BELOW_RATIO}×{floor:.2g})")
+                                    logger.info(f"🌱 [P1-MICRO-SEED] {_seed_why} de '{k}' → "
+                                                f"sembrado '{_seed_line}' (el closer lo escala al piso)")
                     except Exception as _seed_e:
                         logger.debug(f"[P1-MICRO-SEED] seed no-op: {type(_seed_e).__name__}: {_seed_e}")
                 elif _seed_trigger and _already_seeded and MICRO_SEED_REINFORCE_ENABLED \
@@ -15033,20 +15063,36 @@ def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
             return False
         factor = target_protein_day / P  # < 1
         for m in meals:
+            # [P3-8 · 2026-07-07] recompute HONESTO por delta de string: escalar las líneas PROTEÍNA-
+            # dominantes hacia abajo también baja su carbo/grasa EMBEBIDOS (el pollo lleva grasa; el
+            # arroz-con-pollo, carbo). Antes solo se escalaba `protein` (× factor) y C/F quedaban STALE →
+            # el reconcile posterior los leía inflados y sobre-recortaba. Espejo de _rebalance/_carb-floor.
+            _dp = _dc = _df = 0.0
             ings = m.get("ingredients")
             if isinstance(ings, list):
-                m["ingredients"] = [
-                    _resc(str(s), factor) if _ingredient_is_protein_dominant(s, db) else str(s)
-                    for s in ings]
+                _new_i = []
+                for s in ings:
+                    _s = str(s)
+                    if _ingredient_is_protein_dominant(_s, db):
+                        _mo = db.macros_from_ingredient_string(_s) or {}
+                        _ns = _resc(_s, factor)
+                        _mn = db.macros_from_ingredient_string(_ns) or {}
+                        _dp += (_mn.get("protein") or 0) - (_mo.get("protein") or 0)
+                        _dc += (_mn.get("carbs") or 0) - (_mo.get("carbs") or 0)
+                        _df += (_mn.get("fats") or 0) - (_mo.get("fats") or 0)
+                        _new_i.append(_ns)
+                    else:
+                        _new_i.append(_s)
+                m["ingredients"] = _new_i
             raw = m.get("ingredients_raw")
             if isinstance(raw, list):
                 m["ingredients_raw"] = [
                     _resc(str(s), factor) if _ingredient_is_protein_dominant(s, db) else str(s)
                     for s in raw]
-            mp = round(_meal_macro_num(m.get("protein")) * factor)
-            mc = round(_meal_macro_num(m.get("carbs")))
-            mf = round(_meal_macro_num(m.get("fats")))
-            m["protein"] = mp
+            mp = max(0, round(_meal_macro_num(m.get("protein")) + _dp))
+            mc = max(0, round(_meal_macro_num(m.get("carbs")) + _dc))
+            mf = max(0, round(_meal_macro_num(m.get("fats")) + _df))
+            m["protein"], m["carbs"], m["fats"] = mp, mc, mf
             m["cals"] = round(4 * mp + 4 * mc + 9 * mf)
             m["macros"] = [f"P:{mp}g", f"C:{mc}g", f"G:{mf}g"]
         return True

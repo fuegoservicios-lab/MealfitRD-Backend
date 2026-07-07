@@ -316,6 +316,9 @@ def solve_portion_macros(
         "achieved": achieved,
         "target": tgt,
         "report": report,
+        # [P3-6 · 2026-07-07] `report` es una referencia GREEDY per-macro (target/current por grupo), NO los
+        # factores LSQ realmente aplicados (esos están en factors_applied/method/saturated_*). Etiquetado.
+        "report_basis": "greedy-reference",
         "method": method,
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
@@ -412,6 +415,9 @@ def solve_meal_macros(
         "achieved": achieved,
         "target": tgt,
         "report": report,
+        # [P3-6 · 2026-07-07] `report` = referencia GREEDY per-macro, NO los factores LSQ aplicados
+        # (esos en factors_applied/method/saturated_*). Etiquetado para no confundir al lector.
+        "report_basis": "greedy-reference",
         "method": method,
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
