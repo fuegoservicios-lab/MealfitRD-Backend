@@ -4910,8 +4910,16 @@ CRITERIOS DE EVALUACIÓN:
 5. Coherencia comida↔horario (slot_coherence_score):
    - MERIENDAS deben ser SNACKS LIGEROS (yogurt+fruta, batido, casabe+queso, sándwich pequeño, fruta+mani).
      Si una merienda es "Salteado de…", "Locrio de…", "Pechuga al grill con puré", o cualquier mini-almuerzo, BAJA este score a ≤4.
-   - CENA NO debe repetir la PROTEÍNA PRINCIPAL ni el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día. Si los repite, BAJA este score a ≤4.
+   - CENA NO debe repetir el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día. Si lo repite, BAJA este score a ≤4.
    - Si el bloque 'INCOHERENCIAS POR SLOT' en el HumanMessage lista hallazgos, son hechos: BAJA slot_coherence_score a ≤4 obligatoriamente.
+
+[P1-PROTEIN-REPEAT-DETERMINISTIC · 2026-07-07] NO juzgues por tu cuenta "misma PROTEÍNA
+el mismo día". Un detector DETERMINISTA (word-boundary + mapa de alias, PRECISO) valida
+esto POR SEPARADO y rechaza el plan si de verdad hay repetición — es la autoridad. Tú te
+equivocas fácil: leer 'res' en "Rellenos"/"fresas", o marcar dos legumbres que en RD se
+comen a diario a propósito (arroz con habichuela). NO bajes NINGÚN score por "misma
+proteína el mismo día"; enfócate en los demás criterios. (El carbohidrato repetido de
+arriba SÍ lo juzgas tú.)
 
 REGLA DE DECISIÓN:
 Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=True y da instrucciones CLARAS Y CORTAS de qué cambiar, mencionando explícitamente el día afectado (ej. "Día 2").
