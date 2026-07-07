@@ -14641,6 +14641,15 @@ TRUTHUP_NEGLIGIBLE_KCAL_100 = _env_float("MEALFIT_TRUTHUP_NEGLIGIBLE_KCAL_100", 
                                          lambda v: 0.0 <= v <= 200.0)
 TRUTHUP_NEGLIGIBLE_FAT_100 = _env_float("MEALFIT_TRUTHUP_NEGLIGIBLE_FAT_100", 1.5,
                                         lambda v: 0.0 <= v <= 20.0)
+# [P1-TRUTHUP-ALGUSTO-SKIP · 2026-07-07] (review VPS plan vivo 4e7b8dbb) Cantidad SIN masa contable:
+# "al gusto"/"opcional"/"una pizca"/"a discreción" → aporte ~0 por definición. El umbral kcal-por-100g
+# (P1-TRUTHUP-NEGLIGIBLE-SKIP) NO cubre las ESPECIAS densas usadas al gusto: "pimienta negra al gusto"
+# (327 kcal/100g) y "orégano dominicano al gusto" (350) abortaban el truth-up de meals con aguacate →
+# la grasa del aguacate seguía sin contar (day1/day2 sobre target de grasa). "al gusto" NO es masa real
+# como "1 lata" → saltar SIEMPRE, independiente de la densidad. tooltip-anchor: P1-TRUTHUP-ALGUSTO-SKIP
+_TRUTHUP_NOMASS_QTY_RE = _re.compile(
+    r"\b(?:al?\s+gusto|opcional|a\s+discreci[oó]n|una?\s+pizca|a\s+ojo|c/?n|cantidad\s+necesaria)\b",
+    _re.IGNORECASE)
 
 
 def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
@@ -14665,6 +14674,11 @@ def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
                 # resuelve pero la cantidad no → hay masa real no sumable → NO override (conservador).
                 _info_nc = db.lookup(str(ing))
                 if _info_nc is not None:
+                    # [P1-TRUTHUP-ALGUSTO-SKIP · 2026-07-07] cantidad SIN masa contable ("al gusto"/
+                    # "opcional"/"una pizca") → aporta ~0 → saltar SIEMPRE (incluso especias densas como
+                    # "pimienta negra al gusto" 327 kcal/100g, que abortaban el truth-up del aguacate).
+                    if _TRUTHUP_NOMASS_QTY_RE.search(str(ing).lower()):
+                        continue
                     # [P1-TRUTHUP-NEGLIGIBLE-SKIP · 2026-07-07] EXCEPCIÓN: si el alimento es de aporte
                     # macro DESPRECIABLE por-100g (hierba/hoja: cilantro/perejil/lechuga en "taza" sin
                     # densidad), saltarlo NO under-cuenta materialmente → seguir en vez de abortar. Antes,
