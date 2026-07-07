@@ -62,10 +62,15 @@ def test_cost_summary_math_and_cycle_semantics(sc):
     assert w["trip_total_rd"] == 300.0 and w["cycle_total_rd"] == 300.0  # weekly: ciclo == compra
     assert w["stable_rd"] == 200.0 and w["perishable_rd"] == 100.0
     assert w["items_priced"] == 2 and w["items_total"] == 3
+    assert w["cycle_weeks"] == 1.0 and w["cycle_trips"] == 1
+    # [P1-CYCLE-COVERAGE-FRACTIONAL · 2026-07-06] costo = perecederos × (días/7) fraccional
+    # (biweekly 15/7=2.143, monthly 30/7=4.286); idas mostradas = ceil(días/7) (3 y 5).
     b = s["by_duration"]["biweekly"]
-    assert b["cycle_weeks"] == 2 and b["cycle_total_rd"] == 400.0 + 100.0 * 2
+    assert b["cycle_weeks"] == round(15 / 7, 3) and b["cycle_trips"] == 3
+    assert b["cycle_total_rd"] == round(400.0 + 100.0 * (15 / 7), 2)
     m = s["by_duration"]["monthly"]
-    assert m["cycle_weeks"] == 4 and m["cycle_total_rd"] == 800.0 + 100.0 * 4
+    assert m["cycle_weeks"] == round(30 / 7, 3) and m["cycle_trips"] == 5
+    assert m["cycle_total_rd"] == round(800.0 + 100.0 * (30 / 7), 2)
 
 
 def test_cost_summary_knob_off_returns_none(sc, monkeypatch):

@@ -2488,7 +2488,32 @@ def _resolve_brand_pref(name: str, prefs: dict):
 # Tooltip-anchor: P1-BUDGET-COST-SSOT. Test: test_p1_budget_intelligence.py.
 # ============================================================
 
-_CYCLE_WEEKS_BY_DURATION = {"weekly": 1, "biweekly": 2, "monthly": 4}
+# [P1-CYCLE-COVERAGE-FRACTIONAL · 2026-07-06] (review visual plan 30d) El mapa
+# hardcoded {monthly:4} era floor(30/7): 4 semanas = 28 días → los días 29-30 del
+# ciclo quedaban sin costear NI cubrir (biweekly igual: floor(15/7)=2 → día 15 sin
+# cubrir). Modelo honesto que separa DOS conceptos:
+#   - Multiplicador de COSTO = días/7 FRACCIONAL (30/7=4.286): costo real de los
+#     perecederos consumidos en el ciclo, sin desperdicio artificial. NO usar ceil
+#     aquí: comprar 5 semanas completas para 30 días sobre-estima ~RD$1.9k y podría
+#     disparar un banner "excedido" falso contra el presupuesto.
+#   - Nº de IDAS al súper (display) = ceil(días/7) (30d=5 idas, la 5ª parcial cubre
+#     días 29-30): cuántas veces el usuario físicamente recompra perecederos.
+# Espejo frontend: Dashboard.jsx (_cycleCostMultiplier + _cycleTrips).
+_CYCLE_DAYS_BY_DURATION = {"weekly": 7, "biweekly": 15, "monthly": 30}
+
+
+def _cycle_cost_multiplier(duration: str) -> float:
+    """Semanas-equivalentes FRACCIONALES de perecederos consumidos en el ciclo
+    (días/7). monthly=4.286, biweekly=2.143, weekly=1.0. NO redondear a entero:
+    el costo del ciclo debe reflejar los días reales, no floor/ceil."""
+    return _CYCLE_DAYS_BY_DURATION.get(str(duration or "").strip().lower(), 7) / 7.0
+
+
+def _cycle_trip_count(duration: str) -> int:
+    """Nº de idas al súper por perecederos en el ciclo = ceil(días/7). monthly=5
+    (la 5ª ida cubre los días 29-30), biweekly=3, weekly=1. Es el número que se
+    muestra al usuario ('la compras N veces') — distinto del multiplicador de costo."""
+    return int(math.ceil(_CYCLE_DAYS_BY_DURATION.get(str(duration or "").strip().lower(), 7) / 7.0))
 
 
 def _cost_summary_enabled() -> bool:
@@ -2660,19 +2685,23 @@ def compute_shopping_cost_summary(
             ("monthly", monthly_hybrid_list),
         ):
             sums = _sum_shopping_list_costs(items)
-            weeks = _CYCLE_WEEKS_BY_DURATION[duration]
+            # [P1-CYCLE-COVERAGE-FRACTIONAL · 2026-07-06] costo = perecederos × (días/7)
+            # fraccional (honesto para los 30 días); idas mostradas = ceil(días/7).
+            weeks = _cycle_cost_multiplier(duration)
+            trips = _cycle_trip_count(duration)
             cycle_total = sums["stable"] + sums["perishable"] * weeks
             by_duration[duration] = {
                 "trip_total_rd": round(sums["total"], 2),
                 "stable_rd": round(sums["stable"], 2),
                 "perishable_rd": round(sums["perishable"], 2),
-                "cycle_weeks": weeks,
+                "cycle_weeks": round(weeks, 3),
+                "cycle_trips": trips,
                 "cycle_total_rd": round(cycle_total, 2),
                 "items_priced": sums["priced"],
                 "items_total": sums["count"],
             }
         active = str(active_duration or "weekly").strip().lower()
-        if active not in _CYCLE_WEEKS_BY_DURATION:
+        if active not in _CYCLE_DAYS_BY_DURATION:
             active = "weekly"
         from datetime import datetime, timezone
         summary = {
