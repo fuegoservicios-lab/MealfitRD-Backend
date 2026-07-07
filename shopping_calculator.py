@@ -5933,6 +5933,21 @@ def _canonicalize_for_coherence(food_names) -> set:
     return out
 
 
+# [P1-COHERENCE-PACKAGING-NOISE · 2026-07-07] Alimentos cuya cantidad en la lista
+# la dicta el ENVASE MÍNIMO vendible, NO la receta: condimentos/especias (se usan
+# "al gusto"/cdta), aceites (cdta/cda → botella), y semillas (10-20g → funda de
+# 200g). Su sobre-oferta en el coherence guard es ruido estructural, no una falta.
+# Match word-boundary (`\bsal\b` NO matchea salmón/salsa/ensalada). Solo se usan
+# para FILTRAR sobre-oferta (act > exp); jamás ocultan una FALTA. Comida real
+# (pavo/pollo/arroz/res/pescado) NO está aquí → su sobre-oferta sigue siendo señal.
+_COHERENCE_PACKAGED_MIN_KEYWORDS = (
+    "aceite", "vinagre", "sal", "pimienta", "oregano", "comino", "canela",
+    "sazon", "curcuma", "laurel", "clavo", "nuez moscada", "jengibre",
+    "pimenton", "paprika", "curry", "azafran", "tomillo", "especias",
+    "condimento", "semilla", "linaza", "chia", "ajonjoli", "sesamo",
+)
+
+
 def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None, multiplier: float = None) -> list:
     """[P1-shop-coh-1 · 2026-05-07 / P1-C 2026-05-07 v2] Guard recetas↔lista.
     Honra `MEALFIT_SHOPPING_COHERENCE_GUARD` (off|warn|block).
@@ -6222,6 +6237,54 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
                         )
         except Exception as e:
             logging.warning(f"[COH-GUARD/cap-aware] filter falló (no aborta): {e}")
+
+    # [P1-COHERENCE-PACKAGING-NOISE · 2026-07-07] (review visual plan 30d: 61-69
+    # divergencias warn, presence=0, hipótesis {unknown, unit_mismatch}) Descartar
+    # del set de magnitud el RUIDO ESTRUCTURAL de granularidad de envase, que NO es
+    # una falta accionable:
+    #   (a) unit_mismatch — el alimento está en la lista bajo una unidad de envase
+    #       no convertible ("3 lonjas de pan"→745g, "1 sobre" pimienta, funda de
+    #       mejillón vs g). Ya se excluye del block (P2-COHERENCE-PACKAGE-UNITS); es
+    #       igual de ruidoso en warn.
+    #   (b) SOBRE-oferta (actual > expected) de un CONDIMENTO/ACEITE/SEMILLA de envase
+    #       mínimo: la receta pide 20g de semillas pero el mínimo vendible es la funda
+    #       de 200g; 1 cdta de aceite → botella de 125ml. La lista TIENE de sobra → la
+    #       receta es cocinable, no hay divergencia real. NO se filtra la sobre-oferta
+    #       de comida real (pavo 4×, pollo 2.4×, arroz 3%) — esas siguen siendo señal.
+    # Se PRESERVAN: yield_uncovered (banda diagnóstica), pantry_overdeduct y unknown
+    # POR DEBAJO (falta real "qty mitad"), sobre-oferta de proteína/carbo real, y toda
+    # la capa presence. Reversible: MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER=false.
+    if _knob_env_bool("MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER", True) and magnitude_divs:
+        try:
+            from constants import strip_accents as _sa_pkg
+            def _is_packaging_noise(d):
+                if d.get("hypothesis") == "unit_mismatch":
+                    return True  # unidad de envase no convertible (lonja/sobre/funda vs g)
+                try:
+                    _exp_q = float(d.get("expected_qty") or 0)
+                    _act_q = float(d.get("actual_qty") or 0)
+                except (TypeError, ValueError):
+                    return False
+                # Solo sobre-oferta (la lista tiene MÁS) de un ítem de envase-mínimo.
+                if not (_exp_q > 0 and _act_q > _exp_q):
+                    return False
+                _food_norm = _sa_pkg(str(d.get("food") or "").lower())
+                return any(
+                    re.search(r"\b" + re.escape(kw) + r"s?\b", _food_norm)
+                    for kw in _COHERENCE_PACKAGED_MIN_KEYWORDS
+                )
+            _pre_pkg = len(magnitude_divs)
+            _pkg_noise = [d for d in magnitude_divs if _is_packaging_noise(d)]
+            if _pkg_noise:
+                magnitude_divs = [d for d in magnitude_divs if not _is_packaging_noise(d)]
+                logging.info(
+                    f"🛒 [COH-GUARD/pkg-noise] Filtradas {len(_pkg_noise)} divergencias magnitud "
+                    f"estructurales (unit_mismatch + sobre-oferta de condimento/aceite/semilla de "
+                    f"envase) de {_pre_pkg} (P1-COHERENCE-PACKAGING-NOISE). Restantes accionables: "
+                    f"{len(magnitude_divs)}"
+                )
+        except Exception as e:
+            logging.warning(f"[COH-GUARD/pkg-noise] filter falló (no aborta): {e}")
 
     divergences.extend(magnitude_divs)
 
