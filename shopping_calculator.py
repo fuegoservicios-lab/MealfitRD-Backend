@@ -7290,6 +7290,30 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"{_leaf_qty * _g_leaf:.1f}g (density {_g_leaf} g/hoja) → path de envases"
                 )
 
+        # [P1-CASABE-HOJA-UNIT · 2026-07-07] "N hojas de casabe" → gramos. MISMA clase
+        # que P1-LAUREL-LEAF-UNIT: el casabe se pide en HOJAS (count unit) pero se vende
+        # por PAQUETE (master: paquete 283 g, RD$94, market_packages poblado). Sin
+        # conversión a peso, el Bloque 1 de envases jamás corría (exige weight_in_lbs>0)
+        # y el costeo caía al fallback count × price_per_unit del path B de
+        # `_cost_from_market`: "18.67 hojas × RD$94 (precio del PAQUETE aplicado POR HOJA)
+        # = RD$1,755" en el PDF del owner (plan 5f80f797, review visual 30d). Con la
+        # conversión (density del master g/hoja; fallback 15) el flujo normal compra
+        # 1-2 paquetes = RD$94-199, como cualquier despensa (paridad con el primer plan
+        # que mostró "1 paquete RD$85" cuando la receta usó "torta"). Tooltip-anchor:
+        # P1-CASABE-HOJA-UNIT.
+        if 'casabe' in name.lower():
+            _casabe_hojas = 0.0
+            for k in list(units.keys()):
+                if k.strip().lower() in ('hoja', 'hojas'):
+                    _casabe_hojas += units.pop(k)
+            if _casabe_hojas > 0:
+                _g_hoja = g_per_u if g_per_u and g_per_u > 0 else 15.0
+                units['g'] = units.get('g', 0.0) + _casabe_hojas * _g_hoja
+                logging.info(
+                    f"🍘 [P1-CASABE-HOJA-UNIT] {name}: {_casabe_hojas:.2f} hojas → "
+                    f"{_casabe_hojas * _g_hoja:.1f}g (density {_g_hoja} g/hoja) → path de envases"
+                )
+
         # Empaque comercial mínimo para Huevos (Cartones en RD)
         # PRE-PASO: Convertir cualquier peso/volumen de huevos a unidades
         # (ej: "150ml de claras de huevo" ≈ 5 huevos, "100g de huevo" ≈ 2 huevos)
