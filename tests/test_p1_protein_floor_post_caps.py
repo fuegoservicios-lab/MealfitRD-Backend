@@ -19,7 +19,7 @@ def _wire(monkeypatch, capture=None):
     """Mockea closer/reconcile/candidatos para probar la ORQUESTACIÓN sin DB real."""
     import graph_orchestrator as g
 
-    def fake_closer(m, target, db, cands, fill_pct=0.92, max_add_g=300, slot_cal_target=0.0, enforce_min_threshold=True):
+    def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300, slot_cal_target=0.0, enforce_min_threshold=True):
         if capture is not None:
             capture["cands"] = cands
             capture["max_add_g"] = max_add_g

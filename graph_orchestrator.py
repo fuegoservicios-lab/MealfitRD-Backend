@@ -14258,8 +14258,27 @@ def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_acc
         return 0
 
 
+# [P1-CLOSER-SWEET-DAIRY · 2026-07-07] (review plan 4e7b8dbb: 55g de queso blanco inyectado en
+# "Bocaditos de Avena y Miel"). El pool de alta densidad ≥18g/100g del closer solo tiene QUESOS SALADOS
+# como lácteo; yogurt/cottage/ricotta (dulce-compatibles, BARATOS) caen bajo el umbral y quedan fuera.
+# Para platos DULCES: pool SUPLEMENTARIO de lácteos dulce-compatibles con umbral bajo, preferidos sobre
+# el queso salado; se cae al queso SOLO si no hay lácteo dulce (piso de proteína > pureza culinaria). Solo
+# activo cuando el caller pasa `allergies` → los tests de piso (que no lo pasan) conservan el comportamiento
+# previo con queso. tooltip-anchor: P1-CLOSER-SWEET-DAIRY
+CLOSER_SWEET_DAIRY_ENABLED = _env_bool("MEALFIT_CLOSER_SWEET_DAIRY", True)
+CLOSER_SWEET_DAIRY_MIN_PROTEIN = _env_float("MEALFIT_CLOSER_SWEET_DAIRY_MIN_PROTEIN", 7.0,
+                                            lambda v: 3.0 <= v <= 18.0)
+_SWEET_DAIRY_TOKENS = ("yogur", "cottage", "ricotta", "requeson")
+_SWEET_OK_CHEESE_TOKENS = ("ricotta", "requeson", "cottage", "crema")
+
+
+def _is_savory_cheese_name(nlow: str) -> bool:
+    """True si el nombre es un queso NO dulce-compatible (queso blanco/de hoja/mozzarella…)."""
+    return "queso" in nlow and not any(t in nlow for t in _SWEET_OK_CHEESE_TOKENS)
+
+
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
-                                *, fill_pct: float = 0.92, max_add_g: int = 300,
+                                *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0, enforce_min_threshold: bool = True) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
@@ -14314,8 +14333,28 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # (FASE A metió +81g de camarones en 8 comidas dulces). Filtra el pool; si queda vacío → return 0 (el piso
         # de proteína se cubre en las comidas saladas, no se fuerza un combo aberrante). Gateado por coherencia de plato.
         if CLOSER_DISH_COHERENCE_ENABLED and _pool and _is_sweet_meal(meal, _sa):
-            _pool_sweet = [(info, nlow) for (info, nlow) in _pool
-                           if not any(h in nlow for h in _MEAT_PROTEIN_HINT)]
+            _pool_meat_free = [(info, nlow) for (info, nlow) in _pool
+                               if not any(h in nlow for h in _MEAT_PROTEIN_HINT)]
+            # [P1-CLOSER-SWEET-DAIRY · 2026-07-07] preferir lácteo dulce-compatible (yogurt/cottage/
+            # ricotta) sobre el queso salado; caer al queso solo si no hay ninguno (piso de proteína).
+            if CLOSER_SWEET_DAIRY_ENABLED and allergies is not None:
+                _sweet_dairy = []
+                _seen_sd = set()
+                for (_ln_sd, _nm_sd, _info_sd) in _safe_high_density_proteins(
+                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN):
+                    _ndlow = _sa(str(_info_sd.name).lower())
+                    if _ndlow in _seen_sd or not any(t in _ndlow for t in _SWEET_DAIRY_TOKENS):
+                        continue
+                    if no_cook and not any(h in _ndlow for h in _NO_COOK_SAFE_PROTEIN_HINT):
+                        continue  # batido/frío → solo lácteo no-cocción-safe
+                    _sweet_dairy.append((_info_sd, _ndlow))
+                    _seen_sd.add(_ndlow)
+                _no_cheese = [(info, nlow) for (info, nlow) in _pool_meat_free
+                              if not _is_savory_cheese_name(nlow)]
+                # lácteo dulce PRIMERO (preferido por orden) + resto no-queso; fallback al pool con queso
+                _pool_sweet = (_sweet_dairy + _no_cheese) or _pool_meat_free
+            else:
+                _pool_sweet = _pool_meat_free
             if not _pool_sweet:
                 return 0  # comida dulce sin proteína dulce-compatible → no meter camarón/pescado/carne
             _pool = _pool_sweet
@@ -23723,6 +23762,7 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                 # kcal por encima del target (evita el band 0.58/kcal-fuera del re-cierre pesado en bariátrica).
                 _slot_cal = (4.0 * _pg + 4.0 * _cg + 9.0 * _fg) * _share
                 _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
+                                                 allergies=form_data.get("allergies"),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False)
                 if _g > 0:
@@ -23832,6 +23872,7 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                         _had_egg_pre = _meal_has_egg(_m, _sa_egg) if CLOSER_EGG_BUDGET_ENABLED else True
                         _topup_g += _close_protein_gap_for_meal(
                             _m, _slot_target["protein"], _nut_db, _egg_cands,
+                            allergies=form_data.get("allergies"),
                             fill_pct=PROTEIN_FLOOR_FILL_PCT)
                         if CLOSER_EGG_BUDGET_ENABLED and not _had_egg_pre and _meal_has_egg(_m, _sa_egg):
                             _egg_count += 1  # el closer añadió huevo a esta comida → consume presupuesto
