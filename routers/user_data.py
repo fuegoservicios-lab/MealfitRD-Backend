@@ -115,6 +115,9 @@ class InventoryItemBody(BaseModel):
     master_ingredient_id: Optional[str] = None
     source: Optional[str] = None
     category: Optional[str] = None
+    # [P2-NEVERA-BRANDS-MANUAL · 2026-07-07] Marca elegida al añadir a mano
+    # (del picker del súper). NULL = sin marca (no pinta chip en la Nevera).
+    brand: Optional[str] = None
 
 
 @router.post("/inventory/items", status_code=201)
@@ -128,6 +131,9 @@ async def api_add_inventory_item(
     23505 legacy de handleAddNewItem/handleRestoreDepleted)."""
     uid = _require_user(verified_user_id)
 
+    # [P2-NEVERA-BRANDS-MANUAL · 2026-07-07] Marca del picker: trim → NULL si vacío.
+    _brand = (body.brand or "").strip() or None
+
     def _insert():
         import psycopg
         from db import execute_sql_query
@@ -137,9 +143,9 @@ async def api_add_inventory_item(
                 WITH ins AS (
                     INSERT INTO user_inventory
                         (user_id, ingredient_name, quantity, unit,
-                         master_ingredient_id, source, category)
+                         master_ingredient_id, source, category, brand)
                     VALUES (%s, %s, %s, %s, %s,
-                            COALESCE(%s, 'shopping_list'), %s)
+                            COALESCE(%s, 'shopping_list'), %s, %s)
                     RETURNING *
                 )
                 SELECT
@@ -153,6 +159,7 @@ async def api_add_inventory_item(
                     ins.master_ingredient_id::text AS master_ingredient_id,
                     ins.source,
                     ins.category,
+                    ins.brand,
                     CASE WHEN mi.id IS NULL THEN NULL ELSE jsonb_build_object(
                         'name', mi.name,
                         'category', mi.category,
@@ -164,7 +171,7 @@ async def api_add_inventory_item(
                 LEFT JOIN master_ingredients mi ON mi.id = ins.master_ingredient_id
                 """,
                 (uid, body.ingredient_name, body.quantity, body.unit,
-                 body.master_ingredient_id, body.source, body.category),
+                 body.master_ingredient_id, body.source, body.category, _brand),
                 fetch_one=True,
             )
         except psycopg.errors.UniqueViolation:
