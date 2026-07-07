@@ -22599,7 +22599,12 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
 # elegidos neutrales (sin altos-K tipo guineo — perfil renal), y el allergen-scan + dislikes
 # del pase se aplican igual que en la tabla estática.
 _BUDGET_DRIVER_FAMILIES = (
-    (r"salm[oó]n|camar[oó]n(?:es)?|bacalao|mero|chillo|pulpo|langosta|at[uú]n\s+fresco",
+    # [P1-BUDGET-PREMIUM-SHELLFISH · 2026-07-07] (review plan vivo 4e7b8dbb: "Cangrejo" era el driver de
+    # costo #1 — RD$599, RD$479/lb — pero NO estaba en la familia de mariscos → la convergencia lo rankeaba
+    # #1 y no lo podía sustituir. Sustituto "Filete de pescado blanco" = RD$127.5/lb = ~73% más barato).
+    # Añadidos cangrejo/jaiba/langostino/vieira/almeja/mejillón/lambí/ostra/concha a los premium ya cubiertos.
+    (r"salm[oó]n|camar[oó]n(?:es)?|cangrejo|jaiba|langostino(?:s)?|langosta|vieira(?:s)?|almeja(?:s)?|"
+     r"mejill[oó]n(?:es)?|lamb[ií]|ostra(?:s)?|concha(?:s)?|bacalao|mero|chillo|pulpo|at[uú]n\s+fresco",
      ("Filete de pescado blanco",), ()),
     (r"filete\s+de\s+res|lomo\s+de\s+res|churrasco|solomillo",
      ("Carne de res molida",), ()),
