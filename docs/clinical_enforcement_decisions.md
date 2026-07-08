@@ -96,3 +96,37 @@ humana).
 `_REGISTRY` (el caso límite más claro de objetivo numérico ADA), validado con benchmark sobre perfiles DM2.
 Cruza con G9 (`SatFatCeilingConstraint`). El test de paridad ya está listo para exigir su cobertura cuando se
 reclasifique de advisory a hard.
+
+---
+
+## G20 — ERC potasio/fósforo: advisory de panel, NO restricción cuantitativa (baseline 2026-07-07)
+
+**Contexto (medición nueva):** el baseline de adherencia clínica 2026-07-07 (`scripts/clinical_adherence_replay.py`
+sobre el corpus RAW clínico) midió, sobre el único plan ERC del set (n=3 días — **muestra fina**):
+- **potasio ~5000-5750 mg/día** vs un techo renal de referencia ~3000 mg → 0% de días bajo el techo.
+- **fósforo ~1140-1760 mg/día** vs ~1000 mg → 0% de días bajo el techo.
+- (proteína ≤0.8 g/kg = 67%: 1 de 3 días a 1.01 → el cap renal quedó **incompleto** en ese día, patrón
+  `cap_complete=False` / `unresolved_protein` ya documentado; sodio ERC = 100% ✅.)
+
+**Decisión:** NO se implementa un trim/swap cuantitativo que fuerce el plan ERC bajo un techo de K/P. Se
+mantiene el estado actual: el micro-closer **ya EXCLUYE** añadir K/P-cargantes en ERC (`_MICRO_CLOSER_RENAL_EXCLUDED`,
+no empeora), y el panel de micros reporta K/P vs el techo renal como **advisory**.
+
+**Por qué (misma cautela que G9/G11, reforzada en renal):**
+- La restricción de K/P en ERC es **individualizada**: depende del estadio (TFG), diálisis sí/no, labs
+  (kalemia/fosfatemia) y medicación (quelantes, IECA/ARA-II K-elevadores). Un techo fijo ciego puede ser
+  incorrecto para un paciente bien controlado y peligroso omitir para uno hiperkalémico — es criterio de
+  **nefrólogo/nutricionista renal**, no code-closeable (misma línea del audit clínico P1).
+- El potasio del **catálogo es CRUDO**; el potasio se **lixivia ~40-50% al hervir** (técnica de doble-hervido,
+  estándar en cocina renal). El número medido sobre catálogo-crudo **sobreestima** el K entregado si el plan se
+  cocina hervido → un techo duro sobre ese dato daría falsa precisión (análogo al argumento "sal al gusto" de G9).
+- Un swap ciego de alimentos alto-K (guineo/papa/tomate/habichuela → bajo-K) recorta variedad + puede chocar
+  con DM2/HTA comórbidos y con la fibra (leguminosas) — hacerlo bien exige re-balanceo + validación + firma clínica.
+
+**Lo que SÍ conviene (follow-up de menor riesgo, en orden):** (1) hacer el advisory de K/P **coverage-aware**
+(estado `estimado_alto` cuando hay NULLs de K/P relevantes, como ya se hizo con sodio en G5) + surfacearlo en el
+banner renal; (2) añadir **nota de técnica de lixiviación** (doble-hervido) a los pasos de recetas ERC con
+tubérculos/leguminosas — reduce K entregado sin quitar el alimento; (3) cerrar el hueco `cap_complete=False`
+(proteína a 1.01) resolviendo los ítems proteicos no-resueltos antes de dar por completo el cap. Un
+`PotassiumCeilingConstraint` duro queda **explícitamente diferido** a revisión de nefrólogo + corpus ERC más
+grande (n=1 plan hoy es insuficiente para calibrar). Cruza con G9/G11 (motor declarativo).

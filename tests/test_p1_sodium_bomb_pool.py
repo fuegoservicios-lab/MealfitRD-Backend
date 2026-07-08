@@ -49,7 +49,9 @@ def test_ladder_extended_and_fidelity_marker():
 
 def test_per_entry_replacement_check():
     i = _GO.index("def _day_sodium_autofix")
-    body = _GO[i:i + 9000]
+    # [P1-SODIUM-DAIRY-SWAP · 2026-07-07] ventana ampliada 9000→10500: el bloque de escalera-activa
+    # (base cured + lácteo condicional) creció la fn antes del check per-entry.
+    body = _GO[i:i + 10500]
     assert "_repl_allowed(_repl)" in body, "alergia/dislike se chequea POR ENTRY de la escalera"
 
 

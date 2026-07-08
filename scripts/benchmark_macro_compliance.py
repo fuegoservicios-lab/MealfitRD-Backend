@@ -206,12 +206,19 @@ async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("n", nargs="?", type=int, default=len(PROFILES))
     ap.add_argument("--concurrency", type=int, default=3)
+    # [CLINICAL-CORPUS · 2026-07-07] Selección explícita de perfiles por _id (p.ej. "13,14,15,16,17,18"
+    # = solo los clínicos) para capturar un corpus dirigido sin gastar generaciones en los 1-12 regulares.
+    ap.add_argument("--ids", default=None, help="lista de _id de perfiles separados por coma (ignora n)")
     # [gap-audit G13 · 2026-06-15] Gate de no-regresión vs baseline commiteado (para el job nightly).
     ap.add_argument("--baseline", default=None, help="JSON baseline; activa el gate de no-regresión")
     ap.add_argument("--max-mape-rise", type=float, default=5.0, help="subida máx permitida de MAPE (pts)")
     ap.add_argument("--max-band-drop", type=float, default=10.0, help="caída máx permitida de all-4-en-banda (pts)")
     args = ap.parse_args()
-    profiles = PROFILES[: args.n]
+    if args.ids:
+        _want = {int(x) for x in args.ids.split(",") if x.strip()}
+        profiles = [p for p in PROFILES if p["_id"] in _want]
+    else:
+        profiles = PROFILES[: args.n]
     sem = asyncio.Semaphore(args.concurrency)
 
     # [P0-CLINICAL-VALIDATION · 2026-06-14] Abre los pools de Neon (como el lifespan de FastAPI en

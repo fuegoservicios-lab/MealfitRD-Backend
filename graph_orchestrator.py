@@ -20379,7 +20379,27 @@ _SODIUM_SWAP_NAME_RX = (r"(?:sardinas?|at[uú]n(?:\s+en\s+(?:agua|aceite|lata))?
                         r"arenques?|salami(?:\s+dominicano)?|salchich[oó]n|pepperoni|"
                         r"mortadela|tocino|panceta|longaniza|chorizo)")
 _SODIUM_SWAP_NAME_DISPLAY = {"Filete de pescado blanco": "Pescado blanco",
-                             "Pechuga de pollo": "Pollo", "Pollo molido": "Pollo"}
+                             "Pechuga de pollo": "Pollo", "Pollo molido": "Pollo",
+                             "Yogurt griego sin azúcar": "Yogur griego"}
+
+# [P1-SODIUM-DAIRY-SWAP · 2026-07-07] (baseline clínico 2026-07-07: HTA solo 57% de días ≤2000mg de
+# sodio; el driver #1 medido NO era cubito/enlatado (lo que cubría la escalera cured) sino QUESO COTTAGE
+# — 406mg Na/100g × 240-245g ≈ 1000mg/comida, a menudo doble-servido). Swap lácteo fresco alto-sodio →
+# equivalente proteico bajo-sodio: yogur griego sin azúcar (36mg Na/100g, 10.3g prot ≈ cottage 12.4g →
+# PRESERVA proteína, corta ~91% del sodio de esa línea). SOLO fresh cheese yogur-swappable (cottage /
+# queso blanco), NUNCA quesos duros (parmesano/cheddar/gouda = sabor/gratén; el yogur rompería el plato).
+# Es SUSTITUCIÓN proteína-preservada sobre un ofensor NOMBRADO y modelado (no "sal al gusto") → G9-compliant
+# (la decisión G9 veta el TRIM ciego, no un swap que preserva macros). Gated por knob (nace OFF, rollout
+# A/B) y solo se activa para perfiles HTA/renal (no swapear el cottage de un perfil sin condición de sodio).
+# tooltip-anchor: P1-SODIUM-DAIRY-SWAP
+SODIUM_DAIRY_SWAP_ENABLED = _env_bool("MEALFIT_SODIUM_DAIRY_SWAP", True)  # nació OFF; flip ON validado A/B 2026-07-07 (HTA sodio 57%→85.7%)
+_SODIUM_DAIRY_SWAP_LADDER = (
+    (r"queso\s+cottage|cottage\s+cheese", "Yogurt griego sin azúcar"),
+    (r"queso\s+blanco(?:\s+(?:fresco|rallado|dominicano))*", "Yogurt griego sin azúcar"),
+)
+# tokens para el rewrite del NOMBRE del plato ("Bowl de Queso Cottage" → "Bowl de Yogur griego") — sin
+# ellos el swap dejaría un nombre-fantasma. Se unen al _SODIUM_SWAP_NAME_RX cuando el swap lácteo aplica.
+_SODIUM_DAIRY_NAME_RX = r"queso\s+cottage|cottage\s+cheese|queso\s+blanco(?:\s+(?:fresco|rallado|dominicano))*"
 
 
 def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
@@ -20400,6 +20420,21 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
             db = _NaDB()
         _fd = form_data or {}
         dislikes = {_sa_na(str(x).strip().lower()) for x in (_fd.get("dislikes") or []) if str(x).strip()}
+        # [P1-SODIUM-DAIRY-SWAP · 2026-07-07] escalera activa = cured/enlatado base + (lácteo alto-sodio,
+        # SOLO si el knob está ON y el perfil es HTA/renal — la clínica del sodio). El name-RX activo suma
+        # los tokens lácteos para que el rewrite del nombre no deje "Queso Cottage" fantasma tras el swap.
+        _active_ladder = _SODIUM_SWAP_LADDER
+        _active_name_rx = _SODIUM_SWAP_NAME_RX
+        try:
+            _na_conds = _condition_strings(_fd)
+            _na_cstr = " ".join(str(c).lower() for c in (_na_conds or []))
+            _sodium_clinical = any(t in _na_cstr for t in ("hipertens", "hta", "presion alta", "presión alta",
+                                                           "renal", "erc", "nefro", "kidney"))
+            if SODIUM_DAIRY_SWAP_ENABLED and _sodium_clinical:
+                _active_ladder = _SODIUM_SWAP_LADDER + _SODIUM_DAIRY_SWAP_LADDER
+                _active_name_rx = f"(?:{_SODIUM_SWAP_NAME_RX}|{_SODIUM_DAIRY_NAME_RX})"
+        except Exception:
+            pass
         # [P1-SODIUM-BOMB-POOL · 2026-07-05] check de reemplazo PER-ENTRY (antes un único
         # "Filete de pescado blanco" hardcodeado): alergia a pescado bloquea el swap de
         # bacalao/enlatados pero salami→pollo sigue disponible. Cache por candidato.
@@ -20522,7 +20557,7 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                     for _idx, _s in enumerate(_m["ingredients"]):
                         if not isinstance(_s, str):
                             continue
-                        for _rx, _repl in _SODIUM_SWAP_LADDER:
+                        for _rx, _repl in _active_ladder:
                             _mm = _re.search(_rx, _sa_na(_s.lower()), _re.IGNORECASE)
                             if not _mm:
                                 continue
@@ -20566,9 +20601,9 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                 if isinstance(_raw, list) and _bidx < len(_raw):
                     _raw[_bidx] = _new_line
                 _name = str(_bm.get("name") or "")
-                if _re.search(_SODIUM_SWAP_NAME_RX, _sa_na(_name.lower()), _re.IGNORECASE):
+                if _re.search(_active_name_rx, _sa_na(_name.lower()), _re.IGNORECASE):
                     _bm["name"] = _re.sub(
-                        _SODIUM_SWAP_NAME_RX,
+                        _active_name_rx,
                         _SODIUM_SWAP_NAME_DISPLAY.get(_swap_repl, _swap_repl),
                         _name, count=1, flags=_re.IGNORECASE,
                     )
