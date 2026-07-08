@@ -9284,6 +9284,12 @@ FRUIT_SAVORY_AUTOFIX_ENABLED = _env_bool("MEALFIT_FRUIT_SAVORY_AUTOFIX", True)
 SODIUM_DAY_AUTOFIX_ENABLED = _env_bool("MEALFIT_SODIUM_DAY_AUTOFIX", True)
 SODIUM_DAY_CEILING_MG = _env_int("MEALFIT_SODIUM_DAY_CEILING_MG", 2000, lambda v: 1000 <= v <= 5000)
 SODIUM_DAY_AUTOFIX_MAX_SWAPS = _env_int("MEALFIT_SODIUM_DAY_AUTOFIX_MAX_SWAPS", 1, lambda v: 0 <= v <= 3)
+# [P1-SODIUM-SAUCE-CAP · 2026-07-08] (plan vivo fcb739fa Día 3: "4 cucharadas de salsa de soya" ≈ el driver
+# del techo 2799mg, NO cubierto por strip/salt/swap). Las salsas alto-sodio cuantificadas (soya/inglesa/
+# teriyaki/pescado) se acotan a ≤MAX_CDA cucharada(s) cuando el día supera el techo — la salsa aporta sabor
+# (se acota, no se elimina como el cubito). Rollback: =false. tooltip-anchor: P1-SODIUM-SAUCE-CAP
+SODIUM_SAUCE_CAP_ENABLED = _env_bool("MEALFIT_SODIUM_SAUCE_CAP", True)
+SODIUM_SAUCE_CAP_MAX_CDA = _env_int("MEALFIT_SODIUM_SAUCE_CAP_MAX_CDA", 1, lambda v: 0 <= v <= 3)
 # [P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Corrector determinista de la causa #1 RESTANTE de retries
 # medida en vivo (4 firings en las últimas 2 renovaciones): la MISMA proteína principal en 2+ comidas
 # del MISMO día (gate P1-VARIETY-SAME-DAY-PROTEIN). Los días se generan en PARALELO y a ciegas entre
@@ -20543,6 +20549,12 @@ def _fruit_savory_autofix(days: list, form_data=None, db=None) -> int:
 # identidad culinaria (pescado→pescado); el queso NO se toca (identidad del plato —
 # el §17 del prompt ya lo presupuesta y el banner per-día lo señala).
 _SODIUM_STRIP_TOKENS = ("cubito", "sazon completo", "sazón completo", "sopita", "caldo concentrado")
+# [P1-SODIUM-SAUCE-CAP · 2026-07-08] salsas alto-sodio cuya CANTIDAD (cda) revienta el techo del día
+# (accent-stripped en el callsite). Solo cantidades numéricas ≥1 (una ½ cda ya es baja → no matchea).
+_SODIUM_SAUCE_QTY_RX = _re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)\s*(?:cdas?|cucharadas?)\s*(?:sopera[s]?\s*)?de\s+"
+    r"(?:salsa\s+de\s+soya|salsa\s+soya|salsa\s+inglesa|worcestershire|salsa\s+teriyaki|salsa\s+de\s+pescado)",
+    _re.IGNORECASE)
 _SODIUM_SWAP_LADDER = (
     (r"sardinas?\s*(?:en\s*lata|enlatad\w*)?", "Filete de pescado blanco"),
     (r"at[uú]n\s*(?:en\s*(?:agua|aceite|lata)|enlatad\w*)", "Filete de pescado blanco"),
@@ -20738,6 +20750,48 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                             ) if isinstance(_st, str) else _st
                             for _st in _rec
                         ]
+            # [P1-SODIUM-SAUCE-CAP · 2026-07-08] (1.7) salsas alto-sodio cuantificadas (soya/inglesa/
+            # teriyaki/pescado) → cap a MAX_CDA cda. Driver real del techo en fcb739fa ("4 cucharadas de
+            # salsa de soya") que strip/salt/swap no tocaban. Acota (la salsa da sabor) + sincroniza pasos.
+            if SODIUM_SAUCE_CAP_ENABLED:
+                _cap_n = int(SODIUM_SAUCE_CAP_MAX_CDA)
+                _cap_u = "cda" if _cap_n == 1 else "cdas"
+                for _m in meals:
+                    if not isinstance(_m, dict):
+                        continue
+                    _sauced = False
+                    for _key in ("ingredients", "ingredients_raw"):
+                        _lst = _m.get(_key)
+                        if not isinstance(_lst, list):
+                            continue
+                        for _si, _s in enumerate(_lst):
+                            if not isinstance(_s, str):
+                                continue
+                            _mm = _SODIUM_SAUCE_QTY_RX.match(_sa_na(_s.lower()))
+                            if not _mm:
+                                continue
+                            try:
+                                _qn = float(_mm.group(1).replace(",", "."))
+                            except Exception:
+                                _qn = 99.0
+                            if _qn > float(_cap_n):
+                                _lst[_si] = _re.sub(
+                                    r"^\s*\d+(?:[.,]\d+)?\s*(?:cdas?|cucharadas?)\s*(?:sopera[s]?\s*)?",
+                                    f"{_cap_n} {_cap_u} ", _s, count=1, flags=_re.IGNORECASE)
+                                if _key == "ingredients":
+                                    _sauced = True
+                    if _sauced:
+                        actions += 1
+                        _m["_sodium_autofix_applied"] = "sauce_cap"
+                        _rec = _m.get("recipe")
+                        if isinstance(_rec, list):
+                            _m["recipe"] = [
+                                _re.sub(
+                                    r"\d+(?:[.,]\d+)?\s*(?:cdas?|cucharadas?)\s*(?:sopera[s]?\s*)?de\s+"
+                                    r"(salsa\s+de\s+soya|salsa\s+soya|salsa\s+inglesa|salsa\s+teriyaki|salsa\s+de\s+pescado)",
+                                    rf"{_cap_n} {_cap_u} de \1", str(_st), flags=_re.IGNORECASE)
+                                if isinstance(_st, str) else _st
+                                for _st in _rec]
             # (2) swap del enlatado/curado-en-sal más rico si el día sigue sobre el techo.
             _swaps_left = int(SODIUM_DAY_AUTOFIX_MAX_SWAPS)
             while _swaps_left > 0 and _day_sodium(meals) > float(SODIUM_DAY_CEILING_MG):
