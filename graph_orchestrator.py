@@ -9413,6 +9413,11 @@ ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
 # re-introduce DESPUÉS del quantize final, dup unidad-alimento ("filete de Filete de"),
 # marca del súper filtrada de la receta ("(Campos)") y cap cítrico por comida.
 FINALIZE_DISPLAY_POLISH = _env_bool("MEALFIT_FINALIZE_DISPLAY_POLISH", True)
+# [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] (review vivo: los pasos 💪 del closer leen bolt-on) fusiona el
+# paso 💪 de complemento en el "El Toque de Fuego" cuando existe (platos cocinados — el caso visible), en vez
+# de dejarlo como paso APARTE. Platos no-cook puros (sin TdF) mantienen el 💪 (ya coherente antes del Montaje).
+# NO toca `_append_closer_protein_step` (SSOT del closer) → pasada separada, idempotente. Rollback: =false.
+CLOSER_STEP_INTEGRATE_ENABLED = _env_bool("MEALFIT_CLOSER_STEP_INTEGRATE", True)
 # Cap de limones/limas por comida-porción (espejo receta del P6-CITRUS-CAP de la lista:
 # 3/persona/SEMANA es uso intensivo — una receta pidiendo 3 para un filete es inflación).
 CITRUS_MEAL_CAP_UNITS = max(1.0, min(6.0, _env_float("MEALFIT_CITRUS_MEAL_CAP_UNITS", 2.0)))
@@ -19680,6 +19685,15 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"display_polished={_n_pol}")
     except Exception:
         pass
+    # [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] fusiona el paso 💪 del closer en el TdF (platos cocinados) —
+    # persist boundary / chunks semanas 2+ (paridad con assemble).
+    try:
+        _n_ci = _integrate_complement_steps(days)
+        if _n_ci:
+            total += _n_ci
+            parts.append(f"complement_integrated={_n_ci}")
+    except Exception:
+        pass
     # [P2-STEP-PHRASE-DEDUP · 2026-07-06] "queso blanco y queso blanco" → "queso blanco" (review #14).
     try:
         _n_dd2 = _dedup_repeated_phrases_in_plan(days)
@@ -23374,6 +23388,54 @@ def _dedup_repeated_phrases_in_plan(days) -> int:
         return 0
 
 
+def _integrate_complement_steps(days) -> int:
+    """[P1-CLOSER-STEP-INTEGRATE · 2026-07-08] Fusiona el paso 💪 del closer (proteína/complemento añadido)
+    dentro del 'El Toque de Fuego' EXISTENTE, en vez de dejarlo como un paso APARTE que lee bolt-on
+    ("💪 Cocina camarones… / Incorpora queso…"). Solo actúa si el plato TIENE un TdF (plato cocinado);
+    los no-cook puros (sin TdF) conservan su 💪 antes del Montaje (ya coherente). Idempotente (sin 💪 → no-op;
+    tras fusionar no quedan 💪), fail-safe, muta days. NO toca `_append_closer_protein_step`. Devuelve nº de
+    pasos fusionados. tooltip-anchor: P1-CLOSER-STEP-INTEGRATE"""
+    if not CLOSER_STEP_INTEGRATE_ENABLED:
+        return 0
+    try:
+        from constants import strip_accents as _sa_ci
+    except Exception:
+        def _sa_ci(_s):
+            return _s
+    n = 0
+    for _d in (days or []):
+        if not isinstance(_d, dict):
+            continue
+        for _m in (_d.get("meals") or []):
+            if not isinstance(_m, dict):
+                continue
+            rec = _m.get("recipe")
+            if not isinstance(rec, list) or len(rec) < 2:
+                continue
+            _tdf_i = next((i for i, s in enumerate(rec) if isinstance(s, str)
+                           and _sa_ci(s.strip().lower()).startswith("el toque de fuego")), None)
+            if _tdf_i is None:
+                continue  # no-cook puro → dejar el 💪 (ya coherente antes del Montaje)
+            _bolt = [(i, s) for i, s in enumerate(rec)
+                     if isinstance(s, str) and s.lstrip().startswith("💪") and i != _tdf_i]
+            if not _bolt:
+                continue
+            _remove = set()
+            for _bi, _bs in _bolt:
+                _txt = _bs.split("💪", 1)[1].strip() if "💪" in _bs else _bs.strip()
+                if not _txt:
+                    continue
+                _ex = str(rec[_tdf_i]).rstrip()
+                if not _ex.endswith((".", "!", "…", ":", ";")):
+                    _ex += "."
+                rec[_tdf_i] = f"{_ex} {_txt}"
+                _remove.add(_bi)
+                n += 1
+            if _remove:
+                _m["recipe"] = [s for i, s in enumerate(rec) if i not in _remove]
+    return n
+
+
 def _polish_finalize_display(days) -> int:
     """[P1-FINALIZE-COUNTABLE-POLISH · 2026-07-06] Pulido de FRONTERA tras la última mutación
     de cantidades (review #13). Cuatro reglas:
@@ -25747,6 +25809,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"bulk que los recortes tardíos (cheese-dump/re-trim/sodium) dejaron bajo banda.")
         except Exception as _gm_rf_e:
             logger.warning(f"[P1-GAINMUSCLE-FLOOR-FINAL-REFILL] no-op: {type(_gm_rf_e).__name__}: {_gm_rf_e}")
+
+    # [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] fusiona el paso 💪 del closer en el TdF (platos cocinados) —
+    # path principal/assemble. Corre tras el closer + step-sync; idempotente. Cierra el "bolt-on" del review.
+    try:
+        _n_ci_a = _integrate_complement_steps(days)
+        if _n_ci_a:
+            logger.info(f"🍳 [P1-CLOSER-STEP-INTEGRATE] {_n_ci_a} paso(s) 💪 de complemento fusionado(s) "
+                        f"en el Toque de Fuego (integrado, no bolt-on).")
+    except Exception as _ci_a_e:
+        logger.warning(f"[P1-CLOSER-STEP-INTEGRATE] assemble no-op: {type(_ci_a_e).__name__}: {_ci_a_e}")
 
     # [P2-RAW-DISPLAY-RECONCILE · 2026-07-05] ANTES del recompute del panel y de la agregación de
     # compras: toda línea de display sin contraparte en raw se añade al raw (la miel invisible
