@@ -10380,6 +10380,13 @@ MICRO_SEED_ENABLED = _env_bool("MEALFIT_MICRO_SEED", True)
 # que el seed v1, gateado a "sin portadores", no podía evitar). Default 0.6 = alineado con
 # `low_ratio_threshold` del banner per-día: si el día sería flaggeado, se siembra. 0 = off (v1).
 MICRO_SEED_BELOW_RATIO = max(0.0, min(0.95, _env_float("MEALFIT_MICRO_SEED_BELOW_RATIO", 0.6)))
+# [Sd-P3-a / P2-MICRO-SEED-MIN-BUDGET · 2026-07-07] (audit solver+seeder v3) Piso de kcal-headroom para
+# COLOCAR una semilla. Era el literal hardcodeado `25.0` en `_seed_from_reserve` y el gate de siembra —
+# un umbral YA tuneado una vez ("guard 30→25: linaza 53 kcal dejaba 67 del budget → la 2ª semilla girasol
+# 58 debe caber") pero, a diferencia de sus vecinos (MICRO_SEED_BELOW_RATIO, MAX_KCAL_PER_DAY,
+# FAT_SEED_RESERVE_KCAL, todos env-driven), sin knob → no A/B-eable ni reversible sin redeploy (viola la
+# convención del repo). Promovido: auto-registra en _KNOBS_REGISTRY, visible en /health/version. tooltip-anchor: Sd-P3-a
+MICRO_SEED_MIN_BUDGET_KCAL = _env_int("MEALFIT_MICRO_SEED_MIN_BUDGET_KCAL", 25, lambda v: 0 <= v <= 120)
 # [P1-MICRO-SEED-DENSITY · 2026-07-05] Escaleras re-ordenadas por DENSIDAD del micro (forense del
 # catálogo vivo, /100g): vit E — girasol 35.2mg ≫ almendras 25.6 ≫ maní 9.1 (la escalera vieja
 # maní→linaza era 4-100× más débil: linaza tiene 0.3mg de vit E — semilla casi inútil para ese
@@ -10445,6 +10452,71 @@ MICRO_BUDGET_NONFAT_FIRST = _env_bool("MEALFIT_MICRO_BUDGET_NONFAT_FIRST", True)
 # final del budget compartido NUNCA mate su siembra: el fatswap solo ESCALA portadores existentes, no
 # siembra. Espejo de MICRO_FATSWAP_EXTRA_KCAL. tooltip-anchor: P1-MICRO-BUDGET-NONFAT-FIRST
 MICRO_FAT_SEED_RESERVE_KCAL = _env_int("MEALFIT_MICRO_FAT_SEED_RESERVE_KCAL", 120, lambda v: 0 <= v <= 400)
+# [Sd-P2-d / P2-DM2-HIGHGI-STARCH-GUARD · 2026-07-07] (audit solver+seeder v3) El guard DM2 de
+# `_ceiling_risky_contributor` solo bloqueaba FRUTA/azúcar alto-IG (`_DM2_HIGHGI_TOKENS`): en DM2, potasio
+# y vit C siguen cerrables (solo se excluyen bajo renal/K-med) y sus portadores DOMINANTES en un plan
+# dominicano son ALMIDONES/harinas refinadas alto-IG (papa GI~78, arroz blanco GI~73, yuca, pan blanco,
+# víveres) — que NO estaban en el token-set → el closer los escalaba 1.6× onto el plato del diabético,
+# invisible al band-score (lee macros stored). Este guard extiende el bloqueo a esos almidones. Preferimos
+# residual honesto ("por mejorar") a un bolo de carga glucémica. Rollback: =false (vuelve a fruta-only).
+DM2_HIGHGI_STARCH_GUARD = _env_bool("MEALFIT_DM2_HIGHGI_STARCH_GUARD", True)
+# [Sd-P2-e / P2-RENAL-CA-NONDAIRY-GUARD · 2026-07-07] (audit solver+seeder v3) En ERC el closer deja calcio
+# como ÚNICO micro cerrable (el resto va a `_MICRO_CLOSER_RENAL_EXCLUDED` para evitar K/P iatrogénico), pero
+# la rama renal del guard solo bloqueaba LÁCTEOS (`_DAIRY_TOKENS`). Cuando el portador de calcio más rico es
+# NO-lácteo (ajonjolí/sésamo = alto-P, almendra = K/P, espinaca/brócoli = K, sardina con espina = P), el
+# guard devolvía False y el closer lo escalaba 1.6× → cargaba justo el K/P que la exclusión renal del resto
+# existe para evitar. Peor: si el lácteo era el más rico, el skip lácteo enrutaba el fall-through al siguiente
+# portador (probablemente uno de esos no-lácteos). Este guard extiende el bloqueo. Rollback: =false (dairy-only).
+RENAL_CALCIUM_NONDAIRY_GUARD = _env_bool("MEALFIT_RENAL_CALCIUM_NONDAIRY_GUARD", True)
+# [S-P2-d / P2-SUPP-STRIP-DECREMENT · 2026-07-07] (audit solver+seeder v3) El sanitizer de suplementos
+# (assemble_plan_node) borra la línea de suplemento de `ingredients` pero NO decrementaba los macros STORED
+# del meal (`protein`/`carbs`/`fats`/`cals` numéricos del schema — source of truth) ni filtraba
+# `ingredients_raw`. Confiaba en el macro-engine downstream, pero truth-up y solver se ABSTIENEN bajo
+# cobertura<0.6 (platos criollos compuestos: sancocho/mangú/moro) → la proteína/kcal del suplemento quedaba
+# como FANTASMA stored → el protein-closer la veía inflada y NO añadía proteína real → sub-entrega con
+# etiqueta sobre-declarada, invisible al band-score. Con el knob ON, restamos SOLO la masa conocida-removida
+# (best-effort desde el catálogo; si el suplemento no resuelve, no resta → no empeora) y filtramos el raw en
+# lockstep. Rollback: =false (strip-string-only, comportamiento previo). tooltip-anchor: P2-SUPP-STRIP-DECREMENT
+SUPP_STRIP_DECREMENT_MACROS = _env_bool("MEALFIT_SUPP_STRIP_DECREMENT_MACROS", True)
+
+
+def _decrement_stripped_supplement_macros(meal: dict, removed_lines: list, db, supp_keywords) -> int:
+    """[S-P2-d · 2026-07-07] (audit solver+seeder v3) Resta del meal los macros STORED (`protein`/`carbs`/
+    `fats`/`cals` numéricos — source of truth del schema) de las líneas de suplemento removidas por el
+    sanitizer, filtra `ingredients_raw` en lockstep, y sincroniza la lista display `macros` (Optional) si
+    existe. best-effort: una línea que NO resuelve en el catálogo no se resta (fail-safe: no over-subtract;
+    no empeora vs el comportamiento previo) — se cuenta. Resta SOLO masa conocida-removida → no toca la masa
+    no-resuelta del plato compuesto (así el motivo de la abstención de truth-up/solver no aplica). Muta
+    `meal` in-place. Devuelve nº de líneas removidas que NO resolvieron. tooltip-anchor: P2-SUPP-STRIP-DECREMENT"""
+    if not removed_lines or db is None:
+        return 0
+    _raw = meal.get("ingredients_raw")
+    if isinstance(_raw, list):
+        meal["ingredients_raw"] = [
+            _r for _r in _raw if not any(kw in str(_r).lower() for kw in supp_keywords)
+        ]
+    _dp = _dc = _df = _dk = 0.0
+    _unresolved = 0
+    for _rl in removed_lines:
+        try:
+            _rmac = db.macros_from_ingredient_string(_rl) or {}
+        except Exception:
+            _rmac = {}
+        if not _rmac:
+            _unresolved += 1
+            continue
+        _dp += float(_rmac.get("protein") or 0.0)
+        _dc += float(_rmac.get("carbs") or 0.0)
+        _df += float(_rmac.get("fats") or 0.0)
+        _dk += float(_rmac.get("kcal") or 0.0)
+    if _dp or _dc or _df or _dk:
+        meal["protein"] = max(0, round(_meal_macro_num(meal.get("protein")) - _dp))
+        meal["carbs"] = max(0, round(_meal_macro_num(meal.get("carbs")) - _dc))
+        meal["fats"] = max(0, round(_meal_macro_num(meal.get("fats")) - _df))
+        meal["cals"] = max(0, round(_meal_macro_num(meal.get("cals")) - _dk))
+        if isinstance(meal.get("macros"), list):
+            meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+    return _unresolved
 
 
 def _micro_budget_rank(micro_key: str) -> int:
@@ -12014,14 +12086,40 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         _CEIL_RISK_TOKENS = ("queso", "tocino", "salami", "embutido", "jamon", "jamón", "mantequilla",
                              "longaniza", "chorizo", "salchich", "manteca")
         _DAIRY_TOKENS = ("queso", "leche", "yogur", "lacteo", "lácteo", "ricotta", "cottage", "requeson", "requesón")
+        # [Sd-P2-d · 2026-07-07] Almidones/harinas refinadas alto-IG — los portadores DOMINANTES de potasio/
+        # vit C en un plan dominicano. Word-boundary OBLIGATORIO (lección 'res'↔'fresas'): '\bpapa\b' NO
+        # matchea 'papaya'/'papadum'; 's?' cubre plurales (papas/tostones). Los tokens de DOS palabras
+        # ('arroz blanco'/'pan blanco') NO matchean 'arroz integral'/'pan integral' (bajo-IG → siguen
+        # escalables). Tokens accent-stripped (el callsite ya normaliza _ing_low con strip_accents).
+        _DM2_HIGHGI_STARCH_TOKENS = ("papa", "patata", "batata", "yuca", "casabe", "mangu",
+                                     "tostones", "platano verde", "pure de papa",
+                                     "arroz blanco", "pan blanco")
+        _dm2_starch_re = _re.compile(
+            r"\b(?:" + "|".join(_re.escape(t) for t in _DM2_HIGHGI_STARCH_TOKENS) + r")s?\b")
+        # [Sd-P2-e · 2026-07-07] Portadores de calcio NO-lácteos con alto fósforo/potasio (contraindicados en
+        # ERC). 'leche de almendras' (fortificada, renal-safe) YA cae en la rama _DAIRY_TOKENS por 'leche',
+        # así que aquí solo capturamos el fruto seco/semilla/pescado-con-espina/hoja entero. Word-boundary +
+        # accent-stripped.
+        _RENAL_CA_NONDAIRY_TOKENS = ("ajonjoli", "sesamo", "tahini", "almendra", "sardina",
+                                     "espinaca", "brocoli", "tofu", "kale", "col rizada")
+        _renal_ca_nondairy_re = _re.compile(
+            r"\b(?:" + "|".join(_re.escape(t) for t in _RENAL_CA_NONDAIRY_TOKENS) + r")s?\b")
 
         def _ceiling_risky_contributor(_k_micro: str, _ing_low: str) -> bool:
             if _dyslip_or_hta and any(t in _ing_low for t in _CEIL_RISK_TOKENS):
                 return True
             if _renal and _k_micro == "calcium_mg" and any(t in _ing_low for t in _DAIRY_TOKENS):
                 return True
+            # [Sd-P2-e] renal + calcio: los portadores NO-lácteos alto-P/K también se saltan (el fall-through
+            # del skip lácteo aterrizaba justo en estos). Fail-secure a residual honesto sobre carga renal.
+            if (_renal and _k_micro == "calcium_mg" and RENAL_CALCIUM_NONDAIRY_GUARD
+                    and _renal_ca_nondairy_re.search(_ing_low)):
+                return True
             # [P2-CLOSER-DM2-GI-GUARD] fruta/azúcar alto-IG jamás es target de escalado en DM2.
             if _dm2 and _dm2_gi_re.search(_ing_low):
+                return True
+            # [Sd-P2-d] DM2: almidones/harinas refinadas alto-IG tampoco (papa/yuca/arroz blanco/pan blanco).
+            if _dm2 and DM2_HIGHGI_STARCH_GUARD and _dm2_starch_re.search(_ing_low):
                 return True
             return False
 
@@ -12130,9 +12228,11 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 # el caso CON portador (deeply-short) lo cierra el fatswap escalando el portador existente
                 # con su propio budget → la reserva es SOLO para el caso no-carrier (que el fatswap no cubre).
                 _seed_from_reserve = (k in _FAT_BASED_MICROS and not _had_carriers
-                                      and kcal_budget_left <= 25.0 and _fat_seed_reserve > 25.0)
+                                      and kcal_budget_left <= MICRO_SEED_MIN_BUDGET_KCAL
+                                      and _fat_seed_reserve > MICRO_SEED_MIN_BUDGET_KCAL)
                 if _seed_trigger and not _already_seeded and MICRO_SEED_ENABLED \
-                        and k in _MICRO_SEED_SOURCES and (kcal_budget_left > 25.0 or _seed_from_reserve):
+                        and k in _MICRO_SEED_SOURCES \
+                        and (kcal_budget_left > MICRO_SEED_MIN_BUDGET_KCAL or _seed_from_reserve):
                     try:
                         from constants import strip_accents as _sa_seed
                         _seed_dislikes = {_sa_seed(str(x).strip().lower())
@@ -24229,6 +24329,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
         )
         _stripped_supps = 0
         _stripped_ings = 0
+        _supp_db = None  # [S-P2-d] lazy: solo se instancia si hay que decrementar macros
+        _supp_unresolved = 0
         for _d in result.get("days") or []:
             if _d.get("supplements"):
                 _stripped_supps += len(_d["supplements"])
@@ -24238,13 +24340,32 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 if not _ings:
                     continue
                 _filtered = []
+                _removed_lines = []  # [S-P2-d] líneas de suplemento removidas de este meal
                 for _ing in _ings:
                     _ing_norm = str(_ing).lower()
                     if any(kw in _ing_norm for kw in _supp_keywords):
                         _stripped_ings += 1
+                        _removed_lines.append(str(_ing))
                         continue
                     _filtered.append(_ing)
                 _m["ingredients"] = _filtered
+                # [S-P2-d · 2026-07-07] decrementar los macros STORED del meal por las líneas de suplemento
+                # removidas + filtrar ingredients_raw en lockstep (helper testeable). Sin esto la proteína/
+                # kcal del suplemento quedaba FANTASMA (los re-derivadores downstream se abstienen bajo
+                # cobertura<0.6). best-effort: suplemento que no resuelve → no resta (fail-safe) + se cuenta.
+                if _removed_lines and SUPP_STRIP_DECREMENT_MACROS:
+                    if _supp_db is None:
+                        try:
+                            from nutrition_db import IngredientNutritionDB
+                            _supp_db = IngredientNutritionDB()
+                        except Exception:
+                            _supp_db = False  # sentinel: catálogo no disponible → no decrementar
+                    if _supp_db:
+                        _supp_unresolved += _decrement_stripped_supplement_macros(
+                            _m, _removed_lines, _supp_db, _supp_keywords)
+        if _supp_unresolved:
+            logger.info(f"💊 [S-P2-d] {_supp_unresolved} línea(s) de suplemento removida(s) no resolvieron en "
+                        f"el catálogo → macros stored NO decrementados para esas (fantasma residual honesto).")
         if _stripped_supps or _stripped_ings:
             logger.info(
                 f"💊 [SUPPLEMENTS] Eliminados {_stripped_supps} en campo supplements + "

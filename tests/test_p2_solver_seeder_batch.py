@@ -23,9 +23,10 @@ with open(os.path.join(_BACKEND, "graph_orchestrator.py"), encoding="utf-8") as 
 # ═══════════════════════ S-P2-a: clamp knobs + protein max_scale ═══════════════════════
 
 def test_sp2a_knobs_defined():
-    assert 'SOLVER_MIN_SCALE = _envf("MEALFIT_SOLVER_MIN_SCALE", 0.3)' in _PS
-    assert 'SOLVER_MAX_SCALE = _envf("MEALFIT_SOLVER_MAX_SCALE", 3.5)' in _PS
-    assert 'SOLVER_MAX_SCALE_PROTEIN = _envf("MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0)' in _PS
+    # [S-P3-a · 2026-07-07] los knobs ahora pasan un validator de rango (3er arg) — anclamos knob+default.
+    assert 'SOLVER_MIN_SCALE = _envf("MEALFIT_SOLVER_MIN_SCALE", 0.3' in _PS
+    assert 'SOLVER_MAX_SCALE = _envf("MEALFIT_SOLVER_MAX_SCALE", 3.5' in _PS
+    assert 'SOLVER_MAX_SCALE_PROTEIN = _envf("MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0' in _PS
     import portion_solver as ps
     assert (ps.SOLVER_MIN_SCALE, ps.SOLVER_MAX_SCALE, ps.SOLVER_MAX_SCALE_PROTEIN) == (0.3, 3.5, 5.0)
 

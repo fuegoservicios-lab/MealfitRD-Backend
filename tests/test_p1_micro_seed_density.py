@@ -83,7 +83,10 @@ def test_density_first_ladders():
 
 def test_budget_fits_two_seeds():
     assert '_env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 120)' in _GO
-    assert "kcal_budget_left > 25.0" in _GO, "guard 30→25 para que la 2ª semilla del día quepa"
+    # [Sd-P3-a · 2026-07-07] el guard 30→25 vive ahora en el knob MICRO_SEED_MIN_BUDGET_KCAL (default 25).
+    assert "kcal_budget_left > MICRO_SEED_MIN_BUDGET_KCAL" in _GO, \
+        "guard de colocación de semilla (default 25) para que la 2ª semilla del día quepa"
+    assert '_env_int("MEALFIT_MICRO_SEED_MIN_BUDGET_KCAL", 25' in _GO
 
 
 # ---------------------------------------------------------------------------

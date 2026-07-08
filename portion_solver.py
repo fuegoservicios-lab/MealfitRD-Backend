@@ -26,6 +26,7 @@ LP entonces — no antes (convención del repo: no diseñar para requisitos hipo
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
 
@@ -41,11 +42,19 @@ _KCAL_PER_G = {"protein": 4.0, "carbs": 4.0, "fats": 9.0}
 try:
     from knobs import _env_float as _envf, _env_bool as _envb  # auto-registran en _KNOBS_REGISTRY
 except Exception:  # pragma: no cover - knobs siempre disponible en prod
-    def _envf(name: str, default: float) -> float:
+    def _envf(name: str, default: float, validator=None) -> float:
+        # [S-P3-a] acepta `validator` para paridad con knobs._env_float (fallback offline).
         try:
-            return float(os.environ.get(name, default))
+            v = float(os.environ.get(name, default))
         except (TypeError, ValueError):
             return default
+        if validator is not None:
+            try:
+                if not validator(v):
+                    return default
+            except Exception:
+                return default
+        return v
 
     def _envb(name: str, default: bool) -> bool:
         return str(os.environ.get(name, str(default))).strip().lower() in ("1", "true", "yes", "on")
@@ -60,13 +69,17 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod
 SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
 # Pesos TUNED por el benchmark M2 (A/B 2026-06-14): proteína 2.0 sobre-priorizaba y regresaba la
 # grasa (12.2→15.8% MAPE). Rebalanceados → all-4-en-±10% subió de 24%→50% y la grasa volvió a 12.1%.
-SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 1.2)
-SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 1.5)
-SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.1)
-SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4)
+# [S-P3-a · 2026-07-07] (audit solver+seeder v3) validators de rango — espejo de los knobs hermanos
+# SOLVER_MIN_COVERAGE/SOLVER_PARTIAL_MAX_SCALE (graph_orchestrator.py), que SÍ los usan. Un override
+# swapeado/negativo era aceptado en silencio y re-escalaba cada ingrediente sin WARNING. Fuera de rango →
+# WARNING + fallback al default (knobs._env_float).
+SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 1.2, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 1.5, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.1, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4, lambda v: 0.0 < v <= 10.0)
 # Regularización hacia el porcionado original del LLM (x=1): evita porciones absurdas (un
 # ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
-SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10)
+SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10, lambda v: 0.0 <= v <= 5.0)
 
 # [S-P2-a / P2-SOLVER-SCALE-KNOBS · 2026-07-07] (audit solver+seeder v2) El clamp de escala del solver eran
 # params default PLANOS (0.3/3.5), NO knobs → invisibles en /health/version y sin rollback/A-B sin redeploy
@@ -77,9 +90,22 @@ SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10)
 # closer AÑADA una línea nueva (mejor coherencia/variedad). Acotado aguas abajo por los realism-caps
 # (PORTION_CAP_PROTEIN_G / _cap_unrealistic_portions) y el protein-ceiling-trim (g/kg goal-aware). Rollback:
 # MEALFIT_SOLVER_MAX_SCALE_PROTEIN=3.5 (iguala al general → comportamiento previo).
-SOLVER_MIN_SCALE = _envf("MEALFIT_SOLVER_MIN_SCALE", 0.3)
-SOLVER_MAX_SCALE = _envf("MEALFIT_SOLVER_MAX_SCALE", 3.5)
-SOLVER_MAX_SCALE_PROTEIN = _envf("MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0)
+SOLVER_MIN_SCALE = _envf("MEALFIT_SOLVER_MIN_SCALE", 0.3, lambda v: 0.05 <= v <= 1.0)
+SOLVER_MAX_SCALE = _envf("MEALFIT_SOLVER_MAX_SCALE", 3.5, lambda v: 1.0 <= v <= 8.0)
+SOLVER_MAX_SCALE_PROTEIN = _envf("MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0, lambda v: 1.0 <= v <= 8.0)
+# [S-P3-a · 2026-07-07] Guard de INVERSIÓN post-validators: aun con cada knob en su rango, un swap
+# (MIN=1.0/MAX=1.0 imposible, pero MIN cerca de MAX, o proteína < general) degeneraría el clamp
+# por-coordenada de `_box_lsq` (todo forzado a un bound). Fail-safe a defaults + WARNING. tooltip-anchor: S-P3-a
+if not (SOLVER_MIN_SCALE < SOLVER_MAX_SCALE):
+    logging.getLogger(__name__).warning(
+        f"[S-P3-a] MEALFIT_SOLVER_MIN_SCALE ({SOLVER_MIN_SCALE}) >= MAX_SCALE ({SOLVER_MAX_SCALE}) — "
+        f"clamp degenerado. Fallback a defaults 0.3/3.5.")
+    SOLVER_MIN_SCALE, SOLVER_MAX_SCALE = 0.3, 3.5
+if SOLVER_MAX_SCALE_PROTEIN < SOLVER_MAX_SCALE:
+    logging.getLogger(__name__).warning(
+        f"[S-P3-a] MEALFIT_SOLVER_MAX_SCALE_PROTEIN ({SOLVER_MAX_SCALE_PROTEIN}) < MAX_SCALE "
+        f"({SOLVER_MAX_SCALE}) — la proteína no debe escalar MENOS que el general. Igualado al general.")
+    SOLVER_MAX_SCALE_PROTEIN = SOLVER_MAX_SCALE
 
 
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,

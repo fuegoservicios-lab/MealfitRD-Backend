@@ -49,7 +49,8 @@ def test_break_is_fat_micro_aware():
 def test_seed_from_reserve_gate_and_deduction():
     # la reserva SOLO rescata el caso no-carrier (el fatswap cubre el has-carrier escalando).
     assert "_seed_from_reserve = (k in _FAT_BASED_MICROS and not _had_carriers" in _GO
-    assert "and (kcal_budget_left > 25.0 or _seed_from_reserve):" in _GO
+    # [Sd-P3-a · 2026-07-07] el literal 25.0 fue promovido al knob MICRO_SEED_MIN_BUDGET_KCAL.
+    assert "and (kcal_budget_left > MICRO_SEED_MIN_BUDGET_KCAL or _seed_from_reserve):" in _GO
     assert "_fat_seed_reserve -= _kc_seed" in _GO
 
 
