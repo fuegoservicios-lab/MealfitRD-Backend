@@ -9457,6 +9457,11 @@ DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G = max(8, min(20, _env_int("MEALFIT_DAY_KCAL_FL
 # (superávit carb-driven; el aceite sesgaría las grasas fuera de banda). Respeta techos kcal Y carbs.
 GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED = _env_bool("MEALFIT_GAINMUSCLE_DAY_KCAL_FLOOR", True)
 GAINMUSCLE_DAY_KCAL_FLOOR_PCT = max(0.90, min(1.0, _env_float("MEALFIT_GAINMUSCLE_DAY_KCAL_FLOOR_PCT", 0.95)))
+# [P1-GAINMUSCLE-FLOOR-FINAL-REFILL · 2026-07-08] Re-corre el floor de bulk como ÚLTIMA pasada aditiva del
+# macro-engine (tras cheese-dump-final / postquantize-recheck / micro-postengine re-trim / sodium-postmotor
+# — pasadas que BAJAN kcal de un día DESPUÉS de que el floor lo subió, sin re-relleno → día de bulk bajo
+# banda + carbos vestigiales en su comida principal). Rollback sin redeploy: =false. tooltip-anchor: P1-GAINMUSCLE-FLOOR-FINAL-REFILL
+GAINMUSCLE_FLOOR_FINAL_REFILL = _env_bool("MEALFIT_GAINMUSCLE_FLOOR_FINAL_REFILL", True)
 GAINMUSCLE_KCAL_FLOOR_MAX_CARB_PER_MEAL_G = max(30, min(180, _env_int("MEALFIT_GAINMUSCLE_KCAL_FLOOR_MAX_CARB_G", 100)))
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
@@ -21763,7 +21768,8 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
 _GM_RICE_KCAL_G, _GM_RICE_CARB_G, _GM_RICE_PROT_G = 1.3, 0.28, 0.027
 
 
-def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None) -> int:
+def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db=None, *,
+                                final_pass: bool = False) -> int:
     """[P1-GAINMUSCLE-KCAL-FLOOR · 2026-07-06] (plan del owner 4339544f gain_muscle degradado por
     kcal) Espejo del cerrador bariátrico de kcal PERO para ganancia muscular (superávit): un día
     bajo el piso de banda de kcal (típicamente porque la proteína ya cumplía y el solver clampea —
@@ -21812,8 +21818,8 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
             for m in _mains:
                 if day_kcal >= floor:
                     break
-                if m.get("_gainmuscle_kcal_floor"):
-                    continue
+                if not final_pass and m.get("_gainmuscle_kcal_floor"):
+                    continue  # [FINAL-REFILL] la pasada final ignora el marker per-meal → re-rellena lo que los recortes tardíos bajaron
                 _kcal_room = kcal_ceiling - day_kcal
                 _carb_room = carb_ceiling_g - day_carbs
                 if _kcal_room < 40 or _carb_room < 10:
@@ -21825,10 +21831,28 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                                 _mgm.floor(_carb_room / _GM_RICE_CARB_G)))
                 if add_g < 20:
                     continue
-                line = f"{add_g}g de arroz blanco cocido"
-                m.setdefault("ingredients", []).append(line)
-                if isinstance(m.get("ingredients_raw"), list):
-                    m["ingredients_raw"].append(line)
+                # [P1-GAINMUSCLE-FLOOR-FINAL-REFILL] en la pasada final consolida en la línea de arroz ya
+                # sembrada por el floor (evita duplicar "Xg de arroz blanco cocido"); si no hay, la añade.
+                _gm_rice_idx = None
+                if final_pass:
+                    for _gi, _gl in enumerate(m.get("ingredients") or []):
+                        if "de arroz blanco cocido" in str(_gl).lower():
+                            _gm_rice_idx = _gi
+                            break
+                if _gm_rice_idx is not None:
+                    import re as _re_gmrf
+                    _gm_mch = _re_gmrf.match(r"\s*(\d+)", str(m["ingredients"][_gm_rice_idx]))
+                    _gm_prev = int(_gm_mch.group(1)) if _gm_mch else 0
+                    line = f"{_gm_prev + add_g}g de arroz blanco cocido"
+                    m["ingredients"][_gm_rice_idx] = line
+                    _gm_raw = m.get("ingredients_raw")
+                    if isinstance(_gm_raw, list) and _gm_rice_idx < len(_gm_raw):
+                        _gm_raw[_gm_rice_idx] = line
+                else:
+                    line = f"{add_g}g de arroz blanco cocido"
+                    m.setdefault("ingredients", []).append(line)
+                    if isinstance(m.get("ingredients_raw"), list):
+                        m["ingredients_raw"].append(line)
                 _dk = add_g * _GM_RICE_KCAL_G
                 m["carbs"] = round(_meal_macro_num(m.get("carbs")) + add_g * _GM_RICE_CARB_G)
                 m["protein"] = round(_meal_macro_num(m.get("protein")) + add_g * _GM_RICE_PROT_G)
@@ -25560,6 +25584,29 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"había re-inflado sodio tras el pase pre-motor.")
         except Exception as _na_pm_e:
             logger.warning(f"[P1-SODIUM-POSTMOTOR] post-motor no-op: {type(_na_pm_e).__name__}: {_na_pm_e}")
+
+    # [P1-GAINMUSCLE-FLOOR-FINAL-REFILL · 2026-07-08] (plan c2aef769 vivo: Día 3 1648/2100 kcal = 78%, banda
+    # 0.556). El gainmuscle floor (~L25318) corre ANTES de cheese-dump-final + postquantize-recheck +
+    # micro-postengine re-trim + sodium-postmotor — pasadas que BAJAN kcal de un día DESPUÉS de que el floor
+    # lo subió, sin re-relleno → día de bulk bajo banda + carbos vestigiales ("15g de arroz") en su comida
+    # principal. Re-corre el floor como ÚLTIMA pasada aditiva (final_pass: ignora el marker + consolida la
+    # línea de arroz), luego re-quantize + step-sync (patrón sodium-postmotor). El reverse-coherence del
+    # finalizer añade el paso de uso del arroz. tooltip-anchor: P1-GAINMUSCLE-FLOOR-FINAL-REFILL
+    if GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED and GAINMUSCLE_FLOOR_FINAL_REFILL:
+        try:
+            _gm_rf = _repair_gainmuscle_day_kcal(days, nutrition, form_data, final_pass=True)
+            if _gm_rf:
+                if PORTION_QUANTIZE_ENABLED:
+                    from nutrition_db import IngredientNutritionDB as _GmRfDB
+                    _apply_portion_quantization({"days": days}, _GmRfDB())
+                for _gm_d in days or []:
+                    for _gm_m in (_gm_d.get("meals") or []) if isinstance(_gm_d, dict) else []:
+                        if isinstance(_gm_m, dict) and _gm_m.get("_gainmuscle_kcal_floor"):
+                            _sync_recipe_step_quantities(_gm_m)
+                logger.info(f"🍚 [P1-GAINMUSCLE-FLOOR-FINAL-REFILL] +{_gm_rf} kcal re-rellenadas en día(s) de "
+                            f"bulk que los recortes tardíos (cheese-dump/re-trim/sodium) dejaron bajo banda.")
+        except Exception as _gm_rf_e:
+            logger.warning(f"[P1-GAINMUSCLE-FLOOR-FINAL-REFILL] no-op: {type(_gm_rf_e).__name__}: {_gm_rf_e}")
 
     # [P2-RAW-DISPLAY-RECONCILE · 2026-07-05] ANTES del recompute del panel y de la agregación de
     # compras: toda línea de display sin contraparte en raw se añade al raw (la miel invisible
