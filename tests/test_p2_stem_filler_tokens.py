@@ -68,6 +68,23 @@ def test_water_line_itself_still_skipped(go, monkeypatch):
         "la línea de AGUA pura (solo tokens filler) jamás gana complemento (era el skip previo)"
 
 
+def test_pan_recognized_as_used_len3_stem(go, monkeypatch):
+    """[P1-STEM-SHORT-FOOD-NOUN · 2026-07-08] (vivo: Tostadas Francesas con Piña) 'pan' (3 chars)
+    se filtraba del stem (len>=4) → ningún token de 'pan integral familiar' matcheaba un paso que
+    solo dice 'pan' → complemento espurio. Bajar a len>=3 (protegido por \\b más abajo) lo cierra."""
+    monkeypatch.setattr(go, "RECIPE_REVERSE_COHERENCE_ENABLED", True)
+    meal = {
+        "name": "Tostadas Francesas",
+        "ingredients": ["7 lonjas de pan integral familiar"],
+        "recipe": ["Mise en place: prepara la mezcla.",
+                   "El Toque de Fuego: sumerge cada lonja de pan y dora ambos lados.",
+                   "Montaje: sirve."],
+    }
+    n = go._ensure_ingredients_used_in_recipe(meal)
+    assert n == 0, f"'pan' debe reconocerse como usado vía el stem corto: {meal['recipe']}"
+    assert not any("(complemento)" in str(s) for s in meal["recipe"])
+
+
 # ───────────── fruit-dedup compound ─────────────
 
 def test_harina_de_guineo_never_swapped(go):

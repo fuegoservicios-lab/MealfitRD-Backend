@@ -85,6 +85,44 @@ def test_knob_off_leaves_bolt(go, monkeypatch):
     assert sum(_BOLT in s for s in m["recipe"]) == 1, "knob OFF → 💪 intacto"
 
 
+def test_complemento_step_fused_into_tdf(go):
+    """[P1-CLOSER-STEP-INTEGRATE +complemento-fusion · 2026-07-08] El paso "El Toque de Fuego
+    (complemento)" de reverse-coherence (aceite de oliva huérfano) se fusiona en el TdF real, no
+    queda como 3er paso con título casi-duplicado (vivo: Atún Salteado Estilo Cantonés)."""
+    m = {"name": "Atún Salteado Estilo Cantonés", "recipe": [
+        "Mise en place: pica el jengibre y la cebolla.",
+        "El Toque de Fuego: saltea el ajo y el jengibre, agrega el atún y saltea.",
+        "El Toque de Fuego (complemento): incorpora también aceite de oliva (borges) durante la "
+        "preparación.",
+        "Montaje: sirve el arroz con el salteado."]}
+    n = go._integrate_complement_steps([{"meals": [m]}])
+    assert n == 1
+    assert not any("(complemento)" in str(s) for s in m["recipe"]), "no debe quedar paso aparte"
+    assert len(m["recipe"]) == 3, "4 pasos → 3 (Mise/TdF/Montaje)"
+    tdf = next(s for s in m["recipe"] if s.startswith("El Toque"))
+    assert "aceite de oliva" in tdf and tdf.count("El Toque de Fuego") == 1
+
+
+def test_two_same_template_proteins_merge_into_one_sentence(go):
+    """[P1-COMPLEMENT-STEP-MERGE · 2026-07-08] Catibías con pollo+camarones: 2 pasos 💪 con el
+    MISMO template de proteína cárnica se fusionan en una oración combinada, en vez de concatenar
+    2 oraciones casi-idénticas ("...proteína del plato. Cocina camarones... proteína del plato.")."""
+    m = {"name": "Catibías con Queso y Ensalada", "recipe": [
+        "Mise en place: pela el plátano.",
+        "El Toque de Fuego: hornea las catibías 15 minutos.",
+        _BOLT + " Cocina pechuga de pollo a la plancha o hervido y sírvelo como proteína del plato.",
+        _BOLT + " Cocina camarones a la plancha o hervido y sírvelo como proteína del plato.",
+        "Montaje: sirve."]}
+    n = go._integrate_complement_steps([{"meals": [m]}])
+    assert n == 2
+    assert sum(_BOLT in s for s in m["recipe"]) == 0
+    assert len(m["recipe"]) == 3
+    tdf = next(s for s in m["recipe"] if s.startswith("El Toque"))
+    assert tdf.count("a la plancha o hervido") == 1, f"debe fusionar en UNA oración: {tdf}"
+    assert "pechuga de pollo y camarones" in tdf
+    assert "sírvelos" in tdf
+
+
 def test_notes_not_touched(go):
     """Las notas 🌱/💡/⚠ NO son pasos 💪 del closer → intactas."""
     m = {"name": "x", "recipe": [

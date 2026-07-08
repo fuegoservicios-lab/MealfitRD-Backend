@@ -76,6 +76,25 @@ def test_knob_off_falls_back_to_note(go, monkeypatch):
     assert any("huevo" in str(i).lower() for i in meal["ingredients"])
 
 
+def test_blended_raw_egg_scrubs_claras_yemas_step(go, monkeypatch):
+    """[P1-EGG-STEP-SCRUB · 2026-07-08] vivo: 'Batido Refrescante de Lechosa y Arándano' — el Mise
+    en Place seguía diciendo 'Separa las claras de las yemas' tras sustituir el huevo por yogur."""
+    import nutrition_db
+    monkeypatch.setattr(nutrition_db, "IngredientNutritionDB", _StubDB)
+    plan = {"days": [{"meals": [_meal(
+        "Batido de Lechosa",
+        ["1 lechosa mediana", "2 huevos crudos"],
+        ["Mise en place: pela la lechosa. Separa las claras de las yemas "
+         "(reserva las yemas para otro uso).",
+         "Montaje: licúa todo y sirve."])]}]}
+    go._apply_food_safety_fixes(plan)
+    meal = plan["days"][0]["meals"][0]
+    blob = " ".join(str(s) for s in meal["recipe"]).lower()
+    assert "clara" not in blob and "yema" not in blob, \
+        f"la oración de separar claras/yemas debe removerse tras sustituir el huevo: {meal['recipe']}"
+    assert "pela la lechosa" in blob, "el resto del paso Mise en Place se conserva"
+
+
 def test_marker_present(go):
     from pathlib import Path
     src = Path(go.__file__).read_text(encoding="utf-8")

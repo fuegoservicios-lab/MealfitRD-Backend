@@ -13305,6 +13305,13 @@ def _scan_raw_viver_violations(plan: dict) -> list:
     return out
 
 
+# [P1-EGG-STEP-SCRUB · 2026-07-08] Oración que instruye separar claras de yemas — manipulación física
+# del huevo que deja de aplicar en cuanto `_substitute_blended_raw_egg` lo reemplaza por yogur griego.
+# Ancla angosta a propósito: requiere AMBOS términos ("clara(s)" Y "yema(s)") dentro de la MISMA oración
+# (sin punto de por medio) para no arriesgar falsos positivos sobre texto no relacionado.
+_EGG_HANDLING_SENTENCE_RE = _re.compile(r"[^.]*\bclaras?\b[^.]*\byemas?\b[^.]*\.\s*", _re.IGNORECASE)
+
+
 def _substitute_blended_raw_egg(meal: dict, db) -> bool:
     """[P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Reemplaza el huevo crudo de una preparación LICUADA por una
     proteína blend-safe (yogur griego) a nivel de COMPOSICIÓN — preserva el prefijo de cantidad y ajusta
@@ -13336,6 +13343,31 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
             else:
                 out.append(ing)
         meal[key] = out
+    if changed:
+        # [P1-EGG-STEP-SCRUB · 2026-07-08] (vivo: "Batido Refrescante de Lechosa y Arándano" — el
+        # huevo se sustituyó a nivel de composición pero el paso de Mise en Place seguía diciendo
+        # "Separa las claras de las yemas (reserva las yemas para otro uso)" sin huevo ya en los
+        # ingredientes. La nota de seguridad (_FOOD_SAFETY_NOTE_BLENDED_SUBBED) explica el swap,
+        # pero no reescribe pasos previos. Elimina la(s) oración(es) que instruyen manipular
+        # físicamente el huevo (separar claras de yemas) — ya no aplican una vez sustituido.
+        # Ámbito angosto a propósito (solo claras+yemas en la misma oración): es el patrón
+        # confirmado en vivo; generalizar a "bate/casca el huevo" queda para cuando haya evidencia.
+        # [P1-EGG-STEP-SCRUB bugfix] mutar la lista IN-PLACE (rec[:] = ...), NO reasignar
+        # `meal["recipe"]` a un objeto nuevo: el único caller (`_apply_food_safety_fixes`)
+        # captura `rec = meal.get("recipe")` ANTES de invocar esta función y luego hace
+        # `meal["recipe"] = rec + [note]` con SU referencia — una reasignación acá se perdía
+        # (el scrub corría pero el caller pisaba el resultado con la lista vieja).
+        rec = meal.get("recipe")
+        if isinstance(rec, list):
+            _new_rec = []
+            for _s in rec:
+                if isinstance(_s, str):
+                    _cleaned = _EGG_HANDLING_SENTENCE_RE.sub("", _s).strip()
+                    if _cleaned:
+                        _new_rec.append(_cleaned)
+                else:
+                    _new_rec.append(_s)
+            rec[:] = _new_rec
     if changed and db is not None and swaps:
         try:
             _d = {"protein": 0.0, "carbs": 0.0, "fats": 0.0, "kcal": 0.0}
@@ -16021,8 +16053,16 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             # [P2-STEM-FILLER-TOKENS · 2026-07-06] (vivo ×2: "atún en agua" sin paso porque los
             # pasos SÍ usan "agua" — la del masa/aguacate) tokens FILLER (agua/aceite/lata) jamás
             # son evidencia de uso: el token principal del alimento es el que manda.
+            # [P1-STEM-SHORT-FOOD-NOUN · 2026-07-08] (vivo: "pan integral familiar" → toks tras
+            # filtrar len>=4 quedaba en ["integral","familiar"] — "pan" (3 chars) se excluía y
+            # ninguno de esos dos adjetivos aparece literal en un paso que solo dice "lonja de
+            # pan" → falso positivo ("El Toque de Fuego (complemento): incorpora también pan
+            # integral familiar..." sobre TOSTADAS FRANCESAS, que YA usan pan en el paso real).
+            # El límite de palabra (\b) de la búsqueda más abajo ya protege sustantivos cortos de
+            # matchear dentro de otra palabra (p.ej. "pan" no matchea "empanada"), así que bajar a
+            # 3 chars es seguro para sustantivos reales de alimento (pan/ajo/res/miel/col/...).
             toks = [t for t in _re2.split(r"[^a-z]+", bare_low)
-                    if len(t) >= 4 and t not in ("para", "tipo", "agua", "aceite", "lata", "latas")]
+                    if len(t) >= 3 and t not in ("para", "tipo", "agua", "aceite", "lata", "latas")]
             if not toks:
                 continue  # nombre demasiado corto/ambiguo → no arriesgar falso positivo
             # [P1-REVERSE-COH-PLURAL · 2026-07-06] (plan vivo da7bb310 ×2) la línea "1½ tomates
@@ -23394,13 +23434,31 @@ def _dedup_repeated_phrases_in_plan(days) -> int:
         return 0
 
 
+_COMPLEMENTO_STEP_RE = _re.compile(r"(?i)^el toque de fuego \(complemento\):\s*")
+# [P1-COMPLEMENT-STEP-MERGE · 2026-07-08] (review recetas plan 830d9aaa: Catibías con pollo+camarones)
+# 2+ pasos 💪 pueden compartir el MISMO template de proteína cárnica cuando el closer topa dos proteínas
+# distintas al mismo plato (topup + floor, cada uno añade la suya) → concatenar ambas oraciones casi-
+# idénticas ("Cocina pollo... y sírvelo como proteína del plato. Cocina camarones... y sírvelo como
+# proteína del plato.") lee como un bug de copy-paste. Si TODOS los bolts matchean el template exacto,
+# se fusionan en una sola oración con los nombres unidos por "y".
+_COOK_TAIL_RE = _re.compile(r"^Cocina (.+?) a la plancha o hervido y sírvelo como proteína del plato\.?$")
+
+
 def _integrate_complement_steps(days) -> int:
-    """[P1-CLOSER-STEP-INTEGRATE · 2026-07-08] Fusiona el paso 💪 del closer (proteína/complemento añadido)
-    dentro del 'El Toque de Fuego' EXISTENTE, en vez de dejarlo como un paso APARTE que lee bolt-on
-    ("💪 Cocina camarones… / Incorpora queso…"). Solo actúa si el plato TIENE un TdF (plato cocinado);
-    los no-cook puros (sin TdF) conservan su 💪 antes del Montaje (ya coherente). Idempotente (sin 💪 → no-op;
-    tras fusionar no quedan 💪), fail-safe, muta days. NO toca `_append_closer_protein_step`. Devuelve nº de
-    pasos fusionados. tooltip-anchor: P1-CLOSER-STEP-INTEGRATE"""
+    """[P1-CLOSER-STEP-INTEGRATE · 2026-07-08 · +P1-COMPLEMENT-STEP-MERGE 2026-07-08] Fusiona DOS clases de
+    paso bolt-on dentro del 'El Toque de Fuego' EXISTENTE, en vez de dejarlos como paso(s) APARTE:
+    (a) el 💪 del closer de proteína ("💪 Cocina camarones… / Incorpora queso…");
+    (b) el paso "El Toque de Fuego (complemento): incorpora también X…" de reverse-coherence
+        (`_ensure_ingredients_used_in_recipe`) — antes quedaba como un 3er paso con título CASI-duplicado
+        del TdF real (vivo: Atún Salteado Cantonés, Arepitas de Harina de Negrito).
+    Solo actúa si el plato TIENE un TdF real (plato cocinado); los no-cook puros (sin TdF) conservan su 💪
+    antes del Montaje (ya coherente). Si 2+ bolts comparten el MISMO template "Cocina X a la plancha o
+    hervido y sírvelo como proteína del plato." (2 proteínas cárnicas añadidas al mismo plato, vivo:
+    Catibías pollo+camarones) se fusionan en UNA sola oración ("Cocina X y Y… sírvelos…") en vez de
+    concatenar oraciones casi-idénticas; combinaciones de templates distintos siguen concatenándose tal
+    cual (comportamiento previo, ya cubierto por test). Idempotente (sin bolts → no-op; tras fusionar no
+    quedan), fail-safe, muta days. NO toca `_append_closer_protein_step` ni `_ensure_ingredients_used_in_recipe`
+    (SSOT de cada uno). Devuelve nº de pasos fusionados. tooltip-anchor: P1-CLOSER-STEP-INTEGRATE"""
     if not CLOSER_STEP_INTEGRATE_ENABLED:
         return 0
     try:
@@ -23419,26 +23477,49 @@ def _integrate_complement_steps(days) -> int:
             if not isinstance(rec, list) or len(rec) < 2:
                 continue
             _tdf_i = next((i for i, s in enumerate(rec) if isinstance(s, str)
-                           and _sa_ci(s.strip().lower()).startswith("el toque de fuego")), None)
+                           and _sa_ci(s.strip().lower()).startswith("el toque de fuego")
+                           and not _sa_ci(s.strip().lower()).startswith("el toque de fuego (complemento)")), None)
             if _tdf_i is None:
                 continue  # no-cook puro → dejar el 💪 (ya coherente antes del Montaje)
             _bolt = [(i, s) for i, s in enumerate(rec)
-                     if isinstance(s, str) and s.lstrip().startswith("💪") and i != _tdf_i]
+                     if isinstance(s, str) and i != _tdf_i
+                     and (s.lstrip().startswith("💪") or _COMPLEMENTO_STEP_RE.match(s.strip()))]
             if not _bolt:
                 continue
-            _remove = set()
+            _texts = []
             for _bi, _bs in _bolt:
-                _txt = _bs.split("💪", 1)[1].strip() if "💪" in _bs else _bs.strip()
-                if not _txt:
-                    continue
-                _ex = str(rec[_tdf_i]).rstrip()
-                if not _ex.endswith((".", "!", "…", ":", ";")):
-                    _ex += "."
-                rec[_tdf_i] = f"{_ex} {_txt}"
-                _remove.add(_bi)
-                n += 1
-            if _remove:
-                _m["recipe"] = [s for i, s in enumerate(rec) if i not in _remove]
+                if _bs.lstrip().startswith("💪"):
+                    _txt = _bs.split("💪", 1)[1].strip()
+                else:
+                    _txt = _COMPLEMENTO_STEP_RE.sub("", _bs.strip()).strip()
+                    if _txt:
+                        _txt = _txt[0].upper() + _txt[1:]  # continuaba tras ":" en minúscula
+                _texts.append(_txt)
+            _names = []
+            for _txt in _texts:
+                _mm = _COOK_TAIL_RE.match(_txt)
+                if not _mm:
+                    _names = None
+                    break
+                _names.append(_mm.group(1).strip())
+            _ex = str(rec[_tdf_i]).rstrip()
+            if not _ex.endswith((".", "!", "…", ":", ";")):
+                _ex += "."
+            if _names and len(_names) > 1:
+                # [P1-COMPLEMENT-STEP-MERGE] mismo template ×N → una oración combinada.
+                _joined = " y ".join(_names)
+                rec[_tdf_i] = f"{_ex} Cocina {_joined} a la plancha o hervido y sírvelos como proteína del plato."
+            else:
+                for _txt in _texts:
+                    if not _txt:
+                        continue
+                    _ex = str(rec[_tdf_i]).rstrip()
+                    if not _ex.endswith((".", "!", "…", ":", ";")):
+                        _ex += "."
+                    rec[_tdf_i] = f"{_ex} {_txt}"
+            n += len(_bolt)
+            _remove = {_bi for _bi, _ in _bolt}
+            _m["recipe"] = [s for i, s in enumerate(rec) if i not in _remove]
     return n
 
 
