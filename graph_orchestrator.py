@@ -5368,13 +5368,20 @@ async def _attempt_pro_critique_correction(
         # function_calling → json_mode (el prompt ya exige "misma estructura JSON" y adjunta el
         # día actual como plantilla). Si el parse falla → None, mismo contrato fail-safe de hoy.
         if SURGICAL_PRO_THINKING_ENABLED:
+            # [P2-THINKING-EFFORT · 2026-07-08] effort graduable (low→max) vía knob opcional.
+            _surg_think_body = {"type": "enabled"}
+            if SURGICAL_PRO_THINKING_EFFORT:
+                _surg_think_body["effort"] = SURGICAL_PRO_THINKING_EFFORT
             pro_corrector = ChatDeepSeek(
                 model=_PRO_MODEL_NAME,
                 temperature=0.3,
                 max_retries=0,
                 timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
-                extra_body={"thinking": {"type": "enabled"}},
+                extra_body={"thinking": _surg_think_body},
             ).with_structured_output(SingleDayPlanModel, method="json_mode")
+            if SURGICAL_PRO_THINKING_EFFORT:
+                logger.info(f"🧠 {log_prefix} Corrector quirúrgico Pro con thinking "
+                            f"(effort={SURGICAL_PRO_THINKING_EFFORT}).")
         else:
             pro_corrector = ChatDeepSeek(
                 model=_PRO_MODEL_NAME,
@@ -9345,6 +9352,14 @@ REVIEWER_THINKING_EFFORT = str(_env_str("MEALFIT_REVIEWER_THINKING_EFFORT", ""))
 if REVIEWER_THINKING_EFFORT not in ("", "low", "medium", "high", "max"):
     REVIEWER_THINKING_EFFORT = ""
 SURGICAL_PRO_THINKING_ENABLED = _env_bool("MEALFIT_SURGICAL_PRO_THINKING", False)
+# [P2-THINKING-EFFORT · 2026-07-08] effort graduable (low→max) para la escalada Pro
+# del corrector quirúrgico, espejo de REVIEWER_THINKING_EFFORT. Vacío = enabled sin
+# effort (comportamiento previo). "low"/"medium"/"high"/"max" añade `effort` al
+# extra_body. A/B sin redeploy; fail-safe: si el API rechaza el campo el path cae a
+# None (mismo contrato de hoy) y el día conserva el intento original.
+SURGICAL_PRO_THINKING_EFFORT = str(_env_str("MEALFIT_SURGICAL_PRO_THINKING_EFFORT", "")).strip().lower()
+if SURGICAL_PRO_THINKING_EFFORT not in ("", "low", "medium", "high", "max"):
+    SURGICAL_PRO_THINKING_EFFORT = ""
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -13805,6 +13820,13 @@ PROTEIN_STEP_SOFT_DAIRY_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_SOFT_DAIRY_WOR
 # ahumados): el paso "Cocina X a la plancha o hervido" es ABSURDO — caso real del owner: "💪 Cocina sardinas en lata
 # a la plancha o hervido". Para estos → escurrir e incorporar SIN cocción. tooltip-anchor: P1-CLOSER-PRECOOKED-WORDING
 _PRECOOKED_PROTEIN_HINT = ("en lata", "enlatad", "atun en agua", "atun en aceite", "sardina", "ahumad")
+# [P1-CLOSER-LEGUME-WORDING · 2026-07-08] (review recetas plan 9b6a43f6: "💪 Cocina guisantes secos a la
+# plancha o hervido y sírvelo como proteína del plato") una legumbre seca (chícharo/guisante/lenteja) se
+# HIERVE — no se hace a la plancha — y en un plato dominicano es acompañante, no "la proteína del plato".
+# Para legumbres (no pre-cocidas ni enlatadas) → wording de cocción EN AGUA. Rollback: =false. tooltip-anchor: P1-CLOSER-LEGUME-WORDING
+PROTEIN_STEP_LEGUME_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_LEGUME_WORDING", True)
+_LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo", "habichuela",
+                        "frijol", "gandul", "guandul", "edamame", "soya")
 
 
 def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> str:
@@ -13830,6 +13852,9 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> 
         return f"Incorpora {nm} a la preparación y mézclalo antes de servir."
     if any(h in _nm_sa for h in _PRECOOKED_PROTEIN_HINT):
         return f"Escurre e incorpora {nm} (ya viene cocido) a la preparación antes de servir."
+    # [P1-CLOSER-LEGUME-WORDING] legumbre seca → se hierve, no "a la plancha"; acompañante, no "la proteína".
+    if PROTEIN_STEP_LEGUME_WORDING and any(h in _nm_sa for h in _LEGUME_PROTEIN_HINT):
+        return f"Cocina {nm} en agua hasta que ablanden e incorpóralos al plato."
     return f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
 
 
