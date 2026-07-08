@@ -855,6 +855,15 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
                 _n, _summ = _fpc(_pd["days"], target_fats=_tf_ins)
                 if _n:
                     logger.info(f"🧩 [P1-COHERENCE-FINALIZE] pre-INSERT aplicó coherencia a un plan no-finalizado ({_summ}).")
+                # [P1-BAND-DEGRADED-STALE-CLEAR · 2026-07-08] El gate de banda del pipeline marcó _quality_degraded
+                # ANTES de este finalize (que acaba de recortar grasas/re-truthear macros) → un flag low_band_* puede
+                # ser un FALSO POSITIVO de timing. Re-evalúa sobre el estado ENTREGADO y limpia el banner si ya está
+                # en banda. CLEAR-ONLY (nunca marca), fail-safe. Import LAZY (mismo ciclo que finalize).
+                try:
+                    from graph_orchestrator import clear_stale_low_band_degraded as _csd
+                    _csd(_pd)
+                except Exception as _csd_e:
+                    logger.debug(f"[P1-BAND-DEGRADED-STALE-CLEAR] pre-INSERT no-op: {type(_csd_e).__name__}: {_csd_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] pre-INSERT no-op: {type(_fce).__name__}: {_fce}")
 

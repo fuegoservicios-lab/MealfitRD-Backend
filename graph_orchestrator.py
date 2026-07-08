@@ -10052,6 +10052,12 @@ BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", True)
 # [P1-BAND-PARITY-UPDATES · 2026-07-01] paridad del contrato de banda S1 (banner _quality_degraded) en las
 # superficies de UPDATE (regen-day/swap-persist/chat-modify). Kill-switch independiente del banner de S1.
 UPDATE_BAND_PARITY_ENABLED = _env_bool("MEALFIT_UPDATE_BAND_PARITY", True)
+# [P1-BAND-DEGRADED-STALE-CLEAR · 2026-07-08] El gate de banda del pipeline (_maybe_mark_low_band_degraded) marca
+# _quality_degraded ANTES de que finalize_plan_data_coherence (pre-INSERT, db_plans.py) aplique las ÚLTIMAS mutaciones
+# de macros (FATS-RELEVEL-UNIVERSAL trim + truth-up + cheese-final) → el flag low_band_* puede quedar STALE sobre un
+# plan que en realidad se entregó EN banda. Este re-check corre post-finalize sobre el estado ENTREGADO y limpia el
+# falso positivo (espejo CLEAR-ONLY del bidireccional de apply_update_band_parity para el path S1/INSERT). Kill-switch.
+BAND_DEGRADED_STALE_CLEAR_ENABLED = _env_bool("MEALFIT_BAND_DEGRADED_STALE_CLEAR", True)
 BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
 # [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) El band-score headline incluye la celda kcal (casi
 # siempre en banda por el reconcile) → infla ~25% vs precisión de macros. `compute_clinical_band_score` ya
@@ -33316,6 +33322,58 @@ def apply_update_band_parity(plan_data: dict, *, surface: str, pantry_limited: b
     except Exception as _ubp_e:
         logger.debug(f"[P1-BAND-PARITY-UPDATES] no-op: {type(_ubp_e).__name__}: {_ubp_e}")
         return None
+
+
+def clear_stale_low_band_degraded(plan_data: dict) -> bool:
+    """[P1-BAND-DEGRADED-STALE-CLEAR · 2026-07-08] El gate de banda del pipeline (`_maybe_mark_low_band_degraded`,
+    post-scoring) corre ANTES de que `finalize_plan_data_coherence` (pre-INSERT, db_plans.py:842) aplique las ÚLTIMAS
+    mutaciones de macros (FATS-RELEVEL-UNIVERSAL trim de días sobre banda + truth-up + cheese-final). Medido en vivo
+    (plan 618ecd21, gain_muscle): el gate vio fats per_macro=0.333 (un día alto + uno bajo fuera de banda) → marcó
+    `_quality_degraded=low_band_macro:fats`; finalize recortó el día ALTO → el estado ENTREGADO tiene fats=0.667
+    (≥ umbral 0.5) → el banner "Calidad por debajo del óptimo" era un FALSO POSITIVO sobre un plan entregado EN banda.
+
+    Este re-check corre DESPUÉS de finalize sobre el estado ENTREGADO: si el flag es `low_band_*` y el plan ya NO
+    califica para degradación (`band_val >= thr` Y ningún macro < per-macro-thr — el COMPLEMENTO EXACTO de la condición
+    de marca en `_maybe_mark_low_band_degraded`), limpia el contrato (mismas keys que el clear de `apply_update_band_parity`).
+    **CLEAR-ONLY**: nunca MARCA (esa dirección es del gate del pipeline sobre el estado pre-finalize) → cero riesgo de
+    introducir banners nuevos. Razones no-banda (clínicas/fallback/max_attempts/panel_*) JAMÁS se tocan. Idempotente,
+    fail-safe (nunca bloquea el INSERT). Umbrales/selección macros-only IDÉNTICOS a S1. tooltip-anchor: P1-BAND-DEGRADED-STALE-CLEAR"""
+    if not (BAND_DEGRADED_STALE_CLEAR_ENABLED and BAND_SCORE_GATE_ENABLED and isinstance(plan_data, dict)):
+        return False
+    try:
+        if not plan_data.get("_quality_degraded"):
+            return False
+        _prev = str(plan_data.get("_quality_degraded_reason") or "")
+        if not (_prev.startswith("low_band_score") or _prev.startswith("low_band_macro")):
+            return False  # razones no-banda (clínicas/fallback/max_attempts/panel) intactas
+        try:
+            refresh_delivered_macros(plan_data)  # el summary display refleja los meals finalizados
+        except Exception:
+            pass
+        _bs = compute_clinical_band_score(plan_data, {})
+        _use_mo = bool(BAND_GATE_USE_MACROS_ONLY and _bs.get("score_macros_only") is not None)
+        _val = _bs.get("score_macros_only") if _use_mo else _bs.get("score")
+        _thr = BAND_SCORE_GATE_THRESHOLD_MACROS_ONLY if _use_mo else BAND_SCORE_GATE_THRESHOLD
+        if _val is None:
+            return False
+        _pm = _bs.get("per_macro") or {}
+        _pm_low = ([k for k, v in _pm.items()
+                    if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
+                   if BAND_GATE_PER_MACRO else [])
+        if _val >= _thr and not _pm_low:
+            for _k in ("_quality_degraded", "_quality_degraded_reason", "_quality_degraded_severity",
+                       "_quality_degraded_attempts", "_quality_degraded_band_score",
+                       "_quality_degraded_band_per_macro_low", "_quality_degraded_surface",
+                       "_quality_degraded_pantry_limited"):
+                plan_data.pop(_k, None)
+            logger.info(f"📊 [P1-BAND-DEGRADED-STALE-CLEAR] estado ENTREGADO en banda tras finalize "
+                        f"(score={_val} thr={_thr} per_macro={_pm}) → banner low_band '{_prev}' "
+                        f"limpiado (falso positivo de timing del gate)")
+            return True
+        return False
+    except Exception as _csd_e:
+        logger.debug(f"[P1-BAND-DEGRADED-STALE-CLEAR] no-op: {type(_csd_e).__name__}: {_csd_e}")
+        return False
 
 
 # [P1-CONDITION-CEILINGS-UPDATES] razones que produce _maybe_mark_panel_degraded (las únicas que este
