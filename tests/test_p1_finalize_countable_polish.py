@@ -114,6 +114,30 @@ def test_citrus_meal_cap_display_and_raw():
     )
 
 
+def test_citrus_meal_cap_unicode_fraction():
+    """[P1-CITRUS-UNICODE-FRAC · 2026-07-08] vivo: "2½ limones" (Plátano+queso+pescado) quedó SIN
+    capear pese al cap por-comida — el regex exigía espacio tras el dígito y la fracción unicode
+    pegada ("2½", sin espacio) lo evadía. Mismo modo de fallo que P1-COUNT-UNICODE-FRAC (aguacate)."""
+    days = _meal_days(["2½ limones"], raw=["2½ limón"])
+    go._polish_finalize_display(days)
+    ings = days[0]["meals"][0]["ingredients"]
+    raw = days[0]["meals"][0]["ingredients_raw"]
+    assert not any("2½" in s for s in ings + raw), (
+        f"2.5 limones para un plato pequeño es inflación — cap {go.CITRUS_MEAL_CAP_UNITS:g}: "
+        f"{ings} / {raw}"
+    )
+    assert any(re.match(r"^2 lim", s) for s in ings), f"cap a 2 en display: {ings}"
+    assert any(re.match(r"^2 lim", s) for s in raw), f"cap TAMBIÉN en raw: {raw}"
+
+
+def test_citrus_bare_fraction_under_cap_untouched():
+    """"½ limón" (sin lead entero, fracción sola) no debe tocarse — 0.5 < cap 2."""
+    days = _meal_days(["½ limón (jugo)"])
+    go._polish_finalize_display(days)
+    ings = days[0]["meals"][0]["ingredients"]
+    assert any(s.startswith("½ limón") for s in ings), f"no debe tocar bajo el cap: {ings}"
+
+
 def test_unit_food_dup_collapsed():
     days = _meal_days(["1 filete de Filete de pescado blanco (150g)"])
     go._polish_finalize_display(days)

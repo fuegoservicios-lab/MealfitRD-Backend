@@ -23381,8 +23381,15 @@ _BRAND_PAREN_RE = _re.compile(r"\s*\(\s*[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñü]{
 # Dup unidad-alimento: "1 filete de Filete de pescado blanco" (el pase de presupuesto insertó
 # la forma canónica dentro de una línea que ya traía la unidad homónima).
 _UNIT_FOOD_DUP_RE = _re.compile(r"\b(\w+)\s+de\s+\1\s+de\b", _re.IGNORECASE)
-_CITRUS_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s+(limón|limon|limones|lima|limas)\b",
-                              _re.IGNORECASE)
+# [P1-CITRUS-UNICODE-FRAC · 2026-07-08] (vivo: "2½ limones" en Plátano+queso+pescado quedó SIN
+# capear pese al cap por-comida CITRUS_MEAL_CAP_UNITS=2 — el regex original exigía `\d+\s+noun`
+# (espacio obligatorio tras el dígito), y la fracción unicode pegada "2½" (sin espacio) lo evadía.
+# Mismo modo de fallo que P1-COUNT-UNICODE-FRAC (aguacate, 2026-07-07): lead entero opcional +
+# fracción unicode opcional, espejo de `_REALISM_COUNT_LEAD_RE`. Cubre "2½ limones"→2.5,
+# "½ limón"→0.5, y sigue parseando "2.5 limones"/"3 limas". tooltip-anchor: P1-CITRUS-UNICODE-FRAC
+_CITRUS_LEAD_RE = _re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*(limón|limon|limones|lima|limas)\b",
+    _re.IGNORECASE)
 # [P2-MANI-GENDER-STEP · 2026-07-06] "maní" (masc mass-noun) + adjetivo de cocción con género/
 # número errado en la prosa de un paso → masc singular ("maní fileteadas" → "maní fileteado").
 _MANI_GENDER_STEP_RX = _re.compile(
@@ -23553,12 +23560,17 @@ def _polish_finalize_display(days) -> int:
             out = _BRAND_PAREN_RE.sub("", s)
             out = _UNIT_FOOD_DUP_RE.sub(r"\1 de", out)
             _mc = _CITRUS_LEAD_RE.match(out)
-            if _mc:
+            # [P1-CITRUS-UNICODE-FRAC] al menos un grupo (entero o fracción) debe existir —
+            # espejo del guard `m_n.group(1) or m_n.group(2)` de P1-COUNT-UNICODE-FRAC.
+            if _mc and (_mc.group(1) or _mc.group(2)):
                 try:
-                    _q = float(_mc.group(1).replace(",", "."))
+                    _q = float((_mc.group(1) or "0").replace(",", "."))
+                    _q += _REALISM_FRAC_MAP.get(_mc.group(2) or "", 0.0)
                     if _q > CITRUS_MEAL_CAP_UNITS:
                         _cap_txt = (f"{CITRUS_MEAL_CAP_UNITS:g}")
-                        out = out[:_mc.start(1)] + _cap_txt + out[_mc.end(1):]
+                        _lead_start = _mc.start(1) if _mc.group(1) else _mc.start(2)
+                        _lead_end = _mc.end(2) if _mc.group(2) else _mc.end(1)
+                        out = out[:_lead_start] + _cap_txt + out[_lead_end:]
                 except (TypeError, ValueError):
                     pass
             return _re.sub(r"\s{2,}", " ", out).strip()
@@ -33454,6 +33466,54 @@ def clear_stale_low_band_degraded(plan_data: dict) -> bool:
         return False
     except Exception as _csd_e:
         logger.debug(f"[P1-BAND-DEGRADED-STALE-CLEAR] no-op: {type(_csd_e).__name__}: {_csd_e}")
+        return False
+
+
+# [P1-BAND-SCORE-POST-FINALIZE · 2026-07-08] Default ON — mismo espíritu fail-safe/CLEAR-ONLY que
+# P1-BAND-DEGRADED-STALE-CLEAR (que ya recomputa este mismo score post-finalize pero lo descarta sin
+# persistirlo cuando el plan no estaba flagged degradado). Rollback: =false.
+BAND_SCORE_POST_FINALIZE_REFRESH_ENABLED = _env_bool("MEALFIT_BAND_SCORE_POST_FINALIZE_REFRESH", True)
+
+
+def refresh_clinical_band_score_post_finalize(plan_data: dict) -> bool:
+    """[P1-BAND-SCORE-POST-FINALIZE · 2026-07-08] La métrica `plan_data['clinical_band_score']` se mide
+    DENTRO del pipeline (post-scoring, ~L33865) — ANTES de que `finalize_plan_data_coherence` (pre-INSERT)
+    aplique las ÚLTIMAS mutaciones de macros (FATS-RELEVEL-UNIVERSAL + truth-up + cheese-final). Medido en
+    vivo (plan 830d9aaa): score pre-finalize 0.58 (kcal=0.333) logueado 11s ANTES del finalize — no hay
+    forma de saber, sin SQL forense, si el kcal del plan REALMENTE ENTREGADO quedó en banda.
+
+    `clear_stale_low_band_degraded` (mismo día) ya resuelve el falso-positivo del BANNER recomputando
+    este mismo score post-finalize — pero SOLO cuando `_quality_degraded` ya estaba marcado `low_band_*`,
+    y descarta el resultado recomputado sin persistirlo. Para un plan NO flagged (el caso común), la
+    métrica que llega a `pipeline_metrics`/SQL forense sigue siendo la lectura stale pre-finalize.
+
+    Este helper SIEMPRE recomputa sobre el estado ENTREGADO (independiente del flag de degradado) y
+    sobrescribe `plan_data['clinical_band_score']` con la lectura fresca. NO toca `_quality_degraded`
+    (esa decisión sigue siendo exclusiva de `clear_stale_low_band_degraded`, que corre por separado
+    en el mismo call site). Idempotente, fail-safe (nunca bloquea el INSERT), gateado por knob.
+    Devuelve True si actualizó. tooltip-anchor: P1-BAND-SCORE-POST-FINALIZE"""
+    if not (BAND_SCORE_POST_FINALIZE_REFRESH_ENABLED and isinstance(plan_data, dict)):
+        return False
+    try:
+        _prev = plan_data.get("clinical_band_score")
+        _prev_val = _prev.get("score") if isinstance(_prev, dict) else None
+        try:
+            refresh_delivered_macros(plan_data)  # summary display refleja los meals finalizados
+        except Exception:
+            pass
+        _bs = compute_clinical_band_score(plan_data, {})
+        _val = _bs.get("score")
+        if _val is None:
+            return False
+        plan_data["clinical_band_score"] = _bs
+        logger.info(
+            f"🎯 [CLINICAL BAND SCORE/post-finalize] Precisión medida (ENTREGADO): {_val:.2f} "
+            f"({_bs.get('cells_in_band')}/{_bs.get('cells_total')} celdas en banda; "
+            f"por-macro {_bs.get('per_macro')}; pre-finalize era {_prev_val})"
+        )
+        return True
+    except Exception as _bsr_e:
+        logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] no-op: {type(_bsr_e).__name__}: {_bsr_e}")
         return False
 
 

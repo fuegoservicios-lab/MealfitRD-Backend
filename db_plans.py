@@ -864,6 +864,15 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
                     _csd(_pd)
                 except Exception as _csd_e:
                     logger.debug(f"[P1-BAND-DEGRADED-STALE-CLEAR] pre-INSERT no-op: {type(_csd_e).__name__}: {_csd_e}")
+                # [P1-BAND-SCORE-POST-FINALIZE · 2026-07-08] La métrica `clinical_band_score` persistida
+                # hasta acá era la medida DENTRO del pipeline, pre-finalize (stale para TODO plan, no solo
+                # los flagged degradado que _csd ya cubre). Refresca sobre el estado ENTREGADO — corre
+                # SIEMPRE, independiente de si _csd limpió algo. CLEAR-ONLY del flag sigue siendo de _csd.
+                try:
+                    from graph_orchestrator import refresh_clinical_band_score_post_finalize as _rbs
+                    _rbs(_pd)
+                except Exception as _rbs_e:
+                    logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] pre-INSERT no-op: {type(_rbs_e).__name__}: {_rbs_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] pre-INSERT no-op: {type(_fce).__name__}: {_fce}")
 
