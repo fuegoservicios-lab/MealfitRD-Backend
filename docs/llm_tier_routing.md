@@ -33,6 +33,31 @@ Los per-feature knobs `MEALFIT_<FEATURE>_MODEL` se preservan y **siempre
 ganan** sobre el tier-routing (rollback / A-B sin redeploy, convención
 P3-PREVIEW-MODEL-KNOB).
 
+## Thinking mode (razonamiento nativo V4) por superficie
+
+[P1-REVIEWER-THINKING · 2026-07-05 · P2-THINKING-EFFORT · 2026-07-06 · P1-FACTCHECKER-THINKING · 2026-07-08]
+DeepSeek-V4 trae razonamiento nativo ON de fábrica; el repo lo apaga globalmente
+(`P1-DEEPSEEK-THINKING-OFF` — en day-gen midió >170s → fallback matemático). Se
+re-activa SELECTIVAMENTE solo en superficies de **juicio clínico** de bajo volumen.
+
+**Regla empírica (A/B sesión 2026-07-08):** el thinking rinde en superficies de
+**output chico (juicio)** y es contraproducente en **output grande (generación)**,
+donde revienta el timeout. Restricción del API: thinking NO soporta el `tool_choice`
+forzado de `function_calling` → structured output vía `method="json_mode"`; `bind_tools`
+sin tool_choice forzado sí lo soporta nativo.
+
+| Superficie | Output | Knob | Estado | Effort | Medición |
+|---|---|---|---|---|---|
+| Reviewer médico (risk-tier) | chico (veredicto) | `MEALFIT_REVIEWER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=90) | **ON** | `max` | mejor estratificación de riesgo (tomate moderado vs alto); sin penalización de latencia en veredicto chico |
+| Fact-checker clínico (FASE 1) | chico (reporte) | `MEALFIT_FACT_CHECKER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=60) | **ON** | `high` | A/B warfarina+mariscos: HIGH atrapó interacción fibra↔absorción + CYP450 + cross-react sistemática que OFF omitió. `max` (72s) no superó a `high` (53s) → high = sweet spot. Usa `bind_tools` → thinking nativo (sin json_mode) |
+| Corrector quirúrgico (escalada Pro) | **grande (día completo)** | `MEALFIT_SURGICAL_PRO_THINKING` (+`_EFFORT`) | **OFF** | — | A/B caso pollo-duplicado: OFF=17s `pro_success` con fix correcto; HIGH y MAX = **timeout (120s)** → `None`. Generación grande + reasoning revienta el cap Y compite con el budget del pipeline |
+| Day-gen / planner | grande | — | **OFF permanente** | — | `P1-DEEPSEEK-THINKING-OFF`: numérico = motor determinista |
+
+Todos los knobs de thinking **nacen OFF** (convención medir→actuar) y hacen **fail-open
+al path estándar** (nunca a aprobar/omitir el gate clínico). Test ancla del reviewer/surgical:
+[`test_p1_reviewer_thinking.py`](../tests/test_p1_reviewer_thinking.py); del fact-checker:
+[`test_p1_factchecker_thinking.py`](../tests/test_p1_factchecker_thinking.py).
+
 ## Knobs nuevos
 
 | Knob | Default | Efecto |

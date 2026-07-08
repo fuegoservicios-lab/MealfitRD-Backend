@@ -9360,6 +9360,19 @@ SURGICAL_PRO_THINKING_ENABLED = _env_bool("MEALFIT_SURGICAL_PRO_THINKING", False
 SURGICAL_PRO_THINKING_EFFORT = str(_env_str("MEALFIT_SURGICAL_PRO_THINKING_EFFORT", "")).strip().lower()
 if SURGICAL_PRO_THINKING_EFFORT not in ("", "low", "medium", "high", "max"):
     SURGICAL_PRO_THINKING_EFFORT = ""
+# [P1-FACTCHECKER-THINKING · 2026-07-08] Tercera superficie de JUICIO clínico: el
+# fact-checker (FASE 1) que investiga alergias/condiciones/reacciones cruzadas. Cae en
+# la categoría "output chico = juicio" (como el reviewer, donde el thinking rinde), NO
+# en "output grande = generación" (como el corrector quirúrgico, que revienta el
+# timeout). Usa bind_tools SIN tool_choice forzado → thinking nativo (sin json_mode).
+# Ya está gated a perfiles con flags médicos reales (_has_real_medical_flags). El
+# reporte alimenta al reviewer → mejora compuesta. Nace OFF (medir→actuar). El cap de
+# 30s/iter es muy justo para reasoning → se sube en la rama thinking vía knob dedicado.
+FACT_CHECKER_THINKING_ENABLED = _env_bool("MEALFIT_FACT_CHECKER_THINKING", False)
+FACT_CHECKER_THINKING_EFFORT = str(_env_str("MEALFIT_FACT_CHECKER_THINKING_EFFORT", "")).strip().lower()
+if FACT_CHECKER_THINKING_EFFORT not in ("", "low", "medium", "high", "max"):
+    FACT_CHECKER_THINKING_EFFORT = ""
+FACT_CHECKER_THINKING_TIMEOUT_S = _env_int("MEALFIT_FACT_CHECKER_THINKING_TIMEOUT_S", 60, lambda v: 20 <= v <= 180)
 # [P1-NIGHT-RICE-INGREDIENT · 2026-07-01] (audit slots GAP-1) Los 3 detectores de slot son name-only por diseño
 # (anti-falso-positivo) → una cena «Bowl criollo de pollo» con "180g de arroz blanco" en ingredients[] pasaba las
 # 4 superficies sin detección. Segundo pase INGREDIENT-DRIVEN del autofix, SOLO para cena: si un ingrediente
@@ -9586,6 +9599,12 @@ VARIETY_REPORT_ENABLED = _env_bool("MEALFIT_VARIETY_REPORT", True)
 # del ingrediente añadido en el nombre. Flip a False revierte al comportamiento legacy. Anchor:
 # P2-DISH-COHERENCE.
 CLOSER_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_CLOSER_DISH_COHERENCE", True)
+# [P1-CLOSER-SWEET-NO-LEGUME · 2026-07-08] (review plan 9b6a43f6: "Crujiente de Frutos Secos y Ciruela"
+# recibió guisantes secos como proteína añadida) en un snack DULCE (fruta+nueces) una legumbre salada
+# (guisantes/lentejas/habichuelas/garbanzos) es tan incongruente como carne/pescado → se excluye del pool
+# junto con la carne. Si el pool queda vacío el closer no fuerza el combo (el piso de proteína se cubre en
+# comidas saladas). Rollback: =false. tooltip-anchor: P1-CLOSER-SWEET-NO-LEGUME
+CLOSER_SWEET_NO_LEGUME = _env_bool("MEALFIT_CLOSER_SWEET_NO_LEGUME", True)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Congruencia del closer por token ESPECÍFICO del nombre (ricotta/mozzarella/
 # pollo) en vez del primer token genérico ("queso"). Cierra el bug "batido con ricotta recibe un 2º queso
 # (mozzarella)". Flip a False revierte al match por primer-token. tooltip-anchor: P1-CLOSER-COHERENCE
@@ -10664,6 +10683,15 @@ SODIUM_EXCESS_GATE_RATIO = _env_float("MEALFIT_SODIUM_EXCESS_GATE_RATIO", 1.5)
 # pero con un día individual <60% del piso en ≥2 micros accionables marca banner honesto (banner-only,
 # jamás retry — corre fuera del grafo). Thresholds en micronutrients (MEALFIT_MICRO_PERDAY_RATIO/_MIN_MICROS).
 MICRO_PERDAY_DEGRADE_ENABLED = _env_bool("MEALFIT_MICRO_PERDAY_DEGRADE", True)
+# [P1-MICRO-WORSTDAY-EXCLUDE-UNREACHABLE · 2026-07-08] (plan vivo 9b6a43f6: macro-perfecto band 0.833 pero
+# marcado _quality_degraded por worst_day=[vit_e, omega3]) los fat-micros estructuralmente difíciles de
+# alimentos enteros (omega-3 exige mucho pescado/linaza; vit E nueces/aceites; vit D sol/suplemento) — ya
+# cubiertos por la tarjeta de suplementación + el fatswap/seed hacen su mejor esfuerzo determinista — NO
+# deben marcar "degradado" un plan por lo demás sólido (el banner asustaba por algo nutricionalmente
+# inevitable). Se excluyen del trigger del worst-day; si quedan micros CERRABLES cortos (fibra/Ca/hierro),
+# el banner sigue. Rollback: =false (todos disparan). tooltip-anchor: P1-MICRO-WORSTDAY-EXCLUDE-UNREACHABLE
+MICRO_WORSTDAY_EXCLUDE_UNREACHABLE = _env_bool("MEALFIT_MICRO_WORSTDAY_EXCLUDE_UNREACHABLE", True)
+_MICRO_WORSTDAY_EXCLUDE = ("vit_d_mcg", "omega3_g", "vit_e_mg")
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M2) Targeting per-día del micro-closer — el follow-up que
 # P1-MICRO-PERDAY-FLOOR declaró explícitamente: los micros "low" del worst-day flaggeado entran al
 # set de floors del closer (el loop per-día interno solo escala los DÍAS deficientes). Nace OFF por
@@ -14474,7 +14502,9 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # de proteína se cubre en las comidas saladas, no se fuerza un combo aberrante). Gateado por coherencia de plato.
         if CLOSER_DISH_COHERENCE_ENABLED and _pool and _is_sweet_meal(meal, _sa):
             _pool_meat_free = [(info, nlow) for (info, nlow) in _pool
-                               if not any(h in nlow for h in _MEAT_PROTEIN_HINT)]
+                               if not any(h in nlow for h in _MEAT_PROTEIN_HINT)
+                               and not (CLOSER_SWEET_NO_LEGUME
+                                        and any(h in nlow for h in _LEGUME_PROTEIN_HINT))]
             # [P1-CLOSER-SWEET-DAIRY · 2026-07-07] preferir lácteo dulce-compatible (yogurt/cottage/
             # ricotta) sobre el queso salado; caer al queso solo si no hay ninguno (piso de proteína).
             if CLOSER_SWEET_DAIRY_ENABLED and allergies is not None:
@@ -19273,7 +19303,8 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
         return 0
 
 
-def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None) -> tuple:
+def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None, *,
+                                 main_goal=None, target_macros=None) -> tuple:
     """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
     forma DEFENSIVA antes de cualquier persist, para los paths que saltan assemble_plan_node (partial/degradado/SSE-fallback/
     chunk). ORDEN load-bearing: slice-grams ANTES de quantize ("1¼ lonja de queso"→"30 g" antes de redondear gramos);
@@ -19435,6 +19466,28 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                 total += _ncf; parts.append(f"cheese_final={_ncf}")
     except Exception as _ecf:
         logger.warning(f"[P1-CHUNK-FINALIZE-PARITY] cheese-final no-op: {type(_ecf).__name__}: {_ecf}")
+    # [P1-CHUNK-GAINMUSCLE-PARITY · 2026-07-08] El gainmuscle day-kcal-floor (re-relleno final) SOLO corría
+    # en `_apply_macro_engine` (assemble/semana 1) → los días de bulk de las semanas 2+ (chunks, ~27 de 30
+    # días) que los recortes tardíos dejaban bajo banda NUNCA se re-rellenaban (mismo defecto del plan
+    # c2aef769 Día 3, pero en chunks). Corre aquí como ÚLTIMA pasada aditiva (tras relevel+cheese-final,
+    # espejo del orden de assemble) + re-quantize + step-sync. Gated por goal bulk + target_macros provisto
+    # por el caller (chunk worker los deriva de plan_data). Idempotente/fail-safe. tooltip-anchor: P1-CHUNK-GAINMUSCLE-PARITY
+    try:
+        if (GAINMUSCLE_DAY_KCAL_FLOOR_ENABLED and GAINMUSCLE_FLOOR_FINAL_REFILL
+                and main_goal and isinstance(target_macros, dict)):
+            _gm_ck = _repair_gainmuscle_day_kcal(
+                days, {"macros": target_macros}, {"mainGoal": main_goal}, final_pass=True)
+            if _gm_ck:
+                total += _gm_ck; parts.append(f"gainmuscle_refill={_gm_ck}")
+                if ASSEMBLE_FINAL_QUANTIZE:
+                    from nutrition_db import IngredientNutritionDB as _GmCkDB
+                    _apply_portion_quantization({"days": days}, db or _GmCkDB())
+                for _gm_d in days or []:
+                    for _gm_m in (_gm_d.get("meals") or []) if isinstance(_gm_d, dict) else []:
+                        if isinstance(_gm_m, dict) and _gm_m.get("_gainmuscle_kcal_floor"):
+                            _sync_recipe_step_quantities(_gm_m)
+    except Exception as _egm_ck:
+        logger.warning(f"[P1-CHUNK-GAINMUSCLE-PARITY] gainmuscle-refill no-op: {type(_egm_ck).__name__}: {_egm_ck}")
     # [P1-RECIPE-QTY-SYNC · 2026-07-01] post-quantize: los pasos reflejan las cantidades actuales (paridad
     # con assemble/finalizador de updates; el persist boundary cubre partial/degradado/SSE-fallback).
     try:
@@ -27826,11 +27879,30 @@ async def review_plan_node(state: PlanState) -> dict:
             # hardcodeaba `gemini-3-flash-preview` (Flash regular).
             _fact_checker_model = _fact_checker_model_name(form_data)  # P2-ORCH-7 risk-tier
             _fact_checker_cb = _get_circuit_breaker(_fact_checker_model)
-            fact_checker_llm = ChatDeepSeek(
-                model=_fact_checker_model,
-                temperature=0.0,
-            ).bind_tools([consultar_base_datos_medica])
-            
+            # [P1-FACTCHECKER-THINKING · 2026-07-08] Rama thinking: razonamiento nativo
+            # ANTES de decidir qué reacciones cruzadas/interacciones investigar y cómo
+            # sintetizar el reporte que alimenta al reviewer. bind_tools SIN tool_choice
+            # forzado → thinking nativo (no requiere json_mode). El nodo ya está gated a
+            # perfiles con flags médicos reales, así que el costo vive solo donde importa.
+            _fc_thinking = FACT_CHECKER_THINKING_ENABLED
+            if _fc_thinking:
+                _fc_think_body = {"type": "enabled"}
+                if FACT_CHECKER_THINKING_EFFORT:
+                    _fc_think_body["effort"] = FACT_CHECKER_THINKING_EFFORT
+                fact_checker_llm = ChatDeepSeek(
+                    model=_fact_checker_model,
+                    temperature=0.0,
+                    extra_body={"thinking": _fc_think_body},
+                ).bind_tools([consultar_base_datos_medica])
+                logger.info(f"🧠 [P1-FACTCHECKER-THINKING] Fact-checker clínico con thinking mode "
+                            f"({_fact_checker_model}, iter_timeout={FACT_CHECKER_THINKING_TIMEOUT_S}s"
+                            f"{', effort=' + FACT_CHECKER_THINKING_EFFORT if FACT_CHECKER_THINKING_EFFORT else ''}).")
+            else:
+                fact_checker_llm = ChatDeepSeek(
+                    model=_fact_checker_model,
+                    temperature=0.0,
+                ).bind_tools([consultar_base_datos_medica])
+
             fc_sys_prompt = "Eres un investigador clínico. Revisa las alergias y condiciones médicas frente a los ingredientes presentados. Usa tu herramienta para investigar posibles reacciones cruzadas, contraindicaciones o interacciones peligrosas. Cuando termines o si no ves riesgo, responde con un REPORTE CLÍNICO CONCISO con tus hallazgos."
             
             # [P3-COST-FACTCHECK-INGREDIENTS-DEDUP · 2026-06-01] Dedup EXACTO
@@ -27848,13 +27920,17 @@ async def review_plan_node(state: PlanState) -> dict:
                 HumanMessage(content=f"Alergias: {allergies}\nCondiciones: {medical_conditions}\nDieta: {diet_type}\nIngredientes a evaluar: {_fc_ingredients}")
             ]
             
+            # [P1-FACTCHECKER-THINKING · 2026-07-08] El cap de 30s/iter es muy justo para
+            # reasoning → en la rama thinking se sube al knob dedicado (default 60s). La
+            # rama estándar conserva 30s (peor caso 4×30=120s + tool calls).
+            _fc_iter_timeout = float(FACT_CHECKER_THINKING_TIMEOUT_S) if _fc_thinking else 30.0
             for step in range(4): # Límite de 4 iteraciones
                 try:
                     # P0-4: Hard timeout con cancelación graceful. 4 iteraciones
                     # secuenciales sin tope explícito podían colgarse acumulativamente;
                     # 30s/iter mantiene peor caso del fact-check ~120s + tool calls.
                     fc_response = await _safe_ainvoke(
-                        fact_checker_llm, fc_messages, timeout=30.0
+                        fact_checker_llm, fc_messages, timeout=_fc_iter_timeout
                     )
                     fc_messages.append(fc_response)
 
@@ -33241,8 +33317,15 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
             _pdf = _mn.get("per_day_floors")
             if isinstance(_pdf, dict) and _pdf.get("flagged"):
                 _wd = _pdf.get("worst_day") or {}
-                reason = "micro_worst_day"
-                detail = f"día {int(_wd.get('day_index', 0)) + 1}: {','.join(_wd.get('low') or [])}"
+                # [P1-MICRO-WORSTDAY-EXCLUDE-UNREACHABLE] omega3/vitE/vitD (difíciles de alimentos enteros,
+                # ya con tarjeta de suplemento) no marcan degradado; si tras excluirlos queda un micro
+                # CERRABLE corto (fibra/Ca/hierro/etc.), el banner sigue.
+                _wd_low = list(_wd.get("low") or [])
+                if MICRO_WORSTDAY_EXCLUDE_UNREACHABLE:
+                    _wd_low = [k for k in _wd_low if k not in _MICRO_WORSTDAY_EXCLUDE]
+                if _wd_low:
+                    reason = "micro_worst_day"
+                    detail = f"día {int(_wd.get('day_index', 0)) + 1}: {','.join(_wd_low)}"
         # 2c) [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M1) Worst-day de TECHOS: promedio OK pero un
         # día-pico excede un techo (sodio/azúcar/satfat/K-renal) × ratio. El caso de mayor valor
         # clínico es el K en ERC (riesgo agudo de hiperkalemia — la propia justificación de

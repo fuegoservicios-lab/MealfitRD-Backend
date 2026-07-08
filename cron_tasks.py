@@ -30179,14 +30179,23 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     # + cheese-final en los días de semanas 2+ (antes solo en assemble → day2
                                     # llegaba a F141 vs 58 con "Tostadas PB+Mango+Queso" 67g SIN capear).
                                     _tf_ck = None
+                                    _tm_ck = None  # [P1-CHUNK-GAINMUSCLE-PARITY · 2026-07-08] target macros numéricos
                                     try:
-                                        _mfats = (plan_data.get("macros") or {}).get("fats")
-                                        if _mfats is not None:
-                                            _mm_tf = re.search(r"(\d+(?:\.\d+)?)", str(_mfats))
-                                            _tf_ck = float(_mm_tf.group(1)) if _mm_tf else None
+                                        _mac_ck = plan_data.get("macros") or {}
+                                        _vals_ck = {}
+                                        for _ks, _kd in (("protein", "protein_g"), ("carbs", "carbs_g"), ("fats", "fats_g")):
+                                            _mm_ck = re.search(r"(\d+(?:\.\d+)?)", str(_mac_ck.get(_ks)))
+                                            _vals_ck[_kd] = float(_mm_ck.group(1)) if _mm_ck else None
+                                        _tf_ck = _vals_ck.get("fats_g")
+                                        if all(_v is not None for _v in _vals_ck.values()):
+                                            _tm_ck = _vals_ck  # el gainmuscle floor necesita los 3 macros
                                     except Exception:
-                                        _tf_ck = None
-                                    _n_ck, _summ_ck = _fpc_chunk(plan_data["days"], target_fats=_tf_ck)
+                                        _tf_ck = None; _tm_ck = None
+                                    # [P1-CHUNK-GAINMUSCLE-PARITY] pasa goal + target_macros → el finalizer re-rellena
+                                    # días de bulk bajo banda en semanas 2+ (paridad con assemble/semana 1).
+                                    _n_ck, _summ_ck = _fpc_chunk(
+                                        plan_data["days"], target_fats=_tf_ck,
+                                        main_goal=plan_data.get("main_goal"), target_macros=_tm_ck)
                                     if _n_ck:
                                         logger.info(f"🧩 [P1-COHERENCE-FINALIZE] chunk T1 plan {meal_plan_id} semana "
                                                     f"{week_number} ({_summ_ck}).")

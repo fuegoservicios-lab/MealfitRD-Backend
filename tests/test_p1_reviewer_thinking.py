@@ -37,6 +37,12 @@ def test_knobs_born_off():
     assert '_env_bool("MEALFIT_REVIEWER_THINKING", False)' in _GO
     assert '_env_bool("MEALFIT_SURGICAL_PRO_THINKING", False)' in _GO
     assert '_env_int("MEALFIT_REVIEWER_THINKING_TIMEOUT_S", 90' in _GO
+    # [P2-THINKING-EFFORT] knob de effort del quirúrgico (espejo del reviewer).
+    assert '_env_str("MEALFIT_SURGICAL_PRO_THINKING_EFFORT", "")' in _GO
+    # [P1-FACTCHECKER-THINKING] tercera superficie (fact-checker FASE 1).
+    assert '_env_bool("MEALFIT_FACT_CHECKER_THINKING", False)' in _GO
+    assert '_env_str("MEALFIT_FACT_CHECKER_THINKING_EFFORT", "")' in _GO
+    assert '_env_int("MEALFIT_FACT_CHECKER_THINKING_TIMEOUT_S", 60' in _GO
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +52,10 @@ def test_knobs_born_off():
 def test_reviewer_thinking_gated_to_medical_risk():
     i = _GO.index("_rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data))")
     win = _GO[i:i + 900]
-    assert '"thinking": {"type": "enabled"}' in win
+    # [P2-THINKING-EFFORT] el body de thinking se construye en `_think_body` para
+    # poder inyectar `effort` opcional; extra_body lo referencia por variable.
+    assert '_think_body = {"type": "enabled"}' in win
+    assert 'extra_body={"thinking": _think_body}' in win
     assert 'method="json_mode"' in win, \
         "thinking no soporta tool_choice forzado → structured output vía json_mode"
     # la rama estándar (sin riesgo) queda intacta.
@@ -80,11 +89,17 @@ def test_reviewer_prompt_contract_exists():
 
 def test_surgical_pro_thinking_branch():
     i = _GO.index("if SURGICAL_PRO_THINKING_ENABLED:")
-    win = _GO[i:i + 700]
-    assert '"thinking": {"type": "enabled"}' in win
+    win = _GO[i:i + 1200]
+    # [P2-THINKING-EFFORT] body en `_surg_think_body` para inyectar effort opcional.
+    assert '_surg_think_body = {"type": "enabled"}' in win
+    assert 'extra_body={"thinking": _surg_think_body}' in win
     assert 'with_structured_output(SingleDayPlanModel, method="json_mode")' in win
     # rama por defecto intacta (function_calling implícito).
     assert ".with_structured_output(SingleDayPlanModel)\n" in win
+
+
+# NOTA: la 3ra superficie (fact-checker clínico, P1-FACTCHECKER-THINKING) tiene su
+# propio archivo de regresión: `test_p1_factchecker_thinking.py` (cross-link del marker).
 
 
 # ---------------------------------------------------------------------------
