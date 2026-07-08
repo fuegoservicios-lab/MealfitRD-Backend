@@ -48,7 +48,7 @@ sin tool_choice forzado sí lo soporta nativo.
 
 | Superficie | Output | Knob | Estado | Effort | Medición |
 |---|---|---|---|---|---|
-| Reviewer médico (risk-tier) | chico (veredicto) | `MEALFIT_REVIEWER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=90) | **ON** | `max` | mejor estratificación de riesgo (tomate moderado vs alto); sin penalización de latencia en veredicto chico |
+| Reviewer médico (risk-tier) | chico (veredicto) | `MEALFIT_REVIEWER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=90) | **ON** | `medium` | Sweep OFF/low/medium/high/max (caso látex): `low` atrapó lo MISMO que `max` (4 cross-react + gradación tomate) a igual velocidad → **max = overkill** (el reviewer solo escanea+juzga contra el reporte del fact-checker, no razona desde cero). `medium` = hedge para planes reales de 7 días; `low` es el piso probado suficiente |
 | Fact-checker clínico (FASE 1) | chico (reporte) | `MEALFIT_FACT_CHECKER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=60) | **ON** | `high` | A/B warfarina+mariscos: HIGH atrapó interacción fibra↔absorción + CYP450 + cross-react sistemática que OFF omitió. `max` (72s) no superó a `high` (53s) → high = sweet spot. Usa `bind_tools` → thinking nativo (sin json_mode) |
 | Corrector quirúrgico (escalada Pro) | **grande (día completo)** | `MEALFIT_SURGICAL_PRO_THINKING` (+`_EFFORT`) | **OFF** | — | A/B caso pollo-duplicado: OFF=17s `pro_success` con fix correcto; HIGH y MAX = **timeout (120s)** → `None`. Generación grande + reasoning revienta el cap Y compite con el budget del pipeline |
 | Day-gen / planner | grande | — | **OFF permanente** | — | `P1-DEEPSEEK-THINKING-OFF`: numérico = motor determinista |
