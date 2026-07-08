@@ -7677,19 +7677,38 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # total. Si excede, vaciar weight units y setear 'g' al cap.
     _OLIVE_SUBSTRINGS = ('aceituna', 'olive')
     _OLIVE_UNIT_SUBSTRINGS = ('frasco', 'botella', 'pote')
-    _OLIVE_FRASCO_GRAMS = 340.194  # 12 oz frasco estándar dominicano
+    _OLIVE_FRASCO_GRAMS_DEFAULT = 340.194  # 12 oz — fallback si el catálogo no resuelve container
     _WEIGHT_UNIT_TO_G = {
         'g': 1.0, 'kg': 1000.0, 'oz': 28.3495,
         'lb': 453.592, 'lbs': 453.592, 'ml': 1.0, 'l': 1000.0,
     }
 
     _olive_cap_frascos = max(1, int(round(_person_weeks / 3.0)))
-    _olive_cap_g = _olive_cap_frascos * _OLIVE_FRASCO_GRAMS
 
     for _name, _units in list(aggregated.items()):
         _name_norm = strip_accents(_name.lower()).strip()
         if not any(s in _name_norm for s in _OLIVE_SUBSTRINGS):
             continue
+        # [P1-OLIVE-CAP-REAL-CONTAINER · 2026-07-08] (SQL forense vivo) `_OLIVE_FRASCO_GRAMS`
+        # estaba hardcodeado a 340.194g (12oz) desde P5-OLIVE-CAP original, pero el catálogo
+        # REAL de `master_ingredients` tiene 'Aceitunas' con `container_weight_g=142` (frasco
+        # más chico) — un cap calibrado a "3 frascos" con la constante vieja calculaba
+        # `_olive_cap_g=1021g`, que `apply_smart_market_units` (BLOQUE 1, container REAL)
+        # convertía de vuelta a ~8 frascos reales de 142g — el cap "funcionaba" en gramos pero
+        # mentía en unidades de compra (2.7x más frascos de los pretendidos). Resuelve el
+        # tamaño REAL desde `master_map` (ya indexado arriba, línea ~7002) y solo cae al
+        # default hardcodeado si el catálogo no tiene el dato — nunca vuelve a driftear.
+        _olive_m_item = (master_map.get(_name) or master_map.get(_name.lower())
+                          or master_map.get(_name.title()))
+        _OLIVE_FRASCO_GRAMS = _OLIVE_FRASCO_GRAMS_DEFAULT
+        if _olive_m_item:
+            try:
+                _real_container_g = float(_olive_m_item.get("container_weight_g") or 0)
+                if _real_container_g > 0:
+                    _OLIVE_FRASCO_GRAMS = _real_container_g
+            except (TypeError, ValueError):
+                pass
+        _olive_cap_g = _olive_cap_frascos * _OLIVE_FRASCO_GRAMS
         # Cap unit-based ('frasco', 'botella', 'pote' substring)
         for _unit_key in list(_units.keys()):
             if not isinstance(_unit_key, str):
@@ -7724,7 +7743,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             logging.warning(
                 f"[P5-OLIVE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_olive_cap_g:.0f}g "
-                f"(≈{_olive_cap_frascos} frascos 12oz; "
+                f"(≈{_olive_cap_frascos} frascos de {_OLIVE_FRASCO_GRAMS:.0f}g; "
                 f"person_weeks={_person_weeks:.1f})"
             )
         # [P6-OLIVE-CAP-FIX-4] Cap por COUNT cuando LLM emite "X aceitunas"
@@ -7786,7 +7805,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             logging.warning(
                 f"[P5-OLIVE-CAP] '{_name}' volumétrico cap: {_vol_total_g:.0f}g "
                 f"(de {_vol_present}) → {_olive_cap_g:.0f}g "
-                f"(≈{_olive_cap_frascos} frascos 12oz; "
+                f"(≈{_olive_cap_frascos} frascos de {_OLIVE_FRASCO_GRAMS:.0f}g; "
                 f"person_weeks={_person_weeks:.1f})"
             )
 
