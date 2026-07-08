@@ -33,7 +33,21 @@ from shopping_calculator import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_master_cache():
+def _reset_master_cache(monkeypatch):
+    # [P1-SHOPTEST-NO-EMBED-INIT · 2026-07-08] Estos tests ejercitan la LÓGICA DE CAPS del aggregator
+    # (aceitunas/vegetales/cítricos), NO la resolución semántica de nombres. Pero el conftest abre el
+    # connection pool → `get_master_ingredients()` puebla los ~203 nombres reales del catálogo. Cuando
+    # un ingrediente NO resuelve por regex (p.ej. "lima", que no está en el catálogo verificado),
+    # `normalize_name` → `get_semantic_cache` dispara `_batched_embed_documents`: init del semantic
+    # cache embebiendo los 203 nombres contra Cohere en 21 batches seriales (batch=10, delay=0.5s) +
+    # retries de 429 → 2-3 MINUTOS colgado sobre la red real (sin Redis que lo evite en el entorno de
+    # test). Diagnóstico faulthandler confirmó el stack exacto: aggregate→_parse_quantity→normalize_name
+    # →get_semantic_cache→_batched_embed_documents. Desactivar el semantic cache lo manda al Regex
+    # Fast-Path instantáneo — offline, determinista, sin tocar las aserciones de cap (que operan sobre
+    # el nombre YA parseado, aguas abajo de la resolución). NO se pone en conftest (rompería
+    # test_p6_embed_cache_cooldown_bypass / test_p5_embed_cache_e_redis_persistence, que SÍ ejercitan
+    # get_semantic_cache y esperan el path completo). tooltip-anchor: P1-SHOPTEST-NO-EMBED-INIT
+    monkeypatch.setenv("MEALFIT_DISABLE_SEMANTIC_CACHE", "true")
     invalidate_master_cache()
     yield
     invalidate_master_cache()
