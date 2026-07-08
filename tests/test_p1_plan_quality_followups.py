@@ -83,11 +83,13 @@ def test_fu4_unreachable_only_does_not_degrade(go, monkeypatch):
     assert not plan.get("_quality_degraded"), "worst_day solo omega3/vitE → NO degrada (banner limpio)"
 
 
-def test_fu4_closeable_micro_still_degrades(go):
-    plan = _plan_wd(["vit_e_mg", "omega3_g", "fiber_g"])
+def test_fu4_two_closeable_micros_still_degrade(go, monkeypatch):
+    # [P1-MICRO-WORSTDAY-MIN2] ≥2 cerrables cortos → sigue el banner (gap real).
+    monkeypatch.setattr(go, "MICRO_WORSTDAY_MIN2", True)
+    plan = _plan_wd(["vit_e_mg", "omega3_g", "fiber_g", "calcium_mg"])
     go._maybe_mark_panel_degraded(plan, {}, False, 1)
     assert plan.get("_quality_degraded") is True
-    assert plan.get("_quality_degraded_reason") == "micro_worst_day", "fibra cerrable corta → sigue el banner"
+    assert plan.get("_quality_degraded_reason") == "micro_worst_day", "2 cerrables cortos → sigue el banner"
 
 
 def test_fu4_knob_off_reverts(go, monkeypatch):

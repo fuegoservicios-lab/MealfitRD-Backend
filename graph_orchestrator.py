@@ -10692,6 +10692,11 @@ MICRO_PERDAY_DEGRADE_ENABLED = _env_bool("MEALFIT_MICRO_PERDAY_DEGRADE", True)
 # el banner sigue. Rollback: =false (todos disparan). tooltip-anchor: P1-MICRO-WORSTDAY-EXCLUDE-UNREACHABLE
 MICRO_WORSTDAY_EXCLUDE_UNREACHABLE = _env_bool("MEALFIT_MICRO_WORSTDAY_EXCLUDE_UNREACHABLE", True)
 _MICRO_WORSTDAY_EXCLUDE = ("vit_d_mcg", "omega3_g", "vit_e_mg")
+# [P1-MICRO-WORSTDAY-MIN2 · 2026-07-08] tras excluir los inalcanzables, exigir ≥2 micros CERRABLES cortos
+# para degradar — el propio panel flaggea el worst-day con ≥2 micros bajos; si la exclusión deja 1 (p.ej.
+# solo fibra a 80%), cae bajo su umbral y un plan macro-perfecto no debe marcarse "degradado" por un único
+# micro marginal cerrable. Rollback: =false (basta 1). tooltip-anchor: P1-MICRO-WORSTDAY-MIN2
+MICRO_WORSTDAY_MIN2 = _env_bool("MEALFIT_MICRO_WORSTDAY_MIN2", True)
 # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M2) Targeting per-día del micro-closer — el follow-up que
 # P1-MICRO-PERDAY-FLOOR declaró explícitamente: los micros "low" del worst-day flaggeado entran al
 # set de floors del closer (el loop per-día interno solo escala los DÍAS deficientes). Nace OFF por
@@ -16528,7 +16533,10 @@ def _meal_is_no_cook(meal: dict) -> bool:
 # TdF sintetizado (el backstop le añade tiempo por técnica). Rollback: MEALFIT_MISE_COOK_SPLIT=false.
 MISE_COOK_SPLIT_ENABLED = _env_bool("MEALFIT_MISE_COOK_SPLIT", True)
 _MISE_COOK_VERB_RE = _re.compile(
-    r"^(?:tuesta|hierve|cocina|cuece|calienta|saltea|sofrie|hornea|asa|dora|"
+    # [P1-MISE-COOK-COND · 2026-07-08] (plan vivo fcb739fa, merienda de piña: "Si las semillas están crudas,
+    # tuéstalas…" en el Mise) prefijo condicional OPCIONAL: el verbo de cocción no siempre abre la oración.
+    # Sin esto, una cocción condicional del Mise no se separaba a un TdF → falso "Receta con pasos incompletos".
+    r"^(?:si\b[^,]{0,80},\s*)?(?:tuesta|hierve|cocina|cuece|calienta|saltea|sofrie|hornea|asa|dora|"
     r"sella|frie|sancocha|guisa|revuelve|cuaja)\w*\b", _re.IGNORECASE)
 
 
@@ -33323,7 +33331,8 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
                 _wd_low = list(_wd.get("low") or [])
                 if MICRO_WORSTDAY_EXCLUDE_UNREACHABLE:
                     _wd_low = [k for k in _wd_low if k not in _MICRO_WORSTDAY_EXCLUDE]
-                if _wd_low:
+                # [P1-MICRO-WORSTDAY-MIN2] un único micro cerrable marginal no degrada un plan macro-perfecto.
+                if len(_wd_low) >= (2 if MICRO_WORSTDAY_MIN2 else 1):
                     reason = "micro_worst_day"
                     detail = f"día {int(_wd.get('day_index', 0)) + 1}: {','.join(_wd_low)}"
         # 2c) [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M1) Worst-day de TECHOS: promedio OK pero un
