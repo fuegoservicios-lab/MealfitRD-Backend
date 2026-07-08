@@ -195,15 +195,33 @@ _SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAI
 # DELAY=0 para volver al comportamiento de ráfaga única (más rápido).
 EMBED_INIT_BATCH_SIZE     = max(1, _knob_env_int  ("MEALFIT_EMBED_INIT_BATCH_SIZE",      10))
 EMBED_INIT_BATCH_DELAY_S  = max(0.0, _knob_env_float("MEALFIT_EMBED_INIT_BATCH_DELAY_S",   0.5))
+# [P1-EMBED-INIT-DEADLINE · 2026-07-08] Bound wall-clock GLOBAL de la init del semantic cache.
+# La init embebe los ~203 nombres del catálogo contra Cohere en batches seriales; con el proveedor
+# lento/rate-limiting el loop se arrastra minutos SIN tope global. El lock non-blocking (0.05s) protege
+# al usuario síncrono (cae a fast-path si otro thread inicializa), pero el thread que SÍ hace la init en
+# frío (startup warmer, o el primer request antes de que el warmer termine) queda bloqueado hasta que
+# los 21 batches + retries terminen. Este deadline acota ese wall-clock: al excederlo, `_batched_embed_
+# documents` lanza TimeoutError → `get_semantic_cache` lo captura → cooldown 600s + Regex Fast-Path.
+# Default 30s: holgado para la init normal (~15-20s con 203 items) y acota el caso patológico a 30s en
+# vez de minutos. Clamp mínimo 5s para no auto-sabotear la init sana. Rollback: subirlo muy alto (=999).
+EMBED_INIT_DEADLINE_S     = max(5.0, _knob_env_float("MEALFIT_EMBED_INIT_DEADLINE_S",     30.0))
 
 
-def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label):
+def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label, deadline=None):
     """Particiona `embed_documents` en batches para no saturar RPM del modelo.
 
     Cada batch va envuelto en `_gemini_call_with_retry`, así un 429 transitorio
     en el batch K solo reintenta ese batch (los anteriores ya están en `out` y
     no se pierden). Si todos los textos caben en un batch, comportamiento
     idéntico al pre-fix (sin overhead).
+
+    [P1-EMBED-INIT-DEADLINE · 2026-07-08] `deadline` (monotonic timestamp, opcional):
+    si se provee, antes de cada batch del loop multi-batch se verifica el bound
+    wall-clock GLOBAL. Al excederlo se lanza `TimeoutError` → el caller
+    (`get_semantic_cache`) lo captura, activa el cooldown y cae al Regex Fast-Path.
+    El caso single-batch NO chequea deadline (el per-request timeout del provider
+    ya lo acota; el deadline existe para topar la ACUMULACIÓN de N batches seriales).
+    `deadline=None` → comportamiento pre-fix idéntico (backward-compat).
     """
     if len(all_texts) <= batch_size:
         return _gemini_call_with_retry(
@@ -216,6 +234,15 @@ def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label
         f"de hasta {batch_size} ítems con delay {delay_s:.2f}s entre batches."
     )
     for i in range(0, len(all_texts), batch_size):
+        # [P1-EMBED-INIT-DEADLINE] Abortar si la init GLOBAL excedió el bound wall-clock.
+        # Chequeo al TOPE de cada iteración: el primer batch siempre corre (acotado por el
+        # per-request timeout del provider); son los batches ACUMULADOS los que se topan.
+        if deadline is not None and _time.monotonic() > deadline:
+            raise TimeoutError(
+                f"{retry_label}: init excedió el deadline wall-clock "
+                f"({EMBED_INIT_DEADLINE_S:.0f}s) tras {len(out)}/{len(all_texts)} textos "
+                f"({i // batch_size}/{n_batches} batches); cae a Regex Fast-Path + cooldown."
+            )
         chunk = all_texts[i:i + batch_size]
         chunk_idx = (i // batch_size) + 1
         chunk_vectors = _gemini_call_with_retry(
@@ -499,6 +526,10 @@ def get_semantic_cache():
                 embeddings, texts,
                 EMBED_INIT_BATCH_SIZE, EMBED_INIT_BATCH_DELAY_S,
                 retry_label="embed_documents (master_ingredients cache init)",
+                # [P1-EMBED-INIT-DEADLINE · 2026-07-08] tope wall-clock GLOBAL de la init: si Cohere
+                # se arrastra, aborta a los EMBED_INIT_DEADLINE_S y cae al fast-path (el except de abajo
+                # activa el cooldown). Sin esto, el thread de init podía bloquear minutos.
+                deadline=_time.monotonic() + EMBED_INIT_DEADLINE_S,
             )
 
             _semantic_cache = {
