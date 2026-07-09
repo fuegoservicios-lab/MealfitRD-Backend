@@ -560,6 +560,12 @@ CRITIQUE_TIMEOUT_ABORT_THRESHOLD = _env_int("MEALFIT_CRITIQUE_TIMEOUT_ABORT_THRE
 # ============================================================
 CRITIQUE_PRO_FALLBACK_ENABLED   = _env_bool("MEALFIT_CRITIQUE_PRO_FALLBACK_ENABLED",  True)
 CRITIQUE_PRO_FALLBACK_TIMEOUT_S = _env_float("MEALFIT_CRITIQUE_PRO_FALLBACK_TIMEOUT_S", 120.0)
+# [P3-CORRECTOR-NONE-DIAGNOSTIC · 2026-07-09] Cuando el corrector Pro devuelve None SIN excepción, el
+# structured-output no produjo un SingleDayPlanModel válido (vacío/no-parseable/refusal) — punto ciego:
+# el log dice "retornó None" pero no POR QUÉ. Con el knob ON, re-invoca el modelo RAW (sin structured
+# output) y loguea content + finish_reason → revela el patrón. Default OFF (una 2ª llamada cuesta tokens/
+# tiempo; solo para diagnóstico). Cero-ripple: no toca success-path ni emit de costo. Forense corr=8b721589.
+CORRECTOR_NONE_DIAGNOSTIC_ENABLED = _env_bool("MEALFIT_CORRECTOR_NONE_DIAGNOSTIC", False)
 
 # --- Progress callbacks (SSE) ---
 PROGRESS_CB_MAX_PENDING     = _env_int  ("MEALFIT_PROGRESS_CB_MAX_PENDING",     1000)
@@ -5487,6 +5493,32 @@ async def _attempt_pro_critique_correction(
             )
             return corrected, "pro_success"
         await pro_cb.arecord_failure()
+        # [P3-CORRECTOR-NONE-DIAGNOSTIC · 2026-07-09] El structured-output devolvió None sin excepción →
+        # hoy no sabemos POR QUÉ (vacío/prosa/JSON malformado/refusal). Bajo el knob (default OFF), re-
+        # invoca el modelo RAW (sin structured output) con el MISMO prompt y loguea content + finish_reason.
+        # Fresh call (puede diferir del original) pero revela el patrón de fallo. Fail-safe: jamás rompe el
+        # path del corrector. tooltip-anchor: P3-CORRECTOR-NONE-DIAGNOSTIC
+        if CORRECTOR_NONE_DIAGNOSTIC_ENABLED:
+            try:
+                _raw_llm = ChatDeepSeek(
+                    model=_PRO_MODEL_NAME, temperature=0.3, max_retries=0,
+                    timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
+                )  # SIN with_structured_output → devuelve el AIMessage crudo
+                _raw = await _safe_ainvoke(
+                    _raw_llm, correction_prompt, timeout=CRITIQUE_PRO_FALLBACK_TIMEOUT_S,
+                )
+                _raw_content = str(getattr(_raw, "content", "") or "")
+                _finish_reason = (getattr(_raw, "response_metadata", {}) or {}).get("finish_reason")
+                logger.warning(
+                    f"🔬 {log_prefix} [CORRECTOR-NONE-DIAGNOSTIC] Día {day_num}: raw re-invoke → "
+                    f"finish_reason={_finish_reason!r} len={len(_raw_content)} "
+                    f"content[:300]={_raw_content[:300]!r}"
+                )
+            except Exception as _diag_e:
+                logger.warning(
+                    f"{log_prefix} [CORRECTOR-NONE-DIAGNOSTIC] re-invoke diagnóstico falló "
+                    f"(no bloquea): {type(_diag_e).__name__}: {_diag_e}"
+                )
         logger.warning(
             f"⚠️ {log_prefix} {_PRO_MODEL_NAME} retornó None para Día {day_num}. "
             f"Manteniendo original."
