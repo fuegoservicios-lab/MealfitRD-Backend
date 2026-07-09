@@ -6515,11 +6515,53 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
     days = (skeleton or {}).get("days") or []
     if not days:
         return counts
-    # Ramas por clase (añadidas por Tasks 2-5, cada una bajo su propio knob):
-    #   clase 3 (HARDEN_CONDITION_CATALOG) — filtro de pool por condición médica
-    #   clase 5 (HARDEN_SALTCURED_MAIN)    — exclusión salado-como-principal
-    #   clase 1 (HARDEN_SAMEDAY_PROTEIN)   — binding slot→proteína mismo día
-    #   clase 2 (HARDEN_CROSSDAY_QUOTA)    — cuota round-robin cross-día
+
+    # ── Clase 3 · HARDEN_CONDITION_CATALOG — filtro de pool por condición médica ──
+    # El catálogo (_get_fast_filtered_catalogs) filtra alergias/dislikes/dieta pero NUNCA condiciones
+    # médicas → toronja/arroz-blanco/embutidos/bacalao quedaban en el pool de un DM2/HTA y solo se
+    # corregían post-hoc. Reusa el SSOT de tokens de condition_rules.collect_substitutions, actuando
+    # SOLO sobre filas food-identity (preserve_qty=True; las frases de sazón preserve_qty=False no son
+    # items de pool). NUNCA vacía un pool — el backstop post-hoc collect_substitutions caza el residuo
+    # de la canasta sobre-restringida. tooltip-anchor: A1-HARDEN-POOLS
+    if HARDEN_CONDITION_CATALOG:
+        try:
+            from constants import strip_accents as _sa
+            import condition_rules as _cr
+            _subs = _cr.collect_substitutions(form_data or {}, (form_data or {}).get("dietType")) or []
+            _tok_rows = []  # [(tokens, negatives)] solo food-identity
+            for _s in _subs:
+                if not _s.get("preserve_qty"):
+                    continue
+                _toks = tuple(_sa(str(t).lower()) for t in (_s.get("tokens") or ()) if str(t).strip())
+                _negs = tuple(_sa(str(n).lower()) for n in (_s.get("negatives") or ()) if str(n).strip())
+                if _toks:
+                    _tok_rows.append((_toks, _negs))
+            if _tok_rows:
+                def _is_contraindicated(_item):
+                    _n = _sa(str(_item).lower())
+                    for _toks, _negs in _tok_rows:
+                        if any(_ng in _n for _ng in _negs):
+                            continue  # negative → legítimo para esta regla (p.ej. 'arroz integral')
+                        if any(_tk in _n for _tk in _toks):
+                            return True
+                    return False
+                for _d in days:
+                    for _field in ("protein_pool", "carb_pool", "fruit_pool"):
+                        _orig = _d.get(_field) or []
+                        if not _orig:
+                            continue
+                        _kept = [x for x in _orig if not _is_contraindicated(x)]
+                        if len(_kept) < len(_orig) and _kept:
+                            counts["condition_removed"] += (len(_orig) - len(_kept))
+                            _d[_field] = _kept
+                        # _kept vacío → conservar original (nunca vaciar; post-hoc lo swapea)
+        except Exception as _c3e:
+            logger.warning(f"[A1-HARDEN-POOLS clase3] falló (skip): {type(_c3e).__name__}: {_c3e}")
+
+    # ── Ramas pendientes (Tasks 3-5, cada una bajo su propio knob) ──
+    #   clase 5 (HARDEN_SALTCURED_MAIN)   — exclusión salado-como-principal
+    #   clase 1 (HARDEN_SAMEDAY_PROTEIN)  — binding slot→proteína mismo día
+    #   clase 2 (HARDEN_CROSSDAY_QUOTA)   — cuota round-robin cross-día
     return counts
 
 
