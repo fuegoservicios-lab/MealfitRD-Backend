@@ -6487,6 +6487,17 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         except Exception as _mc_oe:
             logger.warning(f"[P1-CLINICAL-MEAL-COUNT] override de meal_types falló (usa skeleton del LLM): {type(_mc_oe).__name__}: {_mc_oe}")
 
+    # [A1-HARDEN-POOLS · 2026-07-09] Endurecer pools por día ANTES de que el day-gen los lea (primer read
+    # LLM = build_day_assignment_context). No-op mientras HARDEN_POOLS_ENABLED=False (default). Mismos
+    # objetos lista in-place → todos los consumidores (prompt, egg-diversifier, scrub post-gen) ven los
+    # pools endurecidos. Fail-safe: si el enforcer revienta, se usa el skeleton del LLM.
+    try:
+        _harden_counts = harden_day_pools(skeleton, form_data, None)
+        if any(_harden_counts.values()):
+            logger.info(f"🔒 [A1-HARDEN-POOLS] {_harden_counts}")
+    except Exception as _hp_oe:
+        logger.warning(f"[A1-HARDEN-POOLS] enforcer falló (usa pools del LLM): {type(_hp_oe).__name__}: {_hp_oe}")
+
     _emit_progress(state, "metric", {
         "node": "plan_skeleton",
         "duration_ms": int(duration * 1000),
@@ -6498,7 +6509,9 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     return {
         "plan_skeleton": skeleton,
         "attempt": attempt,
-        "_cached_context": ctx
+        "_cached_context": ctx,
+        # [A1-HARDEN-POOLS] cohorte determinista del canario (default 'on'; slice OFF vs ON en clinical_band)
+        "_harden_pools_cohort": _harden_pools_canary_cohort(state),
     }
 
 
@@ -34596,6 +34609,12 @@ def _compute_pipeline_holistic_score_and_emit(
                 _band = compute_clinical_band_score(plan, nutrition)
                 plan["clinical_band_score"] = _band
                 _band_val = _band.get("score")
+                # [A1-HARDEN-POOLS] violation-rate del plan final (señal "¿la restricción dura eliminó la
+                # clase?"). Best-effort: si build_variety_report falla, los campos quedan None.
+                try:
+                    _a1_vr = build_variety_report(plan) or {}
+                except Exception:
+                    _a1_vr = {}
                 if _band_val is not None:
                     _emit_progress(initial_state, "metric", {
                         "node": "clinical_band",
@@ -34614,6 +34633,12 @@ def _compute_pipeline_holistic_score_and_emit(
                             # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] cohorte del canario (ausente = 'on').
                             # Única dimensión que permite sliceear OFF vs ON en pipeline_metrics.
                             "self_critique_cohort": final_state.get("_self_critique_cohort") or "on",
+                            # [A1-HARDEN-POOLS · 2026-07-09] cohorte del canario A1 (ausente = 'on') +
+                            # violation-rate para medir la eliminación de clase por cohorte.
+                            "harden_pools_cohort": final_state.get("_harden_pools_cohort") or "on",
+                            "same_day_protein_repeats": _a1_vr.get("same_day_protein_repeats"),
+                            "cross_day_proteins": _a1_vr.get("cross_day_proteins"),
+                            "cross_day_dishes": _a1_vr.get("cross_day_dishes"),
                         },
                     })
                     logger.info(
