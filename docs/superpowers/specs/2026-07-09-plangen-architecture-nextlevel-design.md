@@ -136,8 +136,17 @@ Cada fase es shippable de forma independiente y tendrá su **propio plan de impl
 
 **Riesgo:** bajo-medio. La recovery durable es lo más involucrado pero es aditivo.
 
-### Fase 1 — Solver de precisión (NNLS/LP) ⭐ la palanca de precisión #1
-**Objetivo:** bajar proteína de 16% MAPE; subir el 24% all-4-macro. Determinista.
+### Fase 1 — Solver de precisión (NNLS/LP) ⭐ ~~la palanca de precisión #1~~
+
+> **ESTADO (2026-07-09): OBSOLETA — NO implementar. La verificación mostró que ya está hecho + resuelto.**
+> - `_box_lsq` (`portion_solver.py:111`, `[M2-SOLVER-NNLS · 2026-06-14]`) YA es el solver box-constrained multi-restricción (equivalente NNLS/LP, pure-python, sin scipy). `SOLVER_LSQ` default True.
+> - `_rebalance_day_macros_to_target` (`[P3-MACRO-REBALANCE · 2026-06-19]`, `MACRO_REBALANCE_ENABLED` default True, wired en `_apply_macro_engine:24639`) llevó la precisión a **all-4 ~87-94%, proteína MAPE 1.3-2.8%** (medición viva 2026-06-21). `refine_day_portions_integer` (integer 5g joint) también vivo.
+> - El `docs/macro_precision_benchmark.md` que motivó esta fase (24% / 16% MAPE / "reemplazar por NNLS/LP") es de **2026-06-14, PRE-fix** — stale. La precisión de macros está **en su techo físico** (cota de porción cocinable ~85-90%). scipy NO está instalado y **no hace falta**.
+> - **Corrección honesta:** mi síntesis original sobre-ponderó ese doc stale. La precisión de MACROS no es una palanca abierta. Ver memoria `project_macro_benchmark_baseline`.
+>
+> **Reorientación:** si "precisión" significa (a) no entregar planes DEGRADADOS → es la **Fase 2** (quitar la capa LLM del medio); (b) coherencia receta↔lista + platos compuestos no-resolubles (sancocho/mangú) → **Fase 3**; (c) **micronutrientes** (panel advisory, cobertura parcial) → eje nuevo separado. Los macros ya están resueltos.
+
+**Objetivo (diseño original, OBSOLETO):** bajar proteína de 16% MAPE; subir el 24% all-4-macro. Determinista.
 **Cambios:**
 - Reemplazar el solver greedy/`_box_lsq` por NNLS/LP (`scipy.optimize.nnls`/`linprog`) como optimizador multi-restricción, preservando la elección de alimentos del LLM y re-escalando cantidades.
 - Re-reconcile **después** de la cuantización (hoy la cuantización corre al final y reintroduce deriva sin re-reconcile — `benchmark` causa raíz #3).
@@ -146,7 +155,23 @@ Cada fase es shippable de forma independiente y tendrá su **propio plan de impl
 **Riesgo:** bajo (determinista, con benchmark existente como gate). Añade dependencia `scipy` si no está.
 
 ### Fase 2 — Restar la capa LLM del medio (la respuesta a "¿reducir agentes?")
-**Objetivo:** 10 → ~5-6 roles; matar la clase de bug de paridad y el costo adversarial en gratis/guest.
+
+> **ESTADO (2026-07-09): verificada + Pasos 1-5 implementados (self_critique NO se apaga aún).**
+> Verificación (4 verificadores sobre código vivo) corrigió el plan naíf "quitar self_critique":
+> - **self_critique NO es removible tal cual (RISKY_KEEP):** aún posee 3 detectores sin equivalente en el gate del reviewer — `_detect_slot_incoherence` (almuerzo↔cena carbo, merienda-plato-fuerte, heavy-protein multi-slot) y `_count_staple_repetitions` (staple cross-día). Para sanos/guest el reviewer LLM se bypasea (línea 28204) → quitarlo sin portar = punto ciego. Los fixes de paridad de julio solo alinearon 2 de ~5 dimensiones.
+> - **adversarial NO está ON por defecto** (solo auto-activación rara por historial); gatearlo a solo-pagados = cero pérdida funcional para free/guest.
+> - **Canario:** el harness determinista es CIEGO a la capa de crítica → solo cohorte live puede medir el Paso 6.
+>
+> **Implementado (TDD, todo por knob, mostly-inerte):**
+> - **Paso 1 `P1-ADVERSARIAL-PAID-ONLY`** (`MEALFIT_ADVERSARIAL_PAID_ONLY` def True): self-play solo tiers pagados. Test `test_p1_adversarial_paid_only.py`. *(única mejora de comportamiento live: ahorro para free/guest.)*
+> - **Paso 2 `P1-SELF-CRITIQUE-MASTER-KNOB`** (`MEALFIT_SELF_CRITIQUE_ENABLED` def True): kill-switch del nodo. Test `test_p1_self_critique_master_knob.py`. *(inerte a default.)*
+> - **Paso 3:** baseline de tests de critique — 14 fallos pre-existentes son WIP del owner (surgical return-key + prompt de day_generator), NO míos.
+> - **Paso 4 `P1-SLOT-INCOHERENCE-GATE` / `P1-STAPLE-REPEAT-GATE`** (ambos def **OFF**): porta los 3 detectores únicos al gate del reviewer + ruta quirúrgica (slot-incoherence day-attributable; staple cross-día → retry completo). Test `test_p1_slot_incoherence_gate.py`. *(inerte hasta canario.)*
+> - **Paso 5 `P1-SELF-CRITIQUE-CANARY`** (`MEALFIT_SELF_CRITIQUE_CANARY_PCT` def 0): bucketing determinista + tag `self_critique_cohort` en la métrica `clinical_band`. Test `test_p1_self_critique_canary.py`. *(inerte a 0%.)*
+>
+> **Paso 6 (apagar self_critique) PENDIENTE — requiere:** (a) flip los gates portados ON + observar retry-rate, (b) `SELF_CRITIQUE_CANARY_PCT`=20 y leer cohorte OFF vs ON, (c) **firma del owner del umbral** (degraded-ship per-cohorte + spot-check manual de diversidad, sin métrica automática), luego default OFF, luego borrar nodo.
+
+**Objetivo (diseño original):** 10 → ~5-6 roles; matar la clase de bug de paridad y el costo adversarial en gratis/guest.
 **Cambios:**
 - Eliminar self_critique (#6/#7, `:8442`); enrutar sus checks por los MISMOS detectores deterministas que usa el reviewer (`build_variety_report`, `_detect_slot_appropriateness`, `_trim_day_protein_to_ceiling`) → un SSOT, sin discrepancia LLM-vs-LLM. Elimina en raíz la familia `P1-CRITIQUE-*-PARITY`.
 - Adversarial self-play (`use_adversarial`, `:7223`): **OFF en gratis/guest, ON en pagos**. Cuando existan 2 candidatos, elegir ganador por `compute_clinical_band_score` en vez del `adversarial_judge` LLM (#5).

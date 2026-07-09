@@ -437,6 +437,79 @@ CRITIQUE_FIX_TIMEOUT_S      = _env_float("MEALFIT_CRITIQUE_FIX_TIMEOUT_S",      
 # el floor de calidad — solo se omite el pulido subjetivo cuando NO hay nada duro.
 SELF_CRITIQUE_SKIP_WHEN_CLEAN = _env_bool("MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN", True)
 
+# [P1-SELF-CRITIQUE-MASTER-KNOB · 2026-07-09] Kill-switch del nodo self_critique entero — habilita A/B
+# y la restructuración Fase 2 (quitar la capa LLM del medio) sin tocar el grafo. Default True =
+# comportamiento actual intacto. NO cambiar el default sin canario: self_critique aún posee detectores
+# deterministas SIN equivalente en el gate del reviewer (staples cross-día `_count_staple_repetitions`,
+# slot-incoherence almuerzo↔cena-carbo / merienda-plato-fuerte) — para usuarios sanos/guest el reviewer
+# LLM se bypasea, así que apagarlo sin portar esos detectores = punto ciego. Rollback: =True.
+SELF_CRITIQUE_ENABLED = _env_bool("MEALFIT_SELF_CRITIQUE_ENABLED", True)
+
+# [P1-SELF-CRITIQUE-CANARY · 2026-07-09] Canario para validar apagar self_critique (Fase 2 Paso 6). El
+# harness determinista es CIEGO a la capa de crítica → única señal válida = cohorte live. Este knob rutea
+# ese % de planes a critique-OFF con bucketing determinista sha256(user_id|session_id) (estable por
+# usuario, A/B insesgado). La métrica clinical_band se etiqueta con el cohorte para comparar OFF vs ON.
+# Default 0 = todo critique-ON (comportamiento actual). Clamp [0,100].
+SELF_CRITIQUE_CANARY_PCT = _env_int("MEALFIT_SELF_CRITIQUE_CANARY_PCT", 0, validator=lambda v: 0 <= v <= 100)
+
+
+def _self_critique_canary_cohort(state) -> str:
+    """[P1-SELF-CRITIQUE-CANARY] Cohorte determinista del canario de self_critique: 'off' si el plan
+    cae en el `SELF_CRITIQUE_CANARY_PCT`% enrutado a critique-OFF, 'on' si no. Bucket estable por
+    usuario (sha256 de user_id|session_id → [0,100)). PCT=0 → siempre 'on'. Fail-safe → 'on'."""
+    try:
+        pct = SELF_CRITIQUE_CANARY_PCT
+        if pct <= 0:
+            return "on"
+        if pct >= 100:
+            return "off"
+        fd = state.get("form_data") or {}
+        _id = fd.get("user_id") or fd.get("session_id") or state.get("session_id") or "anon"
+        bucket = int(hashlib.sha256(str(_id).encode()).hexdigest(), 16) % 100
+        return "off" if bucket < pct else "on"
+    except Exception:
+        return "on"
+
+# [P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Tras el loop de corrección del self_critique,
+# re-verificar residuales de MISMA-PROTEÍNA-MISMO-DÍA con el MISMO SSOT que el gate del revisor
+# (`_days_with_same_day_protein_repeat` espeja `build_variety_report.same_day_protein_repeats`:
+# labels `_SAME_DAY_PROTEIN_GATE_LABELS`, aliases `_MAIN_PROTEIN_ALIASES`, match word-boundary sobre
+# name+ingredients). Forense plan vivo 70f802ec (2026-07-08): el self_critique corrigió Día 2/3 con
+# deepseek-v4-pro (63s) pero el gate volvió a rechazar por la MISMA causa — la corrección se logueaba
+# "corregido" con que el LLM devolviera algo no-nulo, sin re-verificar. Como el gate determinista hace
+# bypass del LLM reviewer (guest sin restricciones) no puebla `affected_days` → el retry regeneró el
+# PLAN COMPLETO. Al marcar los días residuales `_critique_unresolved` el retry se vuelve QUIRÚRGICO
+# (P1-SURGICAL-1 regenera solo esos días). Espeja el cierre de FRUTA (P1-FRUIT-DEDUP-GATE-PARITY,
+# 2026-07-05). Flip a False revierte al comportamiento pre-fix. tooltip-anchor: P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY
+SELF_CRITIQUE_VERIFY_SAME_DAY_PROTEIN = _env_bool("MEALFIT_SELF_CRITIQUE_VERIFY_SAME_DAY_PROTEIN", True)
+
+# [P1-CRITIQUE-CROSSDAY-DISH-PARITY · 2026-07-09] El self-critique detectaba staples-INGREDIENTE repetidos
+# pero NO platos-BASE repetidos entre días (revoltillo ×3), que el gate del revisor (P2-CROSSDAY-VARIETY-GATE
+# vía `build_variety_report.cross_day_dishes`) SÍ rechaza → retry completo (forense plan 1273aecb intento #1).
+# Extiende la paridad: el self-critique reusa el MISMO SSOT del gate para (a) NO saltar el evaluador cuando
+# hay repetición de plato-base cross-day, y (b) inyectar la corrección al corrector (que ya tiene el contrato
+# de variedad). Flip a False revierte. tooltip-anchor: P1-CRITIQUE-CROSSDAY-DISH-PARITY
+CRITIQUE_CROSSDAY_DISH_PARITY_ENABLED = _env_bool("MEALFIT_CRITIQUE_CROSSDAY_DISH_PARITY", True)
+
+# [P1-ADVERSARIAL-PAID-ONLY · 2026-07-09] El adversarial self-play (2 candidatos + juez LLM #5) es una
+# capa de calidad ADITIVA, no un gate de seguridad. Restringirla a tiers pagados: free/guest caen al
+# path single-candidate (su comportamiento normal hoy — candidate_b None → el juez no-opea). Ahorra 2×
+# day-gen + 1 juez para el free tier sin pérdida clínica (detectores deterministas + reviewer +
+# coherence + band corren igual para ambos tiers). Rollback: MEALFIT_ADVERSARIAL_PAID_ONLY=False.
+ADVERSARIAL_PAID_ONLY = _env_bool("MEALFIT_ADVERSARIAL_PAID_ONLY", True)
+
+# [P1-SLOT-INCOHERENCE-GATE · 2026-07-09] Porta al gate DETERMINISTA del reviewer los checks que hoy
+# SOLO viven en self_critique: `_detect_slot_incoherence` (almuerzo↔cena comparten CARBOHIDRATO,
+# merienda con técnica de plato fuerte, heavy-protein en ≥2 slots del día). El gate del reviewer ya
+# cubre same-day-PROTEÍNA (build_variety_report) pero NO estas clases. Prerequisito para apagar
+# self_critique (Fase 2) sin punto ciego — para sanos/guest el reviewer LLM se bypasea. Los issues son
+# day-attributable (`Día N:`) → ruta quirúrgica. Nace OFF (canariar antes de flipear). Rollback: =False.
+SLOT_INCOHERENCE_GATE_ENABLED = _env_bool("MEALFIT_SLOT_INCOHERENCE_GATE", False)
+# [P1-STAPLE-REPEAT-GATE · 2026-07-09] Porta `_count_staple_repetitions` (staple-ingrediente en ≥2 días,
+# ej. yuca/piña/pan cross-día) al gate del reviewer. Es CROSS-día (no atribuible a un solo día) → va a
+# retry COMPLETO (NO quirúrgico). Único consumidor hoy es self_critique. Nace OFF. Rollback: =False.
+STAPLE_REPEAT_GATE_ENABLED = _env_bool("MEALFIT_STAPLE_REPEAT_GATE", False)
+
 # ============================================================
 # [P4-TIMEOUT-2] Self-critique circuit breaker
 # ------------------------------------------------------------
@@ -3284,6 +3357,9 @@ class PlanState(TypedDict):
     attempt: int
     user_facts: str
     rejection_reasons: list[str]
+    # [P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] razones de rechazo acumuladas de TODOS los intentos
+    # previos (dedup por prefijo normalizado) → directiva de retry que respeta todos los gates a la vez.
+    _cumulative_rejection_reasons: Optional[list[str]]
     _rejection_severity: Optional[str]
     
     # Callback de progreso para SSE streaming (opcional)
@@ -6065,6 +6141,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         prompt_text = f"🧠 DIRECTIVA META-LEARNING (PRIORIDAD MÁXIMA):\n{state['reflection_directive']}\n\n" + prompt_text
 
     rejection_reasons = state.get("rejection_reasons", [])
+    # [P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] Reforzar con el set ACUMULADO de todos los intentos
+    # (no solo el último) → mismo anti-whack-a-mole que la directiva de retry_reflection_node.
+    if RETRY_CUMULATIVE_DIRECTIVE_ENABLED and state.get("_cumulative_rejection_reasons"):
+        rejection_reasons = state["_cumulative_rejection_reasons"]
     if attempt > 1 and rejection_reasons:
         prompt_text += f"\n\n🚨 ATENCIÓN (INTENTO {attempt}): El intento anterior fue RECHAZADO por estas razones:\n"
         for reason in rejection_reasons:
@@ -7234,6 +7314,16 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     # Si es el intento 2 (retry tras revisión médica), desactivar adversarial por tiempo.
     if attempt > 1:
         use_adversarial = False
+
+    # [P1-ADVERSARIAL-PAID-ONLY · 2026-07-09] Solo tiers pagados corren self-play. Va DESPUÉS de la
+    # auto-activación (neutraliza también a un guest auto-activado) y ANTES del bloque self-play. Para
+    # free/guest use_adversarial=False → path single-candidate (candidate_b None → el juez no-opea) =
+    # comportamiento normal de hoy, cero pérdida clínica. Rollback: MEALFIT_ADVERSARIAL_PAID_ONLY=False.
+    if use_adversarial and ADVERSARIAL_PAID_ONLY:
+        _adv_tier = get_user_tier(form_data.get("user_id"))
+        if _adv_tier not in PAID_TIERS:
+            use_adversarial = False
+            logger.info(f"⚔️ [ADVERSARIAL-PAID-ONLY] Desactivado: tier '{_adv_tier}' no pagado.")
 
     # [P1-PRECISION-LEVERS · 2026-07-04] (lever 2) Los días se generan en PARALELO y no se ven
     # entre sí — "salteado ×3"/"revoltillo ×3" solo lo frenaba el retry del gate de variedad.
@@ -8413,6 +8503,17 @@ def _detect_slot_appropriateness(days: list) -> list:
 @_node_label("self_critique")
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
+    # [P1-SELF-CRITIQUE-MASTER-KNOB · 2026-07-09] Kill-switch del nodo entero (A/B + Fase 2). Default
+    # True = corre como hoy. NO cambiar el default sin canario (aún posee detectores sin equivalente
+    # en el gate del reviewer). Va al TOPE para apagar el nodo por completo, no solo el intento 1.
+    if not SELF_CRITIQUE_ENABLED:
+        return {}
+    # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] Cohorte del canario: si este plan cae en el % ruteado a
+    # critique-OFF, saltar el nodo y marcar el cohorte en el estado (la métrica clinical_band lo lee
+    # para comparar OFF vs ON). PCT=0 (default) → siempre 'on' → no cambia nada.
+    if _self_critique_canary_cohort(state) == "off":
+        logger.info("🧪 [SELF-CRITIQUE-CANARY] Plan ruteado a critique-OFF (cohorte canario).")
+        return {"_self_critique_cohort": "off"}
     partial = state.get("plan_result", {})
     days = partial.get("days", [])
     if not days:
@@ -8521,6 +8622,30 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         slot_block = ""
 
+    # [P1-CRITIQUE-CROSSDAY-DISH-PARITY · 2026-07-09] Plato-base repetido ENTRE DÍAS (revoltillo ×3) con el
+    # MISMO SSOT que el gate del revisor (`build_variety_report.cross_day_dishes`, umbral
+    # CROSS_DAY_DISH_GATE_MIN_DAYS). Sin esto el self-critique lo dejaba pasar (solo cazaba staples-ingrediente)
+    # y el reviewer lo rechazaba → retry completo. Puro + fail-safe (nunca aborta el nodo).
+    cross_day_dish_repeats = {}
+    if CRITIQUE_CROSSDAY_DISH_PARITY_ENABLED:
+        try:
+            cross_day_dish_repeats = build_variety_report({"days": days}).get("cross_day_dishes") or {}
+        except Exception:
+            cross_day_dish_repeats = {}
+    if cross_day_dish_repeats:
+        _cdd_txt = ", ".join(f"'{t}' en {n} días" for t, n in sorted(cross_day_dish_repeats.items()))
+        logger.info(f"🔁 [SELF-CRITIQUE] Plato-base repetido entre días detectado: {_cdd_txt}")
+        crossday_block = (
+            f"\n⚠️ MISMO PLATO-BASE REPETIDO ENTRE DÍAS (conteo determinístico, no opinable): {_cdd_txt}.\n"
+            f"   BAJA diversity_score a 4 o menos, marca needs_correction=True, y en suggestions especifica "
+            f"en qué día cambiar la PREPARACIÓN de ese plato (guisado/al horno/a la plancha/en tortitas) o "
+            f"la base, para que no se repita en {CROSS_DAY_DISH_GATE_MIN_DAYS}+ días.\n"
+        )
+        if not suggested_day_hint:
+            suggested_day_hint = "Día 2"
+    else:
+        crossday_block = ""
+
     # [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Early-exit: si los detectores
     # determinísticos vinieron limpios (cero staples repetidos, cero incoherencias
     # de slot, cero monotonía cross-day de proteína pesada), saltamos el evaluador
@@ -8536,7 +8661,8 @@ async def self_critique_node(state: PlanState) -> dict:
     # (decisión de costo P1-GEN-EFFICIENCY); los detectores determinísticos son
     # el piso de calidad garantizado.
     if (SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions
-            and not slot_issues and not heavy_protein_monotony):
+            and not slot_issues and not heavy_protein_monotony
+            and not cross_day_dish_repeats):  # [P1-CRITIQUE-CROSSDAY-DISH-PARITY]
         logger.info(
             "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
             "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada) "
@@ -8568,7 +8694,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{staples_block}{slot_block}{user_context}
+{staples_block}{slot_block}{crossday_block}{user_context}
 {pista_dia}
 """.strip()
 
@@ -9011,6 +9137,32 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
 
             if corrected_any:
                 partial["days"] = days
+
+            # [P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Verificación post-corrección con el
+            # SSOT del gate del revisor: si tras corregir sigue habiendo MISMA-PROTEÍNA-MISMO-DÍA,
+            # marcar esos días `_critique_unresolved` → el retry regenera SOLO esos días (P1-SURGICAL-1)
+            # en vez del regen ciego de plan completo (el gate determinista hace bypass del LLM reviewer y
+            # no puebla affected_days). Espeja el cierre de FRUTA (P1-FRUIT-DEDUP-GATE-PARITY, 2026-07-05).
+            if SELF_CRITIQUE_VERIFY_SAME_DAY_PROTEIN:
+                try:
+                    _residual = _days_with_same_day_protein_repeat(partial)
+                    for _dn in _residual:
+                        _td = next((d for d in days if d.get("day") == _dn), None)
+                        if _td is not None and not _td.get("_critique_unresolved"):
+                            _mark_critique_unresolved(
+                                _td, "same_day_protein_repeat_unresolved",
+                                f"Día {_dn}: misma proteína principal en ≥2 comidas tras corrección",
+                            )
+                    if _residual:
+                        logger.warning(
+                            f"⚠️ [SELF-CRITIQUE/SAMEDAY-PROTEIN-PARITY] Residual same-day-protein tras "
+                            f"corrección en día(s) {_residual} → marcados _critique_unresolved (retry quirúrgico)."
+                        )
+                except Exception as _e_par:
+                    logger.warning(
+                        f"⚠️ [SELF-CRITIQUE/SAMEDAY-PROTEIN-PARITY] verify no-fatal: "
+                        f"{type(_e_par).__name__}: {_e_par}"
+                    )
         else:
             logger.info("✅ [SELF-CRITIQUE] El plan pasó la evaluación visual y de coherencia.")
             
@@ -10018,6 +10170,12 @@ WARFARIN_VITK_DEGRADE_ENABLED = _env_bool("MEALFIT_WARFARIN_VITK_DEGRADE", True)
 # vez de solo la prosa del revisor → converge en menos intentos. Read-only sobre el plan rechazado +
 # nutrition; NO cambia el control de flujo del grafo. Default True; rollback: =False.
 STRUCTURED_RETRY_CONTEXT_ENABLED = _env_bool("MEALFIT_STRUCTURED_RETRY_CONTEXT", True)
+# [P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] La directiva de retry acumula las razones de rechazo de
+# TODOS los intentos previos (no solo el último) → evita el whack-a-mole donde el planner arregla el gate
+# X del último rechazo y reintroduce el gate Y de un rechazo anterior (forense plan 1273aecb: #1 cross-day-
+# dish+band → #2 same-day-protein → #3 same-day-protein otra vez, 3-4 regens completas). Flip a False
+# revierte al comportamiento "solo último rechazo". tooltip-anchor: P1-RETRY-CUMULATIVE-DIRECTIVE
+RETRY_CUMULATIVE_DIRECTIVE_ENABLED = _env_bool("MEALFIT_RETRY_CUMULATIVE_DIRECTIVE", True)
 
 # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
 # fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
@@ -15557,6 +15715,43 @@ def _plan_has_same_day_fruit_repeat(plan: dict) -> bool:
         return False
     except Exception:
         return False
+
+
+def _days_with_same_day_protein_repeat(plan: dict) -> list:
+    """[P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Números de día donde una MISMA proteína
+    principal aparece en ≥2 comidas del mismo día — detector con el MISMO SSOT que el gate del
+    revisor (`build_variety_report.same_day_protein_repeats`, líneas ~15716-15740): labels
+    `_SAME_DAY_PROTEIN_GATE_LABELS` (pesadas + huevo), aliases `_MAIN_PROTEIN_ALIASES`, match
+    word-boundary (`_name_has_token`) sobre name+ingredients (sin acento, minúscula). Si esto
+    retorna días, el gate P1-VARIETY-SAME-DAY-PROTEIN va a rechazar → esos días deben marcarse
+    `_critique_unresolved` para que el retry sea QUIRÚRGICO. Espeja `_plan_has_same_day_fruit_repeat`
+    (fruta) para proteína. Puro, fail-safe → []. tooltip-anchor: P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY"""
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        def _sa(s):
+            return s
+    out = []
+    try:
+        for day in plan.get("days", []) or []:
+            if not isinstance(day, dict):
+                continue
+            day_proteins: dict = {}
+            for meal in (day.get("meals", []) or []):
+                if not isinstance(meal, dict):
+                    continue
+                name_low = _sa(str(meal.get("name", "")).lower())
+                ings_low = _sa(" ".join(str(i) for i in (meal.get("ingredients", []) or [])).lower())
+                blob = name_low + " " + ings_low
+                for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
+                    if any(_name_has_token(_sa(_al), blob)
+                           for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
+                        day_proteins[_plabel] = day_proteins.get(_plabel, 0) + 1
+            if any(n >= 2 for n in day_proteins.values()):
+                out.append(day.get("day"))
+    except Exception:
+        return []
+    return [d for d in out if d is not None]
 
 
 def dedup_featured_fruits_in_plan(plan: dict) -> int:
@@ -26849,6 +27044,11 @@ _SURGICAL_REJECT_SAFE_PREFIXES = (
     "pareo chocante fruta+salado",
     "plato-base repetido el mismo dia",
     "comida fuera de horario",
+    # [P1-SLOT-INCOHERENCE-GATE · 2026-07-09] clases day-attributable de _detect_slot_incoherence
+    # (accent-stripped, lowercase). Cross-día (staple) NO va aquí — retry completo.
+    "comparten carbohidrato principal",
+    "merienda parece un plato fuerte",
+    "aparece en",  # "la proteina 'X' aparece en N comidas" (heavy-protein multi-slot, day-attributable)
 )
 
 
@@ -26893,6 +27093,17 @@ def _surgical_reject_targets(state) -> dict | None:
                         str(_v.get("text") or _v.get("label") or ""))
         except Exception:
             pass
+        # [P1-SLOT-INCOHERENCE-GATE · 2026-07-09] Atribuir días de _detect_slot_incoherence (`Día N:`)
+        # para ruta quirúrgica. Gated por el knob → INERTE cuando el gate está OFF (no altera la
+        # atribución existente si el gate no está produciendo estas razones).
+        if SLOT_INCOHERENCE_GATE_ENABLED:
+            try:
+                for _si in _detect_slot_incoherence(days) or []:
+                    _m2 = _re.match(r"D[ií]a (\d+):", str(_si))
+                    if _m2:
+                        issues_by_day.setdefault(int(_m2.group(1)), []).append(str(_si))
+            except Exception:
+                pass
         _valid_days = {d.get("day") for d in days if isinstance(d, dict)}
         issues_by_day = {d: [s for s in v if s] for d, v in issues_by_day.items()
                          if d in _valid_days and v}
@@ -28730,6 +28941,56 @@ Responde ÚNICAMENTE con el JSON de revisión.
         except Exception as _sa_e:
             logger.warning(f"[P1-SLOT-APPROPRIATENESS] validador falló: {type(_sa_e).__name__}: {_sa_e}")
 
+    # [P1-SLOT-INCOHERENCE-GATE · 2026-07-09] Gate determinista portado de self_critique (Fase 2). Las
+    # tres clases que `_detect_slot_incoherence` reporta y el reviewer NO cubre: almuerzo↔cena comparten
+    # CARBOHIDRATO, merienda con técnica de plato fuerte, heavy-protein en ≥2 slots del día. Issues
+    # day-attributable (`Día N:`) → ruta quirúrgica (prefijos en _SURGICAL_REJECT_SAFE_PREFIXES). Degrada
+    # a advisory en el intento final (nunca cero-plan, espejo del gate de slot-appropriateness). Nace OFF.
+    if SLOT_INCOHERENCE_GATE_ENABLED:
+        try:
+            _si_issues = _detect_slot_incoherence(plan.get("days", []) if isinstance(plan, dict) else [])
+            if _si_issues:
+                _si_is_final = int(state.get("attempt", 1)) >= MAX_ATTEMPTS
+                if _si_is_final:
+                    logger.warning(
+                        f"🍱 [P1-SLOT-INCOHERENCE-GATE] {len(_si_issues)} incoherencia(s) de slot en "
+                        f"intento final → ADVISORY (entrego el plan). Primera: {_si_issues[0][:90]}"
+                    )
+                    if isinstance(plan, dict):
+                        plan["_slot_incoherence_advisory_final"] = True
+                else:
+                    for _si in _si_issues:
+                        logger.warning(f"🍱 [P1-SLOT-INCOHERENCE-GATE] {_si[:110]} → rechazo.")
+                    approved = False
+                    issues.extend(_si_issues)
+                    severity = _severity_max(severity, "high")
+        except Exception as _si_e:
+            logger.warning(f"[P1-SLOT-INCOHERENCE-GATE] validador falló: {type(_si_e).__name__}: {_si_e}")
+
+    # [P1-STAPLE-REPEAT-GATE · 2026-07-09] Gate determinista portado de self_critique (Fase 2).
+    # `_count_staple_repetitions` = staple-ingrediente en ≥2 días (cross-día → retry COMPLETO, NO
+    # quirúrgico). Degrada a advisory en el intento final. Nace OFF.
+    if STAPLE_REPEAT_GATE_ENABLED:
+        try:
+            _staples = _count_staple_repetitions(plan.get("days", []) if isinstance(plan, dict) else [])
+            if _staples:
+                _st_is_final = int(state.get("attempt", 1)) >= MAX_ATTEMPTS
+                _st_desc = ", ".join(f"{k}×{v}d" for k, v in sorted(_staples.items()))
+                if _st_is_final:
+                    logger.warning(
+                        f"🥔 [P1-STAPLE-REPEAT-GATE] staples repetidos cross-día en intento final "
+                        f"({_st_desc}) → ADVISORY (entrego el plan)."
+                    )
+                    if isinstance(plan, dict):
+                        plan["_staple_repeat_advisory_final"] = True
+                else:
+                    logger.warning(f"🥔 [P1-STAPLE-REPEAT-GATE] staples repetidos cross-día ({_st_desc}) → rechazo.")
+                    approved = False
+                    issues.append(f"Staples repetidos en ≥2 días: {_st_desc}. Varía los acompañantes entre días.")
+                    severity = _severity_max(severity, "high")
+        except Exception as _st_e:
+            logger.warning(f"[P1-STAPLE-REPEAT-GATE] validador falló: {type(_st_e).__name__}: {_st_e}")
+
     # [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Gate SUAVE de calidad de plato: si una fracción
     # ≥ DISH_QUALITY_REJECT_RATIO de los platos son placeholder/crudos (nombre genérico, ingredientes 'Proteína
     # magra al gusto', receta no sustantiva que el backstop determinista no pudo rescatar), rechaza para retry,
@@ -29081,18 +29342,61 @@ Responde ÚNICAMENTE con el JSON de revisión.
             )
         else:
             sample = ", ".join(str(d.get("food", "?")) for d in coherence_block[:5])
-            msg = (
-                f"COHERENCIA RECETAS LISTA: {len(coherence_block)} divergencia(s) "
-                f"críticas (foods: {sample}). action={_block_action}."
+            # [P1-REVIEW-COHERENCE-SEVERE-ONLY · 2026-07-09] WHACK-A-MOLE BREAKER. Forense (batch logs-VPS
+            # 2026-07-09): TODA generación iba a los 3 intentos, rechazada por "COHERENCIA RECETAS LISTA: 1
+            # divergencia crítica" sobre una proteína ROTATIVA (Res→Cangrejo→Chivo). Cada retry regenera el
+            # plan COMPLETO → aparece OTRA divergencia marginal de UNA proteína distinta → nunca converge →
+            # max_attempts → entrega degradada. Espeja MEALFIT_SWAP_COHERENCE_BLOCK_SEVERE_ONLY (P2-B) y
+            # MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY (chunk T2): una sola divergencia MARGINAL (magnitud
+            # <SEVERE_DELTA — típico edge de agregación/redondeo de envase de UNA proteína) NO fuerza retry de
+            # plan completo → degrada a warn (entrega + telemetría; el cron diario vigila la salud agregada).
+            # SÍ rechaza si es SEVERA: ≥MIN_COUNT divergencias (sistemático) o magnitud ≥SEVERE_DELTA (egregio).
+            # Knobs kill-switch → revierte al reject-siempre sin redeploy. tooltip-anchor: P1-REVIEW-COHERENCE-SEVERE-ONLY
+            def _coh_finite_delta_rv(_dv):
+                try:
+                    _v = float(_dv.get("delta_pct") or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+                return _v if _v == _v and abs(_v) != float("inf") else 0.0
+            _rv_severe_only = _env_bool("MEALFIT_REVIEW_COHERENCE_BLOCK_SEVERE_ONLY", True)
+            _rv_min_count = _env_int("MEALFIT_REVIEW_COHERENCE_SEVERE_MIN_COUNT", 2,
+                                     validator=lambda v: 1 <= v <= 20)
+            _rv_severe_delta = _env_float("MEALFIT_REVIEW_COHERENCE_SEVERE_DELTA", 0.50)
+            _rv_is_severe = (
+                (not _rv_severe_only)
+                or len(coherence_block) >= _rv_min_count
+                or any(d.get("magnitude") and abs(_coh_finite_delta_rv(d)) >= _rv_severe_delta
+                       for d in coherence_block)
             )
-            approved = False
-            issues.append(msg)
-            if _block_action == "reject_high":
-                severity = _severity_max(severity, "high")
-                logger.info(f"🛒 [REVISOR/COH-BLOCK reject_high] {msg} → retry forzado.")
+            if not _rv_is_severe:
+                # 1 divergencia marginal → TOLERAR (mismo outcome que knob=degrade) + NO retry. Preserva la
+                # telemetría (history) y marca `nonsevere_review_warn` para el post-mortem del cron P3-B.
+                try:
+                    _rv_ch = plan.get("_shopping_coherence_block_history")
+                    if isinstance(_rv_ch, list) and _rv_ch and isinstance(_rv_ch[-1], dict):
+                        _rv_ch[-1]["action_taken"] = "degrade"  # valor canónico surface #1 (block tolerado)
+                        _rv_ch[-1]["nonsevere_review_warn"] = True
+                except Exception:
+                    pass
+                plan.pop("_shopping_coherence_block", None)
+                logger.info(
+                    f"🛒 [REVISOR/COH-BLOCK severe-only] {len(coherence_block)} divergencia(s) marginal(es) "
+                    f"(foods: {sample}) — ninguna severa (count<{_rv_min_count} y |Δ|<{_rv_severe_delta}) → "
+                    f"warn, NO retry (rompe el whack-a-mole de proteína rotativa)."
+                )
             else:
-                severity = _severity_max(severity, "minor")
-                logger.info(f"🛒 [REVISOR/COH-BLOCK reject_minor] {msg} → retry si budget permite.")
+                msg = (
+                    f"COHERENCIA RECETAS LISTA: {len(coherence_block)} divergencia(s) "
+                    f"críticas (foods: {sample}). action={_block_action}."
+                )
+                approved = False
+                issues.append(msg)
+                if _block_action == "reject_high":
+                    severity = _severity_max(severity, "high")
+                    logger.info(f"🛒 [REVISOR/COH-BLOCK reject_high] {msg} → retry forzado.")
+                else:
+                    severity = _severity_max(severity, "minor")
+                    logger.info(f"🛒 [REVISOR/COH-BLOCK reject_minor] {msg} → retry si budget permite.")
 
     # Brechas 1 y 4: Errores deterministas del ensamblador
     skeleton_fidelity_errors = plan.get("_skeleton_fidelity_errors", [])
@@ -30441,6 +30745,33 @@ def _structured_rejection_context(plan_result, nutrition, *, max_cells: int = 8)
         return ""
 
 
+def _rejection_reason_key(r) -> str:
+    """[P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] Clave de dedup de una razón de rechazo: prefijo
+    normalizado (whitespace-collapsed, lowercase, 60 chars). Los mensajes de gate son strings constantes;
+    el prefijo tolera drift menor sin colapsar gates distintos."""
+    return " ".join(str(r or "").lower().split())[:60]
+
+
+def _merge_rejection_reasons(prior: list, current: list) -> list:
+    """[P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] Une razones previas + actuales, dedup por
+    `_rejection_reason_key`, order-preserving (previas primero, luego las nuevas). Dropea falsy.
+    Puro, fail-safe → []."""
+    out: list = []
+    seen: set = set()
+    try:
+        for r in list(prior or []) + list(current or []):
+            if not r:
+                continue
+            k = _rejection_reason_key(r)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(str(r))
+    except Exception:
+        return list(current or [])
+    return out
+
+
 @_node_label("retry_reflection")
 async def retry_reflection_node(state: PlanState) -> dict:
     """Inyecta contexto de rechazo como directiva para el retry (GAP 1).
@@ -30456,8 +30787,19 @@ async def retry_reflection_node(state: PlanState) -> dict:
     reasons = state.get("rejection_reasons", [])
     attempt = state.get("attempt", 1) + 1
 
+    # [P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] Acumular razones de TODOS los intentos previos +
+    # las de este rechazo → el planner ve el set COMPLETO de gates a respetar y no juega whack-a-mole
+    # (arreglar el último rechazo reintroduciendo uno anterior). Dedup por prefijo normalizado.
+    _prior_cumulative = state.get("_cumulative_rejection_reasons") or []
+    if RETRY_CUMULATIVE_DIRECTIVE_ENABLED:
+        _cumulative = _merge_rejection_reasons(_prior_cumulative, reasons)
+    else:
+        _cumulative = list(reasons)
+
     update_data = {
         "attempt": attempt,
+        # Persistir el set acumulado para el siguiente attempt (LangGraph merge lo preserva).
+        "_cumulative_rejection_reasons": _cumulative,
         # P0-X1: forzar que el segundo intento use SIEMPRE el plan regenerado
         # por el LLM, no el cacheado del primer intento.
         "semantic_cache_hit": False,
@@ -30489,6 +30831,17 @@ async def retry_reflection_node(state: PlanState) -> dict:
     }
     if reasons:
         directive = f"El plan anterior fue RECHAZADO por: {'; '.join(reasons)}. MUTA DRÁSTICAMENTE la estrategia."
+        # [P1-RETRY-CUMULATIVE-DIRECTIVE · 2026-07-09] Añadir las restricciones de intentos PREVIOS que
+        # este rechazo no repite → el planner debe respetarlas SIMULTÁNEAMENTE (no arreglar una rompiendo
+        # otra). Sin esto, cada retry solo veía el último rechazo → whack-a-mole entre gates.
+        if RETRY_CUMULATIVE_DIRECTIVE_ENABLED:
+            _cur_keys = {_rejection_reason_key(r) for r in reasons}
+            _prior_distinct = [r for r in _cumulative if _rejection_reason_key(r) not in _cur_keys]
+            if _prior_distinct:
+                directive += (
+                    " ⚠️ RESTRICCIONES ACUMULADAS de intentos previos que DEBES seguir respetando "
+                    "SIMULTÁNEAMENTE (no arregles una rompiendo otra): " + "; ".join(_prior_distinct) + "."
+                )
         # [P2-STRUCTURED-RETRY-CONTEXT · 2026-06-18] (audit fresco P2-2) Enriquece la directiva con los
         # deltas de macro DETERMINISTAS del plan rechazado (números concretos por día×macro fuera de banda)
         # → el planner corrige celdas específicas en vez de adivinar desde la prosa. Read-only + fail-safe;
@@ -33517,6 +33870,132 @@ def refresh_clinical_band_score_post_finalize(plan_data: dict) -> bool:
         return False
 
 
+# [P1-PROTEIN-BAND-POST-FINALIZE · 2026-07-09] (forense plan vivo 42310dba, gain_muscle) El truth-up de
+# `finalize_plan_data_coherence` (pre-INSERT) RECOMPUTA la proteína HONESTA desde los strings DESPUÉS de que
+# los closers de proteína (P1-PROTEIN-FLOOR-POST-CAPS / trim de techo) ya corrieron en assemble → re-expone
+# drift de proteína que NADA re-encuadra. Medido: banda pre-finalize 1.0 → post-finalize 0.75 (protein 0.333;
+# día 1 = 114g bajo el piso 117, día 2 = 146g sobre el techo 145.6). Este pase corre en el shield pre-INSERT
+# DESPUÉS del finalize/truth-up (proteína honesta) y ANTES del re-check de banda → re-encuadra por día SOLO
+# re-escalando porciones proteína-dominantes EXISTENTES (jamás añade ingredientes → cero riesgo de alérgeno/
+# renal; el shield pre-INSERT no tiene form_data para elegir proteína allergen-safe, a diferencia del closer
+# de assemble). Default ON. Rollback: MEALFIT_PROTEIN_BAND_POST_FINALIZE=false.
+PROTEIN_BAND_POST_FINALIZE_ENABLED = _env_bool("MEALFIT_PROTEIN_BAND_POST_FINALIZE", True)
+PROTEIN_BAND_POST_FINALIZE_MAX_UPSCALE = max(1.0, min(1.5, _env_float("MEALFIT_PROTEIN_BAND_POST_FINALIZE_MAX_UPSCALE", 1.20)))
+
+
+def _bump_day_protein_to_floor(meals: list, target_protein_day: float, db, *, floor_pct: float = 0.90,
+                               aim_pct: float = 0.96, kcal_ceiling_day: float = None,
+                               max_upscale: float = 1.20) -> bool:
+    """[P1-PROTEIN-BAND-POST-FINALIZE] Espejo ASCENDENTE de `_trim_day_protein_to_ceiling`: si el día
+    entrega < floor_pct × target de proteína, escala HACIA ARRIBA las porciones/ingredientes
+    PROTEÍNA-dominantes EXISTENTES (NUNCA añade ingredientes nuevos → cero riesgo de alérgeno) hasta ~aim_pct
+    del target, acotado por max_upscale y por el headroom de kcal del día (no rebasa el techo de banda kcal).
+    Recompute HONESTO por delta de string (baja/sube también C/F embebidos). Retorna True si escaló."""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        P = sum(_meal_macro_num(m.get("protein")) for m in meals)
+        if target_protein_day <= 0 or P <= 0 or P >= target_protein_day * floor_pct:
+            return False
+        # headroom kcal: si el día ya está en el techo de kcal, no empujar proteína (evita cambiar un
+        # fallo de proteína por uno de kcal).
+        if kcal_ceiling_day is not None:
+            _cur_kcal = sum(_meal_macro_num(m.get("cals")) for m in meals)
+            if _cur_kcal >= kcal_ceiling_day:
+                return False
+        factor = min(max_upscale, (target_protein_day * aim_pct) / P)  # > 1
+        if factor <= 1.0:
+            return False
+        applied = False
+        for m in meals:
+            _dp = _dc = _df = 0.0
+            ings = m.get("ingredients")
+            if isinstance(ings, list):
+                _new_i = []
+                for s in ings:
+                    _s = str(s)
+                    if _ingredient_is_protein_dominant(_s, db):
+                        _mo = db.macros_from_ingredient_string(_s) or {}
+                        _ns = _resc(_s, factor)
+                        _mn = db.macros_from_ingredient_string(_ns) or {}
+                        _dp += (_mn.get("protein") or 0) - (_mo.get("protein") or 0)
+                        _dc += (_mn.get("carbs") or 0) - (_mo.get("carbs") or 0)
+                        _df += (_mn.get("fats") or 0) - (_mo.get("fats") or 0)
+                        _new_i.append(_ns)
+                    else:
+                        _new_i.append(_s)
+                if _dp > 0:
+                    m["ingredients"] = _new_i
+                    raw = m.get("ingredients_raw")
+                    if isinstance(raw, list):
+                        m["ingredients_raw"] = [
+                            _resc(str(s), factor) if _ingredient_is_protein_dominant(s, db) else str(s)
+                            for s in raw]
+                    mp = max(0, round(_meal_macro_num(m.get("protein")) + _dp))
+                    mc = max(0, round(_meal_macro_num(m.get("carbs")) + _dc))
+                    mf = max(0, round(_meal_macro_num(m.get("fats")) + _df))
+                    m["protein"], m["carbs"], m["fats"] = mp, mc, mf
+                    m["cals"] = round(4 * mp + 4 * mc + 9 * mf)
+                    m["macros"] = [f"P:{mp}g", f"C:{mc}g", f"G:{mf}g"]
+                    applied = True
+        return applied
+    except Exception as e:
+        logger.warning(f"[P1-PROTEIN-BAND-POST-FINALIZE] bump de piso falló: {type(e).__name__}: {e}")
+        return False
+
+
+def reconcile_protein_band_post_finalize(plan_data: dict) -> bool:
+    """[P1-PROTEIN-BAND-POST-FINALIZE · 2026-07-09] Re-encuadre de la proteína por día sobre el estado
+    ENTREGADO (post-truth-up). Corre en el shield pre-INSERT (db_plans.py) DESPUÉS de
+    `finalize_plan_data_coherence` (que re-expone la proteína honesta) y ANTES de
+    `refresh_clinical_band_score_post_finalize` (que re-mide) → el band score refleja el estado corregido.
+    Por día: proteína > techo (target×1.12) → trim; < piso (target×0.90) → bump. AMBOS solo re-escalan
+    porciones proteína-dominantes EXISTENTES (cero ingredientes nuevos → sin riesgo de alérgeno/renal; el
+    shield no tiene form_data). Idempotente (días ya en banda intactos), gateado, fail-safe (nunca bloquea el
+    INSERT). tooltip-anchor: P1-PROTEIN-BAND-POST-FINALIZE"""
+    if not (PROTEIN_BAND_POST_FINALIZE_ENABLED and isinstance(plan_data, dict)):
+        return False
+    try:
+        import re as _re_pb
+        _mp = (plan_data.get("macros") or {}).get("protein")
+        _mm = _re_pb.search(r"(\d+(?:\.\d+)?)", str(_mp)) if _mp is not None else None
+        target = float(_mm.group(1)) if _mm else 0.0
+        if target <= 0:
+            return False
+        _mk = plan_data.get("calories")
+        _mkm = _re_pb.search(r"(\d+(?:\.\d+)?)", str(_mk)) if _mk is not None else None
+        kcal_target = float(_mkm.group(1)) if _mkm else None
+        kcal_ceiling = kcal_target * 1.10 if kcal_target else None  # techo de banda kcal
+        from nutrition_db import IngredientNutritionDB
+        db = IngredientNutritionDB()
+        changed = False
+        for _d in plan_data.get("days") or []:
+            if not isinstance(_d, dict):
+                continue
+            _ms = [m for m in (_d.get("meals") or []) if isinstance(m, dict)]
+            if not _ms:
+                continue
+            P = sum(_meal_macro_num(m.get("protein")) for m in _ms)
+            if P > target * 1.12:
+                if _trim_day_protein_to_ceiling(_ms, target, db, ceiling_pct=1.12):
+                    changed = True
+            elif 0 < P < target * 0.90:
+                if _bump_day_protein_to_floor(_ms, target, db, floor_pct=0.90, aim_pct=0.96,
+                                              kcal_ceiling_day=kcal_ceiling,
+                                              max_upscale=PROTEIN_BAND_POST_FINALIZE_MAX_UPSCALE):
+                    changed = True
+        if changed:
+            try:
+                refresh_delivered_macros(plan_data)  # el summary display refleja los meals re-escalados
+            except Exception:
+                pass
+            logger.info("🥩 [P1-PROTEIN-BAND-POST-FINALIZE] re-encuadre de proteína por día sobre el estado "
+                        "ENTREGADO (trim de techo / bump de piso, solo porciones existentes).")
+        return changed
+    except Exception as e:
+        logger.debug(f"[P1-PROTEIN-BAND-POST-FINALIZE] no-op: {type(e).__name__}: {e}")
+        return False
+
+
 # [P1-CONDITION-CEILINGS-UPDATES] razones que produce _maybe_mark_panel_degraded (las únicas que este
 # wrapper puede limpiar/re-evaluar; cualquier otra razón previa se respeta intacta).
 _PANEL_DEGRADED_REASONS = ("condition_panel_gap", "low_micros", "high_sodium_sugar", "vitamin_k_inconsistent")
@@ -33940,6 +34419,9 @@ def _compute_pipeline_holistic_score_and_emit(
                             "band_macros": _band.get("band_macros"),
                             "delivered_was_fallback": delivered_was_fallback,
                             "review_passed": final_state.get("review_passed"),
+                            # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] cohorte del canario (ausente = 'on').
+                            # Única dimensión que permite sliceear OFF vs ON en pipeline_metrics.
+                            "self_critique_cohort": final_state.get("_self_critique_cohort") or "on",
                         },
                     })
                     logger.info(
