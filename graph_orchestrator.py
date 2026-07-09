@@ -30309,6 +30309,22 @@ DAY_FALLBACK_HONESTY = _env_bool("MEALFIT_DAY_FALLBACK_HONESTY", True)
 # ya veía banner; el operador solo tenía el agregado 24h. exit_reason=`approved_with_residual`.
 APPROVED_RESIDUAL_ALERT_ENABLED = _env_bool("MEALFIT_APPROVED_RESIDUAL_ALERT", True)
 
+# [P1-MARKER-REGEN-BUDGET-GATE · 2026-07-09] Un plan YA APROBADO no debe arriesgar el surgical regen
+# post-aprobación cuando queda poco budget: el regen (corrector LLM + PRO fallback + re-assemble +
+# re-review, ~1-5min) puede exceder el wall-timeout → la cancelación DURA descarta el plan aprobado y el
+# usuario no recibe NADA. Fallo vivo corr=08f60b00 (2026-07-09): aprobado a ~590s → regen Día 2 con PRO →
+# 900s wall → failed → usuario sin plan. Si `remaining < este umbral`, entregamos el aprobado (marcado
+# _quality_degraded minor por honestidad) en vez del pulido arriesgado. El regen es un PULIDO sobre un plan
+# YA aprobado por el reviewer médico — sacrificarlo bajo presión de tiempo es el trade correcto (plan bueno
+# > nada). Default 400s: el regen re-corrige el día (corrector LLM ≤150s + PRO fallback +120s) Y re-ensambla
+# el plan entero (assemble + coherence guard + re-review) — medido ~350s+ en el fallo vivo corr=08f60b00
+# (prod GLOBAL_PIPELINE_TIMEOUT_S=900: aprobado a 590s → remaining 310s < 400 → entrega el aprobado). El
+# umbral debe superar el peor caso del regen para garantizar entrega antes del wall. 0 = desactiva
+# (comportamiento previo). tooltip-anchor: P1-MARKER-REGEN-BUDGET-GATE
+MARKER_REGEN_MIN_BUDGET_S = _env_int(
+    "MEALFIT_MARKER_REGEN_MIN_BUDGET_S", 400, validator=lambda v: v == 0 or 30 <= v <= 1800
+)
+
 
 def should_retry(state: PlanState) -> str:
     """Decide si regenerar el plan o enviarlo al usuario.
@@ -30361,13 +30377,35 @@ def should_retry(state: PlanState) -> str:
             # se entregaba como plan plenamente aprobado).
             _fb_days = _collect_day_fallback_days(state.get("plan_result")) if DAY_FALLBACK_HONESTY else []
             if marker_days or _fb_days:
-                logger.info(
-                    f"🩹 [ORQUESTADOR] Revisión aprobada PERO {len(marker_days)} "
-                    f"día(s) con `_critique_unresolved` (días {marker_days})"
-                    + (f" + {len(_fb_days)} día(s) `_day_fallback` (días {_fb_days})" if _fb_days else "")
-                    + " → surgical regen antes de enviar al usuario."
-                )
-                return "marker_regen"
+                # [P1-MARKER-REGEN-BUDGET-GATE · 2026-07-09] El plan YA está aprobado; el surgical regen
+                # es un PULIDO. Si queda poco budget NO lo arriesgamos — un regen que exceda el wall-timeout
+                # provoca cancelación DURA que DESCARTA el aprobado → usuario sin plan (fallo corr=08f60b00).
+                _ps = state.get("pipeline_start")
+                _low_budget = False
+                _remaining = None
+                if MARKER_REGEN_MIN_BUDGET_S > 0 and _ps:
+                    _remaining = GLOBAL_PIPELINE_TIMEOUT_S - (time.time() - _ps)
+                    _low_budget = _remaining < MARKER_REGEN_MIN_BUDGET_S
+                if _low_budget:
+                    logger.warning(
+                        f"🩹 [P1-MARKER-REGEN-BUDGET-GATE] Plan aprobado con {len(marker_days)} día(s) "
+                        f"marker pero budget bajo ({_remaining:.0f}s < {MARKER_REGEN_MIN_BUDGET_S}s) → "
+                        f"ENTREGO el aprobado (degradado-minor) en vez de arriesgar un timeout total."
+                    )
+                    _mark_plan_result_quality_degraded(
+                        state, reason="slot_coherence_unresolved", severity="minor"
+                    )
+                    if APPROVED_RESIDUAL_ALERT_ENABLED:
+                        _emit_plan_quality_degraded_alert(state, "approved_with_residual", severity="minor")
+                    # NO return → cae a la entrega del aprobado abajo (return "end").
+                else:
+                    logger.info(
+                        f"🩹 [ORQUESTADOR] Revisión aprobada PERO {len(marker_days)} "
+                        f"día(s) con `_critique_unresolved` (días {marker_days})"
+                        + (f" + {len(_fb_days)} día(s) `_day_fallback` (días {_fb_days})" if _fb_days else "")
+                        + " → surgical regen antes de enviar al usuario."
+                    )
+                    return "marker_regen"
         elif MARKER_UNRESOLVED_HONESTY:
             # [P1-MARKER-UNRESOLVED-HONESTY · 2026-06-23] El surgical regen YA corrió pero
             # pueden quedar días con `_critique_unresolved` (timeout/CB/error en la 2da pasada).
