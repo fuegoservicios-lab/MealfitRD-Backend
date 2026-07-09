@@ -6558,8 +6558,29 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
         except Exception as _c3e:
             logger.warning(f"[A1-HARDEN-POOLS clase3] falló (skip): {type(_c3e).__name__}: {_c3e}")
 
-    # ── Ramas pendientes (Tasks 3-5, cada una bajo su propio knob) ──
-    #   clase 5 (HARDEN_SALTCURED_MAIN)   — exclusión salado-como-principal
+    # ── Clase 5 · HARDEN_SALTCURED_MAIN — exclusión salado-como-principal ──
+    # P1-SODIUM-BOMB-POOL solo baja el peso x0.1 (probabilístico) — una proteína curada en sal puede
+    # salir igual como principal del día y reventar el techo de sodio OMS (2000mg) ella sola. Aquí la
+    # excluimos DURAMENTE del protein_pool (slot principal), universal (goal-independiente). Sigue
+    # permitida como saborizante/acompañante (que el day-gen añade fuera del pool). Nunca vacía el pool.
+    if HARDEN_SALTCURED_MAIN:
+        from constants import strip_accents as _sa5
+        # espeja ai_helpers._SALT_CURED_PROTEIN_TOKENS (P1-SODIUM-BOMB-POOL). tooltip-anchor: A1-SALTCURED-NEVER-MAIN
+        _SALT_CURED_NEVER_MAIN = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
+                                  "mortadela", "tocino", "panceta", "longaniza", "chorizo",
+                                  "salchicha", "embutido", "jamon")
+        for _d in days:
+            _orig = _d.get("protein_pool") or []
+            if not _orig:
+                continue
+            _kept = [p for p in _orig
+                     if not any(t in _sa5(str(p).lower()) for t in _SALT_CURED_NEVER_MAIN)]
+            if len(_kept) < len(_orig) and _kept:
+                counts["saltcured_removed"] += (len(_orig) - len(_kept))
+                _d["protein_pool"] = _kept
+            # _kept vacío → conservar original (nunca vaciar; peso x0.1 + backstops post-hoc siguen)
+
+    # ── Ramas pendientes (Tasks 4-5, cada una bajo su propio knob) ──
     #   clase 1 (HARDEN_SAMEDAY_PROTEIN)  — binding slot→proteína mismo día
     #   clase 2 (HARDEN_CROSSDAY_QUOTA)   — cuota round-robin cross-día
     return counts
