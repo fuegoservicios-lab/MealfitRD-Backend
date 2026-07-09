@@ -180,7 +180,17 @@ Cada fase es shippable de forma independiente y tendrá su **propio plan de impl
 **Riesgo:** medio. Riesgo de cobertura si los detectores deterministas no cubren un caso que self_critique atrapaba → mitigado por conservar el corrector quirúrgico (#10) y correr detrás de flag con canario. **Necesita firma del owner del umbral de regresión.**
 
 ### Fase 3 — Raíz de coherencia (no curita)
-**Objetivo:** matar el whack-a-mole de coherencia que nunca converge.
+
+> **ESTADO (2026-07-09): esencialmente DONE tras verificación — NO hay trabajo de código claramente justificado.**
+> - **Platos compuestos "0-silent uncounted": YA RESUELTO.** `_compound_dish_lookup` (60 platos criollos en `dominican_dishes.json`, `nutrition_db.py:479-557`) + abstención grácil del solver (`_apply_macro_solver_to_meal` conserva macros del LLM si coverage<floor) + telemetría multi-capa (`_maybe_mark_low_resolution_degraded` floor 0.7, drift cron). Coverage prod medido: **avg 0.936, min 0.878, cero planes bajo el floor**. Era un ítem stale en este spec.
+> - **Whack-a-mole coherencia: mayormente cerrado** por `MEALFIT_REVIEW_COHERENCE_BLOCK_SEVERE_ONLY` (default True, deployado 2026-07-09).
+> - **Backfill `package_grams`: MISCARACTERIZADO.** El guard **nunca lee `package_grams`** (`shopping_calculator.py:3594` es artefacto de display/SKU-picker). Para carnes vendidas a granel (Res/Cangrejo/Chivo/Pulpo), NO tener contenedor es la representación CORRECTA, no un defecto. **No backfillear.**
+> - **Residual A (unit-phantom recipe-g vs list-lbs): ya cubierto.** El converter está ON por default (`_get_coherence_unit_converter_enabled()` → True; el docstring "canary" es stale) y la tabla de tokens (`lb/lbs/oz/kg/g/libra(s)/onz`) es completa (`shopping_calculator.py:2139-2141`). Un "Step 1" de hardening sería belt-and-suspenders sin valor real.
+> - **Residual B (missing-food genuino se entrega en silencio): ÚNICO residual real, EVIDENCE-GATED.** El severe-only exige count≥2 o magnitud≥50%, así que un único alimento genuinamente ausente ahora degrada a warn + se entrega (con telemetría + cron diario P3-B). El fix correcto NO es re-escalar presence→retry (re-abre el whack-a-mole) sino un add-to-list determinista — pero **construirlo requiere que el owner primero saque los registros reales de `_shopping_coherence_block_history`/logs VPS** para confirmar que casos genuinos (no falsos-positivos) ocurren. Podría ser un tradeoff de producto aceptable (entregar el raro miss genuino + cron lo caza). **No construir especulativamente.**
+>
+> **Conclusión:** Fase 3 no tiene trabajo de código claramente justificado. Lo único abierto (Residual B) necesita evidencia de prod del owner para decidir si vale construirlo.
+
+**Objetivo (diseño original):** matar el whack-a-mole de coherencia que nunca converge.
 **Cambios:**
 - **Backfill `package_grams`/SKU** para proteínas menos comunes (Res/Cangrejo/Chivo/Pulpo) — raíz del falso positivo de coherencia rotativa.
 - **Reparación determinista add-to-list** en `run_shopping_coherence_guard` (`shopping_calculator.py`): un ítem de coherencia faltante se arregla **en la lista**, no regenerando el plano completo.
