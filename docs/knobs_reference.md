@@ -1,18 +1,32 @@
 # Knobs operacionales `MEALFIT_*` — referencia de discovery
 
-[P2-KNOBS-OPERATIONAL-DOC · 2026-05-23] Este documento existe para resolver
-el gap operacional del audit 2026-05-23: el backend tiene **~161 env vars
-`MEALFIT_*`** referenciados en código, pero `backend/.env.example` solo
-documenta ~10 overrides recomendados. Un operador nuevo no sabe dónde
-están los demás, y durante un incidente puede no encontrar el knob de
-mitigación.
+<!-- tooltip-anchor: P3-CONFIG-KNOBS-DOC-REFRESH -->
 
-Este doc **NO mirror** los 161 knobs (drift garantizado). En lugar de eso:
+
+[P2-KNOBS-OPERATIONAL-DOC · 2026-05-23 · conteo refrescado P3-CONFIG-KNOBS-DOC-REFRESH · 2026-07-09]
+Este documento existe para resolver el gap operacional del audit 2026-05-23: el backend tiene
+**cientos de env vars `MEALFIT_*`** referenciadas en código, pero `backend/.env.example` solo
+documenta ~10 overrides recomendados. Un operador nuevo no sabe dónde están los demás, y durante
+un incidente puede no encontrar el knob de mitigación.
+
+**Conteo actual (2026-07-09):** ~**420 knobs registrados** en `_KNOBS_REGISTRY` at import (via
+`get_knobs_registry_snapshot()`); el universo estático de nombres `MEALFIT_*` en source es mayor
+(~900, incluye lecturas in-function que se registran al ejecutarse + referencias en comentarios/tests).
+El conteo previo del doc ("~161") era stale. **NO confíes en un número hardcodeado** — corre el
+listado vivo:
+
+```bash
+PYTHONPATH=backend python backend/scripts/dump_knobs.py          # tabla legible (regenera desde el registry)
+PYTHONPATH=backend python backend/scripts/dump_knobs.py --json   # JSON para tooling
+```
+
+Este doc **NO mirror-ea** los knobs (drift garantizado — precisamente lo que le pasó al "~161").
+En lugar de eso:
 
 1. **Explica el mecanismo de auto-registro** (cómo descubrirlos at runtime).
 2. **Enumera knobs de alto valor para producción** (los que un SRE
    probablemente quiera tunear sin esperar redeploy).
-3. **Linka el endpoint público que expone los activos**.
+3. **Linka el endpoint público que expone los activos** + el script `dump_knobs.py` para el listado completo.
 
 ## Mecanismo de auto-registro
 

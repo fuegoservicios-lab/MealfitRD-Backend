@@ -10525,7 +10525,7 @@ _MICRO_SOFT_REJECT_KEYS = frozenset({"fiber_g", "potassium_mg", "magnesium_mg", 
 # [P1-OBJECTIVE-LEVERS-ON · 2026-06-29] Default flipped OFF→ON (prerequisito: P1-MICRO-CLOSER-RAW-SYNC, que hace
 # que el closer escale `ingredients_raw` y por tanto el panel/lista/macros REFLEJEN el cierre — sin ese fix el
 # closer era invisible). Es el ÚNICO lever determinista que mueve micros al DRI (espejo del closer de proteína).
-# Riesgo de banda acotado: tope ≤MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY (80) kcal/día COMPARTIDO, techos UL por
+# Riesgo de banda acotado: tope ≤MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY (120) kcal/día COMPARTIDO, techos UL por
 # micro, escala un ingrediente YA presente (no toca alérgenos/lista), skip renal, y el MACRO_REBALANCE (ON) re-
 # apunta los macros después. Rollback sin redeploy: MEALFIT_MICRONUTRIENT_CLOSER=false.
 MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", True)
@@ -12142,7 +12142,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
     zinc/vit C tras P1-MICRO-CLOSER-COVERAGE) que el reporte advisory marca genuinamente BAJO el piso DRI **con
     cobertura alta** (`status=='bajo'`, NO 'estimado_bajo' que es incierto). Recorre DÍA-por-fuera, micro-por-dentro,
     con un PRESUPUESTO de kcal COMPARTIDO por día (`MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY`) → el total añadido al día
-    está acotado sin importar cuántos micros se cierren (cierra el invariante "≤80 kcal/día" que un budget per-micro
+    está acotado sin importar cuántos micros se cierren (cierra el invariante "≤MAX_KCAL_PER_DAY (120 def)" que un budget per-micro
     rompía al crecer el set de micros). Para cada micro deficitario ESCALA el ingrediente existente más rico
     (vegetal/leguminosa/hoja/lácteo/carne, ya en el plato), acotado por:
       - factor ≤ MICRONUTRIENT_CLOSER_MAX_SCALE,
