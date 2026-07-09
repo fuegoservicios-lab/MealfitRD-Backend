@@ -510,6 +510,40 @@ SLOT_INCOHERENCE_GATE_ENABLED = _env_bool("MEALFIT_SLOT_INCOHERENCE_GATE", False
 # retry COMPLETO (NO quirúrgico). Único consumidor hoy es self_critique. Nace OFF. Rollback: =False.
 STAPLE_REPEAT_GATE_ENABLED = _env_bool("MEALFIT_STAPLE_REPEAT_GATE", False)
 
+# [A1-HARDEN-POOLS · 2026-07-09] Endurecimiento determinista de la SELECCIÓN de alimentos a nivel de
+# pool: vuelve imposibles-por-construcción ~5 clases de identidad que hoy se defienden con retry-loops
+# caros y backstops de paridad (el whack-a-mole) — condición-contraindicada (clase 3), salado-como-main
+# (clase 5), proteína repetida mismo-día (clase 1), repetición cross-día (clase 2). El day-gen LLM
+# conserva la composición del plato + recetas + personalización dentro de rieles ahora infranqueables.
+# NACE TODO OFF (canariar contra clinical_band antes de flipear). NO retira ningún backstop
+# (reviewer/coherence/allergen/diet/renal/collect_substitutions/_apply_protein_pool_scrub sobreviven
+# degradados). Ver spec docs/superpowers/specs/2026-07-09-plangen-A1-pool-hardening-design.md.
+HARDEN_POOLS_ENABLED     = _env_bool("MEALFIT_HARDEN_POOLS_ENABLED", False)       # master kill-switch
+HARDEN_CONDITION_CATALOG = _env_bool("MEALFIT_HARDEN_CONDITION_CATALOG", False)   # clase 3
+HARDEN_SALTCURED_MAIN    = _env_bool("MEALFIT_HARDEN_SALTCURED_MAIN", False)      # clase 5
+HARDEN_SAMEDAY_PROTEIN   = _env_bool("MEALFIT_HARDEN_SAMEDAY_PROTEIN", False)     # clase 1
+HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)      # clase 2
+HARDEN_POOLS_CANARY_PCT  = _env_int("MEALFIT_HARDEN_POOLS_CANARY_PCT", 0, validator=lambda v: 0 <= v <= 100)
+
+
+def _harden_pools_canary_cohort(state) -> str:
+    """[A1-HARDEN-POOLS] Cohorte determinista del canario A1: 'off' si el plan cae en el
+    `HARDEN_POOLS_CANARY_PCT`% (bucket sha256 con salt PROPIO 'harden_pools|', insesgado A/B,
+    estable por usuario), 'on' si no. PCT=0 → siempre 'on'. Fail-safe → 'on'. El salt independiente
+    evita confundir esta cohorte con la de self_critique para el MISMO usuario."""
+    try:
+        pct = HARDEN_POOLS_CANARY_PCT
+        if pct <= 0:
+            return "on"
+        if pct >= 100:
+            return "off"
+        fd = state.get("form_data") or {}
+        _id = fd.get("user_id") or fd.get("session_id") or state.get("session_id") or "anon"
+        bucket = int(hashlib.sha256(f"harden_pools|{_id}".encode()).hexdigest(), 16) % 100
+        return "off" if bucket < pct else "on"
+    except Exception:
+        return "on"
+
 # ============================================================
 # [P4-TIMEOUT-2] Self-critique circuit breaker
 # ------------------------------------------------------------
@@ -6466,6 +6500,27 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         "attempt": attempt,
         "_cached_context": ctx
     }
+
+
+def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
+    """[A1-HARDEN-POOLS · 2026-07-09] Enforcer determinista de los pools por día. Muta
+    `skeleton['days'][*]['protein_pool'|'carb_pool'|'fruit_pool']` IN-PLACE (mismos objetos lista que
+    lee el day-generator en build_day_assignment_context) ANTES de que el LLM los lea, de modo que las
+    clases de identidad se vuelven inalcanzables por construcción. Cada clase gateada por su knob (todas
+    OFF por default → no-op). Retorna conteos para telemetría. NO retira ningún backstop post-hoc.
+    tooltip-anchor: A1-HARDEN-POOLS"""
+    counts = {"condition_removed": 0, "saltcured_removed": 0, "sameday_bound": 0, "crossday_capped": 0}
+    if not HARDEN_POOLS_ENABLED:
+        return counts
+    days = (skeleton or {}).get("days") or []
+    if not days:
+        return counts
+    # Ramas por clase (añadidas por Tasks 2-5, cada una bajo su propio knob):
+    #   clase 3 (HARDEN_CONDITION_CATALOG) — filtro de pool por condición médica
+    #   clase 5 (HARDEN_SALTCURED_MAIN)    — exclusión salado-como-principal
+    #   clase 1 (HARDEN_SAMEDAY_PROTEIN)   — binding slot→proteína mismo día
+    #   clase 2 (HARDEN_CROSSDAY_QUOTA)    — cuota round-robin cross-día
+    return counts
 
 
 def _sanitize_unauthorized_protein_text(
