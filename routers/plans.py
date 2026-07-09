@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request, Response, Query
 from fastapi.responses import StreamingResponse
 from error_utils import safe_error_detail
 from typing import Optional, Any
@@ -35,6 +35,8 @@ from graph_orchestrator import (
     # `MEALFIT_WATER_RETRY_BACKOFF_BASE_S` / `MEALFIT_WATER_RETRY_JITTER_MAX_S`
     # del helper `_execute_with_retry` (auto-registro en KNOBS_REGISTRY).
     _env_float,
+    # [P1-CANCEL-DIRECT-TASK · 2026-07-09] `_env_bool` para el knob MEALFIT_CANCEL_CANCELS_PIPELINE.
+    _env_bool,
     # [P1-FORM-6] Merge defensivo de `other*` text fields al router. El merge
     # también ocurre dentro de `arun_plan_pipeline` (línea ~8430); idempotente
     # (dedup case-insensitive). Hacerlo al router blinda contra futuros
@@ -182,6 +184,93 @@ def _clear_cancelled_session(session_id: str) -> None:
         return
     with _PLAN_CANCEL_LOCK:
         _PLAN_CANCEL_REGISTRY.discard(session_id)
+
+
+# [P1-CANCEL-DIRECT-TASK · 2026-07-09] El botón Cancelar debe cancelar DE VERDAD el pipeline. Antes el
+# endpoint /cancel solo registraba el session_id y confiaba en que el SSE loop lo detectara "en la próxima
+# iteración" (_should_stop) — pero si el cliente ya abortó el stream, el generator sale por el path
+# CancelledError (disconnect → deep-search keep-running) y esa iteración NUNCA corre → el pipeline seguía
+# hasta terminar y persistía el plan (forense e691498e 2026-07-09). Fix: mapear session_id → (task, loop) y
+# cancelar la asyncio.Task DIRECTAMENTE desde el endpoint. Preserva deep-search para disconnect SIN cancel
+# explícito (cierre de pestaña NO llama a /cancel). Knob para rollback sin redeploy.
+CANCEL_CANCELS_PIPELINE = _env_bool("MEALFIT_CANCEL_CANCELS_PIPELINE", True)
+_PIPELINE_TASK_REGISTRY: dict = {}
+
+# [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Recuperación deep-search para GUESTS (no logueados). Los guests
+# no persisten en meal_plans (FK a user_profiles) → si cerraban la pestaña mid-generación el plan se
+# descartaba. Ahora el plan de guest se guarda en KV (`guest_plan:<session_id>`) + el status en
+# `pending_pipeline:<session_id>`, y /pending-status + /guest-plan aceptan session_id. Flip a False
+# revierte al comportamiento previo (guests efímeros). tooltip-anchor: P1-GUEST-PLAN-RECOVERY
+GUEST_PLAN_RECOVERY_ENABLED = _env_bool("MEALFIT_GUEST_PLAN_RECOVERY", True)
+
+# [P1-PIPELINE-CONCURRENCY-CAP · 2026-07-09] Ceiling sobre pipelines de generación
+# concurrentes en el proceso `--workers 1`. LLM_MAX_CONCURRENT (graph_orchestrator)
+# acota las *llamadas* LLM, no los *objetos* pipeline; sin este cap, N usuarios distintos
+# (y guests, que evitan el guard per-user) crean N tasks arun_plan_pipeline vivas, cada
+# una reteniendo estado del grafo hasta GLOBAL_PIPELINE_TIMEOUT_S → OOM-creep bajo lentitud
+# del provider (bg_executor.py:11-14). Default 8 = 2× LLM_MAX_CONCURRENT(4): mantiene los 4
+# slots LLM saturados con una cola somera mientras acota los objetos vivos. Knob para
+# tuning/rollback sin redeploy.
+_ACTIVE_PIPELINES_LOCK = _p116_threading.Lock()
+_ACTIVE_PIPELINES: dict = {"count": 0}
+_MAX_CONCURRENT_PIPELINES = _env_int(
+    "MEALFIT_MAX_CONCURRENT_PLAN_PIPELINES", 8, validator=lambda v: 1 <= v <= 64
+)
+
+
+def _try_acquire_pipeline_slot() -> bool:
+    """Reserva un slot de pipeline si hay capacidad. True = admitido, False = en el cap.
+    Thread-safe: el pipeline arranca en el event loop pero el contador se comparte con el
+    done-callback (que puede correr en otro contexto). tooltip-anchor: P1-PIPELINE-CONCURRENCY-CAP"""
+    with _ACTIVE_PIPELINES_LOCK:
+        if _ACTIVE_PIPELINES["count"] >= _MAX_CONCURRENT_PIPELINES:
+            return False
+        _ACTIVE_PIPELINES["count"] += 1
+        return True
+
+
+def _release_pipeline_slot() -> None:
+    """Libera un slot. Floor en 0 — un release de más NO debe "ganar" capacidad fantasma."""
+    with _ACTIVE_PIPELINES_LOCK:
+        if _ACTIVE_PIPELINES["count"] > 0:
+            _ACTIVE_PIPELINES["count"] -= 1
+
+
+def _register_pipeline_task(session_id, task, loop) -> None:
+    """Registra la `asyncio.Task` del pipeline + su event loop por session_id, para que
+    `POST /api/plans/cancel` (endpoint sync/threadpool) pueda cancelarla cross-thread. Fail-safe."""
+    if not session_id or task is None:
+        return
+    with _PLAN_CANCEL_LOCK:
+        _PIPELINE_TASK_REGISTRY[session_id] = (task, loop)
+
+
+def _unregister_pipeline_task(session_id) -> None:
+    """Quita la entrada del registry (llamar cuando la task termina, para no leakear)."""
+    if not session_id:
+        return
+    with _PLAN_CANCEL_LOCK:
+        _PIPELINE_TASK_REGISTRY.pop(session_id, None)
+
+
+def _cancel_pipeline_task_for_session(session_id) -> bool:
+    """Cancela DIRECTAMENTE la task registrada para session_id vía `loop.call_soon_threadsafe(task.cancel)`
+    (thread-safe: el endpoint es sync/threadpool, la task vive en el event loop). Retorna True si programó
+    la cancelación de una task viva. Idempotente + fail-safe. Gateado por MEALFIT_CANCEL_CANCELS_PIPELINE."""
+    if not session_id or not CANCEL_CANCELS_PIPELINE:
+        return False
+    with _PLAN_CANCEL_LOCK:
+        entry = _PIPELINE_TASK_REGISTRY.get(session_id)
+    if not entry:
+        return False
+    task, loop = entry
+    try:
+        if task is not None and loop is not None and not task.done():
+            loop.call_soon_threadsafe(task.cancel)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 router = APIRouter(
@@ -3142,6 +3231,47 @@ async def api_analyze_stream(
                     f"[P1-DEEP-SEARCH-PIPELINE] Track setup falló (best-effort): {_track_err!r}"
                 )
 
+        # [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Guests (sin actual_user_id) NO entran al bloque de arriba
+        # (`_deep_search_user_id=None`). Registramos su pipeline en KV bajo el session_id para que, al
+        # volver tras cerrar la pestaña, /pending-status devuelva 'generating' → loading, y al completar
+        # recuperen el plan desde `guest_plan:<session_id>`. Aislado del path autenticado; best-effort.
+        _guest_recovery_sid = (
+            session_id if (not actual_user_id and session_id and GUEST_PLAN_RECOVERY_ENABLED) else None
+        )
+        if _guest_recovery_sid:
+            from db_plans import check_user_has_active_pipeline, upsert_pending_pipeline as _upp_guest
+            try:
+                # [P1-GUEST-INFLIGHT-GUARD · 2026-07-09] Espejo del guard autenticado (~línea 3116)
+                # para guests: si el guest ya tiene un pipeline activo < 15 min (recargó la pestaña
+                # mid-generación) rechazar el 2º pipeline → evita duplicar el gasto DeepSeek. Keyed en
+                # el session_id (misma KV pending_pipeline:<sid> que registra abajo). El dedup
+                # POST-completion (get_latest_meal_plan_with_id) NO aplica a guests: no persisten en
+                # meal_plans (FK a user_profiles) — su recovery vive en KV guest_plan:<sid>.
+                _active_g = check_user_has_active_pipeline(_guest_recovery_sid, max_age_min=15)
+                if _active_g:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "pipeline_already_running",
+                            "started_at": _active_g.get("started_at"),
+                            "message": (
+                                "Ya tienes un plan generándose. Espera a que termine "
+                                "(o vuelve, te lo mostraremos cuando esté listo)."
+                            ),
+                        },
+                    )
+                _upp_guest(_guest_recovery_sid, status="generating")
+                logger.info(
+                    f"📌 [P1-GUEST-PLAN-RECOVERY] Pipeline guest registrado en KV "
+                    f"(session={_guest_recovery_sid[:8]}, status=generating)."
+                )
+            except HTTPException:
+                # [P1-GUEST-INFLIGHT-GUARD] Re-lanzar el 409 para que NO lo trague el
+                # best-effort `except Exception` de abajo (espejo del path autenticado).
+                raise
+            except Exception as _ge:
+                logger.warning(f"[P1-GUEST-PLAN-RECOVERY] registro guest falló (best-effort): {_ge!r}")
+
         # [P0 FIX GAP 1] Persistir update_reason global como señal de aprendizaje
         update_reason = data.get("update_reason")
         if actual_user_id and update_reason and update_reason != "dislike":
@@ -3163,13 +3293,32 @@ async def api_analyze_stream(
             inject_learning_signals_from_profile(actual_user_id, pipeline_data)
 
         # Cola async para comunicar progreso entre el thread del pipeline y el generador SSE
-        progress_queue: asyncio.Queue = asyncio.Queue()
+        # [P1-SSE-QUEUE-BOUNDED · 2026-07-09] Cap la cola. Si el cliente SSE se desconecta,
+        # el pipeline sigue corriendo (P1-DEEP-SEARCH-PIPELINE) y el producer sigue emitiendo
+        # eventos por toda la ventana wall-clock (~10 min); sin cap se acumulan en RAM
+        # proporcional a los streams abandonados. Consumer drena cada <=5s; producer coalesced
+        # a ~1 evento/250ms/día (P1-1) → 1000 slots ≈ >4 min de buffer antes de dropear
+        # (~0.2-1 MB por pipeline abandonado). Knob para rollback sin redeploy.
+        _sse_q_max = _env_int(
+            "MEALFIT_SSE_PROGRESS_QUEUE_MAXSIZE", 1000, validator=lambda v: 100 <= v <= 100_000
+        )
+        progress_queue: asyncio.Queue = asyncio.Queue(maxsize=_sse_q_max)
         loop = asyncio.get_event_loop()
 
         def progress_callback(event_data: dict):
             """Callback thread-safe que pone eventos en la cola async."""
+            # [P1-SSE-QUEUE-BOUNDED] put_nowait sobre una cola con maxsize lanza
+            # asyncio.QueueFull EN EL THREAD DEL LOOP (el try/except de abajo solo cubre
+            # el scheduling de call_soon_threadsafe, NO el put agendado). Cliente
+            # desconectado/lento → dropear el evento de progreso (best-effort; el plan
+            # igual persiste y se recupera via /pending-status; solo se pierde UI streaming).
+            def _safe_put():
+                try:
+                    progress_queue.put_nowait(event_data)
+                except asyncio.QueueFull:
+                    pass
             try:
-                loop.call_soon_threadsafe(progress_queue.put_nowait, event_data)
+                loop.call_soon_threadsafe(_safe_put)
             except Exception:
                 pass
 
@@ -3202,17 +3351,50 @@ async def api_analyze_stream(
                     except Exception:
                         pass
             finally:
-                # Señal de fin para que el generador SSE cierre
+                # Señal de fin para que el generador SSE cierre.
+                # [P1-SSE-QUEUE-BOUNDED · 2026-07-09] Bajo cola llena, el _done NO se puede
+                # dropear (colgaría el generador hasta su timeout de 5s): drop-oldest-then-put
+                # para garantizar que un consumer vivo reciba el sentinel.
+                def _safe_put_done():
+                    try:
+                        progress_queue.put_nowait({"event": "_done"})
+                    except asyncio.QueueFull:
+                        try:
+                            progress_queue.get_nowait()  # drop-oldest (evento de progreso)
+                            progress_queue.put_nowait({"event": "_done"})
+                        except Exception:
+                            pass
                 try:
-                    loop.call_soon_threadsafe(progress_queue.put_nowait, {"event": "_done"})
+                    loop.call_soon_threadsafe(_safe_put_done)
                 except Exception:
                     pass
+
+        # [P1-PIPELINE-CONCURRENCY-CAP · 2026-07-09] Rechazar si el proceso ya está en
+        # capacidad. Cubre los huecos que el guard per-user (~línea 3116) no cierra: N
+        # usuarios distintos Y guests. 503 (retryable) — se lanza ANTES de abrir el
+        # StreamingResponse, así el cliente recibe un JSON 503 limpio (no un SSE roto).
+        # El slot se libera en _on_pipeline_task_done (corre en natural/error/cancel), que
+        # se attachea a la task creada justo abajo → no se leakea aunque el SSE cierre antes.
+        if not _try_acquire_pipeline_slot():
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "server_busy_generating",
+                    "message": (
+                        "Estamos generando muchos planes ahora mismo. Espera unos "
+                        "segundos y vuelve a intentarlo."
+                    ),
+                },
+            )
 
         # [P1-16] Retener el handle del task del pipeline para poder cancelarlo
         # cooperativamente si el frontend POST /api/plans/cancel llega antes
         # de que el pipeline complete. Sin handle no podemos llamar `.cancel()`
         # ni propagar `asyncio.CancelledError` al pipeline aún en vuelo.
         _pipeline_task = asyncio.create_task(run_pipeline())
+        # [P1-CANCEL-DIRECT-TASK · 2026-07-09] Registrar (task, loop) por session_id para que
+        # POST /api/plans/cancel pueda cancelar el pipeline DIRECTAMENTE aunque el SSE ya cerró.
+        _register_pipeline_task(session_id, _pipeline_task, loop)
 
         # [P2-PIPELINE-TASK-DONE-CALLBACK · 2026-05-16] Bug observado 2026-05-16
         # 02:39-02:53 (plan_id=ninguno): user inició plan, cerró pestaña a los
@@ -3257,6 +3439,19 @@ async def api_analyze_stream(
         _sse_completed_naturally = {"flag": False}
 
         def _on_pipeline_task_done(_task):
+            # [P1-CANCEL-DIRECT-TASK · 2026-07-09] La task terminó (natural/error/cancel) → liberar su
+            # entrada del registry. Aquí (no en el SSE finally) para que un POST /cancel tardío en
+            # deep-search aún encuentre la task viva.
+            try:
+                _unregister_pipeline_task(session_id)
+            except Exception:
+                pass
+            # [P1-PIPELINE-CONCURRENCY-CAP · 2026-07-09] Liberar el slot global del pipeline.
+            # Corre en natural/error/cancel → el slot no se leakea aunque el SSE cerrara temprano.
+            try:
+                _release_pipeline_slot()
+            except Exception:
+                pass
             try:
                 if _task.cancelled():
                     _err_msg = "Pipeline cancelled (timeout o cancel cooperativo)"
@@ -3456,6 +3651,53 @@ async def api_analyze_stream(
                         f"failed; KV marcado failed para "
                         f"user={_deep_search_user_id[:8]}. Error: {_err_msg}"
                     )
+
+                # [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Rama GUEST (actual_user_id=None → los if/elif de
+                # arriba se saltan por `_deep_search_user_id` falsy). Guardar el plan en `guest_plan:<sid>`
+                # + marcar el status del pipeline por session_id. Solo se llega aquí si el SSE NO completó
+                # natural (sentinel False = escenario de recovery: el guest cerró la pestaña). Idempotente.
+                if _guest_recovery_sid:
+                    if _final_status == "complete" and _need_fallback_postprocess:
+                        def _schedule_guest_store():
+                            async def _guest_store():
+                                try:
+                                    await asyncio.sleep(3)  # misma race-guard que el fallback autenticado
+                                    _res = pipeline_result.get("result")
+                                    if not isinstance(_res, dict):
+                                        return
+                                    _pd = _res.get("plan_data") if _res.get("plan_data") else _res
+                                    def _store():
+                                        from db_plans import upsert_guest_plan, upsert_pending_pipeline
+                                        if upsert_guest_plan(_guest_recovery_sid, _pd):
+                                            upsert_pending_pipeline(_guest_recovery_sid, status="complete")
+                                        else:
+                                            upsert_pending_pipeline(
+                                                _guest_recovery_sid, status="failed",
+                                                error="guest_plan_store_failed",
+                                            )
+                                    await asyncio.to_thread(_store)
+                                    logger.info(
+                                        f"✅ [P1-GUEST-PLAN-RECOVERY] Plan de guest guardado + KV complete "
+                                        f"(session={_guest_recovery_sid[:8]})."
+                                    )
+                                except Exception as _ge2:
+                                    logger.warning(f"[P1-GUEST-PLAN-RECOVERY] guest store falló: {_ge2!r}")
+                            _t = asyncio.create_task(_guest_store())
+                            _BG_SSE_FALLBACK_TASKS.add(_t)
+                            _t.add_done_callback(_BG_SSE_FALLBACK_TASKS.discard)
+                        try:
+                            loop.call_soon_threadsafe(_schedule_guest_store)
+                        except Exception as _gsch:
+                            logger.warning(f"[P1-GUEST-PLAN-RECOVERY] no se pudo programar guest store: {_gsch!r}")
+                    elif _final_status == "failed":
+                        try:
+                            from db_plans import upsert_pending_pipeline
+                            upsert_pending_pipeline(
+                                _guest_recovery_sid, status="failed",
+                                error=(_err_msg or "guest_pipeline_failed"),
+                            )
+                        except Exception:
+                            pass
             except Exception as _cb_err:
                 # Best-effort: NUNCA lanzar excepción desde un done_callback
                 # (Python las trata como unhandled y las loguea a stderr).
@@ -3902,6 +4144,9 @@ async def api_analyze_stream(
                 # usuarios cancelan repetidamente.
                 if session_id:
                     _clear_cancelled_session(session_id)
+                    # [P1-CANCEL-DIRECT-TASK · 2026-07-09] NO desregistrar la task aquí: en deep-search el
+                    # SSE cierra ANTES que el pipeline, y un POST /cancel tardío debe poder cancelarla. El
+                    # unregister vive en `_on_pipeline_task_done` (cuando la task realmente termina).
 
                 # [P2-LIVE-7 · 2026-05-11] Audit api_usage. `verify_api_quota`
                 # solo lee — sin log_api_usage, streaming pipelines no contaban
@@ -3964,6 +4209,7 @@ async def api_analyze_stream(
 @router.get("/pending-status")
 async def api_pending_pipeline_status(
     verified_user_id: str = Depends(get_verified_user_id),
+    session_id: Optional[str] = Query(None),
 ):
     """[P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Retorna el estado del pipeline
     pendiente para el user autenticado.
@@ -3976,13 +4222,24 @@ async def api_pending_pipeline_status(
         frontend muestra toast "Tu plan está listo" + redirige a /dashboard.
       - `{"status": "failed", "error": "<msg>"}` — pipeline falló; frontend
         muestra toast de error + opción de regenerar.
+
+    [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Para GUESTS (sin verified_user_id) se acepta `session_id` como
+    key del KV (`pending_pipeline:<session_id>`; el guest lo registró al generar). El status 'complete'
+    para guest NO trae plan_id_final (no hay row en meal_plans) — el frontend recupera el plan vía
+    GET /guest-plan?session_id=x. Riesgo aceptado igual que /cancel (P2-CANCEL-NO-AUTH-ACCEPTED): session_id
+    es un UUID no-enumerable client-side; el payload es status de baja sensibilidad.
     """
-    if not verified_user_id or verified_user_id == "guest":
+    lookup_key = None
+    if verified_user_id and verified_user_id != "guest":
+        lookup_key = verified_user_id
+    elif GUEST_PLAN_RECOVERY_ENABLED and session_id and isinstance(session_id, str):
+        lookup_key = session_id
+    if not lookup_key:
         return {"status": "none"}
     try:
         from db_plans import get_pending_pipeline
         # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
-        payload = await asyncio.to_thread(get_pending_pipeline, verified_user_id)
+        payload = await asyncio.to_thread(get_pending_pipeline, lookup_key)
         if not payload:
             return {"status": "none"}
         # Filtrar a campos públicos (no leak `updated_at` interno innecesario).
@@ -3995,6 +4252,22 @@ async def api_pending_pipeline_status(
     except Exception as e:
         logger.warning(f"[P1-DEEP-SEARCH-PIPELINE] /pending-status error: {e!r}")
         return {"status": "none"}
+
+
+@router.get("/guest-plan")
+async def api_guest_plan(session_id: Optional[str] = Query(None)):
+    """[P1-GUEST-PLAN-RECOVERY · 2026-07-09] Devuelve el plan_data guardado de un GUEST para recovery
+    (el guest no persiste en meal_plans). `{"plan": {...days...}}` o `{"plan": None}`. Riesgo aceptado
+    igual que /cancel: session_id es UUID no-enumerable client-side. Read-only, sin auth, sin costo LLM."""
+    if not GUEST_PLAN_RECOVERY_ENABLED or not session_id or not isinstance(session_id, str):
+        return {"plan": None}
+    try:
+        from db_plans import get_guest_plan
+        plan = await asyncio.to_thread(get_guest_plan, session_id)
+        return {"plan": plan or None}
+    except Exception as e:
+        logger.warning(f"[P1-GUEST-PLAN-RECOVERY] /guest-plan error: {e!r}")
+        return {"plan": None}
 
 
 @router.get("/pantry-status")
@@ -4088,6 +4361,7 @@ async def api_budget_floor(
 @router.post("/pending-status/ack")
 async def api_pending_pipeline_ack(
     verified_user_id: str = Depends(get_verified_user_id),
+    session_id: Optional[str] = Query(None),
 ):
     """[P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Limpia el row de pending
     pipeline tras el frontend acknowledge la finalización. Idempotente.
@@ -4095,13 +4369,21 @@ async def api_pending_pipeline_ack(
     Frontend debe llamar este endpoint después de mostrar el toast +
     redirigir a /dashboard (o tras mostrar el error de failed). Sin esto,
     el next mount detectaría el row stale y entraría en loop de redirect.
+
+    [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Para GUESTS limpia AMBAS KV
+    (`pending_pipeline:<sid>` + `guest_plan:<sid>`) por session_id.
     """
-    if not verified_user_id or verified_user_id == "guest":
-        return {"ok": True}
     try:
-        from db_plans import clear_pending_pipeline
-        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
-        await asyncio.to_thread(clear_pending_pipeline, verified_user_id)
+        if verified_user_id and verified_user_id != "guest":
+            from db_plans import clear_pending_pipeline
+            await asyncio.to_thread(clear_pending_pipeline, verified_user_id)
+            return {"ok": True}
+        if GUEST_PLAN_RECOVERY_ENABLED and session_id and isinstance(session_id, str):
+            def _clear_guest():
+                from db_plans import clear_pending_pipeline, clear_guest_plan
+                clear_pending_pipeline(session_id)
+                clear_guest_plan(session_id)
+            await asyncio.to_thread(_clear_guest)
         return {"ok": True}
     except Exception as e:
         logger.warning(f"[P1-DEEP-SEARCH-PIPELINE] /pending-status/ack error: {e!r}")
@@ -7157,10 +7439,14 @@ def api_cancel_plan_generation(data: dict = Body(...)):
         )
         return {"success": False, "message": "session_id requerido"}
     registered = _cancel_session(session_id)
+    # [P1-CANCEL-DIRECT-TASK · 2026-07-09] Cancelar la asyncio.Task del pipeline DIRECTAMENTE (no depender
+    # de que el SSE loop corra otra iteración — no ocurre si el cliente ya cerró el stream). Preserva
+    # deep-search para cierre-de-pestaña (que NO llama a este endpoint).
+    task_cancelled = _cancel_pipeline_task_for_session(session_id)
     logger.info(
         f"🛑 [P6-CANCEL-LOG] POST /api/plans/cancel recibido para "
-        f"session_id={session_id} (registered_now={registered}). "
-        f"event_generator detectará en próxima iteración SSE."
+        f"session_id={session_id} (registered_now={registered}, task_cancelled={task_cancelled}). "
+        f"{'Pipeline task cancelada directamente.' if task_cancelled else 'Fallback: event_generator detectará en próxima iteración SSE.'}"
     )
     # [P3-CANCEL-CLEAR-KV · 2026-05-16] Limpiar el row del KV
     # `pending_pipeline:<session_id>` para que el guardrail
