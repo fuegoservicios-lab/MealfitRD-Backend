@@ -6580,9 +6580,51 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
                 _d["protein_pool"] = _kept
             # _kept vacío → conservar original (nunca vaciar; peso x0.1 + backstops post-hoc siguen)
 
-    # ── Ramas pendientes (Tasks 4-5, cada una bajo su propio knob) ──
-    #   clase 1 (HARDEN_SAMEDAY_PROTEIN)  — binding slot→proteína mismo día
-    #   clase 2 (HARDEN_CROSSDAY_QUOTA)   — cuota round-robin cross-día
+    # ── Clase 2 · HARDEN_CROSSDAY_QUOTA — cuota round-robin cross-día ──
+    # Generaliza el cap max-1-día de _SKELETON_RESTRICTED a TODAS las proteínas pesadas: ninguna puede
+    # estar en el pool de más de ceil(num_days / distinct_available) días → el día beyond-quota
+    # literalmente no puede suministrarla (y `_apply_protein_pool_scrub` lo enforza post-gen). Legumbres/
+    # yogurt/huevo exentas (repetibles). Graceful: nunca vacía un pool (si solo hay 1 proteína, cuota =
+    # num_days → no puede diversificar). tooltip-anchor: A1-HARDEN-POOLS
+    if HARDEN_CROSSDAY_QUOTA and len(days) >= 2:
+        import math as _math
+        from constants import strip_accents as _sac
+        _EXEMPT_QUOTA = ("lenteja", "garbanzo", "habichuela", "gandul", "frijol", "yogur", "huevo")
+        def _quota_exempt(_p):
+            _n = _sac(str(_p).lower())
+            return any(_e in _n for _e in _EXEMPT_QUOTA)
+        _distinct = set()
+        for _d in days:
+            for _p in (_d.get("protein_pool") or []):
+                if not _quota_exempt(_p):
+                    _distinct.add(_sac(str(_p).lower()))
+        _quota = max(1, _math.ceil(len(days) / max(1, len(_distinct))))
+        _kept_days = {}  # proteína_norm → días conservados hasta ahora
+        for _d in days:
+            _pool = _d.get("protein_pool") or []
+            if not _pool:
+                continue
+            _new = []
+            for _p in _pool:
+                if _quota_exempt(_p):
+                    _new.append(_p)
+                    continue
+                _norm = _sac(str(_p).lower())
+                if _kept_days.get(_norm, 0) < _quota:
+                    _new.append(_p)
+                    _kept_days[_norm] = _kept_days.get(_norm, 0) + 1
+                # else: over-quota → drop de este día (el pool de este día pierde esta pesada)
+            if _new and len(_new) < len(_pool):
+                counts["crossday_capped"] += (len(_pool) - len(_new))
+                _d["protein_pool"] = _new
+            # _new vacío → conservar original (graceful, nunca vaciar)
+
+    # ── Clase 1 (HARDEN_SAMEDAY_PROTEIN) — binding slot→proteína mismo día ──
+    # DEFERIDA: el binding "1 proteína pesada distinta por slot principal" requiere que el day-generator
+    # (prompts/day_generator.py) CONSUMA un binding per-slot para ser inalcanzable-por-construcción, y ese
+    # archivo está en WIP activo del owner → coordinar el cambio ahí es un follow-up (no se toca aquí para
+    # no colisionar). El gate same-day (build_variety_report) sigue firing → sin regresión. El knob
+    # HARDEN_SAMEDAY_PROTEIN queda declarado (OFF) como placeholder del follow-up.
     return counts
 
 
