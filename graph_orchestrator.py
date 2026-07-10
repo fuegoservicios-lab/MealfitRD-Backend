@@ -17209,6 +17209,51 @@ RECIPE_CONTRACT_REPAIR_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_REPAIR", Tru
 COHERENCE_SEVERE_UNDERSUPPLY_ONLY = _env_bool("MEALFIT_REVIEW_COHERENCE_SEVERE_UNDERSUPPLY_ONLY", True)
 
 
+# [P2-REVIEW-ISSUES-HUMANIZE · 2026-07-10] Mapeo patrón-técnico → copy es-DO user-friendly para las
+# observaciones ENTREGADAS (`_review_issues` → toast "Plan generado con observaciones"). El string
+# técnico ("COHERENCIA RECETAS LISTA: ... action=reject_minor.") es correcto para logs y directivas
+# de retry (el LLM necesita precisión) pero es jerga para el usuario (screenshot owner 2026-07-10).
+# Prefijos accent-insensitive; lo no-mapeado conserva su texto (sin inventar) menos el sufijo
+# "action=...". tooltip-anchor: P2-REVIEW-ISSUES-HUMANIZE
+_REVIEW_ISSUE_HUMANIZE_MAP = (
+    ("coherencia recetas lista",
+     "Algunas cantidades de la lista de compras pueden variar respecto a las recetas — revísalas antes de comprar."),
+    ("repeticion detectada",
+     "Algunos platos se parecen a los de tus planes recientes — usa «Cambiar Plato» si quieres más variedad."),
+    ("misma proteina repetida el mismo dia",
+     "Un día repite la misma proteína en más de una comida — puedes cambiar uno de esos platos."),
+    ("fruta repetida el mismo dia",
+     "Un día repite la misma fruta en más de una comida — puedes cambiar uno de esos platos."),
+    ("plato-base repetido",
+     "Hay preparaciones parecidas repetidas — usa «Cambiar Plato» si quieres más variedad."),
+    ("mismo plato entre dias",
+     "Un mismo plato se repite en varios días — usa «Cambiar Plato» si quieres más variedad."),
+    ("omitio multiples proteinas", "Algún plato no siguió al 100% la estructura planificada."),
+    ("omitio proteinas", "Algún plato no siguió al 100% la estructura planificada."),
+)
+
+
+def _humanize_review_issue(issue) -> str:
+    """[P2-REVIEW-ISSUES-HUMANIZE] Traduce un issue técnico del reviewer a copy user-friendly.
+    Desconocido → conserva el texto (sin inventar) pero limpia el sufijo `action=...`. Fail-safe."""
+    try:
+        if issue is None:
+            return ""
+        s = str(issue).strip()
+        try:
+            from constants import strip_accents as _sa_hz
+            low = _sa_hz(s.lower())
+        except Exception:
+            low = s.lower()
+        for _pat, _copy in _REVIEW_ISSUE_HUMANIZE_MAP:
+            if _pat in low:
+                return _copy
+        # desconocido: strip del fragmento interno "action=xxx." si viene al final
+        return _re.sub(r"\s*action=\w+\.?\s*$", "", s).strip()
+    except Exception:
+        return str(issue) if issue is not None else ""
+
+
 def _coherence_divergence_undersupply(_d) -> bool:
     """True si la entrada magnitude es SUB-oferta (actual < expected). Fail-safe → False."""
     try:
@@ -35350,7 +35395,16 @@ def _apply_critical_review_guardrails(
         logger.warning(f"⚠️ [P0-1 TRANSPARENCY] Plan entregado tras rechazo no-crítico. "
               f"Marcando para visibilidad en cliente. Severidad: {rejection_severity}")
         plan_result["_review_failed_but_delivered"] = True
-        plan_result["_review_issues"] = rejection_reasons
+        # [P2-REVIEW-ISSUES-HUMANIZE · 2026-07-10] Al usuario copy claro (deduped); el raw queda en
+        # `_review_issues_raw` para forense/soporte. Los logs y directivas de retry NO cambian.
+        plan_result["_review_issues_raw"] = list(rejection_reasons or [])
+        _hz_seen, _hz_out = set(), []
+        for _ri in (rejection_reasons or []):
+            _h = _humanize_review_issue(_ri)
+            if _h and _h not in _hz_seen:
+                _hz_seen.add(_h)
+                _hz_out.append(_h)
+        plan_result["_review_issues"] = _hz_out
         plan_result["_review_severity"] = rejection_severity or "minor"
         if _protein_floor_deliver_degraded:
             # [P1-PROTEIN-FLOOR-DELIVER · 2026-06-26] (audit gap #3) Disclaimer específico de proteína (no
