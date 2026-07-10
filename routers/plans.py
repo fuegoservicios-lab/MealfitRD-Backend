@@ -6821,6 +6821,27 @@ def api_regenerate_day(
             except Exception as _cp_e:
                 logger.warning(f"[P1-REGEN-DAY-CLINICAL-PARITY] falló (no bloquea): {type(_cp_e).__name__}: {_cp_e}")
 
+        # [P2-REGEN-DAY-SODIUM-AUTOFIX · 2026-07-10] El regen-day no corría el corrector de
+        # sodio per-día de S1 (P1-SODIUM-DAY-AUTOFIX): un día regenerado con queso blanco/
+        # cottage/enlatados podía quedar sobre el techo OMS y el usuario recibía el banner
+        # "un día se pasa del techo de sodio" pidiéndole arreglarlo A MANO (caso vivo
+        # 2026-07-10: Día 1 en 2,733/2,000mg justo tras "actualizar platos del día").
+        # Mismo corrector determinista (strip cubito / sal→al gusto / enlatado→fresco / swap
+        # lácteo) sobre new_meals — FUERA de la transacción atómica (P2-MUTATOR-PURITY: es
+        # CPU+lookups; dentro del FOR UPDATE contribuyó al idle-in-txn kill de las 15:19).
+        # Corre ANTES del mutator → el qty-sync y el recompute de micros (dentro) ya ven el
+        # día corregido. Best-effort. Knob MEALFIT_REGEN_DAY_SODIUM_AUTOFIX default ON.
+        # tooltip-anchor: P2-REGEN-DAY-SODIUM-AUTOFIX
+        if os.environ.get("MEALFIT_REGEN_DAY_SODIUM_AUTOFIX", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                from graph_orchestrator import _day_sodium_autofix as _sod_rd
+                _sod_n = _sod_rd([{"meals": new_meals}], form_data=data, db=_db)
+                if _sod_n:
+                    logger.info(f"🧂 [P2-REGEN-DAY-SODIUM-AUTOFIX] {_sod_n} acción(es) de sodio "
+                                f"aplicadas al día regenerado (pre-persist)")
+            except Exception as _sod_e:
+                logger.debug(f"[P2-REGEN-DAY-SODIUM-AUTOFIX] no-op: {_sod_e}")
+
         # Persistencia atómica de days[day_index].meals (espejo de _swap_mutator, escalado al día).
         def _day_mutator(pd: dict) -> dict:
             _days = pd.get("days")
@@ -6843,24 +6864,6 @@ def api_regenerate_day(
                     _rtu(new_meals, float(_rcap.get("protein_g")), db=_db, renal_capped=True)
             except Exception as _renal_day_e:
                 logger.debug(f"[P1-RENAL-UPDATE-ENFORCE] trim renal del día falló (no bloquea): {_renal_day_e}")
-            # [P2-REGEN-DAY-SODIUM-AUTOFIX · 2026-07-10] El regen-day no corría el corrector de
-            # sodio per-día de S1 (P1-SODIUM-DAY-AUTOFIX): un día regenerado con queso blanco/
-            # cottage/enlatados podía quedar sobre el techo OMS y el usuario recibía el banner
-            # "un día se pasa del techo de sodio" pidiéndole arreglarlo A MANO (caso vivo
-            # 2026-07-10: Día 1 en 2,733/2,000mg justo tras "actualizar platos del día").
-            # Mismo corrector determinista (strip cubito / sal→al gusto / enlatado→fresco /
-            # swap lácteo) sobre EL DÍA mutado, ANTES del qty-sync y del recompute de micros —
-            # así el panel y el banner reflejan el estado ya corregido. Best-effort.
-            # Knob MEALFIT_REGEN_DAY_SODIUM_AUTOFIX default ON. tooltip-anchor: P2-REGEN-DAY-SODIUM-AUTOFIX
-            if os.environ.get("MEALFIT_REGEN_DAY_SODIUM_AUTOFIX", "true").strip().lower() in ("1", "true", "yes", "on"):
-                try:
-                    from graph_orchestrator import _day_sodium_autofix as _sod_rd
-                    _sod_n = _sod_rd([_day], form_data=data, db=_db)
-                    if _sod_n:
-                        logger.info(f"🧂 [P2-REGEN-DAY-SODIUM-AUTOFIX] {_sod_n} acción(es) de sodio "
-                                    f"aplicadas al día regenerado (pre-panel)")
-                except Exception as _sod_e:
-                    logger.debug(f"[P2-REGEN-DAY-SODIUM-AUTOFIX] no-op: {_sod_e}")
             # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-10) Re-sincronizar cantidades en los PASOS:
             # el rebalance del día (P2-REGEN-DAY-MACRO-REBALANCE), los caps DM2/bariátrica
             # (P1-REGEN-DAY-CLINICAL-PARITY) y el trim renal de arriba mutan porciones DESPUÉS

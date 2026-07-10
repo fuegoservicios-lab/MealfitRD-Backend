@@ -632,6 +632,22 @@ def update_plan_data_atomic(
                     cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
                 except Exception as set_err:
                     logger.debug(f"[P0-2] No se pudo setear lock_timeout en update_plan_data_atomic: {set_err}")
+                # [P0-PERSIST-TXN-IDLE-ATOMIC · 2026-07-10] Los mutators de esta función corren
+                # DENTRO del FOR UPDATE y algunos (regen-day: micros recompute + panel + rebuild
+                # inline de listas) tienen tramos CPU-bound largos SIN queries → la conexión queda
+                # idle-in-transaction y el SET de sesión del pool (MEALFIT_DB_IDLE_IN_TXN_TIMEOUT_MS
+                # = 15s, db_core) la mata: `terminating connection due to idle-in-transaction
+                # timeout` → HTTP 500 con TODO el trabajo del update perdido (incidente en vivo
+                # 2026-07-10 15:19 en /regenerate-day, misma clase que P0-PERSIST-TXN-IDLE del
+                # INSERT). Mismo remedio que el T1 del chunk (set_meal_plan_for_update_timeouts):
+                # SET LOCAL con presupuesto amplio SOLO para esta transacción (60s default, knob
+                # compartido MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS).
+                try:
+                    _idle_ms_atomic = _env_int("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)
+                    if _idle_ms_atomic > 0:
+                        cursor.execute(f"SET LOCAL idle_in_transaction_session_timeout = '{int(_idle_ms_atomic)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
+                except Exception as set_err:
+                    logger.debug(f"[P0-PERSIST-TXN-IDLE-ATOMIC] no se pudo setear idle timeout: {set_err}")
 
                 # [P2-OPEN-1] SELECT con filtro user_id si presente. Bajo
                 # `FOR UPDATE` el row se locka; si user_id no matchea, no hay
