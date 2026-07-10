@@ -17188,6 +17188,137 @@ def _recipe_step_contract_issues(meal: dict) -> list:
         return []
 
 
+# [P1-RECIPE-CONTRACT-REPAIR · 2026-07-10] El lint de contrato era READ-ONLY en los persist
+# boundaries: cualquier issue → advisory → badge amarillo "Receta con pasos incompletos" al usuario
+# (caso vivo plan 3d11d96e, desayuno Tostadas), aunque el fix fuera mecánicamente derivable del
+# propio meal. Este pase compone la maquinaria existente (split de cocción, backstop de tiempos,
+# templates de 3 pilares de _ensure_nonempty_recipe) para REPARAR antes de flagear. El badge queda
+# SOLO para lo irreparable (inglés residual, receta ausente, excepciones). Familia de correctores
+# deterministas (siblings MISE_COOK_SPLIT/REVERSE-COHERENCE default ON): no puede rechazar nada,
+# solo toca meals YA rotos, fail-open. Rollback: MEALFIT_RECIPE_CONTRACT_REPAIR=false.
+RECIPE_CONTRACT_REPAIR_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_REPAIR", True)
+
+
+def _repair_recipe_contract(meal: dict, issues: list) -> list:
+    """[P1-RECIPE-CONTRACT-REPAIR] Repara deterministamente las clases reparables del contrato de
+    pasos y retorna los issues RESIDUALES (re-lint). Verbatim-move preferido sobre síntesis; JAMÁS
+    inventa fuego para un plato frío. Marca `_recipe_contract_repaired` (honestidad/telemetría).
+    Fail-open: ante excepción retorna los issues originales (el advisory se conserva).
+    tooltip-anchor: P1-RECIPE-CONTRACT-REPAIR"""
+    if not RECIPE_CONTRACT_REPAIR_ENABLED or not isinstance(meal, dict) or not issues:
+        return issues
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return issues  # 'receta ausente' es de _ensure_nonempty_recipe (badge propio)
+        try:
+            from constants import strip_accents as _sa_rr
+        except Exception:
+            def _sa_rr(s):
+                return s
+
+        name = str(meal.get("name") or "").strip() or "el plato"
+        _ings = [str(i).strip() for i in (meal.get("ingredients") or []) if str(i).strip()]
+        ings_txt = ", ".join(_ings[:6]) if _ings else "los ingredientes de la receta"
+        _MISE_TPL = f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de cocinar."
+        _MONTAJE_TPL = f"Montaje: Emplata «{name}», rectifica la sal y sirve a la temperatura adecuada."
+
+        def _pillar_idx(prefix):
+            for _i, _s in enumerate(rec):
+                if (isinstance(_s, str) and not _is_recipe_safety_note_step(_s)
+                        and _sa_rr(_s.strip().lower()).startswith(prefix)):
+                    return _i
+            return -1
+
+        # ── (1) TdF ausente en plato COCINADO: extracción v3 (señal de cocción EN CUALQUIER parte
+        # de la oración, fuentes de 1 sola oración con backfill del Mise, pasos sin prefijo) — los
+        # guards del split v2 (verbo al inicio, ≥2 oraciones) dejaban escapar exactamente el caso
+        # vivo de las Tostadas. Verbatim-move; síntesis por template SOLO si no hay nada extraíble.
+        if "falta 'El Toque de Fuego'" in issues and not _meal_is_no_cook(meal):
+            _cook_all, _drop_idx = [], []
+            for _si, _s in enumerate(list(rec)):
+                if not isinstance(_s, str) or _is_recipe_safety_note_step(_s):
+                    continue
+                _low = _sa_rr(_s.strip().lower())
+                if _low.startswith("el toque de fuego"):
+                    continue
+                _prefix = None
+                if _low.startswith("mise en place"):
+                    _prefix = "Mise en place"
+                elif _low.startswith("montaje"):
+                    _prefix = "Montaje"
+                _body = (_s.split(":", 1)[1].strip() if (_prefix and ":" in _s) else
+                         (_s.strip() if not _prefix else ""))
+                if not _body:
+                    continue
+                _sents = [x.strip() for x in _re.split(r"(?<=\.)\s+", _body) if x.strip()]
+                _cook = [x for x in _sents if _NOCOOK_COOK_SIGNAL_RE.search(_sa_rr(x.lower()))]
+                if not _cook:
+                    continue
+                _keep = [x for x in _sents if x not in _cook]
+                _cook_all.extend(_cook)
+                if _prefix == "Mise en place":
+                    rec[_si] = (f"{_prefix}: " + " ".join(_keep)) if _keep else _MISE_TPL
+                elif _prefix == "Montaje":
+                    rec[_si] = (f"{_prefix}: " + " ".join(_keep)) if _keep else _MONTAJE_TPL
+                else:  # paso sin prefijo
+                    if _keep:
+                        rec[_si] = " ".join(_keep)
+                    else:
+                        _drop_idx.append(_si)
+            for _di in reversed(_drop_idx):
+                rec.pop(_di)
+            if _cook_all:
+                _tdf_step = "El Toque de Fuego: " + " ".join(_cook_all)
+            else:
+                # nada extraíble → síntesis honesta desde template (paridad _ensure_nonempty_recipe)
+                _tdf_step = (f"El Toque de Fuego: Cocina los ingredientes principales de «{name}» "
+                             f"a fuego medio 10-15 minutos, hasta que estén bien cocidos, "
+                             f"sazonando al gusto.")
+            _mo_i = _pillar_idx("montaje")
+            rec.insert(_mo_i if _mo_i != -1 else len(rec), _tdf_step)
+
+        # ── (2) Mise ausente → PREPEND template (nunca promover un paso arbitrario: podría ser cocción)
+        if "falta 'Mise en place'" in issues and _pillar_idx("mise en place") == -1:
+            rec.insert(0, _MISE_TPL)
+
+        # ── (3) Montaje ausente → APPEND template
+        if "falta 'Montaje'" in issues and _pillar_idx("montaje") == -1:
+            rec.append(_MONTAJE_TPL)
+
+        # ── (4) Pilares fuera de orden → reorden estable (contenidos canónicos en los MISMOS slots;
+        # los pasos no-pilar conservan su posición relativa)
+        if "prefijos fuera de orden" in issues:
+            _idxs = {p: _pillar_idx(p) for p in ("mise en place", "el toque de fuego", "montaje")}
+            _present = [(p, i) for p, i in _idxs.items() if i != -1]
+            if len(_present) >= 2:
+                _slots = sorted(i for _, i in _present)
+                _canon = [rec[_idxs[p]] for p in ("mise en place", "el toque de fuego", "montaje")
+                          if _idxs[p] != -1]
+                for _slot, _content in zip(_slots, _canon):
+                    rec[_slot] = _content
+
+        # ── (5) TdF sin tiempo/temp → backstop existente por técnica
+        if any("sin tiempo/temperatura" in _i for _i in issues) or "falta 'El Toque de Fuego'" in issues:
+            try:
+                _inject_recipe_time_temp_defaults(meal)
+            except Exception:
+                pass
+
+        # ── (6) Re-lint honesto: lo reparado desaparece; lo irreparable (inglés residual...) queda.
+        residual = _recipe_step_contract_issues(meal)
+        if len(residual) < len(issues):
+            meal["_recipe_contract_repaired"] = True
+            logger.info(f"🩹 [P1-RECIPE-CONTRACT-REPAIR] {len(issues) - len(residual)} issue(s) de "
+                        f"contrato reparado(s) deterministamente ({len(residual)} residual) | "
+                        f"meal={name[:40]}")
+        return residual
+    except Exception as _rr_e:
+        logger.warning(f"[P1-RECIPE-CONTRACT-REPAIR] no-op (advisory se conserva): "
+                       f"{type(_rr_e).__name__}: {_rr_e}")
+        return issues
+
+
 # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) Tokens accent-stripped de preparaciones TRANSFORMADAS
 # (masa/horneado/recombinación — la creatividad insignia: panqueques de avena, bollitos de yuca,
 # arepitas, domplines...). KPI `transform_ratio` en dish_quality_report: medir→actuar antes de
@@ -20262,6 +20393,10 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                 if isinstance(_m, dict):
                     _ci = _recipe_step_contract_issues(_m)
+                    # [P1-RECIPE-CONTRACT-REPAIR · 2026-07-10] reparar ANTES de flagear: el badge
+                    # queda solo para el residual genuinamente irreparable.
+                    if _ci and RECIPE_CONTRACT_REPAIR_ENABLED:
+                        _ci = _repair_recipe_contract(_m, _ci)
                     if _ci:
                         _m["_recipe_contract_advisory"] = _ci[:4]
                         _nca += 1
@@ -20523,6 +20658,10 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             pass
         try:
             _rc_issues = _recipe_step_contract_issues(meal)
+            # [P1-RECIPE-CONTRACT-REPAIR · 2026-07-10] reparar ANTES de flagear (mismo patrón que
+            # el persist boundary del plan completo).
+            if _rc_issues and RECIPE_CONTRACT_REPAIR_ENABLED:
+                _rc_issues = _repair_recipe_contract(meal, _rc_issues)
             if _rc_issues:
                 meal["_recipe_contract_advisory"] = _rc_issues[:4]
                 logger.info(f"📋 [P2-AUDIT-V6-BATCH] (P2-C) plato de update con contrato de pasos incompleto "
