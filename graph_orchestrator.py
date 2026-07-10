@@ -33263,8 +33263,17 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
 # P0-A2: cap absoluto al campo `_days_to_generate`. El orquestador nunca debe
 # generar más de esto en un solo run del pipeline; chunks adicionales se
 # encolan por `cron_tasks` con su propia gestión de carga. Cliente que envíe
-# `_days_to_generate=9999` queda capeado a `PLAN_CHUNK_SIZE`.
-_MAX_DAYS_TO_GENERATE = PLAN_CHUNK_SIZE
+# `_days_to_generate=9999` queda capeado a este máximo.
+# [P0-CHUNK-DAYS-CAP-SPLIT-PARITY · 2026-07-10] 2×PLAN_CHUNK_SIZE, NO PLAN_CHUNK_SIZE:
+# el splitter P1-A (`constants.split_with_absorb`) produce chunks LEGÍTIMOS de base+1=4
+# días (planes 15/30d) y hasta 2×base=6 con leftover absorbido (21d → [3,4,4,4,6]).
+# Con el cap viejo (=3), el worker pasaba `_days_to_generate=4` server-side, el cap lo
+# recortaba a 3, el pipeline generaba 3 días y la validación GAP3 (espera 4) fallaba en
+# LOOP hasta dead-letter — semanas 7-8 del plan 72c8b965 estancadas + 5 pipelines
+# completos quemados por chunk (visto en vivo 2026-07-10; el WARN "P0-A2 fuera de rango
+# [1, 3]" era la firma). Paridad enforzada por test_p0_chunk_days_cap_split_parity
+# (barre split_with_absorb(3..60) contra este cap). La defensa anti-9999 sigue intacta.
+_MAX_DAYS_TO_GENERATE = PLAN_CHUNK_SIZE * 2
 
 
 def _strip_untrusted_internal_keys(
