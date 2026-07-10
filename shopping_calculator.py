@@ -2458,6 +2458,9 @@ def _resolve_brand_default(name: str, defaults: dict):
         best_k = None
         for k in defaults:
             if len(k) >= 4 and f" {k} " in padded_name:
+                # [P1-BRAND-PREF-PREP-DISTINCT] base↔preparación nunca cross-matchean
+                if _brand_prep_distinct_conflict(key, k):
+                    continue
                 if best_k is None or len(k) > len(best_k):
                     best_k = k
         if best_k:
@@ -2498,11 +2501,33 @@ def _resolve_brand_default(name: str, defaults: dict):
     return out or None
 
 
+# [P1-BRAND-PREF-PREP-DISTINCT · 2026-07-10] Una PREPARACIÓN ("<prep> de <X>") es un producto
+# DISTINTO de su alimento base <X> (lección P1-NUT-BUTTER-DISTINCT / P1-PREP-COLLAPSE-GUARD,
+# ahora en el brand matcher): la contención bidireccional aplicaba la preferencia Jif Cremosa
+# de 'Mantequilla de maní' al ítem 'Maní' (maní entero) — plan vivo 6d742f23 compraba crema de
+# maní (RD$295) en vez del pote de maní tostado (RD$185). Mismo vector: manzana↔vinagre de
+# manzana, trigo↔harina de trigo, coco↔leche/crema de coco.
+_BRAND_PREP_HEADS_RX = re.compile(
+    r"^(mantequilla|crema|harina|leche|aceite|salsa|jugo|pasta|tortilla|pan|vinagre|dulce|mermelada)\s+de\s+")
+
+
+def _brand_prep_distinct_conflict(a: str, b: str) -> bool:
+    """True si `a` y `b` (keys ya normalizadas) son base↔preparación del mismo alimento
+    ("mani" vs "mantequilla de mani") → JAMÁS cross-match de marca en ninguna dirección.
+    tooltip-anchor: P1-BRAND-PREF-PREP-DISTINCT"""
+    for shorter, longer in ((a, b), (b, a)):
+        m = _BRAND_PREP_HEADS_RX.match(longer)
+        if m and f" {shorter} " in f" {longer[m.end():]} ":
+            return True
+    return False
+
+
 def _resolve_brand_pref(name: str, prefs: dict):
     """Resuelve el nombre de un ítem del plan contra las preferencias — misma
     escalera que POST /api/supermarket/match: exacto → singular → contención
     word-boundary bidireccional (padding con espacios: 'sal' NO matchea
-    'salsa'). Empate → la clave más larga (más específica)."""
+    'salsa'). Empate → la clave más larga (más específica).
+    [P1-BRAND-PREF-PREP-DISTINCT] base↔preparación nunca cross-matchean."""
     if not prefs:
         return None
     key = _norm_pref_food(name)
@@ -2517,6 +2542,8 @@ def _resolve_brand_pref(name: str, prefs: dict):
     best_k = None
     for k in prefs:
         if len(k) >= 4 and (f" {k} " in padded or f" {key} " in f" {k} "):
+            if _brand_prep_distinct_conflict(key, k):
+                continue  # mantequilla de maní ≠ maní (producto derivado)
             if best_k is None or len(k) > len(best_k):
                 best_k = k
     return prefs[best_k] if best_k else None
