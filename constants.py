@@ -1,6 +1,7 @@
 import logging
 import os
 import math
+from functools import lru_cache
 from typing import List, Optional
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Embeddings ahora via capa pluggable
 # (Gemini eliminado; DeepSeek no ofrece embeddings — provider pendiente).
@@ -1968,10 +1969,21 @@ def validate_plan_start_date(value, *, now=None):
         return None, "out_of_bounds:future"
     return parsed, None
 
+@lru_cache(maxsize=8192)
+def _strip_accents_cached(s: str) -> str:
+    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
+
 def strip_accents(s: str) -> str:
     """Remueve acentos de un string para comparaciones normalizadas.
-    Esta es la definición CANÓNICA. Importar desde aquí en todos los módulos."""
-    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    Esta es la definición CANÓNICA. Importar desde aquí en todos los módulos.
+    [P2-GUARD-PERF-REGEXCACHE · 2026-07-10] Cacheada (LRU 8192): el coherence guard la invocaba
+    151k veces por corrida sobre un vocabulario de ~centenares de nombres de alimentos (perfil
+    cProfile en VPS: 1.2s por corrida solo en strip_accents). Función pura str→str → cache seguro.
+    El wrapper conserva compatibilidad con inputs no-str ocasionales. tooltip-anchor: P2-GUARD-PERF-REGEXCACHE"""
+    if not isinstance(s, str):
+        s = str(s)
+    return _strip_accents_cached(s)
 
 
 # [P3-CONDITION-RULES · 2026-06-14] Términos canónicos (SSOT) de detección de condiciones del set

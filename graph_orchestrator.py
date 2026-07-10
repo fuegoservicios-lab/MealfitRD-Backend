@@ -17263,13 +17263,25 @@ def _coherence_divergence_undersupply(_d) -> bool:
 
 
 def _coherence_finite_abs_delta(_d) -> float:
-    """|delta_pct| finito de una entrada de divergencia; corrupto/inf → 0.0 (fail-safe)."""
+    """|delta_pct| finito de una entrada de divergencia; corrupto/inf → 0.0 (fail-safe).
+    Si `delta_pct` falta/es 0 pero hay cantidades, lo DERIVA de |act-exp|/exp — una sub-oferta
+    del 50% sin el campo persistido no debe leerse como 'sin drift' (robustez ante entradas de
+    surfaces viejos/fixtures)."""
+    _v = 0.0
     try:
         _v = float(_d.get("delta_pct") or 0.0)
     except (TypeError, ValueError):
-        return 0.0
+        _v = 0.0
     if _v != _v or abs(_v) == float("inf"):
-        return 0.0
+        _v = 0.0
+    if _v == 0.0:
+        try:
+            _exp = float(_d.get("expected_qty") or 0.0)
+            _act = float(_d.get("actual_qty") or 0.0)
+            if _exp > 0.0:
+                _v = abs(_act - _exp) / _exp
+        except (TypeError, ValueError):
+            pass
     return abs(_v)
 
 

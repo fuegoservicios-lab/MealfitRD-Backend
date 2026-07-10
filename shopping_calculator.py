@@ -1158,19 +1158,41 @@ def parse_fraction(val: str) -> float:
     except Exception:
         return 0.0
 
+# [P2-GUARD-PERF-REGEXCACHE · 2026-07-10] Los ~140 stop-words de normalize_name se compilaban como
+# ~140 regexes DINÁMICOS POR LLAMADA (loop `re.sub(r'\b'+s+r'\b')`) — con 160 llamadas por corrida
+# del coherence guard eso producía ~20k compilaciones re.* (el cache LRU de `re` tiene 512 slots →
+# thrash total). Perfil cProfile en VPS (plan real 12 meals): 4.2s de 4.5s dentro de normalize_name;
+# el guard reportaba 9.3-9.7s en prod (umbral 5s). UNA alternación precompilada a nivel módulo,
+# ordenada por longitud DESC para que las frases multi-palabra ('bajo en grasa', 'hecha puré')
+# matcheen antes que sus sub-tokens. Semántica equivalente al loop secuencial (sub global de cada
+# stop; validado por las suites de coherencia/shopping). tooltip-anchor: P2-GUARD-PERF-REGEXCACHE
+_NORMALIZE_STOPS = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
+_NORMALIZE_STOPS_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(s) for s in sorted(_NORMALIZE_STOPS, key=len, reverse=True)) + r')\b',
+    re.IGNORECASE,
+)
+# Prefijos líderes (antes también re-compilados por llamada): precompilados una vez.
+_NORMALIZE_PAREN_RE = re.compile(r'\(.*?\)')
+_NORMALIZE_CONTAINER_PREFIX_RE = re.compile(
+    r'^(cda|cdta|cdita|cucharada|cucharadita|taza|vaso|pizca|chorrito|puñado|atado|manojo|scoop|lonja|loncha|paquete|paquetico|funda|lata|sobre|sobrecito|chin|toque)(s)?\s*(de\s+|del\s+)?',
+    re.IGNORECASE)
+_NORMALIZE_ANATOMY_PREFIX_RE = re.compile(
+    r'^(pechuga|filete|muslo|trozo|chuleta|pieza|corte|ración|racion|porción|porcion|filetico|medallón|medallones|carne)(s)?\s+(de\s+|del\s+)',
+    re.IGNORECASE)
+_NORMALIZE_DE_PREFIX_RE = re.compile(r'^(de\s+|del\s+)', re.IGNORECASE)
+
+
 def normalize_name(orig_name: str) -> str:
     n = str(orig_name).lower().strip()
-    n = re.sub(r'\(.*?\)', '', n).strip()
+    n = _NORMALIZE_PAREN_RE.sub('', n).strip()
     # Limpieza de prefijos contenedores o medidas informales
-    n = re.sub(r'^(cda|cdta|cdita|cucharada|cucharadita|taza|vaso|pizca|chorrito|puñado|atado|manojo|scoop|lonja|loncha|paquete|paquetico|funda|lata|sobre|sobrecito|chin|toque)(s)?\s*(de\s+|del\s+)?', '', n, flags=re.IGNORECASE)
+    n = _NORMALIZE_CONTAINER_PREFIX_RE.sub('', n)
     # Nueva mejora: Limpieza estricta de pseudo-unidades anatómicas LATINAS SOLO si están seguidas de 'de'
-    n = re.sub(r'^(pechuga|filete|muslo|trozo|chuleta|pieza|corte|ración|racion|porción|porcion|filetico|medallón|medallones|carne)(s)?\s+(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
-    n = re.sub(r'^(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
-    
-    stops = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
-    clean_n = n
-    for s in stops:
-        clean_n = re.sub(r'\b' + s + r'\b', '', clean_n, flags=re.IGNORECASE)
+    n = _NORMALIZE_ANATOMY_PREFIX_RE.sub('', n)
+    n = _NORMALIZE_DE_PREFIX_RE.sub('', n)
+
+    # [P2-GUARD-PERF-REGEXCACHE] una sola pasada con la alternación precompilada (ver arriba)
+    clean_n = _NORMALIZE_STOPS_RE.sub('', n)
         
     # Limpiar conjunciones o preposiciones que quedan colgadas al quitar los stops al inicio o al final
     clean_n = re.sub(r'^\s*(y|e|o|en|con|de|del|para)\b', '', clean_n, flags=re.IGNORECASE)
@@ -3846,6 +3868,48 @@ def _classify_divergence_hypothesis(
     return "unknown"
 
 
+def _bucket_unknown_magnitude_ratios(divergences: list) -> dict:
+    """[P1-COHERENCE-UNKNOWN-RATIO-TELEMETRY · 2026-07-08] Distribución de ratios actual/expected de las
+    divergencias de MAGNITUD clasificadas 'unknown'. Evidencia forense para decidir si vale la pena añadir
+    una categoría de hipótesis nueva: `_classify_divergence_hypothesis` cae a 'unknown' cuando la magnitud
+    no encaja en yield/unit_mismatch/pantry_overdeduct, y el propio código (P3-NEW-5) advierte NO añadir
+    categorías sin ver la FORMA de esos ratios (forense plan vivo 70f802ec: `{'unknown': 32}` sin insight).
+    NO cambia el gate — solo telemetría (log del guard + block-history). Puro, fail-safe → {}.
+    tooltip-anchor: P1-COHERENCE-UNKNOWN-RATIO-TELEMETRY"""
+    buckets = {"<0.5": 0, "0.5-0.9": 0, "0.9-1.1": 0, "1.1-1.5": 0, "1.5-2": 0, "2-4": 0, ">=4": 0}
+    try:
+        for d in divergences or []:
+            if not isinstance(d, dict):
+                continue
+            if (d.get("hypothesis") or "unknown") != "unknown":
+                continue
+            try:
+                exp = float(d.get("expected_qty") or 0)
+                act = float(d.get("actual_qty") or 0)
+            except (TypeError, ValueError):
+                continue
+            if exp <= 0 or act < 0:
+                continue
+            r = act / exp
+            if r < 0.5:
+                buckets["<0.5"] += 1
+            elif r < 0.9:
+                buckets["0.5-0.9"] += 1
+            elif r < 1.1:
+                buckets["0.9-1.1"] += 1
+            elif r < 1.5:
+                buckets["1.1-1.5"] += 1
+            elif r < 2:
+                buckets["1.5-2"] += 1
+            elif r < 4:
+                buckets["2-4"] += 1
+            else:
+                buckets[">=4"] += 1
+        return {k: v for k, v in buckets.items() if v > 0}
+    except Exception:
+        return {}
+
+
 def compare_expected_vs_aggregated(
     expected: dict,
     aggregated: dict,
@@ -6407,10 +6471,17 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         from collections import Counter
         by_hyp = Counter(d["hypothesis"] for d in divergences)
         sample = "; ".join(f"{d['food']} [{d['side']}]" for d in divergences[:6])
+        # [P1-COHERENCE-UNKNOWN-RATIO-TELEMETRY · 2026-07-08] Cuando el bucket 'unknown' domina, loguear la
+        # distribución de ratios act/exp para que el operador vea la FORMA (sub-oferta vs over-oferta) y
+        # decida con evidencia si añadir una categoría (P3-NEW-5: no categoría sin datos). NO cambia el gate.
+        _unknown_ratios = {}
+        if _knob_env_bool("MEALFIT_COHERENCE_UNKNOWN_RATIO_TELEMETRY", True) and by_hyp.get("unknown"):
+            _unknown_ratios = _bucket_unknown_magnitude_ratios(divergences)
+        _ratio_txt = f" unknown_ratios={_unknown_ratios}" if _unknown_ratios else ""
         logging.warning(
             f"🛒 [COH-GUARD/{mode}] {len(divergences)} divergencias "
             f"(presence={len(missing_in_agg)+len(extra_in_agg)}, magnitude={len(magnitude_divs)}, "
-            f"multiplier={mult}). Hipótesis: {dict(by_hyp)}. Sample: {sample}"
+            f"multiplier={mult}). Hipótesis: {dict(by_hyp)}.{_ratio_txt} Sample: {sample}"
         )
         if mode == "block":
             critical = []
@@ -6662,6 +6733,12 @@ def run_shopping_coherence_guard_and_append_history(
                 "block_set": block_set,
                 "action_taken": effective_action,
             }
+            # [P1-COHERENCE-UNKNOWN-RATIO-TELEMETRY · 2026-07-08] Persistir la distribución de ratios del
+            # bucket 'unknown' para queries forenses (¿los unknown son sub-oferta 0.5-0.9 o over-oferta?).
+            if _knob_env_bool("MEALFIT_COHERENCE_UNKNOWN_RATIO_TELEMETRY", True) and hyp_counter.get("unknown"):
+                _ur = _bucket_unknown_magnitude_ratios(divergences)
+                if _ur:
+                    entry["unknown_ratios"] = _ur
 
             # Lazy import para evitar ciclo: graph_orchestrator ya importa
             # de shopping_calculator (módulo cargado primero), así que un
