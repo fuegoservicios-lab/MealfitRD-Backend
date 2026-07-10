@@ -39,7 +39,8 @@ import re
 import pytest
 
 
-_CRON = pathlib.Path(__file__).parent / "cron_tasks.py"
+# [P1-E2E-FIXTURE-NEON · 2026-07-10] parents[1]: cron_tasks.py vive en backend/, no en tests/.
+_CRON = pathlib.Path(__file__).resolve().parents[1] / "cron_tasks.py"
 
 
 @pytest.fixture(scope="module")

@@ -1,9 +1,9 @@
 """
 Shared fixtures for backend E2E tests.
 
-Provides `seeded_user_profile`: inserts a synthetic user into auth.users,
-user_profiles, and user_inventory so that E2E chunk tests never skip
-due to missing DB data.
+Provides `seeded_user_profile`: inserts a synthetic user into user_profiles
+and user_inventory so that E2E chunk tests never skip due to missing DB data.
+[P1-E2E-FIXTURE-NEON · 2026-07-10] Neon no tiene schema `auth` — user_profiles es la raíz.
 """
 # [P1-VERIFIED-ONLY-DEFAULT-ON · 2026-07-02] El default de CÓDIGO del knob verified-only pasó a
 # True (cierra la regresión silenciosa ".env reseteado ⇒ enforcement apagado"). El baseline
@@ -111,7 +111,7 @@ def pytest_configure(config):
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def seeded_user_profile():
-    """Create a throwaway user in auth.users → user_profiles → user_inventory.
+    """Create a throwaway user in user_profiles → user_inventory (Neon: sin auth.users).
 
     Yields (user_id, plan_id).  Teardown removes all traces in FK-safe order.
     """
@@ -125,17 +125,12 @@ def seeded_user_profile():
     for tbl in ("plan_chunk_queue", "meal_plans", "user_inventory"):
         execute_sql_write(f"DELETE FROM {tbl} WHERE user_id = %s", (user_id,))
     execute_sql_write("DELETE FROM user_profiles WHERE id = %s", (user_id,))
-    execute_sql_write("DELETE FROM auth.users WHERE id = %s", (user_id,))
 
-    # 1. auth.users  (minimal row that satisfies the FK from user_profiles)
-    execute_sql_write(
-        "INSERT INTO auth.users (id, aud, role, email) "
-        "VALUES (%s, 'authenticated', 'authenticated', %s) "
-        "ON CONFLICT (id) DO NOTHING",
-        (user_id, email),
-    )
-
-    # 2. user_profiles
+    # [P1-E2E-FIXTURE-NEON · 2026-07-10] Neon NO tiene schema `auth` (P1-NEON-DB-MIGRATION):
+    # `user_profiles` es la tabla raíz (cero FKs). El INSERT a auth.users mataba en SETUP
+    # los 8 E2E de chunks 7/15/30d + 23 tests más desde la migración (2026-06-12) —
+    # relation "auth.users" does not exist. `email` va directo en user_profiles.
+    # 1. user_profiles (raíz)
     health_profile = {
         "age": 30,
         "weight": 75,
@@ -150,9 +145,9 @@ def seeded_user_profile():
         "tz_offset_minutes": -240,
     }
     execute_sql_write(
-        "INSERT INTO user_profiles (id, health_profile) VALUES (%s, %s::jsonb) "
+        "INSERT INTO user_profiles (id, email, health_profile) VALUES (%s, %s, %s::jsonb) "
         "ON CONFLICT (id) DO UPDATE SET health_profile = EXCLUDED.health_profile",
-        (user_id, json.dumps(health_profile, ensure_ascii=False)),
+        (user_id, email, json.dumps(health_profile, ensure_ascii=False)),
     )
 
     # 3. user_inventory  (enough staples so pantry checks pass)
@@ -196,7 +191,4 @@ def seeded_user_profile():
     )
     execute_sql_write(
         "DELETE FROM user_profiles WHERE id = %s", (user_id,)
-    )
-    execute_sql_write(
-        "DELETE FROM auth.users WHERE id = %s", (user_id,)
     )
