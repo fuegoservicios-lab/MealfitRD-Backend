@@ -382,25 +382,24 @@ class TestWiringInSwapMeal:
         para gatear retry de tenacity (no `return False` ni `continue`)."""
         # Buscamos un bloque con `not coh_passed` seguido (en ≤500 chars)
         # de un `raise ValueError`.
-        pattern = re.compile(
-            r"not\s+coh_passed.*?raise\s+ValueError",
-            re.DOTALL,
-        )
-        match = pattern.search(agent_src)
-        assert match is not None, (
+        # [P1-SWAP-COHERENCE-REPAIR · 2026-07-10] Hay DOS ocurrencias de `not coh_passed`:
+        # el gate del repair determinista (nuevo, largo, SIN raise propio) y el reject
+        # (compacto, CON raise). Medimos la distancia mínima ocurrencia→raise: el reject
+        # debe seguir siendo un bloque corto que propaga ValueError a tenacity.
+        occ = [m.start() for m in re.finditer(r"not\s+coh_passed", agent_src)]
+        assert occ, (
             "P1-SWAP-RECIPE-COHERENCE regresión: el branch `not "
             "coh_passed` no levanta `ValueError`. Sin esto, tenacity no "
             "reinicia el invoke y el meal incoherente se entrega al user."
         )
-        # Sanity: el match no es desproporcionadamente largo (señal de
-        # que estamos capturando el bloque correcto, no abarcando 5kb).
-        # [P3-SWAP-RETRY-COHERENCE-HINT · 2026-05-22] Cap relajado de 600
-        # → 2000 chars: el self-check directive "REGLA INVARIANTE" añadido
-        # al retry prompt extendió legítimamente el bloque. 2000 sigue
-        # siendo defensivo (full swap_meal body es ~50kb).
-        assert match.end() - match.start() < 2000, (
-            "Match demasiado largo — probablemente el patrón capturó "
-            "un bloque no relacionado. Verificar el wiring inline."
+        dists = []
+        for i in occ:
+            j = agent_src.find("raise ValueError", i)
+            if j > i:
+                dists.append(j - i)
+        assert dists and min(dists) < 2000, (
+            "Match demasiado largo — el bloque de reject (`not coh_passed` → "
+            "`raise ValueError`) dejó de ser compacto. Verificar el wiring inline."
         )
 
     def test_validator_helper_exception_is_best_effort(self, agent_src: str):
@@ -418,8 +417,12 @@ class TestWiringInSwapMeal:
             "CALLSITE de `_validate_recipe_coh(...)`. El validador "
             "no se invoca — wiring removido."
         )
-        idx = match.start()
-        # Tomamos un bloque de ~2500 chars alrededor del callsite
+        # [P1-SWAP-COHERENCE-REPAIR · 2026-07-10] El repair determinista (con su try/except
+        # interno) vive ahora entre el callsite y el par de excepts del wiring → anclamos
+        # la ventana en el log de divergencia del REJECT (post-repair), que precede
+        # inmediatamente al raise y a los excepts externos cuya jerarquía validamos.
+        idx = agent_src.find("[P1-SWAP-RECIPE-COHERENCE] divergence detected")
+        assert idx > 0, "ancla del log de divergencia desapareció"
         window = agent_src[idx:idx + 2500]
         # `except Exception` debe aparecer después del `except ValueError`
         idx_value_err = window.find("except ValueError:")

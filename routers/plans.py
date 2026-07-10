@@ -6441,6 +6441,12 @@ def api_regenerate_day(
         new_meals: list = []
         regenerated = 0
         slots_kept: list = []
+        # [P2-REGEN-DAY-HONEST-CODE · 2026-07-10] Razones reales de cada slot conservado —
+        # el "todos fallaron" se clasificaba SIEMPRE como pantry_insufficient_for_goal y el
+        # frontend mandaba al usuario a "agregar ítems a la Nevera" aunque la causa fuera
+        # drift de macros/coherencia del LLM (regenerate-day 2026-07-10: 4/4 slots agotados
+        # por guardrails, Nevera recién restockeada, toast culpando a la Nevera).
+        _kept_reasons: list = []
         _ai_unavailable = False  # [P5-REGEN-DAY-LLM-DEGRADE] rate-limit / breaker abierto
         # [P5-DAY-REGEN-VARIETY · 2026-06-23] Variedad intra-día: acumula los platos ya resueltos
         # de HOY (nuevos + conservados) para que cada swap siguiente NO los repita (evita el
@@ -6569,6 +6575,7 @@ def api_regenerate_day(
             except ValueError as _ve:
                 # Un plato no se pudo generar desde la nevera → conservar el original.
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
+                _kept_reasons.append(str(_ve))  # [P2-REGEN-DAY-HONEST-CODE] causa real del slot
                 new_meals.append(meal)
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Mismo decrement que la rama else:
@@ -6615,12 +6622,31 @@ def api_regenerate_day(
                     "deficits": [],
                 }
             # Nada se regeneró → NO consumir cuota; soft-fail accionable.
+            # [P2-REGEN-DAY-HONEST-CODE · 2026-07-10] Clasificar por la causa REAL: solo culpamos
+            # a la Nevera si algún slot falló por inventario (SWAP_STRICT_PANTRY_NO_INVENTORY /
+            # ERRORES DE DESPENSA). Si todo fueron guardrails del LLM (drift/coherencia agotó
+            # retries), el copy honesto es "reintenta" — mandar al usuario a comprar ingredientes
+            # no arregla nada y erosiona confianza (visto en vivo 2026-07-10 con Nevera llena).
+            _pantry_reason = any(
+                ("SWAP_STRICT_PANTRY_NO_INVENTORY" in _r) or ("ERRORES DE DESPENSA" in _r)
+                for _r in _kept_reasons
+            )
+            if _pantry_reason:
+                return {
+                    "regen_failed": True,
+                    "error_code": "pantry_insufficient_for_goal",
+                    "error_message": (
+                        "No pudimos crear platos nuevos con lo que hay en tu Nevera. "
+                        "Agrega más ítems (sobre todo proteína) e inténtalo de nuevo."
+                    ),
+                    "deficits": [],
+                }
             return {
                 "regen_failed": True,
-                "error_code": "pantry_insufficient_for_goal",
+                "error_code": "ai_exhausted_retries",
                 "error_message": (
-                    "No pudimos crear platos nuevos con lo que hay en tu Nevera. "
-                    "Agrega más ítems (sobre todo proteína) e inténtalo de nuevo."
+                    "El chef IA no logró alternativas coherentes en este intento. "
+                    "No se descontó tu crédito — vuelve a intentarlo en un momento."
                 ),
                 "deficits": [],
             }

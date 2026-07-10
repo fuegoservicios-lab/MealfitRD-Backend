@@ -1034,11 +1034,20 @@ def swap_meal(form_data: dict):
     # [P0-DEEPSEEK-MIGRATION] Tier-routing: el endpoint /swap-meal valida
     # ownership de `user_id` contra el JWT ANTES de llegar acá (api_swap_meal).
     _swap_uid = form_data.get("user_id")
-    swap_llm = ChatDeepSeek(
+    # [P2-SWAP-COST-INSTRUMENTATION · 2026-07-10] `include_raw=True` → el invoke retorna
+    # {"raw": AIMessage, "parsed": MealModel|None, "parsing_error"}: el AIMessage crudo trae
+    # `usage_metadata` real → las calls del swap dejan de ser INVISIBLES en `llm_usage_events`
+    # (medido 2026-07-10: un regenerate-day quemó ~20 calls con CERO filas de costo; el
+    # cost-by-node del admin no veía esta superficie). Se conserva la referencia al LLM base
+    # (`_swap_base_llm`) porque el emit helper resuelve el modelo desde `.model`/`.model_name`.
+    # Bonus: un fallo de PARSE ya no revienta como excepción de provider (contaba como CB
+    # failure) — llega como parsed=None y se convierte en ValueError retryable (guardrail).
+    _swap_base_llm = ChatDeepSeek(
         model=_chat_agent_swap_model_name(_swap_uid),
         temperature=temp,
         timeout=_chat_swap_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
-    ).with_structured_output(MealModel)
+    )
+    swap_llm = _swap_base_llm.with_structured_output(MealModel, include_raw=True)
 
     # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate per-modelo del swap_llm.
     # Espejo del gate en `call_model` (P1-CHAT-CB · 2026-05-19). Pre-fix:
@@ -1157,7 +1166,27 @@ def swap_meal(form_data: dict):
         )
     )
     def invoke_with_retry():
-        res = swap_llm.invoke(_current_prompt[0])
+        _t0_inv = time.time()
+        _res_env = swap_llm.invoke(_current_prompt[0])
+        # [P2-SWAP-COST-INSTRUMENTATION · 2026-07-10] include_raw=True → envelope
+        # {"raw", "parsed", "parsing_error"}. Emitimos usage del AIMessage crudo y
+        # desempacamos el parsed para que el resto del flujo quede intacto.
+        if isinstance(_res_env, dict) and ("parsed" in _res_env or "raw" in _res_env):
+            try:
+                from graph_orchestrator import _emit_llm_usage_event_best_effort as _emit_swap_usage
+                _emit_swap_usage(llm=_swap_base_llm, result=_res_env.get("raw"),
+                                 duration_s=time.time() - _t0_inv, node="swap_meal")
+            except Exception as _emit_exc:
+                logger.debug(f"[P2-SWAP-COST-INSTRUMENTATION] emit no-op: {type(_emit_exc).__name__}: {_emit_exc}")
+            res = _res_env.get("parsed")
+            if res is None:
+                _perr = _res_env.get("parsing_error")
+                raise ValueError(
+                    f"SWAP_PARSE_ERROR: el LLM no devolvió el schema MealModel válido "
+                    f"({type(_perr).__name__ if _perr is not None else 'parsed=None'}). Reintenta."
+                )
+        else:
+            res = _res_env
 
         # Validación post-generación (guardrail determinista)
         if hasattr(res, "ingredients"):
@@ -1200,6 +1229,57 @@ def swap_meal(form_data: dict):
                     res if isinstance(res, dict) else {}
                 )
                 coh_passed, coh_divs, coh_summary = _validate_recipe_coh(meal_dump)
+                # [P1-SWAP-COHERENCE-REPAIR · 2026-07-10] Reparar ANTES de rechazar: el
+                # regenerate-day del 2026-07-10 quemó 4 intentos completos por menciones
+                # no-listadas ('dorado'/'pepino'/'tostada'/'arroz+guineítos+coliflor') que
+                # son reparables determinísticamente añadiendo la línea faltante — el solver
+                # pre-guardrail (abajo) re-escala después las porciones al target, así que
+                # la qty inicial solo necesita ser plausible. PANTRY-SEGURO: en modo pantry
+                # (clean_ingredients no vacío) solo se repara si el alimento ESTÁ en la
+                # nevera (si no, se mantiene el reject → retry con hint, jamás inventamos
+                # compra). Knob MEALFIT_SWAP_COHERENCE_REPAIR=false desactiva sin redeploy.
+                if (not coh_passed and isinstance(coh_divs, dict) and coh_divs
+                        and os.environ.get("MEALFIT_SWAP_COHERENCE_REPAIR", "true").strip().lower()
+                        in ("1", "true", "yes", "on")):
+                    try:
+                        from constants import strip_accents as _coh_sa
+                        _rep_qty_by_cat = {"proteína": 80, "proteina": 80, "carbohidrato": 60,
+                                           "vegetal": 50, "fruta": 50}
+                        _pantry_blob = _coh_sa(" ".join(str(x) for x in (clean_ingredients or [])).lower())
+                        _rep_lines = []
+                        _rep_ok = True
+                        for _cf_food, _cf_info in coh_divs.items():
+                            _alias = str((_cf_info or {}).get("mentioned_alias") or _cf_food).strip()
+                            _alias_norm = _coh_sa(_alias.lower())
+                            if clean_ingredients and _alias_norm not in _pantry_blob \
+                                    and _coh_sa(str(_cf_food).lower()) not in _pantry_blob:
+                                _rep_ok = False  # fuera de nevera en modo pantry → no reparable
+                                break
+                            _cat = _coh_sa(str((_cf_info or {}).get("category") or "").lower())
+                            _rep_lines.append(f"{_rep_qty_by_cat.get(_cat, 30)} g de {_alias}")
+                        if _rep_ok and _rep_lines:
+                            _cur_ings = list(meal_dump.get("ingredients") or [])
+                            _cur_ings.extend(_rep_lines)
+                            meal_dump["ingredients"] = _cur_ings
+                            _re_passed, _re_divs, _re_summary = _validate_recipe_coh(meal_dump)
+                            if _re_passed:
+                                if isinstance(res, dict):
+                                    res["ingredients"] = _cur_ings
+                                elif hasattr(res, "ingredients"):
+                                    setattr(res, "ingredients", _cur_ings)
+                                if isinstance(meal_dump.get("ingredients_raw"), list):
+                                    meal_dump["ingredients_raw"].extend(_rep_lines)
+                                logger.info(
+                                    f"🩹 [P1-SWAP-COHERENCE-REPAIR] {len(_rep_lines)} línea(s) "
+                                    f"añadida(s) determinísticamente ({', '.join(_rep_lines)}) — "
+                                    f"intento preservado (el solver re-escala) | meal_type={meal_type}"
+                                )
+                                coh_passed, coh_divs, coh_summary = _re_passed, _re_divs, _re_summary
+                    except Exception as _rep_exc:
+                        logger.warning(
+                            f"[P1-SWAP-COHERENCE-REPAIR] repair falló (no aborta, cae al reject): "
+                            f"{type(_rep_exc).__name__}: {_rep_exc}"
+                        )
                 if not coh_passed:
                     logger.warning(
                         f"⚠️ [P1-SWAP-RECIPE-COHERENCE] divergence detected | "
@@ -1294,6 +1374,62 @@ def swap_meal(form_data: dict):
                 logger.warning(
                     f"[P2-UPDATE-MACRO-TRUTHUP] truth-up swap falló (no aborta): "
                     f"{type(_tu_exc).__name__}: {_tu_exc}"
+                )
+
+        # [P0-SWAP-DETERMINISTIC-RESCALE · 2026-07-10] Re-escala las PORCIONES del candidato
+        # al target del slot ANTES del guardrail — el mismo solver per-ingrediente de la
+        # generación (`_apply_macro_solver_to_meal`: factores acotados por línea → corrige
+        # RATIO, no solo escala global). Root cause medido (regenerate-day 2026-07-10,
+        # corr=8ce66cae): el guardrail pedía al LLM aritmética de ±15% por macro y la
+        # rechazaba-y-re-pedía — 6+ candidatos murieron por drift (uno con kcal +1.2% pero
+        # proteína +31%); la generación NUNCA le pide eso al LLM, lo resuelve el solver.
+        # Tras el solver: re-truth-up (números honestos desde strings) + re-sync de las
+        # menciones de cantidad en los pasos (evita "150g" en paso vs "180g" en línea).
+        # El guardrail queda como red para lo irreparable. Fail-safe total.
+        # Knob MEALFIT_SWAP_DETERMINISTIC_RESCALE=false desactiva sin redeploy.
+        # tooltip-anchor: P0-SWAP-DETERMINISTIC-RESCALE
+        if os.environ.get("MEALFIT_SWAP_DETERMINISTIC_RESCALE", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                _rs_target = {
+                    "kcal": float(target_calories or 0), "protein": float(target_protein or 0),
+                    "carbs": float(target_carbs or 0), "fats": float(target_fats or 0),
+                }
+                _rs_meal = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                if _rs_target["kcal"] > 0 and isinstance(_rs_meal.get("ingredients"), list) and _rs_meal["ingredients"]:
+                    from graph_orchestrator import (
+                        _apply_macro_solver_to_meal as _rs_solver,
+                        _truth_up_meal_macros_from_strings as _rs_truthup,
+                        _sync_recipe_step_quantities as _rs_stepsync,
+                    )
+                    if _tu_db_holder[0] is None:
+                        from nutrition_db import IngredientNutritionDB as _RSDB
+                        _tu_db_holder[0] = _RSDB()
+                    if _rs_solver(_rs_meal, _rs_target, _tu_db_holder[0]):
+                        try:
+                            _rs_truthup(_rs_meal, _tu_db_holder[0])
+                        except Exception:
+                            pass
+                        try:
+                            _rs_stepsync(_rs_meal)
+                        except Exception:
+                            pass
+                        for _rk in ("ingredients", "ingredients_raw", "recipe",
+                                    "protein", "carbs", "fats", "cals", "macros"):
+                            if _rk in _rs_meal and _rs_meal[_rk] is not None:
+                                if isinstance(res, dict):
+                                    res[_rk] = _rs_meal[_rk]
+                                elif hasattr(res, _rk):
+                                    setattr(res, _rk, _rs_meal[_rk])
+                        logger.info(
+                            f"🎯 [P0-SWAP-DETERMINISTIC-RESCALE] porciones re-escaladas al "
+                            f"target del slot pre-guardrail | meal_type={meal_type}"
+                        )
+            except Exception as _rs_exc:
+                logger.warning(
+                    f"[P0-SWAP-DETERMINISTIC-RESCALE] no-op (no aborta): "
+                    f"{type(_rs_exc).__name__}: {_rs_exc}"
                 )
 
         # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
@@ -1571,7 +1707,10 @@ def swap_meal(form_data: dict):
             )
         else:
             _swap_cb.record_failure()
-        logger.error(f"❌ [SWAP_MEAL] Fallaron los intentos LLM y validador: {e}. Usando Plato Fallback.")
+        # [P2-SWAP-HONEST-LOG · 2026-07-10] "Usando Plato Fallback" se movió a la rama que SÍ lo
+        # emite (knob legacy OFF por default desde P3-SWAP-LLM-RETRIES-422) — el log viejo anunciaba
+        # un fallback que casi nunca se entrega y confundía el forensic (2026-07-10).
+        logger.error(f"❌ [SWAP_MEAL] Fallaron los intentos LLM y validador: {e}")
         # [P1-SWAP-STRICT-PANTRY · 2026-05-22] En modo strict (budget /
         # pantry_first) sin clean_ingredients, NO podemos construir un
         # fallback honesto: los hardcoded ["Pollo", "Arroz", "Aguacate"]
@@ -1622,6 +1761,7 @@ def swap_meal(form_data: dict):
         # En strict CON pantry, la lista solo se construye desde clean_ingredients
         # (jamás cae al hardcoded). Sin pantry y NO-strict, el hardcoded
         # se acepta como degradación legacy.
+        logger.warning(f"🍽 [SWAP_MEAL] Usando Plato Fallback (knob MEALFIT_SWAP_EMIT_FALLBACK_DISH=true) | meal_type={meal_type}")
         fallback_ing = clean_ingredients[:4] if clean_ingredients else ["Pollo", "Arroz", "Aguacate"]
         # [P1-SWAP-MACROS · 2026-05-22] Fallback ahora respeta los targets
         # de macros derivados arriba (si target_protein/carbs/fats son 0
