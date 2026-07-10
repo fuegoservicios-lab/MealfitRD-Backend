@@ -71,7 +71,7 @@ def test_metric_emit_tagged_with_cohort():
     """La métrica clinical_band debe llevar el tag de cohorte (única forma de sliceear OFF vs ON)."""
     src = _src()
     emit = src[src.find('"node": "clinical_band"'):]
-    emit = emit[:1200]
+    emit = emit[:1500]  # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] +per_day empujó el offset
     assert "self_critique_cohort" in emit, "el emit de clinical_band debe etiquetar self_critique_cohort"
 
 

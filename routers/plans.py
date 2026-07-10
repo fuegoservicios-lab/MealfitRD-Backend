@@ -4370,8 +4370,9 @@ async def api_pending_pipeline_ack(
     redirigir a /dashboard (o tras mostrar el error de failed). Sin esto,
     el next mount detectaría el row stale y entraría en loop de redirect.
 
-    [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Para GUESTS limpia AMBAS KV
-    (`pending_pipeline:<sid>` + `guest_plan:<sid>`) por session_id.
+    [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Para GUESTS limpia `pending_pipeline:<sid>` y soft-marca
+    `guest_plan:<sid>` (acked_at — el hard-delete corre en el cron de sweep con TTL, ver
+    P2-GUEST-PLAN-FORENSIC-TTL en clear_guest_plan) por session_id.
     """
     try:
         if verified_user_id and verified_user_id != "guest":

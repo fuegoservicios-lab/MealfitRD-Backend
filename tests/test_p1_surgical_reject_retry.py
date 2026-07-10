@@ -113,7 +113,7 @@ def test_router_runs_before_max_attempts_check():
 
 def test_node_reject_mode_no_promote():
     i = _GO.index("En modo RECHAZO el flag propio evita el loop")
-    win = _GO[i:i + 700]
+    win = _GO[i:i + 1000]  # [P1-ENGINE-RESCOPE-POST-REGEN · 2026-07-10] +touched_days empujó el offset
     assert '"_surgical_reject_attempted": True' in win
     assert "return state_update" in win, \
         "en modo rechazo retorna ANTES del bloque de promoción a 'approved'"

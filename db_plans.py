@@ -168,6 +168,92 @@ def clear_pending_pipeline(user_id: str) -> bool:
         return False
 
 
+# ============================================================
+# [P1-GUEST-PLAN-RECOVERY · 2026-07-09] Persistencia de planes de GUESTS en KV.
+# ------------------------------------------------------------
+# Los guests (no logueados) NO persisten en `meal_plans` (FK a user_profiles) →
+# si cierran la pestaña mid-generación, el plan se descartaba (nada que recuperar).
+# El plan del guest se guarda en `app_kv_store` bajo `guest_plan:<session_id>` con
+# TTL vía `expires_at` (limpieza en el cron de zombies). El STATUS del pipeline sigue
+# en `pending_pipeline:<session_id>` (reusa upsert/get_pending_pipeline con el
+# session_id como key). Read/recovery vía GET /api/plans/guest-plan?session_id=x.
+# ============================================================
+_GUEST_PLAN_KV_PREFIX = "guest_plan:"
+
+
+def _guest_plan_kv_key(session_id: str) -> str:
+    return f"{_GUEST_PLAN_KV_PREFIX}{session_id}"
+
+
+def upsert_guest_plan(session_id: str, plan_data: dict) -> bool:
+    """[P1-GUEST-PLAN-RECOVERY · 2026-07-09] Guarda el plan_data de un guest en KV para recovery.
+    Best-effort: fallo silencioso (la generación no se rompe si la KV no está)."""
+    if not session_id or not isinstance(plan_data, dict) or not plan_data.get("days"):
+        return False
+    try:
+        import json as _json
+        execute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value, updated_at)
+            VALUES (%s, %s::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE
+              SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            (_guest_plan_kv_key(session_id), _json.dumps({"plan_data": plan_data})),
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"[P1-GUEST-PLAN-RECOVERY] upsert_guest_plan FAILED session={session_id} error={e!r}")
+        return False
+
+
+def get_guest_plan(session_id: str) -> Optional[Dict[str, Any]]:
+    """[P1-GUEST-PLAN-RECOVERY · 2026-07-09] Lee el plan_data guardado de un guest. None si no existe."""
+    if not session_id:
+        return None
+    try:
+        row = execute_sql_query(
+            "SELECT value FROM app_kv_store WHERE key = %s",
+            (_guest_plan_kv_key(session_id),), fetch_one=True
+        )
+        if not row:
+            return None
+        val = row.get("value") or {}
+        return (val.get("plan_data") if isinstance(val, dict) else None) or None
+    except Exception as e:
+        logger.warning(f"[P1-GUEST-PLAN-RECOVERY] get_guest_plan FAILED session={session_id} error={e!r}")
+        return None
+
+
+def clear_guest_plan(session_id: str) -> bool:
+    """[P1-GUEST-PLAN-RECOVERY · 2026-07-09] Marca el plan de guest como acked tras ack (o al
+    regenerar) — el frontend ya no lo necesita para recovery.
+
+    [P2-GUEST-PLAN-FORENSIC-TTL · 2026-07-10] Forensic corr=d57ffe04 (2026-07-10): el DELETE
+    inmediato aquí borraba el único rastro del plan minutos después de entregado — cuando el owner
+    pidió revisar ESE plan, el KV ya no existía y hubo que reprocesar journalctl línea por línea.
+    Ahora SOFT-marca (`acked_at` dentro del jsonb, mismo row) en vez de borrar: `get_guest_plan`
+    sigue leyendo `plan_data` del mismo row sin cambios (no filtra por acked_at), preservando la
+    ventana de forensics. El hard-delete vive en el cron `_sweep_stale_guest_plans`
+    (cron_tasks.py, TTL configurable vía `MEALFIT_GUEST_PLAN_FORENSIC_TTL_HOURS`).
+    tooltip-anchor: P2-GUEST-PLAN-FORENSIC-TTL"""
+    if not session_id:
+        return False
+    try:
+        execute_sql_write(
+            """
+            UPDATE app_kv_store
+            SET value = value || jsonb_build_object('acked_at', NOW()::text)
+            WHERE key = %s
+            """,
+            (_guest_plan_kv_key(session_id),),
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"[P1-GUEST-PLAN-RECOVERY] clear_guest_plan FAILED session={session_id} error={e!r}")
+        return False
+
+
 def check_recent_meal_plan_exists(user_id: str, max_seconds: int = 30) -> bool:
     """Verifica si ya se ha guardado un plan para este usuario recientemente."""
     if not connection_pool: return False
@@ -855,6 +941,25 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
                 _n, _summ = _fpc(_pd["days"], target_fats=_tf_ins)
                 if _n:
                     logger.info(f"🧩 [P1-COHERENCE-FINALIZE] pre-INSERT aplicó coherencia a un plan no-finalizado ({_summ}).")
+                # [P1-PROTEIN-BAND-POST-FINALIZE · 2026-07-09] El truth-up de _fpc recomputa la proteína HONESTA
+                # → puede re-exponer drift de proteína (día bajo el piso / sobre el techo) que ningún closer de
+                # assemble re-encuadra. Re-escala porciones proteína-dominantes EXISTENTES (sin ingredientes
+                # nuevos → sin riesgo de alérgeno). Corre ANTES de _csd/_rbs para que el band re-medido refleje
+                # el estado corregido. Fail-safe. Import LAZY (mismo ciclo que finalize).
+                try:
+                    from graph_orchestrator import reconcile_protein_band_post_finalize as _rpb
+                    _rpb(_pd)
+                except Exception as _rpb_e:
+                    logger.debug(f"[P1-PROTEIN-BAND-POST-FINALIZE] pre-INSERT no-op: {type(_rpb_e).__name__}: {_rpb_e}")
+                # [P0-1-FINAL-BAND-CLOSER · 2026-07-10] el pase de proteína de arriba SOLO re-encuadra
+                # proteína — cuando el macro fuera de banda es carbs/fats/kcal nada lo corregía (forensic
+                # corr=d57ffe04). Motor SSOT all-4 ya testeado (apply_update_macro_engine), solo wiring.
+                # Corre DESPUÉS del pase de proteína (protein ya estable) y ANTES del re-check de banda.
+                try:
+                    from graph_orchestrator import reconcile_all_macros_band_post_finalize as _ramb
+                    _ramb(_pd)
+                except Exception as _ramb_e:
+                    logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")
                 # [P1-BAND-DEGRADED-STALE-CLEAR · 2026-07-08] El gate de banda del pipeline marcó _quality_degraded
                 # ANTES de este finalize (que acaba de recortar grasas/re-truthear macros) → un flag low_band_* puede
                 # ser un FALSO POSITIVO de timing. Re-evalúa sobre el estado ENTREGADO y limpia el banner si ya está

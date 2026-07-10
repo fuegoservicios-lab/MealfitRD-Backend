@@ -523,6 +523,12 @@ HARDEN_CONDITION_CATALOG = _env_bool("MEALFIT_HARDEN_CONDITION_CATALOG", False) 
 HARDEN_SALTCURED_MAIN    = _env_bool("MEALFIT_HARDEN_SALTCURED_MAIN", False)      # clase 5
 HARDEN_SAMEDAY_PROTEIN   = _env_bool("MEALFIT_HARDEN_SAMEDAY_PROTEIN", False)     # clase 1
 HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)      # clase 2
+# [P0-2-POOL-MAIN-ARITY · 2026-07-10] clase 6. Forensic corr=d57ffe04: 49% de los rechazos del
+# reviewer en 72h (39/80) = "misma proteína repetida el mismo día" — causa estructural: el pool traía
+# menos proteínas gate-label distintas que comidas principales del día. Target=3 (desayuno/almuerzo/
+# cena, el caso común); clamp [2,5]. tooltip-anchor: A1-HARDEN-POOLS
+HARDEN_MAIN_ARITY        = _env_bool("MEALFIT_HARDEN_MAIN_ARITY", False)         # clase 6
+HARDEN_MAIN_ARITY_TARGET = max(2, min(5, _env_int("MEALFIT_HARDEN_MAIN_ARITY_TARGET", 3)))
 HARDEN_POOLS_CANARY_PCT  = _env_int("MEALFIT_HARDEN_POOLS_CANARY_PCT", 0, validator=lambda v: 0 <= v <= 100)
 
 # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Feed-forward de la blocklist de platos recientes al
@@ -581,8 +587,18 @@ def _harden_pools_canary_cohort(state) -> str:
     """[A1-HARDEN-POOLS] Cohorte determinista del canario A1: 'off' si el plan cae en el
     `HARDEN_POOLS_CANARY_PCT`% (bucket sha256 con salt PROPIO 'harden_pools|', insesgado A/B,
     estable por usuario), 'on' si no. PCT=0 → siempre 'on'. Fail-safe → 'on'. El salt independiente
-    evita confundir esta cohorte con la de self_critique para el MISMO usuario."""
+    evita confundir esta cohorte con la de self_critique para el MISMO usuario.
+
+    [P2-COHORT-TAG-EFFECTIVE · 2026-07-10] Con el master switch `HARDEN_POOLS_ENABLED` OFF (default
+    hoy en prod), `harden_day_pools()` es un no-op total (early-return en su primera línea) — pero
+    esta función seguía etiquetando el 100% de la flota como cohorte "on" (PCT=0 → siempre on),
+    contaminando cualquier análisis futuro "¿A1 mejoró la banda?" con histórico OFF-real mal
+    etiquetado. Ahora master OFF → 'off' SIEMPRE (honesto: el enforcer no corrió), independiente del
+    % canario. Solo con el master ON aplica el bucketing determinista por usuario de abajo.
+    tooltip-anchor: P2-COHORT-TAG-EFFECTIVE"""
     try:
+        if not HARDEN_POOLS_ENABLED:
+            return "off"
         pct = HARDEN_POOLS_CANARY_PCT
         if pct <= 0:
             return "on"
@@ -6004,6 +6020,16 @@ async def _compressor_cache_put_persistent(history_context: str, compressed_text
         logger.debug(f"[P3-COMPRESSOR-CACHE] put_persistent best-effort fail: {e}")
 
 
+# [P3-CONTEXT-COMPRESSION-SKIP · 2026-07-10] Umbral de `context_compression_node` — antes hardcoded
+# (`len(history_context) < 2000`), sin lever operacional. Forensic corr=d57ffe04 (2026-07-10): ~6s de
+# latencia LLM por compresión (8301→1136 chars) en CADA generación con contexto largo y cache miss
+# (el cache es content-addressed por hash — casi siempre miss porque el historial difiere por
+# usuario/momento). Default 2000 preserva el comportamiento EXACTO de hoy; el knob solo habilita
+# tunear el umbral (ej. subirlo tras medir que compresiones de 2-4k chars no valen el roundtrip LLM
+# vs el riesgo de "Lost in the Middle") sin redeploy. tooltip-anchor: P3-CONTEXT-COMPRESSION-SKIP
+CONTEXT_COMPRESSION_MIN_CHARS = _env_int("MEALFIT_CONTEXT_COMPRESSION_MIN_CHARS", 2000, validator=lambda v: v >= 500)
+
+
 def _cap_history_context(text: str) -> str:
     cap = _env_int("MEALFIT_HISTORY_CONTEXT_MAX_CHARS", 16000, validator=lambda v: v >= 2000)
     if not isinstance(text, str) or len(text) <= cap:
@@ -6025,9 +6051,10 @@ def _cap_history_context(text: str) -> str:
 async def context_compression_node(state: PlanState) -> dict:
     """Mejora 4: Comprime el exceso de contexto para evitar Lost in the Middle."""
     history_context = state.get("history_context", "")
-    
-    # Solo comprimir si el contexto es demasiado largo (ej. > 2000 caracteres)
-    if len(history_context) < 2000:
+
+    # Solo comprimir si el contexto es demasiado largo. [P3-CONTEXT-COMPRESSION-SKIP · 2026-07-10]
+    # umbral ahora vía knob (antes hardcoded) — default 2000 preserva el comportamiento actual.
+    if len(history_context) < CONTEXT_COMPRESSION_MIN_CHARS:
         return {"compressed_context": history_context}
 
     # [P3-COMPRESSOR-CACHE · 2026-05-29] Cache content-addressed → saltar la
@@ -6573,6 +6600,20 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     }
 
 
+def _gate_label_of(item) -> str:
+    """[P0-2-POOL-MAIN-ARITY] Label gate-relevante (heavy+huevo, ver `_SAME_DAY_PROTEIN_GATE_LABELS`) de
+    un item de pool, o `None` si el item no es una proteína gate-label (legumbres/yogurt exentas — no
+    cuentan para aridad porque pueden repetirse same-day sin disparar el gate). tooltip-anchor: A1-HARDEN-POOLS"""
+    from constants import strip_accents as _sa_gl
+    _n = _sa_gl(str(item).lower())
+    for _lbl, _aliases in _MAIN_PROTEIN_ALIASES.items():
+        if _lbl not in _SAME_DAY_PROTEIN_GATE_LABELS:
+            continue
+        if any(_sa_gl(_al) in _n for _al in _aliases):
+            return _lbl
+    return None
+
+
 def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
     """[A1-HARDEN-POOLS · 2026-07-09] Enforcer determinista de los pools por día. Muta
     `skeleton['days'][*]['protein_pool'|'carb_pool'|'fruit_pool']` IN-PLACE (mismos objetos lista que
@@ -6580,7 +6621,8 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
     clases de identidad se vuelven inalcanzables por construcción. Cada clase gateada por su knob (todas
     OFF por default → no-op). Retorna conteos para telemetría. NO retira ningún backstop post-hoc.
     tooltip-anchor: A1-HARDEN-POOLS"""
-    counts = {"condition_removed": 0, "saltcured_removed": 0, "sameday_bound": 0, "crossday_capped": 0}
+    counts = {"condition_removed": 0, "saltcured_removed": 0, "sameday_bound": 0, "crossday_capped": 0,
+              "main_arity_added": 0}
     if not HARDEN_POOLS_ENABLED:
         return counts
     days = (skeleton or {}).get("days") or []
@@ -6689,6 +6731,49 @@ def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
                 counts["crossday_capped"] += (len(_pool) - len(_new))
                 _d["protein_pool"] = _new
             # _new vacío → conservar original (graceful, nunca vaciar)
+
+    # ── Clase 6 · HARDEN_MAIN_ARITY — aridad mínima de proteínas main-capable por día ──
+    # Forensic corr=d57ffe04 (2026-07-10): 49% de los rechazos del reviewer en 72h (39/80) = "misma
+    # proteína repetida el mismo día". Causa estructural: un día con solo 2 proteínas gate-label
+    # (heavy+huevo) para 3 comidas principales fuerza la repetición sin importar cuánto corrija el LLM
+    # después. Rellena con proteínas gate-label YA vistas en OTROS días del MISMO skeleton — mismo
+    # form_data → mismo filtro de alergia/dieta/dislikes ya aplicado por el catálogo al construirlo, así
+    # que reusar cross-día es seguro (cero candidatos nuevos sin vetar). Target acotado por el universo
+    # real del skeleton (si el catálogo del plan solo ofreció 2 proteínas gate-label en total, no se
+    # puede inventar una 3ª). Nunca quita nada; solo añade cuando hay margen. tooltip-anchor: A1-HARDEN-POOLS
+    if HARDEN_MAIN_ARITY:
+        try:
+            _universe = {}  # label -> item de muestra (primera forma vista en el skeleton)
+            _freq = {}      # label -> nº de días que YA lo traen (para preferir el menos usado)
+            for _d in days:
+                _seen_today = set()
+                for _p in (_d.get("protein_pool") or []):
+                    _lbl = _gate_label_of(_p)
+                    if _lbl:
+                        _universe.setdefault(_lbl, _p)
+                        _seen_today.add(_lbl)
+                for _lbl in _seen_today:
+                    _freq[_lbl] = _freq.get(_lbl, 0) + 1
+            _target_arity = min(HARDEN_MAIN_ARITY_TARGET, len(_universe))
+            if _target_arity >= 2:
+                for _d in days:
+                    _pool = _d.get("protein_pool") or []
+                    _today_labels = {_gate_label_of(_p) for _p in _pool} - {None}
+                    _missing = _target_arity - len(_today_labels)
+                    if _missing <= 0:
+                        continue
+                    _candidates = sorted(
+                        (lbl for lbl in _universe if lbl not in _today_labels),
+                        key=lambda lbl: _freq.get(lbl, 0))
+                    _added = 0
+                    for _lbl in _candidates[:_missing]:
+                        _pool.append(_universe[_lbl])
+                        _added += 1
+                    if _added:
+                        counts["main_arity_added"] += _added
+                        _d["protein_pool"] = _pool
+        except Exception as _c6e:
+            logger.warning(f"[A1-HARDEN-POOLS clase6] falló (skip): {type(_c6e).__name__}: {_c6e}")
 
     # ── Clase 1 (HARDEN_SAMEDAY_PROTEIN) — binding slot→proteína mismo día ──
     # DEFERIDA: el binding "1 proteína pesada distinta por slot principal" requiere que el day-generator
@@ -9405,6 +9490,20 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
 
             if corrected_any:
                 partial["days"] = days
+                # [P1-FRUIT-GATE-MIRROR-AUDIT · 2026-07-10] El comentario de PROTEIN-PARITY (abajo)
+                # afirmaba "espeja el cierre de FRUTA" pero nunca lo hacía: `dedup_featured_fruits_
+                # in_plan` corre UNA sola vez en todo el pipeline (assemble, pre-review) — si la
+                # corrección LLM de self-critique reintroduce/deja una fruta repetida, nada la
+                # detecta hasta que el revisor rechaza (forensic: "8 rechazos/72h pese a FRUIT-DEDUP").
+                # Re-fire aquí, en el MISMO seam post-corrección, cierra la asimetría real.
+                try:
+                    _fd_n = dedup_featured_fruits_in_plan(partial)
+                    if _fd_n:
+                        logger.info(f"🍓 [P1-FRUIT-GATE-MIRROR-AUDIT] {_fd_n} fruta(s) repetida(s) "
+                                    f"reescrita(s) tras corrección de self-critique.")
+                except Exception as _fd_sc_e:
+                    logger.warning(f"[P1-FRUIT-GATE-MIRROR-AUDIT] re-fire falló (no-fatal): "
+                                   f"{type(_fd_sc_e).__name__}: {_fd_sc_e}")
 
             # [P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Verificación post-corrección con el
             # SSOT del gate del revisor: si tras corregir sigue habiendo MISMA-PROTEÍNA-MISMO-DÍA,
@@ -22005,6 +22104,18 @@ def _egg_is_intrinsic_dish(name) -> bool:
     return bool(_EGG_INTRINSIC_HEAD_RX.match(_sa_id(str(name or "").strip())))
 
 
+def _log_autofix_impotent(day_num, label: str, reason: str, meal_name: str = "") -> None:
+    """[P1-AUTOFIX-IMPOTENCE-TELEMETRY · 2026-07-10] Forensic corr=d57ffe04 (2026-07-10): `_protein_
+    repeat_autofix` DETECTA una repetición same-day pero no encuentra target seguro para corregirla
+    (ladder agotado por proteínas ya presentes el mismo día, label sin escalera de swap, o sin
+    candidato en contexto dulce/ligero/huevo) — antes esto era SILENCIO total; el reviewer rechazaba
+    minutos después sin que ningún log conectara la causa. NO cambia el resultado (el gate/backstop
+    sigue decidiendo); solo hace observable la impotencia. tooltip-anchor: P1-AUTOFIX-IMPOTENCE"""
+    _mn = f" meal={meal_name!r}" if meal_name else ""
+    logger.info(f"🔇 [P1-AUTOFIX-IMPOTENCE] Día {day_num}: '{label}' repetido sin target seguro "
+                f"(reason={reason}{_mn}) — el gate/backstop decide.")
+
+
 def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
     """[P1-PROTEIN-REPEAT-AUTOFIX · 2026-07-04] Autofix DETERMINISTA de la proteína principal repetida
     el MISMO día (detector espejo del gate P1-VARIETY-SAME-DAY-PROTEIN: mismos labels, mismos aliases,
@@ -22150,6 +22261,9 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                         if _replace_meal_egg_lines(_d, _meal, form_data, db) is not None:
                             fixes_left -= 1
                             fixed += 1
+                        else:
+                            _log_autofix_impotent(_d.get("day", "?"), "huevo", "egg_no_candidate",
+                                                  _meal.get("name"))
                     # (2) [P1-EGG-PROTAGONIST-SURPLUS · 2026-07-06] si el día AÚN tiene ≥2
                     # comidas-huevo, reasigna las de huevo NOMBRADO renombrable ("X con Huevos")
                     # — NO las intrínsecas (revoltillo/tortilla) ni las aglutinantes (croqueta:
@@ -22183,6 +22297,8 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                     break
                                 _lab = _replace_meal_egg_lines(_d, _meal, form_data, db)
                                 if _lab is None:
+                                    _log_autofix_impotent(_d.get("day", "?"), "huevo",
+                                                          "egg_no_candidate", _meal.get("name"))
                                     continue
                                 _nm2 = _replace_egg_phrase_in_name(
                                     _meal.get("name"), _EGG_LABEL_DISPLAY.get(_lab, _lab))
@@ -22195,6 +22311,7 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                             f"(conserva 1 comida-huevo, cierra el gate same-day)")
                     continue
                 if _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
+                    _log_autofix_impotent(_d.get("day", "?"), _lbl, "no_ladder_for_label")
                     continue  # label sin escalera → deja el gate decidir (backstop)
                 # [P1-PROTEIN-REPEAT-FALLBACK-NONGATED · 2026-07-06] escalera efectiva = carnes +
                 # fallback no-gated (legumbre/queso) cuando las carnes se agotan. Diet-aware:
@@ -22233,11 +22350,15 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                         tgt = next((t for t in _eff_ladder
                                     if t in _allowed and t not in day_labels and _target_ok(t)), None)
                         if tgt is None:
+                            _log_autofix_impotent(_d.get("day", "?"), _lbl,
+                                                  "no_safe_target_sweet_or_light", _meal.get("name"))
                             continue  # este meal no admite target seguro → siguiente hit
                     else:
                         tgt = next((t for t in _eff_ladder
                                     if t not in day_labels and _target_ok(t)), None)
                         if tgt is None:
+                            _log_autofix_impotent(_d.get("day", "?"), _lbl, "ladder_exhausted",
+                                                  _meal.get("name"))
                             break  # sin destino seguro → deja el gate decidir
                     _rewrite_meal(_meal, _lbl, tgt)
                     day_labels.add(tgt)
@@ -27224,12 +27345,25 @@ async def assemble_plan_node(state: PlanState) -> dict:
         logging.warning(f"[COH-GUARD] excepción inesperada (no aborta): {_coh_e}")
 
     duration = round(time.time() - start_time, 2)
+    # [P1-ENGINE-RESCOPE-POST-REGEN · 2026-07-10] evidencia agregada: ¿este pase de assemble (~18
+    # pasadas deterministas, ~2360 líneas) fue un RE-ENTRY tras surgical_marker_regen? Si sí, cuántos
+    # días tocó el regen vs el total del plan — el engine corre COMPLETO en ambos casos (forensic
+    # corr=d57ffe04: 196s/358s en 2 pasadas para regenerar 1 día). Sienta la base de datos para decidir
+    # si/cómo rescopear el engine a día-local con confianza (no se fuerza el refactor sin esto — muchas
+    # pasadas son legítimamente cross-día: shopping aggregation, cuota cross-día de proteína, fruit-dedup).
+    _mr_touched = state.get("_marker_regen_touched_days")
+    _assemble_days = result.get("days")
     _emit_progress(state, "metric", {
         "node": "assemble_plan",
         "duration_ms": int(duration * 1000),
         "retries": state.get("attempt", 1) - 1,
         "tokens_estimated": 0,
-        "confidence": 1.0
+        "confidence": 1.0,
+        "metadata": {
+            "is_marker_regen_reentry": bool(_mr_touched),
+            "marker_regen_touched_days": len(_mr_touched) if isinstance(_mr_touched, list) else 0,
+            "total_days": len(_assemble_days) if isinstance(_assemble_days, list) else None,
+        },
     })
 
     return {
@@ -28118,11 +28252,17 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
         state_update = {
             "plan_result": new_plan_result,
             "_surgical_reject_attempted": True,
+            # [P1-ENGINE-RESCOPE-POST-REGEN · 2026-07-10] días efectivamente tocados por el regen
+            # quirúrgico — assemble_plan_node lo re-lee para tagear su métrica de duración como
+            # re-entry (evidencia agregada de cuánto cuesta el re-run completo del engine vs los
+            # 1-2 días que realmente cambiaron; forensic corr=d57ffe04: 196s/358s en 2 pasadas).
+            "_marker_regen_touched_days": list(marker_day_nums),
         }
         return state_update
     state_update = {
         "plan_result": new_plan_result,
         "_marker_regen_attempted": True,
+        "_marker_regen_touched_days": list(marker_day_nums),
     }
     # [P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) Antes de promover el plan
     # post-surgical a 'approved'/review_passed=True, re-validamos que la corrección LLM no haya
@@ -34181,7 +34321,11 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
         # per_macro NO permiten derivar la tasa conjunta (el benchmark all-4 66.7% solo se medía offline).
         all4_days = 0
         days_total = 0
-        for day in plan.get("days", []) or []:
+        # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] matriz día×macro (ratio entregado/target, redondeado
+        # compacto) — forensic corr=d57ffe04: sin esto, reconstruir QUÉ día/macro causó un banner de banda
+        # baja requiere reprocesar logs línea por línea desde 0. tooltip-anchor: P1-BAND-TELEMETRY-PER-DAY
+        per_day = []
+        for _i, day in enumerate(plan.get("days", []) or []):
             meals = day.get("meals", []) or []
             delivered = {
                 "protein": sum(_meal_macro_num(m.get("protein")) for m in meals),
@@ -34191,18 +34335,23 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             }
             _day_cells = 0
             _day_in = 0
+            _ratios = {}
             for k, t in targets.items():
                 if t and t > 0:
                     lo, hi = bands[k]
                     per[k]["total"] += 1
                     _day_cells += 1
+                    _ratios[k] = round(delivered[k] / t, 3)
                     if lo * t <= delivered[k] <= hi * t:
                         per[k]["in"] += 1
                         _day_in += 1
             if _day_cells:
                 days_total += 1
-                if _day_cells >= 4 and _day_in == _day_cells:
+                _all4 = _day_cells >= 4 and _day_in == _day_cells
+                if _all4:
                     all4_days += 1
+                per_day.append({"day": day.get("day") or (_i + 1), "ratios": _ratios,
+                                "all4_in_band": _all4})
         cin = sum(v["in"] for v in per.values())
         ctot = sum(v["total"] for v in per.values())
         # [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) Score SOLO de macros (excluye la celda kcal,
@@ -34220,10 +34369,38 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             # [P1-ALL4-KPI · 2026-07-01] tasa conjunta all-4 por día (KPI del objetivo "100% macros").
             "all4_days": all4_days, "days_total": days_total,
             "all4_ratio": round(all4_days / days_total, 3) if days_total else None,
+            # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] matriz día×macro para forensics sin reprocesar logs.
+            "per_day": per_day,
         }
     except Exception as _bs_e:
         logger.warning(f"[P4-SCOREBOARD] compute_clinical_band_score falló: {type(_bs_e).__name__}: {_bs_e}")
         return {"score": None, "cells_in_band": 0, "cells_total": 0, "error": True}
+
+
+def _band_gate_per_macro_low(per_macro: dict) -> list:
+    """[P2-BAND-GATE-KCAL-SEMANTICS · 2026-07-10] Lista de macros con fracción de días-en-banda bajo su
+    umbral respectivo. protein/carbs/fats usan `BAND_GATE_PER_MACRO_THRESHOLD`; kcal usa el backstop YA
+    establecido en el retry-gate (`BAND_GATE_KCAL_BACKSTOP`/`BAND_GATE_KCAL_THRESHOLD`, P2-KCAL-GATE-
+    BACKSTOP · 2026-07-02) — antes el banner excluía kcal INCONDICIONALMENTE ("P/C/F la acoplan
+    aritméticamente 4/4/9 — si las 3 están en banda, kcal lo está"), cierto solo hacia la banda MACRO
+    amplia [0.90,1.12], NO hacia la banda kcal propia y más estrecha [0.95,1.05]. Forensic corr=d57ffe04
+    (2026-07-10): kcal=0.333 (igual que carbs) nunca pudo disparar el banner por sí solo. SSOT compartido
+    por `_maybe_mark_low_band_degraded`, `apply_update_band_parity` y `clear_stale_low_band_degraded` — el
+    clear DEBE ser el complemento exacto del mark, así que las 3 comparten este único criterio. Rollback
+    de kcal sin redeploy: MEALFIT_BAND_GATE_KCAL_BACKSTOP=false (mismo knob del retry-gate). Fail-safe → [].
+    tooltip-anchor: P2-BAND-GATE-KCAL-SEMANTICS"""
+    if not BAND_GATE_PER_MACRO or not isinstance(per_macro, dict):
+        return []
+    out = []
+    for k, v in per_macro.items():
+        if v is None:
+            continue
+        if k == "kcal":
+            if BAND_GATE_KCAL_BACKSTOP and v < BAND_GATE_KCAL_THRESHOLD:
+                out.append(k)
+        elif v < BAND_GATE_PER_MACRO_THRESHOLD:
+            out.append(k)
+    return sorted(out)
 
 
 def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: bool, attempt: int,
@@ -34249,11 +34426,7 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
         if not BAND_SCORE_GATE_ENABLED or delivered_was_fallback or band_val is None:
             return False
         _score_thr = score_threshold if score_threshold is not None else BAND_SCORE_GATE_THRESHOLD
-        _pm_low = []
-        if BAND_GATE_PER_MACRO and isinstance(band_payload, dict):
-            _pm = band_payload.get("per_macro") or {}
-            _pm_low = sorted(k for k, v in _pm.items()
-                             if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD)
+        _pm_low = _band_gate_per_macro_low(band_payload.get("per_macro") if isinstance(band_payload, dict) else None)
         if (band_val >= _score_thr and not _pm_low) or plan.get("_quality_degraded"):
             return False
         plan["_quality_degraded"] = True
@@ -34410,9 +34583,7 @@ def apply_update_band_parity(plan_data: dict, *, surface: str, pantry_limited: b
         if _val is None:
             return _bs
         _pm = _bs.get("per_macro") or {}
-        _pm_low = ([k for k, v in _pm.items()
-                    if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
-                   if BAND_GATE_PER_MACRO else [])
+        _pm_low = _band_gate_per_macro_low(_pm)
         _prev_reason = str(plan_data.get("_quality_degraded_reason") or "")
         _was_fallback = bool(plan_data.get("_is_fallback"))
         if _val < _thr or _pm_low:
@@ -34475,9 +34646,7 @@ def clear_stale_low_band_degraded(plan_data: dict) -> bool:
         if _val is None:
             return False
         _pm = _bs.get("per_macro") or {}
-        _pm_low = ([k for k, v in _pm.items()
-                    if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
-                   if BAND_GATE_PER_MACRO else [])
+        _pm_low = _band_gate_per_macro_low(_pm)
         if _val >= _thr and not _pm_low:
             for _k in ("_quality_degraded", "_quality_degraded_reason", "_quality_degraded_severity",
                        "_quality_degraded_attempts", "_quality_degraded_band_score",
@@ -34666,6 +34835,37 @@ def reconcile_protein_band_post_finalize(plan_data: dict) -> bool:
     except Exception as e:
         logger.debug(f"[P1-PROTEIN-BAND-POST-FINALIZE] no-op: {type(e).__name__}: {e}")
         return False
+
+
+# [P0-1-FINAL-BAND-CLOSER · 2026-07-10] (forensic corr=d57ffe04, 2026-07-10 03:06-03:12 UTC)
+# `reconcile_protein_band_post_finalize` SOLO re-encuadra PROTEÍNA — cuando el macro fuera de banda tras
+# el finalize es carbs/fats/kcal (el band-gate P2-BAND-SCORE-GATE lo marca `low_band_macro:carbs`) nada lo
+# corregía: 12/33 planes marcados en 72h, banda media de flota 0.761. `apply_update_macro_engine` YA es el
+# motor SSOT all-4 (rebalance→refine 5g→truth-up, never-worse, testeado en updates/budget_convergence) —
+# este wrapper solo lo conecta al shield pre-INSERT (mismo punto universal que finalize_plan_data_coherence,
+# cubre TODOS los paths que llegan a INSERT: form-gen, partial, SSE-fallback). Corre DESPUÉS del pase de
+# proteína (protein ya estable primero) y ANTES del re-check de banda (band score refleja el estado final).
+# Rollback independiente del resto de update-surfaces: MEALFIT_FORMGEN_FINAL_BAND_CLOSER=false.
+# tooltip-anchor: P0-1-FINAL-BAND-CLOSER
+FORMGEN_FINAL_BAND_CLOSER_ENABLED = _env_bool("MEALFIT_FORMGEN_FINAL_BAND_CLOSER", True)
+
+
+def reconcile_all_macros_band_post_finalize(plan_data: dict, db=None) -> int:
+    """[P0-1-FINAL-BAND-CLOSER] Cierre final all-4-macro sobre el estado ENTREGADO, en el shield
+    pre-INSERT. Delega en `apply_update_macro_engine` (surface="form_gen_final_closer") — SSOT ya testeado,
+    cero matemática nueva, solo wiring al path universal de INSERT. Retorna nº de días tocados. Fail-safe
+    (nunca bloquea el INSERT). tooltip-anchor: P0-1-FINAL-BAND-CLOSER"""
+    if not (FORMGEN_FINAL_BAND_CLOSER_ENABLED and isinstance(plan_data, dict)):
+        return 0
+    try:
+        touched = apply_update_macro_engine(plan_data, surface="form_gen_final_closer", db=db)
+        if touched:
+            logger.info(f"🎯 [P0-1-FINAL-BAND-CLOSER] cierre final all-4-macro: {touched} día(s) "
+                        f"re-apuntado(s) hacia banda sobre el estado ENTREGADO (pre-INSERT).")
+        return touched
+    except Exception as e:
+        logger.debug(f"[P0-1-FINAL-BAND-CLOSER] no-op: {type(e).__name__}: {e}")
+        return 0
 
 
 # [P1-CONDITION-CEILINGS-UPDATES] razones que produce _maybe_mark_panel_degraded (las únicas que este
@@ -35095,6 +35295,9 @@ def _compute_pipeline_holistic_score_and_emit(
                             "score_macros_only": _band.get("score_macros_only"),  # [P2-BAND-MACROS-ONLY] kcal-excluido
                             "per_macro": _band.get("per_macro"),
                             "band_macros": _band.get("band_macros"),
+                            # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] matriz día×macro — forensics sin
+                            # reprocesar logs (forensic corr=d57ffe04 tuvo que hacerlo línea por línea).
+                            "per_day": _band.get("per_day"),
                             "delivered_was_fallback": delivered_was_fallback,
                             "review_passed": final_state.get("review_passed"),
                             # [P1-SELF-CRITIQUE-CANARY · 2026-07-09] cohorte del canario (ausente = 'on').

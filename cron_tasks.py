@@ -6527,6 +6527,25 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             "(03:45 UTC diario, age>=MEALFIT_SWEEP_SYNTHETIC_PLANS_AGE_HOURS hours)."
         )
 
+    # [P2-GUEST-PLAN-FORENSIC-TTL · 2026-07-10] Sweep diario de `guest_plan:*` acked+expirados
+    # (o huérfanos nunca-acked muy viejos). Diario 03:50 UTC (5min después de P1-LIVE-3, mismo
+    # bloque off-peak de sweeps hermanos). Ver `_sweep_stale_guest_plans` para el detalle del
+    # forensic que motivó reemplazar el DELETE-on-ack por soft-mark + TTL.
+    if not scheduler.get_job("sweep_stale_guest_plans"):
+        _add_job_jittered(scheduler,
+            _sweep_stale_guest_plans,
+            CronTrigger(hour=3, minute=50, timezone="UTC"),
+            id="sweep_stale_guest_plans",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            "⏰ [P2-GUEST-PLAN-FORENSIC-TTL] Cron de sweep de guest_plan KV registrado "
+            "(03:50 UTC diario, ttl=MEALFIT_GUEST_PLAN_FORENSIC_TTL_HOURS hours)."
+        )
+
     # [P1-NEON-DB-MIGRATION · 2026-06-12] Cleanup semanal de meal_rejections
     # viejas — antes era pg_cron `cleanup_old_meal_rejections` dentro del
     # Postgres legado; migrado a APScheduler (SSOT de crons) porque Neon
@@ -24899,6 +24918,50 @@ def _sweep_meal_plans_without_chunks() -> int:
             f"errors={errors})."
         )
     return swept
+
+
+def _sweep_stale_guest_plans() -> int:
+    """[P2-GUEST-PLAN-FORENSIC-TTL · 2026-07-10] Hard-delete de rows `guest_plan:<session_id>` en
+    `app_kv_store`. Forensic corr=d57ffe04 (2026-07-10): `clear_guest_plan` (db_plans.py) borraba el
+    row INMEDIATAMENTE al ack del frontend — cerró la ventana de forensics del pipeline de guests.
+    Ahora el ack solo SOFT-marca (`value->>'acked_at'`); este cron barre en duro dos categorías:
+      (a) acked + expirados: `acked_at` más viejo que `MEALFIT_GUEST_PLAN_FORENSIC_TTL_HOURS`
+          (default 24h) — el guest ya vio/descartó su plan, la ventana de forensics ya sirvió.
+      (b) huérfanos NUNCA acked pero muy viejos (>7 días, `updated_at`) — safety net de espacio:
+          guests que cerraron la pestaña sin nunca acusar recibo (recovery abandonado).
+    Corre diario, off-peak, en el MISMO horario que los sweeps hermanos (_sweep_meal_plans_without_
+    chunks / _sweep_synthetic_test_plans). Best-effort, fail-safe (nunca lanza).
+    tooltip-anchor: P2-GUEST-PLAN-FORENSIC-TTL"""
+    ttl_hours = _env_int("MEALFIT_GUEST_PLAN_FORENSIC_TTL_HOURS", 24)
+    ttl_hours = max(1, min(ttl_hours, 168))  # clamp [1h, 7 días]
+    try:
+        resolved = execute_sql_write(
+            """
+            DELETE FROM app_kv_store
+            WHERE key LIKE 'guest_plan:%%'
+              AND (
+                    (
+                      (value->>'acked_at') IS NOT NULL
+                      AND (value->>'acked_at')::timestamptz < NOW() - make_interval(hours => %s)
+                    )
+                    OR (
+                      (value->>'acked_at') IS NULL
+                      AND updated_at < NOW() - INTERVAL '7 days'
+                    )
+                  )
+            RETURNING key
+            """,
+            (int(ttl_hours),),
+            returning=True,
+        ) or []
+        n = len(resolved) if isinstance(resolved, list) else 0
+        if n:
+            logger.info(f"[P2-GUEST-PLAN-FORENSIC-TTL] {n} guest_plan KV barridos "
+                        f"(ttl_hours={ttl_hours}).")
+        return n
+    except Exception as e:
+        logger.warning(f"[P2-GUEST-PLAN-FORENSIC-TTL] sweep falló: {e}")
+        return 0
 
 
 def _sweep_synthetic_test_plans() -> int:

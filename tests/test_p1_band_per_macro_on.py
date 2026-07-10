@@ -57,11 +57,18 @@ def test_all_macros_healthy_not_marked(monkeypatch):
     assert plan == {}
 
 
-def test_kcal_never_triggers_per_macro(monkeypatch):
+def test_kcal_triggers_per_macro_via_backstop(monkeypatch):
+    # [P2-BAND-GATE-KCAL-SEMANTICS · 2026-07-10] Semántica actualizada deliberadamente: kcal ya NO
+    # está excluido incondicionalmente — usa el backstop ya establecido en el retry-gate
+    # (BAND_GATE_KCAL_BACKSTOP/THRESHOLD). Ver test_p2_2_band_gate_kcal_semantics.py para la cobertura
+    # completa (incluye el rollback MEALFIT_BAND_GATE_KCAL_BACKSTOP=false).
     _gate_on(monkeypatch)
+    monkeypatch.setattr(go, "BAND_GATE_KCAL_BACKSTOP", True)
+    monkeypatch.setattr(go, "BAND_GATE_KCAL_THRESHOLD", 0.5)
     plan: dict = {}
     payload = {"per_macro": {"protein": 0.9, "carbs": 0.8, "fats": 0.7, "kcal": 0.0}}
-    assert go._maybe_mark_low_band_degraded(plan, 0.7, False, attempt=1, band_payload=payload) is False
+    assert go._maybe_mark_low_band_degraded(plan, 0.7, False, attempt=1, band_payload=payload) is True
+    assert plan["_quality_degraded_reason"] == "low_band_macro:kcal"
 
 
 def test_backwards_compatible_without_payload(monkeypatch):
