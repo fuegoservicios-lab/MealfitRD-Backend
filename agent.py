@@ -820,6 +820,37 @@ def swap_meal(form_data: dict):
             f"ingrediente hay poco, úsalo en cantidad pequeña o no lo incluyas. Pedir más de lo que el usuario tiene "
             f"hará que el plato se rechace."
         )
+        # [P1-SWAP-PANTRY-ROTATION · 2026-07-10] Variedad RICA desde la Nevera: con 40-60 items
+        # disponibles el LLM gravitaba a los mismos 6-8 (avena/guineo/queso una y otra vez —
+        # reporte del owner). Computa los items de la despensa que NADIE usa aún (ni este plato,
+        # ni las otras comidas de hoy, ni el mismo slot de otros días) y pide priorizarlos. Soft
+        # (los gates deterministas de arriba son la red dura). Fail-safe.
+        try:
+            from constants import strip_accents as _sa_rot
+            _used_blob_rot = _sa_rot((
+                str(rejected_meal or "") + " "
+                + " ".join(str(b) for b in (form_data.get("same_day_other_meal_blobs") or [])) + " "
+                + " ".join(str(n) for n in (_cross_day_names or []))
+            ).lower())
+            _unused_rot = []
+            for _pi_rot in clean_ingredients:
+                _nm_rot = _extract_clean_name_from_display_string(str(_pi_rot).strip())
+                if not _nm_rot or len(_nm_rot) < 4:
+                    continue
+                _nm_low_rot = _sa_rot(_nm_rot.lower())
+                if _nm_low_rot not in _used_blob_rot:
+                    _unused_rot.append(_nm_rot)
+                if len(_unused_rot) >= 10:
+                    break
+            if len(_unused_rot) >= 3:
+                context_extras += (
+                    f"\n    - 🌈 ROTACIÓN DE DESPENSA (variedad rica): estos alimentos de su nevera "
+                    f"AÚN NO se usan en el plan: {', '.join(_unused_rot)}. PRIORIZA construir el plato "
+                    f"alrededor de 2-3 de ellos (respetando macros y coherencia) en vez de repetir los "
+                    f"ingredientes de siempre."
+                )
+        except Exception as _rot_e:
+            logger.debug(f"[P1-SWAP-PANTRY-ROTATION] hint no-op: {type(_rot_e).__name__}: {_rot_e}")
     else:
         logger.warning(
             f"⚠️ [SWAP_MEAL] GUARDRAIL BYPASS — Sin despensa detectada | "
@@ -1215,25 +1246,82 @@ def swap_meal(form_data: dict):
                 _new_name_br = getattr(res, "name", None) if not isinstance(res, dict) else res.get("name")
                 _cur_base_br = _hbt_br(_sa_br(str(rejected_meal or "").lower()))
                 _new_base_br = _hbt_br(_sa_br(str(_new_name_br or "").lower()))
-                if _cur_base_br and _new_base_br and _cur_base_br == _new_base_br:
+                # [P1-SWAP-CROSSDAY-BASE-GATE · 2026-07-10] el gate solo comparaba contra el plato
+                # REEMPLAZADO → el swap podía proponer la base que otro día ya usa en el mismo slot
+                # ("Avena Cremosa" en Día 1 Y Día 3, screenshot del owner). Bases de los otros días
+                # (cross_day_meal_names, mismo slot) también vetadas para reasons de variedad.
+                _cross_bases_br = set()
+                for _cdn_br in (_cross_day_names or []):
+                    _cb_br = _hbt_br(_sa_br(str(_cdn_br or "").lower()))
+                    if _cb_br:
+                        _cross_bases_br.add(_cb_br)
+                _base_clash = _new_base_br and (
+                    (_cur_base_br and _new_base_br == _cur_base_br) or _new_base_br in _cross_bases_br
+                )
+                if _base_clash:
+                    _why_br = ("actual" if (_cur_base_br and _new_base_br == _cur_base_br) else "otros días del plan")
                     logger.warning(
-                        f"🔁 [P1-SWAP-BASE-REPEAT-GATE] plato-base repetido ('{_new_base_br}') | "
+                        f"🔁 [P1-SWAP-BASE-REPEAT-GATE] plato-base repetido ('{_new_base_br}', vs {_why_br}) | "
                         f"actual={str(rejected_meal)[:40]!r} propuesto={str(_new_name_br)[:40]!r} | meal_type={meal_type}"
                     )
                     _current_prompt[0] = prompt_text + (
-                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\nPropusiste OTRA VEZ un plato "
-                        f"base '{_new_base_br}' — el usuario quiere algo DIFERENTE al plato actual "
-                        f"('{rejected_meal}'). CAMBIA LA BASE del plato por completo (otra preparación: "
-                        f"si era panqueques/batido prueba revoltillo, avena cocida, tostadas, bowl, "
-                        f"arepitas…), no solo los acompañantes."
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\nPropusiste un plato "
+                        f"base '{_new_base_br}' que el usuario YA come ({_why_br}). CAMBIA LA BASE del "
+                        f"plato por completo (otra preparación: revoltillo, avena cocida, tostadas, bowl, "
+                        f"arepitas, guiso, al horno…), no solo los acompañantes."
                     )
                     raise ValueError(
-                        f"SWAP_SAME_BASE: el plato propuesto repite el plato-base '{_new_base_br}' del actual."
+                        f"SWAP_SAME_BASE: el plato propuesto repite el plato-base '{_new_base_br}' ({_why_br})."
                     )
             except ValueError:
                 raise
             except Exception as _br_exc:
                 logger.debug(f"[P1-SWAP-BASE-REPEAT-GATE] no-op: {type(_br_exc).__name__}: {_br_exc}")
+
+        # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] Gate DETERMINISTA de proteína same-day:
+        # el hint soft (P1-SWAP-SAME-DAY-VARIETY) no bastaba — el plan vivo del owner acumuló
+        # 'huevo' en 2 comidas del Día 1 Y del Día 2 vía swaps (estado que el reviewer de
+        # generación RECHAZARÍA). Mismo SSOT del detector oficial
+        # (`_protein_gate_labels_in_text`: labels + aliases + word-boundary sobre
+        # nombre+ingredientes). Aplica a TODO reason (repetir proteína el mismo día fatiga
+        # siempre); el caller de regen-day ya trae el estado ACTUAL del día en
+        # `same_day_other_meal_blobs` y su fallback sin-exclusiones lo retira para no dejar
+        # slots imposibles. Knob MEALFIT_SWAP_SAMEDAY_PROTEIN_GATE default ON. Fail-safe.
+        # tooltip-anchor: P1-SWAP-SAMEDAY-PROTEIN-GATE
+        _sd_blobs_gate = form_data.get("same_day_other_meal_blobs") or []
+        if (
+            _sd_blobs_gate
+            and os.environ.get("MEALFIT_SWAP_SAMEDAY_PROTEIN_GATE", "true").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            try:
+                from graph_orchestrator import _protein_gate_labels_in_text as _pglt_sd
+                _cand_name_sd = getattr(res, "name", None) if not isinstance(res, dict) else res.get("name")
+                _cand_blob_sd = str(_cand_name_sd or "") + " " + " ".join(str(i) for i in (ingreds or []))
+                _cand_lbls_sd = _pglt_sd(_cand_blob_sd)
+                _used_lbls_sd = set()
+                for _b_sd in _sd_blobs_gate:
+                    _used_lbls_sd |= _pglt_sd(str(_b_sd))
+                _clash_sd = _cand_lbls_sd & _used_lbls_sd
+                if _clash_sd:
+                    _clash_txt = ", ".join(sorted(_clash_sd))
+                    logger.warning(
+                        f"🍗 [P1-SWAP-SAMEDAY-PROTEIN-GATE] candidato repite proteína del día "
+                        f"({_clash_txt}) | propuesto={str(_cand_name_sd)[:40]!r} | meal_type={meal_type}"
+                    )
+                    _current_prompt[0] = prompt_text + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\nTu plato usa {_clash_txt}, "
+                        f"pero OTRA comida de HOY ya lo lleva (revisa 'VARIEDAD DEL DÍA'). Elige una "
+                        f"proteína principal DIFERENTE de las disponibles en su despensa y NO la "
+                        f"menciones ni en el nombre ni en los ingredientes."
+                    )
+                    raise ValueError(
+                        f"SWAP_SAMEDAY_PROTEIN: el plato propuesto repite '{_clash_txt}' ya usado "
+                        f"en otra comida del mismo día."
+                    )
+            except ValueError:
+                raise
+            except Exception as _sd_exc:
+                logger.debug(f"[P1-SWAP-SAMEDAY-PROTEIN-GATE] no-op: {type(_sd_exc).__name__}: {_sd_exc}")
 
         # Solo aplicamos restricción estricta si hay una despensa base limpia extraída
         if clean_ingredients:

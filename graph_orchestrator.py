@@ -8601,6 +8601,11 @@ _MAIN_PROTEIN_ALIASES = {
     "res": ["res", "carne molida", "bistec"],
     "pescado": ["pescado", "tilapia", "salmon", "merluza", "mero", "dorado"],
     "atun": ["atun"],
+    # [P1-VARIETY-SHELLFISH-LABELS · 2026-07-10] mariscos visibles para el gate same-day
+    # y los contadores cross-día (antes camarones ×2 el mismo día pasaba invisible).
+    "camarones": ["camaron", "camarones", "langostino", "langostinos", "gambas"],
+    "pulpo": ["pulpo"],
+    "cangrejo": ["cangrejo", "jaiba", "juey"],
     "huevo": ["huevo", "claras"],
     "gandules": ["gandules"],
     "habichuelas": ["habichuela", "frijoles", "frijol"],
@@ -8613,7 +8618,12 @@ _MAIN_PROTEIN_ALIASES = {
 # (huevo, claras, yogurt, gandules, habichuelas, lentejas) sí pueden
 # aparecer en múltiples slots (ej. huevo en desayuno + huevo duro snack)
 # sin ser problema.
-_HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun"}
+# [P1-VARIETY-SHELLFISH-LABELS · 2026-07-10] + mariscos: el plan vivo del owner tenía
+# camarones en almuerzo Y cena del MISMO día y el gate no lo veía (los labels solo cubrían
+# carnes/pescado/atún) — la repetición de marisco fatiga igual que la de pollo. Los aliases
+# viven en _MAIN_PROTEIN_ALIASES (abajo).
+_HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun",
+                         "camarones", "pulpo", "cangrejo"}
 
 # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Proteínas PRINCIPALES cuya repetición el MISMO día fatiga al
 # usuario (pedido explícito del owner: vio huevo en desayuno+cena el mismo día). Incluye las pesadas + HUEVO

@@ -24,7 +24,10 @@ def test_router_helper_finds_same_day_other_meals(monkeypatch):
     ]}
     monkeypatch.setattr(db_core, "execute_sql_query", lambda *a, **k: {"plan_data": fake_plan})
 
-    out = plans_mod._same_day_other_meals_for_swap("u1", "Batata Rellena con Queso Mozzarella")
+    # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] el helper ahora retorna (names, blobs):
+    # los blobs (nombre+ingredientes) alimentan el gate determinista del agente.
+    out, _blobs = plans_mod._same_day_other_meals_for_swap("u1", "Batata Rellena con Queso Mozzarella")
+    assert isinstance(_blobs, list) and len(_blobs) == len(out)
     assert "Soya Texturizada sobre Bulgur" in out
     assert "Revoltillo de Huevos" in out
     assert "Batata Rellena con Queso Mozzarella" not in out  # el propio plato excluido
@@ -33,9 +36,9 @@ def test_router_helper_finds_same_day_other_meals(monkeypatch):
 
 def test_router_helper_guest_and_empty_are_safe(monkeypatch):
     from routers import plans as plans_mod
-    assert plans_mod._same_day_other_meals_for_swap("guest", "X") == []
-    assert plans_mod._same_day_other_meals_for_swap("u1", "") == []
-    assert plans_mod._same_day_other_meals_for_swap(None, "X") == []
+    assert plans_mod._same_day_other_meals_for_swap("guest", "X") == ([], [])
+    assert plans_mod._same_day_other_meals_for_swap("u1", "") == ([], [])
+    assert plans_mod._same_day_other_meals_for_swap(None, "X") == ([], [])
 
 
 def test_agent_injects_same_day_variety_directive():

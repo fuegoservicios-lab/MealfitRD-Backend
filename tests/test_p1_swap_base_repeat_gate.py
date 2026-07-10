@@ -30,7 +30,9 @@ def test_base_repeat_gate_wired_in_swap():
         "P1-SWAP-BASE-REPEAT-GATE: el swap volvió a permitir el mode collapse "
         "('Panqueques de Avena…' ×3 regens seguidos con variación cosmética)."
     )
-    blk = _AGENT[i: i + 3200]
+    # [P1-SWAP-CROSSDAY-BASE-GATE · 2026-07-10] 3200→4600: el gate creció con el veto
+    # de bases cross-día (mismo bloque).
+    blk = _AGENT[i: i + 4600]
     assert "_head_dish_base_token" in blk, "SSOT del plato-base (mismo detector del gate cross-día)"
     assert "rejected_meal" in blk, "compara contra el plato ACTUAL que el usuario quiere cambiar"
     assert '"variety", "similar", "dislike"' in blk, (

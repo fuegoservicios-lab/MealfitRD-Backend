@@ -31,7 +31,10 @@ def test_feasibility_fallback_retries_without_exclusions():
     # Si el 1er intento (con variedad) lanza ValueError, reintenta swap_meal(meal_form) SIN day_avoid.
     assert "reintento SIN exclusiones de variedad" in _PLANS
     # El reintento usa meal_form crudo (sin las exclusiones de variedad).
-    assert re.search(r"nm = swap_meal\(meal_form\)", _PLANS)
+    # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] el fallback usa _form_relaxed (meal_form
+    # sin los gates same-day/cross-día) — factibilidad primero, sin slots imposibles.
+    assert re.search(r"nm = swap_meal\(_form_relaxed\)", _PLANS)
+    assert '_form_relaxed.pop("same_day_other_meal_blobs", None)' in _PLANS
 
 
 def test_excludes_main_protein_too():

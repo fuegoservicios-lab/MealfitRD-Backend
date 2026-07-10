@@ -5205,9 +5205,11 @@ def _same_day_other_meals_for_swap(user_id, rejected_meal):
     día (el swap JIT no recibía contexto del día → cambiaba 'Batata con Mozzarella' por 'Yuca con Soya' cuando
     el almuerzo YA era Soya). Backend-only: el frontend no manda day_index al /swap-meal, así que ubicamos el
     día buscando el plato rechazado por nombre en el plan más reciente del usuario. Fail-open: cualquier error
-    o no-match → [] (el swap procede sin la restricción, como antes). Tooltip-anchor: P1-SWAP-SAME-DAY-VARIETY."""
+    o no-match → ([], []) (el swap procede sin la restricción, como antes). Retorna
+    (names, blobs) — blobs = nombre+ingredientes para el gate determinista
+    [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10]. Tooltip-anchor: P1-SWAP-SAME-DAY-VARIETY."""
     if not user_id or user_id == "guest" or not rejected_meal:
-        return []
+        return [], []
     try:
         from db_core import execute_sql_query as _exq
         from constants import strip_accents as _sa
@@ -5227,11 +5229,22 @@ def _same_day_other_meals_for_swap(user_id, rejected_meal):
             names = [str(m.get("name", "")) for m in meals if isinstance(m, dict)]
             if any(_sa(n.lower()).strip() == rn for n in names):
                 # encontrado el día → devolver los nombres de las OTRAS comidas
-                return [n for n in names if _sa(n.lower()).strip() != rn and n.strip()]
-        return []
+                # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] y sus BLOBS (nombre+ingredientes)
+                # para el gate DETERMINISTA del agente: el detector oficial de variedad cuenta
+                # proteínas por nombre+ingredientes ("Panqueques" lleva huevo solo en la lista) —
+                # con solo nombres el gate quedaba ciego al huevo/queso embebido (plan vivo del
+                # owner: 'huevo' ×2 el mismo día invisible para el hint soft).
+                _blobs = [
+                    str(m.get("name", "")) + " " + " ".join(str(i) for i in (m.get("ingredients") or []))
+                    for m in meals
+                    if isinstance(m, dict) and _sa(str(m.get("name", "")).lower()).strip() != rn
+                ]
+                _names_out = [n for n in names if _sa(n.lower()).strip() != rn and n.strip()]
+                return _names_out, _blobs
+        return [], []
     except Exception as _e:
         logger.debug(f"[P1-SWAP-SAME-DAY-VARIETY] no se pudo derivar el día (no bloquea): {_e}")
-        return []
+        return [], []
 
 
 def _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type, cap: int = 8):
@@ -5383,9 +5396,13 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P1-SWAP-SAME-DAY-VARIETY · 2026-06-27] Inyecta las OTRAS comidas del día para que el plato nuevo NO
         # repita la proteína/alimento principal el mismo día (el swap era ciego al resto del día).
         try:
-            _same_day = _same_day_other_meals_for_swap(user_id, rejected_meal)
+            _same_day, _same_day_blobs = _same_day_other_meals_for_swap(user_id, rejected_meal)
             if _same_day:
                 data["same_day_other_meals"] = _same_day
+                # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] blobs (nombre+ingredientes) para el
+                # gate DETERMINISTA del agente — el hint soft de arriba no bastaba (plan vivo con
+                # 'huevo' ×2 same-day que el detector oficial marca como rechazo).
+                data["same_day_other_meal_blobs"] = _same_day_blobs
                 logger.info(f"🔄 [SWAP SAME-DAY-VARIETY] Otras comidas del día (evitar repetir proteína): {_same_day}")
         except Exception as _sdv_e:
             logger.debug(f"[P1-SWAP-SAME-DAY-VARIETY] inyección falló (no bloquea): {_sdv_e}")
@@ -5897,6 +5914,42 @@ def api_swap_meal_persist(
                 except Exception as _fin_sp_e:
                     logger.debug(f"[P2-SWAP-PERSIST-FINALIZE] finalize en persist falló (no bloquea): "
                                  f"{type(_fin_sp_e).__name__}: {_fin_sp_e}")
+
+            # [P1-SWAP-PERSIST-DAY-BAND · 2026-07-10] Re-cuadre del DÍA tras aceptar el swap:
+            # el swap valida su SLOT (±15%) pero nadie re-miraba el DÍA — caso vivo del owner:
+            # una cena aceptada de 1,037 kcal dejó el Día 1 en ~2,970 kcal (+18%, banda 0.667)
+            # sin aviso ni corrección. Si el día re-medido queda fuera de banda, el motor SSOT
+            # de updates re-apunta las porciones EXISTENTES del día (view 1-día, mismos dicts)
+            # + re-sync de cantidades en pasos. Trade-off aceptado: sin guard de ledger acá
+            # (el escalado del motor es acotado a banda [0.90, 1.12] sobre líneas existentes).
+            # Knob MEALFIT_SWAP_PERSIST_DAY_BAND default ON. Best-effort.
+            # tooltip-anchor: P1-SWAP-PERSIST-DAY-BAND
+            if os.environ.get("MEALFIT_SWAP_PERSIST_DAY_BAND", "true").strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    from graph_orchestrator import (apply_update_macro_engine as _ame_spd,
+                                                    compute_clinical_band_score as _cbs_spd,
+                                                    _sync_recipe_step_quantities as _sq_spd)
+                    from nutrition_db import IngredientNutritionDB as _SPDB
+                    _day_view_spd = {"days": [day], "macros": plan_data.get("macros"),
+                                     "calories": plan_data.get("calories"),
+                                     "main_goal": plan_data.get("main_goal")}
+                    _bs_pre_spd = _cbs_spd(_day_view_spd, {})
+                    _pre_score_spd = float(_bs_pre_spd.get("score_macros_only") or 1.0)
+                    if _pre_score_spd < 0.99:
+                        _ame_spd(_day_view_spd, surface="swap_persist_day", db=_SPDB())
+                        for _m_spd in (day.get("meals") or []):
+                            if isinstance(_m_spd, dict):
+                                try:
+                                    _sq_spd(_m_spd)
+                                except Exception:
+                                    pass
+                        _bs_post_spd = _cbs_spd(_day_view_spd, {})
+                        logger.info(
+                            f"🎯 [P1-SWAP-PERSIST-DAY-BAND] día {day_index + 1} re-cuadrado post-swap: "
+                            f"banda {_pre_score_spd:.2f}→{float(_bs_post_spd.get('score_macros_only') or 0):.2f}"
+                        )
+                except Exception as _spd_e:
+                    logger.debug(f"[P1-SWAP-PERSIST-DAY-BAND] no-op: {type(_spd_e).__name__}: {_spd_e}")
 
             # Strip las 4 aggregated_shopping_list* para forzar recalc
             # downstream (mismo contrato que el SQL legacy — el frontend
@@ -6553,6 +6606,27 @@ def api_regenerate_day(
                 # validar contra ESTE ledger reservado (reserva inter-plato D7), NO contra la nevera-virtual
                 # completa del plan → dos platos del mismo día no reclaman el mismo ingrediente escaso.
                 "pantry_override": True,
+                # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] Blobs (nombre+ingredientes) de las
+                # OTRAS comidas del día EN SU ESTADO ACTUAL (ya-regeneradas + pendientes, sin el
+                # plato en curso) → gate determinista en swap_meal: el candidato no puede repetir
+                # la proteína del gate ya usada ese día (el hint soft no bastaba — plan vivo con
+                # 'huevo' ×2 same-day). Se recomputa por-plato dentro del loop (ve los aceptados).
+                "same_day_other_meal_blobs": [
+                    str(_mm.get("name", "")) + " " + " ".join(str(_ii) for _ii in (_mm.get("ingredients") or []))
+                    for _mm in (new_meals + meals[len(new_meals) + 1:])
+                    if isinstance(_mm, dict)
+                ],
+                # [P1-SWAP-CROSSDAY-BASE-GATE · 2026-07-10] Nombres del MISMO slot en los OTROS
+                # días → el gate de plato-base veta también las bases cross-día ("Avena Cremosa"
+                # en Día 1 Y Día 3 vía regen, screenshot del owner). El fallback lo retira.
+                "cross_day_meal_names": [
+                    str(_om.get("name"))
+                    for _di2, _od in enumerate(days)
+                    if _di2 != day_index and isinstance(_od, dict)
+                    for _om in (_od.get("meals") or [])
+                    if isinstance(_om, dict) and _om.get("name")
+                    and str(_om.get("meal") or "").strip().lower() == str(meal.get("meal") or "").strip().lower()
+                ][:8],
             }
             try:
                 # [P5-DAY-REGEN-VARIETY] 1er intento con exclusiones de variedad (los platos ya
@@ -6567,7 +6641,13 @@ def api_regenerate_day(
                 except ValueError:
                     if _variety_on and day_avoid:
                         logger.info(f"[P5-DAY-REGEN-VARIETY] reintento SIN exclusiones de variedad para {meal.get('name')!r}")
-                        nm = swap_meal(meal_form)
+                        # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] el fallback es "factibilidad
+                        # primero": retirar también el gate determinista same-day y el cross-día
+                        # (si la Nevera solo da para repetir proteína, entregar plato válido gana).
+                        _form_relaxed = dict(meal_form)
+                        _form_relaxed.pop("same_day_other_meal_blobs", None)
+                        _form_relaxed.pop("cross_day_meal_names", None)
+                        nm = swap_meal(_form_relaxed)
                     else:
                         raise
                 if isinstance(nm, dict) and nm.get("name"):
