@@ -74,14 +74,22 @@ def test_empty_days_noop(monkeypatch):
 
 
 def test_insert_chokepoint_wired():
+    # [P0-PERSIST-TXN-IDLE · 2026-07-10] el bloque de pases se extrajo del builder a
+    # _finalize_plan_data_for_insert para poder correrlo FUERA de la transacción del
+    # path atomic (idle-in-transaction timeout mataba el INSERT). El chokepoint sigue
+    # siendo universal: el builder delega al helper salvo skip explícito del atomic
+    # (que lo pre-ejecuta él mismo). Ver test_p0_persist_txn_idle.py.
     src = (_BACKEND / "db_plans.py").read_text(encoding="utf-8")
-    # el callsite vive DENTRO de _build_meal_plan_insert_sql
-    i = src.index("def _build_meal_plan_insert_sql")
-    body = src[i:i + 3000]
+    i = src.index("def _finalize_plan_data_for_insert")
+    body = src[i:i + 4000]
     assert "finalize_plan_data_coherence" in body
     assert "P1-COHERENCE-FINALIZE" in body
     # import LAZY (no a nivel módulo — ciclo db_plans↔graph_orchestrator)
     assert "from graph_orchestrator import finalize_plan_data_coherence" in body
+    # el builder conserva el escudo central (default skip=False → delega al helper)
+    ib = src.index("def _build_meal_plan_insert_sql")
+    bbody = src[ib:ib + 2200]
+    assert "_finalize_plan_data_for_insert(data)" in bbody
 
 
 def test_chunk_t1_chokepoint_wired():

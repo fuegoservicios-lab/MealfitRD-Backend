@@ -501,6 +501,17 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
             (LLM/HTTP) DENTRO del bloque transaccional — síntoma a
             investigar (follow-up pendiente: auditar que `/shift-plan` y
             workers no hagan llamadas externas mientras sostienen el lock).
+        MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS  (default 60000)
+            [P0-PERSIST-TXN-IDLE · 2026-07-10] Override per-tx del
+            idle_in_transaction_session_timeout de sesión (15s,
+            P1-DB-STMT-TIMEOUT en db_core). Los mutators bajo FOR UPDATE
+            son CPU-only por contrato (P2-MUTATOR-PURITY) pero un stretch
+            CPU legítimo (T1 merge + finalize parity ~10-20s) cuenta como
+            "idle" para el server: sin este override la sesión moría a los
+            15s (chunk 4 del plan 72c8b965, 2026-07-06). El propio diseño
+            de db_core bendice los `SET LOCAL` per-tx como override. Valor
+            0 ⇒ NO se emite el SET (en Postgres 0 = deshabilitado/infinito
+            — nunca queremos eso; queda vivo el default de sesión de 15s).
 
     Best-effort: si `SET LOCAL` falla (Postgres viejo, permisos), log
     debug y la transacción continúa sin timeouts locales. NO propaga la
@@ -514,9 +525,14 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
 
     lock_to_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_LOCK_TIMEOUT_MS", 5000)
     stmt_to_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_STMT_TIMEOUT_MS", 30000)
+    idle_txn_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)
     try:
         cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_to_ms)}ms'")
         cursor.execute(f"SET LOCAL statement_timeout = '{int(stmt_to_ms)}ms'")
+        if idle_txn_ms > 0:
+            cursor.execute(
+                f"SET LOCAL idle_in_transaction_session_timeout = '{int(idle_txn_ms)}ms'"
+            )
     except Exception as e:
         logger.debug(
             f"[P1-LOCK-1] No se pudo setear lock_timeout/statement_timeout "
@@ -906,12 +922,23 @@ def _apply_inherited_lifetime_lessons(user_id: str, insert_data: dict, cursor=No
     )
 
 
-def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
-    """Construye la SQL de INSERT para meal_plans a partir de un dict.
+def _finalize_plan_data_for_insert(data: dict) -> None:
+    """[P0-PERSIST-TXN-IDLE · 2026-07-10] Pases de normalización/finalize de
+    `plan_data` previos a CUALQUIER INSERT de meal_plans (mutación in-place).
 
-    Retorna (sql, vals) listos para pasar a cursor.execute.
+    Vivían inline en `_build_meal_plan_insert_sql`; extraídos para poder
+    ejecutarlos ANTES de abrir la transacción del path atomic: son CPU-bound
+    (~10-25s en planes reales — fuzzy matching + coherence stack + motor de
+    macros all-4) y corriendo dentro del BEGIN dejaban la conexión
+    idle-in-transaction hasta que el SET de sesión de db_core
+    (`MEALFIT_DB_IDLE_IN_TXN_TIMEOUT_MS`=15s, P1-DB-STMT-TIMEOUT) la mataba:
+    `terminating connection due to idle-in-transaction timeout` → plan generado
+    PERDIDO tras 13 min de pipeline (forensic corr=d2bc0bcc 2026-07-10; también
+    Jul 09 sync ×2 user 99a02318 — el bug precede al band closer, cada pase
+    añadido desde 2026-06-28 acercaba la ventana al umbral).
+
+    Idempotente (cada pase interno lo es) y fail-safe (nunca bloquea el INSERT).
     """
-    from psycopg.types.json import Jsonb
     # [P0-1-RECOVERY/C] Defensa centralizada: cualquier path que use este helper para
     # insertar a meal_plans tendrá grocery_start_date garantizado. Evita reintroducir
     # el bug donde el pipeline LLM omitía el campo y sólo el backfill en runtime
@@ -980,6 +1007,25 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
                     logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] pre-INSERT no-op: {type(_rbs_e).__name__}: {_rbs_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] pre-INSERT no-op: {type(_fce).__name__}: {_fce}")
+
+
+def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False,
+                                skip_plan_data_finalize: bool = False):
+    """Construye la SQL de INSERT para meal_plans a partir de un dict.
+
+    Retorna (sql, vals) listos para pasar a cursor.execute.
+
+    [P0-PERSIST-TXN-IDLE · 2026-07-10] `skip_plan_data_finalize=True` lo pasa
+    `save_new_meal_plan_atomic`, que ejecuta `_finalize_plan_data_for_insert`
+    ANTES de abrir su transacción (los pases son CPU-bound ~10-25s y dentro del
+    BEGIN disparaban el idle-in-transaction timeout de sesión → INSERT muerto,
+    plan perdido). El default False conserva el escudo central para
+    `save_new_meal_plan_robust` y cualquier call site futuro — esos construyen
+    FUERA de transacción, donde el costo CPU es inocuo.
+    """
+    from psycopg.types.json import Jsonb
+    if not skip_plan_data_finalize:
+        _finalize_plan_data_for_insert(data)
 
     # [P0-1/CENTRAL] Último escudo para herencia cross-plan de lifetime lessons.
     # save_new_meal_plan_atomic y save_new_meal_plan_robust ya invocan
@@ -1090,13 +1136,28 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
                     # _lifetime_lessons_history del plan previo seguía vivo en meal_plans.
                     _apply_inherited_lifetime_lessons(user_id, data, cursor=cursor)
 
-                    sql, vals = _build_meal_plan_insert_sql(data, with_returning=True)
+                    # [P0-PERSIST-TXN-IDLE · 2026-07-10] skip: los pases finalize ya
+                    # corrieron FUERA de esta transacción (ver pre-finalize abajo).
+                    # Re-correrlos acá dejaría la conexión idle ~10-25s bajo el BEGIN
+                    # → el SET de sesión de 15s (P1-DB-STMT-TIMEOUT) mata el INSERT.
+                    sql, vals = _build_meal_plan_insert_sql(
+                        data, with_returning=True, skip_plan_data_finalize=True
+                    )
                     cursor.execute(sql, vals)  # pyright: ignore[reportArgumentType]  # psycopg LiteralString FP (sql dinámico)
                     row = cursor.fetchone()
                     plan_id = str(row["id"]) if row else None
         return plan_id, len(cancelled_rows)
 
     safe_data = copy.deepcopy(insert_data)
+    # [P0-PERSIST-TXN-IDLE · 2026-07-10] Finaliza plan_data ANTES de abrir la
+    # transacción: coherence stack + protein band + all-4 band closer + clear/
+    # refresh son CPU-bound (~10-25s con fuzzy matching) y dentro del BEGIN
+    # dejaban la conexión idle-in-transaction > 15s (SET de sesión de db_core,
+    # P1-DB-STMT-TIMEOUT) → Neon mataba la sesión y el INSERT fallaba con el
+    # plan YA generado (pérdida total: corr=d2bc0bcc 2026-07-10, sync ×2
+    # 2026-07-09). El retry por columnas ausentes (except abajo) re-entra a
+    # _run con el MISMO safe_data ya finalizado — no se re-paga el costo.
+    _finalize_plan_data_for_insert(safe_data)
     try:
         plan_id, n_cancelled = _run(safe_data)
     except Exception as e:
