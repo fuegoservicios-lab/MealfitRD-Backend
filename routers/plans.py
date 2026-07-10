@@ -6476,6 +6476,30 @@ def api_regenerate_day(
                     f"🎲 [P1-UPDATE-CROSS-DAY-VARIETY] day_avoid sembrado con "
                     f"{len(day_avoid)} proteína(s) de otros días: {day_avoid}"
                 )
+        # [P1-DAY-REGEN-SERVER-FLAG · 2026-07-10] Declarar el regen in-flight EN EL PLAN
+        # (jsonb_set quirúrgico, I7-exempt) ANTES del loop de slots: el resume cross-refresh
+        # del frontend dependía solo de un marker en localStorage escrito por el bundle del
+        # CLICK — un cliente con bundle stale (SW del PWA pre-deploy, caso vivo 2026-07-10
+        # 15:47) no escribía nada y el refresh perdía el overlay aunque el backend siguiera
+        # generando. Con el flag server-side, cualquier remount (incluso otro dispositivo)
+        # detecta el regen en curso vía plans-data/latest. Lo limpia el _day_mutator en el
+        # persist (pop atómico); si el handler muere (500), queda stale y el cliente lo
+        # ignora por edad (>9 min). Best-effort: si el UPDATE falla, el regen sigue.
+        try:
+            import json as _json_rdf
+            from datetime import datetime as _dt_rdf, timezone as _tz_rdf
+            from db_core import execute_sql_query as _esq_rdf
+            _rdf_payload = _json_rdf.dumps({
+                "day_index": day_index,
+                "started_at": _dt_rdf.now(_tz_rdf.utc).isoformat(),
+            })
+            _esq_rdf(
+                "UPDATE meal_plans SET plan_data = jsonb_set(plan_data, '{_day_regen_inflight}', %s::jsonb, true) "
+                "WHERE id = %s AND user_id = %s",
+                (_rdf_payload, plan_id, verified_user_id),
+            )
+        except Exception as _rdf_e:
+            logger.debug(f"[P1-DAY-REGEN-SERVER-FLAG] set no-op: {_rdf_e}")
         for meal in meals:
             if not isinstance(meal, dict):
                 new_meals.append(meal)
@@ -6610,6 +6634,17 @@ def api_regenerate_day(
             new_meals.extend(meals[len(new_meals):])
 
         if regenerated == 0:
+            # [P1-DAY-REGEN-SERVER-FLAG] nada se persiste en los soft-fail → retirar el flag
+            # in-flight quirúrgicamente (sin él, el resume del cliente esperaría 9 min).
+            try:
+                from db_core import execute_sql_query as _esq_rdf2
+                _esq_rdf2(
+                    "UPDATE meal_plans SET plan_data = plan_data - '_day_regen_inflight' "
+                    "WHERE id = %s AND user_id = %s",
+                    (plan_id, verified_user_id),
+                )
+            except Exception as _rdf2_e:
+                logger.debug(f"[P1-DAY-REGEN-SERVER-FLAG] clear soft-fail no-op: {_rdf2_e}")
             if _ai_unavailable:
                 # Fallo transitorio del proveedor → NO consumir cuota; pedir reintento.
                 return {
@@ -6853,6 +6888,10 @@ def api_regenerate_day(
             if not isinstance(_day, dict):
                 raise ValueError(f"plan_data.days[{day_index}] corrupted")
             _day["meals"] = new_meals
+            # [P1-DAY-REGEN-SERVER-FLAG · 2026-07-10] el regen terminó: retirar el flag
+            # in-flight en el MISMO persist atómico (el resume del frontend lo usa como
+            # señal de "sigue corriendo"; _plan_modified_at le marca la completion).
+            pd.pop("_day_regen_inflight", None)
             # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) Defensa-en-profundidad a nivel DÍA: si
             # el plan lleva cap renal KDIGO, trima el día regenerado al techo de proteína del día
             # (renal_protein_cap.protein_g) — espejo de _enforce_renal_per_meal de S1. El per-meal trim de
