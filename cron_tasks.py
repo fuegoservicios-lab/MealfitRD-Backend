@@ -30236,32 +30236,20 @@ def process_plan_chunk_queue(target_plan_id=None):
                             # ingredientes ya en gramos). Bajo el FOR UPDATE+advisory lock ya tomado (I7-safe), CPU-only.
                             try:
                                 if isinstance(plan_data.get("days"), list):
-                                    from graph_orchestrator import finalize_plan_data_coherence as _fpc_chunk
-                                    # [P1-CHUNK-FINALIZE-PARITY · 2026-07-07] deriva el target de grasa del
-                                    # día (plan_data['macros']['fats'] = "58g") → el finalizer corre relevel
-                                    # + cheese-final en los días de semanas 2+ (antes solo en assemble → day2
-                                    # llegaba a F141 vs 58 con "Tostadas PB+Mango+Queso" 67g SIN capear).
-                                    _tf_ck = None
-                                    _tm_ck = None  # [P1-CHUNK-GAINMUSCLE-PARITY · 2026-07-08] target macros numéricos
-                                    try:
-                                        _mac_ck = plan_data.get("macros") or {}
-                                        _vals_ck = {}
-                                        for _ks, _kd in (("protein", "protein_g"), ("carbs", "carbs_g"), ("fats", "fats_g")):
-                                            _mm_ck = re.search(r"(\d+(?:\.\d+)?)", str(_mac_ck.get(_ks)))
-                                            _vals_ck[_kd] = float(_mm_ck.group(1)) if _mm_ck else None
-                                        _tf_ck = _vals_ck.get("fats_g")
-                                        if all(_v is not None for _v in _vals_ck.values()):
-                                            _tm_ck = _vals_ck  # el gainmuscle floor necesita los 3 macros
-                                    except Exception:
-                                        _tf_ck = None; _tm_ck = None
-                                    # [P1-CHUNK-GAINMUSCLE-PARITY] pasa goal + target_macros → el finalizer re-rellena
-                                    # días de bulk bajo banda en semanas 2+ (paridad con assemble/semana 1).
-                                    _n_ck, _summ_ck = _fpc_chunk(
-                                        plan_data["days"], target_fats=_tf_ck,
-                                        main_goal=plan_data.get("main_goal"), target_macros=_tm_ck)
-                                    if _n_ck:
-                                        logger.info(f"🧩 [P1-COHERENCE-FINALIZE] chunk T1 plan {meal_plan_id} semana "
-                                                    f"{week_number} ({_summ_ck}).")
+                                    # [P0-BAND-PRE-REVIEW · 2026-07-10] chain COMPLETO del shield (SSOT
+                                    # `db_plans.apply_plan_quality_finalize_chain`) en vez de solo fpc: las
+                                    # semanas 2+ mergean vía UPDATE (bypassean el shield del INSERT) y se
+                                    # quedaban SIN los pases nuevos (protein-step-parity, banda all-4,
+                                    # polish-refire, condimentos, bigfruit, count-agreement, detectores) —
+                                    # ~7/8 de los días de un plan mensual. El chain auto-deriva target_fats
+                                    # + main_goal + target_macros del propio plan_data (absorbe
+                                    # P1-CHUNK-FINALIZE-PARITY · 2026-07-07 y P1-CHUNK-GAINMUSCLE-PARITY ·
+                                    # 2026-07-08, que antes se derivaban a mano aquí). Idempotente sobre los
+                                    # días ya finalizados de semanas previas; CPU-only bajo el mismo lock.
+                                    from db import apply_plan_quality_finalize_chain as _apqfc_ck
+                                    _apqfc_ck(plan_data, surface=f"chunk-T1 semana {week_number}")
+                                    logger.info(f"🧩 [P0-BAND-PRE-REVIEW] chain de calidad aplicado en merge T1 "
+                                                f"plan {meal_plan_id} semana {week_number} (paridad shield semanas 2+).")
                             except Exception as _fce_ck:
                                 logger.warning(f"[P1-COHERENCE-FINALIZE] chunk T1 no-op: {type(_fce_ck).__name__}: {_fce_ck}")
 

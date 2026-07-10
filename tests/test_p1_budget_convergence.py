@@ -107,7 +107,9 @@ def test_force_keeps_allergy_guard(cheapen_env, monkeypatch):
 def test_convergence_wired_in_assemble():
     assert "P1-BUDGET-CONVERGENCE" in _GO
     blk_start = _GO.index('str(_bc_rec0.get("status") or "") == "excedido"')
-    blk = _GO[blk_start:blk_start + 6000]
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] 6000→7500: el re-fire del chain post-convergencia
+    # (+~1k chars) empujaba el re-costeo fuera de la ventana fija.
+    blk = _GO[blk_start:blk_start + 7500]
     assert "force=True" in blk, "la pasada post-costeo usa force (todos los tiers con referencia)"
     assert "apply_update_macro_engine(result, surface=\"budget_convergence\"" in blk, \
         "tras sustituir, el motor de updates re-apunta la banda (P1-UPDATE-MACRO-PARITY)"
@@ -122,7 +124,9 @@ def test_convergence_failopen_never_wipes_lists():
     # el bloque vive dentro del try de SHOPPING MATH (que resetea listas a [] al fallar):
     # DEBE tener su propio try/except que trague todo (fail-open al estado de la 1ª pasada).
     blk_start = _GO.index("tooltip-anchor: P1-BUDGET-CONVERGENCE")
-    blk = _GO[blk_start:blk_start + 7000]
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] 7000→10000: mismo motivo que arriba (re-fire del chain;
+    # el except del fail-open quedó a ~8.6k del anchor).
+    blk = _GO[blk_start:blk_start + 10000]
     assert "except Exception as _bc_e:" in blk
     assert "pasada de convergencia no-op" in blk
 

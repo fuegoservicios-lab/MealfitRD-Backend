@@ -41,8 +41,21 @@ def test_fu3_gainmuscle_runs_after_cheese_final_in_finalizer():
 
 
 def test_fu3_chunk_worker_passes_goal_and_macros():
-    assert "main_goal=plan_data.get(\"main_goal\"), target_macros=_tm_ck" in _CT
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] contrato actualizado: el chunk T1 delega en
+    # `apply_plan_quality_finalize_chain` (SSOT db_plans), que AUTO-DERIVA main_goal +
+    # target_macros del propio plan_data y los pasa a fpc — el forwarding manual del
+    # chunk (assert viejo) fue absorbido por el shield. La paridad FU3 sigue viva:
+    # ancla la derivación en db_plans + la delegación en cron_tasks.
     assert "P1-CHUNK-GAINMUSCLE-PARITY" in _CT
+    i_merge = _CT.find("Merge normal: primera vez")
+    assert i_merge > 0
+    assert "apply_plan_quality_finalize_chain" in _CT[i_merge:i_merge + 8000]
+    with open(os.path.join(_BACKEND, "db_plans.py"), encoding="utf-8") as _f_dbp:
+        _dbp_src = _f_dbp.read()
+    assert 'main_goal=_pd.get("main_goal"), target_macros=_tm_ins' in _dbp_src, (
+        "la derivación goal+macros para fpc debe vivir en el shield (db_plans) — "
+        "es lo que preserva el gainmuscle-refill de semanas 2+ tras la delegación"
+    )
 
 
 # ═══════════════════ FU1: sweet-snack no legume ═══════════════════

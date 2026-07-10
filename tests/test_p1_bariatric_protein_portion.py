@@ -19,7 +19,10 @@ _NUT = {"macros": {"protein_g": 80, "carbs_g": 180, "fats_g": 53}}
 def _wire(monkeypatch, cap=None):
     import graph_orchestrator as g
 
-    def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300, slot_cal_target=0.0, enforce_min_threshold=True):
+    # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] day_used_proteins añadido al contrato del closer;
+    # sin él en el stub, el caller real revienta con TypeError silencioso (fail-safe) → added=0.
+    def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300,
+                    slot_cal_target=0.0, enforce_min_threshold=True, day_used_proteins=None):
         if cap is not None:
             cap["max_add_g"] = max_add_g
         cur = g._meal_macro_num(m.get("protein"))

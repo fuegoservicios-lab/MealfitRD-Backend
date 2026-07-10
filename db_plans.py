@@ -922,7 +922,7 @@ def _apply_inherited_lifetime_lessons(user_id: str, insert_data: dict, cursor=No
     )
 
 
-def _finalize_plan_data_for_insert(data: dict) -> None:
+def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -> None:
     """[P0-PERSIST-TXN-IDLE · 2026-07-10] Pases de normalización/finalize de
     `plan_data` previos a CUALQUIER INSERT de meal_plans (mutación in-place).
 
@@ -936,6 +936,12 @@ def _finalize_plan_data_for_insert(data: dict) -> None:
     PERDIDO tras 13 min de pipeline (forensic corr=d2bc0bcc 2026-07-10; también
     Jul 09 sync ×2 user 99a02318 — el bug precede al band closer, cada pase
     añadido desde 2026-06-28 acercaba la ventana al umbral).
+
+    [P0-BAND-PRE-REVIEW · 2026-07-10] `surface` etiqueta los logs con el punto de
+    ejecución real: además del INSERT, el chain corre en la cola de assemble
+    (pre-shopping/pre-review, vía `apply_plan_quality_finalize_chain`) y en el
+    merge T1 del chunk worker (semanas 2+). Kw-only con default → los callers y
+    monkeypatches existentes (1 arg posicional) siguen intactos.
 
     Idempotente (cada pase interno lo es) y fail-safe (nunca bloquea el INSERT).
     """
@@ -956,18 +962,29 @@ def _finalize_plan_data_for_insert(data: dict) -> None:
                 # [P1-CHUNK-FINALIZE-PARITY · 2026-07-07] deriva target de grasa del plan → el shield
                 # pre-INSERT corre relevel + cheese-final en planes que saltan assemble (partial/
                 # rechazado-pero-entregado/SSE-fallback), no solo el slice/quantize.
+                # [P0-BAND-PRE-REVIEW · 2026-07-10] deriva TAMBIÉN main_goal + target_macros (los 3
+                # numéricos) del propio plan_data — paridad P1-CHUNK-GAINMUSCLE-PARITY: antes solo el
+                # chunk T1 los pasaba a mano; ahora el chunk delega en este chain y los paths que
+                # saltan assemble ganan el refill de bulk que nunca tuvieron.
                 _tf_ins = None
+                _tm_ins = None
                 try:
                     import re as _re_ins
-                    _mfats_ins = (_pd.get("macros") or {}).get("fats")
-                    if _mfats_ins is not None:
-                        _mm_ins = _re_ins.search(r"(\d+(?:\.\d+)?)", str(_mfats_ins))
-                        _tf_ins = float(_mm_ins.group(1)) if _mm_ins else None
+                    _mac_ins = _pd.get("macros") or {}
+                    _vals_ins = {}
+                    for _ks_i, _kd_i in (("protein", "protein_g"), ("carbs", "carbs_g"), ("fats", "fats_g")):
+                        _mm_ins = _re_ins.search(r"(\d+(?:\.\d+)?)", str(_mac_ins.get(_ks_i)))
+                        _vals_ins[_kd_i] = float(_mm_ins.group(1)) if _mm_ins else None
+                    _tf_ins = _vals_ins.get("fats_g")
+                    if all(_v is not None for _v in _vals_ins.values()):
+                        _tm_ins = _vals_ins
                 except Exception:
                     _tf_ins = None
-                _n, _summ = _fpc(_pd["days"], target_fats=_tf_ins)
+                    _tm_ins = None
+                _n, _summ = _fpc(_pd["days"], target_fats=_tf_ins,
+                                 main_goal=_pd.get("main_goal"), target_macros=_tm_ins)
                 if _n:
-                    logger.info(f"🧩 [P1-COHERENCE-FINALIZE] pre-INSERT aplicó coherencia a un plan no-finalizado ({_summ}).")
+                    logger.info(f"🧩 [P1-COHERENCE-FINALIZE] {surface} aplicó coherencia a un plan no-finalizado ({_summ}).")
                 # [P1-PROTEIN-BAND-POST-FINALIZE · 2026-07-09] El truth-up de _fpc recomputa la proteína HONESTA
                 # → puede re-exponer drift de proteína (día bajo el piso / sobre el techo) que ningún closer de
                 # assemble re-encuadra. Re-escala porciones proteína-dominantes EXISTENTES (sin ingredientes
@@ -1064,7 +1081,34 @@ def _finalize_plan_data_for_insert(data: dict) -> None:
                 except Exception as _rbs_e:
                     logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] pre-INSERT no-op: {type(_rbs_e).__name__}: {_rbs_e}")
         except Exception as _fce:
-            logger.warning(f"[P1-COHERENCE-FINALIZE] pre-INSERT no-op: {type(_fce).__name__}: {_fce}")
+            logger.warning(f"[P1-COHERENCE-FINALIZE] {surface} no-op: {type(_fce).__name__}: {_fce}")
+
+
+def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "quality-chain") -> None:
+    """[P0-BAND-PRE-REVIEW · 2026-07-10] Adapter público del chain de calidad/banda.
+
+    Delegación pura a `_finalize_plan_data_for_insert({"plan_data": plan_data})` —
+    el SSOT del ORDEN de pases vive allí (fpc → protein-band → step-parity →
+    all-4-band-closer → polish-refire → condimentos → bigfruit → count-agreement →
+    detectores pairing/batch → stale-clear → band-score refresh). Seguro porque
+    `_ensure_grocery_start_date` muta in-place y retorna el MISMO dict (documentado
+    en su docstring) → el caller conserva todas las mutaciones.
+
+    Surfaces (además del INSERT, que lo invoca directo):
+      1. Cola de `assemble_plan_node` ANTES de construir la lista de compras y del
+         review → el gate de banda y el P2-BAND-SCORE-GATE miden el estado CERRADO
+         (mata los retries por banda —que escalaban day_generator a PRO, driver #1
+         del gasto LLM— y el banner falso "precisión de las calorías" que viajaba
+         en el payload SSE pre-shield).
+      2. Merge T1 del chunk worker (semanas 2+) → paridad: los pases del shield
+         cubren el 100% de los días del plan, no solo el primer chunk.
+
+    Idempotente y fail-safe (hereda ambas garantías del shield). Mutación in-place;
+    retorna None. tooltip-anchor: P0-BAND-PRE-REVIEW
+    """
+    if not isinstance(plan_data, dict):
+        return
+    _finalize_plan_data_for_insert({"plan_data": plan_data}, surface=surface)
 
 
 def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False,

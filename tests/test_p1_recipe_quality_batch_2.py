@@ -50,7 +50,10 @@ class _DB:
 # ───────────────────────── FIX A: chunk-finalize parity ─────────────────────────
 
 def test_finalizer_signature_has_target_fats():
-    assert "def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None)" in _GO
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] assert actualizado: P1-CHUNK-GAINMUSCLE-PARITY (2026-07-08)
+    # añadió kw-only `main_goal`/`target_macros` a la firma — el assert viejo (que exigía cierre
+    # `)` justo tras target_fats=None) llevaba stale desde entonces.
+    assert "def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None, *," in _GO
 
 
 def test_finalizer_wires_relevel_and_cheese_final():
@@ -64,20 +67,25 @@ def test_finalizer_wires_relevel_and_cheese_final():
 
 
 def test_chunk_worker_derives_and_passes_target_fats():
-    # el chunk worker (cron_tasks) deriva el target de plan_data['macros']['fats'] y lo pasa
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] contrato actualizado: el chunk T1 ya no invoca fpc a mano
+    # (el assert viejo llevaba stale desde P1-CHUNK-GAINMUSCLE-PARITY 2026-07-08, que volvió la
+    # llamada multilínea) — ahora delega en `apply_plan_quality_finalize_chain` (SSOT db_plans),
+    # que AUTO-DERIVA target_fats/main_goal/target_macros del propio plan_data. La derivación se
+    # ancla en el shield (test de abajo); aquí anclamos la delegación + el marker de paridad.
     assert "P1-CHUNK-FINALIZE-PARITY" in _CRON
-    assert "_fpc_chunk(plan_data[\"days\"], target_fats=_tf_ck)" in _CRON
-    i = _CRON.find("_fpc_chunk(plan_data[\"days\"], target_fats=_tf_ck)")
-    seg = _CRON[max(0, i - 600):i]
-    assert '(plan_data.get("macros") or {}).get("fats")' in seg
+    i_merge = _CRON.find("Merge normal: primera vez")
+    assert i_merge > 0
+    assert "apply_plan_quality_finalize_chain" in _CRON[i_merge:i_merge + 8000]
 
 
 def test_insert_shield_derives_and_passes_target_fats():
-    # el shield pre-INSERT (db_plans) también deriva y pasa target_fats
-    assert "_fpc(_pd[\"days\"], target_fats=_tf_ins)" in _DBP
-    i = _DBP.find("_fpc(_pd[\"days\"], target_fats=_tf_ins)")
-    seg = _DBP[max(0, i - 500):i]
-    assert '(_pd.get("macros") or {}).get("fats")' in seg
+    # el shield pre-INSERT (db_plans) deriva y pasa target_fats (llamada multilínea desde
+    # P0-BAND-PRE-REVIEW, que añadió main_goal/target_macros auto-derivados)
+    assert '_fpc(_pd["days"], target_fats=_tf_ins,' in _DBP
+    i = _DBP.find('_fpc(_pd["days"], target_fats=_tf_ins,')
+    seg = _DBP[max(0, i - 900):i]
+    assert '_pd.get("macros") or {}' in seg
+    assert '"fats_g"' in seg, "la derivación de grasa vive en el loop de los 3 macros"
 
 
 def test_finalizer_caps_cheese_dump_end_to_end(monkeypatch):

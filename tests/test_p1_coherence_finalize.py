@@ -93,9 +93,12 @@ def test_insert_chokepoint_wired():
 
 
 def test_chunk_t1_chokepoint_wired():
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] el chunk T1 ya no importa fpc directo: delega en
+    # `apply_plan_quality_finalize_chain` (SSOT db_plans), que corre fpc + el resto del
+    # shield (banda all-4, step-parity, polish-refire, etc.) para las semanas 2+.
     src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
     assert "P1-COHERENCE-FINALIZE" in src
-    assert "finalize_plan_data_coherence" in src
+    assert "apply_plan_quality_finalize_chain" in src
 
 
 def test_order_slice_before_quantize():

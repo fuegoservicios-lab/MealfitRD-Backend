@@ -19,7 +19,11 @@ def _wire(monkeypatch, capture=None):
     """Mockea closer/reconcile/candidatos para probar la ORQUESTACIÓN sin DB real."""
     import graph_orchestrator as g
 
-    def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300, slot_cal_target=0.0, enforce_min_threshold=True):
+    # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] day_used_proteins añadido al contrato del closer
+    # (labels same-day de las demás comidas del día); el stub debe aceptarlo o el caller real
+    # revienta con TypeError silencioso (fail-safe) y estos tests medirían orquestación muerta.
+    def fake_closer(m, target, db, cands, allergies=None, fill_pct=0.92, max_add_g=300,
+                    slot_cal_target=0.0, enforce_min_threshold=True, day_used_proteins=None):
         if capture is not None:
             capture["cands"] = cands
             capture["max_add_g"] = max_add_g

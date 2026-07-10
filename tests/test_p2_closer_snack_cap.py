@@ -26,7 +26,9 @@ def test_knob_default_100():
 
 def test_cap_applied_on_light_meals_inside_closer():
     i = _GO.index("def _close_protein_gap_for_meal")
-    body = _GO[i:i + 12000]
+    # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] ventana 12000→16000: el chooser ganó el filtro
+    # day-aware (~2k chars) y el cap de snack quedaba fuera de la ventana fija.
+    body = _GO[i:i + 16000]
     i_cap = body.index("int(CLOSER_SNACK_MAX_ADD_G)")  # el CÓDIGO (el comment nombra el knob antes)
     win = body[max(0, i_cap - 600):i_cap]
     assert "if light:" in win, "el cap aplica SOLO a meriendas/platos ligeros (light ya computado)"

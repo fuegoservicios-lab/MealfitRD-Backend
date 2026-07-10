@@ -15059,7 +15059,8 @@ def _is_savory_cheese_name(nlow: str) -> bool:
 
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
-                                slot_cal_target: float = 0.0, enforce_min_threshold: bool = True) -> int:
+                                slot_cal_target: float = 0.0, enforce_min_threshold: bool = True,
+                                day_used_proteins=None) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -15142,6 +15143,22 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _pool = _pool_sweet
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
+        # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
+        # INGREDIENTES del estado FINAL → una proteína que el closer INTRODUCE aquí y que otra comida
+        # del día ya usa se convierte en rechazo del reviewer (medido en vivo corr=2451c8ac: el _alt
+        # del no-dup-cheese eligió 'Huevo' 3s después de que el autofix limpiara el día → retry
+        # completo con day-gen escalado a PRO). Las ramas que INTRODUCEN proteína nueva (categoría/
+        # fallback/_alt) evitan labels ya usados por OTRA comida del día; la CONGRUENCIA no filtra
+        # (escala una proteína que YA está en esta comida → no crea label nuevo). El piso de proteína
+        # SIEMPRE gana: sin candidato limpio, se mantiene la elección legacy.
+        def _collides_day(_nlow_c: str) -> bool:
+            if not day_used_proteins:
+                return False
+            try:
+                return bool(_protein_gate_labels_in_text(_nlow_c) & set(day_used_proteins))
+            except Exception:
+                return False
+
         # Dish-fit: 1) congruencia (proteína ya mencionada en el plato) → escala el tema;
         # 2) categoría (ligera→huevo/lácteo, principal→carne); 3) fallback la más magra.
         chosen = None
@@ -15166,12 +15183,21 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                     break
         if chosen is None:
             _pref = _DAIRY_EGG_PROTEIN_HINT if light else _MEAT_PROTEIN_HINT
+            # [P1-CLOSER-DAY-AWARE-PROTEIN] 1ª pasada: candidato de la categoría SIN colisión
+            # same-day; 2ª pasada legacy si ninguno califica (el piso de proteína gana).
             for info, nlow in _pool:
-                if any(h in nlow for h in _pref):
+                if any(h in nlow for h in _pref) and not _collides_day(nlow):
                     chosen = info
                     break
+            if chosen is None:
+                for info, nlow in _pool:
+                    if any(h in nlow for h in _pref):
+                        chosen = info
+                        break
         if chosen is None:
-            chosen = _pool[0][0]  # la más magra (candidates ya viene ordenado)
+            # la más magra (candidates ya viene ordenado); [P1-CLOSER-DAY-AWARE-PROTEIN]
+            # preferir la más magra SIN colisión same-day; sin candidato limpio → legacy.
+            chosen = next((info for info, nlow in _pool if not _collides_day(nlow)), _pool[0][0])
         # [P1-CLOSER-NO-DUP-CHEESE · 2026-06-30] Evita el 2º queso: si el plato YA tiene queso y `chosen` es OTRO
         # queso, prefiere un candidato NO-queso de la categoría apropiada al slot (ligero→lácteo/huevo; principal→
         # carne) → respeta la coherencia de slot (no mete carne en una merienda). Si no hay alternativa → mantiene
@@ -15180,10 +15206,19 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _ch_low = _sa(str(chosen.name).lower())
             if any(h in _ch_low for h in _CLOSER_CHEESE_HINT) and any(h in meal_text for h in _CLOSER_CHEESE_HINT):
                 _pref2 = _DAIRY_EGG_PROTEIN_HINT if light else _MEAT_PROTEIN_HINT
+                # [P1-CLOSER-DAY-AWARE-PROTEIN] este picker fue EXACTAMENTE el que eligió 'Huevo'
+                # el 2026-07-10 reintroduciendo el repeat same-day que el gate rechazó → 1ª pasada
+                # sin colisión (day_used_proteins), 2ª pasada legacy si no hay alternativa limpia.
                 _alt = next((info for (info, nlow) in _pool
                              if any(h in nlow for h in _pref2)
                              and not any(h in nlow for h in _CLOSER_CHEESE_HINT)
-                             and float(getattr(info, "protein", 0) or 0) >= 12), None)
+                             and float(getattr(info, "protein", 0) or 0) >= 12
+                             and not _collides_day(nlow)), None)
+                if _alt is None:
+                    _alt = next((info for (info, nlow) in _pool
+                                 if any(h in nlow for h in _pref2)
+                                 and not any(h in nlow for h in _CLOSER_CHEESE_HINT)
+                                 and float(getattr(info, "protein", 0) or 0) >= 12), None)
                 if _alt is not None and _sa(str(_alt.name).lower()) != _ch_low:
                     logger.info(f"🧀 [P1-CLOSER-NO-DUP-CHEESE] plato ya tiene queso → uso '{_alt.name}' en vez de un "
                                 f"2º queso ('{chosen.name}') | meal={str(meal.get('name'))[:30]}")
@@ -16152,6 +16187,42 @@ def _days_with_same_day_protein_repeat(plan: dict) -> list:
     except Exception:
         return []
     return [d for d in out if d is not None]
+
+
+def _protein_gate_labels_in_text(text_low: str) -> set:
+    """[P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] Labels del gate same-day presentes en un blob
+    (nombre+ingredientes de una comida; el helper normaliza lower/sin-acentos internamente).
+    MISMO SSOT que el gate del revisor (`_SAME_DAY_PROTEIN_GATE_LABELS` + `_MAIN_PROTEIN_ALIASES`
+    + `_name_has_token` word-boundary) — detectores asimétricos autofix↔gate fueron la causa del
+    rechazo del 2026-07-10 (el closer no-dup-cheese reintrodujo 'huevo' 3s después de que el
+    autofix limpiara el día, invisible para él). Puro, fail-safe → set().
+    tooltip-anchor: P1-CLOSER-DAY-AWARE-PROTEIN"""
+    out: set = set()
+    try:
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                return s
+        blob = _sa(str(text_low).lower())
+        for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
+            if any(_name_has_token(_sa(_al), blob)
+                   for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
+                out.add(_plabel)
+    except Exception:
+        return set()
+    return out
+
+
+def _protein_gate_labels_in_meal(meal: dict) -> set:
+    """[P1-CLOSER-DAY-AWARE-PROTEIN] Labels del gate en una comida (nombre + ingredientes) —
+    espejo del blob que escanea `build_variety_report`. Fail-safe → set()."""
+    try:
+        blob = (str(meal.get("name", "")) + " "
+                + " ".join(str(i) for i in (meal.get("ingredients") or [])))
+        return _protein_gate_labels_in_text(blob)
+    except Exception:
+        return set()
 
 
 def dedup_featured_fruits_in_plan(plan: dict) -> int:
@@ -25309,6 +25380,9 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
             if _day_cur >= _day_floor:
                 continue  # [día-floor] el día YA cumple el piso → NO sobre-disparar (evita 91g/114% de banda)
             _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+            # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] labels del gate same-day por comida (SSOT del
+            # detector del revisor) → el closer no INTRODUCE una proteína que otra comida del día ya usa.
+            _day_meal_labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
             _touched = False
             for _i, _m in enumerate(_ms):
                 if _day_cur >= _day_floor:
@@ -25324,14 +25398,21 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                 # [P1-CLOSER-CALORIE-AWARE] headroom calórico del slot = kcal del día × share → el closer no infla
                 # kcal por encima del target (evita el band 0.58/kcal-fuera del re-cierre pesado en bariátrica).
                 _slot_cal = (4.0 * _pg + 4.0 * _cg + 9.0 * _fg) * _share
+                _used_others = set()
+                for _j, _lb in enumerate(_day_meal_labels):
+                    if _j != _i:
+                        _used_others |= _lb
                 _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
                                                  allergies=form_data.get("allergies"),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
-                                                 slot_cal_target=_slot_cal, enforce_min_threshold=False)
+                                                 slot_cal_target=_slot_cal, enforce_min_threshold=False,
+                                                 day_used_proteins=_used_others)
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
                     _touched = True
+                    # el add recién hecho debe ser visible para las siguientes comidas del día
+                    _day_meal_labels[_i] = _protein_gate_labels_in_meal(_m)
                     _day_cur = sum(_meal_macro_num(_mm.get("protein")) for _mm in _ms)  # recomputar piso del día
             # Re-cuadrar C/F del día preservando la proteína recién cerrada (reusa el reconcile probado).
             if _touched:
@@ -25405,6 +25486,9 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                 # [P3-SLOT-DISTRIBUTION] Fracción por slot: split fisiológico canónico
                 # (redistribuye kcal+proteína equitativamente) o cal_share del LLM (legacy).
                 _slot_fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+                # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] labels del gate same-day por comida
+                # (SSOT del detector del revisor) — ver _repair_protein_floor_post_caps.
+                _day_meal_labels = [_protein_gate_labels_in_meal(_mm) for _mm in _ms]
                 for _mi, _m in enumerate(_ms):
                     if _slot_fracs:
                         _share = _slot_fracs[_mi]
@@ -25433,10 +25517,19 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                                       if (CLOSER_EGG_BUDGET_ENABLED and _egg_count >= _egg_cap)
                                       else _hd_candidates)
                         _had_egg_pre = _meal_has_egg(_m, _sa_egg) if CLOSER_EGG_BUDGET_ENABLED else True
-                        _topup_g += _close_protein_gap_for_meal(
+                        _used_mi = set()
+                        for _j2, _lb2 in enumerate(_day_meal_labels):
+                            if _j2 != _mi:
+                                _used_mi |= _lb2
+                        _g_mi = _close_protein_gap_for_meal(
                             _m, _slot_target["protein"], _nut_db, _egg_cands,
                             allergies=form_data.get("allergies"),
-                            fill_pct=PROTEIN_FLOOR_FILL_PCT)
+                            fill_pct=PROTEIN_FLOOR_FILL_PCT,
+                            day_used_proteins=_used_mi)
+                        if _g_mi > 0:
+                            # el add recién hecho debe ser visible para las siguientes comidas del día
+                            _day_meal_labels[_mi] = _protein_gate_labels_in_meal(_m)
+                        _topup_g += _g_mi
                         if CLOSER_EGG_BUDGET_ENABLED and not _had_egg_pre and _meal_has_egg(_m, _sa_egg):
                             _egg_count += 1  # el closer añadió huevo a esta comida → consume presupuesto
                     elif MACRO_SOLVER_PROTEIN_TOPUP:
@@ -27044,6 +27137,41 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.info(f"🎭 [P1-PHANTOM-PROTEIN-NAMEFIX] {_phantom_fixed} nombre(s) de plato corregido(s) "
                         f"(proteína fantasma del título → proteína real del plato).")
 
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] Chain de calidad/banda del shield pre-INSERT (SSOT
+    # `db_plans.apply_plan_quality_finalize_chain`) corrido AQUÍ: tras la ÚLTIMA mutación de
+    # assemble y ANTES de construir la lista de compras (el closer de banda muta cantidades —
+    # construirla antes daría divergencias receta↔lista en el coherence guard) y del review.
+    # Efectos medidos en vivo (corr=2451c8ac): (a) el gate de banda del review y el
+    # P2-BAND-SCORE-GATE pasan a medir el estado CERRADO (banda 0.583→1.00 pre-review, no
+    # pre-INSERT) → desaparecen los retries por banda pura, que escalaban day_generator a PRO
+    # (5× precio; $1.57/48h = driver #1 del gasto LLM) — y (b) el payload SSE ya no viaja con
+    # `_quality_degraded` stale ("precisión de las calorías...", dolor recurrente del owner):
+    # el flag jamás se marca porque el estado ya está en banda. El shield del INSERT queda
+    # como red idempotente para los paths que saltan assemble. Vía `_adb` (executor DB) para
+    # no bloquear el event loop (~5-20s CPU: fuzzy matching + motor all-4).
+    try:
+        from db import apply_plan_quality_finalize_chain as _apqfc
+        await _adb(_apqfc, result, surface="assemble-tail")
+        logger.info("🎯 [P0-BAND-PRE-REVIEW] chain de calidad/banda aplicado al estado final de "
+                    "assemble (pre-shopping/pre-review).")
+    except Exception as _apq_e:
+        logger.warning(f"[P0-BAND-PRE-REVIEW] chain pre-review no-op: {type(_apq_e).__name__}: {_apq_e}")
+
+    # [P1-SAMEDAY-REINTRO-TELEMETRY · 2026-07-10] Detector del gate (SSOT) sobre el estado FINAL:
+    # el autofix de proteína repetida corre temprano en assemble, pero pases tardíos pueden
+    # reintroducir el repeat (2026-07-10: el closer no-dup-cheese eligió 'Huevo' 3s después del
+    # autofix → rechazo del reviewer → retry en PRO). El chooser ya es day-aware
+    # (P1-CLOSER-DAY-AWARE-PROTEIN); este warn es la evidencia para cazar cualquier
+    # reintroductor restante ANTES de que el gate del review lo convierta en retry.
+    try:
+        _late_rep_days = _days_with_same_day_protein_repeat(result)
+        if _late_rep_days:
+            logger.warning(f"🍗 [P1-SAMEDAY-REINTRO-TELEMETRY] proteína repetida same-day PERSISTE "
+                           f"tras closers/chain en día(s) {_late_rep_days} — el gate del review va a "
+                           f"rechazar; identificar el pase reintroductor aguas arriba.")
+    except Exception:
+        pass
+
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
     _uid = form_data.get("user_id")
@@ -27252,6 +27380,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             recompute_micronutrient_report_for_plan(result, form_data, db=_bc_db)
                     except Exception as _bc_tu_e:
                         logger.debug(f"[P1-BUDGET-CONVERGENCE] truth-up/re-banda no-op: {_bc_tu_e}")
+                    # [P0-BAND-PRE-REVIEW · 2026-07-10] re-fire del chain (idempotente): la convergencia
+                    # acaba de mutar ingredientes/cantidades DESPUÉS del chain de la cola de assemble —
+                    # sin esto, las líneas sustituidas llegan al review/SSE sin polish/parity/banda
+                    # final (misma clase que P1-3-POLISH-REFIRE). ANTES del rebuild de listas para que
+                    # la lista refleje las cantidades finales (coherencia receta↔lista).
+                    try:
+                        from db import apply_plan_quality_finalize_chain as _apqfc_bc
+                        await _adb(_apqfc_bc, result, surface="assemble-budget-convergence")
+                    except Exception as _apq_bc_e:
+                        logger.debug(f"[P0-BAND-PRE-REVIEW] re-fire post-convergencia no-op: {_apq_bc_e}")
                     # rebuild de listas (mismos snapshots de la 1ª pasada) → re-costeo → re-reconcile.
                     if _uid:
                         _bc7, _bc15, _bc30 = await asyncio.gather(
