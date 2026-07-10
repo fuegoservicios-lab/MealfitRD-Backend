@@ -27353,17 +27353,34 @@ def process_plan_chunk_queue(target_plan_id=None):
                 _persist_fresh_pantry_to_chunks(task_id, meal_plan_id, fresh_inventory, user_id=user_id)
 
             if _should_pause_for_empty_pantry(fresh_inventory_source, fresh_inventory, snap, form_data):
-                # [P1-1] Source distinto a "live" se pausaba antes silenciosamente. Logueamos
-                # explícitamente la fuente para detectar si la mayoría de pausas vienen de
-                # snapshots vacíos (síntoma de un frontend que no envía despensa al crear plan).
+                # [P1-CHUNK-AUTONOMY · 2026-07-10] Chunks `initial_plan` (días 4-30 de un plan
+                # RECIÉN generado) NO se pausan por nevera vacía: el flujo real es generar →
+                # el usuario compra la LISTA del plan → restockea. Nevera vacía en el día 4 es
+                # el estado NORMAL, no un error. Paridad worker↔SSE del knob
+                # MEALFIT_INITIAL_CHUNK_PANTRY_GUARD=False (P0-2/RENEWAL-PANTRY-IGNORE): el SSE
+                # ya lo saltaba y el worker no — por eso un plan de 30 días no llegaba solo al
+                # día 30 (dry-run 2026-07-10: prod 7d con reservas 0/N + neveras vacías →
+                # pending_user_action). rolling_refill/catchup CONSERVAN la pausa: a mitad de
+                # plan sí prometemos cocinar con lo que hay.
                 _meaningful = _count_meaningful_pantry_items(fresh_inventory)
-                logger.warning(
-                    f"[P1-1/PANTRY-EMPTY] Chunk {week_number} plan {meal_plan_id} pausado: "
-                    f"items_meaningful={_meaningful} < min={CHUNK_MIN_FRESH_PANTRY_ITEMS}, "
-                    f"source={fresh_inventory_source!r}, raw_count={len(fresh_inventory or [])}."
-                )
-                _pause_chunk_for_pantry_refresh(task_id, user_id, week_number, fresh_inventory)
-                return
+                if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+                    logger.info(
+                        f"[P1-CHUNK-AUTONOMY] Chunk {week_number} plan {meal_plan_id}: nevera "
+                        f"insuficiente (items_meaningful={_meaningful}, source={fresh_inventory_source!r}) "
+                        f"pero kind=initial_plan → continúa SIN pausa (la lista de compras del plan "
+                        f"define qué comprar)."
+                    )
+                else:
+                    # [P1-1] Source distinto a "live" se pausaba antes silenciosamente. Logueamos
+                    # explícitamente la fuente para detectar si la mayoría de pausas vienen de
+                    # snapshots vacíos (síntoma de un frontend que no envía despensa al crear plan).
+                    logger.warning(
+                        f"[P1-1/PANTRY-EMPTY] Chunk {week_number} plan {meal_plan_id} pausado: "
+                        f"items_meaningful={_meaningful} < min={CHUNK_MIN_FRESH_PANTRY_ITEMS}, "
+                        f"source={fresh_inventory_source!r}, raw_count={len(fresh_inventory or [])}."
+                    )
+                    _pause_chunk_for_pantry_refresh(task_id, user_id, week_number, fresh_inventory)
+                    return
 
             is_degraded = snap.get("_degraded", False)
             result = {}
@@ -31254,6 +31271,26 @@ def process_plan_chunk_queue(target_plan_id=None):
                         )
                     except Exception:
                         pass
+                elif chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+                    # [P1-CHUNK-AUTONOMY · 2026-07-10] Para initial_plan las reservas son
+                    # BEST-EFFORT (telemetría), jamás gate de completitud: la nevera aún no
+                    # tiene la compra del plan (estado normal del día 4+). Sin esto, el
+                    # RECONCILE-EXHAUSTED pausaba el chunk y un plan de 30 días quedaba
+                    # congelado esperando restock que el usuario haría DESPUÉS de comprar
+                    # la lista… que el chunk debía producir. Mismo racional que el skip de
+                    # arriba; rolling_refill/catchup conservan el gate completo.
+                    logger.info(
+                        f"[P1-CHUNK-AUTONOMY] Reservas {reserved_items}/{_expected_ingredients} "
+                        f"en chunk initial_plan {week_number} plan {meal_plan_id} → best-effort "
+                        f"sin gate (reservation_status='best_effort'; sin pausa)."
+                    )
+                    try:
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET reservation_status = 'best_effort', updated_at = NOW() WHERE id = %s",
+                            (task_id,)
+                        )
+                    except Exception:
+                        pass
                 else:
                     logger.warning(
                         f"[P0-5/PARTIAL] Reservas parciales chunk {week_number} plan {meal_plan_id}: "
@@ -31290,33 +31327,49 @@ def process_plan_chunk_queue(target_plan_id=None):
                         return
             except Exception as reserve_err:
                 logger.warning(f"[P0-5] Reservas fallidas para chunk {task_id}: {reserve_err}")
-                try:
-                    execute_sql_write(
-                        "UPDATE plan_chunk_queue SET reservation_status = 'partial', updated_at = NOW() WHERE id = %s",
-                        (task_id,)
+                if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+                    # [P1-CHUNK-AUTONOMY · 2026-07-10] espejo del branch best-effort: una
+                    # excepción reservando contra una nevera pre-compra tampoco gatea al
+                    # initial_plan (telemetría y sigue).
+                    logger.info(
+                        f"[P1-CHUNK-AUTONOMY] Reserva lanzó excepción en chunk initial_plan "
+                        f"{week_number} plan {meal_plan_id} → best-effort sin gate."
                     )
-                except Exception:
-                    pass
-                # [P1-CHUNKS-2] Mismo handling que el branch del path normal,
-                # pero entrando desde el except (reserve_plan_ingredients lanzó
-                # excepción en vez de devolver parcial). Con conciliación
-                # exhausted no podemos garantizar que el chunk no cause
-                # overbooking, así que el helper hace cleanup completo.
-                try:
-                    _reconcile_chunk_reservations(user_id, str(task_id), new_days)
-                except ReservationReconciliationFailed as _exc2:
-                    logger.error(
-                        f"[P1-CHUNKS-2/RECONCILE-EXHAUSTED] Pausando chunk {week_number} "
-                        f"plan {meal_plan_id} (reserva inicial lanzó excepción + reconcile "
-                        f"agotó retries)."
-                    )
-                    _handle_reservation_reconciliation_exhausted(
-                        exc=_exc2,
-                        week_number=week_number,
-                        meal_plan_id=meal_plan_id,
-                        fresh_inventory=form_data.get("current_pantry_ingredients", []),
-                    )
-                    return
+                    try:
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET reservation_status = 'best_effort', updated_at = NOW() WHERE id = %s",
+                            (task_id,)
+                        )
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET reservation_status = 'partial', updated_at = NOW() WHERE id = %s",
+                            (task_id,)
+                        )
+                    except Exception:
+                        pass
+                    # [P1-CHUNKS-2] Mismo handling que el branch del path normal,
+                    # pero entrando desde el except (reserve_plan_ingredients lanzó
+                    # excepción en vez de devolver parcial). Con conciliación
+                    # exhausted no podemos garantizar que el chunk no cause
+                    # overbooking, así que el helper hace cleanup completo.
+                    try:
+                        _reconcile_chunk_reservations(user_id, str(task_id), new_days)
+                    except ReservationReconciliationFailed as _exc2:
+                        logger.error(
+                            f"[P1-CHUNKS-2/RECONCILE-EXHAUSTED] Pausando chunk {week_number} "
+                            f"plan {meal_plan_id} (reserva inicial lanzó excepción + reconcile "
+                            f"agotó retries)."
+                        )
+                        _handle_reservation_reconciliation_exhausted(
+                            exc=_exc2,
+                            week_number=week_number,
+                            meal_plan_id=meal_plan_id,
+                            fresh_inventory=form_data.get("current_pantry_ingredients", []),
+                        )
+                        return
 
             # [GAP C] Determinar tier dominante del chunk (peor tier de los días generados)
             chunk_tier = 'llm'

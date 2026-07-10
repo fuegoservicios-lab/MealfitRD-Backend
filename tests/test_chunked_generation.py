@@ -515,9 +515,21 @@ def test_chunk_pauses_for_user_action_when_fresh_pantry_is_nearly_empty(
     mock_learning_ready.return_value = {"ready": True, "ratio": 1.0, "matched_meals": 3, "planned_meals": 3}
     mock_inventory.return_value = ["sal", "agua"][:CHUNK_MIN_FRESH_PANTRY_ITEMS - 1]
 
-    with patch('threading.Thread') as mock_thread, patch('concurrent.futures.ThreadPoolExecutor') as mock_executor:
-        mock_executor.return_value.__enter__.return_value.map.side_effect = lambda f, tasks: [f(t) for t in tasks]
-        process_plan_chunk_queue()
+    # [P1-CHUNK-AUTONOMY · 2026-07-10] initial_plan ya NO pausa por nevera pre-compra
+    # (best-effort por default). Este test valida la MAQUINARIA de pausa (que
+    # refill/catchup siguen usando por el mismo path) + el escape hatch del knob.
+    import os
+    _prev_autonomy = os.environ.get("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY")
+    os.environ["MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY"] = "false"
+    try:
+        with patch('threading.Thread') as mock_thread, patch('concurrent.futures.ThreadPoolExecutor') as mock_executor:
+            mock_executor.return_value.__enter__.return_value.map.side_effect = lambda f, tasks: [f(t) for t in tasks]
+            process_plan_chunk_queue()
+    finally:
+        if _prev_autonomy is None:
+            os.environ.pop("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", None)
+        else:
+            os.environ["MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY"] = _prev_autonomy
 
     mock_pipeline.assert_not_called()
     mock_inventory.assert_called_once_with("user_123")

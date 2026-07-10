@@ -151,6 +151,10 @@ def test_egg_phrase_rename_consumes_de_huevo_tail():
 # 6. Marker vivo
 # ---------------------------------------------------------------------------
 
-def test_marker_bumped():
-    app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert 'P1-CHEAPEN-DAY-AWARE' in app_src.split("_LAST_KNOWN_PFIX = ")[1][:60]
+def test_marker_anchored_in_source():
+    # [P1-CHUNK-AUTONOMY · 2026-07-10] durable: anclar el marker en el CÓDIGO (comments
+    # tooltip-anchor), no en _LAST_KNOWN_PFIX vigente — pinnear el marker actual rota
+    # con cada bump posterior (clase de fallo de test_p1_account_delete_1 y compañía).
+    assert _GO_SRC.count("P1-CHEAPEN-DAY-AWARE") >= 3, (
+        "los anchors del guard day-aware desaparecieron de graph_orchestrator"
+    )
