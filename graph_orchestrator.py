@@ -19915,6 +19915,8 @@ _QTYSYNC_COUNT_NOUNS = {
     "guineo": ("guineo", "guineos", r"guineos?"),
     "mandarina": ("mandarina", "mandarinas", r"mandarinas?"),
     "aguacate": ("aguacate", "aguacates", r"aguacates?"),
+    # [P3-2-INGREDIENT-COUNT-AGREEMENT · 2026-07-10] evidencia visual "1 naranjas" en ingredients.
+    "naranja": ("naranja", "naranjas", r"naranjas?"),
 }
 
 # [P2-QTYSYNC-MULTIUSE + P2-QTYSYNC-CADA-TOTAL · 2026-07-05] Helpers del qty-sync: parser de
@@ -20223,6 +20225,42 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
                         break
                 _steps3.append(s3)
             new_steps = _steps3
+        except Exception:
+            pass
+        # [P1-1-QTYSYNC-STALE-EN-TOTAL · 2026-07-10] (recipe plausibility roadmap P1-1) El pase CADA-TOTAL
+        # de arriba se ABSTIENE incondicionalmente cuando el paso YA contiene "(en total" (asume que un
+        # pase previo lo anotó correctamente) — pero el LLM (day_generator/Chef) puede escribir "(en
+        # total)" DIRECTAMENTE con un número INVENTADO nunca validado contra la línea real. Evidencia
+        # visual (plan 564d6e4e): "Unta cada tortilla con 2 cdas de mantequilla de maní (en total)" vs
+        # línea "1.25 cdas". Aditivo (NO toca el guard existente): entra SOLO a pasos con "(en total"
+        # preexistente, corrige el número SOLO si diverge de `food_total_f`, preserva la anotación.
+        try:
+            _steps4 = []
+            for step in new_steps:
+                if (not isinstance(step, str) or _is_recipe_safety_note_step(step)
+                        or "(en total" not in step.lower()):
+                    _steps4.append(step)
+                    continue
+                s4 = step
+                for _mm4 in list(_STEP_QTY_MENTION_RE.finditer(step)):
+                    _after4 = step[_mm4.end():_mm4.end() + 20].lower()
+                    if "en total" not in _after4:
+                        continue
+                    _mf4 = _sa(str(_mm4.group("food")).strip().lower())
+                    _mtoks4 = [t for t in _re.split(r"[^\wáéíóúñü]+", _mf4) if len(t) >= 4]
+                    _tot4 = next((food_total_f[_t] for _t in _mtoks4[:2] if _t in food_total_f), None)
+                    if not _tot4:
+                        continue
+                    _qv4 = _qtysync_qty_to_float(_mm4.group("qty"))
+                    if _qv4 is None or _qtysync_unit_norm(_mm4.group("unit")) != _tot4[1]:
+                        continue
+                    if abs(_qv4 - _tot4[0]) <= 1e-6:
+                        continue  # ya correcto, nada que reescribir
+                    s4 = s4[:_mm4.start("qty")] + _tot4[2] + s4[_mm4.end("unit"):]
+                    fixed += 1
+                    break
+                _steps4.append(s4)
+            new_steps = _steps4
         except Exception:
             pass
         if fixed:
@@ -23124,6 +23162,77 @@ def _bigfruit_bare_count_serving(s: str, il: str):
     return f"{_new.rstrip()} ({BIGFRUIT_SERVING_G}g)"
 
 
+# [P2-2-BIGFRUIT-COUNT-RECONCILE · 2026-07-10] (recipe plausibility roadmap, item P2-2)
+# `_bigfruit_bare_count_serving` (arriba) corrige la MAGNITUD del fantasma ("1 lechosa"=711kcal →
+# "1 lechosa (200g)"=71kcal) — pero el DISPLAY sigue leyendo "1 lechosa" (unidad ENTERA) mientras una
+# lechosa real pesa 1-3kg: el usuario interpreta "compra 1 lechosa" cuando necesita ~⅙. Fix ADITIVO
+# display-only: NO toca el formato "(Ng)" ya testeado (test_p1_bigfruit_gram_hint.py) — solo AÑADE un
+# descriptor fraccionario cuando el peso de la fruta ENTERA es resoluble consultando el string SIN el
+# paréntesis (el hint parenteral GANA sobre el conteo en el parser normal — por eso hay que preguntarle
+# al catálogo por el conteo BARE para obtener el peso real de la fruta completa).
+_BIGFRUIT_SERVING_HINT_RE = _re.compile(
+    r"^(\s*1\s+)([a-zñáéíóúü]+)((?:\s+[a-zñáéíóúü]+)*?)\s*\((\d+)g\)\s*$", _re.IGNORECASE)
+_BIGFRUIT_FRIENDLY_FRACTIONS = ((1, 2), (1, 3), (1, 4), (1, 5), (1, 6), (1, 8))
+
+
+def annotate_bigfruit_fractional_hint(plan_data: dict, db=None) -> int:
+    """[P2-2-BIGFRUIT-COUNT-RECONCILE] Añade "≈ N/M de la fruta" a líneas display ya anotadas por
+    `_bigfruit_bare_count_serving` ("1 lechosa madura (200g)"), cuando el peso de la fruta ENTERA
+    resuelve por catálogo y una fracción amigable (½..⅛) cae dentro de ±15% de la porción real.
+    Idempotente (no re-anota si ya contiene "≈"), fail-safe, display-only (ingredients_raw intacto).
+    tooltip-anchor: P2-2-BIGFRUIT-COUNT-RECONCILE"""
+    if not isinstance(plan_data, dict):
+        return 0
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return 0
+    try:
+        if db is None:
+            from nutrition_db import IngredientNutritionDB as _BfrDB
+            db = _BfrDB()
+        changed = 0
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                _lst = _m.get("ingredients")
+                if not isinstance(_lst, list):
+                    continue
+                for _i, _s in enumerate(_lst):
+                    if not isinstance(_s, str) or "≈" in _s:
+                        continue
+                    _mo = _BIGFRUIT_SERVING_HINT_RE.match(_s)
+                    if not _mo:
+                        continue
+                    _noun = _mo.group(2).lower()
+                    if not any(_noun.startswith(t) for t in _BIGFRUIT_PHANTOM_TOKENS):
+                        continue
+                    _bare = f"1 {_mo.group(2)}{_mo.group(3)}".strip()
+                    try:
+                        _whole_g = db.grams_from_ingredient_string(_bare)
+                    except Exception:
+                        _whole_g = None
+                    if not _whole_g or _whole_g <= 0:
+                        continue
+                    _serving_g = float(_mo.group(4))
+                    _ratio = _serving_g / _whole_g
+                    _num, _den = min(_BIGFRUIT_FRIENDLY_FRACTIONS,
+                                     key=lambda f: abs(f[0] / f[1] - _ratio))
+                    if abs(_num / _den - _ratio) > 0.15:
+                        continue  # ninguna fracción amigable calza → mejor omitir que mentir
+                    _lst[_i] = f"{_s} ≈ {_num}/{_den} de la fruta"
+                    changed += 1
+        if changed:
+            logger.info(f"🍈 [P2-2-BIGFRUIT-COUNT-RECONCILE] {changed} línea(s) de fruta grande "
+                        f"anotada(s) con fracción de la unidad completa.")
+        return changed
+    except Exception as e:
+        logger.debug(f"[P2-2-BIGFRUIT-COUNT-RECONCILE] no-op: {type(e).__name__}: {e}")
+        return 0
+
+
 # [P1-CHEESE-DUMP-FINAL · 2026-07-07] (review visual plan 766893f4: "190 g de queso" en un DESAYUNO dulce
 # de mantequilla-de-maní+mango, "130 g de queso" en un batido) El cap de queso de `_cap_unrealistic_portions`
 # corre ANTES del quantize/refiner/relevel, que RE-INFLAN la línea gram-led de queso (fat-dominante → el
@@ -24302,6 +24411,16 @@ def _restore_display_from_raw_orphans(days) -> int:
 # solo entre paréntesis ("(Campos)", "(Wala)"). Las anotaciones legítimas van en minúscula
 # o con dígitos ("(105g)", "(jugo)", "(porción)", "(37 g crudo)") → no matchean.
 _BRAND_PAREN_RE = _re.compile(r"\s*\(\s*[A-ZÁÉÍÓÚÑ][A-Za-záéíóúñü]{2,}\s*\)")
+# [P3-1-BRAND-LOWERCASE-STRIP · 2026-07-10] (recipe plausibility roadmap, item P3-1) `_BRAND_PAREN_RE`
+# exige mayúscula inicial — cuando la marca se insertó en MINÚSCULA (evidencia visual: "(jif)", "(borges)",
+# plan 564d6e4e) el strip anterior no matchea y la marca cruda queda visible en la receta. Whitelist
+# case-insensitive de marcas OBSERVADAS (no un patrón amplio "cualquier palabra" — eso colisionaría con
+# anotaciones legítimas como "(en total)" del P1-1-QTYSYNC-STALE-EN-TOTAL). Ampliar la tupla si se
+# observan más marcas en minúscula en vivo.
+_BRAND_PAREN_LOWER_TOKENS = ("jif", "borges")
+_BRAND_PAREN_LOWER_RE = _re.compile(
+    r"\s*\(\s*(?:" + "|".join(_re.escape(_t) for _t in _BRAND_PAREN_LOWER_TOKENS) + r")\s*\)",
+    _re.IGNORECASE)
 # Dup unidad-alimento: "1 filete de Filete de pescado blanco" (el pase de presupuesto insertó
 # la forma canónica dentro de una línea que ya traía la unidad homónima).
 _UNIT_FOOD_DUP_RE = _re.compile(r"\b(\w+)\s+de\s+\1\s+de\b", _re.IGNORECASE)
@@ -24483,6 +24602,7 @@ def _polish_finalize_display(days) -> int:
         def _shared_clean(s: str) -> str:
             """Reglas 2+3+4 — aplican a display Y raw."""
             out = _BRAND_PAREN_RE.sub("", s)
+            out = _BRAND_PAREN_LOWER_RE.sub("", out)  # [P3-1-BRAND-LOWERCASE-STRIP]
             out = _UNIT_FOOD_DUP_RE.sub(r"\1 de", out)
             _mc = _CITRUS_LEAD_RE.match(out)
             # [P1-CITRUS-UNICODE-FRAC] al menos un grupo (entero o fracción) debe existir —
@@ -34706,9 +34826,277 @@ def refresh_clinical_band_score_post_finalize(plan_data: dict) -> bool:
             f"por-macro {_bs.get('per_macro')}; pre-finalize era {_prev_val})"
         )
         return True
-    except Exception as _bsr_e:
-        logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] no-op: {type(_bsr_e).__name__}: {_bsr_e}")
+    except Exception as e:
+        logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] no-op: {type(e).__name__}: {e}")
         return False
+
+
+# [P0-1-PAIRING-PLAUSIBILITY-GATE · 2026-07-10] (recipe plausibility roadmap, item P0-1) Evidencia visual
+# (plan 564d6e4e): "3 papas hervidas cubiertas de mantequilla de maní + gajos de naranja + queso cottage
+# mezclado" — pasó DISH-COHERENCE/SLOT-APPROPRIATENESS/cookable-min porque ninguno valida la COMBINACIÓN
+# de categorías en el MISMO plato (el solver usa maní como filler de grasa sin preguntar "¿esto se come
+# junto?"). Fase 1 (warn-first, per roadmap): detección + telemetría determinista SOLAMENTE — la acción
+# "fix" (re-sembrar el filler) se difiere a cuando haya evidencia de 48h sin falsos positivos, mismo
+# patrón evidence-first que P1-SOLVER-SATURATION-RELIEF. Modo "off" desactiva; "warn" (default) solo loguea.
+PAIRING_GATE_MODE = _env_str("MEALFIT_PAIRING_GATE", "warn", choices=("off", "warn"))
+
+# categoría → hints de nombre (accent-stripped, lowercase). Nut-butter combinado con CUALQUIERA de las
+# otras 3 categorías en el MISMO meal = combinación implausible para un dominicano.
+_PAIRING_NUT_BUTTER_HINT = ("mantequilla de mani", "mantequilla de almendra", "peanut butter", "nut butter")
+_PAIRING_BOILED_SAVORY_TUBER_HINT = ("papa hervida", "papas hervidas", "batata hervida", "yuca hervida",
+                                     "name hervido", "papa sancochada", "papas sancochadas")
+_PAIRING_CITRUS_WEDGE_HINT = ("naranja en gajos", "toronja en gajos", "gajos de naranja", "gajos de toronja",
+                              "mandarina en gajos", "china en gajos")
+_PAIRING_SAVORY_CHEESE_HINT = ("queso cottage", "queso blanco", "queso de freir", "queso mozzarella",
+                               "queso cheddar", "queso gouda")
+_PAIRING_RULES = (
+    ("nut_butter", _PAIRING_NUT_BUTTER_HINT, "boiled_savory_tuber", _PAIRING_BOILED_SAVORY_TUBER_HINT),
+    ("nut_butter", _PAIRING_NUT_BUTTER_HINT, "citrus_wedge", _PAIRING_CITRUS_WEDGE_HINT),
+    ("nut_butter", _PAIRING_NUT_BUTTER_HINT, "savory_cheese", _PAIRING_SAVORY_CHEESE_HINT),
+)
+
+
+def detect_pairing_plausibility_violations(plan_data: dict) -> list:
+    """[P0-1-PAIRING-PLAUSIBILITY-GATE] Escanea `ingredients` de cada meal en busca de PARES de
+    categorías incompatibles (`_PAIRING_RULES`) presentes en el MISMO plato. Retorna lista de dicts
+    `{day, meal, categories}` — telemetría pura, NO muta el plan (fase warn-only). Fail-safe (excepción
+    → lista vacía). tooltip-anchor: P0-1-PAIRING-PLAUSIBILITY-GATE"""
+    if PAIRING_GATE_MODE == "off" or not isinstance(plan_data, dict):
+        return []
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return []
+    try:
+        from constants import strip_accents as _sa_pair
+        violations = []
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            _day_num = _d.get("day")
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                ings = _m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                _blob = _sa_pair(" | ".join(str(i) for i in ings).lower())
+                for _cat_a, _hints_a, _cat_b, _hints_b in _PAIRING_RULES:
+                    if any(_h in _blob for _h in _hints_a) and any(_h in _blob for _h in _hints_b):
+                        violations.append({
+                            "day": _day_num, "meal": _m.get("meal") or _m.get("name"),
+                            "categories": (_cat_a, _cat_b),
+                        })
+        if violations and PAIRING_GATE_MODE == "warn":
+            logger.warning(f"🥜 [P0-1-PAIRING-PLAUSIBILITY-GATE] {len(violations)} combinación(es) "
+                           f"implausible(s) detectada(s) (warn-only, sin acción): {violations}")
+        return violations
+    except Exception as e:
+        logger.debug(f"[P0-1-PAIRING-PLAUSIBILITY-GATE] no-op: {type(e).__name__}: {e}")
+        return []
+
+
+# [P2-1-CONDIMENT-PORTION-SANITY · 2026-07-10] (recipe plausibility roadmap, item P2-1) Evidencia visual
+# (plan 564d6e4e): "7 dientes de ajo" para UNA porción. Los caps P6 protegen la LISTA agregada (semanal/
+# mensual) — el plato individual no tenía tope. Cap conservador por-porción, espejo de
+# `CITRUS_MEAL_CAP_UNITS` (P1-FINALIZE-COUNTABLE-POLISH): display+raw, clamp del lead numérico.
+CONDIMENT_CAP_AJO_DIENTES = max(1.0, min(10.0, _env_float("MEALFIT_CONDIMENT_CAP_AJO_DIENTES", 3.0)))
+CONDIMENT_CAP_CEBOLLA_UNIDADES = max(0.25, min(4.0, _env_float("MEALFIT_CONDIMENT_CAP_CEBOLLA_UNIDADES", 1.0)))
+_AJO_DIENTE_LEAD_RE = _re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*(diente|dientes)\s+de\s+ajo\b", _re.IGNORECASE)
+_CEBOLLA_LEAD_RE = _re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*(cebolla|cebollas)\b", _re.IGNORECASE)
+
+
+def cap_condiments_per_portion(plan_data: dict) -> int:
+    """[P2-1-CONDIMENT-PORTION-SANITY] Recorta el lead numérico de ajo/cebolla en `ingredients`+
+    `ingredients_raw` de cada meal cuando excede el cap por-PORCIÓN (`CONDIMENT_CAP_AJO_DIENTES`,
+    `CONDIMENT_CAP_CEBOLLA_UNIDADES`). Preserva el resto de la línea (unidad + descriptor + marca).
+    Idempotente (no-op si ya bajo el cap), fail-safe. tooltip-anchor: P2-1-CONDIMENT-PORTION-SANITY"""
+    if not isinstance(plan_data, dict):
+        return 0
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return 0
+    try:
+        changed = 0
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = _m.get(_key)
+                    if not isinstance(_lst, list):
+                        continue
+                    for _i, _s in enumerate(_lst):
+                        if not isinstance(_s, str) or not _s.strip():
+                            continue
+                        _new = _s
+                        for _rx, _cap in ((_AJO_DIENTE_LEAD_RE, CONDIMENT_CAP_AJO_DIENTES),
+                                          (_CEBOLLA_LEAD_RE, CONDIMENT_CAP_CEBOLLA_UNIDADES)):
+                            _mo = _rx.match(_new)
+                            if not _mo:
+                                continue
+                            _q = float((_mo.group(1) or "0").replace(",", "."))
+                            _q += _REALISM_FRAC_MAP.get(_mo.group(2) or "", 0.0)
+                            if _q <= 0 or _q <= _cap:
+                                continue
+                            _noun = _mo.group(3)
+                            if abs(_cap - 1.0) < 1e-9 and _noun.endswith("s"):
+                                _noun = _noun[:-1]  # cap=1 → singular ("cebollas"→"cebolla")
+                            _cap_txt = f"{_cap:g}"
+                            _new = f"{_cap_txt} {_noun}" + _new[_mo.end(3):]
+                            break
+                        if _new != _s:
+                            _lst[_i] = _new
+                            changed += 1
+        if changed:
+            logger.info(f"🧄 [P2-1-CONDIMENT-PORTION-SANITY] {changed} línea(s) de condimento recortada(s) "
+                        f"al cap por-porción (ajo≤{CONDIMENT_CAP_AJO_DIENTES:g}, cebolla≤{CONDIMENT_CAP_CEBOLLA_UNIDADES:g}).")
+        return changed
+    except Exception as e:
+        logger.debug(f"[P2-1-CONDIMENT-PORTION-SANITY] no-op: {type(e).__name__}: {e}")
+        return 0
+
+
+# [P2-3-BATCH-ARITHMETIC-CHECK · 2026-07-10] (recipe plausibility roadmap, item P2-3) Evidencia visual
+# (plan 564d6e4e): "Formar 6 tortitas ... Servir 3 tortitas de batata y queso en el plato" para 1
+# porción — el batch de cocción no coincide con lo servido, sin explicar el resto. Warn-first (frecuencia
+# baja per roadmap): detección determinista conservadora, sin reescritura todavía.
+_BATCH_FORM_RE = _re.compile(
+    r"\b(?:forma|formar|hac[eé]|hacer)\s+(\d+)\s+([a-záéíóúñü]+)", _re.IGNORECASE)
+_BATCH_SERVE_RE = _re.compile(
+    r"\bsirv[ea]\w*\s+(\d+)\s+([a-záéíóúñü]+)", _re.IGNORECASE)
+
+
+def detect_batch_arithmetic_mismatch(plan_data: dict) -> list:
+    """[P2-3-BATCH-ARITHMETIC-CHECK] Escanea `recipe` de cada meal por menciones "forma/hace N <item>"
+    seguidas de "sirve M <item>" (mismo token, prefijo ≥4 chars) con M<N — batch de cocción que no
+    coincide con lo servido. Retorna lista de dicts `{day, meal, formed, served}`. Telemetría pura,
+    no muta el plan (fase warn-only). Fail-safe. tooltip-anchor: P2-3-BATCH-ARITHMETIC-CHECK"""
+    if not isinstance(plan_data, dict):
+        return []
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return []
+    try:
+        violations = []
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            _day_num = _d.get("day")
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                _rec = _m.get("recipe")
+                if not isinstance(_rec, list):
+                    continue
+                _text = " ".join(str(s) for s in _rec if isinstance(s, str))
+                _fm = _BATCH_FORM_RE.search(_text)
+                if not _fm:
+                    continue
+                _formed = int(_fm.group(1))
+                _form_tok = _fm.group(2).lower()[:4]
+                for _sm in _BATCH_SERVE_RE.finditer(_text):
+                    _served = int(_sm.group(1))
+                    _serve_tok = _sm.group(2).lower()[:4]
+                    if _serve_tok == _form_tok and _served < _formed:
+                        violations.append({"day": _day_num, "meal": _m.get("meal") or _m.get("name"),
+                                           "formed": _formed, "served": _served})
+                        break
+        if violations:
+            logger.warning(f"🧮 [P2-3-BATCH-ARITHMETIC-CHECK] {len(violations)} desajuste(s) batch↔servido "
+                           f"detectado(s) (warn-only, sin acción): {violations}")
+        return violations
+    except Exception as e:
+        logger.debug(f"[P2-3-BATCH-ARITHMETIC-CHECK] no-op: {type(e).__name__}: {e}")
+        return []
+
+
+# [P3-2-INGREDIENT-COUNT-AGREEMENT · 2026-07-10] (recipe plausibility roadmap, item P3-2) Evidencia
+# visual (plan 564d6e4e): línea de ingrediente "1 naranjas" — conteo=1 con sustantivo PLURAL. La tabla
+# `_QTYSYNC_COUNT_NOUNS` (P2-QTYSYNC-COUNT-NOUNS) ya resuelve esta clase de error, pero SOLO sobre los
+# PASOS de la receta — nunca sobre la línea de `ingredients` misma. Pase espejo, mismo table curado.
+_INGREDIENT_COUNT_LEAD_RE = {
+    _noun: _re.compile(rf"^\s*(\d+)\s+({_pat})\b", _re.IGNORECASE)
+    for _noun, (_sing, _plur, _pat) in _QTYSYNC_COUNT_NOUNS.items()
+}
+
+
+def fix_ingredient_count_agreement(plan_data: dict) -> int:
+    """[P3-2-INGREDIENT-COUNT-AGREEMENT] Corrige la concordancia número-sustantivo en `ingredients`+
+    `ingredients_raw` cuando el conteo líder es 1 pero el sustantivo está en plural (o viceversa: conteo
+    ≥2 con singular) — reusa el mismo table curado `_QTYSYNC_COUNT_NOUNS` (huevo/clara/papa/plátano/
+    guineo/mandarina/aguacate/naranja). Conservador: solo actúa sobre conteos ENTEROS. Idempotente,
+    fail-safe. tooltip-anchor: P3-2-INGREDIENT-COUNT-AGREEMENT"""
+    if not isinstance(plan_data, dict):
+        return 0
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return 0
+    try:
+        changed = 0
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                for _key in ("ingredients", "ingredients_raw"):
+                    _lst = _m.get(_key)
+                    if not isinstance(_lst, list):
+                        continue
+                    for _i, _s in enumerate(_lst):
+                        if not isinstance(_s, str) or not _s.strip():
+                            continue
+                        for _noun, _rx in _INGREDIENT_COUNT_LEAD_RE.items():
+                            _mo = _rx.match(_s)
+                            if not _mo:
+                                continue
+                            _cnt = int(_mo.group(1))
+                            _sing, _plur, _ = _QTYSYNC_COUNT_NOUNS[_noun]
+                            _want = _sing if _cnt == 1 else _plur
+                            if _mo.group(2).lower() == _want.lower():
+                                break  # ya concuerda
+                            _new = f"{_cnt} {_want}" + _s[_mo.end(2):]
+                            if _new != _s:
+                                _lst[_i] = _new
+                                changed += 1
+                            break
+        if changed:
+            logger.info(f"🔤 [P3-2-INGREDIENT-COUNT-AGREEMENT] {changed} línea(s) de ingrediente "
+                        f"corregida(s) en concordancia número-sustantivo.")
+        return changed
+    except Exception as e:
+        logger.debug(f"[P3-2-INGREDIENT-COUNT-AGREEMENT] no-op: {type(e).__name__}: {e}")
+        return 0
+
+
+def refire_display_polish_post_finalize(plan_data: dict) -> int:
+    """[P1-3-POLISH-REFIRE · 2026-07-10] (recipe plausibility roadmap, item P1-3) El countable-polish
+    (`_polish_finalize_display`: "1.25 cdas"→"1¼ cdas", "0.5 toronja"→"½ toronja") vive DENTRO de
+    `finalize_plan_data_coherence`, que en el shield pre-INSERT corre ANTES de
+    `reconcile_protein_band_post_finalize` y `reconcile_all_macros_band_post_finalize` — ambos mutan
+    cantidades de ingredientes (vía `apply_update_macro_engine` → rebalance/refine, que por diseño NO
+    re-quantizan, delegando esa responsabilidad al caller) SIN que nada vuelva a pulir el display
+    después. Evidencia visual (plan 564d6e4e, banda 1.00 — la banda perfecta, el display no):
+    "1.25 cdas de mantequilla de maní", "0.5 toronja", "1.5 dientes de ajo".
+
+    Delega en el `_polish_finalize_display` YA EXISTENTE (P1-FINALIZE-COUNTABLE-POLISH, mismo helper
+    que usa `finalize_plan_data_coherence`) — cero lógica nueva de fracciones, solo re-enganche tras
+    la última mutación real de cantidades. Mismo patrón "quantize = última mutación" ya usado para
+    banda (P0-1-FINAL-BAND-CLOSER). Idempotente, fail-safe. tooltip-anchor: P1-3-POLISH-REFIRE"""
+    if not isinstance(plan_data, dict):
+        return 0
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return 0
+    try:
+        return _polish_finalize_display(days)
+    except Exception as e:
+        logger.debug(f"[P1-3-POLISH-REFIRE] no-op: {type(e).__name__}: {e}")
+        return 0
 
 
 # [P1-PROTEIN-BAND-POST-FINALIZE · 2026-07-09] (forense plan vivo 42310dba, gain_muscle) El truth-up de
@@ -34835,6 +35223,79 @@ def reconcile_protein_band_post_finalize(plan_data: dict) -> bool:
     except Exception as e:
         logger.debug(f"[P1-PROTEIN-BAND-POST-FINALIZE] no-op: {type(e).__name__}: {e}")
         return False
+
+
+PROTEIN_STEP_PARITY_ENABLED = _env_bool("MEALFIT_PROTEIN_STEP_PARITY", True)
+
+
+def ensure_protein_step_parity(plan_data: dict, db=None) -> int:
+    """[P0-2-PROTEIN-STEP-PARITY · 2026-07-10] (recipe plausibility roadmap, item P0-2) Sweep universal:
+    barre `ingredients` de cada meal en busca de líneas proteína-dominantes
+    (`_ingredient_is_protein_dominant` — mismo detector de P1-PROTEIN-BAND-POST-FINALIZE) que el TdF/Montaje
+    NO mencionan, y les añade su paso vía `_append_closer_protein_step` (dedup + wording por tipo YA
+    EXISTENTES). Evidencia visual (plan 564d6e4e): "40g de camarones cocido" en ingredients sin mención
+    alguna en los pasos — el closer que los añadió (uno de varios candidatos: protein-floor/topup/
+    protein-band-post-finalize) nunca invocó el appender para esa línea. En vez de rastrear cuál closer
+    específico dejó la brecha, este sweep cierra la invariante "toda proteína física tiene su paso" en el
+    ÚNICO chokepoint que corre para TODO plan (shield pre-INSERT, `_finalize_plan_data_for_insert`),
+    independiente de qué closer aguas arriba la haya introducido.
+
+    Corre DESPUÉS de `reconcile_protein_band_post_finalize` (que puede escalar/añadir masa a líneas
+    proteína-dominantes existentes) para barrer el estado FINAL de `ingredients`. Fail-safe, idempotente
+    (el dedup del appender es el guard natural contra re-ejecución). Rollback: MEALFIT_PROTEIN_STEP_PARITY=false.
+    tooltip-anchor: P0-2-PROTEIN-STEP-PARITY"""
+    if not (PROTEIN_STEP_PARITY_ENABLED and isinstance(plan_data, dict)):
+        return 0
+    days = plan_data.get("days")
+    if not isinstance(days, list):
+        return 0
+    try:
+        from constants import strip_accents as _sa_psp
+        if db is None:
+            from nutrition_db import IngredientNutritionDB as _PspDB
+            db = _PspDB()
+        touched = 0
+        for _d in days:
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                ings = _m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                for _line in ings:
+                    if not isinstance(_line, str) or not _line.strip():
+                        continue
+                    try:
+                        if not _ingredient_is_protein_dominant(_line, db):
+                            continue
+                        _info = db.macros_from_ingredient_string(_line)
+                    except Exception:
+                        _info = None
+                    if not _info:
+                        continue
+                    _nm = _info.get("name") or _line
+                    # [P0-2-PROTEIN-STEP-PARITY] guard extra: `_append_closer_protein_step`'s propio dedup
+                    # (b) excluye líneas 💪 del blob de "ya mencionado" (existe para detectar si la receta
+                    # REAL ya trabaja el alimento, no un closer previo) — así que un 💪 previo con OTRA
+                    # grafía del mismo alimento (nombre de catálogo vs hint de un closer distinto) escapa a
+                    # su dedup (a), que es match EXACTO de string. Acá el blob SÍ incluye 💪 (queremos
+                    # exactamente lo contrario: nunca dos pasos 💪 para el mismo alimento).
+                    _toks = [t for t in _re.split(r"[^a-z]+", _sa_psp(str(_nm).lower())) if len(t) >= 4]
+                    _blob = _sa_psp(" ".join(
+                        str(s) for s in (_m.get("recipe") or []) if isinstance(s, str)).lower())
+                    if _toks and any(_re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", _blob) for t in _toks):
+                        continue
+                    if _append_closer_protein_step(_m, _nm, no_cook=False):
+                        touched += 1
+        if touched:
+            logger.info(f"🍤 [P0-2-PROTEIN-STEP-PARITY] {touched} paso(s) añadido(s) para proteína(s) "
+                        f"presente(s) en ingredientes pero ausente(s) de los pasos.")
+        return touched
+    except Exception as e:
+        logger.debug(f"[P0-2-PROTEIN-STEP-PARITY] no-op: {type(e).__name__}: {e}")
+        return 0
 
 
 # [P0-1-FINAL-BAND-CLOSER · 2026-07-10] (forensic corr=d57ffe04, 2026-07-10 03:06-03:12 UTC)

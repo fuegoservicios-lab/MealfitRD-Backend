@@ -978,6 +978,16 @@ def _finalize_plan_data_for_insert(data: dict) -> None:
                     _rpb(_pd)
                 except Exception as _rpb_e:
                     logger.debug(f"[P1-PROTEIN-BAND-POST-FINALIZE] pre-INSERT no-op: {type(_rpb_e).__name__}: {_rpb_e}")
+                # [P0-2-PROTEIN-STEP-PARITY · 2026-07-10] (recipe plausibility roadmap) sweep universal:
+                # cierra proteínas físicamente presentes en ingredients (añadidas por CUALQUIER closer
+                # aguas arriba, incl. el pase de proteína de arriba) que ningún paso menciona — evidencia
+                # visual "40g de camarones cocido" sin rastro en Mise en Place/Fuego/Montaje. Corre tras el
+                # pase de proteína (barre su estado final). Fail-safe. Import LAZY (mismo ciclo que finalize).
+                try:
+                    from graph_orchestrator import ensure_protein_step_parity as _epsp
+                    _epsp(_pd)
+                except Exception as _epsp_e:
+                    logger.debug(f"[P0-2-PROTEIN-STEP-PARITY] pre-INSERT no-op: {type(_epsp_e).__name__}: {_epsp_e}")
                 # [P0-1-FINAL-BAND-CLOSER · 2026-07-10] el pase de proteína de arriba SOLO re-encuadra
                 # proteína — cuando el macro fuera de banda es carbs/fats/kcal nada lo corregía (forensic
                 # corr=d57ffe04). Motor SSOT all-4 ya testeado (apply_update_macro_engine), solo wiring.
@@ -987,6 +997,54 @@ def _finalize_plan_data_for_insert(data: dict) -> None:
                     _ramb(_pd)
                 except Exception as _ramb_e:
                     logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")
+                # [P1-3-POLISH-REFIRE · 2026-07-10] (recipe plausibility roadmap) el countable-polish de _fpc
+                # (arriba) corrió ANTES de los dos pases de reconciliación de banda de arriba, que mutan
+                # cantidades de ingredientes (rebalance/refine 5g) SIN re-pulir el display — plan 564d6e4e
+                # (banda 1.00) salió con "1.25 cdas de mantequilla de maní", "0.5 toronja". Re-fire tras la
+                # ÚLTIMA mutación real de cantidades. Fail-safe. Import LAZY (mismo ciclo que finalize).
+                try:
+                    from graph_orchestrator import refire_display_polish_post_finalize as _rdp
+                    _rdp(_pd)
+                except Exception as _rdp_e:
+                    logger.debug(f"[P1-3-POLISH-REFIRE] pre-INSERT no-op: {type(_rdp_e).__name__}: {_rdp_e}")
+                # [P2-1-CONDIMENT-PORTION-SANITY · 2026-07-10] (recipe plausibility roadmap) cap por-
+                # porción de ajo/cebolla — evidencia "7 dientes de ajo" para 1 persona. Fail-safe.
+                try:
+                    from graph_orchestrator import cap_condiments_per_portion as _ccpp
+                    _ccpp(_pd)
+                except Exception as _ccpp_e:
+                    logger.debug(f"[P2-1-CONDIMENT-PORTION-SANITY] pre-INSERT no-op: {type(_ccpp_e).__name__}: {_ccpp_e}")
+                # [P2-2-BIGFRUIT-COUNT-RECONCILE · 2026-07-10] (recipe plausibility roadmap) anota
+                # fracción de la fruta completa en líneas "1 lechosa (200g)" — display-only. Fail-safe.
+                try:
+                    from graph_orchestrator import annotate_bigfruit_fractional_hint as _abfh
+                    _abfh(_pd)
+                except Exception as _abfh_e:
+                    logger.debug(f"[P2-2-BIGFRUIT-COUNT-RECONCILE] pre-INSERT no-op: {type(_abfh_e).__name__}: {_abfh_e}")
+                # [P3-2-INGREDIENT-COUNT-AGREEMENT · 2026-07-10] (recipe plausibility roadmap) "1 naranjas"
+                # → "1 naranja" — concordancia número-sustantivo en líneas de ingrediente. Fail-safe.
+                try:
+                    from graph_orchestrator import fix_ingredient_count_agreement as _fica
+                    _fica(_pd)
+                except Exception as _fica_e:
+                    logger.debug(f"[P3-2-INGREDIENT-COUNT-AGREEMENT] pre-INSERT no-op: {type(_fica_e).__name__}: {_fica_e}")
+                # [P0-1-PAIRING-PLAUSIBILITY-GATE · 2026-07-10] (recipe plausibility roadmap) fase 1
+                # warn-only: detecta combinaciones implausibles (mantequilla de maní + tubérculo hervido/
+                # gajos cítricos/queso salado) sobre el estado ENTREGADO. Telemetría pura, no muta el plan
+                # todavía. Fail-safe. Import LAZY (mismo ciclo que finalize).
+                try:
+                    from graph_orchestrator import detect_pairing_plausibility_violations as _dppv
+                    _dppv(_pd)
+                except Exception as _dppv_e:
+                    logger.debug(f"[P0-1-PAIRING-PLAUSIBILITY-GATE] pre-INSERT no-op: {type(_dppv_e).__name__}: {_dppv_e}")
+                # [P2-3-BATCH-ARITHMETIC-CHECK · 2026-07-10] (recipe plausibility roadmap) warn-only:
+                # "forma 6 tortitas ... sirve 3" — batch de cocción que no coincide con lo servido.
+                # Telemetría pura, no muta el plan. Fail-safe.
+                try:
+                    from graph_orchestrator import detect_batch_arithmetic_mismatch as _dbam
+                    _dbam(_pd)
+                except Exception as _dbam_e:
+                    logger.debug(f"[P2-3-BATCH-ARITHMETIC-CHECK] pre-INSERT no-op: {type(_dbam_e).__name__}: {_dbam_e}")
                 # [P1-BAND-DEGRADED-STALE-CLEAR · 2026-07-08] El gate de banda del pipeline marcó _quality_degraded
                 # ANTES de este finalize (que acaba de recortar grasas/re-truthear macros) → un flag low_band_* puede
                 # ser un FALSO POSITIVO de timing. Re-evalúa sobre el estado ENTREGADO y limpia el banner si ya está

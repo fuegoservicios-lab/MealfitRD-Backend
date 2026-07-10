@@ -92,7 +92,12 @@ def test_p2_unit_conv_1_marker_active(app_src: str):
     # No exigimos el marker exacto (otros P-fixes posteriores pueden
     # bumpear), solo que el marker tenga la forma canónica.
     marker = m.group(1)
-    assert re.match(r"^P[0-3]-[A-Z][A-Z0-9-]*\s+·\s+\d{4}-\d{2}-\d{2}$", marker), (
+    # [P0-1-PAIRING-PLAUSIBILITY-GATE · 2026-07-10] fix: el segmento tras el primer guion puede
+    # empezar con un DÍGITO ("P0-1-FINAL-BAND-CLOSER", "P0-1-PAIRING-PLAUSIBILITY-GATE" — convención
+    # activa desde hace meses, ver `_MARKER_PATTERN` canónico en test_p3_1_last_known_pfix_freshness.py:
+    # `P\d+(?:-[A-Z0-9]+)+`). El regex previo (`[A-Z][A-Z0-9-]*`) exigía letra inicial y quedaba
+    # incorrectamente ROJO cada vez que el marker activo usaba esa convención estándar.
+    assert re.match(r"^P[0-3]-[A-Z0-9][A-Z0-9-]*\s+·\s+\d{4}-\d{2}-\d{2}$", marker), (
         f"P2-UNIT-CONV-1: _LAST_KNOWN_PFIX={marker!r} no matchea formato "
         f"canónico `Pn-X · YYYY-MM-DD`. Test P3-1 cubre formato general; "
         f"acá solo lo replicamos como sanity check del marker activo."
