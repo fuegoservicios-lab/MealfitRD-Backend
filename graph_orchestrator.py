@@ -17199,6 +17199,35 @@ def _recipe_step_contract_issues(meal: dict) -> list:
 RECIPE_CONTRACT_REPAIR_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_REPAIR", True)
 
 
+def _coherence_material_divergence_count(coherence_block, min_delta: float) -> int:
+    """[P1-COHERENCE-COUNT-MATERIAL · 2026-07-09] Cuenta divergencias MATERIALES para la regla
+    count>=MIN_COUNT del severe-only. Evidencia (SQL forense plan 3d11d96e): el ruido de agregación
+    es endémico (33 divergencias magnitude 'unknown' en un plan APROBADO band 0.92) — contar 2
+    sobrevivientes marginales (10-25%) del filter-stack como "sistemático" quemaba un full-regen LLM
+    (intento 2 de corr=45f05b9c: 'Res'+'Queso fresco') sin mejorar nada (la lista entregada carga el
+    mismo ruido). Presence/no-magnitude (alimento AUSENTE) cuentan SIEMPRE; magnitude cuenta solo si
+    |delta| finito >= min_delta. min_delta=0.0 → comportamiento previo exacto. Fail-safe (delta
+    corrupto → 0.0 → no cuenta). tooltip-anchor: P1-COHERENCE-COUNT-MATERIAL"""
+    n = 0
+    for _d in (coherence_block or []):
+        if not isinstance(_d, dict):
+            continue
+        if not _d.get("magnitude"):
+            n += 1  # presence/cap_swallowed: material por definición
+            continue
+        try:
+            _v = float(_d.get("delta_pct") or 0.0)
+        except (TypeError, ValueError):
+            _v = 0.0
+        if _v != _v or abs(_v) == float("inf"):
+            _v = 0.0
+        if min_delta <= 0.0:
+            n += 1  # floor 0.0 → toda magnitude cuenta (paridad exacta pre-fix)
+        elif abs(_v) >= min_delta:
+            n += 1  # magnitude MATERIAL (drift real, no ruido del filter-stack)
+    return n
+
+
 def _repair_recipe_contract(meal: dict, issues: list) -> list:
     """[P1-RECIPE-CONTRACT-REPAIR] Repara deterministamente las clases reparables del contrato de
     pasos y retorna los issues RESIDUALES (re-lint). Verbatim-move preferido sobre síntesis; JAMÁS
@@ -29769,9 +29798,16 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _rv_min_count = _env_int("MEALFIT_REVIEW_COHERENCE_SEVERE_MIN_COUNT", 2,
                                      validator=lambda v: 1 <= v <= 20)
             _rv_severe_delta = _env_float("MEALFIT_REVIEW_COHERENCE_SEVERE_DELTA", 0.50)
+            # [P1-COHERENCE-COUNT-MATERIAL · 2026-07-09] La regla de CONTEO cuenta solo divergencias
+            # MATERIALES (presence siempre; magnitude solo si |Δ|>=floor). Evidencia: el intento 2 de
+            # corr=45f05b9c se quemó completo por 2 sobrevivientes marginales del ruido de agregación
+            # (el plan aprobado carga 33 equivalentes). Floor=0.0 → paridad exacta pre-fix (rollback
+            # sin redeploy). La regla de delta egregio (|Δ|>=SEVERE_DELTA individual) queda intacta.
+            _rv_count_min_delta = _env_float("MEALFIT_REVIEW_COHERENCE_COUNT_MIN_DELTA", 0.25)
+            _rv_material_count = _coherence_material_divergence_count(coherence_block, _rv_count_min_delta)
             _rv_is_severe = (
                 (not _rv_severe_only)
-                or len(coherence_block) >= _rv_min_count
+                or _rv_material_count >= _rv_min_count
                 or any(d.get("magnitude") and abs(_coh_finite_delta_rv(d)) >= _rv_severe_delta
                        for d in coherence_block)
             )
@@ -29788,7 +29824,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 plan.pop("_shopping_coherence_block", None)
                 logger.info(
                     f"🛒 [REVISOR/COH-BLOCK severe-only] {len(coherence_block)} divergencia(s) marginal(es) "
-                    f"(foods: {sample}) — ninguna severa (count<{_rv_min_count} y |Δ|<{_rv_severe_delta}) → "
+                    f"(foods: {sample}) — ninguna severa (material={_rv_material_count}<{_rv_min_count} "
+                    f"[floor |Δ|≥{_rv_count_min_delta}] y |Δ|<{_rv_severe_delta}) → "
                     f"warn, NO retry (rompe el whack-a-mole de proteína rotativa)."
                 )
             else:
