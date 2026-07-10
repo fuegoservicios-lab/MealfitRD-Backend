@@ -22193,8 +22193,11 @@ _EGG_INTRINSIC_HEAD_RX = _re.compile(
 # de Claras" el mismo día → el gate seguía viendo HUEVO×2. El descriptor previo solo reconocía
 # "con huevo"; "de Claras" y el sustantivo 'claras'/'yemas' se escapaban. Reemplazo in-place →
 # "Bowl de Queso blanco con Berro" (limpio, sin manglear multi-componente).
+# [P1-CHEAPEN-DAY-AWARE · 2026-07-10] `(?:\s+de\s+huevos?)?` consume la cola "de Huevo" de
+# "Claras de Huevo": sin ella, el rename dejaba el residuo — nombre mutante vivo en la
+# renovación cb150867: "Cazuela de Avena … con Pechuga de pollo de Huevo".
 _EGG_NAME_PHRASE_RX = _re.compile(
-    r"\b(?:huevos?|claras?|yemas?)\b(?:\s+(?:revueltos?|revueltas?|fritos?|fritas?|duros?|"
+    r"\b(?:huevos?|claras?|yemas?)\b(?:\s+de\s+huevos?)?(?:\s+(?:revueltos?|revueltas?|fritos?|fritas?|duros?|"
     r"duras?|cocidos?|cocidas?|escalfad[oa]s?|pochad[oa]s?|estrellad[oa]s?|tibios?|tibias?))?",
     _re.IGNORECASE)
 _EGG_LABEL_DISPLAY = {"pollo": "Pechuga de pollo", "queso": "Queso blanco",
@@ -22466,8 +22469,21 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                     _ctx_light = _meal_slot_is_light(_meal, _sa_pr)
                     if _ctx_sweet or _ctx_light:
                         _allowed = ("queso",) if _ctx_sweet else ("queso", "habichuelas", "lentejas")
-                        tgt = next((t for t in _eff_ladder
-                                    if t in _allowed and t not in day_labels and _target_ok(t)), None)
+                        # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] deadlock medido en vivo (plan cb150867):
+                        # con gain_muscle la escalera es carnes-only y este branch exige queso/legumbres
+                        # → intersección VACÍA → impotencia SIEMPRE → rechazo → PRO. El queso es
+                        # proteína animal densa (cottage/ricotta clásicos de bulk) y aquí es el único
+                        # candidato culinariamente válido: se busca en _allowed además de la escalera
+                        # (para gain_muscle solo queso; legumbres siguen fuera — P2-FALLBACK-NONGATED-
+                        # GAINMUSCLE intacto para slots principales). Vegano ya excluye queso vía
+                        # _target_ok/alergias del formulario cuando aplica.
+                        _search_sl = [t for t in _eff_ladder if t in _allowed]
+                        _sl_extra = ("queso",) if _is_gainmuscle else _allowed
+                        _search_sl += [t for t in _sl_extra if t in _allowed and t not in _search_sl]
+                        if "vegan" in _diet:
+                            _search_sl = [t for t in _search_sl if t != "queso"]
+                        tgt = next((t for t in _search_sl
+                                    if t not in day_labels and _target_ok(t)), None)
                         if tgt is None:
                             _log_autofix_impotent(_d.get("day", "?"), _lbl,
                                                   "no_safe_target_sweet_or_light", _meal.get("name"))
@@ -24001,6 +24017,31 @@ def _budget_build_master_price_map() -> dict:
         return {}
 
 
+def _budget_candidate_collides_same_day(day: dict, meal: dict, candidate: str) -> bool:
+    """[P1-CHEAPEN-DAY-AWARE · 2026-07-10] True si el CANDIDATO económico introduce un label
+    del gate same-day que YA está presente en OTRA comida del mismo día. Causa raíz medida en
+    vivo (plan cb150867, renovación del owner): marker-regen (PRO) devolvía Día 2 válido con
+    camarones (almuerzo) + pescado (cena) → el cheapen convertía camarones→'Filete de pescado
+    blanco' creando pescado×2 same-day → el autofix quedaba impotente (contexto dulce/ligero ×
+    gain_muscle) → rechazo del reviewer → OTRA reparación PRO devolvía camarones → el cheapen
+    lo volvía a romper. El lever económico deshacía la reparación en CADA ciclo (2 rechazos,
+    660s, entrega degradada). Solo aplica cuando el candidato porta un label del gate (pescado);
+    Maní/Linaza/Arroz/Yogurt no gatean. Mismo SSOT del detector del reviewer. Fail-open a False
+    (en duda, comportamiento previo = sustituir). tooltip-anchor: P1-CHEAPEN-DAY-AWARE"""
+    try:
+        _cand_lbls = _protein_gate_labels_in_text(candidate)
+        if not _cand_lbls:
+            return False
+        for _sib in (day.get("meals") or []) if isinstance(day, dict) else []:
+            if _sib is meal or not isinstance(_sib, dict):
+                continue
+            if _cand_lbls & _protein_gate_labels_in_meal(_sib):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
     """Sustituye hasta BUDGET_CHEAPEN_MAX_SUBS ingredientes premium por su
     equivalente económico cuando el presupuesto pide economía. Retorna nº de
@@ -24066,6 +24107,15 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
                                     continue
                             except Exception:
                                 continue  # scan falló → conservador: no sustituir
+                        # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] la sustitución no puede crear una
+                        # repetición same-day que el reviewer va a rechazar (camarones→pescado con
+                        # pescado ya en otra comida del día). Skip honesto: mejor un premium que
+                        # un ciclo rechazo→PRO→re-rotura.
+                        if _budget_candidate_collides_same_day(_d, meal, candidate):
+                            logger.info(f"💰 [P1-CHEAPEN-DAY-AWARE] skip '{m.group(0)} → {candidate}' "
+                                        f"en Día {_d.get('day', '?')}: el candidato repetiría proteína "
+                                        f"ya presente en otra comida del día (gate same-day).")
+                            continue
                         new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
                         if new_line == ing:
                             continue
@@ -24230,6 +24280,15 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
                             continue
                         m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
                         if not m:
+                            continue
+                        # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] mismo guard del pase estático: la
+                        # familia mariscos→pescado colapsa labels distintos en uno y puede crear
+                        # la repetición same-day que el reviewer rechaza. Skip per-comida (otros
+                        # días siguen recibiendo la sustitución).
+                        if _budget_candidate_collides_same_day(_d, meal, candidate):
+                            logger.info(f"💰 [P1-CHEAPEN-DAY-AWARE] skip driver '{m.group(0)} → {candidate}' "
+                                        f"en Día {_d.get('day', '?')}: el candidato repetiría proteína "
+                                        f"ya presente en otra comida del día (gate same-day).")
                             continue
                         new_line = _re.sub(rf"\b(?:{rx})\b", candidate, ing, count=1, flags=_re.IGNORECASE)
                         if new_line == ing:
