@@ -187,11 +187,23 @@ def _strip_qty_prefix(s: str) -> str:
 
 def _split_qty_unit_name(s: str):
     """(string del plan) → (qty: float, unit: str, name: str). Lightweight, offline.
-    qty 0.0 si no hay número líder (e.g. 'Sal al gusto')."""
+    qty 0.0 si no hay número líder (e.g. 'Sal al gusto').
+    [P2-MICRO-DENSITY-QTYLESS · 2026-07-10] Si el string EMPIEZA con una unidad conocida sin
+    número ("Cdta de miel", "Taza de avena"), en español significa 1 de esa unidad → qty=1.0
+    (antes 0.0 → to_grams None → macros/micros de ese ingrediente descartados en silencio;
+    observado 18×/6h en prod como P1-MICRO-DENSITY-OBSERVABLE). 'Sal al gusto' (sin unidad
+    líder) conserva qty=0.0. tooltip-anchor: P2-MICRO-DENSITY-QTYLESS"""
     from canonical_units import canonicalize_unit
     raw = _normalize_unicode_fractions(str(s).strip())
     mq = _LEAD_QTY_RE.match(raw)
     if not mq:
+        mu0 = _UNIT_TOKEN_RE.match(raw)
+        if mu0 and canonicalize_unit(mu0.group(1)):
+            rest0 = raw[mu0.end():].lstrip()
+            rest0 = re.sub(r"^(de|del)\s+", "", rest0, flags=re.I)
+            name0 = _GRAM_HINT_RE.sub("", rest0).strip()
+            if name0:  # "Cdta de miel" → 1 cdta de miel
+                return 1.0, mu0.group(1).lower(), name0
         return 0.0, "unidad", _strip_qty_prefix(s)
     qty = _frac_to_float(mq.group(1)) or 0.0
     rest = raw[mq.end():]
@@ -633,6 +645,14 @@ class IngredientNutritionDB:
         if not info:
             return None
         grams = self.grams_from_ingredient_string(s)
+        # [P2-MICRO-DENSITY-QTYLESS · 2026-07-10] String nombre-solo ("Yogurt griego sin azúcar",
+        # sin qty ni unidad): SOLO para el panel de micros (no toca el path del solver/macros),
+        # asumir 1 unidad cuando el row tiene density_g_per_unit curada (yogurt single-serve 170g).
+        # Sin densidad por-unidad NO se adivina (comportamiento previo intacto).
+        if grams is None:
+            _q0, _u0, _ = _split_qty_unit_name(s)
+            if _q0 == 0.0 and _u0 == "unidad" and getattr(info, "density_g_per_unit", None):
+                grams = float(info.density_g_per_unit)
         if grams is None:
             # [P1-MICRO-DENSITY-OBSERVABLE · 2026-06-26] (audit gap #6) El ingrediente RESOLVIÓ por nombre
             # (info existe) pero NO por gramos → típico: medido en "taza"/volumen sin density_g_per_cup, o
