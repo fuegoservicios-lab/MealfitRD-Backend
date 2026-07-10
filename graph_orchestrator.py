@@ -17199,6 +17199,48 @@ def _recipe_step_contract_issues(meal: dict) -> list:
 RECIPE_CONTRACT_REPAIR_ENABLED = _env_bool("MEALFIT_RECIPE_CONTRACT_REPAIR", True)
 
 
+# [P1-COHERENCE-SEVERE-DIRECTIONAL · 2026-07-10] La severidad de coherencia es DIRECCIONAL: solo la
+# SUB-oferta (la lista tiene MENOS de lo que las recetas piden → el usuario no puede cocinar) puede
+# ser egregia/material. La SOBRE-oferta es redondeo de empaque (1 lb de res para una receta de 120g
+# → ratio 3.8x) y va a telemetría, no a reject. Evidencia viva corr=2ac209c7 (2026-07-10): 3 intentos
+# quemados + entrega degradada porque Res/Cerdo/Queso fresco tenían ratios act/exp en bandas '2-4' y
+# '>=4' — TODOS sobre-oferta; delta_pct=abs() los trataba como "falta comida". Rollback exacto al
+# comportamiento abs() previo: MEALFIT_REVIEW_COHERENCE_SEVERE_UNDERSUPPLY_ONLY=false.
+COHERENCE_SEVERE_UNDERSUPPLY_ONLY = _env_bool("MEALFIT_REVIEW_COHERENCE_SEVERE_UNDERSUPPLY_ONLY", True)
+
+
+def _coherence_divergence_undersupply(_d) -> bool:
+    """True si la entrada magnitude es SUB-oferta (actual < expected). Fail-safe → False."""
+    try:
+        return float(_d.get("actual_qty") or 0.0) < float(_d.get("expected_qty") or 0.0)
+    except (TypeError, ValueError):
+        return False
+
+
+def _coherence_finite_abs_delta(_d) -> float:
+    """|delta_pct| finito de una entrada de divergencia; corrupto/inf → 0.0 (fail-safe)."""
+    try:
+        _v = float(_d.get("delta_pct") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if _v != _v or abs(_v) == float("inf"):
+        return 0.0
+    return abs(_v)
+
+
+def _coherence_divergence_is_egregious(_d, severe_delta: float) -> bool:
+    """[P1-COHERENCE-SEVERE-DIRECTIONAL] True si una entrada magnitude amerita reject por sí sola:
+    |delta| >= severe_delta Y (con el knob direccional ON) es SUB-oferta. La sobre-oferta de empaque
+    JAMÁS es egregia con el knob ON. tooltip-anchor: P1-COHERENCE-SEVERE-DIRECTIONAL"""
+    if not isinstance(_d, dict) or not _d.get("magnitude"):
+        return False
+    if _coherence_finite_abs_delta(_d) < severe_delta:
+        return False
+    if COHERENCE_SEVERE_UNDERSUPPLY_ONLY and not _coherence_divergence_undersupply(_d):
+        return False
+    return True
+
+
 def _coherence_material_divergence_count(coherence_block, min_delta: float) -> int:
     """[P1-COHERENCE-COUNT-MATERIAL · 2026-07-09] Cuenta divergencias MATERIALES para la regla
     count>=MIN_COUNT del severe-only. Evidencia (SQL forense plan 3d11d96e): el ruido de agregación
@@ -17206,8 +17248,9 @@ def _coherence_material_divergence_count(coherence_block, min_delta: float) -> i
     sobrevivientes marginales (10-25%) del filter-stack como "sistemático" quemaba un full-regen LLM
     (intento 2 de corr=45f05b9c: 'Res'+'Queso fresco') sin mejorar nada (la lista entregada carga el
     mismo ruido). Presence/no-magnitude (alimento AUSENTE) cuentan SIEMPRE; magnitude cuenta solo si
-    |delta| finito >= min_delta. min_delta=0.0 → comportamiento previo exacto. Fail-safe (delta
-    corrupto → 0.0 → no cuenta). tooltip-anchor: P1-COHERENCE-COUNT-MATERIAL"""
+    |delta| finito >= min_delta Y (P1-COHERENCE-SEVERE-DIRECTIONAL, knob ON) es SUB-oferta — la
+    sobre-oferta de empaque nunca es material. min_delta=0.0 → toda la dirección permitida cuenta.
+    Fail-safe (delta corrupto → 0.0 → no cuenta). tooltip-anchor: P1-COHERENCE-COUNT-MATERIAL"""
     n = 0
     for _d in (coherence_block or []):
         if not isinstance(_d, dict):
@@ -17215,15 +17258,12 @@ def _coherence_material_divergence_count(coherence_block, min_delta: float) -> i
         if not _d.get("magnitude"):
             n += 1  # presence/cap_swallowed: material por definición
             continue
-        try:
-            _v = float(_d.get("delta_pct") or 0.0)
-        except (TypeError, ValueError):
-            _v = 0.0
-        if _v != _v or abs(_v) == float("inf"):
-            _v = 0.0
+        if COHERENCE_SEVERE_UNDERSUPPLY_ONLY and not _coherence_divergence_undersupply(_d):
+            continue  # sobre-oferta de empaque: telemetría, nunca material
+        _v = _coherence_finite_abs_delta(_d)
         if min_delta <= 0.0:
-            n += 1  # floor 0.0 → toda magnitude cuenta (paridad exacta pre-fix)
-        elif abs(_v) >= min_delta:
+            n += 1  # floor 0.0 → paridad (dentro de la dirección permitida)
+        elif _v >= min_delta:
             n += 1  # magnitude MATERIAL (drift real, no ruido del filter-stack)
     return n
 
@@ -29805,10 +29845,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # sin redeploy). La regla de delta egregio (|Δ|>=SEVERE_DELTA individual) queda intacta.
             _rv_count_min_delta = _env_float("MEALFIT_REVIEW_COHERENCE_COUNT_MIN_DELTA", 0.25)
             _rv_material_count = _coherence_material_divergence_count(coherence_block, _rv_count_min_delta)
+            # [P1-COHERENCE-SEVERE-DIRECTIONAL · 2026-07-10] La regla egregia es direccional: solo
+            # SUB-oferta >= SEVERE_DELTA rechaza sola (la sobre-oferta de empaque — 1 lb para 120g —
+            # producía |Δ|>=3.0 con abs() y quemaba intentos; corr=2ac209c7).
             _rv_is_severe = (
                 (not _rv_severe_only)
                 or _rv_material_count >= _rv_min_count
-                or any(d.get("magnitude") and abs(_coh_finite_delta_rv(d)) >= _rv_severe_delta
+                or any(_coherence_divergence_is_egregious(d, _rv_severe_delta)
                        for d in coherence_block)
             )
             if not _rv_is_severe:

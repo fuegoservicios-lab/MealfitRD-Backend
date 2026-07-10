@@ -23,7 +23,10 @@ _GO_SRC = Path(go.__file__).read_text(encoding="utf-8")
 
 
 def _mag(delta):
-    return {"food": "X", "magnitude": True, "delta_pct": delta, "expected_qty": 100.0, "actual_qty": 100.0 * (1 + delta)}
+    # SUB-oferta (actual < expected): la única dirección material tras
+    # P1-COHERENCE-SEVERE-DIRECTIONAL (la sobre-oferta de empaque nunca cuenta).
+    return {"food": "X", "magnitude": True, "delta_pct": delta, "expected_qty": 100.0,
+            "actual_qty": 100.0 * (1 - min(delta, 0.99))}
 
 
 def test_two_noise_survivors_do_not_count(monkeypatch):
