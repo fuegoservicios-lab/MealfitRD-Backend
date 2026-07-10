@@ -11554,6 +11554,23 @@ def _strip_qty_prefix_for_step(s: str) -> str:
         return str(s)
 
 
+def _spans_of_phrase_accent_flex(text: str, phrase: str) -> list:
+    """[P1-RECIPE-QUALITY-100 · 2026-07-10] Spans (start, end) de las ocurrencias de `phrase` en
+    `text`, acento-tolerante y case-insensitive, palabras separadas por whitespace flexible.
+    Consumido por los rewriters de sustitución para NO re-reemplazar un token fuente que cae
+    DENTRO de una ocurrencia YA existente del reemplazo. Fail-safe → []."""
+    try:
+        words = [w for w in _re.split(r"\s+", str(phrase).strip().lower()) if w]
+        if not words:
+            return []
+        rx = _re.compile(
+            r"\b" + r"\s+".join(_accent_loose_body(w) for w in words) + r"(?:es|s)?\b",
+            _re.IGNORECASE)
+        return [m.span() for m in rx.finditer(str(text))]
+    except Exception:
+        return []
+
+
 def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
     """[P1-SUBST-RECIPE-REWRITE · 2026-06-28] Reescribe menciones del ingrediente sustituido en los PASOS de la receta.
     `token_subs`: lista de (tokens_busqueda: list[str], nombre_nuevo: str). Diseño verificado por review adversaria:
@@ -11600,7 +11617,17 @@ def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
             out.append(s)
             continue
         for _ln, pat, new_disp in pats:
-            def _rep(m, _nd=new_disp):
+            # [P1-RECIPE-QUALITY-100 · 2026-07-10] IDEMPOTENCIA REAL: si el texto YA contiene el
+            # reemplazo ("la pechuga de pollo desmenuzada"), el token fuente ('pollo') matchea
+            # DENTRO de esa ocurrencia → "pechuga de pechuga de pollo" (vivo: tortitas de maíz,
+            # plan 6d742f23 "pechuga de pollo de pechuga de pollo"). Los matches que caen dentro
+            # de una ocurrencia existente del target NO se tocan.
+            _tgt_spans = _spans_of_phrase_accent_flex(s, new_disp)
+
+            def _rep(m, _nd=new_disp, _spans=_tgt_spans):
+                for _a, _b in _spans:
+                    if _a <= m.start() < _b:
+                        return m.group(0)  # ya dentro del reemplazo existente → intacto
                 # descapitaliza salvo inicio de paso (preserva prosa es-DO: "vierte stevia", no "vierte Stevia")
                 return (_nd[:1].upper() + _nd[1:]) if m.start() == 0 else (_nd[:1].lower() + _nd[1:])
             s2 = pat.sub(_rep, s)
@@ -14363,6 +14390,12 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> 
     # [P1-CLOSER-LEGUME-WORDING] legumbre seca → se hierve, no "a la plancha"; acompañante, no "la proteína".
     if PROTEIN_STEP_LEGUME_WORDING and any(h in _nm_sa for h in _LEGUME_PROTEIN_HINT):
         return f"Cocina {nm} en agua hasta que ablanden e incorpóralos al plato."
+    # [P1-RECIPE-QUALITY-100 · 2026-07-10] concordancia plural: "Cocina camarones ... o hervido y
+    # sírvelo" (plan vivo 6d742f23) → hervidos/sírvelos. Heurística conservadora (termina en
+    # es/as = plural es-DO: camarones/habichuelas/sardinas); 'res' NO es plural.
+    _plural = _nm_sa.endswith("es") or _nm_sa.endswith("as")
+    if _plural:
+        return f"Cocina {nm} a la plancha o hervidos y sírvelos como proteína del plato."
     return f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
 
 
@@ -16528,6 +16561,19 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
                     if len(t) >= 3 and t not in ("para", "tipo", "agua", "aceite", "lata", "latas")]
             if not toks:
                 continue  # nombre demasiado corto/ambiguo → no arriesgar falso positivo
+            # [P1-RECIPE-QUALITY-100 · 2026-07-10] 'aceite' es filler correcto como COLA ("atún en
+            # aceite") pero es la IDENTIDAD cuando LIDERA el nombre ("aceite de oliva"): los pasos
+            # dicen "el aceite" (nunca "oliva") → paso espurio "incorpora también aceite de oliva
+            # durante la preparación" ×3 en el plan vivo 6d742f23. Si el head es 'aceite', aparece
+            # en los pasos, y es el ÚNICO ingrediente-aceite del meal (sin ambigüedad) → usado.
+            _head_tok = next((t for t in _re2.split(r"[^a-z]+", bare_low) if t), "")
+            if _head_tok == "aceite" and _re2.search(r"\baceites?\b", recipe_low):
+                _oil_leads = sum(
+                    1 for _o in ings
+                    if isinstance(_o, str)
+                    and _sa(str(_split_qty_unit_name(_o)[2]).lower()).startswith("aceite"))
+                if _oil_leads <= 1:
+                    continue  # "el aceite" de los pasos ES este aceite → usado
             # [P1-REVERSE-COH-PLURAL · 2026-07-06] (plan vivo da7bb310 ×2) la línea "1½ tomates
             # medianos" (plural) vs pasos "agrega el tomate" (singular) NO matcheaba → paso de
             # complemento ESPURIO en un plato que ya usaba el ingrediente. Stems singular/plural
@@ -22022,14 +22068,28 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 # \b inicial obligatorio: sin ancla, 'pollo' matchearía dentro de 'repollo'
                 # (el detector usa _name_has_token con \b; la sustitución debe ser simétrica).
                 _pat = _re.compile(r"\b" + _accent_flex_pattern(_al) + r"\w*", _re.IGNORECASE)
+
+                # [P1-RECIPE-QUALITY-100 · 2026-07-10] idempotencia: un alias fuente que cae DENTRO
+                # de una ocurrencia YA existente del target no se re-reemplaza (evita "pechuga de
+                # pechuga de pollo" cuando el texto ya traía la forma destino).
+                def _sub_outside_target(_text: str, _repl: str) -> str:
+                    _spans = _spans_of_phrase_accent_flex(_text, _repl)
+
+                    def _fn(m, _r=_repl, _sp=_spans):
+                        for _a, _b in _sp:
+                            if _a <= m.start() < _b:
+                                return m.group(0)
+                        return _r
+                    return _pat.sub(_fn, _text)
+
                 name = str(meal.get("name") or "")
                 _repl_disp = (repl[:1].upper() + repl[1:]) if name[:1].isupper() else repl
-                meal["name"] = _pat.sub(_repl_disp, name)
+                meal["name"] = _sub_outside_target(name, _repl_disp)
                 for _key in ("ingredients", "ingredients_raw"):
                     _lst = meal.get(_key)
                     if isinstance(_lst, list):
                         meal[_key] = [
-                            _pat.sub(repl, s) if isinstance(s, str) else s for s in _lst
+                            _sub_outside_target(s, repl) if isinstance(s, str) else s for s in _lst
                         ]
             try:
                 # [P1-REWRITE-COMPOUNDS-IN-STEPS · 2026-07-06] los pasos reciben TAMBIÉN los
@@ -22160,10 +22220,25 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 for i, (_meal, _) in enumerate(hits):
                     if i == _keep_idx or fixes_left <= 0:
                         continue
-                    tgt = next((t for t in _eff_ladder
-                                if t not in day_labels and _target_ok(t)), None)
-                    if tgt is None:
-                        break  # sin destino seguro → deja el gate decidir
+                    # [P1-RECIPE-QUALITY-100 · 2026-07-10] contexto DULCE/LIGERO: el closer ya tenía
+                    # sweet/light-guard pero este autofix NO — escribía pescado/camarones en meriendas
+                    # y platos dulces (plan vivo 6d742f23: filete de pescado en casabe+lechosa). En
+                    # dulce solo 'queso' (CLOSER-SWEET-NO-LEGUME veta legumbre en dulce); en slot
+                    # ligero salado queso/legumbres; sin candidato → NO tocar (decide el gate, que
+                    # además degrada a advisory en el intento final).
+                    _ctx_sweet = _is_sweet_meal(_meal, _sa_pr)
+                    _ctx_light = _meal_slot_is_light(_meal, _sa_pr)
+                    if _ctx_sweet or _ctx_light:
+                        _allowed = ("queso",) if _ctx_sweet else ("queso", "habichuelas", "lentejas")
+                        tgt = next((t for t in _eff_ladder
+                                    if t in _allowed and t not in day_labels and _target_ok(t)), None)
+                        if tgt is None:
+                            continue  # este meal no admite target seguro → siguiente hit
+                    else:
+                        tgt = next((t for t in _eff_ladder
+                                    if t not in day_labels and _target_ok(t)), None)
+                        if tgt is None:
+                            break  # sin destino seguro → deja el gate decidir
                     _rewrite_meal(_meal, _lbl, tgt)
                     day_labels.add(tgt)
                     fixes_left -= 1
@@ -24176,7 +24251,8 @@ _COMPLEMENTO_STEP_RE = _re.compile(r"(?i)^el toque de fuego \(complemento\):\s*"
 # idénticas ("Cocina pollo... y sírvelo como proteína del plato. Cocina camarones... y sírvelo como
 # proteína del plato.") lee como un bug de copy-paste. Si TODOS los bolts matchean el template exacto,
 # se fusionan en una sola oración con los nombres unidos por "y".
-_COOK_TAIL_RE = _re.compile(r"^Cocina (.+?) a la plancha o hervido y sírvelo como proteína del plato\.?$")
+# [P1-RECIPE-QUALITY-100 · 2026-07-10] acepta la variante plural (hervidos/sírvelos) del wording.
+_COOK_TAIL_RE = _re.compile(r"^Cocina (.+?) a la plancha o hervidos? y sírvelos? como proteína del plato\.?$")
 
 
 def _integrate_complement_steps(days) -> int:
@@ -24771,12 +24847,26 @@ def _consolidate_duplicate_gram_lines(days) -> int:
                     continue
                 raw = meal.get("ingredients_raw")
                 if isinstance(raw, list) and len(raw) != len(ings):
-                    continue  # desalineado → no tocar
+                    # [P1-RECIPE-QUALITY-100 · 2026-07-10] raw YA desalineado (un closer/regen añadió
+                    # solo a `ingredients`): antes se saltaba el meal ENTERO → el usuario veía "15 g de
+                    # queso" + "40 g de queso" (bollitos, plan vivo 6d742f23). Ahora se consolida el
+                    # DISPLAY y raw queda intacto (ya venía desincronizado; la lista agrega en su pase).
+                    raw = None
+
+                def _stem_key(_txt: str) -> str:
+                    # [P1-RECIPE-QUALITY-100] singular/plural por token: "frijoles pintos cocidos" y
+                    # "frijoles pintos cocido" son el MISMO alimento (una línea venía del LLM y otra
+                    # del closer con flexión distinta) → misma key de grupo.
+                    return " ".join(
+                        (w[:-2] if w.endswith("es") and len(w) > 5 else
+                         (w[:-1] if w.endswith("s") and len(w) > 4 else w))
+                        for w in _sa(_txt.strip().lower()).split())
+
                 groups = {}
                 for idx, ing in enumerate(ings):
                     m = _lead.match(str(ing))
                     if m:
-                        groups.setdefault(_sa(m.group(2).strip().lower()), []).append(
+                        groups.setdefault(_stem_key(m.group(2)), []).append(
                             (idx, float(m.group(1).replace(",", "."))))
                 drop = set()
                 for key, entries in groups.items():

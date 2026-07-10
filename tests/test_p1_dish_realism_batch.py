@@ -166,10 +166,15 @@ def test_consolidate_conservative():
                         "ingredients": ["15 g de queso", "40 g de queso fresco"],
                         "ingredients_raw": ["15 g de queso", "40 g de queso fresco"]}]}]
     assert go._consolidate_duplicate_gram_lines(days) == 0, "'queso' ≠ 'queso fresco' — no fusionar"
+    # [P1-RECIPE-QUALITY-100 · 2026-07-10] SEMÁNTICA ACTUALIZADA: raw desalineado ya NO bloquea el
+    # meal entero (dejaba "15 g de queso" + "40 g de queso" visibles al usuario — bollitos, plan
+    # vivo 6d742f23). Ahora el DISPLAY se consolida y raw queda intacto (ya venía desincronizado).
     days2 = [{"meals": [{"name": "X",
                          "ingredients": ["15 g de queso", "40 g de queso"],
                          "ingredients_raw": ["solo una línea"]}]}]
-    assert go._consolidate_duplicate_gram_lines(days2) == 0, "raw desalineado → no tocar"
+    assert go._consolidate_duplicate_gram_lines(days2) == 1, "display SÍ consolida con raw desalineado"
+    assert days2[0]["meals"][0]["ingredients"] == ["55g de queso"]
+    assert days2[0]["meals"][0]["ingredients_raw"] == ["solo una línea"], "raw intacto (no lockstep)"
 
 
 # ── P2-QTYSYNC-COUNT-NOUNS ──────────────────────────────────────────────────
