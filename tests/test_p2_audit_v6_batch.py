@@ -294,7 +294,7 @@ def test_p2i_endpoint_exposes_tier_references():
 def test_p2i_frontend_consumes_reference():
     hook = (_FRONT / "hooks" / "useBudgetFloor.js").read_text(encoding="utf-8")
     assert "tier_references" in hook and "tierReferences" in hook
-    form = (_FRONT / "components" / "assessment" / "questions" / "InteractiveQuestions.jsx").read_text(encoding="utf-8")
+    form = (_FRONT / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
     assert "referencia estimada" in form
     dash = (_FRONT / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
     assert "referencia estimada" in dash

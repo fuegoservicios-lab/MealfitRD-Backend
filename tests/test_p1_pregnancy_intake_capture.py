@@ -20,8 +20,15 @@ import condition_rules as cr
 import nutrition_calculator as nc
 
 
-_IQ_PATH = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "components" / "assessment"
-            / "questions" / "InteractiveQuestions.jsx")
+_QUESTIONS_DIR = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "components" / "assessment"
+                  / "questions")
+# [P2-4 · 2026-07-09] El monolito InteractiveQuestions.jsx se dividio en un archivo
+# por Q* + _shared.jsx. Los anchors de este test viven repartidos: SSOT de labels
+# (_shared.jsx), cleanup de genero (QGender.jsx) y chips gateados (QMedical.jsx).
+_IQ_FILES = ("_shared.jsx", "QGender.jsx", "QMedical.jsx")
+
+def _iq_src():
+    return "\n".join((_QUESTIONS_DIR / f).read_text(encoding="utf-8") for f in _IQ_FILES)
 
 # Labels exactos de los chips del wizard (deben matchear PREGNANCY_CONDITION_TERMS).
 _CHIP_LABELS = ("Embarazo", "Lactancia")
@@ -29,7 +36,7 @@ _CHIP_LABELS = ("Embarazo", "Lactancia")
 
 # ── A. Parser-anchor del wizard (rename → falla el test antes de romper prod) ──
 def test_wizard_has_pregnancy_chips_gender_gated():
-    src = _IQ_PATH.read_text(encoding="utf-8")
+    src = _iq_src()
     assert "P1-PREGNANCY-INTAKE-CAPTURE" in src
     assert "['Embarazo', 'Lactancia']" in src, "los chips de embarazo/lactancia deben existir (SSOT)"
     assert "PREGNANCY_CHIP_LABELS" in src, "los chips deben leer del SSOT compartido"
@@ -40,7 +47,7 @@ def test_wizard_cleans_pregnancy_orphan_on_gender_change():
     # Si el usuario marca embarazo y luego (back-nav) cambia el género a hombre, el chip se oculta pero el
     # valor seguía vivo en medicalConditions → override silencioso. QGender lo limpia al fijar un género
     # no-mujer. Ancla el cleanup en el source del wizard.
-    src = _IQ_PATH.read_text(encoding="utf-8")
+    src = _iq_src()
     assert "value !== 'female'" in src, "QGender debe limpiar embarazo cuando el género no es mujer"
     assert "PREGNANCY_CHIP_LABELS.includes(c)" in src, "el cleanup debe filtrar por el SSOT de labels"
 

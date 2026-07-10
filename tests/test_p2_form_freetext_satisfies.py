@@ -53,7 +53,7 @@ def test_anchors_present():
     assert "P2-FORM-FREETEXT-SATISFIES" in plans_src
     assert "_FREE_TEXT_COMPANION_FIELDS" in plans_src
     # chip + validador frontend (repo hermano — solo si está presente, no en CI backend-only)
-    iq = _BACKEND.parent / "frontend" / "src" / "components" / "assessment" / "questions" / "InteractiveQuestions.jsx"
+    iq = _BACKEND.parent / "frontend" / "src" / "components" / "assessment" / "questions" / "QMedical.jsx"
     fv = _BACKEND.parent / "frontend" / "src" / "config" / "formValidation.js"
     if iq.exists():
         assert "Cirugía Bariátrica" in iq.read_text(encoding="utf-8")

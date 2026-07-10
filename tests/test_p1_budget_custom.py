@@ -27,7 +27,7 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 _PLANS_PY = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 _PLANGEN_PY = (_BACKEND_ROOT / "prompts" / "plan_generator.py").read_text(encoding="utf-8")
 _ORCH_PY = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
-_IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "InteractiveQuestions.jsx").read_text(encoding="utf-8")
+_IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
 _FLOW_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx").read_text(encoding="utf-8")
 _CTX_JSX = (_REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
 
@@ -175,8 +175,11 @@ def test_budget_minimum_enforced_and_shared_ssot():
         "El validateExtra del flow no exige el mínimo (minBudgetFor) — solo > 0."
     )
     # QBudget usa el mismo helper (SSOT) para el hint + el input min + la advertencia.
-    assert "minBudgetFor(budgetCurrency, formData.groceryDuration)" in _IQ_JSX, (
-        "QBudget no calcula el mínimo viable con `minBudgetFor` (drift vs el flow)."
+    # [P1-BUDGET-FLOOR-PERSONALIZADO · 2026-07-09] QBudget ya no llama minBudgetFor
+    # directo: usa el hook useBudgetFloor(formData) (personalizado por metas,
+    # fail-open al estatico minBudgetFor internamente — mismo SSOT).
+    assert "useBudgetFloor(formData)" in _IQ_JSX, (
+        "QBudget no calcula el minimo viable con useBudgetFloor (drift vs el flow)."
     )
     assert "belowMin" in _IQ_JSX, (
         "QBudget no advierte cuando el monto está por debajo del mínimo."

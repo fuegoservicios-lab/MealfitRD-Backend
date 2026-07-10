@@ -22,7 +22,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _CONTEXT_JSX = _REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx"
-_WIZARD_JSX = _REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "InteractiveQuestions.jsx"
+_WIZARD_JSX = _REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QMeasurements.jsx"
 _SETTINGS_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Settings.jsx"
 
 

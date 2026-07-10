@@ -50,7 +50,7 @@ _INTERACTIVE_QUESTIONS_JSX = (
     / "components"
     / "assessment"
     / "questions"
-    / "InteractiveQuestions.jsx"
+    / "QSupplements.jsx"
 )
 
 
