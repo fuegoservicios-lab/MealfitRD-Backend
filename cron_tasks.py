@@ -30247,9 +30247,33 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     # 2026-07-08, que antes se derivaban a mano aquí). Idempotente sobre los
                                     # días ya finalizados de semanas previas; CPU-only bajo el mismo lock.
                                     from db import apply_plan_quality_finalize_chain as _apqfc_ck
-                                    _apqfc_ck(plan_data, surface=f"chunk-T1 semana {week_number}")
+                                    # [P0-CHUNK-CHAIN-SCOPED · 2026-07-10] El chain corre SOLO sobre los
+                                    # días NUEVOS del chunk (view con los MISMOS dicts → la mutación
+                                    # in-place llega al plan mergeado): correrlo sobre el plan COMPLETO
+                                    # (22+ días en el chunk 8 del plan 72c8b965) dentro del FOR UPDATE
+                                    # excedía el presupuesto idle de 60s → `terminating connection due
+                                    # to idle-in-transaction timeout` a las 17:50 (los días viejos ya
+                                    # fueron pulidos cuando SU chunk mergeó — re-barrerlos es CPU
+                                    # redundante bajo el lock). CPU acotado al tamaño del chunk (≤6
+                                    # días) para siempre. Los 3 keys plan-level que el chain refresca
+                                    # se copian de vuelta.
+                                    # Los writes PLAN-LEVEL del chain (clinical_band_score, stale-clear del
+                                    # degraded) se quedan en el view y se DESCARTAN a propósito: medir banda
+                                    # sobre 4 días y copiarla al plan de 22+ sería deshonesto. El valor real
+                                    # del chain acá son las mutaciones per-día (dicts compartidos).
+                                    _new_nums_ck = {d.get("day") for d in (new_days or []) if isinstance(d, dict)}
+                                    _chain_view_ck = {
+                                        "days": [d for d in plan_data.get("days", [])
+                                                 if isinstance(d, dict) and d.get("day") in _new_nums_ck],
+                                        "macros": plan_data.get("macros"),
+                                        "calories": plan_data.get("calories"),
+                                        "main_goal": plan_data.get("main_goal"),
+                                        "grocery_start_date": plan_data.get("grocery_start_date"),
+                                    }
+                                    _apqfc_ck(_chain_view_ck, surface=f"chunk-T1 semana {week_number}")
                                     logger.info(f"🧩 [P0-BAND-PRE-REVIEW] chain de calidad aplicado en merge T1 "
-                                                f"plan {meal_plan_id} semana {week_number} (paridad shield semanas 2+).")
+                                                f"plan {meal_plan_id} semana {week_number} "
+                                                f"(scoped a {len(_chain_view_ck['days'])} día(s) nuevos).")
                             except Exception as _fce_ck:
                                 logger.warning(f"[P1-COHERENCE-FINALIZE] chunk T1 no-op: {type(_fce_ck).__name__}: {_fce_ck}")
 
