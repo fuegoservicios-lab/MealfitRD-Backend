@@ -525,6 +525,57 @@ HARDEN_SAMEDAY_PROTEIN   = _env_bool("MEALFIT_HARDEN_SAMEDAY_PROTEIN", False)   
 HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)      # clase 2
 HARDEN_POOLS_CANARY_PCT  = _env_int("MEALFIT_HARDEN_POOLS_CANARY_PCT", 0, validator=lambda v: 0 <= v <= 100)
 
+# [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Feed-forward de la blocklist de platos recientes al
+# intento #1. Fallo vivo corr=45f05b9c: el intento 1 se quemó COMPLETO en el gate anti-repetición
+# (review :29752) por 3 platos que ya estaban en los planes recientes — lista que el prep YA fetchea
+# antes de generar (get_recent_meals_from_plans) pero que (a) solo viajaba dentro de history_context,
+# que el compresor LLM (>2000 chars, siempre en renovaciones) resume PERDIENDO los nombres literales,
+# y (b) NUNCA llegaba al day-generator — el nodo que inventa los nombres que el gate luego rechaza.
+# Este bloque determinista viaja en form_data['_recent_dishes_blocklist'] (key interna, excluida del
+# JSON dump por P1-PROMPT-TRIM-FORM-DATA) y se inyecta en AMBOS prompts dinámicos. "" cuando vacío →
+# byte-equivalencia → prompt-cache preservado (patrón P1-MED-CONTEXT-DAYGEN). Nace ON: es un nudge
+# aditivo que no puede rechazar nada — el gate intacto sigue siendo el enforcement (peor caso = status
+# quo). Rollback sin redeploy: MEALFIT_RECENT_DISHES_FEEDFORWARD=false.
+RECENT_DISHES_FEEDFORWARD     = _env_bool("MEALFIT_RECENT_DISHES_FEEDFORWARD", True)
+RECENT_DISHES_FEEDFORWARD_MAX = _env_int("MEALFIT_RECENT_DISHES_FEEDFORWARD_MAX", 40, validator=lambda v: 5 <= v <= 120)
+
+
+def build_recent_dishes_blocklist_context(form_data) -> str:
+    """[P1-RECENT-DISHES-FEEDFORWARD] Bloque determinista con los platos recientes PROHIBIDOS,
+    para skeleton + day-gen. Retorna "" (byte-equivalente) para guests/primer plan/knob OFF.
+    La cláusula 'SÍ puedes reutilizar los INGREDIENTES' mitiga la sobre-evitación (espeja la
+    REGLA DE ORO del history_context). Fail-open. tooltip-anchor: P1-RECENT-DISHES-FEEDFORWARD"""
+    try:
+        if not RECENT_DISHES_FEEDFORWARD:
+            return ""
+        names = (form_data or {}).get("_recent_dishes_blocklist") or []
+        if not isinstance(names, list):
+            return ""
+        seen = set()
+        capped = []
+        for n in names:
+            s = str(n).strip()
+            key = s.lower()
+            if not s or key in seen:
+                continue
+            seen.add(key)
+            capped.append(s)
+            if len(capped) >= RECENT_DISHES_FEEDFORWARD_MAX:
+                break
+        if not capped:
+            return ""
+        bullets = "\n".join(f"  ⛔ {n}" for n in capped)
+        return (
+            "\n⛔ PLATOS RECIENTES PROHIBIDOS (anti-repetición feed-forward):\n"
+            "Estos platos YA salieron en los últimos planes del usuario. ESTÁ PROHIBIDO repetir el "
+            "mismo plato o una variante trivial del nombre. SÍ puedes reutilizar sus INGREDIENTES "
+            "en preparaciones y combinaciones DISTINTAS (staples genéricos como huevos revueltos, "
+            "avena o tostadas simples están exentos).\n"
+            f"{bullets}\n"
+        )
+    except Exception:
+        return ""
+
 
 def _harden_pools_canary_cohort(state) -> str:
     """[A1-HARDEN-POOLS] Cohorte determinista del canario A1: 'off' si el plan cae en el
@@ -4630,6 +4681,11 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         "prices_context": build_prices_context() if (str(form_data.get("budget") or "").strip()) else "",
         "taste_profile": taste_profile,
         "history_context": history_context,
+        # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Blocklist LITERAL de platos recientes en bloque
+        # PROPIO (no dentro de history_context, que el compresor resume perdiendo los nombres) para que
+        # llegue TAMBIÉN al day-generator — el nodo que inventa los nombres que el gate anti-repetición
+        # (:29752) chequea. "" para guests/primer plan → prompt byte-equivalente (cache preservado).
+        "recent_dishes_blocklist_context": build_recent_dishes_blocklist_context(form_data),
     }
 
 
@@ -6188,6 +6244,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"Información del Usuario:\n{json.dumps(_sanitize_form_data_for_prompt(form_data), indent=2)}\n"
         f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n{ctx['weight_history_context']}\n{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
         f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n{ctx['history_context']}\n"
+        # [P1-RECENT-DISHES-FEEDFORWARD] blocklist literal FUERA del history_context comprimible
+        f"{ctx['recent_dishes_blocklist_context']}\n"
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['pantry_drift_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
@@ -6975,6 +7033,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables al day-gen
             # (densidad nutricional cuantitativa, no solo cantidad). "" cuando knob OFF/no aplica.
             f"{ctx['micronutrient_targets_context']}\n"
+            # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Blocklist de platos recientes AL DAY-GEN —
+            # el nodo que inventa los nombres. Pre-fix solo el skeleton la veía (vía history_context
+            # comprimido) → el gate anti-repetición rechazaba el intento 1 completo por platos que el
+            # pipeline ya conocía (fallo vivo corr=45f05b9c). "" para guests/primer plan.
+            f"{ctx['recent_dishes_blocklist_context']}\n"
             f"{assignment_context}\n"
             f"{recycled_days_context}\n"
         )
@@ -35426,6 +35489,17 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     "Cambia la forma de cocinarlos y combínalos distinto. NO repitas el mismo nombre o concepto de plato en toda la semana (a menos que el usuario lo pida).\n"
                     "----------------------------------------------------------------------"
                 )
+                # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] La MISMA lista (ya sanitizada P0-A1,
+                # superset del window de 3 planes que chequea el gate :29752) viaja además como key
+                # interna de form_data → bloque determinista propio en skeleton + day-gen, inmune al
+                # compresor LLM que resume history_context perdiendo los nombres literales. Cero
+                # roundtrips extra (reusa este fetch). tooltip-anchor: P1-RECENT-DISHES-FEEDFORWARD
+                try:
+                    actual_form_data["_recent_dishes_blocklist"] = [
+                        str(n) for n in recent_meals if str(n).strip()
+                    ]
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"⚠️ Error recuperando comidas recientes desde db: {e}")
             
@@ -35817,7 +35891,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     actual_form_data["_is_rotation_reroll"] = True
                 else:
                     logger.info("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
-                    
+
                     history_context += (
                         f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
                         f"El usuario quiere cambiar completamente las opciones de hoy:\n{', '.join(previous_meals)}\n"
@@ -35825,6 +35899,13 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                         f"----------------------------------------------------------------------\n"
                     )
                     actual_form_data["_is_same_day_reroll"] = True
+                # [P1-RECENT-DISHES-FEEDFORWARD] En AMBOS re-rolls (rotación + mismo-día) los platos
+                # explícitamente rechazados se UNEN a la blocklist feed-forward (el builder dedupea).
+                try:
+                    _ff = actual_form_data.setdefault("_recent_dishes_blocklist", [])
+                    _ff.extend(str(m) for m in previous_meals if str(m).strip())
+                except Exception:
+                    pass
             else:
                 logger.info("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
         except Exception as e:
