@@ -6843,6 +6843,24 @@ def api_regenerate_day(
                     _rtu(new_meals, float(_rcap.get("protein_g")), db=_db, renal_capped=True)
             except Exception as _renal_day_e:
                 logger.debug(f"[P1-RENAL-UPDATE-ENFORCE] trim renal del día falló (no bloquea): {_renal_day_e}")
+            # [P2-REGEN-DAY-SODIUM-AUTOFIX · 2026-07-10] El regen-day no corría el corrector de
+            # sodio per-día de S1 (P1-SODIUM-DAY-AUTOFIX): un día regenerado con queso blanco/
+            # cottage/enlatados podía quedar sobre el techo OMS y el usuario recibía el banner
+            # "un día se pasa del techo de sodio" pidiéndole arreglarlo A MANO (caso vivo
+            # 2026-07-10: Día 1 en 2,733/2,000mg justo tras "actualizar platos del día").
+            # Mismo corrector determinista (strip cubito / sal→al gusto / enlatado→fresco /
+            # swap lácteo) sobre EL DÍA mutado, ANTES del qty-sync y del recompute de micros —
+            # así el panel y el banner reflejan el estado ya corregido. Best-effort.
+            # Knob MEALFIT_REGEN_DAY_SODIUM_AUTOFIX default ON. tooltip-anchor: P2-REGEN-DAY-SODIUM-AUTOFIX
+            if os.environ.get("MEALFIT_REGEN_DAY_SODIUM_AUTOFIX", "true").strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    from graph_orchestrator import _day_sodium_autofix as _sod_rd
+                    _sod_n = _sod_rd([_day], form_data=data, db=_db)
+                    if _sod_n:
+                        logger.info(f"🧂 [P2-REGEN-DAY-SODIUM-AUTOFIX] {_sod_n} acción(es) de sodio "
+                                    f"aplicadas al día regenerado (pre-panel)")
+                except Exception as _sod_e:
+                    logger.debug(f"[P2-REGEN-DAY-SODIUM-AUTOFIX] no-op: {_sod_e}")
             # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-10) Re-sincronizar cantidades en los PASOS:
             # el rebalance del día (P2-REGEN-DAY-MACRO-REBALANCE), los caps DM2/bariátrica
             # (P1-REGEN-DAY-CLINICAL-PARITY) y el trim renal de arriba mutan porciones DESPUÉS
@@ -6902,6 +6920,32 @@ def api_regenerate_day(
                         _ucc_rd(pd, _micro_form, surface="regen_day")
                     except Exception as _cc_rd_e:
                         logger.debug(f"[P1-CONDITION-CEILINGS-UPDATES] (regen-day) no-op: {_cc_rd_e}")
+                    # [P2-REGEN-DAY-PANEL-REEVAL · 2026-07-10] El banner de panel (sodio/azúcar
+                    # worst-day, micros bajos, etc.) NUNCA se re-evaluaba en updates: quedaba el
+                    # veredicto de la GENERACIÓN aunque el usuario acabara de regenerar el día
+                    # ofensor (y `_maybe_mark_panel_degraded` early-returns si el flag ya está
+                    # seteado → jamás se limpiaba solo). Re-evaluación honesta BIDIRECCIONAL
+                    # sobre el panel recién recomputado: si la razón vigente es de clase-panel,
+                    # se limpia y se re-marca SOLO si la violación persiste. Razones no-panel
+                    # (review_failed, low_band_*) intactas. tooltip-anchor: P2-REGEN-DAY-PANEL-REEVAL
+                    try:
+                        from graph_orchestrator import _maybe_mark_panel_degraded as _mpd_rd
+                        from graph_orchestrator import _PANEL_DEGRADED_REASONS as _pdr_rd
+                        _panel_class = set(_pdr_rd) | {"micro_worst_day", "micro_worst_day_ceiling"}
+                        _was_reason = pd.get("_quality_degraded_reason")
+                        if pd.get("_quality_degraded") and _was_reason in _panel_class:
+                            pd.pop("_quality_degraded", None)
+                            pd.pop("_quality_degraded_reason", None)
+                            pd.pop("_quality_degraded_severity", None)
+                            _remarked = _mpd_rd(pd, _micro_form, False, 1)
+                            logger.info(
+                                f"🧹 [P2-REGEN-DAY-PANEL-REEVAL] razón '{_was_reason}' re-evaluada sobre el "
+                                f"panel fresco → {'sigue (' + str(pd.get('_quality_degraded_reason')) + ')' if _remarked else 'LIMPIA (banner fuera)'}"
+                            )
+                        else:
+                            _mpd_rd(pd, _micro_form, False, 1)
+                    except Exception as _pr_rd_e:
+                        logger.debug(f"[P2-REGEN-DAY-PANEL-REEVAL] no-op: {_pr_rd_e}")
                 except Exception as _mfe:
                     logger.debug(f"[P1-UPDATE-MICROS] recompute (regen-day) falló: {_mfe}")
                 # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2) Recomputa el agregado
@@ -6921,6 +6965,29 @@ def api_regenerate_day(
                 _ubp_rd(pd, surface="regen_day", pantry_limited=bool(_pantry_limited))
             except Exception as _bp_rd_e:
                 logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (regen-day) no-op: {_bp_rd_e}")
+            # [P2-REGEN-DAY-CHIP-STALE-CLEAR · 2026-07-10] `_macro_band_low` se setea per-meal en
+            # el swap cuando el candidato ACEPTADO quedó >15% de su slot — pero el rebalance a
+            # nivel-DÍA (arriba) corre DESPUÉS y puede dejar el día perfecto en banda: el chip
+            # ámbar "Macros algo fuera de la banda objetivo" quedaba STALE en la card (caso vivo
+            # 2026-07-10: chip visible con día band 1.0). CLEAR-ONLY cuando el día re-medido
+            # queda con macros_only ≥0.99; si el día sigue fuera, los chips se quedan (honestos).
+            try:
+                from graph_orchestrator import compute_clinical_band_score as _cbs_chip
+                _bs_chip = _cbs_chip(
+                    {"days": [{"meals": new_meals}],
+                     "macros": {"protein": day_target.get("protein_g"), "carbs": day_target.get("carbs_g"),
+                                "fats": day_target.get("fats_g")},
+                     "calories": day_target.get("kcal")}, {})
+                if float(_bs_chip.get("score_macros_only") or 0) >= 0.99:
+                    _chips_cleared = 0
+                    for _m_chip in new_meals:
+                        if isinstance(_m_chip, dict) and _m_chip.pop("_macro_band_low", None):
+                            _chips_cleared += 1
+                    if _chips_cleared:
+                        logger.info(f"🧹 [P2-REGEN-DAY-CHIP-STALE-CLEAR] {_chips_cleared} chip(s) "
+                                    f"_macro_band_low limpiados (día en banda tras el rebalance)")
+            except Exception as _chip_e:
+                logger.debug(f"[P2-REGEN-DAY-CHIP-STALE-CLEAR] no-op: {_chip_e}")
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas del plan con el día regenerado (el strip de arriba queda
             # como fallback si falla — contrato legacy con recalc del frontend).
