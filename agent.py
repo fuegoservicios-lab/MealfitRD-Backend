@@ -1196,6 +1196,45 @@ def swap_meal(form_data: dict):
         else:
             ingreds = []
 
+        # [P1-SWAP-BASE-REPEAT-GATE · 2026-07-10] Mode collapse del swap: con reason
+        # variety/similar/dislike el LLM devolvía el MISMO plato-base con variación cosmética
+        # ("Panqueques de Avena y Guineo con Cottage" → "...con Yogur" → "...Maduro con Yogur",
+        # 3 regens seguidos del owner con screenshots). El prompt solo veta el nombre EXACTO;
+        # este gate veta el PLATO-BASE canónico (SSOT `_head_dish_base_token`, el mismo del gate
+        # de variedad cross-día) → retry con directiva explícita de cambiar la BASE. Solo aplica
+        # cuando el usuario pidió algo DISTINTO; 'time'/'cravings'/'weekend' pueden legítimamente
+        # conservar la base. Knob MEALFIT_SWAP_BASE_REPEAT_GATE default ON. Fail-safe.
+        # tooltip-anchor: P1-SWAP-BASE-REPEAT-GATE
+        if (
+            swap_reason in ("variety", "similar", "dislike")
+            and os.environ.get("MEALFIT_SWAP_BASE_REPEAT_GATE", "true").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            try:
+                from graph_orchestrator import _head_dish_base_token as _hbt_br
+                from constants import strip_accents as _sa_br
+                _new_name_br = getattr(res, "name", None) if not isinstance(res, dict) else res.get("name")
+                _cur_base_br = _hbt_br(_sa_br(str(rejected_meal or "").lower()))
+                _new_base_br = _hbt_br(_sa_br(str(_new_name_br or "").lower()))
+                if _cur_base_br and _new_base_br and _cur_base_br == _new_base_br:
+                    logger.warning(
+                        f"🔁 [P1-SWAP-BASE-REPEAT-GATE] plato-base repetido ('{_new_base_br}') | "
+                        f"actual={str(rejected_meal)[:40]!r} propuesto={str(_new_name_br)[:40]!r} | meal_type={meal_type}"
+                    )
+                    _current_prompt[0] = prompt_text + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\nPropusiste OTRA VEZ un plato "
+                        f"base '{_new_base_br}' — el usuario quiere algo DIFERENTE al plato actual "
+                        f"('{rejected_meal}'). CAMBIA LA BASE del plato por completo (otra preparación: "
+                        f"si era panqueques/batido prueba revoltillo, avena cocida, tostadas, bowl, "
+                        f"arepitas…), no solo los acompañantes."
+                    )
+                    raise ValueError(
+                        f"SWAP_SAME_BASE: el plato propuesto repite el plato-base '{_new_base_br}' del actual."
+                    )
+            except ValueError:
+                raise
+            except Exception as _br_exc:
+                logger.debug(f"[P1-SWAP-BASE-REPEAT-GATE] no-op: {type(_br_exc).__name__}: {_br_exc}")
+
         # Solo aplicamos restricción estricta si hay una despensa base limpia extraída
         if clean_ingredients:
             # [P2-SWAP-CONSISTENCY · 2026-05-22] `_external_tolerance` calculado

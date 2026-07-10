@@ -6717,9 +6717,46 @@ def api_regenerate_day(
                 if _changed:
                     _exceeds, _why = _day_exceeds_pantry(new_meals, _orig_ledger_grams, _db)
                     if _exceeds:
-                        logger.info(f"🎚 [P2-REGEN-DAY-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_why}")
-                        new_meals[:] = _pre_rb
-                        _pantry_limited = True  # [P2-REGEN-DAY-DEFICIT-HONESTY] el déficit residual es por Nevera
+                        # [P2-REGEN-DAY-PARTIAL-REBALANCE · 2026-07-10] Antes: revert TOTAL → días
+                        # band 0.5 con chips ámbar "honestos pero inarreglables" (caso vivo del
+                        # owner: proteína/kcal 0.0 en banda porque la Nevera no daba para el target
+                        # completo). Ahora: reintento hacia el punto MEDIO (y luego el cuarto) entre
+                        # lo actual y el target — escala lo que la Nevera SÍ permite; revert total
+                        # solo si ni el 25% del delta cabe. Cada intento parte de una copia fresca
+                        # del estado pre-rebalance (el rebalance muta in-place).
+                        _partial_ok = False
+                        try:
+                            _cur_p_rb = sum(float(_m.get("protein") or 0) for _m in _pre_rb if isinstance(_m, dict))
+                            _cur_c_rb = sum(float(_m.get("carbs") or 0) for _m in _pre_rb if isinstance(_m, dict))
+                            _cur_f_rb = sum(float(_m.get("fats") or 0) for _m in _pre_rb if isinstance(_m, dict))
+                            _tgt_p_rb = 0.0 if _renal_capped else float(day_target.get("protein_g") or 0)
+                            _tgt_c_rb = float(day_target.get("carbs_g") or 0)
+                            _tgt_f_rb = float(day_target.get("fats_g") or 0)
+                            for _frac_rb in (0.5, 0.25):
+                                _attempt_rb = _copy_rb.deepcopy(_pre_rb)
+                                _real_att = [m for m in _attempt_rb if isinstance(m, dict)]
+                                _mid_c = _cur_c_rb + (_tgt_c_rb - _cur_c_rb) * _frac_rb if _tgt_c_rb else 0.0
+                                _mid_f = _cur_f_rb + (_tgt_f_rb - _cur_f_rb) * _frac_rb if _tgt_f_rb else 0.0
+                                _mid_p = (_cur_p_rb + (_tgt_p_rb - _cur_p_rb) * _frac_rb) if _tgt_p_rb else 0.0
+                                if not _rebalance_day_macros_to_target(
+                                        _real_att, _mid_c, _mid_f, _db, target_protein=_mid_p):
+                                    continue
+                                _exc_att, _why_att = _day_exceeds_pantry(_attempt_rb, _orig_ledger_grams, _db)
+                                if not _exc_att:
+                                    new_meals[:] = _attempt_rb
+                                    _partial_ok = True
+                                    logger.info(
+                                        f"🎚 [P2-REGEN-DAY-PARTIAL-REBALANCE] la Nevera no da para el "
+                                        f"target completo → re-apuntado al {int(_frac_rb * 100)}% del "
+                                        f"delta (escala lo disponible, sin inventar compras)"
+                                    )
+                                    break
+                        except Exception as _prb_e:
+                            logger.debug(f"[P2-REGEN-DAY-PARTIAL-REBALANCE] no-op: {_prb_e}")
+                        if not _partial_ok:
+                            logger.info(f"🎚 [P2-REGEN-DAY-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_why}")
+                            new_meals[:] = _pre_rb
+                        _pantry_limited = True  # [P2-REGEN-DAY-DEFICIT-HONESTY] el residual (total o parcial) es por Nevera
                     else:
                         logger.info("🎚 [P2-REGEN-DAY-MACRO-REBALANCE] macros del día re-apuntadas al target")
             except Exception as _rbd_e:
