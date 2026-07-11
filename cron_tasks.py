@@ -12288,7 +12288,7 @@ def _cas_pause_chunk_to_pending_user_action(task_id, snapshot_json: str, log_tag
     return True
 
 
-def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = "empty_pantry"):
+def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = "empty_pantry", notify: bool = True):
     """Pauses chunk generation when the live pantry is too empty to preserve the zero-waste promise.
 
     [P0-DASH-CHIP-HONESTY · 2026-05-09] Tooltip-anchor:
@@ -12342,12 +12342,15 @@ def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_numbe
         f"({len(fresh_inventory or [])} items brutos)."
     )
 
-    _dispatch_push_notification(
-        user_id=user_id,
-        title="Actualiza tu nevera para continuar",
-        body="Tu próximo chunk quedó en pausa porque tu inventario está vacío o casi vacío. Actualiza 'Mi Nevera' y reintenta.",
-        url="/dashboard",
-    )
+    # [P1-REFILL-SIBLING-PAUSE-GATE · 2026-07-10] notify=False cuando el plan YA tiene un
+    # sibling pausado que notificó — pausar la semana siguiente no debe duplicar el push.
+    if notify:
+        _dispatch_push_notification(
+            user_id=user_id,
+            title="Actualiza tu nevera para continuar",
+            body="Tu próximo chunk quedó en pausa porque tu inventario está vacío o casi vacío. Actualiza 'Mi Nevera' y reintenta.",
+            url="/dashboard",
+        )
 
 
 def _pause_chunk_for_final_inventory_validation(
@@ -25615,6 +25618,35 @@ def process_plan_chunk_queue(target_plan_id=None):
 
         chunk_kind = task.get("chunk_kind") or ("rolling_refill" if snap.get("_is_rolling_refill", False) else "initial_plan")
         is_rolling_refill = chunk_kind == "rolling_refill"
+
+        # [P1-REFILL-SIBLING-PAUSE-GATE · 2026-07-10] refill/catchup: si el plan YA tiene un
+        # chunk en pending_user_action, pausar ESTE pre-pipeline (cero LLM). Caso vivo (plan
+        # 8ec367f8, 01:04): chunk 2 generó con 3 intentos LLM (~$0.05) y LUEGO pausó en
+        # reservas; el cron rolling encolaba la semana siguiente y repetía el gasto — genera-
+        # para-descartar diario por cuenta con nevera desatendida. El restock del usuario
+        # resume los pausados (P0-4 recovery) y este gate deja de disparar. initial_plan
+        # exento (P1-CHUNK-AUTONOMY). notify=False: el sibling ya notificó al pausarse.
+        if chunk_kind in ("rolling_refill", "catchup") and _env_bool("MEALFIT_REFILL_SIBLING_PAUSE_GATE", True):
+            try:
+                _sib_paused = execute_sql_query(
+                    "SELECT COUNT(*) AS n FROM plan_chunk_queue "
+                    "WHERE meal_plan_id = %s AND status = 'pending_user_action' AND id != %s",
+                    (meal_plan_id, task_id),
+                    fetch_one=True,
+                )
+                if _sib_paused and int(_sib_paused.get("n") or 0) > 0:
+                    logger.info(
+                        f"[P1-REFILL-SIBLING-PAUSE-GATE] Chunk {week_number} plan {meal_plan_id}: "
+                        f"{_sib_paused.get('n')} sibling(s) ya en pending_user_action → pausa "
+                        f"PRE-pipeline (cero costo LLM; el restock resume todos)."
+                    )
+                    _pause_chunk_for_pantry_refresh(
+                        task_id, user_id, week_number, [], reason="empty_pantry", notify=False
+                    )
+                    return
+            except Exception as _spg_e:
+                logger.debug(f"[P1-REFILL-SIBLING-PAUSE-GATE] no-op: {_spg_e}")
+
         form_data = copy.deepcopy(snap.get("form_data", {}))
         snapshot_form_data = snap.get("form_data", {}) or {}
 

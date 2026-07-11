@@ -141,6 +141,8 @@ def test_callsite_ladder_order_lineclamp_then_fracs_then_revert():
 
 
 def test_marker_anchored_in_source():
+    # Durable: SOLO anchors en el código fuente. NO asertar contra app.py — el
+    # _LAST_KNOWN_PFIX se bumpea con cada P-fix posterior y el string sale del archivo
+    # (4ª mordida de esta clase el 2026-07-10; el cross-link marker↔test lo cubre
+    # test_p2_hist_audit_14_marker_test_link).
     assert _PLANS.count("P1-REBALANCE-LINE-CLAMP") >= 3
-    app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-REBALANCE-LINE-CLAMP" in app_src
