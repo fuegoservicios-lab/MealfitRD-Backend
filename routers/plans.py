@@ -9053,10 +9053,14 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             except Exception as _rc_al_e:
                 logger.debug(f"[P0-VEG-GUARD-ALLERGEN] no se pudo hidratar alergias en /recalculate: {_rc_al_e}")
             _rc_fixed = 0
+            # [P1-RECALC-FLOOR-READONLY · 2026-07-11] portion_floors=False: este finalizador corre
+            # sobre una COPIA descartable (solo se persiste aggregated_*) — un floor que muta
+            # cantidades aquí produce lista ≠ plan (vivo: pavo 25g→75g solo en la lista, 16:53Z).
+            # El recalc debe reflejar el plan TAL CUAL está persistido.
             for _d in (plan_data.get("days") or []):
                 for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                     if isinstance(_m, dict):
-                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies)
+                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False)
             if _rc_fixed:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_rc_fixed} fix(es) de coherencia de receta en /recalculate (lista canónica)")
         except Exception as _rc_fin_e:

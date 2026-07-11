@@ -21126,7 +21126,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
 
 
 def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False, allergies=None,
-                                          skip_night_rice: bool = False) -> int:
+                                          skip_night_rice: bool = False, portion_floors: bool = True) -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -21292,8 +21292,14 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # del batch v5) solo existía en assemble/requantize de form-gen → un closer/quantize de update
         # podía persistir líneas macro-bearing de 5-15g ("5g de mozzarella"). Mismo orden que assemble:
         # DESPUÉS del quantize (que es quien puede crear el residuo), ANTES del qty-sync (que ve el final).
+        # [P1-RECALC-FLOOR-READONLY · 2026-07-11] `portion_floors=False` lo desactiva en surfaces
+        # DERIVATIVAS que descartan las mutaciones del meal (/recalculate-shopping-list computa la
+        # lista sobre una copia y persiste SOLO aggregated_*): el floor con day_kcal_target=None
+        # bombeaba 25g→75g en la copia (vivo: 'Locrio de Pavo' 16:53Z) → lista ≠ plan persistido,
+        # la clase de incoherencia receta↔lista que el guard defiende. Surfaces que SÍ persisten
+        # el meal (swap/chat-modify/expand) conservan el default True.
         try:
-            if PORTION_SHRINK_FLOOR_ENABLED:
+            if PORTION_SHRINK_FLOOR_ENABLED and portion_floors:
                 _nsf = _floor_subservible_portions(_wrap, day_kcal_target=None, db=db)
                 if _nsf:
                     total += _nsf
@@ -27717,9 +27723,22 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         for _pl in _SAME_DAY_PROTEIN_GATE_LABELS:
                             if _pl == "huevo" and not _egg_counts_for_same_day_gate(_nl_rd):
                                 continue
-                            if any(_name_has_token(_sa_rd(_a), _blob_rd)
-                                   for _a in _MAIN_PROTEIN_ALIASES.get(_pl, ())):
-                                _lbl_meals.setdefault(_pl, []).append(str(_mm.get("name", "?"))[:40])
+                            _als_rd = [_sa_rd(_a) for _a in _MAIN_PROTEIN_ALIASES.get(_pl, ())]
+                            if any(_name_has_token(_a, _blob_rd) for _a in _als_rd):
+                                # [P1-REINTRO-LINES · 2026-07-11] LÍNEAS portadoras exactas: el detalle
+                                # meal-level (corr=57a373e0, 2 intentos quemados por 'atun'/'pollo' en
+                                # comidas cuyo NOMBRE no lo menciona) no distingue si el portador es un
+                                # bolt del closer ("40g de atún..."), un filler del day-gen o un
+                                # condimento ("caldo de pollo") que ningún autofix puede reescribir.
+                                # El formato de la línea delata al escritor en 1 grep.
+                                _carriers = ["(nombre)"] if any(
+                                    _name_has_token(_a, _nl_rd) for _a in _als_rd) else []
+                                for _il_rd in (_mm.get("ingredients") or []):
+                                    _il_flat = _sa_rd(str(_il_rd).lower())
+                                    if any(_name_has_token(_a, _il_flat) for _a in _als_rd):
+                                        _carriers.append(str(_il_rd)[:60])
+                                _lbl_meals.setdefault(_pl, []).append(
+                                    f"{str(_mm.get('name', '?'))[:40]} [{' | '.join(_carriers) or 'sin línea?'}]")
                     for _pl, _ms in _lbl_meals.items():
                         if len(_ms) >= 2:
                             _rep_detail.append(f"día {_dd.get('day')}: '{_pl}' en {' + '.join(repr(m) for m in _ms)}")
