@@ -131,11 +131,13 @@ def test_zero_waste_context_fires_for_form_generation():
 def test_frontend_wizard_and_preflight():
     src = _FLOW.read_text(encoding="utf-8")
     assert "QPlanSource" in src, "el step 0 del wizard desapareció"
-    assert "pantry-feasibility" in src, "el pre-flight del submit desapareció"
     assert "formData.planSource === 'pantry'" in src
-    i_pf = src.find("pantry-feasibility")
-    i_nav = src.find("navigate('/plan')", i_pf)
-    assert 0 < i_pf < i_nav, "el pre-flight corre ANTES de navegar a la generación"
+    # [P1-PANTRY-BUILDER-FLOW · 2026-07-11] El pre-flight de factibilidad se MOVIÓ del
+    # submit del wizard a Pantry.jsx (modo constructor, feedback owner: "el usuario debe
+    # tocar la nevera antes de crear el plan"). El contrato completo del desvío vive en
+    # test_p1_pantry_builder_flow.py; aquí solo anclamos que el pre-flight sigue vivo.
+    _pantry = (_FLOW.parents[2] / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
+    assert "pantry-feasibility" in _pantry, "el pre-flight determinista desapareció de Pantry.jsx"
     q = (_FLOW.parent / "questions" / "QPlanSource.jsx").read_text(encoding="utf-8")
     assert "planSource" in q and "scratch" in q and "pantry" in q
 
