@@ -132,12 +132,12 @@ def test_frontend_wizard_and_preflight():
     src = _FLOW.read_text(encoding="utf-8")
     assert "QPlanSource" in src, "el step 0 del wizard desapareció"
     assert "formData.planSource === 'pantry'" in src
-    # [P1-PANTRY-BUILDER-FLOW · 2026-07-11] El pre-flight de factibilidad se MOVIÓ del
-    # submit del wizard a Pantry.jsx (modo constructor, feedback owner: "el usuario debe
-    # tocar la nevera antes de crear el plan"). El contrato completo del desvío vive en
-    # test_p1_pantry_builder_flow.py; aquí solo anclamos que el pre-flight sigue vivo.
-    _pantry = (_FLOW.parents[2] / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
-    assert "pantry-feasibility" in _pantry, "el pre-flight determinista desapareció de Pantry.jsx"
+    # [P1-PANTRY-WIZARD-STEP · 2026-07-11] El pre-flight de factibilidad vive en el
+    # paso final del wizard (QPantryBuilder, feedback owner: "mejor hacerlo directo en
+    # el formulario"). El contrato completo del paso vive en
+    # test_p1_pantry_wizard_step.py; aquí solo anclamos que el pre-flight sigue vivo.
+    _qpb = (_FLOW.parent / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+    assert "pantry-feasibility" in _qpb, "el pre-flight determinista desapareció de QPantryBuilder.jsx"
     q = (_FLOW.parent / "questions" / "QPlanSource.jsx").read_text(encoding="utf-8")
     assert "planSource" in q and "scratch" in q and "pantry" in q
 
