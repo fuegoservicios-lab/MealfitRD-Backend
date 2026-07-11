@@ -410,8 +410,11 @@ _VISION_PROMPT = (
     "Republica Dominicana. Unidades permitidas: unidad, lb, g, paquete, botella, "
     "lata, taza, funda. En 'quantity' pon el NUMERO DE ENVASES O PIEZAS que se ven "
     "(1 paquete, 2 latas, 6 huevos) — NUNCA el peso o los gramos impresos en el "
-    "empaque. Usa nombres genericos en espanol dominicano (ej: 'pechuga "
-    "de pollo', 'arroz blanco', 'platano verde', 'huevos', 'leche'). NO inventes "
+    "empaque. En 'name' usa nombres genericos en espanol dominicano (ej: 'pechuga "
+    "de pollo', 'arroz blanco', 'platano verde', 'huevos', 'leche') — la marca NO "
+    "va en el nombre. [P1-PANTRY-SCAN-BRAND] Si el empaque muestra una MARCA "
+    "legible (ej: Quaker, Rica, La Famosa), ponla en 'brand'; si no se lee o el "
+    "alimento no tiene empaque, pon null. NO inventes "
     "alimentos que no se vean claramente; si dudas, omitelo. Responde SOLO el JSON."
 )
 
@@ -452,6 +455,8 @@ _VISION_SCHEMA = {
                     "quantity": {"type": "number"},
                     "unit": {"type": "string"},
                     "confidence": {"type": "number"},
+                    # [P1-PANTRY-SCAN-BRAND] Marca legible del empaque (null si no hay).
+                    "brand": {"type": ["string", "null"]},
                 },
                 "required": ["name", "quantity", "unit", "confidence"],
             },
@@ -562,8 +567,14 @@ async def api_inventory_photo_scan(
             for it in items[:40]:
                 match = _match_catalog(it.get("name"), catalog)
                 _unit = str(it.get("unit") or "unidad")[:20]
+                # [P1-PANTRY-SCAN-BRAND] Marca leída del empaque — etiqueta el item al
+                # confirmar. NO toca user_brand_preferences: la preferencia "para
+                # siempre" es SOLO elección manual del usuario (un OCR equivocado no
+                # debe contaminar sus marcas preferidas globales).
+                _brand = (str(it.get("brand") or "").strip() or None)
                 out.append({
                     "detected_name": str(it.get("name") or "")[:80],
+                    "detected_brand": _brand[:40] if _brand else None,
                     "quantity": _sane_scan_qty(it.get("quantity"), _unit),
                     "unit": _unit,
                     "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
