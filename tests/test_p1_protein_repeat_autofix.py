@@ -164,12 +164,22 @@ def test_molido_form_and_no_repollo_false_positive(go):
 
 
 def test_huevo_protagonists_and_atun_now_fixed(go):
-    # huevo protagonista ×2 (revoltillo + tortilla de claras): decide el gate — sin cambio.
+    # [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] huevo protagonista ×2 (revoltillo + tortilla
+    # de claras) YA NO queda para el gate: la premisa "decide el gate" produjo 3 rechazos
+    # + entrega degradada en el primer plan modo-Nevera del owner (corr=9cc4317e). El pase
+    # (3) conserva el desayuno y transplanta la cabeza del otro plato. Contrato completo:
+    # test_p1_egg_intrinsic_dedup.py.
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Revoltillo de Huevo", ["2 huevos"]),
         _meal("Cena", "Tortilla de Claras", ["4 claras de huevo"]),
     ]}]
-    assert go._protein_repeat_autofix(days, {}, db=object()) == 0
+    assert go._protein_repeat_autofix(days, {}, db=object()) >= 1, (
+        "el pase intrínseco debe corregir revoltillo+tortilla same-day"
+    )
+    _d1 = days[0]["meals"]
+    assert "huevos" in " ".join(_d1[0]["ingredients"]).lower(), "keeper = desayuno"
+    assert "clara" not in " ".join(_d1[1]["ingredients"]).lower(), "cena reasignada"
+    assert not _d1[1]["name"].lower().startswith("tortilla"), "cabeza transplantada"
     # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] atún YA NO está excluido: la exclusión v1
     # ("lata de pollo en agua") se resolvió con compuestos largos-primero; el caso vivo
     # corr=c0a950c6 (no_ladder_for_label → rechazo de plan completo) exigió la escalera.

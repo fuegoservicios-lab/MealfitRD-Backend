@@ -9905,6 +9905,11 @@ EGG_POOL_MAX_DAYS = _env_int("MEALFIT_EGG_POOL_MAX_DAYS", 2, lambda v: 1 <= v <=
 # tiene ≥2 comidas-huevo tras el pase de relleno, reasigna las AÑADIDAS conservando 1 (prioridad
 # al intrínseco). Rollback: =false → vuelve al comportamiento "gate/retry decide".
 EGG_PROTAGONIST_SURPLUS_ENABLED = _env_bool("MEALFIT_EGG_PROTAGONIST_SURPLUS", True)
+# [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] Pase (3) del dedup same-day de huevo: cuando las
+# comidas-huevo del día son TODAS intrínsecas (revoltillo + tortilla el mismo día), conserva
+# una (prioriza desayuno) y reasigna las demás con transplante de cabeza del plato. Caso vivo
+# corr=9cc4317e (primer plan modo-Nevera del owner): 3 rechazos + entrega degradada evitables.
+EGG_INTRINSIC_DEDUP_ENABLED = _env_bool("MEALFIT_EGG_INTRINSIC_DEDUP", True)
 SURGICAL_REJECT_RETRY_ENABLED = _env_bool("MEALFIT_SURGICAL_REJECT_RETRY", True)
 # Presupuesto mínimo del pipeline para intentar la reparación (corrector ≤80s + assemble + re-review).
 SURGICAL_REJECT_MIN_BUDGET_S = _env_int("MEALFIT_SURGICAL_REJECT_MIN_BUDGET_S", 150, lambda v: 60 <= v <= 600)
@@ -22270,12 +22275,16 @@ def _swap_fat_dense_protein_to_lean_for_day(meals: list, target_fats: float, db,
         return 0
 
 
-def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None) -> str | None:
+def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None,
+                            prefer_label: str | None = None) -> str | None:
     """[P1-EGG-SAMEDAY-AUTOFIX · 2026-07-05] Reemplaza las líneas de huevo de UN meal por
     proteína slot-aware del catálogo (misma maquinaria del egg-cap: escalera merienda→yogurt,
     desayuno→queso, fuertes→pollo/queso; guards alergia/dislike + anti-colisión pollo same-day
     re-escaneada). Retorna el label usado o None (sin candidato seguro / sin línea de huevo).
-    Marca `_protein_autofix_applied="huevo->X"` (fidelity-discount lo reconoce)."""
+    Marca `_protein_autofix_applied="huevo->X"` (fidelity-discount lo reconoce).
+    [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] `prefer_label`: si el NOMBRE del plato ya menciona
+    una proteína de la escalera ("Tortilla de Queso Blanco"), probarla PRIMERO — así el
+    reemplazo coincide con el nombre y no nace una violación de name-honesty."""
     try:
         from constants import strip_accents as _sa_e2
         _fd = form_data or {}
@@ -22306,8 +22315,10 @@ def _replace_meal_egg_lines(day: dict, meal: dict, form_data=None, db=None) -> s
                     return False
             return True
 
-        _pick = next(((ln, lb) for ln, lb in _EGG_REPLACEMENT_LADDER[_ladder_key]
-                      if _ok(ln, lb)), None)
+        _ladder = list(_EGG_REPLACEMENT_LADDER[_ladder_key])
+        if prefer_label:
+            _ladder.sort(key=lambda t: 0 if t[1] == prefer_label else 1)
+        _pick = next(((ln, lb) for ln, lb in _ladder if _ok(ln, lb)), None)
         if _pick is None:
             return None
         _line, _label = _pick
@@ -22375,6 +22386,13 @@ _EGG_NAME_PHRASE_RX = _re.compile(
     _re.IGNORECASE)
 _EGG_LABEL_DISPLAY = {"pollo": "Pechuga de pollo", "queso": "Queso blanco",
                       "yogurt": "Yogurt griego"}
+# [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] Cabeza intrínseca REEMPLAZABLE del plato-huevo
+# (sin `huevos?`: esa cabeza se renombra por la vía de frase `_replace_egg_phrase_in_name`).
+# Un plato sin huevo no puede seguir llamándose tortilla/revoltillo → transplante de cabeza
+# a "Salteado" ("Tortilla de Queso Blanco con Espinacas" → "Salteado de Queso Blanco con
+# Espinacas", coherente es-DO).
+_EGG_INTRINSIC_HEAD_SUB_RX = _re.compile(
+    r"^\s*(?:revoltillo|revuelto|tortilla|omelet|omelette|frittata)\b", _re.IGNORECASE)
 
 
 def _replace_egg_phrase_in_name(name, new_disp):
@@ -22604,6 +22622,54 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                 logger.info(f"🍳 [P1-EGG-PROTAGONIST-SURPLUS] Día {_d.get('day', '?')}: "
                                             f"huevo-nombrado excedente → '{_lab}' "
                                             f"(conserva 1 comida-huevo, cierra el gate same-day)")
+                    # (3) [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] caso vivo corr=9cc4317e (primer
+                    # plan modo-Nevera del owner): revoltillo (desayuno) + tortilla de claras
+                    # (cena) el MISMO día — ambas INTRÍNSECAS → los pases (1)/(2) no aplican y
+                    # el gate rechazó los 3 intentos (entrega degradada). Con ≥2 comidas-huevo
+                    # restantes: conservar UNA (prioriza desayuno, hogar cultural del huevo) y
+                    # reasignar las demás con la maquinaria slot-aware + TRANSPLANTE DE CABEZA
+                    # ("Tortilla de X…" → "Salteado de X…"; sin huevo el plato no puede seguir
+                    # llamándose tortilla/revoltillo). `prefer_label` alinea el reemplazo con la
+                    # proteína ya nombrada en el plato (name-honesty por construcción).
+                    if EGG_INTRINSIC_DEDUP_ENABLED and fixes_left > 0:
+                        _egg_now3 = [m for m in meals if isinstance(m, dict)
+                                     and _alias_hit(m, "huevo") is not None]
+                        if len(_egg_now3) >= 2:
+                            _keeper3 = next(
+                                (m for m in _egg_now3
+                                 if "desayuno" in _sa_eh(str(m.get("meal", "")).lower())),
+                                _egg_now3[0])
+                            for _meal in _egg_now3:
+                                if _meal is _keeper3 or fixes_left <= 0:
+                                    continue
+                                _nl3 = _sa_eh(str(_meal.get("name", "")).lower())
+                                _prefer3 = next(
+                                    (lb for lb, disp in _EGG_LABEL_DISPLAY.items()
+                                     if _sa_eh(disp.split()[0].lower()) in _nl3 or lb in _nl3),
+                                    None)
+                                _lab3 = _replace_meal_egg_lines(_d, _meal, form_data, db,
+                                                                prefer_label=_prefer3)
+                                if _lab3 is None:
+                                    _log_autofix_impotent(_d.get("day", "?"), "huevo",
+                                                          "egg_intrinsic_no_candidate",
+                                                          _meal.get("name"))
+                                    continue
+                                _disp3 = _EGG_LABEL_DISPLAY.get(_lab3, _lab3)
+                                _old3 = str(_meal.get("name") or "")
+                                _new3 = _EGG_INTRINSIC_HEAD_SUB_RX.sub("Salteado", _old3, count=1)
+                                if _new3 == _old3:
+                                    _new3 = _replace_egg_phrase_in_name(_old3, _disp3) or _old3
+                                if _sa_eh(_disp3.lower().split()[0]) not in _sa_eh(_new3.lower()):
+                                    _new3 = _re.sub(r"^\s*Salteado\b", f"Salteado de {_disp3}",
+                                                    _new3, count=1)
+                                _meal["name"] = _re.sub(r"\s{2,}", " ", _new3).strip(" ,·-")
+                                fixes_left -= 1
+                                fixed += 1
+                                logger.info(
+                                    f"🍽️ [P1-EGG-INTRINSIC-DEDUP] Día {_d.get('day', '?')}: "
+                                    f"plato-huevo intrínseco excedente '{_old3[:48]}' → '{_lab3}' "
+                                    f"con transplante de cabeza (conserva 1 comida-huevo, "
+                                    f"cierra el gate same-day).")
                     continue
                 if _lbl not in _PROTEIN_REPEAT_SWAP_LADDER:
                     _log_autofix_impotent(_d.get("day", "?"), _lbl, "no_ladder_for_label")
