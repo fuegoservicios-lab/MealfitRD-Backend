@@ -10226,6 +10226,15 @@ VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT
 # los días de un chunk de 3. Rollback: MEALFIT_CROSS_DAY_DISH_GATE=false.
 VARIETY_GATE_CROSS_DAY_DISH = _env_bool("MEALFIT_CROSS_DAY_DISH_GATE", True)
 CROSS_DAY_DISH_GATE_MIN_DAYS = max(2, min(7, _env_int("MEALFIT_CROSS_DAY_DISH_MIN_DAYS", 3)))
+# [P1-CROSSDAY-METHOD-THRESHOLD · 2026-07-11] Umbral separado para MÉTODOS de cocción
+# (plancha/salteado/horneado/guiso): repetir el método con bases distintas es variedad
+# legítima es-DO; solo la monotonía extendida (≥5 días) gatea. Caso vivo: "'plancha' en
+# 3 días" rechazó el intento #1 de la renovación del owner con platos distintos.
+CROSS_DAY_METHOD_GATE_MIN_DAYS = max(3, min(10, _env_int("MEALFIT_CROSS_DAY_METHOD_MIN_DAYS", 5)))
+# Solo MODIFICADORES puros ("X a la plancha", "pollo horneado") — guiso/salteado son
+# CABEZAS de plato renombrables ("Guiso de Res" → "Estofado de Res" vía el
+# diversificador) y conservan el umbral 3 de plato-base.
+_PREP_METHOD_TOKENS = frozenset({"plancha", "horneado"})
 # [P1-CROSSDAY-DISH-DIVERSIFY · 2026-07-06] Diversificador determinista de plato-base cross-día:
 # cuando una CABEZA de plato renombrable ("Ensalada de X"/"Guiso de X"/"Puré de X"/"Wrap de X")
 # se repite en ≥ MIN_DAYS días, renombra la forma limpia "Base de X" → sinónimo HONESTO en los
@@ -16522,10 +16531,20 @@ def build_variety_report(plan: dict) -> dict:
     # [P2-CROSSDAY-VARIETY-GATE · 2026-07-02] el MISMO plato-base en ≥CROSS_DAY_DISH_GATE_MIN_DAYS días de la
     # ventana → alimenta el gate suave (_variety_repeat_gate_issues). Campo separado de cross_day_preps
     # (umbral 4, telemetría) para no cambiar la semántica del existente.
+    # [P1-CROSSDAY-METHOD-THRESHOLD · 2026-07-11] Los MÉTODOS de cocción (plancha/salteado/
+    # horneado/guiso) tienen umbral PROPIO más alto: "pollo a la plancha + res a la plancha +
+    # pescado a la plancha" en 3 días son platos DISTINTOS (la plancha es LA preparación
+    # saludable es-DO por excelencia) — el umbral 3 compartido rechazó el intento #1 de la
+    # renovación del owner (caso vivo 15:26). La monotonía real de método sigue gateada a
+    # ≥CROSS_DAY_METHOD_GATE_MIN_DAYS (default 5). Los platos-base (panqueques, mangú…)
+    # conservan el umbral 3.
     cross_day_dishes = {}
     try:
-        cross_day_dishes = {t: len(ds) for t, ds in prep_days.items()
-                            if len(ds) >= CROSS_DAY_DISH_GATE_MIN_DAYS}
+        cross_day_dishes = {
+            t: len(ds) for t, ds in prep_days.items()
+            if len(ds) >= (CROSS_DAY_METHOD_GATE_MIN_DAYS
+                           if t in _PREP_METHOD_TOKENS else CROSS_DAY_DISH_GATE_MIN_DAYS)
+        }
     except Exception:
         cross_day_dishes = {}
     # [P2-SWEETFISH-ADVISORY · 2026-07-02] (audit v3 creatividad GAP-6) dulce+pescado ("Tilapia con Mango")
@@ -30979,6 +30998,19 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # build_pantry_context). Si validáramos los platos nuevos contra la
         # despensa, fallarían por no estar en ella → retries → plan degradado.
         is_variety_regen = form_data.get("update_reason") == "variety"
+        # [P1-PANTRY-GUARD-EMPTY-FRIDGE · 2026-07-11] Nevera consultada y VACÍA es señal
+        # de verdad moderna: si el cliente mandó current_pantry_ingredients=[] EXPLÍCITO
+        # (renovación con fridge vacío), el fallback legacy current_shopping_list NO debe
+        # reactivar la validación estricta. Caso vivo (renovación owner 15:29-15:33):
+        # Nevera real = 0 filas y el guard rechazó 2 intentos con "TODO inexistente"
+        # contra una lista fantasma → entrega degradada con banda 1.00.
+        _fridge_checked_empty = ("current_pantry_ingredients" in form_data
+                                 and not form_data.get("current_pantry_ingredients"))
+        if _fridge_checked_empty and has_pantry and not (is_rotation or is_strict_required):
+            logger.info("🧊 [P1-PANTRY-GUARD-EMPTY-FRIDGE] Nevera consultada y vacía "
+                        "(current_pantry_ingredients=[]) — se ignora el fallback legacy "
+                        "current_shopping_list para la validación estricta.")
+            has_pantry = False
         needs_pantry_validation = (
             not pantry_advisory_only
             and not is_variety_regen
@@ -31000,6 +31032,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # de severity en should_retry). No mutamos form_data original; solo state.
                 if not is_rotation and not is_strict_required:
                     logger.info(f"🔄 [PANTRY GUARD] Rotación implícita detectada (pantry + previous_meals). Validando estricto.")
+                # [P1-PANTRY-GUARD-EMPTY-FRIDGE] Fuente observable: en el caso vivo la
+                # lista validada no era rastreable desde los logs (¿de dónde salió?).
+                _pg_src = ("current_pantry_ingredients" if form_data.get("current_pantry_ingredients")
+                           else "current_shopping_list")
+                logger.info(f"🧾 [PANTRY GUARD] fuente={_pg_src} items={len(clean_pantry)} "
+                            f"ej={clean_pantry[:3]!r} update_reason={form_data.get('update_reason')!r} "
+                            f"rotation={is_rotation} strict={is_strict_required}")
 
                 val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry, strict_quantities=False)
                 if val_result is not True:
@@ -37491,7 +37530,14 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
         try:
             
             # Check if this is a Pantry Rotation vs a Full Rejected Plan Regeneration
-            is_rotation = bool(actual_form_data.get("current_pantry_ingredients") or actual_form_data.get("current_shopping_list"))
+            # [P1-PANTRY-GUARD-EMPTY-FRIDGE · 2026-07-11] current_pantry_ingredients=[]
+            # EXPLÍCITO (nevera consultada y vacía) → NO es rotación: el fallback a la
+            # lista de compras del plan viejo contradice renovación variety-first.
+            _rot_fridge_empty = ("current_pantry_ingredients" in actual_form_data
+                                 and not actual_form_data.get("current_pantry_ingredients"))
+            is_rotation = (not _rot_fridge_empty) and bool(
+                actual_form_data.get("current_pantry_ingredients")
+                or actual_form_data.get("current_shopping_list"))
 
             # Si el plan anterior se generó en el mismo día, interpretamos como RECHAZO o ROTACIÓN
             # P0-NEW-1.h: DB sync. Despachado al executor.
