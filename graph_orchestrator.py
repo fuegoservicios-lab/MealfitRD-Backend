@@ -10279,6 +10279,15 @@ PORTION_CAP_PROTEIN_G = _env_int("MEALFIT_PORTION_CAP_PROTEIN_G", 300, validator
 # headroom kcal; sin headroom → drop de la línea (jamás dejar la comida sin ingredientes).
 PORTION_SHRINK_FLOOR_ENABLED = _env_bool("MEALFIT_PORTION_SHRINK_FLOOR", True)
 PORTION_SHRINK_FLOOR_G = _env_float("MEALFIT_PORTION_SHRINK_FLOOR_G", 15.0, validator=lambda v: 5.0 <= v <= 40.0)
+# [P1-RECIPE-VISIBLE-DEFECTS · 2026-07-11] Piso PROTAGONISTA: la proteína que da IDENTIDAD al
+# plato (su label aparece en el NOMBRE: "Hamburguesas de Res...", "Cerdo Molido con Casabe")
+# no puede quedar en porción de guarnición — capturas vivas del owner (plan 5424440f): "55 g de
+# carne de res molida" para "dos hamburguesas GRUESAS" y "15 g de cerdo molida" protagonista.
+# El piso genérico (15g) es correcto para queso rallado/toppings pero absurdo para el plato
+# principal. Bump hacia el piso hasta donde el headroom kcal del día permita (parcial si no
+# alcanza; JAMÁS drop — es la identidad del plato).
+PROTAGONIST_PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTAGONIST_PROTEIN_FLOOR", True)
+PROTAGONIST_PROTEIN_MIN_G = _env_float("MEALFIT_PROTAGONIST_PROTEIN_MIN_G", 75.0, validator=lambda v: 40.0 <= v <= 150.0)
 # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (SOLVER) Refinador GLOBAL entero del día: local search
 # en pasos de 5g sobre el estado POST-quantize que optimiza kcal+P+C+F conjuntos (rompe el
 # techo de la cadena secuencial solver→closers→quantize donde cada pasada des-hace a la
@@ -19220,6 +19229,87 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     return plan
 
 
+# [P1-RECIPE-VISIBLE-DEFECTS · 2026-07-11] Género del artículo para el resolver de
+# placeholders — cabezas femeninas comunes del catálogo; el resto usa "el".
+_ALT_PLACEHOLDER_FEM_HEADS = ("carne", "pechuga", "soya", "tilapia", "sardina", "sardinas",
+                              "habichuela", "habichuelas", "lenteja", "lentejas", "clara", "claras")
+_ALT_PLACEHOLDER_RX = _re.compile(
+    "(?:(?:el|la) )?ingrediente alternativo", _re.IGNORECASE)
+
+
+def resolve_alt_ingredient_placeholders(days, db=None) -> int:
+    """[P1-RECIPE-VISIBLE-DEFECTS · 2026-07-11] El sanitizador P2-PROTEIN-VIOLATION-SANITIZE
+    reemplaza menciones de proteína en los pasos por el placeholder literal 'ingrediente
+    alternativo' — y cuando pases posteriores (fidelity/inyección de omitidas) re-añaden la
+    proteína a ingredients, el usuario ve "mezcla la ingrediente alternativo con..." (capturas
+    vivas del owner, plan 5424440f: hamburguesas de res + cerdo con casabe) y el barrido de
+    paridad pega encima su línea mecánica. Este pase FINAL re-resuelve el placeholder con la
+    proteína REAL de ingredients (línea con label del gate y más gramos), con artículo por
+    género. Sin proteína resoluble → deja el placeholder (mejor genérico que inventar).
+    Idempotente, fail-safe, retorna reemplazos. tooltip-anchor: P1-RECIPE-VISIBLE-DEFECTS"""
+    try:
+        from constants import strip_accents as _sa_ap
+    except Exception:
+        def _sa_ap(x):
+            return str(x)
+    total = 0
+    try:
+        if db is None:
+            from nutrition_db import IngredientNutritionDB as _APDB
+            db = _APDB()
+        for _d in (days or []):
+            for meal in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list) or not any(
+                        isinstance(st, str) and "ingrediente alternativo" in st.lower() for st in rec):
+                    continue
+                # proteína real: línea de ingredients con label del gate y más gramos
+                best_name, best_g = None, -1.0
+                for ing in (meal.get("ingredients") or []):
+                    s_ing = str(ing)
+                    il = _sa_ap(s_ing.lower())
+                    if not _protein_gate_labels_in_text(il):
+                        continue
+                    m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)", il)
+                    g = float(m_g.group(1).replace(",", ".")) if m_g else 0.0
+                    nm_res = None
+                    try:
+                        mm = db.macros_from_ingredient_string(s_ing)
+                        nm_res = (mm or {}).get("name")
+                    except Exception:
+                        nm_res = None
+                    if not nm_res:
+                        nm_res = _re.sub(r"^\s*[\d¼½¾⅓⅔.,/\s]+(?:g|gr|gramos|unidad(?:es)?|taza(?:s)?|cdta(?:s)?|cda(?:s)?)?\s*(?:de\s+)?",
+                                         "", s_ing).strip() or None
+                    if nm_res and g >= best_g:
+                        best_name, best_g = str(nm_res).strip(), g
+                if not best_name:
+                    continue
+                _disp = best_name[0].lower() + best_name[1:] if best_name else best_name
+                _head = _sa_ap(_disp.lower()).split()[0] if _disp else ""
+                _art = "la" if _head in _ALT_PLACEHOLDER_FEM_HEADS else "el"
+
+                def _sub_ap(m, _a=_art, _n=_disp):
+                    return f"{_a} {_n}" if m.group(0).lower().startswith(("el ", "la ")) else _n
+
+                new_rec = []
+                for st in rec:
+                    if isinstance(st, str) and "ingrediente alternativo" in st.lower():
+                        st2 = _ALT_PLACEHOLDER_RX.sub(_sub_ap, st)
+                        if st2 != st:
+                            total += 1
+                        new_rec.append(st2)
+                    else:
+                        new_rec.append(st)
+                meal["recipe"] = new_rec
+        return total
+    except Exception as _ap_e:
+        logger.warning(f"[P1-RECIPE-VISIBLE-DEFECTS] resolver placeholder no-op: {type(_ap_e).__name__}: {_ap_e}")
+        return 0
+
+
 @_node_label("assembler")
 def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db, candidates,
                                           *, floor_pct=0.95, carb_tol=0.05) -> int:
@@ -19257,15 +19347,44 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
                 break
         if chosen is None:
             return 0
-        # comida destino: la de MÁS carbos (donde sobra carbo y cabe la proteína de forma natural)
-        target_meal = max(meals, key=lambda m: _meal_macro_num(m.get("carbs")), default=None)
-        if target_meal is None:
-            return 0
         try:
             from constants import strip_accents as _sa
         except Exception:
             def _sa(s):
                 return str(s)
+        # [P1-RECIPE-VISIBLE-DEFECTS · 2026-07-11] comida destino: la de MÁS carbos pero JAMÁS
+        # una dulce ni un slot ligero — este pase metía "75g de camarones cocido" en el snack
+        # de yogurt+lechosa+maní+miel (captura viva del owner, plan 5424440f): elegía por carbos
+        # sin el sweet/light-guard que el closer sí tiene. Sin destino salado-principal → no
+        # forzar el combo aberrante (la banda tolera el residuo).
+        _eligible_cs = [m for m in meals if isinstance(m, dict)
+                        and not _is_sweet_meal(m, _sa) and not _meal_slot_is_light(m, _sa)]
+        if not _eligible_cs:
+            _eligible_cs = [m for m in meals if isinstance(m, dict) and not _is_sweet_meal(m, _sa)]
+        if not _eligible_cs:
+            logger.info("🔄 [P3-CARB-TO-PROTEIN-SWAP] sin comida destino salada (todas dulces/ligeras) → skip")
+            return 0
+        target_meal = max(_eligible_cs, key=lambda m: _meal_macro_num(m.get("carbs")), default=None)
+        if target_meal is None:
+            return 0
+        # [P1-RECIPE-VISIBLE-DEFECTS] day-aware: no INTRODUCIR una proteína que otra comida del
+        # día ya usa (misma doctrina del closer P1-CLOSER-DAY-AWARE — este pase era un
+        # re-introductor invisible del gate same-day). Sin candidato limpio → legacy (piso gana).
+        try:
+            _day_lbls_cs = set()
+            for _om in meals:
+                if isinstance(_om, dict) and _om is not target_meal:
+                    _day_lbls_cs |= _protein_gate_labels_in_meal(_om)
+            _clean_cs = None
+            for _leanness2, _name2, info2 in (candidates or []):
+                if (info2.protein or 0) >= 18 and not (
+                        _protein_gate_labels_in_text(_sa(str(info2.name).lower())) & _day_lbls_cs):
+                    _clean_cs = info2
+                    break
+            if _clean_cs is not None:
+                chosen = _clean_cs
+        except Exception:
+            pass
         nm = str(chosen.name).lower()
         name_low = _sa(str(target_meal.get("name", "")).lower())
         no_cook = any(b in name_low for b in _NO_COOK_BLENDED)
@@ -23742,7 +23861,55 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                     if not m_g:
                         continue
                     cur_g = float(m_g.group(1).replace(",", "."))
-                    if cur_g <= 0 or cur_g >= floor_g:
+                    if cur_g <= 0:
+                        continue
+                    # [P1-RECIPE-VISIBLE-DEFECTS · 2026-07-11] piso PROTAGONISTA (ver knob arriba):
+                    # línea cuyo label de proteína aparece también en el NOMBRE del plato y
+                    # gramos < PROTAGONIST_PROTEIN_MIN_G → bump hacia el piso según headroom
+                    # (parcial si no alcanza; nunca drop). Corre ANTES del piso genérico.
+                    if (PROTAGONIST_PROTEIN_FLOOR_ENABLED
+                            and cur_g < float(PROTAGONIST_PROTEIN_MIN_G)):
+                        try:
+                            _lbls_line = _protein_gate_labels_in_text(il)
+                            _lbls_name = _protein_gate_labels_in_text(
+                                _sa(str(meal.get("name", "")).lower())) if _lbls_line else set()
+                        except Exception:
+                            _lbls_line, _lbls_name = set(), set()
+                        if _lbls_line & _lbls_name:
+                            _kcal_per_g = 0.0
+                            try:
+                                _mc_pf = db.macros_from_ingredient_string(s)
+                                if _mc_pf and cur_g > 0:
+                                    _kcal_per_g = float(_mc_pf.get("kcal") or 0) / cur_g
+                            except Exception:
+                                _kcal_per_g = 0.0
+                            _tgt_pf = float(PROTAGONIST_PROTEIN_MIN_G)
+                            if _headroom is not None and _kcal_per_g > 0:
+                                _afford_g = cur_g + max(0.0, _headroom) / _kcal_per_g
+                                _tgt_pf = min(_tgt_pf, _afford_g)
+                            if _tgt_pf - cur_g >= 10.0:
+                                try:
+                                    _f_pf = _tgt_pf / cur_g
+                                    _new_pf = _resc(s, _f_pf)
+                                except Exception:
+                                    _new_pf = None
+                                if _new_pf and _new_pf != s:
+                                    ings[idx] = _new_pf
+                                    if _lockstep and isinstance(raw[idx], str):
+                                        try:
+                                            raw[idx] = _resc(str(raw[idx]), _f_pf)
+                                        except Exception:
+                                            pass
+                                    if _headroom is not None:
+                                        _headroom -= _kcal_per_g * (_tgt_pf - cur_g)
+                                    touched += 1
+                                    _meal_touched = True
+                                    logger.info(
+                                        f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] proteína PROTAGONISTA "
+                                        f"{int(cur_g)}g→{int(_tgt_pf)}g en '{str(meal.get('name'))[:40]}' "
+                                        f"(piso de identidad del plato)")
+                            continue
+                    if cur_g >= floor_g:
                         continue
                     if _ingredient_macro_group(s, db) is None:
                         continue

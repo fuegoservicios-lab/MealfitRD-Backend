@@ -1011,6 +1011,15 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _rpb(_pd)
                 except Exception as _rpb_e:
                     logger.debug(f"[P1-PROTEIN-BAND-POST-FINALIZE] pre-INSERT no-op: {type(_rpb_e).__name__}: {_rpb_e}")
+                # [P1-RECIPE-VISIBLE-DEFECTS · 2026-07-11] re-resuelve el placeholder 'ingrediente
+                # alternativo' del sanitizador con la proteína REAL de ingredients (capturas vivas
+                # del owner: "mezcla la ingrediente alternativo con..."). Corre ANTES del sweep de
+                # paridad: con la mención restaurada, el sweep ya no pega su línea mecánica encima.
+                try:
+                    from graph_orchestrator import resolve_alt_ingredient_placeholders as _raip
+                    _raip(_pd.get("days"))
+                except Exception as _raip_e:
+                    logger.debug(f"[P1-RECIPE-VISIBLE-DEFECTS] pre-INSERT no-op: {type(_raip_e).__name__}: {_raip_e}")
                 # [P0-2-PROTEIN-STEP-PARITY · 2026-07-10] (recipe plausibility roadmap) sweep universal:
                 # cierra proteínas físicamente presentes en ingredients (añadidas por CUALQUIER closer
                 # aguas arriba, incl. el pase de proteína de arriba) que ningún paso menciona — evidencia

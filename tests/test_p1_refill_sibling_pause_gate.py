@@ -74,6 +74,5 @@ def test_pause_helper_default_still_notifies():
 # ---------------------------------------------------------------------------
 
 def test_marker_anchored_in_source():
+    # Durable: SOLO anchors en source (asertar app.py rota con cada bump posterior — 5ª mordida).
     assert _CRON.count("P1-REFILL-SIBLING-PAUSE-GATE") >= 3
-    app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-REFILL-SIBLING-PAUSE-GATE" in app_src
