@@ -72,7 +72,11 @@ def test_frontend_brand_select_batch_and_hidden_when_empty():
     assert ".length > 0 || item.brand) && (" in _QPB_SRC, (
         "sin marcas disponibles y sin marca puesta → NO se renderiza el select"
     )
-    assert 'Genérico (sin marca)' in _QPB_SRC
+    # [P1-BRAND-SELECT-UI] la etiqueta vive en el dropdown compartido.
+    _BS_SRC = (_BACKEND.parent / "frontend" / "src" / "components" / "pantry"
+               / "BrandSelect.jsx").read_text(encoding="utf-8")
+    assert 'Genérico (sin marca)' in _BS_SRC
+    assert "<BrandSelect" in _QPB_SRC
 
 
 def test_frontend_brand_choice_persists_global_preference():

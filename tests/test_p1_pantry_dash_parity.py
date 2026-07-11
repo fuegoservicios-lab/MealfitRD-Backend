@@ -94,7 +94,8 @@ def test_brand_select_in_both_layouts_hidden_when_empty():
         "desktop Y móvil: sin marcas disponibles y sin marca puesta → sin selector "
         "(un menú con solo Genérico confunde — mismo contrato que el paso 21)"
     )
-    assert _PANTRY_SRC.count("changeItemBrand(item, e.target.value)") >= 2
+    # [P1-BRAND-SELECT-UI] el select nativo se reemplazó por el dropdown propio.
+    assert _PANTRY_SRC.count("onSelect={(b) => changeItemBrand(item, b)}") >= 2
 
 
 def test_marker_anchored_in_source():

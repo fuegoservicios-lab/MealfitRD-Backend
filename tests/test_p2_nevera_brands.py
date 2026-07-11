@@ -80,9 +80,11 @@ def test_inventory_select_exposes_brand():
 def test_pantry_shows_brand_chip_both_layouts():
     pantry = _read(_FRONTEND, "src", "pages", "Pantry.jsx")
     assert "P2-NEVERA-BRANDS" in pantry
-    # [P1-PANTRY-DASH-PARITY · 2026-07-11] el chip pasó a ser EDITABLE (select
-    # disfrazado, title "Marca: X — tocar para cambiar") en ambos layouts.
-    assert pantry.count("tocar para cambiar") >= 2, "chip en renderRow (desktop) Y renderMobileCard"
+    # [P1-BRAND-SELECT-UI · 2026-07-11] el chip es un dropdown propio (BrandSelect,
+    # el popup nativo no es estilable) en ambos layouts; el title vive en el componente.
+    assert pantry.count("<BrandSelect") >= 2, "chip en renderRow (desktop) Y renderMobileCard"
+    brand_select = _read(_FRONTEND, "src", "components", "pantry", "BrandSelect.jsx")
+    assert "tocar para cambiar" in brand_select
     assert pantry.count("if (!_brands.length && !item.brand) return null;") >= 2, \
         "sin marca Y sin marcas disponibles → sin chip"
     # [polish 2026-07-06] identidad visual propia: índigo+Tag (≠ chip de unidad
