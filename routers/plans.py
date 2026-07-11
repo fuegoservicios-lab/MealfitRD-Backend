@@ -14089,6 +14089,16 @@ _PANTRY_MASS_TO_G = {"g": 1.0, "gr": 1.0, "gramos": 1.0, "kg": 1000.0, "lb": 453
 _PANTRY_FEAS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 
+def _pantry_mode_min_items() -> int:
+    """[P1-PANTRY-MIN-ITEMS · 2026-07-11] Piso de alimentos para el modo "Desde mi
+    Nevera" (paso QPantryBuilder del wizard). Con 1-2 items el plan resultante es
+    indistinguible de la generación libre — la queja original del owner con el modo.
+    5 ≈ mínimo para que el Zero-Waste tenga material real (proteína + carbo + 2-3
+    complementos). Lectura lazy (no module-level) para que el knob sea ajustable
+    por env sin redeploy de código."""
+    return _env_int("MEALFIT_PANTRY_MODE_MIN_ITEMS", 5, validator=lambda v: 1 <= v <= 50)
+
+
 def _pantry_item_grams(qty, unit, master_row):
     """Gramos estimados de un item de inventario. Fail-open a 0 (item no cuenta)."""
     try:
@@ -14200,6 +14210,10 @@ def _pantry_feasibility_report(user_id, days, kcal_day, protein_day):
         "days_requested": days,
         "days_supported": days_supported,
         "pantry_items_counted": matched,
+        # [P1-PANTRY-MIN-ITEMS · 2026-07-11] Piso de items del modo "Desde mi Nevera"
+        # (feedback owner: con 1 alimento el plan es indistinguible del libre). SSOT
+        # server-side: el wizard (QPantryBuilder) deshabilita el CTA hasta alcanzarlo.
+        "min_items": _pantry_mode_min_items(),
         "kcal_available": int(kcal_avail),
         "kcal_needed": int(kcal_needed),
         "protein_available_g": int(protein_avail),

@@ -108,9 +108,11 @@ def test_qpantrybuilder_feasibility_is_debounced():
 
 
 def test_qpantrybuilder_cta_disabled_when_empty():
-    assert "disabled={isSubmitting || count === 0}" in _QPB_SRC, (
-        "Nevera vacía → CTA deshabilitado (queja original del owner: el modo con "
-        "Nevera vacía era indistinguible del plan libre)"
+    # [P1-PANTRY-MIN-ITEMS] el gate evolucionó de count===0 a piso configurable —
+    # contrato completo en test_p1_pantry_min_items.py.
+    assert "disabled={isSubmitting || belowMin}" in _QPB_SRC, (
+        "Nevera bajo el piso → CTA deshabilitado (queja original del owner: el modo "
+        "con Nevera casi vacía era indistinguible del plan libre)"
     )
     assert "Crear mi plan con esta Nevera" in _QPB_SRC
 
