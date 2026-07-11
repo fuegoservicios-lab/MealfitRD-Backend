@@ -48,9 +48,13 @@ def _meal(slot, name, ings, steps=None):
             "ingredients_raw": list(ings), "recipe": list(steps or ["Cocina."])}
 
 
-def test_no_ladder_label_logs_impotence(go, caplog):
-    # atún sin entry en _PROTEIN_REPEAT_SWAP_LADDER a propósito (comentario en el código fuente) —
-    # 2 comidas con atún el mismo día deben loguear impotencia (reason=no_ladder_for_label).
+def test_no_ladder_label_logs_impotence(go, caplog, monkeypatch):
+    # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] atún YA tiene escalera (caso vivo corr=c0a950c6:
+    # no_ladder_for_label → rechazo de plan completo). Para probar el LOG de impotencia
+    # simulamos un label sin escalera quitándosela al atún vía monkeypatch — el path
+    # no_ladder_for_label sigue vivo como backstop para labels futuros.
+    _ladder_sin_atun = {k: v for k, v in go._PROTEIN_REPEAT_SWAP_LADDER.items() if k != "atun"}
+    monkeypatch.setattr(go, "_PROTEIN_REPEAT_SWAP_LADDER", _ladder_sin_atun)
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Ensalada de Atún", ["150 g de atún en agua", "1 tomate"]),
         _meal("Cena", "Wrap de Atún", ["120 g de atún en agua", "1 tortilla integral"]),
@@ -79,8 +83,12 @@ def test_ladder_exhausted_logs_impotence(go, caplog):
     assert "pescado" in caplog.text.lower()
 
 
-def test_impotence_never_changes_outcome(go, caplog):
-    """El log es puramente observacional: el meal NO se toca cuando no hay target seguro."""
+def test_impotence_never_changes_outcome(go, caplog, monkeypatch):
+    """El log es puramente observacional: el meal NO se toca cuando no hay target seguro.
+    [P2-PROTEIN-LADDER-GAPS · 2026-07-11] atún YA tiene escalera → se simula el label
+    sin escalera vía monkeypatch (el contrato observacional del log no cambia)."""
+    _ladder_sin_atun = {k: v for k, v in go._PROTEIN_REPEAT_SWAP_LADDER.items() if k != "atun"}
+    monkeypatch.setattr(go, "_PROTEIN_REPEAT_SWAP_LADDER", _ladder_sin_atun)
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Ensalada de Atún", ["150 g de atún en agua"]),
         _meal("Cena", "Wrap de Atún", ["120 g de atún en agua"]),

@@ -22104,8 +22104,16 @@ _PROTEIN_REPEAT_SWAP_LADDER = {
     "cerdo": ("pollo", "pavo", "res"),
     "res": ("cerdo", "pollo", "pavo"),
     "pescado": ("pollo", "pavo"),
-    # atún sin entry a propósito: el swap textual atún→carne produce "lata de pollo en agua"
-    # (incoherente); atún×2 same-day → gate como backstop (raro; el gate degrada a advisory).
+    # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] atún/mariscos SÍ tienen escalera: la exclusión
+    # original ("el swap textual produce 'lata de pollo en agua'") se resuelve con los
+    # COMPUESTOS largos-primero de _PROTEIN_SOURCE_COMPOUNDS (la frase enlatada completa se
+    # reescribe entera), y su premisa "el gate degrada a advisory" ya no es cierta en
+    # intentos no-finales (rechaza HIGH). Caso vivo corr=c0a950c6 (2026-07-11 08:23):
+    # 'atun' repetido Día 2 → no_ladder_for_label → rechazo de plan completo evitable.
+    "atun": ("pollo", "pavo", "res"),
+    "camarones": ("pescado", "pollo", "res"),
+    "pulpo": ("pescado", "pollo"),
+    "cangrejo": ("pescado", "pollo"),
 }
 # [P1-PROTEIN-REPEAT-FALLBACK-NONGATED · 2026-07-06] Cuando la escalera de CARNES se agota (todas
 # presentes ese día O bloqueadas por dislikes/alergias), cae a proteínas NO-gated: legumbres/queso
@@ -22139,6 +22147,12 @@ _PROTEIN_TARGET_FORMS = {
 # presupuesto, que emite exactamente "Filete de pescado blanco".
 _PROTEIN_SOURCE_COMPOUNDS = {
     "pescado": ("filete de pescado blanco", "pescado blanco", "filete de pescado"),
+    # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] la forma enlatada/compuesta se reescribe ENTERA
+    # (largo-primero) — sin esto el token suelto producía "lata de pollo en agua".
+    "atun": ("atún en agua", "atun en agua", "atún en lata", "atun en lata",
+             "lata de atún", "lata de atun", "atún enlatado", "atun enlatado",
+             "lomo de atún", "lomo de atun"),
+    "camarones": ("camarones cocidos", "camarones frescos", "camarones grandes"),
 }
 # [P1-REWRITE-DORADO-HOMONYM · 2026-07-06] Aliases EXCLUIDOS de la REESCRITURA de texto
 # (la DETECCIÓN de repetición los sigue usando): "dorado" es pez en

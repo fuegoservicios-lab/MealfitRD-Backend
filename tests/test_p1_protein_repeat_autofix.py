@@ -163,17 +163,24 @@ def test_molido_form_and_no_repollo_false_positive(go):
     assert "lomo de cerdo" in " ".join(dinner["ingredients"]).lower()
 
 
-def test_huevo_and_atun_excluded_v1(go):
+def test_huevo_protagonists_and_atun_now_fixed(go):
+    # huevo protagonista ×2 (revoltillo + tortilla de claras): decide el gate — sin cambio.
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Revoltillo de Huevo", ["2 huevos"]),
         _meal("Cena", "Tortilla de Claras", ["4 claras de huevo"]),
     ]}]
     assert go._protein_repeat_autofix(days, {}, db=object()) == 0
+    # [P2-PROTEIN-LADDER-GAPS · 2026-07-11] atún YA NO está excluido: la exclusión v1
+    # ("lata de pollo en agua") se resolvió con compuestos largos-primero; el caso vivo
+    # corr=c0a950c6 (no_ladder_for_label → rechazo de plan completo) exigió la escalera.
     days2 = [{"day": 1, "meals": [
         _meal("Almuerzo", "Ensalada de Atún", ["1 lata de atún en agua"]),
         _meal("Cena", "Wrap de Atún", ["1 lata de atún en agua"]),
     ]}]
-    assert go._protein_repeat_autofix(days2, {}, db=object()) == 0
+    fixed = go._protein_repeat_autofix(days2, {}, db=object())
+    assert fixed >= 1, "atún ×2 same-day debe corregirse (escalera + compounds)"
+    _blob = " ".join(str(x) for m in days2[0]["meals"] for x in (m["ingredients"] + [m["name"]]))
+    assert "lata de pollo" not in _blob.lower(), "el compound reescribe la frase enlatada ENTERA"
 
 
 def test_high_mealcount_relax_mirrors_gate(go):
