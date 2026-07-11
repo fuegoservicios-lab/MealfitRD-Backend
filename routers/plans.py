@@ -14089,6 +14089,13 @@ _PANTRY_MASS_TO_G = {"g": 1.0, "gr": 1.0, "gramos": 1.0, "kg": 1000.0, "lb": 453
 _PANTRY_FEAS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 
+def _photo_scan_enabled() -> bool:
+    """[P1-PANTRY-SCAN-V0 · 2026-07-11] True si hay provider de visión activo
+    (knob MEALFIT_VISION_PROVIDER != 'off'). SSOT del knob: routers/user_data.py."""
+    from routers.user_data import vision_scan_provider
+    return vision_scan_provider() != "off"
+
+
 def _pantry_mode_min_items() -> int:
     """[P1-PANTRY-MIN-ITEMS · 2026-07-11] Piso de alimentos para el modo "Desde mi
     Nevera" (paso QPantryBuilder del wizard). Con 1-2 items el plan resultante es
@@ -14214,6 +14221,9 @@ def _pantry_feasibility_report(user_id, days, kcal_day, protein_day):
         # (feedback owner: con 1 alimento el plan es indistinguible del libre). SSOT
         # server-side: el wizard (QPantryBuilder) deshabilita el CTA hasta alcanzarlo.
         "min_items": _pantry_mode_min_items(),
+        # [P1-PANTRY-SCAN-V0 · 2026-07-11] Feature flag del escáner por foto — el
+        # wizard muestra el botón solo si hay provider de visión configurado.
+        "photo_scan_enabled": _photo_scan_enabled(),
         "kcal_available": int(kcal_avail),
         "kcal_needed": int(kcal_needed),
         "protein_available_g": int(protein_avail),

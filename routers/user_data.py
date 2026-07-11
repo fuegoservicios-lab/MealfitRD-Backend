@@ -229,6 +229,70 @@ async def api_increment_inventory(
     return {"quantity": rows[0]["quantity"]}
 
 
+class InventoryUnitBody(BaseModel):
+    unit: str
+
+
+@router.patch("/inventory/items/{item_id}/unit")
+async def api_change_inventory_unit(
+    item_id: int,
+    body: InventoryUnitBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-PANTRY-SCAN-V0 · 2026-07-11] Cambiar el envase/unidad de un item
+    (feedback owner: "no quiero una lata, quiero un paquete de habichuelas").
+    Atómico en UN statement (CTEs): si ya existe otro row del usuario con el
+    mismo nombre y la unidad destino (UNIQUE user+nombre+unidad), MERGEA las
+    cantidades en el destino y borra el origen; si no, actualiza la unidad in
+    place. I2: todo filtra user_id."""
+    uid = _require_user(verified_user_id)
+    new_unit = (body.unit or "").strip()
+    if not new_unit or len(new_unit) > 40:
+        raise HTTPException(status_code=422, detail="Unidad inválida.")
+
+    def _change():
+        from db import execute_sql_write
+        return execute_sql_write(
+            """
+            WITH src AS (
+                SELECT id, user_id, ingredient_name, quantity
+                FROM user_inventory WHERE id = %s AND user_id = %s
+            ), dup AS (
+                SELECT ui.id AS dup_id, src.id AS src_id, src.quantity AS src_qty
+                FROM user_inventory ui
+                JOIN src ON ui.user_id = src.user_id
+                    AND ui.ingredient_name = src.ingredient_name
+                    AND ui.unit = %s AND ui.id <> src.id
+            ), merged AS (
+                UPDATE user_inventory SET quantity = user_inventory.quantity + dup.src_qty,
+                    updated_at = NOW()
+                FROM dup WHERE user_inventory.id = dup.dup_id
+                RETURNING dup.src_id
+            ), removed AS (
+                DELETE FROM user_inventory
+                WHERE id IN (SELECT src_id FROM merged)
+                RETURNING id
+            ), switched AS (
+                UPDATE user_inventory SET unit = %s, updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+                    AND NOT EXISTS (SELECT 1 FROM dup)
+                RETURNING id
+            )
+            SELECT (SELECT COUNT(*) FROM removed) AS merged_count,
+                   (SELECT COUNT(*) FROM switched) AS switched_count,
+                   (SELECT COUNT(*) FROM src) AS found
+            """,
+            (item_id, uid, new_unit, new_unit, item_id, uid),
+            returning=True,
+        )
+
+    rows = await asyncio.to_thread(_change)
+    r = (rows or [{}])[0]
+    if not r.get("found"):
+        raise HTTPException(status_code=404, detail="Item no encontrado.")
+    return {"merged": bool(r.get("merged_count")), "unit": new_unit}
+
+
 @router.delete("/inventory/items/{item_id}")
 async def api_delete_inventory_item(
     item_id: int,
@@ -270,6 +334,183 @@ async def api_delete_all_inventory(
 
     deleted = await asyncio.to_thread(_del_all)
     return {"deleted_count": deleted}
+
+
+# ---------------------------------------------------------------------------
+# [P1-PANTRY-SCAN-V0 · 2026-07-11] Escáner de nevera por foto (vision → items)
+# ---------------------------------------------------------------------------
+# Feature del owner: botón "Escanear mi nevera" — foto de la nevera física →
+# modelo con visión detecta alimentos + cantidades → match contra el catálogo
+# verificado → el usuario CONFIRMA la lista antes de que toque user_inventory
+# (el endpoint NO escribe nada; los adds van por POST /inventory/items).
+#
+# Provider via knob (default OFF: en prod se enciende cuando hay un modelo con
+# visión alcanzable — DeepSeek no tiene visión; el trial usa Ollama gemma local
+# vía túnel SSH reverso laptop→VPS en 127.0.0.1:11434):
+#   MEALFIT_VISION_PROVIDER = off | ollama
+#   MEALFIT_OLLAMA_BASE_URL (default http://127.0.0.1:11434)
+#   MEALFIT_VISION_MODEL    (default gemma4:12b)
+#   MEALFIT_VISION_TIMEOUT_S (default 240, clamp [30, 600])
+# Single-flight: el modelo local no soporta concurrencia (4GB VRAM) — segundo
+# scan simultáneo recibe 409 "escáner ocupado" en vez de encolar minutos.
+
+_VISION_SCAN_LOCK = None  # lazy threading.Lock (evita import module-level innecesario)
+
+_VISION_PROMPT = (
+    "Eres un asistente de nutricion dominicano. Mira la foto de una nevera/despensa "
+    "y lista TODOS los alimentos visibles e identificables con certeza razonable. "
+    "Para cada uno estima la cantidad visible y su unidad de compra tipica en "
+    "Republica Dominicana. Unidades permitidas: unidad, lb, g, paquete, botella, "
+    "lata, taza, funda. Usa nombres genericos en espanol dominicano (ej: 'pechuga "
+    "de pollo', 'arroz blanco', 'platano verde', 'huevos', 'leche'). NO inventes "
+    "alimentos que no se vean claramente; si dudas, omitelo. Responde SOLO el JSON."
+)
+
+_VISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["name", "quantity", "unit", "confidence"],
+            },
+        }
+    },
+    "required": ["items"],
+}
+
+
+def vision_scan_provider() -> str:
+    """Provider activo del escáner ('off' apaga el feature — el frontend oculta
+    el botón vía `photo_scan_enabled` en /pantry-feasibility)."""
+    return (os.environ.get("MEALFIT_VISION_PROVIDER") or "off").strip().lower()
+
+
+def _vision_timeout_s() -> int:
+    try:
+        v = int(os.environ.get("MEALFIT_VISION_TIMEOUT_S", "240"))
+    except ValueError:
+        return 240
+    return min(600, max(30, v))
+
+
+def _norm_food_name(s: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFD", str(s or "").lower())
+    return "".join(c for c in s if not unicodedata.combining(c)).strip()
+
+
+def _match_catalog(detected_name: str, catalog: list) -> Optional[Dict[str, Any]]:
+    """Match laxo contra master_ingredients: exacto/contención normalizada,
+    luego overlap de tokens (≥1). Devuelve row del catálogo o None."""
+    d = _norm_food_name(detected_name)
+    if not d:
+        return None
+    for row in catalog:
+        n = row["_norm"]
+        if d == n or d in n or n in d:
+            return row
+    d_tokens = set(d.split())
+    best, best_overlap = None, 0
+    for row in catalog:
+        overlap = len(d_tokens & set(row["_norm"].split()))
+        if overlap > best_overlap:
+            best_overlap, best = overlap, row
+    return best if best_overlap >= 1 else None
+
+
+def _ollama_vision_scan(image_b64: str) -> list:
+    import httpx
+    base = (os.environ.get("MEALFIT_OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
+    model = os.environ.get("MEALFIT_VISION_MODEL") or "gemma4:12b"
+    body = {
+        "model": model,
+        "stream": False,
+        # gemma4: thinking ON por default → content vacío sin think=false
+        "think": False,
+        "format": _VISION_SCHEMA,
+        "options": {"temperature": 0.1, "num_ctx": 8192},
+        "messages": [{"role": "user", "content": _VISION_PROMPT, "images": [image_b64]}],
+    }
+    import json as _json
+    resp = httpx.post(f"{base}/api/chat", json=body, timeout=_vision_timeout_s())
+    resp.raise_for_status()
+    content = ((resp.json().get("message") or {}).get("content")) or "{}"
+    data = _json.loads(content)
+    return data.get("items") or []
+
+
+@router.post("/inventory/photo-scan")
+async def api_inventory_photo_scan(
+    body: Dict[str, Any] = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Foto (base64) → items detectados con match al catálogo. READ-ONLY:
+    no escribe user_inventory — el cliente confirma y agrega vía /inventory/items."""
+    _require_user(verified_user_id)
+
+    provider = vision_scan_provider()
+    if provider == "off":
+        raise HTTPException(status_code=503, detail="El escáner de nevera no está disponible por ahora.")
+    if provider != "ollama":
+        raise HTTPException(status_code=503, detail=f"Provider de visión desconocido: {provider}")
+
+    image_b64 = str(body.get("image_b64") or "")
+    # ~6MB de imagen (8MB b64). El cliente ya reescala a ≤1024px.
+    if not image_b64 or len(image_b64) > 8_000_000:
+        raise HTTPException(status_code=422, detail="Imagen ausente o demasiado grande.")
+
+    global _VISION_SCAN_LOCK
+    if _VISION_SCAN_LOCK is None:
+        import threading
+        _VISION_SCAN_LOCK = threading.Lock()
+    if not _VISION_SCAN_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="El escáner está procesando otra foto — intenta en un momento.")
+
+    try:
+        def _scan_and_match():
+            from db import execute_sql_query
+            items = _ollama_vision_scan(image_b64)
+            catalog = execute_sql_query(
+                "SELECT id::text AS id, name, market_container, default_unit FROM master_ingredients",
+                fetch_all=True,
+            ) or []
+            for row in catalog:
+                row["_norm"] = _norm_food_name(row["name"])
+            out = []
+            for it in items[:40]:
+                match = _match_catalog(it.get("name"), catalog)
+                out.append({
+                    "detected_name": str(it.get("name") or "")[:80],
+                    "quantity": max(0.1, min(99.0, float(it.get("quantity") or 1))),
+                    "unit": str(it.get("unit") or "unidad")[:20],
+                    "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
+                    "master_ingredient_id": match["id"] if match else None,
+                    "catalog_name": match["name"] if match else None,
+                    "catalog_unit": (match.get("market_container") or match.get("default_unit")) if match else None,
+                })
+            return out
+
+        results = await asyncio.to_thread(_scan_and_match)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-SCAN-V0] photo-scan falló ({type(e).__name__}): {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="No pudimos analizar la foto (el modelo de visión no respondió). Intenta de nuevo.",
+        )
+    finally:
+        _VISION_SCAN_LOCK.release()
+
+    return {"items": results, "provider": provider}
 
 
 @router.get("/catalog")
