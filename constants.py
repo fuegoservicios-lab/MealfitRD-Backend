@@ -401,7 +401,10 @@ CHUNK_STALE_MAX_PAUSE_HOURS = max(
 # [P0-1] Deeplink que se envía en push notifications cuando pedimos al usuario que refresque
 # su nevera. Default apunta a la sección de inventario; configurable para apps mobile que
 # usen scheme propio (e.g., "mealfit://nevera/refresh").
-CHUNK_STALE_PANTRY_DEEPLINK = os.environ.get("CHUNK_STALE_PANTRY_DEEPLINK", "/mi-nevera")
+# [P1-PANTRY-ROUTE-ALIAS · 2026-07-11] Default corregido "/mi-nevera" → "/dashboard/pantry":
+# la ruta "/mi-nevera" nunca existió en el SPA (catch-all 404). El frontend además tiene
+# alias de redirect /mi-nevera → /dashboard/pantry para pushes viejas ya entregadas.
+CHUNK_STALE_PANTRY_DEEPLINK = os.environ.get("CHUNK_STALE_PANTRY_DEEPLINK", "/dashboard/pantry")
 # [P1-4] Deeplink para zero-log pause. Apunta al diario donde el banner expone
 # el toggle "Continuar sin registrar" (PUT /api/diary/preferences/logging) que activa
 # auto_proxy y desbloquea los chunks pausados sin requerir log explícito del usuario.

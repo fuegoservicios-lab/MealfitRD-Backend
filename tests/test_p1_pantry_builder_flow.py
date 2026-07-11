@@ -40,7 +40,8 @@ def test_flow_detours_to_pantry_before_generating():
     i_branch = _FLOW_SRC.find("formData.planSource === 'pantry'")
     assert i_branch > 0, "la rama pantry del submit desapareció"
     i_flag = _FLOW_SRC.find("sessionStorage.setItem('mealfit_pantry_plan_flow'", i_branch)
-    i_nav_pantry = _FLOW_SRC.find("navigate('/pantry')", i_branch)
+    # [P1-PANTRY-ROUTE-ALIAS] ruta canónica: '/pantry' a secas era el catch-all 404.
+    i_nav_pantry = _FLOW_SRC.find("navigate('/dashboard/pantry')", i_branch)
     i_nav_plan = _FLOW_SRC.find("navigate('/plan')", i_branch)
     assert i_flag > 0, "la rama pantry debe setear el flag del modo constructor"
     assert i_nav_pantry > 0, "la rama pantry debe navegar a /pantry"

@@ -12870,7 +12870,11 @@ def _pantry_covers_missing(missing_ingredients: list, current_pantry: list) -> t
     return (len(still_missing) == 0), still_missing
 
 
-def _dispatch_pantry_nudge(user_id: str, title: str = None, body: str = None, url: str = "/pantry") -> bool:
+# [P1-PANTRY-ROUTE-ALIAS · 2026-07-11] url default = ruta canónica /dashboard/pantry.
+# El default previo "/pantry" abría el catch-all 404 del SPA al tocar la push (la ruta
+# real de la Nevera es /dashboard/pantry; el frontend además tiene aliases de redirect
+# para pushes viejas ya entregadas con la URL rota).
+def _dispatch_pantry_nudge(user_id: str, title: str = None, body: str = None, url: str = "/dashboard/pantry") -> bool:
     """[P2-PANTRY-NUDGE-THROTTLE · 2026-07-11] Canal ÚNICO para toda notificación de la
     clase "nevera vacía / repón tu nevera". Feedback vivo del owner: le llegaba la misma
     idea desde 6+ emisores distintos (pausa per-chunk, recordatorios per-chunk, validación
