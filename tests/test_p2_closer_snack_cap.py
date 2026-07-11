@@ -32,7 +32,9 @@ def test_cap_applied_on_light_meals_inside_closer():
     i_cap = body.index("int(CLOSER_SNACK_MAX_ADD_G)")  # el CÓDIGO (el comment nombra el knob antes)
     win = body[max(0, i_cap - 600):i_cap]
     assert "if light:" in win, "el cap aplica SOLO a meriendas/platos ligeros (light ya computado)"
-    assert "grams = min(grams, max_add_g)" in body[:i_cap], "el cap corre DESPUÉS del cap general"
+    assert "grams = min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G))" in body[:i_cap], (
+        "el cap corre DESPUÉS del cap general (que desde P1-RECIPE-STEP-SANITIZE incluye el techo global de bolt)"
+    )
 
 
 # ───────────────────── name specificity (humanize) ─────────────────────

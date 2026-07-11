@@ -10318,6 +10318,11 @@ PROTEIN_CLOSER_SCALE_FIRST = _env_bool("MEALFIT_PROTEIN_CLOSER_SCALE_FIRST", Tru
 # instruyendo cocinarlo a la plancha — un disparate culinario que cierra ~2-3g de proteína. Bajo este piso,
 # el add se SALTA (la banda per-macro tolera ese residuo; el piso se cubre donde haya espacio real).
 CLOSER_COOKABLE_MIN_G = _env_int("MEALFIT_CLOSER_COOKABLE_MIN_G", 40, validator=lambda v: 10 <= v <= 120)
+# [P1-RECIPE-STEP-SANITIZE · 2026-07-11] Techo GLOBAL de un solo bolt del closer de proteína
+# (medido en vivo: "275g de atún" pegado a una comida — macro-perfecto, plato irreal). Un añadido
+# jamás supera una porción completa servible; el déficit restante lo cubren las demás comidas /
+# la banda. min() con el max_add_g del caller (el más restrictivo gana).
+CLOSER_BOLT_MAX_ADD_G = _env_int("MEALFIT_CLOSER_BOLT_MAX_ADD_G", 180, validator=lambda v: 60 <= v <= 400)
 # [P1-PORTION-REALISM-CAP · 2026-07-01] (review de recetas en vivo, batch P1-DISH-REALISM-BATCH) Techos de
 # porción REALISTA per-ingrediente post-sizing: el solver/closers escalan un ingrediente hasta su clamp
 # matemático sin noción de plato servible → "505g de calamar", "1.75 taza de ají morrón" para 1 huevo,
@@ -11806,10 +11811,102 @@ def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
             if s2 != s:
                 s = _re.sub(r"\s{2,}", " ", s2).strip()
                 changed = True
+        # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] Colapso de TARTAMUDEO multi-token: los spans
+        # de idempotencia protegen ocurrencias PRE-existentes del target, no las creadas en
+        # esta misma pasada por OTRO patrón de la lista ("claras"→X deja "de huevo" fuera del
+        # span y el patrón "huevo" lo convierte después) → "Batir 6 pechuga de pollo de
+        # pechuga de pollo con pechuga de pollo entero" (plan vivo del owner 2026-07-11).
+        # "X (de|del|de la|con|y) X" repetido colapsa a UNA mención (conector incluido);
+        # el modificador de cola sobrevive ("... con X entero" → "... X entero").
+        for _nd_st in {p[2] for p in pats}:
+            _esc_st = _re.escape(_nd_st)
+            _pat_st = _re.compile(
+                r"\b" + _esc_st + r"(?:\s+(?:de(?:\s+l[ao]s?)?|del|con|y)\s+" + _esc_st + r")+\b",
+                _re.IGNORECASE)
+
+            def _rep_st(m, _nd=_nd_st):
+                return m.group(0)[0] + _nd[1:]  # preserva mayúscula inicial del texto real
+
+            s3 = _pat_st.sub(_rep_st, s)
+            if s3 != s:
+                s = _re.sub(r"\s{2,}", " ", s3).strip()
+                changed = True
+        # palabra idéntica ADYACENTE duplicada (residuo del colapso cuando la última palabra
+        # del reemplazo coincide con el modificador de cola: "yogurt griego entero entero")
+        s4 = _re.sub(r"\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})(\s+\1)+\b", r"\1", s, flags=_re.IGNORECASE)
+        if s4 != s:
+            s = s4
+            changed = True
         out.append(s)
+    # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] Post-pass: pasos heredados de las plantillas de
+    # HUEVO que el replace textual convirtió en absurdos ("Cocina yogurt griego a la plancha",
+    # nota "≥71°C ... yogurt firmes") se corrigen/eliminan según la naturaleza del reemplazo.
     if changed:
+        out, _san_ch = _sanitize_swapped_protein_steps(out, sorted({p[2] for p in pats}))
         meal["recipe"] = out
     return changed
+
+
+def _sanitize_swapped_protein_steps(steps: list, new_disps: list) -> tuple:
+    """[P1-RECIPE-STEP-SANITIZE · 2026-07-11] Post-pass del reescritor de pasos tras un swap de
+    proteína. El replace textual de tokens deja pasos ABSURDOS user-facing cuando el paso venía
+    de las plantillas de HUEVO (los 3 medidos en vivo, plan del owner 2026-07-11):
+      (a) nota de seguridad de huevo reescrita → "⚠️ ... cocina yogurt griego entero por completo
+          (≥71°C, yogurt griego entero firmes ...)": reemplazo blando/pre-cocido → la nota SE
+          ELIMINA (no hay riesgo que advertir); reemplazo cocinable → se reescribe a wording
+          genérico coherente ("cocina X por completo antes de servir");
+      (b) plantilla de cocción del closer → "Cocina yogurt griego entero a la plancha o hervido
+          y sírvelo como proteína del plato": la frase se re-deriva del SSOT
+          `_closer_protein_step_text` con el nombre ACTUAL (dispatch lácteo-blando/pre-cocido/
+          plural incluido).
+    La nota de MASA (contiene "masa") se conserva: la masa sigue cocinándose aunque el huevo se
+    haya sustituido. Pura sobre `steps`; retorna (steps, changed). Fail-safe.
+    tooltip-anchor: P1-RECIPE-STEP-SANITIZE"""
+    try:
+        from constants import strip_accents as _sa_sw
+    except Exception:
+        def _sa_sw(x):
+            return x
+    changed = False
+    out = []
+    for st in steps:
+        s = str(st)
+        try:
+            s_flat = _sa_sw(s.lower())
+            drop = False
+            for nd in (new_disps or []):
+                nd_s = str(nd)
+                nd_flat = _sa_sw(nd_s.lower())
+                if not nd_flat or nd_flat not in s_flat:
+                    continue
+                _soft = ("cocid" in nd_flat
+                         or any(h in nd_flat for h in _NO_COOK_SAFE_PROTEIN_HINT)
+                         or any(h in nd_flat for h in _PRECOOKED_PROTEIN_HINT))
+                # (a) remanente de nota de seguridad de huevo (≥71°C/Salmonella sin 'huevo' ni 'masa')
+                if ("seguridad alimentaria" in s_flat
+                        and ("71" in s_flat or "salmonella" in s_flat)
+                        and "huevo" not in s_flat and "masa" not in s_flat):
+                    if _soft:
+                        drop = True
+                    else:
+                        s = (f"⚠️ Seguridad alimentaria: cocina {nd_s} por completo antes de "
+                             f"servir; evita consumirlo crudo o poco cocido.")
+                    changed = True
+                    break
+                # (b) plantilla de cocción heredada → re-derivar wording del SSOT para el nombre actual
+                _pat_ck = _re.compile(
+                    r"\bcocina\s+" + _re.escape(nd_s) + r"\s+a\s+la\s+plancha[^.!?]*[.!?]?",
+                    _re.IGNORECASE)
+                s2 = _pat_ck.sub(_closer_protein_step_text(nd_s, no_cook=False), s)
+                if s2 != s:
+                    s = _re.sub(r"\s{2,}", " ", s2).strip()
+                    s_flat = _sa_sw(s.lower())
+                    changed = True
+            if not drop:
+                out.append(s)
+        except Exception:
+            out.append(s)
+    return out, changed
 
 
 def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentinel: str,
@@ -15298,7 +15395,8 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                     chosen = _alt
         gap = target - cur_p
         grams = int(round(gap / (chosen.protein / 100.0)))
-        grams = min(grams, max_add_g)
+        # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] techo global de bolt (275g de atún en vivo).
+        grams = min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G))
         # [P2-CLOSER-SNACK-CAP · 2026-07-05] (plan vivo 7e4e5570: 145-155g de cottage sobre un
         # plato de fruta — macro-perfecto, culinariamente plano). En meriendas/platos ligeros el
         # añadido del closer se capea físicamente; el déficit restante se cubre en las comidas
@@ -15332,7 +15430,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # add que SÍ procede se SUBE al piso COCINABLE (40g servibles > 10g absurdos; el leve overshoot de
         # proteína lo tolera la banda y el reconcile aguas abajo). El caso sin-headroom ya retornó 0 arriba
         # (nunca se infla por encima del techo calórico del slot). tooltip-anchor: P1-CLOSER-COOKABLE-MIN
-        grams = max(CLOSER_COOKABLE_MIN_G, min(grams, max_add_g))
+        grams = max(CLOSER_COOKABLE_MIN_G, min(grams, max_add_g, int(CLOSER_BOLT_MAX_ADD_G)))
         f = grams / 100.0
         nm = str(chosen.name).lower()
         # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] No añadir " cocido" a un alimento que YA viene cocido (enlatado):
@@ -24098,6 +24196,14 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                         f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] proteína PROTAGONISTA "
                                         f"{int(cur_g)}g→{int(_tgt_pf)}g en '{str(meal.get('name'))[:40]}' "
                                         f"(piso de identidad del plato)")
+                            else:
+                                # [P1-RECIPE-STEP-SANITIZE · 2026-07-11] DECLINACIÓN visible: el caso
+                                # vivo "25g de pavo" en 'Locrio de Pavo' escapó el piso sin rastro —
+                                # este log nombra la causa (headroom kcal insuficiente) para diagnóstico.
+                                logger.info(
+                                    f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] piso PROTAGONISTA DECLINADO en "
+                                    f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g, alcanzable "
+                                    f"{int(_tgt_pf)}g (<10g de mejora — headroom kcal insuficiente)")
                             continue
                     if cur_g >= floor_g:
                         continue
