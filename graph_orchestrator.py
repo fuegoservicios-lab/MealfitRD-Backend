@@ -16216,6 +16216,19 @@ def _plan_has_same_day_fruit_repeat(plan: dict) -> bool:
         return False
 
 
+def _egg_counts_for_same_day_gate(name_low: str) -> bool:
+    """[P1-EGG-BINDER-GATE-EXEMPT · 2026-07-11] ¿Este plato cuenta como comida-de-HUEVO
+    para el gate same-day? El huevo-AGLUTINANTE (croqueta/arepita/torta SIN modo de
+    cocción de huevo en el nombre) NO cuenta: es funcional (liga la masa), el plato no
+    'sabe a huevo', y el autofix lo protege como no-reescribible — si el gate lo
+    contara, el rechazo sería INCORREGIBLE por diseño (impotencia estructural
+    `egg_intrinsic_all_protected`, caso vivo corr=dbf45283: día 3 quemó los 3 intentos
+    con banda 1.00). Espejo EXACTO de `_protected_binder` del autofix — la asimetría
+    autofix-protege↔gate-cuenta es la que produce loops de rechazo sin salida."""
+    return not (any(t in name_low for t in _EGG_BINDER_DISH_TOKENS)
+                and not _EGG_SIDE_MODIFIER_RX.search(name_low))
+
+
 def _days_with_same_day_protein_repeat(plan: dict) -> list:
     """[P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Números de día donde una MISMA proteína
     principal aparece en ≥2 comidas del mismo día — detector con el MISMO SSOT que el gate del
@@ -16243,6 +16256,9 @@ def _days_with_same_day_protein_repeat(plan: dict) -> list:
                 ings_low = _sa(" ".join(str(i) for i in (meal.get("ingredients", []) or [])).lower())
                 blob = name_low + " " + ings_low
                 for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
+                    # [P1-EGG-BINDER-GATE-EXEMPT] huevo-aglutinante no cuenta (paridad con gate).
+                    if _plabel == "huevo" and not _egg_counts_for_same_day_gate(name_low):
+                        continue
                     if any(_name_has_token(_sa(_al), blob)
                            for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
                         day_proteins[_plabel] = day_proteins.get(_plabel, 0) + 1
@@ -16444,6 +16460,11 @@ def build_variety_report(plan: dict) -> dict:
             # positivos como 'res' dentro de 'fresas' o 'atun' dentro de otros nombres.
             _meal_blob = name_low + " " + ings_low
             for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
+                # [P1-EGG-BINDER-GATE-EXEMPT · 2026-07-11] huevo-aglutinante NO cuenta:
+                # el autofix lo protege como funcional → contarlo aquí produce rechazos
+                # INCORREGIBLES (impotencia estructural, corr=dbf45283 quemó 3 intentos).
+                if _plabel == "huevo" and not _egg_counts_for_same_day_gate(name_low):
+                    continue
                 if any(_name_has_token(strip_accents(_al), _meal_blob)
                        for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
                     day_proteins[_plabel] = day_proteins.get(_plabel, 0) + 1
@@ -22546,6 +22567,14 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                 if not isinstance(meal, dict):
                     continue
                 for _lbl in _SAME_DAY_PROTEIN_GATE_LABELS:
+                    # [P1-EGG-BINDER-GATE-EXEMPT] paridad autofix<->gate: el binder no
+                    # cuenta para NINGUNO de los dos (contarlo solo aqui reescribiria
+                    # un plato-huevo legitimo por culpa de una croqueta funcional).
+                    if _lbl == "huevo":
+                        from constants import strip_accents as _sa_bge
+                        _nl_bge = _sa_bge(str(meal.get("name", "")).lower())
+                        if not _egg_counts_for_same_day_gate(_nl_bge):
+                            continue
                     _hit = _alias_hit(meal, _lbl)
                     if _hit is not None:
                         day_labels.add(_lbl)
@@ -27544,9 +27573,37 @@ async def assemble_plan_node(state: PlanState) -> dict:
     try:
         _late_rep_days = _days_with_same_day_protein_repeat(result)
         if _late_rep_days:
+            # [P1-REINTRO-DETAIL · 2026-07-11] Nombrar label + platos: en corr=dbf45283 el
+            # warn sin detalle costó ~30 min de forensics por intento para saber QUÉ se
+            # repetía. Con el detalle, identificar el pase reintroductor es 1 grep.
+            _rep_detail = []
+            try:
+                from constants import strip_accents as _sa_rd
+                for _dd in (result.get("days") or []):
+                    if not isinstance(_dd, dict) or _dd.get("day") not in _late_rep_days:
+                        continue
+                    _lbl_meals: dict = {}
+                    for _mm in (_dd.get("meals") or []):
+                        if not isinstance(_mm, dict):
+                            continue
+                        _nl_rd = _sa_rd(str(_mm.get("name", "")).lower())
+                        _blob_rd = _nl_rd + " " + _sa_rd(
+                            " ".join(str(i) for i in (_mm.get("ingredients") or [])).lower())
+                        for _pl in _SAME_DAY_PROTEIN_GATE_LABELS:
+                            if _pl == "huevo" and not _egg_counts_for_same_day_gate(_nl_rd):
+                                continue
+                            if any(_name_has_token(_sa_rd(_a), _blob_rd)
+                                   for _a in _MAIN_PROTEIN_ALIASES.get(_pl, ())):
+                                _lbl_meals.setdefault(_pl, []).append(str(_mm.get("name", "?"))[:40])
+                    for _pl, _ms in _lbl_meals.items():
+                        if len(_ms) >= 2:
+                            _rep_detail.append(f"día {_dd.get('day')}: '{_pl}' en {' + '.join(repr(m) for m in _ms)}")
+            except Exception:
+                pass
             logger.warning(f"🍗 [P1-SAMEDAY-REINTRO-TELEMETRY] proteína repetida same-day PERSISTE "
                            f"tras closers/chain en día(s) {_late_rep_days} — el gate del review va a "
-                           f"rechazar; identificar el pase reintroductor aguas arriba.")
+                           f"rechazar; identificar el pase reintroductor aguas arriba."
+                           f"{(' Detalle: ' + '; '.join(_rep_detail)) if _rep_detail else ''}")
     except Exception:
         pass
 

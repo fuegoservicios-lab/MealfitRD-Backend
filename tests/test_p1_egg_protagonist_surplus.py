@@ -99,16 +99,18 @@ def test_arepita_side_egg_reassignable_despite_binder_token(go):
 
 
 def test_binder_egg_without_modifier_protected(go):
-    """[P1-EGG-INTRINSIC-DEDUP · 2026-07-11] La croqueta (huevo-ligante) sigue INTOCABLE,
-    pero es el keeper implícito: el otro plato-huevo se reasigna (antes huevo×2 → gate)."""
+    """[P1-EGG-BINDER-GATE-EXEMPT · 2026-07-11] El huevo-aglutinante NO cuenta para el
+    same-day (paridad gate↔autofix): revoltillo + croqueta el mismo día es LEGAL — nada
+    se reescribe (contarlo producía rechazos incorregibles: corr=dbf45283, 3 intentos)."""
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Revoltillo de Huevo", ["3 huevos"]),
         _meal("Cena", "Croquetas de Yuca", ["1 huevo", "150 g de yuca"]),
     ]}]
-    assert go._protein_repeat_autofix(days, {}, db=object()) >= 1
+    assert go._protein_repeat_autofix(days, {}, db=object()) == 0, \
+        "binder exento → un solo huevo real → sin repetición → sin reescritura"
     assert "1 huevo" in days[0]["meals"][1]["ingredients"], "el huevo-ligante es funcional"
-    assert "huevos" not in " ".join(days[0]["meals"][0]["ingredients"]), \
-        "el revoltillo cede (el binder no se puede tocar)"
+    assert "huevos" in " ".join(days[0]["meals"][0]["ingredients"]), \
+        "el revoltillo queda INTACTO (ya no cede por culpa de la croqueta)"
 
 
 def test_all_named_keeps_first(go):
