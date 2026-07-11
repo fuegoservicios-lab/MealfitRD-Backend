@@ -123,6 +123,9 @@ _SHIFT_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # crédito de planes (get_monthly_api_usage cuenta TODA fila de api_usage sin filtrar endpoint). El
 # anti-hammering correcto es un RateLimiter per-user/IP, NO el paywall. Tooltip-anchor: P1-NEVERA-QUOTA-EXEMPT.
 _RESTOCK_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+# [P1-ADAPTIVE-RENEWAL · 2026-07-11] check-in de renovación (peso + señales). Cero costo LLM
+# → RateLimiter, NO paywall (misma doctrina P1-AUDIT-3/historial-quota-exemption).
+_CHECKIN_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _CONSUME_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 # [P1-16] Registry global de session_ids cancelados durante la generación.
@@ -3103,6 +3106,71 @@ async def api_analyze_stream(
         # el merge interno de `arun_plan_pipeline`. Ver comentario equivalente
         # arriba para el rationale completo de defense-in-depth.
         _merge_other_text_fields(pipeline_data)
+
+        # [P1-ADAPTIVE-RENEWAL · 2026-07-11] El motor "metabolismo evolutivo" de
+        # nutrition_calculator (smoothing + velocidad + anti-rebound, vivo desde MEJORA 4)
+        # consume form_data['weight_history'] — pero el path SSE JAMÁS lo recibía: el
+        # cliente no lo envía y el strip P0-A2 (correcto) lo vetaría como no-confiable.
+        # Solo los chunks lo inyectaban vía JIT (cron 17239). Resultado: las RENOVACIONES
+        # nunca calibraban calorías con el progreso real. Inyección SERVER-SIDE (fuente:
+        # health_profile, jamás el request) para usuarios autenticados. Knob de rollback.
+        if actual_user_id and os.environ.get("MEALFIT_ADAPTIVE_RENEWAL_INJECT", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                from db_core import execute_sql_query as _esq_ar
+                _hp_ar = _esq_ar(
+                    "SELECT health_profile FROM user_profiles WHERE id = %s",
+                    (actual_user_id,), fetch_one=True,
+                ) or {}
+                _hp_ar = _hp_ar.get("health_profile") or {}
+                if isinstance(_hp_ar, str):
+                    _hp_ar = _json.loads(_hp_ar)
+                _wh_ar = _hp_ar.get("weight_history") or []
+                if isinstance(_wh_ar, list) and len(_wh_ar) >= 2:
+                    pipeline_data["weight_history"] = _wh_ar
+                    logger.info(
+                        f"⚖️ [P1-ADAPTIVE-RENEWAL] weight_history inyectado server-side "
+                        f"({len(_wh_ar)} registros) → metabolismo evolutivo activo en esta generación."
+                    )
+            except Exception as _ar_e:
+                logger.debug(f"[P1-ADAPTIVE-RENEWAL] inyección no-op: {type(_ar_e).__name__}: {_ar_e}")
+
+        # [P1-PANTRY-FIRST-PLAN · 2026-07-11] Modo "desde mi Nevera" (F3): cuando el
+        # formulario eligió planSource='pantry', inyectamos el inventario REAL del
+        # usuario server-side como current_pantry_ingredients (formato _parse_quantity,
+        # espejo del id_string del frontend) → build_pantry_context emite el bloque
+        # Zero-Waste completo (existente) y la validación pantry del review aplica.
+        # update_reason es None en generación de formulario → no choca con el guard
+        # variety-ignora-pantry. Nevera vacía → generación libre (log honesto).
+        if actual_user_id and str(data.get("planSource") or "").strip().lower() == "pantry"                 and os.environ.get("MEALFIT_PANTRY_FIRST_MODE", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                from db_core import execute_sql_query as _esq_pf
+                _inv_pf = _esq_pf(
+                    "SELECT ingredient_name, quantity::float8 AS quantity, unit FROM user_inventory "
+                    "WHERE user_id = %s AND quantity > 0",
+                    (actual_user_id,), fetch_all=True,
+                ) or []
+                _pf_items = []
+                for _it_pf in _inv_pf:
+                    _nm_pf = str(_it_pf.get("ingredient_name") or "").strip()
+                    if not _nm_pf:
+                        continue
+                    _q_pf = _it_pf.get("quantity") or 0
+                    _u_pf = str(_it_pf.get("unit") or "").strip()
+                    _qs_pf = ("%g" % float(_q_pf))
+                    if _u_pf.lower().startswith("unidad"):
+                        _pf_items.append(f"{_qs_pf} {_nm_pf}")
+                    else:
+                        _pf_items.append(f"{_qs_pf} {_u_pf} de {_nm_pf}")
+                if _pf_items:
+                    pipeline_data["current_pantry_ingredients"] = _pf_items
+                    logger.info(
+                        f"🧊 [P1-PANTRY-FIRST-PLAN] modo Nevera: {len(_pf_items)} item(s) del "
+                        f"inventario inyectados server-side (Zero-Waste + validación pantry activos)."
+                    )
+                else:
+                    logger.info("🧊 [P1-PANTRY-FIRST-PLAN] modo Nevera solicitado con inventario vacío → generación libre.")
+            except Exception as _pf_e:
+                logger.debug(f"[P1-PANTRY-FIRST-PLAN] inyección no-op: {type(_pf_e).__name__}: {_pf_e}")
 
         from datetime import datetime, timezone, timedelta
 
@@ -13899,3 +13967,274 @@ def api_admin_guest_metrics_force(request: Request, data: dict = Body(...)):
         )
     reason = data.get("reason") if isinstance(data.get("reason"), str) else None
     return force_set_guest_metrics_enabled(enabled=enabled, reason=reason)
+
+
+# ============================================================================
+# [P1-ADAPTIVE-RENEWAL · 2026-07-11] Check-in de renovación: el usuario registra su
+# peso actual (+ señales subjetivas) al renovar el ciclo → alimenta weight_history
+# (motor "metabolismo evolutivo" de nutrition_calculator, que la inyección
+# server-side del SSE ya consume) y archiva las señales en _renewal_checkins.
+# Cero costo LLM → _CHECKIN_LIMITER, NO paywall (doctrina P1-AUDIT-3).
+# tooltip-anchor: P1-ADAPTIVE-RENEWAL
+# ============================================================================
+
+def _renewal_engine_preview(weight_history) -> dict:
+    """Preview honesto para el frontend: ¿el motor evolutivo va a calibrar?
+    Espeja las precondiciones REALES del motor (≥2 registros y ≥14 días de span
+    tras ordenar por fecha) sin duplicar su lógica interna. Puro, fail-safe."""
+    try:
+        from datetime import datetime as _dt
+        _wh = [e for e in (weight_history or []) if isinstance(e, dict) and e.get("date")]
+        if len(_wh) < 2:
+            return {"entries": len(_wh), "days_span": 0, "engine_active": False}
+        _ds = sorted(_dt.strptime(str(e["date"]), "%Y-%m-%d") for e in _wh)
+        _span = (_ds[-1] - _ds[0]).days
+        return {"entries": len(_wh), "days_span": _span, "engine_active": _span >= 14}
+    except Exception:
+        return {"entries": 0, "days_span": 0, "engine_active": False}
+
+
+@router.post("/renewal-checkin")
+def api_renewal_checkin(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_CHECKIN_LIMITER),
+):
+    """Registra el check-in de renovación (peso obligatorio; hambre/energía/adherencia
+    opcionales 1-5 / 0-100). Append atómico a weight_history (dedupe por día, mismo
+    contrato que /api/diary/progress) + archivo en _renewal_checkins (cap 12)."""
+    if not verified_user_id:
+        raise HTTPException(status_code=403, detail="Inicia sesión para el check-in.")
+    try:
+        _w = float(data.get("weight"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Peso inválido.")
+    if not (0 < _w <= 2000):
+        raise HTTPException(status_code=400, detail="Peso fuera de rango.")
+    _unit = str(data.get("unit") or "lb").strip().lower()
+    if _unit not in ("lb", "kg"):
+        _unit = "lb"
+
+    def _clamp_int(v, lo, hi):
+        try:
+            return max(lo, min(hi, int(v)))
+        except (TypeError, ValueError):
+            return None
+
+    _hunger = _clamp_int(data.get("hunger"), 1, 5)
+    _energy = _clamp_int(data.get("energy"), 1, 5)
+    _adherence = _clamp_int(data.get("adherence_pct"), 0, 100)
+
+    from datetime import datetime, timezone
+    _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _preview_box: dict = {}
+
+    def _checkin_mutator(_hp):
+        _wh = list(_hp.get("weight_history", []) or [])
+        # dedupe por día (mismo contrato del Progress Tracker: el último pesaje del día gana)
+        _wh = [e for e in _wh if not (isinstance(e, dict) and e.get("date") == _today)]
+        _wh.append({"date": _today, "weight": _w, "unit": _unit})
+        _hp["weight_history"] = _wh
+        _ck = list(_hp.get("_renewal_checkins", []) or [])
+        _ck.append({
+            "date": _today, "weight": _w, "unit": _unit,
+            "hunger": _hunger, "energy": _energy, "adherence_pct": _adherence,
+        })
+        _hp["_renewal_checkins"] = _ck[-12:]  # cap: los 12 ciclos más recientes
+        _preview_box.update(_renewal_engine_preview(_wh))
+        return None
+
+    from db_profiles import update_user_health_profile_atomic
+    update_user_health_profile_atomic(verified_user_id, _checkin_mutator)
+    _pv = _preview_box or _renewal_engine_preview([])
+    logger.info(
+        f"⚖️ [P1-ADAPTIVE-RENEWAL] check-in de renovación user={verified_user_id[:8]}: "
+        f"peso={_w}{_unit} hambre={_hunger} energía={_energy} adherencia={_adherence} "
+        f"→ registros={_pv['entries']} span={_pv['days_span']}d engine_active={_pv['engine_active']}"
+    )
+    return {
+        "success": True,
+        **_pv,
+        "message": (
+            "Tu progreso real calibrará las calorías de este ciclo."
+            if _pv.get("engine_active")
+            else "Peso registrado. Con 2+ registros separados 14+ días, el sistema calibra tus calorías automáticamente."
+        ),
+    }
+
+
+# ============================================================================
+# [P1-PANTRY-FIRST-PLAN · 2026-07-11] F3 — "Crear plan desde mi Nevera".
+# Pre-flight DETERMINISTA de factibilidad (cero LLM): con lo que hay en
+# user_inventory, ¿alcanzan kcal/proteína para N días del objetivo del usuario?
+# Si no alcanza, sugiere compras concretas con precios del catálogo master.
+# El modo de generación pantry-first se activa via planSource='pantry' en el
+# SSE (inyección server-side, ver [P1-PANTRY-FIRST-PLAN] en /analyze/stream).
+# tooltip-anchor: P1-PANTRY-FIRST-PLAN
+# ============================================================================
+
+_PANTRY_MASS_TO_G = {"g": 1.0, "gr": 1.0, "gramos": 1.0, "kg": 1000.0, "lb": 453.592,
+                     "lbs": 453.592, "libra": 453.592, "libras": 453.592, "oz": 28.3495}
+_PANTRY_FEAS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+
+def _pantry_item_grams(qty, unit, master_row):
+    """Gramos estimados de un item de inventario. Fail-open a 0 (item no cuenta)."""
+    try:
+        u = str(unit or "").strip().lower()
+        if u in _PANTRY_MASS_TO_G:
+            return float(qty) * _PANTRY_MASS_TO_G[u]
+        if u.startswith("unidad") or u in ("diente", "dientes", "rebanada", "rebanadas"):
+            d = float((master_row or {}).get("density_g_per_unit") or 0)
+            return float(qty) * d if d > 0 else 0.0
+        if u.startswith(("paquete", "lata", "botella", "pote", "carton", "cartón", "mazo", "funda")):
+            cw = float((master_row or {}).get("container_weight_g") or 0)
+            return float(qty) * cw if cw > 0 else 0.0
+        if u.startswith("taza"):
+            dc = float((master_row or {}).get("density_g_per_cup") or 0)
+            return float(qty) * dc if dc > 0 else 0.0
+        return 0.0
+    except Exception:
+        return 0.0
+
+
+def _pantry_feasibility_report(user_id, days, kcal_day, protein_day):
+    """Reporte determinista: disponible vs necesario + sugerencias con precio."""
+    from db_core import execute_sql_query as _esq
+    import unicodedata as _ud
+
+    def _norm_pf(x):
+        x = _ud.normalize("NFD", str(x or "").strip().lower())
+        return "".join(ch for ch in x if _ud.category(ch) != "Mn")
+
+    inv = _esq(
+        "SELECT ingredient_name, quantity::float8 AS quantity, unit FROM user_inventory "
+        "WHERE user_id = %s AND quantity > 0",
+        (user_id,), fetch_all=True,
+    ) or []
+    master = _esq(
+        "SELECT name, aliases, kcal_per_100g, protein_g_per_100g, density_g_per_unit, "
+        "density_g_per_cup, container_weight_g, price_per_lb FROM master_ingredients",
+        (), fetch_all=True,
+    ) or []
+    m_by_norm = {}
+    for r in master:
+        m_by_norm[_norm_pf(r.get("name"))] = r
+        for a in (r.get("aliases") or []):
+            m_by_norm.setdefault(_norm_pf(a), r)
+
+    kcal_avail = 0.0
+    protein_avail = 0.0
+    matched = 0
+    for it in inv:
+        row = m_by_norm.get(_norm_pf(it.get("ingredient_name")))
+        if not row:
+            continue
+        g = _pantry_item_grams(it.get("quantity") or 0, it.get("unit"), row)
+        if g <= 0:
+            continue
+        matched += 1
+        kcal_avail += g * float(row.get("kcal_per_100g") or 0) / 100.0
+        protein_avail += g * float(row.get("protein_g_per_100g") or 0) / 100.0
+
+    kcal_needed = float(kcal_day) * days
+    protein_needed = float(protein_day) * days
+    # umbral 0.85: la lista de compras del plan cubre el residuo pequeño con honestidad
+    feasible = kcal_avail >= kcal_needed * 0.85 and protein_avail >= protein_needed * 0.85
+    days_supported = 0.0
+    if kcal_day > 0 and protein_day > 0:
+        days_supported = round(min(kcal_avail / kcal_day, protein_avail / protein_day), 1)
+
+    gaps = []
+    if protein_avail < protein_needed * 0.85:
+        gap_g = protein_needed - protein_avail
+        sugg = _esq(
+            "SELECT name, price_per_lb, protein_g_per_100g FROM master_ingredients "
+            "WHERE protein_g_per_100g >= 18 AND price_per_lb > 0 "
+            "ORDER BY (protein_g_per_100g / price_per_lb) DESC LIMIT 3",
+            (), fetch_all=True,
+        ) or []
+        gaps.append({
+            "type": "protein", "missing_g": int(gap_g),
+            "suggestions": [
+                {
+                    "name": r["name"],
+                    "price_per_lb_rd": round(float(r["price_per_lb"]), 0),
+                    "approx_lb": round(gap_g / float(r["protein_g_per_100g"]) * 100 / 453.592, 1),
+                }
+                for r in sugg
+            ],
+        })
+    if kcal_avail < kcal_needed * 0.85:
+        gap_kcal = kcal_needed - kcal_avail
+        sugg = _esq(
+            "SELECT name, price_per_lb, kcal_per_100g FROM master_ingredients "
+            "WHERE carbs_g_per_100g >= 20 AND price_per_lb > 0 AND kcal_per_100g >= 100 "
+            "ORDER BY (kcal_per_100g / price_per_lb) DESC LIMIT 3",
+            (), fetch_all=True,
+        ) or []
+        gaps.append({
+            "type": "kcal", "missing_kcal": int(gap_kcal),
+            "suggestions": [
+                {
+                    "name": r["name"],
+                    "price_per_lb_rd": round(float(r["price_per_lb"]), 0),
+                    "approx_lb": round(gap_kcal / float(r["kcal_per_100g"]) * 100 / 453.592, 1),
+                }
+                for r in sugg
+            ],
+        })
+    return {
+        "feasible": feasible,
+        "days_requested": days,
+        "days_supported": days_supported,
+        "pantry_items_counted": matched,
+        "kcal_available": int(kcal_avail),
+        "kcal_needed": int(kcal_needed),
+        "protein_available_g": int(protein_avail),
+        "protein_needed_g": int(protein_needed),
+        "gaps": gaps,
+    }
+
+
+@router.post("/pantry-feasibility")
+def api_pantry_feasibility(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_PANTRY_FEAS_LIMITER),
+):
+    """Pre-flight del modo 'desde mi Nevera': factibilidad determinista + sugerencias.
+
+    Body: {days, age, weight, weightUnit?, height, gender, activityLevel, mainGoal}.
+    Las biometrías vienen del formulario EN VUELO (primer plan: aún no hay perfil
+    persistido) — es un preview sin privilegios, no una mutación. Cero costo LLM
+    → RateLimiter, NO paywall (doctrina P1-AUDIT-3)."""
+    if not verified_user_id:
+        raise HTTPException(status_code=403, detail="Inicia sesión para usar tu Nevera.")
+    try:
+        days = max(1, min(30, int(data.get("days") or 7)))
+        weight = float(data.get("weight"))
+        if str(data.get("weightUnit") or "lb").lower().startswith("lb"):
+            weight *= 0.453592  # → kg
+        height = float(data.get("height"))
+        age = int(float(data.get("age")))
+        gender = str(data.get("gender") or "male")
+        activity = str(data.get("activityLevel") or "sedentary")
+        goal = str(data.get("mainGoal") or data.get("goal") or "maintenance")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Biometrías inválidas para el pre-flight.")
+    try:
+        from nutrition_calculator import calculate_bmr, calculate_tdee, apply_goal_adjustment
+        bmr = calculate_bmr(weight, height, age, gender, None)
+        kcal_day = float(apply_goal_adjustment(calculate_tdee(bmr, activity), goal))
+    except Exception:
+        kcal_day = 2000.0  # fail-open conservador
+    protein_per_kg = {"gain_muscle": 2.0, "lose_fat": 1.8}.get(goal, 1.6)
+    protein_day = min(weight * protein_per_kg, weight * 2.2)
+    report = _pantry_feasibility_report(verified_user_id, days, kcal_day, protein_day)
+    logger.info(
+        f"🧊 [P1-PANTRY-FIRST-PLAN] feasibility user={verified_user_id[:8]} days={days}: "
+        f"feasible={report['feasible']} soporta≈{report['days_supported']}d "
+        f"(kcal {report['kcal_available']}/{report['kcal_needed']}, "
+        f"prot {report['protein_available_g']}/{report['protein_needed_g']}g, "
+        f"items={report['pantry_items_counted']}, gaps={len(report['gaps'])})"
+    )
+    return {"success": True, **report}
