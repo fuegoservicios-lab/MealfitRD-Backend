@@ -105,8 +105,10 @@ def test_gap04_review_patch_reaggregates():
     patch_body = _GO[patch_start:patch_start + 6000]
     assert "_review_patch_removed_ingredients" in patch_body
     # el seam re-agrega cuando no hubo swap
+    # [P1-CRITIQUE-SLOT-PARITY · 2026-07-11] 400→1600: el re-cierre de banda
+    # (P1-POST-PATCH-BAND-RECLOSE) vive entre el if y la re-agregación.
     assert re.search(
-        r"not _swapped[\s\S]{0,300}_review_patch_removed_ingredients[\s\S]{0,400}_recompute_aggregates_after_swap",
+        r"not _swapped[\s\S]{0,300}_review_patch_removed_ingredients[\s\S]{0,1600}_recompute_aggregates_after_swap",
         _GO,
     ), "el seam debe re-agregar listas si el review-patch removió ingredientes sin swap"
 

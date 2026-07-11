@@ -490,6 +490,13 @@ SELF_CRITIQUE_VERIFY_SAME_DAY_PROTEIN = _env_bool("MEALFIT_SELF_CRITIQUE_VERIFY_
 # hay repetición de plato-base cross-day, y (b) inyectar la corrección al corrector (que ya tiene el contrato
 # de variedad). Flip a False revierte. tooltip-anchor: P1-CRITIQUE-CROSSDAY-DISH-PARITY
 CRITIQUE_CROSSDAY_DISH_PARITY_ENABLED = _env_bool("MEALFIT_CRITIQUE_CROSSDAY_DISH_PARITY", True)
+# [P1-CRITIQUE-SLOT-PARITY · 2026-07-11] El critique usaba _detect_slot_incoherence (overlap
+# almuerzo/cena + merienda-heavy) pero NO el SSOT del reviewer (_detect_slot_appropriateness:
+# cena-tipo-desayuno, arroz-en-desayuno) → "Tortitas de Avena al Horno" de CENA pasaba el
+# critique y el reviewer rechazaba el plan COMPLETO (intento 1 de la renovación 03:26 del
+# owner; también 2 cenas-desayuno el 2026-07-10). Detectores asimétricos critique↔reviewer
+# eran la clase entera. Flip a False revierte.
+CRITIQUE_SLOT_PARITY_ENABLED = _env_bool("MEALFIT_CRITIQUE_SLOT_PARITY", True)
 
 # [P1-ADVERSARIAL-PAID-ONLY · 2026-07-09] El adversarial self-play (2 candidatos + juez LLM #5) es una
 # capa de calidad ADITIVA, no un gate de seguridad. Restringirla a tiers pagados: free/guest caen al
@@ -8970,6 +8977,18 @@ async def self_critique_node(state: PlanState) -> dict:
     # - meriendas que en realidad son platos fuertes
     # Estas señales son hechos calculados por código; el LLM no puede negociarlos.
     slot_issues = _detect_slot_incoherence(days)
+    # [P1-CRITIQUE-SLOT-PARITY · 2026-07-11] mismo SSOT del gate del reviewer: las violaciones
+    # de horario (cena-desayuno / arroz-desayuno) entran al critique ANTES de las correcciones
+    # per-día (flash) en vez de descubrirse en el reject del reviewer (replan completo). El
+    # texto ya trae día/slot/plato + hint positivo → directiva exacta para el corrector.
+    if CRITIQUE_SLOT_PARITY_ENABLED:
+        try:
+            for _sa_issue in _detect_slot_appropriateness(days):
+                _t = _sa_issue.get("text") if isinstance(_sa_issue, dict) else None
+                if _t:
+                    slot_issues.append(_t)
+        except Exception as _sap_e:
+            logger.debug(f"[P1-CRITIQUE-SLOT-PARITY] detector no-op: {_sap_e}")
     if slot_issues:
         joined = "\n   - " + "\n   - ".join(slot_issues)
         logger.info(f"🍽️ [SELF-CRITIQUE] Incoherencias de slot detectadas:{joined}")
@@ -9520,6 +9539,27 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             # marcar esos días `_critique_unresolved` → el retry regenera SOLO esos días (P1-SURGICAL-1)
             # en vez del regen ciego de plan completo (el gate determinista hace bypass del LLM reviewer y
             # no puebla affected_days). Espeja el cierre de FRUTA (P1-FRUIT-DEDUP-GATE-PARITY, 2026-07-05).
+            # [P1-CRITIQUE-SLOT-PARITY · 2026-07-11] residual de HORARIO tras corrección: si la
+            # corrección dejó (o re-introdujo) una cena-desayuno, marcar el día para retry
+            # QUIRÚRGICO en vez de descubrirlo en el reject del reviewer (espejo del SAMEDAY).
+            if CRITIQUE_SLOT_PARITY_ENABLED:
+                try:
+                    _residual_slot = _detect_slot_appropriateness(days)
+                    for _rs in _residual_slot:
+                        _dn_rs = _rs.get("day")
+                        _td_rs = next((d for d in days if d.get("day") == _dn_rs), None)
+                        if _td_rs is not None and not _td_rs.get("_critique_unresolved"):
+                            _mark_critique_unresolved(
+                                _td_rs, "slot_appropriateness_unresolved",
+                                str(_rs.get("text") or f"Día {_dn_rs}: plato fuera de horario"),
+                            )
+                    if _residual_slot:
+                        logger.warning(
+                            f"⚠️ [SELF-CRITIQUE/SLOT-PARITY] Residual fuera-de-horario tras corrección "
+                            f"en día(s) {sorted({r.get('day') for r in _residual_slot})} → _critique_unresolved."
+                        )
+                except Exception as _e_sp:
+                    logger.warning(f"⚠️ [SELF-CRITIQUE/SLOT-PARITY] verify no-fatal: {type(_e_sp).__name__}: {_e_sp}")
             if SELF_CRITIQUE_VERIFY_SAME_DAY_PROTEIN:
                 try:
                     _residual = _days_with_same_day_protein_repeat(partial)
@@ -38013,6 +38053,17 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 and isinstance(_rp_plan, dict)
                 and _rp_plan.get("_review_patch_removed_ingredients")
             ):
+                # [P1-CRITIQUE-SLOT-PARITY · 2026-07-11] (sub-fix banda post-patch) el auto-patch
+                # de huérfanos remueve ingredientes DESPUÉS del cierre de banda — firma viva:
+                # post-finalize 1.00 → entregado 0.83 (renovación owner 19:32) / 0.50 (chunk T2
+                # 01:04, fats/kcal caídos). Re-cerrar banda ANTES de re-agregar para que las
+                # listas reflejen las cantidades finales. Chain SSOT idempotente (fail-safe).
+                try:
+                    from db_plans import apply_plan_quality_finalize_chain as _apqfc_pp
+                    _apqfc_pp(_rp_plan, surface="post-review-patch")
+                    logger.info("🎯 [P1-POST-PATCH-BAND-RECLOSE] banda re-cerrada tras review-patch (pre re-agregación).")
+                except Exception as _pp_band_e:
+                    logger.debug(f"[P1-POST-PATCH-BAND-RECLOSE] no-op: {type(_pp_band_e).__name__}: {_pp_band_e}")
                 await _recompute_aggregates_after_swap(final_state)
                 logger.info(
                     f"🛒 [P2-AUDIT-V5-BATCH] (GAP-04) listas re-agregadas tras review-patch "
