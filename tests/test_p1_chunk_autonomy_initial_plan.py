@@ -75,6 +75,7 @@ def test_exception_path_is_kind_aware():
     assert "reservation_status = 'best_effort'" in blk
 
 
-def test_marker_bumped():
-    app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-CHUNK-AUTONOMY" in app_src.split("_LAST_KNOWN_PFIX = ")[1][:60]
+def test_marker_anchored_in_source():
+    # [P1-REBALANCE-LINE-CLAMP · 2026-07-10] durable: anclar en el CÓDIGO, no en el
+    # _LAST_KNOWN_PFIX vigente (pinnear el marker actual rota con cada bump posterior).
+    assert _CRON.count("P1-CHUNK-AUTONOMY") >= 3, "los anchors del skip desaparecieron de cron_tasks"

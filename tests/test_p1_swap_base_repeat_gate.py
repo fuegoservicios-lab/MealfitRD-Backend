@@ -66,7 +66,9 @@ def test_partial_rebalance_before_full_revert():
         "P2-REGEN-DAY-PARTIAL-REBALANCE: el rebalance del regen-day volvió al revert TOTAL "
         "— días band 0.5 con chips ámbar inarreglables cuando la Nevera no da para el target."
     )
-    blk = _PLANS[i: i + 3200]
+    # [P1-REBALANCE-LINE-CLAMP · 2026-07-10] 3200→5600: el nivel 1 (exclusión por-línea)
+    # vive entre el marker y los fracs — el window debe cubrir la escalera completa.
+    blk = _PLANS[i: i + 5600]
     assert "(0.5, 0.25)" in blk, "reintentos al 50% y 25% del delta antes del revert total"
     assert "_day_exceeds_pantry(_attempt_rb" in blk, (
         "cada intento parcial se re-valida contra la Nevera ORIGINAL (never-worse-than-current)"
@@ -74,6 +76,6 @@ def test_partial_rebalance_before_full_revert():
     assert "deepcopy(_pre_rb)" in blk, (
         "cada intento parte de una copia FRESCA del estado pre-rebalance (el rebalance muta in-place)"
     )
-    assert "_pantry_limited = True" in _PLANS[i: i + 4200], (
+    assert "_pantry_limited = True" in _PLANS[i: i + 6800], (  # 4200→6800 [P1-REBALANCE-LINE-CLAMP]
         "el residual (total o parcial) sigue atribuyéndose a la Nevera para el aviso honesto"
     )

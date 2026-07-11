@@ -6245,6 +6245,77 @@ def _day_exceeds_pantry(meals: list, orig_ledger: dict, db, *, tol_frac: float =
         return False, ""
 
 
+def _rebalance_day_with_line_clamp(
+    pre_meals: list, day_target: dict, orig_ledger: dict, db, *,
+    renal_capped: bool, rebalance_fn, exceeds_fn, first_violator: str = "",
+    max_excl: int = 3,
+):
+    """[P1-REBALANCE-LINE-CLAMP · 2026-07-10] Rebalance del día EXCLUYENDO los platos cuya
+    línea de pantry está topada: el plato del violador conserva su porción pre-rebalance y
+    los demás absorben el gap COMPLETO del día (targets del subset = target día − aporte de
+    los excluidos). Caso vivo (plan ff14f7cf, regen 02:04): cerrar carbos/kcal necesitaba
+    yogurt 325g con 150g en Nevera → el all-or-nothing revertía TODO aunque hubiera arroz/
+    avena/batata de sobra para cerrar el mismo gap → día 0.667 con banner "limitado por tu
+    Nevera" evitable. Itera: si al excluir aparece OTRO violador, lo excluye también (cap
+    max_excl). Devuelve (ok, meals|None, excluidos). Puro sobre copia (pre_meals intacto);
+    fail-safe → (False, None, excluidos). tooltip-anchor: P1-REBALANCE-LINE-CLAMP"""
+    import copy as _c
+    try:
+        from constants import strip_accents as _sa_lc
+    except Exception:
+        def _sa_lc(x):
+            return x
+    excluded: list = []
+    if first_violator and str(first_violator).strip():
+        excluded.append(str(first_violator).strip())
+    try:
+        tgt_c = float(day_target.get("carbs_g") or 0)
+        tgt_f = float(day_target.get("fats_g") or 0)
+        tgt_p = 0.0 if renal_capped else float(day_target.get("protein_g") or 0)
+
+        def _meal_has_any(meal: dict, names: list) -> bool:
+            for ing in (meal.get("ingredients") or []):
+                s = ing if isinstance(ing, str) else ((ing or {}).get("name") or "")
+                if not s:
+                    continue
+                try:
+                    mm = db.macros_from_ingredient_string(s)
+                    if mm and mm.get("name") in names:
+                        return True
+                except Exception:
+                    pass
+                low = _sa_lc(str(s).lower())
+                if any(_sa_lc(str(n).lower()) in low for n in names if n):
+                    return True
+            return False
+
+        for _ in range(max(1, max_excl)):
+            attempt = _c.deepcopy(pre_meals)
+            real = [m for m in attempt if isinstance(m, dict)]
+            kept = [m for m in real if not _meal_has_any(m, excluded)] if excluded else real
+            if not kept or len(kept) == len(real):
+                # la exclusión no reduce nada (violador externo al día) o vació el día → fallback
+                return False, None, excluded
+            exc_c = sum(float(m.get("carbs") or 0) for m in real if m not in kept)
+            exc_f = sum(float(m.get("fats") or 0) for m in real if m not in kept)
+            exc_p = sum(float(m.get("protein") or 0) for m in real if m not in kept)
+            sub_c = max(tgt_c - exc_c, 0.0) if tgt_c else 0.0
+            sub_f = max(tgt_f - exc_f, 0.0) if tgt_f else 0.0
+            sub_p = max(tgt_p - exc_p, 0.0) if tgt_p else 0.0
+            if not rebalance_fn(kept, sub_c, sub_f, db, target_protein=sub_p):
+                return False, None, excluded
+            exc, why = exceeds_fn(attempt, orig_ledger, db)
+            if not exc:
+                return True, attempt, excluded
+            viol = (str(why).split(":")[0] or "").strip()
+            if not viol or viol in excluded:
+                return False, None, excluded
+            excluded.append(viol)
+        return False, None, excluded
+    except Exception:
+        return False, None, excluded
+
+
 # [P5-DAY-REGEN-VARIETY-PROTEIN · 2026-06-23] Detección de la proteína principal de un plato
 # (nombre + ingredientes) para excluirla en los swaps siguientes del día → 4 proteínas distintas,
 # no 2 de res. Orden: principales primero, lácteos/legumbres al final (queso/yogurt son la
@@ -6805,6 +6876,28 @@ def api_regenerate_day(
                         # solo si ni el 25% del delta cabe. Cada intento parte de una copia fresca
                         # del estado pre-rebalance (el rebalance muta in-place).
                         _partial_ok = False
+                        # [P1-REBALANCE-LINE-CLAMP · 2026-07-10] Nivel 1 de la escalera: excluir el
+                        # plato de la línea topada y que el RESTO absorba el gap completo del día
+                        # (con 51 items en Nevera, un yogurt corto no debe costar la banda entera).
+                        # Niveles 2-3 (fracs 50/25% + revert) quedan como fallback.
+                        try:
+                            _ok_lc, _meals_lc, _excl_lc = _rebalance_day_with_line_clamp(
+                                _pre_rb, day_target, _orig_ledger_grams, _db,
+                                renal_capped=_renal_capped,
+                                rebalance_fn=_rebalance_day_macros_to_target,
+                                exceeds_fn=_day_exceeds_pantry,
+                                first_violator=(_why.split(":")[0] if _why else ""),
+                            )
+                            if _ok_lc and _meals_lc:
+                                new_meals[:] = _meals_lc
+                                _partial_ok = True
+                                logger.info(
+                                    f"🎚 [P1-REBALANCE-LINE-CLAMP] día re-apuntado al target excluyendo "
+                                    f"{_excl_lc}: la línea topada conserva su porción y el resto del día "
+                                    f"absorbe el gap (sin inventar compras)."
+                                )
+                        except Exception as _lc_e:
+                            logger.debug(f"[P1-REBALANCE-LINE-CLAMP] no-op: {_lc_e}")
                         try:
                             _cur_p_rb = sum(float(_m.get("protein") or 0) for _m in _pre_rb if isinstance(_m, dict))
                             _cur_c_rb = sum(float(_m.get("carbs") or 0) for _m in _pre_rb if isinstance(_m, dict))
@@ -6812,7 +6905,8 @@ def api_regenerate_day(
                             _tgt_p_rb = 0.0 if _renal_capped else float(day_target.get("protein_g") or 0)
                             _tgt_c_rb = float(day_target.get("carbs_g") or 0)
                             _tgt_f_rb = float(day_target.get("fats_g") or 0)
-                            for _frac_rb in (0.5, 0.25):
+                            # [P1-REBALANCE-LINE-CLAMP] fracs solo si el line-clamp no resolvió
+                            for _frac_rb in ((0.5, 0.25) if not _partial_ok else ()):
                                 _attempt_rb = _copy_rb.deepcopy(_pre_rb)
                                 _real_att = [m for m in _attempt_rb if isinstance(m, dict)]
                                 _mid_c = _cur_c_rb + (_tgt_c_rb - _cur_c_rb) * _frac_rb if _tgt_c_rb else 0.0
