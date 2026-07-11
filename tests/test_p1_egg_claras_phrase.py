@@ -80,13 +80,15 @@ def test_claras_bowl_reassigned_keeps_intrinsic_tortilla(_go):
 
 
 def test_two_intrinsic_claras_left_to_gate(_go):
-    # 'Tortilla de Claras' + 'Revoltillo de Claras' — ambos intrínsecos → gate/retry (identidad).
+    # [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] contrato actualizado: ambos intrínsecos YA NO
+    # quedan para el gate (3 rechazos + entrega degradada en corr=9cc4317e). Keeper = desayuno.
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Tortilla de Claras", ["4 claras"]),
         _meal("Cena", "Revoltillo de Claras con Espinaca", ["3 claras", "espinaca"]),
     ]}]
-    assert _go._protein_repeat_autofix(days, {}, db=object()) == 0
-    assert _count_egg_meals(days[0]) == 2
+    assert _go._protein_repeat_autofix(days, {}, db=object()) >= 1
+    assert _count_egg_meals(days[0]) == 1
+    assert "claras" in " ".join(days[0]["meals"][0]["ingredients"]), "keeper = desayuno"
 
 
 def test_marker_anchored_in_source():

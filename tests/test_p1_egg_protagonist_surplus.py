@@ -99,13 +99,16 @@ def test_arepita_side_egg_reassignable_despite_binder_token(go):
 
 
 def test_binder_egg_without_modifier_protected(go):
-    """'Croquetas de Yuca' con huevo-ligante SIN modo de cocción en el nombre → protegido."""
+    """[P1-EGG-INTRINSIC-DEDUP · 2026-07-11] La croqueta (huevo-ligante) sigue INTOCABLE,
+    pero es el keeper implícito: el otro plato-huevo se reasigna (antes huevo×2 → gate)."""
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Revoltillo de Huevo", ["3 huevos"]),
         _meal("Cena", "Croquetas de Yuca", ["1 huevo", "150 g de yuca"]),
     ]}]
-    assert go._protein_repeat_autofix(days, {}, db=object()) == 0, "el huevo-ligante es funcional"
-    assert "1 huevo" in days[0]["meals"][1]["ingredients"]
+    assert go._protein_repeat_autofix(days, {}, db=object()) >= 1
+    assert "1 huevo" in days[0]["meals"][1]["ingredients"], "el huevo-ligante es funcional"
+    assert "huevos" not in " ".join(days[0]["meals"][0]["ingredients"]), \
+        "el revoltillo cede (el binder no se puede tocar)"
 
 
 def test_all_named_keeps_first(go):
@@ -119,17 +122,23 @@ def test_all_named_keeps_first(go):
 
 
 def test_two_intrinsic_left_to_gate(go):
-    """2 revoltillos/tortillas el mismo día: renombrar una a no-huevo es incoherente → gate/retry."""
+    """[P1-EGG-INTRINSIC-DEDUP · 2026-07-11] 2 intrínsecos same-day YA NO van al gate:
+    keeper = desayuno; la cena recibe transplante de cabeza ("Tortilla..." → "Salteado...")."""
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Revoltillo de Huevo con Mangú", ["2 huevos", "200 g de plátano"]),
         _meal("Cena", "Tortilla de Huevo con Espinaca", ["3 huevos", "80 g de espinaca"]),
     ]}]
-    assert go._protein_repeat_autofix(days, {}, db=object()) == 0
-    assert _count_egg_meals(go, days[0]) == 2, "ambos intrínsecos intactos (identidad)"
+    assert go._protein_repeat_autofix(days, {}, db=object()) >= 1
+    assert _count_egg_meals(go, days[0]) == 1, "conserva exactamente una comida-huevo"
+    assert "huevos" in " ".join(days[0]["meals"][0]["ingredients"]), "keeper = desayuno"
+    assert not days[0]["meals"][1]["name"].lower().startswith("tortilla")
 
 
 def test_knob_off_no_escalation(go, monkeypatch):
+    # [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] rollback completo = ambos knobs OFF (el pase
+    # 3 tiene knob propio MEALFIT_EGG_INTRINSIC_DEDUP).
     monkeypatch.setattr(go, "EGG_PROTAGONIST_SURPLUS_ENABLED", False)
+    monkeypatch.setattr(go, "EGG_INTRINSIC_DEDUP_ENABLED", False)
     days = [{"day": 1, "meals": [
         _meal("Desayuno", "Puré de Batata con Huevos Revueltos", ["200 g de batata", "2 huevos"]),
         _meal("Cena", "Revoltillo de Huevo", ["3 huevos"]),

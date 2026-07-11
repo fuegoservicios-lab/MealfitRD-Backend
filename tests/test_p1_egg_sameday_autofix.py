@@ -62,17 +62,26 @@ def test_egg_sameday_filler_rewritten(go):
 
 
 def test_two_protagonists_left_to_gate(go):
+    # [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] contrato actualizado: "decide el gate" produjo
+    # 3 rechazos + entrega degradada (corr=9cc4317e). El pase (3) conserva el desayuno y
+    # transplanta la cabeza del otro plato ("Tortilla..." → "Salteado...").
     days = _mk_day(second_name="Tortilla de Claras", second_ings=("4 claras", "50 g de espinaca"))
-    assert go._protein_repeat_autofix(days, {}, db=object()) == 0, \
-        "revoltillo + tortilla el mismo día = ambos identidad → decide el corrector/gate"
-    assert "claras" in " ".join(days[0]["meals"][1]["ingredients"])
+    assert go._protein_repeat_autofix(days, {}, db=object()) >= 1
+    assert "huevos" in " ".join(days[0]["meals"][0]["ingredients"]), "keeper = desayuno"
+    assert "claras" not in " ".join(days[0]["meals"][1]["ingredients"]), "merienda reasignada"
+    assert not days[0]["meals"][1]["name"].lower().startswith("tortilla"), "cabeza transplantada"
 
 
 def test_binder_dish_protected(go):
+    # [P1-EGG-INTRINSIC-DEDUP · 2026-07-11] la croqueta (huevo-ligante) sigue INTOCABLE,
+    # pero ya no bloquea el dedup: es el keeper implícito y el OTRO plato-huevo se
+    # reasigna (antes el día quedaba con huevo×2 para el gate → rechazo).
     days = _mk_day(second_name="Croquetas de Yuca", second_ings=("1 huevo", "100 g de yuca"))
-    assert go._protein_repeat_autofix(days, {}, db=object()) == 0
+    assert go._protein_repeat_autofix(days, {}, db=object()) >= 1
     assert "1 huevo" in days[0]["meals"][1]["ingredients"], \
         "el huevo-aglutinante de la croqueta es funcional"
+    assert "huevos" not in " ".join(days[0]["meals"][0]["ingredients"]), \
+        "el desayuno (reescribible) cede: el binder no se puede tocar"
 
 
 def test_idempotent(go):

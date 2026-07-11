@@ -22635,13 +22635,31 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                         _egg_now3 = [m for m in meals if isinstance(m, dict)
                                      and _alias_hit(m, "huevo") is not None]
                         if len(_egg_now3) >= 2:
-                            _keeper3 = next(
-                                (m for m in _egg_now3
-                                 if "desayuno" in _sa_eh(str(m.get("meal", "")).lower())),
-                                _egg_now3[0])
-                            for _meal in _egg_now3:
-                                if _meal is _keeper3 or fixes_left <= 0:
-                                    continue
+                            # Aglutinantes (croqueta: el huevo LIGA la masa) siguen intocables —
+                            # son keepers implícitos. Si hay ≥2 protegidos o nada reescribible,
+                            # el gate decide (impotencia observable).
+                            def _protected_binder3(m):
+                                _nl3b = _sa_eh(str(m.get("name", "")).lower())
+                                return (any(t in _nl3b for t in _EGG_BINDER_DISH_TOKENS)
+                                        and not _EGG_SIDE_MODIFIER_RX.search(_nl3b))
+                            _protected3 = [m for m in _egg_now3 if _protected_binder3(m)]
+                            _rewritable3 = [m for m in _egg_now3 if m not in _protected3]
+                            if len(_protected3) >= 2 or not _rewritable3:
+                                _log_autofix_impotent(_d.get("day", "?"), "huevo",
+                                                      "egg_intrinsic_all_protected")
+                                _to_fix3 = []
+                            elif _protected3:
+                                # el binder es el keeper → TODAS las reescribibles se reasignan.
+                                _to_fix3 = _rewritable3
+                            else:
+                                _keeper3 = next(
+                                    (m for m in _rewritable3
+                                     if "desayuno" in _sa_eh(str(m.get("meal", "")).lower())),
+                                    _rewritable3[0])
+                                _to_fix3 = [m for m in _rewritable3 if m is not _keeper3]
+                            for _meal in _to_fix3:
+                                if fixes_left <= 0:
+                                    break
                                 _nl3 = _sa_eh(str(_meal.get("name", "")).lower())
                                 _prefer3 = next(
                                     (lb for lb, disp in _EGG_LABEL_DISPLAY.items()
@@ -22657,8 +22675,12 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
                                 _disp3 = _EGG_LABEL_DISPLAY.get(_lab3, _lab3)
                                 _old3 = str(_meal.get("name") or "")
                                 _new3 = _EGG_INTRINSIC_HEAD_SUB_RX.sub("Salteado", _old3, count=1)
-                                if _new3 == _old3:
-                                    _new3 = _replace_egg_phrase_in_name(_old3, _disp3) or _old3
+                                # La cola del nombre puede seguir nombrando huevo ("Tortilla
+                                # DE HUEVO con Espinaca" → "Salteado de Huevo…"): sustituir
+                                # también la frase de huevo o el detector sigue viendo huevo×2.
+                                _phr3 = _replace_egg_phrase_in_name(_new3, _disp3)
+                                if _phr3:
+                                    _new3 = _phr3
                                 if _sa_eh(_disp3.lower().split()[0]) not in _sa_eh(_new3.lower()):
                                     _new3 = _re.sub(r"^\s*Salteado\b", f"Salteado de {_disp3}",
                                                     _new3, count=1)
