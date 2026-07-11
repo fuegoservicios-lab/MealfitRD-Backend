@@ -194,7 +194,9 @@ def test_dashboard_banner_uses_amber_not_red():
     # Buscar el bloque del banner por su comment marker
     banner_idx = src.find("[P1-LOW-SIGNAL-FALLBACK · 2026-05-21] Banner")
     assert banner_idx > 0
-    snippet = src[banner_idx:banner_idx + 2000]
+    # [P1-PLAN-FREEZE · 2026-07-11] 2000→3600: el banner de plan-congelado vive entre
+    # el comment marker y el JSX del banner amber.
+    snippet = src[banner_idx:banner_idx + 3600]
     # Color amber/warning detectable por presencia de tonos amarillos/ámbar
     assert "#FFFBEB" in snippet or "#FEF3C7" in snippet or "#FCD34D" in snippet, (
         "Banner debe usar paleta amber (#FFFBEB/#FEF3C7/#FCD34D), no red."

@@ -8377,11 +8377,23 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             except Exception as _depl_err:
                 logger.warning(f"⚠️ [P3-RESTOCK-DELETE-DEPLETED] cleanup falló (best-effort): {_depl_err}")
 
+            # [P1-PLAN-FREEZE · 2026-07-11] hook inmediato: si el plan estaba congelado
+            # por Nevera vacía y este restock cumple el mínimo, descongela AL INSTANTE
+            # (corre fechas + reanuda chunks + push). Best-effort; el sweep horario es
+            # el backstop.
+            _unfrozen_now = False
+            try:
+                from cron_tasks import try_unfreeze_plan_for_user
+                _unfrozen_now = try_unfreeze_plan_for_user(user_id)
+            except Exception as _uf_e:
+                logger.debug(f"[P1-PLAN-FREEZE] hook restock no-op: {type(_uf_e).__name__}: {_uf_e}")
+
             return {
                 "success": True,
                 "message": "¡Despensa actualizada exitosamente!",
                 "persisted_count": len(persisted_names),
                 "requested_count": len(filtered_ingredients),
+                "plan_unfrozen": _unfrozen_now,
             }
         else:
             return {"success": False, "message": "Hubo un problema actualizando algunos ingredientes."}

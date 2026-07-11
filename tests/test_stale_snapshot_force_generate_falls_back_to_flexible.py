@@ -75,7 +75,7 @@ def test_p0_5_snapshot_beyond_hard_fail_pauses_unconditionally():
 
     with patch("cron_tasks.get_user_inventory_net", side_effect=Exception("API down")), \
          patch("cron_tasks._pause_chunk_for_stale_inventory") as mock_pause, \
-         patch("cron_tasks._dispatch_push_notification") as mock_notify:
+         patch("cron_tasks._dispatch_pantry_nudge") as mock_notify:  # [P2-PANTRY-NUDGE-THROTTLE] canal único
 
         updated = _refresh_chunk_pantry(
             user_id=user_id,
@@ -103,7 +103,10 @@ def test_p0_5_snapshot_beyond_hard_fail_pauses_unconditionally():
     # 3. Usuario notificado vía push.
     mock_notify.assert_called_once()
     notify_kwargs = mock_notify.call_args.kwargs
-    assert "Refresca tu nevera" in notify_kwargs["title"]
+    # [P2-PANTRY-NUDGE-THROTTLE · 2026-07-11] el copy unificado vive DENTRO del canal
+    # (el mock intercepta antes); el contrato observable es: se pidió notificar al user.
+    _args_all = mock_notify.call_args
+    assert "test_user_hard_fail" in str(_args_all), "el nudge debe dirigirse al usuario del chunk"
 
 
 def test_p0_5_hard_fail_disabled_via_env_preserves_flex_path():

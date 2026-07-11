@@ -7101,6 +7101,27 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"(staleness_h={_env_int('MEALFIT_CB_KV_STALENESS_HOURS', 2)}h)."
         )
 
+    # [P1-PLAN-FREEZE · 2026-07-11] Sweep de congelación por Nevera vacía:
+    # recordar (24h) → congelar (48h, contador de días congelado) → reanudar
+    # (restock) → archivar (30d). La CUENTA jamás se toca.
+    if not scheduler.get_job("plan_freeze_sweep"):
+        _PF_INT = max(15, min(1440, _env_int("MEALFIT_PLAN_FREEZE_SWEEP_INTERVAL_MIN", 60)))
+        _add_job_jittered(scheduler,
+            _plan_freeze_sweep,
+            "interval",
+            minutes=_PF_INT,
+            id="plan_freeze_sweep",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-PLAN-FREEZE] Cron _plan_freeze_sweep registrado cada {_PF_INT} min "
+            f"(gracia={_env_int('MEALFIT_PLAN_FREEZE_GRACE_HOURS', 48)}h, "
+            f"archivo={_env_int('MEALFIT_PLAN_FREEZE_ARCHIVE_DAYS', 30)}d)."
+        )
+
     # [P1-CHAT-SESSION-TTL · 2026-05-20] Cron daily que purga sesiones de
     # chat con cero actividad por N días (default 90). Cierra storage
     # bloat slow-burn de `agent_sessions` + `agent_messages` (FK CASCADE).
@@ -9177,15 +9198,7 @@ def _refresh_chunk_pantry(
                 )
                 from constants import CHUNK_STALE_PANTRY_DEEPLINK as _DL_HF
                 try:
-                    _dispatch_push_notification(
-                        user_id=user_id,
-                        title="Refresca tu nevera para continuar tu plan",
-                        body=(
-                            f"No pudimos validar tu nevera y los datos guardados tienen "
-                            f"{_hf_age_int}h. Abre la app para sincronizarla y seguir tu plan."
-                        ),
-                        url=_DL_HF,
-                    )
+                    _dispatch_pantry_nudge(user_id, url=_DL_HF)  # [P2-PANTRY-NUDGE-THROTTLE]
                 except Exception as _hf_notif_err:
                     logger.warning(
                         f"[P0-5/HARD-FAIL] Falló notificación push para {user_id}: {_hf_notif_err}"
@@ -9311,15 +9324,7 @@ def _refresh_chunk_pantry(
                 )
                 from constants import CHUNK_STALE_PANTRY_DEEPLINK as _DL
                 _age_int = int(round(snapshot_age_hours)) if snapshot_age_hours else 0
-                _dispatch_push_notification(
-                    user_id=user_id,
-                    title="Refresca tu nevera para continuar tu plan",
-                    body=(
-                        f"Tu inventario no se sincroniza hace {_age_int}h. "
-                        f"Abre la app y refresca tu nevera para que generemos los próximos días."
-                    ),
-                    url=_DL,
-                )
+                _dispatch_pantry_nudge(user_id, url=_DL)  # [P2-PANTRY-NUDGE-THROTTLE]
                 _pause_chunk_for_stale_inventory(
                     task_id,
                     user_id,
@@ -12345,12 +12350,8 @@ def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_numbe
     # [P1-REFILL-SIBLING-PAUSE-GATE · 2026-07-10] notify=False cuando el plan YA tiene un
     # sibling pausado que notificó — pausar la semana siguiente no debe duplicar el push.
     if notify:
-        _dispatch_push_notification(
-            user_id=user_id,
-            title="Actualiza tu nevera para continuar",
-            body="Tu próximo chunk quedó en pausa porque tu inventario está vacío o casi vacío. Actualiza 'Mi Nevera' y reintenta.",
-            url="/dashboard",
-        )
+        # [P2-PANTRY-NUDGE-THROTTLE · 2026-07-11] canal único con cooldown 6h + copy claro.
+        _dispatch_pantry_nudge(user_id)
 
 
 def _pause_chunk_for_final_inventory_validation(
@@ -12418,12 +12419,7 @@ def _pause_chunk_for_final_inventory_validation(
         f"{CHUNK_FINAL_VALIDATION_PAUSE_TTL_HOURS}h. "
         f"missing_count={_missing_count} (recovery cron re-evaluará pantry actual)."
     )
-    _dispatch_push_notification(
-        user_id=user_id,
-        title="No pudimos confirmar tu nevera",
-        body="Tu próximo bloque quedó en pausa porque no pudimos validar tu inventario al final. Revisa 'Mi Nevera' y vuelve a intentar.",
-        url="/dashboard",
-    )
+    _dispatch_pantry_nudge(user_id)  # [P2-PANTRY-NUDGE-THROTTLE] canal único (cooldown 6h)
 
 
 # [P1-4] Telemetría de fallbacks de pantry_tolerance. Antes los fallbacks eran
@@ -12874,6 +12870,60 @@ def _pantry_covers_missing(missing_ingredients: list, current_pantry: list) -> t
     return (len(still_missing) == 0), still_missing
 
 
+def _dispatch_pantry_nudge(user_id: str, title: str = None, body: str = None, url: str = "/pantry") -> bool:
+    """[P2-PANTRY-NUDGE-THROTTLE · 2026-07-11] Canal ÚNICO para toda notificación de la
+    clase "nevera vacía / repón tu nevera". Feedback vivo del owner: le llegaba la misma
+    idea desde 6+ emisores distintos (pausa per-chunk, recordatorios per-chunk, validación
+    final, recovery, freeze) — a veces triplicada. Cooldown por USUARIO en app_kv_store
+    (`pantry_nudge_last:<user>`, default 6h, knob MEALFIT_PANTRY_NUDGE_COOLDOWN_HOURS):
+    no importa cuántos chunks/eventos lo pidan, UNA notificación por ventana, con copy
+    unificado y claro. Retorna True si se envió. Fail-open: error de KV → envía igual
+    (mejor un aviso de más que un usuario congelado sin saberlo)."""
+    try:
+        _cool_h = max(1, min(72, _env_int("MEALFIT_PANTRY_NUDGE_COOLDOWN_HOURS", 6)))
+        _key = f"pantry_nudge_last:{user_id}"
+        try:
+            _row = execute_sql_query(
+                "SELECT value FROM app_kv_store WHERE key = %s", (_key,), fetch_one=True,
+            )
+            _last = (_row or {}).get("value")
+            if isinstance(_last, str):
+                _last = json.loads(_last)
+            _last_iso = (_last or {}).get("sent_at")
+            if _last_iso:
+                _last_dt = datetime.fromisoformat(str(_last_iso).replace("Z", "+00:00"))
+                if _last_dt.tzinfo is None:
+                    _last_dt = _last_dt.replace(tzinfo=timezone.utc)
+                _elapsed_h = (datetime.now(timezone.utc) - _last_dt).total_seconds() / 3600.0
+                if _elapsed_h < _cool_h:
+                    logger.info(
+                        f"🔕 [P2-PANTRY-NUDGE-THROTTLE] nudge de nevera suprimido para "
+                        f"{user_id[:8]} (último hace {_elapsed_h:.1f}h < cooldown {_cool_h}h)."
+                    )
+                    return False
+        except Exception as _kv_e:
+            logger.debug(f"[P2-PANTRY-NUDGE-THROTTLE] KV read no-op: {type(_kv_e).__name__}: {_kv_e}")
+        _dispatch_push_notification(
+            user_id=user_id,
+            title=title or "Tu Nevera está vacía 🧊",
+            body=body or ("Agrega tus alimentos a la Nevera para que tu plan empiece a "
+                          "funcionar. Tip: puedes transferir tu lista de compras con un toque."),
+            url=url,
+        )
+        try:
+            execute_sql_write(
+                "INSERT INTO app_kv_store (key, value, updated_at) VALUES (%s, %s::jsonb, NOW()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                (_key, json.dumps({"sent_at": datetime.now(timezone.utc).isoformat()})),
+            )
+        except Exception as _kvw_e:
+            logger.debug(f"[P2-PANTRY-NUDGE-THROTTLE] KV write no-op: {type(_kvw_e).__name__}: {_kvw_e}")
+        return True
+    except Exception as _pn_e:
+        logger.warning(f"[P2-PANTRY-NUDGE-THROTTLE] nudge falló: {type(_pn_e).__name__}: {_pn_e}")
+        return False
+
+
 def _dispatch_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard") -> None:
     # [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Rutea por el `bg_executor` bounded
     # (timeout + alert + drenado en shutdown) en lugar de un daemon thread crudo.
@@ -13071,15 +13121,7 @@ def _handle_reservation_reconciliation_exhausted(
 
     # 3. Push (best-effort).
     try:
-        _dispatch_push_notification(
-            user_id=exc.user_id,
-            title="Tu plan necesita revisión de nevera",
-            body=(
-                "Tuvimos un problema actualizando tu inventario. "
-                "Refresca tu nevera para que retomemos la generación."
-            ),
-            url="/dashboard",
-        )
+        _dispatch_pantry_nudge(exc.user_id)  # [P2-PANTRY-NUDGE-THROTTLE]
     except Exception as _push_err:
         logger.warning(
             f"[P1-CHUNKS-2/EXHAUSTED] Push falló para user={exc.user_id}: {_push_err!r}"
@@ -33011,3 +33053,286 @@ def _sweep_stale_chat_sessions() -> int:
             f"inactivas >{ttl_days}d (batch={batch})."
         )
     return deleted_count
+
+
+# ============================================================================
+# [P1-PLAN-FREEZE · 2026-07-11] Congelación del plan por Nevera vacía (decisión
+# de producto del owner, versión con gracia — SIN borrado/desactivación de
+# cuentas jamás):
+#   - Gracia (48h desde plan nuevo/última actividad de inventario) para
+#     transferir la compra: la Nevera vacía el día 0-1 es el estado NORMAL
+#     (P1-CHUNK-AUTONOMY) — comprar viene DESPUÉS de ver la lista.
+#   - Recordatorio push a las 24h vacías.
+#   - A las 48h: plan CONGELADO — chunks pausados + flag `_frozen_at` (el
+#     contador de días queda congelado DE VERDAD: al reanudar, las fechas del
+#     plan se corren por los días congelados → el usuario no pierde días).
+#   - Reanudación automática al reponer (≥ mínimo significativo): corrimiento
+#     de fechas + chunks resume + push. Backstop en este sweep + hook
+#     inmediato en /restock.
+#   - A los 30 días congelado: plan ARCHIVADO (flag; la CUENTA nunca se toca).
+# tooltip-anchor: P1-PLAN-FREEZE
+# ============================================================================
+
+_PLAN_FREEZE_ACTIVE_STATUSES = ("complete", "partial", "generating_next", "complete_partial")
+
+
+def _shift_plan_dates_for_freeze(plan_id: str, user_id: str, days: int) -> int:
+    """Corre las fechas-ancla del plan y los execute_after de sus chunks vivos
+    `days` días hacia adelante (jsonb_set quirúrgico por key existente, I6/I7-safe;
+    TODA mutación con AND user_id — I2). Retorna nº de statements aplicados."""
+    if days <= 0:
+        return 0
+    applied = 0
+    for _key in ("_plan_start_date", "plan_start_date", "grocery_start_date", "cycle_start_date"):
+        try:
+            execute_sql_write(
+                "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, %s::text[], "
+                "to_jsonb((((plan_data->>%s)::timestamptz) + make_interval(days => %s))::text))"
+                ", '{_plan_modified_at}', to_jsonb(NOW()::text)) "
+                "WHERE id = %s AND user_id = %s AND plan_data ? %s "
+                "AND (plan_data->>%s) ~ '^[0-9]{4}-'",
+                ("{" + _key + "}", _key, days, plan_id, user_id, _key, _key),
+            )
+            applied += 1
+        except Exception as _sh_e:
+            logger.debug(f"[P1-PLAN-FREEZE] shift de {_key} no-op: {type(_sh_e).__name__}: {_sh_e}")
+    try:
+        execute_sql_write(
+            "UPDATE plan_chunk_queue SET execute_after = execute_after + make_interval(days => %s), "
+            "updated_at = NOW() WHERE meal_plan_id = %s AND user_id = %s "
+            "AND status IN ('pending', 'pending_user_action')",
+            (days, plan_id, user_id),
+        )
+        applied += 1
+    except Exception as _shc_e:
+        logger.debug(f"[P1-PLAN-FREEZE] shift de chunks no-op: {type(_shc_e).__name__}: {_shc_e}")
+    return applied
+
+
+def _resume_frozen_plan(plan_id: str, user_id: str, frozen_at_iso: str) -> bool:
+    """Descongela: corre fechas por los días congelados, limpia flags, reanuda
+    chunks pausados y notifica. Idempotente (flag-guard en el caller)."""
+    try:
+        _frozen_dt = datetime.fromisoformat(str(frozen_at_iso).replace("Z", "+00:00"))
+        if _frozen_dt.tzinfo is None:
+            _frozen_dt = _frozen_dt.replace(tzinfo=timezone.utc)
+        _days_frozen = max(0, (datetime.now(timezone.utc) - _frozen_dt).days)
+        _shift_plan_dates_for_freeze(plan_id, user_id, _days_frozen)
+        execute_sql_write(
+            "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set("
+            "(plan_data - '_frozen_at' - '_freeze_reminder_at'), '{_last_unfrozen_at}', to_jsonb(%s::text))"
+            ", '{_plan_modified_at}', to_jsonb(NOW()::text)) "
+            "WHERE id = %s AND user_id = %s",
+            (datetime.now(timezone.utc).isoformat(), plan_id, user_id),
+        )
+        # reanudar chunks: en este punto la Nevera YA cumple el mínimo — reanudar
+        # también los pausados por pantry (misma causa raíz, ya resuelta).
+        execute_sql_write(
+            "UPDATE plan_chunk_queue SET status = 'pending', attempts = 0, updated_at = NOW() "
+            "WHERE meal_plan_id = %s AND user_id = %s AND status = 'pending_user_action'",
+            (plan_id, user_id),
+        )
+        logger.info(
+            f"🧊→▶️ [P1-PLAN-FREEZE] Plan {plan_id[:8]} REANUDADO para user {user_id[:8]}: "
+            f"{_days_frozen} día(s) congelado(s) corridos; chunks reanudados."
+        )
+        try:
+            _dispatch_push_notification(
+                user_id=user_id,
+                title="¡Tu plan está de vuelta! 🧊→▶️",
+                body=(f"Reanudamos tu plan y corrimos {_days_frozen} día(s) que estuvo congelado — "
+                      "no perdiste nada. ¡A cocinar!") if _days_frozen
+                else "Reanudamos tu plan. ¡A cocinar!",
+                url="/dashboard",
+            )
+        except Exception:
+            pass
+        return True
+    except Exception as _rf_e:
+        logger.warning(f"[P1-PLAN-FREEZE] resume falló para plan {plan_id[:8]}: "
+                       f"{type(_rf_e).__name__}: {_rf_e}")
+        return False
+
+
+def try_unfreeze_plan_for_user(user_id: str) -> bool:
+    """Hook inmediato post-restock (/restock): si el plan ACTIVO del usuario está
+    congelado y la Nevera ya cumple el mínimo, descongela al instante (UX snappy;
+    el sweep horario es el backstop). Fail-safe → False."""
+    try:
+        if not _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True) or not user_id:
+            return False
+        row = execute_sql_query(
+            "SELECT id::text AS plan_id, plan_data->>'_frozen_at' AS frozen_at "
+            "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+            (user_id,), fetch_one=True,
+        )
+        if not row or not row.get("frozen_at"):
+            return False
+        inv = execute_sql_query(
+            "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+            (user_id,), fetch_all=True,
+        ) or []
+        _min = max(1, _env_int("MEALFIT_PLAN_FREEZE_MIN_ITEMS", CHUNK_MIN_FRESH_PANTRY_ITEMS))
+        if _count_meaningful_pantry_items([r.get("ingredient_name") for r in inv]) < _min:
+            return False
+        return _resume_frozen_plan(row["plan_id"], user_id, row["frozen_at"])
+    except Exception as _tu_e:
+        logger.debug(f"[P1-PLAN-FREEZE] try_unfreeze no-op: {type(_tu_e).__name__}: {_tu_e}")
+        return False
+
+
+def _plan_freeze_sweep() -> dict:
+    """[P1-PLAN-FREEZE · 2026-07-11] Sweep horario: recordar → congelar → reanudar →
+    archivar. Solo el plan ACTIVO (más reciente) por usuario autenticado. La CUENTA
+    jamás se toca (decisión explícita: cero borrado/desactivación automática)."""
+    stats = {"checked": 0, "reminded": 0, "frozen": 0, "resumed": 0, "archived": 0}
+    if not _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True):
+        return stats
+    _grace_h = max(6, min(720, _env_int("MEALFIT_PLAN_FREEZE_GRACE_HOURS", 48)))
+    _remind_h = max(1, min(_grace_h - 1, _env_int("MEALFIT_PLAN_FREEZE_REMINDER_HOURS", 24)))
+    _min_items = max(1, _env_int("MEALFIT_PLAN_FREEZE_MIN_ITEMS", CHUNK_MIN_FRESH_PANTRY_ITEMS))
+    _archive_d = max(3, min(365, _env_int("MEALFIT_PLAN_FREEZE_ARCHIVE_DAYS", 30)))
+    try:
+        rows = execute_sql_query(
+            "SELECT DISTINCT ON (mp.user_id) mp.id::text AS plan_id, mp.user_id::text AS user_id, "
+            "mp.created_at, mp.plan_data->>'generation_status' AS gstatus, "
+            "mp.plan_data->>'_frozen_at' AS frozen_at, "
+            "mp.plan_data->>'_freeze_reminder_at' AS reminder_at, "
+            "mp.plan_data->>'_frozen_archived_at' AS archived_at, "
+            "mp.plan_data->>'_last_unfrozen_at' AS unfrozen_at "
+            "FROM meal_plans mp WHERE mp.user_id IS NOT NULL "
+            "AND mp.created_at > NOW() - INTERVAL '120 days' "
+            "ORDER BY mp.user_id, mp.created_at DESC",
+            (), fetch_all=True,
+        ) or []
+        _now = datetime.now(timezone.utc)
+        for r in rows:
+            if str(r.get("gstatus") or "") not in _PLAN_FREEZE_ACTIVE_STATUSES:
+                continue
+            if r.get("archived_at"):
+                continue
+            stats["checked"] += 1
+            plan_id, user_id = r["plan_id"], r["user_id"]
+            inv = execute_sql_query(
+                "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
+                (user_id,), fetch_all=True,
+            ) or []
+            _meaningful = _count_meaningful_pantry_items([x.get("ingredient_name") for x in inv])
+
+            if r.get("frozen_at"):
+                if _meaningful >= _min_items:
+                    if _resume_frozen_plan(plan_id, user_id, r["frozen_at"]):
+                        stats["resumed"] += 1
+                    continue
+                try:
+                    _fdt = datetime.fromisoformat(str(r["frozen_at"]).replace("Z", "+00:00"))
+                    if _fdt.tzinfo is None:
+                        _fdt = _fdt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+                if (_now - _fdt).days >= _archive_d:
+                    execute_sql_write(
+                        "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, "
+                        "'{_frozen_archived_at}', to_jsonb(%s::text))"
+                        ", '{_plan_modified_at}', to_jsonb(NOW()::text)) "
+                        "WHERE id = %s AND user_id = %s",
+                        (_now.isoformat(), plan_id, user_id),
+                    )
+                    stats["archived"] += 1
+                    logger.info(f"🗄️ [P1-PLAN-FREEZE] Plan {plan_id[:8]} ARCHIVADO tras "
+                                f"{_archive_d}+ días congelado (la cuenta queda intacta).")
+                    try:
+                        _dispatch_push_notification(
+                            user_id=user_id,
+                            title="Tu plan quedó archivado",
+                            body="Sigue guardado en tu Historial. Cuando quieras volver, genera uno nuevo — tu cuenta y tus datos están intactos.",
+                            url="/dashboard",
+                        )
+                    except Exception:
+                        pass
+                continue
+
+            # No congelado: ¿Nevera bajo el mínimo?
+            if _meaningful >= _min_items:
+                continue
+            # ancla de gracia: lo MÁS RECIENTE entre creación del plan, última
+            # actividad de inventario y el último descongelamiento.
+            _anchor = r["created_at"]
+            if _anchor and _anchor.tzinfo is None:
+                _anchor = _anchor.replace(tzinfo=timezone.utc)
+            _last_act = execute_sql_query(
+                "SELECT MAX(updated_at) AS m FROM user_inventory WHERE user_id = %s",
+                (user_id,), fetch_one=True,
+            ) or {}
+            for _cand in (_last_act.get("m"), r.get("unfrozen_at")):
+                try:
+                    _cdt = _cand if hasattr(_cand, "tzinfo") else (
+                        datetime.fromisoformat(str(_cand).replace("Z", "+00:00")) if _cand else None)
+                    if _cdt is not None and _cdt.tzinfo is None:
+                        _cdt = _cdt.replace(tzinfo=timezone.utc)
+                    if _cdt is not None and _cdt > _anchor:
+                        _anchor = _cdt
+                except Exception:
+                    continue
+            _hours_empty = (_now - _anchor).total_seconds() / 3600.0
+            if _hours_empty >= _grace_h:
+                execute_sql_write(
+                    "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, "
+                    "'{_frozen_at}', to_jsonb(%s::text)), '{_plan_modified_at}', "
+                    "to_jsonb(NOW()::text)) WHERE id = %s AND user_id = %s",
+                    (_now.isoformat(), plan_id, user_id),
+                )
+                execute_sql_write(
+                    "UPDATE plan_chunk_queue SET status = 'pending_user_action', updated_at = NOW() "
+                    "WHERE meal_plan_id = %s AND user_id = %s AND status = 'pending'",
+                    (plan_id, user_id),
+                )
+                stats["frozen"] += 1
+                logger.warning(
+                    f"🧊 [P1-PLAN-FREEZE] Plan {plan_id[:8]} CONGELADO para user {user_id[:8]}: "
+                    f"Nevera bajo mínimo ({_meaningful}<{_min_items}) por {_hours_empty:.0f}h "
+                    f"(gracia {_grace_h}h). El contador de días queda congelado."
+                )
+                try:
+                    _dispatch_pantry_nudge(
+                        user_id,
+                        title="Tu plan está en pausa 🧊",
+                        body="Tu Nevera está vacía, así que congelamos tu plan — tus días NO corren. Agrega tus alimentos y todo se reanuda solo.",
+                    )  # [P2-PANTRY-NUDGE-THROTTLE]
+                except Exception:
+                    pass
+            elif _hours_empty >= _remind_h:
+                _rem = r.get("reminder_at")
+                _rem_fresh = False
+                try:
+                    if _rem:
+                        _rdt = datetime.fromisoformat(str(_rem).replace("Z", "+00:00"))
+                        if _rdt.tzinfo is None:
+                            _rdt = _rdt.replace(tzinfo=timezone.utc)
+                        _rem_fresh = _rdt >= _anchor
+                except Exception:
+                    _rem_fresh = False
+                if not _rem_fresh:
+                    execute_sql_write(
+                        "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, "
+                        "'{_freeze_reminder_at}', to_jsonb(%s::text)), '{_plan_modified_at}', "
+                        "to_jsonb(NOW()::text)) WHERE id = %s AND user_id = %s",
+                        (_now.isoformat(), plan_id, user_id),
+                    )
+                    stats["reminded"] += 1
+                    try:
+                        # [P2-PANTRY-NUDGE-THROTTLE] canal único (cooldown 6h) + copy claro.
+                        _dispatch_pantry_nudge(
+                            user_id,
+                            body=(f"Tu Nevera está vacía — agrega tus alimentos para que tu plan "
+                                  f"empiece a funcionar. Si sigue vacía en ~{max(1, int(_grace_h - _hours_empty))}h, "
+                                  "congelaremos el plan (sin perder días)."),
+                        )
+                    except Exception:
+                        pass
+        if any(stats[k] for k in ("reminded", "frozen", "resumed", "archived")):
+            logger.info(f"🧊 [P1-PLAN-FREEZE] sweep: {stats}")
+        return stats
+    except Exception as _pfs_e:
+        logger.warning(f"[P1-PLAN-FREEZE] sweep falló (no bloquea): {type(_pfs_e).__name__}: {_pfs_e}")
+        return stats

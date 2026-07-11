@@ -172,7 +172,7 @@ def test_pause_persists_missing_ingredients_deduplicated():
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._dispatch_push_notification", lambda *_a, **_kw: None):
+         patch("cron_tasks._dispatch_pantry_nudge", lambda *_a, **_kw: True):
         cron_tasks._pause_chunk_for_final_inventory_validation(
             task_id=1, user_id="u", week_number=2,
             reason="flexible_live_unreachable",
@@ -202,7 +202,7 @@ def test_pause_without_missing_does_not_set_key():
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._dispatch_push_notification", lambda *_a, **_kw: None):
+         patch("cron_tasks._dispatch_pantry_nudge", lambda *_a, **_kw: True):
         cron_tasks._pause_chunk_for_final_inventory_validation(
             task_id=1, user_id="u", week_number=2,
             reason="final_inventory_unavailable",
@@ -264,7 +264,7 @@ def _drive_recover(paused_rows, live_inventory=None, live_raises=False):
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
          patch("cron_tasks.get_user_inventory_net", side_effect=fake_live), \
-         patch("cron_tasks._dispatch_push_notification", lambda *_a, **_kw: None), \
+         patch("cron_tasks._dispatch_pantry_nudge", lambda *_a, **_kw: True), \
          patch("cron_tasks.get_inventory_activity_since",
                lambda *_a, **_kw: {"consumption_mutations_count": 0}):
         cron_tasks._recover_pantry_paused_chunks()

@@ -130,7 +130,7 @@ def test_handler_invokes_release_pause_push_alert():
     inconsistencia (audit P1-CHUNKS-2)."""
     with patch.object(cron_tasks, "release_chunk_reservations") as mock_release, \
          patch.object(cron_tasks, "_pause_chunk_for_pantry_refresh") as mock_pause, \
-         patch.object(cron_tasks, "_dispatch_push_notification") as mock_push, \
+         patch.object(cron_tasks, "_dispatch_pantry_nudge") as mock_push, \
          patch.object(cron_tasks, "execute_sql_write") as mock_write:
         _handle_reservation_reconciliation_exhausted(
             exc=_build_exception(),
@@ -151,7 +151,9 @@ def test_handler_invokes_release_pause_push_alert():
     # 3. push al usuario
     mock_push.assert_called_once()
     push_kwargs = mock_push.call_args.kwargs
-    assert push_kwargs.get("user_id") == "user-1"
+    # [P2-PANTRY-NUDGE-THROTTLE] el canal recibe el user_id posicional
+    _push_call = mock_push.call_args
+    assert (_push_call.kwargs.get("user_id") or (_push_call.args[0] if _push_call.args else None)) == "user-1"
     # 4. system_alerts INSERT
     sql_calls = [c for c in mock_write.call_args_list if "system_alerts" in str(c.args)]
     assert len(sql_calls) >= 1, "El helper debe persistir alerta en system_alerts."
@@ -173,7 +175,7 @@ def test_handler_continues_when_release_throws():
     with patch.object(cron_tasks, "release_chunk_reservations",
                       side_effect=RuntimeError("DB blip")) as mock_release, \
          patch.object(cron_tasks, "_pause_chunk_for_pantry_refresh") as mock_pause, \
-         patch.object(cron_tasks, "_dispatch_push_notification") as mock_push, \
+         patch.object(cron_tasks, "_dispatch_pantry_nudge") as mock_push, \
          patch.object(cron_tasks, "execute_sql_write"):
         # NO debe propagar la excepción.
         _handle_reservation_reconciliation_exhausted(
@@ -194,7 +196,7 @@ def test_handler_continues_when_pause_throws():
     with patch.object(cron_tasks, "release_chunk_reservations"), \
          patch.object(cron_tasks, "_pause_chunk_for_pantry_refresh",
                       side_effect=RuntimeError("schema error")) as mock_pause, \
-         patch.object(cron_tasks, "_dispatch_push_notification") as mock_push, \
+         patch.object(cron_tasks, "_dispatch_pantry_nudge") as mock_push, \
          patch.object(cron_tasks, "execute_sql_write") as mock_write:
         _handle_reservation_reconciliation_exhausted(
             exc=_build_exception(),
@@ -216,7 +218,7 @@ def test_handler_continues_when_push_throws():
     visibilidad del incidente."""
     with patch.object(cron_tasks, "release_chunk_reservations"), \
          patch.object(cron_tasks, "_pause_chunk_for_pantry_refresh"), \
-         patch.object(cron_tasks, "_dispatch_push_notification",
+         patch.object(cron_tasks, "_dispatch_pantry_nudge",
                       side_effect=RuntimeError("Firebase down")) as mock_push, \
          patch.object(cron_tasks, "execute_sql_write") as mock_write:
         _handle_reservation_reconciliation_exhausted(
@@ -239,7 +241,7 @@ def test_handler_no_emite_alerta_sin_meal_plan_id():
     release + pause + push."""
     with patch.object(cron_tasks, "release_chunk_reservations") as mock_release, \
          patch.object(cron_tasks, "_pause_chunk_for_pantry_refresh") as mock_pause, \
-         patch.object(cron_tasks, "_dispatch_push_notification") as mock_push, \
+         patch.object(cron_tasks, "_dispatch_pantry_nudge") as mock_push, \
          patch.object(cron_tasks, "execute_sql_write") as mock_write:
         _handle_reservation_reconciliation_exhausted(
             exc=_build_exception(),
@@ -265,7 +267,7 @@ def test_handler_continues_when_alert_throws():
 
     with patch.object(cron_tasks, "release_chunk_reservations") as mock_release, \
          patch.object(cron_tasks, "_pause_chunk_for_pantry_refresh") as mock_pause, \
-         patch.object(cron_tasks, "_dispatch_push_notification") as mock_push, \
+         patch.object(cron_tasks, "_dispatch_pantry_nudge") as mock_push, \
          patch.object(cron_tasks, "execute_sql_write", side_effect=_fake_write):
         # NO debe propagar.
         _handle_reservation_reconciliation_exhausted(

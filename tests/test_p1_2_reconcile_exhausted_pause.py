@@ -142,11 +142,13 @@ def test_handler_does_release_pause_push_alert_in_order():
     # SQL para system_alerts — evita matchear menciones en el docstring.
     release_idx = src.find("release_chunk_reservations(")
     pause_idx = src.find("_pause_chunk_for_pantry_refresh(")
-    push_idx = src.find("_dispatch_push_notification(")
+    # [P2-PANTRY-NUDGE-THROTTLE · 2026-07-11] el push de la clase nevera va por el
+    # canal único con cooldown — mismo orden del handler, nuevo nombre.
+    push_idx = src.find("_dispatch_pantry_nudge(")
     alert_idx = src.find("INSERT INTO system_alerts")
     assert release_idx != -1, "release_chunk_reservations no aparece en el helper."
     assert pause_idx != -1, "_pause_chunk_for_pantry_refresh no aparece en el helper."
-    assert push_idx != -1, "_dispatch_push_notification no aparece en el helper."
+    assert push_idx != -1, "_dispatch_pantry_nudge no aparece en el helper."
     assert alert_idx != -1, "INSERT INTO system_alerts no aparece en el helper."
     assert release_idx < pause_idx < push_idx < alert_idx, (
         "Orden incorrecto: release → pause → push → alert. "
