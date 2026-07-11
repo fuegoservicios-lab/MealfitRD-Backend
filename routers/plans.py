@@ -4357,17 +4357,21 @@ async def api_pantry_status(
     Response: {meaningful_count, min_required, recommended_target, is_below}.
     """
     from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS as _MIN, PANTRY_RECOMMENDED_ITEMS as _REC
+    # [P1-PANTRY-DASH-PARITY - 2026-07-11] Flag del escaner por foto tambien aqui:
+    # la pagina Nevera del dashboard ya consulta /pantry-status en cada cambio de
+    # inventario y no tiene los campos biometricos que exige /pantry-feasibility.
+    _scan = _photo_scan_enabled()
     if not verified_user_id or verified_user_id == "guest":
-        return {"meaningful_count": 0, "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": False}
+        return {"meaningful_count": 0, "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": False, "photo_scan_enabled": False}
     try:
         from db_inventory import get_user_inventory_net
         from cron_tasks import _count_meaningful_pantry_items
         net = await asyncio.to_thread(get_user_inventory_net, verified_user_id)
         count = _count_meaningful_pantry_items(net or [])
-        return {"meaningful_count": int(count), "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": count < _MIN}
+        return {"meaningful_count": int(count), "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": count < _MIN, "photo_scan_enabled": _scan}
     except Exception as e:
         logger.warning(f"[P2-PANTRY-LOW-BANNER] /pantry-status error: {e!r}")
-        return {"meaningful_count": 0, "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": False}
+        return {"meaningful_count": 0, "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": False, "photo_scan_enabled": _scan}
 
 
 @router.post("/budget-floor")

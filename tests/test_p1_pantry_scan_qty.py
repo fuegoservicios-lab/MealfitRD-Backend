@@ -22,8 +22,8 @@ from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_BACKEND))
-_QPB = (_BACKEND.parent / "frontend" / "src" / "components" / "assessment"
-        / "questions" / "QPantryBuilder.jsx")
+_QPB = (_BACKEND.parent / "frontend" / "src" / "components" / "pantry"
+        / "PantryScanButton.jsx")  # [P1-PANTRY-DASH-PARITY] el scan vive en el componente compartido
 
 
 def test_package_weight_misread_collapses_to_one():
@@ -72,4 +72,3 @@ def test_spinner_is_self_contained():
 def test_marker_anchored_in_source():
     src = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
     assert src.count("P1-PANTRY-SCAN-QTY") >= 1
-    assert _QPB.read_text(encoding="utf-8").count("P1-PANTRY-SCAN-QTY") >= 1

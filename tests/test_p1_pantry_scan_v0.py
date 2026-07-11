@@ -30,6 +30,8 @@ _FRONT = _BACKEND.parent / "frontend" / "src"
 _UD_SRC = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
 _PLANS_SRC = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
 _QPB_SRC = (_FRONT / "components" / "assessment" / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+# [P1-PANTRY-DASH-PARITY - 2026-07-11] El flujo del scan vive en el componente COMPARTIDO.
+_SCAN_SRC = (_FRONT / "components" / "pantry" / "PantryScanButton.jsx").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -118,27 +120,29 @@ def test_frontend_unit_selector_per_row():
 
 
 def test_frontend_scan_button_gated_by_flag():
-    assert "feas?.photo_scan_enabled && (" in _QPB_SRC, (
+    # [P1-PANTRY-DASH-PARITY] flujo en el componente compartido; QPB pasa el flag.
+    assert "enabled={!!feas?.photo_scan_enabled}" in _QPB_SRC, (
         "el botón de escaneo debe ocultarse sin provider (mostrar un botón que "
         "responde 503 frustra)"
     )
-    assert 'capture="environment"' in _QPB_SRC, "móvil debe abrir la cámara trasera"
+    assert "if (!enabled) return null;" in _SCAN_SRC
+    assert 'capture="environment"' in _SCAN_SRC, "móvil debe abrir la cámara trasera"
 
 
 def test_frontend_downscales_before_upload():
-    assert "_downscaleToB64" in _QPB_SRC and "maxSide = 1024" in _QPB_SRC, (
+    assert "_downscaleToB64" in _SCAN_SRC and "maxSide = 1024" in _SCAN_SRC, (
         "sin reescala client-side, una foto de celular de 4000px viaja completa "
         "(payload + tokens de imagen del modelo)"
     )
 
 
 def test_frontend_confirm_before_add():
-    assert "it.selected && it.master_ingredient_id" in _QPB_SRC, (
+    assert "it.selected && it.master_ingredient_id" in _SCAN_SRC, (
         "solo entra lo que el usuario marcó Y mapea al catálogo — el scan no "
         "escribe nada por sí solo"
     )
-    assert "(it.confidence ?? 0) >= 0.5" in _QPB_SRC, (
-        "preselección solo de detecciones confiables (≥0.5) con match"
+    assert "(it.confidence ?? 0) >= 0.5" in _SCAN_SRC, (
+        "preselección solo de detecciones confiables (>=0.5) con match"
     )
 
 

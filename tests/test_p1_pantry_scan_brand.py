@@ -18,8 +18,9 @@ from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 _UD_SRC = (_BACKEND / "routers" / "user_data.py").read_text(encoding="utf-8")
-_QPB_SRC = (_BACKEND.parent / "frontend" / "src" / "components" / "assessment"
-            / "questions" / "QPantryBuilder.jsx").read_text(encoding="utf-8")
+# [P1-PANTRY-DASH-PARITY] el flujo del scan vive en el componente compartido.
+_QPB_SRC = (_BACKEND.parent / "frontend" / "src" / "components" / "pantry"
+            / "PantryScanButton.jsx").read_text(encoding="utf-8")
 
 
 def test_schema_and_prompt_capture_brand():
@@ -52,15 +53,11 @@ def test_frontend_shows_and_applies_detected_brand():
     assert "brand: it.detected_brand || null" in _QPB_SRC, (
         "confirmar debe etiquetar el item con la marca del empaque"
     )
-    # Y el confirm NO debe llamar al PUT de preferencias (solo changeBrand manual
-    # lo hace — changeBrand vive DESPUÉS de confirmScanItems en el archivo, por
-    # eso el slice termina en commitQty, no en removeItem).
-    i = _QPB_SRC.find("const confirmScanItems")
-    j = _QPB_SRC.find("const commitQty")
-    assert 0 < i < j, "orden de funciones cambió — re-anclar el slice"
-    assert "'/api/supermarket/preferences'" not in _QPB_SRC[i:j]
+    # Y el componente del scan COMPLETO no debe tocar el PUT de preferencias
+    # (solo la elección manual de marca lo hace).
+    assert "'/api/supermarket/preferences'" not in _QPB_SRC
 
 
 def test_marker_anchored_in_source():
     assert _UD_SRC.count("P1-PANTRY-SCAN-BRAND") >= 2
-    assert _QPB_SRC.count("P1-PANTRY-SCAN-BRAND") >= 2
+    assert _QPB_SRC.count("P1-PANTRY-SCAN-BRAND") >= 1
