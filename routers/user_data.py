@@ -293,6 +293,53 @@ async def api_change_inventory_unit(
     return {"merged": bool(r.get("merged_count")), "unit": new_unit}
 
 
+class InventoryItemPatchBody(BaseModel):
+    # [P1-PANTRY-ROW-EDIT · 2026-07-11] Edición directa de una fila del paso 21
+    # (feedback owner: "si quiero escribir 200 gramos no tendría que darle al '+'
+    # 200 veces" + "modificar las marcas"). quantity = valor ABSOLUTO (no delta);
+    # brand: string = setear, "" = limpiar a NULL, ausente = no tocar.
+    quantity: Optional[float] = None
+    brand: Optional[str] = None
+
+
+@router.patch("/inventory/items/{item_id}")
+async def api_patch_inventory_item(
+    item_id: int,
+    body: InventoryItemPatchBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Set absoluto de cantidad y/o marca de un item. I2: filtra user_id."""
+    uid = _require_user(verified_user_id)
+    sets, params = [], []
+    if body.quantity is not None:
+        q = max(0.0, min(9999.0, float(body.quantity)))
+        sets.append("quantity = %s::numeric")
+        params.append(round(q, 2))
+    if body.brand is not None:
+        _b = body.brand.strip()[:60] or None
+        sets.append("brand = %s")
+        params.append(_b)
+    if not sets:
+        raise HTTPException(status_code=422, detail="Nada que actualizar (quantity y/o brand).")
+
+    def _patch():
+        from db import execute_sql_write
+        return execute_sql_write(
+            f"""
+            UPDATE user_inventory SET {', '.join(sets)}, updated_at = NOW()
+            WHERE id = %s AND user_id = %s
+            RETURNING quantity::float8 AS quantity, brand
+            """,
+            (*params, item_id, uid),
+            returning=True,
+        )
+
+    rows = await asyncio.to_thread(_patch)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Item no encontrado.")
+    return {"quantity": rows[0]["quantity"], "brand": rows[0]["brand"]}
+
+
 @router.delete("/inventory/items/{item_id}")
 async def api_delete_inventory_item(
     item_id: int,
