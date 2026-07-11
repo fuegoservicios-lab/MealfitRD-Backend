@@ -361,10 +361,37 @@ _VISION_PROMPT = (
     "y lista TODOS los alimentos visibles e identificables con certeza razonable. "
     "Para cada uno estima la cantidad visible y su unidad de compra tipica en "
     "Republica Dominicana. Unidades permitidas: unidad, lb, g, paquete, botella, "
-    "lata, taza, funda. Usa nombres genericos en espanol dominicano (ej: 'pechuga "
+    "lata, taza, funda. En 'quantity' pon el NUMERO DE ENVASES O PIEZAS que se ven "
+    "(1 paquete, 2 latas, 6 huevos) — NUNCA el peso o los gramos impresos en el "
+    "empaque. Usa nombres genericos en espanol dominicano (ej: 'pechuga "
     "de pollo', 'arroz blanco', 'platano verde', 'huevos', 'leche'). NO inventes "
     "alimentos que no se vean claramente; si dudas, omitelo. Responde SOLO el JSON."
 )
+
+
+def _sane_scan_qty(qty, unit) -> float:
+    """[P1-PANTRY-SCAN-QTY · 2026-07-11] Cantidad sanitizada por clase de unidad.
+    Bug vivo: foto de UN paquete de avena → el modelo devolvió el peso impreso
+    (500) → el clamp plano min(99) mostró "99 paquete". Envases discretos con
+    qty absurda (>12) casi siempre son un peso mal leído → colapsar a 1 (mejor
+    subestimar: el usuario ajusta con +). 'unidad' tolera más (30 huevos); pesos
+    reales (lb/g) conservan rango amplio."""
+    try:
+        q = float(qty or 1)
+    except (TypeError, ValueError):
+        q = 1.0
+    u = str(unit or "").strip().lower()
+    if u in ("g", "gramo", "gramos"):
+        return max(10.0, min(5000.0, q))
+    if u in ("lb", "libra", "libras"):
+        return max(0.25, min(10.0, q))
+    if u in ("unidad", "unidades"):
+        return float(max(1, min(30, round(q))))
+    # paquete / lata / botella / funda / taza — envase discreto
+    q = round(q)
+    if q > 12:
+        return 1.0
+    return float(max(1, q))
 
 _VISION_SCHEMA = {
     "type": "object",
@@ -487,10 +514,11 @@ async def api_inventory_photo_scan(
             out = []
             for it in items[:40]:
                 match = _match_catalog(it.get("name"), catalog)
+                _unit = str(it.get("unit") or "unidad")[:20]
                 out.append({
                     "detected_name": str(it.get("name") or "")[:80],
-                    "quantity": max(0.1, min(99.0, float(it.get("quantity") or 1))),
-                    "unit": str(it.get("unit") or "unidad")[:20],
+                    "quantity": _sane_scan_qty(it.get("quantity"), _unit),
+                    "unit": _unit,
                     "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
                     "master_ingredient_id": match["id"] if match else None,
                     "catalog_name": match["name"] if match else None,
