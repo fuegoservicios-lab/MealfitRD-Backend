@@ -61,14 +61,30 @@ def test_frontend_qty_input_commits_absolute():
     assert "JSON.stringify({ quantity: q })" in _QPB_SRC, "commit = PATCH absoluto (no delta)"
 
 
-def test_frontend_brand_select_lazy_supermarket():
+def test_frontend_brand_select_batch_and_hidden_when_empty():
+    # [P1-PANTRY-BRAND-FOREVER] evolucionó de fetch lazy per-item a LOTE (un POST
+    # con todos los nombres) para poder OCULTAR el menú en alimentos sin marcas
+    # ("un menú con solo Genérico confunde" — feedback owner).
     assert "'/api/supermarket/match'" in _QPB_SRC, (
         "las marcas salen del Supermercado RD (mismo contrato que la página Nevera)"
     )
-    assert "onFocus={() => loadBrandsFor(item)}" in _QPB_SRC, (
-        "fetch LAZY al abrir el select — N fetches en el mount penalizan el paso"
+    assert "JSON.stringify({ names })" in _QPB_SRC, "prefetch en LOTE (no N fetches)"
+    assert ".length > 0 || item.brand) && (" in _QPB_SRC, (
+        "sin marcas disponibles y sin marca puesta → NO se renderiza el select"
     )
     assert 'Genérico (sin marca)' in _QPB_SRC
+
+
+def test_frontend_brand_choice_persists_global_preference():
+    assert "'/api/supermarket/preferences'" in _QPB_SRC, (
+        "elegir marca en el paso 21 debe persistir user_brand_preferences (mismo "
+        "sistema 'para siempre' que Marcas del súper del dashboard) — pregunta "
+        "explícita del owner"
+    )
+    assert "food_key: item.ingredient_name" in _QPB_SRC
+    assert "entry?.productId ? entry.productId : null" in _QPB_SRC, (
+        "Genérico o marca sin producto → product_id null (borra la preferencia)"
+    )
 
 
 def test_marker_anchored_in_source():
