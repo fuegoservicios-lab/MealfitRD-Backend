@@ -418,7 +418,12 @@ _VISION_PROMPT = (
     "va en el nombre. [P1-PANTRY-SCAN-BRAND] Si el empaque muestra una MARCA "
     "legible (ej: Quaker, Rica, La Famosa), ponla en 'brand'; si no se lee o el "
     "alimento no tiene empaque, pon null. NO inventes "
-    "alimentos que no se vean claramente; si dudas, omitelo. Responde SOLO el JSON."
+    "alimentos que no se vean claramente; si dudas, omitelo. "
+    # [P2-VISION-GUINEO-PLATANO · 2026-07-12] Misma leccion que el meal-scan:
+    # banana dulce = 'guineo' en RD, no 'platano' (alimento distinto).
+    "OJO en RD: el GUINEO es la banana dulce (delgada, curva, cascara fina, se "
+    "come cruda) - NO lo llames platano; el PLATANO es mas grande y grueso y se "
+    "cocina. Responde SOLO el JSON."
 )
 
 

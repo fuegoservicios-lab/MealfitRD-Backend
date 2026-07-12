@@ -266,6 +266,14 @@ _MEAL_VISION_PROMPT = (
     "en el empaque, 'unit' una de: unidad, lb, g, paquete, botella, lata, "
     "taza, funda. En 'description' resume la compra. NO inventes alimentos "
     "que no se vean claramente; si dudas, omitelo. "
+    # [P2-VISION-GUINEO-PLATANO · 2026-07-12] Vivo: foto de un guineo → gemma
+    # lo nombro 'platano' (traduccion generica banana→platano) y el agente
+    # metio 'Platano verde' a la Nevera del owner. En RD son alimentos
+    # DISTINTOS con macros distintas.
+    "OJO en RD: el GUINEO es la banana dulce (delgada, curva, cascara fina "
+    "amarilla o verde, se come cruda) - NO lo llames platano. El PLATANO es "
+    "mas grande y grueso, de cascara dura (verde o maduro), y se cocina. Si "
+    "es la fruta dulce de comer cruda, llamala 'guineo'. "
     "Responde SOLO el JSON."
 )
 
