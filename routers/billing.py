@@ -397,9 +397,28 @@ async def _fetch_plan_list_price(plan_id, tier, access_token, paypal_api_base) -
                         return p
         except Exception as e:
             logger.warning(f"[P1-BILLING-AMOUNT] GET plan {plan_id} falló: {type(e).__name__}")
-    for suffix in ("", "_ANNUAL"):
-        v = _parse_price(os.environ.get(f"PAYPAL_PLAN_{(tier or '').upper()}{suffix}_PRICE"))
+    # [P1-BILLING-AMOUNT-FP-FIX · 2026-07-12] Fallback env por CADENCIA correcta. El
+    # plan_id distingue mensual vs anual (el mapping ya conoce el sufijo _ANNUAL); usar
+    # el env que corresponde en vez de "mensual primero" (que daba un piso equivocado:
+    # under-detection para anuales, falso-positivo para mensuales si solo estaba el env
+    # anual). Si no se puede determinar la cadencia, se prueban ambos (mejor un piso
+    # aproximado que None) pero se emite WARN — el fallback debe ser observable.
+    tier_u = (tier or "").upper()
+    annual_plan_id = os.environ.get(f"PAYPAL_PLAN_{tier_u}_ANNUAL_ID")
+    monthly_plan_id = os.environ.get(f"PAYPAL_PLAN_{tier_u}_ID")
+    if plan_id and annual_plan_id and plan_id == annual_plan_id:
+        suffixes = ("_ANNUAL",)
+    elif plan_id and monthly_plan_id and plan_id == monthly_plan_id:
+        suffixes = ("",)
+    else:
+        suffixes = ("", "_ANNUAL")  # cadencia indeterminada → ambos (aprox)
+    for suffix in suffixes:
+        v = _parse_price(os.environ.get(f"PAYPAL_PLAN_{tier_u}{suffix}_PRICE"))
         if v is not None:
+            logger.warning(
+                f"[P1-BILLING-AMOUNT] GET plan falló; usando precio-lista de env "
+                f"PAYPAL_PLAN_{tier_u}{suffix}_PRICE={v} (cadencia={'ambigua' if len(suffixes) > 1 else suffix or 'mensual'})."
+            )
             return v
     return None
 
@@ -491,12 +510,24 @@ async def _verify_subscription_amount(
     if list_price is not None:
         expected_min = list_price * (1.0 - (float(discount_pct or 0) / 100.0))
 
+    # [P1-BILLING-AMOUNT-FP-FIX · 2026-07-12] `proven_underpaid` EXIGE un cupón
+    # re-validado (discount_pct is not None): solo es PRUEBA de fraude un precio por
+    # debajo del piso de un cupón que SÍ existe server-side. Un override SIN cupón
+    # válido re-validado es AMBIGUO — puede ser un atacante ($0.01 sin cupón) pero
+    # también un pago legítimo cuyo coupon_code no llegó a /verify (frontend viejo
+    # cacheado por PWA, o cupón que se agotó/expiró entre la creación de la sub y el
+    # verify). Bloquear ese caso ambiguo rechazaría pagos legítimos ya cobrados por
+    # PayPal → limbo. Por eso el caso ambiguo es warn+alerta (nunca block), coherente
+    # con el comentario de abajo. (Review adversario 2026-07-12: el código previo
+    # bloqueaba el caso ambiguo, contradiciendo su propio comentario.)
     proven_underpaid = (
-        actual_price is not None
+        discount_pct is not None
+        and actual_price is not None
         and expected_min is not None
         and actual_price < expected_min * (1.0 - tol)
     )
-    # Sospecha = underpayment probado, O un override SIN cupón válido que lo justifique.
+    # Sospecha (→ alerta): underpayment probado bajo el cupón, O un override SIN cupón
+    # válido que lo justifique (ambiguo — se alerta pero NO se bloquea).
     suspicious = proven_underpaid or (discount_pct is None)
     if not suspicious:
         return  # cupón válido + monto coherente
@@ -523,9 +554,10 @@ async def _verify_subscription_amount(
         f"sub={subscription_id} actual={actual_price} expected_min={expected_min} "
         f"proven_underpaid={proven_underpaid} modo={mode}"
     )
-    # Bloquear SOLO con underpayment PROBADO (precio parseable < mínimo). El caso
-    # ambiguo (no-parseable / cupón no reenviado) queda en warn+alerta → fail-cheap,
-    # nunca bloquea un pago que no podemos PROBAR fraudulento.
+    # Bloquear SOLO con underpayment PROBADO bajo un cupón re-validado (precio <
+    # piso del cupón). El caso ambiguo (sin cupón válido / no-parseable / cupón no
+    # reenviado) queda en warn+alerta → fail-cheap, nunca bloquea un pago que no
+    # podemos PROBAR fraudulento.
     if mode == "block" and proven_underpaid:
         raise HTTPException(
             status_code=409,
@@ -797,7 +829,15 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         # [P1-BILLING-AMOUNT · 2026-07-12] Hardening: marcar el cupón como consumido
         # (best-effort) SOLO si re-valida (no quemar usos por un código inválido).
         # Sin esto un cupón con max_uses nunca se marcaba usado → reuse ilimitado.
-        if coupon_code:
+        # [P1-BILLING-AMOUNT-FP-FIX · 2026-07-12] Idempotencia por subscription_id: si
+        # `existing_row` (leído ANTES del UPDATE) ya tenía ESTA sub, es un reintento/
+        # doble-submit del mismo /verify → NO re-redimir (evita inflar current_uses por
+        # una única redención real). Un reintento fetcha el perfil ya actualizado por
+        # la primera llamada, así que su paypal_subscription_id == subscription_id.
+        _sub_already_applied = bool(
+            existing_row and existing_row.get("paypal_subscription_id") == subscription_id
+        )
+        if coupon_code and not _sub_already_applied:
             try:
                 if await _validate_discount_code(coupon_code, tier_to_assign):
                     await _run_sync_db_in_thread(lambda: _redeem_discount_code(coupon_code))

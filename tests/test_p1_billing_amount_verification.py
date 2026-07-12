@@ -156,12 +156,15 @@ def test_e_no_override_skips(monkeypatch):
     assert alerts == []
 
 
-def test_f_block_on_proven_underpayment(monkeypatch):
+def test_f_no_coupon_override_alerts_but_never_blocks(monkeypatch):
     b = _load()
-    # Override + sin cupón + precio 0.01 vs lista 9.99 → underpayment probado → 409 + alerta.
+    # [P1-BILLING-AMOUNT-FP-FIX] Override SIN cupón válido re-validado (precio 0.01 vs
+    # lista 9.99) es AMBIGUO: puede ser atacante O pago legítimo cuyo coupon_code no
+    # llegó (PWA viejo / cupón expirado). Aun en modo block → alerta pero NO bloquea
+    # (fail-cheap: no bloqueamos un pago que no podemos PROBAR fraudulento bajo cupón).
     raised, alerts = _run_verify(b, monkeypatch, mode="block", overridden=True,
                                  price="0.01", disc=None, list_price=9.99)
-    assert raised is True
+    assert raised is False
     assert len(alerts) == 1
     assert alerts[0]["alert_key"] == "billing_price_tampering:u1:s1"
     assert alerts[0]["severity"] == "critical"
@@ -169,7 +172,7 @@ def test_f_block_on_proven_underpayment(monkeypatch):
 
 def test_g_warn_alerts_but_does_not_block(monkeypatch):
     b = _load()
-    # Mismo tampering pero en warn: alerta, NO bloquea (pago sigue).
+    # En warn: siempre alerta, NUNCA bloquea (pago sigue).
     raised, alerts = _run_verify(b, monkeypatch, mode="warn", overridden=True,
                                  price="0.01", disc=None, list_price=9.99)
     assert raised is False
@@ -183,6 +186,18 @@ def test_h_legit_coupon_price_ok(monkeypatch):
                                  price="7.99", disc=20, list_price=9.99)
     assert raised is False
     assert alerts == []
+
+
+def test_j_block_on_underpayment_below_coupon_floor(monkeypatch):
+    b = _load()
+    # [P1-BILLING-AMOUNT-FP-FIX] ÚNICO caso que bloquea en modo block: cupón 20% válido
+    # re-validado (piso 7.99) pero precio cobrado 3.00 < 7.99*0.98 → underpayment PROBADO
+    # bajo el cupón → 409 + alerta.
+    raised, alerts = _run_verify(b, monkeypatch, mode="block", overridden=True,
+                                 price="3.00", disc=20, list_price=9.99)
+    assert raised is True
+    assert len(alerts) == 1
+    assert alerts[0]["alert_key"] == "billing_price_tampering:u1:s1"
 
 
 def test_i_mode_off_skips(monkeypatch):
