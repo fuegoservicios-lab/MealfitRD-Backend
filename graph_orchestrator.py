@@ -9875,6 +9875,10 @@ PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MA
 # (corr=57a373e0: 2 intentos con banda 1.00 quemados). La última palabra la tiene el
 # corrector, no el reintroductor. Es el MISMO autofix idempotente (costo LLM cero).
 SAMEDAY_LATE_REFIX_ENABLED = _env_bool("MEALFIT_SAMEDAY_LATE_REFIX", True)
+# [P1-MICRO-DEGRADED-STALE-CLEAR · 2026-07-12] clear-only del banner `micro_worst_day_ceiling`
+# cuando el reporte recomputado post-update dice days_above=0 (el usuario resolvió el día vía
+# swaps y el banner quedaba stale). Espejo de MEALFIT_BAND_DEGRADED_STALE_CLEAR.
+MICRO_DEGRADED_STALE_CLEAR_ENABLED = _env_bool("MEALFIT_MICRO_DEGRADED_STALE_CLEAR", True)
 # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Retry QUIRÚRGICO sobre rechazo: cuando el reviewer rechaza
 # y TODAS las causas son deterministas y atribuibles a días concretos (proteína/fruta/plato repetido
 # same-day, pareo fruta+salado, comida fuera de horario), `should_retry` enruta al surgical regen
@@ -12701,6 +12705,26 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
             f"🧪 [P1-UPDATE-MICROS] panel de micros recomputado post-update "
             f"(cobertura {int(_mn.get('coverage', 0) * 100)}%, {len(_mn.get('gaps', []))} gap(s))"
         )
+        # [P1-MICRO-DEGRADED-STALE-CLEAR · 2026-07-12] Espejo de P1-BAND-DEGRADED-STALE-CLEAR para
+        # la razón `micro_worst_day_ceiling`: el flag se marca al GENERAR, pero los swaps del
+        # usuario pueden RESOLVER el día que se pasaba (vivo, plan 1bfda745: banner "sodio/azúcar"
+        # con el reporte fresco diciendo days_above=0 — el usuario ya había cambiado la comida
+        # salada y el banner quedó stale). CLEAR-ONLY sobre el reporte RECIÉN recomputado; razones
+        # no-micro intactas. tooltip-anchor: P1-MICRO-DEGRADED-STALE-CLEAR
+        try:
+            if (MICRO_DEGRADED_STALE_CLEAR_ENABLED and plan.get("_quality_degraded")
+                    and str(plan.get("_quality_degraded_reason") or "").startswith("micro_worst_day_ceiling")):
+                _pdc_sc = (_mn.get("per_day_ceilings") or {})
+                if _pdc_sc.get("flagged") is False and int(_pdc_sc.get("days_above") or 0) == 0:
+                    for _k_sc in ("_quality_degraded", "_quality_degraded_reason",
+                                  "_quality_degraded_severity", "_quality_degraded_attempts",
+                                  "_quality_degraded_band_score", "_quality_degraded_band_per_macro_low",
+                                  "_quality_degraded_surface", "_quality_degraded_pantry_limited"):
+                        plan.pop(_k_sc, None)
+                    logger.info("🧪 [P1-MICRO-DEGRADED-STALE-CLEAR] techo de micros ya resuelto en el "
+                                "estado ENTREGADO (days_above=0) → banner micro_worst_day_ceiling limpiado")
+        except Exception as _sc_e:
+            logger.debug(f"[P1-MICRO-DEGRADED-STALE-CLEAR] no-op: {type(_sc_e).__name__}: {_sc_e}")
         return True
     except Exception as _mn_e:
         logger.warning(f"[P1-UPDATE-MICROS] recompute micro report falló (no bloquea): {type(_mn_e).__name__}: {_mn_e}")
