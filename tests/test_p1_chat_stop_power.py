@@ -82,4 +82,4 @@ def test_recovery_episode_signature_no_infinite_loop():
     assert "st.doneSig === _sig) return" in win, "huérfano descartado no relanza"
     assert "st.sig !== _sig" in win, \
         "attempts solo se resetean para un huérfano NUEVO (no en bucle)"
-    assert "st.attempts > 6) return" in win, "episodio agotado no renace"
+    assert "st.attempts > 30) return" in win, "episodio agotado no renace"

@@ -47,7 +47,7 @@ def test_poll_is_conservative():
         "solo rehidratar cuando el server va ADELANTE (filtrado)"
     assert "srvLast.role === 'model'" in blk, \
         "rehidratar SOLO si hay respuesta real del modelo al final"
-    assert "cur.attempts > 6" in blk, "el sondeo tiene tope (~26s), no es infinito"
+    assert "cur.attempts > 30" in blk, "el sondeo tiene tope (~4 min — los turnos con tools tardan 90-240s), no es infinito"
 
 
 def test_timeout_leaves_retryable_bubble():
