@@ -3036,14 +3036,55 @@ def execute_tools(state: ChatState):
                     session_id = state.get("session_id")
                     form_data = state.get("form_data", {})
 
+                    _allow_exp = bool(tool_args.get("allow_pantry_expansion", False))
                     tool_result = execute_modify_single_meal(
                         user_id=user_id if user_id and user_id != 'guest' else session_id,
                         day_number=tool_args.get("day_number", 1),
                         meal_type=tool_args.get("meal_type", "Desayuno"),
                         changes=tool_args.get("changes", ""),
                         form_data=form_data,
-                        allow_pantry_expansion=tool_args.get("allow_pantry_expansion", False)
+                        allow_pantry_expansion=_allow_exp
                     )
+                    # [P1-CHAT-MODIFY-EXPAND-FALLBACK · 2026-07-12] Paridad con el
+                    # botón "Cambiar Plato": si el intento PANTRY-STRICT no
+                    # convergió (sin `modified_meal`), reintenta UNA vez con
+                    # expansión de despensa — equivale a que el usuario acepte
+                    # comprar 1-2 ingredientes extra. Vivo: "actualiza el
+                    # desayuno" + "algo variado" → el chat se rendía ("no cuajó
+                    # sin salirse de lo que tienes") mientras el flujo del botón
+                    # encuentra la vuelta. La transparencia viaja como warning
+                    # (toast) + aviso en el ToolMessage para que el coach lo diga.
+                    _expand_fallback_used = False
+                    if not _allow_exp:
+                        _first_failed = True
+                        try:
+                            _probe = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
+                            _first_failed = not (isinstance(_probe, dict) and "modified_meal" in _probe)
+                        except Exception:
+                            _first_failed = True
+                        if _first_failed:
+                            logger.info(
+                                "🛒 [P1-CHAT-MODIFY-EXPAND-FALLBACK] strict no convergió → "
+                                "retry automático con expansión de despensa"
+                            )
+                            _retry_result = execute_modify_single_meal(
+                                user_id=user_id if user_id and user_id != 'guest' else session_id,
+                                day_number=tool_args.get("day_number", 1),
+                                meal_type=tool_args.get("meal_type", "Desayuno"),
+                                changes=tool_args.get("changes", ""),
+                                form_data=form_data,
+                                allow_pantry_expansion=True
+                            )
+                            try:
+                                _probe2 = json.loads(_retry_result) if isinstance(_retry_result, str) else _retry_result
+                                if isinstance(_probe2, dict) and "modified_meal" in _probe2:
+                                    tool_result = _retry_result
+                                    _expand_fallback_used = True
+                                    coherence_warnings.append(
+                                        "Para lograr el cambio se usaron 1-2 ingredientes fuera de tu Nevera — se suman a tu lista de compras."
+                                    )
+                            except Exception:
+                                pass
                     try:
                         parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
                         if isinstance(parsed_mod, dict) and "modified_meal" in parsed_mod:
@@ -3098,6 +3139,11 @@ def execute_tools(state: ChatState):
                                     + " ".join(_band_warn_bits)
                                     + " Puede volver a pedir el cambio con otras palabras si quiere afinarlo.")
                                    if _band_warn_bits else "")
+                                # [P1-CHAT-MODIFY-EXPAND-FALLBACK] Transparencia del retry:
+                                + ((" NOTA: con solo lo de su Nevera no convergía, así que el plato "
+                                    "usa 1-2 ingredientes nuevos que se suman a su lista de compras — "
+                                    "díselo con naturalidad.")
+                                   if _expand_fallback_used else "")
                             )
                     except Exception as _mod_exc:
                         # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
