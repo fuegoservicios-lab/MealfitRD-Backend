@@ -1162,16 +1162,34 @@ def swap_meal(form_data: dict):
     _banned_sd_labels = set()
     try:
         _sd_blobs_up = form_data.get("same_day_other_meal_blobs") or []
-        if _sd_blobs_up and not strict_pantry:
+        if _sd_blobs_up:
             from graph_orchestrator import _protein_gate_labels_in_text as _pglt_up
             _used_up = set()
             for _b_up in _sd_blobs_up:
                 _used_up |= _pglt_up(str(_b_up))
             if _used_up:
+                # [P1-SWAP-CUMULATIVE-BAN · 2026-07-12 v2] el ban aplica TAMBIÉN en pantry-strict
+                # (la mayoría de los swaps: todo reason salvo cravings/weekend es estricto — la v1
+                # con `not strict_pantry` lo saltaba y el Chef propuso 3 tortillas seguidas,
+                # corr=32edc94f). En estricto lleva cláusula de escape espejo del fallback
+                # anti-imposible del gate. Para 'huevo' se nombran los PLATOS típicos: el modelo
+                # tunelizado en 'rápido' ignoraba el label pero entiende "nada de tortillas".
+                _ban_names = []
+                for _lb_up in sorted(_used_up):
+                    if _lb_up == "huevo":
+                        _ban_names.append("huevo (nada de tortillas, revoltillos u omelets)")
+                    else:
+                        _ban_names.append(_lb_up)
+                _escape_up = (
+                    " Si NINGUNA otra proteína de la despensa disponible alcanza para el plato, "
+                    "elige la menos repetida y hazlo notar en la descripción."
+                    if strict_pantry else ""
+                )
                 prompt_text += (
                     f"\n\n🚫 PROTEÍNAS PROHIBIDAS HOY (ya usadas en otras comidas del día): "
-                    f"{', '.join(sorted(_used_up))}. NO las uses como proteína principal NI como "
+                    f"{', '.join(_ban_names)}. NO las uses como proteína principal NI como "
                     f"ingrediente del plato nuevo — el validador RECHAZARÁ el plato si aparecen."
+                    f"{_escape_up}"
                 )
     except Exception as _ub_e:
         logger.debug(f"[P1-SWAP-CUMULATIVE-BAN] upfront ban no-op: {type(_ub_e).__name__}: {_ub_e}")
