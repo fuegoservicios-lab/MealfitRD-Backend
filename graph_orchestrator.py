@@ -9869,6 +9869,12 @@ SODIUM_SAUCE_CAP_MAX_CDA = _env_int("MEALFIT_SODIUM_SAUCE_CAP_MAX_CDA", 1, lambd
 # atún = línea enlatada cuya sustitución textual produce disparates "lata de pescado blanco").
 PROTEIN_REPEAT_AUTOFIX_ENABLED = _env_bool("MEALFIT_PROTEIN_REPEAT_AUTOFIX", True)
 PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY", 2, lambda v: 0 <= v <= 4)
+# [P1-SAMEDAY-BURN-FIX · 2026-07-11] Re-pasada del autofix DESPUÉS del chain de calidad
+# (P0-BAND-PRE-REVIEW): el autofix corre temprano en assemble pero los re-closers del chain
+# pueden reintroducir el repeat DESPUÉS — nadie corregía al final y el gate rechazaba
+# (corr=57a373e0: 2 intentos con banda 1.00 quemados). La última palabra la tiene el
+# corrector, no el reintroductor. Es el MISMO autofix idempotente (costo LLM cero).
+SAMEDAY_LATE_REFIX_ENABLED = _env_bool("MEALFIT_SAMEDAY_LATE_REFIX", True)
 # [P1-SURGICAL-REJECT-RETRY · 2026-07-05] Retry QUIRÚRGICO sobre rechazo: cuando el reviewer rechaza
 # y TODAS las causas son deterministas y atribuibles a días concretos (proteína/fruta/plato repetido
 # same-day, pareo fruta+salado, comida fuera de horario), `should_retry` enruta al surgical regen
@@ -16336,6 +16342,30 @@ def _egg_counts_for_same_day_gate(name_low: str) -> bool:
                 and not _EGG_SIDE_MODIFIER_RX.search(name_low))
 
 
+# [P1-SAMEDAY-BURN-FIX · 2026-07-11] Portadores de CONDIMENTO ("1/2 taza de caldo de pollo",
+# "1 cubito de caldo de res") NO son una porción de proteína: contarlos en el gate same-day
+# produce falsos positivos que queman intentos (renovación corr=57a373e0: 2 intentos con banda
+# 1.00 rechazados por 'pollo'/'atun' en comidas cuyo nombre no los menciona), y el autofix los
+# "curaba" reescribiendo el caldo a otra proteína ("caldo de pavo" — absurdo culinario medido
+# en repro local). El strip aplica SOLO a los INGREDIENTES (un plato llamado 'Caldo de Pollo'
+# sí es una porción real y sigue contando por su NOMBRE). Paridad gate↔critique↔autofix en el
+# mismo commit (lección P1-CRITIQUE-SLOT-PARITY). Opera sobre texto ya accent-stripped/lower.
+_PROTEIN_CONDIMENT_CARRIER_RX = _re.compile(
+    r"\b(?:caldos?|consom[eé]s?|cubitos?|sopitas?|fondos?)\s+(?:de\s+|sabor\s+a\s+)?"
+    r"(?:pollo|gallina|res|carne|cerdo|pavo|pescado|camarones?|at[uú]n|mariscos?)\b",
+    _re.IGNORECASE)
+
+
+def _strip_protein_condiment_carriers(ings_low: str) -> str:
+    """[P1-SAMEDAY-BURN-FIX · 2026-07-11] Neutraliza menciones de proteína dentro de frases de
+    condimento/fondo en un blob de INGREDIENTES ("caldo de pollo" → "caldo") para que el gate
+    same-day, el critique y el autofix no las cuenten como porción de proteína. Puro, fail-safe."""
+    try:
+        return _PROTEIN_CONDIMENT_CARRIER_RX.sub("caldo", ings_low)
+    except Exception:
+        return ings_low
+
+
 def _days_with_same_day_protein_repeat(plan: dict) -> list:
     """[P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Números de día donde una MISMA proteína
     principal aparece en ≥2 comidas del mismo día — detector con el MISMO SSOT que el gate del
@@ -16360,7 +16390,9 @@ def _days_with_same_day_protein_repeat(plan: dict) -> list:
                 if not isinstance(meal, dict):
                     continue
                 name_low = _sa(str(meal.get("name", "")).lower())
-                ings_low = _sa(" ".join(str(i) for i in (meal.get("ingredients", []) or [])).lower())
+                # [P1-SAMEDAY-BURN-FIX] caldo/consomé/cubito de X no cuenta (paridad con gate).
+                ings_low = _strip_protein_condiment_carriers(
+                    _sa(" ".join(str(i) for i in (meal.get("ingredients", []) or [])).lower()))
                 blob = name_low + " " + ings_low
                 for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
                     # [P1-EGG-BINDER-GATE-EXEMPT] huevo-aglutinante no cuenta (paridad con gate).
@@ -16403,10 +16435,13 @@ def _protein_gate_labels_in_text(text_low: str) -> set:
 
 def _protein_gate_labels_in_meal(meal: dict) -> set:
     """[P1-CLOSER-DAY-AWARE-PROTEIN] Labels del gate en una comida (nombre + ingredientes) —
-    espejo del blob que escanea `build_variety_report`. Fail-safe → set()."""
+    espejo del blob que escanea `build_variety_report`. Fail-safe → set().
+    [P1-SAMEDAY-BURN-FIX] los INGREDIENTES pasan por el strip de condimentos-portadores
+    (paridad con el gate; el strip opera accent-insensitive vía IGNORECASE + aliases planos)."""
     try:
         blob = (str(meal.get("name", "")) + " "
-                + " ".join(str(i) for i in (meal.get("ingredients") or [])))
+                + _strip_protein_condiment_carriers(
+                    " ".join(str(i) for i in (meal.get("ingredients") or []))))
         return _protein_gate_labels_in_text(blob)
     except Exception:
         return set()
@@ -16565,7 +16600,8 @@ def build_variety_report(plan: dict) -> dict:
             # detecta la misma proteína en ≥2 comidas del mismo día (huevo en desayuno + cena). Usa
             # word-boundary (\b vía _name_has_token) y NO el substring de _detect_main_items, que daría falsos
             # positivos como 'res' dentro de 'fresas' o 'atun' dentro de otros nombres.
-            _meal_blob = name_low + " " + ings_low
+            # [P1-SAMEDAY-BURN-FIX] caldo/consomé/cubito de X en INGREDIENTES no es porción de proteína.
+            _meal_blob = name_low + " " + _strip_protein_condiment_carriers(ings_low)
             for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
                 # [P1-EGG-BINDER-GATE-EXEMPT · 2026-07-11] huevo-aglutinante NO cuenta:
                 # el autofix lo protege como funcional → contarlo aquí produce rechazos
@@ -22609,9 +22645,12 @@ def _protein_repeat_autofix(days: list, form_data=None, db=None) -> int:
             return True
 
         def _alias_hit(meal: dict, label: str):
-            """Alias del label presente en el meal (nombre o ingredientes) o None."""
+            """Alias del label presente en el meal (nombre o ingredientes) o None.
+            [P1-SAMEDAY-BURN-FIX] paridad con el gate: caldo/consomé/cubito de X no cuenta
+            (y así el autofix tampoco 'cura' reescribiendo el caldo a otra proteína)."""
             name_low = _sa_pr(str(meal.get("name", "")).lower())
-            ings_low = _sa_pr(" ".join(str(i) for i in meal.get("ingredients") or []).lower())
+            ings_low = _strip_protein_condiment_carriers(
+                _sa_pr(" ".join(str(i) for i in meal.get("ingredients") or []).lower()))
             blob = name_low + " " + ings_low
             for _al in _MAIN_PROTEIN_ALIASES.get(label, ()):
                 if _name_has_token(_sa_pr(_al), blob):
@@ -27703,6 +27742,24 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # reintroductor restante ANTES de que el gate del review lo convierta en retry.
     try:
         _late_rep_days = _days_with_same_day_protein_repeat(result)
+        # [P1-SAMEDAY-BURN-FIX · 2026-07-11] Repeat detectado POST-chain → re-pasada del
+        # autofix (idempotente, determinista, costo LLM cero) ANTES de avisar: el warn de
+        # abajo era profecía ("el gate va a rechazar") sin corrector — 2 intentos con banda
+        # 1.00 quemados en corr=57a373e0. Solo si PERSISTE tras la re-pasada se avisa (y las
+        # líneas portadoras del detalle dirán por qué fue incorregible).
+        if _late_rep_days and SAMEDAY_LATE_REFIX_ENABLED and PROTEIN_REPEAT_AUTOFIX_ENABLED:
+            try:
+                from nutrition_db import IngredientNutritionDB as _INDB_lr
+                _n_lr = _protein_repeat_autofix(result.get("days") or [], form_data, _INDB_lr())
+                if _n_lr:
+                    _late_rep_days_post = _days_with_same_day_protein_repeat(result)
+                    logger.info(f"🍗 [P1-SAMEDAY-BURN-FIX] re-autofix POST-chain reescribió "
+                                f"{_n_lr} comida(s) con repeat same-day (días antes: "
+                                f"{_late_rep_days} → después: {_late_rep_days_post or 'limpio'})")
+                    _late_rep_days = _late_rep_days_post
+            except Exception as _lr_e:
+                logger.warning(f"[P1-SAMEDAY-BURN-FIX] re-autofix post-chain no-op: "
+                               f"{type(_lr_e).__name__}: {_lr_e}")
         if _late_rep_days:
             # [P1-REINTRO-DETAIL · 2026-07-11] Nombrar label + platos: en corr=dbf45283 el
             # warn sin detalle costó ~30 min de forensics por intento para saber QUÉ se
@@ -27718,8 +27775,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         if not isinstance(_mm, dict):
                             continue
                         _nl_rd = _sa_rd(str(_mm.get("name", "")).lower())
-                        _blob_rd = _nl_rd + " " + _sa_rd(
-                            " ".join(str(i) for i in (_mm.get("ingredients") or [])).lower())
+                        # [P1-SAMEDAY-BURN-FIX] mismo strip que el detector (paridad del conteo);
+                        # las LÍNEAS portadoras de abajo se listan crudas a propósito (evidencia).
+                        _blob_rd = _nl_rd + " " + _strip_protein_condiment_carriers(_sa_rd(
+                            " ".join(str(i) for i in (_mm.get("ingredients") or [])).lower()))
                         for _pl in _SAME_DAY_PROTEIN_GATE_LABELS:
                             if _pl == "huevo" and not _egg_counts_for_same_day_gate(_nl_rd):
                                 continue
