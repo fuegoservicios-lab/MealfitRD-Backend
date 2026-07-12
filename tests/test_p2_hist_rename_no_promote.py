@@ -56,3 +56,20 @@ def test_both_branches_ownership_filtered():
     win = body[body.find("P2-HIST-RENAME-NO-PROMOTE"):]
     assert win.count("WHERE id = %s AND user_id = %s") >= 2, \
         "I2 en ambas ramas del UPDATE"
+
+
+def test_frontend_optimistic_mirror():
+    """El optimistic update de History.jsx replica el guard: sella localmente SOLO si
+    el renombrado ya es la cabeza del sort (el backend dejó de sellar archivados, pero
+    el espejo cliente seguía promoviendo la card a PLAN ACTIVO hasta el refetch)."""
+    import os
+    _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    with open(os.path.join(_root, "frontend", "src", "pages", "History.jsx"),
+              encoding="utf-8") as f:
+        hist = f.read()
+    i = hist.find("P2-HIST-RENAME-NO-PROMOTE")
+    assert i != -1, "el espejo frontend del guard desapareció"
+    win = hist[i:i + 2200]
+    assert "plans[0]?.id === plan.id" in win, "activo = cabeza del sort actual"
+    assert win.count("_isActiveRename ? { plan_modified_at: _modIso } : {}") >= 1
+    assert win.count("_isActiveRename ? { _plan_modified_at: _modIso } : {}") >= 1
