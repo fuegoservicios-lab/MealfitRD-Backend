@@ -1669,6 +1669,55 @@ def swap_meal(form_data: dict):
                     f"[P2-SWAP-PROTEIN-CLOSER] no-op (no aborta): {type(_pc_exc).__name__}: {_pc_exc}"
                 )
 
+        # [P2-SWAP-FATS-TRIM · 2026-07-12] Espejo del closer para el EXCESO de grasa: el
+        # validador quemaba los 3 reintentos LLM por deltas minúsculos (vivo, regen v3 05:28Z:
+        # moro con fats=8g vs target 5g → SWAP_LLM_RETRIES_EXHAUSTED → 2 slots conservados →
+        # el día sin libertad para cuadrar → band 0.5). El recortador determinista de S1
+        # (`_trim_day_fats_to_target`: shrink de fuentes de grasa, portadores de micros
+        # protegidos) cierra el delta ANTES del validador. Solo actúa sobre exceso MATERIAL
+        # (>115% del target — el mismo umbral del validador). Fail-safe total.
+        # Knob MEALFIT_SWAP_FATS_TRIM (ON). tooltip-anchor: P2-SWAP-FATS-TRIM
+        if os.environ.get("MEALFIT_SWAP_FATS_TRIM", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                _ft_target = float(target_fats or 0)
+                _ft_meal = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                _ft_cur = float(_ft_meal.get("fats") or 0)
+                if (_ft_target > 0 and _ft_cur > _ft_target * 1.15
+                        and isinstance(_ft_meal.get("ingredients"), list) and _ft_meal["ingredients"]):
+                    from graph_orchestrator import (
+                        _trim_day_fats_to_target as _ft_trim,
+                        _truth_up_meal_macros_from_strings as _ft_truthup,
+                        _sync_recipe_step_quantities as _ft_stepsync,
+                    )
+                    if _tu_db_holder[0] is None:
+                        from nutrition_db import IngredientNutritionDB as _FTDB
+                        _tu_db_holder[0] = _FTDB()
+                    if _ft_trim([_ft_meal], _ft_target, _tu_db_holder[0]):
+                        try:
+                            _ft_truthup(_ft_meal, _tu_db_holder[0])
+                        except Exception:
+                            pass
+                        try:
+                            _ft_stepsync(_ft_meal)
+                        except Exception:
+                            pass
+                        for _fk in ("ingredients", "ingredients_raw", "recipe",
+                                    "protein", "carbs", "fats", "cals", "macros"):
+                            if _fk in _ft_meal and _ft_meal[_fk] is not None:
+                                if isinstance(res, dict):
+                                    res[_fk] = _ft_meal[_fk]
+                                elif hasattr(res, _fk):
+                                    setattr(res, _fk, _ft_meal[_fk])
+                        logger.info(
+                            f"🥑 [P2-SWAP-FATS-TRIM] grasa recortada determinísticamente en el "
+                            f"candidato ({_ft_cur:.0f}g → {_ft_meal.get('fats')}g vs target "
+                            f"{_ft_target:.0f}g) | meal_type={meal_type}"
+                        )
+            except Exception as _ft_exc:
+                logger.warning(f"[P2-SWAP-FATS-TRIM] no-op (no aborta): {type(_ft_exc).__name__}: {_ft_exc}")
+
         # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
         # targets del slot. Pre-fix: prompt solo enviaba target_calories
         # como hint soft → drift arbitrario permitido (caso real: target
