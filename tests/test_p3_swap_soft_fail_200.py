@@ -156,8 +156,10 @@ def test_frontend_handler_discriminates_error_codes():
 
 
 def test_frontend_handler_returns_currentname_on_soft_fail():
-    """[PARSER] El handler debe ``return currentName`` después del toast
-    para preservar el plato original (NO degradar a fallback local)."""
+    """[PARSER] El handler debe ``return null`` después del toast para
+    preservar el plato original SIN disparar el toast.success del caller
+    (P2-SWAP-TOAST-FIX · 2026-06-29 cambió ``return currentName`` → ``return null``;
+    este anchor quedó stale en el pool baseline hasta 2026-07-12)."""
     # Buscar el bloque del soft-fail check
     # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Cota ampliada 20→45: la rama
     # `pantry_insufficient_for_goal` (P5-PANTRY-SUFFICIENCY) + la discriminación por
@@ -174,8 +176,9 @@ def test_frontend_handler_returns_currentname_on_soft_fail():
     )
     block = m.group(0)
     assert "toast.error" in block, "Soft-fail branch debe disparar toast.error"
-    assert "return currentName" in block, (
-        "Soft-fail branch debe `return currentName` para preservar plato."
+    assert "return null" in block, (
+        "Soft-fail branch debe `return null` (P2-SWAP-TOAST-FIX): preserva el plato "
+        "original y suprime el toast.success engañoso del caller."
     )
     assert "getAlternativeMeal" not in block, (
         "Soft-fail branch NO debe llamar getAlternativeMeal — eso degrada "

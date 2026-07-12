@@ -5362,6 +5362,110 @@ def _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type, cap: int =
         return []
 
 
+# [P1-SWAP-REGEN-RESUME · 2026-07-11] Resume cross-refresh del swap INDIVIDUAL (espejo del
+# patrón P1-DAY-REGEN-RESUME/P1-DAY-REGEN-SERVER-FLAG del día completo, pedido del owner:
+# "cuando actualizo un plato individual y refresco, la animación de carga desaparece").
+# Tres piezas backend: (1) flag server-side `plan_data._meal_regen_inflight` al arrancar el
+# swap (el frontend lo pollea vía plans-data/latest); (2) PERSIST server-side del plato
+# generado — sin esto, un refresh mata los dos requests del cliente (swap + persist) y el
+# plato se pierde: el overlay "resumido" esperaría un cambio que jamás llega; (3) retiro del
+# flag al terminar. El cliente vivo conserva su persist propio (fallback + paridad); el
+# doble persist es idempotente (mismo jsonb_set quirúrgico). Solo usuarios autenticados con
+# plan_id/day_index/meal_index en el body — guests conservan el flujo previo intacto.
+def _swap_meal_regen_flag_set(data: dict, verified_user_id) -> Optional[dict]:
+    """Marca `_meal_regen_inflight` (jsonb_set, AND user_id — I2). Best-effort → None."""
+    try:
+        if not verified_user_id:
+            return None
+        plan_id = data.get("plan_id")
+        day_index = data.get("day_index")
+        meal_index = data.get("meal_index")
+        if plan_id is None or day_index is None or meal_index is None:
+            return None
+        import json as _json_mri
+        from datetime import datetime as _dt_mri, timezone as _tz_mri
+        from db_core import execute_sql_query as _esq_mri
+        _payload = _json_mri.dumps({
+            "day_index": int(day_index),
+            "meal_index": int(meal_index),
+            "started_at": _dt_mri.now(_tz_mri.utc).isoformat(),
+        })
+        _esq_mri(
+            "UPDATE meal_plans SET plan_data = jsonb_set(plan_data, '{_meal_regen_inflight}', %s::jsonb, true) "
+            "WHERE id = %s AND user_id = %s",
+            (_payload, plan_id, verified_user_id),
+        )
+        return {"plan_id": plan_id, "day_index": int(day_index), "meal_index": int(meal_index)}
+    except Exception as _e:
+        logger.debug(f"[P1-SWAP-REGEN-RESUME] flag set no-op: {_e}")
+        return None
+
+
+def _swap_meal_regen_flag_clear(ctx: Optional[dict], verified_user_id) -> None:
+    """Retira `_meal_regen_inflight`. Best-effort (stale >6 min lo ignora el cliente por edad)."""
+    if not ctx:
+        return
+    try:
+        from db_core import execute_sql_query as _esq_mrc
+        _esq_mrc(
+            "UPDATE meal_plans SET plan_data = plan_data - '_meal_regen_inflight' "
+            "WHERE id = %s AND user_id = %s",
+            (ctx["plan_id"], verified_user_id),
+        )
+    except Exception as _e:
+        logger.debug(f"[P1-SWAP-REGEN-RESUME] flag clear no-op: {_e}")
+
+
+def _persist_swap_server_side(ctx: dict, result: dict, verified_user_id) -> bool:
+    """Persistencia server-side del swap. Espejo del merge del CLIENTE
+    (AssessmentContext regenerateSingleMeal: conserva el meal previo y superpone
+    name/desc/cals/prep_time/recipe/ingredients + isExpanded=False; raw fresco del
+    resultado para no arrastrar el raw del plato viejo). Reusa `api_swap_meal_persist`
+    IN-PROCESS — mismas defensas I6/I7 (FOR UPDATE + mutator, AND user_id, clinical
+    guard, strip de listas) sin duplicar lógica. True si persistió."""
+    try:
+        from db_core import execute_sql_query as _esq_ps
+        _row = _esq_ps(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (ctx["plan_id"], verified_user_id), fetch_one=True,
+        )
+        _pd_ps = (_row or {}).get("plan_data")
+        if isinstance(_pd_ps, str):
+            import json as _json_ps
+            _pd_ps = _json_ps.loads(_pd_ps)
+        if not isinstance(_pd_ps, dict):
+            return False
+        _old = {}
+        try:
+            _old = (_pd_ps.get("days") or [])[ctx["day_index"]].get("meals")[ctx["meal_index"]] or {}
+        except Exception:
+            _old = {}
+        merged = dict(_old) if isinstance(_old, dict) else {}
+        for k in ("name", "desc", "cals", "prep_time"):
+            if k in result:
+                merged[k] = result.get(k)
+        merged["recipe"] = result.get("recipe") or []
+        merged["ingredients"] = result.get("ingredients") or []
+        # raw FRESCO: el cliente arrastra el raw viejo (paridad histórica), pero server-side
+        # tenemos el resultado a mano — raw coherente con el display evita misalign aguas abajo.
+        merged["ingredients_raw"] = result.get("ingredients_raw") or list(merged["ingredients"])
+        merged["isExpanded"] = False
+        _resp = api_swap_meal_persist(
+            ctx["plan_id"],
+            {"day_index": ctx["day_index"], "meal_index": ctx["meal_index"], "new_meal": merged},
+            verified_user_id=verified_user_id,
+        )
+        _ok = bool(_resp) and not (isinstance(_resp, dict) and _resp.get("success") is False)
+        if _ok:
+            logger.info(f"🔁 [P1-SWAP-REGEN-RESUME] swap persistido server-side "
+                        f"(plan={str(ctx['plan_id'])[:8]}, d={ctx['day_index']}, m={ctx['meal_index']})")
+        return _ok
+    except Exception as _e:
+        logger.warning(f"[P1-SWAP-REGEN-RESUME] persist server-side falló (el cliente vivo "
+                       f"hará su persist propio): {type(_e).__name__}: {_e}")
+        return False
+
+
 @router.post("/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     try:
@@ -5488,7 +5592,16 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         except Exception as _cdv_e:
             logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inyección cross-day falló (no bloquea): {_cdv_e}")
 
-        result = swap_meal(data)
+        # [P1-SWAP-REGEN-RESUME · 2026-07-11] flag in-flight ANTES de la IA (el frontend lo
+        # pollea si el usuario refresca); si swap_meal levanta, el except-clear lo retira
+        # (el resume del cliente verá ausencia + plan sin cambios → apaga sin éxito).
+        _mri_ctx = _swap_meal_regen_flag_set(data, verified_user_id) \
+            if (user_id and user_id != "guest") else None
+        try:
+            result = swap_meal(data)
+        except BaseException:
+            _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
+            raise
         # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (default): swap_meal entregó un plato.
         # Sus modos de fallo (retries/clínico/breaker/rate-limit) levantan ANTES de aquí → no se cobra.
         if user_id and user_id != "guest" and _swap_charge_on_success_only:
@@ -5503,6 +5616,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 "Este plato quedó algo alejado de tu objetivo de proteína para esta comida. "
                 "Puedes volver a cambiarlo si prefieres más precisión."
             )
+        # [P1-SWAP-REGEN-RESUME · 2026-07-11] persist server-side + retiro del flag: si el
+        # cliente refrescó, el plato YA quedó guardado y su resume lo detecta por
+        # _plan_modified_at/nombre; si sigue vivo, su persist propio es idempotente.
+        if _mri_ctx and isinstance(result, dict) and not result.get("swap_failed"):
+            result["persisted"] = _persist_swap_server_side(_mri_ctx, result, verified_user_id)
+            _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
+        elif _mri_ctx:
+            _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
         return result
     except HTTPException:
         raise
