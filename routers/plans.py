@@ -5329,43 +5329,64 @@ def _same_day_other_meals_for_swap(user_id, rejected_meal):
         return [], []
 
 
-def _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type, cap: int = 8):
+def _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type, cap: int = 12):
     """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) Nombres del MISMO slot en los OTROS días del plan
     activo → el swap deja de ser ciego cross-day (solo veía el mismo día): el plato nuevo puede
     evitar repetir lo que el usuario ya come ese slot el resto de la semana. Fail-open: [] ante
-    cualquier error (el swap procede sin la señal). tooltip-anchor: P2-AUDIT-V6-BATCH (P2-F)"""
+    cualquier error (el swap procede sin la señal). tooltip-anchor: P2-AUDIT-V6-BATCH (P2-F)
+
+    [P1-SWAP-HISTORY-VARIETY · 2026-07-12] Ampliado a HISTORIAL: con un plan de
+    2 días la señal era mínima (1 nombre) y el swap re-proponía los mismos
+    desayunos de siempre (vivo: panqueques/avena en bucle con 64 items en la
+    Nevera). Ahora mira el mismo slot en los ÚLTIMOS 3 PLANES + lo que el
+    usuario REGISTRÓ comer (consumed_meals, 14 días) — cap 12."""
     if not user_id or user_id == "guest" or not meal_type:
         return []
     try:
         from db_core import execute_sql_query as _exq
         from constants import strip_accents as _sa
         import json as _json
-        row = _exq("SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
-                   (user_id,), fetch_one=True)
-        if not row:
-            return []
-        pd = row.get("plan_data")
-        if isinstance(pd, str):
-            pd = _json.loads(pd)
-        if not isinstance(pd, dict):
-            return []
         rn = _sa(str(rejected_meal or "").lower()).strip()
         mt = _sa(str(meal_type).lower()).strip()
         out, seen = [], set()
-        for day in pd.get("days", []) or []:
-            for m in (day.get("meals", []) or []):
-                if not isinstance(m, dict):
-                    continue
-                if _sa(str(m.get("meal", "")).lower()).strip() != mt:
-                    continue
-                name = str(m.get("name", "")).strip()
-                key = _sa(name.lower()).strip()
-                if not name or key == rn or key in seen:
-                    continue
-                seen.add(key)
-                out.append(name)
-                if len(out) >= cap:
-                    return out
+
+        def _push(name) -> bool:
+            name = str(name or "").strip()
+            key = _sa(name.lower()).strip()
+            if not name or key == rn or key in seen:
+                return False
+            seen.add(key)
+            out.append(name)
+            return len(out) >= cap
+
+        # 1) Mismo slot en los últimos 3 planes (el activo primero — su señal
+        #    intra-plan conserva prioridad en el orden del listado).
+        rows = _exq("SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 3",
+                    (user_id,), fetch_all=True) or []
+        for row in rows:
+            pd = row.get("plan_data")
+            if isinstance(pd, str):
+                pd = _json.loads(pd)
+            if not isinstance(pd, dict):
+                continue
+            for day in pd.get("days", []) or []:
+                for m in (day.get("meals", []) or []):
+                    if not isinstance(m, dict):
+                        continue
+                    if _sa(str(m.get("meal", "")).lower()).strip() != mt:
+                        continue
+                    if _push(m.get("name")):
+                        return out
+
+        # 2) Lo que el usuario registró comer en ese slot (diario, 14 días).
+        _diary = _exq(
+            "SELECT DISTINCT meal_name FROM consumed_meals WHERE user_id = %s "
+            "AND lower(meal_type) = %s AND consumed_at > NOW() - interval '14 days' LIMIT 8",
+            (user_id, mt), fetch_all=True,
+        ) or []
+        for r in _diary:
+            if _push(r.get("meal_name")):
+                return out
         return out
     except Exception as _e:
         logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) cross-day no derivable (no bloquea): {_e}")

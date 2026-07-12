@@ -697,6 +697,22 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             clean_ingredients = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item.strip()) > 2]
             
     context_extras = ""
+    # [P1-SWAP-HISTORY-VARIETY · 2026-07-12] Paridad con el botón: el chat-modify
+    # también conoce los platos recientes del slot (últimos 3 planes + diario) —
+    # sin esto re-proponía panqueques/avena en bucle. Lazy import (runtime, sin
+    # ciclo: precedente hydration→routers.plans).
+    try:
+        from routers.plans import _cross_day_meal_names_for_swap as _xday_cm
+        _recent_names = _xday_cm(user_id, target_meal.get("name"), meal_type)
+        if _recent_names:
+            context_extras += (
+                f"\n📅 VARIEDAD (preferencia FUERTE): este horario ya tuvo recientemente: "
+                f"{', '.join(_recent_names[:12])}. Propón un plato CLARAMENTE DISTINTO "
+                f"(otra base, otra técnica), si los ingredientes lo permiten."
+            )
+    except Exception as _xday_err:
+        logger.debug(f"[P1-SWAP-HISTORY-VARIETY] señal de variedad no derivable (no bloquea): {_xday_err}")
+
     if clean_ingredients and not allow_pantry_expansion:
         context_extras = f"\n⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario solicitó un cambio. DEBES utilizar OBLIGATORIAMENTE ingredientes que ya formen parte de su despensa actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
     elif allow_pantry_expansion:

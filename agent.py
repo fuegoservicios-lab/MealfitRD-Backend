@@ -612,10 +612,13 @@ def swap_meal(form_data: dict):
     # esta semana. Soft (nunca pelea con la Nevera): mismo espíritu del same-day de arriba.
     _cross_day_names = form_data.get("cross_day_meal_names") or []
     if _cross_day_names:
+        # [P1-SWAP-HISTORY-VARIETY · 2026-07-12] slice 8→12 (el helper ahora
+        # trae historial de últimos 3 planes + diario, cap 12).
         context_extras += (
-            f"\n    - 📅 VARIEDAD ENTRE DÍAS (preferencia): este horario ya tiene en otros días del plan: "
-            f"{', '.join(str(n) for n in _cross_day_names[:8])}. PREFIERE un plato DISTINTO a esos, "
-            f"si los ingredientes disponibles lo permiten."
+            f"\n    - 📅 VARIEDAD (preferencia FUERTE): este horario ya tuvo recientemente (plan actual, "
+            f"planes anteriores y lo que el usuario registró comer): "
+            f"{', '.join(str(n) for n in _cross_day_names[:12])}. Propón un plato CLARAMENTE DISTINTO a esos "
+            f"(otra base, otra técnica), si los ingredientes disponibles lo permiten."
         )
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) inspiración de la biblioteca curada también en swap
     # (antes solo el day-gen de form-gen la recibía): 2 plantillas del slot, determinista, soft.

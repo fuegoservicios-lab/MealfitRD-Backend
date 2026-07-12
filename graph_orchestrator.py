@@ -25304,6 +25304,21 @@ _BRAND_PAREN_LOWER_RE = _re.compile(
 # Dup unidad-alimento: "1 filete de Filete de pescado blanco" (el pase de presupuesto insertó
 # la forma canónica dentro de una línea que ya traía la unidad homónima).
 _UNIT_FOOD_DUP_RE = _re.compile(r"\b(\w+)\s+de\s+\1\s+de\b", _re.IGNORECASE)
+
+# [P1-DISPLAY-PLURAL-POLISH · 2026-07-12] Dos manchas vistas en receta viva
+# (panqueques del owner): "1 tazas (240 ml) de leche" (plural con cantidad 1)
+# y "1 cdta de (4 g) de mantequilla" (doble 'de' alrededor del paréntesis).
+_SINGULAR_UNIT_MAP = {
+    "tazas": "taza", "cdas": "cda", "cditas": "cdita", "cdtas": "cdta",
+    "cucharadas": "cucharada", "cucharaditas": "cucharadita", "latas": "lata",
+    "unidades": "unidad", "paquetes": "paquete", "botellas": "botella",
+    "rebanadas": "rebanada", "fundas": "funda", "potes": "pote", "tarros": "tarro",
+}
+_SINGULAR_ONE_RE = _re.compile(
+    r"^(\s*1)\s+(tazas|cdas|cditas|cdtas|cucharadas|cucharaditas|latas|unidades|paquetes|botellas|rebanadas|fundas|potes|tarros)\b",
+    _re.IGNORECASE,
+)
+_DE_PAREN_DE_RE = _re.compile(r"\bde\s+(\([^)]{1,24}\))\s+de\b")
 # [P1-CITRUS-UNICODE-FRAC · 2026-07-08] (vivo: "2½ limones" en Plátano+queso+pescado quedó SIN
 # capear pese al cap por-comida CITRUS_MEAL_CAP_UNITS=2 — el regex original exigía `\d+\s+noun`
 # (espacio obligatorio tras el dígito), y la fracción unicode pegada "2½" (sin espacio) lo evadía.
@@ -25484,6 +25499,12 @@ def _polish_finalize_display(days) -> int:
             out = _BRAND_PAREN_RE.sub("", s)
             out = _BRAND_PAREN_LOWER_RE.sub("", out)  # [P3-1-BRAND-LOWERCASE-STRIP]
             out = _UNIT_FOOD_DUP_RE.sub(r"\1 de", out)
+            # [P1-DISPLAY-PLURAL-POLISH · 2026-07-12] "1 tazas" → "1 taza";
+            # "1 cdta de (4 g) de X" → "1 cdta (4 g) de X".
+            out = _SINGULAR_ONE_RE.sub(
+                lambda m: f"{m.group(1)} {_SINGULAR_UNIT_MAP.get(m.group(2).lower(), m.group(2))}", out
+            )
+            out = _DE_PAREN_DE_RE.sub(r"\1 de", out)
             _mc = _CITRUS_LEAD_RE.match(out)
             # [P1-CITRUS-UNICODE-FRAC] al menos un grupo (entero o fracción) debe existir —
             # espejo del guard `m_n.group(1) or m_n.group(2)` de P1-COUNT-UNICODE-FRAC.
