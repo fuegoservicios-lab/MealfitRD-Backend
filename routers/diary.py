@@ -463,6 +463,11 @@ async def api_diary_upload(
             # `busy=True` distingue "hay otro scan en vuelo, reintenta en
             # segundos" de "el analizador está caído" (analysis_failed).
             "busy": vision_result.get("busy", False),
+            # [P1-CHAT-VISION-GEMMA · 2026-07-12] Clasificación de la foto:
+            # 'plato' (macros → diario), 'items' (compra → Nevera vía chat-
+            # agent/modify_pantry_inventory), 'otro'. `items` sanitizados.
+            "photo_kind": vision_result.get("photo_kind") or ("plato" if is_food else "otro"),
+            "items": vision_result.get("items") or [],
             "description": description,
             "image_url": image_url,
             # [P2-DIARY-SCAN-MACROS · 2026-05-30] Macros estimadas + nombre corto

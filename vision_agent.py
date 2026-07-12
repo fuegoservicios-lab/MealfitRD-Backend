@@ -171,6 +171,9 @@ def _vision_disabled_payload() -> dict:
         "description": "Análisis de imagen no disponible temporalmente.",
         "is_food": False,
         "analysis_failed": True,
+        # [P1-CHAT-VISION-GEMMA] Shape estable con el path v4 (clasificación).
+        "photo_kind": "otro",
+        "items": [],
         "meal_name": "",
         "calories": 0,
         "protein": 0,
@@ -187,9 +190,15 @@ def _vision_disabled_payload() -> dict:
 # gemma4 arranca en thinking-mode y devuelve content vacío sin él.
 # ---------------------------------------------------------------------------
 
+# [P1-CHAT-VISION-GEMMA · 2026-07-12] v4: la MISMA pasada clasifica la foto.
+# 'plato' → macros para registrar en el diario; 'items' → lista de alimentos
+# sueltos/compra lista para la Nevera (el chat-agent la ofrece vía
+# modify_pantry_inventory); 'otro' → no es comida. Un solo roundtrip a la GPU
+# cubre ambos poderes del escáner en el chat del Agente.
 _MEAL_VISION_SCHEMA = {
     "type": "object",
     "properties": {
+        "photo_kind": {"type": "string", "enum": ["plato", "items", "otro"]},
         "is_food": {"type": "boolean"},
         "meal_name": {"type": "string"},
         "description": {"type": "string"},
@@ -197,8 +206,21 @@ _MEAL_VISION_SCHEMA = {
         "protein": {"type": "number"},
         "carbs": {"type": "number"},
         "healthy_fats": {"type": "number"},
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "quantity": {"type": "number"},
+                    "unit": {"type": "string"},
+                },
+                "required": ["name", "quantity", "unit"],
+            },
+        },
     },
-    "required": ["is_food", "meal_name", "description", "calories", "protein", "carbs", "healthy_fats"],
+    "required": ["photo_kind", "is_food", "meal_name", "description",
+                 "calories", "protein", "carbs", "healthy_fats", "items"],
 }
 
 # [P1-MEAL-SCAN-DR-DISHES · 2026-07-12] Desambiguacion de platos criollos.
@@ -210,12 +232,17 @@ _MEAL_VISION_SCHEMA = {
 # amarrada a TODOS los componentes listados (540 kcal para un plato de ~750
 # era el mangu ausente de la suma).
 _MEAL_VISION_PROMPT = (
-    "Eres un nutricionista dominicano. Mira la foto y determina si contiene "
-    "comida (un plato servido, ingredientes o bebida calorica). Si es comida, "
-    "haz un INVENTARIO en 'description': lista TODOS los componentes visibles "
-    "sin omitir ninguno - la base de carbohidrato (mangu, arroz, yuca, "
-    "platano, pan), las proteinas (huevo, salami, queso frito, pollo, carne) "
-    "y las guarniciones (cebolla roja encurtida, aguacate, ensalada). "
+    "Eres un nutricionista dominicano. Mira la foto y clasifica 'photo_kind': "
+    "'plato' si es comida PREPARADA o SERVIDA lista para comer (plato, bowl, "
+    "sandwich, desayuno servido); 'items' si son alimentos SUELTOS o una "
+    "compra (funda del super, productos con empaque, frutas o verduras "
+    "crudas, el interior de una nevera o despensa); 'otro' si no hay comida. "
+    "SI ES 'otro': is_food=false, macros en 0, meal_name vacio, items vacio. "
+    "SI ES 'plato' (deja items vacio): haz un INVENTARIO en 'description': "
+    "lista TODOS los componentes visibles sin omitir ninguno - la base de "
+    "carbohidrato (mangu, arroz, yuca, platano, pan), las proteinas (huevo, "
+    "salami, queso frito, pollo, carne) y las guarniciones (cebolla roja "
+    "encurtida, aguacate, ensalada). "
     "OJO: el MANGU es un pure COMPACTO y LISO de platano verde majado (masa "
     "color crema, casi siempre coronada con cebolla roja encurtida) - NO lo "
     "confundas con arroz, que se ve como granos sueltos y separados, y NUNCA "
@@ -230,9 +257,16 @@ _MEAL_VISION_PROMPT = (
     "visible (no por 100g; ej: mangu ~300 kcal, huevo frito ~110, 2 rodajas "
     "de salami ~180, queso frito ~150). El total debe cubrir TODOS los "
     "componentes de description - un componente listado pero fuera de la "
-    "suma es un error. Se realista con porciones dominicanas. Si NO es "
-    "comida: is_food=false, macros en 0 y meal_name vacio. Responde SOLO el "
-    "JSON."
+    "suma es un error. Se realista con porciones dominicanas. "
+    "SI ES 'items' (macros en 0, meal_name vacio): llena 'items' con cada "
+    "alimento visible e identificable con certeza: 'name' generico en "
+    "espanol dominicano SIN marca (ej: 'pechuga de pollo', 'arroz blanco', "
+    "'platano verde', 'huevos', 'leche'), 'quantity' = NUMERO DE ENVASES O "
+    "PIEZAS visibles (1 paquete, 2 latas, 6 huevos) - NUNCA el peso impreso "
+    "en el empaque, 'unit' una de: unidad, lb, g, paquete, botella, lata, "
+    "taza, funda. En 'description' resume la compra. NO inventes alimentos "
+    "que no se vean claramente; si dudas, omitelo. "
+    "Responde SOLO el JSON."
 )
 
 # Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
@@ -240,10 +274,43 @@ _MEAL_VISION_PROMPT = (
 _MEAL_MACRO_CAPS = {"calories": 10000, "protein": 1000, "carbs": 2000, "healthy_fats": 1000}
 
 
+def _sane_item_qty(qty, unit) -> float:
+    """[P1-CHAT-VISION-GEMMA] Espejo de user_data._sane_scan_qty (lección
+    P1-PANTRY-SCAN-QTY): envase discreto con qty absurda (>12) casi siempre es
+    el peso impreso mal leído → colapsar a 1."""
+    try:
+        q = float(qty or 1)
+    except (TypeError, ValueError):
+        q = 1.0
+    u = str(unit or "").strip().lower()
+    if u in ("g", "gramo", "gramos"):
+        return max(10.0, min(5000.0, q))
+    if u in ("lb", "libra", "libras"):
+        return max(0.25, min(10.0, q))
+    if u in ("unidad", "unidades"):
+        return float(max(1, min(30, round(q))))
+    q = round(q)
+    if q > 12:
+        return 1.0
+    return float(max(1, q))
+
+
+def _fmt_item_phrase(name: str, qty: float, unit: str) -> str:
+    """Frase '2 unidades de Manzana' — EXACTO el formato que documenta
+    `tools.modify_pantry_inventory(items_to_add=...)`, para que el chat-agent
+    pueda copiar los items del análisis directo a la tool sin reinterpretar."""
+    q = int(qty) if float(qty).is_integer() else qty
+    u = str(unit or "unidad").strip().lower()
+    if q != 1 and u in ("unidad", "paquete", "botella", "lata", "taza", "funda", "libra"):
+        # Plural español: consonante final → +es (unidad→unidades), vocal → +s.
+        u += "es" if u[-1] not in "aeiou" else "s"
+    return f"{q} {u} de {name}"
+
+
 def _coerce_meal_scan(data: dict) -> dict:
     """Normaliza la salida cruda de gemma al contrato de process_image_with_vision.
     Pura (sin IO) para testearla directo: clamps, is_food=False ⇒ macros 0,
-    strings capadas. Fail-open a 0 en macros no numéricas."""
+    strings capadas, items sanitizados. Fail-open a 0 en macros no numéricas."""
     def _macro(key: str) -> int:
         try:
             n = int(round(float(data.get(key) or 0)))
@@ -254,19 +321,62 @@ def _coerce_meal_scan(data: dict) -> dict:
     is_food = bool(data.get("is_food"))
     description = str(data.get("description") or "").strip()[:600]
     meal_name = str(data.get("meal_name") or "").strip()[:120]
-    if not is_food:
+
+    kind = str(data.get("photo_kind") or "").strip().lower()
+    if kind not in ("plato", "items", "otro"):
+        # Compat: salida vieja/parcial sin photo_kind → derivar de is_food.
+        kind = "plato" if is_food else "otro"
+
+    # ---- Modo ITEMS: compra/alimentos sueltos → lista para la Nevera ----
+    if kind == "items":
+        items = []
+        for it in (data.get("items") or [])[:30]:
+            name = str((it or {}).get("name") or "").strip()[:60]
+            if not name:
+                continue
+            unit = str((it or {}).get("unit") or "unidad").strip().lower()[:20]
+            qty = _sane_item_qty((it or {}).get("quantity"), unit)
+            items.append({"name": name, "quantity": qty, "unit": unit})
+        if not items:
+            # Clasificó 'items' pero no identificó nada usable → tratar como
+            # no-comida honesta en vez de una compra vacía.
+            return {
+                "photo_kind": "otro",
+                "is_food": False,
+                "items": [],
+                "description": description or "No se detectaron alimentos identificables en la imagen.",
+                "meal_name": "",
+                "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
+            }
+        frases = ", ".join(_fmt_item_phrase(i["name"], i["quantity"], i["unit"]) for i in items)
         return {
-            "description": description or "No se detectó comida en la imagen.",
-            "is_food": False,
+            "photo_kind": "items",
+            "is_food": True,
+            "items": items,
+            # Description determinista desde los items SANITIZADOS (no el texto
+            # libre de gemma): es lo que el chat-agent copia a la tool.
+            "description": f"Alimentos detectados (compra/items, no es un plato servido): {frases}."[:900],
             "meal_name": "",
-            "calories": 0,
-            "protein": 0,
-            "carbs": 0,
-            "healthy_fats": 0,
+            "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
         }
+
+    # ---- Modo OTRO / no-comida ----
+    if kind == "otro" or not is_food:
+        return {
+            "photo_kind": "otro",
+            "is_food": False,
+            "items": [],
+            "description": description or "No se detectó comida en la imagen.",
+            "meal_name": "",
+            "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
+        }
+
+    # ---- Modo PLATO: contrato v3 intacto ----
     result = {
-        "description": description or "Comida detectada en la foto.",
+        "photo_kind": "plato",
         "is_food": True,
+        "items": [],
+        "description": description or "Comida detectada en la foto.",
         "meal_name": meal_name,
         "calories": _macro("calories"),
         "protein": _macro("protein"),
