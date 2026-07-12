@@ -3506,6 +3506,30 @@ def rag_query_router(prompt: str) -> dict:
 # Fail-secure: cualquier excepción → retorna "" (no inyecta nada). El
 # agente puede usar la tool `check_hydration_today` si necesita el dato
 # bajo demanda en lugar de en cada turno.
+def _macro_totals_line(consumed_today: list, current_plan) -> str:
+    """[P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros ACUMULADAS del día (proteína/
+    carbos/grasas) con sus metas del plan — el DIARIO DE HOY solo llevaba kcal,
+    así que el agente no podía razonar '33g de 125g de proteína' como la card
+    'Progreso en Tiempo Real'. Fail-open a "" ante cualquier shape rara."""
+    try:
+        _p = sum(float(m.get("protein") or 0) for m in consumed_today if isinstance(m, dict))
+        _c = sum(float(m.get("carbs") or 0) for m in consumed_today if isinstance(m, dict))
+        _f = sum(float(m.get("healthy_fats") or 0) for m in consumed_today if isinstance(m, dict))
+        _tm = current_plan.get("macros") if isinstance(current_plan, dict) else None
+        if isinstance(_tm, dict) and _tm.get("protein"):
+            return (
+                f" Macros acumuladas hoy: {round(_p)}g proteína (meta {_tm.get('protein')}g), "
+                f"{round(_c)}g carbohidratos (meta {_tm.get('carbs')}g), "
+                f"{round(_f)}g grasas (meta {_tm.get('fats')}g)."
+            )
+        return (
+            f" Macros acumuladas hoy: {round(_p)}g proteína, "
+            f"{round(_c)}g carbohidratos, {round(_f)}g grasas."
+        )
+    except Exception:
+        return ""
+
+
 def _build_pantry_context(user_id: Optional[str]) -> str:
     """[P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot REAL de `user_inventory`
     al system prompt (bloque VOLÁTIL → va al final, no rompe el prefix-cache
@@ -3824,12 +3848,15 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     target_calories = current_plan.get("calories")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
-                
+                # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
+                # día — las MISMAS que la card 'Progreso en Tiempo Real'.
+                system_prompt += _macro_totals_line(consumed_today, current_plan)
+
                 if target_calories:
                     try:
                         target_cal_int = int(target_calories)
                         system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
-                        
+
                         remaining = target_cal_int - total_consumed
                         if remaining < (target_cal_int * 0.35) and remaining > 0:
                             system_prompt += f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario solo le quedan {remaining} kcal para el resto del día. TIENES LA OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' para recalcular y reducir las porciones de sus próximas comidas de hoy para mantener su déficit."
@@ -4185,6 +4212,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     target_calories = current_plan.get("calories")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. Revisa esto ANTES de preguntar si ya comió algo (por ejemplo, si ya tiene una cena registrada, no le preguntes si esa foto es su cena, asume que es un snack nocturno o pregúntale por qué repite). Si la foto o mensaje coincide con algo que ya está registrado, felicítalo o no lo registres de nuevo."
+                # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
+                # día — las MISMAS que la card 'Progreso en Tiempo Real'.
+                system_prompt += _macro_totals_line(consumed_today, current_plan)
                 
                 if target_calories:
                     try:
