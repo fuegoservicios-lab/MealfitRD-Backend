@@ -3154,5 +3154,101 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
         return f"Error consultando el catálogo de alimentos: {str(e)}"
 
 
+# ============================================================
+# [P1-CHAT-DAY-REGEN-TOOL · 2026-07-12] TOOL: Actualizar un día completo
+# ============================================================
+# Pedido del owner: el chat debe poder hacer lo mismo que el botón
+# "Actualizar platos" del Plan. NO se re-implementa el motor: la tool invoca
+# DIRECTAMENTE el handler `api_regenerate_day` (patrón de los tests) — hereda
+# el gate clínico server-side, el gate de suficiencia de nevera, la
+# idempotencia 45s, el cobro de 1 crédito, y el flag `_day_regen_inflight`
+# que hace que la página Plan muestre la ola de progreso sola. Corre en un
+# thread daemon porque el handler es SÍNCRONO (~1-2 min de swaps LLM
+# secuenciales) y bloquearía el stream del chat.
+
+
+@tool
+def regenerate_full_day(user_id: str, day_number: int) -> str:
+    """
+    Regenera TODOS los platos de UN día del plan activo (equivale al botón 'Actualizar platos' del Plan).
+    Úsala SOLO cuando el usuario pida renovar el día COMPLETO (ej: 'actualízame todos los platos del domingo', 'regenera el día 2 entero'); para cambiar UN solo plato usa modify_single_meal.
+    IMPORTANTE: cuesta 1 crédito del plan del usuario y tarda 1-2 minutos — CONFIRMA con el usuario ANTES de llamarla (menciona el día y el crédito).
+    day_number: posición 1-based del día en el plan activo (1 = primer día visible, ej. Domingo si el plan arranca en domingo).
+    La regeneración corre en SEGUNDO PLANO: al responder dile que la página Plan mostrará el progreso y que los platos nuevos aparecen solos en ~2 minutos. NO afirmes que ya terminó y NO uses [UI_ACTION: REFRESH_PLAN] (aún no hay cambios que refrescar).
+    """
+    # LIVE-TOOL CONTRACT: `user_id` viene force-overrideado por P0-AGENT-1.
+    logger.info(f"🔄 [TOOL EXECUTION] regenerate_full_day user={user_id} day={day_number}")
+    try:
+        _dn = int(day_number)
+    except (TypeError, ValueError):
+        return "day_number inválido: pásalo como entero 1-based (1 = primer día del plan)."
+    if _dn < 1 or _dn > 31:
+        return "day_number fuera de rango (1..31)."
+
+    # Paywall: el MISMO gate que usa el botón (verify_api_quota es invocable
+    # directo con el user_id — Depends solo lo cablea a FastAPI).
+    try:
+        from auth import verify_api_quota as _vq
+        _vq(user_id)
+    except Exception as _q_err:
+        _detail = getattr(_q_err, "detail", None) or str(_q_err)
+        return (
+            f"NO INICIADO — límite del plan alcanzado: {_detail} "
+            f"Explícaselo al usuario con amabilidad."
+        )
+
+    # Plan activo = latest por recencia (mismo resolver SSOT que restore/rename).
+    from db import execute_sql_query as _esq_rd
+    _row = _esq_rd(
+        "SELECT id::text AS id, "
+        "jsonb_array_length(COALESCE(plan_data->'days', '[]'::jsonb)) AS n_days "
+        "FROM meal_plans WHERE user_id = %s "
+        "ORDER BY GREATEST(created_at, COALESCE((plan_data->>'_plan_modified_at')::timestamptz, created_at)) DESC, "
+        "created_at DESC LIMIT 1",
+        (user_id,),
+        fetch_one=True,
+    )
+    if not _row:
+        return "El usuario no tiene un plan activo — no hay día que regenerar."
+    _plan_id = _row["id"]
+    _n_days = int(_row.get("n_days") or 0)
+    if _dn > _n_days:
+        return f"El plan activo tiene {_n_days} día(s) — day_number={_dn} no existe. Pregunta al usuario a cuál día se refiere."
+
+    _day_index = _dn - 1
+
+    def _run_day_regen():
+        try:
+            from routers.plans import api_regenerate_day
+            from fastapi import BackgroundTasks as _BT
+            _res = api_regenerate_day(
+                plan_id=_plan_id,
+                background_tasks=_BT(),  # el handler no la usa (solo firma)
+                data={"user_id": user_id, "day_index": _day_index, "reason": "variety"},
+                verified_user_id=user_id,
+                _rl=None,
+            )
+            logger.info(
+                f"✅ [P1-CHAT-DAY-REGEN-TOOL] día {_dn} regenerado user={user_id[:8]}: "
+                f"regenerados={(_res or {}).get('meals_regenerated')} "
+                f"warning={(_res or {}).get('day_quality_warning')}"
+            )
+        except Exception as _bg_err:
+            logger.error(
+                f"❌ [P1-CHAT-DAY-REGEN-TOOL] regeneración del día {_dn} falló "
+                f"user={user_id[:8]}: {type(_bg_err).__name__}: {_bg_err}"
+            )
+
+    import threading
+    threading.Thread(target=_run_day_regen, daemon=True, name=f"chat-day-regen-{user_id[:8]}").start()
+
+    return (
+        f"🔄 INICIADA la actualización de todos los platos del día {_dn} en segundo plano "
+        f"(~1-2 minutos, {_n_days} días en el plan). Dile al usuario que la página Plan "
+        f"mostrará el progreso y que los platos nuevos aparecerán solos; NO digas que ya "
+        f"terminó ni incluyas [UI_ACTION: REFRESH_PLAN]."
+    )
+
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient]
+agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, regenerate_full_day]

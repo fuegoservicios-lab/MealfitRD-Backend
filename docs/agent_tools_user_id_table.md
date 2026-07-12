@@ -10,7 +10,7 @@ El nodo LangGraph `execute_tools` ([`backend/agent.py`](../agent.py)) force-over
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer.
 
-## Las 12 tools cubiertas
+## Las 13 tools cubiertas
 
 | # | Tool | Mutación cross-user que el override impide |
 |---|---|---|
@@ -26,6 +26,7 @@ Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s
 | 10 | `check_hydration_today` | leak de `hydration_log` cross-user (read-only) |
 | 11 | `log_water_glass` | INSERT/UPDATE en `hydration_log` cross-user |
 | 12 | `suggest_foods_for_nutrient` | leak del `health_profile` cross-user (lee alergias/dislikes/dieta del `user_id` para filtrar la sugerencia del catálogo) |
+| 13 | `regenerate_full_day` | invoca `api_regenerate_day` con `verified_user_id=user_id` — sin el override, regeneraría (y COBRARÍA 1 crédito) el día del plan de una víctima (P1-CHAT-DAY-REGEN-TOOL · 2026-07-12) |
 
 ## Cómo verificar
 
