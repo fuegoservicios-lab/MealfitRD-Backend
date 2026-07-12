@@ -577,17 +577,22 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary (tras retries): {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False, consumed_at_override: Optional[str] = None):
     """Guarda una comida consumida en la tabla consumed_meals.
 
     [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
     debe pasar `mark_inventory_synced=True` para que la reconciliación al
     cierre del chunk no vuelva a descontarlos.
+
+    [P1-CONSUMED-BACKDATE · 2026-07-12] `consumed_at_override` (ISO timestamptz)
+    permite registrar comidas de días ANTERIORES ("el almuerzo de ayer") con su
+    fecha real — sin él, todo caía en HOY y contaminaba las macros del día. El
+    caller (tools.log_consumed_meal) clampa el rango; aquí solo se aplica.
     """
     try:
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
-        synced_at = now if mark_inventory_synced else None
+        now = consumed_at_override or datetime.now(timezone.utc).isoformat()
+        synced_at = (datetime.now(timezone.utc).isoformat() if mark_inventory_synced else None)
 
         # [P2-CONSUMED-DEDUP · 2026-05-28] Dedup anti doble-tap. log_consumed_meal
         # se invoca desde la tool del chat-agent (re-emisión posible del LLM) y

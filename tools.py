@@ -451,13 +451,37 @@ def generate_new_plan_from_chat(user_id: str, instructions: str = "") -> str:
     """
     return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
 
+# [P1-CONSUMED-BACKDATE · 2026-07-12] Comidas de días anteriores + guard de
+# duplicado. Vivo: el owner subió una foto, dijo "es del almuerzo de ayer" y
+# la tool la registró EN HOY (1600 kcal del día con una comida de ayer).
+_CONSUMED_MAIN_MEAL_TYPES = ("desayuno", "almuerzo", "cena")
+_CONSUMED_MAX_DAYS_AGO = 3
+
+
+def _clamp_days_ago(days_ago) -> int:
+    """0=hoy .. 3=máximo pasado. Garbage/futuro/negativo → 0 (hoy)."""
+    try:
+        d = int(days_ago)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(_CONSUMED_MAX_DAYS_AGO, d))
+
+
+def _normalize_meal_type(meal_type) -> str:
+    mt = str(meal_type or "").strip().lower()
+    return mt if mt in ("desayuno", "almuerzo", "cena", "merienda", "snack") else "snack"
+
+
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
     Incluye carbohidratos y grasas saludables si están disponibles.
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado.
+    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'. Dedúcelo de lo que diga el usuario o de la hora.
+    - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 3 días atrás; el diario nunca registra a futuro.
+    - Si ya existe una comida principal del MISMO tipo ese día, la tool NO inserta y te lo informa: pregúntale al usuario si de verdad quiere registrar dos (repite con force=true SOLO si él confirma) o si prefiere corregir.
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
@@ -478,12 +502,53 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
 
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
+
+    # [P1-CONSUMED-BACKDATE · 2026-07-12] Fecha real de consumo + guard dup.
+    from datetime import datetime, timezone as _tz, timedelta as _td
+    _days_ago = _clamp_days_ago(days_ago)
+    _meal_type = _normalize_meal_type(meal_type)
+    _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
+
+    # Guard: una sola comida PRINCIPAL (desayuno/almuerzo/cena) por día local
+    # (RD = UTC-4, misma convención que _local_date_str_for_user). Meriendas y
+    # snacks se repiten legítimamente. `force=true` (tras confirmación del
+    # usuario) lo salta. Best-effort: si el check falla, se procede (no perder
+    # un registro legítimo por un hiccup de DB).
+    if _meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force:
+        try:
+            from db import execute_sql_query as _esq_cm
+            _dup = _esq_cm(
+                "SELECT meal_name, calories, consumed_at FROM consumed_meals "
+                "WHERE user_id = %s AND meal_type = %s "
+                "AND (consumed_at AT TIME ZONE 'America/Santo_Domingo')::date = "
+                "((%s::timestamptz) AT TIME ZONE 'America/Santo_Domingo')::date "
+                "ORDER BY consumed_at DESC LIMIT 1",
+                (user_id, _meal_type, _consumed_at),
+                fetch_one=True,
+            )
+            if _dup:
+                _dia = "hoy" if _days_ago == 0 else ("ayer" if _days_ago == 1 else f"hace {_days_ago} días")
+                logger.info(
+                    f"🍽️ [P1-CONSUMED-BACKDATE] dup-guard: ya hay {_meal_type} {_dia} "
+                    f"para user {user_id[:8]} ('{_dup.get('meal_name')}') — no inserto sin force."
+                )
+                return (
+                    f"⚠️ NO REGISTRADO: el usuario YA tiene un {_meal_type} registrado {_dia} "
+                    f"('{_dup.get('meal_name')}', {int(_dup.get('calories') or 0)} kcal). "
+                    f"Díselo amablemente y pregúntale si de verdad comió dos {_meal_type}s ese día "
+                    f"(si lo confirma, repite esta herramienta con force=true) o si prefiere no duplicar."
+                )
+        except Exception as _dup_err:
+            logger.warning(f"[P1-CONSUMED-BACKDATE] dup-guard falló (procediendo): {_dup_err}")
+
     # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
     # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
     has_ingredients = bool(ingredients)
     result = db_log_consumed_meal(
         user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients,
+        meal_type=_meal_type,
         mark_inventory_synced=has_ingredients,
+        consumed_at_override=(_consumed_at if _days_ago > 0 else None),
     )
     import db_inventory
     deduct_summary = None
@@ -496,7 +561,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
 
     if result is not None:
-        msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
+        _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
+        msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
         # [P1-AGENT-HINT · 2026-05-22] Si la deducción tuvo items que la
         # inferencia P1-PANTRY-INFER no pudo procesar, añadir hint visible
         # para la LLM en el ToolMessage. La LLM puede entonces pedir al
