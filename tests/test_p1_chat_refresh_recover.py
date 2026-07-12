@@ -39,9 +39,13 @@ def test_orphan_detection_and_indicator():
 
 def test_poll_is_conservative():
     blk = _block()
-    assert "serverCount >= localCount + 1" in blk, \
-        "solo rehidratar cuando el server va ADELANTE — si no, el fetch con menos " \
-        "mensajes borraría la burbuja huérfana del user"
+    # [P1-CHAT-STOP-POWER v2] El conteo filtra filas de sistema y exige que el
+    # ÚLTIMO sea del modelo — contar filas crudas rehidrataba prematuro sin
+    # respuesta y el episodio renacía en bucle ("Recuperando" trabado, vivo).
+    assert "srv.length >= localCount + 1" in blk, \
+        "solo rehidratar cuando el server va ADELANTE (filtrado)"
+    assert "srvLast.role === 'model'" in blk, \
+        "rehidratar SOLO si hay respuesta real del modelo al final"
     assert "cur.attempts > 6" in blk, "el sondeo tiene tope (~26s), no es infinito"
 
 
