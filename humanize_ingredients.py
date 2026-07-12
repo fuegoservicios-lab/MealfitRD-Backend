@@ -173,6 +173,18 @@ def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> s
             if pl and name_l == pl:
                 return f"1 {meas['singular']}"
 
+    # (c) [P1-RECIPE-POLISH-5 · 2026-07-12] "1 <unidad-plural> de X" → singular la PALABRA-UNIDAD
+    # ("1 tazas de yogurt griego", "1 dientes de ajo" — emitidos así por el day-gen, vivos en el
+    # plan 1bfda745). Solo cantidad EXACTA 1 y solo la primera palabra si es unidad conocida;
+    # el resto de la línea queda intacto (no tocamos adjetivos ni el alimento).
+    if abs(qty - 1.0) < 1e-6 and name_l:
+        m_unit = re.match(
+            r'^(tazas|dientes|rebanadas|lonjas|hojas|unidades|pedazos|latas|potes|paquetes|fundas|mazos|cucharadas)\b',
+            name_l)
+        if m_unit:
+            _uw = m_unit.group(1)
+            return f"1 {_uw[:-1]}{name[len(_uw):]}"
+
     return raw_ingredient
 
 

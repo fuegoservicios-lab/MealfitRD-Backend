@@ -1152,6 +1152,30 @@ def swap_meal(form_data: dict):
         # [P4-UPDATE-DISHES-STRICT-ALL] strict-all → cero ingredientes externos para TODOS.
         _external_tolerance = 0
 
+    # [P1-SWAP-CUMULATIVE-BAN · 2026-07-12] PROHIBICIÓN dura UPFRONT: los LABELS de proteína
+    # ya usados hoy (derivados con el MISMO SSOT del gate — asimetría prompt↔gate = intentos
+    # quemados) se enumeran como prohibidos en el prompt BASE cuando el swap NO es
+    # pantry-strict (con despensa estricta manda la preferencia suave: no pelear con lo
+    # comprado; el gate ya tiene su fallback anti-slot-imposible). Vivo (corr=382cf533,
+    # swap 'menos tiempo'): la 'preferencia' con nombres de platos no bastó — 3 intentos
+    # quemados proponiendo huevo/pollo ya usados (la MISMA tortilla dos veces).
+    _banned_sd_labels = set()
+    try:
+        _sd_blobs_up = form_data.get("same_day_other_meal_blobs") or []
+        if _sd_blobs_up and not strict_pantry:
+            from graph_orchestrator import _protein_gate_labels_in_text as _pglt_up
+            _used_up = set()
+            for _b_up in _sd_blobs_up:
+                _used_up |= _pglt_up(str(_b_up))
+            if _used_up:
+                prompt_text += (
+                    f"\n\n🚫 PROTEÍNAS PROHIBIDAS HOY (ya usadas en otras comidas del día): "
+                    f"{', '.join(sorted(_used_up))}. NO las uses como proteína principal NI como "
+                    f"ingrediente del plato nuevo — el validador RECHAZARÁ el plato si aparecen."
+                )
+    except Exception as _ub_e:
+        logger.debug(f"[P1-SWAP-CUMULATIVE-BAN] upfront ban no-op: {type(_ub_e).__name__}: {_ub_e}")
+
     # [P1-SWAP-MACROS · 2026-05-22] Buffer mutable del prompt para inyectar
     # feedback del validador (pantry + macros) en attempts 2 y 3. Mismo
     # patrón que `execute_modify_single_meal` (tools.py:647).
@@ -1308,11 +1332,17 @@ def swap_meal(form_data: dict):
                         f"🍗 [P1-SWAP-SAMEDAY-PROTEIN-GATE] candidato repite proteína del día "
                         f"({_clash_txt}) | propuesto={str(_cand_name_sd)[:40]!r} | meal_type={meal_type}"
                     )
+                    # [P1-SWAP-CUMULATIVE-BAN · 2026-07-12] el set de bans se ACUMULA entre
+                    # intentos — antes la directiva era `prompt_base + clash ACTUAL` (reemplazo):
+                    # el ban de huevo del intento 1 se perdía al banear pollo en el 2 y el 3
+                    # volvía al huevo (corr=382cf533: la misma tortilla dos veces).
+                    _banned_sd_labels |= set(_clash_sd)
+                    _ban_txt = ", ".join(sorted(_banned_sd_labels))
                     _current_prompt[0] = prompt_text + (
                         f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\nTu plato usa {_clash_txt}, "
-                        f"pero OTRA comida de HOY ya lo lleva (revisa 'VARIEDAD DEL DÍA'). Elige una "
-                        f"proteína principal DIFERENTE de las disponibles en su despensa y NO la "
-                        f"menciones ni en el nombre ni en los ingredientes."
+                        f"pero OTRA comida de HOY ya lo lleva (revisa 'VARIEDAD DEL DÍA'). "
+                        f"PROHIBIDO usar: {_ban_txt} — ni en el nombre ni en los ingredientes. "
+                        f"Elige una proteína principal DIFERENTE de las disponibles en su despensa."
                     )
                     raise ValueError(
                         f"SWAP_SAMEDAY_PROTEIN: el plato propuesto repite '{_clash_txt}' ya usado "

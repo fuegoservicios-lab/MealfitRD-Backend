@@ -10353,6 +10353,12 @@ PORTION_SHRINK_FLOOR_G = _env_float("MEALFIT_PORTION_SHRINK_FLOOR_G", 15.0, vali
 # alcanza; JAMÁS drop — es la identidad del plato).
 PROTAGONIST_PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTAGONIST_PROTEIN_FLOOR", True)
 PROTAGONIST_PROTEIN_MIN_G = _env_float("MEALFIT_PROTAGONIST_PROTEIN_MIN_G", 75.0, validator=lambda v: 40.0 <= v <= 150.0)
+# [P1-RECIPE-POLISH-5 · 2026-07-12] Piso PROTAGONISTA para CARBOS: el carbo que da identidad al
+# plato ("cama de yautía asada" con 15g horneados 30 min — vivo, plan 1bfda745) también tiene
+# piso. Mismo mecanismo headroom-aware del piso de proteína; tokens de víveres/almidones es-DO.
+PROTAGONIST_CARB_MIN_G = _env_float("MEALFIT_PROTAGONIST_CARB_MIN_G", 60.0, validator=lambda v: 30.0 <= v <= 120.0)
+_PROTAGONIST_CARB_TOKENS = ("yautia", "yuca", "name", "yame", "malanga", "batata", "papa",
+                            "platano", "guineo", "arroz", "cebada", "quinoa", "pasta", "espagueti")
 # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (SOLVER) Refinador GLOBAL entero del día: local search
 # en pasos de 5g sobre el estado POST-quantize que optimiza kcal+P+C+F conjuntos (rompe el
 # techo de la cadena secuencial solver→closers→quantize donde cada pasada des-hace a la
@@ -17001,7 +17007,27 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             missing.append(str(bare).strip())
         if not missing:
             return 0
-        _list = ", ".join(missing[:6])
+        # [P1-RECIPE-POLISH-5 · 2026-07-12] Víveres/leguminosas que DEBEN cocerse jamás van al
+        # complemento genérico "incorpora también X durante la preparación" (vivo, plan 1bfda745:
+        # "0.5 pedazo de ñame" + paso sin método de cocción — el ñame crudo NO se come; la yuca
+        # cruda es tóxica). Para esos, paso explícito de hervido; el resto conserva el genérico.
+        _must_cook_c = [m_ for m_ in missing[:6]
+                        if _MUST_COOK_VIVER_LEGUME_RE.search(_sa(str(m_).lower()))]
+        _rest_c = [m_ for m_ in missing[:6] if m_ not in _must_cook_c]
+        if _must_cook_c:
+            _cook_step = (f"El Toque de Fuego (complemento): hierve {', '.join(_must_cook_c)} hasta "
+                          f"que ablande (descarta el agua de cocción) e incorpóralo a la preparación.")
+            if isinstance(recipe, list):
+                steps = _insert_step_before_montaje(steps, _cook_step)
+                meal["recipe"] = steps
+            else:
+                meal["recipe"] = ((str(recipe) + " ") if recipe else "") + _cook_step
+                recipe = meal["recipe"]
+            logger.info(f"🍠 [P1-RECIPE-POLISH-5] complemento víver cook-required con paso de "
+                        f"hervido explícito: {_must_cook_c} | meal={str(meal.get('name'))[:40]}")
+            if not _rest_c:
+                return len(missing)
+        _list = ", ".join(_rest_c)
         # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] En una preparación LICUADA (batido/jugo/smoothie)
         # el ingrediente ausente va A LA LICUADORA, no "al plato": "Incorpora también X al plato
         # antes de servir" en un batido lee robótico (review visual). Detecta licuadora en pasos o
@@ -20690,6 +20716,54 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
         return 0
 
 
+# [P1-RECIPE-POLISH-5 · 2026-07-12] Display "NN g de queso" GENÉRICO cuyo raw nombra el queso
+# ESPECÍFICO ("50g de queso cottage") → el display hereda el nombre del raw. Medido en vivo
+# (plan 1bfda745): 3/12 platos mostraban "queso" pelado que ningún paso usaba, mientras el raw
+# (que alimenta la lista de compras) decía cottage — defecto de DISPLAY puro. Solo renombra
+# (jamás toca gramos ni raw → macros/lista intactos).
+_SPECIFIC_CHEESE_TOKENS = ("cottage", "ricotta", "mozzarella", "blanco", "fresco", "crema",
+                           "freir", "cheddar", "parmesano", "gouda", "requeson")
+
+
+def _enrich_generic_cheese_display_from_raw(meal: dict) -> int:
+    """[P1-RECIPE-POLISH-5] Renombra líneas display 'N g de queso' al queso específico del raw
+    ausente del display. Puro sobre nombres, fail-safe → 0."""
+    try:
+        ings = meal.get("ingredients")
+        raw = meal.get("ingredients_raw")
+        if not isinstance(ings, list) or not isinstance(raw, list):
+            return 0
+        from constants import strip_accents as _sa_gc
+        _raw_specific = []
+        for r in raw:
+            rl = _sa_gc(str(r).lower())
+            if "queso" in rl:
+                for t in _SPECIFIC_CHEESE_TOKENS:
+                    if t in rl:
+                        m = _re.search(r"queso(?:\s+de)?\s+" + t, rl)
+                        _raw_specific.append(m.group(0) if m else f"queso {t}")
+                        break
+        if not _raw_specific:
+            return 0
+        _disp_blob = _sa_gc(" ".join(str(i) for i in ings).lower())
+        _cands = [p for p in _raw_specific if p not in _disp_blob]
+        n = 0
+        for idx, ing in enumerate(ings):
+            if not _cands:
+                break
+            il = _sa_gc(str(ing).lower())
+            if _re.match(r"^\s*[\d.,]+\s*g\s+de\s+queso\s*$", il):
+                _ph = _cands.pop(0)
+                ings[idx] = _re.sub(r"de\s+queso\s*$", "de " + _ph, str(ing), flags=_re.IGNORECASE)
+                n += 1
+        if n:
+            logger.info(f"🧀 [P1-RECIPE-POLISH-5] {n} línea(s) 'queso' genérico renombrada(s) al "
+                        f"específico del raw | meal={str(meal.get('name'))[:40]}")
+        return n
+    except Exception:
+        return 0
+
+
 def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fats=None, *,
                                  main_goal=None, target_macros=None) -> tuple:
     """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
@@ -21158,6 +21232,19 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                 total += _ntu; parts.append(f"final_truthup={_ntu}")
     except Exception as _etu:
         logger.warning(f"[P1-FINALIZE-TRUTHUP-ALL] final truth-up no-op: {type(_etu).__name__}: {_etu}")
+    # [P1-RECIPE-POLISH-5 · 2026-07-12] display 'queso' genérico hereda el específico del raw
+    # (defecto de display; la lista ya compraba lo correcto). Al final: los pases previos ya
+    # estabilizaron display/raw.
+    try:
+        _ngc = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if isinstance(_m, dict):
+                    _ngc += _enrich_generic_cheese_display_from_raw(_m)
+        if _ngc:
+            total += _ngc; parts.append(f"queso_display={_ngc}")
+    except Exception as _egc:
+        logger.warning(f"[P1-RECIPE-POLISH-5] enrich queso display no-op: {type(_egc).__name__}: {_egc}")
     return (total, ", ".join(parts))
 
 
@@ -21347,6 +21434,12 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             total += _sync_recipe_step_quantities(meal)
         except Exception as _sq_up_e:
             logger.warning(f"[P1-RECIPE-QTY-SYNC] sync en finalizador de update no-op: {type(_sq_up_e).__name__}: {_sq_up_e}")
+        # [P1-RECIPE-POLISH-5 · 2026-07-12] display 'queso' genérico → específico del raw
+        # (paridad con el finalize plan-level; los swaps/updates también lo producían).
+        try:
+            total += _enrich_generic_cheese_display_from_raw(meal)
+        except Exception:
+            pass
         # [P2-RECIPE-HUMANIZE-UPDATES · 2026-06-29] (re-audit objetivo · P2 RECIPE-HUMANIZE-UPDATES-2) La
         # humanización de display (colapso de doble-fracción, '1 huevos'→'1 huevo', '¼ cda'→'1 cdta', medidas
         # caseras) corría SOLO en form-gen (g_o.py:16929 sobre el result SSE); los platos editados mostraban
@@ -23949,6 +24042,30 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                             capped += 1
                             _meal_touched = True
                             continue
+                    # [P1-RECIPE-POLISH-5 · 2026-07-12] Techo de REBANADAS de pan por comida (vivo,
+                    # plan 1bfda745: "5 rebanadas de pan integral familiar" para 1 persona en un
+                    # desayuno cuyo queso venía "en 4 lonjas, 2 por tostada" — la aritmética interna
+                    # no cuadra con 5 panes). ≤3 rebanadas es porción realista; rescale de conteo
+                    # (lockstep raw) mantiene macros/lista coherentes; el qty-sync re-alinea pasos.
+                    _mbr = _re.match(r"^\s*(\d+)\s+rebanadas?\s+de\s+pan\b", il)
+                    if _mbr and int(_mbr.group(1)) > 3:
+                        try:
+                            _nbr = int(_mbr.group(1))
+                            _new_br = _resc(s, 3.0 / _nbr)
+                            if _new_br and _new_br != s:
+                                ings[idx] = _new_br
+                                if _lockstep:
+                                    try:
+                                        raw[idx] = _resc(str(raw[idx]), 3.0 / _nbr)
+                                    except Exception:
+                                        pass
+                                capped += 1
+                                _meal_touched = True
+                                logger.info(f"🍞 [P1-RECIPE-POLISH-5] pan {_nbr}→3 rebanadas en "
+                                            f"'{str(meal.get('name'))[:40]}' (techo realista por comida)")
+                                continue
+                        except Exception:
+                            pass
                     factor = None
                     # 1) proteína en gramos sobre el techo (505g calamar → 300g)
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
@@ -24249,6 +24366,57 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] piso PROTAGONISTA DECLINADO en "
                                     f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g, alcanzable "
                                     f"{int(_tgt_pf)}g (<10g de mejora — headroom kcal insuficiente)")
+                            continue
+                    # [P1-RECIPE-POLISH-5 · 2026-07-12] piso PROTAGONISTA para CARBOS (ver knob):
+                    # token de víver/almidón presente en la LÍNEA y en el NOMBRE del plato y
+                    # gramos < PROTAGONIST_CARB_MIN_G → bump headroom-aware (espejo del de
+                    # proteína). Vivo: "cama de yautía asada" con 15g horneados 30-35 min.
+                    if (PROTAGONIST_PROTEIN_FLOOR_ENABLED
+                            and cur_g < float(PROTAGONIST_CARB_MIN_G)):
+                        try:
+                            _nm_cf = _sa(str(meal.get("name", "")).lower())
+                            _carb_hit = next(
+                                (t for t in _PROTAGONIST_CARB_TOKENS
+                                 if _re.search(r"\b" + t + r"(?:s|es)?\b", il)
+                                 and _re.search(r"\b" + t + r"(?:s|es)?\b", _nm_cf)), None)
+                        except Exception:
+                            _carb_hit = None
+                        if _carb_hit:
+                            _kcal_per_g_cf = 0.0
+                            try:
+                                _mc_cf = db.macros_from_ingredient_string(s)
+                                if _mc_cf and cur_g > 0:
+                                    _kcal_per_g_cf = float(_mc_cf.get("kcal") or 0) / cur_g
+                            except Exception:
+                                _kcal_per_g_cf = 0.0
+                            _tgt_cf = float(PROTAGONIST_CARB_MIN_G)
+                            if _headroom is not None and _kcal_per_g_cf > 0:
+                                _afford_cf = cur_g + max(0.0, _headroom) / _kcal_per_g_cf
+                                _tgt_cf = min(_tgt_cf, _afford_cf)
+                            if _tgt_cf - cur_g >= 10.0:
+                                try:
+                                    _new_cf = _resc(s, _tgt_cf / cur_g)
+                                except Exception:
+                                    _new_cf = None
+                                if _new_cf and _new_cf != s:
+                                    ings[idx] = _new_cf
+                                    if _lockstep and isinstance(raw[idx], str):
+                                        try:
+                                            raw[idx] = _resc(str(raw[idx]), _tgt_cf / cur_g)
+                                        except Exception:
+                                            pass
+                                    if _headroom is not None:
+                                        _headroom -= _kcal_per_g_cf * (_tgt_cf - cur_g)
+                                    touched += 1
+                                    _meal_touched = True
+                                    logger.info(
+                                        f"🍠 [P1-RECIPE-POLISH-5] carbo PROTAGONISTA '{_carb_hit}' "
+                                        f"{int(cur_g)}g→{int(_tgt_cf)}g en '{str(meal.get('name'))[:40]}' "
+                                        f"(piso de identidad del plato)")
+                            else:
+                                logger.info(
+                                    f"🍠 [P1-RECIPE-POLISH-5] piso carbo PROTAGONISTA DECLINADO en "
+                                    f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g (headroom insuficiente)")
                             continue
                     if cur_g >= floor_g:
                         continue

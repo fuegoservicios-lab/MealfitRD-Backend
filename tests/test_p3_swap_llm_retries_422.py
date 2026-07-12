@@ -182,7 +182,10 @@ def test_frontend_branch_does_not_call_fallback_for_new_code():
     assert "toast.error" in branch_body, (
         "El branch debe disparar toast.error para que el user sepa qué pasó."
     )
-    assert "return currentName" in branch_body, (
+    # [P2-SWAP-TOAST-FIX · 2026-06-29] la rama devuelve `null` (preserva plato + suprime
+    # el success-toast engañoso del caller); anchor actualizado 2026-07-12 (estaba stale
+    # en el pool baseline desde el cambio).
+    assert "return null" in branch_body, (
         "El branch debe `return currentName` para que el caller no "
         "actualice planData."
     )
