@@ -22259,9 +22259,14 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
             # finalizador de swaps emite "½ cdita Sal" SIN "de" — el regex original no cubría
             # ninguna de las dos formas y el converter llevaba desde 2026-07-05 sin disparar
             # (plan vivo df263d1b día-1: 2×"0.5 cdita de/∅ Sal" = 2,358mg invisibles al fix,
-            # 0 acciones con el día a 3,274mg medidos). tooltip-anchor: P1-SALT-CDITA-RX
-            _SALT_QTY_RX = (r"^\s*(?:\d+(?:[.,]\d+)?\s*[½¼¾]?|[½¼¾])\s*"
-                            r"(?:cd(?:i)?tas?|cdas?|cucharaditas?|cucharadas?|g|gramos?)\s+(?:de\s+)?sal\b")
+            # 0 acciones con el día a 3,274mg medidos). v2 (regen 08:00Z del mismo día): el
+            # espacio de formatos es más ancho — fracción ASCII "1/2" y hint parentético
+            # "(2 g)" entre unidad y nombre ("0.5 cdita (2 g) Sal") tampoco matcheaban. El RX
+            # ahora cubre: enteros/decimales/1½/½/"1/2" + paréntesis opcional + "de" opcional.
+            # tooltip-anchor: P1-SALT-CDITA-RX
+            _SALT_QTY_RX = (r"^\s*(?:\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?(?:\s*[½¼¾])?|[½¼¾])\s*"
+                            r"(?:cd(?:i)?tas?|cdas?|cucharaditas?|cucharadas?|g|gramos?)\b"
+                            r"(?:\s*\([^)]{0,20}\))?\s*(?:de\s+)?sal\b")
             for _m in meals:
                 if not isinstance(_m, dict):
                     continue
@@ -22281,11 +22286,13 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                     _m["_sodium_autofix_applied"] = "salt_to_taste"
                     _rec = _m.get("recipe")
                     if isinstance(_rec, list):
-                        # [P1-SALT-CDITA-RX] espejo del RX de ingredientes: cdita + "de" opcional.
+                        # [P1-SALT-CDITA-RX] espejo del RX de ingredientes: cdita + "1/2" ASCII
+                        # + hint parentético "(2 g)" + "de" opcional.
                         _m["recipe"] = [
                             _re.sub(
-                                r"(?:\d+(?:[.,]\d+)?\s*[½¼¾]?|[½¼¾])\s*(?:cd(?:i)?tas?|cdas?|"
-                                r"cucharaditas?|cucharadas?|g|gramos?)\s+(?:de\s+)?sal\b",
+                                r"(?:\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?(?:\s*[½¼¾])?|[½¼¾])\s*"
+                                r"(?:cd(?:i)?tas?|cdas?|cucharaditas?|cucharadas?|g|gramos?)\b"
+                                r"(?:\s*\([^)]{0,20}\))?\s*(?:de\s+)?sal\b",
                                 "sal al gusto", str(_st), flags=_re.IGNORECASE,
                             ) if isinstance(_st, str) else _st
                             for _st in _rec

@@ -79,6 +79,22 @@ def test_recipe_steps_also_rewritten(go):
     assert "sal al gusto" in joined
 
 
+def test_v2_ascii_fraction_and_paren_hint_forms(go):
+    """[v2 · regen vivo 08:00Z] El generador también emite fracción ASCII '1/2' y hint
+    parentético '(2 g)' entre unidad y nombre — las DOS formas frescas del regen que
+    el RX v1 no cubría (banner de sodio reapareció con 0 acciones del autofix)."""
+    for form in ("1/2 cdita de Sal", "0.5 cdita (2 g) Sal"):
+        days = [{"day": 1, "meals": [
+            {"meal": "Cena", "name": "Filete Encebollado",
+             "ingredients": [form, "150 g de pescado"],
+             "ingredients_raw": [form, "150 g de pescado"],
+             "recipe": [f"Sazona con {form} y hornea."]},
+        ]}]
+        assert go._day_sodium_autofix(days, {}, db=_SaltDB()) >= 1, form
+        assert "Sal al gusto" in days[0]["meals"][0]["ingredients"], form
+        assert "sal al gusto" in " ".join(days[0]["meals"][0]["recipe"]).lower(), form
+
+
 def test_mixed_number_and_fraction_forms(go):
     for form in ("1½ cdita de sal", "½ cdita de sal", "2 cditas de sal", "3 g de sal"):
         days = [{"day": 1, "meals": [
