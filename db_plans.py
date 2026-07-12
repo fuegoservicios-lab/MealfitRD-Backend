@@ -643,11 +643,19 @@ def update_plan_data_atomic(
                 # SET LOCAL con presupuesto amplio SOLO para esta transacción (60s default, knob
                 # compartido MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS).
                 try:
-                    _idle_ms_atomic = _env_int("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)
+                    # [P0-ATOMIC-IDLE-GUARD · 2026-07-12] `_env_int` SIN import en este scope
+                    # desde 2026-07-10 → NameError en CADA ejecución, tragado por el except de
+                    # abajo (nivel debug = invisible) → el SET LOCAL de 60s JAMÁS se aplicó y
+                    # todo mutator >15s idle moría al default de sesión (incidente vivo:
+                    # /swap-meal/persist ×2, corr=997c69f0/77cbfc76). Import local (mismo
+                    # patrón que set_meal_plan_for_update_timeouts) + WARNING: un guard de
+                    # resiliencia que falla en silencio es un guard que no existe.
+                    from knobs import _env_int as _env_int_atomic
+                    _idle_ms_atomic = _env_int_atomic("MEALFIT_PLAN_FOR_UPDATE_IDLE_TXN_TIMEOUT_MS", 60000)
                     if _idle_ms_atomic > 0:
                         cursor.execute(f"SET LOCAL idle_in_transaction_session_timeout = '{int(_idle_ms_atomic)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
                 except Exception as set_err:
-                    logger.debug(f"[P0-PERSIST-TXN-IDLE-ATOMIC] no se pudo setear idle timeout: {set_err}")
+                    logger.warning(f"[P0-PERSIST-TXN-IDLE-ATOMIC] no se pudo setear idle timeout: {set_err}")
 
                 # [P2-OPEN-1] SELECT con filtro user_id si presente. Bajo
                 # `FOR UPDATE` el row se locka; si user_id no matchea, no hay
