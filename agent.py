@@ -3521,6 +3521,77 @@ def rag_query_router(prompt: str) -> dict:
 # Fail-secure: cualquier excepción → retorna "" (no inyecta nada). El
 # agente puede usar la tool `check_hydration_today` si necesita el dato
 # bajo demanda en lugar de en cada turno.
+_WEEKDAYS_ES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_CYCLE_DURATION_DAYS = {"weekly": 7, "semanal": 7, "biweekly": 15, "quincenal": 15, "monthly": 30, "mensual": 30}
+
+
+def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None) -> str:
+    """[P1-CHAT-TODAY-CONTEXT · 2026-07-12] Ancla HOY al día del menú y al ciclo.
+    Vivo: "actualiza el desayuno" → el agente preguntó "¿Opción A (Domingo) u
+    Opción B (Lunes)?" siendo domingo — tenía la hora (build_temporal_context)
+    pero NO el mapeo hoy→día-del-plan, ni la posición del ciclo (día k de 7/15/30,
+    que al agotarse exige RENOVAR). Fail-open a "" ante cualquier shape rara."""
+    try:
+        if not isinstance(current_plan, dict):
+            return ""
+        days = current_plan.get("days") or []
+        if not days:
+            return ""
+        from datetime import datetime, timezone, timedelta
+        if local_date_str:
+            today = datetime.strptime(str(local_date_str)[:10], "%Y-%m-%d").date()
+        else:
+            # Convención del repo: fecha local RD = UTC-4 explícito.
+            today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+        wd = _WEEKDAYS_ES[today.weekday()]
+
+        line = f"\n\n📅 HOY es {wd} {today.isoformat()}."
+
+        # HOY → día del menú (match por day_name; soporta planes shifteados).
+        idx = None
+        for i, d in enumerate(days):
+            if isinstance(d, dict) and str(d.get("day_name") or "").strip().lower() == wd:
+                idx = i
+                break
+        if idx is not None:
+            line += (
+                f" En el menú del plan, HOY es el día {idx + 1} ('{days[idx].get('day_name')}'). "
+                f"Si el usuario menciona una comida SIN especificar el día ('actualiza el desayuno', "
+                f"'cámbiame la cena'), asume HOY → day_number={idx + 1} y NO le preguntes a cuál día "
+                f"se refiere. Nunca digas 'Opción A/B/C': llama a los días por su nombre."
+            )
+
+        # Posición del ciclo (7/15/30 días) + recordatorio de renovación.
+        start_raw = current_plan.get("cycle_start_date") or current_plan.get("grocery_start_date")
+        dur_days = _CYCLE_DURATION_DAYS.get(str(current_plan.get("calc_grocery_duration") or "").strip().lower())
+        if start_raw and dur_days:
+            try:
+                start_dt = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+                start_local = (start_dt - timedelta(hours=4)).date() if start_dt.tzinfo else start_dt.date()
+                day_k = (today - start_local).days + 1
+                if day_k >= 1:
+                    # `rem` INCLUYE hoy — mismo cálculo que el chip del Dashboard
+                    # ("30d mensual · 29d" en el día 2).
+                    rem = dur_days - day_k + 1
+                    if rem >= 1:
+                        line += (
+                            f" Ciclo del plan: día {day_k} de {dur_days} "
+                            f"(quedan {rem} día(s) incluyendo hoy)."
+                        )
+                        if rem <= 3:
+                            line += " El ciclo está por terminar: si viene al caso, recuérdale con suavidad que pronto deberá RENOVAR su plan."
+                    else:
+                        line += (
+                            f" ⚠️ El ciclo del plan ({dur_days} días) YA TERMINÓ hace {day_k - dur_days} día(s): "
+                            f"sugiérele renovar su plan para seguir con menú y lista frescos."
+                        )
+            except (ValueError, TypeError):
+                pass
+        return line
+    except Exception:
+        return ""
+
+
 def _macro_totals_line(consumed_today: list, current_plan) -> str:
     """[P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros ACUMULADAS del día (proteína/
     carbos/grasas) con sus metas del plan — el DIARIO DE HOY solo llevaba kcal,
@@ -3890,6 +3961,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += _build_hydration_context(user_id, local_date_str=None)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
+        # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
+        system_prompt += _build_plan_today_context(current_plan, local_date_str=None)
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -4255,6 +4328,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
+        # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
+        system_prompt += _build_plan_today_context(current_plan, local_date_str=local_date)
 
     config = {"configurable": {"thread_id": session_id}}
 
