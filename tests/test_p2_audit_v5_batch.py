@@ -329,9 +329,22 @@ def test_gapm1_report_has_per_day_ceilings():
 def test_gapm1_consumer_banner_only():
     assert "micro_worst_day_ceiling" in _GO, "falta el reason del banner de techos worst-day"
     # jamás retry: el reason vive en _maybe_mark_panel_degraded (banner) — no en gates de retry
-    idx = _GO.index("micro_worst_day_ceiling")
-    ctx = _GO[max(0, idx - 3000):idx + 500]
-    assert "_maybe_mark_panel_degraded" in ctx or "MICRO_PERDAY_DEGRADE_ENABLED" in ctx
+    # [2026-07-12] la PRIMERA ocurrencia dejó de ser el productor: el knob de
+    # P1-MICRO-DEGRADED-STALE-CLEAR (clear-only, ~L9880) también nombra el reason.
+    # El contrato real: AL MENOS UNA ocurrencia vive en el contexto del productor
+    # del banner (no en gates de retry) → escanear todas.
+    _hits = []
+    _start = 0
+    while True:
+        idx = _GO.find("micro_worst_day_ceiling", _start)
+        if idx == -1:
+            break
+        _hits.append(_GO[max(0, idx - 3000):idx + 500])
+        _start = idx + 1
+    assert any(
+        "_maybe_mark_panel_degraded" in ctx or "MICRO_PERDAY_DEGRADE_ENABLED" in ctx
+        for ctx in _hits
+    ), "ninguna ocurrencia del reason vive junto al productor del banner"
 
 
 # ── GAP-M2: micro-closer per-día ─────────────────────────────────────────────
