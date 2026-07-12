@@ -18563,6 +18563,29 @@ def _run_assembly_validations(
                             _d2 = _p.sub(_repl, _d2)
                         if _d2 != _desc_af:
                             meal["description"] = _re.sub(r'\s{2,}', ' ', _d2).strip()
+                    # [P1-RECIPE-AUDIT-6 · 2026-07-12] si el rewrite eliminó pollo/cerdo del cuerpo
+                    # de la receta, la nota undercook "el pollo/cerdo debe cocinarse..." queda
+                    # aconsejando una proteína que ya no existe en el plato (renovación viva
+                    # 69f9e03d: Ropa Vieja de PESCADO con nota de pollo/cerdo). Las notas ⚠ están
+                    # exentas del rewrite a propósito (P2-AUTOFIX-NOTE-EXEMPT) → se retira entera.
+                    try:
+                        _risk_af = {"pollo", "cerdo", "chuleta", "longaniza"}
+                        if _risk_af & {_sa_af(str(_k).lower()) for _k in _orphan_keys}:
+                            _body_af = " ".join(_sa_af(str(_s).lower()) for _s in _new_steps
+                                                if not _is_det_note(_s))
+                            if not _re.search(r"\b(?:pollo|cerdo|chuleta|longaniza)\b", _body_af):
+                                _kept_af = [_s for _s in _new_steps
+                                            if "pollo/cerdo debe cocinarse" not in str(_s)]
+                                if len(_kept_af) != len(_new_steps):
+                                    _recipe_steps = _kept_af
+                                    meal["recipe"] = _kept_af
+                                    recipe = " ".join(str(_s) for _s in _kept_af).lower()
+                                    meal.pop("_food_safety_undercook_time", None)
+                                    logger.info(
+                                        f"🩹 [P1-RECIPE-AUDIT-6] nota undercook pollo/cerdo retirada de "
+                                        f"{str(meal.get('name'))[:30]!r} (proteína reescrita a {_repl!r})")
+                    except Exception:
+                        pass
                     logger.info(f"🩹 [RECIPE-COHERENCE-AUTOFIX] Día {day.get('day')} "
                                 f"{str(meal.get('name'))[:30]!r}: mención(es) huérfana(s) "
                                 f"{_orphan_keys} → {_repl!r} (evita retry, retry_penalty=1.0)")
@@ -21146,6 +21169,12 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                             # en la PROSA del paso (el display de ingredientes ya lo hacía en el
                             # lead; los pasos no). Conservador: solo estos adjetivos de cocción.
                             _pnew = _MANI_GENDER_STEP_RX.sub(lambda _mm: f"{_mm.group(1)} {_mm.group(2)}o", _pnew)
+                            # [P1-RECIPE-AUDIT-6 · 2026-07-12] concordancia huevo+adjetivo
+                            # ("el huevo fritos") + capitalizar el arranque del paso (la mitad
+                            # de los day-gens escriben "lava y corta..." en minúscula).
+                            _pnew = _EGG_ADJ_CONCORD_RX.sub(r"\1 \2", _pnew)
+                            if _pnew and _pnew[0].isalpha() and _pnew[0].islower():
+                                _pnew = _pnew[0].upper() + _pnew[1:]
                             if _pnew != _ps:
                                 _prec[_pi] = _pnew
                                 _npd += 1
@@ -23721,6 +23750,18 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 m["cals"] = round(_meal_macro_num(m.get("cals")) + _dk)
                 m["macros"] = [f"P:{m['protein']}g", f"C:{m['carbs']}g", f"G:{round(_meal_macro_num(m.get('fats')))}g"]
                 m["_gainmuscle_kcal_floor"] = True
+                # [P1-RECIPE-AUDIT-6 · 2026-07-12] el refill añadía el arroz SOLO a ingredients →
+                # ingrediente huérfano en pasos (renovación viva 69f9e03d: "110g de arroz blanco
+                # cocido" sin mención alguna; el orphan-sweep del review corre ANTES del final_pass,
+                # así que el huérfano llegaba al plato). Nota 💡 sin cantidad (consolidación-proof).
+                try:
+                    _rec_gm = m.get("recipe")
+                    if isinstance(_rec_gm, list) and _rec_gm and not any(
+                            "arroz blanco cocido" in str(_s).lower() for _s in _rec_gm):
+                        _rec_gm.append("💡 Acompaña este plato con el arroz blanco cocido de tus "
+                                       "ingredientes para completar las calorías del día.")
+                except Exception:
+                    pass
                 day_kcal += _dk
                 day_carbs += add_g * _GM_RICE_CARB_G
                 added_kcal += _dk
@@ -23786,6 +23827,17 @@ MEAL_CHEESE_CAP_G = _env_int("MEALFIT_MEAL_CHEESE_CAP_G", 180, lambda v: 120 <= 
 # redistribuyendo (patrón del cap de proteína).
 ORGAN_MEAT_CAP_G = _env_int("MEALFIT_ORGAN_MEAT_CAP_G", 150, lambda v: 80 <= v <= 300)
 _ORGAN_MEAT_TOKENS = ("higado", "molleja", "rinon", "riñon", "viscera", "mondongo", "pana")
+# [P1-RECIPE-AUDIT-6 · 2026-07-12] (renovación viva 69f9e03d) SEMILLAS: el micro-closer escala la
+# chía para cerrar fibra sin techo servible → "65 g de semillas de chía" en UN batido (≈5 cdas,
+# textura gel no-bebible). Techo per-línea; el gap de fibra queda advisory (suplementos lo cubren).
+SEED_GRAM_CAP_G = _env_int("MEALFIT_SEED_GRAM_CAP_G", 30, lambda v: 15 <= v <= 80)
+_REALISM_SEED_TOKENS = ("chia", "linaza", "ajonjoli", "sesamo")
+# [P1-RECIPE-AUDIT-6 · 2026-07-12] ESPECIAS MOLIDAS en cucharaditas: el solver escala condimentos
+# junto al resto del plato ("2¾ cdtas de comino" para 1 persona — incomible). Techo 1 cdta/comida.
+SPICE_CDTA_CAP = 1.0
+_REALISM_SPICE_TOKENS = ("comino", "oregano", "curcuma", "canela", "achiote", "paprika",
+                         "pimenton", "nuez moscada", "clavo molido", "jengibre en polvo", "pimienta")
+_REALISM_CDTA_LEAD_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s*(?:cdtas?|cucharaditas?)\b")
 _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
                        # [P2-CLARAS-CAP-KNOB-PARITY · 2026-07-05] era 8.0 hardcoded y el plato vivo
                        # "8 claras de huevo (267g)" pasó justo al ras mientras el knob del motor dice
@@ -24171,6 +24223,11 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         # caps (vivo: "4 rebanadas de Pan integral familiar" ≈ 180g evadió el cap).
                         elif cur_g > 135.0 and _re.search(r"\bpan\b", il):
                             factor = 135.0 / cur_g
+                        # [P1-RECIPE-AUDIT-6 · 2026-07-12] 1.10) semillas (chía/linaza) en gramos
+                        # sobre el techo servible — el micro-closer de fibra las infla sin cap.
+                        elif (cur_g > float(SEED_GRAM_CAP_G)
+                              and any(_re.search(r"\b" + t, il) for t in _REALISM_SEED_TOKENS)):
+                            factor = float(SEED_GRAM_CAP_G) / cur_g
                     # 2) tazas de aromáticos/hierbas/frutas-volumen sobre el techo
                     # [P1-REALISM-CAPS-EXT] lead con fracción unicode/mixta ("3¾ taza de melón") —
                     # el regex decimal previo no la parseaba y las líneas post-quantize la usan.
@@ -24185,6 +24242,17 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                                         if cur_c > _cap:
                                             factor = _cap / cur_c
                                         break
+                    # [P1-RECIPE-AUDIT-6 · 2026-07-12] 2b) especias molidas en CUCHARADITAS sobre el
+                    # techo comestible ("2¾ cdtas de comino" — el solver escala condimentos como si
+                    # fueran comida; ninguna rama previa ve leads cdta).
+                    if factor is None:
+                        m_sp = _REALISM_CDTA_LEAD_RE.match(il)
+                        if m_sp and (m_sp.group(1) or m_sp.group(2)):
+                            cur_t = float((m_sp.group(1) or "0").replace(",", "."))
+                            cur_t += _REALISM_FRAC_MAP.get(m_sp.group(2) or "", 0.0)
+                            if cur_t > SPICE_CDTA_CAP and any(
+                                    _re.search(r"\b" + t, il) for t in _REALISM_SPICE_TOKENS):
+                                factor = SPICE_CDTA_CAP / cur_t
                     # 3) conteos servibles (3.5 papas → 3; 8 claras ok; 5 huevos → 4).
                     # [P1-REALISM-CAPS-EXT] compuestos ANTES del sustantivo genérico
                     # ("36.5 tomates cherry" → cap cherry 10, no cap tomate 3).
@@ -25318,6 +25386,13 @@ _SINGULAR_ONE_RE = _re.compile(
     r"^(\s*1)\s+(tazas|cdas|cditas|cdtas|cucharadas|cucharaditas|latas|unidades|paquetes|botellas|rebanadas|fundas|potes|tarros)\b",
     _re.IGNORECASE,
 )
+# [P1-RECIPE-AUDIT-6 · 2026-07-12] Inverso del singular: cantidad >1 con unidad SINGULAR
+# ("3½ pote de yogurt" en la renovación viva 69f9e03d) → pluraliza la unidad.
+_PLURAL_UNIT_MAP = {v: k for k, v in _SINGULAR_UNIT_MAP.items()}
+_PLURAL_MANY_RE = _re.compile(
+    r"^(\s*)(\d+(?:[.,]\d+)?)([¼½¾⅓⅔])?\s+(taza|cda|cdita|cdta|cucharada|cucharadita|lata|unidad|paquete|botella|rebanada|funda|pote|tarro)\b",
+    _re.IGNORECASE,
+)
 _DE_PAREN_DE_RE = _re.compile(r"\bde\s+(\([^)]{1,24}\))\s+de\b")
 # [P1-CITRUS-UNICODE-FRAC · 2026-07-08] (vivo: "2½ limones" en Plátano+queso+pescado quedó SIN
 # capear pese al cap por-comida CITRUS_MEAL_CAP_UNITS=2 — el regex original exigía `\d+\s+noun`
@@ -25333,6 +25408,11 @@ _CITRUS_LEAD_RE = _re.compile(
 _MANI_GENDER_STEP_RX = _re.compile(
     r"\b(man[ií])\s+(filetead|tostad|picad|molid|pelad|salad|dorad|frit|asad)[oa]s?\b",
     _re.IGNORECASE)
+# [P1-RECIPE-AUDIT-6 · 2026-07-12] Concordancia huevo singular + adjetivo plural en la prosa de
+# pasos ("coloca el huevo fritos al lado", "vierte el huevo batidos" — renovación viva 69f9e03d).
+# Solo matchea "huevo" SINGULAR (tras "huevos" viene 's', no espacio → no matchea).
+_EGG_ADJ_CONCORD_RX = _re.compile(
+    r"\b(huevo)\s+(frito|batido|revuelto|cocido|pochado|hervido)s\b", _re.IGNORECASE)
 
 
 # [P2-STEP-PHRASE-DEDUP · 2026-07-06] (review #14) frase de alimento duplicada adyacente en pasos:
@@ -25504,6 +25584,20 @@ def _polish_finalize_display(days) -> int:
             out = _SINGULAR_ONE_RE.sub(
                 lambda m: f"{m.group(1)} {_SINGULAR_UNIT_MAP.get(m.group(2).lower(), m.group(2))}", out
             )
+
+            # [P1-RECIPE-AUDIT-6 · 2026-07-12] inverso: "3½ pote" → "3½ potes" (qty > 1 + unidad singular).
+            def _pluralize_many(m):
+                try:
+                    _val = float(m.group(2).replace(",", "."))
+                    _val += _REALISM_FRAC_MAP.get(m.group(3) or "", 0.0)
+                except (TypeError, ValueError):
+                    return m.group(0)
+                if _val <= 1.0:
+                    return m.group(0)
+                _pl = _PLURAL_UNIT_MAP.get(m.group(4).lower(), m.group(4) + "s")
+                return f"{m.group(1)}{m.group(2)}{m.group(3) or ''} {_pl}"
+
+            out = _PLURAL_MANY_RE.sub(_pluralize_many, out)
             out = _DE_PAREN_DE_RE.sub(r"\1 de", out)
             _mc = _CITRUS_LEAD_RE.match(out)
             # [P1-CITRUS-UNICODE-FRAC] al menos un grupo (entero o fracción) debe existir —
