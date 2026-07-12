@@ -410,10 +410,17 @@ def _chat_stream_total_timeout_s() -> float:
 # actividad). Es válido — el caso problemático es "0 chunks por N
 # segundos", no "chunks regulares pero lentos".
 def _chat_stream_inactivity_timeout_s() -> float:
+    # [P2-CHAT-STREAM-TIMEOUT-TOOLS · 2026-07-12] Clamp 120→360: las tools
+    # largas corren DENTRO de un solo nodo sin emitir eventos — con el retry
+    # de expansión de despensa (P1-CHAT-MODIFY-EXPAND-FALLBACK) un
+    # modify_single_meal puede callar ~2-4 min (dos generaciones LLM). Con el
+    # clamp viejo el env no podía cubrirlo y el stream moría con el plato YA
+    # persistido (vivo: "dio un error aunque actualizó el plato"). El default
+    # 25s se conserva para conversación normal; el VPS sube la ventana por env.
     return _env_float(
         "MEALFIT_CHAT_STREAM_INACTIVITY_TIMEOUT_S",
         25.0,
-        validator=lambda v: 0.0 < v <= 120.0,
+        validator=lambda v: 0.0 < v <= 360.0,
     )
 
 # [P0-DEEPSEEK-MIGRATION] Singleton módulo-level: se construye a import-time
