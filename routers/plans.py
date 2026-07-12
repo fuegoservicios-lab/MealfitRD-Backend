@@ -10935,6 +10935,38 @@ def api_restore_plan(
                         )
                         released_locks = cur.rowcount or 0
 
+                        # 3b-bis) [P1-HIST-RESTORE-PRESERVE · 2026-07-12] Archivar el estado
+                        #     ACTUAL del target como fila nueva del Historial ANTES del
+                        #     overwrite. El restore era DESTRUCTIVO: sobrescribía nombre +
+                        #     contenido del plan activo sin backup (ni meal_plans_audit) —
+                        #     vivo 08:43Z: el owner reactivó un archivado y su plan "activo 1"
+                        #     (rename + regens del día) desapareció sin rastro ("¿qué pasó?
+                        #     ¿desapareció el nombre que le puse?"). Ahora "reactivar" es un
+                        #     SWAP seguro: lo que tenías pasa al Historial (created_at original
+                        #     → se ordena en su fecha real; marker forense del restore que lo
+                        #     archivó), lo restaurado pasa a activo. Copia fiel dentro de la
+                        #     misma txn (los locks de arriba la protegen); chunks NO viajan
+                        #     (apuntan al id viejo, ya cancelados en 3a).
+                        cur.execute(
+                            """
+                            INSERT INTO meal_plans
+                                (user_id, plan_data, name, calories, macros,
+                                 meal_names, ingredients, techniques,
+                                 profile_embedding, created_at)
+                            SELECT user_id,
+                                   plan_data || jsonb_build_object(
+                                       '_archived_by_restore_at', NOW()::text,
+                                       '_archived_by_restore_to', %s::text
+                                   ),
+                                   name, calories, macros,
+                                   meal_names, ingredients, techniques,
+                                   profile_embedding, created_at
+                            FROM meal_plans
+                            WHERE id = %s AND user_id = %s
+                            """,
+                            (str(source_plan_id), target_plan_id, verified_user_id),
+                        )
+
                         # 3c) Sobrescribir target con plan_data Y
                         #     columnas top-level. La cláusula
                         #     `user_id = %s` es redundante con el
