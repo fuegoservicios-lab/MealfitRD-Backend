@@ -25,7 +25,8 @@ with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
 def _block():
     i = _AP.find("P1-CHAT-REFRESH-RECOVER")
     assert i != -1, "el bloque de recuperación desapareció"
-    return _AP[i:i + 5200]
+    # Ventana generosa: el bloque creció con v2 (firma + descarte persistente).
+    return _AP[i:i + 9000]
 
 
 def test_orphan_detection_and_indicator():

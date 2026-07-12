@@ -30,10 +30,26 @@ def test_stop_button_covers_recovery_phase():
     assert "(isLoading || recoveringTurn) ? (" in _AP, \
         "el ■ debe verse también durante 'Recuperando tu respuesta…'"
     i = _AP.find("const handleStopGeneration")
-    win = _AP[i:i + 1400]
-    assert "doneSig = _st.sig" in win.replace("_st.doneSig", "doneSig = _st.sig") or "_st.doneSig = _st.sig" in win, \
-        "stop descarta el huérfano actual (no relanzar el episodio)"
+    win = _AP[i:i + 2400]
     assert "setRecoveringTurn(false)" in win
+
+
+def test_stop_dismissal_survives_refresh_and_leaves_feedback():
+    """[v2] Vivo: 'cuando la detengo y refresco vuelve a estar igual' — el
+    descarte vivía en un ref (muere con la página). Ahora se persiste en
+    localStorage por firma del huérfano Y el stop deja constancia visible."""
+    i = _AP.find("const handleStopGeneration")
+    win = _AP[i:i + 2400]
+    assert "safeLocalStorageSet(_orphanDismissKey(currentSessionId), _sig)" in win, \
+        "el descarte debe sobrevivir al refresh"
+    assert "⏹ Detenido" in win, "feedback visible al detener (pedido del owner)"
+    assert "_stoppedByUser: true" in win
+    # El efecto respeta el descarte persistido:
+    assert "safeLocalStorageGet(_orphanDismissKey(currentSessionId), null) === _sig" in _AP
+    # La firma ignora burbujas locales (estable ante refetches que las quitan):
+    assert "!m._isErrorBubble && !m._stoppedByUser" in _AP
+    # El agotamiento también persiste:
+    assert _AP.count("safeLocalStorageSet(_orphanDismissKey(currentSessionId)") >= 2
 
 
 def test_stop_covers_photo_analysis():
