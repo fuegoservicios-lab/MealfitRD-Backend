@@ -4157,8 +4157,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     sentiment_result = {}
     user_facts_text = ""
     visual_facts_text = ""
-    _do_sentiment = plan_tier in ["plus", "ultra", "admin"]
-    _do_rag = bool(user_id) and plan_tier in ["basic", "plus", "ultra", "admin"]
+    # [P1-TIER-PARITY · 2026-07-12] Decisión de producto del owner: TODOS los
+    # tiers (incluido gratis) tienen los MISMOS privilegios de features — la
+    # única diferencia entre planes son las CANTIDADES de créditos
+    # (auth._TIER_LIMITS). Pre-fix: sentimiento solo plus+ y RAG excluía a
+    # gratis. Guests (sin cuenta) siguen fuera del RAG: no tienen user_facts.
+    _do_sentiment = True
+    _do_rag = bool(user_id) and user_id != "guest"
     rag_decision = None
     if _do_sentiment or _do_rag:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:

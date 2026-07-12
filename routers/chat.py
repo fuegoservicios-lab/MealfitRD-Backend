@@ -787,7 +787,11 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                         if raw_history:
                                             recent_history_str = "\n".join([f"{m.get('role', 'unknown')}: {m.get('content', '')}" for m in raw_history[-6:]])
 
-                                        is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
+                                        # [P1-TIER-PARITY · 2026-07-12] Memoria a largo
+                                        # plazo para TODOS los tiers (los planes solo
+                                        # difieren en créditos). Guests fuera: sin
+                                        # cuenta no hay identidad estable que recordar.
+                                        is_plus = bool(user_id and user_id != "guest")
 
                                         # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13]
                                         # Además del gate de tier, respetar el flag user-controlled.
@@ -968,11 +972,15 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # `long_term_memory_enabled` controlado por el usuario desde Settings.
         # Default TRUE si el campo no existe (perfil legacy pre-migración).
         ltm_enabled = True
+        # [P1-TIER-PARITY · 2026-07-12] La memoria a largo plazo es para TODOS
+        # los tiers (decisión del owner: los planes solo difieren en créditos).
+        # Pre-fix `is_plus` excluía a gratis — un usuario gratis con horas de
+        # chat quedaba sin user_facts (y sin Dreaming, que come de ahí). Guests
+        # (sin cuenta) siguen fuera: no hay user_id estable que recordar.
+        is_plus = bool(user_id and user_id != "guest")
         if user_id and user_id != "guest":
             profile = get_user_profile(user_id)
             if profile:
-                plan_tier = profile.get("plan_tier", "gratis")
-                is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
                 if "long_term_memory_enabled" in profile:
                     ltm_enabled = bool(profile.get("long_term_memory_enabled", True))
 
@@ -982,7 +990,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         elif is_plus and not ltm_enabled:
             logger.info(f"[LONG-TERM-MEMORY-TOGGLE] Captura pausada por user toggle (user={user_id}).")
         else:
-            logger.info("INFO: Memoria a Largo Plazo deshabilitada para usuario Gratis.")
+            logger.info("INFO: Memoria a Largo Plazo omitida (guest sin cuenta).")
         
         # 🧠 Background: Generar un título si es el primer mensaje
         background_tasks.add_task(generate_chat_title_background, user_id, session_id, prompt)
