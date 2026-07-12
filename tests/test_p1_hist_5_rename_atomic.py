@@ -208,11 +208,16 @@ def test_rename_emits_atomic_update_with_jsonb_set():
     # Trim aplicado server-side.
     assert body["name"] == "Plan con espacios"
 
-    # 2 statements: lock + UPDATE.
-    assert len(cursor.calls) == 2
+    # lock + SELECT-latest (P2-HIST-RENAME-NO-PROMOTE) + UPDATE. El recorder no
+    # implementa fetchone → el check cae al fail-open legacy (sella), que es la
+    # rama que este test cubre.
+    assert 2 <= len(cursor.calls) <= 3
     assert "pg_advisory_xact_lock" in cursor.calls[0][0]
 
-    sql, params = cursor.calls[1]
+    # [P2-HIST-RENAME-NO-PROMOTE] SELECT de latest entre lock y UPDATE → por contenido.
+    _upd = [c for c in cursor.calls if "UPDATE meal_plans" in c[0]]
+    assert _upd, f"sin UPDATE en calls: {[c[0][:40] for c in cursor.calls]}"
+    sql, params = _upd[0]
     # Atomic: ambos en el mismo UPDATE.
     assert "UPDATE meal_plans" in sql
     assert "name = %s" in sql

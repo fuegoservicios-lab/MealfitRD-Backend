@@ -12656,21 +12656,74 @@ def api_rename_plan(
                     # `meal_plans.plan_data` es NOT NULL (verificado en
                     # introspección) → jsonb_set nunca recibe NULL como
                     # input base.
-                    cur.execute(
-                        """
-                        UPDATE meal_plans
-                        SET name = %s,
-                            plan_data = jsonb_set(
-                                jsonb_set(
+                    # [P2-HIST-RENAME-NO-PROMOTE · 2026-07-12] El sello de AUDIT-2 aplica
+                    # SOLO si el plan renombrado YA es el "latest" (= activo). Sellar
+                    # _plan_modified_at en un plan ARCHIVADO lo promovía a activo de
+                    # facto: out-ordenaba al activo real en todo resolver GREATEST
+                    # (target del restore, recalcs, card "PLAN ACTIVO" del Historial).
+                    # Vivo 09:1xZ: el owner renombró 2 archivados ("amigo", "amo de la
+                    # tierra 2") para trackear sus pruebas y "amigo" pasó a ser el
+                    # latest — el dashboard mostraba otro plan. Renombrar un archivado
+                    # ahora cambia el nombre SIN moverlo de su lugar en la línea de
+                    # tiempo; la intención original de AUDIT-2 (el plan activo
+                    # renombrado no debe caer en el sort) se preserva en la rama else.
+                    # Best-effort con fail-open al SELLADO legacy (default True): si el
+                    # check no puede resolverse, preferimos el comportamiento AUDIT-2 de
+                    # siempre antes que dejar un rename sin ordenar. WARNING ruidoso
+                    # (lección P0-ATOMIC-IDLE-GUARD: un guard que falla en silencio es
+                    # un guard que no existe).
+                    _renaming_active = True
+                    try:
+                        cur.execute(
+                            """
+                            SELECT id FROM meal_plans
+                            WHERE user_id = %s
+                            ORDER BY GREATEST(
+                                created_at,
+                                COALESCE(
+                                    (plan_data->>'_plan_modified_at')::timestamptz,
+                                    created_at
+                                )
+                            ) DESC, created_at DESC
+                            LIMIT 1
+                            """,
+                            (verified_user_id,),
+                        )
+                        _latest = cur.fetchone()
+                        _renaming_active = bool(_latest) and str(_latest["id"]) == str(plan_id)
+                    except Exception as _np_e:
+                        logger.warning(
+                            f"⚠️ [P2-HIST-RENAME-NO-PROMOTE] check de latest falló — "
+                            f"fail-open al sellado legacy: {_np_e}")
+                    if _renaming_active:
+                        cur.execute(
+                            """
+                            UPDATE meal_plans
+                            SET name = %s,
+                                plan_data = jsonb_set(
+                                    jsonb_set(
+                                        plan_data, '{name}', to_jsonb(%s::text), true
+                                    ),
+                                    '{_plan_modified_at}', to_jsonb(%s::text), true
+                                )
+                            WHERE id = %s AND user_id = %s
+                            RETURNING id
+                            """,
+                            (new_name, new_name, _modified_at_iso, plan_id, verified_user_id),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            UPDATE meal_plans
+                            SET name = %s,
+                                plan_data = jsonb_set(
                                     plan_data, '{name}', to_jsonb(%s::text), true
-                                ),
-                                '{_plan_modified_at}', to_jsonb(%s::text), true
-                            )
-                        WHERE id = %s AND user_id = %s
-                        RETURNING id
-                        """,
-                        (new_name, new_name, _modified_at_iso, plan_id, verified_user_id),
-                    )
+                                )
+                            WHERE id = %s AND user_id = %s
+                            RETURNING id
+                            """,
+                            (new_name, new_name, plan_id, verified_user_id),
+                        )
                     result = cur.fetchall()
                     if not result:
                         raise HTTPException(status_code=404, detail="Plan not found")

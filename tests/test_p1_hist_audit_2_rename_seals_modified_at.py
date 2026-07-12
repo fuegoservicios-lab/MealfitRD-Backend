@@ -187,9 +187,12 @@ def test_emitted_timestamp_is_recent_iso_utc():
 
     assert r.status_code == 200, r.text
 
-    # cursor.calls[0] es lock, cursor.calls[1] es UPDATE.
+    # cursor.calls[0] es lock; [P2-HIST-RENAME-NO-PROMOTE] añadió un SELECT de latest
+    # entre lock y UPDATE → localizar el UPDATE por contenido, no por índice.
     assert "pg_advisory_xact_lock" in cursor.calls[0][0]
-    _, params = cursor.calls[1]
+    _upd = [c for c in cursor.calls if "UPDATE meal_plans" in c[0]]
+    assert _upd, f"sin UPDATE en calls: {[c[0][:40] for c in cursor.calls]}"
+    _, params = _upd[0]
     assert len(params) == 5, (
         f"Se esperaban 5 params, got {len(params)}: {params}"
     )
