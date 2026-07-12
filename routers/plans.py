@@ -6420,9 +6420,22 @@ def _day_exceeds_pantry(meals: list, orig_ledger: dict, db, *, tol_frac: float =
     current). NO usa `_decrement_ledger_by_meal` (clampa a 0 → no detecta sobre-consumo); acumula el
     consumo per-ítem y lo compara contra el original con tolerancia (redondeo). Ignora ingredientes NO
     presentes en el ledger (externos, ya permitidos por `_external_tolerance` del swap). Devuelve
-    (excede: bool, detalle: str). Fail-safe → (False, ''). tooltip-anchor: P2-REGEN-DAY-MACRO-REBALANCE"""
+    (excede: bool, detalle: str). Fail-safe → (False, ''). tooltip-anchor: P2-REGEN-DAY-MACRO-REBALANCE
+
+    [P2-REBALANCE-PANTRY-NEGLIGIBLE · 2026-07-12] Excepción por EXCEDENTE macro-negligible: el
+    check existe para proteger la honestidad de MACROS (never-worse-than-current), así que una
+    violación cuyo excedente no puede mover macros no debe gatear. Caso vivo (regen 08:19Z,
+    corr=f37c4bb5): "Ajo: necesita ~22g pero hay ~5g" (excedente 17g ≈ 25 kcal) revirtió el
+    rebalance COMPLETO del día — el ajo está en todos los platos criollos, así que el line-clamp
+    nivel-1 (excluir plato violador) tampoco resolvía → band 0.33 con proteína/carbs/kcal
+    corregibles. Umbral por kcal del excedente (knob, 0 = comportamiento previo): el yogurt de
+    325g vs 150g (excedente ~103 kcal) SIGUE gateando."""
     try:
+        _neg_kcal = _env_int(
+            "MEALFIT_REBALANCE_PANTRY_NEGLIGIBLE_KCAL", 40, validator=lambda v: 0 <= v <= 150
+        )
         need: dict = {}
+        kcal_per_g: dict = {}
         for m in meals or []:
             if not isinstance(m, dict):
                 continue
@@ -6437,6 +6450,8 @@ def _day_exceeds_pantry(meals: list, orig_ledger: dict, db, *, tol_frac: float =
                     nm, grams = mm.get("name"), mm.get("grams")
                     if nm and grams:
                         need[nm] = need.get(nm, 0.0) + float(grams)
+                        if nm not in kcal_per_g and float(grams) > 0:
+                            kcal_per_g[nm] = float(mm.get("kcal") or 0.0) / float(grams)
                 except Exception:
                     continue
         for nm, g in need.items():
@@ -6444,6 +6459,14 @@ def _day_exceeds_pantry(meals: list, orig_ledger: dict, db, *, tol_frac: float =
             if avail is None:
                 continue  # ingrediente externo (no pantry) → permitido
             if g > avail * (1.0 + tol_frac) + tol_g:
+                # [P2-REBALANCE-PANTRY-NEGLIGIBLE] excedente incapaz de mover macros → no gatea.
+                _over_kcal = max(0.0, g - float(avail)) * kcal_per_g.get(nm, 0.0)
+                if _neg_kcal > 0 and _over_kcal < float(_neg_kcal):
+                    logger.info(
+                        f"🧄 [P2-REBALANCE-PANTRY-NEGLIGIBLE] '{nm}' excede la reserva "
+                        f"({int(g)}g vs {int(avail)}g) pero el excedente ≈{int(_over_kcal)} kcal "
+                        f"es macro-negligible → no revierte el rebalance")
+                    continue
                 return True, f"{nm}: necesita ~{int(g)}g pero hay ~{int(avail)}g"
         return False, ""
     except Exception:
