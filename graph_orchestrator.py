@@ -15056,11 +15056,21 @@ def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
             return any(re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"(?:s|es)?\b", text)
                        for s in _PHANTOM_PROTEIN_SYNS[canon])
 
+        # [P2-NAME-STYLE-DESCRIPTOR · 2026-07-12] "al estilo <carne>" es descriptor de ESTILO,
+        # no claim de proteína (vivo: 'Soya Guisada al Estilo Bistec Encebollado' → chip de
+        # honestidad sobre un nombre perfectamente honesto — la soya ES la proteína declarada
+        # y 'bistec' solo describe la preparación). Mención precedida por 'estilo' no cuenta.
+        def _is_style_descriptor(m_start):
+            return "estilo" in nl[max(0, m_start - 10):m_start]
+
         # proteínas cárnicas en el NOMBRE, ordenadas por posición (la líder primero)
         in_name = []
         for canon in _PHANTOM_PROTEIN_SYNS:
-            positions = [m.start() for s in _PHANTOM_PROTEIN_SYNS[canon]
-                         for m in [re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"(?:s|es)?\b", nl)] if m]
+            positions = []
+            for s in _PHANTOM_PROTEIN_SYNS[canon]:
+                m = re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"(?:s|es)?\b", nl)
+                if m and not _is_style_descriptor(m.start()):
+                    positions.append(m.start())
             if positions:
                 in_name.append((canon, min(positions)))
         if not in_name:

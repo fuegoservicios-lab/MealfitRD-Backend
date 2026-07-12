@@ -7131,6 +7131,29 @@ def api_regenerate_day(
             except Exception as _rbd_e:
                 logger.warning(f"[P2-REGEN-DAY-MACRO-REBALANCE] rebalance del día falló (no bloquea): {type(_rbd_e).__name__}: {_rbd_e}")
 
+        # [P2-REGEN-DAY-FATS-RELEVEL · 2026-07-12] Paridad con la generación: el rebalance re-apunta
+        # pero sus clamps por-línea pueden dejar la GRASA del día sobre banda (vivo 04:48Z, plan del
+        # owner: band fats=0.0/kcal=0.0 TRAS "re-apuntadas" — los factores 'quería-menos' saturaron
+        # el clamp). El recortador dedicado de S1 (`_relevel_fats_universal`: shrink de fuentes de
+        # grasa añadida con portadores de micros protegidos; SIEMPRE pantry-safe porque solo REDUCE)
+        # jamás corría en regen-day (sus callsites: assemble + finalize-con-target). Cierra la celda
+        # fats y arrastra kcal hacia banda. Fail-safe; knob MEALFIT_REGEN_DAY_FATS_RELEVEL (ON).
+        # tooltip-anchor: P2-REGEN-DAY-FATS-RELEVEL
+        if (
+            regenerated > 0 and not _ai_unavailable
+            and os.environ.get("MEALFIT_REGEN_DAY_FATS_RELEVEL", "true").strip().lower() in ("1", "true", "yes", "on")
+            and float(day_target.get("fats_g") or 0) > 0
+        ):
+            try:
+                from graph_orchestrator import _relevel_fats_universal as _rfu_rd
+                _wrap_frl = [{"day": 1, "meals": [m for m in new_meals if isinstance(m, dict)]}]
+                _n_frl = _rfu_rd(_wrap_frl, float(day_target.get("fats_g") or 0), _db)
+                if _n_frl:
+                    logger.info(f"🥑 [P2-REGEN-DAY-FATS-RELEVEL] re-trim de grasas post-rebalance "
+                                f"({_n_frl} día(s)) — paridad con el relevel de la generación.")
+            except Exception as _frl_e:
+                logger.warning(f"[P2-REGEN-DAY-FATS-RELEVEL] no-op: {type(_frl_e).__name__}: {_frl_e}")
+
         # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Refinador GLOBAL entero de 5g del día
         # regenerado (paridad con assemble: rebalance → refine): si tras el rebalance el día sigue fuera
         # de banda all-4, local search en pasos de 5g (porciones siguen humanas, sin re-quantize).
