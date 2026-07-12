@@ -12780,6 +12780,14 @@ def api_plans_history_list(
             """
             SELECT
                 mp.id::text AS id,
+                -- [P2-HIST-RESTORE-ROW-UID · 2026-07-12] `user_id` en la projection: el guard
+                -- de ownership del frontend (P1-NEW-8, restorePlanFromHistory) rechaza rows
+                -- SIN user_id como defensa contra filas corruptas — la projection slim
+                -- (P1-HIST-AUDIT-4) lo omitía y "Reactivar este Plan" abortaba SIEMPRE con
+                -- "sesión inválida" sin disparar el POST /restore (vivo 08:35Z, nginx sin
+                -- request). Cero riesgo IDOR: el WHERE ya filtra por verified_user_id, así
+                -- que el valor es siempre el del dueño autenticado.
+                mp.user_id::text AS user_id,
                 mp.name,
                 mp.created_at,
                 mp.calories,
@@ -13140,6 +13148,8 @@ def api_plans_history_list(
 
         plans.append({
             "id": row.get("id"),
+            # [P2-HIST-RESTORE-ROW-UID] contrato del guard P1-NEW-8 (ver SELECT arriba).
+            "user_id": row.get("user_id"),
             "name": row.get("name"),
             "created_at": created_at,
             "calories": row.get("calories"),
