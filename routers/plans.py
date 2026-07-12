@@ -10960,7 +10960,14 @@ def api_restore_plan(
                                    ),
                                    name, calories, macros,
                                    meal_names, ingredients, techniques,
-                                   profile_embedding, created_at
+                                   -- [v2] created_at - 1s: un created_at IDÉNTICO al del target
+                                   -- crea EMPATE en todo resolver "latest por created_at" (los
+                                   -- /recalculate post-restore estamparon _plan_modified_at en
+                                   -- filas ALTERNAS a las 08:57:04/09 — vivo) → la copia podía
+                                   -- out-ordenar al activo y volverse target del próximo restore.
+                                   -- -1s rompe el empate determinísticamente; cronología visual
+                                   -- intacta (mismo minuto en el Historial).
+                                   profile_embedding, created_at - interval '1 second'
                             FROM meal_plans
                             WHERE id = %s AND user_id = %s
                             """,

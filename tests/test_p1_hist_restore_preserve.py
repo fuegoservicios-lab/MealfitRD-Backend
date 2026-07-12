@@ -33,12 +33,15 @@ def test_archive_insert_present_with_forensic_markers():
     body = _restore_body()
     i = body.find("P1-HIST-RESTORE-PRESERVE")
     assert i != -1, "el paso 3b-bis (archivar antes de sobrescribir) desapareció"
-    win = body[i:i + 2200]
+    win = body[i:i + 3200]
     assert "INSERT INTO meal_plans" in win
     assert "_archived_by_restore_at" in win and "_archived_by_restore_to" in win, \
         "markers forenses del swap (quién archivó a quién)"
-    assert re.search(r"profile_embedding,\s*created_at", win), \
-        "copia FIEL: embedding + created_at ORIGINAL (se ordena en su fecha real)"
+    assert "created_at - interval '1 second'" in win, (
+        "[v2] la copia nace 1s ANTES del target: un created_at idéntico crea EMPATE en los "
+        "resolvers 'latest por created_at' (los /recalculate post-restore estamparon filas "
+        "alternas — vivo 08:57Z) y la copia podía volverse target del próximo restore"
+    )
 
 
 def test_archive_happens_before_overwrite_inside_txn():
@@ -64,5 +67,5 @@ def test_archive_skipped_on_noop():
 def test_insert_ownership_filtered():
     body = _restore_body()
     i = body.find("P1-HIST-RESTORE-PRESERVE")
-    win = body[i:i + 2200]
+    win = body[i:i + 3200]
     assert "WHERE id = %s AND user_id = %s" in win, "I2: la copia también filtra por user_id"
