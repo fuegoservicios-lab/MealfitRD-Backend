@@ -38,6 +38,27 @@ def test_prompt_requires_per_component_sum():
         "sin suma por componente gemma subestima el total a ojo (450 vs ~750 kcal vivo)"
 
 
+def test_prompt_v3_full_inventory_no_omissions():
+    """[v3] Segundo scan vivo del MISMO plato: gemma ya no confundio el mangu
+    con arroz pero lo OMITIO por completo (nombre + macros). El prompt exige
+    inventario completo y amarra la suma a ese inventario."""
+    assert "INVENTARIO" in _PROMPT, "el inventario de componentes desaparecio"
+    assert "NUNCA lo omitas" in _PROMPT, \
+        "la regla anti-omision del mangu (masa + cebollita ⇒ lleva mangu) desaparecio"
+    assert "TODOS los componentes" in _PROMPT
+    assert "guarniciones" in _PROMPT, "cebolla encurtida/aguacate se perdian del listado"
+
+
+def test_prompt_v3_named_dishes_and_base_first():
+    """[v3] Nombre: plato con nombre propio (los tres golpes, la bandera) o
+    componentes principales EMPEZANDO por la base de carbohidrato — el cap de
+    palabras recortaba justo el mangu del nombre."""
+    assert "nombre propio" in _PROMPT
+    assert "Los tres golpes" in _PROMPT and "La bandera" in _PROMPT
+    assert "EMPEZANDO por la base" in _PROMPT
+    assert "max 8 palabras" in _PROMPT, "el cap subio de 6 a 8 para que quepa la base"
+
+
 def test_prompt_ascii_only():
     """El prompt viaja crudo a Ollama — se mantiene sin acentos ni em-dashes
     (convencion del prompt del escaner de Nevera; evita sorpresas de encoding

@@ -201,29 +201,38 @@ _MEAL_VISION_SCHEMA = {
     "required": ["is_food", "meal_name", "description", "calories", "protein", "carbs", "healthy_fats"],
 }
 
+# [P1-MEAL-SCAN-DR-DISHES · 2026-07-12] Desambiguacion de platos criollos.
+# Vivo (owner, 2 scans del mismo tres golpes): v1 nombro el mangu 'arroz';
+# v2 dejo de confundirlo pero lo OMITIO por completo (nombre y macros) — el
+# cap de 6 palabras recortaba justo la base del plato. v3: inventario completo
+# de componentes OBLIGATORIO en description, nombres propios de platos
+# criollos, base de carbohidrato primero en el nombre, y la suma de macros
+# amarrada a TODOS los componentes listados (540 kcal para un plato de ~750
+# era el mangu ausente de la suma).
 _MEAL_VISION_PROMPT = (
     "Eres un nutricionista dominicano. Mira la foto y determina si contiene "
-    "comida (un plato servido, ingredientes o bebida calorica). Si es comida: "
-    "describe brevemente lo que ves, da un nombre corto del platillo en "
-    "espanol dominicano (max 6 palabras, ej: 'Mangu con salami y queso') y "
-    "estima el TOTAL de calorias, gramos de proteina, gramos de carbohidratos "
-    "y gramos de grasas de LA PORCION VISIBLE en la foto (no por 100g). "
-    # [P1-MEAL-SCAN-DR-DISHES · 2026-07-12] Desambiguacion de platos criollos.
-    # Vivo (owner): foto de los tres golpes → gemma nombro el mangu 'arroz'.
-    # El mangu es la masa lisa mas comun del desayuno dominicano — merece
-    # regla explicita, igual que la suma por componente (450 kcal para un
-    # plato de ~750 era subestimacion tipica de estimar 'a ojo' el total).
-    "OJO con platos dominicanos: el MANGU es un pure COMPACTO y LISO de "
-    "platano verde majado (masa color crema, casi siempre coronada con "
-    "cebolla roja encurtida) - NO lo confundas con arroz, que se ve como "
-    "granos sueltos y separados. El desayuno tipico 'los tres golpes' es "
-    "mangu + huevo frito + salami frito + queso frito. Otros platos comunes: "
-    "la bandera (arroz + habichuelas + carne), sancocho, mofongo, tostones, "
-    "yuca hervida. Para las macros: estima cada componente del plato "
-    "POR SEPARADO (ej: mangu ~300 kcal, huevo frito ~110, 2 rodajas de "
-    "salami ~180, queso frito ~150) y SUMA - no adivines el total a ojo. "
-    "Se realista con porciones dominicanas. Si NO es comida: is_food=false, "
-    "macros en 0 y meal_name vacio. Responde SOLO el JSON."
+    "comida (un plato servido, ingredientes o bebida calorica). Si es comida, "
+    "haz un INVENTARIO en 'description': lista TODOS los componentes visibles "
+    "sin omitir ninguno - la base de carbohidrato (mangu, arroz, yuca, "
+    "platano, pan), las proteinas (huevo, salami, queso frito, pollo, carne) "
+    "y las guarniciones (cebolla roja encurtida, aguacate, ensalada). "
+    "OJO: el MANGU es un pure COMPACTO y LISO de platano verde majado (masa "
+    "color crema, casi siempre coronada con cebolla roja encurtida) - NO lo "
+    "confundas con arroz, que se ve como granos sueltos y separados, y NUNCA "
+    "lo omitas: si ves esa masa con cebollita encurtida, el plato lleva "
+    "mangu. Para 'meal_name' (max 8 palabras): si el plato es un clasico "
+    "dominicano con nombre propio, usalo (ej: 'Los tres golpes' = mangu + "
+    "huevo frito + salami + queso frito; 'La bandera' = arroz + habichuelas "
+    "+ carne; mofongo, sancocho); si no, nombra los componentes principales "
+    "EMPEZANDO por la base (ej: 'Mangu con huevo, salami y queso'). "
+    "Macros: estima calorias, proteina, carbohidratos y grasas de CADA "
+    "componente del inventario POR SEPARADO y SUMA los totales de la porcion "
+    "visible (no por 100g; ej: mangu ~300 kcal, huevo frito ~110, 2 rodajas "
+    "de salami ~180, queso frito ~150). El total debe cubrir TODOS los "
+    "componentes de description - un componente listado pero fuera de la "
+    "suma es un error. Se realista con porciones dominicanas. Si NO es "
+    "comida: is_food=false, macros en 0 y meal_name vacio. Responde SOLO el "
+    "JSON."
 )
 
 # Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
