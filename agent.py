@@ -1710,10 +1710,14 @@ def swap_meal(form_data: dict):
                                     res[_fk] = _ft_meal[_fk]
                                 elif hasattr(res, _fk):
                                     setattr(res, _fk, _ft_meal[_fk])
+                        # [P2-SWAP-FATS-TRIM v2] el número post es el HONESTO (truth-up desde
+                        # strings tras el trim) — puede SUBIR si el candidato sub-reportaba su
+                        # grasa (vivo 05:47Z: reportado 8g, honesto 23g → el validador rechaza
+                        # con el dato real; el log previo "recortada 8g → 23g" confundía).
                         logger.info(
-                            f"🥑 [P2-SWAP-FATS-TRIM] grasa recortada determinísticamente en el "
-                            f"candidato ({_ft_cur:.0f}g → {_ft_meal.get('fats')}g vs target "
-                            f"{_ft_target:.0f}g) | meal_type={meal_type}"
+                            f"🥑 [P2-SWAP-FATS-TRIM] trim aplicado | reportado_pre={_ft_cur:.0f}g "
+                            f"→ honesto_post={_ft_meal.get('fats')}g (target {_ft_target:.0f}g) "
+                            f"| meal_type={meal_type}"
                         )
             except Exception as _ft_exc:
                 logger.warning(f"[P2-SWAP-FATS-TRIM] no-op (no aborta): {type(_ft_exc).__name__}: {_ft_exc}")
