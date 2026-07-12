@@ -52,6 +52,19 @@ def test_style_descriptor_not_a_protein_claim():
     assert m["name"].startswith("Moro de Frijoles"), "el nombre no se toca"
 
 
+def test_stale_honesty_flag_self_heals():
+    """El flag inocente arrastrado de una corrida vieja se retira solo al re-evaluar
+    (vivo: el moro conservó su slot en el regen y el flag pre-fix requirió limpieza
+    manual). Clear-only: jamás inventa flags."""
+    from graph_orchestrator import _fix_phantom_protein_in_name
+    from constants import strip_accents
+    m = {"name": "Moro de Frijoles Pintos con Soya Guisada al Estilo Bistec Encebollado",
+         "ingredients": ["1/2 taza de frijoles pintos", "53g de soya texturizada"],
+         "_name_honesty_degraded": True}
+    _fix_phantom_protein_in_name(m, strip_accents)
+    assert "_name_honesty_degraded" not in m, "flag stale sobre nombre inocente debe auto-limpiarse"
+
+
 def test_real_phantom_still_detected():
     from graph_orchestrator import _fix_phantom_protein_in_name
     from constants import strip_accents

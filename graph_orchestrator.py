@@ -15073,11 +15073,22 @@ def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
                     positions.append(m.start())
             if positions:
                 in_name.append((canon, min(positions)))
+        # [P2-NAME-STYLE-DESCRIPTOR · 2026-07-12] AUTO-LIMPIEZA del flag stale: si el detector
+        # concluye que el nombre es INOCENTE pero el meal arrastra un flag viejo (vivo: el moro
+        # 'al estilo bistec' conservó su slot en el regen y el flag pre-fix sobrevivió — hizo
+        # falta limpieza manual), se retira aquí. Clear-only espejo del chip-stale-clear.
+        def _clear_stale_honesty_flag(reason):
+            if meal.get("_name_honesty_degraded"):
+                meal.pop("_name_honesty_degraded", None)
+                logger.info(f"🎭 [P2-NAME-STYLE-DESCRIPTOR] flag de honestidad stale retirado "
+                            f"({reason}) | meal={str(meal.get('name'))[:40]}")
         if not in_name:
+            _clear_stale_honesty_flag("sin proteína cárnica en el título")
             return False
         in_name.sort(key=lambda x: x[1])
         lead_canon = in_name[0][0]
         if _present(lead_canon, il):
+            _clear_stale_honesty_flag("proteína líder presente en ingredientes")
             return False  # la proteína líder SÍ está → no es fantasma
         # [P2-NAME-HONESTY-EXT · 2026-07-01] solo carnes reales sustituyen (huevo/queso → flag, no rename).
         real = next((c for c in _PHANTOM_PROTEIN_SYNS
