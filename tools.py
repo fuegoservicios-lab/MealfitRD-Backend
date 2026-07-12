@@ -2530,6 +2530,16 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
         removed_count = 0
         depleted_count = 0
         depleted_payload: list[dict] = []
+        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Nombres tocados en esta llamada —
+        # al final se consulta su estado REAL post-cambio y se anexa al
+        # ToolMessage. Vivo: el agente confirmó "ya van 4 leches evaporadas"
+        # contando su memoria conversacional; la fila real decía 6 (el usuario
+        # también edita desde la UI).
+        _touched_names: set = set()
+
+        def _strip_lower(s: str) -> str:
+            nfd = _ucd.normalize("NFD", str(s or ""))
+            return "".join(c for c in nfd if _ucd.category(c) != "Mn").lower().strip()
 
         if items_to_add:
             for item in items_to_add:
@@ -2537,6 +2547,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
                 if name and qty > 0:
                     add_or_update_inventory_item(user_id, name, qty, unit)
                     added_count += 1
+                    _touched_names.add(name)
 
         if items_to_deplete:
             # [P3-AGENT-DEPLETE · 2026-05-22 · upgrade P3-DEPLETED-BD · 2026-05-22]
@@ -2547,10 +2558,6 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
             # de verdad, el localStorage es solo cache local del frontend.
             from db_inventory import add_depleted_item as _bd_add_depleted
             current_rows = get_raw_user_inventory(user_id)
-
-            def _strip_lower(s: str) -> str:
-                nfd = _ucd.normalize("NFD", str(s or ""))
-                return "".join(c for c in nfd if _ucd.category(c) != "Mn").lower().strip()
 
             row_by_name: dict[str, dict] = {}
             for r in current_rows:
@@ -2582,6 +2589,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
                     qty_snapshot = 1.0
                 ingredient_name = row.get("ingredient_name")
                 master_id = row.get("master_ingredient_id")
+                _touched_names.add(str(ingredient_name))
 
                 # [P3-DEPLETED-BD] INSERT a user_depleted_items vía helper que
                 # hace upsert idempotente por (user_id, master_id) o (user_id,
@@ -2631,6 +2639,12 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
         if items_to_remove:
             deduct_consumed_meal_from_inventory(user_id, items_to_remove)
             removed_count += len(items_to_remove)
+            for item in items_to_remove:
+                try:
+                    _q, _u, _n = _parse_quantity(item)
+                    _touched_names.add(_n or str(item))
+                except Exception:
+                    _touched_names.add(str(item))
 
         # Construir mensaje human-friendly para la LLM.
         parts = []
@@ -2644,6 +2658,36 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
             msg = "No se modificó la despensa (nada coincidió con lo solicitado)."
         else:
             msg = "¡Despensa actualizada! " + ", ".join(parts) + "."
+
+        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Anexar el estado REAL post-cambio
+        # de los items tocados — la LLM debe confirmar con ESTOS números, no con
+        # su memoria conversacional (el usuario también edita desde la UI).
+        if _touched_names:
+            try:
+                _post_rows = get_raw_user_inventory(user_id) or []
+                _touched_keys = {_strip_lower(n) for n in _touched_names if n}
+                _states = []
+                _present_keys = set()
+                for r in _post_rows:
+                    rk = _strip_lower(r.get("ingredient_name"))
+                    if rk in _touched_keys:
+                        _present_keys.add(rk)
+                        q = float(r.get("quantity") or 0)
+                        qs = str(int(q)) if q.is_integer() else f"{q:g}"
+                        _b = r.get("brand")
+                        _states.append(
+                            f"{r.get('ingredient_name')}: {qs} {r.get('unit')}"
+                            + (f" ({_b})" if _b else "")
+                        )
+                _gone = sorted(n for n in _touched_names if _strip_lower(n) not in _present_keys)
+                if _states or _gone:
+                    msg += "\n\n📊 Estado REAL en la Nevera tras el cambio (confirma al usuario con ESTOS números): "
+                    if _states:
+                        msg += "; ".join(sorted(_states))
+                    if _gone:
+                        msg += (". " if _states else "") + "Ya no quedan: " + ", ".join(_gone) + "."
+            except Exception as _state_err:
+                logger.warning(f"[P1-CHAT-PANTRY-AWARE] estado post-cambio falló (best-effort): {_state_err}")
 
         # [P3-AGENT-DEPLETE · 2026-05-22] Inyectar marker JSON inline al final
         # del tool_result. `agent.py:execute_tools` lo extrae con regex,

@@ -3506,6 +3506,54 @@ def rag_query_router(prompt: str) -> dict:
 # Fail-secure: cualquier excepción → retorna "" (no inyecta nada). El
 # agente puede usar la tool `check_hydration_today` si necesita el dato
 # bajo demanda en lugar de en cada turno.
+def _build_pantry_context(user_id: Optional[str]) -> str:
+    """[P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot REAL de `user_inventory`
+    al system prompt (bloque VOLÁTIL → va al final, no rompe el prefix-cache
+    P2-CHAT-PROMPT-STATIC-PREFIX). Vivo: el agente confirmó "ya van 4 leches
+    evaporadas" contando su memoria conversacional; la fila real decía 6 (el
+    usuario también borra/edita desde la UI de la Nevera). ~400-600 tokens
+    para una nevera de 60 items. Kill-switch: MEALFIT_CHAT_PANTRY_SNAPSHOT."""
+    if not user_id or user_id == "guest":
+        return ""
+    try:
+        from knobs import _env_bool as _pc_env_bool
+        if not _pc_env_bool("MEALFIT_CHAT_PANTRY_SNAPSHOT", True):
+            return ""
+        from db import execute_sql_query
+        rows = execute_sql_query(
+            "SELECT ingredient_name, quantity::float8 AS quantity, unit, brand "
+            "FROM user_inventory WHERE user_id = %s AND quantity > 0 "
+            "ORDER BY ingredient_name LIMIT 120",
+            (user_id,), fetch_all=True,
+        ) or []
+        if not rows:
+            return (
+                "\n\n🧊 NEVERA FÍSICA AHORA: vacía (0 items). Si el usuario habla "
+                "de lo que tiene, invítalo a registrar su compra o escanear su nevera."
+            )
+
+        def _fmt_q(q):
+            qf = float(q or 0)
+            return str(int(qf)) if qf.is_integer() else f"{qf:g}"
+
+        items = "; ".join(
+            f"{r['ingredient_name']} {_fmt_q(r['quantity'])} {r['unit']}"
+            + (f" ({r['brand']})" if r.get("brand") else "")
+            for r in rows
+        )
+        return (
+            f"\n\n🧊 NEVERA FÍSICA AHORA ({len(rows)} items — cantidades REALES de la "
+            f"base de datos en este instante): {items}. Estos números son la VERDAD y "
+            f"pueden diferir de lo que recuerdes de esta conversación (el usuario también "
+            f"edita su Nevera desde la app). Cita SIEMPRE estas cantidades al hablar de lo "
+            f"que tiene; tras modificar el inventario, el resultado de la herramienta trae "
+            f"los totales nuevos — confirma con esos."
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-CHAT-PANTRY-AWARE] pantry context error: {e}")
+        return ""
+
+
 def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[str] = None) -> str:
     if not user_id or user_id == "guest":
         return ""
@@ -3798,6 +3846,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # viva si el toggle está activo. Non-stream path no recibe
         # `local_date`, así que cae al UTC server-side dentro del helper.
         system_prompt += _build_hydration_context(user_id, local_date_str=None)
+        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
+        system_prompt += _build_pantry_context(user_id)
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -4158,6 +4208,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # `local_date` del cliente, que pasamos al helper para mayor
         # precisión en zonas horarias no-UTC.
         system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
+        # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
+        system_prompt += _build_pantry_context(user_id)
 
     config = {"configurable": {"thread_id": session_id}}
 
