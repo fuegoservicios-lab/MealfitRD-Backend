@@ -10709,6 +10709,21 @@ def api_restore_plan(
     enriched_pd.pop("_user_action_required", None)
     enriched_pd.pop("_recovery_exhausted_chunks", None)
 
+    # [P2-HIST-RESTORE-STALE-STATE · 2026-07-12] Limpiar también estado EFÍMERO del snapshot
+    # que features posteriores al hardening P0-HIST-1 introdujeron:
+    #   - `_day_regen_inflight`/`_meal_regen_inflight`: flags de regen-en-curso (P1-SWAP-REGEN-
+    #     RESUME / server-flag del día). El cliente los ignora por edad (>6/9 min), pero un
+    #     snapshot restaurado no debe cargar señales de un request que murió hace días.
+    #   - `is_restocked`/`restocked_at_iso`/`restocked_items`: ciclo de compra del plan ORIGINAL.
+    #     Stale por definición tras reactivar (describe compras del ciclo viejo) — arrastrarlo
+    #     deja las listas quincenal/mensual VACÍAS ("ya compraste todo") aunque la Nevera actual
+    #     no tenga esos items (incidente vivo 2026-07-12: restock 49 + vaciar Nevera → 3 de 4
+    #     listas en 0 y costo RD$0). El delta real contra la Nevera VIGENTE se calcula client-side
+    #     (buildDeltaShoppingList) y en el restock — no se pierde nada al re-derivar.
+    for _stale_k in ("_day_regen_inflight", "_meal_regen_inflight",
+                     "is_restocked", "restocked_at_iso", "restocked_items"):
+        enriched_pd.pop(_stale_k, None)
+
     target_plan_id = None
     cancelled_chunks = 0
     cancelled_source_chunks = 0
