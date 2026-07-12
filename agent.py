@@ -1607,6 +1607,68 @@ def swap_meal(form_data: dict):
                     f"{type(_rs_exc).__name__}: {_rs_exc}"
                 )
 
+        # [P2-SWAP-PROTEIN-CLOSER · 2026-07-12] (pedido del owner: "que sea más preciso") Si tras
+        # el solver el candidato sigue MATERIALMENTE bajo el objetivo de proteína del slot (<85%,
+        # el mismo umbral del validador de abajo), corre el closer determinista de la GENERACIÓN
+        # (`_close_protein_gap_for_meal`: scale-first → candidato allergen-safe día-aware con toda
+        # la higiene: bolt cap 180g, sweet-guard, no-dup-cheese, wording SSOT del paso 💪) ANTES
+        # de que el validador queme un retry LLM o entregue con el toast "menos preciso" (vivo:
+        # moro de camarones 25g vs 38g). Solo cierra DÉFICIT (el exceso lo trata el solver/
+        # validador). `day_used_proteins` desde los blobs del gate (SSOT) → jamás reintroduce un
+        # repeat same-day. Fail-safe total. Knob MEALFIT_SWAP_PROTEIN_CLOSER=false sin redeploy.
+        # tooltip-anchor: P2-SWAP-PROTEIN-CLOSER
+        if os.environ.get("MEALFIT_SWAP_PROTEIN_CLOSER", "true").strip().lower() in ("1", "true", "yes", "on"):
+            try:
+                _pc_target = float(target_protein or 0)
+                _pc_meal = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                _pc_cur = float(_pc_meal.get("protein") or 0)
+                if (_pc_target > 0 and _pc_cur < _pc_target * 0.85
+                        and isinstance(_pc_meal.get("ingredients"), list) and _pc_meal["ingredients"]):
+                    from graph_orchestrator import (
+                        _close_protein_gap_for_meal as _pc_closer,
+                        _safe_high_density_proteins as _pc_pool,
+                        _protein_gate_labels_in_text as _pc_labels,
+                        _sync_recipe_step_quantities as _pc_stepsync,
+                    )
+                    if _tu_db_holder[0] is None:
+                        from nutrition_db import IngredientNutritionDB as _PCDB
+                        _tu_db_holder[0] = _PCDB()
+                    _pc_allergies = form_data.get("allergies") or []
+                    _pc_used = set()
+                    for _pb in (form_data.get("same_day_other_meal_blobs") or []):
+                        _pc_used |= _pc_labels(str(_pb))
+                    _g_pc = _pc_closer(
+                        _pc_meal, _pc_target, _tu_db_holder[0],
+                        _pc_pool(_pc_allergies, _tu_db_holder[0]),
+                        allergies=_pc_allergies, fill_pct=1.0,
+                        slot_cal_target=float(target_calories or 0),
+                        enforce_min_threshold=False,
+                        day_used_proteins=_pc_used,
+                    )
+                    if _g_pc > 0:
+                        try:
+                            _pc_stepsync(_pc_meal)
+                        except Exception:
+                            pass
+                        for _pk in ("ingredients", "ingredients_raw", "recipe", "name",
+                                    "protein", "carbs", "fats", "cals", "macros"):
+                            if _pk in _pc_meal and _pc_meal[_pk] is not None:
+                                if isinstance(res, dict):
+                                    res[_pk] = _pc_meal[_pk]
+                                elif hasattr(res, _pk):
+                                    setattr(res, _pk, _pc_meal[_pk])
+                        logger.info(
+                            f"💪 [P2-SWAP-PROTEIN-CLOSER] +{_g_pc}g de proteína determinista en el "
+                            f"candidato ({int(_pc_cur)}g → {_pc_meal.get('protein')}g vs target "
+                            f"{int(_pc_target)}g) | meal_type={meal_type}"
+                        )
+            except Exception as _pc_exc:
+                logger.warning(
+                    f"[P2-SWAP-PROTEIN-CLOSER] no-op (no aborta): {type(_pc_exc).__name__}: {_pc_exc}"
+                )
+
         # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
         # targets del slot. Pre-fix: prompt solo enviaba target_calories
         # como hint soft → drift arbitrario permitido (caso real: target
