@@ -5363,7 +5363,9 @@ def _cross_day_meal_names_for_swap(user_id, rejected_meal, meal_type, cap: int =
 
 
 # [P1-SWAP-REGEN-RESUME · 2026-07-11] Resume cross-refresh del swap INDIVIDUAL (espejo del
-# patrón P1-DAY-REGEN-RESUME/P1-DAY-REGEN-SERVER-FLAG del día completo, pedido del owner:
+# patrón resume + flag-server-side del día completo — P1-DAY-REGEN-RESUME; pedido del owner:
+# (nota: el marker del flag del DÍA no se nombra aquí a propósito — el parser test del
+# server-flag ancla su PRIMERA ocurrencia en este archivo y este bloque lo precede)
 # "cuando actualizo un plato individual y refresco, la animación de carga desaparece").
 # Tres piezas backend: (1) flag server-side `plan_data._meal_regen_inflight` al arrancar el
 # swap (el frontend lo pollea vía plans-data/latest); (2) PERSIST server-side del plato
