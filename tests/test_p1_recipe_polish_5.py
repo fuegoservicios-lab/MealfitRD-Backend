@@ -113,6 +113,8 @@ def test_d_unit_word_singularized():
     assert humanize_ingredient("1 tazas de yogurt griego natural sin azúcar") \
         == "1 taza de yogurt griego natural sin azúcar"
     assert humanize_ingredient("1 dientes de ajo") == "1 diente de ajo"
+    # [2026-07-12 v2] 'rodajas' se escapó de la lista en vivo ("1 rodajas (50g) de Lechosa").
+    assert humanize_ingredient("1 rodajas (50g) de Lechosa fresca") == "1 rodaja (50g) de Lechosa fresca"
     # cantidad ≠ 1 intacta
     assert humanize_ingredient("2 dientes de ajo") == "2 dientes de ajo"
 
