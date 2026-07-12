@@ -52,6 +52,20 @@ def test_stop_dismissal_survives_refresh_and_leaves_feedback():
     assert _AP.count("safeLocalStorageSet(_orphanDismissKey(currentSessionId)") >= 2
 
 
+def test_stop_bubble_survives_server_rehydration():
+    """[v3] Vivo: 'el mensaje de que está detenido desapareció' — la burbuja es
+    CLIENT-ONLY y el replace del refetch la borraba. fetchSessionMessages la
+    RECONSTRUYE desde el marcador persistente (fuente de verdad)."""
+    i = _AP.find("Reconstruir la burbuja")
+    assert i != -1, "la reconstrucción post-rehidratación desapareció"
+    win = _AP[i:i + 1500]
+    assert "_orphanDismissKey(sessionId)" in win and "_orphanSig(_mappedMsgs)" in win, \
+        "la burbuja se reconstruye SOLO si el descarte persistido matchea la firma"
+    assert "_lastMapped.role === 'user'" in win, \
+        "solo cuando el último real es del user (turno detenido sin respuesta)"
+    assert "⏹ Detenido" in win
+
+
 def test_stop_covers_photo_analysis():
     # El controller nace ANTES del upload y su signal viaja en el fetch.
     i = _AP.find("El AbortController nace ANTES")
