@@ -3334,5 +3334,24 @@ def check_clinical_profile(user_id: str) -> str:
         return f"Error consultando el perfil clínico: {str(e)}"
 
 
+def _chat_plan_mutation_tools_enabled() -> bool:
+    """[P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Decisión del owner (verbatim:
+    "quiero que el agente no tenga la capacidad de actualizar platos de
+    ninguna manera y mucho menos actualizar el plan completo, ya en el futuro
+    le daremos esa habilidad"): el chat NO muta el plan — ni plato individual,
+    ni día completo, ni plan entero. Esas acciones viven en los botones de la
+    página Plan. Re-habilitar = MEALFIT_CHAT_PLAN_TOOLS_ENABLED=true + restart
+    (las tools, la intercepción en execute_tools y los bullets del prompt
+    quedan intactos, solo dormidos)."""
+    from knobs import _env_bool as _pt_env_bool
+    return _pt_env_bool("MEALFIT_CHAT_PLAN_TOOLS_ENABLED", False)
+
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, regenerate_full_day, check_clinical_profile]
+agent_tools = [update_form_field, log_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile]
+
+# [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
+# (OFF por ahora — ver _chat_plan_mutation_tools_enabled).
+_PLAN_MUTATION_TOOLS = [generate_new_plan_from_chat, modify_single_meal, regenerate_full_day]
+if _chat_plan_mutation_tools_enabled():
+    agent_tools = agent_tools + _PLAN_MUTATION_TOOLS

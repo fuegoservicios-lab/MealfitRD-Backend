@@ -107,16 +107,63 @@ def build_temporal_proactive_context() -> str:
     return ctx
 
 
+# ---------------------------------------------------------------------------
+# [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Bullets de mutación de plan detrás del
+# knob MEALFIT_CHAT_PLAN_TOOLS_ENABLED (OFF — decisión del owner: "por ahora
+# el agente no actualiza platos de ninguna manera"). Con el knob OFF el agente
+# recibe la redirección a los botones de la página Plan; con ON vuelven los
+# bullets originales (las tools se re-anexan a agent_tools en tools.py).
+# ---------------------------------------------------------------------------
+
+def _plan_tools_enabled() -> bool:
+    try:
+        from tools import _chat_plan_mutation_tools_enabled
+        return _chat_plan_mutation_tools_enabled()
+    except Exception:
+        return False
+
+
+_PLAN_TOOLS_DISABLED_BULLET = (
+    "- ❌ POR AHORA NO PUEDES modificar el plan de comidas de NINGUNA manera: ni cambiar un plato, "
+    "ni regenerar un día, ni generar un plan nuevo (esas herramientas están desactivadas). Si el "
+    "usuario te lo pide, dile con amabilidad que use los botones de la página Plan — 'Cambiar Plato' "
+    "en cada comida, o 'Actualizar platos' para renovar el día completo — y ofrécele ayuda con lo que "
+    "SÍ puedes (registrar comidas, gestionar su Nevera, hidratación, sugerencias de alimentos). "
+    "NUNCA prometas modificar el plan ni digas que lo hiciste."
+)
+
+
+def _plan_tools_bullets_inline() -> str:
+    if not _plan_tools_enabled():
+        return _PLAN_TOOLS_DISABLED_BULLET
+    return """- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente'). Esta herramienta ejecuta el pipeline completo y genera un plan personalizado al instante.
+- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
+- Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos', 'ponle más proteína al almuerzo del lunes', 'cámbiame el desayuno de hoy por otra cosa'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. day_number = posición 1-based del día en el plan activo (1 = primer día visible, ej. Domingo; cuenta los días del plan que tienes en contexto) y meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda'). Si el usuario no especifica el día, asume 1. Si el usuario pide expresamente ingredientes nuevos o ir de compras, pasa allow_pantry_expansion=true; si no, el sistema intenta primero con SOLO su Nevera y, si no converge, reintenta solo con 1-2 ingredientes extra AUTOMÁTICAMENTE (te avisará en el resultado para que se lo digas). NO te rindas ni le digas que 'no se pudo' sin haber llamado la herramienta.
+- Usa `regenerate_full_day` SOLO cuando el usuario pida renovar TODOS los platos de un día completo (ej: 'actualízame todos los platos del domingo', 'regenérame el día 2 entero') — equivale al botón 'Actualizar platos'. Cuesta 1 crédito y tarda ~2 minutos: CONFIRMA con el usuario ANTES de llamarla. Corre en segundo plano: avisa que la página Plan mostrará el progreso y NO afirmes que ya terminó. Para UN solo plato usa modify_single_meal."""
+
+
+def _plan_tools_bullets_stream() -> str:
+    if not _plan_tools_enabled():
+        return _PLAN_TOOLS_DISABLED_BULLET
+    return """- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente').
+- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
+- Usa `modify_single_meal` para cambios puntuales a UNA comida específica del plan (ej: 'cámbiale el salami al mangú por huevos', 'cámbiame la cena del lunes'). day_number = posición 1-based del día en el plan (1 = primer día visible); meal_type = 'Desayuno'/'Almuerzo'/'Cena'/'Merienda'. Si pide ingredientes nuevos explícitamente, allow_pantry_expansion=true; si no, el sistema intenta con SOLO su Nevera y auto-reintenta con 1-2 ingredientes extra si no converge (avísale cuando pase).
+- Usa `regenerate_full_day` SOLO si pide renovar TODOS los platos de un día ('actualízame el domingo completo'). Cuesta 1 crédito y tarda ~2 min: CONFIRMA antes. Corre en segundo plano — avisa que el Plan mostrará el progreso; NO afirmes que terminó. Para UN plato usa modify_single_meal."""
+
+
+def _ui_rule_plan() -> str:
+    if not _plan_tools_enabled():
+        return "1. (La modificación del plan desde el chat está desactivada por ahora — no apliques la etiqueta REFRESH_PLAN.)"
+    return "1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario."
+
+
 def build_tools_instructions(user_id: str) -> str:
     """Genera el bloque de instrucciones de herramientas disponibles para el agente."""
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada. ATENCIÓN: Lee atentamente los parámetros de esta herramienta, debes usar valores exactos en INGLÉS como 'lose_fat', 'vegetarian', 'male', etc. para que la UI los reconozca.
-- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente'). Esta herramienta ejecuta el pipeline completo y genera un plan personalizado al instante.
-- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
+{_plan_tools_bullets_inline()}
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta. [P1-CONSUMED-BACKDATE] Pasa SIEMPRE `meal_type` (desayuno/almuerzo/cena/merienda/snack) y, si el usuario dice que la comió OTRO día ('es el almuerzo de ayer'), pasa `days_ago` (1=ayer, 2=antier, máx 3) para que NO cuente en las macros de hoy. Si la herramienta responde que ese día YA tiene esa comida principal registrada, díselo y solo repite con `force=true` si él confirma que comió dos.
-- Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos', 'ponle más proteína al almuerzo del lunes', 'cámbiame el desayuno de hoy por otra cosa'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. day_number = posición 1-based del día en el plan activo (1 = primer día visible, ej. Domingo; cuenta los días del plan que tienes en contexto) y meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda'). Si el usuario no especifica el día, asume 1. Si el usuario pide expresamente ingredientes nuevos o ir de compras, pasa allow_pantry_expansion=true; si no, el sistema intenta primero con SOLO su Nevera y, si no converge, reintenta solo con 1-2 ingredientes extra AUTOMÁTICAMENTE (te avisará en el resultado para que se lo digas). NO te rindas ni le digas que 'no se pudo' sin haber llamado la herramienta.
-- Usa `regenerate_full_day` SOLO cuando el usuario pida renovar TODOS los platos de un día completo (ej: 'actualízame todos los platos del domingo', 'regenérame el día 2 entero') — equivale al botón 'Actualizar platos'. Cuesta 1 crédito y tarda ~2 minutos: CONFIRMA con el usuario ANTES de llamarla. Corre en segundo plano: avisa que la página Plan mostrará el progreso y NO afirmes que ya terminó. Para UN solo plato usa modify_single_meal.
 - Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar desde cero, o pida un resumen de su lista de compras original (lo que tenía que ir a comprar inicialmente).
 - Usa `check_current_pantry` SIEMPRE que el usuario pregunte qué le sobra en la nevera, qué ingredientes le quedan, o sus sobras actuales. Esta herramienta descuenta lo que ya se comió usando matemáticas exactas.
 - Usa `modify_pantry_inventory` EXPRESAMENTE cuando el usuario mencione de manera casual que se le acabó un ingrediente, que compró algo extra, o que se comió/dañó algo (ej: 'Me comí todos los huevos', 'Se pudrió el tomate', 'Añade 2 libras de carne a la nevera'). Esta herramienta sumará o restará dichas cantidades del inventario físico al instante.
@@ -127,7 +174,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `check_clinical_profile` SOLO cuando el usuario pregunte por sus laboratorios o valores clínicos ('¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis labs afectan el plan?'). Cita los valores tal cual, interpreta con prudencia de coach (NO diagnostiques) y recuérdale que no sustituye una consulta médica.
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
-1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
+{_ui_rule_plan()}
 2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
 3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.
 
@@ -139,11 +186,8 @@ def build_tools_instructions_stream(user_id: str) -> str:
     return f"""
 TIENES HERRAMIENTAS DISPONIBLES:
 - OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male').
-- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente').
-- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
+{_plan_tools_bullets_stream()}
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida. Si analizas una foto y el usuario confirma que se la comió, USA ESTA HERRAMIENTA con los macros estimados. [P1-CONSUMED-BACKDATE] Pasa SIEMPRE `meal_type`; si fue de OTRO día ('el almuerzo de ayer'), pasa `days_ago` (1=ayer, máx 3) para no contaminar hoy. Si responde que ese día ya tiene esa comida principal, avísale al usuario y solo usa `force=true` si él confirma.
-- Usa `modify_single_meal` para cambios puntuales a UNA comida específica del plan (ej: 'cámbiale el salami al mangú por huevos', 'cámbiame la cena del lunes'). day_number = posición 1-based del día en el plan (1 = primer día visible); meal_type = 'Desayuno'/'Almuerzo'/'Cena'/'Merienda'. Si pide ingredientes nuevos explícitamente, allow_pantry_expansion=true; si no, el sistema intenta con SOLO su Nevera y auto-reintenta con 1-2 ingredientes extra si no converge (avísale cuando pase).
-- Usa `regenerate_full_day` SOLO si pide renovar TODOS los platos de un día ('actualízame el domingo completo'). Cuesta 1 crédito y tarda ~2 min: CONFIRMA antes. Corre en segundo plano — avisa que el Plan mostrará el progreso; NO afirmes que terminó. Para UN plato usa modify_single_meal.
 - Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar, cuánto necesita de un ingrediente, o pida su lista de compras. NUNCA sumes ingredientes manualmente mirando el plan, esta herramienta hace el cálculo matemático exacto.
 - Usa `modify_pantry_inventory` cuando el usuario diga que comió, gastó, botó o compró un ingrediente específico (ej: 'me quedé sin aguacates', 'añade leche'). Modificará el inventario directamente.
 - Usa `search_deep_memory` cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta, o datos que no aparecen en la memoria reciente (ej: '¿Recuerdas qué comía al principio?', '¿Cómo me sentía hace meses?').
@@ -152,7 +196,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `check_clinical_profile` SOLO si pregunta por sus laboratorios/valores clínicos ('¿cómo está mi glucosa?'). Cita valores tal cual, prudencia de coach (NO diagnostiques), recuerda que no sustituye consulta médica.
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
-1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
+{_ui_rule_plan()}
 2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
 3. Si modificas la hidratación con `log_water_glass`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_HYDRATION]`. Esto recargará el card de Hidratación del Dashboard.
 

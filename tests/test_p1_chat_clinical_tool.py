@@ -83,8 +83,9 @@ def test_prompts_teach_clinical_tool():
     assert "NO diagnostiques" in prompts
 
 
-def test_doc_table_has_row_14():
+def test_doc_table_has_clinical_row():
+    # [P1-CHAT-PLAN-TOOLS-OFF] la tabla bajó a 11 tools activas; esta sigue dentro.
     with open(os.path.join(_BACKEND, "docs", "agent_tools_user_id_table.md"),
               encoding="utf-8") as f:
         doc = f.read()
-    assert "`check_clinical_profile`" in doc and "Las 14 tools" in doc
+    assert "`check_clinical_profile`" in doc and "Las 11 tools" in doc

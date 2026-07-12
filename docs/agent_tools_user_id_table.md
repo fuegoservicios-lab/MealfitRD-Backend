@@ -10,24 +10,32 @@ El nodo LangGraph `execute_tools` ([`backend/agent.py`](../agent.py)) force-over
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer.
 
-## Las 14 tools cubiertas
+## Las 11 tools cubiertas
 
 | # | Tool | Mutación cross-user que el override impide |
 |---|---|---|
 | 1 | `update_form_field` | `update_user_health_profile_atomic` + `delete_user_facts_by_metadata` |
-| 2 | `generate_new_plan_from_chat` | pipeline completo + `save_new_meal_plan_robust` |
-| 3 | `log_consumed_meal` | `db_log_consumed_meal` + `deduct_consumed_meal_from_inventory` |
-| 4 | `modify_single_meal` | `update_meal_plan_data` (full plan_data overwrite) |
-| 5 | `search_deep_memory` | leak de summaries cross-user |
-| 6 | `check_shopping_list` | leak de pantry/plan cross-user |
-| 7 | `check_current_pantry` | leak de pantry cross-user |
-| 8 | `modify_pantry_inventory` | `add_or_update_inventory_item` + `deduct_consumed_meal_from_inventory` |
-| 9 | `mark_shopping_list_purchased` | `restock_inventory` |
-| 10 | `check_hydration_today` | leak de `hydration_log` cross-user (read-only) |
-| 11 | `log_water_glass` | INSERT/UPDATE en `hydration_log` cross-user |
-| 12 | `suggest_foods_for_nutrient` | leak del `health_profile` cross-user (lee alergias/dislikes/dieta del `user_id` para filtrar la sugerencia del catálogo) |
-| 13 | `regenerate_full_day` | invoca `api_regenerate_day` con `verified_user_id=user_id` — sin el override, regeneraría (y COBRARÍA 1 crédito) el día del plan de una víctima (P1-CHAT-DAY-REGEN-TOOL · 2026-07-12) |
-| 14 | `check_clinical_profile` | leak del `health_profile.clinical_profile` cross-user (laboratorios, historial de peso — el dato más sensible del sistema) (P1-CHAT-CLINICAL-TOOL · 2026-07-12) |
+| 2 | `log_consumed_meal` | `db_log_consumed_meal` + `deduct_consumed_meal_from_inventory` |
+| 3 | `search_deep_memory` | leak de summaries cross-user |
+| 4 | `check_shopping_list` | leak de pantry/plan cross-user |
+| 5 | `check_current_pantry` | leak de pantry cross-user |
+| 6 | `modify_pantry_inventory` | `add_or_update_inventory_item` + `deduct_consumed_meal_from_inventory` |
+| 7 | `mark_shopping_list_purchased` | `restock_inventory` |
+| 8 | `check_hydration_today` | leak de `hydration_log` cross-user (read-only) |
+| 9 | `log_water_glass` | INSERT/UPDATE en `hydration_log` cross-user |
+| 10 | `suggest_foods_for_nutrient` | leak del `health_profile` cross-user (lee alergias/dislikes/dieta del `user_id` para filtrar la sugerencia del catálogo) |
+| 11 | `check_clinical_profile` | leak del `health_profile.clinical_profile` cross-user (laboratorios, historial de peso — el dato más sensible del sistema) (P1-CHAT-CLINICAL-TOOL · 2026-07-12) |
+
+### Retiradas temporalmente del set activo (P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12)
+
+Decisión del owner: el chat NO muta el plan por ahora. Las tools siguen definidas en `tools.py`
+(y cubiertas por el override P0-AGENT-1 si vuelven) pero solo se anexan a `agent_tools` con
+`MEALFIT_CHAT_PLAN_TOOLS_ENABLED=true` (+ restart). Sin formato de fila numerada a propósito —
+el parser de paridad de `test_p2_chat_cleanup.py` solo cuenta filas `| n | tool |`.
+
+- **generate_new_plan_from_chat** — pipeline completo + `save_new_meal_plan_robust`
+- **modify_single_meal** — `update_meal_plan_data` (full plan_data overwrite)
+- **regenerate_full_day** — invoca `api_regenerate_day` con `verified_user_id=user_id` — sin el override, regeneraría (y COBRARÍA 1 crédito) el día del plan de una víctima (P1-CHAT-DAY-REGEN-TOOL · 2026-07-12)
 
 ## Cómo verificar
 

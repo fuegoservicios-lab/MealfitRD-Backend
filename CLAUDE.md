@@ -301,9 +301,9 @@ Test relacionado: [`test_p1_new_a_frontend_no_direct_meal_plans_write.py`](backe
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer. Defensa-en-profundidad junto con la sanitización P1-Q8/P0-A1 del pipeline de generación.
 
-### Las 14 tools cubiertas
+### Las 11 tools cubiertas
 
-[P2-CHAT-CLEANUP · 2026-05-20 · +P3-MICRO-FOOD-SUGGEST 2026-06-15] Tabla canónica completa de las 14 tools de `agent_tools` ([backend/tools.py](backend/tools.py)) cubiertas por el override + descripción de la mutación cross-user que cada una impediría sin el override: [`backend/docs/agent_tools_user_id_table.md`](backend/docs/agent_tools_user_id_table.md). El override es genérico al tope del loop `execute_tools` — cubre TODAS las tools que añadas a `agent_tools` automáticamente, NO requiere update por-tool del nodo.
+[P2-CHAT-CLEANUP · 2026-05-20 · +P3-MICRO-FOOD-SUGGEST 2026-06-15] Tabla canónica completa de las 11 tools de `agent_tools` ([backend/tools.py](backend/tools.py)) cubiertas por el override + descripción de la mutación cross-user que cada una impediría sin el override: [`backend/docs/agent_tools_user_id_table.md`](backend/docs/agent_tools_user_id_table.md). El override es genérico al tope del loop `execute_tools` — cubre TODAS las tools que añadas a `agent_tools` automáticamente, NO requiere update por-tool del nodo.
 
 ### Cómo verificar
 

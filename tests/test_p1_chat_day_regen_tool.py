@@ -21,9 +21,15 @@ with open(os.path.join(_BACKEND, "tools.py"), encoding="utf-8") as f:
     _TL = f.read()
 
 
-def test_tool_registered_and_schema():
-    names = [t.name for t in agent_tools]
-    assert "regenerate_full_day" in names, "la tool debe estar en agent_tools (P0-AGENT-1 la cubre)"
+def test_tool_defined_and_gated():
+    # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] La tool existe pero su registro en
+    # agent_tools sigue el knob MEALFIT_CHAT_PLAN_TOOLS_ENABLED (OFF por
+    # decisión del owner — el chat no muta el plan por ahora).
+    from tools import _PLAN_MUTATION_TOOLS, _chat_plan_mutation_tools_enabled
+    assert "regenerate_full_day" in [t.name for t in _PLAN_MUTATION_TOOLS]
+    in_active = "regenerate_full_day" in [t.name for t in agent_tools]
+    assert in_active == _chat_plan_mutation_tools_enabled(), \
+        "el registro de la tool debe seguir el knob"
     assert {"user_id", "day_number"} <= set(regenerate_full_day.args.keys())
 
 
@@ -64,8 +70,10 @@ def test_prompts_teach_the_tool_with_confirmation():
         "cuesta 1 crédito + 2 min: el agente debe confirmar antes de disparar"
 
 
-def test_doc_table_has_row_13():
+def test_doc_documents_tool():
+    # [P1-CHAT-PLAN-TOOLS-OFF] La tool vive en la sección "Retiradas temporalmente"
+    # del doc (fuera de la tabla de paridad) mientras el knob esté OFF.
     with open(os.path.join(_BACKEND, "docs", "agent_tools_user_id_table.md"),
               encoding="utf-8") as f:
         doc = f.read()
-    assert "`regenerate_full_day`" in doc and "Las 13 tools" in doc
+    assert "regenerate_full_day" in doc and "Retiradas temporalmente" in doc
