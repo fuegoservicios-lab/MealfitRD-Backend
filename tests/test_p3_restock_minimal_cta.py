@@ -214,10 +214,10 @@ def test_modal_title_without_question_marks(src: str) -> None:
 
 
 def test_modal_icon_outline_no_heavy_bg(src: str) -> None:
-    """[P3-RESTOCK-MINIMAL-CTA] el icon container del modal usa border
-    slate-200 + bg blanco (outline minimal), NO el gradient verde 64×64
-    con sombra fuerte legacy."""
-    # El cuadro verde legacy: `linear-gradient(135deg, #10B981 0%, #059669 100%)` con `boxShadow: '0 8px 16px rgba(16, 185, 129, 0.3)'`
+    """[P3-RESTOCK-MINIMAL-CTA · superseded P3-RESTOCK-MODAL-POLISH 2026-07-12] El icon
+    container evolucionó: outline 56×56 (2026-05-20) → clase `.restock-modal-icon` con
+    gradiente emerald + halo concéntrico via CSS (familia de diálogos pulidos). El
+    invariante que persiste: NADA del cuadro verde legacy 64×64 con sombra pesada."""
     legacy_icon_box = re.compile(
         r"width:\s*'64px',\s*height:\s*'64px'[^}]*?borderRadius:\s*'20px'[^}]*?linear-gradient\(135deg,\s*#10B981",
         re.DOTALL,
@@ -226,32 +226,29 @@ def test_modal_icon_outline_no_heavy_bg(src: str) -> None:
         "[P3-RESTOCK-MINIMAL-CTA] el icon container legacy 64×64 con gradient "
         "verde debe estar removido."
     )
-    # Nuevo: container 56×56 con border slate-200.
-    # [RESTOCK-CTA-COLOR · 2026-06-01] El borde literal #E2E8F0 se movió a la
-    # variable de tema `var(--border)` (que en claro ES #E2E8F0 = slate-200,
-    # index.css:283) para tematizar por data-theme. Mismo intent, themed.
-    new_icon_pattern = re.compile(
-        r"width:\s*'56px',\s*height:\s*'56px'[^}]*?border:\s*'1\.5px solid var\(--border\)'",
-        re.DOTALL,
-    )
-    assert new_icon_pattern.search(src), (
-        "[P3-RESTOCK-MINIMAL-CTA] el icon container nuevo debe ser 56×56 con "
-        "border `var(--border)` (slate-200 #E2E8F0 en claro) y background "
-        "themed — outline minimal."
+    assert 'className="restock-modal-icon"' in src, (
+        "[P3-RESTOCK-MODAL-POLISH] el icono del modal vive en la clase "
+        ".restock-modal-icon (gradiente emerald + halo por CSS — familia de "
+        "diálogos pulidos 2026-07-12). Si se rediseña otra vez, actualizar "
+        "esta ancla + la memoria project_dialog_family_polish."
     )
 
 
 def test_modal_status_dot_present(src: str) -> None:
-    """[P3-RESTOCK-MINIMAL-CTA] el icon container tiene un status dot
-    emerald (14×14) en la esquina — preserva semántica 'ready' sin saturar."""
+    """[P3-RESTOCK-MODAL-POLISH · 2026-07-12] El status dot 14×14 se ELIMINÓ a propósito:
+    el contenedor del icono ya carga la semántica emerald (dot redundante). Anclamos la
+    decisión para que un revert accidental del rediseño falle aquí antes de producción."""
     status_dot_pattern = re.compile(
         r"width:\s*'14px',\s*height:\s*'14px'[^}]*?background:\s*'#10B981'",
         re.DOTALL,
     )
-    assert status_dot_pattern.search(src), (
-        "[P3-RESTOCK-MINIMAL-CTA] el status dot 14×14 emerald-500 en la "
-        "esquina del icon debe estar presente (el ÚNICO acento de color "
-        "del modal post-rediseño)."
+    assert not status_dot_pattern.search(src), (
+        "[P3-RESTOCK-MODAL-POLISH] el status dot fue removido deliberadamente "
+        "(redundante con el icono emerald). Si reapareció, o es un revert "
+        "accidental o hay que actualizar esta ancla + la memoria."
+    )
+    assert "El dot de status quedó redundante" in src, (
+        "el comment que documenta la decisión debe seguir junto al icono"
     )
 
 

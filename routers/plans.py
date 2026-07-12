@@ -6460,8 +6460,11 @@ def _day_exceeds_pantry(meals: list, orig_ledger: dict, db, *, tol_frac: float =
                 continue  # ingrediente externo (no pantry) → permitido
             if g > avail * (1.0 + tol_frac) + tol_g:
                 # [P2-REBALANCE-PANTRY-NEGLIGIBLE] excedente incapaz de mover macros → no gatea.
-                _over_kcal = max(0.0, g - float(avail)) * kcal_per_g.get(nm, 0.0)
-                if _neg_kcal > 0 and _over_kcal < float(_neg_kcal):
+                # kcal DESCONOCIDA (línea sin dato) → fail-closed: gatea como siempre — solo
+                # eximimos cuando PODEMOS probar que el excedente es negligible.
+                _kpg = kcal_per_g.get(nm) or 0.0
+                _over_kcal = max(0.0, g - float(avail)) * _kpg
+                if _neg_kcal > 0 and _kpg > 0 and _over_kcal < float(_neg_kcal):
                     logger.info(
                         f"🧄 [P2-REBALANCE-PANTRY-NEGLIGIBLE] '{nm}' excede la reserva "
                         f"({int(g)}g vs {int(avail)}g) pero el excedente ≈{int(_over_kcal)} kcal "
