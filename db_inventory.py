@@ -1226,6 +1226,44 @@ def _consume_reserved_inventory(user_id: str, ingredient_name: str, quantity: fl
 
     return False
 
+# [P2-INVENTORY-CONTAINER-MERGE · 2026-07-12] Equivalencia de envases discretos.
+# Vivo: la Nevera tenía 'Leche evaporada' en `lata` (restock) y el agente sumó
+# '2 unidades de Leche evaporada' → convert_amount('unidad'→'lata') = None (los
+# envases no viven en ningún dominio masa/volumen) → INSERT de fila DUPLICADA
+# en vez de fusión. Dos familias con riesgos distintos:
+#   - UNA pieza (lata, botella, pote, tarro) ≈ 'unidad' 1:1 — nadie dice
+#     "1 lata de leche evaporada" refiriéndose a varias.
+#   - MULTI-pack (paquete, funda, cartón, caja): 1:1 sería catastrófico
+#     (1 cartón de huevos = 30 unidades) → SOLO se convierte si el master trae
+#     container_weight_g Y density_g_per_unit (ratio real); sin datos, None
+#     (fila separada — fragmentar es más seguro que corromper cantidades).
+_CONTAINER_SINGLE = {"lata", "latas", "botella", "botellas", "pote", "potes", "tarro", "tarros"}
+_CONTAINER_MULTI = {"paquete", "paquetes", "funda", "fundas", "carton", "cartón", "cartones", "caja", "cajas"}
+_COUNT_GENERIC = {"unidad", "unidades"}
+
+
+def _container_count_equivalence(qty: float, from_unit: str, to_unit: str, master_item: dict) -> Optional[float]:
+    """Conversión entre envases discretos cuando convert_amount no pudo.
+    Retorna None si no hay equivalencia segura (el caller fragmenta la fila)."""
+    fu = str(from_unit or "").strip().lower()
+    tu = str(to_unit or "").strip().lower()
+    single_family = _CONTAINER_SINGLE | _COUNT_GENERIC
+    if fu in single_family and tu in single_family:
+        return qty  # 1:1 — envase de una sola pieza ≈ unidad genérica
+    all_discrete = single_family | _CONTAINER_MULTI
+    if fu in all_discrete and tu in all_discrete:
+        cw = float((master_item or {}).get("container_weight_g") or 0)
+        du = float((master_item or {}).get("density_g_per_unit") or 0)
+
+        def _grams_of(u: str) -> float:
+            return du if u in _COUNT_GENERIC else cw
+
+        fg, tg = _grams_of(fu), _grams_of(tu)
+        if fg > 0 and tg > 0:
+            return qty * fg / tg
+    return None
+
+
 def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: float, unit: str, mutation_type: str = "manual", source: str = "manual", brand: str = None):
     """
     Agrega o actualiza un ingrediente en la despensa del usuario.
@@ -1269,6 +1307,18 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 current_unit = row["unit"]
 
                 converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+
+                # [P2-INVENTORY-CONTAINER-MERGE · 2026-07-12] Fallback de envases
+                # discretos: fusiona '2 unidades' sobre la fila en 'lata' en vez
+                # de duplicar el ingrediente en la Nevera.
+                if converted_qty is None:
+                    converted_qty = _container_count_equivalence(quantity, unit, current_unit, master_item)
+                    if converted_qty is not None:
+                        logger.info(
+                            f"🥫 [P2-INVENTORY-CONTAINER-MERGE] {ingredient_name!r}: "
+                            f"{quantity} {unit} ≈ {round(converted_qty, 4)} {current_unit} "
+                            f"(equivalencia de envases) → fusionando con la fila existente."
+                        )
 
                 if converted_qty is not None:
                     # [P0-4 · 2026-05-10] Atomic delta vía RPC. La RPC hace
