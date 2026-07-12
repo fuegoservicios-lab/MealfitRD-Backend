@@ -22255,8 +22255,13 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
             # techo, toda línea de sal CUANTIFICADA (cdta/cda/gramos) pasa a "Sal al gusto" —
             # culinariamente honesto en cocina es-DO (se sala al probar) y el panel deja de
             # asumir la cucharada completa. "Sal al gusto"/"pizca de sal" existentes no se tocan.
-            _SALT_QTY_RX = (r"^\s*(?:\d+(?:[.,]\d+)?|[½¼¾])\s*"
-                            r"(?:cdtas?|cdas?|cucharaditas?|cucharadas?|g|gramos?)\s+de\s+sal\b")
+            # [P1-SALT-CDITA-RX · 2026-07-12] El generador escribe "cdita" (no "cdta") y el
+            # finalizador de swaps emite "½ cdita Sal" SIN "de" — el regex original no cubría
+            # ninguna de las dos formas y el converter llevaba desde 2026-07-05 sin disparar
+            # (plan vivo df263d1b día-1: 2×"0.5 cdita de/∅ Sal" = 2,358mg invisibles al fix,
+            # 0 acciones con el día a 3,274mg medidos). tooltip-anchor: P1-SALT-CDITA-RX
+            _SALT_QTY_RX = (r"^\s*(?:\d+(?:[.,]\d+)?\s*[½¼¾]?|[½¼¾])\s*"
+                            r"(?:cd(?:i)?tas?|cdas?|cucharaditas?|cucharadas?|g|gramos?)\s+(?:de\s+)?sal\b")
             for _m in meals:
                 if not isinstance(_m, dict):
                     continue
@@ -22276,10 +22281,11 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
                     _m["_sodium_autofix_applied"] = "salt_to_taste"
                     _rec = _m.get("recipe")
                     if isinstance(_rec, list):
+                        # [P1-SALT-CDITA-RX] espejo del RX de ingredientes: cdita + "de" opcional.
                         _m["recipe"] = [
                             _re.sub(
-                                r"(?:\d+(?:[.,]\d+)?|[½¼¾])\s*(?:cdtas?|cdas?|cucharaditas?|"
-                                r"cucharadas?)\s+de\s+sal\b",
+                                r"(?:\d+(?:[.,]\d+)?\s*[½¼¾]?|[½¼¾])\s*(?:cd(?:i)?tas?|cdas?|"
+                                r"cucharaditas?|cucharadas?|g|gramos?)\s+(?:de\s+)?sal\b",
                                 "sal al gusto", str(_st), flags=_re.IGNORECASE,
                             ) if isinstance(_st, str) else _st
                             for _st in _rec

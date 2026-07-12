@@ -39,9 +39,11 @@ def test_regen_day_sets_skip_flag_in_meal_form():
 
 
 def test_skip_flag_lives_near_regen_targets():
-    """El flag debe estar en el bloque del meal_form junto a los target_* retargeteados (no suelto)."""
+    """El flag debe estar en el bloque del meal_form junto a los target_* retargeteados (no suelto).
+    [P1-SLOT-FATS-FLOOR · 2026-07-12] los targets ahora se precomputan en `_sff_cals`/`_sff_fats`
+    (piso de grasa para slots fuertes) — el ancla sigue a la variable, no a la fórmula cruda."""
     idx_flag = _PLANS.find('"_skip_slot_target_override": True')
-    idx_tc = _PLANS.find('"target_calories": round(float(meal.get("cals")')
+    idx_tc = _PLANS.find('"target_calories": _sff_cals')
     assert idx_flag != -1 and idx_tc != -1
     assert abs(idx_flag - idx_tc) < 1500, "el flag debe vivir en el meal_form de regen, junto a los targets"
 

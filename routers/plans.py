@@ -220,6 +220,16 @@ _MAX_CONCURRENT_PIPELINES = _env_int(
     "MEALFIT_MAX_CONCURRENT_PLAN_PIPELINES", 8, validator=lambda v: 1 <= v <= 64
 )
 
+# [P1-SLOT-FATS-FLOOR · 2026-07-12] Piso de grasa para targets per-slot del regen-día. El
+# retarget proporcional puede asignar a una comida fuerte un target de grasa imposible
+# (vivo ×2: almuerzo 736 kcal / 6g grasa → 3 retries LLM quemados, slot conservado). Slots
+# con target ≥MIN_KCAL reciben al menos FLOOR_G de grasa; el relevel del día recorta
+# después el exceso agregado (P2-REGEN-DAY-FATS-RELEVEL, shrink-only). FLOOR_G=0 desactiva.
+SLOT_FATS_FLOOR_G = _env_int("MEALFIT_SLOT_FATS_FLOOR_G", 10, validator=lambda v: 0 <= v <= 25)
+SLOT_FATS_FLOOR_MIN_KCAL = _env_int(
+    "MEALFIT_SLOT_FATS_FLOOR_MIN_KCAL", 450, validator=lambda v: 200 <= v <= 900
+)
+
 
 def _try_acquire_pipeline_slot() -> bool:
     """Reserva un slot de pipeline si hay capacidad. True = admitido, False = en el cap.
@@ -6823,6 +6833,26 @@ def api_regenerate_day(
             if not isinstance(meal, dict):
                 new_meals.append(meal)
                 continue
+            # [P1-SLOT-FATS-FLOOR · 2026-07-12] El retarget proporcional puede asignar a una
+            # comida FUERTE un target de grasa imposible para cocina criolla (vivo ×2: almuerzo
+            # de 736 kcal con target 6g → los 3 intentos del swap mueren honestos en el validador
+            # y el slot se conserva — retries LLM quemados sin salida posible). Piso mínimo de
+            # grasa para slots principales (≥MIN_KCAL): el relevel del día (P2-REGEN-DAY-FATS-
+            # RELEVEL, shrink-only) recorta después cualquier exceso agregado → el día queda en
+            # banda igual, pero el slot deja de ser irresoluble. tooltip-anchor: P1-SLOT-FATS-FLOOR
+            _sff_cals = round(float(meal.get("cals") or 0) * _meal_scale["cals"]) or meal.get("cals")
+            _sff_fats = round(float(meal.get("fats") or 0) * _meal_scale["fats"]) or meal.get("fats")
+            try:
+                if (SLOT_FATS_FLOOR_G > 0
+                        and float(_sff_cals or 0) >= float(SLOT_FATS_FLOOR_MIN_KCAL)
+                        and 0 < float(_sff_fats or 0) < float(SLOT_FATS_FLOOR_G)):
+                    logger.info(
+                        f"🧈 [P1-SLOT-FATS-FLOOR] slot '{meal.get('meal')}' ({_sff_cals} kcal) "
+                        f"target fats {_sff_fats}g → piso {SLOT_FATS_FLOOR_G}g (slot irresoluble "
+                        f"para cocina criolla; el relevel del día recorta el exceso)")
+                    _sff_fats = float(SLOT_FATS_FLOOR_G)
+            except Exception:
+                pass
             meal_form = {
                 "user_id": user_id,
                 "session_id": data.get("session_id"),
@@ -6831,10 +6861,11 @@ def api_regenerate_day(
                 "swap_reason": reason,
                 # [P1-REGEN-DAY-RETARGET · 2026-06-23] Targets per-meal escalados hacia el objetivo del
                 # día (no la suma drifteada). _meal_scale=1.0 cuando no hubo retarget (sin biométricos).
-                "target_calories": round(float(meal.get("cals") or 0) * _meal_scale["cals"]) or meal.get("cals"),
+                "target_calories": _sff_cals,
                 "target_protein": round(float(meal.get("protein") or 0) * _meal_scale["protein"]) or meal.get("protein"),
                 "target_carbs": round(float(meal.get("carbs") or 0) * _meal_scale["carbs"]) or meal.get("carbs"),
-                "target_fats": round(float(meal.get("fats") or 0) * _meal_scale["fats"]) or meal.get("fats"),
+                # [P1-SLOT-FATS-FLOOR] target de grasa con piso para slots principales.
+                "target_fats": _sff_fats,
                 # [P2-REGEN-DAY-SLOT-OVERRIDE-SKIP · 2026-06-29] Estos targets per-comida YA están retargeteados
                 # hacia el objetivo del DÍA (P1-REGEN-DAY-RETARGET, contra el target real del plan). Señaliza a
                 # swap_meal que NO los re-derive con SWAP_TARGET_FROM_SLOT: este meal_form NO trae biométricos
