@@ -179,7 +179,7 @@ def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> s
     # el resto de la línea queda intacto (no tocamos adjetivos ni el alimento).
     if abs(qty - 1.0) < 1e-6 and name_l:
         m_unit = re.match(
-            r'^(tazas|dientes|rebanadas|rodajas|tajadas|lonjas|hojas|unidades|pedazos|latas|potes|paquetes|fundas|mazos|cucharadas)\b',
+            r'^(tazas|dientes|rebanadas|rodajas|tajadas|lonjas|hojas|unidades|pedazos|tortas|piezas|latas|potes|paquetes|fundas|mazos|cucharadas)\b',
             name_l)
         if m_unit:
             _uw = m_unit.group(1)

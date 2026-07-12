@@ -134,6 +134,29 @@ def test_e_bread_slices_capped_at_3():
     assert days[0]["meals"][0]["ingredients_raw"][0].startswith("3 rebanadas"), "lockstep raw"
 
 
+def test_e_v3_bread_gram_form_capped():
+    """[v3] El techo por CONTEO no ve líneas gram-lead que humanize convierte a
+    'rebanadas' DESPUÉS de los caps (vivo: '4 rebanadas' ≈ 180g lo evadió).
+    Rama en gramos: >135g de pan (~3 rebanadas de 45g) → cap; word-boundary
+    protege 'panqueques'."""
+    from graph_orchestrator import _cap_unrealistic_portions
+    days = [{"day": 1, "meals": [{
+        "name": "Tostada Integral", "ingredients": ["180 g de pan integral familiar"],
+        "ingredients_raw": ["180 g de pan integral familiar"], "recipe": ["Tuesta."]}]}]
+    _cap_unrealistic_portions(days)
+    assert days[0]["meals"][0]["ingredients"][0].startswith("135 g")
+    days2 = [{"day": 1, "meals": [{
+        "name": "Panqueques", "ingredients": ["200 g de panqueques de avena"],
+        "ingredients_raw": ["200 g de panqueques de avena"], "recipe": ["Cocina."]}]}]
+    _cap_unrealistic_portions(days2)
+    assert days2[0]["meals"][0]["ingredients"][0].startswith("200 g"), "word-boundary: panqueques exento"
+
+
+def test_d_v3_tortas_singularized():
+    from humanize_ingredients import humanize_ingredient
+    assert humanize_ingredient("1 tortas pequeño de casabe").startswith("1 torta ")
+
+
 def test_e_three_or_fewer_untouched():
     from graph_orchestrator import _cap_unrealistic_portions
     days = [{"day": 1, "meals": [{

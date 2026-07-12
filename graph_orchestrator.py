@@ -24152,6 +24152,12 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         elif (cur_g > float(ORGAN_MEAT_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _ORGAN_MEAT_TOKENS)):
                             factor = float(ORGAN_MEAT_CAP_G) / cur_g
+                        # [P1-RECIPE-POLISH-5 v3 · 2026-07-12] 1.9) pan en GRAMOS sobre el techo de
+                        # 3 rebanadas (~45g c/u = 135g): el techo por CONTEO de rebanadas no ve las
+                        # líneas gram-lead que el humanize convierte a "rebanadas" DESPUÉS de los
+                        # caps (vivo: "4 rebanadas de Pan integral familiar" ≈ 180g evadió el cap).
+                        elif cur_g > 135.0 and _re.search(r"\bpan\b", il):
+                            factor = 135.0 / cur_g
                     # 2) tazas de aromáticos/hierbas/frutas-volumen sobre el techo
                     # [P1-REALISM-CAPS-EXT] lead con fracción unicode/mixta ("3¾ taza de melón") —
                     # el regex decimal previo no la parseaba y las líneas post-quantize la usan.
