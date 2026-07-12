@@ -207,8 +207,22 @@ _MEAL_VISION_PROMPT = (
     "describe brevemente lo que ves, da un nombre corto del platillo en "
     "espanol dominicano (max 6 palabras, ej: 'Mangu con salami y queso') y "
     "estima el TOTAL de calorias, gramos de proteina, gramos de carbohidratos "
-    "y gramos de grasas de LA PORCION VISIBLE en la foto (no por 100g). Se "
-    "realista con porciones dominicanas. Si NO es comida: is_food=false, "
+    "y gramos de grasas de LA PORCION VISIBLE en la foto (no por 100g). "
+    # [P1-MEAL-SCAN-DR-DISHES · 2026-07-12] Desambiguacion de platos criollos.
+    # Vivo (owner): foto de los tres golpes → gemma nombro el mangu 'arroz'.
+    # El mangu es la masa lisa mas comun del desayuno dominicano — merece
+    # regla explicita, igual que la suma por componente (450 kcal para un
+    # plato de ~750 era subestimacion tipica de estimar 'a ojo' el total).
+    "OJO con platos dominicanos: el MANGU es un pure COMPACTO y LISO de "
+    "platano verde majado (masa color crema, casi siempre coronada con "
+    "cebolla roja encurtida) - NO lo confundas con arroz, que se ve como "
+    "granos sueltos y separados. El desayuno tipico 'los tres golpes' es "
+    "mangu + huevo frito + salami frito + queso frito. Otros platos comunes: "
+    "la bandera (arroz + habichuelas + carne), sancocho, mofongo, tostones, "
+    "yuca hervida. Para las macros: estima cada componente del plato "
+    "POR SEPARADO (ej: mangu ~300 kcal, huevo frito ~110, 2 rodajas de "
+    "salami ~180, queso frito ~150) y SUMA - no adivines el total a ojo. "
+    "Se realista con porciones dominicanas. Si NO es comida: is_food=false, "
     "macros en 0 y meal_name vacio. Responde SOLO el JSON."
 )
 
