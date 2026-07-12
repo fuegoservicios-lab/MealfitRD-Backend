@@ -148,6 +148,21 @@ _CHAT_PLAN_PRUNE_KEYS = (
     "_shopping_coherence_block_history",
     "_archived_days",
     "calc_household_multiplier",
+    # [P1-CHAT-CLINICAL-TOOL · 2026-07-12] Reportes internos de QA del pipeline
+    # — el agente no los necesita para conversar y engordaban CADA turno del
+    # chat (audit del plan vivo del owner: dish_quality_report/variety_report/
+    # _review_issues_raw pueden ser KBs). Lo user-facing se queda: insights,
+    # micronutrient_report/advice, budget_reconciliation, goal_eta,
+    # _review_disclaimer, _quality_degraded*.
+    "_review_issues_raw",
+    "dish_quality_report",
+    "variety_report",
+    "_recipe_coherence_errors",
+    "_recent_chunk_lessons",
+    "_last_chunk_learning",
+    "data_provenance",
+    "resolution_coverage",
+    "_transform_gate_advisory_final",
 )
 
 

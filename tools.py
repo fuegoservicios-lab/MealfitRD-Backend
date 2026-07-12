@@ -3250,5 +3250,51 @@ def regenerate_full_day(user_id: str, day_number: int) -> str:
     )
 
 
+# ============================================================
+# [P1-CHAT-CLINICAL-TOOL · 2026-07-12] TOOL: Perfil Clínico bajo demanda
+# ============================================================
+# Los laboratorios NO se inyectan en cada turno (sensibles + tokens); el
+# agente los consulta SOLO cuando el usuario pregunta por ellos. Reusa el
+# builder SSOT de plan-gen (build_clinical_profile_context): mismos umbrales
+# y flags que ve el generador y el reviewer médico.
+
+
+@tool
+def check_clinical_profile(user_id: str) -> str:
+    """
+    Consulta el Perfil Clínico Avanzado del usuario: laboratorios (glucosa, HbA1c, colesterol, LDL/HDL, triglicéridos, creatinina, TFG, TSH, ácido úrico, hemoglobina, vitamina D), historial de peso, digestión y entrenamiento.
+    Úsala SOLO cuando el usuario pregunte por sus valores clínicos o laboratorios (ej: '¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis laboratorios afectan mi plan?'). Son datos sensibles: bajo demanda, NO en cada turno.
+    Al responder: cita los valores tal cual, interpreta con prudencia de coach (no diagnostiques) y recuérdale que esto NO sustituye una consulta médica.
+    """
+    # LIVE-TOOL CONTRACT: `user_id` viene force-overrideado por P0-AGENT-1.
+    logger.info(f"🩺 [TOOL EXECUTION] check_clinical_profile user={user_id}")
+    try:
+        from db import get_user_profile as _gup_cp
+        profile = _gup_cp(user_id) or {}
+        hp = profile.get("health_profile") or {}
+        cp = hp.get("clinical_profile") if isinstance(hp, dict) else None
+        if not isinstance(cp, dict) or not cp:
+            return (
+                "El usuario NO ha llenado su Perfil Clínico Avanzado. Invítalo con amabilidad: "
+                "Configuración → Perfil Clínico Avanzado (laboratorios, historial de peso, digestión) — "
+                "cada dato que complete afina su plan."
+            )
+        from prompts.plan_generator import build_clinical_profile_context
+        ctx = build_clinical_profile_context({"clinical_profile": cp})
+        if not (ctx or "").strip():
+            return (
+                "El Perfil Clínico existe pero aún no tiene valores accionables. "
+                "Sugiérele completar los laboratorios en Configuración → Perfil Clínico Avanzado."
+            )
+        return (
+            ctx
+            + "\n\nRecuerda al responder: cita los valores tal cual, interpreta con prudencia "
+            "(eres coach, no médico) y recomiéndale confirmar con un profesional de salud."
+        )
+    except Exception as e:
+        logger.error(f"❌ [TOOL] check_clinical_profile error: {e}")
+        return f"Error consultando el perfil clínico: {str(e)}"
+
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, regenerate_full_day]
+agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, regenerate_full_day, check_clinical_profile]
