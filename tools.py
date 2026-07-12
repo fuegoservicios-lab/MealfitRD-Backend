@@ -1398,6 +1398,28 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
 
             # En lugar de corromper la BD con ingredientes aleatorios,
             # abortamos limpiamente la transacción e informamos al Agente principal.
+            #
+            # [P1-MODIFY-HONEST-FAIL · 2026-07-12] El mensaje de fallo es
+            # REASON-AWARE. Pre-fix devolvía SIEMPRE "INVENTARIO INSUFICIENTE"
+            # aunque el fallo real fuera el validador de MACROS — vivo: con 64
+            # items en la Nevera, el agente le dijo al owner que sus
+            # ingredientes estaban "al borde de agotarse/reservados" (falso;
+            # los 2 intentos fallaron por drift de carbos 70g vs 37g target).
+            # Un fallo mal atribuido = usuario desconfiando de su Nevera.
+            _err_txt = str(e)
+            _n_pantry = len(clean_ingredients) if isinstance(clean_ingredients, list) else 0
+            if "MACROS FUERA" in _err_txt or "drift" in _err_txt.lower():
+                return (
+                    f"FALLO POR CONVERGENCIA DE MACROS — NO por falta de ingredientes "
+                    f"(la despensa del usuario tiene {_n_pantry} items disponibles): tras varios "
+                    f"intentos ningún plato cuadró con el objetivo de macros del slot. Último intento: "
+                    f"{_err_txt[:280]}. El plato original se mantuvo intacto. Informa al usuario del "
+                    f"motivo REAL (las propuestas se desviaban de sus macros, típico en slots de pocas "
+                    f"calorías) y ofrécele: (a) pedir el cambio con una dirección concreta "
+                    f"(ej: 'menos carbohidratos', 'algo con más proteína'), o (b) permitir 1-2 "
+                    f"ingredientes nuevos. PROHIBIDO decirle que le faltan ingredientes o que están "
+                    f"reservados — eso NO fue lo que pasó."
+                )
             return ("FALLO POR INVENTARIO INSUFICIENTE: Después de varios intentos, "
                     "no fue posible hacer este cambio respetando de forma estricta los ingredientes de la despensa. "
                     "Informa al usuario amablemente que el cambio fue revertido porque carece de los ingredientes "

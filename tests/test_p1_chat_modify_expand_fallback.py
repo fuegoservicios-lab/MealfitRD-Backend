@@ -22,9 +22,11 @@ with open(os.path.join(_BACKEND, "agent.py"), encoding="utf-8") as f:
 
 
 def _block():
-    i = _AG.find("P1-CHAT-MODIFY-EXPAND-FALLBACK")
+    # OJO: anclar en CÓDIGO único — el marker aparece antes en un comment del
+    # clamp de timeouts (lección primera-ocurrencia, 4ª vez hoy).
+    i = _AG.find("_expand_fallback_used = False")
     assert i != -1, "el fallback desapareció de execute_tools"
-    return _AG[i:i + 4200]
+    return _AG[max(0, i - 2500):i + 4200]
 
 
 def test_fallback_retries_expanded_once():
