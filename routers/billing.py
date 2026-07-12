@@ -10,7 +10,7 @@ from typing import Optional
 # Imports relativos al backend
 from auth import get_verified_user_id
 from db import execute_sql_query, execute_sql_write
-from knobs import _env_float, _env_bool, is_production
+from knobs import _env_float, _env_bool, _env_str, is_production
 from psycopg.types.json import Jsonb
 from rate_limiter import RateLimiter
 
@@ -322,12 +322,227 @@ def _build_paypal_plan_tier_map() -> dict[str, str]:
     return mapping
 
 
+# ---------------------------------------------------------------------------
+# [P1-BILLING-AMOUNT · 2026-07-12] Verificación de INTEGRIDAD DE MONTO server-side.
+#
+# I-Billing-1 cierra el TIER (server-derived del plan_id) pero NO el MONTO cobrado.
+# El cliente puede inyectar `plan.billing_cycles[].pricing_scheme.fixed_price` al
+# crear la suscripción PayPal (PaymentModal lo hace legítimamente para descuentos con
+# cupón) y cobrarse el PRIMER ciclo a un precio arbitrario, sin cupón válido. El tier
+# no escala (server-side), pero el monto del ciclo 1 sí es manipulable.
+#
+# Defensa (invariante hermana I-Billing-AMOUNT): si PayPal marca `plan_overridden`,
+# el precio fue sobrescrito → SOLO legítimo si un cupón válido (re-validado
+# server-side) lo justifica. Knob de 3 modos (off/warn/block, default WARN por
+# rollout seguro con caché PWA): warn detecta+alerta sin bloquear pagos legítimos;
+# block además 409ea SOLO cuando hay underpayment PROBADO (precio parseable < mínimo
+# esperado) — nunca bloquea el caso ambiguo (no-parseable / cupón no reenviado por
+# frontend viejo), fail-cheap. Promover a `block` tras smoke-test de PayPal sandbox
+# + días de warn limpio.
+# ---------------------------------------------------------------------------
+
+def _parse_price(value) -> Optional[float]:
+    try:
+        f = float(value)
+        return f if f >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_regular_fixed_price(billing_cycles: list) -> Optional[float]:
+    """Precio del ciclo REGULAR (o el primero) de una lista de billing_cycles PayPal."""
+    try:
+        chosen = None
+        for c in (billing_cycles or []):
+            if (c or {}).get("tenure_type") == "REGULAR":
+                chosen = c
+                break
+        if chosen is None and billing_cycles:
+            chosen = billing_cycles[0]
+        if chosen:
+            fp = ((chosen.get("pricing_scheme") or {}).get("fixed_price") or {})
+            return _parse_price(fp.get("value"))
+    except Exception:
+        pass
+    return None
+
+
+def _extract_override_price(sub_data: dict) -> Optional[float]:
+    """Best-effort: precio realmente pactado en la suscripción (plan embebido cuando
+    `plan_overridden`, o el último pago capturado). None si no parseable → fail-cheap."""
+    p = _extract_regular_fixed_price(((sub_data or {}).get("plan") or {}).get("billing_cycles") or [])
+    if p is not None:
+        return p
+    try:
+        lp = (((sub_data or {}).get("billing_info") or {}).get("last_payment") or {})
+        return _parse_price((lp.get("amount") or {}).get("value"))
+    except Exception:
+        return None
+
+
+async def _fetch_plan_list_price(plan_id, tier, access_token, paypal_api_base) -> Optional[float]:
+    """Precio de lista AUTORITATIVO del plan. Primero GET del plan en PayPal
+    (merchant-side, inmune a tampering del cliente); fallback a env
+    PAYPAL_PLAN_{TIER}[_ANNUAL]_PRICE. None si no se puede determinar → fail-cheap."""
+    if plan_id and access_token:
+        try:
+            async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
+                r = await client.get(
+                    f"{paypal_api_base}/v1/billing/plans/{plan_id}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if r.status_code == 200:
+                    p = _extract_regular_fixed_price(r.json().get("billing_cycles") or [])
+                    if p is not None:
+                        return p
+        except Exception as e:
+            logger.warning(f"[P1-BILLING-AMOUNT] GET plan {plan_id} falló: {type(e).__name__}")
+    for suffix in ("", "_ANNUAL"):
+        v = _parse_price(os.environ.get(f"PAYPAL_PLAN_{(tier or '').upper()}{suffix}_PRICE"))
+        if v is not None:
+            return v
+    return None
+
+
+async def _validate_discount_code(code: str, tier: str) -> Optional[dict]:
+    """Re-valida un código de descuento server-side (MISMAS reglas que
+    /api/discount/validate: is_active, vigencia, max_uses, applicable_tiers).
+    Retorna {'discount_percent': N} si es válido para el tier, o None. SSOT para el
+    lado de INTEGRIDAD (P1-BILLING-AMOUNT); el endpoint conserva sus mensajes de UX."""
+    code = (code or "").strip().upper()
+    tier = (tier or "").strip().lower()
+    if not code:
+        return None
+    rows = await _run_sync_db_in_thread(
+        lambda: execute_sql_query(
+            """
+            SELECT discount_percent, max_uses, current_uses, applicable_tiers,
+                   valid_from::text AS valid_from, valid_until::text AS valid_until
+              FROM public.discount_codes
+             WHERE code = %s AND is_active = TRUE
+            """,
+            (code,),
+            fetch_all=True,
+        )
+    )
+    if not rows:
+        return None
+    d = rows[0]
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    try:
+        if d.get("valid_from") and now < datetime.fromisoformat(d["valid_from"].replace("Z", "+00:00")):
+            return None
+        if d.get("valid_until") and now > datetime.fromisoformat(d["valid_until"].replace("Z", "+00:00")):
+            return None
+    except (ValueError, AttributeError):
+        return None
+    if d.get("max_uses") is not None and d.get("current_uses", 0) >= d["max_uses"]:
+        return None
+    applicable = d.get("applicable_tiers") or []
+    if applicable and tier and tier not in applicable:
+        return None
+    return {"discount_percent": d.get("discount_percent")}
+
+
+def _redeem_discount_code(code: str) -> None:
+    """Hardening: incrementa current_uses del cupón al otorgar el tier. Best-effort
+    (no fatal): sin esto un cupón con max_uses nunca se marcaba consumido (reuse
+    ilimitado). Atómico vía WHERE con guard de max_uses."""
+    code = (code or "").strip().upper()
+    if not code:
+        return
+    try:
+        execute_sql_write(
+            """
+            UPDATE public.discount_codes
+               SET current_uses = COALESCE(current_uses, 0) + 1
+             WHERE code = %s AND is_active = TRUE
+               AND (max_uses IS NULL OR COALESCE(current_uses, 0) < max_uses)
+            """,
+            (code,),
+        )
+    except Exception as e:
+        logger.warning(f"[P1-BILLING-AMOUNT] No se pudo redimir cupón {code}: {type(e).__name__}")
+
+
+async def _verify_subscription_amount(
+    *, sub_data, verified_plan_id, tier, coupon_code, access_token, paypal_api_base,
+    user_id, subscription_id,
+) -> None:
+    """Verifica que el monto pactado en la suscripción NO fue manipulado por debajo
+    del precio de lista (menos un descuento re-validado server-side). Alerta siempre
+    ante sospecha; en modo 'block' 409ea SOLO con underpayment PROBADO (fail-cheap)."""
+    mode = _env_str("MEALFIT_BILLING_VERIFY_AMOUNT", "warn", {"off", "warn", "block"}).lower()
+    if mode == "off" or not sub_data:
+        return
+    # Sin override → precio estándar del plan, sin manipulación posible.
+    if not bool(sub_data.get("plan_overridden")):
+        return
+
+    disc = await _validate_discount_code(coupon_code, tier)
+    discount_pct = disc.get("discount_percent") if disc else None
+
+    actual_price = _extract_override_price(sub_data)
+    list_price = await _fetch_plan_list_price(verified_plan_id, tier, access_token, paypal_api_base)
+    tol = _env_float("MEALFIT_BILLING_AMOUNT_TOLERANCE_PCT", 0.02)
+
+    expected_min = None
+    if list_price is not None:
+        expected_min = list_price * (1.0 - (float(discount_pct or 0) / 100.0))
+
+    proven_underpaid = (
+        actual_price is not None
+        and expected_min is not None
+        and actual_price < expected_min * (1.0 - tol)
+    )
+    # Sospecha = underpayment probado, O un override SIN cupón válido que lo justifique.
+    suspicious = proven_underpaid or (discount_pct is None)
+    if not suspicious:
+        return  # cupón válido + monto coherente
+
+    _persist_billing_alert(
+        alert_key=f"billing_price_tampering:{user_id}:{subscription_id}",
+        severity="critical",
+        title="Verify: posible manipulación del monto de la suscripción",
+        message=(
+            f"User {user_id}: sub {subscription_id} (plan {verified_plan_id}, tier {tier}) "
+            f"tiene plan_overridden con precio={actual_price} vs esperado_min={expected_min} "
+            f"(lista={list_price}, cupón={coupon_code or '∅'} → {discount_pct}%). "
+            f"proven_underpaid={proven_underpaid}, modo={mode}."
+        ),
+        metadata={
+            "user_id": user_id, "sub_id": subscription_id, "tier": tier,
+            "actual_price": actual_price, "list_price": list_price,
+            "expected_min": expected_min, "coupon": coupon_code or None,
+            "discount_pct": discount_pct, "proven_underpaid": proven_underpaid,
+        },
+    )
+    logger.warning(
+        f"⚠️ [P1-BILLING-AMOUNT] Sospecha de manipulación de monto: user={user_id} "
+        f"sub={subscription_id} actual={actual_price} expected_min={expected_min} "
+        f"proven_underpaid={proven_underpaid} modo={mode}"
+    )
+    # Bloquear SOLO con underpayment PROBADO (precio parseable < mínimo). El caso
+    # ambiguo (no-parseable / cupón no reenviado) queda en warn+alerta → fail-cheap,
+    # nunca bloquea un pago que no podemos PROBAR fraudulento.
+    if mode == "block" and proven_underpaid:
+        raise HTTPException(
+            status_code=409,
+            detail="El monto de la suscripción no coincide con el precio del plan. Contacta soporte.",
+        )
+
+
 @router.post("/verify")
 async def api_verify_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
     try:
         user_id = data.get("user_id")
         subscription_id = data.get("subscriptionID")
         client_hint_tier = (data.get("tier") or "").strip().lower()
+        # [P1-BILLING-AMOUNT · 2026-07-12] Cupón aplicado (opcional; retrocompat con
+        # frontend viejo que aún no lo reenvía). Se RE-VALIDA server-side — el
+        # discount_percent del cliente NO se confía.
+        coupon_code = (data.get("coupon_code") or "").strip().upper()
 
         if not user_id or not subscription_id or not client_hint_tier:
             raise HTTPException(status_code=400, detail="Missing parameters")
@@ -365,6 +580,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
 
         access_token = None
         verified_plan_id = None
+        sub_data = None  # [P1-BILLING-AMOUNT] capturado para la verificación de monto
 
         if env_ready and PAYPAL_CLIENT_ID and PAYPAL_SECRET:
             async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
@@ -439,6 +655,20 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         logger.info(
             f"✅ Subscripcion Verificada B2B ({subscription_id}) para usuario "
             f"{user_id}. Tier asignado server-side: {tier_to_assign}"
+        )
+
+        # [P1-BILLING-AMOUNT · 2026-07-12] Verificar integridad del MONTO ANTES de
+        # cancelar la sub vieja / aplicar el tier: si es tampering en modo 'block',
+        # 409ea sin haber tocado nada. En 'warn' (default) solo alerta y continúa.
+        await _verify_subscription_amount(
+            sub_data=sub_data,
+            verified_plan_id=verified_plan_id,
+            tier=tier_to_assign,
+            coupon_code=coupon_code,
+            access_token=access_token,
+            paypal_api_base=PAYPAL_API_BASE,
+            user_id=user_id,
+            subscription_id=subscription_id,
         )
 
         existing_row = await _run_sync_db_in_thread(
@@ -563,6 +793,16 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
                 status_code=500,
                 detail="Perfil no encontrado al aplicar el plan. Contacta soporte; tu pago está registrado.",
             )
+
+        # [P1-BILLING-AMOUNT · 2026-07-12] Hardening: marcar el cupón como consumido
+        # (best-effort) SOLO si re-valida (no quemar usos por un código inválido).
+        # Sin esto un cupón con max_uses nunca se marcaba usado → reuse ilimitado.
+        if coupon_code:
+            try:
+                if await _validate_discount_code(coupon_code, tier_to_assign):
+                    await _run_sync_db_in_thread(lambda: _redeem_discount_code(coupon_code))
+            except Exception as _e:
+                logger.warning(f"[P1-BILLING-AMOUNT] redención de cupón no fatal falló: {type(_e).__name__}")
 
         return {"success": True, "message": "Suscripción verificada y plan actualizado B2B."}
 
