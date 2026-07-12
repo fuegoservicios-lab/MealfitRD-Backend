@@ -11004,6 +11004,22 @@ def api_restore_plan(
                                 verified_user_id,
                             ),
                         )
+
+                        # 3d) [P1-HIST-RESTORE-MOVE · 2026-07-12] Consumir la fila SOURCE:
+                        #     "Reactivar" es MOVER, no copiar. Con la copia 3b-bis + el
+                        #     overwrite 3c, dejar el source vivo duplicaba el plan
+                        #     restaurado (activo + su gemelo archivado) y el Historial
+                        #     crecía +1 por cada swap (vivo 09:05Z: el owner tras 2
+                        #     ping-pongs — "siento que se están duplicando"). Su contenido
+                        #     ya vive en el target (3c); el estado anterior del target ya
+                        #     vive en la copia (3b-bis) → nada se pierde, el conteo queda
+                        #     constante. FKs seguras: plan_chunk_queue CASCADE (chunks ya
+                        #     cancelados en 3a-bis), telemetrías SET NULL, meal_plans_audit
+                        #     sin FK (forensics intacto).
+                        cur.execute(
+                            "DELETE FROM meal_plans WHERE id = %s AND user_id = %s",
+                            (source_plan_id, verified_user_id),
+                        )
         logger.info(
             "[P0-HIST-1] restore plan: user=%s target=%s source=%s "
             "cancelled_chunks=%d cancelled_source_chunks=%d "
