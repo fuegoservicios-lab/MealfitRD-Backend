@@ -8,11 +8,13 @@ import asyncio
 from pydantic import BaseModel, Field, field_validator
 from db_core import _storage_client
 from db_profiles import get_user_profile, log_api_usage
-from auth import get_verified_user_id, verify_api_quota
+# [P1-MEAL-SCAN-GEMMA · 2026-07-12] verify_api_quota removido del import: el
+# único consumidor era /upload, hoy quota-exempt (gemma local, costo LLM cero).
+from auth import get_verified_user_id
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import log_consumed_meal, get_consumed_meals_today, save_visual_entry
-from vision_agent import process_image_with_vision, get_multimodal_embedding
+from vision_agent import process_image_with_vision, get_multimodal_embedding, is_vision_local
 # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top — verificado que
 # `cron_tasks` NO importa `routers.diary` (no circular). El late import dentro
 # del handler era frágil: un refactor que renombrara `trigger_incremental_learning`
@@ -174,9 +176,16 @@ async def api_diary_upload(
     user_id: str = Form("guest"),
     session_id: str = Form(None),
     tz_offset_mins: int = Form(0),
-    verified_user_id: str = Depends(verify_api_quota),
-    # [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] throttle por user_id/IP, apilado
-    # sobre verify_api_quota (que es no-op para guests). Ver _VISION_UPLOAD_LIMITER.
+    # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Quota-exempt (doctrina P1-NEVERA-QUOTA-
+    # EXEMPT): el análisis corre en gemma LOCAL (Ollama vía túnel, costo LLM
+    # cero) — antes `verify_api_quota` devolvía 402 al cap mensual Y cada scan
+    # quemaba un crédito de planes (`get_monthly_api_usage` cuenta toda fila de
+    # api_usage sin filtrar endpoint). Anti-spam: _VISION_UPLOAD_LIMITER
+    # (10/60s por user/IP) + single-flight de GPU en vision_agent. Si algún día
+    # el provider vuelve a ser cloud pago (openai_compatible), `is_vision_local()`
+    # abajo reactiva el log de uso — revisar entonces si reponer el paywall.
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    # [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] throttle por user_id/IP.
     _rl_vision: Optional[str] = Depends(_VISION_UPLOAD_LIMITER),
 ):
     try:
@@ -304,12 +313,18 @@ async def api_diary_upload(
                 logger.error(f"⚠️ Error subiendo al object storage de visual_diary (¿Existe el bucket 'visual_diary_images'?): {sb_err}")
                 upload_success = False
 
-        # 2. Si no se pudo subir al object storage, fallar (evitar guardar localmente en la nube)
+        # 2. [P1-MEAL-SCAN-GEMMA · 2026-07-12] Storage OPCIONAL. Tras la
+        # migración a Neon `_storage_client = None` (db_core) y este paso
+        # abortaba con 500 ANTES de llegar al análisis de visión — el botón
+        # "Escanear comida" moría aquí aunque gemma estuviera vivo. La foto se
+        # analiza en memoria; sin storage solo se pierde la miniatura del
+        # Diario Visual (image_url vacía), no el análisis ni la description.
         if not upload_success:
-            logger.error("❌ No se pudo subir la imagen al object storage de visual_diary. Abortando.")
-            raise HTTPException(status_code=500, detail="Error uploading image to cloud storage.")
-            
-            
+            logger.info(
+                "📷 [P1-MEAL-SCAN-GEMMA] Sin object storage configurado — "
+                "la imagen se analiza en memoria y no se persiste (image_url vacía)."
+            )
+
         # 3. Procesar imagen con Visión SINCRÓNICAMENTE
         logger.info("\n-------------------------------------------------------------")
         logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
@@ -417,7 +432,11 @@ async def api_diary_upload(
                     )
             # ------------------------------------------------------------
 
-            if actual_user_id and actual_user_id != session_id:
+            # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Solo registra uso (cuenta al cap
+            # mensual) cuando el provider de visión es CLOUD pago — gemma local
+            # es costo cero y quemar crédito de planes por scan era el mismo bug
+            # de clase que P1-NEVERA-QUOTA-EXEMPT.
+            if actual_user_id and actual_user_id != session_id and not is_vision_local():
                 # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
                 await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")
 
@@ -440,6 +459,10 @@ async def api_diary_upload(
             "success": True,
             "is_food": is_food,
             "analysis_failed": analysis_failed,
+            # [P1-MEAL-SCAN-GEMMA · 2026-07-12] La GPU local es single-flight:
+            # `busy=True` distingue "hay otro scan en vuelo, reintenta en
+            # segundos" de "el analizador está caído" (analysis_failed).
+            "busy": vision_result.get("busy", False),
             "description": description,
             "image_url": image_url,
             # [P2-DIARY-SCAN-MACROS · 2026-05-30] Macros estimadas + nombre corto

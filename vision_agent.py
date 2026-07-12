@@ -1,6 +1,8 @@
 import os
 import io
 import base64
+import asyncio
+import threading
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado. ChatDeepSeek acepta
@@ -34,14 +36,41 @@ logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
 # Tooltip-anchor: P3-VISION-MODEL-KNOB (knob model preservado).
 _VISION_PROVIDER_DISABLED = "disabled"
 _VISION_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+# [P1-MEAL-SCAN-GEMMA · 2026-07-12] Tercer provider: Ollama local (gemma4:12b
+# vía túnel SSH reverso laptop→VPS, MISMO transporte que el escáner de Nevera
+# de routers/user_data.py — knobs compartidos MEALFIT_VISION_PROVIDER=ollama,
+# MEALFIT_OLLAMA_BASE_URL, MEALFIT_VISION_MODEL, MEALFIT_VISION_TIMEOUT_S).
+# Antes: `_env_str(choices={disabled, openai_compatible})` degradaba el valor
+# prod `ollama` a `disabled` con WARNING → "Escanear comida" muerto mientras
+# "Escanear mi nevera" (que lee el env crudo) funcionaba con el mismo knob.
+_VISION_PROVIDER_OLLAMA = "ollama"
+# "off" es el alias que usa el escáner de Nevera para apagar — aceptarlo aquí
+# evita el split-brain de un mismo env var con dos vocabularios.
+_VISION_PROVIDER_OFF = "off"
 _warned_vision_disabled = False
+
+# [P1-MEAL-SCAN-GEMMA · 2026-07-12] Single-flight COMPARTIDO de todo análisis
+# de visión local: la GPU de gemma (4GB VRAM) no soporta concurrencia, y tanto
+# "Escanear comida" (Dashboard) como "Escanear mi nevera" (Pantry) golpean el
+# mismo Ollama. Un solo Lock module-level para ambos surfaces.
+_VISION_SINGLE_FLIGHT_LOCK = threading.Lock()
+
+
+def get_vision_single_flight_lock() -> threading.Lock:
+    """Lock único para llamadas al modelo de visión local (Ollama)."""
+    return _VISION_SINGLE_FLIGHT_LOCK
 
 
 def _vision_provider() -> str:
     return _env_str(
         "MEALFIT_VISION_PROVIDER",
         _VISION_PROVIDER_DISABLED,
-        choices={_VISION_PROVIDER_DISABLED, _VISION_PROVIDER_OPENAI_COMPATIBLE},
+        choices={
+            _VISION_PROVIDER_DISABLED,
+            _VISION_PROVIDER_OFF,
+            _VISION_PROVIDER_OPENAI_COMPATIBLE,
+            _VISION_PROVIDER_OLLAMA,
+        },
     )
 
 
@@ -53,13 +82,47 @@ def _vision_base_url() -> str:
     return _env_str("MEALFIT_VISION_BASE_URL", "")
 
 
+def _ollama_base_url() -> str:
+    # Mismo default que routers/user_data.py (túnel SSH reverso en el VPS).
+    return (os.environ.get("MEALFIT_OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
+
+
+def _ollama_model_name() -> str:
+    # Crudo (sin _env_str) por paridad exacta con el escáner de Nevera.
+    return os.environ.get("MEALFIT_VISION_MODEL") or "gemma4:12b"
+
+
+def _ollama_timeout_s() -> int:
+    """Timeout del roundtrip Ollama — mismo knob/clamps que user_data.py.
+    gemma local por túnel es LENTO (30-120s por foto); el clamp de 30s del
+    knob MEALFIT_VISION_LLM_TIMEOUT_S (pensado para providers cloud) mataría
+    cada scan."""
+    try:
+        v = int(os.environ.get("MEALFIT_VISION_TIMEOUT_S", "240"))
+    except ValueError:
+        return 240
+    return min(600, max(30, v))
+
+
 def is_vision_enabled() -> bool:
     """True si hay provider de visión activo con config mínima completa."""
+    provider = _vision_provider()
+    if provider == _VISION_PROVIDER_OLLAMA:
+        # Defaults completos (base URL + modelo) — siempre operable.
+        return True
     return (
-        _vision_provider() == _VISION_PROVIDER_OPENAI_COMPATIBLE
+        provider == _VISION_PROVIDER_OPENAI_COMPATIBLE
         and bool(_vision_model_name())
         and bool(_vision_base_url())
     )
+
+
+def is_vision_local() -> bool:
+    """[P1-MEAL-SCAN-GEMMA] True si el análisis corre en el modelo LOCAL
+    (gemma vía Ollama, costo cero). routers/diary.py lo usa para NO quemar
+    crédito del cap mensual (`log_api_usage`) en scans gratis — doctrina
+    P1-NEVERA-QUOTA-EXEMPT: el paywall es para costo LLM real."""
+    return _vision_provider() == _VISION_PROVIDER_OLLAMA
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke del LLM Vision.
@@ -116,6 +179,106 @@ def _vision_disabled_payload() -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# [P1-MEAL-SCAN-GEMMA · 2026-07-12] Análisis de PLATO con gemma local (Ollama).
+# Espejo del escáner de Nevera (user_data._ollama_vision_scan) pero con schema
+# de comida: is_food + nombre corto + macros TOTALES del plato visible. El
+# `format` JSON-schema de Ollama fuerza salida parseable; think=False porque
+# gemma4 arranca en thinking-mode y devuelve content vacío sin él.
+# ---------------------------------------------------------------------------
+
+_MEAL_VISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "is_food": {"type": "boolean"},
+        "meal_name": {"type": "string"},
+        "description": {"type": "string"},
+        "calories": {"type": "number"},
+        "protein": {"type": "number"},
+        "carbs": {"type": "number"},
+        "healthy_fats": {"type": "number"},
+    },
+    "required": ["is_food", "meal_name", "description", "calories", "protein", "carbs", "healthy_fats"],
+}
+
+_MEAL_VISION_PROMPT = (
+    "Eres un nutricionista dominicano. Mira la foto y determina si contiene "
+    "comida (un plato servido, ingredientes o bebida calorica). Si es comida: "
+    "describe brevemente lo que ves, da un nombre corto del platillo en "
+    "espanol dominicano (max 6 palabras, ej: 'Mangu con salami y queso') y "
+    "estima el TOTAL de calorias, gramos de proteina, gramos de carbohidratos "
+    "y gramos de grasas de LA PORCION VISIBLE en la foto (no por 100g). Se "
+    "realista con porciones dominicanas. Si NO es comida: is_food=false, "
+    "macros en 0 y meal_name vacio. Responde SOLO el JSON."
+)
+
+# Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
+# los revalida, esto solo evita precargar absurdos en el modal.
+_MEAL_MACRO_CAPS = {"calories": 10000, "protein": 1000, "carbs": 2000, "healthy_fats": 1000}
+
+
+def _coerce_meal_scan(data: dict) -> dict:
+    """Normaliza la salida cruda de gemma al contrato de process_image_with_vision.
+    Pura (sin IO) para testearla directo: clamps, is_food=False ⇒ macros 0,
+    strings capadas. Fail-open a 0 en macros no numéricas."""
+    def _macro(key: str) -> int:
+        try:
+            n = int(round(float(data.get(key) or 0)))
+        except (TypeError, ValueError):
+            n = 0
+        return max(0, min(_MEAL_MACRO_CAPS[key], n))
+
+    is_food = bool(data.get("is_food"))
+    description = str(data.get("description") or "").strip()[:600]
+    meal_name = str(data.get("meal_name") or "").strip()[:120]
+    if not is_food:
+        return {
+            "description": description or "No se detectó comida en la imagen.",
+            "is_food": False,
+            "meal_name": "",
+            "calories": 0,
+            "protein": 0,
+            "carbs": 0,
+            "healthy_fats": 0,
+        }
+    result = {
+        "description": description or "Comida detectada en la foto.",
+        "is_food": True,
+        "meal_name": meal_name,
+        "calories": _macro("calories"),
+        "protein": _macro("protein"),
+        "carbs": _macro("carbs"),
+        "healthy_fats": _macro("healthy_fats"),
+    }
+    if result["calories"] > 0 or result["protein"] > 0:
+        # Paridad con el path openai_compatible: la estimación viaja también en
+        # la description que se persiste al Diario Visual (contexto del coach).
+        result["description"] += (
+            f" (Estimación: Calorías: {result['calories']}, Proteína: {result['protein']}g, "
+            f"Carbohidratos: {result['carbs']}g, Grasas Saludables: {result['healthy_fats']}g)"
+        )
+    return result
+
+
+def _ollama_meal_scan(image_b64: str) -> dict:
+    """Roundtrip síncrono a Ollama (invocar via asyncio.to_thread). Lanza en
+    error de red/JSON — el caller mapea al payload analysis_failed."""
+    import httpx
+    import json as _json
+    body = {
+        "model": _ollama_model_name(),
+        "stream": False,
+        "think": False,  # gemma4: thinking ON por default → content vacío sin esto
+        "format": _MEAL_VISION_SCHEMA,
+        "options": {"temperature": 0.1, "num_ctx": 8192},
+        "messages": [{"role": "user", "content": _MEAL_VISION_PROMPT, "images": [image_b64]}],
+    }
+    resp = httpx.post(f"{_ollama_base_url()}/api/chat", json=body, timeout=_ollama_timeout_s())
+    resp.raise_for_status()
+    content = ((resp.json().get("message") or {}).get("content")) or "{}"
+    return _coerce_meal_scan(_json.loads(content))
+
+
 async def process_image_with_vision(image_bytes: bytes) -> dict:
     """
     Toma los bytes de una imagen, usa el provider de visión configurado para
@@ -135,6 +298,35 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
             )
             _warned_vision_disabled = True
         return _vision_disabled_payload()
+
+    # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Provider LOCAL: gemma vía Ollama.
+    # Single-flight compartido con el escáner de Nevera (misma GPU): si hay
+    # otro análisis en vuelo devolvemos `busy=True` al instante en vez de
+    # encolar minutos — el modal muestra "escáner ocupado, reintenta".
+    if _vision_provider() == _VISION_PROVIDER_OLLAMA:
+        lock = get_vision_single_flight_lock()
+        if not lock.acquire(blocking=False):
+            payload = _vision_disabled_payload()
+            payload["busy"] = True
+            payload["description"] = "El escáner está procesando otra foto."
+            return payload
+        try:
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+            # to_thread: httpx síncrono con timeout de minutos NO puede correr
+            # en el event loop (workers=1 — estancaría TODAS las requests).
+            return await asyncio.to_thread(_ollama_meal_scan, image_b64)
+        except Exception as e:
+            # [P3-VISION-FAIL-ERROR-LOG] error-level para Sentry (paridad con
+            # el except del path openai_compatible más abajo).
+            logger.error(
+                f"❌ [VISION] meal-scan gemma falló (modelo={_ollama_model_name()!r}, "
+                f"base={_ollama_base_url()!r}): {type(e).__name__}: {e}"
+            )
+            payload = _vision_disabled_payload()
+            payload["description"] = "Error analizando imagen."
+            return payload
+        finally:
+            lock.release()
 
     try:
         # [P3-VISION-MODEL-KNOB · 2026-05-20] Modelo via knob (no hardcoded).

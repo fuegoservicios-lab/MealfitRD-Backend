@@ -401,7 +401,10 @@ async def api_delete_all_inventory(
 # Single-flight: el modelo local no soporta concurrencia (4GB VRAM) — segundo
 # scan simultáneo recibe 409 "escáner ocupado" en vez de encolar minutos.
 
-_VISION_SCAN_LOCK = None  # lazy threading.Lock (evita import module-level innecesario)
+# [P1-MEAL-SCAN-GEMMA · 2026-07-12] El single-flight vive en vision_agent
+# (get_vision_single_flight_lock) y se COMPARTE con "Escanear comida" del
+# Dashboard: ambos golpean la misma GPU local vía túnel — dos análisis
+# simultáneos la tumban igual aunque vengan de features distintos.
 
 _VISION_PROMPT = (
     "Eres un asistente de nutricion dominicano. Mira la foto de una nevera/despensa "
@@ -546,11 +549,10 @@ async def api_inventory_photo_scan(
     if not image_b64 or len(image_b64) > 8_000_000:
         raise HTTPException(status_code=422, detail="Imagen ausente o demasiado grande.")
 
-    global _VISION_SCAN_LOCK
-    if _VISION_SCAN_LOCK is None:
-        import threading
-        _VISION_SCAN_LOCK = threading.Lock()
-    if not _VISION_SCAN_LOCK.acquire(blocking=False):
+    # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Lock compartido con el meal-scan.
+    from vision_agent import get_vision_single_flight_lock
+    _scan_lock = get_vision_single_flight_lock()
+    if not _scan_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="El escáner está procesando otra foto — intenta en un momento.")
 
     try:
@@ -594,7 +596,7 @@ async def api_inventory_photo_scan(
             detail="No pudimos analizar la foto (el modelo de visión no respondió). Intenta de nuevo.",
         )
     finally:
-        _VISION_SCAN_LOCK.release()
+        _scan_lock.release()
 
     return {"items": results, "provider": provider}
 
