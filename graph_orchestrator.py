@@ -10028,6 +10028,14 @@ ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
 # re-introduce DESPUÉS del quantize final, dup unidad-alimento ("filete de Filete de"),
 # marca del súper filtrada de la receta ("(Campos)") y cap cítrico por comida.
 FINALIZE_DISPLAY_POLISH = _env_bool("MEALFIT_FINALIZE_DISPLAY_POLISH", True)
+# [P2-STEP-DECIMAL-POLISH · 2026-07-24] Hermano del anterior para el TEXTO de los pasos, que el
+# pulido de arriba nunca miró: "Calienta 0.25 cda de aceite" (plan a060108b). Display puro (los
+# pasos no alimentan macros ni lista). Rollback: MEALFIT_STEP_DECIMAL_POLISH=false.
+STEP_DECIMAL_POLISH_ENABLED = _env_bool("MEALFIT_STEP_DECIMAL_POLISH", True)
+# [P2-RICE-WATER-RATIO · 2026-07-24] Corrige el agua del arroz cuando el paso pide >3:1 (el
+# locrio del plan a060108b pedía 2 tazas de agua para ¼ taza de arroz = 8:1, o sea sopa).
+# Rollback: MEALFIT_RICE_WATER_RATIO=false.
+RICE_WATER_RATIO_ENABLED = _env_bool("MEALFIT_RICE_WATER_RATIO", True)
 # [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] (review vivo: los pasos 💪 del closer leen bolt-on) fusiona el
 # paso 💪 de complemento en el "El Toque de Fuego" cuando existe (platos cocinados — el caso visible), en vez
 # de dejarlo como paso APARTE. Platos no-cook puros (sin TdF) mantienen el 💪 (ya coherente antes del Montaje).
@@ -21306,6 +21314,24 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"display_polished={_n_pol}")
     except Exception:
         pass
+    # [P2-STEP-DECIMAL-POLISH · 2026-07-24] Mismo pulido, para el TEXTO de los pasos: el de
+    # arriba solo recorre ingredients/ingredients_raw, así que "Calienta 0.25 cda de aceite"
+    # llegaba intacto al usuario.
+    try:
+        _n_sd = _polish_recipe_step_decimals(days)
+        if _n_sd:
+            total += _n_sd
+            parts.append(f"step_decimals={_n_sd}")
+    except Exception:
+        pass
+    # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
+    try:
+        _n_rw = _rice_water_ratio_fix(days)
+        if _n_rw:
+            total += _n_rw
+            parts.append(f"rice_water={_n_rw}")
+    except Exception:
+        pass
     # [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] fusiona el paso 💪 del closer en el TdF (platos cocinados) —
     # persist boundary / chunks semanas 2+ (paridad con assemble).
     try:
@@ -25816,6 +25842,188 @@ def _dedup_redundant_closer_steps(days) -> int:
         return removed
     except Exception as _dd_e:
         logger.warning(f"[P2-CLOSER-STEP-BOUNDARY-DEDUP] no-op: {type(_dd_e).__name__}: {_dd_e}")
+        return 0
+
+
+# [P2-STEP-DECIMAL-POLISH · 2026-07-24] Unidades de medida en las que un decimal delante es
+# SIEMPRE una cantidad de cocina. Lista blanca a propósito: sin ella, un `\d+\.\d+` suelto se
+# comería temperaturas ("cocina a 71.5°C"), tiempos ("1.5 horas") y tamaños ("cubos de 1.5 cm"),
+# que sí se escriben con decimal y leerlos como "1½ horas" sería peor que el problema original.
+_STEP_QTY_UNITS = (
+    "cdas", "cda", "cucharadas", "cucharada", "cdtas", "cdta", "cucharaditas", "cucharadita",
+    "tazas", "taza", "libras", "libra", "lb", "onzas", "onza", "oz", "kg", "gramos", "gramo",
+    "gr", "g", "ml", "litros", "litro", "dientes", "diente", "hojas", "hoja", "rebanadas",
+    "rebanada", "pizcas", "pizca", "unidades", "unidad", "latas", "lata", "potes", "pote",
+)
+_STEP_DECIMAL_RE = _re.compile(
+    r"(?<![\w.,])(\d+[.,]\d+)(\s+)(?=(?:" + "|".join(_STEP_QTY_UNITS) + r")\b)",
+    _re.IGNORECASE,
+)
+
+
+def _polish_recipe_step_decimals(days) -> int:
+    """[P2-STEP-DECIMAL-POLISH · 2026-07-24] Los PASOS de receta no pueden citar decimales crudos.
+
+    Defecto en vivo (plan a060108b, revisión de recetas del owner): pasos como
+        "El Toque de Fuego: Calienta **0.25 cda** de aceite de oliva en un sartén…"
+        "Mise en place: Mide ½ taza de avena, **0.33 taza** de leche, ¼ cdta de canela…"
+    — el segundo mezcla fracción bonita y decimal crudo EN LA MISMA FRASE. Nadie escribe
+    "0.99 cda" en una receta.
+
+    Por qué no lo cubría el pulido existente: `_polish_finalize_display` recorre
+    `ingredients`/`ingredients_raw` y NUNCA los pasos. Y los decimales viven en
+    `ingredients_raw` **por diseño** (es la fuente de macros y de la lista de compras, no se
+    toca) — el error no es que existan, es que el texto del paso los copie.
+
+    Los pasos son superficie 100% de display: no alimentan macros, lista ni medidores. Por eso
+    esta pasada es segura y NO toca ningún número fuera de la lista blanca de unidades.
+    Reusa `number_to_fraction_str` (mismo conversor que el display de ingredientes) para que la
+    receta y la lista hablen igual. Idempotente. tooltip-anchor: P2-STEP-DECIMAL-POLISH"""
+    if not STEP_DECIMAL_POLISH_ENABLED:
+        return 0
+    try:
+        from humanize_ingredients import number_to_fraction_str as _n2f
+    except Exception:
+        return 0
+    changed = 0
+    try:
+        for _d in days or []:
+            if not isinstance(_d, dict):
+                continue
+            for meal in (_d.get("meals") or []):
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list):
+                    continue
+                for i, s in enumerate(rec):
+                    if not isinstance(s, str) or "." not in s and "," not in s:
+                        continue
+
+                    def _sub(m):
+                        try:
+                            _v = float(m.group(1).replace(",", "."))
+                        except (TypeError, ValueError):
+                            return m.group(0)
+                        _pretty = _n2f(_v)
+                        # `number_to_fraction_str` devuelve "" para <=0 y puede redondear a "0"
+                        # (0.1 cdta → sigue siendo una pizca real): ante duda, dejar intacto.
+                        if not _pretty or _pretty == "0":
+                            return m.group(0)
+                        return f"{_pretty}{m.group(2)}"
+
+                    new_s = _STEP_DECIMAL_RE.sub(_sub, s)
+                    if new_s != s:
+                        rec[i] = new_s
+                        changed += 1
+        if changed:
+            logger.info(f"🔢 [P2-STEP-DECIMAL-POLISH] {changed} paso(s) con decimal crudo "
+                        f"reescritos a fracción de cocina.")
+        return changed
+    except Exception as _sd_e:
+        logger.warning(f"[P2-STEP-DECIMAL-POLISH] no-op: {type(_sd_e).__name__}: {_sd_e}")
+        return 0
+
+
+# [P2-RICE-WATER-RATIO · 2026-07-24] Ratios de cocción del arroz (agua : arroz en seco).
+# El blanco absorbe ~2:1 y el integral ~2.5:1. `_MAX` es el umbral de intervención: por debajo
+# no tocamos nada (hay estilos más caldosos, y el asopao es un plato legítimo); por encima ya
+# no es una preferencia sino un error de cocción.
+_RICE_WATER_TARGET_BLANCO = 2.0
+_RICE_WATER_TARGET_INTEGRAL = 2.5
+_RICE_WATER_MAX_RATIO = 3.0
+_RICE_QTY_RE = _re.compile(
+    r"(?<![\w.,])(\d+(?:[.,]\d+)?|[½¼¾⅓⅔])\s*(?:taza|tazas)\s+de\s+arroz", _re.IGNORECASE)
+_STEP_WATER_RE = _re.compile(
+    r"(?<![\w.,])(\d+(?:[.,]\d+)?|[½¼¾⅓⅔])(\s*)(tazas?)(\s+de\s+agua)", _re.IGNORECASE)
+
+
+def _rice_water_ratio_fix(days) -> int:
+    """[P2-RICE-WATER-RATIO · 2026-07-24] Corrige el agua del arroz cuando el paso pide una
+    cantidad que no cocina arroz: hace sopa.
+
+    Defecto en vivo (plan a060108b): "Locrio de Pescado Blanco" con `¼ taza de arroz blanco` en
+    la lista y, en el paso, *"Agrega el arroz, los guisantes … y **2 tazas de agua caliente**"* —
+    **8:1**. El bowl de pollo pedía 1 taza para ¼ de arroz integral (4:1). Con esas proporciones
+    el plato no sale; no es una cuestión de gusto.
+
+    Por qué determinista y no un gate del revisor: mandarlo a rechazo cuesta una regeneración
+    entera (los rechazos son el driver de costo medido del pipeline) para arreglar una división.
+
+    Guardas:
+      - Solo actúa por encima de `_RICE_WATER_MAX_RATIO` (3:1) — el asopao y los estilos
+        caldosos quedan intactos.
+      - **Si la comida declara el agua como INGREDIENTE, no toca nada**: corregir solo el paso
+        dejaría lista y receta diciendo cosas distintas, que es el bug que intentamos evitar.
+      - Necesita la cantidad de arroz en tazas; si no la encuentra, no inventa.
+    tooltip-anchor: P2-RICE-WATER-RATIO"""
+    if not RICE_WATER_RATIO_ENABLED:
+        return 0
+    _FRAC = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3, "⅔": 2.0 / 3}
+
+    def _num(tok: str):
+        tok = (tok or "").strip()
+        if tok in _FRAC:
+            return _FRAC[tok]
+        try:
+            return float(tok.replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+
+    fixed = 0
+    try:
+        from humanize_ingredients import number_to_fraction_str as _n2f
+    except Exception:
+        return 0
+    try:
+        for _d in days or []:
+            if not isinstance(_d, dict):
+                continue
+            for meal in (_d.get("meals") or []):
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list) or not rec:
+                    continue
+                ings = [str(x) for x in (meal.get("ingredients") or [])]
+                ings += [str(x) for x in (meal.get("ingredients_raw") or [])]
+                blob = " | ".join(ings)
+                if _re.search(r"\bde\s+agua\b", blob, _re.IGNORECASE):
+                    continue  # el agua es ingrediente → arreglarlo acá desincronizaría la lista
+                _m_rice = _RICE_QTY_RE.search(blob) or _RICE_QTY_RE.search(" ".join(str(s) for s in rec))
+                if not _m_rice:
+                    continue
+                rice = _num(_m_rice.group(1))
+                if not rice or rice <= 0:
+                    continue
+                integral = bool(_re.search(r"arroz\s+integral", blob, _re.IGNORECASE))
+                target = rice * (_RICE_WATER_TARGET_INTEGRAL if integral else _RICE_WATER_TARGET_BLANCO)
+                for i, s in enumerate(rec):
+                    if not isinstance(s, str):
+                        continue
+
+                    def _sub(m):
+                        nonlocal fixed
+                        water = _num(m.group(1))
+                        if not water or water <= target or (water / rice) <= _RICE_WATER_MAX_RATIO:
+                            return m.group(0)
+                        _pretty = _n2f(target)
+                        if not _pretty or _pretty == "0":
+                            return m.group(0)
+                        _unit = "taza" if target <= 1.0 else "tazas"
+                        fixed += 1
+                        logger.info(
+                            f"🍚 [P2-RICE-WATER-RATIO] {m.group(1)} → {_pretty} tazas de agua "
+                            f"para {rice:g} taza(s) de arroz{' integral' if integral else ''} "
+                            f"| meal={str(meal.get('name'))[:40]}")
+                        return f"{_pretty}{m.group(2)}{_unit}{m.group(4)}"
+
+                    new_s = _STEP_WATER_RE.sub(_sub, s)
+                    if new_s != s:
+                        rec[i] = new_s
+        return fixed
+    except Exception as _rw_e:
+        logger.warning(f"[P2-RICE-WATER-RATIO] no-op: {type(_rw_e).__name__}: {_rw_e}")
         return 0
 
 
