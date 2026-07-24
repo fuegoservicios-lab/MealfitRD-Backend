@@ -3556,6 +3556,18 @@ class PlanState(TypedDict):
     # reset vive en `retry_reflection_node`, igual que el hermano).
     _surgical_reject_attempted: bool
 
+    # [P1-HARDEN-POOLS-CANARY-GATING · 2026-07-24] Cohortes de los dos canarios vivos.
+    # DEBEN estar declaradas acá o LangGraph las DESCARTA del state: `plan_skeleton_node`
+    # las retorna, el schema estricto las filtra, y `final_state.get(...) or "on"` en la
+    # métrica `clinical_band` cae siempre al fallback → el 100% de la flota etiquetada "on"
+    # sin importar la cohorte real (verificado en Neon: 80/80 filas con tag desde 2026-07-09
+    # dicen "on" con el master switch OFF, o sea con el enforcer sin correr NUNCA).
+    # Es exactamente el modo de fallo que el bloque CONTRATO de abajo advierte (P1-G,
+    # `_token_buffers` filtrado por strict-schema). Sin esto, encender cualquiera de los dos
+    # canarios produce datos que PARECEN un A/B y no lo son.
+    _harden_pools_cohort: str
+    _self_critique_cohort: str
+
     # ============================================================
     # [P2-CANDIDATE-A · 2026-05-08] CONTRATO: claves que NO viven en PlanState.
     # ------------------------------------------------------------
@@ -6583,10 +6595,15 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # LLM = build_day_assignment_context). No-op mientras HARDEN_POOLS_ENABLED=False (default). Mismos
     # objetos lista in-place → todos los consumidores (prompt, egg-diversifier, scrub post-gen) ven los
     # pools endurecidos. Fail-safe: si el enforcer revienta, se usa el skeleton del LLM.
+    # [P1-HARDEN-POOLS-CANARY-GATING · 2026-07-24] La cohorte se evalúa UNA vez: la misma que
+    # decide si el enforcer corre es la que se reporta al state (y de ahí a `clinical_band`).
+    # Antes el enforcer se invocaba sin cohorte → con un canario real (PCT>0) endurecía al 100%
+    # mientras la telemetría etiquetaba a media flota como control.
+    _a1_cohort = _harden_pools_canary_cohort(state)
     try:
-        _harden_counts = harden_day_pools(skeleton, form_data, None)
+        _harden_counts = harden_day_pools(skeleton, form_data, None, cohort=_a1_cohort)
         if any(_harden_counts.values()):
-            logger.info(f"🔒 [A1-HARDEN-POOLS] {_harden_counts}")
+            logger.info(f"🔒 [A1-HARDEN-POOLS] cohorte={_a1_cohort} {_harden_counts}")
     except Exception as _hp_oe:
         logger.warning(f"[A1-HARDEN-POOLS] enforcer falló (usa pools del LLM): {type(_hp_oe).__name__}: {_hp_oe}")
 
@@ -6603,7 +6620,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         "attempt": attempt,
         "_cached_context": ctx,
         # [A1-HARDEN-POOLS] cohorte determinista del canario (default 'on'; slice OFF vs ON en clinical_band)
-        "_harden_pools_cohort": _harden_pools_canary_cohort(state),
+        # [P1-HARDEN-POOLS-CANARY-GATING] Se reporta la MISMA que gateó al enforcer arriba.
+        "_harden_pools_cohort": _a1_cohort,
     }
 
 
@@ -6621,16 +6639,29 @@ def _gate_label_of(item) -> str:
     return None
 
 
-def harden_day_pools(skeleton: dict, form_data: dict, conditions=None) -> dict:
+def harden_day_pools(skeleton: dict, form_data: dict, conditions=None, *, cohort: str = None) -> dict:
     """[A1-HARDEN-POOLS · 2026-07-09] Enforcer determinista de los pools por día. Muta
     `skeleton['days'][*]['protein_pool'|'carb_pool'|'fruit_pool']` IN-PLACE (mismos objetos lista que
     lee el day-generator en build_day_assignment_context) ANTES de que el LLM los lea, de modo que las
     clases de identidad se vuelven inalcanzables por construcción. Cada clase gateada por su knob (todas
     OFF por default → no-op). Retorna conteos para telemetría. NO retira ningún backstop post-hoc.
-    tooltip-anchor: A1-HARDEN-POOLS"""
+    tooltip-anchor: A1-HARDEN-POOLS
+
+    [P1-HARDEN-POOLS-CANARY-GATING · 2026-07-24] `cohort` = veredicto de
+    `_harden_pools_canary_cohort` para ESTE plan; 'off' → no-op (grupo de control del canario).
+
+    Pre-fix el canario etiquetaba pero NO gateaba: el call site invocaba sin cohorte, así que con
+    `HARDEN_POOLS_CANARY_PCT=50` el enforcer corría para el 100% de los planes mientras la métrica
+    `clinical_band` etiquetaba a la mitad como control. El A/B no salía incompleto — salía INVERTIDO
+    en media muestra, sugiriendo que la restricción dura no sirve. Con el default `PCT=0` (todos 'on')
+    el tag era honesto por accidente, así que el bug solo aparecía al configurar un canario real.
+
+    `cohort=None` = sin canario → aplica (semántica previa, para callers fuera del experimento)."""
     counts = {"condition_removed": 0, "saltcured_removed": 0, "sameday_bound": 0, "crossday_capped": 0,
               "main_arity_added": 0}
     if not HARDEN_POOLS_ENABLED:
+        return counts
+    if cohort == "off":
         return counts
     days = (skeleton or {}).get("days") or []
     if not days:
