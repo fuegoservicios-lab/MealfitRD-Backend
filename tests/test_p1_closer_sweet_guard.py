@@ -50,9 +50,22 @@ def test_no_savory_protein_into_sweet_meal():
 
 
 def test_savory_protein_into_savory_meal_ok():
-    savory = _meal("Queso de Hoja al Vapor con Coliflor y Batata")
+    # [P1-TOPUP-DISH-COHERENCE · 2026-07-24] El fixture original era "Queso de Hoja al Vapor
+    # con Coliflor y Batata". La INTENCIÓN del test (un plato salado sí recibe el cierre de
+    # proteína) sigue vigente, pero ese nombre choca con una regla añadida después: un plato
+    # cuyo PROTAGONISTA es el queso ya no acepta que le peguen carne al lado — es justo el
+    # patrón que el owner marcó ("pechuga de pollo a la plancha" sobre un queso guisado).
+    # Se cambia el fixture a un salado sin protagonista proteico; la aserción no se toca.
+    savory = _meal("Coliflor Salteada con Batata y Berenjena")
     added = g._close_protein_gap_for_meal(savory, 25, None, _CANDS)
     assert added > 0, "en plato salado SÍ debe cerrar el piso de proteína"
+
+
+def test_plato_con_queso_protagonista_no_recibe_carne():
+    """[P1-TOPUP-DISH-COHERENCE · 2026-07-24] La contraparte del cambio de fixture de arriba."""
+    cheesy = _meal("Queso de Hoja al Vapor con Coliflor y Batata")
+    added = g._close_protein_gap_for_meal(cheesy, 25, None, _CANDS)
+    assert added == 0, "el queso es el plato: no se le pega camarón/pollo al lado"
 
 
 def test_seafood_is_savory():

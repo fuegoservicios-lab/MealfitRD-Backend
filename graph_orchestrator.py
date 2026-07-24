@@ -10244,6 +10244,10 @@ CLOSER_SWEET_NO_LEGUME = _env_bool("MEALFIT_CLOSER_SWEET_NO_LEGUME", True)
 # Hermano del sweet-guard: acota el pool y degrada honesto en vez de forzar el combo.
 # Rollback: MEALFIT_CLOSER_NO_DOUBLE_MAIN=false. tooltip-anchor: P1-CLOSER-NO-DOUBLE-MAIN
 CLOSER_NO_DOUBLE_MAIN_ENABLED = _env_bool("MEALFIT_CLOSER_NO_DOUBLE_MAIN", True)
+# [P1-TOPUP-DISH-COHERENCE · 2026-07-24] Aplica el MISMO criterio de plato al rescate de
+# proteína (), que era el camino sin blindar: por ahí entraron los 4
+# bolt-on del plan 134591d5. Rollback: MEALFIT_TOPUP_DISH_COHERENCE=false.
+TOPUP_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_TOPUP_DISH_COHERENCE", True)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Congruencia del closer por token ESPECÍFICO del nombre (ricotta/mozzarella/
 # pollo) en vez del primer token genérico ("queso"). Cierra el bug "batido con ricotta recibe un 2º queso
 # (mozzarella)". Flip a False revierte al match por primer-token. tooltip-anchor: P1-CLOSER-COHERENCE
@@ -14632,17 +14636,52 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
                 return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
         _name_low = _sa(str(meal.get("name", "")).lower())
         _no_cook = any(b in _name_low for b in _NO_COOK_BLENDED)
-        best = None  # (leanness, info)
-        for p in (approved_proteins or []):
-            info = db.lookup(p)
-            if info and info.protein >= 5:
-                if _no_cook and any(t in _sa(str(info.name).lower()) for t in _RAW_EGG_TERMS):
-                    continue  # huevo crudo en batido prohibido → probar otra proteína del pool
-                leanness = info.protein / max(info.kcal, 1.0)  # g proteína por kcal
-                if best is None or leanness > best[0]:
-                    best = (leanness, info)
+        # [P1-TOPUP-DISH-COHERENCE · 2026-07-24] Mismo criterio de plato que el cerrador (SSOT
+        # `_dish_coherence_filter`): este rescate solo tenía el guard de huevo-crudo, y por ahí
+        # entraron los 4 bolt-on del plan 134591d5 (pollo sobre queso guisado, atún sobre
+        # bollitos de queso, huevo en un bowl dulce, 2º pescado sobre tilapia).
+        _coherent = (_dish_coherence_filter(meal, _sa) if TOPUP_DISH_COHERENCE_ENABLED
+                     else (lambda _n: True))
+
+        def _pick(pred):
+            """La más MAGRA que pase `pred` (mayor proteína/kcal = menor costo calórico)."""
+            _best = None
+            for p in (approved_proteins or []):
+                info = db.lookup(p)
+                if not info or info.protein < 5:
+                    continue
+                _nlow = _sa(str(info.name).lower())
+                if _no_cook and any(t in _nlow for t in _RAW_EGG_TERMS):
+                    continue  # huevo crudo en batido prohibido → probar otra del pool
+                if not pred(_nlow):
+                    continue
+                _lean = info.protein / max(info.kcal, 1.0)
+                if _best is None or _lean > _best[0]:
+                    _best = (_lean, info)
+            return _best
+
+        best = _pick(_coherent)
+        # [P1-CLOSER-NO-DUP-CHEESE · paridad 2026-07-24] Si el plato YA tiene queso, preferir un
+        # candidato que no lo sea; pero es PREFERENCIA, no prohibición: sin alternativa se acepta
+        # el queso antes que dejar la comida bajo el piso de proteína (mismo criterio del cerrador).
+        if best is not None and CLOSER_NO_DUP_PROTEIN and TOPUP_DISH_COHERENCE_ENABLED:
+            _meal_blob = _sa((str(meal.get("name", "")) + " " + " ".join(
+                str(i) for i in (meal.get("ingredients") or []))).lower())
+            _has_cheese = any(h in _meal_blob for h in _CLOSER_CHEESE_HINT)
+            _is_cheese = any(h in _sa(str(best[1].name).lower()) for h in _CLOSER_CHEESE_HINT)
+            if _has_cheese and _is_cheese:
+                _alt = _pick(lambda n: _coherent(n) and not any(h in n for h in _CLOSER_CHEESE_HINT))
+                if _alt is not None:
+                    logger.info(f"🧀 [P1-CLOSER-NO-DUP-CHEESE/topup] plato ya tiene queso → "
+                                f"'{_alt[1].name}' en vez de un 2º queso ('{best[1].name}') | "
+                                f"meal={str(meal.get('name'))[:34]}")
+                    best = _alt
         if best is None:
-            return 0  # nada con proteína real en el pool → fail-safe, no inventar
+            # Coherencia sin candidato viable: el piso se cubre en otra comida (degradación
+            # honesta, mismo criterio que el guard dulce del cerrador) en vez de forzar el combo.
+            logger.info(f"🍽️ [P1-TOPUP-DISH-COHERENCE] sin proteína compatible con el plato → "
+                        f"no se pega ninguna | meal={str(meal.get('name'))[:40]}")
+            return 0  # nada con proteína real y coherente en el pool → fail-safe, no inventar
         info = best[1]
         gap = max(0.0, fill_to_g - cur_p)
         grams = int(round(gap / (info.protein / 100.0)))
@@ -14929,6 +14968,54 @@ _BEVERAGE_MEAL_MARKERS = ("infusion", "manzanilla", "leche tibia", "leche calien
 _MEAT_MARKER_RE = _re.compile(
     r"\b(" + "|".join(_re.escape(_m) for _m in _MEAT_PROTEIN_HINT) + r")(?:s|es|as|os|t)?\b"
 )
+
+
+def _dish_coherence_filter(meal: dict, strip_accents_fn):
+    """[P1-TOPUP-DISH-COHERENCE · 2026-07-24] SSOT del criterio "¿esta proteína pega en este
+    plato?". Devuelve un predicado `nombre_normalizado -> bool`.
+
+    Nace de un fallo de PARIDAD: había dos caminos que añaden proteína y solo uno estaba
+    blindado. `_close_protein_gap_for_meal` tenía guard dulce + no-dup-cheese + no-double-main;
+    `_protein_topup_meal` (el rescate de comidas bajo 12 g) solo tenía el de huevo-crudo. Por
+    ahí entraron los 4 casos del plan 134591d5: pechuga de pollo sobre un queso blanco guisado,
+    una lata de atún sobre unos bollitos rellenos de queso, huevo en un bowl dulce de batata con
+    canela, y un segundo pescado en un plato que ya llevaba tilapia.
+
+    Copiar los guards al segundo sitio habría reproducido el bug que los separó, así que el
+    criterio vive UNA vez y lo consultan ambos. Si mañana aparece un tercer camino, que llame
+    a esta función.
+
+    Reglas (idénticas a las que ya aplicaba el cerrador):
+      - plato dulce  → fuera carnes/pescados (y legumbres si `CLOSER_SWEET_NO_LEGUME`)
+      - ya tiene proteína animal principal → fuera OTRA principal (legumbre/huevo/lácteo sí)
+    El "ya tiene queso" NO se filtra acá: es una PREFERENCIA (mejor huevo que un 2º queso) y
+    la resuelve el caller ordenando candidatos, porque nunca debe sacrificar el piso de
+    proteína. tooltip-anchor: P1-TOPUP-DISH-COHERENCE"""
+    try:
+        sweet = CLOSER_DISH_COHERENCE_ENABLED and _is_sweet_meal(meal, strip_accents_fn)
+        # El protagonista no siempre es animal: "Queso Blanco Guisado" y "Bollitos Rellenos de
+        # Queso" tienen el queso como plato, y pegarles pollo o una lata de atún al lado es tan
+        # incoherente como un segundo pescado. El queso cuenta cuando está en el NOMBRE — ahí es
+        # de lo que va el plato; en la lista de ingredientes puede ser un topping.
+        _nm = strip_accents_fn(str(meal.get("name", "")).lower())
+        _cheese_dish = any(h in _nm for h in _CLOSER_CHEESE_HINT)
+        has_main = (CLOSER_DISH_COHERENCE_ENABLED and CLOSER_NO_DOUBLE_MAIN_ENABLED
+                    and (_meal_has_main_animal_protein(meal, strip_accents_fn) or _cheese_dish))
+    except Exception:
+        sweet = has_main = False
+
+    def _ok(name_low: str) -> bool:
+        try:
+            nlow = strip_accents_fn(str(name_low).lower())
+            if (sweet or has_main) and any(h in nlow for h in _MEAT_PROTEIN_HINT):
+                return False
+            if sweet and CLOSER_SWEET_NO_LEGUME and any(h in nlow for h in _LEGUME_PROTEIN_HINT):
+                return False
+            return True
+        except Exception:
+            return True  # fail-open: ante la duda, el comportamiento previo
+
+    return _ok
 
 
 def _meal_has_main_animal_protein(meal: dict, strip_accents_fn) -> bool:
@@ -15471,10 +15558,12 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         # que el guard dulce de arriba, del que este es hermano directo.
         # Escalar la proteína existente sigue teniendo prioridad (PROTEIN_CLOSER_SCALE_FIRST
         # corre antes); esto solo acota el FALLBACK de pegar una nueva.
-        if (CLOSER_DISH_COHERENCE_ENABLED and CLOSER_NO_DOUBLE_MAIN_ENABLED
-                and _pool and _meal_has_main_animal_protein(meal, _sa)):
-            _pool_no_second_main = [(info, nlow) for (info, nlow) in _pool
-                                    if not any(h in nlow for h in _MEAT_PROTEIN_HINT)]
+        # [P1-TOPUP-DISH-COHERENCE · 2026-07-24] El criterio vive en `_dish_coherence_filter`
+        # (SSOT) y lo consulta también `_protein_topup_meal`: tener dos copias fue exactamente
+        # lo que dejó sin blindar al rescate de proteína.
+        if _pool:
+            _coh_ok = _dish_coherence_filter(meal, _sa)
+            _pool_no_second_main = [(info, nlow) for (info, nlow) in _pool if _coh_ok(nlow)]
             if not _pool_no_second_main:
                 logger.info(
                     "🍽️ [P1-CLOSER-NO-DOUBLE-MAIN] plato ya tiene proteína principal y no hay "
