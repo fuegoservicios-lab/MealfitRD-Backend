@@ -10231,6 +10231,11 @@ CLOSER_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_CLOSER_DISH_COHERENCE", True)
 # junto con la carne. Si el pool queda vacío el closer no fuerza el combo (el piso de proteína se cubre en
 # comidas saladas). Rollback: =false. tooltip-anchor: P1-CLOSER-SWEET-NO-LEGUME
 CLOSER_SWEET_NO_LEGUME = _env_bool("MEALFIT_CLOSER_SWEET_NO_LEGUME", True)
+# [P1-CLOSER-NO-DOUBLE-MAIN · 2026-07-24] Prohíbe pegar una SEGUNDA proteína animal principal a
+# un plato que ya tiene la suya (175 g de atún dentro de un guiso de costilla, plan a060108b).
+# Hermano del sweet-guard: acota el pool y degrada honesto en vez de forzar el combo.
+# Rollback: MEALFIT_CLOSER_NO_DOUBLE_MAIN=false. tooltip-anchor: P1-CLOSER-NO-DOUBLE-MAIN
+CLOSER_NO_DOUBLE_MAIN_ENABLED = _env_bool("MEALFIT_CLOSER_NO_DOUBLE_MAIN", True)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Congruencia del closer por token ESPECÍFICO del nombre (ricotta/mozzarella/
 # pollo) en vez del primer token genérico ("queso"). Cierra el bug "batido con ricotta recibe un 2º queso
 # (mozzarella)". Flip a False revierte al match por primer-token. tooltip-anchor: P1-CLOSER-COHERENCE
@@ -14886,7 +14891,19 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
 # rompiendo el sweet-guard del closer (le metía lácteo en vez de carne) y el day-kcal-floor (saltaba la comida salada).
 # `\bpina` NO matchea en "espinaca" (sin boundary antes de 'pina') pero SÍ "piña"/"pina colada"; `\byogur` sigue
 # matcheando "yogurt" (prefijo en boundary). Texto ya viene strip_accents. tooltip-anchor: P1-SWEET-MARKER-WORDBOUNDARY
-_SWEET_MARKER_RE = _re.compile(r"\b(" + "|".join(_re.escape(_m) for _m in _SWEET_MEAL_MARKERS) + r")")
+# [P1-SWEET-MARKER-SUFFIX · 2026-07-24] …y frontera DERECHA que admite solo sufijos FLEXIVOS.
+# La frontera izquierda sola dejaba pasar cualquier marcador que fuera PREFIJO de una palabra
+# salada: "mora" (la fruta) matcheaba dentro de "repollo MORAdo" → la receta "Queso Blanco
+# Glaseado con Batata Asada y Ensalada" (plan a060108b, revisión 2026-07-24) se clasificaba
+# DULCE por una col morada, y el sweet-guard del cerrador le filtraba TODA proteína salada del
+# pool → el piso de proteína de esa comida se saltaba en silencio.
+#
+# Un `\b` duro a la derecha NO sirve: el guard depende del prefijo para las variantes
+# morfológicas ("yogur"→"yogurt", "fresa"→"fresas"). La lista cerrada `s|es|as|os|t` conserva
+# esas y corta "morado" (sufijo "do"). tooltip-anchor: P1-SWEET-MARKER-SUFFIX
+_SWEET_MARKER_RE = _re.compile(
+    r"\b(" + "|".join(_re.escape(_m) for _m in _SWEET_MEAL_MARKERS) + r")(?:s|es|as|os|t)?\b"
+)
 
 # [P1-FAT-TOPUP-SKIP-BEVERAGE · 2026-06-28] El day-kcal-floor / fat-topup añaden aceite de oliva a comidas SALADAS bajo
 # banda. `_is_sweet_meal` NO marca dulce a una BEBIDA salada-neutra ("leche tibia con canela", "infusión de manzanilla")
@@ -14894,6 +14911,36 @@ _SWEET_MARKER_RE = _re.compile(r"\b(" + "|".join(_re.escape(_m) for _m in _SWEET
 # BEBIDA se saltan además del sweet-guard. tooltip-anchor: P1-FAT-TOPUP-SKIP-BEVERAGE
 _BEVERAGE_MEAL_MARKERS = ("infusion", "manzanilla", "leche tibia", "leche caliente", "bebida", "te de", "agua de",
                           "cafe", "te verde", "te negro", "tisana")
+
+
+# [P1-CLOSER-NO-DOUBLE-MAIN · 2026-07-24] Frontera de palabra sobre los marcadores de carne,
+# por la MISMA razón que P1-SWEET-MARKER-SUFFIX: el match por substring dice que "re-POLLO
+# morado" (col morada) trae pollo, y que "resto"/"reservado" traen res. Escanear INGREDIENTES
+# —donde el repollo abunda— sin frontera convertiría media ensalada en "plato con proteína
+# principal". Sufijos flexivos permitidos para plurales ("filetes", "pechugas", "reses").
+_MEAT_MARKER_RE = _re.compile(
+    r"\b(" + "|".join(_re.escape(_m) for _m in _MEAT_PROTEIN_HINT) + r")(?:s|es|as|os|t)?\b"
+)
+
+
+def _meal_has_main_animal_protein(meal: dict, strip_accents_fn) -> bool:
+    """[P1-CLOSER-NO-DOUBLE-MAIN · 2026-07-24] ¿El plato ya trae su proteína animal principal?
+
+    Mira los INGREDIENTES (no el nombre): el nombre se reescribe aguas abajo para justificar
+    lo que se pegó — el caso vivo se llamaba "Costilla de Cerdo Guisada al Estilo Bowl Poke"
+    porque alguien le había pegado atún. Los ingredientes no mienten.
+
+    Lácteos, huevo y legumbres NO cuentan: son extensores legítimos que un cocinero añade
+    (queso sobre un guiso, habichuelas con arroz), no una segunda proteína principal.
+    tooltip-anchor: P1-CLOSER-NO-DOUBLE-MAIN"""
+    try:
+        ing_low = strip_accents_fn(
+            " ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
+        if not ing_low.strip():
+            return False
+        return bool(_MEAT_MARKER_RE.search(ing_low))
+    except Exception:
+        return False  # fail-open: ante la duda, el comportamiento previo (cerrar el piso)
 
 
 def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
@@ -15399,6 +15446,33 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             if not _pool_sweet:
                 return 0  # comida dulce sin proteína dulce-compatible → no meter camarón/pescado/carne
             _pool = _pool_sweet
+        # [P1-CLOSER-NO-DOUBLE-MAIN · 2026-07-24] Un plato que YA tiene su proteína animal
+        # principal no puede recibir OTRA pegada encima.
+        #
+        # Caso vivo (plan a060108b): "Costilla de Cerdo Guisada al Estilo Bowl Poke" =
+        # 45 g de costilla + **175 g de atún en agua**, con el paso "Escurre e incorpora atún
+        # en agua (ya viene cocido) a la preparación antes de servir" — una lata de atún
+        # volcada en un guiso de 30 minutos. Pasó todos los gates porque el techo del bolt
+        # (`CLOSER_BOLT_MAX_ADD_G`=180) es de GRAMOS, no de plato: 175 g entraron justo debajo.
+        # Mismo patrón en el locrio de pescado que recibía 70 g de camarones "como proteína
+        # del plato" teniendo ya el pescado.
+        #
+        # Quedan en el pool los extensores que un cocinero SÍ añadiría (legumbres, huevo,
+        # lácteo) — habichuelas con arroz y cerdo es un plato dominicano real. Si no queda
+        # nada compatible → 0 y el piso se cubre en otra comida: misma degradación honesta
+        # que el guard dulce de arriba, del que este es hermano directo.
+        # Escalar la proteína existente sigue teniendo prioridad (PROTEIN_CLOSER_SCALE_FIRST
+        # corre antes); esto solo acota el FALLBACK de pegar una nueva.
+        if (CLOSER_DISH_COHERENCE_ENABLED and CLOSER_NO_DOUBLE_MAIN_ENABLED
+                and _pool and _meal_has_main_animal_protein(meal, _sa)):
+            _pool_no_second_main = [(info, nlow) for (info, nlow) in _pool
+                                    if not any(h in nlow for h in _MEAT_PROTEIN_HINT)]
+            if not _pool_no_second_main:
+                logger.info(
+                    "🍽️ [P1-CLOSER-NO-DOUBLE-MAIN] plato ya tiene proteína principal y no hay "
+                    f"extensor compatible → no se pega una segunda | meal={str(meal.get('name'))[:40]}")
+                return 0
+            _pool = _pool_no_second_main
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
         # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
