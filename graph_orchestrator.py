@@ -14752,7 +14752,34 @@ _LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo",
                         "frijol", "gandul", "guandul", "edamame", "soya")
 
 
-def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> str:
+# [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] Marcadores de plato de OLLA. En un guiso la
+# proteína añadida entra a la olla; decir "cocínala aparte y sírvela como proteína del plato"
+# convierte una receta en un añadido de última hora (caso vivo: 55 g de pavo molido sobre unos
+# frijoles pintos guisados que llevan 45 min al fuego — el alimento estaba BIEN, el texto no).
+_STEWY_DISH_HINT = ("guisad", "guiso", "estofad", "sancoch", "caldo", "sopa", "asopa",
+                    "salsa criolla", "en salsa", "sofrit", "locrio", "chilindron")
+CLOSER_STEP_STEW_WORDING = _env_bool("MEALFIT_CLOSER_STEP_STEW_WORDING", True)
+
+
+def _meal_is_stewy(meal: dict, strip_accents_fn) -> bool:
+    """[P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] ¿El plato se cocina en olla con líquido?
+
+    Mira nombre Y pasos: hay guisos cuyo nombre no lo dice ("Bowl…") pero cuyo Toque de Fuego
+    habla de tapar, caldo o espesar. tooltip-anchor: P2-CLOSER-STEP-STEW-WORDING"""
+    try:
+        blob = strip_accents_fn((str(meal.get("name", "")) + " " + " ".join(
+            str(s) for s in (meal.get("recipe") or []))).lower())
+        if any(h in blob for h in _STEWY_DISH_HINT):
+            return True
+        # Señales de cocción en olla dentro del propio paso.
+        return bool(_re.search(r"\b(tapa|tapad\w+)\b.*\b(fuego bajo|cocina)\b", blob)
+                    or "el caldo espese" in blob or "hasta que espese" in blob)
+    except Exception:
+        return False
+
+
+def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
+                              stewy: bool = False) -> str:
     """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
     naturaleza del alimento: licuado → 'Agrega ... a la licuadora'; lácteo blando/no-cook → 'Incorpora ... mézclalo';
     enlatado/pre-cocido → 'Escurre e incorpora (ya viene cocido)'; resto → 'Cocina a la plancha o hervido'. SSOT de
@@ -14774,6 +14801,10 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> 
             or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
         return f"Incorpora {nm} a la preparación y mézclalo antes de servir."
     if any(h in _nm_sa for h in _PRECOOKED_PROTEIN_HINT):
+        # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] En un guiso, "a la preparación" suena a
+        # nada: va a la olla, y al final para que no se deshaga.
+        if stewy and CLOSER_STEP_STEW_WORDING:
+            return f"Escurre e incorpora {nm} (ya viene cocido) al guiso en los últimos minutos."
         return f"Escurre e incorpora {nm} (ya viene cocido) a la preparación antes de servir."
     # [P1-CLOSER-LEGUME-WORDING] legumbre seca → se hierve, no "a la plancha"; acompañante, no "la proteína".
     if PROTEIN_STEP_LEGUME_WORDING and any(h in _nm_sa for h in _LEGUME_PROTEIN_HINT):
@@ -14782,6 +14813,13 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False) -> 
     # sírvelo" (plan vivo 6d742f23) → hervidos/sírvelos. Heurística conservadora (termina en
     # es/as = plural es-DO: camarones/habichuelas/sardinas); 'res' NO es plural.
     _plural = _nm_sa.endswith("es") or _nm_sa.endswith("as")
+    # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] Plato de olla → la proteína entra AL GUISO.
+    # "Cocínala aparte y sírvela como proteína del plato" es lo que hacía que un plato correcto
+    # (arroz + habichuelas + carne, la bandera) se leyera como un parche de última hora.
+    if stewy and CLOSER_STEP_STEW_WORDING:
+        _v = "Incorpóralos" if _plural else "Incorpóralo"
+        return (f"Añade {nm} al guiso en los últimos minutos de cocción para que tome el sabor. "
+                f"{_v} con cuidado para no deshacer el resto.")
     if _plural:
         return f"Cocina {nm} a la plancha o hervidos y sírvelos como proteína del plato."
     return f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
@@ -14818,7 +14856,7 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] licuado → wording "Agrega X a la licuadora".
         _blended = ("licuadora" in _steps_blob or "licua" in _steps_blob
                     or any(b in _sa_cs(str(meal.get("name", "")).lower()) for b in _NO_COOK_BLENDED))
-        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended)}"
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs))}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
         meal["recipe"] = _insert_step_before_montaje(rec, _step)
@@ -21403,16 +21441,6 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"display_polished={_n_pol}")
     except Exception:
         pass
-    # [P2-STEP-DECIMAL-POLISH · 2026-07-24] Mismo pulido, para el TEXTO de los pasos: el de
-    # arriba solo recorre ingredients/ingredients_raw, así que "Calienta 0.25 cda de aceite"
-    # llegaba intacto al usuario.
-    try:
-        _n_sd = _polish_recipe_step_decimals(days)
-        if _n_sd:
-            total += _n_sd
-            parts.append(f"step_decimals={_n_sd}")
-    except Exception:
-        pass
     # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
     try:
         _n_rw = _rice_water_ratio_fix(days)
@@ -21445,6 +21473,23 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_dd:
             total += _n_dd
             parts.append(f"closer_steps_deduped={_n_dd}")
+    except Exception:
+        pass
+    # [P2-STEP-DECIMAL-POLISH · 2026-07-24] Pulido del TEXTO de los pasos (el de arriba solo
+    # recorre ingredients/ingredients_raw). Va **AL FINAL, después de todos los pases que
+    # reescriben pasos** — es el orden lo que lo hace efectivo:
+    #
+    # Corría a mitad de cadena y en el plan b7d07aeb sobrevivió un "0.25 taza de arroz" en un
+    # paso, aunque la función convierte ESE MISMO texto en aislado. La causa es que aguas abajo
+    # hay pases que regeneran el texto del paso a partir de `ingredients_raw` —donde el decimal
+    # vive a propósito, por ser fuente de macros y lista— así que el crudo volvía a entrar
+    # DESPUÉS del pulido. Cualquier pase futuro que reescriba pasos debe quedar por encima de
+    # esta línea. tooltip-anchor: P2-STEP-DECIMAL-POLISH-LAST
+    try:
+        _n_sd = _polish_recipe_step_decimals(days)
+        if _n_sd:
+            total += _n_sd
+            parts.append(f"step_decimals={_n_sd}")
     except Exception:
         pass
     # [P1-INTEGRATE-ALIGN-GUARD · 2026-07-06] TELEMETRÍA de desalineación display↔raw: crónica
@@ -26445,7 +26490,7 @@ def _align_closer_note_food_names(meal: dict) -> int:
             # P1-CLOSER-FRESH-COCIDO
             if "(ya viene cocido)" in step and not any(
                     _h in _sa_al(_line_food.lower()) for _h in _PRECOOKED_PROTEIN_HINT):
-                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal))}"
+                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al))}"
                 if _rebuilt.strip() != step.strip():
                     rec[_i] = _rebuilt
                     fixed += 1

@@ -43,8 +43,18 @@ def test_water_ice_skip_in_reverse_coherence():
 
 
 def test_closer_text_has_blended_param():
-    """`_closer_protein_step_text` DEBE aceptar `blended` y ramificar a licuadora."""
-    assert "def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False)" in _SRC
+    """`_closer_protein_step_text` DEBE aceptar `blended` y ramificar a licuadora.
+
+    [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] Antes se afirmaba la firma LITERAL en una línea
+    (`def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False)`), así que
+    añadir un parámetro nuevo —`stewy`, para el wording de platos de olla— rompía el test sin
+    que nada de lo que cubre hubiera cambiado. Se afirma la INTENCIÓN vía `inspect`: el
+    parámetro existe, es opcional y por defecto no altera el comportamiento previo.
+    """
+    import inspect
+    sig = inspect.signature(g._closer_protein_step_text)
+    assert "blended" in sig.parameters
+    assert sig.parameters["blended"].default is False
     assert "a la licuadora y licúa hasta integrar" in _SRC
 
 

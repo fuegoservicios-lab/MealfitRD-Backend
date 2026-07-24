@@ -111,3 +111,29 @@ def test_cableado_al_pase_de_finalize():
     assert "_polish_recipe_step_decimals(days)" in src
     assert 'parts.append(f"step_decimals=' in src
     assert "[P2-STEP-DECIMAL-POLISH · 2026-07-24]" in src
+
+
+def test_corre_DESPUES_de_todo_pase_que_reescriba_pasos():
+    """[P2-STEP-DECIMAL-POLISH-LAST · 2026-07-24] El orden es lo que hace efectivo al pulido.
+
+    En el plan vivo b7d07aeb sobrevivió un "0.25 taza de arroz" en un paso, aunque la función
+    convierte ese MISMO texto cuando se la llama en aislado (lo verifica el primer test de este
+    archivo). Causa: corría a mitad de cadena, y aguas abajo hay pases que REGENERAN el texto
+    del paso desde `ingredients_raw` —donde el decimal vive a propósito, por ser la fuente de
+    macros y de la lista de compras— así que el crudo volvía a entrar después del pulido.
+
+    Este test es el que evita que un pase futuro se cuele por debajo y reabra el agujero.
+    """
+    import pathlib
+    src = pathlib.Path(g.__file__).with_suffix(".py").read_text(encoding="utf-8", errors="replace")
+    i_dec = src.index("_n_sd = _polish_recipe_step_decimals(days)")
+    for reescritor in (
+        "_integrate_complement_steps(days)",      # fusiona el paso 💪 del closer en el TdF
+        "_dedup_repeated_phrases_in_plan(days)",  # reescribe frases dentro del paso
+        "_dedup_redundant_closer_steps(days)",    # elimina pasos redundantes
+        "_rice_water_ratio_fix(days)",            # reescribe la cantidad de agua del paso
+    ):
+        assert src.index(reescritor) < i_dec, (
+            f"`{reescritor}` reescribe pasos y quedó DESPUÉS del pulido de decimales → "
+            "puede reintroducir un decimal crudo que ya nadie limpia"
+        )
