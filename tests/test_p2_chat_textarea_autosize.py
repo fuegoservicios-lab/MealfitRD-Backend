@@ -196,7 +196,49 @@ def test_agentpage_no_hardcodea_el_cap_del_textarea():
 
 
 # ---------------------------------------------------------------------------
-# 3. Cross-link con los tests conductuales (vitest)
+# 3. Misma clase de fallo: el handler visualViewport NO pisa el padding
+# ---------------------------------------------------------------------------
+@_SKIP_NO_FRONTEND
+def test_visualviewport_handler_solo_escribe_transform():
+    """`padding` lo declara React en el prop `style` del wrapper — DOS dueños.
+
+    El handler [MOBILE-KEYBOARD-LIFT] escribía `paddingBottom='0.5rem'` con el
+    teclado abierto y `paddingBottom=''` al cerrarlo. Ese "restaurar" es falso:
+    React escribe el SHORTHAND (`padding: 1.5rem 3rem …`) y limpiar el longhand
+    no devuelve el valor del shorthand — lo ELIMINA (verificado en Chrome:
+    24px → 0px). Como el handler corre también al montar, el wrapper se quedaba
+    sin padding-bottom en desktop (rompía el centrado de P3-AGENT-INPUT-CENTER).
+
+    `transform` sí es exclusivo del handler (React no lo declara), por eso es la
+    única propiedad que puede escribir.
+    """
+    src = _read(_AGENT_PAGE)
+    i = src.find("const updateInputPosition")
+    assert i != -1, "no se encontró el handler del visualViewport"
+    body = _strip_js_comments(src[i:i + 2500])
+    assert "wrapper.style.transform" in body, "el handler debe seguir aplicando el lift"
+    assert "paddingBottom" not in body, (
+        "el handler visualViewport no debe escribir paddingBottom — React posee "
+        "`padding` vía shorthand; el colapso con teclado abierto lo da el CSS "
+        "`.input-wrapper:focus-within`"
+    )
+
+
+@_SKIP_NO_FRONTEND
+def test_css_cubre_el_colapso_con_teclado_abierto():
+    """Si alguien borra la regla `:focus-within`, el colapso del padding con el
+    teclado abierto desaparece sin que nada más lo cubra (el handler ya no lo
+    hace)."""
+    src = _read(_AGENT_PAGE)
+    assert re.search(
+        r"\.input-wrapper:focus-within\s*\{[^}]*padding-bottom:[^}]*!important",
+        src,
+        re.DOTALL,
+    ), "falta la regla CSS que colapsa el padding-bottom con foco (teclado abierto)"
+
+
+# ---------------------------------------------------------------------------
+# 4. Cross-link con los tests conductuales (vitest)
 # ---------------------------------------------------------------------------
 @_SKIP_NO_FRONTEND
 def test_existe_el_test_conductual_del_bug_reportado():
