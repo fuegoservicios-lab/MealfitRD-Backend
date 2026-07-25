@@ -9777,6 +9777,13 @@ MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", Tru
 # compra algo distinto de lo que el usuario lee. Flip a False vuelve al guard por índice.
 SOLVER_RAW_BY_FOOD = _env_bool("MEALFIT_SOLVER_RAW_BY_FOOD", True)
 
+# [P1-BLEND-STEP-REQUIRED · 2026-07-25] Un plato llamado "batido" cuyas instrucciones no dicen
+# licuar. El chequeo de COMPLETION lo daba por bueno porque sí había paso de servido.
+BLEND_STEP_REQUIRED = _env_bool("MEALFIT_BLEND_STEP_REQUIRED", True)
+# [P1-STEP-UNIT-PLURAL · 2026-07-25] Pasos que describen más unidades de las que hay listadas
+# ("Repite con el otro huevo" con `1 huevo` en ingredientes). Se corrige el TEXTO, no la cantidad.
+STEP_UNIT_PLURAL_FIX = _env_bool("MEALFIT_STEP_UNIT_PLURAL_FIX", True)
+
 # [P3-CAL-RECONCILE · 2026-06-13] Paso final del cerebro dividido: nivela las calorías
 # de cada día EXACTAMENTE al target re-escalando porciones + macros uniformemente (el
 # escalado uniforme preserva la consistencia receta↔macro). Cierra `cal_score` del
@@ -19073,6 +19080,76 @@ def _run_assembly_validations(
                         f"Día {day.get('day')}, {meal.get('name')}: La receta parece incompleta, "
                         f"falta un paso final (ej: 'Servir', 'Montaje' o 'Empacar').")
 
+            # [P1-BLEND-STEP-REQUIRED · 2026-07-25] Un batido que no dice licuar.
+            # Caso vivo (plan ea79db0e, D3 "Batido Cremoso de Lechosa y Piña"): 2 pasos, mise
+            # ("Mide la leche, la mantequilla de maní…") y montaje ("Vierte el batido en un vaso
+            # grande") — el paso que CONVIERTE los ingredientes en batido no existe. El chequeo de
+            # COMPLETION de arriba lo daba por bueno porque sí hay paso de servido.
+            if BLEND_STEP_REQUIRED:
+                try:
+                    from constants import strip_accents as _sa_bl2
+                    _n_blend = _sa_bl2(str(meal.get("name") or "").lower())
+                    if _re.search(r"\b(batido|licuado|smoothie|frappe|malteada)\b", _n_blend):
+                        if not _re.search(r"(licu|bate|batir|procesa|procesar|mezcla en la licuadora)", _sa_bl2(recipe)):
+                            if RECIPE_COHERENCE_AUTOFIX and _recipe_steps:
+                                # Se inserta ANTES del montaje: licuar precede a servir.
+                                _idx_m = next((i for i, s in enumerate(_recipe_steps)
+                                               if str(s).strip().lower().startswith(("montaje", "monta"))),
+                                              len(_recipe_steps))
+                                _recipe_steps = (_recipe_steps[:_idx_m]
+                                                 + ["El Toque de Fuego: coloca todos los ingredientes en la "
+                                                    "licuadora y licúa a alta velocidad hasta obtener una "
+                                                    "mezcla homogénea."]
+                                                 + _recipe_steps[_idx_m:])
+                                meal["recipe"] = _recipe_steps
+                                recipe = " ".join(str(s) for s in _recipe_steps).lower()
+                                logger.info(f"🥤 [P1-BLEND-STEP-REQUIRED] Día {day.get('day')} "
+                                            f"{str(meal.get('name'))[:30]!r}: el batido no decía licuar "
+                                            f"→ paso insertado antes del montaje")
+                            else:
+                                recipe_coherence_errors.append(
+                                    f"Día {day.get('day')}, {meal.get('name')}: es un batido pero "
+                                    f"ninguna instrucción dice licuar/batir.")
+                except Exception:
+                    pass
+
+            # [P1-STEP-UNIT-PLURAL · 2026-07-25] Los pasos describen MÁS unidades de las que hay.
+            # Caso vivo (plan ea79db0e, D1 Tostadas): ingrediente `1 huevo`, pasos "rompe CADA
+            # huevo" y "Repite con EL OTRO huevo". La receta necesita dos; la lista compra uno.
+            # Se corrige el TEXTO (singular), no la cantidad: los macros y la lista se calculan
+            # desde `ingredients`, así que subir el ingrediente cambiaría el plan entregado —
+            # bajar el texto lo hace verdadero sin tocar nada más.
+            if STEP_UNIT_PLURAL_FIX:
+                try:
+                    for _food, _pat_qty in (("huevo", r"\b(\d+(?:[.,]\d+)?)\s*huevos?\b"),):
+                        _m_q = _re.search(_pat_qty, " | ".join(str(i) for i in ingredients), _re.IGNORECASE)
+                        if not _m_q or float(_m_q.group(1).replace(",", ".")) > 1.0:
+                            continue
+                        _plural_res = (
+                            (_re.compile(r"\bRepite con el otro huevo\.?\s*", _re.IGNORECASE), ""),
+                            (_re.compile(r"\bcada huevo\b", _re.IGNORECASE), "el huevo"),
+                            (_re.compile(r"\bambos huevos\b", _re.IGNORECASE), "el huevo"),
+                            (_re.compile(r"\blos huevos\b", _re.IGNORECASE), "el huevo"),
+                        )
+                        _new, _hits = [], 0
+                        for _s in _recipe_steps:
+                            _t = str(_s)
+                            for _p, _rep in _plural_res:
+                                _t2 = _p.sub(_rep, _t)
+                                if _t2 != _t:
+                                    _hits += 1
+                                    _t = _t2
+                            _new.append(_re.sub(r"\s{2,}", " ", _t).strip())
+                        if _hits:
+                            _recipe_steps = _new
+                            meal["recipe"] = _new
+                            recipe = " ".join(str(s) for s in _new).lower()
+                            logger.info(f"🥚 [P1-STEP-UNIT-PLURAL] Día {day.get('day')} "
+                                        f"{str(meal.get('name'))[:30]!r}: {_hits} mención(es) en plural "
+                                        f"con 1 {_food} listado → singular")
+                except Exception:
+                    pass
+
             for ing in ingredients:
                 clean_ing = _re.sub(r'[\d\.,\(\)/\-]', ' ', ing)
                 words = [w.strip() for w in clean_ing.split() if w.strip() and len(w.strip()) > 2]
@@ -25023,7 +25100,21 @@ _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
                        # "tortilla rellena" — la línea era el único sitio con el 4. Ninguna rama
                        # previa la veía: no es taza, no es cdta, y no estaba en esta tabla.
                        # Lección 2026-07-12 repetida por tercera vez: CADA unidad necesita su rama.
-                       "tortilla": 2.0, "arepa": 2.0, "casabe": 2.0}
+                       "tortilla": 2.0, "arepa": 2.0, "casabe": 2.0,
+                       # [P1-FRUIT-COUNT-CAPS-EXT · 2026-07-25] "5½ guayabas" en un desayuno y
+                       # "4½" en un batido — 9.6 guayabas en 3 días para una persona (plan vivo
+                       # ea79db0e). La guayaba no tenía rama: no es taza, no es cdta, y no estaba
+                       # en esta tabla. Techo servible: 3 por comida (~165 g).
+                       "guayaba": 3.0}
+# [P1-COUNT-UNIT-NOUN · 2026-07-25] Palabras que cuentan la PRESENTACIÓN, no el alimento.
+# "6½ láminas de casabe" hacía que el regex de conteo mirara el cap de 'lamina' (inexistente) en
+# vez del de 'casabe' — mi propio cap de casabe no disparó nunca. Cuando el sustantivo contado
+# está aquí, se busca el alimento que va después de "de".
+_COUNT_PRESENTATION_NOUNS = frozenset({
+    "lamina", "laminas", "torta", "tortas", "pieza", "piezas", "rebanada", "rebanadas",
+    "rodaja", "rodajas", "lonja", "lonjas", "filete", "filetes", "tira", "tiras",
+    "trozo", "trozos", "pedazo", "pedazos", "unidad", "unidades", "porcion", "porciones",
+})
 # [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
 # captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
 # cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
@@ -25432,6 +25523,21 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                             if _cap_n is None:
                                 _noun = m_n.group(3).rstrip("s")
                                 _cap_n = _REALISM_COUNT_CAPS.get(_noun)
+                                # [P1-COUNT-UNIT-NOUN · 2026-07-25] Si lo contado es la
+                                # PRESENTACIÓN ("6½ láminas de casabe"), el cap que aplica es el
+                                # del alimento que va tras "de". Sin esto, mi propio cap de
+                                # casabe no disparaba nunca porque el regex miraba 'lamina'.
+                                if _cap_n is None and (_noun in _COUNT_PRESENTATION_NOUNS
+                                                       or _noun + "s" in _COUNT_PRESENTATION_NOUNS):
+                                    # SOLO si la línea no declara gramos. "6½ láminas de casabe
+                                    # (95 g)" tiene un conteo absurdo pero una MASA razonable: el
+                                    # conteo es cosmético y los caps por gramos ya gobiernan.
+                                    # Capear ahí recortaría 95 g → 29 g, o sea quitar comida real
+                                    # por un problema de etiqueta — y la banda lo pagaría.
+                                    if not _re.search(r"\(\s*[\d.,]+\s*(?:g|gr|gramos)\b", il):
+                                        _m_de = _re.search(r"\bde\s+([a-z]+)", il)
+                                        if _m_de:
+                                            _cap_n = _REALISM_COUNT_CAPS.get(_m_de.group(1).rstrip("s"))
                             if _cap_n:
                                 cur_n = float((m_n.group(1) or "0").replace(",", "."))
                                 cur_n += _REALISM_FRAC_MAP.get(m_n.group(2) or "", 0.0)  # "1½"→1.5
