@@ -1470,6 +1470,44 @@ def _preprocess_nlp_quantities(s: str) -> str:
         return re.sub(r'\s{2,}', ' ', s_lower).strip()
     return s.strip()
 
+# [P1-CITRUS-JUICE-YIELD · 2026-07-24] Rendimiento de jugo sobre fruta entera. En RD "limón"
+# es el limón criollo (lima ácida), que rinde menos que un lemon: ~35% de su peso en jugo.
+# Knob para poder ajustarlo sin redeploy. El multiplicador es 1/rendimiento (75 g de jugo →
+# ~214 g de fruta). Se prefiere pecarse de comprar de más: un limón de sobra cuesta centavos,
+# quedarse sin limón a mitad de ciclo rompe la receta.
+CITRUS_JUICE_YIELD = _knob_env_float("MEALFIT_CITRUS_JUICE_YIELD", 0.35,
+                                     validator=lambda v: 0.15 <= v <= 1.0)
+CITRUS_JUICE_YIELD_MULT = round(1.0 / CITRUS_JUICE_YIELD, 4)
+_CITRUS_JUICE_BUYABLE_CACHE: "dict | None" = None
+
+
+def _citrus_juice_is_buyable(fruit_token: str) -> bool:
+    """¿El catálogo vende el JUGO como producto propio? Entonces no hay nada que convertir.
+
+    Hoy devuelve False para todos (no existe ninguna fila 'Jugo de …' — `jugo de limón` es
+    alias de la fruta entera). Existe para que la regla se auto-desactive el día que se
+    añada el producto, en vez de doble-contar en silencio.
+
+    Fail-open hacia APLICAR la conversión: si el catálogo no responde, el estado conocido es
+    'no existe fila de jugo', y no convertir es el bug que estamos cerrando.
+    """
+    global _CITRUS_JUICE_BUYABLE_CACHE
+    if _CITRUS_JUICE_BUYABLE_CACHE is None:
+        idx = {}
+        try:
+            from constants import strip_accents as _sa_cj
+            for row in get_master_ingredients() or []:
+                nm = _sa_cj(str(row.get("name") or "").strip().lower())
+                if nm.startswith("jugo de ") or nm.startswith("zumo de "):
+                    idx[nm[8:].strip()] = True
+        except Exception as e:
+            logging.debug(f"[P1-CITRUS-JUICE-YIELD] catálogo no disponible: {e}")
+        _CITRUS_JUICE_BUYABLE_CACHE = idx
+    from constants import strip_accents as _sa_cj2
+    tok = _sa_cj2(str(fruit_token).lower()).rstrip("s").rstrip("e")
+    return any(k.startswith(tok) for k in _CITRUS_JUICE_BUYABLE_CACHE)
+
+
 def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = False) -> float:
     """Devuelve el multiplicador de yield (cocido↔crudo) para `raw_name`.
 
@@ -1513,6 +1551,27 @@ def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = 
     # se hidratan ~3× al cocinarse desde su forma comercial seca.
     if bool(re.search(r'\b(cocid[oa]s?|hervid[oa]s?)\b', n)) and bool(re.search(r'\b(arroz(?:es)?|pastas?|quinoas?|lentejas?|habichuelas?|frijol(?:es)?|guandul(?:es)?|garbanzos?|soyas?|tofu)\b', n)):
         return 0.35
+
+    # 1b. [P1-CITRUS-JUICE-YIELD · 2026-07-24] Jugo de cítrico → FRUTA ENTERA.
+    #
+    # El catálogo no tiene ninguna fila de jugo: "jugo de limón" es un ALIAS de `Limón`,
+    # la fruta entera (verificado en Neon). Así que "2 cdas de jugo de limón" se agregaba
+    # como si fueran 30 g de limón entero, cuando exprimir 30 g de jugo exige ~86 g de
+    # fruta. Plan vivo 732588f8: 5 cdas de jugo (~75 g) en 3 días → la lista compró
+    # 2 limones, ~0.3× de lo necesario. El usuario se queda sin limón a mitad del ciclo.
+    #
+    # Va en el tramo compartido con la regla #1 (antes del early-return del aggregator)
+    # porque es el MISMO tipo de desajuste: la receta habla en una forma y el SKU se vende
+    # en otra. Y no reintroduce la asimetría P1-2 que motivó ese early-return: el inventario
+    # del usuario también habla de limones enteros (nace de esta misma lista), así que tras
+    # la conversión ambos lados usan la misma unidad.
+    #
+    # Se auto-desactiva si algún día el catálogo incorpora el jugo como producto comprable
+    # (ahí ya no hay nada que convertir) — mismo patrón que el factor cocido→seco.
+    if re.search(r'\b(jugo|zumo)\b', n):
+        _fruit = re.search(r'\b(lim[oó]n(?:es)?|lima|naranjas?|toronjas?|mandarinas?)\b', n)
+        if _fruit and not _citrus_juice_is_buyable(_fruit.group(1)):
+            return CITRUS_JUICE_YIELD_MULT
 
     if only_legumbres_grains:
         # Modo aggregator: NO aplicar reglas #2-4 para preservar la simetría
