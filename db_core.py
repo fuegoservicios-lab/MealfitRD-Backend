@@ -4,6 +4,7 @@ import uuid
 import unicodedata as _uc
 from datetime import datetime, timedelta, timezone
 import os
+import re
 import logging
 from typing import Optional, List, Dict, Any, Tuple, Union, overload, Literal
 from dotenv import load_dotenv
@@ -445,6 +446,42 @@ def execute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: boo
 def execute_sql_write(query: str, params: Optional[tuple] = ..., *, returning: Literal[True], lock_timeout_ms: Optional[int] = ...) -> List[Dict[str, Any]]: ...
 @overload
 def execute_sql_write(query: str, params: Optional[tuple] = ..., returning: Literal[False] = ..., lock_timeout_ms: Optional[int] = ...) -> bool: ...
+# [P1-TEST-ALERT-POLLUTION · 2026-07-25] La suite de tests corre contra la MISMA base Neon que
+# producción (no hay staging), y ~9 módulos escriben `system_alerts` con SQL directo. Resultado
+# medido: una noche de corridas dejó 3 incidentes FALSOS abiertos en el tablero —
+#
+#     plan_persist_failed:user-abc          meta: 'invalid input syntax for type uuid: "user-abc"'
+#     plan_data_corrupted:plan-corrupt:_last_chunk_learning
+#     plan_data_corrupted:plan-corrupt:_recent_chunk_lessons
+#
+# `user-abc` y `plan-corrupt` son fixtures literales (test_chunk_recovery_7day_plan.py,
+# test_chunked_learning_propagation.py). Así es como se acaba ignorando el canal de alertas: se
+# llena de ruido y el operador deja de mirarlo.
+#
+# La guarda vive en el ÚNICO cuello de botella (este writer) en vez de en los 9 call sites, y usa
+# `PYTEST_CURRENT_TEST` — la variable que pytest pone durante la ejecución — porque el señal
+# preciso es "esto es un test", NO el entorno: un dev corriendo la app a mano apunta a la misma
+# base y SÍ quiere sus alertas reales.
+#
+# Cubre INSERT y también UPDATE/DELETE: un test que "resuelve" alertas podría cerrar una REAL,
+# que es peor que crear una falsa. Los tests que afirman sobre la inserción parchean
+# `execute_sql_write` a nivel de módulo (`patch("cron_tasks.execute_sql_write", ...)`), así que
+# reemplazan esta función entera y no ven la guarda — sus aserciones siguen intactas.
+_SYSTEM_ALERTS_WRITE_RE = re.compile(r"\bsystem_alerts\b", re.IGNORECASE)
+
+
+def _suppress_test_alert_write(query: Optional[str]) -> bool:
+    """True si hay que descartar esta escritura a `system_alerts` por venir de un test."""
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    if os.environ.get("MEALFIT_ALLOW_TEST_SYSTEM_ALERTS", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    if not query or not _SYSTEM_ALERTS_WRITE_RE.search(query):
+        return False
+    logging.debug("[P1-TEST-ALERT-POLLUTION] escritura a system_alerts descartada (corrida de tests)")
+    return True
+
+
 def execute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False, lock_timeout_ms: Optional[int] = None) -> Union[List[Dict[str, Any]], bool]:
     """Ejecuta una transacción INSERT/UPDATE/DELETE.
 
@@ -468,6 +505,10 @@ def execute_sql_write(query: str, params: Optional[tuple] = None, returning: boo
     explícita, sin SET LOCAL). El nuevo path solo se activa cuando el
     caller opta in.
     """
+    # [P1-TEST-ALERT-POLLUTION · 2026-07-25] Ver `_suppress_test_alert_write`.
+    if _suppress_test_alert_write(query):
+        return [] if returning else True
+
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")
 
