@@ -205,6 +205,13 @@ EMBED_INIT_BATCH_DELAY_S  = max(0.0, _knob_env_float("MEALFIT_EMBED_INIT_BATCH_D
 # Default 30s: holgado para la init normal (~15-20s con 203 items) y acota el caso patológico a 30s en
 # vez de minutos. Clamp mínimo 5s para no auto-sabotear la init sana. Rollback: subirlo muy alto (=999).
 EMBED_INIT_DEADLINE_S     = max(5.0, _knob_env_float("MEALFIT_EMBED_INIT_DEADLINE_S",     30.0))
+# [P1-EMBED-WARM-DEADLINE · 2026-07-25] Plazo del calentador de arranque (daemon thread, nadie
+# espera su resultado). Debe superar `ceil(catálogo/BATCH_SIZE) × BATCH_DELAY_S` + el tiempo real
+# de Cohere; con los 204 alimentos vivos, lotes de 3 y 3 s entre lotes eso son ~204 s de piso.
+# 600 s deja holgura para que el catálogo casi triplique sin volver a romperse, y no cuelga el
+# thread para siempre. Bajarlo a ≤30 reabre el bug: la init nunca termina, nunca persiste a Redis
+# y toda la resolución de ingredientes cae al Regex Fast-Path.
+EMBED_WARM_DEADLINE_S     = max(60.0, _knob_env_float("MEALFIT_EMBED_WARM_DEADLINE_S",    600.0))
 
 
 def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label, deadline=None):
@@ -425,8 +432,29 @@ def invalidate_master_cache():
     _semantic_cache = None
     _semantic_cache_failed_until = 0.0
 
-def get_semantic_cache():
+def get_semantic_cache(deadline_s: float | None = None):
     """Devuelve el caché semántico (master_list + vectors + embeddings_client).
+
+    `deadline_s` es el tope wall-clock de la inicialización desde cero. Por defecto usa
+    `EMBED_INIT_DEADLINE_S` (30 s), que es lo correcto para un camino que atiende a un usuario:
+    más vale caer al Regex Fast-Path que bloquear la petición.
+
+    [P1-EMBED-WARM-DEADLINE · 2026-07-25] El **calentador de arranque** debe pasar un plazo
+    proporcional al trabajo real, porque con el default es matemáticamente imposible terminar
+    (valores vivos en prod: 204 alimentos, lotes de 3, 3 s entre lotes):
+
+        204 alimentos ÷ EMBED_INIT_BATCH_SIZE (3)   = 68 lotes
+        68 lotes × EMBED_INIT_BATCH_DELAY_S (3,0 s) = 204 s de espera deliberada
+        …contra un deadline de 30 s
+
+    Consecuencia medida en prod: la init aborta SIEMPRE → nunca persiste a Redis → Redis nunca
+    tiene los vectores (verificado: 100 claves, ninguna del catálogo) → cada proceso reintenta
+    cada 10 min y quema 30 s, y **toda** la resolución de ingredientes cae al Regex Fast-Path.
+    En el chunk que expiró el 17-jul esos 30 s salieron del presupuesto de 600 s.
+
+    El deadline de 30 s se añadió en P1-EMBED-INIT-DEADLINE (2026-07-08) para que Cohere lento no
+    bloqueara minutos — correcto para peticiones, pero se aplicó también al warmer, que es
+    justamente el único caller que SÍ puede esperar (daemon thread, nadie aguarda su resultado).
 
     Orden de resolución (importante por interacción cooldown ↔ Redis):
       1. In-process cache hit → fast return.
@@ -529,7 +557,10 @@ def get_semantic_cache():
                 # [P1-EMBED-INIT-DEADLINE · 2026-07-08] tope wall-clock GLOBAL de la init: si Cohere
                 # se arrastra, aborta a los EMBED_INIT_DEADLINE_S y cae al fast-path (el except de abajo
                 # activa el cooldown). Sin esto, el thread de init podía bloquear minutos.
-                deadline=_time.monotonic() + EMBED_INIT_DEADLINE_S,
+                # [P1-EMBED-WARM-DEADLINE · 2026-07-25] …salvo que el caller declare otro plazo: el
+                # warmer de arranque necesita ~96 s sólo de delay entre lotes (ver docstring).
+                deadline=_time.monotonic() + float(
+                    deadline_s if deadline_s and deadline_s > 0 else EMBED_INIT_DEADLINE_S),
             )
 
             _semantic_cache = {

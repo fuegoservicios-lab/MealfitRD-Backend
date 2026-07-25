@@ -82,6 +82,20 @@ def test_warmer_is_daemon_thread():
 
 
 # ---------------------------------------------------------------------------
+def _cuerpo_get_semantic_cache() -> str:
+    """Cuerpo COMPLETO de `get_semantic_cache`, hasta el siguiente def de módulo.
+
+    ⚠️ [P1-EMBED-WARM-DEADLINE · 2026-07-25] Antes se recortaba con una ventana de bytes fija
+    (`_SHOPCALC[idx:idx + 3500]`). Al documentar el fix del plazo del warmer, el docstring creció
+    y empujó el `acquire(timeout=...)` fuera de la ventana: los dos tests de abajo fallaron por
+    una razón que no es la que vigilan. Una ventana fija caduca con la siguiente edición.
+    """
+    idx = _SHOPCALC.find("def get_semantic_cache")
+    assert idx > 0, "get_semantic_cache desapareció de shopping_calculator"
+    fin = _SHOPCALC.find("\ndef ", idx + 10)
+    return _SHOPCALC[idx:fin if fin > 0 else len(_SHOPCALC)]
+
+
 # Fix #2: non-blocking lock acquire en get_semantic_cache
 # ---------------------------------------------------------------------------
 
@@ -89,9 +103,7 @@ def test_warmer_is_daemon_thread():
 def test_lock_acquire_uses_timeout():
     """`_semantic_cache_lock.acquire(timeout=...)` con timeout corto (≤1s)
     para que requests del usuario no esperen al warmer si está corriendo."""
-    idx = _SHOPCALC.find("def get_semantic_cache")
-    assert idx > 0
-    body = _SHOPCALC[idx:idx + 3500]
+    body = _cuerpo_get_semantic_cache()
 
     # Buscar el acquire con timeout
     m = re.search(r"_semantic_cache_lock\.acquire\(\s*timeout\s*=\s*([\d.]+)\s*\)", body)
@@ -111,8 +123,7 @@ def test_lock_acquire_uses_timeout():
 def test_lock_acquire_failure_returns_none():
     """Cuando el acquire timeout falla, debe retornar None (fast-path Regex)
     en lugar de continuar sin lock."""
-    idx = _SHOPCALC.find("def get_semantic_cache")
-    body = _SHOPCALC[idx:idx + 3500]
+    body = _cuerpo_get_semantic_cache()
     # Buscar el branch `if not acquired:` con return None
     pat = re.compile(
         r"if not acquired\s*:\s*\n(?:[^\n]*\n){0,5}?\s*return None",

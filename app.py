@@ -1234,8 +1234,12 @@ async def lifespan(app: FastAPI):
         import threading
         def _warm_semantic_cache_bg():
             try:
-                from shopping_calculator import get_semantic_cache
-                _cache = get_semantic_cache()
+                # [P1-EMBED-WARM-DEADLINE · 2026-07-25] Plazo propio: con el default de petición
+                # (30 s) la init es IMPOSIBLE de completar — sólo el delay entre lotes suma ~96 s
+                # con el catálogo actual, así que este warmer abortaba siempre y Redis nunca
+                # recibía los vectores. Nadie espera este thread; puede tomarse los minutos.
+                from shopping_calculator import get_semantic_cache, EMBED_WARM_DEADLINE_S
+                _cache = get_semantic_cache(deadline_s=EMBED_WARM_DEADLINE_S)
                 if _cache is not None:
                     logger.info(
                         "🔥 [P3-EMBED-CACHE-STARTUP-WARM] Semantic cache warmed "
