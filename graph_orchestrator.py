@@ -3573,6 +3573,20 @@ class PlanState(TypedDict):
     # reset vive en `retry_reflection_node`, igual que el hermano).
     _surgical_reject_attempted: bool
 
+    # [P1-RESCOPE-METRIC-BLIND · 2026-07-25] Días que el regen quirúrgico tocó de verdad.
+    # `surgical_marker_regen_node` lo devuelve y `assemble_plan_node` lo lee para tagear su
+    # métrica de duración como re-entry — la evidencia con la que P1-ENGINE-RESCOPE-POST-REGEN
+    # (2026-07-10) iba a decidir si rescopear el engine a día-local.
+    #
+    # ⚠️ Faltaba esta línea, así que LangGraph lo DESCARTABA del state y assemble leía siempre
+    # `None`: 400 pasadas de assemble medidas en 30 días y **cero re-entries registrados**, con
+    # re-entries ocurriendo de verdad (visibles en el journal del 17-jul). La instrumentación
+    # llevaba 15 días midiendo un booleano que sólo podía ser False.
+    #
+    # Es exactamente el modo de fallo de P1-HARDEN-POOLS-CANARY-GATING (2026-07-24), donde las
+    # cohortes no declaradas hicieron que 80/80 filas mintieran. Mismo bug, otra clave.
+    _marker_regen_touched_days: list
+
     # [P1-HARDEN-POOLS-CANARY-GATING · 2026-07-24] Cohortes de los dos canarios vivos.
     # DEBEN estar declaradas acá o LangGraph las DESCARTA del state: `plan_skeleton_node`
     # las retorna, el schema estricto las filtra, y `final_state.get(...) or "on"` en la
@@ -28430,6 +28444,26 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _emit_progress(state, "phase", {"phase": "assembly", "message": "Ensamblando tu plan final..."})
     start_time = time.time()
 
+    # [P1-ASSEMBLE-PASS-MAP · 2026-07-25] Mapa de coste POR TRAMO del ensamblador.
+    #
+    # `assemble_plan_node` es el tramo caro del pipeline (mediana 83 s, máx 447 s en 400 pasadas
+    # de 30 días) y un rechazo lo re-ejecuta ENTERO — ése es el motivo real de que los chunks
+    # expiren a los 600 s, no el LLM (que son ~40 s). Antes de rescopear el engine a día-local
+    # hace falta saber QUÉ tramo cuesta, y hoy no se sabe: la única descomposición disponible sale
+    # de restar marcas de tiempo entre líneas de log que casualmente logean, lo que atribuye a un
+    # pase todo lo que ocurre entre dos mensajes. Sobre esa atribución no se refactoriza.
+    #
+    # Puro instrumento: `_ck()` sólo anota (label, t). Cero efecto sobre el plan.
+    _pass_marks: list = []
+
+    def _ck(label: str) -> None:
+        try:
+            _pass_marks.append((label, time.time()))
+        except Exception:
+            pass
+
+    _ck("inicio")
+
     # P0-X1 (defensa en profundidad): el flag `semantic_cache_hit` solo aplica
     # en el PRIMER intento. Si llegamos aquí en attempt>=2 con el flag aún en
     # True (caso patológico donde retry_reflection_node no lo reseteó por algún
@@ -29419,6 +29453,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.warning(f"[P1-RECIPE-OFFCATALOG-CONDIMENT] callsite en assemble no-op: {type(_oce).__name__}: {_oce}")
 
     _trace_misalign(days, "pre_engine")  # [P1-RAW-MISALIGN-TRACE] estado post day-gen/critique
+    _ck("pre_macro_engine")
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
     _trace_misalign(days, "post_macro_engine")
 
@@ -29469,6 +29504,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # antes de que el estado fluya a shopping/review → el band-score se mide contra el estado FINAL.
     if REPAIR_PROTEIN_POST_CAPS:
         try:
+            _ck("pre_protein_floor")
             _rp_added = _repair_protein_floor_post_caps(days, nutrition, form_data)
             if _rp_added:
                 logger.info(f"🔒 [P1-PROTEIN-FLOOR-POST-CAPS] +{round(_rp_added)}g proteína animal densa post-caps "
@@ -29609,6 +29645,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # (fuera 39% de los días) y arrastra kcal hacia ~100%. Validado en 18 días reales: 0 regresiones.
             if FATS_RELEVEL_UNIVERSAL_ENABLED and float(_fg or 0) > 0:
                 try:
+                    _ck("pre_fats_relevel")
                     _relevel_fats_universal(days, _fg, _QDB())
                 except Exception as _fru_e:
                     logger.warning(f"[P1-FATS-RELEVEL-UNIVERSAL] assemble no-op: {type(_fru_e).__name__}: {_fru_e}")
@@ -29689,6 +29726,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             from nutrition_db import IngredientNutritionDB as _PEDB
             _pe_db = _PEDB()
+            _ck("pre_micro_closer")
             _pe_adj = _close_micro_gaps_for_plan(result, form_data, _pe_db)
             if _pe_adj:
                 _pe_retrim = 0
@@ -29953,6 +29991,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # llegar a la lista) y antes del truth-up pre-INSERT (que recalcula macros desde strings).
     if PHANTOM_INGREDIENT_REPAIR:
         try:
+            _ck("pre_phantom_repair")
             _ph_fixed = _repair_declared_but_unlisted_ingredients(result.get("days") or [])
             if _ph_fixed:
                 result["_phantom_ingredients_repaired"] = _ph_fixed
@@ -30021,6 +30060,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # forma definitiva — reconciliar antes obligaría a repetirlo.
     if RECONCILE_DISPLAY_RAW:
         try:
+            _ck("pre_reconcile_raw")
             _rc = _reconcile_display_raw_lines(result.get("days") or [])
             if _rc:
                 result["_display_raw_reconciled"] = _rc
@@ -30033,6 +30073,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.warning(f"[P1-DISPLAY-RAW-QTY-RECONCILE] falló (no bloquea): "
                            f"{type(_rc_e).__name__}: {_rc_e}")
 
+    _ck("pre_shopping_list")
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
     _uid = form_data.get("user_id")
@@ -30393,6 +30434,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # también explícito como defensa contra dicts mutados antes del hook.
     # Si el guard explota por bug interno NO debe abortar el assembly.
     try:
+        _ck("pre_coherence_guard")
         from shopping_calculator import run_shopping_coherence_guard
         coh_divergences = run_shopping_coherence_guard(
             result, multiplier=result.get("calc_household_multiplier")
@@ -30472,6 +30514,22 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # pasadas son legítimamente cross-día: shopping aggregation, cuota cross-día de proteína, fruit-dedup).
     _mr_touched = state.get("_marker_regen_touched_days")
     _assemble_days = result.get("days")
+    # [P1-ASSEMBLE-PASS-MAP · 2026-07-25] Deltas entre checkpoints → segundos por tramo. Es el mapa
+    # que decide DÓNDE rescopear; sin él sólo hay restas entre líneas de log que casualmente logean.
+    _ck("fin")
+    _tramos: dict = {}
+    try:
+        for _i in range(1, len(_pass_marks)):
+            _lbl_prev, _t_prev = _pass_marks[_i - 1]
+            _lbl_cur, _t_cur = _pass_marks[_i]
+            _tramos[_lbl_prev] = round(_t_cur - _t_prev, 2)
+        if _tramos:
+            _top = sorted(_tramos.items(), key=lambda kv: kv[1], reverse=True)[:5]
+            logger.info(
+                f"⏱️ [P1-ASSEMBLE-PASS-MAP] assemble={duration:.0f}s · tramos más caros: "
+                + ", ".join(f"{k}={v:.0f}s" for k, v in _top))
+    except Exception as _pm_e:
+        logger.debug(f"[P1-ASSEMBLE-PASS-MAP] no-op: {type(_pm_e).__name__}: {_pm_e}")
     _emit_progress(state, "metric", {
         "node": "assemble_plan",
         "duration_ms": int(duration * 1000),
@@ -30482,6 +30540,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             "is_marker_regen_reentry": bool(_mr_touched),
             "marker_regen_touched_days": len(_mr_touched) if isinstance(_mr_touched, list) else 0,
             "total_days": len(_assemble_days) if isinstance(_assemble_days, list) else None,
+            "pass_map_s": _tramos or None,
         },
     })
 
