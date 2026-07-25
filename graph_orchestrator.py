@@ -9783,6 +9783,10 @@ BLEND_STEP_REQUIRED = _env_bool("MEALFIT_BLEND_STEP_REQUIRED", True)
 # [P1-STEP-UNIT-PLURAL · 2026-07-25] Pasos que describen más unidades de las que hay listadas
 # ("Repite con el otro huevo" con `1 huevo` en ingredientes). Se corrige el TEXTO, no la cantidad.
 STEP_UNIT_PLURAL_FIX = _env_bool("MEALFIT_STEP_UNIT_PLURAL_FIX", True)
+# [P1-PAREN-GRAMS-CAP · 2026-07-25] Los caps por gramos solo veían los gramos LÍDER, así que
+# `½ conejo (aprox. 358 g en piezas)` esquivaba el techo de proteína. Cuando la masa vive en el
+# paréntesis, esa masa es la cantidad real.
+PAREN_GRAMS_CAP = _env_bool("MEALFIT_PAREN_GRAMS_CAP", True)
 
 # [P3-CAL-RECONCILE · 2026-06-13] Paso final del cerebro dividido: nivela las calorías
 # de cada día EXACTAMENTE al target re-escalando porciones + macros uniformemente (el
@@ -25435,8 +25439,21 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                     factor = None
                     # 1) proteína en gramos sobre el techo (505g calamar → 300g)
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
-                    if m_g:
-                        cur_g = float(m_g.group(1).replace(",", "."))
+                    # [P1-PAREN-GRAMS-CAP · 2026-07-25] Los caps por gramos exigían que los
+                    # gramos fueran la cantidad LÍDER (`^\s*N\s*g`). Caso vivo (plan ea79db0e,
+                    # D1): `½ conejo (aprox. 358 g en piezas)` — 358 g de proteína, por encima
+                    # del techo de 300, y NINGÚN cap lo veía porque la línea empieza por "½".
+                    # Cuando la masa vive en el paréntesis, esa masa ES la cantidad real: se usa
+                    # para decidir. `_resc` ya reescala el paréntesis además del número líder
+                    # (verificado: "6½ láminas … (95 g)" → "2 láminas … (29.23 g)").
+                    _paren_g = None
+                    if not m_g and PAREN_GRAMS_CAP:
+                        _mp_g = _re.search(
+                            r"\(\s*(?:aprox\.?|approx\.?|~|≈)?\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                        if _mp_g:
+                            _paren_g = float(_mp_g.group(1).replace(",", "."))
+                    if m_g or _paren_g:
+                        cur_g = float(m_g.group(1).replace(",", ".")) if m_g else _paren_g
                         # [P1-LINE-GRAM-CEILING · 2026-07-05] 0) techo DURO genérico — no depende
                         # de resolver el grupo/token (el "1250 g de queso blanco" evadió el cap de
                         # proteína justo porque la clasificación no aplicó). Backstop absoluto.
