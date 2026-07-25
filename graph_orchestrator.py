@@ -24564,6 +24564,127 @@ def _merge_duplicate_food_lines(days: list) -> list:
     return out
 
 
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-DISPLAY-RAW-QTY-RECONCILE · 2026-07-24] Los macros y la lista de compras se calculaban
+# desde listas DISTINTAS que no dicen lo mismo.
+#
+#   `meal["ingredients"]`      → lo que el usuario lee Y de donde salen los macros
+#                                (`_truth_up_meal_macros_from_strings` lee esta lista)
+#   `meal["ingredients_raw"]`  → lo que COMPRA la lista
+#                                (`meal.get("ingredients_raw") or meal.get("ingredients")`)
+#
+# Medido sobre los 6 planes más recientes (214 alimentos presentes en ambas listas):
+# **24% discrepan en cantidad más de un 5%**, con ratios de 0.16× a 4.9×. Casos reales:
+#
+#     Bollos de Harina    ING "15 g de queso blanco"        RAW "80.19 g de queso blanco"   0.19×
+#     Bowl Tibio          ING "1½ tazas de yogurt"          RAW "75g de yogurt"             4.90×
+#     Filete de pescado   ING "½ taza de espinacas frescas" RAW "2.49 tazas de espinacas"   0.20×
+#
+# Y 27 alimentos (en 6 planes) aparecen SOLO en el display: nunca se compran — la misma clase
+# de defecto que la guanábana, por otra puerta.
+#
+# La divergencia va en AMBAS direcciones, así que no es "una lista está más fresca": son pases
+# distintos actualizando listas distintas. Este pase no persigue al culpable (eso pide
+# instrumentar el pipeline entero); cierra el síntoma en la frontera y deja telemetría con la
+# magnitud para poder perseguirlo con datos.
+#
+# Autoridad = el DISPLAY. Es lo que el usuario lee y lo que respalda los macros declarados;
+# si la lista compra otra cosa, el plan miente por partida doble.
+#
+# Tolerancia: sólo se toca cuando la divergencia supera el umbral. Por debajo se respeta la
+# precisión de `raw` (42.17 g vs "42 g" es el diseño, no un bug).
+RECONCILE_DISPLAY_RAW = _env_bool("MEALFIT_RECONCILE_DISPLAY_RAW", True)
+RECONCILE_DISPLAY_RAW_TOL = _env_float("MEALFIT_RECONCILE_DISPLAY_RAW_TOL", 0.10,
+                                       lambda v: 0.02 <= v <= 0.50)
+
+
+def _reconcile_display_raw_lines(days: list) -> list:
+    """Alinea `ingredients_raw` (lo que se compra) con `ingredients` (lo que se lee y de donde
+    salen los macros). Devuelve telemetría [{day, meal, food, kind, ratio, display, raw}].
+
+    Dos reparaciones:
+      - `missing_in_raw`: el alimento está en el display y no en raw → se apendea (si no, no
+        se compra nunca).
+      - `qty_divergence`: está en ambas con cantidades que difieren más de la tolerancia → las
+        líneas de raw de ESE alimento se reemplazan por las del display.
+
+    El caso inverso (en raw y no en display) NO se toca: es de `_restore_display_from_raw_orphans`
+    (P1-DISPLAY-RESTORE-FROM-RAW), que lo repone prettificado y con su propio cap.
+
+    Idempotente (tras alinear, el ratio es 1.0) y fail-safe por comida.
+    """
+    out: list = []
+    if not isinstance(days, list):
+        return out
+    try:
+        from shopping_calculator import _parse_quantity as _pq
+        from constants import strip_accents as _sa_rc
+    except Exception:
+        return out
+
+    def _index(lines):
+        """{alimento → {'idx': [...], 'g': gramos|None, 'lines': [...]}}"""
+        acc: dict = {}
+        for i, line in enumerate(lines):
+            try:
+                parsed = _pq(str(line), apply_yield_multiplier=False)
+            except Exception:
+                continue
+            if not parsed:
+                continue
+            qty, unit, canon = parsed
+            if not canon or not qty:
+                continue
+            key = _sa_rc(str(canon).lower())
+            g = _dup_merge_line_to_grams(float(qty), str(unit), str(canon))
+            e = acc.setdefault(key, {"idx": [], "g": 0.0, "lines": [], "known": True})
+            e["idx"].append(i)
+            e["lines"].append(str(line))
+            if g is None:
+                e["known"] = False
+            else:
+                e["g"] += g
+        return acc
+
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            disp = meal.get("ingredients")
+            raw = meal.get("ingredients_raw")
+            if not (isinstance(disp, list) and isinstance(raw, list) and disp and raw):
+                continue
+            try:
+                A, B = _index(disp), _index(raw)
+                drop: set = set()
+                add: list = []
+                for food, a in A.items():
+                    b = B.get(food)
+                    if b is None:
+                        add.extend(a["lines"])
+                        out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                    "food": food, "kind": "missing_in_raw", "ratio": None,
+                                    "display": a["lines"][0], "raw": None})
+                        continue
+                    if not (a["known"] and b["known"]) or a["g"] <= 0 or b["g"] <= 0:
+                        continue
+                    ratio = a["g"] / b["g"]
+                    if abs(ratio - 1.0) <= RECONCILE_DISPLAY_RAW_TOL:
+                        continue
+                    drop.update(b["idx"])
+                    add.extend(a["lines"])
+                    out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                "food": food, "kind": "qty_divergence", "ratio": round(ratio, 2),
+                                "display": a["lines"][0], "raw": b["lines"][0]})
+                if drop or add:
+                    meal["ingredients_raw"] = [x for i, x in enumerate(raw) if i not in drop] + add
+            except Exception:
+                continue
+    return out
+
+
 # [P1-PORTION-REALISM-CAP · 2026-07-01] Techos por clase. Tazas: aromáticos ≤1 taza (cebolla/ají para un
 # revoltillo de 1 huevo NO son plato principal), hierbas ≤¼ taza (perejil/cilantro son GUARNICIÓN — el caso
 # "1.5 taza de perejil" de la Ropa Vieja). Conteos: víveres/frutas count-based con techos servibles.
@@ -29176,6 +29297,24 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     f"D{d['day']} {d['food']} → {d['into']!r}" for d in _dm[:6]))
         except Exception as _dm_e:
             logger.warning(f"[P1-DUP-FOOD-LINE-MERGE] falló (no bloquea): {type(_dm_e).__name__}: {_dm_e}")
+
+    # [P1-DISPLAY-RAW-QTY-RECONCILE · 2026-07-24] ÚLTIMO pase antes de la lista: alinea lo que
+    # se compra con lo que el usuario lee (y con lo que respaldan los macros). Va al final para
+    # que los pases anteriores (fantasma, cocido→seco, dedupe) ya hayan dejado el display en su
+    # forma definitiva — reconciliar antes obligaría a repetirlo.
+    if RECONCILE_DISPLAY_RAW:
+        try:
+            _rc = _reconcile_display_raw_lines(result.get("days") or [])
+            if _rc:
+                result["_display_raw_reconciled"] = _rc
+                _peor = max((abs((r.get("ratio") or 1) - 1) for r in _rc), default=0)
+                logger.info(
+                    f"⚖️ [P1-DISPLAY-RAW-QTY-RECONCILE] {len(_rc)} alimento(s) alineado(s) "
+                    f"(peor divergencia {1 + _peor:.2f}×): " + "; ".join(
+                        f"D{r['day']} {r['food']} {r['kind']}" for r in _rc[:6]))
+        except Exception as _rc_e:
+            logger.warning(f"[P1-DISPLAY-RAW-QTY-RECONCILE] falló (no bloquea): "
+                           f"{type(_rc_e).__name__}: {_rc_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
