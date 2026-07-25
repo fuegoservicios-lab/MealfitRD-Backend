@@ -18793,16 +18793,30 @@ def _run_assembly_validations(
                     _recipe_steps = _new_steps
                     meal["recipe"] = _new_steps
                     recipe = " ".join(_new_steps).lower()
-                    # [P2-AUTOFIX-DESC · 2026-07-06] la DESCRIPTION también vende el plato
-                    # ("Camarones cocidos al limón" en un ceviche sin camarón) — mismo
-                    # reemplazo tolerante.
-                    _desc_af = meal.get("description")
-                    if isinstance(_desc_af, str) and _desc_af.strip():
+                    # [P2-AUTOFIX-DESC · 2026-07-06 · clave corregida P1-DESC-KEY-DEAD 2026-07-24]
+                    # la DESCRIPCIÓN también vende el plato ("Camarones cocidos al limón" en un
+                    # ceviche sin camarón) — mismo reemplazo tolerante.
+                    #
+                    # El bloque nació leyendo `meal["description"]`, pero la clave que el motor
+                    # escribe (y que el frontend/PDF renderizan) es **`desc`** — `description` no
+                    # existe en ningún meal persistido. Verificado en el plan vivo 732588f8:
+                    # `sorted(meal.keys())` → [..., 'desc', 'difficulty', ...], sin 'description'.
+                    # O sea: 18 meses de descripciones mintiendo con el fix ya escrito al lado.
+                    # Su test ancla afirmaba la misma clave equivocada, así que el verde no
+                    # probaba nada (corregido en test_p2_blanch_ingredient_truth.py).
+                    # Se recorren AMBAS claves por si algún surface legacy usa `description`.
+                    for _desc_key in ("desc", "description"):
+                        _desc_af = meal.get(_desc_key)
+                        if not (isinstance(_desc_af, str) and _desc_af.strip()):
+                            continue
                         _d2 = _desc_af
                         for _p in _pats:
                             _d2 = _p.sub(_repl, _d2)
                         if _d2 != _desc_af:
-                            meal["description"] = _re.sub(r'\s{2,}', ' ', _d2).strip()
+                            meal[_desc_key] = _re.sub(r'\s{2,}', ' ', _d2).strip()
+                            logger.info(f"🩹 [P1-DESC-KEY-DEAD] Día {day.get('day')} "
+                                        f"{str(meal.get('name'))[:30]!r}: desc reescrita "
+                                        f"({_orphan_keys} → {_repl!r})")
                     # [P1-RECIPE-AUDIT-6 · 2026-07-12] si el rewrite eliminó pollo/cerdo del cuerpo
                     # de la receta, la nota undercook "el pollo/cerdo debe cocinarse..." queda
                     # aconsejando una proteína que ya no existe en el plato (renovación viva
@@ -24040,6 +24054,327 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
         return 0
 
 
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-PHANTOM-INGREDIENT · 2026-07-24] Dirección INVERSA del validador de coherencia.
+#
+# `_recipe_coherence_errors` valida "ingrediente listado que la receta no menciona" (reverse) y,
+# desde P1-AUTO-PATCH-FORWARD, "la receta nombra una PROTEÍNA sin ingrediente equivalente". Lo que
+# NO existía: un alimento cualquiera que la receta declara CON CANTIDAD y que no está en
+# `ingredients`. Caso vivo (plan 732588f8, D1 Desayuno "Avena Proteica con Guanábana y Maní"):
+# guanábana en el nombre, en el desc y en DOS pasos — uno de ellos con la cantidad exacta
+# ("30 g de pulpa de guanábana (despepitada y cortada en trozos)") — y CERO en `ingredients`,
+# CERO en las 4 listas de compras. Receta físicamente incocinable e incomprable.
+#
+# La regla es sintáctica y precisa, no heurística de nombre: **toda cantidad declarada en los
+# pasos debe existir como línea de ingrediente**. Un paso que dice "30 g de X" es una declaración
+# de ingrediente, no una mención casual — por eso el falso positivo es raro (a diferencia de
+# escanear sustantivos del nombre, donde "Ensalada Verde" flagearía 'verde').
+#
+# Reparación = INSERTAR la línea con la cantidad que el propio texto declara (cero invención).
+# Se exige que el alimento resuelva en `master_ingredients`: sin fila no hay densidad ni precio,
+# así que insertarlo ensuciaría la lista de compras — en ese caso se deja pasar (fail-open).
+PHANTOM_INGREDIENT_REPAIR = _env_bool("MEALFIT_PHANTOM_INGREDIENT_REPAIR", True)
+
+# Cantidad + unidad + "de" + alimento. El lookahead corta en el primer separador para no tragar
+# el resto de la frase ("30 g de pulpa de guanábana (despepitada…" → "pulpa de guanábana").
+_PHANTOM_DECL_RE = _re.compile(
+    r"(\d+(?:[.,]\d+)?|[½¼¾⅓⅔])\s*"
+    r"(g|gr|gramos|ml|taza|tazas|cda|cdas|cdta|cdtas|unidad|unidades|lonja|lonjas)\b"
+    r"\s+de\s+"
+    r"([a-záéíóúüñ][a-záéíóúüñ\s]{2,38}?)"
+    r"(?=\s*[,.;:()\[\]]|\s+y\s+|\s+con\s+|\s+para\s+|\s+hasta\s+|\s+en\s+|$)",
+    _re.IGNORECASE,
+)
+# Prefijos de PARTE/PRESENTACIÓN que preceden al alimento real ("pulpa de guanábana", "trozos de
+# piña"). Se pelan de izquierda a derecha hasta que algo resuelva en el catálogo.
+_PHANTOM_PART_PREFIXES = ("pulpa", "trozos", "trozo", "rodajas", "rodaja", "cubos", "tiras",
+                          "lonjas", "lonja", "pedazos", "hojas", "granos", "jugo", "zumo",
+                          "ralladura", "polvo", "harina", "pure", "puré", "crema")
+# Nunca se insertan: staples que el motor NO lista a propósito, o palabras que no son alimento
+# comprable. Insertarlas duplicaría condimentos consolidados o metería agua en la lista.
+_PHANTOM_SKIP_FOODS = frozenset({
+    "agua", "hielo", "sal", "sal marina", "pimienta", "aceite", "aceite en spray", "spray",
+    "azucar", "azúcar", "vinagre", "especias", "sazon", "sazón", "condimentos", "caldo",
+    "mezcla", "masa", "preparacion", "preparación", "relleno", "salsa", "aderezo", "marinada",
+})
+_PHANTOM_CATALOG_INDEX_CACHE: "dict | None" = None
+
+
+def _phantom_catalog_index() -> dict:
+    """{nombre accent-stripped (y alias) → nombre canónico del catálogo}. Lazy, fail-open a {}.
+
+    Sirve para dos cosas a la vez: decidir si una frase ES un alimento comprable y con qué
+    nombre escribirlo (el catálogo es el vocabulario que la lista de compras entiende)."""
+    global _PHANTOM_CATALOG_INDEX_CACHE
+    if _PHANTOM_CATALOG_INDEX_CACHE is not None:
+        return _PHANTOM_CATALOG_INDEX_CACHE
+    idx: dict = {}
+    try:
+        from shopping_calculator import get_master_ingredients
+        from constants import strip_accents as _sa_ph
+        for row in get_master_ingredients() or []:
+            canon = (row.get("name") or "").strip()
+            if not canon:
+                continue
+            keys = [canon]
+            _al = row.get("aliases")
+            if isinstance(_al, (list, tuple)):
+                keys += [str(a) for a in _al if a]
+            elif isinstance(_al, str) and _al.strip():
+                keys += [p.strip() for p in _al.split(",") if p.strip()]
+            for k in keys:
+                kk = _sa_ph(str(k).strip().lower())
+                if len(kk) >= 3:
+                    idx.setdefault(kk, canon)
+                    # plural simple → mismo canónico ("fresas" ↔ "fresa")
+                    idx.setdefault(kk + "s", canon)
+                    if kk.endswith("s"):
+                        idx.setdefault(kk[:-1], canon)
+    except Exception as _e:
+        logger.warning(f"[P1-PHANTOM-INGREDIENT] catálogo no disponible, repair inactivo: {_e}")
+        idx = {}
+    _PHANTOM_CATALOG_INDEX_CACHE = idx
+    return idx
+
+
+def _phantom_resolve_food(phrase: str) -> "tuple[str, str] | None":
+    """'pulpa de guanábana' → ('guanabana', 'Guanábana'). None si no es alimento del catálogo."""
+    try:
+        from constants import strip_accents as _sa_ph
+    except Exception:
+        return None
+    idx = _phantom_catalog_index()
+    if not idx:
+        return None
+    flat = _re.sub(r"\s{2,}", " ", _sa_ph(str(phrase).strip().lower()))
+    if not flat or flat in _PHANTOM_SKIP_FOODS or _sa_ph(flat) in {
+            _sa_ph(s) for s in _PHANTOM_SKIP_FOODS}:
+        return None
+    words = flat.split()
+    # Pelar prefijos de parte/presentación ("pulpa de X", "trozos de X").
+    _prefixes = {_sa_ph(p) for p in _PHANTOM_PART_PREFIXES}
+    while len(words) >= 3 and words[0] in _prefixes and words[1] == "de":
+        words = words[2:]
+    if not words:
+        return None
+    # El skip se evalúa también sobre el NÚCLEO: "aceite" estaba excluido pero "aceite de oliva"
+    # esquivaba la lista por ser otra cadena. Insertar grasa automáticamente es justo lo que más
+    # mueve la banda (2 cdas ≈ 240 kcal) y el motor consolida condimentos por su cuenta.
+    if words[0] in _PHANTOM_SKIP_FOODS:
+        return None
+    # SOLO dos candidatos: la frase completa y su NÚCLEO (primera palabra). Probar todos los
+    # sufijos ("maní mixtas" → "mixtas") o todos los spans invita a resolver un alimento por
+    # su modificador y meter el alimento equivocado en la lista de compras — el fallo caro
+    # aquí no es dejar pasar un fantasma, es comprar lo que la receta no pide.
+    for cand in (" ".join(words), words[0]):
+        if cand in _PHANTOM_SKIP_FOODS:
+            return None
+        hit = idx.get(cand)
+        if hit:
+            return cand, hit
+    return None
+
+
+def _repair_declared_but_unlisted_ingredients(days: list) -> list:
+    """Inserta en `ingredients` los alimentos que los PASOS declaran con cantidad y que no están
+    listados. Devuelve telemetría [{day, meal, food, line}]. Determinista, idempotente, fail-safe.
+
+    Idempotente: tras insertar la línea, el alimento YA aparece en `ingredients` → la siguiente
+    pasada no lo ve. Fail-safe: cualquier excepción por comida se traga (nunca aborta el ensamblado).
+    """
+    fixed: list = []
+    if not isinstance(days, list):
+        return fixed
+    try:
+        from constants import strip_accents as _sa_ph
+    except Exception:
+        return fixed
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            try:
+                steps = meal.get("recipe")
+                steps = list(steps) if isinstance(steps, list) else ([] if steps is None else [str(steps)])
+                if not steps:
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                ings_flat = " | ".join(_sa_ph(str(i).lower()) for i in ings)
+                seen_this_meal = set()
+                for step in steps:
+                    _s = str(step)
+                    # Las notas deterministas (⚠ seguridad, 💡, "se reemplazó X por Y") citan
+                    # alimentos que a propósito NO están en el plato — nunca declaran ingredientes.
+                    if _s.strip().startswith(("⚠", "💡", "💪", "🌱", "🧉")):
+                        continue
+                    _low = _sa_ph(_s.lower())
+                    if "seguridad alimentaria" in _low or "nota del nutricionista" in _low or "se reemplazo" in _low:
+                        continue
+                    for m in _PHANTOM_DECL_RE.finditer(_s):
+                        qty_raw, unit_raw, phrase = m.group(1), m.group(2), m.group(3)
+                        resolved = _phantom_resolve_food(phrase)
+                        if not resolved:
+                            continue
+                        token, canon = resolved
+                        if token in seen_this_meal:
+                            continue
+                        # ¿ya listado? Basta con que el núcleo aparezca en alguna línea.
+                        head = token.split()[0]
+                        if len(head) < 4:
+                            continue
+                        if _re.search(r"\b" + _re.escape(head) + r"[a-z]*\b", ings_flat):
+                            continue
+                        line = f"{qty_raw} {unit_raw} de {canon}"
+                        ings.append(line)
+                        _raw = meal.get("ingredients_raw")
+                        # `ingredients_raw` viaja índice-a-índice con `ingredients`
+                        # (P1-RAW-MISALIGN-TRACE): si existe y estaba alineado, se
+                        # apendea también o el display queda desfasado una posición.
+                        if isinstance(_raw, list) and len(_raw) == len(ings) - 1:
+                            _raw.append(line)
+                        ings_flat += " | " + _sa_ph(line.lower())
+                        seen_this_meal.add(token)
+                        fixed.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                      "food": canon, "line": line})
+            except Exception:
+                continue
+    return fixed
+
+
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-COOKED-GRAIN-DRY · 2026-07-24] "65g de arroz blanco cocido" → 233 kcal donde hay ~85.
+#
+# TODAS las filas de granos/legumbres del catálogo están en SECO (verificado: arroz blanco 358.6,
+# habichuelas rojas 344.7, lentejas 361.5, pasta integral 370.5 kcal/100g). El normalizador de
+# nombres pela los modificadores de estado ("cocido"/"cocida" viven en la lista de constants.py
+# :2274), así que una línea en gramos COCIDOS resuelve contra la fila SECA → sobreconteo ×2.7-3.8
+# en macros, en la lista de compras y en el precio.
+#
+# El propio motor lo escribe: el kcal-floor de gain_muscle calcula su delta con 1.3 kcal/g (arroz
+# COCIDO, `_GM_RICE_KCAL_G`) pero emite el string "{g}g de arroz blanco cocido" que después se
+# resuelve a 3.586 kcal/g. Dos números para el mismo arroz dentro del mismo pipeline. Y el prompt
+# del generador (L4941) instruye a la LLM en kcal COCIDAS, así que el desajuste es sistemático,
+# no un accidente de un plan.
+#
+# Fix: convertir la línea a los gramos SECOS equivalentes — las unidades que el catálogo habla.
+# Así se arregla de una vez para TODOS los consumidores (truth-up, lista, precio, PDF) sin tocar
+# el resolver. Corre antes de construir la lista de compras.
+#
+# El factor sale del catálogo, no de una tabla fija: `kcal_cocido_ref / kcal_fila`. Si algún día
+# una fila pasa a estar en cocido, el ratio cae bajo el umbral y la línea se deja intacta —
+# se auto-desactiva en vez de doble-corregir. Sin paréntesis numérico en la salida a propósito:
+# varios parsers leen `alimento (N g)` como cantidad autoritativa y "(rinde ~65 g cocido)"
+# reintroduciría el número que acabamos de corregir.
+COOKED_GRAIN_DRY_REWRITE = _env_bool("MEALFIT_COOKED_GRAIN_DRY_REWRITE", True)
+_COOKED_GRAIN_LINE_RE = _re.compile(
+    r"^(\s*)(\d+(?:[.,]\d+)?)\s*(g|gr|gramos)\s+de\s+(.+?)\s+"
+    r"(cocid[oa]s?|hervid[oa]s?|sancochad[oa]s?)\s*$",
+    _re.IGNORECASE,
+)
+# (tokens del alimento) → kcal/100 g en estado COCIDO (referencia USDA).
+_COOKED_GRAIN_REF_KCAL = (
+    (("arroz", "quinoa"), 130.0),
+    (("pasta", "espagueti", "espaguetis", "coditos", "fideos", "macarrones", "macarrón"), 158.0),
+    (("habichuela", "habichuelas", "frijol", "frijoles", "lenteja", "lentejas",
+      "garbanzo", "garbanzos", "gandul", "gandules"), 127.0),
+)
+_COOKED_CATALOG_KCAL_CACHE: "dict | None" = None
+
+
+def _catalog_kcal_by_name() -> dict:
+    """{nombre/alias accent-stripped → kcal/100g}. Lazy, fail-open a {}."""
+    global _COOKED_CATALOG_KCAL_CACHE
+    if _COOKED_CATALOG_KCAL_CACHE is not None:
+        return _COOKED_CATALOG_KCAL_CACHE
+    out: dict = {}
+    try:
+        from shopping_calculator import get_master_ingredients
+        from constants import strip_accents as _sa_ck
+        for row in get_master_ingredients() or []:
+            try:
+                kcal = float(row.get("kcal_per_100g") or 0)
+            except (TypeError, ValueError):
+                continue
+            if kcal <= 0:
+                continue
+            keys = [row.get("name") or ""]
+            _al = row.get("aliases")
+            if isinstance(_al, (list, tuple)):
+                keys += [str(a) for a in _al if a]
+            for k in keys:
+                kk = _sa_ck(str(k).strip().lower())
+                if len(kk) >= 3:
+                    out.setdefault(kk, kcal)
+    except Exception as _e:
+        logger.warning(f"[P1-COOKED-GRAIN-DRY] catálogo no disponible, rewrite inactivo: {_e}")
+        out = {}
+    _COOKED_CATALOG_KCAL_CACHE = out
+    return out
+
+
+def _normalize_cooked_grain_lines(days: list) -> list:
+    """Reescribe líneas de grano/legumbre en gramos COCIDOS a sus gramos SECOS equivalentes.
+    Devuelve telemetría [{day, meal, before, after}]. Idempotente (la línea resultante dice
+    'crudo', ya no matchea) y fail-safe."""
+    out: list = []
+    if not isinstance(days, list):
+        return out
+    try:
+        from constants import strip_accents as _sa_ck
+    except Exception:
+        return out
+    kcal_idx = _catalog_kcal_by_name()
+    if not kcal_idx:
+        return out
+    for day in days if isinstance(days, list) else []:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            ings = meal.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            raw = meal.get("ingredients_raw")
+            raw_aligned = isinstance(raw, list) and len(raw) == len(ings)
+            for i, line in enumerate(ings):
+                try:
+                    m = _COOKED_GRAIN_LINE_RE.match(str(line))
+                    if not m:
+                        continue
+                    food = m.group(4).strip()
+                    flat = _sa_ck(food.lower())
+                    ref = next((r for toks, r in _COOKED_GRAIN_REF_KCAL
+                                if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
+                    if ref is None:
+                        continue
+                    dry_kcal = kcal_idx.get(flat) or kcal_idx.get(flat.split()[0])
+                    if not dry_kcal or dry_kcal / ref < 1.5:
+                        # La fila ya está en cocido (o no resuelve): no hay nada que convertir.
+                        continue
+                    cooked_g = float(m.group(2).replace(",", "."))
+                    dry_g = cooked_g * ref / dry_kcal
+                    if dry_g < 5 or dry_g >= cooked_g:
+                        continue
+                    # Concordancia: "cocidas"→"crudas", "cocido"→"crudo". El usuario lee
+                    # esta línea en la app y en el PDF; "habichuelas rojas crudo" canta.
+                    _st = m.group(5).lower()
+                    _end = _st[-2:] if _st[-2:] in ("os", "as") else _st[-1]
+                    new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} crud{_end}"
+                    ings[i] = new_line
+                    if raw_aligned:
+                        raw[i] = new_line
+                    out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                "before": str(line), "after": new_line})
+                except Exception:
+                    continue
+    return out
+
+
 # [P1-PORTION-REALISM-CAP · 2026-07-01] Techos por clase. Tazas: aromáticos ≤1 taza (cebolla/ají para un
 # revoltillo de 1 huevo NO son plato principal), hierbas ≤¼ taza (perejil/cilantro son GUARNICIÓN — el caso
 # "1.5 taza de perejil" de la Ropa Vieja). Conteos: víveres/frutas count-based con techos servibles.
@@ -24123,7 +24458,15 @@ _REALISM_COUNT_CAPS = {"papa": 3.0, "platano": 2.0, "huevo": 4.0,
                        "pina": 1.0, "mango": 2.0,
                        # [P2-ORGAN-MEAT-CAP · 2026-07-06] "2½ puerro mediano (249 g)" para unos
                        # bollitos con 55g de yuca (vivo) — el aromático solo tenía cap en tazas.
-                       "puerro": 1.0}
+                       "puerro": 1.0,
+                       # [P1-TORTILLA-COUNT-CAP · 2026-07-24] "4 tortillas de trigo" en un wrap de
+                       # 1 persona (plan vivo 732588f8, D1 Cena): 48 g/unidad → 192 g = 525 kcal y
+                       # 96 g de carbos, MÁS carbos que los declarados por la comida entera. Los
+                       # pasos de esa misma receta dicen "la tortilla" en singular y el desc
+                       # "tortilla rellena" — la línea era el único sitio con el 4. Ninguna rama
+                       # previa la veía: no es taza, no es cdta, y no estaba en esta tabla.
+                       # Lección 2026-07-12 repetida por tercera vez: CADA unidad necesita su rama.
+                       "tortilla": 2.0, "arepa": 2.0, "casabe": 2.0}
 # [P1-REALISM-CAPS-EXT · 2026-07-05] Compuestos ANTES del sustantivo genérico: el regex de conteo
 # captura solo la primera palabra ("36.5 tomates cherry" → 'tomate', cap 3 sería MUY poco para
 # cherry). Caso vivo: "36.5 tomates cherry (365g)" servido en un casabe — nadie corta 36 cherries.
@@ -28603,6 +28946,34 @@ async def assemble_plan_node(state: PlanState) -> dict:
                            f"{(' Detalle: ' + '; '.join(_rep_detail)) if _rep_detail else ''}")
     except Exception:
         pass
+
+    # [P1-PHANTOM-INGREDIENT · 2026-07-24] Dirección INVERSA del validador de coherencia.
+    # DEBE correr aquí: antes de construir la lista de compras (la línea insertada tiene que
+    # llegar a la lista) y antes del truth-up pre-INSERT (que recalcula macros desde strings).
+    if PHANTOM_INGREDIENT_REPAIR:
+        try:
+            _ph_fixed = _repair_declared_but_unlisted_ingredients(result.get("days") or [])
+            if _ph_fixed:
+                result["_phantom_ingredients_repaired"] = _ph_fixed
+                logger.info(f"👻 [P1-PHANTOM-INGREDIENT] {len(_ph_fixed)} ingrediente(s) fantasma "
+                            f"reinsertado(s): " + "; ".join(
+                                f"D{f['day']} {f['meal'][:24]!r} → {f['line']!r}" for f in _ph_fixed[:6]))
+        except Exception as _ph_e:
+            logger.warning(f"[P1-PHANTOM-INGREDIENT] falló (no bloquea): {type(_ph_e).__name__}: {_ph_e}")
+
+    # [P1-COOKED-GRAIN-DRY · 2026-07-24] Gramos COCIDOS → gramos SECOS (unidades del catálogo).
+    # Mismo requisito de orden: antes de la lista de compras y del truth-up pre-INSERT.
+    # Va DESPUÉS del kcal-floor de gain_muscle (L28378), que es uno de los escritores de
+    # "{g}g de arroz blanco cocido" — así su línea también queda normalizada.
+    if COOKED_GRAIN_DRY_REWRITE:
+        try:
+            _cg = _normalize_cooked_grain_lines(result.get("days") or [])
+            if _cg:
+                result["_cooked_grain_dry_rewrites"] = _cg
+                logger.info(f"🍚 [P1-COOKED-GRAIN-DRY] {len(_cg)} línea(s) cocido→crudo: " + "; ".join(
+                    f"D{c['day']} {c['before']!r}→{c['after'].strip()!r}" for c in _cg[:6]))
+        except Exception as _cg_e:
+            logger.warning(f"[P1-COOKED-GRAIN-DRY] falló (no bloquea): {type(_cg_e).__name__}: {_cg_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
@@ -36386,9 +36757,63 @@ def clear_stale_low_band_degraded(plan_data: dict) -> bool:
 # P1-BAND-DEGRADED-STALE-CLEAR (que ya recomputa este mismo score post-finalize pero lo descarta sin
 # persistirlo cuando el plan no estaba flagged degradado). Rollback: =false.
 BAND_SCORE_POST_FINALIZE_REFRESH_ENABLED = _env_bool("MEALFIT_BAND_SCORE_POST_FINALIZE_REFRESH", True)
+# [P1-BAND-METRIC-FINAL · 2026-07-24] Emitir la fila `clinical_band_final` con el score ENTREGADO.
+# Kill switch por si el volumen de pipeline_metrics molesta (1 fila extra por plan persistido).
+BAND_METRIC_FINAL_EMIT = _env_bool("MEALFIT_BAND_METRIC_FINAL_EMIT", True)
 
 
-def refresh_clinical_band_score_post_finalize(plan_data: dict) -> bool:
+def _emit_clinical_band_final_metric(band: dict, prev_score, plan_data: dict,
+                                     user_id: "str | None", surface: str) -> None:
+    """[P1-BAND-METRIC-FINAL · 2026-07-24] Emite `pipeline_metrics.node='clinical_band_final'` con
+    el score REALMENTE ENTREGADO. Fire-and-forget, fail-safe.
+
+    Cierra dos agujeros que hicieron que yo mismo le reportara al owner una banda de 0.75 sobre un
+    plan entregado en 1.00 (auditoría 2026-07-24):
+
+      1. **Valor stale.** La fila `clinical_band` se emite dentro del pipeline, ANTES de que
+         `finalize_plan_data_coherence` aplique las últimas mutaciones de macros. Su propio
+         docstring lo admitía. Toda la telemetría de banda de la flota sub-reporta.
+      2. **Filas ausentes.** Esa emisión vive en el bloque de streaming: si el SSE muere a media
+         generación (caso común — ver P1-PLAN-HYDRATE-ON-COMPLETE), el pipeline sigue, el plan se
+         persiste por el fallback… y la métrica nunca se emite. De 4 planes del 24/07 solo 1 tenía
+         fila. Con ese volumen el cron `_clinical_band_drift_alert_job` probablemente no dispara.
+
+    Esta emisión cuelga del camino pre-INSERT, que corre para TODO plan persistido — con SSE vivo o
+    muerto. `pre_finalize_score` viaja en metadata para poder medir el sesgo de la serie vieja.
+    tooltip-anchor: P1-BAND-METRIC-FINAL"""
+    try:
+        from db_core import execute_sql_write
+        import json as _json_bm
+        _score = band.get("score")
+        if _score is None:
+            return
+        # P1-Q10: mismo gate que `_emit_progress` — si el probe de startup detectó que
+        # `pipeline_metrics` rechaza user_id NULL, no disparar IntegrityError por cada invitado.
+        if not user_id and not _is_guest_metrics_enabled():
+            return
+        _meta = {
+            "cells_in_band": band.get("cells_in_band"),
+            "cells_total": band.get("cells_total"),
+            "score_macros_only": band.get("score_macros_only"),
+            "per_macro": band.get("per_macro"),
+            "per_day": band.get("per_day"),
+            "pre_finalize_score": prev_score,
+            "surface": surface,
+            "plan_generation_status": plan_data.get("generation_status"),
+            "quality_degraded": bool(plan_data.get("_quality_degraded")),
+        }
+        execute_sql_write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "
+            "tokens_estimated, confidence, metadata) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (user_id, plan_data.get("session_id") or "post-finalize", "clinical_band_final",
+             0, 0, 0, float(_score), _json_bm.dumps(_meta)),
+        )
+    except Exception as _e:
+        logger.debug(f"[P1-BAND-METRIC-FINAL] no-op: {type(_e).__name__}: {_e}")
+
+
+def refresh_clinical_band_score_post_finalize(plan_data: dict, *, user_id: "str | None" = None,
+                                              surface: str = "pre-insert") -> bool:
     """[P1-BAND-SCORE-POST-FINALIZE · 2026-07-08] La métrica `plan_data['clinical_band_score']` se mide
     DENTRO del pipeline (post-scoring, ~L33865) — ANTES de que `finalize_plan_data_coherence` (pre-INSERT)
     aplique las ÚLTIMAS mutaciones de macros (FATS-RELEVEL-UNIVERSAL + truth-up + cheese-final). Medido en
@@ -36424,6 +36849,10 @@ def refresh_clinical_band_score_post_finalize(plan_data: dict) -> bool:
             f"({_bs.get('cells_in_band')}/{_bs.get('cells_total')} celdas en banda; "
             f"por-macro {_bs.get('per_macro')}; pre-finalize era {_prev_val})"
         )
+        # [P1-BAND-METRIC-FINAL · 2026-07-24] Persistir ESTA lectura (la entregada) en
+        # pipeline_metrics. Sin esto el scoreboard de flota sigue leyendo la stale.
+        if BAND_METRIC_FINAL_EMIT:
+            _emit_clinical_band_final_metric(_bs, _prev_val, plan_data, user_id, surface)
         return True
     except Exception as e:
         logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] no-op: {type(e).__name__}: {e}")

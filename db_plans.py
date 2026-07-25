@@ -1110,7 +1110,11 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                 # SIEMPRE, independiente de si _csd limpió algo. CLEAR-ONLY del flag sigue siendo de _csd.
                 try:
                     from graph_orchestrator import refresh_clinical_band_score_post_finalize as _rbs
-                    _rbs(_pd)
+                    # [P1-BAND-METRIC-FINAL · 2026-07-24] user_id/surface viajan para que la fila
+                    # `clinical_band_final` sea atribuible. Este camino corre para TODO plan
+                    # persistido (con SSE vivo o muerto) — a diferencia de la emisión del
+                    # streaming, que se pierde cuando el cliente se desconecta.
+                    _rbs(_pd, user_id=data.get("user_id"), surface=surface)
                 except Exception as _rbs_e:
                     logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] pre-INSERT no-op: {type(_rbs_e).__name__}: {_rbs_e}")
         except Exception as _fce:

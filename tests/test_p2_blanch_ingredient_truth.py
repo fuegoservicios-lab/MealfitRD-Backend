@@ -75,15 +75,20 @@ def test_autofix_note_exempt_and_description_anchors():
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("P2-AUTOFIX-NOTE-EXEMPT")
-    win = src[i:i + 2600]
+    win = src[i:i + 4400]   # [P1-DESC-KEY-DEAD] la ventana tiene que alcanzar el bloque de desc
     assert "seguridad alimentaria" in win and "se reemplazo" in win, (
         "las notas deterministas citan el alimento ORIGINAL a propósito — exentas del replace"
     )
     assert "_is_det_note" in win and "(?:es|s)?" in win, (
         "patrón tolerante a plural ('Camarones') y acento ('camaron' sin tilde)"
     )
-    assert "P2-AUTOFIX-DESC" in src and 'meal.get("description")' in win, (
-        "la description también se reescribe (vendía 'Camarones cocidos' sin camarón)"
+    # [P1-DESC-KEY-DEAD · 2026-07-24] Esta aserción exigía la MISMA clave equivocada que el
+    # código de producción, así que su verde no probaba nada: el bloque llevaba 18 meses
+    # muerto. La clave real del meal es `desc` (verificado en el plan vivo 732588f8:
+    # keys = [..., 'desc', ...]). Ahora se ancla la clave que el motor escribe de verdad.
+    assert "P2-AUTOFIX-DESC" in src and '"desc"' in win, (
+        "la desc también se reescribe (vendía 'Camarones cocidos' sin camarón) — "
+        "y la clave del meal es `desc`, NO `description`"
     )
 
 
