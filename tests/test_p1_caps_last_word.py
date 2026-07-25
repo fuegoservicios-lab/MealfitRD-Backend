@@ -91,14 +91,34 @@ def test_lineas_sin_cap_intactas():
 # ───────────── 2. los caps como ÚLTIMA palabra ─────────────
 
 def test_los_caps_se_reejecutan_al_final_del_finalize():
-    """Sin esto, cualquier pase aditivo posterior deja una línea por encima del techo."""
+    """Sin esto, cualquier pase aditivo posterior deja una línea por encima del techo.
+
+    ⚠️ Este test medía la cola con una ventana de bytes fija (`src[i_ret - 2600:i_ret]`) y
+    P1-RECONCILE-LAST-WORD (2026-07-25) la rompió por el motivo previsible: añadir un bloque
+    legítimo detrás de los caps empujó la llamada fuera de la ventana. Una ventana fija caduca
+    con la siguiente edición y falla por una razón que no es la que el test vigila.
+
+    Lo que importa no es "los caps están en los últimos N bytes" sino **el orden relativo**: los
+    caps van después de los pases ADITIVOS que pueden re-inflar una línea. Eso es lo que se
+    afirma ahora, y no caduca.
+    """
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     i_fin = src.index("def finalize_plan_data_coherence")
     i_ret = src.index('return (total, ", ".join(parts))', i_fin)
-    cola = src[i_ret - 2600:i_ret]
-    assert "P1-CAPS-LAST-WORD" in cola
-    assert "_cap_unrealistic_portions(days, db=db)" in cola
+    cuerpo = src[i_fin:i_ret]
+    assert "P1-CAPS-LAST-WORD" in cuerpo
+    i_caps = cuerpo.rindex("_cap_unrealistic_portions(days, db=db)")
+    # Los pases ADITIVOS de esta función: añaden líneas o suben cantidades, así que cada uno
+    # puede dejar una porción por encima del techo. Todos deben quedar por DELANTE de los caps.
+    # Sin guarda `if found`: si alguien renombra uno, este test tiene que fallar en vez de
+    # dejar de vigilarlo en silencio.
+    for aditivo in ("_add_missing_recipe_step_vegetables", "_add_missing_recipe_step_carbs",
+                    "_repair_gainmuscle_day_kcal", "_floor_subservible_portions",
+                    "_restore_display_from_raw_orphans"):
+        j = cuerpo.find(aditivo)
+        assert j >= 0, f"{aditivo} ya no está en finalize: revisa si sigue siendo aditivo y re-ancla"
+        assert j < i_caps, f"{aditivo} corre DESPUÉS de los caps: puede dejar una línea sobre el techo"
 
 
 def test_corre_antes_del_refresh_de_banda():

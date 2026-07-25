@@ -21959,6 +21959,45 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         except Exception as _eclw:
             logger.warning(f"[P1-CAPS-LAST-WORD] no-op: {type(_eclw).__name__}: {_eclw}")
 
+    # [P1-RECONCILE-LAST-WORD · 2026-07-25] El reconciliador display↔raw, TAMBIÉN como última
+    # palabra. Mismo error de orden que ya cerraron P1-CAPS-LAST-WORD y P1-FINALIZE-TAIL-PARITY,
+    # por tercera puerta.
+    #
+    # `_reconcile_display_raw_lines` tenía UN solo callsite, en `assemble_plan_node` justo antes
+    # de construir la lista de compras. Pero después de ese punto siguen corriendo pases que
+    # cambian cantidades, y la lista se RE-AGREGA después de ellos:
+    #
+    #     reconciliador           ← alinea display↔raw
+    #     DISPLAY-RESTORE-FROM-RAW
+    #     FINAL-BAND-CLOSER       ← cambia cantidades
+    #     GAINMUSCLE-KCAL-FLOOR   ← cambia cantidades
+    #     listas RE-AGREGADAS     ← compra desde el raw ya divergido
+    #
+    # Evidencia (plan vivo 1d3c6643, 12 comidas): la receta dice `75g de costilla de cerdo` y la
+    # lista compra 55 g (D1) y 45 g (D2); `85 g de queso cottage` contra 125 g. Las divergencias
+    # se concentran en proteínas y lácteos — exactamente lo que tocan el cerrador de proteína y
+    # el refill, que corren DESPUÉS del único callsite. La comida del pescado lo confirma en sus
+    # flags: `_protein_closed`, `_gainmuscle_kcal_floor` y `_portion_realism_capped`, los tres.
+    #
+    # Va DESPUÉS de los caps a propósito: los caps sólo bajan el display, así que reconciliar
+    # antes propagaría a la lista una cantidad que el cap está a punto de recortar.
+    #
+    # Autoridad = display (lo que el usuario lee y lo que respaldan los macros declarados).
+    # Idempotente y fail-open, igual que el callsite de assemble, que se conserva: este pase no
+    # lo reemplaza, le pone una segunda oportunidad detrás de los pases aditivos.
+    if RECONCILE_DISPLAY_RAW:
+        try:
+            _rlw = _reconcile_display_raw_lines(days)
+            if _rlw:
+                total += len(_rlw); parts.append(f"reconcile_last_word={len(_rlw)}")
+                _peor = max((abs((r.get("ratio") or 1) - 1) for r in _rlw), default=0)
+                logger.info(
+                    f"⚖️ [P1-RECONCILE-LAST-WORD] {len(_rlw)} alimento(s) re-alineado(s) por pases "
+                    f"POSTERIORES al reconciliador de assemble (peor {1 + _peor:.2f}×): "
+                    + "; ".join(f"D{r['day']} {r['food']} {r['kind']}" for r in _rlw[:6]))
+        except Exception as _erlw:
+            logger.warning(f"[P1-RECONCILE-LAST-WORD] no-op: {type(_erlw).__name__}: {_erlw}")
+
     return (total, ", ".join(parts))
 
 
