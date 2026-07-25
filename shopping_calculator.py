@@ -2641,6 +2641,63 @@ def _resolve_brand_pref(name: str, prefs: dict):
 _CYCLE_DAYS_BY_DURATION = {"weekly": 7, "biweekly": 15, "monthly": 30}
 
 
+# [P1-CYCLE-REPURCHASE-HONEST · 2026-07-25] Un perecedero cuyo envase mínimo cubre varias semanas
+# NO se re-compra cada semana. Rollback sin redeploy: =false vuelve al ×semanas plano.
+CYCLE_REPURCHASE_HONEST = _knob_env_bool("MEALFIT_CYCLE_REPURCHASE_HONEST", True)
+
+
+def _item_cycle_repurchases(item: dict, cycle_days: int, trip_days: int = 7) -> float:
+    """Veces que se compra ESTE ítem durante el ciclo.
+
+    `pkg_cover_ratio` dice cuántas veces cabe la necesidad de una ida dentro del envase mínimo,
+    así que el envase alcanza para `trip_days × ratio` días. El límite lo pone lo que ocurra
+    primero: que se acabe **o que se dañe** (`shelf_life_days`) — una funda de 3 lb de manzanas
+    puede cubrir el mes en consumo y no aguantarlo en la nevera.
+
+    Sin datos (ítem viejo, sin envase resuelto) devuelve el comportamiento previo: ciclo/ida.
+    Nunca menos de 1 ni más que el plano — este pase sólo puede BAJAR el costo declarado, jamás
+    inventar compras. tooltip-anchor: P1-CYCLE-REPURCHASE-HONEST
+    """
+    plano = max(1.0, float(cycle_days) / max(1, trip_days))
+    if not CYCLE_REPURCHASE_HONEST or not isinstance(item, dict):
+        return plano
+    try:
+        ratio = float(item.get("pkg_cover_ratio") or 0)
+    except (TypeError, ValueError):
+        ratio = 0.0
+    if ratio <= 0:
+        return plano                      # sin señal → no adivinar
+    cubre_dias = max(1.0, float(trip_days) * ratio)
+    try:
+        vida = float(item.get("shelf_life_days") or 0)
+        if vida > 0:
+            cubre_dias = min(cubre_dias, vida)
+    except (TypeError, ValueError):
+        pass
+    return max(1.0, min(plano, float(cycle_days) / cubre_dias))
+
+
+def _perishable_cycle_cost(items, cycle_days: int, weeks_flat: float) -> tuple[float, float]:
+    """Costo de perecederos del ciclo sumando ítem a ítem sus re-compras reales.
+
+    Devuelve `(costo, ahorro_vs_plano)`. El ahorro es telemetría: mide cuánto sobre-declaraba el
+    ×semanas plano, que es lo que veía el usuario en "Costo real del ciclo".
+    tooltip-anchor: P1-CYCLE-REPURCHASE-HONEST"""
+    total = plano = 0.0
+    for it in items or []:
+        if not isinstance(it, dict) or it.get("is_perishable") is not True:
+            continue
+        try:
+            cost = float(it.get("estimated_cost_rd"))
+        except (TypeError, ValueError):
+            continue
+        if not (cost > 0) or math.isnan(cost) or math.isinf(cost):
+            continue
+        plano += cost * weeks_flat
+        total += cost * _item_cycle_repurchases(it, cycle_days)
+    return total, max(0.0, plano - total)
+
+
 def _cycle_cost_multiplier(duration: str) -> float:
     """Semanas-equivalentes FRACCIONALES de perecederos consumidos en el ciclo
     (días/7). monthly=4.286, biweekly=2.143, weekly=1.0. NO redondear a entero:
@@ -2879,7 +2936,11 @@ def compute_shopping_cost_summary(
             # fraccional (honesto para los 30 días); idas mostradas = ceil(días/7).
             weeks = _cycle_cost_multiplier(duration)
             trips = _cycle_trip_count(duration)
-            cycle_total = sums["stable"] + sums["perishable"] * weeks
+            # [P1-CYCLE-REPURCHASE-HONEST · 2026-07-25] …pero POR ÍTEM: el ×semanas plano cobraba
+            # 5 veces la funda de 3 lb de manzanas que dura el mes entero.
+            _cycle_days = _CYCLE_DAYS_BY_DURATION.get(duration, 7)
+            _perish_cycle, _ahorro = _perishable_cycle_cost(items, _cycle_days, weeks)
+            cycle_total = sums["stable"] + _perish_cycle
             by_duration[duration] = {
                 "trip_total_rd": round(sums["total"], 2),
                 "stable_rd": round(sums["stable"], 2),
@@ -2887,6 +2948,7 @@ def compute_shopping_cost_summary(
                 "cycle_weeks": round(weeks, 3),
                 "cycle_trips": trips,
                 "cycle_total_rd": round(cycle_total, 2),
+                "cycle_repurchase_saving_rd": round(_ahorro, 2),
                 "items_priced": sums["priced"],
                 "items_total": sums["count"],
             }
@@ -2907,6 +2969,12 @@ def compute_shopping_cost_summary(
             f"cycle=RD${_active_totals['cycle_total_rd']:.0f} "
             f"({_active_totals['items_priced']}/{_active_totals['items_total']} con precio)"
         )
+        _sav = _active_totals.get("cycle_repurchase_saving_rd") or 0
+        if _sav > 0:
+            logging.info(
+                f"🧺 [P1-CYCLE-REPURCHASE-HONEST] {active}: RD${_sav:.0f} que el ×semanas plano "
+                f"cobraba de más (envases que cubren varias idas al súper)."
+            )
         return summary
     except Exception as exc:
         logging.warning(f"⚠️ [P1-BUDGET-COST-SSOT] summary falló (fail-open): {exc}")
@@ -3701,6 +3769,22 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         try:
             result["package_grams"] = round(float(_pkg_size_g), 2)
         except (TypeError, ValueError):
+            pass
+        # [P1-CYCLE-REPURCHASE-HONEST · 2026-07-25] Cuántas veces cabe la NECESIDAD dentro de lo
+        # que obliga a comprar el envase mínimo. Es el único punto del pipeline donde conviven las
+        # dos cifras; más abajo el ítem ya solo lleva el envase y la necesidad se perdió.
+        #
+        # Lo consume el costo del ciclo: hoy multiplica TODOS los perecederos por las semanas del
+        # ciclo (×4,29 en mensual) como si cada uno se re-comprara cada semana. La funda mínima de
+        # manzanas es de 3 lb y el plan usa ~1 manzana por semana: se cobraba 5 veces una funda que
+        # dura el mes. Medido en el plan vivo 1d3c6643 — manzana 6,5×, mozzarella 4,9×, avena 4,3×,
+        # ricotta 3,7× de sobre-oferta.
+        try:
+            _need_g = float(weight_in_lbs) * 453.592
+            _pkg_total_g = float(_pkg_size_g) * max(1.0, float(market_qty_numeric_final or 1))
+            if _need_g > 0 and _pkg_total_g > 0:
+                result["pkg_cover_ratio"] = round(_pkg_total_g / _need_g, 3)
+        except (TypeError, ValueError, ZeroDivisionError):
             pass
     # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] producto del súper que la lista usa.
     if _pkg_product_id:
