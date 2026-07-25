@@ -9771,6 +9771,12 @@ PER_MEAL_MACRO_TRUTHUP_ENABLED = _env_bool("MEALFIT_PER_MEAL_MACRO_TRUTHUP", Tru
 # solver ON. Flip a False revierte a solo-escalado.
 MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", True)
 
+# [P1-SOLVER-RAW-BY-FOOD · 2026-07-25] Cuando el solver no puede escalar `ingredients_raw` por
+# índice (largos distintos, que el tracer midió como el caso NORMAL), mapea el factor por
+# alimento resuelto. Sin esto, raw se queda con las cantidades pre-solver y la lista de compras
+# compra algo distinto de lo que el usuario lee. Flip a False vuelve al guard por índice.
+SOLVER_RAW_BY_FOOD = _env_bool("MEALFIT_SOLVER_RAW_BY_FOOD", True)
+
 # [P3-CAL-RECONCILE · 2026-06-13] Paso final del cerebro dividido: nivela las calorías
 # de cada día EXACTAMENTE al target re-escalando porciones + macros uniformemente (el
 # escalado uniforme preserva la consistencia receta↔macro). Cierra `cal_score` del
@@ -14757,11 +14763,41 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                             f"(método={res.get('method')}; el clamp no clavó el target — closer/rebalance cierran).")
         except Exception:
             pass
+        # [P1-SOLVER-RAW-BY-FOOD · 2026-07-25] CAUSA RAÍZ de la divergencia display↔raw.
+        #
+        # El guard original era `len(raw) == len(factors)`: si las listas no tenían el MISMO
+        # número de líneas, el rescalado de `ingredients_raw` se saltaba entero. Y el tracer
+        # (P1-MISALIGN-DEEP-TRACE) midió que el desajuste de largos **nace en `pre_engine`**, o
+        # sea ANTES del solver, en 7-8 de cada 8 comidas. Traducción: en casi todas las comidas
+        # el guard fallaba, el display quedaba escalado por el solver y raw se quedaba con las
+        # cantidades pre-solver. Como la lista de compras lee raw, se compraba una cosa y se
+        # leía otra: 7 de 7 divergencias de cantidad del plan ea79db0e nacían justo aquí.
+        #
+        # Es la MISMA clase de error que P1-PHANTOM-RAW-PARITY (mío, el día anterior): un guard
+        # de alineación por índice que se salta exactamente los casos que necesitan el trabajo.
+        # Las dos listas no son paralelas por diseño — `_restore_display_from_raw_orphans` las
+        # reconcilia por contenido y trata `len(raw) > len(ings)` como estado esperado.
+        #
+        # Fix: cuando los largos coinciden se mantiene el camino por índice (exacto y barato);
+        # si no, se mapea `alimento → factor` desde las líneas de display que el solver escaló y
+        # se aplica a raw por alimento resuelto. Un alimento con factores distintos en varias
+        # líneas se deja intacto: preferimos no escalar que escalar con el factor equivocado.
         raw = meal.get("ingredients_raw")
-        if isinstance(raw, list) and len(raw) == len(factors):
-            meal["ingredients_raw"] = [
-                rescale_ingredient_string(str(r), f) for r, f in zip(raw, factors)
-            ]
+        if isinstance(raw, list) and raw and factors:
+            if len(raw) == len(factors):
+                meal["ingredients_raw"] = [
+                    rescale_ingredient_string(str(r), f) for r, f in zip(raw, factors)
+                ]
+            elif SOLVER_RAW_BY_FOOD:
+                _new_raw, _n = _rescale_raw_by_food(raw, _ing_strs, factors)
+                if _n:
+                    meal["ingredients_raw"] = _new_raw
+                    meal["_solver_raw_by_food"] = _n
+                    logger.info(
+                        f"⚖️ [P1-SOLVER-RAW-BY-FOOD] {str(meal.get('name'))[:32]!r}: "
+                        f"{_n} línea(s) de raw escaladas por alimento "
+                        f"(display={len(factors)} vs raw={len(raw)} — el guard por índice "
+                        f"las habría dejado sin escalar)")
         ach = res["achieved"]
         meal["protein"] = round(ach["protein"])
         meal["carbs"] = round(ach["carbs"])
@@ -24634,6 +24670,41 @@ def _catalog_density_index() -> dict:
         idx = {}
     _CATALOG_DENSITY_INDEX_CACHE = idx
     return idx
+
+
+def _rescale_raw_by_food(raw: list, ing_strs: list, factors: list) -> "tuple[list, int]":
+    """[P1-SOLVER-RAW-BY-FOOD · 2026-07-25] Aplica a `ingredients_raw` los factores que el solver
+    aplicó al display, mapeados por ALIMENTO en vez de por índice. Devuelve `(nueva_lista, n)`.
+
+    Se usa cuando las dos listas no tienen el mismo número de líneas — que el tracer midió como
+    el caso NORMAL, no la excepción. Un alimento que aparece con factores distintos en varias
+    líneas se deja intacto: preferimos no escalar que escalar con el factor equivocado.
+    Fail-safe: cualquier excepción devuelve la lista original sin tocar.
+    """
+    try:
+        from nutrition_db import rescale_ingredient_string
+        fac_by_food: dict = {}
+        for line, f in zip(ing_strs, factors):
+            food, _ = _resolve_line_food_grams(str(line), cheap=True)
+            if not food:
+                continue
+            if food not in fac_by_food:
+                fac_by_food[food] = f
+            elif fac_by_food[food] is not None and abs(fac_by_food[food] - f) > 1e-6:
+                fac_by_food[food] = None       # ambiguo
+        out, n = [], 0
+        for r in raw:
+            food, _ = _resolve_line_food_grams(str(r), cheap=True)
+            f = fac_by_food.get(food) if food else None
+            if f and abs(f - 1.0) > 1e-6:
+                out.append(rescale_ingredient_string(str(r), f))
+                n += 1
+            else:
+                out.append(str(r))
+        return out, n
+    except Exception as e:
+        logger.warning(f"[P1-SOLVER-RAW-BY-FOOD] falló (no bloquea): {type(e).__name__}: {e}")
+        return list(raw), 0
 
 
 def _dup_merge_line_to_grams(qty: float, unit: str, canon: str) -> "float | None":
