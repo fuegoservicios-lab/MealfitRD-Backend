@@ -33,7 +33,17 @@ FAKE_CATALOG = [
 @pytest.fixture(autouse=True)
 def _catalog(monkeypatch):
     monkeypatch.setattr(sc, "get_master_ingredients", lambda *a, **k: FAKE_CATALOG)
+    # [P1-MISALIGN-DEEP-TRACE · 2026-07-24] Los índices y el memo línea→alimento son globales de
+    # módulo (se construyen una vez por proceso, que es lo correcto en producción: el catálogo no
+    # cambia a mitad de generación). En tests hay que arrancar en frío o un caso hereda lo que
+    # resolvió el anterior — que es justo lo que rompió `test_sin_catalogo_no_hace_nada`.
+    for attr in ("_CATALOG_DENSITY_INDEX_CACHE", "_PHANTOM_CATALOG_INDEX_CACHE"):
+        monkeypatch.setattr(go, attr, None, raising=False)
+    go._LINE_FOOD_GRAMS_CACHE.clear()
     yield
+    go._LINE_FOOD_GRAMS_CACHE.clear()
+    go._CATALOG_DENSITY_INDEX_CACHE = None
+    go._PHANTOM_CATALOG_INDEX_CACHE = None
 
 
 def _bowl_poke():
@@ -125,11 +135,17 @@ def test_al_gusto_no_estorba():
     assert "Sal al gusto" in meal["ingredients"] and "Pimienta negra al gusto" in meal["ingredients"]
 
 
-def test_sin_catalogo_no_hace_nada(monkeypatch):
-    """Fail-open: sin densidades no se fusiona (nunca se adivina una cantidad)."""
-    monkeypatch.setattr(sc, "get_master_ingredients", lambda *a, **k: [])
+def test_sin_densidades_no_hace_nada(monkeypatch):
+    """Fail-open: sin densidades no se fusiona (nunca se adivina una cantidad).
+
+    Se vacía el ÍNDICE, no el catálogo: `_catalog_density_index` también cae a `UNIT_WEIGHTS`/
+    `VOLUMETRIC_DENSITIES` de constants, así que "sin catálogo" no implica "sin densidades"
+    — con `get_master_ingredients` vacío el aguacate sigue resolviendo a 250 g/unidad. Afirmar
+    sobre el catálogo probaba una premisa falsa (y sólo pasaba por el orden de los tests)."""
+    monkeypatch.setattr(go, "_catalog_density_index", lambda: {}, raising=False)
     meal = _bowl_poke()
     assert go._merge_duplicate_food_lines([{"day": 1, "meals": [meal]}]) == []
+    assert len(meal["ingredients"]) == 5, "las líneas quedan como estaban"
 
 
 # ───────────── 3. cableado ─────────────

@@ -13887,23 +13887,179 @@ _COUNT_UNIT_WEIGHT_G = {"huevo": 50.0, "cebolla": 150.0, "tomate": 120.0, "papa"
 RAW_MISALIGN_TRACER_ENABLED = _env_bool("MEALFIT_RAW_MISALIGN_TRACER", True)
 
 
+# [P1-MISALIGN-DEEP-TRACE · 2026-07-24] Cache línea→(alimento, gramos). Medido: `_parse_quantity`
+# cuesta ~5 ms por línea (resuelve el nombre contra el catálogo), así que las 7 sondas del tracer
+# sobre 28 comidas costaban **16 s por generación**. Las líneas se repiten masivamente — entre
+# sondas (la comida no cambió), entre comidas ("Sal al gusto", "270 g de mero") y entre los pases
+# que comparten este resolvedor (dedupe y reconciliador, que pagaban lo mismo en silencio).
+_LINE_FOOD_GRAMS_CACHE: dict = {}
+
+
+# Cantidad + unidad + resto, sin tocar el catálogo. Cubre "270 g de mero", "½ taza de aguacate
+# fresco", "0.5 aguacate", "2 cdas de aceite".
+_CHEAP_QTY_RE = _re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)?\s*([½¼¾⅓⅔⅛])?\s*"
+    r"(g|gr|gramos?|ml|tazas?|cdas?|cditas?|cdtas?|unidad(?:es)?|uds?|lonjas?|piezas?)?\s*"
+    r"(?:de\s+)?(.+?)\s*$",
+    _re.IGNORECASE,
+)
+_CHEAP_FRAC = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125}
+
+
+def _resolve_line_food_grams(line: str, *, cheap: bool = False) -> "tuple[str | None, float | None]":
+    """'½ taza de aguacate fresco' → ('aguacate', 37.5). (None, None) si no resuelve.
+
+    `cheap=True` resuelve **100% offline** (regex + los dos índices cacheados del catálogo).
+
+    Por qué existe ese modo: el profiler mostró que `_parse_quantity` **no es una función pura**
+    — cae a `normalize_name` → `get_semantic_cache` → `_batched_embed_documents`, o sea llamadas
+    de embeddings a Cohere con `time.sleep` de reintento. En la medición del tracer eso fueron
+    **30 de 33 segundos**. Un pase de TELEMETRÍA no puede hacer red: ni el costo ni la latencia
+    son suyos, y correría 7 veces por generación sobre nombres que aún no están normalizados.
+
+    Los pases que MUTAN datos (dedupe, reconciliador) sí usan la resolución completa: necesitan
+    los alias del catálogo, corren una sola vez, y la lista de compras hace ese mismo trabajo
+    inmediatamente después — así que el caché queda caliente para ella.
+
+    Memoizado por string exacto (con el modo en la clave): el parseo es determinista.
+    """
+    key = (str(line), cheap)
+    hit = _LINE_FOOD_GRAMS_CACHE.get(key)
+    if hit is not None:
+        return hit
+    out = (None, None)
+    try:
+        from constants import strip_accents as _sa_rl
+        if cheap:
+            m = _CHEAP_QTY_RE.match(str(line))
+            if m and m.group(4):
+                qty = float((m.group(1) or "0").replace(",", ".")) + _CHEAP_FRAC.get(m.group(2) or "", 0.0)
+                unit = (m.group(3) or "unidad").lower()
+                resolved = _phantom_resolve_food(m.group(4))
+                if resolved and qty > 0:
+                    food = resolved[0]
+                    out = (food, _dup_merge_line_to_grams(qty, unit, resolved[1]))
+        else:
+            from shopping_calculator import _parse_quantity as _pq
+            parsed = _pq(str(line), apply_yield_multiplier=False)
+            if parsed:
+                q, u, canon = parsed
+                if canon and q:
+                    out = (_sa_rl(str(canon).lower()),
+                           _dup_merge_line_to_grams(float(q), str(u), str(canon)))
+    except Exception:
+        out = (None, None)
+    if len(_LINE_FOOD_GRAMS_CACHE) > 20000:      # backstop: nunca crece sin techo
+        _LINE_FOOD_GRAMS_CACHE.clear()
+    _LINE_FOOD_GRAMS_CACHE[key] = out
+    return out
+
+
+def _misalign_fingerprint(meal: dict) -> "dict | None":
+    """[P1-MISALIGN-DEEP-TRACE · 2026-07-24] Compara display vs raw por ALIMENTO RESUELTO.
+
+    Devuelve `{"len": bool, "missing_in_raw": [...], "qty": [(food, ratio)]}` o None si la
+    comida no tiene las dos listas.
+
+    Pareo por alimento, JAMÁS por índice: las dos listas están reordenadas entre sí en planes
+    reales, y comparar por posición enfrenta "½ tomate" contra "0.5 ají cubanela" — midiendo
+    ruido. (Ese error me dio una primera medición inflada del 24%.)
+    """
+    disp, raw = meal.get("ingredients"), meal.get("ingredients_raw")
+    if not (isinstance(disp, list) and isinstance(raw, list) and disp and raw):
+        return None
+
+    def _idx(lines):
+        acc: dict = {}
+        for line in lines:
+            # cheap=True: telemetría NUNCA hace red (ver _resolve_line_food_grams).
+            food, g = _resolve_line_food_grams(line, cheap=True)
+            if not food:
+                continue
+            e = acc.setdefault(food, {"g": 0.0, "known": True})
+            if g is None:
+                e["known"] = False
+            else:
+                e["g"] += g
+        return acc
+
+    A, B = _idx(disp), _idx(raw)
+    qty = []
+    for food, a in A.items():
+        b = B.get(food)
+        if not b or not (a["known"] and b["known"]) or a["g"] <= 0 or b["g"] <= 0:
+            continue
+        r = a["g"] / b["g"]
+        if abs(r - 1.0) > RECONCILE_DISPLAY_RAW_TOL:
+            qty.append((food, round(r, 2)))
+    return {"len": len(disp) != len(raw),
+            "missing_in_raw": sorted(set(A) - set(B)),
+            "qty": sorted(qty, key=lambda x: -abs(x[1] - 1))}
+
+
 def _trace_misalign(days, stage: str) -> None:
-    """[P1-RAW-MISALIGN-TRACE · 2026-07-06] Ver comment del knob. Marca solo la PRIMERA vez."""
+    """[P1-RAW-MISALIGN-TRACE · 2026-07-06 · profundizado P1-MISALIGN-DEEP-TRACE 2026-07-24]
+    Registra en qué etapa del pipeline aparece por PRIMERA VEZ cada tipo de divergencia entre
+    `ingredients` (display + macros) e `ingredients_raw` (lista de compras).
+
+    La versión original solo miraba `len(display) != len(raw)`. Eso deja fuera los dos modos
+    que más daño hacen y que medí en planes entregados:
+      - **cantidad**: mismo alimento en ambas listas con cantidades distintas (24% de los
+        alimentos, hasta 4.9×). El largo coincide, así que era invisible.
+      - **ausente en raw**: alimento que sólo está en el display → no se compra nunca.
+
+    Se guarda un marcador POR TIPO (no uno global): una comida que nace con distinto largo
+    seguía enmascarando la etapa donde después aparecía la divergencia de cantidad. Y el
+    resultado se agrega a `plan_data` (`_raw_misalign_stages`) en vez de morir en un WARN del
+    journal — sin eso, encontrar al pase culpable exige mirar logs en vivo con suerte.
+    """
     if not RAW_MISALIGN_TRACER_ENABLED:
         return
     try:
         for _d in days or []:
             for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
-                if not isinstance(_m, dict) or _m.get("_misalign_traced"):
+                if not isinstance(_m, dict):
                     continue
-                _a = _m.get("ingredients")
-                _b = _m.get("ingredients_raw")
-                if isinstance(_a, list) and isinstance(_b, list) and len(_a) != len(_b):
-                    _m["_misalign_traced"] = stage
-                    logger.warning(f"[P1-RAW-MISALIGN-TRACE] PRIMERA divergencia en stage='{stage}' "
-                                   f"display={len(_a)} raw={len(_b)} | meal={str(_m.get('name'))[:45]}")
+                fp = _misalign_fingerprint(_m)
+                if fp is None:
+                    continue
+                seen = _m.get("_misalign_trace")
+                if not isinstance(seen, dict):
+                    seen = {}
+                for kind, hit, detail in (
+                    ("len", fp["len"], f"display={len(_m.get('ingredients') or [])} raw={len(_m.get('ingredients_raw') or [])}"),
+                    ("missing_in_raw", bool(fp["missing_in_raw"]), ",".join(fp["missing_in_raw"][:3])),
+                    ("qty", bool(fp["qty"]), "; ".join(f"{f}×{r}" for f, r in fp["qty"][:3])),
+                ):
+                    if hit and kind not in seen:
+                        seen[kind] = stage
+                        logger.warning(
+                            f"[P1-RAW-MISALIGN-TRACE] PRIMERA divergencia '{kind}' en "
+                            f"stage='{stage}' | {detail} | meal={str(_m.get('name'))[:45]}")
+                if seen:
+                    _m["_misalign_trace"] = seen
+                    # Compat: el marcador viejo (string) lo leen logs/consultas existentes.
+                    _m.setdefault("_misalign_traced", seen.get("len") or next(iter(seen.values())))
     except Exception:
         pass
+
+
+def _summarize_misalign_stages(days) -> dict:
+    """Agrega los marcadores por-comida en `{tipo: {etapa: nº de comidas}}` para persistirlo en
+    `plan_data`. Así el culpable se busca con SQL sobre la flota, no leyendo logs en vivo."""
+    out: dict = {}
+    try:
+        for _d in days or []:
+            for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                tr = _m.get("_misalign_trace") if isinstance(_m, dict) else None
+                if not isinstance(tr, dict):
+                    continue
+                for kind, stage in tr.items():
+                    out.setdefault(kind, {})
+                    out[kind][stage] = out[kind].get(stage, 0) + 1
+    except Exception:
+        pass
+    return out
 
 
 def _inject_blanch_for_citrus_marinade(meal: dict) -> bool:
@@ -24437,31 +24593,63 @@ _DUP_MERGE_FRACTIONS = ((0.25, "¼"), (1 / 3, "⅓"), (0.5, "½"), (2 / 3, "⅔"
 _DUP_MERGE_MAX_DRIFT = 0.05
 
 
+_CATALOG_DENSITY_INDEX_CACHE: "dict | None" = None
+
+
+def _catalog_density_index() -> dict:
+    """{nombre accent-stripped → (g_por_unidad, g_por_taza)} con fallback a constants.
+
+    Cacheado: el tracer de desalineación (P1-RAW-MISALIGN-TRACE) convierte cada línea de cada
+    comida en varios puntos del pipeline, y un scan lineal del catálogo por línea multiplicaba
+    ~200 filas × miles de líneas.
+    """
+    global _CATALOG_DENSITY_INDEX_CACHE
+    if _CATALOG_DENSITY_INDEX_CACHE is not None:
+        return _CATALOG_DENSITY_INDEX_CACHE
+    idx: dict = {}
+    try:
+        from shopping_calculator import get_master_ingredients
+        from constants import strip_accents as _sa_dm, UNIT_WEIGHTS, VOLUMETRIC_DENSITIES
+
+        def _num(v):
+            try:
+                return float(v or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        for r in get_master_ingredients() or []:
+            k = _sa_dm(str(r.get("name") or "").strip().lower())
+            if k:
+                idx[k] = (_num(r.get("density_g_per_unit")), _num(r.get("density_g_per_cup")))
+        for k, v in (UNIT_WEIGHTS or {}).items():
+            kk = _sa_dm(str(k).lower())
+            u, c = idx.get(kk, (0.0, 0.0))
+            idx[kk] = (u or float(v or 0), c)
+        for k, v in (VOLUMETRIC_DENSITIES or {}).items():
+            kk = _sa_dm(str(k).lower())
+            u, c = idx.get(kk, (0.0, 0.0))
+            idx[kk] = (u, c or float(v or 0))
+    except Exception as _e:
+        logger.debug(f"[CATALOG-DENSITY-INDEX] no disponible: {type(_e).__name__}: {_e}")
+        idx = {}
+    _CATALOG_DENSITY_INDEX_CACHE = idx
+    return idx
+
+
 def _dup_merge_line_to_grams(qty: float, unit: str, canon: str) -> "float | None":
     """(0.5, 'unidad', 'Aguacate') → 125.0 g. None si la unidad no convierte con confianza."""
     u = (unit or "").strip().lower()
     if u in ("g", "gr", "gramo", "gramos", "ml"):
         return float(qty)
     try:
-        from shopping_calculator import get_master_ingredients
-        from constants import strip_accents as _sa_dm, UNIT_WEIGHTS, VOLUMETRIC_DENSITIES
+        from constants import strip_accents as _sa_dm
     except Exception:
         return None
-    flat = _sa_dm(str(canon).strip().lower())
-    row = {}
-    for r in get_master_ingredients() or []:
-        if _sa_dm(str(r.get("name") or "").strip().lower()) == flat:
-            row = r
-            break
-    def _num(v):
-        try:
-            return float(v or 0)
-        except (TypeError, ValueError):
-            return 0.0
+    per_u, per_cup = _catalog_density_index().get(_sa_dm(str(canon).strip().lower()), (0.0, 0.0))
     if u in ("taza", "tazas"):
-        g = _num(row.get("density_g_per_cup")) or _num(VOLUMETRIC_DENSITIES.get(flat))
+        g = per_cup
     elif u in ("unidad", "unidades", "ud", "uds"):
-        g = _num(row.get("density_g_per_unit")) or _num(UNIT_WEIGHTS.get(flat))
+        g = per_u
     else:
         return None   # cda/cdta/lonja/pote/lata/"al gusto": no se fusiona
     return float(qty) * g if g > 0 else None
@@ -24616,27 +24804,15 @@ def _reconcile_display_raw_lines(days: list) -> list:
     out: list = []
     if not isinstance(days, list):
         return out
-    try:
-        from shopping_calculator import _parse_quantity as _pq
-        from constants import strip_accents as _sa_rc
-    except Exception:
-        return out
-
     def _index(lines):
         """{alimento → {'idx': [...], 'g': gramos|None, 'lines': [...]}}"""
         acc: dict = {}
         for i, line in enumerate(lines):
-            try:
-                parsed = _pq(str(line), apply_yield_multiplier=False)
-            except Exception:
+            # Resolvedor memoizado compartido con el tracer (P1-MISALIGN-DEEP-TRACE): parsear
+            # cada línea cuesta ~5 ms y aquí se repiten entre pases y entre comidas.
+            key, g = _resolve_line_food_grams(line)
+            if not key:
                 continue
-            if not parsed:
-                continue
-            qty, unit, canon = parsed
-            if not canon or not qty:
-                continue
-            key = _sa_rc(str(canon).lower())
-            g = _dup_merge_line_to_grams(float(qty), str(unit), str(canon))
             e = acc.setdefault(key, {"idx": [], "g": 0.0, "lines": [], "known": True})
             e["idx"].append(i)
             e["lines"].append(str(line))
@@ -29257,6 +29433,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
     except Exception:
         pass
 
+    # [P1-MISALIGN-DEEP-TRACE · 2026-07-24] Estado de display↔raw ANTES de los pases que las
+    # tocan. Junto con los 5 puntos previos (pre_engine, post_macro_engine, post_engine_seam,
+    # post_humanize, post_gen_sanity) acota en qué tramo nace cada tipo de divergencia.
+    _trace_misalign(result.get("days"), "pre_shopping_passes")
+
     # [P1-PHANTOM-INGREDIENT · 2026-07-24] Dirección INVERSA del validador de coherencia.
     # DEBE correr aquí: antes de construir la lista de compras (la línea insertada tiene que
     # llegar a la lista) y antes del truth-up pre-INSERT (que recalcula macros desde strings).
@@ -29297,6 +29478,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     f"D{d['day']} {d['food']} → {d['into']!r}" for d in _dm[:6]))
         except Exception as _dm_e:
             logger.warning(f"[P1-DUP-FOOD-LINE-MERGE] falló (no bloquea): {type(_dm_e).__name__}: {_dm_e}")
+
+    # [P1-MISALIGN-DEEP-TRACE · 2026-07-24] Foto JUSTO ANTES de reparar: es el estado que
+    # produce el pipeline por sí solo. Si se tomara después del reconciliador, la telemetría
+    # diría siempre "todo bien" y el culpable quedaría tapado por su propio parche.
+    _trace_misalign(result.get("days"), "pre_reconcile")
+    try:
+        _mis = _summarize_misalign_stages(result.get("days"))
+        if _mis:
+            result["_raw_misalign_stages"] = _mis
+            logger.warning(f"[P1-MISALIGN-DEEP-TRACE] divergencias display↔raw por etapa: {_mis}")
+    except Exception:
+        pass
 
     # [P1-DISPLAY-RAW-QTY-RECONCILE · 2026-07-24] ÚLTIMO pase antes de la lista: alinea lo que
     # se compra con lo que el usuario lee (y con lo que respaldan los macros). Va al final para

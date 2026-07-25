@@ -39,7 +39,15 @@ FAKE_CATALOG = [
 @pytest.fixture(autouse=True)
 def _catalog(monkeypatch):
     monkeypatch.setattr(sc, "get_master_ingredients", lambda *a, **k: FAKE_CATALOG)
+    # Caches globales de módulo: correctos en producción (el catálogo no cambia a mitad de
+    # generación), pero en tests hay que arrancar en frío o un caso hereda lo que resolvió otro.
+    for attr in ("_CATALOG_DENSITY_INDEX_CACHE", "_PHANTOM_CATALOG_INDEX_CACHE"):
+        monkeypatch.setattr(go, attr, None, raising=False)
+    go._LINE_FOOD_GRAMS_CACHE.clear()
     yield
+    go._LINE_FOOD_GRAMS_CACHE.clear()
+    go._CATALOG_DENSITY_INDEX_CACHE = None
+    go._PHANTOM_CATALOG_INDEX_CACHE = None
 
 
 # ───────────── 1. los casos medidos en planes reales ─────────────
