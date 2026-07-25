@@ -9787,6 +9787,11 @@ STEP_UNIT_PLURAL_FIX = _env_bool("MEALFIT_STEP_UNIT_PLURAL_FIX", True)
 # `½ conejo (aprox. 358 g en piezas)` esquivaba el techo de proteína. Cuando la masa vive en el
 # paréntesis, esa masa es la cantidad real.
 PAREN_GRAMS_CAP = _env_bool("MEALFIT_PAREN_GRAMS_CAP", True)
+# [P1-FINALIZE-TAIL-PARITY · 2026-07-25] El refill de gain-muscle dentro de
+# `finalize_plan_data_coherence` es ADITIVO y corre después de la cola de assemble, así que
+# reintroduce duplicados y gramos cocidos. Corre esos dos pases detrás de él — sobre todo por los
+# chunks (semanas 2+, ~27 de 30 días), que cierran por ese camino y no tenían ninguna protección.
+FINALIZE_TAIL_PARITY = _env_bool("MEALFIT_FINALIZE_TAIL_PARITY", True)
 
 # [P3-CAL-RECONCILE · 2026-06-13] Paso final del cerebro dividido: nivela las calorías
 # de cada día EXACTAMENTE al target re-escalando porciones + macros uniformemente (el
@@ -21559,6 +21564,38 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                     for _gm_m in (_gm_d.get("meals") or []) if isinstance(_gm_d, dict) else []:
                         if isinstance(_gm_m, dict) and _gm_m.get("_gainmuscle_kcal_floor"):
                             _sync_recipe_step_quantities(_gm_m)
+                # [P1-FINALIZE-TAIL-PARITY · 2026-07-25] Completa el ESPEJO que este bloque
+                # declara ("espejo del orden de assemble"): assemble ganó una cola de pases
+                # después de su refill y este camino se quedó sin ella.
+                #
+                # Medido en vivo (plan 58eb6ed4, corr=00471349): el refill corrió a las 14:02:53,
+                # 35 s DESPUÉS del reconciliador (14:02:18) y en UNA comida produjo las tres cosas
+                # que estos pases arreglan —
+                #     ingredients     : ¼ taza de arroz blanco  +  55g de arroz blanco cocido
+                #     ingredients_raw : ¼ taza de arroz blanco  + 100g de arroz blanco cocido
+                # duplicado del mismo alimento, display↔raw a 1.82×, y gramos COCIDOS que
+                # resuelven contra la fila SECA del catálogo (2.76× de sobreconteo en macros).
+                #
+                # Importa más por los CHUNKS que por assemble: aquí es donde las semanas 2+
+                # (~27 de 30 días) hacen su cierre, y hasta ahora no tenían NINGUNA de estas
+                # protecciones. En el camino chunk la lista se construye después → arreglo completo.
+                #
+                # NO se llama al reconciliador display↔raw: copia las líneas de display verbatim
+                # y aquí el display ya está humanizado ("1 pechuga (porción)") — borraría las
+                # unidades métricas de raw, que es justo lo que P1-4 protege.
+                if FINALIZE_TAIL_PARITY:
+                    try:
+                        _ft_cg = _normalize_cooked_grain_lines(days) if COOKED_GRAIN_DRY_REWRITE else []
+                        _ft_dm = _merge_duplicate_food_lines(days) if MERGE_DUPLICATE_FOOD_LINES else []
+                        if _ft_cg or _ft_dm:
+                            total += len(_ft_cg) + len(_ft_dm)
+                            parts.append(f"finalize_tail={len(_ft_cg)}cg+{len(_ft_dm)}dup")
+                            logger.info(
+                                f"🔗 [P1-FINALIZE-TAIL-PARITY] tras el refill: "
+                                f"{len(_ft_cg)} línea(s) cocido→crudo, "
+                                f"{len(_ft_dm)} grupo(s) de alimento duplicado fusionado(s)")
+                    except Exception as _eft:
+                        logger.warning(f"[P1-FINALIZE-TAIL-PARITY] no-op: {type(_eft).__name__}: {_eft}")
     except Exception as _egm_ck:
         logger.warning(f"[P1-CHUNK-GAINMUSCLE-PARITY] gainmuscle-refill no-op: {type(_egm_ck).__name__}: {_egm_ck}")
     # [P1-RECIPE-QTY-SYNC · 2026-07-01] post-quantize: los pasos reflejan las cantidades actuales (paridad
