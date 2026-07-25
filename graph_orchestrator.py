@@ -17468,6 +17468,16 @@ def _ensure_ingredient_quantities(meal: dict, db) -> int:
 RECIPE_REVERSE_COHERENCE_ENABLED = _env_bool("MEALFIT_RECIPE_REVERSE_COHERENCE", True)
 
 
+# [P1-UNIT-NOUN-NOT-FOOD · 2026-07-25] Sustantivos de unidad/contenedor que pueden quedar dentro
+# del nombre del alimento ("queso de hoja", "filete de pescado") pero jamás son su identidad.
+_UNIT_NOUN_NOT_FOOD = frozenset((
+    "hoja", "hojas", "diente", "dientes", "taza", "tazas", "rebanada", "rebanadas",
+    "lonja", "lonjas", "pedazo", "pedazos", "trozo", "trozos", "cucharada", "cucharadas",
+    "cucharadita", "cucharaditas", "unidad", "unidades", "pizca", "pizcas", "rama", "ramas",
+    "funda", "fundas", "paquete", "paquetes", "pote", "potes", "carton", "cartones",
+    "mazo", "mazos", "gajo", "gajos", "filete", "filetes"))
+
+
 def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
     """[P2-RECIPE-REVERSE-COHERENCE · 2026-06-29] (audit objetivo · P2-6) Coherencia INVERSA: un ingrediente
     listado en `ingredients` pero NUNCA usado en los pasos → el usuario lo compra/paga + macro-cuenta pero la
@@ -17526,6 +17536,25 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             # 3 chars es seguro para sustantivos reales de alimento (pan/ajo/res/miel/col/...).
             toks = [t for t in _re2.split(r"[^a-z]+", bare_low)
                     if len(t) >= 3 and t not in ("para", "tipo", "agua", "aceite", "lata", "latas")]
+            # [P1-UNIT-NOUN-NOT-FOOD · 2026-07-25] Las palabras de UNIDAD/CONTENEDOR que quedan
+            # dentro del nombre no son identidad del alimento, y como el chequeo de más abajo es
+            # `any(token)`, una sola de ellas basta para dar el ingrediente por usado.
+            #
+            # Caso vivo (plan 1d3c6643): `15g de queso de hoja cocido` — el usuario lo compra, lo
+            # ve en el NOMBRE del plato ("…y Queso de Hoja") y ningún paso le dice qué hacer con
+            # él. El pase no lo detectó porque el stem `hoja` casaba con *"cocina al vapor con la
+            # **hoja de laurel**"* — otro ingrediente del mismo plato.
+            #
+            # ⚠️ Medido antes de tocar nada, sobre 518 líneas de 8 planes: esta regla cambia
+            # EXACTAMENTE 1 veredicto (el de arriba) y ninguno más. Dos reglas más anchas se
+            # probaron y se descartaron con datos: exigir ≥2 tokens de identidad producía 41
+            # falsos positivos (`canela en polvo`, `lechuga romana`, `4 huevos enteros`, `yogurt
+            # griego`, y `pan integral familiar` — que es el caso que cerró P1-STEM-SHORT-FOOD-NOUN,
+            # o sea que lo habría regresado); enmascarar las frases de los otros ingredientes no
+            # llegaba a tocar este caso.
+            _ident = [t for t in toks if t not in _UNIT_NOUN_NOT_FOOD]
+            if _ident:
+                toks = _ident          # fallback: un alimento que SEA la unidad no se queda sin tokens
             if not toks:
                 continue  # nombre demasiado corto/ambiguo → no arriesgar falso positivo
             # [P1-RECIPE-QUALITY-100 · 2026-07-10] 'aceite' es filler correcto como COLA ("atún en
