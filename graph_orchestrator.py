@@ -30986,6 +30986,15 @@ _SURGICAL_REJECT_SAFE_PREFIXES = (
     "aparece en",  # "la proteina 'X' aparece en N comidas" (heavy-protein multi-slot, day-attributable)
 )
 
+# [P1-COHERENCE-NO-VETA-QUIRURGICO · 2026-07-25] Razones que NO nombran un día pero que el
+# RE-ENSAMBLADO del path quirúrgico vuelve a evaluar por sí solo: reconstruye la lista de compras
+# y re-corre el guard. No habilitan la ruta por sí mismas (hace falta ≥1 razón day-attributable),
+# sólo dejan de vetarla. Rollback sin redeploy: MEALFIT_COHERENCE_NO_VETA_QUIRURGICO=false.
+_SURGICAL_REJECT_REJUDGED_PREFIXES = (
+    "coherencia recetas lista",
+)
+COHERENCE_NO_VETA_QUIRURGICO = _env_bool("MEALFIT_COHERENCE_NO_VETA_QUIRURGICO", True)
+
 
 def _surgical_reject_targets(state) -> dict | None:
     """[P1-SURGICAL-REJECT-RETRY · 2026-07-05] Clasifica un rechazo como quirúrgicamente reparable.
@@ -31007,10 +31016,36 @@ def _surgical_reject_targets(state) -> dict | None:
         days = plan_result.get("days") or []
         if not reasons or not isinstance(days, list) or len(days) < 2:
             return None
+        # [P1-COHERENCE-NO-VETA-QUIRURGICO · 2026-07-25] Una divergencia de coherencia
+        # receta↔lista NO veta la ruta quirúrgica: se RE-JUZGA después de la reparación.
+        #
+        # Forense (corr=1156a13c, plan 8fa68e8b): el intento 2 se rechazó por DOS razones —
+        # `fruta repetida el mismo día` (day-attributable, whitelisted) y `COHERENCIA RECETAS
+        # LISTA: 1 divergencia crítica (Queso fresco)`. La regla "todas deben ser reparables"
+        # mandó el plan entero al planificador: **~150 s de regeneración completa** para cuadrar
+        # una cantidad de queso.
+        #
+        # La clave es que el path quirúrgico RE-ENSAMBLA (medido: 25 s), y ese re-ensamblado
+        # reconstruye la lista de compras y vuelve a correr el guard. O sea que la reparación
+        # determinista que la divergencia necesita ya viene incluida — a 25 s en vez de 150.
+        # Si sobrevive, el siguiente rechazo enruta normal y no se pierde nada.
+        #
+        # Sigue siendo conservador en las dos direcciones que importan:
+        #   · cualquier razón que NO sea whitelisted ni de coherencia → None (retry completo).
+        #   · SOLO coherencia, sin ninguna razón atribuible a un día → None: no hay día que
+        #     reparar y el quirúrgico no tendría nada que hacer.
+        _n_whitelisted = 0
         for _r in reasons:
             _r_low = _sa_sr(str(_r).lower())
-            if not any(p in _r_low for p in _SURGICAL_REJECT_SAFE_PREFIXES):
-                return None
+            if any(p in _r_low for p in _SURGICAL_REJECT_SAFE_PREFIXES):
+                _n_whitelisted += 1
+                continue
+            if COHERENCE_NO_VETA_QUIRURGICO and any(
+                    p in _r_low for p in _SURGICAL_REJECT_REJUDGED_PREFIXES):
+                continue          # se re-juzga tras el re-ensamblado
+            return None
+        if _n_whitelisted == 0:
+            return None
         issues_by_day: dict = {}
         try:
             _rep = build_variety_report(plan_result)
