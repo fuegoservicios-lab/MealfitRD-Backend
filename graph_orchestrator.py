@@ -24392,6 +24392,161 @@ def _normalize_cooked_grain_lines(days: list) -> list:
     return out
 
 
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# [P1-DUP-FOOD-LINE-MERGE · 2026-07-24] El mismo alimento en DOS líneas de la misma comida.
+#
+# Plan vivo 732588f8, D1 "Bowl Poke Tropical de Mero":
+#     ingredients[2]  "¼ taza de aguacate fresco"     (0.25 × 150 g/taza  =  37.5 g)
+#     ingredients[3]  "½ aguacate"                    (0.5  × 250 g/unid  = 125.0 g)
+# El usuario ve el aguacate dos veces con dos unidades distintas. Y en `ingredients_raw`
+# (lo que compra la lista) pasa lo mismo con casabe y huevo en otras comidas.
+#
+# Lo que este pase NO arregla, para que nadie le atribuya de más: el agregador de la lista
+# ya fusiona por nombre canónico y normaliza a gramos ANTES de asignar empaques
+# (shopping_calculator ~L7423), así que las dos líneas no producían doble redondeo de
+# empaque — se sumaban bien. El defecto real es de PRESENTACIÓN y de portación (dos líneas
+# que describen el mismo alimento suman 162 g de aguacate en un bowl sin que ningún cap lo
+# vea, porque cada línea por separado está bajo el techo).
+#
+# Conservador por diseño: sólo fusiona cuando TODAS las líneas del grupo convierten a gramos
+# de forma limpia. Cualquier unidad rara (cda, lonja, pote, "al gusto") aborta el grupo.
+MERGE_DUPLICATE_FOOD_LINES = _env_bool("MEALFIT_MERGE_DUPLICATE_FOOD_LINES", True)
+# Fracciones "servibles" para no escribir "0.65 aguacate". Incluye TERCIOS: con sólo cuartos,
+# el caso vivo (162.5 g ÷ 250 g/unidad = 0.65) redondeaba a ¾ = 187.5 g, un +15% de comida
+# inventada por un detalle de formato. La cantidad manda sobre la estética.
+_DUP_MERGE_FRACTIONS = ((0.25, "¼"), (1 / 3, "⅓"), (0.5, "½"), (2 / 3, "⅔"), (0.75, "¾"))
+# Deriva máxima tolerada al expresar el total en la unidad dominante. Por encima, se escribe en
+# gramos: menos bonito, pero jamás cambia cuánta comida hay.
+_DUP_MERGE_MAX_DRIFT = 0.05
+
+
+def _dup_merge_line_to_grams(qty: float, unit: str, canon: str) -> "float | None":
+    """(0.5, 'unidad', 'Aguacate') → 125.0 g. None si la unidad no convierte con confianza."""
+    u = (unit or "").strip().lower()
+    if u in ("g", "gr", "gramo", "gramos", "ml"):
+        return float(qty)
+    try:
+        from shopping_calculator import get_master_ingredients
+        from constants import strip_accents as _sa_dm, UNIT_WEIGHTS, VOLUMETRIC_DENSITIES
+    except Exception:
+        return None
+    flat = _sa_dm(str(canon).strip().lower())
+    row = {}
+    for r in get_master_ingredients() or []:
+        if _sa_dm(str(r.get("name") or "").strip().lower()) == flat:
+            row = r
+            break
+    def _num(v):
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    if u in ("taza", "tazas"):
+        g = _num(row.get("density_g_per_cup")) or _num(VOLUMETRIC_DENSITIES.get(flat))
+    elif u in ("unidad", "unidades", "ud", "uds"):
+        g = _num(row.get("density_g_per_unit")) or _num(UNIT_WEIGHTS.get(flat))
+    else:
+        return None   # cda/cdta/lonja/pote/lata/"al gusto": no se fusiona
+    return float(qty) * g if g > 0 else None
+
+
+def _dup_merge_format(total_g: float, unit: str, canon: str) -> "str | None":
+    """Escribe el total en la unidad DOMINANTE del grupo (más legible que gramos crudos para
+    frutas y víveres). Redondea al cuarto más cercano; None si no se puede formatear."""
+    u = (unit or "").strip().lower()
+    if u in ("g", "gr", "gramo", "gramos"):
+        return f"{int(round(total_g))} g de {canon}"
+    if u == "ml":
+        return f"{int(round(total_g))} ml de {canon}"
+    per = _dup_merge_line_to_grams(1.0, u, canon)
+    if not per or per <= 0:
+        return None
+    n = total_g / per
+    if n <= 0 or n > 20:
+        return None
+    whole = int(n)
+    frac = n - whole
+    best = min(_DUP_MERGE_FRACTIONS + ((0.0, ""), (1.0, "")), key=lambda f: abs(f[0] - frac))
+    if best[0] == 1.0:
+        whole, glyph, rounded = whole + 1, "", float(whole + 1)
+    else:
+        glyph, rounded = best[1], whole + best[0]
+    if whole <= 0 and not glyph:
+        return None
+    # La cantidad es el contrato; el formato es cosmético. Si expresarla en la unidad
+    # dominante exige inventar (o quitar) más de un 5% de comida, se escribe en gramos.
+    if abs(rounded * per - total_g) > _DUP_MERGE_MAX_DRIFT * total_g:
+        return f"{int(round(total_g))} g de {canon}"
+    qty_txt = f"{whole}{glyph}" if whole > 0 else glyph
+    if u in ("taza", "tazas"):
+        return f"{qty_txt} taza{'s' if whole > 1 else ''} de {canon}"
+    return f"{qty_txt} {canon}"
+
+
+def _merge_duplicate_food_lines(days: list) -> list:
+    """Fusiona líneas de la MISMA comida que resuelven al mismo alimento maestro.
+    Devuelve telemetría [{day, meal, list, food, merged, into}]. Idempotente, fail-safe."""
+    out: list = []
+    if not isinstance(days, list):
+        return out
+    try:
+        from shopping_calculator import _parse_quantity as _pq
+        from constants import strip_accents as _sa_dm
+    except Exception:
+        return out
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            # Cada lista por separado: no están alineadas por índice (P1-PHANTOM-RAW-PARITY).
+            for _key in ("ingredients", "ingredients_raw"):
+                lst = meal.get(_key)
+                if not isinstance(lst, list) or len(lst) < 2:
+                    continue
+                try:
+                    groups: dict = {}
+                    for idx, line in enumerate(lst):
+                        try:
+                            parsed = _pq(str(line), apply_yield_multiplier=False)
+                        except Exception:
+                            parsed = None
+                        if not parsed:
+                            continue
+                        qty, unit, canon = parsed
+                        if not canon or not qty:
+                            continue
+                        groups.setdefault(_sa_dm(str(canon).lower()), []).append(
+                            (idx, float(qty), str(unit), str(canon)))
+                    drop: set = set()
+                    for _k, members in groups.items():
+                        if len(members) < 2:
+                            continue
+                        grams = [_dup_merge_line_to_grams(q, u, c) for _, q, u, c in members]
+                        if any(g is None or g <= 0 for g in grams):
+                            continue   # alguna unidad no convierte con confianza → no se toca
+                        total = sum(grams)
+                        # Unidad de la línea con MAYOR aporte: la que mejor describe el total.
+                        dom = members[max(range(len(members)), key=lambda i: grams[i])]
+                        merged = _dup_merge_format(total, dom[2], dom[3])
+                        if not merged:
+                            continue
+                        keep = members[0][0]
+                        lst[keep] = merged
+                        drop.update(m[0] for m in members[1:])
+                        out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                    "list": _key, "food": dom[3],
+                                    "merged": [str(lst[m[0]]) if m[0] == keep else str(lst[m[0]])
+                                               for m in members[1:]],
+                                    "into": merged})
+                    if drop:
+                        meal[_key] = [x for i, x in enumerate(lst) if i not in drop]
+                except Exception:
+                    continue
+    return out
+
+
 # [P1-PORTION-REALISM-CAP · 2026-07-01] Techos por clase. Tazas: aromáticos ≤1 taza (cebolla/ají para un
 # revoltillo de 1 huevo NO son plato principal), hierbas ≤¼ taza (perejil/cilantro son GUARNICIÓN — el caso
 # "1.5 taza de perejil" de la Ropa Vieja). Conteos: víveres/frutas count-based con techos servibles.
@@ -28991,6 +29146,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     f"D{c['day']} {c['before']!r}→{c['after'].strip()!r}" for c in _cg[:6]))
         except Exception as _cg_e:
             logger.warning(f"[P1-COOKED-GRAIN-DRY] falló (no bloquea): {type(_cg_e).__name__}: {_cg_e}")
+
+    # [P1-DUP-FOOD-LINE-MERGE · 2026-07-24] El mismo alimento en dos líneas de la misma comida.
+    # Va DESPUÉS del repair de fantasmas (si la línea reinsertada coincide con una existente,
+    # aquí se funden) y antes de la lista.
+    if MERGE_DUPLICATE_FOOD_LINES:
+        try:
+            _dm = _merge_duplicate_food_lines(result.get("days") or [])
+            if _dm:
+                result["_duplicate_food_lines_merged"] = _dm
+                logger.info(f"🔗 [P1-DUP-FOOD-LINE-MERGE] {len(_dm)} grupo(s) fundido(s): " + "; ".join(
+                    f"D{d['day']} {d['food']} → {d['into']!r}" for d in _dm[:6]))
+        except Exception as _dm_e:
+            logger.warning(f"[P1-DUP-FOOD-LINE-MERGE] falló (no bloquea): {type(_dm_e).__name__}: {_dm_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
