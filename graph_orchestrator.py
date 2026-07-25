@@ -24536,6 +24536,89 @@ def _phantom_resolve_food(phrase: str) -> "tuple[str, str] | None":
     return None
 
 
+# [P1-NAME-PHANTOM-DAIRY · 2026-07-25] El NOMBRE promete un lácteo que el plato no lleva.
+#
+# Reporte del owner (plan vivo 2dbc836c), dos platos con el chip "El nombre puede no reflejar la
+# proteína real":
+#   "Tostadas … con Queso Mozzarella y Níspero y Huevo" → pan, níspero, miel, huevo, sal.
+#   "Arepitas … Rellenas de Queso Mozzarella"           → harina, agua, lechuga, tomate, aguacate…
+# El segundo se queda **sin ninguna proteína** en una cena de 611 kcal.
+#
+# El sistema ya lo DETECTA: `P1-PHANTOM-PROTEIN-NAMEFIX` renombra cuando hay otra carne real, y
+# si no la hay marca `_name_honesty_degraded` en vez de mentir ("no se 'asa' un yogur"). Es una
+# decisión correcta, pero deja el plato pobre: renombrar lo vuelve honesto y sigue sin proteína.
+#
+# `P1-PHANTOM-INGREDIENT` sólo cubre alimentos con CANTIDAD declarada en los pasos. Aquí el queso
+# está únicamente en el nombre, así que hay que elegir una porción — por eso el alcance es
+# deliberadamente estrecho:
+#   · SÓLO lácteos/quesos (la clase del reporte, y donde la ausencia rompe la proteína del plato).
+#     Frutas y vegetales fantasma en el nombre siguen siendo sólo aviso: una guarnición ausente
+#     no arruina la comida y no justifica inventar gramos.
+#   · Porción conservadora y fija (30 g ≈ una lonja), no derivada de un hueco de macros.
+#   · El alimento tiene que resolver en `master_ingredients` (si no, no hay densidad ni precio).
+#   · Corre ANTES de la lista de compras y los caps quedan como última palabra
+#     (P1-CAPS-LAST-WORD), así que no puede disparar la grasa del día.
+NAME_PHANTOM_DAIRY_REPAIR = _env_bool("MEALFIT_NAME_PHANTOM_DAIRY_REPAIR", True)
+NAME_PHANTOM_DAIRY_G = _env_int("MEALFIT_NAME_PHANTOM_DAIRY_G", 30, lambda v: 10 <= v <= 80)
+# Familias del catálogo (categoría "Lácteos") cuyo nombre puede liderar un plato.
+_NAME_PHANTOM_DAIRY_TOKENS = ("mozzarella", "cheddar", "ricotta", "parmesano", "gouda",
+                              "cottage", "queso de hoja", "queso crema", "queso blanco", "queso")
+
+
+def _repair_name_phantom_dairy(days: list) -> list:
+    """Inserta el lácteo que el NOMBRE del plato promete y los ingredientes no tienen.
+    Devuelve telemetría [{day, meal, food, line}]. Idempotente y fail-safe."""
+    out: list = []
+    if not isinstance(days, list):
+        return out
+    try:
+        from constants import strip_accents as _sa_np
+    except Exception:
+        return out
+    idx = _phantom_catalog_index()
+    if not idx:
+        return out
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            try:
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                name_flat = _sa_np(str(meal.get("name") or "").lower())
+                raw = meal.get("ingredients_raw")
+                blob = " | ".join(_sa_np(str(x).lower())
+                                  for x in list(ings) + (list(raw) if isinstance(raw, list) else []))
+                # Token más ESPECÍFICO primero ("queso mozzarella" antes que "queso"): si el
+                # nombre dice mozzarella, insertar un genérico sería otra media verdad.
+                for tok in _NAME_PHANTOM_DAIRY_TOKENS:
+                    tok_flat = _sa_np(tok)
+                    if tok_flat not in name_flat:
+                        continue
+                    if _re.search(r"\b" + _re.escape(tok_flat) + r"", blob):
+                        break        # ya está en el plato: nada que reparar
+                    resolved = _phantom_resolve_food(tok if " " in tok else f"queso {tok}") \
+                        or _phantom_resolve_food(tok)
+                    if not resolved:
+                        break
+                    line = f"{NAME_PHANTOM_DAIRY_G} g de {resolved[1]}"
+                    ings.append(line)
+                    if isinstance(raw, list):
+                        raw.append(line)          # la lista de compras lee raw (P1-PHANTOM-RAW-PARITY)
+                    # El chip de honestidad ya no aplica: el nombre pasó a ser verdad.
+                    meal.pop("_name_honesty_degraded", None)
+                    meal["_name_phantom_dairy_added"] = resolved[1]
+                    out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                "food": resolved[1], "line": line})
+                    break
+            except Exception:
+                continue
+    return out
+
+
 def _repair_declared_but_unlisted_ingredients(days: list) -> list:
     """Inserta en `ingredients` los alimentos que los PASOS declaran con cantidad y que no están
     listados. Devuelve telemetría [{day, meal, food, line}]. Determinista, idempotente, fail-safe.
@@ -29738,6 +29821,20 @@ async def assemble_plan_node(state: PlanState) -> dict:
                                 f"D{f['day']} {f['meal'][:24]!r} → {f['line']!r}" for f in _ph_fixed[:6]))
         except Exception as _ph_e:
             logger.warning(f"[P1-PHANTOM-INGREDIENT] falló (no bloquea): {type(_ph_e).__name__}: {_ph_e}")
+
+    # [P1-NAME-PHANTOM-DAIRY · 2026-07-25] El lácteo que el NOMBRE promete y el plato no lleva.
+    # Va DESPUÉS del repair por cantidad declarada (si los pasos ya la traían, ese lo resolvió) y
+    # antes de la lista de compras. Los caps corren después como última palabra.
+    if NAME_PHANTOM_DAIRY_REPAIR:
+        try:
+            _npd = _repair_name_phantom_dairy(result.get("days") or [])
+            if _npd:
+                result["_name_phantom_dairy_repaired"] = _npd
+                logger.info(f"🧀 [P1-NAME-PHANTOM-DAIRY] {len(_npd)} lácteo(s) del NOMBRE añadido(s) al "
+                            f"plato: " + "; ".join(f"D{d['day']} {d['meal'][:26]!r} → {d['line']!r}"
+                                                   for d in _npd[:5]))
+        except Exception as _npd_e:
+            logger.warning(f"[P1-NAME-PHANTOM-DAIRY] falló (no bloquea): {type(_npd_e).__name__}: {_npd_e}")
 
     # [P1-COOKED-GRAIN-DRY · 2026-07-24] Gramos COCIDOS → gramos SECOS (unidades del catálogo).
     # Mismo requisito de orden: antes de la lista de compras y del truth-up pre-INSERT.
