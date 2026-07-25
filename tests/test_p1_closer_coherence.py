@@ -93,4 +93,13 @@ def test_e_light_meal_wording_natural():
     assert "indicado en los ingredientes para reforzar la proteína" not in _SRC
     # [P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] el wording se unificó en el helper SSOT `_closer_protein_step_text`
     # ("Incorpora ... mézclalo antes de servir") — sigue siendo natural, ya no robótico.
-    assert "Incorpora" in _SRC and "mézclalo antes de servir" in _SRC
+    #
+    # [P1-FALSE-STEP-GRAFTS · 2026-07-25] Antes se afirmaba el literal "mézclalo antes de servir"
+    # sobre el SOURCE. Dejó de existir cuando el verbo pasó a concordar en número ("Incorpora
+    # camarones … mézclalos"), y el test falló por una razón que no es la que vigila. Se afirma
+    # sobre la SALIDA del helper, que es lo que de verdad lee el usuario.
+    import graph_orchestrator as _go
+    _sing = _go._closer_protein_step_text("queso cottage", no_cook=True)
+    assert _sing == "Incorpora queso cottage a la preparación y mézclalo antes de servir.", _sing
+    _plur = _go._closer_protein_step_text("camarones", no_cook=True)
+    assert _plur == "Incorpora camarones a la preparación y mézclalos antes de servir.", _plur

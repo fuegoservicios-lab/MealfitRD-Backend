@@ -14987,6 +14987,9 @@ _LEGUME_PROTEIN_HINT = ("guisante", "arveja", "chicharo", "lenteja", "garbanzo",
 # frijoles pintos guisados que llevan 45 min al fuego — el alimento estaba BIEN, el texto no).
 _STEWY_DISH_HINT = ("guisad", "guiso", "estofad", "sancoch", "caldo", "sopa", "asopa",
                     "salsa criolla", "en salsa", "sofrit", "locrio", "chilindron")
+# [P1-STEAM-IS-NOT-STEW · 2026-07-25] Técnicas que también se "tapan" y NO son olla con líquido.
+_NOT_STEWY_HINT = ("vapor", "vaporera", "cesta de bambu", "horno", "hornea", "gratina",
+                   "airfryer", "freidora", "microondas", "papillote")
 CLOSER_STEP_STEW_WORDING = _env_bool("MEALFIT_CLOSER_STEP_STEW_WORDING", True)
 
 
@@ -15000,15 +15003,31 @@ def _meal_is_stewy(meal: dict, strip_accents_fn) -> bool:
             str(s) for s in (meal.get("recipe") or []))).lower())
         if any(h in blob for h in _STEWY_DISH_HINT):
             return True
+        if "el caldo espese" in blob or "hasta que espese" in blob:
+            return True
         # Señales de cocción en olla dentro del propio paso.
-        return bool(_re.search(r"\b(tapa|tapad\w+)\b.*\b(fuego bajo|cocina)\b", blob)
-                    or "el caldo espese" in blob or "hasta que espese" in blob)
+        #
+        # [P1-STEAM-IS-NOT-STEW · 2026-07-25] Dos defectos del patrón original
+        # (`\b(tapa|tapad\w+)\b.*\b(fuego bajo|cocina)\b`), medidos en el plan vivo 1d3c6643:
+        #
+        #   1. El `.*` recorría el blob ENTERO (nombre + todos los pasos unidos), así que un
+        #      "tapa" del paso 2 casaba con un "cocina" del paso 6. El docstring decía "dentro
+        #      del propio paso" y no era verdad. Ahora la ventana está acotada.
+        #   2. **Tapar no es guisar**: *"Coloca los bollitos en una vaporera … tapa y cocina al
+        #      vapor durante 12-15 minutos"* casaba, y el closer remató con *"Añade huevo al
+        #      GUISO en los últimos minutos"* en unos bollitos al vapor donde no hay guiso.
+        #      Una vaporera, un horno o una freidora se tapan y no son olla con líquido.
+        m = _re.search(r"\b(tapa|tapad\w+)\b.{0,70}?\b(fuego bajo|cocina)\b", blob)
+        if not m:
+            return False
+        ventana = blob[max(0, m.start() - 70):m.end() + 70]
+        return not any(h in ventana for h in _NOT_STEWY_HINT)
     except Exception:
         return False
 
 
 def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
-                              stewy: bool = False) -> str:
+                              stewy: bool = False, precooked: bool = False) -> str:
     """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
     naturaleza del alimento: licuado → 'Agrega ... a la licuadora'; lácteo blando/no-cook → 'Incorpora ... mézclalo';
     enlatado/pre-cocido → 'Escurre e incorpora (ya viene cocido)'; resto → 'Cocina a la plancha o hervido'. SSOT de
@@ -15026,9 +15045,16 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
     # [P1-CLOSER-HYGIENE · 2026-07-06] (plan vivo da7bb310: "Cocina huevo cocido a la plancha o
     # hervido") nombres de catálogo que YA traen "cocido" (huevo cocido, guisantes cocidos) jamás
     # reciben el wording "Cocina X..." — cocinar lo cocido es absurdo user-facing.
-    if no_cook or "cocid" in _nm_sa \
+    # [P1-PRECOOKED-FROM-LINE · 2026-07-25] `precooked` viene de la LÍNEA del plato, no del nombre
+    # de catálogo: el plan vivo 1d3c6643 listaba "150g camarones cocido" y el closer, que sólo
+    # miraba el nombre ("Camarones"), remató con "Cocina camarones a la plancha o hervidos".
+    # Decirle al usuario que cueza lo que ya compró cocido es la misma clase de absurdo que
+    # cerró P1-CLOSER-HYGIENE para "huevo cocido".
+    if no_cook or precooked or "cocid" in _nm_sa \
             or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
-        return f"Incorpora {nm} a la preparación y mézclalo antes de servir."
+        # Concordancia: "Incorpora camarones … mézclalo" (plan vivo) → mézclalos.
+        _v_inc = "mézclalos" if (_nm_sa.endswith("es") or _nm_sa.endswith("as")) else "mézclalo"
+        return f"Incorpora {nm} a la preparación y {_v_inc} antes de servir."
     if any(h in _nm_sa for h in _PRECOOKED_PROTEIN_HINT):
         # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] En un guiso, "a la preparación" suena a
         # nada: va a la olla, y al final para que no se deshaga.
@@ -15083,9 +15109,22 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
                           for st in _stems):
             return False  # (b) la receta ya trabaja el alimento → sin paso genérico
         # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] licuado → wording "Agrega X a la licuadora".
-        _blended = ("licuadora" in _steps_blob or "licua" in _steps_blob
+        # [P1-BLENDED-IGNORE-MACHINE-NOTE · 2026-07-25] Leer la receta HUMANA, no las anotaciones
+        # de tiempo que inyecta el pipeline: "(~1-2 min de licuado a velocidad alta)" contiene
+        # "licua" y bastaba para declarar batido un revoltillo de sartén (plan 1d3c6643). La causa
+        # raíz está cerrada aguas arriba (P1-FOOD-WORD-NOT-TECHNIQUE), esto corta la cascada.
+        _human_blob = _re.sub(r"\(~[^)]*\)", " ", _steps_blob)
+        _blended = ("licuadora" in _human_blob or "licua" in _human_blob
                     or any(b in _sa_cs(str(meal.get("name", "")).lower()) for b in _NO_COOK_BLENDED))
-        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs))}"
+        # [P1-PRECOOKED-FROM-LINE · 2026-07-25] ¿la LÍNEA del plato ya dice "cocido"?
+        _precooked_line = False
+        for _ln in (meal.get("ingredients") or []):
+            _l = _sa_cs(str(_ln).lower())
+            if "cocid" in _l and _stems and any(
+                    _re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _l) for st in _stems):
+                _precooked_line = True
+                break
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line)}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
         meal["recipe"] = _insert_step_before_montaje(rec, _step)
@@ -17869,6 +17908,37 @@ _TT_PASSIVE_TOKENS = ("marina", "marinar", "adoba", "reposa", "reposar", "refrig
                       "congela", "descongela", "remoja", "remojo", "fermenta", "leuda", "enfria",
                       "macera", "overnight", "toda la noche")
 
+# [P1-FOOD-WORD-NOT-TECHNIQUE · 2026-07-25] Palabras que son ALIMENTO, no técnica, y que como
+# substring disparan la técnica equivocada. Se neutralizan ANTES de emparejar técnica.
+#
+# Caso vivo (plan 1d3c6643, "Revoltillo de Huevos con Papas"): el paso decía *"Vierta el huevo
+# **batido** sobre las papas"* → matcheó la técnica LICUADO → el anotador escribió *"cocine por
+# 1-2 min de licuado a velocidad alta"* dentro de un paso de sartén. Y de ahí en cascada: el
+# closer de proteína busca "licua" en los pasos, lo encontró dentro de "licuado", se declaró
+# batido y remató con **"Agrega atún en agua a la licuadora y licúa hasta integrar"** en un
+# revoltillo. Un usuario que siga el paso hace puré de atún.
+#
+# La defensa que había era el ORDEN de las tuplas (`revuelto` va antes que `licua`, ver comentario
+# de P2-LICUADO-TIMETEMP). Falló porque esta receta conjuga *"revuelva"* y *"sin revolver"*, y
+# ninguna de las dos contiene `revuelve`. Depender de que el LLM elija una conjugación concreta no
+# es una defensa; neutralizar el participio sí, porque "huevo batido" es siempre alimento.
+#
+# Mismo patrón para "guisantes": contiene `guisa` y haría que una ensalada fría de guisantes se
+# anotara como "20-25 min a fuego medio tapado".
+_FOOD_WORD_NOT_TECHNIQUE_RE = _re.compile(
+    r"\b(?:huevos?|claras?|yemas?|crema)\s+batid[oa]s?\b|\bguisantes?\b")
+
+
+def _strip_food_words_for_technique(hay: str) -> str:
+    """Quita del texto las palabras-alimento que colisionan con nombres de técnica.
+
+    Sólo para EMPAREJAR técnica — nunca muta el paso que ve el usuario.
+    tooltip-anchor: P1-FOOD-WORD-NOT-TECHNIQUE"""
+    try:
+        return _FOOD_WORD_NOT_TECHNIQUE_RE.sub(" ", hay)
+    except Exception:
+        return hay
+
 
 def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
     """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-B) Clamp determinista de outliers de tiempo/temp:
@@ -17891,7 +17961,8 @@ def _clamp_recipe_time_temp_outliers(meal: dict) -> bool:
             if not isinstance(step, str) or _is_recipe_safety_note_step(step):
                 continue
             new_step = step
-            hay = _sa_cl((str(meal.get("name") or "") + " " + step).lower())
+            hay = _strip_food_words_for_technique(
+                _sa_cl((str(meal.get("name") or "") + " " + step).lower()))
             _step_hay = _sa_cl(step.lower())
             _passive = any(t in _step_hay for t in _TT_PASSIVE_TOKENS)
             if not _passive:
@@ -17988,7 +18059,8 @@ def _inject_recipe_time_temp_defaults(meal: dict) -> bool:
                 return False
             if _CONTRACT_TIME_RE.search(step):
                 return False  # ya trae tiempo/temp — contrato cumplido
-            hay = _sa_tt((str(meal.get("name") or "") + " " + step).lower())
+            hay = _strip_food_words_for_technique(
+                _sa_tt((str(meal.get("name") or "") + " " + step).lower()))
             default = _TIMETEMP_FALLBACK_DEFAULT
             for tokens, technique_default in _TIMETEMP_TECHNIQUE_DEFAULTS:
                 if any(t in hay for t in tokens):

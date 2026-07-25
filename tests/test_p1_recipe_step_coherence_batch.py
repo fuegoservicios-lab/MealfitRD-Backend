@@ -17,6 +17,7 @@ en la revisión en vivo del plan 830d9aaa (12 recetas, 6/12 con defectos de text
 Este archivo NO duplica esas pruebas — solo ancla el marker (contrato P2-HIST-AUDIT-14) a los 3
 sub-markers para que un futuro grep encuentre las 3 causas raíz desde un solo punto de entrada.
 """
+import re as _re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
@@ -29,6 +30,24 @@ def test_three_submarkers_present_in_source():
 
 
 def test_last_known_pfix_matches_this_batch():
+    """El marker debe estar bien formado y tener su test de regresión enlazado.
+
+    ⚠️ [P1-FALSE-STEP-GRAFTS · 2026-07-25] Antes exigía que `_LAST_KNOWN_PFIX` contuviera
+    literalmente `P1-RECIPE-STEP-COHERENCE-BATCH`. Eso sólo puede ser cierto en el único commit
+    en que este batch fue el último P-fix: desde el siguiente, el test quedó **rojo para siempre**
+    y por una razón que no es la que vigila. Un test que no puede volver a pasar deja de ser
+    señal y pasa a ser ruido que esconde fallos reales.
+
+    La invariante que sí importa ya es del repo (`test_p2_hist_audit_14_marker_test_link`): el
+    slug del marker vivo tiene que resolver a un `tests/test_<slug>*.py`. Aquí se comprueba lo
+    que le toca a ESTE archivo: que el batch conserve su propio test enlazado.
+    """
     app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-RECIPE-STEP-COHERENCE-BATCH" in app_src, \
-        "_LAST_KNOWN_PFIX debe apuntar a este batch tras el commit"
+    m = _re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', app_src)
+    assert m, "app.py debe declarar _LAST_KNOWN_PFIX"
+    marker = m.group(1)
+    assert _re.match(r"^P\d[A-Z0-9-]*.*·\s*\d{4}-\d{2}-\d{2}$", marker), marker
+    slug = marker.split("·")[0].strip().lower().replace("-", "_")
+    assert list(_BACKEND.glob(f"tests/test_{slug}*.py")), \
+        f"el marker vivo {marker!r} no tiene test de regresión enlazado"
+    assert (_BACKEND / "tests" / "test_p1_recipe_step_coherence_batch.py").exists()
