@@ -2024,6 +2024,23 @@ class LLMCircuitBreaker:
     """
     def __init__(self, failure_threshold=3, reset_timeout=30, local_health_ttl=1.0,
                  model_name: str | None = None):
+        # [P1-DREAMING-CB-KWARG · 2026-07-24] Auto-corrección de un error de llamada que
+        # rompía el breaker EN SILENCIO. `LLMCircuitBreaker("deepseek-v4-flash")` (posicional)
+        # dejaba `threshold` con un str: `failures >= self.threshold` lanzaba TypeError, que
+        # los `except Exception: pass` de los callers se tragaban → el breaker no abría NUNCA,
+        # y además las keys quedaban sin sufijo de modelo (pisando el breaker global legacy).
+        # En prod eso se veía como 17 errores de escritura del CB sin un solo breaker abierto.
+        # Se corrige la intención evidente y se grita: un breaker roto no protege de nada, así
+        # que degradar a "no protege" en silencio es el peor resultado posible.
+        if isinstance(failure_threshold, str):
+            logger.error(
+                f"🚨 [P1-DREAMING-CB-KWARG] LLMCircuitBreaker recibió el modelo "
+                f"{failure_threshold!r} como PRIMER posicional (= failure_threshold). "
+                f"Interpretado como model_name; usa `LLMCircuitBreaker(model_name=...)`."
+            )
+            if model_name is None:
+                model_name = failure_threshold
+            failure_threshold = 3
         self.threshold = failure_threshold
         self.reset_timeout = reset_timeout
         self._local_health_ttl = float(local_health_ttl)  # P0-3: configurable, antes 10s hardcoded

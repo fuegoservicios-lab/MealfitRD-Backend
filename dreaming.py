@@ -481,9 +481,16 @@ def consolidate_user(user_id: str) -> dict:
         model_id = _dreaming_model_name()
 
         # Circuit breaker del modelo (reusa el KV global por-modelo).
+        # [P1-DREAMING-CB-KWARG · 2026-07-24] `model_name=` es OBLIGATORIO por nombre: el primer
+        # parámetro posicional de `LLMCircuitBreaker` es `failure_threshold`. Pasar el model_id
+        # posicionalmente dejaba `threshold="deepseek-v4-flash"` (str) y `model_name=None`, con
+        # dos consecuencias silenciosas: (1) `failures >= threshold` lanzaba TypeError, que el
+        # `except Exception: pass` de abajo se tragaba → el breaker NUNCA abría, y (2) las keys
+        # quedaban sin sufijo de modelo → este cron escribía sobre el breaker global legacy.
+        # Se veía en prod como 17 errores de escritura del CB sin ningún breaker abierto.
         try:
             from graph_orchestrator import LLMCircuitBreaker
-            if not LLMCircuitBreaker(model_id).can_proceed():
+            if not LLMCircuitBreaker(model_name=model_id).can_proceed():
                 result["status"] = "breaker_open"
                 return result
         except Exception:
@@ -501,13 +508,13 @@ def consolidate_user(user_id: str) -> dict:
             parsed: DreamConsolidationResult = llm.invoke(prompt)
             try:
                 from graph_orchestrator import LLMCircuitBreaker
-                LLMCircuitBreaker(model_id).record_success()
+                LLMCircuitBreaker(model_name=model_id).record_success()
             except Exception:
                 pass
         except Exception as llm_err:
             try:
                 from graph_orchestrator import LLMCircuitBreaker
-                LLMCircuitBreaker(model_id).record_failure()
+                LLMCircuitBreaker(model_name=model_id).record_failure()
             except Exception:
                 pass
             raise llm_err
