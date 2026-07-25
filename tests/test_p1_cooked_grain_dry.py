@@ -46,7 +46,7 @@ def _days(*lines):
 def test_arroz_cocido_del_plan_vivo():
     days = _days("65g de arroz blanco cocido")
     out = go._normalize_cooked_grain_lines(days)
-    assert len(out) == 1
+    assert len(out) == 2, "una reescritura por lista (display + raw)"
     line = days[0]["meals"][0]["ingredients"][0]
     # 65 g cocidos × (130 / 358.6) ≈ 23.6 g secos
     assert line == "24 g de arroz blanco crudo", line
@@ -106,15 +106,26 @@ def test_no_toca_volumenes():
 
 def test_idempotente():
     days = _days("65g de arroz blanco cocido")
-    assert len(go._normalize_cooked_grain_lines(days)) == 1
+    assert len(go._normalize_cooked_grain_lines(days)) == 2
     assert go._normalize_cooked_grain_lines(days) == [], "la línea ya dice 'crudo': no re-matchea"
 
 
-def test_raw_alineado():
-    days = _days("65g de arroz blanco cocido", "270 g de mero")
+def test_reescribe_raw_aunque_las_listas_esten_desalineadas():
+    """[P1-PHANTOM-RAW-PARITY · 2026-07-24] El shopping calculator lee `ingredients_raw`
+    PRIMERO. En el plan vivo 732588f8 las listas NO están alineadas por índice (Casabe: 4 vs 5),
+    así que reescribir sólo cuando coincidían los largos dejaba la lista comprando 2.76× de
+    arroz justo en las comidas desalineadas. Cada lista se procesa por separado."""
+    days = [{"day": 1, "meals": [{
+        "name": "Casabe Tropical",
+        "ingredients": ["2 tortas pequeño de casabe", "65 g de queso cottage"],
+        "ingredients_raw": ["65g de arroz blanco cocido", "42.17g de queso cottage",
+                            "2 tortas pequeño de casabe"],
+    }]}]
     go._normalize_cooked_grain_lines(days)
-    m = days[0]["meals"][0]
-    assert m["ingredients"] == m["ingredients_raw"]
+    assert days[0]["meals"][0]["ingredients_raw"][0] == "24 g de arroz blanco crudo", (
+        "la línea que compra la lista tiene que quedar en gramos secos"
+    )
+
 
 
 def test_sin_parentesis_numerico_en_la_salida():

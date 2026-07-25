@@ -85,13 +85,40 @@ def test_nombre_canonico_del_catalogo_no_la_frase_cruda():
     assert meal["ingredients"][-1] == "30 g de Guanábana"
 
 
-def test_ingredients_raw_queda_alineado():
-    """`ingredients_raw` viaja índice-a-índice con `ingredients` (P1-RAW-MISALIGN-TRACE):
-    apendear a una sola lista desfasa el display una posición."""
+def test_la_linea_llega_tambien_a_ingredients_raw():
+    """El shopping calculator lee `ingredients_raw` PRIMERO
+    (`meal.get("ingredients_raw") or meal.get("ingredients")`, shopping_calculator.py:3764/:9740).
+    Si la línea sólo entra al display, el plato queda visible pero sigue sin comprarse — media
+    reparación, que es el defecto original."""
     meal = _guanabana_meal()
     go._repair_declared_but_unlisted_ingredients([{"day": 1, "meals": [meal]}])
-    assert len(meal["ingredients"]) == len(meal["ingredients_raw"])
     assert meal["ingredients"][-1] == meal["ingredients_raw"][-1]
+
+
+def test_raw_recibe_la_linea_aunque_las_listas_esten_desalineadas():
+    """[P1-PHANTOM-RAW-PARITY · 2026-07-24] En el plan vivo 732588f8 las listas NO están
+    alineadas por índice (Casabe: ings=4, raw=5; Revoltillo: 8 vs 9) — la relación display↔raw
+    es por CONTENIDO (`_restore_display_from_raw_orphans` reconcilia por stem y trata
+    len(raw) > len(ings) como estado esperado). Un guard de alineación se saltaba justo las
+    comidas donde más falta hacía."""
+    meal = _guanabana_meal()
+    meal["ingredients_raw"] = meal["ingredients_raw"] + ["Sal al gusto"]   # raw más larga, como en vivo
+    assert len(meal["ingredients_raw"]) != len(meal["ingredients"])
+    go._repair_declared_but_unlisted_ingredients([{"day": 1, "meals": [meal]}])
+    assert any("guanábana" in str(i).lower() for i in meal["ingredients_raw"]), (
+        "sin la línea en raw, la lista de compras no la compra"
+    )
+
+
+def test_no_reinserta_si_ya_esta_solo_en_raw():
+    """Si el alimento está en raw pero no en el display, la reparación del display es de
+    `_restore_display_from_raw_orphans` — este pase no debe duplicar esa responsabilidad."""
+    meal = {"name": "Avena con Guanábana",
+            "ingredients": ["¼ taza de avena"],
+            "ingredients_raw": ["¼ taza de avena", "30 g de Guanábana"],
+            "recipe": ["Mise en place: 30 g de pulpa de guanábana en trozos."]}
+    assert go._repair_declared_but_unlisted_ingredients([{"day": 1, "meals": [meal]}]) == []
+    assert len(meal["ingredients_raw"]) == 2, "no puede duplicar la línea que ya existe en raw"
 
 
 def test_idempotente():

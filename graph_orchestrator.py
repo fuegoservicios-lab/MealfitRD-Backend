@@ -24203,7 +24203,12 @@ def _repair_declared_but_unlisted_ingredients(days: list) -> list:
                 ings = meal.get("ingredients")
                 if not isinstance(ings, list):
                     continue
-                ings_flat = " | ".join(_sa_ph(str(i).lower()) for i in ings)
+                _raw0 = meal.get("ingredients_raw")
+                # La pregunta "¿ya está listado?" se hace sobre la UNIÓN de ambas listas:
+                # `ingredients_raw` puede tener líneas que el display perdió (eso lo repara
+                # `_restore_display_from_raw_orphans`, no este pase).
+                ings_flat = " | ".join(_sa_ph(str(i).lower())
+                                       for i in list(ings) + (list(_raw0) if isinstance(_raw0, list) else []))
                 seen_this_meal = set()
                 for step in steps:
                     _s = str(step)
@@ -24231,10 +24236,19 @@ def _repair_declared_but_unlisted_ingredients(days: list) -> list:
                         line = f"{qty_raw} {unit_raw} de {canon}"
                         ings.append(line)
                         _raw = meal.get("ingredients_raw")
-                        # `ingredients_raw` viaja índice-a-índice con `ingredients`
-                        # (P1-RAW-MISALIGN-TRACE): si existe y estaba alineado, se
-                        # apendea también o el display queda desfasado una posición.
-                        if isinstance(_raw, list) and len(_raw) == len(ings) - 1:
+                        # [P1-PHANTOM-RAW-PARITY · 2026-07-24] La línea DEBE ir también a
+                        # `ingredients_raw`: el shopping calculator lee raw PRIMERO
+                        # (shopping_calculator.py:3764 y :9740, `meal.get("ingredients_raw") or
+                        # meal.get("ingredients")`). Sin esto el fantasma queda visible pero
+                        # sigue sin comprarse — media reparación, que es el defecto original.
+                        #
+                        # La versión anterior sólo apendeaba si las listas estaban alineadas por
+                        # índice. En el plan vivo 732588f8 NO lo están (Casabe: ings=4, raw=5;
+                        # Revoltillo: 8 vs 9), y la relación display↔raw es por CONTENIDO, no
+                        # posicional — `_restore_display_from_raw_orphans` la reconcilia por stem
+                        # y trata `len(raw) > len(ings)` como estado esperado. Es decir: el guard
+                        # se saltaba exactamente las comidas donde más falta hacía.
+                        if isinstance(_raw, list):
                             _raw.append(line)
                         ings_flat += " | " + _sa_ph(line.lower())
                         seen_this_meal.add(token)
@@ -24336,42 +24350,45 @@ def _normalize_cooked_grain_lines(days: list) -> list:
         for meal in day.get("meals") or []:
             if not isinstance(meal, dict):
                 continue
-            ings = meal.get("ingredients")
-            if not isinstance(ings, list):
-                continue
-            raw = meal.get("ingredients_raw")
-            raw_aligned = isinstance(raw, list) and len(raw) == len(ings)
-            for i, line in enumerate(ings):
-                try:
-                    m = _COOKED_GRAIN_LINE_RE.match(str(line))
-                    if not m:
-                        continue
-                    food = m.group(4).strip()
-                    flat = _sa_ck(food.lower())
-                    ref = next((r for toks, r in _COOKED_GRAIN_REF_KCAL
-                                if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
-                    if ref is None:
-                        continue
-                    dry_kcal = kcal_idx.get(flat) or kcal_idx.get(flat.split()[0])
-                    if not dry_kcal or dry_kcal / ref < 1.5:
-                        # La fila ya está en cocido (o no resuelve): no hay nada que convertir.
-                        continue
-                    cooked_g = float(m.group(2).replace(",", "."))
-                    dry_g = cooked_g * ref / dry_kcal
-                    if dry_g < 5 or dry_g >= cooked_g:
-                        continue
-                    # Concordancia: "cocidas"→"crudas", "cocido"→"crudo". El usuario lee
-                    # esta línea en la app y en el PDF; "habichuelas rojas crudo" canta.
-                    _st = m.group(5).lower()
-                    _end = _st[-2:] if _st[-2:] in ("os", "as") else _st[-1]
-                    new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} crud{_end}"
-                    ings[i] = new_line
-                    if raw_aligned:
-                        raw[i] = new_line
-                    out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
-                                "before": str(line), "after": new_line})
-                except Exception:
+            # [P1-PHANTOM-RAW-PARITY · 2026-07-24] Cada lista se procesa por separado, no por
+            # índice: en el plan vivo 732588f8 `ingredients` y `ingredients_raw` NO están
+            # alineadas (Casabe 4 vs 5) y el shopping calculator lee raw PRIMERO. Reescribir
+            # sólo cuando coincidían los largos dejaba la lista comprando 2.76× de arroz justo
+            # en las comidas desalineadas. La transformación es determinista por línea, así que
+            # aplicarla a cada lista de forma independiente es equivalente y no puede desfasar.
+            for _key in ("ingredients", "ingredients_raw"):
+                ings = meal.get(_key)
+                if not isinstance(ings, list):
                     continue
+                for i, line in enumerate(ings):
+                    try:
+                        m = _COOKED_GRAIN_LINE_RE.match(str(line))
+                        if not m:
+                            continue
+                        food = m.group(4).strip()
+                        flat = _sa_ck(food.lower())
+                        ref = next((r for toks, r in _COOKED_GRAIN_REF_KCAL
+                                    if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
+                        if ref is None:
+                            continue
+                        dry_kcal = kcal_idx.get(flat) or kcal_idx.get(flat.split()[0])
+                        if not dry_kcal or dry_kcal / ref < 1.5:
+                            # La fila ya está en cocido (o no resuelve): nada que convertir.
+                            continue
+                        cooked_g = float(m.group(2).replace(",", "."))
+                        dry_g = cooked_g * ref / dry_kcal
+                        if dry_g < 5 or dry_g >= cooked_g:
+                            continue
+                        # Concordancia: "cocidas"→"crudas", "cocido"→"crudo". El usuario lee
+                        # esta línea en la app y en el PDF; "habichuelas rojas crudo" canta.
+                        _st = m.group(5).lower()
+                        _end = _st[-2:] if _st[-2:] in ("os", "as") else _st[-1]
+                        new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} crud{_end}"
+                        ings[i] = new_line
+                        out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                    "list": _key, "before": str(line), "after": new_line})
+                    except Exception:
+                        continue
     return out
 
 
