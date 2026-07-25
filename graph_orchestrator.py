@@ -9787,6 +9787,10 @@ STEP_UNIT_PLURAL_FIX = _env_bool("MEALFIT_STEP_UNIT_PLURAL_FIX", True)
 # `½ conejo (aprox. 358 g en piezas)` esquivaba el techo de proteína. Cuando la masa vive en el
 # paréntesis, esa masa es la cantidad real.
 PAREN_GRAMS_CAP = _env_bool("MEALFIT_PAREN_GRAMS_CAP", True)
+# [P1-CAPS-LAST-WORD · 2026-07-25] Re-ejecutar los techos de porción como ÚLTIMA palabra del
+# finalize: los pases aditivos posteriores (refill gain-muscle, cerrador de proteína, closer de
+# micros) vuelven a inflar líneas que un cap ya había bajado. Idempotente y sólo-bajar.
+CAPS_LAST_WORD = _env_bool("MEALFIT_CAPS_LAST_WORD", True)
 # [P1-FINALIZE-TAIL-PARITY · 2026-07-25] El refill de gain-muscle dentro de
 # `finalize_plan_data_coherence` es ADITIVO y corre después de la cola de assemble, así que
 # reintroduce duplicados y gramos cocidos. Corre esos dos pases detrás de él — sobre todo por los
@@ -21925,6 +21929,36 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             total += _ngc; parts.append(f"queso_display={_ngc}")
     except Exception as _egc:
         logger.warning(f"[P1-RECIPE-POLISH-5] enrich queso display no-op: {type(_egc).__name__}: {_egc}")
+
+    # [P1-CAPS-LAST-WORD · 2026-07-25] Los techos de porción, OTRA VEZ, como última palabra.
+    #
+    # Los caps ya corren al principio de esta función (L~21451) y en assemble, pero DESPUÉS de
+    # ambos siguen actuando pases ADITIVOS: el refill de gain-muscle, el cerrador de proteína,
+    # el closer de micros. Cada uno puede volver a inflar una línea que un cap ya había bajado.
+    #
+    # Evidencia (plan vivo 943c604b, D2 "Tostadas de Yuca…"): la comida llegó con
+    # `_portion_realism_capped=True` Y `_protein_closed=True`, y aun así entregó
+    # **`360g de queso cottage`** — el doble del techo por comida (180 g). Probado aislado, el
+    # cap convierte esa misma línea a 180 g sin problema: no falla el cap, falla el ORDEN.
+    #
+    # Correr los caps al final los convierte en invariante en vez de en un pase más de la
+    # cadena. Son idempotentes y conservadores (sólo bajan cantidades), así que re-ejecutarlos
+    # no puede inventar comida. Y van ANTES del refresh de banda post-finalize, para que el
+    # score que se persiste mida el plato REAL y no el de antes del recorte.
+    #
+    # Trade-off asumido: si el recorte reabre un hueco de proteína que el cerrador había
+    # cerrado, gana el cap. 360 g de queso cottage en un desayuno no es servible, y un plan que
+    # no se puede comer no cumple el objetivo aunque el número cuadre.
+    if CAPS_LAST_WORD and PORTION_REALISM_CAP_ENABLED:
+        try:
+            _clw = _cap_unrealistic_portions(days, db=db)
+            if _clw:
+                total += _clw; parts.append(f"caps_last_word={_clw}")
+                logger.info(f"📏 [P1-CAPS-LAST-WORD] {_clw} línea(s) recortada(s) por pases aditivos "
+                            f"POSTERIORES a los caps previos (refill/cerrador/micro-closer).")
+        except Exception as _eclw:
+            logger.warning(f"[P1-CAPS-LAST-WORD] no-op: {type(_eclw).__name__}: {_eclw}")
+
     return (total, ", ".join(parts))
 
 
@@ -25602,8 +25636,30 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                             _new = _resc(s, factor)
                             if _new and _new != s:
                                 ings[idx] = _new
-                                if _lockstep:
-                                    raw[idx] = _resc(str(raw[idx]), factor)
+                                # [P1-CAP-RAW-BY-FOOD · 2026-07-25] El recorte tiene que llegar a
+                                # `ingredients_raw` — es lo que COMPRA la lista. Antes se escribía
+                                # `raw[idx]` bajo `_lockstep` (mismo largo), y eso es doblemente
+                                # frágil: las dos listas están REORDENADAS entre sí, así que con
+                                # largos iguales el cap recortaba la línea EQUIVOCADA de raw.
+                                #
+                                # Medido en el plan vivo 943c604b (D2 "Tostadas de Yuca"): display
+                                # bajó a 120 g de queso cottage y raw se quedó en 496.8 g — la
+                                # receta decía una cosa y la lista compraba 4×. El cottage estaba
+                                # en la posición 2 del display y en la 3 de raw; `raw[idx]` cayó
+                                # sobre "Sal al gusto" (no-op silencioso).
+                                #
+                                # Se mapea por ALIMENTO, igual que P1-SOLVER-RAW-BY-FOOD. Cuarta
+                                # aparición del mismo patrón hoy: un guard de índice sobre dos
+                                # listas que no son paralelas.
+                                if isinstance(raw, list) and raw:
+                                    _cr, _cn = _rescale_raw_by_food(raw, [s], [factor])
+                                    if _cn:
+                                        meal["ingredients_raw"] = _cr
+                                        raw = meal["ingredients_raw"]
+                                    elif _lockstep and idx < len(raw):
+                                        # Fallback al camino histórico sólo si el mapeo por
+                                        # alimento no resolvió (línea sin alimento de catálogo).
+                                        raw[idx] = _resc(str(raw[idx]), factor)
                                 capped += 1
                                 _meal_touched = True
                         except Exception:
