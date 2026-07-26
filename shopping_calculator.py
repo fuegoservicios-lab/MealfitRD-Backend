@@ -3788,6 +3788,36 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     # sigue siendo el string display-friendly para no romper consumers legacy.
     market_qty_numeric_final = _parse_market_qty(formatted_market_qty)
 
+    # [P1-CAPPED-STAPLE-HONESTY · 2026-07-26] Si un cap de realismo recortó este alimento, DECIRLO.
+    #
+    # Caso medido (plan vivo 1070ceb1): el agregador calculó 3.547 g de atún para el ciclo de 30
+    # días —correcto, casi exacto a la necesidad real de las recetas— y `P6-CANNED-PROTEIN-CAP` lo
+    # recortó a 736 g (4 latas) porque nadie compra 22 latas de una vez. El recorte es RAZONABLE.
+    # Lo que no es razonable es que esas 4 latas aparezcan bajo el encabezado «DESPENSA DEL MES —
+    # COMPRA UNA SOLA VEZ · Cantidad calculada para todo el periodo»: cubren **5,5 días**. El usuario
+    # compra la lista, cree que está abastecido el mes y se queda sin atún en menos de una semana,
+    # sin un solo aviso.
+    #
+    # El dato del cap YA existía (`_CAPS_APPLIED_LAST_RUN`) pero sólo lo consumía el coherence
+    # guard: nunca llegaba al item, así que la pantalla no podía saberlo. Se adjunta aquí —
+    # `capped_by`/`capped_pre_g`/`capped_post_g` para tooling, y el sufijo en `display_qty` para que
+    # la UI y el PDF sean honestos sin tocar el frontend (ambos renderean ese string tal cual).
+    #
+    # NO se sube la cantidad: comprar 22 latas es peor consejo que comprar 4 y recomprar. Lo que se
+    # arregla es la MENTIRA, no el número. tooltip-anchor: P1-CAPPED-STAPLE-HONESTY
+    _cap_hit = None
+    if CAPPED_STAPLE_HONESTY:
+        try:
+            _nlow = strip_accents(str(name).lower()).strip()
+            for _c in get_caps_applied_last_run():
+                if _c.get("food_lower", "").strip() and (
+                        strip_accents(_c["food_lower"]).strip() == _nlow):
+                    if float(_c.get("post_value") or 0) < float(_c.get("pre_value") or 0):
+                        _cap_hit = _c
+                    break
+        except Exception:
+            _cap_hit = None
+
     result = {
         "name": name,
         "market_qty": formatted_market_qty,
@@ -3798,6 +3828,24 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         "confidence_score": confidence,
         "shelf_life_days": master_item.get("shelf_life_days") if master_item else None
     }
+    if _cap_hit:
+        try:
+            _pre = float(_cap_hit.get("pre_value") or 0)
+            _post = float(_cap_hit.get("post_value") or 0)
+            result["capped_by"] = _cap_hit.get("reason")
+            result["capped_pre"] = round(_pre, 1)
+            result["capped_post"] = round(_post, 1)
+            # Fracción del ciclo que cubre lo comprado. Se expresa en % y no en días porque el cap
+            # se aplica sobre la unidad del agregador (g/latas/paquetes) y no siempre hay días.
+            _frac = (_post / _pre) if _pre > 0 else 0.0
+            result["capped_cycle_fraction"] = round(_frac, 3)
+            if _frac and _frac < 0.9:
+                result["display_qty"] = (
+                    f"{display_qty_final} · alcanza ~{max(1, int(round(_frac * 30)))} de 30 días — recompra")
+                result["display_string"] = (
+                    f"{final_str} (alcanza ~{max(1, int(round(_frac * 30)))} de 30 días — recompra)")
+        except Exception:
+            pass
     if sku_label:
         result["sku_size_label"] = sku_label
     # [P1-BRAND-SIZE-FILTER · 2026-07-06] Tamaño del envase elegido → el picker de
@@ -6056,6 +6104,11 @@ def _strip_dairy_brand(name: str) -> str:
 # cap NUEVO, registra `_record_cap_applied(name, pre, post, "MARKER")` en CADA rama
 # que modifique `_units[...]` y añade el marker al parametrize de
 # `test_p1_caps_coherence_reconcile.py::test_cap_callsite_records_metadata`.
+# [P1-CAPPED-STAPLE-HONESTY · 2026-07-26] Kill switch del sufijo "alcanza ~N de 30 días" en los
+# items que un cap de realismo recortó. Flip a False si el copy molesta; el número NO cambia con el
+# knob (el cap sigue aplicándose), sólo se deja de decir.
+CAPPED_STAPLE_HONESTY = _knob_env_bool("MEALFIT_CAPPED_STAPLE_HONESTY", True)
+
 _CAPS_APPLIED_LAST_RUN: list = []
 
 
