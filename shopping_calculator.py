@@ -4836,8 +4836,44 @@ def _normalize_food_dict_to_grams(food_dict: dict) -> dict:
         from db_inventory import convert_amount as _conv
     except Exception:
         return food_dict
+    # [P1-COHERENCE-CANON-DENSITY · 2026-07-26] La búsqueda NO puede ser solo por nombre exacto.
+    #
+    # Este normalizador corre DESPUÉS de `_canonicalize_food_dict_for_coherence`, así que las
+    # claves que recibe ya son etiquetas canónicas — y una etiqueta canónica muchas veces NO es
+    # una fila del catálogo. `Plátano verde` y `Plátano maduro` colapsan ambos a **`Plátano`**,
+    # que no existe en `master_ingredients`; `Yogurt`/`Yogurt griego …` colapsan a **`Yogur`**,
+    # que tampoco. El lookup fallaba, `convert_amount` recibía `{}` y avisaba
+    # `item='<unknown>' sin density_g_per_unit` → devolvía None → la fila se quedaba en `unidad`
+    # mientras la lista hablaba en `g` → `unit_mismatch` con `expected_qty=0.0`: un FANTASMA
+    # inventado por el propio guard.
+    #
+    # Medido en el plan vivo fbe53a5b: `Plátano` esp=0.0 lista=1400.0 reportado como fantasma,
+    # cuando ambas filas de plátano traen `density_g_per_unit=280` y la conversión era posible
+    # (2.5 uds × 280 = 700 g contra 1400 g = divergencia REAL de ×2, que es lo que hay que
+    # reportar). Mismo caso en Yogurt (`density_g_per_cup=245`).
+    #
+    # Se indexa por nombre, por alias y por forma canónica, sin sobreescribir: el nombre exacto
+    # siempre gana. Dentro de un grupo canónico las densidades son equivalentes por construcción
+    # —es la razón por la que colapsan— así que tomar la primera fila del grupo es correcto.
     try:
-        master_map = {str(m.get("name", "")).lower(): m for m in (get_master_ingredients() or [])}
+        master_map = {}
+        _canon_pend = []
+        for m in (get_master_ingredients() or []):
+            nm = str(m.get("name", "")).strip()
+            if not nm:
+                continue
+            master_map.setdefault(nm.lower(), m)
+            for _al in (m.get("aliases") or []):
+                if _al:
+                    master_map.setdefault(str(_al).strip().lower(), m)
+            _canon_pend.append((nm, m))
+        for nm, m in _canon_pend:
+            try:
+                _c = sorted(_canonicalize_for_coherence({nm}))
+            except Exception:
+                continue
+            if _c:
+                master_map.setdefault(_c[0].strip().lower(), m)
     except Exception:
         master_map = {}
     out = {}
