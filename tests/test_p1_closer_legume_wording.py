@@ -38,7 +38,10 @@ def test_the_exact_live_defect_fixed():
 
 @pytest.mark.parametrize("nm,expect_snippet", [
     ("filete de pescado", "a la plancha o hervido"),   # pescado → default intacto (coherente)
-    ("pechuga de pollo", "a la plancha o hervido"),     # pollo → default intacto
+    # [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] "hervida": el núcleo es *la* pechuga, no el
+    # pollo. Lo que este caso protege —que la carne/pescado NO caiga en la rama de legumbre—
+    # sigue intacto; solo se corrige la concordancia, que antes salía del final del sintagma.
+    ("pechuga de pollo", "a la plancha o hervida"),     # pollo → default intacto
 ])
 def test_meat_fish_default_unchanged(nm, expect_snippet):
     import graph_orchestrator as g

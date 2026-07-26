@@ -68,8 +68,19 @@ def test_closer_step_plural_agreement():
 
 
 def test_closer_step_singular_unchanged():
+    """[P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] Expectativa CORREGIDA, no relajada.
+
+    Este test afirmaba "hervido y sírvelo" para "pechuga de pollo" — y es incorrecto en
+    español: se dice *la* pechuga. El test codificaba el comportamiento previo, que decidía la
+    concordancia por la última palabra del sintagma ('pollo') en vez de por el núcleo
+    ('pechuga'). El mismo defecto entregó al usuario "Cocina Carne de res… hervidos y
+    sírvelos" en el plan vivo 0afa0ed5.
+
+    Lo que este test protege sigue vivo: el SINGULAR no se convierte en plural.
+    """
     txt = go._closer_protein_step_text("pechuga de pollo", no_cook=False)
-    assert "hervido y sírvelo como proteína del plato" in txt
+    assert "hervida y sírvela como proteína del plato" in txt
+    assert "hervidas" not in txt and "sírvelas" not in txt, "sigue siendo singular"
 
 
 def test_cook_tail_dedup_regex_matches_both_numbers():

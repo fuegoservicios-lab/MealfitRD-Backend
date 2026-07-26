@@ -15448,6 +15448,51 @@ def _meal_is_stewy(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
+# [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] Sustantivos de comida es-DO cuyo género NO se
+# deduce de la terminación. El resto sigue la regla -a/-as = femenino. Conservador: ante la duda
+# se queda en masculino, que es el comportamiento previo.
+_CLOSER_FEM_HEADS = {
+    "carne", "leche", "pechuga", "sardina", "sardinas", "codorniz", "res",
+    "chuleta", "chuletas", "costilla", "costillas", "salchicha", "salchichas",
+    "habichuela", "habichuelas", "lenteja", "lentejas", "clara", "claras",
+}
+_CLOSER_MASC_HEADS = {"filete", "filetes", "atun", "queso", "quesos", "huevo", "huevos",
+                      "pollo", "cerdo", "pescado", "pavo", "camaron", "camarones", "yogur"}
+
+
+def _closer_step_agreement(nm_sa: str) -> tuple[bool, bool]:
+    """[P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] `(es_plural, es_femenino)` del NÚCLEO del
+    sintagma, no de su última palabra.
+
+    "Carne de res" termina en "es" pero su núcleo es "carne": femenino singular. Mirando el
+    final de la cadena el plan vivo 0afa0ed5 entregó «Cocina Carne de res a la plancha o
+    hervidos y sírvelos» y «Añade Carne de res al guiso… Incorpóralos».
+
+    El núcleo es lo que va ANTES del primer " de " ("Pechuga de pollo" → "pechuga"); si no hay
+    complemento, la primera palabra. Pura, fail-open a (False, False) = masculino singular, que
+    era el comportamiento previo para los nombres sin -es/-as.
+    """
+    try:
+        _n = str(nm_sa or "").strip().lower()
+        if not _n:
+            return (False, False)
+        # El núcleo va DELANTE en español: "atún en agua" → 'atún', no 'agua'; "carne de res"
+        # → 'carne'. Tomar la última palabra del segmento hacía femenino a "Atún en agua"
+        # (lo cazó el propio test de esta corrección).
+        _tokens = _n.split(" de ")[0].strip().split()
+        _cabeza = _tokens[0] if _tokens else _n
+        _plural = _cabeza.endswith("s")
+        if _cabeza in _CLOSER_FEM_HEADS:
+            return (_plural, True)
+        if _cabeza in _CLOSER_MASC_HEADS:
+            return (_plural, False)
+        # regla general es-DO: -a / -as → femenino
+        _fem = _cabeza.endswith("a") or _cabeza.endswith("as")
+        return (_plural, _fem)
+    except Exception:
+        return (False, False)
+
+
 def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
                               stewy: bool = False, precooked: bool = False) -> str:
     """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
@@ -15475,7 +15520,11 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
     if no_cook or precooked or "cocid" in _nm_sa \
             or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
         # Concordancia: "Incorpora camarones … mézclalo" (plan vivo) → mézclalos.
-        _v_inc = "mézclalos" if (_nm_sa.endswith("es") or _nm_sa.endswith("as")) else "mézclalo"
+        # [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] misma corrección que abajo: la concordancia
+        # la manda el núcleo. "Incorpora Carne de res… y mézclalos" era el mismo fallo.
+        _pl_inc, _fem_inc = _closer_step_agreement(_nm_sa)
+        _v_inc = ("mézclalas" if _fem_inc else "mézclalos") if _pl_inc else \
+                 ("mézclala" if _fem_inc else "mézclalo")
         return f"Incorpora {nm} a la preparación y {_v_inc} antes de servir."
     if any(h in _nm_sa for h in _PRECOOKED_PROTEIN_HINT):
         # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] En un guiso, "a la preparación" suena a
@@ -15485,21 +15534,32 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
         return f"Escurre e incorpora {nm} (ya viene cocido) a la preparación antes de servir."
     # [P1-CLOSER-LEGUME-WORDING] legumbre seca → se hierve, no "a la plancha"; acompañante, no "la proteína".
     if PROTEIN_STEP_LEGUME_WORDING and any(h in _nm_sa for h in _LEGUME_PROTEIN_HINT):
-        return f"Cocina {nm} en agua hasta que ablanden e incorpóralos al plato."
+        # [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] "incorpóralos" estaba fijo: las habichuelas
+        # y las lentejas son femeninas y son la legumbre más común del plan.
+        _pl_leg, _fem_leg = _closer_step_agreement(_nm_sa)
+        _v_leg = ("incorpóralas" if _fem_leg else "incorpóralos") if _pl_leg else \
+                 ("incorpórala" if _fem_leg else "incorpóralo")
+        return f"Cocina {nm} en agua hasta que ablanden e {_v_leg} al plato."
     # [P1-RECIPE-QUALITY-100 · 2026-07-10] concordancia plural: "Cocina camarones ... o hervido y
     # sírvelo" (plan vivo 6d742f23) → hervidos/sírvelos. Heurística conservadora (termina en
     # es/as = plural es-DO: camarones/habichuelas/sardinas); 'res' NO es plural.
-    _plural = _nm_sa.endswith("es") or _nm_sa.endswith("as")
+    # [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] …pero el nombre de catálogo es "Carne de res",
+    # NO "res", y ESE sí termina en "es" → el plan vivo 0afa0ed5 entregó "Cocina Carne de res a
+    # la plancha o hervidOS y sírveLOS" y "Añade Carne de res al guiso… IncorpóraLOS". El autor
+    # de la heurística pensó en 'res' suelto; la cadena real lleva el complemento pegado.
+    # La concordancia la manda el NÚCLEO ("Carne"), no la última palabra del sintagma.
+    _plural, _fem = _closer_step_agreement(_nm_sa)
     # [P2-CLOSER-STEP-STEW-WORDING · 2026-07-24] Plato de olla → la proteína entra AL GUISO.
     # "Cocínala aparte y sírvela como proteína del plato" es lo que hacía que un plato correcto
     # (arroz + habichuelas + carne, la bandera) se leyera como un parche de última hora.
     if stewy and CLOSER_STEP_STEW_WORDING:
-        _v = "Incorpóralos" if _plural else "Incorpóralo"
+        _v = ("Incorpóralas" if _fem else "Incorpóralos") if _plural else \
+             ("Incorpórala" if _fem else "Incorpóralo")
         return (f"Añade {nm} al guiso en los últimos minutos de cocción para que tome el sabor. "
                 f"{_v} con cuidado para no deshacer el resto.")
-    if _plural:
-        return f"Cocina {nm} a la plancha o hervidos y sírvelos como proteína del plato."
-    return f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
+    _part = ("hervidas" if _fem else "hervidos") if _plural else ("hervida" if _fem else "hervido")
+    _imp = ("sírvelas" if _fem else "sírvelos") if _plural else ("sírvela" if _fem else "sírvelo")
+    return f"Cocina {nm} a la plancha o {_part} y {_imp} como proteína del plato."
 
 
 def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
@@ -27769,7 +27829,10 @@ _COMPLEMENTO_STEP_RE = _re.compile(r"(?i)^el toque de fuego \(complemento\):\s*"
 # proteína del plato.") lee como un bug de copy-paste. Si TODOS los bolts matchean el template exacto,
 # se fusionan en una sola oración con los nombres unidos por "y".
 # [P1-RECIPE-QUALITY-100 · 2026-07-10] acepta la variante plural (hervidos/sírvelos) del wording.
-_COOK_TAIL_RE = _re.compile(r"^Cocina (.+?) a la plancha o hervidos? y sírvelos? como proteína del plato\.?$")
+# [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] acepta también el FEMENINO (hervida/sírvela). Sin
+# esto los pasos de "Carne de res" y "Pechuga de pollo" dejaban de matchear el template y no se
+# fusionaban → dos bolts seguidos en la misma receta. Lo cazó la corrida de colateral, no yo.
+_COOK_TAIL_RE = _re.compile(r"^Cocina (.+?) a la plancha o hervid[oa]s? y sírvel[oa]s? como proteína del plato\.?$")
 
 
 def _integrate_complement_steps(days) -> int:
