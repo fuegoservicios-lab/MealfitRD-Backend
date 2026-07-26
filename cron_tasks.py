@@ -13175,6 +13175,53 @@ def _handle_reservation_reconciliation_exhausted(
             )
 
 
+def _pantry_gate_waiver_reason(
+    chunk_kind: str | None = None,
+    snapshot: dict | None = None,
+    form_data: dict | None = None,
+    fresh_inventory_source: str | None = None,
+) -> str | None:
+    """[P1-PANTRY-GATE-SSOT · 2026-07-26] Motivo por el que la nevera NO puede bloquear
+    este chunk, o `None` si sí puede.
+
+    SSOT de las **dos** guardas de nevera del worker. Existen dos porque el chunk consulta
+    el inventario en dos momentos de coste MUY distinto:
+
+      1. PRE-pipeline (`_should_pause_for_empty_pantry`) — antes de gastar un centavo.
+      2. POST-pipeline (gate de reservas, `_chunk_worker`) — después de generar y mergear
+         la semana entera.
+
+    Hasta 2026-07-26 cada una decidía por su cuenta y **discrepaban**: la primera respetaba
+    `_pantry_flexible_mode`, la segunda solo eximía `chunk_kind == "initial_plan"`. Un chunk
+    `rolling_refill` en modo flexible pasaba la guarda barata, corría el pipeline completo
+    (~7 min de LLM), y era pausado por la guarda cara — por la misma nevera vacía que el
+    modo flexible ya había perdonado. El cron de TTL lo resucitaba 12h después y el ciclo
+    se repetía indefinidamente: el plan nunca converge y nunca falla del todo.
+
+    Medido en el plan `69f9e03d` semana 5 (`rolling_refill`, nevera del dueño = 0 filas):
+    seis ejecuciones completas solo el 2026-07-26 — 01:07, 01:23, 01:39, 02:09, 02:18,
+    14:43 — todas muertas en `reservas 0/87 (min=43)`, con
+    `_pantry_pause_resolved_at=2026-07-26T14:37:21` justo antes del arranque de las 14:43.
+    El plan llevaba estancado desde el 12 de julio. Las semanas 6-11 del MISMO plan tienen
+    `attempts=2` porque el `P1-REFILL-SIBLING-PAUSE-GATE` sí las frena antes del pipeline:
+    la guarda correcta ya existía, solo que la primera del grupo no la recibía.
+
+    ⚠️ No añadas una tercera lectura suelta de `_pantry_flexible_mode`: llama a esta
+    función. `test_p1_pantry_gate_ssot.py` falla si aparece una guarda que decide sola.
+    """
+    snapshot = snapshot or {}
+    form_data = form_data or {}
+    if snapshot.get("_pantry_flexible_mode") or form_data.get("_pantry_flexible_mode"):
+        return "flexible_mode"
+    if snapshot.get("_pantry_advisory_only") or form_data.get("_pantry_advisory_only"):
+        return "advisory_only"
+    if fresh_inventory_source == "guest":
+        return "guest"
+    if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+        return "initial_plan_autonomy"
+    return None
+
+
 def _should_pause_for_empty_pantry(
     fresh_inventory_source: str,
     fresh_inventory: list,
@@ -13195,19 +13242,17 @@ def _should_pause_for_empty_pantry(
       - `source == "guest"`: usuarios anónimos no tienen perfil para refrescar
         despensa; pausar sería un dead-end.
     """
-    snapshot = snapshot or {}
-    form_data = form_data or {}
-    flexible_mode = bool(
-        snapshot.get("_pantry_flexible_mode")
-        or form_data.get("_pantry_flexible_mode")
-    )
-    advisory_only = bool(
-        snapshot.get("_pantry_advisory_only")
-        or form_data.get("_pantry_advisory_only")
-    )
-    if flexible_mode or advisory_only:
-        return False
-    if fresh_inventory_source == "guest":
+    # [P1-PANTRY-GATE-SSOT · 2026-07-26] La decisión "¿puede la nevera bloquear a este
+    # chunk?" vive en `_pantry_gate_waiver_reason`, compartida con el gate de reservas
+    # POST-pipeline. `chunk_kind=None` es deliberado: la exención de `initial_plan` se
+    # aplica en el call site, DENTRO de este `if` — contrato anclado por
+    # test_p1_chunk_autonomy_initial_plan.py.
+    if _pantry_gate_waiver_reason(
+        chunk_kind=None,
+        snapshot=snapshot,
+        form_data=form_data,
+        fresh_inventory_source=fresh_inventory_source,
+    ):
         return False
     return _count_meaningful_pantry_items(fresh_inventory) < CHUNK_MIN_FRESH_PANTRY_ITEMS
 
@@ -27441,12 +27486,19 @@ def process_plan_chunk_queue(target_plan_id=None):
                 # pending_user_action). rolling_refill/catchup CONSERVAN la pausa: a mitad de
                 # plan sí prometemos cocinar con lo que hay.
                 _meaningful = _count_meaningful_pantry_items(fresh_inventory)
-                if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+                # [P1-PANTRY-GATE-SSOT · 2026-07-26] mismo predicado que el gate de reservas.
+                # Llegados aquí `_should_pause_for_empty_pantry` ya descartó flexible/advisory/
+                # guest, así que en la práctica solo puede devolver "initial_plan_autonomy" —
+                # pero se consulta la SSOT para que el knob tenga UN solo lector en el archivo.
+                _pause_waiver = _pantry_gate_waiver_reason(
+                    chunk_kind=chunk_kind, snapshot=snap, form_data=form_data
+                )
+                if _pause_waiver:
                     logger.info(
                         f"[P1-CHUNK-AUTONOMY] Chunk {week_number} plan {meal_plan_id}: nevera "
                         f"insuficiente (items_meaningful={_meaningful}, source={fresh_inventory_source!r}) "
-                        f"pero kind=initial_plan → continúa SIN pausa (la lista de compras del plan "
-                        f"define qué comprar)."
+                        f"pero waiver={_pause_waiver!r} → continúa SIN pausa (la lista de compras "
+                        f"del plan define qué comprar)."
                     )
                 else:
                     # [P1-1] Source distinto a "live" se pausaba antes silenciosamente. Logueamos
@@ -31321,6 +31373,21 @@ def process_plan_chunk_queue(target_plan_id=None):
 
                 return  # Abortamos para no marcarlo como completed ni sobreescribir status
 
+            # [P1-PANTRY-GATE-SSOT · 2026-07-26] MISMO predicado que la guarda pre-pipeline.
+            # Se calcula FUERA del `try` para que el handler del `except` también lo vea
+            # bound (su rama espejo lo consulta). Ver `_pantry_gate_waiver_reason`.
+            # `fresh_inventory_source` se lee de form_data (no de la local) para que el
+            # valor sea el mismo que vio la guarda barata sin depender de por qué rama del
+            # worker llegamos hasta aquí. Sin él, un chunk `guest` pasaba el pre-pipeline
+            # (los anónimos no tienen perfil que refrescar) y moría en el gate de reservas:
+            # el mismo agujero que `flexible_mode`, por otra puerta.
+            _res_waiver = _pantry_gate_waiver_reason(
+                chunk_kind=chunk_kind,
+                snapshot=snap,
+                form_data=form_data,
+                fresh_inventory_source=form_data.get("_fresh_pantry_source"),
+            )
+
             try:
                 from shopping_calculator import _parse_quantity
                 _expected_ingredients = 0
@@ -31349,18 +31416,24 @@ def process_plan_chunk_queue(target_plan_id=None):
                         )
                     except Exception:
                         pass
-                elif chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+                elif _res_waiver:
                     # [P1-CHUNK-AUTONOMY · 2026-07-10] Para initial_plan las reservas son
                     # BEST-EFFORT (telemetría), jamás gate de completitud: la nevera aún no
                     # tiene la compra del plan (estado normal del día 4+). Sin esto, el
                     # RECONCILE-EXHAUSTED pausaba el chunk y un plan de 30 días quedaba
                     # congelado esperando restock que el usuario haría DESPUÉS de comprar
-                    # la lista… que el chunk debía producir. Mismo racional que el skip de
-                    # arriba; rolling_refill/catchup conservan el gate completo.
+                    # la lista… que el chunk debía producir.
+                    #
+                    # [P1-PANTRY-GATE-SSOT · 2026-07-26] La condición ya no es solo
+                    # `initial_plan`: es el MISMO predicado de la guarda pre-pipeline. Un
+                    # `rolling_refill` en `flexible_mode` llegaba hasta aquí tras gastar el
+                    # pipeline completo y era pausado por la nevera vacía que el modo
+                    # flexible ya había perdonado — lazo infinito cada 12h (TTL).
+                    # rolling_refill/catchup SIN waiver conservan el gate completo.
                     logger.info(
                         f"[P1-CHUNK-AUTONOMY] Reservas {reserved_items}/{_expected_ingredients} "
-                        f"en chunk initial_plan {week_number} plan {meal_plan_id} → best-effort "
-                        f"sin gate (reservation_status='best_effort'; sin pausa)."
+                        f"en chunk {chunk_kind} {week_number} plan {meal_plan_id} → best-effort "
+                        f"sin gate (waiver={_res_waiver!r}; reservation_status='best_effort'; sin pausa)."
                     )
                     try:
                         execute_sql_write(
@@ -31405,13 +31478,16 @@ def process_plan_chunk_queue(target_plan_id=None):
                         return
             except Exception as reserve_err:
                 logger.warning(f"[P0-5] Reservas fallidas para chunk {task_id}: {reserve_err}")
-                if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+                if _res_waiver:
                     # [P1-CHUNK-AUTONOMY · 2026-07-10] espejo del branch best-effort: una
                     # excepción reservando contra una nevera pre-compra tampoco gatea al
                     # initial_plan (telemetría y sigue).
+                    # [P1-PANTRY-GATE-SSOT · 2026-07-26] mismo waiver que el branch normal —
+                    # si divergen, vuelve el lazo del plan 69f9e03d por la puerta del except.
                     logger.info(
-                        f"[P1-CHUNK-AUTONOMY] Reserva lanzó excepción en chunk initial_plan "
-                        f"{week_number} plan {meal_plan_id} → best-effort sin gate."
+                        f"[P1-CHUNK-AUTONOMY] Reserva lanzó excepción en chunk {chunk_kind} "
+                        f"{week_number} plan {meal_plan_id} → best-effort sin gate "
+                        f"(waiver={_res_waiver!r})."
                     )
                     try:
                         execute_sql_write(
