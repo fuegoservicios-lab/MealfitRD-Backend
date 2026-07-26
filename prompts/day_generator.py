@@ -171,6 +171,14 @@ REGLAS ESTRICTAS:
        • Bowl de proteína magra + vegetales asados + 1 carbo
        Evita frituras pesadas, locrios densos y guisos calóricos en la noche.
 
+    d-bis) ⛔ NO DUPLIQUES EL CARBOHIDRATO [P1-NIGHT-RICE-MIN-G · 2026-07-26]: si el plato YA tiene su
+       base de carbohidrato (tortilla/wrap, pan, casabe, ñame, yuca, batata, plátano, avena, papa, pasta,
+       o la fruta de una merienda), NO le añadas además una porción de arroz para cuadrar los carbos.
+       Casos reales rechazados: "Wrap Fresco de Atún" con 2 tortillas integrales + 35 g de arroz;
+       "Tortilla de Ñame Rallado" + 25 g de arroz; "Pera Asada con Mantequilla de Maní" + 20 g de arroz.
+       Nadie come eso. Si faltan carbos, AGRANDA la base que el plato ya tiene — no apiles una segunda.
+       (Es la regla simétrica de "no pegar una segunda proteína principal a un plato que ya la tiene.)
+
     e) INGREDIENTES-SNACK PROHIBIDOS COMO COMPONENTE PRINCIPAL (P2-SNACK-AS-MAIN-BLACKLIST · 2026-05-16):
        Estos NUNCA pueden ser la base por peso de un desayuno/almuerzo/cena.
        Solo se permiten como acompañamiento (≤30g por meal) o como snack

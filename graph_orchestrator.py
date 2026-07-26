@@ -10236,7 +10236,25 @@ FACT_CHECKER_THINKING_TIMEOUT_S = _env_int("MEALFIT_FACT_CHECKER_THINKING_TIMEOU
 # tocar el nombre (el nombre no delata arroz). Hereda a updates vía el finalizer. MIN_G evita tocar guarniciones
 # tangenciales que las exclusiones no cubran. tooltip-anchor: P1-NIGHT-RICE-INGREDIENT
 NIGHT_RICE_INGREDIENT_PASS = _env_bool("MEALFIT_NIGHT_RICE_INGREDIENT_PASS", True)
-NIGHT_RICE_INGREDIENT_MIN_G = max(20, min(200, _env_int("MEALFIT_NIGHT_RICE_INGREDIENT_MIN_G", 60)))
+# [P1-NIGHT-RICE-MIN-G · 2026-07-26] Default 60 → 20. Medido en 60 planes vivos: de 41
+# ingredientes con "arroz", 38 son de almuerzo (correcto, es EL staple dominicano) y quedaban
+# DOS cenas con arroz que este pase no tocaba por caer bajo el umbral:
+#
+#   "Wrap Fresco de Atún con Lechuga, Tomate y Pepino"  → 35 g de arroz blanco crudo
+#   "Tortilla de Ñame Rallado con Ensalada…"            → 25 g de arroz blanco cocido
+#
+# Las dos evaden el gate por partida doble: el detector de nombre es name-only por diseño y
+# ninguno de los dos nombres dice "arroz", y el pase por ingredientes las dejaba pasar por
+# gramaje. La regla del dueño es absoluta ("PROHIBIDO el ARROZ DE NOCHE: NADA de arroz
+# blanco"), así que 35 g —≈105 g cocidos, dos tercios de taza— no es una guarnición tangencial:
+# es una porción. Lo tangencial ya lo cubren los excludes SSOT (harina/leche/vinagre/toque/
+# crocante de arroz), que es la defensa correcta para eso; el umbral era una segunda red que
+# en la práctica solo dejaba huecos.
+#
+# Los platos de cena cuyo NOMBRE sí dice arroz los sigue cazando el detector name-based, así
+# que bajar esto no toca la "sopa de pollo con arroz" (esa cae por nombre, con su degradación
+# soft). Rollback: MEALFIT_NIGHT_RICE_INGREDIENT_MIN_G=60. tooltip-anchor: P1-NIGHT-RICE-MIN-G
+NIGHT_RICE_INGREDIENT_MIN_G = max(20, min(200, _env_int("MEALFIT_NIGHT_RICE_INGREDIENT_MIN_G", 20)))
 # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Moro/locrio/chofán en cena degradaba a advisory
 # en el intento final y SE ENTREGABA (el autofix declaraba "NO toca moro/locrio"). En la rama advisory-final del
 # gate, el modo compound convierte el plato compuesto a su versión guisada con tubérculo (nombre + arroz→tubérculo
