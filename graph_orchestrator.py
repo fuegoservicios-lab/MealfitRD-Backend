@@ -21636,7 +21636,17 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                 if not isinstance(ings, list) or not ings:
                     continue
                 name_low = _norm_text(m.get("name", ""))
-                is_batido = any(t in name_low for t in _GEN_BATIDO_NAME_TOKENS)
+                # [P1-BATIDO-ADJETIVO · 2026-07-26] TERCERA copia del predicado "¿es un
+                # licuado?", con su propia tupla y sin descontar el uso ADJETIVAL de "batido".
+                # Y es la más dañina de las tres: las otras dos solo redactaban mal un paso,
+                # esta BORRA el alimento. Visto en vivo tras el deploy:
+                #   [P3-GEN-SANITY] dropeado '2 lonjas de pan integral' (incongruente en batido)
+                # sobre "Tostadas de Pan Integral con Crema de Queso Crema Batido" — le quitó el
+                # pan a unas tostadas por creerlas un batido. `_name_suggests_blended` descuenta
+                # "queso crema batido" y compañía; los tokens propios de esta rama (shake,
+                # "jugo de") se conservan además del set del helper.
+                is_batido = (_name_suggests_blended(m.get("name", ""), _norm_text)
+                             or any(t in name_low for t in ("shake", "jugo de")))
                 # [P1-GEN-SANITY-RAW-SYNC · 2026-07-06] ACTOR #2 del desalineador crónico (el
                 # tracer lo bracketeó en post_humanize→boundary): este autofix reconstruía SOLO
                 # `ingredients` — cada drop dejaba el glitch VIVO en el raw y desalineaba a mitad

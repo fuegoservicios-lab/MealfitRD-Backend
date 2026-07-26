@@ -118,6 +118,36 @@ def test_las_otras_lecturas_de_la_tupla_son_de_no_cook_no_de_wording():
         )
 
 
+def test_la_tercera_copia_del_predicado_tambien_usa_el_helper():
+    """⚠️ Yo unifiqué DOS copias y se me escapó una TERCERA — `_GEN_BATIDO_NAME_TOKENS`, con su
+    propia lista de tokens. Y era la más dañina: las otras dos solo redactaban mal un paso,
+    esta BORRA el alimento. Visto en producción DESPUÉS de desplegar el fix parcial:
+
+        [P3-GEN-SANITY] dropeado '2 lonjas de pan integral' (incongruente en batido)
+
+    sobre "Tostadas de Pan Integral con Crema de Queso Crema Batido": le quitó el pan a unas
+    tostadas. Lección repetida: buscar TODAS las copias, no las que aparecen en el primer grep.
+    """
+    from pathlib import Path
+    src = Path(g.__file__).resolve().read_text(encoding="utf-8")
+    usos = [l.strip() for l in src.split("\n")
+            if "_GEN_BATIDO_NAME_TOKENS" in l and not l.strip().startswith("_GEN_BATIDO")]
+    assert usos == [], (
+        f"la tupla propia sigue decidiendo por su cuenta: {usos} — debe pasar por "
+        "_name_suggests_blended o el adjetivo vuelve a colarse"
+    )
+    assert "is_batido = (_name_suggests_blended(" in src
+
+
+def test_gen_sanity_no_desarma_unas_tostadas():
+    """El caso vivo, por comportamiento."""
+    assert g._name_suggests_blended(
+        "Tostadas de Pan Integral con Crema de Queso Crema Batido y Mango",
+        g._norm_text) is False
+    # y un batido de verdad sigue siéndolo por esta misma vía
+    assert g._name_suggests_blended("Batido de Guineo y Chinola", g._norm_text) is True
+
+
 def test_ambos_callsites_usan_el_helper():
     from pathlib import Path
     src = Path(g.__file__).resolve().read_text(encoding="utf-8")
