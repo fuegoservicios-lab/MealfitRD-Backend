@@ -14710,6 +14710,63 @@ def _is_recipe_safety_note_step(step) -> bool:
     return ("⚠" in s) or ("💡" in s) or ("Seguridad alimentaria" in s)
 
 
+# [P1-COMPLEMENT-INTO-MONTAJE · 2026-07-26] Kill switch de la fusión en el Montaje. Con False vuelve
+# el paso suelto («Incorpora también X al plato antes de servir»), que es correcto pero se lee como
+# un parche automático — medido en el 25% de las comidas.
+COMPLEMENT_INTO_MONTAJE = _env_bool("MEALFIT_COMPLEMENT_INTO_MONTAJE", True)
+
+# [P1-COMPLEMENT-INTO-MONTAJE · 2026-07-26] Verbos que delatan que el plato SE COCINA. Deliberadamente
+# amplio y con límite de palabra: aquí un falso positivo sólo cuesta conservar el paso suelto (que es
+# correcto, sólo se lee peor), mientras que un falso NEGATIVO manda un ingrediente al emplatado de un
+# plato que había que cocinar. La asimetría manda.
+_COOKING_VERB_RE = _re.compile(
+    r"\b(?:hierv|hirv|cocin|coce|cuec|hornea|horno|fri[eé]|fre[ií]|sofr[ií]|saltea|asa|asar|asada|"
+    r"asado|guisa|plancha|parrilla|airfryer|vapor|tuesta|tosta|dora|calienta|caliente|"
+    r"cocci[oó]n|fuego)\w*")
+
+
+def _merge_complement_into_montaje(steps: list, faltantes: list) -> bool:
+    """Añade los ingredientes olvidados AL FINAL del paso de Montaje. Muta `steps`. True si fusionó.
+
+    Devuelve False —y el caller cae al paso suelto de siempre— cuando no hay Montaje, cuando ya los
+    menciona, o ante cualquier duda. Nunca deja el ingrediente sin usar: eso es lo que este guard
+    existe para impedir.
+
+    ⚠️ Exige que NINGÚN paso cocine. Medido: apoyarse sólo en `_meal_is_no_cook` dejaba pasar **7 de
+    18** platos cocinados (estofado de res, pescado al limón, tostadas francesas). Mover un
+    ingrediente al emplatado de un plato que se cocina puede saltarse su cocción, así que la
+    condición se comprueba aquí sobre los propios pasos en vez de delegarla a un clasificador cuyo
+    veredicto ya me sorprendió una vez.
+
+    tooltip-anchor: P1-COMPLEMENT-INTO-MONTAJE"""
+    try:
+        if not steps or not faltantes:
+            return False
+        _todo = strip_accents(" ".join(str(s) for s in steps).lower())
+        if _COOKING_VERB_RE.search(_todo):
+            return False
+        _idx = next((i for i, s in enumerate(steps)
+                     if isinstance(s, str) and s.strip().lower().startswith("montaje")), None)
+        if _idx is None:
+            return False
+        _montaje = str(steps[_idx]).rstrip()
+        _bajo = strip_accents(_montaje.lower())
+        # Si el Montaje ya nombra alguno, no se toca: duplicarlo lee peor que el paso suelto.
+        for _f in faltantes:
+            _tok = strip_accents(str(_f).lower()).strip()
+            if _tok and _tok in _bajo:
+                return False
+        _lista = ", ".join(str(f).strip() for f in faltantes if str(f).strip())
+        if not _lista:
+            return False
+        if not _montaje.endswith((".", "!", "?")):
+            _montaje += "."
+        steps[_idx] = f"{_montaje} Termina con {_lista}."
+        return True
+    except Exception:
+        return False
+
+
 def _insert_step_before_montaje(steps: list, new_step: str) -> list:
     """[P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] (audit recetas P2-3) Los guards que APPENDEAN pasos
     (closer de proteína 💪, reverse-coherence 'Toque complemento') los ponían AL FINAL, después de
@@ -18037,6 +18094,7 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         # (guineo con mantequilla de maní) el prefijo "El Toque de Fuego (complemento)" invitaba al
         # backstop de tiempo a inyectar "(~10-12 min a fuego medio)" — fuego falso en plato frío.
         # Sin cocción → paso de integración fría sin prefijo de fuego.
+        _es_frio = _blended or (RECIPE_CONTRACT_NOCOOK_ENABLED and _meal_is_no_cook(meal))
         if _blended:
             new_step = f"Agrega también {_list} a la licuadora antes de licuar."
         elif RECIPE_CONTRACT_NOCOOK_ENABLED and _meal_is_no_cook(meal):
@@ -18045,6 +18103,32 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             new_step = f"Incorpora también {_list} al plato antes de servir."
         else:
             new_step = f"El Toque de Fuego (complemento): incorpora también {_list} durante la preparación."
+
+        # [P1-COMPLEMENT-INTO-MONTAJE · 2026-07-26] En platos FRÍOS, fusionar el ingrediente en el
+        # Montaje en vez de añadir un paso suelto.
+        #
+        # Medido sobre 72 comidas de 6 planes: **18 (25%)** traían un paso pegado del tipo
+        # «Incorpora también queso cottage a la preparación y mézclalo antes de servir», y el
+        # Montaje ni lo mencionaba. Casi todas son meriendas frías y casi siempre el olvidado es el
+        # queso cottage. Se lee como lo que es: un parche automático encima de una receta que se
+        # olvidó de un ingrediente.
+        #
+        # El corrector hace lo correcto (sin él el usuario compra algo que ninguna instrucción usa
+        # — por eso el matcher de producción reporta 0 ingredientes sin usar). Lo que falla es la
+        # PROSA. Fusionarlo en el Montaje da «…formando una merienda fresca. Termina con el queso
+        # cottage.» en vez de un paso 2 robótico.
+        #
+        # ⚠️ Sólo en platos fríos/licuados. En uno cocinado, mover el ingrediente al emplatado
+        # podría saltarse su cocción — y los víveres que DEBEN cocerse ya tienen su rama propia
+        # (P1-RECIPE-POLISH-5, arriba). Ahí se conserva el paso separado.
+        # Rollback: MEALFIT_COMPLEMENT_INTO_MONTAJE=false. tooltip-anchor: P1-COMPLEMENT-INTO-MONTAJE
+        if (COMPLEMENT_INTO_MONTAJE and _es_frio and isinstance(recipe, list)
+                and _merge_complement_into_montaje(steps, _rest_c)):
+            meal["recipe"] = steps
+            logger.info(f"🍽️ [P1-COMPLEMENT-INTO-MONTAJE] {len(_rest_c)} ingrediente(s) fusionado(s) "
+                        f"en el Montaje (sin paso suelto) | meal={str(meal.get('name'))[:40]}")
+            return len(missing)
+
         if isinstance(recipe, list):
             # [P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] paso de cocción ANTES del Montaje.
             meal["recipe"] = _insert_step_before_montaje(steps, new_step)
