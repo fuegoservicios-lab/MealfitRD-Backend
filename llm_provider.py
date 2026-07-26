@@ -330,3 +330,47 @@ class ChatDeepSeek(ChatOpenAI):
             merged_extra.setdefault("thinking", {"type": "disabled"})
             base = self.model_copy(update={"extra_body": merged_extra})
         return ChatOpenAI.with_structured_output(base, schema, **kwargs)
+
+
+# ============================================================
+# [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Fábrica de LLM por PROVEEDOR.
+# ============================================================
+# `_build_day_llm` (graph_orchestrator) construía siempre `ChatDeepSeek`, aunque su propio
+# comentario decía "provider correcto por prefijo" — la intención estaba escrita y no
+# implementada. Con un modelo OpenAI en el chain, ese hardcode lo mandaría al base_url de
+# DeepSeek con la key equivocada.
+#
+# Verificado contra el API (2026-07-26) antes de escribir esto:
+#   · `gpt-5.6-luna` responde en `/v1/chat/completions` y soporta `response_format=json_object`
+#     (el day-gen lo exige con MEALFIT_DAYGEN_JSON_MODE).
+#   · A pelo rechaza `temperature != 1` y `max_tokens` (pide `max_completion_tokens`), pero
+#     langchain-openai 1.3.0 traduce ambos → los ~37 callsites no necesitan cirugía.
+#
+# ⚠️ LangChain DESCARTA la temperatura en silencio para estos modelos: sólo aceptan el valor por
+# defecto. Cualquier nodo que dependa de `temperature=0` para ser determinista (p.ej. el
+# `compressor`, cuyo comentario dice "no inventes nada, solo resume") PIERDE esa garantía sin
+# aviso. Por eso el canario se limita al day-gen, donde la temperatura es un empujón y no un
+# contrato.
+_OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt")
+
+
+def is_openai_model(model: str) -> bool:
+    """¿El ID pertenece al API de OpenAI (y no a DeepSeek)?"""
+    m = str(model or "").strip().lower()
+    return any(m.startswith(p) for p in _OPENAI_MODEL_PREFIXES)
+
+
+def build_chat_llm(model: str, **kwargs):
+    """Devuelve el cliente chat del proveedor que corresponde al `model`.
+
+    OpenAI → `ChatOpenAI` con `OPENAI_API_KEY` y base por defecto. Resto → `ChatDeepSeek`
+    (que ya inyecta su propia key/base). La key SIEMPRE desde env, nunca argumento del callsite
+    — mismo contrato que enforza `test_p0_deepseek_migration.py`.
+    """
+    if is_openai_model(model):
+        _k = os.environ.get("OPENAI_API_KEY")
+        if not _k:
+            raise RuntimeError(
+                f"modelo OpenAI '{model}' pedido sin OPENAI_API_KEY en el entorno")
+        return ChatOpenAI(model=model, api_key=_k, **kwargs)
+    return ChatDeepSeek(model=model, **kwargs)

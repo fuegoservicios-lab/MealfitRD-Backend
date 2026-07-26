@@ -3599,6 +3599,14 @@ class PlanState(TypedDict):
     _harden_pools_cohort: str
     _self_critique_cohort: str
 
+    # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Cohorte del canario de MODELO del day-gen.
+    # Declarada aquí desde el minuto uno por la lección de P1-RESCOPE-METRIC-BLIND y
+    # P1-HARDEN-POOLS-CANARY-GATING: una clave que un nodo devuelve y `PlanState` no declara,
+    # LangGraph la DESCARTA — y entonces el A/B produce filas que parecen medir algo y no miden
+    # nada (400 pasadas con "cero re-entries", 80/80 cohortes mintiendo). El escáner AST de
+    # `test_p1_rescope_metric_blind.py` enforza la regla para toda clave nueva.
+    _daygen_model_cohort: str
+
     # ============================================================
     # [P2-CANDIDATE-A · 2026-05-08] CONTRATO: claves que NO viven en PlanState.
     # ------------------------------------------------------------
@@ -5766,6 +5774,51 @@ BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 # médico/fact-checker mantienen su routing risk-tier (pro para condiciones). Knob de escalada: MEALFIT_DAY_GEN_RETRY_USE_PRO.
 
 
+# [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Canario de MODELO en el day generator.
+#
+# Por qué este nodo y no otro (medido sobre 24 h de `llm_usage_events`):
+#
+#     day_generator             110 llamadas  3,26M in / 224K out   USD 0,60   62,6%
+#     self_critique              58            265K in /  85K out   USD 0,15   15,3%
+#     planner                    37            870K in /  34K out   USD 0,12   12,3%
+#     resto                                                          USD 0,08    9%
+#
+# `day_generator` es el 62% del costo Y el origen de casi todos los rechazos que medí
+# (proteína/fruta repetida, proteínas asignadas omitidas, sin preparación transformada). Son
+# fallos de satisfacción de restricciones — justo donde un modelo que razona debería ayudar.
+# Subir el modelo en TODOS los nodos a la vez impediría saber qué mejoró.
+#
+# El canario se ANTEPONE al chain existente en vez de reemplazarlo: así el circuit breaker y la
+# cascada de `_build_day_llm` siguen protegiendo (si Luna falla o su CB abre, cae a flash/pro sin
+# tocar nada). Cohorte determinista por usuario con salt PROPIO — no debe correlacionar con los
+# canarios de harden-pools ni de self-critique, o el A/B mediría dos cosas a la vez.
+#
+# Arranca APAGADO: `MEALFIT_DAYGEN_CANARY_MODEL` vacío ⇒ el chain es idéntico al de hoy.
+DAYGEN_CANARY_MODEL = _env_str("MEALFIT_DAYGEN_CANARY_MODEL", "") or ""
+DAYGEN_CANARY_PCT = _env_int("MEALFIT_DAYGEN_CANARY_PCT", 0,
+                             validator=lambda v: 0 <= v <= 100)
+
+
+def _daygen_model_canary_cohort(form_data: dict) -> str:
+    """'on' si este usuario cae en el canario de modelo del day-gen; 'off' si no.
+
+    Determinista y estable por usuario (bucket sha256 con salt `daygen_model|`), para que un
+    mismo usuario no salte de rama entre generaciones y el A/B sea legible. Sin modelo o con
+    PCT=0 → siempre 'off'. Fail-safe → 'off' (nunca gastar por accidente, simétrico al
+    fail-cheap de `resolve_model_for_tier`). tooltip-anchor: P1-DAYGEN-LUNA-CANARY"""
+    try:
+        if not DAYGEN_CANARY_MODEL or DAYGEN_CANARY_PCT <= 0:
+            return "off"
+        if DAYGEN_CANARY_PCT >= 100:
+            return "on"
+        fd = form_data or {}
+        _id = fd.get("user_id") or fd.get("session_id") or "anon"
+        bucket = int(hashlib.sha256(f"daygen_model|{_id}".encode()).hexdigest(), 16) % 100
+        return "on" if bucket < DAYGEN_CANARY_PCT else "off"
+    except Exception:
+        return "off"
+
+
 def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None) -> list:
     """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día, optimizada por COSTO:
     flash SUFICIENTE por default, pro SOLO cuando no alcanza. El day-gen avanza al siguiente en cada fallo (reintentos de
@@ -5799,6 +5852,10 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     else:
         # attempt 1: flash primario (suficiente por default), pro SOLO como fallback si el call de flash falla.
         chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
+    # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] El canario va DELANTE: se intenta primero y el resto
+    # del chain queda como red (CB abierto o fallo → cascada normal a flash/pro, sin cambios).
+    if _daygen_model_canary_cohort(form_data) == "on":
+        chain = [DAYGEN_CANARY_MODEL] + chain
     _seen, _out = set(), []
     for m in chain:
         if m and m not in _seen:
@@ -6653,6 +6710,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         # [A1-HARDEN-POOLS] cohorte determinista del canario (default 'on'; slice OFF vs ON en clinical_band)
         # [P1-HARDEN-POOLS-CANARY-GATING] Se reporta la MISMA que gateó al enforcer arriba.
         "_harden_pools_cohort": _a1_cohort,
+        # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] La cohorte del canario de modelo se decide con el
+        # MISMO `form_data` que verá `_day_model_chain`, así que reportar aquí es reportar la rama
+        # que de verdad corrió (el error de P1-HARDEN-POOLS-CANARY-GATING fue justo lo contrario).
+        "_daygen_model_cohort": _daygen_model_canary_cohort(form_data),
     }
 
 
@@ -7223,8 +7284,15 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             )
             if DAYGEN_JSON_MODE:
                 # [P1-DEEPSEEK-JSON-MODE · 2026-06-13] Fuerza salida JSON válida (GLM y DeepSeek lo soportan).
+                # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Verificado que gpt-5.6-luna también lo soporta.
                 _kw["model_kwargs"] = {"response_format": {"type": "json_object"}}
-            _llm = ChatDeepSeek(**_kw)
+            # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] Proveedor por prefijo del modelo — esto es lo
+            # que el comentario de arriba prometía ("provider correcto por prefijo") y no hacía:
+            # con un modelo OpenAI en el chain, `ChatDeepSeek` lo mandaría al base_url de DeepSeek
+            # con la key equivocada.
+            from llm_provider import build_chat_llm as _build_chat_llm
+            _kw.pop("model", None)
+            _llm = _build_chat_llm(_model, **_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
                 return _llm.bind_tools(NUTRITION_TOOLS)
             # [L1-UNBIND-NUTRITION-TOOL] tool des-enlazada (la tabla viaja en el SystemMessage cacheado).
@@ -39137,6 +39205,11 @@ def _compute_pipeline_holistic_score_and_emit(
                             # [A1-HARDEN-POOLS · 2026-07-09] cohorte del canario A1 (ausente = 'on') +
                             # violation-rate para medir la eliminación de clase por cohorte.
                             "harden_pools_cohort": final_state.get("_harden_pools_cohort") or "on",
+                            # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] SIN fallback `or "on"`: si la
+                            # clave falta hay que verlo como None y no como una rama inventada —
+                            # ese `or` es exactamente lo que hizo ilegible el canario anterior.
+                            "daygen_model_cohort": final_state.get("_daygen_model_cohort"),
+                            "daygen_canary_model": DAYGEN_CANARY_MODEL or None,
                             "same_day_protein_repeats": _a1_vr.get("same_day_protein_repeats"),
                             "cross_day_proteins": _a1_vr.get("cross_day_proteins"),
                             "cross_day_dishes": _a1_vr.get("cross_day_dishes"),
