@@ -193,6 +193,44 @@ _BARIATRIC_LOW_DENSITY_AS_MAIN = {
 }
 
 
+# [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] El seeder y el gate de variedad hablaban vocabularios
+# distintos: de las 30 frutas del catálogo el gate reconocía 16, así que un pool de 3 salía sin
+# ninguna reconocida el 9% de las veces y con ≤1 el 44,8%. Estos dos helpers cierran el contrato por
+# el lado del seeder. El vocabulario vive en `graph_orchestrator._FEATURED_FRUITS` (SSOT del gate):
+# se importa en lugar de duplicarlo, porque una copia divergiría en el primer alimento nuevo.
+def _n_gate_fruits(fruits) -> int:
+    """Cuántas frutas del pool cuenta el gate de repetición intra-día. Fail-safe → 0."""
+    try:
+        from graph_orchestrator import _featured_fruits_in_name as _ffn
+        return sum(1 for f in (fruits or []) if _ffn(f))
+    except Exception:
+        return 0
+
+
+def _rotate_fruit_pairs(fruits):
+    """Reparte el pool en (fruta_a, fruta_b) por día — DOS distintas cada día.
+
+    Día i recibe `(fruits[i], fruits[i+1])` sobre la rotación, así que 4 frutas distintas cubren 3
+    días con dos por día en vez de comprar 6. Prioriza las que el gate reconoce: si el pool trae
+    níspero y guineo, el guineo va primero porque una repetición de níspero era INVISIBLE para el
+    gate y por tanto no ayudaba a satisfacerlo.
+
+    Devuelve `None` si no hay al menos 2 frutas utilizables — el caller cae al texto libre en vez de
+    inventar un pool. tooltip-anchor: P1-FRUIT-SEEDER-GATE-CONTRACT"""
+    try:
+        from graph_orchestrator import _featured_fruits_in_name as _ffn
+    except Exception:
+        def _ffn(_x):
+            return {"?"}
+    base = [f for f in (fruits or []) if f and str(f).strip()]
+    if len(base) < 2:
+        return None
+    # reconocidas primero, conservando el orden relativo (el shuffle previo ya dio la aleatoriedad)
+    ordenadas = [f for f in base if _ffn(f)] + [f for f in base if not _ffn(f)]
+    n = len(ordenadas)
+    return [(ordenadas[i % n], ordenadas[(i + 1) % n]) for i in range(3)]
+
+
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None, rejection_reasons: list = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
@@ -974,11 +1012,18 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     #      con frutas que NO estén ya presentes (garantiza 3 distintas).
     if unique_fruits:
         _base_fruits = list(unique_fruits)
+        # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Fuera `Limón` y `Naranja` de la lista de
+        # relleno: el gate las excluye A PROPÓSITO (ralladura/aderezo, no "la fruta del plato"), así
+        # que ocupaban un slot del pool sin poder satisfacer nunca "una fruta distinta por comida".
+        # El pool del caso vivo era `['Níspero','Toronja','Limón']` — un slot gastado en un
+        # condimento. Todas las de esta lista SÍ están en `_FEATURED_FRUITS`.
         _DEFAULT_DR_FRUITS = (
-            'Limón', 'Lechosa', 'Mango', 'Piña', 'Guineo', 'Naranja',
-            'Fresas', 'Chinola', 'Melón', 'Manzana',
+            'Lechosa', 'Mango', 'Piña', 'Guineo', 'Fresas', 'Chinola',
+            'Melón', 'Manzana', 'Guayaba', 'Mandarina',
         )
-        while len(unique_fruits) < 3:
+        # [P1-FRUIT-SEEDER-GATE-CONTRACT] 4 y no 3: el reparto da 2 frutas distintas por día
+        # rotando sobre 4, así la semana usa 4 frutas en vez de las 6 que costaría 2×3 sin reutilizar.
+        while len(unique_fruits) < 4:
             existing = {f.lower() for f in unique_fruits}
             # Prioridad 1: añadir una fruta DR default que NO esté ya presente.
             # Garantiza variedad cross-day (cada día recibe fruta distinta).
@@ -1000,7 +1045,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     chosen_proteins = unique_proteins[:3]
     chosen_carbs = unique_carbs[:3]
     chosen_veggies = unique_veggies[:6]
-    chosen_fruits = unique_fruits[:3] if unique_fruits else []
+    # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] 4 frutas: `_rotate_fruit_pairs` las reparte en
+    # 2 por día reutilizándolas entre días.
+    chosen_fruits = unique_fruits[:4] if unique_fruits else []
     
     # Repetimos mezcla final de los 3 días elegidos para distribuir el orden
     random.shuffle(chosen_proteins)
@@ -1150,16 +1197,32 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     elif update_reason == 'weekend':
         blocked_text += "\n\n🎉 [INTENCIÓN DEL USUARIO]: El usuario busca algo para un FIN DE SEMANA ESPECIAL. Propón platos más elaborados, con presentación premium, ideales para disfrutar con tiempo o en familia."
     
-    # Construir parámetros de frutas para el prompt
-    fruit_params = {}
-    if chosen_fruits and len(chosen_fruits) == 3:
-        fruit_params = {
-            "fruit_0": chosen_fruits[0], "fruit_1": chosen_fruits[1], "fruit_2": chosen_fruits[2]
-        }
+    # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] DOS frutas por día, no una.
+    #
+    # El contrato estaba roto por los dos lados y por eso "fruta repetida el mismo día" era la
+    # razón de rechazo dominante (67% de los planes de la línea base reintentaban):
+    #
+    #   · el seeder asignaba UNA fruta por día (`fruit_0/1/2`)
+    #   · el gate exige una fruta dulce DISTINTA por COMIDA dentro del día
+    #
+    # Un día con fruta en el desayuno Y en la merienda —la forma más común— no puede cumplir eso
+    # desde el pool: el day-gen repite la única que tiene (el gate rechaza) o improvisa una de
+    # fuera del pool (y choca cross-día). Caso vivo del 07:47: pool `['Níspero','Toronja','Limón']`
+    # → usó guineo, que no estaba asignado. NO es un fallo del modelo; la instrucción era
+    # insatisfacible, y un modelo mejor se estrella igual.
+    #
+    # Reparto CONSERVADOR con la lista de compras en mente: 4 frutas distintas por semana en vez de
+    # 3, y cada día recibe dos consecutivas de la rotación (día i → frutas[i], frutas[i+1]), así
+    # que las frutas se reutilizan entre días en lugar de comprar 6.
+    _fruit_slots = _rotate_fruit_pairs(chosen_fruits)
+    if _fruit_slots:
+        fruit_params = {f"fruit_{i}": _fruit_slots[i][0] for i in range(3)}
+        fruit_params.update({f"fruit_{i}b": _fruit_slots[i][1] for i in range(3)})
     else:
         _fallback_fruit = "elige la fruta dominicana que mejor combine con la preparación"
-        fruit_params = {"fruit_0": _fallback_fruit, "fruit_1": _fallback_fruit, "fruit_2": _fallback_fruit}
-        
+        fruit_params = {k: _fallback_fruit for k in
+                        ("fruit_0", "fruit_0b", "fruit_1", "fruit_1b", "fruit_2", "fruit_2b")}
+
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
         protein_0=chosen_proteins[0], carb_0=chosen_carbs[0],
         veggie_0=chosen_veggies[0], veggie_0b=chosen_veggies[3],
@@ -1173,7 +1236,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas para 3 días (rotadas si es necesario): {chosen_proteins}")
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos para 3 días (rotados si es necesario): {chosen_carbs}")
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
-    logger.info(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
+    # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Se loguea el reparto POR DÍA y cuántas de las
+    # frutas cuentan para el gate: el log anterior ("Fruta sugerida: [...]") no permitía ver que el
+    # pool era insatisfacible — el forense del 07:47 tuvo que cruzarlo a mano con `_FEATURED_FRUITS`.
+    logger.info(f"🍓 [ANTI MODE-COLLAPSE] Frutas por día (2 distintas c/u): {_fruit_slots or 'fallback'}"
+                f" | reconocidas por el gate: {_n_gate_fruits(chosen_fruits)}/{len(chosen_fruits or [])}")
     return prompt
 
 def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:

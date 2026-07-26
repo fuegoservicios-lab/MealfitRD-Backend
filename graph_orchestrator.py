@@ -17085,7 +17085,51 @@ _PREMIUM_INGREDIENTS = ("ricotta", "yogur griego", "yogurt griego", "queso parme
 # + mango) Y en la merienda (mango + mozzarella) el mismo día → repetición + pareo dudoso.
 _FEATURED_FRUITS = ("mango", "guineo", "banana", "lechosa", "papaya", "pina", "fresa",
                     "melon", "sandia", "uva", "pera", "manzana", "mandarina", "guayaba",
-                    "chinola", "maracuya", "mamey", "zapote", "cereza", "kiwi", "arandano")
+                    "chinola", "maracuya", "mamey", "zapote", "cereza", "kiwi", "arandano",
+                    # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Seis frutas que el CATÁLOGO
+                    # tiene y el seeder ASIGNA, pero el gate no veía. Medido: de las 30 frutas del
+                    # catálogo el gate reconocía 16; un pool de 3 salía sin NINGUNA reconocida el
+                    # 9% de las veces y con ≤1 el 44,8%. Cuando eso pasa, el día-gen no puede
+                    # satisfacer "una fruta distinta por comida" desde el pool, improvisa una de
+                    # fuera (caso vivo plan del 07:47: pool ['Níspero','Toronja','Limón'] → usó
+                    # guineo) y el de-dup determinista tampoco puede reescribir: su log lo dice,
+                    # "pool agotado o nombre no-reescribible".
+                    #
+                    # NO se añaden `naranja` ni `limon`: la exclusión de arriba es DELIBERADA
+                    # (ralladura/aderezo en varias comidas sin ser la fruta del plato). Tampoco
+                    # coco/pasas/datiles/ciruela pasa/tamarindo (guarnición o condimento) ni
+                    # aguacate (grasa), aunque el catálogo los clasifique como fruta.
+                    "nispero", "guanabana", "ciruela", "durazno", "granada", "toronja")
+
+# [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Búsqueda por LÍMITE DE PALABRA, no subcadena.
+# `"pina" ⊂ "espinaca"` — el gate veía piña en un plato de espinacas, y `Espinacas` está en el
+# catálogo (medido: 2 platos de 12 planes contados como piña; ningún día cambió de veredicto
+# porque hacía falta espinaca en DOS comidas del mismo día, así que era un rechazo falso latente).
+# También `"pera" ⊂ "temperatura"`. Tercera vez hoy que la subcadena sobre alimentos en español
+# muerde — ver P1-SEASONING-WORD-BOUNDARY y `"pollo"` ⊂ `"repollo"`.
+#
+# El grupo es CAPTURANTE a propósito: `findall` devuelve el lema sin el plural, así que "fresas" y
+# "fresa" cuentan como la MISMA fruta. Con un grupo no-capturante devolvería la coincidencia entera
+# y "Fresas" en el desayuno + "Fresa" en la merienda serían dos frutas distintas para el conteo —
+# la repetición se colaría.
+_FEATURED_FRUIT_RE = _re.compile(
+    r"\b(" + "|".join(sorted(map(_re.escape, _FEATURED_FRUITS), key=len, reverse=True))
+    + r")(?:s|es)?\b")
+
+
+def _featured_fruits_in_name(name) -> set:
+    """Frutas FEATURED mencionadas en el nombre de un plato, por límite de palabra.
+
+    SSOT de las CUATRO superficies que cuentan fruta (gate `build_variety_report`, detector de
+    paridad, de-dup y el clash fruta↔pescado). Si no comparten matcher, el de-dup reescribe algo
+    que el gate sigue viendo repetido y se quema un intento — el fallo que P1-FRUIT-DEDUP-GATE-PARITY
+    ya tuvo que cerrar una vez. tooltip-anchor: P1-FRUIT-SEEDER-GATE-CONTRACT"""
+    try:
+        from constants import strip_accents as _sa_ff
+    except Exception:
+        def _sa_ff(s):
+            return s
+    return set(_FEATURED_FRUIT_RE.findall(_sa_ff(str(name or "").lower())))
 
 # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Detección determinista del pareo intra-plato chocante.
 # CONSERVADOR para minimizar falsos positivos (un falso positivo solo cuesta un retry — degrada a advisory
@@ -17155,12 +17199,11 @@ def _plan_has_same_day_fruit_repeat(plan: dict) -> bool:
             for meal in (day.get("meals", []) or []):
                 if not isinstance(meal, dict):
                     continue
-                nl = _sa(str(meal.get("name", "")).lower())
-                for fr in _FEATURED_FRUITS:
-                    if fr in nl:
-                        counts[fr] = counts.get(fr, 0) + 1
-                        if counts[fr] >= 2:
-                            return True
+                # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Matcher compartido con el gate.
+                for fr in _featured_fruits_in_name(meal.get("name")):
+                    counts[fr] = counts.get(fr, 0) + 1
+                    if counts[fr] >= 2:
+                        return True
         return False
     except Exception:
         return False
@@ -17319,9 +17362,11 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
                     # detección Y el rewrite eran substring). \b...s?\b en ambos (lección
                     # 'res'↔'fresas', cuarta aparición de la clase).
                     def _fr_bounded(tok, txt):
-                        return bool(_re.search(r"\b" + _re.escape(tok) + r"s?\b", txt))
-                    _frs = [f for f in _FEATURED_FRUITS
-                            if _fr_bounded(f, _sa(str(meal.get("name", "")).lower()))]
+                        return bool(_re.search(r"\b" + _re.escape(tok) + r"(?:s|es)?\b", txt))
+                    # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Mismo matcher que el gate: si el
+                    # de-dup detectara con una regla y el gate con otra, reescribiría algo que el
+                    # gate sigue viendo repetido y se quemaría el intento igual.
+                    _frs = sorted(_featured_fruits_in_name(meal.get("name")))
                     for fr in _frs:
                         name = str(meal.get("name", ""))
                         if not _fr_bounded(fr, _sa(name.lower())):
@@ -17430,9 +17475,12 @@ def build_variety_report(plan: dict) -> dict:
                 day_tokens[tok] = day_tokens.get(tok, 0) + 1
             # [P2-DISH-COHERENCE] Cuenta frutas FEATURED por su mención en el NOMBRE (1 por meal):
             # detecta la misma fruta dulce repartida en ≥2 comidas del mismo día (mango ×2).
-            for fr in _FEATURED_FRUITS:
-                if fr in name_low:
-                    day_fruits[fr] = day_fruits.get(fr, 0) + 1
+            # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Vía el matcher SSOT: este bucle usaba
+            # subcadena y contaba piña en "Espinacas" (`"pina"` ⊂ `"espinaca"`, y `Espinacas` está
+            # en el catálogo) → dos platos de espinaca el mismo día = rechazo por "fruta repetida"
+            # sin una sola fruta en el día.
+            for fr in _featured_fruits_in_name(name_low):
+                day_fruits[fr] = day_fruits.get(fr, 0) + 1
             # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Proteína principal (huevo + pesadas) por comida →
             # detecta la misma proteína en ≥2 comidas del mismo día (huevo en desayuno + cena). Usa
             # word-boundary (\b vía _name_has_token) y NO el substring de _detect_main_items, que daría falsos
@@ -17530,7 +17578,9 @@ def build_variety_report(plan: dict) -> dict:
         for _d_adv in plan.get("days", []) or []:
             for _m_adv in (_d_adv.get("meals", []) or []):
                 _nm_adv = strip_accents(str(_m_adv.get("name", "")).lower())
-                if any(f in _nm_adv for f in _FISH_TOKENS_ADV) and any(fr in _nm_adv for fr in _FEATURED_FRUITS):
+                # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] matcher SSOT: por subcadena, un
+                # "Pescado con Espinacas" contaba como pareo pescado↔fruta dulce.
+                if any(f in _nm_adv for f in _FISH_TOKENS_ADV) and _featured_fruits_in_name(_nm_adv):
                     sweet_fish_pairings += 1
                 if any(t in _nm_adv for t in ("ligera", "ligero", "light")):
                     _kc_adv = _meal_macro_num(_m_adv.get("cals"))
