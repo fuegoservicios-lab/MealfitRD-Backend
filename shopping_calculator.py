@@ -4812,6 +4812,68 @@ def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False
     return {n: dict(u) for n, u in out.items()}
 
 
+def _normalize_food_dict_to_grams(food_dict: dict) -> dict:
+    """[P1-COHERENCE-GRAM-NORM · 2026-07-26] Lleva `{food: {unit: qty}}` a gramos.
+
+    El guard empareja por (alimento, UNIDAD). Medido sobre el plan vivo fbe53a5b, los dos
+    lados hablan idiomas distintos y por eso `expected_qty` salía 0.0 en casi todo:
+
+        lado RECETAS:  taza×8, unidad×15, cda×9, cdta×8, g×11, pizca, diente, hoja, rebanada
+        lado LISTA:    g (tras P1-COHERENCE-BASE-QTY)
+
+    Solo los 11 que ya venían en gramos podían casar. Preservar la cantidad base en la lista
+    fue necesario pero NO suficiente: faltaba convertir el lado de las recetas al mismo
+    idioma. Se usa `convert_amount` (SSOT de db_inventory, con densidad del catálogo) — el
+    mismo motor que ya usa el inventario, no una tabla nueva.
+
+    Lo que NO se puede convertir (pizca, `cantidad necesaria`, densidad ausente en modo
+    strict) conserva su unidad original: es preferible una divergencia sin pareja a una
+    conversión inventada. tooltip-anchor: P1-COHERENCE-GRAM-NORM
+    """
+    if not isinstance(food_dict, dict) or not food_dict:
+        return {}
+    try:
+        from db_inventory import convert_amount as _conv
+    except Exception:
+        return food_dict
+    try:
+        master_map = {str(m.get("name", "")).lower(): m for m in (get_master_ingredients() or [])}
+    except Exception:
+        master_map = {}
+    out = {}
+    for food, units in food_dict.items():
+        if not isinstance(units, dict):
+            continue
+        _mi = master_map.get(str(food).lower()) or {}
+        acc = {}
+        grams = 0.0
+        for unit, qty in units.items():
+            try:
+                q = float(qty)
+            except (TypeError, ValueError):
+                continue
+            if q <= 0:
+                continue
+            u = str(unit).strip().lower()
+            if u in ("g", "gr", "gramo", "gramos"):
+                grams += q
+                continue
+            _g = None
+            try:
+                _g = _conv(q, u, "g", _mi)
+            except Exception:
+                _g = None
+            if isinstance(_g, (int, float)) and _g > 0:
+                grams += float(_g)
+            else:
+                acc[u] = acc.get(u, 0.0) + q      # no convertible → se conserva tal cual
+        if grams > 0:
+            acc["g"] = round(grams, 2)
+        if acc:
+            out[food] = acc
+    return out
+
+
 def _canonicalize_food_dict_for_coherence(food_dict: dict) -> dict:
     """[P1-C 2026-05-07] Canonicaliza las keys de un dict `{food: {unit: qty}}`
     aplicando la misma lógica que `_canonicalize_for_coherence` y sumando
@@ -6726,6 +6788,13 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             agg_dict = _extract_aggregated_food_dict(aggregated_list, exclude_pavo=False)
             expected_canonical = _canonicalize_food_dict_for_coherence(expected_raw)
             aggregated_canonical = _canonicalize_food_dict_for_coherence(agg_dict)
+            # [P1-COHERENCE-GRAM-NORM · 2026-07-26] Ambos lados al MISMO idioma antes de
+            # comparar. Sin esto el emparejamiento por (alimento, unidad) fallaba —
+            # "0.33 taza de avena" contra "26.4 g de avena" no casan— y el 100% de las
+            # divergencias salía `unknown` con expected_qty=0.0. Simétrico a propósito:
+            # normalizar un solo lado crearía el sesgo inverso.
+            expected_canonical = _normalize_food_dict_to_grams(expected_canonical)
+            aggregated_canonical = _normalize_food_dict_to_grams(aggregated_canonical)
             raw_mags = compare_expected_vs_aggregated(
                 expected_canonical,
                 aggregated_canonical,

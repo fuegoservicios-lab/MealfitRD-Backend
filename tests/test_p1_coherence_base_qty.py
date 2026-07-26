@@ -159,3 +159,54 @@ def test_el_extractor_mira_base_antes_que_mercado():
     i_base = cuerpo.index('item.get("base_qty")')
     i_mkt = cuerpo.index('item.get("market_qty_numeric")')
     assert i_base < i_mkt, "la base debe evaluarse ANTES que la unidad de mercado"
+
+
+# ───────────── 5. normalización a gramos (P1-COHERENCE-GRAM-NORM) ─────────────
+#
+# Preservar la base en la lista fue necesario pero NO suficiente: el lado de las RECETAS
+# seguía en medidas caseras. Medido sobre el plan vivo fbe53a5b:
+#
+#     lado recetas:  taza×8, unidad×15, cda×9, cdta×8, g×11, pizca, diente, hoja, rebanada
+#     lado lista:    g
+#
+# Solo los 11 que ya venían en gramos podían casar. Normalizando AMBOS lados:
+#
+#     39 divergencias (todas unknown, expected_qty=0.0)  ->  8, con señal real
+#         Pescado  esp=349.71  lista=574.71  ratio=1.64   <- discrepancia genuina
+#         Plátano  esp=0.0     lista=697.2                <- fantasma genuino
+
+def test_normaliza_medidas_caseras_a_gramos():
+    out = sc._normalize_food_dict_to_grams({"Avena": {"taza": 1.0}})
+    assert "g" in out.get("Avena", {}), out
+    assert out["Avena"]["g"] > 0
+
+
+def test_suma_varias_unidades_del_mismo_alimento():
+    out = sc._normalize_food_dict_to_grams({"Aceite de oliva": {"cda": 2.0, "g": 10.0}})
+    g = out.get("Aceite de oliva", {}).get("g")
+    assert g and g > 10.0, "debe sumar los gramos convertidos a los que ya venían en g"
+
+
+def test_lo_inconvertible_conserva_su_unidad():
+    """Mejor una divergencia sin pareja que una conversión inventada. `convert_amount` en modo
+    strict devuelve None cuando falta la densidad — no se rellena con un valor plausible."""
+    out = sc._normalize_food_dict_to_grams({"Sal": {"pizca": 3.0}})
+    assert out.get("Sal") == {"pizca": 3.0}
+
+
+def test_gramos_pasan_intactos():
+    assert sc._normalize_food_dict_to_grams({"Pollo": {"g": 250.0}}) == {"Pollo": {"g": 250.0}}
+
+
+@pytest.mark.parametrize("entrada", [{}, None, "no-dict", {"X": None}, {"X": {"g": "abc"}}])
+def test_normalizador_fail_safe(entrada):
+    assert isinstance(sc._normalize_food_dict_to_grams(entrada), dict)
+
+
+def test_se_normalizan_LOS_DOS_lados():
+    """Ancla: normalizar solo uno crea el sesgo inverso (recetas en g contra lista en taza)."""
+    from pathlib import Path
+    src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
+    i = src.index("expected_canonical = _normalize_food_dict_to_grams(")
+    bloque = src[i:i + 260]
+    assert "aggregated_canonical = _normalize_food_dict_to_grams(" in bloque
