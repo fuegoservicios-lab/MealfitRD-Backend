@@ -17722,6 +17722,23 @@ _QTY_GUARD_SEASONING_SKIP = (
     "sal", "ajo", "cebolla", "oregano", "cilantro", "perejil", "pimienta", "comino", "laurel", "vinagre",
     "limon", "jengibre", "sazon", "sazonador", "especia", "cebollin", "apio", "aji", "cubito", "curcuma",
     "achiote",
+    # [P1-QTY-GUARD-SPICE-GAP · 2026-07-26] Ocho especias/aromas que faltaban en ESTA lista y que
+    # `_SHRINK_FLOOR_EXEMPT_TOKENS` (34 entradas, unas líneas más abajo) sí reconocía. Dos listas
+    # para el MISMO concepto —"esto es sazón, no comida"— con contenido distinto: canela, vainilla,
+    # mostaza y polvo de hornear estaban exentas del piso de porción y NO de la inyección de
+    # gramos. Es la clase de bug que más ha costado hoy (P1-SEASONING-WORD-BOUNDARY,
+    # P1-FRUIT-SEEDER-GATE-CONTRACT): dos vocabularios que deberían ser uno.
+    #
+    # ⚠️ Esto NO explica el «20 g de Canela en polvo» del plan vivo 1070ceb1. Lo perseguí y
+    # descarté dos causas con medición: (a) el qty-guard corta antes en `qty > 0` y esa línea YA
+    # traía gramos, así que nunca pasó por aquí; (b) canela y vainilla llevan tiempo exentas del
+    # shrink floor. La pista viva es `_solver_clamp_saturated_lo = 2` en ese plato — el clamp
+    # INFERIOR del solver de porciones, que es otro mecanismo y tiene sus propios límites.
+    # Sigue abierto; el cambio de esta lista se justifica solo, no por ese caso.
+    #
+    # NO se añaden `miel` ni `cacao`: sus porciones reales SÍ son de tamaño alimento (una cucharada
+    # de miel son ~21 g y 64 kcal), así que eximirlas escondería macro de verdad.
+    "canela", "vainilla", "pimenton", "albahaca", "tomillo", "curry", "mostaza", "polvo de hornear",
 )
 
 # [P1-SEASONING-WORD-BOUNDARY · 2026-07-26] Los dos guards que consultan la lista de arriba lo

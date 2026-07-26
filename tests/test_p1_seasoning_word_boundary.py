@@ -122,3 +122,35 @@ def test_ambos_guards_pasan_por_el_helper():
 
 def test_sazonador_esta_en_la_lista():
     assert "sazonador" in go._QTY_GUARD_SEASONING_SKIP
+
+
+# ───────────── 6. [P1-QTY-GUARD-SPICE-GAP · 2026-07-26] las dos listas de "esto es sazón" ─────────
+
+@pytest.mark.parametrize("especia", ["canela", "vainilla", "pimenton", "albahaca", "tomillo",
+                                    "curry", "mostaza", "polvo de hornear"])
+def test_las_especias_que_solo_conocia_la_otra_lista(especia):
+    """`_SHRINK_FLOOR_EXEMPT_TOKENS` (34 entradas) ya sabía que canela/vainilla/mostaza/polvo de
+    hornear son sazón; `_QTY_GUARD_SEASONING_SKIP` no. Dos vocabularios para el MISMO concepto con
+    contenido distinto — la clase de bug que más costó el 2026-07-26."""
+    assert go._is_seasoning_name(especia) is True
+
+
+def test_las_dos_listas_no_se_contradicen():
+    """Cualquier token que una lista considere sazón, la otra no debe tratar como alimento. Ancla la
+    CLASE: si alguien añade una especia a una sola de las dos, esto falla."""
+    from constants import strip_accents as sa
+    faltan = [t for t in go._SHRINK_FLOOR_EXEMPT_TOKENS
+              # 'salsa'/'rallado'/'semillas'/'caldo' son modificadores de alimento, no sazón en sí:
+              # el piso los exime por otra razón (no son macro-bearing servibles).
+              if t not in ("salsa", "rallado", "semillas", "caldo", "azucar", "cacao", "miel",
+                           "manteca", "mantequilla", "margarina", "mayonesa", "parmesano",
+                           "aceite", "chia", "linaza", "levadura", "sofrito", "ajonjoli")
+              and not go._is_seasoning_name(sa(t))]
+    assert not faltan, f"sazón que el qty-guard trataría como comida: {faltan}"
+
+
+def test_miel_y_cacao_siguen_siendo_alimento():
+    """Sus porciones reales son de tamaño alimento (1 cda de miel = 21 g, 64 kcal). Eximirlas
+    esconderia macro de verdad."""
+    assert go._is_seasoning_name("miel") is False
+    assert go._is_seasoning_name("cacao en polvo") is False
