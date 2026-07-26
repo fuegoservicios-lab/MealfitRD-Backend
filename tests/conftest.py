@@ -84,6 +84,33 @@ except Exception:
         _stub.OpenAIEmbeddings = _StubLLM
         sys.modules["langchain_openai"] = _stub
 
+# [P1-CONFTEST-EAGER-GO · 2026-07-26] MISMO patrón, aplicado al módulo del repo que más se
+# stubea: `graph_orchestrator`.
+#
+# Varios archivos de test instalan stubs con la forma `if "X" not in sys.modules: <stub>` EN
+# TIEMPO DE IMPORT (p.ej. test_p0_a_zombie_partial_finalize, test_p2_crons_health_aggregate).
+# Ese guard no distingue "no está cargado" de "está cargado el real": si el archivo que lo
+# ejecuta se colecta ANTES que nadie importe el módulo de verdad, deja un stub parcial
+# instalado para TODA la sesión. Los tests posteriores que hagan `import graph_orchestrator`
+# reciben ese stub y revientan con
+#
+#     AttributeError: module 'graph_orchestrator' has no attribute '<lo que sea>'
+#
+# Es exactamente el fallo que este conftest ya documenta y cura para `langgraph` (P0-5) — la
+# misma trampa del `setdefault`, otro módulo. Medido 2026-07-26: el glob
+# polish/display/finalize daba 105 rojos + 24 errores de colección, y los mismos archivos
+# pasaban en verde corriendo solos.
+#
+# Importarlo aquí, antes de que se colecte ningún test, hace que todos esos guards sean no-op.
+# Fail-open: si el import real falla (entorno sin deps), se deja pasar y cada test se apaña
+# como hasta ahora — este conftest no debe ser quien tumbe la suite.
+try:
+    import graph_orchestrator  # noqa: F401
+except Exception as _e_go_eager:  # pragma: no cover - depende del entorno
+    import sys as _sys_go
+    print(f"[P1-CONFTEST-EAGER-GO] no se pudo pre-importar graph_orchestrator: "
+          f"{type(_e_go_eager).__name__}: {_e_go_eager}", file=_sys_go.stderr)
+
 import uuid
 import json
 import pytest
