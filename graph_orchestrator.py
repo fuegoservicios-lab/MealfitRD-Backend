@@ -5829,6 +5829,12 @@ BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 DAYGEN_CANARY_MODEL = _env_str("MEALFIT_DAYGEN_CANARY_MODEL", "") or ""
 DAYGEN_CANARY_PCT = _env_int("MEALFIT_DAYGEN_CANARY_PCT", 0,
                              validator=lambda v: 0 <= v <= 100)
+# [P1-CANARY-RETRY-ONLY · 2026-07-26] Dónde se antepone el canario: `retry` (default) sólo en los
+# intentos 2..N, `all` en todos. El default es `retry` porque el modelo caro sólo se paga donde el
+# barato YA falló — ver el razonamiento largo en `_day_model_chain`.
+DAYGEN_CANARY_SCOPE = (_env_str("MEALFIT_DAYGEN_CANARY_SCOPE", "retry") or "retry").strip().lower()
+if DAYGEN_CANARY_SCOPE not in ("retry", "all"):
+    DAYGEN_CANARY_SCOPE = "retry"   # fail-safe: valor raro ⇒ el más barato
 
 
 def _daygen_model_canary_cohort(form_data: dict) -> str:
@@ -5886,7 +5892,25 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
         chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
     # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] El canario va DELANTE: se intenta primero y el resto
     # del chain queda como red (CB abierto o fallo → cascada normal a flash/pro, sin cambios).
-    if _daygen_model_canary_cohort(form_data) == "on":
+    #
+    # [P1-CANARY-RETRY-ONLY · 2026-07-26] …pero por DEFECTO sólo en el REINTENTO.
+    #
+    # Medido: el modelo caro cuesta ~USD 0,102 por plan de 3 días contra ~0,010 de flash (11,6×
+    # por token). En el intento 1 se paga en TODOS los planes, incluidos los ~2 de cada 3 que el
+    # modelo barato ya resuelve bien — y los datos de hoy no muestran que lo valga: con el
+    # contrato de fruta arreglado, DeepSeek entregó banda 1.00 sin reintentos.
+    #
+    # En el reintento la aritmética se invierte: sólo llegan ahí los planes donde el barato YA
+    # demostró que no pudo, así que el sobrecoste esperado cae a ~0,03/plan de media. Y el
+    # reintento trae una directiva concreta de qué corregir («no repitas fruta», «no pongas avena
+    # de cena», «usa las proteínas asignadas»): eso es seguir instrucciones bajo restricciones,
+    # que es donde un modelo que razona debería rendir MÁS que en la generación libre.
+    #
+    # `MEALFIT_DAYGEN_CANARY_SCOPE=all` restaura el comportamiento anterior (canario en los dos
+    # intentos) sin redeploy, para poder medir el intento 1 cuando haga falta.
+    # tooltip-anchor: P1-CANARY-RETRY-ONLY
+    if _daygen_model_canary_cohort(form_data) == "on" and (
+            DAYGEN_CANARY_SCOPE == "all" or attempt > 1):
         chain = [DAYGEN_CANARY_MODEL] + chain
     _seen, _out = set(), []
     for m in chain:

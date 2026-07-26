@@ -56,9 +56,15 @@ def test_pct_cero_con_modelo_puesto_sigue_apagado(monkeypatch):
 
 # ───────────── 2. encendido: el canario va DELANTE, con red detrás ─────────────
 
-def test_se_antepone_y_conserva_la_cascada(canario_on):
+def test_se_antepone_y_conserva_la_cascada(canario_on, monkeypatch):
     """Anteponer (no reemplazar) deja el circuit breaker y el fallback existentes intactos:
-    si Luna falla o su CB abre, `_build_day_llm` cae a flash/pro sin tocar nada."""
+    si Luna falla o su CB abre, `_build_day_llm` cae a flash/pro sin tocar nada.
+
+    [P1-CANARY-RETRY-ONLY · 2026-07-26] En el intento 1 el canario YA NO se antepone por defecto
+    (se paga sólo donde el modelo barato falló). Este test comprueba la MECÁNICA de anteposición,
+    así que fuerza `scope='all'`; el reparto por intento lo cubre
+    `test_p1_canary_retry_only.py`."""
+    monkeypatch.setattr(go, "DAYGEN_CANARY_SCOPE", "all")
     ch = go._day_model_chain({"user_id": "u"}, 1)
     assert ch[0] == "gpt-5.6-luna"
     assert len(ch) >= 2, "sin red detrás, un fallo del canario mataría la generación"
