@@ -783,13 +783,18 @@ def test_learning_metrics_tracks_ingredient_base_repeats_even_when_names_change(
 
 
 def test_learning_metrics_counts_cross_category_fatigue_hits():
+    """[P1-SUITE-UNBLIND · 2026-07-26] Usaba "queso mozzarella" y llevaba rojo: la
+    categoría se resuelve por lookup EXACTO de la base en el catálogo, y ahí existe
+    "queso", no "queso mozzarella" → `get_nutritional_category` devuelve None y no hay
+    hit de categoría. El nombre compuesto medía el lookup, no la detección cross-categoría
+    que este test dice medir. El hueco queda anclado abajo, no tapado."""
     new_days = [
         {
             "day": 4,
             "meals": [
                 {
                     "name": "Wrap de queso",
-                    "ingredients": ["queso mozzarella", "tortilla integral"],
+                    "ingredients": ["queso", "tortilla integral"],
                 }
             ],
         },
@@ -804,6 +809,29 @@ def test_learning_metrics_counts_cross_category_fatigue_hits():
         fatigued_ingredients=["[CATEGORÍA] huevos y lácteos"],
     )
 
+    assert metrics["fatigued_violations"] == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "[P1-SUITE-UNBLIND · 2026-07-26] HUECO VIVO: la fatiga por categoría no ve los "
+        "nombres compuestos. `get_nutritional_category('queso mozzarella')` → None porque "
+        "el catálogo indexa 'queso'. Los planes reales SÍ generan 'mozzarella' (visto en "
+        "'revoltillo de huevo con mozzarella'), así que la variedad por categoría se le "
+        "escapa. strict=True: si alguien arregla el lookup (fallback a la cabeza del "
+        "nombre), este test se pone verde y la suite falla para obligar a borrar el xfail."
+    ),
+)
+def test_fatiga_por_categoria_ignora_nombres_compuestos():
+    metrics = _calculate_learning_metrics(
+        new_days=[{"day": 4, "meals": [{"name": "Wrap", "ingredients": ["queso mozzarella"]}]}],
+        prior_meals=[],
+        prior_days=[],
+        rejected_names=[],
+        allergy_keywords=[],
+        fatigued_ingredients=["[CATEGORÍA] huevos y lácteos"],
+    )
     assert metrics["fatigued_violations"] == 1
 
 
@@ -1077,7 +1105,13 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')
+@patch('llm_provider.ChatDeepSeek')  # [P1-SUITE-UNBLIND · 2026-07-26] ⚠️ OJO: el generador NO usa
+# esta clase — `graph_orchestrator` define su PROPIA `ChatDeepSeek` (subclase con backpressure e
+# instrumentación de coste). Patchear aquí NO simula la caída del LLM: el pipeline real corre y
+# llama a la API de verdad. Apuntarlo a `graph_orchestrator.ChatDeepSeek` tampoco basta (medido
+# 2026-07-26: arregla 0 de 5 rojos y rompe 3 verdes, porque el MagicMock hace que el pipeline
+# 'tenga éxito' con basura en vez de degradar). El arreglo real es stubbear el pipeline en otra
+# costura; queda pendiente y documentado, no escondido.
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -1093,6 +1127,11 @@ def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, moc
     # (antes langchain_google_genai.ChatGoogleGenerativeAI, ya inexistente) y forzamos
     # que invoke falle → el probe LLM falla → el chunk se queda en modo degraded (Smart
     # Shuffle), que es lo que este test valida.
+    #
+    # [P1-SUITE-UNBLIND · 2026-07-26] ⚠️ La premisa de arriba es FALSA y se conserva solo
+    # para explicar por qué el patch está donde está: `graph_orchestrator.ChatDeepSeek` y
+    # `llm_provider.ChatDeepSeek` NO son el mismo objeto (verificado con `is`). Este
+    # `side_effect` no llega al generador. Ver la nota del decorador.
     mock_llm.return_value.invoke.side_effect = Exception("Simulated LLM Outage")
     mock_likes.return_value = []
     mock_rejections.return_value = []
@@ -1167,7 +1206,7 @@ def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, moc
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
+@patch('llm_provider.ChatDeepSeek')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -1676,12 +1715,33 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
         tasks=tasks,
     )
     mock_learning_ready.return_value = {"ready": True, "ratio": 1.0, "matched_meals": 3, "planned_meals": 3}
-    mock_live_inventory.side_effect = [
-        ["inventario inicial", "huevos", "avena"],
-        ["inventario cambiado", "yogurt"],
-        ["inventario cambiado", "yogurt"],
-        ["inventario cambiado", "yogurt"],
-    ]
+    # [P1-SUITE-UNBLIND · 2026-07-26] La nevera CRECE durante la generación en vez de
+    # reemplazarse entera. Antes derivaba a ["inventario cambiado", "yogurt"], lo que
+    # invalidaba los tres platos y hacía que el bucle de validación de contenido
+    # (`_PANTRY_MAX_RETRIES=2` → reason='pantry_violation_after_retries') agotara ANTES
+    # de que el detector de drift llegara a correr: el test llevaba rojo afirmando
+    # 'persistent_drift' sobre un camino que su propio fixture volvía inalcanzable.
+    # Creciendo, el drift supera el 5% y los ingredientes usados siguen todos presentes,
+    # así que la validación pasa y la carrera la gana el detector de drift — que es lo
+    # que el nombre de este test dice medir.
+    # La lectura depende de la FASE (antes/después de generar), no de la posición en una
+    # lista: el número de lecturas de inventario por chunk creció desde que se escribió
+    # este test, así que una lista posicional dejaba que el generador consumiera ya la
+    # nevera derivada y el detector comparaba derivada-contra-derivada → drift=0.0%.
+    # (La versión original repetía el mismo valor 3 veces justo por eso, y aun así medía 0.)
+    _INV_INICIAL = ["pollo", "arroz", "huevos", "avena"]
+    _EXTRAS = ["yogurt", "queso", "leche", "mantequilla", "cebolla", "ajo", "tomate"]
+    _lecturas = {"n": 0}
+
+    def _inventario_por_fase(*_a, **_kw):
+        if mock_pipeline.call_count == 0:
+            return list(_INV_INICIAL)          # lo que el generador vio
+        # Post-generación la nevera sigue moviéndose: la deriva NO se estabiliza, que es
+        # la condición que agota `_drift_retries` y acaba en reason='persistent_drift'.
+        _lecturas["n"] += 1
+        return _INV_INICIAL + _EXTRAS[:_lecturas["n"]]
+
+    mock_live_inventory.side_effect = _inventario_por_fase
     mock_inject_signals.side_effect = lambda user_id, form_data, *_, **__: form_data
     mock_shop.return_value = {"categories": []}
     mock_cron_facts.return_value = []
@@ -1697,7 +1757,7 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
     mock_analyze.return_value = {}
     mock_pipeline.return_value = {
         "days": [
-            {"day": 4, "meals": [{"name": "D", "ingredients": ["inventario inicial"]}]},
+            {"day": 4, "meals": [{"name": "D", "ingredients": ["pollo"]}]},
             {"day": 5, "meals": [{"name": "E", "ingredients": ["huevos"]}]},
             {"day": 6, "meals": [{"name": "F", "ingredients": ["avena"]}]},
         ]
@@ -1845,7 +1905,7 @@ def test_chunk_uses_snapshot_pantry_when_live_inventory_refresh_fails(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
+@patch('llm_provider.ChatDeepSeek')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2265,7 +2325,7 @@ def test_pantry_hybrid_tolerance_quantity():
 # prior_plan. Mockear el filtro como passthrough invalida la prueba.
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
+@patch('llm_provider.ChatDeepSeek')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2342,7 +2402,7 @@ def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
+@patch('llm_provider.ChatDeepSeek')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2510,7 +2570,7 @@ def test_partial_reservation_marks_chunk_and_defers_next():
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
+@patch('llm_provider.ChatDeepSeek')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
