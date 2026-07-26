@@ -171,3 +171,34 @@ def test_se_emite_SIN_fallback_inventado():
     assert '"daygen_model_cohort": final_state.get("_daygen_model_cohort")' in src
     i = src.index('"daygen_model_cohort"')
     assert 'or "on"' not in src[i:i + 120]
+
+
+def _emit_metadata_src():
+    from pathlib import Path
+    src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index('"daygen_model_cohort": final_state.get')
+    j = src.index('"same_day_protein_repeats"', i)
+    return src[i:j]
+
+
+def test_se_emiten_las_razones_del_reintento():
+    """`retries` dice CUÁNTO costó; sin las razones, un A/B con diferencia no se puede explicar
+    y hay que volver a los logs — que es de donde tuve que sacarlas a mano."""
+    seg = _emit_metadata_src()
+    assert '"rejection_reasons"' in seg
+    assert "_cumulative_rejection_reasons" in seg, \
+        "acumulan entre intentos; sólo el último intento pierde el motivo original"
+    assert "[:160]" in seg and "[:3]" in seg, "sin recorte esto infla pipeline_metrics"
+
+
+def test_el_lector_del_ab_existe_y_agrupa_costo_por_modelo_real():
+    """El costo NO se puede agrupar por el tag: un plan asignado a 'on' con el circuit breaker
+    abierto corre DeepSeek igual. El tag dice a quién se asignó; el modelo, qué pasó."""
+    from pathlib import Path
+    p = Path(go.__file__).resolve().parent / "scripts" / "daygen_canary_ab.py"
+    assert p.exists(), "un canario sin lectura no informa nada"
+    s = p.read_text(encoding="utf-8")
+    assert "node = 'day_generator'" in s and "GROUP BY 1" in s
+    assert "daygen_model_cohort" in s
+    # la limitación de atribución debe quedar dicha, no tapada
+    assert "plan_id" in s and "user_id" in s

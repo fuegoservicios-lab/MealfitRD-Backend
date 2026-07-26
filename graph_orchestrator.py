@@ -39210,6 +39210,17 @@ def _compute_pipeline_holistic_score_and_emit(
                             # ese `or` es exactamente lo que hizo ilegible el canario anterior.
                             "daygen_model_cohort": final_state.get("_daygen_model_cohort"),
                             "daygen_canary_model": DAYGEN_CANARY_MODEL or None,
+                            # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] POR QUÉ se reintentó, no sólo
+                            # cuántas veces. `retries` (arriba) dice el costo; sin las razones, un
+                            # A/B que muestre diferencia no se puede explicar y hay que volver a
+                            # los logs — que es de donde tuve que sacarlas a mano hoy.
+                            # `_cumulative_rejection_reasons` acumula entre intentos; se recorta
+                            # (3 × 160 chars) para no inflar `pipeline_metrics`.
+                            "rejection_reasons": [
+                                str(_r)[:160] for _r in
+                                (final_state.get("_cumulative_rejection_reasons")
+                                 or final_state.get("rejection_reasons") or [])[:3]
+                            ] or None,
                             "same_day_protein_repeats": _a1_vr.get("same_day_protein_repeats"),
                             "cross_day_proteins": _a1_vr.get("cross_day_proteins"),
                             "cross_day_dishes": _a1_vr.get("cross_day_dishes"),
