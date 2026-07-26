@@ -61,7 +61,12 @@ ORDER BY 1
 _SQL_RAZONES = """
 SELECT COALESCE(metadata->>'daygen_model_cohort', 'sin-tag') AS cohorte, r AS razon
 FROM pipeline_metrics,
-     LATERAL jsonb_array_elements_text(COALESCE(metadata->'rejection_reasons', '[]'::jsonb)) r
+     -- `jsonb_typeof` y no `COALESCE`: cuando un plan no tuvo rechazos el emit guarda JSON `null`,
+     -- que NO es SQL NULL — COALESCE lo dejaba pasar y `jsonb_array_elements_text` reventaba con
+     -- "cannot extract elements from a scalar".
+     LATERAL jsonb_array_elements_text(
+         CASE WHEN jsonb_typeof(metadata->'rejection_reasons') = 'array'
+              THEN metadata->'rejection_reasons' ELSE '[]'::jsonb END) r
 WHERE node = 'clinical_band'
   AND created_at > NOW() - (%s || ' days')::interval
 """

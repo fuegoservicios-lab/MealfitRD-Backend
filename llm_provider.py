@@ -360,17 +360,28 @@ def is_openai_model(model: str) -> bool:
     return any(m.startswith(p) for p in _OPENAI_MODEL_PREFIXES)
 
 
+def _openai_api_key() -> str:
+    """Key de OpenAI desde el entorno. Fail-loud: mejor una excepción que un call silencioso al
+    proveedor equivocado. NUNCA argumento del callsite — mismo contrato que enforza
+    `test_p0_deepseek_migration.py`."""
+    _k = os.environ.get("OPENAI_API_KEY")
+    if not _k:
+        raise RuntimeError("modelo OpenAI pedido sin OPENAI_API_KEY en el entorno")
+    return _k
+
+
 def build_chat_llm(model: str, **kwargs):
     """Devuelve el cliente chat del proveedor que corresponde al `model`.
 
     OpenAI → `ChatOpenAI` con `OPENAI_API_KEY` y base por defecto. Resto → `ChatDeepSeek`
-    (que ya inyecta su propia key/base). La key SIEMPRE desde env, nunca argumento del callsite
-    — mismo contrato que enforza `test_p0_deepseek_migration.py`.
+    (que ya inyecta su propia key/base).
+
+    ⚠️ [P1-LUNA-USAGE-BLIND · 2026-07-26] Devuelve las clases BASE: sin backpressure y **sin
+    contabilidad de costo**. Dentro del pipeline de generación NO se usa esta fábrica — allí van
+    `graph_orchestrator.ChatDeepSeek` / `ChatOpenAIInstrumented`, que añaden el mixin. Construir
+    el day-gen con esta fábrica dejó `llm_usage_events` sin una sola fila de `day_generator`
+    (el nodo más caro) durante la primera corrida del canario Luna.
     """
     if is_openai_model(model):
-        _k = os.environ.get("OPENAI_API_KEY")
-        if not _k:
-            raise RuntimeError(
-                f"modelo OpenAI '{model}' pedido sin OPENAI_API_KEY en el entorno")
-        return ChatOpenAI(model=model, api_key=_k, **kwargs)
+        return ChatOpenAI(model=model, api_key=_openai_api_key(), **kwargs)
     return ChatDeepSeek(model=model, **kwargs)

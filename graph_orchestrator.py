@@ -14,10 +14,12 @@ from langgraph.graph import StateGraph, END
 # instrumentación; el router por tier vive en llm_provider.
 from llm_provider import (
     ChatDeepSeek as _ChatDeepSeekBase,
+    ChatOpenAI as _ChatOpenAIBase,
     DEEPSEEK_FLASH,
     DEEPSEEK_PRO,
     PAID_TIERS,
     get_user_tier,
+    is_openai_model,
 )
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
@@ -1460,19 +1462,22 @@ async def aacquire_user_and_global(user_id):
             yield
 
 
-class ChatDeepSeek(_ChatDeepSeekBase):
-    """Wrapper para aplicar backpressure transparente a TODAS las llamadas
-    LLM en LangGraph (síncrono y asíncrono).
+class _LLMBackpressureCostMixin:
+    """[P1-LUNA-USAGE-BLIND · 2026-07-26] Backpressure + contabilidad de costo, extraídos a un
+    mixin para que NO dependan del proveedor.
 
-    P1-NEW-1: ahora usa el helper compuesto `acquire_user_and_global` /
-    `aacquire_user_and_global` que aplica primero el rate limit per-user
-    (vía `PER_USER_LLM_SEMAPHORE`) y después el slot global. El `user_id`
-    se lee del `user_id_var` (ContextVar) — `arun_plan_pipeline` lo setea
-    al entrar; otros callers (cron, batch) sin contextvar configurado
-    obtienen `None` → bypass del rate limit per-user (preserva comportamiento
-    previo). Para callers que quieran rate limit explícito sin pasar por
-    `arun_plan_pipeline`, basta con `user_id_var.set(uid)` antes del .ainvoke.
-    """
+    Vivían pegados a `ChatDeepSeek` y eso fue una trampa en cuanto entró un segundo proveedor:
+    `P1-DAYGEN-LUNA-CANARY` hizo que `_build_day_llm` construyera el cliente vía
+    `llm_provider.build_chat_llm`, que devuelve las clases BASE — sin estos overrides. Resultado
+    medido en la primera corrida con Luna: el plan salió bien y `llm_usage_events` registró
+    planner, compressor y self_critique… y **cero filas de `day_generator`**, el nodo más caro del
+    pipeline. La telemetría no dijo "falta un modelo": dijo que el day-gen no existió.
+
+    El mismo agujero se llevaba por delante el rate limit per-user/global en el camino DeepSeek,
+    porque la clase base tampoco lo trae.
+
+    Aplicar a TODO cliente nuevo. tooltip-anchor: P1-LLM-BACKPRESSURE-COST-MIXIN"""
+
     def invoke(self, *args, **kwargs):
         with acquire_user_and_global(user_id_var.get()):
             return super().invoke(*args, **kwargs)
@@ -1552,6 +1557,33 @@ class ChatDeepSeek(_ChatDeepSeekBase):
             except Exception:
                 pass
             return result
+
+
+class ChatDeepSeek(_LLMBackpressureCostMixin, _ChatDeepSeekBase):
+    """Cliente DeepSeek con backpressure + contabilidad de costo.
+
+    P1-NEW-1: usa el helper compuesto `acquire_user_and_global` / `aacquire_user_and_global` que
+    aplica primero el rate limit per-user (vía `PER_USER_LLM_SEMAPHORE`) y después el slot global.
+    El `user_id` se lee del `user_id_var` (ContextVar) — `arun_plan_pipeline` lo setea al entrar;
+    otros callers (cron, batch) sin contextvar configurado obtienen `None` → bypass del rate limit
+    per-user (preserva comportamiento previo). Para callers que quieran rate limit explícito sin
+    pasar por `arun_plan_pipeline`, basta con `user_id_var.set(uid)` antes del .ainvoke.
+    """
+
+
+class ChatOpenAIInstrumented(_LLMBackpressureCostMixin, _ChatOpenAIBase):
+    """[P1-LUNA-USAGE-BLIND · 2026-07-26] Gemelo del anterior para modelos OpenAI.
+
+    `stream_usage=True` es OBLIGATORIO y por eso se fuerza aquí: el day-gen llama por `.astream()`
+    y el mixin saca `usage_metadata` del último chunk. Sin esa bandera el stream no la trae y la
+    llamada no aparece en `llm_usage_events` — que es exactamente el modo de fallo que este
+    cliente existe para cerrar, así que no se deja a criterio del callsite."""
+
+    def __init__(self, *, model: str, api_key: "str | None" = None, **kwargs):
+        kwargs.setdefault("stream_usage", True)
+        from llm_provider import _openai_api_key as _k
+        super().__init__(model=model, api_key=api_key or _k(), **kwargs)
+
 
 # P1-10: Imports de stdlib y third-party subidos a nivel módulo para evitar
 # reimport repetido en hot paths (workers paralelos, retries, loops por meal).
@@ -7290,9 +7322,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # que el comentario de arriba prometía ("provider correcto por prefijo") y no hacía:
             # con un modelo OpenAI en el chain, `ChatDeepSeek` lo mandaría al base_url de DeepSeek
             # con la key equivocada.
-            from llm_provider import build_chat_llm as _build_chat_llm
-            _kw.pop("model", None)
-            _llm = _build_chat_llm(_model, **_kw)
+            # [P1-LUNA-USAGE-BLIND · 2026-07-26] Se construyen las clases LOCALES, no la fábrica
+            # `llm_provider.build_chat_llm`: la fábrica devuelve las bases, sin el mixin de
+            # backpressure ni la contabilidad de costo. Usarla dejó `llm_usage_events` sin una
+            # sola fila de `day_generator` en la primera corrida del canario.
+            _llm = (ChatOpenAIInstrumented if is_openai_model(_model) else ChatDeepSeek)(**_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
                 return _llm.bind_tools(NUTRITION_TOOLS)
             # [L1-UNBIND-NUTRITION-TOOL] tool des-enlazada (la tabla viaja en el SystemMessage cacheado).
