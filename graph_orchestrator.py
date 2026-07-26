@@ -13998,6 +13998,28 @@ _CHEAP_QTY_RE = _re.compile(
 _CHEAP_FRAC = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125}
 
 
+# [P1-RESOLVE-PAREN-GRAMS · 2026-07-26] Masa declarada en el paréntesis. Misma regex que usan los
+# caps (P1-PAREN-GRAMS-CAP); aquí vive a nivel de módulo para que el resolvedor de líneas la
+# comparta en vez de tener su propia idea de cuánto pesa una línea.
+_PAREN_GRAMS_RE = _re.compile(
+    r"\(\s*(?:aprox\.?|approx\.?|~|≈)?\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _re.IGNORECASE)
+_LEADING_GRAMS_RE = _re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _re.IGNORECASE)
+RESOLVE_PAREN_GRAMS = _env_bool("MEALFIT_RESOLVE_PAREN_GRAMS", True)
+
+
+def _paren_grams_in_line(line) -> "float | None":
+    """Gramos declarados entre paréntesis, o None. Los gramos LÍDER mandan sobre el paréntesis
+    (misma precedencia que P1-PAREN-GRAMS-CAP): `75 g de X (aprox. 80 g cocido)` son 75."""
+    try:
+        s = str(line)
+        if _LEADING_GRAMS_RE.match(s):
+            return None
+        m = _PAREN_GRAMS_RE.search(s)
+        return float(m.group(1).replace(",", ".")) if m else None
+    except Exception:
+        return None
+
+
 def _resolve_line_food_grams(line: str, *, cheap: bool = False) -> "tuple[str | None, float | None]":
     """'½ taza de aguacate fresco' → ('aguacate', 37.5). (None, None) si no resuelve.
 
@@ -14041,6 +14063,24 @@ def _resolve_line_food_grams(line: str, *, cheap: bool = False) -> "tuple[str | 
                            _dup_merge_line_to_grams(float(q), str(u), str(canon)))
     except Exception:
         out = (None, None)
+    # [P1-RESOLVE-PAREN-GRAMS · 2026-07-26] Si la línea DECLARA su masa en el paréntesis, esa masa
+    # manda sobre el conteo × densidad. Sin esto los dos parsers del sistema discrepaban 7,5×
+    # sobre la MISMA línea (medido en prod):
+    #
+    #     "1 lechosa mediana (198g)"
+    #        grams_from_ingredient_string →  198 g   (lee el paréntesis)
+    #        _resolve_line_food_grams     → 1500 g   (resolvía una lechosa ENTERA)
+    #
+    # Importa porque este resolvedor alimenta el reconciliador display↔raw
+    # (P1-DISPLAY-RAW-QTY-RECONCILE / P1-RECONCILE-LAST-WORD) y el tracer de desalineación: medir
+    # 1500 donde el motor de macros lee 198 hace que el reconciliador vea divergencias que no
+    # existen — o que se pierda las que sí. El paréntesis es exactamente lo que anota
+    # `_bigfruit_bare_count_serving` para corregir la magnitud de una fruta grande, así que
+    # ignorarlo desandaba esa corrección.
+    if RESOLVE_PAREN_GRAMS and out[0]:
+        _pg = _paren_grams_in_line(line)
+        if _pg and _pg > 0:
+            out = (out[0], _pg)
     if len(_LINE_FOOD_GRAMS_CACHE) > 20000:      # backstop: nunca crece sin techo
         _LINE_FOOD_GRAMS_CACHE.clear()
     _LINE_FOOD_GRAMS_CACHE[key] = out
