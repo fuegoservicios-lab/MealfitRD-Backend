@@ -2672,6 +2672,12 @@ def _resolve_brand_pref(name: str, prefs: dict):
 _CYCLE_DAYS_BY_DURATION = {"weekly": 7, "biweekly": 15, "monthly": 30}
 
 
+# [P1-COHERENCE-UNIT-MISMATCH-SYM · 2026-07-25] Marcar `unit_mismatch` también cuando el lado
+# RECETA no tiene la unidad (espejo de P2-COHERENCE-PACKAGE-UNITS). Rollback: =false vuelve a
+# emitir esas divergencias sin tagear, con `hypothesis=unknown` y `delta_pct=inf`.
+COHERENCE_UNIT_MISMATCH_SYM = _knob_env_bool("MEALFIT_COHERENCE_UNIT_MISMATCH_SYM", True)
+
+
 # [P1-CYCLE-REPURCHASE-HONEST · 2026-07-25] Un perecedero cuyo envase mínimo cubre varias semanas
 # NO se re-compra cada semana. Rollback sin redeploy: =false vuelve al ×semanas plano.
 CYCLE_REPURCHASE_HONEST = _knob_env_bool("MEALFIT_CYCLE_REPURCHASE_HONEST", True)
@@ -4193,12 +4199,36 @@ def compare_expected_vs_aggregated(
 
             if exp_qty == 0:
                 # Fantasma: aggregated tiene algo que las recetas no piden.
+                # [P1-COHERENCE-UNIT-MISMATCH-SYM · 2026-07-25] …o NO es fantasma y sólo son
+                # unidades incomparables. Espejo exacto de P2-COHERENCE-PACKAGE-UNITS, que cerró
+                # la dirección `act_qty == 0` (abajo) y dejó ésta abierta.
+                #
+                # Medido sobre el plan entregado 0bfe19ac: **37 de 40 divergencias eran esto.**
+                #
+                #     Harina de trigo  receta {'cda': 0.73, 'taza': 0.49}  lista "1 paquete"
+                #     Orégano          receta {'cdta': ...}                lista "1 sobre"
+                #     Batata           receta {'unidad': ...}              lista "680 g"
+                #
+                # El alimento SÍ está en las recetas, sólo que en otra unidad; buscar "paquete"
+                # entre las unidades de la receta da 0 → `delta_pct = inf` → divergencia con
+                # `hypothesis=unknown`. El guard ahogaba su propia señal: en ese plan sólo 3 de
+                # las 40 eran comparaciones reales (Pulpo +152%, Limón −44%, Sardinas −18%), y
+                # esa es exactamente la inestabilidad de conteos que P1-REVIEW-COHERENCE-SEVERE-ONLY
+                # y P1-COHERENCE-COUNT-MATERIAL llevan meses conteniendo aguas abajo.
+                #
+                # Un fantasma DE VERDAD (alimento ausente de toda receta) tiene `exp_units` vacío
+                # o a cero → `unit_mismatch` False → sigue siendo divergencia real. La detección
+                # no se debilita; se deja de contar ruido como señal.
+                _exp_unit_mismatch = bool(
+                    COHERENCE_UNIT_MISMATCH_SYM
+                    and any(float(v or 0) > 0 for v in exp_units.values()))
                 divergences.append({
                     "food": food,
                     "unit": unit,
                     "expected_qty": 0.0,
                     "actual_qty": act_qty,
                     "delta_pct": float("inf"),
+                    "unit_mismatch": _exp_unit_mismatch,
                     "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units, food=food),
                 })
                 continue
