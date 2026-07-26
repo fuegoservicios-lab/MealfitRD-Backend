@@ -1425,6 +1425,12 @@ DOMINICAN_CARBS = [
     # El round-robin ahora los ofrece como carb-base; el day-gen los transforma (panqueques/bollos/arepitas/
     # empanadas al horno). Nombres = catálogo verificado (resuelven en la lista). tooltip-anchor: P1-FLOURS-POOLS
     "Harina de trigo", "Harina de maíz precocida", "Maíz dulce en granos", "Tortilla de trigo",
+    # [P1-CATALOG-VARIETY-OPENED · 2026-07-26] Dos bases de desayuno/merienda que el catálogo
+    # tenía con macros verificadas y el seeder no podía asignar. Aprobadas por el owner tras
+    # ver su perfil: Granola 489 kcal / 19,8 g azúcar; Galletas de soda 412 kcal / 941 mg Na.
+    # Ese sodio es media cuota OMS del día en una sola base, así que van con penalty ×0.15 en
+    # el sorteo (ver P1-CATALOG-VARIETY-OPENED en ai_helpers): aparecen, pero no dominan.
+    "Granola", "Galletas de soda",
 ]
 
 PROTEIN_SYNONYMS = {
@@ -1606,6 +1612,16 @@ DOMINICAN_FRUITS = [
     # Tamarindo) y el Coco (alto en grasa) — son meriendas/endulzantes ocasionales, no fruta fresca del día.
     "Manzana", "Guayaba", "Guanábana", "Níspero", "Mandarina", "Toronja", "Uva", "Pera", "Kiwi",
     "Ciruela", "Arándanos",
+    # [P1-CATALOG-VARIETY-OPENED · 2026-07-26] Estaban en el catálogo con macros y el seeder
+    # NUNCA las podía asignar (auditoría de variedad: 47 huérfanos, éstas 2 eran fruta real,
+    # no guarnición). Ya cuentan para el gate desde P1-FRUIT-SEEDER-GATE-CONTRACT, así que
+    # sin esto el gate las veía y el seeder no las ofrecía — la asimetría inversa.
+    # ⚠️ `Durazno en almíbar` NO entra, aunque la auditoría lo señalara y el owner aprobara los
+    # cuatro: `test_p1_variety_catalog_pools::test_treats_excluded_from_fruit_rotation` (2026-06-27)
+    # lo tiene en la lista de "treats en sirope" fuera de la rotación de fruta FRESCA, junto a
+    # cereza maraschino, dátiles, pasas, ciruela pasa, coco y tamarindo. Es una decisión con test,
+    # no un olvido — revertirla es borrar esa aserción, y eso se decide a la vista, no de paso.
+    "Granada",
 ]
 
 FRUIT_SYNONYMS = {

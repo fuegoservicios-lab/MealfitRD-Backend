@@ -754,6 +754,30 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     f"'{_rep}' (baja densidad como proteína principal)"
                 )
 
+    # [P1-CATALOG-VARIETY-OPENED · 2026-07-26] `P1-SODIUM-BOMB-POOL` sólo pesa el pool de PROTEÍNAS,
+    # así que al abrir el pool de carbos a `Galletas de soda` (941 mg Na/100 g, medido en el catálogo)
+    # un día podía gastar media cuota OMS de sodio en su base de carbohidrato, sin que nada lo frenara.
+    # Mismo patrón y mismo knob-spirit que el de proteínas: penalty en el SORTEO, no exclusión — el
+    # alimento sigue existiendo y sale de vez en cuando, que es lo que el owner pidió al aprobar los
+    # cuatro. `Granola` y `Durazno en almíbar` entran por azúcar añadido (19,8 y 14 g/100 g).
+    # Rollback sin redeploy: MEALFIT_SALTY_SWEET_CARB_PENALTY=1.0.
+    # tooltip-anchor: P1-CATALOG-VARIETY-OPENED
+    try:
+        from knobs import _env_float as _ss_envf
+        _ss_penalty = max(0.0, min(1.0, _ss_envf("MEALFIT_SALTY_SWEET_CARB_PENALTY", 0.15)))
+    except Exception:
+        _ss_penalty = 0.15
+    if _ss_penalty < 1.0:
+        _SALTY_SWEET_CARB_TOKENS = ("galleta", "granola")
+        _ss_n = 0
+        for _i_c, _c in enumerate(available_carbs):
+            if any(t in strip_accents(str(_c).lower()) for t in _SALTY_SWEET_CARB_TOKENS):
+                carb_weights[_i_c] *= _ss_penalty
+                _ss_n += 1
+        if _ss_n:
+            logger.info(f"🧂 [P1-CATALOG-VARIETY-OPENED] {_ss_n} base(s) de carbohidrato alta(s) en "
+                        f"sodio/azúcar penalizada(s) ×{_ss_penalty} en el sorteo (salen, pero raro).")
+
     unique_carbs = []
     _pool_c = list(zip(available_carbs, carb_weights))
     while len(unique_carbs) < num_carbs_to_pick and _pool_c:
