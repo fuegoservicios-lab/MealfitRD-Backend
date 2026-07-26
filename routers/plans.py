@@ -3141,6 +3141,21 @@ async def api_analyze_stream(
                         f"⚖️ [P1-ADAPTIVE-RENEWAL] weight_history inyectado server-side "
                         f"({len(_wh_ar)} registros) → metabolismo evolutivo activo en esta generación."
                     )
+                    # [P1-CHECKIN-SIGNALS-GATE · 2026-07-26] Junto al historial viaja el ÚLTIMO
+                    # check-in (adherencia/hambre/energía). Sólo tiene sentido si el motor está
+                    # activo: son la condición de validez de su lectura, no una entrada propia.
+                    # Server-side desde `health_profile`, jamás del request — el strip P0-A2 vetaría
+                    # (bien) una clave con guión bajo venida del cliente, y confiar en el cliente
+                    # para algo que mueve calorías sería el mismo agujero que P0-AGENT-1.
+                    _ck_ar = _hp_ar.get("_renewal_checkins") or []
+                    if isinstance(_ck_ar, list) and _ck_ar:
+                        _last_ck = _ck_ar[-1] if isinstance(_ck_ar[-1], dict) else {}
+                        _sig_ar = {k: _last_ck.get(k) for k in ("hunger", "energy", "adherence_pct")}
+                        if any(v is not None for v in _sig_ar.values()):
+                            pipeline_data["_renewal_signals"] = _sig_ar
+                            logger.info(
+                                f"🛡️ [P1-CHECKIN-SIGNALS-GATE] señales del último check-in "
+                                f"inyectadas: {_sig_ar} (sólo pueden ABLANDAR el ajuste dinámico)")
             except Exception as _ar_e:
                 logger.debug(f"[P1-ADAPTIVE-RENEWAL] inyección no-op: {type(_ar_e).__name__}: {_ar_e}")
 

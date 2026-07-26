@@ -80,6 +80,28 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-s
 # (TDEE embarazo/menor, MIN-CALORIE-FLOOR + FS9) corren DESPUÉS y ganan.
 # Superávit "decidido" NO excede el legacy +15% (más superávit = más grasa,
 # no más músculo). Rollback sin redeploy: MEALFIT_GOAL_PACE_ENABLED=false.
+# [P1-CHECKIN-SIGNALS-GATE · 2026-07-26] Umbrales de las señales del check-in de renovación.
+# Sólo pueden ANULAR el ajuste dinámico, nunca crearlo ni amplificarlo — ver el razonamiento
+# completo en el gate dentro de `calculate_nutrition_targets`.
+#   · ADHERENCE_FLOOR: por debajo, el peso no es evidencia del metabolismo (el plan no se siguió).
+#     60% es el punto donde la mayoría de los días ya se comió otra cosa.
+#   · HUNGER_CEIL / ENERGY_FLOOR: 4-5 de hambre o 1-2 de energía sobre un déficit son los signos
+#     clásicos de restricción excesiva. Bloquean SOLO la dirección que quita comida.
+try:
+    from knobs import _env_bool as _nc_env_bool_ck, _env_int as _nc_env_int_ck
+    def _checkin_signals_gate_enabled() -> bool:
+        return _nc_env_bool_ck("MEALFIT_CHECKIN_SIGNALS_GATE", True)
+    CHECKIN_ADHERENCE_FLOOR = _nc_env_int_ck("MEALFIT_CHECKIN_ADHERENCE_FLOOR", 60,
+                                             validator=lambda v: 0 <= v <= 100)
+    CHECKIN_HUNGER_CEIL = _nc_env_int_ck("MEALFIT_CHECKIN_HUNGER_CEIL", 4,
+                                         validator=lambda v: 1 <= v <= 5)
+    CHECKIN_ENERGY_FLOOR = _nc_env_int_ck("MEALFIT_CHECKIN_ENERGY_FLOOR", 2,
+                                          validator=lambda v: 1 <= v <= 5)
+except Exception:  # pragma: no cover
+    def _checkin_signals_gate_enabled() -> bool:
+        return True
+    CHECKIN_ADHERENCE_FLOOR, CHECKIN_HUNGER_CEIL, CHECKIN_ENERGY_FLOOR = 60, 4, 2
+
 # Auto-registrado en _KNOBS_REGISTRY. tooltip-anchor: P1-GOAL-PACE-DEFICIT
 try:
     from knobs import _env_bool as _nc_env_bool_pace
@@ -1431,6 +1453,55 @@ def get_nutrition_targets(form_data: dict) -> dict:
                         dynamic_deficit_bonus = -0.05
                         metabolism_notes = f"⚠️ [METABOLISMO EVOLUTIVO]: El peso está subiendo demasiado rápido (riesgo de grasa excesiva). He reducido el superávit un 5% (Anti-Rebound)."
                 
+                # [P1-CHECKIN-SIGNALS-GATE · 2026-07-26] Las señales del check-in de renovación
+                # (adherencia, hambre, energía) sólo pueden ABLANDAR el ajuste, jamás endurecerlo.
+                #
+                # Hasta hoy se preguntaban y nadie las leía (4 escrituras, 0 lecturas). El uso
+                # honesto no es sumarlas al déficit — es usarlas como CONDICIÓN DE VALIDEZ de la
+                # evidencia que el motor cree tener:
+                #
+                #   · ADHERENCIA BAJA invalida la lectura en AMBAS direcciones. Si seguiste el 40%
+                #     del plan, tu estancamiento no dice nada de tu metabolismo: dice que no
+                #     comiste lo que decía el plan. Añadirte 10% más de déficit por eso es
+                #     castigar a quien ya está batallando; y en 'gain_muscle', añadir superávit
+                #     hace que engordes de más cuando SÍ lo sigas.
+                #
+                #   · HAMBRE ALTA o ENERGÍA BAJA bloquean sólo el endurecimiento. Sobre un déficit
+                #     son los signos clásicos de restricción excesiva y los mejores predictores de
+                #     abandono. Nunca bloquean la dirección que da MÁS comida.
+                #
+                # Asimetría deliberada, igual que en el resto del pipeline clínico: equivocarse
+                # hacia "menos agresivo" cuesta una semana de progreso; hacia "más agresivo" cuesta
+                # el usuario. Las ramas de retención hídrica y recomposición de arriba ya siguen
+                # este mismo criterio.
+                #
+                # Rollback: MEALFIT_CHECKIN_SIGNALS_GATE=false. tooltip-anchor: P1-CHECKIN-SIGNALS-GATE
+                if dynamic_deficit_bonus != 0.0 and _checkin_signals_gate_enabled():
+                    _sig = form_data.get("_renewal_signals") or {}
+                    _adh = _sig.get("adherence_pct")
+                    _hun = _sig.get("hunger")
+                    _ene = _sig.get("energy")
+                    # ¿Este ajuste pide MÁS restricción? En 'lose_fat' el bonus negativo suma
+                    # déficit; en 'gain_muscle' el positivo suma superávit. "Endurecer" = alejarse
+                    # del mantenimiento, que es lo que cuesta adherencia en los dos casos.
+                    _endurece = (dynamic_deficit_bonus < 0) if goal == "lose_fat" else (dynamic_deficit_bonus > 0)
+                    _motivo = None
+                    if isinstance(_adh, (int, float)) and _adh < CHECKIN_ADHERENCE_FLOOR:
+                        _motivo = (f"adherencia {int(_adh)}% (<{CHECKIN_ADHERENCE_FLOOR}%): el peso no "
+                                   f"mide tu metabolismo si el plan no se siguió")
+                    elif _endurece and isinstance(_hun, (int, float)) and _hun >= CHECKIN_HUNGER_CEIL:
+                        _motivo = f"hambre {int(_hun)}/5: señal de restricción ya excesiva"
+                    elif _endurece and isinstance(_ene, (int, float)) and _ene <= CHECKIN_ENERGY_FLOOR:
+                        _motivo = f"energía {int(_ene)}/5: señal de restricción ya excesiva"
+                    if _motivo:
+                        logger.info(
+                            f"🛡️ [P1-CHECKIN-SIGNALS-GATE] ajuste dinámico "
+                            f"{dynamic_deficit_bonus:+.0%} anulado — {_motivo}.")
+                        metabolism_notes = (
+                            "🛡️ [METABOLISMO EVOLUTIVO]: no se endureció el plan este ciclo — "
+                            + _motivo[0].upper() + _motivo[1:] + ". Se mantiene el objetivo actual.")
+                        dynamic_deficit_bonus = 0.0
+
                 if dynamic_deficit_bonus != 0.0:
                     target_calories = target_calories + (tdee * dynamic_deficit_bonus)
                     target_calories = int(round(target_calories / 50) * 50)
