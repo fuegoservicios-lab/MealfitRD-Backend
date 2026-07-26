@@ -150,7 +150,11 @@ REGLAS ESTRICTAS:
          • Batido proteico con frutas (mamey, lechosa, guineo, fresas)
          • Casabe / galletas integrales + queso bajo en sodio O aguacate
          • Sándwich pequeño (1 pan + 1 proteína + vegetal)
-         • Fruta + mantequilla de maní/almendras (manzana con pb, guineo con pb)
+         • Fruta + mantequilla de maní/almendras (manzana con pb, guineo con pb) — SOLO FRUTA.
+           ⛔ [P1-SLOT-MERIENDA-CRUDITES · 2026-07-26] NO generalices esto a VEGETALES: apio relleno
+           de mantequilla de maní, bastones de zanahoria con crema, brócoli al vapor con dip de
+           yogurt y demás crudités son merienda de dieta AMERICANA, no dominicana. Aquí un vegetal
+           crudo NUNCA es el vehículo de una crema o un dip. El gate determinista los rechaza.
          • Pinchitos sencillos (pollo/queso) + fruta
          • Huevo duro + fruta + nueces
          • Avena overnight / chia pudding pequeño

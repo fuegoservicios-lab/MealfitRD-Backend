@@ -1800,6 +1800,35 @@ SLOT_INAPPROPRIATE_FOODS = {
         # tooltip-anchor: P2-SLOT-MERIENDA-JUNK
         {"label": "comida chatarra/plato completo como merienda (pizza/hamburguesa/yaroa)", "tokens": (
             "pizza", "hamburguesa", "yaroa"), "hardness": "soft"},
+        # [P1-SLOT-MERIENDA-CRUDITES · 2026-07-26] El vegetal crudo/al vapor usado como VEHÍCULO de
+        # una crema o dip es la merienda de dieta americana (crudités), no dominicana. El dueño
+        # señaló "Apio Relleno con Mantequilla de Maní y Queso Cottage"; en el corpus vivo también
+        # aparece "Brócoli al Vapor con Dip de Yogurt y Hierbas" (3 veces en 60 planes).
+        #
+        # De dónde sale: la regla 15c del prompt lista como categoría válida "Fruta + mantequilla de
+        # maní/almendras (manzana con pb, guineo con pb)". El modelo GENERALIZÓ de fruta a vegetal —
+        # una fuga de la regla, no una violación. Se cierra por los dos lados: el prompt ahora dice
+        # explícitamente "solo fruta, NO vegetales", y esta regla es la red determinista debajo.
+        #
+        # Tokens COMPUESTOS a propósito (mismo criterio que la regla de guisados del desayuno):
+        # "apio" suelto NO sirve — en RD el apio criollo (arracacha) es un víver legítimo de
+        # sancocho; lo que delata la merienda americana es la PREPARACIÓN (relleno / tallos /
+        # bastones / dip). Y NO se toca "fruta + mantequilla de maní", que el prompt permite y es
+        # una merienda real (manzana o guineo con maní).
+        #
+        # hardness=soft: degrada a advisory en el intento final, nunca cero-plan — coherente con el
+        # resto del slot. tooltip-anchor: P1-SLOT-MERIENDA-CRUDITES
+        {"label": "vegetal crudo como vehículo de dip/crema (merienda americana, no dominicana)",
+         "tokens": (
+             "apio relleno", "apio con mantequilla", "apio con crema", "tallos de apio",
+             "palitos de apio", "bastones de apio",
+             "zanahoria con mantequilla", "zanahoria con crema", "bastones de zanahoria",
+             "palitos de zanahoria", "zanahoria con dip",
+             "brocoli al vapor", "brocoli con dip", "coliflor con dip",
+             "pepino con crema", "pepino con dip",
+             "dip de yogurt", "dip de queso", "crudites",
+         ),
+         "hardness": "soft"},
     ],
 }
 
