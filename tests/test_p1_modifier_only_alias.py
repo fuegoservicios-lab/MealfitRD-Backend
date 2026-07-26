@@ -119,3 +119,52 @@ def test_los_tiers_de_contains_usan_la_lista_filtrada():
         "los dos tiers de búsqueda-dentro-del-texto deben usar la lista filtrada"
     assert "for alias_stripped, master_name in all_aliases:" in bloque, \
         "los tiers de match EXACTO deben seguir viendo la lista completa"
+
+
+# ───────────── 5. el residuo, y el reintento que se MIDIÓ y se descartó ─────────────
+#
+# El filtro deja un residuo: las formas mal escritas por el LLM que mezclan plural con adjetivo
+# singular ("2 plátanos maduro medianos") ya no resuelven a Plátano maduro — se quedan SIN
+# RESOLVER. Se probó cerrarlo con un "tier 4b" que, cuando ningún alias con alimento propio
+# había casado, reintentaba SOLO con los alias-modificador (degradar en vez de excluir).
+#
+# Medido like-for-like sobre 932 líneas de ingrediente reales (60 planes, catálogo de 204
+# alimentos cargado — sin abrir el pool la medición mide el vacío):
+#
+#     cambios del tier 4b: 2 de 932
+#         2 plátanos maduro medianos   (sin resolver)  ->  Plátano maduro   ✅ arregla
+#         1 nísperos maduro            (sin resolver)  ->  Plátano maduro   ❌ INVENTA
+#
+# Arregla uno y crea otro, y el que crea es peor de especie: el níspero es una fruta real que
+# no está en el catálogo, y convertirlo en plátano mete un FANTASMA en la lista de compras —
+# exactamente el modo de fallo (`cap_swallowed_modifier`) que el coherence guard existe para
+# cazar. Un ingrediente sin resolver es honesto; uno inventado hace que el usuario compre algo
+# que ninguna receta pide. Se revirtió.
+#
+# La causa raíz es de DATOS, no de resolvedor: el catálogo tiene dos alias desnudos y ambiguos
+# sobre dos alimentos que solo difieren en madurez — 'plátano' en **Plátano verde** y 'maduro'
+# en **Plátano maduro**. Mientras esos alias sigan así, cualquier heurística de texto elige mal
+# en algún lado. Limpiarlos cierra la clase entera.
+
+
+def test_el_platano_maduro_bien_escrito_si_resuelve():
+    """La forma correcta (concordancia plural/plural) no depende de ninguna heurística extra."""
+    assert _food("2 platanos maduros") == "Plátano maduro"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "[P1-MODIFIER-ONLY-ALIAS · 2026-07-26] RESIDUO ACEPTADO A CONCIENCIA. La forma con "
+        "plural + adjetivo singular ('platanos maduro medianos', espanol malformado del LLM) se "
+        "queda sin resolver. Medido: 1 de 932 lineas de ingrediente reales. El reintento que lo "
+        "cerraba inventaba un plátano donde el usuario tenia un nispero, asi que se descarto "
+        "(ver el comentario de arriba con la medicion).\n\n"
+        "A cambio, el filtro corrige un ALIMENTO EQUIVOCADO en la lista de compras — mango y "
+        "kiwi resolviendo a plátano — que es un fallo que el usuario si ve y sufre.\n\n"
+        "strict=True: si alguien lo cierra de verdad (limpiando los alias del catalogo), la "
+        "suite falla y obliga a borrar este xfail."
+    ),
+)
+def test_platanos_maduro_medianos_no_resuelve():
+    assert _food("1.99 platanos maduro medianos") == "Plátano maduro"
