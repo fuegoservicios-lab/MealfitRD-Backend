@@ -14016,6 +14016,41 @@ _RAW_EGG_TERMS = ("huevo", "huevos", "clara", "claras", "yema", "yemas")
 # Preparaciones LICUADAS/FRÍAS donde el huevo queda inequívocamente CRUDO (no hay cocción
 # posible aguas abajo): un batido no se cocina. Aquí el riesgo es máximo y el fix es fuerte.
 _NO_COOK_BLENDED = ("batido", "smoothie", "licuado", "licuada", "malteada", "jugo")
+# [P1-BATIDO-ADJETIVO · 2026-07-26] "batido" es sustantivo (licuado) Y adjetivo (montado), y
+# "licuado" igual. `_NO_COOK_BLENDED` se matchea por SUBCADENA sobre el nombre del plato, así
+# que "Queso Crema Batido" —queso crema MONTADO— declaraba licuado a un plato de cuchara.
+# Medido en el plan vivo 0afa0ed5: el paso "Agrega yogurt a la licuadora y licúa hasta
+# integrar" acabó dentro de unas TOSTADAS ("Tostadas de Pan Integral con Crema de Queso Crema
+# Batido") y dentro de un bowl ("Maní y Lechosa Fresco con Queso Crema Batido y Yogurt", cuyo
+# Montaje dice "sirve en un bowl" — el paso 2 y el 3 se contradicen). 2 de 12 comidas.
+# Misma familia que el arroz tangencial: se descuentan las colocaciones ADJETIVALES conocidas
+# antes de buscar el sustantivo, igual que `_SLOT_RICE_EXCLUDE`.
+_BLENDED_NAME_EXCLUDE = (
+    "queso crema batido", "crema batida", "crema batido", "quesocrema batido",
+    "clara batida", "claras batidas", "huevo batido", "huevos batidos",
+    "nata batida", "mantequilla batida", "yogur batido", "yogurt batido",
+)
+
+
+def _name_suggests_blended(meal_name: str, strip_accents_fn=None) -> bool:
+    """[P1-BATIDO-ADJETIVO · 2026-07-26] ¿El NOMBRE del plato dice que es un licuado?
+
+    SSOT: el cálculo estaba duplicado en dos sitios (el paso del closer y el del complemento) y
+    ninguno descontaba el uso adjetival. Dos copias del mismo predicado divergen — es la lección
+    de P1-PANTRY-GATE-SSOT. Pura, fail-open al comportamiento previo.
+    """
+    try:
+        if strip_accents_fn is None:
+            from constants import strip_accents as strip_accents_fn
+        _n = strip_accents_fn(str(meal_name or "").lower())
+        for _ex in _BLENDED_NAME_EXCLUDE:
+            _n = _n.replace(strip_accents_fn(_ex), " ")
+        return any(b in _n for b in _NO_COOK_BLENDED)
+    except Exception:
+        try:
+            return any(b in str(meal_name or "").lower() for b in _NO_COOK_BLENDED)
+        except Exception:
+            return False
 # Indicadores de que el huevo SÍ se cuece (≥71°C) → seguro. Sesgo a SEGURIDAD: un falso
 # "crudo" solo añade una nota inocua; un falso "cocido" sería peligroso (omitiría la nota),
 # así que se exigen términos ESPECÍFICOS de huevo cocido, NO genéricos ambiguos. Nota:
@@ -15502,7 +15537,7 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         # raíz está cerrada aguas arriba (P1-FOOD-WORD-NOT-TECHNIQUE), esto corta la cascada.
         _human_blob = _re.sub(r"\(~[^)]*\)", " ", _steps_blob)
         _blended = ("licuadora" in _human_blob or "licua" in _human_blob
-                    or any(b in _sa_cs(str(meal.get("name", "")).lower()) for b in _NO_COOK_BLENDED))
+                    or _name_suggests_blended(meal.get("name", ""), _sa_cs))
         # [P1-PRECOOKED-FROM-LINE · 2026-07-25] ¿la LÍNEA del plato ya dice "cocido"?
         _precooked_line = False
         for _ln in (meal.get("ingredients") or []):
@@ -18193,7 +18228,7 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         # antes de servir" en un batido lee robótico (review visual). Detecta licuadora en pasos o
         # batido/jugo en el nombre → wording natural de licuado.
         _blended = ("licuadora" in recipe_low or "licua" in recipe_low
-                    or any(b in _sa(str(meal.get("name", "")).lower()) for b in _NO_COOK_BLENDED))
+                    or _name_suggests_blended(meal.get("name", ""), _sa))
         # [P1-NOCOOK-COMPLEMENT-TDF · 2026-07-05] (review visual, plan e49d44c3) En un plato FRÍO
         # (guineo con mantequilla de maní) el prefijo "El Toque de Fuego (complemento)" invitaba al
         # backstop de tiempo a inyectar "(~10-12 min a fuego medio)" — fuego falso en plato frío.
