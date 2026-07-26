@@ -14417,6 +14417,33 @@ def api_renewal_checkin(
             "hunger": _hunger, "energy": _energy, "adherence_pct": _adherence,
         })
         _hp["_renewal_checkins"] = _ck[-12:]  # cap: los 12 ciclos más recientes
+
+        # [P1-CHECKIN-WEIGHT-TO-PROFILE · 2026-07-26] El peso también actualiza el PERFIL.
+        #
+        # Hasta ahora el check-in sólo escribía `weight_history`, que alimenta la TENDENCIA del
+        # motor evolutivo (±5-10%) y **nada más**. El BMR se calcula con `health_profile.weight`,
+        # que no se tocaba: escribir 125 con el perfil en 130 generaba el plan para 130. El modal
+        # dice "Peso actual" y el usuario razonablemente espera que el plan sea para ese peso.
+        #
+        # Se escribe también `weightUnit`, y eso además SANA un dato ambiguo: hay perfiles con
+        # `weight=75` y `weightUnit=None` (75 lb no es un adulto plausible — casi seguro son kg).
+        # Al venir la unidad declarada desde el modal, el perfil queda auto-consistente.
+        #
+        # NO se convierte entre unidades: se guarda el par (valor, unidad) tal como lo declaró el
+        # usuario. Convertir exigiría confiar en la unidad vieja, que es justo la que puede estar
+        # mal. Rollback: MEALFIT_CHECKIN_WEIGHT_TO_PROFILE=false.
+        # tooltip-anchor: P1-CHECKIN-WEIGHT-TO-PROFILE
+        if os.environ.get("MEALFIT_CHECKIN_WEIGHT_TO_PROFILE", "true").strip().lower() in (
+                "1", "true", "yes", "on"):
+            _prev_w, _prev_u = _hp.get("weight"), _hp.get("weightUnit")
+            _hp["weight"] = _w
+            _hp["weightUnit"] = _unit
+            _preview_box["profile_weight_updated"] = True
+            _preview_box["profile_weight_prev"] = _prev_w
+            logger.info(
+                f"⚖️ [P1-CHECKIN-WEIGHT-TO-PROFILE] peso del perfil {_prev_w}{_prev_u or '?'} "
+                f"→ {_w}{_unit} (el BMR del próximo plan usa este valor)")
+
         _preview_box.update(_renewal_engine_preview(_wh))
         return None
 
