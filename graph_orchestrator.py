@@ -15937,8 +15937,22 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         # 'Res Molida'; 'queso' de 'queso mozzarella' ya en 'Queso Blanco').
         sig_tokens = [t for t in strip_accents_fn(pname.lower()).split()
                       if len(t) >= 3 and t not in _NAME_STOPWORDS]
-        if not sig_tokens or any(t in name_low for t in sig_tokens):
+        # [P1-NAMEFIX-WORDBOUNDARY · 2026-07-26] El chequeo era por SUBCADENA y la proteína
+        # "Atún en agua" tiene el token 'agua', que vive dentro de "agua-cate". En el plan vivo
+        # 0afa0ed5 el desayuno "Revoltillo Dominicano con Casabe Crujiente y Aguacate Fresco"
+        # recibió 120 g de atún y ESTE guard concluyó que la proteína ya estaba en el nombre
+        # → el plato escondió su proteína principal, justo lo que P2-DISH-COHERENCE existe para
+        # impedir. Sexta instancia en la misma sesión de la colisión subcadena/palabra-española
+        # ('sal'⊂'salsa', 'pollo'⊂'repollo', 'ajo'⊂'abajo', 'batido' adjetivo, 'pina'⊂'espinaca').
+        # Con frontera de palabra 'agua' ya no casa con 'aguacate' y el reflejo se aplica.
+        if not sig_tokens:
             return False
+        try:
+            if any(_re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", name_low) for t in sig_tokens):
+                return False
+        except Exception:
+            if any(t in name_low for t in sig_tokens):   # fail-open al comportamiento previo
+                return False
         # Display: nombre COMPLETO de la proteína, conectores en minúscula, resto capitalizado.
         proper = " ".join(w if w.lower() in _NAME_STOPWORDS else w.capitalize()
                           for w in pname.split())
