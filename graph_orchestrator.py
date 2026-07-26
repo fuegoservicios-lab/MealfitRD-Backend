@@ -28057,6 +28057,12 @@ def _polish_finalize_display(days) -> int:
             for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
                 if not isinstance(meal, dict):
                     continue
+                # [P1-NAME-GENDER-POLISH · 2026-07-26] display-only del NOMBRE: no toca macros,
+                # ingredientes ni lista de compras.
+                _nm_fix = _fix_name_gender_agreement(meal.get("name"))
+                if _nm_fix is not None:
+                    meal["name"] = _nm_fix
+                    changed += 1
                 for _key in ("ingredients", "ingredients_raw"):
                     _lst = meal.get(_key)
                     if not isinstance(_lst, list):
@@ -39078,6 +39084,64 @@ def fix_ingredient_count_agreement(plan_data: dict) -> int:
     except Exception as e:
         logger.debug(f"[P3-2-INGREDIENT-COUNT-AGREEMENT] no-op: {type(e).__name__}: {e}")
         return 0
+
+
+# [P1-NAME-GENDER-POLISH · 2026-07-26] Alimentos FEMENINOS frecuentes en los nombres de plato +
+# adjetivos con forma femenina. Deliberadamente CORTO: solo se corrige lo que se puede afirmar.
+_NAME_FEM_FOODS = {
+    "lechosa", "manzana", "pera", "pina", "naranja", "auyama", "batata", "yuca",
+    "avena", "guayaba", "toronja", "mandarina", "chinola", "ciruela", "uva",
+    "sandia", "papaya", "coliflor", "zanahoria", "berenjena", "remolacha",
+    "pechuga", "carne", "tilapia", "tortilla", "ensalada", "sopa", "crema",
+}
+_NAME_ADJ_FEM = {
+    "fresco": "fresca", "asado": "asada", "salteado": "salteada", "molido": "molida",
+    "tostado": "tostada", "horneado": "horneada", "guisado": "guisada",
+    "cocido": "cocida", "rallado": "rallada", "picado": "picada", "crudo": "cruda",
+}
+def _fix_name_gender_agreement(name):
+    """[P1-NAME-GENDER-POLISH · 2026-07-26] Concuerda el adjetivo cuando el NÚCLEO del sintagma
+    es un alimento femenino. Devuelve el nombre corregido, o `None` si no hay nada que tocar.
+
+    Medido en 60 planes (196 nombres): 2 casos reales —«Maní y **Lechosa Fresco**…» y «**Lechosa
+    Fresco** con Almendras…»— sobre lechosa, que es femenina.
+
+    ⚠️ La regla exige que el sustantivo femenino sea el NÚCLEO, es decir que vaya al principio o
+    justo tras `y`/`con`/`de`/`e`. Sin eso, «Queso **Crema Batido**» se "corregiría" a «Crema
+    Batida» — y ahí el núcleo es *queso* (masculino), así que "batido" ya concuerda bien. Mi
+    primer detector cometió exactamente ese error: 2 de sus 4 hallazgos de género eran falsos.
+    Por la misma razón NO se toca la redundancia de palabras («…pescado **blanco**… Arroz
+    **Blanco**» es correcto: son dos alimentos distintos). Con 5 defectos cosméticos en 196
+    nombres, un reescritor amplio corrompe más de lo que arregla.
+    """
+    try:
+        if not isinstance(name, str) or not name.strip():
+            return None
+        from constants import strip_accents as _sa_ng
+        _toks = name.split()
+        if len(_toks) < 2:
+            return None
+        _cambios = 0
+        for _i in range(len(_toks) - 1):
+            _sust = _sa_ng(_toks[_i].lower()).strip(",.;:")
+            _adj = _sa_ng(_toks[_i + 1].lower()).strip(",.;:")
+            if _sust not in _NAME_FEM_FOODS or _adj not in _NAME_ADJ_FEM:
+                continue
+            # el sustantivo debe ser NÚCLEO: inicio del nombre o tras y/con/de/e
+            if _i > 0:
+                _prev = _sa_ng(_toks[_i - 1].lower()).strip(",.;:")
+                if _prev not in ("y", "con", "de", "e"):
+                    continue
+            _fem = _NAME_ADJ_FEM[_adj]
+            _orig = _toks[_i + 1]
+            _nuevo = _fem.capitalize() if _orig[:1].isupper() else _fem
+            if _orig.endswith((",", ".", ";", ":")):
+                _nuevo += _orig[-1]
+            _toks[_i + 1] = _nuevo
+            _cambios += 1
+        return " ".join(_toks) if _cambios else None
+    except Exception:
+        return None
 
 
 def refire_display_polish_post_finalize(plan_data: dict) -> int:
