@@ -56,6 +56,35 @@ def _recipe_expand_model_name() -> str:
     return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", DEEPSEEK_FLASH)
 
 
+def _build_expand_llm(modelo: str, **kw):
+    """[P1-RECIPE-EXPAND-MODEL-PROVIDER · 2026-07-26] Cliente del proveedor que corresponde al
+    modelo, para que `MEALFIT_RECIPE_EXPAND_MODEL` pueda apuntar a un modelo OpenAI.
+
+    Este nodo es el mejor sitio del pipeline para pagar un modelo mejor, y por eso se abre:
+      · lo dispara el USUARIO sobre UN plato ("regenera para más detalle"), no corre en cada plan;
+      · es exactamente donde sale el badge `_dish_quality_degraded` — la receta que quedó pobre;
+      · la llamada es diminuta (una receta), así que el premium se mide en céntimos.
+
+    ⚠️ Sin este dispatch, apuntar el knob a `gpt-5.6-luna` mandaba el modelo al base_url de DeepSeek
+    con la key equivocada. Es el mismo fallo que P1-LUNA-USAGE-BLIND cerró en el day-gen; aquí el
+    `ChatDeepSeek` a secas lo tenía latente desde que el knob existe.
+
+    ⚠️ `with_structured_output` NO se aplica aquí a propósito: `ChatDeepSeek` lo override-a para las
+    rarezas de DeepSeek (`function_calling` en vez de `json_schema`) y OpenAI quiere el default de
+    langchain. Lo pone el caller sobre el cliente que reciba.
+    """
+    try:
+        from llm_provider import is_openai_model
+        if is_openai_model(modelo):
+            from graph_orchestrator import ChatOpenAIInstrumented
+            return ChatOpenAIInstrumented(model=modelo, **kw)
+    except Exception as _e:
+        # fail-cheap: ante cualquier duda, el proveedor barato de siempre
+        logger.warning(f"[P1-RECIPE-EXPAND-MODEL-PROVIDER] dispatch falló ({type(_e).__name__}), "
+                       f"usando DeepSeek: {str(_e)[:120]}")
+    return ChatDeepSeek(model=modelo, **kw)
+
+
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke compartido por los 4
 # constructores `ChatGoogleGenerativeAI` de este módulo: `generate_plan_title`
 # (callsite síncrono en services.py post-save del plan), `expand_recipe_agent`
@@ -1300,8 +1329,11 @@ def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:
     )
 
     try:
-        llm = ChatDeepSeek(
-            model=_recipe_expand_model_name(),  # [P1-RECIPE-EXPAND-FAILSIGNAL] knob, era hardcoded
+        # [P1-RECIPE-EXPAND-MODEL-PROVIDER · 2026-07-26] Proveedor por prefijo del modelo: el knob
+        # `MEALFIT_RECIPE_EXPAND_MODEL` ya existía pero `ChatDeepSeek` a secas mandaba cualquier
+        # valor al base_url de DeepSeek. Ahora puede apuntar a `gpt-5.6-luna` y funcionar.
+        llm = _build_expand_llm(
+            _recipe_expand_model_name(),  # [P1-RECIPE-EXPAND-FAILSIGNAL] knob, era hardcoded
             temperature=0.7,
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(ExpandedRecipeModel)
