@@ -59,7 +59,7 @@ SELECT
     AVG(CASE WHEN metadata->>'review_passed' = 'false' THEN 1.0 ELSE 0.0 END) AS tasa_degradado
 FROM pipeline_metrics
 WHERE node = 'clinical_band'
-  AND created_at > NOW() - (%s || ' days')::interval
+  AND created_at > {_DESDE}
 GROUP BY 1
 ORDER BY 1
 """
@@ -72,7 +72,7 @@ SELECT
     AVG(CASE WHEN metadata->>'quality_degraded' = 'true' THEN 1.0 ELSE 0.0 END) AS tasa_degradado
 FROM pipeline_metrics
 WHERE node = 'clinical_band_final'
-  AND created_at > NOW() - (%s || ' days')::interval
+  AND created_at > {_DESDE}
 GROUP BY 1
 ORDER BY 1
 """
@@ -87,7 +87,7 @@ FROM pipeline_metrics,
          CASE WHEN jsonb_typeof(metadata->'rejection_reasons') = 'array'
               THEN metadata->'rejection_reasons' ELSE '[]'::jsonb END) r
 WHERE node = 'clinical_band'
-  AND created_at > NOW() - (%s || ' days')::interval
+  AND created_at > {_DESDE}
 """
 
 # Agrupa por el modelo que corrió de verdad, no por el tag (ver docstring).
@@ -105,7 +105,7 @@ SELECT
     COUNT(cost_usd_micros)                      AS con_precio
 FROM llm_usage_events
 WHERE node = 'day_generator'
-  AND created_at > NOW() - (%s || ' days')::interval
+  AND created_at > {_DESDE}
 GROUP BY 1
 ORDER BY 5 DESC NULLS LAST
 """
@@ -131,6 +131,13 @@ def _resumir(razon: str, ancho: int = 58) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Slice A/B del canario de modelo del day-gen")
     ap.add_argument("--days", type=int, default=14, help="ventana en días (default 14)")
+    # [P1-CATALOG-VARIETY-OPENED · 2026-07-26] Sin este corte la comparación MIENTE cuando un fix
+    # entra a mitad de la ventana: la cohorte 'on' quedó mezclando 3 planes anteriores al arreglo
+    # del contrato de fruta con 1 posterior, y el % de reintentos de ese grupo no describía ninguna
+    # de las dos configuraciones. `--since` recorta AMBAS cohortes al mismo momento.
+    ap.add_argument("--since", default=None,
+                    help="ISO 'YYYY-MM-DD HH:MM' — recorta ambas cohortes desde ahí (p.ej. el "
+                         "arranque del binario con el fix). Ignora --days.")
     ap.add_argument("--json", action="store_true", help="salida JSON para tooling")
     args = ap.parse_args()
 
@@ -142,20 +149,32 @@ def main() -> int:
         return 2
 
     import psycopg
-    d = str(args.days)
+
+    def _q(sql):
+        """Sustituye el marcador de ventana. Se hace aquí y no con un parámetro porque el default
+        es una EXPRESIÓN SQL (`now() - interval`), no un valor."""
+        lit = ("'" + d.replace("'", "''") + "'::timestamptz") if args.since else d
+        return sql.replace("{_DESDE}", lit)
+    # Un solo parámetro para las 4 consultas: instante de inicio de la ventana.
+    if args.since:
+        d = args.since
+        _etiqueta = f"desde {args.since}"
+    else:
+        d = f"now() - interval '{int(args.days)} days'"
+        _etiqueta = f"últimos {args.days} días"
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(_SQL_COSTO_REINTENTOS, (d,))
+        cur.execute(_q(_SQL_COSTO_REINTENTOS))
         calidad = [dict(zip(["cohorte", "planes", "tasa_reintento",
                              "reintentos_medios", "tasa_degradado"], r)) for r in cur.fetchall()]
-        cur.execute(_SQL_BANDA_ENTREGADA, (d,))
+        cur.execute(_q(_SQL_BANDA_ENTREGADA))
         entregada = {r[0]: dict(zip(["lecturas", "band_entregada", "tasa_degradado"], r[1:]))
                      for r in cur.fetchall()}
         for c in calidad:
             c["band_entregada"] = (entregada.get(c["cohorte"]) or {}).get("band_entregada")
             c["lecturas_entregadas"] = (entregada.get(c["cohorte"]) or {}).get("lecturas")
-        cur.execute(_SQL_RAZONES, (d,))
+        cur.execute(_q(_SQL_RAZONES))
         razones_raw = cur.fetchall()
-        cur.execute(_SQL_COSTO, (d,))
+        cur.execute(_q(_SQL_COSTO))
         costo = [dict(zip(["model", "llamadas", "tokens_in", "tokens_out", "usd", "con_precio"], r))
                  for r in cur.fetchall()]
 
@@ -169,7 +188,7 @@ def main() -> int:
                          default=float, indent=2, ensure_ascii=False))
         return 0
 
-    print(f"\nCanario de modelo · day generator — últimos {args.days} días\n")
+    print(f"\nCanario de modelo · day generator — {_etiqueta}\n")
     print("CALIDAD por cohorte  (reintentos: node='clinical_band' · banda: node='clinical_band_final')\n")
     print(f"{'cohorte':<10}{'planes':>8}{'band entr.':>12}{'% reint.':>10}"
           f"{'reint/plan':>12}{'degradados':>13}")
