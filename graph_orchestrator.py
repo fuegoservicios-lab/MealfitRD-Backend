@@ -26143,7 +26143,18 @@ REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
 # llenar volumen/fibra sin cap: ni el volume-FRUIT ni el leaf-cap (leafy) cubren el pepino). Techo
 # servible por comida (una ensalada generosa de pepino ≈ 1 pepino/200g; >½ kg es no-servible). Cap por
 # gramos (el solver los escribe en gramos). Yogurt/leche exentos por construcción (no son estos tokens).
-_REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito", "apio")
+# [P1-VEG-VOLUME-TOKENS · 2026-07-26] +coliflor/brocoli/repollo/calabacin. El cap de 250 g solo
+# cubría 5 hortalizas, así que una línea de 499 g pasaba por debajo del techo genérico de 600 g.
+# Plan vivo 0afa0ed5, cena: **"1 cabeza de coliflor mediana (499g, en floretes)"** para UNA
+# persona. Medido en 60 planes: solo 2 líneas superan los 450 g, así que NO es sistémico — pero
+# "una cabeza entera" se lee absurdo y el cap ya existía; solo le faltaban los alimentos.
+#
+# La AUYAMA se deja FUERA a propósito pese a ser la otra línea extrema (560 g): es un víver
+# almidonado que hace de BASE de carbohidrato del plato (puré de auyama), no relleno de volumen.
+# Recortarla a 250 g le quitaría los carbos a la cena y el motor de macros tendría que
+# recomponer — es un cambio con consecuencias que merece su propia medición, no un token más.
+_REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito", "apio",
+                              "coliflor", "brocoli", "repollo", "calabacin")
 REALISM_VEG_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_VEG_VOLUME_CAP_G", 250, lambda v: 100 <= v <= 500)
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
 # clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
