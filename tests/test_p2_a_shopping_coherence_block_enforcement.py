@@ -143,7 +143,9 @@ def test_default_action_reject_minor(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_action_reject_high_elevates_severity(monkeypatch):
     monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION", "reject_high")
-    block = [{"food": "Cilantro", "side": "expected_only"}]
+    # [P1-REVIEW-COHERENCE-SEVERE-ONLY · 2026-07-09] Block SEVERO (magnitud |Δ|≥0.5) para ejercer el
+    # mecanismo de reject_high: una divergencia MARGINAL (1 sola, magnitud <0.5) ahora degrada a warn.
+    block = [{"food": "Cilantro", "magnitude": True, "expected_qty": 1000, "actual_qty": 200, "delta_pct": 0.8}]
     state = _minimal_state(plan_result=_minimal_plan(with_block=block))
     result = _run(graph_orchestrator.review_plan_node(state))
     assert result["review_passed"] is False
@@ -172,7 +174,9 @@ def test_action_degrade_clears_flag_no_rejection(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_action_invalid_falls_back_to_reject_minor(monkeypatch, caplog):
     monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION", "garbage_value")
-    block = [{"food": "Cilantro", "side": "expected_only"}]
+    # [P1-REVIEW-COHERENCE-SEVERE-ONLY · 2026-07-09] Block SEVERO para ejercer el fallback reject_minor
+    # (una divergencia MARGINAL ahora degrada a warn bajo severe-only).
+    block = [{"food": "Cilantro", "magnitude": True, "expected_qty": 1000, "actual_qty": 200, "delta_pct": 0.8}]
     state = _minimal_state(plan_result=_minimal_plan(with_block=block))
     with caplog.at_level(logging.WARNING):
         result = _run(graph_orchestrator.review_plan_node(state))
