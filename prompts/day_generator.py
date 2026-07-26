@@ -264,6 +264,26 @@ DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
     "      y proteínas magras (pechuga, pescado blanco, claras, yogurt descremado).\n"
 )
 
+# [P1-DAYGEN-TRANSFORM-NUDGE · 2026-07-09] (forense plan f19d55a6: intento 1 rechazado HIGH por el gate
+# TRANSFORM_SOFT_GATE — transform_meals=0 → "El plan no incluye NINGUNA preparación transformada" → retry
+# COMPLETO pagado). El prompt PEDÍA creatividad pero no exigía un MÍNIMO de preparaciones transformadas; el
+# LLM emitía "proteína a la plancha + carbo hervido + vegetal suelto" (staples servidos) y el gate reintentaba.
+# Esta sección enseña la REGLA DE CONTEO (≥1 preparación transformada real) que cierra el gate desde el
+# intento 1. Espejo del §17/§18. String ESTÁTICO a import-time → prompt-cache del SystemMessage intacto
+# (P1-PROMPT-CACHE). tooltip-anchor: P1-DAYGEN-TRANSFORM-NUDGE
+DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
+    "\n19. PREPARACIONES TRANSFORMADAS (el validador RECHAZA un plan de puros staples servidos):\n"
+    "    - Un plato 'transformado' es una PREPARACIÓN dominicana real donde los ingredientes se integran:\n"
+    "      guisos, locrios (almuerzo), panqueques/arepitas con las harinas, bollitos/buñuelos de yuca o\n"
+    "      víveres, revoltillos, tortitas/croquetas al horno, mangú, ensaladas COMPUESTAS. NO cuenta:\n"
+    "      proteína a la plancha + carbo hervido + vegetal crudo suelto servidos por separado (eso es un\n"
+    "      'staple servido' y el validador lo rechaza si el día NO trae ninguna preparación transformada).\n"
+    "    - Incluye AL MENOS una preparación transformada por día — idealmente que la comida principal lo sea.\n"
+    "      Un día entero de puros staples servidos se rechaza y se regenera (pierde tiempo y calidad).\n"
+    "    - Transformar es la TÉCNICA (cómo se cocina y se presenta), NO cambia los macros: mantén las mismas\n"
+    "      cantidades de proteína/carbohidrato/grasa del plato.\n"
+)
+
 
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.
 # Clave: término de búsqueda en el pool (lowercase). Valor: etiqueta para el LLM.
@@ -490,6 +510,55 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     except Exception:
         dish_library_block = ""
 
+    # [P1-DAYGEN-DINNER-IDENTITY · 2026-07-09] (opción A del análisis de calidad) Nudge determinista para
+    # que la CENA tenga IDENTIDAD PROPIA de plato fuerte y NO defaultee a tortilla/revoltillo de huevo. La
+    # técnica asignada se aplica a "la comida principal" (§6) y el LLM tendía a ponerla en el almuerzo y
+    # dejar la cena "libre" → tortilla de huevo las 3 noches (forense plan ae7ab047: 3 tortillas de cena →
+    # rechazo cross-day-dish tolerado en el intento final). Additive + knob-gated + prompt-cache-safe
+    # (string estático). El gate cross-day sigue siendo el enforcement; esto reduce que el LLM caiga ahí.
+    import os as _os_dg
+    _dinner_nudge_on = _os_dg.environ.get(
+        "MEALFIT_DAYGEN_DINNER_IDENTITY", "true"
+    ).strip().lower() not in ("false", "0", "off", "no")
+    dinner_identity_block = ""
+    if _dinner_nudge_on:
+        dinner_identity_block = (
+            "\n• ⚠️ IDENTIDAD DE LA CENA: la Cena debe ser una preparación REAL con identidad propia "
+            "(guiso/estofado, al horno, a la plancha, salteado, en su técnica asignada) usando la proteína "
+            "asignada. NO uses tortilla/revoltillo/omelette de huevo como cena por defecto — el huevo va en "
+            "el desayuno, pero la cena necesita su propio plato fuerte. Varía la preparación de la cena "
+            "respecto a las técnicas de los OTROS días indicadas arriba (no repitas la misma forma 3 noches)."
+        )
+
+    # [P1-DAYGEN-PROTEIN-DIVERSITY · 2026-07-09] Nudge additive + knob-gated para NO sobrecargar el día de
+    # queso como proteína principal. Forense plan 55b659c5 (gain_muscle, renovación en vivo): 8/12 comidas
+    # usaban queso (freír/cottage/crema/blanco) → sodio día 3 2410mg > techo 2000mg = ÚNICA causa del
+    # _quality_degraded (micro_worst_day_ceiling) + monotonía + proteína menos magra. El queso de freír es
+    # MUY salado; cottage moderado. Instruimos: queso como proteína PRINCIPAL en ≤1 comida/día, resto con
+    # proteína animal magra variada. Prompt-cache-safe (string estático). NO es enforcement — el panel de
+    # micros + gates de variedad siguen siendo el enforcement; esto reduce que el LLM caiga en el default.
+    _protein_diversity_on = _os_dg.environ.get(
+        "MEALFIT_DAYGEN_PROTEIN_DIVERSITY", "true"
+    ).strip().lower() not in ("false", "0", "off", "no")
+    protein_diversity_block = ""
+    if _protein_diversity_on:
+        protein_diversity_block = (
+            "\n• ⚠️ DIVERSIDAD DE PROTEÍNA: el queso (de freír, cottage, crema, blanco) es ALTO EN SODIO — "
+            "úsalo como proteína PRINCIPAL en máximo 1 comida del día, NO en varias. Para el resto de las "
+            "comidas prioriza proteína animal magra y variada (pollo, pescado, res, cerdo, calamar, huevo, "
+            "hígado, atún) o legumbres. Evita que 2+ comidas del mismo día dependan del queso para su "
+            "proteína: aporta menos variedad y dispara el sodio del día. "
+            # [P1-DAYGEN-PROTEIN-DIVERSITY-LEAN · 2026-07-09] (forense plan f19d55a6 intento 2: día con
+            # grasas 174% del target → rechazo de banda; la grasa venía EMBEBIDA en la proteína, que el
+            # trim determinista NO puede recortar). Complementa el §18: la diversidad NO debe pelearse con
+            # el presupuesto de grasa — prefiere cortes MAGROS por defecto.
+            "Al elegir la proteína PREFIERE cortes MAGROS (pechuga/muslo sin piel, pescado blanco, lomo, "
+            "claras, atún en agua, pavo) sobre los grasos (salmón, res 80/20, muslo con piel, hígado): la "
+            "grasa embebida en un corte graso NO se puede recortar después y revienta el presupuesto de "
+            "grasa del día (§18), forzando un rechazo de banda. Usa un corte graso solo si es LA grasa "
+            "protagonista del plato y no le añades otra fuente de grasa."
+        )
+
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
@@ -497,7 +566,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(skeleton_day.get('carb_pool', []))}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}
-• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}
+• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{dinner_identity_block}{protein_diversity_block}
 {dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,
