@@ -18912,7 +18912,24 @@ def _canonical_slot_fractions(meals: list) -> list:
     mer_keys = [k for k in split if k.startswith("merienda")]
     fracs, mer_i = [], 0
     for m in meals:
-        key = _SLOT_KEY_MAP.get(strip_accents(str(m.get("slot", "")).lower().strip()))
+        # [P1-SLOT-FRACTIONS-KEY · 2026-07-26] La clave del slot es `meal`, no `slot`.
+        #
+        # `m.get("slot")` devolvía None en TODAS las comidas (verificado sobre planes vivos: las
+        # claves son `cals/carbs/desc/fats/ingredients/macros/**meal**/name/...`, sin `slot`), así
+        # que cada comida caía a la rama "no mapeado" y recibía parte IGUAL del remanente:
+        #
+        #     devuelto:  0,25 / 0,25 / 0,25 / 0,25      (plano)
+        #     canónico:  0,20 / 0,35 / 0,15 / 0,30      (MEAL_SLOT_SPLITS)
+        #
+        # O sea que P3-SLOT-DISTRIBUTION (2026-06-13) llevaba **seis semanas inerte** y el solver
+        # apuntaba a un reparto plano. Efecto medido sobre 22 días de 8 planes: la merienda supera
+        # al almuerzo en el **27%** de los días, con un máximo del 43,7% de las kcal del día contra
+        # una mediana del 16%. Caso vivo `cd08ea3c` D2: merienda 911 kcal, cena 233.
+        #
+        # `_detect_slot_appropriateness` (mismo archivo) ya leía `meal` correctamente — el bug
+        # estaba sólo aquí. Se leen las dos claves por si alguna superficie emite `slot`.
+        key = _SLOT_KEY_MAP.get(
+            strip_accents(str(m.get("meal") or m.get("slot") or "").lower().strip()))
         f = None
         if key in split:
             f = split[key]
