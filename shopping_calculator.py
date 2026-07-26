@@ -1213,6 +1213,21 @@ _NORMALIZE_ANATOMY_PREFIX_RE = re.compile(
 _NORMALIZE_DE_PREFIX_RE = re.compile(r'^(de\s+|del\s+)', re.IGNORECASE)
 
 
+
+# [P1-MODIFIER-ONLY-ALIAS · 2026-07-26] Palabras que describen un ESTADO o CORTE, nunca un
+# alimento. Un alias del catálogo que sea solo una de estas no puede resolver un alimento
+# dentro de un texto que ya nombra otro (ver el bloque del INTENTO 2). Sin acentos: el caller
+# compara contra `strip_accents`.
+_MODIFIER_ONLY_ALIASES = frozenset({
+    "maduro", "madura", "maduros", "maduras",
+    "verde", "verdes", "fresco", "fresca", "frescos", "frescas",
+    "crudo", "cruda", "crudos", "crudas", "cocido", "cocida", "cocidos", "cocidas",
+    "molido", "molida", "molidos", "molidas", "rallado", "rallada",
+    "picado", "picada", "entero", "entera", "enteros", "enteras",
+    "seco", "seca", "secos", "secas", "integral", "integrales",
+    "grande", "mediano", "pequeno", "magro", "magra",
+})
+
 def normalize_name(orig_name: str) -> str:
     n = str(orig_name).lower().strip()
     n = _NORMALIZE_PAREN_RE.sub('', n).strip()
@@ -1317,8 +1332,32 @@ def normalize_name(orig_name: str) -> str:
         all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
         for alias in (master.get("aliases") or []):
             all_aliases.append((strip_accents(alias.strip().lower()), master_name))
-            
+
     all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
+
+    # [P1-MODIFIER-ONLY-ALIAS · 2026-07-26] Un alias que es SOLO un modificador no puede
+    # resolver un alimento por su cuenta dentro de un texto más grande.
+    #
+    # `Plátano maduro` tiene en el catálogo el alias **'maduro'** (a secas). Los tiers 2 y 4
+    # buscan cada alias como palabra completa DENTRO del texto, recorriéndolos por longitud
+    # DESCENDENTE — así que 'maduro' (6) se evalúa antes que 'mango' (5) y gana:
+    #
+    #     "½ mango maduro"  ->  Plátano maduro     (plan vivo 01d63a5b, desayuno día 1)
+    #     "1 kiwi maduro"   ->  Plátano maduro
+    #
+    # No es que faltara el mango en la lista de compras: es que la lista traía PLÁTANO en su
+    # lugar. El usuario compra plátanos para un desayuno de mango. Y como el aggregator y el
+    # coherence guard usan este MISMO parser, ambos lados coinciden en el error y la guarda no
+    # puede verlo — coherentemente equivocados.
+    #
+    # Afecta a todo alimento masculino cuyo nombre sea más corto que el modificador. Las
+    # femeninas se salvan por casualidad ("pera madura" ≠ 'maduro'), lo que no es una defensa.
+    #
+    # Los tiers de match EXACTO (1 y 3) los conservan: si alguien escribe literalmente
+    # "maduro" a secas, resolver a plátano maduro es defendible. Lo que se prohíbe es que un
+    # modificador secuestre un texto que ya nombra otro alimento.
+    _aliases_for_contains = [(a, m) for (a, m) in all_aliases
+                             if a not in _MODIFIER_ONLY_ALIASES]
 
     # ── INTENTO 1: Match Exacto sobre el texto RAW (sin mutilar por stops) ──
     # Esto es CRÍTICO porque los stops eliminan palabras como 'natural', 'descremado',
@@ -1329,7 +1368,8 @@ def normalize_name(orig_name: str) -> str:
 
     # ── INTENTO 2: Regex sobre el texto RAW (sin mutilar) ──
     # Buscar "queso mozzarella bajo en grasa" dentro de "queso mozzarella bajo en grasa rallado"
-    for alias_stripped, master_name in all_aliases:
+    # [P1-MODIFIER-ONLY-ALIAS] lista filtrada: un modificador suelto no secuestra el texto.
+    for alias_stripped, master_name in _aliases_for_contains:
         if re.search(r'\b' + re.escape(alias_stripped) + r'\b', n_stripped, flags=re.IGNORECASE):
             return master_name
 
@@ -1339,7 +1379,8 @@ def normalize_name(orig_name: str) -> str:
             return master_name
 
     # ── INTENTO 4: Regex sobre clean_n (último recurso antes de fuzzy/semántica) ──
-    for alias_stripped, master_name in all_aliases:
+    # [P1-MODIFIER-ONLY-ALIAS] misma lista filtrada que el INTENTO 2.
+    for alias_stripped, master_name in _aliases_for_contains:
         if re.search(r'\b' + re.escape(alias_stripped) + r'\b', clean_n_stripped, flags=re.IGNORECASE):
             return master_name
 
