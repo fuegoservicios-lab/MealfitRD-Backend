@@ -9713,6 +9713,11 @@ class BatchParsedIngredients(BaseModel):
 #      entradas en vuelo, validación nueva añadida después), `_schema_invalid`
 #      se setea y `review_plan_node` lo eleva a critical → guardrail entrega
 #      fallback matemático.
+# [P1-SKELETON-FIDELITY-PLURAL · 2026-07-26] Concordancia de número entre la proteína que el
+# skeleton asigna ("huevos") y cómo la lista el día ("1 huevo"). Rollback: =false vuelve al match
+# exacto, que reporta esos días como "omitió la proteína asignada".
+SKELETON_FIDELITY_PLURAL = _env_bool("MEALFIT_SKELETON_FIDELITY_PLURAL", True)
+
 _SKELETON_PROTEIN_MODIFIER_STOPWORDS = {
     "proteina", "proteína", "principal", "secundaria", "entero", "enteros",
     "entera", "enteras", "molida", "molido", "molidas", "fresco", "fresca",
@@ -9745,7 +9750,32 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
             t for t in _re2.findall(r"[a-záéíóúñ]+", alt)
             if len(t) >= 3 and t not in _SKELETON_PROTEIN_MODIFIER_STOPWORDS
         ]
-        if any(_re2.search(r"\b" + _re2.escape(t) + r"\b", ingredients_text) for t in toks):
+        # [P1-SKELETON-FIDELITY-PLURAL · 2026-07-26] …y concordancia de número. El skeleton
+        # asigna el alimento en PLURAL ("huevos") y el día lo lista en SINGULAR ("1 huevo
+        # entero"): `\bhuevos\b` no casa y el día se reportaba como "omitió la proteína".
+        #
+        # Medido sobre el journal completo (1.293 razones de rechazo): `omitió múltiples
+        # proteínas asignadas` es la razón #1 de las últimas 2 semanas (19 de 114), y `'huevos'`
+        # aparece en casi todos los casos. Verificado ejecutando el matcher con las cadenas
+        # exactas del log:
+        #
+        #     'huevos'                            vs "1 huevo entero"  → False  ← falso omitido
+        #     'huevos enteros (desayuno/merienda)' vs "1 huevo batido"  → False  ← falso omitido
+        #     'edamame'                           vs "habichuelas"     → False  ← correcto
+        #
+        # Mismo patrón de stems que P1-REVERSE-COH-PLURAL usa en la coherencia inversa. Los
+        # guards de longitud evitan destrozar tokens cortos ("res" no pierde la "s").
+        _stems = set()
+        for t in toks:
+            _stems.add(t)
+            if SKELETON_FIDELITY_PLURAL:
+                if t.endswith("es") and len(t) > 5:
+                    _stems.add(t[:-2])
+                if t.endswith("s") and len(t) > 4:
+                    _stems.add(t[:-1])
+        _suf = r"(?:s|es)?" if SKELETON_FIDELITY_PLURAL else ""
+        if any(_re2.search(r"\b" + _re2.escape(st) + _suf + r"\b", ingredients_text)
+               for st in _stems):
             return True
     return False
 
