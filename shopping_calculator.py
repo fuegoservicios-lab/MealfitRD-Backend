@@ -3877,7 +3877,26 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         "display_qty": display_qty_final,
         "display_string": final_str,
         "confidence_score": confidence,
-        "shelf_life_days": master_item.get("shelf_life_days") if master_item else None
+        "shelf_life_days": master_item.get("shelf_life_days") if master_item else None,
+        # [P1-COHERENCE-BASE-QTY · 2026-07-26] Cantidad ANTES de convertir a unidad de mercado.
+        #
+        # El coherence guard compara la suma de las recetas contra la lista emparejando por
+        # (alimento, UNIDAD). Las recetas hablan en g/taza/cda; la lista, tras esta función,
+        # solo guardaba `market_qty`/`market_unit` — pote, sobre, paquete, mazo. Sin unidad
+        # común el emparejamiento fallaba y `expected_qty` salía 0.0 para TODOS:
+        #
+        #     Miel     pote     esperado=0.0  lista=1.0  ratio=inf  -> unknown
+        #     Orégano  sobre    esperado=0.0  lista=1.0  ratio=inf  -> unknown
+        #
+        # Medido en el plan vivo 01d63a5b: 41 divergencias, 39 de ellas `unknown` por esta
+        # causa. El guard no estaba detectando incoherencias reales — estaba comparando dos
+        # idiomas distintos y llamando "desconocido" al resultado. El propio docstring de
+        # `compare_expected_vs_aggregated` ya avisaba: el caller debe comparar ANTES de esta
+        # conversión. Preservar la base aquí es la forma no-invasiva de cumplirlo.
+        #
+        # Aditivo: nadie que lea `market_*` se entera. tooltip-anchor: P1-COHERENCE-BASE-QTY
+        "base_qty": float(raw_qty) if isinstance(raw_qty, (int, float)) else None,
+        "base_unit": str(unit_str) if unit_str else None,
     }
     if _cap_hit:
         try:
@@ -4736,13 +4755,25 @@ def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False
         name_str = str(name).strip()
         if exclude_pavo and re.match(r'^pavo\b', name_str.lower()):
             continue
-        try:
-            qty = float(item.get("market_qty_numeric") or item.get("quantity") or 0)
-        except (TypeError, ValueError):
-            qty = 0.0
+        # [P1-COHERENCE-BASE-QTY · 2026-07-26] Preferir la cantidad en unidad BASE cuando el
+        # item la trae. Es el mismo idioma en el que hablan las recetas (g/taza/cda), así que
+        # el emparejamiento por (alimento, unidad) del comparador por fin encuentra pareja.
+        # Con `market_qty` el esperado salía 0.0 para todos —pote/sobre/paquete no existen en
+        # una receta— y las 39 divergencias del plan 01d63a5b caían a `unknown` por eso.
+        # Fallback al comportamiento previo para listas legacy sin `base_qty`.
+        qty = None
+        unit = None
+        _bq, _bu = item.get("base_qty"), item.get("base_unit")
+        if isinstance(_bq, (int, float)) and float(_bq) > 0 and _bu:
+            qty, unit = float(_bq), str(_bu).strip().lower()
+        if qty is None:
+            try:
+                qty = float(item.get("market_qty_numeric") or item.get("quantity") or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            unit = str(item.get("market_unit") or item.get("unit") or "").strip().lower()
         if qty <= 0:
             continue
-        unit = str(item.get("market_unit") or item.get("unit") or "").strip().lower()
         if not unit:
             unit = "unidad"
         out[name_str][unit] += qty
