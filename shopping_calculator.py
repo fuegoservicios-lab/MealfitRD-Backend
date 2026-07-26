@@ -3808,14 +3808,24 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     _cap_hit = None
     if CAPPED_STAPLE_HONESTY:
         try:
-            _nlow = strip_accents(str(name).lower()).strip()
+            # ⚠️ `strip_accents` NO es un nombre de módulo en este archivo — se importa DENTRO de
+            # cada función (líneas 688, 709, 753, 980). La primera versión de este bloque lo usaba
+            # como global: lanzaba NameError, el `except` de abajo se lo tragaba, y el resultado era
+            # que `get_caps_applied_last_run()` NUNCA se llamaba. Medido con un spy sobre un plan
+            # real: `apply_smart_market_units` corría 50 veces y la lectura de caps 0.
+            from constants import strip_accents as _sa_cap
+            _nlow = _sa_cap(str(name).lower()).strip()
             for _c in get_caps_applied_last_run():
                 if _c.get("food_lower", "").strip() and (
-                        strip_accents(_c["food_lower"]).strip() == _nlow):
+                        _sa_cap(_c["food_lower"]).strip() == _nlow):
                     if float(_c.get("post_value") or 0) < float(_c.get("pre_value") or 0):
                         _cap_hit = _c
                     break
-        except Exception:
+        except Exception as _cap_e:
+            # NO callar: un `except: pass` aquí fue justo lo que convirtió el NameError en un
+            # no-op invisible y me hizo reportar como arreglado algo que no hacía nada.
+            logging.warning(f"[P1-CAPPED-STAPLE-HONESTY] lookup de cap falló para "
+                            f"'{str(name)[:40]}': {type(_cap_e).__name__}: {str(_cap_e)[:120]}")
             _cap_hit = None
 
     result = {

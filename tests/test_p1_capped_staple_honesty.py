@@ -122,3 +122,70 @@ def test_registro_de_cap_es_fail_safe():
     sc._record_cap_applied(None, "no-numero", None, "X")   # no lanza
     sc._record_cap_applied("Atún", 100.0, 50.0, "Y")
     assert any(c.get("reason") == "Y" for c in sc.get_caps_applied_last_run())
+
+# ───────────── 4. EFECTO OBSERVABLE (lo que faltaba) ─────────────
+#
+# ⚠️ La primera versión de este archivo pasaba entera con el código ROTO. Verificaba que el bloque
+# existiera en el fuente y que la aritmética 736/3547 diera "6 de 30 días" — las dos cosas ciertas —
+# mientras `strip_accents` lanzaba NameError, un `except` lo tragaba y el sufijo NUNCA llegaba al
+# item. Medido con un spy sobre un plan real: `apply_smart_market_units` corría 50 veces y la
+# lectura de caps 0.
+#
+# Estos tests llaman a la función y miran el DICT que devuelve. Un test que comprueba que el código
+# está escrito no comprueba que el código haga algo.
+
+def test_el_item_devuelto_LLEVA_el_sufijo():
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Atún en agua", 3546.7, 736.0, "P6-CANNED-PROTEIN-CAP")
+    out = sc.apply_smart_market_units("Atún en agua", 736.0 / 453.6, "g", 736.0)
+    assert isinstance(out, dict)
+    assert out.get("capped_by") == "P6-CANNED-PROTEIN-CAP"
+    assert "de 30 días — recompra" in out["display_qty"]
+    assert "de 30 días — recompra" in out["display_string"]
+
+
+def test_el_acento_del_nombre_no_rompe_el_cruce():
+    """La causa raíz fue de acentos: el cap guarda 'atún en agua' y el item se llama 'Atún en agua'.
+    `strip_accents` tiene que estar DISPONIBLE — en este módulo se importa dentro de cada función,
+    no a nivel de módulo, y usarlo como global lanzaba NameError."""
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Limón", 2125.0, 804.0, "P6-CITRUS-CAP")
+    out = sc.apply_smart_market_units("Limón", 804.0 / 453.6, "g", 804.0)
+    assert out.get("capped_by") == "P6-CITRUS-CAP"
+
+
+def test_sin_cap_no_hay_sufijo():
+    sc.reset_caps_applied_last_run()
+    out = sc.apply_smart_market_units("Avena", 2.0, "g", 907.0)
+    assert out.get("capped_by") is None
+    assert "recompra" not in out["display_qty"]
+
+
+def test_cap_marginal_no_avisa():
+    """96% del ciclo: se registra la metadata pero NO se molesta al usuario."""
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Avena", 1000.0, 960.0, "TEST-CAP")
+    out = sc.apply_smart_market_units("Avena", 960.0 / 453.6, "g", 960.0)
+    assert out.get("capped_by") == "TEST-CAP"
+    assert "recompra" not in out["display_qty"]
+
+
+def test_idempotente():
+    """La lista se recalcula al cambiar household/duración: el sufijo no debe acumularse."""
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Atún en agua", 3546.7, 736.0, "P6-CANNED-PROTEIN-CAP")
+    for _ in range(3):
+        out = sc.apply_smart_market_units("Atún en agua", 736.0 / 453.6, "g", 736.0)
+        assert out["display_qty"].count("recompra") == 1
+
+
+def test_el_fallo_del_lookup_se_LOGUEA_no_se_traga():
+    """El `except: pass` original convirtió un NameError en un no-op invisible y me hizo reportar
+    como arreglado algo que no hacía nada."""
+    src = _fuente()
+    i = src.index("_cap_hit = None")
+    bloque = src[i:src.index("result = {", i)]
+    assert "except Exception as" in bloque
+    assert "logging.warning" in bloque
+    # el `except` mudo original, sin la variable de la excepción
+    assert "except Exception:" not in bloque
