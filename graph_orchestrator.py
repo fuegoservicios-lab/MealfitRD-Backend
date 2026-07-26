@@ -38293,6 +38293,19 @@ def _emit_clinical_band_final_metric(band: dict, prev_score, plan_data: dict,
             "surface": surface,
             "plan_generation_status": plan_data.get("generation_status"),
             "quality_degraded": bool(plan_data.get("_quality_degraded")),
+            # [P1-BAND-COHORT-ON-FINAL · 2026-07-26] La cohorte del canario de modelo vivía SOLO en
+            # `clinical_band`, que es la lectura PRE-finalize. Medido en los dos primeros planes con
+            # Luna: la fila etiquetada decía 0.833 mientras `clinical_band_final`, emitida 2 s ANTES,
+            # decía 1.00 — el A/B comparaba cohortes con el número que el usuario NO recibió. Es la
+            # misma trampa que P1-BAND-METRIC-FINAL cerró para el tablero (auditoría 2026-07-24) y
+            # que yo reabrí al etiquetar sólo la fila vieja.
+            #
+            # Se recalcula desde `form_data` y no desde `user_id` a secas: para invitados la
+            # identidad del bucket es `session_id`, y pasar `user_id=None` los mandaría todos al
+            # mismo bucket 'anon'.
+            "daygen_model_cohort": _daygen_model_canary_cohort(
+                plan_data.get("form_data") or ({"user_id": user_id} if user_id else {})),
+            "daygen_canary_model": DAYGEN_CANARY_MODEL or None,
         }
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, retries, "

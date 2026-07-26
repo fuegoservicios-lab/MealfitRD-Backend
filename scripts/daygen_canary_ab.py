@@ -43,16 +43,35 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Las filas SIN el tag son de antes del canario (se emite desde 2026-07-26). Etiquetarlas 'off'
 # por COALESCE mezclaría cientos de planes de otra época con el grupo de control y haría ver una
 # diferencia donde sólo hay cambio de calendario. Van aparte como 'sin-tag'.
-_SQL_CALIDAD = """
+# [P1-BAND-COHORT-ON-FINAL · 2026-07-26] DOS nodos, a propósito, porque ninguno tiene las dos
+# cosas:
+#   · `clinical_band`       → `retries` (el costo). Su `confidence` es PRE-finalize: en los dos
+#                             primeros planes con Luna decía 0.833 sobre planes entregados en 1.00.
+#   · `clinical_band_final` → la banda ENTREGADA (lo que el usuario recibe), pero `retries` es 0
+#                             fijo porque se emite fuera del grafo.
+# Leer la banda del primero era comparar cohortes con un número que nadie recibió.
+_SQL_COSTO_REINTENTOS = """
 SELECT
     COALESCE(metadata->>'daygen_model_cohort', 'sin-tag')                     AS cohorte,
     COUNT(*)                                                                  AS planes,
-    AVG(confidence)                                                           AS band_medio,
     AVG(CASE WHEN retries > 0 THEN 1.0 ELSE 0.0 END)                          AS tasa_reintento,
     AVG(retries::float)                                                       AS reintentos_medios,
     AVG(CASE WHEN metadata->>'review_passed' = 'false' THEN 1.0 ELSE 0.0 END) AS tasa_degradado
 FROM pipeline_metrics
 WHERE node = 'clinical_band'
+  AND created_at > NOW() - (%s || ' days')::interval
+GROUP BY 1
+ORDER BY 1
+"""
+
+_SQL_BANDA_ENTREGADA = """
+SELECT
+    COALESCE(metadata->>'daygen_model_cohort', 'sin-tag')                       AS cohorte,
+    COUNT(*)                                                                    AS lecturas,
+    AVG(confidence)                                                             AS band_entregada,
+    AVG(CASE WHEN metadata->>'quality_degraded' = 'true' THEN 1.0 ELSE 0.0 END) AS tasa_degradado
+FROM pipeline_metrics
+WHERE node = 'clinical_band_final'
   AND created_at > NOW() - (%s || ' days')::interval
 GROUP BY 1
 ORDER BY 1
@@ -125,9 +144,15 @@ def main() -> int:
     import psycopg
     d = str(args.days)
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(_SQL_CALIDAD, (d,))
-        calidad = [dict(zip(["cohorte", "planes", "band_medio", "tasa_reintento",
+        cur.execute(_SQL_COSTO_REINTENTOS, (d,))
+        calidad = [dict(zip(["cohorte", "planes", "tasa_reintento",
                              "reintentos_medios", "tasa_degradado"], r)) for r in cur.fetchall()]
+        cur.execute(_SQL_BANDA_ENTREGADA, (d,))
+        entregada = {r[0]: dict(zip(["lecturas", "band_entregada", "tasa_degradado"], r[1:]))
+                     for r in cur.fetchall()}
+        for c in calidad:
+            c["band_entregada"] = (entregada.get(c["cohorte"]) or {}).get("band_entregada")
+            c["lecturas_entregadas"] = (entregada.get(c["cohorte"]) or {}).get("lecturas")
         cur.execute(_SQL_RAZONES, (d,))
         razones_raw = cur.fetchall()
         cur.execute(_SQL_COSTO, (d,))
@@ -145,13 +170,16 @@ def main() -> int:
         return 0
 
     print(f"\nCanario de modelo · day generator — últimos {args.days} días\n")
-    print("CALIDAD (pipeline_metrics.node='clinical_band', por cohorte asignada)\n")
-    print(f"{'cohorte':<10}{'planes':>8}{'band':>9}{'% reint.':>10}{'reint/plan':>12}{'degradados':>13}")
-    print("-" * 62)
+    print("CALIDAD por cohorte  (reintentos: node='clinical_band' · banda: node='clinical_band_final')\n")
+    print(f"{'cohorte':<10}{'planes':>8}{'band entr.':>12}{'% reint.':>10}"
+          f"{'reint/plan':>12}{'degradados':>13}")
+    print("-" * 65)
     for c in calidad:
-        print(f"{c['cohorte']:<10}{c['planes']:>8}{_fmt(c['band_medio']):>9}"
+        print(f"{c['cohorte']:<10}{c['planes']:>8}{_fmt(c.get('band_entregada')):>12}"
               f"{_fmt(c['tasa_reintento'], pct=True):>10}{_fmt(c['reintentos_medios'], nd=2):>12}"
               f"{_fmt(c['tasa_degradado'], pct=True):>13}")
+    print("\n'band entr.' = la banda que el usuario RECIBIÓ. La de `clinical_band` es pre-finalize y\n"
+          "en los 2 primeros planes con Luna marcaba 0.833 sobre planes entregados en 1.00.")
 
     print("\n\nCOSTO (llm_usage_events, node='day_generator', por modelo que CORRIÓ)\n")
     print(f"{'modelo':<22}{'llamadas':>10}{'tok in':>12}{'tok out':>10}{'USD':>10}{'USD/call':>11}")
@@ -197,7 +225,7 @@ def main() -> int:
         on = next(c for c in reales if c["cohorte"] == "on")
         off = next(c for c in reales if c["cohorte"] == "off")
         d_re = (float(on["tasa_reintento"]) - float(off["tasa_reintento"])) * 100
-        d_bd = float(on["band_medio"] or 0) - float(off["band_medio"] or 0)
+        d_bd = float(on.get("band_entregada") or 0) - float(off.get("band_entregada") or 0)
         print(f"\nDelta reintentos (on − off): {d_re:+.1f} puntos  ·  delta banda: {d_bd:+.3f}")
         print("Negativo en reintentos y positivo en banda = el modelo caro se está ganando el sueldo.")
         print("Ojo con la n: por debajo de ~30 planes por cohorte el ruido domina.")
