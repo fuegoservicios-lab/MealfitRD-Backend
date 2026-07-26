@@ -17636,8 +17636,52 @@ def _meal_raw_staple_issue(meal: dict):
 # verificados SÍ recibe porción default si el LLM degradó la cantidad. tooltip-anchor: P2-QTY-PRESENCE-GUARD
 _QTY_GUARD_SEASONING_SKIP = (
     "sal", "ajo", "cebolla", "oregano", "cilantro", "perejil", "pimienta", "comino", "laurel", "vinagre",
-    "limon", "jengibre", "sazon", "especia", "cebollin", "apio", "aji", "cubito", "curcuma", "achiote",
+    "limon", "jengibre", "sazon", "sazonador", "especia", "cebollin", "apio", "aji", "cubito", "curcuma",
+    "achiote",
 )
+
+# [P1-SEASONING-WORD-BOUNDARY · 2026-07-26] Los dos guards que consultan la lista de arriba lo
+# hacían por SUBCADENA (`any(_seas in bare_low ...)`), y en español eso traga alimentos enteros.
+# Es la misma clase de bug que ya me mordió el 2026-07-24 con `"pollo"` ⊂ `"repollo"`.
+#
+# Medido contra el catálogo real (204 alimentos): `sal` se comía **Salami, Salmón, Salsa de soya y
+# Salsa de tomate**; `ajo` se comía **Ajonjolí**. Cinco alimentos clasificados como sazón, con dos
+# consecuencias distintas según el callsite:
+#
+#   · `_ensure_ingredient_quantities` — un "Salmón" que llegue SIN gramos se salta como si su macro
+#     fuera ≈0 y NO se le inyecta porción ⇒ cuenta ≈0 en macros en silencio. Ese es exactamente el
+#     agujero que P2-QTY-PRESENCE-GUARD existe para cerrar; la subcadena lo reabría para 5 alimentos,
+#     dos de ellos proteínas.
+#   · `_ensure_ingredients_used_in_recipe` — caso VIVO (plan 2b3be84e, "Filete al Wok"): la receta
+#     lista "1 cda de salsa de soya", los pasos usan vinagre y jamás la mencionan, y nadie lo detectó
+#     porque `"sal"` ⊂ `"salsa"`. El usuario la compra, le suma ~900 mg de sodio a la cuenta, y la
+#     receta nunca le dice qué hacer con ella.
+#
+# ⚠️ Delta medido sobre 1.955 líneas de ingrediente de 9 planes ANTES de cambiar nada: cambia
+# EXACTAMENTE 6 líneas (salsa de tomate ×4, salsa de soya ×2) y produce CERO regresiones — los 20
+# sazonadores reales (sal marina, dientes de ajo, ajo en polvo, jugo de limón, ajíes morrones,
+# hojas de laurel, cúrcuma en polvo…) siguen exentos. El único que el límite de palabra habría
+# perdido es `sazonador`, añadido arriba como entrada propia.
+#
+# El plural opcional mantiene `ajies`, `limones`, `cebollas`. tooltip-anchor: P1-SEASONING-WORD-BOUNDARY
+SEASONING_WORD_BOUNDARY = _env_bool("MEALFIT_SEASONING_WORD_BOUNDARY", True)
+_QTY_GUARD_SEASONING_RE = _re.compile(
+    r"\b(?:" + "|".join(sorted(map(_re.escape, _QTY_GUARD_SEASONING_SKIP), key=len, reverse=True))
+    + r")(?:es|s)?\b")
+
+
+def _is_seasoning_name(bare_low: str) -> bool:
+    """¿El nombre pelado de un ingrediente es un sazonador/aromático (macro ≈0)?
+
+    SSOT de los dos guards. Con el knob apagado vuelve al `in` de subcadena previo, que traga
+    Salmón/Salami/Salsa. tooltip-anchor: P1-SEASONING-WORD-BOUNDARY"""
+    if not bare_low:
+        return False
+    if not SEASONING_WORD_BOUNDARY:
+        return any(_seas in bare_low for _seas in _QTY_GUARD_SEASONING_SKIP)
+    return bool(_QTY_GUARD_SEASONING_RE.search(bare_low))
+
+
 QTY_PRESENCE_GUARD_ENABLED = _env_bool("MEALFIT_QTY_PRESENCE_GUARD", True)
 
 
@@ -17674,7 +17718,9 @@ def _ensure_ingredient_quantities(meal: dict, db) -> int:
             if qty and qty > 0:
                 continue  # ya tiene cantidad líder
             bare_low = _sa(str(bare).lower())
-            if any(_seas in bare_low for _seas in _QTY_GUARD_SEASONING_SKIP):
+            # [P1-SEASONING-WORD-BOUNDARY · 2026-07-26] por límite de palabra: con `in` un "Salmón"
+            # sin gramos se saltaba como sazón y quedaba contando ≈0 en macros.
+            if _is_seasoning_name(bare_low):
                 continue  # sazonador/aromático (macro ≈0) → no inyectar porción
             info = None
             try:
@@ -17756,7 +17802,9 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
             except Exception:
                 continue
             bare_low = _sa(str(bare).lower())
-            if any(_seas in bare_low for _seas in _QTY_GUARD_SEASONING_SKIP):
+            # [P1-SEASONING-WORD-BOUNDARY · 2026-07-26] `"sal"` ⊂ `"salsa"` dejaba pasar la salsa de
+            # soya del wok (plan 2b3be84e): listada, comprada, ~900 mg de sodio, y ningún paso la usa.
+            if _is_seasoning_name(bare_low):
                 continue  # sazonador → puede no estar en pasos legítimamente
             # [P1-BLENDER-STEP-COHERENCE · 2026-07-06] (review visual, batido verde plan de 30d)
             # agua/hielo son triviales: no requieren un paso de uso explícito y su identidad
