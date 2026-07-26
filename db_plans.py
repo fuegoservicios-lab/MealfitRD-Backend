@@ -1117,6 +1117,26 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _rbs(_pd, user_id=data.get("user_id"), surface=surface)
                 except Exception as _rbs_e:
                     logger.debug(f"[P1-BAND-SCORE-POST-FINALIZE] pre-INSERT no-op: {type(_rbs_e).__name__}: {_rbs_e}")
+                # [P1-MICRO-PANEL-POST-FINALIZE · 2026-07-26] El panel de micronutrientes tenía
+                # EXACTAMENTE el mismo problema que la banda de arriba: se computaba dentro del
+                # pipeline y los pases posteriores (autofix de sodio, caps, cerradores, refill)
+                # cambiaban los ingredientes sin que nadie lo recalculara.
+                #
+                # Medido sobre los 12 planes más recientes: **9 con el panel desfasado**, con
+                # desvíos de −433 a +126 mg de sodio. El plan `c162260c` mostraba al usuario
+                # "Sodio 2133 / 2000 · SOBRE EL LÍMITE" cuando el plan entregado tiene 1841 de
+                # media y **ningún día** supera el techo — falsa alarma. El corrector de sodio no
+                # actuaba porque tenía razón: el plan cumplía; lo que mentía era el número.
+                #
+                # La dirección peligrosa es la contraria y también ocurre (`a3b9510e`: panel 1648
+                # "ok", real 1774): el propio `micronutrients.py` avisa de que *"la dirección
+                # PELIGROSA de un techo es la SUB-estimación"*. Refrescar cierra las dos.
+                try:
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan as _rmr
+                    _rmr(_pd, (_pd.get("form_data") or data.get("form_data") or {}))
+                except Exception as _rmr_e:
+                    logger.debug(f"[P1-MICRO-PANEL-POST-FINALIZE] pre-INSERT no-op: "
+                                 f"{type(_rmr_e).__name__}: {_rmr_e}")
         except Exception as _fce:
             logger.warning(f"[P1-COHERENCE-FINALIZE] {surface} no-op: {type(_fce).__name__}: {_fce}")
 
