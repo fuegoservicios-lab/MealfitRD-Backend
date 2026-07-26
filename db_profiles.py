@@ -657,6 +657,25 @@ _DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     # equivalente V4. Presentes por si un knob los referencia en transición.
     "deepseek-chat":     {"input": 140_000, "output": 280_000, "cached": 2_800},
     "deepseek-reasoner": {"input": 435_000, "output": 870_000, "cached": 3_625},
+    # [P1-LUNA-PRICING · 2026-07-26] Familia gpt-5.6 (pricing oficial OpenAI, tier STANDARD,
+    # consultado 2026-07-26). Los tres se registran aunque hoy sólo `luna` esté en uso: sin fila
+    # de precio, `compute_llm_cost_micros` devuelve None y el evento se persiste con tokens pero
+    # SIN costo — el modelo caro aparecería como gratis en el A/B (medido: la primera corrida del
+    # canario dejó 3 llamadas sin costear). Añadir el hermano ANTES de probarlo, no después.
+    #
+    # ⚠️ OJO con el `cached`: $0.10/M contra $1.00/M de entrada normal = **10× de descuento**, y
+    # el day-gen viene con ~42% de aciertos de caché medidos. Ignorarlo sobreestima el costo de
+    # Luna en casi un 40% de su entrada.
+    #
+    # NO cubierto: la tarifa de ESCRITURA de caché ($1.25/M en luna). `usage_metadata` no la
+    # separa, así que esas escrituras se cobran aquí como entrada normal — el costo real queda
+    # ligeramente subestimado en la primera llamada de cada prompt nuevo.
+    #
+    # El tier PRIORITY cuesta ~2× (luna: $2.00 in / $9.00 out) y NO se usa; si algún día se
+    # activa, hay que duplicar estas filas con otro sufijo de modelo.
+    "gpt-5.6-luna":  {"input": 1_000_000, "output": 6_000_000,  "cached": 100_000},
+    "gpt-5.6-terra": {"input": 2_500_000, "output": 15_000_000, "cached": 250_000},
+    "gpt-5.6-sol":   {"input": 5_000_000, "output": 30_000_000, "cached": 500_000},
 }
 
 
