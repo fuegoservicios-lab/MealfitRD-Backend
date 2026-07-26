@@ -108,3 +108,46 @@ def test_sin_lectura_entregada_muestra_guion_no_cero():
     assert 'c.get(\'band_entregada\')' in s or 'c.get("band_entregada")' in s
     i = s.index("def _fmt(")
     assert 'return "—"' in s[i:i + 260]
+
+
+# ───────────── 4. [P1-BAND-METRIC-NO-SILENT-DROP · 2026-07-26] ninguna corrida se pierde ─────────
+
+def test_la_fila_de_clinical_band_se_emite_siempre():
+    """El guard era `if _band_val is not None:` y descartaba la fila ENTERA cuando la banda no se
+    podía calcular — con ella se iba el `retries` de esa corrida.
+
+    Medido: el plan b2464ffe (2026-07-26 14:55) **reintentó una vez** y no dejó fila; su log tampoco
+    imprimió «CLINICAL BAND SCORE», o sea `_band_val` era None. El sesgo NO es aleatorio: las
+    corridas que se perdían eran justo las problemáticas, las que el A/B más necesita contar."""
+    src = _fuente()
+    i = src.index('"node": "clinical_band",')
+    ventana = src[max(0, i - 1600):i]
+    assert "P1-BAND-METRIC-NO-SILENT-DROP" in ventana
+    assert "if _band_val is not None:" not in ventana, \
+        "volvió el guard que descarta la corrida entera"
+
+
+def test_sin_score_va_cero_pero_MARCADO():
+    """`confidence` es NOT NULL, así que sin score va 0.0. Un 0 sin marca sería PEOR que la fila
+    ausente: bajaría la banda media de la cohorte con un plan que nunca se midió."""
+    src = _fuente()
+    i = src.index('"node": "clinical_band",')
+    bloque = src[i:i + 1400]
+    assert '"confidence": _band_val if _band_val is not None else 0.0' in bloque
+    assert '"band_unavailable": _band_val is None' in bloque
+
+
+def test_el_lector_cuenta_las_corridas_sin_banda_pero_no_las_promedia():
+    sql_ret = _sql("_SQL_COSTO_REINTENTOS")
+    sql_band = _sql("_SQL_BANDA_ENTREGADA")
+    assert "band_unavailable" in sql_ret, "debe contarlas (columna sin_banda)"
+    assert "FILTER (WHERE metadata->>'band_unavailable' = 'true')" in sql_ret
+    assert "<> 'true'" in sql_band, "debe EXCLUIRLAS del promedio de banda"
+
+
+def test_el_lector_explica_que_cuenta_corridas_y_no_planes():
+    """Comparar filas de `clinical_band` contra `meal_plans` da un '362% de cobertura' que no
+    significa nada — me llevó a una falsa alarma. Queda escrito en la salida."""
+    s = _lector()
+    assert "corridas del PIPELINE" in s
+    assert "362%" in s

@@ -54,6 +54,11 @@ _SQL_COSTO_REINTENTOS = """
 SELECT
     COALESCE(metadata->>'daygen_model_cohort', 'sin-tag')                     AS cohorte,
     COUNT(*)                                                                  AS planes,
+    -- [P1-BAND-METRIC-NO-SILENT-DROP · 2026-07-26] Las corridas sin banda calculable ahora SÍ
+    -- emiten fila (antes se descartaban enteras y con ellas su `retries` — y la corrida perdida
+    -- del 14:55 era justo una que reintentó, o sea sesgo NO aleatorio). Cuentan en el denominador
+    -- de reintentos y se excluyen del promedio de banda.
+    COUNT(*) FILTER (WHERE metadata->>'band_unavailable' = 'true')             AS sin_banda,
     AVG(CASE WHEN retries > 0 THEN 1.0 ELSE 0.0 END)                          AS tasa_reintento,
     AVG(retries::float)                                                       AS reintentos_medios,
     AVG(CASE WHEN metadata->>'review_passed' = 'false' THEN 1.0 ELSE 0.0 END) AS tasa_degradado
@@ -73,6 +78,7 @@ SELECT
 FROM pipeline_metrics
 WHERE node = 'clinical_band_final'
   AND created_at > {_DESDE}
+  AND COALESCE(metadata->>'band_unavailable', 'false') <> 'true'
 GROUP BY 1
 ORDER BY 1
 """
@@ -164,7 +170,7 @@ def main() -> int:
         _etiqueta = f"últimos {args.days} días"
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(_q(_SQL_COSTO_REINTENTOS))
-        calidad = [dict(zip(["cohorte", "planes", "tasa_reintento",
+        calidad = [dict(zip(["cohorte", "planes", "sin_banda", "tasa_reintento",
                              "reintentos_medios", "tasa_degradado"], r)) for r in cur.fetchall()]
         cur.execute(_q(_SQL_BANDA_ENTREGADA))
         entregada = {r[0]: dict(zip(["lecturas", "band_entregada", "tasa_degradado"], r[1:]))
@@ -190,14 +196,20 @@ def main() -> int:
 
     print(f"\nCanario de modelo · day generator — {_etiqueta}\n")
     print("CALIDAD por cohorte  (reintentos: node='clinical_band' · banda: node='clinical_band_final')\n")
-    print(f"{'cohorte':<10}{'planes':>8}{'band entr.':>12}{'% reint.':>10}"
+    print(f"{'cohorte':<10}{'corridas':>10}{'sin banda':>11}{'band entr.':>12}{'% reint.':>10}"
           f"{'reint/plan':>12}{'degradados':>13}")
-    print("-" * 65)
+    print("-" * 78)
     for c in calidad:
-        print(f"{c['cohorte']:<10}{c['planes']:>8}{_fmt(c.get('band_entregada')):>12}"
+        print(f"{c['cohorte']:<10}{c['planes']:>10}{c.get('sin_banda') or 0:>11}"
+              f"{_fmt(c.get('band_entregada')):>12}"
               f"{_fmt(c['tasa_reintento'], pct=True):>10}{_fmt(c['reintentos_medios'], nd=2):>12}"
               f"{_fmt(c['tasa_degradado'], pct=True):>13}")
-    print("\n'band entr.' = la banda que el usuario RECIBIÓ. La de `clinical_band` es pre-finalize y\n"
+    print("\n'corridas' = corridas del PIPELINE, no planes persistidos: una regeneración sobreescribe\n"
+          "el plan pero es una corrida más, y es el denominador correcto para una tasa de reintentos.\n"
+          "Comparar estas filas contra `meal_plans` da un '362% de cobertura' que no significa nada.\n"
+          "'sin banda' = corridas donde el score no se pudo calcular: cuentan para reintentos y NO\n"
+          "para el promedio de banda (antes se descartaba la fila entera y se perdía la corrida).\n"
+          "'band entr.' = la banda que el usuario RECIBIÓ. La de `clinical_band` es pre-finalize y\n"
           "en los 2 primeros planes con Luna marcaba 0.833 sobre planes entregados en 1.00.")
 
     print("\n\nCOSTO (llm_usage_events, node='day_generator', por modelo que CORRIÓ)\n")

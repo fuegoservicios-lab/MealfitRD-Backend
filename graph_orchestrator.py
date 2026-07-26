@@ -39343,14 +39343,32 @@ def _compute_pipeline_holistic_score_and_emit(
                     _a1_vr = build_variety_report(plan) or {}
                 except Exception:
                     _a1_vr = {}
-                if _band_val is not None:
+                # [P1-BAND-METRIC-NO-SILENT-DROP · 2026-07-26] El guard era `if _band_val is not
+                # None:` y descartaba la fila ENTERA cuando la banda no se podía calcular. Eso hacía
+                # desaparecer la corrida del A/B — y con ella su `retries`.
+                #
+                # Medido: el plan b2464ffe (2026-07-26 14:55) reintentó una vez y NO dejó fila de
+                # `clinical_band`; el log tampoco imprimió «CLINICAL BAND SCORE», o sea `_band_val`
+                # era None. Un plan que reintenta es exactamente el que el A/B necesita contar, así
+                # que el sesgo no es aleatorio: las corridas problemáticas eran las que se perdían.
+                #
+                # Ahora la fila se emite SIEMPRE, con `confidence=0.0` y `band_unavailable=True`
+                # cuando no hay score. El lector puede excluirlas del promedio de banda sin perder
+                # el denominador ni los reintentos. Preferimos una fila honesta con un hueco marcado
+                # a ninguna fila. tooltip-anchor: P1-BAND-METRIC-NO-SILENT-DROP
+                if True:
                     _emit_progress(initial_state, "metric", {
                         "node": "clinical_band",
                         "duration_ms": int(pipeline_duration * 1000),
                         "retries": final_state.get("attempt", 1) - 1,
                         "tokens_estimated": 0,
-                        "confidence": _band_val,   # = el band score [0,1]
+                        # [P1-BAND-METRIC-NO-SILENT-DROP] `confidence` es NOT NULL en la tabla, así
+                        # que sin score va 0.0 — y `band_unavailable` lo marca para que el lector
+                        # NO lo promedie como un plan malo. Un 0 sin marca sería peor que la fila
+                        # ausente: bajaría la banda media de la cohorte con un dato inexistente.
+                        "confidence": _band_val if _band_val is not None else 0.0,
                         "metadata": {
+                            "band_unavailable": _band_val is None,
                             "cells_in_band": _band.get("cells_in_band"),
                             "cells_total": _band.get("cells_total"),
                             "score_macros_only": _band.get("score_macros_only"),  # [P2-BAND-MACROS-ONLY] kcal-excluido
