@@ -11921,6 +11921,76 @@ def _spans_of_phrase_accent_flex(text: str, phrase: str) -> list:
         return []
 
 
+# [P1-SHELLFISH-CLAUSE-STRIP · 2026-07-26] Frases que SÓLO tienen sentido en moluscos de concha.
+# Cuando el plato no lleva concha, no hay lectura legítima: son restos de una receta original que
+# perdió su proteína en una sustitución (`_rewrite_recipe_steps_after_subs` cambia el SUSTANTIVO,
+# no las cláusulas de técnica del alimento viejo).
+#
+# Caso vivo (plan 2b3be84e, D3 "Filete de pescado blanco al Ajillo sobre Puré de Ñame"):
+#     "Lava bien filete de pescado blanco (si son frescos, retira las barbas)"
+#     "cocina 5-6 minutos, hasta que filete de pescado blanco se abran (desecha los que no se abran)"
+# La receta le dice al usuario que TIRE los filetes que no se abran. El plural del verbo delata la
+# sustitución: concuerda con los mejillones originales, no con el filete.
+#
+# A diferencia de la concordancia de género (que descarté por falsos positivos: hace falta el
+# núcleo del sintagma), estos marcadores son inequívocos — ningún plato sin concha los usa bien.
+_SHELLFISH_HINT = ("mejill", "almeja", "ostra", "chipichip", "vieira", "berberecho",
+                   "concha negra", "molusco")
+_SHELLFISH_PAREN_RE = _re.compile(r"\s*\([^)]*(?:barbas?|se\s+abran)[^)]*\)", _re.IGNORECASE)
+_SHELLFISH_OPEN_RE = _re.compile(r"\bhasta que\b[^.,;]{0,70}?\bse\s+abran\b", _re.IGNORECASE)
+SHELLFISH_CLAUSE_STRIP = _env_bool("MEALFIT_SHELLFISH_CLAUSE_STRIP", True)
+
+
+def _meal_has_shellfish(meal: dict) -> bool:
+    """¿El plato lleva molusco de concha (nombre o ingredientes)? Si sí, sus cláusulas son
+    correctas y NO se tocan."""
+    try:
+        from constants import strip_accents as _sa_sh
+        blob = _sa_sh((str(meal.get("name") or "") + " " + " ".join(
+            str(i) for i in (meal.get("ingredients") or [])
+            + (meal.get("ingredients_raw") or []))).lower())
+        return any(h in blob for h in _SHELLFISH_HINT)
+    except Exception:
+        return True          # fail-safe: ante la duda, no tocar
+
+
+def _strip_shellfish_only_clauses(days: list) -> int:
+    """Quita de los PASOS las cláusulas exclusivas de molusco cuando el plato no lleva concha.
+
+    Dos reparaciones, en este orden:
+      1. paréntesis con `barbas` / `se abran`  → se elimina entero
+         («…filete (si son frescos, retira las barbas).» → «…filete.»)
+      2. `hasta que … se abran`                → «hasta que esté bien cocido»
+
+    Sólo toca `recipe`; jamás ingredientes ni macros. Idempotente (tras el paso 1 ya no queda el
+    paréntesis; tras el 2 ya no queda "se abran"). Fail-safe por comida.
+    tooltip-anchor: P1-SHELLFISH-CLAUSE-STRIP"""
+    n = 0
+    if not isinstance(days, list):
+        return 0
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            try:
+                rec = meal.get("recipe")
+                if not isinstance(rec, list) or _meal_has_shellfish(meal):
+                    continue
+                for i, st in enumerate(rec):
+                    if not isinstance(st, str):
+                        continue
+                    s2 = _SHELLFISH_PAREN_RE.sub("", st)
+                    s2 = _SHELLFISH_OPEN_RE.sub("hasta que esté bien cocido", s2)
+                    if s2 != st:
+                        rec[i] = _re.sub(r"\s+([.,;])", r"\1", s2).strip()
+                        n += 1
+            except Exception:
+                continue
+    return n
+
+
 def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
     """[P1-SUBST-RECIPE-REWRITE · 2026-06-28] Reescribe menciones del ingrediente sustituido en los PASOS de la receta.
     `token_subs`: lista de (tokens_busqueda: list[str], nombre_nuevo: str). Diseño verificado por review adversaria:
@@ -22153,6 +22223,17 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             total += _ngc; parts.append(f"queso_display={_ngc}")
     except Exception as _egc:
         logger.warning(f"[P1-RECIPE-POLISH-5] enrich queso display no-op: {type(_egc).__name__}: {_egc}")
+
+    # [P1-SHELLFISH-CLAUSE-STRIP · 2026-07-26] Instrucciones de MOLUSCO en un plato sin molusco.
+    if SHELLFISH_CLAUSE_STRIP:
+        try:
+            _sfc = _strip_shellfish_only_clauses(days)
+            if _sfc:
+                total += _sfc; parts.append(f"shellfish_clause={_sfc}")
+                logger.info(f"🐚 [P1-SHELLFISH-CLAUSE-STRIP] {_sfc} cláusula(s) de molusco "
+                            f"retiradas de platos sin concha.")
+        except Exception as _esfc:
+            logger.warning(f"[P1-SHELLFISH-CLAUSE-STRIP] no-op: {type(_esfc).__name__}: {_esfc}")
 
     # [P1-CAPS-LAST-WORD · 2026-07-25] Los techos de porción, OTRA VEZ, como última palabra.
     #
