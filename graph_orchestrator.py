@@ -10483,6 +10483,16 @@ CLOSER_NO_DOUBLE_MAIN_ENABLED = _env_bool("MEALFIT_CLOSER_NO_DOUBLE_MAIN", True)
 # proteína (), que era el camino sin blindar: por ahí entraron los 4
 # bolt-on del plan 134591d5. Rollback: MEALFIT_TOPUP_DISH_COHERENCE=false.
 TOPUP_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_TOPUP_DISH_COHERENCE", True)
+# [P1-CLOSER-NO-SPREAD-PLUS-CHEESE · 2026-07-26] Un plato cuyo PROTAGONISTA ya es una pasta
+# grasa untable (mantequilla de maní/almendra) no recibe además un queso encima. Caso que lo
+# destapó: "Apio Relleno con Mantequilla de Maní y Queso Cottage" — 80 g de apio como vehículo,
+# 41 g de mantequilla de maní y 85 g de cottage mezclados en el mismo relleno. Medido: el 8.2%
+# de los platos lleva las dos cosas. Nadie hace ese relleno; son dos rellenos apilados para
+# cerrar macros. Hermano del sweet-guard y del no-double-main: acota el pool y degrada honesto
+# (el piso se cubre en otra comida) en vez de forzar el combo. NO bloquea yogurt ni huevo —
+# un batido de maní con yogurt es normal; lo que no lo es son dos pastas distintas de untar.
+# Rollback: MEALFIT_CLOSER_NO_SPREAD_PLUS_CHEESE=false. tooltip-anchor: P1-CLOSER-NO-SPREAD-PLUS-CHEESE
+CLOSER_NO_SPREAD_PLUS_CHEESE = _env_bool("MEALFIT_CLOSER_NO_SPREAD_PLUS_CHEESE", True)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Congruencia del closer por token ESPECÍFICO del nombre (ricotta/mozzarella/
 # pollo) en vez del primer token genérico ("queso"). Cierra el bug "batido con ricotta recibe un 2º queso
 # (mozzarella)". Flip a False revierte al match por primer-token. tooltip-anchor: P1-CLOSER-COHERENCE
@@ -15568,6 +15578,11 @@ _DAIRY_EGG_PROTEIN_HINT = ("huevo", "clara", "yogur", "yogurt", "queso", "ricott
 # sacrifica el piso de proteína). Default ON; rollback: MEALFIT_CLOSER_NO_DUP_PROTEIN=false. tooltip-anchor: P1-CLOSER-NO-DUP-CHEESE
 _CLOSER_CHEESE_HINT = ("queso", "ricotta", "mozzarella", "cottage", "cheddar", "parmesano", "gouda", "requeson",
                        "requesón", "feta", "cheese", "freir", "freír")
+# [P1-CLOSER-NO-SPREAD-PLUS-CHEESE · 2026-07-26] Pastas grasas untables que, cuando están en el
+# NOMBRE, son el relleno del plato — no un topping. Sin acentos: el caller normaliza con
+# `strip_accents_fn` antes de comparar.
+_SPREAD_PROTAGONIST_HINT = ("mantequilla de mani", "mantequilla de almendra",
+                            "crema de mani", "mantequilla de cajuil")
 CLOSER_NO_DUP_PROTEIN = _env_bool("MEALFIT_CLOSER_NO_DUP_PROTEIN", True)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Palabras GENÉRICAS de proteína que NO sirven para congruencia (las comparten
 # varios alimentos → "queso" matchea ricotta Y mozzarella). La congruencia exige un token ESPECÍFICO fuera de esta lista.
@@ -15666,8 +15681,13 @@ def _dish_coherence_filter(meal: dict, strip_accents_fn):
         _cheese_dish = any(h in _nm for h in _CLOSER_CHEESE_HINT)
         has_main = (CLOSER_DISH_COHERENCE_ENABLED and CLOSER_NO_DOUBLE_MAIN_ENABLED
                     and (_meal_has_main_animal_protein(meal, strip_accents_fn) or _cheese_dish))
+        # [P1-CLOSER-NO-SPREAD-PLUS-CHEESE · 2026-07-26] Se mira el NOMBRE (igual que
+        # `_cheese_dish`): ahí es de lo que va el plato. En la lista de ingredientes una
+        # cucharada de mantequilla de maní puede ser un topping, no el relleno.
+        spread_dish = CLOSER_NO_SPREAD_PLUS_CHEESE and any(
+            h in _nm for h in _SPREAD_PROTAGONIST_HINT)
     except Exception:
-        sweet = has_main = False
+        sweet = has_main = spread_dish = False
 
     def _ok(name_low: str) -> bool:
         try:
@@ -15675,6 +15695,9 @@ def _dish_coherence_filter(meal: dict, strip_accents_fn):
             if (sweet or has_main) and any(h in nlow for h in _MEAT_PROTEIN_HINT):
                 return False
             if sweet and CLOSER_SWEET_NO_LEGUME and any(h in nlow for h in _LEGUME_PROTEIN_HINT):
+                return False
+            # Dos pastas de untar apiladas en el mismo relleno: fuera el queso, no el yogurt.
+            if spread_dish and "queso" in nlow:
                 return False
             return True
         except Exception:
@@ -16116,6 +16139,63 @@ CLOSER_SWEET_DAIRY_MIN_PROTEIN = _env_float("MEALFIT_CLOSER_SWEET_DAIRY_MIN_PROT
 _SWEET_DAIRY_TOKENS = ("yogur", "cottage", "ricotta", "requeson")
 _SWEET_OK_CHEESE_TOKENS = ("ricotta", "requeson", "cottage", "crema")
 
+# [P1-CLOSER-SWEET-DAIRY-FIT · 2026-07-26] Dentro del pool dulce el orden lo daba SOLO la
+# densidad proteica (`_safe_high_density_proteins` ordena por protein/kcal desc). Medido en el
+# catálogo vivo:
+#
+#     Queso cottage   0.1779 prot/kcal   (12.4 g / 70 kcal)
+#     Yogurt          0.1743 prot/kcal   (10.3 g / 59 kcal)
+#
+# Un **2%** de ventaja. Con eso el cottage ganaba SIEMPRE y el cerrador lo pegaba —en 85 g
+# clavados— a cualquier plato dulce que quedara corto de proteína, renombrándolo para no
+# esconderlo (P2-DISH-COHERENCE). Resultado medido sobre 184 comidas de los 60 planes más
+# recientes: **20.1% de TODOS los platos** llevan "queso cottage" en el nombre, y el 8.2% lo
+# llevan junto a mantequilla de maní. De ahí salen "Batido de Guineo con Leche y Canela y Queso
+# Cottage", "Tostadas Francesas con Ricotta y Piña Caramelizada y Queso Cottage" y el caso que
+# lo destapó, "Apio Relleno con Mantequilla de Maní y Queso Cottage".
+#
+# En es-DO el yogurt con fruta es normal y el cottage no. Cuando la diferencia de densidad es
+# despreciable, decide el AJUSTE culinario; fuera de la banda sigue mandando la densidad. Es un
+# REORDEN de candidatos, no un filtro: los dos siguen en el pool, así que el piso de proteína se
+# cumple igual — solo cambia con qué alimento. tooltip-anchor: P1-CLOSER-SWEET-DAIRY-FIT
+CLOSER_SWEET_DAIRY_FIT_ENABLED = _env_bool("MEALFIT_CLOSER_SWEET_DAIRY_FIT", True)
+CLOSER_SWEET_DAIRY_FIT_MARGIN = _env_float("MEALFIT_CLOSER_SWEET_DAIRY_FIT_MARGIN", 0.10)
+# Lácteos que un dominicano SÍ pone sobre fruta fresca / avena / batido.
+_SWEET_DAIRY_FIT_PREFERRED = ("yogur",)
+
+
+def _sweet_dairy_density(info) -> float:
+    """protein/kcal defensivo (0.0 ante datos inválidos)."""
+    try:
+        return float(info.protein) / float(info.kcal) if info and float(info.kcal) > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _reorder_sweet_dairy_by_fit(sweet_dairy: list, margin: float) -> list:
+    """[P1-CLOSER-SWEET-DAIRY-FIT · 2026-07-26] Dentro de la banda `margin` respecto al más
+    denso, el lácteo culinariamente apropiado va primero. Fuera de la banda no se toca el orden
+    por densidad — una diferencia REAL de proteína sigue ganando.
+
+    `sweet_dairy` es una lista de tuplas `(info, nombre_normalizado)`.
+    """
+    try:
+        if not sweet_dairy or len(sweet_dairy) < 2:
+            return sweet_dairy
+        _mejor = max(_sweet_dairy_density(i) for (i, _n) in sweet_dairy)
+        if _mejor <= 0:
+            return sweet_dairy
+        _piso = _mejor * (1.0 - max(0.0, min(1.0, margin)))
+        _banda = [(i, n) for (i, n) in sweet_dairy if _sweet_dairy_density(i) >= _piso]
+        _resto = [(i, n) for (i, n) in sweet_dairy if _sweet_dairy_density(i) < _piso]
+        _banda.sort(key=lambda t: (
+            0 if any(p in t[1] for p in _SWEET_DAIRY_FIT_PREFERRED) else 1,
+            -_sweet_dairy_density(t[0]),
+        ))
+        return _banda + _resto
+    except Exception:
+        return sweet_dairy  # fail-open: ante la duda, el orden previo
+
 
 def _is_savory_cheese_name(nlow: str) -> bool:
     """True si el nombre es un queso NO dulce-compatible (queso blanco/de hoja/mozzarella…)."""
@@ -16197,6 +16277,12 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                         continue  # batido/frío → solo lácteo no-cocción-safe
                     _sweet_dairy.append((_info_sd, _ndlow))
                     _seen_sd.add(_ndlow)
+                # [P1-CLOSER-SWEET-DAIRY-FIT · 2026-07-26] El pool llega ordenado por densidad
+                # (protein/kcal desc) y el cottage le gana al yogurt por un 2% — suficiente para
+                # ganar SIEMPRE. Dentro de la banda de margen decide el ajuste culinario.
+                if CLOSER_SWEET_DAIRY_FIT_ENABLED:
+                    _sweet_dairy = _reorder_sweet_dairy_by_fit(
+                        _sweet_dairy, CLOSER_SWEET_DAIRY_FIT_MARGIN)
                 _no_cheese = [(info, nlow) for (info, nlow) in _pool_meat_free
                               if not _is_savory_cheese_name(nlow)]
                 # lácteo dulce PRIMERO (preferido por orden) + resto no-queso; fallback al pool con queso
