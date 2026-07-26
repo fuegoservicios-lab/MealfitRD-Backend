@@ -9718,6 +9718,12 @@ class BatchParsedIngredients(BaseModel):
 # exacto, que reporta esos días como "omitió la proteína asignada".
 SKELETON_FIDELITY_PLURAL = _env_bool("MEALFIT_SKELETON_FIDELITY_PLURAL", True)
 
+# [P1-SKELETON-FIDELITY-FILLER · 2026-07-26] Tokens de RELLENO del nombre de un alimento: nunca son
+# evidencia de que la proteína esté en el día. Espejo de `_STEM_FILLER` en la coherencia inversa
+# (P2-STEM-FILLER-TOKENS), que se ganó con este mismo caso: "atún en agua".
+_SKELETON_PROTEIN_FILLER_TOKENS = frozenset(("agua", "aceite", "lata", "latas"))
+SKELETON_FIDELITY_FILLER = _env_bool("MEALFIT_SKELETON_FIDELITY_FILLER", True)
+
 _SKELETON_PROTEIN_MODIFIER_STOPWORDS = {
     "proteina", "proteína", "principal", "secundaria", "entero", "enteros",
     "entera", "enteras", "molida", "molido", "molidas", "fresco", "fresca",
@@ -9750,6 +9756,22 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
             t for t in _re2.findall(r"[a-záéíóúñ]+", alt)
             if len(t) >= 3 and t not in _SKELETON_PROTEIN_MODIFIER_STOPWORDS
         ]
+        # [P1-SKELETON-FIDELITY-FILLER · 2026-07-26] …y los tokens de RELLENO jamás son evidencia.
+        # El chequeo es `any(token)`, así que `'atún en agua'` matcheaba por **`agua`**: cualquier
+        # receta que mencione agua hacía creer al gate que el atún estaba presente, tapando una
+        # omisión real (verificado sobre el plan a3b9510e: matcher=True con "atún" ausente del día).
+        #
+        # Este repo YA aprendió esto con el MISMO alimento, en la función hermana:
+        #   [P2-STEM-FILLER-TOKENS · 2026-07-06] "agua/aceite/lata jamás son evidencia de uso (el
+        #   'atún en agua' quedaba sin paso porque la masa de las arepitas usaba agua real)"
+        # Estaba arreglado en `_ensure_ingredients_used_in_recipe` y no aquí.
+        #
+        # Fallback si el filtro vacía la lista: se usan los tokens sin filtrar — un alimento cuyo
+        # nombre sea SÓLO relleno quedaría si no marcado como omitido siempre.
+        if SKELETON_FIDELITY_FILLER:
+            _sin_relleno = [t for t in toks if t not in _SKELETON_PROTEIN_FILLER_TOKENS]
+            if _sin_relleno:
+                toks = _sin_relleno
         # [P1-SKELETON-FIDELITY-PLURAL · 2026-07-26] …y concordancia de número. El skeleton
         # asigna el alimento en PLURAL ("huevos") y el día lo lista en SINGULAR ("1 huevo
         # entero"): `\bhuevos\b` no casa y el día se reportaba como "omitió la proteína".

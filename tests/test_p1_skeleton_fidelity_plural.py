@@ -85,9 +85,53 @@ def test_el_plural_opcional_no_rompe_la_frontera():
     assert go._skeleton_protein_present("pavo", "2 tazas de pavos reales decorativos") is True
 
 
-# ───────────── 3. knob ─────────────
+# ───────────── 3. tokens de relleno [P1-SKELETON-FIDELITY-FILLER] ─────────────
+#
+# El chequeo es `any(token)`, así que `'atún en agua'` matcheaba por **`agua`**: cualquier receta
+# que mencione agua hacía creer al gate que el atún estaba presente — tapando una omisión REAL.
+# Verificado sobre el plan vivo a3b9510e: matcher=True con "atún" ausente del día.
+#
+# ⚠️ Este repo ya aprendió esto con el MISMO alimento en la función hermana
+# (P2-STEM-FILLER-TOKENS, 2026-07-06: *"el 'atún en agua' quedaba sin paso porque la masa de las
+# arepitas usaba agua real"*). Estaba arreglado allí y no aquí.
+
+@pytest.mark.parametrize("asignado,texto_del_dia", [
+    ("atún en agua", "1 huevo, 3 cdas de harina, media taza de agua tibia"),
+    ("sardinas en lata", "1 lata de habichuelas rojas"),
+    ("atún en aceite", "1 cda de aceite de oliva y lechuga"),
+])
+def test_el_relleno_no_prueba_que_la_proteina_este(asignado, texto_del_dia):
+    assert go._skeleton_protein_present(asignado, texto_del_dia) is False
+
+
+@pytest.mark.parametrize("asignado,texto_del_dia", [
+    ("atún en agua", "110 g de atún en agua escurrido"),
+    ("sardinas en lata", "40 g de sardinas en lata"),
+])
+def test_con_la_proteina_REAL_sigue_matcheando(asignado, texto_del_dia):
+    assert go._skeleton_protein_present(asignado, texto_del_dia) is True
+
+
+def test_alimento_cuyo_nombre_EMPIEZA_por_relleno_no_se_queda_sin_tokens():
+    """'aceite de oliva': filtrar 'aceite' deja 'oliva', que sí identifica. El fallback protege
+    el caso extremo en que el filtro vaciara la lista."""
+    assert go._skeleton_protein_present("aceite de oliva", "1 cda de aceite de oliva") is True
+
+
+# ───────────── 4. knobs ─────────────
 
 def test_knob_de_rollback(monkeypatch):
     monkeypatch.setattr(go, "SKELETON_FIDELITY_PLURAL", False)
     assert go._skeleton_protein_present("huevos", "1 huevo entero") is False
     assert go._skeleton_protein_present("huevos", "2 huevos") is True
+
+
+def test_knob_de_rollback_filler(monkeypatch):
+    monkeypatch.setattr(go, "SKELETON_FIDELITY_FILLER", False)
+    assert go._skeleton_protein_present("atún en agua", "media taza de agua tibia") is True
+
+
+def test_la_lista_de_relleno_no_contiene_alimentos():
+    """Meter un alimento aquí lo volvería invisible para el gate en todos los planes."""
+    for sospechoso in ("atun", "atún", "sardinas", "pollo", "huevo", "queso", "leche", "res"):
+        assert sospechoso not in go._SKELETON_PROTEIN_FILLER_TOKENS
