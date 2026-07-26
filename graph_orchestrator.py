@@ -15493,6 +15493,35 @@ def _closer_step_agreement(nm_sa: str) -> tuple[bool, bool]:
         return (False, False)
 
 
+# [P1-GAINMUSCLE-NO-DOUBLE-CARB · 2026-07-26] Bases de carbohidrato de un plato es-DO. El arroz
+# NO está aquí: el refill consolida en una línea de arroz existente en vez de duplicarla, así que
+# un plato que ya lleva arroz no es "conflictivo" — es el destino ideal.
+_CARB_BASE_TOKENS = (
+    "pasta", "espagueti", "macarron", "coditos", "fideos", "tallarines", "lasana",
+    "pan ", "pan integral", "tostada", "casabe", "arepita", "tortilla de harina",
+    "name", "yuca", "batata", "yautia", "mapuey", "platano", "papa", "avena",
+    "bulgur", "quinoa", "cebada", "granola", "pancake", "panqueque", "mangu",
+)
+
+
+def _meal_has_conflicting_carb_base(meal: dict, strip_accents_fn) -> bool:
+    """[P1-GAINMUSCLE-NO-DOUBLE-CARB · 2026-07-26] ¿El plato YA tiene una base de carbohidrato
+    distinta del arroz?
+
+    Mira NOMBRE + INGREDIENTES: la base puede no estar en el título ("Res Salteada al Wok con
+    Pasta Integral" sí la dice, pero "Bowl criollo" con ¾ taza de pasta no). Pura, fail-open a
+    False = comportamiento previo.
+    """
+    try:
+        _n = strip_accents_fn(str(meal.get("name", "")).lower())
+        _i = strip_accents_fn(" | ".join(
+            str(x) for x in (meal.get("ingredients") or []) if isinstance(x, str)).lower())
+        _blob = f"{_n} | {_i}"
+        return any(t in _blob for t in _CARB_BASE_TOKENS)
+    except Exception:
+        return False
+
+
 def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
                               stewy: bool = False, precooked: bool = False) -> str:
     """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
@@ -25253,11 +25282,24 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
             day_carbs = sum(_meal_macro_num(m.get("carbs")) for m in ms)
             if day_kcal >= floor:
                 continue  # ya en/sobre banda → no tocar (protege el caso bueno)
+            # [P1-GAINMUSCLE-NO-DOUBLE-CARB · 2026-07-26] El orden era SOLO por slot, así que el
+            # arroz aterrizaba en el almuerzo aunque ese plato ya tuviera su base. Plan vivo
+            # 0afa0ed5, día 1: "Res Salteada al Wok con Pasta Integral" (¾ taza de pasta) recibió
+            # además 30 g de arroz + la nota "Acompaña este plato con el arroz blanco…". Pasta y
+            # arroz en el mismo plato: nadie come eso. Es el simétrico del NO_DOUBLE_MAIN de
+            # proteínas, aplicado al carbohidrato.
+            #
+            # REORDEN, no filtro: las comidas SIN base de carbo (o que ya llevan arroz, donde el
+            # refill consolida en vez de duplicar) van primero; el resto conserva su orden por
+            # slot detrás. Si TODAS tienen base, el comportamiento es el de antes y el piso
+            # calórico —que es clínico para gain-muscle— se cumple igual.
             _mains = sorted(
                 (m for m in ms if not _is_sweet_meal(m, _sa_gm)
                  and not any(b in _sa_gm(str(m.get("name", "")).lower()) for b in _BEVERAGE_MEAL_MARKERS)),
-                key=lambda mm: next((r for s, r in _slot_rank.items()
-                                     if s in _sa_gm(str(mm.get("meal", "")).lower())), 3))
+                key=lambda mm: (
+                    1 if _meal_has_conflicting_carb_base(mm, _sa_gm) else 0,
+                    next((r for s, r in _slot_rank.items()
+                          if s in _sa_gm(str(mm.get("meal", "")).lower())), 3)))
             for m in _mains:
                 if day_kcal >= floor:
                     break
