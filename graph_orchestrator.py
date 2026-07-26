@@ -19913,23 +19913,43 @@ def _run_assembly_validations(
                 # Ahora chequeamos TODOS los core_nouns. Si AL MENOS UNO
                 # aparece en la receta, el ingrediente está "usado". Solo
                 # flageamos si NINGUNO se menciona.
+                # [P1-COHERENCE-SHORTNOUN-FP · 2026-07-26] Solo los núcleos de ≥4 letras son
+                # VERIFICABLES: el chequeo de mención los exige (prefijo de 5) y los más cortos
+                # se saltaban... pero luego servían de `err_noun` de reserva. O sea que un
+                # ingrediente cuyo único núcleo fuera corto —'sal', 'ajo'— NO PODÍA ser
+                # verificado nunca y SIEMPRE se reportaba. Falso positivo garantizado.
+                _verificables = [cn for cn in core_nouns if len(cn) >= 4]
                 any_mentioned = False
-                for cn in core_nouns:
-                    if len(cn) < 4:
-                        continue
+                for cn in _verificables:
                     prefix = cn[:min(5, len(cn))]
-                    permissive_pattern = r'\b' + _re.escape(prefix) + r'[a-z]*\b'
+                    # [P1-COHERENCE-SHORTNOUN-FP · 2026-07-26] `[a-z]*` NO incluye la ñ ni las
+                    # vocales acentuadas, así que "champiñones" no casaba consigo mismo:
+                    # `\bchamp[a-z]*\b` avanza hasta "champi", choca con la ñ (que SÍ es \w) y
+                    # el \b final no cierra → sin match → falso positivo. Afectaba a todo
+                    # alimento con ñ o tilde más allá de la 5ª letra (champiñones, ñame,
+                    # plátano, maíz). `\w*` es Unicode-aware en Python 3.
+                    permissive_pattern = r'\b' + _re.escape(prefix) + r'\w*\b'
                     if _re.search(permissive_pattern, recipe):
                         any_mentioned = True
                         break
                 if not any_mentioned:
-                    # Mensaje conserva el primer core_noun de tamaño ≥4
-                    # (más identificativo); fallback a core_nouns[0] si
-                    # ninguno alcanza el threshold.
-                    err_noun = next(
-                        (cn for cn in core_nouns if len(cn) >= 4),
-                        core_nouns[0],
-                    )
+                    # No verificable ⇒ no se afirma la violación. Medido en el plan 0afa0ed5:
+                    # 9 errores emitidos, SIETE de ellos sobre 'sal' ("Sal al gusto" no tiene por
+                    # qué salir en los pasos) y uno sobre 'ajo'. El daño no era el ruido: el
+                    # auto-patch aguas abajo REMOVÍA esos ingredientes de la lista sin reescribir
+                    # los pasos, y quedaban recetas diciendo "pica el ajo" sin ajo que comprar
+                    # (2 recetas de 12 en ese plan). "No pude comprobarlo" ≠ "está mal".
+                    if not _verificables:
+                        continue
+                    # Un sazonador tampoco es "ingrediente principal": mismo SSOT que el guard de
+                    # cantidades (P1-SEASONING-WORD-BOUNDARY), con límite de palabra para no
+                    # tragarse Salmón/Salami/Salsa.
+                    try:
+                        if all(_is_seasoning_name(cn) for cn in _verificables):
+                            continue
+                    except Exception:
+                        pass
+                    err_noun = _verificables[0]
                     msg = f"Día {day.get('day')}, {meal.get('name')}: El ingrediente principal '{err_noun}' está listado pero no se menciona en las instrucciones de la receta."
                     recipe_coherence_errors.append(msg)
     if recipe_coherence_errors:
