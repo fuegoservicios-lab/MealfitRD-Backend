@@ -73,12 +73,17 @@ SELECT
     COUNT(*)                                    AS llamadas,
     SUM(input_tokens)                           AS tokens_in,
     SUM(output_tokens)                          AS tokens_out,
-    SUM(cost_usd_micros) / 1e6                  AS usd
+    SUM(cost_usd_micros) / 1e6                  AS usd,
+    -- [P1-DAYGEN-LUNA-CANARY] Un modelo que no está en `_DEFAULT_LLM_PRICING_MICROS_PER_M`
+    -- persiste tokens pero NO costo. Sin esta columna, SUM(NULL)=NULL se imprimiría como
+    -- 0.0000 y el modelo caro parecería gratis — el error más caro que podría cometer esta
+    -- tabla. Se distingue "no cuesta nada" de "no sabemos cuánto cuesta".
+    COUNT(cost_usd_micros)                      AS con_precio
 FROM llm_usage_events
 WHERE node = 'day_generator'
   AND created_at > NOW() - (%s || ' days')::interval
 GROUP BY 1
-ORDER BY 5 DESC
+ORDER BY 5 DESC NULLS LAST
 """
 
 
@@ -121,7 +126,7 @@ def main() -> int:
         cur.execute(_SQL_RAZONES, (d,))
         razones_raw = cur.fetchall()
         cur.execute(_SQL_COSTO, (d,))
-        costo = [dict(zip(["model", "llamadas", "tokens_in", "tokens_out", "usd"], r))
+        costo = [dict(zip(["model", "llamadas", "tokens_in", "tokens_out", "usd", "con_precio"], r))
                  for r in cur.fetchall()]
 
     razones = {}
@@ -147,13 +152,26 @@ def main() -> int:
     print(f"{'modelo':<22}{'llamadas':>10}{'tok in':>12}{'tok out':>10}{'USD':>10}{'USD/call':>11}")
     print("-" * 75)
     total_usd = 0.0
+    sin_precio = []
     for c in costo:
+        n = c["llamadas"] or 0
+        if not c.get("con_precio"):
+            sin_precio.append((c["model"], n, c["tokens_in"] or 0, c["tokens_out"] or 0))
+            print(f"{c['model']:<22}{n:>10}{c['tokens_in'] or 0:>12,}"
+                  f"{c['tokens_out'] or 0:>10,}{'sin precio':>10}{'—':>11}")
+            continue
         usd = float(c["usd"] or 0)
         total_usd += usd
-        por_call = usd / c["llamadas"] if c["llamadas"] else 0
-        print(f"{c['model']:<22}{c['llamadas']:>10}{c['tokens_in'] or 0:>12,}"
-              f"{c['tokens_out'] or 0:>10,}{usd:>10.4f}{por_call:>11.5f}")
-    print(f"{'TOTAL':<22}{'':>10}{'':>12}{'':>10}{total_usd:>10.4f}")
+        print(f"{c['model']:<22}{n:>10}{c['tokens_in'] or 0:>12,}"
+              f"{c['tokens_out'] or 0:>10,}{usd:>10.4f}{usd / n if n else 0:>11.5f}")
+    print(f"{'TOTAL con precio':<22}{'':>10}{'':>12}{'':>10}{total_usd:>10.4f}")
+    for mdl, n, ti, to in sin_precio:
+        print(f"\n  ⚠ '{mdl}' no está en la tabla de precios: {n} llamadas con {ti:,} tokens de "
+              f"entrada y {to:,} de salida quedaron SIN costo.\n"
+              f"    Los tokens sí están guardados, así que el costo se puede backfillar. Para que "
+              f"se registre de aquí en adelante:\n"
+              f"    MEALFIT_LLM_PRICING_JSON='{{\"{mdl}\": {{\"input\": <micros/M>, "
+              f"\"output\": <micros/M>}}}}'  (USD/1M × 1e6)")
 
     if razones:
         print("\n\nPOR QUÉ SE REINTENTÓ (razones acumuladas, top por cohorte)\n")
