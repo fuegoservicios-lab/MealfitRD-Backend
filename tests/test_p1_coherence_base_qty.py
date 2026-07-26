@@ -40,6 +40,35 @@ def test_apply_smart_market_units_devuelve_la_base():
     assert r.get("base_unit") == "cdta"
 
 
+def test_la_ruta_por_PESO_tambien_produce_base():
+    """⚠️ El aggregator tiene DOS rutas y solo una trae `raw_qty`:
+
+        por unidades:  apply_smart_market_units(name, 0.0, u,   q,   ...)
+        por peso:      apply_smart_market_units(name, lbs, 'lb', 0.0, ...)
+
+    Mi primera versión solo miraba `raw_qty`, así que en la ruta de peso guardaba 0.0 y el
+    extractor lo descartaba. Medido sobre el plan vivo fbe53a5b: **2 de 48 items** tenían base.
+    El fix quedaba inerte justo donde más items hay — mismo modo de fallo que dejó muerto
+    P1-CAPPED-STAPLE-HONESTY, y solo se ve MIDIENDO el resultado, no leyendo el código.
+    """
+    r = sc.apply_smart_market_units("Pechuga de pollo", 1.5, "lb", 0.0)
+    assert r.get("base_unit") == "g"
+    assert r.get("base_qty") == pytest.approx(1.5 * 453.592, rel=1e-3)
+
+
+def test_las_dos_rutas_del_helper():
+    assert sc._coherence_base_fields(2.0, "unidad", 0.0) == {"base_qty": 2.0, "base_unit": "unidad"}
+    assert sc._coherence_base_fields(0.0, "lb", 1.5)["base_unit"] == "g"
+
+
+@pytest.mark.parametrize("args", [(0.0, "lb", 0.0), ("x", None, None), (None, None, None),
+                                  (-1, "g", -1)])
+def test_el_helper_es_fail_safe(args):
+    """Sin datos utilizables devuelve {} y el item sale sin base → el extractor cae al
+    comportamiento previo. Nunca revienta la cadena del aggregator."""
+    assert sc._coherence_base_fields(*args) == {}
+
+
 def test_la_base_no_pisa_las_claves_de_mercado():
     """Aditivo: quien lee `market_*` no se entera del cambio."""
     r = sc.apply_smart_market_units("Miel", 0.5, "cdta", 12.0)

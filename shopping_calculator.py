@@ -3189,6 +3189,29 @@ def _sku_size_label(size_g: float, unit_hint: str = None) -> str:
     return f"{int(size_g)}g"
 
 
+# [P1-COHERENCE-BASE-QTY · 2026-07-26] Cantidad en unidad BASE del item de la lista, en el
+# mismo idioma en que hablan las recetas (g / taza / cda / unidad). Es lo que permite al
+# coherence guard emparejar; con `market_qty` (pote/sobre/paquete/mazo) no hay pareja posible.
+#
+# Las DOS rutas del aggregator entregan la cantidad en sitios distintos:
+#   - por unidades: raw_qty>0, unit_str='unidad'/'taza'/... -> se usa tal cual
+#   - por peso:     raw_qty=0.0 y la cantidad viaja en weight_in_lbs -> se convierte a gramos
+# Sin cubrir la segunda, el 96% de los items se quedaba sin base (medido: 2 de 48).
+_LB_TO_G = 453.592
+
+
+def _coherence_base_fields(raw_qty, unit_str, weight_in_lbs) -> dict:
+    """Devuelve `{'base_qty', 'base_unit'}` o `{}` si no se puede determinar. Fail-safe."""
+    try:
+        if isinstance(raw_qty, (int, float)) and float(raw_qty) > 0 and unit_str:
+            return {"base_qty": float(raw_qty), "base_unit": str(unit_str).strip().lower()}
+        if isinstance(weight_in_lbs, (int, float)) and float(weight_in_lbs) > 0:
+            return {"base_qty": round(float(weight_in_lbs) * _LB_TO_G, 2), "base_unit": "g"}
+    except Exception:
+        pass
+    return {}
+
+
 def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None):
     """Motor determinístico de unidades de mercado dominicano.
     
@@ -3894,9 +3917,18 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         # `compare_expected_vs_aggregated` ya avisaba: el caller debe comparar ANTES de esta
         # conversión. Preservar la base aquí es la forma no-invasiva de cumplirlo.
         #
-        # Aditivo: nadie que lea `market_*` se entera. tooltip-anchor: P1-COHERENCE-BASE-QTY
-        "base_qty": float(raw_qty) if isinstance(raw_qty, (int, float)) else None,
-        "base_unit": str(unit_str) if unit_str else None,
+        # Aditivo: nadie que lea `market_*` se entera.
+        #
+        # ⚠️ HAY DOS RUTAS DE ENTRADA y solo una trae `raw_qty`:
+        #   - por UNIDADES  (línea ~9858): `apply_smart_market_units(name, 0.0, u, q, ...)`
+        #   - por PESO      (línea ~9816): `apply_smart_market_units(name, lbs, 'lb', 0.0, ...)`
+        # La primera versión de este bloque solo miraba `raw_qty`, así que en la ruta de peso
+        # guardaba 0.0 y el extractor lo descartaba: medido sobre el plan vivo fbe53a5b,
+        # **2 de 48 items** tenían base. El fix quedaba inerte justo donde más items hay.
+        # Es el mismo modo de fallo que dejó muerto P1-CAPPED-STAPLE-HONESTY: código presente,
+        # efecto ausente, y solo se ve midiendo el resultado.
+        # tooltip-anchor: P1-COHERENCE-BASE-QTY
+        **_coherence_base_fields(raw_qty, unit_str, weight_in_lbs),
     }
     if _cap_hit:
         try:
