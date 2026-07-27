@@ -58,7 +58,21 @@ _CANDS = [(0.25, "Pechuga de pollo", _Info("Pechuga de pollo", 31))]
 
 
 def _meal(cals):
-    return {"name": "Pollo con Ensalada", "protein": 5, "carbs": 10, "fats": 5, "cals": cals, "ingredients": ["pollo"]}
+    """Plato SIN proteína principal — es el prerequisito para poder medir la conciencia calórica.
+
+    [reapuntado 2026-07-27] El fixture era "Pollo con Ensalada" con `ingredients: ["pollo"]`,
+    mientras el único candidato es "Pechuga de pollo". Cuando se escribió (2026-06-27) eso daba
+    igual, pero después llegó **P1-CLOSER-NO-DOUBLE-MAIN**: si el plato YA tiene proteína
+    principal y no hay extensor compatible, el cerrador devuelve 0 y no pega una segunda.
+
+    Producción tiene razón —no se le añade pechuga a un plato de pollo— así que el fixture es lo
+    que caducó, no la regla. Con un plato sin proteína las tres aserciones vuelven a medir lo que
+    decían medir: 0 sin margen calórico, >0 con margen, >0 sin `slot_cal_target`.
+
+    Rastreado con `sys.settrace` hasta la línea exacta del `return 0`, no adivinado.
+    """
+    return {"name": "Ensalada Verde", "protein": 5, "carbs": 10, "fats": 5, "cals": cals,
+            "ingredients": ["lechuga", "tomate"]}
 
 
 def test_calorie_aware_skips_when_no_headroom():
@@ -73,6 +87,18 @@ def test_calorie_aware_adds_when_headroom():
 def test_no_slot_cal_target_preserves_original_floor():
     """Callers sin slot_cal_target conservan el comportamiento original (piso 10g), aunque cals sean altas."""
     assert g._close_protein_gap_for_meal(_meal(500), 25, None, _CANDS) > 0
+
+
+def test_no_se_pega_una_segunda_proteina_principal():
+    """[P1-CLOSER-NO-DOUBLE-MAIN] Descubierto al reapuntar `_meal` (2026-07-27).
+
+    Un plato que YA lleva pollo no recibe pechuga de pollo encima. Sin este caso anclado, el
+    próximo que vea el fixture verde podría "arreglar" la regla de vuelta y devolver los platos
+    con dos proteínas principales.
+    """
+    con_pollo = {"name": "Pollo con Ensalada", "protein": 5, "carbs": 10, "fats": 5,
+                 "cals": 150, "ingredients": ["pollo"]}
+    assert g._close_protein_gap_for_meal(con_pollo, 25, None, _CANDS, slot_cal_target=480) == 0
 
 
 def test_calorie_aware_anchor():

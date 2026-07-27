@@ -188,37 +188,29 @@ def test_no_runtime_ddl_create_index_in_active_backend():
 
 
 def test_deprecated_scripts_are_archived():
-    """Verifica que los 4 scripts standalone DDL están archivados.
+    """Los scripts standalone de DDL no deben ser ejecutables desde `backend/`.
 
-    Si reaparece un `<name>.py` sin sufijo `.bak`, el test falla y guía
-    al renombrado correcto. Garantiza que el fix de P1-A no se revierte
-    por accidente (ej. un git revert de un commit cosmético).
+    [reapuntado 2026-07-27] Este test exigía que los 5 `.bak` archivados ESTUVIERAN presentes.
+    Ya no existen en el árbol (ni con `.bak` ni sin él, verificado con `find`), así que exigir su
+    presencia dejaba el test rojo de forma permanente sin proteger nada.
+
+    **Borrarlos es estrictamente más fuerte que archivarlos.** La defensa P2-C (header
+    `[DEPRECATED]` + `sys.exit(1)`) existía para el caso "un cron externo tiene la ruta absoluta y
+    ejecuta el `.bak`"; si el archivo no existe, ese cron falla solo. Lo que sigue importando —y es
+    lo único que este test comprueba ahora— es que NO REAPAREZCAN en forma ejecutable.
+
+    La invariante de fondo (cero DDL en código activo) la siguen guardando los tres
+    `test_no_runtime_ddl_*` de arriba, que están en verde.
     """
-    expected_archived = [
-        "_deprecated_migrate_quality_alerts.py.bak",
-        "_deprecated_alter_db.py.bak",
-        "_deprecated_add_price_cols.py.bak",
-        "_deprecated_migrate_subscriptions.py.bak",
-        # [P3-2 · 2026-05-08] Archivo `add_semantic_cache.py` cuyo DDL fue
-        # consolidado a `migrations/p1_1_consolidate_semantic_cache_ddl.sql`.
-        "_deprecated_add_semantic_cache.py.bak",
-    ]
-    missing = [
-        name for name in expected_archived
-        if not (_BACKEND_ROOT / name).is_file()
-    ]
-    assert not missing, (
-        f"Scripts DDL deprecated faltan en backend/: {missing}. "
-        "Si los renombraste, actualiza la lista en este test. "
-        "Si fueron borrados, el test debe eliminarse junto con la entrada del registry."
-    )
-
-    # Y también: NO deben re-aparecer las versiones sin .bak
+    # NO deben re-aparecer las versiones sin .bak
     forbidden_active = [
         "migrate_quality_alerts.py",
         "alter_db.py",
         "add_price_cols.py",
         "migrate_subscriptions.py",
+        # [2026-07-27] Añadido: estaba en la lista de archivados pero NO en la de prohibidos,
+        # así que podía reaparecer como script activo sin que ningún test lo notara.
+        "add_semantic_cache.py",
     ]
     leaked = [
         name for name in forbidden_active
@@ -258,7 +250,8 @@ def test_deprecated_scripts_have_deprecation_header_and_exec_guard():
     for fname, ssot_path in archived_with_ssot_pointer.items():
         path = _BACKEND_ROOT / fname
         if not path.is_file():
-            failures.append(f"{fname}: archivo no existe (ver test_deprecated_scripts_are_archived)")
+            # [reapuntado 2026-07-27] Ausente = mejor que archivado-con-guard: un `.bak` que no
+            # existe no lo puede ejecutar ningún cron. Solo se auditan los que SIGUEN presentes.
             continue
         try:
             content = path.read_text(encoding="utf-8")

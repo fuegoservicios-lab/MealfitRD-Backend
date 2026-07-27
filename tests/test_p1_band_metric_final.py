@@ -25,31 +25,46 @@ medir el sesgo de la serie vieja.
 """
 from pathlib import Path
 
+import re
+
 import graph_orchestrator as go
 
 SRC = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
 DBP = (Path(go.__file__).resolve().parent / "db_plans.py").read_text(encoding="utf-8")
 
 
+def _cuerpo(src: str, nombre: str) -> str:
+    """Cuerpo COMPLETO de una función, cortado en el siguiente `def`/`class` de nivel superior.
+
+    [reapuntado 2026-07-27] Los cinco tests de abajo cortaban `SRC[i:i+3000]`. La función creció a
+    61 líneas y `"clinical_band_final"` y `except Exception` cayeron FUERA de la ventana, así que
+    dos tests se pusieron rojos sin que producción tuviera nada mal.
+
+    Es la sexta ventana de bytes fija caducada en esta sesión. Un límite estructural no caduca
+    cuando la función engorda; un número mágico sí.
+    """
+    i = src.index("def " + nombre)
+    resto = src[i:]
+    m = re.search(r"^(?:def |class |@)", resto[1:], re.MULTILINE)
+    return resto[:m.start() + 1] if m else resto
+
+
 def test_emite_nodo_propio_no_pisa_la_serie_vieja():
-    i = SRC.index("def _emit_clinical_band_final_metric")
-    body = SRC[i:i + 3000]
+    body = _cuerpo(SRC, "_emit_clinical_band_final_metric")
     assert '"clinical_band_final"' in body, (
         "nodo propio: reusar 'clinical_band' mezclaría lecturas pre y post finalize en la misma serie"
     )
 
 
 def test_lleva_el_score_pre_finalize_en_metadata():
-    i = SRC.index("def _emit_clinical_band_final_metric")
-    body = SRC[i:i + 3000]
+    body = _cuerpo(SRC, "_emit_clinical_band_final_metric")
     assert '"pre_finalize_score": prev_score' in body, (
         "sin el par (pre, post) no se puede medir cuánto sesgaba la serie vieja"
     )
 
 
 def test_se_invoca_desde_el_refresh_post_finalize():
-    i = SRC.index("def refresh_clinical_band_score_post_finalize")
-    body = SRC[i:i + 4000]
+    body = _cuerpo(SRC, "refresh_clinical_band_score_post_finalize")
     assert "_emit_clinical_band_final_metric(_bs, _prev_val, plan_data, user_id, surface)" in body
     # …y sobre `_bs` (la lectura fresca), nunca sobre `_prev`.
     assert "_emit_clinical_band_final_metric(_prev" not in body
@@ -71,8 +86,7 @@ def test_camino_independiente_del_sse():
 
 
 def test_gate_de_invitados_y_knob():
-    i = SRC.index("def _emit_clinical_band_final_metric")
-    body = SRC[i:i + 3000]
+    body = _cuerpo(SRC, "_emit_clinical_band_final_metric")
     # Mismo gate P1-Q10 que `_emit_progress`: sin él, un invitado dispara IntegrityError por plan.
     assert "_is_guest_metrics_enabled()" in body
     assert 'BAND_METRIC_FINAL_EMIT = _env_bool("MEALFIT_BAND_METRIC_FINAL_EMIT", True)' in SRC
@@ -81,6 +95,5 @@ def test_gate_de_invitados_y_knob():
 
 def test_fail_safe():
     """Nunca puede bloquear el INSERT del plan: la telemetría es observabilidad, no producto."""
-    i = SRC.index("def _emit_clinical_band_final_metric")
-    body = SRC[i:i + 3000]
+    body = _cuerpo(SRC, "_emit_clinical_band_final_metric")
     assert "except Exception" in body and "logger.debug" in body

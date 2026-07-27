@@ -50,17 +50,49 @@ def _extract_method_body(class_body: str, method_name: str) -> str:
     return m.group(0) if m else ""
 
 
-def test_ainvoke_override_captures_usage():
-    """`ChatDeepSeek.ainvoke` debe llamar
-    `_emit_llm_usage_event_best_effort` ANTES del `return result`."""
-    text = _read_graph()
-    class_match = re.search(
-        r"class ChatDeepSeek\(_ChatDeepSeekBase\):.*?(?=^class |\Z)",
-        text,
+def _instrumented_class_body() -> str:
+    """Cuerpo de la clase donde VIVEN hoy los overrides instrumentados.
+
+    [reapuntado 2026-07-27] Estos tests buscaban `class ChatDeepSeek(_ChatDeepSeekBase):`. Los
+    overrides se movieron a `_LLMBackpressureCostMixin` y `ChatDeepSeek` quedó en un cascarón de
+    12 líneas SIN métodos, así que los 3 quedaron rojos.
+
+    ⚠️ Relajar el regex para tolerar la tupla de bases NO bastaba: habría encontrado el cascarón
+    vacío. Hay que escanear donde está el comportamiento, y anclar aparte que la clase use el
+    mixin (ver `test_chat_deepseek_hereda_el_mixin_instrumentado`).
+    """
+    m = re.search(
+        r"^class _LLMBackpressureCostMixin\b.*?(?=^class |\Z)",
+        _read_graph(),
         re.MULTILINE | re.DOTALL,
     )
-    assert class_match, "Subclase `ChatDeepSeek` no encontrada."
-    class_body = class_match.group(0)
+    assert m, "Mixin `_LLMBackpressureCostMixin` no encontrado — ¿se renombró?"
+    return m.group(0)
+
+
+def test_chat_deepseek_hereda_el_mixin_instrumentado():
+    """Ancla 'código presente, efecto ausente': el mixin puede existir intacto y no correr.
+
+    Dos formas de romperlo en silencio: sacarlo de las bases, o ponerlo DESPUÉS del base — en ese
+    orden el MRO resuelve `ainvoke`/`astream`/`agenerate` contra `_ChatDeepSeekBase` y la
+    instrumentación de coste deja de ejecutarse sin que falle nada.
+    """
+    m = re.search(r"^class ChatDeepSeek\((.*?)\)\s*:", _read_graph(), re.MULTILINE)
+    assert m, "Subclase `ChatDeepSeek` no encontrada."
+    bases = [b.strip() for b in m.group(1).split(",") if b.strip()]
+    assert "_LLMBackpressureCostMixin" in bases, (
+        f"`ChatDeepSeek` ya no hereda del mixin instrumentado (bases: {bases}) — "
+        "los eventos de coste dejarían de emitirse."
+    )
+    assert bases[0] == "_LLMBackpressureCostMixin", (
+        f"El mixin debe ir PRIMERO en las bases (hoy: {bases}). Después del base, el MRO "
+        "resuelve los overrides contra `_ChatDeepSeekBase` y la instrumentación no corre."
+    )
+
+
+def test_ainvoke_override_captures_usage():
+    """`ainvoke` debe llamar `_emit_llm_usage_event_best_effort` ANTES del `return result`."""
+    class_body = _instrumented_class_body()
 
     ainvoke_body = _extract_method_body(class_body, "ainvoke")
     assert ainvoke_body, "Override de `ainvoke` no encontrado."
@@ -81,13 +113,7 @@ def test_astream_override_accumulates_for_usage():
     """`ChatDeepSeek.astream` debe acumular chunks y emitir
     usage_metadata al final del stream. Sin esto, day_generator (único callsite
     de `.astream(...)` directo) no se contabiliza."""
-    text = _read_graph()
-    class_match = re.search(
-        r"class ChatDeepSeek\(_ChatDeepSeekBase\):.*?(?=^class |\Z)",
-        text,
-        re.MULTILINE | re.DOTALL,
-    )
-    class_body = class_match.group(0)
+    class_body = _instrumented_class_body()
     astream_body = _extract_method_body(class_body, "astream")
     assert astream_body
     assert "_emit_llm_usage_event_best_effort" in astream_body, (
@@ -106,13 +132,7 @@ def test_astream_override_accumulates_for_usage():
 def test_agenerate_override_extracts_from_llmresult():
     """`agenerate` retorna LLMResult; debe extraer el AIMessage de
     `result.generations[0][0].message` para emitir usage_metadata."""
-    text = _read_graph()
-    class_match = re.search(
-        r"class ChatDeepSeek\(_ChatDeepSeekBase\):.*?(?=^class |\Z)",
-        text,
-        re.MULTILINE | re.DOTALL,
-    )
-    class_body = class_match.group(0)
+    class_body = _instrumented_class_body()
     agen_body = _extract_method_body(class_body, "agenerate")
     assert agen_body
     assert "_emit_llm_usage_event_best_effort" in agen_body, (
