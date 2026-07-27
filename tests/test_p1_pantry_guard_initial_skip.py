@@ -200,9 +200,20 @@ def test_skip_when_pantry_below_threshold():
     )
 
 
-def test_validation_runs_when_pantry_above_threshold():
+def test_validation_runs_when_pantry_above_threshold(monkeypatch):
     """Con nevera de 15 items (≥ default 10), el guard SÍ debe invocar
     `_validate_and_retry_initial_chunk_against_pantry` (comportamiento legacy)."""
+    # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26 · reparado 2026-07-26] El guard nace DORMIDO.
+    # `INITIAL_CHUNK_PANTRY_GUARD_ENABLED` (knob MEALFIT_INITIAL_CHUNK_PANTRY_GUARD) es
+    # default-False desde el incidente d4bc3af5: validar el plan NUEVO contra la nevera vieja lo
+    # rechazaba en sus propios méritos y caía a emergency band-0.0. La lista de compras del plan
+    # nuevo ES la que define qué comprar.
+    #
+    # Este test verifica el camino LEGACY, que sigue existiendo detrás del knob — así que hay que
+    # encenderlo explícitamente. Sin esto afirmaba un comportamiento que producción apagó a
+    # propósito, y el rojo parecía "una validación de despensa no está corriendo".
+    monkeypatch.setattr("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True)
+
     from routers.plans import _run_pantry_validation_for_initial_chunk
 
     fake_result = {"days": [{"meals": [{"name": "test"}]}]}
@@ -285,4 +296,41 @@ def test_knob_can_disable_guard_entirely_by_raising_threshold():
     mock_validate.assert_not_called(), (
         "Con PANTRY_GUARD_MIN_ITEMS=1000 y nevera de 50, el guard debió skipear. "
         "Knob no se está leyendo correctamente."
+    )
+
+
+# ───────────── P1-RENEWAL-PANTRY-IGNORE: el guard nace DORMIDO, y es decisión ─────────────
+
+def test_el_guard_nace_apagado_y_es_a_proposito():
+    """[P1-RENEWAL-PANTRY-IGNORE · 2026-06-26] `MEALFIT_INITIAL_CHUNK_PANTRY_GUARD` es
+    default-**False**. No es un olvido: validar el plan NUEVO contra la nevera VIEJA lo rechazaba
+    en sus propios méritos y caía a emergency band-0.0 (incidente vivo d4bc3af5). La lista de
+    compras del plan nuevo ES la que define qué comprar.
+
+    Los flujos que SÍ deben respetar lo comprado (`/swap-meal/persist`, `/regenerate-day`) son
+    endpoints SEPARADOS y no pasan por aquí.
+
+    Si alguien flipa el default a True, este test falla y le obliga a leer por qué se apagó —
+    que es exactamente lo que a mí me faltó al ver los rojos: parecían "una validación no está
+    corriendo" y eran "una validación apagada a conciencia".
+    """
+    import importlib
+    import constants
+    importlib.reload(constants)
+    assert constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED is False, (
+        "El guard de nevera del chunk inicial debe nacer APAGADO. Si lo enciendes, documenta "
+        "por qué y actualiza este test — el incidente d4bc3af5 está en el docstring."
+    )
+
+
+def test_el_camino_legacy_sigue_existiendo_detras_del_knob():
+    """Apagado no es borrado: con el knob encendido la validación debe volver a correr. Sin este
+    test, alguien podría borrar el código muerto sin notar que es reactivable."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "routers" / "plans.py").read_text(encoding="utf-8")
+    i = src.index("def _run_pantry_validation_for_initial_chunk")
+    cuerpo = src[i:src.index("\ndef ", i + 100)]
+    assert "INITIAL_CHUNK_PANTRY_GUARD_ENABLED" in cuerpo, "el gate del knob desapareció"
+    assert "_validate_and_retry_initial_chunk_against_pantry" in cuerpo, (
+        "la llamada a la validación desapareció: el knob quedaría sin nada que encender"
     )

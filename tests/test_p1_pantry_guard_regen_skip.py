@@ -298,11 +298,22 @@ def test_skip_when_update_reason_dislike_with_full_pantry():
         )
 
 
-def test_validates_when_update_reason_is_none_and_pantry_full():
+def test_validates_when_update_reason_is_none_and_pantry_full(monkeypatch):
     """Path legacy preservado: si update_reason=None (first-time generation
     o caller que no propaga el campo), el guard SÍ se aplica cuando hay
     pantry suficiente. Sin esto, perdemos protección sobre el caso edge
     'first plan con pantry manualmente poblada'."""
+    # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26 · reparado 2026-07-26] El guard nace DORMIDO.
+    # `INITIAL_CHUNK_PANTRY_GUARD_ENABLED` (knob MEALFIT_INITIAL_CHUNK_PANTRY_GUARD) es
+    # default-False desde el incidente d4bc3af5: validar el plan NUEVO contra la nevera vieja lo
+    # rechazaba en sus propios méritos y caía a emergency band-0.0. La lista de compras del plan
+    # nuevo ES la que define qué comprar.
+    #
+    # Este test verifica el camino LEGACY, que sigue existiendo detrás del knob — así que hay que
+    # encenderlo explícitamente. Sin esto afirmaba un comportamiento que producción apagó a
+    # propósito, y el rojo parecía "una validación de despensa no está corriendo".
+    monkeypatch.setattr("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True)
+
     from routers.plans import _run_pantry_validation_for_initial_chunk
 
     fake_result = {"days": [{"meals": [{"name": "test"}]}]}
@@ -336,10 +347,21 @@ def test_validates_when_update_reason_is_none_and_pantry_full():
     )
 
 
-def test_empty_string_update_reason_does_not_skip():
+def test_empty_string_update_reason_does_not_skip(monkeypatch):
     """`update_reason=''` (string vacío, falsy) NO debe activar el skip.
     Solo truthy strings. Defensa contra payload con campo presente pero
     vacío que un cliente podría enviar por bug."""
+    # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26 · reparado 2026-07-26] El guard nace DORMIDO.
+    # `INITIAL_CHUNK_PANTRY_GUARD_ENABLED` (knob MEALFIT_INITIAL_CHUNK_PANTRY_GUARD) es
+    # default-False desde el incidente d4bc3af5: validar el plan NUEVO contra la nevera vieja lo
+    # rechazaba en sus propios méritos y caía a emergency band-0.0. La lista de compras del plan
+    # nuevo ES la que define qué comprar.
+    #
+    # Este test verifica el camino LEGACY, que sigue existiendo detrás del knob — así que hay que
+    # encenderlo explícitamente. Sin esto afirmaba un comportamiento que producción apagó a
+    # propósito, y el rojo parecía "una validación de despensa no está corriendo".
+    monkeypatch.setattr("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True)
+
     from routers.plans import _run_pantry_validation_for_initial_chunk
 
     fake_result = {"days": []}
