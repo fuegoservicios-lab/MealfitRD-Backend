@@ -25410,12 +25410,35 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                 # ingrediente huérfano en pasos (renovación viva 69f9e03d: "110g de arroz blanco
                 # cocido" sin mención alguna; el orphan-sweep del review corre ANTES del final_pass,
                 # así que el huérfano llegaba al plato). Nota 💡 sin cantidad (consolidación-proof).
+                # [P1-RICE-STEP-HONEST · 2026-07-27] Tres defectos de la nota, medidos sobre 92
+                # comidas de 8 planes vivos (13 la traían, el 14%):
+                #
+                #   1. CONTRADICCIÓN 13/13. La nota decía «el arroz blanco COCIDO de tus
+                #      ingredientes», pero la línea que ve el usuario dice «30 g de arroz blanco
+                #      CRUDO» — el display convierte a peso crudo, que es lo correcto para
+                #      comprar. Cero líneas decían "cocido". El usuario lee dos cosas distintas.
+                #   2. NADIE LO CUECE. 10 de 13 no tenían ningún paso que cocinara el arroz: la
+                #      nota decía "acompaña con el arroz cocido" y ese arroz no existía cocido en
+                #      ninguna parte.
+                #   3. IBA DESPUÉS DEL MONTAJE. `append` lo dejaba al final, así que se leía un
+                #      paso de cocina DESPUÉS de emplatar — exactamente lo que
+                #      P2-STEP-INSERT-BEFORE-MONTAJE arregló para los demás pasos que se anexan.
+                #
+                # Y de fondo: «para completar las calorías del día» es razonamiento INTERNO
+                # (estamos rellenando un piso calórico de ganancia muscular) filtrándose a la
+                # receta. El usuario no tiene por qué leer la contabilidad del sistema; necesita
+                # saber qué hacer con el arroz.
+                #
+                # Se mantiene SIN cantidad a propósito (consolidación-proof): el refill puede
+                # sumar gramos en pasadas posteriores y una cifra escrita aquí quedaría stale.
                 try:
                     _rec_gm = m.get("recipe")
                     if isinstance(_rec_gm, list) and _rec_gm and not any(
-                            "arroz blanco cocido" in str(_s).lower() for _s in _rec_gm):
-                        _rec_gm.append("💡 Acompaña este plato con el arroz blanco cocido de tus "
-                                       "ingredientes para completar las calorías del día.")
+                            "arroz blanco" in str(_s).lower() for _s in _rec_gm):
+                        m["recipe"] = _insert_step_before_montaje(
+                            _rec_gm,
+                            "🍚 Cuece el arroz blanco de tus ingredientes según el paquete y "
+                            "sírvelo como acompañante.")
                 except Exception:
                     pass
                 day_kcal += _dk

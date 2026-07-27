@@ -41,14 +41,27 @@ def test_gainmuscle_refill_adds_recipe_note():
         return  # knob apagado en este entorno — el contrato se verifica con el knob ON
     m = day["meals"][0]
     assert any("arroz blanco cocido" in str(i).lower() for i in m["ingredients"])
-    assert any("arroz blanco cocido" in str(s).lower() for s in m["recipe"]), \
+    # [reapuntado 2026-07-27 · P1-RICE-STEP-HONEST] El paso pasó de la nota
+    # «💡 Acompaña este plato con el arroz blanco COCIDO … para completar las calorías del día»
+    # a un paso de cocina real: «🍚 Cuece el arroz blanco de tus ingredientes …».
+    #
+    # Motivo (medido sobre 92 comidas): la línea que ve el usuario dice "arroz blanco CRUDO"
+    # 13 de 13 veces —el display convierte a peso crudo para comprar— así que la nota se
+    # contradecía con su propio ingrediente; 10 de 13 no tenían ningún paso que cociera el arroz;
+    # y la nota se anexaba DESPUÉS del Montaje.
+    #
+    # La invariante de este test no cambia —mención en los pasos, sin cantidad, idempotente—,
+    # solo el wording. Se busca "arroz blanco", que cubre las dos redacciones.
+    assert any("arroz blanco" in str(s).lower() for s in m["recipe"]), \
         "el refill debe dejar mención en los pasos — sin ella el ingrediente queda huérfano"
-    # la nota es consolidación-proof: sin cantidad embebida
-    _note = next(s for s in m["recipe"] if "arroz blanco cocido" in str(s).lower())
+    _note = next(s for s in m["recipe"] if "arroz blanco" in str(s).lower())
     assert not re.search(r"\d", str(_note)), "nota sin cantidad (la consolidación no la deja stale)"
+    # y debe MANDAR COCERLO: el ingrediente llega crudo al usuario.
+    assert "cuece" in str(_note).lower(), \
+        f"el paso debe instruir a cocer el arroz (llega crudo en la lista): {_note}"
     # idempotente: segundo pase no duplica la nota
     go._repair_gainmuscle_day_kcal([day], nutrition, {"mainGoal": "gain_muscle"}, final_pass=True)
-    assert sum(1 for s in m["recipe"] if "arroz blanco cocido" in str(s).lower()) == 1
+    assert sum(1 for s in m["recipe"] if "arroz blanco" in str(s).lower()) == 1
 
 
 # ---------------------------------------------------------------- 2. nota undercook stale
