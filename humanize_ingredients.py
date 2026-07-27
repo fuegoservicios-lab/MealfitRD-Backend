@@ -169,6 +169,45 @@ for _k_lbl, _v_lbl in DOMINICAN_HOUSEHOLD_MEASURES.items():
             _LABEL_TO_ENTRY.setdefault(_norm_lbl, _v_lbl)
 
 
+# [P1-STEP-LABEL-DEDUP · 2026-07-27] El inyector del blanqueo antepone su frase CON la etiqueta a
+# un paso que ya empezaba por ella, y el usuario lee el rótulo dos veces dentro del mismo bloque:
+#
+#   "El Toque de Fuego: Blanquea el filete de mero … (el cítrico solo marina, no cuece).
+#    El Toque de Fuego: En una olla pequeña, cocina el arroz blanco …"
+#
+# Medido: 2 de 530 pasos de 14 planes vivos. Se conserva la PRIMERA etiqueta y se retiran las
+# repetidas dejando la prosa intacta — no se reordena ni se borra contenido.
+_STEP_LABELS = ("El Toque de Fuego", "Mise en place", "Montaje")
+# se captura la letra siguiente para volver a mayúscula la frase que queda huérfana del rótulo
+# ("… pica todo. Mise en place: lava el kale" → "… pica todo. Lava el kale", no ". lava").
+_STEP_LABEL_RXS = [
+    (_l, re.compile(r"(?<!^)\s*\b" + re.escape(_l) + r"\s*:\s*(.)", re.IGNORECASE))
+    for _l in _STEP_LABELS
+]
+
+
+def _sin_rotulo(_m):
+    return " " + _m.group(1).upper()
+
+
+def dedupe_step_label(step):
+    """Quita las repeticiones del rótulo dentro de un mismo paso. Display-only y fail-safe."""
+    try:
+        s = str(step)
+        for _label, _rx in _STEP_LABEL_RXS:
+            if len(_rx.findall(s)) + (1 if s.lstrip().lower().startswith(_label.lower()) else 0) < 2:
+                continue
+            # se preserva la primera aparición (esté al inicio o no) y se limpian las siguientes
+            _primera = s.lower().find(_label.lower())
+            if _primera < 0:
+                continue
+            _corte = _primera + len(_label)
+            s = s[:_corte] + _rx.sub(_sin_rotulo, s[_corte:])
+        return re.sub(r"\s{2,}", " ", s).strip() if isinstance(step, str) else step
+    except Exception:
+        return step
+
+
 def append_gram_hint(line):
     """Anexa el peso a un ingrediente contado por bultos: "½ pedazo de yautía" → "… (≈125 g)".
 
@@ -419,7 +458,10 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                 try:
                     _rec_pf = meal.get("recipe")
                     if isinstance(_rec_pf, list):
-                        meal["recipe"] = [prettify_step_fractions(_s) if isinstance(_s, str) else _s
+                        # [P1-STEP-LABEL-DEDUP · 2026-07-27] el rótulo repetido dentro del mismo
+                        # paso se limpia AQUÍ, con el resto del pulido de display.
+                        meal["recipe"] = [dedupe_step_label(prettify_step_fractions(_s))
+                                          if isinstance(_s, str) else _s
                                           for _s in _rec_pf]
                 except Exception:
                     pass
