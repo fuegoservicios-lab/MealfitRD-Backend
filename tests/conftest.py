@@ -270,3 +270,51 @@ def seeded_user_profile():
     execute_sql_write(
         "DELETE FROM user_profiles WHERE id = %s", (user_id,)
     )
+
+
+# ---------------------------------------------------------------------------
+# [P1-TEST-RESIDUE-DETECTOR · 2026-07-27] Avisar si la corrida deja filas de test
+# vivas en la base de PRODUCCIÓN.
+#
+# Contexto medido hoy: esta suite escribe en Neon PROD (no hay base de test; el
+# `seeded_user_profile` de arriba crea un usuario real y lo borra en teardown).
+# Eso NO es basura acumulada — se midió: 0 residuos de corridas anteriores, el
+# teardown es fiable — pero sí dos riesgos:
+#
+#   1. Contaminación del monitoreo. Un vigilante que avise de "planes nuevos" ve
+#      los fixtures como si fueran de usuarios reales. Hoy casi tomo un plan de
+#      test (27 días, lista de 4 items) como la evidencia para girar
+#      `MEALFIT_SHOPPING_COHERENCE_GUARD` a `block`.
+#   2. Riesgo de cola: si una corrida muere a mitad (Ctrl-C, timeout, OOM), el
+#      teardown no corre y el usuario sintético se queda en prod.
+#
+# Montar una base de test aparte NO está justificado hoy: habría que mantener
+# sincronizado el catálogo de 204 alimentos, y estos tests valen precisamente
+# porque validan contra el catálogo REAL. Lo que sí compensa es esto: convertir
+# un riesgo silencioso en uno visible.
+#
+# NO falla la suite a propósito — un residuo no invalida los resultados, solo hay
+# que limpiarlo. Se imprime al final, donde el operador lo ve.
+def pytest_sessionfinish(session, exitstatus):
+    try:
+        filas = execute_sql_query(
+            "SELECT id, email FROM user_profiles "
+            "WHERE email LIKE 'e2e-test-%' OR email LIKE '%@test.local'"
+        ) or []
+    except Exception as _e:  # sin DB / red caída: el detector nunca estorba
+        return
+    if not filas:
+        return
+    import sys as _sys_res
+    print(
+        f"\n[P1-TEST-RESIDUE-DETECTOR] AVISO: {len(filas)} usuario(s) de test VIVOS en la base "
+        f"de producción tras la corrida — el teardown no completó:",
+        file=_sys_res.stderr,
+    )
+    for _f in filas[:10]:
+        print(f"    {str(_f.get('id'))[:8]}  {_f.get('email')}", file=_sys_res.stderr)
+    print(
+        "    Limpieza: DELETE de user_inventory / meal_plans / plan_chunk_queue / "
+        "user_profiles por ese user_id (mismo orden FK-safe que el fixture).",
+        file=_sys_res.stderr,
+    )
