@@ -42,10 +42,26 @@ def test_no_bare_harina_or_maiz_variant():
 def test_all_pools_resolve_key_or_variant():
     """Cero items de pool desconocidos para el synonym system (invariante P1-FLOURS-POOLS,
     espejo del criterio actualizado de test_synonyms)."""
-    for lst, syn in ((DOMINICAN_CARBS, CARB_SYNONYMS), (DOMINICAN_PROTEINS, PROTEIN_SYNONYMS),
-                     (DOMINICAN_VEGGIES_FATS, VEGGIE_FAT_SYNONYMS), (DOMINICAN_FRUITS, FRUIT_SYNONYMS)):
+    # [2026-07-26] El `assert` estaba DENTRO del bucle, así que solo reportaba el primer pool con
+    # huecos y escondía los demás: al cerrar 'Granola' y 'Galletas de soda' (CARBS) apareció
+    # 'Granada' (FRUITS), que llevaba ahí todo el tiempo. Se acumula y se reporta de una vez —
+    # si no, cada arreglo destapa el siguiente y parecen fallos nuevos.
+    faltantes: dict[str, list[str]] = {}
+    for etiqueta, lst, syn in (
+        ("CARBS", DOMINICAN_CARBS, CARB_SYNONYMS),
+        ("PROTEINS", DOMINICAN_PROTEINS, PROTEIN_SYNONYMS),
+        ("VEGGIES_FATS", DOMINICAN_VEGGIES_FATS, VEGGIE_FAT_SYNONYMS),
+        ("FRUITS", DOMINICAN_FRUITS, FRUIT_SYNONYMS),
+    ):
         known = {k.lower() for k in syn}
         for variants in syn.values():
             known.update(str(v).lower() for v in variants)
         missing = [i for i in lst if i.lower() not in known]
-        assert not missing, f"items de pool sin entrada en su synonym map: {missing}"
+        if missing:
+            faltantes[etiqueta] = missing
+    assert not faltantes, (
+        f"items de pool sin entrada en su synonym map: {faltantes}. Sin entrada, "
+        "`normalize_ingredient_for_tracking` NO colapsa sus variantes y el seguimiento de "
+        "frecuencia cuenta 'granola', 'granola sin azúcar' y 'granola con miel' como tres "
+        "alimentos distintos — diluye la señal que alimenta la personalización."
+    )

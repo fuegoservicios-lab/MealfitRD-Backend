@@ -1510,6 +1510,20 @@ CARB_SYNONYMS = {
     "arroz blanco": ["arroz blanco", "arroz"],
     "arroz integral": ["arroz integral"],
     "avena": ["avena", "avena en hojuelas", "overnight oats", "avena instantanea"],
+    # [P1-FLOURS-POOLS · completado 2026-07-26] Estaban en DOMINICAN_CARBS pero sin entrada aquí,
+    # así que `normalize_ingredient_for_tracking` NO colapsaba sus variantes y el seguimiento de
+    # frecuencia las contaba como alimentos distintos. Medido antes del fix:
+    #     "granola"             -> 'granola'
+    #     "granola sin azucar"  -> 'granola sin azucar'   ← otro alimento
+    #     "granola con miel"    -> 'granola con miel'     ← y otro
+    #     "galleta de soda"     -> 'galleta de soda'      ← distinto del plural
+    # Comer granola tres veces se registraba como tres alimentos ⇒ la señal de "esto lo come
+    # seguido" que alimenta la personalización quedaba diluida. Compárese con "avena", que sí
+    # colapsa "avena en hojuelas" -> 'avena'.
+    "granola": ["granola", "granola sin azúcar", "granola sin azucar", "granola con miel",
+                "granola casera", "cereal granola"],
+    "galletas de soda": ["galletas de soda", "galleta de soda", "galletas soda",
+                         "galletas de soda integrales"],
     "pasta": ["pasta", "espagueti", "espaguetis", "spaghetti", "macarrones", "coditos", "fideos",
               "pasta integral", "espagueti integral", "fideos integrales", "macarrones integrales"],
     "quinoa": ["quinoa", "quinua"],
@@ -1630,6 +1644,11 @@ FRUIT_SYNONYMS = {
     "piña": ["piña", "pina", "piña natural"],
     "lechosa": ["lechosa", "papaya"],
     "chinola": ["chinola", "maracuyá", "maracuya", "parcha"],
+    # [P1-FLOURS-POOLS · completado 2026-07-26] Tercer item del pool sin sinónimos, y estaba
+    # ESCONDIDO: el test hacía `assert` dentro del bucle de los cuatro pools, así que solo
+    # reportaba el primero que fallara. Al cerrar granola/galletas de soda (CARBS) apareció éste
+    # (FRUITS). El test ahora acumula y reporta los cuatro pools de una vez.
+    "granada": ["granada", "granadas", "semillas de granada", "arilos de granada"],
     "limón": ["limón", "limon", "lima", "jugo de limón"],
     "fresa": ["fresa", "fresas", "frutilla"],
     "naranja": ["naranja", "naranjas", "jugo de naranja"],
