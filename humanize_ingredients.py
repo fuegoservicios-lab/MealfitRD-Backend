@@ -138,6 +138,72 @@ def strip_accents(s: str) -> str:
     import unicodedata
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
+# [P1-COUNT-UNIT-GRAM-HINT · 2026-07-27] "½ pedazo de yautía" no le dice al usuario cuánto usar.
+# Medido sobre 1299 líneas de 12 planes vivos: 19 usan unidad de bulto y las 19 llegan SIN peso.
+# El peso existe —es el mismo `weight` con el que esta tabla convirtió los gramos a bultos—, solo
+# no se escribía. Se anexa desde la tabla, así que jamás puede contradecir a la lista de compras.
+_FRAC_GLYPHS = {"¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
+_ALREADY_WEIGHED_RE = re.compile(
+    r'\d+(?:[.,]\d+)?\s*(?:g|gr|gramos|kg|ml|l|lb|lbs|oz)\b', re.IGNORECASE)
+_LEAD_QTY_RE = re.compile(r'^\s*(\d+(?:[.,]\d+)?)?\s*([¼½¾⅓⅔])?\s+(\S.*)$')
+
+# Solo las unidades VAGAS. Un huevo, un limón o un diente de ajo son objetos de tamaño conocido:
+# anotarlos añade ruido sin resolver ninguna duda. Aplicado a toda la tabla el anexo tocaba 176
+# líneas de 1299 (13.5%) —"1 diente de ajo (≈5 g)"— para arreglar las 19 que sí son ambiguas.
+# Un "pedazo" o una "porción", en cambio, no tienen tamaño natural: ahí el gramo es la respuesta.
+_UNIDADES_VAGAS = ("pedazo", "pedazos", "porcion", "porciones", "pieza", "piezas",
+                   "trozo", "trozos", "lonja", "lonjas")
+
+# etiqueta de display → entrada de la tabla. Se indexan singular Y plural porque el display usa
+# las dos ("1 pedazo" / "2 pedazos").
+_LABEL_TO_ENTRY = {}
+for _k_lbl, _v_lbl in DOMINICAN_HOUSEHOLD_MEASURES.items():
+    for _lbl in (_v_lbl.get("singular"), _v_lbl.get("plural")):
+        if not _lbl:
+            continue
+        _norm_lbl = strip_accents(str(_lbl).lower()).strip()
+        # los separadores cuentan como espacio: sin esto "pechuga de pollo (porción)" —el grupo
+        # MAYOR de los vagos, 8 de 19— se escapa porque el token queda "(porcion)".
+        _palabras = set(re.split(r'[\s/(),]+', _norm_lbl))
+        if _palabras & set(_UNIDADES_VAGAS):
+            _LABEL_TO_ENTRY.setdefault(_norm_lbl, _v_lbl)
+
+
+def append_gram_hint(line):
+    """Anexa el peso a un ingrediente contado por bultos: "½ pedazo de yautía" → "… (≈125 g)".
+
+    Deliberadamente ESTRICTO — el resto de la línea debe coincidir EXACTO con una etiqueta de
+    `DOMINICAN_HOUSEHOLD_MEASURES`. Un match laxo inventaría equivalencias para alimentos que no
+    están en la tabla, que es peor que no decir nada.
+
+    Display-only, idempotente (un "≈" o cualquier peso ya presente lo deja intacto) y fail-safe.
+    """
+    try:
+        s = str(line)
+        if "≈" in s or _ALREADY_WEIGHED_RE.search(s):
+            return line
+        m = _LEAD_QTY_RE.match(s)
+        if not m:
+            return line
+        whole, frac, rest = m.group(1), m.group(2), m.group(3)
+        if not whole and not frac:
+            return line
+        qty = float((whole or "0").replace(",", ".")) + _FRAC_GLYPHS.get(frac or "", 0.0)
+        entry = _LABEL_TO_ENTRY.get(strip_accents(rest.strip().lower()))
+        if qty <= 0 or not entry:
+            return line
+        gramos = qty * float(entry.get("weight") or 0)
+        if gramos <= 0:
+            return line
+        _peso = f"(≈{int(round(gramos))} {'ml' if entry.get('is_liquid') else 'g'})"
+        # "(porción)" ES la marca de vaguedad que estamos respondiendo: se SUSTITUYE en vez de
+        # encadenar dos paréntesis seguidos ("… (porción) (≈100 g)").
+        _sin_cola = re.sub(r'\s*\((?:porci[oó]n|porciones)\)\s*$', '', s.rstrip(), flags=re.I)
+        return f"{_sin_cola} {_peso}"
+    except Exception:
+        return line
+
+
 def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> str:
     """[P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Pulido cosmético del ingrediente sin unidad métrica (el quantize
     no lo toca porque "cda"/count no son unidades métricas). Display-only (corre dentro de humanize_plan_ingredients, POST
@@ -344,6 +410,10 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                     sync_recipe_steps_to_household(meal)
                 except Exception:
                     pass
+                # [P1-COUNT-UNIT-GRAM-HINT · 2026-07-27] "½ pedazo de yautía" → "… (≈125 g)".
+                # DESPUÉS del sync de pasos a propósito: los pasos deben seguir leyendo la etiqueta
+                # casera limpia, no arrastrar el peso a la prosa de la receta.
+                meal["ingredients"] = [append_gram_hint(_g) for _g in meal["ingredients"]]
                 # [P3-STEP-FRACTIONS · 2026-07-05] "2.5 cdas"/"0.5 taza"/"1/4 de la masa" en pasos
                 # → fracciones unicode (paridad visual con la lista). Display-only, fail-safe.
                 try:
