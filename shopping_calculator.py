@@ -4526,6 +4526,28 @@ def _get_coherence_tolerance_pct() -> float:
     )
 
 
+def _get_coherence_day_basis_norm_knob() -> bool:
+    """[P1-COHERENCE-DAY-BASIS · 2026-07-26] Lee `MEALFIT_COHERENCE_DAY_BASIS_NORM`.
+
+    Knob default **True** (opt-out). Cuando True, el guard escala el lado ESPERADO por
+    `7.0 / días_materializados` antes de comparar contra `aggregated_shopping_list_weekly` —
+    el MISMO factor que `get_shopping_list_delta` aplica al construir la lista
+    (`base_duration_scale = 7.0 / num_days`, línea ~10174).
+
+    Sin esto, el guard compara los 3 días de recetas que existen contra una lista proyectada a
+    7 días y TODO diverge por 7/3 = 2.33. Medido en 19 planes vivos, el factor encaja al
+    decimal (Pescado 574.7/3×7 = 1341.0 contra 1341.0 en la lista) — es estructural, no una
+    incoherencia. Era la razón por la que el guard no podía estar en modo `block`.
+
+    Nace en True (no OFF como los gates de calidad) porque NO añade rechazos: elimina falsos
+    positivos de una comparación que estaba mal planteada. Rollback sin redeploy:
+    `MEALFIT_COHERENCE_DAY_BASIS_NORM=false` restaura la comparación pre-fix.
+
+    Tooltip-anchor: P1-COHERENCE-DAY-BASIS-KNOB
+    """
+    return _knob_env_bool("MEALFIT_COHERENCE_DAY_BASIS_NORM", True)
+
+
 def _get_coherence_t2_block_severe_only_knob() -> bool:
     """[P2-COHERENCE-1 · 2026-05-11] Lee `MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY`.
 
@@ -6719,8 +6741,49 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     if math.isnan(mult) or math.isinf(mult) or mult <= 0:
         mult = 1.0
 
+    # [P1-COHERENCE-DAY-BASIS · 2026-07-26] El guard comparaba 3 días de recetas contra una
+    # lista de 7 días. El agregador PROYECTA a propósito (get_shopping_list_delta:10172):
+    #
+    #     # Si hay 3 días generados, representan un ciclo rotativo. Promediamos por día
+    #     # y proyectamos a 7 días.
+    #     base_duration_scale = 7.0 / num_days
+    #     effective_multiplier = multiplier * base_duration_scale
+    #
+    # `expected_sum_from_recipes` NO espejaba ese factor, así que TODO divergía por
+    # 7/num_days. Medido sobre 19 planes vivos —los 19 con ≤3 días materializados, porque el
+    # guard corre en `assemble_plan_node` ANTES de que los chunks llenen los días 4+— el
+    # factor encaja al decimal, no aproximadamente:
+    #
+    #     Pescado    574.7 / 3 × 7 = 1341.0   ← la lista dice 1341.0
+    #     Cangrejo   225.0 / 3 × 7 =  525.0   ← la lista dice  525.0
+    #
+    # Dos alimentos sin relación con ratio idéntico ⇒ factor estructural, no incoherencia.
+    # En modo `block` esto rechazaba casi cualquier plan, y por eso el guard estaba forzado a
+    # `warn` en producción. La premisa de `P2-COH-WEEKLY-BASIS` ("la lista semanal ES la misma
+    # base que expected") solo es cierta con la semana COMPLETA materializada.
+    #
+    # Se espeja la MISMA fórmula, no una heurística nueva. Solo cuando se va a comparar contra
+    # la lista SEMANAL: la lista activa (quincenal/mensual) tiene otra base y es el caso que
+    # P2-COH-WEEKLY-BASIS evita precisamente por eso.
+    _basis_scale = 1.0
+    if _get_coherence_day_basis_norm_knob() and (plan_result.get("aggregated_shopping_list_weekly")):
+        try:
+            _n_days_basis = len(plan_result.get("days") or [])
+        except Exception:
+            _n_days_basis = 0
+        if _n_days_basis > 0:
+            _basis_scale = 7.0 / float(_n_days_basis)
+            if abs(_basis_scale - 1.0) > 1e-9:
+                logging.info(
+                    "[COH-GUARD/DAY-BASIS] días materializados=%d → escalando el lado esperado "
+                    "×%.4f para igualar la proyección a 7 días del agregador",
+                    _n_days_basis, _basis_scale,
+                )
+
     try:
-        expected_raw = expected_sum_from_recipes(plan_result, apply_yield=False, multiplier=mult)
+        expected_raw = expected_sum_from_recipes(
+            plan_result, apply_yield=False, multiplier=mult * _basis_scale
+        )
     except Exception as e:
         logging.warning(f"[COH-GUARD] expected_sum_from_recipes falló: {e}")
         return []
