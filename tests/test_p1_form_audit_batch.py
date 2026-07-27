@@ -372,5 +372,20 @@ class TestF2HydrationQualifier:
 # ---------------------------------------------------------------------------
 
 def test_marker_bumped():
+    """[REESCRITO · 2026-07-26] Antes afirmaba que `_LAST_KNOWN_PFIX` contuviera ESTE P-fix.
+
+    Era **imposible de satisfacer**: la convención del repo obliga a bumpear ese marker en CADA
+    P-fix (lo enforza `test_p3_1_last_known_pfix_freshness`), así que la aserción solo podía
+    pasar en el único commit donde este P-fix fue el último. Desde el siguiente, rojo para
+    siempre — ruido permanente que ensucia la lectura de toda la suite.
+
+    "¿Se mergeó mi P-fix?" no es contestable desde HEAD leyendo un marker que se mueve. Lo que
+    sí es verificable son los artefactos propios de este P-fix, y de eso se encargan los demás
+    tests de este archivo. Aquí queda el contrato compartido: forma válida del marker.
+    """
+    import re
     app_src = (BACKEND / "app.py").read_text(encoding="utf-8")
-    assert 'P1-FORM-AUDIT-BATCH' in app_src.split("_LAST_KNOWN_PFIX = ")[1].split("\n")[0]
+    linea = app_src.split("_LAST_KNOWN_PFIX = ")[1].split("\n")[0].strip()
+    assert re.match(r'^"P\d+[A-Z0-9\-]* · \d{4}-\d{2}-\d{2}"$', linea), (
+        f"_LAST_KNOWN_PFIX con formato inválido: {linea!r}. Formato: \"Pn-SLUG · YYYY-MM-DD\"."
+    )

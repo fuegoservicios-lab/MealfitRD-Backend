@@ -93,7 +93,23 @@ def test_dreaming_tables_in_purge_list():
 
 
 def test_marker_bumped():
-    assert '_LAST_KNOWN_PFIX = "P1-ACCOUNT-DELETE-1' in _APP
+    """[REESCRITO · 2026-07-26] Antes afirmaba que `_LAST_KNOWN_PFIX` contuviera ESTE P-fix.
+
+    Era **imposible de satisfacer**: la convención del repo obliga a bumpear ese marker en CADA
+    P-fix (lo enforza `test_p3_1_last_known_pfix_freshness`), así que la aserción solo podía
+    pasar en el único commit donde este P-fix fue el último. Desde el siguiente, rojo para
+    siempre — ruido permanente que ensucia la lectura de toda la suite.
+
+    "¿Se mergeó mi P-fix?" no es contestable desde HEAD leyendo un marker que se mueve. Lo que
+    sí es verificable son los artefactos propios de este P-fix — y de eso se encargan los demás
+    tests de este archivo (endpoint, gate de confirmación, montaje en los dos settings). Aquí
+    queda el contrato compartido: que el marker exista y tenga forma válida.
+    """
+    import re
+    linea = _APP.split("_LAST_KNOWN_PFIX = ")[1].split("\n")[0].strip()
+    assert re.match(r'^"P\d+[A-Z0-9\-]* · \d{4}-\d{2}-\d{2}"$', linea), (
+        f"_LAST_KNOWN_PFIX con formato inválido: {linea!r}. Formato: \"Pn-SLUG · YYYY-MM-DD\"."
+    )
 
 
 def test_frontend_calls_delete_endpoint():
