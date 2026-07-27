@@ -198,50 +198,55 @@ def test_frontend_defensive_guard_marker_present():
     )
 
 
-def test_frontend_computes_restocked_items_count():
-    """El guard debe leer el tamaño de `planData.restocked_items` para
-    comparar contra `inventoryToUse.length`. Sin esa cuenta, no hay forma
-    de detectar el mismatch."""
-    # Aceptamos cualquier nombre de variable razonable pero exigimos que el
-    # acceso a `restocked_items` exista en el contexto del guard.
-    assert re.search(
-        r"planData\?\.restocked_items",
-        _DASHBOARD,
-    ), (
-        "`planData?.restocked_items` no referenciado en Dashboard.jsx. El "
-        "guard no puede detectar drift sin contar las entries del dict."
-    )
-    # Y debe usar Object.keys(...).length para contar (no `.length` directo,
-    # que retornaría undefined sobre un object).
-    assert "Object.keys(" in _DASHBOARD, (
-        "`Object.keys(restocked_items).length` ausente. `restocked_items` es "
-        "un dict, no un array — `.length` directo sería undefined."
+def test_frontend_ya_no_cuenta_restocked_items():
+    """[P5-PRESENCE-SHOPPING-LIST · 2026-06-23 · test INVERTIDO 2026-07-26] Esta capa del
+    frontend fue ELIMINADA a proposito, igual que la Capa 3 de mas abajo.
+
+    El comentario que la retira esta en Dashboard.jsx y explica el porque:
+
+        La supresion por ventana-de-tiempo is_restocked (isPostRestockRotation + _staleDedup)
+        fue ELIMINADA. El modelo ahora es de PRESENCIA pura: un item se muestra SOLO si esta
+        ausente de la Nevera. Eso vuelve innecesario el flag (un item agotado nunca puede quedar
+        oculto) y elimina la clase de bug "Lista Vacia pese a Nevera vacia" que _staleDedup
+        parchaba.
+
+    O sea: el mecanismo no se perdio, se volvio innecesario porque el bug que parchaba dejo de
+    existir por construccion. `is_restocked` se sigue persistiendo (lo lee el banner
+    RestockNudge) pero ya NO suprime contenido.
+
+    Las 6 pruebas del self-heal BACKEND de este mismo archivo siguen vigentes y en verde: esa
+    capa si sigue viva.
+    """
+    assert not re.search(r"planData\?\.restocked_items", _DASHBOARD), (
+        "Dashboard.jsx volvio a contar `restocked_items` para suprimir items de la lista. "
+        "El modelo es de PRESENCIA pura desde P5-PRESENCE-SHOPPING-LIST: un item se muestra "
+        "si falta en la Nevera, punto. Reintroducir la supresion por ventana-de-tiempo "
+        "devuelve el bug 'Lista Vacia pese a Nevera vacia'."
     )
 
+def test_frontend_ya_no_existe_isPostRestockRotation():
+    """[P5-PRESENCE-SHOPPING-LIST · 2026-06-23 · test INVERTIDO 2026-07-26] Esta capa del
+    frontend fue ELIMINADA a proposito, igual que la Capa 3 de mas abajo.
 
-def test_frontend_isPostRestockRotation_respects_stale_flag():
-    """`isPostRestockRotation` debe consultar `_staleDedup` (o equivalente) y
-    forzar `false` cuando el flag es stale. Sin esto, el guard cuenta pero no
-    cierra el bug."""
-    # Buscamos la asignación de `isPostRestockRotation`. Debe NO ser el `!!planData?.is_restocked`
-    # crudo de pre-fix (que era exactamente esa expresión sola).
-    m = re.search(
-        r"const\s+isPostRestockRotation\s*=\s*([^;\n]+);",
-        _DASHBOARD,
-    )
-    assert m, "`const isPostRestockRotation` no encontrada en Dashboard.jsx."
-    rhs = m.group(1).strip()
-    assert rhs != "!!planData?.is_restocked", (
-        f"`isPostRestockRotation` revertida al RHS crudo `!!planData?.is_restocked`. "
-        f"Sin combinar con stale-check el guard no aplica."
-    )
-    # La RHS final debe incluir negación del stale-dedup (referencia textual).
-    assert "_staleDedup" in rhs or "staleDedup" in rhs, (
-        f"`isPostRestockRotation` no combina con `_staleDedup` flag. RHS "
-        f"actual: {rhs}. Reintroduciría el bug de PDF 'Lista Vacía' cuando "
-        f"DB tiene flag stale + nevera real vacía."
-    )
+    El comentario que la retira esta en Dashboard.jsx y explica el porque:
 
+        La supresion por ventana-de-tiempo is_restocked (isPostRestockRotation + _staleDedup)
+        fue ELIMINADA. El modelo ahora es de PRESENCIA pura: un item se muestra SOLO si esta
+        ausente de la Nevera. Eso vuelve innecesario el flag (un item agotado nunca puede quedar
+        oculto) y elimina la clase de bug "Lista Vacia pese a Nevera vacia" que _staleDedup
+        parchaba.
+
+    O sea: el mecanismo no se perdio, se volvio innecesario porque el bug que parchaba dejo de
+    existir por construccion. `is_restocked` se sigue persistiendo (lo lee el banner
+    RestockNudge) pero ya NO suprime contenido.
+
+    Las 6 pruebas del self-heal BACKEND de este mismo archivo siguen vigentes y en verde: esa
+    capa si sigue viva.
+    """
+    assert not re.search(r"const\s+isPostRestockRotation\s*=", _DASHBOARD), (
+        "`isPostRestockRotation` volvio a Dashboard.jsx. Esa supresion se elimino en "
+        "P5-PRESENCE-SHOPPING-LIST; el marker que lo documenta esta en el propio archivo."
+    )
 
 def test_frontend_threshold_uses_half_restocked_count_with_floor_3():
     """La heurística del threshold debe ser:

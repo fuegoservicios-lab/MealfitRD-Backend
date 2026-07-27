@@ -70,11 +70,17 @@ def test_goal_label_rendered_via_mapping_not_raw_replace():
     via `userGoal.replace(/_/g, ' ')` (renderizaba "gain muscle" capitalizado
     en ingles). Debe usar `_goalMeta.label` del mapping es-DO."""
     src = _read(_SETTINGS_JSX)
-    # Localizar el bloque de la seccion 'plan' (~30 lineas alrededor del
-    # render del card). Buscar dentro del bloque, no en todo el archivo
-    # (otros surfaces de Settings pueden usar replace _ legitimamente).
+    # Localizar el bloque de la seccion 'plan'. Buscar dentro del bloque, no en todo el
+    # archivo (otros surfaces de Settings pueden usar replace _ legitimamente).
+    #
+    # [2026-07-26] El regex acotaba la ventana a {0,16000} chars. La seccion crecio a 16787 y
+    # los 5 tests de este archivo se cayeron a la vez con "No se localizo el bloque" — un
+    # mensaje que suena a "borraron la seccion" y era "la seccion engordo 787 chars".
+    # El lookahead a "activeSection === subscription" YA ancla el final: el numero no aportaba
+    # nada y solo ponia una fecha de caducidad. Septima ventana de bytes fija que caduca en esta
+    # sesion; si vuelves a escribir un {0,N} aqui, estas programando el proximo rojo.
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]*?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match, "No se localizo el bloque de la seccion 'plan'."
@@ -98,7 +104,7 @@ def test_legacy_emerald_gradient_and_shadow_removed():
     tiene `overflow:hidden` y la sombra de 25px se clipeaba abajo."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]*?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match, "No se localizo el bloque de la seccion 'plan'."
@@ -122,7 +128,7 @@ def test_cta_uses_minimal_slate_pattern():
     P3-RESTOCK-MINIMAL-CTA del Dashboard."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]*?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match
@@ -147,7 +153,7 @@ def test_prefers_reduced_motion_respected():
     la microinteraccion translateX para a11y (WCAG 2.3.3 baseline)."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]*?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match
@@ -163,7 +169,7 @@ def test_kcal_formatted_for_es_do_locale():
     para separador de miles consistente con el producto (no '2100' raw)."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]*?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match

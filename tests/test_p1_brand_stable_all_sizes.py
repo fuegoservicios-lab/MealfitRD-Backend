@@ -37,19 +37,37 @@ def test_stable_items_show_full_catalog():
 
 def test_stable_sort_your_size_first_then_price():
     i = BRANDS_JSX.index("const stableSortedVariants")
-    body = BRANDS_JSX[i:i + 700]
+    # [2026-07-26] Era `BRANDS_JSX[i:i + 700]`. Misma mina que reventó al test de abajo por UN
+    # carácter: la cota no aporta nada (el ancla ya localiza el bloque) y solo pone fecha de
+    # caducidad. Se busca tras el ancla, sin cota.
+    body = BRANDS_JSX[i:]
     assert "matchesSize" in body and "price_rd ?? Infinity" in body, (
         "orden de estables: tamaño de tu lista primero, luego más económica"
     )
 
 
 def test_stable_branch_bypasses_size_filter():
+    """[2026-07-26] La ventana era de 900 chars y `stableSortedVariants(g.variants` está a
+    **901** del ancla. Falló por UN carácter, y el mensaje decía "assert (... in ...)" sin
+    pista de que el problema fuera la distancia y no la ausencia.
+
+    Se sustituye por un orden RELATIVO desde el ancla, sin cota: lo que la invariante afirma es
+    que la rama estable existe, ordena por `stableSortedVariants` y que el filtro de tamaño
+    sigue vivo para los NO-estables. Ninguna de esas tres cosas depende de cuántos chars haya
+    entre medias.
+    """
     i = BRANDS_JSX.index("const isStable = stableByKey")
-    win = BRANDS_JSX[i:i + 900]
-    assert "if (isStable)" in win and "stableSortedVariants(g.variants" in win
-    assert "sizeFilteredVariants" in win, (
-        "los NO-estables (frescos) conservan el filtro ±15% (P1-BRAND-SIZE-FILTER)"
-    )
+    resto = BRANDS_JSX[i:]
+    for token, motivo in (
+        ("if (isStable)", "la rama estable desapareció"),
+        ("stableSortedVariants(g.variants",
+         "los estables ya no se ordenan por tamaño-de-tu-lista + más económica"),
+        ("sizeFilteredVariants",
+         "los NO-estables (frescos) perdieron el filtro ±15% (P1-BRAND-SIZE-FILTER)"),
+    ):
+        assert token in resto, f"`{token}` ausente tras el ancla: {motivo}"
+    # Orden relativo: la decisión estable/no-estable precede a ambos caminos.
+    assert resto.index("if (isStable)") < resto.index("stableSortedVariants(g.variants")
 
 
 # ─────────────── 2. auto-refresh silencioso de la lista ───────────────
