@@ -15660,6 +15660,38 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line)}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
+        # [P1-CLOSER-INTO-MONTAJE · 2026-07-27] El closer 💪 tenía su PROPIO camino y se quedó
+        # fuera de la fusión de ayer.
+        #
+        # P1-COMPLEMENT-INTO-MONTAJE (2026-07-26) funde el ingrediente olvidado dentro del Montaje
+        # en platos fríos, porque el paso suelto «Incorpora X a la preparación y mézclalo antes de
+        # servir» se lee como un parche automático. Pero solo cubrió el camino del COMPLEMENTO.
+        # El closer de proteína inserta su paso por aquí, y siguió soltándolo.
+        #
+        # Medido en el plan vivo del owner (merienda "Lechosa Fresca con Queso Ricotta y Yogurt"):
+        #   verbo de cocción detectado: NINGUNO   ·   paso MONTAJE presente en el índice 2
+        # o sea que cumplía las dos condiciones de la fusión y aun así salió con el paso suelto —
+        # y el Montaje ni mencionaba el yogurt. La fusión solo se registró 1 vez en 3 horas de
+        # logs justamente por esto: cubría un camino de dos.
+        #
+        # ⚠️ Gate por WORDING, no solo por "plato frío". El paso del closer no siempre significa
+        # "añádelo y ya": puede decir «Cocina X a la plancha» o «Agrega X a la licuadora». Fundir
+        # eso en el emplatado se saltaría la cocción o el licuado. Solo se funde la rama fría
+        # «Incorpora … mézclal…», que es exactamente la que produce el caso del yogurt/cottage.
+        # Misma asimetría que ya documenta `_merge_complement_into_montaje`: un falso positivo
+        # cuesta conservar el paso suelto (feo pero correcto); un falso negativo manda al plato
+        # un ingrediente sin cocinar.
+        #
+        # Se REUTILIZA el helper existente en vez de escribir una segunda fusión: él ya comprueba
+        # que ningún paso cocine y que exista Montaje. Dos implementaciones del mismo predicado
+        # divergen — es el patrón que P1-PANTRY-GATE-SSOT cerró a base de disgustos.
+        _rama_fria = ("Incorpora " in _step) and ("mézclal" in _step)
+        if (COMPLEMENT_INTO_MONTAJE and _rama_fria and isinstance(rec, list)
+                and _merge_complement_into_montaje(rec, [nm])):
+            meal["recipe"] = rec
+            logger.info(f"🍽️ [P1-CLOSER-INTO-MONTAJE] '{nm}' fusionado en el Montaje "
+                        f"(sin paso suelto) — {str(meal.get('name'))[:40]}")
+            return True
         meal["recipe"] = _insert_step_before_montaje(rec, _step)
         return True
     except Exception:

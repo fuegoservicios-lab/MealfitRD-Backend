@@ -63,13 +63,31 @@ def test_genuinely_missing_still_gets_step(go, monkeypatch):
 # ───────────── closer: dup + redundante + wording ─────────────
 
 def test_closer_step_not_duplicated(go):
+    """[reapuntado 2026-07-27 · P1-CLOSER-INTO-MONTAJE] La invariante es IDEMPOTENCIA —el closer
+    corre en dos seams y no debe duplicar—, no la FORMA del resultado.
+
+    Antes se contaban pasos con 💪 y se exigía exactamente 1. Desde P1-CLOSER-INTO-MONTAJE, en un
+    plato FRÍO el ingrediente se funde dentro del Montaje («… Termina con queso cottage.») en vez
+    de dejar un paso suelto, que se leía como un parche automático. Este caso —"Mise en place:
+    pela. / Montaje: sirve."— no cocina, así que funde: 0 pasos con 💪 y la aserción de forma
+    fallaba pese a que la idempotencia se cumple.
+
+    Se afirma lo que importa: tras DOS pasadas el ingrediente aparece UNA sola vez, esté fundido
+    en el Montaje o como paso propio.
+    """
     meal = {"name": "Batata con Guisantes",
             "recipe": ["Mise en place: pela.", "Montaje: sirve."]}
     assert go._append_closer_protein_step(meal, "queso cottage", True) is True
-    n1 = sum(1 for s in meal["recipe"] if "💪" in str(s))
     assert go._append_closer_protein_step(meal, "queso cottage", True) is False, \
         "2ª pasada (el closer corre en dos seams) → no duplica"
-    assert sum(1 for s in meal["recipe"] if "💪" in str(s)) == n1 == 1
+    _texto = " ".join(str(s) for s in meal["recipe"]).lower()
+    assert _texto.count("queso cottage") == 1, (
+        f"el ingrediente debe quedar mencionado UNA vez tras dos pasadas: {meal['recipe']}"
+    )
+    # Y como este plato es frío, debe estar FUNDIDO (sin paso suelto).
+    assert not any("💪" in str(s) for s in meal["recipe"]), (
+        f"plato frío: el closer debe fundir en el Montaje, no dejar paso suelto: {meal['recipe']}"
+    )
 
 
 def test_closer_step_skipped_when_food_already_in_recipe(go):
