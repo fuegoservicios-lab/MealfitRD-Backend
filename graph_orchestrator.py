@@ -1910,6 +1910,28 @@ def _is_transient_upstream_error(exc: BaseException) -> bool:
     """
     try:
         _type_name = type(exc).__name__
+        # [P1-TRANSIENT-DEEPSEEK · 2026-07-27] Taxonomía del cliente OpenAI-compatible, que es
+        # el que usa DeepSeek desde P0-DEEPSEEK-MIGRATION (2026-06-12).
+        #
+        # Esta función se escribió el 2026-05-21 para las firmas de GOOGLE y NUNCA se actualizó
+        # al proveedor nuevo. Resultado: `APIConnectionError` —un fallo de RED puro, el error
+        # más transitorio que existe— contaba como mala salud del modelo y abría el circuit
+        # breaker. Es exactamente el bug que esta función existe para evitar, descrito en su
+        # propio docstring, con otro proveedor.
+        #
+        # Medido en los logs del VPS (6 h): 25 correcciones del self-critique intentadas, 12
+        # perdidas — 6 por `pro_error:APIConnectionError` y **6 por `pro_cb_open`**, o sea el
+        # breaker que abrieron las primeras. De ahí salieron 2 regeneraciones COMPLETAS de plan
+        # (el revisor rechaza por "misma proteína repetida" justo lo que la corrección perdida
+        # iba a arreglar). Un hipo de red desactivaba PRO para todos, incluido el revisor médico
+        # que va a PRO en todos los tiers.
+        #
+        # Coste del fix: cero llamadas LLM extra. Solo deja de castigar al modelo por la red.
+        if _type_name in (
+            "APIConnectionError", "APITimeoutError", "InternalServerError",
+            "ConnectionError", "ConnectTimeout", "ReadTimeout", "RemoteProtocolError",
+        ):
+            return True
         # Excepciones canónicas que documentan transient upstream
         if _type_name in (
             "ServiceUnavailable", "InternalServerError", "GatewayTimeout",
