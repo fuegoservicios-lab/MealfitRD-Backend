@@ -552,6 +552,30 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     _protein_diversity_on = _os_dg.environ.get(
         "MEALFIT_DAYGEN_PROTEIN_DIVERSITY", "true"
     ).strip().lower() not in ("false", "0", "off", "no")
+    # [P1-CARB-BASE-NO-REPEAT · 2026-07-27] El sembrador reparte DOS bases por día
+    # (`ai_helpers._rotate_pairs`), pero esa asignación solo llegaba al prompt del ESQUELETO
+    # (`prompts/preferences.py`). Quien escribe los ingredientes es ESTE generador, y aquí el
+    # `carb_pool` se listaba pelado, sin regla alguna. Medido en el plan vivo 08114452: almuerzo
+    # y cena del día 2 llevaron papa las dos veces (225 g + 74 g).
+    #
+    # ⚠️ Solo se emite con ≥2 bases en el pool. Pedir "no repitas" con una sola base sería una
+    # restricción insatisfacible, que es exactamente como el gate de fruta acabó forzando el 67%
+    # de reintentos (P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26).
+    # Se sanea UNA vez y se usa para las dos cosas (mostrar el pool y decidir la regla). El
+    # `', '.join(carb_pool)` original reventaba con un None dentro de la lista — hoy lo cubre el
+    # esquema Pydantic (`List[str]`), pero este prompt es camino crítico: si lanza, NO se genera
+    # ningún día. Un test de basura lo destapó al añadir la regla.
+    _carbs_asignados = [str(c).strip() for c in (skeleton_day.get('carb_pool') or [])
+                        if c is not None and str(c).strip()]
+    carb_no_repeat_block = ""
+    if len(_carbs_asignados) >= 2:
+        carb_no_repeat_block = (
+            f"\n• ⛔ NO REPITAS LA BASE: el Almuerzo y la Cena deben llevar bases DISTINTAS entre sí — "
+            f"una con '{_carbs_asignados[0]}' y la otra con '{_carbs_asignados[1]}'. Usar la misma base "
+            f"en las dos comidas fuertes del día es un fallo: produce jornadas con papa en almuerzo Y "
+            f"cena. Si el desayuno o la merienda ya llevan una de las dos, tanto mejor variar."
+        )
+
     protein_diversity_block = ""
     if _protein_diversity_on:
         protein_diversity_block = (
@@ -576,7 +600,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}
-• Carbohidratos Asignados: {', '.join(skeleton_day.get('carb_pool', []))}
+• Carbohidratos Asignados: {', '.join(_carbs_asignados)}{carb_no_repeat_block}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}
 • Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{dinner_identity_block}{protein_diversity_block}
 {dish_library_block}{prohibited_block}
