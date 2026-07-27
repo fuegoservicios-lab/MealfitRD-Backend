@@ -293,18 +293,32 @@ class TestLiquidPostFilter:
         assert all(d.get("magnitude") is not True for d in divs)
 
     def test_liquid_outside_extended_tolerance_reports(self, monkeypatch):
-        """Aceite recipe=10ml, list=100ml → delta=900%; aún fuera de tol_liquid=50% → SI reporta."""
+        """Aceite recipe=100ml, list=10ml → delta=-90%; fuera de tol_liquid=50% → SÍ reporta.
+
+        [reapuntado 2026-07-27] Dos capas deliberadas posteriores rodearon el escenario original
+        (10→100ml, sobre-oferta) sin que la tolerancia líquida muriera:
+          1. P3-VERIFIED-INGREDIENTS-ONLY (06-20, ON por default desde 07-02): con el catálogo
+             vacío del mock, el aceite caía del lado ESPERADO y todo degeneraba a un fantasma
+             `aggregated_only` — la comparación de magnitud ni corría. Se apaga el knob aquí:
+             este fixture modela exactamente el mundo pre-verified.
+          2. P1-COHERENCE-PACKAGING-NOISE (07-26): la SOBRE-oferta de envase de no-proteína es
+             estructural (la botella de aceite es más grande que la receta) y se filtra a
+             propósito. La dirección que sigue siendo señal es la SUB-oferta — comprar MENOS de
+             lo que las recetas piden nunca es "el envase redondea": se cambia el escenario a
+             100→10ml, que preserva la intención original (fuera de tolerancia → reporta).
+        """
         from shopping_calculator import run_shopping_coherence_guard
 
         monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_GUARD", "warn")
+        monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "false")
 
         with patch("shopping_calculator.get_master_ingredients", return_value=[]):
-            plan = self._build_plan(recipe_qty=10.0, list_qty=100.0)
+            plan = self._build_plan(recipe_qty=100.0, list_qty=10.0)
             divs = run_shopping_coherence_guard(plan, mode_override="warn", multiplier=1.0)
 
-        # Debe haber al menos una divergencia magnitud.
+        # Debe haber al menos una divergencia magnitud (sub-oferta -90% > tol_liquid 50%).
         mag_divs = [d for d in divs if d.get("magnitude") is True]
-        assert len(mag_divs) >= 1
+        assert len(mag_divs) >= 1, divs
 
     def test_non_liquid_uses_base_tolerance(self, monkeypatch):
         """Pollo (no-líquido) con delta=50% SIGUE reportándose porque base=10%."""

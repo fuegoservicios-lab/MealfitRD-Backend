@@ -3757,6 +3757,16 @@ class PlanState(TypedDict):
     #   - `_quality_degraded_severity`        (string — minor / high).
     #   - `_quality_degraded_attempts`        (int — nº de attempt al degradar).
     #
+    # [P1-SUITE-SWEEP · 2026-07-27] BUDGET + SHOPPING COMPLETENESS (viajan en
+    # `plan_result`, NO en state):
+    #   - `_budget_adjusted`                  (bool — el cheapen-day/budget swap
+    #                                           tocó el plan; banner honesto de
+    #                                           sustituciones por presupuesto).
+    #   - `_shopping_completeness`            (dict — señal de lista de compras
+    #                                           vacía/incompleta pese a recetas;
+    #                                           la lee `review_plan_node` y el
+    #                                           guard del plan entregado).
+    #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
     # campo en este TypedDict ANTES de tocar el call site — el bug equivalente
@@ -15668,9 +15678,18 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
         _blended = ("licuadora" in _human_blob or "licua" in _human_blob
                     or _name_suggests_blended(meal.get("name", ""), _sa_cs))
         # [P1-PRECOOKED-FROM-LINE · 2026-07-25] ¿la LÍNEA del plato ya dice "cocido"?
+        # [P1-CLOSER-OWN-LINE-EXEMPT · 2026-07-27] …pero NO la línea que el PROPIO closer acaba de
+        # insertar ("58g de pechuga de pollo cocido" — el sufijo es base de peso, no estado de
+        # compra). Leerla convertía pollo crudo en "Incorpora (ya viene cocido)": nadie lo
+        # cocinaba. La regla del 07-25 era para líneas del LLM ("camarones cocidos" enlatados).
+        _nm_low_pf = _sa_cs(str(nm).lower())
+        _own_line_rx = _re.compile(r"^\s*\d+(?:[.,]\d+)?\s*g\s+de\s+" + _re.escape(_nm_low_pf)
+                                   + r"\s+cocid[oa]s?\s*$")
         _precooked_line = False
         for _ln in (meal.get("ingredients") or []):
             _l = _sa_cs(str(_ln).lower())
+            if _own_line_rx.match(_l):
+                continue  # la firma exacta de la línea del closer → no es evidencia de precocido
             if "cocid" in _l and _stems and any(
                     _re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _l) for st in _stems):
                 _precooked_line = True
@@ -18436,7 +18455,13 @@ def _ensure_ingredients_used_in_recipe(meal: dict) -> int:
         # podría saltarse su cocción — y los víveres que DEBEN cocerse ya tienen su rama propia
         # (P1-RECIPE-POLISH-5, arriba). Ahí se conserva el paso separado.
         # Rollback: MEALFIT_COMPLEMENT_INTO_MONTAJE=false. tooltip-anchor: P1-COMPLEMENT-INTO-MONTAJE
-        if (COMPLEMENT_INTO_MONTAJE and _es_frio and isinstance(recipe, list)
+        #
+        # [P1-BLENDER-FUSION-EXEMPT · 2026-07-27] Los LICUADOS quedan FUERA de la fusión: "Termina
+        # con espinacas frescas" tras el Licúa deja la espinaca SIN licuar en un batido verde — el
+        # ingrediente debe ir A LA LICUADORA antes de licuar (rama `_blended` de abajo, que la
+        # fusión estaba cortocircuitando). La fusión era para meriendas frías tipo bowl, no para
+        # batidos. Regresión destapada por test_p1_blender_step_coherence en rojo.
+        if (COMPLEMENT_INTO_MONTAJE and _es_frio and not _blended and isinstance(recipe, list)
                 and _merge_complement_into_montaje(steps, _rest_c)):
             meal["recipe"] = steps
             logger.info(f"🍽️ [P1-COMPLEMENT-INTO-MONTAJE] {len(_rest_c)} ingrediente(s) fusionado(s) "

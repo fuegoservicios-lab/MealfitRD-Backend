@@ -70,8 +70,12 @@ def test_cohort_helper_deterministic_per_user():
 def test_metric_emit_tagged_with_cohort():
     """La métrica clinical_band debe llevar el tag de cohorte (única forma de sliceear OFF vs ON)."""
     src = _src()
-    emit = src[src.find('"node": "clinical_band"'):]
-    emit = emit[:1500]  # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] +per_day empujó el offset
+    # [reapuntado 2026-07-27] Ventana de bytes fija caducada por SEGUNDA vez (1000→1500 el 07-10,
+    # y hoy el tag quedó a 1850). Un número mágico caduca con cada inserción; el límite
+    # estructural (hasta el siguiente `def`) no.
+    i = src.find('"node": "clinical_band"')
+    fin = src.find("\ndef ", i)
+    emit = src[i:fin if fin > 0 else len(src)]
     assert "self_critique_cohort" in emit, "el emit de clinical_band debe etiquetar self_critique_cohort"
 
 

@@ -111,11 +111,29 @@ def test_new_condition_active_and_has_prompt(cond, rule_id):
 
 
 def test_new_conditions_are_referral_not_substitution():
-    """Las 5 nuevas son advisory/derivación — sin sustituciones deterministas (cautela del audit)."""
-    for rid in ("pregnancy", "hypothyroid", "gout", "nafld", "pcos"):
+    """Las 5 nuevas son advisory/derivación; 4 sin sustituciones deterministas.
+
+    [reapuntado 2026-07-27] La cautela original del audit ("cero sustituciones") fue superada
+    DELIBERADAMENTE por el gate embarazo/lactancia (commit e07bdea, P1-3): pregnancy ganó UNA
+    sustitución — pescado alto en mercurio (tiburón/pez espada/marlin/king mackerel) → pescado
+    blanco. Es contraindicación de libro en embarazo; sustituir es MÁS seguro que solo derivar.
+    La clasificación sigue siendo referral (no reemplaza la consulta médica) y las otras 4
+    condiciones permanecen sin sustituciones. Si pregnancy gana una 2ª sustitución o alguna de
+    las otras 4 gana la primera, este test debe caer y forzar la conversación clínica.
+    """
+    for rid in ("hypothyroid", "gout", "nafld", "pcos"):
         rule = cr._RULES_BY_ID[rid]
         assert rule.substitutions == (), rid
         assert rule.classification == cr.CLINICAL_REFERRAL, rid
+    preg = cr._RULES_BY_ID["pregnancy"]
+    assert preg.classification == cr.CLINICAL_REFERRAL
+    assert len(preg.substitutions) == 1, (
+        "pregnancy debe tener EXACTAMENTE la sustitución de mercurio (e07bdea); una 2ª requiere "
+        "revisión clínica explícita"
+    )
+    _triggers = " ".join(preg.substitutions[0][0])
+    assert "tiburon" in _triggers and "pez espada" in _triggers, preg.substitutions[0][0]
+    assert "pescado blanco" in str(preg.substitutions[0][1]).lower()
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

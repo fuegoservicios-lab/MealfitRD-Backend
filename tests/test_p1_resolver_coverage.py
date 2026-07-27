@@ -174,3 +174,17 @@ def test_populate_has_usda_query_for_new_ingredients():
         txt = f.read()
     for name in ("Manzana", "Pepino", "Granola", "Maní"):
         assert re.search(rf'"{name}"\s*:', txt), f"populate sin USDA_QUERY para {name}"
+
+
+# ── [P1-PREP-HEAD-GUARD · 2026-07-27] la harina es material, no producto ──────
+def test_prep_guard_no_secuestra_al_sustantivo_cabeza():
+    """"TORTILLA de harina de trigo (wrap, 60g)" resolvía a HARINA DE TRIGO cruda: el guard
+    de preparaciones casaba "harina de X" en cualquier posición. Con cabeza ajena (tortilla/
+    pan/bollitos) el guard debe abstenerse y dejar que los tiers resuelvan el producto real.
+    Destapado por este mismo archivo en rojo — el fixture devolvía None."""
+    import shopping_calculator as sc
+    assert sc.resolve_preparation_distinct("tortilla de harina de trigo (wrap, 60g)") == (False, None)
+    assert sc.resolve_preparation_distinct("pan de harina de maiz") == (False, None)
+    # las UNIDADES no son cabeza: "1 taza de harina" sigue siendo harina
+    assert sc.resolve_preparation_distinct("1 taza de harina de trigo") == (True, "Harina de trigo")
+    assert sc.resolve_preparation_distinct("harina de trigo (42 g)") == (True, "Harina de trigo")

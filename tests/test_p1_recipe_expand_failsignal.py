@@ -106,8 +106,11 @@ def test_expand_agent_uses_model_knob(ai_src: str):
         ai_src,
     ), "El knob debe leer MEALFIT_RECIPE_EXPAND_MODEL con default DEEPSEEK_FLASH."
     body = _fn_body(ai_src, "expand_recipe_agent")
-    assert "model=_recipe_expand_model_name()" in body, (
-        "expand_recipe_agent debe usar model=_recipe_expand_model_name()."
+    # [reapuntado 2026-07-27] Exigía el literal `model=_recipe_expand_model_name()` y el callsite
+    # pasó el modelo POSICIONAL (mismo knob, misma semántica). La invariante es que la función
+    # invoque el knob — keyword o posicional — y no hardcodee; el literal exacto caducó.
+    assert "_recipe_expand_model_name()" in body, (
+        "expand_recipe_agent debe obtener el modelo vía _recipe_expand_model_name()."
     )
     assert not re.search(r'model\s*=\s*"[a-z0-9.-]+"', body), (
         "expand_recipe_agent volvió a hardcodear el modelo."

@@ -30,37 +30,37 @@ def _read(path: Path) -> str:
 
 
 def test_credits_ttl_at_least_60s():
-    """[P1-CREDITS-CHECK-TTL] TTL debe ser >=60s. Pre-fix era 5s,
-    perceptible como delay en cada click."""
+    """[P1-CREDITS-CHECK-TTL] El TTL del gate de créditos del Dashboard debe ser >=60s.
+    Pre-fix era 5s, perceptible como delay en cada click.
+
+    [reapuntado 2026-07-27] La constante `_CACHE_TTL_MS` murió el 2026-07-09 (P2-3): el cache
+    migró a TanStack (`utils/quotaCache.js::getFreshPlanCount`) y el TTL se expresa por callsite
+    vía `ttlMs`. La INVARIANTE es la misma — el Dashboard no debe re-fetchear en cada click — y
+    hoy vive en el `ttlMs` que el Dashboard pasa (120s). Este test estuvo rojo desde la migración
+    sin proteger nada: la constante que exigía ya no podía existir.
+    """
     src = _read(_DASHBOARD_JSX)
-    # Buscar la constante o literal del TTL dentro de validateCreditsAsync.
-    fn_match = re.search(
-        r"const\s+validateCreditsAsync\s*=\s*async\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*;",
+    call = re.search(
+        r"getFreshPlanCount\(\s*[^)]*?\{\s*ttlMs\s*:\s*([0-9*\s]+?)\s*\}",
         src,
         re.DOTALL,
     )
-    assert fn_match, "validateCreditsAsync no encontrada"
-    body = fn_match.group(1)
-    # Buscar _CACHE_TTL_MS o el literal numérico.
-    ttl_match = re.search(
-        r"(_CACHE_TTL_MS|__lastQuotaCheckTime\s*\|\|\s*0\)\s*>\s*)(\d+)",
-        body,
+    assert call, (
+        "El Dashboard debe invocar getFreshPlanCount con `ttlMs` explícito — sin él cae al "
+        "default de 5s de quotaCache.js y vuelve el delay por click pre-fix."
     )
-    # Mejor: extraer cualquier `const _CACHE_TTL_MS = N * 1000;`
-    const_match = re.search(r"_CACHE_TTL_MS\s*=\s*(.+?);", body)
-    assert const_match, (
-        "Constante `_CACHE_TTL_MS` ausente — TTL puede estar hardcoded. "
-        "Usar constante named para claridad. Ver P1-CREDITS-CHECK-TTL."
-    )
-    expr = const_match.group(1).strip()
+    # Sin eval: la clase de captura del regex es [0-9*\s], así que la expresión solo puede ser
+    # un producto de enteros ("120 * 1000"). Se multiplica a mano.
     try:
-        ttl_ms = eval(expr, {"__builtins__": {}}, {})
+        ttl_ms = 1
+        for _factor in call.group(1).split("*"):
+            ttl_ms *= int(_factor.strip())
     except Exception:
         ttl_ms = 0
     assert ttl_ms >= 60 * 1000, (
-        f"_CACHE_TTL_MS = {ttl_ms}ms < 60s. Pre-fix era 5000ms causando "
-        f"delay perceptible en cada click. Subir a >=60s. Ver "
-        f"P1-CREDITS-CHECK-TTL · 2026-05-20."
+        f"ttlMs del Dashboard = {ttl_ms}ms < 60s. El gate de créditos del Dashboard tolera "
+        f"staleness (el quota real se enforza server-side con 402); re-fetchear por click solo "
+        f"añade latencia. Ver P1-CREDITS-CHECK-TTL · 2026-05-20 y P2-3 · 2026-07-09."
     )
 
 

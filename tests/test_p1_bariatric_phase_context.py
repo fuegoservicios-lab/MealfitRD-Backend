@@ -42,11 +42,31 @@ def test_bariatric_protein_cap_via_freetext():
 
 
 def test_bariatric_protein_cap_redistributes_to_fat_not_carbs():
-    # las kcal liberadas del cap van a GRASA (no carbos → evita dumping)
-    m = nc.get_nutrition_targets(_baria_form())["macros"]
-    m_ctrl = nc.get_nutrition_targets(_baria_form(medicalConditions=["Ninguna"]))["macros"]
-    # con bariátrica la grasa sube respecto al control (recibe las kcal de la proteína capeada)
-    assert m["fats_g"] >= m_ctrl["fats_g"]
+    """Las kcal liberadas del cap de proteína van a GRASA (no carbos → evita dumping).
+
+    [reapuntado 2026-07-27] Comparaba GRAMOS absolutos y una feature posterior —el techo kcal
+    bariátrico (`bariatric_kcal_ceiling_applied`: la capacidad del pouch hace inalcanzable el
+    TDEE; 2000 vs 2700 kcal del control, deliberada y con nota clínica propia)— hizo esa
+    comparación de manzanas con peras: menos kcal totales ⇒ menos grasa absoluta aunque la
+    redistribución sea correcta. La invariante vive en las FRACCIONES: la grasa bariátrica pesa
+    MÁS del total que en el control (recibe lo liberado) y los carbos NO pesan más (dumping).
+    Medido al reapuntar: grasa 39% vs 30%, carbos 45% vs 45%.
+    """
+    b = nc.get_nutrition_targets(_baria_form())["macros"]
+    c = nc.get_nutrition_targets(_baria_form(medicalConditions=["Ninguna"]))["macros"]
+
+    def _kcal(m):
+        return m["protein_g"] * 4 + m["carbs_g"] * 4 + m["fats_g"] * 9
+
+    fat_frac_b = b["fats_g"] * 9 / _kcal(b)
+    fat_frac_c = c["fats_g"] * 9 / _kcal(c)
+    carb_frac_b = b["carbs_g"] * 4 / _kcal(b)
+    carb_frac_c = c["carbs_g"] * 4 / _kcal(c)
+    assert fat_frac_b >= fat_frac_c, (fat_frac_b, fat_frac_c)
+    assert carb_frac_b <= carb_frac_c + 0.02, (
+        f"los carbos bariátricos pesan más que en el control ({carb_frac_b:.0%} vs "
+        f"{carb_frac_c:.0%}): las kcal del cap de proteína se fueron a carbos → riesgo dumping"
+    )
 
 
 def test_small_bariatric_patient_not_overcapped():

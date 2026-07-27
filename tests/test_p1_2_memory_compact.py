@@ -135,13 +135,27 @@ def test_no_orphan_topic_files():
         `reference_*.md` — son entries válidas del índice.
     """
     _skip_if_missing()
+    # [reapuntado 2026-07-27] El índice se compactó archivando los meses viejos en
+    # `MEMORY_archivo_*.md` (el índice se carga entero cada sesión; el archivo solo bajo demanda).
+    # Una referencia sigue viva si está en MEMORY.md O en un archivo de histórico que MEMORY.md
+    # enlaza — un nivel de indirección, no un grafo: si el histórico se desengancha del índice,
+    # sus 100+ referencias vuelven a contar como huérfanas, que es el comportamiento correcto.
     text = _MEMORY_MD.read_text(encoding="utf-8")
     refs = re.findall(r"\(([a-zA-Z0-9_./-]+\.md)(?:#[^\)]+)?\)", text)
     referenced = {Path(r).name for r in refs if not r.startswith(("http://", "https://"))}
+    for archivo in sorted(referenced):
+        if not archivo.startswith("MEMORY_archivo"):
+            continue
+        p = _MEMORY_DIR / archivo
+        if p.is_file():
+            sub = re.findall(r"\(([a-zA-Z0-9_./-]+\.md)(?:#[^\)]+)?\)",
+                             p.read_text(encoding="utf-8"))
+            referenced |= {Path(r).name for r in sub
+                           if not r.startswith(("http://", "https://"))}
     existing = {p.name for p in _MEMORY_DIR.glob("*.md")} - {"MEMORY.md"}
     orphans = sorted(existing - referenced)
     assert not orphans, (
         f"{len(orphans)} archivo(s) huérfano(s) en {_MEMORY_DIR.name}/ "
-        f"(no referenciados desde MEMORY.md): {orphans[:5]}. "
+        f"(no referenciados desde MEMORY.md ni sus archivos de histórico): {orphans[:5]}. "
         f"Añadir entrada al índice o eliminar el archivo."
     )

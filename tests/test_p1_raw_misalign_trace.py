@@ -171,7 +171,12 @@ def test_missing_bread_materialized(go, monkeypatch):
 def test_thinking_effort_knob():
     m = re.search(r'REVIEWER_THINKING_EFFORT = str\(_env_str\("MEALFIT_REVIEWER_THINKING_EFFORT", ""\)\)', _GO)
     assert m, "knob opcional (vacío = comportamiento actual)"
-    i = _GO.index('_think_body = {"type": "enabled"}')
-    win = _GO[i:i + 400]
+    # [reapuntado 2026-07-27] `.index()` anclaba en `_surg_think_body = {"type": "enabled"}`
+    # (SURGICAL_PRO, añadido después) porque CONTIENE `_think_body = ...` como subcadena — la
+    # misma trampa de subcadena de siempre, ahora entre nombres de variable. El reviewer real
+    # está 1.7 MB después y correcto. Lookbehind: la variable debe EMPEZAR ahí.
+    m2 = re.search(r'(?<!\w)_think_body = \{"type": "enabled"\}', _GO)
+    assert m2, "bloque thinking del reviewer no encontrado"
+    win = _GO[m2.start():m2.start() + 400]
     assert '_think_body["effort"] = REVIEWER_THINKING_EFFORT' in win, \
         "el effort graduable (low→max) entra al extra_body solo si el knob está seteado"

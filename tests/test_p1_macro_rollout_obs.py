@@ -54,7 +54,10 @@ def test_low_fallback_resolves():
 
 
 def test_insufficient_samples_only_tick():
-    w = _run_with(total=5, fallback=3)  # < min_samples (10) → skip
+    # [reapuntado 2026-07-27] El default del knob MEALFIT_FALLBACK_RATE_MIN_SAMPLES bajó de 10 a 5,
+    # así que total=5 YA es muestra suficiente (3/5=60% dispara el alert — comportamiento correcto
+    # del cron, no un bug). La muestra insuficiente del test debe quedar POR DEBAJO del default.
+    w = _run_with(total=4, fallback=3)  # < min_samples (default 5) → skip
     assert _writes_to_system_alerts(w) == [], "no debe tocar system_alerts con muestra insuficiente"
     # El tick observable a pipeline_metrics SÍ debe emitirse siempre.
     assert any("pipeline_metrics" in c.args[0] for c in w.call_args_list)

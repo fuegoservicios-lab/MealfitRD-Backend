@@ -106,22 +106,32 @@ def test_zero_async_client_without_timeout():
 
 
 def test_four_callsites_use_knob_variable():
-    """Los 4 callsites a PayPal deben usar `timeout=_HTTPX_TIMEOUT_S`, NO
+    """TODOS los callsites a PayPal deben usar `timeout=_HTTPX_TIMEOUT_S`, NO
     literal numérico (`timeout=15.0` o similar). Pasar la variable garantiza
     que el knob `MEALFIT_HTTPX_TIMEOUT_S` aplica a TODOS los callsites — un
     literal hardcoded ignora silenciosamente el override SRE.
+
+    [reapuntado 2026-07-27] Fijaba `== 4` exacto y billing.py creció a 6
+    clientes — los DOS nuevos ya llevaban el knob, o sea que el rojo no
+    protegía nada (misma clase que las ventanas de bytes fijas: un conteo
+    exacto caduca con cada adición correcta). La invariante real es
+    estructural: cada `httpx.AsyncClient(` lleva el knob, y hay al menos los
+    4 históricos. `test_all_asyncclient_have_timeout` (arriba) ya cierra el
+    caso "cliente sin timeout"; este cierra "timeout literal".
     """
     src = _read(_BILLING)
     callsites = re.findall(
         r"httpx\.AsyncClient\(\s*timeout\s*=\s*_HTTPX_TIMEOUT_S\s*\)",
         src,
     )
-    assert len(callsites) == 4, (
-        f"Esperados exactamente 4 callsites con `timeout=_HTTPX_TIMEOUT_S` "
-        f"en billing.py (OAuth verify, cancel-old-sub, cancel direct, "
-        f"webhook verify). Encontrados: {len(callsites)}. "
-        f"Si añadiste un 5° callsite a PayPal, actualiza este conteo y "
-        f"asegúrate que también usa el knob."
+    total_clients = len(re.findall(r"httpx\.AsyncClient\(", src))
+    assert len(callsites) == total_clients, (
+        f"{total_clients - len(callsites)} cliente(s) httpx en billing.py no usan "
+        f"`timeout=_HTTPX_TIMEOUT_S` — el knob SRE no les aplica."
+    )
+    assert len(callsites) >= 4, (
+        f"Solo {len(callsites)} clientes con el knob — los 4 históricos (OAuth "
+        f"verify, cancel-old-sub, cancel direct, webhook verify) son el piso."
     )
     # Defensa: cero literales numéricos en `httpx.AsyncClient(timeout=...)`
     bad = re.search(r"httpx\.AsyncClient\(\s*timeout\s*=\s*[0-9]", src)

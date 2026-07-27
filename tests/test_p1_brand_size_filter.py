@@ -96,8 +96,12 @@ def test_item_carries_package_grams(master_stub):
 
 
 def test_package_grams_anchor_in_result_dict():
+    # [reapuntado 2026-07-27] Era `SRC[i:i+1200]` y el código entre `display_qty` y la asignación
+    # creció a 5143 bytes (P1-COVERAGE-VS-PURCHASE y compañía) — décima ventana de bytes fija
+    # caducada. Límite estructural: misma función, orden relativo, sin número mágico.
     i = SRC.index('"display_qty": display_qty_final,')
-    win = SRC[i:i + 1200]
+    fin = SRC.find("\ndef ", i)
+    win = SRC[i:fin if fin > 0 else len(SRC)]
     assert 'result["package_grams"]' in win, (
         "apply_smart_market_units debe exponer package_grams junto al resto del ítem"
     )

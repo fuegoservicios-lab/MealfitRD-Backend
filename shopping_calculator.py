@@ -5631,6 +5631,14 @@ def canonicalize_legumino(name) -> str | None:
 # passthrough (no matchea master → verified-only lo dropea y el guard de coherencia ve ambos lados igual) y
 # nutrition_db devuelve None (no computar macros del producto equivocado). tooltip-anchor: P1-PREP-COLLAPSE-GUARD
 _PREP_FLOUR_RE = re.compile(r"\bharinas?\s+de\s+([a-z]+)")
+# [P1-PREP-HEAD-GUARD · 2026-07-27] unidades que pueden preceder a "de harina..." sin cambiar el
+# sustantivo cabeza ("1 taza de harina de trigo" ES harina; "tortilla de harina de trigo" NO).
+_PREP_HEAD_UNITS = frozenset((
+    "taza", "tazas", "cda", "cdas", "cdta", "cdtas", "cucharada", "cucharadas",
+    "cucharadita", "cucharaditas", "g", "gr", "gramos", "kg", "ml", "l", "lb", "lbs",
+    "libra", "libras", "oz", "onza", "onzas", "paquete", "paquetes", "funda", "fundas",
+    "sobre", "sobres", "pizca", "porcion", "porciones", "mitad", "resto", "parte",
+))
 _PREP_FLOUR_CANON = {
     "avena": "Avena",
     "maiz": "Harina de maíz precocida",
@@ -5660,6 +5668,14 @@ def resolve_preparation_distinct(name) -> tuple:
         low = str(name).lower()
     m = _PREP_FLOUR_RE.search(low)
     if m:
+        # [P1-PREP-HEAD-GUARD · 2026-07-27] "TORTILLA de harina de trigo (wrap, 60g)" resolvía a
+        # HARINA DE TRIGO cruda: el regex casa "harina de X" en cualquier posición y el guard
+        # secuestraba productos cuyo sustantivo cabeza es otro (tortilla/bollitos/pan — la harina
+        # es el material, no el producto). Si antes de "harina" viene "<palabra> de ", solo es
+        # producto-harina cuando esa palabra es una UNIDAD de medida ("1 taza de harina de trigo").
+        _pre_m = re.search(r"([a-z]\w*)\s+de\s+$", low[:m.start()])
+        if _pre_m and _pre_m.group(1) not in _PREP_HEAD_UNITS:
+            return (False, None)  # cabeza ajena (tortilla/pan/bollitos) → tiers normales
         base = m.group(1)
         if base in _PREP_FLOUR_CANON:
             return (True, _PREP_FLOUR_CANON[base])
