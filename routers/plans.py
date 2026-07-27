@@ -87,6 +87,16 @@ _PLAN_GEN_LIMITER = RateLimiter(max_calls=3, period_seconds=60)
 # Buckets independientes (singletons a nivel módulo). Mismo bucket-key
 # strategy que `_PLAN_GEN_LIMITER`: prefer `verified_user_id`, fall back a
 # `ip:<host>` para anon (vía RateLimiter P1-6).
+# [P1-CLINICAL-MEAL-COUNT · 2026-06-27 · extraído a constante 2026-07-26] Cap de comidas en el
+# preview del Historial. Subió de 4 a 6: con planes de 5-6 comidas, un cap de 4 hacía que el
+# badge "+N" (overflow = total − mostrados) MINTIERA u ocultara comidas sin señal — un plan de 6
+# con cap 4 y 4 chips daba "+0" y dos comidas invisibles. 6 es el máximo posible (clamp 2-6).
+#
+# Vive aquí como constante con nombre porque el 4 estaba hardcodeado en tres sitios que
+# divergieron: el loop, el docstring del endpoint ("max 4", ya falso) y dos tests. Ahora los
+# tests la importan y no pueden volver a quedarse atrás.
+_HISTORY_PREVIEW_MEALS_CAP = 6
+
 _RECALC_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 
@@ -12841,7 +12851,7 @@ def api_plans_history_list(
               "cycle_start_date": "<iso|null>",
               "coherence_adjusts_count": <int>,
               "coherence_last_hypotheses": [<str>, ...] (max 5),
-              "preview_meals": [{"name", "meal"}, ...] (max 4),
+              "preview_meals": [{"name", "meal"}, ...] (max _HISTORY_PREVIEW_MEALS_CAP = 6),
               "goal": "<str|null>",
               "diet_preference": "<str|null>",
               "allergies": [<str>, ...],
@@ -13265,11 +13275,9 @@ def api_plans_history_list(
                     "name": m.get("name"),
                     "meal": m.get("meal") or "",
                 })
-                # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Cap a 6 (no 4): con planes de 5-6 comidas un cap de 4
-                # hacía que el badge "+N" del Historial (overflow = total - mostrados) MINTIERA u ocultara
-                # comidas sin señal (un plan de 6 con cap 4 + max 4 chips = "+0", 2 comidas invisibles). 6 = la
-                # cantidad máxima posible de comidas (clamp 2-6). El frontend igual solo pinta 3-4 chips + "+N".
-                if len(preview_meals) >= 6:
+                # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Cap a 6 (no 4) — la razón vive en la
+                # constante `_HISTORY_PREVIEW_MEALS_CAP`. El frontend igual solo pinta 3-4 chips + "+N".
+                if len(preview_meals) >= _HISTORY_PREVIEW_MEALS_CAP:
                     break
 
         # Goal/diet con fallback root → assessment (espeja

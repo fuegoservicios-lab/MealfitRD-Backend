@@ -106,24 +106,38 @@ def test_marker_in_endpoint():
 # ---------------------------------------------------------------------------
 # 2. Comportamiento legacy: meals todos válidos → shape preservado
 # ---------------------------------------------------------------------------
-def test_no_skipped_meals_returns_first_4():
-    """Sin meals skipped, el endpoint devuelve los primeros 4 (cap).
-    Comportamiento legacy preservado para no romper consumidores."""
+def test_no_skipped_meals_returns_first_cap():
+    """Sin meals skipped, el endpoint devuelve los primeros `_CAP` (cap).
+    Comportamiento legacy preservado para no romper consumidores.
+
+    [2026-07-26] El fixture traía 5 comidas cuando el cap era 4. Al subir el cap a 6
+    (P1-CLINICAL-MEAL-COUNT) esas 5 dejaron de alcanzarlo: el test habría afirmado
+    "devuelve las 5" — o sea, que NO se aplicó cap, que es no probar nada. Se amplía a 8
+    para que el cap se ejerza de verdad."""
     meals = [
         {"name": "Avena", "meal": "Desayuno"},
         {"name": "Pollo", "meal": "Almuerzo"},
         {"name": "Snack 1", "meal": "Snack"},
         {"name": "Cena", "meal": "Cena"},
-        {"name": "Extra", "meal": "Extra"},  # 5th, descartado por cap.
+        {"name": "Extra", "meal": "Extra"},
+        {"name": "Tarde", "meal": "Tarde"},
+        {"name": "Noche", "meal": "Noche"},      # 7ma y 8va: descartadas por cap.
+        {"name": "Madrugada", "meal": "Extra 2"},
     ]
     rows = [_row_with_preview(meals)]
     with patch("db_core.execute_sql_query", return_value=rows):
         r = _client().get("/api/plans/history-list")
     assert r.status_code == 200
     plan = r.json()["plans"][0]
-    assert len(plan["preview_meals"]) == 4
+    # [2026-07-26] Se afirma contra la CONSTANTE, no contra un numero. El cap subio de 4 a 6
+    # en P1-CLINICAL-MEAL-COUNT (un cap de 4 hacia mentir al badge "+N" del Historial con
+    # planes de 5-6 comidas) y estos tests se quedaron en el valor viejo. La intencion que
+    # vigilan —que el cap cuente meals VALIDOS, no posiciones del array— no cambia.
+    from routers.plans import _HISTORY_PREVIEW_MEALS_CAP as _CAP
+    assert len(plan["preview_meals"]) == _CAP
     names = [m["name"] for m in plan["preview_meals"]]
-    assert names == ["Avena", "Pollo", "Snack 1", "Cena"]
+    assert names == ["Avena", "Pollo", "Snack 1", "Cena", "Extra", "Tarde"]
+    assert "Noche" not in names and "Madrugada" not in names, "el cap debe recortar"
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +161,10 @@ def test_skipped_meals_filtered_out():
 
 
 def test_first_n_skipped_endpoint_advances_to_fill_cap():
-    """Cuando los primeros N son skipped, el loop avanza por los
-    siguientes para llenar el cap 4 con meals válidos."""
+    """Cuando los primeros N son skipped, el loop avanza por los siguientes para llenar el
+    cap con meals VÁLIDOS — el cap cuenta comidas válidas, no posiciones del array.
+
+    [2026-07-26] Con cap 6 hacen falta 7+ válidos para ejercerlo; el fixture traía 5."""
     meals = [
         {"name": "Skip 1", "meal": "Desayuno", "isSkipped": True},
         {"name": "Skip 2", "meal": "Almuerzo", "isSkipped": True},
@@ -158,6 +174,9 @@ def test_first_n_skipped_endpoint_advances_to_fill_cap():
         {"name": "Valid 3", "meal": "Tarde"},
         {"name": "Valid 4", "meal": "Noche"},
         {"name": "Valid 5", "meal": "Snack 2"},
+        {"name": "Skip 4", "meal": "Extra 2", "isSkipped": True},
+        {"name": "Valid 6", "meal": "Extra 3"},
+        {"name": "Valid 7", "meal": "Extra 4"},
     ]
     rows = [_row_with_preview(meals)]
     with patch("db_core.execute_sql_query", return_value=rows):
@@ -165,8 +184,15 @@ def test_first_n_skipped_endpoint_advances_to_fill_cap():
     assert r.status_code == 200
     plan = r.json()["plans"][0]
     names = [m["name"] for m in plan["preview_meals"]]
-    assert len(names) == 4
-    assert names == ["Valid 1", "Valid 2", "Valid 3", "Valid 4"]
+    # [2026-07-26] Se afirma contra la CONSTANTE, no contra un numero. El cap subio de 4 a 6
+    # en P1-CLINICAL-MEAL-COUNT (un cap de 4 hacia mentir al badge "+N" del Historial con
+    # planes de 5-6 comidas) y estos tests se quedaron en el valor viejo. La intencion que
+    # vigilan —que el cap cuente meals VALIDOS, no posiciones del array— no cambia.
+    from routers.plans import _HISTORY_PREVIEW_MEALS_CAP as _CAP
+    assert len(names) == _CAP
+    assert names == ["Valid 1", "Valid 2", "Valid 3", "Valid 4", "Valid 5", "Valid 6"]
+    assert "Valid 7" not in names, "el cap debe recortar tras llenarse con válidos"
+    assert not any(n.startswith("Skip") for n in names), "ningún skipped debe colarse"
 
 
 def test_bug_original_3_skipped_3_valid_returns_3():

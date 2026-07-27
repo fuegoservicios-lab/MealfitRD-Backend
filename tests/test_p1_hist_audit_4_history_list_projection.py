@@ -254,7 +254,7 @@ def test_coherence_adjusts_count_only_anomalous():
     assert plans[0]["coherence_adjusts_count"] == 4
 
 
-def test_preview_meals_capped_at_four_and_normalized():
+def test_preview_meals_capped_and_normalized():
     """preview_meals: cap 4, solo `{name, meal}` (descarta cals,
     recipe, etc. que son ruido para preview)."""
     client = _client()
@@ -263,13 +263,21 @@ def test_preview_meals_capped_at_four_and_normalized():
         {"name": "M2", "meal": "Almuerzo", "cals": 200},
         {"name": "M3", "meal": "Cena"},
         {"name": "M4", "meal": "Snack"},
-        {"name": "M5", "meal": "Extra"},  # cap → no debe aparecer
+        {"name": "M5", "meal": "Extra"},
+        {"name": "M6", "meal": "Tarde"},
+        {"name": "M7", "meal": "Noche"},    # cap → no deben aparecer
+        {"name": "M8", "meal": "Madrugada"},
     ]
     row = _make_row(preview_meals_raw=raw)
     with patch("db_core.execute_sql_query", return_value=[row]):
         r = client.get("/api/plans/history-list")
     plans = r.json()["plans"]
-    assert len(plans[0]["preview_meals"]) == 4
+    # [2026-07-26] Se afirma contra la CONSTANTE, no contra un numero. El cap subio de 4 a 6
+    # en P1-CLINICAL-MEAL-COUNT (un cap de 4 hacia mentir al badge "+N" del Historial con
+    # planes de 5-6 comidas) y estos tests se quedaron en el valor viejo. La intencion que
+    # vigilan —que el cap cuente meals VALIDOS, no posiciones del array— no cambia.
+    from routers.plans import _HISTORY_PREVIEW_MEALS_CAP as _CAP
+    assert len(plans[0]["preview_meals"]) == _CAP
     # Solo {name, meal} — no cals/recipe.
     for m in plans[0]["preview_meals"]:
         assert set(m.keys()) == {"name", "meal"}
