@@ -19933,6 +19933,7 @@ def _run_assembly_validations(
                             continue
                         for _p in _pats:
                             _s = _p.sub(_repl, _s)
+                        _s = _reparar_concordancia_huevo(_s, _orphan_keys, _sa_af)
                         _new_steps.append(_re.sub(r'\s{2,}', ' ', _s).strip())
                     _recipe_steps = _new_steps
                     meal["recipe"] = _new_steps
@@ -27951,6 +27952,44 @@ _MANI_GENDER_STEP_RX = _re.compile(
 # Solo matchea "huevo" SINGULAR (tras "huevos" viene 's', no espacio → no matchea).
 _EGG_ADJ_CONCORD_RX = _re.compile(
     r"\b(huevo)\s+(frito|batido|revuelto|cocido|pochado|hervido)s\b", _re.IGNORECASE)
+
+
+# [P1-EGG-PROSE-ORPHAN · 2026-07-27] El autofix de coherencia sustituye el SUSTANTIVO huérfano
+# ('huevo' → 'yogurt griego entero') pero deja los participios y verbos que concordaban con él:
+#
+#   "Vierte yogurt griego entero BATIDAS y cocina 2-3 min hasta que CUAJEN"
+#   "…yogurt griego entero REVUELTAS con kale"        (wrap del martes, plan 08114452)
+#
+# Los femeninos plurales apuntan a unos huevos que ya no están. Medido sobre 164 comidas de 14
+# planes vivos: 2 (1.2%), y una de ellas es de las que el guard de honestidad de nombre marcó como
+# degradadas. `_EGG_ADJ_CONCORD_RX` (P1-RECIPE-AUDIT-6) NO cubre esto: aquel arregla la concordancia
+# cuando el huevo SIGUE presente; aquí el huevo ya no existe y el participio sobra entero.
+#
+# Se BORRA el participio en vez de intentar concordarlo: "yogurt batido" seguiría siendo falso —
+# nadie bate el yogur para que cuaje. El verbo sí se sustituye por uno neutro.
+_ORPHAN_EGG_PARTICIPIO_RX = _re.compile(
+    r"\s+(?:batid|revuelt|cuajad|pochad)[oa]s?\b", _re.IGNORECASE)
+_ORPHAN_EGG_CUAJAR_RX = _re.compile(
+    r"\bhasta\s+que\s+cuaje[nm]?\b", _re.IGNORECASE)
+
+
+def _reparar_concordancia_huevo(paso: str, orphan_keys, strip_acc) -> str:
+    """Quita la prosa que solo tenía sentido con el huevo que el autofix acaba de sustituir.
+
+    Gateado a que el huérfano SEA huevo/clara: en un plato que sí lleva huevo, "batidos" y "hasta
+    que cuajen" son correctos y no se tocan. Fail-safe: cualquier excepción devuelve el paso intacto.
+
+    tooltip-anchor: P1-EGG-PROSE-ORPHAN
+    """
+    try:
+        _claves = {strip_acc(str(k).lower()) for k in (orphan_keys or [])}
+        if not any(k.startswith(("huevo", "clara")) for k in _claves):
+            return paso
+        _out = _ORPHAN_EGG_CUAJAR_RX.sub("hasta que tome consistencia", str(paso))
+        _out = _ORPHAN_EGG_PARTICIPIO_RX.sub("", _out)
+        return _out
+    except Exception:
+        return paso
 
 
 # [P2-STEP-PHRASE-DEDUP · 2026-07-06] (review #14) frase de alimento duplicada adyacente en pasos:
