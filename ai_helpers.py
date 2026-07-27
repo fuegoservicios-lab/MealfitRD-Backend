@@ -256,8 +256,26 @@ def _rotate_fruit_pairs(fruits):
         return None
     # reconocidas primero, conservando el orden relativo (el shuffle previo ya dio la aleatoriedad)
     ordenadas = [f for f in base if _ffn(f)] + [f for f in base if not _ffn(f)]
-    n = len(ordenadas)
-    return [(ordenadas[i % n], ordenadas[(i + 1) % n]) for i in range(3)]
+    return _rotate_pairs(ordenadas)
+
+
+def _rotate_pairs(items):
+    """[P1-CARB-SEEDER-PAIRS · 2026-07-27] Núcleo de la rotación en pares, extraído de
+    `_rotate_fruit_pairs` para que carbos y frutas usen LA MISMA: día i recibe
+    `(items[i], items[i+1])` sobre la rotación circular.
+
+    La gracia es el ahorro en la compra: 4 elementos distintos cubren 3 días con dos por día en
+    vez de comprar 6, porque se reutilizan entre días.
+
+    Se extrae en vez de copiarse: dos implementaciones del mismo reparto divergen — es el patrón
+    que P1-PANTRY-GATE-SSOT y P1-CLOSER-INTO-MONTAJE costaron cerrar en esta misma base de código.
+
+    Devuelve `None` con menos de 2 elementos utilizables; el caller decide el fallback."""
+    base = [x for x in (items or []) if x and str(x).strip()]
+    if len(base) < 2:
+        return None
+    n = len(base)
+    return [(base[i % n], base[(i + 1) % n]) for i in range(3)]
 
 
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None, rejection_reasons: list = None) -> str:
@@ -1276,14 +1294,38 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         fruit_params = {k: _fallback_fruit for k in
                         ("fruit_0", "fruit_0b", "fruit_1", "fruit_1b", "fruit_2", "fruit_2b")}
 
+    # [P1-CARB-SEEDER-PAIRS · 2026-07-27] SEGUNDA base por día — el mismo contrato roto que
+    # P1-FRUIT-SEEDER-GATE-CONTRACT cerró ayer para la fruta, con la última categoría que quedaba.
+    #
+    # El reparto era: veggie_i + veggie_ib (dos), fruit_i + fruit_ib (dos, desde ayer)… y carb_i
+    # SOLO UNO. Pero un día tiene almuerzo Y cena, y ambos llevan base. Con una sola asignada, el
+    # day-gen la usa en las dos. No es un fallo del modelo: la asignación no daba para otra cosa.
+    #
+    # Medido sobre 23 días de 8 planes vivos: **9 días (39%)** repiten una base en 2+ comidas. En
+    # el plan del owner, los 3 días de 3 — papa (599 g el lunes), papa (824 g el martes), yautía.
+    #
+    # Se reparte con `_rotate_pairs` (día i → carbos[i], carbos[i+1]), el MISMO helper de la fruta:
+    # las bases se reutilizan entre días en vez de comprar 6 distintas, así que la lista de compras
+    # crece en una como mucho. Sin lista utilizable → se omite el segundo y el prompt cae a su
+    # redacción previa (fail-open: nunca peor que hoy).
+    _carb_slots = _rotate_pairs(chosen_carbs)
+    carb_params = {f"carb_{i}": chosen_carbs[i] for i in range(3)}
+    if _carb_slots:
+        carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(3)})
+    else:
+        carb_params.update({f"carb_{i}b": "otra base distinta del catálogo" for i in range(3)})
+    logger.info(f"✅ [P1-CARB-SEEDER-PAIRS] 2ª base por día (evita repetir base el mismo día): "
+                f"{[carb_params[f'carb_{i}b'] for i in range(3)]}")
+
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
-        protein_0=chosen_proteins[0], carb_0=chosen_carbs[0],
+        protein_0=chosen_proteins[0],
         veggie_0=chosen_veggies[0], veggie_0b=chosen_veggies[3],
-        protein_1=chosen_proteins[1], carb_1=chosen_carbs[1],
+        protein_1=chosen_proteins[1],
         veggie_1=chosen_veggies[1], veggie_1b=chosen_veggies[4],
-        protein_2=chosen_proteins[2], carb_2=chosen_carbs[2],
+        protein_2=chosen_proteins[2],
         veggie_2=chosen_veggies[2], veggie_2b=chosen_veggies[5],
         blocked_text=blocked_text,
+        **carb_params,
         **fruit_params
     )
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas para 3 días (rotadas si es necesario): {chosen_proteins}")
