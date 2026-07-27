@@ -32,9 +32,35 @@ from pathlib import Path
 import pytest
 
 
-_MEMORY_DIR = Path(
-    "C:/Users/angel/.claude/projects/c--Users-angel-OneDrive-Escritorio-MealfitRD-IA/memory"
-)
+# [2026-07-26] El path estaba hardcodeado al directorio VIEJO, de cuando el repo no vivía dentro
+# de `Nodalia/`. Al mover el proyecto, Claude Code abrió un directorio de memoria NUEVO (la clave
+# es la ruta del workspace) y el viejo quedó congelado:
+#
+#     c--Users-angel-OneDrive-Escritorio-MealfitRD-IA               576 archivos, MEMORY.md 456 KB
+#     c--...-Nodalia-MealfitRD-Software-MealfitRD-IA (ACTIVO)       251 archivos, MEMORY.md  19 KB
+#
+# El test medía el abandonado. De ahí los 456 KB contra un techo de 35: nadie lo compacta porque
+# nadie le escribe. Un rojo que no pedía compactar nada, pedía mirar otro sitio.
+#
+# Ahora se deriva de la ruta REAL del repo con el mismo esquema de Claude Code (ruta absoluta con
+# los separadores convertidos en `-`), con fallback al viejo si el nuevo no existe. El viejo se
+# conserva como archivo histórico — 576 entradas de contexto que no se tiran, pero que tampoco
+# tiene sentido someter al techo de un índice vivo.
+def _memory_dir_activo() -> Path:
+    _repo = Path(__file__).resolve().parent.parent.parent
+    _slug = str(_repo).replace(":", "").replace("\\", "-").replace("/", "-").lower()
+    _base = Path.home() / ".claude" / "projects"
+    _cand = _base / f"c--{_slug.lstrip('c-')}" / "memory"
+    if _cand.exists():
+        return _cand
+    # Fallback: el directorio cuyo MEMORY.md se tocó más recientemente.
+    _dirs = [d / "memory" for d in _base.glob("c--*") if (d / "memory" / "MEMORY.md").exists()]
+    if _dirs:
+        return max(_dirs, key=lambda d: (d / "MEMORY.md").stat().st_mtime)
+    return _base / "c--Users-angel-OneDrive-Escritorio-MealfitRD-IA" / "memory"
+
+
+_MEMORY_DIR = _memory_dir_activo()
 _MEMORY_MD = _MEMORY_DIR / "MEMORY.md"
 _MAX_LINE_BYTES = 200
 _MAX_FILE_BYTES = 35 * 1024  # ceiling con margen sobre 24.4KB del sistema
