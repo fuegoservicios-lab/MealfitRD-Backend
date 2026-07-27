@@ -15544,8 +15544,20 @@ def _meal_has_conflicting_carb_base(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
+def _meal_is_baked(meal: dict, strip_accents_fn) -> bool:
+    """[P1-CLOSER-BAKED-ASIDE · 2026-07-27] ¿El plato se HORNEA? (bollitos, papas rellenas,
+    pimientos). Mira nombre + pasos. Pura, fail-open a False = comportamiento previo."""
+    try:
+        _blob = strip_accents_fn((str(meal.get("name", "")) + " | " + " ".join(
+            str(s) for s in (meal.get("recipe") or []) if isinstance(s, str))).lower())
+        return ("horno" in _blob) or ("hornea" in _blob) or ("horneal" in _blob)
+    except Exception:
+        return False
+
+
 def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
-                              stewy: bool = False, precooked: bool = False) -> str:
+                              stewy: bool = False, precooked: bool = False,
+                              baked: bool = False) -> str:
     """[P1-CLOSER-PRECOOKED-WORDING · 2026-06-30] Texto del paso de receta del closer de proteína, COHERENTE con la
     naturaleza del alimento: licuado → 'Agrega ... a la licuadora'; lácteo blando/no-cook → 'Incorpora ... mézclalo';
     enlatado/pre-cocido → 'Escurre e incorpora (ya viene cocido)'; resto → 'Cocina a la plancha o hervido'. SSOT de
@@ -15573,6 +15585,12 @@ def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
         # Concordancia: "Incorpora camarones … mézclalo" (plan vivo) → mézclalos.
         # [P1-CLOSER-STEP-CONCORDANCIA · 2026-07-26] misma corrección que abajo: la concordancia
         # la manda el núcleo. "Incorpora Carne de res… y mézclalos" era el mismo fallo.
+        # [P1-CLOSER-BAKED-ASIDE · 2026-07-27] En un plato HORNEADO, "Incorpora yogurt a la
+        # preparación y mézclalo antes de servir" manda mezclar lácteo frío dentro de una masa ya
+        # horneada (bollitos del plan vivo 08114452) — disparate culinario. El lácteo blando va AL
+        # LADO. Solo lácteos (hint soft-dairy): el atún en un guiso horneado sí se incorpora.
+        if baked and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT):
+            return f"Sirve {nm} al lado para acompañar."
         _pl_inc, _fem_inc = _closer_step_agreement(_nm_sa)
         _v_inc = ("mézclalas" if _fem_inc else "mézclalos") if _pl_inc else \
                  ("mézclala" if _fem_inc else "mézclalo")
@@ -15657,7 +15675,7 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
                     _re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _l) for st in _stems):
                 _precooked_line = True
                 break
-        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line)}"
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line, baked=_meal_is_baked(meal, _sa_cs))}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
         # [P1-CLOSER-INTO-MONTAJE · 2026-07-27] El closer 💪 tenía su PROPIO camino y se quedó
@@ -22740,6 +22758,14 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"display_polished={_n_pol}")
     except Exception:
         pass
+    # [P1-DESC-FOOD-HONESTY · 2026-07-27] la desc no puede vender alimentos que el plato no lleva.
+    try:
+        _n_dh = _desc_food_honesty_pass(days)
+        if _n_dh:
+            total += _n_dh
+            parts.append(f"desc_honesty={_n_dh}")
+    except Exception:
+        pass
     # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
     try:
         _n_rw = _rice_water_ratio_fix(days)
@@ -28129,6 +28155,193 @@ def _integrate_complement_steps(days) -> int:
     return n
 
 
+# [P1-DESC-FOOD-HONESTY · 2026-07-27] La DESCRIPCIÓN vendía alimentos que el plato no lleva.
+# Medido sobre 164 comidas de 14 planes vivos: 20 (12%) mencionan un alimento AUSENTE de los
+# ingredientes (mango ×6, huevo ×3, atún ×3, mero ×2, lechosa ×2…). El NOMBRE está sano (0/164:
+# PHANTOM-PROTEIN-NAMEFIX funciona) y el autofix solo reescribe `desc` cuando hay huérfanos en los
+# PASOS — si los pasos están limpios y la desc miente, no corría nadie. Este pase cierra ese hueco.
+#
+# ⚠️ La primera medición dio 43 y era más del doble de lo real: contaba "sabrosa y SIN arroz" como
+# mención. Las menciones NEGADAS (sin/no/libre de/en vez de…) son honestas y NO se tocan.
+#
+# Escalera por mención ausente (de más segura a más agresiva; si ningún peldaño aplica, la desc
+# queda INTACTA — mentir es malo, mutilar la prosa es peor):
+#   1. SWAP "de/del X" → el alimento de la misma categoría que SÍ está (guiso de mero → de atún),
+#      con artículo ajustado por género (del mango → de la lechosa). Solo si a la mención no le
+#      sigue un adjetivo con género fuera de la whitelist (evita "queso revueltos esponjosos").
+#   2. REMOVE la frase-conector ("y la dulzura natural del mango", "con claras de huevo para…"):
+#      desde el conector (y/e/con/junto a) hasta la siguiente puntuación.
+#   3. Nada seguro → intacta + logger.info (telemetría para saber cuánto queda vivo).
+_DESC_HONESTY_ENABLED = _env_bool("MEALFIT_DESC_FOOD_HONESTY", True)
+# vocabulario: patrón de mención (tolerante a acento), patrón de presencia en ingredientes
+# (con alias), categoría para el swap y género para el artículo. Sustantivos cortos tipo "sal"
+# NO entran (lección P1-SEASONING-WORD-BOUNDARY: "sal" ⊂ "salsa"/"salmón").
+_DESC_FOOD_VOCAB = {
+    "mango":   {"pat": r"mangos?",            "pres": r"\bmangos?\b",                    "cat": "fruta", "gen": "m", "lbl": "mango"},
+    "lechosa": {"pat": r"lechosas?",          "pres": r"\blechosas?\b|\bpapayas?\b",     "cat": "fruta", "gen": "f", "lbl": "lechosa"},
+    "pina":    {"pat": r"pi[nñ]as?",          "pres": r"\bpi[nñ]as?\b",                  "cat": "fruta", "gen": "f", "lbl": "piña"},
+    "melon":   {"pat": r"mel[oó]n(?:es)?",    "pres": r"\bmel[oó]n(?:es)?\b",            "cat": "fruta", "gen": "m", "lbl": "melón"},
+    "ciruela": {"pat": r"ciruelas?",          "pres": r"\bciruelas?\b",                  "cat": "fruta", "gen": "f", "lbl": "ciruela"},
+    "guayaba": {"pat": r"guayabas?",          "pres": r"\bguayabas?\b",                  "cat": "fruta", "gen": "f", "lbl": "guayaba"},
+    "fresa":   {"pat": r"fresas?",            "pres": r"\bfresas?\b",                    "cat": "fruta", "gen": "f", "lbl": "fresa"},
+    "uva":     {"pat": r"uvas?",              "pres": r"\buvas?\b",                      "cat": "fruta", "gen": "f", "lbl": "uva"},
+    "guineo":  {"pat": r"guineos?",           "pres": r"\bguineos?\b|\bbananos?\b",      "cat": "fruta", "gen": "m", "lbl": "guineo"},
+    "manzana": {"pat": r"manzanas?",          "pres": r"\bmanzanas?\b",                  "cat": "fruta", "gen": "f", "lbl": "manzana"},
+    "naranja": {"pat": r"naranjas?",          "pres": r"\bnaranjas?\b",                  "cat": "fruta", "gen": "f", "lbl": "naranja"},
+    "toronja": {"pat": r"toronjas?",          "pres": r"\btoronjas?\b",                  "cat": "fruta", "gen": "f", "lbl": "toronja"},
+    "huevo":   {"pat": r"claras?\s+de\s+huevo|huevos?", "pres": r"\bhuevos?\b|\bclaras?\b", "cat": "prot", "gen": "m", "lbl": "huevo"},
+    "atun":    {"pat": r"at[uú]n",            "pres": r"\bat[uú]n\b",                    "cat": "prot", "gen": "m", "lbl": "atún"},
+    "mero":    {"pat": r"mero",               "pres": r"\bmero\b",                       "cat": "prot", "gen": "m", "lbl": "mero"},
+    "pollo":   {"pat": r"pollo",              "pres": r"\bpollo\b|\bpechugas?\b",        "cat": "prot", "gen": "m", "lbl": "pollo"},
+    "camaron": {"pat": r"camar[oó]n(?:es)?",  "pres": r"\bcamar[oó]n(?:es)?\b",          "cat": "prot", "gen": "m", "lbl": "camarón"},
+    "salmon":  {"pat": r"salm[oó]n",          "pres": r"\bsalm[oó]n\b",                  "cat": "prot", "gen": "m", "lbl": "salmón"},
+    "yogurt":  {"pat": r"yogur(?:t)?",        "pres": r"\byogur(?:t)?\b",                "cat": "prot", "gen": "m", "lbl": "yogurt"},
+    "queso":   {"pat": r"quesos?",            "pres": r"\bquesos?\b",                    "cat": "prot", "gen": "m", "lbl": "queso"},
+    "arroz":   {"pat": r"arroz",              "pres": r"\barroz\b",                      "cat": "carb", "gen": "m", "lbl": "arroz"},
+    "papa":    {"pat": r"papas?",             "pres": r"\bpapas?\b",                     "cat": "carb", "gen": "f", "lbl": "papa"},
+    "batata":  {"pat": r"batatas?",           "pres": r"\bbatatas?\b",                   "cat": "carb", "gen": "f", "lbl": "batata"},
+    "yuca":    {"pat": r"yucas?",             "pres": r"\byucas?\b",                     "cat": "carb", "gen": "f", "lbl": "yuca"},
+    "platano": {"pat": r"pl[aá]tanos?",       "pres": r"\bpl[aá]tanos?\b",               "cat": "carb", "gen": "m", "lbl": "plátano"},
+    "avena":   {"pat": r"avena",              "pres": r"\bavena\b",                      "cat": "carb", "gen": "f", "lbl": "avena"},
+}
+# mención negada = honesta ("sabrosa y sin arroz"). Ventana de 28 chars antes de la mención.
+_DESC_NEG_RX = _re.compile(r"\b(sin|no|nada\s+de|libre\s+de|en\s+vez\s+de|en\s+lugar\s+de|"
+                           r"sustituy\w+|reemplaz\w+)\b[^.;:!?]{0,24}$", _re.IGNORECASE)
+# adjetivos con género que sabemos re-concordar tras un swap; cualquier OTRA palabra en -o/-a
+# tras la mención aborta el swap (no sabemos si es adjetivo del alimento).
+_DESC_ADJ_OK_RX = _re.compile(r"^(madur|fresc|jugos|cremos|dulce|picad|tostad|asad|hornead|"
+                              r"troceado|cortad|natural)", _re.IGNORECASE)
+
+
+def _desc_swap_gender_articles(seg: str, gen: str) -> str:
+    """Ajusta el artículo/contracción previos al alimento swapeado: del↔de la, al↔a la, el↔la."""
+    if gen == "f":
+        seg = _re.sub(r"\bdel\s+$", "de la ", seg)
+        seg = _re.sub(r"\bal\s+$", "a la ", seg)
+        seg = _re.sub(r"\bel\s+$", "la ", seg)
+        seg = _re.sub(r"\bun\s+$", "una ", seg)
+    else:
+        seg = _re.sub(r"\bde\s+la\s+$", "del ", seg)
+        seg = _re.sub(r"\ba\s+la\s+$", "al ", seg)
+        seg = _re.sub(r"\bla\s+$", "el ", seg)
+        seg = _re.sub(r"\buna\s+$", "un ", seg)
+    return seg
+
+
+# subgrupos de swap: solo se sustituye DENTRO del subgrupo. La 1ª iteración permitía prot→prot a
+# secas y produjo "Salmón horneado" → "QUESO horneado" (glaseado de miel sobre queso: absurdo).
+_DESC_SWAP_SUBGROUP = {
+    "mango": "dulce", "lechosa": "dulce", "pina": "dulce", "melon": "dulce", "ciruela": "dulce",
+    "guayaba": "dulce", "fresa": "dulce", "uva": "dulce", "guineo": "dulce", "manzana": "dulce",
+    "naranja": "dulce", "toronja": "dulce",
+    "atun": "carne", "mero": "carne", "pollo": "carne", "camaron": "carne", "salmon": "carne",
+    "queso": "lacteo", "yogurt": "lacteo",
+    # huevo sin subgrupo: no hay swap honesto genérico ("claras"→"queso" solo valdría en
+    # construcciones concretas); se cubre con retirada de cláusula final o telemetría.
+    "arroz": "vivere", "papa": "vivere", "batata": "vivere", "yuca": "vivere",
+    "platano": "vivere", "avena": "vivere",
+}
+# tras la mención solo puede venir puntuación, un conector, o un adjetivo de la whitelist.
+# "arroz INTEGRAL"→"yuca integral" y "coronado con atún EN AGUA ESCURRIDO…" nacieron de no
+# mirar el token siguiente.
+_DESC_NEXT_CONNECTORS = {"y", "e", "o", "u", "con", "para", "en", "al", "a", "de", "del",
+                         "sobre", "que", "como", "si", "por", "sin", "la", "el", "los", "las"}
+
+
+def _desc_regender_adj(adj: str, gen: str) -> str:
+    """"jugoso"→"jugosa" (y plural) al swapear m↔f. Invariantes (dulce, natural) quedan igual."""
+    m = _re.match(r"^([a-záéíóúñ]+?)([oa])(s?)$", adj, _re.IGNORECASE)
+    if not m:
+        return adj
+    return m.group(1) + ("a" if gen == "f" else "o") + m.group(3)
+
+
+def _desc_pluralize_lbl(lbl: str) -> str:
+    """"lechosa"→"lechosas", "melón"→"melones": el swap debe respetar el NÚMERO de la mención.
+    "servidos con ciruelas asadas" → target singular daba "lechosa asadas" (adjetivo y verbo
+    quedaban en plural). Se pluraliza la etiqueta y toda la concordancia aguas abajo cuadra."""
+    if lbl.endswith(("ón", "on")):
+        return (lbl[:-2] + "ones") if lbl.endswith("ón") else (lbl + "es")
+    if lbl.endswith(("a", "e", "i", "o", "u")):
+        return lbl + "s"
+    return lbl + "es"
+
+
+def _desc_food_honesty_pass(days) -> int:
+    """Repara descripciones que mencionan alimentos ausentes del plato. Fail-open por comida.
+
+    Escalera DELIBERADAMENTE corta (la 1ª versión, más agresiva, mutiló 6 de 22 salidas en el
+    dry-run sobre planes vivos — "coronado jí", "tortilla hecha, salteada"):
+      1. SWAP dentro del subgrupo, con artículo por género, re-concordancia del adjetivo
+         whitelisted y regla de token siguiente.
+      2. RETIRADA solo si la mención CIERRA su cláusula ("…y la dulzura natural del mango.").
+      3. Nada seguro → intacta + telemetría logger.info.
+
+    tooltip-anchor: P1-DESC-FOOD-HONESTY
+    """
+    if not (_DESC_HONESTY_ENABLED and isinstance(days, list)):
+        return 0
+    from constants import strip_accents as _sa_dh
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                desc = meal.get("desc")
+                if not (isinstance(desc, str) and desc.strip()):
+                    continue
+                ings_na = _sa_dh(" | ".join(str(x) for x in (meal.get("ingredients") or [])).lower())
+                presentes = {k for k, v in _DESC_FOOD_VOCAB.items()
+                             if _re.search(v["pres"], ings_na)}
+                nuevo = desc
+                for key, v in _DESC_FOOD_VOCAB.items():
+                    if key in presentes:
+                        continue
+                    m = _re.search(r"\b(?:" + v["pat"] + r")\b", _sa_dh(nuevo.lower()))
+                    if not m:
+                        continue
+                    i, j = m.start(), m.end()
+                    if _DESC_NEG_RX.search(nuevo[:i]):
+                        continue  # mención negada = honesta
+                    resto = nuevo[j:]
+                    _mm_nx = _re.match(r"\s+([a-záéíóúñA-ZÁÉÍÓÚÑ]+)", resto)
+                    _nx = (_mm_nx.group(1).lower() if _mm_nx else "")
+                    _nx_ok = (not _nx) or (_nx in _DESC_NEXT_CONNECTORS)                         or bool(_DESC_ADJ_OK_RX.match(_nx))
+                    _sub = _DESC_SWAP_SUBGROUP.get(key)
+                    mate = next((p for p in presentes
+                                 if _sub and _DESC_SWAP_SUBGROUP.get(p) == _sub), None)
+                    if mate and _nx_ok:
+                        tv = _DESC_FOOD_VOCAB[mate]
+                        _lbl_out = _desc_pluralize_lbl(tv["lbl"])                             if m.group(0).endswith("s") else tv["lbl"]
+                        pre = _desc_swap_gender_articles(nuevo[:i], tv["gen"])                             if tv["gen"] != v["gen"] else nuevo[:i]
+                        if _nx and _DESC_ADJ_OK_RX.match(_nx) and tv["gen"] != v["gen"]:
+                            resto = resto.replace(_mm_nx.group(1),
+                                                  _desc_regender_adj(_mm_nx.group(1), tv["gen"]), 1)
+                        nuevo = pre + _lbl_out + resto
+                        fixed += 1
+                        continue
+                    # peldaño 2: retirada SOLO clausula-final (mención pegada a la puntuación)
+                    rx_rm = _re.compile(
+                        r"(?:,\s*)?\b(?:y|e|con|junto\s+a)\s+"
+                        r"[^,.;:!?¡¿]{0,40}?\b(?:" + v["pat"] + r")\b"
+                        r"(?=\s*[.;:!?)]|\s*$)",  # coma EXCLUIDA: en listas ("ensalada de manzana, pera y…") arrancaba la cabeza del sintagma
+                        _re.IGNORECASE)
+                    n2 = rx_rm.sub("", nuevo, count=1)
+                    if n2 != nuevo and not _re.search(v["pat"], _sa_dh(n2.lower())):
+                        n2 = _re.sub(r"\s{2,}", " ", n2)
+                        n2 = _re.sub(r"\s+([,.;:!?])", r"\1", n2).strip()
+                        if len(n2) >= 25:
+                            nuevo = n2
+                            fixed += 1
+                            continue
+                    logger.info(f"🎭 [P1-DESC-FOOD-HONESTY] mención de '{key}' ausente sin arreglo "
+                                f"seguro | meal={str(meal.get('name'))[:40]}")
+                if nuevo != desc:
+                    meal["desc"] = nuevo
+            except Exception:
+                continue
+    return fixed
+
+
 def _polish_finalize_display(days) -> int:
     """[P1-FINALIZE-COUNTABLE-POLISH · 2026-07-06] Pulido de FRONTERA tras la última mutación
     de cantidades (review #13). Cuatro reglas:
@@ -28811,7 +29024,7 @@ def _align_closer_note_food_names(meal: dict) -> int:
             # P1-CLOSER-FRESH-COCIDO
             if "(ya viene cocido)" in step and not any(
                     _h in _sa_al(_line_food.lower()) for _h in _PRECOOKED_PROTEIN_HINT):
-                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al))}"
+                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al), baked=_meal_is_baked(meal, _sa_al))}"
                 if _rebuilt.strip() != step.strip():
                     rec[_i] = _rebuilt
                     fixed += 1

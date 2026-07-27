@@ -138,6 +138,27 @@ def strip_accents(s: str) -> str:
     import unicodedata
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
+# [P1-COUNT-HALF-RANGE · 2026-07-27] "3½ ciruelas" pide partir la cuarta ciruela por la mitad —
+# nadie hace eso. Para frutas pequeñas que se comen por unidad, el display convierte el conteo
+# mixto en un rango honesto: "3½ ciruelas" → "3–4 ciruelas". Display-only (`ingredients_raw`
+# intacto: la compra y los macros siguen usando el valor exacto). Solo N≥1 con fracción — el
+# "½ aguacate" o "½ ciruela" solitario sí se corta y queda como está.
+_HALF_COUNT_FRUITS = r"(?:ciruelas?|guayabas?|fresas?|uvas?|n[ií]speros?|limoncillos?)"
+_HALF_COUNT_RANGE_RE = re.compile(
+    r"^(\s*)(\d+)[¼½¾⅓⅔]\s+(" + _HALF_COUNT_FRUITS + r")\b")
+
+
+def half_count_range(line):
+    """"3½ ciruelas" → "3–4 ciruelas" (solo frutas contables de la lista). Fail-safe."""
+    try:
+        def _rng(m):
+            n = int(m.group(2))
+            return f"{m.group(1)}{n}–{n + 1} {m.group(3)}"
+        return _HALF_COUNT_RANGE_RE.sub(_rng, str(line), count=1) if isinstance(line, str) else line
+    except Exception:
+        return line
+
+
 # [P1-COUNT-UNIT-GRAM-HINT · 2026-07-27] "½ pedazo de yautía" no le dice al usuario cuánto usar.
 # Medido sobre 1299 líneas de 12 planes vivos: 19 usan unidad de bulto y las 19 llegan SIN peso.
 # El peso existe —es el mismo `weight` con el que esta tabla convirtió los gramos a bultos—, solo
@@ -436,7 +457,8 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                 # [P2-DISPLAY-FRACTIONS · 2026-07-01] (batch P1-DISH-REALISM-BATCH) pulido final de
                 # display: "0.5 papa"→"½ papa", "1.75 cdta"→"1¾ cdta", "1 cdas"→"1 cda", "1 tallos"→
                 # "1 tallo". Display-only (ingredients_raw intacto para compras).
-                meal["ingredients"] = [_prettify_quantity_display(h) for h in humanized_ingredients]
+                meal["ingredients"] = [half_count_range(_prettify_quantity_display(h))
+                                       for h in humanized_ingredients]
                 # [P2-DISPLAY-NAME-SPECIFICITY · 2026-07-05] el display puede perder calificadores
                 # del alimento ("145 g de queso" vs raw "145g de queso cottage cocido", plan
                 # 7e4e5570 — compras BIEN, usuario veía el genérico). Restaura el nombre específico
