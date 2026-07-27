@@ -26,8 +26,16 @@ Drift detection:
       `test_handler_uses_request_plan_id_with_ownership`.
     - Si alguien restaura el `if updated: break` → falla
       `test_handler_propagates_to_all_matching_occurrences`.
-    - Si Recipes.jsx deja de enviar los identificadores → falla
-      `test_recipes_jsx_sends_targeting_identifiers`.
+    - Si Recipes.jsx vuelve a invocar el expand → falla
+      `test_recipes_jsx_ya_no_llama_al_expand`.
+
+[P-RECIPES-COOK-REMOVED · 2026-07-12] El flujo "Cocinar" se retiró del producto y
+`Recipes.jsx` quedó read-only. El caller front desapareció; el HANDLER y sus
+garantías (ownership por plan_id, targeting por índices, propagación a todas las
+ocurrencias) siguen vivos y validados aquí — el endpoint tiene otros consumidores.
+La invariante cross-language se INVIRTIÓ en consecuencia: antes "debe enviar los
+identificadores", ahora "no debe llamarlo". El contrato del lado cliente lo posee
+`frontend/src/__tests__/Recipes.p1_hist_close_1_no_restorePlan.test.js`.
 """
 from __future__ import annotations
 
@@ -189,31 +197,39 @@ def test_handler_precise_index_path_consistency_check(expand_body: str):
 # bugs originales — el fix backend solo agrega capacidad, el cierre real
 # requiere que el cliente la use.
 # ---------------------------------------------------------------------------
-def test_recipes_jsx_sends_targeting_identifiers(recipes_jsx_src: str):
-    """`Recipes.jsx::handleCookClick` debe incluir `plan_id`, `day_index`,
-    `meal_index` en el body de POST `/api/plans/recipe/expand`.
-    """
-    # Buscar el call a /api/plans/recipe/expand.
-    call_match = re.search(
-        r"fetchWithAuth\(\s*['\"]/api/plans/recipe/expand['\"][^)]*?body\s*:\s*JSON\.stringify\(\s*(\{[^}]*\})",
-        recipes_jsx_src,
-        re.DOTALL,
-    )
-    assert call_match, (
-        "P1-HIST-RECIPE-1 regresión: no se encontró el call POST a "
-        "`/api/plans/recipe/expand` con body JSON.stringify({...}) en "
-        "Recipes.jsx. ¿El callsite fue refactorizado? Actualizar el test."
-    )
-    body_literal = call_match.group(1)
+def test_recipes_jsx_ya_no_llama_al_expand(recipes_jsx_src: str):
+    """[INVERTIDO · 2026-07-26] `Recipes.jsx` NO debe invocar el expand.
 
-    for js_key in ("plan_id", "day_index", "meal_index"):
-        assert js_key in body_literal, (
-            f"P1-HIST-RECIPE-1 regresión: Recipes.jsx ya no envía "
-            f"`{js_key}` en el body de /recipe/expand. Sin este "
-            f"identificador, el backend cae al path legacy "
-            f"(get_latest_meal_plan + match by name + first-match-only) "
-            f"y reintroducimos los bugs wrong-plan + cuota-quemada."
-        )
+    El flujo "Cocinar" se retiró del producto (P-RECIPES-COOK-REMOVED · 2026-07-12) y la página
+    quedó read-only sobre el plan. El HANDLER server-side sigue vivo y validado por los demás
+    tests de este archivo — lo que cambió es quién lo llama.
+    """
+    # [P-RECIPES-COOK-REMOVED · 2026-07-12 · test INVERTIDO 2026-07-26]
+    #
+    # El flujo "Cocinar" COMPLETO se retiró del producto: botón, CookingModeOverlay, expansión
+    # LLM y registro de consumo. `Recipes.jsx` quedó READ-ONLY sobre el plan — su única acción es
+    # generar el PDF localmente.
+    #
+    # Este test exigía el callsite y estaba en CONTRADICCIÓN DIRECTA con el test del frontend
+    # `src/__tests__/Recipes.p1_hist_close_1_no_restorePlan.test.js`, que afirma su AUSENCIA. Dos
+    # tests, uno en cada repo, pidiendo cosas opuestas: el rojo no significaba "se perdió una
+    # protección" sino "este lado no se enteró del cambio de producto".
+    #
+    # El endpoint SIGUE existiendo server-side y los demás tests de este archivo —que validan el
+    # HANDLER: ownership, targeting por índices, propagación a todas las ocurrencias— siguen
+    # vigentes y en verde. Lo único que cambió es quién lo llama.
+    _lineas = recipes_jsx_src.split("\n")
+    codigo = "\n".join(l for l in _lineas if not l.strip().startswith(("//", "*", "/*")))
+    assert "/api/plans/recipe/expand" not in codigo, (
+        "Recipes.jsx volvió a invocar /api/plans/recipe/expand. La página es read-only sobre el "
+        "plan desde P-RECIPES-COOK-REMOVED; reintroducir el write path duplica el persist "
+        "server-side y arrastra name/calories/macros stale del cliente (el bug que P1-HIST-CLOSE-1 "
+        "cerró). Si el flujo Cocinar vuelve al producto, este test se invierte de nuevo — y el "
+        "del frontend también."
+    )
+    assert "fetchWithAuth" not in codigo, (
+        "Recipes.jsx no debe hacer requests mutantes: cero write paths desde esa página."
+    )
 
 
 def test_marker_anchor_present():

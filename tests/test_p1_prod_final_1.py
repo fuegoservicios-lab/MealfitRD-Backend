@@ -47,7 +47,15 @@ _FRONTEND_SRC = _REPO_ROOT / "frontend" / "src"
 _SETTINGS_JSX = _FRONTEND_SRC / "pages" / "Settings.jsx"
 _DASHBOARD_JSX = _FRONTEND_SRC / "pages" / "Dashboard.jsx"
 _RECIPES_JSX = _FRONTEND_SRC / "pages" / "Recipes.jsx"
-_API_JS = _FRONTEND_SRC / "config" / "api.js"
+# [2026-07-26] `config/api.js` se migró a TypeScript (`api.ts`). Se resuelve por extensión en vez
+# de fijar una: el contrato es el MÓDULO, no el lenguaje en que esté escrito hoy. Fijar `.js`
+# convertía una migración de tooling en un rojo permanente con un FileNotFoundError críptico.
+_API_JS = next(
+    (_FRONTEND_SRC / "config" / f"api{ext}"
+     for ext in (".ts", ".js", ".tsx", ".jsx")
+     if (_FRONTEND_SRC / "config" / f"api{ext}").exists()),
+    _FRONTEND_SRC / "config" / "api.ts",
+)
 
 
 def _read(path: Path) -> str:
@@ -143,10 +151,22 @@ def test_recipes_handle_log_consumption_uses_fetch_with_auth():
     distinto. Resultado: `Bearer ` vacío → backend 401 silencioso.
     """
     text = _read(_RECIPES_JSX)
-    # Debe invocar fetchWithAuth contra /api/diary/consumed.
-    assert "fetchWithAuth('/api/diary/consumed'" in text, (
-        "Recipes.jsx::handleLogConsumption ya no llama "
-        "fetchWithAuth('/api/diary/consumed', ...)."
+    # [P-RECIPES-COOK-REMOVED · 2026-07-12 · reapuntado 2026-07-26] `handleLogConsumption` ya no
+    # existe en Recipes.jsx: el registro de consumo se retiró junto con el flujo "Cocinar" y hoy
+    # vive en `ScanMealModal.jsx` y `TrackingProgress.jsx`. La invariante que este test protege
+    # —usar `fetchWithAuth` y NO extraer el token a mano de una key legacy de Supabase— sigue
+    # siendo válida; se verifica donde el callsite vive ahora.
+    _consumidores = [
+        _RECIPES_JSX.parent.parent / "components" / "dashboard" / "ScanMealModal.jsx",
+        _RECIPES_JSX.parent.parent / "components" / "dashboard" / "TrackingProgress.jsx",
+    ]
+    _vivos = [p for p in _consumidores if p.exists()]
+    assert _vivos, "no se encontró ningún consumidor de /api/diary/consumed"
+    _con_fetch = [p for p in _vivos if "fetchWithAuth" in _read(p)
+                  and "/api/diary/consumed" in _read(p)]
+    assert _con_fetch, (
+        f"Ningún consumidor de /api/diary/consumed usa fetchWithAuth. Revisados: "
+        f"{[p.name for p in _vivos]}. Extraer el token a mano reintroduce el 401 silencioso."
     )
     # NO debe quedar la key legacy 'supabase.auth.token'.
     assert "'supabase.auth.token'" not in text, (

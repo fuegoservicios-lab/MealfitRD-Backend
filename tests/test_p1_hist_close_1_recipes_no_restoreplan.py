@@ -159,34 +159,30 @@ def test_no_restoreplan_named_import():
 # ---------------------------------------------------------------------------
 # 5. Preserva el localStorage.setItem('mealfit_plan', ...)
 # ---------------------------------------------------------------------------
-def test_localstorage_setitem_mealfit_plan_preserved():
-    """Si un revert quita el update del cache local de `mealfit_plan` junto
-    con el `restorePlan`, el usuario perdería la consistencia inmediata UI
-    al navegar a /plan tras expandir. Alertar específicamente.
+def test_recipes_ya_no_persiste_el_plan_a_localstorage():
+    """[P-RECIPES-COOK-REMOVED · 2026-07-12 · test INVERTIDO 2026-07-26] Antes exigía que el
+    cache local de `mealfit_plan` se PRESERVARA tras expandir la receta.
 
-    [P3-RECIPE-SAFE-LS · 2026-05-30] El raw `localStorage.setItem('mealfit_plan',
-    JSON.stringify(planData))` se migró al helper SSOT no-throw
-    `safeLocalStorageSet('mealfit_plan', planData)` (utils/safeLocalStorage.js),
-    que internamente hace `JSON.stringify(value)` + `localStorage.setItem(key, ...)`
-    — comportamiento idéntico, envuelto en try/catch para iOS Private Mode /
-    QuotaExceededError. Aceptamos AMBAS formas para que el contrato (preservar
-    el cache local de `mealfit_plan`) sobreviva al refactor.
+    Ya no hay expansión: el flujo "Cocinar" completo se retiró del producto (botón, modo cocina,
+    expansión LLM, registro de consumo) y `Recipes.jsx` quedó READ-ONLY sobre el plan — su única
+    acción es generar el PDF localmente. Sin write, no hay nada que reflejar en el cache.
+
+    El rojo estaba en CONTRADICCIÓN DIRECTA con el test del frontend
+    `src/__tests__/Recipes.p1_hist_close_1_no_restorePlan.test.js`, que afirma exactamente lo
+    contrario y es el contrato vivo. Dos tests, uno en cada repo, pidiendo cosas opuestas: no era
+    "se perdió una protección", era "este lado no se enteró".
     """
     src = _read_recipes_source()
-    # Forma legacy raw o el helper SSOT P3-RECIPE-SAFE-LS — ambas preservan
-    # el update del cache local de `mealfit_plan`.
-    pattern = re.compile(
-        r"(?:localStorage\.setItem|safeLocalStorageSet)\s*\(\s*"
-        r"[\'\"]mealfit_plan[\'\"]\s*,\s*"
-        r"(?:JSON\.stringify\s*\(\s*)?planData"
+    codigo = "\n".join(
+        l for l in src.split("\n") if not l.strip().startswith(("//", "*", "/*"))
     )
-    assert pattern.search(src), (
-        "Recipes.jsx ya no actualiza el cache local de `mealfit_plan` "
-        "(ni raw `localStorage.setItem('mealfit_plan', JSON.stringify(planData))` "
-        "ni el helper `safeLocalStorageSet('mealfit_plan', planData)`) tras "
-        "expandir la receta. Esto rompe la consistencia UI inmediata: al "
-        "navegar a /plan post-expand, el usuario vería la receta original "
-        "hasta que el siguiente fetch del server actualice el cache local."
+    pattern = re.compile(
+        r"(?:localStorage\.setItem|safeLocalStorageSet)\s*\(\s*[\'\"]mealfit_plan[\'\"]"
+    )
+    assert not pattern.search(codigo), (
+        "Recipes.jsx volvió a escribir el cache local del plan. La página es read-only desde "
+        "P-RECIPES-COOK-REMOVED: el SSOT del plan es el server, y escribir desde aquí "
+        "reintroduce el drift plan_data ↔ columnas top-level que P1-HIST-CLOSE-1 cerró."
     )
 
 
