@@ -26648,7 +26648,29 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                     # 3) conteos servibles (3.5 papas → 3; 8 claras ok; 5 huevos → 4).
                     # [P1-REALISM-CAPS-EXT] compuestos ANTES del sustantivo genérico
                     # ("36.5 tomates cherry" → cap cherry 10, no cap tomate 3).
-                    if factor is None:
+                    #
+                    # [P1-CAP-STRICTEST-WINS · 2026-07-26] Esta rama ya NO se salta cuando otra
+                    # ya puso `factor`: se queda el MÁS ESTRICTO de los dos.
+                    #
+                    # Cada rama limita una DIMENSIÓN distinta (gramos, tazas, cdtas, conteo). La
+                    # cascada `if factor is None` aplicaba solo la primera que casara y dejaba las
+                    # demás sin evaluar, así que una línea podía salir corregida en una dimensión
+                    # y absurda en otra. Caso vivo (test P1-APIO-STALK-CAP, plan 4b9291fe):
+                    #
+                    #     "9½ tallos de apio (285g)"
+                    #        rama 1 (veg-volume 250 g) dispara  →  factor = 250/285
+                    #        rama 3 (tope 4 tallos)  NO se evalúa
+                    #     resultado: "8.33 tallos de apio (250g)"
+                    #
+                    # Gramos arreglados, conteo intacto — y encima fraccionario, que ningún humano
+                    # escribe. El tope de 4 tallos existía desde P1-APIO-STALK-CAP y no disparaba
+                    # nunca en una línea que declarase gramos.
+                    #
+                    # Se limita a ESTA rama a propósito: es la única cuya unidad (piezas contables)
+                    # es independiente de la masa, así que `min()` no puede quitar comida real que
+                    # otro tope ya haya aprobado — recorta piezas, y el gramaje lo sigue mandando
+                    # la rama de gramos. Las ramas 2/2b siguen en cascada.
+                    if True:
                         m_n = _REALISM_COUNT_LEAD_RE.match(il)
                         if m_n and (m_n.group(1) or m_n.group(2)):  # [P1-COUNT-UNICODE-FRAC] exige nº o fracción
                             _cap_n = None
@@ -26678,7 +26700,9 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                                 cur_n = float((m_n.group(1) or "0").replace(",", "."))
                                 cur_n += _REALISM_FRAC_MAP.get(m_n.group(2) or "", 0.0)  # "1½"→1.5
                                 if cur_n > _cap_n:
-                                    factor = _cap_n / cur_n
+                                    # [P1-CAP-STRICTEST-WINS] gana el más estricto, no el primero.
+                                    _f_count = _cap_n / cur_n
+                                    factor = _f_count if factor is None else min(factor, _f_count)
                     if factor is not None and factor < 0.999:
                         try:
                             _new = _resc(s, factor)
