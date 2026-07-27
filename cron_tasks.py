@@ -27435,8 +27435,23 @@ def process_plan_chunk_queue(target_plan_id=None):
             elif not learning_ready.get("ready", True) and _learning_flexible_mode:
                 # flexible_mode bypassea el gate (usuario optó por seguir aunque sin aprendizaje).
                 # Igualmente marcamos para que la lección y el prompt lo sepan.
+                # [P1-LEARNING-RATIO-NONE · 2026-07-27] `(… or 0)` OBLIGATORIO: `learning_ready`
+                # devuelve `ratio=None` cuando no hay datos de aprendizaje, y `None:.0%` levanta
+                # `TypeError: unsupported format string passed to NoneType.__format__`.
+                #
+                # La excepción salía de DENTRO de un logger.warning, así que el mensaje de
+                # diagnóstico mataba el chunk que intentaba explicar: `_chunk_worker` abortaba,
+                # el chunk quedaba failed y esa SEMANA del plan no se generaba nunca.
+                #
+                # Visto en los logs del VPS: 6 veces en 3 horas, chunks 4/6/9 del plan 69f9e03d —
+                # el mismo cuyas semanas 4-11 llevaban días sin avanzar.
+                #
+                # El idioma seguro ya se usa BIEN en las otras cuatro interpolaciones de esta
+                # variable (líneas ~27176, ~27182, ~27415) y hay un guard `is not None` en ~26676.
+                # Esta era la única que se lo saltó.
                 logger.warning(
-                    f"[P0-1/LEARNING-FLEXIBLE] chunk {week_number} ratio={learning_ready_ratio:.0%}, "
+                    f"[P0-1/LEARNING-FLEXIBLE] chunk {week_number} "
+                    f"ratio={(learning_ready_ratio or 0):.0%}, "
                     f"flexible_mode activo. Generando con _force_variety=True como compensación."
                 )
                 form_data["_force_variety"] = True
