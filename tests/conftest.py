@@ -172,7 +172,11 @@ def pytest_configure(config):
 #
 # Restaurar de más también rompe. Se limita al par medido; si aparece otra contaminación
 # rastreada, se añade con su bisect, no por si acaso.
-_MODULOS_VIGILADOS = ("graph_orchestrator", "db_inventory")
+# [P1-SUITE-SWEEP · 2026-07-27] +shopping_calculator: `test_p1_3_shopping_coherence_knobs_registered`
+# lo borra de sys.modules sin restaurar (su `_fresh_modules()` borra graph_orchestrator Y
+# shopping_calculator; este fixture solo devolvía el primero). Bisect del par: ese archivo +
+# las víctimas reproduce 3 de los 4 rojos de orden (caps_last_word ×2, recipe_step failsafe).
+_MODULOS_VIGILADOS = ("graph_orchestrator", "db_inventory", "shopping_calculator")
 
 
 @pytest.fixture(autouse=True)

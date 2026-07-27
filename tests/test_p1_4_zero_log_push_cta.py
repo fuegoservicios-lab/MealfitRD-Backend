@@ -18,6 +18,22 @@ import pytest
 from cron_tasks import _build_zero_log_push_payload
 
 
+
+# [P1-SUITE-SWEEP · 2026-07-27] `importlib.reload(constants)` re-ejecuta el módulo REAL: crea
+# tuplas/objetos NUEVOS y deja viejos los alias `from constants import X as _X` de TODO el
+# proceso (rompía la identidad `plans._LESSON_COUNT_EVENT_WHITELIST is constants...` del canario
+# audit_hist_7 — y el reload "de restauración" del finally NO restaura: fabrica una 3ª tupla).
+# En su lugar: instancia AISLADA del módulo, ejecutada bajo el env deseado, sin tocar
+# sys.modules['constants'].
+def _constants_instancia_aislada():
+    import importlib.util
+    import pathlib
+    _p = pathlib.Path(__file__).resolve().parent.parent / "constants.py"
+    _spec = importlib.util.spec_from_file_location("_constants_aislado_para_env_tests", _p)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    return _mod
+
 def test_p1_4_manual_normal_includes_optout_cta():
     """logging_preference='manual' + zero-log normal (<3 consec) → CTA en body, deeplink al diario."""
     import constants
@@ -108,13 +124,8 @@ def test_p1_4_default_logging_preference_is_manual():
 def test_p1_4_deeplink_honors_env_override(monkeypatch):
     """CHUNK_ZERO_LOG_DEEPLINK debe respetar override de env var."""
     monkeypatch.setenv("CHUNK_ZERO_LOG_DEEPLINK", "mealfit://diario/zero-log")
-    import importlib
-    import constants
-    importlib.reload(constants)
-    assert constants.CHUNK_ZERO_LOG_DEEPLINK == "mealfit://diario/zero-log"
-    # Restaurar default
+    assert _constants_instancia_aislada().CHUNK_ZERO_LOG_DEEPLINK == "mealfit://diario/zero-log"
     monkeypatch.delenv("CHUNK_ZERO_LOG_DEEPLINK", raising=False)
-    importlib.reload(constants)
 
 
 def test_p1_4_constant_default_points_to_diary():

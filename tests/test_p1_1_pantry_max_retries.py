@@ -32,6 +32,22 @@ import os
 import pytest
 
 
+
+# [P1-SUITE-SWEEP · 2026-07-27] `importlib.reload(constants)` re-ejecuta el módulo REAL: crea
+# tuplas/objetos NUEVOS y deja viejos los alias `from constants import X as _X` de TODO el
+# proceso (rompía la identidad `plans._LESSON_COUNT_EVENT_WHITELIST is constants...` del canario
+# audit_hist_7 — y el reload "de restauración" del finally NO restaura: fabrica una 3ª tupla).
+# En su lugar: instancia AISLADA del módulo, ejecutada bajo el env deseado, sin tocar
+# sys.modules['constants'].
+def _constants_instancia_aislada():
+    import importlib.util
+    import pathlib
+    _p = pathlib.Path(__file__).resolve().parent.parent / "constants.py"
+    _spec = importlib.util.spec_from_file_location("_constants_aislado_para_env_tests", _p)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    return _mod
+
 def test_constant_is_defined_in_constants_module():
     """`CHUNK_PANTRY_MAX_RETRIES` está exportado desde constants.py.
     Antes vivía como hardcoded local en cron_tasks._chunk_worker."""
@@ -51,17 +67,11 @@ def test_constant_default_value_matches_legacy_hardcoded():
     # Reset env override si estuviera seteado por otra suite.
     prev = os.environ.pop("CHUNK_PANTRY_MAX_RETRIES", None)
     try:
-        # Re-import limpio para que el default aplique.
-        import importlib
-        import constants
-        importlib.reload(constants)
-        assert constants.CHUNK_PANTRY_MAX_RETRIES == 2
+        # Instancia aislada para que el default aplique (sin reload del módulo real).
+        assert _constants_instancia_aislada().CHUNK_PANTRY_MAX_RETRIES == 2
     finally:
         if prev is not None:
             os.environ["CHUNK_PANTRY_MAX_RETRIES"] = prev
-            import importlib
-            import constants
-            importlib.reload(constants)
 
 
 def test_constant_clamps_invalid_env_value():
@@ -71,18 +81,12 @@ def test_constant_clamps_invalid_env_value():
     chunk generaría nunca."""
     os.environ["CHUNK_PANTRY_MAX_RETRIES"] = "0"
     try:
-        import importlib
-        import constants
-        importlib.reload(constants)
-        assert constants.CHUNK_PANTRY_MAX_RETRIES == 1, (
+        assert _constants_instancia_aislada().CHUNK_PANTRY_MAX_RETRIES == 1, (
             "Clamp a 1 debe rescatar valores <1 para que siempre haya al "
             "menos 1 retry real."
         )
     finally:
         os.environ.pop("CHUNK_PANTRY_MAX_RETRIES", None)
-        import importlib
-        import constants
-        importlib.reload(constants)
 
 
 def test_cron_tasks_imports_constant():
@@ -179,12 +183,6 @@ def test_env_var_override_works():
     que las demás constantes de chunk en constants.py."""
     os.environ["CHUNK_PANTRY_MAX_RETRIES"] = "5"
     try:
-        import importlib
-        import constants
-        importlib.reload(constants)
-        assert constants.CHUNK_PANTRY_MAX_RETRIES == 5
+        assert _constants_instancia_aislada().CHUNK_PANTRY_MAX_RETRIES == 5
     finally:
         os.environ.pop("CHUNK_PANTRY_MAX_RETRIES", None)
-        import importlib
-        import constants
-        importlib.reload(constants)
