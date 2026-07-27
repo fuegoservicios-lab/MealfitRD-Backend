@@ -46,6 +46,17 @@ _SAFE_VAR_NAMES = frozenset({
     "qtyStr",
     # Counters / flags / runtime-derived state que NO contiene HTML
     "deltaItemsRemoved", "showInventoryNotes",
+    # [P1-PDF-3 · verificado 2026-07-26] Maquetación del PDF de la lista. Se comprobó en
+    # `Dashboard.jsx` que NINGUNA deriva de datos externos — el procedimiento que este mismo
+    # test documenta en su mensaje de fallo (paso 2):
+    #   columnCount  Dashboard.jsx:2830 <- shoppingHelpers `isHyperDense ? 4 : 3`  (entero)
+    #   columnGap    Dashboard.jsx:3114 <- `isHyperDense ? '8px' : … : '16px'`     (literal CSS)
+    #   cardStyle    Dashboard.jsx:2999 <- ternario entre dos literales CSS
+    #   ulStyle      Dashboard.jsx:3002 <- ternario; su rama interpola columnCount/columnGap,
+    #                                      ambos ya verificados arriba
+    # Si alguna pasa a depender del LLM, del usuario o de la BD, sácala de aquí y envuélvela
+    # en `escapeHtml(...)`.
+    "columnCount", "columnGap", "cardStyle", "ulStyle",
 })
 
 
