@@ -61,12 +61,12 @@ Todos los knobs `MEALFIT_*` se auto-registran en `_KNOBS_REGISTRY` vía `_env_in
 
 ### Archivos clave
 
-- [`backend/graph_orchestrator.py:6185`](backend/graph_orchestrator.py#L6185) — `assemble_plan_node` (productor del flag).
-- [`backend/graph_orchestrator.py:7704`](backend/graph_orchestrator.py#L7704) — `review_plan_node` (consumidor del flag).
-- [`backend/shopping_calculator.py:2686`](backend/shopping_calculator.py#L2686) — `run_shopping_coherence_guard`.
+- [`backend/graph_orchestrator.py`](backend/graph_orchestrator.py) — `assemble_plan_node` (productor del flag).
+- [`backend/graph_orchestrator.py`](backend/graph_orchestrator.py) — `review_plan_node` (consumidor del flag).
+- [`backend/shopping_calculator.py`](backend/shopping_calculator.py) — `run_shopping_coherence_guard`.
 - [`backend/shopping_calculator.py`](backend/shopping_calculator.py) — `run_shopping_coherence_guard_and_append_history` (P1-NEXT-2 · 2026-05-11, helper SSOT para surfaces auxiliares).
-- [`backend/shopping_calculator.py:2228`](backend/shopping_calculator.py#L2228) — `expected_sum_from_recipes` (lado izquierdo del guard).
-- [`backend/cron_tasks.py:676`](backend/cron_tasks.py#L676) — `_shopping_coherence_alert_job` (cron diario).
+- [`backend/shopping_calculator.py`](backend/shopping_calculator.py) — `expected_sum_from_recipes` (lado izquierdo del guard).
+- [`backend/cron_tasks.py`](backend/cron_tasks.py) — `_shopping_coherence_alert_job` (cron diario).
 - [`backend/cron_tasks.py`](backend/cron_tasks.py) — `_aggregate_coherence_block_history_metrics` (cron horario P3-B).
 
 ### Surfaces que escriben `aggregated_shopping_list*` y status del guard
@@ -92,6 +92,12 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ---
 
+## RAG + Dreaming (consolidación de memoria offline)
+
+[P1-DREAMING-1 · 2026-06-13] Sistema híbrido: el RAG de `user_facts` (Cohere embed-v4 + `match_user_facts`) + una capa de "Dreaming" — cron nocturno `_dream_consolidate_facts` que de-duplica facts globalmente (merges soft-delete reversibles), aplica salience + decay, resuelve contradicciones cross-sesión, y sintetiza un `user_memory_profile` (1 fila/usuario, `evidence_fact_ids` FK-verificada anti-confabulación) inyectado al prompt del coach + opcional al generador de planes. **Alergias/condiciones médicas EXENTAS** (floor salience 1.0, nunca auto-merge, fail-secure). Todo OFF por default (`MEALFIT_DREAMING_ENABLED`/`_RETRIEVAL_ENABLED`/`_INJECT_PLAN_ENABLED`) → 5 fases de rollout, F0 neutral (no toca `match_user_facts`). Adaptado a Neon (FK→`user_profiles`, sin RLS/`auth.uid()`, RPC estilo `match_user_facts`). Costo ~$0.0002/usuario (flash + 1 call/usuario + budget cap). Motor SSOT [`backend/dreaming.py`](backend/dreaming.py); doc canónica (knobs/ciclo/fases/alertas/seguridad) [`backend/docs/dreaming_consolidation.md`](backend/docs/dreaming_consolidation.md). Test ancla [`test_p1_dreaming_1_anchors.py`](backend/tests/test_p1_dreaming_1_anchors.py).
+
+---
+
 ## Supermercado RD artificial
 
 [P1-SUPERMARKET-DB · 2026-07-02] Tabla `supermarket_products` (Neon): presentaciones comprables de los +200 alimentos verificados (+variantes de marca futuras), navegable en `/supermercado` (landing, link en Footer) y editable ahí mismo con gate admin (Bearer `CRON_SECRET`, mutaciones SOLO vía [`backend/routers/supermarket.py`](backend/routers/supermarket.py) — simétrica a I6). Roadmap: conexión a lista de compras vía `master_food_name` (elegir marca de yogurt/carnes/arroz). Doc canónica (schema/endpoints/seed/roadmap): [`backend/docs/supermarket_db.md`](backend/docs/supermarket_db.md). Test ancla: [`test_p1_supermarket_db.py`](backend/tests/test_p1_supermarket_db.py).
@@ -102,7 +108,7 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 - **Knobs operacionales**: env vars `MEALFIT_*` con defaults seguros, registrados en `_KNOBS_REGISTRY` (`graph_orchestrator.py`). Cambios de comportamiento que pueden necesitar revertirse sin redeploy van como knob, no como hardcode.
 - **Logging en producción**: [P2-LOGGER-MIGRATION · 2026-05-12] archivos productivos del backend (`graph_orchestrator.py`, `fact_extractor.py`, `memory_manager.py`, `vision_agent.py`, `nutrition_calculator.py`, `db_facts.py`, `app.py`) usan `logger.<level>(...)` — NO `print(...)`. Mapeo emoji → nivel: ❌/🛑/🚨 → `error`, ⚠/🛡 → `warning`, resto → `info`. Excepciones legítimas (CLI subcommand a stdout) requieren marker `# [P2-LOGGER-EXEMPT: <razón>]` en las 3 líneas previas. Test blanket [`test_p2_logger_migration.py`](backend/tests/test_p2_logger_migration.py) escanea con AST y falla si encuentra `print()` sin marker. Whitelist `KNOWN_PRINT_EXEMPT_PATHS` para scripts CLI/scratch/refactors one-shot.
-- **Readiness probe granular**: [P3-READY-REASON · 2026-05-12] `GET /ready` devuelve `{status, plan_graph, reason, message}` cuando 503. `reason` formato `build_failed:<ExcType>:<msg>:<n>` permite a orquestadores (k8s, load balancer) dispatchear por tipo de error sin abrir logs. Mensaje truncado a 240 chars para evitar leak de paths/SQL en body público del probe. Implementado vía `is_plan_graph_ready_with_reason() -> tuple[bool, str | None]` ([`graph_orchestrator.py:10160+`](backend/graph_orchestrator.py#L10160)). Test [`test_p3_ready_reason.py`](backend/tests/test_p3_ready_reason.py).
+- **Readiness probe granular**: [P3-READY-REASON · 2026-05-12] `GET /ready` devuelve `{status, plan_graph, reason, message}` cuando 503. `reason` formato `build_failed:<ExcType>:<msg>:<n>` permite a orquestadores (k8s, load balancer) dispatchear por tipo de error sin abrir logs. Mensaje truncado a 240 chars para evitar leak de paths/SQL en body público del probe. Implementado vía `is_plan_graph_ready_with_reason() -> tuple[bool, str | None]` ([`graph_orchestrator.py`](backend/graph_orchestrator.py)). Test [`test_p3_ready_reason.py`](backend/tests/test_p3_ready_reason.py).
 - **E2E tests (Playwright)**: [P3-E2E-PLAYWRIGHT · 2026-05-12] smoke del golden-path en [`frontend/e2e/golden_path.spec.js`](frontend/e2e/golden_path.spec.js). Regression guards: `pageerror` listener (P0-FRONTEND-ANALYTICS) + 0 requests a `fonts.gstatic.com` (P3-SELF-HOST-FONTS). NO cubre flujo autenticado (follow-up cuando exista staging Supabase). Scripts: `test:e2e` / `test:e2e:install`. Ver [`frontend/e2e/README.md`](frontend/e2e/README.md).
 - **UUIDs en endpoints públicos**: [P2-HEALTH-UID-STRIP · 2026-05-12] endpoints health/observabilidad sin auth DEBEN hashear UUIDs via `_hash_uuid_for_public()` ([`routers/system.py`](backend/routers/system.py)) → `hashlib.sha256(value)[:12]` (preserva correlation visual sin enumeración). Si necesitas UUID raw, gatear con `_verify_admin_token`. Test: [`test_p2_prod_audit_3.py`](backend/tests/test_p2_prod_audit_3.py) sección 1.
 - **`datetime.utcnow()` prohibido en producción**: [P3-DEPRECATED-UTCNOW · 2026-05-12] Python 3.12+ emite `DeprecationWarning`; usar `datetime.now(timezone.utc)`. Tests legacy exentos con comment `# naive a propósito`. Test: [`test_p3_prod_audit_6.py`](backend/tests/test_p3_prod_audit_6.py) sección 2.
@@ -114,16 +120,16 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 - **SSOT de migrations** [P3-MIGRATIONS-SSOT · 2026-05-20]: TODA migration vive en DOS directorios mantenidos sincronizados — `migrations/` (workspace-root, cross-repo) Y `backend/migrations/` (backend repo). Al añadir una nueva migration, copiarla a AMBOS dirs en el mismo commit/push de cada repo. Razón: el workspace-root usa el `.gitignore` que excluye `backend/`+`frontend/` (son repos hermanos con remotes propios), así que necesitas archivos físicos en cada dir para que cada `git push` lleve el cambio. Drift histórico (audit 2026-05-20): 4 files root-only + 1 file backend-only fueron sincronizados; estado actual = 37 archivos idénticos en ambos. Verificación rápida: `diff <(ls migrations) <(ls backend/migrations)` debe retornar vacío.
 - **Convención de imports DB** [P3-DB-IMPORTS-FACADE · 2026-05-20]: nuevos call sites de funciones DB deben usar la **fachada** `from db import <funcion>` (ver [`backend/db.py`](backend/db.py)) en lugar de los módulos internos (`from db_plans import ...`, `from db_inventory import ...`, etc.). Razón: `db.py` hace `from db_X import *` de los 6 sub-módulos (`db_core`, `db_profiles`, `db_chat`, `db_plans`, `db_facts`, `db_inventory`) y es el contrato público. Importar el sub-módulo directo (a) acopla el call site a la organización interna actual (si re-organizamos a `db/` paquete, hay que mover 59 imports), (b) eluda los `__all__` controlados, (c) duplica el sentinel de re-export protegido por `test_p3_new_star_imports_audit.py` (P3-NEW-STAR-IMPORTS-AUDIT). Migración: NO grep+replace masivo hoy (59 imports cross-codebase). Política "boy scout": cuando edites un archivo con `from db_<sub> import`, considera migrar ese mismo bloque a `from db import`. Los 5 sub-módulos seguirán siendo SSOT del código real — la fachada es API pública únicamente.
 - **Console output frontend** [P3-CONSOLE-DEV-GUARDS · 2026-05-15]: `error/trace/assert` preservados prod (Sentry los captura) — NO DEV-guard. `log/warn/debug/info` dropeados por esbuild `pure:[...]` (P3-FRONTEND-1).
-- **Crons**: registrados en `register_plan_chunk_scheduler` ([cron_tasks.py:793](backend/cron_tasks.py#L793)) — SSOT. Listener `_scheduler_alert_listener` ([app.py:102+](backend/app.py#L102)) escala MISSED/ERROR a `system_alerts`.
+- **Crons**: registrados en `register_plan_chunk_scheduler` ([cron_tasks.py](backend/cron_tasks.py)) — SSOT. Listener `_scheduler_alert_listener` ([app.py](backend/app.py)) escala MISSED/ERROR a `system_alerts`.
 - **Tests**: cuando un test parsea source-de-prod con regex, incluir tooltip-anchor en el código fuente para que un renombre falle el test antes de cambiar producción.
 - **`TODO`/`TODOS` en comentarios — solo marker de deuda**: [P3-TODOS-NARRATIVE · 2026-05-13] mayúsculas (`TODO`/`FIXME`/`XXX`/`HACK`) reservadas exclusivamente para markers de trabajo pendiente real; el sustantivo español "todo/todos" va en minúscula. Razón: audit 2026-05-12 encontró 243 matches grep, prácticamente todos sustantivo español — ruido. Convención editorial; cero enforcement automático.
 - **Memoria persistente**: cada cierre de P-fix se documenta en `~/.claude/projects/.../memory/` con frontmatter `name/description/type` y se referencia en `MEMORY.md`.
-- **`_LAST_KNOWN_PFIX`** ([`backend/app.py:32`](backend/app.py#L32)): marker textual del último P-fix mergeado en HEAD. Cada cierre de P-fix DEBE bumpearlo (formato `Pn-X · YYYY-MM-DD` o `Pn-NEW-X · YYYY-MM-DD`). `/health/version` lo expone para diagnóstico de deploy rezagado vs. árbol — sin bump, un operador no puede confirmar que su último fix está vivo en producción. Dos tests de regresión enforzan el contrato:
+- **`_LAST_KNOWN_PFIX`** ([`backend/app.py`](backend/app.py)): marker textual del último P-fix mergeado en HEAD. Cada cierre de P-fix DEBE bumpearlo (formato `Pn-X · YYYY-MM-DD` o `Pn-NEW-X · YYYY-MM-DD`). `/health/version` lo expone para diagnóstico de deploy rezagado vs. árbol — sin bump, un operador no puede confirmar que su último fix está vivo en producción. Dos tests de regresión enforzan el contrato:
   - [`test_p3_1_last_known_pfix_freshness.py`](backend/tests/test_p3_1_last_known_pfix_freshness.py) — formato (`Pn-...· YYYY-MM-DD`) + floor de fecha (rechaza markers stale).
   - [`test_p2_hist_audit_14_marker_test_link.py`](backend/tests/test_p2_hist_audit_14_marker_test_link.py) — **cross-link**: el slug del marker (`P2-HIST-AUDIT-14` → `p2_hist_audit_14`) DEBE matchear al menos un archivo `tests/test_<slug>*.py`. Cierra el gap "bump cosmético" donde alguien actualizaba el marker sin añadir el test de regresión correspondiente.
 - **Tamaño de CLAUDE.md (cap)**: [P3-CLAUDEMD-CAP · 2026-05-14] [`test_p3_claudemd_cap.py`](backend/tests/test_p3_claudemd_cap.py) falla si CLAUDE.md > 52000 chars (knob `MEALFIT_CLAUDE_MD_MAX_CHARS`, clamp [10k, 200k]). CLAUDE.md auto-carga cada turn → chars = tokens proporcionales. **Doc-first**: contenido nuevo nace en `docs/` (tabla con test parser) o `~/.claude/projects/.../memory/` (narrativa/runbook); CLAUDE.md tiene header + 1-line + link. Bump del cap visible en code review — si sube >10% en una sesión, planificar limpieza estructural (pattern 2026-05-14: -46% en 6 fases).
 - **Dev local — auto-reload del backend**: setear `UVICORN_RELOAD=1` en `.env` evita el modo de fallo "fix está en HEAD pero binary no lo ve". Python no recarga módulos automáticamente; edits a `constants.py`/`routers/*.py` requieren restart manual SIN reload activo. Default `0` en prod (P2-UVICORN-RELOAD-ENV). Verificación post-restart: `curl /health/version` → comparar `last_known_pfix` vs HEAD. Detalle + SOP: [`runbook_dev_local_setup_2026_05_23.md`](~/.claude/projects/.../memory/runbook_dev_local_setup_2026_05_23.md).
-- **SQL forensic antes de tocar código**: cuando un bug depende de datos persistidos (`plan_data`, `user_inventory`, `master_ingredients`), ejecuta SELECT vía Supabase MCP ANTES de teorizar. La sesión 2026-05-23 cerró 3 bugs únicamente porque el SELECT reveló data corrupta (`/pedazos de queso` literal, `paquete` unit no convertible, `½ lb` Unicode). Templates copy-paste para 7 queries comunes (plan_data, meals, ingredients, inventory join master, audit history, schema discovery): [`runbook_sql_forensic_sop_2026_05_23.md`](~/.claude/projects/.../memory/runbook_sql_forensic_sop_2026_05_23.md).
+- **SQL forense antes de tocar código**: cuando un bug depende de datos persistidos (`plan_data`, `user_inventory`, `master_ingredients`), ejecuta el SELECT **antes** de teorizar. La sesión 2026-05-23 cerró 3 bugs solo porque el SELECT reveló data corrupta; la del 2026-07-26 refutó 5 hipótesis igual de rápido. Hoy la DB es **Neon**: `load_dotenv()` + `psycopg.connect(os.environ['NEON_DATABASE_URL'])` desde un script (el MCP de Supabase ya no aplica). ⚠️ Fuera de FastAPI hay que **abrir el pool** (`db_core.connection_pool.open()`) o `master_ingredients` sale vacío y mides el vacío, no el sistema. Templates: [`runbook_sql_forensic_sop_2026_05_23.md`](~/.claude/projects/.../memory/runbook_sql_forensic_sop_2026_05_23.md).
 - **Soft-fail pattern (HTTP 200 + body flag)** [P3-SWAP-SOFT-FAIL-200 · 2026-05-23]: para endpoints donde el "fallo" es business-as-usual (LLM no convergió, etc), retornar 200 con `operation_failed:true` + `error_code` canónico + `error_message` es preferible a 4xx — evita ruido rojo en DevTools del browser sin perder observability (logger.warning + knob de rollback). NO aplicar a validation/auth/not-found errors (esos siguen 4xx). Criterios + templates backend/frontend + endpoints actuales bajo el pattern: [`runbook_soft_fail_pattern_2026_05_23.md`](~/.claude/projects/.../memory/runbook_soft_fail_pattern_2026_05_23.md).
 
 ### Historial-quota-exemption
@@ -132,15 +138,15 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 | Endpoint | Razón |
 |---|---|
-| `/history-list` ([routers/plans.py:6226](backend/routers/plans.py#L6226)) | Polling read-only del listado del Historial. Cero costo LLM. |
-| `/lessons-counts` ([routers/plans.py:4776](backend/routers/plans.py#L4776)) | Single-roundtrip de conteos por plan. Cero costo LLM. |
-| `/history-status-summary` ([routers/plans.py:4888](backend/routers/plans.py#L4888)) | Reconciliación de estados `plan_chunk_queue`. Cero costo LLM. |
-| `/recalculate-shopping-list` ([routers/plans.py:3915](backend/routers/plans.py#L3915)) | **[P3-PDF-POLISH-4-C · 2026-05-14]** Recalc derivativo al cambiar `householdSize`/`groceryDuration`. Cero costo LLM. Mitigación spam: `_RECALC_LIMITER = RateLimiter(20/60s)`. |
-| `/telemetry/pdf-stale-fallback` ([routers/plans.py:4187](backend/routers/plans.py#L4187)) | **[P3-PDF-POLISH-4-C · 2026-05-14]** Sink fire-and-forget desde el handler PDF. Cero costo LLM. Mitigación spam: `_PDF_TELEMETRY_LIMITER = RateLimiter(30/60s)`. |
-| `/shift-plan` ([routers/plans.py:1656](backend/routers/plans.py#L1656)) | **[P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15]** Avance de la ventana rolling de un plan YA generado (mantenimiento). Antes `verify_api_quota` + `log_api_usage("shift_plan")` → 402 + crédito extra al llegar al cap, congelando un plan ya pagado. Ahora `Depends(_SHIFT_LIMITER)` (20/60s), NO cuenta contra el cap. Anti-hammering (P2-LIVE-7) cerrado por el RateLimiter + idempotencia. Test [`test_p3_shift_plan_quota_exempt.py`](tests/test_p3_shift_plan_quota_exempt.py). |
-| `/restock` ([routers/plans.py:5761](backend/routers/plans.py#L5761)) | **[P1-NEVERA-QUOTA-EXEMPT · 2026-06-24]** "Ya compré la lista" → `user_inventory`. Cero costo LLM. Antes `verify_api_quota` + `log_api_usage("restock_inventory")` congelaba la Nevera al cap Y quemaba crédito (`get_monthly_api_usage` cuenta toda fila sin filtrar endpoint). Ahora `Depends(_RESTOCK_LIMITER)` (20/60s). Test [`test_p1_nevera_quota_exempt.py`](tests/test_p1_nevera_quota_exempt.py). |
-| `/inventory/consume` ([routers/plans.py:6116](backend/routers/plans.py#L6116)) | **[P1-NEVERA-QUOTA-EXEMPT · 2026-06-24]** Vaciar consumidos, sub-paso de renovar plan. Cero costo LLM. Antes el 402 al cap abortaba la renovación con "Error al sincronizar despensa física". Ahora `Depends(_CONSUME_LIMITER)` (20/60s). Test [`test_p1_nevera_quota_exempt.py`](tests/test_p1_nevera_quota_exempt.py). |
-| `/api/diary/upload` ([routers/diary.py:170](backend/routers/diary.py#L170)) | **[P1-MEAL-SCAN-GEMMA · 2026-07-12]** "Escanear comida" → gemma LOCAL (Ollama vía túnel, costo LLM cero). Antes `verify_api_quota` + `log_api_usage("llm_vision")` → 402 al cap + crédito quemado por scan gratis. Ahora `Depends(_VISION_UPLOAD_LIMITER)` (10/60s); `log_api_usage` solo con provider cloud (`is_vision_local()`). Test [`test_p1_meal_scan_gemma.py`](tests/test_p1_meal_scan_gemma.py). |
+| `/history-list` ([routers/plans.py](backend/routers/plans.py)) | Polling read-only del listado del Historial. Cero costo LLM. |
+| `/lessons-counts` ([routers/plans.py](backend/routers/plans.py)) | Single-roundtrip de conteos por plan. Cero costo LLM. |
+| `/history-status-summary` ([routers/plans.py](backend/routers/plans.py)) | Reconciliación de estados `plan_chunk_queue`. Cero costo LLM. |
+| `/recalculate-shopping-list` ([routers/plans.py](backend/routers/plans.py)) | **[P3-PDF-POLISH-4-C · 2026-05-14]** Recalc derivativo. Cero costo LLM. `Depends(_RECALC_LIMITER)` (20/60s) reemplaza `get_verified_user_id` (RateLimiter retorna `verified_user_id`). |
+| `/telemetry/pdf-stale-fallback` ([routers/plans.py](backend/routers/plans.py)) | **[P3-PDF-POLISH-4-C · 2026-05-14]** Sink fire-and-forget PDF. Cero costo LLM. `Depends(_PDF_TELEMETRY_LIMITER)` (30/60s). |
+| `/shift-plan` ([routers/plans.py](backend/routers/plans.py)) | **[P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15]** Avance de la ventana rolling de un plan YA generado (mantenimiento, no plan nuevo). Antes `verify_api_quota` + `log_api_usage("shift_plan")` → 402 + crédito extra al llegar al cap, congelando un plan ya pagado. Ahora `Depends(_SHIFT_LIMITER)` (20/60s) y NO cuenta contra el cap. Anti-hammering (P2-LIVE-7) cerrado por el RateLimiter + idempotencia. Test [`test_p3_shift_plan_quota_exempt.py`](backend/tests/test_p3_shift_plan_quota_exempt.py). |
+| `/restock` ([routers/plans.py](backend/routers/plans.py)) | **[P1-NEVERA-QUOTA-EXEMPT · 2026-06-24]** "Ya compré la lista" → INSERT/UPDATE `user_inventory`. Cero costo LLM. Antes `verify_api_quota` + `log_api_usage("restock_inventory")` → al cap congelaba la Nevera Inteligente (no se podía meter la compra) Y quemaba crédito de planes (`get_monthly_api_usage` cuenta toda fila de `api_usage` sin filtrar endpoint). Ahora `Depends(_RESTOCK_LIMITER)` (20/60s), NO cuenta contra el cap. Test [`test_p1_nevera_quota_exempt.py`](backend/tests/test_p1_nevera_quota_exempt.py). |
+| `/inventory/consume` ([routers/plans.py](backend/routers/plans.py)) | **[P1-NEVERA-QUOTA-EXEMPT · 2026-06-24]** Vaciar consumidos (`quantity=0`), sub-paso de renovar plan (`useRegeneratePlan.js`). Cero costo LLM. Antes `verify_api_quota` → al cap el 402 abortaba la renovación entera con "Error al sincronizar despensa física" + quemaba crédito. Ahora `Depends(_CONSUME_LIMITER)` (20/60s), NO cuenta contra el cap. Test [`test_p1_nevera_quota_exempt.py`](backend/tests/test_p1_nevera_quota_exempt.py). |
+| `/api/diary/upload` ([routers/diary.py](backend/routers/diary.py)) | **[P1-MEAL-SCAN-GEMMA · 2026-07-12]** "Escanear comida" → análisis en gemma LOCAL (Ollama vía túnel, costo LLM cero). Antes `verify_api_quota` + `log_api_usage("llm_vision")` → 402 al cap + cada scan gratis quemaba crédito de planes. Ahora `Depends(_VISION_UPLOAD_LIMITER)` (10/60s); `log_api_usage` solo si el provider de visión es cloud pago (`is_vision_local()`). Test [`test_p1_meal_scan_gemma.py`](backend/tests/test_p1_meal_scan_gemma.py). |
 
 **Por qué no `verify_api_quota`:** el paywall mensual (gratis=15, basic=50, plus=200) devuelve `HTTP 402` al exceder. Aplicarlo a GETs read-only del Historial impediría al usuario ver su propio historial tras alcanzar el cap (UX inaceptable); aplicarlo a recalc/telemetry sin costo LLM bloquearía cambios legítimos de household + telemetría operacional durante incidentes. Para rate-limiting per-spam, `RateLimiter` per-bucket es la herramienta correcta (NO el paywall). Tests [`test_p1_audit_3_history_quota_exemption.py`](backend/tests/test_p1_audit_3_history_quota_exemption.py) (3 rows originales) + [`test_p3_pdf_polish_4.py`](backend/tests/test_p3_pdf_polish_4.py) (2 rows del bundle PDF) anclan ambas decisiones.
 
@@ -202,7 +208,7 @@ Anclajes en migraciones: [`test_p2_whitelist_advisors_anchors_alive.py`](backend
 
 ### Admin gate en `/api/system/health` (no es público)
 
-[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] [`backend/routers/system.py:get_system_health`](backend/routers/system.py#L21) gateado por `_verify_admin_token` (mismo `CRON_SECRET` que admin endpoints). Pre-fix era público y exponía business-intel agregada (nudge rate, abandono, distribución emocional, quality score). Probe público de liveness: `GET /health` y `GET /ready` (solo `{status: ok}`). Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
+[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] [`backend/routers/system.py:get_system_health`](backend/routers/system.py) gateado por `_verify_admin_token` (mismo `CRON_SECRET` que admin endpoints). Pre-fix era público y exponía business-intel agregada (nudge rate, abandono, distribución emocional, quality score). Probe público de liveness: `GET /health` y `GET /ready` (solo `{status: ok}`). Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
 
 ### Pattern: `SET search_path = ''` en functions Postgres
 
@@ -215,7 +221,7 @@ Anclajes en migraciones: [`test_p2_whitelist_advisors_anchors_alive.py`](backend
 | `increment_inventory_quantity` | runtime/historical | `auth, public, extensions` (legacy, ver P2-4 memoria) | `authenticated` + `service_role` (P2-4) |
 | `handle_new_user` | [`p1_definer_functions_lockdown_2026_05_12.sql`](migrations/p1_definer_functions_lockdown_2026_05_12.sql) | `''` (P1-DEFINER-LOCKDOWN) | `service_role` (REVOKE explícito) |
 | `get_monthly_plan_count` | mismo | `''` | `service_role` (REVOKE explícito; función huérfana, 0 callsites) |
-| `log_unknown_ingredient_rpc` | mismo | `''` | `service_role` (REVOKE explícito; callsite [`db_plans.py:1196`](backend/db_plans.py#L1196)) |
+| `log_unknown_ingredient_rpc` | mismo | `''` | `service_role` (REVOKE explícito; callsite [`db_plans.py`](backend/db_plans.py)) |
 
 Si añades function nueva: aplicar el pattern, justificar excepción en COMMENT ON FUNCTION + memoria si necesitas resolver nombres sin qualifier.
 
@@ -279,9 +285,9 @@ Test relacionado: [`test_p1_new_a_frontend_no_direct_meal_plans_write.py`](backe
 
 ## Anti-patrones de agent tools prohibidos
 
-[P0-AGENT-1 · 2026-05-11] El nodo LangGraph `execute_tools` ([backend/agent.py:371](backend/agent.py#L371)) NO debe confiar en el `user_id` que la LLM emite dentro de `tool_args`. Antes de invocar cualquier tool con signature `(user_id: str, ...)` el nodo DEBE force-overridear `tool_args["user_id"]` al valor autenticado del state (`state["user_id"]` o `state["session_id"]` para guests).
+[P0-AGENT-1 · 2026-05-11] El nodo LangGraph `execute_tools` ([backend/agent.py](backend/agent.py)) NO debe confiar en el `user_id` que la LLM emite dentro de `tool_args`. Antes de invocar cualquier tool con signature `(user_id: str, ...)` el nodo DEBE force-overridear `tool_args["user_id"]` al valor autenticado del state (`state["user_id"]` o `state["session_id"]` para guests).
 
-**Razón:** la LLM recibe el `user_id` autenticado en plano dentro del system prompt vía `build_tools_instructions(user_id)` ([prompts/chat_agent.py:128, 148](backend/prompts/chat_agent.py#L128)). Eso es **prompt-trustable, NO enforced**. Una entrada adversaria del usuario (mensaje hostil, contenido importado vía `vision_agent`, recetas externas) puede inducir a la LLM a emitir `tool_call` con `user_id` ajeno, abriendo IDOR cross-user sobre `user_inventory`, `consumed_meals`, `user_facts`, `health_profile`, `meal_plans`.
+**Razón:** la LLM recibe el `user_id` autenticado en plano dentro del system prompt vía `build_tools_instructions(user_id)` ([prompts/chat_agent.py:128, 148](backend/prompts/chat_agent.py)). Eso es **prompt-trustable, NO enforced**. Una entrada adversaria del usuario (mensaje hostil, contenido importado vía `vision_agent`, recetas externas) puede inducir a la LLM a emitir `tool_call` con `user_id` ajeno, abriendo IDOR cross-user sobre `user_inventory`, `consumed_meals`, `user_facts`, `health_profile`, `meal_plans`.
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer. Defensa-en-profundidad junto con la sanitización P1-Q8/P0-A1 del pipeline de generación.
 
@@ -317,32 +323,25 @@ Ejemplos de código prohibido completos + vector de ataque + contrato post-fix: 
 
 ---
 
-## Anti-patrones de billing/paywall prohibidos
+## Anti-patrones de billing y webhook prohibidos
 
-[P0-BILLING-1 / P0-BILLING-2 · 2026-05-12] `/api/subscription/verify` ([`backend/routers/billing.py`](backend/routers/billing.py)) es la **única** vía cliente→upgrade tier. Tres invariantes; ejemplos completos + vectores en [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md).
+5 invariantes que protegen los únicos surfaces cliente→tier-upgrade y webhook-trigger del sistema. Ejemplos completos + vectores en [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md).
 
-- **I-Billing-1**: `tier` server-derived desde PayPal `plan_id` (mapping env vars `PAYPAL_PLAN_{BASIC,PLUS,ULTRA}_ID`), NO `data.get("tier")` del cliente.
-- **I-Billing-2**: fail-secure cuando faltan env vars PayPal en prod (`raise HTTPException(503)`, no `success=True`). Knob `MEALFIT_ALLOW_PAYPAL_BYPASS` solo dev.
-- **I-Billing-3** [P1-BILLING-{UPGRADE,CANCEL}-FAIL-LOUD]: PayPal cancel non-success → `_persist_billing_alert` + `HTTPException(409|502)`, NO `logger.warning` + UPDATE BD (evita doble cobro). Helper `_is_paypal_cancel_idempotent_success` clasifica 200/204/404/422-terminal como success.
+- **Billing** (`/api/subscription/verify`, [`routers/billing.py`](backend/routers/billing.py)):
+  - **I-Billing-1** [P0-BILLING-1]: `tier` server-derived desde PayPal `plan_id` (env vars `PAYPAL_PLAN_{BASIC,PLUS,ULTRA}_ID`), NO `data.get("tier")` del cliente.
+  - **I-Billing-2** [P0-BILLING-2]: fail-secure cuando faltan env vars PayPal en prod (`HTTPException(503)`, NO `success=True`). Knob `MEALFIT_ALLOW_PAYPAL_BYPASS` solo dev.
+  - **I-Billing-3** [P1-BILLING-FAIL-LOUD]: PayPal cancel non-success → `_persist_billing_alert` + `HTTPException(409|502)`, NO `logger.warning` (evita doble cobro). Helper `_is_paypal_cancel_idempotent_success` clasifica 200/204/404/422-terminal como success.
+- **Webhook**:
+  - **I-Webhook-1** [P0-WEBHOOK-1]: `/api/webhooks/process-pending-facts` con `WEBHOOK_SECRET=None AND ENVIRONMENT=production → 503` fail-secure. Set → `hmac.compare_digest` constant-time.
+  - **I-Webhook-2** [P2-WEBHOOK-FAIL-SECURE-ALWAYS]: PayPal webhook firma fail-secure SIEMPRE; sandbox NO salta verificación. Knob `MEALFIT_ALLOW_WEBHOOK_UNSIGNED` nunca respetado en prod.
 
-Tests: [`test_p0_billing_1_tier_server_side.py`](backend/tests/test_p0_billing_1_tier_server_side.py), [`test_p0_billing_2_fail_secure.py`](backend/tests/test_p0_billing_2_fail_secure.py), [`test_p1_billing_fail_loud.py`](backend/tests/test_p1_billing_fail_loud.py).
-
----
-
-## Anti-patrones de webhook prohibidos
-
-[P0-WEBHOOK-1 · 2026-05-12] `/api/webhooks/process-pending-facts` ([`backend/app.py`](backend/app.py)) rechaza TODA invocación sin `WEBHOOK_SECRET` válido (atacante con UUID enumerado podría forzar `process_pending_queue_sync(victim_id)`).
-
-- **I-Webhook-1**: `WEBHOOK_SECRET=None AND ENVIRONMENT=production → 503` fail-secure (NO `if webhook_secret:` sin `else`). Set → `hmac.compare_digest` constant-time.
-- **I-Webhook-2** [P2-WEBHOOK-FAIL-SECURE-ALWAYS]: PayPal webhook firma fail-secure SIEMPRE; sandbox NO salta verificación (vector: DNS misroute → forja `BILLING.SUBSCRIPTION.SUSPENDED`). Knob `MEALFIT_ALLOW_WEBHOOK_UNSIGNED` nunca respetado en `ENVIRONMENT=production`.
-
-Ejemplos + vectores: [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md). Tests: [`test_p0_webhook_1_fail_secure.py`](backend/tests/test_p0_webhook_1_fail_secure.py), [`test_p2_prod_audit_3.py`](backend/tests/test_p2_prod_audit_3.py).
+Tests: [`test_p0_billing_1_tier_server_side.py`](backend/tests/test_p0_billing_1_tier_server_side.py), [`test_p0_billing_2_fail_secure.py`](backend/tests/test_p0_billing_2_fail_secure.py), [`test_p1_billing_fail_loud.py`](backend/tests/test_p1_billing_fail_loud.py), [`test_p0_webhook_1_fail_secure.py`](backend/tests/test_p0_webhook_1_fail_secure.py), [`test_p2_prod_audit_3.py`](backend/tests/test_p2_prod_audit_3.py).
 
 ---
 
 ## Detección de deploy lag (operacional)
 
-[P0-PROD-1-DEPLOY · 2026-05-12] El cron `_alert_deploy_lag_marker_stale` ([`backend/cron_tasks.py:1222`](backend/cron_tasks.py#L1222)) corre cada `MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS` (default **1h** desde 2026-05-12, antes 24h) y compara `_LAST_KNOWN_PFIX` del binario corriendo vs `app_kv_store.expected_last_known_pfix`. Si divergen → alert `deploy_lag_drift_vs_expected`.
+[P0-PROD-1-DEPLOY · 2026-05-12] El cron `_alert_deploy_lag_marker_stale` ([`backend/cron_tasks.py`](backend/cron_tasks.py)) corre cada `MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS` (default **1h** desde 2026-05-12, antes 24h) y compara `_LAST_KNOWN_PFIX` del binario corriendo vs `app_kv_store.expected_last_known_pfix`. Si divergen → alert `deploy_lag_drift_vs_expected`.
 
 Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/system.py) (auth `Bearer <CRON_SECRET>`) invoca el detector inline + retorna `{live_marker, expected_marker, drift, message}` para validación inmediata post-deploy sin esperar al cron.
 
@@ -350,7 +349,7 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 ### Endpoint público para blackbox monitor externo
 
-[P2-HEALTHZ-DEEP · 2026-05-12] `GET /health/version` ([`backend/app.py:869`](backend/app.py#L869)) público sin auth, expone 5 keys (`expected_marker`, `drift`, `last_pipeline_metrics_tick_at`, `has_p0_prod_1_gate`, `has_p1_perf_1_cache`) para poller externo. Cierra paradoja "binary roto se vigila a sí mismo". Tabla detallada + SOP UptimeRobot (URL + assertions): [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "Endpoint público `/health/version`". Test: [`test_p2_healthz_deep_extended.py`](backend/tests/test_p2_healthz_deep_extended.py).
+[P2-HEALTHZ-DEEP · 2026-05-12] `GET /health/version` ([`backend/app.py`](backend/app.py)) público sin auth, expone 5 keys (`expected_marker`, `drift`, `last_pipeline_metrics_tick_at`, `has_p0_prod_1_gate`, `has_p1_perf_1_cache`) para poller externo. Cierra paradoja "binary roto se vigila a sí mismo". Tabla detallada + SOP UptimeRobot (URL + assertions): [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "Endpoint público `/health/version`". Test: [`test_p2_healthz_deep_extended.py`](backend/tests/test_p2_healthz_deep_extended.py).
 
 ### SOP: resolver `deploy_lag_drift_vs_expected`
 
