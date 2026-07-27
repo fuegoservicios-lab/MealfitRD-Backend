@@ -21057,7 +21057,15 @@ def resolve_alt_ingredient_placeholders(days, db=None) -> int:
         return 0
 
 
-@_node_label("assembler")
+# [P1-ASSEMBLER-NODE-LABEL · 2026-07-26] Aquí había un `@_node_label("assembler")` huérfano.
+#
+# Este helper es SÍNCRONO, no un nodo de LangGraph, y hace **cero llamadas LLM** — no hay nada
+# que atribuir. Su único llamador de producción es `_apply_macro_engine`, que corre dentro de
+# `assemble_plan_node`, así que el contextvar ya vale "assembler" cuando entra aquí.
+#
+# Lo grave no era el decorador de más, sino el de MENOS: `assemble_plan_node` —el nodo más caro
+# del pipeline— se quedó sin etiqueta, y este decorador mal colocado hacía que un grep pareciera
+# decir lo contrario. Ver el marker en `assemble_plan_node`.
 def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db, candidates,
                                           *, floor_pct=0.95, carb_tol=0.05) -> int:
     """[P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Día con déficit de proteína (<floor_pct×target) Y exceso de
@@ -29276,6 +29284,17 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                            f"{type(_rcreb_e).__name__}: {_rcreb_e}")
 
 
+# [P1-ASSEMBLER-NODE-LABEL · 2026-07-26] Este decorator FALTABA, y es el del nodo más caro del
+# pipeline (el ensamblador, ~222 s medidos). Sin él, `_current_node_var` sigue en None durante
+# todo el ensamblaje y cada llamada LLM originada aquí se persiste en `llm_usage_events` con
+# `node = NULL` — justo el agujero que P1-COST-INSTRUMENTATION-PHASE2 abrió para cerrar.
+#
+# Costaba verlo porque SÍ existía un `@_node_label("assembler")` en el archivo: se había quedado
+# huérfano ~8.000 líneas más arriba, sobre `_swap_excess_carbs_to_protein_for_day`, un helper
+# síncrono sin llamadas LLM. Un grep del label daba resultado y el nodo seguía sin etiqueta.
+#
+# Efecto: el costo por nodo deja de tener un boquete en la partida más grande.
+@_node_label("assembler")
 async def assemble_plan_node(state: PlanState) -> dict:
     """Ensambla el plan final combinando skeleton + días paralelos + datos del calculador, o re-ensambla un plan en caché."""
     nutrition = state["nutrition"]
