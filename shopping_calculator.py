@@ -4222,6 +4222,29 @@ def _classify_divergence_hypothesis(
     if exp_qty > 0 and 0 < act_qty < exp_qty * overdeduct_threshold:
         return "pantry_overdeduct"
 
+    # 5. [P1-COHERENCE-UNQUANTIFIED-LABEL · 2026-07-26] El alimento está en la lista pero las
+    # recetas NO le ponen cantidad. Es el caso de los condimentos: "Sal al gusto" parsea a
+    # `0.0 pizca`, cantidad cero, así que `expected` no lo tiene y sale `delta_pct = inf`.
+    #
+    # Ya estaba excluido del subset que BLOQUEA (fantasma delta=inf, exclusión por diseño — ver
+    # `_BAKING_PANTRY_STAPLE_TOKENS`), pero se reportaba como `unknown`, que es la etiqueta de
+    # "no sé qué pasó aquí". Medido con el guard REAL sobre 19 planes vivos: **831 de 879
+    # divergencias** eran esto. Quien lee la alerta diaria veía 831 incógnitas donde había 831
+    # condimentos sin cuantificar.
+    #
+    # Es SOLO una etiqueta: no cambia qué se reporta ni qué bloquea, cambia cómo se lee. Separar
+    # este bucket es además el prerequisito para que los umbrales del cron
+    # (`MEALFIT_COH_ALERT_CAP_RATIO`) midan señal en vez de ruido conocido.
+    if exp_qty <= 0 and act_qty > 0:
+        if any(float(v or 0) > 0 for v in exp_units.values()):
+            # El alimento SÍ está en las recetas, pero en otra unidad (receta en `taza`, lista
+            # en `pote`). Es simétrico del caso 2, que solo cubría `exp_qty > 0`. Medido: ~792
+            # de las 879 divergencias sobre 19 planes vivos caían aquí como `unknown`, y son
+            # casi todas de planes persistidos ANTES de `base_qty` — el desajuste que
+            # P1-COHERENCE-BASE-QTY ya cierra para los planes nuevos.
+            return "unit_mismatch"
+        return "recipe_unquantified"
+
     return "unknown"
 
 
