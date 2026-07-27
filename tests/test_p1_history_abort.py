@@ -142,7 +142,11 @@ def test_api_js_helpers_have_marker_anchor():
     """`config/api.js` debe tener el marker — los 3 helpers
     (getHistoryList, getLessonsCounts, getHistoryStatusSummary)
     cambiaron firma para soportar options.signal."""
-    api_js = _REPO_ROOT / "frontend" / "src" / "config" / "api.js"
+    # [2026-07-26] `config/api.js` se migro a TypeScript (`api.ts`). Se resuelve por extension
+    # en vez de fijar una: el contrato es el MODULO, no el lenguaje en que este escrito hoy.
+    _cfg = _REPO_ROOT / "frontend" / "src" / "config"
+    api_js = next((_cfg / f"api{ext}" for ext in (".ts", ".js", ".tsx", ".jsx")
+                   if (_cfg / f"api{ext}").exists()), _cfg / "api.ts")
     text = api_js.read_text(encoding="utf-8")
     assert re.search(r"\[P1-HISTORY-ABORT\s*·\s*2026-05-23\]", text), (
         f"`{api_js}` no contiene el marker. El forwarding de options "

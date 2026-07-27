@@ -76,19 +76,42 @@ def test_water_state_persists_on_change():
     glasses/goal/goalBasis al cambio, para que próximo mount encuentre
     cache fresco."""
     src = _read(_WATER_JSX)
-    # Buscar useEffect con deps que incluyan glasses, goal, goalBasis y
-    # currentDate. El user-scoping de la cache key añadió un `userId` final
-    # opcional a las deps; el regex lo tolera.
-    persist = re.search(
-        r"useEffect\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,\s*\[\s*glasses\s*,\s*goal\s*,\s*goalBasis\s*,\s*currentDate\s*(?:,\s*userId\s*)?\]\s*\)",
-        src,
-        re.DOTALL,
-    )
+    # [2026-07-26] Antes el regex exigía la lista de deps EXACTA y en ORDEN
+    # (`[glasses, goal, goalBasis, currentDate(, userId)?]`). Fallaba porque el código se volvió
+    # MÁS correcto: hoy son `[glasses, goal, goalBasis, streak, currentDate, userId]` — `streak`
+    # se persiste en el payload y `userId` está en la key, así que ambos DEBEN ser deps. Un test
+    # que se rompe cuando añades la dependencia que faltaba está midiendo la forma, no la
+    # invariante.
+    #
+    # Ahora: se localiza el effect por lo que HACE (escribe la cache) y se exige que sus deps
+    # sean un SUPERCONJUNTO de las obligatorias. Añadir deps sigue siendo válido; quitar una de
+    # las que se persisten, no.
+    efectos = re.findall(r"useEffect\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,\s*\[([^\]]*)\]\s*\)",
+                         src, re.DOTALL)
+    persist = None
+    for cuerpo, deps in efectos:
+        if ("setItem" in cuerpo or "safeLocalStorageSet" in cuerpo) and "_waterCacheKey" in cuerpo:
+            persist = (cuerpo, deps)
+            break
     assert persist, (
-        "useEffect con deps `[glasses, goal, goalBasis, currentDate]` ausente "
-        "— state no se persiste. Ver P1-WATER-CACHE-STATE · 2026-05-20."
+        "No hay useEffect que escriba la cache de agua (`_waterCacheKey` + setItem) — el state "
+        "no se persiste y el próximo mount arranca en frío. Ver P1-WATER-CACHE-STATE."
     )
-    body = persist.group(1)
+    body, deps_txt = persist
+    _deps = {d.strip() for d in deps_txt.split(",") if d.strip()}
+    _obligatorias = {"glasses", "goal", "goalBasis", "currentDate", "userId"}
+    assert _obligatorias <= _deps, (
+        f"al persist effect le faltan deps: {sorted(_obligatorias - _deps)}. Todo valor que se "
+        f"escriba en la cache (o que forme la key) tiene que ser dep, o el cache queda stale. "
+        f"Deps actuales: {sorted(_deps)}"
+    )
+    # Lo que se escribe debe estar cubierto: si el payload incluye `streak`, `streak` es dep.
+    for _campo in ("glasses", "goal", "goalBasis", "streak"):
+        if _campo in body:
+            assert _campo in _deps, (
+                f"`{_campo}` se escribe en la cache pero NO es dependencia del effect: se "
+                f"persistiría un valor viejo."
+            )
     assert "setItem" in body or "safeLocalStorageSet" in body, (
         "Persist effect no escribe a localStorage."
     )

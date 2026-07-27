@@ -47,11 +47,18 @@ def test_consumed_initializer_reads_cache():
         "P1-TRACKING-CACHE-CONSUMED · 2026-05-20."
     )
     body = match.group(1)
-    assert "safeLocalStorageGet" in body, (
+    # [2026-07-26] Los regex exigian la FORMA exacta del codigo de 2026-05-20. Fallaban
+    # porque la implementacion mejoro: la lectura se extrajo al helper `_readConsumedCache`
+    # y la dep `userId` se sustituyo por `consumedCacheKey` (useMemo de userId +
+    # planTrackingStartIso), que ademas cubre el rollover de dia. Se afirma la INVARIANTE.
+    assert any(t in body for t in ("safeLocalStorageGet", "_readConsumedCache", "localStorage.getItem")), (
         "Initializer NO lee de localStorage — no puede arrancar con cache."
     )
     assert re.search(
-        r"_getConsumedCacheKey|_CONSUMED_CACHE_KEY_PREFIX|mealfit_tracking_consumed",
+        # [2026-07-26] `consumedCacheKey` es el useMemo de `_getConsumedCacheKey(userId,
+        # planTrackingStartIso)`. Referenciar el memo es equivalente —y mejor: una sola
+        # construccion de la key por render en vez de una por consumidor.
+        r"_getConsumedCacheKey|consumedCacheKey|_CONSUMED_CACHE_KEY_PREFIX|mealfit_tracking_consumed",
         body,
     ), "Initializer NO referencia la cache key esperada."
 
@@ -63,7 +70,7 @@ def test_consumed_cache_key_includes_user_and_date():
     src = _read(_TRACKING_JSX)
     # Buscar la función o helper que construye la key.
     key_helper = re.search(
-        r"const\s+_getConsumedCacheKey\s*=\s*\(?[^)]*\)?\s*=>\s*\{(.+?)\};",
+        r"const\s+_getConsumedCacheKey\s*=\s*\([^)]*\)\s*=>\s*\{(.+?)\n\};",
         src,
         re.DOTALL,
     )
@@ -83,16 +90,28 @@ def test_consumed_persisted_on_change_with_guard():
     evitar bloquear la hidratación con datos frescos en próximos mounts."""
     src = _read(_TRACKING_JSX)
     # Buscar useEffect con deps [consumed, userId] o similar.
-    persist_match = re.search(
-        r"useEffect\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,\s*\[\s*consumed\s*,\s*userId\s*\]\s*\)",
-        src,
-        re.DOTALL,
-    )
+    # [2026-07-26] Los regex exigian la FORMA exacta del codigo de 2026-05-20. Fallaban
+    # porque la implementacion mejoro: la lectura se extrajo al helper `_readConsumedCache`
+    # y la dep `userId` se sustituyo por `consumedCacheKey` (useMemo de userId +
+    # planTrackingStartIso), que ademas cubre el rollover de dia. Se afirma la INVARIANTE.
+    persist_match = None
+    for cuerpo, deps in re.findall(
+            r"useEffect\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,\s*\[([^\]]*)\]\s*\)", src, re.DOTALL):
+        if "safeLocalStorageSet" in cuerpo or "localStorage.setItem" in cuerpo:
+            _deps = {d.strip() for d in deps.split(",") if d.strip()}
+            assert "consumed" in _deps, (
+                f"el persist effect no depende de `consumed`: persistiria un valor viejo. "
+                f"Deps: {sorted(_deps)}")
+            assert _deps & {"consumedCacheKey", "userId"}, (
+                f"el persist effect no depende de la cache KEY (ni userId): al cambiar de "
+                f"usuario o de dia escribiria en la key anterior. Deps: {sorted(_deps)}")
+            persist_match = True
+            body = cuerpo
+            break
     assert persist_match, (
-        "useEffect con deps `[consumed, userId]` ausente — `consumed` no se "
-        "persiste al cambio y la próxima carga no encuentra cache fresco."
+        "No hay useEffect que escriba la cache de `consumed` — no se persiste al cambio y la "
+        "proxima carga no encuentra cache fresco."
     )
-    body = persist_match.group(1)
     assert "safeLocalStorageSet" in body, (
         "useEffect no llama `safeLocalStorageSet` — no persiste."
     )
@@ -129,7 +148,11 @@ def test_loading_false_if_cache_hit():
         "cuando hay cache, debe ser lazy condicional."
     )
     body = loading_match.group(1)
-    assert "safeLocalStorageGet" in body, (
+    # [2026-07-26] La lectura se extrajo al helper `_readConsumedCache`; exigir el nombre
+    # crudo `safeLocalStorageGet` medía la forma, no la invariante (que el loading inicial
+    # consulte la cache para no pintar spinner sobre datos que ya tenemos).
+    assert any(t in body for t in ("safeLocalStorageGet", "_readConsumedCache",
+                                   "localStorage.getItem")), (
         "Initializer de `loading` no consulta cache — siempre arranca en true."
     )
     assert "return false" in body, (
