@@ -4526,6 +4526,28 @@ def _get_coherence_tolerance_pct() -> float:
     )
 
 
+def _get_coherence_compare_capped_pre_knob() -> bool:
+    """[P1-COHERENCE-CAPPED-PRE · 2026-07-26] Lee `MEALFIT_COHERENCE_COMPARE_CAPPED_PRE`.
+
+    Knob default **True** (opt-out). Cuando True, para los items con `capped_by` el guard
+    compara las recetas contra `capped_pre` (lo calculado ANTES del tope) en vez de contra la
+    cantidad topada.
+
+    Los topes de perecederos (`P5-VEG-CAP`, `P6-LACTEOS-PERISHABLE-CAP`,
+    `P6-FRUITS-LARGE-CAP`) son decisión de producto —nadie compra 30 días de tomate fresco de
+    una vez— y ya se le comunican al usuario en el propio item ("alcanza ~12 de 30 días —
+    recompra"). Reportarlos como incoherencia recetas↔lista es un falso positivo.
+
+    Lo que el guard verifica con esto es que el agregador calculó BIEN desde las recetas. Si
+    calcula mal, `capped_pre` diverge y se reporta igual: NO es un mute.
+
+    Rollback sin redeploy: `MEALFIT_COHERENCE_COMPARE_CAPPED_PRE=false`.
+
+    Tooltip-anchor: P1-COHERENCE-CAPPED-PRE-KNOB
+    """
+    return _knob_env_bool("MEALFIT_COHERENCE_COMPARE_CAPPED_PRE", True)
+
+
 def _get_coherence_day_basis_norm_knob() -> bool:
     """[P1-COHERENCE-DAY-BASIS · 2026-07-26] Lee `MEALFIT_COHERENCE_DAY_BASIS_NORM`.
 
@@ -4818,6 +4840,32 @@ def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False
         qty = None
         unit = None
         _bq, _bu = item.get("base_qty"), item.get("base_unit")
+        # [P1-COHERENCE-CAPPED-PRE · 2026-07-26] Si el item fue TOPADO a propósito, comparar
+        # contra `capped_pre` — la cantidad que el agregador calculó ANTES del tope.
+        #
+        # Los perecederos llevan un tope deliberado con mensaje al usuario:
+        #
+        #   Yogurt   capped_by=P6-LACTEOS-PERISHABLE-CAP  pre=2324.8  post=907.2
+        #            display: "1 pote (1.96 kg) · alcanza ~12 de 30 días — recompra"
+        #   Cebolla  capped_by=P5-VEG-CAP                 pre=1459.5  post=600.0
+        #   Tomate   capped_by=P5-VEG-CAP                 pre=1575.0  post=750.0
+        #   Lechosa  capped_by=P6-FRUITS-LARGE-CAP        pre=3613.3  post=3000.0
+        #
+        # Comparar las recetas contra `post` reporta el TOPE como si fuera incoherencia: no lo
+        # es, es una decisión de producto (no se compran 30 días de tomate fresco de golpe) y
+        # además se le comunica al usuario. Lo que el guard debe verificar es que el agregador
+        # calculó BIEN a partir de las recetas; el tope se aplica después y por diseño.
+        #
+        # Tras P1-COHERENCE-DAY-BASIS, `capped_pre` coincide con el lado esperado **al decimal**
+        # en los cuatro casos de arriba — confirmación independiente de que la base de días
+        # quedó bien, desde un campo que el guard no miraba.
+        #
+        # Si el agregador calcula mal, `capped_pre` diverge y el guard lo sigue viendo: esto NO
+        # es un mute. Knob de rollback: MEALFIT_COHERENCE_COMPARE_CAPPED_PRE=false.
+        if (item.get("capped_by") and _get_coherence_compare_capped_pre_knob()):
+            _cp = item.get("capped_pre")
+            if isinstance(_cp, (int, float)) and float(_cp) > 0 and _bu:
+                _bq = float(_cp)
         if isinstance(_bq, (int, float)) and float(_bq) > 0 and _bu:
             qty, unit = float(_bq), str(_bu).strip().lower()
         if qty is None:
