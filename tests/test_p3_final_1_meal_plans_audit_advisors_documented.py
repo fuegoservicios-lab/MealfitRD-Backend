@@ -32,7 +32,15 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
+# [P3-CLAUDEMD-CAP · 2026-07-26] La tabla "Advisors aceptados" salio de CLAUDE.md a docs/: era
+# la segunda seccion mas grande (12.3k chars) y la que menos se consulta por turno, y el propio
+# `test_p3_claudemd_cap` la nombraba como la siguiente candidata. CLAUDE.md conserva cabecera +
+# resumen + link, que es el patron doc-first del repo.
+#
+# Este test sigue siendo el contrato: la tabla sin test se desactualiza en silencio. Solo cambia
+# DONDE vive. Se deja fallback a CLAUDE.md por si algun checkout la tiene todavia inline.
+_ADVISORS_DOC = _REPO_ROOT / "backend" / "docs" / "advisors_aceptados.md"
+_CLAUDE_MD = _ADVISORS_DOC if _ADVISORS_DOC.exists() else (_REPO_ROOT / "CLAUDE.md")
 _MIGRATION = (
     _REPO_ROOT
     / "migrations"
@@ -67,9 +75,9 @@ def test_claude_md_documents_all_four_advisors():
     # Localizar la seccion para que el match no agarre menciones aleatorias
     # en otras secciones (e.g., el SOP P3-AUDIT-6 menciona meal_plans_audit
     # en otro contexto).
-    section_start = text.find("## Advisors aceptados")
+    section_start = text.find("# Advisors aceptados")
     assert section_start != -1, (
-        "Seccion '## Advisors aceptados' no encontrada en CLAUDE.md. "
+        f"Seccion 'Advisors aceptados' no encontrada en {_CLAUDE_MD.name}. "
         "Si la renombraste, actualizar el header en este test."
     )
     # La seccion termina en el siguiente '## ' top-level o EOF.
@@ -138,7 +146,7 @@ def test_claude_md_links_to_memory_file():
     """Las filas de los 4 advisors deben referenciar el archivo de memoria
     canonico (cierre del cross-link CLAUDE.md ↔ memoria)."""
     text = _read(_CLAUDE_MD)
-    section_start = text.find("## Advisors aceptados")
+    section_start = text.find("# Advisors aceptados")
     section_end = text.find("\n## ", section_start + 1)
     section_text = text[section_start : section_end if section_end != -1 else None]
 
