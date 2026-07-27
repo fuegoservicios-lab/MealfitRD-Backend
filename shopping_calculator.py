@@ -1664,6 +1664,13 @@ def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = 
 
     return 1.0
 
+# [P1-DOUBLE-QTY-PARSE · 2026-07-27] Dos cantidades pegadas al frente: una fracción unicode
+# seguida de una fracción ASCII ("1½ 1/2 cdas de mantequilla de maní"). Se conserva la primera.
+# No toca el mixto legítimo "1 1/2 cdas" (el grupo exige terminar en fracción unicode) ni
+# "½ taza de agua" (tras la fracción viene una palabra, no un dígito).
+_DOUBLE_LEAD_QTY_RE = re.compile(r"^\s*(\d*[¼½¾⅓⅔])\s+\d+\s*/\s*\d+\s+")
+
+
 def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_yield_only: bool = False):
     """[P1-2] Parsea un string de ingrediente a (qty, unit, name).
 
@@ -1694,6 +1701,18 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
     porque el inventario también se canonicaliza al name seco antes de
     deducir.
     """
+    # [P1-DOUBLE-QTY-PARSE · 2026-07-27] "1½ 1/2 cdas de mantequilla de maní (39 g)" degradaba en
+    # silencio: la unidad caía de 'cda' a 'unidad' y el NOMBRE salía como "1/2 cdas de mantequilla
+    # de maní". Como "una unidad" de mantequilla de maní es un pote, la lista compró UN POTE POR
+    # CUCHARADA — 14 potes, RD$1.638, la mitad del sobrecoste del ciclo de 30 días.
+    #
+    # ⚠️ El productor de esa forma NO se pudo reproducir: ni `_prettify_quantity_display` ni
+    # `_collapse_double_fraction` la generan, y el modelo escribe el mixto legítimo "1 1/2 cdas",
+    # que este parser YA resolvía bien. Se endurece el CONSUMIDOR, que es donde se pierde el dinero
+    # y donde devolver un nombre basura es un defecto por sí mismo, venga la entrada de donde venga.
+    if isinstance(s, str):
+        s = _DOUBLE_LEAD_QTY_RE.sub(r"\1 ", s, count=1)
+
     if isinstance(s, dict):
         # [P3-PARSE-QTY-DICT-GUARD · 2026-05-30] Blindar simétricamente con la
         # rama string (que ya cae a 0.0 vía parse_fraction). Un futuro caller
