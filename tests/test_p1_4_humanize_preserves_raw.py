@@ -140,17 +140,59 @@ def test_get_shopping_list_delta_prefers_ingredients_raw():
     result = get_shopping_list_delta(
         user_id=None, plan_result=plan, is_new_plan=True, structured=True,
     )
-    # Debe haber un item de pollo con peso (no "1 unidad").
+    # [REESCRITO · 2026-07-26] Antes esto afirmaba `market_unit in ("lb","lbs")`. Esa aserción
+    # se volvió **CIEGA**, no solo caducada: desde P1-SUPERMARKET-DB el pollo se presenta en
+    # envases del súper, y el redondeo al paquete de 454 g da el MISMO display por los dos
+    # caminos —
+    #
+    #     leyendo ingredients_raw  (200 g/día)  ->  "3 paquetes (1 lb c/u)"   base_qty=1400 g
+    #     leyendo ingredients      (1 pechuga)  ->  "3 paquetes (1 lb c/u)"   base_qty=1190 g
+    #
+    # — así que el test habría pasado o fallado igual leyera la lista que leyera. Justo lo que
+    # NO puede hacer un test de regresión.
+    #
+    # `base_qty` (P1-COHERENCE-BASE-QTY · 2026-07-26) sí distingue: es la cantidad física antes
+    # de la presentación de mercado. Se afirma sobre ella.
     pollo_items = [r for r in result if isinstance(r, dict) and "pollo" in r.get("name", "").lower()]
     assert pollo_items, "P1-4: debe agregar pollo desde ingredients_raw"
     item = pollo_items[0]
-    # market_qty_numeric debe reflejar el peso real (200g ~ 0.44 lb), no 1 unidad.
-    mq_num = item.get("market_qty_numeric") or 0
-    market_unit = item.get("market_unit", "").lower()
-    # Aceptamos lb/lbs; rechazamos unit='unidad' (señal del bug).
-    assert market_unit in ("lb", "lbs"), (
-        f"P1-4: market_unit debe ser lb (peso real), got unit={market_unit!r} "
-        f"qty={mq_num}. Probable lectura de ingredients humanizado en lugar de raw."
+    base_qty = item.get("base_qty")
+    assert item.get("base_unit") == "g", f"se esperaba base en gramos: {item}"
+    # 200 g/día × 7 (el agregador proyecta a semana: base_duration_scale = 7/num_days).
+    assert base_qty == pytest.approx(1400.0, rel=0.02), (
+        f"P1-4: base_qty debe reflejar los 200 g de `ingredients_raw` proyectados a 7 días "
+        f"(1400 g), got {base_qty}. ~1190 g significa que leyó la línea HUMANIZADA "
+        f"('1 pechuga' ≈ 170 g)."
+    )
+
+
+def test_la_asercion_anterior_no_discriminaba():
+    """Guarda contra volver a afirmar sobre la unidad de mercado.
+
+    Se ejecutan los DOS caminos y se comprueba que su presentación coincide: mientras eso sea
+    cierto, `market_unit`/`market_qty_numeric` no pueden distinguir si el agregador leyó la
+    lista métrica o la humanizada. Si algún día divergen, este test falla y avisa de que la
+    aserción vieja volvería a tener sentido — pero la de `base_qty` sigue siendo la correcta."""
+    def _pollo(plan):
+        for it in get_shopping_list_delta(user_id=None, plan_result=plan, is_new_plan=True,
+                                          structured=True):
+            if isinstance(it, dict) and "pollo" in str(it.get("name", "")).lower():
+                return it
+        return {}
+
+    con_raw = _pollo({"days": [{"meals": [{
+        "ingredients": ["1 pechuga de pollo (porción)"],
+        "ingredients_raw": ["200g pechuga de pollo"]}]}]})
+    sin_raw = _pollo({"days": [{"meals": [{
+        "ingredients": ["1 pechuga de pollo (porción)"]}]}]})
+
+    assert (con_raw.get("market_unit"), con_raw.get("market_qty_numeric")) == \
+           (sin_raw.get("market_unit"), sin_raw.get("market_qty_numeric")), (
+        "la presentación de mercado ya distingue los dos caminos — revisa si la aserción "
+        "histórica sobre market_unit vuelve a ser útil"
+    )
+    assert con_raw.get("base_qty") != sin_raw.get("base_qty"), (
+        "base_qty DEBE distinguirlos: es lo único que hace verificable esta invariante"
     )
 
 
