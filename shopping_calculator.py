@@ -3212,6 +3212,36 @@ def _coherence_base_fields(raw_qty, unit_str, weight_in_lbs) -> dict:
     return {}
 
 
+
+def _purchase_covers_need(item: dict, need_g: float) -> bool:
+    """[P1-COVERAGE-VS-PURCHASE · 2026-07-27] True si lo que el usuario COMPRA cubre lo que el
+    plan necesita (antes del tope). Puro y fail-safe: ante cualquier duda devuelve False, o sea
+    que el aviso se conserva — nunca peor que el comportamiento previo.
+
+    Se calcula en gramos desde el envase (`package_grams` × cantidad) o desde la propia unidad
+    cuando ya es de peso (lb/kg/g). Sin datos suficientes → False.
+    """
+    try:
+        need = float(need_g or 0)
+        if need <= 0:
+            return False
+        qty = float(item.get("market_qty_numeric") or 0)
+        if qty <= 0:
+            return False
+        pkg = item.get("package_grams")
+        if isinstance(pkg, (int, float)) and float(pkg) > 0:
+            return (qty * float(pkg)) >= need
+        unit = str(item.get("market_unit") or "").strip().lower()
+        if unit.startswith("lb"):
+            return (qty * _LB_TO_G) >= need
+        if unit == "kg":
+            return (qty * 1000.0) >= need
+        if unit in ("g", "gr", "gramos"):
+            return qty >= need
+        return False
+    except Exception:
+        return False
+
 def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None):
     """Motor determinístico de unidades de mercado dominicano.
     
@@ -3941,7 +3971,32 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             # se aplica sobre la unidad del agregador (g/latas/paquetes) y no siempre hay días.
             _frac = (_post / _pre) if _pre > 0 else 0.0
             result["capped_cycle_fraction"] = round(_frac, 3)
-            if _frac and _frac < 0.9:
+            # [P1-COVERAGE-VS-PURCHASE · 2026-07-27] El aviso comparaba lo CAPADO contra lo
+            # necesario e ignoraba lo que el usuario realmente COMPRA.
+            #
+            # El envase de mercado redondea hacia ARRIBA, y muchas veces por encima de lo que
+            # hacía falta. Entonces el usuario leía "recompra" de algo que le sobra:
+            #
+            #   Yogurt   necesita 1480.7 g   compra 1960.0 g   -> avisaba "alcanza ~18/30"
+            #   Cúrcuma  necesita   43.6 g   compra  113.4 g   -> avisaba "alcanza ~19/30"
+            #   Puerro   necesita  207.7 g   compra  300.0 g   -> avisaba "alcanza ~7/30"
+            #
+            # (los ejemplos NO reproducen el sufijo literal a propósito: `test_p1_capped_staple_
+            # honesty` cuenta sus apariciones en este bloque y un comentario que lo cite lo rompe —
+            # ya pasó con P1-RICE-STEP-HONEST)
+            #
+            # Medido sobre 6 planes vivos: **6 de 39** avisos (15%) eran así, y el yogurt salía
+            # 3 veces. Un aviso que manda recomprar lo que sobra es peor que no avisar: enseña al
+            # usuario a ignorar el resto de avisos, que sí son ciertos.
+            #
+            # Se calcula lo comprado en gramos (envase × cantidad, o la propia unidad si ya es de
+            # peso) y se calla el aviso cuando cubre lo necesario ANTES del tope. Fail-open: si no
+            # se puede calcular —10 de 39 no traen datos suficientes— se conserva el aviso, que es
+            # el comportamiento de hoy.
+            _tapa_avisa = not _purchase_covers_need(result, _pre)
+            if not _tapa_avisa:
+                result["coverage_ok_by_package"] = True
+            if _frac and _frac < 0.9 and _tapa_avisa:
                 result["display_qty"] = (
                     f"{display_qty_final} · alcanza ~{max(1, int(round(_frac * 30)))} de 30 días — recompra")
                 result["display_string"] = (
