@@ -111,6 +111,7 @@ except Exception as _e_go_eager:  # pragma: no cover - depende del entorno
     print(f"[P1-CONFTEST-EAGER-GO] no se pudo pre-importar graph_orchestrator: "
           f"{type(_e_go_eager).__name__}: {_e_go_eager}", file=_sys_go.stderr)
 
+import sys
 import uuid
 import json
 import pytest
@@ -131,6 +132,56 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+
+
+# ---------------------------------------------------------------------------
+# [P1-MODULE-IDENTITY-RESTORE · 2026-07-26] Restaurar la IDENTIDAD de los módulos
+# sensibles después de cada test.
+#
+# Varios tests necesitan re-importar un módulo para que un knob lazy relea el env:
+#
+#     if "graph_orchestrator" in sys.modules:
+#         del sys.modules["graph_orchestrator"]
+#     import graph_orchestrator
+#
+# El re-import es legítimo. Lo que NO lo es: dejar en `sys.modules` un objeto de
+# identidad DISTINTA para el resto de la sesión. Los tests ya cargados retienen
+# una referencia al módulo v1; los que corran después reciben el v2. Un
+# `patch.object(modulo, "X")` parchea uno y el código bajo prueba lee el otro.
+#
+# Medido por bisect 2026-07-26: **14 de 37 rojos de `tests/test_p1_*.py` eran esto**
+# — archivos que en aislamiento pasan y en suite fallan. Dos culpables distintos
+# (`test_p1_1_convert_amount_density_fallback`, `test_p1_2_env_str_coherence_block_action`)
+# y seis archivos más con el mismo patrón sin curar, cada uno con su forma.
+#
+# El repo ya conocía el fallo: `test_fatigue_decay_constants_consistency` lo documenta
+# como P0-5 y se cura A MANO ("SALVAR el módulo original y RESTAURARLO en el finally").
+# La cura per-archivo no escala — el séptimo que lo escriba mal vuelve a envenenar la
+# sesión. Esto lo cierra en UN sitio, para los que existen y los que vengan.
+#
+# El test SÍ recibe su módulo fresco (la fixture restaura al SALIR), así que ninguno
+# pierde lo que necesita: solo deja de contaminar a los siguientes.
+# Lista DELIBERADAMENTE estrecha: solo los dos módulos cuya contaminación se rastreó por bisect.
+#
+# La primera versión vigilaba además `shopping_calculator`, `constants`, `cron_tasks` y `app`.
+# Medido sobre la suite COMPLETA: 225 → 211 fallos, pero con **2 nuevos**
+# (`test_chunked_generation::test_edge_case_one_or_two_days`,
+# `test_p1_bigfruit_gram_hint::test_hint_yields_serving_macros_not_whole_fruit`) — dos tests que
+# pasaban gracias a la contaminación de otro y que, al restaurarles la identidad original, se
+# quedaron sin ella. Ninguno falla en aislamiento.
+#
+# Restaurar de más también rompe. Se limita al par medido; si aparece otra contaminación
+# rastreada, se añade con su bisect, no por si acaso.
+_MODULOS_VIGILADOS = ("graph_orchestrator", "db_inventory")
+
+
+@pytest.fixture(autouse=True)
+def _restaurar_identidad_de_modulos():
+    _antes = {m: sys.modules.get(m) for m in _MODULOS_VIGILADOS}
+    yield
+    for _m, _obj in _antes.items():
+        if _obj is not None and sys.modules.get(_m) is not _obj:
+            sys.modules[_m] = _obj
 
 
 # ---------------------------------------------------------------------------

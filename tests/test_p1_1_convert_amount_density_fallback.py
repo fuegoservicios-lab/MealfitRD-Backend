@@ -43,13 +43,39 @@ def _reset_env():
 
 
 def _import_convert_amount():
-    """Importa fresco para que el knob lazy lea el env actual."""
+    """Importa fresco para que el knob lazy lea el env actual.
+
+    [2026-07-26] Antes borraba `graph_orchestrator` de `sys.modules` y NO lo restauraba, así que
+    el resto de la sesión de pytest se quedaba con un módulo de IDENTIDAD DISTINTA. Medido por
+    bisect: este archivo, y solo este, provocaba los 5 rojos de
+    `test_p1_27_cb_db_fallback_atomicity` (`IndexError: list index out of range` al parsear el
+    source) — que en aislamiento pasa. 14 rojos de la suite eran contaminación de este tipo.
+
+    Es exactamente el fallo que `test_fatigue_decay_constants_consistency.py` documenta como
+    P0-5 y cura: *"SALVAR el módulo original antes de borrarlo y RESTAURARLO en el finally"*.
+    Este archivo tenía el patrón peligroso sin la cura.
+
+    Se restaura la identidad ORIGINAL tras el import fresco: el re-import ya cumplió su función
+    (re-registrar el knob leyendo el env actual) y a partir de ahí todos vuelven a ver el mismo
+    objeto que veían antes. Nota: el conftest pre-importa `graph_orchestrator` a propósito
+    (P1-CONFTEST-EAGER-GO) — borrarlo sin restaurar deshacía esa defensa.
+    """
+    _prev_go = sys.modules.get("graph_orchestrator")
+    _prev_dbi = sys.modules.get("db_inventory")
     if "db_inventory" in sys.modules:
         del sys.modules["db_inventory"]
     if "graph_orchestrator" in sys.modules:
         # forzar re-registro del knob
         del sys.modules["graph_orchestrator"]
-    from db_inventory import convert_amount
+    try:
+        from db_inventory import convert_amount
+    finally:
+        # Restaurar identidades: lo que importa para el resto de la sesión es que
+        # `sys.modules[...]` apunte al MISMO objeto que antes de este helper.
+        if _prev_go is not None:
+            sys.modules["graph_orchestrator"] = _prev_go
+        if _prev_dbi is not None:
+            sys.modules["db_inventory"] = _prev_dbi
     return convert_amount
 
 
@@ -159,8 +185,8 @@ def test_oil_old_default_would_have_been_off_by_30pct():
 
 def test_knob_registered_in_registry():
     """Asegura que MEALFIT_CROSS_UNIT_CONVERSION_STRICT pasa por _env_bool."""
-    if "graph_orchestrator" in sys.modules:
-        del sys.modules["graph_orchestrator"]
+    # [2026-07-26] El `del` explícito sobraba y era la mitad no-restaurada del problema:
+    # `_import_convert_amount` ya fuerza el re-import Y ahora restaura la identidad.
     convert_amount = _import_convert_amount()
     # disparar lectura del knob via path strict
     convert_amount(100, "g", "taza", {"name": "x_unknown_zzz"})
