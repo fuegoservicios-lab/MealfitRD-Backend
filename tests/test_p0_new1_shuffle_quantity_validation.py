@@ -270,21 +270,19 @@ def test_edge_recipe_returns_none_when_filters_eliminate_all_proteins():
     Esto valida la guarda `if not filtered_proteins or not filtered_carbs ...`
     en cron_tasks.py:11447.
 
-    Listamos explícitamente cada protein del catálogo `DOMINICAN_PROTEINS`
-    (constants.py:765) como dislike para forzar que el filtro lo vacíe.
+    [reapuntado 2026-07-28] La lista literal de dislikes caducó con la expansión del
+    catálogo (07-26): 15 proteínas nuevas sobrevivían (mero, tilapia, conejo, pulpo,
+    calamar, habas...) y el builder — CORRECTAMENTE — servía un plato con proteína
+    legítima. La guarda `return None` sigue viva; el test ahora deriva los dislikes
+    del catálogo VIVO (dislike de cada entrada actual) — evergreen ante cualquier
+    expansión futura. Clase P1-CAP-CANON-DRIFT: set literal vs catálogo que evoluciona.
     """
-    # DOMINICAN_PROTEINS contiene: Pollo, Cerdo, Res, Pavo, Pescado, Atún,
-    # Huevos, Queso de Freír, Salami Dominicano, Camarones, Chuleta, Longaniza,
-    # Habichuelas Rojas/Negras/Blancas, Gandules, Lentejas, Garbanzos,
-    # Soya/Tofu, Queso Ricotta, Queso Blanco, Queso Mozzarella, Yogurt.
+    from constants import _get_fast_filtered_catalogs as _gcat
+    _all_proteins, _, _, _ = _gcat((), (), "")
+    assert _all_proteins, "catálogo de proteínas vacío — el probe no puede construirse"
     edge_day = _build_filtered_edge_recipe_day(
         allergies=[],
-        dislikes=[
-            "pollo", "cerdo", "res", "pavo", "pescado", "atun", "atún",
-            "huevos", "huevo", "queso", "salami", "camarones", "chuleta",
-            "longaniza", "habichuelas", "gandules", "lentejas", "garbanzos",
-            "soya", "tofu", "yogurt",
-        ],
+        dislikes=[p.lower() for p in _all_proteins],
         diet="",
         pantry_items=["100g Arroz Blanco"],
     )

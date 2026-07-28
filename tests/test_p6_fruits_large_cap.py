@@ -66,6 +66,16 @@ def _qty_grams_for(result: list, name_substr: str, unit_density_g: float = 1200.
             return qty
         if unit in ("unidad", "ud.", "uds.", "unidades"):
             return qty * unit_density_g
+        # [reapuntado 2026-07-28] Unidades de EMPAQUE del sistema de presentaciones
+        # ("1 funda (Amarilla 3 Lb)"): market_qty=1 ya no es gramos ni piezas. Para
+        # esas, `base_qty` (base_unit='g') es la necesidad agregada real — sin este
+        # branch, "1 funda" se medía como "1 gramo". Solo fallback: las ramas de
+        # arriba conservan la calibración original de los tests de unidades.
+        _bq = r.get("base_qty")
+        if _bq and (r.get("base_unit") or "").lower() == "g":
+            return float(_bq)
+        if unit and r.get("package_grams"):
+            return qty * float(r["package_grams"])
         return qty
     return -1.0
 
@@ -165,21 +175,41 @@ class TestMelonScaling:
 # 5. Items NO listados no se afectan
 # ===========================================================================
 def test_manzana_not_capped_by_fruits_large():
-    """Manzana (fruta pequeña, no en dict) no debe ser tocada."""
+    """Manzana (fruta pequeña) NO vive en el dict de frutas grandes.
+
+    [reapuntado 2026-07-28] El input original (99 manzanas × 18.67 ≈ 277 kg) hoy lo
+    frena OTRO sistema legítimo: el cap de perecederos/fundas (2026-07-26/27 — "la
+    funda de 3 lb de manzanas dura el mes"; medido en plan vivo 1d3c6643: manzana
+    comprada 6,5× su consumo). Ese cap es correcto-por-diseño para el absurdo, así
+    que ya no sirve como probe de "el dict de frutas grandes no me toca". Las dos
+    capas del contrato ahora:
+      (a) estructural — el dict EXACTO sigue sin incluir manzana;
+      (b) conductual — con cantidades realistas (3 manzanas × 2 personas) ningún
+          cap la aplasta a niveles de "1 unidad"."""
+    import shopping_calculator as _sc
+    _src = __import__("pathlib").Path(_sc.__file__).with_suffix(".py").read_text(
+        encoding="utf-8"
+    )
+    import re as _re
+    m = _re.search(r"_FRUITS_LARGE_UNIT_G\s*=\s*\{[^}]+\}", _src) or _re.search(
+        r"(?s)(melon|mel[oó]n)[^{}]{0,400}sand[ií]a[^{}]{0,400}papaya", _src
+    )
+    if m:
+        assert "manzana" not in m.group(0).lower(), (
+            "El dict de frutas grandes ahora incluye 'manzana' — una fruta de "
+            "~150-180g no debe compartir cap con melón/sandía."
+        )
     result = aggregate_and_deduct_shopping_list(
-        plan_ingredients=["99 manzanas"],
-        multiplier=18.666666,
+        plan_ingredients=["3 manzanas"],
+        multiplier=2.0,
         structured=True,
     )
     qty_g = _qty_grams_for(result, "manzana")
     if qty_g > 0:
-        # 99 × 150g (typical manzana) × 18.67 = 277000g sin cap.
-        # Cap específico melón es 8 × 1200 = 9600g. Manzana NO debe
-        # cap a este nivel.
-        big_threshold = 50000  # 50kg, debajo del valor sin cap pero arriba del cap melón
-        assert qty_g > 5000, (
-            f"Manzana fue capeada erróneamente: {qty_g:.0f}g muy bajo. "
-            f"Solo melón/sandía/piña/lechosa/papaya están en el dict."
+        # 3 × ~150-182g × 2 ≈ 900-1100g sin cap; la funda de 3 lb (1361g) no clampa
+        # a esta escala. Si algún cap la aplasta a "1 unidad" (~200g), es un bug.
+        assert qty_g > 500, (
+            f"Manzana fue capeada erróneamente a escala realista: {qty_g:.0f}g."
         )
 
 

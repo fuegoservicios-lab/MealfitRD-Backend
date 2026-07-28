@@ -67,9 +67,19 @@ def test_t2_incremental_keys_includes_learning_shopping_quality():
         '_quality_degraded_severity',
         '_quality_degraded_attempts',
         '_quality_degraded_band_score',
+        # [P3-BAND-PERMACRO-CHUNK-PROPAGATE · 2026-07-01] El array estructurado del
+        # banner per-macro se perdía en el overlay T2 para semanas 2+ (el reason
+        # string sobrevivía, el detalle no).
+        '_quality_degraded_band_per_macro_low',
         '_quality_degraded_panel_detail',
         '_quality_degraded_clinical_detail',
         '_quality_degraded_resolution_pct',
+        # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C1) Costo + reconciliación de
+        # presupuesto recomputados en T2 post-merge junto a las 4 listas — sin
+        # estas keys el overlay descartaba el refresh y el Dashboard quedaba
+        # anclado a la extrapolación de semana 1.
+        'shopping_cost_summary',
+        'budget_reconciliation',
     }
     assert set(P0_4_T2_INCREMENTAL_KEYS) == expected, (
         "Si añadiste un nuevo campo que el worker calcula entre T1 y T2 sin "
