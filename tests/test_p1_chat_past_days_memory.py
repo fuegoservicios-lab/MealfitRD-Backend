@@ -295,3 +295,40 @@ def test_formula_de_la_fecha_archivada_es_aritmeticamente_correcta():
         ]
         assert got == esperado, "%s: la fórmula %r da %r, esperaba %r" % (ruta, formula, got, esperado)
         assert got[-1] == "2026-07-26", "%s: el último archivado debe ser AYER" % ruta
+
+
+# --- Task 4: cableado en agent.py (stream + no-stream) ---
+
+
+def test_agent_usa_el_fetcher_multidia_en_ambos_paths():
+    """`get_consumed_meals_today` solo alimenta DIARIO DE HOY; los días
+    anteriores exigen `get_consumed_meals_since` (que ya existía y el chat
+    era el único callsite de producción que no la usaba)."""
+    src = _src("agent.py")
+    assert src.count("build_past_diary_block") >= 2, "stream y no-stream deben tenerlo"
+    assert src.count("build_past_plan_days_block") >= 2
+    assert "get_consumed_meals_since" in src
+
+
+def test_agent_inyecta_los_bloques_despues_del_diario_de_hoy():
+    """Posición: sección volátil, nunca antes del prefijo estático (prompt-cache)."""
+    src = _src("agent.py")
+    i_static = src.index("def _chat_prompt_static_prefix")
+    i_block = src.index("build_past_plan_days_block")
+    assert i_block > i_static
+    # En el path stream, el bloque nuevo va después del DIARIO DE HOY.
+    i_hoy = src.rindex("DIARIO DE HOY: El usuario no ha registrado")
+    assert src.index("build_past_diary_block", i_hoy) > i_hoy
+
+
+def test_agent_pasa_el_tz_offset_del_cliente_al_bloque_de_diario():
+    """Sin esto, una comida de las 10:30pm RD se atribuye al día siguiente y el
+    día real se declara 'SIN REGISTRO' — la mentira que este P-fix cierra."""
+    src = _src("agent.py")
+    assert "tz_offset_mins=" in src, "el diario multi-día debe recibir el offset resuelto"
+    i_helper = src.index("def _build_past_days_context")
+    cuerpo = src[i_helper:i_helper + 3000]
+    assert "tz_offset" in cuerpo, "el helper debe aceptar y reenviar el tz_offset"
+    # El path stream SÍ recibe tz_offset del cliente y debe pasárselo.
+    assert "_build_past_days_context(user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset)" in src \
+        or "tz_offset=tz_offset" in src, "el path stream debe reenviar el tz_offset del cliente"
