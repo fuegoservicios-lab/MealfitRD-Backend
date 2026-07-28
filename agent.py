@@ -3684,7 +3684,13 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
             today = rd_today()
 
         try:
-            tz_offset_mins = int(tz_offset) if tz_offset is not None else 240
+            if tz_offset is not None:
+                _cand = int(tz_offset)
+                # `getTimezoneOffset()` vive en [-840, 840] (UTC+14 .. UTC-14). Fuera
+                # de ahí el valor no es un huso: es un bug del cliente.
+                tz_offset_mins = _cand if -840 <= _cand <= 840 else 240
+            else:
+                tz_offset_mins = 240
         except (TypeError, ValueError):
             tz_offset_mins = 240
 

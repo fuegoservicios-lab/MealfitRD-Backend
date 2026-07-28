@@ -499,3 +499,20 @@ def test_temporal_context_trata_el_offset_cero_como_utc_no_como_utc4():
     assert re.search(r"tz_offset\s+or\s+", cuerpo) is None, "`tz_offset or X` tiene el mismo bug"
     # Con local_date explícito la fecha manda, sea cual sea el offset.
     assert "26" in build_temporal_context(local_date="2026-07-26", tz_offset=0)
+
+
+@pytest.mark.parametrize("absurdo", [99999999, -99999999, 100000, -5000])
+def test_temporal_context_ignora_un_offset_fuera_del_rango_de_husos(absurdo):
+    """`getTimezoneOffset()` vive en [-840, 840]. Un valor fuera de ahí no es un
+    huso: es un bug del cliente. Sin clamp, `int(99999999)` producía una línea
+    afirmando 'Jueves, 9 de Junio de 1836' DENTRO del system prompt."""
+    from prompts.chat_agent import build_temporal_context
+    out = build_temporal_context(tz_offset=absurdo)
+    assert "2026" in out or "2025" in out, "el año se fue de rango: %r" % out
+
+
+def test_ambos_sitios_clampan_el_offset_al_rango_de_husos():
+    """El mismo `tz_offset` del cliente viaja por dos caminos; los dos clampan."""
+    for ruta in ("prompts/chat_agent.py", "agent.py"):
+        src = _src(ruta)
+        assert "840" in src, "%s no clampa el tz_offset al rango de husos" % ruta

@@ -13,7 +13,7 @@ from typing import Optional
 
 CHAT_SYSTEM_PROMPT_BASE = """Eres el Nutriólogo Crítico e IA Central de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan o dieta, dando respuestas al grano, conversacionales pero CLÍNICAMENTE FIRMES.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha. Nunca los etiquetes con letras (A, B o C).
 
 REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 1. CRONONUTRICIÓN Y RITMO CIRCADIANO: Evalúa SIEMPRE la pesadez nutricional de los alimentos cruzando el "CONTEXTO TEMPORAL ACTUAL" con el "RITMO CIRCADIANO" del usuario (ambos proporcionados más abajo). Solo alerta de "deshoras" si la comida rompe la lógica de SU propio reloj biológico (ej. Si tiene turno nocturno, las 5 AM es su cena, no lo reprimas. Si tiene turno de día, las 5 AM con arroz es terrible).
@@ -22,7 +22,7 @@ REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 
 CHAT_STREAM_SYSTEM_PROMPT_BASE = """Eres el Nutriólogo Crítico e IA Central de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan o dieta, dando respuestas al grano, conversacionales pero CLÍNICAMENTE FIRMES.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha. Nunca los etiquetes con letras (A, B o C).
 
 REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 1. CRONONUTRICIÓN Y RITMO CIRCADIANO: Evalúa SIEMPRE la pesadez nutricional de los alimentos cruzando el "CONTEXTO TEMPORAL ACTUAL" con el "RITMO CIRCADIANO" del usuario (ambos proporcionados más abajo). Solo alerta de "deshoras" si la comida rompe la lógica de SU propio reloj biológico (ej. Si tiene turno nocturno, las 4 AM es su cena ideal, elógialo. Si tiene turno de día, las 4 AM con arroz es terrible, repréndelo).
@@ -41,7 +41,7 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 
 CHAT_AGENT_INLINE_PROMPT = """Eres el agente asistente de nutrición IA de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios. El usuario ya fue saludado al iniciar el chat. Ve directo al punto en cada respuesta.
-REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha. Nunca los etiquetes con letras (A, B o C).
 
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
@@ -69,7 +69,7 @@ REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
 CHAT_STREAM_INLINE_PROMPT = """Eres el agente asistente de nutrición IA de MealfitRD, una app profesional de nutrición clínica. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
 CONTEXTO PROFESIONAL: Esta es una plataforma de nutrición clínica. Los usuarios hablarán sobre sus hábitos alimenticios, incluyendo momentos en que comieron de más, se sintieron mal por su alimentación, o quieren mejorar. Tu rol es guiarlos como nutricionista profesional con empatía y conocimiento. Todas las respuestas deben ser constructivas y orientadas a mejorar sus hábitos.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha. Nunca los etiquetes con letras (A, B o C).
 
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
@@ -97,10 +97,15 @@ def build_temporal_context(local_date: Optional[str] = None,
     meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
                   "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
-    offset_min = 240  # UTC-4 por defecto
+    offset_min = 240  # UTC-4 por defecto (convención del repo)
     if tz_offset is not None:
         try:
-            offset_min = int(tz_offset)
+            _cand = int(tz_offset)
+            # `getTimezoneOffset()` vive en [-840, 840] (UTC+14 .. UTC-14). Fuera
+            # de ahí el valor no es un huso: es un bug del cliente (un epoch, una
+            # unidad mal multiplicada). Sin este clamp la línea temporal afirmaba
+            # fechas de 1836 dentro del system prompt.
+            offset_min = _cand if -840 <= _cand <= 840 else 240
         except (TypeError, ValueError):
             pass
     now_chat = datetime.now(timezone.utc) - timedelta(minutes=offset_min)
