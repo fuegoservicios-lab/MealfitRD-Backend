@@ -167,16 +167,9 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 
 [P3-I18N-DEFERRED · 2026-05-13] El producto es 100% español dominicano (es-DO). UI copy, mensajes de validación, toasts, aria-labels, error handlers — todo hardcoded en literal strings es-DO. **NO hay infraestructura i18n** (cero deps `react-i18next` / `i18next` / `react-intl`) y es intencional.
 
-**Por qué (audit production-readiness 2026-05-12 + decisión 2026-05-13):**
-- Mercado objetivo: República Dominicana únicamente, sin roadmap activo de expansión multilocale.
-- Añadir `react-i18next` ahora viola la convención del repo ("Don't design for hypothetical future requirements"): introduce bundle overhead (~30KB), deuda de mantenimiento (cada string nuevo debe pasar por el sistema o se vuelve inconsistente), y abstracción no-usada.
-- Si en el futuro se decide expandir (Puerto Rico, México, US Latino, EU/PT/IT), el refactor incremental **cuesta lo mismo que el scaffold preventivo de hoy**, pero hoy se evita pagar la maintenance hasta que la decisión sea real.
+**Por qué:** mercado RD únicamente, sin roadmap multilocale; `react-i18next` hoy = bundle +30KB + mantenimiento por string + abstracción no-usada ("Don't design for hypothetical future requirements"). El refactor incremental futuro cuesta lo mismo que el scaffold preventivo de hoy.
 
-**Cuándo revisitar:**
-- Si alguien del lado de producto decide expandir geográficamente: este P3 se reabre como tarea de implementación con `react-i18next` + estructura `src/i18n/locales/{es,en,...}/<namespace>.json` + migración incremental empezando por `components/common/` y `components/home/`.
-- Floor de revisión sugerido: 2027-01-01 (audit anual). Si para entonces sigue siendo es-DO only, mantener decisión.
-
-**Cierre del gap del audit 2026-05-12:** el audit P3-1 flageó "100% español hardcoded" como deuda i18n. La decisión documentada acá cierra el gap como "decisión de producto, no técnico", análoga al patrón "Advisors aceptados" más abajo. Test parser-based [`test_p3_i18n_deferred.py`](backend/tests/test_p3_i18n_deferred.py) ancla la decisión: si alguien añade `react-i18next` / `i18next` a `package.json` sin actualizar esta sección, el test falla con copy explicativo.
+**Cuándo revisitar:** si producto decide expandir geográficamente (reabrir con `react-i18next` + `src/i18n/locales/` empezando por `components/common/`). Floor de revisión: 2027-01-01. Test [`test_p3_i18n_deferred.py`](backend/tests/test_p3_i18n_deferred.py): si alguien añade `react-i18next`/`i18next` a `package.json` sin actualizar esta sección, falla con copy explicativo.
 
 ### `chat-agent safety_settings relajados` (SUPERSEDED por DeepSeek)
 
