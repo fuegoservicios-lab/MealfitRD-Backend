@@ -166,11 +166,10 @@ def test_thursday_7day_3plus4_split_e2e(mock_pipeline, seeded_user_profile):
     assert queued[0]["days_offset"] == 3, "chunk 2 must start at day-offset 3"
 
     # 3. Force the chunk to be eligible for processing now.
-    execute_sql_write(
-        "UPDATE plan_chunk_queue SET execute_after = NOW() - INTERVAL '1 MINUTE' "
-        "WHERE meal_plan_id = %s",
-        (plan_id,),
-    )
+    # [P1-E2E-NO-BACKDATE · 2026-07-28] Sin backdate: los chunks conservan su fecha
+    # FUTURA natural — invisibles para el worker de PRODUCCION del VPS (misma DB;
+    # su claim sin target exige execute_after<=NOW y se ROBABA los chunks de test,
+    # generando con DeepSeek real). La rama target del claim no exige execute_after.
 
     # 4. Process. One iteration should be enough since there is only one chunk.
     # Run twice as a safety margin in case a deferral inserts a follow-up row.

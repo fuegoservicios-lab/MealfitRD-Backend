@@ -151,10 +151,13 @@ def _setup_30day_plan(user_id, plan_id, seed_lessons=None, pre_days=None,
             pipeline_snapshot=valid_snapshot,
         )
 
-    execute_sql_write(
-        "UPDATE plan_chunk_queue SET execute_after = NOW() - INTERVAL '1 MINUTE' WHERE meal_plan_id = %s",
-        (plan_id,)
-    )
+    # [P1-E2E-NO-BACKDATE · 2026-07-28] El backdate de execute_after volvía los chunks
+    # ELEGIBLES para el worker de PRODUCCIÓN del VPS (misma DB Neon, tick 60s, claim
+    # sin target exige execute_after<=NOW): cazado en vivo 17:49:31 generando con
+    # DeepSeek REAL el chunk 9 sintético del test (plan 3c112666) — el flake 9_10 era
+    # prod robándose el chunk (local lo veía 'processing' ajeno y callaba). La rama
+    # target del claim NO exige execute_after, así que los chunks se quedan con su
+    # fecha FUTURA natural: invisibles para prod, reclamables por estos tests.
 
 
 # ---------------------------------------------------------------------------
