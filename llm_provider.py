@@ -100,9 +100,21 @@ def _is_deepseek_provider(base_url: Optional[str] = None) -> bool:
     owner 2026-07-04; si se re-introduce un provider alterno, debe nacer con
     knob + test ancla propios.
 
-    Como los callsites productivos NUNCA pasan un `base_url` propio (viene del
-    knob `MEALFIT_DEEPSEEK_BASE_URL`), inspeccionar el knob basta; se acepta un
-    `base_url` explícito para cubrir el path del constructor.
+    [P1-DEEPSEEK-PROVIDER-INSTANCE · 2026-07-28] La asunción anterior ("los
+    callsites productivos NUNCA pasan un `base_url` propio") YA NO es cierta:
+    `ChatDeepSeek` (subclase de `ChatOpenAI`) se construye cada vez más contra
+    back-ends OpenAI-compatibles DISTINTOS de DeepSeek (p.ej. el meal-photo
+    scanner apuntado a OpenAI). Llamar esta función sin argumento SIEMPRE
+    inspecciona el knob global `MEALFIT_DEEPSEEK_BASE_URL` — que SIEMPRE
+    contiene "deepseek" — y retorna `True` sin importar a dónde apunte la
+    instancia real. Todo callsite que resuelva el provider de una instancia YA
+    construida (p.ej. `ChatDeepSeek.with_structured_output`) DEBE pasar el
+    `base_url` efectivo de ESA instancia (`self.openai_api_base` en
+    `ChatOpenAI` — `base_url` NO es atributo de instancia, solo kwarg del
+    constructor), nunca confiar en el default implícito. El fallback al knob
+    global sigue vigente para: (a) el path del constructor (`base_url` aún no
+    resuelto, puede venir `None`) y (b) cualquier caller sin forma de leer el
+    atributo de instancia — preserva el comportamiento DeepSeek-only de hoy.
     """
     resolved = (base_url or _deepseek_base_url() or "").lower()
     return "deepseek" in resolved
@@ -322,10 +334,27 @@ class ChatDeepSeek(ChatOpenAI):
 
         Cubre los ~15 callsites `.with_structured_output(...)` del pipeline
         sin tocarlos. Un caller puede pasar `method=` explícito si lo necesita.
+
+        [P1-DEEPSEEK-PROVIDER-INSTANCE · 2026-07-28] El guard resuelve el
+        provider de ESTA instancia (`self.openai_api_base`), NO del knob
+        global: `_is_deepseek_provider()` sin argumento inspecciona
+        `MEALFIT_DEEPSEEK_BASE_URL` (que SIEMPRE contiene "deepseek") y
+        retornaba `True` para TODA instancia sin importar a dónde apuntara de
+        verdad — inyectando `thinking` (parámetro DeepSeek-only) contra
+        back-ends que lo rechazan con `400 Unknown parameter: 'thinking'`
+        (medido en vivo: el meal-photo scanner con `ChatDeepSeek` contra
+        OpenAI). `openai_api_base` es el atributo real que `ChatOpenAI`
+        persiste desde el kwarg `base_url` del constructor (verificado
+        empíricamente — `base_url` NO es atributo de instancia). Si un futuro
+        langchain-openai renombra el atributo, `getattr(..., None)` cae a
+        `None` y `_is_deepseek_provider(None)` reproduce el comportamiento de
+        HOY (inspecciona el knob global) — el path DeepSeek-only de
+        producción (~15 callsites) no puede regresar por este cambio.
         """
         kwargs.setdefault("method", "function_calling")
         base = self
-        if kwargs["method"] == "function_calling" and _is_deepseek_provider():
+        _instance_base_url = getattr(self, "openai_api_base", None)
+        if kwargs["method"] == "function_calling" and _is_deepseek_provider(_instance_base_url):
             merged_extra = dict(self.extra_body or {})
             merged_extra.setdefault("thinking", {"type": "disabled"})
             base = self.model_copy(update={"extra_body": merged_extra})
