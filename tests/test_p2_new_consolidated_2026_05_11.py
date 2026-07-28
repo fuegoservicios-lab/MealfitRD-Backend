@@ -50,36 +50,34 @@ def test_p2_new_1_visibilitychange_respects_cache_ttl():
 # ---------------------------------------------------------------------------
 # P2-NEW-3: Recipes.jsx invalida caches tras recipe/expand exitoso
 # ---------------------------------------------------------------------------
-def test_p2_new_3_recipes_imports_invalidatecachesforplan():
-    """Recipes.jsx debe importar `invalidateCachesForPlan` del helper SSOT."""
+def test_p2_new_3_recipes_cook_flow_removed_and_history_still_invalidates():
+    """[reapuntado 2026-07-28 · P-RECIPES-COOK-REMOVED 07-12] El flujo "Cocinar" ENTERO
+    (expansión LLM /recipe/expand + modo cocina + registro de consumo) se retiró de
+    Recetas como decisión de producto: la página es read-only + PDF. Con él murió su
+    único caller de `invalidateCachesForPlan` — ya no hay mutación que invalide.
+
+    El contrato I4 (invalidación post-mutación) SIGUE vivo donde quedan mutaciones:
+    History.jsx invalida tras sus writes. Este test ancla ambos lados:
+      (a) Recetas declara la remoción (marker) y no re-introduce el expand a medias
+          (un expand sin invalidate reabriría el bug del cache stale de 30min);
+      (b) History.jsx conserva `invalidateCachesForPlan(...)` en sus mutaciones."""
     recipes_fp = _REPO_ROOT / "frontend" / "src" / "pages" / "Recipes.jsx"
     src = recipes_fp.read_text(encoding="utf-8")
-    assert re.search(
-        r"import\s*\{[^}]*invalidateCachesForPlan[^}]*\}\s*from\s*['\"][^'\"]*historyCaches['\"]",
-        src,
+    assert "P-RECIPES-COOK-REMOVED" in src, (
+        "El marker de la remoción del flujo Cocinar desapareció de Recipes.jsx — "
+        "si el expand VOLVIÓ, restaurar también invalidateCachesForPlan (P2-NEW-3)."
+    )
+    assert "recipe/expand" not in src.replace("`/api/plans/recipe/expand`", "").replace(
+        "/api/plans/recipe/expand + modo cocina", ""
     ), (
-        "P2-NEW-3 regresión: Recipes.jsx ya no importa "
-        "`invalidateCachesForPlan` desde `../utils/historyCaches`. "
-        "Sin esto, el modal del Historial muestra receta pre-expand "
-        "hasta 30min tras un cook-click."
+        "Recipes.jsx vuelve a llamar /recipe/expand: re-introducir la invalidación "
+        "post-expand (P2-NEW-3) o el modal del Historial mostrará receta stale 30min."
+    )
+    hist_src = (_REPO_ROOT / "frontend" / "src" / "pages" / "History.jsx").read_text(encoding="utf-8")
+    assert hist_src.count("invalidateCachesForPlan(") >= 3, (
+        "History.jsx perdió invalidaciones post-mutación (esperaba >=3 callsites) — I4."
     )
 
-
-def test_p2_new_3_recipes_invokes_invalidate_after_expand():
-    """Recipes.jsx debe llamar `invalidateCachesForPlan(planId)` tras
-    `/recipe/expand` exitoso, antes de cerrar el handler."""
-    recipes_fp = _REPO_ROOT / "frontend" / "src" / "pages" / "Recipes.jsx"
-    src = recipes_fp.read_text(encoding="utf-8")
-    # Buscar el bloque post-expand exitoso.
-    success_idx = src.find("data.expanded_recipe")
-    finally_idx = src.find("setIsExpanding(false)", success_idx)
-    assert success_idx > 0 and finally_idx > 0
-    success_block = src[success_idx:finally_idx]
-    assert "invalidateCachesForPlan(planId)" in success_block, (
-        "P2-NEW-3 regresión: `invalidateCachesForPlan(planId)` no se "
-        "invoca tras `/recipe/expand` exitoso. El cache stale persiste "
-        "30min."
-    )
 
 
 # ---------------------------------------------------------------------------

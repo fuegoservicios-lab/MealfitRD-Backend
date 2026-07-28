@@ -20,13 +20,27 @@ def go():
 
 
 class _StubDB:
+    # [reapuntado 2026-07-28] El recompute honesto (P3-8, 07-07) trima RE-ESCALANDO el
+    # string y midiendo el DELTA de macros — un stub que devuelve macros fijas sin mirar
+    # los gramos deja delta=0 y el trim se vuelve no-op (el test moría con el día intacto
+    # en 105 g). El stub ahora escala por la cantidad líder, como la DB real (per-100g).
+    _PER100 = {
+        "pollo": {"kcal": 165.0, "protein": 31.0, "carbs": 0.0, "fats": 3.6},
+        "res": {"kcal": 165.0, "protein": 31.0, "carbs": 0.0, "fats": 3.6},
+        "pescado": {"kcal": 165.0, "protein": 31.0, "carbs": 0.0, "fats": 3.6},
+        "arroz": {"kcal": 130.0, "protein": 2.7, "carbs": 28.0, "fats": 0.3},
+    }
+
     def macros_from_ingredient_string(self, s):
+        import re as _re
         t = str(s).lower()
-        if "pollo" in t or "res" in t or "pescado" in t:
-            return {"kcal": 165.0, "protein": 31.0, "carbs": 0.0, "fats": 3.6}  # proteína-dominante
-        if "arroz" in t:
-            return {"kcal": 130.0, "protein": 2.7, "carbs": 28.0, "fats": 0.3}
-        return None
+        base = next((v for k, v in self._PER100.items() if k in t), None)
+        if base is None:
+            return None
+        mq = _re.match(r"\s*(\d+(?:[.,]\d+)?)\s*g\b", t)
+        grams = float(mq.group(1).replace(",", ".")) if mq else 100.0
+        f = grams / 100.0
+        return {k: round(v * f, 2) for k, v in base.items()}
 
 
 def test_renal_cap_knob_exists_default_on(go):

@@ -97,7 +97,12 @@ def test_gc_cron_registered():
     # Anchor: el block dentro de register_plan_chunk_scheduler.
     register_block_idx = _CRON_TASKS.find("def register_plan_chunk_scheduler")
     assert register_block_idx > 0, "register_plan_chunk_scheduler no encontrado"
-    register_block = _CRON_TASKS[register_block_idx:register_block_idx + 30000]
+    # [reapuntado 2026-07-28] Ventana fija 30000 → cuerpo completo hasta el siguiente def
+    # top-level: la función creció a ~1450 líneas (~115k chars) y el registro del GC quedó
+    # a ~53k del inicio — la ventana lo declaraba "no registrado" estando vivo (15ª de la
+    # clase ventana-caducada; anclar a estructura, no a bytes).
+    _next_def = _CRON_TASKS.find("\ndef ", register_block_idx + 10)
+    register_block = _CRON_TASKS[register_block_idx:_next_def if _next_def > 0 else len(_CRON_TASKS)]
 
     assert 'id="gc_dead_lettered_chunks"' in register_block, (
         "Cron 'gc_dead_lettered_chunks' no registrado en register_plan_chunk_scheduler. "

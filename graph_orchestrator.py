@@ -17416,7 +17416,25 @@ def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
         P = sum(_meal_macro_num(m.get("protein")) for m in meals)
         if target_protein_day <= 0 or P <= target_protein_day * ceiling_pct:
             return False
-        factor = target_protein_day / P  # < 1
+        # [P1-RENAL-TRIM-RESOLVABLE · 2026-07-28] El factor se calculaba sobre la proteína
+        # DECLARADA del día, pero los deltas del recompute honesto (P3-8) salen de los
+        # ingredientes RESUELTOS. Cuando declarada > resuelta (truth-up upstream falló o
+        # fixture sin truthup), el trim se quedaba corto de forma sistemática: con 130 g
+        # declarados / 100 g resolubles y cap 56, el día aterrizaba en 73 g — sobre un cap
+        # RENAL (seguridad). El drop necesario (P - target) debe salir ÍNTEGRO de la masa
+        # resoluble: factor = 1 - (P - target)/resoluble, clamp [0.05, 1). Con declarada
+        # == resuelta se reduce al factor clásico target/P.
+        _resolvable = 0.0
+        for _m_r in meals:
+            for _s_r in (_m_r.get("ingredients") or []):
+                if _ingredient_is_protein_dominant(str(_s_r), db):
+                    _mc_r = db.macros_from_ingredient_string(str(_s_r)) or {}
+                    _resolvable += float(_mc_r.get("protein") or 0.0)
+        _drop = P - target_protein_day
+        if _resolvable > 0:
+            factor = max(0.05, 1.0 - (_drop / _resolvable))
+        else:
+            factor = target_protein_day / P  # < 1 (sin resolubles: comportamiento previo)
         for m in meals:
             # [P3-8 · 2026-07-07] recompute HONESTO por delta de string: escalar las líneas PROTEÍNA-
             # dominantes hacia abajo también baja su carbo/grasa EMBEBIDOS (el pollo lleva grasa; el
