@@ -27,6 +27,7 @@ import pytest
 from shopping_calculator import (
     aggregate_and_deduct_shopping_list,
     invalidate_master_cache,
+    normalize_name,
 )
 
 
@@ -123,56 +124,50 @@ class TestYogurtCap:
 # Sección 2: P6-BROTHS-CAP (caldo)
 # ===========================================================================
 class TestCaldoCap:
-    def test_repro_pdf_caldo_3lbs_caps_to_1(self):
-        """Caso real PDF: 3 lbs de caldo de vegetales para 2p × mes →
-        cap 1 lb."""
+    """[reapuntado 2026-07-28 · P1-BROTH-NOT-MEAT] La premisa original (caldo presente en la
+    lista, capeado a 1 lb) murió dos veces: (a) el catálogo no tiene fila de caldo, así que el
+    verified-only (ON desde 07-02) lo dropea con WARN — comportamiento honesto y uniforme; y
+    (b) lo que el rojo de esta clase DESTAPÓ es peor que lo que anclaba: "caldo de pollo"
+    resolvía a PECHUGA DE POLLO y "caldo de res" a CARNE DE RES (subcadena sobre alimento,
+    la clase de siempre) — la lista compraba 838 kg de pechuga por 99 lbs de caldo. La
+    invariante que vale es esa: EL CALDO JAMÁS ES CARNE."""
+
+    @pytest.mark.parametrize("caldo_type,carne", [
+        ("caldo de pollo", "pechuga"),
+        ("caldo de res", "carne de res"),
+        ("caldo de hueso", None),  # "hueso" forma parte del nombre del caldo — no sirve de aguja
+        ("caldo de vegetales", None),
+    ])
+    def test_caldo_jamas_resuelve_a_carne(self, caldo_type, carne):
+        canon = str(normalize_name(caldo_type) or "").lower()
+        assert "caldo" in canon, (
+            f"{caldo_type} → {canon!r}: el caldo perdió su identidad en el resolver"
+        )
+        if carne:
+            assert carne not in canon, (
+                f"{caldo_type} → {canon!r}: la lista compraría CARNE por un caldo"
+            )
+
+    def test_caldo_no_infla_la_carne_en_la_lista(self):
+        """99 lbs de caldo + 200 g de pechuga → la línea de pechuga queda en sus gramos
+        reales (×mult), sin absorber el caldo."""
         result = aggregate_and_deduct_shopping_list(
-            plan_ingredients=["99 lbs de caldo de vegetales"],
-            multiplier=18.666666,
+            plan_ingredients=["99 lbs de caldo de pollo", "200 g de pechuga de pollo"],
+            multiplier=2.0,
             structured=True,
         )
-        qty_g = _qty_grams_for(result, "caldo")
-        cap_g = 1.0 * 453.592 * 1.20  # 1 lb cap + margen
-        assert 0 < qty_g <= cap_g, (
-            f"Caldo cap fallido: {qty_g:.0f}g > {cap_g:.0f}g"
+        pechuga = next((i for i in result if isinstance(i, dict)
+                        and "pechuga" in str(i.get("name", "")).lower()), None)
+        assert pechuga is not None
+        qty = float(pechuga.get("base_qty") or 0)
+        assert qty <= 600, (
+            f"la pechuga salió a {qty:.0f}g: el caldo se le sumó (98 lbs fantasma)"
         )
 
-    @pytest.mark.parametrize("caldo_type", [
-        "caldo de vegetales",
-        "caldo de pollo",
-        "caldo de res",
-        "caldo de hueso",
-    ])
-    def test_caldo_variants_substring_match(self, caldo_type):
-        """Match substring: 'caldo de X' debe matchear via 'caldo'."""
-        result = aggregate_and_deduct_shopping_list(
-            plan_ingredients=[f"99 lbs de {caldo_type}"],
-            multiplier=18.666666,
-            structured=True,
-        )
-        qty_g = _qty_grams_for(result, "caldo")
-        cap_g = 1.0 * 453.592 * 1.20
-        assert 0 < qty_g <= cap_g, (
-            f"{caldo_type}: cap fallido {qty_g:.0f}g > {cap_g:.0f}g"
-        )
-
-    @pytest.mark.parametrize("scenario,multiplier,expected_cap_lbs", [
-        ("4p mensual", 4 * 4 * 7 / 3, 2.0),
-        ("2p mensual", 2 * 4 * 7 / 3, 1.0),
-        ("1p mensual", 1 * 4 * 7 / 3, 0.5),
-        ("2p semanal", 2 * 1 * 7 / 3, 0.5),
-    ])
-    def test_caldo_cap_scales(self, scenario, multiplier, expected_cap_lbs):
-        result = aggregate_and_deduct_shopping_list(
-            plan_ingredients=["99 lbs de caldo de vegetales"],
-            multiplier=multiplier,
-            structured=True,
-        )
-        qty_g = _qty_grams_for(result, "caldo")
-        cap_g = expected_cap_lbs * 453.592 * 1.30
-        assert qty_g <= cap_g, (
-            f"{scenario}: cap {expected_cap_lbs} lbs ({cap_g:.0f}g), recibido {qty_g:.0f}g"
-        )
+    def test_resolver_marca_el_caldo_como_producto_distinto(self):
+        from shopping_calculator import resolve_preparation_distinct
+        assert resolve_preparation_distinct("caldo de pollo") == (True, None)
+        assert resolve_preparation_distinct("2 tazas de caldo de res") == (True, None)
 
 
 # ===========================================================================

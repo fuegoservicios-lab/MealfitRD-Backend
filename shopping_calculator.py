@@ -5649,6 +5649,8 @@ _PREP_FLOUR_DISTINCT = (
     "almendra", "almendras", "garbanzo", "garbanzos", "cebada", "quinoa",
 )
 _PREP_TORTILLA_MAIZ_RE = re.compile(r"\btortillas?\s+de\s+maiz\b")
+# [P1-BROTH-NOT-MEAT · 2026-07-28] caldo de <lo que sea>: producto distinto de su ingrediente.
+_PREP_BROTH_RE = re.compile(r"\bcaldos?\s+de\s+[a-z]")
 _PREP_CREMA_COCO_RE = re.compile(r"\bcremas?\s+de\s+coco\b")
 
 
@@ -5686,6 +5688,14 @@ def resolve_preparation_distinct(name) -> tuple:
         return (True, None)  # el catálogo solo tiene tortillas de TRIGO — no colapsar a Maíz dulce
     if _PREP_CREMA_COCO_RE.search(low):
         return (True, None)  # crema de coco ≠ coco fresco (SKU distinto)
+    # [P1-BROTH-NOT-MEAT · 2026-07-28] "caldo de pollo" resolvía a PECHUGA DE POLLO y "caldo de
+    # res" a CARNE DE RES (la subcadena 'pollo'/'res' ganaba el matching): la lista compraba
+    # CARNE cuando la receta pedía caldo — 838 kg de pechuga en el caso extremo del test de caps.
+    # El caldo es un producto DISTINTO sin fila propia en master_ingredients: se marca handled
+    # sin canónico y sigue el mismo camino honesto que caldo de hueso/vegetales (drop del
+    # verified-only con WARN de observabilidad), jamás la carne.
+    if _PREP_BROTH_RE.search(low):
+        return (True, None)
     return (False, None)
 
 
@@ -9239,6 +9249,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         'tortilla de maiz', 'tortillas de maiz',  # strip_accents normalizado
         'pan integral', 'pan de molde', 'pan multigrano',
         'pan de centeno', 'pan blanco', 'pan',
+        # [P1-CAP-CANON-DRIFT · 2026-07-28] la expansión del catálogo movió los canónicos a los
+        # SKUs "familiar" ('pan integral' resuelve hoy a 'Pan integral familiar') y este set de
+        # nombres EXACTOS dejó de matchear: caps de pan muertos en producción sin que nada
+        # fallara. Mismo drift que las sardinas ('Sardinas en lata') en el cap de enlatados.
+        'pan integral familiar', 'pan blanco familiar', 'pan familiar',
         'pan pita', 'pita integral',
         # [P6-CARBS-CAP-CRACKERS 2026-05-06] Visto en PDF: 9¼ lbs galletas
         # de soda para 2p × mes (~4 lbs/persona) — absurdo. Se usan como
@@ -9384,6 +9399,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _CANNED_PROTEIN_NAMES_FOR_CAP = {
         'atun', 'atun en agua', 'atun en aceite',  # strip_accents
         'sardinas', 'sardina',
+        # [P1-CAP-CANON-DRIFT · 2026-07-28] la resolución canónica da 'Sardinas en lata' desde la
+        # expansión del catálogo — el nombre suelto ya no matchea y las latas de sardina iban SIN
+        # cap en producción. Mismo drift que el pan "familiar" en P6-CARBS-CAP.
+        'sardinas en lata', 'sardina en lata',
         'salmon en lata', 'salmon enlatado',
         'pollo en lata', 'pollo enlatado',
     }

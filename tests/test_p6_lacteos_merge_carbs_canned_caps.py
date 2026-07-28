@@ -48,32 +48,26 @@ def _reset_master_cache():
 # ===========================================================================
 class TestLacteosMerge:
     def test_yogurt_generico_se_merge_en_especifico(self, caplog):
-        """Si hay 'Yogurt' genérico Y 'Yogurt griego', el genérico se folds."""
-        import logging
-        with caplog.at_level(logging.INFO):
-            aggregate_and_deduct_shopping_list(
-                plan_ingredients=[
-                    "1 pote de yogurt griego sin azúcar",
-                    "1 pote de yogurt",  # genérico
-                    "1 pote de yogurt griego sin azúcar",
-                ],
-                multiplier=18.666666,
-                structured=True,
-            )
-        merge_logs = [
-            r for r in caplog.records
-            if "P6-LACTEOS-MERGE" in r.message
-        ]
-        assert merge_logs, (
-            f"P6-LACTEOS-MERGE debe firar. "
-            f"INFO logs: {[r.message for r in caplog.records if 'MERGE' in r.message]}"
+        """[reapuntado 2026-07-28] El log P6-LACTEOS-MERGE ya no dispara para este par porque la
+        RESOLUCIÓN canónica colapsa 'yogurt' y 'yogurt griego sin azúcar' al mismo canon
+        ('Yogurt') ANTES de agregar — la fusión ocurre aguas arriba y mejor (el merge post-hoc
+        existía para tapar exactamente esta duplicación). La invariante que importa y se ancla:
+        el par produce UNA sola fila de yogurt en la lista, jamás dos."""
+        result = aggregate_and_deduct_shopping_list(
+            plan_ingredients=[
+                "1 pote de yogurt griego sin azúcar",
+                "1 pote de yogurt",  # genérico
+                "1 pote de yogurt griego sin azúcar",
+            ],
+            multiplier=18.666666,
+            structured=True,
+        )
+        yogurts = [i for i in result if isinstance(i, dict)
+                   and "yogur" in str(i.get("name", "")).lower()]
+        assert len(yogurts) == 1, (
+            f"el par genérico+específico debe consolidar en UNA fila: {[y.get('name') for y in yogurts]}"
         )
 
-
-# ===========================================================================
-# Sección 2: P6-VEG-EXT-7 (brócoli)
-# ===========================================================================
-class TestBrocoliCap:
     def test_repro_pdf_brocoli_excesivo(self, caplog):
         """PDF 22:42: 14 cabezas brócoli para 2p×mes. Cap esperado: 8."""
         import logging
