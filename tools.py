@@ -3347,8 +3347,77 @@ def _chat_plan_mutation_tools_enabled() -> bool:
     return _pt_env_bool("MEALFIT_CHAT_PLAN_TOOLS_ENABLED", False)
 
 
+@tool
+def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
+    """Consulta el menú COMPLETO que el plan del usuario prescribió para una
+    fecha concreta, con las cantidades exactas de cada ingrediente y los pasos
+    de la receta.
+
+    Úsala cuando el usuario pregunte por el DETALLE de un día que ya pasó:
+    '¿cuánto pollo tenía el almuerzo del domingo?', '¿cómo era la receta de la
+    cena de ayer?', '¿qué llevaba el batido del martes?'. El bloque 'DÍAS QUE YA
+    PASARON' de tu contexto solo trae los nombres y las kcal — esta herramienta
+    trae los gramos y los pasos.
+
+    `fecha` en formato ISO 'YYYY-MM-DD'. Tienes la fecha de HOY en tu contexto:
+    resuelve tú 'ayer' o 'el domingo' y pasa la fecha ya calculada.
+
+    OJO: esto es lo que el plan MANDABA ese día, NO prueba de que el usuario se
+    lo comiera. Para lo que realmente comió, mira el bloque 'DIARIO'.
+    """
+    # tooltip-anchor: P1-CHAT-PAST-DAYS
+    # LIVE-TOOL CONTRACT: `user_id` viene force-overrideado por P0-AGENT-1.
+    logger.info(f"📖 [TOOL EXECUTION] consultar_dia_del_plan user={user_id} fecha={fecha}")
+    try:
+        from chat_history_context import find_plan_day_for_date, rd_today
+        from datetime import datetime as _dt
+
+        try:
+            target = _dt.strptime(str(fecha)[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return (f"No pude interpretar la fecha '{fecha}'. Necesito el formato "
+                    f"ISO 'YYYY-MM-DD' (ejemplo: 2026-07-26).")
+
+        plan = get_latest_meal_plan(user_id)
+        if not isinstance(plan, dict) or not plan:
+            return "El usuario no tiene ningún plan activo del que pueda sacar ese día."
+
+        row = find_plan_day_for_date(plan, target, rd_today())
+        if not row:
+            return (f"No tengo el día {target.isoformat()} en el plan de este usuario. "
+                    f"Puede que sea anterior al plan actual, o que ese día ya se haya "
+                    f"perdido del historial del plan. Dile la verdad: que no lo tienes.")
+
+        day = row["day"]
+        aviso_fecha = " (fecha estimada, no exacta)" if row.get("inferred") else ""
+        out = [f"Menú que el PLAN prescribió para {target.isoformat()} "
+               f"({day.get('day_name') or 'día'}){aviso_fecha}:"]
+        for m in (day.get("meals") or []):
+            if not isinstance(m, dict):
+                continue
+            slot = str(m.get("meal") or "Comida").strip()
+            out.append(f"\n▸ {slot} — {m.get('name') or '(sin nombre)'}"
+                       f" · {m.get('cals') or '?'} kcal"
+                       f" · P:{m.get('protein') or '?'}g C:{m.get('carbs') or '?'}g"
+                       f" G:{m.get('fats') or '?'}g")
+            ings = [str(x) for x in (m.get("ingredients") or []) if x]
+            if ings:
+                out.append("  Ingredientes: " + "; ".join(ings))
+            steps = [str(x) for x in (m.get("recipe") or []) if x]
+            if steps:
+                out.append("  Preparación: " + " ".join(
+                    f"({i + 1}) {s}" for i, s in enumerate(steps)))
+        out.append("\n⚠️ Esto es lo que el plan MANDABA ese día; no es prueba de que el "
+                   "usuario se lo comiera. Si te pregunta qué comió de verdad, usa el "
+                   "bloque DIARIO de tu contexto.")
+        return "\n".join(out)
+    except Exception as e:
+        logger.error(f"❌ [TOOL] consultar_dia_del_plan falló: {e}")
+        return "No pude consultar ese día del plan ahora mismo."
+
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, log_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile]
+agent_tools = [update_form_field, log_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

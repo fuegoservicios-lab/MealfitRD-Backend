@@ -62,4 +62,4 @@ def test_doc_moves_retired_tools_out_of_parity_table():
               encoding="utf-8") as f:
         doc = f.read()
     assert "Retiradas temporalmente" in doc
-    assert "Las 11 tools cubiertas" in doc
+    assert "Las 12 tools cubiertas" in doc

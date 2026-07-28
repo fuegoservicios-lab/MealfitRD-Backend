@@ -367,3 +367,48 @@ def test_tz_offset_se_resuelve_por_is_not_none_nunca_por_truthiness():
         "truthiness sobre tz_offset: el 0 (UTC) se perdería silenciosamente"
     assert re.search(r"tz_offset\s+or\s+240", cuerpo) is None, \
         "`tz_offset or 240` tiene el mismo bug que el truthiness"
+
+
+# --- Task 5: tool `consultar_dia_del_plan` ---
+
+
+def test_tool_registrada_y_documentada():
+    """P0-AGENT-1: toda tool de `agent_tools` necesita fila en la tabla canónica
+    o `test_p2_chat_cleanup.py` falla por paridad bidireccional."""
+    src = _src("tools.py")
+    assert "def consultar_dia_del_plan" in src
+    m = re.search(r"^agent_tools = \[(.+?)\]", src, re.M)
+    assert m and "consultar_dia_del_plan" in m.group(1), "falta en agent_tools"
+    doc = _src("docs/agent_tools_user_id_table.md")
+    assert "consultar_dia_del_plan" in doc
+
+
+def test_tool_devuelve_cantidades_y_receta():
+    """Es la razón de existir de la tool: el índice del prompt NO las trae."""
+    import tools as _t
+    meals = [{"meal": "Cena", "name": "Pescado Guisado", "cals": 603,
+              "ingredients": ["255g de pescado", "1 taza de yuca (150g)"],
+              "recipe": ["Sofríe el ajo", "Añade el pescado"]}]
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, meals)]}
+    monkey = getattr(_t, "get_latest_meal_plan")
+    try:
+        _t.get_latest_meal_plan = lambda uid: plan
+        out = _t.consultar_dia_del_plan.func(user_id="u1", fecha="2026-07-26")
+    finally:
+        _t.get_latest_meal_plan = monkey
+    assert "255g de pescado" in out
+    assert "Sofríe el ajo" in out
+    assert "Pescado Guisado" in out
+
+
+def test_tool_no_confunde_prescrito_con_consumido():
+    import tools as _t
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, [
+        {"meal": "Cena", "name": "X", "cals": 1, "ingredients": [], "recipe": []}])]}
+    monkey = getattr(_t, "get_latest_meal_plan")
+    try:
+        _t.get_latest_meal_plan = lambda uid: plan
+        out = _t.consultar_dia_del_plan.func(user_id="u1", fecha="2026-07-26")
+    finally:
+        _t.get_latest_meal_plan = monkey
+    assert "no es prueba" in out.lower() or "no significa" in out.lower()

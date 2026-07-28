@@ -84,8 +84,9 @@ def test_prompts_teach_clinical_tool():
 
 
 def test_doc_table_has_clinical_row():
-    # [P1-CHAT-PLAN-TOOLS-OFF] la tabla bajó a 11 tools activas; esta sigue dentro.
+    # [P1-CHAT-PLAN-TOOLS-OFF] la tabla bajó a 11 tools activas; luego subió a
+    # 12 con `consultar_dia_del_plan` (P1-CHAT-PAST-DAYS · 2026-07-27).
     with open(os.path.join(_BACKEND, "docs", "agent_tools_user_id_table.md"),
               encoding="utf-8") as f:
         doc = f.read()
-    assert "`check_clinical_profile`" in doc and "Las 11 tools" in doc
+    assert "`check_clinical_profile`" in doc and "Las 12 tools" in doc
