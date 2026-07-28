@@ -255,3 +255,43 @@ def test_shift_cron_es_gemelo_del_shift_api():
     src = _src("cron_tasks.py")
     assert "_arch_day['date']" in src
     assert 'day_obj["date"] = target_date.date().isoformat()' in src
+
+
+def test_formula_de_la_fecha_archivada_es_aritmeticamente_correcta():
+    """El substring no basta: `shift_amount - _j - 1` pasaría los tests parser
+    igual, y desfecharía por un día TODO lo que el coach cite de días pasados.
+
+    Extrae la fórmula real del source de producción y la evalúa con valores
+    concretos. Contrato: tras el slice, days[0] es HOY, así que el ÚLTIMO día
+    archivado tiene que caer exactamente en AYER.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    hoy = _dt(2026, 7, 27, 15, 30)  # datetime, como en producción
+    shift_amount = 3
+    esperado = ["2026-07-24", "2026-07-25", "2026-07-26"]
+
+    for ruta, patron in (
+        ("routers/plans.py", r"_arch_day\['date'\] = \((.+?)\)\.date\(\)\.isoformat\(\)"),
+        ("cron_tasks.py", r"_arch_day\['date'\] = \((.+?)\)\.date\(\)\.isoformat\(\)"),
+    ):
+        src = _src(ruta)
+        m = re.search(patron, src)
+        assert m, "no encontré la fórmula de fecha archivada en %s" % ruta
+        formula = m.group(1)
+        # eval() aquí es seguro y necesario: `formula` no es input externo/de
+        # usuario, es una expresión aritmética extraída por regex del propio
+        # código de producción versionado en este repo (routers/plans.py /
+        # cron_tasks.py). El punto del test es precisamente ejecutar ESA
+        # expresión (no una reescrita a mano que podría divergir del source
+        # real) con valores concretos. `__builtins__` vacío + namespace
+        # cerrado a 4 nombres (today/timedelta/shift_amount/_j) bloquea
+        # cualquier llamada fuera de la aritmética esperada.
+        got = [
+            eval(formula, {"__builtins__": {}}, {
+                "today": hoy, "timedelta": _td, "shift_amount": shift_amount, "_j": j,
+            }).date().isoformat()
+            for j in range(shift_amount)
+        ]
+        assert got == esperado, "%s: la fórmula %r da %r, esperaba %r" % (ruta, formula, got, esperado)
+        assert got[-1] == "2026-07-26", "%s: el último archivado debe ser AYER" % ruta
