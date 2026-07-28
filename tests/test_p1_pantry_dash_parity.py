@@ -42,6 +42,11 @@ def test_scan_flow_is_single_source():
     for f in _FRONT.rglob("*.jsx"):
         if f.name == "PantryScanButton.jsx":
             continue
+        # [reapuntado 2026-07-28] Los TESTS frontend del propio componente
+        # (*.test.jsx) referencian el endpoint legítimamente — son anclas del
+        # flujo, no drift (disparó con PantryScanButton.p1_pantry_camera_scan.test.jsx).
+        if f.name.endswith(".test.jsx"):
+            continue
         if "/api/inventory/photo-scan" in f.read_text(encoding="utf-8"):
             offenders.append(f.name)
     assert not offenders, (

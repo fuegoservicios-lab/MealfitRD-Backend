@@ -24,7 +24,11 @@ _QPB_SRC = (_BACKEND.parent / "frontend" / "src" / "components" / "pantry"
 
 
 def test_schema_and_prompt_capture_brand():
-    assert '"brand": {"type": ["string", "null"]}' in _UD_SRC, "campo brand en el schema de visión"
+    # [reapuntado 2026-07-28 · P1-VISION-NO-LOCAL] El schema de visión migró del literal
+    # JSON artesanal a modelo Pydantic (_PantryScanItem) en la migración cloud del scan —
+    # la marca sigue capturándose, ahora como Field tipado con descripción.
+    assert "brand: Optional[str] = Field(" in _UD_SRC, "campo brand en el schema de visión (Pydantic)"
+    assert "Marca legible en el empaque" in _UD_SRC, "la descripción del Field ancla la semántica"
     assert "la marca NO" in _UD_SRC and "ponla en 'brand'" in _UD_SRC, (
         "el prompt debe separar nombre genérico (matchea catálogo) de marca (etiqueta)"
     )
