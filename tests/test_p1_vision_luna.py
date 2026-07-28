@@ -316,6 +316,112 @@ def test_telemetria_de_resize_se_loguea_a_info(monkeypatch, caplog):
 
 
 # ---------------------------------------------------------------------------
+# Bug real cazado en vivo contra la API de OpenAI (VPS, 2026-07-28):
+# `_dispatch_openai_compatible_vision` construía SIEMPRE `ChatDeepSeek`
+# (subclase de `ChatOpenAI` que inyecta `extra_body={"thinking": ...}`,
+# parámetro PROPIO de DeepSeek) -- con `MEALFIT_VISION_MODEL=gpt-5.6-luna`
+# el API real de OpenAI rechazaba el request con
+# `400 Unknown parameter: 'thinking'`. Fix: el cliente se elige por MODELO
+# (`is_openai_model`, mismo criterio que `llm_provider.build_chat_llm`).
+# ---------------------------------------------------------------------------
+
+def test_dispatch_por_modelo_no_hardcodea_chatdeepseek(monkeypatch):
+    """El path OpenAI-compatible debe elegir el cliente por MODELO, no
+    hardcodear uno. Si alguien revierte a `ChatDeepSeek` incondicional (el
+    bug real que causó el HTTP 400 'Unknown parameter: thinking' contra la
+    API de OpenAI), este test se pone rojo."""
+    import vision_agent as va
+
+    calls = []
+
+    class _FakeResponse:
+        description = "ok"
+        is_food = False
+        meal_name = ""
+        calories = 0
+        protein = 0
+        carbs = 0
+        healthy_fats = 0
+
+    class _FakeBoundLLM:
+        async def ainvoke(self, messages):
+            return _FakeResponse()
+
+    class _FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            calls.append(("ChatOpenAI", kwargs))
+
+        def with_structured_output(self, schema):
+            return _FakeBoundLLM()
+
+    class _FakeChatDeepSeek:
+        def __init__(self, **kwargs):
+            calls.append(("ChatDeepSeek", kwargs))
+
+        def with_structured_output(self, schema):
+            return _FakeBoundLLM()
+
+    monkeypatch.setattr(va, "ChatOpenAI", _FakeChatOpenAI)
+    monkeypatch.setattr(va, "ChatDeepSeek", _FakeChatDeepSeek)
+    monkeypatch.setenv("VISION_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("MEALFIT_VISION_BASE_URL", "https://api.openai.com/v1")
+
+    # Modelo OpenAI real (Luna) -> DEBE usar ChatOpenAI, NUNCA ChatDeepSeek.
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
+    asyncio.run(va._dispatch_openai_compatible_vision(b"fake-jpeg-bytes"))
+    assert [c[0] for c in calls] == ["ChatOpenAI"], (
+        f"gpt-5.6-luna debe despachar a ChatOpenAI, no a ChatDeepSeek: {calls}"
+    )
+
+    calls.clear()
+    # Modelo NO-OpenAI (DeepSeek u otro proveedor OpenAI-compatible) ->
+    # sigue siendo ChatDeepSeek (el wrapper correcto para esos providers).
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "deepseek-v4-flash")
+    asyncio.run(va._dispatch_openai_compatible_vision(b"fake-jpeg-bytes"))
+    assert [c[0] for c in calls] == ["ChatDeepSeek"], (
+        f"un modelo no-OpenAI debe seguir usando ChatDeepSeek: {calls}"
+    )
+
+
+def test_api_key_precedence_vision_key_gana_sobre_openai_key(monkeypatch):
+    """VISION_API_KEY (knob específico de visión) SIEMPRE gana sobre la key
+    genérica del proveedor; si no está seteada, cae a `_openai_api_key()`
+    (OPENAI_API_KEY) para modelos OpenAI."""
+    import vision_agent as va
+
+    calls = []
+
+    class _FakeBoundLLM:
+        async def ainvoke(self, messages):
+            class _R:
+                description = "ok"; is_food = False; meal_name = ""
+                calories = 0; protein = 0; carbs = 0; healthy_fats = 0
+            return _R()
+
+    class _FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+        def with_structured_output(self, schema):
+            return _FakeBoundLLM()
+
+    monkeypatch.setattr(va, "ChatOpenAI", _FakeChatOpenAI)
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
+    monkeypatch.setenv("MEALFIT_VISION_BASE_URL", "https://api.openai.com/v1")
+
+    # Con VISION_API_KEY seteada, debe ganar sobre OPENAI_API_KEY.
+    monkeypatch.setenv("VISION_API_KEY", "vision-specific-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "generic-openai-key")
+    asyncio.run(va._dispatch_openai_compatible_vision(b"fake"))
+    assert calls[-1]["api_key"] == "vision-specific-key"
+
+    # Sin VISION_API_KEY, cae a OPENAI_API_KEY (_openai_api_key()).
+    monkeypatch.delenv("VISION_API_KEY", raising=False)
+    asyncio.run(va._dispatch_openai_compatible_vision(b"fake"))
+    assert calls[-1]["api_key"] == "generic-openai-key"
+
+
+# ---------------------------------------------------------------------------
 # Task 3 [P1-VISION-LUNA · 2026-07-28]: sacar la visión del libro de cuota de
 # planes. El bug que se cierra: `diary.py` quemaba un crédito de plan
 # (`log_api_usage` → `api_usage`) por cada scan cuando el provider era CLOUD

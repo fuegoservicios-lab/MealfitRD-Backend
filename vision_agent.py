@@ -8,7 +8,12 @@ from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] /
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado. ChatDeepSeek acepta
 # base_url/api_key explícitos — el path vision lo reusa apuntando a CUALQUIER
 # provider OpenAI-compatible con soporte de imágenes.
-from llm_provider import ChatDeepSeek
+# [P1-VISION-LUNA · 2026-07-28] `is_openai_model`/`_openai_api_key`: mismo
+# criterio de despacho por MODELO que `llm_provider.build_chat_llm` — un
+# modelo `gpt-*` real necesita `ChatOpenAI` PLANO, no `ChatDeepSeek` (ver
+# comentario en `_dispatch_openai_compatible_vision`).
+from llm_provider import ChatDeepSeek, is_openai_model, _openai_api_key
+from langchain_openai import ChatOpenAI
 from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -495,18 +500,74 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
     (gpt-5.6-luna u otro configurado por knob). Nunca lanza: cualquier error
     degrada a un payload `analysis_failed=True`. Extraído para compartir el
     código entre el intento primario y el de la cascada sin duplicar el
-    branch."""
+    branch.
+
+    [P1-VISION-LUNA · 2026-07-28] BUG cazado en vivo contra la API real: con
+    `MEALFIT_VISION_MODEL=gpt-5.6-luna` este dispatch construía SIEMPRE
+    `ChatDeepSeek` (subclase de `ChatOpenAI` que inyecta `extra_body=
+    {"thinking": ...}` — parámetro PROPIO del API de DeepSeek). El API de
+    OpenAI real lo rechaza: `400 Unknown parameter: 'thinking'`. Fix: el
+    cliente se elige por MODELO (`is_openai_model`, mismo criterio que
+    `llm_provider.build_chat_llm`) — `gpt-*`/`o1`/`o3`/`o4`/`chatgpt` usan
+    `ChatOpenAI` PLANO (sin el mixin de DeepSeek); cualquier otro modelo
+    (DeepSeek, Qwen-VL, GLM-4V, moonshot, ...) sigue con `ChatDeepSeek`, que
+    sigue siendo el wrapper OpenAI-compatible correcto para esos providers.
+
+    NO se reutiliza `llm_provider.build_chat_llm` directamente: su branch
+    OpenAI hardcodea `api_key=_openai_api_key()` POSICIONAL — pasarle
+    `api_key=` propio por kwargs colisionaría (`TypeError: multiple values`)
+    y de todos modos pisaría la precedencia `VISION_API_KEY` que este
+    módulo documenta (cabecera del archivo, línea ~36). Por eso el `if
+    is_openai_model(...)` se replica acá con la resolución de key propia de
+    visión: `VISION_API_KEY` (knob específico de visión) SIEMPRE gana; si no
+    está seteada, cae a la key del proveedor (`_openai_api_key()` →
+    `OPENAI_API_KEY`, fail-loud si tampoco está esa — el `except` de abajo
+    lo convierte en el soft-fail estándar, no revienta el proceso).
+
+    `build_chat_llm` devuelve además clases BASE sin contabilidad de costo
+    (su propio docstring lo advierte, `P1-LUNA-USAGE-BLIND`) — irrelevante
+    acá: el gasto de un scan se emite aparte desde `routers/diary.py` vía
+    `log_llm_usage_event` (P1-VISION-LUNA quota task, ya committeado), NUNCA
+    desde el cliente LangChain mismo.
+    """
     try:
         # [P3-VISION-MODEL-KNOB · 2026-05-20] Modelo via knob (no hardcoded).
-        # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con base_url/key
-        # del provider de visión configurado.
-        llm = ChatDeepSeek(
-            model=_vision_model_name(),
-            temperature=0.1,
-            base_url=_vision_base_url(),
-            api_key=(os.environ.get("VISION_API_KEY") or "").strip() or None,
-            timeout=_vision_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
-        ).with_structured_output(ImageDescription)
+        model = _vision_model_name()
+        base_url = _vision_base_url()
+        timeout = _vision_llm_timeout_s()  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
+        # Precedencia de API key: VISION_API_KEY (knob de visión) primero.
+        explicit_key = (os.environ.get("VISION_API_KEY") or "").strip() or None
+
+        if is_openai_model(model):
+            # [P1-VISION-LUNA] ChatOpenAI PLANO — el fix del bug de arriba.
+            # ⚠️ Temperatura: `gpt-5.6-luna` (familia `gpt-5`, no-chat)
+            # rechaza `temperature` != 1 con HTTP 400 contra el API real.
+            # PERO `langchain-openai` 1.3 (`validate_temperature` en
+            # `chat_models/base.py`) DESCARTA `temperature` en silencio
+            # ANTES de construir el request para cualquier modelo `gpt-5*`
+            # no-chat — verificado leyendo el validator, no asumido. El
+            # `temperature=0.1` de abajo es entonces un NO-OP MUDO con Luna
+            # (la llamada corre con la temperatura default del modelo, NO
+            # determinista pese a lo que este kwarg sugiere) pero SÍ aplica
+            # para otros modelos OpenAI que sí la respetan (gpt-4o, etc.) —
+            # se deja puesto por eso, no por descuido.
+            llm = ChatOpenAI(
+                model=model,
+                temperature=0.1,
+                base_url=base_url,
+                api_key=explicit_key or _openai_api_key(),
+                timeout=timeout,
+            ).with_structured_output(ImageDescription)
+        else:
+            # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con
+            # base_url/key del provider de visión configurado.
+            llm = ChatDeepSeek(
+                model=model,
+                temperature=0.1,
+                base_url=base_url,
+                api_key=explicit_key,
+                timeout=timeout,
+            ).with_structured_output(ImageDescription)
 
         # Convertimos los bytes a base64 para enviarlo a la API de LangChain/Gemini
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
