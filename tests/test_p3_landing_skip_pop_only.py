@@ -49,6 +49,26 @@ def _strip_js_comments(src: str) -> str:
     return src
 
 
+
+def _bloque_landing_pop(src: str) -> str:
+    """[reapuntado 2026-07-28 · LANDING-REFRESH-STAY 06-18] El branch reload-stay metió un
+    `return children;` TEMPRANO dentro del bloque (F5 en la landing la conserva), así que
+    cualquier regex lazy que cierre en `return children;` trunca ANTES de
+    hasCompletedAssessment. Capturamos el if-block COMPLETO por conteo de llaves —
+    inmune a returns internos y a nuevas ramas."""
+    m = re.search(r"if\s*\(\s*isOnLanding[^)]+\)\s*\{", src)
+    assert m, "Bloque del redirect landing-POP no encontrado."
+    depth, i = 0, m.end() - 1
+    while i < len(src):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[m.start(): i + 1]
+        i += 1
+    raise AssertionError("if-block sin cierre — archivo corrupto o parser desfasado")
+
 def test_marker_present_as_tooltip_anchor():
     """[P3-LANDING-SKIP-POP-ONLY] Marker presente en source."""
     src = _read(_PROTECTED_ROUTE_JSX)
@@ -119,12 +139,7 @@ def test_redirect_gated_by_landing_and_assessment():
     que matcheamos el bloque landing-POP COMPLETO (hasta el `return children`
     final) en vez de cortar en el primer return de /dashboard."""
     src = _read(_PROTECTED_ROUTE_JSX)
-    if_match = re.search(
-        r"if\s*\(\s*isOnLanding[^)]+\)\s*\{[\s\S]*?return\s+children\s*;",
-        src,
-    )
-    assert if_match, "Bloque del redirect landing-POP no encontrado."
-    condition = if_match.group(0)
+    condition = _bloque_landing_pop(src)
     assert "isOnLanding" in condition
     assert "hasCompletedAssessment" in condition, (
         "Sin `hasCompletedAssessment`, users sin plan saltarian el wizard."
@@ -168,16 +183,15 @@ def test_assessment_redirect_still_precedes():
     src = _read(_PROTECTED_ROUTE_JSX)
     assessment_match = re.search(r"<Navigate\s+to=['\"]/assessment['\"]", src)
     # /dashboard dentro del bloque landing-POP (no el del guest mode al tope).
-    landing_block = re.search(
-        r"if\s*\(\s*isOnLanding[^)]+\)\s*\{[\s\S]*?return\s+children\s*;",
-        src,
-    )
-    assert landing_block, "Bloque landing-POP no encontrado."
+    # [reapuntado 2026-07-28] mismo truncamiento que arriba: el regex lazy moría en el
+    # `return children;` del branch reload-stay, dejando el /dashboard FUERA del bloque.
+    bloque = _bloque_landing_pop(src)
+    landing_start = src.index(bloque)
     dashboard_in_landing = re.search(
-        r"<Navigate\s+to=['\"]/dashboard['\"]", landing_block.group(0)
+        r"<Navigate\s+to=['\"]/dashboard['\"]", bloque
     )
     assert assessment_match and dashboard_in_landing
-    dashboard_abs_start = landing_block.start() + dashboard_in_landing.start()
+    dashboard_abs_start = landing_start + dashboard_in_landing.start()
     assert assessment_match.start() < dashboard_abs_start, (
         "Redirect a /assessment debe preceder al de /dashboard (landing-POP)."
     )

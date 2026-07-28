@@ -503,8 +503,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 w * (_tb_boost if any(t in _sa_tb(str(c).lower()) for t in _TRANSFORM_BASE_TOKENS) else 1.0)
                 for w, c in zip(carb_weights, available_carbs)
             ]
-        except Exception:
-            pass
+        except Exception as _exc:
+            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+            # pero sí dejar traza (antes: pass silencioso).
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] transform-base boost de carb_weights no aplicado (pesos sin ponderar): %s: %s",
+                type(_exc).__name__, str(_exc)[:160])
 
     # [P1-BUDGET-TIER-LEVERS · 2026-07-02] (audit v4 presupuesto) Ponderación ECONÓMICA del sorteo:
     # el tier del formulario era señal solo-prompt (advisory). Cuando el presupuesto pide economía

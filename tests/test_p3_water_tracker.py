@@ -261,10 +261,20 @@ def test_dashboard_mobile_renders_water_tracker_above_meals():
         "Hook `isMobileViewport` ausente — sin el, no hay forma de elegir "
         "donde renderizar WaterTracker."
     )
-    # matchMedia con el breakpoint canonico (768px) del resto del Dashboard.
-    assert "matchMedia('(max-width: 768px)')" in src, (
-        "Detector de mobile debe usar `matchMedia('(max-width: 768px)')` "
+    # [reapuntado 2026-07-28] El matchMedia crudo migró al hook SSOT `useMediaQuery`
+    # (SSR-safe, useSyncExternalStore sobre window.matchMedia). El contrato — breakpoint
+    # canónico 768px alineado con las media queries del Dashboard — vive en el callsite
+    # del hook; el matchMedia real se ancla en el archivo del hook.
+    assert "useMediaQuery('(max-width: 768px)')" in src, (
+        "Detector de mobile debe usar `useMediaQuery('(max-width: 768px)')` "
         "para alinearse con las media queries existentes del Dashboard."
+    )
+    _hook_src = (_DASHBOARD_JSX.parent.parent / "hooks" / "useMediaQuery.js").read_text(
+        encoding="utf-8"
+    )
+    assert "window.matchMedia(query)" in _hook_src, (
+        "useMediaQuery ya no envuelve window.matchMedia — el detector de viewport "
+        "cambió de mecanismo, re-anclar."
     )
     # Mobile render ANTES del .main-grid (orden textual = orden visual).
     mobile_marker = "isMobileViewport && <WaterTracker"

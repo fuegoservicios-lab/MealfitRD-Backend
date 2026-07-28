@@ -77,7 +77,9 @@ def test_plan_jsx_skips_sse_when_generating():
     `return` antes del SSE (no continuar al stream)."""
     idx = _PLAN.find("P3-PLAN-RECOVERY-LOADING")
     assert idx > 0
-    block = _PLAN[idx:idx + 3000]
+    # [reapuntado 2026-07-28] 3000 -> 4500: el comentario de P1-GUEST-PLAN-RECOVERY
+    # (07-09) empujo el `return;` fuera de la ventana original.
+    block = _PLAN[idx:idx + 4500]
     # El branch generating debe:
     # 1. setStatus('generating')
     # 2. return (early exit)
@@ -130,9 +132,14 @@ def test_recovery_navigate_does_not_set_handled():
     """CRÍTICO: el navigate a /plan NO debe marcar `handledRef.current = true`.
     Si lo hace, el polling se detiene y nunca detectamos `complete` →
     el user se queda en loading screen para siempre."""
-    idx = _RECOVERY.find("status.status === 'generating'")
-    end = _RECOVERY.find("} else if (status.status === 'failed')", idx)
-    block = _RECOVERY[idx:end if end > 0 else idx + 3000]
+    # [reapuntado 2026-07-28] El branch 'failed' ahora va ANTES del 'generating' del
+    # polling, y existe un segundo branch generating en el BOOT-check (linea ~143) cuyo
+    # sibling 'complete' setea handledRef legitimamente. Anclamos el branch del POLLING
+    # exacto (`} else if (...)`) y ventana hacia adelante -- ahi es donde un
+    # handledRef=true congelaria el loading para siempre.
+    idx = _RECOVERY.find("} else if (status.status === 'generating')")
+    assert idx > 0, "Branch generating del polling no encontrado - re-anclar."
+    block = _RECOVERY[idx:idx + 2500]
     # En el branch generating, NO debe haber handledRef.current = true:
     assert "handledRef.current = true" not in block, (
         "El branch generating NO debe setear `handledRef.current = true` — "

@@ -123,26 +123,33 @@ _FRONTEND_SOURCES = {
 }
 
 
-@pytest.mark.parametrize("label", list(_FRONTEND_SOURCES.keys()))
+# [reapuntado 2026-07-28] El contrato de retry es de los callsites INTERACTIVOS (click del
+# user → feedback inmediato): Dashboard (cambio de household, attemptRecalc ~5320) y Pantry
+# (restock, attemptRecalc ~1252). Los callsites que NACIERON después SIN retry son
+# background/one-shot A PROPÓSITO — reintentar un endpoint serializado de 15-40s desde
+# flujos de fondo apila trabajo:
+#   - Dashboard auto-refresh on-mount (once por plan_id, withRecalcLock, best-effort);
+#   - Dashboard brand-apply reconcile (UI ya optimista);
+#   - AssessmentContext heal-effect (once por plan_id; el próximo mount re-intenta solo);
+#   - AssessmentContext `_recalcOnce` / `_swapRecalcOnce` (el sufijo declara la intención).
+# Por eso AssessmentContext salió de la parametrización, y el ancla es la DEFINICIÓN del
+# helper (el primer callsite del archivo puede ser un background legítimo sin retry).
+@pytest.mark.parametrize("label", ["Dashboard.jsx", "Pantry.jsx"])
 def test_frontend_caller_has_retry_pattern(label):
-    """Cada caller debe tener: (a) helper `attemptRecalc`, (b) check de
+    """Los callers interactivos deben tener: (a) helper `attemptRecalc`, (b) check de
     `res.status >= 500`, (c) `setTimeout(500)` para el backoff, (d) marker
     P3-RECALC-503-CLASSIFICATION en el archivo (no por callsite — basta
     con que el archivo declare la convención una vez)."""
     source = _FRONTEND_SOURCES[label]
-    # Localizar la llamada REAL al endpoint (no la primera mencion textual,
-    # que puede estar en un comentario). El callsite real usa
-    # `fetchWithAuth(...recalculate-shopping-list...`.
-    pat = re.compile(r"fetchWithAuth\([^)]*recalculate-shopping-list", re.DOTALL)
-    m = pat.search(source)
+    m = re.search(r"attemptRecalc = async", source)
     assert m, (
-        f"{label} no contiene call real `fetchWithAuth(...recalculate-shopping-list)`."
+        f"{label} ya no define el helper `attemptRecalc` — el retry interactivo se perdió."
     )
     idx = m.start()
-    # Slice generoso (~4000 chars) alrededor del callsite real
-    start = max(0, idx - 1500)
-    end = min(len(source), idx + 3000)
-    block = source[start:end]
+    block = source[max(0, idx - 200): min(len(source), idx + 2500)]
+    assert re.search(r"fetchWithAuth\([^)]*recalculate-shopping-list", block, re.DOTALL), (
+        f"{label}: el helper attemptRecalc ya no llama al endpoint de recalc — re-anclar."
+    )
 
     assert "attemptRecalc" in block, (
         f"{label}: helper `attemptRecalc` no detectado cerca del callsite "

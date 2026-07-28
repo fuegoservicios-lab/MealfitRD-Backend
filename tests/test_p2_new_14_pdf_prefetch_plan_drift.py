@@ -126,12 +126,19 @@ def test_compares_plan_modified_at(src: str):
     # sincroniza desde DB → cero riesgo de lista stale. Verificamos que ese
     # always-sync sigue vivo (no que reaparezca la comparación con falsos
     # negativos).
-    assert re.search(r"if\s*\(\s*true\s*\)", block), (
-        "P2-NEW-14/P3-PDF-ALWAYS-SYNC regresión: el sync incondicional "
-        "`if (true)` desapareció del prefetch. Si volviste a gatear el sync "
-        "por comparación de timestamps (`latestModified !== localModified`), "
-        "reintrodujiste el falso-negativo que P3-PDF-ALWAYS-SYNC cerró "
-        "(PDF con lista stale cuando el marker no se bumpeó)."
+    # [reapuntado 2026-07-28] El literal `if (true)` fue reemplazado por
+    # `if (latestRow?.plan_data)` — guard de DISPONIBILIDAD del fetch, no gate de
+    # drift. El contrato real de P3-PDF-ALWAYS-SYNC es la AUSENCIA de un gate por
+    # comparación de timestamps: eso es lo que se asserta ahora (el falso-negativo
+    # era `latestModified !== localModified` como condición del sync).
+    assert re.search(r"if\s*\(\s*latestRow\?\.plan_data\s*\)", block), (
+        "P2-NEW-14/P3-PDF-ALWAYS-SYNC: el guard `if (latestRow?.plan_data)` del sync "
+        "desapareció — re-anclar al nuevo shape del prefetch."
+    )
+    assert not re.search(r"if\s*\([^)]*latestModified\s*!==\s*localModified", block), (
+        "P2-NEW-14/P3-PDF-ALWAYS-SYNC regresión: el sync volvió a gatearse por "
+        "comparación de timestamps (`latestModified !== localModified`) — ese gate "
+        "tenía falsos negativos (PDF con lista stale cuando el marker no se bumpeó)."
     )
     assert "P3-PDF-ALWAYS-SYNC" in block, (
         "P2-NEW-14 regresión: el rationale `P3-PDF-ALWAYS-SYNC` (por qué se "
@@ -163,11 +170,17 @@ def test_syncs_localStorage_and_state(src: str):
 
 def test_effective_plan_data_used_downstream(src: str):
     body = _extract_handler_block(src)
-    # `rawSourceIngredients` debe leer de `effectivePlanData`, no de planData.
-    assert "getActiveShoppingList(effectivePlanData" in body, (
-        "P2-NEW-14 regresión: `rawSourceIngredients` ya no usa "
+    # La lista del PDF debe leer de `effectivePlanData`, no de planData.
+    # [reapuntado 2026-07-28] `getActiveShoppingList(...)` → `getDeltaSourceList(...)`
+    # (consumidor delta-aware); el contrato es el MISMO: consumir la versión fresh.
+    assert "getDeltaSourceList(effectivePlanData" in body, (
+        "P2-NEW-14 regresión: la lista del PDF ya no usa "
         "`effectivePlanData`. Si revertiste a `planData`, el prefetch "
         "fue para nada — el PDF sigue construido sobre stale state."
+    )
+    assert "getDeltaSourceList(planData" not in body, (
+        "P2-NEW-14 regresión: hay un callsite del PDF leyendo `planData` stale "
+        "directo en vez de `effectivePlanData`."
     )
 
 

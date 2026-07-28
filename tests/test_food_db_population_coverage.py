@@ -36,12 +36,13 @@ EXPECTED_FDC_PINS = {
 
 
 # ─────────────────────────── OFFLINE: curación ───────────────────────────
-def test_mapping_covers_113_ingredients():
-    # 105 USDA_QUERY + 8 MANUAL_MACROS = 113. Incluye los +3 de P2-DATA-CATALOG
-    # (Yema de huevo, Leche descremada, Yogurt griego entero) sobre los 110 previos
-    # (que ya cubrían los +5 de P1-RESOLVER-COVERAGE: Manzana/Pepino/Granola/Maní/Clara de huevo).
+def test_mapping_covers_112_ingredients():
+    # 104 USDA_QUERY + 8 MANUAL_MACROS = 112. Historia del número: 110 base + 3 de
+    # P2-DATA-CATALOG (Yema de huevo, Leche descremada, Yogurt griego entero) = 113;
+    # luego 2a45dbf ELIMINÓ "Galletas de arroz" (no se vende en La Sirena) → 112.
+    # Si cambias el catálogo del script, actualiza el número CON su porqué aquí.
     base = set(M.USDA_QUERY) | set(M.MANUAL_MACROS)
-    assert len(base) == 113, f"Se esperaban 113 ingredientes mapeados, hay {len(base)}"
+    assert len(base) == 112, f"Se esperaban 112 ingredientes mapeados, hay {len(base)}"
 
 
 def test_usda_and_manual_disjoint():
@@ -104,11 +105,33 @@ def test_db_coverage_and_atwater_consistency():
         cur.execute("""SELECT name, kcal_per_100g, protein_g_per_100g,
                               carbs_g_per_100g, fats_g_per_100g
                        FROM master_ingredients WHERE kcal_per_100g IS NOT NULL""")
-        bad = []
+        # [reapuntado 2026-07-28] El ±2 kcal era válido cuando TODA la tabla venía de
+        # populate_nutrition_db.py (kcal COMPUTADA desde Atwater ⇒ auto-consistente).
+        # La expansión del catálogo (+200 alimentos, 2026-07-26) puebla kcal REAL de
+        # etiqueta/USDA, donde 4P+4C+9C legítimamente diverge (carbs corregidos por
+        # fibra, factores específicos: cacao 228 vs 433 Atwater es CORRECTO). Contrato
+        # nuevo: estricto ±2 SOLO para filas sembradas por el script; para el resto,
+        # banda de sanidad ratio [0.40, 1.40] que caza typos gordos (kcal invertida,
+        # factor 10x, macros de otro alimento) sin declarar mentirosa la data real.
+        script_names = set(M.USDA_QUERY) | set(M.MANUAL_MACROS)
+        # Filas del script RE-CURADAS después con kcal de etiqueta (ya no Atwater-
+        # computadas): chía 464.29 = 130 kcal/28g exacto (label serving), tortilla
+        # integral 228.07 (fibra-corregida). Van a la banda de sanidad como el resto
+        # de la data real.
+        script_names -= {"Semillas de chía", "Tortilla integral"}
+        bad_strict, bad_sanity = [], []
         for name, k, p, c, f in cur.fetchall():
             atwater = 4 * float(p) + 4 * float(c) + 9 * float(f)
-            if abs(float(k) - atwater) > 2.0:  # tolerancia de redondeo
-                bad.append((name, float(k), round(atwater, 1)))
-        assert not bad, f"kcal NO auto-consistente con 4P+4C+9F: {bad}"
+            if name in script_names:
+                if abs(float(k) - atwater) > 2.0:  # tolerancia de redondeo
+                    bad_strict.append((name, float(k), round(atwater, 1)))
+            elif atwater > 0 and not (0.40 <= float(k) / atwater <= 1.40):
+                bad_sanity.append((name, float(k), round(atwater, 1)))
+        assert not bad_strict, (
+            f"kcal sembrada por el script NO auto-consistente con 4P+4C+9F: {bad_strict}"
+        )
+        assert not bad_sanity, (
+            f"kcal fuera de banda de sanidad [0.40, 1.40]×Atwater (typo probable): {bad_sanity}"
+        )
     finally:
         conn.close()

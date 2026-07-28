@@ -35,9 +35,14 @@ def test_start_time_uses_useref_for_stable_anchor():
     )
     assert loading_block, "LoadingScreen component no encontrado."
     body = loading_block.group(0)
-    assert "startTimeRef = useRef(Date.now())" in body, (
-        "startTimeRef debe usar `useRef(Date.now())` — useState reiniciaría "
-        "el anchor en cada re-render por cambios de props."
+    # [reapuntado 2026-07-28] useRef(Date.now()) → useState lazy-init (P2-LINT-ZERO
+    # 07-09: el IIFE inline releía localStorage en cada tick) + continuidad
+    # cross-reentrada (P2-LOADING-ETA-57: arranca del started_at REAL del flag).
+    # El CONTRATO es el mismo: anchor estable que los re-renders no reinician —
+    # el initializer lazy de useState corre exactamente una vez.
+    assert "const [startTime] = useState(" in body, (
+        "el anchor del contador debe ser `const [startTime] = useState(<lazy>)` — "
+        "sin lazy-init estable, cada re-render reiniciaría el contador."
     )
 
 
@@ -90,11 +95,13 @@ def test_adaptive_copy_four_phases():
 
     Verificamos los 4 strings literales esperados."""
     src = _PLAN_JSX.read_text(encoding="utf-8")
+    # [reapuntado 2026-07-28] Rango vivo = 9-10 min (el owner lo subió 07-09; los
+    # umbrales y la continuidad completa se anclan en test_p2_loading_eta_57).
     expected_phrases = [
-        "Esto suele tomar entre 4 y 5 minutos",                   # <30s
-        "estimado 4-5 minutos",                                   # 30s-6min
-        "ya casi terminamos, espera un poco más",                # 6-10min
-        "gracias por tu paciencia",                              # >10min
+        "Esto suele tomar entre 9 y 10 minutos",                  # <30s
+        "estimado 9-10 minutos",                                  # 30s-10min
+        "ya casi terminamos, espera un poco más",                # 10-13min
+        "gracias por tu paciencia",                              # >13min
     ]
     for phrase in expected_phrases:
         assert phrase in src, (

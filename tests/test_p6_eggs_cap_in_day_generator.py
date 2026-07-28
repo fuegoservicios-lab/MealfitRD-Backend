@@ -66,9 +66,16 @@ def test_eggs_cap_explains_reviewer_rejection_reason():
     assert "revisor médico" in DAY_GENERATOR_SYSTEM_PROMPT.lower()
     # Específicamente sobre huevos: la palabra "carga excesiva" o "colesterol"
     eggs_section_lower = DAY_GENERATOR_SYSTEM_PROMPT.lower()
-    eggs_idx = eggs_section_lower.find("huevos — cap")
+    # [reapuntado 2026-07-28] La sección evolucionó a "Huevos — DOBLE CAP (cantidad y nº
+    # de comidas) [P3-EGG-MEAL-ROTATION]". El fallback a la PRIMERA mención de "huevos"
+    # caía en la regla de piezas indivisibles ("2 huevos", nunca "2.5") — ventana sin el
+    # contexto de rechazo, aunque el porqué SIGUE vivo dentro del doble cap.
+    eggs_idx = eggs_section_lower.find("huevos — doble cap")
     if eggs_idx == -1:
-        eggs_idx = eggs_section_lower.find("huevos")
+        eggs_idx = eggs_section_lower.find("huevos — cap")
+    assert eggs_idx != -1, (
+        "Sección del cap de huevos no encontrada (ni 'doble cap' ni 'cap') — re-anclar."
+    )
     # Buscar dentro de los siguientes 500 chars
     section = DAY_GENERATOR_SYSTEM_PROMPT[eggs_idx:eggs_idx + 600].lower()
     has_rejection_context = (

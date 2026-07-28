@@ -81,8 +81,13 @@ def test_fs9_pro_review_flag_en_assemble():
     assert "requires_professional_review" in src
     assert "_has_real_medical_flags" in src
     assert "PRO_REVIEW_FLAG_ENABLED" in src
-    assert "_apply_deterministic_clinical_layer(" in _func_src("assemble_plan_node"), \
-        "assemble debe delegar la capa clínica al SSOT (Fase B)"
+    # [reapuntado 2026-07-28] La delegación ganó un salto: assemble → _apply_macro_engine
+    # → _apply_deterministic_clinical_layer (assemble y fallback consumen la MISMA función;
+    # el marker `_clinical_layer_applied` la deja idempotente cross-path). Anclamos la CADENA.
+    assert "_apply_macro_engine(" in _func_src("assemble_plan_node"), \
+        "assemble debe delegar en _apply_macro_engine (Fase B, salto 1)"
+    assert "_apply_deterministic_clinical_layer(" in _func_src("_apply_macro_engine"), \
+        "_apply_macro_engine debe invocar la capa clínica SSOT (Fase B, salto 2)"
 
 
 def test_fs7_variety_hard_gate_en_review():
@@ -99,5 +104,10 @@ def test_fs8_supplement_wiring_en_assemble():
     src = _func_src("_apply_deterministic_clinical_layer")
     assert "build_supplement_recommendations" in src
     assert "micronutrient_supplement_advice" in src
-    assert "_apply_deterministic_clinical_layer(" in _func_src("assemble_plan_node"), \
-        "assemble debe delegar la capa clínica al SSOT (Fase B)"
+    # [reapuntado 2026-07-28] La delegación ganó un salto: assemble → _apply_macro_engine
+    # → _apply_deterministic_clinical_layer (assemble y fallback consumen la MISMA función;
+    # el marker `_clinical_layer_applied` la deja idempotente cross-path). Anclamos la CADENA.
+    assert "_apply_macro_engine(" in _func_src("assemble_plan_node"), \
+        "assemble debe delegar en _apply_macro_engine (Fase B, salto 1)"
+    assert "_apply_deterministic_clinical_layer(" in _func_src("_apply_macro_engine"), \
+        "_apply_macro_engine debe invocar la capa clínica SSOT (Fase B, salto 2)"

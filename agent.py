@@ -1066,8 +1066,12 @@ def swap_meal(form_data: dict):
                 context_extras += ("\n    - 🧪 DENSIDAD DE MICROS (preferencia suave, sin salir de la Nevera): "
                                    "entre los ingredientes disponibles, prioriza los más ricos en magnesio, hierro, "
                                    "calcio y fibra (hojas verdes, leguminosas, semillas, vegetales de color).")
-        except Exception:
-            pass
+        except Exception as _exc:
+            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+            # pero sí dejar traza (antes: pass silencioso).
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] guía nutricional extra no anexada al prompt: %s: %s",
+                type(_exc).__name__, str(_exc)[:160])
 
     # [P2-VERIFIED-ONLY-UPDATE · 2026-06-29] (audit objetivo · P2-6) Paridad de catálogo con S1: cuando el usuario
     # va de compras (no pantry-strict), el LLM del swap podía inventar un alimento/especia fuera del catálogo
@@ -1617,12 +1621,20 @@ def swap_meal(form_data: dict):
                     if _rs_solver(_rs_meal, _rs_target, _tu_db_holder[0]):
                         try:
                             _rs_truthup(_rs_meal, _tu_db_holder[0])
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+                            # pero sí dejar traza (antes: pass silencioso).
+                            logger.debug(
+                                "[P2-SILENT-DEGRADATION] truth-up post-reshuffle no aplicado (nombre puede exagerar): %s: %s",
+                                type(_exc).__name__, str(_exc)[:160])
                         try:
                             _rs_stepsync(_rs_meal)
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+                            # pero sí dejar traza (antes: pass silencioso).
+                            logger.debug(
+                                "[P2-SILENT-DEGRADATION] step-sync post-reshuffle no aplicado (pasos pueden desalinear): %s: %s",
+                                type(_exc).__name__, str(_exc)[:160])
                         for _rk in ("ingredients", "ingredients_raw", "recipe",
                                     "protein", "carbs", "fats", "cals", "macros"):
                             if _rk in _rs_meal and _rs_meal[_rk] is not None:
@@ -1683,8 +1695,12 @@ def swap_meal(form_data: dict):
                     if _g_pc > 0:
                         try:
                             _pc_stepsync(_pc_meal)
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+                            # pero sí dejar traza (antes: pass silencioso).
+                            logger.debug(
+                                "[P2-SILENT-DEGRADATION] step-sync post-cheapen no aplicado (pasos pueden desalinear): %s: %s",
+                                type(_exc).__name__, str(_exc)[:160])
                         for _pk in ("ingredients", "ingredients_raw", "recipe", "name",
                                     "protein", "carbs", "fats", "cals", "macros"):
                             if _pk in _pc_meal and _pc_meal[_pk] is not None:
@@ -1730,12 +1746,20 @@ def swap_meal(form_data: dict):
                     if _ft_trim([_ft_meal], _ft_target, _tu_db_holder[0]):
                         try:
                             _ft_truthup(_ft_meal, _tu_db_holder[0])
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+                            # pero sí dejar traza (antes: pass silencioso).
+                            logger.debug(
+                                "[P2-SILENT-DEGRADATION] truth-up post-fit no aplicado (nombre puede exagerar): %s: %s",
+                                type(_exc).__name__, str(_exc)[:160])
                         try:
                             _ft_stepsync(_ft_meal)
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+                            # pero sí dejar traza (antes: pass silencioso).
+                            logger.debug(
+                                "[P2-SILENT-DEGRADATION] step-sync post-fit no aplicado (pasos pueden desalinear): %s: %s",
+                                type(_exc).__name__, str(_exc)[:160])
                         for _fk in ("ingredients", "ingredients_raw", "recipe",
                                     "protein", "carbs", "fats", "cals", "macros"):
                             if _fk in _ft_meal and _ft_meal[_fk] is not None:
@@ -3101,8 +3125,12 @@ def execute_tools(state: ChatState):
                                     coherence_warnings.append(
                                         "Para lograr el cambio se usaron 1-2 ingredientes fuera de tu Nevera — se suman a tu lista de compras."
                                     )
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                # [P2-SILENT-DEGRADATION] best-effort: la falla no debe romper el flujo,
+                                # pero sí dejar traza (antes: pass silencioso).
+                                logger.debug(
+                                    "[P2-SILENT-DEGRADATION] nota de ingredientes fuera de nevera no anexada al mensaje: %s: %s",
+                                    type(_exc).__name__, str(_exc)[:160])
                     try:
                         parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
                         if isinstance(parsed_mod, dict) and "modified_meal" in parsed_mod:
