@@ -3779,6 +3779,163 @@ def _macro_totals_line(consumed_today: list, current_plan) -> str:
         return ""
 
 
+def _resolve_today_plan_day_index(current_plan, local_date_str: Optional[str] = None) -> Optional[int]:
+    """[P1-TODAY-REMAINING · 2026-07-28] HOY → índice del día del plan (por
+    `day_name`, es-DO), fail-open a `None`. Mismo mapeo que usa
+    `_build_plan_today_context` para el header '📅 HOY es...' — extraído a su
+    propia función para que `_build_today_remaining_context` (comidas
+    restantes de hoy) NO reimplemente el weekday-match. `None` cuando no hay
+    match (plan roto, o `days` con `day_name` que no cubre la semana)."""
+    try:
+        if not isinstance(current_plan, dict):
+            return None
+        days = current_plan.get("days") or []
+        if not days:
+            return None
+        if local_date_str:
+            today = datetime.strptime(str(local_date_str)[:10], "%Y-%m-%d").date()
+        else:
+            # Convención del repo: fecha local RD = UTC-4 explícito.
+            today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+        wd = _WEEKDAYS_ES[today.weekday()]
+        for i, d in enumerate(days):
+            if isinstance(d, dict) and str(d.get("day_name") or "").strip().lower() == wd:
+                return i
+        return None
+    except Exception:
+        return None
+
+
+def _build_today_remaining_context(current_plan, consumed_today: list, target_cal_int: int,
+                                    total_consumed: float, local_date_str: Optional[str] = None) -> str:
+    """[P1-TODAY-REMAINING · 2026-07-28] SSOT compartida entre el path stream
+    (~:4462) y el non-stream (~:4090) para el bloque `DIARIO DE HOY` — antes
+    los dos if/elif de tiers vivían duplicados y podían divergir por edición
+    de uno solo (ya pasó: el texto de la ALERTA CRÍTICA difería palabra por
+    palabra entre paths).
+
+    Cierra dos gaps sobre el caso real del owner ("comí el desayuno y luego
+    renové el plan — el desayuno de ayer no debería reaparecer"):
+
+    (a) TIER FACTUAL nuevo, sin alarma, ARRIBA del gate de 35%. Un desayuno
+        normal ronda 20-25% del presupuesto del día → `remaining` cae en
+        ~75-80% del target → el gate viejo (`remaining < 0.35*target`) se
+        queda MUDO justo en el caso más común. El tier nuevo cubre todo el
+        rango [0.35*target, target) con una frase factual ("cuánto queda"),
+        sin emoji de alarma ni urgencia — el 🚨 se reserva para cuando el
+        margen es genuinamente ajustado (tiers existentes, sin cambios de
+        umbral ni de intención, solo de dónde vive el código).
+
+    (b) CUÁNTAS COMIDAS DEL PLAN quedan hoy, por nombre. El prompt ya tenía
+        el plan completo (JSON) Y el diario de hoy por separado, pero nunca
+        la resta explícita — el modelo tenía que inferirla sin ayuda.
+
+    REGLA DE MATCH (misma que el frontend, `Dashboard.jsx`): un slot del plan
+    de HOY cuenta como "ya comido" cuando una fila del diario de HOY trae un
+    `meal_type` que canonicaliza (`canonical_slot_key`, constants.py) a la
+    MISMA key que el slot (`meal`) del plan.
+
+    REGLA DE AMBIGÜEDAD: si ≥2 slots del plan de HOY canonicalizan a la MISMA
+    key (planes de 5-6 comidas con 2-3 meriendas) y el diario solo trae UNA
+    fila de esa key, NO hay forma de saber CUÁL merienda fue — marcar la
+    incorrecta es peor que no marcar ninguna. En ese caso NINGÚN meal de esa
+    key se remueve de "restantes" (las kcal ya están reflejadas en
+    `total_consumed`, que es la suma cruda del diario — la ambigüedad solo
+    afecta la ATRIBUCIÓN por nombre, nunca el conteo de kcal).
+
+    Todo kcal en este bloque es un ESTIMADO (buena parte del diario viene de
+    una foto analizada por un modelo de visión) — el copy lo frasea así,
+    nunca como medición exacta. Fail-open a "" ante cualquier shape rara.
+    tooltip-anchor: P1-TODAY-REMAINING
+    """
+    try:
+        out = ""
+        remaining = target_cal_int - total_consumed
+
+        # --- (a) tier de calorías restantes ---
+        if remaining <= 0:
+            out += (
+                f"\n🚨 ALERTA CRÍTICA (MEJORA 6): El usuario ha superado su presupuesto "
+                f"calórico de hoy. Tiene un exceso estimado de {abs(round(remaining))} kcal. "
+                f"Indícale esto con empatía de coach y dale recomendaciones proactivas sobre "
+                f"cómo equilibrarse en la cena o mañana."
+            )
+        elif remaining < (target_cal_int * 0.35):
+            out += (
+                f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario le quedan solo "
+                f"~{round(remaining)} kcal estimadas para el resto del día. TIENES LA "
+                f"OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con "
+                f"amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' "
+                f"para recalcular y reducir las porciones de sus próximas comidas de hoy "
+                f"para mantener su déficit."
+            )
+        else:
+            # [P1-TODAY-REMAINING] Tier factual — sin alarma, sin 🚨. Cubre el
+            # caso "ya desayunó" (~20-25% del día) que el gate de 35% dejaba
+            # en silencio absoluto — exactamente el caso descrito por el owner.
+            out += (
+                f"\n📊 ESTADO DEL DÍA: El usuario lleva un estimado de {round(total_consumed)} "
+                f"kcal de sus {target_cal_int} kcal del día — le quedan aproximadamente "
+                f"{round(remaining)} kcal estimadas para el resto del día. No es una alerta, "
+                f"solo el estado actual: tenlo presente si sugieres porciones o comidas nuevas."
+            )
+
+        # --- (b) comidas del plan que quedan hoy ---
+        try:
+            from constants import canonical_slot_key as _canon_slot
+            day_idx = _resolve_today_plan_day_index(current_plan, local_date_str=local_date_str)
+            days = current_plan.get("days") if isinstance(current_plan, dict) else None
+            day = days[day_idx] if (day_idx is not None and isinstance(days, list) and 0 <= day_idx < len(days)) else None
+            day_meals = day.get("meals") if isinstance(day, dict) else None
+            if isinstance(day_meals, list) and day_meals:
+                # Slots ya comidos hoy, canonicalizados. Set (no lista): loguear
+                # la misma merienda 2 veces sigue siendo UN solo match de key.
+                eaten_keys = set()
+                for row in (consumed_today or []):
+                    if not isinstance(row, dict):
+                        continue
+                    k = _canon_slot(row.get("meal_type"))
+                    if k:
+                        eaten_keys.add(k)
+
+                # Agrupa los índices de los slots del plan de HOY por key canónica.
+                groups: dict = {}
+                for i, m in enumerate(day_meals):
+                    k = _canon_slot(m.get("meal")) if isinstance(m, dict) else None
+                    groups.setdefault(k, []).append(i)
+
+                eaten_indices = set()
+                for k in eaten_keys:
+                    idxs = groups.get(k) or []
+                    if len(idxs) == 1:
+                        # Match inequívoco: exactamente un slot de hoy tiene esta key.
+                        eaten_indices.add(idxs[0])
+                    # len==0 (comida no planificada, ej. snack extra) o len>1
+                    # (AMBIGUO — 2+ meriendas hoy) → no se marca nada. Ver
+                    # docstring "REGLA DE AMBIGÜEDAD".
+
+                remaining_meals = [
+                    m for i, m in enumerate(day_meals)
+                    if i not in eaten_indices and isinstance(m, dict) and m.get("meal")
+                ]
+                if remaining_meals:
+                    names = ", ".join(str(m.get("meal")) for m in remaining_meals)
+                    kcal_left = round(remaining) if remaining > 0 else 0
+                    out += (
+                        f"\n📋 Hoy te quedan {len(remaining_meals)} comida(s) del plan "
+                        f"({names}) y ~{kcal_left} kcal estimadas."
+                    )
+                elif eaten_indices:
+                    out += "\n📋 Hoy ya no te quedan más comidas del plan por registrar."
+        except Exception as e:
+            logger.warning(f"[P1-TODAY-REMAINING] no se pudo calcular comidas restantes de hoy: {e}")
+
+        return out
+    except Exception as e:
+        logger.warning(f"[P1-TODAY-REMAINING] fail-open: {e}")
+        return ""
+
+
 def _build_pantry_context(user_id: Optional[str]) -> str:
     """[P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot REAL de `user_inventory`
     al system prompt (bloque VOLÁTIL → va al final, no rompe el prefix-cache
@@ -4105,12 +4262,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     try:
                         target_cal_int = int(target_calories)
                         system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
-
-                        remaining = target_cal_int - total_consumed
-                        if remaining < (target_cal_int * 0.35) and remaining > 0:
-                            system_prompt += f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario solo le quedan {remaining} kcal para el resto del día. TIENES LA OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' para recalcular y reducir las porciones de sus próximas comidas de hoy para mantener su déficit."
-                        elif remaining <= 0:
-                            system_prompt += f"\n🚨 ALERTA CRÍTICA (MEJORA 6): El usuario ha superado su presupuesto calórico de hoy. Tiene un exceso de {abs(remaining)} kcal. Indícale esto con empatía y dale recomendaciones proactivas sobre cómo equilibrarse."
+                        # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
+                        # comidas del plan restantes hoy — SSOT compartida con el
+                        # path stream (`_build_today_remaining_context`).
+                        system_prompt += _build_today_remaining_context(
+                            current_plan, consumed_today, target_cal_int, total_consumed,
+                            local_date_str=None,
+                        )
                     except ValueError:
                         pass
             else:
@@ -4486,12 +4644,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                     try:
                         target_cal_int = int(target_calories)
                         system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
-                        
-                        remaining = target_cal_int - total_consumed
-                        if remaining < (target_cal_int * 0.35) and remaining > 0:
-                            system_prompt += f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario solo le quedan {remaining} kcal para el resto del día. TIENES LA OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' para recalcular y reducir las porciones de sus próximas comidas de hoy para mantener su déficit."
-                        elif remaining <= 0:
-                            system_prompt += f"\n🚨 ALERTA CRÍTICA (MEJORA 6): El usuario ha superado su presupuesto calórico de hoy. Tiene un exceso de {abs(remaining)} kcal. Indícale esto con empatía de coach y dale recomendaciones proactivas sobre cómo equilibrarse en la cena o mañana."
+                        # [P1-TODAY-REMAINING · 2026-07-28] Tier factual/alertas +
+                        # comidas del plan restantes hoy — SSOT compartida con el
+                        # path non-stream (`_build_today_remaining_context`).
+                        system_prompt += _build_today_remaining_context(
+                            current_plan, consumed_today, target_cal_int, total_consumed,
+                            local_date_str=local_date,
+                        )
                     except ValueError:
                         pass
             else:
