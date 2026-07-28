@@ -32430,11 +32430,28 @@ def trigger_incremental_learning(user_id: str):
 
 # ─── P0-2: ROLLING REFILL EN BACKGROUND (usuarios que no abren la app) ───────
 
-def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
+def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
     """
     Replica la lógica de api_shift_plan() sin autenticación HTTP.
     Llamada por el cron P0-2 para usuarios inactivos.
     Retorna True si se encolaron chunks nuevos.
+
+    [P1-CHAT-PAST-DAYS · 2026-07-28] `tz_offset` default 240 (RD = UTC-4,
+    convención del repo), NO 0. Pre-fix el único caller de producción
+    (`trigger_background_rolling_refill`) no pasaba nada, así que `today` salía
+    de un reloj UTC: el job corre cada 4 h, de modo que ~1 tick al día cae entre
+    las 00:00 y las 04:00 UTC = 20:00–23:59 RD y calcula `days_since_creation`
+    un día de más. Prueba viva (2026-07-27, lunes RD): los planes `4d2c1111` y
+    `69f9e03d` traían `days[0].day_name = "Martes"`.
+
+    Ese bug era pre-existente, pero P1-CHAT-PAST-DAYS lo agrava: el MISMO
+    `today` estampa ahora `day['date']` y `_arch_day['date']`, que el lector
+    (`chat_history_context.resolve_day_dates`) trata como AUTORITATIVAS
+    (`inferred=False`, sin el hedge `~`), así que el coach afirmaría como exacta
+    una fecha equivocada — y los estampados archivados no se reescriben nunca
+    (`if not _arch_day.get('date')`). El default 240 impide que un caller futuro
+    que olvide el parámetro reintroduzca UTC en silencio.
+    tooltip-anchor: P1-CHAT-PAST-DAYS-CRON-TZ
     """
     import copy
     import json as _json_bg
@@ -33072,7 +33089,15 @@ def trigger_background_rolling_refill() -> None:
             uid = str(row.get("user_id") or "")
             if not uid:
                 continue
-            if _background_shift_plan_for_user(uid):
+            # [P1-CHAT-PAST-DAYS · 2026-07-28] Resolver la zona del usuario y
+            # PASARLA. El parámetro ya existía; este caller no lo usaba, así que
+            # el shift fechaba (`day['date']`, `_arch_day['date']`), renombraba
+            # (`day_name`) y contaba (`days_since_creation`) desde un reloj UTC.
+            # `_get_user_tz_live` es el mismo helper que usa
+            # `routers/plans.py::_resolve_request_tz_offset`; fallback 240 (RD),
+            # no 0, para no volver a UTC cuando el perfil no trae el campo.
+            _uid_tz = _get_user_tz_live(uid, fallback_minutes=240)
+            if _background_shift_plan_for_user(uid, _uid_tz):
                 refilled += 1
 
         logger.info(

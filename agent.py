@@ -3684,6 +3684,29 @@ def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None
         return ""
 
 
+def _clamp_tz_offset_mins(value, default_mins: int = 240) -> int:
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] SSOT del clamp del `tz_offset` que manda
+    el cliente, para los consumidores de este archivo.
+
+    `getTimezoneOffset()` vive en [-840, 840] (UTC+14 .. UTC-14). Fuera de ahí
+    el valor no es un huso: es un bug del cliente (un epoch, una unidad mal
+    multiplicada). Sin clamp no revienta nada — simplemente vacía el bloque
+    `DIARIO DE HOY` en silencio, porque `get_consumed_meals_today` construye una
+    ventana [00:00, 23:59] desplazada a un siglo cualquiera.
+
+    `None` → `default_mins`. La resolución es por `is not None` y NUNCA por
+    truthiness: `0` es UTC, un offset legítimo que además es falsy.
+    tooltip-anchor: P1-CHAT-PAST-DAYS-TZ-CLAMP
+    """
+    if value is None:
+        return default_mins
+    try:
+        cand = int(value)
+    except (TypeError, ValueError):
+        return default_mins
+    return cand if -840 <= cand <= 840 else default_mins
+
+
 def _build_past_days_context(user_id: str, current_plan, local_date_str: Optional[str] = None,
                               tz_offset: Optional[int] = None) -> str:
     """[P1-CHAT-PAST-DAYS · 2026-07-27] Los dos bloques de días pasados:
@@ -3711,16 +3734,10 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         else:
             today = rd_today()
 
-        try:
-            if tz_offset is not None:
-                _cand = int(tz_offset)
-                # `getTimezoneOffset()` vive en [-840, 840] (UTC+14 .. UTC-14). Fuera
-                # de ahí el valor no es un huso: es un bug del cliente.
-                tz_offset_mins = _cand if -840 <= _cand <= 840 else 240
-            else:
-                tz_offset_mins = 240
-        except (TypeError, ValueError):
-            tz_offset_mins = 240
+        # `tz_offset is not None` (jamás truthiness: `0` es UTC, legítimo y falsy).
+        # El clamp al rango de husos vive en `_clamp_tz_offset_mins` — SSOT
+        # compartida con el callsite de `get_consumed_meals_today` del stream.
+        tz_offset_mins = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else 240
 
         out = build_past_plan_days_block(current_plan, today, days_back=days_back)
 
@@ -4444,7 +4461,14 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         
     if user_id and user_id != "guest":
         try:
-            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=tz_offset)
+            # [P1-CHAT-PAST-DAYS · 2026-07-28] Clamp al rango de husos, como los
+            # otros dos consumidores del mismo `tz_offset`. Un valor basura no
+            # revienta: vacía `DIARIO DE HOY` en silencio. `None` se PRESERVA —
+            # `get_consumed_meals_today` exige `date_str` Y `tz_offset_mins` no
+            # nulos para usar el día local; inventar 240 ahí cambiaría la
+            # ventana de los clientes que no mandan offset.
+            _tz_diario = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else None
+            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=_tz_diario)
             if consumed_today:
                 total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])

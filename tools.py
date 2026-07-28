@@ -3348,6 +3348,22 @@ def _chat_plan_mutation_tools_enabled() -> bool:
     return _pt_env_bool("MEALFIT_CHAT_PLAN_TOOLS_ENABLED", False)
 
 
+def _chat_plan_day_tool_enabled() -> bool:
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] Kill switch de `consultar_dia_del_plan`.
+
+    `docs/chat_past_days_memory.md` §4 lo documenta desde el día 1, pero la tool
+    se anexaba a `agent_tools` incondicionalmente: un operador que siguiera la
+    spec durante un incidente habría seteado una env var muerta. Espejo exacto
+    de `_chat_plan_mutation_tools_enabled`, con una diferencia deliberada: aquí
+    el default es **True** (la tool es la vía barata de servir gramos y recetas
+    de días pasados), así que la tool VIVE en la lista literal `agent_tools` de
+    abajo y el knob la RETIRA — ver `_apply_chat_tool_knobs`.
+    tooltip-anchor: P1-CHAT-PAST-DAYS-TOOL-KNOB
+    """
+    from knobs import _env_bool as _pd_env_bool
+    return _pd_env_bool("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", True)
+
+
 @tool
 def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
     """Consulta el menú COMPLETO que el plan del usuario prescribió para una
@@ -3425,5 +3441,33 @@ agent_tools = [update_form_field, log_consumed_meal, search_deep_memory, check_s
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).
 _PLAN_MUTATION_TOOLS = [generate_new_plan_from_chat, modify_single_meal, regenerate_full_day]
-if _chat_plan_mutation_tools_enabled():
-    agent_tools = agent_tools + _PLAN_MUTATION_TOOLS
+
+
+def _apply_chat_tool_knobs(base: list) -> list:
+    """SSOT del gating por knob sobre la lista literal `agent_tools` de arriba.
+
+    Los dos knobs tiran en direcciones opuestas a propósito:
+
+    - `MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED` (default **True**): la tool está en
+      la lista literal — la paridad bidireccional que enforza
+      `test_p2_chat_cleanup.py` parsea ESA lista contra
+      `docs/agent_tools_user_id_table.md`, así que sacarla de ahí dejaría su
+      fila huérfana con el knob en su default. El knob la RETIRA.
+    - `MEALFIT_CHAT_PLAN_TOOLS_ENABLED` (default **False**): las 3 tools de
+      mutación viven FUERA de la lista literal (y fuera de la tabla numerada del
+      doc, en su propia sección "Retiradas temporalmente"). El knob las AÑADE.
+
+    Función, no inline, para que el test del kill switch pueda re-evaluar el
+    gate REAL con el env cambiado sin `importlib.reload(tools)` — un reload deja
+    alias viejos colgando por todo el proceso.
+    tooltip-anchor: P1-CHAT-PAST-DAYS-TOOL-KNOB
+    """
+    out = list(base)
+    if not _chat_plan_day_tool_enabled():
+        out = [t for t in out if getattr(t, "name", "") != "consultar_dia_del_plan"]
+    if _chat_plan_mutation_tools_enabled():
+        out = out + _PLAN_MUTATION_TOOLS
+    return out
+
+
+agent_tools = _apply_chat_tool_knobs(agent_tools)
