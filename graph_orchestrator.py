@@ -22809,6 +22809,15 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"desc_honesty={_n_dh}")
     except Exception:
         pass
+    # [P1-CEVICHE-DAIRY-RENAME · 2026-07-28] "Ceviche de Queso" → "Queso Marinado en Cítricos"
+    # (el lácteo no se cura; vegetal y pescado-crudo quedan intactos — ver el pase).
+    try:
+        _n_cv = _ceviche_dairy_rename_pass(days)
+        if _n_cv:
+            total += _n_cv
+            parts.append(f"ceviche_dairy={_n_cv}")
+    except Exception:
+        pass
     # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
     try:
         _n_rw = _rice_water_ratio_fix(days)
@@ -28308,6 +28317,77 @@ def _desc_pluralize_lbl(lbl: str) -> str:
     if lbl.endswith(("a", "e", "i", "o", "u")):
         return lbl + "s"
     return lbl + "es"
+
+
+CEVICHE_DAIRY_RENAME_ENABLED = _env_bool("MEALFIT_CEVICHE_DAIRY_RENAME", True)
+import re as _re_cv  # `re` no es global en este punto del módulo (imports locales por función)
+_CEVICHE_HEAD_RX = _re_cv.compile(r"^\s*(?:ceviches?|cebiches?)\s+de\s+", _re_cv.IGNORECASE)
+_CEVICHE_DAIRY_TOKENS = ("queso", "gouda", "mozzarella", "ricotta", "requeson",
+                         "yogur", "yogurt", "leche", "crema", "mantequilla", "cuajada")
+_CEVICHE_FEM_HEADS = ("leche", "mozzarella", "ricotta", "crema", "mantequilla", "cuajada")
+_CEVICHE_MARINADE_HINT_RX = _re_cv.compile(r"marinad|c[ií]tric|lim[oó]n", _re_cv.IGNORECASE)
+
+
+def _ceviche_dairy_rename_pass(days) -> int:
+    """[P1-CEVICHE-DAIRY-RENAME · 2026-07-28] "Ceviche de Queso Gouda Marinado en
+    Cítricos" (caso vivo, plan ab2b0a16): el ceviche CURA pescado crudo en cítrico;
+    el lácteo no se cura — el plato real es "queso marinado". Renombre honesto SOLO
+    cuando el protagonista inmediato tras "Ceviche de" (primeras 3 palabras) es lácteo:
+      · vegetal ("Ceviche de yuca con edamame") es plato RD legítimo
+        (P2-RAW-SEAFOOD-FALSE-POSITIVE) → intacto, incluso con queso de guarnición;
+      · pescado/carne cruda es dominio del sistema de seguridad raw
+        (_RAW_PREP_AMBIGUOUS + marinade-blanch) → intacto.
+    Si el nombre restante no menciona ya marinado/cítrico/limón, se añade
+    "Marinado/a en Cítricos" (género por la cabeza). La desc del mismo meal cambia
+    "ceviche"→"marinado". Fail-open por comida. tooltip-anchor: P1-CEVICHE-DAIRY-RENAME
+    """
+    if not (CEVICHE_DAIRY_RENAME_ENABLED and isinstance(days, list)):
+        return 0
+    from constants import strip_accents as _sa_cv
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                nm = meal.get("name")
+                if not isinstance(nm, str):
+                    continue
+                m = _CEVICHE_HEAD_RX.match(nm)
+                if not m:
+                    continue
+                resto = nm[m.end():].strip()
+                # Protagonista = palabras hasta el primer conector: "yuca CON queso rallado"
+                # corta en "con" → head "yuca" (el queso de guarnición no dispara el rename).
+                _head_words = []
+                for _w in resto.split():
+                    if _sa_cv(_w.lower()) in ("con", "sobre", "y", "en", "al", "a"):
+                        break
+                    _head_words.append(_w)
+                protagonista = _sa_cv(" ".join(_head_words[:4]).lower())
+                # "Leche de coco/almendras/soya/avena" es vegetal, no lácteo.
+                if any(p in protagonista for p in ("leche de coco", "leche de almendra",
+                                                   "leche de soya", "leche de avena")):
+                    continue
+                if not any(t in protagonista for t in _CEVICHE_DAIRY_TOKENS):
+                    continue
+                nuevo = resto[:1].upper() + resto[1:] if resto else resto
+                if nuevo and not _CEVICHE_MARINADE_HINT_RX.search(nuevo):
+                    _cabeza = _sa_cv(nuevo.split()[0].lower()) if nuevo.split() else ""
+                    _suf = "Marinada" if _cabeza in _CEVICHE_FEM_HEADS else "Marinado"
+                    nuevo = f"{nuevo} {_suf} en Cítricos"
+                if not nuevo:
+                    continue
+                meal["name"] = nuevo
+                _d = meal.get("desc")
+                if isinstance(_d, str) and _d:
+                    _d = _d.replace("ceviche", "marinado").replace("Ceviche", "Marinado")
+                    meal["desc"] = _d.replace("cebiche", "marinado").replace("Cebiche", "Marinado")
+                fixed += 1
+                logger.info(f"🧀 [P1-CEVICHE-DAIRY-RENAME] '{nm[:48]}' → '{nuevo[:48]}'")
+            except Exception:
+                continue
+    return fixed
 
 
 def _desc_food_honesty_pass(days) -> int:
