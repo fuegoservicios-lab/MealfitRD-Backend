@@ -516,14 +516,50 @@ class TestChatToolMaxDaysAlignedTo7:
 
 # ===========================================================================
 # 8. CLAUDE.md — la exención de quota del nuevo endpoint queda documentada
-#    (contrato anclado también por test_p1_audit_3_history_quota_exemption.py).
+#    EN LAS DOS COPIAS: `backend/CLAUDE.md` (única con git — la que Claude
+#    Code auto-carga con cwd=backend/, y la que de verdad viaja en el commit)
+#    y la copia espejo de workspace-root (fuera de cualquier repo git, pero
+#    mantenida idéntica por convención). El bug real que motivó este test:
+#    la primera pasada de P1-DIARY-EDITABLE solo editó la copia de
+#    workspace-root — `routers/diary.py:684` quedó apuntando a una fila que
+#    NO existía en `backend/CLAUDE.md`, el archivo que de verdad se commitea.
+#    Contrato anclado también por test_p1_audit_3_history_quota_exemption.py
+#    (que solo cubre las 3 filas originales del Historial).
 # ===========================================================================
-def test_claude_md_documents_delete_endpoint_exemption():
-    claude_md = (_BACKEND.parent / "CLAUDE.md").read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "claude_md_path",
+    [_BACKEND / "CLAUDE.md", _BACKEND.parent / "CLAUDE.md"],
+    ids=["backend/CLAUDE.md", "workspace-root/CLAUDE.md"],
+)
+def test_claude_md_documents_delete_endpoint_exemption(claude_md_path: Path):
+    assert claude_md_path.exists(), f"{claude_md_path} no existe."
+    claude_md = claude_md_path.read_text(encoding="utf-8")
     assert "Historial-quota-exemption" in claude_md
     assert "/api/diary/consumed/{meal_id}" in claude_md, (
-        "CLAUDE.md no documenta la exención de quota del DELETE — sin "
-        "esto, un futuro mantenedor 've' verify_api_quota faltante y lo "
-        "'arregla' rompiendo la corrección de errores de logging."
+        f"{claude_md_path} no documenta la exención de quota del DELETE — "
+        f"sin esto, un futuro mantenedor 've' verify_api_quota faltante y "
+        f"lo 'arregla' rompiendo la corrección de errores de logging."
     )
+    assert "P1-DIARY-EDITABLE" in claude_md
     assert "_DELETE_CONSUMED_LIMITER" in claude_md
+    # No basta con que la fila EXISTA — debe explicar POR QUÉ el paywall
+    # sería absurdo aquí, mismo estándar que /restock y /inventory/consume:
+    # bloquearía corregir un error propio Y `get_monthly_api_usage` cuenta
+    # TODA fila de `api_usage` sin filtrar endpoint (quemaría crédito de
+    # planes por borrar una fila).
+    assert "get_monthly_api_usage" in claude_md
+
+
+def test_claude_md_copies_stay_in_sync():
+    """Convención del repo: la copia de workspace-root y `backend/CLAUDE.md`
+    se mantienen IDÉNTICAS (solo `backend/CLAUDE.md` vive en git; la de
+    workspace-root es un espejo de trabajo fuera de cualquier repo). Si
+    divergen, alguien editó una sola copia — exactamente el bug que este
+    test previene yendo hacia adelante."""
+    root_text = (_BACKEND.parent / "CLAUDE.md").read_text(encoding="utf-8")
+    backend_text = (_BACKEND / "CLAUDE.md").read_text(encoding="utf-8")
+    assert root_text == backend_text, (
+        "Las dos copias de CLAUDE.md divergieron. Por convención del repo "
+        "se mantienen idénticas — sincronizar ambas en el mismo commit "
+        "(la de backend/ es la única que efectivamente se commitea)."
+    )
