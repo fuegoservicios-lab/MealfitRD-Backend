@@ -28,14 +28,15 @@ Convenciones:
   bloquear el event loop con los roundtrips sync del pool.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import asyncio
+import base64
 import logging
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
 
@@ -384,27 +385,25 @@ async def api_delete_all_inventory(
 
 
 # ---------------------------------------------------------------------------
-# [P1-PANTRY-SCAN-V0 · 2026-07-11] Escáner de nevera por foto (vision → items)
+# [P1-PANTRY-SCAN-V0 · 2026-07-11 → P1-VISION-NO-LOCAL · 2026-07-28] Escáner
+# de nevera por foto (vision → items)
 # ---------------------------------------------------------------------------
 # Feature del owner: botón "Escanear mi nevera" — foto de la nevera física →
 # modelo con visión detecta alimentos + cantidades → match contra el catálogo
 # verificado → el usuario CONFIRMA la lista antes de que toque user_inventory
 # (el endpoint NO escribe nada; los adds van por POST /inventory/items).
 #
-# Provider via knob (default OFF: en prod se enciende cuando hay un modelo con
-# visión alcanzable — DeepSeek no tiene visión; el trial usa Ollama gemma local
-# vía túnel SSH reverso laptop→VPS en 127.0.0.1:11434):
-#   MEALFIT_VISION_PROVIDER = off | ollama
-#   MEALFIT_OLLAMA_BASE_URL (default http://127.0.0.1:11434)
-#   MEALFIT_VISION_MODEL    (default gemma4:12b)
-#   MEALFIT_VISION_TIMEOUT_S (default 240, clamp [30, 600])
-# Single-flight: el modelo local no soporta concurrencia (4GB VRAM) — segundo
-# scan simultáneo recibe 409 "escáner ocupado" en vez de encolar minutos.
-
-# [P1-MEAL-SCAN-GEMMA · 2026-07-12] El single-flight vive en vision_agent
-# (get_vision_single_flight_lock) y se COMPARTE con "Escanear comida" del
-# Dashboard: ambos golpean la misma GPU local vía túnel — dos análisis
-# simultáneos la tumban igual aunque vengan de features distintos.
+# [P1-VISION-NO-LOCAL · 2026-07-28] Provider CLOUD (el mismo transporte que
+# "Escanear comida" del Dashboard) via el knob compartido de vision_agent:
+#   MEALFIT_VISION_PROVIDER = off | openai_compatible
+#   MEALFIT_VISION_MODEL    (modelo con visión, p.ej. gpt-5.6-luna)
+#   MEALFIT_VISION_BASE_URL / VISION_API_KEY
+# El provider LOCAL (Ollama/gemma, P1-MEAL-SCAN-GEMMA) y el single-flight que
+# lo protegía (una sola GPU de 4GB, sin concurrencia) fueron ELIMINADOS junto
+# con él — el laptop del owner no podía sostener el servicio. El transporte
+# cloud no tiene ese límite: dos scans simultáneos ya no compiten por la
+# misma GPU, así que no hay lock que mantener (ni el 409 "escáner ocupado"
+# que producía).
 
 _VISION_PROMPT = (
     "Eres un asistente de nutricion dominicano. Mira la foto de una nevera/despensa "
@@ -451,41 +450,26 @@ def _sane_scan_qty(qty, unit) -> float:
         return 1.0
     return float(max(1, q))
 
-_VISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "quantity": {"type": "number"},
-                    "unit": {"type": "string"},
-                    "confidence": {"type": "number"},
-                    # [P1-PANTRY-SCAN-BRAND] Marca legible del empaque (null si no hay).
-                    "brand": {"type": ["string", "null"]},
-                },
-                "required": ["name", "quantity", "unit", "confidence"],
-            },
-        }
-    },
-    "required": ["items"],
-}
+# [P1-VISION-NO-LOCAL · 2026-07-28] Schema de salida estructurada para el
+# cliente LangChain (reemplaza el JSON-schema crudo `_VISION_SCHEMA` que se
+# le pasaba a Ollama como `format`) — mismo patrón que `ImageDescription` de
+# vision_agent.py, ya probado contra la API real de Luna.
+class _PantryScanItem(BaseModel):
+    name: str = Field(description="Nombre generico del alimento en espanol dominicano, sin marca.")
+    quantity: float = Field(description="Numero de envases o piezas visibles (NUNCA el peso o los gramos impresos en el empaque).")
+    unit: str = Field(description="Unidad de compra: unidad, lb, g, paquete, botella, lata, taza o funda.")
+    confidence: float = Field(description="Confianza 0-1 en la deteccion del item.")
+    brand: Optional[str] = Field(default=None, description="Marca legible en el empaque (ej: Quaker, Rica), o null si no se lee o no tiene empaque.")
+
+
+class _PantryScanResult(BaseModel):
+    items: List[_PantryScanItem] = Field(default_factory=list, description="Alimentos detectados en la foto de la nevera/despensa.")
 
 
 def vision_scan_provider() -> str:
     """Provider activo del escáner ('off' apaga el feature — el frontend oculta
     el botón vía `photo_scan_enabled` en /pantry-feasibility)."""
     return (os.environ.get("MEALFIT_VISION_PROVIDER") or "off").strip().lower()
-
-
-def _vision_timeout_s() -> int:
-    try:
-        v = int(os.environ.get("MEALFIT_VISION_TIMEOUT_S", "240"))
-    except ValueError:
-        return 240
-    return min(600, max(30, v))
 
 
 def _norm_food_name(s: str) -> str:
@@ -513,25 +497,29 @@ def _match_catalog(detected_name: str, catalog: list) -> Optional[Dict[str, Any]
     return best if best_overlap >= 1 else None
 
 
-def _ollama_vision_scan(image_b64: str) -> list:
-    import httpx
-    base = (os.environ.get("MEALFIT_OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
-    model = os.environ.get("MEALFIT_VISION_MODEL") or "gemma4:12b"
-    body = {
-        "model": model,
-        "stream": False,
-        # gemma4: thinking ON por default → content vacío sin think=false
-        "think": False,
-        "format": _VISION_SCHEMA,
-        "options": {"temperature": 0.1, "num_ctx": 8192},
-        "messages": [{"role": "user", "content": _VISION_PROMPT, "images": [image_b64]}],
-    }
-    import json as _json
-    resp = httpx.post(f"{base}/api/chat", json=body, timeout=_vision_timeout_s())
-    resp.raise_for_status()
-    content = ((resp.json().get("message") or {}).get("content")) or "{}"
-    data = _json.loads(content)
-    return data.get("items") or []
+async def _cloud_vision_scan(image_bytes: bytes) -> list:
+    """[P1-VISION-NO-LOCAL · 2026-07-28] Reemplaza `_ollama_vision_scan`:
+    MISMO prompt de negocio (`_VISION_PROMPT`, incluye la lección
+    guineo/plátano) y MISMO contrato de salida (items con name/quantity/
+    unit/confidence/brand), pero el transporte ahora es el cliente cloud
+    compartido con el meal-scan (`vision_agent.analyze_image_structured` —
+    mismo `_resolve_vision_client`/resize/telemetría que "Escanear comida"),
+    en vez de un roundtrip httpx propio contra Ollama. Lanza en cualquier
+    error (red, parseo, provider caído) — el caller (el endpoint) lo mapea
+    a HTTP 502, el mismo contrato que tenía con Ollama."""
+    from vision_agent import analyze_image_structured
+    result = await analyze_image_structured(image_bytes, _VISION_PROMPT, _PantryScanResult)
+    items = result.items if isinstance(result, _PantryScanResult) else []
+    return [
+        {
+            "name": it.name,
+            "quantity": it.quantity,
+            "unit": it.unit,
+            "confidence": it.confidence,
+            "brand": it.brand,
+        }
+        for it in items
+    ]
 
 
 @router.post("/inventory/photo-scan")
@@ -546,63 +534,62 @@ async def api_inventory_photo_scan(
     provider = vision_scan_provider()
     if provider == "off":
         raise HTTPException(status_code=503, detail="El escáner de nevera no está disponible por ahora.")
-    if provider != "ollama":
+    if provider != "openai_compatible":
         raise HTTPException(status_code=503, detail=f"Provider de visión desconocido: {provider}")
 
     image_b64 = str(body.get("image_b64") or "")
-    # ~6MB de imagen (8MB b64). El cliente ya reescala a ≤1024px.
+    # ~6MB de imagen (8MB b64). El cliente ya reescala a ≤1024px, pero el
+    # server NO confía en eso: `analyze_image_structured` corre el mismo
+    # guard `prepare_image_for_vision` que el meal-scan antes de despachar.
     if not image_b64 or len(image_b64) > 8_000_000:
         raise HTTPException(status_code=422, detail="Imagen ausente o demasiado grande.")
 
-    # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Lock compartido con el meal-scan.
-    from vision_agent import get_vision_single_flight_lock
-    _scan_lock = get_vision_single_flight_lock()
-    if not _scan_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="El escáner está procesando otra foto — intenta en un momento.")
+    try:
+        image_bytes = base64.b64decode(image_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Imagen inválida (base64 corrupto).")
 
     try:
-        def _scan_and_match():
-            from db import execute_sql_query
-            items = _ollama_vision_scan(image_b64)
-            catalog = execute_sql_query(
-                "SELECT id::text AS id, name, market_container, default_unit FROM master_ingredients",
-                fetch_all=True,
-            ) or []
-            for row in catalog:
-                row["_norm"] = _norm_food_name(row["name"])
-            out = []
-            for it in items[:40]:
-                match = _match_catalog(it.get("name"), catalog)
-                _unit = str(it.get("unit") or "unidad")[:20]
-                # [P1-PANTRY-SCAN-BRAND] Marca leída del empaque — etiqueta el item al
-                # confirmar. NO toca user_brand_preferences: la preferencia "para
-                # siempre" es SOLO elección manual del usuario (un OCR equivocado no
-                # debe contaminar sus marcas preferidas globales).
-                _brand = (str(it.get("brand") or "").strip() or None)
-                out.append({
-                    "detected_name": str(it.get("name") or "")[:80],
-                    "detected_brand": _brand[:40] if _brand else None,
-                    "quantity": _sane_scan_qty(it.get("quantity"), _unit),
-                    "unit": _unit,
-                    "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
-                    "master_ingredient_id": match["id"] if match else None,
-                    "catalog_name": match["name"] if match else None,
-                    "catalog_unit": (match.get("market_container") or match.get("default_unit")) if match else None,
-                })
-            return out
-
-        results = await asyncio.to_thread(_scan_and_match)
-    except HTTPException:
-        raise
+        items = await _cloud_vision_scan(image_bytes)
     except Exception as e:
         logger.warning(f"[P1-PANTRY-SCAN-V0] photo-scan falló ({type(e).__name__}): {e}")
         raise HTTPException(
             status_code=502,
             detail="No pudimos analizar la foto (el modelo de visión no respondió). Intenta de nuevo.",
         )
-    finally:
-        _scan_lock.release()
 
+    def _match_against_catalog():
+        from db import execute_sql_query
+        catalog = execute_sql_query(
+            "SELECT id::text AS id, name, market_container, default_unit FROM master_ingredients",
+            fetch_all=True,
+        ) or []
+        for row in catalog:
+            row["_norm"] = _norm_food_name(row["name"])
+        out = []
+        for it in items[:40]:
+            match = _match_catalog(it.get("name"), catalog)
+            _unit = str(it.get("unit") or "unidad")[:20]
+            # [P1-PANTRY-SCAN-BRAND] Marca leída del empaque — etiqueta el item al
+            # confirmar. NO toca user_brand_preferences: la preferencia "para
+            # siempre" es SOLO elección manual del usuario (un OCR equivocado no
+            # debe contaminar sus marcas preferidas globales).
+            _brand = (str(it.get("brand") or "").strip() or None)
+            out.append({
+                "detected_name": str(it.get("name") or "")[:80],
+                "detected_brand": _brand[:40] if _brand else None,
+                "quantity": _sane_scan_qty(it.get("quantity"), _unit),
+                "unit": _unit,
+                "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
+                "master_ingredient_id": match["id"] if match else None,
+                "catalog_name": match["name"] if match else None,
+                "catalog_unit": (match.get("market_container") or match.get("default_unit")) if match else None,
+            })
+        return out
+
+    # READ-ONLY: el match contra el catálogo NUNCA escribe user_inventory —
+    # los adds van por POST /inventory/items una vez el usuario confirma.
+    results = await asyncio.to_thread(_match_against_catalog)
     return {"items": results, "provider": provider}
 
 

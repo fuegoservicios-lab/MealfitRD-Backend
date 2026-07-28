@@ -11,8 +11,10 @@ Contrato:
 2. POST /api/inventory/photo-scan — vision provider via knob MEALFIT_VISION_PROVIDER
    (default OFF → 503; el frontend oculta el botón vía photo_scan_enabled del
    pre-flight). READ-ONLY: el scan NUNCA escribe user_inventory — el usuario confirma
-   en el checklist y los adds van por POST /inventory/items. Single-flight (409 si
-   hay otro scan en vuelo — el modelo local no soporta concurrencia) + cap de tamaño.
+   en el checklist y los adds van por POST /inventory/items. Cap de tamaño de imagen.
+   [P1-VISION-NO-LOCAL · 2026-07-28] El provider pasó de `ollama` (local, single-flight
+   por GPU de 4GB) a `openai_compatible` (cloud, mismo transporte que el meal-scan de
+   vision_agent.py) — sin GPU compartida no hay más 409 "escáner ocupado".
 3. QPantryBuilder: <select> de envase por fila, botón de escaneo gateado por el flag,
    reescala client-side antes de subir, checklist con preselección solo de items
    confiables Y mapeados al catálogo.
@@ -88,20 +90,22 @@ def test_scan_is_read_only():
         )
 
 
-def test_scan_single_flight_and_size_cap():
+def test_scan_size_cap():
     body = _scan_endpoint_body()
-    assert "acquire(blocking=False)" in body and "409" in body, (
-        "segundo scan simultáneo → 409 (el modelo local de 4GB VRAM no soporta "
-        "concurrencia; encolar sería esperar minutos a ciegas)"
-    )
     assert "8_000_000" in body and "422" in body, "cap de payload (~6MB imagen)"
 
 
-def test_scan_ollama_thinking_disabled():
-    assert '"think": False' in _UD_SRC, (
-        "gemma4 vía Ollama: thinking ON por default deja content VACÍO — el body "
-        "debe mandar think=false (lección 2026-07-04)"
-    )
+def test_scan_no_single_flight_lock():
+    """[P1-VISION-NO-LOCAL · 2026-07-28] El single-flight (`acquire(blocking=False)`
+    + 409 "escáner ocupado") existía porque el modelo LOCAL corría en una GPU de
+    4GB sin concurrencia. Con el provider cloud eliminado ese límite, el lock
+    también se eliminó — dos scans simultáneos ya no compiten por el mismo
+    recurso. Si reaparece, es una regresión de latencia/UX sin justificación
+    (nada serializa scans concurrentes hoy)."""
+    body = _scan_endpoint_body()
+    assert "acquire(blocking=False)" not in body
+    assert "get_vision_single_flight_lock" not in _UD_SRC
+    assert 'status_code=409' not in body
 
 
 def test_feasibility_exposes_scan_flag():

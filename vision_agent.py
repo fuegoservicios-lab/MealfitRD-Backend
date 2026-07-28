@@ -2,7 +2,6 @@ import os
 import io
 import base64
 import asyncio
-import threading
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado. ChatDeepSeek acepta
@@ -40,31 +39,19 @@ logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
 #   MEALFIT_VISION_BASE_URL=<base-url-openai-compatible>
 #   VISION_API_KEY=<key>   (env var, NUNCA hardcodeada)
 # Tooltip-anchor: P3-VISION-MODEL-KNOB (knob model preservado).
+#
+# [P1-VISION-NO-LOCAL · 2026-07-28] El provider `ollama` (gemma local vía
+# túnel SSH reverso, P1-MEAL-SCAN-GEMMA) fue ELIMINADO — el laptop del owner
+# no podía sostener el servicio. `openai_compatible` (Luna) es hoy el ÚNICO
+# provider real; `disabled`/`off` siguen existiendo como estados "apagado"
+# (no son remanentes de ollama, son el kill-switch del feature). Doc
+# canónica: backend/docs/vision_luna.md.
 _VISION_PROVIDER_DISABLED = "disabled"
 _VISION_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
-# [P1-MEAL-SCAN-GEMMA · 2026-07-12] Tercer provider: Ollama local (gemma4:12b
-# vía túnel SSH reverso laptop→VPS, MISMO transporte que el escáner de Nevera
-# de routers/user_data.py — knobs compartidos MEALFIT_VISION_PROVIDER=ollama,
-# MEALFIT_OLLAMA_BASE_URL, MEALFIT_VISION_MODEL, MEALFIT_VISION_TIMEOUT_S).
-# Antes: `_env_str(choices={disabled, openai_compatible})` degradaba el valor
-# prod `ollama` a `disabled` con WARNING → "Escanear comida" muerto mientras
-# "Escanear mi nevera" (que lee el env crudo) funcionaba con el mismo knob.
-_VISION_PROVIDER_OLLAMA = "ollama"
 # "off" es el alias que usa el escáner de Nevera para apagar — aceptarlo aquí
 # evita el split-brain de un mismo env var con dos vocabularios.
 _VISION_PROVIDER_OFF = "off"
 _warned_vision_disabled = False
-
-# [P1-MEAL-SCAN-GEMMA · 2026-07-12] Single-flight COMPARTIDO de todo análisis
-# de visión local: la GPU de gemma (4GB VRAM) no soporta concurrencia, y tanto
-# "Escanear comida" (Dashboard) como "Escanear mi nevera" (Pantry) golpean el
-# mismo Ollama. Un solo Lock module-level para ambos surfaces.
-_VISION_SINGLE_FLIGHT_LOCK = threading.Lock()
-
-
-def get_vision_single_flight_lock() -> threading.Lock:
-    """Lock único para llamadas al modelo de visión local (Ollama)."""
-    return _VISION_SINGLE_FLIGHT_LOCK
 
 
 def _vision_provider() -> str:
@@ -75,42 +62,8 @@ def _vision_provider() -> str:
             _VISION_PROVIDER_DISABLED,
             _VISION_PROVIDER_OFF,
             _VISION_PROVIDER_OPENAI_COMPATIBLE,
-            _VISION_PROVIDER_OLLAMA,
         },
     )
-
-
-# [P1-VISION-LUNA · 2026-07-28] Cascada de fallback: si el provider primario
-# falla o devuelve un resultado no usable, reintentar UNA sola vez con este
-# provider (si está configurado y difiere del primario). Default vacío = sin
-# cascada. Mismo choices-set que `_vision_provider` vía `_env_str`: un valor
-# DESCONOCIDO cae al default "" con WARNING (nunca revienta). `disabled`/
-# `off` son choices mecánicamente válidos (no generan warning de knob), pero
-# `_vision_cascade_target` los trata como "sin cascada" — no tiene sentido
-# reintentar contra un provider apagado.
-def _vision_fallback_provider() -> str:
-    return _env_str(
-        "MEALFIT_VISION_FALLBACK_PROVIDER",
-        "",
-        choices={
-            _VISION_PROVIDER_DISABLED,
-            _VISION_PROVIDER_OFF,
-            _VISION_PROVIDER_OPENAI_COMPATIBLE,
-            _VISION_PROVIDER_OLLAMA,
-        },
-    )
-
-
-def _vision_cascade_target(primary: str) -> str | None:
-    """Provider de fallback a usar para ESTE intento, o `None` si no hay
-    cascada: knob vacío, fallback apagado (`disabled`/`off`), o fallback
-    igual al primario (evita el loop primario→sí-mismo)."""
-    fallback = _vision_fallback_provider()
-    if not fallback or fallback in (_VISION_PROVIDER_DISABLED, _VISION_PROVIDER_OFF):
-        return None
-    if fallback == primary:
-        return None
-    return fallback
 
 
 def _vision_model_name() -> str:
@@ -121,79 +74,14 @@ def _vision_base_url() -> str:
     return _env_str("MEALFIT_VISION_BASE_URL", "")
 
 
-def _ollama_base_url() -> str:
-    # Mismo default que routers/user_data.py (túnel SSH reverso en el VPS).
-    return (os.environ.get("MEALFIT_OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
-
-
-def _ollama_model_name() -> str:
-    """Modelo de Ollama para el análisis LOCAL (gemma).
-
-    [P1-VISION-LUNA · 2026-07-28] Knob DEDICADO `MEALFIT_OLLAMA_VISION_MODEL`
-    (default `gemma4:12b`), separado del knob cloud `MEALFIT_VISION_MODEL`.
-    BUG real cazado por el owner antes de encender Luna en prod: antes ambos
-    compartían `MEALFIT_VISION_MODEL` — con `MEALFIT_VISION_MODEL=gpt-5.6-luna`
-    (necesario para encender el provider cloud PRIMARIO), la cascada de
-    fallback a ollama le pedía a Ollama un modelo llamado "gpt-5.6-luna", que
-    obviamente no existe ahí (`meal-scan gemma falló (modelo='gpt-5.6-luna',
-    ...)` en la sonda real contra el VPS). La cascada era correcta en su
-    lógica y estaba INALCANZABLE por configuración.
-
-    Precedencia (documentada acá a propósito: simplificarla reintroduce el
-    bug de arriba):
-      1. `MEALFIT_OLLAMA_VISION_MODEL` si está seteado → ese, SIEMPRE gana.
-      2. Si NO está seteado Y el provider PRIMARIO (`_vision_provider()`) es
-         `ollama` → hereda el knob compartido `MEALFIT_VISION_MODEL`
-         (retrocompat: la config viva de prod hoy pone
-         `MEALFIT_VISION_MODEL=gemma4:12b` con ollama como primario, y debe
-         seguir funcionando sin tocar nada al desplegar este fix).
-      3. Si no → default `gemma4:12b`.
-    La clave del punto 2: ollama SOLO hereda el knob compartido cuando
-    ollama es el PRIMARIO — nunca cuando actúa como FALLBACK de un provider
-    cloud. Así un `MEALFIT_VISION_MODEL=gpt-5.6-luna` (modelo cloud) nunca
-    se filtra al roundtrip de Ollama.
-    """
-    dedicated = _env_str("MEALFIT_OLLAMA_VISION_MODEL", "")
-    if dedicated:
-        return dedicated
-    if _vision_provider() == _VISION_PROVIDER_OLLAMA:
-        # Retrocompat (punto 2): crudo, sin _env_str, por paridad exacta con
-        # el escáner de Nevera (mismo patrón que tenía este accessor antes).
-        return os.environ.get("MEALFIT_VISION_MODEL") or "gemma4:12b"
-    return "gemma4:12b"
-
-
-def _ollama_timeout_s() -> int:
-    """Timeout del roundtrip Ollama — mismo knob/clamps que user_data.py.
-    gemma local por túnel es LENTO (30-120s por foto); el clamp de 30s del
-    knob MEALFIT_VISION_LLM_TIMEOUT_S (pensado para providers cloud) mataría
-    cada scan."""
-    try:
-        v = int(os.environ.get("MEALFIT_VISION_TIMEOUT_S", "240"))
-    except ValueError:
-        return 240
-    return min(600, max(30, v))
-
-
 def is_vision_enabled() -> bool:
     """True si hay provider de visión activo con config mínima completa."""
     provider = _vision_provider()
-    if provider == _VISION_PROVIDER_OLLAMA:
-        # Defaults completos (base URL + modelo) — siempre operable.
-        return True
     return (
         provider == _VISION_PROVIDER_OPENAI_COMPATIBLE
         and bool(_vision_model_name())
         and bool(_vision_base_url())
     )
-
-
-def is_vision_local() -> bool:
-    """[P1-MEAL-SCAN-GEMMA] True si el análisis corre en el modelo LOCAL
-    (gemma vía Ollama, costo cero). routers/diary.py lo usa para NO quemar
-    crédito del cap mensual (`log_api_usage`) en scans gratis — doctrina
-    P1-NEVERA-QUOTA-EXEMPT: el paywall es para costo LLM real."""
-    return _vision_provider() == _VISION_PROVIDER_OLLAMA
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke del LLM Vision.
@@ -472,67 +360,98 @@ def _coerce_meal_scan(data: dict) -> dict:
     return result
 
 
-def _ollama_meal_scan(image_b64: str) -> dict:
-    """Roundtrip síncrono a Ollama (invocar via asyncio.to_thread). Lanza en
-    error de red/JSON — el caller mapea al payload analysis_failed."""
-    import httpx
-    import json as _json
-    body = {
-        "model": _ollama_model_name(),
-        "stream": False,
-        "think": False,  # gemma4: thinking ON por default → content vacío sin esto
-        "format": _MEAL_VISION_SCHEMA,
-        "options": {"temperature": 0.1, "num_ctx": 8192},
-        "messages": [{"role": "user", "content": _MEAL_VISION_PROMPT, "images": [image_b64]}],
-    }
-    resp = httpx.post(f"{_ollama_base_url()}/api/chat", json=body, timeout=_ollama_timeout_s())
-    resp.raise_for_status()
-    content = ((resp.json().get("message") or {}).get("content")) or "{}"
-    return _coerce_meal_scan(_json.loads(content))
+def _resolve_vision_client(schema):
+    """[P1-VISION-NO-LOCAL · 2026-07-28] Construye + configura el cliente LLM
+    del provider CLOUD (`openai_compatible`) con salida estructurada a
+    `schema` (clase Pydantic). Extraído de `_dispatch_openai_compatible_vision`
+    para que OTROS callers de visión reutilicen la MISMA resolución de
+    modelo/cliente/key en vez de mantener un cliente cloud propio — el
+    escáner de Nevera (`routers/user_data.py`) es el primer caso real: antes
+    tenía su PROPIO roundtrip httpx contra Ollama, duplicando lo que este
+    módulo ya resolvía para el meal-scan.
 
+    Mismo criterio de despacho por MODELO que `llm_provider.build_chat_llm`
+    (ver docstring completo de `_dispatch_openai_compatible_vision` para el
+    bug real — `400 Unknown parameter: 'thinking'` — que motivó elegir el
+    cliente por modelo en vez de hardcodear `ChatDeepSeek`)."""
+    model = _vision_model_name()
+    base_url = _vision_base_url()
+    timeout = _vision_llm_timeout_s()  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
+    # Precedencia de API key: VISION_API_KEY (knob de visión) primero.
+    explicit_key = (os.environ.get("VISION_API_KEY") or "").strip() or None
 
-async def _dispatch_ollama_vision(image_bytes: bytes) -> dict:
-    """[P1-MEAL-SCAN-GEMMA · 2026-07-12 → extraído P1-VISION-LUNA · 2026-07-28]
-    Intento de análisis vía Ollama local (gemma). Single-flight compartido
-    con el escáner de Nevera (misma GPU): si hay otro análisis en vuelo
-    devuelve `busy=True` al instante en vez de encolar minutos — el modal
-    muestra "escáner ocupado, reintenta". Nunca lanza: lock ocupado o error
-    de red/JSON degradan a un payload `analysis_failed=True` — el caller
-    (`process_image_with_vision`) decide si cascada a un fallback o retorna
-    tal cual. Extraído para compartir el código entre el intento primario y
-    el de la cascada sin duplicar el branch."""
-    lock = get_vision_single_flight_lock()
-    if not lock.acquire(blocking=False):
-        payload = _vision_disabled_payload()
-        payload["busy"] = True
-        payload["description"] = "El escáner está procesando otra foto."
-        return payload
-    try:
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        # to_thread: httpx síncrono con timeout de minutos NO puede correr
-        # en el event loop (workers=1 — estancaría TODAS las requests).
-        return await asyncio.to_thread(_ollama_meal_scan, image_b64)
-    except Exception as e:
-        # [P3-VISION-FAIL-ERROR-LOG] error-level para Sentry (paridad con
-        # el except del path openai_compatible más abajo).
-        logger.error(
-            f"❌ [VISION] meal-scan gemma falló (modelo={_ollama_model_name()!r}, "
-            f"base={_ollama_base_url()!r}): {type(e).__name__}: {e}"
+    if is_openai_model(model):
+        # ⚠️ Temperatura: `gpt-5.6-luna` (familia `gpt-5`, no-chat) rechaza
+        # `temperature` != 1 con HTTP 400 contra el API real, pero
+        # `langchain-openai` 1.3 la descarta en silencio para esos modelos
+        # (verificado leyendo `validate_temperature`) — NO-OP mudo con Luna,
+        # pero sí aplica a otros modelos OpenAI que la respetan (gpt-4o).
+        llm = ChatOpenAI(
+            model=model,
+            temperature=0.1,
+            base_url=base_url,
+            api_key=explicit_key or _openai_api_key(),
+            timeout=timeout,
         )
-        payload = _vision_disabled_payload()
-        payload["description"] = "Error analizando imagen."
-        return payload
-    finally:
-        lock.release()
+    else:
+        # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con
+        # base_url/key del provider de visión configurado.
+        llm = ChatDeepSeek(
+            model=model,
+            temperature=0.1,
+            base_url=base_url,
+            api_key=explicit_key,
+            timeout=timeout,
+        )
+    return llm.with_structured_output(schema)
+
+
+async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
+    """[P1-VISION-NO-LOCAL · 2026-07-28] Llamada LLM de bajo nivel: bytes YA
+    REDIMENSIONADOS + prompt + schema propios del caller → respuesta
+    estructurada (instancia de `schema`). NO redimensiona (responsabilidad
+    del caller) y NO captura excepciones (el caller decide cómo degradar —
+    el meal-scan las softea a `analysis_failed`; el escáner de Nevera las
+    mapea a HTTP 502, igual que hacía con Ollama). Compartida entre
+    `_dispatch_openai_compatible_vision` (schema `ImageDescription`) y
+    `analyze_image_structured` (schema propio del caller)."""
+    llm = _resolve_vision_client(schema)
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+        ]
+    )
+    return await llm.ainvoke([message])
+
+
+async def analyze_image_structured(image_bytes: bytes, prompt: str, schema):
+    """[P1-VISION-NO-LOCAL · 2026-07-28] Despacho genérico a visión CLOUD con
+    prompt y salida estructurada ARBITRARIOS del caller — reemplaza el
+    cliente Ollama propio que tenía `routers/user_data.py` (escáner de
+    Nevera) por el MISMO transporte cloud que ya sirve el meal-scan, sin
+    escribir un segundo cliente. Redimensiona ANTES de despachar (mismo
+    chokepoint/telemetría que `process_image_with_vision`) y LANZA en
+    cualquier error (red, parseo, provider caído) — el caller (endpoint
+    FastAPI) decide cómo degradar; el escáner de Nevera lo mapea a HTTP 502,
+    el mismo contrato que tenía con Ollama."""
+    image_bytes, resize_info = prepare_image_for_vision(image_bytes)
+    logger.info(
+        f"[P1-VISION-LUNA] resize original_bytes={resize_info['original_bytes']} "
+        f"sent_bytes={resize_info['sent_bytes']} original_wh={resize_info['original_wh']} "
+        f"sent_wh={resize_info['sent_wh']} resized={resize_info['resized']} "
+        f"skipped_reason={resize_info['skipped_reason']}"
+    )
+    return await _invoke_structured_vision(image_bytes, prompt, schema)
 
 
 async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
     """[P0-DEEPSEEK-MIGRATION · 2026-06-12 → extraído P1-VISION-LUNA ·
     2026-07-28] Intento de análisis vía provider OpenAI-compatible
-    (gpt-5.6-luna u otro configurado por knob). Nunca lanza: cualquier error
-    degrada a un payload `analysis_failed=True`. Extraído para compartir el
-    código entre el intento primario y el de la cascada sin duplicar el
-    branch.
+    (gpt-5.6-luna u otro configurado por knob) — el ÚNICO provider tras
+    P1-VISION-NO-LOCAL. Nunca lanza: cualquier error degrada a un payload
+    `analysis_failed=True`.
 
     [P1-VISION-LUNA · 2026-07-28] BUG cazado en vivo contra la API real: con
     `MEALFIT_VISION_MODEL=gpt-5.6-luna` este dispatch construía SIEMPRE
@@ -563,55 +482,16 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
     desde el cliente LangChain mismo.
     """
     try:
-        # [P3-VISION-MODEL-KNOB · 2026-05-20] Modelo via knob (no hardcoded).
-        model = _vision_model_name()
-        base_url = _vision_base_url()
-        timeout = _vision_llm_timeout_s()  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
-        # Precedencia de API key: VISION_API_KEY (knob de visión) primero.
-        explicit_key = (os.environ.get("VISION_API_KEY") or "").strip() or None
-
-        if is_openai_model(model):
-            # [P1-VISION-LUNA] ChatOpenAI PLANO — el fix del bug de arriba.
-            # ⚠️ Temperatura: `gpt-5.6-luna` (familia `gpt-5`, no-chat)
-            # rechaza `temperature` != 1 con HTTP 400 contra el API real.
-            # PERO `langchain-openai` 1.3 (`validate_temperature` en
-            # `chat_models/base.py`) DESCARTA `temperature` en silencio
-            # ANTES de construir el request para cualquier modelo `gpt-5*`
-            # no-chat — verificado leyendo el validator, no asumido. El
-            # `temperature=0.1` de abajo es entonces un NO-OP MUDO con Luna
-            # (la llamada corre con la temperatura default del modelo, NO
-            # determinista pese a lo que este kwarg sugiere) pero SÍ aplica
-            # para otros modelos OpenAI que sí la respetan (gpt-4o, etc.) —
-            # se deja puesto por eso, no por descuido.
-            llm = ChatOpenAI(
-                model=model,
-                temperature=0.1,
-                base_url=base_url,
-                api_key=explicit_key or _openai_api_key(),
-                timeout=timeout,
-            ).with_structured_output(ImageDescription)
-        else:
-            # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con
-            # base_url/key del provider de visión configurado.
-            llm = ChatDeepSeek(
-                model=model,
-                temperature=0.1,
-                base_url=base_url,
-                api_key=explicit_key,
-                timeout=timeout,
-            ).with_structured_output(ImageDescription)
-
-        # Convertimos los bytes a base64 para enviarlo a la API de LangChain/Gemini
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": "Describe detalladamente todos los alimentos, ingredientes o platillos que ves en esta imagen. Si es una nevera, lista el contenido visible. Si no hay comida, indícalo. Da también un nombre corto del platillo en español dominicano (`meal_name`, máx ~6 palabras). También proporciona una estimación de las calorías, gramos de proteína, gramos de carbohidratos y gramos de grasas saludables (solo el número) totales en la imagen (usa 0 si no es comida)."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}}
-            ]
+        # [P1-VISION-NO-LOCAL · 2026-07-28] Cliente + invoke delegados a
+        # `_invoke_structured_vision` (resolución de modelo/cliente/key vía
+        # `_resolve_vision_client`, mismo criterio de despacho por MODELO
+        # documentado arriba). El texto del prompt y el parseo de la
+        # respuesta se quedan acá — son propios del meal-scan.
+        response = await _invoke_structured_vision(
+            image_bytes,
+            "Describe detalladamente todos los alimentos, ingredientes o platillos que ves en esta imagen. Si es una nevera, lista el contenido visible. Si no hay comida, indícalo. Da también un nombre corto del platillo en español dominicano (`meal_name`, máx ~6 palabras). También proporciona una estimación de las calorías, gramos de proteína, gramos de carbohidratos y gramos de grasas saludables (solo el número) totales en la imagen (usa 0 si no es comida).",
+            ImageDescription,
         )
-
-        response = await llm.ainvoke([message])
 
         description = response.description if response and hasattr(response, 'description') else "Imagen sin descripción clara."
         is_food = response.is_food if response and hasattr(response, 'is_food') else False
@@ -673,26 +553,6 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
         }
 
 
-def _vision_result_unusable(result: dict) -> bool:
-    """[P1-VISION-LUNA] "Vacío/no usable" — dispara la cascada. Todo path de
-    fallo de `_dispatch_ollama_vision`/`_dispatch_openai_compatible_vision`
-    YA retorna `analysis_failed=True` (ver `_vision_disabled_payload`,
-    incluye el caso `busy=True` de single-flight ocupado) — un resultado
-    exitoso NUNCA lleva esa key."""
-    return not result or bool(result.get("analysis_failed"))
-
-
-async def _dispatch_vision_provider(provider: str, image_bytes: bytes) -> dict:
-    """[P1-VISION-LUNA] Único punto de despacho por provider — compartido
-    entre el intento primario y el de la cascada para no duplicar el branch
-    `ollama` vs `openai_compatible`. Nunca lanza: ambas implementaciones ya
-    capturan sus propios errores y devuelven un payload
-    `analysis_failed=True` en caso de fallo."""
-    if provider == _VISION_PROVIDER_OLLAMA:
-        return await _dispatch_ollama_vision(image_bytes)
-    return await _dispatch_openai_compatible_vision(image_bytes)
-
-
 async def process_image_with_vision(image_bytes: bytes) -> dict:
     """
     Toma los bytes de una imagen, usa el provider de visión configurado para
@@ -700,13 +560,14 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
     structured output. Con `MEALFIT_VISION_PROVIDER=disabled` retorna el
     payload `analysis_failed` sin tocar ningún API.
 
-    [P1-VISION-LUNA · 2026-07-28] Redimensiona ANTES de despachar a
-    cualquier provider (chokepoint único: cubre `ollama` Y
-    `openai_compatible`) y, si `MEALFIT_VISION_FALLBACK_PROVIDER` está
-    configurado, cascada UNA sola vez si el provider primario falla o
-    devuelve un resultado no usable. Sin bucles: primario → fallback → si
-    el fallback TAMBIÉN falla, retorna el resultado del PRIMARIO (no el del
-    fallback), para que el log/mensaje apunte al problema real.
+    [P1-VISION-NO-LOCAL · 2026-07-28] `openai_compatible` es el ÚNICO
+    provider — la cascada de fallback a `ollama` (P1-VISION-LUNA) fue
+    eliminada junto con el provider local: no queda nada a lo que cascar, y
+    dejar la maquinaria de reintento viva (leyendo un knob que ya no puede
+    apuntar a ningún provider real) era exactamente el tipo de código muerto
+    que este P-fix cierra. Sin cascada, este dispatch es un passthrough
+    directo — el resultado (éxito o `analysis_failed`) del ÚNICO provider
+    se retorna tal cual.
     """
     global _warned_vision_disabled
     if not is_vision_enabled():
@@ -722,10 +583,9 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
         return _vision_disabled_payload()
 
     # [P1-VISION-LUNA · 2026-07-28] Resize en el ÚNICO punto por el que
-    # pasan los bytes antes de salir a CUALQUIER provider — cubre `ollama` Y
-    # `openai_compatible`. A gemma también le acelera (30-120s de latencia
-    # son en parte resolución). Telemetría a `info`: audita el ahorro real
-    # en prod (6,6x medido 3024x4032→1024px, ver backend/docs/vision_luna.md).
+    # pasan los bytes antes de salir al provider. Telemetría a `info`: audita
+    # el ahorro real en prod (6,6x medido 3024x4032→1024px, ver
+    # backend/docs/vision_luna.md).
     image_bytes, resize_info = prepare_image_for_vision(image_bytes)
     logger.info(
         f"[P1-VISION-LUNA] resize original_bytes={resize_info['original_bytes']} "
@@ -734,31 +594,7 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
         f"skipped_reason={resize_info['skipped_reason']}"
     )
 
-    primary = _vision_provider()
-    result = await _dispatch_vision_provider(primary, image_bytes)
-    if not _vision_result_unusable(result):
-        return result
-
-    fallback = _vision_cascade_target(primary)
-    if fallback is None:
-        return result
-
-    logger.warning(
-        f"⚠️ [P1-VISION-LUNA] Provider primario={primary!r} falló o devolvió "
-        f"un resultado no usable; reintentando UNA sola vez con "
-        f"fallback={fallback!r}."
-    )
-    fb_result = await _dispatch_vision_provider(fallback, image_bytes)
-    if not _vision_result_unusable(fb_result):
-        return fb_result
-
-    logger.warning(
-        f"⚠️ [P1-VISION-LUNA] Fallback={fallback!r} TAMBIÉN falló; "
-        f"devolviendo el resultado ORIGINAL del provider primario="
-        f"{primary!r} (no el del fallback) para que el log apunte al "
-        f"problema real."
-    )
-    return result
+    return await _dispatch_openai_compatible_vision(image_bytes)
 
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
 # "multimodal" siempre vectorizó el TEXTO de la descripción (no la imagen),
