@@ -197,11 +197,30 @@ def test_upload_quota_exempt_with_ratelimiter():
 
 
 def test_upload_usage_log_gated_on_local_vision():
+    """[P1-MEAL-SCAN-GEMMA · 2026-07-12 → call site superseded por
+    P1-VISION-LUNA · 2026-07-28] El GATE `not is_vision_local()` se
+    conserva igual -- lo que cambió es el sink: ya no escribe en
+    `api_usage` (libro de CUOTA mensual de planes, vía `log_api_usage`)
+    sino en `llm_usage_events` (libro de COSTO) vía `log_llm_usage_event`,
+    para que un scan con provider CLOUD pago no queme crédito de plan.
+    Detalle completo del nuevo call site: test_p1_vision_luna.py."""
     body = _upload_body()
     assert "not is_vision_local()" in body, \
-        "log_api_usage (cuenta al cap) solo con provider cloud pago"
-    # El anchor histórico de P1-DIARY-UPLOAD-GUEST-IDOR se preserva literal.
-    assert 'await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")' in body
+        "log_llm_usage_event (costo, NO cuota) solo con provider cloud pago"
+    assert "asyncio.to_thread(" in body and "log_llm_usage_event" in body, \
+        "el evento de costo debe offloadearse a un thread (P2-DIARY-ASYNC-SYNC-DB)"
+    # El call site viejo pasaba `log_api_usage` POR REFERENCIA (bare, sin
+    # paréntesis) como argumento de `to_thread` -- `log_api_usage(` con
+    # paréntesis de invocación directa NUNCA existió, así que ambos
+    # patrones se cubren. Ninguno debe confundirse con las menciones
+    # narrativas en backticks que el cuerpo del endpoint conserva al
+    # explicar el bug histórico que P1-VISION-LUNA cerró.
+    assert "to_thread(log_api_usage" not in body and "log_api_usage(" not in body, (
+        "P1-VISION-LUNA: log_api_usage ya NO debe invocarse desde /upload -- "
+        "quemaba crédito de plan por cada scan con provider cloud pago, "
+        "el mismo bug de clase que este archivo (P1-MEAL-SCAN-GEMMA) cerró "
+        "originalmente para el path local."
+    )
 
 
 def test_upload_busy_passthrough():

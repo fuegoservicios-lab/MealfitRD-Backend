@@ -75,14 +75,27 @@ def test_background_visual_entry_write_is_gated_on_actual_user_id():
 # ---------------------------------------------------------------------------
 def test_sync_db_calls_offloaded_to_thread():
     """Las 3 llamadas DB síncronas del handler async `api_diary_upload`
-    deben ir vía `asyncio.to_thread` (no bloquear el event loop)."""
+    deben ir vía `asyncio.to_thread` (no bloquear el event loop).
+
+    [P1-VISION-LUNA · 2026-07-28] El 2º call site (llm_vision) cambió de
+    sink: `log_api_usage` (libro de CUOTA, `api_usage`) → `log_llm_usage_event`
+    (libro de COSTO, `llm_usage_events`) — mismo bug de clase que
+    P1-MEAL-SCAN-GEMMA cerró para el path local, ahora cerrado también para
+    el path CLOUD pago. El offload a thread se conserva idéntico; solo
+    cambió QUÉ función se offloadea. Detalle: test_p1_vision_luna.py."""
     src = _src()
     assert "P2-DIARY-ASYNC-SYNC-DB" in src, "Falta el tooltip-anchor P2-DIARY-ASYNC-SYNC-DB"
     assert "await asyncio.to_thread(get_user_profile, user_id)" in src, (
         "get_user_profile (chrono) debe ir por asyncio.to_thread"
     )
-    assert 'await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")' in src, (
-        "log_api_usage (llm_vision) debe ir por asyncio.to_thread"
+    assert re.search(
+        r'await\s+asyncio\.to_thread\(\s*\n\s*log_llm_usage_event\s*,',
+        src,
+    ), "log_llm_usage_event (costo del scan cloud) debe ir por asyncio.to_thread"
+    assert 'await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")' not in src, (
+        "regresión: el call site viejo (log_api_usage, quema crédito de "
+        "plan) reapareció -- P1-VISION-LUNA lo reemplazó por "
+        "log_llm_usage_event."
     )
     assert re.search(
         r'await\s+asyncio\.to_thread\(\s*\n\s*execute_sql_write\s*,',

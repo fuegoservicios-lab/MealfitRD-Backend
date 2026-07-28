@@ -102,29 +102,27 @@ def test_vision_model_helper_present():
 
 
 def test_vision_llm_uses_knob_not_hardcoded():
-    """`ChatGoogleGenerativeAI` dentro de `process_image_with_vision` debe
-    referenciar `_vision_model_name()`, no un string literal."""
+    """El modelo de visión SIEMPRE sale del knob, nunca de un literal.
+
+    [P1-VISION-LUNA · 2026-07-28] Antes este test escaneaba el cuerpo de
+    `process_image_with_vision`. Al extraerse el dispatch por proveedor a
+    helpers propios, la construcción del LLM salió de esa ventana y el test
+    se puso rojo sin que la invariante se rompiera. Ahora se ancla a la
+    invariante (todo `model=` de una llamada de visión viene del knob) en vez
+    de a una función concreta, que es lo que se mueve con cada refactor.
+    """
     src = _VISION_AGENT_PY.read_text(encoding="utf-8")
-    # Buscar la sección de process_image_with_vision (función async)
-    m = re.search(
-        r"async def process_image_with_vision[\s\S]+?(?=\n(?:async )?def |\Z)",
-        src,
-    )
-    assert m is not None, "No se encontró def de process_image_with_vision"
-    body = m.group(0)
-    assert "_vision_model_name()" in body, (
-        "process_image_with_vision NO usa _vision_model_name(). "
-        "Probablemente revertido a hardcoded — re-revisar D3 del audit."
-    )
-    # Defense: el literal hardcoded NO debe aparecer como argumento
-    # a `model=` (puede aparecer como default del helper, eso es OK).
-    body_lines = body.splitlines()
-    for ln in body_lines:
-        if "model=" in ln and "gemini-3.1-pro-preview" in ln:
+    assert "_vision_model_name()" in src, "el modelo de visión debe venir del knob"
+
+    # Ningún `model=` puede llevar un literal de modelo hardcodeado.
+    for i, ln in enumerate(src.splitlines(), 1):
+        if "model=" not in ln or ln.strip().startswith("#"):
+            continue
+        m = re.search(r"model\s*=\s*[\"']([^\"']+)[\"']", ln)
+        if m:
             pytest.fail(
-                f"vision_agent.process_image_with_vision sigue con modelo "
-                f"hardcoded en línea: {ln.strip()!r}. Debe ser "
-                f"`model=_vision_model_name()`."
+                "vision_agent.py:%d hardcodea el modelo de visión: model=%r. "
+                "Debe salir de `_vision_model_name()` (knob MEALFIT_VISION_MODEL)." % (i, m.group(1))
             )
 
 
