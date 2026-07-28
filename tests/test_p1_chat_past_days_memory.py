@@ -337,14 +337,33 @@ def test_agent_inyecta_los_bloques_despues_del_diario_de_hoy():
         assert c > p, "path %d: el bloque no puede ir antes del reorden del prefijo estático" % i
 
 
-def test_agent_pasa_el_tz_offset_del_cliente_al_bloque_de_diario():
-    """Sin esto, una comida de las 10:30pm RD se atribuye al día siguiente y el
-    día real se declara 'SIN REGISTRO' — la mentira que este P-fix cierra."""
+def test_agent_reenvia_el_tz_offset_del_cliente_al_bloque_de_diario():
+    """El path stream SÍ recibe `tz_offset` del cliente; el bloque de diario lo
+    necesita para convertir `consumed_at` (UTC) a la fecha LOCAL del usuario.
+    Sin él, una comida de las 10:30pm RD se atribuye al día siguiente y el día
+    real se declara 'SIN REGISTRO'."""
     src = _src("agent.py")
-    assert "tz_offset_mins=" in src, "el diario multi-día debe recibir el offset resuelto"
-    i_helper = src.index("def _build_past_days_context")
-    cuerpo = src[i_helper:i_helper + 3000]
-    assert "tz_offset" in cuerpo, "el helper debe aceptar y reenviar el tz_offset"
-    # El path stream SÍ recibe tz_offset del cliente y debe pasárselo.
-    assert "_build_past_days_context(user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset)" in src \
-        or "tz_offset=tz_offset" in src, "el path stream debe reenviar el tz_offset del cliente"
+    i = src.index("def _build_past_days_context")
+    cuerpo = src[i:i + 3000]
+    assert "tz_offset_mins=" in cuerpo, "el helper debe reenviar el offset a build_past_diary_block"
+    assert re.search(r"_build_past_days_context\([^)]*tz_offset=tz_offset", src), \
+        "el path stream debe pasarle el tz_offset del cliente"
+
+
+def test_tz_offset_se_resuelve_por_is_not_none_nunca_por_truthiness():
+    """`tz_offset = 0` es UTC: un offset LEGÍTIMO que además es falsy.
+
+    Un `if tz_offset:` lo trataría como ausente y caería al default 240 (UTC-4),
+    desplazando un día las comidas nocturnas de todo usuario en UTC — la misma
+    clase de bug que este P-fix existe para cerrar. Este guard lo prohíbe por
+    construcción, que es lo que una aserción de substring no consigue.
+    """
+    src = _src("agent.py")
+    i = src.index("def _build_past_days_context")
+    cuerpo = src[i:i + 3000]
+    assert "tz_offset is not None" in cuerpo, \
+        "la resolución del offset debe ser `is not None`, no truthiness"
+    assert re.search(r"if\s+tz_offset\s*:", cuerpo) is None, \
+        "truthiness sobre tz_offset: el 0 (UTC) se perdería silenciosamente"
+    assert re.search(r"tz_offset\s+or\s+240", cuerpo) is None, \
+        "`tz_offset or 240` tiene el mismo bug que el truthiness"
