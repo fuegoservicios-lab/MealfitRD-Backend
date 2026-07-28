@@ -130,13 +130,24 @@ def test_bloque_plan_marca_fechas_inferidas_con_tilde():
     assert "~Domingo 26 jul" in out
 
 
-def test_bloque_plan_respeta_el_cap_y_lo_declara():
-    """No silent caps: si se recorta, el prompt lo dice."""
-    archived = [_day("D%d" % i, i, _MEALS) for i in range(10)]
+@pytest.mark.parametrize("cap", [520, 700, 1200, 3000])
+def test_bloque_plan_nunca_supera_el_cap(cap):
+    """El cap es DURO: el docstring lo promete y la nota de recorte también cuenta."""
+    archived = [_day("D%d" % i, i, _MEALS) for i in range(12)]
     plan = {"days": [_day("Lunes", 1)], "_archived_days": archived}
-    out = build_past_plan_days_block(plan, HOY, days_back=30, max_chars=600)
-    assert len(out) <= 700  # cap + header/footer
-    assert "omitidos por espacio" in out
+    out = build_past_plan_days_block(plan, HOY, days_back=30, max_chars=cap)
+    assert len(out) <= cap, "cap duro violado: %d > %d" % (len(out), cap)
+
+
+def test_bloque_plan_declara_el_recorte_cuando_recorta():
+    """No silent caps: si se cae un día, el prompt lo dice."""
+    archived = [_day("D%d" % i, i, _MEALS) for i in range(12)]
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": archived}
+    apretado = build_past_plan_days_block(plan, HOY, days_back=30, max_chars=520)
+    holgado = build_past_plan_days_block(plan, HOY, days_back=30, max_chars=6000)
+    assert "omitidos por espacio" in apretado
+    assert "omitidos por espacio" not in holgado
+    assert apretado.count("\n- ") < holgado.count("\n- ")
 
 
 def test_bloque_plan_apagado_con_days_back_cero():
@@ -167,3 +178,24 @@ def test_bloque_diario_vacio_sigue_declarando_ignorancia():
     out = build_past_diary_block([], HOY, days_back=2, max_chars=3000)
     assert "SIN REGISTRO" in out
     assert "Domingo 26 jul" in out and "Sábado 25 jul" in out
+
+
+def test_diario_atribuye_la_comida_al_dia_LOCAL_no_al_utc():
+    """Regresión: 10:30pm RD del 25 se guarda como 02:30 UTC del 26. Tomar
+    `.date()` del UTC crudo la movía al 26 Y declaraba el 25 'SIN REGISTRO'."""
+    rows = [{"meal_name": "Merienda nocturna", "meal_type": "cena",
+             "calories": 300, "consumed_at": "2026-07-26T02:30:00+00:00"}]
+    out = build_past_diary_block(rows, HOY, days_back=3, max_chars=3000)
+    assert "Sábado 25 jul: cena: Merienda nocturna (300 kcal)" in out
+    assert "Sábado 25 jul: SIN REGISTRO" not in out
+    assert "Domingo 26 jul: SIN REGISTRO" in out
+
+
+def test_diario_excluye_el_dia_anterior_al_floor():
+    """El borde cercano (hoy excluido) ya está fijado; este fija el lejano."""
+    rows = [{"meal_name": "Demasiado viejo", "meal_type": "cena",
+             "calories": 100, "consumed_at": "2026-07-23T15:00:00+00:00"}]
+    out = build_past_diary_block(rows, HOY, days_back=3, max_chars=3000)
+    assert "Demasiado viejo" not in out
+    assert "Jueves 23 jul" not in out
+    assert "Viernes 24 jul: SIN REGISTRO" in out

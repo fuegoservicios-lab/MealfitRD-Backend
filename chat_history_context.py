@@ -38,6 +38,29 @@ def _parse_date(value: Any) -> Optional[date]:
         return None
 
 
+def _consumed_local_date(value: Any, tz_offset_mins: int = 240) -> Optional[date]:
+    """Fecha LOCAL DEL USUARIO en la que ocurrió un `consumed_at`.
+
+    `consumed_at` es timestamptz almacenado en UTC. Tomar `.date()` directo
+    atribuye al día SIGUIENTE todo lo comido después de las 20:00 hora RD, y de
+    paso declara 'SIN REGISTRO' el día real — justo la mentira que este bloque
+    existe para impedir. Convención del repo: RD = UTC-4 (tz_offset_mins=240).
+    tooltip-anchor: P1-CHAT-PAST-DAYS-TZ-CONSUMED
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if len(text) == 10:  # 'YYYY-MM-DD': ya es una fecha, no hay hora que convertir
+        return _parse_date(text)
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return _parse_date(value)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return (dt - timedelta(minutes=tz_offset_mins)).date()
+
+
 def _live_anchor(live: list, plan_data: dict, today: date):
     """(idx, fecha) del día vivo que sirve de ancla. Ver spec §3 Pieza 1.
 
@@ -139,26 +162,43 @@ def _fmt_date_es(d: date, inferred: bool = False) -> str:
 
 
 def _assemble(header: str, lines: list, footer: str, max_chars: int, label: str) -> str:
-    """Junta líneas (ya en orden newest-first) respetando el cap.
+    """Junta líneas (ya en orden newest-first) respetando el cap DURO.
 
     Los días más antiguos se caen primero y el recorte se DECLARA en el texto —
     un cap silencioso se lee como "esto es todo lo que hay", que es justo la
-    confusión que este P-fix existe para evitar.
+    confusión que este P-fix existe para evitar. La nota de recorte ocupa espacio,
+    así que se aplica punto fijo: se descuenta del presupuesto ANTES de decidir
+    qué cae. Converge en 2-3 vueltas.
     """
-    budget = max(0, max_chars - len(header) - len(footer))
-    kept, used, dropped = [], 0, 0
-    for line in lines:
-        if used + len(line) + 1 > budget:
-            dropped += 1
-            continue
-        kept.append(line)
-        used += len(line) + 1
+    def _pack(budget: int):
+        kept, used, dropped = [], 0, 0
+        for line in lines:
+            if used + len(line) + 1 > budget:
+                dropped += 1
+            else:
+                kept.append(line)
+                used += len(line) + 1
+        return kept, dropped
+
+    # Punto fijo: la nota de recorte OCUPA espacio, así que hay que descontarla
+    # del presupuesto ANTES de decidir qué cae. Converge en 2-3 vueltas (el
+    # largo de la nota solo depende de los dígitos de `dropped`).
+    notice = ""
+    kept, dropped = [], 0
+    for _ in range(4):
+        kept, dropped = _pack(max_chars - len(header) - len(footer) - len(notice))
+        nueva = f"\n(+{dropped} día(s) más antiguos omitidos por espacio.)" if dropped else ""
+        if nueva == notice:
+            break
+        notice = nueva
     if not kept:
+        logger.info(
+            f"[P1-CHAT-PAST-DAYS] {label}: cap={max_chars} no da ni para una línea; bloque omitido"
+        )
         return ""
     if dropped:
         logger.info(f"[P1-CHAT-PAST-DAYS] {label}: {dropped} día(s) recortados por cap={max_chars}")
-        footer = f"\n(+{dropped} día(s) más antiguos omitidos por espacio.)" + footer
-    return header + "\n".join(kept) + footer
+    return header + "\n".join(kept) + notice + footer
 
 
 def build_past_plan_days_block(plan_data: Any, today: date,
@@ -206,7 +246,8 @@ def build_past_plan_days_block(plan_data: Any, today: date,
 
 def build_past_diary_block(consumed_rows: Any, today: date,
                            days_back: Optional[int] = None,
-                           max_chars: Optional[int] = None) -> str:
+                           max_chars: Optional[int] = None,
+                           tz_offset_mins: int = 240) -> str:
     """Pieza 3 del spec: lo que el usuario REGISTRÓ haber comido en los días
     anteriores a hoy. Declara explícitamente los días sin registro — esa es la
     guarda que impide que el modelo rellene el hueco con el plan."""
@@ -220,7 +261,7 @@ def build_past_diary_block(consumed_rows: Any, today: date,
     for row in (consumed_rows or []):
         if not isinstance(row, dict):
             continue
-        d = _parse_date(row.get("consumed_at"))
+        d = _consumed_local_date(row.get("consumed_at"), tz_offset_mins)
         if d is None or not (floor <= d < today):
             continue
         by_date.setdefault(d, []).append(row)
