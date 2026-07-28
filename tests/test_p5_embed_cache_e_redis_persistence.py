@@ -36,6 +36,22 @@ def _sample_master_list():
     ]
 
 
+@pytest.fixture(autouse=True)
+def _reset_semantic_cache_state():
+    """[2026-07-28 · contaminación de orden, especie 3] `get_semantic_cache` memoiza en
+    `sc._semantic_cache` y cientos de tests de la suite lo dejan POBLADO — este archivo
+    pasaba solo y caía en corrida completa con la identidad del módulo intacta (el vigía
+    de identidades del conftest es ciego a atributos). Mismo remedio que
+    test_p6_embed_cache_cooldown_bypass: snapshot/reset autouse file-wide (la clase 5 ya
+    lo hacía en setup/teardown; las demás quedaban expuestas)."""
+    import shopping_calculator as sc
+    sc._semantic_cache = None
+    sc._semantic_cache_failed_until = 0.0
+    yield
+    sc._semantic_cache = None
+    sc._semantic_cache_failed_until = 0.0
+
+
 # ---------------------------------------------------------------------------
 # 1. Hash estabilidad y sensibilidad
 # ---------------------------------------------------------------------------
