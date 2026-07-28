@@ -1170,6 +1170,27 @@ def _build_hybrid_shopping_list(
         out_item = dict(chosen)  # copia superficial
         out_item["is_perishable"] = (perishability == "perishable")
         out_item["_perishability"] = perishability
+        # [P1-OVERCOVER-LABEL · 2026-07-28] El costo del ciclo YA sabe que un envase que
+        # cubre varias semanas no se recompra semanal (P1-CYCLE-REPURCHASE-HONEST), pero el
+        # USUARIO no: el tarro de cottage 16 Oz (cover ~5×) salía en la sección semanal SIN
+        # letrero (caso vivo, plan 9af221fb) — recompra implícita cada ida. Con cobertura
+        # ≥2× en un perecedero, el display declara cuántos días alcanza de verdad (capado
+        # por la vida útil del abierto). Va AQUÍ y no al armar el result: `is_perishable`
+        # nace en esta etapa (el intento anterior corría antes y nunca la veía).
+        try:
+            _ocr = float(out_item.get("pkg_cover_ratio") or 0)
+            if (out_item["is_perishable"] and _ocr >= 2.0
+                    and "alcanza" not in str(out_item.get("display_qty", ""))):
+                _cubre_d = 7.0 * _ocr
+                _vida_d = float(out_item.get("shelf_life_days") or 0)
+                if _vida_d > 0:
+                    _cubre_d = min(_cubre_d, _vida_d)
+                _cubre_i = max(8, int(round(_cubre_d)))
+                out_item["display_qty"] = (
+                    f"{out_item.get('display_qty', '')} · alcanza ~{_cubre_i} días — "
+                    f"no recompres cada semana")
+        except (TypeError, ValueError):
+            pass
         hybrid.append(out_item)
 
     return hybrid

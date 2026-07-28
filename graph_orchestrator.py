@@ -15571,6 +15571,30 @@ def _meal_is_baked(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
+def _meal_is_hot_cooked(meal: dict, strip_accents_fn) -> bool:
+    """[P1-HOT-DAIRY-ASIDE · 2026-07-28] ¿El plato se COCINA con calor? (revoltillo,
+    salteado, guiso, plancha). "Incorpora yogurt a la preparación y mézclalo" sobre un
+    revoltillo CALIENTE lo corta (caso vivo, desayuno jueves plan 9af221fb) — el lácteo
+    frío que el CLOSER añade a un plato caliente va AL LADO. Si el yogurt fuera salsa
+    del plato, el LLM lo integra él mismo en sus pasos (guiso de yogurt del mismo plan:
+    templado correcto) — esta rama solo gobierna el texto del complemento del closer.
+    Pura, fail-open a False = comportamiento previo."""
+    try:
+        _blob = strip_accents_fn((str(meal.get("name", "")) + " | " + " ".join(
+            str(s) for s in (meal.get("recipe") or []) if isinstance(s, str))).lower())
+        if any(h in _blob for h in (
+                "toque de fuego", "sofrie", "sofrei", "saltea", "revoltillo", "revuelto",
+                "a la plancha", "sarten", "hierve", "hervid", "estofa")):
+            return True
+        # "guisa" como substring muerde "GUISAntes" (Batata con Guisantes, plato frío
+        # — cazado por test_p1_closer_hygiene): la familia culinaria guis- se detecta
+        # con lookahead que excluye el alimento.
+        import re as _re_hc
+        return bool(_re_hc.search(r"\bguis(?!ant)", _blob))
+    except Exception:
+        return False
+
+
 def _closer_protein_step_text(nm: str, no_cook: bool, blended: bool = False,
                               stewy: bool = False, precooked: bool = False,
                               baked: bool = False) -> str:
@@ -15700,7 +15724,7 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
                     _re.search(r"\b" + _re.escape(st) + r"(?:s|es)?\b", _l) for st in _stems):
                 _precooked_line = True
                 break
-        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line, baked=_meal_is_baked(meal, _sa_cs))}"
+        _step = f"💪 {_closer_protein_step_text(nm, no_cook, blended=_blended, stewy=_meal_is_stewy(meal, _sa_cs), precooked=_precooked_line, baked=(_meal_is_baked(meal, _sa_cs) or _meal_is_hot_cooked(meal, _sa_cs)))}"
         if any(isinstance(s, str) and s.strip() == _step.strip() for s in rec):
             return False  # (a) dup exacto
         # [P1-CLOSER-INTO-MONTAJE · 2026-07-27] El closer 💪 tenía su PROPIO camino y se quedó
@@ -22861,6 +22885,31 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"bigfruit_fraction={_n_bf}")
     except Exception:
         pass
+    # [P1-FRESH-CANNED-PROSE · 2026-07-28] verbos de lata sobre proteína fresca ("escurre
+    # el filete... reservando el líquido de la lata") → prosa de fresco/batch.
+    try:
+        _n_fp = _fresh_protein_canned_prose_fix(days)
+        if _n_fp:
+            total += _n_fp
+            parts.append(f"fresh_canned_prose={_n_fp}")
+    except Exception:
+        pass
+    # [P1-BAKING-POWDER-CAP · 2026-07-28] leudante en CDAS → 1 cdta (plausibilidad).
+    try:
+        _n_bp = _baking_powder_cap_pass(days)
+        if _n_bp:
+            total += _n_bp
+            parts.append(f"baking_powder_cap={_n_bp}")
+    except Exception:
+        pass
+    # [P1-HERB-COUNT-GENDER · 2026-07-28] "3 perejil fresco"→ramitas + "Guisadas"→Guisado.
+    try:
+        _n_hg = _herb_count_and_gender_polish(days)
+        if _n_hg:
+            total += _n_hg
+            parts.append(f"herb_gender={_n_hg}")
+    except Exception:
+        pass
     # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
     try:
         _n_rw = _rice_water_ratio_fix(days)
@@ -27097,6 +27146,26 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     touched += 1
                                     _meal_touched = True
                         continue
+                    # [P1-RICE-SIDE-MIN-COOKABLE · 2026-07-28] "15 g de arroz blanco crudo"
+                    # + paso dedicado de cocción (2ª aparición: planes ab2b0a16 y 9af221fb)
+                    # — nadie cuece 2 cucharadas de arroz. Bajo el mínimo cocinable
+                    # (CLOSER_COOKABLE_MIN_G=40) se bumpea; la banda re-mide el delta.
+                    if "arroz" in il and "crud" in il:
+                        m_rz = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                        if m_rz and 0 < float(m_rz.group(1).replace(",", ".")) < float(CLOSER_COOKABLE_MIN_G):
+                            _rz_cur = float(m_rz.group(1).replace(",", "."))
+                            _rzf = float(CLOSER_COOKABLE_MIN_G) / _rz_cur
+                            _new_rz = _resc(s, _rzf)
+                            if _new_rz != s:
+                                ings[idx] = _new_rz
+                                if _lockstep and isinstance(raw[idx], str):
+                                    try:
+                                        raw[idx] = _resc(str(raw[idx]), _rzf)
+                                    except Exception:
+                                        pass
+                                touched += 1
+                                _meal_touched = True
+                            continue
                     # [P1-CHEESE-DUST-BUMP · 2026-07-28] "0.82 g de queso Gouda rallado"
                     # (caso vivo, plan ab2b0a16 desayuno jueves): la exención 'rallado' deja
                     # pasar POLVO de queso — bajo 5g no es garnish, es artefacto del solver
@@ -28399,6 +28468,159 @@ _BIGFRUIT_COUNT_LEAD_RX = _re_cv.compile(
 _BIGFRUIT_HINT_RX = _re_cv.compile(r"\(\s*(\d+(?:[.,]\d+)?)\s*g\s*\)")
 
 
+_CANNED_TOKENS_FP = ("en lata", "enlatad", "en agua", "en aceite", "sardina", "ahumad", "conserva")
+_LATA_CLAUSE_RX = _re_cv.compile(r",?\s*reservando el l[ií]quido de la lata", _re_cv.IGNORECASE)
+_LATA_RESERVED_RX = _re_cv.compile(r"\s*y el l[ií]quido reservado de [^,.;]+", _re_cv.IGNORECASE)
+_ESCURRE_FISH_RX = _re_cv.compile(
+    r"Escurre\s+(?:el\s+|la\s+)?((?:filete de )?pescado[^,.;]*?|filete[^,.;]*?)\s+y\s+desmen[uú]zal[oa]s?"
+    r"(?:\s+ligeramente)?(?:\s+con un tenedor)?", _re_cv.IGNORECASE)
+_ESCURRE_AVE_RX = _re_cv.compile(
+    r"Escurre\s+(?:el\s+|la\s+)?(pechuga[^,.;]*?|pollo[^,.;]*?|pavo[^,.;]*?)\s+y\s+desmen[uú]zal[oa]s?"
+    r"(?:\s+ligeramente)?(?:\s+con un tenedor)?", _re_cv.IGNORECASE)
+
+
+_HERB_BARE_COUNT_RX = _re_cv.compile(
+    r"^(\s*)(\d+)\s+(perejil|cilantro|albahaca|tomillo|romero)\b(?!\s*(?:ramitas?|tallos?|hojas?|cdas?|cdtas?|g\b))",
+    _re_cv.IGNORECASE)
+_GUISADAS_MASC_RX = _re_cv.compile(
+    r"\b((?:filete de )?pescado(?:\s+blanco)?|filete|pollo|pavo)\s+guisadas\b", _re_cv.IGNORECASE)
+
+
+def _herb_count_and_gender_polish(days) -> int:
+    """[P1-HERB-COUNT-GENDER · 2026-07-28] Dos menores de la 3ª revisión visual:
+      · "3 perejil fresco" / "5 cilantro fresco" — conteo pelado de hierba sin unidad
+        → "3 ramitas de perejil…" (la ramita es la unidad natural es-DO);
+      · "Pescado blanco Guisadas" / "filete … guisadas" — participio en femenino plural
+        tras sustantivo masculino (arrastre de un swap) → "guisado". Aplica a nombre,
+        ingredientes y pasos. Display-only, fail-open. tooltip-anchor: P1-HERB-COUNT-GENDER
+    """
+    if not isinstance(days, list):
+        return 0
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                _tocado = False
+                ings = meal.get("ingredients")
+                if isinstance(ings, list):
+                    for idx, s in enumerate(ings):
+                        if not isinstance(s, str):
+                            continue
+                        nuevo = _HERB_BARE_COUNT_RX.sub(r"\g<1>\g<2> ramitas de \g<3>", s, count=1)
+                        nuevo = _GUISADAS_MASC_RX.sub(lambda m: f"{m.group(1)} guisado", nuevo)
+                        if nuevo != s:
+                            ings[idx] = nuevo
+                            _tocado = True
+                nm = meal.get("name")
+                if isinstance(nm, str):
+                    nuevo_nm = _GUISADAS_MASC_RX.sub(lambda m: f"{m.group(1)} Guisado", nm)
+                    if nuevo_nm != nm:
+                        meal["name"] = nuevo_nm
+                        _tocado = True
+                rec = meal.get("recipe")
+                if isinstance(rec, list):
+                    for j, p in enumerate(rec):
+                        if isinstance(p, str):
+                            nuevo_p = _GUISADAS_MASC_RX.sub(lambda m: f"{m.group(1)} guisado", p)
+                            if nuevo_p != p:
+                                rec[j] = nuevo_p
+                                _tocado = True
+                if _tocado:
+                    fixed += 1
+            except Exception:
+                continue
+    return fixed
+
+
+def _fresh_protein_canned_prose_fix(days) -> int:
+    """[P1-FRESH-CANNED-PROSE · 2026-07-28] "Escurre filete de pescado blanco…, reservando
+    el líquido de la lata" con un FILETE FRESCO en ingredientes (caso vivo, plan 9af221fb:
+    almuerzo martes pescado + cena pechuga "escurrida" y desmenuzada CRUDA). El LLM (o un
+    swap de sustantivo) dejó verbos de enlatado sobre proteína fresca. Solo actúa si el
+    meal NO tiene ningún ingrediente enlatado:
+      · fuera la cláusula "reservando el líquido de la lata";
+      · "y el líquido reservado de X" → "y un chorrito de agua";
+      · pescado: "Escurre X y desmenúzala" → "Corta X en trozos pequeños" (el crudo no se
+        desmenuza; se cuece en la salsa);
+      · ave: → "Desmenuza X ya cocida (usa batch previo o hiérvela 10–12 min antes)" —
+        la receta la necesita desmenuzada Y cocida.
+    Display-only, fail-open. tooltip-anchor: P1-FRESH-CANNED-PROSE
+    """
+    if not isinstance(days, list):
+        return 0
+    from constants import strip_accents as _sa_fp
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                ings_sa = _sa_fp(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
+                if any(t in ings_sa for t in _CANNED_TOKENS_FP):
+                    continue
+                rec = meal.get("recipe")
+                if not isinstance(rec, list):
+                    continue
+                _tocado = False
+                for j, p in enumerate(rec):
+                    if not isinstance(p, str):
+                        continue
+                    nuevo = _LATA_CLAUSE_RX.sub("", p)
+                    nuevo = _LATA_RESERVED_RX.sub(" y un chorrito de agua", nuevo)
+                    nuevo = _ESCURRE_FISH_RX.sub(lambda m: f"Corta {m.group(1)} en trozos pequeños", nuevo)
+                    nuevo = _ESCURRE_AVE_RX.sub(
+                        lambda m: f"Desmenuza {m.group(1)} ya cocida (usa batch previo o hiérvela 10–12 min antes)",
+                        nuevo)
+                    if nuevo != p:
+                        rec[j] = nuevo
+                        _tocado = True
+                if _tocado:
+                    fixed += 1
+                    logger.info(f"🥫 [P1-FRESH-CANNED-PROSE] '{str(meal.get('name'))[:44]}': "
+                                f"verbos de lata sobre proteína fresca reparados.")
+            except Exception:
+                continue
+    return fixed
+
+
+_BAKING_POWDER_LEAD_RX = _re_cv.compile(
+    r"^(\s*)(\d+(?:[.,]\d+)?\s?[¼½¾⅓⅔]?|[¼½¾⅓⅔])\s*(cdas?|cucharadas?)(\s+de\s+polvo de hornear)",
+    _re_cv.IGNORECASE)
+
+
+def _baking_powder_cap_pass(days) -> int:
+    """[P1-BAKING-POWDER-CAP · 2026-07-28] "1¼ cdas de polvo de hornear" para una tortilla
+    individual (caso vivo, cena martes plan 9af221fb) ≈ 18 g de leudante — sabor a jabón.
+    Cualquier lead en CUCHARADAS (cda) de polvo de hornear se capea a 1 cdta (lo máximo
+    plausible por porción individual). Display-only; macros del leudante ~0.
+    tooltip-anchor: P1-BAKING-POWDER-CAP
+    """
+    if not isinstance(days, list):
+        return 0
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                ings = meal.get("ingredients") if isinstance(meal, dict) else None
+                if not isinstance(ings, list):
+                    continue
+                for idx, s in enumerate(ings):
+                    if not isinstance(s, str):
+                        continue
+                    m = _BAKING_POWDER_LEAD_RX.match(s)
+                    if m:
+                        ings[idx] = _BAKING_POWDER_LEAD_RX.sub(r"\g<1>1 cdta\g<4>", s, count=1)
+                        raw = meal.get("ingredients_raw")
+                        if isinstance(raw, list) and idx < len(raw) and isinstance(raw[idx], str):
+                            raw[idx] = _BAKING_POWDER_LEAD_RX.sub(r"\g<1>1 cdta\g<4>", raw[idx], count=1)
+                        fixed += 1
+            except Exception:
+                continue
+    return fixed
+
+
 def _bigfruit_count_fraction_honesty(days) -> int:
     """[P1-BIGFRUIT-COUNT-FRACTION · 2026-07-28] "1 lechosa mediana (202 g)" (caso vivo,
     merienda martes plan ab2b0a16): el catálogo sabe que la lechosa entera pesa ~700 g —
@@ -29501,7 +29723,7 @@ def _align_closer_note_food_names(meal: dict) -> int:
             # P1-CLOSER-FRESH-COCIDO
             if "(ya viene cocido)" in step and not any(
                     _h in _sa_al(_line_food.lower()) for _h in _PRECOOKED_PROTEIN_HINT):
-                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al), baked=_meal_is_baked(meal, _sa_al))}"
+                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al), baked=(_meal_is_baked(meal, _sa_al) or _meal_is_hot_cooked(meal, _sa_al)))}"
                 if _rebuilt.strip() != step.strip():
                     rec[_i] = _rebuilt
                     fixed += 1

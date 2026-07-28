@@ -143,7 +143,7 @@ def strip_accents(s: str) -> str:
 # mixto en un rango honesto: "3½ ciruelas" → "3–4 ciruelas". Display-only (`ingredients_raw`
 # intacto: la compra y los macros siguen usando el valor exacto). Solo N≥1 con fracción — el
 # "½ aguacate" o "½ ciruela" solitario sí se corta y queda como está.
-_HALF_COUNT_FRUITS = r"(?:ciruelas?|guayabas?|fresas?|uvas?|n[ií]speros?|limoncillos?)"
+_HALF_COUNT_FRUITS = r"(?:ciruelas?|guayabas?|fresas?|uvas?|n[ií]speros?|limoncillos?|mandarinas?)"  # [P1-HERB-COUNT-GENDER · 2026-07-28] +mandarinas ("2½ mandarinas" vivo)
 _HALF_COUNT_RANGE_RE = re.compile(
     r"^(\s*)(\d+)[¼½¾⅓⅔]\s+(" + _HALF_COUNT_FRUITS + r")\b")
 

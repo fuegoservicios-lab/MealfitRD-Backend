@@ -75,9 +75,20 @@ def test_detector_fail_open():
 
 
 def test_los_callsites_pasan_baked():
-    """Ancla 'código presente, efecto ausente': la rama existe pero nadie pasa el flag."""
+    """Ancla 'código presente, efecto ausente': la rama existe pero nadie pasa el flag.
+
+    [reapuntado 2026-07-28 · P1-HOT-DAIRY-ASIDE] Los callsites ahora pasan
+    `baked=(_meal_is_baked(...) or _meal_is_hot_cooked(...))` — el aside cubre también
+    platos COCINADOS con calor (revoltillo), no solo horneados. La invariante sigue
+    siendo la misma: ambos callsites deben alimentar el flag, y ahora además ambos
+    deben consultar el detector de calor.
+    """
     import pathlib
     src = pathlib.Path(g.__file__).with_suffix(".py").read_text(encoding="utf-8")
-    assert src.count("baked=_meal_is_baked(meal") >= 2, (
+    _wired = src.count("baked=_meal_is_baked(meal") + src.count("baked=(_meal_is_baked(meal")
+    assert _wired >= 2, (
         "los dos callsites del closer deben pasar baked= o la rama jamás corre"
+    )
+    assert src.count("or _meal_is_hot_cooked(meal") >= 2, (
+        "ambos callsites deben incluir el detector de calor (P1-HOT-DAIRY-ASIDE)"
     )
