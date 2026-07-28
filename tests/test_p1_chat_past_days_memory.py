@@ -87,3 +87,83 @@ def test_find_plan_day_for_date_encuentra_en_el_archivo():
 @pytest.mark.parametrize("basura", [None, "no soy un dict", 42, [], {"days": "tampoco"}])
 def test_fail_open_ante_shapes_raras(basura):
     assert resolve_day_dates(basura, HOY) == []
+
+
+from chat_history_context import (  # noqa: E402
+    build_past_diary_block,
+    build_past_plan_days_block,
+)
+
+_MEALS = [
+    {"meal": "Desayuno", "name": "Revoltillo de Tayota con Atún", "cals": 793},
+    {"meal": "Almuerzo", "name": "Pulpo al Horno con Croquetas", "cals": 549},
+]
+
+
+def test_bloque_plan_lista_solo_dias_pasados():
+    plan = {
+        "days": [_day("Lunes", 1, _MEALS)],
+        "_archived_days": [_day("Domingo", 1, _MEALS)],
+    }
+    out = build_past_plan_days_block(plan, HOY, days_back=7, max_chars=3000)
+    assert "Domingo 26 jul" in out
+    assert "Revoltillo de Tayota con Atún" in out
+    assert "793 kcal" in out
+    # HOY no es un día pasado: no debe aparecer como tal.
+    assert "Lunes 27 jul" not in out
+
+
+def test_bloque_plan_no_filtra_cantidades_ni_recetas():
+    """El índice es barato a propósito: los gramos y los pasos van por la tool."""
+    meals = [{"meal": "Cena", "name": "Pescado", "cals": 400,
+              "ingredients": ["255g de pescado"], "recipe": ["Paso secreto"]}]
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, meals)]}
+    out = build_past_plan_days_block(plan, HOY, days_back=7, max_chars=3000)
+    assert "255g" not in out
+    assert "Paso secreto" not in out
+    assert "consultar_dia_del_plan" in out
+
+
+def test_bloque_plan_marca_fechas_inferidas_con_tilde():
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, _MEALS)]}
+    out = build_past_plan_days_block(plan, HOY, days_back=7, max_chars=3000)
+    assert "~Domingo 26 jul" in out
+
+
+def test_bloque_plan_respeta_el_cap_y_lo_declara():
+    """No silent caps: si se recorta, el prompt lo dice."""
+    archived = [_day("D%d" % i, i, _MEALS) for i in range(10)]
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": archived}
+    out = build_past_plan_days_block(plan, HOY, days_back=30, max_chars=600)
+    assert len(out) <= 700  # cap + header/footer
+    assert "omitidos por espacio" in out
+
+
+def test_bloque_plan_apagado_con_days_back_cero():
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, _MEALS)]}
+    assert build_past_plan_days_block(plan, HOY, days_back=0, max_chars=3000) == ""
+
+
+def test_bloque_diario_declara_los_dias_sin_registro():
+    """La guarda que impide que el modelo rellene el hueco con el plan."""
+    rows = [{"meal_name": "Salami con queso", "meal_type": "desayuno",
+             "calories": 820, "consumed_at": "2026-07-25T17:56:00+00:00"}]
+    out = build_past_diary_block(rows, HOY, days_back=3, max_chars=3000)
+    assert "Salami con queso" in out
+    assert "820 kcal" in out
+    assert "Domingo 26 jul: SIN REGISTRO" in out
+    assert "NUNCA respondas con lo que el plan mandaba" in out
+
+
+def test_bloque_diario_excluye_hoy():
+    """DIARIO DE HOY es su propio bloque; este NO debe duplicarlo."""
+    rows = [{"meal_name": "Almuerzo de hoy", "meal_type": "almuerzo",
+             "calories": 500, "consumed_at": "2026-07-27T15:00:00+00:00"}]
+    out = build_past_diary_block(rows, HOY, days_back=3, max_chars=3000)
+    assert "Almuerzo de hoy" not in out
+
+
+def test_bloque_diario_vacio_sigue_declarando_ignorancia():
+    out = build_past_diary_block([], HOY, days_back=2, max_chars=3000)
+    assert "SIN REGISTRO" in out
+    assert "Domingo 26 jul" in out and "Sábado 25 jul" in out

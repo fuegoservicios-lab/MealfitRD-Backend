@@ -113,3 +113,143 @@ def find_plan_day_for_date(plan_data: Any, target: date, today: date) -> Optiona
         if row["date"] == target:
             return row
     return None
+
+
+# ---------------------------------------------------------------------------
+# Knobs — auto-registran en `_KNOBS_REGISTRY` (P3-NEW-D).
+# tooltip-anchor: P1-CHAT-PAST-DAYS-KNOBS
+# ---------------------------------------------------------------------------
+
+def chat_history_days() -> int:
+    """Ventana de días pasados de los bloques 2 y 3. `0` apaga ambos."""
+    from knobs import _env_int
+    return _env_int("MEALFIT_CHAT_HISTORY_DAYS", 7, validator=lambda v: 0 <= v <= 30)
+
+
+def chat_history_max_chars() -> int:
+    """Cap duro por bloque. Al excederse se recortan los días más antiguos."""
+    from knobs import _env_int
+    return _env_int("MEALFIT_CHAT_HISTORY_MAX_CHARS", 3000, validator=lambda v: 500 <= v <= 20000)
+
+
+def _fmt_date_es(d: date, inferred: bool = False) -> str:
+    """`Domingo 26 jul`; con `~` delante si la fecha es inferida, no estampada."""
+    tag = "~" if inferred else ""
+    return f"{tag}{_WEEKDAYS_ES[d.weekday()].capitalize()} {d.day} {_MONTHS_ES[d.month - 1]}"
+
+
+def _assemble(header: str, lines: list, footer: str, max_chars: int, label: str) -> str:
+    """Junta líneas (ya en orden newest-first) respetando el cap.
+
+    Los días más antiguos se caen primero y el recorte se DECLARA en el texto —
+    un cap silencioso se lee como "esto es todo lo que hay", que es justo la
+    confusión que este P-fix existe para evitar.
+    """
+    budget = max(0, max_chars - len(header) - len(footer))
+    kept, used, dropped = [], 0, 0
+    for line in lines:
+        if used + len(line) + 1 > budget:
+            dropped += 1
+            continue
+        kept.append(line)
+        used += len(line) + 1
+    if not kept:
+        return ""
+    if dropped:
+        logger.info(f"[P1-CHAT-PAST-DAYS] {label}: {dropped} día(s) recortados por cap={max_chars}")
+        footer = f"\n(+{dropped} día(s) más antiguos omitidos por espacio.)" + footer
+    return header + "\n".join(kept) + footer
+
+
+def build_past_plan_days_block(plan_data: Any, today: date,
+                               days_back: Optional[int] = None,
+                               max_chars: Optional[int] = None) -> str:
+    """Pieza 2 del spec: índice compacto de lo que el plan MANDABA en los días
+    que ya pasaron. Solo nombre + slot + kcal — las cantidades y las recetas
+    las sirve la tool `consultar_dia_del_plan` bajo demanda."""
+    days_back = chat_history_days() if days_back is None else days_back
+    max_chars = chat_history_max_chars() if max_chars is None else max_chars
+    if days_back <= 0:
+        return ""
+    floor = today - timedelta(days=days_back)
+    past = [r for r in resolve_day_dates(plan_data, today) if floor <= r["date"] < today]
+    if not past:
+        return ""
+
+    lines = []
+    for r in sorted(past, key=lambda x: x["date"], reverse=True):
+        parts = []
+        for m in (r["day"].get("meals") or []):
+            if not isinstance(m, dict):
+                continue
+            name = str(m.get("name") or "").strip()
+            if not name:
+                continue
+            slot = str(m.get("meal") or m.get("meal_type") or "Comida").strip()
+            cals = m.get("cals") if m.get("cals") is not None else m.get("calories")
+            seg = f'{slot} "{name}"'
+            if isinstance(cals, (int, float)) and cals:
+                seg += f" {int(cals)} kcal"
+            parts.append(seg)
+        if parts:
+            lines.append(f"- {_fmt_date_es(r['date'], r['inferred'])}: " + " · ".join(parts))
+    if not lines:
+        return ""
+
+    header = ("\n\n📖 DÍAS QUE YA PASARON — esto es lo que el plan MANDABA esos días "
+              "(NO es prueba de que el usuario se lo comiera):\n")
+    footer = ("\nLas fechas con '~' son estimadas, no exactas. Para las cantidades, los gramos "
+              "o los pasos de la receta de uno de estos días, usa la herramienta "
+              "`consultar_dia_del_plan`.")
+    return _assemble(header, lines, footer, max_chars, "plan_days")
+
+
+def build_past_diary_block(consumed_rows: Any, today: date,
+                           days_back: Optional[int] = None,
+                           max_chars: Optional[int] = None) -> str:
+    """Pieza 3 del spec: lo que el usuario REGISTRÓ haber comido en los días
+    anteriores a hoy. Declara explícitamente los días sin registro — esa es la
+    guarda que impide que el modelo rellene el hueco con el plan."""
+    days_back = chat_history_days() if days_back is None else days_back
+    max_chars = chat_history_max_chars() if max_chars is None else max_chars
+    if days_back <= 0:
+        return ""
+    floor = today - timedelta(days=days_back)
+
+    by_date: dict = {}
+    for row in (consumed_rows or []):
+        if not isinstance(row, dict):
+            continue
+        d = _parse_date(row.get("consumed_at"))
+        if d is None or not (floor <= d < today):
+            continue
+        by_date.setdefault(d, []).append(row)
+
+    lines = []
+    cursor = today - timedelta(days=1)
+    while cursor >= floor:
+        rows = by_date.get(cursor)
+        if rows:
+            parts = []
+            for r in rows:
+                nm = str(r.get("meal_name") or "").strip() or "(sin nombre)"
+                slot = str(r.get("meal_type") or "").strip()
+                cal = r.get("calories")
+                seg = f"{slot}: {nm}" if slot else nm
+                if isinstance(cal, (int, float)) and cal:
+                    seg += f" ({int(cal)} kcal)"
+                parts.append(seg)
+            lines.append(f"- {_fmt_date_es(cursor)}: " + " · ".join(parts))
+        else:
+            lines.append(f"- {_fmt_date_es(cursor)}: SIN REGISTRO")
+        cursor -= timedelta(days=1)
+    if not lines:
+        return ""
+
+    header = ("\n\n🍽️ DIARIO REAL DE DÍAS ANTERIORES — lo ÚNICO que sabes que el usuario "
+              "comió esos días:\n")
+    footer = ("\n⚠️ 'SIN REGISTRO' significa que NO tienes ningún dato de lo que comió ese día. "
+              "Si te pregunta qué comió un día SIN REGISTRO, dile con claridad que no lo tienes "
+              "registrado y NUNCA respondas con lo que el plan mandaba como si se lo hubiera "
+              "comido. El bloque del PLAN es lo prescrito; este bloque es lo real.")
+    return _assemble(header, lines, footer, max_chars, "diary")
