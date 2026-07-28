@@ -101,6 +101,9 @@ from constants import (
     get_embedding,
     cosine_similarity,
 )
+# [P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] piso de items para modo estricto (0 = desactivado).
+CHUNK_PANTRY_STRICT_MIN_ITEMS = max(0, min(100, int(os.environ.get("CHUNK_PANTRY_STRICT_MIN_ITEMS", "12") or 12)))
+
 # [P1-A · 2026-05-08] `_env_int`/`_env_float` importados aquí para que los
 # knobs `MEALFIT_*` consumidos por crons (perishable cycle, coherence alert,
 # reactivation interval, etc.) se auto-registren en `_KNOBS_REGISTRY` en lugar
@@ -8996,6 +8999,54 @@ def _record_inventory_live_success(user_id: str) -> None:
 
 
 def _refresh_chunk_pantry(
+    user_id: str,
+    form_data: dict,
+    snapshot_form_data: dict | None = None,
+    task_id: str | int | None = None,
+    week_number: int | None = None,
+) -> dict:
+    """[P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] Wrapper: resuelve la despensa (cuerpo original en
+    `_refresh_chunk_pantry_inner`, intacto) y aplica el PISO DE VIABILIDAD al resultado, cubriendo
+    los 3 callsites y todos los returns internos de una vez.
+
+    El caso vivo que lo motivó (chunk fbd6bac2, madrugada del 28-07): nevera fresca de 10 items en
+    modo estricto → PANTRY GUARD unauthorized=31→33→… (EMPEORA entre intentos: no es que el modelo
+    desobedezca, es que componer 4 comidas/día de una semana con 10 ingredientes es INSATISFACIBLE)
+    → 3+ generaciones quemadas en 5 minutos, camino directo a chunk degradado. La misma clase que
+    el gate de fruta (P1-FRUIT-SEEDER-GATE-CONTRACT: la restricción imposible no produce mejores
+    planes, produce reintentos).
+
+    Las válvulas existentes (flex por snapshot stale / live degradado) miran FRESCURA, no TAMAÑO;
+    y la nevera VACÍA tiene su carril propio (P2-CHUNK-AUTONOMY: vacía no es error). El hueco era
+    exactamente 0 < items < piso. Knob CHUNK_PANTRY_STRICT_MIN_ITEMS (default 12, clamp [2,100]);
+    rollback: =0 desactiva el piso.
+    """
+    form_data = _refresh_chunk_pantry_inner(
+        user_id, form_data, snapshot_form_data=snapshot_form_data,
+        task_id=task_id, week_number=week_number,
+    )
+    try:
+        _floor = CHUNK_PANTRY_STRICT_MIN_ITEMS
+        if (_floor > 0
+                and isinstance(form_data, dict)
+                and not form_data.get("_pantry_paused")
+                and not form_data.get("_pantry_flexible_mode")):
+            _items = form_data.get("current_pantry_ingredients") or []
+            if 0 < len(_items) < _floor:
+                form_data["_pantry_flexible_mode"] = True
+                form_data["_pantry_advisory_only"] = True
+                form_data["_pantry_degraded_reason"] = "pantry_below_viability_floor"
+                logger.warning(
+                    f"[P1-PANTRY-VIABILITY-FLOOR] Usuario {user_id} week={week_number}: nevera de "
+                    f"{len(_items)} items < piso {_floor} para modo estricto → flex+advisory "
+                    f"(estricto seria insatisfacible y quemaria los retries)."
+                )
+    except Exception as _pvf_e:
+        logger.debug(f"[P1-PANTRY-VIABILITY-FLOOR] no-op: {type(_pvf_e).__name__}: {_pvf_e}")
+    return form_data
+
+
+def _refresh_chunk_pantry_inner(
     user_id: str,
     form_data: dict,
     snapshot_form_data: dict | None = None,
