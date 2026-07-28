@@ -20,6 +20,30 @@ from contextlib import ExitStack, nullcontext
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pin_pantry_viability_floor_off(monkeypatch):
+    """[P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] El floor (nevera 0<n<12 -> flex+advisory)
+    cambia el flujo estricto/híbrido que ESTE archivo ancla, y sus fixtures usan neveras
+    chicas legítimas. Se apaga explícitamente: el floor tiene su propio anchor en
+    test_p1_pantry_viability_floor.py."""
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
+
+
+@pytest.fixture
+def _coherencia_t2_warn_only(monkeypatch):
+    """[P2-COHERENCE-1] OPT-IN para tests de camino feliz T1+T2: las listas mockeadas
+    ({"categories": []}) son incoherentes con las recetas POR DISEÑO → el guard severo
+    bloquea, re-encola y T2 jamás escribe (assert "2 UPDATEs" muere con 1). NO es autouse:
+    los tests de camino de RECHAZO (p.ej. degraded_shuffle: exactamente 1 UPDATE) anclan
+    justamente el flujo bloqueado y deben correr con el default."""
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+
+
 def _install_stub(module_name, **attrs):
     if module_name in sys.modules:
         return sys.modules[module_name]

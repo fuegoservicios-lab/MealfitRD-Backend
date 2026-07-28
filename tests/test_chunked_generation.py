@@ -38,6 +38,28 @@ from constants import (
     CHUNK_RETRY_CRITICAL_MINUTES,
 )
 
+
+@pytest.fixture(autouse=True)
+def _pin_pantry_viability_floor_off(monkeypatch):
+    """[P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] El floor (nevera 0<n<12 -> flex+advisory)
+    cambia el flujo estricto/híbrido que ESTE archivo ancla, y sus fixtures usan neveras
+    chicas legítimas. Se apaga explícitamente: el floor tiene su propio anchor en
+    test_p1_pantry_viability_floor.py. Si un test de este archivo debe ejercer el floor,
+    re-habilitarlo localmente con monkeypatch."""
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
+
+
+@pytest.fixture
+def _coherencia_t2_warn_only(monkeypatch):
+    """[P2-COHERENCE-1] OPT-IN para tests de camino feliz T1+T2: las listas mockeadas
+    ({"categories": []}) son incoherentes con las recetas POR DISEÑO → el guard severo
+    bloquea, re-encola y T2 jamás escribe (assert "2 UPDATEs" muere con 1). NO es autouse:
+    los tests de camino de RECHAZO (p.ej. degraded_shuffle: exactamente 1 UPDATE) anclan
+    justamente el flujo bloqueado y deben correr con el default."""
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+
+
 def test_compute_chunk_delay_days_defaults_to_strict_mode():
     delay_days, mode, _, _ = _compute_chunk_delay_days(3, 4, 2, {"totalDays": 7}, "initial_plan")
 
@@ -2009,6 +2031,7 @@ def test_continuous_learning_mid_plan_injection(
     mock_analyze, mock_db_rejections, mock_cron_rejections, mock_db_likes,
     mock_cron_likes, mock_inventory, mock_pipeline, mock_shop, mock_pool,
     _mock_ready, _mock_filter, _mock_sem,
+    _coherencia_t2_warn_only,
 ):
     # (a) Simular un plan de 9 días -> 3 chunks. Estamos procesando el chunk 2 (días 4-6)
     tasks = [{
@@ -2819,6 +2842,7 @@ def test_zero_log_inventory_proxy_returns_weak_learning_signal(mock_consumed, mo
     assert learning_ready["learning_signal_strength"] == "weak"
 
 
+@patch("cron_tasks.persist_legacy_learning_to_plan_data")  # import tardío en plans.py:1479 → patch al módulo fuente
 @patch("cron_tasks._calculate_learning_metrics")
 @patch("db_core.execute_sql_write")
 @patch("db_core.execute_sql_query")
@@ -2835,7 +2859,7 @@ def test_synchronous_week1_seeds_last_chunk_learning_for_chunk2(
     mock_has_profile, mock_get_rejections, mock_get_likes,
     mock_get_session, mock_build_memory, mock_analyze_pref, mock_run_pipeline,
     mock_save_partial, mock_enqueue, mock_execute_sql_query, mock_execute_sql_write,
-    mock_calc_metrics,
+    mock_calc_metrics, mock_persist_seed,
 ):
     """Verify that after creating chunk 1 synchronously, _last_chunk_learning
     and _recent_chunk_lessons are seeded with REAL metrics from
@@ -2878,8 +2902,16 @@ def test_synchronous_week1_seeds_last_chunk_learning_for_chunk2(
     }
 
     mock_save_partial.return_value = "plan-seed-test"
-    # Prior plan query returns None (no previous plan)
-    mock_execute_sql_query.return_value = None
+    # [reapuntado 2026-07-28] El seed migro de un execute_sql_write directo al helper
+    # SSOT `persist_legacy_learning_to_plan_data` (patron I7) + SELECT de verificacion
+    # con retry (<=2). Mockeamos el helper (True) y respondemos la verificacion con
+    # chunk="1" para que el flujo reporte seed persistido.
+    mock_persist_seed.return_value = True
+    def _seed_query_router(query, *a, **kw):
+        if "_last_chunk_learning" in query:
+            return {"chunk": "1"}
+        return None  # prior plan query: sin plan previo
+    mock_execute_sql_query.side_effect = _seed_query_router
 
     # [P1-5] `_validate_form_data_min` ahora rechaza con 422 si faltan campos
     # mínimos del formulario (age/weight/height/gender/... + allergies/medical).
@@ -2927,19 +2959,14 @@ def test_synchronous_week1_seeds_last_chunk_learning_for_chunk2(
     call_kwargs = mock_calc_metrics.call_args
     assert len(call_kwargs[1].get("new_days", call_kwargs[0][0] if call_kwargs[0] else [])) > 0 or len(call_kwargs[0]) > 0
 
-    # Find the execute_sql_write call that seeds _last_chunk_learning
-    seed_calls = [
-        call for call in mock_execute_sql_write.call_args_list
-        if "_last_chunk_learning" in call[0][0]
-    ]
-    assert len(seed_calls) == 1, f"Expected 1 seed call, got {len(seed_calls)}"
+    # [reapuntado 2026-07-28] El seed va por el helper SSOT; el contrato P0-α (metricas
+    # REALES, no stub en ceros) se verifica en los ARGS del helper.
+    mock_persist_seed.assert_called_once()
+    _seed_args, _seed_kwargs = mock_persist_seed.call_args
+    assert _seed_args[0] == "plan-seed-test"
+    assert _seed_kwargs.get("user_id") == "test_user", "el seed debe llevar ownership (P0-9)"
 
-    query, params = seed_calls[0][0]
-    assert "_recent_chunk_lessons" in query
-    assert "plan-seed-test" == params[2]
-
-    # Parse the seeded lesson and verify it contains REAL metrics, not zeros
-    seeded_lesson = json.loads(params[0])
+    seeded_lesson = _seed_args[1]
     assert seeded_lesson["chunk"] == 1
     assert "is_synchronous_seed" not in seeded_lesson, "is_synchronous_seed should be removed (P0-α)"
     assert seeded_lesson["metrics_unavailable"] is False
@@ -2950,8 +2977,7 @@ def test_synchronous_week1_seeds_last_chunk_learning_for_chunk2(
         "Should contain sample_repeated_bases from real metrics"
     )
 
-    # Verify _recent_chunk_lessons is a list with the same lesson
-    seeded_lessons_list = json.loads(params[1])
+    seeded_lessons_list = _seed_kwargs.get("recent_chunk_lessons")
     assert isinstance(seeded_lessons_list, list)
     assert len(seeded_lessons_list) == 1
     assert "is_synchronous_seed" not in seeded_lessons_list[0]

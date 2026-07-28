@@ -108,12 +108,14 @@ def test_recipes_imports_escape_html(recipes_src: str):
 def _extract_function_body(src: str) -> str:
     """Aísla `const generateRecipeHTML = (meal) => { ... }` hasta el
     siguiente `const handleDownloadPDF` o `return (` del componente."""
+    # [reapuntado 2026-07-28] P1-PDF-ONE-PAGE añadió `basePx = PDF_FONT_MAX_PX` a la
+    # firma — el ancla exige `meal` como primer param y tolera params extra.
     anchor = re.search(
-        r"const\s+generateRecipeHTML\s*=\s*\(\s*meal\s*\)\s*=>\s*\{",
+        r"const\s+generateRecipeHTML\s*=\s*\(\s*meal\b[^)]*\)\s*=>\s*\{",
         src,
     )
     assert anchor is not None, (
-        "P2-AUDIT-2 regresión: `const generateRecipeHTML = (meal) => {` no "
+        "P2-AUDIT-2 regresión: `const generateRecipeHTML = (meal, ...) => {` no "
         "encontrado en Recipes.jsx. ¿Renombrado? Actualizar test."
     )
     start = anchor.end()
@@ -169,9 +171,12 @@ def test_interpolation_uses_escape_html(fn_body: str, var_name: str):
 
 def test_ingredients_uses_escape_html(fn_body: str):
     """La iteración sobre `meal.ingredients` debe escapar cada `ing`."""
-    # Aceptar `${escapeHtml(ing)}` en cualquier forma.
+    # [reapuntado 2026-07-28] Hoy la interpolación es `${escapeHtml(displayAjiMorron(ing))}`
+    # — composición SEGURA porque escapeHtml es el call MÁS EXTERNO (transformar primero,
+    # escapar al final). El regex acepta cualquier wrapper interno siempre que `ing` viva
+    # dentro del paréntesis de escapeHtml y este abra la interpolación.
     assert re.search(
-        r"\$\{\s*escapeHtml\s*\(\s*ing\b",
+        r"\$\{\s*escapeHtml\s*\([^}]*\bing\b",
         fn_body,
     ), (
         "P2-AUDIT-2 regresión: la iteración `meal.ingredients.map(ing => ...)` "

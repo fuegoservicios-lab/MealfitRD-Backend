@@ -22,6 +22,36 @@ import logging
 logging.getLogger().setLevel(logging.INFO)
 
 
+
+@pytest.fixture(autouse=True)
+def _pin_pantry_viability_floor_off(monkeypatch):
+    """[P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] El floor (nevera 0<n<12 -> flex+advisory)
+    cambia el flujo estricto/híbrido que ESTE archivo ancla, y sus fixtures usan neveras
+    chicas legítimas. Se apaga explícitamente: el floor tiene su propio anchor en
+    test_p1_pantry_viability_floor.py. Si un test de este archivo debe ejercer el floor,
+    re-habilitarlo localmente con monkeypatch."""
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
+    # [CHUNK/LEARNING-READY · 07-25] El gate de adherencia pospone chunks 12h si el
+    # ratio de log < 50% — correcto en prod, pero estos E2E simulan la corrida completa
+    # SIN diario del usuario (ratio 0% garantizado) y anclan merge/lecciones, no el gate.
+    # Mismo stub que usa test_chunked_generation (_ready_passing).
+    monkeypatch.setattr(_ct_floor, "_check_chunk_learning_ready", lambda *a, **kw: {
+        "ready": True, "ratio": 1.0, "matched_meals": 3, "planned_meals": 3,
+        "previous_chunk_start_iso": None,
+    })
+
+
+@pytest.fixture
+def _coherencia_t2_warn_only(monkeypatch):
+    """[P2-COHERENCE-1] OPT-IN para tests de camino feliz T1+T2: las listas mockeadas
+    ({"categories": []}) son incoherentes con las recetas POR DISEÑO → el guard severo
+    bloquea, re-encola y T2 jamás escribe (assert "2 UPDATEs" muere con 1). NO es autouse:
+    los tests de camino de RECHAZO (p.ej. degraded_shuffle: exactamente 1 UPDATE) anclan
+    justamente el flujo bloqueado y deben correr con el default."""
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+
+
 def _mock_run_plan_pipeline(form_data, *args, **kwargs):
     offset = form_data.get("_days_offset", 0)
     count = form_data.get("_days_to_generate", 3)
@@ -45,7 +75,7 @@ def _mock_run_plan_pipeline(form_data, *args, **kwargs):
 
 @pytest.mark.e2e
 @patch('cron_tasks.run_plan_pipeline', side_effect=_mock_run_plan_pipeline)
-def test_chunked_15days_e2e(mock_pipeline, seeded_user_profile):
+def test_chunked_15days_e2e(mock_pipeline, seeded_user_profile, _coherencia_t2_warn_only):
     user_id, plan_id = seeded_user_profile
 
     # 1. Generate first 3 days (Simulating synchronous agent call)
