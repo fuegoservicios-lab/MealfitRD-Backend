@@ -197,17 +197,26 @@ class TestSurgicalMarkerRegenNodeFastPath:
             "form_data": {},
         }
         result = asyncio.run(self.go.surgical_marker_regen_node(state))
-        assert result == {"_marker_regen_attempted": True}
+        # [reapuntado 2026-07-28 · P1-SURGICAL-MODE-COLLISION] El fast-path emite AMBOS
+        # flags: sin `_surgical_reject_attempted`, un enrutamiento reject-mode sin targets
+        # re-derivables entraria en loop router -> nodo-no-op -> re-review.
+        assert result == {"_marker_regen_attempted": True, "_surgical_reject_attempted": True}
 
     def test_invalid_plan_result_returns_flag_only(self):
         state = {"plan_result": None, "form_data": {}}
         result = asyncio.run(self.go.surgical_marker_regen_node(state))
-        assert result == {"_marker_regen_attempted": True}
+        # [reapuntado 2026-07-28 · P1-SURGICAL-MODE-COLLISION] El fast-path emite AMBOS
+        # flags: sin `_surgical_reject_attempted`, un enrutamiento reject-mode sin targets
+        # re-derivables entraria en loop router -> nodo-no-op -> re-review.
+        assert result == {"_marker_regen_attempted": True, "_surgical_reject_attempted": True}
 
     def test_plan_result_not_dict_returns_flag_only(self):
         state = {"plan_result": "not_a_dict", "form_data": {}}
         result = asyncio.run(self.go.surgical_marker_regen_node(state))
-        assert result == {"_marker_regen_attempted": True}
+        # [reapuntado 2026-07-28 · P1-SURGICAL-MODE-COLLISION] El fast-path emite AMBOS
+        # flags: sin `_surgical_reject_attempted`, un enrutamiento reject-mode sin targets
+        # re-derivables entraria en loop router -> nodo-no-op -> re-review.
+        assert result == {"_marker_regen_attempted": True, "_surgical_reject_attempted": True}
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,13 @@ Pedidos del owner sobre /plan ("Diseñando tu plan"):
    Umbral "ya casi" 6→8 min (no contradecir el estimado nuevo).
 3. Gap de producción encontrado: en modo recovery el contador "Transcurrido"
    reiniciaba en 0:00 (mentía). Ahora arranca del started_at real del flag.
+
+[reapuntado 2026-07-28] El 2026-07-09 el MISMO owner subió el rango a 9-10 min
+(renovaciones monitoreadas ese día: 7.5-8.4 min con 2-3 intentos del reviewer) y los
+umbrales pasaron a 10/13 min; además `startTimeRef` migró a `useState` lazy-init
+(P2-LINT-ZERO: el IIFE inline releía localStorage en cada tick). Este test anclaba el
+pedido del 07-06 que el propio owner supersedió — ahora ancla el rango honesto vivo y
+la MISMA continuidad cross-reentrada bajo el nombre nuevo.
 """
 import os
 import re
@@ -29,22 +36,24 @@ _APP = _read(_FRONTEND, "src", "App.jsx")
 _REC = _read(_FRONTEND, "src", "components", "PendingPipelineRecovery.jsx")
 
 
-def test_eta_copy_is_5_7():
-    assert "entre 5 y 7 minutos" in _PLAN, "ETA inicial = 5-7 (pedido del owner)"
-    assert "estimado 5-7 minutos" in _PLAN, "tracking = 5-7"
-    assert "4 y 5 minutos" not in _PLAN and "4-5 minutos" not in _PLAN, "copy viejo fuera"
+def test_eta_copy_is_9_10():
+    assert "entre 9 y 10 minutos" in _PLAN, "ETA inicial = 9-10 (pedido del owner 2026-07-09)"
+    assert "estimado 9-10 minutos" in _PLAN, "tracking = 9-10"
+    for viejo in ("4 y 5 minutos", "4-5 minutos", "5 y 7 minutos", "5-7 minutos"):
+        assert viejo not in _PLAN, f"copy viejo `{viejo}` fuera"
 
 
 def test_ya_casi_threshold_beyond_estimate():
     i = _PLAN.index("const timeMessage")
     win = _PLAN[i:i + 800]
-    assert "8 * 60" in win, "'ya casi terminamos' arranca DESPUÉS del estimado (8 min), no dentro (6)"
-    assert "12 * 60" in win
+    assert "10 * 60" in win, "'ya casi terminamos' arranca DESPUÉS del estimado (10 min), no dentro"
+    assert "13 * 60" in win
 
 
 def test_elapsed_continuity_across_reentry():
     assert "P2-LOADING-ETA-57" in _PLAN
-    i = _PLAN.index("const startTimeRef")
+    # [reapuntado 2026-07-28] startTimeRef → useState lazy-init (P2-LINT-ZERO).
+    i = _PLAN.index("const [startTime] = useState(")
     win = _PLAN[i:i + 600]
     assert "mealfit_plan_in_progress" in win and "started_at" in win, (
         "en modo recovery el contador arranca del inicio REAL del pipeline (no 0:00)"

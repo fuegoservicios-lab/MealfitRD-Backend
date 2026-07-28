@@ -21,8 +21,13 @@ _DECISIONS_DOC = (_BACKEND / "docs" / "clinical_enforcement_decisions.md").read_
 
 # Clasificación declarativa (G11). Si cambia CONDITION_RULES, el test fuerza actualizar esto.
 _CAP_ENFORCED = {"renal"}
-_SUB_ENFORCED_EXPECTED = {"dm2", "hta", "dyslipidemia"}
-_ADVISORY_EXPECTED = {"anemia", "pregnancy", "hypothyroid", "gout", "nafld", "pcos"}
+# [reapuntado 2026-07-28] Tres reglas GANARON sustituciones enforced después de este test:
+# pregnancy (pez alto mercurio → bajo, e07bdea — decisión deliberada), renal (además de su
+# cap) y bariatric. Gastritis/ERGE nació CLINICAL_REFERRAL con prompt cualitativo (evita
+# irritantes/fritos, porciones pequeñas) sin objetivo cuantitativo → advisory, la clase de
+# gout/nafld.
+_SUB_ENFORCED_EXPECTED = {"dm2", "hta", "dyslipidemia", "pregnancy", "renal", "bariatric"}
+_ADVISORY_EXPECTED = {"anemia", "pregnancy", "hypothyroid", "gout", "nafld", "pcos", "gastritis"}
 
 
 def _all_rule_ids():

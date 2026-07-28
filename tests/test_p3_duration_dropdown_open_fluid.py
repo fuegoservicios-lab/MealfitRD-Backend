@@ -27,6 +27,14 @@ Fix definitivo:
 Trade-off aceptado: pierde el efecto "frosted glass" del backdrop blur,
 gana fluidez. Para un dropdown over content scrollable el glass effect
 es nice-to-have; cero-flicker es must-have.
+
+[reapuntado 2026-07-28] UX-DURATION-PANEL-BACKDROP (2026-07-03) añadió un BACKDROP
+portaleado a <body> que SÍ usa blur — pero blur CONSTANTE (siempre montado, solo la
+opacity fade): esa variante no flickerea porque el filtro jamás se anima. Su comentario
+menciona este marker, así que el `find()` simple anclaba el elemento equivocado. Los
+tests del PANEL anclan ahora la forma `// [P3-...` (comentario del panel, 2ª ocurrencia).
+El contrato del panel sigue intacto: opacity-only + `var(--bg-card)` opaco + sin
+backdrop-filter EN EL PANEL. El blur del backdrop está exento a propósito.
 """
 from __future__ import annotations
 
@@ -69,7 +77,7 @@ def test_no_underdamped_spring_in_duration_dropdown():
 def test_opacity_only_animation():
     """El fix definitivo usa SOLO opacity en initial/animate/exit. Cualquier
     `y`, `scale`, o `x` requeriría capa de composición → potencial flicker."""
-    marker_pos = _DASHBOARD.find("P3-DURATION-DROPDOWN-OPEN-FLUID")
+    marker_pos = _DASHBOARD.find("// [P3-DURATION-DROPDOWN-OPEN-FLUID")
     assert marker_pos > 0
     window = _DASHBOARD[marker_pos : marker_pos + 1500]
     init_pos = window.find("initial={{")
@@ -98,14 +106,15 @@ def test_no_backdrop_filter_in_dropdown():
     """`backdrop-filter: blur(16px)` causaba el flash de borde superior
     porque Blink/Webkit lo recomponen en stages durante la transición.
     Sobre fondo opaco no añade nada útil."""
-    marker_pos = _DASHBOARD.find("P3-DURATION-DROPDOWN-OPEN-FLUID")
+    marker_pos = _DASHBOARD.find("// [P3-DURATION-DROPDOWN-OPEN-FLUID")
     assert marker_pos > 0
-    window = _DASHBOARD[marker_pos : marker_pos + 2000]
+    window = _DASHBOARD[marker_pos : marker_pos + 3500]  # style de hoy trae ~800 chars de comentarios internos
     # Cortar al cierre del style={{ ... }} de la motion.div del dropdown
     style_pos = window.find("style={{")
     assert style_pos > 0
-    # Cerrar en el siguiente `>`
-    close_pos = window.find(">", style_pos)
+    # Cerrar en el `}}` del objeto style (NO en `>`: los comentarios internos
+    # del style contienen `<body>` y cortaban el bloque antes del background).
+    close_pos = window.find("}}", style_pos)
     style_block = window[style_pos:close_pos]
     assert "backdropFilter" not in style_block and "backdrop-filter" not in style_block, (
         "REGRESIÓN: `backdropFilter` está de vuelta en la motion.div del "
@@ -116,11 +125,11 @@ def test_no_backdrop_filter_in_dropdown():
 
 def test_opaque_background_in_dropdown():
     """Fondo opaco evita compositing extra durante la animación."""
-    marker_pos = _DASHBOARD.find("P3-DURATION-DROPDOWN-OPEN-FLUID")
+    marker_pos = _DASHBOARD.find("// [P3-DURATION-DROPDOWN-OPEN-FLUID")
     assert marker_pos > 0
-    window = _DASHBOARD[marker_pos : marker_pos + 2000]
+    window = _DASHBOARD[marker_pos : marker_pos + 3500]  # style de hoy trae ~800 chars de comentarios internos
     style_pos = window.find("style={{")
-    close_pos = window.find(">", style_pos)
+    close_pos = window.find("}}", style_pos)  # ver nota del test anterior: `>` corta en `<body>`
     style_block = window[style_pos:close_pos]
     # Debe tener background, y NO debe ser rgba con alpha < 1.0
     assert "background:" in style_block

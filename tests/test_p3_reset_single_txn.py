@@ -156,72 +156,61 @@ def test_isResetting_state_declared():
     )
 
 
-def test_button_uses_isResetting_for_visual_feedback():
-    """El botón debe leer `isResetting` para: (a) disabled, (b) cambiar
-    el texto a 'Borrando…', (c) color desaturado."""
-    # Localizar el bloque del botón "Sí, empezar desde cero"
-    # Anchor único del fix nuevo (la JSX expression con `isResetting`).
-    # Evita matches en comentarios cercanos que mencionan el botón.
-    idx = _SETTINGS.find("isResetting ? 'Borrando")
-    assert idx > 0, "Expresión JSX `isResetting ? 'Borrando` no encontrada."
-    # Slice de ~2500 chars ANTES (donde está la definición del button)
-    block = _SETTINGS[max(0, idx - 12000):idx + 200]
+# [reapuntado 2026-07-28] El botón dedicado "Sí, empezar desde cero" migró a una opción
+# (`choiceId === 'cero'`) dentro del EvaluateModal. El CONTRATO sobrevive en forma modal:
+#   - feedback inmediato = `toast.loading('Borrando preferencias...')` ANTES del await
+#     (reemplaza el ternario 'Borrando…' + #FCA5A5 + cursor wait del botón muerto);
+#   - guard doble-click = early-return `if (... || isResetting) return` + `busy={...}` del modal;
+#   - error path = catch → toast.error + `setIsResetting(false)` (retry sin recargar).
+# El handler fluye HACIA ADELANTE desde el anchor, así que la ventana es idx→idx+2500.
 
-    assert "disabled={isResetting}" in block, (
-        "Botón no tiene `disabled={isResetting}` — user podría clickear "
-        "múltiples veces durante el await."
+def _bloque_handler_cero():
+    idx = _SETTINGS.find("choiceId === 'cero'")
+    assert idx > 0, "Handler `choiceId === 'cero'` no encontrado — el flujo de reset se movió, re-anclar."
+    return _SETTINGS[idx: idx + 2500]
+
+
+def test_button_uses_isResetting_for_visual_feedback():
+    """Feedback visual del reset: toast.loading inmediato + guard `isResetting` + busy del modal."""
+    block = _bloque_handler_cero()
+    assert "toast.loading('Borrando" in block, (
+        "El handler ya no muestra `toast.loading('Borrando...')` — sin feedback inmediato el "
+        "user clickea múltiples veces creyendo que falló."
     )
-    assert "'Borrando…'" in block or "'Borrando...'" in block or "Borrando…" in block, (
-        "Botón no cambia texto a 'Borrando…' cuando isResetting=true. "
-        "Feedback visual perdido."
+    assert "|| isResetting) return" in block, (
+        "El early-return con `isResetting` desapareció — doble click dispararía dos resets."
     )
-    # Color cambia a desaturado (#FCA5A5 vs #EF4444):
-    assert "#FCA5A5" in block, (
-        "Botón no usa color desaturado (#FCA5A5) cuando isResetting=true. "
-        "Sin esto, sigue viéndose 100% activo."
-    )
-    # cursor:wait:
-    assert "'wait'" in block, (
-        "Botón no setea `cursor: 'wait'` cuando isResetting=true."
+    assert "|| isResetting}" in _SETTINGS, (
+        "El modal ya no propaga `isResetting` a su prop `busy` — la UI se ve 100% activa "
+        "durante el borrado."
     )
 
 
 def test_setIsResetting_true_at_start_of_handler():
-    """El handler onClick debe llamar `setIsResetting(true)` ANTES del
-    await del backend, para feedback inmediato."""
-    # Anchor único del fix nuevo (la JSX expression con `isResetting`).
-    # Evita matches en comentarios cercanos que mencionan el botón.
-    idx = _SETTINGS.find("isResetting ? 'Borrando")
-    block = _SETTINGS[max(0, idx - 12000):idx + 200]
-
-    # El setIsResetting(true) debe estar ANTES del await fetchWithAuth
+    """`setIsResetting(true)` debe ir ANTES del primer await del backend (feedback inmediato)."""
+    block = _bloque_handler_cero()
     set_true_idx = block.find("setIsResetting(true)")
     await_idx = block.find("await fetchWithAuth")
     assert set_true_idx > 0, "setIsResetting(true) no encontrado."
     assert await_idx > 0, "await fetchWithAuth no encontrado."
     assert set_true_idx < await_idx, (
         "setIsResetting(true) debe estar ANTES del `await fetchWithAuth` "
-        "para feedback INMEDIATO. Si está después, el botón solo cambia "
-        "tras 5-8s de espera — sin diferencia para el user."
+        "para feedback INMEDIATO. Si está después, el guard de doble-click "
+        "llega tarde y el toast aparece tras la espera."
     )
 
 
 def test_isResetting_re_enabled_on_error():
-    """En error path, `setIsResetting(false)` debe re-habilitar el botón.
+    """En error path, `setIsResetting(false)` debe re-habilitar el flujo.
     En happy path NO es necesario (navigate desmonta el componente)."""
-    # Anchor único del fix nuevo (la JSX expression con `isResetting`).
-    # Evita matches en comentarios cercanos que mencionan el botón.
-    idx = _SETTINGS.find("isResetting ? 'Borrando")
-    block = _SETTINGS[max(0, idx - 12000):idx + 200]
-
-    # Debe haber setIsResetting(false) dentro de un catch:
+    block = _bloque_handler_cero()
     catch_idx = block.find("catch (error)")
     if catch_idx < 0:
         catch_idx = block.find("catch(error)")
     assert catch_idx > 0, "Catch block no encontrado."
     catch_block = block[catch_idx:catch_idx + 1000]
     assert "setIsResetting(false)" in catch_block, (
-        "En error path, `setIsResetting(false)` NO se llama — el botón "
-        "queda permanentemente disabled tras un error transient. User "
+        "En error path, `setIsResetting(false)` NO se llama — el flujo "
+        "queda permanentemente bloqueado tras un error transient. User "
         "no puede retry sin recargar."
     )

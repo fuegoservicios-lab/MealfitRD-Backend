@@ -153,9 +153,12 @@ def test_frontend_marker_present():
     )
 
 
+# [reapuntado 2026-07-28] `persistGlasses` fue renombrada a `flushPersist` cuando el POST
+# ganó coalescing (taps rápidos → un solo POST en vuelo + pendingTarget). El patrón de
+# reintento sobrevivió intacto en ambas funciones.
 @pytest.mark.parametrize("fn_signature", [
     "const loadIntake = useCallback(",
-    "const persistGlasses = useCallback(",
+    "const flushPersist = useCallback(",
 ])
 def test_frontend_functions_have_retry_pattern(fn_signature):
     """Ambas funciones DEBEN seguir el patron `attemptOnce()` + check
