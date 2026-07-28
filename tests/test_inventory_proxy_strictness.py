@@ -1,5 +1,18 @@
 from unittest.mock import patch
 
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pin_pantry_viability_floor_off(monkeypatch):
+    """[P1-PANTRY-VIABILITY-FLOOR 2026-07-28] El floor (nevera 0<n<12 -> flex+advisory con
+    reason propio) pisa los escenarios de FRESCURA que este archivo ancla (stale vs live,
+    drift, force_generate) — sus fixtures usan neveras chicas legítimas. Se apaga explícito;
+    el floor tiene su anchor propio en test_p1_pantry_viability_floor.py."""
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
+
 @patch("cron_tasks.get_inventory_activity_since")
 @patch("cron_tasks.get_consumed_meals_since")
 def test_inventory_proxy_strictness_manual_blocks(mock_consumed, mock_activity):
@@ -122,12 +135,20 @@ def test_chunk_aborts_on_5pct_inventory_drift_during_llm_call():
     triggering the drift retry mechanism rather than silently passing.
     """
     import cron_tasks
-    old_inv = [{"name": "Huevos", "quantity": 10, "unit": "unidad"}]
-    # Consume 1 huevo (10% drift)
-    new_inv = [{"name": "Huevos", "quantity": 9, "unit": "unidad"}]
-    
+    # [reapuntado 2026-07-28 · P1-D] El calculador fue REESCRITO a deriva de BASES
+    # (diferencia simétrica de conjuntos normalizados): detecta ingredientes que
+    # aparecen/desaparecen, NO cambios de cantidad — la deriva cuantitativa la cubre
+    # la validación de cantidades (P0-5 annotations). 10→9 huevos = misma base = 0.0.
+    same_base_old = [{"name": "Huevos", "quantity": 10, "unit": "unidad"}]
+    same_base_new = [{"name": "Huevos", "quantity": 9, "unit": "unidad"}]
+    assert cron_tasks._calculate_inventory_drift(same_base_old, same_base_new) == 0.0, (
+        "cambio SOLO de cantidad no es deriva de bases (la cubre P0-5)"
+    )
+    # Un ingrediente de 2 desaparece → deriva 50% (dispara el retry > 5%).
+    old_inv = ["Huevos", "Pechuga de pollo"]
+    new_inv = ["Huevos"]
     drift_pct = cron_tasks._calculate_inventory_drift(old_inv, new_inv)
-    assert drift_pct == 0.10, f"Expected 10% drift, got {drift_pct}"
+    assert drift_pct == 0.50, f"Expected 50% drift (1 base de 2 fuera), got {drift_pct}"
     
     # Simula la lógica de retry que ahora se activa > 0.05
     form_data = {"current_pantry_ingredients": old_inv, "_drift_retries": 0}

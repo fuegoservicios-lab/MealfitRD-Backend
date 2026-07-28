@@ -22,6 +22,16 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
+
+@pytest.fixture(autouse=True)
+def _pin_pantry_viability_floor_off(monkeypatch):
+    """[P1-PANTRY-VIABILITY-FLOOR 2026-07-28] El floor (nevera 0<n<12 -> flex+advisory con
+    reason propio) pisa los escenarios de FRESCURA que este archivo ancla (stale vs live,
+    drift, force_generate) — sus fixtures usan neveras chicas legítimas. Se apaga explícito;
+    el floor tiene su anchor propio en test_p1_pantry_viability_floor.py."""
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
+
 def _stale_snapshot_form_data(age_hours=30):
     """Helper: snapshot stale (más viejo que FORCE_GENERATE_HOURS=24h por defecto)."""
     captured = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()

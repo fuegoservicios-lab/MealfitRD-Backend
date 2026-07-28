@@ -63,9 +63,15 @@ def test_solver_runs_before_shopping_aggregation_in_assemble():
     a = src.find("async def assemble_plan_node")
     assert a > 0, "assemble_plan_node no encontrado"
     body = src[a:src.find("async def", a + 20)]
-    i_solver = body.find("[P3-MACRO-SOLVER] Re-escaló porciones")
+    # [reapuntado 2026-07-28] El bloque migró de inline-en-assemble al SSOT
+    # `_apply_macro_engine` (assemble y fallback consumen LA MISMA función). El ORDEN
+    # se preserva por la posición del CALL dentro de assemble: engine → shopping.
+    e = src.find("def _apply_macro_engine")
+    engine_body = src[e:src.find('\nasync def', e)]
+    assert "[P3-MACRO-SOLVER] Re-escaló porciones" in engine_body, "marker del solver ausente del engine"
+    i_call = body.find("_apply_macro_engine(")
     i_shop = body.find("# Calcular shopping lists")
     i_human = body.find("Humanizar ingredientes a medidas caseras")
-    assert i_solver > 0 and i_shop > 0 and i_human > 0, "marcadores de orden ausentes"
-    assert i_solver < i_shop, "el solver debe correr ANTES de la agregación de compras"
+    assert i_call > 0 and i_shop > 0 and i_human > 0, "marcadores de orden ausentes"
+    assert i_call < i_shop, "el solver (via engine) debe correr ANTES de la agregación de compras"
     assert i_shop < i_human, "la humanización debe correr DESPUÉS del shopping (orden legacy)"

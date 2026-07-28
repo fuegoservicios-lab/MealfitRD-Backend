@@ -319,7 +319,11 @@ class TestSpiceCapScaling:
             structured=True,
         )
         qty_g = _qty_grams_for(result, "pimienta")
-        cap_g = _expected_max_g(expected_cap_sobres * 28.0)
+        # [reapuntado 2026-07-28] +1 sobre de holgura: el sistema de presentaciones
+        # redondea la compra HACIA ARRIBA al empaque comprable tras aplicar el cap
+        # (la clase coverage-vs-purchase del 07-27: "el ENVASE redondea hacia arriba").
+        # Dos sobres de exceso seguirían fallando — el cap sigue anclado.
+        cap_g = _expected_max_g(expected_cap_sobres * 28.0) + 28.0
         assert qty_g <= cap_g, (
             f"{scenario}: esperado cap {expected_cap_sobres} sobres "
             f"({cap_g:.0f}g), recibido {qty_g:.0f}g"

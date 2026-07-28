@@ -131,9 +131,16 @@ def test_loading_dark_bg_matches_dashboard_formulario():
     assert 'html[data-theme="dark"] .mf-loading-bg' in text, (
         "Falta el override del fondo oscuro `html[data-theme=\"dark\"] .mf-loading-bg`."
     )
-    # Capa de rayas diagonales — firma compartida con Dashboard/Formulario.
-    assert "repeating-linear-gradient(45deg, rgba(255,255,255,0.04)" in text, (
-        "Falta la capa de rayas diagonales del fondo oscuro (P3-DARK-BG-STRIPES)."
+    # [reapuntado 2026-07-28 · sin-rayas 2026-06-22] Las rayas diagonales se QUITARON
+    # por pedido del owner (documentado inline en Plan.jsx: "quedan solo los glows
+    # ambientales", igual que en el formulario). El contrato vivo: glows indigo/purpura
+    # y CERO rayas en el fondo del loading.
+    # (con paren abierto: el COMENTARIO sin-rayas menciona el literal a secas)
+    assert "repeating-linear-gradient(" not in text, (
+        "Las rayas diagonales volvieron al loading — el owner las quito el 06-22."
+    )
+    assert "rgba(99,102,241" in text, (
+        "Falta el glow indigo ambiental del fondo oscuro del loading."
     )
     # Base slate-950 idéntica al --bg-page oscuro del resto del producto.
     assert "background-color: #0B1120" in text, (

@@ -26,12 +26,18 @@ ROWS = [
 def test_reconcile_block_present_and_before_shopping():
     backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = open(os.path.join(backend, "graph_orchestrator.py"), encoding="utf-8").read()
+    # [reapuntado 2026-07-28] El bloque migró de inline-en-assemble al SSOT
+    # `_apply_macro_engine` (assemble y fallback consumen LA MISMA función). El ORDEN
+    # se preserva por la posición del CALL dentro de assemble: engine → shopping.
+    e = src.find("def _apply_macro_engine")
+    engine_body = src[e:src.find('\nasync def', e)]
+    assert "[P3-CAL-RECONCILE] Niveló calorías" in engine_body, "bloque de reconciliación calórica ausente"
     a = src.find("async def assemble_plan_node")
     body = src[a:src.find("async def", a + 20)]
-    i_rec = body.find("[P3-CAL-RECONCILE] Niveló calorías")
+    i_call = body.find("_apply_macro_engine(")
     i_shop = body.find("# Calcular shopping lists")
-    assert i_rec > 0, "bloque de reconciliación calórica ausente"
-    assert i_rec < i_shop, "la reconciliación debe correr ANTES del shopping (gramos finales → lista)"
+    assert i_call > 0 and i_shop > 0, "call del engine o bloque shopping ausentes en assemble"
+    assert i_call < i_shop, "la reconciliación (via engine) debe correr ANTES del shopping (gramos finales → lista)"
 
 
 def test_uniform_scaling_preserves_recipe_macro_consistency():

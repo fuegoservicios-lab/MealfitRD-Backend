@@ -70,8 +70,12 @@ def test_skeleton_fidelity_threshold_is_dynamic():
     # Localizar el bloque del check
     idx = _GRAPH.find("def _run_assembly_validations")
     assert idx > 0
-    # Tomar las ~3000 chars que siguen (cubre el bloque de skeleton fidelity)
-    block = _GRAPH[idx:idx + 4000]
+    # [reapuntado 2026-07-28] Ventana fija → cuerpo hasta el siguiente def top-level
+    # (17ª ventana caducada: el bloque quedó a +4706 de la firma y la ventana era 4000).
+    _nxt = _GRAPH.find("\ndef ", idx + 10)
+    _nxt_a = _GRAPH.find("\nasync def ", idx + 10)
+    _fin = min(x for x in (_nxt, _nxt_a, len(_GRAPH)) if x > 0)
+    block = _GRAPH[idx:_fin]
 
     # Anchor del marker:
     assert "P3-SKELETON-FIDELITY-CRITIQUE-AWARE" in block, (

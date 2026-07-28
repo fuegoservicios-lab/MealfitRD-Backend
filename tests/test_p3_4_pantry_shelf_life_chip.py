@@ -141,8 +141,11 @@ def test_pantry_renders_only_when_urgent():
     src = _read(_PANTRY_JSX)
     # Buscar el patrón `if (!badge) return null` cerca de la invocación
     # del helper.
+    # [reapuntado 2026-07-28] El guard cambio de forma: ya no es un componente helper con
+    # early-return, sino el condicional JSX `{badge && (...)}` inline en el render (mismo
+    # contrato: badge null => no se pinta nada; ademas `badgeStyle` se deriva null-safe).
     pattern = re.search(
-        r"getShelfLifeBadge\(item\)[\s\S]{0,200}if\s*\(\s*!badge\s*\)\s*return\s+null",
+        r"getShelfLifeBadge\(item\)[\s\S]{0,2600}\{badge && \(",
         src,
     )
     assert pattern is not None, (

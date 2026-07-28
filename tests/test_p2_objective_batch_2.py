@@ -188,13 +188,15 @@ def test_step_contract_lint():
 
 def test_persist_boundary_includes_reverse_and_offcatalog():
     i = _GRAPH.find("def finalize_plan_data_coherence")
-    # [P2-AUDIT-V2-BATCH · 2026-07-01] ventana 7000→9000: el bloque qty-presence (P2-QTY-PRESENCE-PERSIST)
-    # se insertó antes del strip; el contrato anclado (reverse + offcatalog en el boundary) no cambió.
-    # [P1-DISH-REALISM-BATCH · 2026-07-01] +carb-ghost/realism-cap/consolidate → 12000.
-    # [P1-CLOSER-STEP-INTEGRATE · 2026-07-08] +llamada a _integrate_complement_steps dentro del persist
-    # boundary → la distancia real a _ensure_ingredients_used_in_recipe subió a ~13887 chars → 16000
-    # (margen; el contrato en sí no cambió, solo el tamaño de la función que lo contiene).
-    seg = _GRAPH[i:i + 16000]
+    # [reapuntado 2026-07-28] Esta ventana fue bumpeada CUATRO veces (7000→9000→12000→16000,
+    # historial abajo) — el número mágico no aprende. Corte estructural: cuerpo completo
+    # hasta el siguiente def top-level; el contrato (reverse + offcatalog DENTRO del persist
+    # boundary) es de pertenencia, no de distancia.
+    #   [P2-AUDIT-V2-BATCH 07-01] 7000→9000 (qty-presence) · [P1-DISH-REALISM-BATCH 07-01]
+    #   →12000 · [P1-CLOSER-STEP-INTEGRATE 07-08] →16000 · hoy: la función siguió creciendo.
+    _cands = [_GRAPH.find("\ndef ", i + 10), _GRAPH.find("\nasync def ", i + 10), len(_GRAPH)]
+    _nxt = min(x for x in _cands if x > 0)
+    seg = _GRAPH[i:_nxt]
     assert "_ensure_ingredients_used_in_recipe" in seg and "_strip_offcatalog_condiments_from_recipe" in seg, \
         "persist boundary sin reverse-coherence/off-catalog strip (P2-PERSIST-BOUNDARY-COHERENCE)"
 

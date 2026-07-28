@@ -183,7 +183,10 @@ def test_p3_shopping_2_knob_escape_hatch_documented(plans_src: str):
     """Knob `MEALFIT_PERSIST_DEBUG_RECALC` permite re-habilitar en prod
     sin redeploy (escape hatch para SRE)."""
     fn_idx = plans_src.find("def api_recalculate_shopping_list")
-    body = plans_src[fn_idx:fn_idx + 30000]
+    # [reapuntado 2026-07-28] 30000 → cuerpo hasta el siguiente @router (16ª ventana
+    # caducada: el endpoint creció con P1-RECALC-LOSTUPDATE y el knob quedó a +30957).
+    _nxt = plans_src.find("@router.", fn_idx + 10)
+    body = plans_src[fn_idx:_nxt if _nxt > 0 else len(plans_src)]
     assert "MEALFIT_PERSIST_DEBUG_RECALC" in body, (
         "P3-SHOPPING-2 regresión: knob `MEALFIT_PERSIST_DEBUG_RECALC` "
         "ya no aparece. Sin escape hatch, debugging en producción "
@@ -194,7 +197,10 @@ def test_p3_shopping_2_knob_escape_hatch_documented(plans_src: str):
 def test_p3_shopping_2_anchor_present(plans_src: str):
     """Anchor `[P3-SHOPPING-2 · 2026-05-14]` documenta la razón."""
     fn_idx = plans_src.find("def api_recalculate_shopping_list")
-    body = plans_src[fn_idx:fn_idx + 30000]
+    # [reapuntado 2026-07-28] 30000 → cuerpo hasta el siguiente @router (16ª ventana
+    # caducada: el endpoint creció con P1-RECALC-LOSTUPDATE y el knob quedó a +30957).
+    _nxt = plans_src.find("@router.", fn_idx + 10)
+    body = plans_src[fn_idx:_nxt if _nxt > 0 else len(plans_src)]
     assert "P3-SHOPPING-2" in body, (
         "P3-SHOPPING-2 regresión: anchor desapareció. Restaurar el "
         "comment que documenta por qué se gatea el fingerprint."

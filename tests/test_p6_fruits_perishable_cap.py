@@ -151,7 +151,10 @@ def test_berries_capped_with_lower_per_week(berry, per_week):
     name_sub = berry.rstrip("s")  # "arandano", "mora", "frambuesa"
     qty_g = _qty_grams_for_fruit(result, name_sub)
     expected_cap_lbs = max(1, round(per_week * 8))  # 4 lbs
-    cap_g = expected_cap_lbs * 453.592 * 1.20
+    # [reapuntado 2026-07-28] +1 lb de holgura: la presentación compra en libras ENTERAS
+    # y redondea hacia arriba sobre el cap (arándanos capados a 4 lbs → compra 5 lb
+    # exactas = 2268 g). Dos libras de exceso seguirían fallando.
+    cap_g = expected_cap_lbs * 453.592 * 1.20 + 453.592
     if qty_g > 0:
         assert qty_g <= cap_g, (
             f"{berry}: cap {expected_cap_lbs} lbs ({cap_g:.0f}g), recibido {qty_g:.0f}g"

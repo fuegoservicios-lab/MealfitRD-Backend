@@ -71,9 +71,13 @@ def test_guard_uses_weekly_not_active_functional(monkeypatch):
     assert not _mags, f"el guard usó la lista ACTIVA (mensual ×4) como base: {_mags[:3]}"
 
     # Legacy: sin key semanal → fallback a la activa (comportamiento previo intacto).
+    # [reapuntado 2026-07-28] El probe era SOBRE-oferta (400 vs 100) y el filtro de
+    # sobre-oferta (07-26) la exime a propósito — comprar de más es legítimo (fundas,
+    # caps de empaque). El fallback se prueba con SUB-oferta, que sí es divergencia
+    # accionable (misma migración que el edge de líquidos en p1_1_coherence).
     plan_legacy = {
         "days": [{"day": 1, "meals": []}],
-        "aggregated_shopping_list": [_mk_item(400.0)],
+        "aggregated_shopping_list": [_mk_item(40.0)],
     }
     div2 = sc.run_shopping_coherence_guard(plan_legacy, mode_override="warn", multiplier=1.0)
     assert any(d.get("magnitude") for d in div2), \
