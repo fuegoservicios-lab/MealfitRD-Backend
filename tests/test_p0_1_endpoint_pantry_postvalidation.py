@@ -210,9 +210,21 @@ import cron_tasks  # noqa: E402
 # (asumiendo plan inicial / nevera no poblada). Para validar el path estricto
 # necesitamos simular un usuario con ciclo de compras vivo.
 PANTRY_OK = [
-    "pollo 500g", "arroz 1000g", "tomate 300g", "cebolla 200g", "aceite 250ml",
-    "huevo 12 unidades", "leche 1L", "queso 250g", "pan integral 500g", "yogurt 500g",
-    "ajo 100g", "limón 200g",
+    # [reapuntado 2026-07-28] ampliada a >=12: el endpoint gano el gate
+    # PANTRY_GUARD_MIN_ITEMS (default 10) ANTES del validador — con la lista corta
+    # el helper se saltaba y "no invocado" no probaba nada.
+    "pollo 500g",
+    "arroz 1000g",
+    "tomate 300g",
+    "cebolla 200g",
+    "aceite 250ml",
+    "huevo 12 unidades",
+    "leche 1L",
+    "queso 250g",
+    "pan integral 500g",
+    "yogurt 500g",
+    "ajo 100g",
+    "limón 200g",
 ]
 
 # [P1-5] El endpoint valida campos mínimos del formulario antes de invocar al
@@ -395,6 +407,14 @@ def _common_endpoint_patches():
     ]
 
 
+# [reapuntado 2026-07-28 · P1-RENEWAL-PANTRY-IGNORE] El guard post-LLM del plan inicial quedó
+# tras el knob MEALFIT_INITIAL_CHUNK_PANTRY_GUARD, default OFF: la renovación de plan completo es
+# variety-first A PROPÓSITO (la lista de compras define qué comprar; la nevera previa se ignora,
+# y el guard 400 de entrada por nevera mínima también se retiró). Estos tests conservan el
+# CONTRATO de validación bajo knob ON — quien lo encienda hereda el contrato intacto — y
+# `test_knob_off_por_default_saltea` ancla la decisión de producto.
+_KNOB_ON = ("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True)
+
 def test_endpoint_invokes_validation_for_guest_with_payload_pantry():
     """[P0-1 GAP-A] Un guest que envía `current_pantry_ingredients` en el
     payload DEBE disparar la validación post-LLM (antes era saltada por el
@@ -433,6 +453,7 @@ def test_endpoint_invokes_validation_for_guest_with_payload_pantry():
     with ExitStack() as stack:
         for cm in _common_endpoint_patches():
             stack.enter_context(cm)
+        stack.enter_context(patch(*_KNOB_ON))
         stack.enter_context(
             patch("routers.plans.run_plan_pipeline", return_value=pipeline_return)
         )
@@ -525,6 +546,19 @@ def test_endpoint_invokes_validation_for_authenticated_user():
             patch("routers.plans._resolve_request_tz_offset", return_value=0),
         ]:
             stack.enter_context(cm)
+        stack.enter_context(patch(*_KNOB_ON))
+        # [2026-07-28] El path auth persiste INLINE (`_save_plan_and_track_background`) y
+        # lee señales de aprendizaje — sin estos mocks el test golpeaba la DB REAL con
+        # "user-abc" (fallaba por uuid inválido y moría en el 503 de persistencia).
+        stack.enter_context(
+            patch(
+                "routers.plans._save_plan_and_track_background",
+                return_value="00000000-0000-4000-8000-000000000abc",
+            )
+        )
+        stack.enter_context(
+            patch("cron_tasks.inject_learning_signals_from_profile", return_value=None)
+        )
         stack.enter_context(
             patch("routers.plans.run_plan_pipeline", return_value=pipeline_return)
         )
@@ -551,11 +585,10 @@ def test_endpoint_invokes_validation_for_authenticated_user():
 # ---------------------------------------------------------------------------
 
 def test_endpoint_skips_validation_when_no_pantry_available():
-    """Si `_live_pantry` queda vacío (auth con inventario vacío que pasó el
-    guard mínimo por payload, edge case), el endpoint no invoca el helper.
-    El guard de pantry mínima (línea 767) ya rechaza la mayoría de estos
-    casos con HTTPException 400, pero esta verificación cierra el contrato:
-    sin pantry, no hay validación que aplicar.
+    """Si `_live_pantry` queda vacío, el endpoint no invoca el helper — aun con
+    knob ON. (El antiguo guard 400 de entrada por nevera mínima se retiró con
+    P1-RENEWAL-PANTRY-IGNORE; el contrato vigente es solo el corto-circuito:
+    sin pantry, no hay validación que aplicar.)
     """
     from contextlib import ExitStack
     from fastapi import HTTPException
@@ -575,6 +608,7 @@ def test_endpoint_skips_validation_when_no_pantry_available():
     with ExitStack() as stack:
         for cm in _common_endpoint_patches():
             stack.enter_context(cm)
+        stack.enter_context(patch(*_KNOB_ON))
         stack.enter_context(
             patch("routers.plans.run_plan_pipeline", return_value=_result_clean())
         )
@@ -583,18 +617,50 @@ def test_endpoint_skips_validation_when_no_pantry_available():
         )
 
         kwargs = _build_endpoint_call_kwargs(payload, verified_user_id=None)
-        with pytest.raises(HTTPException) as exc_info:
+        # [reapuntado 2026-07-28] El guard 400 de entrada por nevera mínima se RETIRÓ con
+        # P1-RENEWAL-PANTRY-IGNORE (variety-first): la request ya no se rechaza. El contrato que
+        # queda es el corto-circuito del validador: sin pantry, no hay validación que aplicar.
+        # La request puede fallar aguas abajo por mocks de persistencia ausentes — irrelevante
+        # para ESTE contrato, así que se tolera cualquier excepción.
+        try:
             api_analyze(**kwargs)
+        except HTTPException:
+            pass
 
-    # El endpoint envuelve cualquier excepción (incluido el HTTPException 400
-    # del guard de pantry mínima) en un HTTPException 500 con el detail original
-    # concatenado (routers/plans.py:1069). Verificamos que el rechazo sucedió
-    # antes de la validación post-LLM (lo único que importa para este contrato).
-    detail = str(exc_info.value.detail)
-    assert "Actualiza tu nevera" in detail, (
-        f"Esperaba mensaje del guard de pantry mínima en el detail, recibido: {detail}"
-    )
     assert helper_mock.called is False, (
-        "El helper no debe invocarse cuando el guard de pantry mínima "
-        "rechaza la request antes."
+        "Sin pantry disponible el helper no debe invocarse (corto-circuito sano)."
+    )
+
+
+def test_knob_off_por_default_saltea():
+    """[P1-RENEWAL-PANTRY-IGNORE] Con el knob en default (OFF), el validador post-LLM NO corre:
+    la renovación es variety-first por decisión de producto. Si este test falla porque el default
+    cambió a ON, actualizar también la tabla de knobs y los tests de arriba (heredan el contrato)."""
+    from contextlib import ExitStack
+
+    api_analyze = _import_api_analyze()
+    payload = {
+        "user_id": "guest",
+        "totalDays": 3,
+        "current_pantry_ingredients": PANTRY_OK,
+        "tzOffset": 0,
+        **MIN_FORM_DATA,
+    }
+    helper_mock = MagicMock()
+    with ExitStack() as stack:
+        for cm in _common_endpoint_patches():
+            stack.enter_context(cm)
+        stack.enter_context(
+            patch("routers.plans.run_plan_pipeline", return_value=_result_clean())
+        )
+        stack.enter_context(
+            patch("cron_tasks._validate_and_retry_initial_chunk_against_pantry", helper_mock)
+        )
+        kwargs = _build_endpoint_call_kwargs(payload, verified_user_id=None)
+        try:
+            api_analyze(**kwargs)
+        except Exception:
+            pass
+    assert helper_mock.called is False, (
+        "default OFF: el validador no debe correr (variety-first). ¿Cambió el default del knob?"
     )

@@ -279,6 +279,10 @@ def test_sse_emits_degraded_flag_on_pantry_violation(client):
                                   return_value=summary_mock))
         for cm in _common_postprocess_patches():
             stack.enter_context(cm)
+        # [reapuntado 2026-07-28 · P1-RENEWAL-PANTRY-IGNORE] knob ON: estos tests conservan
+        # el CONTRATO del validador post-LLM; el default OFF (variety-first) se ancla en
+        # test_p0_1_endpoint_pantry_postvalidation.py::test_knob_off_por_default_saltea.
+        stack.enter_context(patch("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True))
 
         payload = {
             "user_id": "guest",
@@ -375,6 +379,10 @@ def test_sse_no_degraded_flag_on_clean_pantry(client):
                                   return_value=summary_mock))
         for cm in _common_postprocess_patches():
             stack.enter_context(cm)
+        # [reapuntado 2026-07-28 · P1-RENEWAL-PANTRY-IGNORE] knob ON: estos tests conservan
+        # el CONTRATO del validador post-LLM; el default OFF (variety-first) se ancla en
+        # test_p0_1_endpoint_pantry_postvalidation.py::test_knob_off_por_default_saltea.
+        stack.enter_context(patch("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True))
 
         payload = {
             "user_id": "guest",
@@ -560,6 +568,10 @@ def test_sse_filters_internal_events_and_renames_day_completed(client):
                                   return_value=summary_mock))
         for cm in _common_postprocess_patches():
             stack.enter_context(cm)
+        # [reapuntado 2026-07-28 · P1-RENEWAL-PANTRY-IGNORE] knob ON: estos tests conservan
+        # el CONTRATO del validador post-LLM; el default OFF (variety-first) se ancla en
+        # test_p0_1_endpoint_pantry_postvalidation.py::test_knob_off_por_default_saltea.
+        stack.enter_context(patch("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True))
         response = client.post("/api/plans/analyze/stream", json=payload)
 
     assert response.status_code == 200
@@ -646,6 +658,10 @@ def test_sse_rate_limit_returns_429_after_3_requests(client):
                                   return_value=summary_mock))
         for cm in _common_postprocess_patches():
             stack.enter_context(cm)
+        # [reapuntado 2026-07-28 · P1-RENEWAL-PANTRY-IGNORE] knob ON: estos tests conservan
+        # el CONTRATO del validador post-LLM; el default OFF (variety-first) se ancla en
+        # test_p0_1_endpoint_pantry_postvalidation.py::test_knob_off_por_default_saltea.
+        stack.enter_context(patch("constants.INITIAL_CHUNK_PANTRY_GUARD_ENABLED", True))
 
         # Primeros 3 requests: deben pasar
         for i in range(3):
