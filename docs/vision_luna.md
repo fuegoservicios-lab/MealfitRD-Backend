@@ -1,10 +1,26 @@
-# Escáner de comida: gemma local → Luna cloud (P1-VISION-LUNA · 2026-07-28)
+# Escáner de comida y de Nevera: Luna cloud, único provider (P1-VISION-LUNA · 2026-07-28, P1-VISION-NO-LOCAL · 2026-07-28)
 
-Lee esto si "Escanear comida" (Dashboard) o el Diario Visual se comportan
-raro, si un scan tarda 2 minutos en vez de 2 segundos, o si `llm_usage_events`
-muestra un costo que no esperabas. SSOT del código: [`vision_agent.py`](../vision_agent.py)
-(despacho + cascada), [`image_prep.py`](../image_prep.py) (resize),
-[`routers/diary.py`](../routers/diary.py) (endpoint + contabilidad de costo).
+Lee esto si "Escanear comida" (Dashboard), "Escanear mi nevera" (Pantry) o el
+Diario Visual se comportan raro, si un scan tarda mucho más de 2-3 segundos, o
+si `llm_usage_events` muestra un costo que no esperabas. SSOT del código:
+[`vision_agent.py`](../vision_agent.py) (despacho), [`image_prep.py`](../image_prep.py)
+(resize), [`routers/diary.py`](../routers/diary.py) (endpoint meal-scan +
+contabilidad de costo), [`routers/user_data.py`](../routers/user_data.py)
+(endpoint del escáner de Nevera, prompt/schema propios).
+
+**[P1-VISION-NO-LOCAL · 2026-07-28]** El provider LOCAL (`ollama`, gemma
+vía túnel SSH reverso desde el laptop del owner, P1-MEAL-SCAN-GEMMA) fue
+ELIMINADO por completo — el laptop no podía sostener el servicio. Con eso
+desaparecieron: el provider `ollama` y su transporte httpx propio, la
+cascada de fallback `MEALFIT_VISION_FALLBACK_PROVIDER` (no tenía sentido con
+un solo provider real), el single-flight lock que serializaba TODOS los
+scans (limitación de una GPU de 4GB, ya no aplica a un provider cloud), y
+`is_vision_local()`. El escáner de Nevera (antes su propio cliente Ollama en
+`routers/user_data.py`) ahora reutiliza el MISMO transporte cloud que el
+meal-scan (`vision_agent.analyze_image_structured`), con su prompt y schema
+de negocio propios (items + marca, matcheados contra `master_ingredients`)
+sin cambios. **No hay más provider al que hacer rollback** — ver la sección
+de rollback más abajo.
 
 ## Qué cambió y por qué
 
@@ -29,22 +45,30 @@ entrada `gpt-5.6-luna`, ya registrada por `P1-LUNA-PRICING · 2026-07-26` —
 este fix no tocó el pricing, solo lo empieza a usar desde un surface nuevo).
 Latencia medida: **1,7-2,7 s** (gemma local por túnel SSH: 30-120 s).
 
-El fix son tres cambios en cadena, en orden de dependencia:
+El fix original (P1-VISION-LUNA) fueron tres cambios en cadena:
 
 1. **Resize defensivo** ([`image_prep.py`](../image_prep.py)) — cap de lado
    mayor a `MEALFIT_VISION_MAX_SIDE_PX` px, re-encode JPEG calidad 85,
    fail-open ante cualquier error. Se invoca en el ÚNICO punto por el que
-   pasan los bytes antes de salir a cualquier proveedor
-   (`process_image_with_vision`, `vision_agent.py`) — cubre `ollama` Y
-   `openai_compatible` con el mismo chokepoint, así que gemma también se
-   beneficia (parte de sus 30-120 s es puro tamaño de imagen).
-2. **Cascada de fallback** — `MEALFIT_VISION_FALLBACK_PROVIDER`: si el
-   primario falla o devuelve un resultado no usable, reintenta UNA sola vez
-   con el fallback configurado. Sin bucles: primario → fallback → si el
-   fallback TAMBIÉN falla, se devuelve el resultado del PRIMARIO (no el del
-   fallback), para que el log apunte al problema real.
+   pasan los bytes antes de salir al proveedor (`process_image_with_vision`,
+   `vision_agent.py`). **Sigue vigente sin cambios.**
+2. ~~Cascada de fallback~~ — `MEALFIT_VISION_FALLBACK_PROVIDER`: si el
+   primario fallaba, reintentaba UNA vez con un provider distinto (pensado
+   para cascar cloud→`ollama`). **ELIMINADA en P1-VISION-NO-LOCAL** — sin
+   provider local no había a qué cascar, y la maquinaria (knob + retry en
+   `_dispatch_vision_provider`) quedaba muerta. Ver "Rollback" abajo para lo
+   que la reemplaza.
 3. **El gasto sale del libro de cuota de planes** ([`routers/diary.py`](../routers/diary.py))
-   — ver sección dedicada abajo.
+   — ver sección dedicada abajo. **Sigue vigente sin cambios.**
+
+**[P1-VISION-NO-LOCAL · 2026-07-28]** añadió un cuarto cambio: el escáner de
+Nevera (`routers/user_data.py`, antes su propio cliente Ollama) ahora
+despacha a través de `vision_agent.analyze_image_structured` — la misma
+resolución de cliente/modelo/key (`_resolve_vision_client`) y el mismo
+resize defensivo que el meal-scan, con su prompt/schema de negocio propios
+sin cambios (items + marca detectados en la foto, matcheados contra
+`master_ingredients`). El único cliente cloud del repo (`vision_agent.py`)
+ahora sirve AMBOS escáneres.
 
 ## Knobs
 
@@ -54,15 +78,19 @@ source el 2026-07-28 — no asumidos del plan.
 
 | Knob | Default | Clamp / choices | Dónde |
 |---|---|---|---|
-| `MEALFIT_VISION_PROVIDER` | `disabled` | `{disabled, off, openai_compatible, ollama}` — fuera del set cae al default con WARNING | `vision_agent._vision_provider` |
-| `MEALFIT_VISION_MODEL` | `""` (vacío) | sin choices; `_env_str` normaliza a lowercase | `vision_agent._vision_model_name` — modelo del provider CLOUD (`openai_compatible`) |
-| `MEALFIT_OLLAMA_VISION_MODEL` | `""` (vacío → cae a retrocompat/default, ver precedencia) | sin choices | `vision_agent._ollama_model_name` — modelo DEDICADO de Ollama, separado de `MEALFIT_VISION_MODEL`. **Bug real que este knob cierra**: antes ambos compartían `MEALFIT_VISION_MODEL` — con `MEALFIT_VISION_MODEL=gpt-5.6-luna` (necesario para encender Luna como primario), la cascada de fallback a ollama le pedía a Ollama un modelo llamado `gpt-5.6-luna` (no existe ahí), y la cascada quedaba correcta en su lógica pero inalcanzable por config. Precedencia: **(1)** `MEALFIT_OLLAMA_VISION_MODEL` si está seteado, SIEMPRE gana; **(2)** si no, y el provider **PRIMARIO** es `ollama` → hereda `MEALFIT_VISION_MODEL` (retrocompat con la config viva de prod, que hoy pone `MEALFIT_VISION_MODEL=gemma4:12b` con ollama de primario); **(3)** si no, default `gemma4:12b`. La clave del punto 2: ollama solo hereda el knob compartido cuando es el PRIMARIO — nunca cuando actúa de FALLBACK de un provider cloud |
-| `MEALFIT_VISION_BASE_URL` | `""` (vacío) | sin choices | `vision_agent._vision_base_url` (solo usado por `openai_compatible`) |
+| `MEALFIT_VISION_PROVIDER` | `disabled` | `{disabled, off, openai_compatible}` — fuera del set cae al default con WARNING. **`ollama` salió del choices-set en P1-VISION-NO-LOCAL** — un valor `ollama` remanente en el `.env` ahora degrada a `disabled` con WARNING (apaga el feature) en vez de fallar silenciosamente. | `vision_agent._vision_provider` |
+| `MEALFIT_VISION_MODEL` | `""` (vacío) | sin choices; `_env_str` normaliza a lowercase | `vision_agent._vision_model_name` — modelo del ÚNICO provider (`openai_compatible`) |
+| `MEALFIT_VISION_BASE_URL` | `""` (vacío) | sin choices | `vision_agent._vision_base_url` |
 | `MEALFIT_VISION_MAX_SIDE_PX` | `1024` | `[256, 4096]` — fuera de rango cae al **default**, NO clampa al borde (así trata `_env_int` un `validator` que retorna False) | `image_prep.vision_max_side_px` |
-| `MEALFIT_VISION_FALLBACK_PROVIDER` | `""` (vacío = sin cascada) | mismo choices-set que `MEALFIT_VISION_PROVIDER`; `disabled`/`off`/igual-al-primario también se tratan como "sin cascada" | `vision_agent._vision_fallback_provider` + `_vision_cascade_target` |
-| `MEALFIT_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | env crudo, sin `_env_str` | `vision_agent._ollama_base_url` (mismo default que el escáner de Nevera en `routers/user_data.py`) |
-| `MEALFIT_VISION_TIMEOUT_S` | `240` | `[30, 600]` — **este SÍ clampa al borde** (`min(600, max(30, v))`), a diferencia de `MEALFIT_VISION_MAX_SIDE_PX` que cae al default. Parse inválido → 240 | `vision_agent._ollama_timeout_s` (solo Ollama; gemma local es lento) |
-| `MEALFIT_VISION_LLM_TIMEOUT_S` | `30.0` | `(0.0, 120.0]` — cae al default fuera de rango | `vision_agent._vision_llm_timeout_s` (solo `openai_compatible`) |
+| `MEALFIT_VISION_LLM_TIMEOUT_S` | `30.0` | `(0.0, 120.0]` — cae al default fuera de rango | `vision_agent._vision_llm_timeout_s` |
+
+**[P1-VISION-NO-LOCAL · 2026-07-28] Knobs ELIMINADOS** (ya no se leen en
+ningún módulo de producción — si siguen en el `.env` del VPS, bórralos, son
+ruido inerte): `MEALFIT_OLLAMA_BASE_URL`, `MEALFIT_OLLAMA_VISION_MODEL`,
+`MEALFIT_VISION_FALLBACK_PROVIDER`, `MEALFIT_VISION_TIMEOUT_S` (era el
+timeout del roundtrip Ollama, 240s/clamp [30,600] — el timeout cloud vigente
+es `MEALFIT_VISION_LLM_TIMEOUT_S`, tabla arriba, un knob DISTINTO que ya
+existía y sigue vivo).
 
 **API key del provider cloud — atención al nombre exacto**: el path
 `openai_compatible` lee `VISION_API_KEY` (ver `.env.example` y
@@ -78,22 +106,36 @@ imagen" sin pista de la causa). **Al encender Luna en prod, setear
 
 ## Rollback (sin redeploy)
 
+**[P1-VISION-NO-LOCAL · 2026-07-28] No hay más provider al que hacer
+rollback.** `ollama` (gemma local) fue eliminado del código, no solo
+apagado — no existe una palanca de env var que lo reviva; revivirlo exigiría
+revertir el commit de P1-VISION-NO-LOCAL (o cherry-pickear `vision_agent.py`
+pre-fix) Y volver a levantar el túnel SSH del laptop del owner, que es
+precisamente lo que este P-fix cerró porque no era sostenible.
+
+El ÚNICO rollback disponible hoy es apagar el feature (soft-fail, sin costo,
+sin escaneo):
+
 ```
 # En /opt/mealfit/backend/.env del VPS:
-MEALFIT_VISION_PROVIDER=ollama
+MEALFIT_VISION_PROVIDER=disabled   # o "off" — mismo efecto
 
 # reiniciar el proceso backend (systemd/pm2/lo que corra en el VPS)
 ```
 
-Esto vuelve el escáner a gemma local (costo cero, 30-120 s). No requiere
-tocar código ni migraciones — es la misma palanca que ya existía desde
-`P1-MEAL-SCAN-GEMMA`. Si el rollback es porque Luna está devolviendo
-`analysis_failed` para todos los scans, también sirve dejar
-`MEALFIT_VISION_FALLBACK_PROVIDER=ollama` puesto (cascada automática, sin
-rollback completo) — pero si el primario está sistemáticamente caído, cada
-scan paga el timeout del primario ANTES de caer al fallback, así que el
-rollback completo (`MEALFIT_VISION_PROVIDER=ollama`) es más rápido para el
-usuario mientras se investiga.
+Con esto, "Escanear comida"/"Escanear mi nevera"/Diario Visual responden
+`analysis_failed=True` (meal-scan) o `503` (escáner de Nevera) — el frontend
+ya distingue ese estado, así que no es un 500 sorpresivo. Si Luna está
+devolviendo `analysis_failed` de forma intermitente (no sistemática), el
+knob a revisar primero es `VISION_API_KEY`/`MEALFIT_VISION_BASE_URL` (ver
+sección de arriba) o el circuito de rate-limit del proveedor — no hay
+cascada automática a la que apostar mientras se investiga.
+
+Si en el futuro se necesita un SEGUNDO provider real (otro modelo
+OpenAI-compatible con visión, por ejemplo, para diversificar o abaratar
+más), la cascada de P1-VISION-LUNA es un patrón razonable para reintroducir
+— pero como fallback ENTRE DOS PROVIDERS CLOUD, no como vuelta a un modelo
+local.
 
 ## Por qué el costo va a `llm_usage_events` y NO a `api_usage`
 
@@ -124,11 +166,12 @@ sistema, no solo de visión. El test
 ancla esto — si alguien "limpia" el SELECT agregándole `AND endpoint = ...`,
 el test se pone rojo.
 
-El path LOCAL (`ollama`/gemma, costo cero) tampoco escribe en
-`llm_usage_events` — esa tabla es un libro de $ gastado, no de volumen de
-scans. Una fila con `cost_usd_micros=NULL` por cada scan gratis es ruido. Si
-algún día se necesita auditar volumen de scans locales, el lugar correcto es
-`pipeline_metrics`, no el libro de costo.
+**[P1-VISION-NO-LOCAL]** El gate que antes excluía el path LOCAL
+(`not is_vision_local()`, gemma/Ollama costo cero, para no escribir una fila
+`cost_usd_micros=NULL` por scan gratis) se eliminó junto con `is_vision_local()`
+— sin provider local esa condición nunca podía ser False, así que el
+accessor quedaba muerto. Con un único provider (cloud), la fila se emite
+SIEMPRE que hay usuario autenticado; ya no hay un "path gratis" que excluir.
 
 ## Fail-open del resize — consecuencia operacional
 
@@ -183,10 +226,17 @@ macros contra ground truth — eso no existe hoy.
 
 ## Tests
 
-[`tests/test_p1_vision_luna.py`](../tests/test_p1_vision_luna.py) — ancla
-completo: resize (contrato, aspecto, fail-open, clamp del knob), cascada
-(orden resize→despacho, dispara solo con knob, propagación de error del
-primario, "ambos fallan" devuelve el error del primario), el gate de cuota en
-`diary.py` (ya no llama `log_api_usage`, sí llama `log_llm_usage_event` con
-`node="vision_scan"`), anti-regresión de `get_monthly_api_usage`, y
-supersession del marker `_LAST_KNOWN_PFIX`.
+- [`tests/test_p1_vision_luna.py`](../tests/test_p1_vision_luna.py) — ancla
+  del resize (contrato, aspecto, fail-open, clamp del knob), el dispatch por
+  MODELO (`ChatOpenAI` vs `ChatDeepSeek`), la precedencia de API key, el
+  gate de cuota en `diary.py` (ya no llama `log_api_usage`, sí llama
+  `log_llm_usage_event` con `node="vision_scan"`), anti-regresión de
+  `get_monthly_api_usage`, y supersession del marker `_LAST_KNOWN_PFIX`.
+  **Los tests de cascada (`ollama` de fallback) fueron eliminados en
+  P1-VISION-NO-LOCAL junto con la cascada misma.**
+- [`tests/test_p1_vision_no_local.py`](../tests/test_p1_vision_no_local.py)
+  — ancla de la eliminación: el escáner de Nevera ya no requiere
+  `provider == "ollama"` ni devuelve 503 bajo el provider cloud, blanket
+  parser que falla si algún módulo de producción sigue referenciando
+  `ollama`/`gemma`/`_ollama_`, y anti-regresión de la doctrina de cuota
+  (costo a `llm_usage_events`, nunca a `api_usage`).

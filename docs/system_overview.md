@@ -211,7 +211,7 @@ flowchart TB
     ET -.->|"P0-AGENT-1<br/>user_id FORZADO del JWT"| T["11 tools<br/>nevera · consumos · perfil · micros"]
     CM -.->|"RAG"| F[("user_facts + pgvector<br/>Cohere embed-v4")]
     CM -.->|"perfil consolidado"| DR["user_memory_profile<br/>dreaming nocturno"]
-    M -.->|"foto"| VI["Visión local gemma<br/>vía túnel Ollama · costo 0"]
+    M -.->|"foto"| VI["Visión cloud Luna<br/>gpt-5.6-luna OpenAI-compatible"]
 ```
 
 El override de `user_id` en `execute_tools` es la defensa central: el modelo **recibe**
