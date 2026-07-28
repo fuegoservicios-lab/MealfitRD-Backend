@@ -300,25 +300,41 @@ def test_formula_de_la_fecha_archivada_es_aritmeticamente_correcta():
 # --- Task 4: cableado en agent.py (stream + no-stream) ---
 
 
-def test_agent_usa_el_fetcher_multidia_en_ambos_paths():
+def test_agent_usa_el_fetcher_multidia_y_conserva_el_de_hoy():
     """`get_consumed_meals_today` solo alimenta DIARIO DE HOY; los días
-    anteriores exigen `get_consumed_meals_since` (que ya existía y el chat
-    era el único callsite de producción que no la usaba)."""
+    anteriores exigen `get_consumed_meals_since` — que ya existía con ~13
+    callsites en producción, y el chat era el único que no la usaba.
+
+    También fija que DIARIO DE HOY sigue vivo: el bloque nuevo es ADITIVO, no
+    un reemplazo (de él dependen la alerta de micro-adaptación, `_macro_totals_line`
+    y la heurística de no re-registrar una foto ya registrada).
+    """
     src = _src("agent.py")
-    assert src.count("build_past_diary_block") >= 2, "stream y no-stream deben tenerlo"
-    assert src.count("build_past_plan_days_block") >= 2
-    assert "get_consumed_meals_since" in src
+    assert "get_consumed_meals_since" in src, "falta el fetcher multi-día"
+    assert "get_consumed_meals_today" in src, "DIARIO DE HOY no puede desaparecer"
+    assert "build_past_diary_block" in src
+    assert "build_past_plan_days_block" in src
 
 
 def test_agent_inyecta_los_bloques_despues_del_diario_de_hoy():
-    """Posición: sección volátil, nunca antes del prefijo estático (prompt-cache)."""
+    """El contrato es el ORDEN EN QUE SE CONCATENA EL PROMPT, no dónde esté
+    definida la función en el archivo.
+
+    Se comprueba, en CADA uno de los dos paths (no-stream y stream), que el
+    `system_prompt +=` del bloque nuevo cae DESPUÉS del `DIARIO DE HOY` de ese
+    mismo path, y después del reordenamiento del prefijo estático (meterlo antes
+    invalidaría el prompt-cache del proveedor para todo lo que va detrás).
+    """
     src = _src("agent.py")
-    i_static = src.index("def _chat_prompt_static_prefix")
-    i_block = src.index("build_past_plan_days_block")
-    assert i_block > i_static
-    # En el path stream, el bloque nuevo va después del DIARIO DE HOY.
-    i_hoy = src.rindex("DIARIO DE HOY: El usuario no ha registrado")
-    assert src.index("build_past_diary_block", i_hoy) > i_hoy
+    hoy = [m.start() for m in re.finditer(r"DIARIO DE HOY: El usuario no ha registrado", src)]
+    call = [m.start() for m in re.finditer(r"system_prompt \+= _build_past_days_context\(", src)]
+    pref = [m.start() for m in re.finditer(r"if _chat_prompt_static_prefix\(\):", src)]
+    assert len(hoy) == 2, "esperaba los 2 paths (no-stream y stream), vi %d" % len(hoy)
+    assert len(call) == 2, "el bloque nuevo debe estar en LOS DOS paths, vi %d" % len(call)
+    assert len(pref) >= 2, "esperaba el reorden del prefijo estático en ambos paths"
+    for i, (h, c, p) in enumerate(zip(hoy, call, pref)):
+        assert c > h, "path %d: el bloque de días pasados debe ir DESPUÉS del DIARIO DE HOY" % i
+        assert c > p, "path %d: el bloque no puede ir antes del reorden del prefijo estático" % i
 
 
 def test_agent_pasa_el_tz_offset_del_cliente_al_bloque_de_diario():

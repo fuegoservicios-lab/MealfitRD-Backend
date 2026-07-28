@@ -197,11 +197,13 @@ from prompts.chat_agent import (
     build_user_identity_context,
 )
 # [P1-CHAT-PAST-DAYS · 2026-07-27] Memoria de días pasados — doc:
-# backend/docs/chat_past_days_memory.md. Los dos builders de bloque de ese
-# módulo se importan de forma diferida dentro de `_build_past_days_context`
-# (al final de este archivo, ver el helper para el porqué) — a propósito,
-# NO por descuido: no los agregues aquí arriba.
-from chat_history_context import chat_history_days, rd_today
+# backend/docs/chat_past_days_memory.md
+from chat_history_context import (
+    build_past_diary_block,
+    build_past_plan_days_block,
+    chat_history_days,
+    rd_today,
+)
 
 from tools import (
     update_form_field, generate_new_plan_from_chat,
@@ -3654,6 +3656,54 @@ def _build_plan_today_context(current_plan, local_date_str: Optional[str] = None
         return ""
 
 
+def _build_past_days_context(user_id: str, current_plan, local_date_str: Optional[str] = None,
+                              tz_offset: Optional[int] = None) -> str:
+    """[P1-CHAT-PAST-DAYS · 2026-07-27] Los dos bloques de días pasados:
+    lo que el plan MANDABA + lo que el usuario REGISTRÓ. Fail-open a "".
+
+    SSOT compartida entre el path stream y el no-stream — la divergencia entre
+    ambos ya ha causado bugs de zona horaria antes.
+
+    `tz_offset`: minutos que el cliente manda junto a `local_date` (stream
+    path). Sin esto, `build_past_diary_block` toma `.date()` del UTC crudo de
+    `consumed_at` y una comida de las 10:30pm RD se atribuye al día SIGUIENTE
+    — y de paso el día real queda declarado 'SIN REGISTRO'. `tz_offset` es
+    input de request body: se guarda la coerción a int, nunca se confía ciego.
+    tooltip-anchor: P1-CHAT-PAST-DAYS-AGENT
+    """
+    try:
+        days_back = chat_history_days()
+        if days_back <= 0:
+            return ""
+        if local_date_str:
+            try:
+                today = datetime.strptime(str(local_date_str)[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                today = rd_today()
+        else:
+            today = rd_today()
+
+        try:
+            tz_offset_mins = int(tz_offset) if tz_offset is not None else 240
+        except (TypeError, ValueError):
+            tz_offset_mins = 240
+
+        out = build_past_plan_days_block(current_plan, today, days_back=days_back)
+
+        try:
+            from db_facts import get_consumed_meals_since
+            since = (today - timedelta(days=days_back)).isoformat()
+            rows = get_consumed_meals_since(user_id, since, include_ingredients=True) or []
+        except Exception as e:
+            logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
+            rows = []
+        out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
+        return out
+    except Exception as e:
+        logger.warning(f"[P1-CHAT-PAST-DAYS] contexto de días pasados fail-open: {e}")
+        return ""
+
+
 def _macro_totals_line(consumed_today: list, current_plan) -> str:
     """[P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros ACUMULADAS del día (proteína/
     carbos/grasas) con sus metas del plan — el DIARIO DE HOY solo llevaba kcal,
@@ -4709,62 +4759,3 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
     yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items})}\n\n"
-
-
-# [P1-CHAT-PAST-DAYS · 2026-07-27] Definida DESPUÉS de `chat_with_agent` y
-# `chat_with_agent_stream` a propósito (Python resuelve el nombre al LLAMARLA,
-# no al definirla — ambos callsites arriba ya funcionan con esta posición).
-# El test parser-based `test_agent_inyecta_los_bloques_despues_del_diario_de_hoy`
-# ancla que `build_past_plan_days_block`/`build_past_diary_block` aparecen en
-# el texto fuente después de `_chat_prompt_static_prefix` Y después del último
-# bloque DIARIO DE HOY (el del path stream, más abajo en el archivo que el del
-# path no-stream) — de ahí que el import de ambas funciones también sea
-# diferido, DENTRO de este helper, en vez de vivir arriba con los demás
-# imports de `chat_history_context`.
-def _build_past_days_context(user_id: str, current_plan, local_date_str: Optional[str] = None,
-                              tz_offset: Optional[int] = None) -> str:
-    """[P1-CHAT-PAST-DAYS · 2026-07-27] Los dos bloques de días pasados:
-    lo que el plan MANDABA + lo que el usuario REGISTRÓ. Fail-open a "".
-
-    SSOT compartida entre el path stream y el no-stream — la divergencia entre
-    ambos ya ha causado bugs de zona horaria antes.
-
-    `tz_offset`: minutos que el cliente manda junto a `local_date` (stream
-    path). Sin esto, `build_past_diary_block` toma `.date()` del UTC crudo de
-    `consumed_at` y una comida de las 10:30pm RD se atribuye al día SIGUIENTE
-    — y de paso el día real queda declarado 'SIN REGISTRO'. `tz_offset` es
-    input de request body: se guarda la coerción a int, nunca se confía ciego.
-    tooltip-anchor: P1-CHAT-PAST-DAYS-AGENT
-    """
-    try:
-        from chat_history_context import build_past_diary_block, build_past_plan_days_block
-        days_back = chat_history_days()
-        if days_back <= 0:
-            return ""
-        if local_date_str:
-            try:
-                today = datetime.strptime(str(local_date_str)[:10], "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                today = rd_today()
-        else:
-            today = rd_today()
-
-        try:
-            tz_offset_mins = int(tz_offset) if tz_offset is not None else 240
-        except (TypeError, ValueError):
-            tz_offset_mins = 240
-
-        out = build_past_plan_days_block(current_plan, today, days_back=days_back)
-
-        try:
-            from db_facts import get_consumed_meals_since
-            since = (today - timedelta(days=days_back)).isoformat()
-            rows = get_consumed_meals_since(user_id, since, include_ingredients=True) or []
-        except Exception as e:
-            logger.warning(f"[P1-CHAT-PAST-DAYS] no se pudo leer el diario multi-día: {e}")
-            rows = []
-        out += build_past_diary_block(rows, today, days_back=days_back, tz_offset_mins=tz_offset_mins)
-        return out
-    except Exception as e:
-        logger.warning(f"[P1-CHAT-PAST-DAYS] contexto de días pasados fail-open: {e}")
-        return ""
