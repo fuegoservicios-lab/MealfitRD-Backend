@@ -383,32 +383,74 @@ def test_tool_registrada_y_documentada():
     assert "consultar_dia_del_plan" in doc
 
 
+def _plan_fixture_fechado(meals):
+    """Fixture DETERMINISTA: fechas estampadas => el ancla no depende de qué día
+    se corra la suite. `_live_anchor` prioriza la fecha estampada sobre el
+    weekday-match contra `rd_today()` — sin estampar, un test que corra un
+    día distinto al lunes 2026-07-27 (commit day) caduca en silencio."""
+    return {
+        "days": [_day("Lunes", 1, fecha="2026-07-27")],
+        "_archived_days": [_day("Domingo", 1, meals, fecha="2026-07-26")],
+    }
+
+
+def _llamar_tool(plan, fecha):
+    import tools as _t
+    orig = _t.get_latest_meal_plan
+    try:
+        _t.get_latest_meal_plan = lambda uid: plan
+        return _t.consultar_dia_del_plan.func(user_id="u1", fecha=fecha)
+    finally:
+        _t.get_latest_meal_plan = orig
+
+
 def test_tool_devuelve_cantidades_y_receta():
     """Es la razón de existir de la tool: el índice del prompt NO las trae."""
-    import tools as _t
     meals = [{"meal": "Cena", "name": "Pescado Guisado", "cals": 603,
               "ingredients": ["255g de pescado", "1 taza de yuca (150g)"],
               "recipe": ["Sofríe el ajo", "Añade el pescado"]}]
-    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, meals)]}
-    monkey = getattr(_t, "get_latest_meal_plan")
-    try:
-        _t.get_latest_meal_plan = lambda uid: plan
-        out = _t.consultar_dia_del_plan.func(user_id="u1", fecha="2026-07-26")
-    finally:
-        _t.get_latest_meal_plan = monkey
+    out = _llamar_tool(_plan_fixture_fechado(meals), "2026-07-26")
     assert "255g de pescado" in out
     assert "Sofríe el ajo" in out
     assert "Pescado Guisado" in out
 
 
 def test_tool_no_confunde_prescrito_con_consumido():
-    import tools as _t
-    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, [
-        {"meal": "Cena", "name": "X", "cals": 1, "ingredients": [], "recipe": []}])]}
-    monkey = getattr(_t, "get_latest_meal_plan")
-    try:
-        _t.get_latest_meal_plan = lambda uid: plan
-        out = _t.consultar_dia_del_plan.func(user_id="u1", fecha="2026-07-26")
-    finally:
-        _t.get_latest_meal_plan = monkey
+    meals = [{"meal": "Cena", "name": "X", "cals": 1, "ingredients": [], "recipe": []}]
+    out = _llamar_tool(_plan_fixture_fechado(meals), "2026-07-26")
     assert "no es prueba" in out.lower() or "no significa" in out.lower()
+
+
+@pytest.mark.parametrize("basura", ["ayer", "26/07/2026", "", "2026-13-45", None])
+def test_tool_con_fecha_malformada_explica_el_formato_y_no_revienta(basura):
+    out = _llamar_tool(_plan_fixture_fechado([]), basura)
+    assert "YYYY-MM-DD" in out, "debe decirle al modelo el formato que espera"
+
+
+def test_tool_sin_plan_activo_lo_dice():
+    out = _llamar_tool(None, "2026-07-26")
+    assert "plan" in out.lower()
+    assert "255g" not in out
+
+
+def test_tool_con_dia_ausente_ordena_ser_honesto():
+    """El mensaje de 'no lo tengo' es load-bearing: sin él el modelo inventa."""
+    out = _llamar_tool(_plan_fixture_fechado([]), "2020-01-01")
+    assert "verdad" in out.lower() or "no lo tienes" in out.lower()
+
+
+def test_tool_avisa_cuando_la_fecha_es_inferida_no_estampada():
+    """Si la fecha se reconstruyó en vez de venir estampada, la tool tiene que
+    decirlo — o el coach afirmaría como exacta una fecha que el sistema no
+    garantiza."""
+    import chat_history_context as _chc
+    meals = [{"meal": "Cena", "name": "Pescado", "cals": 400,
+              "ingredients": ["255g de pescado"], "recipe": ["Sofríe"]}]
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, meals)]}
+    orig = _chc.rd_today
+    try:
+        _chc.rd_today = lambda: date(2026, 7, 27)  # lunes fijo, no el reloj real
+        out = _llamar_tool(plan, "2026-07-26")
+    finally:
+        _chc.rd_today = orig
+    assert "estimada" in out.lower(), "falta el aviso de fecha inferida"

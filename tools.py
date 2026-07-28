@@ -3357,7 +3357,9 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
     '¿cuánto pollo tenía el almuerzo del domingo?', '¿cómo era la receta de la
     cena de ayer?', '¿qué llevaba el batido del martes?'. El bloque 'DÍAS QUE YA
     PASARON' de tu contexto solo trae los nombres y las kcal — esta herramienta
-    trae los gramos y los pasos.
+    trae los gramos y los pasos. NO la llames si el bloque 'DÍAS QUE YA PASARON'
+    de tu contexto ya responde la pregunta (ahí tienes los nombres de los platos
+    y sus kcal): esta herramienta es solo para el detalle que ese bloque NO trae.
 
     `fecha` en formato ISO 'YYYY-MM-DD'. Tienes la fecha de HOY en tu contexto:
     resuelve tú 'ayer' o 'el domingo' y pasa la fecha ya calculada.
