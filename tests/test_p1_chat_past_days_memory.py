@@ -706,12 +706,24 @@ def test_el_guard_del_clamp_muerde_si_se_borra_la_expresion():
 
 
 def test_marker_bumpeado():
+    """Supersession-proof: este P-fix, o cualquiera POSTERIOR (fecha ≥).
+
+    `_LAST_KNOWN_PFIX` es last-writer-wins por diseño — su trabajo es detectar
+    deploy-lag, no recordar quién fue el último. Exigir el slug propio convierte
+    un valor que DEBE cambiar en uno congelado, y deja el test rojo en cuanto
+    otro P-fix aterriza en la misma rama (pasó en esta misma sesión con
+    `P1-PESCADO-CATCHALL`). Patrón tomado de `test_p2_audit_v5_batch.py`.
+    """
     src = _src("app.py")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
     assert m, "no encontré _LAST_KNOWN_PFIX"
-    assert m.group(1).startswith("P1-CHAT-PAST-DAYS"), (
-        f"marker sin bumpear: {m.group(1)!r}. Sin bump, un operador no puede "
-        "confirmar que este fix está vivo en producción."
+    marker = m.group(1)
+    if "P1-CHAT-PAST-DAYS" in marker:
+        return
+    fecha = re.search(r"(\d{4}-\d{2}-\d{2})", marker)
+    assert fecha and fecha.group(1) >= "2026-07-28", (
+        "marker %r es ANTERIOR a este P-fix: sin bump un operador no puede "
+        "confirmar que este fix está vivo en producción." % marker
     )
 
 
