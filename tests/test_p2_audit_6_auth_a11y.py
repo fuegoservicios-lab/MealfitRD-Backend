@@ -78,43 +78,41 @@ def _count_htmlfor_id_pairs(src: str) -> int:
 # 1. Login.jsx: ≥3 pairs (email login, password, email reset)
 # ---------------------------------------------------------------------------
 def test_login_has_min_htmlfor_id_pairs(login_src: str):
-    n = _count_htmlfor_id_pairs(login_src)
-    assert n >= 3, (
-        f"P2-AUDIT-6 regresión: Login.jsx tiene {n} pairs htmlFor/id (esperado ≥3 "
-        f"— email-login, password, email-reset). Sin pairs, screen readers no "
-        f"asocian label con input."
+    """[reapuntado 2026-07-28] El Login migró a OTP (2026-06-21): los 3 pares htmlFor/id del
+    flujo de contraseña murieron con él. El idioma vivo es `aria-label` por input — sustituto
+    válido de la asociación label/input para lectores de pantalla. La invariante real: NINGÚN
+    input sin etiquetar (hoy: 2 inputs — correo y código — con 2 aria-label)."""
+    inputs = len(re.findall(r"<input\b", login_src))
+    etiquetados = len(re.findall(r'aria-label\s*=\s*"', login_src))
+    assert inputs >= 2, f"Login OTP debe tener al menos correo y código: {inputs} inputs"
+    assert etiquetados >= inputs, (
+        f"P2-AUDIT-6 regresión: {inputs} inputs pero solo {etiquetados} aria-label — "
+        f"hay inputs sin etiqueta para el lector de pantalla."
     )
 
 
 def test_login_error_box_has_alert_role(login_src: str):
+    """[reapuntado 2026-07-28] La caja pasó de `styles.errorBox` a `mf-error` con el rediseño.
+    La invariante es la MISMA: el contenedor de error anuncia con role=alert + aria-live, y los
+    inputs lo referencian por aria-describedby para que el lector diga QUÉ campo falló."""
     assert re.search(
-        r'errorBox\}?\s*role\s*=\s*["\']alert["\']',
-        login_src,
-    ) or re.search(
-        r'role\s*=\s*["\']alert["\'][^>]*errorBox',
-        login_src,
-    ) or re.search(
-        # className puede aparecer antes o después de role; aceptamos cualquier
-        # orden siempre que el className includes errorBox y role="alert"
-        # estén en el mismo elemento JSX.
-        r'<div[^>]*className=\{styles\.errorBox\}[^>]*role\s*=\s*["\']alert["\']',
+        r'<div[^>]*id="login-error"[^>]*role\s*=\s*["\']alert["\'][^>]*aria-live',
         login_src,
     ), (
-        "P2-AUDIT-6 regresión: `<div className={styles.errorBox}>` en Login.jsx "
-        "no tiene `role=\"alert\"`. Screen readers no anuncian errores de "
-        "validación. Añadir `role=\"alert\" aria-live=\"assertive\"`."
+        "P2-AUDIT-6 regresión: el contenedor de error del Login perdió role=\"alert\"/aria-live."
+    )
+    assert "aria-describedby={error ? 'login-error'" in login_src, (
+        "P2-AUDIT-6 regresión: los inputs ya no referencian #login-error vía aria-describedby."
     )
 
 
 def test_login_success_box_has_status_role(login_src: str):
-    assert re.search(
-        r'<div[^>]*className=\{styles\.successBox\}[^>]*role\s*=\s*["\']status["\']',
-        login_src,
-    ), (
-        "P2-AUDIT-6 regresión: `<div className={styles.successBox}>` en "
-        "Login.jsx no tiene `role=\"status\"`. Añadir `role=\"status\" "
-        "aria-live=\"polite\"` para que screen readers anuncien sin "
-        "interrumpir."
+    """[reapuntado 2026-07-28] El successBox murió con el flujo de contraseña: el éxito del OTP
+    viaja por toast (sonner gestiona su propio aria-live). La invariante que queda anclable es
+    que el feedback de éxito EXISTE (reenvío de código) — sin él, el usuario no sabe si el
+    código salió."""
+    assert re.search(r"toast\.success\(", login_src), (
+        "P2-AUDIT-6 regresión: el Login perdió el feedback de éxito (toast.success)."
     )
 
 

@@ -47,6 +47,16 @@ class _FakeDB:
         return {"protein": 2.0, "carbs": 0.0, "fats": 1.0, "kcal": 15.0}
 
 
+
+def _cuerpo_funcion(src: str, nombre: str) -> str:
+    """[reapuntado 2026-07-28] Cuerpo COMPLETO hasta el siguiente def de nivel superior.
+    Las ventanas fijas (16000/26000 bytes) caducaron por 2ª vez cuando finalize_plan_data_coherence
+    creció a ~37.5k (una ya habia sido bumpeada 17000→26000 el 07-06 — el número mágico caduca con
+    cada inserción; el límite estructural no)."""
+    i = src.index("def " + nombre)
+    fin = src.find(chr(10) + 'def ', i)
+    return src[i:fin if fin > 0 else len(src)]
+
 def test_marker_bumped():
     """Supersession-proof: este batch o uno posterior (fecha ≥)."""
     src = (_BACKEND / "app.py").read_text(encoding="utf-8")
@@ -204,8 +214,7 @@ def test_gap09a_horno_gets_default_injected(go):
 
 
 def test_gap09b_persist_boundary_runs_timetemp():
-    fb = _GO.index("def finalize_plan_data_coherence")
-    body = _GO[fb:fb + 16000]
+    body = _cuerpo_funcion(_GO, "finalize_plan_data_coherence")
     assert "_inject_recipe_time_temp_defaults" in body, \
         "el persist boundary debe correr el backstop tiempo/temp (paridad con los otros 13 guards)"
     assert "timetemp=" in body

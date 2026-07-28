@@ -154,10 +154,16 @@ def test_consumer_processes_producer_output_reject_minor(monkeypatch):
     (default) → approved=False, severity='minor'."""
     monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_GUARD", "block")
     monkeypatch.delenv("MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION", raising=False)
+    # [reapuntado 2026-07-28] SEVERE_ONLY=false fija la semántica que este test verifica desde
+    # su origen (1 divergencia → reject). Con el default severe-only (07-09), una sola
+    # divergencia marginal se TOLERA a propósito — esa rama tiene su propio test abajo.
+    monkeypatch.setenv("MEALFIT_REVIEW_COHERENCE_BLOCK_SEVERE_ONLY", "false")
 
     plan = _plan_with_recipe_only_food()
-    # 1. PRODUCER fase
-    run_shopping_coherence_guard(plan, mode_override="block", multiplier=1.0)
+    # 1. PRODUCER fase — por el helper SSOT (P1-NEXT-2), que además crea el history real;
+    # el guard crudo no lo crea y la hidratación del consumer quedaba en 'hydration_error'.
+    from shopping_calculator import run_shopping_coherence_guard_and_append_history
+    run_shopping_coherence_guard_and_append_history(plan, mode_override="block", multiplier=1.0)
     assert plan.get("_shopping_coherence_block"), "Productor no set el flag"
 
     # 2. CONSUMER fase — pasa plan_result REAL al review_plan_node.
@@ -169,9 +175,14 @@ def test_consumer_processes_producer_output_reject_minor(monkeypatch):
         "P2-AUDIT-3 regresión: consumer no rechazó el plan pese a "
         "flag presente. La cadena producer→consumer está rota."
     )
-    assert result["_rejection_severity"] == "minor", (
-        f"P2-AUDIT-3: severity esperada 'minor' (default reject_minor), "
-        f"got {result['_rejection_severity']!r}."
+    # [reapuntado 2026-07-28] La severity GLOBAL es un `max()` entre TODOS los gates del
+    # reviewer, y el gate de banda de macros (posterior a este test) marca `high` para este
+    # fixture de 1 comida sin macros cuadrados — ahogaba el 'minor' de coherencia. Lo que ESTE
+    # test debe verificar es la contribución de coherencia: la acción hidratada en su history.
+    _hist = plan.get("_shopping_coherence_block_history") or []
+    assert _hist and _hist[-1].get("action_taken") == "reject_minor", (
+        f"P2-AUDIT-3: la acción de coherencia hidratada debe ser 'reject_minor' (default), "
+        f"got {_hist[-1].get('action_taken') if _hist else 'sin history'!r}."
     )
     # Issue text debe mencionar COHERENCIA RECETAS LISTA
     issues = result["rejection_reasons"]
@@ -206,9 +217,11 @@ def test_consumer_degrade_pops_flag_from_producer(monkeypatch):
     productor (no uno sintético)."""
     monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_GUARD", "block")
     monkeypatch.setenv("MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION", "degrade")
+    monkeypatch.setenv("MEALFIT_REVIEW_COHERENCE_BLOCK_SEVERE_ONLY", "false")
 
     plan = _plan_with_recipe_only_food()
-    run_shopping_coherence_guard(plan, mode_override="block", multiplier=1.0)
+    from shopping_calculator import run_shopping_coherence_guard_and_append_history
+    run_shopping_coherence_guard_and_append_history(plan, mode_override="block", multiplier=1.0)
     assert "_shopping_coherence_block" in plan, (
         "Productor no set el flag — sanity falló."
     )
@@ -216,12 +229,21 @@ def test_consumer_degrade_pops_flag_from_producer(monkeypatch):
     state = _state_for_review(plan)
     result = _run(graph_orchestrator.review_plan_node(state))
 
-    assert result["review_passed"] is True, (
-        "P2-AUDIT-3: kill switch 'degrade' debe permitir aprobar el plan."
-    )
+    # [reapuntado 2026-07-28] `review_passed is True` era la aserción original, pero la
+    # aprobación GLOBAL depende de TODOS los gates del reviewer y el de banda de macros
+    # (posterior) rechaza este fixture de 1 comida por su cuenta. El punto de ESTE test — que
+    # da nombre al archivo — es que la rama degrade consume el flag REAL del productor: el pop
+    # in-place y que la coherencia NO aporte issue propio.
     assert "_shopping_coherence_block" not in plan, (
         "P2-AUDIT-3: degrade debe POPEAR el flag del plan in-place. "
         "Si persiste, se serializaría a meal_plans innecesariamente."
+    )
+    assert not any("COHERENCIA RECETAS LISTA" in i for i in result["rejection_reasons"]), (
+        "P2-AUDIT-3: con action=degrade la coherencia no debe aportar issue de rechazo."
+    )
+    _hist = plan.get("_shopping_coherence_block_history") or []
+    assert _hist and _hist[-1].get("action_taken") == "degrade", (
+        "P2-AUDIT-3: el history debe quedar hidratado con action_taken='degrade'."
     )
 
 

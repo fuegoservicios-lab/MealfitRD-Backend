@@ -31,6 +31,16 @@ _NC = (_BACKEND / "nutrition_calculator.py").read_text(encoding="utf-8")
 _FRONT = _BACKEND.parent / "frontend" / "src"
 
 
+
+def _cuerpo_funcion(src: str, nombre: str) -> str:
+    """[reapuntado 2026-07-28] Cuerpo COMPLETO hasta el siguiente def de nivel superior.
+    Las ventanas fijas (16000/26000 bytes) caducaron por 2ª vez cuando finalize_plan_data_coherence
+    creció a ~37.5k (una ya habia sido bumpeada 17000→26000 el 07-06 — el número mágico caduca con
+    cada inserción; el límite estructural no)."""
+    i = src.index("def " + nombre)
+    fin = src.find(chr(10) + 'def ', i)
+    return src[i:fin if fin > 0 else len(src)]
+
 def test_marker_bumped():
     src = (_BACKEND / "app.py").read_text(encoding="utf-8")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
@@ -54,8 +64,7 @@ def test_p2a_floor_in_single_meal_finalizer():
 
 
 def test_p2a_floor_in_persist_boundary():
-    fpc = _GO.index("def finalize_plan_data_coherence")
-    body = _GO[fpc:fpc + 16000]
+    body = _cuerpo_funcion(_GO, "finalize_plan_data_coherence")
     assert "shrink_floor=" in body, "el persist boundary (chunks S2+/degradado) debe correr el piso"
 
 
@@ -116,11 +125,9 @@ def test_p2b_called_from_backstop_seam():
 def test_p2c_contract_advisory_in_finalizer_and_boundary():
     fin = _GO.index("def finalize_single_meal_recipe_coherence")
     assert '_recipe_contract_advisory"] = _rc_issues[:4]' in _GO[fin:fin + 22000]
-    fpc = _GO.index("def finalize_plan_data_coherence")
-    # [2026-07-06] ventana 17000→26000: el boundary creció con los seams de la
-    # madrugada 07-05/06 (cured-ghost, mise-split, note-align, tracer) y el
-    # callsite quedó a offset ~18.9k del def — drift de ventana, no ausencia.
-    assert "contract_advisory=" in _GO[fpc:fpc + 26000]
+    # [reapuntado 2026-07-28] 2º bump de esta MISMA ventana (17000→26000 el 07-06; hoy el
+    # callsite está a ~30.2k). Se acabaron los números mágicos: cuerpo completo de la función.
+    assert "contract_advisory=" in _cuerpo_funcion(_GO, "finalize_plan_data_coherence")
 
 
 def test_p2c_dish_quality_report_in_chunk_t1():
@@ -192,7 +199,11 @@ def test_p2f_wired_in_swap_and_chat():
     # swap: cross-day + inspiración
     assert "def _cross_day_meal_names_for_swap" in _PL
     assert 'data["cross_day_meal_names"] = _cross_day' in _PL
-    assert "cross_day_meal_names" in _AG and "VARIEDAD ENTRE DÍAS" in _AG
+    # [reapuntado 2026-07-28] El texto "VARIEDAD ENTRE DÍAS" migró de agent.py a tools.py con
+    # P1-SWAP-HISTORY-VARIETY (57d8651); agent.py conserva el CONSUMO de cross_day_meal_names
+    # (veto de nombres del mismo slot). La invariante es que el prompt exista en ALGÚN camino
+    # del swap/chat-modify y que agent siga cableado al cross-day.
+    assert "cross_day_meal_names" in _AG and ("VARIEDAD ENTRE" in _AG or "VARIEDAD ENTRE" in _TO)
     assert "build_swap_inspiration_context as _bsi_swap" in _AG
     # chat-modify: inspiración (el cross-day ya existía vía P2-CHATMODIFY-CROSS-DAY-VARIETY)
     assert "build_swap_inspiration_context as _bsi_cm" in _TO

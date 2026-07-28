@@ -86,11 +86,16 @@ def test_p2_5_truthup_recomputes_from_strings(go):
 
 
 def test_p2_5_gate_no_override_when_unconvertible_qty(go):
-    # nombre resuelve (lookup!=None) pero cantidad 'al gusto' (macros None) → NO override (conservador)
+    """[reapuntado 2026-07-28] La semántica conservadora original ('al gusto' → abortar el
+    truth-up entero) fue superada DELIBERADAMENTE por P1-TRUTHUP-ALGUSTO-SKIP (2026-07-07):
+    una cantidad sin masa contable se SALTA — "pimienta negra al gusto" a 327 kcal/100g
+    abortaba el truth-up del aguacate y dejaba los números drifteados en pie. Hoy la sal se
+    ignora y la pechuga SÍ corrige los macros del meal."""
     meal = {"name": "X", "ingredients": ["sal al gusto", "180g pechuga de pollo"],
             "protein": 99, "carbs": 99, "fats": 99}
-    assert go._truth_up_meal_macros_from_strings(meal, _StubDB()) is False
-    assert meal["protein"] == 99  # intacto
+    assert go._truth_up_meal_macros_from_strings(meal, _StubDB()) is True
+    assert meal["protein"] == 30, "la pechuga (única línea con masa) manda el número"
+    assert meal["carbs"] == 0, "la sal saltada no aporta — y el 99 drifteado no sobrevive"
 
 
 def test_p2_5_gate_no_resolution_keeps_intact(go):
