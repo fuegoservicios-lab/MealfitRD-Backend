@@ -27,3 +27,9 @@ sentry-sdk[fastapi]==2.59.0
 apscheduler==3.11.2
 pywebpush==2.3.0
 httpx==0.28.1
+# [P1-VISION-LUNA · 2026-07-28] Redimensionado defensivo de fotos antes de
+# enviarlas a un proveedor de visión (image_prep.py) — 6,6x más barato en
+# tokens de entrada a 1024px vs foto cruda de móvil. Publica wheels
+# manylinux para aarch64 (VPS Oracle ARM) desde hace varias major versions,
+# así el deploy no compila desde fuente.
+Pillow==12.2.0
