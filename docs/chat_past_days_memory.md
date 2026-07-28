@@ -89,22 +89,35 @@ lectura puede derivar sola. En su lugar el lector degrada.
 **Regla de inferencia** (para días sin `date`). El ancla NO puede ser
 `cycle_start_date + idx`: tras un shift `days[0]` es **hoy**, no el inicio del
 ciclo, así que esa fórmula desplaza el plan entero. El ancla correcta es
-`day_name`, que el shift sí mantiene al día ([`plans.py:2214`](../routers/plans.py)):
+`grocery_start_date`, que es el campo que el shift **reescribe a hoy** en cada
+rotación ([`plans.py:2575`](../routers/plans.py) y su gemelo de `cron_tasks.py`)
+y por tanto el único que sigue a `days[0]`:
 
 ```
-resolver_fechas(plan_data, hoy):
-    # días vivos: anclar por weekday
-    idx_hoy = primer i en days[] con day_name == weekday(hoy)     # el mismo
-                                                                  # match que
-                                                                  # _build_plan_today_context
-    si idx_hoy existe:   fecha(days[i]) = hoy + (i - idx_hoy)
-    si no:               fecha(days[i]) = cycle_start_date + i     # plan sin
-                                                                  # shift aún
+resolver_fechas(plan_data, hoy):        # `_live_anchor`, 4 tiers en orden
+    1. primera days[i]['date'] estampada        -> ancla (i, esa fecha)   [autoritativa]
+    2. grocery_start_date  (fecha LOCAL)        -> ancla (0, esa fecha)
+    3. primer i con day_name == weekday(hoy)    -> ancla (i, hoy)         [fallback]
+    4. cycle_start_date    (fecha LOCAL)        -> ancla (0, esa fecha)   [último recurso]
+
+    fecha(days[i]) = fecha_ancla + (i - idx_ancla)
 
     # días archivados: son estrictamente anteriores a days[0], en orden
     A = len(_archived_days)
     fecha(_archived_days[k]) = fecha(days[0]) - (A - k)
 ```
+
+[P1-CHAT-PAST-DAYS · 2026-07-28] Los tiers 2 y 4 nacieron de dos fallos
+**reproducidos contra planes de producción**; el orden de arriba es el contrato,
+no una preferencia estética:
+
+| Tier | Por qué está donde está |
+|---|---|
+| 2 `grocery_start_date` | `cycle_start_date` es el ancla **inmutable de creación** ([`plans.py:7754`](../routers/plans.py)); `grocery_start_date` es la que el shift reescribe. Plan real `4d2c1111` (17 archivados, grocery=28-jul, cycle=11-jul): anclando por cycle el plan entero se fechaba 24-jun…12-jul, fuera de la ventana de 7 días → `build_past_plan_days_block` devolvía `""` y ese usuario se quedaba **sin la feature**. Se pasa por `_to_local_date` porque la flota lo persiste en dos shapes (date-only, ver marker `P3-SHIFT-DATEONLY-LOCAL`, y timestamp UTC completo): un plan shifteado a las 22:00 RD ancla un día tarde si se lee crudo. |
+| 3 `day_name` (degradado a fallback) | El escaneo coge la **primera** coincidencia y en una ventana viva de más de 7 días el `day_name` se repite: un desfase de 1 día se vuelve de 7. Plan real `69f9e03d` (26 días vivos) emitía 7 líneas de "días que ya pasaron" de las cuales **6 eran días futuros** (28-jul…2-ago). |
+
+Solo el tier 1 marca `inferred=False`; los tiers 2-4 siguen marcando
+`inferred=True` (el hedge `~` en el prompt).
 
 Toda fecha que no venga de `day['date']` se marca en el prompt con `~`
 antepuesto (`~Domingo 26 jul`) para que el agente no afirme como exacta una
@@ -198,8 +211,26 @@ resuelta en `days[]` + `_archived_days`.
 | Knob | Default | Clamp | Efecto |
 |---|---|---|---|
 | `MEALFIT_CHAT_HISTORY_DAYS` | `7` | `[0, 30]` | Ventana de los bloques de Piezas 2 y 3. **`0` apaga ambos** (rollback sin redeploy) |
-| `MEALFIT_CHAT_HISTORY_MAX_CHARS` | `3000` | `[500, 20000]` | Cap duro combinado de los dos bloques nuevos; al excederse se truncan los días más antiguos primero |
+| `MEALFIT_CHAT_HISTORY_MAX_CHARS` | `3000` | `[500, 20000]` | Cap duro **por bloque**; al excederse se truncan los días más antiguos primero |
 | `MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED` | `True` | — | Kill switch de la tool de la Pieza 4 |
+
+[P1-CHAT-PAST-DAYS · 2026-07-28] `MEALFIT_CHAT_HISTORY_MAX_CHARS` es **por
+bloque, no combinado**: `_assemble` se invoca una vez por bloque con el mismo
+valor (su propio docstring ya decía "por bloque"). El techo efectivo de los dos
+bloques juntos es **2× el knob** — 6000 chars con el default. Si necesitas un
+techo combinado real, hay que repartir el presupuesto entre las dos llamadas,
+no bajar el knob a la mitad (eso recorta cada bloque por separado y el bloque
+del plan, que es el caro, se lleva el recorte igual que el del diario).
+
+`MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED` está **implementado**
+([`tools.py::_chat_plan_day_tool_enabled`](../tools.py) +
+`_apply_chat_tool_knobs`): con el knob en `false` la tool se retira de
+`agent_tools`. Nótese la asimetría con `MEALFIT_CHAT_PLAN_TOOLS_ENABLED`
+(default `False`, el knob **añade**): como este default es `True`, la tool vive
+dentro de la lista literal `agent_tools` y el knob la **quita** — sacarla de la
+lista literal rompería la paridad bidireccional que
+[`test_p2_chat_cleanup.py`](../tests/test_p2_chat_cleanup.py) enforza contra
+[`agent_tools_user_id_table.md`](agent_tools_user_id_table.md).
 
 Todos se auto-registran en `_KNOBS_REGISTRY` vía `_env_int`/`_env_bool`
 (P3-NEW-D).
@@ -211,9 +242,14 @@ Todos se auto-registran en `_KNOBS_REGISTRY` vía `_env_int`/`_env_bool`
 | Índice de días pasados (7 días) | ~1.4 KB | ~400 |
 | Diario multi-día (7 días con registro real) | ~0.7–1.7 KB | ~200–470 |
 | **Total añadido por turno** | **~2–3 KB** | **~600–900** |
+| Techo duro (cap por bloque × 2 bloques, default 3000) | **6 KB** | **~1.7k** |
 
 ≈ +$0.0004/turno en `deepseek-v4-pro`. Frente a los 9–69k tokens que el plan
 JSON ya mete en cada turno, es ruido. La tool solo cuesta cuando se invoca.
+
+[P1-CHAT-PAST-DAYS · 2026-07-28] La fila del techo se añadió al corregir la
+lectura de `MEALFIT_CHAT_HISTORY_MAX_CHARS` (§4): el cap es por bloque, así que
+el peor caso es **2×** el knob, no 1×.
 
 ## 6. Invariantes que respeta
 
@@ -225,8 +261,11 @@ JSON ya mete en cada turno, es ruido. La tool solo cuesta cuando se invoca.
 - **P0-AGENT-1**: la tool nueva hereda el override de `user_id` del loop; se
   documenta en la tabla canónica.
 - **DDL**: cero. `date` es una clave jsonb, no una columna.
-- **`_LAST_KNOWN_PFIX`**: bump a `P1-CHAT-PAST-DAYS · 2026-07-27`; el slug
-  cruza con `tests/test_p1_chat_past_days_memory.py`.
+- **`_LAST_KNOWN_PFIX`**: bump a `P1-CHAT-PAST-DAYS · 2026-07-28`; el slug
+  cruza con `tests/test_p1_chat_past_days_memory.py`. (La fecha se alineó al
+  valor real de [`app.py:34`](../app.py) — el doc decía `2026-07-27` mientras el
+  código ya iba por el 28, y el marker NUNCA se mueve hacia atrás: es lo que un
+  operador compara contra `/health/version` para confirmar el deploy.)
 
 ## 7. Lo que este diseño NO resuelve
 

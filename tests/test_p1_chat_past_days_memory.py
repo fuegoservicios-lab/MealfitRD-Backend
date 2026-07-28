@@ -67,6 +67,66 @@ def test_ancla_3_cycle_start_cuando_ningun_day_name_es_hoy():
     assert [r["date"] for r in rows] == [date(2026, 7, 25), date(2026, 7, 26)]
 
 
+def test_ancla_prefiere_grocery_start_date_sobre_cycle_start_date():
+    """`cycle_start_date` es el ancla INMUTABLE de creación; `grocery_start_date`
+    es la que el shift reescribe a HOY en cada rotación, así que es la que sigue
+    a days[0]. Plan real 4d2c1111: con cycle (11-jul) el bloque salía VACÍO."""
+    plan = {
+        "days": [_day("Lunes", 1), _day("Martes", 2)],
+        "cycle_start_date": "2026-07-11T10:00:00+00:00",
+        "grocery_start_date": "2026-07-27T10:00:00+00:00",
+    }
+    rows = resolve_day_dates(plan, date(2026, 7, 29))  # HOY deliberadamente != ancla
+    assert [r["date"] for r in rows] == [date(2026, 7, 27), date(2026, 7, 28)]
+    assert all(r["inferred"] for r in rows)
+
+
+def test_ancla_grocery_timestamp_se_convierte_a_la_fecha_LOCAL():
+    """`grocery_start_date` se persiste en DOS shapes: date-only (marker
+    P3-SHIFT-DATEONLY-LOCAL) y timestamp completo. Un plan shifteado a las 22:00
+    RD se guarda como 02:00 UTC del día SIGUIENTE — leerlo crudo ancla el plan
+    entero un día tarde. Ambos shapes tienen que dar la misma fecha."""
+    base = [_day("Lunes", 1), _day("Martes", 2)]
+    solo_fecha = resolve_day_dates({"days": base, "grocery_start_date": "2026-07-27"}, HOY)
+    con_hora = resolve_day_dates(
+        {"days": base, "grocery_start_date": "2026-07-28T02:00:00+00:00"}, HOY)
+    assert [r["date"] for r in solo_fecha] == [date(2026, 7, 27), date(2026, 7, 28)]
+    assert [r["date"] for r in con_hora] == [r["date"] for r in solo_fecha], (
+        "el timestamp de las 22:00 RD (02:00 UTC del 28) debe anclar al 27, no al 28"
+    )
+
+
+def test_ventana_larga_no_lista_dias_FUTUROS_como_pasados():
+    """El escaneo por weekday coge la PRIMERA coincidencia; en una ventana >7
+    días `day_name` se repite y un desfase de 1 día se vuelve de 7. Plan real
+    69f9e03d (26 días vivos) listaba 6 días FUTUROS como 'días que ya pasaron'.
+    """
+    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    live = [_day(dias[i % 7], i + 1, [{"meal": "Cena", "name": "X%d" % i, "cals": 400}])
+            for i in range(26)]
+    plan = {"days": live, "grocery_start_date": "2026-07-27"}
+    hoy = date(2026, 7, 27)
+    out = build_past_plan_days_block(plan, hoy, days_back=7, max_chars=6000)
+    rows = resolve_day_dates(plan, hoy)
+    assert all(r["date"] >= hoy for r in rows), "ningún día vivo puede caer en el pasado"
+    assert out == "", "sin días pasados el bloque debe estar vacío, no listar futuros"
+
+
+def test_helper_de_fecha_local_renombrado_sirve_a_los_dos_consumidores():
+    """`_consumed_local_date` pasó a `_to_local_date` al empezar a fechar también
+    las anclas del plan (`grocery_start_date`/`cycle_start_date`), no solo
+    `consumed_at`. El comportamiento es byte-idéntico: 10 chars se devuelven tal
+    cual, el timestamp se corre por el offset."""
+    import chat_history_context as _chc
+    assert not hasattr(_chc, "_consumed_local_date"), \
+        "quedó el nombre viejo: hay dos helpers que pueden divergir"
+    assert _chc._to_local_date("2026-07-25") == date(2026, 7, 25)
+    assert _chc._to_local_date("2026-07-26T02:30:00+00:00") == date(2026, 7, 25)
+    assert _chc._to_local_date("2026-07-26T02:30:00+00:00", 0) == date(2026, 7, 26)
+    assert _chc._to_local_date(None) is None
+    assert _chc._to_local_date("no-soy-fecha") is None
+
+
 def test_archivados_van_antes_del_primer_dia_vivo():
     plan = {
         "days": [_day("Lunes", 1)],
@@ -247,6 +307,49 @@ def test_shift_api_estampa_date_en_vivos_y_archivados():
     assert "_arch_day['date']" in src, "los días archivados deben nacer fechados"
 
 
+def test_shift_del_cron_usa_la_zona_del_usuario_y_no_un_reloj_utc():
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] `_background_shift_plan_for_user` deriva
+    `today` de su parámetro `tz_offset`, pero el ÚNICO caller de producción
+    (`trigger_background_rolling_refill`) no le pasaba nada → `today` salía de
+    `datetime.now(timezone.utc)`. El job corre cada 4 h, así que ~1 tick al día
+    cae entre las 00:00 y las 04:00 UTC = 20:00–23:59 RD y cuenta un día de más.
+
+    Evidencia viva (Neon, 2026-07-27, LUNES en RD): los planes `4d2c1111` y
+    `69f9e03d` traían ambos `days[0].day_name = "Martes"`.
+
+    Ese `today` es el que estampa `day['date']` y `_arch_day['date']`, y el
+    lector las trata como AUTORITATIVAS (`inferred=False`, sin el hedge `~`) — o
+    sea, el coach afirmaría como exacta una fecha equivocada. Y los estampados
+    archivados no se reescriben nunca (`if not _arch_day.get('date')`).
+    """
+    src = _src("cron_tasks.py")
+
+    # 1. El default ya no es UTC.
+    assert re.search(
+        r"def _background_shift_plan_for_user\(\s*user_id: str,\s*tz_offset: int = 240\s*\)", src
+    ), ("el default de `tz_offset` debe ser 240 (RD = UTC-4, convención del repo): "
+        "con 0, un caller futuro que olvide el parámetro reintroduce UTC en silencio")
+
+    # 2. El caller de producción resuelve la zona y la PASA.
+    m = re.search(r"def trigger_background_rolling_refill\(\)[\s\S]+?(?=\ndef |\Z)", src)
+    assert m, "no encontré `trigger_background_rolling_refill` en cron_tasks.py"
+    cuerpo = m.group(0)
+    assert "_get_user_tz_live(" in cuerpo, (
+        "el caller debe resolver la zona viva del usuario — es el mismo helper que "
+        "usa `routers/plans.py::_resolve_request_tz_offset`"
+    )
+    assert "fallback_minutes=240" in cuerpo, (
+        "el fallback del resolver debe ser 240 (RD), no 0: sin perfil volveríamos a UTC"
+    )
+    llamada = re.search(r"_background_shift_plan_for_user\(([^)]*)\)", cuerpo)
+    assert llamada, "no encontré la llamada al shift dentro del caller"
+    args = [a.strip() for a in llamada.group(1).split(",") if a.strip()]
+    assert len(args) == 2, (
+        "la llamada debe pasar 2 argumentos (uid + offset resuelto), vi %r" % (args,)
+    )
+    assert args[1] not in ("0", "None"), "el offset pasado no puede ser UTC hardcodeado"
+
+
 def test_shift_cron_es_gemelo_del_shift_api():
     """El bloque del cron es un duplicado literal en lógica (no en estilo de
     comillas: el renumber loop de cron_tasks.py ya usaba dobles antes de este
@@ -383,6 +486,46 @@ def test_tool_registrada_y_documentada():
     assert "consultar_dia_del_plan" in doc
 
 
+def test_kill_switch_de_la_tool_existe_y_la_retira_de_agent_tools(monkeypatch):
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] `MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED`
+    estaba DOCUMENTADO en §4 de la spec pero no implementado: la tool se anexaba
+    a `agent_tools` incondicionalmente. Un operador que siguiera la spec durante
+    un incidente habría seteado una env var muerta.
+
+    Asimetría deliberada con `MEALFIT_CHAT_PLAN_TOOLS_ENABLED` (default False,
+    el knob AÑADE): como este default es True, la tool vive DENTRO de la lista
+    literal `agent_tools` —la paridad bidireccional de `test_p2_chat_cleanup.py`
+    parsea esa lista contra el doc canónico— y el knob la QUITA.
+    """
+    src = _src("tools.py")
+    assert "MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED" in src, "el knob de §4 no existe en el código"
+    assert "agent_tools = _apply_chat_tool_knobs(agent_tools)" in src, (
+        "el gate está definido pero no aplicado a `agent_tools`"
+    )
+
+    import tools as _t
+    monkeypatch.delenv("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", raising=False)
+    assert _t._chat_plan_day_tool_enabled() is True, "el default documentado es True"
+    con = {getattr(x, "name", "") for x in _t._apply_chat_tool_knobs(_t.agent_tools)}
+    assert "consultar_dia_del_plan" in con, "con el knob en su default la tool debe estar activa"
+
+    monkeypatch.setenv("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", "false")
+    assert _t._chat_plan_day_tool_enabled() is False
+    sin = {getattr(x, "name", "") for x in _t._apply_chat_tool_knobs(_t.agent_tools)}
+    assert "consultar_dia_del_plan" not in sin, "el kill switch no retira la tool"
+    assert con - sin == {"consultar_dia_del_plan"}, (
+        "el knob solo puede retirar ESA tool, no tocar el resto del set: %r" % (con - sin,)
+    )
+
+
+def test_kill_switch_documentado_en_la_spec():
+    doc = _src("docs/chat_past_days_memory.md")
+    assert "MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED" in doc
+    assert "_chat_plan_day_tool_enabled" in doc, (
+        "la spec debe apuntar a la implementación real del kill switch, no solo nombrarlo"
+    )
+
+
 def _plan_fixture_fechado(meals):
     """Fixture DETERMINISTA: fechas estampadas => el ancla no depende de qué día
     se corra la suite. `_live_anchor` prioriza la fecha estampada sobre el
@@ -505,17 +648,58 @@ def test_temporal_context_trata_el_offset_cero_como_utc_no_como_utc4():
 def test_temporal_context_ignora_un_offset_fuera_del_rango_de_husos(absurdo):
     """`getTimezoneOffset()` vive en [-840, 840]. Un valor fuera de ahí no es un
     huso: es un bug del cliente. Sin clamp, `int(99999999)` producía una línea
-    afirmando 'Jueves, 9 de Junio de 1836' DENTRO del system prompt."""
+    afirmando 'Jueves, 9 de Junio de 1836' DENTRO del system prompt.
+
+    [P1-CHAT-PAST-DAYS · 2026-07-28] La aserción se hacía contra los literales
+    "2026"/"2025" y por tanto CADUCABA el 2027-01-01 (comprobado con el reloj
+    congelado en 2027: daba False). Se ancla al año real del reloj.
+    """
     from prompts.chat_agent import build_temporal_context
     out = build_temporal_context(tz_offset=absurdo)
-    assert "2026" in out or "2025" in out, "el año se fue de rango: %r" % out
+    from datetime import datetime as _dt, timezone as _tz
+    anio = str(_dt.now(_tz.utc).year)
+    assert anio in out or str(int(anio) - 1) in out, "el año se fue de rango: %r" % out
+
+
+# El clamp real, tal como está escrito en los dos archivos:
+#   prompts/chat_agent.py : `offset_min = _cand if -840 <= _cand <= 840 else 240`
+#   agent.py              : `return cand if -840 <= cand <= 840 else default_mins`
+# Se ancla la COMPARACIÓN ENCADENADA, no el literal suelto `840`.
+_CLAMP_RE = re.compile(r"-840\s*<=\s*[A-Za-z_][A-Za-z0-9_]*\s*<=\s*840")
 
 
 def test_ambos_sitios_clampan_el_offset_al_rango_de_husos():
-    """El mismo `tz_offset` del cliente viaja por dos caminos; los dos clampan."""
+    """El mismo `tz_offset` del cliente viaja por dos caminos; los dos clampan.
+
+    [P1-CHAT-PAST-DAYS · 2026-07-28] La versión anterior aseveraba `"840" in src`
+    y era VACUA: los DOS archivos escriben `840` dentro del comentario
+    explicativo que va encima del clamp, así que borrar la expresión y dejar el
+    comentario mantenía el test en verde. Ahora se ancla la expresión.
+    """
     for ruta in ("prompts/chat_agent.py", "agent.py"):
         src = _src(ruta)
-        assert "840" in src, "%s no clampa el tz_offset al rango de husos" % ruta
+        assert _CLAMP_RE.search(src), (
+            "%s no clampa el tz_offset al rango de husos: falta una comparación "
+            "encadenada `-840 <= x <= 840`" % ruta
+        )
+
+
+def test_el_guard_del_clamp_muerde_si_se_borra_la_expresion():
+    """Prueba de que el guard de arriba NO es vacuo: se borra la EXPRESIÓN del
+    clamp en una copia en memoria del source (dejando intacto el comentario que
+    menciona 840, que es lo que hacía pasar la aserción vieja) y el pin tiene
+    que fallar."""
+    for ruta in ("prompts/chat_agent.py", "agent.py"):
+        src = _src(ruta)
+        mutilado = _CLAMP_RE.sub("True", src)
+        assert "840" in mutilado, (
+            "%s: sin el literal 840 en el comentario, este experimento no probaría "
+            "que la aserción vieja era vacua" % ruta
+        )
+        assert not _CLAMP_RE.search(mutilado), (
+            "%s: el pin del clamp sigue matcheando tras borrar la expresión — "
+            "el guard no muerde" % ruta
+        )
 
 
 # --- Task 7: marker + doc canónica (cierre del P-fix) ---
@@ -536,3 +720,43 @@ def test_doc_canonica_existe_y_esta_enlazada():
     assert "P1-CHAT-PAST-DAYS" in doc
     assert "MEALFIT_CHAT_HISTORY_DAYS" in doc
     assert "chat_past_days_memory.md" in _src("CLAUDE.md")
+
+
+def test_doc_no_promete_un_cap_combinado_que_el_codigo_no_aplica():
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] El doc llamaba a
+    `MEALFIT_CHAT_HISTORY_MAX_CHARS` "cap duro COMBINADO de los dos bloques",
+    pero `_assemble` se invoca una vez POR BLOQUE con el mismo valor (su propio
+    docstring ya decía "por bloque"). El techo real es 2× el documentado."""
+    doc = _src("docs/chat_past_days_memory.md")
+    fila = [ln for ln in doc.splitlines() if "MEALFIT_CHAT_HISTORY_MAX_CHARS" in ln and ln.startswith("|")]
+    assert fila, "no encontré la fila del knob en la tabla §4"
+    assert "combinado" not in fila[0].lower(), (
+        "la tabla §4 sigue prometiendo un cap combinado: %r" % fila[0]
+    )
+    assert "por bloque" in fila[0].lower()
+    src = _src("chat_history_context.py")
+    assert src.count("return _assemble(") == 2, (
+        "si deja de haber exactamente 2 llamadas a `_assemble`, el multiplicador "
+        "del techo (2×) que documenta §5 deja de ser cierto"
+    )
+
+
+def test_marker_del_doc_no_va_por_detras_del_codigo():
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] §6 del doc mandaba bumpear a
+    `P1-CHAT-PAST-DAYS · 2026-07-27` mientras `app.py` ya iba por el 28. El
+    marker NUNCA se mueve hacia atrás —es lo que un operador compara contra
+    `/health/version` para confirmar el deploy—, así que el que se corrige es el
+    DOC.
+
+    Se ancla la instrucción de §6, no la igualdad con `app.py`: el marker vivo
+    pertenece al ÚLTIMO P-fix mergeado, que mañana puede ser otro (de hecho
+    `P1-PESCADO-CATCHALL` se lo llevó a media sesión). Lo que este guard protege
+    es que el doc no dicte una fecha ANTERIOR a la que el código ya tuvo.
+    """
+    doc = _src("docs/chat_past_days_memory.md")
+    i = doc.index("## 6.")
+    seis = doc[i:]
+    assert "P1-CHAT-PAST-DAYS · 2026-07-28" in seis, "§6 no dicta el marker correcto"
+    assert "P1-CHAT-PAST-DAYS · 2026-07-27" not in seis, (
+        "§6 sigue mandando bumpear a una fecha que el código ya superó"
+    )
