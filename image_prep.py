@@ -1,7 +1,8 @@
 """[P1-VISION-LUNA · 2026-07-28] Redimensionado defensivo de fotos antes de
-enviarlas a un proveedor de visión (gpt-5.6-luna vía OpenAI-compatible, o
-Ollama local). Bytes → bytes, sin I/O de red, testeable con imágenes
-sintéticas.
+enviarlas al proveedor de visión (gpt-5.6-luna vía OpenAI-compatible; el
+provider LOCAL que existía junto a este, Ollama, fue eliminado en
+P1-VISION-NO-LOCAL · 2026-07-28). Bytes → bytes, sin I/O de red, testeable
+con imágenes sintéticas.
 
 Por qué existe: una foto de móvil típica (3024x4032) cuesta 12.406 tokens de
 entrada ($0,0130/scan) contra 1.374 tokens ($0,0020/scan) a 1024x1024 — 6,6x

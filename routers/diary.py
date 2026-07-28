@@ -7,8 +7,10 @@ import uuid
 import asyncio
 from pydantic import BaseModel, Field, field_validator
 from db_core import _storage_client
-# [P1-MEAL-SCAN-GEMMA · 2026-07-12] verify_api_quota removido del import: el
-# único consumidor era /upload, hoy quota-exempt (gemma local, costo LLM cero).
+# [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-NO-LOCAL · 2026-07-28]
+# verify_api_quota removido del import: el único consumidor era /upload, y
+# ningún provider de visión (hoy solo cloud, `openai_compatible`) escribe en
+# el libro de cuota de planes — ver el gate `log_llm_usage_event` más abajo.
 from auth import get_verified_user_id
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
@@ -21,7 +23,7 @@ from db import (
     delete_consumed_meal, get_user_profile, log_llm_usage_event,
 )
 from vision_agent import (
-    process_image_with_vision, get_multimodal_embedding, is_vision_local,
+    process_image_with_vision, get_multimodal_embedding,
     _vision_model_name,
 )
 # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top — verificado que
@@ -208,14 +210,14 @@ async def api_diary_upload(
     user_id: str = Form("guest"),
     session_id: str = Form(None),
     tz_offset_mins: int = Form(0),
-    # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28]
-    # Quota-exempt PERMANENTE (doctrina P1-NEVERA-QUOTA-EXEMPT), sin importar
-    # el provider: `verify_api_quota` devolvía 402 al cap mensual Y cada scan
-    # quemaba un crédito de planes (`get_monthly_api_usage` cuenta toda fila de
-    # api_usage sin filtrar endpoint). Anti-spam: _VISION_UPLOAD_LIMITER
-    # (10/60s por user/IP) + single-flight de GPU en vision_agent. Cuando el
-    # provider es CLOUD pago (`not is_vision_local()`), el gasto real NO
-    # reactiva este paywall — va a `llm_usage_events` (libro de COSTO) vía
+    # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28 →
+    # P1-VISION-NO-LOCAL · 2026-07-28] Quota-exempt PERMANENTE (doctrina
+    # P1-NEVERA-QUOTA-EXEMPT): `verify_api_quota` devolvería 402 al cap
+    # mensual Y cada scan quemaría un crédito de planes (`get_monthly_api_usage`
+    # cuenta toda fila de api_usage sin filtrar endpoint). Anti-spam:
+    # _VISION_UPLOAD_LIMITER (10/60s por user/IP) — el único provider de
+    # visión hoy es cloud (`openai_compatible`); el gasto real NO reactiva
+    # este paywall — va a `llm_usage_events` (libro de COSTO) vía
     # `log_llm_usage_event`, ver el gate más abajo.
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
     # [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] throttle por user_id/IP.
@@ -349,12 +351,13 @@ async def api_diary_upload(
         # 2. [P1-MEAL-SCAN-GEMMA · 2026-07-12] Storage OPCIONAL. Tras la
         # migración a Neon `_storage_client = None` (db_core) y este paso
         # abortaba con 500 ANTES de llegar al análisis de visión — el botón
-        # "Escanear comida" moría aquí aunque gemma estuviera vivo. La foto se
-        # analiza en memoria; sin storage solo se pierde la miniatura del
-        # Diario Visual (image_url vacía), no el análisis ni la description.
+        # "Escanear comida" moría aquí aunque el provider de visión estuviera
+        # vivo. La foto se analiza en memoria; sin storage solo se pierde la
+        # miniatura del Diario Visual (image_url vacía), no el análisis ni
+        # la description.
         if not upload_success:
             logger.info(
-                "📷 [P1-MEAL-SCAN-GEMMA] Sin object storage configurado — "
+                "📷 [DIARY-UPLOAD] Sin object storage configurado — "
                 "la imagen se analiza en memoria y no se persiste (image_url vacía)."
             )
 
@@ -465,34 +468,33 @@ async def api_diary_upload(
                     )
             # ------------------------------------------------------------
 
-            # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28]
-            # Encender un provider CLOUD pago (Luna) reabría el bug que
-            # P1-MEAL-SCAN-GEMMA cerró: `log_api_usage` escribía en `api_usage`
-            # (libro de CUOTA de planes) y `get_monthly_api_usage` cuenta TODA
-            # fila sin filtrar endpoint — 3 scans/día agotarían el cap gratis
-            # (15/mes) en 5 días, congelando la generación de planes por
-            # fotografiar comida. El gasto real (modelo + tokens si el
-            # provider los devuelve + USD) ahora va a `llm_usage_events`
-            # (libro de COSTO, NO de cuota) vía `log_llm_usage_event` — sigue
-            # siendo auditable (mismo sitio del canario de Luna) sin cobrarle
-            # un plan al usuario. `log_llm_usage_event` es best-effort y ya
-            # silencia sus propias excepciones — no envolver en otro try.
+            # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28
+            # → P1-VISION-NO-LOCAL · 2026-07-28] Encender un provider CLOUD
+            # pago (Luna) reabría el bug que P1-MEAL-SCAN-GEMMA cerró:
+            # `log_api_usage` escribía en `api_usage` (libro de CUOTA de
+            # planes) y `get_monthly_api_usage` cuenta TODA fila sin filtrar
+            # endpoint — 3 scans/día agotarían el cap gratis (15/mes) en 5
+            # días, congelando la generación de planes por fotografiar
+            # comida. El gasto real (modelo + tokens si el provider los
+            # devuelve + USD) va a `llm_usage_events` (libro de COSTO, NO de
+            # cuota) vía `log_llm_usage_event` — sigue siendo auditable
+            # (mismo sitio del canario de Luna) sin cobrarle un plan al
+            # usuario. `log_llm_usage_event` es best-effort y ya silencia sus
+            # propias excepciones — no envolver en otro try.
             #
-            # Decisión: el path LOCAL (gemma/Ollama, costo cero) NO emite fila
-            # aquí. `llm_usage_events` es un libro de $ gastado, no de volumen
-            # de scans; una fila `cost_usd_micros=NULL` por cada scan gratis
-            # es ruido para ese propósito y no aporta nada que `is_vision_local()`
-            # + los logs de `vision_agent` no den ya. Si algún día se necesita
-            # auditar volumen de scans locales, el lugar correcto es
-            # `pipeline_metrics` (mismo patrón que `chrono_nutrition_red_alert`
-            # arriba en este archivo), no el libro de costo.
-            if actual_user_id and actual_user_id != session_id and not is_vision_local():
+            # [P1-VISION-NO-LOCAL] El gate ANTES excluía el path LOCAL
+            # (`not is_vision_local()`, gemma/Ollama costo cero): sin
+            # provider local, esa rama nunca podía ser False, así que el
+            # accessor quedaba muerto — eliminado junto con el resto de
+            # Ollama. Con un ÚNICO provider (cloud), esta rama SIEMPRE emite
+            # la fila cuando hay usuario autenticado; no hay condición de
+            # provider que verificar.
+            if actual_user_id and actual_user_id != session_id:
                 # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
-                # `_vision_model_name()` es el modelo del provider CLOUD configurado
-                # (el único que llega a esta rama, ver `is_vision_local()` arriba);
-                # `process_image_with_vision` no expone hoy cuál provider sirvió
-                # realmente tras una cascada de fallback, así que este es el mejor
-                # accessor disponible — no se inventa un dato que el módulo no da.
+                # `_vision_model_name()` es el modelo del ÚNICO provider de
+                # visión (`openai_compatible`) — accessor vivo de
+                # vision_agent, no un literal hardcodeado que se
+                # desincronizaría de MEALFIT_VISION_MODEL.
                 await asyncio.to_thread(
                     log_llm_usage_event,
                     user_id=actual_user_id,
@@ -519,9 +521,14 @@ async def api_diary_upload(
             "success": True,
             "is_food": is_food,
             "analysis_failed": analysis_failed,
-            # [P1-MEAL-SCAN-GEMMA · 2026-07-12] La GPU local es single-flight:
-            # `busy=True` distingue "hay otro scan en vuelo, reintenta en
-            # segundos" de "el analizador está caído" (analysis_failed).
+            # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-NO-LOCAL · 2026-07-28]
+            # `busy=True` distinguía "hay otro scan en vuelo, reintenta en
+            # segundos" de "el analizador está caído" bajo el provider LOCAL
+            # (single-flight de una sola GPU). Sin provider local, ningún
+            # dispatch vuelve a setear `busy` — el key queda SIEMPRE False.
+            # Se conserva (no se rompe el contrato de respuesta del frontend,
+            # que ya trata `busy` falsy como "no ocupado") en vez de tocar
+            # ScanMealModal.jsx fuera del alcance de este P-fix.
             "busy": vision_result.get("busy", False),
             # [P1-CHAT-VISION-GEMMA · 2026-07-12] Clasificación de la foto:
             # 'plato' (macros → diario), 'items' (compra → Nevera vía chat-

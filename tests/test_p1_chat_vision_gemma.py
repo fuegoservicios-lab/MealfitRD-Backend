@@ -85,6 +85,34 @@ def test_items_mode_sanitizes_and_formats_for_pantry_tool():
         "la description es determinista desde los items sanitizados, no texto libre"
 
 
+def test_coerce_meal_scan_clamps_and_not_food_zeroes():
+    """[Portado de test_p1_meal_scan_gemma.py, eliminado en P1-VISION-NO-LOCAL
+    · 2026-07-28 -- ese archivo pineaba transporte Ollama/single-flight que ya
+    no existe, pero esta aserción sobre `_coerce_meal_scan` (clamps numéricos,
+    is_food=False -> macros en 0) es lógica de negocio pura, independiente
+    del provider, y no estaba cubierta por ningún otro test de este archivo.]
+    """
+    out = _coerce_meal_scan({
+        "is_food": True, "meal_name": "Mangu con salami",
+        "description": "Plato de mangu",
+        "calories": 99999, "protein": -5, "carbs": "310.6", "healthy_fats": None,
+    })
+    assert out["is_food"] is True
+    assert out["calories"] == 10000, "clamp espejo de ConsumedMealRequest"
+    assert out["protein"] == 0, "negativo → 0"
+    assert out["carbs"] == 311, "string numérica → int redondeado"
+    assert out["healthy_fats"] == 0
+    assert "Estimación" in out["description"]
+
+    not_food = _coerce_meal_scan({
+        "is_food": False, "meal_name": "algo", "description": "un carro",
+        "calories": 500, "protein": 20, "carbs": 30, "healthy_fats": 10,
+    })
+    assert not_food["is_food"] is False
+    assert not_food["meal_name"] == ""
+    assert not_food["calories"] == 0 and not_food["protein"] == 0
+
+
 def test_items_mode_empty_degrades_to_otro():
     out = _coerce_meal_scan({"photo_kind": "items", "is_food": True, "items": []})
     assert out["photo_kind"] == "otro"

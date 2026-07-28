@@ -86,11 +86,14 @@ def test_knob_max_side_con_clamp():
 
 
 # ---------------------------------------------------------------------------
-# Task 2 [P1-VISION-LUNA · 2026-07-28]: cablear el resize + cascada de
-# fallback en vision_agent.py. Tests behaviorales (spy sobre los puntos de
-# extensión reales del módulo) en vez de grep de substrings — si se invierte
-# el comportamiento (orden, cascada, propagación del error), estos deben
-# ponerse rojos.
+# Task 2 [P1-VISION-LUNA · 2026-07-28 → simplificado P1-VISION-NO-LOCAL ·
+# 2026-07-28]: cablear el resize + despacho al ÚNICO provider en
+# vision_agent.py. Tests behaviorales (spy sobre los puntos de extensión
+# reales del módulo) en vez de grep de substrings — si se invierte el
+# comportamiento (orden, propagación del error), estos deben ponerse rojos.
+# La cascada de fallback (`MEALFIT_VISION_FALLBACK_PROVIDER`, reintento
+# contra `ollama`) fue ELIMINADA en P1-VISION-NO-LOCAL junto con el provider
+# local — sus tests vivían acá y se retiraron con ella.
 # ---------------------------------------------------------------------------
 
 def _openai_compatible_env(monkeypatch):
@@ -98,17 +101,17 @@ def _openai_compatible_env(monkeypatch):
     monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
     monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
     monkeypatch.setenv("MEALFIT_VISION_BASE_URL", "https://example.test/v1")
-    monkeypatch.delenv("MEALFIT_VISION_FALLBACK_PROVIDER", raising=False)
 
 
-def test_resize_invocado_antes_del_despacho_a_cualquier_provider(monkeypatch):
+def test_resize_invocado_antes_del_despacho_al_provider(monkeypatch):
     """Behavioral, NO source-parsing: instrumenta el punto de resize real
     (`prepare_image_for_vision`, importado a vision_agent) y el punto de
-    despacho real (`_dispatch_vision_provider`) y verifica el ORDEN de
-    invocación en tiempo de ejecución. Si alguien mueve el resize después
-    del despacho (o lo condiciona por provider), esto se pone rojo."""
+    despacho real (`_dispatch_openai_compatible_vision` — el ÚNICO provider
+    tras P1-VISION-NO-LOCAL) y verifica el ORDEN de invocación en tiempo de
+    ejecución. Si alguien mueve el resize después del despacho, esto se pone
+    rojo."""
     import vision_agent as va
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "ollama")
+    _openai_compatible_env(monkeypatch)
 
     calls = []
 
@@ -120,83 +123,27 @@ def test_resize_invocado_antes_del_despacho_a_cualquier_provider(monkeypatch):
             "skipped_reason": None,
         }
 
-    async def _spy_dispatch(provider, image_bytes):
-        calls.append(f"dispatch:{provider}")
+    async def _spy_dispatch(image_bytes):
+        calls.append("dispatch")
         return {"is_food": False, "description": "ok", "meal_name": "",
                 "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
 
     monkeypatch.setattr(va, "prepare_image_for_vision", _spy_prepare)
-    monkeypatch.setattr(va, "_dispatch_vision_provider", _spy_dispatch)
+    monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _spy_dispatch)
 
     asyncio.run(va.process_image_with_vision(b"\xff\xd8\xfffake-jpeg"))
 
-    assert calls == ["resize", "dispatch:ollama"], (
-        f"el resize debe ocurrir ANTES del despacho a CUALQUIER provider: {calls}"
+    assert calls == ["resize", "dispatch"], (
+        f"el resize debe ocurrir ANTES del despacho al provider: {calls}"
     )
 
 
-def test_cascada_no_dispara_sin_knob_configurado(monkeypatch):
-    """Sin `MEALFIT_VISION_FALLBACK_PROVIDER`, un primario que falla NUNCA
-    debe tocar el otro provider."""
-    import vision_agent as va
-    _openai_compatible_env(monkeypatch)
-
-    calls = []
-
-    async def _fail_openai(image_bytes):
-        calls.append("openai_compatible")
-        return {"analysis_failed": True, "description": "boom",
-                "is_food": False, "meal_name": "", "calories": 0,
-                "protein": 0, "carbs": 0, "healthy_fats": 0}
-
-    def _fail_if_ollama(*a, **k):
-        pytest.fail("sin knob configurado NO debe cascar a ollama")
-
-    monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _fail_openai)
-    monkeypatch.setattr(va, "_dispatch_ollama_vision", _fail_if_ollama)
-
-    out = asyncio.run(va.process_image_with_vision(b"\xff\xd8\xfffake"))
-
-    assert calls == ["openai_compatible"]
-    assert out.get("analysis_failed") is True
-
-
-def test_cascada_dispara_exactamente_una_vez_con_knob(monkeypatch):
-    """Con el knob puesto, un primario que falla SÍ reintenta con el
-    fallback — pero solo UNA vez (sin loop de vuelta al primario)."""
-    import vision_agent as va
-    _openai_compatible_env(monkeypatch)
-    monkeypatch.setenv("MEALFIT_VISION_FALLBACK_PROVIDER", "ollama")
-
-    calls = []
-
-    async def _fail_openai(image_bytes):
-        calls.append("openai_compatible")
-        return {"analysis_failed": True, "description": "boom",
-                "is_food": False, "meal_name": "", "calories": 0,
-                "protein": 0, "carbs": 0, "healthy_fats": 0}
-
-    async def _ok_ollama(image_bytes):
-        calls.append("ollama")
-        return {"is_food": True, "description": "plato ok",
-                "meal_name": "Arroz con pollo", "calories": 500,
-                "protein": 30, "carbs": 60, "healthy_fats": 10}
-
-    monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _fail_openai)
-    monkeypatch.setattr(va, "_dispatch_ollama_vision", _ok_ollama)
-
-    out = asyncio.run(va.process_image_with_vision(b"\xff\xd8\xfffake"))
-
-    assert calls == ["openai_compatible", "ollama"], (
-        f"exactamente UN intento de fallback esperado, sin loops: {calls}"
-    )
-    assert out["is_food"] is True
-    assert not out.get("analysis_failed")
-
-
-def test_primario_falla_sin_fallback_propaga_el_resultado_original(monkeypatch):
-    """Sin fallback configurado, el resultado devuelto debe ser EXACTAMENTE
-    el del primario (mismo payload) — no una versión genérica ni mezclada."""
+def test_sin_cascada_el_resultado_del_unico_provider_se_retorna_tal_cual(monkeypatch):
+    """[P1-VISION-NO-LOCAL · 2026-07-28] La cascada de fallback
+    (`MEALFIT_VISION_FALLBACK_PROVIDER`, provider `ollama`) fue eliminada —
+    no queda un segundo provider al que reintentar. `process_image_with_vision`
+    debe ser un passthrough directo: el resultado (éxito o `analysis_failed`)
+    del ÚNICO provider se retorna EXACTAMENTE igual, sin envolver ni mezclar."""
     import vision_agent as va
     _openai_compatible_env(monkeypatch)
 
@@ -209,83 +156,28 @@ def test_primario_falla_sin_fallback_propaga_el_resultado_original(monkeypatch):
     async def _fail_openai(image_bytes):
         return dict(primary_failure)
 
-    def _fail_if_ollama(*a, **k):
-        pytest.fail("sin fallback configurado NUNCA debe tocar ollama")
-
     monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _fail_openai)
-    monkeypatch.setattr(va, "_dispatch_ollama_vision", _fail_if_ollama)
 
     out = asyncio.run(va.process_image_with_vision(b"\xff\xd8\xfffake"))
 
     assert out == primary_failure
 
 
-def test_cascada_ambos_fallan_devuelve_el_error_del_primario_no_del_fallback(monkeypatch):
-    """Si el fallback TAMBIÉN falla, el error que se devuelve (y por tanto
-    lo que ve el usuario/log downstream) debe ser el del PRIMARIO, no el
-    del fallback — para que apunte al problema real."""
+def test_cascada_infra_eliminada_de_vision_agent():
+    """[P1-VISION-NO-LOCAL · 2026-07-28] Blanket anti-regresión: la cascada
+    completa (knob + resolver + dispatcher genérico) no debe reaparecer como
+    símbolo del módulo — si alguien la reintroduce, este test lo cacha antes
+    que el blanket parser genérico de test_p1_vision_no_local.py (que solo
+    busca 'ollama'/'gemma', no estos nombres específicos de la cascada)."""
     import vision_agent as va
-    _openai_compatible_env(monkeypatch)
-    monkeypatch.setenv("MEALFIT_VISION_FALLBACK_PROVIDER", "ollama")
-
-    calls = []
-    primary_failure = {
-        "description": "primario boom", "is_food": False,
-        "analysis_failed": True, "meal_name": "", "calories": 0,
-        "protein": 0, "carbs": 0, "healthy_fats": 0,
-    }
-    fallback_failure = {
-        "description": "fallback boom TAMBIEN", "is_food": False,
-        "analysis_failed": True, "meal_name": "", "calories": 0,
-        "protein": 0, "carbs": 0, "healthy_fats": 0,
-    }
-
-    async def _fail_openai(image_bytes):
-        calls.append("openai_compatible")
-        return dict(primary_failure)
-
-    async def _fail_ollama(image_bytes):
-        calls.append("ollama")
-        return dict(fallback_failure)
-
-    monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _fail_openai)
-    monkeypatch.setattr(va, "_dispatch_ollama_vision", _fail_ollama)
-
-    out = asyncio.run(va.process_image_with_vision(b"\xff\xd8\xfffake"))
-
-    assert calls == ["openai_compatible", "ollama"]
-    assert out == primary_failure, "debe devolver el error del PRIMARIO, no el del fallback"
-
-
-@pytest.mark.parametrize("fb_value", [
-    "disabled", "off", "valor-basura-invalido", "openai_compatible",
-])
-def test_fallback_invalido_apagado_o_igual_al_primario_es_no_cascada(monkeypatch, fb_value):
-    """`disabled`/`off` (apagados a propósito), un valor fuera del choices-set
-    (cae al default "" vía `_env_str`, con WARNING) y un fallback IGUAL al
-    primario (evita el loop primario→sí-mismo) deben comportarse los tres
-    como 'sin cascada' — nunca crashear, nunca reintentar."""
-    import vision_agent as va
-    _openai_compatible_env(monkeypatch)
-    monkeypatch.setenv("MEALFIT_VISION_FALLBACK_PROVIDER", fb_value)
-
-    calls = []
-
-    async def _fail_openai(image_bytes):
-        calls.append("openai_compatible")
-        return {"analysis_failed": True, "description": "boom",
-                "is_food": False, "meal_name": "", "calories": 0,
-                "protein": 0, "carbs": 0, "healthy_fats": 0}
-
-    monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _fail_openai)
-
-    out = asyncio.run(va.process_image_with_vision(b"\xff\xd8\xfffake"))
-
-    assert calls == ["openai_compatible"], (
-        f"MEALFIT_VISION_FALLBACK_PROVIDER={fb_value!r} debe comportarse como "
-        f"sin cascada (un único intento): {calls}"
-    )
-    assert out.get("analysis_failed") is True
+    for symbol in (
+        "_vision_fallback_provider", "_vision_cascade_target",
+        "_dispatch_vision_provider", "_vision_result_unusable",
+    ):
+        assert not hasattr(va, symbol), (
+            f"vision_agent.{symbol} debía eliminarse junto con la cascada "
+            f"(P1-VISION-NO-LOCAL) — no queda un segundo provider al que cascar."
+        )
 
 
 def test_telemetria_de_resize_se_loguea_a_info(monkeypatch, caplog):
@@ -293,13 +185,13 @@ def test_telemetria_de_resize_se_loguea_a_info(monkeypatch, caplog):
     siendo greppable — verifica que el marker + los campos de telemetría
     llegan al logger a nivel INFO."""
     import vision_agent as va
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "ollama")
+    _openai_compatible_env(monkeypatch)
 
-    async def _ok_ollama(image_bytes):
+    async def _ok_openai(image_bytes):
         return {"is_food": False, "description": "ok", "meal_name": "",
                 "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}
 
-    monkeypatch.setattr(va, "_dispatch_ollama_vision", _ok_ollama)
+    monkeypatch.setattr(va, "_dispatch_openai_compatible_vision", _ok_openai)
 
     caplog.set_level(logging.INFO, logger="vision_agent")
     asyncio.run(va.process_image_with_vision(_png(64, 64)))
@@ -422,76 +314,24 @@ def test_api_key_precedence_vision_key_gana_sobre_openai_key(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Bug real cazado por el owner antes de encender Luna en prod: el fallback a
-# ollama compartía `MEALFIT_VISION_MODEL` con el provider cloud. Con
-# `MEALFIT_VISION_MODEL=gpt-5.6-luna` (necesario para encender Luna como
-# PRIMARIO), la cascada de fallback a ollama le pedía a Ollama un modelo
-# llamado "gpt-5.6-luna", que no existe ahí -- la cascada era correcta en su
-# lógica pero inalcanzable por configuración. Fix: knob dedicado
-# `MEALFIT_OLLAMA_VISION_MODEL`, con retrocompat solo cuando ollama es el
-# PRIMARIO (nunca cuando es fallback).
+# [P1-VISION-NO-LOCAL · 2026-07-28] El bug real que `_ollama_model_name()`
+# cerraba (retrocompat del modelo dedicado de Ollama vs el knob cloud
+# compartido durante la cascada) dejó de aplicar: no queda accessor, knob
+# `MEALFIT_OLLAMA_VISION_MODEL`, ni cascada a la que ese modelo alimentara.
+# Los 4 tests que vivían acá (nunca-hereda-el-modelo-cloud, retrocompat-
+# primario, dedicado-gana-sobre-ambos, default-sin-knob) se retiraron junto
+# con `_ollama_model_name()` — ver test_cascada_infra_eliminada_de_vision_agent
+# arriba y el blanket parser de test_p1_vision_no_local.py para la cobertura
+# de que el símbolo no reaparezca.
 # ---------------------------------------------------------------------------
 
-def test_ollama_model_nunca_hereda_el_modelo_cloud_del_fallback(monkeypatch):
-    """El caso que rompía la cascada: provider PRIMARIO cloud con
-    MEALFIT_VISION_MODEL=gpt-5.6-luna. `_ollama_model_name()` (el modelo que
-    se le pediría a Ollama si la cascada cae ahí) NUNCA puede devolver el
-    modelo cloud -- si lo hiciera, el roundtrip a Ollama fallaría con
-    'modelo gpt-5.6-luna no existe', exactamente el bug real."""
+
+def test_ollama_model_name_symbol_removed():
+    """Anti-regresión puntual: `_ollama_model_name` no debe reaparecer como
+    símbolo de vision_agent — su única razón de existir era la cascada
+    eliminada en P1-VISION-NO-LOCAL."""
     import vision_agent as va
-
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
-    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
-    monkeypatch.delenv("MEALFIT_OLLAMA_VISION_MODEL", raising=False)
-
-    resolved = va._ollama_model_name()
-    assert resolved != "gpt-5.6-luna", (
-        f"_ollama_model_name() devolvió el modelo CLOUD ({resolved!r}) -- "
-        f"la cascada a ollama fallaría pidiendo un modelo que no existe ahí."
-    )
-    assert resolved == "gemma4:12b"
-
-
-def test_ollama_model_retrocompat_cuando_ollama_es_primario(monkeypatch):
-    """Retrocompat: la config viva de prod (ollama como PRIMARIO,
-    MEALFIT_VISION_MODEL=gemma4:12b) debe seguir funcionando IDÉNTICO sin
-    tocar nada al desplegar este fix -- solo hereda el knob compartido
-    cuando ollama es el primario."""
-    import vision_agent as va
-
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "ollama")
-    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gemma4:12b")
-    monkeypatch.delenv("MEALFIT_OLLAMA_VISION_MODEL", raising=False)
-
-    assert va._ollama_model_name() == "gemma4:12b"
-
-
-def test_ollama_model_dedicado_gana_sobre_ambos(monkeypatch):
-    """`MEALFIT_OLLAMA_VISION_MODEL` explícito gana SIEMPRE, sea cual sea el
-    provider primario o el valor de `MEALFIT_VISION_MODEL`."""
-    import vision_agent as va
-
-    monkeypatch.setenv("MEALFIT_OLLAMA_VISION_MODEL", "gemma4:27b")
-
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
-    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
-    assert va._ollama_model_name() == "gemma4:27b"
-
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "ollama")
-    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gemma4:12b")
-    assert va._ollama_model_name() == "gemma4:27b"
-
-
-def test_ollama_model_default_sin_ningun_knob(monkeypatch):
-    """Sin ningún knob seteado y provider primario NO-ollama: default puro,
-    nunca hereda nada del knob cloud vacío."""
-    import vision_agent as va
-
-    monkeypatch.delenv("MEALFIT_OLLAMA_VISION_MODEL", raising=False)
-    monkeypatch.delenv("MEALFIT_VISION_MODEL", raising=False)
-    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
-
-    assert va._ollama_model_name() == "gemma4:12b"
+    assert not hasattr(va, "_ollama_model_name")
 
 
 # ---------------------------------------------------------------------------
@@ -499,27 +339,36 @@ def test_ollama_model_default_sin_ningun_knob(monkeypatch):
 # planes. El bug que se cierra: `diary.py` quemaba un crédito de plan
 # (`log_api_usage` → `api_usage`) por cada scan cuando el provider era CLOUD
 # pago — con Luna encendido eso agota el cap gratis (15/mes) en 5 días. Los
-# tests parsean el bloque real alrededor del gate histórico
-# `not is_vision_local()` (mismo gate que P1-MEAL-SCAN-GEMMA ya usaba) en vez
-# de grepear el archivo entero, para no dar falso-verde si el texto viejo
-# sobrevive en un comentario/docstring en otra parte del archivo.
+# tests parsean el bloque real alrededor del gate `if actual_user_id and
+# actual_user_id != session_id:` en vez de grepear el archivo entero, para no
+# dar falso-verde si el texto viejo sobrevive en un comentario/docstring en
+# otra parte del archivo.
+#
+# [P1-VISION-NO-LOCAL · 2026-07-28] El marker INCLUÍA `and not
+# is_vision_local()` — ese sufijo se eliminó junto con `is_vision_local()`
+# (sin provider local, la condición nunca podía ser False). Re-anclado al
+# gate simplificado.
 # ---------------------------------------------------------------------------
 
 _VISION_GATE_MARKER = (
-    "if actual_user_id and actual_user_id != session_id and not is_vision_local():"
+    "if actual_user_id and actual_user_id != session_id:"
 )
 
 
 def _vision_gate_window(src, chars=900):
-    """Ventana de código INMEDIATAMENTE posterior al gate `not is_vision_local()`
-    — el mismo gate que ya existía pre-P1-VISION-LUNA (P1-MEAL-SCAN-GEMMA).
-    Acotar la ventana (en vez de buscar en el archivo entero) evita que un
-    comentario explicativo en OTRA parte del archivo (p.ej. el bloque de
-    docstring que narra el bug cerrado) haga pasar el test en falso."""
+    """Ventana de código INMEDIATAMENTE posterior al gate
+    `if actual_user_id and actual_user_id != session_id:` — el mismo gate
+    que ya existía pre-P1-VISION-LUNA (P1-MEAL-SCAN-GEMMA), simplificado en
+    P1-VISION-NO-LOCAL (perdió el sufijo `and not is_vision_local()` al
+    eliminarse el provider local). Acotar la ventana (en vez de buscar en el
+    archivo entero) evita que un comentario explicativo en OTRA parte del
+    archivo (p.ej. el bloque de docstring que narra el bug cerrado) haga
+    pasar el test en falso."""
     i = src.find(_VISION_GATE_MARKER)
     assert i != -1, (
-        "no se encontró el gate `not is_vision_local()` en diary.py — "
-        "renombrado o eliminado; los tests de abajo necesitan re-anclarse."
+        "no se encontró el gate `if actual_user_id and actual_user_id != "
+        "session_id:` en diary.py — renombrado o eliminado; los tests de "
+        "abajo necesitan re-anclarse."
     )
     return src[i + len(_VISION_GATE_MARKER):i + len(_VISION_GATE_MARKER) + chars]
 
