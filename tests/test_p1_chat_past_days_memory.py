@@ -31,6 +31,17 @@ def test_ancla_1_fecha_estampada_gana():
     assert [r["inferred"] for r in rows] == [False, False]
 
 
+def test_ancla_estampada_en_indice_distinto_de_cero():
+    """El ancla estampada puede NO estar en days[0]: la fórmula
+    `anchor_date + (i - anchor_idx)` tiene que proyectar hacia ATRÁS y hacia
+    ADELANTE desde ella. Sin este guard, un off-by-anchor-index pasaría mudo.
+    """
+    plan = {"days": [_day("Domingo", 1), _day("Lunes", 2, fecha="2026-07-27"), _day("Martes", 3)]}
+    rows = resolve_day_dates(plan, HOY)
+    assert [r["date"] for r in rows] == [date(2026, 7, 26), date(2026, 7, 27), date(2026, 7, 28)]
+    assert [r["inferred"] for r in rows] == [True, False, True]
+
+
 def test_ancla_2_weekday_match_para_plan_shifteado():
     """Sin `date`, el ancla es el day_name que coincide con HOY.
 
