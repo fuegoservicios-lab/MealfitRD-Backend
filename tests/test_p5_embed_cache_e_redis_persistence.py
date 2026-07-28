@@ -44,12 +44,18 @@ def _reset_semantic_cache_state():
     de identidades del conftest es ciego a atributos). Mismo remedio que
     test_p6_embed_cache_cooldown_bypass: snapshot/reset autouse file-wide (la clase 5 ya
     lo hacía en setup/teardown; las demás quedaban expuestas)."""
+    import threading
     import shopping_calculator as sc
     sc._semantic_cache = None
     sc._semantic_cache_failed_until = 0.0
+    # [2026-07-28] 4ª especie: lock tomado por el warmer de otro test → acquire(0.05)
+    # falla → None fast-path. Lock fresco por test (ver test_p6_embed_cache_cooldown).
+    _lock_prev = sc._semantic_cache_lock
+    sc._semantic_cache_lock = threading.Lock()
     yield
     sc._semantic_cache = None
     sc._semantic_cache_failed_until = 0.0
+    sc._semantic_cache_lock = _lock_prev
 
 
 # ---------------------------------------------------------------------------

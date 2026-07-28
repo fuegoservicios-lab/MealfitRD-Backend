@@ -43,13 +43,24 @@ def _sample_master_list():
 
 @pytest.fixture(autouse=True)
 def _reset_cache_state():
-    """Resetea state in-process antes y después de cada test."""
+    """Resetea state in-process antes y después de cada test.
+
+    [2026-07-28 · 4ª especie de contaminación de orden] Además del memo y el cooldown,
+    el TERCER estado es `_semantic_cache_lock`: si el warmer de startup de OTRO test
+    (init de ~100s en background thread) lo dejó tomado, `acquire(timeout=0.05)`
+    falla → get_semantic_cache devuelve None por el fast-path y TODO este archivo
+    cae — solo en corrida completa, invisible para el reset de atributos. Lock
+    FRESCO por test."""
+    import threading
     import shopping_calculator as sc
     sc._semantic_cache = None
     sc._semantic_cache_failed_until = 0.0
+    _lock_prev = sc._semantic_cache_lock
+    sc._semantic_cache_lock = threading.Lock()
     yield
     sc._semantic_cache = None
     sc._semantic_cache_failed_until = 0.0
+    sc._semantic_cache_lock = _lock_prev
 
 
 # ---------------------------------------------------------------------------
