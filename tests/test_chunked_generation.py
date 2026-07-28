@@ -45,9 +45,32 @@ def _pin_pantry_viability_floor_off(monkeypatch):
     cambia el flujo estricto/híbrido que ESTE archivo ancla, y sus fixtures usan neveras
     chicas legítimas. Se apaga explícitamente: el floor tiene su propio anchor en
     test_p1_pantry_viability_floor.py. Si un test de este archivo debe ejercer el floor,
-    re-habilitarlo localmente con monkeypatch."""
+    re-habilitarlo localmente con monkeypatch.
+
+    [2026-07-28 · 3ª especie] Además: reset del cache semántico. test_chunked_30days_e2e
+    corre el pipeline REAL y deja `sc._semantic_cache` POBLADO — el chequeo de cobertura
+    de nevera del Smart Shuffle matchea DISTINTO con cache semántico activo vs regex
+    fast-path, y `test_chunk_degraded_fallback_prefers_days_covered_by_fresh_pantry`
+    caía solo en corrida completa (el día "cubierto" dejaba de estarlo). Mismo remedio
+    que los archivos embed (memo + cooldown + lock fresco)."""
+    import threading
     import cron_tasks as _ct_floor
+    import shopping_calculator as _sc_iso
     monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
+    monkeypatch.setattr(_sc_iso, "_semantic_cache", None)
+    monkeypatch.setattr(_sc_iso, "_semantic_cache_failed_until", 0.0)
+    monkeypatch.setattr(_sc_iso, "_semantic_cache_lock", threading.Lock())
+    # [2026-07-28 · el estado real era _master_cache] Los E2E de 30days pueblan el memo
+    # de master_ingredients (TTL 300s) desde la DB REAL; con la data CALIENTE, el shuffle
+    # re-escala ingredientes a "NNNg X" ANTES de validar cantidades y el día "cubierto"
+    # (nevera sin cantidades) FALLA los 3 intentos → Edge Recipe → el test del fallback
+    # moría solo en corrida completa. Frío (como en solo), el rescale no resuelve macros
+    # y la validación pasa por existencia. Se pinnea FRÍO (mismo estado que anclan estos
+    # mocks); `invalidate_master_cache()` es el SSOT de este reset en prod.
+    monkeypatch.setattr(_sc_iso, "_master_cache", None)
+    monkeypatch.setattr(_sc_iso, "_master_cache_ts", 0)
+    monkeypatch.setattr(_sc_iso, "_VERIFIED_SHOPPING_NAMES", None)
+    monkeypatch.setattr(_sc_iso, "_VERIFIED_SHOPPING_NAMES_TS", 0.0)
 
 
 @pytest.fixture
