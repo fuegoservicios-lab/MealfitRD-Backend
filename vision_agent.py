@@ -127,8 +127,40 @@ def _ollama_base_url() -> str:
 
 
 def _ollama_model_name() -> str:
-    # Crudo (sin _env_str) por paridad exacta con el escáner de Nevera.
-    return os.environ.get("MEALFIT_VISION_MODEL") or "gemma4:12b"
+    """Modelo de Ollama para el análisis LOCAL (gemma).
+
+    [P1-VISION-LUNA · 2026-07-28] Knob DEDICADO `MEALFIT_OLLAMA_VISION_MODEL`
+    (default `gemma4:12b`), separado del knob cloud `MEALFIT_VISION_MODEL`.
+    BUG real cazado por el owner antes de encender Luna en prod: antes ambos
+    compartían `MEALFIT_VISION_MODEL` — con `MEALFIT_VISION_MODEL=gpt-5.6-luna`
+    (necesario para encender el provider cloud PRIMARIO), la cascada de
+    fallback a ollama le pedía a Ollama un modelo llamado "gpt-5.6-luna", que
+    obviamente no existe ahí (`meal-scan gemma falló (modelo='gpt-5.6-luna',
+    ...)` en la sonda real contra el VPS). La cascada era correcta en su
+    lógica y estaba INALCANZABLE por configuración.
+
+    Precedencia (documentada acá a propósito: simplificarla reintroduce el
+    bug de arriba):
+      1. `MEALFIT_OLLAMA_VISION_MODEL` si está seteado → ese, SIEMPRE gana.
+      2. Si NO está seteado Y el provider PRIMARIO (`_vision_provider()`) es
+         `ollama` → hereda el knob compartido `MEALFIT_VISION_MODEL`
+         (retrocompat: la config viva de prod hoy pone
+         `MEALFIT_VISION_MODEL=gemma4:12b` con ollama como primario, y debe
+         seguir funcionando sin tocar nada al desplegar este fix).
+      3. Si no → default `gemma4:12b`.
+    La clave del punto 2: ollama SOLO hereda el knob compartido cuando
+    ollama es el PRIMARIO — nunca cuando actúa como FALLBACK de un provider
+    cloud. Así un `MEALFIT_VISION_MODEL=gpt-5.6-luna` (modelo cloud) nunca
+    se filtra al roundtrip de Ollama.
+    """
+    dedicated = _env_str("MEALFIT_OLLAMA_VISION_MODEL", "")
+    if dedicated:
+        return dedicated
+    if _vision_provider() == _VISION_PROVIDER_OLLAMA:
+        # Retrocompat (punto 2): crudo, sin _env_str, por paridad exacta con
+        # el escáner de Nevera (mismo patrón que tenía este accessor antes).
+        return os.environ.get("MEALFIT_VISION_MODEL") or "gemma4:12b"
+    return "gemma4:12b"
 
 
 def _ollama_timeout_s() -> int:

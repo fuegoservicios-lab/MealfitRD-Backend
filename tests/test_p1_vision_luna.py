@@ -422,6 +422,79 @@ def test_api_key_precedence_vision_key_gana_sobre_openai_key(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Bug real cazado por el owner antes de encender Luna en prod: el fallback a
+# ollama compartía `MEALFIT_VISION_MODEL` con el provider cloud. Con
+# `MEALFIT_VISION_MODEL=gpt-5.6-luna` (necesario para encender Luna como
+# PRIMARIO), la cascada de fallback a ollama le pedía a Ollama un modelo
+# llamado "gpt-5.6-luna", que no existe ahí -- la cascada era correcta en su
+# lógica pero inalcanzable por configuración. Fix: knob dedicado
+# `MEALFIT_OLLAMA_VISION_MODEL`, con retrocompat solo cuando ollama es el
+# PRIMARIO (nunca cuando es fallback).
+# ---------------------------------------------------------------------------
+
+def test_ollama_model_nunca_hereda_el_modelo_cloud_del_fallback(monkeypatch):
+    """El caso que rompía la cascada: provider PRIMARIO cloud con
+    MEALFIT_VISION_MODEL=gpt-5.6-luna. `_ollama_model_name()` (el modelo que
+    se le pediría a Ollama si la cascada cae ahí) NUNCA puede devolver el
+    modelo cloud -- si lo hiciera, el roundtrip a Ollama fallaría con
+    'modelo gpt-5.6-luna no existe', exactamente el bug real."""
+    import vision_agent as va
+
+    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
+    monkeypatch.delenv("MEALFIT_OLLAMA_VISION_MODEL", raising=False)
+
+    resolved = va._ollama_model_name()
+    assert resolved != "gpt-5.6-luna", (
+        f"_ollama_model_name() devolvió el modelo CLOUD ({resolved!r}) -- "
+        f"la cascada a ollama fallaría pidiendo un modelo que no existe ahí."
+    )
+    assert resolved == "gemma4:12b"
+
+
+def test_ollama_model_retrocompat_cuando_ollama_es_primario(monkeypatch):
+    """Retrocompat: la config viva de prod (ollama como PRIMARIO,
+    MEALFIT_VISION_MODEL=gemma4:12b) debe seguir funcionando IDÉNTICO sin
+    tocar nada al desplegar este fix -- solo hereda el knob compartido
+    cuando ollama es el primario."""
+    import vision_agent as va
+
+    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "ollama")
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gemma4:12b")
+    monkeypatch.delenv("MEALFIT_OLLAMA_VISION_MODEL", raising=False)
+
+    assert va._ollama_model_name() == "gemma4:12b"
+
+
+def test_ollama_model_dedicado_gana_sobre_ambos(monkeypatch):
+    """`MEALFIT_OLLAMA_VISION_MODEL` explícito gana SIEMPRE, sea cual sea el
+    provider primario o el valor de `MEALFIT_VISION_MODEL`."""
+    import vision_agent as va
+
+    monkeypatch.setenv("MEALFIT_OLLAMA_VISION_MODEL", "gemma4:27b")
+
+    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gpt-5.6-luna")
+    assert va._ollama_model_name() == "gemma4:27b"
+
+    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "ollama")
+    monkeypatch.setenv("MEALFIT_VISION_MODEL", "gemma4:12b")
+    assert va._ollama_model_name() == "gemma4:27b"
+
+
+def test_ollama_model_default_sin_ningun_knob(monkeypatch):
+    """Sin ningún knob seteado y provider primario NO-ollama: default puro,
+    nunca hereda nada del knob cloud vacío."""
+    import vision_agent as va
+
+    monkeypatch.delenv("MEALFIT_OLLAMA_VISION_MODEL", raising=False)
+    monkeypatch.delenv("MEALFIT_VISION_MODEL", raising=False)
+    monkeypatch.setenv("MEALFIT_VISION_PROVIDER", "openai_compatible")
+
+    assert va._ollama_model_name() == "gemma4:12b"
+
+
+# ---------------------------------------------------------------------------
 # Task 3 [P1-VISION-LUNA · 2026-07-28]: sacar la visión del libro de cuota de
 # planes. El bug que se cierra: `diary.py` quemaba un crédito de plan
 # (`log_api_usage` → `api_usage`) por cada scan cuando el provider era CLOUD
