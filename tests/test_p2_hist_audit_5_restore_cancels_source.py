@@ -124,6 +124,19 @@ def _client():
 # ---------------------------------------------------------------------------
 # 1. Anchor del marker
 # ---------------------------------------------------------------------------
+
+def _cancel_calls(cursor):
+    """[reapuntado 2026-07-28] Los cancel del target/source ya no viven en índices 2/3: el
+    restore ganó un 2º advisory lock per-plan (P2-RESTORE-PLAN-LOCK · 06-19) y el archivado +
+    DELETE del source (P1-HIST-RESTORE-PRESERVE · 07-12) — 9 statements. Se localizan por
+    CONTENIDO en orden: los dos UPDATE plan_chunk_queue con status cancelled."""
+    hits = [
+        (sql, params) for sql, params in cursor.calls
+        if "UPDATE plan_chunk_queue" in str(sql) and "cancelled" in str(sql)
+    ]
+    assert len(hits) == 2, f"esperaba 2 cancels (target y source), hay {len(hits)}"
+    return hits  # [0]=target, [1]=source (orden de emisión)
+
 def test_marker_in_endpoint():
     from routers.plans import api_restore_plan
     src = inspect.getsource(api_restore_plan)
@@ -139,7 +152,7 @@ def test_cancel_source_statement_emitted_with_correct_reason():
     y `meal_plan_id = source_plan_id`."""
     client = _client()
     cursor = _CursorRecorder(
-        rowcounts=[0, 0, 2, 5, 1, 1],  # cancel_source = 5 chunks
+        rowcounts=[0, 0, 0, 2, 5, 1, 1, 1, 1],  # [reapuntado 2026-07-28] 9 stmts; cancel_source (idx 4) = 5
         fetchone_returns=[{"id": _TARGET_ID}],
     )
     pool_mock = _build_pool_mock(cursor)
@@ -152,8 +165,8 @@ def test_cancel_source_statement_emitted_with_correct_reason():
     body = r.json()
     assert body["cancelled_source_chunks"] == 5
 
-    assert len(cursor.calls) == 6
-    sql4, params4 = cursor.calls[3]
+    assert len(cursor.calls) == 9  # [reapuntado 2026-07-28] contrato de 9 (locks x2 + archivo + delete source)
+    sql4, params4 = _cancel_calls(cursor)[1]
     assert "UPDATE plan_chunk_queue" in sql4
     assert "status = 'cancelled'" in sql4
     assert "'pending'" in sql4 and "'processing'" in sql4
@@ -182,8 +195,8 @@ def test_cancel_source_uses_distinct_reason_from_target():
         r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
     assert r.status_code == 200
 
-    _, params_target = cursor.calls[2]
-    _, params_source = cursor.calls[3]
+    _, params_target = _cancel_calls(cursor)[0]
+    _, params_source = _cancel_calls(cursor)[1]
     # Razones distintas.
     assert "restore_overwrite" in params_target
     assert "restore_overwrite" not in params_source
@@ -211,7 +224,9 @@ def test_release_locks_subquery_covers_target_and_source():
         r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
     assert r.status_code == 200
 
-    sql5, params5 = cursor.calls[4]
+    _rl = [(q, pr) for q, pr in cursor.calls if "DELETE FROM chunk_user_locks" in str(q)]
+    assert _rl, "no hay release de chunk_user_locks"
+    sql5, params5 = _rl[0]
     assert "DELETE FROM chunk_user_locks" in sql5
     # Subquery con IN (target, source).
     assert re.search(

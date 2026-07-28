@@ -153,6 +153,19 @@ def _normalize_sql(sql: str) -> str:
 # ---------------------------------------------------------------------------
 # 1. Anchor del marker
 # ---------------------------------------------------------------------------
+
+def _cancel_calls(cursor):
+    """[reapuntado 2026-07-28] Los cancel del target/source ya no viven en índices 2/3: el
+    restore ganó un 2º advisory lock per-plan (P2-RESTORE-PLAN-LOCK · 06-19) y el archivado +
+    DELETE del source (P1-HIST-RESTORE-PRESERVE · 07-12) — 9 statements. Se localizan por
+    CONTENIDO en orden: los dos UPDATE plan_chunk_queue con status cancelled."""
+    hits = [
+        (sql, params) for sql, params in cursor.calls
+        if "UPDATE plan_chunk_queue" in str(sql) and "cancelled" in str(sql)
+    ]
+    assert len(hits) == 2, f"esperaba 2 cancels (target y source), hay {len(hits)}"
+    return hits  # [0]=target, [1]=source (orden de emisión)
+
 def test_marker_in_endpoint():
     """El marker `P0-AUDIT-HIST-1` debe estar citado en el endpoint
     para que un grep + git blame lleve directo al fix."""
@@ -186,9 +199,7 @@ def test_target_cancel_filter_includes_all_five_live_states():
         )
 
     assert r.status_code == 200, r.text
-    # El cancel del target es el 3er statement (advisory_lock=0,
-    # SELECT target=1, cancel target=2 en la lista 0-indexed).
-    sql_target, params_target = cursor.calls[2]
+    sql_target, params_target = _cancel_calls(cursor)[0]
     assert "UPDATE plan_chunk_queue" in sql_target
     assert "restore_overwrite" in params_target
     norm = _normalize_sql(sql_target)
@@ -221,7 +232,7 @@ def test_source_cancel_filter_includes_all_five_live_states():
         )
 
     assert r.status_code == 200, r.text
-    sql_source, params_source = cursor.calls[3]
+    sql_source, params_source = _cancel_calls(cursor)[1]
     assert "UPDATE plan_chunk_queue" in sql_source
     assert "restore_source_archived" in params_source
     norm = _normalize_sql(sql_source)
@@ -255,8 +266,7 @@ def test_cancel_filter_does_not_include_terminal_states(forbidden):
         )
     assert r.status_code == 200
 
-    for idx in (2, 3):  # cancel_target, cancel_source
-        sql, _params = cursor.calls[idx]
+    for sql, _params in _cancel_calls(cursor):
         norm = _normalize_sql(sql)
         # Buscar el bloque del IN para no fallar por menciones
         # incidentales del literal en otros lugares (e.g.,

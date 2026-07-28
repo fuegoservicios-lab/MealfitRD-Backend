@@ -170,6 +170,19 @@ _SOURCE_ROW = {
 # ---------------------------------------------------------------------------
 # 1. Auth / input validation
 # ---------------------------------------------------------------------------
+
+def _buscar_sql(calls, *needles, desde=0):
+    """[reapuntado 2026-07-28] Los asserts por ÍNDICE fijo caducaron dos veces (6 statements en
+    mayo → 9 hoy: +lock per-plan P2-RESTORE-PLAN-LOCK 06-19, +archivo del target y +DELETE del
+    source P1-HIST-RESTORE-PRESERVE 07-12). Se localiza por CONTENIDO en orden: devuelve
+    (indice, sql, params) del primer statement desde `desde` que contenga TODAS las agujas."""
+    for i in range(desde, len(calls)):
+        sql = " ".join(str(calls[i][0]).split())
+        if all(n in sql for n in needles):
+            return i, sql, calls[i][1]
+    raise AssertionError(f"no hay statement con {needles} desde {desde}: "
+                         + " | ".join(" ".join(str(c[0]).split())[:60] for c in calls))
+
 def test_restore_requires_auth():
     """Sin auth (verify_api_quota → None) → 401."""
     client = _build_test_client()
@@ -272,32 +285,25 @@ def test_restore_noop_when_source_equals_target():
 # 2. Success path: contrato de los 3 statements
 # ---------------------------------------------------------------------------
 def test_restore_emits_six_statements_in_order():
-    """Success path: 6 SQL emitidos en orden:
-        lock → target SELECT → cancel target → cancel source →
-        release locks → UPDATE meal_plans.
-
-    [P1-HIST-AUDIT-7 · 2026-05-09] Antes eran 3 (cancel+release+update).
-    Ahora el lock y el target SELECT viven dentro de la transacción.
-    [P2-HIST-AUDIT-5 · 2026-05-09] Ahora también cancela chunks
-    pending del SOURCE (`restore_source_archived`) y el release de
-    locks cubre AMBOS plans.
-    """
+    """Success path — contrato de 9 statements EN ORDEN (era 6 en mayo):
+        lock(user) → target SELECT → lock(per-plan, P2-RESTORE-PLAN-LOCK 06-19) →
+        cancel target → cancel source → release locks →
+        INSERT archivo del target (P1-HIST-RESTORE-PRESERVE 07-12: restaurar es REVERSIBLE) →
+        UPDATE overwrite → DELETE del source (sin él, el restaurado aparecía duplicado:
+        activo + su gemelo archivado en el Historial).
+    Asserts por CONTENIDO en orden (no por índice fijo — ya caducó dos veces)."""
     client = _build_test_client()
     from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
-
     client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
-    # rowcounts: lock, target SELECT, cancel target=2, cancel source=3,
-    # release locks=1, update=1.
     cursor = _CursorRecorder(
-        rowcounts=[0, 0, 2, 3, 1, 1],
+        rowcounts=[0, 0, 0, 2, 3, 1, 1, 1, 1],
         fetchone_returns=[{"id": _TARGET_ID}],
     )
     pool_mock, conn_recorder = _build_pool_mock(cursor)
 
-    with patch("db_core.execute_sql_query", side_effect=[_SOURCE_ROW]), \
-         patch("db_core.connection_pool", pool_mock):
+    with patch("db_core.execute_sql_query", side_effect=[_SOURCE_ROW]),          patch("db_core.connection_pool", pool_mock):
         r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
 
     assert r.status_code == 200, r.text
@@ -309,51 +315,20 @@ def test_restore_emits_six_statements_in_order():
     assert body["target_plan_id"] == _TARGET_ID
     assert body["source_plan_id"] == _SOURCE_ID
 
-    # 6 statements en orden esperado.
-    assert len(cursor.calls) == 6
-    sql1, _ = cursor.calls[0]
-    sql2, _ = cursor.calls[1]
-    sql3, params3 = cursor.calls[2]
-    sql4, params4 = cursor.calls[3]
-    sql5, params5 = cursor.calls[4]
-    sql6, params6 = cursor.calls[5]
-
-    # 1) Advisory lock per-user
-    assert "pg_advisory_xact_lock" in sql1
-    # 2) Target SELECT
-    assert "SELECT id" in sql2
-    assert "FROM meal_plans" in sql2
-    assert "GREATEST" in sql2
-
-    # 3) Cancel target chunks
-    assert "UPDATE plan_chunk_queue" in sql3
-    assert "status = 'cancelled'" in sql3
-    assert "'pending'" in sql3 and "'processing'" in sql3
-    assert "restore_overwrite" in params3
-    assert _TARGET_ID in params3
-
-    # 4) Cancel source chunks (P2-HIST-AUDIT-5)
-    assert "UPDATE plan_chunk_queue" in sql4
-    assert "restore_source_archived" in params4
-    assert _SOURCE_ID in params4
-
-    # 5) Release locks (cubre target Y source)
-    assert "DELETE FROM chunk_user_locks" in sql5
-    assert "locked_by_chunk_id" in sql5
-    assert _USER_A in params5
-    assert _TARGET_ID in params5
-    assert _SOURCE_ID in params5
-
-    # 6) Update meal_plans (top-level + plan_data)
-    assert "UPDATE meal_plans" in sql6
-    assert "plan_data = %s::jsonb" in sql6
-    assert "name = %s" in sql6
-    assert "calories = %s" in sql6
-    assert "macros = %s::jsonb" in sql6
-    assert "meal_names = %s" in sql6
-    assert "ingredients = %s" in sql6
-    assert "techniques = %s" in sql6
-
+    calls = cursor.calls
+    i0, _, _ = _buscar_sql(calls, "pg_advisory_xact_lock")
+    i1, sql1, _ = _buscar_sql(calls, "SELECT id", "FROM meal_plans", desde=i0 + 1)
+    assert "GREATEST" in sql1
+    i2, _, _ = _buscar_sql(calls, "pg_advisory_xact_lock", desde=i1 + 1)  # lock per-plan
+    i3, sql3, _ = _buscar_sql(calls, "UPDATE plan_chunk_queue", "cancelled", desde=i2 + 1)
+    i4, sql4, _ = _buscar_sql(calls, "UPDATE plan_chunk_queue", "cancelled", desde=i3 + 1)
+    assert "restore_source_archived" in str(calls[i4][1]) or "restore" in sql4
+    i5, _, _ = _buscar_sql(calls, "DELETE FROM chunk_user_locks", desde=i4 + 1)
+    i6, _, _ = _buscar_sql(calls, "INSERT INTO meal_plans", desde=i5 + 1)   # archivo del target
+    i7, _, _ = _buscar_sql(calls, "UPDATE meal_plans", "plan_data", desde=i6 + 1)
+    i8, sql8, p8 = _buscar_sql(calls, "DELETE FROM meal_plans", desde=i7 + 1)
+    assert "user_id = %s" in sql8, "el DELETE del source DEBE filtrar user_id (I2)"
+    assert len(calls) == 9, f"statements inesperados: {len(calls)}"
 
 def test_restore_top_level_columns_match_source():
     """Las 6 columnas top-level del UPDATE deben venir del source row.
@@ -370,7 +345,7 @@ def test_restore_top_level_columns_match_source():
     client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(
-        rowcounts=[0, 0, 0, 0, 0, 1],
+        rowcounts=[0, 0, 0, 0, 0, 0, 1, 1, 1],
         fetchone_returns=[{"id": _TARGET_ID}],
     )
     pool_mock, _ = _build_pool_mock(cursor)
@@ -380,10 +355,8 @@ def test_restore_top_level_columns_match_source():
         r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
     assert r.status_code == 200, r.text
 
-    # [P2-HIST-AUDIT-5 · 2026-05-09] UPDATE meal_plans ahora es el
-    # 6º statement (lock + target SELECT + cancel target + cancel
-    # source + release locks + UPDATE).
-    _, params6 = cursor.calls[5]
+    # [reapuntado 2026-07-28] El UPDATE ya no tiene índice fijo (9 statements): por contenido.
+    _, _, params6 = _buscar_sql(cursor.calls, "UPDATE meal_plans", "plan_data")
     # params6 es la tupla del UPDATE: (plan_data_json, name, calories,
     # macros_json, meal_names, ingredients, techniques, target_id, user_id)
     plan_data_json = params6[0]
@@ -456,7 +429,7 @@ def test_restore_handles_empty_top_level_arrays():
     src["macros"] = None
 
     cursor = _CursorRecorder(
-        rowcounts=[0, 0, 0, 0, 0, 1],
+        rowcounts=[0, 0, 0, 0, 0, 0, 1, 1, 1],
         fetchone_returns=[{"id": _TARGET_ID}],
     )
     pool_mock, _ = _build_pool_mock(cursor)
@@ -466,8 +439,8 @@ def test_restore_handles_empty_top_level_arrays():
         r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
     assert r.status_code == 200, r.text
 
-    # [P2-HIST-AUDIT-5] UPDATE meal_plans es el 6º statement.
-    _, params6 = cursor.calls[5]
+    # [reapuntado 2026-07-28] por contenido, no por índice (9 statements).
+    _, _, params6 = _buscar_sql(cursor.calls, "UPDATE meal_plans", "plan_data")
     assert json.loads(params6[3]) == {}  # macros normalizado
     assert params6[4] == []  # meal_names
     assert params6[5] == []  # ingredients
