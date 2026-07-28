@@ -199,3 +199,19 @@ def test_diario_excluye_el_dia_anterior_al_floor():
     assert "Demasiado viejo" not in out
     assert "Jueves 23 jul" not in out
     assert "Viernes 24 jul: SIN REGISTRO" in out
+
+
+def test_assemble_respeta_el_cap_aunque_la_nota_de_recorte_ocupe_espacio():
+    """Regresión DIRECTA sobre `_assemble`: la nota "(+N ... omitidos)" ocupa
+    espacio, y descontarla DESPUÉS de haber gastado el presupuesto desbordaba
+    el cap que el docstring promete como duro.
+
+    Se prueba el helper con entradas sintéticas y un BARRIDO de caps, no con
+    los bloques reales: así el guard no depende del largo del copy (que cambia)
+    y cubre por construcción la franja donde el recorte se activa. Un cap
+    concreto tuneado al umbral de hoy caduca a la primera edición del texto.
+    """
+    from chat_history_context import _assemble
+    for cap in range(20, 141):
+        out = _assemble("H" * 10, ["L" * 19] * 6, "F" * 10, cap, "test")
+        assert len(out) <= cap, "cap duro violado con cap=%d: len=%d" % (cap, len(out))
