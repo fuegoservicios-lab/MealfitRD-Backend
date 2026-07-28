@@ -23680,12 +23680,18 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                 "WHERE meal_plan_id = %s AND week_number = %s",
                 (meal_plan_id, week_number)
             )
-            from services import create_notification
-            create_notification(
-                user_id=user_id,
-                title="Actualiza tu nevera",
-                message="Tu nevera necesita reposición para que el plan siga variado",
-                notification_type="warning"
+            # [P1-GAMMA-NOTIF-REVIVE · 2026-07-28] El bloque importaba desde `services` una
+            # función de crear-notificación que NUNCA existió ahí → ImportError en cada
+            # intento, enmascarado como una línea de error por el except de abajo: la
+            # notificación de diversidad nació muerta. (No se cita el import literal a
+            # propósito: el test escanea este archivo.) El mecanismo real del repo es
+            # `_dispatch_push_notification` (bg_executor acotado + fail-safe), el mismo que
+            # usan el zero-log CTA y los nudges de nevera. Nevera = /dashboard/pantry.
+            _dispatch_push_notification(
+                user_id,
+                "Actualiza tu nevera",
+                "Tu nevera necesita reposición para que el plan siga variado",
+                url="/dashboard/pantry",
             )
             logger.info(f"[P0-gamma] Notificación de diversidad de nevera enviada a {user_id}")
         except Exception as e:
