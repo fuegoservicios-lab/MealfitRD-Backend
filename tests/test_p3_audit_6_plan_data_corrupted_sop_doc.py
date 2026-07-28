@@ -22,7 +22,11 @@ from __future__ import annotations
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
+# [reapuntado 2026-07-28] El SOP migró de CLAUDE.md al runbook de memoria (dieta P3-CLEANUP)
+# — fuera del repo y atado a la máquina del operador. Un test no puede depender de ~/.claude,
+# y un SOP de incidente debe viajar con el código: copiado a docs/ (doc-first) y el test lee
+# el doc del REPO. El header pasa de '###' en CLAUDE.md a '### SOP' dentro del doc canónico.
+_CLAUDE_MD = _REPO_ROOT / "backend" / "docs" / "system_alerts_resolution_table.md"
 
 
 def test_sop_section_exists():

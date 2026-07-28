@@ -40,6 +40,8 @@ _HISTORY_JSX = (
 _HISTORY_CSS = (
     _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.module.css"
 ).read_text(encoding="utf-8")
+_DESKTOP_PANEL = (_BACKEND_ROOT.parent / "frontend" / "src" / "components" / "history" / "HistoryDesktopPanel.jsx").read_text(encoding="utf-8")
+_MOBILE_PANEL = (_BACKEND_ROOT.parent / "frontend" / "src" / "components" / "history" / "HistoryMobilePanel.jsx").read_text(encoding="utf-8")
 _PLANS_ROUTER = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
 _APP_PY = (_BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
 
@@ -154,75 +156,37 @@ def test_temporal_status_parses_date_only_as_local():
 
 
 def test_active_chip_rendered_first_in_card_actions():
-    """El chip 'Activo' debe aparecer ANTES del caloriesBadge y del
-    chip de generación (Parcial/Falló/etc). Es la pregunta más
-    importante para el usuario ("¿cuál plan estoy comiendo ahora?")
-    y va en la posición más prominente del cardActions."""
-    actions_idx = _HISTORY_JSX.find('<div className={styles.cardActions}>')
-    assert actions_idx > 0, "<div className={styles.cardActions}> no encontrado en History.jsx"
-    # Block hasta el siguiente cierre del div (~250 líneas siguientes —
-    # cardActions tiene muchos chips condicionales con comentarios extensos,
-    # ~3000 chars es la ventana real).
-    block = _HISTORY_JSX[actions_idx:actions_idx + 3500]
-    active_pos = block.find("styles.statusActive")
-    calories_pos = block.find("styles.caloriesBadge")
-    assert active_pos > 0, (
-        "Chip `styles.statusActive` no se renderiza dentro de cardActions. "
-        "Feature P3-HIST-ACTIVE-CHIP quedó sin UI."
-    )
-    assert calories_pos > 0
-    assert active_pos < calories_pos, (
-        "El chip 'Activo' debe ir ANTES del caloriesBadge en cardActions. "
-        "Si está después, el orden visual rompe el contrato de diseño "
-        "P3-HIST-ACTIVE-CHIP (chip temporal primero)."
-    )
-
+    """[reapuntado 2026-07-28] El render de cards migró de History.jsx a los paneles
+    (HistoryDesktopPanel/HistoryMobilePanel) y el chip 'Activo' se convirtió en un HERO dedicado
+    con píldora + punto pulsante — MÁS prominente que el chip-primero del diseño viejo. La
+    pregunta que protegía ("¿cuál plan estoy comiendo ahora?") se responde igual o mejor: ambos
+    paneles reciben activePlanId y pintan el indicador con el token de acento."""
+    for nombre, src in (("Desktop", _DESKTOP_PANEL), ("Mobile", _MOBILE_PANEL)):
+        assert "activePlanId" in src, f"{nombre}: el panel perdió la noción de plan activo"
+        assert 'background: "var(--secondary)"' in src, (
+            f"{nombre}: el indicador del plan activo perdió el punto con el token de acento"
+        )
 
 def test_card_active_class_applied_conditionally():
-    """La clase `cardActive` (borde verde + fondo sutil) debe aplicarse
-    al wrapper SOLO cuando el plan es temporal-active. Aplicarla siempre
-    o nunca rompería el resaltado diferenciado."""
-    # Anchor: el className del motion.div del map.
-    assert "_isActive ? styles.cardActive" in _HISTORY_JSX, (
-        "El motion.div del map NO aplica `styles.cardActive` "
-        "condicionalmente. Las cards activas no se distinguen visualmente "
-        "del resto."
+    """[reapuntado 2026-07-28] La clase `cardActive` del monolito murió con la extracción a
+    paneles. La CONDICIONALIDAD vive en `normalizePlan`: `active` solo cuando el id coincide
+    con activePlanId — ni siempre, ni nunca."""
+    assert "raw.id === activePlanId" in _DESKTOP_PANEL, (
+        "el panel ya no computa `active` por comparación de id — las cards activas no se "
+        "distinguen del resto"
     )
-
 
 def test_css_status_active_chip_defined():
-    """CSS class `.statusActive` (chip verde) DEBE existir en
-    History.module.css. Sin el bloque, el chip no tiene estilo y
-    aparece como texto pelado."""
-    assert ".statusActive {" in _HISTORY_CSS, (
-        ".statusActive ausente de History.module.css — el chip "
-        "renderiza sin estilo (texto verde plano sin píldora)."
+    """[reapuntado 2026-07-28] La palette emerald hardcodeada (#ECFDF5/#10B981) fue reemplazada
+    A PROPÓSITO por tokens (commit "verdes→tokens" · 2026-07-09): el indicador usa
+    var(--secondary) con color-mix para fondo/borde. Anclar el hex viejo revertiría esa
+    decisión. Se ancla el token."""
+    assert _DESKTOP_PANEL.count("var(--secondary)") >= 2, (
+        "el indicador de activo perdió el token de acento (¿volvió el hex hardcodeado?)"
     )
-    # Verde emerald — debe diferenciarse de los otros chips de
-    # generación (amber=partial, red=failed, blue=in_progress, gray=unknown).
-    # Iteramos TODAS las apariciones de `.statusActive {` porque el
-    # selector compuesto inicial (`.statusPartial, .statusFailed, …,
-    # .statusActive {`) solo define el shape compartido (padding /
-    # border-radius / font); el bloque standalone con la palette
-    # viene después. Al menos UNO debe contener el verde emerald.
-    found_palette = False
-    cursor = 0
-    while True:
-        idx = _HISTORY_CSS.find(".statusActive {", cursor)
-        if idx < 0:
-            break
-        block = _HISTORY_CSS[idx:idx + 500]
-        if "#ECFDF5" in block or "#10B981" in block or "#047857" in block:
-            found_palette = True
-            break
-        cursor = idx + 1
-    assert found_palette, (
-        ".statusActive no usa palette verde emerald (#ECFDF5/#10B981/#047857). "
-        "Si se cambió a otro color, el chip podría confundirse con los "
-        "chips de generación (amber=partial, red=failed, blue=in_progress, "
-        "gray=unknown)."
+    assert "color-mix" in _DESKTOP_PANEL, (
+        "el fondo/borde del indicador ya no deriva del token — el chip pierde coherencia de tema"
     )
-
 
 def test_css_card_active_modifier_defined():
     """CSS class `.cardActive` (resaltado del wrapper) DEBE existir

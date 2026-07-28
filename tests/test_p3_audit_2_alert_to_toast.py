@@ -125,11 +125,11 @@ def test_paymentmodal_imports_toast_from_sonner(payment_modal_src: str):
 def test_paymentmodal_uses_toast_error(payment_modal_src: str):
     no_comments = _strip_comments(payment_modal_src)
     assert re.search(
-        r"toast\.error\s*\(\s*['\"][^'\"]*Plan ID",
+        r"toast\.error\s*\(\s*['\"][^'\"]*no configurado",
         no_comments,
     ), (
-        "P3-AUDIT-2 regresión: `toast.error('Plan ID Anual no configurado.')` "
-        "no encontrado en PaymentModal.jsx. El replacement debe usar el "
+        "P3-AUDIT-2 regresión: `toast.error('Plan de pago no configurado…')` "
+        "no encontrado en PaymentModal.jsx — [reapuntado 2026-07-28] el copy cambió de 'Plan ID Anual' al genérico; la invariante es toast.error + 'no configurado' y CERO alert() nativos. El replacement debe usar el "
         "método error."
     )
 

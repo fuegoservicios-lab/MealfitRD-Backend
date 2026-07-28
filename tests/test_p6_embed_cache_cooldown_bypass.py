@@ -55,6 +55,25 @@ def _reset_cache_state():
 # ---------------------------------------------------------------------------
 # 1. Cooldown activo + Redis hit → SERVIDO (el fix)
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _aislar_estado_semantico():
+    """[P6-EMBED-ISOLATION · 2026-07-28] Estos tests pasaban SOLOS y fallaban en la corrida
+    completa: `get_semantic_cache()` memoiza en `sc._semantic_cache` (y el cooldown en
+    `sc._semantic_cache_failed_until`), y cientos de tests anteriores dejan el memo poblado —
+    el hit in-process respondía antes de tocar los mocks de Redis/Gemini y las aserciones
+    sobre llamadas quedaban vacías. Identidad de módulo intacta, ATRIBUTOS sucios: la clase
+    de contaminación que el conftest (que vigila identidades) no puede ver. Snapshot + reset
+    aquí, restaurar al salir."""
+    import shopping_calculator as sc
+    _prev_cache = sc._semantic_cache
+    _prev_until = sc._semantic_cache_failed_until
+    sc._semantic_cache = None
+    sc._semantic_cache_failed_until = 0.0
+    yield
+    sc._semantic_cache = _prev_cache
+    sc._semantic_cache_failed_until = _prev_until
+
 def test_cooldown_active_redis_hit_serves_cache_without_gemini():
     """[P6-EMBED-CACHE-FIX] Caso del bug: 429 reciente activó cooldown,
     pero Redis tiene vectores válidos. PRE-fix retornaba None (gemini

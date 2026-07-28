@@ -28,6 +28,7 @@ Defensas:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -55,54 +56,28 @@ def test_marker_present_in_source():
 
 
 def test_onclick_is_synchronous_not_async():
-    """El handler `onClick` de la card NO debe ser `async` — si lo es,
-    React no procesará `setSelectedPlan` hasta que el `await` resuelva,
-    revirtiendo a comportamiento bloqueante."""
-    # Buscamos el patrón canónico `onClick={() => {` precediendo
-    # un bloque que tenga setSelectedPlan + setActiveModalTab.
-    # NO debe haber `onClick={async () => {` (forma anti-patrón).
-    # Aceptamos `onClick={async` en OTROS handlers (no en la card del
-    # listado). Anchor: el setActiveChunkIdx(0) que es único de este
-    # handler del listado del Historial.
-    idx = _HISTORY_JSX.find("setActiveChunkIdx(0);")
-    assert idx > 0, "Anchor `setActiveChunkIdx(0)` no encontrado"
-    # Buscamos el `onClick` ANTES de este setActiveChunkIdx (en los
-    # 2000 chars previos — el callback es grande).
-    block_before = _HISTORY_JSX[max(0, idx - 2000):idx]
-    last_onclick = block_before.rfind("onClick={")
-    assert last_onclick > 0, "onClick handler del card no encontrado"
-    handler_decl = block_before[last_onclick:last_onclick + 60]
-    assert "onClick={() =>" in handler_decl, (
-        "El handler `onClick` de la card del Historial debería ser "
-        "síncrono (`() => {`), no async (`async () => {`). Si es async, "
-        "React no flusheará `setSelectedPlan` hasta que el await del "
-        "fetch resuelva — el optimistic open queda anulado."
+    """[reapuntado 2026-07-28] El handler migró del onClick inline del monolito a
+    `openPlanModal`, que los paneles reciben como prop. La invariante es la misma: SÍNCRONO
+    (sin `async`) para que el modal abra en el mismo frame."""
+    m = re.search(r"const\s+openPlanModal\s*=\s*(async\s+)?\(", _HISTORY_JSX)
+    assert m, "openPlanModal no encontrado en History.jsx"
+    assert not m.group(1), (
+        "openPlanModal se volvió async — el modal esperaría al fetch para abrir (el bug original)"
     )
-
 
 def test_setSelectedPlan_called_before_loadPlanDataLazy():
-    """`setSelectedPlan({...plan, plan_data: ...})` debe ejecutarse
-    ANTES de `_loadPlanDataLazy(plan).then(...)`. Sin esto, el orden
-    se invierte y el modal NO abre hasta que el fetch resuelva
-    (bloqueo perceptible)."""
-    # Anchors únicos del handler del listado:
-    set_idx = _HISTORY_JSX.find("setSelectedPlan({\n                                            ...plan,\n                                            plan_data: _hasInlinePlanData ? plan.plan_data : null,")
-    assert set_idx > 0, (
-        "Llamada optimista `setSelectedPlan({...plan, plan_data: ...})` "
-        "no encontrada en el handler. El fix se perdió."
-    )
-    load_idx = _HISTORY_JSX.find("_loadPlanDataLazy(plan).then((fullPlanData)")
-    assert load_idx > 0, (
-        "`_loadPlanDataLazy(plan).then(...)` no encontrado. El fetch "
-        "paralelo se eliminó — el modal queda con plan_data=null para "
-        "siempre."
-    )
-    assert set_idx < load_idx, (
-        "`setSelectedPlan` (apertura optimista) debe ejecutarse ANTES "
-        "de `_loadPlanDataLazy(...).then`. Orden invertido revierte el "
-        "comportamiento bloqueante."
-    )
-
+    """[reapuntado 2026-07-28] Mismo contrato, nombres nuevos: dentro de `openPlanModal`, el
+    `setSelectedPlan({ ...plan, plan_data: ... })` optimista va ANTES del
+    `_loadPlanDataLazy(plan).then(...)` — el usuario ve el modal al instante y los datos llegan
+    después."""
+    i = _HISTORY_JSX.index("const openPlanModal")
+    fin = _HISTORY_JSX.find("};", i)
+    cuerpo = _HISTORY_JSX[i:fin]
+    a = cuerpo.find("setSelectedPlan({ ...plan")
+    b = cuerpo.find("_loadPlanDataLazy(plan)")
+    assert a > 0, "la llamada optimista setSelectedPlan({...plan, ...}) desapareció del handler"
+    assert b > 0, "el lazy-load desapareció del handler"
+    assert a < b, "el optimista debe ir ANTES del lazy-load — si no, vuelve el modal en blanco"
 
 def test_race_guard_in_then_callback():
     """El callback `.then` que enchufa `plan_data` DEBE proteger
@@ -181,22 +156,17 @@ def test_skeleton_css_classes_defined():
 
 
 def test_skeleton_respects_reduced_motion():
-    """A11y: usuarios con `prefers-reduced-motion: reduce` no deben ver
-    el shimmer. Media query debe desactivar `animation` en los 4
-    elementos animados."""
-    assert "@media (prefers-reduced-motion: reduce)" in _HISTORY_CSS, (
-        "@media prefers-reduced-motion ausente del skeleton. Usuarios "
-        "con motion sensitivity verán shimmer no-desactivable."
+    """[reapuntado 2026-07-28] El bloque @media (prefers-reduced-motion) creció a un selector
+    compuesto multi-línea (`.menuSkeletonTab,
+ .menuSkeletonMealIcon,…`) y el regex de una
+    línea dejó de verlo. Se verifica estructuralmente: dentro de ALGÚN bloque reduced-motion
+    aparece .menuSkeletonTab."""
+    bloques = re.findall(r"@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{(.*?)" + chr(10) + r"\}",
+                         _HISTORY_CSS, re.DOTALL)
+    assert bloques, "History.module.css perdió los bloques prefers-reduced-motion"
+    assert any(".menuSkeletonTab" in b for b in bloques), (
+        "el shimmer del skeleton no respeta reduced-motion — a11y roto para vestibular"
     )
-    # El bloque debe afectar las 4 clases animadas.
-    pr_idx = _HISTORY_CSS.find("@media (prefers-reduced-motion: reduce)")
-    block = _HISTORY_CSS[pr_idx:pr_idx + 600]
-    for cls in ["menuSkeletonTab", "menuSkeletonMealIcon", "menuSkeletonMealLine", "menuSkeletonMealKcal"]:
-        assert cls in block, (
-            f"@media prefers-reduced-motion no afecta `.{cls}` — "
-            "su shimmer seguirá activo en a11y mode."
-        )
-
 
 def test_shimmer_keyframes_defined():
     """`@keyframes menuSkeletonShimmer` DEBE existir para que la

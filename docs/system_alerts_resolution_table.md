@@ -83,3 +83,84 @@
 ## Cómo añadir un nuevo `alert_key`
 
 (1) decidir modelo de resolution; (2) añadir fila a la tabla de arriba con productor/resolver/modelo (el test `test_p2_audit_4_alert_keys_documented.py` falla en CI si emisor sin row o ghost row); (3) si Auto (explicit), añadir `UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key = '...' AND resolved_at IS NULL` al callsite que resuelve; (4) test de regresión idempotencia del resolver. SOPs detallados (alerts Manual + limpieza one-shot de huérfanas): runbook arriba.
+
+---
+
+> [P3-AUDIT-6 · copiado al repo 2026-07-28] Este SOP vivia en el runbook de memoria del
+> operador (~/.claude/projects/.../runbook_system_alerts_sops_2026_05_11.md) — fuera del repo
+> y atado a una maquina. Un SOP de incidente debe viajar con el codigo: doc-first.
+
+### SOP: resolver `plan_data_corrupted:<plan_id>:<field_name>`
+
+[P3-AUDIT-6 · 2026-05-10] El alert es `Manual` porque cada incidente requiere decisión humana entre rollback y hotfix. Si vuelves a ver este alert:
+
+1. **Extraer plan_id + field_name** del `alert_key` (formato `plan_data_corrupted:<plan_id>:<field_name>`). El `field_name` es una de las keys que `_check_plan_data_invariants` (cron_tasks.py) marca como corrupta (e.g., `days`, `aggregated_shopping_list`, `_chunk_lessons`, `_merged_chunk_ids`).
+
+2. **Leer plan_data del meal_plan afectado**:
+   ```sql
+   SELECT id, user_id, plan_data->'<field_name>' AS field_value, created_at, updated_at
+   FROM meal_plans
+   WHERE id = '<plan_id>'::uuid;
+   ```
+   Si la query falla en JSON-parse del field, ya tienes la confirmación de corrupción.
+
+3. **Backup defensivo** ANTES de cualquier mutación.
+
+   **Opción preferida — helper Python SSOT** [P2-DOC-1 · 2026-05-12]
+   ([`backend/db_meal_plans_audit.py`](backend/db_meal_plans_audit.py)):
+
+   ```python
+   from db_meal_plans_audit import record_meal_plan_audit_backup
+
+   audit_id = record_meal_plan_audit_backup(
+       meal_plan_id="<plan_id>",
+       action="corruption_repair",
+       actor="sre_manual",
+       note="Reparando <field_name> drift post-incidente <YYYY-MM-DD>",
+   )
+   assert audit_id, "Backup falló — abortar mutación"
+   ```
+
+   El helper valida UUID + action contra el CHECK constraint + snapshot
+   automático del `plan_data` + retorna el id BIGINT del row insertado.
+   Si retorna None, NO mutes el plan (algo falló — investigar logs WARN).
+
+   **Fallback manual** si no tienes Python shell con backend imports:
+
+   ```sql
+   INSERT INTO meal_plans_audit (meal_plan_id, plan_data_before, action, actor)
+   VALUES ('<plan_id>'::uuid,
+           (SELECT plan_data FROM meal_plans WHERE id = '<plan_id>'::uuid),
+           'corruption_repair', 'sre_manual');
+   -- Si la tabla audit no existe en tu deploy, exportar a archivo local:
+   --   psql ... -c "SELECT plan_data FROM meal_plans WHERE id = '<plan_id>'" > backup_<plan_id>.json
+   ```
+
+4. **Decidir rollback vs hotfix**:
+   - **Rollback** (preferido cuando es posible): si el campo tiene valor obvio por defecto (e.g., `_merged_chunk_ids = []`), o si `plan_chunk_queue.learning_metrics` permite reconstruir (caso `_chunk_lessons` — P1-1 reconstruye desde queue).
+   - **Hotfix**: si el campo no es reconstruible (e.g., `days[*].meals` corruptos requieren regen via `regenerate-simplified`).
+
+5. **Aplicar fix**:
+   ```sql
+   -- Rollback ejemplo (campo a default vacío):
+   UPDATE meal_plans
+   SET plan_data = jsonb_set(plan_data, '{<field_name>}', '[]'::jsonb),
+       updated_at = NOW()
+   WHERE id = '<plan_id>'::uuid;
+
+   -- Hotfix ejemplo (regen completo del plan via endpoint):
+   --   POST /api/plans/<plan_id>/regenerate-simplified
+   ```
+
+6. **Cerrar el alert** (manual porque el productor solo emite, no resuelve):
+   ```sql
+   UPDATE system_alerts
+   SET resolved_at = NOW()
+   WHERE alert_key = 'plan_data_corrupted:<plan_id>:<field_name>'
+     AND resolved_at IS NULL;
+   ```
+
+7. **Post-mortem** si los incidentes se repiten (>3 por semana sobre el mismo `field_name`): el bug está en el mutator, no en el dato. Investigar logs del nodo que escribe ese field (e.g., `_chunk_lessons` → `_record_chunk_lesson_telemetry`).
+
+---
+
