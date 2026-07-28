@@ -28715,12 +28715,22 @@ MEAL_DOUBLE_MAIN_RESOLVE_ENABLED = _env_bool("MEALFIT_MEAL_DOUBLE_MAIN_RESOLVE",
 _DM_FISH_TOKENS = ("pescado", "tilapia", "mero", "salmon", "bacalao", "chillo", "atun", "sardina")
 _DM_SPECIES_TOKENS = ("pollo", "pavo", "cerdo", "res", "carne", "camaron", "pulpo", "calamar",
                       "cangrejo", "langosta", "chivo", "conejo", "higado") + _DM_FISH_TOKENS
+# [P1-DM-SPECIES-BOUNDARY · 2026-07-28] "res" ⊂ "fResco" (cazado EN VIVO corr=6acd0c94:
+# 'Cilantro fresco para decorar' eliminado de dos platos de cerdo como "2ª principal res").
+# Frontera de palabra: "res" SOLO como palabra completa (res/reses — 'reservada' y
+# 'refrescante' quedan fuera); el resto matchea por stem con inicio de palabra
+# (camarones/pescados/atunes siguen entrando).
+import re as _re_dm
+_DM_TOKEN_RX = {
+    t: _re_dm.compile(r"\bres(?:es)?\b" if t == "res" else r"\b" + t)
+    for t in _DM_SPECIES_TOKENS
+}
 
 
 def _dm_species_of(text_sa: str) -> set:
     esp = set()
-    for t in _DM_SPECIES_TOKENS:
-        if t in text_sa:
+    for t, rx in _DM_TOKEN_RX.items():
+        if rx.search(text_sa):
             esp.add("pescado" if t in _DM_FISH_TOKENS else ("res" if t in ("res", "carne") else t))
     return esp
 
@@ -28788,6 +28798,12 @@ def _meal_double_main_resolve(days, db=None) -> int:
                         _mp = db.macros_from_ingredient_string(str(ings[idx_prim])) or {}
                         _ms = db.macros_from_ingredient_string(sec_line) or {}
                         _pp, _ps = float(_mp.get("protein") or 0), float(_ms.get("protein") or 0)
+                        # [P1-DM-SPECIES-BOUNDARY] Si la "2ª principal" resuelve macros y
+                        # su proteína es ínfima (<3 g), NO es una principal — es adorno o
+                        # condimento mal clasificado (el cilantro vivo resolvió ×1.00).
+                        # Guard semántico detrás del fix léxico de _DM_TOKEN_RX.
+                        if _ms and _ps < 3.0:
+                            continue
                         if _pp > 0 and _ps > 0:
                             _factor = min(2.0, (_pp + _ps) / _pp)
                     except Exception:
