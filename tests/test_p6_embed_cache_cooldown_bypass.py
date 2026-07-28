@@ -42,7 +42,7 @@ def _sample_master_list():
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache_state():
+def _reset_cache_state(monkeypatch):
     """Resetea state in-process antes y después de cada test.
 
     [2026-07-28 · 4ª especie de contaminación de orden] Además del memo y el cooldown,
@@ -50,7 +50,13 @@ def _reset_cache_state():
     (init de ~100s en background thread) lo dejó tomado, `acquire(timeout=0.05)`
     falla → get_semantic_cache devuelve None por el fast-path y TODO este archivo
     cae — solo en corrida completa, invisible para el reset de atributos. Lock
-    FRESCO por test."""
+    FRESCO por test.
+
+    [5ª especie · 2026-07-28] Y el estado CERO: dos archivos de canon hacen
+    `os.environ.setdefault("MEALFIT_DISABLE_SEMANTIC_CACHE", "1")` A NIVEL DE MÓDULO
+    (corre al IMPORTARSE en la colección) → el kill-switch queda puesto para todo el
+    proceso y `_semantic_cache_disabled()` corta ANTES de memo/lock/cooldown. delenv."""
+    monkeypatch.delenv("MEALFIT_DISABLE_SEMANTIC_CACHE", raising=False)
     import threading
     import shopping_calculator as sc
     sc._semantic_cache = None
