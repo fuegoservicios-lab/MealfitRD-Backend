@@ -236,6 +236,38 @@ _MEAL_VISION_PROMPT = (
     "Responde SOLO el JSON."
 )
 
+
+# [P1-MEAL-SCAN-DR-DISHES-RESTORE · 2026-07-28] Bridge Pydantic de
+# `_MEAL_VISION_SCHEMA` (el dict de arriba es el SSOT de la FORMA — lo
+# ancla `test_p1_chat_vision_gemma.py` — pero `with_structured_output` en
+# este módulo SIEMPRE recibe una clase Pydantic: `ImageDescription` ya usaba
+# ese mecanismo y quedó VERIFICADO contra la API real de gpt-5.6-luna
+# (P1-VISION-LUNA · 2026-07-28, doc vision_luna.md). Pasar `_MEAL_VISION_SCHEMA`
+# directo (dict crudo) a `with_structured_output` habría exigido un `title`
+# top-level que el dict no tiene — sin él, `convert_to_openai_function`
+# (langchain-core) lanza `ValueError` ANTES de llegar al API — y aun con
+# `title` agregado, caería a modo NO-estricto (`strict=False`), más frágil
+# que la ruta Pydantic ya probada en vivo. Reusar el mecanismo comprobado es
+# la opción de MENOR riesgo: cero transporte nuevo sin verificar.
+class _MealVisionItem(BaseModel):
+    name: str = Field(default="", description="Nombre genérico del alimento en español dominicano, sin marca.")
+    quantity: float = Field(default=1.0, description="Número de envases o piezas visibles — NUNCA el peso impreso en el empaque.")
+    unit: str = Field(default="unidad", description="unidad, lb, g, paquete, botella, lata, taza o funda.")
+
+
+class _MealVisionResult(BaseModel):
+    """Mirror Pydantic de `_MEAL_VISION_SCHEMA` — ver comentario arriba."""
+    photo_kind: str = Field(description="'plato' (comida servida), 'items' (alimentos sueltos/compra) u 'otro' (no es comida).")
+    is_food: bool = Field(description="¿Contiene esta imagen comida, ingredientes o una nevera/despensa?")
+    meal_name: str = Field(default="", description="Nombre corto del platillo en español dominicano. Vacío si no aplica.")
+    description: str = Field(default="", description="Inventario completo de componentes (modo plato) o resumen de la compra (modo items).")
+    calories: float = Field(default=0, description="Calorías totales estimadas de la porción visible. 0 si no aplica.")
+    protein: float = Field(default=0, description="Gramos de proteína totales estimados. 0 si no aplica.")
+    carbs: float = Field(default=0, description="Gramos de carbohidratos totales estimados. 0 si no aplica.")
+    healthy_fats: float = Field(default=0, description="Gramos de grasas saludables totales estimados. 0 si no aplica.")
+    items: list[_MealVisionItem] = Field(default_factory=list, description="Alimentos sueltos detectados — solo si photo_kind='items'.")
+
+
 # Clamps espejo de ConsumedMealRequest (routers/diary.py) — el registro final
 # los revalida, esto solo evita precargar absurdos en el modal.
 _MEAL_MACRO_CAPS = {"calories": 10000, "protein": 1000, "carbs": 2000, "healthy_fats": 1000}
@@ -413,7 +445,10 @@ async def _invoke_structured_vision(image_bytes: bytes, prompt: str, schema):
     del caller) y NO captura excepciones (el caller decide cómo degradar —
     el meal-scan las softea a `analysis_failed`; el escáner de Nevera las
     mapea a HTTP 502, igual que hacía con Ollama). Compartida entre
-    `_dispatch_openai_compatible_vision` (schema `ImageDescription`) y
+    `_dispatch_openai_compatible_vision` (schema `_MealVisionResult`,
+    restaurado en P1-MEAL-SCAN-DR-DISHES-RESTORE · 2026-07-28 — antes usaba
+    `ImageDescription`, que sigue definida arriba por compat de
+    `test_p2_diary_scan_macros.py` pero ya no tiene callers en producción) y
     `analyze_image_structured` (schema propio del caller)."""
     llm = _resolve_vision_client(schema)
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -480,6 +515,19 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
     acá: el gasto de un scan se emite aparte desde `routers/diary.py` vía
     `log_llm_usage_event` (P1-VISION-LUNA quota task, ya committeado), NUNCA
     desde el cliente LangChain mismo.
+
+    [P1-MEAL-SCAN-DR-DISHES-RESTORE · 2026-07-28] BUG cazado en vivo (owner,
+    scan real del día del switch a Luna): el nombre del plato volvió a salir
+    truncado/incompleto. Root cause: la migración a este dispatch cloud
+    (P0-DEEPSEEK-MIGRATION) trajo un prompt genérico inline + el schema
+    `ImageDescription` (cap "máx ~6 palabras" en `meal_name`) — EXACTAMENTE
+    el bug que `_MEAL_VISION_PROMPT` (P1-MEAL-SCAN-DR-DISHES · 2026-07-12)
+    ya había cerrado para el provider local, pero que nunca se recableó acá:
+    `_MEAL_VISION_PROMPT`/`_MEAL_VISION_SCHEMA`/`_coerce_meal_scan` quedaron
+    con CERO callers de producción. Fix: este dispatch ahora usa el prompt
+    afinado + `_MealVisionResult` (bridge Pydantic de `_MEAL_VISION_SCHEMA`)
+    + `_coerce_meal_scan` para normalizar — mismo pipeline que ya corría
+    contra gemma local.
     """
     try:
         # [P1-VISION-NO-LOCAL · 2026-07-28] Cliente + invoke delegados a
@@ -487,42 +535,19 @@ async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
         # `_resolve_vision_client`, mismo criterio de despacho por MODELO
         # documentado arriba). El texto del prompt y el parseo de la
         # respuesta se quedan acá — son propios del meal-scan.
+        #
+        # [P1-MEAL-SCAN-DR-DISHES-RESTORE · 2026-07-28] `_MEAL_VISION_PROMPT`
+        # (no un prompt genérico inline) + `_MealVisionResult` (bridge
+        # Pydantic de `_MEAL_VISION_SCHEMA`, ver comentario en su definición)
+        # — mismo par prompt/schema que `_coerce_meal_scan` fue escrito para
+        # normalizar.
         response = await _invoke_structured_vision(
             image_bytes,
-            "Describe detalladamente todos los alimentos, ingredientes o platillos que ves en esta imagen. Si es una nevera, lista el contenido visible. Si no hay comida, indícalo. Da también un nombre corto del platillo en español dominicano (`meal_name`, máx ~6 palabras). También proporciona una estimación de las calorías, gramos de proteína, gramos de carbohidratos y gramos de grasas saludables (solo el número) totales en la imagen (usa 0 si no es comida).",
-            ImageDescription,
+            _MEAL_VISION_PROMPT,
+            _MealVisionResult,
         )
-
-        description = response.description if response and hasattr(response, 'description') else "Imagen sin descripción clara."
-        is_food = response.is_food if response and hasattr(response, 'is_food') else False
-
-        # [P2-DIARY-SCAN-MACROS · 2026-05-30] Las macros se computaban pero solo
-        # se retornaba `calories` — el modal "Escanear comida" necesita las 4
-        # macros + el nombre corto. Defaults a 0/"" si no es comida (la API
-        # nunca devuelve None para estos campos → frontend no se rompe).
-        calories = 0
-        protein = 0
-        carbs = 0
-        healthy_fats = 0
-        meal_name = ""
-
-        if is_food:
-            calories = response.calories if hasattr(response, 'calories') else 0
-            protein = response.protein if hasattr(response, 'protein') else 0
-            carbs = response.carbs if hasattr(response, 'carbs') else 0
-            healthy_fats = response.healthy_fats if hasattr(response, 'healthy_fats') else 0
-            meal_name = (response.meal_name if hasattr(response, 'meal_name') else "") or ""
-            if calories > 0 or protein > 0:
-                description += f" (Estimación: Calorías: {calories}, Proteína: {protein}g, Carbohidratos: {carbs}g, Grasas Saludables: {healthy_fats}g)"
-        return {
-            "description": description,
-            "is_food": is_food,
-            "meal_name": meal_name,
-            "calories": calories,
-            "protein": protein,
-            "carbs": carbs,
-            "healthy_fats": healthy_fats,
-        }
+        data = response.model_dump() if response else {}
+        return _coerce_meal_scan(data)
 
     except Exception as e:
         # [P3-VISION-FAIL-ERROR-LOG · 2026-05-30] error-level (NO warning) para
