@@ -2541,6 +2541,7 @@ def fetch_brand_default_packages() -> dict:
         logging.warning(f"⚠️ [P1-BRAND-LIST-VISIBILITY] fetch defaults falló (fail-open): {exc}")
         return {}
     out: dict = {}
+    _canned_keys: dict = {}
     for r in rows:
         pkg = _pkg_from_product_row(r)
         if pkg is None:
@@ -2551,8 +2552,32 @@ def fetch_brand_default_packages() -> dict:
             continue
         key = _norm_pref_food(r.get("food_name"))
         if key:
+            # [P1-FRESH-OVER-CANNED-DEFAULT] la forma se detecta en la PRESENTATION cruda
+            # (el label compuesto la recorta: "Lata Entero 185 gr" → "Entero 185 gr").
+            # `_shelf` = CUALQUIER envase de estantería (lata/frasco/pote/tetra): solo si
+            # existe una forma SIN envase de estantería (bandeja/paquete fresco) el alimento
+            # califica como "fresco disponible" — sin esto, el FRASCO de atún Tonnino
+            # contaba como fresco y filtraba todas las latas baratas (98→469 RD$, cazado
+            # en la verificación).
+            _pres = str(r.get("presentation") or "").lower()
+            pkg["_canned"] = ("lata" in _pres) or ("enlatad" in _pres)
+            pkg["_shelf"] = any(w in _pres for w in ("lata", "frasco", "pote", "tetra",
+                                                     "enlatad", "conserva"))
             out.setdefault(key, []).append(pkg)
     for key, pkgs in out.items():
+        # [P1-FRESH-OVER-CANNED-DEFAULT · 2026-07-28] "Champiñones frescos en láminas" en la
+        # receta pero la lista compraba "Lata Trozos y Tallos · Roland" (caso vivo, plan
+        # ab2b0a16): el selector es costo-óptimo TOTAL (ordenar no le manda) y elegía lata
+        # sobre la bandeja FRESCA por RD$0.02/g. Cuando un alimento tiene formas MIXTAS
+        # (fresca y lata), la lata SALE del set default — honestidad de forma sobre
+        # centavos. La elección MANUAL del usuario va por product_id directo y sigue
+        # ganando (puede elegir la lata). Alimentos solo-lata (atún, calamar) idénticos.
+        _has_truly_fresh = any(not p.get("_shelf") for p in pkgs)
+        if _has_truly_fresh:
+            pkgs[:] = [p for p in pkgs if not p.get("_canned")]
+        for p in pkgs:
+            p.pop("_canned", None)
+            p.pop("_shelf", None)
         pkgs.sort(key=lambda p: (p["price"], p["grams"]))
         del pkgs[_BRAND_DEFAULTS_MAX_PER_FOOD:]
     _brand_defaults_cache["data"] = out

@@ -15556,11 +15556,17 @@ def _meal_has_conflicting_carb_base(meal: dict, strip_accents_fn) -> bool:
 
 def _meal_is_baked(meal: dict, strip_accents_fn) -> bool:
     """[P1-CLOSER-BAKED-ASIDE · 2026-07-27] ¿El plato se HORNEA? (bollitos, papas rellenas,
-    pimientos). Mira nombre + pasos. Pura, fail-open a False = comportamiento previo."""
+    pimientos). Mira nombre + pasos. Pura, fail-open a False = comportamiento previo.
+
+    [P1-TOASTED-ASIDE-TOO · 2026-07-28] +tostadas: "Incorpora yogurt a la preparación y
+    mézclalo" sobre unas TOSTADAS (caso vivo, desayuno martes plan ab2b0a16) empapa el pan —
+    misma física que el horneado: ensamblaje seco donde el lácteo frío va AL LADO, no
+    mezclado. Se añaden los hints de tostado al mismo detector (el wording aside ya existe)."""
     try:
         _blob = strip_accents_fn((str(meal.get("name", "")) + " | " + " ".join(
             str(s) for s in (meal.get("recipe") or []) if isinstance(s, str))).lower())
-        return ("horno" in _blob) or ("hornea" in _blob) or ("horneal" in _blob)
+        return ("horno" in _blob) or ("hornea" in _blob) or ("horneal" in _blob) \
+            or ("tostada" in _blob) or ("tuesta" in _blob) or ("tostad" in _blob)
     except Exception:
         return False
 
@@ -22642,6 +22648,16 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
                 total += _nrf; parts.append(f"recipe_fill={_nrf}")
     except Exception as _e4:
         logger.warning(f"[P1-COHERENCE-FINALIZE] recipe-nonempty no-op: {type(_e4).__name__}: {_e4}")
+    # [P1-MEAL-DOUBLE-MAIN-RESOLVE · 2026-07-28] Dos proteínas animales principales en un plato
+    # (day-gen) → fuera la secundaria + primaria re-escalada. ANTES del ensure de abajo para que
+    # el paso genérico del huérfano nunca nazca.
+    try:
+        _n_dm = _meal_double_main_resolve(days, db=db)
+        if _n_dm:
+            total += _n_dm
+            parts.append(f"double_main={_n_dm}")
+    except Exception as _e_dm:
+        logger.warning(f"[P1-MEAL-DOUBLE-MAIN-RESOLVE] no-op: {type(_e_dm).__name__}: {_e_dm}")
     # [P2-PERSIST-BOUNDARY-COHERENCE · 2026-07-01] (audit recetas P2-4) El persist boundary omitía la
     # coherencia INVERSA (ingrediente listado sin paso de uso) y el strip de condimentos off-catálogo →
     # un plan degradado/partial/SSE-fallback podía persistir "añade la salsa de soya" (borrada de la lista)
@@ -22816,6 +22832,33 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_cv:
             total += _n_cv
             parts.append(f"ceviche_dairy={_n_cv}")
+    except Exception:
+        pass
+    # [P1-EGG-COUNT-STEP-SYNC · 2026-07-28] "1 huevo" listado pero los pasos usan "el otro
+    # huevo" → 2 huevos (el truth-up de abajo re-mide macros).
+    try:
+        _n_eg = _egg_count_step_sync(days)
+        if _n_eg:
+            total += _n_eg
+            parts.append(f"egg_count_sync={_n_eg}")
+    except Exception:
+        pass
+    # [P1-GROUND-MEAT-STEP-NOUN · 2026-07-28] pasos con "pechuga de X" cuando el ingrediente
+    # es "X molido" → forma molida (display-only).
+    try:
+        _n_gm = _ground_meat_step_noun_sync(days)
+        if _n_gm:
+            total += _n_gm
+            parts.append(f"ground_noun_sync={_n_gm}")
+    except Exception:
+        pass
+    # [P1-BIGFRUIT-COUNT-FRACTION · 2026-07-28] "1 lechosa mediana (202 g)" → "¼ de lechosa
+    # mediana (202 g)" (la entera pesa ~700 g; display-only, el hint ya manda en macros).
+    try:
+        _n_bf = _bigfruit_count_fraction_honesty(days)
+        if _n_bf:
+            total += _n_bf
+            parts.append(f"bigfruit_fraction={_n_bf}")
     except Exception:
         pass
     # [P2-RICE-WATER-RATIO · 2026-07-24] agua del arroz fuera de proporción (8:1 en vivo).
@@ -27054,6 +27097,27 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     touched += 1
                                     _meal_touched = True
                         continue
+                    # [P1-CHEESE-DUST-BUMP · 2026-07-28] "0.82 g de queso Gouda rallado"
+                    # (caso vivo, plan ab2b0a16 desayuno jueves): la exención 'rallado' deja
+                    # pasar POLVO de queso — bajo 5g no es garnish, es artefacto del solver
+                    # (factor compuesto sin piso). Bump al piso servible ANTES de la exención;
+                    # el paso que menciona el queso queda coherente y la banda re-mide el delta.
+                    if "queso" in il:
+                        m_qd = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
+                        if m_qd and 0 < float(m_qd.group(1).replace(",", ".")) < 5.0:
+                            _q_cur = float(m_qd.group(1).replace(",", "."))
+                            _qf = floor_g / _q_cur
+                            _new_q = _resc(s, _qf)
+                            if _new_q != s:
+                                ings[idx] = _new_q
+                                if _lockstep and isinstance(raw[idx], str):
+                                    try:
+                                        raw[idx] = _resc(str(raw[idx]), _qf)
+                                    except Exception:
+                                        pass
+                                touched += 1
+                                _meal_touched = True
+                            continue
                     if any(tok in il for tok in _SHRINK_FLOOR_EXEMPT_TOKENS):
                         continue
                     m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
@@ -28328,6 +28392,282 @@ _CEVICHE_FEM_HEADS = ("leche", "mozzarella", "ricotta", "crema", "mantequilla", 
 _CEVICHE_MARINADE_HINT_RX = _re_cv.compile(r"marinad|c[ií]tric|lim[oó]n", _re_cv.IGNORECASE)
 
 
+_BIGFRUIT_UNIT_G = {"lechosa": 700, "papaya": 700, "melon": 1800, "sandia": 4000,
+                    "patilla": 4000, "pina": 1500}
+_BIGFRUIT_COUNT_LEAD_RX = _re_cv.compile(
+    r"^(\s*)1\s+(lechosa|papaya|mel[oó]n|sand[ií]a|patilla|pi[ñn]a)(\s+median[oa]|\s+grande|\s+peque[ñn][oa])?\b")
+_BIGFRUIT_HINT_RX = _re_cv.compile(r"\(\s*(\d+(?:[.,]\d+)?)\s*g\s*\)")
+
+
+def _bigfruit_count_fraction_honesty(days) -> int:
+    """[P1-BIGFRUIT-COUNT-FRACTION · 2026-07-28] "1 lechosa mediana (202 g)" (caso vivo,
+    merienda martes plan ab2b0a16): el catálogo sabe que la lechosa entera pesa ~700 g —
+    el conteo "1 mediana" vende 3.5× lo que el plato usa. Los MACROS ya van bien (el hint
+    de gramos gana en el parser, P1-RESOLVE-PAREN-GRAMS); esto es honestidad de display:
+    si el hint es <60% del peso por-unidad, el lead "1 <fruta>" se reescribe a la fracción
+    de cocina más cercana ("¼ de lechosa mediana (202 g)"). Display-only, fail-open.
+    tooltip-anchor: P1-BIGFRUIT-COUNT-FRACTION
+    """
+    if not isinstance(days, list):
+        return 0
+    from constants import strip_accents as _sa_bf
+    _fracs = ((0.25, "¼"), (1/3, "⅓"), (0.5, "½"), (2/3, "⅔"), (0.75, "¾"))
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                ings = meal.get("ingredients") if isinstance(meal, dict) else None
+                if not isinstance(ings, list):
+                    continue
+                for idx, s in enumerate(ings):
+                    if not isinstance(s, str):
+                        continue
+                    m = _BIGFRUIT_COUNT_LEAD_RX.match(s)
+                    if not m:
+                        continue
+                    mh = _BIGFRUIT_HINT_RX.search(s)
+                    if not mh:
+                        continue
+                    hint_g = float(mh.group(1).replace(",", "."))
+                    unit_g = _BIGFRUIT_UNIT_G.get(_sa_bf(m.group(2).lower()))
+                    if not unit_g or hint_g <= 0 or (hint_g / unit_g) >= 0.60:
+                        continue
+                    ratio = hint_g / unit_g
+                    frac = min(_fracs, key=lambda fv: abs(fv[0] - ratio))[1]
+                    ings[idx] = _BIGFRUIT_COUNT_LEAD_RX.sub(
+                        rf"\g<1>{frac} de \g<2>\g<3>", s, count=1)
+                    fixed += 1
+            except Exception:
+                continue
+    return fixed
+
+
+def _ground_meat_step_noun_sync(days) -> int:
+    """[P1-GROUND-MEAT-STEP-NOUN · 2026-07-28] Ingredientes dicen "pollo MOLIDO" pero los
+    pasos hablan de "PECHUGA de pollo" ×3 (caso vivo, plan ab2b0a16 cena miércoles: el swap
+    cambió el sustantivo en un lado y no en el otro — la clase del 'yogur cocido'). Cuando
+    la especie está en forma MOLIDA en ingredientes y NINGUNA línea trae pechuga/filete de
+    esa especie, los pasos que digan "pechuga de <especie>" se reescriben a "el <especie>
+    molido". Display-only (cero macros). Fail-open por comida.
+    tooltip-anchor: P1-GROUND-MEAT-STEP-NOUN
+    """
+    if not isinstance(days, list):
+        return 0
+    from constants import strip_accents as _sa_gm
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                ings_sa = _sa_gm(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
+                rec = meal.get("recipe")
+                if not isinstance(rec, list):
+                    continue
+                _tocado = False
+                for _esp in ("pollo", "pavo", "res", "cerdo"):
+                    if f"{_esp} molido" not in ings_sa and f"{_esp} molida" not in ings_sa:
+                        continue
+                    if f"pechuga de {_esp}" in ings_sa or f"filete de {_esp}" in ings_sa:
+                        continue
+                    _rx = _re_cv.compile(rf"(?:la\s+|el\s+)?[Pp]echuga\s+de\s+{_esp}\b")
+                    for j, p in enumerate(rec):
+                        if isinstance(p, str) and _rx.search(p):
+                            rec[j] = _rx.sub(f"el {_esp} molido", p)
+                            _tocado = True
+                if _tocado:
+                    fixed += 1
+                    logger.info(f"🔤 [P1-GROUND-MEAT-STEP-NOUN] '{str(meal.get('name'))[:40]}': "
+                                f"pasos re-sincronizados a la forma molida del ingrediente.")
+            except Exception:
+                continue
+    return fixed
+
+
+_EGG_OTRO_RX = _re_cv.compile(r"\botro\s+huevo\b", _re_cv.IGNORECASE)
+_EGG_ONE_LINE_RX = _re_cv.compile(r"^(\s*)1\s+huevo(\s+entero)?\b")
+
+
+MEAL_DOUBLE_MAIN_RESOLVE_ENABLED = _env_bool("MEALFIT_MEAL_DOUBLE_MAIN_RESOLVE", True)
+# Familias colapsadas: cualquier pez = 'pescado'; res/carne = 'res'. El resto, su token.
+_DM_FISH_TOKENS = ("pescado", "tilapia", "mero", "salmon", "bacalao", "chillo", "atun", "sardina")
+_DM_SPECIES_TOKENS = ("pollo", "pavo", "cerdo", "res", "carne", "camaron", "pulpo", "calamar",
+                      "cangrejo", "langosta", "chivo", "conejo", "higado") + _DM_FISH_TOKENS
+
+
+def _dm_species_of(text_sa: str) -> set:
+    esp = set()
+    for t in _DM_SPECIES_TOKENS:
+        if t in text_sa:
+            esp.add("pescado" if t in _DM_FISH_TOKENS else ("res" if t in ("res", "carne") else t))
+    return esp
+
+
+def _meal_double_main_resolve(days, db=None) -> int:
+    """[P1-MEAL-DOUBLE-MAIN-RESOLVE · 2026-07-28] "Ropa Vieja de PAVO … ½ filete de PESCADO …
+    sírvelo como proteína del plato" (caso vivo, plan ab2b0a16 almuerzo martes): el day-gen
+    metió DOS proteínas animales principales en un plato (skeleton compliance + plato propio),
+    el closer no fue (su guard no-double-main solo acota lo que ÉL pega) y reverse-coherence
+    le fabricó un paso genérico al huérfano. Resolución determinista, corre ANTES del ensure:
+      · primaria = la especie presente en el NOMBRE del plato (exactamente una);
+      · secundaria = línea de OTRA especie animal, sin mención en nombre;
+      · se REMUEVE la secundaria; si ambas resuelven macros via db, la primaria se re-escala
+        proteína-conservada (el truth-up/banda re-miden); si no resuelven, remove-only y la
+        cadena de banda compensa;
+      · se dropean pasos bolt que la mencionan ("como proteína del plato").
+    Lácteos/huevo/legumbres NO cuentan (extensores legítimos — mismo contrato que el closer).
+    Knob MEALFIT_MEAL_DOUBLE_MAIN_RESOLVE. Fail-open por comida.
+    tooltip-anchor: P1-MEAL-DOUBLE-MAIN-RESOLVE
+    """
+    if not (MEAL_DOUBLE_MAIN_RESOLVE_ENABLED and isinstance(days, list)):
+        return 0
+    from constants import strip_accents as _sa_dm
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc_dm
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+    except Exception:
+        db = None
+        _resc_dm = None
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                nm_sa = _sa_dm(str(meal.get("name", "")).lower())
+                especies_nombre = _dm_species_of(nm_sa)
+                if len(especies_nombre) != 1:
+                    continue
+                primaria = next(iter(especies_nombre))
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list) or len(ings) < 2:
+                    continue
+                raw = meal.get("ingredients_raw")
+                _lockstep = isinstance(raw, list) and len(raw) == len(ings)
+                idx_prim, idx_sec, especie_sec = None, None, None
+                for i, s in enumerate(ings):
+                    if not isinstance(s, str):
+                        continue
+                    esp = _dm_species_of(_sa_dm(s.lower()))
+                    if primaria in esp:
+                        if idx_prim is None:
+                            idx_prim = i
+                    elif esp:
+                        idx_sec, especie_sec = i, next(iter(esp))
+                if idx_prim is None or idx_sec is None:
+                    continue
+                sec_line = str(ings[idx_sec])
+                # Recuperación proteína-conservada (best-effort).
+                _factor = None
+                if db is not None:
+                    try:
+                        _mp = db.macros_from_ingredient_string(str(ings[idx_prim])) or {}
+                        _ms = db.macros_from_ingredient_string(sec_line) or {}
+                        _pp, _ps = float(_mp.get("protein") or 0), float(_ms.get("protein") or 0)
+                        if _pp > 0 and _ps > 0:
+                            _factor = min(2.0, (_pp + _ps) / _pp)
+                    except Exception:
+                        _factor = None
+                del ings[idx_sec]
+                if _lockstep:
+                    try:
+                        del raw[idx_sec]
+                    except Exception:
+                        pass
+                if _factor and _factor > 1.02 and _resc_dm is not None:
+                    _ip = idx_prim if idx_prim < idx_sec else idx_prim - 1
+
+                    def _round_lead(_s: str) -> str:
+                        return _re_cv.sub(
+                            r"^(\s*)(\d+(?:[.,]\d+)?)(\s*(?:g|gr|gramos)\b)",
+                            lambda mm: f"{mm.group(1)}{round(float(mm.group(2).replace(',', '.')))}{mm.group(3)}",
+                            _s, count=1)
+                    try:
+                        ings[_ip] = _round_lead(_resc_dm(str(ings[_ip]), _factor))
+                        if isinstance(meal.get("ingredients_raw"), list) and _ip < len(meal["ingredients_raw"]):
+                            meal["ingredients_raw"][_ip] = _round_lead(
+                                _resc_dm(str(meal["ingredients_raw"][_ip]), _factor))
+                    except Exception:
+                        pass
+                rec = meal.get("recipe")
+                if isinstance(rec, list):
+                    # Cirugía por ORACIÓN: el bolt vive DENTRO del TdF real ("…cocina el pavo.
+                    # Cocina Filete… como proteína del plato.") — borrar el paso entero se lleva
+                    # la receta legítima. Se dropea solo la oración del bolt.
+                    _sec_tok = especie_sec
+                    _new_rec = []
+                    for p in rec:
+                        if not isinstance(p, str):
+                            _new_rec.append(p)
+                            continue
+                        _pl = _sa_dm(p.lower())
+                        if _sec_tok in _pl and "como proteina del plato" in _pl:
+                            _oraciones = _re_cv.split(r"(?<=[.!?])\s+", p)
+                            _keep = [o for o in _oraciones if not (
+                                _sec_tok in _sa_dm(o.lower())
+                                and "como proteina del plato" in _sa_dm(o.lower()))]
+                            _nuevo_paso = " ".join(_keep).strip()
+                            if _nuevo_paso:
+                                _new_rec.append(_nuevo_paso)
+                        else:
+                            _new_rec.append(p)
+                    meal["recipe"] = _new_rec
+                fixed += 1
+                logger.info(f"🍽️ [P1-MEAL-DOUBLE-MAIN-RESOLVE] '{str(meal.get('name'))[:44]}': "
+                            f"fuera '{sec_line[:36]}' (2ª principal {especie_sec}; primaria {primaria}"
+                            f"{f' ×{_factor:.2f}' if _factor else ''}).")
+            except Exception:
+                continue
+    return fixed
+
+
+def _egg_count_step_sync(days) -> int:
+    """[P1-EGG-COUNT-STEP-SYNC · 2026-07-28] "1 huevo" en ingredientes pero los pasos baten
+    uno en la masa y luego "bate EL OTRO huevo" (caso vivo, plan ab2b0a16, Tortitas martes):
+    la receta usa DOS y la lista miente. Cuando algún paso menciona "otro huevo" y hay
+    EXACTAMENTE una línea de huevo con lead 1, se corrige a "2 huevos" (con lockstep raw);
+    el truth-up de finalize re-mide macros aguas abajo. Fail-open por comida.
+    tooltip-anchor: P1-EGG-COUNT-STEP-SYNC
+    """
+    if not isinstance(days, list):
+        return 0
+    fixed = 0
+    for day in days:
+        for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                rec = meal.get("recipe")
+                if not (isinstance(rec, list) and any(
+                        isinstance(p, str) and _EGG_OTRO_RX.search(p) for p in rec)):
+                    continue
+                ings = meal.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                _egg_idx = [i for i, s in enumerate(ings)
+                            if isinstance(s, str) and "huevo" in s.lower()]
+                if len(_egg_idx) != 1:
+                    continue
+                i0 = _egg_idx[0]
+                m = _EGG_ONE_LINE_RX.match(str(ings[i0]))
+                if not m:
+                    continue
+                _suf = " enteros" if m.group(2) else ""
+                nuevo = _EGG_ONE_LINE_RX.sub(rf"\g<1>2 huevos{_suf}", str(ings[i0]), count=1)
+                ings[i0] = nuevo
+                raw = meal.get("ingredients_raw")
+                if isinstance(raw, list) and i0 < len(raw) and isinstance(raw[i0], str):
+                    raw[i0] = _EGG_ONE_LINE_RX.sub(rf"\g<1>2 huevos{_suf}", raw[i0], count=1)
+                fixed += 1
+                logger.info(f"🥚 [P1-EGG-COUNT-STEP-SYNC] '{meal.get('name', '')[:40]}': "
+                            f"1 huevo → 2 huevos (los pasos usan 'el otro huevo').")
+            except Exception:
+                continue
+    return fixed
+
+
 def _ceviche_dairy_rename_pass(days) -> int:
     """[P1-CEVICHE-DAIRY-RENAME · 2026-07-28] "Ceviche de Queso Gouda Marinado en
     Cítricos" (caso vivo, plan ab2b0a16): el ceviche CURA pescado crudo en cítrico;
@@ -28688,7 +29028,21 @@ def _polish_recipe_step_decimals(days) -> int:
                 if not isinstance(rec, list):
                     continue
                 for i, s in enumerate(rec):
-                    if not isinstance(s, str) or "." not in s and "," not in s:
+                    if not isinstance(s, str):
+                        continue
+                    # [P1-STEP-MANGLED-FRACTION · 2026-07-28] "añade 2–⅓ taza de agua" (caso
+                    # vivo, cena jueves plan ab2b0a16): el "2/3" del LLM llegó como dígito +
+                    # guion + fracción unicode. Solo los pares cuya lectura es N/denominador
+                    # (2–⅓→⅔, 3–¼→¾, 2–¼→½); un mixto legítimo se escribe "2⅓" sin guion.
+                    if "–" in s or "-" in s:
+                        _new_s = s.replace("2–⅓", "⅔").replace("2-⅓", "⅔") \
+                                  .replace("3–¼", "¾").replace("3-¼", "¾") \
+                                  .replace("2–¼", "½").replace("2-¼", "½")
+                        if _new_s != s:
+                            rec[i] = _new_s
+                            s = _new_s
+                            changed += 1
+                    if "." not in s and "," not in s:
                         continue
 
                     def _sub(m):

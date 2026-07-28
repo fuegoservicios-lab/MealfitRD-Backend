@@ -513,6 +513,11 @@ _DISPLAY_PLURAL.update({
     "clara": "claras", "sardina": "sardinas", "arepita": "arepitas", "mandarina": "mandarinas",
     # [P1-VEG-GHOST-RAW-SYNC · 2026-07-06] (review #9: "8½ aceitunas verde") + contables vistos.
     "aceituna": "aceitunas", "casabe": "casabes", "molondron": "molondrones",
+    # [P1-GRAMMAR-GAPS-2 · 2026-07-28] (revisión visual plan ab2b0a16: "1 toronjas mediano",
+    # "1-2 nísperos fresco", "2½ guineítos verde") — ESTE bloque alimenta el inverso
+    # _GRAMMAR_PLURAL_TO_SING; el update de _DISPLAY_SINGULAR de abajo NO (orden del módulo).
+    "toronja": "toronjas", "nispero": "nisperos", "níspero": "nísperos",
+    "guineito": "guineitos", "guineíto": "guineítos",
     # [P2-ORGAN-MEAT-CAP · 2026-07-06] "2½ puerro mediano" (review #10).
     "puerro": "puerros",
     # [P2-STEM-FILLER-TOKENS · 2026-07-06] review #11: "½ guayabas fresco", "1 filetes de pescado".
@@ -532,6 +537,11 @@ _DISPLAY_PLURAL.update({
 _DISPLAY_SINGULAR.update({
     "ciruelas": "ciruela", "uvas": "uva", "duraznos": "durazno", "mandarinas": "mandarina",
     "chinolas": "chinola", "melocotones": "melocoton", "higos": "higo",
+    # [P1-GRAMMAR-GAPS-2 · 2026-07-28] 2ª tanda de la misma clase (revisión visual plan
+    # ab2b0a16): "1 toronjas mediano" y "1-2 nísperos fresco" no concordaban porque el
+    # sustantivo no estaba en el mapa. +guineítos (diminutivo frecuente del day-gen).
+    "toronjas": "toronja", "nisperos": "nispero", "nísperos": "níspero",
+    "guineitos": "guineito", "guineítos": "guineíto",
 })
 
 # [P3-DISPLAY-GRAMMAR · 2026-07-05] Concordancia número/género de leads con FRACCIÓN/mixto
@@ -542,7 +552,7 @@ _DISPLAY_SINGULAR.update({
 # adjetivo desconocido en -o/-a adyacente → el sustantivo NO se toca (jamás crear un mismatch).
 _GRAMMAR_FRAC_MAP = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1.0 / 3.0, "⅔": 2.0 / 3.0}
 _GRAMMAR_LEAD_RE = re.compile(
-    r"^\s*(?P<lead>\d+(?:[.,]\d+)?\s?[½¼¾⅓⅔]?|[½¼¾⅓⅔])\s+"
+    r"^\s*(?P<lead>\d+(?:[.,]\d+)?\s?[½¼¾⅓⅔]?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?|[½¼¾⅓⅔])\s+"
     r"(?P<word>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*)(?P<rest>.*)$")
 # [review #12] + unidades de peso/volumen: "20 g de Maní fileteadas" necesitaba la
 # rama de unidad para concordar el alimento tras "de".
@@ -564,6 +574,10 @@ def _grammar_lead_value(lead: str):
     lead = str(lead).strip()
     if lead in _GRAMMAR_FRAC_MAP:
         return _GRAMMAR_FRAC_MAP[lead]
+    # [P1-GRAMMAR-GAPS-2] rango "1-2": el valor que concuerda es el MAYOR ("1-2 nísperos").
+    m_rng = re.match(r"^(\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)$", lead)
+    if m_rng:
+        return float(m_rng.group(2).replace(",", "."))
     m = re.match(r"^(\d+(?:[.,]\d+)?)\s?([½¼¾⅓⅔])?$", lead)
     if not m:
         return None
@@ -777,7 +791,7 @@ def _prettify_quantity_display(s: str) -> str:
                 lambda mm: f"1 {mm.group(1).lower()} de ", s0, count=1)
         # [P3-RECIPE-POLISH-4 · 2026-07-06] "½ de cebolla" → "½ cebolla" (el 'de' sobra ante un
         # contable conocido; "¼ de taza" — partitivo legítimo — queda intacto por el lookahead).
-        s0 = re.sub(r"^(\s*[½¼¾⅓⅔])\s+de\s+(?=(?:cebolla|tomate|huevo|papa|zanahoria|"
+        s0 = re.sub(r"^(\s*\d*[½¼¾⅓⅔])\s+de\s+(?=(?:cebolla|tomate|huevo|papa|zanahoria|"
                     r"lim[oó]n|guineo|manzana|aguacate|lechosa|batata|mandarina|pepino|"
                     r"aj[ií]|pl[aá]tano)s?\b)", r"\1 ", s0)
         # [P3-DISPLAY-GRAMMAR · 2026-07-05] concordancia número/género de leads fraccionarios
