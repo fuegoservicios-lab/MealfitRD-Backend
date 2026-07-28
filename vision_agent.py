@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from db import save_visual_entry
+from image_prep import prepare_image_for_vision  # [P1-VISION-LUNA · 2026-07-28]
 import logging
 
 logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
@@ -72,6 +73,39 @@ def _vision_provider() -> str:
             _VISION_PROVIDER_OLLAMA,
         },
     )
+
+
+# [P1-VISION-LUNA · 2026-07-28] Cascada de fallback: si el provider primario
+# falla o devuelve un resultado no usable, reintentar UNA sola vez con este
+# provider (si está configurado y difiere del primario). Default vacío = sin
+# cascada. Mismo choices-set que `_vision_provider` vía `_env_str`: un valor
+# DESCONOCIDO cae al default "" con WARNING (nunca revienta). `disabled`/
+# `off` son choices mecánicamente válidos (no generan warning de knob), pero
+# `_vision_cascade_target` los trata como "sin cascada" — no tiene sentido
+# reintentar contra un provider apagado.
+def _vision_fallback_provider() -> str:
+    return _env_str(
+        "MEALFIT_VISION_FALLBACK_PROVIDER",
+        "",
+        choices={
+            _VISION_PROVIDER_DISABLED,
+            _VISION_PROVIDER_OFF,
+            _VISION_PROVIDER_OPENAI_COMPATIBLE,
+            _VISION_PROVIDER_OLLAMA,
+        },
+    )
+
+
+def _vision_cascade_target(primary: str) -> str | None:
+    """Provider de fallback a usar para ESTE intento, o `None` si no hay
+    cascada: knob vacío, fallback apagado (`disabled`/`off`), o fallback
+    igual al primario (evita el loop primario→sí-mismo)."""
+    fallback = _vision_fallback_provider()
+    if not fallback or fallback in (_VISION_PROVIDER_DISABLED, _VISION_PROVIDER_OFF):
+        return None
+    if fallback == primary:
+        return None
+    return fallback
 
 
 def _vision_model_name() -> str:
@@ -420,55 +454,48 @@ def _ollama_meal_scan(image_b64: str) -> dict:
     return _coerce_meal_scan(_json.loads(content))
 
 
-async def process_image_with_vision(image_bytes: bytes) -> dict:
-    """
-    Toma los bytes de una imagen, usa el provider de visión configurado para
-    extraer una descripción y determina si contiene alimentos usando
-    structured output. Con `MEALFIT_VISION_PROVIDER=disabled` retorna el
-    payload `analysis_failed` sin tocar ningún API.
-    """
-    global _warned_vision_disabled
-    if not is_vision_enabled():
-        if not _warned_vision_disabled:
-            logger.warning(
-                "⚠️ [VISION] Provider de visión DESACTIVADO "
-                "(MEALFIT_VISION_PROVIDER=disabled — DeepSeek no acepta "
-                "imágenes; provider pendiente de configurar). El Diario "
-                "Visual y 'Escanear comida' responderán analysis_failed. "
-                "Este aviso se emite una vez por proceso."
-            )
-            _warned_vision_disabled = True
-        return _vision_disabled_payload()
+async def _dispatch_ollama_vision(image_bytes: bytes) -> dict:
+    """[P1-MEAL-SCAN-GEMMA · 2026-07-12 → extraído P1-VISION-LUNA · 2026-07-28]
+    Intento de análisis vía Ollama local (gemma). Single-flight compartido
+    con el escáner de Nevera (misma GPU): si hay otro análisis en vuelo
+    devuelve `busy=True` al instante en vez de encolar minutos — el modal
+    muestra "escáner ocupado, reintenta". Nunca lanza: lock ocupado o error
+    de red/JSON degradan a un payload `analysis_failed=True` — el caller
+    (`process_image_with_vision`) decide si cascada a un fallback o retorna
+    tal cual. Extraído para compartir el código entre el intento primario y
+    el de la cascada sin duplicar el branch."""
+    lock = get_vision_single_flight_lock()
+    if not lock.acquire(blocking=False):
+        payload = _vision_disabled_payload()
+        payload["busy"] = True
+        payload["description"] = "El escáner está procesando otra foto."
+        return payload
+    try:
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        # to_thread: httpx síncrono con timeout de minutos NO puede correr
+        # en el event loop (workers=1 — estancaría TODAS las requests).
+        return await asyncio.to_thread(_ollama_meal_scan, image_b64)
+    except Exception as e:
+        # [P3-VISION-FAIL-ERROR-LOG] error-level para Sentry (paridad con
+        # el except del path openai_compatible más abajo).
+        logger.error(
+            f"❌ [VISION] meal-scan gemma falló (modelo={_ollama_model_name()!r}, "
+            f"base={_ollama_base_url()!r}): {type(e).__name__}: {e}"
+        )
+        payload = _vision_disabled_payload()
+        payload["description"] = "Error analizando imagen."
+        return payload
+    finally:
+        lock.release()
 
-    # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Provider LOCAL: gemma vía Ollama.
-    # Single-flight compartido con el escáner de Nevera (misma GPU): si hay
-    # otro análisis en vuelo devolvemos `busy=True` al instante en vez de
-    # encolar minutos — el modal muestra "escáner ocupado, reintenta".
-    if _vision_provider() == _VISION_PROVIDER_OLLAMA:
-        lock = get_vision_single_flight_lock()
-        if not lock.acquire(blocking=False):
-            payload = _vision_disabled_payload()
-            payload["busy"] = True
-            payload["description"] = "El escáner está procesando otra foto."
-            return payload
-        try:
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            # to_thread: httpx síncrono con timeout de minutos NO puede correr
-            # en el event loop (workers=1 — estancaría TODAS las requests).
-            return await asyncio.to_thread(_ollama_meal_scan, image_b64)
-        except Exception as e:
-            # [P3-VISION-FAIL-ERROR-LOG] error-level para Sentry (paridad con
-            # el except del path openai_compatible más abajo).
-            logger.error(
-                f"❌ [VISION] meal-scan gemma falló (modelo={_ollama_model_name()!r}, "
-                f"base={_ollama_base_url()!r}): {type(e).__name__}: {e}"
-            )
-            payload = _vision_disabled_payload()
-            payload["description"] = "Error analizando imagen."
-            return payload
-        finally:
-            lock.release()
 
+async def _dispatch_openai_compatible_vision(image_bytes: bytes) -> dict:
+    """[P0-DEEPSEEK-MIGRATION · 2026-06-12 → extraído P1-VISION-LUNA ·
+    2026-07-28] Intento de análisis vía provider OpenAI-compatible
+    (gpt-5.6-luna u otro configurado por knob). Nunca lanza: cualquier error
+    degrada a un payload `analysis_failed=True`. Extraído para compartir el
+    código entre el intento primario y el de la cascada sin duplicar el
+    branch."""
     try:
         # [P3-VISION-MODEL-KNOB · 2026-05-20] Modelo via knob (no hardcoded).
         # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con base_url/key
@@ -480,10 +507,10 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
             api_key=(os.environ.get("VISION_API_KEY") or "").strip() or None,
             timeout=_vision_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
         ).with_structured_output(ImageDescription)
-        
+
         # Convertimos los bytes a base64 para enviarlo a la API de LangChain/Gemini
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        
+
         message = HumanMessage(
             content=[
                 {"type": "text", "text": "Describe detalladamente todos los alimentos, ingredientes o platillos que ves en esta imagen. Si es una nevera, lista el contenido visible. Si no hay comida, indícalo. Da también un nombre corto del platillo en español dominicano (`meal_name`, máx ~6 palabras). También proporciona una estimación de las calorías, gramos de proteína, gramos de carbohidratos y gramos de grasas saludables (solo el número) totales en la imagen (usa 0 si no es comida)."},
@@ -551,6 +578,94 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
             "carbs": 0,
             "healthy_fats": 0,
         }
+
+
+def _vision_result_unusable(result: dict) -> bool:
+    """[P1-VISION-LUNA] "Vacío/no usable" — dispara la cascada. Todo path de
+    fallo de `_dispatch_ollama_vision`/`_dispatch_openai_compatible_vision`
+    YA retorna `analysis_failed=True` (ver `_vision_disabled_payload`,
+    incluye el caso `busy=True` de single-flight ocupado) — un resultado
+    exitoso NUNCA lleva esa key."""
+    return not result or bool(result.get("analysis_failed"))
+
+
+async def _dispatch_vision_provider(provider: str, image_bytes: bytes) -> dict:
+    """[P1-VISION-LUNA] Único punto de despacho por provider — compartido
+    entre el intento primario y el de la cascada para no duplicar el branch
+    `ollama` vs `openai_compatible`. Nunca lanza: ambas implementaciones ya
+    capturan sus propios errores y devuelven un payload
+    `analysis_failed=True` en caso de fallo."""
+    if provider == _VISION_PROVIDER_OLLAMA:
+        return await _dispatch_ollama_vision(image_bytes)
+    return await _dispatch_openai_compatible_vision(image_bytes)
+
+
+async def process_image_with_vision(image_bytes: bytes) -> dict:
+    """
+    Toma los bytes de una imagen, usa el provider de visión configurado para
+    extraer una descripción y determina si contiene alimentos usando
+    structured output. Con `MEALFIT_VISION_PROVIDER=disabled` retorna el
+    payload `analysis_failed` sin tocar ningún API.
+
+    [P1-VISION-LUNA · 2026-07-28] Redimensiona ANTES de despachar a
+    cualquier provider (chokepoint único: cubre `ollama` Y
+    `openai_compatible`) y, si `MEALFIT_VISION_FALLBACK_PROVIDER` está
+    configurado, cascada UNA sola vez si el provider primario falla o
+    devuelve un resultado no usable. Sin bucles: primario → fallback → si
+    el fallback TAMBIÉN falla, retorna el resultado del PRIMARIO (no el del
+    fallback), para que el log/mensaje apunte al problema real.
+    """
+    global _warned_vision_disabled
+    if not is_vision_enabled():
+        if not _warned_vision_disabled:
+            logger.warning(
+                "⚠️ [VISION] Provider de visión DESACTIVADO "
+                "(MEALFIT_VISION_PROVIDER=disabled — DeepSeek no acepta "
+                "imágenes; provider pendiente de configurar). El Diario "
+                "Visual y 'Escanear comida' responderán analysis_failed. "
+                "Este aviso se emite una vez por proceso."
+            )
+            _warned_vision_disabled = True
+        return _vision_disabled_payload()
+
+    # [P1-VISION-LUNA · 2026-07-28] Resize en el ÚNICO punto por el que
+    # pasan los bytes antes de salir a CUALQUIER provider — cubre `ollama` Y
+    # `openai_compatible`. A gemma también le acelera (30-120s de latencia
+    # son en parte resolución). Telemetría a `info`: audita el ahorro real
+    # en prod (6,6x medido 3024x4032→1024px, ver backend/docs/vision_luna.md).
+    image_bytes, resize_info = prepare_image_for_vision(image_bytes)
+    logger.info(
+        f"[P1-VISION-LUNA] resize original_bytes={resize_info['original_bytes']} "
+        f"sent_bytes={resize_info['sent_bytes']} original_wh={resize_info['original_wh']} "
+        f"sent_wh={resize_info['sent_wh']} resized={resize_info['resized']} "
+        f"skipped_reason={resize_info['skipped_reason']}"
+    )
+
+    primary = _vision_provider()
+    result = await _dispatch_vision_provider(primary, image_bytes)
+    if not _vision_result_unusable(result):
+        return result
+
+    fallback = _vision_cascade_target(primary)
+    if fallback is None:
+        return result
+
+    logger.warning(
+        f"⚠️ [P1-VISION-LUNA] Provider primario={primary!r} falló o devolvió "
+        f"un resultado no usable; reintentando UNA sola vez con "
+        f"fallback={fallback!r}."
+    )
+    fb_result = await _dispatch_vision_provider(fallback, image_bytes)
+    if not _vision_result_unusable(fb_result):
+        return fb_result
+
+    logger.warning(
+        f"⚠️ [P1-VISION-LUNA] Fallback={fallback!r} TAMBIÉN falló; "
+        f"devolviendo el resultado ORIGINAL del provider primario="
+        f"{primary!r} (no el del fallback) para que el log apunte al "
+        f"problema real."
+    )
+    return result
 
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
 # "multimodal" siempre vectorizó el TEXTO de la descripción (no la imagen),
