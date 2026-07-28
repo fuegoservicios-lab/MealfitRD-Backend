@@ -185,7 +185,7 @@ def test_enqueue_does_not_flip_when_anchor_resolved(
     # (lo que falsearía la prueba de "P0-2 no flipea").
     with patch(
         "db_inventory.get_user_inventory_net",
-        return_value=["500g pollo", "300g arroz", "200g brocoli", "1 cebolla"],
+        return_value=["500g pollo", "300g arroz", "200g brocoli", "1 cebolla", "2 tomates", "1 aji"],  # [reapuntado 2026-07-28] >= CHUNK_MIN_FRESH_PANTRY_ITEMS (hoy 5; era 3 al escribirse)
     ):
         cron_tasks._enqueue_plan_chunk(
             user_id="user-p02-ok",
