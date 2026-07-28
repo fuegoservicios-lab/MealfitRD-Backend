@@ -146,23 +146,23 @@ def test_render_item_card_uses_market_container_as_display():
         src,
     ), (
         "El cálculo `const displayUnit = item.master_ingredients?.market_container "
-        "|| item.unit` no se encuentra en `renderItemCard`. Sin él, el item "
+        "|| item.unit` no se encuentra en el render del item. Sin él, el item "
         "muestra `item.unit` (que para items viejos es `paquete` aunque el "
         "PDF diga `cartón`)."
     )
 
-    # El render del unit-tag debe usar displayUnit, no item.unit
+    # [reapuntado 2026-07-28] El span pasó de la clase string "nevera-item-unit-tag" (diseño
+    # esquiomórfico, retirado en cafb430 · 2026-06-24) a CSS-module `fstyles.unit`. La invariante
+    # es la MISMA: el tag de unidad renderiza {displayUnit}, no {item.unit}.
     unit_tag_match = re.search(
-        r'<span\s+className="nevera-item-unit-tag"[^>]*>\{(\w+)\}</span>',
+        r'<span\s+className=\{fstyles\.unit\}[^>]*>\{(\w+)\}</span>',
         src,
     )
     assert unit_tag_match, (
-        "No se encontró el `<span className='nevera-item-unit-tag'>{...}</span>` "
-        "que renderiza la unit del item."
+        "No se encontró el `<span className={fstyles.unit}>…</span>` que renderiza la unidad."
     )
     assert unit_tag_match.group(1) == "displayUnit", (
-        f"El unit-tag renderiza `{{{unit_tag_match.group(1)}}}` en lugar de "
-        f"`{{displayUnit}}`. Reemplaza por displayUnit."
+        f"El unit-tag renderiza `{{{unit_tag_match.group(1)}}}` en lugar de `{{displayUnit}}`."
     )
 
 
