@@ -2423,6 +2423,15 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
         normalized_restrictions.extend(["camaron", "camarones", "pescado", "atun",
             "mero", "tilapia", "salmon", "bacalao", "sardina", "sardinas", "arenque", "merluza",
             "pulpo", "calamar", "mejillones", "mejillon", "cangrejo", "langosta", "langostino", "lambi"])
+    # [P1-PESCADO-CATCHALL · 2026-07-28] "pescado" a secas (el término que un dominicano
+    # realmente escribe) no disparaba NINGÚN catch-all: solo "mariscos" expandía especies,
+    # así que un dislike "pescado" dejaba mero/tilapia/salmón/bacalao/sardinas/arenque en
+    # los pools de variedad y el LLM podía servirlos. Expande SOLO peces (quien no come
+    # pescado puede seguir comiendo camarones — mariscos es el término para el mar entero).
+    # Mismo sesgo a sobre-filtrar de P2-VARIETY-CATALOG-NOT-FILTERED.
+    if any(r in ["pescado", "pescados", "pez", "peces", "fish"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["pescado", "atun", "mero", "tilapia", "salmon",
+            "bacalao", "sardina", "sardinas", "arenque", "merluza"])
     if any(r in ["carne", "carnes", "meat"] for r in normalized_restrictions):
         normalized_restrictions.extend(["pollo", "cerdo", "res", "chuleta", "longaniza", "salami",
             "pavo", "conejo", "chivo", "cabro", "higado", "costilla", "jamon", "muslo", "pernil"])
