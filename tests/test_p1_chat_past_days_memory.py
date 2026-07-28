@@ -454,3 +454,48 @@ def test_tool_avisa_cuando_la_fecha_es_inferida_no_estampada():
     finally:
         _chc.rd_today = orig
     assert "estimada" in out.lower(), "falta el aviso de fecha inferida"
+
+
+# --- Fósil "Opción A/B/C" y zona horaria de build_temporal_context ---
+
+
+def test_fosil_opcion_abc_eliminado_de_los_prompts_base():
+    """El fósil de las '3 opciones rotativas' destruía la identidad de día y se
+    contradecía con `agent.py` DENTRO DEL MISMO system message."""
+    src = _src("prompts/chat_agent.py")
+    assert "Opción A" not in src, "queda el fósil en algún prompt base"
+    assert "3 opciones distintas" not in src
+
+
+def test_prohibicion_explicita_se_conserva_en_agent():
+    """Lo que se elimina es la REGLA que enseñaba el vocabulario; la
+    PROHIBICIÓN que corrige al modelo se queda (la ancla test_p1_chat_today_context)."""
+    assert "Nunca digas 'Opción A/B/C'" in _src("agent.py")
+
+
+def test_temporal_context_respeta_la_fecha_local_del_cliente():
+    """Regresión: usaba `datetime.now()` del servidor mientras otro bloque del
+    MISMO prompt usaba UTC-4 → 'ayer' podía significar dos días distintos."""
+    from prompts.chat_agent import build_temporal_context
+    out = build_temporal_context(local_date="2026-07-26")
+    assert "26" in out and "Julio" in out
+    assert "Domingo" in out
+    assert build_temporal_context()  # sin args sigue funcionando
+
+
+def test_temporal_context_ignora_una_fecha_basura():
+    from prompts.chat_agent import build_temporal_context
+    assert build_temporal_context(local_date="no-soy-fecha")
+
+
+def test_temporal_context_trata_el_offset_cero_como_utc_no_como_utc4():
+    """`tz_offset = 0` es UTC: legítimo y a la vez falsy. Un truthiness lo
+    convertiría en UTC-4 y correría la fecha un día para usuarios en UTC."""
+    from prompts.chat_agent import build_temporal_context
+    src = _src("prompts/chat_agent.py")
+    i = src.index("def build_temporal_context")
+    cuerpo = src[i:i + 2000]
+    assert "tz_offset is not None" in cuerpo, "resolver por `is not None`, nunca por truthiness"
+    assert re.search(r"tz_offset\s+or\s+", cuerpo) is None, "`tz_offset or X` tiene el mismo bug"
+    # Con local_date explícito la fecha manda, sea cual sea el offset.
+    assert "26" in build_temporal_context(local_date="2026-07-26", tz_offset=0)

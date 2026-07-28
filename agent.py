@@ -4310,7 +4310,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
         system_prompt += build_tools_instructions_stream(user_id)
         # --- bloques dinámicos (volátiles) al final ---
-        system_prompt += build_temporal_context()
+        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
@@ -4320,7 +4320,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             system_prompt += f"\n{rag_context}"
     else:
         system_prompt = _base_inline
-        system_prompt += build_temporal_context()
+        system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
         system_prompt += build_temporal_proactive_context()
         # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado

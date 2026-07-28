@@ -3,7 +3,8 @@
 Prompts y builders de contexto para el agente de chat (agent.py).
 Elimina la duplicación entre chat_with_agent() y chat_stream().
 """
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 
 # ============================================================
@@ -12,7 +13,7 @@ from datetime import datetime
 
 CHAT_SYSTEM_PROMPT_BASE = """Eres el Nutriólogo Crítico e IA Central de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan o dieta, dando respuestas al grano, conversacionales pero CLÍNICAMENTE FIRMES.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C". NUNCA te refieras a ellas como "Día 1", "Día 2" o "Día 3".
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
 
 REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 1. CRONONUTRICIÓN Y RITMO CIRCADIANO: Evalúa SIEMPRE la pesadez nutricional de los alimentos cruzando el "CONTEXTO TEMPORAL ACTUAL" con el "RITMO CIRCADIANO" del usuario (ambos proporcionados más abajo). Solo alerta de "deshoras" si la comida rompe la lógica de SU propio reloj biológico (ej. Si tiene turno nocturno, las 5 AM es su cena, no lo reprimas. Si tiene turno de día, las 5 AM con arroz es terrible).
@@ -21,7 +22,7 @@ REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 
 CHAT_STREAM_SYSTEM_PROMPT_BASE = """Eres el Nutriólogo Crítico e IA Central de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan o dieta, dando respuestas al grano, conversacionales pero CLÍNICAMENTE FIRMES.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C".
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
 
 REGLAS DE CONCIENCIA NUTRICIONAL Y CRÍTICA (OBLIGATORIAS):
 1. CRONONUTRICIÓN Y RITMO CIRCADIANO: Evalúa SIEMPRE la pesadez nutricional de los alimentos cruzando el "CONTEXTO TEMPORAL ACTUAL" con el "RITMO CIRCADIANO" del usuario (ambos proporcionados más abajo). Solo alerta de "deshoras" si la comida rompe la lógica de SU propio reloj biológico (ej. Si tiene turno nocturno, las 4 AM es su cena ideal, elógialo. Si tiene turno de día, las 4 AM con arroz es terrible, repréndelo).
@@ -40,7 +41,7 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 
 CHAT_AGENT_INLINE_PROMPT = """Eres el agente asistente de nutrición IA de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios. El usuario ya fue saludado al iniciar el chat. Ve directo al punto en cada respuesta.
-REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C". NUNCA te refieras a ellas como "Día 1", "Día 2" o "Día 3" en tu conversación con el usuario.
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
 
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
@@ -68,7 +69,7 @@ REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
 CHAT_STREAM_INLINE_PROMPT = """Eres el agente asistente de nutrición IA de MealfitRD, una app profesional de nutrición clínica. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
 CONTEXTO PROFESIONAL: Esta es una plataforma de nutrición clínica. Los usuarios hablarán sobre sus hábitos alimenticios, incluyendo momentos en que comieron de más, se sintieron mal por su alimentación, o quieren mejorar. Tu rol es guiarlos como nutricionista profesional con empatía y conocimiento. Todas las respuestas deben ser constructivas y orientadas a mejorar sus hábitos.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C".
+REGLA CRUCIAL: Los días del plan son días REALES del calendario, no opciones intercambiables. Llámalos SIEMPRE por su nombre ("el Domingo", "el Lunes") o por su fecha.
 
 REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
@@ -80,12 +81,40 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 # BUILDERS DE CONTEXTO DINÁMICO (compartidos entre chat y stream)
 # ============================================================
 
-def build_temporal_context() -> str:
-    """Genera la línea de contexto temporal (fecha/hora actual)."""
-    now_chat = datetime.now()
+def build_temporal_context(local_date: Optional[str] = None,
+                          tz_offset: Optional[int] = None) -> str:
+    """Genera la línea de contexto temporal (fecha/hora actual).
+
+    [P1-CHAT-PAST-DAYS · 2026-07-27] Antes usaba `datetime.now()` — el reloj del
+    SERVIDOR — mientras `agent._build_plan_today_context` usaba UTC-4 en el
+    MISMO system message. Con el VPS en UTC eso hace que, entre las 20:00 y las
+    23:59 hora RD, el prompt afirme el día de MAÑANA en un bloque y el de HOY en
+    otro — y 'ayer' pase a significar dos días distintos. Ahora manda la fecha
+    local del cliente cuando llega; si no, UTC-4 (convención del repo).
+    tooltip-anchor: P1-CHAT-PAST-DAYS-TZ
+    """
     dias_chat = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    return f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, {now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. La hora local es {now_chat.strftime('%I:%M %p')}."
+    meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+                  "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+    offset_min = 240  # UTC-4 por defecto
+    if tz_offset is not None:
+        try:
+            offset_min = int(tz_offset)
+        except (TypeError, ValueError):
+            pass
+    now_chat = datetime.now(timezone.utc) - timedelta(minutes=offset_min)
+
+    if local_date:
+        try:
+            parsed = datetime.strptime(str(local_date)[:10], "%Y-%m-%d")
+            now_chat = now_chat.replace(year=parsed.year, month=parsed.month, day=parsed.day)
+        except (TypeError, ValueError):
+            pass
+
+    return (f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, "
+            f"{now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. "
+            f"La hora local es {now_chat.strftime('%I:%M %p')}.")
 
 
 def build_circadian_context(schedule_type: str) -> str:

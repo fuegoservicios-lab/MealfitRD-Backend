@@ -2204,11 +2204,12 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
     """
     Modifica UNA comida específica del plan activo del usuario. No genera un plan nuevo, solo cambia la comida indicada.
     Usa esta herramienta cuando el usuario pida un cambio puntual a una comida de su plan.
-    IMPORTANTE: Opción A = day_number 1, Opción B = day_number 2, Opción C = day_number 3.
+    IMPORTANTE: day_number es la posición 1-based del día en el plan activo
+    (1 = primer día visible del menú).
 
     Parámetros:
     - user_id: ID del usuario
-    - day_number: número de la opción (1 para Opción A, 2 para Opción B, 3 para Opción C)
+    - day_number: posición 1-based del día en el plan (1 = primer día visible)
     - meal_type: momento exacto del día: 'Desayuno', 'Almuerzo', 'Merienda' o 'Cena'
     - changes: descripción en lenguaje natural del cambio solicitado por el usuario
     - allow_pantry_expansion: ponlo en True SOLO SI el usuario explícitamente autoriza comprar ingredientes nuevos, ir al súper, o salir de la regla de zero-waste para esta comida. Por defecto es False.
