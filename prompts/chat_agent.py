@@ -191,6 +191,45 @@ def _ui_rule_plan() -> str:
     return "1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario."
 
 
+# ---------------------------------------------------------------------------
+# [P1-CHAT-PAST-DAYS · 2026-07-28] Bullet de `consultar_dia_del_plan` detrás del
+# knob MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED (default True). El kill switch en
+# tools.py::_apply_chat_tool_knobs retira la tool de `agent_tools` cuando está
+# OFF, pero esta copia era incondicional: con el knob OFF el modelo seguía
+# recibiendo, dos veces por turno, la instrucción de llamar una tool que ya no
+# tiene. Espejo exacto de `_plan_tools_enabled()` — import inline (para no
+# acoplar el import-time de este módulo a `tools`) + `except Exception` fail-safe.
+# Default AQUÍ es True (no False como el sibling): el knob real por defecto es
+# True, así que un import fallido no debe silenciar copy que sí funciona.
+# ---------------------------------------------------------------------------
+
+def _plan_day_tool_enabled() -> bool:
+    try:
+        from tools import _chat_plan_day_tool_enabled
+        return _chat_plan_day_tool_enabled()
+    except Exception:
+        return True
+
+
+_PLAN_DAY_TOOL_BULLET_ENABLED = (
+    "- Usa `consultar_dia_del_plan` cuando el usuario pida el DETALLE de un día que ya pasó: "
+    "cantidades, gramos o pasos de receta ('¿cuánto pollo tenía el almuerzo del domingo?', "
+    "'¿cómo era la receta de la cena de ayer?'). El bloque 'DÍAS QUE YA PASARON' de tu contexto "
+    "ya te da los NOMBRES y las kcal de esos días — no llames la herramienta si con eso basta. "
+    "Pasa la fecha en ISO 'YYYY-MM-DD' (tienes HOY en tu contexto: calcula tú 'ayer' o 'el domingo')."
+)
+
+_PLAN_DAY_TOOL_BULLET_DISABLED = (
+    "- El bloque 'DÍAS QUE YA PASARON' de tu contexto te da los NOMBRES y las kcal de los días "
+    "que ya pasaron, pero por ahora NO tienes forma de consultar sus cantidades, gramos ni pasos "
+    "de receta — no los inventes ni prometas traerlos."
+)
+
+
+def _plan_day_tool_bullet() -> str:
+    return _PLAN_DAY_TOOL_BULLET_ENABLED if _plan_day_tool_enabled() else _PLAN_DAY_TOOL_BULLET_DISABLED
+
+
 def build_tools_instructions(user_id: str) -> str:
     """Genera el bloque de instrucciones de herramientas disponibles para el agente."""
     return f"""
@@ -206,7 +245,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `log_water_glass` cuando el usuario diga que tomó agua o se equivocó marcando ('me tomé un vaso', 'marca dos más', 'borra el último', 'llevo 5 vasos'). Para valores absolutos, primero usa `check_hydration_today` para conocer el conteo actual y luego pasa el delta correcto.
 - Usa `suggest_foods_for_nutrient` cuando el usuario pregunte qué comer para mejorar un micronutriente específico de su plan (ej: '¿qué como para más fibra?', 'necesito más hierro', 'cómo subo la vitamina D', 'cómo bajo el sodio'). Devuelve alimentos del catálogo (criollos) ya filtrados por las alergias/rechazos/dieta del usuario; úsalos para recomendarle 2-3 opciones prácticas con cantidades realistas, NO inventes valores de nutrientes.
 - Usa `check_clinical_profile` SOLO cuando el usuario pregunte por sus laboratorios o valores clínicos ('¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis labs afectan el plan?'). Cita los valores tal cual, interpreta con prudencia de coach (NO diagnostiques) y recuérdale que no sustituye una consulta médica.
-- Usa `consultar_dia_del_plan` cuando el usuario pida el DETALLE de un día que ya pasó: cantidades, gramos o pasos de receta ('¿cuánto pollo tenía el almuerzo del domingo?', '¿cómo era la receta de la cena de ayer?'). El bloque 'DÍAS QUE YA PASARON' de tu contexto ya te da los NOMBRES y las kcal de esos días — no llames la herramienta si con eso basta. Pasa la fecha en ISO 'YYYY-MM-DD' (tienes HOY en tu contexto: calcula tú 'ayer' o 'el domingo').
+{_plan_day_tool_bullet()}
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}
@@ -229,7 +268,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `check_hydration_today` cuando pregunte sobre su agua del día ('¿cuánta agua llevo?', '¿voy bien?'). Usa `log_water_glass` cuando diga que se tomó agua o se equivocó marcando ('me tomé un vaso' → delta=1; 'borra uno' → delta=-1). Para absolutos, primero check y calcula el delta.
 - Usa `suggest_foods_for_nutrient` cuando pregunte qué comer para mejorar un micronutriente (ej: '¿qué como para más fibra?', 'necesito hierro', 'cómo bajo el sodio'). Devuelve alimentos del catálogo filtrados por sus alergias/dieta; recomiéndale 2-3 opciones prácticas con cantidades.
 - Usa `check_clinical_profile` SOLO si pregunta por sus laboratorios/valores clínicos ('¿cómo está mi glucosa?'). Cita valores tal cual, prudencia de coach (NO diagnostiques), recuerda que no sustituye consulta médica.
-- Usa `consultar_dia_del_plan` cuando el usuario pida el DETALLE de un día que ya pasó: cantidades, gramos o pasos de receta ('¿cuánto pollo tenía el almuerzo del domingo?', '¿cómo era la receta de la cena de ayer?'). El bloque 'DÍAS QUE YA PASARON' de tu contexto ya te da los NOMBRES y las kcal de esos días — no llames la herramienta si con eso basta. Pasa la fecha en ISO 'YYYY-MM-DD' (tienes HOY en tu contexto: calcula tú 'ayer' o 'el domingo').
+{_plan_day_tool_bullet()}
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 {_ui_rule_plan()}

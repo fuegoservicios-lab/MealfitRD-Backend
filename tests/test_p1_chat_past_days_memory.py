@@ -772,3 +772,63 @@ def test_marker_del_doc_no_va_por_detras_del_codigo():
     assert "P1-CHAT-PAST-DAYS · 2026-07-27" not in seis, (
         "§6 sigue mandando bumpear a una fecha que el código ya superó"
     )
+
+
+# --- Closing fix A: el kill switch retiraba la tool de `agent_tools` pero la
+# copia del prompt (dos builders + el footer del bloque) era incondicional ---
+
+
+def test_plan_day_tool_shim_sigue_el_patron_del_sibling_con_default_true():
+    """`_plan_day_tool_enabled()` debe copiar `_plan_tools_enabled()` (import
+    inline + `except Exception` fail-safe), pero con default True: el knob real
+    (`MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED`) por defecto es True, así que un import
+    fallido NO puede silenciar copy que sí funciona (al revés que el sibling, cuyo
+    default seguro es False porque el suyo también lo es)."""
+    src = _src("prompts/chat_agent.py")
+    i = src.index("def _plan_day_tool_enabled")
+    cuerpo = src[i:i + 400]
+    assert "from tools import _chat_plan_day_tool_enabled" in cuerpo, (
+        "el shim debe importar el getter real dentro de la función, como el sibling"
+    )
+    assert re.search(r"except Exception:\s*\n\s*return True", cuerpo), (
+        "el default seguro de este shim debe ser True, no False"
+    )
+
+
+def test_bullet_y_footer_nombran_la_tool_con_el_knob_en_default(monkeypatch):
+    """Con el knob ausente (default True) los DOS builders del prompt y el
+    footer del bloque de días pasados deben seguir nombrando la tool."""
+    monkeypatch.delenv("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", raising=False)
+    from prompts.chat_agent import build_tools_instructions, build_tools_instructions_stream
+    for builder in (build_tools_instructions, build_tools_instructions_stream):
+        out = builder("11111111-1111-1111-1111-111111111111")
+        assert "consultar_dia_del_plan" in out
+
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, _MEALS)]}
+    bloque = build_past_plan_days_block(plan, HOY, days_back=7, max_chars=3000)
+    assert "consultar_dia_del_plan" in bloque
+
+
+def test_bullet_y_footer_dejan_de_nombrar_la_tool_con_el_knob_off(monkeypatch):
+    """Cierre del bug: con el knob OFF la tool sale de `agent_tools`
+    (`test_kill_switch_de_la_tool_existe_y_la_retira_de_agent_tools`), pero la
+    copia del prompt era incondicional — el modelo seguía instruido, DOS veces
+    por turno, a llamar una tool que ya no tiene. Ninguno de los 3 sitios debe
+    nombrarla, y el bloque debe seguir emitiendo sus líneas de días pasados y
+    el hedge `~` de fechas inferidas (eso es sobre fechas, no sobre la tool)."""
+    monkeypatch.setenv("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", "false")
+    from prompts.chat_agent import build_tools_instructions, build_tools_instructions_stream
+    for builder in (build_tools_instructions, build_tools_instructions_stream):
+        out = builder("11111111-1111-1111-1111-111111111111")
+        assert "consultar_dia_del_plan" not in out, "la copia sigue nombrando una tool que ya no existe"
+        assert "DÍAS QUE YA PASARON" in out, (
+            "el bullet debe seguir diciendo que el índice de días pasados existe, "
+            "solo que el detalle no está disponible"
+        )
+
+    plan = {"days": [_day("Lunes", 1)], "_archived_days": [_day("Domingo", 1, _MEALS)]}
+    bloque = build_past_plan_days_block(plan, HOY, days_back=7, max_chars=3000)
+    assert "consultar_dia_del_plan" not in bloque
+    assert "Revoltillo de Tayota con Atún" in bloque, "las líneas del día no dependen del knob"
+    assert "793 kcal" in bloque
+    assert "~Domingo 26 jul" in bloque, "el hedge de fecha inferida es sobre fechas, no sobre la tool"

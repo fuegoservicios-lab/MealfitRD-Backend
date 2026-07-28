@@ -190,6 +190,23 @@ def chat_history_max_chars() -> int:
     return _env_int("MEALFIT_CHAT_HISTORY_MAX_CHARS", 3000, validator=lambda v: 500 <= v <= 20000)
 
 
+def _plan_day_tool_footer_sentence() -> str:
+    """[P1-CHAT-PAST-DAYS · 2026-07-28] Sombra de `tools._chat_plan_day_tool_enabled`
+    sobre el footer de `build_past_plan_days_block`: con el kill switch OFF la tool
+    `consultar_dia_del_plan` sale de `agent_tools`, así que este footer no puede
+    seguir remitiendo a ella. Se lee el knob DIRECTO (no se importa `tools`, que
+    es pesado) — mismo patrón que `chat_history_days`/`chat_history_max_chars` de
+    arriba: import inline, módulo import-leaf. Default seguro True, igual al del
+    knob real, para que un import fallido no borre copy que sí funciona.
+    tooltip-anchor: P1-CHAT-PAST-DAYS-TOOL-KNOB
+    """
+    from knobs import _env_bool
+    if not _env_bool("MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED", True):
+        return ""
+    return (" Para las cantidades, los gramos o los pasos de la receta de uno de estos "
+            "días, usa la herramienta `consultar_dia_del_plan`.")
+
+
 def _fmt_date_es(d: date, inferred: bool = False) -> str:
     """`Domingo 26 jul`; con `~` delante si la fecha es inferida, no estampada."""
     tag = "~" if inferred else ""
@@ -273,9 +290,7 @@ def build_past_plan_days_block(plan_data: Any, today: date,
 
     header = ("\n\n📖 DÍAS QUE YA PASARON — esto es lo que el plan MANDABA esos días "
               "(NO es prueba de que el usuario se lo comiera):\n")
-    footer = ("\nLas fechas con '~' son estimadas, no exactas. Para las cantidades, los gramos "
-              "o los pasos de la receta de uno de estos días, usa la herramienta "
-              "`consultar_dia_del_plan`.")
+    footer = ("\nLas fechas con '~' son estimadas, no exactas." + _plan_day_tool_footer_sentence())
     return _assemble(header, lines, footer, max_chars, "plan_days")
 
 
