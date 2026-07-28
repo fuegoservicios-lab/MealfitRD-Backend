@@ -13,7 +13,7 @@ from db_profiles import get_user_profile, log_api_usage
 from auth import get_verified_user_id
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
-from db import log_consumed_meal, get_consumed_meals_today, save_visual_entry
+from db import log_consumed_meal, get_consumed_meals_today, save_visual_entry, delete_consumed_meal
 from vision_agent import process_image_with_vision, get_multimodal_embedding, is_vision_local
 # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top — verificado que
 # `cron_tasks` NO importa `routers.diary` (no circular). El late import dentro
@@ -54,6 +54,16 @@ class ConsumedMealRequest(BaseModel):
     protein: float = Field(default=0.0, ge=0.0, le=1000.0)
     carbs: float = Field(default=0.0, ge=0.0, le=2000.0)
     healthy_fats: float = Field(default=0.0, ge=0.0, le=1000.0)
+    # [P1-DIARY-EDITABLE · 2026-07-28] Antes el POST siempre escribía "ahora":
+    # un usuario que olvidó loguear el fin de semana no podía corregirlo, y
+    # el chat coach (que SÍ lee el diario) veía el hueco como "SIN REGISTRO"
+    # para siempre. 0=hoy (default, comportamiento previo intacto) .. 7=hace
+    # una semana — mismo tope que `tools._CONSUMED_MAX_DAYS_AGO` tras este fix
+    # (antes 3, divergente del endpoint que no aceptaba backdate alguno).
+    # ge/le son el contrato de FRONTERA HTTP (422 si el cliente manda basura
+    # estructural); `_clamp_diary_days_ago` abajo es una segunda capa
+    # defensiva (mismo patrón que `_reject_non_finite` sobre los macros).
+    days_ago: int = Field(default=0, ge=0, le=7)
 
     model_config = {"extra": "ignore"}
 
@@ -106,6 +116,19 @@ _PROGRESS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # sobre `verify_api_quota` (no lo reemplaza). Cap 10/60s holgado para el flujo
 # real de subir fotos del diario.
 _VISION_UPLOAD_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
+# [P1-DIARY-EDITABLE · 2026-07-28] Rate-limiter para `DELETE /consumed/{meal_id}`.
+# Borrar una comida mal registrada es cero costo LLM (un DELETE filtrado por
+# user_id) — aplicar `verify_api_quota` (el paywall mensual: gratis=15,
+# basic=50...) bloquearía la corrección de un error de tap justo cuando el
+# usuario ya agotó su cap del mes, doctrina idéntica a `_RESTOCK_LIMITER` /
+# `_CONSUME_LIMITER` (routers/plans.py, P1-NEVERA-QUOTA-EXEMPT) y
+# `_VISION_UPLOAD_LIMITER` arriba. 20/60s: house default de esta clase de
+# endpoint (mutación barata, anti-spam sin ánimo de restringir uso legítimo).
+# `RateLimiter.__call__` ya envuelve `Depends(get_verified_user_id)` y
+# retorna el `verified_user_id` — el endpoint NO necesita un segundo
+# `Depends(get_verified_user_id)` aparte (mismo patrón que api_restock).
+_DELETE_CONSUMED_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -505,6 +528,34 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
         logger.warning("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
 
 
+# [P1-DIARY-EDITABLE · 2026-07-28] Duplicado DELIBERADO de `tools._clamp_days_ago`
+# (backend/tools.py) — NO se importa desde `tools.py` acá: ese módulo carga
+# LangChain (`langchain_core.tools`), `graph_orchestrator` y `llm_provider`
+# completos (deps del chat-agent, ~decenas de imports transitivos) solo para
+# reusar 6 líneas de aritmética. Un router HTTP no debería arrastrar la capa
+# del agente por esto. Si el rango vuelve a divergir entre el chat y este
+# endpoint, actualizar AMBAS constantes (`tools._CONSUMED_MAX_DAYS_AGO` y
+# `_DIARY_MAX_DAYS_AGO` abajo) en el mismo commit — hermana textual, misma
+# semántica: garbage/negativo/futuro → 0 (hoy), nunca más allá del tope.
+_DIARY_MAX_DAYS_AGO = 7
+
+
+def _clamp_diary_days_ago(days_ago) -> int:
+    """0=hoy .. 7=máximo pasado. Garbage/futuro/negativo → 0 (hoy).
+
+    Segunda capa defensiva DETRÁS del `Field(ge=0, le=7)` de
+    `ConsumedMealRequest.days_ago` (que ya rechaza con 422 en la frontera
+    HTTP). Esta función existe para callers directos (tests, scripts) y para
+    que el contrato "nunca en el futuro, nunca más de 7 días atrás" no
+    dependa exclusivamente de la validación de Pydantic.
+    """
+    try:
+        d = int(days_ago)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(_DIARY_MAX_DAYS_AGO, d))
+
+
 @router.post("/consumed")
 def api_log_consumed_meal(
     payload: ConsumedMealRequest,
@@ -517,6 +568,10 @@ def api_log_consumed_meal(
     a `ConsumedMealRequest`. Pydantic valida tipos + rangos + NaN/Infinity
     antes del handler (422 con detalle estructurado en lugar de 500
     silencioso).
+
+    [P1-DIARY-EDITABLE · 2026-07-28] `days_ago` (0..7) permite backdatear —
+    antes el POST siempre escribía `NOW()` y un usuario que olvidó loguear
+    el fin de semana no podía corregirlo retroactivamente.
     """
     try:
         user_id = payload.user_id
@@ -535,6 +590,17 @@ def api_log_consumed_meal(
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
 
+        # [P1-DIARY-EDITABLE · 2026-07-28] `consumed_at_override`: fecha real
+        # de consumo en el día LOCAL del usuario (RD = UTC-4). Restar días
+        # enteros a "ahora" (en vez de anclar a medianoche UTC/local)
+        # preserva la hora del día — una comida backdateada sigue pareciendo
+        # una comida real (14:32) en vez de un timestamp sospechoso (00:00:00).
+        from datetime import datetime, timezone, timedelta
+        _days_ago = _clamp_diary_days_ago(payload.days_ago)
+        consumed_at_override = (
+            datetime.now(timezone.utc) - timedelta(days=_days_ago)
+        ).isoformat()
+
         # [P1-PROD-AUDIT-3 · 2026-05-30] Fail-loud en fallo de persistencia.
         # ANTES se descartaba el return de log_consumed_meal y se devolvía
         # success:true incondicional → en un blip de DB (la helper captura toda
@@ -547,6 +613,7 @@ def api_log_consumed_meal(
         _logged_ok = log_consumed_meal(
             user_id, meal_name, int(calories), int(protein), int(carbs),
             int(healthy_fats), meal_type=meal_type,
+            consumed_at_override=consumed_at_override,
         )
         if not _logged_ok:
             raise HTTPException(
@@ -605,6 +672,49 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.delete("/consumed/{meal_id}")
+def api_delete_consumed_meal(
+    meal_id: str,
+    # [P1-DIARY-EDITABLE · 2026-07-28] `_DELETE_CONSUMED_LIMITER` envuelve
+    # `Depends(get_verified_user_id)` internamente y retorna el
+    # `verified_user_id` autenticado — cero costo LLM, NO `verify_api_quota`
+    # (ver CLAUDE.md "Historial-quota-exemption"). Mismo patrón que
+    # `api_restock`/`api_consume_inventory` (routers/plans.py).
+    verified_user_id: Optional[str] = Depends(_DELETE_CONSUMED_LIMITER),
+):
+    """Elimina una comida mal registrada del diario ("Deshacer registro").
+
+    [P1-DIARY-EDITABLE · 2026-07-28] `consumed_meals` era append-only: un
+    1.030 kcal mal loggeado (doble-tap, dedo equivocado) vivía para siempre
+    hasta purgar la cuenta. El DELETE real vive en
+    `db_facts.delete_consumed_meal`, filtrado `AND user_id = %s` (invariante
+    I2) — acá solo se valida forma + auth y se traduce el resultado a
+    HTTP: 404 si no había fila que borrar (no existía, o pertenecía a otro
+    usuario — el mensaje es el mismo para no filtrar existencia cross-user),
+    200 si se borró.
+    """
+    try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(meal_id)
+
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+
+        deleted = delete_consumed_meal(verified_user_id, meal_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="Comida no encontrada (o ya fue eliminada).",
+            )
+
+        return {"success": True, "message": "Comida eliminada del diario."}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

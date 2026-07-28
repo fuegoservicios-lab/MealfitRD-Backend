@@ -455,11 +455,17 @@ def generate_new_plan_from_chat(user_id: str, instructions: str = "") -> str:
 # duplicado. Vivo: el owner subió una foto, dijo "es del almuerzo de ayer" y
 # la tool la registró EN HOY (1600 kcal del día con una comida de ayer).
 _CONSUMED_MAIN_MEAL_TYPES = ("desayuno", "almuerzo", "cena")
-_CONSUMED_MAX_DAYS_AGO = 3
+# [P1-DIARY-EDITABLE · 2026-07-28] 3 → 7: alineado con el `days_ago` que ahora
+# acepta `POST /api/diary/consumed` (`ConsumedMealRequest.days_ago`,
+# routers/diary.py) — antes el chat permitía backdatear hasta 3 días y el
+# endpoint manual 0 (siempre "hoy"), dos contratos divergentes para el MISMO
+# concepto ("corregir un día que olvidé loguear"). Ver `_clamp_diary_days_ago`
+# en routers/diary.py (duplicado deliberado, NO import cruzado — ver comentario ahí).
+_CONSUMED_MAX_DAYS_AGO = 7
 
 
 def _clamp_days_ago(days_ago) -> int:
-    """0=hoy .. 3=máximo pasado. Garbage/futuro/negativo → 0 (hoy)."""
+    """0=hoy .. 7=máximo pasado. Garbage/futuro/negativo → 0 (hoy)."""
     try:
         d = int(days_ago)
     except (TypeError, ValueError):
@@ -480,7 +486,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Incluye carbohidratos y grasas saludables si están disponibles.
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado.
     - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'. Dedúcelo de lo que diga el usuario o de la hora.
-    - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 3 días atrás; el diario nunca registra a futuro.
+    - days_ago: 0 = hoy (default), 1 = ayer, 2 = antier. ÚSALO cuando el usuario diga que la comió OTRO día (ej. "es el almuerzo de ayer" → days_ago=1, meal_type='almuerzo') para que NO contamine las macros de hoy. Máximo 7 días atrás; el diario nunca registra a futuro.
     - Si ya existe una comida principal del MISMO tipo ese día, la tool NO inserta y te lo informa: pregúntale al usuario si de verdad quiere registrar dos (repite con force=true SOLO si él confirma) o si prefiere corregir.
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.

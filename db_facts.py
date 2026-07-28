@@ -662,6 +662,33 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         logger.error(f"Error guardando comida consumida: {e}")
         return None
 
+def delete_consumed_meal(user_id: str, meal_id: str) -> bool:
+    """Elimina una fila de `consumed_meals` mal registrada por el usuario.
+
+    [P1-DIARY-EDITABLE · 2026-07-28] `consumed_meals` era append-only: una
+    comida mal registrada (ej. un snack de 1.030 kcal por error de tap)
+    vivía permanentemente hasta purgar la cuenta. El DELETE filtra
+    `AND user_id = %s` — invariante I2 (CLAUDE.md: toda mutación de tabla
+    user-scoped filtra por user_id). Sin ese filtro, cualquier usuario
+    autenticado que adivinara/enumerara un `id` ajeno podría borrar
+    comidas de OTRO usuario (IDOR). `RETURNING id` distingue "borré 1 fila"
+    de "no había ninguna fila con ese (id, user_id)" para que el caller
+    (`routers/diary.py`) pueda 404 honesto en vez de reportar éxito en un
+    no-op.
+    """
+    try:
+        if not connection_pool:
+            return False
+        rows = execute_sql_write(
+            "DELETE FROM consumed_meals WHERE id = %s AND user_id = %s RETURNING id",
+            (meal_id, user_id),
+            returning=True,
+        )
+        return bool(rows)
+    except Exception as e:
+        logger.error(f"Error eliminando comida consumida {meal_id}: {e}")
+        return False
+
 def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_offset_mins: Optional[int] = None):
     """Obtiene las comidas consumidas del día especificado en base a la zona horaria del usuario."""
     max_retries = 2
@@ -698,8 +725,14 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
             # carbs, healthy_fats, consumed_at, meal_type. Trim de I/O +
             # JSON parse + payload size; cierra convención post-P1-NEW-3
             # (explicit columns).
+            # [P1-DIARY-EDITABLE · 2026-07-28] `id` añadido — sin él, ningún
+            # caller (frontend Diario) puede identificar QUÉ fila borrar con
+            # `DELETE /api/diary/consumed/{meal_id}`. Additive: los callers
+            # existentes (`agent.py`, `/api/diary/consumed/{user_id}`)
+            # iteran los dicts por KEY (`m.get("calories")` etc.), nunca
+            # desempaquetan posicionalmente — una columna extra no rompe nada.
             _COLUMNS = (
-                "meal_name, calories, protein, carbs, healthy_fats, "
+                "id, meal_name, calories, protein, carbs, healthy_fats, "
                 "consumed_at, meal_type"
             )
             # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST.

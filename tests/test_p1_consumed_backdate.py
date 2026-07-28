@@ -27,10 +27,13 @@ import db_facts  # noqa: E402
 
 
 def test_clamp_days_ago_never_future_never_far_past():
+    # [P1-DIARY-EDITABLE · 2026-07-28] 3 → 7: alineado con el `days_ago` que
+    # ahora acepta POST /api/diary/consumed (ver routers/diary.py).
     assert _clamp_days_ago(0) == 0
     assert _clamp_days_ago(1) == 1
     assert _clamp_days_ago(3) == 3
-    assert _clamp_days_ago(9) == 3, "máximo 3 días atrás"
+    assert _clamp_days_ago(7) == 7
+    assert _clamp_days_ago(9) == 7, "máximo 7 días atrás"
     assert _clamp_days_ago(-1) == 0, "el diario nunca registra a futuro"
     assert _clamp_days_ago("ayer") == 0, "garbage del LLM → hoy"
     assert _clamp_days_ago(None) == 0
