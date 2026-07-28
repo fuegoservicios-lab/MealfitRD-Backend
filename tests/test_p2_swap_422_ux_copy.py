@@ -139,9 +139,17 @@ def test_catch_returns_current_name_without_fallback():
         "produciría un plato genérico ignorando la razón estricta del usuario. "
         "Debe `return currentName` (preservar plato actual)."
     )
-    assert "return currentName" in branch_body, (
-        "El branch 422 debe `return currentName` para que el caller no "
-        "actualice planData con un fallback no deseado."
+    # [reapuntado 2026-07-28 · P2-SWAP-TOAST-FIX] `return currentName` fue REEMPLAZADO por
+    # `return null`: devolver el nombre actual hacía que el caller mostrara su toast de
+    # ÉXITO ("plato cambiado") sobre un swap que NO ocurrió. El null es el soft-fail que
+    # suprime ese success toast; el plato se preserva porque el caller no toca planData
+    # con null. El contrato de fondo (sin fallback genérico, plato intacto) es el mismo.
+    assert "return null" in branch_body, (
+        "El branch 422 debe `return null` (P2-SWAP-TOAST-FIX) — con `return currentName` "
+        "el caller celebra con success toast un swap que no ocurrió."
+    )
+    assert "P2-SWAP-TOAST-FIX" in branch_body, (
+        "El rationale del soft-fail (suprimir el success toast) desapareció del branch."
     )
 
 
