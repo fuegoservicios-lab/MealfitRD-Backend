@@ -176,24 +176,39 @@ class TestLocalStorageDefensive:
                 f"ausente — flow logout/reset no protegido contra iOS Private Mode."
             )
 
-    def test_settings_uses_safe_remove(self, settings_src: str):
-        """El handler resetPreferences debe limpiar via safeLocalStorageRemove."""
-        for key in ("mealfit_disabled_ingredients", "mealfit_plan", "mealfit_likes", "mealfit_dislikes"):
+    # [reapuntado 2026-07-28] Los dos contratos MIGRARON de página a SSOT:
+    #   - la lectura/escritura de `mealfit_disabled_ingredients` vive en el hook
+    #     `useDisabledIngredients.js` (Pantry ya no toca localStorage directo);
+    #   - la limpieza del reset vive en `AssessmentContext::resetForNewAssessment`
+    #     (el handler 'cero' del modal en Settings delega ahí; el hook limpia su
+    #     propia key desde _clearUserScopedCaches).
+    # El contrato defensivo (iOS Private Mode) se conserva idéntico en las casas nuevas.
+    @pytest.fixture(scope="class")
+    def disabled_hook_src(self) -> str:
+        return (_FRONTEND / "src" / "hooks" / "useDisabledIngredients.js").read_text(encoding="utf-8")
+
+    def test_reset_flow_uses_safe_remove(self, assessment_src: str, disabled_hook_src: str):
+        """resetForNewAssessment limpia las llaves user-scoped via safeLocalStorageRemove."""
+        for key in ("mealfit_plan", "mealfit_likes", "mealfit_dislikes"):
             assert re.search(
                 rf"safeLocalStorageRemove\(\s*['\"]{key}['\"]",
-                settings_src,
+                assessment_src,
             ), (
-                f"P2-LOCALSTORAGE-REMOVEITEM: Settings.jsx::handleResetPreferences "
+                f"P2-LOCALSTORAGE-REMOVEITEM: resetForNewAssessment "
                 f"no usa safeLocalStorageRemove para `{key}`."
             )
+        assert "safeLocalStorageRemove(LS_KEY)" in disabled_hook_src, (
+            "P2-LOCALSTORAGE-REMOVEITEM: useDisabledIngredients ya no limpia su key "
+            "via safeLocalStorageRemove."
+        )
 
-    def test_pantry_uses_safe_get(self, pantry_src: str):
-        assert re.search(
-            r"safeLocalStorageGet\(\s*['\"]mealfit_disabled_ingredients['\"]",
-            pantry_src,
-        ), (
-            "P2-LOCALSTORAGE-GETITEM-DEFENSIVE: Pantry.jsx mount handler "
+    def test_disabled_ingredients_hook_uses_safe_get(self, disabled_hook_src: str):
+        assert "safeLocalStorageGet(LS_KEY" in disabled_hook_src, (
+            "P2-LOCALSTORAGE-GETITEM-DEFENSIVE: useDisabledIngredients "
             "no usa safeLocalStorageGet para `mealfit_disabled_ingredients`."
+        )
+        assert "const LS_KEY = 'mealfit_disabled_ingredients'" in disabled_hook_src, (
+            "la key canónica cambió — re-anclar."
         )
 
 

@@ -38,9 +38,11 @@ import pytest
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _APP_PY = _BACKEND_ROOT / "app.py"
+# [reapuntado 2026-07-28] El workspace se movió a Nodalia/ (rename 07-2026): el path viejo
+# quedó congelado y todo marker nuevo fallaba contra un índice que ya nadie actualiza.
 _DEFAULT_MEMORY_INDEX = Path(
     os.path.expanduser(
-        "~/.claude/projects/C--Users-angel-OneDrive-Escritorio-MealfitRD-IA/memory/MEMORY.md"
+        "~/.claude/projects/c--Users-angel-OneDrive-Escritorio-Nodalia-MealfitRD-Software-MealfitRD-IA/memory/MEMORY.md"
     )
 )
 

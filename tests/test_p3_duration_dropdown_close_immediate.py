@@ -61,11 +61,13 @@ def test_close_happens_before_recalc_if_block():
         "ausente — el dropdown de duración fue refactorizado y este test "
         "perdió su punto de referencia. Re-anclar manualmente."
     )
-    # Inspecciona los 1200 chars siguientes a safeUpdateHealthProfile.
+    # Inspecciona los chars siguientes a safeUpdateHealthProfile.
     # En esa ventana debe aparecer setShowDespensaDropdown(false) ANTES
-    # del `if (userProfile?.id && planData)`. La ventana cubre el comment
-    # block del fix + el setter + la apertura del if.
-    window = _DASHBOARD[idx : idx + 1200]
+    # del `if (userProfile?.id && planData)`.
+    # [reapuntado 2026-07-28] 1200 → 3200: P1-DASH-BUDGET-AUTOFILL (06-23) insertó
+    # ~20 líneas de sync de presupuesto (a ~60 columnas de indentación) entre el
+    # anchor y el close — el ORDEN del contrato sigue intacto, solo quedó lejos.
+    window = _DASHBOARD[idx : idx + 3200]
     close_pos = window.find("setShowDespensaDropdown(false)")
     if_pos = window.find("if (userProfile?.id && planData)")
     assert close_pos > 0, (

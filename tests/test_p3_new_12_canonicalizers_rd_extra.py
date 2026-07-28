@@ -85,7 +85,13 @@ def test_citricos_does_not_collapse_cross_type():
     ("tomates cherry", "Tomate cherry"),
     ("tomate uva", "Tomate cherry"),
     # No match
-    ("salsa de tomate", "Tomate"),  # "tomates?" matchea — OK por simplicidad
+    # [reapuntado 2026-07-28 · P3-TOMATE-SAUCE-FIX 06-22] El "OK por simplicidad" era el
+    # BUG: la salsa colapsaba a tomate fresco y se costeaba/capeaba como tomate de
+    # ensalada (P5-VEG-CAP en vez de P6-SAUCE-CAP). Las formas procesadas conservan su
+    # nombre y resuelven a su propio master item.
+    ("salsa de tomate", None),
+    ("pasta de tomate", None),
+    ("tomate seco", None),
     ("zanahoria", None),
     ("", None),
 ])

@@ -270,8 +270,16 @@ def _rotate_pairs(items):
     Se extrae en vez de copiarse: dos implementaciones del mismo reparto divergen — es el patrón
     que P1-PANTRY-GATE-SSOT y P1-CLOSER-INTO-MONTAJE costaron cerrar en esta misma base de código.
 
-    Devuelve `None` con menos de 2 elementos utilizables; el caller decide el fallback."""
+    Devuelve `None` con menos de 2 elementos utilizables; el caller decide el fallback.
+
+    [P1-ROTATE-PAIRS-DEDUPE · 2026-07-28] Deduplica preservando orden ANTES de contar:
+    cazado en vivo (05:48) un pool colapsado a ['Arroz Blanco']×3 — len 3 pasaba el guard
+    y cada día recibía (Arroz, Arroz): la "2ª base distinta" era LA MISMA, derrotando el
+    propósito del par. Con dedupe, el degenerado cae al fallback del caller ("otra base
+    distinta del catálogo"), que sí empuja variedad."""
     base = [x for x in (items or []) if x and str(x).strip()]
+    _vistos: set = set()
+    base = [x for x in base if not (x in _vistos or _vistos.add(x))]
     if len(base) < 2:
         return None
     n = len(base)

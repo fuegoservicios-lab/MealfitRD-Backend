@@ -103,8 +103,14 @@ def test_hedge_max_concurrent_no_hardcoded_div_2():
 
 
 def test_env_sets_hedge_max_concurrent_at_3():
-    """El `.env` debe setear el knob explícitamente a 3 para que un operador
-    sepa qué valor está activo sin tener que mirar el código del default."""
+    """El `.env` debe setear el knob explícitamente para que un operador sepa
+    qué valor está activo sin tener que mirar el código del default.
+
+    [reapuntado 2026-07-28] El valor vivo es 1, NO 3: P1-COST-HEDGE-TUNE (05-28,
+    documentado en el propio .env) lo bajó porque con hedges que perdían 3/3,
+    permitir 3 concurrentes triplicaba el desperdicio — 1 hedge rescata solo el
+    día más lento. El contrato de ESTE test pasa a ser: knob explícito en .env
+    (no default silencioso) + valor dentro del rango operado [1, 3]."""
     m = re.search(
         r"^MEALFIT_HEDGE_MAX_CONCURRENT\s*=\s*(\d+)\s*$",
         _ENV,
@@ -115,9 +121,10 @@ def test_env_sets_hedge_max_concurrent_at_3():
         "el valor activo depende del default código (frágil ante refactor)."
     )
     val = int(m.group(1))
-    assert val == 3, (
-        f"MEALFIT_HEDGE_MAX_CONCURRENT={val} en .env, esperado 3. "
-        "Bajar a 2 revertiría el fix del incidente bf6f1383."
+    assert val == 1, (
+        f"MEALFIT_HEDGE_MAX_CONCURRENT={val} en .env, esperado 1 (P1-COST-HEDGE-TUNE "
+        "05-28: 3 concurrentes triplicaban el desperdicio con hedges 3/3 perdidos). "
+        "Si lo subes (rollback 2-3 por latencia tail), actualiza este test JUNTO al .env."
     )
 
 

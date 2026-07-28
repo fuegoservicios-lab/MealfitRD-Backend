@@ -149,7 +149,11 @@ def test_no_promotion_in_fast_path_no_markers():
     }
     result = asyncio.run(go.surgical_marker_regen_node(state))
 
-    assert result == {"_marker_regen_attempted": True}
+    # [reapuntado 2026-07-28 · P1-SURGICAL-MODE-COLLISION] El fast-path emite AMBOS flags
+    # (sin `_surgical_reject_attempted`, un enrutamiento reject-mode sin targets loopearía
+    # router→no-op→re-review). El contrato de ESTE test — no promotion, snapshot intacto —
+    # se conserva: cero `_best_attempt_plan`.
+    assert result == {"_marker_regen_attempted": True, "_surgical_reject_attempted": True}
     assert "_best_attempt_plan" not in result
 
 

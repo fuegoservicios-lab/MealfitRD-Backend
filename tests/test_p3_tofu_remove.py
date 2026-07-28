@@ -19,7 +19,16 @@ _BACKEND = Path(__file__).resolve().parent.parent
 def test_tofu_not_offered_in_protein_pool():
     joined = " | ".join(p.lower() for p in DOMINICAN_PROTEINS)
     assert "tofu" not in joined, f"tofu no debe estar en DOMINICAN_PROTEINS: {DOMINICAN_PROTEINS}"
-    assert "soya" not in joined, f"soya no debe estar en DOMINICAN_PROTEINS: {DOMINICAN_PROTEINS}"
+    # [reapuntado 2026-07-28] El blanket "sin soya" del 06-22 quedó SUPERSEDIDO parcialmente:
+    # la expansión del catálogo verificó 'Soya texturizada' como comprable en La Sirena
+    # (add_foods_batch1_2026_06_26.py: paquete 200 g RD$100) y P1-VARIETY-CATALOG-POOLS
+    # deriva el pool de los verificados. El TOFU sigue fuera (no se vende). Solo esa
+    # presentación de soya está permitida — cualquier otra variante sigue prohibida.
+    _soya_extras = [p for p in DOMINICAN_PROTEINS
+                    if "soya" in p.lower() and p.lower() != "soya texturizada"]
+    assert not _soya_extras, (
+        f"solo 'Soya texturizada' (verificada, RD$100/200g) está permitida: {_soya_extras}"
+    )
     # Sanidad: las leguminosas (proteína vegana de reemplazo) siguen presentes.
     assert any("lenteja" in p.lower() or "garbanzo" in p.lower() or "habichuela" in p.lower()
                for p in DOMINICAN_PROTEINS), "deben quedar leguminosas como proteína vegana"

@@ -121,7 +121,27 @@ def test_every_constructor_has_timeout(module):
         f"se hallaron {len(blocks)}. ¿Cambió el formato o se removió un callsite? "
         "Revisa antes de asumir que el scan sigue cubriendo todo."
     )
-    missing = [ln for (ln, inner) in blocks if "timeout=" not in inner]
+    # [reapuntado 2026-07-28] `_build_expand_llm` (P1-RECIPE-EXPAND-MODEL-PROVIDER, 07-26)
+    # forwardea `**kw` al constructor — el timeout viaja desde el caller y el scan no puede
+    # verlo dentro del bloque. Se exime el forward SOLO si (a) el bloque pasa `**kw` y
+    # (b) todo callsite de `_build_expand_llm(` lleva `timeout=` literal en sus args.
+    def _es_forward_kw(inner: str) -> bool:
+        return "**kw" in inner
+    if module == "ai_helpers.py" and any(_es_forward_kw(inner) for _, inner in blocks):
+        for m in re.finditer(r"_build_expand_llm\(", src):
+            # el cierre real puede estar tras varias líneas; ventana simple de 400 chars
+            call_args = src[m.end(): m.end() + 400]
+            if "def _build_expand_llm" in src[max(0, m.start()-30): m.start() + 30]:
+                continue
+            assert "timeout=" in call_args, (
+                f"{module}: callsite de _build_expand_llm en offset {m.start()} no pasa "
+                "`timeout=` — el forward **kw perdería el timeout (P2-LLM-TIMEOUT-SWEEP)."
+            )
+    missing = [
+        ln for (ln, inner) in blocks
+        if "timeout=" not in inner
+        and not (module == "ai_helpers.py" and _es_forward_kw(inner))
+    ]
     assert not missing, (
         f"{module}: constructores ChatDeepSeek SIN `timeout=` en líneas "
         f"{missing}. Un provider colgado bloquearía el thread/event-loop indefinidamente "
