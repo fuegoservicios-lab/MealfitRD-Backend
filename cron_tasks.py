@@ -32586,7 +32586,19 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                             _archived = shifted_data.get("_archived_days")
                             if not isinstance(_archived, list):
                                 _archived = []
-                            _archived.extend(copy.deepcopy(shifted_days[:shift_amount]))
+                            # [P1-CHAT-PAST-DAYS · 2026-07-27] Fechar los días
+                            # ANTES de archivarlos: el archivado j corresponde a
+                            # `today - (shift_amount - j)`, porque tras el slice
+                            # de abajo shifted_days[0] pasa a ser HOY. `today` es
+                            # un `datetime` (no `date`) en este scope — `.date()`
+                            # antes de `.isoformat()` para no filtrar hora/TZ al
+                            # JSON. Espejo del mismo bloque en
+                            # routers/plans.py:api_shift_plan.
+                            _to_archive = copy.deepcopy(shifted_days[:shift_amount])
+                            for _j, _arch_day in enumerate(_to_archive):
+                                if isinstance(_arch_day, dict) and not _arch_day.get('date'):
+                                    _arch_day['date'] = (today - timedelta(days=(shift_amount - _j))).date().isoformat()
+                            _archived.extend(_to_archive)
                             _arch_cap = (total_planned_days if isinstance(total_planned_days, int) and total_planned_days > 0 else 30) + 31
                             shifted_data["_archived_days"] = _archived[-_arch_cap:]
                         shifted_days = shifted_days[shift_amount:]
@@ -32596,6 +32608,8 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                         target_date = today + timedelta(days=i)
                         day_obj["day_name"] = dias_es[target_date.weekday()]
                         day_obj["day"] = i + 1
+                        # [P1-CHAT-PAST-DAYS · 2026-07-27] Fecha calendario del día.
+                        day_obj["date"] = target_date.date().isoformat()
 
                     modified = needs_shift
                     needs_fill_after_shift = (

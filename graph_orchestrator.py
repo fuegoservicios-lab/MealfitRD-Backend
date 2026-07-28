@@ -29948,7 +29948,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
 
         target_date = start_dt + timedelta(days=days_offset + i)
         day["day_name"] = dias_es[target_date.weekday()]
-    
+        # [P1-CHAT-PAST-DAYS · 2026-07-27] Estampar la fecha calendario local.
+        # `target_date` ya existe para el day_name y se descartaba; sin ella el
+        # chat solo puede INFERIR qué día del calendario fue cada `day`.
+        day["date"] = target_date.date().isoformat()
+
     injected_names = [d.get("day_name") for d in result.get("days", [])]
     logger.info(f"📅 [DAY NAMES] Inyectados: {injected_names} (start={start_dt.isoformat()}, tzOffset={tz_offset_minutes})")
 

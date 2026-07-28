@@ -215,3 +215,43 @@ def test_assemble_respeta_el_cap_aunque_la_nota_de_recorte_ocupe_espacio():
     for cap in range(20, 141):
         out = _assemble("H" * 10, ["L" * 19] * 6, "F" * 10, cap, "test")
         assert len(out) <= cap, "cap duro violado con cap=%d: len=%d" % (cap, len(out))
+
+
+# --- Estampado de `date`: tests parser-based sobre código de producción ---
+
+_BACKEND = os.path.join(os.path.dirname(__file__), "..")
+
+
+def _src(rel):
+    with open(os.path.join(_BACKEND, rel), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_generacion_estampa_date():
+    src = _src("graph_orchestrator.py")
+    assert 'day["date"] = target_date.date().isoformat()' in src, (
+        "graph_orchestrator debe estampar la fecha del día en la generación "
+        "(P1-CHAT-PAST-DAYS); `target_date` ya se calcula ahí para el day_name."
+    )
+
+
+def test_shift_api_estampa_date_en_vivos_y_archivados():
+    src = _src("routers/plans.py")
+    # [P1-CHAT-PAST-DAYS · 2026-07-27] `today` en este scope es un
+    # `datetime` (datetime.now(timezone.utc)), NO un `date` — verificado
+    # leyendo el código fuente antes de escribir este test (el brief
+    # original asumía `date`; se adaptó). `.date()` evita filtrar hora/TZ
+    # al JSON persistido.
+    assert "day_obj['date'] = target_date.date().isoformat()" in src, "días vivos del shift sin fecha"
+    assert "P1-CHAT-PAST-DAYS" in src, "falta el marker en el bloque de archivado"
+    assert "_arch_day['date']" in src, "los días archivados deben nacer fechados"
+
+
+def test_shift_cron_es_gemelo_del_shift_api():
+    """El bloque del cron es un duplicado literal en lógica (no en estilo de
+    comillas: el renumber loop de cron_tasks.py ya usaba dobles antes de este
+    cambio — `day_obj["day_name"]`/`day_obj["day"]` — vs comillas simples en
+    plans.py; se respetó la convención local de cada archivo)."""
+    src = _src("cron_tasks.py")
+    assert "_arch_day['date']" in src
+    assert 'day_obj["date"] = target_date.date().isoformat()' in src

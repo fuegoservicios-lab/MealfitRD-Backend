@@ -2202,7 +2202,19 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                             _archived = shifted_data.get("_archived_days")
                             if not isinstance(_archived, list):
                                 _archived = []
-                            _archived.extend(copy.deepcopy(shifted_days[:shift_amount]))
+                            # [P1-CHAT-PAST-DAYS · 2026-07-27] Fechar los días
+                            # ANTES de archivarlos: el archivado j corresponde a
+                            # `today - (shift_amount - j)`, porque tras el slice
+                            # de abajo shifted_days[0] pasa a ser HOY. `today` es
+                            # un `datetime` (no `date`) en este scope — `.date()`
+                            # antes de `.isoformat()` para no filtrar hora/TZ al
+                            # JSON. Sin esto el chat solo puede inferir la fecha
+                            # hacia atrás y los agujeros del clamp la desalinean.
+                            _to_archive = copy.deepcopy(shifted_days[:shift_amount])
+                            for _j, _arch_day in enumerate(_to_archive):
+                                if isinstance(_arch_day, dict) and not _arch_day.get('date'):
+                                    _arch_day['date'] = (today - timedelta(days=(shift_amount - _j))).date().isoformat()
+                            _archived.extend(_to_archive)
                             _arch_cap = (total_planned_days if isinstance(total_planned_days, int) and total_planned_days > 0 else 30) + 31
                             shifted_data["_archived_days"] = _archived[-_arch_cap:]
                         shifted_days = shifted_days[shift_amount:]
@@ -2213,6 +2225,8 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                         target_date = today + timedelta(days=i)
                         day_obj['day_name'] = dias_es[target_date.weekday()]
                         day_obj['day'] = i + 1  # Renumerar desde 1 para mantener secuencia 1..N
+                        # [P1-CHAT-PAST-DAYS · 2026-07-27] Fecha calendario del día.
+                        day_obj['date'] = target_date.date().isoformat()
 
                     # 3. Rolling window: si el plan no ha expirado y la ventana actual tiene menos de window_size días,
                     #    y no hay ya un chunk de IA en camino, encolar generación IA real (aprendizaje continuo).
