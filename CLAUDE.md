@@ -104,6 +104,12 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 
 ---
 
+## Memoria de días pasados en el chat
+
+[P1-CHAT-PAST-DAYS · 2026-07-27] El coach recuerda los días que ya pasaron por dos vías separadas que NUNCA deben confundirse: un índice barato siempre inyectado de lo que el plan **prescribió** (nombre + slot + kcal, ~200 bytes/día) y el diario multi-día de lo que el usuario **registró** comer, con los días sin registro declarados uno a uno. El detalle caro (ingredientes con gramos + pasos de receta, ~2.5k tokens/día) va bajo demanda por la tool `consultar_dia_del_plan`. Prerequisito estructural: cada día del plan nace con `date` ISO estampada en los 3 sitios de renumeración; los planes viejos degradan a inferencia anclada por `day_name` (nunca `cycle_start_date + i`, que desplaza el plan tras un shift). Motor SSOT [`backend/chat_history_context.py`](backend/chat_history_context.py); doc canónica (causas, knobs, costos, lo que NO resuelve) [`backend/docs/chat_past_days_memory.md`](backend/docs/chat_past_days_memory.md). Test ancla [`test_p1_chat_past_days_memory.py`](backend/tests/test_p1_chat_past_days_memory.py).
+
+---
+
 ## Convenciones del repo
 
 - **Knobs operacionales**: env vars `MEALFIT_*` con defaults seguros, registrados en `_KNOBS_REGISTRY` (`graph_orchestrator.py`). Cambios de comportamiento que pueden necesitar revertirse sin redeploy van como knob, no como hardcode.

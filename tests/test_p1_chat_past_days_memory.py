@@ -516,3 +516,23 @@ def test_ambos_sitios_clampan_el_offset_al_rango_de_husos():
     for ruta in ("prompts/chat_agent.py", "agent.py"):
         src = _src(ruta)
         assert "840" in src, "%s no clampa el tz_offset al rango de husos" % ruta
+
+
+# --- Task 7: marker + doc canónica (cierre del P-fix) ---
+
+
+def test_marker_bumpeado():
+    src = _src("app.py")
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
+    assert m, "no encontré _LAST_KNOWN_PFIX"
+    assert m.group(1).startswith("P1-CHAT-PAST-DAYS"), (
+        f"marker sin bumpear: {m.group(1)!r}. Sin bump, un operador no puede "
+        "confirmar que este fix está vivo en producción."
+    )
+
+
+def test_doc_canonica_existe_y_esta_enlazada():
+    doc = _src("docs/chat_past_days_memory.md")
+    assert "P1-CHAT-PAST-DAYS" in doc
+    assert "MEALFIT_CHAT_HISTORY_DAYS" in doc
+    assert "chat_past_days_memory.md" in _src("CLAUDE.md")
