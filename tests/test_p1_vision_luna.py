@@ -500,3 +500,91 @@ def test_claude_md_copies_stay_in_sync_p1_vision_luna():
         "P1-VISION-LUNA -- sincronizar ambas (solo backend/CLAUDE.md vive "
         "en git)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 4 [P1-VISION-LUNA · 2026-07-28]: doc canónica + marker.
+#
+# El marker `_LAST_KNOWN_PFIX` en app.py DEBE quedar en "P1-VISION-LUNA ·
+# 2026-07-28" o más nuevo. El owner cierra P-fixes en PARALELO sobre esta
+# rama (el marker cambió dos veces solo en la sesión de hoy, de
+# P1-DIARY-EDITABLE a P1-RENAL-TRIM-RESOLVABLE, ANTES de que este Task 4
+# tocara nada) -- un `assert marker.startswith("P1-VISION-LUNA")` se rompería
+# en horas apenas el owner mergee su siguiente fix. La regla correcta es por
+# FECHA: aceptar el marker propio O cualquiera cuya fecha sea >= la nuestra,
+# mirror de `test_marker_bumped` en test_p2_audit_v5_batch.py:60-68.
+# ---------------------------------------------------------------------------
+
+_OUR_MARKER_SLUG = "P1-VISION-LUNA"
+_OUR_MARKER_DATE = "2026-07-28"
+
+
+def _marker_supersedes_or_matches(marker: str) -> bool:
+    """True si `marker` es el propio de este P-fix O tiene fecha >= la
+    nuestra. Extraído a función PURA (sin leer app.py) para poder probar el
+    comportamiento contra markers SINTÉTICOS -- un `startswith` habría
+    rechazado cualquier P-fix futuro con OTRO nombre, sin importar la fecha;
+    esta función lo acepta correctamente si la fecha es igual o posterior."""
+    if _OUR_MARKER_SLUG in marker:
+        return True
+    fecha = re.search(r"(\d{4}-\d{2}-\d{2})", marker)
+    if not fecha:
+        return False
+    return fecha.group(1) >= _OUR_MARKER_DATE
+
+
+def test_marker_bumped_to_vision_luna_or_later():
+    """El marker REAL en app.py debe ser el nuestro o uno posterior."""
+    src = _src("app.py")
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
+    assert m, "falta _LAST_KNOWN_PFIX en app.py"
+    marker = m.group(1)
+    assert _marker_supersedes_or_matches(marker), (
+        f"`_LAST_KNOWN_PFIX={marker!r}` no es P1-VISION-LUNA ni tiene fecha "
+        f">= {_OUR_MARKER_DATE} -- stale respecto a este P-fix."
+    )
+
+
+@pytest.mark.parametrize("marker_viejo", [
+    "P1-DIARY-EDITABLE · 2026-07-27",  # un día ANTES de la nuestra
+    "P0-ALGUN-FIX-VIEJO · 2026-01-01",
+])
+def test_bite_marker_mas_viejo_es_rechazado(marker_viejo):
+    """MUERDE de verdad: un marker de OTRO P-fix con fecha ANTERIOR a la
+    nuestra debe fallar la validación. Esto es lo que un `startswith`
+    también habría rechazado -- pero por la razón EQUIVOCADA (nombre, no
+    fecha). Aquí probamos que la razón correcta (fecha) sigue rechazándolo."""
+    assert not _marker_supersedes_or_matches(marker_viejo), (
+        f"{marker_viejo!r} es más viejo que {_OUR_MARKER_DATE} y NO debería "
+        f"pasar la validación de supersession."
+    )
+
+
+@pytest.mark.parametrize("marker_nuevo", [
+    "P1-DIARY-EDITABLE · 2026-07-28",  # mismo día, OTRO P-fix
+    "P2-ALGUN-FIX-FUTURO · 2026-08-01",  # posterior, OTRO P-fix
+])
+def test_bite_marker_de_otro_pfix_pero_mas_nuevo_es_aceptado(marker_nuevo):
+    """MUERDE de verdad: un marker de OTRO P-fix (nombre completamente
+    distinto) pero con fecha >= la nuestra DEBE pasar -- esto es EXACTAMENTE
+    lo que un `assert marker.startswith("P1-VISION-LUNA")` NUNCA aceptaría,
+    y es el escenario real: el owner cierra su siguiente P-fix en esta misma
+    rama en paralelo y bumpea el marker a otro nombre sin que este test deba
+    tocarse."""
+    assert _marker_supersedes_or_matches(marker_nuevo), (
+        f"{marker_nuevo!r} tiene fecha >= {_OUR_MARKER_DATE} -- un marker "
+        f"de OTRO P-fix más nuevo debe pasar la validación de supersession."
+    )
+
+
+def test_marker_slug_matches_this_test_file():
+    """Cross-link con test_p2_hist_audit_14_marker_test_link.py: el slug
+    derivado de `P1-VISION-LUNA` (`p1_vision_luna`) debe matchear el nombre
+    de ESTE archivo -- si no, el gate `test_marker_has_associated_test_file`
+    del audit-14 fallaría en CI apenas se bumpee el marker."""
+    slug = _OUR_MARKER_SLUG.replace("-", "_").lower()
+    assert slug == "p1_vision_luna"
+    this_file = os.path.basename(__file__)
+    assert this_file.startswith(f"test_{slug}"), (
+        f"slug {slug!r} no matchea el nombre de este archivo {this_file!r}"
+    )
