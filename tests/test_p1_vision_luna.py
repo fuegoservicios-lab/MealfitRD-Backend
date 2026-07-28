@@ -313,3 +313,190 @@ def test_telemetria_de_resize_se_loguea_a_info(monkeypatch, caplog):
     for key in ("original_bytes=", "sent_bytes=", "original_wh=",
                 "sent_wh=", "resized=", "skipped_reason="):
         assert key in line, f"telemetría incompleta, falta {key!r} en: {line}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3 [P1-VISION-LUNA · 2026-07-28]: sacar la visión del libro de cuota de
+# planes. El bug que se cierra: `diary.py` quemaba un crédito de plan
+# (`log_api_usage` → `api_usage`) por cada scan cuando el provider era CLOUD
+# pago — con Luna encendido eso agota el cap gratis (15/mes) en 5 días. Los
+# tests parsean el bloque real alrededor del gate histórico
+# `not is_vision_local()` (mismo gate que P1-MEAL-SCAN-GEMMA ya usaba) en vez
+# de grepear el archivo entero, para no dar falso-verde si el texto viejo
+# sobrevive en un comentario/docstring en otra parte del archivo.
+# ---------------------------------------------------------------------------
+
+_VISION_GATE_MARKER = (
+    "if actual_user_id and actual_user_id != session_id and not is_vision_local():"
+)
+
+
+def _vision_gate_window(src, chars=900):
+    """Ventana de código INMEDIATAMENTE posterior al gate `not is_vision_local()`
+    — el mismo gate que ya existía pre-P1-VISION-LUNA (P1-MEAL-SCAN-GEMMA).
+    Acotar la ventana (en vez de buscar en el archivo entero) evita que un
+    comentario explicativo en OTRA parte del archivo (p.ej. el bloque de
+    docstring que narra el bug cerrado) haga pasar el test en falso."""
+    i = src.find(_VISION_GATE_MARKER)
+    assert i != -1, (
+        "no se encontró el gate `not is_vision_local()` en diary.py — "
+        "renombrado o eliminado; los tests de abajo necesitan re-anclarse."
+    )
+    return src[i + len(_VISION_GATE_MARKER):i + len(_VISION_GATE_MARKER) + chars]
+
+
+def test_diary_upload_ya_no_quema_credito_de_plan_por_scan_cloud():
+    """El call site original NO era `log_api_usage(...)` -- era
+    `asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")`: la
+    función se pasaba POR REFERENCIA (bare, sin paréntesis) como argumento
+    de `to_thread`, que la invoca después en el thread pool. Un test que
+    solo buscara el substring `log_api_usage(` NUNCA habría atrapado ese
+    patrón -- verificado manualmente reconstruyendo el call site viejo y
+    confirmando que `"log_api_usage(" in texto` da False sobre él. Por eso
+    se cubren AMBOS patrones de reaparición (referencia bare a to_thread Y
+    llamada directa), más la ausencia del import -- sin import, cualquier
+    referencia bare a `log_api_usage` sería un NameError en runtime, así
+    que el import es la señal más fuerte."""
+    src = _src("routers/diary.py")
+    assert "to_thread(log_api_usage" not in src, (
+        "el patrón exacto del bug original -- log_api_usage pasado POR "
+        "REFERENCIA a asyncio.to_thread -- reapareció. Quemaría crédito de "
+        "plan de nuevo por cada scan con provider cloud pago."
+    )
+    assert "log_api_usage(" not in src, (
+        "log_api_usage ya no debe invocarse (llamada directa tampoco) "
+        "desde diary.py -- el gasto de visión vive en llm_usage_events "
+        "vía log_llm_usage_event."
+    )
+    assert re.search(r"^\s*from\s+\S+\s+import\s+[^#\n]*\blog_api_usage\b",
+                      src, re.MULTILINE) is None, (
+        "log_api_usage tampoco debe seguir importado -- sin el import, "
+        "cualquier referencia bare al nombre sería un NameError en "
+        "runtime; el import muerto es lo que habilitaría reintroducir el "
+        "bug sin que ni siquiera falle al arrancar."
+    )
+
+
+def test_diary_upload_llama_log_llm_usage_event_en_el_gate_vision():
+    """Behavioral/parser: el MISMO gate que antes llamaba log_api_usage debe
+    ahora invocar log_llm_usage_event, vía asyncio.to_thread (mismo patrón
+    async-offload del resto del archivo), con node="vision_scan" y el modelo
+    real (`_vision_model_name()`, el accessor de vision_agent -- NO un
+    string hardcodeado, que se desincronizaría del knob
+    MEALFIT_VISION_MODEL). Si el nodo o el offload desaparecen, este test se
+    pone rojo."""
+    window = _vision_gate_window(_src("routers/diary.py"))
+    assert re.search(r"asyncio\.to_thread\(\s*\n?\s*log_llm_usage_event\s*,", window), (
+        f"log_llm_usage_event debe invocarse via asyncio.to_thread dentro "
+        f"del gate de visión. Ventana analizada:\n{window}"
+    )
+    assert re.search(r'node\s*=\s*"vision_scan"', window), (
+        "falta node=\"vision_scan\" -- sin esto el evento de costo no es "
+        "distinguible de cualquier otra llamada LLM en llm_usage_events."
+    )
+    assert "model=_vision_model_name()" in window, (
+        "el modelo debe venir del accessor vivo de vision_agent, no de un "
+        "literal hardcodeado (se desincronizaría de MEALFIT_VISION_MODEL)."
+    )
+
+
+def test_diary_upload_import_log_llm_usage_event_desde_facade_db():
+    """[P3-DB-IMPORTS-FACADE] `log_llm_usage_event` debe entrar por la
+    fachada `from db import ...` (convención del repo para call sites
+    nuevos) -- no por `from db_profiles import log_llm_usage_event` directo."""
+    src = _src("routers/diary.py")
+    assert re.search(r"from\s+db\s+import\s*\([^)]*\blog_llm_usage_event\b",
+                      src, re.DOTALL), (
+        "log_llm_usage_event debe importarse desde la fachada `db`, no "
+        "desde `db_profiles` directo."
+    )
+    assert re.search(r"from\s+db_profiles\s+import\s*\([^)]*\blog_llm_usage_event\b",
+                      src, re.DOTALL) is None
+
+
+def test_get_monthly_api_usage_sigue_sin_filtro_de_endpoint():
+    """ANCLA anti-regresión (P1-VISION-LUNA Task 3, instrucción explícita del
+    plan): `get_monthly_api_usage` cuenta TODA fila de `api_usage` sin
+    filtrar por endpoint -- ese es el comportamiento CORRECTO del paywall
+    mensual (gratis/basic/plus/ultra comparten el mismo contador). El fix
+    del bug de cuota de visión es NO escribir la fila (ver los dos tests de
+    arriba), NO reinterpretar cómo se cuenta el libro -- tocar este SELECT
+    para "arreglar" un endpoint cambiaría la facturación de TODOS los
+    endpoints a la vez. Si esto se pone rojo, alguien le agregó un filtro
+    `AND endpoint = ...` -- revertir esa parte y usar log_llm_usage_event
+    en el call site nuevo en su lugar."""
+    src = _src("db_profiles.py")
+    m = re.search(
+        r"^def get_monthly_api_usage\(.*?(?=^def )", src, re.MULTILINE | re.DOTALL
+    )
+    assert m, "get_monthly_api_usage no encontrada en db_profiles.py."
+    body = m.group(0)
+    assert (
+        "SELECT count(*) as total FROM api_usage WHERE user_id = %s "
+        "AND created_at >= %s"
+    ) in body, (
+        "el SELECT debe seguir contando TODA fila del mes sin filtro de "
+        "endpoint -- cambiar esta query altera la facturación de todos los "
+        "endpoints, no solo el de visión."
+    )
+    assert "endpoint" not in body, (
+        "get_monthly_api_usage no debe filtrar/mencionar `endpoint` -- "
+        "cualquier aparición aquí es un filtro por endpoint colándose en "
+        "el libro de cuota compartido."
+    )
+
+
+# ---------------------------------------------------------------------------
+# CLAUDE.md: la fila "Historial-quota-exemption" de `/api/diary/upload`
+# tiene que reflejar el nuevo hecho (costo vive en llm_usage_events) en LAS
+# DOS copias (backend/CLAUDE.md, la única con git, y el espejo de
+# workspace-root fuera de cualquier repo) y ambas deben seguir idénticas --
+# mismo patrón que test_p1_diary_editable.py::test_claude_md_copies_stay_in_sync.
+# ---------------------------------------------------------------------------
+
+_ROOT = os.path.join(_BACKEND, "..")
+
+
+def _claude_md(which):
+    path = os.path.join(_BACKEND, "CLAUDE.md") if which == "backend" \
+        else os.path.join(_ROOT, "CLAUDE.md")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _diary_upload_row(claude_md):
+    """Extrae la fila de la tabla Historial-quota-exemption para
+    `/api/diary/upload` (una sola línea `| ... |`) -- pinchar la fila
+    específica, no "en algún lado del archivo de 50k chars", para que el
+    test no dé falso-verde si el texto aparece en otra sección."""
+    m = re.search(r"^\|\s*`/api/diary/upload`.*\|$", claude_md, re.MULTILINE)
+    assert m, "no se encontró la fila de `/api/diary/upload` en Historial-quota-exemption."
+    return m.group(0)
+
+
+@pytest.mark.parametrize("which", ["backend", "workspace-root"])
+def test_claude_md_diary_upload_row_documenta_llm_usage_events(which):
+    row = _diary_upload_row(_claude_md(which))
+    assert "P1-VISION-LUNA" in row, f"{which}: falta el marker P1-VISION-LUNA en la fila."
+    assert "llm_usage_events" in row, (
+        f"{which}: la fila debe decir que el costo de un scan cloud vive "
+        f"en llm_usage_events, no solo que log_api_usage desapareció."
+    )
+    assert "log_llm_usage_event" in row
+    assert "vision_scan" in row
+    # La fila vieja decía "log_api_usage solo si el provider es cloud pago" --
+    # eso ahora es FALSO (nunca se llama, ni local ni cloud). Si el texto
+    # viejo sobrevive literal, la fila miente sobre el comportamiento actual.
+    assert "log_api_usage solo si" not in row
+
+
+def test_claude_md_copies_stay_in_sync_p1_vision_luna():
+    """Redundante a propósito con test_p1_diary_editable.py -- el bug real
+    (P1-DIARY-EDITABLE) fue exactamente "una sola copia se editó"; este
+    P-fix toca la MISMA fila y merece su propio guard independiente del
+    archivo de test de otro P-fix."""
+    assert _claude_md("backend") == _claude_md("workspace-root"), (
+        "Las dos copias de CLAUDE.md divergieron tras el edit de "
+        "P1-VISION-LUNA -- sincronizar ambas (solo backend/CLAUDE.md vive "
+        "en git)."
+    )

@@ -7,14 +7,23 @@ import uuid
 import asyncio
 from pydantic import BaseModel, Field, field_validator
 from db_core import _storage_client
-from db_profiles import get_user_profile, log_api_usage
 # [P1-MEAL-SCAN-GEMMA · 2026-07-12] verify_api_quota removido del import: el
 # único consumidor era /upload, hoy quota-exempt (gemma local, costo LLM cero).
 from auth import get_verified_user_id
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
-from db import log_consumed_meal, get_consumed_meals_today, save_visual_entry, delete_consumed_meal
-from vision_agent import process_image_with_vision, get_multimodal_embedding, is_vision_local
+# [P3-DB-IMPORTS-FACADE · boy scout] `get_user_profile`/`log_llm_usage_event`
+# migrados a la fachada `db` en el mismo edit que tocó este bloque
+# (P1-VISION-LUNA · 2026-07-28) — `log_api_usage` salió del import: su único
+# call site en este archivo (visión) se reemplazó por `log_llm_usage_event`.
+from db import (
+    log_consumed_meal, get_consumed_meals_today, save_visual_entry,
+    delete_consumed_meal, get_user_profile, log_llm_usage_event,
+)
+from vision_agent import (
+    process_image_with_vision, get_multimodal_embedding, is_vision_local,
+    _vision_model_name,
+)
 # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top — verificado que
 # `cron_tasks` NO importa `routers.diary` (no circular). El late import dentro
 # del handler era frágil: un refactor que renombrara `trigger_incremental_learning`
@@ -199,14 +208,15 @@ async def api_diary_upload(
     user_id: str = Form("guest"),
     session_id: str = Form(None),
     tz_offset_mins: int = Form(0),
-    # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Quota-exempt (doctrina P1-NEVERA-QUOTA-
-    # EXEMPT): el análisis corre en gemma LOCAL (Ollama vía túnel, costo LLM
-    # cero) — antes `verify_api_quota` devolvía 402 al cap mensual Y cada scan
+    # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28]
+    # Quota-exempt PERMANENTE (doctrina P1-NEVERA-QUOTA-EXEMPT), sin importar
+    # el provider: `verify_api_quota` devolvía 402 al cap mensual Y cada scan
     # quemaba un crédito de planes (`get_monthly_api_usage` cuenta toda fila de
     # api_usage sin filtrar endpoint). Anti-spam: _VISION_UPLOAD_LIMITER
-    # (10/60s por user/IP) + single-flight de GPU en vision_agent. Si algún día
-    # el provider vuelve a ser cloud pago (openai_compatible), `is_vision_local()`
-    # abajo reactiva el log de uso — revisar entonces si reponer el paywall.
+    # (10/60s por user/IP) + single-flight de GPU en vision_agent. Cuando el
+    # provider es CLOUD pago (`not is_vision_local()`), el gasto real NO
+    # reactiva este paywall — va a `llm_usage_events` (libro de COSTO) vía
+    # `log_llm_usage_event`, ver el gate más abajo.
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
     # [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] throttle por user_id/IP.
     _rl_vision: Optional[str] = Depends(_VISION_UPLOAD_LIMITER),
@@ -455,13 +465,40 @@ async def api_diary_upload(
                     )
             # ------------------------------------------------------------
 
-            # [P1-MEAL-SCAN-GEMMA · 2026-07-12] Solo registra uso (cuenta al cap
-            # mensual) cuando el provider de visión es CLOUD pago — gemma local
-            # es costo cero y quemar crédito de planes por scan era el mismo bug
-            # de clase que P1-NEVERA-QUOTA-EXEMPT.
+            # [P1-MEAL-SCAN-GEMMA · 2026-07-12 → P1-VISION-LUNA · 2026-07-28]
+            # Encender un provider CLOUD pago (Luna) reabría el bug que
+            # P1-MEAL-SCAN-GEMMA cerró: `log_api_usage` escribía en `api_usage`
+            # (libro de CUOTA de planes) y `get_monthly_api_usage` cuenta TODA
+            # fila sin filtrar endpoint — 3 scans/día agotarían el cap gratis
+            # (15/mes) en 5 días, congelando la generación de planes por
+            # fotografiar comida. El gasto real (modelo + tokens si el
+            # provider los devuelve + USD) ahora va a `llm_usage_events`
+            # (libro de COSTO, NO de cuota) vía `log_llm_usage_event` — sigue
+            # siendo auditable (mismo sitio del canario de Luna) sin cobrarle
+            # un plan al usuario. `log_llm_usage_event` es best-effort y ya
+            # silencia sus propias excepciones — no envolver en otro try.
+            #
+            # Decisión: el path LOCAL (gemma/Ollama, costo cero) NO emite fila
+            # aquí. `llm_usage_events` es un libro de $ gastado, no de volumen
+            # de scans; una fila `cost_usd_micros=NULL` por cada scan gratis
+            # es ruido para ese propósito y no aporta nada que `is_vision_local()`
+            # + los logs de `vision_agent` no den ya. Si algún día se necesita
+            # auditar volumen de scans locales, el lugar correcto es
+            # `pipeline_metrics` (mismo patrón que `chrono_nutrition_red_alert`
+            # arriba en este archivo), no el libro de costo.
             if actual_user_id and actual_user_id != session_id and not is_vision_local():
                 # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
-                await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")
+                # `_vision_model_name()` es el modelo del provider CLOUD configurado
+                # (el único que llega a esta rama, ver `is_vision_local()` arriba);
+                # `process_image_with_vision` no expone hoy cuál provider sirvió
+                # realmente tras una cascada de fallback, así que este es el mejor
+                # accessor disponible — no se inventa un dato que el módulo no da.
+                await asyncio.to_thread(
+                    log_llm_usage_event,
+                    user_id=actual_user_id,
+                    model=_vision_model_name(),
+                    node="vision_scan",
+                )
 
             # 4. Guardar en DB en segundo plano (embedding + insert).
             # `description` se persiste limpio (sin poison_pill) — la
