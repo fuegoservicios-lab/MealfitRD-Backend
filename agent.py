@@ -4899,7 +4899,33 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('calculando_compras')})}\n\n"
                                 elif tool_name == "search_deep_memory":
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('buscando_memoria')})}\n\n"
-                                    
+                                else:
+                                    # [P1-CHAT-NARRATION-KEPT-REVIEW-1 · 2026-07-28]
+                                    # Fallback genérico para CUALQUIER tool_call sin
+                                    # bucket de mensaje dedicado (ej. check_current_pantry,
+                                    # modify_pantry_inventory, mark_shopping_list_purchased,
+                                    # check_hydration_today, log_water_glass,
+                                    # suggest_foods_for_nutrient, check_clinical_profile,
+                                    # consultar_dia_del_plan, regenerate_full_day — y
+                                    # cualquier tool futura añadida a `agent_tools`/
+                                    # `_PLAN_MUTATION_TOOLS` sin branch explícito acá).
+                                    #
+                                    # Por qué: el frontend (AgentPage.jsx / ChatWidget.jsx)
+                                    # usa el evento `progress` como ÚNICA señal de que una
+                                    # nueva pasada narrate-then-act está por comenzar, para
+                                    # insertar el mismo separador '\n\n' que
+                                    # `_build_final_content_from_messages` usa al unir
+                                    # AIMessage del turno (`"\n\n".join(parts)`, línea
+                                    # ~4117). Sin un progress event para ESTA tool_call, el
+                                    # frontend concatenaba las dos pasadas SIN separador —
+                                    # el `done.response` (que SÍ trae '\n\n') nunca hacía
+                                    # match contra lo ya mostrado en
+                                    # `reconcileFinalChatText` (`final.startsWith(displayed)`
+                                    # siempre falso para las 8+ tools sin branch dedicado),
+                                    # forzando SIEMPRE la rama 'replace' — reflow visible al
+                                    # final del turno. Ver hallazgo de review P1-CHAT-NARRATION-KEPT.
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('analizando')})}\n\n"
+
     except GeneratorExit:
         # [P1-CHAT-CANCEL · 2026-05-19] Cliente cerró el SSE stream antes de
         # que terminemos (tab-close, AbortController.abort, network drop).
