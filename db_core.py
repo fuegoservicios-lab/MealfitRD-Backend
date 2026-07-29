@@ -12,6 +12,16 @@ from dotenv import load_dotenv
 # (visible en /health/version y /api/system/knobs). `knobs` no tiene deps
 # internas → import a top-level seguro, sin riesgo de ciclo.
 from knobs import _env_int as _knob_env_int
+# [P0-TEST-DB-ISOLATION-3 · 2026-07-29] Import top-level de `psycopg` (best
+# effort, `ImportError` → None) para poder subclasificar `psycopg.Cursor` /
+# `psycopg.AsyncCursor` más abajo (`_GuardedSyncCursor`/`_GuardedAsyncCursor`).
+# Ya es dependencia dura de `psycopg_pool` (importado condicional en el
+# bloque `MEALFIT_DB_BACKEND == "neon"` más abajo) — este import no añade
+# ninguna dependencia nueva, solo la hace explícita donde se necesita.
+try:
+    import psycopg as _psycopg
+except ImportError:  # pragma: no cover - psycopg siempre instalado en runtime real
+    _psycopg = None
 
 
 
@@ -598,7 +608,17 @@ def _install_write_guard_on_cursor(cursor):
     """Envuelve `cursor.execute` (sync) para invocar `_guard_test_write_to_prod` en
     sentencias de escritura. Los SELECT pasan intactos — la guarda original solo
     protegía escrituras; bloquear lecturas de tests no-e2e rompería call sites
-    legítimos que leen contra el pool real (p.ej. mocks parciales)."""
+    legítimos que leen contra el pool real (p.ej. mocks parciales).
+
+    [P0-TEST-DB-ISOLATION-3 · 2026-07-29] Este path (asignación de INSTANCIA
+    `cursor.execute = ...`) solo es seguro sobre objetos plain con `__dict__`
+    (los test doubles `_FakeCursor`/`_FakeAsyncCursor` de
+    `test_p0_test_db_isolation.py`). Se PRESERVA sin cambios exclusivamente
+    para esos fakes — `_install_write_guard_on_connection`/`_install_write_guard_on_async_connection`
+    de abajo ya NO lo usan contra una conexión psycopg real; ver
+    `_GuardedSyncCursor` para la razón (`Cursor`/`AsyncCursor` son
+    `__slots__`-only, esta asignación lanza `AttributeError` incondicional
+    sobre ellos)."""
     _orig_execute = cursor.execute
 
     def _guarded_execute(query, *args, **kwargs):
@@ -611,7 +631,8 @@ def _install_write_guard_on_cursor(cursor):
 
 
 def _install_write_guard_on_async_cursor(cursor):
-    """Variante async de `_install_write_guard_on_cursor` — `execute` es awaitable."""
+    """Variante async de `_install_write_guard_on_cursor` — `execute` es awaitable.
+    Mismo alcance reducido a test doubles, ver docstring de la variante sync."""
     _orig_execute = cursor.execute
 
     async def _guarded_execute(query, *args, **kwargs):
@@ -623,10 +644,98 @@ def _install_write_guard_on_async_cursor(cursor):
     return cursor
 
 
+# [P0-TEST-DB-ISOLATION-3 · 2026-07-29] Incidente causado por P0-TEST-DB-ISOLATION-2:
+# `_install_write_guard_on_connection`/`_install_write_guard_on_async_connection`
+# envolvían `conn.cursor` para devolver un cursor con `_install_write_guard_on_cursor`
+# aplicado — es decir, `cursor.execute = _guarded_execute` como ATRIBUTO DE
+# INSTANCIA. Eso funciona sobre objetos plain (los `_FakeCursor` de los tests)
+# pero es SIEMPRE ilegal sobre un `psycopg.Cursor`/`AsyncCursor` REAL: ambas
+# clases (y toda su MRO, `BaseCursor` incluido) son `__slots__`-only — sin
+# `__dict__` de instancia — así que `cursor.execute = ...` lanza
+# `AttributeError: 'Cursor' object attribute 'execute' is read-only`
+# INCONDICIONALMENTE, sin importar la query, sin importar pytest.
+#
+# Cadena de fallo medida (2026-07-29, `PYTEST_CURRENT_TEST` completamente
+# AUSENTE — esto rompía producción, no solo tests):
+#   1. `configure_sync_conn` llama a `_install_write_guard_on_connection(conn)`.
+#      Esa llamada en sí NO lanza (solo reemplaza `conn.cursor`).
+#   2. Dos líneas después, el bloque best-effort `SET statement_timeout`
+#      hace `with conn.cursor() as _c:` → invoca el factory recién
+#      reemplazado → `_install_write_guard_on_cursor` → `AttributeError` ANTES
+#      de que exista un cursor (antes de `__enter__`). Atrapado por el
+#      `try/except Exception` preexistente de ese bloque → `configure_sync_conn`
+#      retorna limpio, el pool cree que la conexión quedó configurada.
+#   3. Pero `conn.cursor` quedó PERMANENTEMENTE apuntando al factory
+#      guardado → CUALQUIER `.cursor()` futuro sobre esa conexión física
+#      vuelve a lanzar, para siempre.
+#   4. `ConnectionPool.check_connection` (el `check=` del pool — hace
+#      `conn.execute("")`, que internamente es `self.cursor().execute(...)`)
+#      la encuentra "rota" en cada checkout → la descarta y crea una
+#      conexión de reemplazo.
+#   5. La conexión de reemplazo pasa por `configure_sync_conn` de nuevo →
+#      vuelve a envenenarse → vuelve a descartarse. Bucle hasta agotar
+#      `MEALFIT_DB_POOL_TIMEOUT_S` (20s en `.env`) →
+#      `psycopg_pool.PoolTimeout: couldn't get a connection after 20.00 sec`.
+#      CERO conexiones podían escapar el bucle — el pool quedaba 100%
+#      incapaz de servir NINGUNA query (lectura o escritura), sync Y async
+#      Y el pool del checkpointer de LangGraph, en tests Y EN PRODUCCIÓN.
+#
+# Fix: en vez de asignar sobre la INSTANCIA del cursor, subclasificar
+# `psycopg.Cursor`/`AsyncCursor` con `execute` como MÉTODO DE CLASE real
+# (nunca toca `__slots__`) y cablearla vía `conn.cursor_factory` — el hook
+# que psycopg YA usa internamente (`Connection.__init__` hace
+# `self.cursor_factory = Cursor`; `Connection.cursor()` construye
+# `self.cursor_factory(self, row_factory=row_factory)` cuando no hay
+# `name=`). `cursor_factory` vive en `Connection`/`AsyncConnection`, que NO
+# son `__slots__`-only (tienen `__dict__` real, `self.cursor_factory = Cursor`
+# ya lo demuestra en el propio `__init__` de psycopg) — asignarlo está
+# soportado. Cubre exactamente lo que el wrap legacy pretendía: CUALQUIER
+# cursor que esa conexión física produzca a lo largo de su vida, para TODOS
+# los checkouts futuros, sin tocar los 27+ call sites (I7/CLAUDE.md).
+if _psycopg is not None:
+
+    class _GuardedSyncCursor(_psycopg.Cursor):
+        """`psycopg.Cursor` con `execute` guardado como MÉTODO REAL (no
+        atributo de instancia) — ver comentario extenso arriba. Cableada vía
+        `conn.cursor_factory`, nunca instanciada directamente."""
+
+        def execute(self, query, *args, **kwargs):
+            if isinstance(query, str) and _WRITE_STATEMENT_RE.match(query):
+                _guard_test_write_to_prod(query)
+            return super().execute(query, *args, **kwargs)
+
+    class _GuardedAsyncCursor(_psycopg.AsyncCursor):
+        """Variante async de `_GuardedSyncCursor` — `execute` es awaitable."""
+
+        async def execute(self, query, *args, **kwargs):
+            if isinstance(query, str) and _WRITE_STATEMENT_RE.match(query):
+                _guard_test_write_to_prod(query)
+            return await super().execute(query, *args, **kwargs)
+
+else:  # pragma: no cover - psycopg siempre instalado en runtime real
+    _GuardedSyncCursor = None
+    _GuardedAsyncCursor = None
+
+
 def _install_write_guard_on_connection(conn) -> None:
-    """Parchea `conn.cursor` para que TODO cursor que la conexión produzca a lo largo
-    de su vida quede envuelto por `_install_write_guard_on_cursor`. Cablear desde
-    `configure_sync_conn` — corre UNA VEZ por conexión física (ver comentario arriba)."""
+    """Cablea la guarda test-vs-prod para TODO cursor que `conn` produzca a
+    lo largo de su vida. Cablear desde `configure_sync_conn`/
+    `configure_checkpoint_conn` — corre UNA VEZ por conexión física.
+
+    [P0-TEST-DB-ISOLATION-3 · 2026-07-29] Dos caminos:
+      - Conexión psycopg REAL (`hasattr(conn, "cursor_factory")`, ver
+        comentario extenso arriba de `_GuardedSyncCursor`): swap de
+        `conn.cursor_factory` a la subclase con `execute` como método real.
+        Nunca toca `__slots__` — el bug que causó el `PoolTimeout` universal.
+      - Test double sin `cursor_factory` (los `_FakeConn` de
+        `test_p0_test_db_isolation.py`, que no imitan ese atributo): legacy
+        fallback, wrap de `conn.cursor` + `_install_write_guard_on_cursor`
+        vía asignación de instancia — funciona porque esos fakes son
+        objetos plain con `__dict__`.
+    """
+    if _GuardedSyncCursor is not None and hasattr(conn, "cursor_factory"):
+        conn.cursor_factory = _GuardedSyncCursor
+        return
     _orig_cursor = conn.cursor
 
     def _guarded_cursor(*args, **kwargs):
@@ -637,7 +746,11 @@ def _install_write_guard_on_connection(conn) -> None:
 
 def _install_write_guard_on_async_connection(conn) -> None:
     """Variante async de `_install_write_guard_on_connection` — cablear desde
-    `configure_async_conn`."""
+    `configure_async_conn`. Mismos dos caminos, ver docstring de la variante
+    sync."""
+    if _GuardedAsyncCursor is not None and hasattr(conn, "cursor_factory"):
+        conn.cursor_factory = _GuardedAsyncCursor
+        return
     _orig_cursor = conn.cursor
 
     def _guarded_cursor(*args, **kwargs):
