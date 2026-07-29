@@ -254,5 +254,35 @@ def test_marker_anchor_present_in_routers_plans():
 
 
 def test_last_known_pfix_bumped():
+    """A prueba de supersesión — NO fijar el marcador propio.
+
+    `_LAST_KNOWN_PFIX` es last-writer-wins por diseño: el owner cierra varios P-fixes al día
+    y cada uno lo reescribe. Un test que exija literalmente su propio slug pasa exactamente
+    una vez y luego falla para siempre — este archivo lo hacía y se puso rojo en cuanto
+    aterrizaron P1-SWAP-PROSE-HONEST y P1-CHAT-DIARY-CORRECT el mismo día. Es un defecto ya
+    documentado en el repo ("dos tests fijan un marker histórico mientras otro obliga a
+    bumpearlo: rotos por construcción").
+
+    Lo que este test debe garantizar es que el marcador NO quedó atrás de este P-fix: vale el
+    propio slug o cualquier marcador de fecha igual o posterior.
+    """
+    import re as _re
+    from datetime import date as _date
+
+    _OWN_DATE = _date(2026, 7, 29)
     app_src = pathlib.Path(g.__file__).parent.joinpath("app.py").read_text(encoding="utf-8")
-    assert 'P1-FALLBACK-CAUSE-SPLIT · 2026-07-29' in app_src
+
+    m = _re.search(r'_LAST_KNOWN_PFIX\s*=\s*["\']([^"\']+)["\']', app_src)
+    assert m, "no se encontró _LAST_KNOWN_PFIX en app.py"
+    marker = m.group(1)
+
+    if 'P1-FALLBACK-CAUSE-SPLIT' in marker:
+        return  # es el nuestro
+
+    dm = _re.search(r'(\d{4})-(\d{2})-(\d{2})', marker)
+    assert dm, f"marcador sin fecha parseable: {marker!r}"
+    marker_date = _date(int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
+    assert marker_date >= _OWN_DATE, (
+        f"_LAST_KNOWN_PFIX = {marker!r} es ANTERIOR a P1-FALLBACK-CAUSE-SPLIT ({_OWN_DATE}). "
+        "Un P-fix posterior debe superponerlo, nunca retrocederlo."
+    )
