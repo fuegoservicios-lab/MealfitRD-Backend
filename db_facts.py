@@ -653,13 +653,102 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         # migración a connection_pool. `consumed_meals` quedó vacía
         # en prod (0 rows) — el diario de comidas del agente
         # nunca persistió nada. Tooltip-anchor: P1-CONSUMED-MEALS-JSONB.
-        execute_sql_write(
-            "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at)
+        # [P1-CHAT-DIARY-CORRECT · 2026-07-29] `RETURNING id` — antes el
+        # caller (tools.log_consumed_meal) solo recibía `True` en éxito, así
+        # que la LLM NUNCA tenía forma de nombrar esta fila específica en un
+        # turno posterior. Sin un id en contexto, "eso quedó mal, corrígelo"
+        # solo podía resolverse llamando log_consumed_meal OTRA VEZ —
+        # garantizando una fila fantasma (incidente verificado: 2 filas para
+        # una sola comida real, `a03ad8b2` + `c499a9e3`). Ahora el id vuelve
+        # en el ToolMessage de esa llamada y sobrevive en el historial de la
+        # conversación; `tools.correct_consumed_meal` lo usa para hacer un
+        # UPDATE atómico sobre la MISMA fila en vez de insertar una segunda.
+        # Backward-compatible: todos los callers existentes (`tools.py`,
+        # `routers/diary.py`) solo chequean truthiness (`is not None`,
+        # `!= "deduped"`, `not _logged_ok`) — un string uuid es tan truthy
+        # como el `True` que devolvía antes.
+        _rows = execute_sql_write(
+            "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at),
+            returning=True,
         )
-        return True
+        return str(_rows[0]["id"]) if _rows else True
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")
+        return None
+
+def update_consumed_meal(
+    user_id: str,
+    meal_id: str,
+    meal_name: Optional[str] = None,
+    calories: Optional[int] = None,
+    protein: Optional[int] = None,
+    carbs: Optional[int] = None,
+    healthy_fats: Optional[int] = None,
+    meal_type: Optional[str] = None,
+    ingredients: Optional[list] = None,
+    consumed_at_override: Optional[str] = None,
+) -> Optional[str]:
+    """Corrige EN SITIO una fila de `consumed_meals` mal registrada.
+
+    [P1-CHAT-DIARY-CORRECT · 2026-07-29] UPDATE atómico — NUNCA delete+insert.
+    El incidente que motiva este fix: el coach insertaba una SEGUNDA fila
+    cada vez que el usuario decía "eso quedó mal" porque `log_consumed_meal`
+    era la ÚNICA tool disponible para tocar el diario. Un UPDATE en una sola
+    sentencia SQL no puede dejar 0 ni 2 filas — o corrige la fila indicada,
+    o no toca nada (`RETURNING id` vacío ⇒ 404 honesto para el caller).
+
+    Solo los campos NO-None se incluyen en el `SET` (permite corregir un
+    solo campo, ej. solo `meal_type`, sin tener que reenviar calorías que
+    ya estaban bien). Filtra `AND user_id = %s` (invariante I2 — mismo
+    patrón que `delete_consumed_meal`, P1-DIARY-EDITABLE): un `meal_id`
+    ajeno (adivinado, o alucinado por la LLM) no toca ninguna fila porque
+    el `WHERE` compuesto nunca matchea, sea cual sea el resto del payload.
+    """
+    try:
+        if not connection_pool:
+            return None
+
+        set_parts = []
+        params: list = []
+        if meal_name is not None:
+            set_parts.append("meal_name = %s")
+            params.append(meal_name)
+        if calories is not None:
+            set_parts.append("calories = %s")
+            params.append(calories)
+        if protein is not None:
+            set_parts.append("protein = %s")
+            params.append(protein)
+        if carbs is not None:
+            set_parts.append("carbs = %s")
+            params.append(carbs)
+        if healthy_fats is not None:
+            set_parts.append("healthy_fats = %s")
+            params.append(healthy_fats)
+        if meal_type is not None:
+            set_parts.append("meal_type = %s")
+            params.append(meal_type)
+        if ingredients is not None:
+            set_parts.append("ingredients = %s")
+            params.append(Jsonb(ingredients))
+        if consumed_at_override is not None:
+            set_parts.append("consumed_at = %s")
+            params.append(consumed_at_override)
+
+        if not set_parts:
+            # Nada que corregir — no ejecutar un UPDATE vacío/no-op.
+            return None
+
+        params.extend([meal_id, user_id])
+        query = (
+            f"UPDATE consumed_meals SET {', '.join(set_parts)} "
+            "WHERE id = %s AND user_id = %s RETURNING id"
+        )
+        rows = execute_sql_write(query, tuple(params), returning=True)
+        return str(rows[0]["id"]) if rows else None
+    except Exception as e:
+        logger.error(f"Error corrigiendo comida consumida {meal_id}: {e}")
         return None
 
 def delete_consumed_meal(user_id: str, meal_id: str) -> bool:

@@ -18,6 +18,7 @@ from db import (
     get_user_likes, get_active_rejections, get_latest_meal_plan_with_id,
     update_meal_plan_data, search_deep_memory as db_search_deep_memory,
     log_consumed_meal as db_log_consumed_meal,
+    update_consumed_meal as db_update_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
     get_latest_meal_plan
 )
@@ -569,6 +570,26 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) como {_meal_type}{_cuando} en tu diario."
+        # [P1-CHAT-DIARY-CORRECT · 2026-07-29] Devolver el id de la fila
+        # insertada EN el ToolMessage. Sin esto, si el usuario dice después
+        # "eso quedó mal" la LLM no tiene forma de nombrar ESTA fila
+        # específica y su única palanca es volver a llamar
+        # `log_consumed_meal` — que inserta una SEGUNDA fila en vez de
+        # corregir la primera (incidente verificado: filas `a03ad8b2` +
+        # `c499a9e3` para una sola comida real). El id sobrevive en el
+        # historial de la conversación (ToolMessage persiste en `messages`)
+        # y `correct_consumed_meal` lo consume para un UPDATE atómico sobre
+        # la MISMA fila. `result == "deduped"` es el sentinel del guard
+        # anti doble-tap (db_facts.log_consumed_meal) — ahí NO hubo INSERT
+        # nuevo, así que no hay id de fila nueva que ofrecer.
+        if isinstance(result, str) and result != "deduped":
+            msg += (
+                f" [ID_REGISTRO_DIARIO: {result} — uso interno tuyo, NO se lo "
+                f"menciones ni se lo leas al usuario; guárdalo en tu contexto "
+                f"para poder corregir (`correct_consumed_meal`) o borrar ESTA "
+                f"fila exacta si el usuario te dice más adelante en esta "
+                f"conversación que quedó mal registrada.]"
+            )
         # [P1-AGENT-HINT · 2026-05-22] Si la deducción tuvo items que la
         # inferencia P1-PANTRY-INFER no pudo procesar, añadir hint visible
         # para la LLM en el ToolMessage. La LLM puede entonces pedir al
@@ -596,6 +617,154 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         return msg
     else:
         return "Hubo un error al intentar registrar la comida consumida. Por favor, intenta de nuevo."
+
+
+# ============================================================
+# TOOL: Corregir una comida YA registrada en el diario
+# ============================================================
+
+# [P1-CHAT-DIARY-CORRECT · 2026-07-29] Incidente real (verificado en DB):
+# usuario dijo "me comí 3 panes con queso... y una batida" hablando de un
+# tema que el coach había abierto ("¿del almuerzo no hay registro?"). El
+# coach ATRIBUYÓ esa respuesta al almuerzo de AYER (el tema en curso, no
+# algo que el usuario hubiera dicho) e insertó una fila. Dos turnos después
+# el usuario aclaró "me referia al desayuno de hoy" — el coach entendió mal
+# DE NUEVO, y cuando por fin corrigió, la ÚNICA herramienta disponible era
+# `log_consumed_meal`, que solo puede INSERTAR: quedaron 2 filas para 1
+# comida real (`a03ad8b2` almuerzo-ayer + `c499a9e3` desayuno-mañana,
+# eliminadas a mano). `correct_consumed_meal` cierra el gap: un UPDATE
+# atómico sobre la fila que `log_consumed_meal` ya devolvió en su
+# ID_REGISTRO_DIARIO — nunca un delete+insert (eso abriría una ventana
+# donde un fallo a mitad de turno deja al usuario con CERO filas, peor que
+# duplicar). `update_consumed_meal` (db_facts.py) hace ambas garantías:
+# UPDATE de una sola sentencia (0 o 1 fila tocada, jamás 2) + `WHERE id = %s
+# AND user_id = %s` (invariante I2 — un meal_id ajeno, adivinado o
+# alucinado por la LLM, no toca nada).
+#
+# P0-AGENT-1: esta tool tiene `user_id` como 1er parámetro — el override
+# genérico de `execute_tools` (agent.py) la cubre automáticamente, igual que
+# a `log_consumed_meal`. Ver entry #13 en
+# `backend/docs/agent_tools_user_id_table.md`.
+@tool
+def correct_consumed_meal(
+    user_id: str,
+    meal_id: str,
+    meal_name: str = None,
+    calories: int = None,
+    protein: int = None,
+    carbs: int = None,
+    healthy_fats: int = None,
+    meal_type: str = None,
+    days_ago: int = None,
+    ingredients: list[str] = None,
+) -> str:
+    """
+    Corrige EN SITIO una comida que YA está en el diario del usuario porque
+    quedó mal registrada (día equivocado, comida equivocada, macros
+    equivocados). Es un UPDATE sobre la MISMA fila — NUNCA crea una fila
+    nueva, así que NUNCA duplica el conteo calórico.
+    - meal_id: OBLIGATORIO. El 'ID_REGISTRO_DIARIO' EXACTO que recibiste en
+      el ToolMessage de la llamada a `log_consumed_meal` (o de una
+      corrección previa) que registró esa comida, DENTRO DE ESTA MISMA
+      CONVERSACIÓN. NUNCA inventes ni adivines un id — si no lo tienes en tu
+      contexto, pregúntale al usuario a cuál comida se refiere en vez de
+      llamar esta herramienta a ciegas.
+    - Pasa SOLO los campos que hay que cambiar (deja el resto en None/sin
+      mencionar) — no hace falta reenviar lo que ya estaba bien.
+    - meal_type: 'desayuno' | 'almuerzo' | 'cena' | 'merienda' | 'snack'.
+      Pásalo SOLO si el usuario está corrigiendo A QUÉ COMIDA fue.
+    - days_ago: 0=hoy, 1=ayer, 2=antier (máx 7). Pásalo SOLO si el usuario
+      está corrigiendo A QUÉ DÍA fue. El día y la comida deben salir de lo
+      que el USUARIO dijo explícitamente — NUNCA de qué estabas preguntando
+      TÚ justo antes; si no está claro, pregunta primero.
+    - Si la corrección tiene éxito, dile al usuario en una frase qué quedó
+      corregido. Si la herramienta responde ERROR, NO digas que corregiste
+      nada — dile la verdad y pregúntale a cuál comida se refiere; usa
+      `log_consumed_meal` solo si de verdad es una comida DISTINTA que aún
+      no está registrada.
+    """
+    # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
+    # ────────────────────────────────────────────────────────────────────────
+    # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
+    # el IDOR: `agent.py:execute_tools` force-overridea `tool_args["user_id"]`
+    # al `state["user_id"]` autenticado ANTES de invocar. Path normal seguro.
+    # Para llamadores DIRECTOS (tests, scripts, endpoints HTTP futuros):
+    #
+    #   1. NUNCA confiar en `user_id` LLM-supplied sin validar contra el
+    #      `verified_user_id` autenticado del request.
+    #   2. `db_update_consumed_meal` (db_facts.update_consumed_meal) DEBE
+    #      seguir filtrando `WHERE id = %s AND user_id = %s` en el MISMO
+    #      statement (defense-in-depth, invariante I2) — un `meal_id` ajeno
+    #      no debe tocar ninguna fila, sea cual sea el resto del payload.
+    #   3. Si extiendes esta tool para mutar tablas adicionales, aplicar el
+    #      mismo filtro `AND user_id = %s`.
+    #
+    # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
+    logger.debug(
+        f"🔧 [TOOL EXECUTION] Corrigiendo comida consumida user={user_id} "
+        f"meal_id={meal_id!r} meal_name={meal_name!r} meal_type={meal_type!r} "
+        f"days_ago={days_ago!r}"
+    )
+
+    if not meal_id or not str(meal_id).strip():
+        return (
+            "ERROR: falta el ID_REGISTRO_DIARIO de la fila a corregir. Solo puedes "
+            "corregir una comida que TÚ mismo registraste en esta conversación con "
+            "`log_consumed_meal` (o una corrección previa) — usa el "
+            "ID_REGISTRO_DIARIO que esa llamada te devolvió, nunca lo inventes."
+        )
+
+    # `meal_type=None` debe dejar la fila intacta — a diferencia de
+    # `log_consumed_meal` (donde `_normalize_meal_type(None)` cae a
+    # "snack" porque SIEMPRE hay que guardar algo), aquí None significa
+    # "el usuario no está corrigiendo esto".
+    _meal_type = _normalize_meal_type(meal_type) if meal_type is not None else None
+
+    _consumed_at_override = None
+    _dia_txt = ""
+    if days_ago is not None:
+        from datetime import datetime, timezone as _tz, timedelta as _td
+        _d = _clamp_days_ago(days_ago)
+        _consumed_at_override = (datetime.now(_tz.utc) - _td(days=_d)).isoformat()
+        _dia_txt = "hoy" if _d == 0 else ("ayer" if _d == 1 else f"hace {_d} días")
+
+    updated_id = db_update_consumed_meal(
+        user_id,
+        str(meal_id).strip(),
+        meal_name=meal_name,
+        calories=calories,
+        protein=protein,
+        carbs=carbs,
+        healthy_fats=healthy_fats,
+        meal_type=_meal_type,
+        ingredients=ingredients,
+        consumed_at_override=_consumed_at_override,
+    )
+
+    if updated_id:
+        bits = []
+        if meal_name is not None:
+            bits.append(f"nombre → '{meal_name}'")
+        if _meal_type is not None:
+            bits.append(f"comida → {_meal_type}")
+        if _dia_txt:
+            bits.append(f"día → {_dia_txt}")
+        if calories is not None:
+            bits.append(f"{calories} kcal")
+        detalle = ", ".join(bits) if bits else "los campos indicados"
+        return (
+            f"¡Corregido! Actualicé el registro existente ({detalle}) — no se creó "
+            f"ninguna fila nueva. [ID_REGISTRO_DIARIO: {updated_id} — uso interno "
+            f"tuyo, NO se lo menciones ni se lo leas al usuario.]"
+        )
+    else:
+        return (
+            "ERROR: no encontré esa fila del diario para corregir (puede que el id "
+            "no exista, no sea de este usuario, o no hayas pasado ningún campo a "
+            "cambiar). NO digas que quedó corregido — dile la verdad al usuario y "
+            "pregúntale a cuál comida se refiere."
+        )
+
 
 # ============================================================
 # TOOL: Modificar una comida individual del plan activo
@@ -3442,7 +3611,7 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
 
 
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, log_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan]
+agent_tools = [update_form_field, log_consumed_meal, correct_consumed_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient, check_clinical_profile, consultar_dia_del_plan]
 
 # [P1-CHAT-PLAN-TOOLS-OFF · 2026-07-12] Mutación de plan detrás del knob
 # (OFF por ahora — ver _chat_plan_mutation_tools_enabled).

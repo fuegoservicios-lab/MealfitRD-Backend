@@ -13,7 +13,7 @@ Cierre del audit 2026-05-11 (P3 polish):
         en SQL, y no introducir lookups globales sin filtro.
 
 P3-NEW-7 ya cubría `modify_single_meal` (tool DUMMY interceptada). P3-DOC-2
-extiende el patrón a las 4 tools live restantes con contrato adaptado:
+extiende el patrón a las tools live restantes con contrato adaptado:
 
     1. `update_form_field`        — muta `user_profiles.health_profile` +
                                     `user_facts` (delete_user_facts_by_metadata)
@@ -21,6 +21,8 @@ extiende el patrón a las 4 tools live restantes con contrato adaptado:
                                     (deduct_consumed_meal_from_inventory)
     3. `modify_pantry_inventory`  — muta `user_inventory` (add/deduct)
     4. `mark_shopping_list_purchased` — muta `user_inventory` (restock)
+    5. `correct_consumed_meal`    — muta `consumed_meals` (UPDATE por id,
+                                    P1-CHAT-DIARY-CORRECT · 2026-07-29)
 
 Test parser-based: scan `tools.py` para verificar que cada tool live tenga
 el bloque P3-DOC-2 LIVE-TOOL CONTRACT + tooltip-anchor compartido. Si
@@ -63,6 +65,9 @@ _LIVE_TOOLS_WITH_CONTRACT = [
     "def log_consumed_meal(",
     "def modify_pantry_inventory(",
     "def mark_shopping_list_purchased(",
+    # [P1-CHAT-DIARY-CORRECT · 2026-07-29] 5ª tool live: corrige (UPDATE)
+    # una fila de `consumed_meals` ya existente por su id.
+    "def correct_consumed_meal(",
 ]
 
 
