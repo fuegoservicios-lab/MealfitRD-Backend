@@ -22731,7 +22731,20 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
     # porque el floor muta cantidades DESPUÉS del qty-sync de arriba.
     try:
         if PORTION_SHRINK_FLOOR_ENABLED:
-            _nsfb = _floor_subservible_portions(days, day_kcal_target=None, db=db)
+            # [P1-PROTAGONIST-CONTEXT-GATE · 2026-07-29] day-target derivado 4-4-9 desde
+            # target_macros (el shield pre-INSERT ya lo extrae del propio plan_data) → el
+            # piso protagonista corre con headroom REAL también en los planes que saltan
+            # assemble, en vez de disparar ciego y ser revertido por la banda.
+            _sfl_day_kcal_fpc = None
+            try:
+                if isinstance(target_macros, dict):
+                    _sfl_day_kcal_fpc = (
+                        4.0 * (float(target_macros.get("protein_g") or 0)
+                               + float(target_macros.get("carbs_g") or 0))
+                        + 9.0 * float(target_macros.get("fats_g") or 0)) or None
+            except Exception:
+                _sfl_day_kcal_fpc = None
+            _nsfb = _floor_subservible_portions(days, day_kcal_target=_sfl_day_kcal_fpc, db=db)
             if _nsfb:
                 total += _nsfb; parts.append(f"shrink_floor={_nsfb}")
                 for _d in days or []:
@@ -27215,6 +27228,17 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     _kcal_per_g = float(_mc_pf.get("kcal") or 0) / cur_g
                             except Exception:
                                 _kcal_per_g = 0.0
+                            # [P1-PROTAGONIST-CONTEXT-GATE · 2026-07-29] Sin contexto verificable
+                            # (day-target o db ausentes) el bump disparaba CIEGO al piso completo y
+                            # el reconciliador de banda lo deshacía — oscilación + log fantasma
+                            # (burrito 40g→75g logueado, 40g en DB, corr=6acd0c94). El surface con
+                            # headroom real decide; aquí se declina con razón propia.
+                            if _headroom is None or _kcal_per_g <= 0:
+                                logger.info(
+                                    f"🍖 [P1-RECIPE-VISIBLE-DEFECTS] piso PROTAGONISTA DECLINADO en "
+                                    f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g — sin contexto kcal "
+                                    f"(day-target/db ausentes); decide el surface con headroom")
+                                continue
                             _tgt_pf = float(PROTAGONIST_PROTEIN_MIN_G)
                             if _headroom is not None and _kcal_per_g > 0:
                                 _afford_g = cur_g + max(0.0, _headroom) / _kcal_per_g
@@ -27271,6 +27295,14 @@ def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:
                                     _kcal_per_g_cf = float(_mc_cf.get("kcal") or 0) / cur_g
                             except Exception:
                                 _kcal_per_g_cf = 0.0
+                            # [P1-PROTAGONIST-CONTEXT-GATE] espejo del gate de proteína: sin
+                            # contexto kcal verificable, declinar — nunca disparar ciego.
+                            if _headroom is None or _kcal_per_g_cf <= 0:
+                                logger.info(
+                                    f"🍠 [P1-RECIPE-POLISH-5] piso carbo PROTAGONISTA DECLINADO en "
+                                    f"'{str(meal.get('name'))[:40]}': {int(cur_g)}g — sin contexto kcal "
+                                    f"(day-target/db ausentes); decide el surface con headroom")
+                                continue
                             _tgt_cf = float(PROTAGONIST_CARB_MIN_G)
                             if _headroom is not None and _kcal_per_g_cf > 0:
                                 _afford_cf = cur_g + max(0.0, _headroom) / _kcal_per_g_cf

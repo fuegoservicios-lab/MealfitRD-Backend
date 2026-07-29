@@ -74,6 +74,19 @@ def test_b_wired_in_both_finalizers():
 
 
 def test_c_carb_protagonist_floor():
+    """[reapuntado 2026-07-29 · P1-PROTAGONIST-CONTEXT-GATE] Este test llamaba con
+    day_kcal_target=None y db=None y esperaba el bump — codificaba el DISPARO CIEGO que en
+    prod oscilaba (el shield bumpeaba 75g sin headroom y la banda lo revertía; burrito
+    corr=6acd0c94: log 40→75, DB 40). Ahora sin contexto se DECLINA (anclado en
+    test_p1_protagonist_context_gate.py); el bump legítimo exige day-target + db."""
+    import re as _re_t
+
+    class _DB:
+        def macros_from_ingredient_string(self, s):
+            m = _re_t.match(r"^\s*(\d+(?:[.,]\d+)?)\s*g", str(s))
+            g = float(m.group(1).replace(",", ".")) if m else 0.0
+            return {"kcal": g * 1.2, "protein": g * 0.05, "carbs": g * 0.25, "fats": 0.0}
+
     from graph_orchestrator import _floor_subservible_portions
     days = [{"day": 1, "meals": [{
         "name": "Pechuga Guisada con Cama de Yautía Asada",
@@ -81,11 +94,11 @@ def test_c_carb_protagonist_floor():
         "ingredients_raw": ["120 g de pechuga de pollo", "15 g de yautía"],
         "recipe": ["Hornea la yautía."],
         "protein": 30, "carbs": 10, "fats": 8, "cals": 280}]}]
-    _floor_subservible_portions(days, day_kcal_target=None, db=None)
+    _floor_subservible_portions(days, day_kcal_target=2000, db=_DB())
     y = next(i for i in days[0]["meals"][0]["ingredients"] if "yaut" in str(i).lower())
     assert y.startswith("60 g"), (
         "carbo protagonista (nombre∩línea) bajo el piso → bump a PROTAGONIST_CARB_MIN_G "
-        "(vivo: cama de yautía asada con 15g)"
+        "(vivo: cama de yautía asada con 15g) — con headroom real"
     )
 
 

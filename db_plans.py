@@ -1005,7 +1005,16 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                 except Exception:
                     _tf_ins = None
                     _tm_ins = None
-                _n, _summ = _fpc(_pd["days"], target_fats=_tf_ins,
+                # [P1-PROTAGONIST-CONTEXT-GATE · 2026-07-29] db real para el chain: sin él,
+                # el piso protagonista del floor no puede medir affordability (kcal/g) y
+                # declina; con él + target_macros (kcal 4-4-9 derivado dentro de fpc) los
+                # planes que saltan assemble conservan el piso con headroom honesto.
+                try:
+                    from nutrition_db import IngredientNutritionDB as _NDB_ins
+                    _db_ins = _NDB_ins()
+                except Exception:
+                    _db_ins = None
+                _n, _summ = _fpc(_pd["days"], db=_db_ins, target_fats=_tf_ins,
                                  main_goal=_pd.get("main_goal"), target_macros=_tm_ins)
                 if _n:
                     logger.info(f"🧩 [P1-COHERENCE-FINALIZE] {surface} aplicó coherencia a un plan no-finalizado ({_summ}).")
