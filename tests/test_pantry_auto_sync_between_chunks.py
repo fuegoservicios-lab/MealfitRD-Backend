@@ -242,13 +242,23 @@ def test_invalid_args_are_noop():
 # 6. log_consumed_meal con mark_inventory_synced=True
 # ---------------------------------------------------------------------------
 def test_log_consumed_meal_marks_inventory_synced_when_requested():
+    """[P3-PANTRY-SYNC-TEST-ISOLATION · 2026-07-29] Dos fallos que tenían este test rojo en HEAD:
+
+    1. El fake de `execute_sql_write` no aceptaba `returning=`, kwarg que producción ya pasa →
+       TypeError tragado por el `except` de `log_consumed_meal` y `captured` vacío.
+    2. **El test consultaba Neon DE VERDAD**: parcheaba `execute_sql_write` pero NO
+       `execute_sql_query`, que es lo que usa el check de dedup (P2-CONSUMED-DEDUP) — el log lo
+       delataba (`invalid input syntax for type uuid: "u1"`). Un test unitario que abre una consulta
+       contra producción es la misma clase que P0-TEST-DB-ISOLATION; se parchea también.
+    """
     captured = {}
 
-    def fake_write(query, params=None):
+    def fake_write(query, params=None, **kw):
         captured["query"] = query
         captured["params"] = params
 
     with patch.object(db_facts, "connection_pool", object()), \
+         patch.object(db_facts, "execute_sql_query", return_value=[]), \
          patch.object(db_facts, "execute_sql_write", side_effect=fake_write):
         db_facts.log_consumed_meal(
             user_id="u1",
@@ -269,10 +279,12 @@ def test_log_consumed_meal_marks_inventory_synced_when_requested():
 def test_log_consumed_meal_default_does_not_mark_synced():
     captured = {}
 
-    def fake_write(query, params=None):
+    def fake_write(query, params=None, **kw):
         captured["params"] = params
 
+    # [P3-PANTRY-SYNC-TEST-ISOLATION] ídem: `returning=` + dedup sin tocar Neon.
     with patch.object(db_facts, "connection_pool", object()), \
+         patch.object(db_facts, "execute_sql_query", return_value=[]), \
          patch.object(db_facts, "execute_sql_write", side_effect=fake_write):
         db_facts.log_consumed_meal(
             user_id="u1",

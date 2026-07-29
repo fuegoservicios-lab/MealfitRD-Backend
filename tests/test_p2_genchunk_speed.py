@@ -107,7 +107,13 @@ def test_a_chat_plan_prune_keys_and_helper():
         "_archived_days",
         "calc_household_multiplier",
     ]
-    block = src[src.find("_CHAT_PLAN_PRUNE_KEYS"): src.find("_CHAT_PLAN_PRUNE_KEYS") + 600]
+    # [P3-PRUNE-KEYS-ANCHOR · 2026-07-29] Anclar a la ASIGNACIÓN y recortar hasta el cierre de la
+    # tupla, no una ventana de 600 bytes desde el nombre: `find()` aterrizaba en el comentario
+    # tooltip-anchor, así que cualquier bloque insertado entre el comentario y la definición empujaba
+    # la lista fuera del recorte (pasó al añadir un knob ahí). Ventana fija = deuda con caducidad.
+    _i = src.find("_CHAT_PLAN_PRUNE_KEYS = (")
+    assert _i != -1, "no se encontró la asignación de _CHAT_PLAN_PRUNE_KEYS"
+    block = src[_i: src.index("\n)", _i)]
     for k in expected:
         assert f'"{k}"' in block, f"A: clave {k!r} ausente de _CHAT_PLAN_PRUNE_KEYS."
     assert "def _prune_plan_for_chat(" in src, "A: falta el helper _prune_plan_for_chat."

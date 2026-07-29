@@ -83,10 +83,28 @@ def test_prompts_teach_clinical_tool():
     assert "NO diagnostiques" in prompts
 
 
-def test_doc_table_has_clinical_row():
-    # [P1-CHAT-PLAN-TOOLS-OFF] la tabla bajó a 11 tools activas; luego subió a
-    # 12 con `consultar_dia_del_plan` (P1-CHAT-PAST-DAYS · 2026-07-27).
-    with open(os.path.join(_BACKEND, "docs", "agent_tools_user_id_table.md"),
-              encoding="utf-8") as f:
+def _doc_and_tool_count():
+    """[P3-DOC-TOOL-COUNT-DERIVED · 2026-07-29] El número de tools del doc se DERIVA de
+    `agent_tools`, no se ancla a un literal.
+
+    Este test (y su hermano en test_p1_chat_plan_tools_off) llevaban días ROJOS en HEAD por anclar
+    "Las 12 tools" cuando P1-CHAT-DIARY-CORRECT añadió la 13ª (`correct_consumed_meal`) y actualizó
+    el doc. Un test que ancla un CONTEO caduca cada vez que el conteo cambia legítimamente, y su
+    rojo no dice nada útil — el contrato real es "el doc y el código coinciden", que es justo lo que
+    ahora se comprueba: añadir una tool sin tocar el doc falla con el diagnóstico correcto."""
+    import re
+    with open(os.path.join(_BACKEND, "docs", "agent_tools_user_id_table.md"), encoding="utf-8") as f:
         doc = f.read()
-    assert "`check_clinical_profile`" in doc and "Las 12 tools" in doc
+    with open(os.path.join(_BACKEND, "tools.py"), encoding="utf-8") as f:
+        src = f.read()
+    m = re.search(r"agent_tools\s*=\s*\[(.*?)\]", src, re.S)
+    n_tools = len([t for t in re.findall(r"\w+", m.group(1))]) if m else 0
+    return doc, n_tools
+
+
+def test_doc_table_has_clinical_row():
+    doc, n_tools = _doc_and_tool_count()
+    assert "`check_clinical_profile`" in doc
+    assert f"Las {n_tools} tools" in doc, (
+        f"el doc no declara las {n_tools} tools que hay en `agent_tools` — "
+        f"¿añadiste una tool sin actualizar docs/agent_tools_user_id_table.md?")

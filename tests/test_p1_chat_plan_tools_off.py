@@ -58,8 +58,17 @@ def test_prompts_restore_with_knob_on(monkeypatch):
 
 
 def test_doc_moves_retired_tools_out_of_parity_table():
+    # [P3-DOC-TOOL-COUNT-DERIVED · 2026-07-29] el conteo se DERIVA de `agent_tools` (ver el helper
+    # gemelo en test_p1_chat_clinical_tool): anclarlo a un literal dejaba el test rojo cada vez que
+    # se añadía una tool legítimamente — y el rojo no señalaba el problema real.
+    import re
     with open(os.path.join(_BACKEND, "docs", "agent_tools_user_id_table.md"),
               encoding="utf-8") as f:
         doc = f.read()
+    with open(os.path.join(_BACKEND, "tools.py"), encoding="utf-8") as f:
+        src = f.read()
+    m = re.search(r"agent_tools\s*=\s*\[(.*?)\]", src, re.S)
+    n_tools = len(re.findall(r"\w+", m.group(1))) if m else 0
     assert "Retiradas temporalmente" in doc
-    assert "Las 12 tools cubiertas" in doc
+    assert f"Las {n_tools} tools cubiertas" in doc, (
+        f"el doc debe declarar las {n_tools} tools activas de `agent_tools`")

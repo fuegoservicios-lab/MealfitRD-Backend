@@ -50,24 +50,28 @@ def _read(path: Path) -> str:
 # ============================================================
 
 def test_agent_page_strips_refresh_inventory_in_streaming():
-    """[P1-CHAT-UI-ACTION-INVENTORY] El callsite del streaming chunk debe
-    detectar `[UI_ACTION: REFRESH_INVENTORY]`, removerlo del texto, y
-    dispatch `mealfit:refresh-inventory` custom event."""
+    """[P1-CHAT-UI-ACTION-INVENTORY] `[UI_ACTION: REFRESH_INVENTORY]` debe removerse del texto y
+    disparar el custom event, en los DOS caminos (chunk de streaming + payload `done`).
+
+    [P3-UI-ACTION-TEST-SSOT · 2026-07-29] Re-anclado: `P1-CHAT-NARRATION-KEPT · 2026-07-28` extrajo el
+    strip a un módulo SSOT (`utils/chatStreamReconcile.stripUiActionTags`) precisamente para que
+    chunk y done no divergieran. El test seguía CONTANDO el literal dentro de AgentPage.jsx, donde ya
+    no vive → rojo en HEAD desde ayer, señalando un problema que no existe (es la mejora, no el bug).
+    Ahora: el literal se exige en el SSOT, y en AgentPage se exige el cableado de los dos caminos."""
+    ssot = _read(_REPO_ROOT / "frontend" / "src" / "utils" / "chatStreamReconcile.js")
+    assert re.search(r"\[UI_ACTION:\s*REFRESH_INVENTORY\]", ssot), \
+        "el SSOT del strip debe reconocer el tag REFRESH_INVENTORY"
+    assert re.search(r"replace\(/\\\[UI_ACTION:\\s\*REFRESH_INVENTORY\\\]/g", ssot) \
+        or "REFRESH_INVENTORY\\]/g" in ssot, "y removerlo del texto mostrado"
+
     src = _read(_AGENT_PAGE_JSX)
-    # El handler de REFRESH_INVENTORY DEBE aparecer >=2 veces (streaming + done).
-    inventory_strip = re.findall(
-        r"\[UI_ACTION:\s*REFRESH_INVENTORY\]",
-        src,
-    )
-    # 2 ocurrencias mínimas: el `includes('[UI_ACTION: REFRESH_INVENTORY]')` x2
-    # + el `replace(/\[UI_ACTION:\s*REFRESH_INVENTORY\]/g, '')` x2 = 4.
-    # Si solo aparece 1 vez, falta uno de los callsites.
-    assert len(inventory_strip) >= 2, (
-        f"Solo {len(inventory_strip)} ocurrencias de `[UI_ACTION: REFRESH_INVENTORY]` "
-        f"en AgentPage.jsx. Esperaba >=2 (streaming chunk + post-stream done). "
-        f"Sin esto, el tag se renderiza tal cual al user. Ver "
-        f"P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20."
-    )
+    n_wired = len(re.findall(r"stripUiActionTags\s*\(", src))
+    assert n_wired >= 2, (
+        f"Solo {n_wired} callsite(s) de `stripUiActionTags` en AgentPage.jsx. Esperaba >=2 "
+        f"(chunk de streaming + post-stream done). Si falta uno, el tag se renderiza tal cual al "
+        f"usuario por ese camino. Ver P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20 y "
+        f"P1-CHAT-NARRATION-KEPT · 2026-07-28.")
+    assert "onRefreshInventory" in src, "y el handler que dispara el custom event sigue cableado"
 
 
 def test_agent_page_dispatches_refresh_inventory_event():

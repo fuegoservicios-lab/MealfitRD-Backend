@@ -139,15 +139,8 @@ def strip_ui_action_tags_for_persist(text):
 # `day_number`/`meal_type` correcto en `modify_single_meal`. NO podar días
 # week-2+ ni texto de recetas: degradaría la precisión del agente.
 # tooltip-anchor: _CHAT_PLAN_PRUNE_KEYS (test_p2_genchunk_speed parsea esto)
-
-# [P2-SWAP-NUM-MEALS · 2026-07-29] (audit solver+seeder v4) El slot-target del swap se derivaba
-# SIEMPRE con `num_meals = 4` (nadie aporta el campo) → en perfiles de 3/5/6 comidas el matcher
-# devolvía la cuota del slot equivocado y el solver re-escalaba físicamente el plato nuevo a ese
-# target. Con el knob, si el campo falta se deriva del perfil vía `decide_meals_per_day`; el literal
-# 4 sigue siendo el último fallback, así que nunca es peor que antes.
-# Rollback sin redeploy: MEALFIT_SWAP_NUM_MEALS_FROM_PLAN=false.
-SWAP_NUM_MEALS_FROM_PLAN = _env_bool("MEALFIT_SWAP_NUM_MEALS_FROM_PLAN", True)
-
+# ⚠️ NO insertar nada entre esta línea y la asignación de abajo: el test recortaba una ventana desde
+# el ancla, así que un bloque intermedio empujaba la lista fuera del recorte (ya pasó).
 _CHAT_PLAN_PRUNE_KEYS = (
     "aggregated_shopping_list",
     "aggregated_shopping_list_weekly",
@@ -173,6 +166,14 @@ _CHAT_PLAN_PRUNE_KEYS = (
     "resolution_coverage",
     "_transform_gate_advisory_final",
 )
+
+# [P2-SWAP-NUM-MEALS · 2026-07-29] (audit solver+seeder v4) El slot-target del swap se derivaba
+# SIEMPRE con `num_meals = 4` (nadie aporta el campo) → en perfiles de 3/5/6 comidas el matcher
+# devolvía la cuota del slot equivocado y el solver re-escalaba físicamente el plato nuevo a ese
+# target. Con el knob, si el campo falta se deriva del perfil vía `decide_meals_per_day`; el literal
+# 4 sigue siendo el último fallback, así que nunca es peor que antes.
+# Rollback sin redeploy: MEALFIT_SWAP_NUM_MEALS_FROM_PLAN=false.
+SWAP_NUM_MEALS_FROM_PLAN = _env_bool("MEALFIT_SWAP_NUM_MEALS_FROM_PLAN", True)
 
 
 def _prune_plan_for_chat(plan):
