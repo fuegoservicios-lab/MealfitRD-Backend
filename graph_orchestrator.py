@@ -27711,6 +27711,14 @@ _BUDGET_CHEAP_EQUIVALENTS = (
     # "habas guisadas" → "habichuelas rojas guisadas" es coherente es-DO. `\b` evita matchear
     # "habichuelas". Solo dispara sobre planes EXCEDIDOS (el cheapen no toca planes en presupuesto).
     (r"\bhabas?\b", "Habichuelas rojas", ("habichuela",)),
+    # [P1-DRIVER-FAMILIES-2 · 2026-07-29] espejo estático de las familias nuevas del pase
+    # driver-aware (ricotta/girasol/espárragos/kale/granada) — el backstop corre después
+    # y cubre planes cuyo ranking no vio el driver.
+    (r"(?:queso\s+)?ricotta|requeso[oó]?n|mascarpone", "Queso blanco", ()),
+    (r"semillas?\s+de\s+girasol", "Maní", ("aceite",)),
+    (r"esp[aá]rragos?", "Vainitas", ()),
+    (r"\bkale\b|col\s+rizada", "Espinacas", ()),
+    (r"granadas?\b", "Guineo", ()),
 )
 
 
@@ -27984,13 +27992,31 @@ _BUDGET_DRIVER_FAMILIES = (
      ("Carne de res molida",), ()),
     (r"queso\s+(?:cheddar|gouda|parmesano|mozzarella|manchego|suizo|azul|brie)",
      ("Queso blanco", "Queso de freír"), ()),
+    # [P1-DRIVER-FAMILIES-2 · 2026-07-29] (plan vivo af917e29: la convergencia sustituyó
+    # cangrejo −RD$2,106 y quedó RD$4,456 sobre porque los drivers restantes no tenían
+    # familia). Quesos frescos premium (tarro ricotta Sosua RD$400+/lb) → frescos económicos.
+    (r"(?:queso\s+)?ricotta|requeso[oó]?n|mascarpone|queso\s+crema",
+     ("Queso blanco", "Queso cottage"), ()),
     (r"almendras?|nueces|nuez|pistachos?|avellanas?|semillas?\s+de\s+cajuil|maca(?:damia)?s?",
      ("Maní",), ("leche de almendra", "harina de almendra", "nuez moscada")),
+    # [P1-DRIVER-FAMILIES-2] semillas premium → maní/linaza (jamás el aceite del mismo nombre).
+    (r"semillas?\s+de\s+girasol|semillas?\s+de\s+calabaza|ajonjol[ií]|s[eé]samo",
+     ("Maní", "Linaza"), ("aceite",)),
     (r"ch[ií]a", ("Linaza",), ()),
     (r"quinoa|quinua", ("Arroz integral",), ()),
-    (r"yogurt\s+griego|yogur\s+griego", ("Yogurt natural",), ()),
+    # [P1-DRIVER-FAMILIES-2] ⚠️ la lista costeada rankea por nombre CANÓNICO ("Yogurt") —
+    # exigir "yogurt griego" literal dejaba al driver #2 sin matchear aunque el plan
+    # estuviera lleno de griego (mismatch de base de nombres entre ranking y regex).
+    # El exclude "natural" protege las líneas ya económicas.
+    (r"yogurt\s+griego|yogur\s+griego|yogurt|yogur\b", ("Yogurt natural",), ("natural",)),
+    # [P1-DRIVER-FAMILIES-2] vegetales importados/premium → locales de la misma función.
+    (r"esp[aá]rragos?", ("Vainitas",), ()),
+    (r"\bkale\b|col\s+rizada", ("Espinacas",), ()),
     (r"fresas?|ar[aá]ndanos?|frambuesas?|moras?\b",
      ("Lechosa", "Piña"), ()),
+    # [P1-DRIVER-FAMILIES-2] frutas premium (granada RD$290/paquete arils, uvas importadas)
+    # → fruta local barata; "uvas pasas" es despensa, no fruta fresca.
+    (r"granadas?|uvas?\b", ("Guineo", "Lechosa"), ("pasas",)),
 )
 
 
