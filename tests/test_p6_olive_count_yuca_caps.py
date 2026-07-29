@@ -51,7 +51,11 @@ class TestOliveCapFix4:
         aceitunas raw post-mult. Pre-FIX-4: silenciosamente skipped. Post:
         cap a ~204 unidades (3 frascos × 68 olivas/frasco)."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        # [P2-CAP-LOG-LEVEL · 2026-07-29] captura a INFO: el log per-ítem del cap bajó de
+        # nivel (era el 74,6% del journal). El test comprueba que el cap DISPARA, no su
+        # severidad — acoplar una aserción de comportamiento al nivel de log la vuelve
+        # frágil ante una decisión de observabilidad.
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 aceitunas verdes"],
                 multiplier=18.666666,
@@ -75,7 +79,7 @@ class TestOliveCapFix4:
     def test_aceitunas_variants_count_capped(self, plural_form, caplog):
         """Variantes de nombre con count grande deben capear."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[plural_form],
                 multiplier=18.666666,
@@ -94,7 +98,7 @@ class TestOliveCapFix4:
     ])
     def test_olive_count_cap_scales(self, scenario, multiplier, expected_cap_count, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 aceitunas verdes"],
                 multiplier=multiplier,
@@ -110,7 +114,7 @@ class TestOliveCapFix4:
     def test_olive_weight_cap_still_works(self, caplog):
         """No-regresión: cap por peso (FIX-3) sigue funcionando."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["12 oz de aceitunas"] * 5,
                 multiplier=18.666666,
@@ -125,7 +129,7 @@ class TestOliveCapFix4:
     def test_olive_frasco_cap_still_works(self, caplog):
         """No-regresión: cap por unit substring (frasco) sigue funcionando."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["50 frascos de aceitunas"],
                 multiplier=18.666666,
@@ -147,7 +151,7 @@ class TestYucaCap:
     def test_repro_pdf_yuca_17_uds(self, caplog):
         """Caso real PDF 21:34: 17 unidades yuca para 2p×mes. Cap esperado: 24."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 yucas"],
                 multiplier=18.666666,
@@ -170,7 +174,7 @@ class TestYucaCap:
     ])
     def test_yuca_cap_scales(self, scenario, multiplier, expected_cap_uds, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 yucas"],
                 multiplier=multiplier,
@@ -187,7 +191,7 @@ class TestYucaCap:
     def test_papa_still_separately_capped(self, caplog):
         """No-regresión: papa sigue capeando (cap original 40)."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 papas"],
                 multiplier=18.666666,
@@ -203,7 +207,7 @@ class TestYucaCap:
     def test_batata_still_separately_capped(self, caplog):
         """No-regresión: batata (P6-VEG-EXT-3) sigue capeando."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 batatas"],
                 multiplier=18.666666,

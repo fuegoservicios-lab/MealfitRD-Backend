@@ -94,7 +94,11 @@ class TestSpiceCapFix2:
         14g/sobre fallback en display, mientras el cap usa 28g real. Lo que
         importa es que el cap se EJECUTA, no el display final."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        # [P2-CAP-LOG-LEVEL · 2026-07-29] captura a INFO: el log per-ítem del cap bajó de
+        # nivel (era el 74,6% del journal). El test comprueba que el cap DISPARA, no su
+        # severidad — acoplar una aserción de comportamiento al nivel de log la vuelve
+        # frágil ante una decisión de observabilidad.
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 oz de canela en polvo"] * 5,
                 multiplier=18.666666,
@@ -122,7 +126,7 @@ class TestSpiceCapFix2:
     def test_spice_cap_via_weight_units(self, unit_form, caplog):
         """Cap debe firar warning para CUALQUIER unit de peso."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"{unit_form} de canela en polvo"] * 5,
                 multiplier=18.666666,
@@ -142,7 +146,7 @@ class TestSpiceCapFix2:
     def test_other_spices_via_oz_capped(self, spice, caplog):
         """Mismo fix aplica a TODAS las especias del set."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"1 oz de {spice}"] * 5,
                 multiplier=18.666666,
@@ -162,7 +166,7 @@ class TestSauceCap:
     def test_repro_pdf_salsa_tomate_11_latas(self, caplog):
         """Caso real PDF 21:12: 11 latas de salsa de tomate. Cap firó."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 lata de salsa de tomate"] * 5,
                 multiplier=18.666666,
@@ -185,7 +189,7 @@ class TestSauceCap:
     ])
     def test_other_sauces_capped(self, sauce, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"1 lata de {sauce}"] * 5,
                 multiplier=18.666666,
@@ -197,7 +201,7 @@ class TestSauceCap:
     def test_sauce_cap_via_weight_units(self, caplog):
         """LLM puede emitir 'X oz salsa' → cap debe firar."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["8 oz de salsa de tomate"] * 5,
                 multiplier=18.666666,
@@ -217,7 +221,7 @@ class TestSauceCap:
     ])
     def test_sauce_cap_scales(self, scenario, multiplier, expected_cap_latas, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 lata de salsa de tomate"] * 5,
                 multiplier=multiplier,
@@ -340,7 +344,7 @@ class TestSpiceCapFix3SubstringMatch:
         """FIX-3: substring match debe firar cap aún con modificadores
         adicionales que el set anterior no anticipaba."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"5g de {name_with_modifier}"] * 5,
                 multiplier=18.666666,
@@ -356,7 +360,7 @@ class TestSpiceCapFix3SubstringMatch:
         """Sanity: 'ajo' fresco (cabezas) NO debe firar spice cap.
         Solo 'ajo en polvo' (frase completa) debe matchear."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 cabeza de ajo"] * 20,
                 multiplier=18.666666,
@@ -374,7 +378,7 @@ class TestSpiceCapFix3SubstringMatch:
     def test_fresh_cebolla_NOT_capped_as_spice(self, caplog):
         """Sanity: 'cebolla' fresca NO debe firar spice cap."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 cebolla mediana"] * 20,
                 multiplier=18.666666,
@@ -389,7 +393,7 @@ class TestSpiceCapFix3SubstringMatch:
     def test_fresh_jengibre_NOT_capped_as_spice(self, caplog):
         """Sanity: 'jengibre' fresco NO debe firar spice cap."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["50g de jengibre fresco rallado"] * 5,
                 multiplier=18.666666,

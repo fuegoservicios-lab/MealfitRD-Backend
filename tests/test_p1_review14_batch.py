@@ -93,7 +93,11 @@ def test_rabano_cap_fires(caplog):
     import logging
     from constants import strip_accents as _sa
     import shopping_calculator as sc
-    with caplog.at_level(logging.WARNING):
+        # [P2-CAP-LOG-LEVEL · 2026-07-29] captura a INFO: el log per-ítem del cap bajó de
+        # nivel (era el 74,6% del journal). El test comprueba que el cap DISPARA, no su
+        # severidad — acoplar una aserción de comportamiento al nivel de log la vuelve
+        # frágil ante una decisión de observabilidad.
+    with caplog.at_level(logging.INFO):
         # 135g × 13 servings ≈ 1755g de rábano (guarnición sobre-asignada)
         sc.aggregate_and_deduct_shopping_list(
             plan_ingredients=["135 g rábano"] * 13, multiplier=1.0, structured=True)
