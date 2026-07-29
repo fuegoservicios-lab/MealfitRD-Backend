@@ -399,6 +399,37 @@ def test_slot_drift_is_observable():
         "el cambio de reparto FÍSICO nace OFF (exige A/B contra all4_ratio)"
 
 
+def test_slot_drift_uses_the_canonical_meal_key_not_meal_type():
+    """[P3-SLOT-DRIFT-KEY · 2026-07-29] En los planes vivos `meal_type` vale 'flexible' para TODAS
+    las comidas: la v1 de este helper agrupaba el día entero en UN bucket y la telemetría —que existe
+    para hacer visible el sesgo POR SLOT— no podía mostrarlo (verificado en el plan vivo 4218191f:
+    `slot_drift = {'flexible': {...}}`, una sola fila). Misma clase que P1-SLOT-FRACTIONS-KEY, donde
+    leer la clave equivocada dejó P3-SLOT-DISTRIBUTION inerte seis semanas."""
+    import graph_orchestrator as go
+    plan = {"days": [{"meals": [
+        {"meal": "Desayuno", "meal_type": "flexible", "protein": 30, "carbs": 60, "fats": 15},
+        {"meal": "Almuerzo", "meal_type": "flexible", "protein": 50, "carbs": 80, "fats": 25},
+        {"meal": "Merienda", "meal_type": "flexible", "protein": 20, "carbs": 30, "fats": 10},
+        {"meal": "Cena", "meal_type": "flexible", "protein": 20, "carbs": 30, "fats": 10}]}]}
+    drift = go._compute_slot_drift(plan)
+    assert set(drift) == {"desayuno", "almuerzo", "merienda", "cena"}, \
+        f"debe distinguir los 4 slots, no colapsarlos en uno: {list(drift)}"
+    assert drift["cena"]["protein"] < drift["desayuno"]["protein"], \
+        "el sesgo contra la CENA debe quedar visible — es el motivo de esta telemetría"
+
+
+def test_slot_drift_falls_back_to_canonical_names_without_meal_key():
+    """Sin clave `meal` se etiqueta por ÍNDICE con el nombre canónico del split: nunca todo bajo la
+    misma etiqueta, que es el modo de fallo que hace la métrica inútil."""
+    import graph_orchestrator as go
+    plan = {"days": [{"meals": [
+        {"meal_type": "flexible", "protein": 30, "carbs": 60, "fats": 15},
+        {"meal_type": "flexible", "protein": 50, "carbs": 80, "fats": 25},
+        {"meal_type": "flexible", "protein": 20, "carbs": 30, "fats": 10},
+        {"meal_type": "flexible", "protein": 20, "carbs": 30, "fats": 10}]}]}
+    assert set(go._compute_slot_drift(plan)) == {"desayuno", "almuerzo", "merienda", "cena"}
+
+
 def test_slot_drift_reuses_the_pipeline_ssot():
     """Nada de una 3ª lista paralela de fracciones: usa la misma función que reparte el día."""
     seg = _GO[_GO.index("def _compute_slot_drift"):]

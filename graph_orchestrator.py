@@ -41362,6 +41362,17 @@ def _compute_slot_drift(plan: dict) -> "dict | None":
             _fracs = _canonical_slot_fractions(_meals)
             if not _fracs or len(_fracs) != len(_meals):
                 continue
+            # nombres canónicos del split para el nº de comidas del día (fallback de etiqueta)
+            try:
+                from nutrition_calculator import MEAL_SLOT_SPLITS as _MSS_sd
+                _slot_names = list((_MSS_sd.get(len(_meals)) or _MSS_sd[4]).keys())
+            except Exception:
+                _slot_names = []
+            try:
+                from constants import strip_accents as _sa_sd
+            except Exception:
+                def _sa_sd(s):
+                    return str(s)
             _day_tot = {m: sum(_meal_macro_num(x.get(m)) for x in _meals)
                         for m in ("protein", "carbs", "fats")}
             for _i, _m in enumerate(_meals):
@@ -41371,7 +41382,18 @@ def _compute_slot_drift(plan: dict) -> "dict | None":
                     continue
                 if _frac <= 0:
                     continue
-                _slot = str(_m.get("meal_type") or _m.get("time") or f"slot_{_i}").strip().lower()
+                # [P3-SLOT-DRIFT-KEY · 2026-07-29] La clave canónica del slot es `meal` — la misma
+                # que usa `_canonical_slot_fractions`. La v1 de este helper leía `meal_type`, que en
+                # los planes vivos vale 'flexible' para TODAS las comidas: el resultado agrupaba el
+                # día entero en UN solo bucket ('flexible') y la telemetría, que existe justamente
+                # para hacer VISIBLE el sesgo POR SLOT, no podía mostrarlo. Verificado en el plan
+                # 4218191f: `slot_drift = {'flexible': {...}}`, una sola fila.
+                # Es la misma clase que P1-SLOT-FRACTIONS-KEY (2026-07-26), donde leer la clave
+                # equivocada dejó P3-SLOT-DISTRIBUTION inerte seis semanas. Fallback por ÍNDICE al
+                # nombre canónico del split, que es lo que de verdad identifica la cuota usada.
+                _slot = _sa_sd(str(_m.get("meal") or _m.get("slot") or "").lower().strip())
+                if not _slot or _slot == "flexible":
+                    _slot = _slot_names[_i] if _i < len(_slot_names) else f"slot_{_i}"
                 for _mac in ("protein", "carbs", "fats"):
                     _tgt = _day_tot[_mac] * _frac
                     if _tgt <= 0:
