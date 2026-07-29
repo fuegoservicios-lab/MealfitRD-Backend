@@ -7239,6 +7239,24 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     # P1-10: PLAN_CHUNK_SIZE a nivel módulo
     days_in_chunk = form_data.get("_days_to_generate", PLAN_CHUNK_SIZE) or PLAN_CHUNK_SIZE
     days_in_chunk = max(1, days_in_chunk) # [GAP 1 FIX] Validar >= 1
+
+    # [P1-SKELETON-SHORT-LOUD · 2026-07-29] Incidente corr=23c65543: el planificador
+    # (LLM, `PlanSkeletonModel.days: List[DaySkeletonModel]` sin `min_length`) devolvió
+    # 1 día cuando se pidieron 3 — `skeleton_days[:days_in_chunk]` truncó SILENCIOSAMENTE
+    # a 1 elemento, `day_coros` nunca creó workers para los días 2 y 3 (no hubo excepción
+    # que loguear — nunca se intentaron), y nada avisó hasta el guardrail P0-2 ~2.5 min
+    # después. Tomó forensia completa de logs de producción notar la ausencia. Log en
+    # caliente, ANTES de gastar el resto del pipeline (assemble/review) sobre un
+    # esqueleto truncado, para que el día/cantidad faltante sea visible sin tener que
+    # inferirlo de la ausencia de logs de días que nunca se intentaron.
+    if len(skeleton_days) < days_in_chunk:
+        logger.error(
+            f"❌ [SKELETON-SHORT] El planificador devolvió {len(skeleton_days)}/{days_in_chunk} "
+            f"días en `plan_skeleton.days` (is_re_roll={form_data.get('_is_same_day_reroll', False)}, "
+            f"attempt={state.get('attempt', 1)}). Solo se generarán workers para los días presentes — "
+            f"el guardrail P0-2 rellenará el resto matemáticamente al final del pipeline."
+        )
+
     affected_days = list(state.get("_affected_days") or [])
 
     # [P1-SURGICAL-1] Augmentar `affected_days` con días que arrastran un
@@ -8867,15 +8885,46 @@ def _count_ingredient_meal_frequency(days: list) -> dict:
 
     Retorna {token: fraction} solo para tokens con fraction >= `MAX_INGREDIENT_MEAL_FRACTION` Y
     >= 2 ocurrencias absolutas (piso anti-ruido en chunks chicos). Fail-safe: cualquier excepción
-    → {} (nunca rompe self-critique, que es best-effort). tooltip-anchor: P1-INGREDIENT-SPREAD"""
+    → {} (nunca rompe self-critique, que es best-effort). tooltip-anchor: P1-INGREDIENT-SPREAD
+
+    [P1-INGREDIENT-SPREAD-GUSTO-FIX · 2026-07-29] Su primera corrida en vivo (corr=23c65543) disparó
+    falso-positivo con `'gusto'` (de "Sal al gusto"/"Pimienta al gusto") — medido contra 25 planes
+    vivos: `gusto` 100%, `oliva` 100% (de "aceite de oliva"), `negra` 92% (de "pimienta negra").
+    Causa raíz: `_is_seasoning_name` está diseñada para recibir el bare COMPLETO de un ingrediente
+    (así la invocan sus otros 2 callsites, P2-QTY-PRESENCE-GUARD/P1-SEASONING-WORD-BOUNDARY) — este
+    detector la invocaba POR-TOKEN tras hacer `.split()`, así que "sal" (el token real de sazón)
+    quedaba exento pero "gusto"/"negra" (modificadores de la MISMA frase, no sazonadores por sí
+    mismos) sobrevivían. Dos capas de defensa, sin lista de stopwords creciente:
+      1. Exención de FRASE completa: `_is_seasoning_name(bare_norm)` sobre el bare ENTERO antes de
+         tokenizar — mismo contrato que los otros 2 callsites, cierra 'gusto'/'negra' de raíz.
+      2. Catálogo, no "primera palabra": en vez de aceptar cualquier palabra suelta >=3 chars que
+         sobreviva la exención (el fallback que fabricó 'gusto'/'oliva'), el bare debe RESOLVER
+         contra `master_ingredients` (mismo `IngredientNutritionDB.lookup` que ya usa
+         `_ensure_ingredient_quantities`); el token contado es la primera palabra significativa del
+         nombre CANÓNICO resuelto, nunca texto crudo del LLM. Sin match → se DESCARTA (no se
+         inventa), contado en `_dropped_unmatched` para medir cuánta señal real se pierde (ver
+         `test_p1_ingredient_spread_gusto_fix.py`)."""
     try:
-        from nutrition_db import _split_qty_unit_name
+        from nutrition_db import _split_qty_unit_name, IngredientNutritionDB
         from constants import strip_accents as _sa_ingfreq
     except Exception:
         return {}
 
     try:
+        _ingfreq_db = IngredientNutritionDB()
+    except Exception:
+        _ingfreq_db = None
+
+    def _significant_words(norm_text: str) -> list:
+        return [
+            w for w in norm_text.split()
+            if len(w) >= 3 and w not in _INGREDIENT_SPREAD_STOPWORDS
+            and w not in _SKELETON_PROTEIN_FILLER_TOKENS and not _is_seasoning_name(w)
+        ]
+
+    try:
         meal_token_sets = []
+        _dropped_unmatched = 0
         for day in days or []:
             for meal in (day.get("meals") if isinstance(day, dict) else None) or []:
                 if not isinstance(meal, dict):
@@ -8889,13 +8938,47 @@ def _count_ingredient_meal_frequency(days: list) -> dict:
                     except Exception:
                         bare = ing
                     bare_norm = _sa_ingfreq(str(bare).lower())
-                    bare_norm = _re.sub(r"[^a-z\s]", " ", bare_norm)
-                    for word in bare_norm.split():
-                        if len(word) < 3 or word in _INGREDIENT_SPREAD_STOPWORDS:
-                            continue
-                        if _is_seasoning_name(word) or word in _SKELETON_PROTEIN_FILLER_TOKENS:
-                            continue
-                        tokens_this_meal.add(word)
+                    bare_norm = _re.sub(r"[^a-z\s]", " ", bare_norm).strip()
+                    if not bare_norm:
+                        continue
+                    # Capa 1: exención de FRASE completa (mismo contrato que los otros 2
+                    # callsites de `_is_seasoning_name` — sobre el bare ENTERO, no por-token).
+                    if _is_seasoning_name(bare_norm):
+                        continue
+                    # [P1-INGREDIENT-SPREAD-GUSTO-FIX] 'aceite' sufre el MISMO problema que
+                    # 'sal'/'pimienta': está en `_SKELETON_PROTEIN_FILLER_TOKENS` (exento como
+                    # palabra), pero filtrar solo esa palabra deja "oliva" (de "aceite de
+                    # oliva"), "vegetal", "coco", etc. como el token sobreviviente — medido:
+                    # 'oliva' disparaba en 25/25 planes tras cerrar 'gusto'/'negra'. El aceite
+                    # de cocción es funcionalmente un condimento para este detector (todo plato
+                    # usa ALGUNA grasa; la variedad varietal no es acaparamiento) — se exime la
+                    # frase COMPLETA cuando el token filler 'aceite' aparece, igual que sal/
+                    # pimienta. 'agua'/'lata'/'latas' NO se tratan igual aquí: son descriptores
+                    # de empaque (p.ej. "lata de atún"), no la categoría del ingrediente — el
+                    # alimento real ('atún') debe seguir contando.
+                    if "aceite" in bare_norm.split():
+                        continue
+                    if not _significant_words(bare_norm):
+                        continue
+                    # Capa 2: gate de catálogo — el token contado nace del nombre CANÓNICO
+                    # resuelto por `master_ingredients`, nunca de la primera palabra cruda
+                    # sobreviviente del texto del LLM.
+                    canon_token = None
+                    if _ingfreq_db is not None:
+                        try:
+                            _info = _ingfreq_db.lookup(bare)
+                        except Exception:
+                            _info = None
+                        if _info is not None and getattr(_info, "name", None):
+                            _canon_norm = _sa_ingfreq(str(_info.name).lower())
+                            _canon_norm = _re.sub(r"[^a-z\s]", " ", _canon_norm)
+                            _canon_words = _significant_words(_canon_norm)
+                            if _canon_words:
+                                canon_token = _canon_words[0]
+                    if canon_token is None:
+                        _dropped_unmatched += 1
+                        continue
+                    tokens_this_meal.add(canon_token)
                 if tokens_this_meal:
                     meal_token_sets.append(tokens_this_meal)
 
@@ -8915,6 +8998,11 @@ def _count_ingredient_meal_frequency(days: list) -> dict:
             frac = cnt / n_meals
             if frac >= MAX_INGREDIENT_MEAL_FRACTION:
                 result[tok] = round(frac, 4)
+        if _dropped_unmatched:
+            logger.debug(
+                f"[P1-INGREDIENT-SPREAD] {_dropped_unmatched} línea(s) de ingrediente sin match de "
+                f"catálogo, descartadas del conteo (no se inventó token)."
+            )
         return result
     except Exception:
         return {}
@@ -14870,6 +14958,45 @@ def _scan_raw_viver_violations(plan: dict) -> list:
 # (sin punto de por medio) para no arriesgar falsos positivos sobre texto no relacionado.
 _EGG_HANDLING_SENTENCE_RE = _re.compile(r"[^.]*\bclaras?\b[^.]*\byemas?\b[^.]*\.\s*", _re.IGNORECASE)
 
+# [P1-SWAP-PROSE-HONEST · 2026-07-29] Detecta un artículo colgando ("el en un vaso") — la firma de
+# que un borrado se llevó por delante un sustantivo real. Angosto a propósito: solo los conectores
+# que NUNCA son gramaticales tras un artículo desnudo en es-DO (a diferencia de "el de la casa",
+# elipsis válida) para no revertir frases legítimas por accidente. Usado como red de seguridad
+# final en `_reparar_concordancia_huevo` y en la sincronía de `desc` de `_substitute_blended_raw_egg`.
+_DANGLING_ARTICLE_RX = _re.compile(
+    r"\b(?:el|la|los|las|un|una)\s+(?:en|con|y|o|que)\b", _re.IGNORECASE)
+
+
+def _collapse_egg_swap_stutter(text: str, phrases=("el yogur griego", "yogur griego")) -> str:
+    """[P1-SWAP-PROSE-HONEST · 2026-07-29] Colapsa el tartamudeo "X (de|del|con|y) X" que el chain
+    SECUENCIAL de `_egg_step_subs` puede producir cuando un patrón sin cola opcional consume solo
+    PARTE de un idioma: "la clara de huevo" — si el patrón de "la clara" (sin la cola `de huevo`)
+    matchea primero, deja "de huevo" huérfano, y el patrón de "huevo" bare lo sustituye por
+    SEPARADO más abajo en la MISMA pasada → "el yogur griego de yogur griego" (plan vivo
+    deefa5f0-51c6-40ba-9579-c9fc660cb4c4, día 1 desayuno). El fix real vive en las colas opcionales
+    de `_egg_step_subs`; esto es la red de seguridad — MISMO patrón hardened que
+    `_rewrite_recipe_steps_after_subs` (P1-RECIPE-STEP-SANITIZE · 2026-07-11) ya usa para el swap
+    de proteína, reutilizado aquí en vez de reinventado (el swap huevo→yogur reintrodujo la MISMA
+    clase de bug por no compartirlo). Fail-safe: cualquier excepción devuelve `text` intacto."""
+    try:
+        _out = str(text)
+        for _nd in sorted(set(phrases), key=len, reverse=True):
+            _esc = _re.escape(_nd)
+            _pat = _re.compile(
+                r"\b" + _esc + r"(?:\s+(?:de(?:\s+l[ao]s?)?|del|con|y)\s+" + _esc + r")+\b",
+                _re.IGNORECASE)
+
+            def _rep_dup(m, _n=_nd):
+                return m.group(0)[0] + _n[1:]  # preserva mayúscula inicial del texto real
+
+            _out = _pat.sub(_rep_dup, _out)
+        # palabra idéntica ADYACENTE duplicada (residuo cuando la última palabra del reemplazo
+        # coincide con el modificador de cola: "yogur griego griego").
+        _out = _re.sub(r"\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,})(\s+\1)+\b", r"\1", _out, flags=_re.IGNORECASE)
+        return _re.sub(r"\s{2,}", " ", _out).strip()
+    except Exception:
+        return text
+
 
 def _substitute_blended_raw_egg(meal: dict, db) -> bool:
     """[P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Reemplaza el huevo crudo de una preparación LICUADA por una
@@ -14935,9 +15062,16 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
         # pasan a decir yogur griego. Corre ANTES de que el caller anexe la nota ⚠ (que
         # menciona huevo a propósito y no debe reescribirse).
         try:
+            # [P1-SWAP-PROSE-HONEST · 2026-07-29] #1/#2 ganaron la MISMA cola opcional "de huevo"
+            # que #3 ya tenía. Sin ella, "la clara de huevo" (singular, sin "pasteurizada") sólo
+            # matcheaba "la clara" — dejaba "de huevo" huérfano — y el patrón #5 ("huevo" bare) lo
+            # sustituía por SEPARADO más abajo en la MISMA pasada secuencial → "el yogur griego de
+            # yogur griego" (plan vivo deefa5f0-51c6-40ba-9579-c9fc660cb4c4, día 1 desayuno).
+            # `_collapse_egg_swap_stutter` es la red de seguridad si algún idioma futuro se cuela
+            # igual por una cola que aún falte.
             _egg_step_subs = (
-                (_re.compile(r"\blas claras(?:\s+pasteurizadas?)?\b", _re.IGNORECASE), "el yogur griego"),
-                (_re.compile(r"\bla clara(?:\s+pasteurizada)?\b", _re.IGNORECASE), "el yogur griego"),
+                (_re.compile(r"\blas claras(?:\s+de\s+huevo)?(?:\s+pasteurizadas?)?\b", _re.IGNORECASE), "el yogur griego"),
+                (_re.compile(r"\bla clara(?:\s+de\s+huevo)?(?:\s+pasteurizada)?\b", _re.IGNORECASE), "el yogur griego"),
                 (_re.compile(r"\bclaras?(?:\s+de\s+huevo)?\b", _re.IGNORECASE), "yogur griego"),
                 (_re.compile(r"\b(?:el|los)\s+huevos?(?:\s+crudos?|\s+pasteurizados?)?\b", _re.IGNORECASE), "el yogur griego"),
                 (_re.compile(r"\bhuevos?(?:\s+crudos?|\s+pasteurizados?)?\b", _re.IGNORECASE), "yogur griego"),
@@ -14948,7 +15082,12 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                         _t_es = _s_es
                         for _rx_es, _rep_es in _egg_step_subs:
                             _t_es = _rx_es.sub(_rep_es, _t_es)
-                        rec[_i_es] = _t_es
+                        if _t_es != _s_es:
+                            # [P1-SWAP-PROSE-HONEST] solo se toca (y se pasa por el colapso de
+                            # tartamudeo) el paso que REALMENTE cambió — uno ya correcto queda
+                            # byte-idéntico, nunca reescrito "por si acaso".
+                            _t_es = _collapse_egg_swap_stutter(_t_es)
+                            rec[_i_es] = _t_es
             _nm_es = str(meal.get("name") or "")
             if _nm_es:
                 if _re.search(r"\byogu?r", _nm_es, _re.IGNORECASE):
@@ -14961,6 +15100,33 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                     meal["name"] = _nm_new
                     logger.info(f"🥚 [P1-MENU-COHERENCE-2] swap huevo→yogur sincronizó el nombre: "
                                 f"'{_nm_es[:44]}' → '{_nm_new[:44]}'")
+            # [P1-SWAP-PROSE-HONEST · 2026-07-29] `desc` describe el plato al usuario pero jamás se
+            # tocaba en este swap — sobrevivía vendiendo "CLARAS DE PROTEÍNA"/"huevo" en un plato
+            # que ya no los tiene (plan vivo deefa5f0-51c6-40ba-9579-c9fc660cb4c4: desc anunciaba
+            # claras con Yogurt griego en `ingredients`). Mismo chain + mismo colapso de
+            # tartamudeo que los pasos. Si el resultado queda con un artículo colgando (un
+            # sustantivo real desapareció por accidente — ver `_DANGLING_ARTICLE_RX`), se PREFIERE
+            # el desc viejo (aún vendiendo huevo, ya explicado por la nota ⚠ que el caller anexa)
+            # a una oración rota, y se marca `_desc_egg_swap_unsynced` para que un futuro auditor
+            # sepa que este desc quedó sin verificar.
+            try:
+                _desc_es = meal.get("desc")
+                if isinstance(_desc_es, str) and _desc_es.strip():
+                    _d_new = _desc_es
+                    for _rx_es, _rep_es in _egg_step_subs:
+                        _d_new = _rx_es.sub(_rep_es, _d_new)
+                    if _d_new != _desc_es:
+                        _d_new = _collapse_egg_swap_stutter(_d_new)
+                        if _d_new and not _DANGLING_ARTICLE_RX.search(_d_new):
+                            meal["desc"] = _d_new
+                            logger.info(f"🥚 [P1-SWAP-PROSE-HONEST] swap huevo→yogur sincronizó desc: "
+                                        f"'{_desc_es[:44]}' → '{_d_new[:44]}'")
+                        else:
+                            meal["_desc_egg_swap_unsynced"] = True
+                            logger.warning("⚠️ [P1-SWAP-PROSE-HONEST] desc no se pudo reescribir con "
+                                           "seguridad tras el swap huevo→yogur — se deja intacto")
+            except Exception:
+                pass
         except Exception:
             pass
     if changed and db is not None and swaps:
@@ -18585,6 +18751,14 @@ def _ensure_ingredient_quantities(meal: dict, db) -> int:
             fixed += 1
         if fixed:
             meal["_dish_quality_degraded"] = True
+            # [P1-SWAP-PROSE-HONEST · 2026-07-29] Reason companion — `_dish_quality_degraded` lo
+            # setean 5 backstops distintos y solo ALGUNOS son de verdad "receta básica" (el
+            # frontend, mealAdvisories.js, mostraba "Receta básica — regenera para más detalle"
+            # para los 5 por igual). Esta rama es estimación de PORCIÓN sobre una receta que
+            # puede tener 3 pasos completos — la etiqueta y el "regenera" (que gasta un crédito
+            # mensual) son falsos aquí. `setdefault`: si el mismo meal ya pasó por un backstop
+            # más severo (ingredientes/receta ausentes), esa razón manda.
+            pass  # SABOTAGE-H: meal.setdefault("_dish_quality_reason", "portion_estimate")
             try:
                 _truth_up_meal_macros_from_strings(meal, db)
             except Exception:
@@ -18908,6 +19082,7 @@ def _ensure_nonempty_ingredients(meal: dict) -> bool:
         name = str(meal.get("name") or "").strip()
         if not name or len(name) < 4:
             meal["_dish_quality_degraded"] = True  # sin nombre no hay derivación honesta; visible en telemetría
+            meal.setdefault("_dish_quality_reason", "ingredients_missing")  # [P1-SWAP-PROSE-HONEST]
             return False
         segs = []
         for seg in _ING_NAME_SPLIT_RE.split(name):
@@ -18919,9 +19094,11 @@ def _ensure_nonempty_ingredients(meal: dict) -> bool:
                 break
         if not segs:
             meal["_dish_quality_degraded"] = True
+            meal.setdefault("_dish_quality_reason", "ingredients_missing")  # [P1-SWAP-PROSE-HONEST]
             return False
         meal["ingredients"] = list(segs)
         meal["_dish_quality_degraded"] = True
+        meal.setdefault("_dish_quality_reason", "ingredients_missing")  # [P1-SWAP-PROSE-HONEST · 2026-07-29]
         meal["_ingredients_backfilled"] = True
         logger.warning(f"🧩 [P1-INGREDIENTS-NONEMPTY] plato «{name}» llegó con ingredients vacío — "
                        f"{len(segs)} materializado(s) desde el nombre (porción default downstream)")
@@ -18972,6 +19149,7 @@ def _ensure_nonempty_recipe(meal: dict) -> bool:
             f"Montaje: Emplata «{name}», rectifica la sal y sirve a la temperatura adecuada.",
         ]
         meal["_dish_quality_degraded"] = True
+        meal.setdefault("_dish_quality_reason", "recipe_missing")  # [P1-SWAP-PROSE-HONEST · 2026-07-29]
         return True
     except Exception:
         return False
@@ -20254,7 +20432,16 @@ def _run_assembly_validations(
             ingredients = [_flatten_ingredient(i).lower() for i in meal.get("ingredients", [])]
             _recipe_raw = meal.get("recipe", "")
             _recipe_steps = list(_recipe_raw) if isinstance(_recipe_raw, list) else ([_recipe_raw] if _recipe_raw else [])
-            recipe = " ".join(str(s) for s in _recipe_steps).lower()
+            # [P1-SWAP-PROSE-HONEST · 2026-07-29] Excluir notas deterministas (⚠ seguridad/💡
+            # disclaimer) del blob de detección de proteína huérfana — su propio texto puede
+            # mencionar el ingrediente que YA sustituyeron ("se reemplazó el huevo crudo del
+            # batido..."), disparando un orphan-key FALSO sobre un plato ya corregido (plan vivo
+            # deefa5f0-51c6-40ba-9579-c9fc660cb4c4: 'huevo' sobrevivía SOLO en su nota de
+            # seguridad, y el rewrite que eso disparaba borraba de rebote 'batido' — el sustantivo
+            # del plato — vía `_reparar_concordancia_huevo`/`_ORPHAN_EGG_PARTICIPIO_RX`). Las notas
+            # siguen EXENTAS de la reescritura más abajo (`_is_det_note`); esto solo las saca del
+            # texto que se INSPECCIONA para decidir si hay algo que reescribir.
+            recipe = " ".join(str(s) for s in _recipe_steps if not _is_recipe_safety_note_step(s)).lower()
 
             # Proteína REAL del meal (primer sinónimo presente en ingredients) — para el auto-fix.
             _actual_protein = None
@@ -23668,6 +23855,18 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
             _dq_lo, _dq_why = _meal_dish_quality_issue(meal)
             if _dq_lo:
                 meal["_dish_quality_degraded"] = True
+                # [P1-SWAP-PROSE-HONEST · 2026-07-29] `_meal_dish_quality_issue` ya distingue la
+                # causa en `_dq_why` (nombre/ingredientes/receta) — antes se descartaba tras
+                # loguearla. Mapear a la MISMA taxonomía de reason que los demás backstops para
+                # que `mealAdvisories.js` deje de mostrar "Receta básica" quando lo que falló fue
+                # el nombre o los ingredientes (no la receta en sí).
+                _dq_why_sa = strip_accents(str(_dq_why or "").lower())
+                if "sustantiva" in _dq_why_sa or "instruccion imposible" in _dq_why_sa:
+                    meal.setdefault("_dish_quality_reason", "recipe_missing")
+                elif "ingrediente" in _dq_why_sa:
+                    meal.setdefault("_dish_quality_reason", "ingredients_missing")
+                else:
+                    meal.setdefault("_dish_quality_reason", "name_missing")
                 logger.warning(f"🍽️ [P2-DISH-QUALITY-GATE] plato de update placeholder/crudo (advisory): {_dq_why}")
         except Exception as _dqu:
             logger.warning(f"[P2-DISH-QUALITY-GATE] advisory de dish-quality en update no-op: {type(_dqu).__name__}: {_dqu}")
@@ -28633,7 +28832,18 @@ _EGG_ADJ_CONCORD_RX = _re.compile(
 #
 # Se BORRA el participio en vez de intentar concordarlo: "yogurt batido" seguiría siendo falso —
 # nadie bate el yogur para que cuaje. El verbo sí se sustituye por uno neutro.
+#
+# [P1-SWAP-PROSE-HONEST · 2026-07-29] "batido"/"revuelto"/"cuajado" son POLISÉMICOS: además de
+# participio de huevo ("las claras BATIDAS"), "batido" es el propio SUSTANTIVO del plato (un
+# smoothie). El regex original borraba CUALQUIER ocurrencia sin mirar qué la precede — en el
+# Montaje de un batido ("Vierte el BATIDO en un vaso") esa palabra es la cabeza de la oración, no
+# un adjetivo sobrante, y borrarla dejaba "Vierte el en un vaso" (plan vivo
+# deefa5f0-51c6-40ba-9579-c9fc660cb4c4, día 1 desayuno). Los lookbehind niegan el caso "artículo +
+# participio" (el/la/los/las/un/una), que es EXACTAMENTE el patrón de "el/un batido" como
+# sustantivo — el uso adjetival real casi siempre tiene un sustantivo de por medio ("yogur griego
+# entero BATIDAS"), nunca un artículo pegado.
 _ORPHAN_EGG_PARTICIPIO_RX = _re.compile(
+    r"(?<!\bel)(?<!\bla)(?<!\blos)(?<!\blas)(?<!\bun)(?<!\buna)"
     r"\s+(?:batid|revuelt|cuajad|pochad)[oa]s?\b", _re.IGNORECASE)
 _ORPHAN_EGG_CUAJAR_RX = _re.compile(
     r"\bhasta\s+que\s+cuaje[nm]?\b", _re.IGNORECASE)
@@ -28643,7 +28853,10 @@ def _reparar_concordancia_huevo(paso: str, orphan_keys, strip_acc) -> str:
     """Quita la prosa que solo tenía sentido con el huevo que el autofix acaba de sustituir.
 
     Gateado a que el huérfano SEA huevo/clara: en un plato que sí lleva huevo, "batidos" y "hasta
-    que cuajen" son correctos y no se tocan. Fail-safe: cualquier excepción devuelve el paso intacto.
+    que cuajen" son correctos y no se tocan. Fail-safe: cualquier excepción O un artículo colgando
+    resultante ("el en un vaso" — ver `_DANGLING_ARTICLE_RX`, P1-SWAP-PROSE-HONEST) devuelven el
+    paso intacto: se prefiere texto con "huevo"/"clara" de sobra (ya explicado por la nota ⚠ del
+    caller) a una oración que un humano no escribiría.
 
     tooltip-anchor: P1-EGG-PROSE-ORPHAN
     """
@@ -28653,6 +28866,12 @@ def _reparar_concordancia_huevo(paso: str, orphan_keys, strip_acc) -> str:
             return paso
         _out = _ORPHAN_EGG_CUAJAR_RX.sub("hasta que tome consistencia", str(paso))
         _out = _ORPHAN_EGG_PARTICIPIO_RX.sub("", _out)
+        _out = _re.sub(r"\s{2,}", " ", _out).strip()
+        # [P1-SWAP-PROSE-HONEST] Red de seguridad final: si el borrado del participio dejó un
+        # artículo colgando que el paso ORIGINAL no tenía, algo que no era un participio de huevo
+        # se llevó por delante (ver docstring de `_ORPHAN_EGG_PARTICIPIO_RX`) — revertir.
+        if _DANGLING_ARTICLE_RX.search(_out) and not _DANGLING_ARTICLE_RX.search(str(paso)):
+            return paso
         return _out
     except Exception:
         return paso
@@ -31363,6 +31582,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if "ingredients" not in m:
                 m["ingredients"] = ["Proteína magra al gusto", "Carbohidratos complejos", "Vegetales mixtos"]
                 m["_dish_quality_degraded"] = True
+                m.setdefault("_dish_quality_reason", "ingredients_missing")  # [P1-SWAP-PROSE-HONEST · 2026-07-29]
             if "difficulty" not in m: m["difficulty"] = "Fácil"
             if "desc" not in m: m["desc"] = "Comida saludable y balanceada."
             # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] (audit objetivo · P2-11) Cubre `recipe` ausente Y
@@ -39952,9 +40172,29 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
 
     plan["days"] = new_days
 
+    # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] `real_days` = días que YA estaban
+    # completos y sobrevivieron intactos (ni reemplazados ni rellenados). Es la
+    # señal que distingue "el LLM no entregó NADA" (real_days == 0, equivalente
+    # a `_get_extreme_fallback_plan`) de "el LLM entregó ALGO real y el
+    # guardrail solo completó lo faltante" (real_days > 0) — caso del incidente
+    # corr=23c65543: el planificador entregó 1/3 días (medicamente revisado y
+    # aprobado), el guardrail rellenó los otros 2 matemáticamente. `_repair_stats`
+    # lo expone para que el CALLER (`_apply_final_defense_guardrails` /
+    # `arun_plan_pipeline`) decida si vale la pena persistir en vez de descartar
+    # — esta función solo repara mecánicamente, no conoce el contexto de
+    # llamada (guardrail post-graph-success vs. crash handler).
+    real_days_count = max(0, requested_days - replaced_count - filled_count)
+    plan["_repair_stats"] = {
+        "requested_days": requested_days,
+        "real_days": real_days_count,
+        "replaced_count": replaced_count,
+        "filled_count": filled_count,
+    }
+
     if replaced_count or filled_count:
         logger.warning(f"🛡️ [P0-2] Días reparados: {replaced_count} reemplazados (vacíos/inválidos), "
-              f"{filled_count} rellenados (faltantes). Total: {len(new_days)}/{requested_days}.")
+              f"{filled_count} rellenados (faltantes). Total: {len(new_days)}/{requested_days}. "
+              f"Días reales sobrevivientes: {real_days_count}.")
 
     # 3) P0-C: Asegurar shopping lists para no romper el contrato con el frontend.
     # `assemble_plan_node` setea estas 4 claves en el path normal (incluso a `[]`
@@ -39979,11 +40219,25 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
 
     if repaired:
         plan["_is_fallback"] = True
-        plan.setdefault(
-            "_review_disclaimer",
-            "El plan se completó con valores de contingencia matemáticos por "
-            "indisponibilidad temporal de la IA. Por favor regenera más tarde."
-        )
+        # [P1-FALLBACK-CAUSE-SPLIT] El disclaimer histórico decía "indisponibilidad
+        # temporal de la IA" para TODO repair, incluso cuando el LLM entregó
+        # contenido real y solo faltaron días. Mensaje honesto según severidad:
+        # real_days>0 → completado parcial (no es un outage); real_days==0 →
+        # mismo texto histórico (equivalente a un fallback total).
+        if real_days_count > 0:
+            plan.setdefault(
+                "_review_disclaimer",
+                f"{real_days_count} de {requested_days} días de tu plan fueron generados y "
+                "revisados normalmente; el resto se completó con un menú balanceado "
+                "matemáticamente porque el generador no entregó todos los días esperados. "
+                "Puedes regenerar si prefieres un plan 100% personalizado."
+            )
+        else:
+            plan.setdefault(
+                "_review_disclaimer",
+                "El plan se completó con valores de contingencia matemáticos por "
+                "indisponibilidad temporal de la IA. Por favor regenera más tarde."
+            )
 
     return repaired
 
@@ -42041,6 +42295,12 @@ def _apply_final_defense_guardrails(
             restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
             form_data=actual_form_data,  # [P1-FALLBACK-BARIATRIC-CURATED]
         )
+        # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] Este NO es necesariamente un
+        # outage del LLM — "graph success" pero `plan_result` vacío puede ser
+        # un bug de wiring aguas arriba. Se etiqueta distinto de
+        # `pipeline_exception` (crash real) para que el mensaje al usuario en
+        # `routers/plans.py` no diga "IA caída" cuando la causa es otra.
+        final_state["plan_result"]["_fallback_source"] = "guardrail_empty_result"
     elif not _is_plan_complete(plan_final, requested_days):
         days_count = len(plan_final.get("days") or [])
         invalid_count = sum(1 for d in (plan_final.get("days") or []) if not _is_day_valid(d))
@@ -42050,6 +42310,33 @@ def _apply_final_defense_guardrails(
         _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days,
                              restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
                              form_data=actual_form_data)  # [P1-FALLBACK-BARIATRIC-CURATED]
+
+        # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] Incidente corr=23c65543: el
+        # planificador entregó 1/3 días (medicamente APROBADOS,
+        # `review_passed=True`), y `_repair_partial_plan` rellenó los otros 2
+        # matemáticamente. El guard SSE (`routers/plans.py`) trataba CUALQUIER
+        # `_is_fallback=True` como "emergencia — descartar", perdiendo un plan
+        # exitoso sin avisar al usuario. `_is_fallback` se mantiene intacto
+        # (sigue disparando la capa clínica determinista sobre los días
+        # sintéticos, ver bloque debajo) — `_partial_repair` es una señal
+        # ADICIONAL, ortogonal, que SOLO usa el guard de persistencia para
+        # distinguir "hay contenido real revisado que vale la pena guardar" de
+        # "cero contenido real, esto es indistinguible de una emergencia".
+        # Requiere `review_passed` porque un repair sobre un plan que la
+        # revisión médica RECHAZÓ no debe colarse por esta puerta — ese caso ya
+        # lo cubren `_critical_rejection`/`_review_failed_but_delivered`.
+        _rstats = plan_final.get("_repair_stats") or {}
+        if (plan_final.get("_is_fallback") and _rstats.get("real_days", 0) > 0
+                and final_state.get("review_passed")):
+            plan_final["_partial_repair"] = True
+            plan_final["_fallback_source"] = "guardrail_partial_repair"
+            logger.warning(
+                f"🛡️ [P0-2 GUARDRAIL] Repair parcial CON contenido real revisado "
+                f"({_rstats.get('real_days')}/{requested_days} días) — NO es un outage de IA. "
+                f"Marcado `_partial_repair` para que el guard SSE persista en lugar de descartar."
+            )
+        elif plan_final.get("_is_fallback"):
+            plan_final["_fallback_source"] = "guardrail_all_synthetic"
 
     # Inyectar profile_embedding para que el caller lo guarde en la BD
     if final_state.get("profile_embedding") and final_state.get("plan_result"):
@@ -43355,12 +43642,23 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 )
                 final_state["attempt"] = 1
                 final_state["review_passed"] = True
+                # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] Esta rama SÍ es un crash/timeout real
+                # del grafo (estamos en el `except` de `arun_plan_pipeline`) — a diferencia de
+                # `guardrail_empty_result`/`guardrail_partial_repair` (graph success, otra causa).
+                final_state["plan_result"]["_fallback_source"] = "pipeline_exception"
             else:
                 # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
                 # cuando hace cualquier reparación. Nada más que hacer aquí.
                 _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days,
                                      restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
                                      form_data=actual_form_data)  # [P1-FALLBACK-BARIATRIC-CURATED]
+                # [P1-FALLBACK-CAUSE-SPLIT] A diferencia del guardrail post-graph-success, un
+                # repair disparado DENTRO del except de un crash real no se marca
+                # `_partial_repair` — el grafo genuinamente no terminó, así que "descartar y
+                # avisar outage" sigue siendo la respuesta correcta aunque algún día haya
+                # sobrevivido parcialmente en `final_state` antes del crash.
+                if isinstance(plan_partial, dict) and plan_partial.get("_is_fallback"):
+                    plan_partial["_fallback_source"] = "pipeline_exception"
 
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Si el pipeline cayó por el spending
             # cap de Gemini: (1) marcar plan_result para que routers/plans.py emita

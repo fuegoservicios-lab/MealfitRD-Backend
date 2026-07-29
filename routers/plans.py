@@ -2870,7 +2870,13 @@ def api_analyze(
         # Antes el plan basura quedaba persistido + se encolaban N chunks futuros
         # con la misma referencia → el usuario veía "Fallback: pollo y arroz" por
         # una semana. Mejor: 503 con mensaje claro para que reintente.
-        if isinstance(result, dict) and result.get("_is_fallback"):
+        #
+        # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] `_partial_repair=True` (ver
+        # graph_orchestrator._apply_final_defense_guardrails) es la contraparte
+        # de este endpoint sync al fix de `/analyze/stream`: un repair con
+        # contenido real revisado NO es un outage, cae al flujo normal debajo.
+        if (isinstance(result, dict) and result.get("_is_fallback")
+                and not result.get("_partial_repair")):
             # [P2-CRITICAL-REJECTION-CODE · 2026-06-18] (audit fresco P2) Rechazo crítico (alérgeno/condición):
             # 422 con mensaje accionable ("revisa tus restricciones"), NO 503 "IA saturada" (reintentar no
             # resuelve una restricción fija). El plan NO se entrega. Anchor: P2-CRITICAL-REJECTION-CODE.
@@ -2886,9 +2892,14 @@ def api_analyze(
             # de saturación transitoria: el mensaje "intenta en 1-2 min" es FALSO
             # cuando el cap mensual de Gemini está agotado (reintentar no ayuda).
             _spend_cap = bool(result.get("_llm_spend_cap"))
+            # [P1-FALLBACK-CAUSE-SPLIT] `_fallback_source` reemplaza el hardcode
+            # "LLM upstream caído" en el LOG (no en el mensaje al usuario — en los
+            # 3 casos restantes tras excluir `_partial_repair` el resultado
+            # observable sigue siendo "no hay plan que entregar").
+            _fb_source = result.get("_fallback_source", "unknown")
             logger.warning(
                 f"🚨 [FALLBACK-GUARD] Pipeline devolvió plan de emergencia "
-                f"(LLM upstream caído{', spending cap' if _spend_cap else ''}). "
+                f"(fuente={_fb_source}{', spending cap' if _spend_cap else ''}). "
                 f"Devolviendo 503 sin persistir. user={actual_user_id or 'guest'}"
             )
             raise HTTPException(
@@ -2900,6 +2911,14 @@ def api_analyze(
                     "La IA está temporalmente saturada y no pudimos generar tu plan. "
                     "Por favor intenta de nuevo en 1-2 minutos."
                 ),
+            )
+        elif isinstance(result, dict) and result.get("_partial_repair"):
+            _rstats = result.get("_repair_stats") or {}
+            logger.warning(
+                f"🛡️ [FALLBACK-GUARD] Plan con repair PARCIAL — NO es outage de IA: "
+                f"{_rstats.get('real_days', '?')}/{_rstats.get('requested_days', '?')} días reales "
+                f"revisados, resto completado matemáticamente. Persistiendo. "
+                f"user={actual_user_id or 'guest'}"
             )
 
         # [P0-1/P1-1] Validación post-LLM contra nevera para el primer chunk.
@@ -3648,11 +3667,17 @@ async def api_analyze_stream(
                             # N chunks futuros → el usuario lo veía en su historial por una
                             # semana. Marcamos KV failed para que el frontend muestre el
                             # mensaje de reintento. Tooltip-anchor: P2-PIPELINE-FALLBACK-GUARD-DONE.
-                            if isinstance(_result, dict) and _result.get("_is_fallback"):
+                            # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] `_partial_repair=True`
+                            # (contenido real revisado + guardrail solo completó días
+                            # faltantes matemáticamente) NO es un outage — cae al flujo
+                            # normal de persistencia debajo, igual que en los otros 2 paths.
+                            if (isinstance(_result, dict) and _result.get("_is_fallback")
+                                    and not _result.get("_partial_repair")):
+                                _fb_source = _result.get("_fallback_source", "unknown")
                                 logger.warning(
                                     f"🚨 [P2-PIPELINE-FALLBACK-GUARD-DONE] Pipeline devolvió "
-                                    f"plan de emergencia; NO se persiste via done-callback. "
-                                    f"user={_deep_search_user_id[:8]}"
+                                    f"plan de emergencia (fuente={_fb_source}); NO se persiste "
+                                    f"via done-callback. user={_deep_search_user_id[:8]}"
                                 )
                                 try:
                                     from db_plans import upsert_pending_pipeline
@@ -3666,6 +3691,14 @@ async def api_analyze_stream(
                                         f"[P2-PIPELINE-FALLBACK-GUARD-DONE] KV failed update no-op: {_kv_e!r}"
                                     )
                                 return
+                            elif isinstance(_result, dict) and _result.get("_partial_repair"):
+                                _rstats = _result.get("_repair_stats") or {}
+                                logger.warning(
+                                    f"🛡️ [P2-PIPELINE-FALLBACK-GUARD-DONE] Plan con repair PARCIAL "
+                                    f"— NO es outage de IA: {_rstats.get('real_days', '?')}/"
+                                    f"{_rstats.get('requested_days', '?')} días reales. Persistiendo "
+                                    f"via done-callback. user={_deep_search_user_id[:8]}"
+                                )
                             # Recomputar memory_ctx desde scope del endpoint
                             # (mismo cálculo que el SSE generator hace antes
                             # del postprocess original).
@@ -3971,11 +4004,19 @@ async def api_analyze_stream(
                         elif pipeline_result["result"]:
                             result = pipeline_result["result"]
 
-                            # GUARD: Si el pipeline devolvió un plan de emergencia
-                            # matemático (LLM upstream caído), NO persistir ni encolar
-                            # chunks. Emitir error SSE para que el frontend muestre
-                            # "intenta de nuevo" en lugar de un plan basura permanente.
-                            if isinstance(result, dict) and result.get("_is_fallback"):
+                            # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] Incidente corr=23c65543: el
+                            # planificador entregó 1/3 días (revisados y APROBADOS médicamente,
+                            # `review_passed=True`), el guardrail P0-2 rellenó los otros 2
+                            # matemáticamente, y este guard trataba CUALQUIER `_is_fallback=True`
+                            # como "emergencia total — descartar", perdiendo un pipeline
+                            # objetivamente exitoso sin avisar al usuario ni dejar rastro de POR
+                            # QUÉ ("LLM upstream caído" — falso: cero errores/timeouts/CB-trips en
+                            # todo el run). `_apply_final_defense_guardrails` ahora distingue esa
+                            # causa con `_partial_repair=True` (solo cuando sobrevivió contenido
+                            # real Y la revisión médica aprobó) — ese caso NO entra a este guard de
+                            # descarte, cae al flujo normal de persistencia más abajo.
+                            if (isinstance(result, dict) and result.get("_is_fallback")
+                                    and not result.get("_partial_repair")):
                                 # [P1-PENDING-PIPELINE-SSE-FALLBACK-CLEAR · 2026-06-20] Estos breaks del
                                 # FALLBACK-GUARD ya setearon `_sse_completed_naturally=True` (L3326) → el
                                 # done-callback SALTA su mark-failed (race-fix L3047 → return). Sin marcar el
@@ -4014,9 +4055,16 @@ async def api_analyze_stream(
                                 # hasta subir el cap). El system_alert ya lo emitió
                                 # el pipeline (graph_orchestrator).
                                 _spend_cap = bool(result.get("_llm_spend_cap"))
+                                # [P1-FALLBACK-CAUSE-SPLIT] `_fallback_source` (estampado por
+                                # graph_orchestrator: `pipeline_exception` / `guardrail_empty_result` /
+                                # `guardrail_all_synthetic`) reemplaza el hardcode "LLM upstream caído"
+                                # en el LOG — el mensaje al usuario abajo se mantiene genérico porque en
+                                # los 3 casos restantes (post `_partial_repair`) el resultado observable
+                                # SÍ es "no tenemos plan que entregarte", solo la causa interna difiere.
+                                _fb_source = result.get("_fallback_source", "unknown")
                                 logger.warning(
                                     f"🚨 [FALLBACK-GUARD/SSE] Pipeline devolvió plan de "
-                                    f"emergencia (LLM upstream caído{', spending cap' if _spend_cap else ''}). "
+                                    f"emergencia (fuente={_fb_source}{', spending cap' if _spend_cap else ''}). "
                                     f"No se persiste. user={actual_user_id or 'guest'}"
                                 )
                                 _fallback_msg = (
@@ -4030,6 +4078,21 @@ async def api_analyze_stream(
                                 _plan_delivery_failed = True
                                 yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'llm_unavailable', 'message': _fallback_msg}})}\n\n"
                                 break
+                            elif isinstance(result, dict) and result.get("_partial_repair"):
+                                # [P1-FALLBACK-CAUSE-SPLIT] NO discard: el pipeline tuvo éxito (graph
+                                # success + revisión médica aprobada) y sobrevivió contenido real; el
+                                # guardrail P0-2 solo completó matemáticamente los días faltantes. Cae
+                                # al flujo normal de persistencia debajo — el plan SÍ se guarda, y el
+                                # `_review_disclaimer` honesto (estampado por `_repair_partial_plan`)
+                                # viaja con el plan para que el usuario sepa qué días son sintéticos.
+                                _rstats = result.get("_repair_stats") or {}
+                                logger.warning(
+                                    f"🛡️ [FALLBACK-GUARD/SSE] Plan con repair PARCIAL — NO es outage de "
+                                    f"IA: {_rstats.get('real_days', '?')}/{_rstats.get('requested_days', '?')} "
+                                    f"días reales revisados, {_rstats.get('replaced_count', 0)} reemplazados + "
+                                    f"{_rstats.get('filled_count', 0)} rellenados matemáticamente. "
+                                    f"Persistiendo (pipeline exitoso). user={actual_user_id or 'guest'}"
+                                )
 
                             # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Comportamiento INVERTIDO
                             # respecto a P0-3 pre-fix. Pre-fix cortaba aquí si el cliente

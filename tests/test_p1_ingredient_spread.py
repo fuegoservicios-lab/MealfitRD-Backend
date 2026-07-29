@@ -10,14 +10,34 @@ signal. `_count_ingredient_meal_frequency` closes that gap by counting occurrenc
 (continuous, meal-granularity) instead.
 
 Non-negotiable design constraints from the brief, each anchored to a test below:
-  1. No per-ingredient token list — the mechanism must flag a NOVEL ingredient word it has never
-     seen named anywhere in the codebase (test_novel_ingredient_word_is_detected).
+  1. No CURATED per-ingredient synonym/alias list (`_STAPLE_INGREDIENT_ALIASES`-style) — the
+     counted token must never come from a hand-maintained table of known foods
+     (test_hardcoded_list_sabotage_would_be_caught).
   2. Seasonings/cooking fats MUST be exempt, reusing the existing SSOT
      (`_is_seasoning_name`/`_QTY_GUARD_SEASONING_SKIP` + `_SKELETON_PROTEIN_FILLER_TOKENS` for
      aceite) — NOT a second source of truth (test_seasonings_and_oil_never_flagged,
      test_seasoning_exemption_sabotage_would_be_caught).
   3. Knob-gated with a safe default (test_knobs_registered).
   4. Logs what it did and why (test_self_critique_logs_and_wires_spread_block, source-level).
+
+[P1-INGREDIENT-SPREAD-GUSTO-FIX · 2026-07-29] Constraint 1 was REVISED after this detector's first
+live firing (corr=23c65543) flagged `'gusto'` (from "Sal al gusto") as a concentrated ingredient — a
+false positive injected into the self-critique prompt on a real generation. Read-only census against
+25 live plans found it systemic: `gusto` 25/25, `oliva` 25/25 (from "aceite de oliva"), `negra` 23/25
+(from "pimienta negra"). Root cause: the ORIGINAL "mechanical, no lookup at all" design (this test
+file's original `test_novel_ingredient_word_is_detected`, now
+`test_novel_unverified_word_is_dropped_not_hallucinated`) accepted the raw "first significant token"
+survived from the LLM's own text as the counted signal — which is exactly what fabricated
+'gusto'/'oliva'/'negra' (modifier words of a seasoning phrase, not foods themselves). The FIX keeps
+constraint 1's actual intent (never trust a hand-curated ALIAS TABLE — a table needs a 4th/5th/6th
+entry every time a new false-positive word surfaces, the exact anti-pattern CLAUDE.md calls out:
+pavo → mariscos → conejo/chivo/calamar/langosta/hígado → yogurt) while requiring the counted token
+to RESOLVE against `master_ingredients` (the verified food catalogue, via the same
+`IngredientNutritionDB.lookup` SSOT `_ensure_ingredient_quantities` already uses) instead of being
+whatever raw word survives the seasoning/filler filters. A structurally novel word with NO catalog
+entry is now DROPPED (not hallucinated as a token) — this is a deliberate, tested behavior change,
+not a regression: it closes the false-positive class while catalog-verified real foods (yogurt,
+queso, pollo, tomate, ...) are detected exactly as before.
 
 tooltip-anchor: P1-INGREDIENT-SPREAD
 """
@@ -71,13 +91,17 @@ def test_below_threshold_not_flagged():
     )
 
 
-# ─────────────────────────── constraint 1: no hardcoded list ───────────────────────────
+# ─────────────────────────── constraint 1: no curated alias table ───────────────────────────
 
-def test_novel_ingredient_word_is_detected():
-    """A word that appears NOWHERE in `_STAPLE_INGREDIENT_ALIASES`, `_MAIN_PROTEIN_ALIASES`,
-    `_QTY_GUARD_SEASONING_SKIP`, or any other curated list in this codebase must still be flagged
-    if it repeats enough — proving detection is mechanical (count the literal word), not a lookup
-    against a named-ingredient table. Uses a made-up food word."""
+def test_novel_unverified_word_is_dropped_not_hallucinated():
+    """[REVISED · P1-INGREDIENT-SPREAD-GUSTO-FIX 2026-07-29] A made-up word with no entry in
+    `master_ingredients` must NEVER become the counted token, no matter how many times it repeats —
+    this is the inverse of the pre-fix contract (see module docstring): the pre-fix version treated
+    "detect ANY repeated word mechanically" as the goal, and that is exactly what turned modifier
+    words of a seasoning phrase ('gusto', 'oliva', 'negra') into fabricated concentration signals on
+    every single live plan. The catalog gate means an unresolved word is DROPPED, never invented as
+    a token — real foods (yogurt/queso/pollo/tomate) still resolve and still flag normally, proven
+    by `test_yogurt_8_of_12_meals_flagged_like_the_live_incident` above still passing unchanged."""
     novel_word = "zzquinoawok"
     assert novel_word not in go._STAPLE_INGREDIENT_ALIASES
     for aliases in go._MAIN_PROTEIN_ALIASES.values():
@@ -92,21 +116,23 @@ def test_novel_ingredient_word_is_detected():
             _meal("Pollo con Arroz", ["150 g de pollo", "100 g de arroz"]),
         ]
         days.append(_day(meals, day=d))
-    # novel_word in 4/6 meals = 66.7%
+    # novel_word en 4/6 comidas = 66.7% — pre-fix esto lo hubiera flagueado (bug); post-fix debe
+    # descartarse por no resolver contra el catálogo verificado.
     result = go._count_ingredient_meal_frequency(days)
-    assert novel_word in result, (
-        f"Un ingrediente NUNCA nombrado en el codebase debe detectarse igual que uno conocido "
-        f"(constraint: sin lista por-ingrediente). Result: {result}"
+    assert novel_word not in result, (
+        f"Una palabra inventada sin match de catálogo NUNCA debe fabricarse como token — "
+        f"exactamente el bug que produjo 'gusto'/'oliva'/'negra' en producción. Result: {result}"
     )
 
 
 def test_hardcoded_list_sabotage_would_be_caught():
-    """SABOTAGE CHECK (per brief instructions): if `_count_ingredient_meal_frequency` were
+    """SABOTAGE CHECK (constraint 1, revised): if `_count_ingredient_meal_frequency` were
     reimplemented as a lookup against a fixed alias table (like `_STAPLE_INGREDIENT_ALIASES`)
-    instead of literal-word counting, `test_novel_ingredient_word_is_detected` above would fail
-    immediately — a curated table by definition does not contain a word invented for this test.
-    This test just asserts that invariant explicitly: the novel word is provably absent from every
-    curated table in the module, so its detection can only come from mechanical tokenization."""
+    instead of the `master_ingredients` catalog gate, the fixture word below would be provably
+    absent from that hardcoded table too — proving the ONLY reason it gets dropped post-fix is the
+    catalog gate (real food-DB lookup), not a hand-maintained list masquerading as one. Also
+    confirms the word doesn't resolve against the live catalog either (belt-and-suspenders for
+    `test_novel_unverified_word_is_dropped_not_hallucinated`)."""
     novel_word = "zzquinoawok"
     all_curated_tokens = set()
     for aliases in go._STAPLE_INGREDIENT_ALIASES.values():
@@ -116,6 +142,11 @@ def test_hardcoded_list_sabotage_would_be_caught():
     all_curated_tokens.update(t.lower() for t in go._QTY_GUARD_SEASONING_SKIP)
     all_curated_tokens.update(t.lower() for t in go._SKELETON_PROTEIN_FILLER_TOKENS)
     assert novel_word not in all_curated_tokens
+    from nutrition_db import IngredientNutritionDB
+    assert IngredientNutritionDB().lookup(novel_word) is None, (
+        "el fixture debe ser genuinamente irresoluble contra el catálogo — si esto falla, "
+        "'zzquinoawok' dejó de ser un buen ancla para este test."
+    )
 
 
 # ─────────────────────────── constraint 2: seasoning/oil exemption ───────────────────────────

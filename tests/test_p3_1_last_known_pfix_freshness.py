@@ -41,7 +41,18 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 7, 10)  # [P0-1-FINAL-BAND-CLOSER · 2026-07-10] roadmap P0-P3 completo
+_PFIX_DATE_FLOOR = date(2026, 7, 29)  # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] incidente corr=23c65543:
+# el planificador entregó 1/3 días (medicamente APROBADOS) y el guardrail P0-2 rellenó el resto
+# matemáticamente; el guard SSE trataba CUALQUIER `_is_fallback=True` como emergencia total y
+# descartaba un pipeline exitoso sin avisar al usuario, con un log "LLM upstream caído" que era falso
+# (cero errores/timeouts/CB-trips en todo el run). Fix: `_partial_repair`/`_fallback_source`
+# distinguen "hay contenido real revisado, no es outage" de las 3 causas reales de emergencia
+# (`pipeline_exception`, `guardrail_empty_result`, `guardrail_all_synthetic`) en los 3 guards de
+# `routers/plans.py` + `_repair_stats`/`_fallback_source` estampados en `graph_orchestrator.py`.
+# Además: log ERROR en caliente si el planificador devuelve menos días de skeleton que
+# `days_in_chunk` (antes cero rastro hasta el guardrail final, ~2.5 min después) y fix estructural
+# del falso-positivo 'gusto'/'oliva'/'negra' en `_count_ingredient_meal_frequency` (gate de catálogo
+# en vez de "primera palabra significativa" cruda). Floor previo P0-1-FINAL-BAND-CLOSER · 2026-07-10 roadmap P0-P3 completo
 # (forensic corr=d57ffe04): cierre final all-4-macro sobre el estado ENTREGADO (P0-1), aridad de pool
 # main-proteins (P0-2), matriz día×macro en clinical_band (P1-1), telemetría de impotencia del autofix
 # (P1-2), fruit-dedup re-fire tras self-critique (P1-3), telemetría evidence-first del re-engine post
