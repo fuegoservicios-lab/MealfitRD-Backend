@@ -2067,16 +2067,29 @@ DIABETES_CONDITION_TERMS = (
     "diabet", "dm2", "dm-2", "dm 2", "t2dm", "prediabet", "pre-diabet", "hiperglucem",
     "resistencia a la insulina", "resistencia insulinica", "glucemia alta", "azucar alta",
     "intolerancia a la glucosa", "intolerancia a glucosa",
+    # [P1-CLOSER-CONDITION-SSOT · 2026-07-29] (audit solver+seeder v4) `glicem`/`glucem` venían del
+    # detector ad-hoc del micro-closer, que los tenía y el SSOT no. Son STEMS de términos que la tupla
+    # ya contenía ("hiperglucem", "glucemia alta") más la variante RD "glicemia", así que solo AMPLÍAN
+    # en dirección fail-secure (más perfiles reciben el guard DM2, ninguno lo pierde).
+    "glicem", "glucem",
 )
 # [P3-CONDITION-ENGINE · 2026-06-14] Extensión del set Pareto cardiometabólico DR. Términos sin
 # acento (el caller normaliza con strip_accents). Consumidos por el ConditionRuleEngine (condition_rules.py).
 HTA_CONDITION_TERMS = (
     "hipertension", "hta", "presion alta", "presion arterial alta", "tension alta",
     "hipertenso", "high blood pressure", "blood pressure",
+    # [P1-CLOSER-CONDITION-SSOT · 2026-07-29] stem del detector ad-hoc del micro-closer: subsume
+    # "hipertension"/"hipertenso"/"hipertensiva". Solo amplía, dirección fail-secure.
+    "hipertens",
 )
 DYSLIPIDEMIA_CONDITION_TERMS = (
     "dislipidemia", "colesterol alto", "colesterol elevado", "trigliceridos altos",
     "hipercolesterolemia", "ldl alto", "hiperlipidemia", "high cholesterol",
+    # [P1-CLOSER-CONDITION-SSOT · 2026-07-29] stems del detector ad-hoc del micro-closer. El closer
+    # YA se comportaba así (usaba "dislip"/"colesterol"/"hiperlip" sueltos); moverlos al SSOT mata la
+    # lista paralela sin cambiarle el comportamiento al closer, y de paso el resto de consumidores
+    # deja de fallar ABIERTO ante "colesterol" a secas o "trigliceridos" sin adjetivo.
+    "dislip", "colesterol", "hiperlip", "trigliceridos",
 )
 ANEMIA_CONDITION_TERMS = (
     "anemia", "ferropenica", "ferropenia", "hierro bajo", "ferritina baja",

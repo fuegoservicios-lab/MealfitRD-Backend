@@ -73,7 +73,11 @@ def test_s_p3_a_validators_anchored():
     assert 'MEALFIT_SOLVER_MIN_SCALE", 0.3, lambda v:' in _PS
     assert 'MEALFIT_SOLVER_MAX_SCALE", 3.5, lambda v:' in _PS
     assert 'MEALFIT_SOLVER_MAX_SCALE_PROTEIN", 5.0, lambda v:' in _PS
-    assert 'MEALFIT_SOLVER_W_KCAL", 1.2, lambda v:' in _PS
+    # [P1-SOLVER-KCAL-ROW-REDUNDANT · 2026-07-29] re-anclado: el default pasó de 1.2 a 0.1 (la fila
+    # kcal es redundante y dominaba el 98% del objetivo). Lo que S-P3-a protege es que el knob LLEVE
+    # VALIDATOR, no cuánto vale — anclar el literal del default hacía fallar al test por un cambio
+    # que no es el suyo. El default vive en test_p1_solver_seeder_v4_batch.py, que es su dueño.
+    assert re.search(r'MEALFIT_SOLVER_W_KCAL",\s*[\d.]+,\s*lambda v:', _PS)
     assert 'MEALFIT_SOLVER_LSQ_REG", 0.10, lambda v:' in _PS
     # guard de inversión + fallback fallback local acepta validator
     assert "if not (SOLVER_MIN_SCALE < SOLVER_MAX_SCALE):" in _PS

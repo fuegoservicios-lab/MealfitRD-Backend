@@ -31,6 +31,8 @@ import os
 from typing import Optional
 
 
+_log = logging.getLogger(__name__)
+
 # Aportes calóricos Atwater (kcal/g) por macro — para decidir el macro dominante.
 _KCAL_PER_G = {"protein": 4.0, "carbs": 4.0, "fats": 9.0}
 
@@ -40,8 +42,23 @@ _KCAL_PER_G = {"protein": 4.0, "carbs": 4.0, "fats": 9.0}
 # leían os.environ crudo y eludían el registry: un override de los pesos del solver (núcleo de precisión)
 # era invisible al operador. Fail-safe: si knobs no importa, helpers locales equivalentes (raw os.environ).
 try:
-    from knobs import _env_float as _envf, _env_bool as _envb  # auto-registran en _KNOBS_REGISTRY
+    from knobs import (_env_float as _envf, _env_bool as _envb,
+                       _env_int as _envi)  # auto-registran en _KNOBS_REGISTRY
 except Exception:  # pragma: no cover - knobs siempre disponible en prod
+    def _envi(name: str, default: int, validator=None) -> int:
+        # [P1-SOLVER-LSQ-ITERS] espejo offline de knobs._env_int (mismo contrato que _envf).
+        try:
+            v = int(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
+        if validator is not None:
+            try:
+                if not validator(v):
+                    return default
+            except Exception:
+                return default
+        return v
+
     def _envf(name: str, default: float, validator=None) -> float:
         # [S-P3-a] acepta `validator` para paridad con knobs._env_float (fallback offline).
         try:
@@ -73,13 +90,58 @@ SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
 # SOLVER_MIN_COVERAGE/SOLVER_PARTIAL_MAX_SCALE (graph_orchestrator.py), que SÍ los usan. Un override
 # swapeado/negativo era aceptado en silencio y re-escalaba cada ingrediente sin WARNING. Fuera de rango →
 # WARNING + fallback al default (knobs._env_float).
-SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 1.2, lambda v: 0.0 < v <= 10.0)
+# [P1-SOLVER-KCAL-ROW-REDUNDANT · 2026-07-29] (audit solver+seeder v4) Default 1.2 → 0.1.
+#
+# La fila kcal del LSQ es una restricción REDUNDANTE, medida: sobre las 201 filas de
+# `master_ingredients` con los 4 macros no nulos, |kcal_catálogo − (4·(P+C) + 9·F)| / kcal tiene
+# p50 = 0.001 (0.1%) y 63% de las filas bajo el 2% — o sea, para todo lo que pesa en un plato la
+# fila kcal ES `4·fila_P + 4·fila_C + 9·fila_F`. No añade información nueva, pero como las filas
+# se arman en unidades ABSOLUTAS (`A_rows`/`brow` abajo, ~500-720 kcal vs ~16-72 g de macro) el
+# peso EFECTIVO de cada ecuación es `w·b²` → con w=1.2 la fila kcal se llevaba el **98.2% del
+# objetivo**: los otros tres knobs `SOLVER_W_*` movían décimas de punto porcentual, y el problema
+# quedaba mal condicionado para el descenso por coordenadas (ver `iters` en `_box_lsq`).
+#
+# ⚠️ Lo que este cambio NO hace: con 0.1 la fila kcal SIGUE dominando (share 81.7-84.0% según el
+# slot) — solo domina MENOS. Los pesos declarados siguen sin ser los efectivos. Devolverles su
+# significado exige re-tunear los CUATRO simultáneamente contra un harness de comidas vivas; esto
+# compra los +10.1 pp medidos y nada más. No leer este knob como "el objetivo ya está bien puesto".
+#
+# Medido re-solviendo 416 comidas VIVAS (30 planes) con el mismo `_box_lsq`, variando SOLO este peso:
+#   w=1.2 (previo) → 67.5% de comidas con P/C/F en ±10%   ·  w=0.1 → 77.6% (+10.1 pp)
+# NO bajarlo a 0 (quitar la fila): P/C/F sube a 80.3% pero el MAPE de kcal salta a 2.3% y la banda
+# kcal es la ESTRECHA [0.95, 1.05] → el all-4 empeora. Se conserva como regularizador suave del
+# agregado. Rollback sin redeploy: `MEALFIT_SOLVER_W_KCAL=1.2`.
+#
+# ⚠️ NO "arreglar" esto normalizando las filas (`A/b`, `b=1`) para que los pesos declarados sean los
+# efectivos: MEDIDO sobre las mismas 416 comidas, regresa **−27.1 pp** de convergencia (78.1% → 51.0%,
+# MAPE proteína 4.7% → 9.9%). Con filas absolutas `w·b²` da a la proteína (b≈40 g) ~6.7× el peso de la
+# grasa (b≈16 g), que es clínicamente lo que se quiere; normalizar las iguala y de-prioriza la proteína.
+# Lo que sobra es la FILA KCAL, no la escala. tooltip-anchor: P1-SOLVER-KCAL-ROW-REDUNDANT
+SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 0.1, lambda v: 0.0 < v <= 10.0)
 SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 1.5, lambda v: 0.0 < v <= 10.0)
 SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.1, lambda v: 0.0 < v <= 10.0)
 SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4, lambda v: 0.0 < v <= 10.0)
 # Regularización hacia el porcionado original del LLM (x=1): evita porciones absurdas (un
 # ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
 SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10, lambda v: 0.0 <= v <= 5.0)
+# [P1-SOLVER-LSQ-ITERS · 2026-07-29] (audit solver+seeder v4) El tope de barridos de `_box_lsq` era un
+# default de PARÁMETRO plano (`iters: int = 150`) que ningún callsite pasaba → ni knob, ni rollback, ni
+# A/B sin redeploy (mismo defecto que S-P2-a cerró para MIN_SCALE/MAX_SCALE).
+#
+# Peor: el criterio de parada NO DISPARA en producción. Instrumentando `_box_lsq` con el criterio real
+# (`max_delta < 1e-7`) y tope 100.000 sobre 416 comidas VIVAS: barridos necesarios p50 = 82.560, y el
+# **99.0% de las comidas necesitan más de 150** (95.4% más de 400). O sea que hoy el solver SIEMPRE
+# retorna por agotamiento, en un punto que no es su propio óptimo — el docstring que promete "converge
+# al óptimo global" describía la teoría, no la corrida.
+#
+# Medido re-solviendo las mismas 416 comidas variando SOLO el tope (objetivo de producción intacto):
+#   150 (previo) → 67.5% con P/C/F en ±10%  ·  400 → 74.8% (+7.3 pp)  ·  5.000 → 78.1%
+#   MAPE grasa 11.0% → 9.8% → 9.0%   ·   MAPE proteína 6.1% → 5.1% → 4.7%
+# Default 400 y no 5.000: los ~3 pp extra se solapan con lo que P1-SOLVER-KCAL-ROW-REDUNDANT consigue
+# más barato (bajar el peso de la fila kcal mejora el condicionamiento, que es la causa del mal
+# condicionamiento que exige tantos barridos). El coste CPU de 400 es indistinguible (≤15 vars, ≤4 filas,
+# pure-python). Rollback sin redeploy: `MEALFIT_SOLVER_LSQ_ITERS=150`. tooltip-anchor: P1-SOLVER-LSQ-ITERS
+SOLVER_LSQ_ITERS = _envi("MEALFIT_SOLVER_LSQ_ITERS", 400, lambda v: 50 <= v <= 20000)
 
 # [S-P2-a / P2-SOLVER-SCALE-KNOBS · 2026-07-07] (audit solver+seeder v2) El clamp de escala del solver eran
 # params default PLANOS (0.3/3.5), NO knobs → invisibles en /health/version y sin rollback/A-B sin redeploy
@@ -109,11 +171,18 @@ if SOLVER_MAX_SCALE_PROTEIN < SOLVER_MAX_SCALE:
 
 
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
-             reg: float, iters: int = 150) -> list:
+             reg: float, iters: int = None) -> list:
     """Mínimos cuadrados ACOTADOS con regularización hacia x=1, por descenso por coordenadas.
     Minimiza  Σ_r w_r (Σ_j A[r][j]·x_j − b[r])²  +  reg·Σ_j (x_j − 1)²  s.a. x_j ∈ [lo, hi].
     Problema convexo pequeño (≤~15 vars, ≤4 filas) → CD con minimización 1D exacta por coordenada
-    converge al óptimo global. Determinista, pure-python (sin numpy/scipy). Retorna x (factores)."""
+    converge al óptimo global. Determinista, pure-python (sin numpy/scipy). Retorna x (factores).
+
+    [P1-SOLVER-LSQ-ITERS · 2026-07-29] `iters=None` → `SOLVER_LSQ_ITERS` (knob). OJO al leer esto:
+    la convergencia al óptimo global es la propiedad del ALGORITMO, no de la corrida — medido en
+    prod, el 99% de las comidas AGOTA el tope antes de que `max_delta < 1e-7` dispare, así que el
+    retorno es un punto sub-óptimo cuya calidad depende directamente de `iters`."""
+    if iters is None:
+        iters = SOLVER_LSQ_ITERS
     nrows = len(A_rows)
     n = len(A_rows[0]) if nrows else 0
     x = [1.0] * n
@@ -480,6 +549,23 @@ def solve_meal_macros(
 # del caller) → requiere A/B antes de flipear. Rollback/estado actual: MEALFIT_REFINE_HOUSEHOLD_LINES=false.
 REFINE_HOUSEHOLD_LINES = _envb("MEALFIT_REFINE_HOUSEHOLD_LINES", False)
 
+# [P1-REFINE-RAW-BY-FOOD · 2026-07-29] (audit solver+seeder v4) El sync a `ingredients_raw` del
+# refinador escribía `raw[idx]` con el ÍNDICE de `ingredients` y el único guard `idx < len(raw)` —
+# un guard MÁS FLOJO que el de sus dos pases hermanos (`P1-SOLVER-RAW-BY-FOOD` en el solver per-meal
+# y `P1-CAP-RAW-BY-FOOD` en los caps), que exigen `len(raw) == len(ings)` antes de confiar en el índice.
+# Y el repo YA MIDIÓ que las dos listas no son paralelas (tracer P1-MISALIGN-DEEP-TRACE: el desajuste
+# nace en `pre_engine`, o sea antes de todo este bloque). Consecuencia: el factor de la línea de display
+# `idx` se aplicaba a lo que ocupara esa posición en raw → la LISTA DE COMPRAS y el PANEL DE MICROS
+# (ambos leen raw) escalaban el alimento equivocado, en silencio.
+# Agravante de ubicación: en el shield pre-INSERT el refinador corre DESPUÉS del último reconciliador
+# display↔raw, así que el desalineado que introduce llega tal cual a la DB.
+# Fix = el mismo contrato que los hermanos: largos iguales → índice (exacto y barato); largos distintos
+# → mapeo por ALIMENTO. Un alimento con factores distintos en varias líneas se deja INTACTO (preferimos
+# no escalar a escalar con el factor equivocado). Rollback: MEALFIT_REFINE_RAW_BY_FOOD=false → el sync
+# se SALTA cuando los largos difieren (nunca vuelve al índice ciego: ese era el bug).
+# tooltip-anchor: P1-REFINE-RAW-BY-FOOD
+REFINE_RAW_BY_FOOD = _envb("MEALFIT_REFINE_RAW_BY_FOOD", True)
+
 _REFINE_WEIGHTS = {"kcal": 1.0, "protein": 1.5, "carbs": 1.0, "fats": 1.2}
 
 
@@ -603,7 +689,11 @@ def refine_day_portions_integer(
             return 0
 
         # 3) Aplicar los cambios a los strings (lockstep raw) por línea tocada.
+        # [P1-REFINE-RAW-BY-FOOD · 2026-07-29] El display se muta línea a línea; el raw se sincroniza
+        # DESPUÉS, por meal, para poder decidir entre índice (largos iguales) y alimento (distintos).
+        # `_pending[id(meal)] = (meal, [display_original...], {idx: (factor, es_casera)})`.
         touched_meals = set()
+        _pending: dict = {}
         for ln in lines:
             if abs(ln["grams"] - ln["orig"]) < 1e-9:
                 continue
@@ -617,18 +707,56 @@ def refine_day_portions_integer(
                 # (el lead casero se re-renderiza a porción humana; el caller hace truth-up de macros).
                 new_s = _quant(_resc(s, factor))[0] if _hh else _resc(s, factor)
                 if new_s and new_s != s:
+                    _slot = _pending.get(id(meal))
+                    if _slot is None:
+                        # snapshot del display ANTES de mutarlo (el mapeo por alimento lo necesita)
+                        _slot = (meal, [str(x) for x in meal["ingredients"]], {})
+                        _pending[id(meal)] = _slot
                     meal["ingredients"][idx] = new_s
-                    raw = meal.get("ingredients_raw")
-                    if isinstance(raw, list) and idx < len(raw):
+                    _slot[2][idx] = (factor, _hh)
+                    touched_meals.add(id(meal))
+                    meal["_global_refine_applied"] = True
+            except Exception:
+                continue
+
+        # 3b) Sync de `ingredients_raw`, por meal, con el MISMO contrato que los pases hermanos
+        #     (P1-SOLVER-RAW-BY-FOOD / P1-CAP-RAW-BY-FOOD): índice solo si los largos coinciden.
+        for _meal, _disp_orig, _fmap in _pending.values():
+            raw = _meal.get("ingredients_raw")
+            if not (isinstance(raw, list) and raw and _fmap):
+                continue
+            try:
+                if len(raw) == len(_disp_orig):
+                    for idx, (factor, _hh) in _fmap.items():
+                        if idx >= len(raw):
+                            continue
                         try:
                             _rw = _resc(str(raw[idx]), factor)
                             raw[idx] = _quant(_rw)[0] if _hh else _rw
                         except Exception:
                             pass
-                    touched_meals.add(id(meal))
-                    meal["_global_refine_applied"] = True
-            except Exception:
-                continue
+                    continue
+                if not REFINE_RAW_BY_FOOD:
+                    # Rollback explícito: se SALTA el sync (no se vuelve al índice ciego — ese era el bug).
+                    _log.warning(
+                        f"[P1-REFINE-RAW-BY-FOOD] display={len(_disp_orig)} vs raw={len(raw)} en meal "
+                        f"{str(_meal.get('name'))[:32]!r} y el knob está OFF — raw sin sincronizar.")
+                    continue
+                _factors = [_fmap.get(i, (1.0, False))[0] for i in range(len(_disp_orig))]
+                from graph_orchestrator import _rescale_raw_by_food as _rrbf
+                _new_raw, _n = _rrbf(raw, _disp_orig, _factors)
+                if _n:
+                    _meal["ingredients_raw"] = _new_raw
+                    _meal["_refine_raw_by_food"] = _n
+                    _log.info(
+                        f"⚖️ [P1-REFINE-RAW-BY-FOOD] {str(_meal.get('name'))[:32]!r}: {_n} línea(s) de "
+                        f"raw escaladas por alimento (display={len(_disp_orig)} vs raw={len(raw)} — el "
+                        f"guard por índice habría escalado la línea EQUIVOCADA).")
+            except Exception as _rs_e:
+                # Fail-safe: raw sin tocar es un estado consistente (el truth-up del caller lo detecta);
+                # escalar la línea equivocada NO lo es.
+                _log.warning(f"[P1-REFINE-RAW-BY-FOOD] sync no-op en meal "
+                             f"{str(_meal.get('name'))[:32]!r}: {type(_rs_e).__name__}: {_rs_e}")
         return moves if touched_meals else 0
     except Exception:
         return 0

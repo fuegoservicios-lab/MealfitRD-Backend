@@ -11001,6 +11001,25 @@ REFINE_KCAL_AWARE = _env_bool("MEALFIT_REFINE_KCAL_AWARE", True)
 # Antes el motor corría SOLO en form-gen: un update que dejaba el día fuera de banda se entregaba con
 # banner (band-parity) pero sin palanca correctiva de proteína/grasa. Ver apply_update_macro_engine.
 UPDATE_MACRO_ENGINE_ENABLED = _env_bool("MEALFIT_UPDATE_MACRO_ENGINE", True)
+# [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] (audit solver+seeder v4) Los caps clínicos de PORCIÓN
+# (`cap_dm2_high_gi_portions` ≤150 g/comida de almidón alto-IG, `cap_bariatric_portions` queso 30 g /
+# yogurt 120 g) declaran en su propio docstring que corren POST-sizing "si corrieran antes, el motor
+# re-inflaría la porción". En form-gen eso se cumple. En las superficies de UPDATE se cumple al REVÉS:
+# la capa clínica corrió en S1, y `apply_update_macro_engine` (rebalance + refine) corre DESPUÉS, sin
+# que nadie re-aplique los caps.
+#
+# Escenario medido en el código: usuario DM2 con la batata del almuerzo capada a 150 g en S1 hace un
+# swap de la cena → el día queda bajo en carbos → `_rebalance_day_macros_to_target` recoge TODAS las
+# líneas carbo-dominantes del día (incluida la batata capada) y les aplica un factor común de hasta
+# ×2.5 SIN ningún check de condición → la batata vuelve a 300-375 g en una sola comida. El único
+# post-check (`apply_update_condition_ceilings`) pinta un banner; no corrige.
+#
+# Fix: re-aplicar ambos caps sobre los días que el motor tocó. Idempotente por construcción (los dos
+# hacen `if grams <= cap: continue`) y no-op para perfiles sin la condición → cero coste en el caso
+# común. Default TRUE (fail-secure: el enforcement clínico no se apaga solo).
+# Rollback sin redeploy: MEALFIT_UPDATE_MACRO_ENGINE_CLINICAL_RECAP=false.
+# tooltip-anchor: P1-UPDATE-CLINICAL-RECAP
+UPDATE_MACRO_ENGINE_CLINICAL_RECAP = _env_bool("MEALFIT_UPDATE_MACRO_ENGINE_CLINICAL_RECAP", True)
 # [P2-STEP-CARB-GHOST · 2026-07-01] (batch P1-DISH-REALISM-BATCH) espejo del veg-guard para CARBS fantasma:
 # "Revoltillo con Avena" cuyos pasos cocinan avena que NO está en ingredients[] (no se cuenta ni se compra).
 # Solo carbs slot-neutros curados (avena/casabe/batata/yuca) — arroz/pasta EXCLUIDOS (slot-sensitivos: el
@@ -12217,6 +12236,27 @@ def _is_renal_condition(form_data) -> bool:
 def _is_diabetes_condition(form_data) -> bool:
     """[P3-CONDITION-RULES] True si el perfil declara diabetes/prediabetes (regla ADA 2026)."""
     return any(any(t in c for t in _DIABETES_CONDITION_TERMS) for c in _condition_strings(form_data))
+
+
+def _is_dyslip_or_hta_condition(form_data) -> bool:
+    """[P1-CLOSER-CONDITION-SSOT · 2026-07-29] (audit solver+seeder v4) True si el perfil declara
+    dislipidemia/hipercolesterolemia O hipertensión — las dos condiciones que comparten la MISMA
+    consecuencia en el micro-closer: no escalar contribuyentes cargados de grasa saturada/sodio
+    (queso, embutido) para cerrar un micro.
+
+    Existe porque `_close_micro_gaps_for_plan` re-implementaba la detección con su propia lista de
+    stems sobre `" ".join(conditions).lower()` — sin accent-strip (por eso llevaba "presión alta" Y
+    "presion alta" duplicados) y sin los términos del SSOT ("trigliceridos altos", "ldl alto",
+    "hipercolesterolemia", "tension alta", "high cholesterol"...). Los stems del closer ya migraron a
+    las tuplas de constants.py, así que este helper es un superconjunto estricto del detector viejo.
+    tooltip-anchor: P1-CLOSER-CONDITION-SSOT"""
+    try:
+        from constants import (HTA_CONDITION_TERMS as _HTA_T,
+                               DYSLIPIDEMIA_CONDITION_TERMS as _DYS_T)
+    except Exception:
+        return True  # fail-secure: sin SSOT no escalamos queso/embutido para cerrar micros
+    _terms = tuple(_HTA_T) + tuple(_DYS_T)
+    return any(any(t in c for t in _terms) for c in _condition_strings(form_data))
 
 
 def _is_bariatric_condition(form_data) -> bool:
@@ -13485,7 +13525,15 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         except Exception:
             _anticoag = True
         _conditions = _condition_strings(_fd)
-        _renal = any(("renal" in str(c).lower() or "erc" in str(c).lower()) for c in (_conditions or []))
+        # [P1-CLOSER-CONDITION-SSOT · 2026-07-29] (audit solver+seeder v4) Era
+        # `any("renal" in c or "erc" in c ...)` — un detector ad-hoc con 2 de los 14 términos del SSOT
+        # `RENAL_CONDITION_TERMS`, mientras los otros 10 callsites renales del archivo usan
+        # `_is_renal_condition()`. Fallaba ABIERTO para "rinon", "kidney", "ckd", "nefro", "nefropat",
+        # "dialisis", "glomerul", "creatinina alta" — y como NO existe chip renal en el formulario,
+        # TODO perfil renal llega como texto libre, justo donde esas variantes son las probables.
+        # Un ERC no detectado aquí es el closer cerrando potasio/fósforo/vit A en un riñón que no los
+        # excreta. tooltip-anchor: P1-CLOSER-CONDITION-SSOT
+        _renal = _is_renal_condition(_fd)
         _days = plan.get("days") or []
         _ndays = len(_days) or 1
         try:
@@ -13580,17 +13628,22 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         # auto-infligida); en ERC la rama calcio escalaba lácteo cargando K/P sin check. Guard token-based
         # determinista: bajo esas condiciones se SALTAN los contribuyentes de riesgo (el siguiente contribuyente
         # richest-first toma su lugar; si no hay, el residual se loguea como antes). tooltip-anchor: P2-MICRO-CLOSER-CEILINGS
-        _cstr = " ".join(str(c).lower() for c in (_conditions or []))
-        _dyslip_or_hta = any(t in _cstr for t in ("dislip", "colesterol", "hiperlip", "hipertens", "hta",
-                                                  "presion alta", "presión alta"))
+        # [P1-CLOSER-CONDITION-SSOT · 2026-07-29] los 3 detectores del closer eran listas de stems
+        # PARALELAS al SSOT de constants.py. Migrados a los helpers `_is_*_condition` (que además
+        # accent-strippean vía `_condition_strings`); los stems propios del closer se movieron a las
+        # tuplas del SSOT, así que estos helpers son superconjuntos estrictos del comportamiento previo.
+        _dyslip_or_hta = _is_dyslip_or_hta_condition(_fd)
         # [P2-CLOSER-DM2-GI-GUARD · 2026-07-05] (audit solver+seeder P2-4) El closer era DM2-ciego al
         # escalar: cerrar potasio/vit C podía inflar 1.6× la fruta alto-IG de un diabético (guineo
         # maduro/mango/piña = azúcar). Mismo patrón token-based del guard dislip/HTA: bajo DM2 se
         # SALTAN los contribuyentes alto-IG (el siguiente richest-first toma su lugar; sin
         # alternativa, el residual se loguea como siempre). Tokens accent-stripped (el callsite pasa
         # `_ing_low` ya normalizado); "mangu" NO matchea "mango".
-        _dm2 = any(t in _cstr for t in ("diabet", "dm2", "glicem", "glucem", "prediabet",
-                                        "resistencia a la insulina"))
+        # [P1-CLOSER-CONDITION-SSOT · 2026-07-29] ídem: `DIABETES_CONDITION_TERMS` (14 términos) en
+        # vez de los 6 stems ad-hoc — el detector viejo perdía "t2dm", "dm-2", "hiperglucem",
+        # "intolerancia a la glucosa", "azucar alta". Los stems "glicem"/"glucem" que solo tenía el
+        # closer viven ahora en el SSOT.
+        _dm2 = _is_diabetes_condition(_fd)
         # Word-boundary OBLIGATORIO (lección 'res'↔'fresas' de CATALOG-POOLS): "pina" como
         # substring matchea dentro de "es-PINA-ca" y bloquearía justo la alternativa verde.
         # Plural opcional (`s?`): uvas/pasas/mangos.
@@ -40836,7 +40889,7 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
 
 
 def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
-                              pantry_strict: bool = False) -> int:
+                              pantry_strict: bool = False, form_data: dict = None) -> int:
     """[P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Paridad del MOTOR de macros de S1 en las
     superficies de update. `_apply_macro_engine` + el refinador global entero corrían SOLO en form-gen:
     un swap/chat-modify que dejaba el día fuera de banda se entregaba con banner (band-parity) pero sin
@@ -40846,7 +40899,12 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
          bidireccional [0.3, 2.5], never-worse: solo escala líneas macro-dominantes EXISTENTES).
       2. si el día SIGUE fuera de banda → `refine_day_portions_integer` en pasos enteros de 5g
          (all-4 conjunto, porciones siguen humanas, sin re-quantize) + truth-up per-meal.
-      3. qty-sync de pasos de receta de los meals del día tocado (última mutación textual).
+      3. [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] re-aplica los caps clínicos de porción del día tocado
+         (`cap_dm2_high_gi_portions` + `cap_bariatric_portions`) — los pasos 1-2 re-dimensionan sin
+         consultar la condición y re-inflaban la porción que la capa clínica de S1 recortó. Requiere
+         `form_data`; sin él el re-cap se omite (debug log). Rollback:
+         MEALFIT_UPDATE_MACRO_ENGINE_CLINICAL_RECAP=false.
+      4. qty-sync de pasos de receta de los meals del día tocado (última mutación textual).
     Guards:
       - `pantry_strict` → skip TOTAL (escalar = "comprar más"; mismo trade-off documentado del
         carb-floor/micro-closer en updates — la banda queda atribuida a Nevera por band-parity).
@@ -40925,6 +40983,28 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                         _hit = True
                 except Exception:
                     pass
+            # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] (audit solver+seeder v4) Re-aplica los caps clínicos
+            # de porción sobre el día que el motor acaba de re-dimensionar. SIN esto, el rebalance/refine
+            # de arriba re-infla exactamente la porción que la capa clínica de S1 había recortado (la
+            # batata del DM2 volviendo de 150 g a 300-375 g), porque ninguno de los dos consulta la
+            # condición. Idempotente y no-op sin la condición. tooltip-anchor: P1-UPDATE-CLINICAL-RECAP
+            if _hit and UPDATE_MACRO_ENGINE_CLINICAL_RECAP and isinstance(form_data, dict) and form_data:
+                try:
+                    _rc = 0
+                    _rc += int(cap_dm2_high_gi_portions([_day], form_data, db=db) or 0)
+                    _rc += int(cap_bariatric_portions([_day], form_data, db=db) or 0)
+                    if _rc:
+                        logger.info(f"🩺 [P1-UPDATE-CLINICAL-RECAP] {_rc} porción(es) re-capada(s) tras el "
+                                    f"motor de macros (surface={surface}) — el rebalance/refine había "
+                                    f"re-inflado una porción que la capa clínica de S1 recortó.")
+                except Exception as _rc_e:
+                    logger.warning(f"[P1-UPDATE-CLINICAL-RECAP] re-cap no-op (surface={surface}): "
+                                   f"{type(_rc_e).__name__}: {_rc_e}")
+            elif _hit and UPDATE_MACRO_ENGINE_CLINICAL_RECAP and not form_data:
+                # Visible a propósito: sin `form_data` el motor NO puede re-aplicar los caps clínicos.
+                # Si esto aparece en un surface user-facing, ese callsite tiene que pasar su form_data.
+                logger.debug(f"[P1-UPDATE-CLINICAL-RECAP] surface={surface} sin form_data — "
+                             f"re-cap clínico omitido.")
             if _hit:
                 touched += 1
                 for _m in _meals:

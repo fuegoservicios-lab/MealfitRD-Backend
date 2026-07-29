@@ -1970,7 +1970,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 # determinista, converge con el callback fresh de abajo). Skip pantry-strict.
                 try:
                     from graph_orchestrator import apply_update_macro_engine as _ume_pre
-                    _ume_pre(plan_data, surface="chat_modify", pantry_strict=_ps_cm)
+                    # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] re-cap clínico DM2/bariátrico tras el
+                    # re-dimensionado (el rebalance/refine no consultan la condición).
+                    _ume_pre(plan_data, surface="chat_modify", pantry_strict=_ps_cm,
+                             form_data=_micro_form_cm)
                 except Exception as _ume_pre_e:
                     logger.debug(f"[P1-UPDATE-MACRO-PARITY] (pre-listas) no-op: {_ume_pre_e}")
             except Exception as _cm_pre_e:
@@ -2233,7 +2236,9 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     # de micros (panel ve estado final) y del band-parity (puede limpiar el banner).
                     try:
                         from graph_orchestrator import apply_update_macro_engine as _ume_cm
-                        _ume_cm(plan_data_fresh, surface="chat_modify", pantry_strict=_ps_cm)
+                        # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] espejo del re-cap de la pasada pre-listas.
+                        _ume_cm(plan_data_fresh, surface="chat_modify", pantry_strict=_ps_cm,
+                                form_data=_micro_form_cm)
                     except Exception as _ume_cm_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (chat fresh) no-op: {_ume_cm_e}")
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)

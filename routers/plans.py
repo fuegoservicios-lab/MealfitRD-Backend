@@ -6264,7 +6264,9 @@ def api_swap_meal_persist(
                     _bs_pre_spd = _cbs_spd(_day_view_spd, {})
                     _pre_score_spd = float(_bs_pre_spd.get("score_macros_only") or 1.0)
                     if _pre_score_spd < 0.99:
-                        _ame_spd(_day_view_spd, surface="swap_persist_day", db=_SPDB())
+                        # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] mismo re-cap clínico que swap_persist.
+                        _ame_spd(_day_view_spd, surface="swap_persist_day", db=_SPDB(),
+                                 form_data=_micro_form)
                         for _m_spd in (day.get("meals") or []):
                             if isinstance(_m_spd, dict):
                                 try:
@@ -6391,7 +6393,12 @@ def api_swap_meal_persist(
                     # ahora puede LIMPIAR el banner si el motor reparó la banda). Skip pantry-strict.
                     try:
                         from graph_orchestrator import apply_update_macro_engine as _ume_sw
-                        _ume_sw(plan_data, surface="swap_persist", pantry_strict=_ps_swap)
+                        # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] `form_data` = perfil SERVER-SIDE
+                        # (`_micro_form`, con el free-text clínico ya plegado) para que el motor
+                        # re-aplique los caps DM2/bariátrico sobre lo que acaba de re-dimensionar.
+                        # Sin esto el rebalance re-inflaba la batata capada de un diabético.
+                        _ume_sw(plan_data, surface="swap_persist", pantry_strict=_ps_swap,
+                                form_data=_micro_form)
                     except Exception as _ume_sw_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (swap) no-op: {_ume_sw_e}")
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
