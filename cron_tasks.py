@@ -25116,7 +25116,20 @@ def _sweep_stale_guest_plans() -> int:
 
 
 def _sweep_synthetic_test_plans() -> int:
-    """[P1-LIVE-3 · 2026-05-11] Limpia planes test-fixture acumulados en prod.
+    """[P1-LIVE-3 · 2026-05-11 · predicado ampliado P0-TEST-DB-ISOLATION 2026-07-29]
+    Limpia planes test-fixture acumulados en prod.
+
+    [P0-TEST-DB-ISOLATION · 2026-07-29] El predicado original (solo el `name`
+    ILIKE) NUNCA hizo match del plan que causó el incidente de esa fecha: el
+    fixture roto insertaba `meal_plans` SIN key `name` en absoluto
+    (`NULL ILIKE '...'` es NULL, falsy). Se amplió a
+    `name ILIKE '...' OR plan_data->>'_test_fixture' = 'true'` — el segundo
+    fixture SSOT (conftest.py + los 4 archivos corregidos) estampa
+    `_test_fixture: true` en TODO plan que siembra, redundante con el `name`
+    legado. Ningún flujo de producto (I6: mutaciones de `plan_data` prohibidas
+    desde el cliente, y ningún endpoint backend escribe esta key) puede poner
+    esa key en el plan de un usuario real — el widen no puede volverse falso
+    positivo contra contenido legítimo.
 
     Caso real cerrado:
       Audit live 2026-05-11 detectó 3 planes del user `bf6f1383` (test
@@ -25136,10 +25149,12 @@ def _sweep_synthetic_test_plans() -> int:
         (cerrado parcialmente por P1-NEW-D, pero plan padre intacto).
 
     Estrategia (más agresiva que P2-NEXT-3):
-      1. SELECT planes con `plan_data->>'name' ILIKE 'Plan Sintético% — Test%'`
-         AND `created_at < NOW() - 1 día`. El sufijo `— Test` filtra
-         falsos positivos (un usuario podría nombrar legítimamente un
-         plan `Plan Sintético Pro 2026`, pero no con `— Test` suffix).
+      1. SELECT planes con `plan_data->>'name' ILIKE 'Plan Sintético% — Test%'
+         OR plan_data->>'_test_fixture' = 'true'` AND `created_at < NOW() - 1
+         día`. El sufijo `— Test` filtra falsos positivos del `name` (un
+         usuario podría nombrar legítimamente un plan `Plan Sintético Pro
+         2026`, pero no con `— Test` suffix); el flag `_test_fixture` no tiene
+         ese riesgo porque ninguna escritura legítima de producto lo setea.
       2. Para cada plan: CANCELAR chunks vivos (`pending`/`processing`/
          `stale`) — son fixtures, no work real. Diferencia clave con
          P2-NEXT-3 que solo cubre planes ya sin chunks.
@@ -25187,7 +25202,10 @@ def _sweep_synthetic_test_plans() -> int:
                 f"""
                 SELECT id, user_id, plan_data->>'name' AS name
                 FROM meal_plans
-                WHERE plan_data->>'name' ILIKE 'Plan Sintético%% — Test%%'
+                WHERE (
+                    plan_data->>'name' ILIKE 'Plan Sintético%% — Test%%'
+                    OR plan_data->>'_test_fixture' = 'true'
+                )
                   AND created_at < NOW() - INTERVAL '{int(age_hours)} hours'
                   AND plan_data->>'generation_status' IS DISTINCT FROM 'abandoned'
                 ORDER BY created_at ASC
@@ -25258,7 +25276,10 @@ def _sweep_synthetic_test_plans() -> int:
                         updated_at = NOW()
                     WHERE id = %s
                       AND user_id = %s
-                      AND plan_data->>'name' ILIKE 'Plan Sintético%% — Test%%'
+                      AND (
+                        plan_data->>'name' ILIKE 'Plan Sintético%% — Test%%'
+                        OR plan_data->>'_test_fixture' = 'true'
+                      )
                     """,
                     (plan_id, user_id),
                 )

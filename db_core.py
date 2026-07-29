@@ -482,6 +482,77 @@ def _suppress_test_alert_write(query: Optional[str]) -> bool:
     return True
 
 
+# [P0-TEST-DB-ISOLATION · 2026-07-29] Incidente: un fixture de test (`fresh_plan` en
+# `test_chunk_corrupted_plan_data_pauses.py`, y 3 copias hermanas) elegía su usuario con
+# `SELECT id FROM user_profiles LIMIT 1` — sin ORDER BY, un accidente de orden físico de
+# almacenamiento, no intención — y ese SELECT devolvía determinísticamente al OWNER real.
+# El INSERT en `meal_plans` que seguía escribía un plan corrupto (sin `plan_data.name`) en la
+# cuenta REAL, y sobrevivió porque el proceso de test murió antes del `yield`'s teardown.
+#
+# Censo (ver runbook / CLAUDE.md P0-TEST-DB-ISOLATION) midió: no existe base de test separada
+# — `backend/.env` define un único NEON_DATABASE_URL con ENVIRONMENT=production — y solo
+# 12/1544 archivos de test escriben de verdad contra esa base, todos legítimos (E2E contra
+# Neon real con fixtures que crean SU PROPIO usuario sintético). Bloquear TODA escritura de
+# test por defecto rompería esos 12 archivos; en cambio, esta guarda es table-agnostic pero
+# marker-aware vía `@pytest.mark.e2e`: solo los tests marcados e2e (los que YA declaran
+# "necesito Neon real") pueden escribir bajo pytest. `conftest.py::_guard_test_writes_to_prod`
+# (autouse) fija `_CURRENT_TEST_IS_E2E` según el marker del test en curso, ANTES de que
+# cualquier fixture de setup corra.
+#
+# Por qué NO reusar `_suppress_test_alert_write` (silent no-op): system_alerts es ruido
+# tolerable de silenciar; un INSERT/UPDATE/DELETE en `meal_plans`/`user_profiles`/etc que
+# debería fallar sonoramente NO debe degradar en silencio — un test que asume que su propio
+# INSERT ocurrió y luego lee `[]` de vuelta falla de forma confusa. `RuntimeError` con mensaje
+# accionable es la superficie correcta ("loud es el punto", brief P0-TEST-DB-ISOLATION).
+_CURRENT_TEST_IS_E2E = False
+
+
+def _looks_like_test_db_url(url: Optional[str]) -> bool:
+    """True si la URL de conexión ya apunta a algo que NO es la Neon de producción.
+
+    Hoy (2026-07-29) esto siempre es False — censo confirmó una única
+    NEON_DATABASE_URL sin staging/test separado — pero deja el guard listo para
+    cuando exista una base de test real (recomendación censo P0-TEST-DB-ISOLATION
+    item 4): en ese caso las escrituras de test dejan de necesitar el escape
+    hatch por completo.
+    """
+    if not url:
+        return False
+    _low = url.lower()
+    return any(tok in _low for tok in ("test", "staging", "localhost", "127.0.0.1"))
+
+
+def _guard_test_write_to_prod(query: Optional[str]) -> None:
+    """Bloquea (RuntimeError) escrituras reales a Neon prod desde tests NO marcados e2e.
+
+    No-op fuera de pytest (PYTEST_CURRENT_TEST ausente) — nunca afecta runtime normal.
+    """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if os.environ.get("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", "").strip().lower() in ("1", "true", "yes"):
+        return
+    if _CURRENT_TEST_IS_E2E:
+        return
+    if _looks_like_test_db_url(os.environ.get("NEON_DATABASE_URL")):
+        return
+    _preview = " ".join((query or "").split())[:160]
+    raise RuntimeError(
+        "[P0-TEST-DB-ISOLATION] BLOQUEADO: un test SIN @pytest.mark.e2e intentó escribir en "
+        "Neon PRODUCCIÓN (no existe base de test separada — ver CLAUDE.md 'DB + Auth: 100% "
+        "Neon'). Qué hacer AHORA:\n"
+        "  1. Si este test necesita escribir de verdad (E2E contra Neon real): añade "
+        "`pytestmark = pytest.mark.e2e` al tope del archivo y usa la fixture "
+        "`seeded_user_profile` de conftest.py (o tu propio `str(uuid.uuid4())`) para el "
+        "usuario — JAMÁS `SELECT ... FROM user_profiles LIMIT 1` sin ORDER BY: eso adopta "
+        "la fila de un usuario REAL (ver incidente P0-TEST-DB-ISOLATION 2026-07-29).\n"
+        "  2. Si esta escritura es un accidente (el test debería estar mockeado): parchea "
+        "`execute_sql_write` a nivel de módulo en el test en vez de dejar pasar la escritura "
+        "real.\n"
+        "  3. Escape hatch de emergencia, NO usar en CI: MEALFIT_ALLOW_TEST_WRITES_TO_PROD=1.\n"
+        f"Query bloqueada: {_preview!r}"
+    )
+
+
 def execute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False, lock_timeout_ms: Optional[int] = None) -> Union[List[Dict[str, Any]], bool]:
     """Ejecuta una transacción INSERT/UPDATE/DELETE.
 
@@ -508,6 +579,11 @@ def execute_sql_write(query: str, params: Optional[tuple] = None, returning: boo
     # [P1-TEST-ALERT-POLLUTION · 2026-07-25] Ver `_suppress_test_alert_write`.
     if _suppress_test_alert_write(query):
         return [] if returning else True
+
+    # [P0-TEST-DB-ISOLATION · 2026-07-29] Ver `_guard_test_write_to_prod`. DESPUÉS de la
+    # suppression de system_alerts (ese ruido se sigue silenciando, no bloqueando) y ANTES
+    # de tocar el pool real — ningún byte llega a Neon si un test no-e2e cae aquí.
+    _guard_test_write_to_prod(query)
 
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")

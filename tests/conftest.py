@@ -117,6 +117,7 @@ import json
 import pytest
 from datetime import datetime, timezone
 
+import db_core
 from db_core import execute_sql_write, execute_sql_query, connection_pool
 
 
@@ -132,6 +133,34 @@ if connection_pool and not getattr(connection_pool, '_opened', False):
 # ---------------------------------------------------------------------------
 def pytest_configure(config):
     config.addinivalue_line("markers", "e2e: End-to-end tests requiring a live database")
+
+
+# ---------------------------------------------------------------------------
+# [P0-TEST-DB-ISOLATION · 2026-07-29] Guarda de escrituras reales a Neon PRODUCCIÓN.
+#
+# `db_core._guard_test_write_to_prod` (el único cuello de botella de escritura,
+# `execute_sql_write`) bloquea con RuntimeError cualquier INSERT/UPDATE/DELETE que
+# ocurra bajo pytest, A MENOS que el test en curso esté marcado `@pytest.mark.e2e`
+# (o `pytestmark = pytest.mark.e2e` a nivel de módulo). Esta fixture autouse es la
+# que le dice a `db_core` cuál es "el test en curso": lee el marker del nodo ANTES
+# de que corra cualquier fixture de setup (incl. `seeded_user_profile` / `fresh_plan`
+# de los archivos E2E), y restaura el valor previo al salir — necesario porque los
+# tests corren en el MISMO proceso/módulo y `_CURRENT_TEST_IS_E2E` es un flag global.
+#
+# Censo P0-TEST-DB-ISOLATION: de los 12 archivos que escriben de verdad hoy, 8 ya
+# llevaban `@pytest.mark.e2e`; los 4 restantes (los del incidente) lo ganan en el
+# mismo commit que corrige su fixture `fresh_plan`. Con eso, ESTA guarda no rompe
+# ningún test existente — solo cierra la puerta a que un test NUEVO, no marcado,
+# escriba prod por accidente.
+@pytest.fixture(autouse=True)
+def _guard_test_writes_to_prod(request):
+    is_e2e = request.node.get_closest_marker("e2e") is not None
+    _previo = db_core._CURRENT_TEST_IS_E2E
+    db_core._CURRENT_TEST_IS_E2E = is_e2e
+    try:
+        yield
+    finally:
+        db_core._CURRENT_TEST_IS_E2E = _previo
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +220,26 @@ def _restaurar_identidad_de_modulos():
 # ---------------------------------------------------------------------------
 # Core fixture: synthetic user + plan_id, with full teardown
 # ---------------------------------------------------------------------------
+def _safe_write(query: str, params: tuple, label: str) -> None:
+    """[P0-TEST-DB-ISOLATION · 2026-07-29] DELETE de teardown aislado: un fallo en
+    UNA sentencia (lock, blip de red) ya no aborta las siguientes — cada tabla se
+    limpia independientemente. No es protección contra SIGKILL (nada lo es; por
+    eso el marker `_test_fixture` en `plan_data` — reapable por
+    `_sweep_synthetic_test_plans` — es la defensa que sí sobrevive un proceso
+    muerto a mitad de corrida), pero sí cierra el caso más común y más barato de
+    curar: una excepción individual (no una interrupción del proceso) que dejaba
+    el resto del teardown sin ejecutar.
+    """
+    try:
+        execute_sql_write(query, params)
+    except Exception as _err:
+        import sys as _sys_safe_write
+        print(
+            f"[P0-TEST-DB-ISOLATION] teardown falló (no bloqueante) — {label}: {_err}",
+            file=_sys_safe_write.stderr,
+        )
+
+
 @pytest.fixture
 def seeded_user_profile():
     """Create a throwaway user in user_profiles → user_inventory (Neon: sin auth.users).
@@ -201,79 +250,82 @@ def seeded_user_profile():
     plan_id = str(uuid.uuid4())
     email = f"e2e-test-{user_id[:8]}@test.local"
 
-    # --- Setup -----------------------------------------------------------
-    # Pre-clean any leftover data from a previously interrupted test with
-    # the same UUID (astronomically unlikely, but handles partial teardowns).
-    for tbl in ("plan_chunk_queue", "meal_plans", "user_inventory"):
-        execute_sql_write(f"DELETE FROM {tbl} WHERE user_id = %s", (user_id,))
-    execute_sql_write("DELETE FROM user_profiles WHERE id = %s", (user_id,))
+    # --- Setup -------------------------------------------------------------
+    # [P0-TEST-DB-ISOLATION · 2026-07-29] Envuelto en try/except: si el INSERT
+    # de user_profiles o alguno de los de user_inventory revienta a mitad
+    # (DB blip, columna renombrada), las filas YA insertadas antes del fallo se
+    # limpian aquí mismo en vez de quedar huérfanas — el `yield` nunca se
+    # alcanza en ese caso, así que el teardown de abajo (post-yield) NO
+    # correría por sí solo. Se relanza la excepción original: el test sigue
+    # fallando de forma visible, solo que sin dejar basura en prod.
+    try:
+        # Pre-clean any leftover data from a previously interrupted test with
+        # the same UUID (astronomically unlikely, but handles partial teardowns).
+        for tbl in ("plan_chunk_queue", "meal_plans", "user_inventory"):
+            execute_sql_write(f"DELETE FROM {tbl} WHERE user_id = %s", (user_id,))
+        execute_sql_write("DELETE FROM user_profiles WHERE id = %s", (user_id,))
 
-    # [P1-E2E-FIXTURE-NEON · 2026-07-10] Neon NO tiene schema `auth` (P1-NEON-DB-MIGRATION):
-    # `user_profiles` es la tabla raíz (cero FKs). El INSERT a auth.users mataba en SETUP
-    # los 8 E2E de chunks 7/15/30d + 23 tests más desde la migración (2026-06-12) —
-    # relation "auth.users" does not exist. `email` va directo en user_profiles.
-    # 1. user_profiles (raíz)
-    health_profile = {
-        "age": 30,
-        "weight": 75,
-        "height": 170,
-        "gender": "M",
-        "goal": "maintain",
-        "activityLevel": "moderate",
-        "dietType": "Omnívora",
-        "allergies": [],
-        "budget": "medium",
-        "householdSize": 1,
-        "tz_offset_minutes": -240,
-    }
-    execute_sql_write(
-        "INSERT INTO user_profiles (id, email, health_profile) VALUES (%s, %s, %s::jsonb) "
-        "ON CONFLICT (id) DO UPDATE SET health_profile = EXCLUDED.health_profile",
-        (user_id, email, json.dumps(health_profile, ensure_ascii=False)),
-    )
-
-    # 3. user_inventory  (enough staples so pantry checks pass)
-    pantry_items = [
-        ("Pechuga de Pollo", 1000, "g"),
-        ("Arroz", 2000, "g"),
-        ("Habichuelas", 500, "g"),
-        ("Res", 800, "g"),
-        ("Pescado", 600, "g"),
-        ("Huevos", 12, "unidad"),
-        ("Aceite de Oliva", 500, "ml"),
-        ("Cebolla", 500, "g"),
-        ("Ajo", 100, "g"),
-        ("Tomate", 400, "g"),
-    ]
-    for name, qty, unit in pantry_items:
+        # [P1-E2E-FIXTURE-NEON · 2026-07-10] Neon NO tiene schema `auth` (P1-NEON-DB-MIGRATION):
+        # `user_profiles` es la tabla raíz (cero FKs). El INSERT a auth.users mataba en SETUP
+        # los 8 E2E de chunks 7/15/30d + 23 tests más desde la migración (2026-06-12) —
+        # relation "auth.users" does not exist. `email` va directo en user_profiles.
+        # 1. user_profiles (raíz)
+        health_profile = {
+            "age": 30,
+            "weight": 75,
+            "height": 170,
+            "gender": "M",
+            "goal": "maintain",
+            "activityLevel": "moderate",
+            "dietType": "Omnívora",
+            "allergies": [],
+            "budget": "medium",
+            "householdSize": 1,
+            "tz_offset_minutes": -240,
+        }
         execute_sql_write(
-            "INSERT INTO user_inventory (user_id, ingredient_name, quantity, unit) "
-            "VALUES (%s, %s, %s, %s)",
-            (user_id, name, qty, unit),
+            "INSERT INTO user_profiles (id, email, health_profile) VALUES (%s, %s, %s::jsonb) "
+            "ON CONFLICT (id) DO UPDATE SET health_profile = EXCLUDED.health_profile",
+            (user_id, email, json.dumps(health_profile, ensure_ascii=False)),
         )
 
-    yield user_id, plan_id
+        # 3. user_inventory  (enough staples so pantry checks pass)
+        pantry_items = [
+            ("Pechuga de Pollo", 1000, "g"),
+            ("Arroz", 2000, "g"),
+            ("Habichuelas", 500, "g"),
+            ("Res", 800, "g"),
+            ("Pescado", 600, "g"),
+            ("Huevos", 12, "unidad"),
+            ("Aceite de Oliva", 500, "ml"),
+            ("Cebolla", 500, "g"),
+            ("Ajo", 100, "g"),
+            ("Tomate", 400, "g"),
+        ]
+        for name, qty, unit in pantry_items:
+            execute_sql_write(
+                "INSERT INTO user_inventory (user_id, ingredient_name, quantity, unit) "
+                "VALUES (%s, %s, %s, %s)",
+                (user_id, name, qty, unit),
+            )
+    except Exception:
+        _safe_write("DELETE FROM user_inventory WHERE user_id = %s", (user_id,), "setup-fail cleanup user_inventory")
+        _safe_write("DELETE FROM meal_plans WHERE user_id = %s", (user_id,), "setup-fail cleanup meal_plans")
+        _safe_write("DELETE FROM plan_chunk_queue WHERE user_id = %s", (user_id,), "setup-fail cleanup plan_chunk_queue")
+        _safe_write("DELETE FROM user_profiles WHERE id = %s", (user_id,), "setup-fail cleanup user_profiles")
+        raise
 
-    # --- Teardown (FK-safe order) ----------------------------------------
-    execute_sql_write(
-        "DELETE FROM plan_chunk_queue WHERE meal_plan_id = %s", (plan_id,)
-    )
-    execute_sql_write(
-        "DELETE FROM meal_plans WHERE id = %s", (plan_id,)
-    )
-    # Also clean any plans created with this user_id outside the fixture plan_id
-    execute_sql_write(
-        "DELETE FROM plan_chunk_queue WHERE user_id = %s", (user_id,)
-    )
-    execute_sql_write(
-        "DELETE FROM meal_plans WHERE user_id = %s", (user_id,)
-    )
-    execute_sql_write(
-        "DELETE FROM user_inventory WHERE user_id = %s", (user_id,)
-    )
-    execute_sql_write(
-        "DELETE FROM user_profiles WHERE id = %s", (user_id,)
-    )
+    try:
+        yield user_id, plan_id
+    finally:
+        # --- Teardown (FK-safe order) — cada DELETE aislado, ver _safe_write. ---
+        _safe_write("DELETE FROM plan_chunk_queue WHERE meal_plan_id = %s", (plan_id,), "plan_chunk_queue(plan_id)")
+        _safe_write("DELETE FROM meal_plans WHERE id = %s", (plan_id,), "meal_plans(plan_id)")
+        # Also clean any plans created with this user_id outside the fixture plan_id
+        _safe_write("DELETE FROM plan_chunk_queue WHERE user_id = %s", (user_id,), "plan_chunk_queue(user_id)")
+        _safe_write("DELETE FROM meal_plans WHERE user_id = %s", (user_id,), "meal_plans(user_id)")
+        _safe_write("DELETE FROM user_inventory WHERE user_id = %s", (user_id,), "user_inventory")
+        _safe_write("DELETE FROM user_profiles WHERE id = %s", (user_id,), "user_profiles")
 
 
 # ---------------------------------------------------------------------------

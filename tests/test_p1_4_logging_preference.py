@@ -24,22 +24,23 @@ logging.getLogger().setLevel(logging.INFO)
 if connection_pool and not getattr(connection_pool, "_opened", False):
     connection_pool.open()
 
+# [P0-TEST-DB-ISOLATION · 2026-07-29] Ver test_chunk_corrupted_plan_data_pauses.py —
+# misma familia de fixture copiada, mismo defecto, mismo fix. Este archivo era el
+# MÁS peligroso de los 4: además del plan corrupto, mutaba
+# `user_profiles.logging_preference` del usuario adoptado (el owner real) en cada
+# test y solo lo restauraba si el teardown llegaba a correr.
+pytestmark = pytest.mark.e2e
+
 
 @pytest.fixture
-def fresh_user_and_plan():
-    user_row = execute_sql_query("SELECT id FROM user_profiles LIMIT 1", fetch_one=True)
-    if not user_row:
-        pytest.skip("No user_profiles disponible.")
-    user_id = str(user_row["id"])
-
-    # Snapshot original preference
-    orig = execute_sql_query(
-        "SELECT logging_preference FROM user_profiles WHERE id = %s",
-        (user_id,), fetch_one=True,
-    )
-    orig_pref = (orig or {}).get("logging_preference") or "manual"
-
-    plan_id = str(uuid.uuid4())
+def fresh_user_and_plan(seeded_user_profile):
+    """[P0-TEST-DB-ISOLATION · 2026-07-29] Usuario Y plan sintéticos via
+    `seeded_user_profile` — pre-fix esto elegía un usuario REAL con
+    `SELECT id FROM user_profiles LIMIT 1` (sin ORDER BY) y mutaba su columna
+    `logging_preference` en cada test, restaurándola solo si el teardown corría.
+    Con un usuario propio (borrado entero al salir) no queda nada que restaurar.
+    """
+    user_id, plan_id = seeded_user_profile
     past_start = datetime.now(timezone.utc) - timedelta(days=30)
     # Sembramos comidas reales para que planned_total > 0 y se active zero_log_proxy.
     plan_data = {
@@ -57,17 +58,16 @@ def fresh_user_and_plan():
         "total_days_generated": 12,
         "generation_status": "partial",
         "_plan_start_date": past_start.isoformat(),
+        # [P0-TEST-DB-ISOLATION · 2026-07-29] Marca reapable por
+        # `_sweep_synthetic_test_plans` si el teardown no corre.
+        "name": "Plan Sintético 30 días — Test logging_preference",
+        "_test_fixture": True,
     }
     execute_sql_write(
         "INSERT INTO meal_plans (id, user_id, plan_data) VALUES (%s, %s, %s)",
         (plan_id, user_id, json.dumps(plan_data)),
     )
     yield user_id, plan_id, plan_data, past_start
-    execute_sql_write("DELETE FROM meal_plans WHERE id = %s", (plan_id,))
-    execute_sql_write(
-        "UPDATE user_profiles SET logging_preference = %s WHERE id = %s",
-        (orig_pref, user_id),
-    )
 
 
 def _make_snapshot(plan_start_dt, consecutive_proxy=0, lifetime_proxy=0, lifetime_total=0):

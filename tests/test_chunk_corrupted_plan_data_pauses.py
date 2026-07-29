@@ -31,6 +31,13 @@ logging.getLogger().setLevel(logging.INFO)
 if connection_pool and not getattr(connection_pool, "_opened", False):
     connection_pool.open()
 
+# [P0-TEST-DB-ISOLATION · 2026-07-29] Marca `@pytest.mark.e2e` — habilita escrituras
+# reales bajo `db_core._guard_test_write_to_prod` (ver conftest.py). Este archivo
+# es EL INCIDENTE: su fixture `fresh_plan` adoptaba al usuario real vía
+# `SELECT ... LIMIT 1` sin ORDER BY; ahora usa `seeded_user_profile` (usuario
+# sintético propio, con teardown).
+pytestmark = pytest.mark.e2e
+
 
 def _mock_pipeline_should_not_run(*args, **kwargs):
     """El pipeline NO debe ejecutarse si la guardia P1-1 funciona."""
@@ -55,15 +62,17 @@ def _mock_pipeline_minimal(form_data, *args, **kwargs):
 
 
 @pytest.fixture
-def fresh_plan():
-    user_row = execute_sql_query("SELECT id FROM user_profiles LIMIT 1", fetch_one=True)
-    if not user_row:
-        pytest.skip("No user_profiles disponible para el test E2E.")
-    user_id = user_row["id"]
-    plan_id = str(uuid.uuid4())
+def fresh_plan(seeded_user_profile):
+    """[P0-TEST-DB-ISOLATION · 2026-07-29] Delega el usuario a `seeded_user_profile`
+    (conftest.py): un `uuid.uuid4()` propio, nunca un usuario real. Pre-fix esto
+    hacía `SELECT id FROM user_profiles LIMIT 1` — sin ORDER BY, adoptaba
+    determinísticamente al owner y escribía un `meal_plans` corrupto en SU cuenta
+    (el incidente que motiva este marker). El teardown de `meal_plans` /
+    `plan_chunk_queue` por `plan_id` y por `user_id` ya lo hace `seeded_user_profile`
+    — no hace falta repetirlo aquí.
+    """
+    user_id, plan_id = seeded_user_profile
     yield user_id, plan_id
-    execute_sql_write("DELETE FROM plan_chunk_queue WHERE meal_plan_id = %s", (plan_id,))
-    execute_sql_write("DELETE FROM meal_plans WHERE id = %s", (plan_id,))
 
 
 def _seed_plan(user_id, plan_id, total_days, recent_lessons=None, days_generated=12):
@@ -73,6 +82,12 @@ def _seed_plan(user_id, plan_id, total_days, recent_lessons=None, days_generated
         "total_days_requested": total_days,
         "total_days_generated": days_generated,
         "generation_status": "partial",
+        # [P0-TEST-DB-ISOLATION · 2026-07-29] Marca reapable por
+        # `cron_tasks._sweep_synthetic_test_plans`: si el teardown de este test no
+        # corre (proceso interrumpido), el cron reclama la fila igual. Doble marca
+        # (name legado + flag boolean) — ninguna la produce nunca un plan real.
+        "name": f"Plan Sintético {total_days} días — Test corrupted_plan_data",
+        "_test_fixture": True,
     }
     if recent_lessons is not None:
         plan_data["_recent_chunk_lessons"] = recent_lessons

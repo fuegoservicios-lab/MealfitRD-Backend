@@ -33,6 +33,10 @@ logging.getLogger().setLevel(logging.INFO)
 if connection_pool and not getattr(connection_pool, "_opened", False):
     connection_pool.open()
 
+# [P0-TEST-DB-ISOLATION · 2026-07-29] Ver test_chunk_corrupted_plan_data_pauses.py —
+# misma familia de fixture `fresh_plan` copiada, mismo defecto, mismo fix.
+pytestmark = pytest.mark.e2e
+
 
 def _mock_pipeline_should_not_run(*args, **kwargs):
     """El pipeline NO debe ejecutarse: la guardia P0-3 debe hacer hard-fail antes."""
@@ -43,15 +47,12 @@ def _mock_pipeline_should_not_run(*args, **kwargs):
 
 
 @pytest.fixture
-def fresh_plan():
-    user_row = execute_sql_query("SELECT id FROM user_profiles LIMIT 1", fetch_one=True)
-    if not user_row:
-        pytest.skip("No user_profiles disponible para el test E2E.")
-    user_id = user_row["id"]
-    plan_id = str(uuid.uuid4())
+def fresh_plan(seeded_user_profile):
+    """[P0-TEST-DB-ISOLATION · 2026-07-29] Usuario sintético via `seeded_user_profile`
+    — nunca un usuario real (pre-fix: `SELECT id FROM user_profiles LIMIT 1`).
+    """
+    user_id, plan_id = seeded_user_profile
     yield user_id, plan_id
-    execute_sql_write("DELETE FROM plan_chunk_queue WHERE meal_plan_id = %s", (plan_id,))
-    execute_sql_write("DELETE FROM meal_plans WHERE id = %s", (plan_id,))
 
 
 def _seed_plan(user_id, plan_id, total_days=30, days_generated=12):
@@ -61,6 +62,10 @@ def _seed_plan(user_id, plan_id, total_days=30, days_generated=12):
         "total_days_generated": days_generated,
         "generation_status": "partial",
         # _recent_chunk_lessons OMITIDO a propósito — gatilla guardia P1-1
+        # [P0-TEST-DB-ISOLATION · 2026-07-29] Marca reapable por
+        # `_sweep_synthetic_test_plans` si el teardown no corre.
+        "name": f"Plan Sintético {total_days} días — Test guard_pause_hard_fail",
+        "_test_fixture": True,
     }
     execute_sql_write(
         "INSERT INTO meal_plans (id, user_id, plan_data) VALUES (%s, %s, %s)",

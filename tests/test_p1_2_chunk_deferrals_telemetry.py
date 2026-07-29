@@ -26,19 +26,33 @@ logging.getLogger().setLevel(logging.INFO)
 if connection_pool and not getattr(connection_pool, "_opened", False):
     connection_pool.open()
 
+# [P0-TEST-DB-ISOLATION · 2026-07-29] Ver test_chunk_corrupted_plan_data_pauses.py —
+# misma familia de fixture `fresh_plan` copiada, mismo defecto, mismo fix.
+pytestmark = pytest.mark.e2e
+
 
 @pytest.fixture
-def fresh_plan():
-    user_row = execute_sql_query("SELECT id FROM user_profiles LIMIT 1", fetch_one=True)
-    if not user_row:
-        pytest.skip("No user_profiles disponible.")
-    user_id = str(user_row["id"])
-    plan_id = str(uuid.uuid4())
-    yield user_id, plan_id
-    execute_sql_write(
-        "DELETE FROM chunk_deferrals WHERE meal_plan_id = %s", (plan_id,)
-    )
-    execute_sql_write("DELETE FROM meal_plans WHERE id = %s", (plan_id,))
+def fresh_plan(seeded_user_profile):
+    """[P0-TEST-DB-ISOLATION · 2026-07-29] Usuario sintético via `seeded_user_profile`
+    — nunca un usuario real (pre-fix: `SELECT id FROM user_profiles LIMIT 1`).
+    `seeded_user_profile` ya limpia `meal_plans`/`plan_chunk_queue`; este archivo
+    escribe además `chunk_deferrals`, que esa fixture no conoce — se limpia aquí
+    en un `finally` propio para que un fallo de una fila no aborte el resto del
+    teardown heredado.
+    """
+    user_id, plan_id = seeded_user_profile
+    try:
+        yield user_id, plan_id
+    finally:
+        try:
+            execute_sql_write(
+                "DELETE FROM chunk_deferrals WHERE meal_plan_id = %s", (plan_id,)
+            )
+        except Exception as _teardown_err:
+            logging.warning(
+                f"[P0-TEST-DB-ISOLATION] teardown chunk_deferrals falló (no bloqueante): "
+                f"{_teardown_err}"
+            )
 
 
 def _seed_plan(user_id, plan_id, plan_start_dt):
@@ -48,6 +62,10 @@ def _seed_plan(user_id, plan_id, plan_start_dt):
         "total_days_generated": 3,
         "generation_status": "partial",
         "_plan_start_date": plan_start_dt.isoformat(),
+        # [P0-TEST-DB-ISOLATION · 2026-07-29] Marca reapable por
+        # `_sweep_synthetic_test_plans` si el teardown no corre.
+        "name": "Plan Sintético 30 días — Test chunk_deferrals_telemetry",
+        "_test_fixture": True,
     }
     execute_sql_write(
         "INSERT INTO meal_plans (id, user_id, plan_data) VALUES (%s, %s, %s)",
