@@ -8812,6 +8812,114 @@ def _count_staple_repetitions(days: list) -> dict:
     return {k: v for k, v in day_counts.items() if v >= 2}
 
 
+# [P1-INGREDIENT-SPREAD · 2026-07-28] Generalización de `_count_staple_repetitions`: ese detector
+# es presencia BINARIA por DÍA ("'yuca' en 3 días" es el MISMO flag si yuca aparece 1x/día en 3 días
+# que si aparece 3x/día en esos mismos 3 días) — no distingue repetición cultural (una vez al día) de
+# acaparamiento (varias veces al día). Medición viva (script scratchpad `measure_ingredient_repetition.py`,
+# conexión directa a Neon, 29 planes / 1036 pares plan-ingrediente-sustancia): el plan c8fa78c5 con
+# yogurt en 8/12 comidas (66.7%) es el ÚNICO par por encima de 66% en TODA la flota — rango #1 de
+# 1036, 99.9avo percentil — y `_count_staple_repetitions` YA conocía 'yogurt griego' en su alias
+# table (línea ~8777) pero no pudo distinguirlo de un yogurt normal de una vez al día porque cuenta
+# DÍAS, no COMIDAS. Este detector cierra ese gap SIN añadir una 4ª entrada per-incidente (pavo
+# 2026-06 → mariscos 2026-07-10 → conejo/chivo/calamar/langosta/hígado 2026-07-29 → yogurt sería la
+# 4ª) a una lista que el propio repo advirtió que "garantiza el próximo incidente"
+# (project_variety_gate_gaps_2026_07_29.md): en vez de NOMBRAR ingredientes, cuenta la PALABRA
+# LITERAL que se repite en el texto crudo del ingrediente — mismo principio que `_is_seasoning_name`
+# (match por palabra, no por lista curada de "sinónimos").
+#
+# Exención de sazonadores/grasas de cocción: reusa el SSOT existente `_is_seasoning_name` /
+# `_QTY_GUARD_SEASONING_SKIP` (P1-SEASONING-WORD-BOUNDARY, cubre sal/pimienta/ajo/cebolla/aji/
+# cilantro/etc.) + el token 'aceite' ya declarado filler en `_SKELETON_PROTEIN_FILLER_TOKENS`
+# (P2-STEM-FILLER-TOKENS) — sal, pimienta, ajo, cebolla, aceite quedan EXENTOS por construcción,
+# reusando DOS fuentes de verdad ya existentes en vez de inventar una tercera.
+#
+# El threshold por defecto (0.5 = 50% de las comidas del chunk) apunta deliberadamente a la banda
+# RARA/outlier que la medición encontró (yogurt 66.7%, queso 58.3–62.5% en un puñado de planes),
+# NO a la banda moderada (33–50%) que la medición encontró en el 100%/55% de los 29 planes vivos —
+# esa banda moderada es variedad normal de una rotación de 3–4 proteínas/lácteos por semana en un
+# plan de pocos días, no un defecto; escalar el evaluador LLM del self-critique para ELLA dispararía
+# la corrida cara en la mayoría de los planes sin que la medición justifique esa severidad (ver
+# clasificación systemic/occasional/rare del brief P1-INGREDIENT-SPREAD). Clamp [0.15, 0.9] evita
+# un override accidental que vuelva el gate mudo o hiperactivo.
+INGREDIENT_SPREAD_GATE_ENABLED = _env_bool("MEALFIT_INGREDIENT_SPREAD_GATE_ENABLED", True)
+MAX_INGREDIENT_MEAL_FRACTION = _env_float(
+    "MEALFIT_MAX_INGREDIENT_MEAL_FRACTION", 0.5, validator=lambda v: 0.15 <= v <= 0.9
+)
+_INGREDIENT_SPREAD_STOPWORDS = frozenset((
+    "de", "la", "el", "los", "las", "un", "una", "y", "con", "al", "en", "sin", "del", "a", "o", "u",
+    "para", "por",
+))
+# Bajo esto, cualquier repetición cruza el umbral por ruido de muestra chica (un chunk de 1-2 días
+# ya tiene 3-8 comidas; exigir >=3 comidas Y >=2 ocurrencias evita flaguear un chunk de 3 comidas
+# donde 2/3=66.7% no es señal, es tamaño de muestra).
+_INGREDIENT_SPREAD_MIN_MEALS = 3
+
+
+def _count_ingredient_meal_frequency(days: list) -> dict:
+    """[P1-INGREDIENT-SPREAD] occurrences/total_meals por palabra-ingrediente, granularidad de
+    COMIDA (no de día como `_count_staple_repetitions`). Sin lista de alias por-ingrediente:
+    tokeniza el texto crudo de cada línea de ingrediente (post qty/unit strip vía
+    `_split_qty_unit_name`, el mismo SSOT que usa P2-QTY-PRESENCE-GUARD) y cuenta cada palabra
+    >=3 chars que sobrevive la exención de sazonador/grasa-de-cocción (`_is_seasoning_name` +
+    `_SKELETON_PROTEIN_FILLER_TOKENS`). Dedup DENTRO de cada comida (una comida que lista 'queso'
+    dos veces cuenta 1, no 2 — así una receta con ingredientes repetidos en su propia lista no
+    infla el conteo).
+
+    Retorna {token: fraction} solo para tokens con fraction >= `MAX_INGREDIENT_MEAL_FRACTION` Y
+    >= 2 ocurrencias absolutas (piso anti-ruido en chunks chicos). Fail-safe: cualquier excepción
+    → {} (nunca rompe self-critique, que es best-effort). tooltip-anchor: P1-INGREDIENT-SPREAD"""
+    try:
+        from nutrition_db import _split_qty_unit_name
+        from constants import strip_accents as _sa_ingfreq
+    except Exception:
+        return {}
+
+    try:
+        meal_token_sets = []
+        for day in days or []:
+            for meal in (day.get("meals") if isinstance(day, dict) else None) or []:
+                if not isinstance(meal, dict):
+                    continue
+                tokens_this_meal = set()
+                for ing in meal.get("ingredients", []) or []:
+                    if not isinstance(ing, str) or not ing.strip():
+                        continue
+                    try:
+                        _q, _u, bare = _split_qty_unit_name(ing)
+                    except Exception:
+                        bare = ing
+                    bare_norm = _sa_ingfreq(str(bare).lower())
+                    bare_norm = _re.sub(r"[^a-z\s]", " ", bare_norm)
+                    for word in bare_norm.split():
+                        if len(word) < 3 or word in _INGREDIENT_SPREAD_STOPWORDS:
+                            continue
+                        if _is_seasoning_name(word) or word in _SKELETON_PROTEIN_FILLER_TOKENS:
+                            continue
+                        tokens_this_meal.add(word)
+                if tokens_this_meal:
+                    meal_token_sets.append(tokens_this_meal)
+
+        n_meals = len(meal_token_sets)
+        if n_meals < _INGREDIENT_SPREAD_MIN_MEALS:
+            return {}
+
+        counts: dict = {}
+        for tokset in meal_token_sets:
+            for tok in tokset:
+                counts[tok] = counts.get(tok, 0) + 1
+
+        result = {}
+        for tok, cnt in counts.items():
+            if cnt < 2:
+                continue
+            frac = cnt / n_meals
+            if frac >= MAX_INGREDIENT_MEAL_FRACTION:
+                result[tok] = round(frac, 4)
+        return result
+    except Exception:
+        return {}
+
+
 # Proteínas y carbohidratos principales para detectar overlap almuerzo/cena
 # del mismo día. Match por substring sobre nombre+ingredientes normalizados.
 _MAIN_PROTEIN_ALIASES = {
@@ -9205,6 +9313,37 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         staples_block = ""
 
+    # [P1-INGREDIENT-SPREAD · 2026-07-28] Conteo determinístico de concentración de ingrediente
+    # por COMIDA (complementa staple_repetitions, que es por DÍA — ver docstring de
+    # `_count_ingredient_meal_frequency`). Barato (puro Python, sin LLM); gateado por
+    # INGREDIENT_SPREAD_GATE_ENABLED (MEALFIT_INGREDIENT_SPREAD_GATE_ENABLED) — off ⇒ no-op total,
+    # rollback sin redeploy si el volumen de disparos resulta problemático.
+    try:
+        ingredient_spread = _count_ingredient_meal_frequency(days) if INGREDIENT_SPREAD_GATE_ENABLED else {}
+    except Exception as _ing_spread_e:
+        logger.debug(f"[P1-INGREDIENT-SPREAD] detector no-op: {_ing_spread_e}")
+        ingredient_spread = {}
+    if ingredient_spread:
+        _spread_items_str = ", ".join(
+            f"'{k}' en {v:.0%} de las comidas"
+            for k, v in sorted(ingredient_spread.items(), key=lambda kv: -kv[1])
+        )
+        logger.info(
+            f"🔁 [P1-INGREDIENT-SPREAD] Ingrediente concentrado (>= {MAX_INGREDIENT_MEAL_FRACTION:.0%} "
+            f"de las comidas del chunk, sazón/aceite exentos por SSOT compartido): {_spread_items_str}"
+        )
+        spread_block = (
+            f"\n⚠️ INGREDIENTE CONCENTRADO DETECTADO (conteo determinístico por comida, no opinable): "
+            f"{_spread_items_str}\n"
+            f"   BAJA diversity_score a 4 o menos y en suggestions especifica en qué comida sustituir "
+            f"ese ingrediente por una alternativa nutricionalmente equivalente (NO aplica a "
+            f"sazonadores/aceite de cocción, ya exentos por diseño).\n"
+        )
+        if not suggested_day_hint:
+            suggested_day_hint = "Día 1"
+    else:
+        spread_block = ""
+
     # Detector determinístico de incoherencia por slot:
     # - almuerzo y cena del mismo día con misma proteína/carbo principal
     # - meriendas que en realidad son platos fuertes
@@ -9275,14 +9414,19 @@ async def self_critique_node(state: PlanState) -> dict:
     # cultural / temperatura) se OMITEN intencionalmente cuando todo está limpio
     # (decisión de costo P1-GEN-EFFICIENCY); los detectores determinísticos son
     # el piso de calidad garantizado.
+    # [P1-INGREDIENT-SPREAD] `ingredient_spread` se suma a las condiciones del skip-when-clean:
+    # un plan con un ingrediente concentrado en >= MAX_INGREDIENT_MEAL_FRACTION de sus comidas ya
+    # no es "estructuralmente sano" aunque los otros 4 detectores vengan en cero.
     if (SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions
             and not slot_issues and not heavy_protein_monotony
-            and not cross_day_dish_repeats):  # [P1-CRITIQUE-CROSSDAY-DISH-PARITY]
+            and not cross_day_dish_repeats  # [P1-CRITIQUE-CROSSDAY-DISH-PARITY]
+            and not ingredient_spread):  # [P1-INGREDIENT-SPREAD]
         logger.info(
             "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
-            "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada) "
-            "→ skip evaluador+correcciones (MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN). "
-            "Recorte de latencia/costo; plan entregado sin pulido subjetivo."
+            "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada, "
+            "0 ingredientes concentrados) → skip evaluador+correcciones "
+            "(MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN). Recorte de latencia/costo; "
+            "plan entregado sin pulido subjetivo."
         )
         return {}
 
@@ -9309,7 +9453,7 @@ async def self_critique_node(state: PlanState) -> dict:
     human_content = f"""
 PLAN A EVALUAR (días generados):
 {days_summary_json}
-{staples_block}{slot_block}{crossday_block}{user_context}
+{staples_block}{spread_block}{slot_block}{crossday_block}{user_context}
 {pista_dia}
 """.strip()
 
@@ -16655,6 +16799,28 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _pool = _pool_no_second_main
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
+        # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
+        # INGREDIENTES del estado FINAL → una proteína que el closer INTRODUCE aquí y que otra comida
+        # del día ya usa se convierte en rechazo del reviewer (medido en vivo corr=2451c8ac: el _alt
+        # del no-dup-cheese eligió 'Huevo' 3s después de que el autofix limpiara el día → retry
+        # completo con day-gen escalado a PRO). Las ramas que INTRODUCEN proteína nueva (categoría/
+        # fallback/_alt) evitan labels ya usados por OTRA comida del día; la CONGRUENCIA no filtra
+        # (escala una proteína que YA está en esta comida → no crea label nuevo). El piso de proteína
+        # SIEMPRE gana: sin candidato limpio, se mantiene la elección legacy.
+        #
+        # Definido ANTES del filtro dulce-salado de abajo (P1-MENU-COHERENCE-2): ese filtro puede
+        # ser el único candidato SIN colisión same-day del pool (verificado en vivo, test
+        # test_functional_avoids_day_used_label — 'Yogurt griego' era la única opción sin colisión
+        # con 'huevo' y el filtro dulce-salado lo tumbaba primero, dejando SOLO al colisionante). Las
+        # dos garantías compiten por el mismo pool; la diversidad same-day es la más cara de romper
+        # (retry completo en PRO) así que gana el desempate.
+        def _collides_day(_nlow_c: str) -> bool:
+            if not day_used_proteins:
+                return False
+            try:
+                return bool(_protein_gate_labels_in_text(_nlow_c) & set(day_used_proteins))
+            except Exception:
+                return False
         # [P1-MENU-COHERENCE-2 · 2026-07-29] Yogurt "al lado" de una ropa vieja/guiso criollo
         # no es apetecible (queja explícita del owner, plan vivo c8fa78c5: ¾ taza de yogurt +
         # "Sirve yogurt al lado" en Ropa Vieja de Queso de Freír con Tostones). En plato
@@ -16666,24 +16832,21 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _pool_no_sd = [(info, nlow) for (info, nlow) in _pool
                            if not any(t in nlow for t in _SWEET_DAIRY_TOKENS)]
             if _pool_no_sd and len(_pool_no_sd) < len(_pool):
-                logger.info("🥣 [P1-MENU-COHERENCE-2] lácteo dulce filtrado del closer en plato "
-                            f"salado caliente | meal={str(meal.get('name'))[:40]}")
-                _pool = _pool_no_sd
-        # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
-        # INGREDIENTES del estado FINAL → una proteína que el closer INTRODUCE aquí y que otra comida
-        # del día ya usa se convierte en rechazo del reviewer (medido en vivo corr=2451c8ac: el _alt
-        # del no-dup-cheese eligió 'Huevo' 3s después de que el autofix limpiara el día → retry
-        # completo con day-gen escalado a PRO). Las ramas que INTRODUCEN proteína nueva (categoría/
-        # fallback/_alt) evitan labels ya usados por OTRA comida del día; la CONGRUENCIA no filtra
-        # (escala una proteína que YA está en esta comida → no crea label nuevo). El piso de proteína
-        # SIEMPRE gana: sin candidato limpio, se mantiene la elección legacy.
-        def _collides_day(_nlow_c: str) -> bool:
-            if not day_used_proteins:
-                return False
-            try:
-                return bool(_protein_gate_labels_in_text(_nlow_c) & set(day_used_proteins))
-            except Exception:
-                return False
+                # [P1-CLOSER-DAY-AWARE-PROTEIN-VS-COHERENCE-1 · 2026-07-28] No tumbar la ÚLTIMA
+                # alternativa sin colisión same-day: si el pool SIN lácteo dulce quedaría con
+                # candidatos que colisionan TODOS con day_used_proteins, mientras el lácteo dulce
+                # removido traía uno limpio, la coherencia de plato cede — el piso de diversidad
+                # same-day es más caro de romper (retry en PRO) que servir yogurt al lado.
+                if day_used_proteins and all(_collides_day(nlow) for (_info_sd2, nlow) in _pool_no_sd) \
+                        and any(not _collides_day(nlow) for (info, nlow) in _pool
+                                if any(t in nlow for t in _SWEET_DAIRY_TOKENS)):
+                    logger.info("🥣 [P1-MENU-COHERENCE-2] filtro dulce-salado CEDE ante colisión "
+                                f"same-day (única alternativa limpia era lácteo dulce) | "
+                                f"meal={str(meal.get('name'))[:40]}")
+                else:
+                    logger.info("🥣 [P1-MENU-COHERENCE-2] lácteo dulce filtrado del closer en plato "
+                                f"salado caliente | meal={str(meal.get('name'))[:40]}")
+                    _pool = _pool_no_sd
 
         # Dish-fit: 1) congruencia (proteína ya mencionada en el plato) → escala el tema;
         # 2) categoría (ligera→huevo/lácteo, principal→carne); 3) fallback la más magra.
@@ -25965,7 +26128,14 @@ def _repair_name_phantom_dairy(days: list) -> list:
                                 if not isinstance(_s_pd, str):
                                     continue
                                 _sl_pd = _sa_np(_s_pd.lower())
-                                if tok_flat not in _sl_pd:
+                                # [P1-MENU-COHERENCE-2-BUMP-BOUNDARY · 2026-07-28] bare substring
+                                # aquí colisiona con 'requeson' ⊃ 'queso' (r-e-[queso]-n) — la
+                                # 12ª mordida documentada de la clase 'sal'⊂'salsa'/'pollo'⊂'repollo'.
+                                # Sin \b, una línea de requesón ANTES de la línea real de queso
+                                # hace creer al loop que el lácteo del NOMBRE ya está honesto (o
+                                # peor, bumpea el requesón y lo telemetra como food=tok). Mismo
+                                # ancla \b que el gate hermano dos líneas arriba (P1-MENU-COHERENCE-2).
+                                if not _re.search(r"\b" + _re.escape(tok_flat) + r"", _sl_pd):
                                     continue
                                 _mg_pd = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _sl_pd)
                                 if not _mg_pd:

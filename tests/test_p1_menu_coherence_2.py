@@ -87,6 +87,60 @@ def test_closer_savory_hot_filters_sweet_dairy_anchor():
     assert "_pool_no_sd" in body and "_SWEET_DAIRY_TOKENS" in body
 
 
+class _MC2Info:
+    def __init__(self, name, protein, carbs=2.0, fats=1.0, kcal=95.0):
+        self.name, self.protein, self.carbs, self.fats, self.kcal = name, protein, carbs, fats, kcal
+
+
+def _mc2_savory_hot_meal():
+    # Merienda salada COCINADA ("Saltea 5 min" en los pasos → _meal_is_hot_cooked=True),
+    # sin proteína animal principal aún (pool no se vacía por P1-CLOSER-NO-DOUBLE-MAIN).
+    return {
+        "meal": "Merienda", "name": "Sándwich integral de vegetales",
+        "protein": 5, "carbs": 30, "fats": 8, "cals": 212,
+        "ingredients": ["2 rebanadas de pan integral", "1/2 taza de vegetales salteados"],
+        "ingredients_raw": ["2 rebanadas de pan integral", "1/2 taza de vegetales salteados"],
+        "recipe": ["MISE EN PLACE: Prepara los vegetales.",
+                   "EL TOQUE DE FUEGO: Saltea 5 min.",
+                   "MONTAJE: Arma el sándwich."],
+    }
+
+
+def test_closer_savory_hot_filters_sweet_dairy_functional(monkeypatch):
+    """[P1-MENU-COHERENCE-2 finding #3] La versión parser-based de arriba no puede detectar
+    un closure inerte (código presente, efecto ausente — sabotaje verificado: reemplazar
+    `_pool = _pool_no_sd` por `pass` deja el test de arriba en verde). Llamando a la función
+    REAL: con una alternativa NO-láctea-dulce disponible, el yogurt debe quedar filtrado del
+    plato salado caliente (mismo patrón que test_p1_closer_sweet_guard.py, sin DB)."""
+    monkeypatch.setattr(go, "PROTEIN_CLOSER_SCALE_FIRST", False)
+    monkeypatch.setattr(go, "_scale_congruent_protein_line", lambda *a, **k: False)
+    candidates = [
+        (1.0, "Yogurt griego", _MC2Info("Yogurt griego", protein=19.0, kcal=97.0)),
+        (2.0, "Pechuga de pollo", _MC2Info("Pechuga de pollo", protein=31.0, kcal=165.0)),
+    ]
+    meal = _mc2_savory_hot_meal()
+    g = go._close_protein_gap_for_meal(meal, 22.0, None, candidates, enforce_min_threshold=False)
+    assert g > 0
+    blob = " ".join(meal["ingredients"]).lower()
+    assert "yogurt" not in blob and "pollo" in blob, (
+        f"plato salado+caliente con alternativa disponible debe filtrar el lácteo dulce; "
+        f"ingredients={meal['ingredients']}"
+    )
+
+
+def test_closer_savory_hot_keeps_sweet_dairy_as_last_resort(monkeypatch):
+    """Contraparte del test anterior: SIN alternativa no-láctea-dulce, el yogurt se conserva
+    (piso de proteína manda — 'pool quedaría vacío ⇒ se conserva', docstring del closer)."""
+    monkeypatch.setattr(go, "PROTEIN_CLOSER_SCALE_FIRST", False)
+    monkeypatch.setattr(go, "_scale_congruent_protein_line", lambda *a, **k: False)
+    candidates = [(1.0, "Yogurt griego", _MC2Info("Yogurt griego", protein=19.0, kcal=97.0))]
+    meal = _mc2_savory_hot_meal()
+    g = go._close_protein_gap_for_meal(meal, 22.0, None, candidates, enforce_min_threshold=False)
+    assert g > 0
+    blob = " ".join(meal["ingredients"]).lower()
+    assert "yogurt" in blob, f"sin alternativa, el yogurt es último recurso; ingredients={meal['ingredients']}"
+
+
 # ─────────────── 4. harina cruda de cumplimiento ───────────────
 
 def test_raw_flour_bolt_removed_without_dough_context():
@@ -134,3 +188,21 @@ def test_named_dairy_honest_grams_untouched():
         "recipe": ["Mezcla."]}]}]
     assert go._repair_name_phantom_dairy(days) == []
     assert days[0]["meals"][0]["ingredients"][0].startswith("40 g")
+
+
+def test_named_dairy_bump_no_false_hit_on_requeson():
+    """[P1-MENU-COHERENCE-2-BUMP-BOUNDARY] 'queso' ⊂ 'requeson' (strip_accents('requesón')) es
+    substring, no palabra. Con una línea de requesón ANTES de la línea real de queso, el bare
+    `in` del bump loop la tomaba como el lácteo del nombre — sin \b se creía 'ya honesto'
+    (>=30g) y la línea real de 15g de queso quedaba sin tocar. Debe bumpear la línea REAL."""
+    days = [{"day": 1, "meals": [{
+        "name": "Ropa Vieja de Queso de Freír con Tostones",
+        "ingredients": ["50 g de requesón", "15 g de queso de freír", "2 tostones"],
+        "ingredients_raw": ["50 g de requesón", "15 g de queso de freír", "2 tostones"],
+        "recipe": ["Desmenuza el queso."]}]}]
+    out = go._repair_name_phantom_dairy(days)
+    ings = days[0]["meals"][0]["ingredients"]
+    assert ings[0] == "50 g de requesón", "el requesón (35g por encima del piso) no se toca"
+    assert ings[1].startswith(f"{go.NAME_PHANTOM_DAIRY_G} g de queso"), (
+        f"la línea REAL de queso (15g) debía bumpearse al piso; ingredients={ings}")
+    assert any(x.get("bumped_from_g") == 15.0 and x.get("food") == "queso" for x in out), out
