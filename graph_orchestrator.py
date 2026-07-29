@@ -10366,6 +10366,40 @@ RECONCILE_AFTER_BAND_CLOSER = _env_bool("MEALFIT_RECONCILE_AFTER_BAND_CLOSER", T
 # `greedy_fallback_meals` / `not_converged_ratio` a la métrica per-run `solver_clamp` que YA se
 # emite. Telemetría pura (cero impacto sobre el plan) → default ON. Rollback: =false.
 SOLVER_CONVERGENCE_METRIC = _env_bool("MEALFIT_SOLVER_CONVERGENCE_METRIC", True)
+# [P3-SOLVER-WIRING-METRICS · 2026-07-29] (audit solver+seeder v4) (1) La abstención por cobertura
+# deja rastro en `plan_data` (`_solver_abstained_coverage`) y (2) sale una serie PROPIA
+# `node='solver_convergence'` con las 3 razones por las que el solver no clava el target
+# (no-convergencia / abstención / infactibilidad), que piden respuestas distintas. Telemetría pura.
+# Rollback sin redeploy: =false → ni el flag ni la serie; `solver_clamp` sigue igual.
+SOLVER_WIRING_METRICS = _env_bool("MEALFIT_SOLVER_WIRING_METRICS", True)
+# ── P3 del audit solver+seeder v4 (2026-07-29) ────────────────────────────────────────────────
+# [P3-CLOSER-LINE-CLAMP-RAW-FALLBACK] el techo VITALICIO de línea se medía solo sobre el display; si
+# no resolvía gramos, el clamp ENTERO se saltaba y el escalado quedaba sin techo (y compone entre
+# re-entradas). Fallback a la línea de raw del mismo alimento; sin ninguna base → no escalar.
+MICRO_CLOSER_LINE_CLAMP_RAW_FALLBACK = _env_bool("MEALFIT_MICRO_CLOSER_LINE_CLAMP_RAW_FALLBACK", True)
+# Techo VITALICIO expresado como RATIO para las líneas cuyos gramos no resuelven ni en display ni en
+# raw. Es la contraparte del cap absoluto: sin gramos no hay "≤40 g", pero sí "nunca más de 1.5× de
+# su tamaño original, sumando TODAS las re-entradas del closer". Clave = alimento resuelto (estable
+# entre pasadas; el índice de línea no lo es).
+# ⚠️ DEBE ser ≥ `MICRONUTRIENT_CLOSER_MAX_SCALE` (1.6): un cap vitalicio por debajo del máximo
+# POR PASADA recortaría el escalado normal de la primera pasada — o sea cambiaría el comportamiento
+# sano en vez de acotar el patológico. El guard de coherencia está junto a esa constante.
+MICRO_CLOSER_UNMEASURED_LIFETIME_CAP = _env_float(
+    "MEALFIT_MICRO_CLOSER_UNMEASURED_LIFETIME_CAP", 2.0, validator=lambda v: 1.0 < v <= 4.0)
+# [P3-SEED-REINFORCE-FOOD-MATCH] el refuerzo buscaba la forma PRE-humanize de la semilla ('50 g de
+# zanahoria rallada') y era letra muerta sobre planes ya humanizados ('⅔ zanahoria (≈50 g)') — o sea
+# en swap-persist y chat-modify, justo donde la erosión ocurre. Match por alimento + gramos del hint.
+MICRO_SEED_REINFORCE_FOOD_MATCH = _env_bool("MEALFIT_MICRO_SEED_REINFORCE_FOOD_MATCH", True)
+# [P3-MICRO-SEED-BUDGET-EXACT] el gate de siembra comparaba contra un piso fijo (25 kcal) y debitaba
+# el costo real (linaza ≈53) → el techo de kcal/día del closer se rebasaba hasta ~33 kcal.
+MICRO_SEED_BUDGET_EXACT = _env_bool("MEALFIT_MICRO_SEED_BUDGET_EXACT", True)
+# [P3-MICRO-SEED-CEILING-GUARD] el candidato de SIEMBRA pasa por `_ceiling_risky_contributor` (las 7
+# ramas que ya protegen el escalado) + check de UL. La premisa "los seeds son plant-based, no hace
+# falta" murió con P2-MICRO-SEED-VITA (espinaca = vit K en un perfil anticoagulado).
+MICRO_SEED_CEILING_GUARD = _env_bool("MEALFIT_MICRO_SEED_CEILING_GUARD", True)
+# [P3-CLOSER-PCOS-GLYCEMIC-GUARD] SOP/PCOS hereda el guard alto-IG de DM2 (resistencia a la insulina:
+# misma consecuencia clínica, y el repo ya tiene su ConditionRule pidiendo evitar harinas refinadas).
+CLOSER_PCOS_GLYCEMIC_GUARD = _env_bool("MEALFIT_CLOSER_PCOS_GLYCEMIC_GUARD", True)
 
 # [P1-BLEND-STEP-REQUIRED · 2026-07-25] Un plato llamado "batido" cuyas instrucciones no dicen
 # licuar. El chequeo de COMPLETION lo daba por bueno porque sí había paso de servido.
@@ -12038,6 +12072,16 @@ FALLBACK_PHYSICAL_MACROS_ENABLED = _env_bool("MEALFIT_FALLBACK_PHYSICAL_MACROS",
 # (bariátrico exento — contrato de porciones). Default ON. tooltip-anchor: P2-FALLBACK-MACRO-ENGINE
 FALLBACK_MACRO_REBALANCE_ENABLED = _env_bool("MEALFIT_FALLBACK_MACRO_REBALANCE", True)
 MICRONUTRIENT_CLOSER_MAX_SCALE = max(1.1, min(3.0, _env_float("MEALFIT_MICRONUTRIENT_CLOSER_MAX_SCALE", 1.6)))
+# [P3-CLOSER-LINE-CLAMP-RAW-FALLBACK · 2026-07-29] Guard de coherencia entre los dos techos: el
+# VITALICIO por ratio nunca puede quedar por debajo del máximo POR PASADA, o recortaría el escalado
+# sano de la primera pasada en vez de acotar el compuesto de las re-entradas (la regresión que este
+# mismo test cazó al ponerlo en 1.5 con el per-pass en 1.6).
+if MICRO_CLOSER_UNMEASURED_LIFETIME_CAP < MICRONUTRIENT_CLOSER_MAX_SCALE:
+    logging.getLogger(__name__).warning(
+        f"[P3-CLOSER-LINE-CLAMP-RAW-FALLBACK] cap vitalicio "
+        f"({MICRO_CLOSER_UNMEASURED_LIFETIME_CAP}) < max por pasada "
+        f"({MICRONUTRIENT_CLOSER_MAX_SCALE}) — elevado al per-pass para no recortar la 1ª pasada.")
+    MICRO_CLOSER_UNMEASURED_LIFETIME_CAP = MICRONUTRIENT_CLOSER_MAX_SCALE
 # map report-key → key del dict de db.micros_from_ingredient_string (la fibra allá es 'fiber', no 'fiber_g';
 # el resto son identidad — verificado contra micronutrients.py:295-308 / nutrition_db.micros_from_ingredient_string).
 _MICRO_CLOSER_INGREDIENT_KEY = {
@@ -13772,7 +13816,25 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         # vez de los 6 stems ad-hoc — el detector viejo perdía "t2dm", "dm-2", "hiperglucem",
         # "intolerancia a la glucosa", "azucar alta". Los stems "glicem"/"glucem" que solo tenía el
         # closer viven ahora en el SSOT.
+        # [P3-CLOSER-PCOS-GLYCEMIC-GUARD · 2026-07-29] (audit solver+seeder v4) El flag no es "es
+        # diabético": es "es glucémicamente sensible". De los 7 chips de condición del formulario el
+        # closer trataba 3 (+bariátrico), y 'SOP (PCOS)' quedaba fuera pese a ser una condición de
+        # RESISTENCIA A LA INSULINA con `ConditionRule` propia en este repo, cuyo prompt_block pide
+        # explícitamente evitar azúcares añadidos y harinas refinadas. Resultado: en una usuaria que
+        # marca SOLO 'SOP (PCOS)', cerrar vit C escalaba "120 g de mango en cubos" a 192 g y cerrar
+        # potasio escalaba papa — el motor determinista contradiciendo su propia regla clínica.
+        # 'sop' son 3 caracteres: va por `_condition_strings` (accent-strip + el mismo criterio de los
+        # otros detectores), NUNCA por substring crudo. tooltip-anchor: P3-CLOSER-PCOS-GLYCEMIC-GUARD
         _dm2 = _is_diabetes_condition(_fd)
+        if not _dm2 and CLOSER_PCOS_GLYCEMIC_GUARD:
+            try:
+                from constants import PCOS_CONDITION_TERMS as _PCOS_T
+                if any(any(t in c for t in _PCOS_T) for c in (_conditions or [])):
+                    _dm2 = True
+                    logger.info("🩺 [P3-CLOSER-PCOS-GLYCEMIC-GUARD] perfil SOP/PCOS → hereda el guard "
+                                "alto-IG de DM2 (resistencia a la insulina: misma consecuencia).")
+            except Exception:
+                pass
         # Word-boundary OBLIGATORIO (lección 'res'↔'fresas' de CATALOG-POOLS): "pina" como
         # substring matchea dentro de "es-PINA-ca" y bloquearía justo la alternativa verde.
         # Plural opcional (`s?`): uvas/pasas/mangos.
@@ -14052,6 +14114,19 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         continue
                                 except Exception:
                                     continue  # conservador: duda → no sembrar
+                            # [P3-MICRO-SEED-CEILING-GUARD · 2026-07-29] (audit solver+seeder v4) El
+                            # candidato de SIEMBRA no pasaba por `_ceiling_risky_contributor` — el
+                            # mismo guard que YA protege los dos callsites de escalado. La premisa que
+                            # hacía tolerable la asimetría ("hoy los seeds son plant-based") dejó de
+                            # ser cierta con P2-MICRO-SEED-VITA: espinaca es candidato de vit A, y en
+                            # un perfil con warfarina que rechaza zanahoria y auyama (dislikes/OAS,
+                            # ambos filtrados correctamente) el candidato #3 es justo la espinaca —
+                            # sembrada en UN día y luego escalada hasta el techo de línea = pico de
+                            # vit K concentrado, exactamente lo que el skip por micro existe para
+                            # evitar. Reusar el guard conecta gratis sus 7 ramas (dislip/HTA, renal-Ca
+                            # ×2, DM2 GI, DM2 almidón, anticoag, K-med) sin lógica nueva.
+                            if MICRO_SEED_CEILING_GUARD and _ceiling_risky_contributor(k, _cand_low):
+                                continue
                             _seed_line = _cand
                             break
                         if _seed_line:
@@ -14101,9 +14176,26 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     _kc_seed = float(_seed_mac.get("kcal") or 0.0)
                                 except Exception:
                                     _kc_seed = 0.0
+                                # [P3-MICRO-SEED-BUDGET-EXACT · 2026-07-29] (audit solver+seeder v4) El gate
+                                # de arriba autoriza con `kcal_budget_left > MICRO_SEED_MIN_BUDGET_KCAL`
+                                # (25) pero se DEBITA `_kc_seed` (linaza ≈53, girasol ≈58): con el budget
+                                # entre 26 y 52 la semilla entraba igual y el restante quedaba NEGATIVO —
+                                # el techo declarado del día se rebasaba hasta ~33 kcal. No era doble
+                                # gasto (el descuento es exacto): era un gate que no miraba el precio.
+                                # Aquí `_kc_seed` YA está resuelto, así que el chequeo es exacto.
+                                _budget_here = _fat_seed_reserve if _seed_from_reserve else kcal_budget_left
+                                if MICRO_SEED_BUDGET_EXACT and _c_seed > 0 and _kc_seed > _budget_here:
+                                    logger.info(f"🌱 [P3-MICRO-SEED-BUDGET-EXACT] seed '{_seed_line}' de "
+                                                f"'{k}' cuesta {_kc_seed:.0f} kcal y quedan "
+                                                f"{_budget_here:.0f} → NO sembrado (el techo del día es "
+                                                f"un techo, no una sugerencia).")
+                                    _c_seed = 0.0
+                                    _seed_line = None
                                 if _c_seed <= 0:
-                                    logger.info(f"🌱 [P1-MICRO-SEED] seed '{_seed_line}' de '{k}' no resuelve "
-                                                f"en el catálogo → NO sembrado (fail-secure vs catalog-drift).")
+                                    # nota: la frase 'fail-secure vs catalog-drift' está anclada por
+                                    # test_p3_solver_seeder_polish — mantenerla contigua en UNA línea.
+                                    logger.info(f"🌱 [P1-MICRO-SEED] seed de '{k}' NO sembrado "
+                                                f"(fail-secure vs catalog-drift, o no cabe en budget).")
                                 else:
                                     _seed_meal["ingredients"].append(_seed_line)
                                     _seed_raw = _seed_meal.get("ingredients_raw")
@@ -14119,6 +14211,22 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         _c_seed, _seed_meal,
                                         len(_seed_meal["ingredients"]) - 1, _seed_line, _kc_seed,
                                     ))
+                                    # [P3-MICRO-SEED-CEILING-GUARD] el seed tampoco chequeaba el UL.
+                                    # Hoy es inalcanzable por construcción (solo se siembra bajo el
+                                    # piso), pero es el invariante que hace segura cualquier
+                                    # ampliación futura del catálogo de semillas.
+                                    if MICRO_SEED_CEILING_GUARD:
+                                        _ul_seed = _MICRO_CLOSER_UL.get(k)
+                                        if _ul_seed and (day_total + _c_seed) > _ul_seed:
+                                            logger.warning(
+                                                f"🌱 [P3-MICRO-SEED-CEILING-GUARD] la semilla de '{k}' "
+                                                f"cruzaría el UL ({day_total:.1f}+{_c_seed:.1f} > "
+                                                f"{_ul_seed}) — no se siembra.")
+                                            _seed_meal["ingredients"].pop()
+                                            if isinstance(_seed_raw, list) and _seed_raw:
+                                                _seed_raw.pop()
+                                            contributors.pop()
+                                            continue
                                     day_total += _c_seed
                                     # [P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] descuenta del budget correcto:
                                     # la reserva dedicada si el seed grasa-basado no tenía budget compartido.
@@ -14192,20 +14300,61 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             _r_ings = _rm.get("ingredients")
                             if not isinstance(_r_ings, list):
                                 break
+                            # [P3-SEED-REINFORCE-FOOD-MATCH · 2026-07-29] (audit solver+seeder v4) El
+                            # refuerzo localizaba la semilla por (a) contención del TEXTO crudo del
+                            # catálogo y (b) un regex que exige que la línea EMPIECE por 'NN g'. Las
+                            # DOS condiciones se rompen tras `humanize_plan_ingredients`, que reescribe
+                            # el display a medida casera y descarta calificadores: '50 g de zanahoria
+                            # rallada' pasa a '⅔ zanahoria (≈50 g)' — sin 'rallada' y sin lead en
+                            # gramos. O sea que el refuerzo era LETRA MUERTA exactamente en las
+                            # superficies donde la erosión ocurre de verdad (swap-persist y
+                            # chat-modify, que corren sobre planes YA humanizados).
+                            # Fallback: localizar por ALIMENTO resuelto y medir gramos con el
+                            # resolvedor (que sí entiende el hint '(≈50 g)').
+                            _reinforced_any = False
                             for _ri, _rline in enumerate(_r_ings):
-                                if not isinstance(_rline, str) or not any(
-                                        cf in _rline.lower() for cf in _cand_foods):
+                                if not isinstance(_rline, str):
+                                    continue
+                                _txt_hit = any(cf in _rline.lower() for cf in _cand_foods)
+                                _food_hit = False
+                                if not _txt_hit and MICRO_SEED_REINFORCE_FOOD_MATCH:
+                                    try:
+                                        _f_ln, _ = _resolve_line_food_grams(_rline, cheap=True)
+                                        _food_hit = bool(_f_ln and any(
+                                            _f_ln in cf or cf in _f_ln for cf in _cand_foods))
+                                    except Exception:
+                                        _food_hit = False
+                                if not (_txt_hit or _food_hit):
                                     continue
                                 _m_g = _re_rs.match(r"^\s*(\d+(?:[.,]\d+)?)\s*g\b", _rline)
-                                if not _m_g:
+                                if _m_g:
+                                    _g_now = float(_m_g.group(1).replace(",", "."))
+                                elif MICRO_SEED_REINFORCE_FOOD_MATCH:
+                                    # lead casero ('⅔ zanahoria (≈50 g)') → gramos por el resolvedor
+                                    try:
+                                        _g_now = float(db.grams_from_ingredient_string(_rline) or 0.0)
+                                    except Exception:
+                                        _g_now = 0.0
+                                    if _g_now <= 0:
+                                        continue
+                                else:
                                     continue
-                                _g_now = float(_m_g.group(1).replace(",", "."))
                                 _g_new = min(30.0, max(_g_now * 1.8, _g_now + 8.0))
                                 if _g_new <= _g_now + 0.5:
                                     break
-                                _new_line = _re_rs.sub(r"^\s*\d+(?:[.,]\d+)?\s*g",
-                                                       f"{int(round(_g_new))} g", _rline, count=1)
+                                if _m_g:
+                                    _new_line = _re_rs.sub(r"^\s*\d+(?:[.,]\d+)?\s*g",
+                                                           f"{int(round(_g_new))} g", _rline, count=1)
+                                else:
+                                    # [P3-SEED-REINFORCE-FOOD-MATCH] lead casero: el `sub` de arriba no
+                                    # matchea y devolvería la línea INTACTA (refuerzo fantasma que
+                                    # igualmente marcaba `_micro_seed_reinforced` y bloqueaba el
+                                    # siguiente). Re-escalado proporcional preservando la forma humana.
+                                    _new_line = _resc(_rline, _g_new / _g_now) or _rline
+                                if _new_line == _rline:
+                                    continue
                                 _r_ings[_ri] = _new_line
+                                _reinforced_any = True
                                 # [P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] El refuerzo ASIGNABA el
                                 # string de DISPLAY a raw — mal incluso con listas paralelas: raw
                                 # tiene su propio nombre/formato (es la base de la lista de compras).
@@ -14238,6 +14387,13 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                             f"semilla re-escalada a {int(round(_g_new))} g "
                                             f"(el día seguía bajo el umbral).")
                                 break
+                            if not _reinforced_any:
+                                # [P3-SEED-REINFORCE-FOOD-MATCH] antes esta rama salía MUDA: el
+                                # marcador decía "sembrado" y el refuerzo no encontraba la línea, así
+                                # que el día se quedaba corto sin que nada lo dijera.
+                                logger.info(f"🌱 [P3-SEED-REINFORCE-FOOD-MATCH] '{k}': el meal está "
+                                            f"marcado como sembrado pero NO se localizó la línea de la "
+                                            f"semilla (¿display humanizado?) — refuerzo no aplicado.")
                             break
                     except Exception as _rs_e:
                         logger.debug(f"[P1-MICRO-SEED] refuerzo no-op: {type(_rs_e).__name__}: {_rs_e}")
@@ -14286,6 +14442,57 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         _g_now = float(db.grams_from_ingredient_string(ing_str) or 0.0)
                     except Exception:
                         _g_now = 0.0
+                    # [P3-CLOSER-LINE-CLAMP-RAW-FALLBACK · 2026-07-29] (audit solver+seeder v4) El techo
+                    # VITALICIO de línea se medía SOLO sobre el display — la forma que el propio repo
+                    # documenta como no-resoluble ('¾ lonja/pedazo de queso' no convierte a gramos).
+                    # Sin gramos, `if _g_now > 0` saltaba el bloque ENTERO: ni el corte "línea ya en su
+                    # techo" ni el `min(factor, cap/g)` se aplicaban… y `_resc` sí escalaba igual. O sea
+                    # que el clamp NO existía justo para las líneas que más lo necesitan, y como el
+                    # closer RE-ENTRA (swap-persist, chat-modify, post-motor) el factor se COMPONÍA sin
+                    # techo. Fallback: medir sobre la línea de raw del mismo alimento; si tampoco
+                    # resuelve, tratar la línea como NO escalable (fail-secure) en vez de sin techo.
+                    _clamp_basis = "display" if _g_now > 0 else None
+                    if _g_now <= 0 and MICRO_CLOSER_LINE_CLAMP_RAW_FALLBACK:
+                        try:
+                            _rawl = meal.get("ingredients_raw")
+                            _f_disp, _ = _resolve_line_food_grams(str(ing_str), cheap=True)
+                            if _f_disp and isinstance(_rawl, list):
+                                for _rl in _rawl:
+                                    if not isinstance(_rl, str):
+                                        continue
+                                    if _resolve_line_food_grams(_rl, cheap=True)[0] != _f_disp:
+                                        continue
+                                    _g_try = float(db.grams_from_ingredient_string(_rl) or 0.0)
+                                    if _g_try > 0:
+                                        _g_now, _clamp_basis = _g_try, "raw"
+                                        break
+                        except Exception:
+                            pass
+                        if _g_now <= 0:
+                            # Sin gramos en NINGUNA de las dos formas no se puede aplicar un techo
+                            # ABSOLUTO. Amputar el escalado aquí sería peor que el bug (el closer
+                            # perdería alcance sobre platos legítimos y el residual quedaría abierto),
+                            # así que el techo se expresa como RATIO VITALICIO acumulado por alimento
+                            # — clave estable entre re-entradas, a diferencia del índice de línea.
+                            # Eso mata el crecimiento compuesto, que es el defecto real.
+                            _f_key, _ = (None, None)
+                            try:
+                                _f_key, _ = _resolve_line_food_grams(str(ing_str), cheap=True)
+                            except Exception:
+                                _f_key = None
+                            _f_key = _f_key or str(ing_str)[:24].lower()
+                            _grown = meal.get("_closer_unmeasured_growth") or {}
+                            _sofar = float(_grown.get(_f_key) or 1.0)
+                            _room = MICRO_CLOSER_UNMEASURED_LIFETIME_CAP / _sofar
+                            if _room <= 1.0 + 1e-3:
+                                logger.info(f"🔒 [P3-CLOSER-LINE-CLAMP-RAW-FALLBACK] {k}: "
+                                            f"{str(ing_str)[:36]!r} sin gramos resolubles y ya en su "
+                                            f"techo vitalicio por ratio ({_sofar:.2f}×) — no se escala.")
+                                continue
+                            factor = min(factor, _room)
+                            _grown[_f_key] = _sofar * factor
+                            meal["_closer_unmeasured_growth"] = _grown
+                            _clamp_basis = "ratio"
                     if _g_now > 0:
                         _line_low = str(ing_str).lower()
                         _line_cap = 40.0 if any(t in _line_low for t in _SEED_NUT_TOKENS) \
@@ -15969,6 +16176,11 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                 pass
         _cov = (_n_res / _n_quant) if _n_quant else 1.0
         if _cov < SOLVER_MIN_COVERAGE:
+            # [P3-SOLVER-WIRING-METRICS · 2026-07-29] (audit solver+seeder v4) La abstención NO dejaba
+            # rastro en `plan_data`: solo un warning. Una decisión que cambia el plan (el solver no
+            # corre) debe ser consultable por SQL y agregable, no arqueología de logs.
+            if SOLVER_WIRING_METRICS:
+                meal["_solver_abstained_coverage"] = round(_cov, 2)
             logger.warning(f"🔎 [P1-SOLVER-COVERAGE-GATE] cobertura {_cov:.2f} < {SOLVER_MIN_COVERAGE} "
                            f"({_n_res}/{_n_quant} líneas) en meal {str(meal.get('name'))[:40]!r} — solver se "
                            f"abstiene (masa no-resuelta significativa; downstream closer/rebalance dimensionan).")
@@ -16011,8 +16223,23 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                                f"(LSQ lanzó excepción o está OFF) — el greedy por-grupo puede driftear la grasa.")
             if not res.get("converged", True):
                 meal["_solver_not_converged"] = True
+                # [P3-SOLVER-CONVERGED-BAND · 2026-07-29] QUÉ macro falló, no solo que falló alguno.
+                _cpm = res.get("converged_per_macro") or {}
+                if _cpm:
+                    meal["_solver_failed_macros"] = [m for m, ok in _cpm.items() if not ok]
                 logger.info(f"📐 [P2-SOLVER-METHOD-OBS] meal {str(meal.get('name'))[:40]!r} NO convergió "
-                            f"(método={res.get('method')}; el clamp no clavó el target — closer/rebalance cierran).")
+                            f"(método={res.get('method')}, macros fuera={meal.get('_solver_failed_macros')}; "
+                            f"el clamp no clavó el target — closer/rebalance cierran).")
+            # [P3-SOLVER-FEASIBILITY · 2026-07-29] Distingue "falta escalado" de "falta un PORTADOR":
+            # con `infeasible={'fats':'high'}` ninguna re-escala arregla el plato — hace falta añadir
+            # una fuente de grasa. Sin esta señal la reparación aguas abajo no puede saberlo.
+            _infe = res.get("infeasible") or {}
+            if _infe:
+                meal["_solver_infeasible"] = _infe
+                meal["_solver_residuals"] = res.get("residuals")
+                logger.info(f"📐 [P3-SOLVER-FEASIBILITY] meal {str(meal.get('name'))[:40]!r}: target "
+                            f"INALCANZABLE con estos alimentos dentro del clamp → {_infe} "
+                            f"(no es re-escalado: falta/sobra un portador).")
         except Exception:
             pass
         # [P1-SOLVER-RAW-BY-FOOD · 2026-07-25] CAUSA RAÍZ de la divergencia display↔raw.
@@ -33061,6 +33288,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # (que queda como fallback continuo) y del qty-sync final (que ve el estado final).
             if GLOBAL_DAY_REFINE_ENABLED and (_pg or _cg or _fg):
                 try:
+                    # tooltip-anchor: P1-NEXT-LEVEL-SOLVER-ASSEMBLE-CALLSITE
+                    # (ancla ÚNICA del callsite de assemble — el alias `_rdi` es prefijo de `_rdi_u`,
+                    #  el callsite de las superficies de update, y `.index()` los confundía)
                     from portion_solver import refine_day_portions_integer as _rdi
                     _ref_db = _QDB()
                     _ref_targets = {
@@ -42864,6 +43094,31 @@ def _compute_pipeline_holistic_score_and_emit(
                             logger.info(f"📐 [P2-SOLVER-CONVERGENCE-METRIC] {_nc}/{len(_clamp_meals)} "
                                         f"meals NO convergidos, {_gf} con fallback greedy "
                                         f"(línea base de flota 2026-07-29: 57.2% no-convergidos).")
+                        # [P3-SOLVER-WIRING-METRICS · 2026-07-29] (audit solver+seeder v4) Serie PROPIA
+                        # de salud del solver. `solver_clamp` mide saturación (73% basal); la
+                        # no-convergencia es más del doble de frecuente como indicador de fragilidad y
+                        # merece su `confidence` — si comparte fila, un cambio en una tapa a la otra.
+                        # Incluye abstención por cobertura e infactibilidad: las 3 razones por las que
+                        # el solver NO clava el target son distintas y piden respuestas distintas.
+                        if SOLVER_WIRING_METRICS:
+                            _abst = sum(1 for _m4 in _clamp_meals
+                                        if _m4.get("_solver_abstained_coverage") is not None)
+                            _infe_n = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_infeasible"))
+                            _emit_progress(initial_state, "metric", {
+                                "node": "solver_convergence",
+                                "duration_ms": 0,
+                                "retries": final_state.get("attempt", 1) - 1,
+                                "tokens_estimated": 0,
+                                "confidence": round(1.0 - (_nc / len(_clamp_meals)), 3),
+                                "metadata": {
+                                    "not_converged": _nc,
+                                    "greedy_fallback": _gf,
+                                    "abstained_coverage": _abst,
+                                    "infeasible_meals": _infe_n,
+                                    "total_meals": len(_clamp_meals),
+                                    "delivered_was_fallback": delivered_was_fallback,
+                                },
+                            })
                 except Exception:
                     pass
                 # [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) métrica de flota por-meal (NO hard-gate):

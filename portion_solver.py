@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re as _re_ps
 from typing import Optional
 
 
@@ -142,6 +143,32 @@ SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10, lambda v: 0.0 <= v <= 5.0
 # condicionamiento que exige tantos barridos). El coste CPU de 400 es indistinguible (≤15 vars, ≤4 filas,
 # pure-python). Rollback sin redeploy: `MEALFIT_SOLVER_LSQ_ITERS=150`. tooltip-anchor: P1-SOLVER-LSQ-ITERS
 SOLVER_LSQ_ITERS = _envi("MEALFIT_SOLVER_LSQ_ITERS", 400, lambda v: 50 <= v <= 20000)
+
+# [P3-SOLVER-CONVERGED-BAND · 2026-07-29] (audit solver+seeder v4) `converged` no era comparable con
+# la banda clínica que alimenta, por tres desalineaciones acumuladas:
+#   (a) el bucle solo mira ("protein","carbs","fats") — kcal queda FUERA del criterio, justo la fila
+#       que domina el objetivo;
+#   (b) `|achieved−t|/t > tol` es SIMÉTRICO ±10% mientras la banda real es ASIMÉTRICA [0.90, 1.12];
+#   (c) `tolerance_pct` era un default de parámetro, no un knob.
+# Efecto: una comida a 1.11× de proteína se marcaba NO convergida (está DENTRO de la banda) y una a
+# 1.30× de kcal se reportaba convergida (la banda kcal es la MÁS estrecha, [0.95, 1.05]). Con eso el
+# 57.2% medido no se puede mapear a resultados de banda: un operador que lo vea mejorar no sabe si
+# mejoró el plan.
+# `..._USES_BAND` nace OFF: cambia la semántica de una serie que ya tiene línea base medida hoy
+# (57.2%) — encenderlo sin avisar rompería la comparabilidad histórica, que es justo lo que este fix
+# quiere ganar. Encender junto con un corte de serie. tooltip-anchor: P3-SOLVER-CONVERGED-BAND
+SOLVER_TOLERANCE_PCT = _envf("MEALFIT_SOLVER_TOLERANCE_PCT", 0.10, lambda v: 0.01 <= v <= 0.50)
+SOLVER_CONVERGED_USES_BAND = _envb("MEALFIT_SOLVER_CONVERGED_USES_BAND", False)
+SOLVER_BAND_LOWER = _envf("MEALFIT_SOLVER_BAND_LOWER", 0.90, lambda v: 0.5 <= v < 1.0)
+SOLVER_BAND_UPPER = _envf("MEALFIT_SOLVER_BAND_UPPER", 1.12, lambda v: 1.0 < v <= 2.0)
+SOLVER_BAND_KCAL_LOWER = _envf("MEALFIT_SOLVER_BAND_KCAL_LOWER", 0.95, lambda v: 0.5 <= v < 1.0)
+SOLVER_BAND_KCAL_UPPER = _envf("MEALFIT_SOLVER_BAND_KCAL_UPPER", 1.05, lambda v: 1.0 < v <= 2.0)
+# [P3-SOLVER-FEASIBILITY · 2026-07-29] (audit solver+seeder v4) Telemetría PURA: el solver sabe si el
+# target es físicamente inalcanzable con los alimentos elegidos (cotas exactas de la caja, O(n)) y no
+# lo decía. Caso medido: merienda 'Yogurt Griego con Guineo y Avena Tostada' con slot-target de grasa
+# 8.5 g cuando el MÁXIMO escalando todo al tope es 6.0 g — no falta escalado, falta un PORTADOR de
+# grasa. La reparación aguas abajo no puede distinguir un caso del otro sin esta señal.
+SOLVER_FEASIBILITY_SIGNAL = _envb("MEALFIT_SOLVER_FEASIBILITY_SIGNAL", True)
 
 # [S-P2-a / P2-SOLVER-SCALE-KNOBS · 2026-07-07] (audit solver+seeder v2) El clamp de escala del solver eran
 # params default PLANOS (0.3/3.5), NO knobs → invisibles en /health/version y sin rollback/A-B sin redeploy
@@ -271,6 +298,65 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     return factors, "greedy", sat_hi, sat_lo
 
 
+def _converged_report(achieved: dict, tgt: dict, tolerance_pct: float) -> tuple:
+    """[P3-SOLVER-CONVERGED-BAND · 2026-07-29] `(converged: bool, per_macro: dict)`.
+
+    `per_macro` existe porque el criterio viejo hacía `break` al primer macro fuera → se PERDÍA cuál
+    falló, que es justo el dato que vuelve accionable la métrica de no-convergencia.
+
+    Con `SOLVER_CONVERGED_USES_BAND` OFF (default) el bool es idéntico al de siempre (±tol simétrico
+    sobre P/C/F); ON evalúa el ratio contra la banda REAL y añade kcal con su banda estrecha."""
+    per: dict = {}
+    _macros = ("protein", "carbs", "fats", "kcal") if SOLVER_CONVERGED_USES_BAND \
+        else ("protein", "carbs", "fats")
+    for m in _macros:
+        t = float(tgt.get(m) or 0.0)
+        if t <= 0:
+            continue
+        ratio = float(achieved.get(m) or 0.0) / t
+        if SOLVER_CONVERGED_USES_BAND:
+            lo, hi = ((SOLVER_BAND_KCAL_LOWER, SOLVER_BAND_KCAL_UPPER) if m == "kcal"
+                      else (SOLVER_BAND_LOWER, SOLVER_BAND_UPPER))
+            per[m] = bool(lo <= ratio <= hi)
+        else:
+            per[m] = bool(abs(ratio - 1.0) <= tolerance_pct)
+    return (all(per.values()) if per else True), per
+
+
+def _feasibility_report(entries: list, tgt: dict, min_scale: float,
+                        hi_by_entry: list) -> "dict | None":
+    """[P3-SOLVER-FEASIBILITY · 2026-07-29] ¿El target es alcanzable con ESTOS alimentos dentro del
+    clamp? Cota exacta por coordenada: `m_max = Σ hi_i·a_mi`, `m_min = Σ lo_i·a_mi` (condición
+    NECESARIA, O(n), determinista, sin dependencias).
+
+    Devuelve `{macro: 'high'|'low'}` para los macros infactibles, o `{}` si todos son alcanzables.
+    'high' = ni escalando todo al techo se llega (falta un PORTADOR, no escalado); 'low' = ni
+    bajando todo al piso se baja lo suficiente. `None` si no hay nada que evaluar."""
+    if not SOLVER_FEASIBILITY_SIGNAL or not entries:
+        return None
+    try:
+        out: dict = {}
+        for m in ("kcal", "protein", "carbs", "fats"):
+            t = float(tgt.get(m) or 0.0)
+            if t <= 0:
+                continue
+            _mx = _mn = 0.0
+            for j, e in enumerate(entries):
+                _a = float((e.get("macros") or {}).get(m) or 0.0)
+                if _a <= 0:
+                    continue
+                _hi = hi_by_entry[j] if j < len(hi_by_entry) else 1.0
+                _mx += _a * _hi
+                _mn += _a * min_scale
+            if _mx > 0 and t > _mx:
+                out[m] = "high"
+            elif t < _mn:
+                out[m] = "low"
+        return out
+    except Exception:
+        return None
+
+
 def _get(d: dict, *keys, default=0.0):
     if not isinstance(d, dict):
         return default
@@ -397,14 +483,14 @@ def solve_portion_macros(
         out_ingredients.append(new_ing)
 
     achieved = {m: round(v, 1) for m, v in achieved.items()}
+    # [P3-SOLVER-FEASIBILITY · 2026-07-29] cotas exactas de la caja con los MISMOS bounds que usó
+    # el solver (proteína-dominante lleva su techo propio). Telemetría: no cambia ni un gramo.
+    _hi_all = [(max_scale_protein if e.get("group") == "protein" else max_scale) for e in entries]
+    _infeasible = _feasibility_report(entries, tgt, min_scale, _hi_all)
 
-    converged = True
-    for macro in ("protein", "carbs", "fats"):
-        t = tgt[macro]
-        if t > 0:
-            if abs(achieved[macro] - t) / t > tolerance_pct:
-                converged = False
-                break
+    # [P3-SOLVER-CONVERGED-BAND · 2026-07-29] criterio compartido + desglose per-macro (el `break`
+    # previo perdía CUÁL macro falló, que es el dato que vuelve accionable la métrica).
+    converged, converged_per_macro = _converged_report(achieved, tgt, tolerance_pct)
 
     return {
         "ingredients": out_ingredients,
@@ -418,6 +504,13 @@ def solve_portion_macros(
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
         "converged": converged,
+        # [P3-SOLVER-CONVERGED-BAND] qué macro falló, no solo que falló alguno.
+        "converged_per_macro": converged_per_macro,
+        # [P3-SOLVER-FEASIBILITY] {macro: 'high'|'low'} si el target es inalcanzable con estos
+        # alimentos dentro del clamp: distingue "falta escalado" de "falta un PORTADOR".
+        "infeasible": _infeasible,
+        "residuals": {m: (round(achieved[m] / tgt[m], 3) if tgt.get(m) else None)
+                      for m in ("kcal", "protein", "carbs", "fats")},
         "saturated_hi": _sat_hi,
         "saturated_lo": _sat_lo,
     }
@@ -497,12 +590,13 @@ def solve_meal_macros(
             factors_applied.append(1.0)
 
     achieved = {m: round(v, 1) for m, v in achieved.items()}
-    converged = True
-    for macro in ("protein", "carbs", "fats"):
-        t = tgt[macro]
-        if t > 0 and abs(achieved[macro] - t) / t > tolerance_pct:
-            converged = False
-            break
+    # [P3-SOLVER-FEASIBILITY · 2026-07-29] cotas exactas de la caja con los MISMOS bounds que usó
+    # el solver (proteína-dominante lleva su techo propio). Telemetría: no cambia ni un gramo.
+    _hi_all = [(max_scale_protein if e.get("group") == "protein" else max_scale) for e in entries]
+    _infeasible = _feasibility_report(entries, tgt, min_scale, _hi_all)
+    # [P3-SOLVER-CONVERGED-BAND · 2026-07-29] criterio compartido + desglose per-macro (el `break`
+    # previo perdía CUÁL macro falló, que es el dato que vuelve accionable la métrica).
+    converged, converged_per_macro = _converged_report(achieved, tgt, tolerance_pct)
 
     return {
         "ingredients": out_strings,
@@ -517,6 +611,13 @@ def solve_meal_macros(
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
         "converged": converged,
+        # [P3-SOLVER-CONVERGED-BAND] qué macro falló, no solo que falló alguno.
+        "converged_per_macro": converged_per_macro,
+        # [P3-SOLVER-FEASIBILITY] {macro: 'high'|'low'} si el target es inalcanzable con estos
+        # alimentos dentro del clamp: distingue "falta escalado" de "falta un PORTADOR".
+        "infeasible": _infeasible,
+        "residuals": {m: (round(achieved[m] / tgt[m], 3) if tgt.get(m) else None)
+                      for m in ("kcal", "protein", "carbs", "fats")},
         "saturated_hi": _sat_hi,
         "saturated_lo": _sat_lo,
     }
@@ -583,7 +684,68 @@ REFINE_RAW_BY_FOOD = _envb("MEALFIT_REFINE_RAW_BY_FOOD", True)
 # tooltip-anchor: P2-REFINE-COVERAGE-GATE
 REFINE_MIN_COVERAGE = _envf("MEALFIT_REFINE_MIN_COVERAGE", 0.6, lambda v: 0.0 <= v <= 1.0)
 
-_REFINE_WEIGHTS = {"kcal": 1.0, "protein": 1.5, "carbs": 1.0, "fats": 1.2}
+# [P3-REFINE-WEIGHTS-KNOBS · 2026-07-29] (audit solver+seeder v4) Eran los ÚNICOS pesos del motor de
+# precisión hardcodeados: sus gemelos `SOLVER_W_*` son knobs con validador desde
+# P2-SOLVER-KNOBS-REGISTRY, precisamente porque tunearlos movió el all-4-en-banda. El refinador es el
+# ÚLTIMO optimizador de la cadena y decide qué línea mover en cada una de sus hasta 250 iteraciones,
+# así que el operador no podía A/B-earlo ni verlo en /health/version.
+# Defaults IDÉNTICOS a los literales previos ⇒ cero cambio de comportamiento en el merge; lo que se
+# gana es reversibilidad y visibilidad.
+# ⚠️ Nota para quien los tunee: difieren de los del LSQ (kcal 1.0 vs 0.1 · carbos 1.0 vs 1.1 ·
+# grasa 1.2 vs 1.4) y nadie documentó por qué. Además `P1-FATS-RELEVEL-UNIVERSAL` corre JUSTO después
+# del refinador y recorta grasa de los días sobre banda: con `fats` alto el refinador empuja grasa y
+# el relevel la recorta — el gancho "dos guardas sobre la misma condición → OSCILA". Si vas a
+# tocarlos, mide contra `all4_ratio`, no a ojo. tooltip-anchor: P3-REFINE-WEIGHTS-KNOBS
+_REFINE_WEIGHTS = {
+    "kcal": _envf("MEALFIT_REFINE_W_KCAL", 1.0, lambda v: 0.0 < v <= 10.0),
+    "protein": _envf("MEALFIT_REFINE_W_PROTEIN", 1.5, lambda v: 0.0 < v <= 10.0),
+    "carbs": _envf("MEALFIT_REFINE_W_CARBS", 1.0, lambda v: 0.0 < v <= 10.0),
+    "fats": _envf("MEALFIT_REFINE_W_FATS", 1.2, lambda v: 0.0 < v <= 10.0),
+}
+
+# [P3-REFINE-EXEMPT-BOUNDARY · 2026-07-29] (audit solver+seeder v4) La exención del refinador era un
+# `in` de substring sobre la línea sin acentos, y fallaba en las DOS direcciones a la vez:
+#   (a) `"sal"` ⊂ salmón / ensalada / salchicha / salami / bacalao salado ⇒ el refinador PERDÍA su
+#       palanca sobre líneas de proteína y grasa mayores (cena de salmón: el día se entrega fuera de
+#       banda con banner `low_band_macro:protein` porque no había de dónde sacar proteína);
+#   (b) los portadores que el micro-closer acaba de SEMBRAR (linaza/girasol/maní/zanahoria/auyama/
+#       espinaca) NO estaban exentos ⇒ el refinador podía recortarlos a 0.5× y deshacer el cierre.
+# Es la 13ª mordida de la clase 'res'⊂'fresco'. Rollback independiente por knob.
+REFINE_EXEMPT_WORD_BOUNDARY = _envb("MEALFIT_REFINE_EXEMPT_WORD_BOUNDARY", True)
+REFINE_PROTECT_MICRO_CARRIERS = _envb("MEALFIT_REFINE_PROTECT_MICRO_CARRIERS", True)
+# Portadores que el micro-closer siembra/escala. SSOT propio del refinador (no puede importar
+# graph_orchestrator a module-init sin ciclo); el test de paridad lo ancla contra `_SEED_NUT_TOKENS`.
+_MICRO_CARRIER_TOKENS = ("linaza", "chia", "girasol", "mani", "almendra", "almendras", "nuez",
+                         "nueces", "pistacho", "merey", "maranon", "ajonjoli", "semilla", "semillas",
+                         "zanahoria", "auyama", "espinaca", "espinacas")
+
+_EXEMPT_RE_CACHE: dict = {}
+
+
+def _exempt_matcher(exempt_tokens: tuple):
+    """[P3-REFINE-EXEMPT-BOUNDARY] Devuelve `fn(linea_normalizada) -> bool` con frontera de palabra.
+    Cacheado por tupla de tokens: recompilar por línea sería O(líneas × tokens) en el hot path."""
+    _key = tuple(exempt_tokens or ())
+    _hit = _EXEMPT_RE_CACHE.get(_key)
+    if _hit is not None:
+        return _hit
+    if not REFINE_EXEMPT_WORD_BOUNDARY:
+        def _fn(il, _toks=_key):
+            return any(t and t in il for t in _toks)
+    else:
+        _toks = [t for t in _key if t]
+        if REFINE_PROTECT_MICRO_CARRIERS:
+            _toks = list(_toks) + [t for t in _MICRO_CARRIER_TOKENS if t not in _toks]
+        if not _toks:
+            def _fn(il):
+                return False
+        else:
+            _rx = _re_ps.compile(r"\b(?:" + "|".join(_re_ps.escape(t) for t in _toks) + r")\b")
+
+            def _fn(il, _r=_rx):
+                return bool(_r.search(il))
+    _EXEMPT_RE_CACHE[_key] = _fn
+    return _fn
 
 
 def _refine_error(delivered: dict, targets: dict) -> float:
@@ -628,6 +790,7 @@ def refine_day_portions_integer(
         _BENIGN_RE = _re.compile(
             r"\b(?:agua|hielo|perejil|cilantro|cilantrico|culantro|albahaca|hierbabuena|cebollin|cebollino)\b")
         _n_quant = _n_res = 0
+        _is_exempt = _exempt_matcher(tuple(exempt_tokens or ()))
 
         # 1) Censo de líneas móviles: gram-based, resolubles, no exentas.
         lines = []  # dicts: meal, idx, grams, per_g {kcal,p,c,f}, orig_grams
@@ -659,7 +822,8 @@ def refine_day_portions_integer(
                 il = _sa(s.lower())
                 if "al gusto" in il or "opcional" in il:
                     continue
-                if any(tok and tok in il for tok in exempt_tokens):
+                # [P3-REFINE-EXEMPT-BOUNDARY] frontera de palabra + protección de portadores de micros
+                if _is_exempt(il):
                     continue
                 m_g = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", il)
                 _gram_led = bool(m_g)
@@ -703,6 +867,8 @@ def refine_day_portions_integer(
         # 2) Greedy: el mejor movimiento ±step por iteración hasta converger.
         moves = 0
         err = _refine_error(delivered, tg)
+        _err0 = err
+        _exhausted = True   # [P3-REFINE-OBSERVABILITY] se pone False si sale por convergencia
         for _ in range(int(max_iters)):
             best = None  # (new_err, line, direction)
             for ln in lines:
@@ -718,6 +884,7 @@ def refine_day_portions_integer(
                     if ne < err - 1e-9 and (best is None or ne < best[0]):
                         best = (ne, ln, direction)
             if best is None:
+                _exhausted = False   # no hay movimiento que mejore: convergió de verdad
                 break
             ne, ln, direction = best
             ln["grams"] += direction * float(step_g)
@@ -726,6 +893,14 @@ def refine_day_portions_integer(
             err = ne
             moves += 1
 
+        # [P3-REFINE-OBSERVABILITY · 2026-07-29] (audit solver+seeder v4) El refinador era MUDO: ni
+        # una línea de log, ni siquiera al agotar `max_iters` (que es cuando su resultado depende del
+        # tope y no de la convergencia — el mismo modo de fallo que P1-SOLVER-LSQ-ITERS destapó en
+        # `_box_lsq`, donde el 99% de las comidas agotaba el tope sin que nadie lo supiera).
+        if _exhausted and moves:
+            _log.info(f"🎯 [P3-REFINE-OBSERVABILITY] refinador AGOTÓ {max_iters} iteraciones con "
+                      f"{moves} movimiento(s) (err {_err0:.4f} → {err:.4f}) — el resultado depende "
+                      f"del tope, no de la convergencia; subir max_iters podría mejorar el día.")
         if not moves:
             return 0
 

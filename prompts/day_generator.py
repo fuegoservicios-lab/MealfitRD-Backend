@@ -414,7 +414,55 @@ _POOL_IMPLICATIONS = {
 }
 
 
-def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None) -> str:
+def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
+    """[P3-DAYGEN-SLOT-TARGETS · 2026-07-29] (audit solver+seeder v4) Una línea por slot con su cuota
+    de kcal/P/C/F, derivada del SSOT `allocate_macros_per_slot` (el mismo que el swap ya consume).
+
+    Por qué: el day-gen recibía kcal/P/C/F del DÍA y la orden «la suma DEBE coincidir con el objetivo
+    diario», pero NUNCA el reparto por slot contra el que el solver lo va a medir. Componía cada
+    plato ciego al reparto y luego el solver lo forzaba re-escalando — o no podía, porque faltaba el
+    PORTADOR del macro. Caso medido: merienda de 0.15 sobre 68 g de grasa = 10.2 g; el LLM compone
+    'Yogurt Griego con Guineo y Avena Tostada' (~1.7 g de grasa) y el máximo alcanzable escalando
+    todo al tope es 6.0 g. **13 de las 16 infactibilidades por-coordenada medidas eran de grasa**, de
+    ahí la regla explícita del portador.
+
+    Nace OFF: toca el prompt del nodo MÁS CARO del pipeline (62.6% del costo), así que exige canario.
+    Devuelve "" si no hay datos suficientes (fail-open: el prompt queda como hoy).
+    tooltip-anchor: P3-DAYGEN-SLOT-TARGETS"""
+    try:
+        from nutrition_calculator import allocate_macros_per_slot
+        _mt = [m for m in (meal_types or []) if m]
+        if not _mt or not isinstance(daily_targets, dict):
+            return ""
+        _slots = allocate_macros_per_slot(daily_targets, len(_mt)) or {}
+        if not _slots:
+            return ""
+        _rows, _needs_fat = [], []
+        for _i, (_k, _v) in enumerate(_slots.items()):
+            if _i >= len(_mt) or not isinstance(_v, dict):
+                break
+            _rows.append(f"    · {_mt[_i]} ≈ {round(_v.get('kcal') or 0)} kcal · "
+                         f"{round(_v.get('protein') or 0)} g P · {round(_v.get('carbs') or 0)} g C · "
+                         f"{round(_v.get('fats') or 0)} g G")
+            if float(_v.get("fats") or 0) >= 5.0:
+                _needs_fat.append(_mt[_i])
+        if not _rows:
+            return ""
+        _fat_rule = ""
+        if _needs_fat:
+            _fat_rule = (
+                f"\n  ⚠️ PORTADOR DE GRASA OBLIGATORIO en: {', '.join(_needs_fat)} — su cuota supera "
+                f"los 5 g y la grasa NO se puede fabricar re-escalando lo que no la tiene. Incluye una "
+                f"fuente real (aceite, aguacate, frutos secos, mantequilla de maní, queso). Un yogurt "
+                f"con fruta y avena NO llega ni escalándolo al máximo.")
+        return ("\n• 🎯 CUOTA POR COMIDA (el motor mide cada plato contra ESTO, no solo el total del día):\n"
+                + "\n".join(_rows) + _fat_rule)
+    except Exception:
+        return ""
+
+
+def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
+                                 daily_targets: dict = None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día."""
     import re as _re
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
@@ -595,6 +643,17 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             "protagonista del plato y no le añades otra fuente de grasa."
         )
 
+    # [P3-DAYGEN-SLOT-TARGETS · 2026-07-29] OFF por default: nace vacío ⇒ prompt byte-idéntico.
+    _slot_targets_block = ""
+    try:
+        import os as _os_dg
+        if str(_os_dg.environ.get("MEALFIT_DAYGEN_SLOT_TARGETS_IN_PROMPT", "false")
+               ).strip().lower() in ("1", "true", "yes", "on") and daily_targets:
+            _slot_targets_block = build_slot_targets_block(
+                daily_targets, skeleton_day.get("meal_types") or [])
+    except Exception:
+        _slot_targets_block = ""
+
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
@@ -602,7 +661,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(_carbs_asignados)}{carb_no_repeat_block}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}
-• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{dinner_identity_block}{protein_diversity_block}
+• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{_slot_targets_block}{dinner_identity_block}{protein_diversity_block}
 {dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,

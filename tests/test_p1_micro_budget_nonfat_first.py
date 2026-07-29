@@ -106,6 +106,14 @@ class _FakeDB:
     def macros_from_ingredient_string(self, s):
         # kcal alto → el kcal-cap del escalado consume el budget compartido COMPLETO en una pasada
         # (factor = 1 + budget/kcal ⇒ consumo = budget), drenándolo deterministamente antes del fat-micro.
+        # [P3-MICRO-SEED-BUDGET-EXACT · 2026-07-29] La SEMILLA lleva su costo REAL: el fake devolvía
+        # 250 kcal para toda línea, incluida "10 g de semillas de linaza" — 25 kcal/g, físicamente
+        # imposible (la grasa son 9). Eso pasaba desapercibido porque el gate de siembra comparaba
+        # contra un piso fijo y no contra el precio; con el gate exacto, el fixture no-físico hacía
+        # fallar al test por describir un alimento que no existe. Linaza 10 g ≈ 53 kcal.
+        _low = str(s).lower()
+        if any(t in _low for t in ("linaza", "chia", "chía", "nuez", "nueces", "girasol")):
+            return {"kcal": 53.0, "protein": 1.8, "carbs": 2.9, "fats": 4.2}
         return {"kcal": 250.0, "protein": 3.0, "carbs": 15.0, "fats": 2.0}
 
     def grams_from_ingredient_string(self, s):

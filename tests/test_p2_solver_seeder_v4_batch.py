@@ -70,7 +70,9 @@ def test_parallel_checker_rejects_permuted_equal_length():
 
 
 def test_solver_requires_verified_parallelism():
-    body = _GO[_GO.index("def _apply_macro_solver_to_meal"):][:9000]
+    # [P3 · 2026-07-29] fin de función, no ventana fija (la de 9000 caducó el mismo día).
+    _i = _GO.index("def _apply_macro_solver_to_meal")
+    body = _GO[_i:_i + _GO[_i:].index("\ndef ", 1)]
     assert "_raw_display_parallel_by_food(_ing_strs, raw)" in body
     assert "RAW_PAIR_BY_FOOD" in body
     assert 'RAW_PAIR_BY_FOOD = _env_bool("MEALFIT_RAW_PAIR_BY_FOOD", True)' in _GO

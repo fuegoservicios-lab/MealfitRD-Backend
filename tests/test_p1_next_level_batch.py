@@ -239,6 +239,64 @@ def test_refiner_converges_all4_with_human_steps():
     assert 0.90 <= delivered["kcal"] / targets["kcal"] <= 1.12
 
 
+def _ref_meals_reordered():
+    """[P3-REFINER-LOCKSTEP-FIXTURES · 2026-07-29] raw con el MISMO largo y ORDEN DISTINTO — el estado
+    que produce el reconciliador display↔raw (`[conservadas] + [añadidas]`) y que medimos en el
+    48-52% de las comidas vivas."""
+    return [
+        {"name": "Almuerzo", "ingredients": ["120g de pollo", "80g de arroz", "50g de aguacate"],
+         "ingredients_raw": ["80g de arroz", "50g de aguacate", "120g de pollo"]},
+    ]
+
+
+def _ref_meals_raw_longer():
+    """raw con MÁS líneas que display — estado que `_restore_display_from_raw_orphans` declara
+    ESPERADO (no una anomalía)."""
+    return [
+        {"name": "Cena", "ingredients": ["100g de pollo", "150g de arroz"],
+         "ingredients_raw": ["30g de aguacate", "100g de pollo", "150g de arroz"]},
+    ]
+
+
+def _grams_by_food(lines):
+    out = {}
+    for s in lines:
+        m = re.match(r"(\d+(?:\.\d+)?)", s)
+        food = next((f for f in ("pollo", "arroz", "aguacate") if f in s.lower()), None)
+        if m and food:
+            out[food] = float(m.group(1))
+    return out
+
+
+@pytest.mark.parametrize("mk", [_ref_meals, _ref_meals_reordered, _ref_meals_raw_longer])
+def test_refiner_lockstep_never_scales_the_wrong_food(mk):
+    """[P3-REFINER-LOCKSTEP-FIXTURES · 2026-07-29] El test de lockstep usaba SOLO un fixture con raw
+    copiado literal — o sea el ÚNICO caso en que el write posicional es correcto por construcción.
+    La aserción `ingredients == ingredients_raw` no podía fallar por desalineación aunque el bug
+    estuviera vivo. Ahora se parametriza sobre los tres estados reales y se afirma la propiedad que
+    de verdad importa: **ninguna línea de raw cambia de gramos salvo que su ALIMENTO sea el mismo
+    que el de la línea de display que se movió**."""
+    from portion_solver import refine_day_portions_integer
+    meals = mk()
+    before = {id(m): _grams_by_food(m["ingredients_raw"]) for m in meals}
+    disp_before = {id(m): _grams_by_food(m["ingredients"]) for m in meals}
+    refine_day_portions_integer(meals, {"protein": 90.0, "carbs": 70.0, "fats": 22.0, "kcal": 838.0},
+                                _RefDB(), step_g=5.0, floor_g=15.0, cap_g=300.0)
+    for m in meals:
+        _raw_now = _grams_by_food(m["ingredients_raw"])
+        _disp_now = _grams_by_food(m["ingredients"])
+        for food, g_now in _raw_now.items():
+            if abs(g_now - before[id(m)].get(food, g_now)) < 1e-9:
+                continue   # intacta: siempre válido (el sync es conservador a propósito)
+            # cambió → el display del MISMO alimento tiene que haber cambiado igual
+            assert food in _disp_now, f"raw movió {food!r} y el display ni lo tiene"
+            assert abs(_disp_now[food] - g_now) < 1e-6, (
+                f"raw de {food!r} quedó en {g_now} y su display en {_disp_now[food]} — "
+                f"el factor aterrizó en la línea EQUIVOCADA")
+            assert abs(disp_before[id(m)][food] - _disp_now[food]) > 1e-9, \
+                f"raw de {food!r} cambió pero su display no se movió"
+
+
 def test_refiner_respects_bounds_and_lockstep():
     from portion_solver import refine_day_portions_integer
     meals = _ref_meals()
@@ -266,7 +324,15 @@ def test_refiner_noop_cases():
 def test_refiner_wired_in_assemble():
     assert "GLOBAL_DAY_REFINE_ENABLED" in _GO
     assert "refine_day_portions_integer as _rdi" in _GO
+    # [P3-REFINER-ASSEMBLE-ANCHOR · 2026-07-29] El ancla vieja (`"...as _rdi"`) es PREFIJO ESTRICTO
+    # de `...as _rdi_u`, el otro callsite del mismo helper (el de las superficies de update). Hoy
+    # acertaba por orden de aparición, no por precisión: si alguien renombra el alias de assemble,
+    # el literal sigue existiendo — ahora apuntando al OTRO callsite — y el test falla con un
+    # diagnóstico que miente ("el refinador debe correr antes del recheck"). Misma clase de colisión
+    # por prefijo compartido que ya mordió este mes. Ancla ÚNICA + assert de unicidad.
+    _ANCHOR = "tooltip-anchor: P1-NEXT-LEVEL-SOLVER-ASSEMBLE-CALLSITE"
+    assert _GO.count(_ANCHOR) == 1, "el ancla del callsite de assemble debe ser ÚNICA"
     # corre ANTES del recheck (fallback continuo) y del qty-sync final
-    refine_idx = _GO.index("refine_day_portions_integer as _rdi")
+    refine_idx = _GO.index(_ANCHOR)
     recheck_idx = _GO.index("POSTQUANTIZE_RECHECK_ENABLED and (_pg or _cg or _fg)")
     assert refine_idx < recheck_idx, "el refinador global debe correr antes del recheck continuo"

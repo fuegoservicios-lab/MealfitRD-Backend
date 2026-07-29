@@ -106,7 +106,9 @@ def test_el_camino_por_indice_sigue_siendo_el_preferido():
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def _apply_macro_solver_to_meal")
-    body = src[i:i + 9000]
+    # [P3 · 2026-07-29] recorte hasta el FIN DE LA FUNCIÓN, no una ventana de bytes: la ventana
+    # de 9000 caducó al crecer la función (misma clase que la de 2200 en test_p2_solver_clamp_action).
+    body = src[i:i + src[i:].index("\ndef ", 1)]
     assert "len(raw) == len(factors)" in body, "el camino rápido por índice se conserva"
     assert "_raw_display_parallel_by_food(_ing_strs, raw)" in body, \
         "y ahora exige paralelismo verificado por alimento antes de fiarse del índice"
@@ -119,7 +121,9 @@ def test_el_guard_ya_no_es_la_unica_condicion():
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def _apply_macro_solver_to_meal")
-    body = src[i:i + 9000]
+    # [P3 · 2026-07-29] recorte hasta el FIN DE LA FUNCIÓN, no una ventana de bytes: la ventana
+    # de 9000 caducó al crecer la función (misma clase que la de 2200 en test_p2_solver_clamp_action).
+    body = src[i:i + src[i:].index("\ndef ", 1)]
     assert "isinstance(raw, list) and len(raw) == len(factors)" not in body, (
         "ese guard era la causa raíz: sin rama alternativa, raw se queda pre-solver"
     )
