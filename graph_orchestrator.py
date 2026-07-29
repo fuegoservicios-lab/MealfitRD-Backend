@@ -18758,7 +18758,7 @@ def _ensure_ingredient_quantities(meal: dict, db) -> int:
             # puede tener 3 pasos completos — la etiqueta y el "regenera" (que gasta un crédito
             # mensual) son falsos aquí. `setdefault`: si el mismo meal ya pasó por un backstop
             # más severo (ingredientes/receta ausentes), esa razón manda.
-            pass  # SABOTAGE-H: meal.setdefault("_dish_quality_reason", "portion_estimate")
+            meal.setdefault("_dish_quality_reason", "portion_estimate")
             try:
                 _truth_up_meal_macros_from_strings(meal, db)
             except Exception:
