@@ -4050,6 +4050,73 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
         return ""
 
 
+def _extract_ai_message_text(msg) -> str:
+    """Extrae el texto de un AIMessage, normalizando `content` list (bloques
+    multimodal/estructurados de algunos providers) a un string plano. Helper
+    interno de `_build_final_content_from_messages` (P1-CHAT-NARRATION-KEPT).
+    """
+    content = msg.content
+    if isinstance(content, list):
+        content = "\n".join(
+            [str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content]
+        )
+    return str(content) if content else ""
+
+
+def _build_final_content_from_messages(messages: list) -> str:
+    """[P1-CHAT-NARRATION-KEPT · 2026-07-28] Reconstruye el texto final del
+    turno a partir de TODAS las AIMessage con contenido no vacío emitidas
+    después del último HumanMessage — no solo `messages[-1]`.
+
+    Por qué: cuando el modelo emite narración + tool_calls en el MISMO
+    completion ("narrate-then-act": ej. "Lo anoto..." + tool_call), esa
+    narración ya se streameó al usuario como chunks ordinarios (ver el loop
+    `for event in stream_iter` en `chat_with_agent_stream`). El grafo corre
+    la tool y vuelve a `call_model`, que produce un SEGUNDO AIMessage
+    ("Listo, quedó anotado"). Tomar solo `final_messages[-1]` para el evento
+    `done` — que además persiste vía `save_message` en `routers/chat.py` —
+    descartaba la primera narración: el usuario la veía aparecer en vivo y
+    luego "desaparecer" cuando el `done` la reemplazaba, y un reload del
+    historial jamás la mostraba (pérdida de dato real, no solo visual).
+
+    Reglas:
+      - Solo el tramo DESPUÉS del último HumanMessage (turnos previos no
+        contaminan el turno actual).
+      - Solo AIMessage; ToolMessage/HumanMessage intermedios se ignoran.
+      - Mensajes con contenido vacío se saltan (AIMessage(content='') que
+        solo trae tool_calls, patrón normal del loop narrate-then-act).
+      - De-duplicación verbatim: si una pasada posterior repite exactamente
+        (tras strip) el texto de una pasada anterior, se omite — el patrón
+        esperado es ADITIVO (narrar, actuar, confirmar resultado), no
+        repetir la misma frase dos veces.
+      - Unión legible con doble salto de línea entre partes.
+    """
+    if not messages:
+        return ""
+
+    last_human_idx = -1
+    for i, m in enumerate(messages):
+        if isinstance(m, HumanMessage):
+            last_human_idx = i
+    tail = messages[last_human_idx + 1:] if last_human_idx >= 0 else messages
+
+    seen_texts = set()
+    parts = []
+    for m in tail:
+        if not isinstance(m, AIMessage):
+            continue
+        text = _extract_ai_message_text(m)
+        if not text:
+            continue
+        dedup_key = text.strip()
+        if not dedup_key or dedup_key in seen_texts:
+            continue
+        seen_texts.add(dedup_key)
+        parts.append(text)
+
+    return "\n\n".join(parts)
+
+
 def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
     # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Wall-clock total para el path
     # non-stream del chat. Pre-fix: solo el stream emitía
@@ -4403,11 +4470,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         pass
 
     final_messages = final_state["messages"]
-    last_msg = final_messages[-1]
-    content = last_msg.content
-
-    if isinstance(content, list):
-        content = "\n".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
+    # [P1-CHAT-NARRATION-KEPT · 2026-07-28] Antes solo `final_messages[-1]`,
+    # que descartaba la narración de un pase narrate-then-act cuando el
+    # modelo emitía content+tool_calls y el grafo volvía a `call_model` con
+    # una segunda AIMessage. Ver `_build_final_content_from_messages`.
+    content = _build_final_content_from_messages(final_messages)
 
     # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad output non-stream.
     sanitized_content = _sanitize_chat_output_for_wire(str(content))
@@ -4964,11 +5031,14 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         pantry_depleted_items = final_state_snapshot.values.get("pantry_depleted_items")
         final_messages = final_state_snapshot.values.get("messages", [])
         if final_messages:
-            last_msg = final_messages[-1]
-            extracted_content = last_msg.content
-            if isinstance(extracted_content, list):
-                extracted_content = "\n".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in extracted_content])
-            final_content = str(extracted_content)
+            # [P1-CHAT-NARRATION-KEPT · 2026-07-28] Antes solo
+            # `final_messages[-1]`: en un pase narrate-then-act (content +
+            # tool_calls en el mismo completion) la narración ya se
+            # streameó como chunks al usuario, pero el `done` la
+            # reemplazaba por el segundo AIMessage post-tool — pérdida de
+            # dato real, porque `routers/chat.py::save_message` persiste
+            # justo este `response`. Ver `_build_final_content_from_messages`.
+            final_content = _build_final_content_from_messages(final_messages)
 
     logger.info("✅ [CHAT STREAM] Finalizado con éxito.")
     # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad del payload `done`.
