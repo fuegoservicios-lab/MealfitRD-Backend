@@ -2878,6 +2878,11 @@ _atexit.register(
 _METRICS_EXECUTOR = _DrainableThreadPoolExecutor(
     max_workers=4, thread_name_prefix="metrics", name="metrics"
 )
+# [P1-METRICS-DETACHED-PIPELINE · 2026-07-29] Las métricas van SIEMPRE por este executor, nunca por
+# el `BackgroundTasks` del request: en deep-search el pipeline sobrevive al request y todo
+# `add_task` posterior se encola en un objeto muerto (métrica perdida, sin log de error).
+# Ver el bloque de `_emit_progress` para la evidencia medida. Rollback: =false.
+METRICS_ALWAYS_EXECUTOR = _env_bool("MEALFIT_METRICS_ALWAYS_EXECUTOR", True)
 _atexit.register(
     _shutdown_drainable_executor,
     _METRICS_EXECUTOR, "_METRICS_EXECUTOR", METRICS_SHUTDOWN_DRAIN_S,
@@ -4046,7 +4051,31 @@ def _emit_progress(state: PlanState, event: str, data: dict):
                         f"{type(e).__name__}: {e}"
                     )
             
-            bg_tasks = state.get("background_tasks")
+            # [P1-METRICS-DETACHED-PIPELINE · 2026-07-29] Las métricas per-run se PERDÍAN cuando el
+            # cliente cerraba el SSE.
+            #
+            # `background_tasks` es el `BackgroundTasks` de FastAPI del REQUEST: sus tareas corren
+            # cuando la respuesta termina. Pero en deep-search el pipeline sigue vivo como task
+            # detached DESPUÉS de que el request murió (P1-DEEP-SEARCH-PIPELINE, que existe justo
+            # para que el usuario cierre la pestaña y vuelva). Todo `add_task` posterior a esa
+            # muerte se encola en un objeto que nadie va a ejecutar: la métrica se pierde en
+            # silencio — ni siquiera salta el `[METRICS] Insert falló`, porque `_save` NUNCA se llama.
+            #
+            # Evidencia (2026-07-29): la corrida corr=5cbced82 logueó
+            # `📐 [P2-SOLVER-CLAMP-ACTION] 8/12` y `📐 [P2-SOLVER-CONVERGENCE-METRIC] 6/12` a las
+            # 18:52:08, y `pipeline_metrics` NO tiene ninguna de las dos filas. Lo mismo con la
+            # corrida de las 13:52 (anterior a los deploys del día ⇒ PREEXISTENTE). La única fila del
+            # día es la de las 13:36, cuyo SSE sí completó. El sink está sano (46-203 filas/hora).
+            #
+            # El sesgo es el peor posible: se pierden las métricas de las corridas MÁS LARGAS, que
+            # son exactamente las que más interesa medir y las que más probablemente pierden al
+            # cliente por el camino.
+            #
+            # El executor dedicado (abajo) no depende del ciclo de vida del request y ya era el
+            # camino de crons y contextos detached. Rollback: MEALFIT_METRICS_ALWAYS_EXECUTOR=false
+            # restaura el uso de `background_tasks` cuando existe.
+            # tooltip-anchor: P1-METRICS-DETACHED-PIPELINE
+            bg_tasks = None if METRICS_ALWAYS_EXECUTOR else state.get("background_tasks")
             if bg_tasks and hasattr(bg_tasks, "add_task"):
                 bg_tasks.add_task(_save)
             else:
