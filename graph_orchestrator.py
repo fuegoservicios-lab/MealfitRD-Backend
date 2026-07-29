@@ -8833,6 +8833,16 @@ _MAIN_PROTEIN_ALIASES = {
     "camarones": ["camaron", "camarones", "langostino", "langostinos", "gambas"],
     "pulpo": ["pulpo"],
     "cangrejo": ["cangrejo", "jaiba", "juey"],
+    # [P1-VARIETY-GATE-GAPS · 2026-07-29] Conejo Estofado (almuerzo) + Conejo Guisado
+    # (cena) el MISMO jueves y same_day_protein_repeats=0 (plan vivo 73db1e79): la lista
+    # crecía por-incidente (pavo 2026-06, mariscos 2026-07-10) y cada especie ausente es
+    # invisible para el gate + report + self-critique A LA VEZ. Alineado al universo de
+    # `_DM_SPECIES_TOKENS` (mero/tilapia/etc ya viven bajo "pescado").
+    "conejo": ["conejo"],
+    "chivo": ["chivo", "cabrito"],
+    "calamar": ["calamar", "calamares"],
+    "langosta": ["langosta"],
+    "higado": ["higado"],
     "huevo": ["huevo", "claras"],
     "gandules": ["gandules"],
     "habichuelas": ["habichuela", "frijoles", "frijol"],
@@ -8850,7 +8860,10 @@ _MAIN_PROTEIN_ALIASES = {
 # carnes/pescado/atún) — la repetición de marisco fatiga igual que la de pollo. Los aliases
 # viven en _MAIN_PROTEIN_ALIASES (abajo).
 _HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun",
-                         "camarones", "pulpo", "cangrejo"}
+                         "camarones", "pulpo", "cangrejo",
+                         # [P1-VARIETY-GATE-GAPS · 2026-07-29] especies que faltaban
+                         # (conejo ×2 mismo día pasó invisible en el plan vivo 73db1e79)
+                         "conejo", "chivo", "calamar", "langosta", "higado"}
 
 # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Proteínas PRINCIPALES cuya repetición el MISMO día fatiga al
 # usuario (pedido explícito del owner: vio huevo en desayuno+cena el mismo día). Incluye las pesadas + HUEVO
@@ -18050,6 +18063,36 @@ def build_variety_report(plan: dict) -> dict:
                         light_name_heavy_meals += 1
     except Exception:
         pass
+    # [P1-VARIETY-GATE-GAPS · 2026-07-29] Merienda casi idéntica en días CONSECUTIVOS
+    # ("Batido Refrescante de Guineo y Mantequilla de Maní" → "Guineo con Mantequilla de
+    # Maní y Yogurt", plan vivo 73db1e79): fruit-repeat es mismo-día y el dish-gate exige
+    # nombre repetido — nadie veía el par. Firma de alimentos featured en el NOMBRE
+    # (frutas SSOT + maní/yogurt/avena) por slot-índice; día i vs i+1 con ≥2 compartidos
+    # → advisory (NO bloquea: calidad blanda, mismo criterio que cross_day_preps).
+    cross_day_snack_pair_repeats = 0
+    try:
+        _sig_rows = []
+        for _d_sp in (plan.get("days") or []):
+            _row_sp = []
+            for _m_sp in (_d_sp.get("meals") or []) if isinstance(_d_sp, dict) else []:
+                _nm_sp = strip_accents(str(_m_sp.get("name", "")).lower())
+                _sig = set(_featured_fruits_in_name(_nm_sp))
+                for _tok_sp in ("mani", "yogurt", "avena"):
+                    if _name_has_token(_tok_sp, _nm_sp):
+                        _sig.add(_tok_sp)
+                _row_sp.append(_sig)
+            _sig_rows.append(_row_sp)
+        for _i_sp in range(len(_sig_rows) - 1):
+            _hoy, _man = _sig_rows[_i_sp], _sig_rows[_i_sp + 1]
+            for _j_sp in range(min(len(_hoy), len(_man))):
+                _comp = _hoy[_j_sp] & _man[_j_sp]
+                if len(_comp) >= 2:
+                    cross_day_snack_pair_repeats += 1
+                    issues.append(
+                        f"Slot {_j_sp + 1}: misma pareja featured ({', '.join(sorted(_comp))}) "
+                        f"en días consecutivos (repetición de merienda/plato)")
+    except Exception:
+        pass
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
@@ -18060,6 +18103,7 @@ def build_variety_report(plan: dict) -> dict:
             "cross_day_dishes": cross_day_dishes,
             "sweet_fish_pairings": sweet_fish_pairings,
             "light_name_heavy_meals": light_name_heavy_meals,
+            "cross_day_snack_pair_repeats": cross_day_snack_pair_repeats,
             "issues": issues,
             "ok": not issues}
 
@@ -22878,6 +22922,16 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         if _n_eg:
             total += _n_eg
             parts.append(f"egg_count_sync={_n_eg}")
+    except Exception:
+        pass
+    # [P1-VARIETY-GATE-GAPS · 2026-07-29] "Espolvorea con perejil picado" sin perejil en
+    # ingredientes (mero del plan vivo 73db1e79; misma clase que el cilantro fantasma del
+    # day-gen): la receta ya usa la hierba → se lista para que la compra la incluya.
+    try:
+        _n_gb = _garnish_herb_mention_backfill(days)
+        if _n_gb:
+            total += _n_gb
+            parts.append(f"garnish_backfill={_n_gb}")
     except Exception:
         pass
     # [P1-GROUND-MEAT-STEP-NOUN · 2026-07-28] pasos con "pechuga de X" cuando el ingrediente
@@ -28516,6 +28570,48 @@ _HERB_BARE_COUNT_RX = _re_cv.compile(
     _re_cv.IGNORECASE)
 _GUISADAS_MASC_RX = _re_cv.compile(
     r"\b((?:filete de )?pescado(?:\s+blanco)?|filete|pollo|pavo)\s+guisadas\b", _re_cv.IGNORECASE)
+
+
+_GARNISH_MENTION_RX = _re.compile(
+    r"\b(?:decora(?:r|do|da)?|espolvorea(?:r|do|da)?|adorna(?:r|do|da)?|corona(?:r|do|da)?)\b"
+    r"[^.]*?\b(cilantro|perejil)\b")
+
+
+def _garnish_herb_mention_backfill(days) -> int:
+    """[P1-VARIETY-GATE-GAPS · 2026-07-29] Pasos que decoran con cilantro/perejil SIN la
+    hierba en ingredientes (mero "Espolvorea con perejil picado", plan vivo 73db1e79; el
+    cilantro fantasma del wok, plan a33807a0 — ambos de origen day-gen). La receta ya la
+    usa: se añade "1 ramita de X fresco (para decorar)" para que la lista de compras la
+    incluya (mazo RD$44) en vez de mutilar la prosa. Solo hierbas de adorno (cero riesgo
+    alérgeno/dieta), idempotente, fail-open. tooltip-anchor: P1-VARIETY-GATE-GAPS"""
+    touched = 0
+    try:
+        from constants import strip_accents as _sa_gb
+    except Exception:
+        return 0
+    for _d in days or []:
+        for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                rec = meal.get("recipe")
+                if not isinstance(ings, list) or not isinstance(rec, list) or not rec:
+                    continue
+                _steps_sa = _sa_gb(" ".join(str(s) for s in rec if isinstance(s, str)).lower())
+                _ings_sa = _sa_gb(" ".join(str(s) for s in ings if isinstance(s, str)).lower())
+                _herbs = {m.group(1) for m in _GARNISH_MENTION_RX.finditer(_steps_sa)}
+                for _hb in sorted(_herbs):
+                    if _hb in _ings_sa:
+                        continue
+                    ings.append(f"1 ramita de {_hb} fresco (para decorar)")
+                    raw = meal.get("ingredients_raw")
+                    if isinstance(raw, list):
+                        raw.append(f"1 ramita de {_hb} fresco (para decorar)")
+                    touched += 1
+            except Exception:
+                continue
+    return touched
 
 
 def _herb_count_and_gender_polish(days) -> int:
