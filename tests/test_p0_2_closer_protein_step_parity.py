@@ -34,7 +34,10 @@ def test_marker_present():
 def test_function_defined_and_reuses_existing_helpers():
     assert "def ensure_protein_step_parity(plan_data" in _GO
     i = _GO.index("def ensure_protein_step_parity(plan_data")
-    body = _GO[i:i + 4200]
+    # [reapuntado 2026-07-29 · P1-MENU-COHERENCE-1] ventana fija 4200 caducó al crecer el
+    # cuerpo (piso ≥3g + fallback de token corto) — corte estructural al próximo def.
+    j = _GO.index("\ndef ", i + 10)
+    body = _GO[i:j]
     assert "_ingredient_is_protein_dominant(" in body, (
         "debe reusar el detector de proteína-dominante ya usado por "
         "P1-PROTEIN-BAND-POST-FINALIZE, no reimplementar un umbral propio"

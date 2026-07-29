@@ -17619,19 +17619,35 @@ def _featured_fruits_in_name(name) -> set:
 _SWEET_DOMINANT_FRUITS = ("mango", "pina", "lechosa", "papaya", "guayaba", "melon", "sandia", "mamey", "zapote")
 _SAVORY_CLASH_TOKENS = ("arroz", "moro", "locrio", "pasta", "espagueti", "macarron", "fideo", "espaguetis",
                         "revoltillo", "revuelto", "coliflor", "brocoli", "berenjena")
+# [P1-MENU-COHERENCE-1 · 2026-07-29] Refinamiento pedido por el owner (plan vivo 73db1e79:
+# "Brochetas de Chuleta de Cerdo … y Ensalada de LECHOSA" de almuerzo — "comer lechosa en el
+# almuerzo es raro; quedaría mejor de merienda"). Las frutas DE AGUA (lechosa/papaya/melón/
+# sandía/mamey/zapote) como ensalada/guarnición de un plato de CARNE o PESCADO sí son pareo
+# chocante — van en desayuno/merienda. La exclusión original de proteínas ("pollo con piña /
+# cerdo con guayaba aceptables") SIGUE VIGENTE para mango/piña/guayaba: solo el subconjunto
+# de agua gatea contra carnes.
+_WATER_SWEET_FRUITS = ("lechosa", "papaya", "melon", "sandia", "mamey", "zapote")
+_MEAT_MAIN_CLASH_TOKENS = ("chuleta", "cerdo", "brocheta", "pollo", "pavo", "res", "bistec",
+                           "conejo", "chivo", "mero", "pescado", "tilapia", "salmon", "atun",
+                           "camarones", "pulpo", "calamar", "langosta", "carne")
 
 
 def _meal_has_sweet_savory_clash(meal: dict) -> bool:
     """[P1-FRUIT-SAVORY-CLASH] True si el NOMBRE del plato combina una fruta dulce dominante con una
-    base salada (mango+arroz, revoltillo+mango, coliflor+mango). SSOT del detector per-comida —
-    reusado por build_variety_report (S1) y appetibility_fix_for_update (S2/S3). Match word-boundary
-    sobre el nombre (anti-falso-positivo). FAIL-SAFE: error → False. tooltip-anchor: P1-FRUIT-SAVORY-CLASH"""
+    base salada (mango+arroz, revoltillo+mango, coliflor+mango), o una fruta DE AGUA con un plato de
+    carne/pescado (brochetas de cerdo + ensalada de lechosa — P1-MENU-COHERENCE-1). SSOT del detector
+    per-comida — reusado por build_variety_report (S1) y appetibility_fix_for_update (S2/S3). Match
+    word-boundary sobre el nombre (anti-falso-positivo). FAIL-SAFE: error → False.
+    tooltip-anchor: P1-FRUIT-SAVORY-CLASH"""
     try:
         name_low = strip_accents(str((meal or {}).get("name", "")).lower())
         if not name_low:
             return False
-        return (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
-                and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS))
+        if (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
+                and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS)):
+            return True
+        return (any(_name_has_token(fr, name_low) for fr in _WATER_SWEET_FRUITS)
+                and any(_name_has_token(tok, name_low) for tok in _MEAT_MAIN_CLASH_TOKENS))
     except Exception:
         return False
 
@@ -27794,6 +27810,64 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
         return 0
 
 
+def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None) -> int:
+    """[P1-BUDGET-T2-CONVERGENCE · 2026-07-29] Cuerpo SÍNCRONO de la convergencia de
+    presupuesto, reutilizable fuera de assemble. Razón de existir: en el flujo deep-search
+    el costeo de assemble sale VACÍO (la lista aún no trae precios) → reconcile/convergencia
+    mueren de hambre, y el único momento donde el costo es real es el seam T2 del chunk
+    worker — que MEDÍA `excedido` y no actuaba (plan vivo 73db1e79: RD$21,673 vs RD$15,324,
+    ratio 1.414, banner rojo y cero sustituciones; el anterior a33807a0 salió `dentro` por
+    menú, no por acción). Secuencia idéntica al bloque de assemble (driver-aware → cheapen
+    force → protein-repeat refix → truth-up → motor all-4 → panel micros → finalize chain);
+    el REBUILD de listas + re-costeo + re-reconcile quedan en el CALLER (cada seam tiene sus
+    snapshots). Retorna nº de sustituciones (0 = nada que re-costear). Fail-open TOTAL.
+    tooltip-anchor: P1-BUDGET-T2-CONVERGENCE"""
+    try:
+        days = (plan_data or {}).get("days") or []
+        if not days:
+            return 0
+        subs = 0
+        if BUDGET_DRIVER_AWARE_ENABLED:
+            subs = _apply_budget_driver_aware_pass(
+                days, form_data or {},
+                plan_data.get("aggregated_shopping_list_weekly") or [],
+            )
+        subs += _apply_budget_cheapen_pass(days, form_data or {}, force=True)
+        if not subs:
+            return 0
+        plan_data["_budget_adjusted"] = True
+        try:
+            _pr_n = _protein_repeat_autofix(days, form_data or {})
+            if _pr_n:
+                logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] post-budget (T2): {_pr_n} comida(s) "
+                            f"re-diversificada(s).")
+        except Exception:
+            pass
+        try:
+            from nutrition_db import IngredientNutritionDB as _BCDB2
+            _db2 = _BCDB2()
+            for _d2 in days:
+                for _m2 in (_d2.get("meals") or []) if isinstance(_d2, dict) else []:
+                    if isinstance(_m2, dict) and _m2.get("_budget_substitutions"):
+                        _truth_up_meal_macros_from_strings(_m2, _db2)
+            apply_update_macro_engine(plan_data, surface="budget_convergence_t2", db=_db2)
+            if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
+                recompute_micronutrient_report_for_plan(plan_data, form_data or {}, db=_db2)
+        except Exception as _tu2_e:
+            logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] truth-up/re-banda no-op: {_tu2_e}")
+        try:
+            from db import apply_plan_quality_finalize_chain as _apqfc_t2
+            _apqfc_t2(plan_data, surface="t2-budget-convergence")
+        except Exception as _apq_t2_e:
+            logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] finalize chain no-op: {_apq_t2_e}")
+        logger.info(f"💰 [P1-BUDGET-T2-CONVERGENCE] {subs} sustitución(es) económica(s) aplicadas "
+                    f"— el caller re-construye listas y re-reconcilia.")
+        return subs
+    except Exception as _abc_e:
+        logger.warning(f"[P1-BUDGET-T2-CONVERGENCE] pase no-op: {type(_abc_e).__name__}: {_abc_e}")
+        return 0
+
+
 # [P1-BUDGET-DRIVER-AWARE · 2026-07-04] Familias culinarias para la sustitución driver-aware.
 # Cada regla: (regex del driver caro, tuple de candidatos económicos EN ORDEN DE PREFERENCIA
 # culinaria, excludes accent-stripped). Doctrina intacta de P1-BUDGET-TIER-LEVERS: misma
@@ -28217,11 +28291,16 @@ _SINGULAR_UNIT_MAP = {
     "cucharadas": "cucharada", "cucharaditas": "cucharadita", "latas": "lata",
     "unidades": "unidad", "paquetes": "paquete", "botellas": "botella",
     "rebanadas": "rebanada", "fundas": "funda", "potes": "pote", "tarros": "tarro",
+    # [P1-MENU-COHERENCE-1 · 2026-07-29] "1 pedazos de yautía (≈250 g)" vivo (73db1e79).
+    "pedazos": "pedazo", "lonjas": "lonja", "ramitas": "ramita",
 }
 _SINGULAR_ONE_RE = _re.compile(
-    r"^(\s*1)\s+(tazas|cdas|cditas|cdtas|cucharadas|cucharaditas|latas|unidades|paquetes|botellas|rebanadas|fundas|potes|tarros)\b",
+    r"^(\s*1)\s+(tazas|cdas|cditas|cdtas|cucharadas|cucharaditas|latas|unidades|paquetes|botellas|rebanadas|fundas|potes|tarros|pedazos|lonjas|ramitas)\b",
     _re.IGNORECASE,
 )
+# [P1-MENU-COHERENCE-1 · 2026-07-29] El pan va en REBANADAS, no en "lonjas" (unidad de
+# queso/embutido) — "2 lonjas de pan integral" vivo en el desayuno de 73db1e79.
+_LONJA_PAN_RE = _re.compile(r"\blonja(s?)\s+de\s+pan\b", _re.IGNORECASE)
 # [P1-RECIPE-AUDIT-6 · 2026-07-12] Inverso del singular: cantidad >1 con unidad SINGULAR
 # ("3½ pote de yogurt" en la renovación viva 69f9e03d) → pluraliza la unidad.
 _PLURAL_UNIT_MAP = {v: k for k, v in _SINGULAR_UNIT_MAP.items()}
@@ -28549,8 +28628,13 @@ _CEVICHE_MARINADE_HINT_RX = _re_cv.compile(r"marinad|c[ií]tric|lim[oó]n", _re_
 
 _BIGFRUIT_UNIT_G = {"lechosa": 700, "papaya": 700, "melon": 1800, "sandia": 4000,
                     "patilla": 4000, "pina": 1500}
+# [P1-MENU-COHERENCE-1 · 2026-07-29] lead fraccionario incluido + IGNORECASE: "½ Piña
+# mediana (100g)" (plan vivo 73db1e79) escapaba DOS veces — la P mayúscula y el lead ½.
+# ½ piña real son ~750 g; con 100 g ni ¼ es honesto → esos casos van a lead de GRAMOS.
 _BIGFRUIT_COUNT_LEAD_RX = _re_cv.compile(
-    r"^(\s*)1\s+(lechosa|papaya|mel[oó]n|sand[ií]a|patilla|pi[ñn]a)(\s+median[oa]|\s+grande|\s+peque[ñn][oa])?\b")
+    r"^(\s*)(1|[½¼¾⅓⅔])\s+(lechosa|papaya|mel[oó]n|sand[ií]a|patilla|pi[ñn]a)"
+    r"(\s+median[oa]|\s+grande|\s+peque[ñn][oa])?\b", _re_cv.IGNORECASE)
+_BIGFRUIT_LEAD_VALS = {"1": 1.0, "½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1/3, "⅔": 2/3}
 _BIGFRUIT_HINT_RX = _re_cv.compile(r"\(\s*(\d+(?:[.,]\d+)?)\s*g\s*\)")
 
 
@@ -28565,8 +28649,11 @@ _ESCURRE_AVE_RX = _re_cv.compile(
     r"(?:\s+ligeramente)?(?:\s+con un tenedor)?", _re_cv.IGNORECASE)
 
 
+# [P1-MENU-COHERENCE-1 · 2026-07-29] lead con fracción unicode PEGADA incluido: "1½ cilantro
+# fresco para decorar" (plan vivo 73db1e79, cena jueves) evadía el `\d+` — misma clase que
+# P1-CITRUS-UNICODE-FRAC.
 _HERB_BARE_COUNT_RX = _re_cv.compile(
-    r"^(\s*)(\d+)\s+(perejil|cilantro|albahaca|tomillo|romero)\b(?!\s*(?:ramitas?|tallos?|hojas?|cdas?|cdtas?|g\b))",
+    r"^(\s*)(\d+[¼½¾⅓⅔]?|[¼½¾⅓⅔])\s+(perejil|cilantro|albahaca|tomillo|romero)\b(?!\s*(?:ramitas?|tallos?|hojas?|cdas?|cdtas?|g\b))",
     _re_cv.IGNORECASE)
 _GUISADAS_MASC_RX = _re_cv.compile(
     r"\b((?:filete de )?pescado(?:\s+blanco)?|filete|pollo|pavo)\s+guisadas\b", _re_cv.IGNORECASE)
@@ -28636,7 +28723,18 @@ def _herb_count_and_gender_polish(days) -> int:
                     for idx, s in enumerate(ings):
                         if not isinstance(s, str):
                             continue
-                        nuevo = _HERB_BARE_COUNT_RX.sub(r"\g<1>\g<2> ramitas de \g<3>", s, count=1)
+                        def _herb_sub(m):
+                            _lead_h = m.group(2)
+                            try:
+                                _v_h = float(_lead_h.replace("½", ".5").replace("¼", ".25")
+                                             .replace("¾", ".75").replace("⅓", ".33").replace("⅔", ".67")
+                                             if _lead_h[0].isdigit() else
+                                             {"½": "0.5", "¼": "0.25", "¾": "0.75", "⅓": "0.33", "⅔": "0.67"}[_lead_h])
+                            except Exception:
+                                _v_h = 2.0
+                            _u_h = "ramita" if _v_h <= 1.0 else "ramitas"
+                            return f"{m.group(1)}{_lead_h} {_u_h} de {m.group(3)}"
+                        nuevo = _HERB_BARE_COUNT_RX.sub(_herb_sub, s, count=1)
                         nuevo = _GUISADAS_MASC_RX.sub(lambda m: f"{m.group(1)} guisado", nuevo)
                         if nuevo != s:
                             ings[idx] = nuevo
@@ -28779,13 +28877,34 @@ def _bigfruit_count_fraction_honesty(days) -> int:
                     if not mh:
                         continue
                     hint_g = float(mh.group(1).replace(",", "."))
-                    unit_g = _BIGFRUIT_UNIT_G.get(_sa_bf(m.group(2).lower()))
-                    if not unit_g or hint_g <= 0 or (hint_g / unit_g) >= 0.60:
+                    unit_g = _BIGFRUIT_UNIT_G.get(_sa_bf(m.group(3).lower()))
+                    if not unit_g or hint_g <= 0:
                         continue
                     ratio = hint_g / unit_g
+                    _lead_v = _BIGFRUIT_LEAD_VALS.get(m.group(2), 1.0)
+                    # contrato original para "1 <fruta>": ≥60% del peso por-unidad = honesto.
+                    if m.group(2) == "1" and ratio >= 0.60:
+                        continue
+                    # lead fraccionario ya honesto (±12% de lo que los gramos implican) → intacto
+                    if m.group(2) != "1" and abs(_lead_v - ratio) <= 0.12:
+                        continue
+                    if ratio < 0.20:
+                        # [P1-MENU-COHERENCE-1] ni la fracción de cocina más chica es honesta
+                        # ("½ Piña (100g)" real ≈ 6.7% de la fruta) → lead de GRAMOS y fuera
+                        # el hint redundante.
+                        _tail = _BIGFRUIT_COUNT_LEAD_RX.sub("", s, count=1)
+                        _tail = _BIGFRUIT_HINT_RX.sub("", _tail, count=1).strip(" ,")
+                        _new_bf = f"{m.group(1)}{int(round(hint_g))} g de {_sa_bf(m.group(3).lower())}"
+                        if _tail:
+                            _new_bf += f" {_tail}"
+                        ings[idx] = _new_bf.rstrip()
+                        fixed += 1
+                        continue
                     frac = min(_fracs, key=lambda fv: abs(fv[0] - ratio))[1]
+                    if frac == m.group(2):
+                        continue
                     ings[idx] = _BIGFRUIT_COUNT_LEAD_RX.sub(
-                        rf"\g<1>{frac} de \g<2>\g<3>", s, count=1)
+                        rf"\g<1>{frac} de \g<3>\g<4>", s, count=1)
                     fixed += 1
             except Exception:
                 continue
@@ -29206,6 +29325,8 @@ def _polish_finalize_display(days) -> int:
             out = _SINGULAR_ONE_RE.sub(
                 lambda m: f"{m.group(1)} {_SINGULAR_UNIT_MAP.get(m.group(2).lower(), m.group(2))}", out
             )
+            # [P1-MENU-COHERENCE-1] "lonja(s) de pan" → "rebanada(s) de pan" (misma pluralidad).
+            out = _LONJA_PAN_RE.sub(r"rebanada\1 de pan", out)
 
             # [P1-RECIPE-AUDIT-6 · 2026-07-12] inverso: "3½ pote" → "3½ potes" (qty > 1 + unidad singular).
             def _pluralize_many(m):
@@ -40565,6 +40686,12 @@ def ensure_protein_step_parity(plan_data: dict, db=None) -> int:
                         _info = None
                     if not _info:
                         continue
+                    # [P1-MENU-COHERENCE-1 · 2026-07-29] "Sal al gusto" resolvía macros TODO-cero
+                    # → 0>=0 la hacía "proteína dominante" y el sweep le fabricó "Añade Sal al
+                    # guiso… Incorpóralo con cuidado" ×3 (plan vivo 73db1e79, revoltillo jueves).
+                    # Una proteína FÍSICA trae gramos de proteína; sin ≥3 g no hay paso que deber.
+                    if float(_info.get("protein") or 0) < 3.0:
+                        continue
                     _nm = _info.get("name") or _line
                     # [P0-2-PROTEIN-STEP-PARITY] guard extra: `_append_closer_protein_step`'s propio dedup
                     # (b) excluye líneas 💪 del blob de "ya mencionado" (existe para detectar si la receta
@@ -40575,6 +40702,12 @@ def ensure_protein_step_parity(plan_data: dict, db=None) -> int:
                     _toks = [t for t in _re.split(r"[^a-z]+", _sa_psp(str(_nm).lower())) if len(t) >= 4]
                     _blob = _sa_psp(" ".join(
                         str(s) for s in (_m.get("recipe") or []) if isinstance(s, str)).lower())
+                    # [P1-MENU-COHERENCE-1 · 2026-07-29] nombre CORTO sin tokens ≥4 chars ("Sal",
+                    # "Res") → el dedup por token jamás se activaba y cada re-corrida del chain
+                    # añadía OTRA copia del paso (el triple "Añade Sal al guiso" vivo: 2 fusionadas
+                    # al TdF por STEP-INTEGRATE + 1 suelta). Fallback: el nombre completo manda.
+                    if not _toks:
+                        _toks = [t for t in _re.split(r"[^a-z]+", _sa_psp(str(_nm).lower())) if t]
                     if _toks and any(_re.search(r"\b" + _re.escape(t) + r"(?:s|es)?\b", _blob) for t in _toks):
                         continue
                     if _append_closer_protein_step(_m, _nm, no_cook=False):

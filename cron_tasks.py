@@ -31362,6 +31362,50 @@ def process_plan_chunk_queue(target_plan_id=None):
                         if _sum_t2:
                             full_plan_data["shopping_cost_summary"] = _sum_t2
                             _rbr_t2(full_plan_data)
+                            # [P1-BUDGET-T2-CONVERGENCE · 2026-07-29] En deep-search el costeo de
+                            # assemble sale VACÍO (lista sin precios) → la convergencia de assemble
+                            # jamás corre y ESTE era el único punto que MEDÍA `excedido` sin actuar
+                            # (plan vivo 73db1e79: ratio 1.414, banner rojo, cero sustituciones).
+                            # Una pasada acotada (jamás loop): sustituir → rebuild con los MISMOS
+                            # snapshots → re-costear → re-reconciliar honesto. Fail-open TOTAL.
+                            try:
+                                _bc_rec_t2 = full_plan_data.get("budget_reconciliation") or {}
+                                if str(_bc_rec_t2.get("status") or "") == "excedido":
+                                    from graph_orchestrator import apply_budget_convergence_for_days as _abc_t2
+                                    if _abc_t2(full_plan_data, form_data):
+                                        aggr_7 = get_shopping_list_delta(
+                                            user_id, full_plan_data, is_new_plan=True, structured=True,
+                                            multiplier=1.0 * household,
+                                            inventory_override=_inv_s, consumed_override=_cons_s,
+                                        )
+                                        aggr_15 = get_shopping_list_delta(
+                                            user_id, full_plan_data, is_new_plan=True, structured=True,
+                                            multiplier=2.0 * household,
+                                            inventory_override=_inv_s, consumed_override=_cons_s,
+                                        )
+                                        aggr_30 = get_shopping_list_delta(
+                                            user_id, full_plan_data, is_new_plan=True, structured=True,
+                                            multiplier=4.0 * household,
+                                            inventory_override=_inv_s, consumed_override=_cons_s,
+                                        )
+                                        from shopping_calculator import _build_hybrid_shopping_list as _bh_t2b
+                                        aggr_15_hybrid = _bh_t2b(aggr_7, aggr_15, restocked_at_iso=_restocked_at,
+                                                                 restocked_items=_restocked_items) if aggr_15 else aggr_15
+                                        aggr_30_hybrid = _bh_t2b(aggr_7, aggr_30, restocked_at_iso=_restocked_at,
+                                                                 restocked_items=_restocked_items) if aggr_30 else aggr_30
+                                        full_plan_data['aggregated_shopping_list_weekly'] = aggr_7
+                                        full_plan_data['aggregated_shopping_list_biweekly'] = aggr_15_hybrid
+                                        full_plan_data['aggregated_shopping_list_monthly'] = aggr_30_hybrid
+                                        full_plan_data['aggregated_shopping_list'] = (
+                                            aggr_15_hybrid if grocery_duration == "biweekly"
+                                            else aggr_30_hybrid if grocery_duration == "monthly" else aggr_7)
+                                        _sum_t2b = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration)
+                                        if _sum_t2b:
+                                            full_plan_data["shopping_cost_summary"] = _sum_t2b
+                                            _rbr_t2(full_plan_data)
+                            except Exception as _bc_t2_e:
+                                logger.warning(f"[P1-BUDGET-T2-CONVERGENCE] no-op (estado 1ª pasada intacto): "
+                                               f"{type(_bc_t2_e).__name__}: {_bc_t2_e}")
                     except Exception as _sum_t2_e:
                         logger.debug(f"[P2-AUDIT-V5-BATCH] (T2) cost summary no-op: {_sum_t2_e}")
 
