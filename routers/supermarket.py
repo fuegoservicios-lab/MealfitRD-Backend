@@ -368,7 +368,21 @@ async def api_get_brand_preferences(
     user_id: Optional[str] = Depends(get_verified_user_id),
     _rl: Any = Depends(_PREFS_LIMITER),
 ):
-    """Preferencias de marca del usuario autenticado, con el producto hidratado."""
+    """Preferencias de marca del usuario autenticado, con el producto hidratado.
+
+    [P1-SUPERMARKET-PREFS-DISCONTINUED · 2026-07-29] (fix round, finding 2) Antes
+    devolvía la fila aunque `sp.active = false` (el producto elegido fue dado de
+    baja por la admin UI) y dejaba que el CALLER decidiera filtrar por `active` —
+    `SupermarketBrands.jsx` no lo hacía, así que un pin muerto revertía en silencio
+    al default/más-barato en /match y en `fetch_brand_pref_packages` (costeo), sin
+    avisar al usuario, y la fila quedaba huérfana para siempre (sin cron que limpie
+    filas fuera del filtro `user_id = %s` de I2). Ahora: `preferences` SOLO trae
+    filas activas (mismo contrato de forma para el caller — nada se rompe si no
+    había inactivas); las inactivas se reportan aparte en `discontinued` (para que
+    el frontend avise) Y se auto-borran aquí mismo (self-healing — este GET es el
+    único lugar donde el usuario y su lista de pins muertos coinciden). Best-effort:
+    si el DELETE falla, la fila sigue apareciendo en `discontinued` en la próxima
+    carga — no bloquea."""
     # get_verified_user_id retorna None para anónimos (contrato P0-AUDIT-1) —
     # el caller DEBE rechazar. Sin este guard, el GET respondía 200 vacío y el
     # cliente creería que el guest tiene persistencia server-side.
@@ -390,7 +404,39 @@ async def api_get_brand_preferences(
             (user_id,),
             fetch_all=True,
         ) or []
-        return {"preferences": {r["food_key"]: r for r in rows}}
+        active_rows = [r for r in rows if r.get("active")]
+        stale_rows = [r for r in rows if not r.get("active")]
+        if stale_rows:
+            stale_keys = [r["food_key"] for r in stale_rows]
+            try:
+                execute_sql_write(
+                    "DELETE FROM public.user_brand_preferences "
+                    "WHERE user_id = %s AND food_key = ANY(%s)",
+                    (user_id, stale_keys),
+                )
+                logger.info(
+                    f"🧹 [P1-SUPERMARKET-PREFS-DISCONTINUED] {len(stale_keys)} preferencia(s) "
+                    f"con producto discontinuado limpiadas para user={user_id}: {stale_keys}"
+                )
+            except Exception as exc_del:
+                # Best-effort: no bloquea la respuesta — la fila muerta se reintenta
+                # en la próxima carga (sigue excluida de `preferences` igual).
+                logger.warning(
+                    f"⚠️ [P1-SUPERMARKET-PREFS-DISCONTINUED] no se pudo limpiar "
+                    f"{len(stale_keys)} preferencia(s) obsoleta(s): {exc_del}"
+                )
+        return {
+            "preferences": {r["food_key"]: r for r in active_rows},
+            "discontinued": [
+                {
+                    "food_key": r["food_key"],
+                    "food_name": r.get("food_name"),
+                    "brand": r.get("brand"),
+                    "presentation": r.get("presentation"),
+                }
+                for r in stale_rows
+            ],
+        }
 
     try:
         return await asyncio.to_thread(_fetch)

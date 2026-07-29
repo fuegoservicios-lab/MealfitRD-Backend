@@ -28387,13 +28387,70 @@ def _budget_candidate_collides_same_day(day: dict, meal: dict, candidate: str) -
         return False
 
 
+# [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] (fix round, finding 1) La convergencia de
+# presupuesto rankeaba/sustituía ítems SIN mirar si el usuario fijó una marca para ese
+# alimento vía 'Marcas del súper' (`user_brand_preferences`). Dos fallos distintos que esto
+# cierra: (a) un alimento SIN familia de sustitución (ej. aceite — excluido a propósito de
+# TODAS las familias, `_BUDGET_CHEAP_EQUIVALENTS`/`_BUDGET_DRIVER_FAMILIES`) que además está
+# pineado no puede tocarse — correcto — pero su costo seguía empujando la ranking de drivers
+# y el pase gastaba sus sustituciones en OTRA comida que el usuario nunca eligió cambiar,
+# sin ningún aviso de que la causa era una elección de marca en otro panel; (b) un alimento
+# CON familia (salmón, queso, almendras...) que el usuario SÍ pineó se sustituía igual,
+# pisando en silencio una decisión explícita — peor que (a). Ambos se cierran igual: un
+# alimento con marca fijada nunca es driver candidato NI candidato a ser reescrito por
+# regex, en ninguno de los dos pases. Fail-open total: sin `user_id` o sin filas en
+# `user_brand_preferences`, `pinned_keys` sale vacío y el comportamiento es idéntico al
+# de antes. Tooltip-anchor: P1-BUDGET-RESPECT-BRAND-PIN. Test: test_p1_budget_respect_brand_pin.py.
+def _budget_pinned_food_keys(form_data) -> set:
+    """{food_key normalizado} de los alimentos con marca fijada por el usuario
+    (misma tabla/normalización que `fetch_brand_pref_packages` — SSOT de
+    'Marcas del súper'). Fail-open: set() ante cualquier duda (usuario invitado,
+    sin filas, error de DB) — el comportamiento previo (sustituir sin mirar pins)
+    se conserva cuando no hay nada que proteger."""
+    try:
+        uid = (form_data or {}).get("user_id")
+        if not uid or uid == "guest":
+            return set()
+        from shopping_calculator import fetch_brand_pref_packages
+        prefs = fetch_brand_pref_packages(uid) or {}
+        return set(prefs.keys())
+    except Exception:
+        return set()
+
+
+def _budget_food_is_brand_pinned(food_text: str, pinned_keys: set) -> bool:
+    """True si `food_text` (nombre de driver o substring de ingrediente) corresponde
+    a un alimento con marca fijada. Misma normalización + escalera de contención
+    word-boundary que `_resolve_brand_pref` (shopping_calculator) para que las claves
+    calcen exactamente contra `fetch_brand_pref_packages` — 'sal' NO matchea 'salsa'.
+    Fail-open: False (en duda, comportamiento previo = sustituir)."""
+    if not pinned_keys or not food_text:
+        return False
+    try:
+        from shopping_calculator import _norm_pref_food as _npf
+        key = _npf(food_text)
+        if not key or len(key) < 3:
+            return False
+        if key in pinned_keys:
+            return True
+        padded = f" {key} "
+        return any(
+            len(pk) >= 3 and (f" {pk} " in padded or f" {key} " in f" {pk} ")
+            for pk in pinned_keys
+        )
+    except Exception:
+        return False
+
+
 def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
     """Sustituye hasta BUDGET_CHEAPEN_MAX_SUBS ingredientes premium por su
     equivalente económico cuando el presupuesto pide economía. Retorna nº de
     sustituciones. Fail-open total (0 y plan intacto ante cualquier duda).
     [P1-BUDGET-CONVERGENCE · 2026-07-03] `force=True` (pasada post-costeo) salta el
     gate de economía: el caller YA sabe que el plan excede su referencia (cualquier
-    tier) — los guards de alergia/dislike/≥30%-más-barato/max-subs siguen intactos."""
+    tier) — los guards de alergia/dislike/≥30%-más-barato/max-subs siguen intactos.
+    [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] tampoco toca un alimento con marca
+    fijada por el usuario (ver helpers arriba)."""
     if not BUDGET_CHEAPEN_PASS_ENABLED or BUDGET_CHEAPEN_MAX_SUBS <= 0 or not days:
         return 0
     if not force:
@@ -28408,6 +28465,7 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
         master_map = _budget_build_master_price_map()
         allergies = (form_data or {}).get("allergies")
         dislikes = {_sa(str(d).strip().lower()) for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()}
+        pinned_keys = _budget_pinned_food_keys(form_data)
         subs = 0
         for _d in days:
             if subs >= BUDGET_CHEAPEN_MAX_SUBS:
@@ -28431,6 +28489,11 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
                             continue
                         m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
                         if not m:
+                            continue
+                        # [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] el usuario fijó marca
+                        # para ESTE alimento en 'Marcas del súper' — no pisar esa elección
+                        # explícita con la sustitución económica genérica.
+                        if _budget_food_is_brand_pinned(m.group(0), pinned_keys):
                             continue
                         cand_low = _sa(candidate.lower())
                         # El candidato debe: existir con precio en catálogo, ser realmente
@@ -28613,6 +28676,10 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
     `_apply_budget_cheapen_pass`: alergias (`_scan_allergen_violations`), dislikes,
     ahorro mínimo, marcado honesto (`_budget_substitutions`), rewrite de nombre y de
     pasos de receta. Fail-open TOTAL (0 y plan intacto ante cualquier duda).
+    [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] los ítems con marca fijada por el usuario
+    ('Marcas del súper') se excluyen del pool de drivers — su costo, aunque real, es una
+    elección explícita del usuario en otro panel: no debe empujar la ranking que decide
+    QUÉ OTRA comida (no elegida por el usuario) se sustituye para compensarlo.
     tooltip-anchor: P1-BUDGET-DRIVER-AWARE"""
     if not BUDGET_DRIVER_AWARE_ENABLED or BUDGET_DRIVER_AWARE_MAX_SUBS <= 0:
         return 0
@@ -28625,11 +28692,18 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
             return 0
         allergies = (form_data or {}).get("allergies")
         dislikes = {_sa(str(d).strip().lower()) for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()}
+        pinned_keys = _budget_pinned_food_keys(form_data)
 
-        # 1. Drivers: ítems con precio, de mayor a menor costo.
+        # 1. Drivers: ítems con precio, de mayor a menor costo. Los ítems con marca
+        # fijada se excluyen ANTES de tomar el top-N — no son sustituibles y no deben
+        # dictar qué OTRA comida (no elegida por el usuario) paga esa elección
+        # (P1-BUDGET-RESPECT-BRAND-PIN); excluirlos antes del corte deja que un
+        # driver real #9 entre al ranking en su lugar, en vez de simplemente
+        # encogerlo.
         priced = [
             it for it in weekly_list
             if isinstance(it, dict) and str(it.get("name") or "").strip()
+            and not _budget_food_is_brand_pinned(str(it.get("name") or ""), pinned_keys)
         ]
         priced.sort(key=lambda x: float(x.get("estimated_cost_rd") or 0) or 0.0, reverse=True)
         drivers = [
@@ -28701,6 +28775,12 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
                             continue
                         m = _re.search(rf"\b(?:{rx})\b", ing, _re.IGNORECASE)
                         if not m:
+                            continue
+                        # [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] la familia matcheó por
+                        # categoría (ej. "mariscos") y esta OCURRENCIA puntual resulta ser el
+                        # alimento con marca fijada — no pisar la elección del usuario aunque
+                        # el driver que abrió esta familia haya sido otro ítem no-pineado.
+                        if _budget_food_is_brand_pinned(m.group(0), pinned_keys):
                             continue
                         # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] mismo guard del pase estático: la
                         # familia mariscos→pescado colapsa labels distintos en uno y puede crear
