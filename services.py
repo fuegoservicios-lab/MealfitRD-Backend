@@ -371,7 +371,32 @@ def _track_ingredient_frequencies(user_id: str, raw_ingredients: list) -> None:
     nuevo — el motor anti-mode-collapse estaba apagado por falta de datos, no por diseño.
 
     Best-effort SIEMPRE: el plan YA se persistió cuando esto corre; un fallo aquí no puede propagar.
+
+    ⚠️ [P3-FREQ-TRACKING-CATALOG-DB · 2026-07-29] `_catalog_db` se instancia AQUÍ, no se hereda. Al
+    extraer este bloque de `_save_plan_and_track_background` me dejé fuera esa dependencia (vivía en
+    la función original, fuera del trozo movido) → `NameError: name '_catalog_db' is not defined` en
+    CADA llamada, tragado por el `except` de abajo y convertido en un ERROR de log. Resultado: el
+    tracking quedó ROTO PARA TODOS durante ~4 h, peor que el bug que este helper venía a arreglar.
+    Lo cazó el log de producción (`⚠️ [BACKGROUND ERROR] Error en freq-tracking`), no la suite: los
+    tests del helper no cubrían la rama del filtro de unknowns.
     tooltip-anchor: P2-FREQ-TRACKING-CHUNKED"""
+    # Instancia propia del resolver del catálogo (lazy, cacheada por el propio módulo): la usa el
+    # filtro de unknowns de más abajo para distinguir "gap del catálogo" de "gap del mapa de variedad".
+    _catalog_db = None
+    try:
+        from nutrition_db import IngredientNutritionDB as _NDB_freq
+        _catalog_db = _NDB_freq()
+    except Exception as _cat_e:
+        logger.warning(f"[P1-UNKNOWN-CATALOG-FILTER] catálogo no disponible en freq-tracking: "
+                       f"{type(_cat_e).__name__}: {_cat_e}")
+    # `_eb` era la SEGUNDA dependencia huérfana de la misma línea (se importaba más abajo, también
+    # fuera del trozo extraído): con `_catalog_db` arreglado habría reventado igual, un NameError
+    # detrás de otro. Un chequeo AST de nombres libres las encontró a las dos de una vez.
+    try:
+        from knobs import _env_bool as _eb
+    except Exception:
+        def _eb(_k, _d=False):
+            return _d
 
     # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad).
     # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] Best-effort en su PROPIO try: el plan YA se persistió; un
