@@ -14783,6 +14783,42 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                 else:
                     _new_rec.append(_s)
             rec[:] = _new_rec
+        # [P1-MENU-COHERENCE-2 · 2026-07-29] El swap cambiaba la COMPOSICIÓN pero nombre y
+        # pasos seguían vendiendo claras ("Mide… las claras pasteurizadas", "Licúa… las
+        # claras") sin una clara en los ingredientes — y el nombre huérfano ("…y Claras de
+        # Huevo") quedaba a merced del namefix, que con cualquier falso "real" fabrica
+        # disparates ("Claras de RES", plan vivo c8fa78c5). Sincronía total: pasos y nombre
+        # pasan a decir yogur griego. Corre ANTES de que el caller anexe la nota ⚠ (que
+        # menciona huevo a propósito y no debe reescribirse).
+        try:
+            _egg_step_subs = (
+                (_re.compile(r"\blas claras(?:\s+pasteurizadas?)?\b", _re.IGNORECASE), "el yogur griego"),
+                (_re.compile(r"\bla clara(?:\s+pasteurizada)?\b", _re.IGNORECASE), "el yogur griego"),
+                (_re.compile(r"\bclaras?(?:\s+de\s+huevo)?\b", _re.IGNORECASE), "yogur griego"),
+                (_re.compile(r"\b(?:el|los)\s+huevos?(?:\s+crudos?|\s+pasteurizados?)?\b", _re.IGNORECASE), "el yogur griego"),
+                (_re.compile(r"\bhuevos?(?:\s+crudos?|\s+pasteurizados?)?\b", _re.IGNORECASE), "yogur griego"),
+            )
+            if isinstance(rec, list):
+                for _i_es, _s_es in enumerate(rec):
+                    if isinstance(_s_es, str) and not _is_recipe_safety_note_step(_s_es):
+                        _t_es = _s_es
+                        for _rx_es, _rep_es in _egg_step_subs:
+                            _t_es = _rx_es.sub(_rep_es, _t_es)
+                        rec[_i_es] = _t_es
+            _nm_es = str(meal.get("name") or "")
+            if _nm_es:
+                if _re.search(r"\byogu?r", _nm_es, _re.IGNORECASE):
+                    _nm_new = _re.sub(r"\s+(?:y|con)\s+claras?(?:\s+de\s+huevo)?\b", "", _nm_es, flags=_re.IGNORECASE)
+                else:
+                    _nm_new = _re.sub(r"\bclaras?\s+de\s+huevo\b|\bclaras?\b|\bhuevos?\b",
+                                      "Yogurt Griego", _nm_es, count=1, flags=_re.IGNORECASE)
+                _nm_new = _re.sub(r"\s+", " ", _nm_new).strip(" ,y")
+                if _nm_new and _nm_new != _nm_es:
+                    meal["name"] = _nm_new
+                    logger.info(f"🥚 [P1-MENU-COHERENCE-2] swap huevo→yogur sincronizó el nombre: "
+                                f"'{_nm_es[:44]}' → '{_nm_new[:44]}'")
+        except Exception:
+            pass
     if changed and db is not None and swaps:
         try:
             _d = {"protein": 0.0, "carbs": 0.0, "fats": 0.0, "kcal": 0.0}
@@ -16138,7 +16174,10 @@ PHANTOM_PROTEIN_DEGRADE_FLAG = _env_bool("MEALFIT_PHANTOM_PROTEIN_DEGRADE_FLAG",
 _PHANTOM_PROTEIN_SYNS = {
     "pollo": ["pollo", "pechuga", "muslo"],
     "cerdo": ["cerdo", "chuleta de cerdo", "lomo de cerdo", "longaniza"],
-    "res": ["res", "carne de res", "bistec", "molida"],
+    # [P1-MENU-COHERENCE-2 · 2026-07-29] "molida" SUELTA mordió: "linaza MOLIDA" en un batido
+    # hizo creer al namefix que había RES real y renombró el fantasma → "Claras de RES" (plan
+    # vivo c8fa78c5, 12ª mordida — esta vez de sinónimo). Solo frases inequívocas.
+    "res": ["res", "carne de res", "bistec", "carne molida", "res molida", "molida de res"],
     "pescado": ["pescado", "filete", "tilapia", "dorado", "mero", "bacalao", "salmon", "salmón",
                 "merluza", "chillo", "sardina", "corvina"],
     "pavo": ["pavo"],
@@ -16154,7 +16193,10 @@ _PHANTOM_PROTEIN_SYNS = {
     "cordero": ["cordero"],
     "conejo": ["conejo"],
     "jamon": ["jamon", "jamón", "jamoneta"],
-    "huevo": ["huevo", "huevos", "revoltillo de huevo"],
+    # [P1-MENU-COHERENCE-2 · 2026-07-29] frases de claras PRIMERO (regex alternation): si el
+    # líder es "Claras de Huevo" y solo se sustituye el sustantivo, nace "Claras de Res" —
+    # la FRASE entera es la unidad de reemplazo.
+    "huevo": ["claras de huevo", "clara de huevo", "claras", "huevo", "huevos", "revoltillo de huevo"],
     "queso": ["queso", "mozzarella", "cheddar", "ricotta", "cottage", "gouda", "parmesano",
               "requeson", "requesón"],
 }
@@ -16613,6 +16655,20 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             _pool = _pool_no_second_main
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
+        # [P1-MENU-COHERENCE-2 · 2026-07-29] Yogurt "al lado" de una ropa vieja/guiso criollo
+        # no es apetecible (queja explícita del owner, plan vivo c8fa78c5: ¾ taza de yogurt +
+        # "Sirve yogurt al lado" en Ropa Vieja de Queso de Freír con Tostones). En plato
+        # SALADO y COCINADO el lácteo dulce (yogur/cottage/ricotta/requesón) queda como
+        # ÚLTIMO recurso: con cualquier otro candidato disponible, se filtra. Piso clínico
+        # manda (pool quedaría vacío ⇒ se conserva) — misma asimetría que el sweet-guard.
+        if (_pool and not no_cook and CLOSER_DISH_COHERENCE_ENABLED
+                and not _is_sweet_meal(meal, _sa) and _meal_is_hot_cooked(meal, _sa)):
+            _pool_no_sd = [(info, nlow) for (info, nlow) in _pool
+                           if not any(t in nlow for t in _SWEET_DAIRY_TOKENS)]
+            if _pool_no_sd and len(_pool_no_sd) < len(_pool):
+                logger.info("🥣 [P1-MENU-COHERENCE-2] lácteo dulce filtrado del closer en plato "
+                            f"salado caliente | meal={str(meal.get('name'))[:40]}")
+                _pool = _pool_no_sd
         # [P1-CLOSER-DAY-AWARE-PROTEIN · 2026-07-10] El detector del gate same-day escanea nombre+
         # INGREDIENTES del estado FINAL → una proteína que el closer INTRODUCE aquí y que otra comida
         # del día ya usa se convierte en rechazo del reviewer (medido en vivo corr=2451c8ac: el _alt
@@ -22950,6 +23006,14 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             parts.append(f"garnish_backfill={_n_gb}")
     except Exception:
         pass
+    # [P1-MENU-COHERENCE-2 · 2026-07-29] harina cruda "de cumplimiento" (sin masa) fuera.
+    try:
+        _n_fl = _strip_raw_flour_compliance_bolt(days)
+        if _n_fl:
+            total += _n_fl
+            parts.append(f"raw_flour_bolt={_n_fl}")
+    except Exception:
+        pass
     # [P1-GROUND-MEAT-STEP-NOUN · 2026-07-28] pasos con "pechuga de X" cuando el ingrediente
     # es "X molido" → forma molida (display-only).
     try:
@@ -25892,7 +25956,37 @@ def _repair_name_phantom_dairy(days: list) -> list:
                     if tok_flat not in name_flat:
                         continue
                     if _re.search(r"\b" + _re.escape(tok_flat) + r"", blob):
-                        break        # ya está en el plato: nada que reparar
+                        # [P1-MENU-COHERENCE-2 · 2026-07-29] presente pero MÍNIMO: "Ropa Vieja
+                        # de QUESO de Freír" con 15 g de queso (plan vivo c8fa78c5) — el nombre
+                        # vende un plato de queso y el plato trae polvo. Mismo piso del knob
+                        # (30 g): la línea del lácteo nombrado se bumpea, no se inserta otra.
+                        try:
+                            for _i_pd, _s_pd in enumerate(ings):
+                                if not isinstance(_s_pd, str):
+                                    continue
+                                _sl_pd = _sa_np(_s_pd.lower())
+                                if tok_flat not in _sl_pd:
+                                    continue
+                                _mg_pd = _re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos)\b", _sl_pd)
+                                if not _mg_pd:
+                                    break
+                                _cur_pd = float(_mg_pd.group(1).replace(",", "."))
+                                if 0 < _cur_pd < float(NAME_PHANTOM_DAIRY_G):
+                                    _new_pd = _re.sub(r"^\s*\d+(?:[.,]\d+)?", str(NAME_PHANTOM_DAIRY_G),
+                                                      _s_pd, count=1)
+                                    ings[_i_pd] = _new_pd
+                                    if isinstance(raw, list) and _i_pd < len(raw) and isinstance(raw[_i_pd], str):
+                                        raw[_i_pd] = _re.sub(r"^\s*\d+(?:[.,]\d+)?",
+                                                             str(NAME_PHANTOM_DAIRY_G), raw[_i_pd], count=1)
+                                    out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                                                "food": tok, "line": _new_pd, "bumped_from_g": _cur_pd})
+                                    logger.info(f"🧀 [P1-MENU-COHERENCE-2] lácteo del NOMBRE bump "
+                                                f"{int(_cur_pd)}g→{NAME_PHANTOM_DAIRY_G}g | "
+                                                f"meal={str(meal.get('name'))[:40]}")
+                                break
+                        except Exception:
+                            pass
+                        break        # presente (ya honesto o recién bumpeado): no insertar otra línea
                     resolved = _phantom_resolve_food(tok if " " in tok else f"queso {tok}") \
                         or _phantom_resolve_food(tok)
                     if not resolved:
@@ -28662,6 +28756,76 @@ _GUISADAS_MASC_RX = _re_cv.compile(
 _GARNISH_MENTION_RX = _re.compile(
     r"\b(?:decora(?:r|do|da)?|espolvorea(?:r|do|da)?|adorna(?:r|do|da)?|corona(?:r|do|da)?)\b"
     r"[^.]*?\b(cilantro|perejil)\b")
+
+
+_RAW_FLOUR_LINE_RX = _re.compile(
+    r"^\s*(?:\d+(?:[.,]\d+)?[¼½¾⅓⅔]?|[¼½¾⅓⅔])\s*(?:g|gr|gramos|cdas?|cdtas?|tazas?)?\s*"
+    r"(?:de\s+)?harina\b", _re.IGNORECASE)
+_DOUGH_CONTEXT_TOKENS = ("masa", "amasa", "arepita", "arepa", "panqueque", "pancake",
+                         "costra", "empaniz", "reboz", "bollito", "bolita", "tortita",
+                         "mezcla la harina", "harina con", "pasa el", "cubre")
+
+
+def _strip_raw_flour_compliance_bolt(days) -> int:
+    """[P1-MENU-COHERENCE-2 · 2026-07-29] "20 g de harina de trigo" suelta en unas TOSTADAS
+    de pan + paso fabricado "Incorpora también harina de trigo durante la preparación"
+    (plan vivo c8fa78c5): el seeder asigna harina como base para que el day-gen la
+    TRANSFORME (panqueques/bollos/arepitas — pedido flagship del owner, P1-FLOURS-POOLS),
+    pero a veces el day-gen cumple listándola cruda sin masa. Harina cruda sin contexto de
+    masa no es comestible ni apetecible: se remueve la línea y su paso-bolt; el truth-up
+    re-mide macros. Los platos que SÍ amasan (arepitas del mismo plan) quedan intactos.
+    tooltip-anchor: P1-MENU-COHERENCE-2"""
+    touched = 0
+    try:
+        from constants import strip_accents as _sa_fl
+    except Exception:
+        return 0
+    for _d in days or []:
+        for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+            try:
+                if not isinstance(meal, dict):
+                    continue
+                ings = meal.get("ingredients")
+                rec = meal.get("recipe")
+                if not isinstance(ings, list) or not any(
+                        isinstance(s, str) and _RAW_FLOUR_LINE_RX.match(s) for s in ings):
+                    continue
+                _steps_fl = _sa_fl(" ".join(
+                    str(s) for s in (rec or []) if isinstance(s, str)
+                    and "harina" not in _sa_fl(str(s).lower())).lower())
+                _steps_fl_all = _sa_fl(" ".join(
+                    str(s) for s in (rec or []) if isinstance(s, str)).lower())
+                if any(t in _steps_fl_all for t in _DOUGH_CONTEXT_TOKENS):
+                    continue  # el plato SÍ trabaja la harina (masa/costra/empanizado)
+                _keep = []
+                _removed_fl = False
+                for s in ings:
+                    if isinstance(s, str) and _RAW_FLOUR_LINE_RX.match(s):
+                        _removed_fl = True
+                        continue
+                    _keep.append(s)
+                if not _removed_fl:
+                    continue
+                meal["ingredients"] = _keep
+                raw = meal.get("ingredients_raw")
+                if isinstance(raw, list):
+                    meal["ingredients_raw"] = [
+                        s for s in raw
+                        if not (isinstance(s, str) and _RAW_FLOUR_LINE_RX.match(s))]
+                if isinstance(rec, list):
+                    meal["recipe"] = [
+                        s for s in rec
+                        if not (isinstance(s, str)
+                                and "harina" in _sa_fl(str(s).lower())
+                                and ("incorpora tambien" in _sa_fl(str(s).lower())
+                                     or "durante la preparacion" in _sa_fl(str(s).lower())
+                                     or str(s).strip().startswith("💪")))]
+                touched += 1
+                logger.info(f"🌾 [P1-MENU-COHERENCE-2] harina cruda de cumplimiento removida "
+                            f"(sin contexto de masa) | meal={str(meal.get('name'))[:40]}")
+            except Exception:
+                continue
+    return touched
 
 
 def _garnish_herb_mention_backfill(days) -> int:
