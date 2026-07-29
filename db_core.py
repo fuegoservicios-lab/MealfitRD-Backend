@@ -219,6 +219,11 @@ if MEALFIT_DB_BACKEND == "neon":
             # pgBouncer Transaction Mode no soporta server-side prepared statements.
             # Deshabilitar auto-prepare para evitar errores "_pg3_N requires N params".
             conn.prepare_threshold = None
+            # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] Envuelve `conn.cursor` para que
+            # CUALQUIER escritura cruda (no solo la que pasa por `execute_sql_write`)
+            # quede sujeta a la guarda test-vs-prod. Ver comentario extenso arriba de
+            # `_install_write_guard_on_connection`.
+            _install_write_guard_on_connection(conn)
             # [P1-DB-STMT-TIMEOUT · 2026-05-27] Session-level statement_timeout +
             # idle_in_transaction_session_timeout. Best-effort: un fallo del SET
             # NO debe impedir checkout de la conexión.
@@ -234,6 +239,9 @@ if MEALFIT_DB_BACKEND == "neon":
         async def configure_async_conn(conn):
             await conn.set_autocommit(True)
             conn.prepare_threshold = None
+            # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] Variante async del wrapper sync
+            # de arriba — mismo razonamiento, ver `_install_write_guard_on_connection`.
+            _install_write_guard_on_async_connection(conn)
             # [P1-DB-STMT-TIMEOUT · 2026-05-27] idem async.
             _stmts = _session_timeout_statements()
             if _stmts:
@@ -255,6 +263,11 @@ if MEALFIT_DB_BACKEND == "neon":
             # aplicamos timeouts — el riesgo de exhaustion es despreciable.
             conn.autocommit = True
             conn.prepare_threshold = None
+            # [P0-TEST-DB-ISOLATION-2 · 2026-07-29] El checkpointer de LangGraph
+            # también persiste (`checkpoints`/`checkpoint_writes`) via SQL crudo del
+            # driver `PostgresSaver` — mismo riesgo si un test no-e2e llega a correr
+            # el grafo contra este pool real.
+            _install_write_guard_on_connection(conn)
 
         connection_pool = ConnectionPool(
             conninfo=clean_url,
@@ -551,6 +564,86 @@ def _guard_test_write_to_prod(query: Optional[str]) -> None:
         "  3. Escape hatch de emergencia, NO usar en CI: MEALFIT_ALLOW_TEST_WRITES_TO_PROD=1.\n"
         f"Query bloqueada: {_preview!r}"
     )
+
+
+# [P0-TEST-DB-ISOLATION-2 · 2026-07-29 · code review] El comentario original (arriba)
+# afirmaba que `execute_sql_write` es "el ÚNICO cuello de botella de escritura" —
+# FALSO. Censo del review: 27+ call sites (`update_plan_data_atomic` en db_plans.py —
+# el patrón PREFERIDO de la invariante I7, CLAUDE.md —, el endpoint `/name` de
+# rename en routers/plans.py, más cron_tasks.py/db_profiles.py/dreaming.py/
+# routers/notifications.py) escriben abriendo `connection_pool.connection()` CRUDO y
+# llamando `cursor.execute(...)` directo, sin pasar NUNCA por `execute_sql_write` — la
+# guarda de arriba nunca los ve. Un futuro fixture que reintroduzca el incidente
+# (`SELECT ... LIMIT 1` sin ORDER BY) y persista via CUALQUIERA de esos call sites
+# escribiría en Neon prod con CERO interferencia.
+#
+# Perseguir 27+ call sites uno por uno queda desactualizado con el próximo call site
+# nuevo. En su lugar, la guarda se instala UNA VEZ por CONEXIÓN FÍSICA dentro de
+# `configure_sync_conn`/`configure_async_conn` (los callbacks `configure=` de los
+# pools, más abajo): se envuelve `conn.cursor` para que CUALQUIER cursor que esa
+# conexión produzca intercepte `execute()` cuando la sentencia empiece por
+# INSERT/UPDATE/DELETE/TRUNCATE. psycopg_pool invoca `configure` solo al CREAR la
+# conexión (no en cada checkout) — el wrapper vive mientras la conexión viva, así que
+# cubre TODOS los checkouts futuros sin importar qué función la tome del pool. Esto
+# hace de `connection_pool`/`async_connection_pool` el cuello de botella real que el
+# comentario original afirmaba (incorrectamente) que ya era `execute_sql_write`.
+#
+# Tests que patchean `db_core.connection_pool` a nivel de módulo con un Mock (p.ej.
+# `test_p1_hist_5_rename_atomic.py`) NO pasan por `configure_sync_conn` — nunca crean
+# una conexión real, así que no ven esta guarda, pero tampoco tocan Neon real: sin gap.
+_WRITE_STATEMENT_RE = re.compile(r"^\s*(INSERT|UPDATE|DELETE|TRUNCATE)\b", re.IGNORECASE)
+
+
+def _install_write_guard_on_cursor(cursor):
+    """Envuelve `cursor.execute` (sync) para invocar `_guard_test_write_to_prod` en
+    sentencias de escritura. Los SELECT pasan intactos — la guarda original solo
+    protegía escrituras; bloquear lecturas de tests no-e2e rompería call sites
+    legítimos que leen contra el pool real (p.ej. mocks parciales)."""
+    _orig_execute = cursor.execute
+
+    def _guarded_execute(query, *args, **kwargs):
+        if isinstance(query, str) and _WRITE_STATEMENT_RE.match(query):
+            _guard_test_write_to_prod(query)
+        return _orig_execute(query, *args, **kwargs)
+
+    cursor.execute = _guarded_execute
+    return cursor
+
+
+def _install_write_guard_on_async_cursor(cursor):
+    """Variante async de `_install_write_guard_on_cursor` — `execute` es awaitable."""
+    _orig_execute = cursor.execute
+
+    async def _guarded_execute(query, *args, **kwargs):
+        if isinstance(query, str) and _WRITE_STATEMENT_RE.match(query):
+            _guard_test_write_to_prod(query)
+        return await _orig_execute(query, *args, **kwargs)
+
+    cursor.execute = _guarded_execute
+    return cursor
+
+
+def _install_write_guard_on_connection(conn) -> None:
+    """Parchea `conn.cursor` para que TODO cursor que la conexión produzca a lo largo
+    de su vida quede envuelto por `_install_write_guard_on_cursor`. Cablear desde
+    `configure_sync_conn` — corre UNA VEZ por conexión física (ver comentario arriba)."""
+    _orig_cursor = conn.cursor
+
+    def _guarded_cursor(*args, **kwargs):
+        return _install_write_guard_on_cursor(_orig_cursor(*args, **kwargs))
+
+    conn.cursor = _guarded_cursor
+
+
+def _install_write_guard_on_async_connection(conn) -> None:
+    """Variante async de `_install_write_guard_on_connection` — cablear desde
+    `configure_async_conn`."""
+    _orig_cursor = conn.cursor
+
+    def _guarded_cursor(*args, **kwargs):
+        return _install_write_guard_on_async_cursor(_orig_cursor(*args, **kwargs))
+
+    conn.cursor = _guarded_cursor
 
 
 def execute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False, lock_timeout_ms: Optional[int] = None) -> Union[List[Dict[str, Any]], bool]:
