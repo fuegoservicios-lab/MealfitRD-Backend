@@ -10602,6 +10602,12 @@ PROTEIN_REPEAT_AUTOFIX_MAX_PER_DAY = _env_int("MEALFIT_PROTEIN_REPEAT_AUTOFIX_MA
 # (corr=57a373e0: 2 intentos con banda 1.00 quemados). La última palabra la tiene el
 # corrector, no el reintroductor. Es el MISMO autofix idempotente (costo LLM cero).
 SAMEDAY_LATE_REFIX_ENABLED = _env_bool("MEALFIT_SAMEDAY_LATE_REFIX", True)
+# [P1-FRUIT-SAVORY-BURN-FIX · 2026-07-29] Gemelo del anterior para el OTRO gate de coherencia de
+# sabor. Mismo modo de fallo, misma cura: el corrector de pareo fruta-dulce+salado corre PRE-motor y
+# los pases tardíos (repair del piso de proteína, protein-closer, namefix de proteína fantasma)
+# pueden CREAR el pareo después. Medido en corr=5cbced82 (2026-07-29): intento #1 con banda 1.00 y
+# micros al 79% tirado entero → retry de ~3.4 min. La última palabra la tiene el corrector.
+FRUIT_SAVORY_LATE_REFIX_ENABLED = _env_bool("MEALFIT_FRUIT_SAVORY_LATE_REFIX", True)
 # [P1-MICRO-DEGRADED-STALE-CLEAR · 2026-07-12] clear-only del banner `micro_worst_day_ceiling`
 # cuando el reporte recomputado post-update dice days_above=0 (el usuario resolvió el día vía
 # swaps y el banner quedaba stale). Espejo de MEALFIT_BAND_DEGRADED_STALE_CLEAR.
@@ -33656,6 +33662,34 @@ async def assemble_plan_node(state: PlanState) -> dict:
             except Exception as _lr_e:
                 logger.warning(f"[P1-SAMEDAY-BURN-FIX] re-autofix post-chain no-op: "
                                f"{type(_lr_e).__name__}: {_lr_e}")
+
+        # [P1-FRUIT-SAVORY-BURN-FIX · 2026-07-29] Misma clase que P1-SAMEDAY-BURN-FIX de arriba,
+        # con el OTRO gate de coherencia de sabor. `_fruit_savory_autofix` corre PRE-motor (~33054),
+        # pero los pases TARDÍOS meten proteína en el plato y le reescriben el nombre
+        # (`_repair_protein_floor_post_caps`, el protein-closer, el namefix de proteína fantasma),
+        # así que un pareo fruta-dulce+salado puede NACER después de que el corrector ya pasó. El
+        # corrector no lo vuelve a ver y el reviewer lo convierte en rechazo HIGH.
+        #
+        # Medido en vivo (corr=5cbced82, 2026-07-29): el intento #1 llegó al reviewer con **banda
+        # 1.00** (12/12 celdas, 18:48:51), presupuesto dentro y micros al 79%, y se tiró ENTERO por
+        # 'PAREO CHOCANTE FRUTA+SALADO' → retry completo de 18:49:08 a 18:52:27 (~3.4 min +
+        # planificador + day-gen). El corrector determinista arregla ese plato en milisegundos y con
+        # coste LLM CERO.
+        #
+        # Re-pasada idempotente ANTES del reviewer, exactamente como su hermano de bloque.
+        # Rollback sin redeploy: MEALFIT_FRUIT_SAVORY_LATE_REFIX=false.
+        # tooltip-anchor: P1-FRUIT-SAVORY-BURN-FIX
+        if FRUIT_SAVORY_LATE_REFIX_ENABLED:
+            try:
+                _fs_late = _fruit_savory_autofix(result.get("days") or [], form_data)
+                if _fs_late:
+                    logger.info(f"🥑 [P1-FRUIT-SAVORY-BURN-FIX] re-autofix POST-chain reescribió "
+                                f"{_fs_late} pareo(s) fruta-dulce+salado nacido(s) DESPUÉS del "
+                                f"corrector pre-motor (evita un rechazo HIGH + retry completo).")
+            except Exception as _fs_le:
+                logger.warning(f"[P1-FRUIT-SAVORY-BURN-FIX] re-autofix post-chain no-op: "
+                               f"{type(_fs_le).__name__}: {_fs_le}")
+
         if _late_rep_days:
             # [P1-REINTRO-DETAIL · 2026-07-11] Nombrar label + platos: en corr=dbf45283 el
             # warn sin detalle costó ~30 min de forensics por intento para saber QUÉ se
