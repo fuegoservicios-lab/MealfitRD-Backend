@@ -530,6 +530,27 @@ class IngredientNutritionDB:
             omega3_g=_num(row.get("omega3_ala_g_per_100g")),
         )
 
+    def category_of(self, raw_name: str) -> Optional[str]:
+        """[P1-INGREDIENT-SPREAD-SPECIES-GUARD · 2026-07-29] Categoría cruda de `master_ingredients`
+        (columna `category`: 'Vegetales'/'Frutas'/'Proteínas'/'Lácteos'/'Víveres'/'Despensa') para el
+        `raw_name` resuelto — `NutritionInfo`/`lookup()` no la expone, así que este método pasa por
+        `_match_row` directo. `None` si no hay match (fail-open: el caller trata "sin categoría" como
+        "no hay evidencia de que sea un alimento real", igual que hoy). No usa `_compound_dish_lookup`
+        (platos compuestos no tienen `category` propia en `master_ingredients`).
+
+        Nace del bug de 'Ají morrón'/'Ají cubanela' (`category='Vegetales'`) quedando invisibles al
+        detector de acaparamiento `_count_ingredient_meal_frequency` porque la palabra 'ají' también
+        vive en `_QTY_GUARD_SEASONING_SKIP` — un umbral de magnitud de macro NO sirve para distinguirlos
+        de sazonadores reales (`Pimienta negra` 10.4g proteína/64g carbos por 100g, `Comino` 17.81/44.24,
+        `Laurel` 7.61/74.97 — TODOS más densos en macro por-100g que `Ají morrón` 0.99/6.03), pero la
+        categoría ya poblada en la fila sí: los sazonadores reales viven en `category='Despensa'`, los
+        vegetales homónimos NO. tooltip-anchor: P1-INGREDIENT-SPREAD-SPECIES-GUARD"""
+        try:
+            row = self._match_row(raw_name)
+        except Exception:
+            return None
+        return row.get("category") if row else None
+
     def _compound_dish_lookup(self, raw_name: str) -> Optional[NutritionInfo]:
         """[P2-COMPOUND-DISH-RESOLUTION · 2026-07-02] Fallback FINAL: macros per-100g de un plato
         criollo COMPUESTO desde data/dominican_dishes.json. Match exacto → contención word-boundary

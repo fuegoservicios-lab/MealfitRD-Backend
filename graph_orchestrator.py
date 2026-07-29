@@ -36895,7 +36895,8 @@ def _persist_skeleton_short_repair_alert(
         replaced_count = int(_rstats.get("replaced_count") or 0)
         filled_count = int(_rstats.get("filled_count") or 0)
         severity = "critical" if real_days <= 0 else "warning"
-        alert_key = f"skeleton_short_repair:{fallback_source or 'unknown'}"
+        _fs_label = fallback_source if fallback_source else "unknown"
+        alert_key = f"skeleton_short_repair:{_fs_label}"
         execute_sql_write(
             """
             INSERT INTO system_alerts
