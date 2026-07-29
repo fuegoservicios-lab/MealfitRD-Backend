@@ -82,7 +82,7 @@ def _run(go, monkeypatch, plan, piso):
     import micronutrients
     monkeypatch.setattr(micronutrients, "build_micronutrient_report",
                         lambda *a, **kw: _mk_report("omega3_g", piso))
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     return plan
 
 

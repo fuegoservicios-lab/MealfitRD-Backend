@@ -155,7 +155,7 @@ def test_fat_micro_seed_survives_shared_budget_drain(go, monkeypatch):
     import micronutrients
     monkeypatch.setattr(micronutrients, "build_micronutrient_report", lambda *a, **kw: _mk_report())
     plan = _mk_plan()
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     assert _has_omega3_seed(plan), "el seed del fat-micro debe sobrevivir vía la reserva dedicada"
 
 
@@ -166,5 +166,5 @@ def test_without_reserve_fat_micro_seed_starves(go, monkeypatch):
     monkeypatch.setattr(micronutrients, "build_micronutrient_report", lambda *a, **kw: _mk_report())
     monkeypatch.setattr(go, "MICRO_FAT_SEED_RESERVE_KCAL", 0)
     plan = _mk_plan()
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     assert not _has_omega3_seed(plan), "sin reserva y con budget compartido agotado, el seed no entra"

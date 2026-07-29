@@ -30,8 +30,12 @@ def test_p1_1_micro_closer_writes_ingredients_raw():
     assert "P1-MICRO-CLOSER-RAW-SYNC" in _GRAPH
     seg = _GRAPH[_GRAPH.index("def _close_micro_gaps_for_plan"):]
     seg = seg[: seg.index("\ndef ", 1)]
-    assert 'meal["ingredients_raw"][idx] = _new_raw' in seg, "el closer debe escribir ingredients_raw"
-    assert "_resc(_raw[idx], factor)" in seg, "debe reescalar el raw por el MISMO factor"
+    # [P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] re-anclado: las 3 escrituras a raw del closer pasan
+    # ahora por el helper SSOT `_sync_one_raw_line` (índice solo con paralelismo verificado; si no,
+    # por alimento). Lo que este test protege es que el closer SIGA escribiendo raw con el MISMO
+    # factor — no el mecanismo concreto de la escritura.
+    assert "_sync_one_raw_line(meal, idx, ing_str, factor)" in seg, \
+        "el closer debe sincronizar ingredients_raw con el MISMO factor"
 
 
 # ───────────────────────── P1-2 / P1-3: closers deterministas ON ─────────────────────────

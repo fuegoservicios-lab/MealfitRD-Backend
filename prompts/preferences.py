@@ -36,7 +36,7 @@ Los carbohidratos asignados ({carb_0}+{carb_0b} / {carb_1}+{carb_1b} / {carb_2}+
 La proteína asignada a CADA día (Opción A→{protein_0}, B→{protein_1}, C→{protein_2}) es la ÚNICA carne/leguminosa principal permitida ese día. NO sustituyas ni complementes con otra carne distinta:
    - Si la Opción A dice "{protein_0}", el día A NO puede tener cerdo, pollo, res ni pescado salvo que esa sea la proteína {protein_0}.
    - El `protein_pool` que pases en el skeleton al day_generator es enforced: el sistema rechazará cualquier carne distinta que el LLM intente meter como "complemento".
-   - Para el desayuno y la merienda usa SIEMPRE al menos UNA de estas fuentes de proteína livianas (no cuentan como otra carne principal y son OBLIGATORIAS — ver regla de abajo):
+   - Para el desayuno y la merienda usa SIEMPRE al menos UNA de estas fuentes de proteína livianas (no cuentan como otra carne principal y son OBLIGATORIAS — ver regla de abajo):{light_protein_block}
      • Huevos enteros / claras de huevo
      • Queso fresco / ricotta / queso de hoja
      • Yogurt griego natural

@@ -566,6 +566,23 @@ REFINE_HOUSEHOLD_LINES = _envb("MEALFIT_REFINE_HOUSEHOLD_LINES", False)
 # tooltip-anchor: P1-REFINE-RAW-BY-FOOD
 REFINE_RAW_BY_FOOD = _envb("MEALFIT_REFINE_RAW_BY_FOOD", True)
 
+# [P2-REFINE-COVERAGE-GATE · 2026-07-29] (audit solver+seeder v4) El refinador acumula `delivered`
+# SOLO con las líneas que el catálogo resuelve (`if mc:`), pero su `target` es el del DÍA COMPLETO.
+# La masa que el catálogo no ve es invisible a la izquierda y contable a la derecha ⇒ el greedy
+# empuja cada línea movible hacia su techo 2× para "cubrir" macros que YA están en el plato.
+#
+# Es el mismo modo de fallo que `P1-SOLVER-COVERAGE-GATE` cerró para el solver per-meal, y el
+# refinador —que agrega el día ENTERO— no tenía rama de abstención. Escenario: día de 4 comidas
+# cuyo almuerzo es un sancocho que no resuelve (~500 g = 40P/60C/15F reales). El día está en target,
+# pero `delivered` ve todo ~27% bajo y el greedy sube arroz/pollo/aguacate de las OTRAS 3 comidas
+# hasta un día entregado de ~2.540 kcal contra un target de 2.003 (+27%).
+#
+# El gate mide cobertura por DÍA (que es lo que el refinador agrega), excluyendo del denominador las
+# líneas benignas que no son masa oculta (agua/hielo/hierbas) — mismo criterio que
+# P1-SOLVER-COVERAGE-BENIGN. Rollback sin redeploy: MEALFIT_REFINE_MIN_COVERAGE=0.0 (nunca dispara).
+# tooltip-anchor: P2-REFINE-COVERAGE-GATE
+REFINE_MIN_COVERAGE = _envf("MEALFIT_REFINE_MIN_COVERAGE", 0.6, lambda v: 0.0 <= v <= 1.0)
+
 _REFINE_WEIGHTS = {"kcal": 1.0, "protein": 1.5, "carbs": 1.0, "fats": 1.2}
 
 
@@ -605,6 +622,13 @@ def refine_day_portions_integer(
             def _sa(s):
                 return s
 
+        # [P2-REFINE-COVERAGE-GATE · 2026-07-29] benignos fuera del denominador de cobertura: no son
+        # masa oculta, así que contarlos deprimiría la cobertura sin motivo (mismo criterio y misma
+        # forma word-boundary que `_SOLVER_COV_BENIGN_RE`, para no re-abrir 'agua'⊂'aguacate').
+        _BENIGN_RE = _re.compile(
+            r"\b(?:agua|hielo|perejil|cilantro|cilantrico|culantro|albahaca|hierbabuena|cebollin|cebollino)\b")
+        _n_quant = _n_res = 0
+
         # 1) Censo de líneas móviles: gram-based, resolubles, no exentas.
         lines = []  # dicts: meal, idx, grams, per_g {kcal,p,c,f}, orig_grams
         delivered = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0}
@@ -621,6 +645,12 @@ def refine_day_portions_integer(
                     mc = db.macros_from_ingredient_string(s)
                 except Exception:
                     mc = None
+                # cobertura del DÍA (el refinador agrega el día, así que el gate va al mismo nivel)
+                _s_low = _sa(s.lower())
+                if not ("al gusto" in _s_low or "opcional" in _s_low or _BENIGN_RE.search(_s_low)):
+                    _n_quant += 1
+                    if mc:
+                        _n_res += 1
                 if mc:
                     delivered["kcal"] += float(mc.get("kcal") or 0.0)
                     delivered["protein"] += float(mc.get("protein") or 0.0)
@@ -654,6 +684,17 @@ def refine_day_portions_integer(
                 lines.append({"meal": meal, "idx": idx, "grams": grams,
                               "orig": grams, "per_g": per_g, "gram_led": _gram_led})
         if not lines:
+            return 0
+        # [P2-REFINE-COVERAGE-GATE · 2026-07-29] Abstención: con masa no-resuelta significativa el
+        # lado izquierdo (`delivered`) subestima al derecho (`targets`, del día completo) y el greedy
+        # infla hasta 2× las líneas que SÍ resuelve para cubrir macros que ya están en el plato.
+        # Abstenerse deja el día intacto: los closers/rebalance aguas abajo siguen dimensionando.
+        _cov = (_n_res / _n_quant) if _n_quant else 1.0
+        if _cov < REFINE_MIN_COVERAGE:
+            _log.warning(
+                f"🔎 [P2-REFINE-COVERAGE-GATE] cobertura del día {_cov:.2f} < {REFINE_MIN_COVERAGE} "
+                f"({_n_res}/{_n_quant} líneas resueltas) — el refinador se abstiene (con masa "
+                f"invisible al catálogo inflaría las líneas resolubles de las OTRAS comidas).")
             return 0
         tg = {k: float(targets.get(k) or 0.0) for k in ("kcal", "protein", "carbs", "fats")}
         if not any(v > 0 for v in tg.values()):
@@ -720,13 +761,29 @@ def refine_day_portions_integer(
                 continue
 
         # 3b) Sync de `ingredients_raw`, por meal, con el MISMO contrato que los pases hermanos
-        #     (P1-SOLVER-RAW-BY-FOOD / P1-CAP-RAW-BY-FOOD): índice solo si los largos coinciden.
+        #     (P1-SOLVER-RAW-BY-FOOD / P1-CAP-RAW-BY-FOOD): el índice solo se usa con paralelismo
+        #     VERIFICADO por alimento (P2-RAW-PAIR-BY-FOOD); si no, mapeo por alimento.
         for _meal, _disp_orig, _fmap in _pending.values():
             raw = _meal.get("ingredients_raw")
             if not (isinstance(raw, list) and raw and _fmap):
                 continue
             try:
-                if len(raw) == len(_disp_orig):
+                # [P2-RAW-PAIR-BY-FOOD · 2026-07-29] P1-REFINE-RAW-BY-FOOD (arriba) todavía se fiaba
+                # del LARGO para tomar el camino por índice. Medido: el 93.5% de las comidas tiene
+                # largos iguales y solo el 48.1% de ESAS son paralelas de verdad — el reconciliador
+                # display↔raw preserva el largo y cambia el ORDEN. Ahora hay que demostrar el
+                # paralelismo por alimento. Repro del caso permutado: display queda
+                # `pollo 240 / arroz 75 / aceite 15` y raw `arroz 300 / aceite 5 / pollo 180`.
+                _parallel = len(raw) == len(_disp_orig)
+                if _parallel and REFINE_RAW_BY_FOOD:
+                    try:
+                        from graph_orchestrator import (RAW_PAIR_BY_FOOD as _RPBF,
+                                                        _raw_display_parallel_by_food as _par_ok)
+                        if _RPBF:
+                            _parallel = _par_ok(_disp_orig, raw)
+                    except Exception:
+                        pass  # sin el verificador, el largo sigue siendo el criterio (estado previo)
+                if _parallel:
                     for idx, (factor, _hh) in _fmap.items():
                         if idx >= len(raw):
                             continue

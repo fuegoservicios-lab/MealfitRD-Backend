@@ -146,7 +146,7 @@ def test_p3_2_phantom_seed_not_appended(go, monkeypatch):
     plan = {"days": [{"day": 1, "meals": [
         {"meal": "Merienda", "name": "Fruta", "ingredients": ["1 manzana"],
          "ingredients_raw": ["1 manzana"], "recipe": ["Sirve."]}]}]}
-    go._close_micro_gaps_for_plan(plan, {}, _SeedDB(drift_tokens=("linaza", "chia", "chía", "nuez", "nueces")))
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _SeedDB(drift_tokens=("linaza", "chia", "chía", "nuez", "nueces")))
     assert "linaza" not in _seeded_text(plan)
     assert all(not m.get("_micro_seed_applied") for d in plan["days"] for m in d["meals"])
 
@@ -158,5 +158,5 @@ def test_p3_3_savory_seed_skipped_without_savory_meal(go, monkeypatch):
     plan = {"days": [{"day": 1, "meals": [
         {"meal": "Merienda", "name": "Yogurt con Fresas", "ingredients": ["1 taza de yogurt"],
          "ingredients_raw": ["1 taza de yogurt"], "recipe": ["Sirve."]}]}]}
-    go._close_micro_gaps_for_plan(plan, {}, _SeedDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _SeedDB())
     assert "zanahoria" not in _seeded_text(plan) and "auyama" not in _seeded_text(plan)

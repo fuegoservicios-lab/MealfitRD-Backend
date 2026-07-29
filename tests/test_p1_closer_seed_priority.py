@@ -93,7 +93,7 @@ def test_seed_gets_budget_before_scaling_exhausts_it(go, monkeypatch):
     import micronutrients
     monkeypatch.setattr(micronutrients, "build_micronutrient_report", lambda *a, **kw: _mk_report())
     plan = _mk_plan()
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     _all = " | ".join(i for d in plan["days"] for m in d["meals"] for i in m["ingredients"])
     assert "linaza" in _all, \
         "el micro sembrable debe recibir presupuesto ANTES de que el escalado lo agote"

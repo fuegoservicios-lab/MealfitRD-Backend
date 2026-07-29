@@ -338,6 +338,102 @@ def _persist_plan_persist_failed_alert(user_id: Optional[str], reason: str) -> N
         )
 
 
+def extract_raw_ingredients_from_plan(plan_data: dict) -> list:
+    """[P2-FREQ-TRACKING-CHUNKED · 2026-07-29] Mismo aplanado de `days[].meals[].ingredients` que
+    usa `_save_plan_and_track_background`, expuesto para que la rama CHUNKED derive la lista con el
+    MISMO criterio y las dos no puedan divergir."""
+    out = []
+    try:
+        for _d in (plan_data or {}).get("days", []) or []:
+            if not isinstance(_d, dict):
+                continue
+            for _m in _d.get("meals", []) or []:
+                if isinstance(_m, dict) and _m.get("ingredients"):
+                    out.extend(_m.get("ingredients"))
+    except Exception:
+        return out
+    return out
+
+
+def _track_ingredient_frequencies(user_id: str, raw_ingredients: list) -> None:
+    """[P2-FREQ-TRACKING-CHUNKED · 2026-07-29] (audit solver+seeder v4) SSOT del tracking de
+    frecuencias de ingredientes — extraído de `_save_plan_and_track_background`, donde vivía INLINE
+    y por tanto solo corría en la rama NO-chunked.
+
+    Como `use_chunking = tiene_perfil AND días > PLAN_CHUNK_SIZE (3)`, TODO plan de 7 días de un
+    usuario con perfil caía en la rama que NO trackea. Medido en Neon (2026-07-29):
+    `SELECT count(*) FROM ingredient_frequencies f JOIN meal_plans p ON p.user_id=f.user_id` → **0**;
+    la tabla tenía 64 filas de 2 usuarios con `last_used` de 2026-07-09 y desde entonces se crearon
+    30 planes. Consecuencia en el sorteo: `db_freq_map` sale `{}` → se toma el fallback regex
+    etiquetado "para guest o sin historial" → `_apply_recency_fatigue` (el ×3 de 3 días / ×1.5 de 7)
+    JAMÁS se ejecutaba para nadie y los pesos `1/(freq+1)` valían 1.0 para todo el catálogo. Un
+    usuario con 23 planes seguidos de pollo tenía exactamente la misma probabilidad de pollo que uno
+    nuevo — el motor anti-mode-collapse estaba apagado por falta de datos, no por diseño.
+
+    Best-effort SIEMPRE: el plan YA se persistió cuando esto corre; un fallo aquí no puede propagar.
+    tooltip-anchor: P2-FREQ-TRACKING-CHUNKED"""
+
+    # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad).
+    # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] Best-effort en su PROPIO try: el plan YA se persistió; un
+    # fallo de tracking NO debe propagarse al caller síncrono ni emitir 'persist_failed' (no es fallo de persistencia).
+    try:
+        if raw_ingredients:
+            # Conjunto de términos base canónicos (ej: "pollo", "platano verde", "aguacate")
+            canonical_bases = set(GLOBAL_REVERSE_MAP.values())
+            
+            normalized = [normalize_ingredient_for_tracking(ing) for ing in raw_ingredients]
+            # Filtrar: solo trackear ingredientes que resolvieron a un término base conocido.
+            # Esto evita que condimentos/hierbas (cilantro, orégano, ajo) polucionen la tabla.
+            canonical = [n for n in normalized if n and n in canonical_bases]
+
+            def _is_ignored(term: str) -> bool:
+                """Ignora el término si es exacto o si alguna de sus palabras está en IGNORED_TRACKING_TERMS.
+                Cubre compuestos como 'pimienta negra', 'canela en polvo', 'oregano dominicano'.
+                """
+                if term in IGNORED_TRACKING_TERMS:
+                    return True
+                return bool(set(term.split()) & IGNORED_TRACKING_TERMS)
+
+            non_canonical = [n for n in normalized if n and n not in canonical_bases and not _is_ignored(n)]
+            
+            if canonical:
+                increment_ingredient_frequencies(user_id, canonical)
+
+            # [P1-UNKNOWN-CATALOG-FILTER · 2026-06-15] `unknown_ingredients` existe para señalar GAPS DEL
+            # CATÁLOGO de macros (qué ingrediente REAL falta agregar). Pero `canonical_bases`
+            # (GLOBAL_REVERSE_MAP, mapa de VARIEDAD) es MÁS ESTRECHO que el catálogo: "leche descremada",
+            # "chía", "queso" resuelven al catálogo de macros (vía aliases) pero no están en el mapa de
+            # variedad → se logueaban como falsos-positivos (11 de 11 entradas en prod 2026-06-14 eran de
+            # este tipo). Enrutamos los no-canónicos por el resolver del catálogo (el mismo que alimenta el
+            # solver de macros); SOLO los que TAMPOCO resuelven ahí son gaps reales. Así el log se vuelve
+            # señal accionable de "qué agregar". Knob de rollback: MEALFIT_UNKNOWN_LOG_USE_CATALOG=false.
+            if non_canonical and _catalog_db is not None and _eb("MEALFIT_UNKNOWN_LOG_USE_CATALOG", True):
+                try:
+                    _genuine = [n for n in non_canonical if _catalog_db.lookup(n) is None]
+                    _filtered = len(non_canonical) - len(_genuine)
+                    if _filtered:
+                        logger.info(f"🔎 [P1-UNKNOWN-CATALOG-FILTER] {_filtered} no-canónico(s) resuelven al "
+                                    "catálogo de macros (gap del mapa de variedad, NO del catálogo) → no logueados como unknown")
+                    non_canonical = _genuine
+                except Exception as _uf_e:
+                    logger.warning(f"[P1-UNKNOWN-CATALOG-FILTER] filtro catálogo falló (logueo todos): {type(_uf_e).__name__}: {_uf_e}")
+
+            # 2b. Loguear ingredientes no reconocidos para revisión y expansión del catálogo
+            if non_canonical:
+                raw_map = {normalize_ingredient_for_tracking(r): r for r in raw_ingredients if r}
+                log_unknown_ingredients(user_id, non_canonical, raw_map)
+                logger.info(f"🧹 [FREQ TRACKING] {len(non_canonical)} ingredientes no-canónicos logueados para revisión")
+                
+            logger.info(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
+            
+
+            
+    except Exception as e:
+        # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] freq-tracking best-effort: el plan YA se persistió, su
+        # fallo NO afecta la entrega (NO emite persist_failed ni se propaga al caller síncrono).
+        logger.error(f"⚠️ [BACKGROUND ERROR] Error en freq-tracking del plan (no afecta persistencia): {e}")
+
+
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None,
                                     return_id: bool = False):
     """Background task para guardar plan y actualizar frecuencias de ingredientes.
@@ -475,66 +571,9 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
         if return_id:
             raise
         return None
-
-    # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad).
-    # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] Best-effort en su PROPIO try: el plan YA se persistió; un
-    # fallo de tracking NO debe propagarse al caller síncrono ni emitir 'persist_failed' (no es fallo de persistencia).
-    try:
-        if raw_ingredients:
-            # Conjunto de términos base canónicos (ej: "pollo", "platano verde", "aguacate")
-            canonical_bases = set(GLOBAL_REVERSE_MAP.values())
-            
-            normalized = [normalize_ingredient_for_tracking(ing) for ing in raw_ingredients]
-            # Filtrar: solo trackear ingredientes que resolvieron a un término base conocido.
-            # Esto evita que condimentos/hierbas (cilantro, orégano, ajo) polucionen la tabla.
-            canonical = [n for n in normalized if n and n in canonical_bases]
-
-            def _is_ignored(term: str) -> bool:
-                """Ignora el término si es exacto o si alguna de sus palabras está en IGNORED_TRACKING_TERMS.
-                Cubre compuestos como 'pimienta negra', 'canela en polvo', 'oregano dominicano'.
-                """
-                if term in IGNORED_TRACKING_TERMS:
-                    return True
-                return bool(set(term.split()) & IGNORED_TRACKING_TERMS)
-
-            non_canonical = [n for n in normalized if n and n not in canonical_bases and not _is_ignored(n)]
-            
-            if canonical:
-                increment_ingredient_frequencies(user_id, canonical)
-
-            # [P1-UNKNOWN-CATALOG-FILTER · 2026-06-15] `unknown_ingredients` existe para señalar GAPS DEL
-            # CATÁLOGO de macros (qué ingrediente REAL falta agregar). Pero `canonical_bases`
-            # (GLOBAL_REVERSE_MAP, mapa de VARIEDAD) es MÁS ESTRECHO que el catálogo: "leche descremada",
-            # "chía", "queso" resuelven al catálogo de macros (vía aliases) pero no están en el mapa de
-            # variedad → se logueaban como falsos-positivos (11 de 11 entradas en prod 2026-06-14 eran de
-            # este tipo). Enrutamos los no-canónicos por el resolver del catálogo (el mismo que alimenta el
-            # solver de macros); SOLO los que TAMPOCO resuelven ahí son gaps reales. Así el log se vuelve
-            # señal accionable de "qué agregar". Knob de rollback: MEALFIT_UNKNOWN_LOG_USE_CATALOG=false.
-            if non_canonical and _catalog_db is not None and _eb("MEALFIT_UNKNOWN_LOG_USE_CATALOG", True):
-                try:
-                    _genuine = [n for n in non_canonical if _catalog_db.lookup(n) is None]
-                    _filtered = len(non_canonical) - len(_genuine)
-                    if _filtered:
-                        logger.info(f"🔎 [P1-UNKNOWN-CATALOG-FILTER] {_filtered} no-canónico(s) resuelven al "
-                                    "catálogo de macros (gap del mapa de variedad, NO del catálogo) → no logueados como unknown")
-                    non_canonical = _genuine
-                except Exception as _uf_e:
-                    logger.warning(f"[P1-UNKNOWN-CATALOG-FILTER] filtro catálogo falló (logueo todos): {type(_uf_e).__name__}: {_uf_e}")
-
-            # 2b. Loguear ingredientes no reconocidos para revisión y expansión del catálogo
-            if non_canonical:
-                raw_map = {normalize_ingredient_for_tracking(r): r for r in raw_ingredients if r}
-                log_unknown_ingredients(user_id, non_canonical, raw_map)
-                logger.info(f"🧹 [FREQ TRACKING] {len(non_canonical)} ingredientes no-canónicos logueados para revisión")
-                
-            logger.info(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
-            
-
-            
-    except Exception as e:
-        # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] freq-tracking best-effort: el plan YA se persistió, su
-        # fallo NO afecta la entrega (NO emite persist_failed ni se propaga al caller síncrono).
-        logger.error(f"⚠️ [BACKGROUND ERROR] Error en freq-tracking del plan (no afecta persistencia): {e}")
+    # [P2-FREQ-TRACKING-CHUNKED · 2026-07-29] extraído a helper SSOT: el path chunked (todo plan de
+    # 7 días de un usuario con perfil) no pasa por aquí y necesitaba el MISMO tracking.
+    _track_ingredient_frequencies(user_id, raw_ingredients)
 
     return plan_id
 

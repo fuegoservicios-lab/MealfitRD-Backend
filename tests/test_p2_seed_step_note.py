@@ -74,7 +74,7 @@ def _run(go, monkeypatch, plan):
         "panel": [{"key": "vit_e_mg", "piso": 15.0, "valor": 0.0, "status": "bajo"}],
         "gaps": [{"key": "vit_e_mg", "piso": 15.0, "status": "bajo"}],
         "coverage": 1.0, "per_day_floors": {"flagged": False}})
-    return go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    return go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
 
 
 def test_seed_adds_note_before_montaje(go, monkeypatch):

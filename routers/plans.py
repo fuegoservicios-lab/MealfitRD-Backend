@@ -1773,6 +1773,22 @@ def _postprocess_pipeline_result(
             actual_user_id, result, selected_techniques, total_days_requested,
         )
         if plan_id:
+            # [P2-FREQ-TRACKING-CHUNKED · 2026-07-29] (audit solver+seeder v4) El tracking de
+            # frecuencias vivía DENTRO de `_save_plan_and_track_background`, que solo corre en la
+            # rama NO-chunked. Como `use_chunking` es True para todo plan de 7 días de un usuario
+            # con perfil, la tabla `ingredient_frequencies` no crecía para NADIE (medido en Neon:
+            # 0 filas cruzando con planes, con 30 planes creados desde el último `last_used`) → el
+            # sorteo caía siempre al fallback "guest o sin historial" y la fatiga por recencia nunca
+            # se aplicaba. Best-effort: el plan ya está persistido, esto no puede tumbar la entrega.
+            try:
+                from ai_helpers import TRACK_FREQ_ON_CHUNKED as _tfc
+                if _tfc:
+                    from services import (_track_ingredient_frequencies as _tif,
+                                          extract_raw_ingredients_from_plan as _eri)
+                    _tif(actual_user_id, _eri(result))
+            except Exception as _tif_e:
+                logger.warning(f"[P2-FREQ-TRACKING-CHUNKED] tracking en rama chunked no-op: "
+                               f"{type(_tif_e).__name__}: {_tif_e}")
             _seed_chunk1_learning(
                 plan_id, result, rejected_meal_names,
                 context_label=f"seed_chunk1_{transport_label}",
@@ -6094,6 +6110,14 @@ def api_swap_meal_persist(
                 "medications": _hp_micro.get("medications"),
                 "otherConditions": _oc_sp,
                 "otherMedications": _hp_micro.get("otherMedications") or _hp_micro.get("other_medications"),
+                # [P2-MICRO-SEED-CLINICAL-CTX · 2026-07-29] (audit solver+seeder v4) El closer SIEMBRA
+                # alimentos nuevos y sus 3 filtros (alergia/dieta/dislike) se gatean por PRESENCIA de
+                # key → sin estas tres el scan de alérgenos no corría. El dato ya estaba hidratado del
+                # perfil server-side tres líneas más abajo, para otro backstop; solo faltaba pasarlo.
+                # Siempre presentes (aunque sean [] / None): "ausente" ≠ "sin alergias".
+                "allergies": [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()],
+                "dietType": _hp_micro.get("dietType") or _hp_micro.get("diet_type"),
+                "dislikes": _hp_micro.get("dislikes") or [],
             }
             # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] Alergias + dieta del PERFIL (server-side) para el
             # backstop clínico de abajo — nunca del body del cliente (espejo de I2 / P0-UPDATE-CLINICAL-GUARD).

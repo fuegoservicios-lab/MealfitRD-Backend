@@ -98,13 +98,19 @@ def test_fail_safe_devuelve_la_lista_original(monkeypatch):
 # ───────────── 2. el contrato en el solver ─────────────
 
 def test_el_camino_por_indice_sigue_siendo_el_preferido():
-    """Cuando los largos coinciden es exacto y barato: no se cambia por el mapeo por alimento."""
+    """Cuando las listas son paralelas DE VERDAD, el índice es exacto y barato: se conserva.
+
+    [P2-RAW-PAIR-BY-FOOD · 2026-07-29] re-anclado: el largo igual ya no basta para tomar ese camino
+    (medido: 93.5% de las comidas tiene largo igual y solo el 48.1% de ESAS son paralelas). Lo que
+    este test protege es que el camino rápido SIGA EXISTIENDO, no el criterio con que se elige."""
     from pathlib import Path
     src = (Path(go.__file__).resolve().parent / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def _apply_macro_solver_to_meal")
     body = src[i:i + 9000]
-    assert "if len(raw) == len(factors):" in body, "el camino rápido por índice se conserva"
-    assert "elif SOLVER_RAW_BY_FOOD:" in body, "y el fallback por alimento cuelga de él"
+    assert "len(raw) == len(factors)" in body, "el camino rápido por índice se conserva"
+    assert "_raw_display_parallel_by_food(_ing_strs, raw)" in body, \
+        "y ahora exige paralelismo verificado por alimento antes de fiarse del índice"
+    assert "elif SOLVER_RAW_BY_FOOD:" in body, "el fallback por alimento cuelga de él"
 
 
 def test_el_guard_ya_no_es_la_unica_condicion():

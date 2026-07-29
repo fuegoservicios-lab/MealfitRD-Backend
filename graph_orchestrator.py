@@ -9073,7 +9073,67 @@ _MAIN_PROTEIN_ALIASES = {
     "habichuelas": ["habichuela", "frijoles", "frijol"],
     "lentejas": ["lentejas"],
     "yogurt": ["yogurt", "yogur"],
+    # [P2-PROTEIN-ALIASES-SSOT · 2026-07-29] (audit solver+seeder v4) `mejillones` no tenía etiqueta
+    # en NINGUNA de las dos estructuras del orquestador pese a vivir en `DOMINICAN_PROTEINS` sin
+    # penalización de peso: un día con "Mejillones al Vapor" + "Sopa de Mejillones" devolvía
+    # `same_day_protein_repeats = 0`, `issues = []`, `ok = True`; y `_dm_species_of` tampoco los veía,
+    # así que el resolver de doble-principal podía dejar mejillones + pollo como dos principales.
+    "mejillones": ["mejillon", "mejillones"],
 }
+
+# [P2-PROTEIN-ALIASES-SSOT · 2026-07-29] (audit solver+seeder v4) P1-VARIETY-GATE-GAPS (esta misma
+# semana) alineó el universo de ETIQUETAS con `_DM_SPECIES_TOKENS` pero dejó intactas las listas de
+# ALIAS. Resultado: TRES listas paralelas para el mismo concepto "pez" —
+# `constants.PROTEIN_SYNONYMS['pescado']` (~30 alias, con bacalao/arenque/merluza),
+# `_MAIN_PROTEIN_ALIASES['pescado']` (6, sin bacalao/arenque/sardina) y `_DM_FISH_TOKENS` (8, con
+# bacalao/sardina pero sin arenque/merluza). Verificado contra el código: un día con "Bacalao Guisado
+# con Yuca" + "Ensalada de Bacalao a la Vizcaína" daba `same_day_protein_repeats = 0`.
+#
+# La unión toma el SSOT de `PROTEIN_SYNONYMS` para cada etiqueta que tenga base propia ahí. NO
+# reemplaza la lista literal: la extiende (un alias curado a mano nunca se pierde).
+# ⚠️ Los consumidores matchean con `_name_has_token` (frontera de palabra) — la lección
+# P1-DM-SPECIES-BOUNDARY (`"res" ⊂ "fResco"`) exige que siga siendo así; "res" conserva su regex
+# especial aguas abajo. Rollback sin redeploy: MEALFIT_PROTEIN_ALIASES_FROM_SSOT=false.
+# tooltip-anchor: P2-PROTEIN-ALIASES-SSOT
+PROTEIN_ALIASES_FROM_SSOT = _env_bool("MEALFIT_PROTEIN_ALIASES_FROM_SSOT", True)
+if PROTEIN_ALIASES_FROM_SSOT:
+    try:
+        from constants import PROTEIN_SYNONYMS as _PS_SSOT, strip_accents as _sa_ali
+        # ⚠️ GUARD DE AMBIGÜEDAD (obligatorio): un alias del SSOT solo entra si NO colisiona con los
+        # alias curados de OTRA etiqueta, en ninguna dirección de subcadena. Sin esto, `PROTEIN_
+        # SYNONYMS['pollo']` reintroduce "pechuga" — que matchea dentro de "pechuga de pavo" y vuelve
+        # a etiquetar pavo como pollo, exactamente la colisión que P6-SLOT-CROSS-PROTEIN quitó a
+        # propósito (y que la regresión de esta sesión cazó al primer intento). La curación a mano
+        # SIEMPRE gana sobre la unión automática.
+        _curated = {_l: {_sa_ali(str(a).lower()) for a in _as}
+                    for _l, _as in _MAIN_PROTEIN_ALIASES.items()}
+        _n_ali, _n_skip = 0, 0
+        for _lbl, _al in _MAIN_PROTEIN_ALIASES.items():
+            _extra = _PS_SSOT.get(_lbl) or _PS_SSOT.get(_sa_ali(_lbl)) or []
+            _have = set(_curated[_lbl])
+            for _e in _extra:
+                _en = _sa_ali(str(_e).strip().lower())
+                # tokens de 1-2 chars jamás: con frontera de palabra siguen siendo ruido
+                if not _en or len(_en) < 3 or _en in _have:
+                    continue
+                _ambiguous = any(
+                    (_en in _o or _o in _en)
+                    for _ol, _os in _curated.items() if _ol != _lbl for _o in _os)
+                if _ambiguous:
+                    _n_skip += 1
+                    continue
+                _al.append(_en)
+                _have.add(_en)
+                _n_ali += 1
+        if _n_ali or _n_skip:
+            logging.getLogger(__name__).info(
+                f"🐟 [P2-PROTEIN-ALIASES-SSOT] {_n_ali} alias añadidos desde PROTEIN_SYNONYMS "
+                f"(bacalao/arenque/sardina dejan de ser invisibles al gate same-day); {_n_skip} "
+                f"descartados por colisión con la curación de otra etiqueta.")
+    except Exception as _ali_e:
+        logging.getLogger(__name__).warning(
+            f"[P2-PROTEIN-ALIASES-SSOT] no se pudo unir el SSOT ({type(_ali_e).__name__}: {_ali_e}) "
+            f"— las listas literales siguen vigentes (comportamiento previo).")
 
 # [P6-SLOT-CROSS-PROTEIN] Set de proteínas "pesadas" — carnes principales
 # que no deberían repetirse en >1 comida del mismo día. Light proteins
@@ -9088,7 +9148,10 @@ _HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun",
                          "camarones", "pulpo", "cangrejo",
                          # [P1-VARIETY-GATE-GAPS · 2026-07-29] especies que faltaban
                          # (conejo ×2 mismo día pasó invisible en el plan vivo 73db1e79)
-                         "conejo", "chivo", "calamar", "langosta", "higado"}
+                         "conejo", "chivo", "calamar", "langosta", "higado",
+                         # [P2-PROTEIN-ALIASES-SSOT · 2026-07-29] el molusco que quedaba fuera de
+                         # las DOS estructuras (etiquetas y species-tokens) pese a estar en el pool.
+                         "mejillones"}
 
 # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Proteínas PRINCIPALES cuya repetición el MISMO día fatiga al
 # usuario (pedido explícito del owner: vio huevo en desayuno+cena el mismo día). Incluye las pesadas + HUEVO
@@ -10274,6 +10337,35 @@ MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", Tru
 # alimento resuelto. Sin esto, raw se queda con las cantidades pre-solver y la lista de compras
 # compra algo distinto de lo que el usuario lee. Flip a False vuelve al guard por índice.
 SOLVER_RAW_BY_FOOD = _env_bool("MEALFIT_SOLVER_RAW_BY_FOOD", True)
+# [P2-RAW-PAIR-BY-FOOD · 2026-07-29] (audit solver+seeder v4) P1-SOLVER-RAW-BY-FOOD arregló la rama
+# de largos DISTINTOS y dejó intacta la de largos IGUALES, asumiendo que largo igual ⇒ listas
+# paralelas. Medido sobre 416 comidas vivas: largo igual ocurre en el **93.5%** de las comidas pero
+# solo el **48.1%** de ellas son realmente paralelas por índice. O sea, el camino que creíamos exacto
+# escribe el factor de un alimento sobre la línea de OTRO en ~45% de las comidas.
+#
+# Caso vivo (plan fbe53a5b, día 2): `len(display)==len(raw)==17` pero raw está ROTADO una posición
+# — display[0]='½ filete de pescado' / raw[0]='0.51 batata mediana'. El factor del pescado aterriza
+# en la batata, el de la batata en el arroz… La receta dice 20 g de arroz y la lista compra 59.93 g.
+# El reconciliador display↔raw preserva el LARGO y cambia el ORDEN (reconstruye
+# `[conservadas] + [añadidas]`), así que "mismo largo" nunca fue evidencia de "mismo orden".
+#
+# Con el knob ON, las 3 superficies que sincronizan raw (solver per-meal, refinador global entero,
+# micro-closer) exigen paralelismo VERIFICADO por alimento antes de confiar en el índice; si no
+# se cumple, caen al mapeo por alimento (`_rescale_raw_by_food`, conservador: alimento con factores
+# distintos ⇒ no toca). Rollback sin redeploy: MEALFIT_RAW_PAIR_BY_FOOD=false → índice por largo.
+# tooltip-anchor: P2-RAW-PAIR-BY-FOOD
+RAW_PAIR_BY_FOOD = _env_bool("MEALFIT_RAW_PAIR_BY_FOOD", True)
+# [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) En el shield pre-INSERT
+# (`db_plans._finalize_plan_data_for_insert`) el reconciliador display↔raw corre DENTRO de
+# `finalize_plan_data_coherence`, y DESPUÉS se ejecutan `reconcile_protein_band_post_finalize` y
+# `reconcile_all_macros_band_post_finalize` — que mueven cantidades (rebalance + refine 5 g + trim)
+# sin que nadie vuelva a reconciliar. Toda divergencia que esos pases introduzcan se PERSISTE.
+# Este knob añade la pasada final. Rollback sin redeploy: =false → cadena pre-INSERT como antes.
+RECONCILE_AFTER_BAND_CLOSER = _env_bool("MEALFIT_RECONCILE_AFTER_BAND_CLOSER", True)
+# [P2-SOLVER-CONVERGENCE-METRIC · 2026-07-29] (audit solver+seeder v4) Añade `not_converged_meals` /
+# `greedy_fallback_meals` / `not_converged_ratio` a la métrica per-run `solver_clamp` que YA se
+# emite. Telemetría pura (cero impacto sobre el plan) → default ON. Rollback: =false.
+SOLVER_CONVERGENCE_METRIC = _env_bool("MEALFIT_SOLVER_CONVERGENCE_METRIC", True)
 
 # [P1-BLEND-STEP-REQUIRED · 2026-07-25] Un plato llamado "batido" cuyas instrucciones no dicen
 # licuar. El chequeo de COMPLETION lo daba por bueno porque sí había paso de servido.
@@ -11634,6 +11726,43 @@ MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", True)
 # es del protocolo de SUPLEMENTACIÓN de por vida (ASMBS; el panel/tarjetas lo muestran), no de
 # "comer más volumen" — mismo racional del skip pantry_strict. Rollback sin redeploy: =false.
 MICRO_CLOSER_BARIATRIC_SKIP = _env_bool("MEALFIT_MICRO_CLOSER_BARIATRIC_SKIP", True)
+# [P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] (audit solver+seeder v4) Espejo de
+# MEALFIT_SOLVER_RAW_BY_FOOD para las 3 escrituras a `ingredients_raw` del closer (escalado
+# principal, refuerzo post-erosión, fatswap), que usaban `idx < len(_raw)` a secas. Ver
+# `_sync_one_raw_line`. Rollback sin redeploy: =false → índice por largo (comportamiento previo).
+MICRO_CLOSER_RAW_BY_FOOD = _env_bool("MEALFIT_MICRO_CLOSER_RAW_BY_FOOD", True)
+# [P2-MICRO-SEED-CLINICAL-CTX · 2026-07-29] (audit solver+seeder v4) Sin la clave `allergies` en
+# `form_data`, el path de SIEMBRA (la única operación ADITIVA del closer) no dispara. Los 3 filtros
+# del seed se gateaban por presencia de key ⇒ "campo ausente" se leía como "sin alergias".
+# Default TRUE = fail-secure. Rollback sin redeploy: =false → siembra con el filtro inerte (previo).
+MICRO_SEED_REQUIRE_CLINICAL_CTX = _env_bool("MEALFIT_MICRO_SEED_REQUIRE_CLINICAL_CTX", True)
+# [P2-CLOSER-MED-CONTRIBUTOR-GUARD · 2026-07-29] (audit solver+seeder v4) Promueve los flags de
+# anticoagulante y de fármaco K-elevador de "filtro de MICRO" a "filtro de CONTRIBUYENTE" — que es
+# donde ya viven sus hermanos renal/DM2/dislip. Sin esto, cerrar folato/fibra/Mg/hierro escalaba
+# hoja verde (vit K) y leguminosas (K) sin ningún check, porque el skip solo miraba `k == vit_k_mcg`
+# / `k == potassium_mg`. Separados a propósito: los perfiles y el riesgo clínico son distintos.
+# Ambos default TRUE (fail-secure). Rollback sin redeploy: =false → guard solo por micro (previo).
+CLOSER_ANTICOAG_CONTRIBUTOR_GUARD = _env_bool("MEALFIT_CLOSER_ANTICOAG_CONTRIBUTOR_GUARD", True)
+CLOSER_KMED_CONTRIBUTOR_GUARD = _env_bool("MEALFIT_CLOSER_KMED_CONTRIBUTOR_GUARD", True)
+# [P2-MICRO-CLOSER-MEASURE-RAW-UNION · 2026-07-29] (audit solver+seeder v4) `day_total` y el headroom
+# del UL se miden sobre la lista RAW entera cuando existe y no está pareada por índice — la MISMA
+# base que suma el panel del usuario. Antes se caía a display (sub-resoluble) y closer y panel
+# decidían sobre números distintos. Rollback sin redeploy: =false → medición pareada previa.
+MICRO_CLOSER_MEASURE_RAW_UNION = _env_bool("MEALFIT_MICRO_CLOSER_MEASURE_RAW_UNION", True)
+# Observación pura: una línea por día/micro diciendo sobre qué base se midió.
+MICRO_CLOSER_BASIS_LOG = _env_bool("MEALFIT_MICRO_CLOSER_BASIS_LOG", True)
+# [P2-MICRO-CLOSER-MACRO-DELTA · 2026-07-29] (audit solver+seeder v4) Cuando el truth-up se ABSTIENE
+# (algún ingrediente resuelve por nombre pero no por cantidad), los macros almacenados del plato se
+# quedaban con la masa que el closer AÑADIÓ sin contabilizar — y los trims de día leen esos macros.
+# Fallback por delta de la línea tocada. Rollback sin redeploy: =false → solo truth-up (previo).
+MICRO_CLOSER_MACRO_DELTA_FALLBACK = _env_bool("MEALFIT_MICRO_CLOSER_MACRO_DELTA_FALLBACK", True)
+# [P2-SLOT-DRIFT-TELEMETRY · 2026-07-29] (audit solver+seeder v4) Hace OBSERVABLE la desviación por
+# slot (p50 entregado/cuota) dentro de `compute_clinical_band_score`. Telemetría pura → default ON.
+# El cambio de COMPORTAMIENTO que sugiere el hallazgo (tie-break slot-aware en el refinador + repair
+# del piso de proteína por déficit relativo en vez de por índice) nace OFF: mueve el reparto físico
+# en 3 callsites y exige A/B contra `all4_ratio` — mismo criterio que MEALFIT_FAT_LEAN_SWAP.
+SLOT_DRIFT_TELEMETRY = _env_bool("MEALFIT_SLOT_DRIFT_TELEMETRY", True)
+SLOT_AWARE_DAY_REPAIR = _env_bool("MEALFIT_SLOT_AWARE_DAY_REPAIR", False)
 # [P2-CLOSER-SNACK-CAP · 2026-07-05] Techo físico del añadido del closer de proteína en
 # meriendas/platos ligeros (145-155g de cottage sobre fruta, plan 7e4e5570). El déficit
 # restante se cubre en comidas fuertes. Clamp [40, 300].
@@ -13673,6 +13802,32 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
         _renal_ca_nondairy_re = _re.compile(
             r"\b(?:" + "|".join(_re.escape(t) for t in _RENAL_CA_NONDAIRY_TOKENS) + r")s?\b")
 
+        # [P2-CLOSER-MED-CONTRIBUTOR-GUARD · 2026-07-29] Regex de contribuyente para los dos guards de
+        # fármaco. Vit K: SSOT importado de `medication_rules._HIGH_VIT_K_TERMS` — NO re-escribir la
+        # lista (re-escribirla es exactamente el error que produjo la 12ª mordida de subcadena).
+        # Word-boundary + accent-strip, igual que Sd-P2-d/Sd-P2-e.
+        _vitk_contrib_re = None
+        if CLOSER_ANTICOAG_CONTRIBUTOR_GUARD:
+            try:
+                # `strip_accents` LOCAL: el alias `_sa_seed` de este archivo se importa ~150 líneas
+                # más abajo (dentro del bloque de siembra) — usarlo aquí sería un NameError tragado
+                # por el `except`, dejando el guard clínico inerte en silencio. Ya pasó hoy.
+                from constants import strip_accents as _sa_vk
+                from medication_rules import _HIGH_VIT_K_TERMS as _HVK
+                _vitk_contrib_re = _re.compile(
+                    r"\b(?:" + "|".join(_re.escape(_sa_vk(t)) for t in _HVK) + r")s?\b")
+            except Exception as _vk_e:
+                _vitk_contrib_re = None  # sin SSOT no inventamos lista: el guard queda inerte y se loguea
+                logger.warning(f"[P2-CLOSER-MED-CONTRIBUTOR-GUARD] no se pudo compilar el regex de vit K "
+                               f"({type(_vk_e).__name__}: {_vk_e}) — el guard de anticoagulante por "
+                               f"contribuyente queda INACTIVO.")
+        # Potasio alto (es-DO): el token-set vive aquí porque no hay SSOT previo de "alto en K"
+        # (el de medication_rules es de vit K, no de potasio).
+        _highk_contrib_re = _re.compile(
+            r"\b(?:guineo|platano|aguacate|habichuela|habichuelas|lenteja|lentejas|guandul|guandules|"
+            r"frijol|frijoles|papa|papas|batata|batatas|espinaca|espinacas|auyama|coco de agua|suero|"
+            r"yuca|name|ñame|tomate|tomates|melon|melones)s?\b")
+
         def _ceiling_risky_contributor(_k_micro: str, _ing_low: str) -> bool:
             if _dyslip_or_hta and any(t in _ing_low for t in _CEIL_RISK_TOKENS):
                 return True
@@ -13688,6 +13843,21 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 return True
             # [Sd-P2-d] DM2: almidones/harinas refinadas alto-IG tampoco (papa/yuca/arroz blanco/pan blanco).
             if _dm2 and DM2_HIGHGI_STARCH_GUARD and _dm2_starch_re.search(_ing_low):
+                return True
+            # [P2-CLOSER-MED-CONTRIBUTOR-GUARD · 2026-07-29] (audit solver+seeder v4) `_anticoag` y
+            # `_k_elev` solo decidían si el MICRO (`vit_k_mcg` / `potassium_mg`) entraba al set de
+            # floors — nunca qué INGREDIENTE es seguro escalar. Pero los portadores más ricos de
+            # fibra, folato, magnesio, hierro y vit A en un plan dominicano SON la hoja verde (vit K)
+            # y las leguminosas/aguacate/guineo (K): cerrar folato escalaba espinacas 1.6× en un
+            # usuario con warfarina, sin que ninguna de las 5 ramas de arriba lo mirara.
+            # Y como el closer corre PER-DÍA y solo sobre los días deficientes, cargaba hoja verde
+            # de forma ASIMÉTRICA entre días — que es la definición operativa del riesgo de warfarina.
+            # El fall-through richest-first ya existente toma el siguiente portador; si no hay, queda
+            # residual honesto. tooltip-anchor: P2-CLOSER-MED-CONTRIBUTOR-GUARD
+            if _anticoag and CLOSER_ANTICOAG_CONTRIBUTOR_GUARD and _vitk_contrib_re is not None \
+                    and _vitk_contrib_re.search(_ing_low):
+                return True
+            if _k_elev and CLOSER_KMED_CONTRIBUTOR_GUARD and _highk_contrib_re.search(_ing_low):
                 return True
             return False
 
@@ -13751,6 +13921,33 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                     # sin raw alineado → display (comportamiento previo). tooltip-anchor: P2-MICRO-CLOSER-RAW-BASIS
                     _raw_m = _m.get("ingredients_raw")
                     _raw_ok = isinstance(_raw_m, list) and len(_raw_m) == len(ings)
+                    # [P2-MICRO-CLOSER-MEASURE-RAW-UNION · 2026-07-29] (audit solver+seeder v4)
+                    # DESACOPLAR medir de escalar. `_raw_ok` exigía paridad de largos; cuando no se
+                    # cumple —el caso mayoritario medido— TODO el conteo del día (y por tanto el gate
+                    # `day_total >= floor` y el headroom del UL) se computaba sobre el DISPLAY, que el
+                    # propio repo documenta como sub-resoluble ('¾ lonja de queso' no resuelve; el raw
+                    # dice '45 g de queso'). El panel que juzga al usuario suma sobre RAW. Closer y
+                    # panel decidían sobre números distintos:
+                    #   (a) el closer creía faltar 6 mg de hierro y escalaba en un día que YA cumplía;
+                    #   (b) el headroom del UL salía 45−12=33 mg cuando el margen real era 45−30=15 →
+                    #       el guard de toxicidad autorizaba un escalado que en la base real cruza el UL.
+                    # Ahora `day_total` se suma sobre la lista RAW ENTERA cuando existe (sin exigir
+                    # paridad); los CONTRIBUYENTES (targets de escalado) se siguen construyendo desde
+                    # display, que es lo que se escala. tooltip-anchor: P2-MICRO-CLOSER-MEASURE-RAW-UNION
+                    _measured_on_raw = False
+                    if (MICRO_CLOSER_MEASURE_RAW_UNION and isinstance(_raw_m, list) and _raw_m
+                            and not _raw_ok):
+                        for _rl in _raw_m:
+                            if not (isinstance(_rl, str) and _rl.strip()):
+                                continue
+                            try:
+                                _rmic = db.micros_from_ingredient_string(_rl)
+                            except Exception:
+                                _rmic = None
+                            _rc = (_rmic or {}).get(ing_key)
+                            if _rc and _rc > 0:
+                                day_total += float(_rc)
+                                _measured_on_raw = True
                     for i, ing in enumerate(ings):
                         if not isinstance(ing, str):
                             continue
@@ -13764,13 +13961,17 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         c = mic.get(ing_key)
                         if not c or c <= 0:
                             continue
-                        day_total += float(c)
+                        if not _measured_on_raw:
+                            day_total += float(c)   # ya contado sobre raw: no sumar dos veces
                         try:
                             _mac = db.macros_from_ingredient_string(_meas)
                             _kc = float(_mac.get("kcal") or 0) if _mac else 0.0
                         except Exception:
                             _kc = 0.0
                         contributors.append((float(c), _m, i, ing, _kc))
+                    if _measured_on_raw and MICRO_CLOSER_BASIS_LOG:
+                        logger.info(f"🧪 [P2-MICRO-CLOSER-MEASURE-RAW-UNION] {k}: día medido sobre RAW "
+                                    f"(display={len(ings)} vs raw={len(_raw_m)}) — la base del panel.")
                 if day_total >= floor:
                     continue
                 # [P1-MICRO-SEED · 2026-07-04] día SIN portador del micro → nada que escalar
@@ -13806,7 +14007,28 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         _seed_dislikes = {_sa_seed(str(x).strip().lower())
                                           for x in (_fd.get("dislikes") or []) if str(x).strip()}
                         _seed_line = None
-                        for _cand in _MICRO_SEED_SOURCES[k]:
+                        # [P2-MICRO-SEED-CLINICAL-CTX · 2026-07-29] (audit solver+seeder v4) La siembra
+                        # es la ÚNICA operación del closer que AÑADE un alimento nuevo al plato, y sus
+                        # tres defensas (alergia / dieta / dislike) estaban gateadas por la PRESENCIA de
+                        # una key en `form_data`: `if _fd.get("allergies"):` no distingue "el usuario no
+                        # tiene alergias" de "el caller no me pasó el campo" ⇒ fallaba ABIERTO.
+                        # Dos de las cuatro superficies que invocan el closer (`/swap-meal/persist` y el
+                        # chat-modify) construían ese dict a mano con 6 keys y omitían justo esas tres.
+                        # Escenario: alérgico a girasol hace un swap → el Día 2 queda sin portador de
+                        # vit E → se siembra "10 g de semillas de girasol" con el scan de alérgenos SIN
+                        # CORRER. Ahora: si el contexto clínico no viene, NO se siembra. El coste de no
+                        # sembrar es un residual honesto que el banner ya reporta; el de sembrar a
+                        # ciegas es un alérgeno en el plato. tooltip-anchor: P2-MICRO-SEED-CLINICAL-CTX
+                        if MICRO_SEED_REQUIRE_CLINICAL_CTX and "allergies" not in _fd:
+                            logger.warning(
+                                f"🌱 [P2-MICRO-SEED-CLINICAL-CTX] siembra de {k} OMITIDA: `form_data` sin "
+                                f"la clave `allergies` — sin contexto clínico no se añade un alimento "
+                                f"nuevo al plato (residual honesto > alérgeno silencioso).")
+                            _seed_line = None
+                            _MICRO_SEED_SOURCES_ITER = ()
+                        else:
+                            _MICRO_SEED_SOURCES_ITER = _MICRO_SEED_SOURCES[k]
+                        for _cand in _MICRO_SEED_SOURCES_ITER:
                             _cand_low = _sa_seed(_cand.lower())
                             if any(dk and dk in _cand_low for dk in _seed_dislikes):
                                 continue
@@ -13888,7 +14110,9 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     if isinstance(_seed_raw, list):
                                         _seed_raw.append(_seed_line)  # preserva alineación posicional
                                     try:
-                                        _truth_up_meal_macros_from_strings(_seed_meal, db)
+                                        # [P2-MICRO-CLOSER-MACRO-DELTA] línea AÑADIDA: si el
+                                        # truth-up se abstiene, el delta son sus macros enteros.
+                                        _closer_sync_meal_macros(_seed_meal, db, new_line=_seed_line)
                                     except Exception:
                                         pass
                                     contributors.append((
@@ -13982,12 +14206,15 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                 _new_line = _re_rs.sub(r"^\s*\d+(?:[.,]\d+)?\s*g",
                                                        f"{int(round(_g_new))} g", _rline, count=1)
                                 _r_ings[_ri] = _new_line
-                                _r_raw = _rm.get("ingredients_raw")
-                                if isinstance(_r_raw, list) and _ri < len(_r_raw) \
-                                        and isinstance(_r_raw[_ri], str):
-                                    _r_raw[_ri] = _new_line
+                                # [P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] El refuerzo ASIGNABA el
+                                # string de DISPLAY a raw — mal incluso con listas paralelas: raw
+                                # tiene su propio nombre/formato (es la base de la lista de compras).
+                                # Ahora se re-ESCALA la línea de raw del MISMO alimento por el ratio.
+                                _sync_one_raw_line(_rm, _ri, _rline,
+                                                   (_g_new / _g_now) if _g_now > 0 else 1.0)
                                 try:
-                                    _truth_up_meal_macros_from_strings(_rm, db)
+                                    _closer_sync_meal_macros(_rm, db, old_line=_rline,
+                                                             new_line=_new_line)
                                 except Exception:
                                     pass
                                 _rm["_micro_seed_reinforced"] = k
@@ -14078,16 +14305,11 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                     # panel recomputado, al PDF y a la lista — los gramos extra los "comía" el raw sin escalar y
                     # el reporte seguía mostrando el gap abierto. Espejo del closer de proteína (g_o.py:12052-12057)
                     # y del reconcile de macros (g_o.py:15924-15926), que escalan AMBAS formas. tooltip-anchor: P1-MICRO-CLOSER-RAW-SYNC
-                    _raw = meal.get("ingredients_raw")
-                    if isinstance(_raw, list) and idx < len(_raw) and isinstance(_raw[idx], str):
-                        try:
-                            _new_raw = _resc(_raw[idx], factor)
-                            if _new_raw:
-                                meal["ingredients_raw"][idx] = _new_raw
-                        except Exception:
-                            pass
+                    # [P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] por ALIMENTO cuando las listas no
+                    # son paralelas (el caso normal) — antes `idx < len(_raw)` escalaba otra línea.
+                    _sync_one_raw_line(meal, idx, ing_str, factor)
                     try:
-                        _truth_up_meal_macros_from_strings(meal, db)
+                        _closer_sync_meal_macros(meal, db, old_line=ing_str, new_line=new_ing)
                     except Exception:
                         pass
                     if kcal_now > 0:
@@ -14193,17 +14415,10 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             if not _new_f or _new_f == _fing:
                                 continue
                             _fm["ingredients"][_fi] = _new_f
-                            _fraw = _fm.get("ingredients_raw")
-                            if isinstance(_fraw, list) and _fi < len(_fraw) \
-                                    and isinstance(_fraw[_fi], str):
-                                try:
-                                    _nr = _resc(_fraw[_fi], factor)
-                                    if _nr:
-                                        _fraw[_fi] = _nr
-                                except Exception:
-                                    pass
+                            # [P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] ídem para el fatswap.
+                            _sync_one_raw_line(_fm, _fi, _fing, factor)
                             try:
-                                _truth_up_meal_macros_from_strings(_fm, db)
+                                _closer_sync_meal_macros(_fm, db, old_line=_fing, new_line=_new_f)
                             except Exception:
                                 pass
                             if _fk > 0:
@@ -15821,7 +16036,13 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
         # líneas se deja intacto: preferimos no escalar que escalar con el factor equivocado.
         raw = meal.get("ingredients_raw")
         if isinstance(raw, list) and raw and factors:
-            if len(raw) == len(factors):
+            # [P2-RAW-PAIR-BY-FOOD · 2026-07-29] El índice ya NO se gana con el largo: hay que
+            # demostrar que ambas listas hablan del mismo alimento en cada posición. Sin esta
+            # comprobación, ~45% de las comidas escalaban la línea EQUIVOCADA de la lista de compras
+            # (raw rotado, mismo largo — lo que produce el reconciliador display↔raw).
+            _par = (len(raw) == len(factors)
+                    and (not RAW_PAIR_BY_FOOD or _raw_display_parallel_by_food(_ing_strs, raw)))
+            if _par:
                 meal["ingredients_raw"] = [
                     rescale_ingredient_string(str(r), f) for r, f in zip(raw, factors)
                 ]
@@ -15833,8 +16054,9 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                     logger.info(
                         f"⚖️ [P1-SOLVER-RAW-BY-FOOD] {str(meal.get('name'))[:32]!r}: "
                         f"{_n} línea(s) de raw escaladas por alimento "
-                        f"(display={len(factors)} vs raw={len(raw)} — el guard por índice "
-                        f"las habría dejado sin escalar)")
+                        f"(display={len(factors)} vs raw={len(raw)} — "
+                        f"{'largos distintos' if len(raw) != len(factors) else 'MISMO largo pero NO paralelas'}; "
+                        f"el guard por índice habría escalado la línea equivocada)")
         ach = res["achieved"]
         meal["protein"] = round(ach["protein"])
         meal["carbs"] = round(ach["carbs"])
@@ -17566,6 +17788,57 @@ TRUTHUP_NEGLIGIBLE_FAT_100 = _env_float("MEALFIT_TRUTHUP_NEGLIGIBLE_FAT_100", 1.
 _TRUTHUP_NOMASS_QTY_RE = _re.compile(
     r"\b(?:al?\s+gusto|opcional|a\s+discreci[oó]n|una?\s+pizca|a\s+ojo|c/?n|cantidad\s+necesaria)\b",
     _re.IGNORECASE)
+
+
+def _closer_sync_meal_macros(meal: dict, db, *, old_line: str = None, new_line: str = None) -> bool:
+    """[P2-MICRO-CLOSER-MACRO-DELTA · 2026-07-29] (audit solver+seeder v4) Sincroniza los macros del
+    plato tras una mutación del micro-closer. Intenta el truth-up completo y, si SE ABSTIENE, aplica
+    el DELTA de la línea tocada.
+
+    Por qué hace falta el fallback: `_truth_up_meal_macros_from_strings` ABORTA (return False, sin
+    escribir) si algún ingrediente resuelve por NOMBRE pero no por CANTIDAD y no es macro-despreciable
+    — p.ej. "1 lata de atún al agua" ('lata' sin `container_weight_g`, 132 kcal/100g > el umbral de
+    despreciable). En ese plato el closer podía sembrar "10 g de semillas de linaza" (~53 kcal, 4.2 g
+    de grasa) y escalar la avena 1.5×: los ingredientes y la LISTA DE COMPRAS cambiaban y
+    `meal['cals']` NO. Consecuencias encadenadas: el band-score y el PDF declaran menos kcal/grasa de
+    las que el usuario come, y `_trim_day_carbs_to_target` / `_trim_day_fats_to_target` —que leen los
+    macros ALMACENADOS— no ven el exceso, así que no compensan. Justo P1-FATS-POSTCLOSER-RELEVEL
+    existe porque lo que el closer siembra es grasa-denso.
+
+    `old_line=None` + `new_line` = línea AÑADIDA (seed): el delta son sus macros completos.
+    Si tampoco resuelve el delta, marca `_closer_macros_unaccounted` en vez de callar.
+    tooltip-anchor: P2-MICRO-CLOSER-MACRO-DELTA"""
+    try:
+        if _truth_up_meal_macros_from_strings(meal, db):
+            return True
+    except Exception:
+        pass
+    if not MICRO_CLOSER_MACRO_DELTA_FALLBACK or not new_line:
+        return False
+    try:
+        _new = db.macros_from_ingredient_string(new_line) or {}
+        _old = (db.macros_from_ingredient_string(old_line) or {}) if old_line else {}
+        if not _new:
+            meal["_closer_macros_unaccounted"] = True
+            return False
+        _delta = {m: float(_new.get(m) or 0.0) - float(_old.get(m) or 0.0)
+                  for m in ("kcal", "protein", "carbs", "fats")}
+        if all(abs(v) < 0.5 for v in _delta.values()):
+            return False
+        for _fld, _mk in (("protein", "protein"), ("carbs", "carbs"), ("fats", "fats"), ("cals", "kcal")):
+            meal[_fld] = max(0, round(_meal_macro_num(meal.get(_fld)) + _delta[_mk]))
+        meal["macros"] = [f"P:{round(_meal_macro_num(meal.get('protein')))}g",
+                          f"C:{round(_meal_macro_num(meal.get('carbs')))}g",
+                          f"G:{round(_meal_macro_num(meal.get('fats')))}g"]
+        logger.info(f"🧮 [P2-MICRO-CLOSER-MACRO-DELTA] truth-up se abstuvo en "
+                    f"{str(meal.get('name'))[:32]!r} → macros ajustados por delta "
+                    f"({_delta['kcal']:+.0f} kcal, {_delta['fats']:+.1f} g grasa).")
+        return True
+    except Exception as _dl_e:
+        meal["_closer_macros_unaccounted"] = True
+        logger.warning(f"[P2-MICRO-CLOSER-MACRO-DELTA] delta no aplicable en "
+                       f"{str(meal.get('name'))[:32]!r}: {type(_dl_e).__name__}: {_dl_e}")
+        return False
 
 
 def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
@@ -25069,6 +25342,20 @@ _PROTEIN_REPEAT_SWAP_LADDER = {
     "camarones": ("pescado", "pollo", "res"),
     "pulpo": ("pescado", "pollo"),
     "cangrejo": ("pescado", "pollo"),
+    # [P2-PROTEIN-ALIASES-SSOT · 2026-07-29] `mejillones` entra al gate en este mismo cambio; sin
+    # escalera el autofix quedaría impotente (`no_ladder_for_label`) y el reviewer rechazaría el
+    # plan COMPLETO — el modo de fallo que P2-PROTEIN-LADDER-GAPS documentó con corr=c0a950c6.
+    # Añadir una especie al gate sin su escalera convierte una mejora de detección en un rechazo.
+    "mejillones": ("pescado", "pollo"),
+    # [P2-PROTEIN-ALIASES-SSOT · 2026-07-29] Las 5 especies que P1-VARIETY-GATE-GAPS añadió al gate
+    # HOY quedaron sin escalera (`test_p2_protein_ladder_gaps` rojo en HEAD): el gate las DETECTA
+    # pero el autofix no puede repararlas → `no_ladder_for_label` → rechazo del plan completo, que es
+    # peor que no detectarlas. Detectar sin poder reparar no es media mejora: es una regresión.
+    "chivo": ("res", "pollo", "cerdo"),
+    "conejo": ("pollo", "pavo", "res"),
+    "higado": ("res", "pollo"),
+    "langosta": ("pescado", "pollo"),
+    "calamar": ("pescado", "pollo"),
 }
 # [P1-PROTEIN-REPEAT-FALLBACK-NONGATED · 2026-07-06] Cuando la escalera de CARNES se agota (todas
 # presentes ese día O bloqueadas por dislikes/alergias), cae a proteínas NO-gated: legumbres/queso
@@ -26928,6 +27215,94 @@ def _catalog_density_index() -> dict:
         idx = {}
     _CATALOG_DENSITY_INDEX_CACHE = idx
     return idx
+
+
+def _raw_display_parallel_by_food(ing_strs: list, raw: list) -> bool:
+    """[P2-RAW-PAIR-BY-FOOD · 2026-07-29] ¿`ingredients` e `ingredients_raw` son paralelas DE VERDAD?
+
+    "Mismo largo" NUNCA fue evidencia de "mismo orden": el reconciliador display↔raw reconstruye raw
+    como `[conservadas] + [añadidas]`, o sea preserva el largo y cambia el orden. Medido: el 93.5% de
+    las comidas tiene largos iguales pero solo el 48.1% de ESAS son paralelas por índice.
+
+    Devuelve True solo si cada posición resuelve al MISMO alimento en ambas listas. Una posición que
+    no resuelve en ninguna de las dos se considera compatible (no podemos afirmar divergencia); una
+    que resuelve en una sola, o a alimentos distintos, rompe el paralelismo.
+
+    100% offline (`cheap=True` + memoización) — es un gate de decisión, no puede hacer red.
+    Fail-safe: cualquier excepción → False (preferimos el mapeo por alimento, que es conservador).
+    tooltip-anchor: P2-RAW-PAIR-BY-FOOD"""
+    try:
+        if len(ing_strs) != len(raw):
+            return False
+        for _d, _r in zip(ing_strs, raw):
+            _fd, _ = _resolve_line_food_grams(str(_d), cheap=True)
+            _fr, _ = _resolve_line_food_grams(str(_r), cheap=True)
+            if _fd is None and _fr is None:
+                continue          # ninguna resuelve → no podemos afirmar divergencia
+            if _fd != _fr:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _sync_one_raw_line(meal: dict, idx: int, display_old: str, factor: float) -> bool:
+    """[P2-MICRO-CLOSER-RAW-BY-FOOD · 2026-07-29] (audit solver+seeder v4) Escala en
+    `ingredients_raw` la línea que corresponde a `meal['ingredients'][idx]`, aplicando el MISMO
+    criterio que el solver: índice solo con paralelismo verificado; si no, por ALIMENTO.
+
+    Las 3 escrituras a raw del micro-closer (escalado principal, refuerzo post-erosión y fatswap)
+    usaban `idx < len(_raw)` a secas. Con las listas desalineadas —el caso NORMAL medido— escalaban
+    la línea de OTRO alimento mientras el portador del micro nunca crecía en la base que leen el
+    panel y la lista de compras; y como el closer re-entra (post-motor, swap, chat), el crecimiento
+    se COMPONÍA sobre el alimento equivocado.
+
+    Conservador a propósito: si el alimento no resuelve, o aparece en varias líneas de raw, NO toca
+    nada (devuelve False). Preferimos raw sin escalar —estado que el reconciliador sabe cerrar— a
+    raw escalado en la línea equivocada, que nadie detecta.
+    tooltip-anchor: P2-MICRO-CLOSER-RAW-BY-FOOD"""
+    _raw = meal.get("ingredients_raw")
+    if not (isinstance(_raw, list) and _raw):
+        return False
+    try:
+        # Import LOCAL a propósito: `rescale_ingredient_string` NO está a nivel de módulo en este
+        # archivo (los callsites la aliasan como `_resc` dentro de su propia función). La primera
+        # versión de este helper la usaba como global → NameError en CADA invocación, tragado por el
+        # `except` de abajo → el sync devolvía False siempre y raw no se escribía nunca. Lo cazó la
+        # regresión funcional, no el except. Por eso el except ahora LOGUEA (ver abajo).
+        from nutrition_db import rescale_ingredient_string
+        _ings = meal.get("ingredients") or []
+        _parallel = (isinstance(_ings, list) and len(_raw) == len(_ings)
+                     and (not RAW_PAIR_BY_FOOD
+                          or _raw_display_parallel_by_food([str(x) for x in _ings], _raw)))
+        if _parallel and 0 <= idx < len(_raw) and isinstance(_raw[idx], str):
+            _nr = rescale_ingredient_string(_raw[idx], factor)
+            if _nr:
+                _raw[idx] = _nr
+                return True
+            return False
+        if not MICRO_CLOSER_RAW_BY_FOOD:
+            return False
+        _food, _ = _resolve_line_food_grams(str(display_old), cheap=True)
+        if not _food:
+            return False
+        _hits = [i for i, r in enumerate(_raw)
+                 if isinstance(r, str) and _resolve_line_food_grams(r, cheap=True)[0] == _food]
+        if len(_hits) != 1:
+            return False  # 0 → nada que escalar; >1 → ambiguo, no adivinamos
+        _nr = rescale_ingredient_string(_raw[_hits[0]], factor)
+        if not _nr:
+            return False
+        _raw[_hits[0]] = _nr
+        meal["_closer_raw_by_food"] = int(meal.get("_closer_raw_by_food") or 0) + 1
+        return True
+    except Exception as _sr_e:
+        # NUNCA mudo: un fallo aquí significa que el panel y la lista de compras se quedan con la
+        # cantidad vieja mientras el display muestra la nueva — el modo de fallo que este helper
+        # existe para cerrar. Si esto aparece en logs, es un bug del helper, no ruido.
+        logger.warning(f"[P2-MICRO-CLOSER-RAW-BY-FOOD] sync de raw falló en meal "
+                       f"{str(meal.get('name'))[:32]!r}: {type(_sr_e).__name__}: {_sr_e}")
+        return False
 
 
 def _rescale_raw_by_food(raw: list, ing_strs: list, factors: list) -> "tuple[list, int]":
@@ -29887,7 +30262,11 @@ MEAL_DOUBLE_MAIN_RESOLVE_ENABLED = _env_bool("MEALFIT_MEAL_DOUBLE_MAIN_RESOLVE",
 # Familias colapsadas: cualquier pez = 'pescado'; res/carne = 'res'. El resto, su token.
 _DM_FISH_TOKENS = ("pescado", "tilapia", "mero", "salmon", "bacalao", "chillo", "atun", "sardina")
 _DM_SPECIES_TOKENS = ("pollo", "pavo", "cerdo", "res", "carne", "camaron", "pulpo", "calamar",
-                      "cangrejo", "langosta", "chivo", "conejo", "higado") + _DM_FISH_TOKENS
+                      "cangrejo", "langosta", "chivo", "conejo", "higado",
+                      # [P2-PROTEIN-ALIASES-SSOT · 2026-07-29] `_dm_species_of('mejillones al vapor')`
+                      # devolvía `set()`: el resolver de doble-principal no los veía y un plato podía
+                      # llevar mejillones + pollo como dos principales sin que actuara.
+                      "mejillon") + _DM_FISH_TOKENS
 # [P1-DM-SPECIES-BOUNDARY · 2026-07-28] "res" ⊂ "fResco" (cazado EN VIVO corr=6acd0c94:
 # 'Cilantro fresco para decorar' eliminado de dos platos de cerdo como "2ª principal res").
 # Frontera de palabra: "res" SOLO como palabra completa (res/reses — 'reservada' y
@@ -40731,6 +41110,55 @@ def _plan_goal_is_gainmuscle(plan: dict, explicit_goal=None) -> bool:
         return False
 
 
+def _compute_slot_drift(plan: dict) -> "dict | None":
+    """[P2-SLOT-DRIFT-TELEMETRY · 2026-07-29] (audit solver+seeder v4) Desviación ENTREGADA vs la
+    cuota del slot, por slot y macro (p50 del ratio entregado/slot-target).
+
+    Existe porque el reparto fisiológico de `MEAL_SLOT_SPLITS` es hoy **inobservable en producción**:
+    se aplica una vez como target del solver y todos los pases posteriores son slot-ciegos. Un sesgo
+    sistemático contra la CENA no mueve ni una celda de la banda (que puntúa día×macro), así que
+    nadie se entera. Medir primero, mover el reparto después.
+
+    Cero coste de LLM y cero mutación. Fail-safe → None."""
+    try:
+        _acc: dict = {}
+        for _d in (plan.get("days") or []):
+            _meals = [m for m in ((_d.get("meals") or []) if isinstance(_d, dict) else [])
+                      if isinstance(m, dict)]
+            if not _meals:
+                continue
+            # SSOT: la MISMA función que reparte el día en el pipeline (normaliza a 1.0 y respeta el
+            # orden de slots, incluida merienda_noche). Reusarla evita una 3ª lista paralela.
+            _fracs = _canonical_slot_fractions(_meals)
+            if not _fracs or len(_fracs) != len(_meals):
+                continue
+            _day_tot = {m: sum(_meal_macro_num(x.get(m)) for x in _meals)
+                        for m in ("protein", "carbs", "fats")}
+            for _i, _m in enumerate(_meals):
+                try:
+                    _frac = float(_fracs[_i])
+                except (TypeError, ValueError):
+                    continue
+                if _frac <= 0:
+                    continue
+                _slot = str(_m.get("meal_type") or _m.get("time") or f"slot_{_i}").strip().lower()
+                for _mac in ("protein", "carbs", "fats"):
+                    _tgt = _day_tot[_mac] * _frac
+                    if _tgt <= 0:
+                        continue
+                    _acc.setdefault(_slot, {}).setdefault(_mac, []).append(
+                        round(_meal_macro_num(_m.get(_mac)) / _tgt, 4))
+        if not _acc:
+            return None
+        def _p50(xs):
+            xs = sorted(xs)
+            return round(xs[len(xs) // 2], 3) if xs else None
+        return {_slot: {_mac: _p50(_vals) for _mac, _vals in _macs.items()}
+                for _slot, _macs in _acc.items()}
+    except Exception:
+        return None
+
+
 def compute_clinical_band_score(plan: dict, nutrition: dict, *,
                                 lower: float = None, upper: float = None, goal: str = None) -> dict:
     """[P4-SCOREBOARD · 2026-06-14] Score DETERMINISTA de precisión por-plan: la fracción de celdas
@@ -40816,6 +41244,17 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
             "all4_ratio": round(all4_days / days_total, 3) if days_total else None,
             # [P1-BAND-TELEMETRY-PER-DAY · 2026-07-10] matriz día×macro para forensics sin reprocesar logs.
             "per_day": per_day,
+            # [P2-SLOT-DRIFT-TELEMETRY · 2026-07-29] (audit solver+seeder v4) `MEAL_SLOT_SPLITS` se
+            # aplica UNA vez, como target del solver per-meal; TODO lo que corre después es
+            # SLOT-CIEGO y redistribuye libremente entre comidas (el refinador global recibe
+            # `targets` del DÍA y trata las líneas de todas las comidas como un pool; el repair del
+            # piso de proteína recorre por ÍNDICE y hace `break` al alcanzar el día, así que rellena
+            # Desayuno→Almuerzo→Merienda y la CENA casi nunca recibe). Ninguna métrica del sistema
+            # observaba la desviación por slot: la banda puntúa celdas día×macro, que son ciegas al
+            # reparto interno. Esto la hace observable ANTES de tocar el reparto físico (los levers
+            # (a) y (b) del hallazgo nacen OFF bajo MEALFIT_SLOT_AWARE_DAY_REPAIR).
+            # tooltip-anchor: P2-SLOT-DRIFT-TELEMETRY
+            "slot_drift": _compute_slot_drift(plan) if SLOT_DRIFT_TELEMETRY else None,
         }
     except Exception as _bs_e:
         logger.warning(f"[P4-SCOREBOARD] compute_clinical_band_score falló: {type(_bs_e).__name__}: {_bs_e}")
@@ -42384,24 +42823,47 @@ def _compute_pipeline_holistic_score_and_emit(
                     # vs ABAJO (quería menos → sobre-entrega). Desambigua la opción (b) del solver con datos de flota.
                     _clamp_hi = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_clamp_saturated_hi"))
                     _clamp_lo = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_clamp_saturated_lo"))
+                    # [P2-SOLVER-CONVERGENCE-METRIC · 2026-07-29] (audit solver+seeder v4) La señal de
+                    # calidad de MAYOR volumen del solver no tenía consumidor: `_solver_not_converged`
+                    # ocurre en el 57.2% de las comidas y `_solver_greedy_fallback` delata que el LSQ
+                    # cayó al algoritmo inferior — ambas se escribían en cada plan y NADIE las leía.
+                    # Ese 57.2% hubo que descubrirlo con un SQL ad-hoc sobre `plan_data` de 30 planes;
+                    # no existía como serie, así que un salto a 80% no dispararía nada (y el
+                    # `clinical_band` agregado no lo distingue de ruido: los pases de reparación
+                    # posteriores tapan el síntoma varios pases más tarde).
+                    # Claves ADITIVAS sobre la fila que ya se emite — cero crons, cero coste, y el
+                    # denominador (`total_meals`) ya es el correcto. Rollback: =false.
+                    _nc = _gf = 0
+                    if SOLVER_CONVERGENCE_METRIC:
+                        _nc = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_not_converged"))
+                        _gf = sum(1 for _m4 in _clamp_meals if _m4.get("_solver_greedy_fallback"))
                     if _clamp_meals:
+                        _md_clamp = {
+                            "saturated_meals": _clamp_sat,
+                            "saturated_meals_hi": _clamp_hi,  # clamp arriba (3.5×): subir max_scale ayudaría
+                            "saturated_meals_lo": _clamp_lo,  # clamp abajo (0.3×): otro lever
+                            "total_meals": len(_clamp_meals),
+                            "delivered_was_fallback": delivered_was_fallback,
+                        }
+                        if SOLVER_CONVERGENCE_METRIC:
+                            _md_clamp["not_converged_meals"] = _nc
+                            _md_clamp["greedy_fallback_meals"] = _gf
+                            _md_clamp["not_converged_ratio"] = round(_nc / len(_clamp_meals), 3)
                         _emit_progress(initial_state, "metric", {
                             "node": "solver_clamp",
                             "duration_ms": 0,
                             "retries": final_state.get("attempt", 1) - 1,
                             "tokens_estimated": 0,
                             "confidence": round(_clamp_sat / len(_clamp_meals), 3),
-                            "metadata": {
-                                "saturated_meals": _clamp_sat,
-                                "saturated_meals_hi": _clamp_hi,  # clamp arriba (3.5×): subir max_scale ayudaría
-                                "saturated_meals_lo": _clamp_lo,  # clamp abajo (0.3×): otro lever
-                                "total_meals": len(_clamp_meals),
-                                "delivered_was_fallback": delivered_was_fallback,
-                            },
+                            "metadata": _md_clamp,
                         })
                         if _clamp_sat:
                             logger.info(f"📐 [P2-SOLVER-CLAMP-ACTION] {_clamp_sat}/{len(_clamp_meals)} "
                                         f"meals con clamp del solver saturado en el plan entregado.")
+                        if _nc or _gf:
+                            logger.info(f"📐 [P2-SOLVER-CONVERGENCE-METRIC] {_nc}/{len(_clamp_meals)} "
+                                        f"meals NO convergidos, {_gf} con fallback greedy "
+                                        f"(línea base de flota 2026-07-29: 57.2% no-convergidos).")
                 except Exception:
                     pass
                 # [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) métrica de flota por-meal (NO hard-gate):

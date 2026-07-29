@@ -33,9 +33,33 @@ from constants import (
 )
 from db import get_user_profile, update_user_health_profile, update_user_health_profile_atomic, get_user_ingredient_frequencies
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
-from knobs import _env_str, _env_float, _env_bool  # [P3-FLASH-LITE-COST-CUT · 2026-05-21] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] / [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23]
+from knobs import _env_str, _env_float, _env_bool, _env_int  # [P3-FLASH-LITE-COST-CUT · 2026-05-21] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] / [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23] / [P2-PANTRY-ROTATION-FLOOR · 2026-07-29]
 
 logger = logging.getLogger(__name__)
+
+# [P2-FREQ-LOOKUP-CANONICAL · 2026-07-29] (audit solver+seeder v4) El lookup de frecuencias del
+# sorteo usa TAMBIÉN la clave canónica de `normalize_ingredient_for_tracking` (la misma con la que
+# se ESCRIBE la tabla), no solo los alias. Sin esto, 19 de los 145 ítems de los pools tenían
+# `freq=0` permanente — el peso MÁXIMO — porque su clave de tracking es OTRO ítem del pool.
+# Rollback sin redeploy: MEALFIT_FREQ_LOOKUP_CANONICAL=false → lookup solo-por-alias (previo).
+FREQ_LOOKUP_CANONICAL = _env_bool("MEALFIT_FREQ_LOOKUP_CANONICAL", True)
+# [P2-FREQ-TRACKING-CHUNKED · 2026-07-29] (audit solver+seeder v4) El tracking de frecuencias vivía
+# SOLO en la rama no-chunked. Como `use_chunking = perfil AND días > PLAN_CHUNK_SIZE(3)`, TODO plan
+# de 7 días de un usuario con perfil caía en la rama que NO trackea → la tabla nunca crecía y el
+# sorteo perdía su señal. Medido en Neon 2026-07-29: 0 filas cruzando con planes; 30 planes creados
+# desde el último `last_used`. Rollback sin redeploy: MEALFIT_TRACK_FREQ_ON_CHUNKED=false.
+TRACK_FREQ_ON_CHUNKED = _env_bool("MEALFIT_TRACK_FREQ_ON_CHUNKED", True)
+# [P2-PANTRY-ROTATION-FLOOR · 2026-07-29] (audit solver+seeder v4) Mínimo de proteínas DISTINTAS que
+# la nevera debe aportar para que el modo rotación reemplace el pool y active `cycle_locked`. Por
+# debajo, la nevera va primero pero se completa con el sorteo (y sin lock) — si no, una nevera con
+# una sola proteína produce los 3 días con la misma base, violando el cap de huevo del propio prompt.
+# `=1` restaura exactamente el comportamiento previo. Rollback sin redeploy.
+PANTRY_ROTATION_MIN_PROTEINS = max(1, min(3, _env_int("MEALFIT_PANTRY_ROTATION_MIN_PROTEINS", 2,
+                                                      lambda v: 1 <= v <= 3)))
+# [P2-LIGHT-PROTEIN-SEED · 2026-07-29] (audit solver+seeder v4) Sortea el ancla proteica de
+# desayuno/merienda (última categoría sin sorteo: 5 viñetas literales iguales para todos los planes).
+# Nace OFF esperando A/B — con el knob apagado el prompt queda BYTE-IDÉNTICO (bloque vacío).
+LIGHT_PROTEIN_SEED = _env_bool("MEALFIT_LIGHT_PROTEIN_SEED", False)
 
 
 # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Knob para overridear el modelo del
@@ -357,18 +381,43 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if db_freq_map:
         # ======= NUEVO FLUJO OPTIMIZADO O(1) =======
         logger.info(f"⚡ [ANTI MODE-COLLAPSE] Usando Hash Map O(1) de DB con {len(db_freq_map)} métricas pre-calculadas.")
+
+        def _freq_for_pool_item(item: str, syn_map: dict) -> int:
+            """[P2-FREQ-LOOKUP-CANONICAL · 2026-07-29] (audit solver+seeder v4) El seeder LEÍA por
+            alias y la tabla se ESCRIBE por la BASE canónica de `normalize_ingredient_for_tracking`
+            (n-gramas contra `GLOBAL_REVERSE_MAP`). Para todo ítem del pool que es VARIANTE de otra
+            base, la clave consultada NUNCA existía en la tabla → `freq=0` permanente → peso
+            `1/(0+1)=1.0`, el MÁXIMO, para siempre.
+
+            Medido sobre los 4 pools (145 ítems): **19 ciegos** — Maní y Almendras fileteadas
+            resuelven a `nueces/almendras`; Salmón/Tilapia/Mero/Bacalao/Arenque a `pescado`; Muslo
+            de pollo a `pollo`; Hígado de res a `res`… La asimetría se REFUERZA sola: comer salmón
+            incrementa `pescado`, lo que castiga al ítem genérico del pool y NO al salmón, así que
+            el sorteo se desplaza hacia el pez específico que el usuario acaba de comer. Es la
+            explicación del maní en 4 de 12 comidas que el owner venía viendo.
+
+            UNIÓN, no reemplazo: sumamos alias + clave canónica (si un ítem ya es su propia base, no
+            pierde señal; el `set` evita contar dos veces cuando coinciden).
+            tooltip-anchor: P2-FREQ-LOOKUP-CANONICAL"""
+            _keys = {strip_accents(s.lower()) for s in syn_map.get(item.lower(), [item.lower()])}
+            if FREQ_LOOKUP_CANONICAL:
+                try:
+                    from constants import normalize_ingredient_for_tracking as _norm_freq
+                    _canon = _norm_freq(item)
+                    if _canon:
+                        _keys.add(strip_accents(str(_canon).lower()))
+                except Exception:
+                    pass
+            return sum(db_freq_map.get(_k, 0) for _k in _keys)
+
         for p in filtered_proteins:
-            syns = protein_synonyms.get(p.lower(), [p.lower()])
-            protein_freq[p] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+            protein_freq[p] = _freq_for_pool_item(p, protein_synonyms)
         for c in filtered_carbs:
-            syns = carb_synonyms.get(c.lower(), [c.lower()])
-            carb_freq[c] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+            carb_freq[c] = _freq_for_pool_item(c, carb_synonyms)
         for v in filtered_veggies:
-            syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
-            veggie_freq[v] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+            veggie_freq[v] = _freq_for_pool_item(v, veggie_fat_synonyms)
         for f in filtered_fruits:
-            syns = fruit_synonyms.get(f.lower(), [f.lower()])
-            fruit_freq[f] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+            fruit_freq[f] = _freq_for_pool_item(f, fruit_synonyms)
     else:
         # ======= FALLBACK: Regex en Runtime (O(n×m)) para Invitados =======
         # Truncar historial a los últimos ~5000 chars (~1250 tokens) para proteger de O(N×M) si la sesión guest es larga.
@@ -981,11 +1030,36 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 if any(strip_accents(s) in item for s in syns) and f not in extracted_f: 
                     extracted_f.append(f)
                 
-        if extracted_p: unique_proteins = extracted_p
+        # [P2-PANTRY-ROTATION-FLOOR · 2026-07-29] (audit solver+seeder v4) Esto REEMPLAZABA los pools
+        # por lo extraído de la nevera y forzaba `cycle_locked = True` INCONDICIONALMENTE — sin sorteo,
+        # sin cap y sin mínimo. `useRegeneratePlan.js` manda `current_pantry_ingredients` en TODA
+        # renovación, así que si tras el `/inventory/consume` la nevera conserva UNA sola proteína
+        # reconocible (p.ej. Huevos), el padding la cicla y `chosen_proteins = [Huevos]×3`: los 3 días
+        # con huevo mientras el MISMO prompt dice "el HUEVO no debe aparecer en más de 2-3 comidas de
+        # todo el plan" y `cycle_locked` prohíbe introducir otra base. El plan nacía obligado a violar
+        # su propio cap, y `build_variety_report` lo cazaba después.
+        # Además abría una puerta lateral al bloqueo que `MEALFIT_GROCERY_CYCLE_LOCK` tiene APAGADO
+        # por default desde P1-VARIETY-RENEWAL-NO-CYCLE-LOCK, justo porque el owner pidió variedad
+        # de ingredientes sobre reuso.
+        # Ahora la nevera es un PISO, no una camisa de fuerza: va PRIMERO (conserva la prioridad de
+        # ahorro) y se completa con el sorteo ponderado hasta el mínimo; solo con suficientes bases
+        # propias se activa el lock. tooltip-anchor: P2-PANTRY-ROTATION-FLOOR
+        _min_p = PANTRY_ROTATION_MIN_PROTEINS
+        if extracted_p:
+            if len(extracted_p) >= _min_p:
+                unique_proteins = extracted_p
+            else:
+                _rest = [p for p in unique_proteins if p not in extracted_p]
+                unique_proteins = extracted_p + _rest
+                logger.info(
+                    f"🧊 [P2-PANTRY-ROTATION-FLOOR] la nevera aportó {len(extracted_p)} proteína(s) "
+                    f"(<{_min_p}) → se completa con el sorteo ponderado y NO se activa cycle-lock "
+                    f"(evita los 3 días con la misma base).")
         if extracted_c: unique_carbs = extracted_c
         if extracted_v: unique_veggies = extracted_v
         if extracted_f: unique_fruits = extracted_f
-        cycle_locked = True # We force cycle locked mode to ensure pure rotation
+        # El lock solo si la nevera sostiene la rotación por sí sola.
+        cycle_locked = bool(extracted_p) and len(extracted_p) >= _min_p
         
     # ======= FORCED INGREDIENT INJECTION (FROM RAG/HISTORY) =======
     if form_data and "_force_base_proteins" in form_data:
@@ -1329,7 +1403,41 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     logger.info(f"✅ [P1-CARB-SEEDER-PAIRS] 2ª base por día (evita repetir base el mismo día): "
                 f"{[carb_params[f'carb_{i}b'] for i in range(3)]}")
 
+    # [P2-LIGHT-PROTEIN-SEED · 2026-07-29] (audit solver+seeder v4) El seeder reparte por día proteína
+    # principal, carbo (×2, P1-CARB-SEEDER-PAIRS), vegetal/grasa (×2) y fruta (×2,
+    # P1-FRUIT-SEEDER-GATE-CONTRACT). El ANCLA PROTEICA de desayuno/merienda era la última categoría
+    # sin sorteo: 5 viñetas literales, idénticas para los 3 días de TODOS los planes. En un plan de
+    # 4×3, eso son 6 de 12 comidas eligiendo de un menú fijo donde 2 opciones son frutos secos y 1 es
+    # huevo — el origen medido del "maní en 4 de 12" y del huevo topando su cap. El advisory
+    # `cross_day_snack_pair_repeats` que se añadió hoy está midiendo el síntoma de este literal.
+    #
+    # Nace OFF (mismo criterio que MEALFIT_FAT_LEAN_SWAP / MEALFIT_REFINE_HOUSEHOLD_LINES): con el
+    # knob apagado el prompt es BYTE-IDÉNTICO al actual (protege el prompt-cache) porque el bloque
+    # inyectado es la cadena vacía. tooltip-anchor: P2-LIGHT-PROTEIN-SEED
+    _light_block = ""
+    if LIGHT_PROTEIN_SEED:
+        try:
+            _light_pool = [v for v in (filtered_veggies or [])
+                           if any(t in strip_accents(str(v).lower())
+                                  for t in ("queso", "yogur", "almendra", "nuez", "nueces",
+                                            "mani", "mantequilla", "ricotta"))]
+            if len(_light_pool) >= 2:
+                _light_slots = _rotate_pairs(_light_pool[:4])
+                if _light_slots:
+                    _l = [" o ".join(s) if isinstance(s, (list, tuple)) else str(s)
+                          for s in _light_slots[:3]]
+                    while len(_l) < 3:
+                        _l.append(_l[-1] if _l else "")
+                    _light_block = (
+                        f"\n     ⭐ ANCLA LIVIANA SORTEADA POR DÍA (prioriza ESTA sobre las viñetas "
+                        f"genéricas de abajo): día A → {_l[0]} · día B → {_l[1]} · día C → {_l[2]}.")
+                    logger.info(f"🥚 [P2-LIGHT-PROTEIN-SEED] anclas livianas por día: {_l}")
+        except Exception as _lp_e:
+            _light_block = ""   # fail-open: el literal de siempre nunca es peor que hoy
+            logger.warning(f"[P2-LIGHT-PROTEIN-SEED] sorteo no-op: {type(_lp_e).__name__}: {_lp_e}")
+
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
+        light_protein_block=_light_block,
         protein_0=chosen_proteins[0],
         veggie_0=chosen_veggies[0], veggie_0b=chosen_veggies[3],
         protein_1=chosen_proteins[1],

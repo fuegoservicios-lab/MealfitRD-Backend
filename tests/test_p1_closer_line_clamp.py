@@ -75,7 +75,7 @@ def _run(go, monkeypatch, plan, piso=4000.0):
         "panel": [{"key": "potassium_mg", "piso": piso, "valor": 0.0, "status": "bajo"}],
         "gaps": [{"key": "potassium_mg", "piso": piso, "status": "bajo"}],
         "coverage": 1.0, "per_day_floors": {"flagged": False}})
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     return plan
 
 

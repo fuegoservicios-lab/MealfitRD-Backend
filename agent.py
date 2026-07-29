@@ -139,6 +139,15 @@ def strip_ui_action_tags_for_persist(text):
 # `day_number`/`meal_type` correcto en `modify_single_meal`. NO podar días
 # week-2+ ni texto de recetas: degradaría la precisión del agente.
 # tooltip-anchor: _CHAT_PLAN_PRUNE_KEYS (test_p2_genchunk_speed parsea esto)
+
+# [P2-SWAP-NUM-MEALS · 2026-07-29] (audit solver+seeder v4) El slot-target del swap se derivaba
+# SIEMPRE con `num_meals = 4` (nadie aporta el campo) → en perfiles de 3/5/6 comidas el matcher
+# devolvía la cuota del slot equivocado y el solver re-escalaba físicamente el plato nuevo a ese
+# target. Con el knob, si el campo falta se deriva del perfil vía `decide_meals_per_day`; el literal
+# 4 sigue siendo el último fallback, así que nunca es peor que antes.
+# Rollback sin redeploy: MEALFIT_SWAP_NUM_MEALS_FROM_PLAN=false.
+SWAP_NUM_MEALS_FROM_PLAN = _env_bool("MEALFIT_SWAP_NUM_MEALS_FROM_PLAN", True)
+
 _CHAT_PLAN_PRUNE_KEYS = (
     "aggregated_shopping_list",
     "aggregated_shopping_list_weekly",
@@ -555,10 +564,29 @@ def swap_meal(form_data: dict):
                     "kcal": _nt8.get("target_calories"), "protein": _m8.get("protein_g"),
                     "carbs": _m8.get("carbs_g"), "fats": _m8.get("fats_g"),
                 }
+                # [P2-SWAP-NUM-MEALS · 2026-07-29] (audit solver+seeder v4) `_num8` caía SIEMPRE a 4:
+                # ni el cliente ni el enriquecimiento server-side aportan `num_meals`/`mealsPerDay`.
+                # Latente en la cohorte de 4 comidas, dispara al 100% en la clínica de 3/5/6.
+                # Caso post-bariátrico: `decide_meals_per_day` devuelve 6 y la 'Merienda Nocturna'
+                # vale 0.08 del día; con `_num8=4` el matcher hace match de 'merienda' dentro de
+                # 'merienda nocturna' y devuelve la cuota de 0.15 → el plato nuevo se re-escala a
+                # 300 kcal en vez de 160 (×1.875) dentro de un pouch de 150-200 mL.
+                # Fallback: derivar del perfil antes del literal 4 — nunca es peor que hoy.
+                _num8 = None
                 try:
-                    _num8 = int(form_data.get("num_meals") or form_data.get("mealsPerDay") or 4)
+                    _num8 = int(form_data.get("num_meals") or form_data.get("mealsPerDay") or 0) or None
                 except (TypeError, ValueError):
-                    _num8 = 4
+                    _num8 = None
+                if _num8 is None and SWAP_NUM_MEALS_FROM_PLAN:
+                    try:
+                        from nutrition_calculator import decide_meals_per_day as _dmpd8
+                        _num8 = int((_dmpd8(form_data) or {}).get("num_meals") or 0) or None
+                        if _num8:
+                            logger.info(f"🍽️ [P2-SWAP-NUM-MEALS] num_meals derivado del perfil: {_num8} "
+                                        f"(el literal 4 daba la cuota del slot equivocado).")
+                    except Exception:
+                        _num8 = None
+                _num8 = _num8 or 4
                 _slots8 = _alloc8(_daily8, _num8)
                 _mt8 = strip_accents(str(meal_type or "").lower()).strip()
                 _slot_key8 = next(
@@ -1635,8 +1663,17 @@ def swap_meal(form_data: dict):
                             logger.debug(
                                 "[P2-SILENT-DEGRADATION] step-sync post-reshuffle no aplicado (pasos pueden desalinear): %s: %s",
                                 type(_exc).__name__, str(_exc)[:160])
+                        # [P2-SOLVER-CONVERGENCE-METRIC · 2026-07-29] (audit solver+seeder v4) El
+                        # solver corre sobre `_rs_meal`, que es un `model_dump()` NUEVO: sus 6 flags
+                        # de telemetría quedaban ahí y se perdían al copiar de vuelta solo 8 claves.
+                        # Resultado: ninguna comida SWAPEADA aparecía jamás en la métrica per-run
+                        # `solver_clamp`, y la serie de no-convergencia que se acaba de construir
+                        # arrancaría sesgada con un agujero justo en las comidas swapeadas.
                         for _rk in ("ingredients", "ingredients_raw", "recipe",
-                                    "protein", "carbs", "fats", "cals", "macros"):
+                                    "protein", "carbs", "fats", "cals", "macros",
+                                    "_solver_clamp_saturated", "_solver_clamp_saturated_hi",
+                                    "_solver_clamp_saturated_lo", "_solver_greedy_fallback",
+                                    "_solver_not_converged", "_solver_raw_by_food"):
                             if _rk in _rs_meal and _rs_meal[_rk] is not None:
                                 if isinstance(res, dict):
                                     res[_rk] = _rs_meal[_rk]

@@ -1056,6 +1056,27 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _ramb(_pd)
                 except Exception as _ramb_e:
                     logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")
+                # [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) El único
+                # reconciliador display↔raw que actúa como "última palabra" vive DENTRO de
+                # `finalize_plan_data_coherence` (_fpc, más arriba). Pero `_rpb` y sobre todo `_ramb`
+                # corren DESPUÉS y MUEVEN cantidades (rebalance + refine de 5 g + trim de grasas) —
+                # y nada re-reconciliaba: cualquier divergencia display↔raw que esos pases
+                # introdujeran se PERSISTÍA tal cual. Misma autoridad que los otros 3 callsites
+                # (display manda), idempotente y fail-open. Va ANTES de `_rdp` para que el re-pulido
+                # del display vea el estado ya reconciliado.
+                # Rollback sin redeploy: MEALFIT_RECONCILE_AFTER_BAND_CLOSER=false.
+                try:
+                    from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc,
+                                                    _reconcile_display_raw_lines as _rdrl)
+                    if _rabc:
+                        _rw_fix = _rdrl(_pd.get("days") or [])
+                        if _rw_fix:
+                            logger.info(f"⚖️ [P2-RECONCILE-AFTER-BAND-CLOSER] {len(_rw_fix)} línea(s) "
+                                        f"display↔raw reconciliadas tras el band-closer pre-INSERT "
+                                        f"(antes se persistían divergentes).")
+                except Exception as _rabc_e:
+                    logger.debug(f"[P2-RECONCILE-AFTER-BAND-CLOSER] pre-INSERT no-op: "
+                                 f"{type(_rabc_e).__name__}: {_rabc_e}")
                 # [P1-3-POLISH-REFIRE · 2026-07-10] (recipe plausibility roadmap) el countable-polish de _fpc
                 # (arriba) corrió ANTES de los dos pases de reconciliación de banda de arriba, que mutan
                 # cantidades de ingredientes (rebalance/refine 5g) SIN re-pulir el display — plan 564d6e4e

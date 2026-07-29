@@ -108,7 +108,7 @@ def test_fatswap_grants_extra_budget_and_fires_mirror_trim(go, monkeypatch):
     monkeypatch.setattr(go, "_trim_day_fats_to_target",
                         lambda meals, tf, db, **kw: _trim_calls.append(tf) or True)
     plan = _fat_plan()
-    assert go._close_micro_gaps_for_plan(plan, {}, _FakeDB()) >= 1
+    assert go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB()) >= 1
     line = plan["days"][0]["meals"][0]["ingredients"][0]
     g = float(re.match(r"^\s*(\d+)", line).group(1))
     assert g > 5.0, f"el fatswap escaló la linaza pese al budget agotado: {line}"
@@ -127,7 +127,7 @@ def test_fatswap_knob_off_no_extra(go, monkeypatch):
     monkeypatch.setattr(go, "_trim_day_fats_to_target",
                         lambda meals, tf, db, **kw: _trim_calls.append(tf) or True)
     plan = _fat_plan()
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     assert not _trim_calls, "knob OFF → sin presupuesto extra ni trim espejo (residual honesto)"
 
 
@@ -150,7 +150,7 @@ def test_vita_seed_lands_in_savory_meal_with_coherent_note(go, monkeypatch):
          "ingredients": ["150 g de pollo"], "ingredients_raw": ["150 g de pollo"],
          "recipe": ["Mise en place: pica.", "El Toque de Fuego: guisa 20 min.", "Montaje: sirve."]},
     ]}]}
-    assert go._close_micro_gaps_for_plan(plan, {}, _FakeDB()) >= 1
+    assert go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB()) >= 1
     merienda, almuerzo = plan["days"][0]["meals"]
     assert any("zanahoria" in s.lower() for s in almuerzo["ingredients"]), \
         "seed SALADO (zanahoria) → almuerzo/cena, no la merienda dulce"

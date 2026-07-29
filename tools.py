@@ -1949,6 +1949,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     "medications": _hp.get("medications"),
                     "otherConditions": _oc_cm,
                     "otherMedications": _hp.get("otherMedications") or _hp.get("other_medications"),
+                    # [P2-MICRO-SEED-CLINICAL-CTX · 2026-07-29] (audit solver+seeder v4) idéntico al de
+                    # `/swap-meal/persist`: sin estas 3 claves el scan de alérgenos del path de SIEMBRA
+                    # no corre (se gatea por presencia de key) y el closer puede añadir un alérgeno.
+                    "allergies": [str(a).strip() for a in (_hp.get("allergies") or []) if str(a).strip()],
+                    "dietType": _hp.get("dietType") or _hp.get("diet_type"),
+                    "dislikes": _hp.get("dislikes") or [],
                 }
                 # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] pantry-strict (cocinar desde la nevera) → skip
                 # interno del closer; self-guards en MICRONUTRIENT_CLOSER_ENABLED, kcal/UL-bounded, renal-skip.

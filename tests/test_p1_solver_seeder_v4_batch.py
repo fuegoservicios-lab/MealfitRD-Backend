@@ -147,8 +147,10 @@ def test_p1_3_blind_index_write_is_gone():
     assert 'REFINE_RAW_BY_FOOD = _envb("MEALFIT_REFINE_RAW_BY_FOOD", True)' in _PS
     # el guard viejo `isinstance(raw, list) and idx < len(raw)` no debe existir en el refinador
     assert "isinstance(raw, list) and idx < len(raw)" not in _PS
-    # y el contrato nuevo (índice SOLO con largos iguales) sí
-    assert "if len(raw) == len(_disp_orig):" in _PS
+    # y el contrato nuevo sí: el índice se gana con paralelismo VERIFICADO, no con el largo
+    # [P2-RAW-PAIR-BY-FOOD · 2026-07-29] el largo solo es el primer filtro barato.
+    assert "_parallel = len(raw) == len(_disp_orig)" in _PS
+    assert "_raw_display_parallel_by_food as _par_ok" in _PS
 
 
 class _FakeDB:

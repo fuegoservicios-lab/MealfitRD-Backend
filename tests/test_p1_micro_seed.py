@@ -91,7 +91,9 @@ def _run(go, monkeypatch, key="omega3_g", piso=1.0, form=None):
     monkeypatch.setattr(micronutrients, "build_micronutrient_report",
                         lambda *a, **kw: _mk_report(key, piso))
     plan = _mk_plan()
-    n = go._close_micro_gaps_for_plan(plan, form or {}, _FakeDB())
+    # [P2-MICRO-SEED-CLINICAL-CTX · 2026-07-29] el default era `{}`, que ahora significa "sin
+    # contexto clínico" y bloquea la siembra. Producción SIEMPRE manda la clave (aunque sea []).
+    n = go._close_micro_gaps_for_plan(plan, form or {"allergies": []}, _FakeDB())
     return n, plan
 
 
@@ -131,7 +133,11 @@ def test_allergy_ladder_skips_flagged_candidates(go, monkeypatch):
 
 def test_dislike_ladder(go, monkeypatch):
     # dislike linaza → omega-3 cae al 2º candidato (chía, seed-safe).
-    n, plan = _run(go, monkeypatch, key="omega3_g", piso=1.0, form={"dislikes": ["linaza"]})
+    # [P2-MICRO-SEED-CLINICAL-CTX] `allergies` explícito: un form con dislikes pero SIN la clave de
+    # alergias es justo el caso ambiguo que el guard bloquea (no sabemos si es "ninguna" o "no me la
+    # pasaron"). Producción manda las tres claves.
+    n, plan = _run(go, monkeypatch, key="omega3_g", piso=1.0,
+                   form={"dislikes": ["linaza"], "allergies": []})
     assert n >= 1
     joined = " ".join(plan["days"][0]["meals"][1]["ingredients"])
     assert "linaza" not in joined and "chía" in joined
@@ -152,7 +158,7 @@ def test_no_seed_when_carrier_exists(go, monkeypatch):
     plan = _mk_plan()
     plan["days"][0]["meals"][0]["ingredients"].append("10 g de semillas de linaza")
     plan["days"][0]["meals"][0]["ingredients_raw"].append("10 g de semillas de linaza")
-    go._close_micro_gaps_for_plan(plan, {}, _FakeDB())
+    go._close_micro_gaps_for_plan(plan, {"allergies": []}, _FakeDB())
     _all = " | ".join(i for d in plan["days"] for m in d["meals"] for i in m["ingredients"])
     assert _all.count("linaza") == 1, "no debe sembrar si ya existe un portador (solo escalar)"
 

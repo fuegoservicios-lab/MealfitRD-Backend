@@ -19,8 +19,13 @@ _GO = (_REPO_ROOT / "backend" / "graph_orchestrator.py").read_text(encoding="utf
 
 
 def _block():
+    """[P2-SOLVER-CONVERGENCE-METRIC · 2026-07-29] Re-anclado a ORDEN RELATIVO en vez de a una
+    ventana de 2200 bytes: al añadir las claves de convergencia a esta misma emisión, el corte fijo
+    dejó `delivered_was_fallback` fuera del recorte y el test falló por el tamaño, no por el
+    contrato. Ventana fija = deuda con fecha de caducidad (lección ya anotada en el repo)."""
     i = _GO.index("[P2-SOLVER-CLAMP-ACTION · 2026-07-05]")
-    return _GO[i:i + 2200]
+    j = _GO.index("[P2-LOW-COVERAGE-MEALS", i)   # el siguiente bloque de métrica
+    return _GO[i:j]
 
 
 def test_marker_anchored():
