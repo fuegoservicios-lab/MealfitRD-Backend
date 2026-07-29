@@ -20696,7 +20696,49 @@ _TRANSFORM_NAME_TOKENS = (
     "domplin", "pastelon", "quipe", "kipe", "catibia", "tortita", "torta", "croqueta",
     "albondiga", "empanada", "waffle", "muffin", "budin", "majarete", "mangu",
     "hamburguesa", "taco", "wrap", "burrito", "pizza casera", "lasana", "mofongo",
+    # [P1-TRANSFORM-GATE-PARITY · 2026-07-29] Las familias que el PROMPT y el MENSAJE DE RECHAZO
+    # llevaban prometiendo y el detector NO contaba. Ver el bloque de abajo para la evidencia.
+    "revoltillo", "revuelto", "locrio", "moro", "asopao", "sancocho", "pastelito",
+    "bunuelo", "tortilla", "salteado", "guisado", "guiso", "estofado",
 )
+
+# [P1-TRANSFORM-GATE-PARITY · 2026-07-29] El detector, el prompt y el mensaje de rechazo eran TRES
+# listas distintas del mismo concepto, y el LLM quedaba en una posición imposible:
+#
+#   · prompt §19 (prompts/day_generator.py) le dice que cuentan «guisos, locrios (almuerzo),
+#     panqueques/arepitas, bollitos/buñuelos, revoltillos, tortitas/croquetas, mangú, ensaladas
+#     COMPUESTAS»;
+#   · el mensaje de rechazo le repite «panqueques de avena, arepitas, bollitos de yuca, revoltillo,
+#     guiso, locrio de almuerzo»;
+#   · el detector (arriba) NO tenía guiso, guisado, locrio, revoltillo ni tortilla.
+#
+# Resultado medido (corr=5cbced82, 2026-07-29): un plan con 'Revoltillo…', 'Bulgur GUISADO Estilo
+# Pilaf', 'Nabo GUISADO con Huevo Pochado' y 'TORTILLA de Vegetales al Estilo Criollo' puntuó
+# `transform_meals=0` y fue rechazado con severidad HIGH pidiéndole justamente eso. El LLM podía
+# escribir el guiso que el mensaje le pedía y volver a puntuar 0: **un rechazo que no se puede
+# obedecer**. Y como el gate es HIGH, cuesta un retry completo (~3.4 min + 2 llamadas LLM).
+#
+# Match por FRONTERA DE PALABRA, no substring: `guis` muerde dentro de «GUISAntes» (Batata con
+# Guisantes es un plato FRÍO, cazado en su día por test_p1_closer_hygiene), así que se reusa el
+# mismo `\bguis(?!ant)` que ya vive en `_meal_is_hot_cooked`. Sin esa precaución, añadir "guiso"
+# habría marcado como transformado cualquier plato con guisantes de guarnición.
+# Rollback sin redeploy: MEALFIT_TRANSFORM_GATE_WORD_BOUNDARY=false → substring (comportamiento
+# previo, pero con los tokens nuevos). tooltip-anchor: P1-TRANSFORM-GATE-PARITY
+TRANSFORM_GATE_WORD_BOUNDARY = _env_bool("MEALFIT_TRANSFORM_GATE_WORD_BOUNDARY", True)
+_TRANSFORM_NAME_RX = _re.compile(
+    r"\bguis(?!ant)|" + "|".join(
+        r"\b" + _re.escape(t) for t in _TRANSFORM_NAME_TOKENS
+        if t not in ("guiso", "guisado")))
+
+
+def _name_is_transformed(name_sa: str) -> bool:
+    """[P1-TRANSFORM-GATE-PARITY · 2026-07-29] ¿El NOMBRE del plato declara una preparación
+    transformada? `name_sa` debe venir ya en minúsculas y sin acentos."""
+    if not name_sa:
+        return False
+    if TRANSFORM_GATE_WORD_BOUNDARY:
+        return bool(_TRANSFORM_NAME_RX.search(name_sa))
+    return any(t in name_sa for t in _TRANSFORM_NAME_TOKENS)
 
 
 def compute_dish_quality_report(plan: dict) -> dict:
@@ -20723,7 +20765,10 @@ def compute_dish_quality_report(plan: dict) -> dict:
                 # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-E) KPI de creatividad por transformación.
                 try:
                     _nm_tf = _sa_dq(str(m.get("name") or "").lower())
-                    if any(t in _nm_tf for t in _TRANSFORM_NAME_TOKENS):
+                    # [P1-TRANSFORM-GATE-PARITY · 2026-07-29] SSOT del match (frontera de palabra +
+                    # las familias que el prompt promete). Antes: substring sobre una lista que no
+                    # incluía guiso/locrio/revoltillo/tortilla → rechazo imposible de obedecer.
+                    if _name_is_transformed(_nm_tf):
                         transform += 1
                 except Exception:
                     pass
@@ -27748,6 +27793,10 @@ def _merge_duplicate_food_lines(days: list) -> list:
 # Tolerancia: sólo se toca cuando la divergencia supera el umbral. Por debajo se respeta la
 # precisión de `raw` (42.17 g vs "42 g" es el diseño, no un bug).
 RECONCILE_DISPLAY_RAW = _env_bool("MEALFIT_RECONCILE_DISPLAY_RAW", True)
+# [P2-RECONCILE-EFFICACY-PROBE · 2026-07-29] Sonda POST-reconciliador: `_trace_misalign` solo corría
+# ANTES, así que nadie sabía cuántas divergencias display↔raw quedan ABIERTAS tras su paso — el dato
+# que hace falta para decidir si el pase mide en la etapa equivocada. Telemetría pura, no muta nada.
+RECONCILE_EFFICACY_PROBE = _env_bool("MEALFIT_RECONCILE_EFFICACY_PROBE", True)
 RECONCILE_DISPLAY_RAW_TOL = _env_float("MEALFIT_RECONCILE_DISPLAY_RAW_TOL", 0.10,
                                        lambda v: 0.02 <= v <= 0.50)
 
@@ -33831,6 +33880,30 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _rc_e:
             logger.warning(f"[P1-DISPLAY-RAW-QTY-RECONCILE] falló (no bloquea): "
                            f"{type(_rc_e).__name__}: {_rc_e}")
+
+    # [P2-RECONCILE-EFFICACY-PROBE · 2026-07-29] Sonda POST-reconciliador.
+    #
+    # La revisión de logs planteó que el reconciliador podría estar midiendo una etapa ANTES de
+    # donde nacen la mayoría de las divergencias que debe cerrar (yogurt aparecía en 6 de 9). Pero
+    # la evidencia disponible NO permite decidirlo: `_trace_misalign` corre en `pre_reconcile` y
+    # nunca DESPUÉS, así que no existe el dato de cuántas quedaron abiertas tras su paso.
+    #
+    # Antes de tocar el orden de un pase que reescribe la lista de compras, hay que MEDIR: esta
+    # sonda es telemetría pura (no muta nada) y da exactamente el número que falta. Si
+    # `post_reconcile` sale ~0, el reconciliador hace su trabajo y la hipótesis muere; si conserva
+    # las mismas familias, entonces sí hay que mover el pase — y ya con datos.
+    # Rollback: MEALFIT_RECONCILE_EFFICACY_PROBE=false. tooltip-anchor: P2-RECONCILE-EFFICACY-PROBE
+    if RECONCILE_EFFICACY_PROBE:
+        try:
+            _trace_misalign(result.get("days"), "post_reconcile")
+            _mis_post = _summarize_misalign_stages(result.get("days"))
+            if _mis_post:
+                result["_raw_misalign_stages_post"] = _mis_post
+                logger.info(f"⚖️ [P2-RECONCILE-EFFICACY-PROBE] divergencias display↔raw TRAS el "
+                            f"reconciliador: {_mis_post} (compara contra `_raw_misalign_stages`: "
+                            f"si no bajan, el pase mide una etapa antes de donde nacen).")
+        except Exception as _rep_e:
+            logger.debug(f"[P2-RECONCILE-EFFICACY-PROBE] no-op: {type(_rep_e).__name__}: {_rep_e}")
 
     _ck("pre_shopping_list")
     # Calcular shopping lists
