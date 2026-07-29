@@ -238,7 +238,15 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
                    category, is_verified
             FROM public.supermarket_products
             WHERE active
-            ORDER BY lower(food_name), (brand IS NOT NULL), price_rd NULLS LAST
+            -- [P1-BRAND-BUDGET-COHERENCE · 2026-07-29] price_rd ANTES del tiebreak de
+            -- marca: con `(brand IS NOT NULL)` primero, TODO genérico ordenaba antes
+            -- que TODO branded sin importar precio. Para ítems sin `package_grams`
+            -- (presentación no parseable, ~21% del catálogo) el frontend no puede
+            -- re-ordenar (sizeFilteredVariants/stableSortedVariants requieren targetG)
+            -- y usa este array crudo — "N opciones · desde RD$X" podía mostrar el
+            -- genérico como "desde" aunque una marca fuera más barata (test:
+            -- test_p1_brand_budget_coherence_match_order.py).
+            ORDER BY lower(food_name), price_rd NULLS LAST, (brand IS NOT NULL)
             """,
             fetch_all=True,
         ) or []
