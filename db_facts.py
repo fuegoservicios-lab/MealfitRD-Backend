@@ -784,30 +784,57 @@ def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_of
     for attempt in range(max_retries):
         try:
             from datetime import datetime, timezone, timedelta
-            
-            if date_str and tz_offset_mins is not None:
-                # El frontend envía tz_offset en minutos (JS: getTimezoneOffset() - diferencia a UTC)
-                # Parsear el inicio del día local
-                try:
-                    local_start = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
-                    local_end = datetime.strptime(f"{date_str} 23:59:59", "%Y-%m-%d %H:%M:%S")
-                    
-                    # Convertir local a UTC sumando tz_offset_mins (para UTC-4 el offset es 240)
-                    utc_start = local_start + timedelta(minutes=tz_offset_mins)
-                    utc_end = local_end + timedelta(minutes=tz_offset_mins)
-                    
-                    start_str = utc_start.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    end_str = utc_end.strftime("%Y-%m-%dT%H:%M:%SZ")
-                except Exception as e:
-                    logger.error(f"⚠️ Error procesando la zona horaria, usando fallback a UTC: {e}")
-                    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                    start_str = f"{today_date}T00:00:00Z"
-                    end_str = f"{today_date}T23:59:59Z"
-            else:
-                today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                start_str = f"{today_date}T00:00:00Z"
-                end_str = f"{today_date}T23:59:59Z"
-            
+
+            # [P1-DIARY-TZ-DEFAULT-RD · 2026-07-30] Los defaults degradan a la
+            # fecha local RD (UTC-4), la convención del repo — NO a UTC.
+            #
+            # Antes, si faltaba cualquiera de los dos argumentos, la ventana era
+            # `[hoy_UTC 00:00Z .. 23:59Z]`, que en hora RD es
+            # `[20:00 de AYER .. 19:59 de HOY]`: mete 4 h de anoche y pierde
+            # todo lo comido después de las 20:00 de hoy. `proactive_agent`
+            # (`P1-PROACTIVE-TZ`) y `routers/diary.py` ya pasaban ambos valores
+            # explícitos precisamente para esquivarlo; el chat non-stream
+            # (`agent.py::chat_with_agent`) no, y le presentaba al coach la cena
+            # de anoche como "registrado HOY" mientras el dashboard decía 0
+            # (medido en prod 2026-07-30 13:37 RD: ventana UTC 1 fila, ventana
+            # RD 0 filas). Un default que los 3 callsites sanos tienen que
+            # rodear a mano no es un default, es una trampa — se arregla aquí y
+            # no en el callsite que se olvidó.
+            #
+            # Los dos defaults son INDEPENDIENTES: defaultear el huso jamás
+            # puede reescribir la `date_str` que el caller sí mandó
+            # (`GET /api/diary/consumed/{uid}?date=…` sin `tzOffset` es un
+            # caller real: ambos query params son opcionales). Y la resolución
+            # del huso es por `is not None`, nunca por truthiness — `0` es UTC,
+            # un offset legítimo y falsy.
+            # tooltip-anchor: P1-DIARY-TZ-DEFAULT-RD
+            if not date_str:
+                date_str = (datetime.now(timezone.utc) - timedelta(hours=4)).date().isoformat()
+            if tz_offset_mins is None:
+                tz_offset_mins = 240
+
+            # El frontend envía tz_offset en minutos (JS: getTimezoneOffset() - diferencia a UTC)
+            # Parsear el inicio del día local
+            try:
+                local_start = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
+                local_end = datetime.strptime(f"{date_str} 23:59:59", "%Y-%m-%d %H:%M:%S")
+
+                # Convertir local a UTC sumando tz_offset_mins (para UTC-4 el offset es 240)
+                utc_start = local_start + timedelta(minutes=tz_offset_mins)
+                utc_end = local_end + timedelta(minutes=tz_offset_mins)
+
+                start_str = utc_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+                end_str = utc_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+            except Exception as e:
+                # `date_str` basura del caller. El fallback también es RD: caer
+                # a UTC aquí reintroduciría el mismo desfase por la puerta de
+                # atrás, y encima solo para el usuario que mandó datos malos.
+                logger.error(f"⚠️ Error procesando la zona horaria, usando fallback a fecha local RD: {e}")
+                _rd_today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+                start_str = f"{_rd_today.isoformat()}T04:00:00Z"
+                end_str = f"{(_rd_today + timedelta(days=1)).isoformat()}T03:59:59Z"
+
+
             # [P2-SELECT-STAR-CONSUMED-MEALS · 2026-05-15] Columnas explícitas
             # (era `SELECT *`). Caller (`/api/diary/consumed/{user_id}` y
             # `agent.py:904`) solo necesita meal_name, calories, protein,
