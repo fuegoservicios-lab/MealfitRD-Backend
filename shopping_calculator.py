@@ -7949,7 +7949,7 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None):
     # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
     # inicio de cada run del aggregator. Los caps que se apliquen durante
     # este run (P3-HERB-CAP, P5-VEG-CAP, P6-LEGUMES-DRY-CAP, P6-EGGS-AGGREGATE-CAP,
@@ -8694,7 +8694,33 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     }
     _HERB_MAZO_GRAMS = 50.0  # 1 mazo de hierba ≈ 50g
 
-    _person_weeks = max(1.0, float(multiplier) * 3.0 / 7.0)
+    # [P1-PERSON-WEEKS-CYCLE-AWARE · 2026-07-30] El `3` estaba HARDCODEADO y solo es correcto en
+    # planes de 3 días.
+    #
+    # El comentario de arriba declara la intención: "`multiplier × 3/7` deshace el
+    # `base_duration_scale = 7/days_generated` aplicado upstream". Si la inversa de `7/num_days` es
+    # `num_days/7`, el `3` solo la deshace cuando `num_days == 3` — y sus cuatro ejemplos trabajados
+    # (18.67, 9.33, 4.67, 2.33) están TODOS calculados sobre un ciclo de 3 días. La intención estaba
+    # bien escrita al lado de la línea que la traiciona.
+    #
+    # Efecto por longitud de ciclo (person_weeks obtenidos ÷ correctos):
+    #   num_days=2 → ×1,5 (topes demasiado FLOJOS, y encima invisibles: al no dispararse el tope no
+    #                      hay ni aviso)      · num_days=3 → exacto  · num_days=4 → ×0,75
+    #   num_days=14 → ×0,214 (4,7× APRETADO)  · num_days=25 → ×0,12 (8,3×)
+    #
+    # Medido en el journal: con `days_len=14 base_scale=0.5`, `person_weeks` queda CLAVADO en 1.0
+    # mientras el multiplicador va 1/2/4 (Yogurt 1155→907g, 2311→907g, 4622→907g: el mismo tope para
+    # tres duraciones distintas). Con `days_len=3` sí sigue a 1/2/4, que es la firma del hardcode.
+    #
+    # Muerde a TODOS los topes que leen `_person_weeks`, incluidos los NO perecederos —
+    # P6-CANNED-PROTEIN-CAP, P6-OIL-CAP, P6-SPICE, P6-SWEETENER — donde no hay coartada de realismo
+    # de almacenamiento: que la lista mensual traiga 2 latas de atún para ~1.600 g de demanda no lo
+    # explica la nevera, lo causa esta división.
+    #
+    # `num_days=None` conserva el comportamiento histórico (3) para cualquier callsite que todavía
+    # no lo pase, en vez de cambiarle el cap por debajo sin avisar.
+    _pw_days = float(num_days) if num_days and float(num_days) > 0 else 3.0
+    _person_weeks = max(1.0, float(multiplier) * _pw_days / 7.0)
     # `round()` (vs `ceil()`) absorbe ruido de floating point: para
     # multiplier=18.67 (display rounded), person_weeks calc = 8.0014... →
     # ceil = 9 (off-by-one). round = 8 ✓. En producción multiplier es
@@ -10779,7 +10805,11 @@ def get_shopping_list_delta(
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
         
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults)
+    # [P1-PERSON-WEEKS-CYCLE-AWARE · 2026-07-30] `num_days` viaja al agregador porque los topes por
+    # persona-semana necesitan deshacer el `base_duration_scale = 7/num_days` que se aplica tres
+    # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
+    # apretados en un ciclo de 14 días.
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days)
     
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
     urgent_items = plan_result.get("_pantry_supplement_required", [])
