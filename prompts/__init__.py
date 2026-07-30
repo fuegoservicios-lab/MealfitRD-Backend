@@ -1,6 +1,6 @@
 # prompts/__init__.py
 """
-Paquete de Prompts de MealfitRD.
+Paquete de Prompts de BioBoros.
 Re-exporta TODAS las constantes con los mismos nombres originales
 para mantener retrocompatibilidad con `from prompts import X`.
 """

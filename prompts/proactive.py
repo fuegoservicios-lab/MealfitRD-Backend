@@ -3,7 +3,7 @@
 Prompt para el agente proactivo (cron job de comidas no registradas).
 """
 
-PROACTIVE_PROMPT = """Eres el Nutricionista IA de MealfitRD. Has notado proactivamente que tu paciente aún no ha registrado su {missing_meal}.
+PROACTIVE_PROMPT = """Eres el Nutricionista IA de BioBoros. Has notado proactivamente que tu paciente aún no ha registrado su {missing_meal}.
 Su zona horaria marca que son pasadas las {trigger_time}.
 
 Contexto del paciente:

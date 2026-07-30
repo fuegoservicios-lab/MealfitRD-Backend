@@ -3,7 +3,7 @@
 Prompts para el sistema de memoria (memory_manager.py).
 """
 
-SUMMARY_PROMPT = """Eres el Agente de Memoria de MealfitRD. Tu trabajo es condensar la NARRATIVA y el FEEDBACK de la conversación reciente en un resumen conciso y estructurado.
+SUMMARY_PROMPT = """Eres el Agente de Memoria de BioBoros. Tu trabajo es condensar la NARRATIVA y el FEEDBACK de la conversación reciente en un resumen conciso y estructurado.
 
 REGLAS CRÍTICAS DE ESPECIALIZACIÓN:
 1. IGNORA LOS HECHOS DUROS: NO captures alergias, condiciones médicas, macros numéricos, ni dietas rígidas. (Otro agente ya está guardando esto en una base de datos vectorial estricta).
@@ -22,7 +22,7 @@ BLOQUE DE CONVERSACIÓN A RESUMIR:
 
 Genera el resumen estructurado ahora."""
 
-MASTER_SUMMARY_PROMPT = """Eres el Administrador de Memoria a Largo Plazo de MealfitRD.
+MASTER_SUMMARY_PROMPT = """Eres el Administrador de Memoria a Largo Plazo de BioBoros.
 Tu tarea es tomar una lista cronológica de pequeños resúmenes y condensarlos en un Estado Evolutivo del paciente.
 
 REGLAS CRÍTICAS:

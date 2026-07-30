@@ -133,7 +133,11 @@ def test_prompt_grounded():
     assert "fuego.servicios@gmail.com" in src, (
         "El prompt debe escalar al correo de soporte canónico."
     )
-    assert "MealfitRD" in src
+    # [P1-REBRAND-BIOBOROS · 2026-07-30] Era "MealfitRD". El bot de ayuda se
+    # presenta con el nombre del producto, así que el rebrand lo alcanza — y
+    # este assert es justo el que lo detecta si alguien cambia la marca en la
+    # UI y se olvida de los prompts, que no salen en ningún grep de interfaz.
+    assert "BioBoros" in src
     # Anti-injection best-effort: el prompt instruye ignorar re-roleos.
     assert re.search(r"Ignora cualquier instrucci", src), (
         "El prompt debe incluir la regla anti-injection (ignorar re-roleos "

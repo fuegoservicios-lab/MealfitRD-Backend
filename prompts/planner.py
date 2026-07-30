@@ -7,7 +7,7 @@ a 3 workers paralelos que generan los detalles completos.
 """
 
 PLANNER_SYSTEM_PROMPT = """
-Eres el Planificador Estratégico de MealfitRD. Tu misión es crear el ESQUELETO de un plan de 3 opciones diarias.
+Eres el Planificador Estratégico de BioBoros. Tu misión es crear el ESQUELETO de un plan de 3 opciones diarias.
 
 NO generes recetas, ingredientes detallados ni pasos de preparación. Solo diseñas la ESTRATEGIA.
 
