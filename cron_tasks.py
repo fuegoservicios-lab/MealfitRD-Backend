@@ -9959,13 +9959,27 @@ def _is_lesson_stub(lesson) -> bool:
     Un stub significa que el seed inicial (chunk 1) o la persistencia post-chunk falló silenciosamente,
     dejando la cadena de aprendizaje rota. Heurística:
       - No es dict, o dict vacío → stub.
-      - Marcado explícitamente con `metrics_unavailable=True` → stub.
       - Sin `chunk` asignado → stub (toda lección persistida lleva el número de chunk).
       - Todos los contadores numéricos en cero Y todas las muestras vacías → stub.
+
+    [P1-SYNTH-LESSON-NOT-STUB · 2026-07-30] `metrics_unavailable=True` NO basta por sí
+    solo para declarar stub. Esa marca dice "los contadores numéricos no son reales,
+    no los leas como '0 violaciones'" — es una pista de RENDERIZADO para el prompt, no
+    una declaración de ausencia. `_synthesize_last_chunk_learning_from_plan_days` la
+    estampa SIEMPRE (cron_tasks.py, `"metrics_unavailable": True` del candidate) junto
+    a muestras reales (`repeated_bases`, `repeated_meal_names`) extraídas de
+    `plan_data.days`. Con el early-return, la lección que la síntesis acababa de
+    persistir volvía a leerse como stub en el intento siguiente → `_p03_needs_rebuild`
+    → rebuild desde la cola (que para `prev_week=1` NO existe: los 17 planes de prod
+    arrancan la cola en `week_number=2`) → re-síntesis → otra fila de telemetría.
+    Bucle sin salida: 843 eventos `lesson_synthesized_low_confidence` en la semana 2
+    de 6 planes contra 18 en TODAS las demás semanas juntas, y dos usuarios reales con
+    su semana 2 pausada por el guard P0-B que consume esa telemetría.
+    Una lección que trae 10 bases y 8 nombres de plato no está ausente.
+    El discriminante correcto sigue vivo abajo: sin señal numérica NI muestras → stub
+    (un `{"chunk": 2, "metrics_unavailable": True}` pelado sigue siendo stub).
     """
     if not isinstance(lesson, dict) or not lesson:
-        return True
-    if lesson.get("metrics_unavailable") is True:
         return True
     if lesson.get("chunk") in (None, 0):
         return True
@@ -19946,15 +19960,25 @@ def _alert_high_synthesized_lesson_ratio() -> None:
         # de abandoned. NOT EXISTS contra subquery es barato (índice
         # `plan_chunk_queue.meal_plan_id` + filter on jsonb path) y la
         # subquery scopea solo a planes recientes via JOIN implícito por FK.
+        # [P1-SYNTH-LESSON-NOT-STUB · 2026-07-30] Misma paridad que en
+        # `_per_user_synthesis_ratio_exceeded`: el numerador contaba EVENTOS
+        # (append-only por intento) contra un denominador de FILAS de chunk. Los
+        # propios nombres de variable lo decían — `synthesized_events` sobre
+        # `total_chunks` — y el docstring lo llamaba "ratio". Un chunk que reintenta
+        # N veces valía N arriba y 1 abajo. `COUNT(DISTINCT (plan, week))` y
+        # `pending_user_action` en el denominador (los chunks que el guard per-usuario
+        # pausa siguen siendo chunks procesados).
+        # tooltip-anchor: [P1-SYNTH-LESSON-NOT-STUB] paridad flota
         stats = execute_sql_query(
             """
             SELECT
-                (SELECT COUNT(*)::int FROM chunk_lesson_telemetry
+                (SELECT COUNT(DISTINCT (meal_plan_id, week_number))::int
+                   FROM chunk_lesson_telemetry
                  WHERE event IN ('lesson_synthesized_low_confidence',
                                  'recent_lessons_partial_synthesis')
                    AND created_at > NOW() - make_interval(hours => %s)) AS synthesized_events,
                 (SELECT COUNT(*)::int FROM plan_chunk_queue pcq
-                 WHERE pcq.status IN ('completed', 'failed')
+                 WHERE pcq.status IN ('completed', 'failed', 'pending_user_action')
                    AND pcq.updated_at > NOW() - make_interval(hours => %s)
                    AND NOT EXISTS (
                        SELECT 1 FROM meal_plans mp
@@ -20074,18 +20098,33 @@ def _alert_high_synthesized_lesson_ratio() -> None:
 def _per_user_synthesis_ratio_exceeded(user_id: str) -> dict:
     """[P0-B] Versión per-usuario de la métrica que evalúa _alert_high_synthesized_lesson_ratio.
 
-    Cuenta los eventos de síntesis low-confidence de UN usuario contra sus chunks
-    completados/fallidos en CHUNK_SYNTH_PER_USER_WINDOW_HOURS. Devuelve dict con:
-      - synth: count de eventos sintetizados (lesson_synthesized_low_confidence
+    Cuenta los CHUNKS con síntesis low-confidence de UN usuario contra sus chunks
+    procesados en CHUNK_SYNTH_PER_USER_WINDOW_HOURS. Devuelve dict con:
+      - synth: count de chunks DISTINTOS que sintetizaron (lesson_synthesized_low_confidence
         + recent_lessons_partial_synthesis).
-      - total: count de chunks procesados (completed + failed) del mismo usuario.
+      - total: count de chunks procesados del mismo usuario.
       - ratio: synth/total (0.0 si total==0).
       - exceeded: bool — True si samples >= MIN_SAMPLES y ratio >= THRESHOLD.
 
     En caso de error de DB devuelve `exceeded=False` (fail-open): preferimos
     un chunk con learning low-confidence ocasional que bloquear al usuario por
     un blip de la query.
+
+    [P1-SYNTH-LESSON-NOT-STUB · 2026-07-30] Las dos mitades cuentan poblaciones
+    distintas y el ratio salía >100%, que bajo la semántica declarada ("porcentaje
+    de chunks") es imposible: ningún chunk puede sintetizar más de una vez de sí
+    mismo. Un ratio que rebasa el 100% no es un pico — es la prueba estructural de
+    que numerador y denominador no hablan del mismo conjunto. Dos asimetrías:
+
+      1. `chunk_lesson_telemetry` es append-only por INTENTO: un chunk que reintenta
+         15 veces aporta 15 al numerador y 1 al denominador. Medido en prod:
+         synth=26 sobre 4 chunks distintos ⇒ 650%. De ahí `COUNT(DISTINCT (plan, week))`.
+      2. El denominador filtraba `IN ('completed','failed')`, y este guard mueve al
+         chunk a `pending_user_action` — o sea que PAUSAR un chunk lo sacaba del
+         denominador y empeoraba el ratio de la siguiente evaluación. Realimentación
+         positiva de un guard consigo mismo. `pending_user_action` entra al denominador.
     """
+    # tooltip-anchor: [P1-SYNTH-LESSON-NOT-STUB] paridad numerador/denominador
     from constants import (
         CHUNK_SYNTH_PER_USER_RATIO_THRESHOLD,
         CHUNK_SYNTH_PER_USER_MIN_SAMPLES,
@@ -20096,14 +20135,15 @@ def _per_user_synthesis_ratio_exceeded(user_id: str) -> dict:
         row = execute_sql_query(
             """
             SELECT
-                (SELECT COUNT(*)::int FROM chunk_lesson_telemetry
+                (SELECT COUNT(DISTINCT (meal_plan_id, week_number))::int
+                   FROM chunk_lesson_telemetry
                  WHERE user_id = %s
                    AND event IN ('lesson_synthesized_low_confidence',
                                  'recent_lessons_partial_synthesis')
                    AND created_at > NOW() - make_interval(hours => %s)) AS synth,
                 (SELECT COUNT(*)::int FROM plan_chunk_queue
                  WHERE user_id = %s
-                   AND status IN ('completed', 'failed')
+                   AND status IN ('completed', 'failed', 'pending_user_action')
                    AND updated_at > NOW() - make_interval(hours => %s)) AS total
             """,
             (
