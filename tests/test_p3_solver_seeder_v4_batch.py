@@ -149,8 +149,19 @@ def test_feasibility_silent_when_reachable():
 
 
 def test_solver_returns_the_new_signals():
-    for key in ('"converged_per_macro"', '"infeasible"', '"residuals"'):
-        assert _PS.count(key) == 2, f"{key} debe viajar en los DOS returns públicos"
+    # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] Era `count(key) == 2` sobre el archivo entero, con dos
+    # modos de fallo: (a) COMPENSACIÓN — un docstring futuro que cite la clave entre comillas
+    # mantiene el 2 aunque un `return` la pierda, o sea verde sobre una pérdida real de señal;
+    # (b) FRAGILIDAD — un tercer return legítimo lo rompe por un cambio que no es el suyo.
+    # Se afirma POR SITIO: cada return público debe traer las tres claves. Inmune a menciones
+    # en prosa y robusto ante returns nuevos.
+    for fn, fin in (("def solve_portion_macros(", "\ndef solve_meal_macros("),
+                    ("def solve_meal_macros(", "\n# =")):
+        i = _PS.index(fn)
+        cuerpo = _PS[i:_PS.index(fin, i)]
+        ret = cuerpo[cuerpo.rindex("return {"):]
+        for key in ('"converged_per_macro"', '"infeasible"', '"residuals"'):
+            assert key in ret, f"{key} falta en el return de {fn.strip()}"
 
 
 # ═══════════════ P3-SOLVER-WIRING-METRICS ═══════════════

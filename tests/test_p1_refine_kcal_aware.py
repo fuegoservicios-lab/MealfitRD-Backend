@@ -78,8 +78,13 @@ def test_wired_in_update_helper():
 
 
 def test_wired_in_regen_day_inline():
+    # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] Ventana de bytes fija (`i-600 : i+1200`) con 187 bytes
+    # de holgura medidos. Se recorta por orden relativo: desde el import del refinador hasta el
+    # cierre del bloque `if _oob_rf:` que lo usa.
     i = _PL.index("refine_day_portions_integer as _rdi_rd")
-    blk = _PL[i - 600:i + 1200]
+    _f = _PL.index("_day_exceeds_pantry(", i)
+    blk = _PL[i:_f if _f > i else i + 2500]
+    assert len(blk) > 400, "recorte sospechosamente corto"
     assert "_rka_rf" in blk and "_kob_rf(" in blk, "regen-day inline no aplica el arm kcal"
 
 

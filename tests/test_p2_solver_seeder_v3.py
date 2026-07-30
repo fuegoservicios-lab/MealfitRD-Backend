@@ -61,8 +61,16 @@ def test_sd_p2_e_tokens_and_branch_anchored():
 def test_s_p2_d_helper_and_gate_anchored():
     assert "def _decrement_stripped_supplement_macros(" in _GO
     # el sanitizer llama al helper, gateado por el knob
+    # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] Era `_GO[i:i + 2500]` — ventana de bytes FIJA, y el
+    # needle load-bearing (`_decrement_stripped_supplement_macros(`) terminaba en el byte 2443
+    # de 2500: **57 bytes de holgura**. Un comentario de UNA línea insertado en el bloque lo
+    # empujaba fuera y ponía este test rojo por un cambio ajeno a su contrato. Es la clase que
+    # ya caducó cinco veces en este repo. Recorte por ORDEN RELATIVO: hasta el final real del
+    # bloque `if`, que crece con él.
     i = _GO.index("if not form_data.get(\"includeSupplements\"):")
-    win = _GO[i:i + 2500]
+    _fin = _GO.index("\n    # ", i)          # primer comentario a nivel de función tras el bloque
+    win = _GO[i:_fin if _fin > i else len(_GO)]
+    assert len(win) > 600, "el recorte del bloque quedó sospechosamente corto"
     assert "SUPP_STRIP_DECREMENT_MACROS" in win
     assert "_decrement_stripped_supplement_macros(" in win
     assert "_removed_lines" in win
@@ -91,7 +99,12 @@ def test_sd_p3_a_knob_replaces_literal():
     assert "kcal_budget_left > 25.0" not in _GO
     assert "_fat_seed_reserve > 25.0" not in _GO
     # ambos gates usan el knob
-    seg = _GO[_GO.index("_seed_from_reserve = (k in _FAT_BASED_MICROS"):][:600]
+    # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] La ventana de 600 bytes dejaba la 3ª ocurrencia
+    # terminando en el byte 457 — con `count >= 3` justo al mínimo, cualquier línea nueva entre
+    # medias la sacaba. Recorte relativo al bloque de gates.
+    _i = _GO.index("_seed_from_reserve = (k in _FAT_BASED_MICROS")
+    _f = _GO.index("\n\n", _i)
+    seg = _GO[_i:_f if _f > _i else _i + 1200]
     assert seg.count("MICRO_SEED_MIN_BUDGET_KCAL") >= 3
 
 

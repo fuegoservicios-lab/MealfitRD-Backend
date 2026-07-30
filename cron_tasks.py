@@ -28368,14 +28368,23 @@ def process_plan_chunk_queue(target_plan_id=None):
                         ]
                         rechazos_shuffle = get_active_rejections(user_id=user_id)
                         rejected_names_for_metrics = [r["meal_name"] for r in rechazos_shuffle] if rechazos_shuffle else []
+                        # [P3-CHUNK1-LESSON-HONEST · 2026-07-30] (audit solver+seeder v5) Las dos
+                        # listas iban hardcodeadas vacías y la lesson certificaba
+                        # `allergy_violations: 0` sin haber medido nada. `current_allergies` ya
+                        # está en scope en esta misma función (los otros 3 callsites de
+                        # `_calculate_learning_metrics` en el worker sí la pasan) — era la única
+                        # disidente. Un 0 dice "lo miré y estaba limpio"; sin lista, no se miró.
+                        _shuffle_allergies = [str(a).strip().lower()
+                                              for a in (current_allergies or []) if str(a).strip()]
                         learning_metrics = _calculate_learning_metrics(
                             new_days=new_days,
                             prior_meals=prior_meals_for_metrics,
                             prior_days=prior_days_for_metrics,
                             rejected_names=rejected_names_for_metrics,
-                            allergy_keywords=[],
+                            allergy_keywords=_shuffle_allergies,
                             fatigued_ingredients=[],
                         )
+                        learning_metrics["violations_measured"] = bool(_shuffle_allergies)
                         # [P0-1] Anotar si el filtro de aprendizaje se aplicó efectivamente.
                         learning_metrics["shuffle_learning_applied"] = _shuffle_learning_applied
                         learning_metrics["shuffle_source"] = (

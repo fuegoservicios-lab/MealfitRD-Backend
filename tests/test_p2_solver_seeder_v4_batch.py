@@ -229,7 +229,9 @@ def test_closer_measures_on_raw_union():
 def test_closer_macro_delta_fallback_wired_at_all_four_sites():
     seg = _GO[_GO.index("def _close_micro_gaps_for_plan"):]
     seg = seg[: seg.index("\ndef ", 1)]
-    assert seg.count("_closer_sync_meal_macros(") == 4, \
+    # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] `== 4` → `>= 4` por la misma razón que el hermano de
+    # arriba: el conteo exacto castiga precisamente el uso correcto del SSOT.
+    assert seg.count("_closer_sync_meal_macros(") >= 4, \
         "seed + refuerzo + escalado + fatswap sincronizan macros por el helper"
     assert "_truth_up_meal_macros_from_strings(" not in seg, \
         "ninguno debe llamar al truth-up pelado (se abstiene y deja los macros stale)"

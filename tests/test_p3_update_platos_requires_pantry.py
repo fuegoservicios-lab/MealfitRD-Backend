@@ -34,9 +34,15 @@ from pathlib import Path
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_DASHBOARD = (
-    _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "Dashboard.jsx"
-).read_text(encoding="utf-8")
+_FRONT_SRC = _BACKEND_ROOT.parent / "frontend" / "src"
+_DASHBOARD = (_FRONT_SRC / "pages" / "Dashboard.jsx").read_text(encoding="utf-8")
+# [P3-AUDIT-V5-TESTDEBT · 2026-07-30] `P1-SWAP-PANTRY-GATE` extrajo el umbral y el gate a
+# `utils/pantryGate.js` (lógica PURA, testeable de verdad). Estos anchors seguían apuntando al
+# Dashboard, donde ya no vive ninguna de las dos cosas — rojo por un refactor CORRECTO, no por
+# una regresión. Se re-anclan al nuevo hogar; lo que protegen (umbral en rango + fail-open) es
+# idéntico y de hecho más fuerte, porque el helper resuelve por `typeof !== 'number'` y así
+# cubre también `undefined` y `NaN`, no solo `null`.
+_PANTRY_GATE = (_FRONT_SRC / "utils" / "pantryGate.js").read_text(encoding="utf-8")
 
 
 def test_marker_present():
@@ -50,20 +56,20 @@ def test_marker_present():
 def test_threshold_const_declared_at_module_scope():
     """`PANTRY_MIN_ITEMS_FOR_UPDATE` debe estar a nivel módulo (no dentro
     del componente) para poder tunearse sin afectar render."""
-    # Aceptamos cualquier número >= 1, default actual 3.
     import re as _re
     match = _re.search(
-        r"const PANTRY_MIN_ITEMS_FOR_UPDATE\s*=\s*(\d+);", _DASHBOARD
+        r"export const PANTRY_MIN_ITEMS_FOR_UPDATE\s*=\s*(\d+);", _PANTRY_GATE
     )
     assert match, (
-        "Const `PANTRY_MIN_ITEMS_FOR_UPDATE = <N>;` ausente en Dashboard.jsx. "
-        "Debe declararse a nivel módulo (fuera del componente)."
+        "Const `PANTRY_MIN_ITEMS_FOR_UPDATE = <N>;` ausente en utils/pantryGate.js."
     )
     threshold = int(match.group(1))
-    assert 1 <= threshold <= 10, (
-        f"Threshold {threshold} fuera de rango razonable [1, 10]. Si subió "
-        "a >10 es probablemente un bug; si bajó a 0 el gate no aplica."
+    assert 1 <= threshold <= 12, (
+        f"Threshold {threshold} fuera de rango razonable [1, 12]. Si subió mucho más es "
+        "probablemente un bug; si bajó a 0 el gate no aplica."
     )
+    assert "PANTRY_MIN_ITEMS_FOR_UPDATE" in _DASHBOARD, (
+        "el Dashboard debe seguir consumiendo la const del módulo, no un número hardcodeado")
 
 
 def test_is_pantry_too_empty_derived_fail_open():
@@ -83,20 +89,21 @@ def test_is_pantry_too_empty_derived_fail_open():
         "depende de ella."
     )
     window = _DASHBOARD[idx : idx + 400]
-    # Fail-open: solo true cuando pantryItemCount no es null (sin cache ni
-    # fetch resuelto → null → false). Reemplaza el check `!isLoadingInventory`
-    # del diseño inicial (P3-PLAN-BTN-STABLE movió el fail-open al null-check).
-    assert "pantryItemCount !== null" in window, (
-        "`isPantryTooEmpty` no verifica que pantryItemCount no sea null — "
-        "podría bloquear el botón cuando el inventario no cargó / fetch falló "
-        "(usuario verá el estado bloqueado sin razón visible). El fail-open "
-        "vive en este null-check (P3-PLAN-BTN-STABLE)."
-    )
-    # Debe usar el threshold
+    # Debe usar el threshold (no un número hardcodeado que divergiría del label/title).
     assert "PANTRY_MIN_ITEMS_FOR_UPDATE" in window, (
         "`isPantryTooEmpty` no usa la const `PANTRY_MIN_ITEMS_FOR_UPDATE` — "
         "número hardcodeado divergerá del label/title (que sí lo interpolan)."
     )
+    # [P3-AUDIT-V5-TESTDEBT · 2026-07-30] El fail-open ya no es un `pantryItemCount !== null`
+    # inline: vive en `computePantryGate`. Se afirma sobre el helper, que es donde está la regla.
+    assert "computePantryGate" in window, (
+        "el gate debe delegar en el helper puro, no re-implementar la condición inline")
+    _fn = _PANTRY_GATE[_PANTRY_GATE.index("export function computePantryGate("):]
+    assert "typeof pantryItemCount !== 'number'" in _fn and "return false" in _fn, (
+        "`computePantryGate` no es fail-open: bloquearía el botón cuando el inventario no cargó "
+        "o el fetch falló (el usuario vería el estado bloqueado sin razón visible)."
+    )
+    assert "Number.isNaN" in _fn, "un NaN colado tampoco puede leerse como 'nevera vacía'"
 
 
 def test_button_onclick_guards_pantry_before_modal():

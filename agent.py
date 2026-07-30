@@ -185,6 +185,27 @@ _MERIENDA_QUALIFIERS = (
 )
 
 
+def _num_meals_from_same_day(form_data) -> "int | None":
+    """[P3-SWAP-NUMMEALS-SAMEDAY · 2026-07-30] (audit solver+seeder v5) Nº de comidas del día
+    que se está editando, derivado de `same_day_other_meals` (las OTRAS comidas del día) + la
+    que se swapea.
+
+    Es el ground truth del plan vivo, frente a `decide_meals_per_day(form_data)` que re-deriva
+    del PERFIL y puede diverger: el usuario pudo elegir el conteo a mano al generar, la regla de
+    alto gasto depende de un kcal que el callsite no pasa, o el perfil cambió después del plan.
+    `None` si no hay dato (el caller sigue con su cadena de fallbacks).
+    tooltip-anchor: P3-SWAP-NUMMEALS-SAMEDAY"""
+    try:
+        _sdo = (form_data or {}).get("same_day_other_meals") or []
+        if isinstance(_sdo, (list, tuple)) and _sdo:
+            return len(_sdo) + 1
+    except Exception as _exc:
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] num_meals desde same_day_other_meals no derivable "
+            "(se cae al perfil): %s: %s", type(_exc).__name__, str(_exc)[:160])
+    return None
+
+
 def _resolve_swap_slot_key(meal_type, slots: dict) -> "str | None":
     """[P2-SWAP-SLOT-KEY-MATCH · 2026-07-30] (audit solver+seeder v5) Resuelve el nombre de slot
     del plato que se swapea ('Merienda Nocturna') a la clave de `allocate_macros_per_slot`.
@@ -623,6 +644,19 @@ def swap_meal(form_data: dict):
                     _num8 = int(form_data.get("num_meals") or form_data.get("mealsPerDay") or 0) or None
                 except (TypeError, ValueError):
                     _num8 = None
+                # [P3-SWAP-NUMMEALS-SAMEDAY · 2026-07-30] (audit solver+seeder v5) Antes de
+                # derivar del PERFIL, mirar la estructura REAL del día que se está editando: el
+                # mismo `form_data` ya la trae (el caller puebla `same_day_other_meals` para la
+                # variedad intra-día). El perfil puede mentir sobre el plan vivo por tres vías:
+                # (a) el usuario eligió num_meals explícito al generar y el plan se enforzó a ese
+                # conteo, pero el form del swap no lo trae; (b) la regla de alto gasto depende del
+                # kcal, que este callsite no pasa; (c) el perfil cambió DESPUÉS de generar el plan.
+                # En los tres casos `allocate_macros_per_slot` repartiría con N distinto del real.
+                if _num8 is None:
+                    _num8 = _num_meals_from_same_day(form_data)
+                    if _num8:
+                        logger.info(f"🍽️ [P3-SWAP-NUMMEALS-SAMEDAY] num_meals={_num8} derivado del "
+                                    f"DÍA que se edita (ground truth) en vez del perfil.")
                 if _num8 is None and SWAP_NUM_MEALS_FROM_PLAN:
                     try:
                         from nutrition_calculator import decide_meals_per_day as _dmpd8

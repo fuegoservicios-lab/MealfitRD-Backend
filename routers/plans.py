@@ -1479,20 +1479,37 @@ def _seed_chunk1_learning(
         from cron_tasks import _calculate_learning_metrics, persist_legacy_learning_to_plan_data
 
         chunk1_days = result.get("days", [])
+        # [P3-CHUNK1-LESSON-HONEST · 2026-07-30] (audit solver+seeder v5) Las dos listas iban
+        # HARDCODEADAS vacías y la lesson persistía `allergy_violations: 0` con
+        # `metrics_unavailable: False`: afirmaba haber medido sin medir. El chunk 2 lee esa
+        # lesson, concluye que el chunk anterior salió limpio y suprime el refuerzo correctivo
+        # que la cadena de lessons existe para dar. Los 3 callsites del chunk worker sí pasan
+        # listas reales — la asimetría era solo de este seed. Ahora se derivan del form_data que
+        # el propio `result` transporta; si no hay de dónde, los campos van a None (no-medido)
+        # en vez de certificar cero.
+        _c1_form = (result.get("form_data") or {}) if isinstance(result, dict) else {}
+        _c1_allergies = [str(a).strip().lower()
+                         for a in (_c1_form.get("allergies") or []) if str(a).strip()]
+        _c1_measured = bool(_c1_allergies)
         _c1_metrics = _calculate_learning_metrics(
             new_days=chunk1_days,
             prior_meals=[],
             prior_days=[],
             rejected_names=rejected_meal_names,
-            allergy_keywords=[],
+            allergy_keywords=_c1_allergies,
             fatigued_ingredients=[],
         )
         week1_lesson = {
             'repeat_pct': _c1_metrics.get('learning_repeat_pct', 0),
             'ingredient_base_repeat_pct': _c1_metrics.get('ingredient_base_repeat_pct', 0),
             'rejection_violations': _c1_metrics.get('rejection_violations', 0),
-            'allergy_violations': _c1_metrics.get('allergy_violations', 0),
-            'fatigued_violations': _c1_metrics.get('fatigued_violations', 0),
+            # [P3-CHUNK1-LESSON-HONEST] `None` = NO medido (sin lista contra la que comparar).
+            # Un 0 dice "lo miré y estaba limpio"; None dice "no lo miré". La diferencia importa
+            # porque el chunk 2 decide si reforzar la corrección a partir de esto.
+            'allergy_violations': (_c1_metrics.get('allergy_violations', 0)
+                                   if _c1_measured else None),
+            'fatigued_violations': None,   # nadie alimenta `fatigued_ingredients` en este seed
+            'violations_measured': _c1_measured,
             'repeated_bases': _c1_metrics.get('sample_repeated_bases', []),
             'repeated_meal_names': _c1_metrics.get('sample_repeats', []),
             'rejected_meals_that_reappeared': _c1_metrics.get('sample_rejection_hits', []),

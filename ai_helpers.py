@@ -297,6 +297,26 @@ _LIGHT_ANCHOR_TOKENS = ("queso", "yogur", "ricotta", "almendra", "nuez", "nueces
                         "mani", "mantequilla")
 
 
+def _intersect_cycle_base(persisted, allowed) -> "list | None":
+    """[P3-GROCERY-LOCK-REFILTER · 2026-07-30] (audit solver+seeder v5) Intersecta las bases que
+    el grocery-cycle persistió al INICIO del ciclo con el pool permitido de HOY.
+
+    Devuelve `None` (no una lista vacía) cuando no queda nada utilizable, para que el caller
+    conserve su sorteo con un `or` y el lock degrade a variedad en vez de imponer un alimento
+    que el usuario ya no puede comer. Comparación normalizada sin acentos.
+    tooltip-anchor: P3-GROCERY-LOCK-REFILTER"""
+    try:
+        if not persisted or not isinstance(persisted, (list, tuple)):
+            return None
+        _ok = {strip_accents(str(a).lower()).strip() for a in (allowed or [])}
+        if not _ok:
+            return None
+        _out = [p for p in persisted if strip_accents(str(p).lower()).strip() in _ok]
+        return _out or None
+    except Exception:
+        return None
+
+
 def _build_light_protein_pool(veggies, proteins, *, bariatric: bool = False) -> list:
     """[P2-LIGHT-PROTEIN-POOL · 2026-07-30] (audit solver+seeder v5) Pool del "ancla liviana"
     sorteada por día para desayuno/merienda.
@@ -1012,9 +1032,26 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                         if 2 <= days_elapsed < grocery_days and GROCERY_CYCLE_LOCK_ENABLED:
                             # ¡BLOQUEO ACTIVO! Forzamos la reutilización de ingredientes (ahorro de supermercado).
                             cycle_locked = True
-                            unique_proteins = grocery_cycle.get("base_proteins", unique_proteins)
-                            unique_carbs = grocery_cycle.get("base_carbs", unique_carbs)
-                            unique_veggies = grocery_cycle.get("base_veggies", unique_veggies)
+                            # [P3-GROCERY-LOCK-REFILTER · 2026-07-30] (audit solver+seeder v5)
+                            # El restore re-imponía las bases que se persistieron al INICIO del
+                            # ciclo sin re-filtrarlas contra las alergias/dislikes/dieta de HOY —
+                            # y el prompt del lock añade "REGLA DE AHORRO EXTREMA… usa EXACTAMENTE
+                            # las proteínas asignadas". Un usuario que empieza un ciclo mensual con
+                            # ['Pollo','Salmón'] y al día 10 registra alergia a pescado recibía
+                            # Salmón como base OBLIGATORIA el resto del ciclo: el allergen-guard lo
+                            # convierte en rechazo→retry en CADA regeneración (hasta 20 días de
+                            # fricción). Se intersecta con el pool filtrado actual; si la
+                            # intersección queda vacía se conserva el sorteo ya computado
+                            # (fail-open: mejor perder el ahorro que imponer un alérgeno).
+                            unique_proteins = (_intersect_cycle_base(
+                                grocery_cycle.get("base_proteins"), filtered_proteins)
+                                or unique_proteins)
+                            unique_carbs = (_intersect_cycle_base(
+                                grocery_cycle.get("base_carbs"), filtered_carbs)
+                                or unique_carbs)
+                            unique_veggies = (_intersect_cycle_base(
+                                grocery_cycle.get("base_veggies"), filtered_veggies)
+                                or unique_veggies)
                             logger.info(f"🔒 [GROCERY CYCLE LOCK] Reutilizando ingredientes del ciclo (Día {days_elapsed} de {grocery_days}).")
                         elif days_elapsed >= grocery_days:
                             logger.info(f"🔓 [GROCERY CYCLE] Ciclo expirado ({days_elapsed} >= {grocery_days} días). Iniciando nuevo ciclo.")
@@ -1182,61 +1219,28 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         cycle_locked = bool(extracted_p) and len(extracted_p) >= _min_p
         
     # ======= FORCED INGREDIENT INJECTION (FROM RAG/HISTORY) =======
-    if form_data and "_force_base_proteins" in form_data:
-        _forced_p = form_data.get("_force_base_proteins", unique_proteins)
-        _forced_c = form_data.get("_force_base_carbs", unique_carbs)
-        _forced_v = form_data.get("_force_base_veggies", unique_veggies)
-        
-        # --- FILTAR INGREDIENTES RECHAZADOS (EVITAR LOOP DE REVISOR MÉDICO) ---
-        _banned_strings = []
-        for pm in form_data.get("previous_meals", []):
-            _banned_strings.append(strip_accents(pm.lower()))
-        for dm in form_data.get("disliked_meals", []):
-            _banned_strings.append(strip_accents(dm.lower()))
-            
-        def _is_forced_allowed(item):
-            item_n = strip_accents(item.lower())
-            for banned in _banned_strings:
-                if item_n in banned or banned in item_n:
-                    return False
-                # Keywords fuertes
-                words = item_n.split()
-                banned_words = banned.split()
-                if "pollo" in item_n and "pollo" in banned: return False
-                if "res" in words and "res" in banned_words: return False
-                if "cerdo" in item_n and "cerdo" in banned: return False
-                if "pescado" in item_n and "pescado" in banned: return False
-                if "habichuelas" in item_n and "habichuelas" in banned: return False
-            return True
-        
-        unique_proteins = [p for p in _forced_p if _is_forced_allowed(p)]
-        if len(unique_proteins) < 3: unique_proteins = _forced_p # Fallback de seguridad
-        
-        unique_carbs = [c for c in _forced_c if _is_forced_allowed(c)]
-        if len(unique_carbs) < 3: unique_carbs = _forced_c
-        
-        forced_veg = [v for v in _forced_v if _is_forced_allowed(v)]
-        if len(forced_veg) < 6: forced_veg = _forced_v
-        
-        # Frutas usualmente entran como vegetales desde el prompt, las filtramos manualmente
-        fruit_names_lower = [strip_accents(f.strip().lower()) for f in DOMINICAN_FRUITS]
-        extracted_fruits = []
-        extracted_veggies = []
-        
-        for v in forced_veg:
-            if strip_accents(v.strip().lower()) in fruit_names_lower:
-                extracted_fruits.append(v)
-            else:
-                extracted_veggies.append(v)
-                
-        unique_veggies = extracted_veggies if extracted_veggies else unique_veggies
-        if extracted_fruits:
-            unique_fruits = extracted_fruits
-            
-        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Proteínas: {unique_proteins}")
-        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Carbos: {unique_carbs}")
-        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Vegetales: {unique_veggies}")
-        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Frutas Extraídas: {unique_fruits}")
+    # [P3-FORCED-ALLOWED-CLEANUP · 2026-07-30] (audit solver+seeder v5) BLOQUE ELIMINADO.
+    #
+    # Era una rama con CERO productores en todo el repo (grep repo-wide: `_force_base_proteins`
+    # solo aparecia aqui, como CONSUMIDOR — ni el backend ni el frontend lo emiten nunca) y con
+    # tres defectos dentro, listos para el primer caller que la reactivara:
+    #
+    #   1. `if item_n in banned or banned in item_n` — DOBLE substring sin word-boundary:
+    #      'res' esta dentro de 'ensalada fresca' y 'pollo' dentro de 'repollo guisado', asi que
+    #      un dislike de "Ensalada fresca" baneaba la Res antes de llegar a las keywords. Es la
+    #      misma clase que ya mordio 13 veces en este repo.
+    #   2. Los fallbacks (`if len(...) < 3: unique_proteins = _forced_p`) restauraban la lista
+    #      forzada COMPLETA — bans legitimos incluidos — cuando el filtro dejaba menos del
+    #      minimo: un filtro simultaneamente sobre-inclusivo (por 1) y no-op (por esto), donde
+    #      cual de los dos gana depende del CONTEO.
+    #   3. Con `_force_base_proteins=[]` el padding de mas abajo hacia `% len([])` →
+    #      ZeroDivisionError.
+    #
+    # Codigo muerto con bugs es deuda que solo espera a un caller nuevo para volverse incidente,
+    # y ademas era una puerta lateral al bloqueo que MEALFIT_GROCERY_CYCLE_LOCK tiene APAGADO por
+    # default desde P1-VARIETY-RENEWAL-NO-CYCLE-LOCK (el owner pidio variedad sobre reuso).
+    # Si vuelve a hacer falta forzar bases desde RAG/historial, se escribe de nuevo con
+    # word-boundary y sin fallback-que-restaura-bans desde el dia 1.
     # ==========================================================
 
     # Dedupicamos usando minúsculas normalizadas para evitar seleccionar "Huevos" y "Huevo s" en la misma corrida

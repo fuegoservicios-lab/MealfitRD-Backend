@@ -348,7 +348,18 @@ def _feasibility_report(entries: list, tgt: dict, min_scale: float,
                 _hi = hi_by_entry[j] if j < len(hi_by_entry) else 1.0
                 _mx += _a * _hi
                 _mn += _a * min_scale
-            if _mx > 0 and t > _mx:
+            # [P3-FEASIBILITY-NO-CARRIER · 2026-07-30] (audit solver+seeder v5) El guard era
+            # `if _mx > 0 and t > _mx`, y ocultaba justo el caso MÁS grave: con CERO entries
+            # aportando el macro, `_mx` queda en 0.0 ⇒ la rama 'high' no entra (por el guard) y
+            # la rama 'low' tampoco (`t < _mn` es falso con `_mn = 0`). O sea, el macro para el
+            # que NO existe ningún portador en el plato pasaba como FACTIBLE — que es
+            # exactamente la distinción que esta señal existe para hacer ("falta escalado" vs
+            # "falta un PORTADOR"). Caso real: merienda de gelatina + claras con todas las
+            # líneas a fats=0.00 tras el round del catálogo y un slot-target de 6 g de grasa.
+            # Valor propio para que aguas abajo se pueda distinguir: escalar no lo arregla.
+            if _mx <= 0:
+                out[m] = "no_carrier"
+            elif t > _mx:
                 out[m] = "high"
             elif t < _mn:
                 out[m] = "low"
@@ -758,13 +769,23 @@ def _exempt_matcher(exempt_tokens: tuple):
     _hit = _EXEMPT_RE_CACHE.get(_key)
     if _hit is not None:
         return _hit
+    # [P3-EXEMPT-KNOBS-INDEPENDENT · 2026-07-30] (audit solver+seeder v5) La lista de tokens se
+    # construye ANTES de elegir el operador de match. Antes, el append de `_MICRO_CARRIER_TOKENS`
+    # vivía SOLO dentro de la rama word-boundary: apagar `MEALFIT_REFINE_EXEMPT_WORD_BOUNDARY`
+    # (un rollback documentado, para un falso-exento del regex) desactivaba TAMBIÉN en silencio
+    # la protección de portadores de micros — el refinador volvía a poder recortar a 0.5× la
+    # linaza/girasol/zanahoria que el micro-closer acababa de sembrar, deshaciendo cierres de
+    # micros sin un solo log, y con /health/version mostrando PROTECT_MICRO_CARRIERS en `true`.
+    # El comentario del fix original prometía "rollback independiente por knob"; el código lo
+    # contradecía. Los dos knobs gobiernan cosas distintas (QUÉ se exime vs CÓMO se matchea) y
+    # ahora son de verdad ortogonales.
+    _toks = [t for t in _key if t]
+    if REFINE_PROTECT_MICRO_CARRIERS:
+        _toks = list(_toks) + [t for t in _MICRO_CARRIER_TOKENS if t not in _toks]
     if not REFINE_EXEMPT_WORD_BOUNDARY:
-        def _fn(il, _toks=_key):
-            return any(t and t in il for t in _toks)
+        def _fn(il, _t=tuple(_toks)):
+            return any(t and t in il for t in _t)
     else:
-        _toks = [t for t in _key if t]
-        if REFINE_PROTECT_MICRO_CARRIERS:
-            _toks = list(_toks) + [t for t in _MICRO_CARRIER_TOKENS if t not in _toks]
         if not _toks:
             def _fn(il):
                 return False
@@ -903,9 +924,25 @@ def refine_day_portions_integer(
             for ln in lines:
                 lo = max(float(floor_g), 0.5 * ln["orig"])
                 hi = min(float(cap_g), 2.0 * ln["orig"])
+                # [P3-REFINE-OUTOFBOUNDS-INWARD · 2026-07-30] (audit solver+seeder v5) `lo`/`hi`
+                # se computan desde `orig` y el test evaluaba SOLO el punto DESTINO, así que una
+                # línea que ARRANCA fuera del intervalo quedaba congelada en AMBAS direcciones:
+                # con orig=400 y cap_g=300 el techo es 300, y tanto 395 como 405 caen fuera ⇒
+                # `continue` siempre. El refinador perdía su palanca justo en la línea más grande
+                # del día (un '400 g de arroz' es producible por el solver con max_scale 3.5 y el
+                # realism-cap no capea carbos en gramos), y esa línea seguía sobre el cap para el
+                # usuario. Bounds EFECTIVOS: desde dentro se comporta idéntico; desde fuera
+                # permite solo la dirección que ACERCA al intervalo, y ahí queda acotada.
+                _lo_eff = min(lo, ln["grams"])
+                _hi_eff = max(hi, ln["grams"])
                 for direction in (+1.0, -1.0):
                     ng = ln["grams"] + direction * float(step_g)
-                    if ng < lo - 1e-9 or ng > hi + 1e-9:
+                    if ng < _lo_eff - 1e-9 or ng > _hi_eff + 1e-9:
+                        continue
+                    # ...pero nunca ALEJARSE más: si ya está fuera, solo se admite acercarse.
+                    if ng > hi + 1e-9 and ng > ln["grams"]:
+                        continue
+                    if ng < lo - 1e-9 and ng < ln["grams"]:
                         continue
                     cand = {k: delivered[k] + direction * float(step_g) * ln["per_g"][k]
                             for k in delivered}
@@ -1019,5 +1056,14 @@ def refine_day_portions_integer(
                 _log.warning(f"[P1-REFINE-RAW-BY-FOOD] sync no-op en meal "
                              f"{str(_meal.get('name'))[:32]!r}: {type(_rs_e).__name__}: {_rs_e}")
         return moves if touched_meals else 0
-    except Exception:
+    except Exception as _rdi_e:
+        # [P3-REFINE-EXCEPT-LOGGED · 2026-07-30] (audit solver+seeder v5) Este `except` era MUDO
+        # (`return 0` a secas), y es el fail-safe del ÚLTIMO optimizador de la banda all-4 —
+        # corre en generación Y en todas las superficies de update. Un fallo estructural (el
+        # NameError-en-helper-recién-extraído ya mordió dos veces en este repo, y los tests
+        # parser-based no lo ejecutan) haría que CADA llamada devolviera 0 en silencio: el motor
+        # apagado sería indistinguible de "no había nada que mejorar", y la banda de la flota
+        # degradaría sin una sola línea de diagnóstico. Todos los pases hermanos ya loguean su
+        # fail-safe; este era el único callado.
+        _log.warning(f"[REFINE] fail-safe: {type(_rdi_e).__name__}: {_rdi_e}")
         return 0

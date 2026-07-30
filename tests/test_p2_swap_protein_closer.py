@@ -25,6 +25,33 @@ sys.path.insert(0, str(_BACKEND))
 _AGENT = (_BACKEND / "agent.py").read_text(encoding="utf-8")
 
 
+# [P3-AUDIT-V5-TESTDEBT · 2026-07-30] Filas INYECTADAS para no consultar el catálogo real.
+# `IngredientNutritionDB()` sin `rows` carga `master_ingredients` de Neon: este test unitario
+# dependía de la red y del CONTENIDO de producción — un rename de 'Atún en agua' o un ajuste de
+# `protein_g_per_100g` lo ponía rojo sin cambio de código, y un blip de Neon lo volvía flaky
+# (el constructor cae a `self._rows = []` con un except silencioso). Un rojo así se archiva como
+# "pre-existente" y detrás se esconden regresiones reales del closer day-aware. El contrato bajo
+# prueba (cierre ≥85%, day-aware, renombre, paso SSOT) no necesita las 204 filas: necesita estas.
+_ROWS = [
+    {"name": "Atún en agua", "kcal_per_100g": 100.0, "protein_g_per_100g": 25.0,
+     "carbs_g_per_100g": 0.0, "fats_g_per_100g": 1.0,
+     "density_g_per_cup": None, "density_g_per_unit": None},
+    {"name": "Arroz blanco", "kcal_per_100g": 130.0, "protein_g_per_100g": 2.7,
+     "carbs_g_per_100g": 28.0, "fats_g_per_100g": 0.3,
+     "density_g_per_cup": 185.0, "density_g_per_unit": None},
+    {"name": "Brócoli", "kcal_per_100g": 34.0, "protein_g_per_100g": 2.8,
+     "carbs_g_per_100g": 7.0, "fats_g_per_100g": 0.4,
+     "density_g_per_cup": 91.0, "density_g_per_unit": None,
+     "aliases": ["brocoli"]},
+    {"name": "Pechuga de pollo", "kcal_per_100g": 114.0, "protein_g_per_100g": 23.0,
+     "carbs_g_per_100g": 0.0, "fats_g_per_100g": 2.0,
+     "density_g_per_cup": None, "density_g_per_unit": None},
+    {"name": "Queso cottage", "kcal_per_100g": 84.0, "protein_g_per_100g": 11.0,
+     "carbs_g_per_100g": 3.0, "fats_g_per_100g": 2.5,
+     "density_g_per_cup": 226.0, "density_g_per_unit": None},
+]
+
+
 def _cands():
     mk = lambda n, p, k, c, f: SimpleNamespace(name=n, protein=p, kcal=k, carbs=c, fats=f)  # noqa: E731
     return [(0.25, "Atún en agua", mk("Atún en agua", 25.0, 100.0, 0.0, 1.0)),
@@ -43,7 +70,7 @@ def test_functional_deficit_closed_day_aware():
             "recipe": ["Saltea.", "MONTAJE: sirve."],
             "protein": 12, "carbs": 45, "fats": 18, "cals": 420}
     g = go._close_protein_gap_for_meal(
-        cand, 38.0, IngredientNutritionDB(), _cands(), allergies=[], fill_pct=1.0,
+        cand, 38.0, IngredientNutritionDB(rows=_ROWS), _cands(), allergies=[], fill_pct=1.0,
         slot_cal_target=630.0, enforce_min_threshold=False,
         day_used_proteins={"huevo", "pollo"})
     assert g > 0 and cand["protein"] >= 32, "déficit material debe cerrarse (≥85% del target)"

@@ -105,10 +105,26 @@ def build_dish_library_context(skeleton_day: dict, day_num: int) -> str:
             str(x) for x in (skeleton_day.get("protein_pool") or [])).lower())
         meal_types = skeleton_day.get("meal_types") or ["Desayuno", "Almuerzo", "Merienda", "Cena"]
         lines = []
+        _seen_slots = set()
         for mt in meal_types:
             slot = strip_accents(str(mt).strip().lower())
             if slot not in _SLOT_LABELS:
-                continue
+                # [P3-DISHLIB-MERIENDA-SLOTS · 2026-07-30] (audit solver+seeder v5) `_SLOT_LABELS`
+                # tiene 'merienda' a secas, pero el slot REAL de todo plan clínico es 'Merienda
+                # AM'/'PM'/'Nocturna' (lo fuerza `MEAL_TYPES_BY_COUNT[5|6]` antes de que el
+                # day-gen lea el esqueleto) ⇒ `continue` y esas comidas se componían SIN
+                # biblioteca de inspiración, cayendo a los staples repetidos que la biblioteca
+                # existe para evitar. En un plan bariátrico son 3 de 6 slots, y es justo el
+                # perfil que más depende de meriendas bien diseñadas.
+                # La función hermana de este MISMO módulo (`build_swap_inspiration_context`) ya
+                # tenía este fallback: un swap de esa merienda recibía inspiración y la
+                # generación no. Paridad entre surfaces del mismo módulo.
+                slot = next((k for k in _SLOT_LABELS if k in slot), None)
+                if not slot:
+                    continue
+            if slot in _seen_slots:
+                continue   # 3 meriendas → una sola línea de inspiración (evita repetir el bloque)
+            _seen_slots.add(slot)
             picks = sample_templates_for_slot(slot, pool_ascii, int(DISH_LIBRARY_PER_SLOT), int(day_num or 1))
             if not picks:
                 continue

@@ -12076,6 +12076,61 @@ def _decrement_stripped_supplement_macros(meal: dict, removed_lines: list, db, s
     return _unresolved
 
 
+def _has_micro_seed(meal, micro_key: str) -> bool:
+    """[P3-MICRO-SEED-MARKER-LIST · 2026-07-30] (audit solver+seeder v5) ¿Este meal ya fue
+    sembrado para ESTE micro?
+
+    `_micro_seed_applied` era un slot ESCALAR: si el mismo meal se sembraba para un segundo
+    micro —los pools tienen fallback explícito a meals YA sembradas cuando no quedan candidatas
+    sin sembrar— la 2ª asignación PISABA a la 1ª. A partir de ahí, en cualquier re-entrada del
+    closer (swap-persist / chat-modify persisten el marker en `plan_data`) el anti-doble-siembra
+    daba False para el micro pisado ⇒ se sembraba una SEGUNDA línea del mismo portador en vez de
+    entrar al refuerzo; y el refuerzo post-erosión, que localiza su meal por igualdad con `k`,
+    nunca volvía a encontrarla.
+
+    Lee las DOS formas: la colección nueva y el escalar legacy, porque el parque de planes ya
+    persistidos trae el escalar y sin el shim el anti-doble-siembra se apagaría para todos ellos.
+    tooltip-anchor: P3-MICRO-SEED-MARKER-LIST"""
+    if not isinstance(meal, dict):
+        return False
+    if meal.get("_micro_seed_applied") == micro_key:
+        return True
+    _lst = meal.get("_micro_seeds_applied")
+    return bool(isinstance(_lst, (list, tuple)) and micro_key in _lst)
+
+
+def _has_any_micro_seed(meal) -> bool:
+    """[P3-MICRO-SEED-MARKER-LIST · 2026-07-30] ¿Este meal ya recibió ALGUNA siembra?
+
+    Distinto de `_has_micro_seed(meal, k)` a propósito, y la distinción es load-bearing: los
+    POOLS de candidatos usan este predicado para REPARTIR las semillas entre platos distintos
+    (un meal ya sembrado —aunque fuera de otro micro— se salta mientras queden vírgenes), y el
+    anti-doble-siembra usa el otro para preguntar por un micro concreto.
+
+    Al migrar el marker a colección estuve a punto de colapsar los dos en uno: cambiar el filtro
+    de los pools a "no sembrado para ESTE micro" habría permitido cargar dos semillas en el mismo
+    plato teniendo otro libre — justo lo contrario del reparto que el diseño busca, y lo cazó
+    `test_already_seeded_merienda_skipped`. Ampliar la memoria de un marker no es lo mismo que
+    ampliar la elegibilidad."""
+    if not isinstance(meal, dict):
+        return False
+    return bool(meal.get("_micro_seed_applied") or meal.get("_micro_seeds_applied"))
+
+
+def _mark_micro_seed(meal, micro_key: str) -> None:
+    """[P3-MICRO-SEED-MARKER-LIST · 2026-07-30] Añade el micro a la colección (idempotente) y
+    conserva el escalar por compatibilidad hacia atrás con lectores que aún no migraron."""
+    if not isinstance(meal, dict) or not micro_key:
+        return
+    _lst = meal.get("_micro_seeds_applied")
+    if not isinstance(_lst, list):
+        _lst = []
+        meal["_micro_seeds_applied"] = _lst
+    if micro_key not in _lst:
+        _lst.append(micro_key)
+    meal["_micro_seed_applied"] = micro_key
+
+
 def _micro_budget_rank(micro_key: str) -> int:
     """[P1-MICRO-BUDGET-NONFAT-FIRST · 2026-07-07] Orden de consumo del presupuesto kcal COMPARTIDO del
     micro-closer. 0 = seedable sin backstop graso (vitA: la siembra es el cierre más kcal-eficiente y no
@@ -14129,8 +14184,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 # Anti-doble-siembra: si el día ya tiene comida sembrada para este micro, skip.
                 _had_carriers = bool(contributors)
                 _already_seeded = any(
-                    isinstance(m, dict) and m.get("_micro_seed_applied") == k
-                    for m in (_d.get("meals") or [])
+                    _has_micro_seed(m, k) for m in (_d.get("meals") or [])
                 )
                 _seed_trigger = (not contributors) or (
                     MICRO_SEED_BELOW_RATIO > 0 and day_total < MICRO_SEED_BELOW_RATIO * floor
@@ -14228,13 +14282,13 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                     # salada (día solo con meriendas dulces) → NO sembrar: mejor el residual
                                     # honesto que "zanahoria rallada" en un yogurt-con-fruta. Pool = solo
                                     # saladas (sin fallback a cualquier meal → _seed_pool vacío → skip).
-                                    _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
+                                    _seed_pool = ([m for m in _seed_mers if not _has_any_micro_seed(m)]
                                                   or _seed_mers)
                                 else:
                                     _seed_mers = [m for m in _seed_cands
                                                   if "merienda" in str(m.get("meal", "")).lower()]
-                                    _seed_pool = ([m for m in _seed_mers if not m.get("_micro_seed_applied")]
-                                                  or [m for m in _seed_cands if not m.get("_micro_seed_applied")]
+                                    _seed_pool = ([m for m in _seed_mers if not _has_any_micro_seed(m)]
+                                                  or [m for m in _seed_cands if not _has_any_micro_seed(m)]
                                                   or _seed_mers or _seed_cands)
                                 _seed_meal = (min(_seed_pool, key=lambda m: _meal_macro_num(m.get("cals")))
                                               if _seed_pool else None)
@@ -14317,7 +14371,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         _fat_seed_reserve -= _kc_seed
                                     else:
                                         kcal_budget_left -= _kc_seed
-                                    _seed_meal["_micro_seed_applied"] = k
+                                    _mark_micro_seed(_seed_meal, k)
                                     # [P2-SEED-STEP-NOTE · 2026-07-05] la semilla también vive en los pasos.
                                     if MICRO_SEED_STEP_NOTE_ENABLED:
                                         _rec_seed = _seed_meal.get("recipe")
@@ -14376,7 +14430,7 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                             if " de " in c
                         )
                         for _rm in (_d.get("meals") or []):
-                            if not (isinstance(_rm, dict) and _rm.get("_micro_seed_applied") == k):
+                            if not _has_micro_seed(_rm, k):
                                 continue
                             if _rm.get("_micro_seed_reinforced") == k:
                                 break  # ya reforzado — no crecer sin límite
@@ -14409,6 +14463,27 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                                         _food_hit = False
                                 if not (_txt_hit or _food_hit):
                                     continue
+                                # [P3-REINFORCE-CEILING-GUARD · 2026-07-30] (audit solver+seeder
+                                # v5) El guard clínico de CONTRIBUYENTE aterrizó en 3 de los 4
+                                # paths que escalan una línea (loop principal, fatswap, candidato
+                                # de siembra) — el refuerzo post-erosión se quedó fuera. Población
+                                # concreta: planes de 2026-07-06 a 07-29 (cuando la espinaca ya
+                                # era candidata de vit A y el guard aún no existía) de usuarios
+                                # con warfarina que rechazan zanahoria y auyama. Como
+                                # `_micro_seed_applied` persiste en plan_data, un swap re-entra
+                                # aquí, encuentra el día corto y escala la espinaca ×1.8: carga
+                                # asimétrica de vitamina K en un solo día bajo anticoagulante,
+                                # que es la definición operativa del riesgo. Cubre gratis las 7
+                                # ramas del guard (dislip/HTA, renal-Ca ×2, DM2 ×2, anticoag, K-med).
+                                try:
+                                    if _ceiling_risky_contributor(k, strip_accents(str(_rline).lower())):
+                                        logger.info(
+                                            f"🩺 [P3-REINFORCE-CEILING-GUARD] refuerzo de {k} "
+                                            f"omitido en línea sembrada de riesgo clínico "
+                                            f"('{str(_rline)[:40]}') — residual honesto.")
+                                        break
+                                except Exception:
+                                    pass
                                 _m_g = _re_rs.match(r"^\s*(\d+(?:[.,]\d+)?)\s*g\b", _rline)
                                 if _m_g:
                                     _g_now = float(_m_g.group(1).replace(",", "."))
