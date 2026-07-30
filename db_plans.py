@@ -1053,7 +1053,13 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                 # Corre DESPUÉS del pase de proteína (protein ya estable) y ANTES del re-check de banda.
                 try:
                     from graph_orchestrator import reconcile_all_macros_band_post_finalize as _ramb
-                    _ramb(_pd)
+                    # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) el motor
+                    # que este wrapper invoca RE-DIMENSIONA porciones; sin `form_data` no podía
+                    # re-aplicar los caps clínicos (DM2 alto-IG / bariátrico) y este es el ÚLTIMO
+                    # punto del chain donde el re-cap es posible (ningún pase posterior capea).
+                    # Misma expresión que el recompute de micros de más abajo — si una cambia, la otra
+                    # debe cambiar con ella.
+                    _ramb(_pd, form_data=(_pd.get("form_data") or data.get("form_data") or {}))
                 except Exception as _ramb_e:
                     logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")
                 # [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) El único

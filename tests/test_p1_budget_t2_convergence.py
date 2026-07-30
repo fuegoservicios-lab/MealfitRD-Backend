@@ -34,8 +34,15 @@ def test_helper_orchestrates_and_marks(monkeypatch):
     monkeypatch.setattr(go, "_apply_budget_cheapen_pass",
                         lambda days, fd, force=False: calls.setdefault("cheapen_force", force) or 1)
     monkeypatch.setattr(go, "_protein_repeat_autofix", lambda days, fd: 0)
+    # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] `**kw` a propósito: el doble del motor tenía
+    # firma CERRADA (`pd, surface, db`), así que al empezar a pasarle `form_data=` el stub lanzaba
+    # TypeError → lo tragaba el `except Exception` del bloque T2 → `engine_surface` nunca se
+    # seteaba y el test caía por "no se invocó el motor" cuando el motor SÍ se invocaba.
+    # Un doble con firma cerrada convierte un argumento nuevo en un falso negativo.
     monkeypatch.setattr(go, "apply_update_macro_engine",
-                        lambda pd, surface=None, db=None: calls.setdefault("engine_surface", surface))
+                        lambda pd, surface=None, db=None, **kw: (
+                            calls.setdefault("engine_surface", surface),
+                            calls.setdefault("engine_form_data", kw.get("form_data")))[0])
     monkeypatch.setattr(go, "recompute_micronutrient_report_for_plan",
                         lambda pd, fd, db=None: calls.setdefault("micros", True))
     plan = _plan()
@@ -44,6 +51,11 @@ def test_helper_orchestrates_and_marks(monkeypatch):
     assert plan.get("_budget_adjusted") is True
     assert calls.get("cheapen_force") is True, "el cheapen corre con force=True (salta el gate de economía)"
     assert calls.get("engine_surface") == "budget_convergence_t2"
+    # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] T2 (chunk worker, semanas 2+) es la superficie
+    # más silenciosa del sistema y llamaba al motor SIN form_data ⇒ el re-cap clínico DM2/
+    # bariátrico se omitía sobre porciones que el rebalance/refine acababa de re-inflar.
+    assert calls.get("engine_form_data") is not None, (
+        "el motor debe recibir form_data para poder re-aplicar los caps clínicos de porción")
 
 
 def test_helper_zero_subs_is_pure_noop(monkeypatch):

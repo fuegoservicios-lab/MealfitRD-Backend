@@ -1017,24 +1017,63 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         extracted_p, extracted_c, extracted_v, extracted_f = [], [], [], []
         csl_lower = [strip_accents(i.lower()) for i in current_pantry_ingredients]
         
+        # [P1-PANTRY-EXTRACT-FILTERED-WB · 2026-07-30] (audit solver+seeder v5) Dos defectos en el
+        # mismo loop, y hacían falta las DOS correcciones:
+        #
+        #   (1) EL OPERADOR era `in` crudo (subcadena). `PROTEIN_SYNONYMS['res']` trae el alias
+        #       'res' y `['pollo']` trae 'pollo', así que una nevera de vegetales extraía carne:
+        #           'res'   ⊂ '**fres**as'   → Res
+        #           'pollo' ⊂ 're**pollo**'  → Pollo
+        #       Dos proteínas fantasma ≥ PANTRY_ROTATION_MIN_PROTEINS ⇒ el pool se REEMPLAZA por
+        #       ellas y se activa `cycle_locked` ("REGLA DE AHORRO EXTREMA… EXACTAMENTE las
+        #       proteínas asignadas"): 3 días de pollo y res que el usuario NO tiene. Es el 13º
+        #       incidente de subcadena del repo; el patrón canónico (word-boundary sobre el mismo
+        #       synonym map, con strip_accents en los dos lados) ya vive en `cpu_tasks.py` y en el
+        #       `fast_regex` de `constants.py` — esta era la tercera implementación, la única cruda.
+        #
+        #   (2) EL UNIVERSO eran los catálogos COMPLETOS (`DOMINICAN_*`) en vez de los `filtered_*`
+        #       que este mismo seeder ya calculó arriba. Aunque el match sea exacto, eso deja a la
+        #       nevera resucitar un alimento que la alergia/dieta/dislike había excluido del pool —
+        #       y con `cycle_locked` el prompt lo vuelve OBLIGATORIO. Para un vegetariano el pool
+        #       filtrado se descartaba entero y el backstop de dieta lo convertía en retry-storm.
+        #
+        # Con solo (1) o solo (2) queda medio agujero abierto.
+        #   (3) EL ALIAS GANADOR. Con (1)+(2) todavía quedaba un fantasma: `PROTEIN_SYNONYMS['res']`
+        #       incluye el alias genérico `'filete'`, que ES una palabra completa dentro de
+        #       "Filete de pescado" ⇒ una nevera con PESCADO extraía RES. El word-boundary no puede
+        #       verlo (el alias no es subcadena de otra palabra: es genuinamente ambiguo) y el pool
+        #       filtrado tampoco (Res sí está permitido). La regla que lo cierra: gana el alias MÁS
+        #       ESPECÍFICO (el más largo) sobre el catálogo COMPLETO, y solo se extrae si ese
+        #       ganador está permitido. Si el ítem nombra un alimento excluido (alergia/dieta/
+        #       dislike), NO se degrada a un match genérico más débil — ese ítem simplemente no
+        #       aporta base. Medido: 'filete de pescado' → Pescado(17) gana a Res(6); 'salmon
+        #       fresco' → Pescado; 'repollo'/'fresas' → ningún match proteico.
+        def _pantry_pick(item_norm: str, full_catalog, syn_map, allowed) -> str | None:
+            _best, _len = None, 0
+            for _food in full_catalog:
+                for s in syn_map.get(_food.lower(), [_food.lower()]):
+                    _s = strip_accents(str(s).lower()).strip()
+                    if _s and len(_s) > _len and re.search(r'\b' + re.escape(_s) + r'\b', item_norm):
+                        _best, _len = _food, len(_s)
+            return _best if (_best is not None and _best in allowed) else None
+
+        _allow_p, _allow_c = set(filtered_proteins), set(filtered_carbs)
+        _allow_v, _allow_f = set(filtered_veggies), set(filtered_fruits)
         for item in csl_lower:
-            for p in DOMINICAN_PROTEINS:
-                syns = protein_synonyms.get(p.lower(), [p.lower()])
-                if any(strip_accents(s) in item for s in syns) and p not in extracted_p: 
-                    extracted_p.append(p)
-            for c in DOMINICAN_CARBS:
-                syns = carb_synonyms.get(c.lower(), [c.lower()])
-                if any(strip_accents(s) in item for s in syns) and c not in extracted_c: 
-                    extracted_c.append(c)
-            for v in DOMINICAN_VEGGIES_FATS:
-                syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
-                if any(strip_accents(s) in item for s in syns) and v not in extracted_v: 
-                    extracted_v.append(v)
-            for f in DOMINICAN_FRUITS:
-                syns = fruit_synonyms.get(f.lower(), [f.lower()])
-                if any(strip_accents(s) in item for s in syns) and f not in extracted_f: 
-                    extracted_f.append(f)
-                
+            _p = _pantry_pick(item, DOMINICAN_PROTEINS, protein_synonyms, _allow_p)
+            if _p and _p not in extracted_p:
+                extracted_p.append(_p)
+            _c = _pantry_pick(item, DOMINICAN_CARBS, carb_synonyms, _allow_c)
+            if _c and _c not in extracted_c:
+                extracted_c.append(_c)
+            _v = _pantry_pick(item, DOMINICAN_VEGGIES_FATS, veggie_fat_synonyms, _allow_v)
+            if _v and _v not in extracted_v:
+                extracted_v.append(_v)
+            _f = _pantry_pick(item, DOMINICAN_FRUITS, fruit_synonyms, _allow_f)
+            if _f and _f not in extracted_f:
+                extracted_f.append(_f)
+
+
         # [P2-PANTRY-ROTATION-FLOOR · 2026-07-29] (audit solver+seeder v4) Esto REEMPLAZABA los pools
         # por lo extraído de la nevera y forzaba `cycle_locked = True` INCONDICIONALMENTE — sin sorteo,
         # sin cap y sin mínimo. `useRegeneratePlan.js` manda `current_pantry_ingredients` en TODA
@@ -1183,18 +1222,36 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             'Lechosa', 'Mango', 'Piña', 'Guineo', 'Fresas', 'Chinola',
             'Melón', 'Manzana', 'Guayaba', 'Mandarina',
         )
+        # [P1-FRUIT-PAD-FILTERED · 2026-07-30] (audit solver+seeder v5) El relleno recorría
+        # `_DEFAULT_DR_FRUITS` con un ÚNICO chequeo ("¿ya está?") y jamás consultaba
+        # `filtered_fruits` — deshaciendo el filtro de alergias/dislikes/dieta que este mismo
+        # seeder aplicó al principio. Y la fruta rechazada era la MÁS probable de entrar:
+        # precisamente por estar excluida del pool no aparecía en `existing`, así que el padding
+        # la elegía. Con `num_fruits_to_pick = min(2, ...)` el while añade ≥2 defaults en CADA
+        # plan con frutas, así que no era un borde: era el caso normal.
+        # `P1-FRUIT-SEEDER-GATE-CONTRACT` ya había curado esta lista por el lado del GATE; esto
+        # la cura por el lado del USUARIO. Comparación normalizada (sin acentos, tolerando
+        # singular/plural tipo Fresa/Fresas) porque el catálogo y la tupla no coinciden en forma.
+        def _fruit_key(_s: str) -> str:
+            _k = strip_accents(str(_s).lower()).strip()
+            return _k[:-1] if _k.endswith("s") else _k
+
+        _allowed_fruit_keys = {_fruit_key(_f) for _f in (filtered_fruits or [])}
         # [P1-FRUIT-SEEDER-GATE-CONTRACT] 4 y no 3: el reparto da 2 frutas distintas por día
         # rotando sobre 4, así la semana usa 4 frutas en vez de las 6 que costaría 2×3 sin reutilizar.
         while len(unique_fruits) < 4:
             existing = {f.lower() for f in unique_fruits}
-            # Prioridad 1: añadir una fruta DR default que NO esté ya presente.
-            # Garantiza variedad cross-day (cada día recibe fruta distinta).
+            # Prioridad 1: añadir una fruta DR default que NO esté ya presente Y que el usuario
+            # pueda comer. Garantiza variedad cross-day (cada día recibe fruta distinta).
             _added = False
             for _df in _DEFAULT_DR_FRUITS:
-                if _df.lower() not in existing:
-                    unique_fruits.append(_df)
-                    _added = True
-                    break
+                if _df.lower() in existing:
+                    continue
+                if _allowed_fruit_keys and _fruit_key(_df) not in _allowed_fruit_keys:
+                    continue   # alergia / dislike / dieta la excluyó del pool
+                unique_fruits.append(_df)
+                _added = True
+                break
             if _added:
                 continue
             # Prioridad 2 (rara): todas las default ya presentes — round-robin

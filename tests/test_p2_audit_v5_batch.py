@@ -100,7 +100,15 @@ def test_c1_wrap_jsonb_expr_mechanics():
 # ── GAP-C3: expand rebuild inline ────────────────────────────────────────────
 def test_c3_expand_rebuilds_lists_inline():
     start = _PL.index("def _apply_recipe_expansion")
-    body = _PL[start:start + 12000]
+    # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] Era `_PL[start:start + 12000]` — ventana de bytes
+    # FIJA. Un bloque nuevo dentro de la función (la reconciliación display↔raw) empujó el
+    # rebuild de listas fuera de los 12000 y el test se puso rojo por un cambio que no tenía
+    # nada que ver con su contrato. Quinta vez que esta clase muerde en el repo: la ventana
+    # caduca sola cuando la función crece. Recorte por ORDEN RELATIVO (hasta el final real de
+    # la función), que no caduca.
+    _end = _PL.find("\n                update_plan_data_atomic(", start)
+    body = _PL[start:_end if _end > start else len(_PL)]
+    assert len(body) > 4000, "el recorte de la función quedó sospechosamente corto"
     assert "_expand_list_dirty" in body, "falta el flag de dirty del append de veg"
     assert re.search(r'_rebuild_plan_shopping_lists_inline\(\s*plan_data_fresh', body), \
         "expand debe invocar el rebuild inline de listas"

@@ -5210,7 +5210,12 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     if _expand_added_ings:
                         try:
                             from graph_orchestrator import apply_update_macro_engine as _ume_exp
-                            _ume_exp(plan_data_fresh, surface="recipe_expand")
+                            # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5)
+                            # `_expand_clin` trae las medicalConditions HIDRATADAS del perfil
+                            # (`_enrich_clinical_from_profile`) y ya viaja al recompute de micros 11
+                            # líneas más abajo — sin pasarlo aquí, el motor re-dimensionaba sin poder
+                            # re-aplicar los caps clínicos de porción.
+                            _ume_exp(plan_data_fresh, surface="recipe_expand", form_data=_expand_clin)
                         except Exception as _ume_exp_e:
                             logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) motor en expand no-op: {_ume_exp_e}")
                     # [P2-EXPAND-MICRO-RECOMPUTE · 2026-07-02] (audit v3 micros GAP-2) el veg añadido ya entró
@@ -5232,6 +5237,21 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             _ubp_exp(plan_data_fresh, surface="recipe_expand")
                         except Exception as _ubp_exp_e:
                             logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) band-parity en expand no-op: {_ubp_exp_e}")
+                    # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) el motor de macros
+                    # de arriba (`_ume_exp`) MUEVE cantidades tras el finalize; sin esta pasada la
+                    # divergencia display↔raw que introduzca se persiste y el rebuild de listas de
+                    # aquí abajo la lee. Espejo del shield pre-INSERT, mismo knob de rollback.
+                    if _expand_added_ings:
+                        try:
+                            from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_ex,
+                                                            _reconcile_display_raw_lines as _rdrl_ex)
+                            if _rabc_ex:
+                                _rw_ex = _rdrl_ex(plan_data_fresh.get("days") or [])
+                                if _rw_ex:
+                                    logger.info(f"⚖️ [P1-UPDATE-RAW-BY-FOOD] {len(_rw_ex)} línea(s) "
+                                                f"display↔raw reconciliadas (recipe_expand).")
+                        except Exception as _rabc_ex_e:
+                            logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (expand) no-op: {_rabc_ex_e}")
                     # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C3) Rebuild inline de las 4 listas si el
                     # veg del finalizer entró a ingredients — expand era la ÚNICA superficie mutadora
                     # de ingredients sin recalc (el veg faltaba de la lista todo el ciclo, violando
@@ -6285,11 +6305,16 @@ def api_swap_meal_persist(
                 try:
                     from graph_orchestrator import (apply_update_macro_engine as _ame_spd,
                                                     compute_clinical_band_score as _cbs_spd,
+                                                    _engine_day_view as _edv_spd,
                                                     _sync_recipe_step_quantities as _sq_spd)
                     from nutrition_db import IngredientNutritionDB as _SPDB
-                    _day_view_spd = {"days": [day], "macros": plan_data.get("macros"),
-                                     "calories": plan_data.get("calories"),
-                                     "main_goal": plan_data.get("main_goal")}
+                    # [P1-SWAP-RENAL-DAY-VIEW · 2026-07-30] (audit solver+seeder v5) el view era un
+                    # literal de 4 claves y le faltaba `renal_protein_cap` → el guard renal del motor
+                    # (protein-preserving + sin refine) quedaba INERTE justo en la superficie que
+                    # persiste: en un plan con cap KDIGO el rebalance re-apuntaba la proteína al
+                    # target completo. Helper SSOT + test de paridad que deriva las claves del
+                    # cuerpo del motor: si el motor lee una clave nueva, el view debe traerla.
+                    _day_view_spd = _edv_spd(plan_data, day)
                     _bs_pre_spd = _cbs_spd(_day_view_spd, {})
                     _pre_score_spd = float(_bs_pre_spd.get("score_macros_only") or 1.0)
                     if _pre_score_spd < 0.99:
@@ -6414,6 +6439,19 @@ def api_swap_meal_persist(
                                         _sq_swap(_m_sq)
                         except Exception as _sq_e:
                             logger.debug(f"[P1-STEPS-STALE-POSTCLOSER] qty-sync (swap) falló: {_sq_e}")
+                    # [P1-CARBFLOOR-CLINICAL-RECAP · 2026-07-30] (audit solver+seeder v5) El carb-floor
+                    # de arriba escala HACIA el target → deja el día EN banda por construcción → el
+                    # motor de macros de abajo (que SÍ recibe form_data) es no-op y su re-cap clínico
+                    # interno, gateado a `_hit`, NUNCA corre. Sin este bloque, la batata que la capa
+                    # clínica de S1 recortó a 150 g se persiste re-inflada hasta ×2.5 para un DM2:
+                    # `_close_carb_gap_for_day` no recibe form_data y elige el carbo-dominante más
+                    # rico del día, que es justo el almidón capado. Espejo del orden de form-gen
+                    # (carb-floor en assemble → caps después). Idempotente y no-op sin condición.
+                    try:
+                        from graph_orchestrator import reapply_clinical_portion_caps as _rcpc_sw
+                        _rcpc_sw(plan_data, _micro_form, surface="swap_persist")
+                    except Exception as _rcpc_sw_e:
+                        logger.debug(f"[P1-CARBFLOOR-CLINICAL-RECAP] (swap) no-op: {_rcpc_sw_e}")
                     # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Motor de macros de S1 en el
                     # persist del swap: si el plato swapeado (o los closers de arriba) dejaron CUALQUIER
                     # día fuera de banda [0.90,1.12], rebalance C/F/P al target + refine entero de 5g —
@@ -6464,6 +6502,25 @@ def api_swap_meal_persist(
                 _ubp_sw(plan_data, surface="swap_persist", pantry_limited=_pl_sw)
             except Exception as _bp_sw_e:
                 logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (swap) no-op: {_bp_sw_e}")
+
+            # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) Espejo de
+            # P2-RECONCILE-AFTER-BAND-CLOSER, que solo existía en el shield pre-INSERT. En esta
+            # superficie el motor (rebalance → refine 5g → trim de grasas) corre DESPUÉS del
+            # finalize y MUEVE cantidades; cualquier divergencia display↔raw que introduzca se
+            # persistía tal cual — y el rebuild de listas de aquí abajo lee `ingredients_raw`
+            # PRIMERO, así que la lista se construía sobre el lado divergente. El coherence guard
+            # no puede verlo (lee raw en los dos lados). Display manda, idempotente, fail-open.
+            # Rollback sin redeploy: MEALFIT_RECONCILE_AFTER_BAND_CLOSER=false.
+            try:
+                from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_sw,
+                                                _reconcile_display_raw_lines as _rdrl_sw)
+                if _rabc_sw:
+                    _rw_sw = _rdrl_sw(plan_data.get("days") or [])
+                    if _rw_sw:
+                        logger.info(f"⚖️ [P1-UPDATE-RAW-BY-FOOD] {len(_rw_sw)} línea(s) display↔raw "
+                                    f"reconciliadas antes del rebuild de listas (swap_persist).")
+            except Exception as _rabc_sw_e:
+                logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (swap) no-op: {_rabc_sw_e}")
 
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas (post closer/requantize/qty-sync → reflejan los
@@ -7675,6 +7732,20 @@ def api_regenerate_day(
                                     f"_macro_band_low limpiados (día en banda tras el rebalance)")
             except Exception as _chip_e:
                 logger.debug(f"[P2-REGEN-DAY-CHIP-STALE-CLEAR] no-op: {_chip_e}")
+            # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) regen-day inlinea la
+            # misma orquestación del motor (rebalance → refine 5g → trim de grasas) y también
+            # carecía de la reconciliación display↔raw que sí tiene el shield pre-INSERT. ANTES
+            # del rebuild de listas, que lee `ingredients_raw` primero.
+            try:
+                from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_rd,
+                                                _reconcile_display_raw_lines as _rdrl_rd)
+                if _rabc_rd:
+                    _rw_rd = _rdrl_rd(pd.get("days") or [])
+                    if _rw_rd:
+                        logger.info(f"⚖️ [P1-UPDATE-RAW-BY-FOOD] {len(_rw_rd)} línea(s) display↔raw "
+                                    f"reconciliadas antes del rebuild de listas (regen_day).")
+            except Exception as _rabc_rd_e:
+                logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (regen-day) no-op: {_rabc_rd_e}")
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas del plan con el día regenerado (el strip de arriba queda
             # como fallback si falla — contrato legacy con recalc del frontend).

@@ -167,7 +167,11 @@ def test_p2_12_alert_wired_and_documented():
 # ---------------------------------------------------------------------------
 
 def test_p2_4_expand_engine_and_band_parity_order():
-    _eng = _PL.index('_ume_exp(plan_data_fresh, surface="recipe_expand")')
+    # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] El ancla era la llamada COMPLETA
+    # (`_ume_exp(plan_data_fresh, surface="recipe_expand")`) y se rompió al añadirle el argumento
+    # `form_data=_expand_clin` — un cambio correcto que puso rojo un test cuyo contrato (el ORDEN
+    # de los 3 pases) no había cambiado. Anclar al NOMBRE del pase, no a su firma exacta.
+    _eng = _PL.index("_ume_exp(plan_data_fresh, surface=\"recipe_expand\"")
     _mic = _PL.index("from graph_orchestrator import recompute_micronutrient_report_for_plan as _rmr_exp")
     _bp = _PL.index('_ubp_exp(plan_data_fresh, surface="recipe_expand")')
     assert _eng < _mic < _bp, "orden del contrato de updates: motor → micros → band-parity"

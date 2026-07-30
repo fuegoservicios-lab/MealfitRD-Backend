@@ -100,7 +100,17 @@ def test_day_band_resquare_after_swap_persist():
     )
     blk = _PLANS[i: i + 2600]
     assert "apply_update_macro_engine" in blk, "motor SSOT de updates sobre view 1-día"
-    assert '"days": [day]' in blk, "view 1-día (mismos dicts → mutación llega al persist)"
+    # [P1-SWAP-RENAL-DAY-VIEW · 2026-07-30] El ancla era el literal `"days": [day]` del dict
+    # inline. Ese literal desapareció al extraer el view a `_engine_day_view(plan_data, day)` —
+    # precisamente porque escribirlo a mano fue lo que dejó fuera `renal_protein_cap` y volvió
+    # inerte el guard KDIGO en esta superficie. Lo que este assert protege es "view de UN día
+    # compartiendo los mismos dicts", y eso lo garantiza ahora el helper (+ su test de paridad
+    # en test_p1_swap_renal_day_view.py, que deriva las claves del cuerpo del motor).
+    # (El repo importa lazy y CON ALIAS para evitar ciclos, así que anclar al nombre pelado
+    # seguido de `(` daría 0 matches — el mismo tropiezo que ya costó un rojo hoy.)
+    assert "_engine_day_view" in blk, "el view debe venir del helper SSOT, no de un dict literal"
+    assert "(plan_data, day)" in blk, (
+        "view 1-día (mismos dicts → mutación llega al persist)")
     assert "_sync_recipe_step_quantities" in blk, "re-sync de pasos tras re-escalar porciones"
     assert "0.99" in blk, "solo re-cuadra si el día quedó fuera de banda (idempotente si ya está)"
     assert 'os.environ.get("MEALFIT_SWAP_PERSIST_DAY_BAND", "true")' in blk, "knob default ON"

@@ -363,7 +363,14 @@ def test_p1_5_recap_invoked_on_touched_day(monkeypatch):
 
 def test_p1_5_recap_skipped_without_form_data(monkeypatch):
     """Sin form_data no se puede conocer la condición → el re-cap NO corre (y el motor sigue igual
-    que antes). Ancla el fail-safe, no el fail-open silencioso."""
+    que antes). Ancla el fail-safe, no el fail-open silencioso.
+
+    [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] El vehículo era `surface="budget_convergence"` —
+    una superficie REAL que en v4 no pasaba form_data. Eso convertía este test en documentación
+    del hueco: certificaba como correcto el estado que el audit v5 identificó como el bug. Ahora
+    las 4 superficies de generación pasan su form_data y el vehículo es un nombre neutro: lo que
+    este test protege es el CONTRATO de la función (fail-safe sin form_data), no el hueco.
+    La omisión ya no es silenciosa — `test_p1_update_recap_all_surfaces.py` ancla el warning."""
     import graph_orchestrator as go
     calls = {"n": 0}
     monkeypatch.setattr(go, "_rebalance_day_macros_to_target", lambda *a, **kw: 1)
@@ -377,5 +384,5 @@ def test_p1_5_recap_skipped_without_form_data(monkeypatch):
         "macros": {"protein": "100 g", "carbs": "200 g", "fats": "60 g"},
         "days": [{"meals": [{"protein": 20, "carbs": 40, "fats": 10, "cals": 330}]}],
     }
-    go.apply_update_macro_engine(plan, surface="budget_convergence", db=object())
+    go.apply_update_macro_engine(plan, surface="caller_legacy_sin_form_data", db=object())
     assert calls["n"] == 0

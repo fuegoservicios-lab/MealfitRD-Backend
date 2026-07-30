@@ -18228,14 +18228,16 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
             m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
             m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
             ings[idx] = quant
-            raw = m.get("ingredients_raw")
-            if isinstance(raw, list) and len(raw) == len(ings):
-                # [P2-CARB-TRIM-RAW-LOCKSTEP · 2026-06-18] (audit fresco P2) El factor TOTAL de `ings[idx]`
-                # (orig→quant) es `factor × _f` (el escalado al target + el re-snap a cocinable). `raw` debe
-                # escalarse por el MISMO factor efectivo, no solo por `factor` — si no, la lista de compras
-                # (que prefiere ingredients_raw) diverge en magnitud de la receta cuantizada. Espejo del
-                # lockstep de _apply_portion_quantization.
-                raw[idx] = _resc(str(raw[idx]), _factor_line * _f)
+            # [P2-CARB-TRIM-RAW-LOCKSTEP · 2026-06-18] (audit fresco P2) El factor TOTAL de `ings[idx]`
+            # (orig→quant) es `factor × _f` (el escalado al target + el re-snap a cocinable). `raw` debe
+            # escalarse por el MISMO factor efectivo, no solo por `factor` — si no, la lista de compras
+            # (que prefiere ingredients_raw) diverge en magnitud de la receta cuantizada.
+            # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) el guard era
+            # `len(raw) == len(ings)` a secas → escribía por ÍNDICE CIEGO. "Mismo largo" no es
+            # "mismo orden": medido, solo el 48.1% de las comidas con largos iguales son paralelas.
+            # `_sync_one_raw_line` aplica el contrato v4 (índice solo con paralelismo verificado;
+            # si no, por ALIMENTO; ambiguo → no toca).
+            _sync_one_raw_line(m, idx, orig, _factor_line * _f)
             applied = True
         return applied
     except Exception as e:
@@ -18323,10 +18325,10 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
             m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
             m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
             ings[idx] = quant
-            raw = m.get("ingredients_raw")
-            if isinstance(raw, list) and len(raw) == len(ings):
-                # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
-                raw[idx] = _resc(str(raw[idx]), _factor_line * _f)
+            # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
+            # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) by-food, no por índice
+            # ciego (ver el gemelo en `_trim_day_carbs_to_target`).
+            _sync_one_raw_line(m, idx, orig, _factor_line * _f)
             applied = True
         return applied
     except Exception as e:
@@ -18462,9 +18464,10 @@ def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float
         _mn = db.macros_from_ingredient_string(quant) or {}
         ings = m.get("ingredients")
         ings[idx] = quant
-        raw = m.get("ingredients_raw")
-        if isinstance(raw, list) and len(raw) == len(ings):
-            raw[idx] = _resc(str(raw[idx]), factor * _f)
+        # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) by-food, no por índice ciego.
+        # Este escritor es el más peligroso de los 5: el carb-floor es ADITIVO (factor hasta 2.5) y
+        # corre en swap/chat sobre planes PERSISTIDOS, cuyo raw está rotado por diseño.
+        _sync_one_raw_line(m, idx, orig, factor * _f)
         _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
         _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
         _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
@@ -18551,9 +18554,11 @@ def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fat
                 m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
                 m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
                 ings[idx] = quant
-                raw = m.get("ingredients_raw")
-                if isinstance(raw, list) and len(raw) == len(ings):
-                    raw[idx] = _resc(str(raw[idx]), factor * _f)
+                # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) by-food, no por
+                # índice ciego. Es el paso 1 del motor de updates: corre en TODAS las superficies
+                # que persisten, y el paso 2 (refinador global) ya usaba el contrato by-food —
+                # los pasos 1 y 3 se habían quedado con el guard viejo.
+                _sync_one_raw_line(m, idx, orig, factor * _f)
                 applied_any = True
 
         # Re-apunta las 3 macros (Gauss-Seidel): escalar carbo/grasa-dominantes movía la pequeña proteína que
@@ -21070,13 +21075,25 @@ def _apply_portion_quantization(plan: dict, db) -> int:
                 new_ings.append(new_s)
             if not any_change:
                 continue
+            _orig_ings = [str(x) for x in ings]
             meal["ingredients"] = new_ings
             raw = meal.get("ingredients_raw")
             if isinstance(raw, list) and len(raw) == len(factors):
-                meal["ingredients_raw"] = [
-                    rescale_ingredient_string(str(r), f) if abs(f - 1.0) > 1e-6 else str(r)
-                    for r, f in zip(raw, factors)
-                ]
+                # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) el zip por índice
+                # asumía que raw y display están alineadas posicionalmente. Medido: solo el 48.1%
+                # de las comidas con largos iguales lo están (el reconciliador reconstruye raw como
+                # [conservadas]+[añadidas] → mismo largo, otro orden). Con el zip ciego, cada factor
+                # aterrizaba en el alimento equivocado — y aquí son TODAS las líneas a la vez.
+                # Verificamos el paralelismo real antes de usar el camino barato.
+                if not RAW_PAIR_BY_FOOD or _raw_display_parallel_by_food(_orig_ings, raw):
+                    meal["ingredients_raw"] = [
+                        rescale_ingredient_string(str(r), f) if abs(f - 1.0) > 1e-6 else str(r)
+                        for r, f in zip(raw, factors)
+                    ]
+                else:
+                    _rw, _rn = _rescale_raw_by_food(raw, _orig_ings, factors)
+                    if _rn:
+                        meal["ingredients_raw"] = _rw
             meal["protein"] = max(0, round(_meal_macro_num(meal.get("protein")) + dp))
             meal["carbs"] = max(0, round(_meal_macro_num(meal.get("carbs")) + dc))
             meal["fats"] = max(0, round(_meal_macro_num(meal.get("fats")) + df))
@@ -23154,6 +23171,50 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
         return capped
     except Exception as _bgc_e:
         logger.warning(f"[P1-BARIATRIC-PORTION-CAP] falló (no bloquea): {type(_bgc_e).__name__}: {_bgc_e}")
+        return 0
+
+
+def reapply_clinical_portion_caps(plan_data: dict, form_data: dict, *, db=None,
+                                  surface: str = "update") -> int:
+    """[P1-CARBFLOOR-CLINICAL-RECAP · 2026-07-30] (audit solver+seeder v5) Re-aplica los DOS caps
+    clínicos de porción (`cap_dm2_high_gi_portions` + `cap_bariatric_portions`) sobre el plan
+    completo, SIN consultar la banda.
+
+    Por qué existe además del re-cap que ya vive dentro de `apply_update_macro_engine`:
+    ese re-cap está gateado a `_hit` — solo días que el MOTOR re-dimensionó, y el motor solo
+    actúa sobre días FUERA de banda. Pero `_close_carb_gap_for_day` (el carb-floor aditivo de
+    los updates) escala HACIA el target: cuando cierra el hueco deja el día EN banda **por
+    construcción**, así que el motor posterior es no-op y su re-cap interno nunca corre. El
+    carb-floor tampoco tiene guard clínico propio (no recibe form_data, su único skip es arroz
+    en la cena) y elige el carbo-dominante MÁS RICO del día — justo el almidón alto-IG que la
+    capa clínica de S1 había recortado a 150 g. Resultado medido: 300-375 g de batata
+    persistidos para un DM2 vía swap-persist / chat-modify.
+
+    En form-gen el orden ya es seguro (carb-floor en assemble, caps DESPUÉS). Este helper es el
+    espejo de ese orden para las superficies de update, que lo tenían invertido.
+
+    Los dos caps son idempotentes (`if grams <= cap: continue`) y no-op sin la condición, así que
+    llamarlos incondicionalmente tras el bloque closer+carb-floor+requantize es seguro y barato.
+    Devuelve nº de porciones recortadas. Fail-safe: cualquier error → 0 (plan intacto).
+    tooltip-anchor: P1-CARBFLOOR-CLINICAL-RECAP"""
+    if not (isinstance(plan_data, dict) and isinstance(form_data, dict) and form_data):
+        return 0
+    try:
+        _days = plan_data.get("days") or []
+        if not _days:
+            return 0
+        _n = 0
+        _n += int(cap_dm2_high_gi_portions(_days, form_data, db=db) or 0)
+        _n += int(cap_bariatric_portions(_days, form_data, db=db) or 0)
+        if _n:
+            logger.info(f"🩺 [P1-CARBFLOOR-CLINICAL-RECAP] {_n} porción(es) re-capada(s) tras el "
+                        f"carb-floor/closer (surface={surface}) — el floor había re-inflado un "
+                        f"almidón alto-IG dejando el día EN banda, así que el motor de macros "
+                        f"(y su re-cap interno) no llegaba a correr.")
+        return _n
+    except Exception as _rcpc_e:
+        logger.warning(f"[P1-CARBFLOOR-CLINICAL-RECAP] no-op (surface={surface}): "
+                       f"{type(_rcpc_e).__name__}: {_rcpc_e}")
         return 0
 
 
@@ -29497,7 +29558,11 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None) -
                 for _m2 in (_d2.get("meals") or []) if isinstance(_d2, dict) else []:
                     if isinstance(_m2, dict) and _m2.get("_budget_substitutions"):
                         _truth_up_meal_macros_from_strings(_m2, _db2)
-            apply_update_macro_engine(plan_data, surface="budget_convergence_t2", db=_db2)
+            # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) ídem que T1: sin
+            # `form_data` el re-cap clínico se omitía. Esta superficie es la más silenciosa del sistema
+            # (chunk worker de semanas 2+, sin usuario mirando, persiste directo).
+            apply_update_macro_engine(plan_data, surface="budget_convergence_t2", db=_db2,
+                                      form_data=form_data or {})
             if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
                 recompute_micronutrient_report_for_plan(plan_data, form_data or {}, db=_db2)
         except Exception as _tu2_e:
@@ -34266,7 +34331,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             for _bc_m in (_bc_d.get("meals") or []) if isinstance(_bc_d, dict) else []:
                                 if isinstance(_bc_m, dict) and _bc_m.get("_budget_substitutions"):
                                     _truth_up_meal_macros_from_strings(_bc_m, _bc_db)
-                        apply_update_macro_engine(result, surface="budget_convergence", db=_bc_db)
+                        # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5)
+                        # `form_data` viaja para que el motor pueda RE-APLICAR los caps clínicos de
+                        # porción sobre lo que su rebalance/refine acaba de re-dimensionar. Los caps
+                        # de assemble corrieron ANTES de este pase y nada aguas abajo re-capea.
+                        apply_update_macro_engine(result, surface="budget_convergence", db=_bc_db,
+                                                  form_data=form_data)
                         # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) las sustituciones económicas cambian
                         # el perfil de micros del plato (salmón→pescado blanco pierde omega-3/vit D) —
                         # panel fresco también en este path.
@@ -41875,6 +41945,34 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
         return False
 
 
+def _engine_day_view(plan_data: dict, day: dict) -> dict:
+    """[P1-SWAP-RENAL-DAY-VIEW · 2026-07-30] (audit solver+seeder v5) Vista de UN día con TODO el
+    contexto plan-level que `apply_update_macro_engine` consulta.
+
+    `/swap-meal/persist` es la única superficie que no le pasa el plan entero al motor (re-cuadra
+    solo el día tocado). Su view era un dict literal escrito a mano con 4 claves — y el motor
+    añadió después la lectura de `renal_protein_cap`, que nadie replicó: `_renal` quedaba SIEMPRE
+    False ahí, el rebalance apuntaba la proteína al target completo y el refine movía líneas
+    proteína-dominantes en un plan con cap KDIGO aplicado. Ningún pase posterior lo repara
+    (la rama renal de `_ume_sw` es no-touch por diseño; los condition-ceilings no miden proteína).
+
+    Por eso el view es un helper y no un literal: `test_p1_swap_renal_day_view` DERIVA del cuerpo
+    del motor las claves `plan_data.get("...")` y falla si alguna no viaja aquí. Un guard cuyo
+    contexto ningún caller suministra no es un guard, es un apagado.
+
+    El día se comparte por referencia a propósito (mismos dicts ⇒ las mutaciones del motor
+    persisten en el plan del caller). tooltip-anchor: P1-SWAP-RENAL-DAY-VIEW"""
+    _pd = plan_data if isinstance(plan_data, dict) else {}
+    return {
+        "days": [day],
+        "macros": _pd.get("macros"),
+        "calories": _pd.get("calories"),
+        "main_goal": _pd.get("main_goal"),
+        # Guard renal (KDIGO): sin esta clave el motor cree que NO hay cap y mueve proteína.
+        "renal_protein_cap": _pd.get("renal_protein_cap"),
+    }
+
+
 def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                               pantry_strict: bool = False, form_data: dict = None) -> int:
     """[P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Paridad del MOTOR de macros de S1 en las
@@ -41935,6 +42033,10 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
             return False
 
         touched = 0
+        # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) contador de días que
+        # el motor re-dimensionó SIN poder re-aplicar los caps clínicos por falta de `form_data`.
+        # Se reporta AGREGADO al final (un warning por llamada, no por día).
+        _recap_skipped_days = 0
         for _day in plan_data.get("days") or []:
             if not isinstance(_day, dict):
                 continue
@@ -41988,10 +42090,14 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                     logger.warning(f"[P1-UPDATE-CLINICAL-RECAP] re-cap no-op (surface={surface}): "
                                    f"{type(_rc_e).__name__}: {_rc_e}")
             elif _hit and UPDATE_MACRO_ENGINE_CLINICAL_RECAP and not form_data:
-                # Visible a propósito: sin `form_data` el motor NO puede re-aplicar los caps clínicos.
-                # Si esto aparece en un surface user-facing, ese callsite tiene que pasar su form_data.
-                logger.debug(f"[P1-UPDATE-CLINICAL-RECAP] surface={surface} sin form_data — "
-                             f"re-cap clínico omitido.")
+                # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) Esta rama era
+                # `logger.debug` — el nivel que nadie mira — y por eso el gap vivió invisible en las 4
+                # superficies de generación/expand que llamaban al motor sin `form_data` teniéndolo en
+                # scope (recipe_expand, budget_convergence, budget_convergence_t2, form_gen_final_closer).
+                # Sin form_data el motor NO puede re-aplicar los caps clínicos y NADIE aguas abajo lo
+                # hace: la cadena finalize del INSERT no contiene cap_dm2/cap_bariatric. Si esto aparece
+                # en el log, ese callsite tiene que pasar su form_data.
+                _recap_skipped_days += 1
             if _hit:
                 touched += 1
                 for _m in _meals:
@@ -41999,6 +42105,11 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                         _sync_recipe_step_quantities(_m)
                     except Exception:
                         pass
+        if _recap_skipped_days:
+            logger.warning(f"⚠️ [P1-UPDATE-CLINICAL-RECAP] surface={surface} sin form_data — re-cap "
+                           f"clínico omitido en {_recap_skipped_days} día(s) que el motor acaba de "
+                           f"re-dimensionar. Si esa superficie puede servir a un DM2/bariátrico, su "
+                           f"callsite DEBE pasar form_data (nadie re-capea aguas abajo).")
         if touched:
             logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] motor de macros en update: {touched} día(s) "
                         f"re-apuntado(s) hacia banda (surface={surface})")
@@ -42791,15 +42902,23 @@ def ensure_protein_step_parity(plan_data: dict, db=None) -> int:
 FORMGEN_FINAL_BAND_CLOSER_ENABLED = _env_bool("MEALFIT_FORMGEN_FINAL_BAND_CLOSER", True)
 
 
-def reconcile_all_macros_band_post_finalize(plan_data: dict, db=None) -> int:
+def reconcile_all_macros_band_post_finalize(plan_data: dict, db=None, form_data: dict = None) -> int:
     """[P0-1-FINAL-BAND-CLOSER] Cierre final all-4-macro sobre el estado ENTREGADO, en el shield
     pre-INSERT. Delega en `apply_update_macro_engine` (surface="form_gen_final_closer") — SSOT ya testeado,
     cero matemática nueva, solo wiring al path universal de INSERT. Retorna nº de días tocados. Fail-safe
-    (nunca bloquea el INSERT). tooltip-anchor: P0-1-FINAL-BAND-CLOSER"""
+    (nunca bloquea el INSERT).
+
+    [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) `form_data` es el parámetro que
+    faltaba: este wrapper es el ÚLTIMO pase que MUEVE cantidades antes del INSERT y cubre TODOS los paths
+    (form-gen, partial, SSE-fallback, merge T1 del chunk worker). Sin él, el rebalance/refine re-inflaba
+    la porción que la capa clínica recortó y el plan se persistía así — la cadena finalize del INSERT no
+    contiene cap_dm2/cap_bariatric, así que este era el último punto donde el re-cap era posible.
+    tooltip-anchor: P0-1-FINAL-BAND-CLOSER"""
     if not (FORMGEN_FINAL_BAND_CLOSER_ENABLED and isinstance(plan_data, dict)):
         return 0
     try:
-        touched = apply_update_macro_engine(plan_data, surface="form_gen_final_closer", db=db)
+        touched = apply_update_macro_engine(plan_data, surface="form_gen_final_closer", db=db,
+                                            form_data=form_data)
         if touched:
             logger.info(f"🎯 [P0-1-FINAL-BAND-CLOSER] cierre final all-4-macro: {touched} día(s) "
                         f"re-apuntado(s) hacia banda sobre el estado ENTREGADO (pre-INSERT).")

@@ -2064,6 +2064,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                         _qz_pre(plan_data, _QDB_pre())
                     except Exception as _qz_pre_e:
                         logger.debug(f"[P2-MICROCLOSER-REQUANTIZE] re-quantize (pre-listas) falló: {_qz_pre_e}")
+                # [P1-CARBFLOOR-CLINICAL-RECAP · 2026-07-30] (audit solver+seeder v5) el carb-floor de
+                # arriba deja el día EN banda por construcción → el motor de macros de abajo es no-op y
+                # su re-cap clínico interno (gateado a `_hit`) no llega a correr. Va en las DOS pasadas
+                # del patrón closer-order: si aterrizara solo en una, las listas precomputadas y el plan
+                # persistido divergirían justo en la porción clínica.
+                try:
+                    from graph_orchestrator import reapply_clinical_portion_caps as _rcpc_pre
+                    _rcpc_pre(plan_data, _micro_form_cm, surface="chat_modify")
+                except Exception as _rcpc_pre_e:
+                    logger.debug(f"[P1-CARBFLOOR-CLINICAL-RECAP] (pre-listas) no-op: {_rcpc_pre_e}")
                 # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Motor de macros de S1
                 # (rebalance C/F/P + refine entero de 5g) en la pasada PRE-LISTAS → las listas
                 # precomputadas reflejan las porciones finales (mismo patrón closer-order:
@@ -2330,6 +2340,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                         _sq_cm(_m_sq)
                         except Exception as _sq_cm_e:
                             logger.debug(f"[P1-STEPS-STALE-POSTCLOSER] qty-sync (chat) falló: {_sq_cm_e}")
+                    # [P1-CARBFLOOR-CLINICAL-RECAP · 2026-07-30] (audit solver+seeder v5) espejo exacto
+                    # de swap-persist: el carb-floor escala HACIA el target → el día queda EN banda →
+                    # el motor de abajo es no-op → su re-cap clínico interno (gateado a `_hit`) nunca
+                    # corre. Sin esto, el almidón alto-IG que la capa clínica recortó vuelve inflado.
+                    try:
+                        from graph_orchestrator import reapply_clinical_portion_caps as _rcpc_cm
+                        _rcpc_cm(plan_data_fresh, _micro_form_cm, surface="chat_modify")
+                    except Exception as _rcpc_cm_e:
+                        logger.debug(f"[P1-CARBFLOOR-CLINICAL-RECAP] (chat fresh) no-op: {_rcpc_cm_e}")
                     # [P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) espejo del motor de
                     # macros de la pasada pre-listas sobre el FRESH (determinista → converge a las
                     # mismas porciones que las listas precomputadas ya reflejan). ANTES del recompute
@@ -2341,6 +2360,21 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                 form_data=_micro_form_cm)
                     except Exception as _ume_cm_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (chat fresh) no-op: {_ume_cm_e}")
+                    # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) espejo de
+                    # P2-RECONCILE-AFTER-BAND-CLOSER (que solo vivía en el shield pre-INSERT): el
+                    # motor de arriba MUEVE cantidades después del finalize y su divergencia
+                    # display↔raw se persistía. ANTES del recompute de micros, que lee raw primero.
+                    # Rollback sin redeploy: MEALFIT_RECONCILE_AFTER_BAND_CLOSER=false.
+                    try:
+                        from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_cm,
+                                                        _reconcile_display_raw_lines as _rdrl_cm)
+                        if _rabc_cm:
+                            _rw_cm = _rdrl_cm(plan_data_fresh.get("days") or [])
+                            if _rw_cm:
+                                logger.info(f"⚖️ [P1-UPDATE-RAW-BY-FOOD] {len(_rw_cm)} línea(s) "
+                                            f"display↔raw reconciliadas tras el motor (chat_modify).")
+                    except Exception as _rabc_cm_e:
+                        logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (chat) no-op: {_rabc_cm_e}")
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
                     # [P1-CONDITION-CEILINGS-UPDATES · 2026-07-01] (audit v3 micros GAP-4) re-verifica
                     # techos/pisos por condición sobre el panel recomputado (sodio/HTA, satfat/dislipidemia).

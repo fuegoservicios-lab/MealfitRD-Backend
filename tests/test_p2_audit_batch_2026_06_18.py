@@ -125,8 +125,19 @@ def test_protein_ceiling_clamp_preserved():
 def test_carb_trim_raw_lockstep_anchor():
     src = _GO.read_text(encoding="utf-8")
     assert "P2-CARB-TRIM-RAW-LOCKSTEP" in src
-    # El raw debe reescalarse por el factor efectivo (factor * _f), no solo por factor.
-    assert "_resc(str(raw[idx]), factor * _f)" in src
+    # El raw debe reescalarse por el factor efectivo (escala al target × re-snap a cocinable),
+    # no solo por `factor` — si no, la lista de compras diverge en magnitud de la receta.
+    #
+    # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] El ancla era el literal `_resc(str(raw[idx]), ...)`,
+    # o sea la escritura por ÍNDICE. Esa escritura se eliminó a propósito: "mismo largo" no es
+    # "mismo orden" (medido: solo el 48.1% de las comidas con largos iguales son paralelas), así
+    # que escribir por índice escalaba el alimento equivocado. El lockstep del FACTOR —lo único
+    # que este test protege— sigue vivo, ahora a través del helper by-food.
+    i = src.index("P2-CARB-TRIM-RAW-LOCKSTEP")
+    blk = src[i:src.index("\n    except Exception as e:", i)]
+    assert "_sync_one_raw_line(m, idx, orig, _factor_line * _f)" in blk, (
+        "el raw debe sincronizarse por ALIMENTO y con el factor EFECTIVO (_factor_line * _f)")
+    assert "raw[idx] = " not in blk, "volvió la escritura por índice ciego"
 
 
 # --------------------------------------------------------------------------- regen chunk user scope (#16)
