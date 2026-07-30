@@ -110,8 +110,12 @@ def test_eggs_cap_distribution_guidance():
     concentre todos los huevos en una sola comida."""
     from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT
 
-    # Buscar mención de distribución (desayuno + otra comida o similar)
-    eggs_section_idx = DAY_GENERATOR_SYSTEM_PROMPT.find("HUEVOS")
+    # [P1-WHOLE-EGGS-FIRST · 2026-07-30 · reanclado] Era `find("HUEVOS")` a secas: la regla nueva
+    # "HUEVOS: ENTEROS PRIMERO" (rule 9) aparece ANTES en el prompt que la sección del cap, así que
+    # el ancla aterrizaba en la regla equivocada y la ventana de 600 bytes no llegaba al hint de
+    # distribución. Ancla por el encabezado ÚNICO de la sección que este test describe.
+    eggs_section_idx = DAY_GENERATOR_SYSTEM_PROMPT.find("HUEVOS — DOBLE CAP")
+    assert eggs_section_idx > 0, "la sección del doble cap de huevos ya no existe con ese encabezado"
     section = DAY_GENERATOR_SYSTEM_PROMPT[eggs_section_idx:eggs_section_idx + 600].lower()
     has_distribution_hint = (
         "desayuno" in section or "repartición" in section or "distribución" in section
