@@ -1441,7 +1441,19 @@ def normalize_name(orig_name: str) -> str:
     # match léxico por el número — ni pagar el embedding de INTENTO 6 con un
     # query contaminado.
     _noqty = re.sub(r'^[\d\s.,/½¼¾⅓⅔⅕]+(?:de\s+)?', '', _orig_fuzz).strip()
-    _fuzz_forms = {f for f in (n_stripped, clean_n_stripped, _orig_fuzz, _noqty) if f and len(f) > 3}
+    # [P1-QUALIFIER-STRIP-FUZZY · 2026-07-30] Forma SIN calificativo de cola: "nisperos sin semilla"
+    # → "nisperos". Medido en prod (18 drops en 40 min): 'Nísperos sin semilla' NO resolvía mientras
+    # 'Nísperos' → 'Níspero' resolvía de sobra — el calificativo tiraba el ratio fuzzy bajo 0.87 y
+    # el alimento quedaba FUERA de la lista de compras ("un calificativo que no se compra por
+    # separado no debería poder volver incomprable el alimento"). Solo entra al pool de formas
+    # fuzzy: el umbral 0.87 sigue mandando, así que no introduce snaps nuevos por sí sola.
+    # Solo calificativos NEGATIVOS ("sin semilla", "bajo en sodio", "libre de gluten"). "con X" se
+    # queda fuera a propósito: "yogurt con fresas" nombra OTRO producto y recortarlo cambiaría el
+    # alimento resuelto, no solo su presentación.
+    _noqual = re.sub(r'\bsin\s+\w+.*$|\b(?:bajo|baja|libre)s?\s+(?:en|de)\s+\w+.*$',
+                     '', _noqty).strip()
+    _fuzz_forms = {f for f in (n_stripped, clean_n_stripped, _orig_fuzz, _noqty, _noqual)
+                   if f and len(f) > 3}
     if _fuzz_forms:
         _fuzz_best, _fuzz_name = 0.0, None
         for alias_stripped, master_name in all_aliases:
