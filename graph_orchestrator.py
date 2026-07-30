@@ -26934,6 +26934,37 @@ def _repair_gainmuscle_day_kcal(days: list, nutrition: dict, form_data: dict, db
                                 _mgm.floor(_carb_room / _GM_RICE_CARB_G)))
                 if add_g < 20:
                     continue
+                # [P1-GAINMUSCLE-NO-SECOND-RICE · 2026-07-30] No meter arroz BLANCO en un plato que
+                # ya lleva OTRO arroz.
+                #
+                # La búsqueda de abajo solo reconoce `"de arroz blanco cocido"` — la línea que este
+                # mismo bloque escribe. Un plato con "45 g de Arroz integral" le resulta invisible,
+                # así que anexa una segunda línea y el usuario recibe DOS arroces en el mismo plato,
+                # uno de ellos con su propio paso de cocción inyectado ("🍚 Cuece el arroz blanco de
+                # tus ingredientes"). Caso vivo del owner: un "ceviche de queso" con 45 g de arroz
+                # integral cocido en el paso 2 y 40 g de arroz blanco anexado en el paso 3.
+                #
+                # Se SALTA esta comida y el bucle prueba con la siguiente principal. Rellenar el
+                # piso calórico es deseable; hacerlo a costa de un plato incoherente, no — y si
+                # ninguna principal admite el relleno, quedarse algo corto de kcal es el fallo
+                # barato frente a servir dos arroces.
+                #
+                # (Escalar el arroz que YA está sería mejor todavía, pero requiere los macros del
+                # arroz correcto, no los del blanco que este bloque tiene cableados: se deja fuera
+                # a propósito en vez de hacerlo mal.)
+                try:
+                    _otro_arroz = any(
+                        "arroz" in _sa_gm(str(_gl).lower())
+                        and "arroz blanco cocido" not in str(_gl).lower()
+                        for _gl in (m.get("ingredients") or [])
+                    )
+                except Exception:
+                    _otro_arroz = False
+                if _otro_arroz:
+                    logger.info(
+                        f"🍚 [P1-GAINMUSCLE-NO-SECOND-RICE] '{str(m.get('name'))[:40]}' ya lleva "
+                        f"arroz — no se le añade un segundo; se prueba con otra comida.")
+                    continue
                 # [P1-GAINMUSCLE-FLOOR-FINAL-REFILL] en la pasada final consolida en la línea de arroz ya
                 # sembrada por el floor (evita duplicar "Xg de arroz blanco cocido"); si no hay, la añade.
                 _gm_rice_idx = None
