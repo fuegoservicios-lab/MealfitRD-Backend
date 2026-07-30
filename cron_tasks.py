@@ -30564,6 +30564,29 @@ def process_plan_chunk_queue(target_plan_id=None):
                             except Exception as _fce_ck:
                                 logger.warning(f"[P1-COHERENCE-FINALIZE] chunk T1 no-op: {type(_fce_ck).__name__}: {_fce_ck}")
 
+                            # [P2-FREQ-TRACKING-CHUNK · 2026-07-30] (audit solver+seeder v5)
+                            # `P2-FREQ-TRACKING-CHUNKED` (v4) cableó el tracking en los 2 sitios del
+                            # REQUEST inicial, pero el worker quedó fuera: `increment_ingredient_
+                            # frequencies` no tenía un solo callsite en cron_tasks.py. Con la ventana
+                            # rolling, tras unas semanas la MAYORÍA de los días que el usuario come
+                            # vienen de chunks de refill/catchup — o sea justo los que nunca se
+                            # contaban. `ingredient_frequencies` sub-contaba, el sorteo 1/(freq+1) y
+                            # `_apply_recency_fatigue` (que pesa los últimos 3 días, casi siempre de
+                            # refill) re-ofrecían con peso MÁXIMO el salmón que el usuario lleva dos
+                            # semanas recibiendo. Se pasan SOLO los días nuevos del chunk: los del
+                            # request inicial ya los contó routers/plans.py y double-contarlos
+                            # sesgaría al revés. Best-effort: el merge ya está hecho, esto no puede
+                            # tumbar la entrega.
+                            try:
+                                from ai_helpers import TRACK_FREQ_ON_CHUNKED as _tfc_ck
+                                if _tfc_ck and sorted_new_days:
+                                    from services import (_track_ingredient_frequencies as _tif_ck,
+                                                          extract_raw_ingredients_from_plan as _eri_ck)
+                                    _tif_ck(user_id, _eri_ck({"days": sorted_new_days}))
+                            except Exception as _tif_ck_e:
+                                logger.warning(f"[P2-FREQ-TRACKING-CHUNK] tracking en chunk worker "
+                                               f"no-op: {type(_tif_ck_e).__name__}: {_tif_ck_e}")
+
                             # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) dish_quality_report también en chunk T1:
                             # los chunks semana 2+ no pasan por review_plan_node → el report plan-level quedaba
                             # congelado en la semana 1 (Dashboard/PDF stale al crecer el plan). Best-effort.

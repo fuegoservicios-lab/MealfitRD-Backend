@@ -175,6 +175,51 @@ _CHAT_PLAN_PRUNE_KEYS = (
 # Rollback sin redeploy: MEALFIT_SWAP_NUM_MEALS_FROM_PLAN=false.
 SWAP_NUM_MEALS_FROM_PLAN = _env_bool("MEALFIT_SWAP_NUM_MEALS_FROM_PLAN", True)
 
+# [P2-SWAP-SLOT-KEY-MATCH · 2026-07-30] (audit solver+seeder v5) Calificativos de merienda →
+# sufijo de la clave de slot. El orden importa: 'noche'/'nocturna' antes que nada, porque el
+# matcher genérico de abajo los resolvía a `merienda_am` por ser la PRIMERA merienda del dict.
+_MERIENDA_QUALIFIERS = (
+    (("noct", "noche"), "merienda_noche"),
+    (("pm", "tarde"), "merienda_pm"),
+    (("am", "manana"), "merienda_am"),
+)
+
+
+def _resolve_swap_slot_key(meal_type, slots: dict) -> "str | None":
+    """[P2-SWAP-SLOT-KEY-MATCH · 2026-07-30] (audit solver+seeder v5) Resuelve el nombre de slot
+    del plato que se swapea ('Merienda Nocturna') a la clave de `allocate_macros_per_slot`.
+
+    El matcher era `k == _mt or k.split("_")[0] in _mt or _mt in k` sobre un dict ORDENADO
+    (desayuno, merienda_am, almuerzo, merienda_pm, cena, merienda_noche). Para 'merienda
+    nocturna' el primer match era `merienda_am` vía `'merienda' in 'merienda nocturna'` → cuota
+    0.12 en vez de 0.08. En un bariátrico de 6 comidas y 1200 kcal eso son 144 kcal de target
+    en vez de 96 (×1.5), y el solver determinista re-escala FÍSICAMENTE el plato a esa cuota,
+    sobre-dimensionándolo para un pouch de 150-200 mL. El fix v4 (P2-SWAP-NUM-MEALS) redujo el
+    error de ×1.875 a ×1.5 corrigiendo el CONTEO de comidas, pero no tocó el pareo de la clave —
+    y su propio comentario usa este caso como motivación.
+
+    En el split de 5 comidas el bug era inocuo por accidente (merienda_am y merienda_pm comparten
+    0.10); solo `merienda_noche` del split de 6 diverge.
+    tooltip-anchor: P2-SWAP-SLOT-KEY-MATCH"""
+    _mt = strip_accents(str(meal_type or "").lower()).strip()
+    if not _mt or not isinstance(slots, dict):
+        return None
+    if _mt in slots:
+        return _mt
+    # 1) Calificativo explícito de merienda: gana SIEMPRE al match genérico.
+    if "merienda" in _mt:
+        for _toks, _key in _MERIENDA_QUALIFIERS:
+            if any(t in _mt for t in _toks) and _key in slots:
+                return _key
+    # 2) Match genérico (desayuno/almuerzo/cena y meriendas sin calificativo).
+    _k = next((k for k in slots if k.split("_")[0] in _mt or _mt in k), None)
+    if _k is not None:
+        return _k
+    # 3) Último recurso: cualquier merienda disponible.
+    if "merienda" in _mt:
+        return next((k for k in slots if k.startswith("merienda")), None)
+    return None
+
 
 def _prune_plan_for_chat(plan):
     """[P2-GENCHUNK-SPEED · 2026-06-01] Devuelve una copia shallow de `plan`
@@ -589,13 +634,7 @@ def swap_meal(form_data: dict):
                         _num8 = None
                 _num8 = _num8 or 4
                 _slots8 = _alloc8(_daily8, _num8)
-                _mt8 = strip_accents(str(meal_type or "").lower()).strip()
-                _slot_key8 = next(
-                    (k for k in _slots8 if k == _mt8 or k.split("_")[0] in _mt8 or _mt8 in k),
-                    None,
-                )
-                if _slot_key8 is None and "merienda" in _mt8:
-                    _slot_key8 = next((k for k in _slots8 if k.startswith("merienda")), None)
+                _slot_key8 = _resolve_swap_slot_key(meal_type, _slots8)
                 _st8 = _slots8.get(_slot_key8) if _slot_key8 else None
                 if _st8 and _st8.get("protein"):
                     target_calories = round(_st8["kcal"])
@@ -1647,7 +1686,21 @@ def swap_meal(form_data: dict):
                     if _tu_db_holder[0] is None:
                         from nutrition_db import IngredientNutritionDB as _RSDB
                         _tu_db_holder[0] = _RSDB()
-                    if _rs_solver(_rs_meal, _rs_target, _tu_db_holder[0]):
+                    _rs_ok = _rs_solver(_rs_meal, _rs_target, _tu_db_holder[0])
+                    if not _rs_ok:
+                        # [P2-SWAP-SOLVER-FLAGS · 2026-07-30] (audit solver+seeder v5)
+                        # `_solver_abstained_coverage` se escribe JUSTO ANTES del `return False`
+                        # del solver, y el copy-back vivía dentro del `if` de éxito → era
+                        # imposible de conservar por construcción. Sin esto, una comida swapeada
+                        # donde el solver se abstiene por cobertura no deja rastro NUNCA, y la
+                        # serie que mide esa abstención nace ciega a los swaps.
+                        _rs_ab = _rs_meal.get("_solver_abstained_coverage")
+                        if _rs_ab is not None:
+                            if not isinstance(res, dict) and hasattr(res, "model_dump"):
+                                res = res.model_dump()
+                            if isinstance(res, dict):
+                                res["_solver_abstained_coverage"] = _rs_ab
+                    if _rs_ok:
                         try:
                             _rs_truthup(_rs_meal, _tu_db_holder[0])
                         except Exception as _exc:
@@ -1670,16 +1723,29 @@ def swap_meal(form_data: dict):
                         # Resultado: ninguna comida SWAPEADA aparecía jamás en la métrica per-run
                         # `solver_clamp`, y la serie de no-convergencia que se acaba de construir
                         # arrancaría sesgada con un agujero justo en las comidas swapeadas.
+                        # [P2-SWAP-SOLVER-FLAGS · 2026-07-30] (audit solver+seeder v5) El copy-back
+                        # era ESTRUCTURALMENTE inerte para su propósito: en el path normal `res` es
+                        # un `MealModel` de pydantic (structured output) que NO declara ningún
+                        # `_solver_*` ni `ingredients_raw`, así que `hasattr(res, "_solver_...")`
+                        # era SIEMPRE False y las 6 claves se descartaban en silencio. Las 9
+                        # declaradas sí copiaban, y por eso el bloque "funcionaba" a la vista.
+                        # Convertimos a dict UNA vez: todo lo que viene después usa el idioma
+                        # `res.model_dump() if hasattr(...) else (res if isinstance(res, dict))`,
+                        # que trata un dict igual de bien — y de paso los copy-backs hermanos
+                        # (protein-closer, fat-topup) dejan de tener la misma rama muerta.
+                        if not isinstance(res, dict) and hasattr(res, "model_dump"):
+                            res = res.model_dump()
+                        # `_solver_failed_macros`/`_solver_infeasible`/`_solver_residuals` nacieron
+                        # el MISMO día que este bloque y quedaron fuera de la lista.
                         for _rk in ("ingredients", "ingredients_raw", "recipe",
                                     "protein", "carbs", "fats", "cals", "macros",
                                     "_solver_clamp_saturated", "_solver_clamp_saturated_hi",
                                     "_solver_clamp_saturated_lo", "_solver_greedy_fallback",
-                                    "_solver_not_converged", "_solver_raw_by_food"):
-                            if _rk in _rs_meal and _rs_meal[_rk] is not None:
-                                if isinstance(res, dict):
-                                    res[_rk] = _rs_meal[_rk]
-                                elif hasattr(res, _rk):
-                                    setattr(res, _rk, _rs_meal[_rk])
+                                    "_solver_not_converged", "_solver_raw_by_food",
+                                    "_solver_failed_macros", "_solver_infeasible",
+                                    "_solver_residuals"):
+                            if _rk in _rs_meal and _rs_meal[_rk] is not None and isinstance(res, dict):
+                                res[_rk] = _rs_meal[_rk]
                         logger.info(
                             f"🎯 [P0-SWAP-DETERMINISTIC-RESCALE] porciones re-escaladas al "
                             f"target del slot pre-guardrail | meal_type={meal_type}"

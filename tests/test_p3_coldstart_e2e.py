@@ -80,7 +80,13 @@ def test_coldstart_2_learning_builders_empty_returns_blank_anchor():
 def test_coldstart_3_variety_guard_clause_anchor():
     # Guard clause: si las restricciones vacían los catálogos → libertad al LLM
     # (retorna "" en vez de matriz vacía). Base anti-mode-collapse.
-    assert "if not available_proteins or not available_carbs:" in _AI_HELPERS
+    # [P2-VEGGIE-POOL-EMPTY-GUARD · 2026-07-30] El ancla era la condición LITERAL de 2 categorías
+    # (`proteins or carbs`); se amplió a vegetales porque el pool vacío ahí reventaba con
+    # ZeroDivisionError en el padding y bloqueaba la generación. El contrato que este test
+    # protege —catálogo vacío ⇒ libertad al LLM, no matriz vacía— sigue intacto y ahora cubre
+    # una categoría más, así que se ancla al contrato y no a la lista exacta de categorías.
+    assert "if not available_proteins or not available_carbs" in _AI_HELPERS
+    assert "not available_veggies:" in _AI_HELPERS, "el guard debe cubrir también vegetales"
     assert "Dejando libertad al LLM" in _AI_HELPERS
 
 

@@ -61,6 +61,16 @@ class DaySkeletonModel(BaseModel):
     protein_pool: List[str] = Field(description="Proteínas base asignadas a este día, Ej: ['Pechuga de pollo', 'Huevos']")
     carb_pool: List[str] = Field(description="Carbohidratos base asignados a este día, Ej: ['Arroz integral', 'Batata']")
     fruit_pool: List[str] = Field(description="Frutas asignadas a este día, Ej: ['Guineo', 'Manzana']")
+    # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] (audit solver+seeder v5) El seeder sorteaba
+    # vegetales/grasas por día (pool filtrado por alergias + pareo con dedupe) y los interpolaba
+    # SOLO en el prompt del ESQUELETO. El day-generator —quien escribe los ingredientes reales—
+    # no tenía forma de recibir esa decisión: este modelo no declaraba el campo, así que ni
+    # siquiera podía transportarla. Toda la maquinaria de vegetales del seeder producía una
+    # decisión sin consumidor estructural, y el day-gen caía en su default (la misma ensalada
+    # verde/aguacate los 3 días). Misma clase que P1-CARB-BASE-NO-REPEAT, que cerró esto SOLO
+    # para carbos. Default [] → los planners que no lo emitan siguen validando.
+    veggie_pool: List[str] = Field(default_factory=list,
+                                   description="Vegetales/grasas asignados a este día, Ej: ['Brócoli', 'Aguacate']")
     meal_types: List[str] = Field(description="Tipos de comidas a generar en orden, Ej: ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']")
     breakfast_category: str = Field(default="Libre", description="Categoría base del desayuno asignada a este día. DEBE ser diferente para cada día. Valores: 'Mangú/Tubérculos', 'Avena/Cereales', 'Pan/Tostadas', 'Batido/Bowl', 'Revoltillo/Tortilla'")
     brief_concept: str = Field(description="Concepto temático breve de este día, Ej: 'Día Caribeño con enfoque en proteína magra y tubérculos'")

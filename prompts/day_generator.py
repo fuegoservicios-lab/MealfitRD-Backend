@@ -645,6 +645,19 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             "protagonista del plato y no le añades otra fuente de grasa."
         )
 
+    # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] (audit solver+seeder v5) El seeder reparte
+    # vegetales/grasas por día (2 distintos, pool ya filtrado por alergias/dislikes/dieta) y hasta
+    # ahora esa decisión moría en el prompt del ESQUELETO: el day-gen —quien escribe los
+    # ingredientes reales— generaba ciego a ella y caía en su default (la misma ensalada
+    # verde/aguacate los 3 días). Replica el patrón de `carb_no_repeat_block`, con el mismo guard
+    # de ≥2 ítems para no crear una restricción insatisfacible.
+    _veggie_block = ""
+    _vp_dg = [str(v).strip() for v in (skeleton_day.get("veggie_pool") or []) if str(v).strip()]
+    if len(_vp_dg) >= 2:
+        _veggie_block = (
+            f"\n• Vegetales/Grasas Asignados: {', '.join(_vp_dg)} "
+            f"(usa AMBOS en el día, en comidas distintas — son la variedad vegetal de esta opción)")
+
     # [P3-DAYGEN-SLOT-TARGETS · 2026-07-29] OFF por default: nace vacío ⇒ prompt byte-idéntico.
     _slot_targets_block = ""
     try:
@@ -662,7 +675,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Técnica de Cocción Principal: {skeleton_day.get('assigned_technique', 'Libre')}
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(_carbs_asignados)}{carb_no_repeat_block}
-• Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}
+• Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}{_veggie_block}
 • Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{_slot_targets_block}{dinner_identity_block}{protein_diversity_block}
 {dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar

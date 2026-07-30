@@ -283,6 +283,52 @@ def _rotate_fruit_pairs(fruits):
     return _rotate_pairs(ordenadas)
 
 
+# [P1-BARIATRIC-PROTEIN-DENSITY] Nueces/semillas ENTERAS: riesgo OBSTRUCTIVO del pouch. Las formas
+# molida / mantequilla / fileteada NO cuentan (ya son seguras).
+# [P2-LIGHT-PROTEIN-POOL · 2026-07-30] Promovido a módulo: era local del pool de variedad y el
+# sorteo del ancla liviana necesitaba el MISMO universo. Dos listas paralelas de tokens sobre el
+# mismo concepto clínico es la receta para que el próximo endurecimiento aterrice en una sola.
+_WHOLE_NUT_SEED_TOKENS = ("mani", "almendra", "nuez", "nueces", "pistacho", "maranon", "merey",
+                          "avellana", "semilla", "pepita", "chia", "ajonjoli", "sesamo", "linaza")
+_SAFE_NUT_FORM_TOKENS = ("mantequilla", "molid", "filetead")
+# Tokens del ancla liviana. Los 3 primeros son LÁCTEOS y viven en DOMINICAN_PROTEINS, no en
+# DOMINICAN_VEGGIES_FATS — por eso el pool tiene que mirar las DOS listas.
+_LIGHT_ANCHOR_TOKENS = ("queso", "yogur", "ricotta", "almendra", "nuez", "nueces",
+                        "mani", "mantequilla")
+
+
+def _build_light_protein_pool(veggies, proteins, *, bariatric: bool = False) -> list:
+    """[P2-LIGHT-PROTEIN-POOL · 2026-07-30] (audit solver+seeder v5) Pool del "ancla liviana"
+    sorteada por día para desayuno/merienda.
+
+    El filtro original corría SOLO sobre `filtered_veggies` con 8 tokens, y 3 de ellos
+    ('queso', 'yogur', 'ricotta') NO existen en `DOMINICAN_VEGGIES_FATS`: los lácteos viven en
+    `DOMINICAN_PROTEINS`. Resultado: esos 3 tokens no podían matchear jamás y el ancla quedaba
+    reducida a {Nueces/Almendras, Maní, Mantequilla de maní, Mantequilla de almendras} — o sea
+    reforzando el "maní en 4 de 12" que el knob venía a curar, y sin la diversificación láctea
+    que su propio comentario prometía.
+
+    Segundo defecto: el callsite hacía `_light_pool[:4]`, un slice POSICIONAL que nunca consulta
+    `veggie_weights`, así que el penalty ×0.1 por riesgo obstructivo del pouch no llegaba a
+    aplicarse — el ancla podía priorizar frutos secos ENTEROS para un perfil post-quirúrgico.
+    Aquí se filtran explícitamente (las formas molida/mantequilla/fileteada sí son seguras).
+
+    Determinista: preserva el orden de los catálogos de entrada. tooltip-anchor: P2-LIGHT-PROTEIN-POOL"""
+    _out, _seen = [], set()
+    for _src in (veggies or [], proteins or []):
+        for _item in _src:
+            _n = strip_accents(str(_item).lower())
+            if not any(t in _n for t in _LIGHT_ANCHOR_TOKENS):
+                continue
+            if bariatric and any(t in _n for t in _WHOLE_NUT_SEED_TOKENS) \
+                    and not any(t in _n for t in _SAFE_NUT_FORM_TOKENS):
+                continue      # forma ENTERA: riesgo obstructivo del pouch
+            if _n not in _seen:
+                _seen.add(_n)
+                _out.append(_item)
+    return _out
+
+
 def _rotate_pairs(items):
     """[P1-CARB-SEEDER-PAIRS · 2026-07-27] Núcleo de la rotación en pares, extraído de
     `_rotate_fruit_pairs` para que carbos y frutas usen LA MISMA: día i recibe
@@ -310,7 +356,14 @@ def _rotate_pairs(items):
     return [(base[i % n], base[(i + 1) % n]) for i in range(3)]
 
 
-def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None, rejection_reasons: list = None) -> str:
+def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None,
+                                     rejection_reasons: list = None,
+                                     out_assignment: dict = None) -> str:
+    # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] `out_assignment` (opcional) recibe el reparto que el
+    # seeder decide, como DATO además de como prosa. Hoy transporta `veggie_pairs`: el
+    # day-generator es quien escribe los ingredientes reales y no tenía forma de recibir esa
+    # rotación (el esqueleto tipado no la declaraba), así que generaba ciego y caía en su default.
+    # Opcional y no-mutante si el caller no lo pasa → cero impacto en los callers existentes.
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
     history_lower = history_text.lower() if history_text else ""
@@ -462,7 +515,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
 
     # Guard clause: si las restricciones eliminaron TODOS los ingredientes
     # (ej: vegano con muchas alergias), dejar libertad total al LLM
-    if not available_proteins or not available_carbs:
+    # [P2-VEGGIE-POOL-EMPTY-GUARD · 2026-07-30] (audit solver+seeder v5) El guard cubría solo
+    # proteínas y carbos. Con `available_veggies` vacío el padding de más abajo ejecuta
+    # `_base_veggies[len(unique_veggies) % len(_base_veggies)]` → **ZeroDivisionError**, y ningún
+    # caller lo envuelve (`_build_shared_context` → nodo planner/day-gen): la excepción tumba el
+    # nodo y el retry repite el MISMO crash de forma determinista, dejando la generación
+    # BLOQUEADA para ese usuario —sin mensaje accionable— hasta que edite sus dislikes. Las
+    # frutas ya estaban protegidas (`if unique_fruits:` + break). Misma semántica que las otras
+    # dos categorías: sin pool utilizable, libertad total al LLM (el day-gen funciona sin este
+    # bloque de variedad; lo que NO funciona es un plan que nunca llega a generarse).
+    if not available_proteins or not available_carbs or not available_veggies:
         logger.warning("⚠️ [ANTI MODE-COLLAPSE] No quedan ingredientes disponibles tras filtrar restricciones. Dejando libertad al LLM.")
         return ""
         
@@ -708,8 +770,6 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # (el revisor rechazó crítico 'maní/chía/pistachos enteros'). Penalizar fuerte (×0.1) en el pool veg/grasa para
     # bariátrica → preferir mantequillas/molidas. Las formas molidas/mantequilla/fileteada NO se penalizan.
     if _is_bariatric and veggie_weights:
-        _WHOLE_NUT_SEED_TOKENS = ("mani", "almendra", "nuez", "nueces", "pistacho", "maranon", "merey",
-                                  "avellana", "semilla", "pepita", "chia", "ajonjoli", "sesamo", "linaza")
         for _vi, _v in enumerate(available_veggies):
             _vn = strip_accents(str(_v).lower())
             if "mantequilla" in _vn or "molid" in _vn or "fileteada" in _vn:
@@ -1099,9 +1159,25 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     f"🧊 [P2-PANTRY-ROTATION-FLOOR] la nevera aportó {len(extracted_p)} proteína(s) "
                     f"(<{_min_p}) → se completa con el sorteo ponderado y NO se activa cycle-lock "
                     f"(evita los 3 días con la misma base).")
-        if extracted_c: unique_carbs = extracted_c
-        if extracted_v: unique_veggies = extracted_v
-        if extracted_f: unique_fruits = extracted_f
+        # [P2-PANTRY-FLOOR-ALL-CATS · 2026-07-30] (audit solver+seeder v5) El floor de v4 aterrizó
+        # SOLO en proteínas; estas 3 categorías conservaban el reemplazo incondicional, que es
+        # literalmente el bug que aquel fix describe: con UN carbo reconocible tras
+        # `/inventory/consume`, el padding lo cicla y los 3 días salen con la misma base (la
+        # monotonía medida en el 39% de los días). Con vegetales es peor — 1 extraído ⇒ los 6
+        # slots del prompt idénticos. Mismo patrón que las proteínas: la nevera va PRIMERO
+        # (conserva la prioridad de ahorro) y se completa con el sorteo hasta el mínimo.
+        # Umbral 2 para carbos/frutas; 3 para vegetales, que llenan 6 slots (2 por día).
+        def _floor_pool(_extracted, _sorteo, _min):
+            if len(_extracted) >= _min:
+                return _extracted
+            return _extracted + [x for x in _sorteo if x not in _extracted]
+
+        if extracted_c:
+            unique_carbs = _floor_pool(extracted_c, unique_carbs, 2)
+        if extracted_v:
+            unique_veggies = _floor_pool(extracted_v, unique_veggies, 3)
+        if extracted_f:
+            unique_fruits = _floor_pool(extracted_f, unique_fruits, 2)
         # El lock solo si la nevera sostiene la rotación por sí sola.
         cycle_locked = bool(extracted_p) and len(extracted_p) >= _min_p
         
@@ -1479,10 +1555,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     _light_block = ""
     if LIGHT_PROTEIN_SEED:
         try:
-            _light_pool = [v for v in (filtered_veggies or [])
-                           if any(t in strip_accents(str(v).lower())
-                                  for t in ("queso", "yogur", "almendra", "nuez", "nueces",
-                                            "mani", "mantequilla", "ricotta"))]
+            # [P2-LIGHT-PROTEIN-POOL · 2026-07-30] (audit solver+seeder v5) el pool se construía
+            # SOLO desde `filtered_veggies`, donde no existe ningún lácteo → 3 de los 8 tokens
+            # ('queso', 'yogur', 'ricotta') no podían matchear jamás y el ancla acababa siendo
+            # 100% frutos secos, reforzando el "maní en 4 de 12" que el knob venía a curar.
+            _light_pool = _build_light_protein_pool(
+                filtered_veggies, filtered_proteins, bariatric=_is_bariatric)
             if len(_light_pool) >= 2:
                 _light_slots = _rotate_pairs(_light_pool[:4])
                 if _light_slots:
@@ -1498,15 +1576,41 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             _light_block = ""   # fail-open: el literal de siempre nunca es peor que hoy
             logger.warning(f"[P2-LIGHT-PROTEIN-SEED] sorteo no-op: {type(_lp_e).__name__}: {_lp_e}")
 
+    # [P2-VEGGIE-PAIRS-ROTATE · 2026-07-30] (audit solver+seeder v5) El par del día se derivaba
+    # por OFFSET POSICIONAL (`chosen_veggies[i]` + `chosen_veggies[i+3]`) sin ninguna garantía de
+    # que fueran distintos. Con 3 vegetales únicos el padding produce [a,b,c,a,b,c] y, tras el
+    # shuffle, ~20% de los días reciben el MISMO vegetal dos veces (40% con 2 únicos, 100% con 1):
+    # "Día A: Zanahoria y Zanahoria", contradiciendo la instrucción de "2 vegetales distintos" del
+    # propio prompt. El day-gen entonces o repite (y el gate de repetición intra-día rechaza) o
+    # improvisa fuera del pool — el mismo mecanismo insatisfacible que P1-FRUIT-SEEDER-GATE-CONTRACT
+    # documentó: no es fallo del modelo, la asignación no da para otra cosa.
+    # Frutas (P1-FRUIT-SEEDER-GATE-CONTRACT) y carbos (P1-CARB-SEEDER-PAIRS) ya usaban el helper
+    # con dedupe; los vegetales eran la última categoría fuera del contrato.
+    _veg_slots = _rotate_pairs(chosen_veggies[:6])
+    if _veg_slots:
+        veggie_params = {}
+        for _i in range(3):
+            veggie_params[f"veggie_{_i}"] = _veg_slots[_i][0]
+            veggie_params[f"veggie_{_i}b"] = _veg_slots[_i][1]
+        # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] (audit solver+seeder v5) El reparto se publica
+        # como DATO, no solo interpolado en la prosa del prompt. El day-generator lo necesita
+        # (es quien escribe los ingredientes reales) y la salida tipada del planner no puede
+        # transportarlo; parsear el prompt de vuelta sería frágil —los dos vegetales del día
+        # viven en frases distintas— y se rompería con cualquier reescritura del copy.
+        if isinstance(out_assignment, dict):
+            out_assignment["veggie_pairs"] = [tuple(p) for p in _veg_slots[:3]]
+    else:
+        # <2 únicos: fallback textual (mismo patrón que carb_ib) en vez de repetir el mismo nombre.
+        veggie_params = {f"veggie_{_i}": chosen_veggies[_i] for _i in range(3)}
+        veggie_params.update({f"veggie_{_i}b": "otro vegetal distinto del catálogo"
+                              for _i in range(3)})
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
         light_protein_block=_light_block,
         protein_0=chosen_proteins[0],
-        veggie_0=chosen_veggies[0], veggie_0b=chosen_veggies[3],
         protein_1=chosen_proteins[1],
-        veggie_1=chosen_veggies[1], veggie_1b=chosen_veggies[4],
         protein_2=chosen_proteins[2],
-        veggie_2=chosen_veggies[2], veggie_2b=chosen_veggies[5],
         blocked_text=blocked_text,
+        **veggie_params,
         **carb_params,
         **fruit_params
     )

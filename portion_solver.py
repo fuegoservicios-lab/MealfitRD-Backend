@@ -403,7 +403,7 @@ def solve_portion_macros(
     min_scale: float = None,
     max_scale: float = None,
     max_scale_protein: float = None,
-    tolerance_pct: float = 0.10,
+    tolerance_pct: float = None,
 ) -> dict:
     """Re-escala porciones para clavar el target de macros del slot.
 
@@ -431,6 +431,9 @@ def solve_portion_macros(
     min_scale = SOLVER_MIN_SCALE if min_scale is None else min_scale
     max_scale = SOLVER_MAX_SCALE if max_scale is None else max_scale
     max_scale_protein = SOLVER_MAX_SCALE_PROTEIN if max_scale_protein is None else max_scale_protein
+    # [P2-SOLVER-TOLERANCE-KNOB · 2026-07-30] (audit solver+seeder v5) ver el gemelo en
+    # `solve_meal_macros`: el knob existía pero ningún camino lo leía.
+    tolerance_pct = SOLVER_TOLERANCE_PCT if tolerance_pct is None else tolerance_pct
 
     # 1) computar macros por ingrediente + clasificar por macro dominante.
     entries = []  # cada uno: {idx, qty, unit, name, macros|None, group|None}
@@ -469,12 +472,19 @@ def solve_portion_macros(
         if e["macros"] and e["group"]:
             f = ing_factors[idx]
             base_q = e["raw_qty"]
+            # [P2-SOLVER-ACHIEVED-HONEST · 2026-07-30] (audit solver+seeder v5) espejo del path de
+            # strings: si la cantidad NO es numérica el `round(float(...))` lanza y la cantidad se
+            # queda igual — pero `achieved` se acreditaba el factor igualmente. El factor efectivo
+            # de un ingrediente cuya cantidad no se pudo escribir es 1.0.
+            _qty_ok = False
             try:
                 new_ing["quantity"] = round(float(base_q) * f, 2)
+                _qty_ok = True
             except (TypeError, ValueError):
                 pass
+            _f_eff = f if _qty_ok else 1.0
             for m in achieved:
-                achieved[m] += e["macros"][m] * f
+                achieved[m] += e["macros"][m] * _f_eff
             resolved += 1
         elif e["macros"]:  # resoluble pero sin grupo (macros todos 0, e.g. agua)
             for m in achieved:
@@ -524,7 +534,7 @@ def solve_meal_macros(
     min_scale: float = None,
     max_scale: float = None,
     max_scale_protein: float = None,
-    tolerance_pct: float = 0.10,
+    tolerance_pct: float = None,
 ) -> dict:
     """Variante para los ingredientes-STRING de un meal del plan ("0.5 taza de avena
     (50g)"). Mismo algoritmo que `solve_portion_macros` pero re-escribe los strings
@@ -543,6 +553,12 @@ def solve_meal_macros(
     min_scale = SOLVER_MIN_SCALE if min_scale is None else min_scale
     max_scale = SOLVER_MAX_SCALE if max_scale is None else max_scale
     max_scale_protein = SOLVER_MAX_SCALE_PROTEIN if max_scale_protein is None else max_scale_protein
+    # [P2-SOLVER-TOLERANCE-KNOB · 2026-07-30] (audit solver+seeder v5) `MEALFIT_SOLVER_TOLERANCE_PCT`
+    # se definía y se auto-registraba en `_KNOBS_REGISTRY` (visible en /health/version) pero NINGÚN
+    # camino lo leía: la firma conservaba el literal 0.10, así que un operador podía setear el
+    # override, verlo "tomado" en el health, y estar A/B-eando la misma cosa contra sí misma.
+    # Mismo patrón que las 3 líneas de arriba: None → knob; valor explícito → override del caller.
+    tolerance_pct = SOLVER_TOLERANCE_PCT if tolerance_pct is None else tolerance_pct
 
     entries = []
     for s in ingredient_strings:
@@ -574,10 +590,23 @@ def solve_meal_macros(
     for idx, e in enumerate(entries):
         if e["macros"] and e["group"]:
             f = ing_factors[idx]
-            out_strings.append(rescale_ingredient_string(e["s"], f))
-            factors_applied.append(f)
+            # [P2-SOLVER-ACHIEVED-HONEST · 2026-07-30] (audit solver+seeder v5) `rescale_ingredient_
+            # string` devuelve el string INTACTO cuando la línea no tiene cantidad líder — formas
+            # REALES en prod: 'Cdta de miel' (unit-led sin número) y 'Pechuga … (150g)' (solo
+            # gram-hint). Antes se acreditaba `macros × f` a `achieved` y se apendaba `f` a
+            # `factors_applied` sin comprobar si el string había cambiado, así que:
+            #   · la tarjeta prometía macros que el plato NO entrega,
+            #   · `converged=True` certificaba un target no alcanzado, y
+            #   · el factor fantasma viajaba al rescale de `ingredients_raw` en el caller ⇒ la
+            #     lista de compras compraba 1.8× de un plato cuyo display nunca cambió (misma
+            #     clase display↔raw que P1-GRAM-HINT-TRUMPS-QTY).
+            # El factor EFECTIVO es 1.0 cuando el string no se movió. tooltip-anchor: P2-SOLVER-ACHIEVED-HONEST
+            _new_s = rescale_ingredient_string(e["s"], f)
+            _f_eff = f if (_new_s != e["s"] or abs(f - 1.0) <= 1e-9) else 1.0
+            out_strings.append(_new_s)
+            factors_applied.append(_f_eff)
             for m in achieved:
-                achieved[m] += e["macros"][m] * f
+                achieved[m] += e["macros"][m] * _f_eff
             resolved += 1
         elif e["macros"]:
             out_strings.append(e["s"])

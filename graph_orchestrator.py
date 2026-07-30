@@ -4670,7 +4670,14 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     rejection_reasons = state.get("rejection_reasons", [])
 
     from ai_helpers import get_deterministic_variety_prompt
-    variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid, rejection_reasons=rejection_reasons)
+    # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] `_seeder_assignment` recoge el reparto del seeder
+    # como DATO (hoy: `veggie_pairs`), para que `plan_skeleton_node` lo estampe en el esqueleto y
+    # el day-generator pueda honrarlo. Antes esa decisión solo existía en la prosa del prompt del
+    # planner, y su salida tipada no tenía dónde transportarla.
+    _seeder_assignment: dict = {}
+    variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid,
+                                                      rejection_reasons=rejection_reasons,
+                                                      out_assignment=_seeder_assignment)
     # [P1-MED-CONTEXT-DAYGEN · 2026-06-22] Las directivas clínicas deterministas (condición +
     # medicación) se computan en un bloque PROPIO (`clinical_directives_context`) para que lleguen
     # NO SOLO al esqueleto (vía variety_prompt, abajo) sino TAMBIÉN al day-generator de producción
@@ -4823,6 +4830,8 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         "pantry_drift_context": build_pantry_drift_context(form_data.get("_pantry_drift_warning")),
         "time_context": build_time_context(),
         "variety_prompt": variety_prompt,
+        # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] reparto del seeder como DATO (veggie_pairs).
+        "seeder_assignment": _seeder_assignment,
         # [P1-MED-CONTEXT-DAYGEN · 2026-06-22] Directivas clínicas (condición + medicación) aisladas
         # de la variedad para inyectarlas TAMBIÉN al day-generator (donde se eligen los ingredientes
         # reales). "" si el perfil no tiene condición/medicamento cubierto. tooltip-anchor:
@@ -6812,6 +6821,23 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     except Exception as _hp_oe:
         logger.warning(f"[A1-HARDEN-POOLS] enforcer falló (usa pools del LLM): {type(_hp_oe).__name__}: {_hp_oe}")
 
+    # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] (audit solver+seeder v5) El reparto de vegetales del
+    # seeder viaja en el PROMPT del planner, pero su salida es tipada (`DaySkeletonModel`) y hasta
+    # hoy no tenía campo donde ponerlo → la decisión moría ahí y el day-gen generaba ciego.
+    # Se puebla DETERMINÍSTICAMENTE post-LLM (mismo patrón que el override de `meal_types`): no se
+    # depende de que el planner lo copie, que no es estructural ni garantizado.
+    try:
+        _vp_all = _extract_seeder_veggie_pairs(ctx)
+        if _vp_all:
+            for _di, _dsk in enumerate(skeleton.get("days") or []):
+                if isinstance(_dsk, dict) and not (_dsk.get("veggie_pool") or []):
+                    _dsk["veggie_pool"] = list(_vp_all[_di % len(_vp_all)])
+            logger.info(f"🥦 [P2-VEGGIE-CHANNEL-DAYGEN] reparto de vegetales del seeder propagado "
+                        f"al esqueleto ({len(_vp_all)} par(es)) — antes moría en el prompt del "
+                        f"planner y el day-gen caía en su default.")
+    except Exception as _vp_oe:
+        logger.debug(f"[P2-VEGGIE-CHANNEL-DAYGEN] propagación no-op: {type(_vp_oe).__name__}: {_vp_oe}")
+
     _emit_progress(state, "metric", {
         "node": "plan_skeleton",
         "duration_ms": int(duration * 1000),
@@ -7351,7 +7377,29 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         target_date = start_date + timedelta(days=global_day - 1)
         day_name = dias_es[target_date.weekday()]
 
-        assignment_context = build_day_assignment_context(skeleton_day, day_num, day_name=day_name)
+        # [P2-DAYGEN-SLOT-TARGETS-WIRED · 2026-07-30] (audit solver+seeder v5) El bloque de cuotas
+        # por slot (P3-DAYGEN-SLOT-TARGETS) estaba gateado a `knob AND daily_targets`, y NINGUNO de
+        # los 3 callers pasaba `daily_targets` (default None) → encender el knob era un NO-OP
+        # SILENCIOSO: el canario que su propio docstring exige habría producido un prompt
+        # byte-idéntico al de control, se habría concluido que la cuota por slot "no ayuda", y el
+        # fix de las 13/16 infactibilidades de grasa se habría enterrado con una medición falsa.
+        # Misma clase que `day_kcal_target=None` (P1-UPDATE-PROTAGONIST-FLOOR): un gate que declina
+        # por falta de contexto solo es correcto si ALGÚN callsite puede suministrarlo.
+        _dg_targets = None
+        try:
+            _dg_m = (nutrition or {}).get("macros") or {}
+            _dg_targets = {
+                "kcal": _meal_macro_num((nutrition or {}).get("target_calories")),
+                "protein": _meal_macro_num(_dg_m.get("protein")),
+                "carbs": _meal_macro_num(_dg_m.get("carbs")),
+                "fats": _meal_macro_num(_dg_m.get("fats")),
+            }
+            if not any(v > 0 for v in _dg_targets.values()):
+                _dg_targets = None
+        except Exception:
+            _dg_targets = None
+        assignment_context = build_day_assignment_context(skeleton_day, day_num, day_name=day_name,
+                                                          daily_targets=_dg_targets)
 
         random_seed = random.randint(10000, 99999)
 
@@ -27550,9 +27598,23 @@ _COOKED_CATALOG_KCAL_CACHE: "dict | None" = None
 
 
 def _catalog_kcal_by_name() -> dict:
-    """{nombre/alias accent-stripped → kcal/100g}. Lazy, fail-open a {}."""
+    """{nombre/alias accent-stripped → kcal/100g}. Lazy, fail-open a {}.
+
+    [P2-COOKED-KCAL-CACHE · 2026-07-30] (audit solver+seeder v5) Este era el hermano NO migrado
+    de `P1-CATALOG-INDEX-NO-STICKY`. El guard era `if _COOKED_CATALOG_KCAL_CACHE is not None` y
+    la asignación incondicional, así que **cacheaba el FALLO**: `get_master_ingredients()`
+    devuelve `[]` SIN excepción cuando el pool aún no está abierto o hay un blip de Neon → `out`
+    quedaba `{}`, el `except` de abajo ni se rozaba (no hubo raise, así que tampoco había log) y
+    ese `{}` se servía durante TODA la vida del worker. El rewrite cocido→seco quedaba inerte y
+    el aggregator resolvía contra el SKU seco (358.6 vs 130 kcal/100 g): ~2.76× de sobre-compra
+    de arroz, indistinguible de un motor apagado hasta el restart.
+
+    Ahora usa el mismo gate con negative-TTL que `_phantom_catalog_index` y `_catalog_density_
+    index` (350 líneas más arriba): un vacío se reintenta, no se sella. La pregunta que hay que
+    hacerle a todo caché lazy: ¿el valor vacío es un resultado legítimo o la firma de un fallo?
+    `is not None` no los distingue. tooltip-anchor: P2-COOKED-KCAL-CACHE"""
     global _COOKED_CATALOG_KCAL_CACHE
-    if _COOKED_CATALOG_KCAL_CACHE is not None:
+    if not _catalog_index_should_rebuild("_catalog_kcal_by_name", _COOKED_CATALOG_KCAL_CACHE):
         return _COOKED_CATALOG_KCAL_CACHE
     out: dict = {}
     try:
@@ -27577,6 +27639,14 @@ def _catalog_kcal_by_name() -> dict:
         logger.warning(f"[P1-COOKED-GRAIN-DRY] catálogo no disponible, rewrite inactivo: {_e}")
         out = {}
     _COOKED_CATALOG_KCAL_CACHE = out
+    if not out:
+        # [P2-COOKED-KCAL-CACHE] el caso MUDO: catálogo vacío SIN excepción (pool cerrado / blip
+        # de Neon). Antes no emitía nada y el `{}` se sellaba para siempre. Registrar el fallo
+        # arma el negative-TTL para que la próxima invocación reintente.
+        _catalog_index_note_failure("_catalog_kcal_by_name")
+        logger.error("❌ [P2-COOKED-KCAL-CACHE] índice kcal del catálogo VACÍO (sin excepción: "
+                     "pool cerrado o blip de Neon). El rewrite cocido→seco queda inactivo hasta "
+                     "el reintento — sin esto, la lista compra ~2.76× de arroz.")
     return out
 
 
@@ -27716,6 +27786,32 @@ def _catalog_density_index() -> dict:
     if not idx:
         _catalog_index_note_failure("_catalog_density_index")
     return idx
+
+
+def _extract_seeder_veggie_pairs(ctx: dict) -> list:
+    """[P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] (audit solver+seeder v5) Par de vegetales/grasas
+    que el seeder asignó a cada día, leído del contexto compartido.
+
+    Se lee un DATO (`ctx['seeder_assignment']['veggie_pairs']`), no la prosa del prompt. La
+    primera versión parseaba el prompt del planner con un regex y devolvía SIEMPRE [] — porque
+    los dos vegetales del día no viven en la misma frase ("…acompañante vegetal/grasa: Berro." y
+    "En las DEMÁS comidas del día …, usa: Bok choy."). Ese fallo silencioso es justo la clase de
+    motor-inerte que este audit persigue: habría dejado el campo del esqueleto siempre vacío y
+    el fix entero sin efecto, con los tests estructurales igualmente en verde.
+
+    Devuelve [(veg_a, veg_b), …] en orden de día. Fail-safe: [] si falta o viene mal formado.
+    tooltip-anchor: P2-VEGGIE-CHANNEL-DAYGEN"""
+    try:
+        _pairs = ((ctx or {}).get("seeder_assignment") or {}).get("veggie_pairs") or []
+        out = []
+        for _p in _pairs:
+            if isinstance(_p, (list, tuple)) and len(_p) == 2:
+                _a, _b = str(_p[0]).strip(), str(_p[1]).strip()
+                if _a and _b and _a.lower() != _b.lower():
+                    out.append((_a, _b))
+        return out
+    except Exception:
+        return []
 
 
 def _raw_display_parallel_by_food(ing_strs: list, raw: list) -> bool:
@@ -31768,10 +31864,29 @@ def _fix_cooked_raw_annotations(days) -> int:
 # La LÍNEA es la verdad (compras) → la nota adopta el nombre de la línea cuando comparten token
 # principal y difieren. tooltip-anchor: P2-NOTE-LINE-NAME-ALIGN
 NOTE_LINE_NAME_ALIGN_ENABLED = _env_bool("MEALFIT_NOTE_LINE_NAME_ALIGN", True)
+# [P2-CLOSER-NOTE-RE-UNIVERSE · 2026-07-30] (audit solver+seeder v5) El regex conocía 3 verbos y
+# 3 finales, y `_closer_protein_step_text` emite 17 wordings distintos: 9 NO matcheaban (medido
+# derivando los returns del SSOT, no leyéndolos a ojo). Un paso sin match hace `continue`, así que
+# para esas 9 variantes quedaban MUERTOS los dos consumidores del regex:
+#   · el name-align (la nota conserva el nombre interno del catálogo y no el de la línea), y
+#   · el rebuild de P1-CLOSER-FRESH-COCIDO, que es food-safety: en un plato de olla con hint de
+#     precocido y línea de pescado FRESCO la nota decía "(ya viene cocido) al guiso" y nadie la
+#     reescribía ⇒ instrucción de incorporar pescado crudo sin cocerlo.
+# Las variantes stew/legumbre/licuadora nacieron DESPUÉS del regex (07-24 vs 07-05): una lista de
+# frases que crece por incidente garantiza el próximo incidente. El test del batch v5 deriva los
+# wordings invocando la función, así que el próximo que se añada rompe el test antes de nacer
+# huérfano. tooltip-anchor: P2-CLOSER-NOTE-RE-UNIVERSE
 _CLOSER_NOTE_FOOD_RE = _re.compile(
-    r"^(?P<pre>(?:💪\s*)?(?:Escurre e incorpora|Incorpora|Cocina)\s+)"
+    r"^(?P<pre>(?:💪\s*)?(?:Escurre e incorpora|Incorpora|Cocina|Añade|Agrega|Sirve)\s+)"
     r"(?P<food>.+?)"
-    r"(?P<post>\s+\(ya viene cocido\)\s+a la preparación|\s+a la preparación|\s+a la plancha)")
+    r"(?P<post>\s+\(ya viene cocido\)\s+a la preparación"
+    r"|\s+\(ya viene cocido\)\s+al guiso"
+    r"|\s+a la preparación"
+    r"|\s+a la plancha"
+    r"|\s+al guiso"
+    r"|\s+en agua hasta"
+    r"|\s+a la licuadora"
+    r"|\s+al lado para acompañar)")
 
 
 def _align_closer_note_food_names(meal: dict) -> int:
@@ -43067,8 +43182,30 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
                 _wd_low = list(_wd.get("low") or [])
                 if MICRO_WORSTDAY_EXCLUDE_UNREACHABLE:
                     _wd_low = [k for k in _wd_low if k not in _MICRO_WORSTDAY_EXCLUDE]
+                # [P2-BARIATRIC-WORSTDAY · 2026-07-30] (audit solver+seeder v5) DETECTAR SIN PODER
+                # REPARAR. El micro-closer hace skip TOTAL en perfiles bariátricos
+                # (MICRO_CLOSER_BARIATRIC_SKIP, ON) porque el protocolo ASMBS cubre esos micros con
+                # SUPLEMENTACIÓN de por vida — pero este sub-check seguía marcando el banner, y a
+                # 1000-1200 kcal pouch-limitadas tener ≥2 micros bajo el piso (fibra 25 g, hierro
+                # 18 mg, calcio) es ESTRUCTURAL, no un defecto del plan. El banner se re-marcaba
+                # además en cada swap/chat vía `apply_update_condition_ceilings`: permanente por
+                # construcción, y el único actor que podría limpiarlo está deshabilitado a
+                # propósito para ese mismo perfil. `_MICRO_WORSTDAY_EXCLUDE` excluye por MICRO;
+                # esto excluye por PERFIL, que es la dimensión que faltaba.
+                _baria_skip = False
+                if _wd_low and MICRO_CLOSER_BARIATRIC_SKIP:
+                    try:
+                        _baria_skip = bool(_is_bariatric_condition(form_data))
+                    except Exception:
+                        _baria_skip = False
+                if _baria_skip:
+                    logger.info(
+                        "🩺 [P2-BARIATRIC-WORSTDAY] perfil bariátrico: micros bajo el piso "
+                        f"({','.join(_wd_low)}) NO marcan degradado — el closer hace skip por "
+                        "protocolo ASMBS (suplementación de por vida), así que el banner sería "
+                        "permanente e imposible de limpiar.")
                 # [P1-MICRO-WORSTDAY-MIN2] un único micro cerrable marginal no degrada un plan macro-perfecto.
-                if len(_wd_low) >= (2 if MICRO_WORSTDAY_MIN2 else 1):
+                elif len(_wd_low) >= (2 if MICRO_WORSTDAY_MIN2 else 1):
                     reason = "micro_worst_day"
                     detail = f"día {int(_wd.get('day_index', 0)) + 1}: {','.join(_wd_low)}"
         # 2c) [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-M1) Worst-day de TECHOS: promedio OK pero un

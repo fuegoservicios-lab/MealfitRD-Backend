@@ -2655,8 +2655,17 @@ def test_p1_3_intermediate_failures_use_warning_to_avoid_log_spam(caplog):
                     week_number=2, reason="temporal_gate",
                 )
 
-    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
-    warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+    # [P2-SOLVER-SEEDER-V5 · 2026-07-30] El filtro era `r.levelname == "ERROR"` a secas sobre
+    # `caplog.records`, que recoge lo de TODOS los loggers — no solo el que este test ejercita.
+    # En la corrida completa un hilo de fondo de otro test emitió
+    # `utils_push: ❌ [PUSH] … user_p01: invalid input syntax for type uuid` DENTRO de esta
+    # ventana y el conteo dio 2 en vez de 1. El test pasaba solo y fallaba en suite: la clase de
+    # rojo que se archiva como "flaky" y deja de leerse. Se filtra por el logger + el marker del
+    # subsistema, exactamente como ya hacían otros dos asserts de este mismo archivo.
+    _mine = [r for r in caplog.records
+             if r.name == "cron_tasks" and "[P1-3/DEFERRAL-TELEMETRY]" in r.getMessage()]
+    error_records = [r for r in _mine if r.levelname == "ERROR"]
+    warning_records = [r for r in _mine if r.levelname == "WARNING"]
     # Solo el #1 escala a ERROR; #2-#5 son WARNING.
     assert len(error_records) == 1
     assert len(warning_records) == 4
@@ -2680,7 +2689,11 @@ def test_p1_3_every_tenth_failure_escalates_to_error(caplog):
                     week_number=2, reason="temporal_gate",
                 )
 
-    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+    # [P2-SOLVER-SEEDER-V5 · 2026-07-30] mismo endurecimiento que el test hermano de arriba:
+    # un ERROR ajeno (otro logger, hilo de fondo de otro test) rompía el conteo en suite.
+    error_records = [r for r in caplog.records
+                     if r.name == "cron_tasks" and r.levelname == "ERROR"
+                     and "[P1-3/DEFERRAL-TELEMETRY]" in r.getMessage()]
     # ERRORs disparados en #1 y #10 → 2 ERROR records.
     assert len(error_records) == 2
 
