@@ -237,3 +237,27 @@ def test_las_reglas_siguen_compartidas_por_los_4_prompts():
     Si alguien vuelve a copiarlas, este test cae."""
     assert _PROMPT.count("CERO TEXTO ANTES DE UNA HERRAMIENTA") == 1
     assert _PROMPT.count("_CHAT_BREVITY_RULES") >= 5      # 1 def + 4 usos
+
+
+def test_reconstruccion_inmune_a_clases_de_otro_modulo():
+    """[P1-CHAT-MSG-DUCK-TYPE] Estos 3 tests estuvieron verdes en aislamiento y ROJOS solo en la
+    corrida completa con el arbol CONGELADO: otro test deja en sys.modules un langchain distinto y
+    `isinstance(m, AIMessage)` deja de casar — todos los mensajes se saltan y el turno sale vacio.
+    La reconstruccion ahora acepta tambien el duck-type `m.type == "ai"/"human"`, que es como
+    fallaria en produccion con versiones mixtas. Se simula con clases FALSAS que no heredan de
+    langchain."""
+
+    class _FakeHuman:
+        type = "human"
+        def __init__(self, content): self.content = content
+
+    class _FakeAI:
+        type = "ai"
+        def __init__(self, content): self.content = content
+
+    msgs = [_FakeHuman("me comi dos sandwiches"),
+            _FakeAI("Registrando..."),
+            _FakeAI("Listo, quedo anotado como cena: 420 kcal.")]
+    out = agent._build_final_content_from_messages(msgs)
+    assert "420 kcal" in out, "con clases ajenas la reconstruccion no puede salir vacia"
+    assert "Registrando..." not in out, "el filtro de relleno debe operar igual sobre duck-types"

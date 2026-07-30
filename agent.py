@@ -4168,14 +4168,20 @@ def _build_final_content_from_messages(messages: list) -> str:
 
     last_human_idx = -1
     for i, m in enumerate(messages):
-        if isinstance(m, HumanMessage):
+        if isinstance(m, HumanMessage) or getattr(m, "type", None) == "human":
             last_human_idx = i
     tail = messages[last_human_idx + 1:] if last_human_idx >= 0 else messages
 
     seen_texts = set()
     parts = []
     for m in tail:
-        if not isinstance(m, AIMessage):
+        # [P1-CHAT-MSG-DUCK-TYPE · 2026-07-30] isinstance + duck-type por `m.type == "ai"` (atributo
+        # estable de los mensajes langchain). Solo-isinstance falla cuando el AIMessage del state
+        # viene de un MODULO distinto al importado aqui (reload/stub en tests, versiones mixtas en
+        # prod): dos clases identicas pero no-identicas => todos los mensajes se saltan y el turno
+        # sale vacio (lo que P1-CHAT-NEVER-EMPTY degrada, pero mejor no llegar). Medido: 3 tests
+        # verdes en aislamiento y rojos SOLO en la corrida completa, arbol congelado.
+        if not (isinstance(m, AIMessage) or getattr(m, "type", None) == "ai"):
             continue
         text = _extract_ai_message_text(m)
         if not text:
