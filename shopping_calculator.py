@@ -1713,6 +1713,79 @@ def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = 
 _DOUBLE_LEAD_QTY_RE = re.compile(r"^\s*(\d*[¼½¾⅓⅔])\s+\d+\s*/\s*\d+\s+")
 
 
+_HINT_TRUMPS_QTY = _knob_env_bool("MEALFIT_GRAM_HINT_TRUMPS_QTY", True)
+_HINT_TRUMPS_RATIO = _knob_env_float("MEALFIT_GRAM_HINT_TRUMPS_RATIO", 5.0,
+                                     lambda v: 1.5 <= v <= 100.0)
+# Pista de gramos que la propia línea declara: "(4 g)", "(39g)", "(≈147 g)", "(aprox. 204 g)",
+# "(149g, lavadas)". Solo gramos: un "(2 tazas)" no es una declaración de peso.
+_GRAM_HINT_RX = re.compile(r"\(\s*(?:[≈~]|aprox\.?|unos)?\s*(\d+(?:[.,]\d+)?)\s*g(?:r|ramos)?\b",
+                            re.IGNORECASE)
+# Conversión GRUESA a gramos, solo para detectar contradicciones de ORDEN DE MAGNITUD. No sirve
+# para calcular nada: una taza de lechuga no pesa 240 g. Por eso el umbral es de 5× y no del 20%.
+_COARSE_G_PER_UNIT = {"g": 1.0, "gr": 1.0, "gramo": 1.0, "gramos": 1.0, "ml": 1.0,
+                      "cda": 15.0, "cdas": 15.0, "cucharada": 15.0, "cucharadas": 15.0,
+                      "cdta": 5.0, "cdtas": 5.0, "cucharadita": 5.0, "cucharaditas": 5.0,
+                      "taza": 240.0, "tazas": 240.0}
+
+
+def _reconcile_qty_with_gram_hint(raw_line, qty, unit):
+    """[P1-GRAM-HINT-TRUMPS-QTY · 2026-07-30] Si la línea se CONTRADICE a sí misma, gana la pista.
+
+    Caso vivo del owner (plan 307395c7, desayuno del día 2):
+
+        ingredients      →  '¼ cda de mantequilla de maní (4 g)'     ← lo que el usuario LEE
+        ingredients_raw  →  '30 cdas de mantequilla de maní (4 g)'   ← lo que la lista COMPRA
+
+    La lista de compras lee `ingredients_raw`. 30 cdas ≈ 450 g por aparición × el multiplicador del
+    ciclo = 4.515 g ⇒ **10 potes de mantequilla de maní, RD$1.170**, la línea más cara del ciclo,
+    para una tostada que lleva 4 g. El display decía ¼ cda.
+
+    Lo que hace este guard: la línea raw trae DENTRO la prueba de que está mal — su propio
+    paréntesis dice `(4 g)` y `_parse_quantity` lo tiraba a la basura. Cuando la cantidad parseada
+    convierte a algo ≥`RATIO`× distinto de lo que la propia línea declara pesar, se cree a la pista.
+
+    Por qué la pista y no la cantidad: el paréntesis es lo que el usuario ve, es de donde salieron
+    los macros del plato, y en este producto denota SIEMPRE el peso total de la cantidad indicada
+    ('2¼ tazas de fresas (338g)', '½ guineo (102g)'). Una cantidad sin pista no se toca nunca.
+
+    Por qué 5× y no 20%: la conversión a gramos es GRUESA (1 taza = 240 g) y una taza de lechuga no
+    pesa eso. El umbral tiene que dejar pasar el error honesto de densidad y cazar solo la
+    contradicción de orden de magnitud — aquí fue de 112×.
+
+    ⚠️ Va DENTRO del parser, no en el agregador, a propósito: `expected_sum_from_recipes` parsea las
+    MISMAS líneas para el guard de coherencia. Corregir solo en el agregador haría que los dos lados
+    discreparan y el guard bloquearía el plan por un arreglo.
+    tooltip-anchor: P1-GRAM-HINT-TRUMPS-QTY"""
+    if not _HINT_TRUMPS_QTY:
+        return qty, unit
+    try:
+        if qty is None or float(qty) <= 0:
+            return qty, unit
+        m = _GRAM_HINT_RX.search(str(raw_line or ""))
+        if not m:
+            return qty, unit
+        hint_g = float(m.group(1).replace(",", "."))
+        if hint_g <= 0:
+            return qty, unit
+        factor = _COARSE_G_PER_UNIT.get(str(unit or "").strip().lower())
+        if not factor:
+            return qty, unit          # unidad no convertible (unidad/lata/pote…): sin veredicto
+        approx_g = float(qty) * factor
+        if approx_g <= 0:
+            return qty, unit
+        ratio = max(approx_g / hint_g, hint_g / approx_g)
+        if ratio < _HINT_TRUMPS_RATIO:
+            return qty, unit
+        logging.warning(
+            f"⚠️ [P1-GRAM-HINT-TRUMPS-QTY] línea contradictoria: '{str(raw_line)[:70]}' declara "
+            f"{hint_g:.0f} g pero {qty:g} {unit} ≈ {approx_g:.0f} g ({ratio:.0f}× de diferencia) — "
+            f"se usa la pista. Sin esto la lista compra por la cantidad, no por el peso.")
+        return hint_g, "g"
+    except Exception as _e_hint:
+        logging.warning(f"[P1-GRAM-HINT-TRUMPS-QTY] no-op: {type(_e_hint).__name__}: {_e_hint}")
+        return qty, unit
+
+
 def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_yield_only: bool = False):
     """[P1-2] Parsea un string de ingrediente a (qty, unit, name).
 
@@ -1831,7 +1904,11 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
             unit_str = 'unidad'
     else:
         unit_str = 'unidad'
-        
+
+    # [P1-GRAM-HINT-TRUMPS-QTY · 2026-07-30] Último paso: si la línea declara su peso y la cantidad
+    # parseada lo contradice por orden de magnitud, gana la pista. Ver el helper.
+    qty, unit_str = _reconcile_qty_with_gram_hint(s, qty, unit_str)
+
     return qty, unit_str, normalize_name(rest_str).strip()
     
 def get_plural_unit(num, u):

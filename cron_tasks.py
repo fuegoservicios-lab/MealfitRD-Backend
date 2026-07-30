@@ -28010,8 +28010,12 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 logger.error(f"[CHUNK] Smart Shuffle fallo para {user_id}: pool vacio, no hay dias a repetir.")
                                 fallback_failed = True
                                 break
-                        shuffled_day = copy.deepcopy(random.choice(available_days))
-                    
+                        # [P1-SHUFFLE-SAMPLE-NO-REPLACEMENT · 2026-07-30] Se guarda el día ORIGINAL
+                        # elegido, no solo su copia: el descarte de más abajo compara por IDENTIDAD
+                        # y una copia nunca es idéntica a su original. Ver el bloque del `while`.
+                        _shuffle_pick = random.choice(available_days)
+                        shuffled_day = copy.deepcopy(_shuffle_pick)
+
                         # [P0-NEW1] Validate quantities against pantry for ALL day types in degraded mode.
                         # [P0-4] Do NOT re-import CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE here:
                         # binding it locally at this Smart-Shuffle-only line shadowed the
@@ -28047,11 +28051,31 @@ def process_plan_chunk_queue(target_plan_id=None):
                             _shuffle_qty_attempts += 1
                             logger.debug(f" [SHUFFLE-QTY] Candidato falló validación de cantidad: {_qty_check}")
                         
-                            # Remove the failing candidate and try another
-                            available_days = [d for d in available_days if d is not shuffled_day]
+                            # [P1-SHUFFLE-SAMPLE-NO-REPLACEMENT · 2026-07-30] El descarte era un
+                            # NO-OP: comparaba `d is not shuffled_day`, y `shuffled_day` es un
+                            # `copy.deepcopy` del elegido — una copia NUNCA es idéntica a su
+                            # original, así que el filtro daba True para TODOS los elementos y el
+                            # candidato rechazado seguía en el pool. Los 3 intentos re-sorteaban de
+                            # la lista COMPLETA: muestreo con reemplazo donde el código dice
+                            # explícitamente "Remove the failing candidate".
+                            #
+                            # Medido (correlación 1:1 sobre 55 semillas): con 3 días en el pool y 1
+                            # solo válido, P(fallar los 3) = (2/3)³ = 29,6% — observado 29,1%. En
+                            # ese ~30% el sistema **se rinde teniendo un día válido disponible** y
+                            # cae a una Edge Recipe sintética; el usuario recibe un genérico
+                            # "Desayuno: 150g Pollo con 100g Arroz" en vez de un día real de su
+                            # plan. Sin reemplazo, 3 intentos sobre un pool de 3 encuentran el
+                            # válido SIEMPRE.
+                            #
+                            # Nota: un fix de 2026-07-28 ya curó este MISMO síntoma en su versión
+                            # dependiente de orden (la caché caliente hacía fallar los 3
+                            # candidatos). Aquello arregló por qué fallaban; esto arregla por qué
+                            # el bucle no llegaba a probar los otros.
+                            available_days = [d for d in available_days if d is not _shuffle_pick]
                             if not available_days:
                                 break
-                            shuffled_day = copy.deepcopy(random.choice(available_days))
+                            _shuffle_pick = random.choice(available_days)
+                            shuffled_day = copy.deepcopy(_shuffle_pick)
                             _fell_to_edge = False # Reset flag if we pick a new day
                             is_emergency_repeat = False # Also reset this since it's a new day
                             is_edge_recipe = False
@@ -29939,13 +29963,36 @@ def process_plan_chunk_queue(target_plan_id=None):
                         # Si los últimos N días en `existing_days` tienen las MISMAS signatures de
                         # meals que `new_days`, asumir que el chunk ya fue mergeado en un intento
                         # previo cuyo marker se perdió. Esto previene duplicación silenciosa.
+                        # [P1-P11-SIG-INCLUDE-DAY · 2026-07-30] La firma incluye el NÚMERO DE DÍA.
+                        #
+                        # Antes comparaba solo (nombre, tipo) de las comidas, y en la rama degradada
+                        # `new_days` son POR CONSTRUCCIÓN una permutación de `existing_days` (Smart
+                        # Shuffle re-baraja el plan previo). Cuando el RNG producía el mismo orden
+                        # que ya estaba en storage, el guard se creía un duplicado y **saltaba el
+                        # merge**: el plan se quedaba en 3 días en vez de 6, y el único write era el
+                        # plan previo intacto.
+                        #
+                        # Medido (correlación 1:1 sobre 7 semillas): P = 1/3 × 1/2 × 1/2 = 1/12 =
+                        # 8,33% de los merges degradados; observado 8,6%. El test fallaba
+                        # EXACTAMENTE cuando aparecía el log `[P1-1/PRE-CHECK]`.
+                        #
+                        # El número de día separa los dos casos sin debilitar nada: en el escenario
+                        # LEGÍTIMO que este guard defiende (T1 commiteó los días y T2 perdió el
+                        # marker) los días ya están en storage CON su numeración final, así que
+                        # `existing_days[-N:]` y `new_days` traen los mismos números y el guard
+                        # sigue disparando. En el falso positivo, storage tiene los días 1-3 y
+                        # `new_days` son los 4-6 (`shuffled_day['day'] = days_offset + idx + 1`):
+                        # números distintos, ninguna confusión posible.
                         def _p11_meal_signature(day):
                             if not isinstance(day, dict):
                                 return ()
-                            return tuple(sorted(
+                            _meals = tuple(sorted(
                                 (str(m.get('name') or ''), str(m.get('type') or ''))
                                 for m in (day.get('meals') or []) if isinstance(m, dict)
                             ))
+                            if not _meals:
+                                return ()          # se preserva el sentinel de "día vacío"
+                            return (str(day.get('day') or ''), _meals)
 
                         _p11_already_in_storage = False
                         _p11_new_count = len([d for d in new_days if isinstance(d, dict)])
