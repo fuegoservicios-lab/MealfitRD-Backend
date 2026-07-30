@@ -262,7 +262,17 @@ _BREVITY_MARKERS = (
     "REGLAS DE BREVEDAD Y DENSIDAD",
     "DI CADA PUNTO UNA SOLA VEZ",
     "UNA SOLA PREGUNTA POR RESPUESTA",
-    "NO ANUNCIES UNA ACCIÓN ANTES DE EJECUTARLA",
+    # [P1-CHAT-FILLER-STRIP · 2026-07-30] Era "NO ANUNCIES UNA ACCIÓN ANTES DE EJECUTARLA".
+    # Renombrada porque estaba escrita como LISTA NEGRA DE FRASES ("lo registro", "lo anoto") y el
+    # modelo la esquivaba con sinónimos: en una respuesta real la incumplió 3 veces sin usar ninguna
+    # de las frases prohibidas ("Vamos a registrarlo", "Dame un segundo…", "Registrando…"). Ahora es
+    # una regla de COMPORTAMIENTO: cero texto delante de la llamada, sea como sea que lo formules.
+    # Este test hizo su trabajo — pilló el renombre en los 4 prompts a la vez, que es exactamente
+    # para lo que existe (que una edición no pueda arreglar 3 de 4).
+    "CERO TEXTO ANTES DE UNA HERRAMIENTA",
+    # La regla del slot es nueva (P1-DIARY-DINNER-SLOT): un `snack` a las 22:47 con la cena sin
+    # registrar era la cena. Se ancla igual para que no se caiga de uno de los 4 prompts.
+    "EL SLOT SE DERIVA DE LOS DATOS",
 )
 
 

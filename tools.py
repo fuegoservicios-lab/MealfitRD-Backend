@@ -36,7 +36,7 @@ from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical
 # + sin `timeout=` (puede colgar al worker indefinidamente) + sin CB gate
 # (avalancha si Gemini está degradado). El P1-CHAT-CB-EXTEND ya cubrió los
 # 4 callsites de `agent.py`; este fix cierra los 2 de `tools.py`.
-from knobs import _env_str, _env_float
+from knobs import _env_str, _env_float, _env_bool, _env_int
 
 
 def _tools_pref_agent_model_name() -> str:
@@ -479,6 +479,82 @@ def _normalize_meal_type(meal_type) -> str:
     return mt if mt in ("desayuno", "almuerzo", "cena", "merienda", "snack") else "snack"
 
 
+_DINNER_RESCUE_ENABLED = _env_bool("MEALFIT_DIARY_DINNER_RESCUE", True)
+_DINNER_RESCUE_MIN_KCAL = _env_int("MEALFIT_DIARY_DINNER_RESCUE_MIN_KCAL", 300,
+                                  lambda v: 50 <= v <= 2000)
+_DINNER_RESCUE_MIN_GAP_H = _env_float("MEALFIT_DIARY_DINNER_RESCUE_MIN_GAP_H", 4.0,
+                                           lambda v: 0.0 <= v <= 24.0)
+
+
+def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: int) -> str:
+    """[P1-DIARY-DINNER-SLOT · 2026-07-30] `snack` a las 22:47 con la cena SIN registrar es la CENA.
+
+    Caso vivo del owner: escribe "me comí dos sandwiches con queso gooda" a las 22:47 RD sin decir
+    qué comida era. El coach lo razonó por NARRATIVA ("ya veo que hoy has comido bastante, esto
+    parece un snack nocturno adicional") teniendo delante los dos datos que lo resolvían: la hora y
+    que la cena del día seguía vacía. Quedó en el diario como `snack`. Confirmado por el usuario:
+    era su cena.
+
+    Medido en su diario ese día:
+        desayuno 10:00 (1070 kcal) · almuerzo 15:06 (525) · snack 22:47 (420) · cena AUSENTE
+
+    ⚠️ La derivación NO usa una banda horaria (`hora >= 19 → cena`). El prompt del coach protege
+    explícitamente al usuario de turno nocturno ("si tiene turno nocturno, las 5 AM es su cena, no
+    lo reprimas"), así que un umbral de reloj de pared rompería justo a esos. Se usa **el hueco
+    desde su última comida principal**, que sale de SUS propios datos y se adapta a cualquier
+    horario: 7,7 h tras el almuerzo con la cena vacía es cena; una merienda de las 4 de la tarde
+    queda a ~1 h del almuerzo y NO se toca.
+
+    Las 4 condiciones tienen que darse todas:
+      1. el slot pedido es `snack`/`merienda` (nunca se reescribe una comida principal explícita),
+      2. es HOY (`days_ago == 0`; en un backdate la hora de ahora no dice nada),
+      3. desayuno y almuerzo YA están registrados hoy y la cena NO — el ancla está en su ritmo, no
+         en el nuestro; si no hay ancla (día vacío) no se toca nada,
+      4. es sustancial (≥ `MIN_KCAL`) y viene ≥ `MIN_GAP_H` después de la última principal.
+
+    Si las tres comidas principales están registradas, un picoteo nocturno SÍ es un snack y se
+    respeta. Rollback: `MEALFIT_DIARY_DINNER_RESCUE=false`. El usuario puede corregirlo siempre
+    desde la card "Progreso en Tiempo Real" (P1-DIARY-EDITABLE).
+    tooltip-anchor: P1-DIARY-DINNER-SLOT"""
+    if not _DINNER_RESCUE_ENABLED or days_ago != 0:
+        return meal_type
+    if meal_type not in ("snack", "merienda"):
+        return meal_type
+    try:
+        if int(calories or 0) < _DINNER_RESCUE_MIN_KCAL:
+            return meal_type
+        from db import execute_sql_query as _esq_ds
+        _rows = _esq_ds(
+            "SELECT meal_type, MAX(consumed_at) AS ultima FROM consumed_meals "
+            "WHERE user_id = %s AND meal_type = ANY(%s) "
+            "AND (consumed_at AT TIME ZONE 'America/Santo_Domingo')::date "
+            "  = (now() AT TIME ZONE 'America/Santo_Domingo')::date "
+            "GROUP BY meal_type",
+            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES)),
+            fetch_all=True,
+        ) or []
+        _por_slot = {str(r.get("meal_type")): r.get("ultima") for r in _rows if isinstance(r, dict)}
+        if "cena" in _por_slot:
+            return meal_type                      # ya cenó: esto sí es un picoteo
+        if not {"desayuno", "almuerzo"}.issubset(_por_slot.keys()):
+            return meal_type                      # sin ancla en su propio ritmo
+        from datetime import datetime, timezone as _tz_ds
+        _ult = max(v for v in _por_slot.values() if v is not None)
+        if _ult.tzinfo is None:
+            _ult = _ult.replace(tzinfo=_tz_ds.utc)
+        _gap_h = (datetime.now(_tz_ds.utc) - _ult).total_seconds() / 3600.0
+        if _gap_h < _DINNER_RESCUE_MIN_GAP_H:
+            return meal_type                      # demasiado pegado: merienda legítima
+        logger.info(
+            f"🍽️ [P1-DIARY-DINNER-SLOT] slot reclasificado '{meal_type}' → 'cena' para user "
+            f"{str(user_id)[:8]}: {int(calories)} kcal, {_gap_h:.1f}h tras la última principal y "
+            f"cena del día sin registrar. El usuario puede corregirlo desde la card.")
+        return "cena"
+    except Exception as _e_ds:
+        logger.warning(f"[P1-DIARY-DINNER-SLOT] rescate de slot no-op: {type(_e_ds).__name__}: {_e_ds}")
+        return meal_type
+
+
 @tool
 def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None, meal_type: str = None, days_ago: int = 0, force: bool = False) -> str:
     """
@@ -514,7 +590,17 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     from datetime import datetime, timezone as _tz, timedelta as _td
     _days_ago = _clamp_days_ago(days_ago)
     _meal_type = _normalize_meal_type(meal_type)
+    # [P1-DIARY-DINNER-SLOT · 2026-07-30] ANTES del dup-guard a propósito: si esto reclasifica a
+    # `cena`, la cena reclasificada tiene que pasar por su propia comprobación de duplicado como
+    # cualquier comida principal. Al revés (después del guard) se colaría una segunda cena.
+    _meal_type = _rescue_dinner_slot(user_id, _meal_type, calories, _days_ago)
     _consumed_at = (datetime.now(_tz.utc) - _td(days=_days_ago)).isoformat()
+    # [P1-DIARY-DINNER-SLOT · 2026-07-30] El único log de qué slot se escribe era `logger.debug`, y
+    # en producción solo se emite INFO+ — o sea que al revisar el journal NO había forma de saber
+    # qué comida creyó el modelo que estaba registrando. Sube a INFO: es el dato que hace
+    # diagnosticable esta clase entera.
+    logger.info(f"🍽️ [DIARY] slot='{_meal_type}' (pedido='{meal_type}') days_ago={_days_ago} "
+                f"kcal={calories} user={str(user_id)[:8]} · '{str(meal_name)[:40]}'")
 
     # Guard: una sola comida PRINCIPAL (desayuno/almuerzo/cena) por día local
     # (RD = UTC-4, misma convención que _local_date_str_for_user). Meriendas y

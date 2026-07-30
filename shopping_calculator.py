@@ -4806,6 +4806,31 @@ def _has_severe_divergence(divergences: list) -> bool:
                 delta = float(d.get("delta_pct") or 0)
             except (TypeError, ValueError):
                 delta = 0.0
+            # [P1-COHERENCE-INF-NOT-SEVERE · 2026-07-30] Un delta INFINITO no es una magnitud: es
+            # un denominador que falta. El guard escribe `delta_pct = float("inf")` en la única
+            # rama donde `expected_qty = 0` — la receta no pide NADA de ese alimento y la lista
+            # tiene algo (sobre-oferta por construcción). `abs(inf) > 0.50` es verdadero
+            # trivialmente, así que "la receta no dijo cuánto" se leía como la magnitud más severa
+            # posible.
+            #
+            # Caso vivo (plan 4d2c1111, semana 2, 2026-07-30): `Pimienta negra` y `Sal` con
+            # hipótesis `recipe_unquantified` ("sal al gusto", sin gramos) escalaron T2 warn→block,
+            # el chunk agotó sus 3 intentos y **el usuario se quedó sin la lista de compras de la
+            # semana 2**. Un plan entero bloqueado por sal y pimienta.
+            #
+            # Es el mismo endurecimiento que P1-COHERENCE-SEVERE-NO-NOISE (2026-07-07) aplicó a
+            # `unknown`/`pantry_overdeduct`, y la misma clase que P1-TRANSFORM-GATE-PARITY: DOS
+            # tests de severidad para el mismo concepto y el endurecimiento aterrizó en uno solo.
+            # La ruta de review ya era inmune porque pasa por `_coherence_finite_abs_delta`
+            # (graph_orchestrator), que mapea inf/NaN → 0.0; esta no lo hacía. Aquí no se puede
+            # importar ese helper (graph_orchestrator importa de este módulo — sería circular), así
+            # que se replica la semántica y un test ancla la PARIDAD entre las dos.
+            #
+            # NO debilita la detección: el caso que de verdad rompe un plan — la receta menciona un
+            # alimento y la lista lo omite — es `cap_swallowed_modifier`, que sale por el `return
+            # True` de arriba por NOMBRE de hipótesis, sin mirar el delta.
+            if delta != delta or abs(delta) == float("inf"):
+                continue
             if abs(delta) > _COHERENCE_SEVERE_MAGNITUDE_THRESHOLD:
                 return True
     return False
@@ -6615,7 +6640,7 @@ def _cap_log(msg: str) -> None:
         logging.info(msg)
 
 
-_LAST_SEVERE_CAPS_SIG: str = ""
+_LAST_SEVERE_CAPS_SIG: set = set()
 _LAST_SEVERE_CAPS_AT: float = 0.0
 _SEVERE_CAPS_DEDUP_TTL_S = _knob_env_float("MEALFIT_CAP_SUMMARY_DEDUP_TTL_S", 120.0,
                                            lambda v: 0.0 <= v <= 3600.0)
@@ -6632,12 +6657,14 @@ def _log_severe_caps_summary() -> None:
         return
     try:
         _sev = []
+        _claves = set()
         for _c in (_CAPS_APPLIED_LAST_RUN or []):
             _pre = float(_c.get("pre_value") or 0.0)
             _post = float(_c.get("post_value") or 0.0)
             if _pre > 0 and (_post / _pre) < _CAP_LOG_SEVERE_RATIO:
                 _sev.append(f"{_c.get('food')} {_pre:.0f}→{_post:.0f}g "
                             f"({_post / _pre:.0%}, {_c.get('reason')})")
+                _claves.add(f"{_c.get('food')}|{_c.get('reason')}")
         if not _sev:
             return
         # [P2-CAP-LOG-LEVEL · 2026-07-29 · v2] De-dup por CONTENIDO dentro de una RÁFAGA:
@@ -6652,13 +6679,29 @@ def _log_severe_caps_summary() -> None:
         # "tragarse la señal de otro usuario", que es justo lo contrario de lo que persigue este
         # bloque. Con TTL, lo peor que pasa es perder un duplicado dentro de la misma ráfaga.
         # Rollback: MEALFIT_CAP_SUMMARY_DEDUP_TTL_S=0 → sin de-dup (vuelven las 2-3 repeticiones).
+        # [P2-CAP-LOG-LEVEL · 2026-07-30 · v3] La firma va por (ALIMENTO, RAZÓN), no por gramos.
+        #
+        # ⚠️ Corrección de la v2, medida en producción: la v2 firmaba el texto completo — gramos
+        # incluidos — y los gramos son EXACTAMENTE lo que cambia entre variantes de lista. Cada
+        # variante escala el mismo tope ('Puerro 415→200g' / 'Puerro 104→50g' / 'Puerro 208→100g'),
+        # así que la firma nunca coincidía y el de-dup era **incapaz de disparar por construcción**
+        # — peor que no ayudar. Medido: 53 resúmenes en 40 min, 3-4 por plan, cuando yo había
+        # afirmado "como máximo uno por plan".
+        #
+        # Y los resúmenes de un mismo plan son ACUMULATIVOS (el 2º contiene las entradas del 1º más
+        # otras), así que además se compara por SUBCONJUNTO: si lo que traigo ya estaba contado en
+        # el resumen anterior de esta ráfaga, callo; si aporta un tope de un alimento nuevo, hablo.
+        # Así el operador ve el resumen más COMPLETO y no sus tres prefijos.
+        # El estado se guarda como SET, no como string unido: la clave ya contiene `|` por dentro
+        # ("Puerro|P3-HERB-CAP"), así que unir con `|` y volver a partir por `|` deshacía las claves
+        # en trozos y el subconjunto no casaba nunca. Sin separador no hay colisión posible.
         global _LAST_SEVERE_CAPS_SIG, _LAST_SEVERE_CAPS_AT
-        _sig = "|".join(sorted(_sev))
         _now = _time.time()
-        if (_sig == _LAST_SEVERE_CAPS_SIG
-                and (_now - _LAST_SEVERE_CAPS_AT) < _SEVERE_CAPS_DEDUP_TTL_S):
+        _vigente = (_now - _LAST_SEVERE_CAPS_AT) < _SEVERE_CAPS_DEDUP_TTL_S
+        _previas = _LAST_SEVERE_CAPS_SIG if _vigente else set()
+        if _vigente and _claves.issubset(_previas):
             return
-        _LAST_SEVERE_CAPS_SIG = _sig
+        _LAST_SEVERE_CAPS_SIG = _claves | _previas
         _LAST_SEVERE_CAPS_AT = _now
         logging.warning(
             f"🧺 [P2-CAP-LOG-LEVEL] {len(_sev)} tope(s) de perecedero recortaron "

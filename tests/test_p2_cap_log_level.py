@@ -125,7 +125,7 @@ def test_summary_is_deduped_across_aggregator_passes(cap_logs):
     mismo segundo (medido en prod 21:28:40 ×2). Repetir la misma línea es la versión pequeña del
     problema que este bloque vino a resolver."""
     import shopping_calculator as sc
-    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_SIG = set()
     sc._LAST_SEVERE_CAPS_AT = 0.0
     sc.reset_caps_applied_last_run()
     sc._record_cap_applied("Tomate", 9100, 3000, "P5-VEG-CAP")
@@ -139,7 +139,7 @@ def test_summary_is_deduped_across_aggregator_passes(cap_logs):
 def test_summary_reappears_when_content_changes(cap_logs):
     """El de-dup es por CONTENIDO, no un mute: otro plan con otros topes vuelve a avisar."""
     import shopping_calculator as sc
-    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_SIG = set()
     sc._LAST_SEVERE_CAPS_AT = 0.0
     sc.reset_caps_applied_last_run()
     sc._record_cap_applied("Tomate", 9100, 3000, "P5-VEG-CAP")
@@ -180,7 +180,7 @@ def test_dedup_expires_so_another_plan_is_never_swallowed(cap_logs, monkeypatch)
     severos idéntico se silenciarían mutuamente para siempre. Improbable, pero el modo de fallo
     sería tragarse la señal de OTRO usuario — lo contrario de lo que persigue este bloque."""
     import shopping_calculator as sc
-    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_SIG = set()
     sc._LAST_SEVERE_CAPS_AT = 0.0
     _t = [1_000.0]
     monkeypatch.setattr(sc._time, "time", lambda: _t[0])
@@ -214,7 +214,7 @@ def test_summary_failure_is_never_silent(cap_logs):
     el módulo `time`, del que depende el propio `logging` para estampar cada record — parchearlo
     rompe el canal con el que se comprueba el resultado.)"""
     import shopping_calculator as sc
-    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_SIG = set()
     sc._LAST_SEVERE_CAPS_AT = 0.0
     sc.reset_caps_applied_last_run()
 
@@ -228,3 +228,71 @@ def test_summary_failure_is_never_silent(cap_logs):
              if lv == "WARNING" and "resumen de topes severos falló" in m]
     assert fails, "…pero tampoco callar: la rotura del canal tiene que verse"
     sc.reset_caps_applied_last_run()
+
+
+def test_v3_dedup_por_alimento_no_por_gramos(cap_logs):
+    """[v3] La v2 firmaba el TEXTO (gramos incluidos) y los gramos son justo lo que cambia entre
+    variantes de lista: el mismo tope sale escalado ('Puerro 415->200g' / '104->50g' / '208->100g').
+    La firma nunca coincidia ⇒ el de-dup era INCAPAZ DE DISPARAR por construccion. Medido en prod:
+    53 resumenes en 40 min, 3-4 por plan, habiendo yo afirmado 'como maximo uno por plan'."""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = set()
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+    for _pre, _post in ((415, 200), (104, 50), (208, 100)):     # 3 variantes del MISMO tope
+        sc.reset_caps_applied_last_run()
+        sc._record_cap_applied("Puerro", _pre, _post, "P3-HERB-CAP")
+        sc._log_severe_caps_summary()
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 1, (
+        f"el mismo alimento escalado por variante debe avisar UNA vez, hubo {len(warns)}")
+
+
+def test_v3_resumen_acumulativo_no_repite_prefijos(cap_logs):
+    """Los resumenes de un plan son ACUMULATIVOS (el 2o contiene las entradas del 1o mas otras,
+    medido en corr=ef3fec6e). Comparar por SUBCONJUNTO deja pasar solo lo que aporta un alimento
+    nuevo, para que el operador vea el resumen mas COMPLETO y no sus prefijos."""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = set()
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Puerro", 104, 50, "P3-HERB-CAP")
+    sc._log_severe_caps_summary()                                # 1: {Puerro}
+
+    sc.reset_caps_applied_last_run()                             # 2: {Puerro} otra vez -> callado
+    sc._record_cap_applied("Puerro", 415, 200, "P3-HERB-CAP")
+    sc._log_severe_caps_summary()
+
+    sc.reset_caps_applied_last_run()                             # 3: aporta Fresas -> habla
+    sc._record_cap_applied("Puerro", 415, 200, "P3-HERB-CAP")
+    sc._record_cap_applied("Fresas", 3901, 1814, "P6-FRUITS-PERISHABLE-CAP")
+    sc._log_severe_caps_summary()
+
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 2, f"prefijo callado, aporte nuevo hablado: esperaba 2, hubo {len(warns)}"
+    assert "Fresas" in warns[1]
+
+
+def test_v3_mismo_alimento_distinta_razon_si_avisa(cap_logs):
+    """La clave es (alimento, RAZON): el mismo alimento topado por otro motivo es informacion nueva."""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = set()
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Yogurt", 6319, 2722, "P6-LACTEOS-PERISHABLE-CAP")
+    sc._log_severe_caps_summary()
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Yogurt", 6319, 2722, "P6-DAIRY-OTHER-CAP")
+    sc._log_severe_caps_summary()
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 2
+
+
+def test_v3_la_firma_no_contiene_gramos():
+    """Ancla del defecto concreto de la v2: si la firma vuelve a llevar gramos, vuelve a ser inerte."""
+    i = _SC.index("def _log_severe_caps_summary")
+    body = _SC[i:_SC.index("\ndef ", i + 10)]
+    assert '_claves.add(' in body, "la firma debe construirse de claves (alimento|razon)"
+    assert '_sig = "|".join(sorted(_sev))' not in body, (
+        "la firma volvio a ser el texto completo con gramos -> de-dup inerte por construccion")
+    assert "issubset" in body, "falta la comparacion por subconjunto del patron acumulativo"

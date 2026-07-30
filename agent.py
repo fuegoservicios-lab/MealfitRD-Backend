@@ -4101,6 +4101,40 @@ def _extract_ai_message_text(msg) -> str:
     return str(content) if content else ""
 
 
+FILLER_STRIP_ENABLED = _env_bool("MEALFIT_CHAT_FILLER_STRIP", True)
+_FILLER_MAX_CHARS = _env_int("MEALFIT_CHAT_FILLER_MAX_CHARS", 90, lambda v: 10 <= v <= 400)
+
+# Patrones de ESPERA, no de contenido. Anclados al inicio del bloque y exigiendo que el bloque
+# entero sea eso: un gerundio/anuncio suelto que termina en puntos suspensivos o dos puntos.
+_FILLER_RX = re.compile(
+    r"^\s*(?:"
+    r"(?:un\s+)?(?:momento|segundo|instante)\b"          # "un momento…"
+    r"|d[ae]me\s+un\s+(?:momento|segundo|instante)\b"     # "dame un segundo…"
+    r"|(?:ya\s+)?(?:voy|vamos)\s+a\s+\w+"                 # "vamos a registrarlo…"
+    r"|\w+ando\b|\w+iendo\b"                              # "registrando…", "calculando…"
+    r"|(?:estimado|resultado|estimaci[oó]n)\s+aproximad[oa]"
+    r")[\s\w,]*[.…:]*\s*$",
+    re.IGNORECASE,
+)
+_TIENE_CIFRA_RX = re.compile(r"\d")
+
+
+def _is_pure_filler(text: str) -> bool:
+    """[P1-CHAT-FILLER-STRIP · 2026-07-30] True si un bloque es SOLO relleno de espera.
+
+    Conservador a propósito (ver el bloque de `_build_final_content_from_messages`): exige las tres
+    cosas a la vez — corto, SIN ninguna cifra, y que el bloque ENTERO encaje en el patrón de espera.
+    Un bloque con kcal, gramos o una hora es contenido aunque suene a narración: "asumo pan de molde
+    y 40 g de queso por sándwich" le dice al usuario de dónde salió el estimado y se queda.
+    tooltip-anchor: P1-CHAT-FILLER-STRIP"""
+    t = (text or "").strip()
+    if not t or len(t) > _FILLER_MAX_CHARS:
+        return False
+    if _TIENE_CIFRA_RX.search(t):
+        return False
+    return bool(_FILLER_RX.match(t))
+
+
 def _build_final_content_from_messages(messages: list) -> str:
     """[P1-CHAT-NARRATION-KEPT · 2026-07-28] Reconstruye el texto final del
     turno a partir de TODAS las AIMessage con contenido no vacío emitidas
@@ -4152,7 +4186,70 @@ def _build_final_content_from_messages(messages: list) -> str:
         seen_texts.add(dedup_key)
         parts.append(text)
 
-    return "\n\n".join(parts)
+    # [P1-CHAT-FILLER-STRIP · 2026-07-30] Quita los bloques que son PURO relleno de espera.
+    #
+    # Caso vivo del owner: su respuesta traía un bloque suelto que decía literalmente
+    # "Registrando..." — el modelo narrando su propia llamada interna, que este helper preserva
+    # (correctamente: P1-CHAT-NARRATION-KEPT existe porque descartar narración perdía contenido
+    # real que el usuario ya había visto en vivo). La consecuencia no buscada es que cada preámbulo
+    # de relleno queda GRABADO en la conversación para siempre.
+    #
+    # El prompt ya lo prohíbe (regla 3 del bloque de brevedad) y lleva dos días siendo ignorado
+    # porque estaba escrito como lista negra de frases y el modelo la esquiva con sinónimos. Un
+    # prompt es una petición; esto es la garantía.
+    #
+    # Deliberadamente CONSERVADOR — descartar de más es el bug que P1-CHAT-NARRATION-KEPT cerró:
+    #   · nunca se toca el ÚLTIMO bloque (es la respuesta real del turno),
+    #   · solo cae un bloque SIN cifras (si trae kcal/gramos/hora es contenido, no relleno),
+    #   · solo si es corto y encaja en el patrón de espera (gerundio o anuncio + puntos suspensivos
+    #     / dos puntos), nunca por longitud sola.
+    # Si el filtro se comiera todo, se devuelve el original: preferimos ruido a una respuesta vacía.
+    if FILLER_STRIP_ENABLED and len(parts) > 1:
+        _keep = [p for i, p in enumerate(parts)
+                 if i == len(parts) - 1 or not _is_pure_filler(p)]
+        if _keep:
+            _dropped = len(parts) - len(_keep)
+            if _dropped:
+                logger.info(f"🧹 [P1-CHAT-FILLER-STRIP] {_dropped} bloque(s) de relleno fuera del "
+                            f"mensaje final del turno")
+            parts = _keep
+
+    out = "\n\n".join(parts)
+    # [P1-CHAT-NEVER-EMPTY · 2026-07-30] Si la reconstrucción no sacó NADA, degradar al último
+    # mensaje en vez de devolver "".
+    #
+    # Ninguno de los dos callsites tenía guarda de vacío: el path non-stream devuelve el string tal
+    # cual y el stream emite `done` con `response: ""` — y `routers/chat.py::save_message` PERSISTE
+    # esa cadena vacía. O sea el usuario ve una respuesta en blanco y el historial la guarda así,
+    # sin ningún error en el log que lo explique.
+    #
+    # Basta con que `isinstance(m, AIMessage)` deje de matchear para llegar aquí: dos objetos
+    # AIMessage de módulos distintos (versiones de langchain, un stub de import, un reload) son
+    # clases DISTINTAS y el `isinstance` da False para todos los mensajes a la vez. El fallback
+    # devuelve el comportamiento pre-P1-CHAT-NARRATION-KEPT (solo el último), que es peor que la
+    # reconstrucción pero infinitamente mejor que el vacío — y lo dice en el log, que es lo que
+    # faltaba para poder diagnosticarlo.
+    if not out.strip() and messages:
+        _ultimo = ""
+        for m in reversed(tail or messages):
+            _t = ""
+            try:
+                _t = _extract_ai_message_text(m) or ""
+            except Exception:
+                _t = ""
+            if not _t:
+                _t = str(getattr(m, "content", "") or "")
+            if _t.strip():
+                _ultimo = _t
+                break
+        if _ultimo.strip():
+            logger.warning(
+                "⚠️ [P1-CHAT-NEVER-EMPTY] la reconstrucción del turno salió vacía con "
+                f"{len(messages)} mensaje(s) en el state — degradando al último. Si esto aparece, "
+                f"el `isinstance(m, AIMessage)` no está matcheando (clases de módulos distintos).")
+            return _ultimo
+
+    return out
 
 
 def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
