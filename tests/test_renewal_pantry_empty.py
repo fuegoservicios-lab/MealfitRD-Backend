@@ -2,17 +2,34 @@ import sys
 from unittest.mock import MagicMock, patch
 import time
 
-# Mock APScheduler early since it's commonly imported
-sys.modules['apscheduler'] = MagicMock()
-sys.modules['apscheduler.triggers'] = MagicMock()
-sys.modules['apscheduler.triggers.cron'] = MagicMock()
-sys.modules['apscheduler.schedulers'] = MagicMock()
-sys.modules['apscheduler.schedulers.background'] = MagicMock()
-sys.modules['langchain_google_genai'] = MagicMock()
-sys.modules['langgraph'] = MagicMock()
-sys.modules['langgraph.graph'] = MagicMock()
-sys.modules['langchain_core'] = MagicMock()
-sys.modules['langchain_core.messages'] = MagicMock()
+# [P1-RENEWAL-STUB-CLOBBER · 2026-07-30] Stubs CONDICIONALES — antes eran asignaciones
+# incondicionales (`sys.modules['langchain_core'] = MagicMock()`) a nivel de MÓDULO, y pytest
+# importa todos los ficheros en la COLECCIÓN antes de correr el primer test: este fichero
+# (alfabéticamente `test_renewal...`) reemplazaba el langchain_core REAL en sys.modules para toda
+# la sesión. Cualquier import tardío (dentro de una función de test) recibía el MagicMock.
+#
+# Así envenenó 3 tests de test_p1_diary_dinner_slot que hacían `from langchain_core.messages
+# import AIMessage` en el cuerpo del test: sus mensajes eran `mock.AIMessage()` y la
+# reconstrucción del turno salía vacía. La firma que lo hizo indetectable: los 3 pasaban SOLOS,
+# en test_p1_* completo (7492), en [a-o]+p0 (1626) y con el prefijo alfabético entero (478
+# ficheros) — fallaban ÚNICAMENTE en la corrida total, porque solo ahí este fichero entraba en la
+# colección. Tres hipótesis cayeron antes que la correcta (edición bajo la suite, identidad de
+# módulo por reload, orden de ejecución): el veneno no era de ORDEN DE EJECUCIÓN sino de ORDEN DE
+# COLECCIÓN. Y en pequeño ni siquiera arranca: con este fichero primero, la colección revienta con
+# `AttributeError: __path__` (un MagicMock no es un paquete).
+#
+# El guard `not in sys.modules` es el mismo patrón del conftest para langchain_openai: si el
+# paquete real ya está cargado (siempre, en este entorno), el stub es un no-op; solo actuaría en
+# un entorno sin la dependencia instalada, que era su propósito original.
+for _stub_mod in ('apscheduler', 'apscheduler.triggers', 'apscheduler.triggers.cron',
+                  'apscheduler.schedulers', 'apscheduler.schedulers.background',
+                  'langchain_google_genai', 'langgraph', 'langgraph.graph',
+                  'langchain_core', 'langchain_core.messages'):
+    if _stub_mod not in sys.modules:
+        try:
+            __import__(_stub_mod)          # el real primero; stub solo si no existe
+        except ImportError:
+            sys.modules[_stub_mod] = MagicMock()
 
 import pytest
 from datetime import datetime, timezone, timedelta

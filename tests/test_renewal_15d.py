@@ -1,10 +1,15 @@
 import sys
 from unittest.mock import MagicMock, patch
-sys.modules['apscheduler'] = MagicMock()
-sys.modules['apscheduler.triggers'] = MagicMock()
-sys.modules['apscheduler.triggers.cron'] = MagicMock()
-sys.modules['apscheduler.schedulers'] = MagicMock()
-sys.modules['apscheduler.schedulers.background'] = MagicMock()
+# [P1-RENEWAL-STUB-CLOBBER · 2026-07-30] condicional — ver test_renewal_pantry_empty.py: el
+# clobber incondicional a nivel de modulo reemplaza el paquete REAL en la coleccion de pytest
+# para toda la sesion (asi se envenenaron 3 tests de diary_dinner_slot desde el fichero hermano).
+for _stub_mod in ('apscheduler', 'apscheduler.triggers', 'apscheduler.triggers.cron',
+                  'apscheduler.schedulers', 'apscheduler.schedulers.background'):
+    if _stub_mod not in sys.modules:
+        try:
+            __import__(_stub_mod)
+        except ImportError:
+            sys.modules[_stub_mod] = MagicMock()
 
 import pytest
 from unittest.mock import patch, MagicMock
