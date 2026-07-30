@@ -23704,6 +23704,44 @@ _SPECIFIC_CHEESE_TOKENS = ("cottage", "ricotta", "mozzarella", "blanco", "fresco
                            "freir", "cheddar", "parmesano", "gouda", "requeson")
 
 
+CLARAS_YOLK_NOTE_ENABLED = _env_bool("MEALFIT_CLARAS_YOLK_NOTE", True)
+_YOLK_NOTE_TEXT = ("🌱 Nota del Nutricionista AI: esta receta usa solo las claras — NO botes las "
+                   "yemas: guárdalas tapadas en la nevera (2-3 días) y úsalas en otra comida "
+                   "(un revoltillo, arroz, o para dorar pan).")
+
+
+def _note_claras_save_yolks(meal: dict) -> int:
+    """[P1-CLARAS-YOLK-NOTE · 2026-07-30] Receta de SOLO claras → nota de qué hacer con las yemas.
+
+    Pregunta literal del owner ante '4 claras de huevo': "¿la otra parte del huevo se bota?". El
+    motor elige claras por aritmética legítima (proteína sin la grasa/kcal de la yema, cuando la
+    banda del día va apretada), pero la receta no decía qué hacer con las 4 yemas — y asumir que el
+    usuario tira comida es un defecto de comunicación, no de macros.
+
+    Gate estricto: solo si hay línea de claras Y NINGUNA línea de huevo entero (una receta
+    '2 huevos + 2 claras' ya consume ambas partes). Nota, no paso: el prefijo 'Nota del
+    Nutricionista AI' es el que `isRecipeAnnotation` (frontend, P2-RECIPE-NOTES-NOT-STEPS) deja
+    SIN numerar. Idempotente y fail-safe → 0. tooltip-anchor: P1-CLARAS-YOLK-NOTE"""
+    try:
+        if not CLARAS_YOLK_NOTE_ENABLED or not isinstance(meal, dict):
+            return 0
+        ings = [str(x).lower() for x in (meal.get("ingredients") or []) if x]
+        if not any("clara" in l and "huevo" in l for l in ings):
+            return 0
+        if any(_re.search(r"\bhuevos?\b", l) and "clara" not in l for l in ings):
+            return 0                      # lleva huevo entero: las yemas ya se usan
+        rec = meal.get("recipe")
+        if not isinstance(rec, list) or not rec:
+            return 0
+        if any("botes las yemas" in str(s).lower() or "guarda" in str(s).lower()
+               and "yema" in str(s).lower() for s in rec):
+            return 0                      # ya está la nota (idempotencia)
+        meal["recipe"] = _insert_step_before_montaje(rec, _YOLK_NOTE_TEXT)
+        return 1
+    except Exception:
+        return 0
+
+
 def _enrich_generic_cheese_display_from_raw(meal: dict) -> int:
     """[P1-RECIPE-POLISH-5] Renombra líneas display 'N g de queso' al queso específico del raw
     ausente del display. Puro sobre nombres, fail-safe → 0."""
@@ -24393,6 +24431,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
             for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                 if isinstance(_m, dict):
                     _ngc += _enrich_generic_cheese_display_from_raw(_m)
+                    _note_claras_save_yolks(_m)   # [P1-CLARAS-YOLK-NOTE] no cuenta como fix
         if _ngc:
             total += _ngc; parts.append(f"queso_display={_ngc}")
     except Exception as _egc:
@@ -24685,6 +24724,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # (paridad con el finalize plan-level; los swaps/updates también lo producían).
         try:
             total += _enrich_generic_cheese_display_from_raw(meal)
+            _note_claras_save_yolks(meal)   # [P1-CLARAS-YOLK-NOTE]
         except Exception:
             pass
         # [P2-RECIPE-HUMANIZE-UPDATES · 2026-06-29] (re-audit objetivo · P2 RECIPE-HUMANIZE-UPDATES-2) La

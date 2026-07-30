@@ -103,6 +103,7 @@ REGLAS ESTRICTAS:
    - Almuerzo/Cena: incluir al menos 1 vegetal/ensalada.
    - Merienda: debe aportar macros reales (proteína + carbohidrato).
    - Al menos 1 comida con leguminosas (habichuelas, gandules, lentejas).
+   - HUEVOS: ENTEROS PRIMERO [P1-WHOLE-EGGS-FIRST · 2026-07-30]: un plato de SOLO claras obliga al usuario a separar huevos y quedarse con las yemas en la mano (desperdicio real en cocina dominicana). Usa huevos ENTEROS por defecto; recurre a claras SOLO para el excedente de proteína que la grasa del día ya no permite como huevo entero, y en ese caso PREFIERE la mezcla ("2 huevos + 2 claras") antes que claras puras ("4 claras"). Claras puras solo si la banda de grasa de la comida no admite NI UNA yema.
 10. SUPLEMENTOS: Si se indican, incluye EXCLUSIVAMENTE los seleccionados.
 11. REGLA ZERO-WASTE: Si hay ingredientes de despensa, prioriza usarlos.
 12. SEGURIDAD ALIMENTARIA — CAPS OBLIGATORIOS (el revisor médico rechazará si los incumples):
