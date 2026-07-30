@@ -182,6 +182,70 @@ def ensure_user_profile_exists(user_id: str, email: Optional[str] = None,
         )
 
 
+def build_clinical_form_from_profile(user_id: str) -> dict:
+    """[P1-PREINSERT-CLINICAL-CTX · 2026-07-30] Contexto clínico SERVER-SIDE de un usuario, con
+    la forma que consumen el motor de macros, los caps de porción y el panel de micros.
+
+    SSOT de una hidratación que ya estaba copiada a mano en 3 sitios (swap-persist,
+    swap-persist-day, chat-modify). La cuarta copia —el shield pre-INSERT— fue la señal de que
+    faltaba el helper, y llegó por el camino incómodo: el warning de `P1-UPDATE-CLINICAL-RECAP`
+    disparando EN PRODUCCIÓN durante una renovación real, una hora después de desplegar el fix
+    que creía haber cerrado esa superficie.
+
+    Aquel fix pasaba `(_pd.get("form_data") or data.get("form_data") or {})`, reusando la misma
+    expresión que el recompute de micros ya tenía al lado — asumiendo que si estaba escrita es
+    que traía algo. Medido en Neon: **0 de 31 planes** llevan `form_data` dentro de `plan_data`,
+    y el dict `data` del INSERT solo trae `plan_data` y `user_id`. Las dos fuentes eran vacías,
+    así que el re-cap clínico quedaba inerte ahí y el panel de micros pre-INSERT llevaba desde
+    su día recomputando sin condiciones (sin techo de sodio para HTA ni de potasio para ERC).
+
+    Dos decisiones de forma que importan:
+      · el free-text `otherConditions` se PLIEGA en `medicalConditions` (mismo merge que
+        P1-MICRO-CLINICAL-FREETEXT) — un "ERC" escrito a mano tiene que activar el renal-skip;
+      · `allergies`/`dietType`/`dislikes` van SIEMPRE presentes aunque vayan vacías: el scan de
+        alérgenos del closer se gatea por PRESENCIA de key (P2-MICRO-SEED-CLINICAL-CTX), y
+        "ausente" no significa "sin alergias".
+
+    Fail-open a `{}`: esto corre en el camino del INSERT y jamás puede tumbarlo. Ojo con la
+    asimetría — `{}` significa "no sé" y hace que el motor OMITA el re-cap; un perfil leído sin
+    condiciones devuelve un dict con las claves vacías, que es la afirmación honesta "miré y no
+    hay nada". tooltip-anchor: P1-PREINSERT-CLINICAL-CTX"""
+    if not user_id:
+        return {}
+    try:
+        _prof = get_user_profile(user_id)
+        if not _prof:
+            # Perfil inexistente o ilegible = "NO SÉ" ⇒ `{}`, que hace al motor OMITIR el
+            # re-cap. Distinto de un perfil que SÍ se leyó y no declara condiciones (abajo),
+            # que devuelve las claves vacías = "miré y no hay nada". Colapsar los dos casos es
+            # el error que este helper documenta en su propia cabecera.
+            return {}
+        _hp = _prof.get("health_profile") or {}
+        if not isinstance(_hp, dict):
+            return {}
+        _mc = _hp.get("medicalConditions") or _hp.get("medical_conditions") or []
+        if isinstance(_mc, str):
+            _mc = [_mc]
+        _oc = _hp.get("otherConditions") or _hp.get("other_conditions")
+        if _oc and str(_oc).strip():
+            _mc = list(_mc) + [str(_oc).strip()]
+        return {
+            "gender": _hp.get("gender") or _hp.get("sex"),
+            "age": _hp.get("age"),
+            "medicalConditions": _mc,
+            "medications": _hp.get("medications"),
+            "otherConditions": _oc,
+            "otherMedications": _hp.get("otherMedications") or _hp.get("other_medications"),
+            "allergies": [str(a).strip() for a in (_hp.get("allergies") or []) if str(a).strip()],
+            "dietType": _hp.get("dietType") or _hp.get("diet_type"),
+            "dislikes": _hp.get("dislikes") or [],
+        }
+    except Exception as _e:
+        logger.warning(f"[P1-PREINSERT-CLINICAL-CTX] perfil clínico no hidratado para "
+                       f"{str(user_id)[:8]}: {type(_e).__name__}: {_e}")
+        return {}
+
+
 def get_user_profile(user_id: str):
     """Obtiene el perfil completo del usuario, incluyendo el health_profile."""
     if not connection_pool: return None

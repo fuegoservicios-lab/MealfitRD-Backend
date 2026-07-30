@@ -85,11 +85,27 @@ def test_es_fail_safe():
 
 
 def test_no_revienta_si_falta_form_data():
-    """`form_data` puede no estar en `plan_data` (planes viejos, superficies de chunk)."""
+    """`form_data` puede no estar en `plan_data` (planes viejos, superficies de chunk).
+
+    [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] El ancla era `"or {}" in llamada`, o sea el
+    fallback escrito DENTRO de la propia llamada. Ese fallback se movió a la resolución del
+    contexto clínico (`_clin_ctx = ... or _build_clinical_form(user_id) or {}`), que además
+    arregló el defecto de fondo: las dos fuentes que la expresión vieja consultaba están
+    SIEMPRE vacías (0 de 31 planes llevan `form_data`), así que el panel se recomputaba sin
+    condiciones. El contrato que este test protege —el argumento nunca es None y la llamada
+    tolera la ausencia— sigue intacto; lo que cambió es dónde vive el `or {}`."""
     cuerpo = _cuerpo_finalize()
-    i = cuerpo.index("recompute_micronutrient_report_for_plan")
-    llamada = cuerpo[i:i + 260]
-    assert "or {}" in llamada, "la llamada debe tolerar form_data ausente"
+    # La asignación ocupa dos líneas, así que se recorta hasta el primer CONSUMIDOR
+    # (`_ramb(`), no hasta el primer `)` — que cae dentro de la propia expresión.
+    i_ctx = cuerpo.index("_clin_ctx =")
+    assert "or {}" in cuerpo[i_ctx:cuerpo.index("_ramb(", i_ctx)], (
+        "la resolución del contexto clínico debe terminar en `or {}`: el argumento que llega "
+        "al panel nunca puede ser None")
+    # Ventana de bytes fija NO: `[i:i+260]` se llenó con el comentario del propio fix y dejó la
+    # llamada fuera. Se ancla a la invocación real (`_rmr(`), que es lo que se quiere afirmar.
+    i = cuerpo.index("_rmr(", cuerpo.index("recompute_micronutrient_report_for_plan"))
+    llamada = cuerpo[i:cuerpo.index("\n", i)]
+    assert "_clin_ctx" in llamada, f"el panel debe recibir el contexto ya resuelto: {llamada!r}"
 
 
 # ───────────── 2. la función que se invoca sigue existiendo y es best-effort ─────────────

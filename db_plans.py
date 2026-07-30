@@ -8,7 +8,11 @@ logger = logging.getLogger(__name__)
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from constants import strip_accents, GLOBAL_REVERSE_MAP
 from db_chat import insert_rejection, save_message
-from db_profiles import get_user_profile, update_user_health_profile, update_user_health_profile_atomic
+from db_profiles import (get_user_profile, update_user_health_profile,
+                         update_user_health_profile_atomic,
+                         # [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] contexto clínico del shield
+                         # pre-INSERT (SSOT de la hidratación que estaba copiada en 3 surfaces).
+                         build_clinical_form_from_profile as _build_clinical_form)
 
 # ============================================================
 # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Tracking de pipelines en curso
@@ -1053,13 +1057,22 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                 # Corre DESPUÉS del pase de proteína (protein ya estable) y ANTES del re-check de banda.
                 try:
                     from graph_orchestrator import reconcile_all_macros_band_post_finalize as _ramb
-                    # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) el motor
-                    # que este wrapper invoca RE-DIMENSIONA porciones; sin `form_data` no podía
-                    # re-aplicar los caps clínicos (DM2 alto-IG / bariátrico) y este es el ÚLTIMO
-                    # punto del chain donde el re-cap es posible (ningún pase posterior capea).
-                    # Misma expresión que el recompute de micros de más abajo — si una cambia, la otra
-                    # debe cambiar con ella.
-                    _ramb(_pd, form_data=(_pd.get("form_data") or data.get("form_data") or {}))
+                    # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] el motor que este wrapper invoca
+                    # RE-DIMENSIONA porciones; sin `form_data` no puede re-aplicar los caps
+                    # clínicos (DM2 alto-IG / bariátrico) y este es el ÚLTIMO punto del chain
+                    # donde el re-cap es posible (ningún pase posterior capea).
+                    #
+                    # [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] La primera versión leía
+                    # `(_pd.get("form_data") or data.get("form_data") or {})`, reusando la
+                    # expresión que el recompute de micros ya tenía al lado. Las DOS fuentes están
+                    # SIEMPRE vacías —medido: 0 de 31 planes llevan `form_data` en `plan_data`, y
+                    # `data` solo trae plan_data/user_id—, así que el fix quedaba inerte aquí y el
+                    # warning de arriba lo delató en producción. El contexto se deriva del PERFIL
+                    # por `user_id`, que sí viaja. Se resuelve UNA vez: abajo lo reusa el panel de
+                    # micros, que sufría el mismo dict vacío.
+                    _clin_ctx = (_pd.get("form_data") or data.get("form_data")
+                                 or _build_clinical_form(data.get("user_id")) or {})
+                    _ramb(_pd, form_data=_clin_ctx)
                 except Exception as _ramb_e:
                     logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")
                 # [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) El único
@@ -1169,7 +1182,13 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                 # PELIGROSA de un techo es la SUB-estimación"*. Refrescar cierra las dos.
                 try:
                     from graph_orchestrator import recompute_micronutrient_report_for_plan as _rmr
-                    _rmr(_pd, (_pd.get("form_data") or data.get("form_data") or {}))
+                    # [P1-PREINSERT-CLINICAL-CTX · 2026-07-30] Este recompute llevaba desde su día
+                    # recibiendo `{}`: ni `plan_data['form_data']` ni `data['form_data']` existen
+                    # jamás. Sin condiciones, esta pasada re-escribe el panel SIN los techos por
+                    # condición (sodio en HTA, potasio en ERC) — justo los que su propio comentario
+                    # dice que existen porque "la dirección PELIGROSA de un techo es la
+                    # SUB-estimación". Reusa el contexto ya resuelto arriba (una sola query).
+                    _rmr(_pd, _clin_ctx)
                 except Exception as _rmr_e:
                     logger.debug(f"[P1-MICRO-PANEL-POST-FINALIZE] pre-INSERT no-op: "
                                  f"{type(_rmr_e).__name__}: {_rmr_e}")
