@@ -71,7 +71,7 @@ class TestLacteosMerge:
     def test_repro_pdf_brocoli_excesivo(self, caplog):
         """PDF 22:42: 14 cabezas brócoli para 2p×mes. Cap esperado: 8."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 brócolis"],
                 multiplier=18.666666,
@@ -92,7 +92,7 @@ class TestLacteosMerge:
     ])
     def test_brocoli_cap_scales(self, scenario, multiplier, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 brócolis"],
                 multiplier=multiplier,
@@ -112,7 +112,7 @@ class TestCarbsCap:
     def test_repro_pdf_tortilla_integral_7_paquetes(self, caplog):
         """PDF 22:42: 7 paquetes tortilla integral. Cap esperado: 4."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 paquete de tortilla integral"] * 5,
                 multiplier=18.666666,
@@ -134,7 +134,7 @@ class TestCarbsCap:
     ])
     def test_other_carbs_capped(self, carb, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"1 paquete de {carb}"] * 5,
                 multiplier=18.666666,
@@ -151,7 +151,7 @@ class TestCannedProteinCap:
     def test_repro_pdf_atun_19_latas(self, caplog):
         """PDF 22:42: 19 latas atún en agua. Cap esperado: 8."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 lata de atún en agua"] * 5,
                 multiplier=18.666666,
@@ -173,7 +173,7 @@ class TestCannedProteinCap:
     ])
     def test_other_canned_proteins_capped(self, canned, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"1 lata de {canned}"] * 5,
                 multiplier=18.666666,
@@ -190,7 +190,7 @@ class TestMozzarellaCap:
     def test_mozzarella_capped(self, caplog):
         """Mozzarella excesivo debe firar cap (similar a ricotta)."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de queso mozzarella"],
                 multiplier=18.666666,
@@ -208,7 +208,7 @@ class TestMozzarellaCap:
     def test_yogurt_still_capped(self, caplog):
         """No-regresión: yogurt sigue capeando."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de yogurt griego"],
                 multiplier=18.666666,

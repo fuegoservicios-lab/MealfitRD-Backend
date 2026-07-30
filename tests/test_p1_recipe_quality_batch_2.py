@@ -81,10 +81,24 @@ def test_chunk_worker_derives_and_passes_target_fats():
 def test_insert_shield_derives_and_passes_target_fats():
     # el shield pre-INSERT (db_plans) deriva y pasa target_fats (llamada multilínea desde
     # P0-BAND-PRE-REVIEW, que añadió main_goal/target_macros auto-derivados)
-    assert '_fpc(_pd["days"], target_fats=_tf_ins,' in _DBP
-    i = _DBP.find('_fpc(_pd["days"], target_fats=_tf_ins,')
-    seg = _DBP[max(0, i - 900):i]
-    assert '_pd.get("macros") or {}' in seg
+    # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29 · reanclado] Antes se asertaba el literal exacto
+    # `_fpc(_pd["days"], target_fats=_tf_ins,`, o sea el ORDEN de los argumentos. Caducó el mismo
+    # día que P1-PROTAGONIST-CONTEXT-GATE insertó `db=_db_ins` en medio — un cambio deliberado y
+    # correcto (el shield necesita la nutrition-db para el piso protagonista). Lo que este test
+    # protege es que el shield DERIVE y PASE `target_fats`, no en qué posición va: anclar al orden
+    # convierte cualquier kwarg nuevo en un rojo falso. Misma clase que las ventanas de bytes fijas.
+    i = _DBP.find('_fpc(_pd["days"]')
+    assert i > 0, "el shield pre-INSERT ya no llama a `_fpc(_pd[\"days\"]...)`"
+    _call = _DBP[i:i + 400]
+    assert "target_fats=_tf_ins" in _call, (
+        "el shield pre-INSERT debe seguir pasando el target_fats derivado")
+    # Y la segunda aserción era una VENTANA DE BYTES FIJA (`_DBP[i-900:i]`), que el mismo bloque
+    # `db=_db_ins` (12 líneas de comentario + try) empujó fuera de rango. Cuarta caducidad de esta
+    # clase en la sesión: se recorta por ORDEN RELATIVO, no por distancia en bytes.
+    _i_macros = _DBP.rfind('_pd.get("macros") or {}', 0, i)
+    assert _i_macros > 0, (
+        'la derivación del shield ya no lee `_pd.get("macros") or {}` antes del callsite')
+    seg = _DBP[_i_macros:i]
     assert '"fats_g"' in seg, "la derivación de grasa vive en el loop de los 3 macros"
 
 

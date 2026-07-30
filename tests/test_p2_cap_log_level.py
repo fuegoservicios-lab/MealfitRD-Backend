@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
+import re
 
 import pytest
 
@@ -116,3 +118,113 @@ def test_knob_is_registered():
     import shopping_calculator  # noqa: F401
     from knobs import get_knobs_registry_snapshot
     assert "MEALFIT_CAP_LOG_SEVERE_RATIO" in get_knobs_registry_snapshot()
+
+def test_summary_is_deduped_across_aggregator_passes(cap_logs):
+    """[v2] `aggregate_and_deduct_shopping_list` corre una vez por variante de lista (semanal /
+    quincenal / mensual) sobre el MISMO plan → el resumen salía 2-3 veces idéntico, a veces en el
+    mismo segundo (medido en prod 21:28:40 ×2). Repetir la misma línea es la versión pequeña del
+    problema que este bloque vino a resolver."""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Tomate", 9100, 3000, "P5-VEG-CAP")
+    sc._log_severe_caps_summary()
+    sc._log_severe_caps_summary()      # 2ª variante de lista, mismo plan
+    sc._log_severe_caps_summary()      # 3ª
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 1, f"una sola línea por contenido, hubo {len(warns)}"
+
+
+def test_summary_reappears_when_content_changes(cap_logs):
+    """El de-dup es por CONTENIDO, no un mute: otro plan con otros topes vuelve a avisar."""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Tomate", 9100, 3000, "P5-VEG-CAP")
+    sc._log_severe_caps_summary()
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Cebolla", 4900, 1200, "P5-VEG-CAP")
+    sc._log_severe_caps_summary()
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 2, f"contenido distinto → vuelve a avisar, hubo {len(warns)}"
+
+
+def test_no_cap_test_captures_only_at_warning():
+    """[v2] Blanket: un test que afirma sobre un cap NO puede capturar solo en WARNING.
+
+    Tras bajar los emisores a INFO, `caplog.at_level(logging.WARNING)` deja de ver la línea del
+    ítem. Cuatro archivos siguieron en VERDE igualmente — cazaban el resumen agregado, que es
+    WARNING y cita dentro el nombre del alimento y el `reason`. El de-dup del resumen puso 5 en
+    rojo y destapó los cuatro. **Un test verde por una línea distinta a la que cree mirar no
+    protege nada**, y solo se descubre cuando algo no relacionado cambia. Este guard lo hace
+    imposible de reintroducir en silencio.
+    """
+    offenders = []
+    for f in sorted(pathlib.Path(__file__).parent.glob("test_*.py")):
+        if f.name == pathlib.Path(__file__).name:
+            continue
+        t = f.read_text(encoding="utf-8", errors="ignore")
+        if "at_level(logging.WARNING)" in t and re.search(r"-CAP\]", t):
+            offenders.append(f.name)
+    assert not offenders, (
+        f"capturan en WARNING y afirman sobre caps: {offenders} — el cap per-ítem es INFO desde "
+        f"P2-CAP-LOG-LEVEL; usa `at_level(logging.INFO)` o el filtro pasa a depender del resumen "
+        f"agregado (verde por la línea equivocada)")
+
+
+
+def test_dedup_expires_so_another_plan_is_never_swallowed(cap_logs, monkeypatch):
+    """[v2] La firma es un global de MÓDULO: sin TTL, dos planes distintos con un set de topes
+    severos idéntico se silenciarían mutuamente para siempre. Improbable, pero el modo de fallo
+    sería tragarse la señal de OTRO usuario — lo contrario de lo que persigue este bloque."""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+    _t = [1_000.0]
+    monkeypatch.setattr(sc._time, "time", lambda: _t[0])
+    sc.reset_caps_applied_last_run()
+    sc._record_cap_applied("Tomate", 9100, 3000, "P5-VEG-CAP")
+    sc._log_severe_caps_summary()
+    _t[0] += sc._SEVERE_CAPS_DEDUP_TTL_S / 2      # misma ráfaga → callado
+    sc._log_severe_caps_summary()
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 1, f"dentro del TTL sigue de-duplicando, hubo {len(warns)}"
+    _t[0] += sc._SEVERE_CAPS_DEDUP_TTL_S + 1      # otra ráfaga → vuelve a hablar
+    sc._log_severe_caps_summary()
+    warns = [m for lv, m in cap_logs.recs if lv == "WARNING" and "P2-CAP-LOG-LEVEL" in m]
+    assert len(warns) == 2, f"pasado el TTL debe re-emitir, hubo {len(warns)}"
+
+
+def test_dedup_ttl_knob_is_registered_and_zero_disables():
+    import shopping_calculator as sc
+    from knobs import get_knobs_registry_snapshot
+    assert "MEALFIT_CAP_SUMMARY_DEDUP_TTL_S" in get_knobs_registry_snapshot()
+    assert sc._SEVERE_CAPS_DEDUP_TTL_S == 120.0
+
+
+def test_summary_failure_is_never_silent(cap_logs):
+    """[v2] El `except` de este helper era `pass`. Al añadir el TTL referencié `time` en vez de
+    `_time` (el módulo lo importa aliaseado) y el NameError se convirtió en "no hay nada severo que
+    decir" — indistinguible desde fuera de un plan sano. Un canal de telemetría que se rompe en
+    silencio es exactamente el modo de fallo que P2-CAP-LOG-LEVEL vino a atacar.
+
+    (El fallo se inyecta en una fila de `_CAPS_APPLIED_LAST_RUN`, no parcheando `_time`: `_time` ES
+    el módulo `time`, del que depende el propio `logging` para estampar cada record — parchearlo
+    rompe el canal con el que se comprueba el resultado.)"""
+    import shopping_calculator as sc
+    sc._LAST_SEVERE_CAPS_SIG = ""
+    sc._LAST_SEVERE_CAPS_AT = 0.0
+    sc.reset_caps_applied_last_run()
+
+    class _Boom(dict):
+        def get(self, *a, **k):
+            raise RuntimeError("fila de cap corrupta")
+    sc._CAPS_APPLIED_LAST_RUN.append(_Boom())
+
+    sc._log_severe_caps_summary()          # no debe propagar…
+    fails = [m for lv, m in cap_logs.recs
+             if lv == "WARNING" and "resumen de topes severos falló" in m]
+    assert fails, "…pero tampoco callar: la rotura del canal tiene que verse"
+    sc.reset_caps_applied_last_run()

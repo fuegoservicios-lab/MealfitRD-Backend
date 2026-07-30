@@ -68,14 +68,32 @@ def test_functional_floor_respects_kwarg():
                 return float(m.group(1).replace(",", "."))
         return None
 
+    # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] Ambas ramas reciben el MISMO contexto (db +
+    # day-target) para que la ÚNICA variable sea `portion_floors` — que es lo que este test mide.
+    #
+    # Por qué hizo falta tocarlo: tras P1-PROTAGONIST-CONTEXT-GATE el piso protagonista declina sin
+    # contexto, así que las dos ramas dejaban 25 g y el par pasó a NO discriminar el kwarg — la 1ª
+    # aserción se cumplía en vacío y la 2ª caía. Suministrar el contexto y CONSERVAR las dos
+    # aserciones es el mismo patrón con el que ea77565 reapuntó a su hermano en
+    # test_p1_recipe_polish_5.py. La tentación era cambiar el vehículo al bump de queso, que
+    # dispara sin db ni day-target: eso habría dejado un fixture que certifica exactamente el caso
+    # SIN bug, incapaz de volver a detectar esta clase de fallo.
+    class _FakeDB:
+        def macros_from_ingredient_string(self, s):
+            m = re.match(r"^\s*(\d+(?:[.,]\d+)?)\s*g", str(s))
+            g = float(m.group(1).replace(",", ".")) if m else 0.0
+            return {"kcal": g * 1.65, "protein": g * 0.2, "carbs": 0.0, "fats": g * 0.05}
+
+    _ctx = {"db": _FakeDB(), "day_kcal_target": 2000.0}
+
     m_ro = _meal()
-    finalize_single_meal_recipe_coherence(m_ro, portion_floors=False)
+    finalize_single_meal_recipe_coherence(m_ro, portion_floors=False, **_ctx)
     assert _pavo_grams(m_ro) is not None and _pavo_grams(m_ro) < 75, (
         "con portion_floors=False la línea protagonista NO debe bombearse (surface derivativa)"
     )
 
     m_rw = _meal()
-    finalize_single_meal_recipe_coherence(m_rw)  # default True
+    finalize_single_meal_recipe_coherence(m_rw, **_ctx)  # default True
     assert _pavo_grams(m_rw) is not None and _pavo_grams(m_rw) >= 75, (
         "con el default True el piso PROTAGONISTA sigue activo (surfaces que persisten)"
     )

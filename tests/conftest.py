@@ -217,6 +217,48 @@ def _restaurar_identidad_de_modulos():
             sys.modules[_m] = _obj
 
 
+# [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] Hermana de la de arriba, para el OTRO vector: la
+# identidad del módulo puede estar intacta y su CACHÉ envenenada.
+#
+# Cadena medida (3 eslabones, el culpable ~800 ficheros antes en orden alfabético):
+#   1. `test_chunked_learning_propagation.py::_run_process` parchea `db_core.connection_pool` con un
+#      MagicMock. `shopping_calculator` importó `connection_pool` por valor (sigue siendo el real y
+#      pasa el `if`), pero `execute_sql_query` lee `db_core.connection_pool` en tiempo de llamada →
+#      `get_master_ingredients()` cachea el MagicMock como catálogo. El `patch` se revierte al
+#      salir; `_master_cache` NO, porque es estado de módulo y nadie lo restauraba.
+#   2. El primer `_phantom_catalog_index()` posterior itera el MagicMock → TypeError → fail-open →
+#      cachea `{}`… y el guard de entrada es `is not None`. (Eso era un bug de PRODUCCIÓN y se
+#      arregló ahí; este fixture es la otra mitad.)
+#   3. Con el índice vacío el resolvedor devuelve `(None, None)` y lo memoiza, así que
+#      `_raw_display_parallel_by_food` da True para listas PERMUTADAS y `_sync_one_raw_line` no
+#      escala nada — 8 rojos en 6 ficheros, todos verdes en aislamiento.
+#
+# Punto ÚNICO a propósito: hay ~25 ficheros que parchean `db_core.connection_pool`, y cualquiera
+# puede volver a envenenar el catálogo. Se mantiene la disciplina de la fixture de arriba (limitar
+# a lo medido): estos 4 caches son los que el bisect atravesó, no una lista preventiva.
+_CACHES_CONTAMINABLES = (
+    ("shopping_calculator", "_master_cache", None),
+    ("graph_orchestrator", "_PHANTOM_CATALOG_INDEX_CACHE", None),
+    ("graph_orchestrator", "_CATALOG_DENSITY_INDEX_CACHE", None),
+)
+
+
+@pytest.fixture(autouse=True)
+def _limpiar_caches_de_catalogo():
+    yield
+    for _mod_name, _attr, _val in _CACHES_CONTAMINABLES:
+        _mod = sys.modules.get(_mod_name)
+        if _mod is not None and hasattr(_mod, _attr):
+            try:
+                setattr(_mod, _attr, _val)
+            except Exception:
+                pass
+    _go = sys.modules.get("graph_orchestrator")
+    _memo = getattr(_go, "_LINE_FOOD_GRAMS_CACHE", None) if _go is not None else None
+    if isinstance(_memo, dict):
+        _memo.clear()      # memoiza (None, None) por línea: sobrevive al reset de los índices
+
+
 # ---------------------------------------------------------------------------
 # Core fixture: synthetic user + plan_id, with full teardown
 # ---------------------------------------------------------------------------

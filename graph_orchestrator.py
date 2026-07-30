@@ -24481,7 +24481,8 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
 
 
 def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False, allergies=None,
-                                          skip_night_rice: bool = False, portion_floors: bool = True) -> int:
+                                          skip_night_rice: bool = False, portion_floors: bool = True,
+                                          day_kcal_target: float | None = None) -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -24653,9 +24654,23 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # bombeaba 25g→75g en la copia (vivo: 'Locrio de Pavo' 16:53Z) → lista ≠ plan persistido,
         # la clase de incoherencia receta↔lista que el guard defiende. Surfaces que SÍ persisten
         # el meal (swap/chat-modify/expand) conservan el default True.
+        # Estado real del piso PROTAGONISTA por surface (el genérico corre en todas):
+        #   · swap-persist  → VIVO (pasa db + day_kcal_target).
+        #   · chat-modify   → declina: pasa day-target pero invoca SIN db (tools.py).
+        #   · agent swap    → declina: sin db y sin day-target (agent.py, swap stateless).
+        # Los dos que declinan lo logean con razón propia; no es silencioso.
+        # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] El `day_kcal_target=None` que estaba aquí
+        # HARDCODEADO dejó los pisos PROTAGONISTAS (proteína y carbo) permanentemente inertes en
+        # las 3 surfaces que PERSISTEN — swap-persist, chat-modify y agent — desde
+        # P1-PROTAGONIST-CONTEXT-GATE: sin day-target no hay `_headroom`, y el gate declina y hace
+        # `continue` (28722). O sea, este mismo comentario prometía justo lo contrario de lo que
+        # pasaba. El único callsite con contexto (`_fpc`) corre SOLO pre-INSERT, y un swap hace
+        # `jsonb_set` sobre un plan existente: nunca lo alcanza. Ahora el day-target entra por
+        # kwarg desde quien SÍ tiene el día. Sigue siendo None-safe: sin contexto se declina igual
+        # (que es el comportamiento correcto, no el bug — el bug era no poder suministrarlo nunca).
         try:
             if PORTION_SHRINK_FLOOR_ENABLED and portion_floors:
-                _nsf = _floor_subservible_portions(_wrap, day_kcal_target=None, db=db)
+                _nsf = _floor_subservible_portions(_wrap, day_kcal_target=day_kcal_target, db=db)
                 if _nsf:
                     total += _nsf
         except Exception as _esf:
@@ -27041,13 +27056,44 @@ _PHANTOM_SKIP_FOODS = frozenset({
 _PHANTOM_CATALOG_INDEX_CACHE: "dict | None" = None
 
 
+_CATALOG_INDEX_NEG_TTL_S = _env_float("MEALFIT_CATALOG_INDEX_NEG_TTL_S", 30.0,
+                                      lambda v: 0.0 <= v <= 3600.0)
+_CATALOG_INDEX_NEG_AT: dict = {}
+
+
+def _catalog_index_should_rebuild(who: str, cached) -> bool:
+    """[P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] ¿Hay que (re)construir este índice del catálogo?
+
+    El guard original era `if cache is not None: return cache`, y el fail-open guardaba `{}` — que
+    no es None. O sea el FALLO se cacheaba igual que el éxito y quedaba pegado a la vida del
+    worker: un blip de Neon en el primer build dejaba el phantom-repair muerto para siempre.
+
+    Reglas: índice bueno → nunca se reconstruye (la optimización original intacta). Índice vacío →
+    es un fallo previo, se sirve cacheado durante `MEALFIT_CATALOG_INDEX_NEG_TTL_S` (para no hacer
+    un scan del catálogo por línea mientras esté caído de verdad) y pasado el TTL se REINTENTA.
+    `=0` reintenta siempre; subirlo lo hace más perezoso.
+    tooltip-anchor: P1-CATALOG-INDEX-NO-STICKY"""
+    if cached is None:
+        return True
+    if cached:
+        return False
+    _at = _CATALOG_INDEX_NEG_AT.get(who, 0.0)
+    # este módulo importa `time` sin alias (shopping_calculator lo importa como `_time`)
+    return (time.time() - _at) >= _CATALOG_INDEX_NEG_TTL_S
+
+
+def _catalog_index_note_failure(who: str) -> None:
+    """Sella el instante del fallo para que el negative-cache tenga desde dónde medir el TTL."""
+    _CATALOG_INDEX_NEG_AT[who] = time.time()
+
+
 def _phantom_catalog_index() -> dict:
     """{nombre accent-stripped (y alias) → nombre canónico del catálogo}. Lazy, fail-open a {}.
 
     Sirve para dos cosas a la vez: decidir si una frase ES un alimento comprable y con qué
     nombre escribirlo (el catálogo es el vocabulario que la lista de compras entiende)."""
     global _PHANTOM_CATALOG_INDEX_CACHE
-    if _PHANTOM_CATALOG_INDEX_CACHE is not None:
+    if not _catalog_index_should_rebuild("_phantom_catalog_index", _PHANTOM_CATALOG_INDEX_CACHE):
         return _PHANTOM_CATALOG_INDEX_CACHE
     idx: dict = {}
     try:
@@ -27072,9 +27118,20 @@ def _phantom_catalog_index() -> dict:
                     if kk.endswith("s"):
                         idx.setdefault(kk[:-1], canon)
     except Exception as _e:
-        logger.warning(f"[P1-PHANTOM-INGREDIENT] catálogo no disponible, repair inactivo: {_e}")
+        logger.error(f"❌ [P1-CATALOG-INDEX-NO-STICKY] catálogo no disponible, phantom-repair "
+                     f"INACTIVO en esta llamada: {type(_e).__name__}: {_e}")
         idx = {}
+    # [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] NO cachear el fallo de forma permanente.
+    # El guard de entrada es `is not None`, y `{}` no es None: cachear el índice vacío dejaba el
+    # repair MUERTO durante toda la vida del worker tras UN solo fallo transitorio (blip de Neon,
+    # pool aún sin abrir, TTL que expira en mal momento) — y el phantom-repair es uno de los pases
+    # que evitan comprar el alimento equivocado. Señal total del apagado: un `logger.warning`.
+    # Es la clase ya anotada: "un motor que no recibe datos es indistinguible de uno apagado, y no
+    # lo dice ningún log". Ahora el vacío se guarda con TTL corto (no se reintenta en cada línea,
+    # que sería un scan del catálogo por línea) y el log sube a error.
     _PHANTOM_CATALOG_INDEX_CACHE = idx
+    if not idx:
+        _catalog_index_note_failure("_phantom_catalog_index")
     return idx
 
 
@@ -27492,7 +27549,7 @@ def _catalog_density_index() -> dict:
     ~200 filas × miles de líneas.
     """
     global _CATALOG_DENSITY_INDEX_CACHE
-    if _CATALOG_DENSITY_INDEX_CACHE is not None:
+    if not _catalog_index_should_rebuild("_catalog_density_index", _CATALOG_DENSITY_INDEX_CACHE):
         return _CATALOG_DENSITY_INDEX_CACHE
     idx: dict = {}
     try:
@@ -27518,9 +27575,14 @@ def _catalog_density_index() -> dict:
             u, c = idx.get(kk, (0.0, 0.0))
             idx[kk] = (u, c or float(v or 0))
     except Exception as _e:
-        logger.debug(f"[CATALOG-DENSITY-INDEX] no disponible: {type(_e).__name__}: {_e}")
+        logger.warning(f"⚠️ [P1-CATALOG-INDEX-NO-STICKY] densidades no disponibles: "
+                       f"{type(_e).__name__}: {_e}")
         idx = {}
+    # [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] mismo tratamiento que el índice phantom: el vacío
+    # NO se pega para siempre (ver `_catalog_index_should_rebuild`).
     _CATALOG_DENSITY_INDEX_CACHE = idx
+    if not idx:
+        _catalog_index_note_failure("_catalog_density_index")
     return idx
 
 
@@ -28527,6 +28589,33 @@ _MICRO_OIL_LEAD_RE = _re.compile(r"^\s*(?:¼|½|0[.,]25|0[.,]5|1/4|1/2)\s*(?:cdt
 _MICRO_AROMATIC_LEAD_RE = _re.compile(r"^\s*(?:1|½|¼|0[.,]5|0[.,]25)\s*(?:cdta|cucharadita)s?\b",
                                       _re.IGNORECASE)
 _MICRO_AROMATIC_HINT_RE = _re.compile(r"\(\s*(\d+(?:[.,]\d+)?)\s*g\s*\)")
+
+
+def _day_kcal_from_target_macros(macros) -> float | None:
+    """[P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] kcal del día por 4-4-9 desde los gramos objetivo.
+
+    Existe porque el piso protagonista DECLINA sin day-target (P1-PROTAGONIST-CONTEXT-GATE) y las
+    surfaces de update necesitaban derivarlo igual que ya lo hacen assemble y el shield pre-INSERT.
+    Acepta las DOS formas que conviven en el repo — `{protein_g, carbs_g, fats_g}` (los
+    `target_macros` del pipeline) y `{protein, carbs, fats}` (el `plan_data['macros']` persistido,
+    que es lo que tienen a mano swap-persist y chat-modify). Devolver None es seguro: el gate
+    declina explícitamente y lo dice en el log.
+    tooltip-anchor: P1-UPDATE-PROTAGONIST-FLOOR"""
+    if not isinstance(macros, dict):
+        return None
+    try:
+        def _g(*keys) -> float:
+            for k in keys:
+                v = macros.get(k)
+                if v not in (None, ""):
+                    return float(v)
+            return 0.0
+        _p = _g("protein_g", "protein")
+        _c = _g("carbs_g", "carbs")
+        _f = _g("fats_g", "fats", "fat_g", "fat")
+        return (4.0 * (_p + _c) + 9.0 * _f) or None
+    except Exception:
+        return None
 
 
 def _floor_subservible_portions(days, day_kcal_target=None, db=None) -> int:

@@ -123,7 +123,27 @@ def test_frutas_y_vegetales_fantasma_siguen_siendo_SOLO_aviso():
 
 
 def test_sin_catalogo_no_inventa(monkeypatch):
-    monkeypatch.setattr(go, "_PHANTOM_CATALOG_INDEX_CACHE", {}, raising=False)
+    """[P1-CATALOG-INDEX-NO-STICKY · 2026-07-29 · reanclado] Simulaba "sin catálogo" FORJANDO `{}`
+    en `_PHANTOM_CATALOG_INDEX_CACHE`. Eso funcionaba porque el guard de entrada era `is not None`,
+    o sea `{}` se servía tal cual para siempre — que era justamente el bug: un fallo transitorio
+    dejaba el phantom-repair muerto durante toda la vida del worker. Arreglado eso, `{}` ya no
+    significa "no hay catálogo" sino "hubo un fallo, reintenta pasado el TTL", así que el índice se
+    reconstruía contra el catálogo REAL y el repair sí inventaba.
+
+    La invariante no cambió y sigue importando (fail-secure: sin catálogo no se añade un alimento
+    que la lista de compras no sabría comprar). Lo que cambia es CÓMO se simula: se corta la fuente
+    de verdad — el catálogo caído — en vez de fabricar a mano un valor interno de caché. Es la
+    simulación honesta del incidente real, y no se rompe la próxima vez que cambie la
+    representación del caché."""
+    monkeypatch.setattr(go, "_PHANTOM_CATALOG_INDEX_CACHE", None, raising=False)
+    monkeypatch.setattr(go, "_CATALOG_INDEX_NEG_TTL_S", 0.0, raising=False)
+    import shopping_calculator as _sc
+
+    def _catalogo_caido():
+        raise RuntimeError("catálogo no disponible (simulacro de blip)")
+    monkeypatch.setattr(_sc, "get_master_ingredients", _catalogo_caido)
+
+    assert go._phantom_catalog_index() == {}, "precondición: el índice sale vacío (fail-open)"
     meal = _arepitas()
     assert go._repair_name_phantom_dairy([{"day": 1, "meals": [meal]}]) == []
 

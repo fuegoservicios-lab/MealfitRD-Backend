@@ -6251,11 +6251,16 @@ def api_swap_meal_persist(
                 try:
                     from graph_orchestrator import (finalize_single_meal_recipe_coherence as _fin_sp,
                                                     _truth_up_meal_macros_from_strings as _tu_sp,
-                                                    slot_coherence_backstop_for_meal as _slot_sp)
+                                                    slot_coherence_backstop_for_meal as _slot_sp,
+                                                    _day_kcal_from_target_macros as _dkt_sp)
                     from nutrition_db import IngredientNutritionDB as _FDB_sp
                     _fdb_sp = _FDB_sp()
                     _ps_sp = bool(new_meal.get("pantry_constrained"))
-                    _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies)
+                    # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] day-target 4-4-9 → el piso
+                    # protagonista deja de declinar aquí. Sin él llevaba inerte desde
+                    # P1-PROTAGONIST-CONTEXT-GATE en el ÚNICO round-trip que persiste el swap.
+                    _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies,
+                            day_kcal_target=_dkt_sp(plan_data.get("macros")))
                     _tu_sp(new_meal, _fdb_sp)
                     try:
                         _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""))

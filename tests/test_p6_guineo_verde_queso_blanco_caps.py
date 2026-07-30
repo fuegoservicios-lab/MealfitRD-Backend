@@ -44,7 +44,7 @@ class TestGuineoVerdeCap:
     def test_repro_pdf_guineo_verde_168_uds(self, caplog):
         """PDF 23:12: 168 guineos verdes para 2p×mes. Cap esperado: 32."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 guineos verdes"],
                 multiplier=18.666666,
@@ -71,7 +71,7 @@ class TestGuineoVerdeCap:
     ])
     def test_guineo_verde_variants(self, name, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[name],
                 multiplier=18.666666,
@@ -86,7 +86,7 @@ class TestGuineoVerdeCap:
     def test_guineo_comun_still_capped_separately(self, caplog):
         """No-regresión: 'Guineo' (sin verde) sigue capeando con su entry original."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 guineos"],
                 multiplier=18.666666,
@@ -107,7 +107,7 @@ class TestQuesoBlancoCap:
     def test_repro_pdf_queso_blanco_9_lbs(self, caplog):
         """PDF 23:12: 9 lbs queso blanco. Cap esperado: 6 lbs."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de queso blanco"],
                 multiplier=18.666666,
@@ -127,7 +127,7 @@ class TestQuesoBlancoCap:
         """Compound 'queso blanco fresco' (LLM emite frecuente con ambos
         adjetivos) debe firar via substring 'queso blanco'."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de queso blanco fresco"],
                 multiplier=18.666666,
@@ -143,7 +143,7 @@ class TestQuesoBlancoCap:
     def test_mozzarella_still_capped(self, caplog):
         """No-regresión: mozzarella sigue capeando con P6-LACTEOS-EXT-2."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de queso mozzarella"],
                 multiplier=18.666666,
@@ -159,7 +159,7 @@ class TestQuesoBlancoCap:
     def test_yogurt_still_capped(self, caplog):
         """No-regresión: yogurt sigue capeando con su entry original."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de yogurt griego"],
                 multiplier=18.666666,

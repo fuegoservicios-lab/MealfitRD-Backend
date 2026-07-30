@@ -227,9 +227,25 @@ def test_recipes_jsx_ya_no_llama_al_expand(recipes_jsx_src: str):
         "cerró). Si el flujo Cocinar vuelve al producto, este test se invierte de nuevo — y el "
         "del frontend también."
     )
-    assert "fetchWithAuth" not in codigo, (
-        "Recipes.jsx no debe hacer requests mutantes: cero write paths desde esa página."
+    # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29 · reanclado] La aserción era
+    # `"fetchWithAuth" not in codigo`, un PROXY del contrato. P1-EATEN-SLOT-RECIPES (2026-07-28)
+    # reintrodujo `fetchWithAuth` a propósito para UN `GET /api/diary/consumed/...` de solo lectura,
+    # y actualizó la contraparte JS (`Recipes.p1_hist_close_1_no_restorePlan.test.js`) en el mismo
+    # commit — este test Python se quedó atrás y llevaba rojo desde entonces. El propio código de
+    # producción lo dice (Recipes.jsx:70-72): "la invariante real que protegía ese test es 'cero
+    # MUTACIONES desde esta página', no 'cero fetchWithAuth' — un GET no escribe plan_data".
+    # Reanclado a la invariante en vez de al proxy: ni métodos mutantes, ni el write path del
+    # expand (ya cubierto arriba). Es MÁS fuerte, no más laxo: prohibir el identificador dejaba
+    # pasar un `fetch()` mutante crudo que esquivara el helper.
+    _mutantes = re.findall(r"""method\s*:\s*['"](POST|PUT|PATCH|DELETE)['"]""", codigo)
+    assert not _mutantes, (
+        f"Recipes.jsx no debe hacer requests mutantes: cero write paths desde esa página. "
+        f"Encontrados: {_mutantes}"
     )
+    for _call in re.findall(r"fetchWithAuth\(([^)]*)\)", codigo):
+        assert "method" not in _call, (
+            f"toda llamada desde Recipes.jsx debe ser un GET implícito; ésta pasa opciones: {_call[:120]}"
+        )
 
 
 def test_marker_anchor_present():

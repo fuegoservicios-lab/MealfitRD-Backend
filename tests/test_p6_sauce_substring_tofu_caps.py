@@ -36,6 +36,22 @@ def _reset_master_cache():
     invalidate_master_cache()
 
 
+def _is_item_cap(record, marker: str, food: str = "") -> bool:
+    """[P2-CAP-LOG-LEVEL · 2026-07-29] La línea PER-ÍTEM del cap, no el resumen agregado.
+
+    Estos tests capturaban en WARNING y comprobaban `marker in message`. Tras bajar los emisores de
+    cap a INFO siguieron en verde — **por accidente**: lo que cazaban ya no era el cap del ítem sino
+    el resumen agregado `[P2-CAP-LOG-LEVEL]`, que es WARNING y cita dentro el nombre del alimento y
+    el `reason` del cap. Al de-duplicar ese resumen por contenido, 5 de los 14 se pusieron rojos y
+    destaparon el acoplamiento. Un test que pasa por una línea distinta a la que cree estar mirando
+    no protege nada: aquí se exige la del ítem y se excluye el resumen explícitamente.
+    """
+    msg = record.message
+    if "[P2-CAP-LOG-LEVEL]" in msg:      # el resumen agregado NO cuenta como cap del ítem
+        return False
+    return marker in msg and (not food or food in msg.lower())
+
+
 # ===========================================================================
 # Sección 1: P6-SAUCE-CAP-FIX (substring match)
 # ===========================================================================
@@ -45,7 +61,7 @@ class TestSauceCapFix:
         Pre-fix: exact match del set falla, no capea. Post-fix: substring
         'salsa de soya' matchea variante."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 botella de salsa de soya baja en sodio"] * 5,
                 multiplier=18.666666,
@@ -53,7 +69,7 @@ class TestSauceCapFix:
             )
         sauce_caps = [
             r for r in caplog.records
-            if "P6-SAUCE-CAP" in r.message and "soya" in r.message.lower()
+            if _is_item_cap(r, "P6-SAUCE-CAP", "soya")
         ]
         assert sauce_caps, (
             f"P6-SAUCE-CAP-FIX debe firar para 'salsa de soya baja en sodio'. "
@@ -69,19 +85,19 @@ class TestSauceCapFix:
     def test_other_sauce_variants_now_capped(self, variant, caplog):
         """Variantes con adjetivos también deben firar (substring match)."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"1 lata de {variant}"] * 5,
                 multiplier=18.666666,
                 structured=True,
             )
-        sauce_caps = [r for r in caplog.records if "P6-SAUCE-CAP" in r.message]
+        sauce_caps = [r for r in caplog.records if _is_item_cap(r, "P6-SAUCE-CAP")]
         assert sauce_caps, f"'{variant}' debe firar P6-SAUCE-CAP via substring"
 
     def test_salsa_tomate_basica_still_capped(self, caplog):
         """No-regresión: caso base sin variantes sigue funcionando."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["1 lata de salsa de tomate"] * 5,
                 multiplier=18.666666,
@@ -89,7 +105,7 @@ class TestSauceCapFix:
             )
         sauce_caps = [
             r for r in caplog.records
-            if "P6-SAUCE-CAP" in r.message and "tomate" in r.message.lower()
+            if _is_item_cap(r, "P6-SAUCE-CAP", "tomate")
         ]
         assert sauce_caps, "Salsa de tomate (caso base) debe seguir capeando"
 
@@ -101,7 +117,7 @@ class TestTofuCap:
     def test_repro_pdf_tofu_31_lbs(self, caplog):
         """PDF 23:33: 31 lbs tofu para 2p × mes — absurdo. Cap esperado: 8 lbs."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["500g de tofu firme"] * 5,
                 multiplier=18.666666,
@@ -109,7 +125,7 @@ class TestTofuCap:
             )
         tofu_caps = [
             r for r in caplog.records
-            if "P5-VEG-CAP" in r.message and "tofu" in r.message.lower()
+            if _is_item_cap(r, "P5-VEG-CAP", "tofu")
         ]
         assert tofu_caps, (
             f"P5-VEG-CAP debe firar para tofu via P6-TOFU-CAP. "
@@ -123,7 +139,7 @@ class TestTofuCap:
     ])
     def test_tofu_variants_capped(self, tofu_variant, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"500g de {tofu_variant}"] * 5,
                 multiplier=18.666666,
@@ -131,7 +147,7 @@ class TestTofuCap:
             )
         tofu_caps = [
             r for r in caplog.records
-            if "P5-VEG-CAP" in r.message and "tofu" in r.message.lower()
+            if _is_item_cap(r, "P5-VEG-CAP", "tofu")
         ]
         assert tofu_caps, f"'{tofu_variant}' debe firar cap"
 
@@ -141,7 +157,7 @@ class TestTofuCap:
     ])
     def test_tofu_cap_scales(self, scenario, multiplier, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["500g de tofu firme"] * 5,
                 multiplier=multiplier,
@@ -149,7 +165,7 @@ class TestTofuCap:
             )
         tofu_caps = [
             r for r in caplog.records
-            if "P5-VEG-CAP" in r.message and "tofu" in r.message.lower()
+            if _is_item_cap(r, "P5-VEG-CAP", "tofu")
         ]
         assert tofu_caps, f"{scenario}: tofu cap debe firar"
 

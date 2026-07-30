@@ -406,8 +406,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     _canon = _norm_freq(item)
                     if _canon:
                         _keys.add(strip_accents(str(_canon).lower()))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    # [P2-SILENT-DEGRADATION] Si esto falla, `_keys` se queda SOLO con los alias y
+                    # el lookup vuelve a fallar al 100% para los 19 ítems ciegos — o sea, degrada
+                    # exactamente al bug que P2-FREQ-LOOKUP-CANONICAL vino a cerrar, y en silencio.
+                    logger.debug(
+                        "[P2-SILENT-DEGRADATION] freq lookup canónico de %r: %s: %s",
+                        item, type(_exc).__name__, str(_exc)[:160])
             return sum(db_freq_map.get(_k, 0) for _k in _keys)
 
         for p in filtered_proteins:

@@ -47,9 +47,36 @@ def test_save_background_no_gatea_en_if_supabase():
 def test_save_background_llama_atomic_incondicional():
     body = _func_source("_save_plan_and_track_background")
     assert "save_new_meal_plan_atomic(" in body, "debe invocar el save Neon-native"
-    # raw_ingredients debe definirse antes de su uso (no dentro de un guard saltable)
-    assert "raw_ingredients = []" in body
-    assert body.index("raw_ingredients = []") < body.index("if raw_ingredients:")
+
+    # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29 · reanclado] El par de `index()` de antes
+    # (`"raw_ingredients = []"` antes de `"if raw_ingredients:"`) era un anclaje POSICIONAL por
+    # texto y caducó cuando `_track_ingredient_frequencies` se extrajo a su propio helper: el
+    # consumo (`if raw_ingredients:`) se mudó fuera de esta función, así que el segundo `index()`
+    # lanzaba ValueError. La invariante NO cambió — el bug original era un `UnboundLocalError`
+    # porque la variable se definía DENTRO de un guard que en modo Neon se saltaba entero, y con
+    # ella se perdía el plan en silencio. Lo que hay que exigir es eso, no un orden de dos
+    # literales: la asignación tiene que estar en un camino que SIEMPRE se ejecuta.
+    _fn, _ = _func_node("_save_plan_and_track_background")
+
+    # líneas de asignación que cuelgan de algún `if` → esas NO garantizan nada
+    _bajo_if = set()
+    for _node in ast.walk(_fn):
+        if isinstance(_node, ast.If):
+            for _d in ast.walk(_node):
+                if (isinstance(_d, ast.Name) and _d.id == "raw_ingredients"
+                        and isinstance(_d.ctx, ast.Store)):
+                    _bajo_if.add(_d.lineno)
+    _asigna_libre = any(
+        isinstance(_t, ast.Name) and _t.id == "raw_ingredients" and _t.lineno not in _bajo_if
+        for _node in ast.walk(_fn) if isinstance(_node, ast.Assign)
+        for _t in _node.targets)
+
+    assert _asigna_libre, (
+        "`raw_ingredients` ya no se asigna en un camino incondicional de "
+        "_save_plan_and_track_background — vuelve el UnboundLocalError que perdía el plan "
+        "no-chunked entero en modo Neon (y emitía plan_persist_failed sin decir por qué)")
+    assert "_track_ingredient_frequencies(" in body, (
+        "el tracking salió a su helper; esta función debe seguir invocándolo")
 
 
 def test_partial_chunked_path_tampoco_gatea():

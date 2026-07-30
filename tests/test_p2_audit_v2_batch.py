@@ -241,8 +241,15 @@ def test_f2_chat_modify_surfaces_band_and_slot_warnings():
 
 def test_f3_swap_persist_runs_finalizer_truthup_slot():
     assert "P2-SWAP-PERSIST-FINALIZE" in _PLANS
+    # [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29 · reanclado] Era `_PLANS[i_mut:i_mut + 4000]`, una
+    # VENTANA DE BYTES FIJA: las 3 líneas de comentario que P1-UPDATE-PROTAGONIST-FLOOR añadió en
+    # este mismo bloque empujaron `_persist_allergies` fuera del recorte. Quinta caducidad de esta
+    # clase en la sesión. Se recorta por ORDEN RELATIVO — desde `_swap_mutator` hasta el final del
+    # bloque que este test describe — para que el tamaño del bloque deje de ser el contrato.
     i_mut = _PLANS.find("def _swap_mutator")
-    seg = _PLANS[i_mut:i_mut + 4000]
+    assert i_mut > 0, "`_swap_mutator` ya no existe en plans.py"
+    _i_fin = _PLANS.index("P1-SWAP-PERSIST-DAY-BAND", i_mut)   # marker del bloque siguiente
+    seg = _PLANS[i_mut:_i_fin]
     assert "finalize_single_meal_recipe_coherence as _fin_sp" in seg
     assert "_truth_up_meal_macros_from_strings as _tu_sp" in seg
     assert "slot_coherence_backstop_for_meal as _slot_sp" in seg

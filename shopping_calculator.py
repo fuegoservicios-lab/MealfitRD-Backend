@@ -609,8 +609,24 @@ def get_master_ingredients():
         if connection_pool:
             try:
                 res = execute_sql_query("SELECT * FROM master_ingredients", fetch_all=True)
-                _master_cache = res or []
-                _master_cache_ts = now
+                # [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] `res or []` aceptaba como catálogo
+                # CUALQUIER objeto truthy y le sellaba `_master_cache_ts` → 5 minutos sirviendo
+                # basura como si fuera la tabla verificada. Cómo se destapó: un test parchea
+                # `db_core.connection_pool` con un MagicMock, `execute_sql_query` lo lee en tiempo
+                # de llamada, y el MagicMock (truthy) quedaba cacheado como el catálogo; aguas
+                # abajo `_phantom_catalog_index` lo iteraba, lanzaba, y cacheaba su fallo. El
+                # mock es el mensajero, pero el agujero es de producción: un cursor a medio
+                # consumir o cualquier retorno inesperado del driver entra igual.
+                if isinstance(res, list):
+                    _master_cache = res
+                    _master_cache_ts = now
+                else:
+                    logging.error(
+                        f"❌ [P1-CATALOG-INDEX-NO-STICKY] master_ingredients devolvió "
+                        f"{type(res).__name__}, no una lista — NO se cachea (se reintenta en la "
+                        f"próxima llamada en vez de servir 5 min de basura).")
+                    if _master_cache is None:
+                        _master_cache = []
             except Exception as e:
                 logging.error(f"Error fetching master_ingredients via pool: {e}")
                 if _master_cache is None:
@@ -6599,6 +6615,12 @@ def _cap_log(msg: str) -> None:
         logging.info(msg)
 
 
+_LAST_SEVERE_CAPS_SIG: str = ""
+_LAST_SEVERE_CAPS_AT: float = 0.0
+_SEVERE_CAPS_DEDUP_TTL_S = _knob_env_float("MEALFIT_CAP_SUMMARY_DEDUP_TTL_S", 120.0,
+                                           lambda v: 0.0 <= v <= 3600.0)
+
+
 def _log_severe_caps_summary() -> None:
     """[P2-CAP-LOG-LEVEL · 2026-07-29] UN warning por corrida con los topes que sí son señal.
 
@@ -6616,13 +6638,40 @@ def _log_severe_caps_summary() -> None:
             if _pre > 0 and (_post / _pre) < _CAP_LOG_SEVERE_RATIO:
                 _sev.append(f"{_c.get('food')} {_pre:.0f}→{_post:.0f}g "
                             f"({_post / _pre:.0%}, {_c.get('reason')})")
-        if _sev:
-            logging.warning(
-                f"🧺 [P2-CAP-LOG-LEVEL] {len(_sev)} tope(s) de perecedero recortaron >50%: "
-                f"{'; '.join(_sev[:8])}{' …' if len(_sev) > 8 else ''} — esto habla del MENÚ "
-                f"(demasiado perecedero pedido), no del tope.")
-    except Exception:
-        pass
+        if not _sev:
+            return
+        # [P2-CAP-LOG-LEVEL · 2026-07-29 · v2] De-dup por CONTENIDO dentro de una RÁFAGA:
+        # `aggregate_and_deduct_shopping_list` corre una vez por variante de lista (semanal /
+        # quincenal / mensual) sobre el MISMO plan, así que el resumen salía 2-3 veces idéntico y a
+        # veces en el mismo segundo (medido en prod: 18 líneas en ~7 min, dos a las 21:28:40).
+        # Repetir la misma línea es la versión pequeña del problema que este bloque vino a resolver.
+        #
+        # El TTL acota el de-dup a la ráfaga que lo motivó. La firma es un global de módulo, así que
+        # sin él dos planes DISTINTOS con un set de topes severos idéntico (mismos alimentos, mismos
+        # gramos) se silenciarían mutuamente para siempre: improbable, pero el modo de fallo sería
+        # "tragarse la señal de otro usuario", que es justo lo contrario de lo que persigue este
+        # bloque. Con TTL, lo peor que pasa es perder un duplicado dentro de la misma ráfaga.
+        # Rollback: MEALFIT_CAP_SUMMARY_DEDUP_TTL_S=0 → sin de-dup (vuelven las 2-3 repeticiones).
+        global _LAST_SEVERE_CAPS_SIG, _LAST_SEVERE_CAPS_AT
+        _sig = "|".join(sorted(_sev))
+        _now = _time.time()
+        if (_sig == _LAST_SEVERE_CAPS_SIG
+                and (_now - _LAST_SEVERE_CAPS_AT) < _SEVERE_CAPS_DEDUP_TTL_S):
+            return
+        _LAST_SEVERE_CAPS_SIG = _sig
+        _LAST_SEVERE_CAPS_AT = _now
+        logging.warning(
+            f"🧺 [P2-CAP-LOG-LEVEL] {len(_sev)} tope(s) de perecedero recortaron "
+            f">{int((1 - _CAP_LOG_SEVERE_RATIO) * 100)}%: "
+            f"{'; '.join(_sev[:8])}{' …' if len(_sev) > 8 else ''} — esto habla del MENÚ "
+            f"(demasiado perecedero pedido), no del tope.")
+    except Exception as _e:
+        # [P2-CAP-LOG-LEVEL · 2026-07-29 · v2] NO `pass`. Este mismo helper acaba de demostrar por
+        # qué: un `_time` mal referenciado dentro del try convirtió "el resumen falla" en "el
+        # resumen no tiene nada severo que decir" — indistinguibles desde fuera, y el test que lo
+        # cazó lo hizo por el número equivocado. Un canal de telemetría que se rompe en silencio es
+        # el modo de fallo que este bloque entero vino a atacar. Cuesta cero cuando funciona.
+        logging.warning(f"⚠️ [P2-CAP-LOG-LEVEL] resumen de topes severos falló: {_e!r}")
 
 
 def _record_cap_applied(name: str, pre_value: float, post_value: float, reason: str) -> None:

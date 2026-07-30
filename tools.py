@@ -1857,8 +1857,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     _wish_slot = bool(slot_violations_for_meal_name(changes or "", _sk_fin))
             except Exception:
                 _wish_slot = False
+            # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] day-target 4-4-9 del plan. NOTA: este
+            # callsite invoca el finalizador SIN `db`, y el gate protagonista exige las dos cosas
+            # (day-target Y db, para el kcal/g de la línea) — así que aquí el piso sigue
+            # declinando, y lo dice en su propio log. Se pasa igual porque es la mitad correcta y
+            # deja el callsite listo; encender `db` en la ruta de chat enciende de paso
+            # quantize/sanity-autofix, que es un cambio de alcance distinto y sin medir.
+            from graph_orchestrator import _day_kcal_from_target_macros as _dkt_m
             _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies,
-                                skip_night_rice=_wish_slot)
+                                skip_night_rice=_wish_slot,
+                                day_kcal_target=_dkt_m((plan_data or {}).get("macros")))
             if _nfix_m:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:

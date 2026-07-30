@@ -46,7 +46,7 @@ class TestGuineoCap:
     def test_repro_pdf_guineo_56_uds(self, caplog):
         """Caso real PDF 21:50: 56 guineos para 2p×mes. Cap esperado: 32."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 guineos"],
                 multiplier=18.666666,
@@ -69,7 +69,7 @@ class TestGuineoCap:
     ])
     def test_guineo_cap_scales(self, scenario, multiplier, expected_cap_uds, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 guineos"],
                 multiplier=multiplier,
@@ -85,7 +85,7 @@ class TestGuineoCap:
     def test_platano_maduro_separately_capped(self, caplog):
         """No-regresión: plátano maduro sigue capeando con su entry original."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 plátanos maduros"],
                 multiplier=18.666666,
@@ -105,7 +105,7 @@ class TestTomateCap:
     def test_repro_pdf_tomate_38_uds(self, caplog):
         """PDF 21:50: 38 tomates. Cap nuevo: 40 max para 2p×mes."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 tomates"],
                 multiplier=18.666666,
@@ -123,7 +123,7 @@ class TestTomateCap:
     ])
     def test_tomate_cap_scales(self, scenario, multiplier, expected_cap_uds, caplog):
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 tomates"],
                 multiplier=multiplier,
@@ -141,7 +141,7 @@ class TestNameCap:
     def test_name_with_and_without_accent(self, name_form, caplog):
         """Cap debe firar tanto para 'ñame' como para 'name' (sin tilde)."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=[f"99 {name_form}"],
                 multiplier=18.666666,
@@ -161,7 +161,7 @@ class TestRicottaCap:
     def test_ricotta_capped(self, caplog):
         """Ricotta excesivo debe firar cap (similar a yogurt)."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de queso ricotta"],
                 multiplier=18.666666,
@@ -179,7 +179,7 @@ class TestRicottaCap:
     def test_cottage_cheese_capped(self, caplog):
         """Cottage cheese (similar a ricotta) debe firar cap."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de cottage cheese"],
                 multiplier=18.666666,
@@ -194,7 +194,7 @@ class TestRicottaCap:
     def test_yogurt_still_capped(self, caplog):
         """No-regresión: yogurt sigue capeando con su entry original."""
         import logging
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.INFO):
             aggregate_and_deduct_shopping_list(
                 plan_ingredients=["99 lbs de yogurt griego"],
                 multiplier=18.666666,
