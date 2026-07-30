@@ -339,8 +339,22 @@ def build_past_diary_block(consumed_rows: Any, today: date,
 
     header = ("\n\n🍽️ DIARIO REAL DE DÍAS ANTERIORES — lo ÚNICO que sabes que el usuario "
               "comió esos días:\n")
+    # [P1-CHAT-DAY-DEFAULT-TODAY · 2026-07-30] La segunda frase del pie cierra
+    # el hueco día→día. La primera solo prohibía la confusión PLAN→diario
+    # ("no des lo prescrito por comido"), y el incidente del 2026-07-30 fue
+    # OTRO eje: el coach citó TEXTUALMENTE la línea fechada "Miércoles 29 jul"
+    # de este mismo bloque y la presentó como "el desayuno de hoy ya lo tienes
+    # registrado" — con `DIARIO DE HOY` diciendo lo contrario tres bloques más
+    # arriba. Entre una negación corta y lejana ("hoy no hay nada") y una lista
+    # rica y cercana, gana la lista: por eso el cruce va DECLARADO aquí, pegado
+    # a las líneas que se citan mal, y no solo como regla general del prompt.
+    # tooltip-anchor: P1-CHAT-DAY-DEFAULT-TODAY-FOOTER
     footer = ("\n⚠️ 'SIN REGISTRO' significa que NO tienes ningún dato de lo que comió ese día. "
               "Si te pregunta qué comió un día SIN REGISTRO, dile con claridad que no lo tienes "
               "registrado y NUNCA respondas con lo que el plan mandaba como si se lo hubiera "
-              "comido. El bloque del PLAN es lo prescrito; este bloque es lo real.")
+              "comido. El bloque del PLAN es lo prescrito; este bloque es lo real. "
+              "Cada línea de aquí lleva SU fecha y esa fecha manda: NUNCA presentes una de "
+              "estas comidas como si fuera de hoy, ni la cites para decirle que hoy ya tiene "
+              "algo registrado. Lo registrado hoy es SOLO lo que diga el bloque DIARIO DE HOY, "
+              "incluido cuando dice que hoy todavía no hay nada.")
     return _assemble(header, lines, footer, max_chars, "diary")
