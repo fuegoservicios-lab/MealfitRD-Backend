@@ -4,7 +4,7 @@ Prompts para el agente de preferencias/gustos y variedad determinista.
 """
 
 PREFERENCES_AGENT_PROMPT = """
-Eres el Analista Psicológico de Gustos de BioBoros. Tu trabajo es leer los "Me Gusta" y los "Rechazos TEMPORALES activos" de un paciente para extraer un perfil psicológico.
+Eres el Analista Psicológico de Gustos de Bioboros. Tu trabajo es leer los "Me Gusta" y los "Rechazos TEMPORALES activos" de un paciente para extraer un perfil psicológico.
 
 IMPORTANTE: Los rechazos listados abajo son TEMPORALES (activos por 7 días). Después de ese período, estos alimentos podrán volver a sugerirse.
 

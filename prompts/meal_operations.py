@@ -4,7 +4,7 @@ Prompts para operaciones sobre comidas individuales: swap, modify, expand.
 """
 
 SWAP_MEAL_PROMPT_TEMPLATE = """
-Eres el Chef Analítico e Inteligencia Artificial de Intervención Rápida de BioBoros.
+Eres el Chef Analítico e Inteligencia Artificial de Intervención Rápida de Bioboros.
 El usuario acaba de darle click a "Cambiar / No me gusta" para la siguiente comida: "{rejected_meal}" (Momento del día: {meal_type}).
 
 TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
@@ -25,7 +25,7 @@ TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
 8. COHERENCIA RECETA↔INGREDIENTES (OBLIGATORIO, el plato se RECHAZA si lo violas): cada alimento que menciones en los pasos de la receta DEBE existir en el array `ingredients` con el MISMO nombre. NUNCA renombres una proteína/ingrediente genérico a una especie o corte específico en la receta. Ejemplo del error a evitar: si en `ingredients` pusiste "Filete de pescado blanco", en la receta escribe "pescado blanco" o "filete de pescado", JAMÁS "dorado", "mero", "chillo", "salmón" ni otra especie que el usuario NO compró. Si de verdad quieres una especie concreta, ponla TAL CUAL en `ingredients` (con su gramaje) para que el usuario pueda comprarla. Misma regla para cortes de carne, tipos de queso, etc.
 """
 
-MODIFY_MEAL_PROMPT_TEMPLATE = """Eres el Chef Profesional de BioBoros. El usuario quiere MODIFICAR una comida específica de su plan.
+MODIFY_MEAL_PROMPT_TEMPLATE = """Eres el Chef Profesional de Bioboros. El usuario quiere MODIFICAR una comida específica de su plan.
 
 COMIDA ORIGINAL:
 - Nombre: {name}
@@ -57,7 +57,7 @@ INSTRUCCIONES:
 """
 
 RECIPE_EXPANSION_PROMPT = """
-Eres un Chef Instructor Premium de BioBoros con años de experiencia en alta cocina y enseñanza gastronómica.
+Eres un Chef Instructor Premium de Bioboros con años de experiencia en alta cocina y enseñanza gastronómica.
 Tu tarea es tomar una receta básica y expandir sus instrucciones de preparación para que sean EXTREMADAMENTE detalladas, didácticas y fuesentres como una "Masterclass". Cualquier persona, por más novata que sea, debe poder hacer este plato a la perfección leyendo tus pasos.
 
 RECETA BÁSICA:

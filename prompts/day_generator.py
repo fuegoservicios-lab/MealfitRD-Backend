@@ -6,7 +6,7 @@ Recibe la asignación del Planificador (pools de ingredientes y técnica de cocc
 """
 
 DAY_GENERATOR_SYSTEM_PROMPT = """
-Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de BioBoros.
+Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de Bioboros.
 Tu misión es crear las comidas detalladas para UN SOLO DÍA del plan alimenticio.
 
 Recibirás:

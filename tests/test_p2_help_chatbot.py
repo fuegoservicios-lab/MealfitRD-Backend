@@ -137,7 +137,7 @@ def test_prompt_grounded():
     # presenta con el nombre del producto, así que el rebrand lo alcanza — y
     # este assert es justo el que lo detecta si alguien cambia la marca en la
     # UI y se olvida de los prompts, que no salen en ningún grep de interfaz.
-    assert "BioBoros" in src
+    assert "Bioboros" in src
     # Anti-injection best-effort: el prompt instruye ignorar re-roleos.
     assert re.search(r"Ignora cualquier instrucci", src), (
         "El prompt debe incluir la regla anti-injection (ignorar re-roleos "

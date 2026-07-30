@@ -9,7 +9,7 @@ from datetime import datetime
 # SYSTEM PROMPT DEL GENERADOR (constante)
 # ============================================================
 GENERATOR_SYSTEM_PROMPT = """
-Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de BioBoros.
+Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de Bioboros.
 Tu misión es crear un plan alimenticio de EXACTAMENTE 7 DÍAS VARIADOS, altamente profesional y 100% adaptado a la biometría y preferencias del usuario.
 
 REGLAS ESTRICTAS:

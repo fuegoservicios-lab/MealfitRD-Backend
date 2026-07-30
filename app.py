@@ -1490,7 +1490,7 @@ async def lifespan(app: FastAPI):
             f"⚠️ [P1-4] Probe de pool falló (no fatal): {_pool_probe_err}"
         )
 
-    logger.info("🚀 [FastAPI] Servidor de BioBoros IA iniciado con éxito en el puerto 3001.")
+    logger.info("🚀 [FastAPI] Servidor de Bioboros IA iniciado con éxito en el puerto 3001.")
     yield
 
     # [P0-LIVE-1 · 2026-05-11] Cancelar hard-floor autoheal task ANTES de
@@ -1629,7 +1629,7 @@ def health_check():
     """Liveness probe: el proceso está vivo y atendiendo HTTP. NO valida que
     los componentes downstream (LangGraph, DB, Redis) estén operativos —
     para eso usar `/ready`."""
-    return {"status": "ok", "message": "BioBoros AI Backend is running"}
+    return {"status": "ok", "message": "Bioboros AI Backend is running"}
 
 
 @app.get("/ready")
@@ -2533,11 +2533,11 @@ async def api_export_my_account(
         return payload
 
     payload = await asyncio.to_thread(_collect)
-    payload["app"] = "BioBoros"
+    payload["app"] = "Bioboros"
     payload["format_version"] = 1
     payload["generated_at"] = datetime.now(timezone.utc).isoformat()
     payload["notes"] = (
-        "Copia de tus datos en BioBoros. Las tablas en `truncated` tienen más "
+        "Copia de tus datos en Bioboros. Las tablas en `truncated` tienen más "
         "filas que el límite exportado; `skipped` no aplican a tu cuenta o "
         "no existen en esta versión."
     )
