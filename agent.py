@@ -2886,6 +2886,15 @@ class ChatState(MessagesState):
     # también alimenta la lista de compras para re-stock).
     # Default: None — sin items agotados en el turn.
     pantry_depleted_items: list | None
+    # [P1-DIARY-CLAIM-VERIFY · 2026-07-31] Tope del reintento cuando el modelo
+    # afirma haber registrado una comida sin llamar `log_consumed_meal`
+    # (ver `route_tools` / `nudge_diary_tool`).
+    # DEBE estar declarada aquí: LangGraph DESCARTA las claves que un nodo
+    # devuelve y no existen en el schema del state — el flag se perdería en
+    # silencio, `route_tools` lo leería siempre como False y el turno entraría
+    # en bucle call_model→nudge→call_model quemando tokens hasta el timeout.
+    # Default: ausente (falsy) — un turno normal nunca la escribe.
+    diary_claim_retried: bool
 
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
@@ -3450,11 +3459,114 @@ def execute_tools(state: ChatState):
         "pantry_depleted_items": pantry_depleted_items if pantry_depleted_items else None,
     }
 
+# ============================================================
+# [P1-DIARY-CLAIM-VERIFY · 2026-07-31] "Cena registrada" sin haber registrado
+# ============================================================
+# Incidente (turno `corr=610fd9c8`): el usuario escribió "cene dos panes con
+# queso" y el coach respondió «Cena registrada. Asumo 2 panes de molde…
+# Quedó anotada como tu cena de hoy». El journal de ese turno es UNA sola línea
+# `call_model` seguida de `Finalizado con éxito`: cero `execute_tools`, cero
+# `🍽️ [DIARY]`, cero filas. El modelo NARRÓ el registro sin llamar la tool.
+#
+# `build_tools_instructions_stream` ya se lo prohíbe con todas las letras
+# ("NUNCA digas 'lo registro' o 'anotado' si no llamaste la herramienta en ese
+# turno"). Eso es una INSTRUCCIÓN, no un control: el tier `free` va a
+# `deepseek-v4-flash` (llm_provider: todo lo que no sea basic/plus/ultra cae al
+# barato por diseño fail-cheap) y flash se salta la llamada con bastante más
+# frecuencia que pro. Un aviso en el prompt no es un guard.
+#
+# Coste de no verificarlo: el usuario cree que su comida está contada, el panel
+# "Progreso en Tiempo Real" dice 0, y encima el diario queda mintiendo hacia
+# atrás — el coach de mañana leerá "no registró nada" y le reprochará algo que
+# sí hizo.
+#
+# La verificación es determinista y barata: si el texto final AFIRMA el registro
+# y en ESTE turno no se llamó la tool, se reinyecta un system message y se
+# vuelve a `call_model`. UNA sola vez (`diary_claim_retried`), porque un guard
+# que puede reintentar sin tope es un bucle de facturación.
+# Tooltip-anchor: P1-DIARY-CLAIM-VERIFY
+
+_DIARY_WRITE_TOOLS = ("log_consumed_meal", "correct_consumed_meal")
+
+# Afirmaciones de registro. Sin `\b` final en las raíces verbales a propósito:
+# cubre "registrada/registrado/registré/anotada/anoté/apunté" sin enumerar cada
+# flexión, que es justo la lista que caduca al primer sinónimo nuevo.
+_RE_CLAIM_DIARY = re.compile(
+    r"\b(?:regist[rn]?[aeéio]\w*|anot[aeéio]\w*|apunt[aeéio]\w*)\b",
+    re.IGNORECASE,
+)
+# Una negación cerca ANTES del verbo lo convierte en lo contrario ("no pude
+# registrarlo", "no quedó anotada"). Sin esto el guard dispararía justo cuando
+# el modelo está siendo honesto — y lo castigaría por ello.
+_RE_NEGACION = re.compile(r"\b(?:no|nunca|tampoco|sin)\b", re.IGNORECASE)
+
+
+def _reply_claims_diary_write(text: str) -> bool:
+    """True si el texto AFIRMA haber registrado algo en el diario."""
+    if not text:
+        return False
+    for m in _RE_CLAIM_DIARY.finditer(text):
+        previo = text[max(0, m.start() - 40):m.start()]
+        if _RE_NEGACION.search(previo):
+            continue  # "no pude registrarlo" — el modelo está siendo honesto
+        return True
+    return False
+
+
+def _diary_tool_called_this_turn(messages: list) -> bool:
+    """¿Se llamó alguna tool de diario desde el último mensaje del usuario?
+
+    Se mira `AIMessage.tool_calls` y NO los `ToolMessage`: éstos se construyen
+    con `tool_call_id` pero sin `name` (ver `execute_tools`), así que por sí
+    solos no dicen QUÉ tool corrió.
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return False  # llegamos al turno anterior sin encontrarla
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            nombre = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+            if nombre in _DIARY_WRITE_TOOLS:
+                return True
+    return False
+
+
+def nudge_diary_tool(state: ChatState):
+    """Reinyecta la exigencia y devuelve el turno a `call_model`."""
+    logger.warning(
+        "🍽️ [P1-DIARY-CLAIM-VERIFY] El modelo afirmó haber registrado sin llamar "
+        f"la tool (user={str(state.get('user_id'))[:8]}). Forzando reintento."
+    )
+    return {
+        "messages": [SystemMessage(content=(
+            "ALTO. Acabas de afirmar que registraste una comida en el diario, "
+            "pero NO llamaste a `log_consumed_meal` en este turno, así que NO "
+            "quedó nada guardado y el usuario vería 0 comidas en 'Progreso en "
+            "Tiempo Real'.\n"
+            "Llama AHORA a `log_consumed_meal` con los macros que estimaste y el "
+            "`meal_type` correcto. Si el usuario dijo que fue de otro día, pasa "
+            "`days_ago`.\n"
+            "Si de verdad NO hay nada que registrar (el usuario no dijo que "
+            "comiera algo), responde sin afirmar que registraste nada."
+        ))],
+        "diary_claim_retried": True,
+    }
+
+
 def route_tools(state: ChatState):
     messages = state["messages"]
     last_message = messages[-1]
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "execute_tools"
+
+    # [P1-DIARY-CLAIM-VERIFY] Antes de dar el turno por bueno: ¿el modelo dijo
+    # que registró algo que nunca registró?
+    if not state.get("diary_claim_retried"):
+        contenido = getattr(last_message, "content", "") or ""
+        if isinstance(contenido, list):  # algunos providers parten el content
+            contenido = " ".join(str(p) for p in contenido)
+        if _reply_claims_diary_write(contenido) and not _diary_tool_called_this_turn(messages):
+            return "nudge_diary_tool"
+
     return END
 
 # Removido el MemorySaver global estático
@@ -3462,9 +3574,14 @@ def route_tools(state: ChatState):
 chat_builder = StateGraph(ChatState)
 chat_builder.add_node("call_model", call_model)
 chat_builder.add_node("execute_tools", execute_tools)
+# [P1-DIARY-CLAIM-VERIFY · 2026-07-31] Ver `route_tools`.
+chat_builder.add_node("nudge_diary_tool", nudge_diary_tool)
 chat_builder.add_edge(START, "call_model")
-chat_builder.add_conditional_edges("call_model", route_tools, ["execute_tools", END])
+chat_builder.add_conditional_edges(
+    "call_model", route_tools, ["execute_tools", "nudge_diary_tool", END]
+)
 chat_builder.add_edge("execute_tools", "call_model")
+chat_builder.add_edge("nudge_diary_tool", "call_model")
 # NOTA: chat_graph_app se compila dinámicamente usando el PostgresSaver en cada petición
 
 # ============================================================
