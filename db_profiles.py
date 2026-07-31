@@ -868,6 +868,55 @@ def log_llm_usage_event(
         except Exception:
             pass
 
+def attach_plan_id_to_usage_events(plan_id: str, correlation_id: str,
+                                   max_age_minutes: int = 120) -> int:
+    """[P1-COST-ATTRIBUTION · 2026-07-31] Canjea el `corr` de la generación por
+    el `plan_id` real en las filas de costo que ese pipeline ya escribió.
+
+    POR QUÉ EN DOS TIEMPOS: durante la generación el plan todavía NO tiene id
+    (invariante I1: `plan_id` nace del INSERT backend), así que el emisor sólo
+    puede estampar el id de correlación. Cuando el INSERT ocurre, esta función
+    reetiqueta hacia atrás las filas de ESE pipeline.
+
+    Acotada por ventana temporal: un `corr` reutilizado (o un pipeline que
+    reintentó horas después) no debe arrastrar filas viejas a un plan nuevo.
+    Sólo toca filas con `plan_id IS NULL` — nunca reasigna lo ya atribuido.
+
+    Best-effort: devuelve cuántas filas etiquetó; jamás propaga (el costo es
+    telemetría, no puede tumbar el guardado de un plan).
+    """
+    if not plan_id or not correlation_id or correlation_id == "-":
+        return 0
+    try:
+        from db_core import connection_pool
+        if not connection_pool:
+            return 0
+        # `returning=True` para contar de verdad: sin él `execute_sql_write`
+        # devuelve un BOOLEANO y un `or 0` convertiría el conteo en True/0.
+        rows = execute_sql_write(
+            """
+            UPDATE llm_usage_events
+               SET plan_id = %s
+             WHERE plan_id IS NULL
+               AND metadata->>'corr' = %s
+               AND created_at > NOW() - (%s || ' minutes')::interval
+            RETURNING id
+            """,
+            (plan_id, correlation_id, str(int(max_age_minutes))),
+            returning=True,
+        )
+        return len(rows or [])
+    except Exception as e:
+        try:
+            logger.debug(
+                f"[P1-COST-ATTRIBUTION] attach_plan_id_to_usage_events falló "
+                f"(best-effort): {e!r}"
+            )
+        except Exception:
+            pass
+        return 0
+
+
 def get_monthly_api_usage(user_id: str) -> int:
     """Cuenta cuántas llamadas a la API ha hecho el usuario este mes."""
     if not user_id or user_id == "guest": return 0

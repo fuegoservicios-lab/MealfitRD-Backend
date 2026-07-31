@@ -197,6 +197,37 @@ def _scrub_plan_data_floats(plan_data: dict, user_id: str = "?") -> dict:
         return plan_data
 
 
+def _stamp_quality_index(plan_data: dict) -> dict:
+    """[P1-PLAN-QUALITY-INDEX · 2026-07-31] Estampa `_quality_index` en el
+    plan_data justo ANTES del INSERT.
+
+    Aquí y no antes porque es el único momento en que TODOS los insumos ya
+    existen (variety_report, dish_quality_report, clinical_band_score,
+    micronutrient_report, coherencia de recetas y de lista). Calcularlo antes
+    daría un número construido sobre huecos — el modo de fallo que este
+    medidor existe para evitar.
+
+    Best-effort y NO mutante: devuelve una copia con el índice añadido. Si algo
+    falla, devuelve el plan tal cual — un medidor jamás puede impedir que se
+    guarde un plan.
+    """
+    try:
+        from plan_quality_index import PQI_ENABLED, compute_plan_quality_index
+        if not PQI_ENABLED or not isinstance(plan_data, dict):
+            return plan_data
+        idx = compute_plan_quality_index(plan_data)
+        if idx.get("score") is None:
+            return plan_data
+        logger.info(
+            f"📏 [P1-PLAN-QUALITY-INDEX] score={idx['score']} "
+            f"componentes={idx.get('componentes')} defectos={idx.get('defectos') or '{}'}"
+        )
+        return {**plan_data, "_quality_index": idx}
+    except Exception as _pqi_e:
+        logger.debug(f"[P1-PLAN-QUALITY-INDEX] no se pudo calcular (best-effort): {_pqi_e!r}")
+        return plan_data
+
+
 def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7) -> Optional[str]:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
@@ -247,7 +278,9 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
 
         insert_data = {
             "user_id": user_id,
-            "plan_data": {**plan_data, "generation_status": "partial", "total_days_requested": total_days_requested},
+            "plan_data": {**_stamp_quality_index(plan_data),
+                          "generation_status": "partial",
+                          "total_days_requested": total_days_requested},
             "name": plan_name,
             "calories": int(calories) if calories else 0,
             "macros": macros,
@@ -264,6 +297,26 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         # return_id=True garantiza un UUID str (ver db_plans.save_new_meal_plan_atomic);
         # cast solo para descartar el Literal[True]/None inferido del helper sin anotación.
         plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
+
+        # [P1-COST-ATTRIBUTION · 2026-07-31] Ruta CHUNKED (la de los planes de 7
+        # días): mismo canje corr→plan_id que en `_save_plan_and_track_background`.
+        # Cubre el gasto de la SEMANA 1, que es donde vive el grueso del costo
+        # (planner + 3 day-gen + critique). ⚠️ Las semanas 2..N las generan los
+        # chunk workers en su PROPIO contexto de correlación, más tarde: esas filas
+        # quedan sin plan_id hasta que alguien las etiquete desde el worker. Al
+        # comparar coste por plan, cuenta que es el coste de la semana 1.
+        try:
+            if plan_id:
+                from correlation import get_correlation_id
+                from db_profiles import attach_plan_id_to_usage_events
+                _n = attach_plan_id_to_usage_events(str(plan_id), get_correlation_id())
+                if _n:
+                    logger.info(
+                        f"💰 [P1-COST-ATTRIBUTION] {_n} evento(s) de costo atribuidos "
+                        f"al plan {str(plan_id)[:8]} (semana 1)."
+                    )
+        except Exception as _attr_e:
+            logger.debug(f"[P1-COST-ATTRIBUTION] canje corr→plan_id (chunked) falló: {_attr_e!r}")
 
         # [P3-GENCHUNK-SPEED · 2026-06-01] Disparar el título creativo en background
         # SOLO tras tener el plan_id (para el UPDATE guardado) y solo si diferimos.
@@ -563,7 +616,8 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 # entra bajo la invariante I8 (complete ⇒ days>0): si alguna
                 # regresión persistiera days vacío, el CHECK lo rechaza en vez de
                 # guardar corrupción silenciosa. Tooltip-anchor: P2-ORCH-10.
-                "plan_data": {**plan_data, "generation_status": plan_data.get("generation_status", "complete")},
+                "plan_data": {**_stamp_quality_index(plan_data),
+                              "generation_status": plan_data.get("generation_status", "complete")},
                 "name": plan_name,
                 "calories": int(calories) if calories else 0,
                 "macros": macros,
@@ -586,6 +640,26 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
         # una sola transacción (Neon-native).
         plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=return_id)
         logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
+        # [P1-COST-ATTRIBUTION · 2026-07-31] Recién AHORA existe el plan_id
+        # (invariante I1), así que es el primer momento en que se puede etiquetar
+        # el costo que este pipeline ya gastó. El emisor sólo pudo estampar el id
+        # de correlación; aquí se canjea. Best-effort: si falla, se pierde la
+        # atribución de ese plan, nunca el plan.
+        try:
+            # ⚠️ `save_new_meal_plan_atomic` devuelve el UUID sólo con
+            # `return_id=True`; sin él devuelve **True**. Un `if plan_id:` a secas
+            # escribiría la cadena "True" en la columna plan_id.
+            if return_id and isinstance(plan_id, str) and plan_id:
+                from correlation import get_correlation_id
+                from db_profiles import attach_plan_id_to_usage_events
+                _n = attach_plan_id_to_usage_events(plan_id, get_correlation_id())
+                if _n:
+                    logger.info(
+                        f"💰 [P1-COST-ATTRIBUTION] {_n} evento(s) de costo atribuidos "
+                        f"al plan {str(plan_id)[:8]}."
+                    )
+        except Exception as _attr_e:
+            logger.debug(f"[P1-COST-ATTRIBUTION] canje corr→plan_id falló: {_attr_e!r}")
     except Exception as e:
         # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] (gap-audit G2) Fallo del INSERT. Si el caller persiste
         # SÍNCRONO (return_id=True), PROPAGAMOS para que marque `_persist_failed` (simétrico al branch

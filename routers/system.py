@@ -1468,3 +1468,113 @@ def admin_cost_by_node(request: Request, hours: int = 24):
         "unattributed": has_unattributed,
         "by_node": by_node,
     }
+
+
+@router.get("/admin/plan-quality")
+def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
+    """[P1-PLAN-QUALITY-INDEX · 2026-07-31] El medidor: índice de variedad y
+    coherencia por plan, con su costo al lado.
+
+    POR QUÉ EXISTE: se preguntó si cambiar el generador subiría la calidad y no
+    había forma de contestar con datos — las señales existían sueltas y sin
+    guardar juntas. Este endpoint es el sitio donde se mira el antes/después de
+    cualquier cambio (modelo, prompt, gate) sin abrir el SQL Editor.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>`. Rate-limited.
+
+    Query params:
+      - `days` (default 14, clamp [1, 90]): ventana hacia atrás.
+      - `limit` (default 40, clamp [1, 200]): planes a listar.
+
+    Retorna:
+      - `planes`: lista por plan → `{id, fecha, score, componentes, defectos,
+        dias, degradado, usd, llm_calls, modelos}`. `usd`/`modelos` salen de
+        `llm_usage_events` atribuidos (P1-COST-ATTRIBUTION); un plan anterior a
+        esa atribución llega con `usd=None` — es ausencia de dato, NO coste 0.
+      - `resumen`: medias del periodo + `sin_indice` (planes guardados antes de
+        que el índice existiera; sirven de recordatorio de que la serie
+        histórica empieza el 2026-07-31, no antes).
+
+    Anchor: P1-PLAN-QUALITY-INDEX.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)
+
+    win_d = max(1, min(90, int(days) if days else 14))
+    lim = max(1, min(200, int(limit) if limit else 40))
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT m.id::text                                   AS id,
+                   m.created_at                                 AS fecha,
+                   m.plan_data->'_quality_index'                AS idx,
+                   COALESCE(c.usd, 0)                           AS usd,
+                   COALESCE(c.calls, 0)                         AS calls,
+                   c.modelos                                    AS modelos
+              FROM meal_plans m
+              LEFT JOIN (
+                    SELECT plan_id,
+                           SUM(COALESCE(cost_usd_micros,0))/1e6::numeric AS usd,
+                           COUNT(*)                                      AS calls,
+                           ARRAY_AGG(DISTINCT model)                     AS modelos
+                      FROM llm_usage_events
+                     WHERE plan_id IS NOT NULL
+                     GROUP BY plan_id
+              ) c ON c.plan_id = m.id
+             WHERE m.created_at > NOW() - (%s || ' days')::interval
+             ORDER BY m.created_at DESC
+             LIMIT %s
+            """,
+            (str(win_d), lim),
+        ) or []
+    except Exception as e:
+        logger.error(f"[P1-PLAN-QUALITY-INDEX] query falló: {e!r}")
+        raise HTTPException(status_code=500, detail="No se pudo leer el índice de calidad.")
+
+    planes, scores, sin_indice = [], [], 0
+    for r in rows:
+        idx = r.get("idx") or {}
+        if not isinstance(idx, dict) or idx.get("score") is None:
+            sin_indice += 1
+            continue
+        scores.append(float(idx["score"]))
+        planes.append({
+            "id": r.get("id"),
+            "fecha": str(r.get("fecha")),
+            "score": idx.get("score"),
+            "componentes": idx.get("componentes"),
+            "defectos": idx.get("defectos") or {},
+            "dias": idx.get("dias"),
+            "degradado": idx.get("degradado"),
+            # `None` (no 0) cuando el plan no tiene costo atribuido: distinguir
+            # "no lo sabemos" de "fue gratis" es la diferencia entre una media
+            # honesta y una que miente hacia abajo.
+            "usd": round(float(r["usd"]), 5) if r.get("calls") else None,
+            "llm_calls": int(r.get("calls") or 0) or None,
+            "modelos": r.get("modelos"),
+        })
+
+    def _media(campo):
+        vals = [p[campo] for p in planes if p.get(campo) is not None]
+        return round(sum(vals) / len(vals), 4) if vals else None
+
+    comp_medias = {}
+    for k in ("variedad", "coherencia", "nutricion"):
+        vals = [p["componentes"].get(k) for p in planes
+                if isinstance(p.get("componentes"), dict) and p["componentes"].get(k) is not None]
+        comp_medias[k] = round(sum(vals) / len(vals), 1) if vals else None
+
+    return {
+        "success": True,
+        "ventana_dias": win_d,
+        "planes": planes,
+        "resumen": {
+            "con_indice": len(planes),
+            "sin_indice": sin_indice,
+            "score_medio": round(sum(scores) / len(scores), 1) if scores else None,
+            "componentes_medios": comp_medias,
+            "usd_medio_por_plan": _media("usd"),
+            "planes_con_costo_atribuido": sum(1 for p in planes if p.get("usd") is not None),
+        },
+    }

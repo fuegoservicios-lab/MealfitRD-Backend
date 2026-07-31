@@ -3372,13 +3372,39 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
         # [P2-ORCH-14] Marcar ANTES del log (una sola fila por objeto-resultado).
         if result is not None:
             _mark_usage_emitted(result)
+        # [P1-COST-ATTRIBUTION · 2026-07-31] La "phase 2" que la docstring de
+        # `log_llm_usage_event` prometía desde 2026-05-15 y nunca se hizo: sin
+        # esto el libro de COSTO no se puede cruzar con nada. Medido el
+        # 2026-07-31: user_id NULL en 6.061 de 6.063 filas y plan_id NULL en
+        # las 6.063 → imposible responder "¿cuánto cuesta un plan?" o comparar
+        # dos modelos por plan, que es justo lo que el índice de calidad
+        # necesita para servir de guía.
+        #   · user_id: del ContextVar que ya usa el router de modelos.
+        #   · corr: el id de correlación del request/pipeline. Va en metadata
+        #     (jsonb, sin migración) porque durante la GENERACIÓN el plan
+        #     todavía no tiene id — nace del INSERT posterior (invariante I1).
+        #     `attach_plan_id_to_usage_events` lo canjea por el plan_id real
+        #     en cuanto ese INSERT ocurre.
+        try:
+            _attr_uid = user_id_var.get()
+        except Exception:
+            _attr_uid = None
+        try:
+            from correlation import get_correlation_id
+            _attr_corr = get_correlation_id()
+        except Exception:
+            _attr_corr = None
         log_llm_usage_event(
+            user_id=_attr_uid,
             model=model_name,
             node=current_node,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=int(cached_tokens) if cached_tokens else 0,
-            metadata={"duration_s": round(float(duration_s), 3)},
+            metadata={
+                "duration_s": round(float(duration_s), 3),
+                **({"corr": _attr_corr} if _attr_corr and _attr_corr != "-" else {}),
+            },
         )
     except Exception as _e_emit:
         try:
