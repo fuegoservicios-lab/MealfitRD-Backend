@@ -414,6 +414,34 @@ def _chat_agent_llm_timeout_s() -> float:
         validator=lambda v: 0.0 < v <= 120.0,
     )
 
+
+def _chat_hold_pretool_text() -> bool:
+    """[P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] Kill switch.
+
+    Con `False` el stream vuelve al comportamiento anterior (todo el texto
+    pre-tool se emite en vivo, deliberación incluida). Existe porque retener
+    el texto cambia la sensación de la app: en un turno SIN herramienta la
+    respuesta aparece de golpe al final en vez de irse escribiendo. Si eso
+    resulta peor que el problema que arregla, se revierte sin redesplegar.
+    """
+    return _env_bool("MEALFIT_CHAT_HOLD_PRETOOL_TEXT", True)
+
+
+def _chat_pretool_narration_max_chars() -> int:
+    """Frontera entre narración corta (se emite) y deliberación (se descarta).
+
+    300 chars: la narración legítima que P1-CHAT-NARRATION-KEPT preserva son
+    frases como "Lo anoto y te digo cómo va" (~30-60 chars); la deliberación
+    del incidente pasaba de 4.000. El umbral vive en medio de un hueco de dos
+    órdenes de magnitud, así que no es un número peleado — moverlo entre 150 y
+    1.000 no cambiaría ninguno de los dos casos.
+    """
+    return _env_int(
+        "MEALFIT_CHAT_PRETOOL_NARRATION_MAX_CHARS",
+        300,
+        validator=lambda v: 0 <= v <= 20000,
+    )
+
 def _chat_swap_llm_timeout_s() -> float:
     return _env_float(
         "MEALFIT_CHAT_SWAP_LLM_TIMEOUT_S",
@@ -4432,9 +4460,30 @@ def _build_final_content_from_messages(messages: list) -> str:
     #   · solo si es corto y encaja en el patrón de espera (gerundio o anuncio + puntos suspensivos
     #     / dos puntos), nunca por longitud sola.
     # Si el filtro se comiera todo, se devuelve el original: preferimos ruido a una respuesta vacía.
+    # [P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] Segunda mitad del guard del
+    # stream. Retener la deliberación en el SSE no basta: este helper alimenta
+    # el evento `done` Y el `save_message` de routers/chat.py, así que sin
+    # filtrar también aquí el texto volvería al final del turno y quedaría
+    # GRABADO en el historial — el bug se vería igual, solo que un segundo
+    # más tarde. Dos mitades del mismo interruptor.
+    #
+    # Mismo criterio que en el stream (longitud, no prosa) y misma frontera.
+    # `_is_pure_filler` no lo caza: la deliberación no es una frase de relleno
+    # conocida, es razonamiento largo y variable — por eso hace falta este
+    # segundo predicado en vez de alargar aquella lista.
+    _delib_max = _chat_pretool_narration_max_chars()
+
+    def _es_deliberacion(_p: str) -> bool:
+        return _chat_hold_pretool_text() and len((_p or "").strip()) > _delib_max
+
     if FILLER_STRIP_ENABLED and len(parts) > 1:
         _keep = [p for i, p in enumerate(parts)
-                 if i == len(parts) - 1 or not _is_pure_filler(p)]
+                 # El ÚLTIMO bloque nunca se toca: es la respuesta del turno.
+                 # Sin esa excepción, un turno cuya única salida fuese larga
+                 # quedaría vacío — el modo de fallo que P1-CHAT-NEVER-EMPTY
+                 # degrada y que conviene no provocar.
+                 if i == len(parts) - 1
+                 or not (_is_pure_filler(p) or _es_deliberacion(p))]
         if _keep:
             _dropped = len(parts) - len(_keep)
             if _dropped:
@@ -5198,6 +5247,39 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # de degradación silenciosa. Tooltip-anchor: P1-CHAT-CHECKPOINT-DEGRADE.
     _chunks_yielded = 0
 
+    # ================================================================
+    # [P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] La deliberación en pantalla
+    # ================================================================
+    # Incidente: el usuario escribió "cene dos panes con queso" y antes de la
+    # respuesta le aparecieron ~4.000 caracteres de deliberación en primera
+    # persona — "Hmm, pero son las 10:23 AM", "Espera, según la regla 6-bis",
+    # "Déjame pensar" — y, entre ellos, la frase que lo delata: «Déjame llamar
+    # la herramienta primero (regla de cero texto antes de herramienta)». El
+    # modelo CITA la regla que le prohíbe eso mientras la incumple.
+    #
+    # No es un leak de reasoning tokens: DeepSeek los manda en
+    # `reasoning_content` (campo aparte que este loop no lee) y además el
+    # thinking está desactivado desde P1-DEEPSEEK-THINKING-OFF. Es el modelo
+    # escribiendo su deliberación como `content` normal.
+    #
+    # El guard que debería taparlo ya existe cinco líneas más abajo
+    # (`if not msg_chunk.tool_calls`) pero **el orden del streaming lo
+    # derrota**: los chunks de texto llegan ANTES que la tool_call, así que
+    # cuando se evalúan todavía no hay `tool_calls` y pasan enteros.
+    #
+    # ⚠️ NO se descarta todo el texto pre-tool: eso desharía
+    # P1-CHAT-NARRATION-KEPT (2026-07-28), que restauró a propósito la
+    # narración corta ("Lo anoto...") porque antes aparecía y se desvanecía —
+    # pérdida de dato real. Dos guardas sobre el mismo campo oscilan.
+    #
+    # El corte NO es "hay texto antes" sino CUÁNTO: una narración útil son
+    # ~40 chars; la deliberación del incidente eran miles. Es una diferencia
+    # de un orden de magnitud, no una heurística sobre prosa.
+    _hold_pretool = _chat_hold_pretool_text()
+    _pretool_max = _chat_pretool_narration_max_chars()
+    _pretool_buf: list[str] = []
+    _tool_seen = False
+
     try:
         for event in stream_iter:
             # [P1-CHAT-STREAM-BUDGET · 2026-05-20] Wall-clock checks al tope
@@ -5243,10 +5325,33 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                             # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad
                             # del wire SSE chunk.
                             chunk_content = _sanitize_chat_output_for_wire(chunk_content)
-                            yield f"data: {json.dumps({'type': 'chunk', 'text': chunk_content})}\n\n"
-                            # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20]
-                            _chunks_yielded += 1
+                            # [P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] Ver el
+                            # bloque de arriba: el texto ANTERIOR a la primera
+                            # tool_call se retiene hasta saber cuánto es.
+                            if _hold_pretool and not _tool_seen:
+                                _pretool_buf.append(chunk_content)
+                            else:
+                                yield f"data: {json.dumps({'type': 'chunk', 'text': chunk_content})}\n\n"
+                                # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20]
+                                _chunks_yielded += 1
                     else:
+                        # [P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] Punto de
+                        # decisión: llegó la tool_call, ya sabemos qué era el
+                        # texto retenido.
+                        if _hold_pretool and not _tool_seen:
+                            _tool_seen = True
+                            _retenido = "".join(_pretool_buf)
+                            _pretool_buf.clear()
+                            if len(_retenido.strip()) > _pretool_max:
+                                logger.warning(
+                                    f"🧠 [P1-CHAT-DELIBERATION-HIDDEN] {len(_retenido)} chars "
+                                    f"de deliberación antes de la tool — descartados "
+                                    f"(cap {_pretool_max}). Inicio: {_retenido[:90]!r}"
+                                )
+                            elif _retenido:
+                                # Narración corta: se emite (P1-CHAT-NARRATION-KEPT).
+                                yield f"data: {json.dumps({'type': 'chunk', 'text': _retenido})}\n\n"
+                                _chunks_yielded += 1
                         for idx, tool_call in enumerate(msg_chunk.tool_calls):
                             if idx == 0:  # Mostrar el mensaje 1 sola vez por llamada múltiple
                                 tool_name = tool_call.get("name", "")
@@ -5288,6 +5393,18 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                     # forzando SIEMPRE la rama 'replace' — reflow visible al
                                     # final del turno. Ver hallazgo de review P1-CHAT-NARRATION-KEPT.
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('analizando')})}\n\n"
+
+        # [P1-CHAT-DELIBERATION-HIDDEN · 2026-07-31] El turno terminó sin
+        # ninguna tool_call ⇒ lo retenido NO era deliberación previa a una
+        # herramienta: es la respuesta. Se emite entera. Sin este flush, un
+        # turno conversacional normal (el caso más común del chat) saldría
+        # VACÍO — el guard se comería justo lo que debe proteger.
+        if _pretool_buf and not _tool_seen:
+            _resto = "".join(_pretool_buf)
+            _pretool_buf.clear()
+            if _resto:
+                yield f"data: {json.dumps({'type': 'chunk', 'text': _resto})}\n\n"
+                _chunks_yielded += 1
 
     except GeneratorExit:
         # [P1-CHAT-CANCEL · 2026-05-19] Cliente cerró el SSE stream antes de
