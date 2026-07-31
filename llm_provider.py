@@ -72,11 +72,14 @@ logger = logging.getLogger(__name__)
 DEEPSEEK_FLASH = "deepseek-v4-flash"
 DEEPSEEK_PRO = "deepseek-v4-pro"
 
-# [P1-NET-LUNA · P1-REVIEWER-TIER-MODELS · 2026-07-31] IDs OpenAI gpt-5.6 en
-# uso: luna = red cross-provider del pipeline + reviewer clínico free;
-# terra = reviewer clínico tiers pagados. SSOT del ID — no repetir literales.
+# [P1-NET-LUNA · P1-REVIEWER-TIER-MODELS · P1-REVIEWER-SOL-HARD · 2026-07-31]
+# IDs OpenAI gpt-5.6 en uso: luna = red cross-provider del pipeline + reviewer
+# clínico free; terra = reviewer clínico tiers pagados; sol = reviewer clínico
+# plus/ultra en casos clínicos DIFÍCILES (bariátrico / ≥2 reglas activas).
+# SSOT del ID — no repetir literales.
 GPT56_LUNA = "gpt-5.6-luna"
 GPT56_TERRA = "gpt-5.6-terra"
+GPT56_SOL = "gpt-5.6-sol"
 
 # [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] DeepSeek-V4 trae "thinking mode"
 # (chain-of-thought) NATIVO ENCENDIDO por default. Para la generación de planes

@@ -18,6 +18,7 @@ from llm_provider import (
     DEEPSEEK_FLASH,
     DEEPSEEK_PRO,
     GPT56_LUNA,
+    GPT56_SOL,
     GPT56_TERRA,
     PAID_TIERS,
     get_user_tier,
@@ -5333,17 +5334,49 @@ _REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH
 # Knobs per-tier (convención P3-PREVIEW-MODEL-KNOB — override sin redeploy):
 _REVIEWER_RISK_MODEL_FREE_DEFAULT = GPT56_LUNA
 _REVIEWER_RISK_MODEL_PAID_DEFAULT = GPT56_TERRA
+# [P1-REVIEWER-SOL-HARD · 2026-07-31] Escalón superior para plus/ultra en
+# casos clínicamente DIFÍCILES (decisión owner). Sol = $5/$30 por 1M
+# (~2.5× terra, ~$0.018/llamada con los tokens reales del reviewer).
+_REVIEWER_RISK_MODEL_PAID_HARD_DEFAULT = GPT56_SOL
+# Tiers que reciben el escalón sol-difícil (basic se queda en terra: sol en
+# basic sería ~18% del revenue en worst-case — no rentable).
+_REVIEWER_SOL_HARD_TIERS = frozenset({"plus", "ultra"})
 
 
-def _reviewer_risk_model_for_tier() -> str:
+def _is_hard_clinical_profile(form_data) -> bool:
+    """[P1-REVIEWER-SOL-HARD · 2026-07-31] ¿Perfil clínicamente DIFÍCIL?
+    Definición determinista anclada al SSOT `condition_rules.detect_active_rules`
+    (cero listas de keywords nuevas — la lección repetida del repo):
+      difícil := regla bariátrica activa O ≥2 reglas clínicas activas.
+    Fail-safe: cualquier excepción de detección → False (terra, nunca crash) —
+    la duda jamás encarece ni rompe la resolución del gate clínico."""
+    try:
+        from condition_rules import detect_active_rules
+
+        rules = detect_active_rules(form_data or {})
+        if any(getattr(r, "id", None) == "bariatric" for r in rules):
+            return True
+        return len(rules) >= 2
+    except Exception as _hcp_e:
+        logger.debug(f"[P1-REVIEWER-SOL-HARD] detección de dificultad falló "
+                     f"(fail-safe a no-difícil): {_hcp_e}")
+        return False
+
+
+def _reviewer_risk_model_for_tier(form_data=None) -> str:
     """Modelo risk-tier del REVIEWER según tier de suscripción del usuario en
-    contexto (`user_id_var`). free/guest/desconocido → Luna; basic/plus/ultra
-    → Terra. Fail-cheap simétrico al router: sin contexto → free."""
+    contexto (`user_id_var`). free/guest/desconocido → Luna; basic → Terra;
+    plus/ultra → Terra, o SOL si el perfil es clínicamente difícil
+    (P1-REVIEWER-SOL-HARD: bariátrico / ≥2 reglas activas). Fail-cheap
+    simétrico al router: sin contexto → free."""
     try:
         tier = get_user_tier(user_id_var.get())
     except Exception:
         tier = "gratis"
     if tier in PAID_TIERS:
+        if tier in _REVIEWER_SOL_HARD_TIERS and _is_hard_clinical_profile(form_data):
+            return _env_str("MEALFIT_REVIEWER_RISK_MODEL_PAID_HARD",
+                            _REVIEWER_RISK_MODEL_PAID_HARD_DEFAULT) or _REVIEWER_RISK_MODEL_PAID_HARD_DEFAULT
         return _env_str("MEALFIT_REVIEWER_RISK_MODEL_PAID",
                         _REVIEWER_RISK_MODEL_PAID_DEFAULT) or _REVIEWER_RISK_MODEL_PAID_DEFAULT
     return _env_str("MEALFIT_REVIEWER_RISK_MODEL_FREE",
@@ -5500,7 +5533,9 @@ def _reviewer_model_name(form_data=None) -> str:
     [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != esperado del
     tier → WARN + system_alert (observacional, el knob sigue ganando)."""
     _risk = _profile_has_medical_risk(form_data)
-    _tier_expected = _reviewer_risk_model_for_tier() if _risk else None
+    # [P1-REVIEWER-SOL-HARD] form_data viaja al resolver: plus/ultra escalan a
+    # sol cuando el perfil es clínicamente difícil (bariátrico / ≥2 reglas).
+    _tier_expected = _reviewer_risk_model_for_tier(form_data) if _risk else None
     _override = _env_str("MEALFIT_REVIEWER_MODEL", "")
     if _override:
         if _risk:

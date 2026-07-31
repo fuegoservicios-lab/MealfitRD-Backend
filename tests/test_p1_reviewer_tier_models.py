@@ -75,8 +75,11 @@ def test_a_free_tier_risk_goes_to_luna(_go, monkeypatch):
 
 @pytest.mark.parametrize("tier", ["basic", "plus", "ultra"])
 def test_a2_paid_tiers_risk_go_to_terra(_go, monkeypatch, tier):
+    # [P1-REVIEWER-SOL-HARD] Se fija dificultad=False para testear el MAP BASE
+    # (el escalón sol-difícil tiene su propio archivo test_p1_reviewer_sol_hard.py).
     writes = _mute_alert_writes(monkeypatch)
     monkeypatch.setattr(_go, "get_user_tier", lambda uid: tier)
+    monkeypatch.setattr(_go, "_is_hard_clinical_profile", lambda fd: False)
     assert _go._reviewer_model_name(_RISK_FORM) == "gpt-5.6-terra"
     assert not _go._CLINICAL_MODEL_GUARD_WARNED and not writes
 
