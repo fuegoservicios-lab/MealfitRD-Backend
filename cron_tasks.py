@@ -24403,6 +24403,62 @@ def _calculate_learning_metrics(new_days: list, prior_meals: list, prior_days: l
     }
 
 
+# [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] (audit solver+seeder v6 · P0) Knob del backstop
+# determinista de alérgeno/dieta en el path DEGRADADO (Smart Shuffle + Edge Recipes). Esta rama
+# construye días sin LLM y BYPASEA `assemble_plan_node` → ni `review_plan_node`, ni el allergen
+# guard, ni el diet hard guard llegaban a verla: lo único que la protegía era un blocklist por
+# substring del LABEL del chip, que no cubre la dieta y no matchea categorías ('frutos secos' no
+# es substring de 'Almendras fileteadas'). Default ON (es SEGURIDAD, no comodidad).
+# Rollback sin redeploy: MEALFIT_DEGRADED_SAFETY_SCAN=false.
+DEGRADED_SAFETY_SCAN = _env_bool("MEALFIT_DEGRADED_SAFETY_SCAN", True)
+
+
+def _degraded_safety_violations(day, allergies, diet) -> list:
+    """[P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Violaciones de alérgeno/dieta de UN día del path
+    degradado, con el MISMO escáner determinista que corre el path LLM.
+
+    Reusa `clinical_backstop_for_meal` (C2-ALLERGEN-GUARD + P1-DIET-HARD-GUARD) a propósito, en vez
+    de comparar contra los catálogos ya filtrados: el filtro upstream
+    (`constants._get_fast_filtered_catalogs`) tiene agujeros MEDIDOS que este backstop no comparte —
+    el femenino legacy ('vegetariana'/'vegana') no matchea ninguna de sus ramas, y sus catch-alls de
+    alérgeno expanden a singulares contra un catálogo en plural. El backstop canonicaliza la dieta
+    (`_canonicalize_diet_type`, femeninos incluidos) y expande sinónimos vía `_ALLERGEN_SYNONYMS`
+    (plurales incluidos), así que cierra el hueco con independencia de lo que deje pasar el filtro.
+
+    Devuelve lista de strings legibles (vacía = seguro). FAIL-SECURE: un error del escáner cuenta
+    como violación (mismo criterio que `clinical_backstop_for_meal`) — no persistir es preferible a
+    persistir un alérgeno. tooltip-anchor: P0-DEGRADED-SAFETY-SCAN"""
+    if not DEGRADED_SAFETY_SCAN or not isinstance(day, dict):
+        return []
+    try:
+        from graph_orchestrator import clinical_backstop_for_meal
+        out = []
+        for meal in (day.get("meals") or []):
+            if isinstance(meal, dict):
+                out.extend(clinical_backstop_for_meal(meal, allergies=allergies or [], diet_type=diet))
+        return out
+    except Exception as _dss_e:
+        logger.error(f"[P0-DEGRADED-SAFETY-SCAN] Escáner falló ({type(_dss_e).__name__}: {_dss_e}) — bloqueo conservador.")
+        return [f"error de re-validación de seguridad ({type(_dss_e).__name__}) — bloqueo conservador"]
+
+
+def _sieve_catalog_for_safety(catalog: list, allergies, diet) -> list:
+    """[P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Quita del pool de candidatos los alimentos que el
+    backstop marcaría como violación, ANTES del `random.choice`.
+
+    Tamizar el pool (en vez de re-sortear hasta acertar) hace el resultado determinista: sin esto la
+    seguridad del día dependería de la suerte del sorteo y de cuántos reintentos nos diéramos.
+    tooltip-anchor: P0-DEGRADED-SAFETY-SCAN"""
+    if not DEGRADED_SAFETY_SCAN or not catalog:
+        return catalog
+    safe = []
+    for item in catalog:
+        probe = {"meals": [{"name": str(item), "ingredients": [str(item)]}]}
+        if not _degraded_safety_violations(probe, allergies, diet):
+            safe.append(item)
+    return safe
+
+
 def _build_filtered_edge_recipe_day(
     allergies: list | tuple | None,
     dislikes: list | tuple | None,
@@ -24414,6 +24470,12 @@ def _build_filtered_edge_recipe_day(
     [P0-C FIX] Si se pasa pantry_items, intersecta cada categoría del catálogo con los
     ingredientes disponibles en la nevera. Si la intersección está vacía para una categoría,
     usa el catálogo completo filtrado como fallback para no bloquear la generación.
+
+    [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] El día que sale de aquí se PERSISTE sin pasar por el
+    grafo, así que el catálogo filtrado no puede ser la última palabra: los candidatos se tamizan
+    con el backstop determinista y el día ensamblado se re-verifica antes de devolverlo. Devolver
+    `None` es seguro — los dos callsites lo tratan como "no se pudo construir" (omiten la expansión
+    del pool o caen al siguiente recurso), que es exactamente el fail-secure que queremos.
     """
     from constants import _get_fast_filtered_catalogs, normalize_ingredient_for_tracking
 
@@ -24424,6 +24486,21 @@ def _build_filtered_edge_recipe_day(
         dislikes,
         (diet or "").strip().lower(),
     )
+
+    # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Segunda malla sobre el pool de candidatos. Va ANTES del
+    # guard de categoría vacía de abajo a propósito: si el tamiz deja una categoría sin candidatos
+    # seguros, la respuesta correcta es `None` (no construir), no construir con lo que sobró.
+    _pre = (len(filtered_proteins), len(filtered_carbs), len(filtered_veggies))
+    filtered_proteins = _sieve_catalog_for_safety(filtered_proteins, allergies, diet)
+    filtered_carbs = _sieve_catalog_for_safety(filtered_carbs, allergies, diet)
+    filtered_veggies = _sieve_catalog_for_safety(filtered_veggies, allergies, diet)
+    _post = (len(filtered_proteins), len(filtered_carbs), len(filtered_veggies))
+    if _post != _pre:
+        logger.warning(
+            f"[P0-DEGRADED-SAFETY-SCAN] El catálogo filtrado dejaba pasar alimentos que el backstop "
+            f"rechaza (dieta={diet!r}): proteínas {_pre[0]}→{_post[0]}, carbos {_pre[1]}→{_post[1]}, "
+            f"vegetales {_pre[2]}→{_post[2]}. El día se construye solo con los seguros."
+        )
 
     if not filtered_proteins or not filtered_carbs or not filtered_veggies:
         return None
@@ -24509,7 +24586,7 @@ def _build_filtered_edge_recipe_day(
     # nunca aparecía (gateado en `recipe.length > 0`). Recetas con prefijos de
     # 3 pilares para consistencia con FormattedRecipeStep.
     # Tooltip-anchor: P2-EDGE-RECIPE-CANONICAL-KEYS.
-    return {
+    _edge_day = {
         "day": 0,
         "day_name": "",
         "meals": [
@@ -24557,6 +24634,20 @@ def _build_filtered_edge_recipe_day(
             },
         ],
     }
+
+    # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Última palabra sobre el día ENSAMBLADO (no sobre el pool
+    # de candidatos): el tamiz de arriba mira nombres sueltos del catálogo y esto mira las líneas
+    # reales que se persisten ("200g Pollo"), incluido lo que `_cap_ingredient` y la intersección con
+    # la nevera hayan podido reintroducir. Si algo se coló, no devolvemos un día a medio arreglar:
+    # devolvemos `None` y el caller cae a su fail-secure (omitir la expansión o pausar el chunk).
+    _edge_violations = _degraded_safety_violations(_edge_day, allergies, diet)
+    if _edge_violations:
+        logger.error(
+            f"[P0-DEGRADED-SAFETY-SCAN] Edge Recipe descartado: el día ensamblado viola "
+            f"restricciones (dieta={diet!r}) → {_edge_violations[:3]}"
+        )
+        return None
+    return _edge_day
 
 
 def _detect_and_escalate_stuck_chunks():
@@ -27841,15 +27932,25 @@ def process_plan_chunk_queue(target_plan_id=None):
                             edge_day["day_name"] = "Edge Recipe"
                             safe_pool.append(edge_day)
                 
-                    if blocklist:
+                    # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] La condición era `if blocklist:` —
+                    # o sea que con alergias y dislikes vacíos el pool NO se filtraba, y una
+                    # violación de DIETA no necesita blocklist para existir. Los prior days se
+                    # generaron bajo las restricciones de ENTONCES; si el usuario declaró una
+                    # dieta o una alergia después, este es el único punto donde se detecta.
+                    if blocklist or current_diet:
                         def _is_blocked(day):
                             for meal in day.get("meals", []):
                                 txt = (meal.get("name", "") + " " + " ".join(meal.get("ingredients", []))).lower()
                                 for alg in blocklist:
                                     if alg.strip() and alg.strip().lower() in txt:
                                         return True
+                            # Escáner determinista además del substring: el substring compara el
+                            # LABEL del chip ('frutos secos' no aparece en 'Almendras fileteadas')
+                            # y no sabe nada de la dieta. tooltip-anchor: P0-DEGRADED-SAFETY-SCAN
+                            if _degraded_safety_violations(day, current_allergies, current_diet):
+                                return True
                             return False
-                        
+
                         filtered_pool = [d for d in safe_pool if not _is_blocked(d)]
                         if filtered_pool:
                             safe_pool = filtered_pool
