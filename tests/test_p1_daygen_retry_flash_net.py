@@ -21,11 +21,23 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 _BACKEND = Path(__file__).resolve().parent.parent
 _GO = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
 
 _NON = {"medicalConditions": ["Ninguna"]}
 _BAR = {"medicalConditions": ["Cirugía bariátrica"]}
+
+
+@pytest.fixture(autouse=True)
+def _sin_tier_routing(monkeypatch):
+    """[P1-DAYGEN-TIER-MODEL · 2026-07-31] Estos tests anclan la cadena BASE
+    [flash, red]. El routing por tier (Luna primario) tiene su propio ancla en
+    test_p1_daygen_tier_model.py; aquí se neutraliza para que las aserciones
+    midan el contrato base y no el tier/API-key del entorno de quien corre."""
+    import graph_orchestrator as _go
+    monkeypatch.setattr(_go, "_daygen_tier_profile", lambda: (None, ""))
 
 
 def test_marker_bumped():

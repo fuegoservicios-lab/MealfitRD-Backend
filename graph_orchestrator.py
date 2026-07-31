@@ -5414,6 +5414,54 @@ def _openai_key_available() -> bool:
     gpt-5.6-* la requieren; sin ella el reviewer cae al fallback DeepSeek)."""
     return bool((os.environ.get("OPENAI_API_KEY") or "").strip())
 
+
+# [P1-DAYGEN-TIER-MODEL · 2026-07-31] Generador de DÍAS por tier. Decisión del
+# owner tras el A/B medido con el índice de calidad (2026-07-31): "deepseek
+# medium dura mucho, el ganador es gpt 5.6 luna medium; medium en plus nadamás
+# por ahora, low o sin pensamiento en gratis; deja a deepseek donde no sea
+# necesario luna". Números del A/B: luna-medium 95,4 (coherencia 90) vs flash
+# 82-92 (coherencia 57-83); luna-high PEOR que medium en todo (90,8, 3×
+# latencia); flash+thinking DESCALIFICADO (36k tokens de razonamiento, 266 s
+# por día, timeout contra el techo → plan degradado 76,9). DeepSeek flash
+# conserva TODOS los demás nodos (planner, critique, correctores, compressor,
+# fact-checker) y es la RED del chain del day-gen (fallback rápido SIN
+# razonamiento: la red existe para rescatar, no para profundizar).
+_DAYGEN_TIER_MODEL_PLUS_DEFAULT = GPT56_LUNA
+_DAYGEN_TIER_EFFORT_PLUS_DEFAULT = "medium"
+_DAYGEN_TIER_MODEL_FREE_DEFAULT = GPT56_LUNA
+_DAYGEN_TIER_EFFORT_FREE_DEFAULT = "low"
+_DAYGEN_TIER_EFFORT_VALID = ("none", "low", "medium", "high", "xhigh", "max")
+
+
+def _daygen_tier_profile() -> tuple:
+    """(modelo_primario, effort) del day-gen según el tier del usuario en
+    contexto (`user_id_var`). plus/ultra → Luna medium; gratis/basic/guest/
+    desconocido → Luna low (fail-cheap simétrico al reviewer: sin contexto se
+    asume el barato). Sin OPENAI_API_KEY → (None, "") y la cadena queda la
+    estándar [flash, red] — mismo fail-safe que el reviewer clínico.
+    tooltip-anchor: P1-DAYGEN-TIER-MODEL"""
+    try:
+        tier = get_user_tier(user_id_var.get())
+    except Exception:
+        tier = "gratis"
+    if tier in ("plus", "ultra"):
+        model = _env_str("MEALFIT_DAYGEN_MODEL_PLUS",
+                         _DAYGEN_TIER_MODEL_PLUS_DEFAULT) or _DAYGEN_TIER_MODEL_PLUS_DEFAULT
+        effort = (_env_str("MEALFIT_DAYGEN_EFFORT_PLUS",
+                           _DAYGEN_TIER_EFFORT_PLUS_DEFAULT) or "").strip().lower()
+        if effort not in _DAYGEN_TIER_EFFORT_VALID:
+            effort = _DAYGEN_TIER_EFFORT_PLUS_DEFAULT
+    else:
+        model = _env_str("MEALFIT_DAYGEN_MODEL_FREE",
+                         _DAYGEN_TIER_MODEL_FREE_DEFAULT) or _DAYGEN_TIER_MODEL_FREE_DEFAULT
+        effort = (_env_str("MEALFIT_DAYGEN_EFFORT_FREE",
+                           _DAYGEN_TIER_EFFORT_FREE_DEFAULT) or "").strip().lower()
+        if effort not in _DAYGEN_TIER_EFFORT_VALID:
+            effort = _DAYGEN_TIER_EFFORT_FREE_DEFAULT
+    if is_openai_model(model) and not _openai_key_available():
+        return None, ""
+    return model, effort
+
 _PROFILE_RISK_NEGATIVES = {"", "ninguna", "ninguno", "none", "n/a", "na", "no", "nada"}
 
 
@@ -6144,7 +6192,16 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     # `attempt > 1 and DAY_GEN_RETRY_USE_PRO → [pro, flash]` asumía pro > flash; el knob
     # DAY_GEN_RETRY_USE_PRO sigue vivo en `_route_model_for_day_generator` (escalada
     # post-fallo por skeleton-fidelity, que SÍ es legítima: ahí pro entra tras fallar flash).
-    chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
+    #
+    # [P1-DAYGEN-TIER-MODEL · 2026-07-31] El PRIMARIO del day-gen sale del tier (Luna medium
+    # en plus/ultra, Luna low en gratis/basic — ver `_daygen_tier_profile`); flash queda de
+    # RED rápida sin razonamiento y la red cross-provider cierra la cadena. Sin OPENAI_API_KEY
+    # el perfil devuelve (None, "") y la cadena queda la base [flash, red] de P1-FLASH-PRIMARY.
+    _tier_primary, _ = _daygen_tier_profile()
+    if _tier_primary and _tier_primary != _FLASH_MODEL_NAME:
+        chain = [_tier_primary, _FLASH_MODEL_NAME, _PRO_MODEL_NAME]
+    else:
+        chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
     # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] El canario va DELANTE: se intenta primero y el resto
     # del chain queda como red (CB abierto o fallo → cascada normal a flash/pro, sin cambios).
     #
@@ -7728,17 +7785,27 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # nada: el A/B compara modelo contra modelo, no configuraciones
             # distintas por accidente.
             _es_openai = is_openai_model(_model)
-            if DAYGEN_EFFORT:
+            # [P1-DAYGEN-TIER-MODEL · 2026-07-31] Resolución del effort: el knob
+            # GLOBAL (experimentos A/B) GANA cuando está seteado; si no, aplica
+            # el effort del TIER y SOLO al modelo primario del tier — los
+            # modelos de red van sin razonamiento (la red rescata, no
+            # profundiza; un fallback que razona 4 min no rescata nada).
+            _eff = DAYGEN_EFFORT
+            if not _eff:
+                _t_model, _t_eff = _daygen_tier_profile()
+                if _t_model == _model and _t_eff:
+                    _eff = _t_eff
+            if _eff:
                 _kw["timeout"] = DAYGEN_EFFORT_TIMEOUT_S
                 if _es_openai:
-                    _kw["reasoning_effort"] = "xhigh" if DAYGEN_EFFORT == "max" else DAYGEN_EFFORT
-                elif DAYGEN_EFFORT != "none":
+                    _kw["reasoning_effort"] = "xhigh" if _eff == "max" else _eff
+                elif _eff != "none":
                     # DeepSeek: extra_body explícito GANA sobre el disabled-default
                     # del wrapper (merge por setdefault). "none" no inyecta nada:
                     # el default del wrapper ya es thinking apagado.
                     _kw["extra_body"] = {"thinking": {
                         "type": "enabled",
-                        "effort": "max" if DAYGEN_EFFORT == "xhigh" else DAYGEN_EFFORT,
+                        "effort": "max" if _eff == "xhigh" else _eff,
                     }}
             _llm = (ChatOpenAIInstrumented if _es_openai else ChatDeepSeek)(**_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:

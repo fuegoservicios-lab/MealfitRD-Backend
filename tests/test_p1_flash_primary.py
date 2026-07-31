@@ -34,6 +34,18 @@ _GO_SRC = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
 _LP_SRC = (_BACKEND / "llm_provider.py").read_text(encoding="utf-8")
 _APP_SRC = (_BACKEND / "app.py").read_text(encoding="utf-8")
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _sin_tier_routing(monkeypatch):
+    """[P1-DAYGEN-TIER-MODEL · 2026-07-31] Estos tests anclan la cadena BASE
+    [flash, red]. El routing por tier (Luna primario) tiene su propio ancla en
+    test_p1_daygen_tier_model.py; aquí se neutraliza para que las aserciones
+    midan el contrato base y no el tier/API-key del entorno de quien corre."""
+    import graph_orchestrator as _go
+    monkeypatch.setattr(_go, "_daygen_tier_profile", lambda: (None, ""))
+
 
 # ------------------------------------------------------------------
 # A. Router por tier — defaults del CÓDIGO (env-independiente)

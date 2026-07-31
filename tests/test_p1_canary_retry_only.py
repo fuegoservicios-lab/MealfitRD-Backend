@@ -27,6 +27,15 @@ import pytest
 import graph_orchestrator as go
 
 
+@pytest.fixture(autouse=True)
+def _sin_tier_routing(monkeypatch):
+    """[P1-DAYGEN-TIER-MODEL · 2026-07-31] Estos tests anclan el CANARIO sobre
+    la cadena base [flash, red]. El routing por tier (Luna primario) tiene su
+    ancla en test_p1_daygen_tier_model.py; aquí se neutraliza para que las
+    aserciones midan el canario y no el tier/API-key del entorno."""
+    monkeypatch.setattr(go, "_daygen_tier_profile", lambda: (None, ""))
+
+
 @pytest.fixture
 def canario_on(monkeypatch):
     monkeypatch.setattr(go, "DAYGEN_CANARY_MODEL", "gpt-5.6-luna")

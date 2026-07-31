@@ -91,6 +91,34 @@ resuelve al modelo FREE — un fallo de lookup jamás encarece la llamada.
 Lookup con cache TTL in-process (`MEALFIT_TIER_CACHE_TTL_S`, default 300s);
 `invalidate_tier_cache(user_id)` disponible post-upgrade de billing.
 
+## [P1-DAYGEN-TIER-MODEL · 2026-07-31] Generador de DÍAS por tier (Luna primario)
+
+Decisión del owner tras el A/B medido con el índice de calidad (2026-07-31):
+*"deepseek medium dura mucho, el ganador es gpt 5.6 luna medium; medium en plus
+nadamás por ahora, low o sin pensamiento en gratis; deja a deepseek donde no
+sea necesario luna"*. El day-gen es la ÚNICA superficie de generación que sale
+de DeepSeek; el resto de nodos (planner, critique, correctores, compressor,
+fact-checker) sigue flash [P1-FLASH-PRIMARY].
+
+| Tier | Day-gen primario | Effort | Cadena completa | Evidencia A/B (índice 0-100) |
+|---|---|---|---|---|
+| plus / ultra | `gpt-5.6-luna` | `medium` (`reasoning_effort`) | [luna, flash] | luna-medium **95,4** (coherencia 90) vs flash 82-92 (coherencia 57-83); ~$0,040/plan, 34,5 s/día |
+| gratis / basic / guest / desconocido | `gpt-5.6-luna` | `low` | [luna, flash] | fail-cheap simétrico al reviewer; low no medido aún — floor barato ($1,20/M out con poco razonamiento) |
+| (cualquiera) sin `OPENAI_API_KEY` | `deepseek-v4-flash` | — | [flash, red P1-NET-LUNA→pro] | fail-safe: jamás un modelo incobrable delante |
+
+Descalificados por el mismo A/B: **luna-high** (90,8 — peor que medium en TODO,
+3× latencia, 1,5× costo) y **flash+thinking-medium** (76,9 — 36k tokens de
+razonamiento, 266 s/día, día muerto contra el techo → plan degradado. La
+"ganga" del reasoning barato de DeepSeek era latencia, no dinero).
+
+Reglas de diseño ancladas por [`test_p1_daygen_tier_model.py`](../tests/test_p1_daygen_tier_model.py):
+el effort del tier aplica **SOLO al modelo primario** (la red flash jamás
+hereda thinking — la red rescata, no profundiza); el knob global
+`MEALFIT_DAYGEN_EFFORT` (experimentos A/B) gana sobre el del tier; effort
+inválido cae al default del tier, nunca a uno más caro. Knobs:
+`MEALFIT_DAYGEN_{MODEL,EFFORT}_{PLUS,FREE}`. Bariátrico NO cambia
+(early-return propio con `MEALFIT_BARIATRIC_DAYGEN_MODEL`, sin canario/lite).
+
 ## Surfaces tier-routed vs aux-fijo
 
 | Surface | Routing | Cómo obtiene la identidad |
@@ -125,7 +153,7 @@ sin tool_choice forzado sí lo soporta nativo.
 | Reviewer médico (risk-tier) | chico (veredicto) | `MEALFIT_REVIEWER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=90) | **ON** | `medium` | Sweep OFF/low/medium/high/max (caso látex): `low` atrapó lo MISMO que `max` (4 cross-react + gradación tomate) a igual velocidad → **max = overkill** (el reviewer solo escanea+juzga contra el reporte del fact-checker, no razona desde cero). `medium` = hedge para planes reales de 7 días; `low` es el piso probado suficiente |
 | Fact-checker clínico (FASE 1) | chico (reporte) | `MEALFIT_FACT_CHECKER_THINKING` (+`_EFFORT`, +`_TIMEOUT_S`=60) | **ON** | `high` | A/B warfarina+mariscos: HIGH atrapó interacción fibra↔absorción + CYP450 + cross-react sistemática que OFF omitió. `max` (72s) no superó a `high` (53s) → high = sweet spot. Usa `bind_tools` → thinking nativo (sin json_mode) |
 | Corrector quirúrgico (escalada Pro) | **grande (día completo)** | `MEALFIT_SURGICAL_PRO_THINKING` (+`_EFFORT`) | **OFF** | — | A/B caso pollo-duplicado: OFF=17s `pro_success` con fix correcto; HIGH y MAX = **timeout (120s)** → `None`. Generación grande + reasoning revienta el cap Y compite con el budget del pipeline |
-| Day-gen / planner | grande | — | **OFF permanente** | — | `P1-DEEPSEEK-THINKING-OFF`: numérico = motor determinista |
+| Day-gen / planner | grande | `MEALFIT_DAYGEN_EFFORT` (global A/B) · `MEALFIT_DAYGEN_EFFORT_{PLUS,FREE}` (tier) | **OFF en DeepSeek** · ON en Luna [P1-DAYGEN-TIER-MODEL] | plus `medium` / free `low` (solo el primario Luna; la red flash sin thinking) | `P1-DEEPSEEK-THINKING-OFF` sigue vigente para DeepSeek: flash+thinking-medium midió 36k tok de razonamiento, 266 s/día y plan degradado 76,9 (A/B 2026-07-31). El razonamiento de LUNA sí paga: medium 95,4 vs base 82-92 |
 
 Todos los knobs de thinking **nacen OFF** (convención medir→actuar) y hacen **fail-open
 al path estándar** (nunca a aprobar/omitir el gate clínico). Test ancla del reviewer/surgical:

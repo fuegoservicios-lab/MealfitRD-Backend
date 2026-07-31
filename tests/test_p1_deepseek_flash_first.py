@@ -12,9 +12,19 @@ from __future__ import annotations
 
 import graph_orchestrator as g
 import llm_provider as lp
+import pytest
 
 _BAR = {"medicalConditions": ["Cirugía Bariátrica (manga gástrica)"]}
 _NON = {"medicalConditions": ["Diabetes tipo 2"]}
+
+
+@pytest.fixture(autouse=True)
+def _sin_tier_routing(monkeypatch):
+    """[P1-DAYGEN-TIER-MODEL · 2026-07-31] Estos tests anclan la cadena BASE
+    [flash, red]. El routing por tier (Luna primario) tiene su propio ancla en
+    test_p1_daygen_tier_model.py; aquí se neutraliza para que las aserciones
+    midan el contrato base y no el tier/API-key del entorno de quien corre."""
+    monkeypatch.setattr(g, "_daygen_tier_profile", lambda: (None, ""))
 
 
 def _patch_flash(monkeypatch):

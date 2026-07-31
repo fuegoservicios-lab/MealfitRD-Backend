@@ -48,26 +48,30 @@ def test_knob_nace_apagado_y_acepta_ambos_vocabularios():
     assert 'DAYGEN_EFFORT = ""' in win, "un valor raro debe caer al default"
 
 
+# [P1-DAYGEN-TIER-MODEL · 2026-07-31] El effort efectivo ahora se resuelve en
+# la variable `_eff` (global de experimentos GANA; si no, el del tier gateado
+# al modelo primario) — los asserts siguen a la variable resuelta, no al knob
+# crudo, y la ventana creció con el bloque de resolución (900 → 1400).
 def test_alias_cruzados():
     i = _GO.index("_es_openai = is_openai_model(_model)")
-    win = _GO[i:i + 900]
-    assert '"xhigh" if DAYGEN_EFFORT == "max" else DAYGEN_EFFORT' in win, (
+    win = _GO[i:i + 1400]
+    assert '"xhigh" if _eff == "max" else _eff' in win, (
         "OpenAI no conoce 'max': debe traducirse a 'xhigh'"
     )
-    assert '"max" if DAYGEN_EFFORT == "xhigh" else DAYGEN_EFFORT' in win, (
+    assert '"max" if _eff == "xhigh" else _eff' in win, (
         "DeepSeek no conoce 'xhigh': debe traducirse a 'max'"
     )
 
 
 def test_deepseek_recibe_extra_body_thinking():
     i = _GO.index("_es_openai = is_openai_model(_model)")
-    win = _GO[i:i + 900]
+    win = _GO[i:i + 1400]
     assert '"type": "enabled"' in win, (
         "DeepSeek gobierna el razonamiento con extra_body.thinking — sin la "
         "inyección explícita el wrapper lo deja DISABLED y el A/B de flash-high/"
         "max mediría flash sin razonar creyendo que razona"
     )
-    assert 'elif DAYGEN_EFFORT != "none"' in win, (
+    assert 'elif _eff != "none"' in win, (
         "'none' en DeepSeek = no inyectar (el wrapper ya lo apaga)"
     )
 
@@ -79,7 +83,7 @@ def test_timeout_acompana_al_effort():
         "A/B muere en timeout y se mide la red, no el modelo"
     )
     i = _GO.index("_es_openai = is_openai_model(_model)")
-    win = _GO[i:i + 900]
+    win = _GO[i:i + 1400]
     assert '_kw["timeout"] = DAYGEN_EFFORT_TIMEOUT_S' in win
 
 
