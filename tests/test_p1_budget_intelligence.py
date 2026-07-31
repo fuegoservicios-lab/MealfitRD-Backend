@@ -218,7 +218,23 @@ def test_tier_lever_anchors_and_defaults(go):
     assert go.BUDGET_CHEAPEN_MAX_SUBS == 3
     # Pool weighting cableado en el sorteo (ai_helpers) tras el transform-boost.
     assert "P1-BUDGET-TIER-LEVERS (pool weighting)" in _AI_SRC
-    assert 'MEALFIT_BUDGET_POOL_WEIGHT", "2.0"' in _AI_SRC
+    # [2026-07-31] Anclado al CONTRATO, no a la sintaxis. Antes exigía la cadena
+    # literal `MEALFIT_BUDGET_POOL_WEIGHT", "2.0"`, o sea el
+    # `os.environ.get(nombre, "2.0")` de su día. P3-SEEDER-KNOBS-REGISTRY lo migró a
+    # `_env_float(nombre, 2.0, validador)` — mismo knob, mismo default, y ADEMÁS con
+    # rango validado: código mejor, test rojo. Lo que hay que proteger es que el knob
+    # siga existiendo y que su default siga siendo 2.0, no cómo se escriba.
+    import re as _re_knob
+    _m_knob = _re_knob.search(
+        r'MEALFIT_BUDGET_POOL_WEIGHT["\']\s*,\s*["\']?([0-9.]+)', _AI_SRC)
+    assert _m_knob, (
+        "P1-BUDGET-TIER-LEVERS: no encuentro el knob MEALFIT_BUDGET_POOL_WEIGHT con "
+        "su default en ai_helpers.py — el sorteo ponderado por precio perdió su palanca."
+    )
+    assert float(_m_knob.group(1)) == 2.0, (
+        f"el default del boost de pool cambió a {_m_knob.group(1)}; era 2.0. Si es "
+        f"intencional, actualiza este test Y la doc del knob en el mismo commit."
+    )
     assert "budget_prefers_economy" in _AI_SRC
     # Sugerencias de ahorro con el Supermercado RD (assemble) + helper con cache.
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) el inline de assemble se refactorizó al helper SSOT

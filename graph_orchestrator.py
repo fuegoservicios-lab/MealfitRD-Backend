@@ -32057,8 +32057,17 @@ NOTE_LINE_NAME_ALIGN_ENABLED = _env_bool("MEALFIT_NOTE_LINE_NAME_ALIGN", True)
 # frases que crece por incidente garantiza el próximo incidente. El test del batch v5 deriva los
 # wordings invocando la función, así que el próximo que se añada rompe el test antes de nacer
 # huérfano. tooltip-anchor: P2-CLOSER-NOTE-RE-UNIVERSE
+# [P1-CLOSER-NOTE-FUSED-FRESHCOCIDO · 2026-07-31] El ancla `^` cayó por la MISMA razón que los
+# verbos en v5: es una suposición sobre lo que hará el resto del pipeline.
+# `_integrate_complement_steps` fusiona la nota al final del párrafo "El Toque de Fuego", así que el
+# paso deja de empezar por el verbo, el `.match()` falla y la comida entera se salta — dejando otra
+# vez muerto el rebuild de food-safety. Evidencia viva (plan 93d6cd70): "…Escurre e incorpora filete
+# de pescado blanco (ya viene cocido) a la preparación antes de servir." con la línea "15 g de filete
+# de pescado blanco": pescado CRUDO declarado ya-cocido. Ahora se busca la nota esté donde esté
+# (`.search`), y el consumidor distingue nota suelta de nota fusionada.
+# tooltip-anchor: P1-CLOSER-NOTE-FUSED-FRESHCOCIDO
 _CLOSER_NOTE_FOOD_RE = _re.compile(
-    r"^(?P<pre>(?:💪\s*)?(?:Escurre e incorpora|Incorpora|Cocina|Añade|Agrega|Sirve)\s+)"
+    r"(?P<pre>(?:💪\s*)?(?:Escurre e incorpora|Incorpora|Cocina|Añade|Agrega|Sirve)\s+)"
     r"(?P<food>.+?)"
     r"(?P<post>\s+\(ya viene cocido\)\s+a la preparación"
     r"|\s+\(ya viene cocido\)\s+al guiso"
@@ -32088,9 +32097,15 @@ def _align_closer_note_food_names(meal: dict) -> int:
         for _i, step in enumerate(rec):
             if not isinstance(step, str):
                 continue
-            m_n = _CLOSER_NOTE_FOOD_RE.match(step.strip())
+            # [P1-CLOSER-NOTE-FUSED-FRESHCOCIDO · 2026-07-31] `search`, no `match`: ver la nota del
+            # regex. `_fusionada` = la nota NO abre el paso porque otro pase la pegó al final del
+            # "Toque de Fuego"; en ese caso el paso contiene ADEMÁS la cocción del plato y no se
+            # puede sustituir entero.
+            _step_s = step.strip()
+            m_n = _CLOSER_NOTE_FOOD_RE.search(_step_s)
             if not m_n:
                 continue
+            _fusionada = m_n.start() > 0
             _note_food = m_n.group("food").strip()
             _note_toks = [t for t in _re.split(r"[^\wáéíóúñü]+", _sa_al(_note_food.lower()))
                           if len(t) >= 4]
@@ -32125,8 +32140,16 @@ def _align_closer_note_food_names(meal: dict) -> int:
             # P1-CLOSER-FRESH-COCIDO
             if "(ya viene cocido)" in step and not any(
                     _h in _sa_al(_line_food.lower()) for _h in _PRECOOKED_PROTEIN_HINT):
-                _rebuilt = f"💪 {_closer_protein_step_text(_line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al), baked=(_meal_is_baked(meal, _sa_al) or _meal_is_hot_cooked(meal, _sa_al)))}"
-                if _rebuilt.strip() != step.strip():
+                _nota_ok = _closer_protein_step_text(
+                    _line_food, _meal_is_no_cook(meal), stewy=_meal_is_stewy(meal, _sa_al),
+                    baked=(_meal_is_baked(meal, _sa_al) or _meal_is_hot_cooked(meal, _sa_al)))
+                # [P1-CLOSER-NOTE-FUSED-FRESHCOCIDO · 2026-07-31] Con la nota FUSIONADA, el paso trae
+                # también la cocción del plato: sustituirlo entero (lo que hacía la rama original,
+                # correcta para una nota suelta) borraría "calienta el aceite", "fríe el plátano"…
+                # Se reemplaza SOLO el segmento de la nota, que la fusión deja al final del paso.
+                _rebuilt = (f"{_step_s[:m_n.start()].rstrip()} {_nota_ok}" if _fusionada
+                            else f"💪 {_nota_ok}")
+                if _rebuilt.strip() != _step_s:
                     rec[_i] = _rebuilt
                     fixed += 1
                 continue

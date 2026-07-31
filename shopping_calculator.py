@@ -3309,6 +3309,61 @@ def _has_pkg_suffix(display_qty: str, label: str) -> bool:
 # pricing, agregadores, frontend con `parseFloat(market_qty)`).
 _FRACTION_DECIMAL = {"1/4": 0.25, "1/2": 0.5, "3/4": 0.75}
 
+# [P2-MARKET-FRACTION-NO-SHORTFALL · 2026-07-31] Déficit máximo tolerado al redondear el peso a
+# cuartos de libra. Por debajo de esto se permite bajar (evita encarecer una proteína cara por unos
+# gramos); por encima se sube al siguiente cuarto. Clamp [0, 0.15]: con 0 se compra siempre de más,
+# con 0.15 se vuelve al comportamiento previo de "cuarto más cercano".
+MARKET_FRACTION_SHORTFALL_TOL = _knob_env_float(
+    "MEALFIT_MARKET_FRACTION_SHORTFALL_TOL", 0.05, lambda v: 0.0 <= v <= 0.15)
+
+_MARKET_FRACTION_LADDER = ("", "1/4", "1/2", "3/4")
+
+
+def _lbs_to_market_fraction(lbs: float) -> "tuple[int, str]":
+    """[P2-MARKET-FRACTION-NO-SHORTFALL · 2026-07-31] Peso en libras → (enteros, fracción de mercado).
+
+    Antes esto era una escalera inline que redondeaba al cuarto MÁS CERCANO
+    (`frac < 0.15 → ""`, `<= 0.35 → "1/4"`, …). El problema no es el redondeo en sí: es que el número
+    que recibe (`lbs_for_weighable`) YA pasó por el anti-desperdicio y un `ceil`, o sea que la
+    cantidad era correcta y esta última capa la bajaba por debajo del requisito. Medido en el plan
+    fe788498: 5 ítems de 34 por debajo de lo que las recetas piden, hasta −22,9% (molondrones).
+
+    En una lista de compras la asimetría importa — que sobre queda en la nevera, que falte te deja
+    sin cocinar — pero subir SIEMPRE encarecería de más una proteína cara por un déficit trivial
+    (el chivo se queda a −2,8%). Por eso el criterio es una tolerancia y no un `ceil` duro.
+
+    Pura y determinista. tooltip-anchor: P2-MARKET-FRACTION-NO-SHORTFALL"""
+    try:
+        _lbs = max(0.0, float(lbs))
+    except Exception:
+        return 0, ""
+    whole = math.floor(_lbs)
+    frac_w = _lbs - whole
+
+    # candidato "más cercano" (comportamiento histórico)
+    if frac_w < 0.15:
+        fraction_str = ""
+    elif frac_w <= 0.35:
+        fraction_str = "1/4"
+    elif frac_w <= 0.65:
+        fraction_str = "1/2"
+    elif frac_w <= 0.85:
+        fraction_str = "3/4"
+    else:
+        fraction_str = ""
+        whole += 1
+
+    # ¿el candidato deja al usuario corto más allá de la tolerancia? → siguiente peldaño
+    _elegido = whole + _FRACTION_DECIMAL.get(fraction_str, 0.0)
+    if _lbs > 0 and _elegido < _lbs * (1.0 - MARKET_FRACTION_SHORTFALL_TOL):
+        _i = _MARKET_FRACTION_LADDER.index(fraction_str)
+        if _i + 1 < len(_MARKET_FRACTION_LADDER):
+            fraction_str = _MARKET_FRACTION_LADDER[_i + 1]
+        else:
+            whole += 1
+            fraction_str = ""
+    return int(whole), fraction_str
+
 
 def _sku_size_label(size_g: float, unit_hint: str = None) -> str:
     """Convierte gramos a etiqueta legible de mercado dominicano.
@@ -3684,17 +3739,8 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                 if is_native_weighable:
                     # Enfoque Híbrido Priorizado a Peso: "1 lb (~5 Uds)"
                     lbs_for_weighable = (units_count * density_per_u) / 453.592
-                    whole = math.floor(lbs_for_weighable)
-                    frac_w = lbs_for_weighable - whole
-                    fraction_str = ""
-                    if frac_w < 0.15: fraction_str = ""
-                    elif frac_w <= 0.35: fraction_str = "1/4"
-                    elif frac_w <= 0.65: fraction_str = "1/2"
-                    elif frac_w <= 0.85: fraction_str = "3/4"
-                    else: 
-                        fraction_str = ""
-                        whole += 1
-                        
+                    whole, fraction_str = _lbs_to_market_fraction(lbs_for_weighable)
+
                     if whole == 0 and not fraction_str:
                         # Si es muy ligero, forzar a "1/4 lb" o unidades puras si es excepcionalmente pequeño
                         unit_text = "Ud." if units_count == 1 else "Uds."
