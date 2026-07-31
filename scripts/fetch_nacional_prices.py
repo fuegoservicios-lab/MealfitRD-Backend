@@ -54,7 +54,7 @@ except Exception:
 import psycopg
 
 BASE = "https://supermercadosnacional.com"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; MealfitRD-price-bot/1.0)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Bioboros-price-bot/1.0)"}
 
 # Categorías reales verificadas (2026-06-16). Clave lógica → ruta. Se paginan con ?p=N.
 CATEGORIES = {

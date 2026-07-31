@@ -1,7 +1,7 @@
 """[P1-SUPERMARKET-DB · 2026-07-02] Supermercado RD artificial.
 
 Endpoints de la base de datos `supermarket_products` (Neon): el "supermercado
-dominicano" de MealfitRD. Cada fila es UNA presentación comprable de un alimento
+dominicano" de Bioboros. Cada fila es UNA presentación comprable de un alimento
 verificado (alimento + marca opcional + presentación + porción + duración +
 precio RD$). Se navega públicamente desde el landing (/supermercado) y se edita
 desde la misma página con el gate admin (Bearer CRON_SECRET).

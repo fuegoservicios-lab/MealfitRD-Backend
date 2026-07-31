@@ -10522,7 +10522,7 @@ def api_blocked_reasons(
             "tz_unresolved": {
                 "title": "Confirmando tu zona horaria",
                 "body": "Aún no pudimos resolver tu zona horaria para programar el siguiente bloque. Abre la app desde tu dispositivo principal.",
-                "cta": "Abrir Mealfit",
+                "cta": "Abrir Bioboros",
                 "url": "/dashboard",
             },
             "missing_prior_lessons": {
@@ -12070,7 +12070,7 @@ def api_plan_lifetime_lessons(
 
         Para el usuario que abre un plan archivado, todo este
         aprendizaje cross-plan era invisible. Surface en el modal
-        permite al usuario ver *qué aprendió Mealfit de él* en ese
+        permite al usuario ver *qué aprendió Bioboros de él* en ese
         plan — diferenciador de producto que estaba enterrado en
         jsonb sin UI.
 
@@ -13269,7 +13269,7 @@ def api_plans_history_list(
                     --         próximo tick del scheduler (≤1 min).
                     --     El frontend usa este split para mostrar copy
                     --     preciso: "se generarán cuando llegue su momento"
-                    --     vs "Mealfit los está generando ahora".
+                    --     vs "Bioboros los está generando ahora".
                     --
                     -- Edge case: si execute_after es NULL (chunk legacy
                     -- pre-migration con DEFAULT NOW() en INSERT que cayó

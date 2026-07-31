@@ -445,7 +445,7 @@ def run_proactive_checks():
                     logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró NADA. Generando nudge indulgente...")
                     prompt = f"""
 Eres tu nutricionista IA. Son las {trigger_time_str} de la noche.
-He notado que el paciente no ha registrado NINGUNA comida en todo el día en su diario de Mealfit.
+He notado que el paciente no ha registrado NINGUNA comida en todo el día en su diario de Bioboros.
 Escríbele un mensaje corto (máximo 2 líneas) muy amistoso e indulgente al estilo WhatsApp preguntándole:
 "Veo que no registraste nada hoy, ¿restamos lo de hoy de tu nevera como si lo hubieras cocinado o comiste fuera?"
 No uses demasiados emojis. Sé directo, breve y empático.

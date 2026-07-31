@@ -1,6 +1,6 @@
 """[P2-HELP-CHATBOT · 2026-07-04] Chatbot de ayuda del menú "Obtener ayuda".
 
-POST /api/help/chat — Q&A de producto (qué es MealfitRD, planes/precios,
+POST /api/help/chat — Q&A de producto (qué es Bioboros, planes/precios,
 cómo usar cada sección). SIN acceso a datos del usuario: cero tools, cero
 DB, cero user_id en el prompt — el conocimiento vive en
 `prompts.help_bot.HELP_BOT_SYSTEM_PROMPT` y la escalación es el correo de

@@ -69,7 +69,7 @@ async def main():
         "ORDER BY created_at DESC LIMIT %s", (args.n,), fetch_all=True) or []
 
     parts = [f"<!doctype html><meta charset='utf-8'><style>{_CSS}</style>",
-             "<h1>Revisión clínica de planes — MealfitRD</h1>",
+             "<h1>Revisión clínica de planes — Bioboros</h1>",
              "<p class='meta'>Muestra de planes reales generados en producción. Para revisión por "
              "nutricionista certificado: verifica que las comidas, porciones y macros sean clínicamente "
              "sensatas y que el plan entregue su target. Marca cada plan y anota observaciones.</p>",

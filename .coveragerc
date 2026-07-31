@@ -45,4 +45,4 @@ exclude_also =
 [html]
 directory = htmlcov
 # Title del index para distinguir si abres múltiples coverage reports.
-title = MealfitRD backend coverage
+title = Bioboros backend coverage

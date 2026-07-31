@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-PAUSE-REASON-STALE · 2026-07-30"
+_LAST_KNOWN_PFIX = "P1-BIOBOROS-REBRAND-COPY · 2026-07-30"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2185,8 +2185,15 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
-        "https://mealfitrd.com",
-        "https://www.mealfitrd.com"
+        # [BIOBOROS-REBRAND · 2026-07-30] Antes eran mealfitrd.com / www. El
+        # dominio cambió y la lista se quedó con los dos muertos y sin el vivo.
+        # Hoy es inerte —nginx sirve el frontend y proxya /api en el MISMO
+        # origen, así que el navegador no dispara preflight— pero una lista CORS
+        # que no nombra el origen real es una trampa para el día que el frontend
+        # se sirva desde otro host.
+        "https://bioboros.com",
+        "https://www.bioboros.com",
+        "https://app.bioboros.com"
     ], # Dominios de producción (servidos por nginx en el VPS Oracle)
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

@@ -2,7 +2,7 @@
 first-party `__Host-mf_session`.
 
 Por qué (resumen — diseño/seguridad completos en `auth.py`): Neon Auth sirve la
-sesión como cookie de su propio dominio (third-party relativa a mealfitrd.com);
+sesión como cookie de su propio dominio (third-party relativa a bioboros.com);
 iOS Safari/PWA la borra al cerrar la app → logout. Esta capa emite, EN ESTE
 backend (mismo origen), una cookie first-party que iOS sí conserva. No reemplaza
 a Neon: el usuario se loguea en Neon (email u OAuth) y luego intercambia su JWT
@@ -126,7 +126,7 @@ async def email_otp_verify(
 
     Por qué: el flujo previo verificaba el OTP con un fetch directo del navegador a
     Neon Auth (`/sign-in/email-otp`, credentials:include). La cookie de sesión que
-    Neon setea en esa respuesta es THIRD-PARTY (dominio neonauth ≠ app.mealfitrd.com)
+    Neon setea en esa respuesta es THIRD-PARTY (dominio neonauth ≠ app.bioboros.com)
     y viene de un XHR, no de una navegación top-level → los navegadores móviles la
     BLOQUEAN (iOS siempre; Chrome con el phase-out de third-party cookies). Tras el
     reload, getSession() no encontraba nada → rebote a /login ("pongo el código y no

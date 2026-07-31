@@ -8951,7 +8951,7 @@ def _maybe_notify_user_tz_unresolved(
             title="Necesitamos tu zona horaria",
             body=(
                 "Dejamos en pausa los próximos días de tu plan porque no pudimos "
-                "detectar tu zona horaria. Abre Mealfit y se sincronizará "
+                "detectar tu zona horaria. Abre Bioboros y se sincronizará "
                 "automáticamente para reanudar la generación."
             ),
             url="/dashboard?action_required=tz_unresolved",
@@ -15253,7 +15253,7 @@ def _escalate_unrecoverable_chunk(
         action_title = "Tu plan necesita atención"
         action_body = (
             "No pudimos completar parte de tu plan automáticamente. "
-            "Abre Mealfit y regenera tu plan para que volvamos a generarlo con tu nevera actual."
+            "Abre Bioboros y regenera tu plan para que volvamos a generarlo con tu nevera actual."
         )
         action_cta = "Regenerar plan"
         action_url = "/dashboard?recovery_exhausted=1"
@@ -15445,7 +15445,7 @@ def _notify_zombie_plan_generation_failed(plan_id: str, user_id: str) -> None:
     action_title = "No pudimos generar tu plan"
     action_body = (
         "Hubo un problema y tu plan no llegó a generarse. "
-        "Abre Mealfit y vuelve a generarlo con tu nevera actual."
+        "Abre Bioboros y vuelve a generarlo con tu nevera actual."
     )
     action_cta = "Generar plan"
     action_url = "/dashboard?action_required=generation_failed"
