@@ -21,6 +21,10 @@ from rate_limiter import RateLimiter
 from db import (
     log_consumed_meal, get_consumed_meals_today, save_visual_entry,
     delete_consumed_meal, get_user_profile, log_llm_usage_event,
+    # [P1-DIARY-HISTORY · 2026-07-31] Agregación por día de `consumed_meals`
+    # (ver `api_get_consumed_range`). Vía la fachada `db`, no `db_core`
+    # directo — convención P3-DB-IMPORTS-FACADE.
+    execute_sql_query,
 )
 from vision_agent import (
     process_image_with_vision, get_multimodal_embedding,
@@ -716,6 +720,94 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.get("/consumed-range/{user_id}")
+def api_get_consumed_range(
+    user_id: str,
+    days: int = 14,
+    tzOffset: Optional[int] = None,
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-DIARY-HISTORY · 2026-07-31] Totales por DÍA de los últimos N días.
+
+    Existe para que la tira de días del diario signifique algo: sin esto, el
+    selector solo puede mostrar fechas y el usuario tiene que ir tocando una a
+    una para descubrir cuáles tienen registro. Con esto cada día lleva su kcal
+    y su conteo, así que la tira es a la vez navegación y resumen de adherencia.
+
+    La alternativa —pedir los ~14 días con 14 llamadas al endpoint de un día—
+    multiplica por 14 el round-trip y la carga para la MISMA información. Aquí
+    es UNA agregación en Postgres.
+
+    El día se corta en la zona del USUARIO (`tzOffset` en minutos, la misma
+    convención que `/consumed/{user_id}`): agrupar en UTC partiría las cenas
+    dominicanas en dos días distintos — en RD (UTC-4) todo lo comido después de
+    las 20:00 caería en el día siguiente.
+
+    [I2] Filtra `AND user_id = %s` en SQL además del guard de ownership de
+    arriba: defensa en profundidad, igual que el resto de lecturas del diario.
+    """
+    try:
+        assert_valid_uuid(user_id, allow_guest=True)
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=403, detail="Prohibido.")
+        if not user_id or user_id == "guest":
+            return {"days": []}
+
+        # Clamp defensivo: `days` viene del cliente. Sin tope, un `days=99999`
+        # convierte un endpoint de UI en un escaneo de tabla.
+        try:
+            n_days = max(1, min(int(days), 90))
+        except (TypeError, ValueError):
+            n_days = 14
+
+        # tzOffset es el `getTimezoneOffset()` de JS: minutos que hay que SUMAR
+        # a la hora local para obtener UTC (RD = +240). Se resta para pasar de
+        # UTC a local, y se clampa al rango real de zonas horarias.
+        try:
+            off_min = int(tzOffset) if tzOffset is not None else 0
+        except (TypeError, ValueError):
+            off_min = 0
+        off_min = max(-840, min(off_min, 840))
+
+        rows = execute_sql_query(
+            """
+            SELECT (consumed_at - make_interval(mins => %s))::date AS dia,
+                   COALESCE(SUM(calories), 0)      AS calories,
+                   COALESCE(SUM(protein), 0)       AS protein,
+                   COALESCE(SUM(carbs), 0)         AS carbs,
+                   COALESCE(SUM(healthy_fats), 0)  AS healthy_fats,
+                   COUNT(*)                        AS meals_count
+            FROM consumed_meals
+            WHERE user_id = %s
+              AND consumed_at >= now() - make_interval(days => %s)
+            GROUP BY 1
+            ORDER BY 1 DESC
+            """,
+            (off_min, user_id, n_days),
+            fetch_all=True,
+        ) or []
+
+        return {
+            "days": [
+                {
+                    "date": str(r.get("dia")),
+                    "calories": int(r.get("calories") or 0),
+                    "protein": int(r.get("protein") or 0),
+                    "carbs": int(r.get("carbs") or 0),
+                    "healthy_fats": int(r.get("healthy_fats") or 0),
+                    "meals_count": int(r.get("meals_count") or 0),
+                }
+                for r in rows
+            ]
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed-range GET: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
