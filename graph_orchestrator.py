@@ -5315,18 +5315,43 @@ def _judge_model_name() -> str:
 # [P2-ORCH-7 · 2026-05-28] Modelo "risk-tier" para el reviewer médico y el
 # fact-checker clínico cuando el perfil declara alergias/condiciones médicas.
 # El reviewer es el ÚNICO gate LLM de seguridad clínica.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default único PARA TODOS los tiers
-# (incluido gratis): la seguridad clínica de perfiles con alergias/condiciones
-# NO se degrada por plan de pago. Perfiles sin restricciones siguen en el
-# modelo barato. Tooltip-anchor: P2-ORCH-7.
-# [P1-FLASH-PRIMARY · 2026-07-31] Era `DEEPSEEK_PRO` bajo la premisa
-# "pro razona mejor". El owner midió que flash es actualmente MEJOR — mantener
-# pro aquí sería degradar el gate clínico a propósito. El guard de downgrade
-# (`_warn_if_clinical_model_downgraded`) compara contra ESTA constante, así que
-# sigue alertando si un knob desvía el gate del risk-tier esperado (ahora
-# flash). Rollback: `MEALFIT_REVIEWER_RISK_TIER_MODEL=deepseek-v4-pro` (+ el
-# knob homólogo del fact-checker) sin redeploy.
+# [P1-FLASH-PRIMARY · 2026-07-31] Era `DEEPSEEK_PRO`; el owner midió que flash
+# es actualmente MEJOR que pro. Hoy esta constante es: (a) el risk-tier del
+# FACT-CHECKER, (b) el FALLBACK fail-safe del reviewer cuando el modelo
+# OpenAI del tier no es utilizable (sin OPENAI_API_KEY).
+# [P1-REVIEWER-TIER-MODELS · 2026-07-31] El REVIEWER risk-tier ya no usa esta
+# constante como default: enruta por tier de suscripción (decisión owner tras
+# el recorte de precios OpenAI: free→gpt-5.6-luna [-80%], pagados→gpt-5.6-terra
+# [-20%; medido rentable en basic: worst-case $0.73/mes = 7.3% del revenue con
+# 2.371 tok in / 213 out promedio reales de 158 calls/30d]). Ver
+# `_reviewer_model_name`.
 _REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH
+
+# [P1-REVIEWER-TIER-MODELS · 2026-07-31] Modelos del reviewer clínico por tier.
+# Knobs per-tier (convención P3-PREVIEW-MODEL-KNOB — override sin redeploy):
+_REVIEWER_RISK_MODEL_FREE_DEFAULT = "gpt-5.6-luna"
+_REVIEWER_RISK_MODEL_PAID_DEFAULT = "gpt-5.6-terra"
+
+
+def _reviewer_risk_model_for_tier() -> str:
+    """Modelo risk-tier del REVIEWER según tier de suscripción del usuario en
+    contexto (`user_id_var`). free/guest/desconocido → Luna; basic/plus/ultra
+    → Terra. Fail-cheap simétrico al router: sin contexto → free."""
+    try:
+        tier = get_user_tier(user_id_var.get())
+    except Exception:
+        tier = "gratis"
+    if tier in PAID_TIERS:
+        return _env_str("MEALFIT_REVIEWER_RISK_MODEL_PAID",
+                        _REVIEWER_RISK_MODEL_PAID_DEFAULT) or _REVIEWER_RISK_MODEL_PAID_DEFAULT
+    return _env_str("MEALFIT_REVIEWER_RISK_MODEL_FREE",
+                    _REVIEWER_RISK_MODEL_FREE_DEFAULT) or _REVIEWER_RISK_MODEL_FREE_DEFAULT
+
+
+def _openai_key_available() -> bool:
+    """True si hay OPENAI_API_KEY utilizable en el entorno (los modelos
+    gpt-5.6-* la requieren; sin ella el reviewer cae al fallback DeepSeek)."""
+    return bool((os.environ.get("OPENAI_API_KEY") or "").strip())
 
 _PROFILE_RISK_NEGATIVES = {"", "ninguna", "ninguno", "none", "n/a", "na", "no", "nada"}
 
@@ -5360,15 +5385,21 @@ def _profile_has_medical_risk(form_data) -> bool:
 _CLINICAL_MODEL_GUARD_WARNED: set = set()
 
 
-def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
+def _warn_if_clinical_model_downgraded(node: str, resolved_model: str,
+                                       expected_model: str | None = None) -> None:
     """Emite WARN + `system_alerts` cuando un perfil con riesgo médico va a
-    ser revisado por un modelo distinto del risk-tier esperado
-    (`_REVIEWER_RISK_TIER_DEFAULT` — flash desde P1-FLASH-PRIMARY 2026-07-31).
+    ser revisado por un modelo distinto del risk-tier ESPERADO para ese nodo.
+    [P1-REVIEWER-TIER-MODELS · 2026-07-31] `expected_model` es parámetro: el
+    reviewer espera el modelo de SU tier (Luna/Terra); el fact-checker sigue
+    esperando `_REVIEWER_RISK_TIER_DEFAULT` (default del parámetro).
     Detector de DESVÍO, no de "modelo más barato": cualquier divergencia del
-    risk-tier (incluido pro) alerta, porque el gate clínico solo está
-    verificado con el modelo esperado. Best-effort: jamás rompe el routing."""
+    esperado alerta, porque el gate clínico solo está verificado con el modelo
+    esperado (incluye el fallback sin OPENAI_API_KEY — el operador DEBE
+    enterarse de que el gate corre en el modelo de respaldo).
+    Best-effort: jamás rompe el routing."""
+    _expected = (expected_model or _REVIEWER_RISK_TIER_DEFAULT).strip()
     resolved = (resolved_model or "").strip()
-    if resolved == _REVIEWER_RISK_TIER_DEFAULT:
+    if resolved == _expected:
         return
     dedup = (node, resolved)
     if dedup in _CLINICAL_MODEL_GUARD_WARNED:
@@ -5377,7 +5408,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
     logger.warning(
         f"⚠ [P1-DEEPSEEK-ONLY-RESTORE] Gate clínico DESVIADO del risk-tier: nodo '{node}' "
         f"resolvió '{resolved}' para perfil con riesgo médico (risk-tier "
-        f"esperado '{_REVIEWER_RISK_TIER_DEFAULT}'). Revisar knobs "
+        f"esperado '{_expected}'). Revisar knobs "
         f"MEALFIT_{node.upper()}_MODEL / MEALFIT_{node.upper()}_RISK_TIER_MODEL "
         f"en el .env del worker; si es intencional, resolver la alert manual."
     )
@@ -5404,7 +5435,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
                     f"El nodo clínico '{node}' está resolviendo al modelo "
                     f"'{resolved}' para perfiles con alergias/condiciones "
                     f"médicas (risk-tier esperado "
-                    f"'{_REVIEWER_RISK_TIER_DEFAULT}'). Un modelo fuera del "
+                    f"'{_expected}'). Un modelo fuera del "
                     f"risk-tier verificado puede dejar pasar violaciones "
                     f"clínicas (caso medido con un modelo débil: DM2 carbos "
                     f"+99%). Corregir knobs o resolver manual si es "
@@ -5414,7 +5445,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
                     {
                         "node": node,
                         "resolved_model": resolved,
-                        "expected_model": _REVIEWER_RISK_TIER_DEFAULT,
+                        "expected_model": _expected,
                     },
                     ensure_ascii=False,
                 ),
@@ -5450,23 +5481,40 @@ def _fact_checker_model_name(form_data=None) -> str:
 
 def _reviewer_model_name(form_data=None) -> str:
     """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del reviewer (pipeline_holistic).
-    Hard-override `MEALFIT_REVIEWER_MODEL` siempre gana. Si el perfil tiene
-    alergias/condiciones médicas → risk-tier (`MEALFIT_REVIEWER_RISK_TIER_MODEL`,
-    default `_REVIEWER_RISK_TIER_DEFAULT` = flash desde P1-FLASH-PRIMARY —
-    el owner midió flash > pro);
-    de lo contrario Flash (`ReviewResult` schema strict, temp=0.1).
-    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
-    WARN + system_alert (observacional, el knob sigue ganando)."""
-    _override = _env_str("MEALFIT_REVIEWER_MODEL", "")
+    Hard-override `MEALFIT_REVIEWER_MODEL` siempre gana. Perfil SIN riesgo →
+    Flash (`ReviewResult` schema strict, temp=0.1).
+
+    [P1-REVIEWER-TIER-MODELS · 2026-07-31] Perfil CON riesgo → modelo por TIER
+    (decisión owner tras el recorte de precios OpenAI):
+      free/guest → `gpt-5.6-luna` ($0.20/$1.20 por 1M, -80%)
+      basic/plus/ultra → `gpt-5.6-terra` ($2.00/$12.00, -20%; rentable en
+      basic: worst-case $0.73/mes = 7.3% del revenue, medido con 2.371 tok
+      in / 213 out promedio de producción)
+    Precedencia: `MEALFIT_REVIEWER_RISK_TIER_MODEL` (global) gana sobre el
+    tier map; knobs per-tier `MEALFIT_REVIEWER_RISK_MODEL_{FREE,PAID}`.
+    Fail-safe: modelo OpenAI sin `OPENAI_API_KEY` → fallback
+    `_REVIEWER_RISK_TIER_DEFAULT` (flash) + alerta de desvío — el gate
+    clínico NUNCA se queda sin modelo utilizable.
+    [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != esperado del
+    tier → WARN + system_alert (observacional, el knob sigue ganando)."""
     _risk = _profile_has_medical_risk(form_data)
+    _tier_expected = _reviewer_risk_model_for_tier() if _risk else None
+    _override = _env_str("MEALFIT_REVIEWER_MODEL", "")
     if _override:
         if _risk:
-            _warn_if_clinical_model_downgraded("reviewer", _override)
+            _warn_if_clinical_model_downgraded("reviewer", _override, _tier_expected)
         return _override
     if _risk:
-        _resolved = (_env_str("MEALFIT_REVIEWER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
-                     or _REVIEWER_RISK_TIER_DEFAULT)
-        _warn_if_clinical_model_downgraded("reviewer", _resolved)
+        _resolved = (_env_str("MEALFIT_REVIEWER_RISK_TIER_MODEL", _tier_expected)
+                     or _tier_expected)
+        if is_openai_model(_resolved) and not _openai_key_available():
+            logger.warning(
+                f"⚠ [P1-REVIEWER-TIER-MODELS] Reviewer risk-tier '{_resolved}' requiere "
+                f"OPENAI_API_KEY y no está en el entorno → fallback fail-safe a "
+                f"'{_REVIEWER_RISK_TIER_DEFAULT}'. El gate clínico sigue vivo en el respaldo."
+            )
+            _resolved = _REVIEWER_RISK_TIER_DEFAULT
+        _warn_if_clinical_model_downgraded("reviewer", _resolved, _tier_expected)
         return _resolved
     return _FLASH_LITE_DEFAULT
 
@@ -37092,13 +37140,21 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # `MEALFIT_REVIEWER_MODEL` — tarea schema-strict (ReviewResult) con
         # temp=0.1. Pre-fix: `_route_model(form_data, attempt=1)` escalaba a
         # Pro en perfiles clínicos. Override por knob si regresión.
-        _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier
+        _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier · P1-REVIEWER-TIER-MODELS
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
-        # [P1-REVIEWER-THINKING · 2026-07-05] Rama thinking SOLO para perfiles con riesgo médico
-        # (los que ya enrutan a pro): razonamiento nativo antes del veredicto clínico. El API no
-        # soporta thinking + tool_choice forzado → json_mode (el contrato JSON ya vive literal en
+        # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Dispatch por proveedor: Luna/Terra son OpenAI —
+        # construirlos con ChatDeepSeek los mandaría al base_url de DeepSeek con la key equivocada
+        # (el mismo fallo que P1-DAYGEN-LUNA-CANARY cerró en el day-gen). ChatOpenAIInstrumented
+        # conserva backpressure + contabilidad en llm_usage_events (P1-LUNA-USAGE-BLIND).
+        _rev_is_openai = is_openai_model(_reviewer_model)
+        # [P1-REVIEWER-THINKING · 2026-07-05] Rama thinking SOLO para perfiles con riesgo médico:
+        # razonamiento nativo antes del veredicto clínico. El API no soporta thinking +
+        # tool_choice forzado → json_mode (el contrato JSON ya vive literal en
         # REVIEWER_SYSTEM_PROMPT; ReviewResult tiene defaults en todos los campos opcionales).
-        _rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data))
+        # [P1-REVIEWER-TIER-MODELS] `extra_body.thinking` es DeepSeek-only → la rama se salta
+        # para modelos OpenAI (la familia gpt-5.6 razona nativo sin knob nuestro).
+        _rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data)
+                             and not _rev_is_openai)
         if _rev_thinking:
             # [P2-THINKING-EFFORT · 2026-07-06] effort graduable (low→max) vía knob opcional.
             _think_body = {"type": "enabled"}
@@ -37115,9 +37171,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         f"({_reviewer_model}, timeout={REVIEWER_THINKING_TIMEOUT_S}s"
                         f"{', effort=' + REVIEWER_THINKING_EFFORT if REVIEWER_THINKING_EFFORT else ''}).")
         else:
-            reviewer_llm = ChatDeepSeek(
+            reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)(
                 model=_reviewer_model,
-                temperature=0.1,  # Temperatura muy baja para ser preciso
+                temperature=0.1,  # Temperatura muy baja para ser preciso (gpt-5.6 la descarta — solo acepta default)
                 max_retries=0,
                 timeout=60
             ).with_structured_output(ReviewResult)
@@ -37166,7 +37222,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     f"{str(_thk_e)[:120]}) → fallback al reviewer estándar sin thinking."
                 )
                 _rev_thinking = False
-                reviewer_llm = ChatDeepSeek(
+                reviewer_llm = (ChatOpenAIInstrumented if _rev_is_openai else ChatDeepSeek)(
                     model=_reviewer_model,
                     temperature=0.1,
                     max_retries=0,

@@ -149,14 +149,31 @@ def _capture_writes(monkeypatch):
 
 
 def test_healthy_risk_tier_no_alert(_go, monkeypatch):
-    """Perfil con riesgo + config default → flash, sin warn ni alert.
-    [P1-FLASH-PRIMARY · 2026-07-31] Era `deepseek-v4-pro`: el owner midió que
-    flash es actualmente mejor y el risk-tier esperado pasó a flash."""
+    """Perfil con riesgo + config default → el modelo del TIER, sin warn ni alert.
+    [P1-REVIEWER-TIER-MODELS · 2026-07-31] Sin user en contexto → tier gratis →
+    `gpt-5.6-luna` (decisión owner tras el -80% de OpenAI). El esperado del
+    guard ES el modelo del tier, así que resolver a él jamás alerta."""
     writes = _capture_writes(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
+    monkeypatch.delenv("MEALFIT_REVIEWER_RISK_MODEL_FREE", raising=False)
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-flash"
+    assert resolved == "gpt-5.6-luna"
     assert not _go._CLINICAL_MODEL_GUARD_WARNED
     assert not writes
+
+
+def test_missing_openai_key_falls_back_to_flash_and_alerts(_go, monkeypatch):
+    """[P1-REVIEWER-TIER-MODELS] Fail-safe: modelo OpenAI del tier sin
+    OPENAI_API_KEY → el gate clínico cae a flash (nunca se queda sin modelo)
+    Y el guard de desvío alerta (el operador DEBE saber que corre el respaldo)."""
+    writes = _capture_writes(monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("MEALFIT_REVIEWER_RISK_MODEL_FREE", raising=False)
+    resolved = _go._reviewer_model_name(_RISK_FORM)
+    assert resolved == "deepseek-v4-flash"
+    assert ("reviewer", "deepseek-v4-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert len(writes) == 1
+    assert writes[0][1][0] == "llm_clinical_reviewer_downgraded:reviewer"
 
 
 def test_override_downgrade_emits_alert_once(_go, monkeypatch):

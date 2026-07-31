@@ -31,6 +31,36 @@ la premisa "pro > flash" de 2026-06-12 caducó). Consecuencias:
 
 Test ancla: [`test_p1_flash_primary.py`](../tests/test_p1_flash_primary.py).
 
+## [P1-REVIEWER-TIER-MODELS · 2026-07-31] Reviewer clínico por tier (Luna/Terra)
+
+OpenAI recortó la familia gpt-5.6: **luna -80%** ($0.20 in / $1.20 out por 1M) y
+**terra -20%** ($2.00 / $12.00). Decisión del owner: el reviewer médico
+risk-tier se enruta por tier de suscripción:
+
+| Tier | Reviewer risk-tier | Costo/llamada (2.371 in / 213 out reales) | Worst-case/mes (cap × 2 calls/plan, 100% clínicos) |
+|---|---|---|---|
+| free/guest | `gpt-5.6-luna` | ~$0.0007 | $0.02 (15 planes) |
+| basic ($9.99, 50 planes) | `gpt-5.6-terra` | ~$0.0073 | $0.73 = **7.3%** del revenue → rentable |
+| plus ($19.99, 200) / ultra ($49.99) | `gpt-5.6-terra` | ~$0.0073 | $2.92 = 14.6% (plus) — realista <1% |
+
+- Con el recorte, **luna quedó MÁS BARATO que deepseek-v4-pro** (~0.75×) — por
+  eso es viable hasta en el tier gratis.
+- Knobs: `MEALFIT_REVIEWER_RISK_MODEL_FREE` (default luna) /
+  `MEALFIT_REVIEWER_RISK_MODEL_PAID` (default terra);
+  `MEALFIT_REVIEWER_RISK_TIER_MODEL` (global) gana sobre el map;
+  `MEALFIT_REVIEWER_MODEL` (hard-override) gana sobre todo.
+- **Fail-safe**: modelo OpenAI sin `OPENAI_API_KEY` → fallback
+  `_REVIEWER_RISK_TIER_DEFAULT` (flash) + alerta de desvío. El gate clínico
+  nunca se queda sin modelo.
+- Construcción con dispatch por proveedor (`ChatOpenAIInstrumented` para
+  gpt-* — backpressure + costo en `llm_usage_events` intactos). El thinking
+  DeepSeek (`MEALFIT_REVIEWER_THINKING`) se salta para OpenAI (gpt-5.6 razona
+  nativo); aplica solo si el reviewer cae al fallback flash.
+- El **fact-checker NO cambió** de provider (tool-calling loop medido en
+  DeepSeek risk-tier flash). Candidato a Luna cuando haya datos del reviewer.
+
+Test ancla: [`test_p1_reviewer_tier_models.py`](../tests/test_p1_reviewer_tier_models.py).
+
 ## Mapping tier → modelo
 
 | `user_profiles.plan_tier` | Modelo | Pricing (USD/1M tok, in miss/hit · out) |
@@ -53,7 +83,8 @@ Lookup con cache TTL in-process (`MEALFIT_TIER_CACHE_TTL_S`, default 300s);
 | Chat agent (`call_model`) | **Tier** | `state.user_id` / `state.session_id` |
 | Chat swap (`swap_meal`) | **Tier** | `form_data.user_id` (validado vs JWT en `api_swap_meal`) |
 | Tool `modify_single_meal` | **Tier** | `user_id` forzado por P0-AGENT-1 |
-| Reviewer médico / fact-checker con perfil de riesgo | **risk-tier FLASH fijo** (todos los tiers; P1-FLASH-PRIMARY, era PRO) | `_REVIEWER_RISK_TIER_DEFAULT` — la seguridad clínica no se degrada por plan de pago; el guard de desvío alerta ante cualquier modelo ≠ risk-tier |
+| Reviewer médico con perfil de riesgo | **Por TIER** (P1-REVIEWER-TIER-MODELS · 2026-07-31): free/guest → `gpt-5.6-luna`; basic/plus/ultra → `gpt-5.6-terra` | `_reviewer_risk_model_for_tier()`; fail-safe sin `OPENAI_API_KEY` → flash + alerta; el guard de desvío alerta ante cualquier modelo ≠ esperado del tier |
+| Fact-checker clínico con perfil de riesgo | **risk-tier FLASH fijo** (P1-FLASH-PRIMARY) | `_REVIEWER_RISK_TIER_DEFAULT` — sin cambio de provider (tool-calling loop medido en DeepSeek) |
 | Aux baratos: títulos, recipe-expand, sentiment, router RAG, fact-extractor, memoria, nudges, judge, compressor, meta-learning, planner default, médico Q&A, probe CB | **FLASH fijo** | — |
 
 Los per-feature knobs `MEALFIT_<FEATURE>_MODEL` se preservan y **siempre

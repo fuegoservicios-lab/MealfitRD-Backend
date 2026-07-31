@@ -50,8 +50,13 @@ def test_knobs_born_off():
 # ---------------------------------------------------------------------------
 
 def test_reviewer_thinking_gated_to_medical_risk():
-    i = _GO.index("_rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data))")
-    win = _GO[i:i + 900]
+    # [P1-REVIEWER-TIER-MODELS · 2026-07-31] El gate añade `and not _rev_is_openai`:
+    # `extra_body.thinking` es DeepSeek-only — con Luna/Terra (reviewer por tier) la rama
+    # se salta y el modelo OpenAI razona nativo. El anchor sigue la línea que DECIDE.
+    i = _GO.index("_rev_thinking = bool(REVIEWER_THINKING_ENABLED and _profile_has_medical_risk(form_data)")
+    win = _GO[i:i + 1100]
+    assert "and not _rev_is_openai)" in _GO[i:i + 220], \
+        "el gate de thinking debe excluir modelos OpenAI (extra_body DeepSeek-only)"
     # [P2-THINKING-EFFORT] el body de thinking se construye en `_think_body` para
     # poder inyectar `effort` opcional; extra_body lo referencia por variable.
     assert '_think_body = {"type": "enabled"}' in win

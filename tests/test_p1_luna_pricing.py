@@ -29,9 +29,12 @@ import pytest
 from db_profiles import _DEFAULT_LLM_PRICING_MICROS_PER_M as TABLA, compute_llm_cost_micros
 
 
+# [P1-REVIEWER-TIER-MODELS · 2026-07-31] Recorte oficial de OpenAI re-consultado:
+# luna -80% ($1.00/$6.00 → $0.20/$1.20), terra -20% ($2.50/$15.00 → $2.00/$12.00).
+# sol sin cambio. `cached` mantiene el ratio 10% del input.
 _FAMILIA = {
-    "gpt-5.6-luna":  (1_000_000, 6_000_000, 100_000),
-    "gpt-5.6-terra": (2_500_000, 15_000_000, 250_000),
+    "gpt-5.6-luna":  (200_000, 1_200_000, 20_000),
+    "gpt-5.6-terra": (2_000_000, 12_000_000, 200_000),
     "gpt-5.6-sol":   (5_000_000, 30_000_000, 500_000),
 }
 
@@ -56,10 +59,13 @@ def test_el_cache_es_diez_veces_mas_barato():
 
 def test_costo_del_plan_medido_en_produccion():
     """Tokens REALES de las 3 llamadas del plan b01baf9c (2026-07-26 07:24). Ancla el orden de
-    magnitud: si un cambio de tabla mueve esto, se ve aquí antes que en la factura."""
+    magnitud: si un cambio de tabla mueve esto, se ve aquí antes que en la factura.
+    [P1-REVIEWER-TIER-MODELS · 2026-07-31] OpenAI recortó luna -80% ($1.00/$6.00 →
+    $0.20/$1.20): el mismo plan pasa de ~$0.102 a ~$0.020 (×0.2 exacto — cross-check
+    del recorte)."""
     llamadas = [(25346, 2670, 10658), (25347, 2977, 10658), (25340, 3405, 10658)]
     total = sum(compute_llm_cost_micros("gpt-5.6-luna", i, o, c) for i, o, c in llamadas)
-    assert 0.095 < total / 1e6 < 0.110, f"USD {total/1e6:.5f}"
+    assert 0.019 < total / 1e6 < 0.022, f"USD {total/1e6:.5f}"
 
 
 def test_luna_es_el_mas_barato_de_la_familia():
@@ -74,10 +80,13 @@ def test_deepseek_sigue_intacto():
 
 
 def test_relacion_de_costo_contra_deepseek():
-    """El número que decide: mismos tokens, cuánto más caro es Luna. Medido 11.6× flash y 3.7×
-    pro sobre los tokens reales del plan."""
+    """El número que decide: mismos tokens, cuánto más caro es Luna.
+    [P1-REVIEWER-TIER-MODELS · 2026-07-31] Con el -80%, la relación se DESPLOMÓ:
+    de 11.6× flash / 3.7× pro (2026-07-26) a ~2.3× flash y ~0.75× pro — Luna es
+    ahora MÁS BARATO que deepseek-v4-pro, lo que hace viable usarlo de reviewer
+    clínico hasta en el tier gratis."""
     llamadas = [(25346, 2670, 10658), (25347, 2977, 10658), (25340, 3405, 10658)]
     def _t(m):
         return sum(compute_llm_cost_micros(m, i, o, c) for i, o, c in llamadas)
-    assert 11.0 < _t("gpt-5.6-luna") / _t("deepseek-v4-flash") < 12.5
-    assert 3.3 < _t("gpt-5.6-luna") / _t("deepseek-v4-pro") < 4.2
+    assert 2.1 < _t("gpt-5.6-luna") / _t("deepseek-v4-flash") < 2.5
+    assert 0.65 < _t("gpt-5.6-luna") / _t("deepseek-v4-pro") < 0.85
