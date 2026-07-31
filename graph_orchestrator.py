@@ -16054,6 +16054,55 @@ def _merge_complement_into_montaje(steps: list, faltantes: list) -> bool:
         return False
 
 
+def _mention_cooked_complement_in_montaje(steps: list, faltantes: list) -> bool:
+    """[P2-CLOSER-MENTION-IN-MONTAJE · 2026-07-31] En un plato COCINADO, hace que el Montaje diga que
+    se SIRVA el complemento que el cerrador ya cocinó en su propio paso. Muta `steps`. True si añadió.
+
+    Hermano de `_merge_complement_into_montaje`, no su sustituto — hacen cosas distintas y el gate de
+    aquel es correcto: él MUEVE el ingrediente al emplatado, y por eso exige que ningún paso cocine
+    (mover un alimento al emplatado de un plato que se cocina puede saltarse su cocción). Éste solo
+    MENCIONA algo que ya tiene su paso.
+
+    Medido: 9 de 32 comidas de la base entregaban un alimento de 40 g con paso de cocción propio y un
+    Montaje que no lo nombraba — el usuario compra y paga algo que la receta no le dice cómo servir.
+
+    ⚠️ LA GUARDA: el alimento debe aparecer YA en algún otro paso. Si no está en ninguno, mencionarlo
+    al servir sería mandar emplatar algo que nadie preparó — la misma preocupación que gobierna el
+    gate del hermano. Sin esa condición esto sería un atajo peligroso, no un fix.
+
+    Conservador: sin Montaje, sin faltantes, ya mencionado, o cualquier duda → False y nada se toca.
+    tooltip-anchor: P2-CLOSER-MENTION-IN-MONTAJE"""
+    try:
+        if not steps or not faltantes or not isinstance(steps, list):
+            return False
+        _idx = next((i for i, s in enumerate(steps)
+                     if isinstance(s, str) and s.strip().lower().startswith("montaje")), None)
+        if _idx is None:
+            return False
+        _otros = strip_accents(" ".join(str(s) for i, s in enumerate(steps)
+                                        if i != _idx).lower())
+        _montaje = str(steps[_idx]).rstrip()
+        _bajo = strip_accents(_montaje.lower())
+        _a_mencionar = []
+        for _f in faltantes:
+            _tok = strip_accents(str(_f).lower()).strip()
+            if not _tok:
+                continue
+            if _tok in _bajo:
+                return False          # ya lo nombra: duplicarlo lee peor
+            if _tok not in _otros:
+                return False          # nadie lo preparó → no se emplata
+            _a_mencionar.append(str(_f).strip())
+        if not _a_mencionar:
+            return False
+        if not _montaje.endswith((".", "!", "?")):
+            _montaje += "."
+        steps[_idx] = f"{_montaje} Acompaña con {', '.join(_a_mencionar)}."
+        return True
+    except Exception:
+        return False
+
+
 def _insert_step_before_montaje(steps: list, new_step: str) -> list:
     """[P2-STEP-INSERT-BEFORE-MONTAJE · 2026-07-01] (audit recetas P2-3) Los guards que APPENDEAN pasos
     (closer de proteína 💪, reverse-coherence 'Toque complemento') los ponían AL FINAL, después de
@@ -16978,7 +17027,17 @@ def _append_closer_protein_step(meal: dict, nm: str, no_cook: bool) -> bool:
             logger.info(f"🍽️ [P1-CLOSER-INTO-MONTAJE] '{nm}' fusionado en el Montaje "
                         f"(sin paso suelto) — {str(meal.get('name'))[:40]}")
             return True
-        meal["recipe"] = _insert_step_before_montaje(rec, _step)
+        # [P2-CLOSER-MENTION-IN-MONTAJE · 2026-07-31] El plato SÍ se cocina, así que la fusión de
+        # arriba (que MUEVE el alimento al emplatado) no aplica y el complemento se queda con su paso
+        # propio — correcto. Lo que faltaba es que el Montaje diga que se sirva: medido, 9 de 32
+        # comidas entregaban un alimento de 40 g con paso de cocción y un emplatado que lo ignoraba.
+        # Se menciona DESPUÉS de insertar el paso, porque el helper exige (a propósito) que el
+        # alimento ya aparezca en algún paso antes de mandarlo al plato.
+        _rec_out = _insert_step_before_montaje(rec, _step)
+        if COMPLEMENT_INTO_MONTAJE and _mention_cooked_complement_in_montaje(_rec_out, [nm]):
+            logger.info(f"🍽️ [P2-CLOSER-MENTION-IN-MONTAJE] '{nm}' mencionado al servir "
+                        f"(su paso de cocción se conserva) — {str(meal.get('name'))[:40]}")
+        meal["recipe"] = _rec_out
         return True
     except Exception:
         return False
