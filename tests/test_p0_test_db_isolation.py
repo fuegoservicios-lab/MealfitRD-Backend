@@ -214,10 +214,15 @@ class TestGuardFiresAgainstProdLookingUrl:
     def test_fires_when_unmarked_and_prod_url(self, monkeypatch):
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake_module::fake_test")
         monkeypatch.delenv("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", raising=False)
-        monkeypatch.setenv(
-            "NEON_DATABASE_URL",
-            "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
-        )
+        # [P0-TEST-DB-DUAL-URL · 2026-07-31] Las DOS: el pool se conecta con la
+        # POOLED. Poner solo la directa deja el otro extremo a lo que traiga el
+        # entorno, y si ese entorno es un branch de test el guard ve DESACUERDO y
+        # bloquea por esa vía — no por la que este test quiere medir.
+        for _v in ("NEON_DATABASE_URL", "NEON_DATABASE_URL_POOLED"):
+            monkeypatch.setenv(
+                _v,
+                "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
+            )
         db_core._CURRENT_TEST_IS_E2E = False
         with pytest.raises(RuntimeError, match="P0-TEST-DB-ISOLATION"):
             db_core._guard_test_write_to_prod(
@@ -228,10 +233,15 @@ class TestGuardFiresAgainstProdLookingUrl:
         """No solo la función standalone: el cableado real en execute_sql_write."""
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake_module::fake_test")
         monkeypatch.delenv("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", raising=False)
-        monkeypatch.setenv(
-            "NEON_DATABASE_URL",
-            "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
-        )
+        # [P0-TEST-DB-DUAL-URL · 2026-07-31] Las DOS: el pool se conecta con la
+        # POOLED. Poner solo la directa deja el otro extremo a lo que traiga el
+        # entorno, y si ese entorno es un branch de test el guard ve DESACUERDO y
+        # bloquea por esa vía — no por la que este test quiere medir.
+        for _v in ("NEON_DATABASE_URL", "NEON_DATABASE_URL_POOLED"):
+            monkeypatch.setenv(
+                _v,
+                "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
+            )
         db_core._CURRENT_TEST_IS_E2E = False
         with pytest.raises(RuntimeError, match="P0-TEST-DB-ISOLATION"):
             # Si la guarda NO estuviera cableada aquí, esto intentaría abrir una
@@ -244,18 +254,34 @@ class TestGuardFiresAgainstProdLookingUrl:
     def test_escape_hatch_env_var_bypasses_guard(self, monkeypatch):
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake_module::fake_test")
         monkeypatch.setenv("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", "1")
-        monkeypatch.setenv(
-            "NEON_DATABASE_URL",
-            "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
-        )
+        # [P0-TEST-DB-DUAL-URL · 2026-07-31] Las DOS: el pool se conecta con la
+        # POOLED. Poner solo la directa deja el otro extremo a lo que traiga el
+        # entorno, y si ese entorno es un branch de test el guard ve DESACUERDO y
+        # bloquea por esa vía — no por la que este test quiere medir.
+        for _v in ("NEON_DATABASE_URL", "NEON_DATABASE_URL_POOLED"):
+            monkeypatch.setenv(
+                _v,
+                "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
+            )
         db_core._CURRENT_TEST_IS_E2E = False
         # No debe lanzar — es el escape hatch documentado en el mensaje de error.
         db_core._guard_test_write_to_prod("INSERT INTO meal_plans (id) VALUES (%s)")
 
     def test_does_not_fire_when_db_url_already_looks_like_test(self, monkeypatch):
+        # [P0-TEST-DB-DUAL-URL · 2026-07-31] Ahora hay que poner las DOS URLs.
+        #
+        # Este test ponía solo `NEON_DATABASE_URL` y exigía que el guard callara — o sea
+        # que codificaba el cepo: el pool se conecta con `NEON_DATABASE_URL_POOLED`, así
+        # que "directa en test, pooled sin tocar" es precisamente la media configuración
+        # que dejaba escribir en PRODUCCIÓN creyendo estar aislado. El test verde daba
+        # por buena esa situación.
+        #
+        # El caso a medias ahora BLOQUEA y tiene su propio test en
+        # `test_p0_test_db_dual_url.py`.
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake_module::fake_test")
         monkeypatch.delenv("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", raising=False)
         monkeypatch.setenv("NEON_DATABASE_URL", "postgresql://u:p@localhost:5432/mealfit_test")
+        monkeypatch.setenv("NEON_DATABASE_URL_POOLED", "postgresql://u:p@localhost:5432/mealfit_test")
         db_core._CURRENT_TEST_IS_E2E = False
         db_core._guard_test_write_to_prod("INSERT INTO meal_plans (id) VALUES (%s)")
 
@@ -282,10 +308,15 @@ class TestGuardDoesNotFireLegitimately:
     def test_no_fire_when_marked_e2e(self, monkeypatch):
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake_module::fake_test")
         monkeypatch.delenv("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", raising=False)
-        monkeypatch.setenv(
-            "NEON_DATABASE_URL",
-            "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
-        )
+        # [P0-TEST-DB-DUAL-URL · 2026-07-31] Las DOS: el pool se conecta con la
+        # POOLED. Poner solo la directa deja el otro extremo a lo que traiga el
+        # entorno, y si ese entorno es un branch de test el guard ve DESACUERDO y
+        # bloquea por esa vía — no por la que este test quiere medir.
+        for _v in ("NEON_DATABASE_URL", "NEON_DATABASE_URL_POOLED"):
+            monkeypatch.setenv(
+                _v,
+                "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
+            )
         db_core._CURRENT_TEST_IS_E2E = True
         db_core._guard_test_write_to_prod("INSERT INTO meal_plans (id) VALUES (%s)")
 
@@ -735,10 +766,15 @@ class TestConnectionLevelWriteGuardCoversRawCallsites:
     def _prod_env(self, monkeypatch):
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "fake_module::fake_test")
         monkeypatch.delenv("MEALFIT_ALLOW_TEST_WRITES_TO_PROD", raising=False)
-        monkeypatch.setenv(
-            "NEON_DATABASE_URL",
-            "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
-        )
+        # [P0-TEST-DB-DUAL-URL · 2026-07-31] Las DOS: el pool se conecta con la
+        # POOLED. Poner solo la directa deja el otro extremo a lo que traiga el
+        # entorno, y si ese entorno es un branch de test el guard ve DESACUERDO y
+        # bloquea por esa vía — no por la que este test quiere medir.
+        for _v in ("NEON_DATABASE_URL", "NEON_DATABASE_URL_POOLED"):
+            monkeypatch.setenv(
+                _v,
+                "postgresql://user:pw@ep-cool-lake-123456.us-east-2.aws.neon.tech/mealfit",
+            )
 
     def test_install_write_guard_blocks_raw_cursor_write(self, monkeypatch):
         """El helper standalone: un `cursor.execute("UPDATE ...")` crudo —

@@ -393,7 +393,34 @@ def seeded_user_profile():
 #
 # NO falla la suite a propósito — un residuo no invalida los resultados, solo hay
 # que limpiarlo. Se imprime al final, donde el operador lo ve.
+def _describir_destino() -> tuple[str, str]:
+    """[P1-TEST-RESIDUE-TARGET · 2026-07-31] ¿Contra qué base acabamos de correr?
+
+    Devuelve `(nombre, gravedad)` para que los detectores digan la verdad en vez de
+    asumir. Los dos avisos afirmaban "contra la base de PRODUCCIÓN" sin mirar — y en
+    la primera corrida contra un branch de Neon eso ya era falso. Un detector que
+    exagera se aprende a ignorar, y entonces no sirve el día que acierta.
+
+    Reusa `_db_target_is_nonprod` (P0-TEST-DB-DUAL-URL), que exige que las DOS URLs
+    sean no-producción: así el aviso no puede decir "branch de test" en una
+    configuración a medias, que es justo cuando más importaría no relajarse.
+    """
+    try:
+        es_nonprod, _ = db_core._db_target_is_nonprod()
+    except Exception:
+        return "la base configurada", "AVISO"
+    if es_nonprod:
+        return "el branch de test (no producción)", "NOTA"
+    return "la base de PRODUCCIÓN", "AVISO"
+
+
 def pytest_sessionfinish(session, exitstatus):
+    # [P1-TEST-RESIDUE-TELEMETRY · 2026-07-31] PRIMERO el chequeo de telemetría fantasma:
+    # el de usuarios de abajo tiene `return`s tempranos, así que colgarlo al final lo
+    # dejaría sin ejecutar justo cuando NO hay usuarios residuales — que es el caso
+    # normal y precisamente cuando la telemetría sí puede haber quedado sucia.
+    _reportar_telemetria_fantasma()
+
     try:
         filas = execute_sql_query(
             "SELECT id, email FROM user_profiles "
@@ -404,9 +431,11 @@ def pytest_sessionfinish(session, exitstatus):
     if not filas:
         return
     import sys as _sys_res
+    # [P1-TEST-RESIDUE-TARGET · 2026-07-31] Decir contra QUÉ base, no asumir producción.
+    _donde_u, _grav_u = _describir_destino()
     print(
-        f"\n[P1-TEST-RESIDUE-DETECTOR] AVISO: {len(filas)} usuario(s) de test VIVOS en la base "
-        f"de producción tras la corrida — el teardown no completó:",
+        f"\n[P1-TEST-RESIDUE-DETECTOR] {_grav_u}: {len(filas)} usuario(s) de test VIVOS en "
+        f"{_donde_u} tras la corrida — el teardown no completó:",
         file=_sys_res.stderr,
     )
     for _f in filas[:10]:
@@ -416,3 +445,69 @@ def pytest_sessionfinish(session, exitstatus):
         "user_profiles por ese user_id (mismo orden FK-safe que el fixture).",
         file=_sys_res.stderr,
     )
+
+
+# [P1-TEST-RESIDUE-TELEMETRY · 2026-07-31] El detector de arriba mira `user_profiles`
+# y ahí se queda corto, porque el residuo que MÁS daño hizo no tenía perfil que mirar.
+#
+# Incidente del 31 jul: `chunk_lesson_telemetry` tenía 2.237 filas de 447 `user_id` que
+# NUNCA existieron como perfil — el 94% de la tabla. Consecuencias medidas:
+#
+#   1. El cron de flota `_alert_high_synthesized_lesson_ratio` llevaba semanas midiendo
+#      la suite de tests en vez del producto, y disparó una alerta por ello.
+#   2. Falseó una cifra que se reportó como diagnóstico ("843 eventos en la semana 2"
+#      cuando los reales eran 26). El ruido de tests no solo escribe en producción:
+#      contamina las mediciones que haces SOBRE producción, incluidas las que usas para
+#      decidir si hay un bug.
+#
+# Por qué aquí y no montando una base aparte: esa decisión está tomada y documentada
+# arriba (el catálogo de 204 alimentos debe ser el REAL). Esto no la revisa — hace lo
+# que esa misma decisión promete, "convertir un riesgo silencioso en uno visible",
+# para el residuo que el detector original no podía ver.
+#
+# Barato: UNA query agregada, sin recorrer tablas. Best-effort como su hermano.
+def _reportar_telemetria_fantasma():
+    """Invocado desde `pytest_sessionfinish`, NO es un hook.
+
+    pytest solo llama hooks por nombre exacto: si esto se llamara
+    `pytest_sessionfinish_algo` no lo ejecutaría nadie y sería un detector inerte —
+    verde para siempre, vigilando nada.
+    """
+    try:
+        filas = execute_sql_query(
+            """
+            SELECT 'chunk_lesson_telemetry' AS tabla, count(*)::int AS n,
+                   count(DISTINCT t.user_id)::int AS usuarios
+            FROM chunk_lesson_telemetry t
+            WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = t.user_id)
+            HAVING count(*) > 0
+            """
+        ) or []
+    except Exception:  # sin DB / red caída: el detector nunca estorba
+        return
+    if not filas:
+        return
+    import sys as _sys_tel
+    _donde, _gravedad = _describir_destino()
+    for _f in filas:
+        print(
+            f"\n[P1-TEST-RESIDUE-TELEMETRY] {_gravedad}: {_f.get('n')} fila(s) en "
+            f"{_f.get('tabla')} de {_f.get('usuarios')} user_id SIN perfil — telemetría "
+            f"fantasma escrita por la suite contra {_donde}.",
+            file=_sys_tel.stderr,
+        )
+    if _gravedad == "AVISO":
+        print(
+            "    Por qué importa: los crons de ratio de síntesis agregan ESTA tabla sin "
+            "filtrar, así que estas filas mueven una métrica de producto.\n"
+            "    Limpieza: DELETE FROM chunk_lesson_telemetry t WHERE NOT EXISTS "
+            "(SELECT 1 FROM user_profiles p WHERE p.id = t.user_id);",
+            file=_sys_tel.stderr,
+        )
+    else:
+        print(
+            "    Inocuo aquí: en un branch el residuo no toca ninguna métrica de "
+            "producto. Se sigue reportando porque significa que un teardown no "
+            "completó, y eso conviene saberlo antes de que la corrida sea contra prod.",
+            file=_sys_tel.stderr,
+        )

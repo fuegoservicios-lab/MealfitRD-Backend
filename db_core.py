@@ -545,6 +545,44 @@ def _looks_like_test_db_url(url: Optional[str]) -> bool:
     return any(tok in _low for tok in ("test", "staging", "localhost", "127.0.0.1"))
 
 
+def _db_target_is_nonprod() -> tuple[bool, Optional[str]]:
+    """[P0-TEST-DB-DUAL-URL · 2026-07-31] ¿Apuntan a algo que NO es producción **las dos**
+    URLs? Devuelve `(es_nonprod, motivo_de_desacuerdo)`.
+
+    POR QUÉ NO BASTA MIRAR UNA
+    El pool se conecta con `NEON_DATABASE_URL_POOLED` (ver `clean_url` en la
+    inicialización del pool, arriba), pero este guard evaluaba SOLO
+    `NEON_DATABASE_URL`, la directa. Así que una migración a medias —apuntar la directa
+    al branch de test y olvidar la pooled, que es lo natural porque la directa es la que
+    se ve primero— hacía que el guard concluyera "esto es base de test, las escrituras
+    son seguras" mientras **todas** las escrituras salían a PRODUCCIÓN por la pooled.
+    Sin marker `e2e`, sin escape hatch y sin aviso: el guard pasaba de freno a acelerador
+    justo al dar el paso que su propio docstring recomienda dar.
+
+    FAIL-SECURE ANTE EL DESACUERDO
+    Si una parece test y la otra producción, NO se asume test. Una configuración a medias
+    es peor que cualquiera de los dos extremos, porque el operador CREE que está aislado.
+    Se devuelve `False` (trátalo como producción) más un motivo, para que el mensaje del
+    bloqueo pueda explicar la causa real en vez de repetir el genérico.
+    """
+    _directa = os.environ.get("NEON_DATABASE_URL")
+    _pooled = os.environ.get("NEON_DATABASE_URL_POOLED")
+    _d_test = _looks_like_test_db_url(_directa)
+    _p_test = _looks_like_test_db_url(_pooled)
+    if _d_test and _p_test:
+        return True, None
+    if _d_test != _p_test:
+        return False, (
+            "NEON_DATABASE_URL "
+            f"{'parece de test' if _d_test else 'apunta a producción'} pero "
+            "NEON_DATABASE_URL_POOLED "
+            f"{'parece de test' if _p_test else 'apunta a producción'}. "
+            "El pool usa la POOLED, así que las escrituras irían a producción aunque la "
+            "directa apunte al branch de test. Mueve las DOS."
+        )
+    return False, None
+
+
 def _guard_test_write_to_prod(query: Optional[str]) -> None:
     """Bloquea (RuntimeError) escrituras reales a Neon prod desde tests NO marcados e2e.
 
@@ -556,9 +594,20 @@ def _guard_test_write_to_prod(query: Optional[str]) -> None:
         return
     if _CURRENT_TEST_IS_E2E:
         return
-    if _looks_like_test_db_url(os.environ.get("NEON_DATABASE_URL")):
+    # [P0-TEST-DB-DUAL-URL · 2026-07-31] Exige que las DOS URLs sean no-producción; el
+    # desacuerdo se trata como producción. Ver `_db_target_is_nonprod`.
+    _es_nonprod, _desacuerdo = _db_target_is_nonprod()
+    if _es_nonprod:
         return
     _preview = " ".join((query or "").split())[:160]
+    if _desacuerdo:
+        raise RuntimeError(
+            "[P0-TEST-DB-DUAL-URL] BLOQUEADO: configuración de base de test A MEDIAS. "
+            f"{_desacuerdo}\n"
+            "Se trata como producción a propósito: creer que estás aislado sin estarlo es "
+            "peor que no estarlo.\n"
+            f"Query bloqueada: {_preview!r}"
+        )
     raise RuntimeError(
         "[P0-TEST-DB-ISOLATION] BLOQUEADO: un test SIN @pytest.mark.e2e intentó escribir en "
         "Neon PRODUCCIÓN (no existe base de test separada — ver CLAUDE.md 'DB + Auth: 100% "
