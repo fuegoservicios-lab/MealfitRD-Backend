@@ -155,3 +155,53 @@ def test_ninguna_regla_css_pinta_un_trozo_del_wordmark_del_splash():
         f"splash {hits!r}. El wordmark es monocromo por decisión de producto (tercera "
         f"versión; las dos con acento se descartaron en vivo)."
     )
+
+
+# ------------------------------------------- la imagen de compartir (og:image)
+
+_GENERADOR = _FRONT.parent / "scripts" / "generate-og-image.mjs"
+
+
+def test_el_og_image_existe_y_lo_produce_el_generador():
+    """El `og:image` es un RASTER: ningún grep ni guard de copy lo alcanza.
+
+    La v3 siguió diciendo "MealfitRD" semanas después del rebrand — con el
+    comentario de al lado ya rebrandeado a «wordmark "Bioboros"». Se descubrió
+    porque el owner compartió el enlace desde el móvil y lo vio.
+
+    No se puede leer el JPEG desde aquí, pero sí cerrar la deriva REALISTA: el
+    nombre del fichero se bumpea en cada cambio (iOS y WhatsApp cachean el
+    og:image por URL e ignoran el `?v=`), y ese bump vive en DOS sitios —
+    el meta y el generador. Si sólo se toca uno, la preview se queda vieja o
+    da 404, que es exactamente el fallo silencioso que este guard evita.
+    """
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    og = re.findall(r'<meta property="og:image" content="[^"]*/([\w.-]+\.jpe?g)"', html)
+    tw = re.findall(r'<meta name="twitter:image" content="[^"]*/([\w.-]+\.jpe?g)"', html)
+    # Sanity del vehículo antes de afirmar nada.
+    assert len(og) == 1 and len(tw) == 1, (
+        f"P2-WORDMARK-BIOBOROS: esperaba un og:image y un twitter:image en index.html, "
+        f"encontré og={og!r} twitter={tw!r}. Si cambió el markup, actualiza este test."
+    )
+    assert og == tw, (
+        f"P2-WORDMARK-BIOBOROS: og:image ({og[0]}) y twitter:image ({tw[0]}) apuntan a "
+        f"imágenes distintas — X mostraría una y WhatsApp otra."
+    )
+
+    fichero = _FRONT.parent / "public" / og[0]
+    assert fichero.exists(), (
+        f"P2-WORDMARK-BIOBOROS: index.html anuncia /{og[0]} pero no está en public/. "
+        f"La preview al compartir daría 404. Corre `node scripts/generate-og-image.mjs`."
+    )
+
+    gen = _GENERADOR.read_text(encoding="utf-8")
+    assert og[0] in gen, (
+        f"P2-WORDMARK-BIOBOROS: index.html usa /{og[0]} pero el generador "
+        f"(`scripts/generate-og-image.mjs`) escribe otro nombre. El bump del sufijo "
+        f"vive en dos sitios y hay que moverlo en los dos: si no, se publica la imagen "
+        f"vieja bajo el nombre nuevo — o al revés."
+    )
+    assert re.search(r"const\s+MARCA\s*=\s*'Bioboros'", gen), (
+        "P2-WORDMARK-BIOBOROS: el generador del og:image ya no escribe 'Bioboros'. "
+        "Es la única fuente de la marca en la imagen de compartir."
+    )
