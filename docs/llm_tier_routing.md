@@ -18,16 +18,23 @@ la premisa "pro > flash" de 2026-06-12 caducó). Consecuencias:
   clínico a propósito bajo la premisa nueva. El guard
   `_warn_if_clinical_model_downgraded` detecta DESVÍO del risk-tier esperado
   (cualquier modelo ≠ flash, incluido pro, alerta).
-- **Pro NO desaparece**: queda exclusivamente como RED post-fallo —
-  2º en la cadena del day-gen, fallback del planner con breaker abierto,
-  escalada del corrector quirúrgico y escalada por skeleton-fidelity. En esos
-  slots su valor es ser un modelo **DISTINTO con circuit breaker
-  INDEPENDIENTE** (diversidad), no ser "mejor". Colapsar la red a flash haría
-  no-op esos fallbacks (incidentes P1-DAYGEN-RETRY-FLASH-NET y
-  P1-PLANNER-PRO-FALLBACK).
+- **La RED post-fallo es CROSS-PROVIDER** [P1-NET-LUNA · 2026-07-31]:
+  `_PRO_MODEL_NAME` default = **`gpt-5.6-luna`** (OpenAI) — 2º en la cadena
+  del day-gen, fallback del planner con breaker abierto, escalada del
+  corrector quirúrgico y por skeleton-fidelity. Razón: flash y pro son el
+  MISMO proveedor; el incidente que motivó la red (breaker abierto 172×, gym
+  baseline) fue DeepSeek rate-limiteando — pro caía JUNTO con flash y la red
+  no atrapaba nada. Luna = infra/key/límites propios (diversidad real).
+  Fail-safe: sin `OPENAI_API_KEY` la red vuelve sola a `deepseek-v4-pro`
+  (nunca sin red). Colapsar la red a flash sigue prohibido (fallbacks no-op
+  contra el mismo breaker roto). Simetría: pipeline DeepSeek→cae a OpenAI;
+  reviewer OpenAI→cae a DeepSeek. Los 8 consumidores de modelo variable
+  construyen con dispatch por proveedor (`ChatOpenAIInstrumented` para gpt-*).
+  Test ancla: [`test_p1_net_luna.py`](../tests/test_p1_net_luna.py).
 - Rollback sin redeploy: `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro` (tiers),
-  `MEALFIT_REVIEWER_RISK_TIER_MODEL` / `MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`
-  (gate clínico), `MEALFIT_BARIATRIC_DAYGEN_MODEL` (day-gen bariátrico).
+  `MEALFIT_PRO_MODEL=deepseek-v4-pro` (red), `MEALFIT_REVIEWER_RISK_TIER_MODEL`
+  / `MEALFIT_FACT_CHECKER_RISK_TIER_MODEL` (gate clínico),
+  `MEALFIT_BARIATRIC_DAYGEN_MODEL` (day-gen bariátrico).
 
 Test ancla: [`test_p1_flash_primary.py`](../tests/test_p1_flash_primary.py).
 

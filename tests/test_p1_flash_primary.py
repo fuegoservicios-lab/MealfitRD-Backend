@@ -117,18 +117,28 @@ def test_d2_bariatric_model_knob_exists():
 # ------------------------------------------------------------------
 
 def test_e_pro_net_not_collapsed():
+    # [P1-NET-LUNA · 2026-07-31] La invariante REAL de este test: la red es un
+    # modelo DISTINTO de flash — jamás colapsada a flash (los fallbacks serían
+    # no-op contra el mismo breaker roto). El default pasó de DEEPSEEK_PRO a
+    # GPT56_LUNA (proveedor DISTINTO = diversidad real; un rate-limit de
+    # DeepSeek tumbaba flash Y la red pro juntos), con fail-safe a
+    # DEEPSEEK_PRO si falta OPENAI_API_KEY.
     m = re.search(
-        r"def _plan_pro_model_name\(\).*?return _env_str\(\"MEALFIT_PRO_MODEL\", (\w+)\)",
+        r"def _plan_pro_model_name\(\).*?_env_str\(\"MEALFIT_PRO_MODEL\", (\w+)\)",
         _GO_SRC,
         re.DOTALL,
     )
     assert m, "no encontré _plan_pro_model_name"
-    assert m.group(1) == "DEEPSEEK_PRO", (
-        "la RED post-fallo debe seguir siendo un modelo DISTINTO (breaker "
-        "independiente); colapsarla a flash haría no-op los fallbacks de "
-        "P1-DAYGEN-RETRY-FLASH-NET / P1-PLANNER-PRO-FALLBACK"
+    assert m.group(1) == "GPT56_LUNA", (
+        "la RED post-fallo debe ser cross-provider (GPT56_LUNA) — "
+        "ver P1-NET-LUNA; rollback vía MEALFIT_PRO_MODEL=deepseek-v4-pro"
     )
-    # Ambos extremos de la cadena presentes: flash primario + pro de red.
+    # Fail-safe intra-provider presente: sin OPENAI_API_KEY la red vuelve a pro.
+    _fn = re.search(r"def _plan_pro_model_name\(\).*?return _configured", _GO_SRC, re.DOTALL)
+    assert _fn and "return DEEPSEEK_PRO" in _fn.group(0), (
+        "el fail-safe sin OPENAI_API_KEY debe devolver DEEPSEEK_PRO"
+    )
+    # Ambos extremos de la cadena presentes: flash primario + red distinta.
     assert "[_FLASH_MODEL_NAME, _PRO_MODEL_NAME]" in _GO_SRC
 
 

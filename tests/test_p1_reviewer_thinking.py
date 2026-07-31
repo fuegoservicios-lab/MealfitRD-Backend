@@ -93,8 +93,10 @@ def test_reviewer_prompt_contract_exists():
 # ---------------------------------------------------------------------------
 
 def test_surgical_pro_thinking_branch():
-    i = _GO.index("if SURGICAL_PRO_THINKING_ENABLED:")
-    win = _GO[i:i + 1200]
+    # [P1-NET-LUNA · 2026-07-31] El gate añade `and not _net_is_openai`: la red
+    # default es gpt-5.6-luna (OpenAI) y `extra_body.thinking` es DeepSeek-only.
+    i = _GO.index("if SURGICAL_PRO_THINKING_ENABLED and not _net_is_openai:")
+    win = _GO[i:i + 1400]
     # [P2-THINKING-EFFORT] body en `_surg_think_body` para inyectar effort opcional.
     assert '_surg_think_body = {"type": "enabled"}' in win
     assert 'extra_body={"thinking": _surg_think_body}' in win

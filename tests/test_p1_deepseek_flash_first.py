@@ -44,9 +44,14 @@ def test_bariatric_flash_primary_pro_net(monkeypatch):
     assert g._day_model_chain(_BAR, 1) == ["deepseek-v4-flash", "deepseek-v4-pro"]
 
 
-def test_chain_ends_in_pro():
+def test_chain_ends_in_net():
+    # [P1-NET-LUNA · 2026-07-31] La cadena termina en la RED (_PRO_MODEL_NAME),
+    # que ya no es fija: gpt-5.6-luna con OPENAI_API_KEY, deepseek-v4-pro sin
+    # ella (fail-safe). La invariante: la red existe y es DISTINTA de flash.
     for fd in (_NON, _BAR):
-        assert g._day_model_chain(fd, 1)[-1] == "deepseek-v4-pro"
+        chain = g._day_model_chain(fd, 1)
+        assert chain[-1] == g._PRO_MODEL_NAME
+        assert chain[-1] != g._FLASH_MODEL_NAME
 
 
 def test_dedup_when_flash_equals_pro(monkeypatch):

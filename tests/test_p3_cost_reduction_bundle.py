@@ -199,10 +199,12 @@ def test_plan_model_constants_use_helpers():
 
 
 def test_plan_model_defaults_preserved():
-    """Defaults del helper [P0-DEEPSEEK-MIGRATION · 2026-06-12]:
-    Pro=DEEPSEEK_PRO (tiers pagados), Flash=DEEPSEEK_FLASH (tier gratis).
-    Los defaults referencian las CONSTANTES de llm_provider (no literales) —
-    el SSOT del ID vive en un solo lugar.
+    """Defaults del helper — referencian CONSTANTES de llm_provider (no
+    literales): el SSOT del ID vive en un solo lugar.
+    [P1-NET-LUNA · 2026-07-31] El default de la RED (`MEALFIT_PRO_MODEL`)
+    pasó de `DEEPSEEK_PRO` a `GPT56_LUNA` (decisión owner: flash y pro son el
+    MISMO proveedor — un rate-limit de DeepSeek tumbaba flash Y la red; Luna
+    es proveedor DISTINTO = diversidad real). Flash sin cambio.
     """
     src = _GO_PY.read_text(encoding="utf-8")
 
@@ -217,19 +219,20 @@ def test_plan_model_defaults_preserved():
     assert pro_default is not None, "no _env_str call for MEALFIT_PRO_MODEL"
     assert flash_default is not None, "no _env_str call for MEALFIT_FLASH_MODEL"
 
-    assert pro_default.group(1) == "DEEPSEEK_PRO", (
-        f"Default Pro model debe ser la constante `DEEPSEEK_PRO` "
-        f"(P0-DEEPSEEK-MIGRATION · 2026-06-12) — got {pro_default.group(1)!r}. "
-        f"Rollback/swap via env var `MEALFIT_PRO_MODEL` sin tocar el default."
+    assert pro_default.group(1) == "GPT56_LUNA", (
+        f"Default de la red debe ser la constante `GPT56_LUNA` "
+        f"(P1-NET-LUNA · 2026-07-31, cross-provider) — got {pro_default.group(1)!r}. "
+        f"Rollback via env var `MEALFIT_PRO_MODEL=deepseek-v4-pro` sin tocar el default."
     )
     assert flash_default.group(1) == "DEEPSEEK_FLASH", (
         f"Default Flash model debe ser la constante `DEEPSEEK_FLASH` "
         f"(P0-DEEPSEEK-MIGRATION · 2026-06-12) — got {flash_default.group(1)!r}."
     )
-    # Y las constantes resuelven a los IDs reales del API DeepSeek V4.
-    from llm_provider import DEEPSEEK_FLASH, DEEPSEEK_PRO
+    # Y las constantes resuelven a los IDs reales de cada API.
+    from llm_provider import DEEPSEEK_FLASH, DEEPSEEK_PRO, GPT56_LUNA
     assert DEEPSEEK_FLASH == "deepseek-v4-flash"
     assert DEEPSEEK_PRO == "deepseek-v4-pro"
+    assert GPT56_LUNA == "gpt-5.6-luna"
 
 
 # ---------------------------------------------------------------------------

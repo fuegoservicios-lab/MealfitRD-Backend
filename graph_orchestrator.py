@@ -17,6 +17,8 @@ from llm_provider import (
     ChatOpenAI as _ChatOpenAIBase,
     DEEPSEEK_FLASH,
     DEEPSEEK_PRO,
+    GPT56_LUNA,
+    GPT56_TERRA,
     PAID_TIERS,
     get_user_tier,
     is_openai_model,
@@ -5329,8 +5331,8 @@ _REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH
 
 # [P1-REVIEWER-TIER-MODELS · 2026-07-31] Modelos del reviewer clínico por tier.
 # Knobs per-tier (convención P3-PREVIEW-MODEL-KNOB — override sin redeploy):
-_REVIEWER_RISK_MODEL_FREE_DEFAULT = "gpt-5.6-luna"
-_REVIEWER_RISK_MODEL_PAID_DEFAULT = "gpt-5.6-terra"
+_REVIEWER_RISK_MODEL_FREE_DEFAULT = GPT56_LUNA
+_REVIEWER_RISK_MODEL_PAID_DEFAULT = GPT56_TERRA
 
 
 def _reviewer_risk_model_for_tier() -> str:
@@ -5600,16 +5602,31 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 def _plan_pro_model_name() -> str:
     # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Nació como "modelo del TIER PAGADO".
     # [P1-FLASH-PRIMARY · 2026-07-31] Re-scoped: ya NO es el modelo de ningún
-    # tier (todos los tiers van a flash — decisión del owner: flash es
-    # actualmente mejor). `_PRO_MODEL_NAME` queda EXCLUSIVAMENTE como la RED
+    # tier (todos van a flash). `_PRO_MODEL_NAME` es EXCLUSIVAMENTE la RED
     # post-fallo: 2º en la cadena del day-gen, fallback del planner con breaker
-    # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO. Su valor
-    # en esos slots es ser un modelo DISTINTO con circuit breaker INDEPENDIENTE
-    # (diversidad), no ser "mejor" — colapsarlo a flash convertiría cada
-    # fallback en un no-op contra el mismo breaker roto (los incidentes
-    # P1-DAYGEN-RETRY-FLASH-NET y P1-PLANNER-PRO-FALLBACK existen por eso).
-    # Rollback/swap sin redeploy: `MEALFIT_PRO_MODEL=<model-id>`.
-    return _env_str("MEALFIT_PRO_MODEL", DEEPSEEK_PRO)
+    # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO.
+    # [P1-NET-LUNA · 2026-07-31] Default de la red → `gpt-5.6-luna` (OpenAI).
+    # Razón (decisión owner): flash y pro son el MISMO proveedor — el incidente
+    # que motivó la red (breaker abierto 172× en el gym baseline) fue DeepSeek
+    # rate-limiteando bajo carga, y en ese modo de fallo pro cae JUNTO con
+    # flash. Luna es proveedor DISTINTO (infra/key/límites propios): diversidad
+    # real. Simetría: el pipeline (DeepSeek) cae a OpenAI; el reviewer clínico
+    # (OpenAI) cae a DeepSeek (P1-REVIEWER-TIER-MODELS).
+    # Fail-safe: sin OPENAI_API_KEY utilizable, la red vuelve a DEEPSEEK_PRO —
+    # nunca te quedas sin red por una key. Se resuelve al boot (los constantes
+    # module-level no se re-leen; cambiar key/knob ⇒ restart del worker).
+    # Colapsar la red a flash sigue prohibido: cada fallback sería un no-op
+    # contra el mismo breaker roto (P1-DAYGEN-RETRY-FLASH-NET,
+    # P1-PLANNER-PRO-FALLBACK). Rollback sin redeploy:
+    # `MEALFIT_PRO_MODEL=deepseek-v4-pro`.
+    _configured = _env_str("MEALFIT_PRO_MODEL", GPT56_LUNA) or GPT56_LUNA
+    if is_openai_model(_configured) and not _openai_key_available():
+        logger.warning(
+            f"⚠ [P1-NET-LUNA] La red post-fallo '{_configured}' requiere OPENAI_API_KEY "
+            f"y no está en el entorno → fail-safe a '{DEEPSEEK_PRO}' (red intra-provider)."
+        )
+        return DEEPSEEK_PRO
+    return _configured
 
 
 def _plan_flash_model_name() -> str:
@@ -5782,7 +5799,13 @@ async def _attempt_pro_critique_correction(
         # exclusivamente en el camino infeliz. thinking no soporta el tool_choice forzado de
         # function_calling → json_mode (el prompt ya exige "misma estructura JSON" y adjunta el
         # día actual como plantilla). Si el parse falla → None, mismo contrato fail-safe de hoy.
-        if SURGICAL_PRO_THINKING_ENABLED:
+        # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: la red puede ser un modelo OpenAI
+        # (gpt-5.6-luna default) — construirlo con ChatDeepSeek lo mandaría al base_url de
+        # DeepSeek con la key equivocada (lección P1-DAYGEN-LUNA-CANARY, ahora en TODOS los
+        # consumidores de _PRO_MODEL_NAME). El thinking extra_body es DeepSeek-only → la rama
+        # se salta para OpenAI.
+        _net_is_openai = is_openai_model(_PRO_MODEL_NAME)
+        if SURGICAL_PRO_THINKING_ENABLED and not _net_is_openai:
             # [P2-THINKING-EFFORT · 2026-07-08] effort graduable (low→max) vía knob opcional.
             _surg_think_body = {"type": "enabled"}
             if SURGICAL_PRO_THINKING_EFFORT:
@@ -5798,7 +5821,7 @@ async def _attempt_pro_critique_correction(
                 logger.info(f"🧠 {log_prefix} Corrector quirúrgico Pro con thinking "
                             f"(effort={SURGICAL_PRO_THINKING_EFFORT}).")
         else:
-            pro_corrector = ChatDeepSeek(
+            pro_corrector = (ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(
                 model=_PRO_MODEL_NAME,
                 temperature=0.3,
                 max_retries=0,
@@ -5833,7 +5856,7 @@ async def _attempt_pro_critique_correction(
         # path del corrector. tooltip-anchor: P3-CORRECTOR-NONE-DIAGNOSTIC
         if CORRECTOR_NONE_DIAGNOSTIC_ENABLED:
             try:
-                _raw_llm = ChatDeepSeek(
+                _raw_llm = (ChatOpenAIInstrumented if _net_is_openai else ChatDeepSeek)(
                     model=_PRO_MODEL_NAME, temperature=0.3, max_retries=0,
                     timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
                 )  # SIN with_structured_output → devuelve el AIMessage crudo
@@ -6678,7 +6701,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     if attempt > 1:
         logger.info(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
 
-    planner_llm = ChatDeepSeek(
+    # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: `MEALFIT_PLANNER_MODEL` puede apuntar
+    # a un modelo OpenAI — ChatDeepSeek lo mandaría al base_url equivocado (trampa latente
+    # hermana de la del corrector quirúrgico; misma clase P1-DAYGEN-LUNA-CANARY).
+    planner_llm = (ChatOpenAIInstrumented if is_openai_model(planner_model) else ChatDeepSeek)(
         model=planner_model,
         temperature=base_temp,
         max_retries=0,
@@ -6750,7 +6776,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                 f"({type(_planner_flash_err).__name__}: {str(_planner_flash_err)[:120]}) → "
                 f"reintentando esqueleto con '{_PRO_MODEL_NAME}'."
             )
-            _pro_planner_llm = ChatDeepSeek(
+            # [P1-NET-LUNA · 2026-07-31] La red default es gpt-5.6-luna (OpenAI, proveedor
+            # DISTINTO): justo en este path — DeepSeek saturado — es donde la diversidad de
+            # proveedor vale oro (con pro, un rate-limit de DeepSeek tumbaba flash Y la red).
+            _pro_planner_llm = (ChatOpenAIInstrumented if is_openai_model(_PRO_MODEL_NAME) else ChatDeepSeek)(
                 model=_PRO_MODEL_NAME, temperature=base_temp, max_retries=0, timeout=90,
             ).with_structured_output(PlanSkeletonModel)
             _pro_planner_cb = _get_circuit_breaker(_PRO_MODEL_NAME)
@@ -9644,7 +9673,9 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         _evaluator_model = _self_critique_model_name()
     _evaluator_cb = _get_circuit_breaker(_evaluator_model)
-    evaluator_llm = ChatDeepSeek(
+    # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: EVALUATOR_USE_PRO apunta a
+    # _PRO_MODEL_NAME (red, default OpenAI) y MEALFIT_SELF_CRITIQUE_MODEL es knob libre.
+    evaluator_llm = (ChatOpenAIInstrumented if is_openai_model(_evaluator_model) else ChatDeepSeek)(
         model=_evaluator_model,
         temperature=0.1,
         max_retries=1,
@@ -9909,7 +9940,9 @@ PLAN A EVALUAR (días generados):
             # P1-Q3: capturar modelo del corrector para CB per-modelo
             _corrector_model = _route_model(form_data, force_fast=True)
             _corrector_cb = _get_circuit_breaker(_corrector_model)
-            corrector_llm = ChatDeepSeek(
+            # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor (uniformidad: cualquier knob
+            # de modelo puede apuntar a OpenAI; ChatDeepSeek lo mandaría al base_url equivocado).
+            corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatDeepSeek)(
                 model=_corrector_model,
                 temperature=0.3,
                 # [P1-SELFCRITIQUE-RETRY · 2026-06-17] 0→1: un error de CONEXIÓN
@@ -35770,7 +35803,8 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # Setup del corrector — paridad con self_critique_node line ~5124.
     _corrector_model = _route_model(form_data, force_fast=True)
     _corrector_cb = _get_circuit_breaker(_corrector_model)
-    corrector_llm = ChatDeepSeek(
+    # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor (paridad con el corrector del critique).
+    corrector_llm = (ChatOpenAIInstrumented if is_openai_model(_corrector_model) else ChatDeepSeek)(
         model=_corrector_model,
         temperature=0.3,
         max_retries=0,

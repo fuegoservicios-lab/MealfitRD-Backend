@@ -275,8 +275,11 @@ def test_model_constants_match_production():
 
     [P0-DEEPSEEK-MIGRATION · 2026-06-12] Flash = `deepseek-v4-flash`.
     [P1-FLASH-PRIMARY · 2026-07-31] `_PRO_MODEL_NAME` ya NO es "el modelo de
-    tiers pagados" (todos los tiers van a flash): es el modelo de RED
-    post-fallo (breaker independiente) y sigue siendo `deepseek-v4-pro`.
+    tiers pagados": es el modelo de RED post-fallo.
+    [P1-NET-LUNA · 2026-07-31] La red es `gpt-5.6-luna` (cross-provider) con
+    OPENAI_API_KEY presente, o `deepseek-v4-pro` como fail-safe sin ella —
+    la invariante estable es red ≠ flash.
     """
     assert _FLASH_MODEL_NAME == "deepseek-v4-flash"
-    assert _PRO_MODEL_NAME == "deepseek-v4-pro"
+    assert _PRO_MODEL_NAME in ("gpt-5.6-luna", "deepseek-v4-pro")
+    assert _PRO_MODEL_NAME != _FLASH_MODEL_NAME
