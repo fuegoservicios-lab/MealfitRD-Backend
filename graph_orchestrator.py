@@ -5315,12 +5315,18 @@ def _judge_model_name() -> str:
 # [P2-ORCH-7 · 2026-05-28] Modelo "risk-tier" para el reviewer médico y el
 # fact-checker clínico cuando el perfil declara alergias/condiciones médicas.
 # El reviewer es el ÚNICO gate LLM de seguridad clínica.
-# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default `deepseek-v4-pro` PARA TODOS
-# los tiers (incluido gratis): la seguridad clínica de perfiles con
-# alergias/condiciones NO se degrada por plan de pago — es 1 call por plan y
-# el delta de costo es centavos. Perfiles sin restricciones siguen en el
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default único PARA TODOS los tiers
+# (incluido gratis): la seguridad clínica de perfiles con alergias/condiciones
+# NO se degrada por plan de pago. Perfiles sin restricciones siguen en el
 # modelo barato. Tooltip-anchor: P2-ORCH-7.
-_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_PRO
+# [P1-FLASH-PRIMARY · 2026-07-31] Era `DEEPSEEK_PRO` bajo la premisa
+# "pro razona mejor". El owner midió que flash es actualmente MEJOR — mantener
+# pro aquí sería degradar el gate clínico a propósito. El guard de downgrade
+# (`_warn_if_clinical_model_downgraded`) compara contra ESTA constante, así que
+# sigue alertando si un knob desvía el gate del risk-tier esperado (ahora
+# flash). Rollback: `MEALFIT_REVIEWER_RISK_TIER_MODEL=deepseek-v4-pro` (+ el
+# knob homólogo del fact-checker) sin redeploy.
+_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH
 
 _PROFILE_RISK_NEGATIVES = {"", "ninguna", "ninguno", "none", "n/a", "na", "no", "nada"}
 
@@ -5356,8 +5362,11 @@ _CLINICAL_MODEL_GUARD_WARNED: set = set()
 
 def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
     """Emite WARN + `system_alerts` cuando un perfil con riesgo médico va a
-    ser revisado por un modelo distinto del risk-tier (`deepseek-v4-pro`).
-    Best-effort: jamás rompe el routing de modelos."""
+    ser revisado por un modelo distinto del risk-tier esperado
+    (`_REVIEWER_RISK_TIER_DEFAULT` — flash desde P1-FLASH-PRIMARY 2026-07-31).
+    Detector de DESVÍO, no de "modelo más barato": cualquier divergencia del
+    risk-tier (incluido pro) alerta, porque el gate clínico solo está
+    verificado con el modelo esperado. Best-effort: jamás rompe el routing."""
     resolved = (resolved_model or "").strip()
     if resolved == _REVIEWER_RISK_TIER_DEFAULT:
         return
@@ -5366,7 +5375,7 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
         return
     _CLINICAL_MODEL_GUARD_WARNED.add(dedup)
     logger.warning(
-        f"⚠ [P1-DEEPSEEK-ONLY-RESTORE] Gate clínico DEGRADADO: nodo '{node}' "
+        f"⚠ [P1-DEEPSEEK-ONLY-RESTORE] Gate clínico DESVIADO del risk-tier: nodo '{node}' "
         f"resolvió '{resolved}' para perfil con riesgo médico (risk-tier "
         f"esperado '{_REVIEWER_RISK_TIER_DEFAULT}'). Revisar knobs "
         f"MEALFIT_{node.upper()}_MODEL / MEALFIT_{node.upper()}_RISK_TIER_MODEL "
@@ -5395,10 +5404,11 @@ def _warn_if_clinical_model_downgraded(node: str, resolved_model: str) -> None:
                     f"El nodo clínico '{node}' está resolviendo al modelo "
                     f"'{resolved}' para perfiles con alergias/condiciones "
                     f"médicas (risk-tier esperado "
-                    f"'{_REVIEWER_RISK_TIER_DEFAULT}'). Un modelo débil en "
-                    f"este gate deja pasar violaciones clínicas (caso medido: "
-                    f"DM2 carbos +99%). Corregir knobs o resolver manual si "
-                    f"es intencional."
+                    f"'{_REVIEWER_RISK_TIER_DEFAULT}'). Un modelo fuera del "
+                    f"risk-tier verificado puede dejar pasar violaciones "
+                    f"clínicas (caso medido con un modelo débil: DM2 carbos "
+                    f"+99%). Corregir knobs o resolver manual si es "
+                    f"intencional."
                 ),
                 _json.dumps(
                     {
@@ -5420,7 +5430,8 @@ def _fact_checker_model_name(form_data=None) -> str:
     """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del fact-checker clínico.
     Hard-override `MEALFIT_FACT_CHECKER_MODEL` siempre gana. Si el perfil tiene
     alergias/condiciones → risk-tier (`MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`,
-    default `deepseek-v4-pro`); de lo contrario Flash (default barato).
+    default `_REVIEWER_RISK_TIER_DEFAULT` = flash desde P1-FLASH-PRIMARY);
+    de lo contrario Flash (default barato).
     [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
     WARN + system_alert (observacional, el knob sigue ganando)."""
     _override = _env_str("MEALFIT_FACT_CHECKER_MODEL", "")
@@ -5441,7 +5452,8 @@ def _reviewer_model_name(form_data=None) -> str:
     """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del reviewer (pipeline_holistic).
     Hard-override `MEALFIT_REVIEWER_MODEL` siempre gana. Si el perfil tiene
     alergias/condiciones médicas → risk-tier (`MEALFIT_REVIEWER_RISK_TIER_MODEL`,
-    default `deepseek-v4-pro`, más capaz para razonamiento clínico);
+    default `_REVIEWER_RISK_TIER_DEFAULT` = flash desde P1-FLASH-PRIMARY —
+    el owner midió flash > pro);
     de lo contrario Flash (`ReviewResult` schema strict, temp=0.1).
     [P1-DEEPSEEK-ONLY-RESTORE] Perfil con riesgo + modelo != risk-tier →
     WARN + system_alert (observacional, el knob sigue ganando)."""
@@ -5538,9 +5550,16 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 #
 # Defaults preservan comportamiento actual. Tooltip-anchor: P3-PLAN-MODEL-KNOBS.
 def _plan_pro_model_name() -> str:
-    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El "modelo PRO" del pipeline es el
-    # modelo del TIER PAGADO: DeepSeek V4 Pro ($0.435/M in · $0.87/M out).
-    # `_route_model` lo asigna a usuarios basic/plus/ultra.
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Nació como "modelo del TIER PAGADO".
+    # [P1-FLASH-PRIMARY · 2026-07-31] Re-scoped: ya NO es el modelo de ningún
+    # tier (todos los tiers van a flash — decisión del owner: flash es
+    # actualmente mejor). `_PRO_MODEL_NAME` queda EXCLUSIVAMENTE como la RED
+    # post-fallo: 2º en la cadena del day-gen, fallback del planner con breaker
+    # abierto, escalada del corrector quirúrgico, EVALUATOR_USE_PRO. Su valor
+    # en esos slots es ser un modelo DISTINTO con circuit breaker INDEPENDIENTE
+    # (diversidad), no ser "mejor" — colapsarlo a flash convertiría cada
+    # fallback en un no-op contra el mismo breaker roto (los incidentes
+    # P1-DAYGEN-RETRY-FLASH-NET y P1-PLANNER-PRO-FALLBACK existen por eso).
     # Rollback/swap sin redeploy: `MEALFIT_PRO_MODEL=<model-id>`.
     return _env_str("MEALFIT_PRO_MODEL", DEEPSEEK_PRO)
 
@@ -5928,20 +5947,22 @@ def _daygen_model_canary_cohort(form_data: dict) -> str:
 
 
 def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None) -> list:
-    """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día, optimizada por COSTO:
-    flash SUFICIENTE por default, pro SOLO cuando no alcanza. El day-gen avanza al siguiente en cada fallo (reintentos de
-    tenacity) o si el CB del modelo está abierto.
-      - BARIÁTRICO → [deepseek-v4-pro] (perfil clínico más difícil; sin capa flash). Reusa _is_bariatric_condition.
-      - RETRY (attempt>1 = el plan anterior de flash fue rechazado → flash insuficiente) → [deepseek-v4-pro,
-        deepseek-v4-flash] (P1-DAYGEN-RETRY-FLASH-NET: flash como red si el breaker de pro está abierto —
-        antes el chain era [pro] a secas y un breaker abierto mataba TODOS los workers → fallback matemático).
-      - attempt 1 → [deepseek-v4-flash, deepseek-v4-pro]: flash primario, pro SOLO si el call de flash falla (reliability).
+    """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día. El day-gen avanza al
+    siguiente en cada fallo (reintentos de tenacity) o si el CB del modelo está abierto.
+    [P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: flash es actualmente MEJOR que pro (la premisa "pro razona
+    mejor" de 2026-06 caducó). TODA superficie va flash-PRIMERO; pro queda EXCLUSIVAMENTE de red de diversidad
+    (modelo distinto + breaker independiente — P1-DAYGEN-RETRY-FLASH-NET conserva su razón de ser con los roles
+    invertidos):
+      - BARIÁTRICO → [flash, pro] (era [pro] a secas bajo la premisa vieja; sigue saltándose el canario Luna
+        y el downgrade lite — esa garantía se conserva con el early-return). Reusa _is_bariatric_condition.
+      - attempt 1 Y retries → [deepseek-v4-flash, deepseek-v4-pro]: flash primario (en el retry lleva además la
+        directiva correctiva); pro SOLO si el call de flash falla o su breaker está abierto.
     Dedup preservando orden (si MEALFIT_FLASH_MODEL==pro, queda [pro])."""
-    # Bariátrico: directo a PRO (sin capa flash).
+    # Bariátrico: flash primario + pro de red, sin canario ni lite (early-return deliberado).
     if BARIATRIC_DAYGEN_PRO:
         try:
             if _is_bariatric_condition(form_data):
-                return [_PRO_MODEL_NAME]
+                return [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
         except Exception:
             pass
     # Retry tras rechazo: flash no fue suficiente → PRO para el reintento.
@@ -5955,11 +5976,12 @@ def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None)
     # sigue PRIMERO (calidad del retry intacta con breaker sano); el cascade solo cae a flash
     # con pro caído/abierto. Bariátrico NO cambia (arriba: [pro] deliberado — su fallback
     # matemático está curado clínicamente, P1-FALLBACK-BARIATRIC-CURATED).
-    if attempt > 1 and DAY_GEN_RETRY_USE_PRO:
-        chain = [_PRO_MODEL_NAME, _FLASH_MODEL_NAME]
-    else:
-        # attempt 1: flash primario (suficiente por default), pro SOLO como fallback si el call de flash falla.
-        chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
+    # [P1-FLASH-PRIMARY · 2026-07-31] Cadena única para attempt 1 y retries: flash primario
+    # (en el retry con la directiva correctiva de qué arreglar), pro de RED. El branch viejo
+    # `attempt > 1 and DAY_GEN_RETRY_USE_PRO → [pro, flash]` asumía pro > flash; el knob
+    # DAY_GEN_RETRY_USE_PRO sigue vivo en `_route_model_for_day_generator` (escalada
+    # post-fallo por skeleton-fidelity, que SÍ es legítima: ahí pro entra tras fallar flash).
+    chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
     # [P1-DAYGEN-LUNA-CANARY · 2026-07-26] El canario va DELANTE: se intenta primero y el resto
     # del chain queda como red (CB abierto o fallo → cascada normal a flash/pro, sin cambios).
     #
@@ -6010,18 +6032,23 @@ def _route_model_for_day_generator(
     Pro en el retry específico mejora la adherencia ~25 puntos a costo
     de ~$0.05 extra por plan (estimado por intento que escala).
     """
-    # [P1-BARIATRIC-DAYGEN-PRO] Override al TOPE: bariátrico → PRO desde attempt 1, ganando sobre el routing por tier
-    # (FLASH en gratis) Y sobre el override DAYGEN_LITE_FOR_EASY (que podría degradar a flash-lite). Fail-safe: cualquier
-    # excepción de detección → cae al routing normal (nunca rompe la generación). Reusa el detector SSOT detect_active_rules.
+    # [P1-BARIATRIC-DAYGEN-PRO] Override al TOPE: bariátrico gana sobre el routing por tier Y sobre el override
+    # DAYGEN_LITE_FOR_EASY (que podría degradar a flash-lite). Fail-safe: cualquier excepción de detección → cae al
+    # routing normal (nunca rompe la generación). Reusa el detector SSOT detect_active_rules.
+    # [P1-FLASH-PRIMARY · 2026-07-31] Era `return _PRO_MODEL_NAME` con la nota medida "FLASH no retiene las reglas
+    # bariátricas" (medición de la era pro>flash — los providers actualizan modelos bajo el mismo ID y el owner midió
+    # que hoy flash es MEJOR). El valor vigente del branch: garantizar que bariátrico NUNCA degrada a lite. Rollback
+    # per-feature sin redeploy: `MEALFIT_BARIATRIC_DAYGEN_MODEL=deepseek-v4-pro` (convención P3-PREVIEW-MODEL-KNOB).
     if BARIATRIC_DAYGEN_PRO:
         try:
             from condition_rules import detect_active_rules
             if any(getattr(r, "id", None) == "bariatric" for r in detect_active_rules(form_data)):
+                _bariatric_model = _env_str("MEALFIT_BARIATRIC_DAYGEN_MODEL", _FLASH_MODEL_NAME) or _FLASH_MODEL_NAME
                 logger.info(
-                    f"🔀 [P1-BARIATRIC-DAYGEN-PRO] Perfil bariátrico → day generator PRO ({_PRO_MODEL_NAME}) "
-                    f"desde attempt {attempt} (simetría con revisor clínico PRO; FLASH no retiene las reglas bariátricas)."
+                    f"🔀 [P1-BARIATRIC-DAYGEN-PRO] Perfil bariátrico → day generator '{_bariatric_model}' "
+                    f"desde attempt {attempt} (P1-FLASH-PRIMARY: flash primario; sin downgrade lite para bariátrico)."
                 )
-                return _PRO_MODEL_NAME
+                return _bariatric_model
         except Exception as _bdp_e:
             logger.warning(f"[P1-BARIATRIC-DAYGEN-PRO] detección falló (no bloquea, cae al routing normal): {_bdp_e}")
 
@@ -6041,10 +6068,12 @@ def _route_model_for_day_generator(
         return _base
 
     if _is_skeleton_fidelity_rejection(prev_rejection_reasons):
+        # [P1-FLASH-PRIMARY] Escalada POST-FALLO legítima: flash ya falló esta
+        # tarea concreta (fidelity rejection previa) — probar el modelo DISTINTO
+        # es diversidad de red, no premisa "pro es mejor".
         logger.info(
-            f"🔀 [ROUTER P4] Day generator escalado a PRO ({_PRO_MODEL_NAME}) "
-            f"en retry attempt={attempt} por skeleton fidelity violation previa. "
-            f"Trade: ~+40s/día vs Flash, +25pts de adherencia esperada."
+            f"🔀 [ROUTER P4] Day generator escalado al modelo de red ({_PRO_MODEL_NAME}) "
+            f"en retry attempt={attempt} por skeleton fidelity violation previa de flash."
         )
         return _PRO_MODEL_NAME
 
@@ -6057,7 +6086,12 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
     [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ruteo ahora es POR TIER DE
     SUSCRIPCIÓN (decisión de producto 2026-06-12):
       - `gratis` / guests / tier irresoluble → `_FLASH_MODEL_NAME` (V4 Flash)
-      - `basic` / `plus` / `ultra` (pagados) → `_PRO_MODEL_NAME` (V4 Pro)
+      - `basic` / `plus` / `ultra` (pagados) → `resolve_model_for_tier(tier)`
+        (SSOT llm_provider; [P1-FLASH-PRIMARY · 2026-07-31] default flash —
+        el owner midió que flash es actualmente mejor que pro. Rollback:
+        `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro` sin redeploy. Antes esta
+        rama retornaba `_PRO_MODEL_NAME`, que queda re-scoped como modelo de
+        RED post-fallo, ver `_plan_pro_model_name`).
 
     El user_id se lee del ContextVar `user_id_var`, que `arun_plan_pipeline`
     setea al entrar (cubre requests síncronos Y chunk workers de fondo).
@@ -6067,8 +6101,8 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
 
     El ruteo legacy por complejidad clínica (P1-A) quedó reemplazado: la
     seguridad clínica NO depende de este router — el reviewer médico y el
-    fact-checker escalan a PRO via risk-tier (P2-ORCH-7,
-    `_REVIEWER_RISK_TIER_DEFAULT`) para CUALQUIER perfil con
+    fact-checker van al risk-tier (P2-ORCH-7, `_REVIEWER_RISK_TIER_DEFAULT`,
+    flash desde P1-FLASH-PRIMARY) para CUALQUIER perfil con
     alergias/condiciones, incluido tier gratis. `form_data`/`attempt` se
     conservan en la firma por compat con los callers (y un futuro ruteo
     híbrido tier+complejidad puede reusarlos).
@@ -6079,10 +6113,14 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
     _uid = user_id_var.get()
     tier = get_user_tier(_uid)
     if tier in PAID_TIERS:
+        from llm_provider import resolve_model_for_tier
+        _paid_model = resolve_model_for_tier(tier)
         logger.info(
-            f"🔀 [ROUTER] Tier '{tier}' (pagado) → modelo PRO ({_PRO_MODEL_NAME})."
+            f"🔀 [ROUTER] Tier '{tier}' (pagado) → modelo '{_paid_model}' "
+            f"(P1-FLASH-PRIMARY: flash por default; MEALFIT_MODEL_PAID_TIER "
+            f"para divergir)."
         )
-        return _PRO_MODEL_NAME
+        return _paid_model
     logger.info(
         f"🔀 [ROUTER] Tier '{tier or 'gratis'}' → modelo FLASH ({_FLASH_MODEL_NAME})."
     )

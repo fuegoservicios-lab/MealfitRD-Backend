@@ -5,7 +5,8 @@ Contratos que ancla:
   A. Blanket: cero construcciones Gemini en código productivo (imports,
      constructores, GEMINI_API_KEY, model IDs `gemini-*` en string literals).
   B. Router por tier: gratis/guest/desconocido → deepseek-v4-flash;
-     basic/plus/ultra → deepseek-v4-pro. Fail-cheap en errores de lookup.
+     basic/plus/ultra → deepseek-v4-flash ([P1-FLASH-PRIMARY · 2026-07-31]:
+     el owner midió flash > pro; era pro). Fail-cheap en errores de lookup.
   C. Wrapper ChatDeepSeek: drop-in del constructor legacy (swallow de
      google_api_key/safety_settings/thinking_budget, max_output_tokens →
      max_tokens, stream_usage habilitado, base_url DeepSeek, boot sin key
@@ -129,16 +130,22 @@ def test_b_resolve_model_for_tier_matrix(monkeypatch):
     monkeypatch.delenv("MEALFIT_MODEL_FREE_TIER", raising=False)
     monkeypatch.delenv("MEALFIT_MODEL_PAID_TIER", raising=False)
 
-    # Decisión de producto 2026-06-12: free → flash, pagado → pro.
+    # [P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: flash es actualmente
+    # MEJOR que pro → TODOS los tiers resuelven flash por default (era pagado→pro
+    # desde 2026-06-12). Pro queda solo como red post-fallo (MEALFIT_PRO_MODEL).
     assert resolve_model_for_tier("gratis") == DEEPSEEK_FLASH
-    assert resolve_model_for_tier("basic") == DEEPSEEK_PRO
-    assert resolve_model_for_tier("plus") == DEEPSEEK_PRO
-    assert resolve_model_for_tier("ultra") == DEEPSEEK_PRO
+    assert resolve_model_for_tier("basic") == DEEPSEEK_FLASH
+    assert resolve_model_for_tier("plus") == DEEPSEEK_FLASH
+    assert resolve_model_for_tier("ultra") == DEEPSEEK_FLASH
     # Fail-cheap: None / vacío / desconocido / casing raro.
     assert resolve_model_for_tier(None) == DEEPSEEK_FLASH
     assert resolve_model_for_tier("") == DEEPSEEK_FLASH
     assert resolve_model_for_tier("enterprise") == DEEPSEEK_FLASH
-    assert resolve_model_for_tier("  BASIC  ") == DEEPSEEK_PRO  # normaliza
+    assert resolve_model_for_tier("  BASIC  ") == DEEPSEEK_FLASH  # normaliza
+    # El knob sigue permitiendo divergir pagado→pro sin redeploy (rollback).
+    monkeypatch.setenv("MEALFIT_MODEL_PAID_TIER", DEEPSEEK_PRO)
+    assert resolve_model_for_tier("plus") == DEEPSEEK_PRO
+    assert resolve_model_for_tier("gratis") == DEEPSEEK_FLASH
 
 
 def test_b2_resolve_model_for_user_paths(monkeypatch):
@@ -153,13 +160,13 @@ def test_b2_resolve_model_for_user_paths(monkeypatch):
 
     llm_provider.invalidate_tier_cache()
 
-    # Paid user → PRO.
+    # Paid user → FLASH ([P1-FLASH-PRIMARY]: el owner midió flash > pro).
     monkeypatch.setattr(
         "db.get_user_plan_tier", lambda uid: "plus", raising=False
     )
     assert (
         llm_provider.resolve_model_for_user("11111111-1111-1111-1111-111111111111")
-        == llm_provider.DEEPSEEK_PRO
+        == llm_provider.DEEPSEEK_FLASH
     )
 
     # Free user → FLASH.

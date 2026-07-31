@@ -214,10 +214,11 @@ def test_p2_orch_6_cross_day_detector():
 # ===========================================================================
 def test_p2_orch_7_risk_tier():
     assert "def _profile_has_medical_risk(form_data) -> bool:" in _G
-    # [P0-DEEPSEEK-MIGRATION] risk-tier escala a PRO (constante SSOT de
-    # llm_provider) para TODOS los tiers — la seguridad clínica no se
-    # degrada por plan de pago.
-    assert "_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_PRO" in _G
+    # [P0-DEEPSEEK-MIGRATION] risk-tier con constante SSOT de llm_provider
+    # para TODOS los tiers — la seguridad clínica no se degrada por plan de
+    # pago. [P1-FLASH-PRIMARY · 2026-07-31] risk-tier = FLASH (el owner midió
+    # flash > pro; mantener pro habría degradado el gate clínico a propósito).
+    assert "_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_FLASH" in _G
     assert "def _reviewer_model_name(form_data=None) -> str:" in _G
     assert "def _fact_checker_model_name(form_data=None) -> str:" in _G
     assert "_reviewer_model = _reviewer_model_name(form_data)" in _G

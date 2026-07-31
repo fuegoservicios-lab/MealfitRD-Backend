@@ -1,9 +1,11 @@
 """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] GLM ELIMINADO (su tier gratis rate-limitea hasta ser inusable, 429 en 1 sola
-llamada). Routing por costo SOLO DeepSeek: deepseek-v4-flash SUFICIENTE por default; deepseek-v4-pro SOLO cuando flash no
-alcanza:
-  - attempt 1 → [flash, pro]: flash primario; pro SOLO si el call de flash falla (reliability).
-  - attempt > 1 (plan de flash rechazado → insuficiente) → [pro].
-  - bariátrico → [pro] directo.
+llamada). Routing SOLO DeepSeek.
+
+[P1-FLASH-PRIMARY · 2026-07-31] El owner midió que flash es actualmente MEJOR que pro → la
+cadena es flash-PRIMERO en TODOS los casos, con pro exclusivamente de red post-fallo
+(breaker independiente):
+  - attempt 1 Y retries → [flash, pro] (el retry lleva además la directiva correctiva).
+  - bariátrico → [flash, pro] (era [pro] directo bajo la premisa pro>flash).
 Minimiza costo/llamadas: el caso normal = 1 llamada flash.
 """
 from __future__ import annotations
@@ -26,18 +28,20 @@ def test_attempt1_flash_primary_pro_fallback(monkeypatch):
     assert g._day_model_chain(_NON, 1) == ["deepseek-v4-flash", "deepseek-v4-pro"]
 
 
-def test_retry_escalates_to_pro(monkeypatch):
+def test_retry_stays_flash_primary(monkeypatch):
     _patch_flash(monkeypatch)
-    # plan de flash rechazado → reintento usa pro PRIMERO (flash no fue suficiente).
-    # [P1-DAYGEN-RETRY-FLASH-NET · 2026-07-03] flash queda como RED de última instancia:
-    # con el breaker de pro abierto, [pro] a secas mataba TODOS los workers del retry
-    # → fallback matemático (gym baseline: 2/20 planes, uno maintenance sin condiciones).
-    assert g._day_model_chain(_NON, 2) == ["deepseek-v4-pro", "deepseek-v4-flash"]
+    # [P1-FLASH-PRIMARY · 2026-07-31] Era [pro, flash] ("flash rechazado → pro primero").
+    # Con flash medido como MEJOR, el retry va flash-PRIMERO (con la directiva correctiva)
+    # y pro queda de red — la invariante de P1-DAYGEN-RETRY-FLASH-NET (dos modelos,
+    # breakers independientes) se conserva con los roles invertidos.
+    assert g._day_model_chain(_NON, 2) == ["deepseek-v4-flash", "deepseek-v4-pro"]
 
 
-def test_bariatric_direct_pro(monkeypatch):
+def test_bariatric_flash_primary_pro_net(monkeypatch):
     _patch_flash(monkeypatch)
-    assert g._day_model_chain(_BAR, 1) == ["deepseek-v4-pro"]
+    # [P1-FLASH-PRIMARY] Era [pro] directo (premisa pro>flash + "flash no retiene reglas
+    # bariátricas", medición de la era vieja). Hoy: flash primario + pro de red.
+    assert g._day_model_chain(_BAR, 1) == ["deepseek-v4-flash", "deepseek-v4-pro"]
 
 
 def test_chain_ends_in_pro():

@@ -1,4 +1,4 @@
-# Router de modelos LLM por tier (P0-DEEPSEEK-MIGRATION · 2026-06-12)
+# Router de modelos LLM por tier (P0-DEEPSEEK-MIGRATION · 2026-06-12 · P1-FLASH-PRIMARY · 2026-07-31)
 
 Provider único: **DeepSeek V4** (API OpenAI-compatible, base
 `https://api.deepseek.com`, key env `DEEPSEEK_API_KEY`). SSOT del router:
@@ -6,12 +6,39 @@ Provider único: **DeepSeek V4** (API OpenAI-compatible, base
 2026-06-12: salir a producción con modelos chinos por costo; Gemini eliminado
 por completo (deps, embeddings, vision, safety_settings).
 
+## [P1-FLASH-PRIMARY · 2026-07-31] Flash primario en TODAS las superficies
+
+Decisión del owner: **`deepseek-v4-flash` es actualmente MEJOR que
+`deepseek-v4-pro`** (los providers actualizan los modelos bajo el mismo ID —
+la premisa "pro > flash" de 2026-06-12 caducó). Consecuencias:
+
+- TODOS los tiers (gratis Y pagados) resuelven **flash** por default.
+- El reviewer médico / fact-checker **risk-tier también es flash**
+  (`_REVIEWER_RISK_TIER_DEFAULT`): mantener pro habría degradado el gate
+  clínico a propósito bajo la premisa nueva. El guard
+  `_warn_if_clinical_model_downgraded` detecta DESVÍO del risk-tier esperado
+  (cualquier modelo ≠ flash, incluido pro, alerta).
+- **Pro NO desaparece**: queda exclusivamente como RED post-fallo —
+  2º en la cadena del day-gen, fallback del planner con breaker abierto,
+  escalada del corrector quirúrgico y escalada por skeleton-fidelity. En esos
+  slots su valor es ser un modelo **DISTINTO con circuit breaker
+  INDEPENDIENTE** (diversidad), no ser "mejor". Colapsar la red a flash haría
+  no-op esos fallbacks (incidentes P1-DAYGEN-RETRY-FLASH-NET y
+  P1-PLANNER-PRO-FALLBACK).
+- Rollback sin redeploy: `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro` (tiers),
+  `MEALFIT_REVIEWER_RISK_TIER_MODEL` / `MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`
+  (gate clínico), `MEALFIT_BARIATRIC_DAYGEN_MODEL` (day-gen bariátrico).
+
+Test ancla: [`test_p1_flash_primary.py`](../tests/test_p1_flash_primary.py).
+
 ## Mapping tier → modelo
 
 | `user_profiles.plan_tier` | Modelo | Pricing (USD/1M tok, in miss/hit · out) |
 |---|---|---|
 | `gratis` / guest / NULL / desconocido / fallo de lookup | `deepseek-v4-flash` | $0.14 / $0.0028 · $0.28 |
-| `basic` · `plus` · `ultra` | `deepseek-v4-pro` | $0.435 / $0.003625 · $0.87 |
+| `basic` · `plus` · `ultra` | `deepseek-v4-flash` (P1-FLASH-PRIMARY; era `deepseek-v4-pro`) | $0.14 / $0.0028 · $0.28 |
+
+(Pricing de la red pro, usada solo post-fallo: $0.435 / $0.003625 · $0.87.)
 
 Invariante **fail-cheap**: cualquier duda (guest, DB blip, tier corrupto)
 resuelve al modelo FREE — un fallo de lookup jamás encarece la llamada.
@@ -26,7 +53,7 @@ Lookup con cache TTL in-process (`MEALFIT_TIER_CACHE_TTL_S`, default 300s);
 | Chat agent (`call_model`) | **Tier** | `state.user_id` / `state.session_id` |
 | Chat swap (`swap_meal`) | **Tier** | `form_data.user_id` (validado vs JWT en `api_swap_meal`) |
 | Tool `modify_single_meal` | **Tier** | `user_id` forzado por P0-AGENT-1 |
-| Reviewer médico / fact-checker con perfil de riesgo | **PRO fijo** (todos los tiers) | `_REVIEWER_RISK_TIER_DEFAULT` — la seguridad clínica no se degrada por plan de pago |
+| Reviewer médico / fact-checker con perfil de riesgo | **risk-tier FLASH fijo** (todos los tiers; P1-FLASH-PRIMARY, era PRO) | `_REVIEWER_RISK_TIER_DEFAULT` — la seguridad clínica no se degrada por plan de pago; el guard de desvío alerta ante cualquier modelo ≠ risk-tier |
 | Aux baratos: títulos, recipe-expand, sentiment, router RAG, fact-extractor, memoria, nudges, judge, compressor, meta-learning, planner default, médico Q&A, probe CB | **FLASH fijo** | — |
 
 Los per-feature knobs `MEALFIT_<FEATURE>_MODEL` se preservan y **siempre
@@ -64,7 +91,8 @@ al path estándar** (nunca a aprobar/omitir el gate clínico). Test ancla del re
 |---|---|---|
 | `MEALFIT_DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | endpoint OpenAI-compatible |
 | `MEALFIT_MODEL_FREE_TIER` | `deepseek-v4-flash` | modelo tier gratis/aux |
-| `MEALFIT_MODEL_PAID_TIER` | `deepseek-v4-pro` | modelo tiers pagados |
+| `MEALFIT_MODEL_PAID_TIER` | `deepseek-v4-flash` (P1-FLASH-PRIMARY; era pro) | modelo tiers pagados |
+| `MEALFIT_BARIATRIC_DAYGEN_MODEL` | `_FLASH_MODEL_NAME` (P1-FLASH-PRIMARY) | day-gen bariátrico (era PRO hardcoded) |
 | `MEALFIT_TIER_CACHE_TTL_S` | `300` (clamp [10, 3600]) | TTL del cache de tier |
 | `MEALFIT_LLM_PRICING_JSON` | — | override del pricing de telemetría (antes `MEALFIT_GEMINI_PRICING_JSON`) |
 

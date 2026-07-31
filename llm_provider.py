@@ -7,7 +7,18 @@ OpenAI-compatible, base `https://api.deepseek.com`) para reducir costo de
 producción, con enrutamiento por plan de pago:
 
     - Tier `gratis` (free) / guests / desconocido → `deepseek-v4-flash`
-    - Tiers `basic` / `plus` / `ultra` (pagados)   → `deepseek-v4-pro`
+    - Tiers `basic` / `plus` / `ultra` (pagados)   → `deepseek-v4-flash`
+
+[P1-FLASH-PRIMARY · 2026-07-31] Decisión del owner: `deepseek-v4-flash` es
+actualmente MEJOR que `deepseek-v4-pro` (los providers actualizan modelos bajo
+el mismo ID — la premisa "pro > flash" de 2026-06-12 caducó). Flash pasa a ser
+el modelo PRIMARIO de TODAS las superficies, incluidos tiers pagados y el
+reviewer clínico risk-tier (`graph_orchestrator._REVIEWER_RISK_TIER_DEFAULT`).
+Pro NO desaparece: queda exclusivamente como RED post-fallo (2º en cadena del
+day-gen, fallback del planner con breaker independiente, escalada del corrector
+quirúrgico — `MEALFIT_PRO_MODEL`), donde su valor es ser un modelo DISTINTO
+con circuit breaker propio, no ser "mejor". Rollback sin redeploy:
+`MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro`.
 
 Precios oficiales 2026-06 (por 1M tokens): flash $0.14 in / $0.28 out;
 pro $0.435 in / $0.87 out. Ambos: 1M contexto, 384K max output, JSON mode,
@@ -31,7 +42,7 @@ Contratos:
 Knobs (auto-registrados en `_KNOBS_REGISTRY` vía `_env_*`):
   - `MEALFIT_DEEPSEEK_BASE_URL`  (default `https://api.deepseek.com`)
   - `MEALFIT_MODEL_FREE_TIER`    (default `deepseek-v4-flash`)
-  - `MEALFIT_MODEL_PAID_TIER`    (default `deepseek-v4-pro`)
+  - `MEALFIT_MODEL_PAID_TIER`    (default `deepseek-v4-flash`, P1-FLASH-PRIMARY)
   - `MEALFIT_TIER_CACHE_TTL_S`   (default 300, clamp [10, 3600])
 
 Rollback operacional sin redeploy: ambos modelos son swappeables vía knob
@@ -149,8 +160,11 @@ def model_free_tier() -> str:
 
 
 def model_paid_tier() -> str:
-    """Modelo para tiers `basic`/`plus`/`ultra`. Default V4 Pro."""
-    return _env_str("MEALFIT_MODEL_PAID_TIER", DEEPSEEK_PRO) or DEEPSEEK_PRO
+    """Modelo para tiers `basic`/`plus`/`ultra`. Default V4 Flash
+    ([P1-FLASH-PRIMARY · 2026-07-31]: el owner midió que flash es actualmente
+    mejor que pro; era `DEEPSEEK_PRO` desde P0-DEEPSEEK-MIGRATION). Rollback:
+    `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro`."""
+    return _env_str("MEALFIT_MODEL_PAID_TIER", DEEPSEEK_FLASH) or DEEPSEEK_FLASH
 
 
 def resolve_model_for_tier(tier: Optional[str]) -> str:
@@ -241,7 +255,9 @@ def get_user_tier(user_id: Optional[str]) -> str:
 
 
 def resolve_model_for_user(user_id: Optional[str] = None) -> str:
-    """Router user → model ID: tier pagado → PRO, resto → FLASH."""
+    """Router user → model ID. [P1-FLASH-PRIMARY] Ambos tiers resuelven FLASH
+    por default; la distinción pagado/gratis se conserva (knobs separados) para
+    poder divergir de nuevo sin tocar código."""
     return resolve_model_for_tier(get_user_tier(user_id))
 
 

@@ -7,9 +7,14 @@ deepseek-v4-pro estuvo abierto (172 menciones) y el chain de retry del day-gen e
 workers muertos → plan de contingencia. Un día real generado por flash (validado por los
 mismos gates de review) es estrictamente mejor que un día matemático.
 
-Cierra: retry chain = [pro, flash] (pro primero — calidad intacta con breaker sano; el
-cascade solo cae a flash con pro caído/abierto). Bariátrico intacto ([pro] deliberado:
-su fallback matemático está curado clínicamente).
+Cierra: retry chain con AMBOS modelos (la invariante real: un solo breaker abierto jamás
+mata todos los workers).
+
+[P1-FLASH-PRIMARY · 2026-07-31] El ORDEN se invirtió: el owner midió que flash es
+actualmente MEJOR que pro → retry = [flash, pro] (flash primario con la directiva
+correctiva; pro queda de RED de diversidad). Bariátrico también: [flash, pro] (era [pro]
+a secas bajo la premisa vieja). La invariante de ESTE test (dos modelos en la cadena,
+breakers independientes) sobrevive intacta con los roles invertidos.
 """
 from __future__ import annotations
 
@@ -33,26 +38,26 @@ def test_marker_bumped():
     assert fecha and fecha.group(1) >= "2026-07-03"
 
 
-def test_retry_chain_has_flash_net(monkeypatch):
+def test_retry_chain_has_two_model_net(monkeypatch):
     import graph_orchestrator as g
     monkeypatch.setattr(g, "_FLASH_MODEL_NAME", "deepseek-v4-flash")
     monkeypatch.setattr(g, "_PRO_MODEL_NAME", "deepseek-v4-pro")
     monkeypatch.setattr(g, "DAY_GEN_RETRY_USE_PRO", True)
     chain = g._day_model_chain(_NON, 2)
-    assert chain == ["deepseek-v4-pro", "deepseek-v4-flash"], \
-        "el retry debe llevar flash como red — [pro] a secas + breaker abierto = fallback matemático"
+    assert chain == ["deepseek-v4-flash", "deepseek-v4-pro"], \
+        "el retry debe llevar DOS modelos (breakers independientes) — flash primario por P1-FLASH-PRIMARY"
     # attempt 3 igual (todo retry lleva la red)
-    assert g._day_model_chain(_NON, 3) == ["deepseek-v4-pro", "deepseek-v4-flash"]
+    assert g._day_model_chain(_NON, 3) == ["deepseek-v4-flash", "deepseek-v4-pro"]
 
 
-def test_bariatric_stays_pro_only(monkeypatch):
+def test_bariatric_has_pro_net(monkeypatch):
     import graph_orchestrator as g
     monkeypatch.setattr(g, "_FLASH_MODEL_NAME", "deepseek-v4-flash")
     monkeypatch.setattr(g, "_PRO_MODEL_NAME", "deepseek-v4-pro")
     if not g.BARIATRIC_DAYGEN_PRO:
         return  # knob off en el baseline de tests → decisión cubierta por su propio test
-    assert g._day_model_chain(_BAR, 2) == ["deepseek-v4-pro"], \
-        "bariátrico NO degrada a flash (decisión clínica deliberada; su fallback está curado)"
+    assert g._day_model_chain(_BAR, 2) == ["deepseek-v4-flash", "deepseek-v4-pro"], \
+        "bariátrico: flash primario (P1-FLASH-PRIMARY) + pro de red — nunca un solo modelo sin red"
 
 
 def test_attempt1_unchanged(monkeypatch):

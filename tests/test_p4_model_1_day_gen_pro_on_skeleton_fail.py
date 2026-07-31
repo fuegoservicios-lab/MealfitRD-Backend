@@ -175,16 +175,18 @@ class TestRouteModelForDayGenerator:
         )
         assert result == _FLASH_MODEL_NAME
 
-    def test_paid_tier_attempt_1_uses_pro(self, monkeypatch):
-        """Sanity post-P0-DEEPSEEK-MIGRATION: el routing default escala a Pro
-        cuando el USUARIO ES DE TIER PAGADO (el ruteo por complejidad clínica
-        fue reemplazado por ruteo por tier — la seguridad clínica vive en el
-        risk-tier del reviewer P2-ORCH-7, no acá).
+    def test_paid_tier_attempt_1_uses_flash(self, monkeypatch):
+        """[P1-FLASH-PRIMARY · 2026-07-31] El tier pagado TAMBIÉN resuelve
+        flash por default (el owner midió flash > pro; era pro desde
+        P0-DEEPSEEK-MIGRATION). La rama pagada de `_route_model` ahora resuelve
+        vía `resolve_model_for_tier` (SSOT llm_provider), rollback
+        `MEALFIT_MODEL_PAID_TIER=deepseek-v4-pro`.
 
         NOTA reload-safety: se parchean los `__globals__` de la función
         importada (no `sys.modules["graph_orchestrator"]`) — otros tests
         (p6_evaluator_use_pro) recargan el módulo y desincronizarían el patch.
         """
+        monkeypatch.delenv("MEALFIT_MODEL_PAID_TIER", raising=False)
         monkeypatch.setitem(
             _route_model_for_day_generator.__globals__,
             "get_user_tier",
@@ -197,7 +199,7 @@ class TestRouteModelForDayGenerator:
         result = _route_model_for_day_generator(
             form, attempt=1, prev_rejection_reasons=[],
         )
-        assert result == _PRO_MODEL_NAME
+        assert result == "deepseek-v4-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +273,10 @@ def test_model_constants_match_production():
     """Las constantes de nombre de modelo deben coincidir con los IDs
     reales que el resto del codebase usa (CB tracking, logs).
 
-    [P0-DEEPSEEK-MIGRATION · 2026-06-12] Flash = modelo del tier gratis
-    (`deepseek-v4-flash`); Pro = modelo de tiers pagados (`deepseek-v4-pro`).
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] Flash = `deepseek-v4-flash`.
+    [P1-FLASH-PRIMARY · 2026-07-31] `_PRO_MODEL_NAME` ya NO es "el modelo de
+    tiers pagados" (todos los tiers van a flash): es el modelo de RED
+    post-fallo (breaker independiente) y sigue siendo `deepseek-v4-pro`.
     """
     assert _FLASH_MODEL_NAME == "deepseek-v4-flash"
     assert _PRO_MODEL_NAME == "deepseek-v4-pro"

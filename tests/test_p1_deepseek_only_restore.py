@@ -149,23 +149,28 @@ def _capture_writes(monkeypatch):
 
 
 def test_healthy_risk_tier_no_alert(_go, monkeypatch):
-    """Perfil con riesgo + config default → pro, sin warn ni alert."""
+    """Perfil con riesgo + config default → flash, sin warn ni alert.
+    [P1-FLASH-PRIMARY · 2026-07-31] Era `deepseek-v4-pro`: el owner midió que
+    flash es actualmente mejor y el risk-tier esperado pasó a flash."""
     writes = _capture_writes(monkeypatch)
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-pro"
+    assert resolved == "deepseek-v4-flash"
     assert not _go._CLINICAL_MODEL_GUARD_WARNED
     assert not writes
 
 
 def test_override_downgrade_emits_alert_once(_go, monkeypatch):
-    """Hard-override a flash con perfil de riesgo → WARN + system_alert una
-    sola vez por proceso por (nodo, modelo)."""
+    """Hard-override fuera del risk-tier con perfil de riesgo → WARN +
+    system_alert una sola vez por proceso por (nodo, modelo).
+    [P1-FLASH-PRIMARY] El guard es detector de DESVÍO del risk-tier esperado
+    (hoy flash): pre-fix el desvío de prueba era flash (cuando pro era el
+    esperado); ahora el desvío de prueba es pro."""
     writes = _capture_writes(monkeypatch)
-    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-pro")
 
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-flash", "el knob sigue ganando (guard observacional)"
-    assert ("reviewer", "deepseek-v4-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "deepseek-v4-pro", "el knob sigue ganando (guard observacional)"
+    assert ("reviewer", "deepseek-v4-pro") in _go._CLINICAL_MODEL_GUARD_WARNED
     assert len(writes) == 1
     sql, params = writes[0]
     assert "system_alerts" in sql
@@ -177,13 +182,14 @@ def test_override_downgrade_emits_alert_once(_go, monkeypatch):
 
 
 def test_risk_tier_knob_downgrade_also_alerts(_go, monkeypatch):
-    """El knob risk-tier apuntado a un modelo débil también dispara el guard
-    (no solo el hard-override)."""
+    """El knob risk-tier apuntado FUERA del risk-tier esperado también dispara
+    el guard (no solo el hard-override). [P1-FLASH-PRIMARY] desvío de prueba:
+    pro (el esperado hoy es flash)."""
     writes = _capture_writes(monkeypatch)
-    monkeypatch.setenv("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", "deepseek-v4-pro")
     resolved = _go._fact_checker_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-flash"
-    assert ("fact_checker", "deepseek-v4-flash") in _go._CLINICAL_MODEL_GUARD_WARNED
+    assert resolved == "deepseek-v4-pro"
+    assert ("fact_checker", "deepseek-v4-pro") in _go._CLINICAL_MODEL_GUARD_WARNED
     assert len(writes) == 1
     assert writes[0][1][0] == "llm_clinical_reviewer_downgraded:fact_checker"
 
@@ -199,13 +205,16 @@ def test_no_risk_profile_never_warns(_go, monkeypatch):
 
 
 def test_alert_emit_failure_is_best_effort(_go, monkeypatch):
-    """Fallo del INSERT jamás rompe la resolución de modelo."""
+    """Fallo del INSERT jamás rompe la resolución de modelo.
+    [P1-FLASH-PRIMARY] El override debe DESVIAR del risk-tier (hoy flash) para
+    que el guard intente el INSERT — con flash el guard retorna temprano y el
+    test no ejercitaría nada."""
     import db
 
     def _boom(*a, **k):
         raise RuntimeError("db caída")
 
     monkeypatch.setattr(db, "execute_sql_write", _boom)
-    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("MEALFIT_REVIEWER_MODEL", "deepseek-v4-pro")
     resolved = _go._reviewer_model_name(_RISK_FORM)
-    assert resolved == "deepseek-v4-flash"
+    assert resolved == "deepseek-v4-pro"
