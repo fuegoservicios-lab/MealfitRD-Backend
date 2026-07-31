@@ -98,8 +98,13 @@ DOMINICAN_HOUSEHOLD_MEASURES = {
 }
 
 # Regex pre-compilado para extraer cantidad, unidad y nombre
+# [P3-UNICODE-FRACTION-POLISH · 2026-07-31] La clase de caracteres NO incluía las fracciones unicode,
+# así que "¼ cda de ajonjolí" no matcheaba y `humanize_ingredient` retornaba ANTES de llegar a
+# ningún pulido. Ésa —y no el `float()` de más abajo— es la razón de fondo por la que la regla
+# "¼ cucharada es impráctica" nunca se aplicaba: el pipeline emite la forma unicode, que era
+# justamente la que este regex no reconocía como cantidad. tooltip-anchor: P3-UNICODE-FRACTION-POLISH
 _QUANTITY_PATTERN = re.compile(
-    r'^([\d\s/.,]+)'                           # Números, fracciones, espacios iniciales
+    r'^([\d\s/.,¼½¾⅓⅔⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞]+)'           # Números, fracciones (ASCII y unicode), espacios
     r'(?:'
         r'(g|gr|kg|mg|ml|l|lb|lbs|oz)'         # Unidades métricas/imperiales (strict)
     r')?'
@@ -264,6 +269,50 @@ def append_gram_hint(line):
         return line
 
 
+# [P3-UNICODE-FRACTION-POLISH · 2026-07-31] El pulido de "¼ cda → 1 cdta" estaba INERTE para la
+# forma que el pipeline realmente produce: su parser hacía `float(qty_str)` y `float("¼")` lanza
+# ValueError, así que caía al early-return. Funcionaba con "0.25" y "1/4" —las notaciones que nadie
+# emite— y no con "¼", que es la que ve el usuario (6 líneas en el plan real fe788498). El docstring
+# de `_polish_countunit_display` afirmaba cubrir `"¼ cda"`: un comentario que promete lo que el
+# código no hace invita a dar el caso por cerrado. tooltip-anchor: P3-UNICODE-FRACTION-POLISH
+_UNICODE_FRACTIONS = {
+    "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1.0 / 3, "⅔": 2.0 / 3,
+    "⅕": 0.2, "⅖": 0.4, "⅗": 0.6, "⅘": 0.8, "⅙": 1.0 / 6, "⅚": 5.0 / 6,
+    "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875,
+}
+
+
+def _qty_str_to_float(qty_str) -> "float | None":
+    """[P3-UNICODE-FRACTION-POLISH · 2026-07-31] Cantidad textual → float, entendiendo las tres
+    notaciones que circulan por el pipeline: decimal ("0.25"), ASCII ("1/4") y unicode ("¼", "1½").
+    `None` si no es interpretable. tooltip-anchor: P3-UNICODE-FRACTION-POLISH"""
+    if qty_str is None:
+        return None
+    _qs = str(qty_str).strip().replace(",", ".")
+    if not _qs:
+        return None
+    # mixto ("1½") o fracción suelta ("¼")
+    _entero, _frac = "", 0.0
+    for _ch in _qs:
+        if _ch in _UNICODE_FRACTIONS:
+            _frac += _UNICODE_FRACTIONS[_ch]
+        else:
+            _entero += _ch
+    if _frac:
+        _entero = _entero.strip()
+        try:
+            return (float(_entero) if _entero else 0.0) + _frac
+        except ValueError:
+            return _frac
+    try:
+        if "/" in _qs:
+            _p = _qs.split("/")
+            return float(_p[0]) / float(_p[1])
+        return float(_qs)
+    except (ValueError, ZeroDivisionError, IndexError):
+        return None
+
+
 def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> str:
     """[P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Pulido cosmético del ingrediente sin unidad métrica (el quantize
     no lo toca porque "cda"/count no son unidades métricas). Display-only (corre dentro de humanize_plan_ingredients, POST
@@ -272,16 +321,12 @@ def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> s
       (b) "1 <plural>" → "1 <singular>" usando DOMINICAN_HOUSEHOLD_MEASURES (match EXACTO del plural → evita romper
           gramática con adjetivos no mapeados). Ej: "1 huevos enteros"→"1 huevo entero", "1 huevos"→"1 huevo".
     Cualquier otro caso: devuelve el original intacto."""
-    try:
-        qty = 1.0
-        _qs = (qty_str or "").strip().replace(',', '.')
-        if '/' in _qs:
-            _p = _qs.split('/')
-            qty = float(_p[0]) / float(_p[1])
-        elif _qs:
-            qty = float(_qs)
-    except (ValueError, ZeroDivisionError, IndexError):
+    # [P3-UNICODE-FRACTION-POLISH · 2026-07-31] Vía el parser SSOT: antes era un `float()` inline que
+    # no entendía "¼" y mandaba la regla entera al early-return.
+    _parsed = _qty_str_to_float(qty_str)
+    if _parsed is None and (qty_str or "").strip():
         return raw_ingredient
+    qty = 1.0 if _parsed is None else _parsed
 
     name_l = strip_accents((name or "").lower().strip())
 

@@ -16054,6 +16054,21 @@ def _merge_complement_into_montaje(steps: list, faltantes: list) -> bool:
         return False
 
 
+def _name_connector_for(name: str) -> str:
+    """[P3-NAME-CONNECTOR-ENUM · 2026-07-31] Conector para añadir un alimento al nombre de un plato.
+
+    Era `" y " if " con " in name else " con "`: solo miraba si el nombre ya traía un " con ", no si
+    ya terminaba en una ENUMERACIÓN. Caso real del plan fe788498: "Tostadas de Pan Integral con
+    Ricotta y Mango" + "Yogurt" → "…con Ricotta y Mango **y** Yogurt", con dos conjunciones seguidas.
+    Cuando la enumeración ya está abierta, lo que toca es la coma.
+    tooltip-anchor: P3-NAME-CONNECTOR-ENUM"""
+    _n = f" {strip_accents(str(name or '').lower())} "
+    if " con " not in _n:
+        return " con "
+    # ya hay " con ": si además ya enumera (" y "), se continúa con coma en vez de encadenar otra "y"
+    return ", " if " y " in _n.split(" con ", 1)[1] else " y "
+
+
 def _mention_cooked_complement_in_montaje(steps: list, faltantes: list) -> bool:
     """[P2-CLOSER-MENTION-IN-MONTAJE · 2026-07-31] En un plato COCINADO, hace que el Montaje diga que
     se SIRVA el complemento que el cerrador ya cocinó en su propio paso. Muta `steps`. True si añadió.
@@ -17384,7 +17399,7 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         # Display: nombre COMPLETO de la proteína, conectores en minúscula, resto capitalizado.
         proper = " ".join(w if w.lower() in _NAME_STOPWORDS else w.capitalize()
                           for w in pname.split())
-        connector = " y " if " con " in f" {name_low} " else " con "
+        connector = _name_connector_for(name)
         meal["name"] = f"{name}{connector}{proper}"
         return True
     except Exception:
