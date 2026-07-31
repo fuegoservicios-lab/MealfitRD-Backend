@@ -97,14 +97,18 @@ def test_tier_limits_use_knobs_not_literal():
 
 
 def test_tier_limits_default_preserved():
-    """Defaults del `_env_int(...)` para cada tier deben preservar
-    pricing actual: gratis=15, basic=50, plus=200, ultra=999999, admin=999999."""
+    """Defaults del `_env_int(...)` para cada tier.
+    [P1-CREDITS-LADDER · 2026-07-31] Re-balance comercial intencional del
+    owner: gratis 15→10 (presión de conversión + múltiplos limpios 5×/20×/50×)
+    y ultra ∞(999999)→500 (el "ilimitado" era cola de costo LLM sin acotar +
+    imán de abuso; 500/mes ≈ 16/día). basic/plus sin cambio; admin conserva el
+    sentinel interno. Detalle: test_p1_credits_ladder.py."""
     src = _AUTH_PY.read_text(encoding="utf-8")
     expected_defaults = {
-        "GRATIS": 15,
+        "GRATIS": 10,
         "BASIC": 50,
         "PLUS": 200,
-        "ULTRA": 999999,
+        "ULTRA": 500,
         "ADMIN": 999999,
     }
     for tier, default_value in expected_defaults.items():

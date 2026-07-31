@@ -202,11 +202,24 @@ def session_cookie_iat(value: str) -> Optional[int]:
 #   redeploy, basta con bumpear la env var + restart del worker (en el VPS Oracle,
 #   uvicorn). El cost de re-leer env var por cada request sería marginal
 #   pero innecesario — los tiers no cambian intra-request.
+# [P1-CREDITS-LADDER · 2026-07-31] Re-balance comercial (decisión owner):
+#   gratis 15→10 — suficiente para crear el hábito (~2 planes/semana), más
+#     presión de conversión y menor COGS del tier que no factura. Deja además
+#     múltiplos limpios en el copy: basic=5×, plus=20×, ultra=50×.
+#   ultra ∞(999999)→500 — "ilimitado" era cola de costo NO acotada (cada
+#     generación cuesta LLM real; con el reviewer sol-hard hasta ~$0.018/call)
+#     y un imán de abuso/scripts. 500/mes ≈ 16/día: inalcanzable para uso
+#     humano legítimo, acotado para abuso (worst-case LLM ultra ≈ $18/mes
+#     sobre $49.99 = 36% — tolerable; antes era ∞). El copy de venta pasa de
+#     "Créditos Ilimitados" a "500 créditos/mes" (frontend sincronizado).
+#   basic/plus SIN cambio (bajar caps a usuarios que pagan es hostil; subirlos
+#     regala margen sin mover conversión).
+# admin conserva el sentinel alto (cuenta interna, no comercial).
 _TIER_LIMITS = {
-    "gratis": _env_int("MEALFIT_TIER_LIMIT_GRATIS", 15),
+    "gratis": _env_int("MEALFIT_TIER_LIMIT_GRATIS", 10),
     "basic": _env_int("MEALFIT_TIER_LIMIT_BASIC", 50),
     "plus": _env_int("MEALFIT_TIER_LIMIT_PLUS", 200),
-    "ultra": _env_int("MEALFIT_TIER_LIMIT_ULTRA", 999999),
+    "ultra": _env_int("MEALFIT_TIER_LIMIT_ULTRA", 500),
     "admin": _env_int("MEALFIT_TIER_LIMIT_ADMIN", 999999),
 }
 

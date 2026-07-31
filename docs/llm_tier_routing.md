@@ -46,10 +46,10 @@ risk-tier se enruta por tier de suscripción:
 
 | Tier | Reviewer risk-tier | Costo/llamada (2.371 in / 213 out reales) | Worst-case/mes (cap × 2 calls/plan, 100% clínicos) |
 |---|---|---|---|
-| free/guest | `gpt-5.6-luna` | ~$0.0007 | $0.02 (15 planes) |
+| free/guest | `gpt-5.6-luna` | ~$0.0007 | $0.015 (10 planes, P1-CREDITS-LADDER) |
 | basic ($9.99, 50 planes) | `gpt-5.6-terra` (NUNCA sol: sería ~18% del revenue) | ~$0.0073 | $0.73 = **7.3%** del revenue → rentable |
 | plus ($19.99, 200) / ultra ($49.99) | `gpt-5.6-terra` | ~$0.0073 | $2.92 = 14.6% (plus) — realista <1% |
-| plus/ultra + perfil DIFÍCIL | **`gpt-5.6-sol`** ($5/$30) [P1-REVIEWER-SOL-HARD · 2026-07-31] | ~$0.018 (2.5× terra) | $7.30 = 36.5% (plus) solo en el extremo patológico; realista centavos |
+| plus/ultra + perfil DIFÍCIL | **`gpt-5.6-sol`** ($5/$30) [P1-REVIEWER-SOL-HARD · 2026-07-31] | ~$0.018 (2.5× terra) | $7.30 = 36.5% (plus, cap 200); ultra $18 = 36% (cap 500, P1-CREDITS-LADDER — antes ∞ sin acotar). Solo extremos patológicos; realista centavos |
 
 **"Difícil"** (determinista, SSOT `condition_rules.detect_active_rules` — cero
 listas de keywords nuevas): regla bariátrica activa **o** ≥2 reglas clínicas
