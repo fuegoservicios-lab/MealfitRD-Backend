@@ -6057,21 +6057,36 @@ DAYGEN_CANARY_SCOPE = (_env_str("MEALFIT_DAYGEN_CANARY_SCOPE", "retry") or "retr
 if DAYGEN_CANARY_SCOPE not in ("retry", "all"):
     DAYGEN_CANARY_SCOPE = "retry"   # fail-safe: valor raro ⇒ el más barato
 
-# [P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento para el day-gen cuando
-# corre en un modelo OpenAI (la familia gpt-5.6 razona de fábrica; esto gradúa
-# cuánto). Nace VACÍO = default del proveedor, así que encenderlo es una
+# [P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento del day-gen, para
+# CUALQUIER proveedor. Nace VACÍO = default del proveedor: encenderlo es una
 # decisión explícita.
 #
+# Cada proveedor tiene SU vocabulario y el knob habla los dos con alias
+# (verificado contra la doc oficial de luna que aportó el owner 2026-07-31, y
+# contra el contrato DeepSeek ya usado por el reviewer/fact-checker):
+#   OpenAI gpt-5.6 (`reasoning_effort`): none · low · medium · high · xhigh
+#   DeepSeek (`extra_body.thinking.effort`): low · medium · high · max
+#   Alias: `max`→`xhigh` en OpenAI; `xhigh`→`max` en DeepSeek. Así "el tope"
+#   se pide igual sin memorizar qué palabra usa cada API. La primera versión
+#   de este knob usaba el vocabulario clásico (minimal..high) y por eso "luna
+#   al máximo" era IMPEDIBLE de pedir.
+#
 # ⚠️ LO QUE ESTE REPO YA MIDIÓ sobre razonar en superficies de OUTPUT GRANDE:
-# el corrector quirúrgico con thinking pasó de 17 s a TIMEOUT de 120 s. El
-# day-gen construye un día entero (~1.900 tokens de salida) con un tope de 90 s,
-# así que es exactamente esa clase de superficie. Y el razonamiento se factura
-# como OUTPUT, donde luna cobra $1,20/M: cada escalón de esfuerzo es coste
-# directo. Por eso: subir de a poco y mirar latencia, no ponerlo en `high` de
-# entrada.
+# el day-gen DeepSeek con thinking superó los 170 s en 2026-06-13 (motivo del
+# apagado global P1-DEEPSEEK-THINKING-OFF) y el corrector quirúrgico pasó de
+# 17 s a timeout de 120 s. El tope del day-gen es 90 s: probar efforts altos
+# exige subir MEALFIT_DAYGEN_EFFORT_TIMEOUT_S a la vez, o cada llamada morirá
+# en timeout y el A/B medirá la red, no el modelo. El razonamiento se factura
+# como OUTPUT (luna $1,20/M; DeepSeek $0,28/M — ahí el coste del thinking es
+# casi gratis y el riesgo es solo la latencia).
 DAYGEN_EFFORT = (_env_str("MEALFIT_DAYGEN_EFFORT", "") or "").strip().lower()
-if DAYGEN_EFFORT not in ("", "minimal", "low", "medium", "high"):
+if DAYGEN_EFFORT not in ("", "none", "low", "medium", "high", "xhigh", "max"):
     DAYGEN_EFFORT = ""   # fail-safe: valor raro ⇒ default del proveedor
+
+# Tope por llamada del day-gen cuando hay effort pedido (default = el mismo 90
+# de siempre; subirlo es parte del experimento, no un cambio permanente).
+DAYGEN_EFFORT_TIMEOUT_S = _env_int("MEALFIT_DAYGEN_EFFORT_TIMEOUT_S", 90,
+                                   validator=lambda v: 30 <= v <= 300)
 
 
 def _daygen_model_canary_cohort(form_data: dict) -> str:
@@ -7708,13 +7723,23 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # `llm_provider.build_chat_llm`: la fábrica devuelve las bases, sin el mixin de
             # backpressure ni la contabilidad de costo. Usarla dejó `llm_usage_events` sin una
             # sola fila de `day_generator` en la primera corrida del canario.
-            # [P2-DAYGEN-EFFORT · 2026-07-31] El esfuerzo de razonamiento SOLO
-            # aplica a modelos OpenAI (DeepSeek lo gobierna con `extra_body.thinking`,
-            # que es otro contrato). Sin knob no se toca nada: el A/B compara
-            # modelo contra modelo, no configuraciones distintas por accidente.
+            # [P2-DAYGEN-EFFORT · 2026-07-31] Traducción del effort al contrato
+            # de CADA proveedor (ver el bloque del knob). Sin knob no se toca
+            # nada: el A/B compara modelo contra modelo, no configuraciones
+            # distintas por accidente.
             _es_openai = is_openai_model(_model)
-            if _es_openai and DAYGEN_EFFORT:
-                _kw["reasoning_effort"] = DAYGEN_EFFORT
+            if DAYGEN_EFFORT:
+                _kw["timeout"] = DAYGEN_EFFORT_TIMEOUT_S
+                if _es_openai:
+                    _kw["reasoning_effort"] = "xhigh" if DAYGEN_EFFORT == "max" else DAYGEN_EFFORT
+                elif DAYGEN_EFFORT != "none":
+                    # DeepSeek: extra_body explícito GANA sobre el disabled-default
+                    # del wrapper (merge por setdefault). "none" no inyecta nada:
+                    # el default del wrapper ya es thinking apagado.
+                    _kw["extra_body"] = {"thinking": {
+                        "type": "enabled",
+                        "effort": "max" if DAYGEN_EFFORT == "xhigh" else DAYGEN_EFFORT,
+                    }}
             _llm = (ChatOpenAIInstrumented if _es_openai else ChatDeepSeek)(**_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
                 return _llm.bind_tools(NUTRITION_TOOLS)

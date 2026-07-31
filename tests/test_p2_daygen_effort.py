@@ -1,21 +1,25 @@
-"""[P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento del day-gen cuando
-corre en un modelo OpenAI (el A/B "luna con esfuerzo medium" que pidió el owner).
+"""[P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento del day-gen, en el
+vocabulario de CADA proveedor (el A/B luna-medium/xhigh vs flash-high/max).
 
-El canario de modelo (`MEALFIT_DAYGEN_CANARY_MODEL`) ya existía, pero sólo
-elegía el MODELO: no había forma de pedir un nivel de razonamiento, así que
-"luna con medium" no se podía ni probar.
+La primera versión sólo cubría OpenAI y con el vocabulario clásico
+(minimal..high): "luna al máximo" era imposible de pedir — el owner preguntó
+"¿no pudiste probar luna max?" y la respuesta era que el knob lo impedía. La
+doc oficial de luna (aportada por el owner) da: none/low/medium/high/XHIGH.
+DeepSeek usa low/medium/high/MAX vía `extra_body.thinking` (contrato ya usado
+por reviewer y fact-checker).
 
 CONTRATO:
   · Nace vacío ⇒ default del proveedor ⇒ encenderlo es explícito.
-  · Sólo se aplica a modelos OpenAI: DeepSeek gobierna el razonamiento con
-    `extra_body.thinking`, que es otro contrato. Mezclarlos haría que el A/B
-    comparase dos configuraciones a la vez en vez de dos modelos.
+  · Alias cruzados: `max`→`xhigh` en OpenAI, `xhigh`→`max` en DeepSeek — "el
+    tope" se pide igual sin memorizar qué palabra usa cada API.
+  · "none": en OpenAI se pasa explícito (apaga el razonamiento de luna); en
+    DeepSeek no se inyecta nada (el wrapper ya lo desactiva por default).
+  · Con effort pedido, el timeout por llamada sale de
+    MEALFIT_DAYGEN_EFFORT_TIMEOUT_S: el day-gen DeepSeek con thinking superó
+    los 170 s medidos (2026-06-13) y el tope base es 90 s — sin subirlo a la
+    par, el A/B mediría la red de fallback, no el modelo.
   · Valor inválido ⇒ vacío (fail-safe al default, nunca a un esfuerzo alto:
     el razonamiento se factura como OUTPUT).
-
-⚠️ CONTEXTO MEDIDO EN ESTE REPO: el corrector quirúrgico con razonamiento pasó
-de 17 s a TIMEOUT de 120 s. El day-gen escribe un día entero con tope de 90 s —
-la misma clase de superficie. Por eso el default es "no razonar de más".
 """
 from __future__ import annotations
 
@@ -26,25 +30,57 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _GO = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
 
 
-def test_knob_nace_apagado_y_valida():
+def test_knob_nace_apagado_y_acepta_ambos_vocabularios():
     m = re.search(r'DAYGEN_EFFORT = \(_env_str\("MEALFIT_DAYGEN_EFFORT", "(.*?)"\)', _GO)
     assert m, "falta el knob MEALFIT_DAYGEN_EFFORT"
     assert m.group(1) == "", "debe nacer VACÍO (default del proveedor)"
     i = _GO.index('DAYGEN_EFFORT = (_env_str("MEALFIT_DAYGEN_EFFORT"')
-    win = _GO[i:i + 500]
-    for nivel in ("minimal", "low", "medium", "high"):
-        assert f'"{nivel}"' in win, f"el nivel {nivel} debe ser aceptado"
-    assert 'DAYGEN_EFFORT = ""' in win, "un valor raro debe caer al default, no a un esfuerzo alto"
-
-
-def test_solo_se_aplica_a_openai():
-    i = _GO.index("_es_openai = is_openai_model(_model)")
     win = _GO[i:i + 400]
-    assert 'if _es_openai and DAYGEN_EFFORT:' in win, (
-        "el esfuerzo NO puede aplicarse a DeepSeek: allí el razonamiento va por "
-        "extra_body.thinking (otro contrato)"
+    for nivel in ("none", "low", "medium", "high", "xhigh", "max"):
+        assert f'"{nivel}"' in win, (
+            f"el nivel {nivel} debe aceptarse — sin 'xhigh' luna no puede ir al "
+            f"tope y sin 'max' DeepSeek tampoco (fue el gap de la v1)"
+        )
+    assert '"minimal"' not in win, (
+        "'minimal' no existe en la doc de luna ni en el contrato DeepSeek — "
+        "era el vocabulario clásico que dejó el knob corto"
     )
-    assert '_kw["reasoning_effort"] = DAYGEN_EFFORT' in win
+    assert 'DAYGEN_EFFORT = ""' in win, "un valor raro debe caer al default"
+
+
+def test_alias_cruzados():
+    i = _GO.index("_es_openai = is_openai_model(_model)")
+    win = _GO[i:i + 900]
+    assert '"xhigh" if DAYGEN_EFFORT == "max" else DAYGEN_EFFORT' in win, (
+        "OpenAI no conoce 'max': debe traducirse a 'xhigh'"
+    )
+    assert '"max" if DAYGEN_EFFORT == "xhigh" else DAYGEN_EFFORT' in win, (
+        "DeepSeek no conoce 'xhigh': debe traducirse a 'max'"
+    )
+
+
+def test_deepseek_recibe_extra_body_thinking():
+    i = _GO.index("_es_openai = is_openai_model(_model)")
+    win = _GO[i:i + 900]
+    assert '"type": "enabled"' in win, (
+        "DeepSeek gobierna el razonamiento con extra_body.thinking — sin la "
+        "inyección explícita el wrapper lo deja DISABLED y el A/B de flash-high/"
+        "max mediría flash sin razonar creyendo que razona"
+    )
+    assert 'elif DAYGEN_EFFORT != "none"' in win, (
+        "'none' en DeepSeek = no inyectar (el wrapper ya lo apaga)"
+    )
+
+
+def test_timeout_acompana_al_effort():
+    assert '_env_int("MEALFIT_DAYGEN_EFFORT_TIMEOUT_S", 90' in _GO, (
+        "falta el knob del timeout: el day-gen DeepSeek con thinking midió "
+        ">170 s y el tope base es 90 s — sin poder subirlo, cada llamada del "
+        "A/B muere en timeout y se mide la red, no el modelo"
+    )
+    i = _GO.index("_es_openai = is_openai_model(_model)")
+    win = _GO[i:i + 900]
+    assert '_kw["timeout"] = DAYGEN_EFFORT_TIMEOUT_S' in win
 
 
 def test_reasoning_effort_es_parametro_real_del_cliente():
@@ -59,6 +95,5 @@ def test_reasoning_effort_es_parametro_real_del_cliente():
 
 def test_registrado_en_knobs():
     """Sin registro no aparece en /health/version y nadie sabe qué corre."""
-    assert '_env_str("MEALFIT_DAYGEN_EFFORT"' in _GO, (
-        "debe leerse con _env_str para auto-registrarse en _KNOBS_REGISTRY"
-    )
+    assert '_env_str("MEALFIT_DAYGEN_EFFORT"' in _GO
+    assert '_env_int("MEALFIT_DAYGEN_EFFORT_TIMEOUT_S"' in _GO
