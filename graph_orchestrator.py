@@ -6813,6 +6813,45 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # decide si el enforcer corre es la que se reporta al state (y de ahí a `clinical_band`).
     # Antes el enforcer se invocaba sin cohorte → con un canario real (PCT>0) endurecía al 100%
     # mientras la telemetría etiquetaba a media flota como control.
+    # [P2-SEEDER-PAIRS-CHANNEL · 2026-07-31] (audit solver+seeder v6 · F23) El reparto determinista
+    # de CARBOS y FRUTAS del seeder viajaba solo como prosa del prompt del planner: llegaba al
+    # day-gen únicamente si el LLM lo copiaba a `carb_pool`/`fruit_pool`, y cuando emitía un pool de
+    # un solo ítem la regla anti-repetición se perdía y el gate de variedad quemaba un retry.
+    #
+    # ⚠️ ESTE BLOQUE VA ANTES DE `harden_day_pools`, al revés que su hermano de vegetales, y no es
+    # cosmético: el enforcer PODA `carb_pool`/`fruit_pool` por condición médica (toronja↔CYP3A4,
+    # arroz blanco por IG) y el seeder no sabe nada de condiciones clínicas. Estampar después
+    # reinyectaría justo lo que el enforcer acaba de quitar — y como `HARDEN_POOLS_ENABLED` es False
+    # por default, el daño quedaría LATENTE hasta que alguien encendiera el knob. `veggie_pool` no
+    # tiene el problema porque el enforcer no lo toca; por eso aquel bloque puede vivir después.
+    # Solo COMPLETA pools cortos: con 2+ ítems del planner no se toca nada (su elección temática
+    # manda). tooltip-anchor: P2-SEEDER-PAIRS-CHANNEL
+    try:
+        for _pk, _sk in (("carb_pairs", "carb_pool"), ("fruit_pairs", "fruit_pool")):
+            _pairs_all = _extract_seeder_pairs(ctx, _pk)
+            if not _pairs_all:
+                continue
+            _completados = 0
+            for _di, _dsk in enumerate(skeleton.get("days") or []):
+                if not isinstance(_dsk, dict):
+                    continue
+                _cur = [x for x in (_dsk.get(_sk) or []) if x]
+                if len(_cur) >= 2:
+                    continue  # el planner ya cumplió: no se pisa
+                for _cand in _pairs_all[_di % len(_pairs_all)]:
+                    if _cand and _cand not in _cur:
+                        _cur.append(_cand)
+                    if len(_cur) >= 2:
+                        break
+                if len(_cur) >= 2:
+                    _dsk[_sk] = _cur
+                    _completados += 1
+            if _completados:
+                logger.info(f"🌾 [P2-SEEDER-PAIRS-CHANNEL] {_sk} completado en {_completados} día(s) "
+                            f"con el reparto del seeder (el planner los dejó con <2 ítems).")
+    except Exception as _sp_oe:
+        logger.debug(f"[P2-SEEDER-PAIRS-CHANNEL] propagación no-op: {type(_sp_oe).__name__}: {_sp_oe}")
+
     _a1_cohort = _harden_pools_canary_cohort(state)
     try:
         _harden_counts = harden_day_pools(skeleton, form_data, None, cohort=_a1_cohort)
@@ -27885,9 +27924,24 @@ def _extract_seeder_veggie_pairs(ctx: dict) -> list:
     el fix entero sin efecto, con los tests estructurales igualmente en verde.
 
     Devuelve [(veg_a, veg_b), …] en orden de día. Fail-safe: [] si falta o viene mal formado.
-    tooltip-anchor: P2-VEGGIE-CHANNEL-DAYGEN"""
+    tooltip-anchor: P2-VEGGIE-CHANNEL-DAYGEN
+
+    [P2-SEEDER-PAIRS-CHANNEL · 2026-07-31] Alias fino de `_extract_seeder_pairs`, que generaliza
+    el cuerpo a cualquier categoría. Se conserva el nombre porque hay tests que lo llaman así."""
+    return _extract_seeder_pairs(ctx, "veggie_pairs")
+
+
+def _extract_seeder_pairs(ctx: dict, key: str = "veggie_pairs") -> list:
+    """[P2-SEEDER-PAIRS-CHANNEL · 2026-07-31] (audit solver+seeder v6) Par que el seeder asignó a
+    cada día para una categoría (`veggie_pairs` / `carb_pairs` / `fruit_pairs`), leído del contexto
+    compartido como DATO — nunca parseando la prosa del prompt (ver la nota del alias de arriba:
+    la primera versión del extractor de vegetales parseaba el prompt y devolvía SIEMPRE []).
+
+    Devuelve [(a, b), …] en orden de día. Descarta pares degenerados (mismo ítem dos veces): dar
+    "usa X y también X, nunca repitas" es la instrucción insatisfacible que dispara reintentos.
+    Fail-safe: [] si falta o viene mal formado. tooltip-anchor: P2-SEEDER-PAIRS-CHANNEL"""
     try:
-        _pairs = ((ctx or {}).get("seeder_assignment") or {}).get("veggie_pairs") or []
+        _pairs = ((ctx or {}).get("seeder_assignment") or {}).get(key) or []
         out = []
         for _p in _pairs:
             if isinstance(_p, (list, tuple)) and len(_p) == 2:

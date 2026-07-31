@@ -7506,6 +7506,16 @@ def api_regenerate_day(
                         if _exc_rf:
                             logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] refine rompió pantry → revertido | {_why_rf}")
                             new_meals[:] = _pre_rf
+                            # [P2-REVERT-REALRF-STALE · 2026-07-31] (audit solver+seeder v6 · F5) El
+                            # revert es asignación de SLICE: sustituye el CONTENIDO de `new_meals`
+                            # por los deepcopies, así que `_real_rf` —que aliasaba los dicts que el
+                            # refine mutó— queda apuntando a objetos HUÉRFANOS que ya no están en el
+                            # día que se persiste. El `_trim_fats_rd` de abajo recortaba sobre ellos:
+                            # inerte justo en la rama revert, y el día se entregaba con las grasas
+                            # fuera de banda. Se re-deriva aquí (y no solo en el callsite del trim)
+                            # para que la invariante "`_real_rf` es el día VIVO" valga para todo lo
+                            # que se añada después. tooltip-anchor: P2-REVERT-REALRF-STALE
+                            _real_rf = [m for m in new_meals if isinstance(m, dict)]
                             _pantry_limited = True  # el déficit residual es por Nevera (deficit-honesty)
                         else:
                             logger.info(f"🎯 [P1-UPDATE-MACRO-PARITY] refine 5g del día regenerado: {_mv_rf} movimiento(s)")

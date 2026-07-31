@@ -2405,6 +2405,26 @@ SUPPLEMENT_NAMES = {
     "electrolytes":  "Electrolitos (Sodio + Potasio + Magnesio)",
 }
 
+# [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit solver+seeder v6 · F15) Índice
+# nombre-del-catálogo → blob con todos sus sinónimos, para que un dislike/alergia escrito con
+# OTRO nombre del mismo alimento ('Hongos' por 'Champiñones', 'setas', 'palta' por 'Aguacate')
+# lo excluya igual. Los 4 diccionarios de sinónimos ya existían y nadie los consultaba desde el
+# filtro. Se construye UNA vez al importar: el filtro corre por cada plan y no puede pagar esto
+# por llamada. tooltip-anchor: P2-CATALOG-FILTER-SSOT
+def _build_catalog_alias_index() -> dict:
+    idx = {}
+    for _d in (PROTEIN_SYNONYMS, CARB_SYNONYMS, VEGGIE_FAT_SYNONYMS, FRUIT_SYNONYMS):
+        for _key, _syns in (_d or {}).items():
+            _terms = [str(_key)] + [str(s) for s in (_syns or [])]
+            idx[strip_accents(str(_key).lower())] = " | ".join(
+                strip_accents(t.lower()) for t in _terms
+            )
+    return idx
+
+
+_CATALOG_ALIAS_INDEX = _build_catalog_alias_index()
+
+
 # [P1-DIET-CANON-SSOT · 2026-07-31] (audit solver+seeder v6 · P1) SSOT de canonicalización de
 # `dietType` → {vegan|vegetarian|pescatarian|balanced}. Vive AQUÍ, en el módulo más bajo de la
 # jerarquía, precisamente para que no haya ciclo de imports: `condition_rules` y
@@ -2464,9 +2484,28 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
 
     if not restrictions:
         return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
-        
-    normalized_restrictions = [strip_accents(r.lower()) for r in restrictions]
-    
+
+    # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F31) Las restricciones vacías se descartan
+    # AQUÍ. Una cadena vacía sobrevivía hasta el `'|'.join` de abajo y creaba una ALTERNATIVA VACÍA
+    # en el patrón maestro (`\b(mani||...)\b`) que matchea en cualquier posición ⇒ los CUATRO
+    # catálogos salían vacíos, en silencio, y el seeder devolvía "".
+    # tooltip-anchor: P2-CATALOG-FILTER-SSOT
+    normalized_restrictions = [
+        _r for _r in (strip_accents(str(r).lower()).strip() for r in restrictions) if _r
+    ]
+    if not normalized_restrictions:
+        return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
+
+    # [P2-CATALOG-FILTER-SSOT · 2026-07-31] Snapshot de lo que el usuario NOMBRÓ, antes de que los
+    # catch-alls de categoría lo extiendan. Solo esto se compara contra los alias de los alimentos
+    # (ver `is_allowed`): los alias son nombres ALTERNATIVOS del mismo alimento, y cruzarlos con
+    # vocabulario DERIVADO produce falsos positivos reales — medidos aquí: el alias de 'Harina de
+    # maíz precocida' incluye "harina pan" (la marca P.A.N.) y el de 'Queso Blanco' incluye "queso
+    # de pasta", así que el `\bpan\b`/`\bpasta\b` del catch-all de gluten excluía dos alimentos SIN
+    # gluten del pool de un celíaco. tooltip-anchor: P2-CATALOG-FILTER-SSOT
+    _user_named_restrictions = list(normalized_restrictions)
+
+
     # Reglas genéricas CATCH-ALL de mariscos y carnes
     # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Pescados/mariscos y carnes/aves ESPECÍFICOS del catálogo (202
     # alimentos). Crítico de SEGURIDAD: el regex \bpescado\b/\bcarne\b NO matchea 'salmon'/'mero'/'pulpo'/
@@ -2498,26 +2537,66 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     if any(r in ["lacteos", "lacteo", "lactosa", "dairy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["leche", "queso", "yogur", "yogurt", "mantequilla", "crema",
                                         "ricotta", "mozzarella", "parmesano", "requeson", "suero de leche"])
+    # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F13/F29/F14) Estas tres expansiones estaban
+    # DRIFTEADAS respecto a `graph_orchestrator._ALLERGEN_SYNONYMS`, que es el vocabulario que usa el
+    # escáner de seguridad: el catch-all de gluten listaba 5 términos contra ~24 del canónico, así que
+    # Bulgur, Cebada, Galletas de soda y Tortilla integral —los cuatro en el catálogo— sobrevivían al
+    # chip de un celíaco. Se alinean con el canónico; la paridad la enforza en adelante
+    # `test_p2_catalog_filter_ssot.py::test_paridad_filtro_vs_escaner_canonico`, que usa el escáner
+    # como oráculo en vez de comparar dos listas escritas a mano.
+    # tooltip-anchor: P2-CATALOG-FILTER-SSOT
     if any(r in ["frutos secos", "nueces", "nuts", "tree nuts"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["almendra", "nuez", "maranon", "pistacho", "avellana", "merey", "anacardo"])
+        normalized_restrictions.extend(["almendra", "almendras", "nuez", "nueces", "maranon",
+                                        "pistacho", "pistachos", "avellana", "merey", "anacardo",
+                                        "marzipan", "mazapan", "nutella", "praline", "turron", "pesto"])
     if any(r in ["mani", "cacahuate", "peanut", "peanuts"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["mani", "cacahuate", "mantequilla de mani"])
+        normalized_restrictions.extend(["mani", "cacahuate", "peanut", "mantequilla de mani",
+                                        "crema de mani", "salsa de mani"])
     if any(r in ["huevo", "huevos", "egg", "eggs"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["huevo", "clara", "yema", "mayonesa"])
+        normalized_restrictions.extend(["huevo", "huevos", "clara", "claras", "yema", "yemas",
+                                        "mayonesa", "merengue", "aioli", "alioli", "holandesa",
+                                        "ponche", "mousse"])
     if any(r in ["gluten", "trigo", "wheat"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["trigo", "pan", "pasta", "harina de trigo", "galleta"])
+        normalized_restrictions.extend(["trigo", "pan", "pasta", "harina de trigo", "galleta",
+                                        "galletas", "cebada", "centeno", "gluten",
+                                        "tortilla integral", "pan integral", "cuscus", "couscous",
+                                        "seitan", "bulgur", "malta", "cerveza", "semola",
+                                        "espagueti", "macarrones", "lasana", "lasagna",
+                                        "empanada", "bizcocho"])
     if any(r in ["soya", "soja", "soy"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["soya", "soja", "tofu", "edamame"])
+        normalized_restrictions.extend(["soya", "soja", "tofu", "salsa de soya", "edamame", "miso",
+                                        "tempeh", "salsa teriyaki", "teriyaki", "natto",
+                                        "lecitina de soya", "proteina de soya",
+                                        "proteina vegetal texturizada", "tvp"])
 
     # [OPTIMIZACIÓN O(1)] Compilar un único patrón maestro ultra veloz
     import re
     or_pattern = '|'.join(map(re.escape, normalized_restrictions))
-    fast_regex = re.compile(rf'\b({or_pattern})\b')
-    
+    # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F13/F29) `(?:s|es)?` — el sufijo plural que
+    # el escáner hermano (`_scan_allergen_violations`) tiene desde hace tiempo y a éste le faltaba.
+    # Los catch-alls expanden en SINGULAR ('almendra', 'huevo', 'pistacho') y el catálogo dominicano
+    # está en PLURAL ('Almendras fileteadas', 'Huevos', 'Pistachos'), así que la expansión era inerte
+    # justo para los alimentos que nombraba. No reintroduce falsos positivos de subcadena: `\b` sigue
+    # acotando ('leche' no alcanza 'Lechosa'). Los plurales irregulares (nuez→nueces) NO se derivan
+    # por sufijo y van explícitos arriba, igual que en el canónico.
+    fast_regex = re.compile(rf'\b({or_pattern})(?:s|es)?\b')
+    # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit v6 · F15) Segundo regex, SOLO con los términos que
+    # el usuario escribió: es el único que puede mirar los alias de los alimentos.
+    _alias_pattern = '|'.join(map(re.escape, _user_named_restrictions))
+    alias_regex = re.compile(rf'\b({_alias_pattern})(?:s|es)?\b')
+
     def is_allowed(item):
         item_normalized = strip_accents(item.lower())
-        return not fast_regex.search(item_normalized)
-        
+        if fast_regex.search(item_normalized):
+            return False
+        # El chip del usuario puede ser un SINÓNIMO del nombre del catálogo: 'Hongos' nunca excluía
+        # 'Champiñones' aunque `VEGGIE_FAT_SYNONYMS` ya sabe que son el mismo alimento. Se consulta
+        # el alias del ítem ADEMÁS de su nombre, pero contra `alias_regex` (lo que el usuario
+        # nombró), NO contra el patrón con los catch-alls: ver la nota de `_user_named_restrictions`.
+        _alias = _CATALOG_ALIAS_INDEX.get(item_normalized)
+        return not (_alias and alias_regex.search(_alias))
+
+
     filtered_proteins = [p for p in filtered_proteins if is_allowed(p)]
     filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
     filtered_veggies = [v for v in filtered_veggies if is_allowed(v)]

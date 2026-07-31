@@ -349,6 +349,26 @@ def _build_light_protein_pool(veggies, proteins, *, bariatric: bool = False) -> 
     return _out
 
 
+def _pick_light_anchor_candidates(pool, k: int = 4) -> list:
+    """[P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F18) Elige `k` candidatos del pool del
+    ancla liviana SIN REEMPLAZO y de verdad al azar.
+
+    El callsite hacía `_light_pool[:4]`, un slice POSICIONAL. `_build_light_protein_pool`
+    concatena los vegetales ANTES que las proteínas, y los vegetales aportan exactamente 5 frutos
+    secos, así que los 11 lácteos del pool (índices 5..15) NO entraban jamás y el "sorteo" del
+    ancla era una constante. O sea: el fix v5 que amplió el pool para incluir lácteos quedó INERTE
+    en su consumidor — el pool creció y nadie llegaba a mirarlo.
+
+    Muestreo UNIFORME a propósito, no ponderado por la frecuencia inversa del seeder: los pesos de
+    vegetales y proteínas no son comparables entre sí (`veggie_weights` lleva el penalty de frutos
+    secos y `protein_weights` no), así que mezclarlos sesgaría el ancla por un artefacto del
+    penalty en vez de por la historia del usuario. tooltip-anchor: P2-SEEDER-PAIRS-GOALS"""
+    _items = [x for x in (pool or []) if x]
+    if not _items:
+        return []
+    return random.sample(_items, min(int(k), len(_items)))
+
+
 def _rotate_pairs(items):
     """[P1-CARB-SEEDER-PAIRS · 2026-07-27] Núcleo de la rotación en pares, extraído de
     `_rotate_fruit_pairs` para que carbos y frutas usen LA MISMA: día i recibe
@@ -422,7 +442,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     )
         dislikes = tuple(dislikes_list)
         
-        diet = form_data.get("diet", form_data.get("dietType", "")).lower()
+        # [P2-SEEDER-DIET-NONE · 2026-07-31] (audit solver+seeder v6 · F32) Era
+        # `form_data.get("diet", form_data.get("dietType", "")).lower()`, que explota con
+        # AttributeError si la clave EXISTE con valor None — y `dietType: null` es entrada válida:
+        # el campo es presence-optional en el boundary (decisión documentada en formValidation.js)
+        # y un health_profile rehidratado puede traerlo así. El crash era determinista: el retry
+        # del pipeline repetía el mismo AttributeError y la generación quedaba bloqueada para ese
+        # usuario, sin mensaje accionable. `or` en vez de default posicional + `str()` defensivo.
+        # tooltip-anchor: P2-SEEDER-DIET-NONE
+        diet = str(form_data.get("diet") or form_data.get("dietType") or "").lower()
         
         filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet)
     else:
@@ -586,10 +614,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Auto-promoción a "max" para objetivos que se benefician de mayor diversidad
     # de proteínas. Razón: con 'standard' el sistema elige solo 2 proteínas base y
     # las cicla (P[0], P[1], P[0]) — eso fuerza repetición almuerzo↔cena del mismo
-    # día y dispara incoherencias de slot. Para gain_muscle/lose_weight el aporte
+    # día y dispara incoherencias de slot. Para gain_muscle/lose_fat el aporte
     # de aminoácidos completos y la variedad de fuentes importa más que optimizar
     # el costo del supermercado (3 proteínas vs 2 al mes es marginal en costo).
-    _GOALS_FORCE_MAX_VARIETY = {"gain_muscle", "lose_weight"}
+    # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F28) Era `"lose_weight"`, un valor que NO
+    # existe en `_MAIN_GOAL_ENUM` ({lose_fat, gain_muscle, maintenance, performance}) y que el
+    # router rechaza con 422 ⇒ el token era INALCANZABLE y la auto-promoción no disparaba nunca
+    # para quien quiere perder grasa — justo el perfil que más sufre la repetición de proteína.
+    # tooltip-anchor: P2-SEEDER-PAIRS-GOALS
+    _GOALS_FORCE_MAX_VARIETY = {"gain_muscle", "lose_fat"}
     _main_goal_for_variety = (form_data.get("mainGoal") or "").strip().lower() if form_data else ""
     # [P1-REVIEWER-TRANSIENT-RETRY · 2026-06-27] (FASE C) Bariátrica también auto-promueve a variety_level=max:
     # 6 comidas pequeñas con solo 2 proteínas base → repetición same-day (el reviewer y el gate same-day-protein
@@ -749,8 +782,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         "tocineta", "tocino", "salchichón", "salchichon", "salchicha",
         "mortadela", "embutido",
     )
+    # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F28) Eran `"lose_weight"` y
+    # `"health_improvement"`, ninguno en `_MAIN_GOAL_ENUM` ⇒ el penalty de embutidos solo aplicaba
+    # a gain_muscle. `health_improvement` se ELIMINA en vez de remapearse: no tiene equivalente
+    # en el enum (ni `maintenance` ni `performance` significan "mejorar salud"), y mapearlo a uno
+    # sería inventar una intención que el usuario no declaró.
     _GOALS_PENALIZE_PROCESSED = {
-        "gain_muscle", "lose_weight", "health_improvement",
+        "gain_muscle", "lose_fat",
     }
     # [P2-PROTEIN-PENALTY-FATTY-MEAT · 2026-05-16] Categoría adicional:
     # carnes frescas grasas (NO procesadas) que para gain_muscle son
@@ -1536,14 +1574,25 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # las bases se reutilizan entre días en vez de comprar 6 distintas, así que la lista de compras
     # crece en una como mucho. Sin lista utilizable → se omite el segundo y el prompt cae a su
     # redacción previa (fail-open: nunca peor que hoy).
+    # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F17) Los DOS slots del día salen ahora de la
+    # MISMA rotación. Antes el primero venía de `chosen_carbs` (lista PADDED a 3 por repetición) y
+    # el segundo de `_carb_slots` (rotación DEDUPLICADA): dos listas derivadas por separado pareadas
+    # por índice. Con 2 bases únicas —el caso POR DEFECTO, `num_carbs_to_pick = min(2, ...)`— el
+    # índice i deja de señalar al mismo elemento y sale `carb_i == carb_ib`: el prompt ASIGNA una
+    # base y en la misma frase PROHÍBE repetirla. Medido: 29 de 90 días colisionaban.
+    # Frutas y vegetales ya tomaban ambos slots del mismo `_slots[i]`; los carbos eran la única
+    # categoría fuera del contrato. tooltip-anchor: P2-SEEDER-PAIRS-GOALS
     _carb_slots = _rotate_pairs(chosen_carbs)
-    carb_params = {f"carb_{i}": chosen_carbs[i] for i in range(3)}
     if _carb_slots:
+        carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(3)}
         carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(3)})
     else:
+        # Una sola base única: `_rotate_pairs` devuelve None y pedir "no repitas" es insatisfacible.
+        # Fail-open deliberado (P1-CARB-BASE-NO-REPEAT), no tocar.
+        carb_params = {f"carb_{i}": chosen_carbs[i] for i in range(3)}
         carb_params.update({f"carb_{i}b": "otra base distinta del catálogo" for i in range(3)})
-    logger.info(f"✅ [P1-CARB-SEEDER-PAIRS] 2ª base por día (evita repetir base el mismo día): "
-                f"{[carb_params[f'carb_{i}b'] for i in range(3)]}")
+    logger.info(f"✅ [P1-CARB-SEEDER-PAIRS] par de bases por día (las dos del mismo reparto): "
+                f"{[(carb_params[f'carb_{i}'], carb_params[f'carb_{i}b']) for i in range(3)]}")
 
     # [P2-LIGHT-PROTEIN-SEED · 2026-07-29] (audit solver+seeder v4) El seeder reparte por día proteína
     # principal, carbo (×2, P1-CARB-SEEDER-PAIRS), vegetal/grasa (×2) y fruta (×2,
@@ -1566,7 +1615,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             _light_pool = _build_light_protein_pool(
                 filtered_veggies, filtered_proteins, bariatric=_is_bariatric)
             if len(_light_pool) >= 2:
-                _light_slots = _rotate_pairs(_light_pool[:4])
+                # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F18) era `_light_pool[:4]`,
+                # un slice posicional que cortaba antes del primer lácteo. Ver el helper.
+                _light_slots = _rotate_pairs(_pick_light_anchor_candidates(_light_pool, 4))
                 if _light_slots:
                     _l = [" o ".join(s) if isinstance(s, (list, tuple)) else str(s)
                           for s in _light_slots[:3]]
@@ -1603,6 +1654,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # viven en frases distintas— y se rompería con cualquier reescritura del copy.
         if isinstance(out_assignment, dict):
             out_assignment["veggie_pairs"] = [tuple(p) for p in _veg_slots[:3]]
+            # [P2-SEEDER-PAIRS-CHANNEL · 2026-07-31] (audit v6 · F23) Los repartos de carbo y fruta
+            # se calculaban igual de determinísticamente que el de vegetales pero solo salían como
+            # PROSA del prompt del planner: llegaban al day-gen únicamente si el LLM se molestaba
+            # en copiarlos a `carb_pool`/`fruit_pool`. Publicarlos como DATO permite completarlos
+            # en el esqueleto cuando el planner los deja cortos, que es cuando se pierde la regla
+            # anti-repetición y el gate quema un retry. tooltip-anchor: P2-SEEDER-PAIRS-CHANNEL
+            if _carb_slots:
+                out_assignment["carb_pairs"] = [tuple(p) for p in _carb_slots[:3]]
+            if _fruit_slots:
+                out_assignment["fruit_pairs"] = [tuple(p) for p in _fruit_slots[:3]]
     else:
         # <2 únicos: fallback textual (mismo patrón que carb_ib) en vez de repetir el mismo nombre.
         veggie_params = {f"veggie_{_i}": chosen_veggies[_i] for _i in range(3)}
