@@ -9478,6 +9478,46 @@ def _calculate_inventory_drift(old_inv: list, new_inv: list) -> float:
     return min(drift, 1.0)
 
 
+# Claves que describen una pausa de nevera VIVA. Al resolverla dejan de ser ciertas.
+_PANTRY_PAUSE_LIVE_KEYS = (
+    "_pantry_pause_reason",
+    "_pantry_pause_started_at",
+    "_pantry_pause_ttl_hours",
+    "_pantry_pause_reminder_hours",
+    "_pantry_pause_reminders",
+    "_pantry_pause_last_reminder_at",
+)
+
+
+def _resolve_pantry_pause_markers(snapshot: dict, resolution: str) -> dict:
+    """[P1-PAUSE-REASON-STALE · 2026-07-30] SSOT para cerrar una pausa de nevera.
+
+    Sella la resolución Y borra las claves que describían la pausa viva. Las dos
+    mitades tienen que ir juntas: `_pantry_pause_reason` sobreviviendo a su propia
+    resolución no es basura inerte, porque el cron de recovery resuelve el motivo así:
+
+        pause_reason = snap.get("_pantry_pause_reason") or snap.get("_pause_reason") ...
+
+    o sea que **la clave caduca gana sobre la vigente**. Un chunk que se pausa después
+    por OTRO motivo (p.ej. `synthesis_ratio_exceeded`) se clasifica como pausa de
+    nevera y toma la rama equivocada del recovery.
+
+    Origen: de los 7 sitios que sellaban `_pantry_pause_resolution`, **solo uno**
+    (`prev_chunk_concluded`) limpiaba las claves, y con el comentario correcto al lado
+    ("Limpiar flags de pause para que el worker no los lea como guardia"). Los otros 6
+    sellaban `resolved_at` y dejaban el motivo puesto — la misma asimetría
+    "el fix aterrizó en una superficie y no en sus hermanas" de todo este audit.
+    Medido en prod: 4 de 89 chunks con motivo caduco, los 4 del mismo plan.
+
+    Devuelve el mismo dict (mutado) para poder encadenar.
+    """
+    snapshot["_pantry_pause_resolution"] = resolution
+    snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+    for _k in _PANTRY_PAUSE_LIVE_KEYS:
+        snapshot.pop(_k, None)
+    return snapshot
+
+
 def _activate_flexible_mode(
     snapshot: dict,
     reason: str,
@@ -9533,8 +9573,7 @@ def _activate_flexible_mode(
     if chunk_lessons is not None:
         snapshot["_chunk_lessons"] = chunk_lessons
 
-    snapshot["_pantry_pause_resolution"] = reason
-    snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+    _resolve_pantry_pause_markers(snapshot, reason)
 
     logger.warning(
         "[P1-3/FLEXIBLE-MODE] activated",
@@ -13411,7 +13450,29 @@ def _recover_pantry_paused_chunks() -> None:
             # fabricada. Leer ambas claves cierra el drift productor↔consumidor de raíz para
             # TODA razón futura (misma clase que P1-CHUNK-3). El productor además dual-escribe
             # ambas claves (defensa-en-profundidad), pero este fallback tolera futuros olvidos.
-            pause_reason = str(snap.get("_pantry_pause_reason") or snap.get("_pause_reason") or "empty_pantry")
+            # [P1-PAUSE-REASON-STALE · 2026-07-30] Un `_pantry_pause_reason` cuya pausa
+            # YA se resolvió no describe esta pausa: describe una anterior. Y como va
+            # primero en la cadena, ganaba sobre el `_pause_reason` vigente — un chunk
+            # pausado por `synthesis_ratio_exceeded` se leía como pausa de nevera y
+            # tomaba la rama equivocada del recovery. Los productores ya no dejan la
+            # clave caduca (`_resolve_pantry_pause_markers`), pero este guard cubre las
+            # filas escritas ANTES del fix sin necesidad de migrar datos: medidas 4 de
+            # 89 en prod, todas del mismo plan y aún `pending`.
+            #
+            # Compara MARCAS DE TIEMPO, no presencia: tras el fix, una pausa nueva
+            # escribe `started_at` fresco pero el `resolved_at` de la anterior sigue
+            # ahí (los productores de pausa no lo borran). Anular por la mera
+            # presencia de `resolved_at` mataría el motivo VIVO — cambiar un falso
+            # positivo por otro. El motivo es caduco solo si se resolvió DESPUÉS de
+            # empezar, o si no hay `started_at` con el que compararlo.
+            # tooltip-anchor: [P1-PAUSE-REASON-STALE] motivo caduco no gana
+            _pantry_reason_vivo = snap.get("_pantry_pause_reason")
+            if _pantry_reason_vivo:
+                _pp_resuelta = snap.get("_pantry_pause_resolved_at")
+                _pp_iniciada = snap.get("_pantry_pause_started_at")
+                if _pp_resuelta and (not _pp_iniciada or str(_pp_resuelta) >= str(_pp_iniciada)):
+                    _pantry_reason_vivo = None
+            pause_reason = str(_pantry_reason_vivo or snap.get("_pause_reason") or "empty_pantry")
             user_id_str = str(row["user_id"])
             row_id = row["id"]
             week_num = row.get("week_number")
@@ -13731,8 +13792,7 @@ def _recover_pantry_paused_chunks() -> None:
                         resumed_snapshot["form_data"]["tzOffset"] = anchor_tz_min
                         resumed_snapshot["form_data"]["tz_offset_minutes"] = anchor_tz_min
                         resumed_snapshot["form_data"]["_chunk_anchor_source"] = anchor_source
-                    resumed_snapshot["_pantry_pause_resolution"] = "tz_recovered"
-                    resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    _resolve_pantry_pause_markers(resumed_snapshot, "tz_recovered")
                     # execute_after = midnight start_dt + days_offset + tz_min + 30min.
                     # Lo replicamos del cálculo original en _enqueue_plan_chunk.
                     # [G-B2 · P2-CRON-OPT-4] days_offset ya viene del batch SELECT (inmutable
@@ -13859,8 +13919,7 @@ def _recover_pantry_paused_chunks() -> None:
                         logger.warning(f"[P0-2/STALE-RETRY] No se pudo propagar inv fresco: {prop_e}")
 
                     resumed_snapshot = copy.deepcopy(snap)
-                    resumed_snapshot["_pantry_pause_resolution"] = "live_recovered"
-                    resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    _resolve_pantry_pause_markers(resumed_snapshot, "live_recovered")
                     execute_sql_write(
                         """
                         UPDATE plan_chunk_queue
@@ -13980,8 +14039,7 @@ def _recover_pantry_paused_chunks() -> None:
                 if _zl_mutations >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS:
                     # Señal de inventario suficiente → reanudar con variety forzada.
                     resumed_snapshot = copy.deepcopy(snap)
-                    resumed_snapshot["_pantry_pause_resolution"] = "inventory_proxy_resumed"
-                    resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    _resolve_pantry_pause_markers(resumed_snapshot, "inventory_proxy_resumed")
                     resumed_snapshot["_inventory_proxy_mutations_at_resume"] = _zl_mutations
                     _zl_fd = resumed_snapshot.get("form_data", {})
                     _zl_fd["_force_variety"] = True
@@ -14121,17 +14179,7 @@ def _recover_pantry_paused_chunks() -> None:
 
                 if _p03_now_ready:
                     resumed_snapshot = copy.deepcopy(snap)
-                    resumed_snapshot["_pantry_pause_resolution"] = "prev_chunk_concluded"
-                    resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
-                    # Limpiar flags de pause para que el worker no los lea como guardia.
-                    for _k in (
-                        "_pantry_pause_reason",
-                        "_pantry_pause_started_at",
-                        "_pantry_pause_ttl_hours",
-                        "_pantry_pause_reminder_hours",
-                        "_pantry_pause_reminders",
-                    ):
-                        resumed_snapshot.pop(_k, None)
+                    _resolve_pantry_pause_markers(resumed_snapshot, "prev_chunk_concluded")
                     execute_sql_write(
                         """
                         UPDATE plan_chunk_queue
@@ -14252,8 +14300,7 @@ def _recover_pantry_paused_chunks() -> None:
 
                         if _p0c_covered:
                             resumed_snapshot = copy.deepcopy(snap)
-                            resumed_snapshot["_pantry_pause_resolution"] = "missing_ingredients_covered"
-                            resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                            _resolve_pantry_pause_markers(resumed_snapshot, "missing_ingredients_covered")
                             resumed_snapshot["_pantry_pause_recovery_attempts"] = _p0c_attempts + 1
                             execute_sql_write(
                                 """
@@ -14308,8 +14355,7 @@ def _recover_pantry_paused_chunks() -> None:
                     )
                 if _p04_live is not None and _count_meaningful_pantry_items(_p04_live) >= CHUNK_MIN_FRESH_PANTRY_ITEMS:
                     resumed_snapshot = copy.deepcopy(snap)
-                    resumed_snapshot["_pantry_pause_resolution"] = "pantry_restocked"
-                    resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    _resolve_pantry_pause_markers(resumed_snapshot, "pantry_restocked")
                     if isinstance(resumed_snapshot.get("form_data"), dict):
                         resumed_snapshot["form_data"]["current_pantry_ingredients"] = _p04_live
                         resumed_snapshot["form_data"]["_pantry_captured_at"] = datetime.now(timezone.utc).isoformat()
