@@ -147,14 +147,41 @@ def test_las_fechas_se_construyen_en_hora_LOCAL():
     assert "getFullYear()" in src and "getMonth()" in src
 
 
-def test_la_linea_del_dia_ordena_por_hora_de_CONSUMO():
-    """El endpoint devuelve por `created_at` (orden de REGISTRO). Ordenar por eso
-    rompe justo el caso que motivó la pantalla: una cena registrada al día
-    siguiente aparecería fuera de sitio en su propia línea de tiempo."""
+def test_no_se_muestra_una_hora_RETRODATADA():
+    """[P2-DIARY-SLOTS] La v1 mostraba "10:51 · CENA" para una cena.
+
+    `log_consumed_meal` sella `consumed_at = now() - N días`, así que en un
+    registro de otro día la hora es la del REGISTRO. Medido en la fila real:
+    `consumed = 30 jul 14:51:04` / `created = 31 jul 14:51:04` — el mismo
+    minuto, 24 h de diferencia. Pintar esa hora es inventarse cuándo comió.
+
+    Se detecta comparando los DÍAS de ambas marcas. No hace falta epsilon: la
+    pregunta es "¿lo anotaste otro día?", no "¿cuánto se parecen los relojes?".
+    """
     src = (FRONT / "DiaryHistory.jsx").read_text(encoding="utf-8")
-    assert "lista.sort(" in src and "consumed_at" in src, (
-        "la línea del día no reordena por hora de consumo"
+    assert "horaFiable" in src, "no existe el guard de hora retrodatada"
+    assert "aISO(creado) !== aISO(consumido)" in src, (
+        "el guard no compara los DÍAS de consumed_at y created_at"
     )
+
+
+def test_el_dia_se_dibuja_por_FRANJAS_incluidas_las_vacias():
+    """El hueco bajo una sola comida no era espaciado: era información.
+
+    Un día con solo la cena registrada significa que faltan desayuno, almuerzo
+    y merienda — y eso es lo más útil de la pantalla para quien lleva el diario.
+    """
+    src = (FRONT / "DiaryHistory.jsx").read_text(encoding="utf-8")
+    for f in ("desayuno", "almuerzo", "merienda", "cena"):
+        assert f"'{f}'" in src, f"la franja {f} no se dibuja"
+    assert "Sin registro" in src, "las franjas vacías no se muestran"
+
+
+def test_el_total_lleva_su_objetivo_al_lado():
+    """420 kcal es mucho o poco según el objetivo; suelto no dice nada, y
+    obligaba a recordar el denominador de la card de hoy."""
+    src = (FRONT / "DiaryHistory.jsx").read_text(encoding="utf-8")
+    assert "targetCalories" in src and "quotaOf" in src
 
 
 def test_un_dia_sin_registro_se_distingue_de_uno_a_cero():
