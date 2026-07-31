@@ -9861,7 +9861,7 @@ def _emit_plan_data_corruption_alert(
                     "expected_type": expected_type,
                     "meal_plan_id": plan_id,
                 }),
-                json.dumps([user_id] if user_id else []),
+                json.dumps([str(user_id)] if user_id else []),
             ),
         )
     except Exception as ins_err:
@@ -9972,9 +9972,15 @@ def _is_lesson_stub(lesson) -> bool:
     persistir volvía a leerse como stub en el intento siguiente → `_p03_needs_rebuild`
     → rebuild desde la cola (que para `prev_week=1` NO existe: los 17 planes de prod
     arrancan la cola en `week_number=2`) → re-síntesis → otra fila de telemetría.
-    Bucle sin salida: 843 eventos `lesson_synthesized_low_confidence` en la semana 2
-    de 6 planes contra 18 en TODAS las demás semanas juntas, y dos usuarios reales con
-    su semana 2 pausada por el guard P0-B que consume esa telemetría.
+    Bucle sin salida, medido sobre UN plan real: 17 filas
+    `lesson_synthesized_low_confidence` del MISMO chunk (plan 4d2c1111 semana 2), que
+    acabaron pausándolo vía el guard P0-B que consume esa telemetría.
+    [corrección · 2026-07-30] El commit que introdujo este fix decía "843 eventos en la
+    semana 2 de 6 planes contra 18 en las demás". Falso por contaminación: 825 de esos
+    843 eran filas con `meal_plan_id IS NULL` escritas por la SUITE DE TESTS contra la
+    base de producción (92,8% de `chunk_lesson_telemetry` es ruido de tests). La cifra
+    real es 26 eventos en semana 2 sobre 7 planes contra 18 en las demás — la
+    concentración en la semana 2 se sostiene, la magnitud no.
     Una lección que trae 10 bases y 8 nombres de plato no está ausente.
     El discriminante correcto sigue vivo abajo: sin señal numérica NI muestras → stub
     (un `{"chunk": 2, "metrics_unavailable": True}` pelado sigue siendo stub).
@@ -19869,7 +19875,7 @@ def _detect_chronic_deferrals() -> None:
                         "week_number": row["week_number"],
                         "window_hours": CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS,
                     }),
-                    json.dumps([user_id]),
+                    json.dumps([str(user_id)]),
                 ),
             )
             notified += 1
@@ -20281,14 +20287,22 @@ def _pause_chunk_for_synthesis_overload(
                     f"intervención manual; investigar plan_chunk_queue.learning_metrics "
                     f"de chunks anteriores del mismo plan."
                 ),
+                # [P1-ALERT-AFFECTED-UUID · 2026-07-30] `str(...)` en AMBOS. psycopg3
+                # devuelve `uuid.UUID` para columnas uuid, y `json.dumps` no lo
+                # serializa: el insert lanzaba TypeError, el `except` de abajo lo
+                # tragaba como warning y esta alerta NUNCA llegaba a `system_alerts`
+                # — 0 filas en toda su vida, medido. El chunk sí se pausaba y el
+                # usuario sí recibía su push, así que el único ciego era el operador.
+                # Cazado en el journal de prod: "[P0-B/ALERT] No se pudo persistir
+                # alert per-user: Object of type UUID is not JSON serializable".
                 json.dumps({
                     "synth": int(ratio_info.get("synth") or 0),
                     "total": int(ratio_info.get("total") or 0),
                     "ratio": round(float(ratio_info.get("ratio") or 0.0), 4),
                     "source": source,
-                    "task_id": task_id,
+                    "task_id": str(task_id),
                 }),
-                json.dumps([user_id]),
+                json.dumps([str(user_id)]),
             ),
         )
     except Exception as _alert_err:
@@ -21148,7 +21162,7 @@ def _alert_stuck_chunks() -> None:
                         "earliest_due": row.get("earliest_due").isoformat()
                             if row.get("earliest_due") else None,
                     }, ensure_ascii=False),
-                    json.dumps([user_id] if user_id else []),
+                    json.dumps([str(user_id)] if user_id else []),
                 ),
             )
             emitted += 1
@@ -21426,7 +21440,7 @@ def _alert_stranded_partial_plans() -> None:
                         "age_hours": round(age_hours, 2),
                         "age_threshold_h": _age_h,
                     }, ensure_ascii=False),
-                    json.dumps([user_id] if user_id else []),
+                    json.dumps([str(user_id)] if user_id else []),
                 ),
             )
             emitted += 1
@@ -21614,7 +21628,7 @@ def _alert_stranded_partial_plans() -> None:
                         "days_count": days_count,
                         "pending_user_action_count": pending_ua,
                     }, ensure_ascii=False),
-                    json.dumps([user_id] if user_id else []),
+                    json.dumps([str(user_id)] if user_id else []),
                 ),
             )
             abandoned_emitted += 1
@@ -23966,7 +23980,7 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
                                 "week_number": int(week_number),
                                 "days_until_prev_end": int(_days_until_prev_end),
                             }),
-                            json.dumps([user_id]),
+                            json.dumps([str(user_id)]),
                         ),
                     )
                     logger.info(
