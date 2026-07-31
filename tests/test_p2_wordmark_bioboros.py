@@ -13,6 +13,23 @@ no alcanzó los archivos donde estaban en líneas separadas. Cayeron dos:
 
 Los dos fallaron por la MISMA razón, con dos meses de diferencia. Por eso el guard no
 persigue la cadena "RD": persigue el patrón estructural que la produce.
+
+⚠️ [ampliado 2026-07-31, tercera vez] Y aun así se le escapó una: el **splash de
+`index.html`** — lo PRIMERO que ve todo usuario al arrancar — seguía bicolor. Falló los
+tres anclajes del regex a la vez:
+
+  1. sólo se escaneaba `frontend/src/**/*.jsx`, e `index.html` no es ninguna de las dos;
+  2. el color venía de una CLASE (`.splash-r { color: … }`), no de un `style` inline;
+  3. la pieza no era una letra mayúscula suelta, sino `b` minúscula + `oros`.
+
+El patrón "letra suelta con color inline" se había generalizado a partir de los dos
+casos JSX conocidos, y no cubría el que estaba escrito de otra forma. La lección se
+repite: la exclusión que hace tratable un barrido es exactamente donde se queda ciego.
+
+El splash no puede usar `<Wordmark/>` (corre antes de que React monte), así que es la
+única copia legítima de la marca fuera del SSOT. Se vigila aparte y por ESTRUCTURA: la
+marca va en una pieza, sin markup dentro — así da igual el color, el número de letras o
+si son mayúsculas.
 """
 import re
 from pathlib import Path
@@ -21,6 +38,7 @@ import pytest
 
 _FRONT = Path(__file__).resolve().parent.parent.parent / "frontend" / "src"
 _WORDMARK = _FRONT / "components" / "common" / "Wordmark.jsx"
+_INDEX_HTML = _FRONT.parent / "index.html"
 
 
 def _jsx_files():
@@ -82,4 +100,58 @@ def test_la_pantalla_de_carga_del_plan_usa_el_componente():
     assert "<Wordmark />" in plan or "<Wordmark/>" in plan, (
         "P2-WORDMARK-BIOBOROS regresión: Plan.jsx importa `Wordmark` pero no lo renderiza "
         "— la pantalla 'Diseñando tu plan' volvería a dibujar la marca a mano."
+    )
+
+
+# ------------------------------------------------- el splash, la copia legítima
+
+_SPLASH_BRAND = re.compile(r'<div class="splash-brand">(.*?)</div>', re.DOTALL)
+
+
+def _splash_brand_inner() -> str:
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    m = _SPLASH_BRAND.search(html)
+    # Sanity del vehículo: si el div se renombra, los asserts de abajo pasarían
+    # en vacío y este guard dejaría de proteger sin ponerse rojo.
+    assert m, (
+        "P2-WORDMARK-BIOBOROS: no encuentro `<div class=\"splash-brand\">` en index.html. "
+        "Si lo renombraste, actualiza este test — mientras tanto el splash está sin vigilar."
+    )
+    return m.group(1).strip()
+
+
+def test_el_splash_escribe_la_marca_en_UNA_pieza():
+    """Sin markup dentro: ni spans, ni letras sueltas, ni bicolor.
+
+    Es una comprobación ESTRUCTURAL a propósito. La versión anterior del guard
+    buscaba "letra mayúscula suelta con color inline" y no vio este splash, que
+    partía `b` + `oros` coloreando por clase CSS. Exigir que no haya markup no
+    depende del color, ni del número de letras, ni de si son mayúsculas.
+    """
+    inner = _splash_brand_inner()
+    assert "<" not in inner, (
+        f"P2-WORDMARK-BIOBOROS regresión: el splash de index.html volvió a partir la "
+        f"marca en trozos ({inner!r}). Va en una pieza: `<div class=\"splash-brand\">"
+        f"Bioboros</div>`. Este splash corre antes de React y no puede usar "
+        f"`<Wordmark/>`, así que es la única copia a mano — y por eso es la que se "
+        f"desincroniza."
+    )
+    assert inner == "Bioboros", (
+        f"P2-WORDMARK-BIOBOROS: el splash muestra {inner!r} en vez de 'Bioboros'."
+    )
+
+
+def test_ninguna_regla_css_pinta_un_trozo_del_wordmark_del_splash():
+    """El color por CLASE fue el agujero: `.splash-r`/`.splash-d` no eran inline.
+
+    Una regla que apunta a un descendiente de `.splash-brand` sólo tiene sentido
+    si alguien volvió a meter markup dentro. El test de arriba ya lo cazaría,
+    pero una regla huérfana con nombre de letra es una invitación a rehacerlo.
+    """
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    hits = re.findall(r"\.splash-brand\s+\.[\w-]+", html)
+    assert not hits, (
+        f"P2-WORDMARK-BIOBOROS regresión: reglas CSS sobre trozos del wordmark del "
+        f"splash {hits!r}. El wordmark es monocromo por decisión de producto (tercera "
+        f"versión; las dos con acento se descartaron en vivo)."
     )
