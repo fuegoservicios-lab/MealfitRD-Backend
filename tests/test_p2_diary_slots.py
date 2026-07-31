@@ -77,6 +77,34 @@ def test_el_total_lleva_su_objetivo_al_lado():
     assert "targetCalories" in src and "quotaOf" in src
 
 
+def test_el_disparador_no_se_estira_a_todo_el_ancho():
+    """`.mealsSection` es una COLUMNA FLEX.
+
+    Un `inline-flex` dentro de ella se estira por el `align-items: stretch` por
+    defecto, y el botón quedaba como un rectángulo vacío a todo el ancho con
+    cuatro palabras en la esquina: pesaba mucho más de lo que vale y se leía
+    como un campo de formulario. *El display del hijo no manda si el padre es
+    flex.*
+    """
+    css = (FRONT / "DiaryHistory.module.css").read_text(encoding="utf-8")
+    bloque = css.split(".trigger {")[1].split("}")[0]
+    assert "align-self: flex-end" in bloque, (
+        "sin `align-self`, el disparador se estira a todo el ancho de la card"
+    )
+
+
+def test_el_disparador_pesa_MENOS_que_la_accion_principal():
+    """`.scanBtn` (Escanear comida) lleva borde: es la acción principal. Mirar
+    el pasado es secundario y no debe competir — la jerarquía la marca el peso,
+    no el tamaño."""
+    css = (FRONT / "DiaryHistory.module.css").read_text(encoding="utf-8")
+    bloque = css.split(".trigger {")[1].split("}")[0]
+    assert "border: 1px solid transparent" in bloque, (
+        "el disparador vuelve a llevar borde visible y compite con la acción "
+        "principal de la card"
+    )
+
+
 def test_una_sola_gramatica_para_la_ausencia_de_dato():
     """Punteado = sin dato, en las DOS mitades del cajón: el riel de un día sin
     registro en la tira y la regla de una franja vacía. Si cada mitad inventara
