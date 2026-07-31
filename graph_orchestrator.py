@@ -27794,6 +27794,56 @@ _COOKED_GRAIN_REF_KCAL = (
 )
 _COOKED_CATALOG_KCAL_CACHE: "dict | None" = None
 
+# [P3-REFILL-STEP-VERB-MATCHES-FOOD · 2026-07-31] El paso que inyecta el refill calórico escribe
+# "arroz blanco" FIJO ("🍚 Cuece el arroz blanco de tus ingredientes según el paquete"), pero en
+# producción apareció "🍚 Cuece el **Casabe** … según el paquete" (plan af58ec2e): un pase posterior
+# renombró el alimento y dejó el verbo del arroz. El casabe es una torta de yuca ya horneada — no se
+# cuece, y menos "según el paquete".
+#
+# No se persigue al renombrador (no conseguí identificarlo): se cierra en el CONSUMIDOR, que es donde
+# el defecto es observable, con el mismo patrón que `P2-SPECIES-VERB-CLEANUP` — nacido porque una
+# sustitución camarón→pescado renombró el alimento y dejó "desvena" y "hasta que estén rosados".
+#
+# El vocabulario de "qué se cuece desde seco" se REUSA de `_COOKED_GRAIN_REF_KCAL` en vez de escribir
+# una lista nueva: una lista por incidente garantiza el próximo incidente.
+# tooltip-anchor: P3-REFILL-STEP-VERB-MATCHES-FOOD
+_REFILL_STEP_RE = _re.compile(
+    r"^(?P<pre>\s*🍚\s*)Cuece\s+el\s+(?P<food>.+?)\s+de tus ingredientes según el paquete\s+y\s+"
+    r"sírvelo como acompañante\.?\s*$",
+    _re.IGNORECASE)
+
+
+def _fix_refill_step_verb(meal: dict) -> bool:
+    """[P3-REFILL-STEP-VERB-MATCHES-FOOD · 2026-07-31] Si el paso del refill acabó nombrando un
+    alimento que NO se cuece desde seco, corrige el verbo en vez de dejar una instrucción imposible.
+
+    No borra el paso: en el caso real el Montaje tampoco menciona ese alimento, así que borrarlo lo
+    dejaría sin ninguna instrucción. Muta `meal`. True si corrigió.
+    tooltip-anchor: P3-REFILL-STEP-VERB-MATCHES-FOOD"""
+    try:
+        rec = (meal or {}).get("recipe")
+        if not isinstance(rec, list):
+            return False
+        _granos = {t for toks, _k in _COOKED_GRAIN_REF_KCAL for t in toks}
+        for _i, _s in enumerate(rec):
+            if not isinstance(_s, str):
+                continue
+            m = _REFILL_STEP_RE.match(_s)
+            if not m:
+                continue
+            _food = m.group("food").strip()
+            _food_n = strip_accents(_food.lower())
+            if any(_re.search(r"\b" + _re.escape(_g) + r"s?\b", _food_n) for _g in _granos):
+                continue  # sí se cuece desde seco: el paso es correcto
+            rec[_i] = f"{m.group('pre')}Sirve el {_food} como acompañante."
+            logger.info(f"🍚 [P3-REFILL-STEP-VERB-MATCHES-FOOD] '{_food}' no se cuece desde seco: "
+                        f"verbo corregido | meal={str((meal or {}).get('name'))[:40]}")
+            return True
+        return False
+    except Exception as _rv_e:
+        logger.warning(f"[P3-REFILL-STEP-VERB-MATCHES-FOOD] no-op: {type(_rv_e).__name__}: {_rv_e}")
+        return False
+
 
 def _catalog_kcal_by_name() -> dict:
     """{nombre/alias accent-stripped → kcal/100g}. Lazy, fail-open a {}.
@@ -34248,6 +34298,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 if isinstance(_m_al, dict):
                     _align_closer_note_food_names(_m_al)
                     _split_cooking_from_mise(_m_al)
+                    # [P3-REFILL-STEP-VERB-MATCHES-FOOD · 2026-07-31] Va aquí, al final, porque el
+                    # defecto lo introduce un renombrado POSTERIOR al productor del paso: colgarlo
+                    # antes lo dejaría mirando el texto que aún no ha cambiado.
+                    _fix_refill_step_verb(_m_al)
     except Exception as _cra_as_e:
         logger.warning(f"[P2-COOKED-RAW-ANNOTATION] assemble no-op: {type(_cra_as_e).__name__}: {_cra_as_e}")
 
