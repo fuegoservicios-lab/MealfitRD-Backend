@@ -561,7 +561,20 @@ _PESC_PROTEIN_REDIRECT = {"Pechuga de pollo": "Filete de pescado blanco"}  # pes
 
 
 def _canon_diet(diet) -> str:
-    """[P2-13] dietType → {vegan|vegetarian|pescatarian|balanced} (EN + ES masc/fem). Acent-stripped."""
+    """[P2-13 · SSOT desde P1-DIET-CANON-SSOT · 2026-07-31] dietType →
+    {vegan|vegetarian|pescatarian|balanced} (EN + ES masc/fem). Acent-stripped.
+
+    Delega en `constants.canonicalize_diet_type`. El comentario de arriba decía que la duplicación
+    era a propósito por import circular (`condition_rules` es importado POR `graph_orchestrator`),
+    y era cierto respecto a graph_orchestrator — pero `constants` está por DEBAJO de ambos (este
+    módulo ya le importaba `strip_accents`), así que el ciclo nunca justificó tener la tabla aquí.
+    Y la copia ya había drifteado: le faltaba `ovo-lacto-vegetariano`, que sí estaba en la hermana.
+    La tabla local queda solo como fallback si el import fallara. tooltip-anchor: P1-DIET-CANON-SSOT"""
+    try:
+        from constants import canonicalize_diet_type as _cdt
+        return _cdt(diet)
+    except Exception:
+        pass
     try:
         from constants import strip_accents as _sa
     except Exception:
@@ -569,7 +582,7 @@ def _canon_diet(diet) -> str:
     d = _sa(str(diet or "").strip().lower())
     if d in ("vegano", "vegan", "vegana"):
         return "vegan"
-    if d in ("vegetariano", "vegetarian", "vegetariana", "ovolactovegetariano"):
+    if d in ("vegetariano", "vegetarian", "vegetariana", "ovolactovegetariano", "ovo-lacto-vegetariano"):
         return "vegetarian"
     if d in ("pescetariano", "pescatariano", "pescatarian", "pescetarian", "pescetariana", "pescatariana"):
         return "pescatarian"

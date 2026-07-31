@@ -313,7 +313,9 @@ Override emite `WARN [P0-AGENT-1]` con `tool=/llm_user_id=/trusted=` para identi
 
 ## El path degradado necesita su propio backstop
 
-[P0-DEGRADED-SAFETY-SCAN · 2026-07-31] El Smart Shuffle + Edge Recipes ([`cron_tasks.py`](backend/cron_tasks.py)) arma días sin LLM y **bypasea `assemble_plan_node`** → ni review, ni allergen guard, ni diet guard. **No borres `_sieve_catalog_for_safety` creyendo que `_get_fast_filtered_catalogs` ya cubre eso**: el filtro tiene agujeros medidos (femenino `'vegetariana'` no matchea ninguna rama; catch-alls en singular vs catálogo en plural) y el tamiz usa `clinical_backstop_for_meal`, que canonicaliza dieta y expande sinónimos. Knob `MEALFIT_DEGRADED_SAFETY_SCAN`. Test [`test_p0_degraded_safety_scan.py`](backend/tests/test_p0_degraded_safety_scan.py).
+[P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Smart Shuffle + Edge Recipes ([`cron_tasks.py`](backend/cron_tasks.py)) arman días sin LLM y **bypasean `assemble_plan_node`** → ni review, ni allergen/diet guard. **No borres `_sieve_catalog_for_safety` creyendo que `_get_fast_filtered_catalogs` ya cubre eso**: al filtro aún se le escapan plurales (Bulgur/Pistachos) y el tamiz usa `clinical_backstop_for_meal`. Knob `MEALFIT_DEGRADED_SAFETY_SCAN`. Test [`test_p0_degraded_safety_scan.py`](backend/tests/test_p0_degraded_safety_scan.py).
+
+[P1-DIET-CANON-SSOT] `dietType` canonicaliza SOLO en **`constants.canonicalize_diet_type`**: eran 3 tablas a mano, drifearon, y la del filtro olvidó `'vegetariana'`/`'vegana'` — servía Pollo a vegetarianas. No escribas una 4ª. Test [`test_p1_diet_canon_ssot.py`](backend/tests/test_p1_diet_canon_ssot.py).
 
 ---
 

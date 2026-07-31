@@ -2405,22 +2405,63 @@ SUPPLEMENT_NAMES = {
     "electrolytes":  "Electrolitos (Sodio + Potasio + Magnesio)",
 }
 
+# [P1-DIET-CANON-SSOT · 2026-07-31] (audit solver+seeder v6 · P1) SSOT de canonicalización de
+# `dietType` → {vegan|vegetarian|pescatarian|balanced}. Vive AQUÍ, en el módulo más bajo de la
+# jerarquía, precisamente para que no haya ciclo de imports: `condition_rules` y
+# `graph_orchestrator` (que ya importaban `strip_accents` de aquí) delegan en esta.
+#
+# Antes había TRES tablas del mismo mapeo escritas a mano, y ya habían drifteado entre sí
+# (`ovo-lacto-vegetariano` estaba en la de graph_orchestrator y no en la de condition_rules).
+# La de este módulo, además, era la única que vivía INLINE dentro de un `if diet in [...]` — y se
+# había olvidado de `'vegetariana'` y `'vegana'`, dos formas que `routers/plans.py` acepta
+# explícitamente como data legacy de `health_profile.dietType`. Resultado: pool sin filtrar (Pollo
+# y Res ofrecidos a una vegetariana). Añadir dos strings a esa lista habría sido crecimiento por
+# incidente; el universo canónico cierra la clase.
+#
+# Cubre EN + ES masculino/femenino. Acent-stripped y tolerante a basura (no-string → balanced,
+# que es el valor sin restricción: nunca inventa una dieta que el usuario no declaró).
+# tooltip-anchor: P1-DIET-CANON-SSOT
+_DIET_CANON_MAP = {
+    "vegan": ("vegano", "vegana", "vegan"),
+    "vegetarian": ("vegetariano", "vegetariana", "vegetarian",
+                   "ovolactovegetariano", "ovo-lacto-vegetariano"),
+    "pescatarian": ("pescetariano", "pescetariana", "pescatariano", "pescatariana",
+                    "pescatarian", "pescetarian"),
+}
+_DIET_CANON_LOOKUP = {v: canon for canon, variants in _DIET_CANON_MAP.items() for v in variants}
+
+
+def canonicalize_diet_type(diet) -> str:
+    """[P1-DIET-CANON-SSOT · 2026-07-31] `dietType` → {vegan|vegetarian|pescatarian|balanced}.
+
+    SSOT del mapeo. `balanced` es el default seguro para lo desconocido/ausente: significa "sin
+    restricción de dieta", que es lo que el sistema ya hacía con un valor no reconocido — la
+    diferencia es que ahora las variantes conocidas dejan de caer ahí por olvido.
+    tooltip-anchor: P1-DIET-CANON-SSOT"""
+    if not isinstance(diet, str):
+        return "balanced"
+    return _DIET_CANON_LOOKUP.get(strip_accents(diet.strip().lower()), "balanced")
+
+
 def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     """Filtra el catálogo dominicano basado en restricciones del usuario O(N) sin Cache Thrashing volátil."""
     filtered_proteins = DOMINICAN_PROTEINS.copy()
     filtered_carbs = DOMINICAN_CARBS.copy()
     filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
     filtered_fruits = DOMINICAN_FRUITS.copy()
-    
+
     restrictions = list(allergies) + list(dislikes)
-    
-    if diet in ["vegano", "vegan"]:
+
+    # [P1-DIET-CANON-SSOT · 2026-07-31] Antes esto era `if diet in ["vegano", "vegan"]` — una lista
+    # literal de variantes que se olvidó de los femeninos legacy. tooltip-anchor: P1-DIET-CANON-SSOT
+    _diet_canon = canonicalize_diet_type(diet)
+    if _diet_canon == "vegan":
         restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "huevos", "queso", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", "lácteo", "leche"])
-    elif diet in ["vegetariano", "vegetarian"]:
+    elif _diet_canon == "vegetarian":
         restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco"])
-    elif diet in ["pescetariano", "pescatarian"]:
+    elif _diet_canon == "pescatarian":
         restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne"])
-        
+
     if not restrictions:
         return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
         

@@ -13284,7 +13284,17 @@ def _canonicalize_diet_type(diet) -> str:
     cubriendo TODAS las variantes que el backend ACEPTA (`_DIET_TYPE_LEGACY_ACCEPTED` en routers/plans.py:
     EN + ES masculino/femenino — p.ej. 'vegana'/'vegetariana' son data legacy real de health_profile).
     Acent-stripped. SSOT compartido por el scan Y el fallback (cierra el gap post-review donde las formas
-    femeninas eludían ambos). Anchor: P1-DIET-HARD-GUARD."""
+    femeninas eludían ambos). Anchor: P1-DIET-HARD-GUARD.
+
+    [P1-DIET-CANON-SSOT · 2026-07-31] Delega en `constants.canonicalize_diet_type`: había TRES copias
+    de esta tabla y la de `constants` (inline en `_get_fast_filtered_catalogs`) se había olvidado de
+    los femeninos, sirviendo pollo a vegetarianas. La tabla de abajo queda como fallback si el import
+    fallara — este guard es de seguridad y no puede depender de que un import salga bien."""
+    try:
+        from constants import canonicalize_diet_type as _cdt
+        return _cdt(diet)
+    except Exception:
+        pass
     try:
         from constants import strip_accents
     except Exception:
@@ -27977,6 +27987,46 @@ def _sync_one_raw_line(meal: dict, idx: int, display_old: str, factor: float) ->
         return False
 
 
+def _remove_one_raw_line_by_food(meal: dict, display_line: str, idx: int) -> bool:
+    """[P1-DM-RAW-BY-FOOD · 2026-07-31] (audit solver+seeder v6) Gemelo de `_sync_one_raw_line` para
+    el caso BORRAR: quita de `ingredients_raw` la línea que corresponde a `meal['ingredients'][idx]`.
+
+    Mismo criterio y mismo sesgo conservador que su hermano: índice SOLO con paralelismo verificado;
+    si no, por ALIMENTO; 0 o >1 coincidencias ⇒ no toca nada y devuelve False. Borrar la línea
+    equivocada de raw es peor que no borrar ninguna — lo primero saca de la lista de compras un
+    alimento que el plato SÍ lleva y deja comprándose el que se quitó; lo segundo deja una
+    divergencia que el reconciliador display↔raw sabe cerrar.
+
+    Debe invocarse ANTES de mutar `meal['ingredients']`, para que la comprobación de paralelismo
+    compare las dos listas en el mismo estado. tooltip-anchor: P1-DM-RAW-BY-FOOD"""
+    _raw = meal.get("ingredients_raw")
+    if not (isinstance(_raw, list) and _raw):
+        return False
+    try:
+        _ings = meal.get("ingredients") or []
+        _parallel = (isinstance(_ings, list) and len(_raw) == len(_ings)
+                     and (not RAW_PAIR_BY_FOOD
+                          or _raw_display_parallel_by_food([str(x) for x in _ings], _raw)))
+        if _parallel and 0 <= idx < len(_raw):
+            del _raw[idx]
+            return True
+        _food, _ = _resolve_line_food_grams(str(display_line), cheap=True)
+        if not _food:
+            return False
+        _hits = [i for i, r in enumerate(_raw)
+                 if isinstance(r, str) and _resolve_line_food_grams(r, cheap=True)[0] == _food]
+        if len(_hits) != 1:
+            return False  # 0 → no está en raw; >1 → ambiguo, no adivinamos cuál
+        del _raw[_hits[0]]
+        return True
+    except Exception as _rm_e:
+        # Nunca mudo, por la misma razón que el hermano: si esto falla, la 2ª proteína se quitó del
+        # plato pero se sigue comprando, y nadie lo ve salvo por esta línea.
+        logger.warning(f"[P1-DM-RAW-BY-FOOD] borrado de raw falló en meal "
+                       f"{str(meal.get('name'))[:32]!r}: {type(_rm_e).__name__}: {_rm_e}")
+        return False
+
+
 def _rescale_raw_by_food(raw: list, ing_strs: list, factors: list) -> "tuple[list, int]":
     """[P1-SOLVER-RAW-BY-FOOD · 2026-07-25] Aplica a `ingredients_raw` los factores que el solver
     aplicó al display, mapeados por ALIMENTO en vez de por índice. Devuelve `(nueva_lista, n)`.
@@ -31035,8 +31085,6 @@ def _meal_double_main_resolve(days, db=None) -> int:
                 ings = meal.get("ingredients")
                 if not isinstance(ings, list) or len(ings) < 2:
                     continue
-                raw = meal.get("ingredients_raw")
-                _lockstep = isinstance(raw, list) and len(raw) == len(ings)
                 idx_prim, idx_sec, especie_sec = None, None, None
                 for i, s in enumerate(ings):
                     if not isinstance(s, str):
@@ -31067,12 +31115,17 @@ def _meal_double_main_resolve(days, db=None) -> int:
                             _factor = min(2.0, (_pp + _ps) / _pp)
                     except Exception:
                         _factor = None
+                # [P1-DM-RAW-BY-FOOD · 2026-07-31] (audit solver+seeder v6) Antes esto era
+                # `_lockstep = len(raw) == len(ings)` + `del raw[idx_sec]` + una escritura por
+                # índice a `ingredients_raw[_ip]` que ni siquiera consultaba `_lockstep`. "Mismo
+                # largo" nunca fue "mismo orden": con raw rotado (el caso normal medido) se borraba
+                # de la lista de compras el ARROZ en vez de la res, y el factor de recuperación
+                # engordaba a 189 g la MISMA res que se acababa de quitar del plato. Este pase era
+                # el último que quedaba fuera del contrato by-food de sus hermanos.
+                # El borrado va ANTES de mutar `ings`: el chequeo de paralelismo necesita las dos
+                # listas en el mismo estado. tooltip-anchor: P1-DM-RAW-BY-FOOD
+                _remove_one_raw_line_by_food(meal, sec_line, idx_sec)
                 del ings[idx_sec]
-                if _lockstep:
-                    try:
-                        del raw[idx_sec]
-                    except Exception:
-                        pass
                 if _factor and _factor > 1.02 and _resc_dm is not None:
                     _ip = idx_prim if idx_prim < idx_sec else idx_prim - 1
 
@@ -31082,10 +31135,9 @@ def _meal_double_main_resolve(days, db=None) -> int:
                             lambda mm: f"{mm.group(1)}{round(float(mm.group(2).replace(',', '.')))}{mm.group(3)}",
                             _s, count=1)
                     try:
-                        ings[_ip] = _round_lead(_resc_dm(str(ings[_ip]), _factor))
-                        if isinstance(meal.get("ingredients_raw"), list) and _ip < len(meal["ingredients_raw"]):
-                            meal["ingredients_raw"][_ip] = _round_lead(
-                                _resc_dm(str(meal["ingredients_raw"][_ip]), _factor))
+                        _prim_old = str(ings[_ip])
+                        ings[_ip] = _round_lead(_resc_dm(_prim_old, _factor))
+                        _sync_one_raw_line(meal, _ip, _prim_old, _factor)
                     except Exception:
                         pass
                 rec = meal.get("recipe")
