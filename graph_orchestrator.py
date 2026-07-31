@@ -6057,6 +6057,22 @@ DAYGEN_CANARY_SCOPE = (_env_str("MEALFIT_DAYGEN_CANARY_SCOPE", "retry") or "retr
 if DAYGEN_CANARY_SCOPE not in ("retry", "all"):
     DAYGEN_CANARY_SCOPE = "retry"   # fail-safe: valor raro ⇒ el más barato
 
+# [P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento para el day-gen cuando
+# corre en un modelo OpenAI (la familia gpt-5.6 razona de fábrica; esto gradúa
+# cuánto). Nace VACÍO = default del proveedor, así que encenderlo es una
+# decisión explícita.
+#
+# ⚠️ LO QUE ESTE REPO YA MIDIÓ sobre razonar en superficies de OUTPUT GRANDE:
+# el corrector quirúrgico con thinking pasó de 17 s a TIMEOUT de 120 s. El
+# day-gen construye un día entero (~1.900 tokens de salida) con un tope de 90 s,
+# así que es exactamente esa clase de superficie. Y el razonamiento se factura
+# como OUTPUT, donde luna cobra $1,20/M: cada escalón de esfuerzo es coste
+# directo. Por eso: subir de a poco y mirar latencia, no ponerlo en `high` de
+# entrada.
+DAYGEN_EFFORT = (_env_str("MEALFIT_DAYGEN_EFFORT", "") or "").strip().lower()
+if DAYGEN_EFFORT not in ("", "minimal", "low", "medium", "high"):
+    DAYGEN_EFFORT = ""   # fail-safe: valor raro ⇒ default del proveedor
+
 
 def _daygen_model_canary_cohort(form_data: dict) -> str:
     """'on' si este usuario cae en el canario de modelo del day-gen; 'off' si no.
@@ -7692,7 +7708,14 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # `llm_provider.build_chat_llm`: la fábrica devuelve las bases, sin el mixin de
             # backpressure ni la contabilidad de costo. Usarla dejó `llm_usage_events` sin una
             # sola fila de `day_generator` en la primera corrida del canario.
-            _llm = (ChatOpenAIInstrumented if is_openai_model(_model) else ChatDeepSeek)(**_kw)
+            # [P2-DAYGEN-EFFORT · 2026-07-31] El esfuerzo de razonamiento SOLO
+            # aplica a modelos OpenAI (DeepSeek lo gobierna con `extra_body.thinking`,
+            # que es otro contrato). Sin knob no se toca nada: el A/B compara
+            # modelo contra modelo, no configuraciones distintas por accidente.
+            _es_openai = is_openai_model(_model)
+            if _es_openai and DAYGEN_EFFORT:
+                _kw["reasoning_effort"] = DAYGEN_EFFORT
+            _llm = (ChatOpenAIInstrumented if _es_openai else ChatDeepSeek)(**_kw)
             if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
                 return _llm.bind_tools(NUTRITION_TOOLS)
             # [L1-UNBIND-NUTRITION-TOOL] tool des-enlazada (la tabla viaja en el SystemMessage cacheado).
