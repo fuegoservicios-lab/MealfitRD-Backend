@@ -82,3 +82,36 @@ def test_frontend_synced():
     assert "Créditos Ilimitados" not in pricing, (
         "Pricing.jsx (landing) no debe vender 'Créditos Ilimitados'"
     )
+
+    # Los créditos que muestra el frontend son los MISMOS que factura el backend.
+    plans = (_fe / "config" / "plans.js").read_text(encoding="utf-8")
+    m = re.search(r"TIER_CREDITS\s*=\s*\{([^}]*)\}", plans)
+    assert m, "config/plans.js debe exportar TIER_CREDITS"
+    fe_credits = dict(re.findall(r"(\w+)\s*:\s*(\d+)", m.group(1)))
+    for tier_env, key in (("GRATIS", "gratis"), ("BASIC", "basic"),
+                          ("PLUS", "plus"), ("ULTRA", "ultra")):
+        assert int(fe_credits[key]) == _default_of(tier_env), (
+            f"TIER_CREDITS.{key} ({fe_credits[key]}) no coincide con "
+            f"MEALFIT_TIER_LIMIT_{tier_env} ({_default_of(tier_env)}): la página "
+            f"vendería créditos que el paywall no honra"
+        )
+
+
+def test_multipliers_are_derived_not_typed():
+    """[P2-LADDER-VS-PREDECESSOR · 2026-07-31] El salto de cada plan se compara
+    con el escalón ANTERIOR y se CALCULA desde `TIER_CREDITS`. Escrito a mano,
+    el día que cambie el ladder la página seguiría prometiendo el salto viejo
+    — el patrón "dos copias del mismo número" que este repo ya pagó caro."""
+    _fe = _BACKEND.parent / "frontend" / "src"
+    plans = (_fe / "config" / "plans.js").read_text(encoding="utf-8")
+    assert "export function creditsVsPredecessor" in plans
+    assert "TIER_CREDITS[tier] / TIER_CREDITS[prev]" in plans, (
+        "el múltiplo debe derivarse de TIER_CREDITS, no fijarse"
+    )
+    for name in ("pages/Upgrade.jsx", "components/home/Pricing.jsx"):
+        src = (_fe / name).read_text(encoding="utf-8")
+        typed = re.findall(r"\d+(?:[.,]\d+)?×\s*más créditos", src)
+        assert not typed, (
+            f"{name} tiene múltiplos escritos a mano ({typed}) — usar "
+            f"creditsVsPredecessor(tier)"
+        )
