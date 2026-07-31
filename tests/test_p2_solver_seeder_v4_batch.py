@@ -378,7 +378,10 @@ def test_res_keeps_its_word_boundary():
 def test_pantry_floor_knob_and_conditional_lock():
     assert "PANTRY_ROTATION_MIN_PROTEINS" in _AI
     assert "MEALFIT_PANTRY_ROTATION_MIN_PROTEINS" in _AI
-    assert "cycle_locked = bool(extracted_p) and len(extracted_p) >= _min_p" in _AI, \
+    assert "_pantry_sustains_rotation = bool(extracted_p) and len(extracted_p) >= _min_p" in _AI
+    # [P3-CYCLE-LOCK-ADDITIVE · 2026-07-31] el veredicto de la nevera se ACUMULA sobre el lock
+    # del grocery-cycle en vez de pisarlo (antes esta línea era `cycle_locked = ...` directo).
+    assert "cycle_locked = cycle_locked or _pantry_sustains_rotation" in _AI, \
         "el lock deja de ser incondicional (una nevera con 1 proteína daba 3 días iguales)"
     import ai_helpers as ai
     assert ai.PANTRY_ROTATION_MIN_PROTEINS == 2

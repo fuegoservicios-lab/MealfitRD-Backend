@@ -5453,13 +5453,19 @@ def _same_day_other_meals_for_swap(user_id, rejected_meal):
         import json as _json
         row = _exq("SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
                    (user_id,), fetch_one=True)
+        # [P3-SWAP-SAMEDAY-ARITY · 2026-07-31] (audit solver+seeder v6 · F25) Estos returns devolvian
+        # `[]` (un valor) donde el contrato son DOS listas: el caller hace
+        # `_same_day, _same_day_blobs = ...` y el unpack lanzaba ValueError. Hoy lo tapa el
+        # try/except del caller, que degrada en silencio a swap sin variedad same-day ni blobs para
+        # el gate determinista P1-SWAP-SAMEDAY-PROTEIN-GATE. Un contrato que solo se sostiene por el
+        # except de su llamador no es un contrato. tooltip-anchor: P3-SWAP-SAMEDAY-ARITY
         if not row:
-            return []
+            return [], []
         pd = row.get("plan_data")
         if isinstance(pd, str):
             pd = _json.loads(pd)
         if not isinstance(pd, dict):
-            return []
+            return [], []
         rn = _sa(str(rejected_meal).lower()).strip()
         for day in pd.get("days", []) or []:
             meals = day.get("meals", []) or []

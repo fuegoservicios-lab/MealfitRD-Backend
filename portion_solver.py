@@ -197,6 +197,16 @@ if SOLVER_MAX_SCALE_PROTEIN < SOLVER_MAX_SCALE:
     SOLVER_MAX_SCALE_PROTEIN = SOLVER_MAX_SCALE
 
 
+# [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] (audit solver+seeder v6 · F3) Estado del reporte del
+# fallo del LSQ. `_LSQ_ERR_SEEN` deduplica el WARNING por TIPO de excepción (el solver corre ~28
+# veces por plan; un crash sistemático inundaría el journal). `_LAST_LSQ_ERROR` deja el último
+# tipo+mensaje disponible para que el caller lo estampe junto a `_solver_greedy_fallback` y el
+# operador pueda distinguir "knob OFF" de "LSQ crasheó" sin abrir logs.
+# tooltip-anchor: P3-SOLVER-LSQ-ERROR-LOUD
+_LSQ_ERR_SEEN: set = set()
+_LAST_LSQ_ERROR = None
+
+
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
              reg: float, iters: int = None) -> list:
     """Mínimos cuadrados ACOTADOS con regularización hacia x=1, por descenso por coordenadas.
@@ -278,8 +288,21 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                     elif xs[j] <= min_scale * 1.001:
                         sat_lo += 1
                 return factors, "lsq", sat_hi, sat_lo
-        except Exception:
-            pass
+        except Exception as _lsq_e:
+            # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] (audit v6 · F3) Era `pass`. `method="greedy"`
+            # colapsa TRES causas distintas en un solo valor: knob apagado, sin filas de target, y
+            # LSQ crasheado. Un pico de crashes era indistinguible de un rollback intencional del
+            # operador, y el propio log del consumidor ya confesaba la ambigüedad ("LSQ lanzó
+            # excepción o está OFF"). NO se cambia el valor de `method`: el caller compara `== "greedy"`
+            # exacto y un rename apagaría en silencio el flag `_solver_greedy_fallback`.
+            # Dedup por TIPO: esto corre 1 vez por comida (~28/plan) y un crash sistemático
+            # inundaría el journal. tooltip-anchor: P3-SOLVER-LSQ-ERROR-LOUD
+            _et = type(_lsq_e).__name__
+            globals()["_LAST_LSQ_ERROR"] = f"{_et}: {str(_lsq_e)[:120]}"
+            if _et not in _LSQ_ERR_SEEN:
+                _LSQ_ERR_SEEN.add(_et)
+                _log.warning(f"⚠ [P3-SOLVER-LSQ-ERROR-LOUD] LSQ falló ({_et}: {str(_lsq_e)[:120]}) "
+                             f"— fallback al greedy por grupo. Se reporta una vez por tipo.")
     # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
     gf = {}
     for macro in _KCAL_PER_G:
@@ -345,9 +368,17 @@ def _feasibility_report(entries: list, tgt: dict, min_scale: float,
                 _a = float((e.get("macros") or {}).get(m) or 0.0)
                 if _a <= 0:
                     continue
-                _hi = hi_by_entry[j] if j < len(hi_by_entry) else 1.0
+                # [P3-FEASIBILITY-FROZEN-LINE · 2026-07-31] (audit v6 · F10) Una línea que el solver
+                # no puede mover aporta su valor TAL CUAL a las dos cotas: contarla a techo
+                # completo inflaba `_mx` y el veredicto "alcanzable" salía FALSO. Caso real:
+                # merienda con 8 g de grasa objetivo cuya única fuente es "Cdta de mantequilla de
+                # maní" (≈5 g, sin cantidad líder) — la cota decía 17.5 g y el solver no movía ni
+                # un gramo. Sin la clave (entries del path dict) se asume movible: preserva el
+                # comportamiento previo. tooltip-anchor: P3-FEASIBILITY-FROZEN-LINE
+                _mov = e.get("movable", True)
+                _hi = (hi_by_entry[j] if j < len(hi_by_entry) else 1.0) if _mov else 1.0
                 _mx += _a * _hi
-                _mn += _a * min_scale
+                _mn += _a * (min_scale if _mov else 1.0)
             # [P3-FEASIBILITY-NO-CARRIER · 2026-07-30] (audit solver+seeder v5) El guard era
             # `if _mx > 0 and t > _mx`, y ocultaba justo el caso MÁS grave: con CERO entries
             # aportando el macro, `_mx` queda en 0.0 ⇒ la rama 'high' no entra (por el guard) y
@@ -418,6 +449,16 @@ def solve_portion_macros(
 ) -> dict:
     """Re-escala porciones para clavar el target de macros del slot.
 
+    ⚠️ [P3-SOLVER-DICT-PATH-PARITY · 2026-07-31] (audit solver+seeder v6 · F4) Esta función NO tiene
+    tráfico de producción: cero call sites fuera de `tests/`. El camino vivo es `solve_meal_macros`
+    (invocado desde `graph_orchestrator`), que re-escribe strings en vez de un campo `quantity`.
+    Ambas comparten algoritmo pero NO comparten cuerpo, así que cada arreglo del solver hay que
+    pagarlo dos veces — y el modo de fallo real no es que ésta se rompa, sino que alguien la cablee
+    meses después "porque es el mismo algoritmo" y herede un bug ya cerrado en su hermana.
+    Mientras siga duplicada, `test_p3_solver_dict_path_parity.py` exige que las dos den el MISMO
+    veredicto sobre entradas equivalentes: un fix que aterrice en una sola falla CI.
+    tooltip-anchor: P3-SOLVER-DICT-PATH-PARITY
+
     Args:
         ingredients: lista de dicts {name, quantity, unit} (o strings parseables).
         target: macros objetivo del slot {kcal, protein, carbs, fats} (acepta aliases).
@@ -469,7 +510,15 @@ def solve_portion_macros(
         current = sum(e["macros"][macro] for e in entries
                       if e["macros"] and e["group"] == macro)
         target_v = tgt[macro]
-        gfactor = max(min_scale, min(max_scale, target_v / current)) if (current > 0 and target_v > 0) else 1.0
+        # [P3-SOLVER-REPORT-PROTEIN-CAP · 2026-07-31] (audit v6 · F2) El techo es POR MACRO, igual
+        # que en el greedy real (`_compute_scale_factors`): la proteína lleva `max_scale_protein`
+        # (5.0) y el resto `max_scale` (3.5). Clamparlas todas con `max_scale` hacía que el report
+        # dijera 3.5 mientras el greedy aplicaba hasta 5.0 — o sea, la referencia mentía justo en la
+        # fila que el repo subió a propósito por sub-entrega de proteína, y quien auditara la comida
+        # por telemetría vería 400 g de pollo "inconsistentes" con su propio report.
+        # tooltip-anchor: P3-SOLVER-REPORT-PROTEIN-CAP
+        _hi_rep = max_scale_protein if macro == "protein" else max_scale
+        gfactor = max(min_scale, min(_hi_rep, target_v / current)) if (current > 0 and target_v > 0) else 1.0
         report[macro] = {"current": round(current, 2), "target": round(target_v, 2),
                          "factor": round(gfactor, 4), "applied": abs(gfactor - 1.0) > 1e-9}
 
@@ -522,6 +571,10 @@ def solve_portion_macros(
         # factores LSQ realmente aplicados (esos están en factors_applied/method/saturated_*). Etiquetado.
         "report_basis": "greedy-reference",
         "method": method,
+        # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] `method` sigue siendo "greedy" (el caller lo
+        # compara exacto); el TIPO del fallo viaja aparte para que el operador distinga
+        # "knob OFF" de "LSQ crashó". None cuando el greedy corrió por otra razón.
+        "lsq_error": (_LAST_LSQ_ERROR if method == "greedy" else None),
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
         "converged": converged,
@@ -579,7 +632,18 @@ def solve_meal_macros(
             contrib = {m: macros[m] * _KCAL_PER_G[m] for m in _KCAL_PER_G}
             if any(contrib.values()):
                 group = max(contrib, key=contrib.get)
-        entries.append({"s": s, "macros": macros, "group": group})
+        # [P3-FEASIBILITY-FROZEN-LINE · 2026-07-31] (audit v6 · F10) ¿El solver puede MOVER esta
+        # línea? `rescale_ingredient_string` devuelve el string INTACTO cuando no hay cantidad
+        # líder ("Cdta de mantequilla de maní"): el mismo hecho que cerró
+        # P2-SOLVER-ACHIEVED-HONEST. Factor 2.0 y no 1.0+eps a propósito: el reescalador
+        # retorna temprano con factores ≈ 1 y el formateo podría colapsar al mismo texto.
+        # tooltip-anchor: P3-FEASIBILITY-FROZEN-LINE
+        _movable = True
+        try:
+            _movable = rescale_ingredient_string(s, 2.0) != s
+        except Exception:
+            pass
+        entries.append({"s": s, "macros": macros, "group": group, "movable": _movable})
 
     # [M2-SOLVER-NNLS] Factor POR-INGREDIENTE (LSQ multi-macro; greedy fallback). Reemplaza el
     # factor único por-grupo. El `report` greedy se conserva como telemetría por-macro.
@@ -590,7 +654,15 @@ def solve_meal_macros(
         current = sum(e["macros"][macro] for e in entries
                       if e["macros"] and e["group"] == macro)
         target_v = tgt[macro]
-        gfactor = max(min_scale, min(max_scale, target_v / current)) if (current > 0 and target_v > 0) else 1.0
+        # [P3-SOLVER-REPORT-PROTEIN-CAP · 2026-07-31] (audit v6 · F2) El techo es POR MACRO, igual
+        # que en el greedy real (`_compute_scale_factors`): la proteína lleva `max_scale_protein`
+        # (5.0) y el resto `max_scale` (3.5). Clamparlas todas con `max_scale` hacía que el report
+        # dijera 3.5 mientras el greedy aplicaba hasta 5.0 — o sea, la referencia mentía justo en la
+        # fila que el repo subió a propósito por sub-entrega de proteína, y quien auditara la comida
+        # por telemetría vería 400 g de pollo "inconsistentes" con su propio report.
+        # tooltip-anchor: P3-SOLVER-REPORT-PROTEIN-CAP
+        _hi_rep = max_scale_protein if macro == "protein" else max_scale
+        gfactor = max(min_scale, min(_hi_rep, target_v / current)) if (current > 0 and target_v > 0) else 1.0
         report[macro] = {"current": round(current, 2), "target": round(target_v, 2),
                          "factor": round(gfactor, 4), "applied": abs(gfactor - 1.0) > 1e-9}
 
@@ -648,6 +720,10 @@ def solve_meal_macros(
         # (esos en factors_applied/method/saturated_*). Etiquetado para no confundir al lector.
         "report_basis": "greedy-reference",
         "method": method,
+        # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] `method` sigue siendo "greedy" (el caller lo
+        # compara exacto); el TIPO del fallo viaja aparte para que el operador distinga
+        # "knob OFF" de "LSQ crashó". None cuando el greedy corrió por otra razón.
+        "lsq_error": (_LAST_LSQ_ERROR if method == "greedy" else None),
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
         "converged": converged,
@@ -782,18 +858,40 @@ def _exempt_matcher(exempt_tokens: tuple):
     _toks = [t for t in _key if t]
     if REFINE_PROTECT_MICRO_CARRIERS:
         _toks = list(_toks) + [t for t in _MICRO_CARRIER_TOKENS if t not in _toks]
+
+    # [P3-EXEMPT-NEGATED-TOKEN · 2026-07-31] (audit solver+seeder v6 · F8) La exención se decidía por
+    # MENCIÓN del token, sin mirar si un descriptor lo NIEGA: "120 g de yogurt griego natural sin
+    # azúcar" quedaba exenta por `azucar`, o sea que la frase que dice que NO lleva el condimento
+    # activaba la protección pensada para el condimento. El refinador perdía ahí su palanca proteica
+    # más barata y el día podía entregarse bajo banda.
+    # Los negadores se evalúan POR TOKEN MATCHEADO, no globalmente: "aceite de oliva y sal — sin sal
+    # añadida" debe seguir exenta por `aceite`. Vocabulario reusado de `condition_rules` (SSOT de los
+    # guards clínicos) en vez de una lista nueva. tooltip-anchor: P3-EXEMPT-NEGATED-TOKEN
+    try:
+        from condition_rules import (_DM2_SUGAR_NEGATIVES as _NEG_SUGAR,
+                                     _HTA_SODIUM_NEGATIVES as _NEG_SALT)
+    except Exception:
+        _NEG_SUGAR = _NEG_SALT = ()
+    _NEG_BY_TOKEN = {"azucar": _NEG_SUGAR, "miel": _NEG_SUGAR,
+                     "sal": _NEG_SALT, "sodio": _NEG_SALT}
+
+    def _token_negado(_il: str, _tok: str) -> bool:
+        _negs = _NEG_BY_TOKEN.get(_tok)
+        return bool(_negs) and any(_n in _il for _n in _negs)
+
     if not REFINE_EXEMPT_WORD_BOUNDARY:
         def _fn(il, _t=tuple(_toks)):
-            return any(t and t in il for t in _t)
+            return any(t and t in il and not _token_negado(il, t) for t in _t)
     else:
         if not _toks:
             def _fn(il):
                 return False
         else:
-            _rx = _re_ps.compile(r"\b(?:" + "|".join(_re_ps.escape(t) for t in _toks) + r")\b")
+            _rx = _re_ps.compile(r"\b(" + "|".join(_re_ps.escape(t) for t in _toks) + r")\b")
 
             def _fn(il, _r=_rx):
-                return bool(_r.search(il))
+                # Un solo token NO negado basta para eximir; se recorren todos los matches.
+                return any(not _token_negado(il, m.group(1)) for m in _r.finditer(il))
     _EXEMPT_RE_CACHE[_key] = _fn
     return _fn
 
@@ -1016,7 +1114,15 @@ def refine_day_portions_integer(
                 # paralelismo por alimento. Repro del caso permutado: display queda
                 # `pollo 240 / arroz 75 / aceite 15` y raw `arroz 300 / aceite 5 / pollo 180`.
                 _parallel = len(raw) == len(_disp_orig)
-                if _parallel and REFINE_RAW_BY_FOOD:
+                # [P3-REFINE-PARALLEL-UNGATED · 2026-07-31] (audit v6 · F6) La verificación por
+                # ALIMENTO colgaba de `REFINE_RAW_BY_FOOD`, el knob de ROLLBACK del mapeo by-food.
+                # Apagarlo (lo que un operador hace ante un mapeo problemático) no volvía al estado
+                # "seguro": desactivaba también el detector de no-paralelismo, así que con largos
+                # IGUALES —el 93,5% de las comidas, de las que solo el 48,1% son paralelas de
+                # verdad— reaparecía el índice ciego. Un rollback que empeora lo que dice arreglar.
+                # El verificador solo debe colgar de `RAW_PAIR_BY_FOOD`, como en las hermanas.
+                # tooltip-anchor: P3-REFINE-PARALLEL-UNGATED
+                if _parallel:
                     try:
                         from graph_orchestrator import (RAW_PAIR_BY_FOOD as _RPBF,
                                                         _raw_display_parallel_by_food as _par_ok)

@@ -297,6 +297,13 @@ _LIGHT_ANCHOR_TOKENS = ("queso", "yogur", "ricotta", "almendra", "nuez", "nueces
                         "mani", "mantequilla")
 
 
+# [P3-CYCLE-BASE-FLOOR · 2026-07-31] (audit v6 · C2) Mínimo de bases DISTINTAS que la intersección
+# del grocery-cycle debe sostener para que valga la pena imponer el lock. Bajo esto, el ahorro no
+# compensa entregar el mismo alimento todos los días del ciclo. Espejo del floor de la nevera
+# (`PANTRY_ROTATION_MIN_PROTEINS`, P2-PANTRY-ROTATION-FLOOR).
+_CYCLE_BASE_MIN_ITEMS = _env_int("MEALFIT_CYCLE_BASE_MIN_ITEMS", 2, lambda v: 1 <= v <= 6)
+
+
 def _intersect_cycle_base(persisted, allowed) -> "list | None":
     """[P3-GROCERY-LOCK-REFILTER · 2026-07-30] (audit solver+seeder v5) Intersecta las bases que
     el grocery-cycle persistió al INICIO del ciclo con el pool permitido de HOY.
@@ -312,6 +319,16 @@ def _intersect_cycle_base(persisted, allowed) -> "list | None":
         if not _ok:
             return None
         _out = [p for p in persisted if strip_accents(str(p).lower()).strip() in _ok]
+        # [P3-CYCLE-BASE-FLOOR · 2026-07-31] (audit solver+seeder v6 · C2) El fail-open solo
+        # disparaba con intersección VACÍA. Con UN superviviente la lista de 1 gana el `or` del
+        # caller, el padding cíclico la replica a los 3 días y el prompt del lock PROHÍBE bases
+        # nuevas: los días restantes del ciclo salen todos con la misma proteína. El bloque de
+        # nevera, 140 líneas más abajo, ya había aprendido esta lección (`_floor_pool`,
+        # P2-PANTRY-ROTATION-FLOOR) — el floor no llegó a esta superficie hermana, que es la
+        # asimetría dominante de este audit. Bajo el mínimo se degrada igual que con vacío.
+        # tooltip-anchor: P3-CYCLE-BASE-FLOOR
+        if len(_out) < _CYCLE_BASE_MIN_ITEMS:
+            return None
         return _out or None
     except Exception:
         return None
@@ -667,9 +684,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # podían emerger porque la base jamás ganaba un cupo. Boost multiplicativo del peso (default 2.0×) —
     # sigue siendo sorteo ponderado (no forzado); el efecto se valida con la serie del KPI de creatividad.
     # Rollback sin redeploy: MEALFIT_TRANSFORM_BASE_BOOST=1.0. tooltip-anchor: P2-TRANSFORM-BASE-BOOST
+    # [P3-SEEDER-KNOBS-REGISTRY · 2026-07-31] (audit v6 · F30) Leía `os.environ` en crudo, así que
+    # el knob NO se auto-registraba en `_KNOBS_REGISTRY` y era invisible en `/health/version`: durante
+    # un incidente de sorteo sesgado el operador consulta el snapshot, no lo ve, y concluye que no
+    # existe tal palanca o que su override no aplica. `_env_float` lee en CADA llamada igual que
+    # antes (no cachea), así que el rollback sin redeploy se conserva.
+    # tooltip-anchor: P3-SEEDER-KNOBS-REGISTRY
     try:
-        import os as _os_tb
-        _tb_boost = max(1.0, min(5.0, float(_os_tb.environ.get("MEALFIT_TRANSFORM_BASE_BOOST", "2.0"))))
+        _tb_boost = min(5.0, max(1.0, _env_float(
+            "MEALFIT_TRANSFORM_BASE_BOOST", 2.0, lambda v: 1.0 <= v <= 5.0)))
     except Exception:
         _tb_boost = 2.0
     if _tb_boost > 1.0 and available_carbs:
@@ -695,9 +718,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # ítems ni toca filtros clínicos/alergias (esos ya corrieron aguas arriba). Ítems sin precio
     # resoluble → peso intacto. Rollback sin redeploy: MEALFIT_BUDGET_POOL_WEIGHT=1.0.
     # tooltip-anchor: P1-BUDGET-TIER-LEVERS (pool weighting)
+    # [P3-SEEDER-KNOBS-REGISTRY · 2026-07-31] ver la nota del gemelo MEALFIT_TRANSFORM_BASE_BOOST.
     try:
-        import os as _os_bw
-        _bud_boost = max(1.0, min(5.0, float(_os_bw.environ.get("MEALFIT_BUDGET_POOL_WEIGHT", "2.0"))))
+        _bud_boost = min(5.0, max(1.0, _env_float(
+            "MEALFIT_BUDGET_POOL_WEIGHT", 2.0, lambda v: 1.0 <= v <= 5.0)))
     except Exception:
         _bud_boost = 2.0
     if _bud_boost > 1.0:
@@ -1046,6 +1070,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     cycle_locked = False
     new_cycle_started = False
+    # [P3-CYCLE-PERSIST-AFTER-POOLS · 2026-07-31] (audit v6 · F20) La base del ciclo se
+    # persistía DENTRO del bloque del lock, antes de que la nevera, el dedupe y el padding
+    # reescribieran esos mismos pools ⇒ el ciclo guardaba bases que el plan entregado no usa,
+    # y al regenerar el lock las re-imponía con “REGLA DE AHORRO EXTREMA”: proteínas que no
+    # están ni en la nevera del usuario ni en su lista de compras del ciclo. Aquí solo se toma
+    # la DECISIÓN; la ESCRITURA se hace abajo con los pools ya definitivos.
+    # tooltip-anchor: P3-CYCLE-PERSIST-AFTER-POOLS
+    _cycle_persist_pending = None
     
     # Excepción: la regla no aplica si grocery_days es 7 y no queremos complicar o si es guest
     if grocery_days > 7 and user_id and user_id != "guest":
@@ -1135,12 +1167,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                         "base_veggies": unique_veggies,
                     }
 
-                    def _grocery_cycle_mutator(_hp):
-                        _hp["grocery_cycle"] = new_grocery_cycle
-                        return None
-
-                    update_user_health_profile_atomic(user_id, _grocery_cycle_mutator)
-                    logger.info("💾 [GROCERY CYCLE] Guardados nuevos ingredientes base del ciclo.")
+                    # [P3-CYCLE-PERSIST-AFTER-POOLS · 2026-07-31] Se difiere la escritura: `now` y
+                    # `days_elapsed` son locales de este try, así que la decisión (start_date +
+                    # duración) se captura AQUÍ; las bases se toman abajo, ya definitivas.
+                    _cycle_persist_pending = {"start_date": start_date_to_save,
+                                              "duration_days": grocery_days}
+                    del new_grocery_cycle
         except Exception as e:
             logger.error(f"Error procesando Grocery Cycle Lock: {e}")
     # ==========================================================
@@ -1254,7 +1286,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         if extracted_f:
             unique_fruits = _floor_pool(extracted_f, unique_fruits, 2)
         # El lock solo si la nevera sostiene la rotación por sí sola.
-        cycle_locked = bool(extracted_p) and len(extracted_p) >= _min_p
+        # [P3-CYCLE-LOCK-ADDITIVE · 2026-07-31] (audit v6 · F19) Era una asignación directa que
+        # PISABA el `cycle_locked = True` del grocery-cycle: dos guardas sobre el mismo campo,
+        # la segunda siempre gana. Con el knob del ciclo encendido y una nevera sin proteínas
+        # tras `/inventory/consume`, el plan usaba la base intersectada del ciclo pero SIN la
+        # regla de ahorro, o sea el coste del lock sin su beneficio. Acumulativo.
+        # tooltip-anchor: P3-CYCLE-LOCK-ADDITIVE
+        _pantry_sustains_rotation = bool(extracted_p) and len(extracted_p) >= _min_p
+        cycle_locked = cycle_locked or _pantry_sustains_rotation
         
     # ======= FORCED INGREDIENT INJECTION (FROM RAG/HISTORY) =======
     # [P3-FORCED-ALLOWED-CLEANUP · 2026-07-30] (audit solver+seeder v5) BLOQUE ELIMINADO.
@@ -1300,6 +1339,29 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         unique_fruits = _dedup_list(unique_fruits)
 
     # Mezclar ANTES de rellenar o truncar, para asegurar rotación de todos los items en la lista de ingredientes base
+    # [P3-CYCLE-PERSIST-AFTER-POOLS · 2026-07-31] (audit v6 · F20) Escritura del ciclo con los pools
+    # YA definitivos (post-nevera, post-dedupe) y ANTES del shuffle/padding, que introduce duplicados
+    # cíclicos que no deben persistirse como “base”. Así lo que el ciclo guarda es lo que el plan
+    # realmente usa. tooltip-anchor: P3-CYCLE-PERSIST-AFTER-POOLS
+    if _cycle_persist_pending and user_id:
+        try:
+            _new_cycle = dict(_cycle_persist_pending)
+            _new_cycle.update({"base_proteins": list(unique_proteins),
+                               "base_carbs": list(unique_carbs),
+                               "base_veggies": list(unique_veggies)})
+
+            def _grocery_cycle_mutator(_hp):
+                _hp["grocery_cycle"] = _new_cycle
+                return None
+
+            update_user_health_profile_atomic(user_id, _grocery_cycle_mutator)
+            logger.info(f"💾 [GROCERY CYCLE] Base del ciclo guardada con los pools definitivos: "
+                        f"{len(_new_cycle['base_proteins'])}P/{len(_new_cycle['base_carbs'])}C/"
+                        f"{len(_new_cycle['base_veggies'])}V.")
+        except Exception as _cp_e:
+            logger.error(f"[P3-CYCLE-PERSIST-AFTER-POOLS] no se pudo guardar el ciclo: "
+                         f"{type(_cp_e).__name__}: {_cp_e}")
+
     random.shuffle(unique_proteins)
     random.shuffle(unique_carbs)
     random.shuffle(unique_veggies)
@@ -1358,12 +1420,19 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # [P1-FRUIT-SEEDER-GATE-CONTRACT] 4 y no 3: el reparto da 2 frutas distintas por día
         # rotando sobre 4, así la semana usa 4 frutas en vez de las 6 que costaría 2×3 sin reutilizar.
         while len(unique_fruits) < 4:
-            existing = {f.lower() for f in unique_fruits}
+            # [P3-FRUIT-PAD-KEY-SYMMETRY · 2026-07-31] (audit v6 · F21) Era `{f.lower() ...}`: el
+            # chequeo de PERMITIDAS normalizaba singular/plural con `_fruit_key` y el de DUPLICADAS
+            # no, así que con 'Fresa' ya en la lista el pad añadía 'Fresas' y un día recibía
+            # (Fresa, Fresas) como sus "dos frutas distintas". Dos comparaciones sobre el mismo
+            # concepto con criterios distintos. El bug está en el chequeo, no en el dato: renombrar
+            # 'Fresas' en `_DEFAULT_DR_FRUITS` cerraría el caso de hoy y dejaría la clase abierta.
+            # tooltip-anchor: P3-FRUIT-PAD-KEY-SYMMETRY
+            existing = {_fruit_key(f) for f in unique_fruits}
             # Prioridad 1: añadir una fruta DR default que NO esté ya presente Y que el usuario
             # pueda comer. Garantiza variedad cross-day (cada día recibe fruta distinta).
             _added = False
             for _df in _DEFAULT_DR_FRUITS:
-                if _df.lower() in existing:
+                if _fruit_key(_df) in existing:
                     continue
                 if _allowed_fruit_keys and _fruit_key(_df) not in _allowed_fruit_keys:
                     continue   # alergia / dislike / dieta la excluyó del pool
@@ -1612,8 +1681,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             # SOLO desde `filtered_veggies`, donde no existe ningún lácteo → 3 de los 8 tokens
             # ('queso', 'yogur', 'ricotta') no podían matchear jamás y el ancla acababa siendo
             # 100% frutos secos, reforzando el "maní en 4 de 12" que el knob venía a curar.
-            _light_pool = _build_light_protein_pool(
+            # [P3-LIGHT-ANCHOR-NOT-BLOCKED · 2026-07-31] (audit v6 · C1) El ancla no puede nombrar
+            # lo que el MISMO prompt prohibe tres bloques antes: `blocked_text` lista los
+            # sobreusados y el ancla los podía sortear igual ("EVITA... Maní" + "día B → Maní").
+            # Igualdad EXACTA, no subcadena: 'Maní' y 'Mantequilla de maní' son ítems distintos del
+            # catálogo y bloquear uno no debe borrar el otro; ambos lados salen de las mismas listas.
+            # tooltip-anchor: P3-LIGHT-ANCHOR-NOT-BLOCKED
+            _over_light = {str(x).lower() for x in (list(used_proteins) + list(used_veggies))}
+            _light_pool = [x for x in _build_light_protein_pool(
                 filtered_veggies, filtered_proteins, bariatric=_is_bariatric)
+                if str(x).lower() not in _over_light]
             if len(_light_pool) >= 2:
                 # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F18) era `_light_pool[:4]`,
                 # un slice posicional que cortaba antes del primer lácteo. Ver el helper.
@@ -1641,7 +1718,18 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # documentó: no es fallo del modelo, la asignación no da para otra cosa.
     # Frutas (P1-FRUIT-SEEDER-GATE-CONTRACT) y carbos (P1-CARB-SEEDER-PAIRS) ya usaban el helper
     # con dedupe; los vegetales eran la última categoría fuera del contrato.
-    _veg_slots = _rotate_pairs(chosen_veggies[:6])
+    # [P3-VEGGIE-SLOTS-CONSUME-SIX · 2026-07-31] (audit v6 · F33) `_rotate_pairs` produce
+    # (v[i], v[i+1]) rotando, o sea consume 4 de los 6 vegetales sorteados: 2 picks quedaban
+    # INERTES —persistidos en `base_veggies` y eximidos del blocked_text, pero jamás ofrecidos— y
+    # el log decía 6. Con 6 únicos se reparten en 3 pares DISJUNTOS (los 6 se usan y ningún
+    # vegetal se repite entre días, que es la intención documentada en `num_veggies_to_pick`);
+    # con menos de 6 se cae al helper compartido, mismo contrato que fruta y carbo.
+    # tooltip-anchor: P3-VEGGIE-SLOTS-CONSUME-SIX
+    _vg6 = list(dict.fromkeys(chosen_veggies[:6]))
+    if len(_vg6) >= 6:
+        _veg_slots = [(_vg6[0], _vg6[1]), (_vg6[2], _vg6[3]), (_vg6[4], _vg6[5])]
+    else:
+        _veg_slots = _rotate_pairs(chosen_veggies[:6])
     if _veg_slots:
         veggie_params = {}
         for _i in range(3):

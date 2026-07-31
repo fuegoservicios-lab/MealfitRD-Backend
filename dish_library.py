@@ -160,7 +160,36 @@ def build_dish_library_context(skeleton_day: dict, day_num: int) -> str:
 _BROAD_POOL_ASCII = "pollo pescado res cerdo pavo atun camarones salmon huevo queso legumbre"
 
 
-def build_swap_inspiration_context(meal_type: str, seed: int = 1, avoid_names=None) -> str:
+def _diet_safe_pool_ascii(diet_type=None, allergies=None) -> str:
+    """[P3-SWAP-INSPIRATION-DIET · 2026-07-31] (audit solver+seeder v6 · F26) Filtra el pool ancho de
+    inspiración con el MISMO backstop determinista que juzga el plato resultante.
+
+    `_BROAD_POOL_ASCII` es una constante con pollo/pescado/res/cerdo/…: se ofrecía igual a un vegano
+    o a un alérgico, así que el LLM adaptaba una plantilla de carne, `clinical_backstop_for_meal` la
+    rechazaba y el swap gastaba un reintento. Si el sesgo persistía los 3 intentos, el usuario recibía
+    "no se pudo cambiar el plato" — un fallo de producto inducido por una señal que el propio sistema
+    fabricó.
+
+    Import perezoso a propósito: `dish_library` está por debajo de `graph_orchestrator` y no puede
+    importarlo a nivel de módulo. Fail-open al pool ancho si el escáner no está disponible: quedarse
+    sin inspiración es peor que una inspiración que el backstop ya sabe rechazar.
+    tooltip-anchor: P3-SWAP-INSPIRATION-DIET"""
+    _toks = _BROAD_POOL_ASCII.split()
+    if not diet_type and not allergies:
+        return _BROAD_POOL_ASCII
+    try:
+        from graph_orchestrator import clinical_backstop_for_meal as _cb
+        _safe = [t for t in _toks
+                 if not _cb({"name": t, "ingredients": [t]},
+                            allergies=list(allergies or []), diet_type=diet_type)]
+        return " ".join(_safe) if _safe else _BROAD_POOL_ASCII
+    except Exception as _e:
+        logger.debug(f"[P3-SWAP-INSPIRATION-DIET] filtro no-op: {type(_e).__name__}: {_e}")
+        return _BROAD_POOL_ASCII
+
+
+def build_swap_inspiration_context(meal_type: str, seed: int = 1, avoid_names=None,
+                                   *, diet_type=None, allergies=None) -> str:
     """[P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) Inspiración compacta de la biblioteca para las
     superficies de UPDATE (swap / chat-modify) — antes solo el day-gen de form-gen la recibía,
     así que un plato actualizado perdía la creatividad por recombinación de las 87 plantillas.
@@ -179,7 +208,8 @@ def build_swap_inspiration_context(meal_type: str, seed: int = 1, avoid_names=No
         if slot not in _SLOT_LABELS:
             return ""
         avoid = tuple(strip_accents(str(n).lower())[:30] for n in (avoid_names or [])[:10] if str(n).strip())
-        picks = sample_templates_for_slot(slot, _BROAD_POOL_ASCII, int(DISH_LIBRARY_PER_SLOT),
+        picks = sample_templates_for_slot(slot, _diet_safe_pool_ascii(diet_type, allergies),
+                                          int(DISH_LIBRARY_PER_SLOT),
                                           int(seed or 1), avoid_tokens=avoid)
         if not picks:
             return ""

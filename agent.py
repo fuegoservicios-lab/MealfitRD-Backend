@@ -738,6 +738,11 @@ def swap_meal(form_data: dict):
             form_data.get("meal_type") or "",
             seed=len(str(form_data.get("rejected_meal") or "")) + len(_cross_day_names) + 1,
             avoid_names=list(_cross_day_names) + [form_data.get("rejected_meal") or ""],
+            # [P3-SWAP-INSPIRATION-DIET · 2026-07-31] (audit v6 · F26) La inspiración se ofrecía sin
+            # mirar dieta ni alergias: proponía "Res guisada" a un vegetariano, el backstop lo
+            # rechazaba y el swap quemaba reintentos. Los datos ya estaban en scope.
+            diet_type=form_data.get("dietType") or form_data.get("diet"),
+            allergies=form_data.get("allergies") or [],
         )
         if _insp_swap:
             context_extras += _insp_swap

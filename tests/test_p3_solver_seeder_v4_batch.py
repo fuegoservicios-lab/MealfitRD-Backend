@@ -86,9 +86,27 @@ def test_exempt_matcher_is_cached():
 def test_micro_carrier_tokens_cover_the_seed_catalog():
     """Paridad con lo que el closer siembra/escala: si se añade una semilla nueva al catálogo y no
     entra aquí, el refinador podrá recortarla a la mitad y deshacer el cierre."""
+    # [P3-MICRO-CARRIER-LIVE-ANCHOR · 2026-07-31] (audit v6 · F7) Antes iteraba una lista LITERAL
+    # de 6 tokens, o sea se comprobaba a sí misma: añadir "50 g de lentejas" al catálogo de semillas
+    # no rompía nada y el refinador podía recortarla a la mitad, deshaciendo el cierre del micro sin
+    # que ningún test se quejara. Y el comentario de producción (portion_solver.py) prometia
+    # justamente este anclaje. Ahora se deriva del catálogo VIVO y con el MISMO operador que usa
+    # producción (word-boundary sobre el texto sin acentos): con `in` a secas el test certificaría
+    # un match que el refinador no hace ('lenteja' vs '50 g de lentejas').
+    import re
     import portion_solver as ps
-    for t in ("linaza", "girasol", "mani", "zanahoria", "auyama", "espinaca"):
-        assert t in ps._MICRO_CARRIER_TOKENS, t
+    import graph_orchestrator as go
+    from constants import strip_accents as _sa
+
+    _rx = re.compile(r"\b(?:" + "|".join(re.escape(x) for x in ps._MICRO_CARRIER_TOKENS) + r")")
+    _fuentes = []
+    for _v in (getattr(go, "_MICRO_SEED_SOURCES", {}) or {}).values():
+        _fuentes.extend([_v] if isinstance(_v, str) else list(_v or []))
+    assert _fuentes, "sanity: el catálogo de semillas del closer no puede estar vacío"
+    _huerfanos = [f for f in _fuentes if not _rx.search(_sa(str(f).lower()))]
+    assert not _huerfanos, (
+        f"semillas del micro-closer que el refinador NO protege como portadoras: {_huerfanos[:5]}. "
+        f"El refinador puede recortarlas y deshacer el cierre del micro.")
 
 
 # ═══════════════ P3-REFINE-OBSERVABILITY ═══════════════

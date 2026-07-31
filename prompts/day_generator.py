@@ -439,15 +439,48 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
         _slots = allocate_macros_per_slot(daily_targets, len(_mt)) or {}
         if not _slots:
             return ""
+        # [P3-SLOT-TARGETS-BY-NAME · 2026-07-31] (audit solver+seeder v6 · F24) Antes esto pareaba
+        # `_slots.items()` con `_mt[_i]` por ÍNDICE y descartaba `_k`, que es justo la clave que sabe
+        # de qué slot es la cuota. Si el esqueleto llega con los meal_types en orden no-canónico
+        # (Desayuno→Merienda→Almuerzo→Cena, p.ej. con el decisor clínico de nº de comidas caído), el
+        # prompt le dice al LLM "Merienda ≈ 35% del día · Almuerzo ≈ 15%" y el day-gen compone una
+        # merienda de plato fuerte y un almuerzo raquítico.
+        # Se parea por NOMBRE con el resolvedor que ya existe. `canonical_slot_key` devuelve
+        # 'merienda' mientras el asignador produce 'merienda_am'/'merienda_pm' cuando hay 5+ comidas:
+        # esa familia se resuelve por prefijo y EN ORDEN de aparición, consumiendo cada clave una
+        # sola vez. Lo que no resuelve cae al índice, que es el comportamiento previo (fail-open: sin
+        # cuota es peor que con una cuota aproximada). tooltip-anchor: P3-SLOT-TARGETS-BY-NAME
+        try:
+            from constants import canonical_slot_key as _csk
+        except Exception:
+            _csk = lambda _x: None  # noqa: E731
+
+        _libres = list(_slots.keys())
+
+        def _slot_para(_meal_type, _idx):
+            _canon = _csk(_meal_type)
+            if _canon:
+                if _canon in _libres:
+                    _libres.remove(_canon)
+                    return _canon
+                for _cand in _libres:
+                    if _cand.startswith(_canon):      # merienda → merienda_am, luego merienda_pm
+                        _libres.remove(_cand)
+                        return _cand
+            _todas = list(_slots.keys())
+            return _todas[_idx] if _idx < len(_todas) else None
+
         _rows, _needs_fat = [], []
-        for _i, (_k, _v) in enumerate(_slots.items()):
-            if _i >= len(_mt) or not isinstance(_v, dict):
-                break
-            _rows.append(f"    · {_mt[_i]} ≈ {round(_v.get('kcal') or 0)} kcal · "
+        for _i, _mt_name in enumerate(_mt):
+            _k = _slot_para(_mt_name, _i)
+            _v = _slots.get(_k) if _k else None
+            if not isinstance(_v, dict):
+                continue
+            _rows.append(f"    · {_mt_name} ≈ {round(_v.get('kcal') or 0)} kcal · "
                          f"{round(_v.get('protein') or 0)} g P · {round(_v.get('carbs') or 0)} g C · "
                          f"{round(_v.get('fats') or 0)} g G")
             if float(_v.get("fats") or 0) >= 5.0:
-                _needs_fat.append(_mt[_i])
+                _needs_fat.append(_mt_name)
         if not _rows:
             return ""
         _fat_rule = ""

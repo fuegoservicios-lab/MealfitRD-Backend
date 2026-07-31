@@ -277,11 +277,30 @@ def test_28_el_lock_reintersecta_con_los_filtros_actuales():
 
 def test_28_interseccion_conserva_lo_permitido():
     import ai_helpers as ah
-    assert ah._intersect_cycle_base(["Pollo", "Salmón"], ["Pollo", "Res"]) == ["Pollo"]
+    # La intersección conserva SOLO lo que el usuario puede comer hoy.
+    assert ah._intersect_cycle_base(["Pollo", "Salmón", "Res"], ["Pollo", "Res"]) == ["Pollo", "Res"]
     # sin interseccion utilizable → se conserva el sorteo ya computado (fail-open, nunca vacío)
     assert ah._intersect_cycle_base(["Salmón"], ["Pollo", "Res"]) is None
     assert ah._intersect_cycle_base([], ["Pollo"]) is None
     assert ah._intersect_cycle_base(None, ["Pollo"]) is None
+
+
+def test_28_interseccion_de_una_sola_base_degrada(monkeypatch):
+    """[P3-CYCLE-BASE-FLOOR · 2026-07-31] (audit v6 · C2) Antes esto devolvía `['Pollo']` y el test
+    lo fijaba como correcto.
+
+    Con UN solo superviviente la lista de 1 gana el `or` del caller, el padding cíclico la replica a
+    los 3 días y el prompt del lock PROHÍBE bases nuevas: el resto del ciclo sale con la misma
+    proteína. El bloque de nevera ya tenía un piso (`_floor_pool`) para exactamente esto; no había
+    llegado a esta superficie hermana. Bajo el mínimo se degrada igual que con intersección vacía.
+    """
+    import ai_helpers as ah
+    assert ah._intersect_cycle_base(["Pollo", "Salmón"], ["Pollo", "Res"]) is None, (
+        "una sola base no sostiene la rotación: debe degradar al sorteo en vez de imponerla"
+    )
+    # el mínimo es un knob: con 1 se recupera el comportamiento previo sin redeploy
+    monkeypatch.setattr(ah, "_CYCLE_BASE_MIN_ITEMS", 1)
+    assert ah._intersect_cycle_base(["Pollo", "Salmón"], ["Pollo", "Res"]) == ["Pollo"]
 
 
 # ═════════════ 29 · P3-MICRO-SEED-MARKER-LIST ═════════════

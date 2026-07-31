@@ -138,13 +138,36 @@ def test_solver_leaves_unresolved_untouched(db):
 
 def test_solver_clamps_extreme_factor(db):
     from portion_solver import solve_portion_macros
-    # Target absurdo (500g P de 22.5g) → factor clamp a max_scale.
+    # Target absurdo (500g P de 22.5g) → factor clamp al techo de la fila.
+    # [P3-SOLVER-REPORT-PROTEIN-CAP · 2026-07-31] (audit v6 · F2) Antes esto pasaba SOLO
+    # `max_scale=3.5` y afirmaba `factor == 3.5`, pero el techo de la fila de PROTEÍNA es
+    # `max_scale_protein` (knob, default 5.0), así que el 3.5 que certificaba era el valor del bug:
+    # el report clampaba con el techo genérico mientras el greedy real aplicaba el de proteína.
+    # Se pasan AMBOS techos explícitos para que el test diga lo que quiere decir ("el clamp satura")
+    # sin depender de un default, y se añade el caso que distingue los dos techos.
     res = solve_portion_macros(
         [{"name": "pollo", "quantity": 100, "unit": "g"}],
-        {"protein": 500, "carbs": 0, "fats": 0}, db=db, max_scale=3.5,
+        {"protein": 500, "carbs": 0, "fats": 0}, db=db, max_scale=3.5, max_scale_protein=3.5,
     )
     assert res["report"]["protein"]["factor"] == pytest.approx(3.5)
     assert res["converged"] is False  # no pudo alcanzar el target absurdo
+
+
+def test_solver_report_usa_el_techo_de_proteina(db):
+    """[P3-SOLVER-REPORT-PROTEIN-CAP] La fila de proteína se reporta con SU techo, no con el genérico.
+
+    Si el report clampa con `max_scale` mientras el greedy aplica `max_scale_protein`, quien audite
+    la comida por telemetría concluye que el clamp saturó en 3.5 y que los gramos servidos son
+    inconsistentes con el propio report.
+    """
+    from portion_solver import solve_portion_macros
+    res = solve_portion_macros(
+        [{"name": "pollo", "quantity": 100, "unit": "g"}],
+        {"protein": 500, "carbs": 0, "fats": 0}, db=db, max_scale=3.5, max_scale_protein=5.0,
+    )
+    assert res["report"]["protein"]["factor"] == pytest.approx(5.0), (
+        "la fila de proteína debe reportar su propio techo (max_scale_protein)"
+    )
 
 
 def test_solver_dominant_macro_classification(db):

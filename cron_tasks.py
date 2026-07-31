@@ -24516,15 +24516,25 @@ def _build_filtered_edge_recipe_day(
                 pantry_bases.add(normalized)
             pantry_bases.add(strip_accents(str(item).lower().strip()))
 
+        # [P3-PANTRY-INTERSECT-WB · 2026-07-31] (audit solver+seeder v6 · F16) Era substring
+        # BIDIRECCIONAL (`pb in nombre or nombre in pb`) con umbral de 3 chars: `'sal'` en la nevera
+        # hacía preferir `'Salami Dominicano'` como única proteína "disponible", y los 3 slots del
+        # edge day salían con embutido porque el usuario tiene un salero. La 13ª subcadena de la
+        # serie del repo (`"sal"⊂"salsa"`, `"res"⊂"fresco"`, `"pollo"⊂"repollo"`…). Frontera de
+        # palabra + sufijo plural: alinea el criterio al de los guards hermanos en vez de subir el
+        # umbral, que no cierra la clase. tooltip-anchor: P3-PANTRY-INTERSECT-WB
+        import re as _re_pi
+        _pb_rx = [
+            _re_pi.compile(r"\b" + _re_pi.escape(pb) + r"(?:s|es)?\b")
+            for pb in pantry_bases if pb and len(pb) > 2
+        ]
+
         def _pantry_intersect(catalog: list) -> list:
-            """Keep only catalog items whose normalized name matches a pantry base."""
-            matched = [
-                c for c in catalog
-                if any(
-                    (pb and len(pb) > 2 and (pb in strip_accents(c.lower()) or strip_accents(c.lower()) in pb))
-                    for pb in pantry_bases
-                )
-            ]
+            """Keep only catalog items whose normalized name matches a pantry base (word-boundary)."""
+            if not _pb_rx:
+                return catalog
+            matched = [c for c in catalog
+                       if any(rx.search(strip_accents(c.lower())) for rx in _pb_rx)]
             return matched if matched else catalog  # fallback: use full filtered catalog
 
         pantry_proteins = _pantry_intersect(filtered_proteins)
