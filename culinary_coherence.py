@@ -254,8 +254,26 @@ def _occurrence_resolves(paso_norm: str, start: int, end: int,
     return bool(head.strip() and find_catalog_foods(head, index))
 
 
+# [P1-CULINARY-CONTRACT-YOGUR · 2026-08-01] "yogur" y "yogurt" son la MISMA palabra en es-DO —
+# el catálogo usa la forma con 't' ("Yogurt griego sin azúcar", migración P2-3) pero la prosa
+# generada (y el propio swap huevo→yogur de graph_orchestrator.py, `_egg_step_subs`) usa la forma
+# SIN 't' ("el yogur griego"). Defecto real medido (plan de producción 97.2,
+# 5f4bb17e-14cb-4db3-8d97-79933af690cf, día 2 Desayuno): «Hierve el yogur griego en agua durante
+# 8 minutos hasta que estén firmes; pélalos y córtalos en trozos.» — huevo duro aplicado al
+# lácteo, y V1 nunca lo vio: "yogur" no resolvía contra el índice construido sobre "yogurt", así
+# que `find_catalog_foods` no encontraba NINGÚN alimento en ese paso y el check ni evaluaba el
+# método (el scan solo disparó V3 huérfano, ciego a la violación real). Normalizado en `_norm` —
+# el único punto por el que pasan TANTO los nombres del catálogo (`build_culinary_index`) COMO el
+# texto escaneado (`_catalog_food_spans`/`step_has_cooking_verb`) — cubre las 4 variantes
+# (yogur/yogurt/yogures/yogurts) en AMBAS direcciones sin duplicar la normalización en cada
+# callsite. `\byogurt(s)?\b` → "yogur"/"yogurs"; combinado con `_sing_plural_pattern("yogur")`
+# ("yogur(?:e?s)?") en el índice, las 4 formas convergen al mismo match.
+_YOGUR_T_RE = re.compile(r"\byogurt(s)?\b")
+
+
 def _norm(text: str) -> str:
-    return strip_accents(str(text or "").lower())
+    s = strip_accents(str(text or "").lower())
+    return _YOGUR_T_RE.sub(lambda m: "yogur" + (m.group(1) or ""), s)
 
 
 def step_has_cooking_verb(paso: str) -> bool:

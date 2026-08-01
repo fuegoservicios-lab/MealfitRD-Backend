@@ -942,3 +942,89 @@ def test_degrade_offending_steps_acota_por_meal():
     assert edge_day["meals"][1]["recipe"][0] == "El Toque de Fuego: Hornea el Casabe.", (
         "la violación de Desayuno NO debe degradar el paso idéntico de Cena")
     assert n == 1
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT-YOGUR · 2026-08-01] Defecto REAL del plan de producción
+# 97.2 (5f4bb17e-14cb-4db3-8d97-79933af690cf, día 2 Desayuno "Batido Caribeño
+# de Mango, Avena y Chía", encontrado en auditoría manual — SELECT de solo
+# lectura contra Neon prod). El pase de sustitución de seguridad alimentaria
+# (huevo crudo → yogur griego, `graph_orchestrator._substitute_blended_raw_egg`)
+# renombra la MENCIÓN pero no la instrucción de cocción, dejando: «El Toque de
+# Fuego: Hierve el yogur griego en agua durante 8 minutos hasta que estén
+# firmes; pélalos y córtalos en trozos.» — huevo duro aplicado a un lácteo
+# listo-para-comer. V1 debía detectar esto (hervir ∉ prep_methods de un
+# ready_to_eat) pero quedó CIEGO: el catálogo real (`master_ingredients`,
+# verificado por SELECT) declara "Yogurt griego sin azúcar"/"Yogurt" — CON 't'
+# — mientras la prosa generada (y el propio swap huevo→yogur) siempre usa "el
+# yogur griego" SIN 't'. `find_catalog_foods` no encontraba NINGÚN alimento en
+# el paso ofensor y el check ni evaluaba el método; el scan solo disparaba V3
+# huérfano (el ingrediente "Yogurt griego sin azúcar" nunca se mencionaba
+# textualmente en ningún paso), ciego a la violación real de cocción.
+# ---------------------------------------------------------------------------
+
+# Catálogo fiel a la fila REAL de `master_ingredients` (verificado por SELECT
+# de solo lectura, 2026-08-01): "Yogurt" (bare, 1 token) Y "Yogurt griego sin
+# azúcar" (4 tokens) coexisten como filas separadas — el alias corto es el que
+# resuelve contra "el yogur griego" en prosa (V1 no hace prefix-matching de
+# nombres compuestos, a diferencia de V3/`_mencionado_por_prefijo`; fuera de
+# alcance de este fix, que es SOLO la normalización yogur↔yogurt).
+_CAT_YOGUR = [
+    {"name": "Yogurt", "prep_methods": ["ninguno", "crudo", "licuar"], "ready_to_eat": True},
+    {"name": "Yogurt griego sin azúcar", "prep_methods": ["ninguno", "crudo", "licuar"],
+     "ready_to_eat": True},
+]
+
+# Paso REAL del plan 97.2 (día 2, Desayuno, "El Toque de Fuego") — huevo duro
+# renombrado a yogur por el swap de seguridad alimentaria, cocción intacta.
+_PASO_REAL_HIERVE_YOGUR = (
+    "El Toque de Fuego: Hierve el yogur griego en agua durante 8 minutos "
+    "hasta que estén firmes; pélalos y córtalos en trozos."
+)
+
+
+def test_yogur_sin_t_resuelve_contra_catalogo_con_t():
+    """Ancla mínima del alias: 'yogur' (prosa) y 'Yogurt' (catálogo) deben
+    resolver al MISMO alimento — en cualquiera de las dos direcciones."""
+    index = cc.build_culinary_index(_CAT_YOGUR)
+    assert cc.find_catalog_foods("Licúa el yogur con hielo.", index) == ["Yogurt"]
+    assert cc.find_catalog_foods("Licúa el yogurt con hielo.", index) == ["Yogurt"]
+
+
+def test_yogur_variantes_plural_bidireccional():
+    """Las 4 variantes (yogur/yogurt/yogures/yogurts) convergen al mismo
+    match, en cualquier combinación prosa↔catálogo."""
+    index_sin_t = cc.build_culinary_index(
+        [{"name": "Yogur de coco", "prep_methods": ["crudo"], "ready_to_eat": True}])
+    assert cc.find_catalog_foods("2 yogures de coco fríos", index_sin_t) == ["Yogur de coco"]
+    assert cc.find_catalog_foods("2 yogurts de coco fríos", index_sin_t) == ["Yogur de coco"]
+
+    index_con_t = cc.build_culinary_index(
+        [{"name": "Yogurt de coco", "prep_methods": ["crudo"], "ready_to_eat": True}])
+    assert cc.find_catalog_foods("2 yogures de coco fríos", index_con_t) == ["Yogurt de coco"]
+
+
+def test_v1_defecto_real_plan_97_2_hervir_sobre_yogur_ready_to_eat():
+    """El paso REAL del plan de producción 97.2 — antes de este fix, V1 no
+    encontraba NINGÚN alimento en este paso (yogur↔Yogurt no resolvía) y
+    callaba; solo V3 (huérfano) disparaba, sin decir NADA sobre la cocción
+    imposible. Con el alias, V1 debe producir la violación real: 'hervir'
+    aplicado a un ready_to_eat."""
+    plan = _plan([_PASO_REAL_HIERVE_YOGUR],
+                 ["⅔ taza de Yogurt griego sin azúcar"],
+                 nombre="Batido Caribeño de Mango, Avena y Chía")
+    v = cc.culinary_contract_scan(plan, _CAT_YOGUR)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 and v1[0]["food"] == "Yogurt" and v1[0]["severity"] == "minor", v1
+    assert "hervir" in v1[0]["detail"] and "listo-para-comer" in v1[0]["detail"], v1
+
+
+def test_v1_legitimo_licuar_yogur_no_dispara():
+    """Control positivo: 'Licúa el yogur griego con el mango.' — licuar SÍ
+    está en prep_methods del catálogo real — 0 violaciones V1. Sin este
+    control, un fix demasiado agresivo del alias podría convertir CUALQUIER
+    mención de yogur en una acusación."""
+    plan = _plan(["Licúa el yogur griego con el mango."],
+                 ["⅔ taza de Yogurt griego sin azúcar", "1 mango"])
+    v = cc.culinary_contract_scan(plan, _CAT_YOGUR)
+    assert not [x for x in v if x["check"] == "V1"], v
