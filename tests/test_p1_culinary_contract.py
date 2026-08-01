@@ -1139,3 +1139,60 @@ def test_v4_ingrediente_sin_gramaje_no_dispara():
         ["Mise en place: desmenuza el queso de hoja (45 g)."],
         ["1 lonja de queso de hoja"]), _CAT_V4)
     assert not [x for x in v if x["check"] == "V4"], v
+
+
+# ---------------------------------------------------------------------------
+# [V4-FIX3 · 2026-08-01] Aproximación declarada (≈/~) NO es un contrato exacto.
+# Finding "Important" del review de V4: "(≈200 g)" se leía como 200 EXACTO y
+# disparaba falso positivo contra hints que el propio sistema genera vía
+# `append_gram_hint` (`humanize_ingredients.py`) sobre unidades vagas
+# (lonja/pedazo/porción). Ver evidencia real: "21.5 molondrones medianos
+# (≈322 g)" (diagnóstico `.superpowers/esparragos-600g-diagnostico.md`).
+# ---------------------------------------------------------------------------
+
+_CAT_V4B = _CAT_V4 + [
+    {"name": "Jamón", "prep_methods": ["ninguno", "crudo"], "ready_to_eat": True},
+]
+
+
+def test_v4_aproximacion_en_ingrediente_no_dispara():
+    """(a) Ingrediente con gramaje APROXIMADO ('≈20 g') vs paso con gramaje
+    EXACTO ('30 g') — el lado aproximado se descarta silenciosamente, 0 V4.
+    Sin el fix, esto sería un falso positivo (33% de divergencia, por encima
+    de la tolerancia)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: sirve el jamón (30 g)."],
+        ["1 lonja de jamón (≈20 g)"]), _CAT_V4B)
+    assert not [x for x in v if x["check"] == "V4"], v
+
+
+def test_v4_aproximacion_en_paso_no_dispara():
+    """(a espejo) La aproximación puede vivir en CUALQUIER lado de la
+    comparación — ingrediente exacto vs paso aproximado también se salta."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: sirve el jamón (≈30 g)."],
+        ["20 g de jamón"]), _CAT_V4B)
+    assert not [x for x in v if x["check"] == "V4"], v
+
+
+def test_v4_aproximacion_con_virgulilla_tambien_se_salta():
+    """El marcador '~' (además de '≈') también cuenta como aproximación
+    declarada."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: sirve el jamón (~30 g)."],
+        ["20 g de jamón"]), _CAT_V4B)
+    assert not [x for x in v if x["check"] == "V4"], v
+
+
+def test_v4_caso_real_30_vs_45_exactos_sigue_disparando_tras_el_fix():
+    """El fix de aproximación NO debe convertirse en una vía de escape para
+    divergencias reales — el caso real del plan 5f4bb17e (30 g vs 45 g,
+    AMBOS exactos, sin ≈/~) debe seguir disparando V4 exactamente igual que
+    antes del fix (mismo escenario que `test_v4_caso_real_queso_30_vs_45`,
+    repetido aquí como regresión explícita del fix de aproximación)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: desmenuza 1¾ lonjas/pedazos de queso de hoja (45 g)."],
+        ["30 g de queso de hoja"]), _CAT_V4B)
+    v4 = [x for x in v if x["check"] == "V4"]
+    assert v4 and v4[0]["food"] == "Queso de hoja", v4
+    assert "30" in v4[0]["detail"] and "45" in v4[0]["detail"], v4

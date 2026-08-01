@@ -600,6 +600,19 @@ def _v3_huerfanos(day, meal, index) -> list:
 _V4_GRAMS_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos?)\b", re.IGNORECASE)
 _RE_MISE_STEP = re.compile(r"^\s*mise en place\s*:", re.IGNORECASE)
 
+# [V4-FIX3 · 2026-08-01] Aproximación declarada (≈/~) NO es un contrato de cantidad — es
+# honestidad del propio sistema ("más o menos", no "exactamente"). Caso real: el humanizador
+# anota hints parentéticos aproximados sobre unidades vagas (lonja/pedazo/porción) vía
+# `append_gram_hint` (`humanize_ingredients.py`) — "21.5 molondrones medianos (≈322 g)" — y sin
+# este skip, V4 comparaba ese número aproximado contra el gramaje EXACTO del otro lado y disparaba
+# un falso positivo contra un hint que el propio sistema generó, no contra un desacuerdo real.
+# Ancla al final de la porción `[≈~]\s*$` (marcador inmediatamente antes del número, con o sin
+# espacio de por medio: "≈20 g" / "≈ 20 g" / "~20 g") — SOLO descarta la mención marcada, la
+# comparación del alimento se salta EN SILENCIO (mismo criterio que la regla dura (a): no
+# inventar, no acusar donde no hay contrato). El caso real 30↔45 g (plan 5f4bb17e, ambos números
+# EXACTOS, sin ≈/~) sigue disparando sin cambios — solo lo aproximado se exime.
+_V4_APPROX_LEAD_RE = re.compile(r"[≈~]\s*$")
+
 
 def _v4_grams_by_food(text_norm: str, index: dict) -> dict:
     """{food: gramos} de TODAS las menciones con gramaje explícito de
@@ -609,7 +622,9 @@ def _v4_grams_by_food(text_norm: str, index: dict) -> dict:
     "mide 15 g de merey y 10 g de granola" debe emparejar 15↔merey y
     10↔granola por PROXIMIDAD, no ambos con el primer alimento que aparezca.
     Si un alimento tiene ≥2 menciones con gramaje en el mismo texto, se queda
-    con la PRIMERA (orden de aparición, cláusula por cláusula)."""
+    con la PRIMERA (orden de aparición, cláusula por cláusula). Menciones
+    precedidas de ≈/~ (aproximación declarada) se DESCARTAN — ver
+    `_V4_APPROX_LEAD_RE`."""
     out = {}
     for c_start, c_end in clause_bounds(text_norm):
         clause = text_norm[c_start:c_end]
@@ -617,7 +632,8 @@ def _v4_grams_by_food(text_norm: str, index: dict) -> dict:
         if not foods:
             continue
         grams = [(m.start(), m.end(), float(m.group(1).replace(",", ".")))
-                 for m in _V4_GRAMS_RE.finditer(clause)]
+                 for m in _V4_GRAMS_RE.finditer(clause)
+                 if not _V4_APPROX_LEAD_RE.search(clause[:m.start()])]
         for g_start, g_end, val in grams:
             best_food, best_dist = None, None
             for f_start, f_end, f_name in foods:
