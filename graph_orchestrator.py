@@ -16234,8 +16234,15 @@ def _collapse_egg_swap_stutter(text: str, phrases=("el yogur griego", "yogur gri
         _out = str(text)
         for _nd in sorted(set(phrases), key=len, reverse=True):
             _esc = _re.escape(_nd)
+            # [P1-SUBST-STALE-STEP · 2026-08-01] Bonus del plan real 97.2 (5f4bb17e-...): el
+            # Montaje decía "...la mantequilla de maní, el yogur griego, el yogur griego y la
+            # leche descremada..." — DOS sustituciones independientes (huevo→yogur, clara→yogur)
+            # cayeron una junto a la otra separadas por COMA (lista de ingredientes), no por un
+            # conector de los ya cubiertos (de/del/con/y). Rama extra `\s*,\s*` + repetición: el
+            # mismo tartamudeo que el resto de esta función ya colapsa, solo con otro separador.
             _pat = _re.compile(
-                r"\b" + _esc + r"(?:\s+(?:de(?:\s+l[ao]s?)?|del|con|y)\s+" + _esc + r")+\b",
+                r"\b" + _esc + r"(?:\s*,\s*" + _esc
+                + r"|\s+(?:de(?:\s+l[ao]s?)?|del|con|y)\s+" + _esc + r")+\b",
                 _re.IGNORECASE)
 
             def _rep_dup(m, _n=_nd):
@@ -16298,6 +16305,51 @@ _EGG_SWAP_PASSTHROUGH_ADV = frozenset((
 ))
 _EGG_SWAP_TAIL_RX = _re.compile(
     r"(\byogur griego\b)((?:\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+)*)", _re.IGNORECASE)
+
+# [P1-SUBST-STALE-STEP · 2026-08-01] Plan real 97.2 (5f4bb17e-14cb-4db3-8d97-79933af690cf, día 2
+# Desayuno "Batido Caribeño de Mango, Avena y Chía"): `_egg_step_subs` renombra la MENCIÓN del
+# alimento ("el huevo" → "el yogur griego") pero no la INSTRUCCIÓN DE COCCIÓN que la acompañaba —
+# "El Toque de Fuego: Hierve el huevo en agua durante 8 minutos hasta que estén firmes; pélalos y
+# córtalos en trozos." (huevo duro) sobrevivía como "Hierve el yogur griego..." (huevo duro
+# aplicado a un lácteo listo-para-comer). `culinary_coherence.step_has_cooking_verb` sobre el
+# PASO COMPLETO da dos falsos positivos reales medidos contra la suite existente:
+#   1. Un verbo de cocción legítimo aplicado a OTRO alimento del mismo paso ("Hornea hasta que
+#      la avena horneada esté firme y el yogur griego.", `test_p1_dangling_adverb_plus_
+#      participle_both_dropped`) — "Hornea" cocina la avena, 9 palabras antes del sustituto.
+#   2. "licúa"/"licuadora": ÚNICO verbo esperado en TODA preparación 'blended' (la única `kind`
+#      que invoca esta función — ver `_apply_food_safety_fixes`) — licuar el sustituto junto con
+#      el resto es correcto POR DEFINICIÓN ("un batido no se cocina", comentario de
+#      `_NO_COOK_BLENDED`), no un residuo de cocción térmica ("licúa la sandía, el yogur griego y
+#      la linaza.", `test_egg_swap_syncs_name_and_steps`).
+# Fix (NO un motor de atribución nuevo — acota el INPUT de la función ya pública a la vecindad
+# real del defecto observado, "Hierve el yogur griego" = verbo a 1-2 palabras del sustituto):
+# ventana de las últimas `window_words` palabras INMEDIATAMENTE anteriores a cada mención de
+# "yogur griego", enmascarando licuar/licúa (verbo siempre legítimo aquí) antes de preguntarle a
+# `step_has_cooking_verb`. Si CUALQUIER mención resuelve, el paso se considera stale.
+_LICUAR_TOKEN_RE = _re.compile(r"\blic[uú]a\w*\b", _re.IGNORECASE)
+_YOGUR_GRIEGO_MENTION_RE = _re.compile(r"\byogur griego\b", _re.IGNORECASE)
+# Mismas 3 secciones que `cron_tasks._CULINARY_STEP_SECTIONS` (prefijo que RecipesView/export a
+# PDF usan para agrupar pasos) — no se importa desde ahí para no acoplar graph_orchestrator.py a
+# cron_tasks.py; son 3 literales estables, no vale la pena una dependencia cruzada por esto.
+_EGG_SWAP_STEP_SECTIONS = ("Mise en place", "El Toque de Fuego", "Montaje")
+
+
+def _stale_cooking_verb_precedes_egg_swap(text: str, cooking_verb_check, window_words: int = 5) -> bool:
+    """[P1-SUBST-STALE-STEP · 2026-08-01] True si ALGUNA mención de "yogur griego" en `text`
+    tiene, en la ventana de las `window_words` palabras inmediatamente anteriores (licuar/licúa
+    enmascarado — ver comentario arriba), un verbo de cocción reconocido por
+    `culinary_coherence.step_has_cooking_verb` (recibido como `cooking_verb_check`, ya resuelto
+    por el caller vía import lazy). Fail-safe: cualquier excepción retorna False (nunca reescribe
+    de más)."""
+    try:
+        for m in _YOGUR_GRIEGO_MENTION_RE.finditer(text):
+            palabras_antes = _re.findall(r"\S+", text[:m.start()])[-window_words:]
+            ventana = _LICUAR_TOKEN_RE.sub("", " ".join(palabras_antes))
+            if cooking_verb_check(ventana):
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def _fix_egg_swap_dangling_adjectives(text: str) -> str:
@@ -16443,6 +16495,14 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                 (_re.compile(r"\bhuevos?(?:\s+crudos?|\s+pasteurizados?)?\b", _re.IGNORECASE),
                  lambda m: _egg_swap_cap_like(m.group(0), "yogur griego")),
             )
+            # [P1-SUBST-STALE-STEP · 2026-08-01] import lazy (mismo patrón que el resto de este
+            # módulo usa para culinary_coherence — ver `step_has_cooking_verb` en cron_tasks.py):
+            # `culinary_coherence` es puro/sin deps de import-time pesadas, pero graph_orchestrator
+            # no lo importa a nivel de módulo para no acoplar el árbol de imports de arranque.
+            try:
+                from culinary_coherence import step_has_cooking_verb as _cc_cooking_verb_es
+            except Exception:
+                _cc_cooking_verb_es = None
             if isinstance(rec, list):
                 for _i_es, _s_es in enumerate(rec):
                     if isinstance(_s_es, str) and not _is_recipe_safety_note_step(_s_es):
@@ -16459,6 +16519,19 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                             # que opera sobre repeticiones literales de la frase, no adjetivos.
                             _t_es = _fix_egg_swap_dangling_adjectives(_t_es)
                             _t_es = _collapse_egg_swap_stutter(_t_es)
+                            # [P1-SUBST-STALE-STEP] el paso que cambió puede haber dejado la
+                            # INSTRUCCIÓN DE COCCIÓN del alimento original colgando ("Hierve el
+                            # yogur griego..."). Si una mención del sustituto todavía tiene un
+                            # verbo de cocción térmica a distancia de objeto inmediato (ver
+                            # `_stale_cooking_verb_precedes_egg_swap`), el paso entero quedó
+                            # stale — se reescribe a la acción correcta para un listo-para-comer,
+                            # preservando el prefijo de sección.
+                            if _cc_cooking_verb_es is not None and _stale_cooking_verb_precedes_egg_swap(
+                                    _t_es, _cc_cooking_verb_es):
+                                _head_es = _s_es.split(":", 1)[0]
+                                _prefijo_es = (f"{_head_es}: "
+                                               if _head_es in _EGG_SWAP_STEP_SECTIONS else "")
+                                _t_es = f"{_prefijo_es}Incorpora el yogur griego."
                             rec[_i_es] = _t_es
             _nm_es = str(meal.get("name") or "")
             if _nm_es:

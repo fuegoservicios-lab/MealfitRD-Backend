@@ -404,3 +404,127 @@ def test_p1_dangling_adjective_no_tail_untouched():
     changed = go._substitute_blended_raw_egg(meal, None)
     assert changed is True
     assert meal["recipe"][0] == "Vierte el yogur griego en el sartén y cocina a fuego medio."
+
+
+# ═══════════════ P1-SUBST-STALE-STEP (2026-08-01) — defecto real plan 97.2 ═══════════════
+#
+# Plan de producción 5f4bb17e-14cb-4db3-8d97-79933af690cf (score 97.2), día 2 Desayuno
+# "Batido Caribeño de Mango, Avena y Chía" (SELECT de solo lectura contra Neon, verificado
+# manualmente 2026-08-01). El swap huevo→yogur renombra la MENCIÓN del alimento dentro del
+# paso ("el huevo" → "el yogur griego") pero deja la INSTRUCCIÓN DE COCCIÓN del huevo
+# original intacta:
+#
+#   ANTES  (huevo real): "El Toque de Fuego: Hierve el huevo en agua durante 8 minutos
+#                          hasta que estén firmes; pélalos y córtalos en trozos."
+#   POST-SWAP (bug):      "El Toque de Fuego: Hierve el yogur griego en agua durante 8
+#                          minutos hasta que estén firmes; pélalos y córtalos en trozos."
+#
+# — huevo duro aplicado a un lácteo listo-para-comer, servido tal cual al usuario. Bonus del
+# mismo meal: el Montaje decía "...la mantequilla de maní, el yogur griego, el yogur griego y
+# la leche descremada..." (dos sustituciones independientes — huevo→yogur, clara→yogur —
+# cayendo adyacentes, separadas por coma en vez de uno de los conectores de/del/con/y que
+# `_collapse_egg_swap_stutter` ya cubría).
+
+
+def _meal_real_batido_caribeno():
+    """Reconstrucción del meal real (antes del swap) a partir del texto post-swap observado
+    en producción — la ÚNICA diferencia estructural es 'huevo'/'clara' donde el plan vivo ya
+    dice 'yogur griego' (efecto del bug), reconstruido hacia atrás para poder ejercer
+    `_substitute_blended_raw_egg` end-to-end como el resto de este archivo."""
+    return {
+        "name": "Batido Caribeño de Mango, Avena y Chía",
+        "ingredients": [
+            "65 g de mango en cubos", "15 g de avena", "75 ml de leche descremada",
+            "10 g de semillas de chía", "1¾ cdtas de mantequilla de maní",
+            "1 huevo entero", "2 claras de huevo",
+        ],
+        "ingredients_raw": [
+            "65 g de mango en cubos", "15 g de avena", "75 ml de leche descremada",
+            "10 g de semillas de chía", "1¾ cdtas de mantequilla de maní",
+            "1 huevo entero", "2 claras de huevo",
+        ],
+        "recipe": [
+            "Mise en place: Pela y corta 65 g de mango en cubos; mide 15 g de avena, 10 g de "
+            "semillas de chía y 1¾ cdta de mantequilla de maní (5 g); mide 75 ml de leche "
+            "descremada; separa 1 huevo y 2 claras.",
+            "El Toque de Fuego: Hierve el huevo en agua durante 8 minutos hasta que estén "
+            "firmes; pélalos y córtalos en trozos.",
+            "Montaje: Coloca el mango, la avena, las semillas de chía, la mantequilla de "
+            "maní, el huevo, la clara y la leche descremada en la licuadora; procesa durante "
+            "1-2 minutos hasta obtener un batido homogéneo y sírvelo bien frío.",
+        ],
+        "protein": 15, "carbs": 30, "fats": 5, "cals": 220,
+    }
+
+
+def test_p1_subst_stale_step_hierve_el_huevo_se_reescribe_a_incorpora():
+    """El defecto real: el paso 'El Toque de Fuego' quedaba diciendo 'Hierve el yogur
+    griego...pélalos...' — huevo duro sobre un lácteo listo-para-comer. Debe reescribirse a
+    'Incorpora el yogur griego.', preservando el prefijo de sección."""
+    meal = _meal_real_batido_caribeno()
+    changed = go._substitute_blended_raw_egg(meal, None)
+    assert changed is True
+    assert meal["recipe"][1] == "El Toque de Fuego: Incorpora el yogur griego.", meal["recipe"][1]
+    # nunca sobrevive un verbo de cocción térmica aplicado al sustituto
+    blob = meal["recipe"][1].lower()
+    assert "hierve" not in blob and "pélalos" not in blob and "pelalos" not in blob
+
+
+def test_p1_subst_stale_step_montaje_dedup_comma_connector():
+    """Bonus del mismo meal: 'el yogur griego, el yogur griego' (dos swaps independientes
+    adyacentes, separados por coma) colapsa a una sola mención — el Montaje SIGUE listando el
+    resto de ingredientes intacto (no se reescribe el paso entero, solo se deduplica)."""
+    meal = _meal_real_batido_caribeno()
+    go._substitute_blended_raw_egg(meal, None)
+    montaje = meal["recipe"][2]
+    assert "yogur griego, el yogur griego" not in montaje.lower(), montaje
+    assert montaje == (
+        "Montaje: Coloca el mango, la avena, las semillas de chía, la mantequilla de maní, "
+        "el yogur griego y la leche descremada en la licuadora; procesa durante 1-2 minutos "
+        "hasta obtener un batido homogéneo y sírvelo bien frío."
+    ), montaje
+
+
+def test_p1_subst_stale_step_guard_licuar_del_montaje_no_dispara():
+    """[Guard 1, encontrado corriendo la suite ANTES de fijar el fix] 'licúa'/'licuadora' es
+    el verbo ESPERADO en TODA preparación 'blended' (única `kind` que invoca esta función) —
+    licuar el sustituto junto con el resto es correcto por definición, no un residuo de
+    cocción térmica. El Montaje ('...en la licuadora; procesa...') NO debe reescribirse a
+    'Incorpora...' — sigue mencionando el resto de los ingredientes."""
+    meal = _meal_real_batido_caribeno()
+    go._substitute_blended_raw_egg(meal, None)
+    montaje = meal["recipe"][2]
+    assert montaje.startswith("Montaje: Coloca el mango"), (
+        f"'licúa'/'licuadora' disparó un rewrite espurio del Montaje: {montaje!r}")
+    assert "sírvelo bien frío" in montaje
+
+
+def test_p1_subst_stale_step_guard_verbo_de_otro_alimento_no_dispara():
+    """[Guard 2, encontrado corriendo la suite ANTES de fijar el fix — rompía
+    `test_p1_dangling_adverb_plus_participle_both_dropped` de arriba] Un verbo de cocción
+    legítimo aplicado a OTRO alimento del MISMO paso ('Hornea...la avena...') no debe disparar
+    el rewrite solo porque el sustituto aparece más adelante en la misma oración — la ventana
+    de atribución es la vecindad INMEDIATA del sustituto, no 'el paso completo'."""
+    meal = _meal_egg_step(
+        "Hornea hasta que la avena horneada esté firme y las claras completamente cocidas.",
+        name="Avena horneada con clara")
+    meal["ingredients"] = ["2 claras de huevo"]
+    meal["ingredients_raw"] = ["2 claras de huevo"]
+    changed = go._substitute_blended_raw_egg(meal, None)
+    assert changed is True
+    step = meal["recipe"][0]
+    assert step.lower() == "hornea hasta que la avena horneada esté firme y el yogur griego.", step
+    assert not step.lower().startswith("incorpora"), (
+        f"el verbo 'Hornea' cocina la AVENA, no el sustituto — no debía disparar: {step!r}")
+
+
+def test_p1_subst_stale_step_idempotent_after_rewrite():
+    """El paso ya reescrito a 'Incorpora el yogur griego.' no vuelve a mutarse en una segunda
+    pasada (sin términos de huevo/clara/yema restantes en `ingredients`, `changed` es False y
+    la función retorna temprano sin tocar `recipe`)."""
+    meal = _meal_real_batido_caribeno()
+    go._substitute_blended_raw_egg(meal, None)
+    recipe_after_first = list(meal["recipe"])
+    changed_again = go._substitute_blended_raw_egg(meal, None)
+    assert changed_again is False
+    assert meal["recipe"] == recipe_after_first
