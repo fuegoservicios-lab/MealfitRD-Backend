@@ -1,0 +1,130 @@
+{
+  "days": [
+    {
+      "day": 1,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Avena cremosa con salami frito",
+          "ingredients": [
+            "50 g Avena",
+            "200 g Leche",
+            "0.5 g Canela en polvo",
+            "50 g Salami"
+          ],
+          "recipe": [
+            "Hierve la leche a fuego medio.",
+            "Agrega la avena y la canela en polvo, revuelve.",
+            "Cocina 5 minutos hasta espesar.",
+            "Sirve caliente.",
+            "Fríe el salami y mézclalo con la avena."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Locrío de pollo",
+          "ingredients": [
+            "60 g Arroz blanco",
+            "65 g Pechuga de pollo",
+            "8 g Aceite vegetal",
+            "12 g Cebolla",
+            "15 g Tomate"
+          ],
+          "recipe": [
+            "Sofríe la cebolla y el tomate en el aceite vegetal.",
+            "Agrega la pechuga de pollo en trozos y dora.",
+            "Incorpora el arroz y el agua, guisa a fuego bajo hasta que el arroz esté cocido.",
+            "Sirve caliente.",
+            "Pechuga de pollo (ya viene cocido/a) — solo recaliéntalo/a antes de servir."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Pescado guisado a la criolla",
+          "ingredients": [
+            "160 g Filete de pescado blanco",
+            "7 g Aceite vegetal",
+            "18 g Cebolla",
+            "12 g Ají cubanela",
+            "20 g Tomate",
+            "15 g Salsa de tomate",
+            "4 g Ajo",
+            "8 g Limón",
+            "1 g Sal",
+            "80 g Zanahoria"
+          ],
+          "recipe": [
+            "Sazona el filete de pescado blanco con limón, ajo y sal.",
+            "Sofríe la cebolla y el ají cubanela en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora el pescado y guisa a fuego bajo 8 minutos.",
+            "Sirve caliente."
+          ]
+        }
+      ]
+    },
+    {
+      "day": 2,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Huevos revueltos con cebolla",
+          "ingredients": [
+            "100 g Huevo",
+            "7 g Aceite vegetal",
+            "25 g Cebolla",
+            "1 g Sal",
+            "0.3 g Pimienta negra"
+          ],
+          "recipe": [
+            "Bate los huevos con sal y pimienta negra.",
+            "Sofríe la cebolla en el aceite vegetal.",
+            "Vierte el huevo batido y revuelve hasta cuajar.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Moro de habichuelas",
+          "ingredients": [
+            "60 g Arroz blanco",
+            "35 g Habichuelas rojas",
+            "6 g Aceite vegetal",
+            "12 g Cebolla",
+            "8 g Ají cubanela",
+            "50 g Casabe"
+          ],
+          "recipe": [
+            "Sofríe la cebolla y el ají cubanela en el aceite vegetal.",
+            "Agrega las habichuelas rojas y el arroz, mezcla bien.",
+            "Hierve con agua hasta que el arroz absorba el líquido.",
+            "Sirve caliente.",
+            "Cuece el Casabe según las instrucciones del paquete."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Pollo guisado dominicano",
+          "ingredients": [
+            "140 g Pechuga de pollo",
+            "7 g Aceite vegetal",
+            "18 g Cebolla",
+            "12 g Ají cubanela",
+            "18 g Tomate",
+            "15 g Salsa de tomate",
+            "4 g Ajo",
+            "0.5 g Orégano dominicano",
+            "1 g Sal"
+          ],
+          "recipe": [
+            "Sofríe la cebolla, el ají cubanela y el ajo en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora la pechuga de pollo y el orégano dominicano, guisa a fuego bajo 15 minutos.",
+            "Sazona con sal y sirve caliente.",
+            "Licúa la Pechuga de pollo hasta obtener una crema."
+          ]
+        }
+      ]
+    }
+  ]
+}

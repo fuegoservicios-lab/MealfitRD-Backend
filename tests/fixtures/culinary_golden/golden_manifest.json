@@ -1,0 +1,250 @@
+{
+  "mutados": {
+    "golden_01_mutado": {
+      "base": "golden_01_bueno",
+      "defects": [
+        {
+          "day": 1,
+          "meal": "Desayuno",
+          "class": "combo_absurdo",
+          "detail": "Renombrado 'Avena cocida con canela' → 'Avena cremosa con salami frito'; se añadió 'Salami' (combinación culturalmente incoherente para el slot).",
+          "expected_by": "juez"
+        },
+        {
+          "day": 1,
+          "meal": "Almuerzo",
+          "class": "estado_imposible",
+          "detail": "'Pechuga de pollo' (proteína fresca; la receta la cocina en otros pasos) marcada como '(ya viene cocido)'.",
+          "expected_by": "capa1:V2"
+        },
+        {
+          "day": 1,
+          "meal": "Cena",
+          "class": "ingrediente_huerfano",
+          "detail": "Se añadió '80 g Zanahoria' a ingredients; ningún paso de la receta lo menciona.",
+          "expected_by": "capa1:V3"
+        },
+        {
+          "day": 2,
+          "meal": "Almuerzo",
+          "class": "verbo_imposible",
+          "detail": "Casabe (ready_to_eat) recibe la instrucción de cocción 'Cuece' — verbo imposible sobre un alimento que ya viene listo para comer.",
+          "expected_by": "capa1:V1"
+        },
+        {
+          "day": 2,
+          "meal": "Cena",
+          "class": "tecnica_impropia",
+          "detail": "Paso añadido: 'Licúa la Pechuga de pollo hasta obtener una crema.' (verbo 'licúa' sobre alimento sólido sin 'licuar' en prep_methods).",
+          "expected_by": "capa1:V1"
+        }
+      ]
+    },
+    "golden_02_mutado": {
+      "base": "golden_02_bueno",
+      "defects": [
+        {
+          "day": 2,
+          "meal": "Desayuno",
+          "class": "combo_absurdo",
+          "detail": "Renombrado 'Pan integral con mantequilla de maní' → 'Pan integral con mantequilla de maní y salami frito'; se añadió 'Salami' (combinación culturalmente incoherente para el slot).",
+          "expected_by": "juez"
+        },
+        {
+          "day": 1,
+          "meal": "Cena",
+          "class": "estado_imposible",
+          "detail": "'Pechuga de pollo' (proteína fresca; la receta la cocina en otros pasos) marcada como '(ya viene cocido)'.",
+          "expected_by": "capa1:V2"
+        },
+        {
+          "day": 1,
+          "meal": "Almuerzo",
+          "class": "ingrediente_huerfano",
+          "detail": "Se añadió '80 g Ají morrón' a ingredients; ningún paso de la receta lo menciona.",
+          "expected_by": "capa1:V3"
+        },
+        {
+          "day": 1,
+          "meal": "Merienda",
+          "class": "verbo_imposible",
+          "detail": "Casabe (ready_to_eat) recibe la instrucción de cocción 'Cuece' — verbo imposible sobre un alimento que ya viene listo para comer.",
+          "expected_by": "capa1:V1"
+        },
+        {
+          "day": 2,
+          "meal": "Almuerzo",
+          "class": "nombre_no_corresponde",
+          "detail": "Renombrado 'Moro de habichuelas negras' → 'Moro de guandules' sin gandules entre los ingredientes.",
+          "expected_by": "juez"
+        }
+      ]
+    },
+    "golden_03_mutado": {
+      "base": "golden_03_bueno",
+      "defects": [
+        {
+          "day": 1,
+          "meal": "Merienda",
+          "class": "verbo_imposible",
+          "detail": "Casabe (ready_to_eat) recibe la instrucción de cocción 'Cuece' — verbo imposible sobre un alimento que ya viene listo para comer.",
+          "expected_by": "capa1:V1"
+        },
+        {
+          "day": 2,
+          "meal": "Almuerzo",
+          "class": "estado_imposible",
+          "detail": "'Pechuga de pollo' (proteína fresca; la receta la cocina en otros pasos) marcada como '(ya viene cocido)'.",
+          "expected_by": "capa1:V2"
+        },
+        {
+          "day": 1,
+          "meal": "Almuerzo",
+          "class": "ingrediente_huerfano",
+          "detail": "Se añadió '80 g Zanahoria' a ingredients; ningún paso de la receta lo menciona.",
+          "expected_by": "capa1:V3"
+        },
+        {
+          "day": 2,
+          "meal": "Merienda",
+          "class": "tecnica_impropia",
+          "detail": "Paso añadido: 'Deja el yogurt griego sobre la plancha caliente unos minutos para intensificar su sabor.' (técnica incoherente sin verbo de cocción canónico — requiere juicio LLM).",
+          "expected_by": "juez"
+        },
+        {
+          "day": 2,
+          "meal": "Cena",
+          "class": "nombre_no_corresponde",
+          "detail": "Renombrado 'Bacalao guisado con papa' → 'Moro de guandules' sin gandules entre los ingredientes.",
+          "expected_by": "juez"
+        }
+      ]
+    },
+    "golden_04_mutado": {
+      "base": "golden_04_bueno",
+      "defects": [
+        {
+          "day": 1,
+          "meal": "Desayuno",
+          "class": "combo_absurdo",
+          "detail": "Renombrado 'Avena cocida con canela' → 'Avena cremosa con salami frito'; se añadió 'Salami' (combinación culturalmente incoherente para el slot).",
+          "expected_by": "juez"
+        },
+        {
+          "day": 2,
+          "meal": "Cena",
+          "class": "estado_imposible",
+          "detail": "'Huevo' (proteína fresca; la receta la cocina en otros pasos) marcada como '(ya viene cocido)'.",
+          "expected_by": "capa1:V2"
+        },
+        {
+          "day": 1,
+          "meal": "Almuerzo",
+          "class": "ingrediente_huerfano",
+          "detail": "Se añadió '80 g Ají morrón' a ingredients; ningún paso de la receta lo menciona.",
+          "expected_by": "capa1:V3"
+        },
+        {
+          "day": 2,
+          "meal": "Almuerzo",
+          "class": "verbo_imposible",
+          "detail": "Casabe (ready_to_eat) recibe la instrucción de cocción 'Cuece' — verbo imposible sobre un alimento que ya viene listo para comer.",
+          "expected_by": "capa1:V1"
+        },
+        {
+          "day": 1,
+          "meal": "Cena",
+          "class": "nombre_no_corresponde",
+          "detail": "Renombrado 'Berenjena guisada a la criolla' → 'Moro de guandules' sin gandules entre los ingredientes.",
+          "expected_by": "juez"
+        }
+      ]
+    },
+    "golden_05_mutado": {
+      "base": "golden_05_bueno",
+      "defects": [
+        {
+          "day": 2,
+          "meal": "Desayuno",
+          "class": "combo_absurdo",
+          "detail": "Renombrado 'Avena cocida con canela' → 'Avena cremosa con salami frito'; se añadió 'Salami' (combinación culturalmente incoherente para el slot).",
+          "expected_by": "juez"
+        },
+        {
+          "day": 1,
+          "meal": "Cena",
+          "class": "estado_imposible",
+          "detail": "'Carne de res' (proteína fresca; la receta la cocina en otros pasos) marcada como '(ya viene cocido)'.",
+          "expected_by": "capa1:V2"
+        },
+        {
+          "day": 2,
+          "meal": "Almuerzo",
+          "class": "ingrediente_huerfano",
+          "detail": "Se añadió '80 g Ají morrón' a ingredients; ningún paso de la receta lo menciona.",
+          "expected_by": "capa1:V3"
+        },
+        {
+          "day": 2,
+          "meal": "Cena",
+          "class": "verbo_imposible",
+          "detail": "Casabe (ready_to_eat) recibe la instrucción de cocción 'Cuece' — verbo imposible sobre un alimento que ya viene listo para comer.",
+          "expected_by": "capa1:V1"
+        },
+        {
+          "day": 1,
+          "meal": "Desayuno",
+          "class": "nombre_no_corresponde",
+          "detail": "Renombrado 'Huevos revueltos con cebolla' → 'Moro de guandules' sin gandules entre los ingredientes.",
+          "expected_by": "juez"
+        }
+      ]
+    }
+  },
+  "catalog_foods_used": [
+    "Aceite de oliva",
+    "Aceite vegetal",
+    "Aceitunas",
+    "Ajo",
+    "Ají cubanela",
+    "Ají morrón",
+    "Arroz blanco",
+    "Auyama",
+    "Avena",
+    "Bacalao",
+    "Berenjena",
+    "Canela en polvo",
+    "Carne de res",
+    "Casabe",
+    "Cebolla",
+    "Cilantro",
+    "Filete de pescado blanco",
+    "Fresas",
+    "Garbanzos",
+    "Guineo",
+    "Habichuelas negras",
+    "Habichuelas rojas",
+    "Huevo",
+    "Leche",
+    "Lentejas",
+    "Limón",
+    "Mango",
+    "Mantequilla de maní",
+    "Miel",
+    "Naranja",
+    "Orégano dominicano",
+    "Pan integral personal",
+    "Papa",
+    "Pechuga de pollo",
+    "Pimienta negra",
+    "Plátano verde",
+    "Queso blanco",
+    "Sal",
+    "Salsa de tomate",
+    "Tomate",
+    "Yogurt griego sin azúcar",
+    "Yuca",
+    "Zanahoria",
+    "Ñame"
+  ]
+}

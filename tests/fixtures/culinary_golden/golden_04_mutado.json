@@ -1,0 +1,126 @@
+{
+  "days": [
+    {
+      "day": 1,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Avena cremosa con salami frito",
+          "ingredients": [
+            "50 g Avena",
+            "200 g Leche",
+            "0.5 g Canela en polvo",
+            "50 g Salami"
+          ],
+          "recipe": [
+            "Hierve la leche a fuego medio.",
+            "Agrega la avena y la canela en polvo, revuelve.",
+            "Cocina 5 minutos hasta espesar.",
+            "Sirve caliente.",
+            "Fríe el salami y mézclalo con la avena."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Moro de habichuelas",
+          "ingredients": [
+            "60 g Arroz blanco",
+            "35 g Habichuelas rojas",
+            "6 g Aceite vegetal",
+            "12 g Cebolla",
+            "8 g Ají cubanela",
+            "80 g Ají morrón"
+          ],
+          "recipe": [
+            "Sofríe la cebolla y el ají cubanela en el aceite vegetal.",
+            "Agrega las habichuelas rojas y el arroz, mezcla bien.",
+            "Hierve con agua hasta que el arroz absorba el líquido.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Moro de guandules",
+          "ingredients": [
+            "180 g Berenjena",
+            "30 g Cebolla",
+            "25 g Ají cubanela",
+            "20 g Ají morrón",
+            "40 g Tomate",
+            "25 g Salsa de tomate",
+            "4 g Ajo",
+            "10 g Aceite vegetal",
+            "1.5 g Sal"
+          ],
+          "recipe": [
+            "Sofríe la cebolla, el ají cubanela y el ají morrón en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora la berenjena en cubos y el ajo, guisa a fuego bajo 15 minutos.",
+            "Sazona con sal y sirve caliente."
+          ]
+        }
+      ]
+    },
+    {
+      "day": 2,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Yogurt griego con fresas y mango",
+          "ingredients": [
+            "170 g Yogurt griego sin azúcar",
+            "60 g Fresas",
+            "60 g Mango",
+            "8 g Miel"
+          ],
+          "recipe": [
+            "Sirve el yogurt griego en un bol.",
+            "Cubre con las fresas y el mango picados.",
+            "Añade un hilo de miel por encima."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Lentejas guisadas",
+          "ingredients": [
+            "55 g Lentejas",
+            "25 g Zanahoria",
+            "15 g Cebolla",
+            "12 g Ají cubanela",
+            "4 g Ajo",
+            "3 g Cilantro",
+            "18 g Salsa de tomate",
+            "6 g Aceite vegetal",
+            "2 g Sal",
+            "50 g Casabe"
+          ],
+          "recipe": [
+            "Sofríe la cebolla, el ají cubanela y el ajo en el aceite vegetal.",
+            "Agrega la salsa de tomate y cocina 2 minutos.",
+            "Incorpora las lentejas cocidas y la zanahoria en rodajas, guisa a fuego bajo hasta espesar.",
+            "Espolvorea cilantro y sirve caliente.",
+            "Cuece el Casabe según las instrucciones del paquete."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Tortilla de huevo con cebolla y queso",
+          "ingredients": [
+            "100 g Huevo",
+            "20 g Cebolla",
+            "25 g Queso blanco",
+            "6 g Aceite vegetal",
+            "1 g Sal"
+          ],
+          "recipe": [
+            "Bate los huevos con sal.",
+            "Sofríe la cebolla en el aceite vegetal.",
+            "Vierte el huevo batido, agrega el queso blanco y cuaja a fuego medio.",
+            "Sirve caliente.",
+            "Huevo (ya viene cocido/a) — solo recaliéntalo/a antes de servir."
+          ]
+        }
+      ]
+    }
+  ]
+}

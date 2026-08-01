@@ -1,0 +1,130 @@
+{
+  "days": [
+    {
+      "day": 1,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Huevos revueltos con cebolla",
+          "ingredients": [
+            "100 g Huevo",
+            "7 g Aceite vegetal",
+            "25 g Cebolla",
+            "1 g Sal",
+            "0.3 g Pimienta negra"
+          ],
+          "recipe": [
+            "Bate los huevos con sal y pimienta negra.",
+            "Sofríe la cebolla en el aceite vegetal.",
+            "Vierte el huevo batido y revuelve hasta cuajar.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Locrío de pollo con tomate rallado",
+          "ingredients": [
+            "60 g Arroz blanco",
+            "65 g Pechuga de pollo",
+            "8 g Aceite vegetal",
+            "12 g Cebolla",
+            "2 tomates"
+          ],
+          "recipe": [
+            "Ralla el tomate y resérvalo.",
+            "Sofríe la cebolla en el aceite vegetal.",
+            "Agrega la pechuga de pollo en trozos y dora.",
+            "Incorpora el arroz, el tomate rallado y el agua; guisa a fuego bajo hasta que el arroz esté cocido.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Carne de res guisada",
+          "ingredients": [
+            "150 g Carne de res",
+            "7 g Aceite vegetal",
+            "18 g Cebolla",
+            "12 g Ají cubanela",
+            "18 g Tomate",
+            "15 g Salsa de tomate",
+            "4 g Ajo",
+            "10 g Ají morrón",
+            "1 g Sal"
+          ],
+          "recipe": [
+            "Sofríe la cebolla, el ají cubanela y el ají morrón en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora la carne de res y el ajo, guisa a fuego bajo 25 minutos hasta ablandar.",
+            "Sazona con sal y sirve caliente."
+          ]
+        }
+      ]
+    },
+    {
+      "day": 2,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Avena cocida con canela",
+          "ingredients": [
+            "50 g Avena",
+            "200 g Leche",
+            "0.5 g Canela en polvo"
+          ],
+          "recipe": [
+            "Hierve la leche a fuego medio.",
+            "Agrega la avena y la canela en polvo, revuelve.",
+            "Cocina 5 minutos hasta espesar.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Sancocho dominicano",
+          "ingredients": [
+            "70 g Carne de res",
+            "50 g Yuca",
+            "40 g Plátano verde",
+            "30 g Auyama",
+            "30 g Ñame",
+            "10 g Cebolla",
+            "5 g Aceite vegetal"
+          ],
+          "recipe": [
+            "Sofríe la cebolla en el aceite vegetal.",
+            "Agrega la carne de res y dora por todos lados.",
+            "Incorpora la yuca, el plátano verde, la auyama y el ñame con agua suficiente.",
+            "Hierve a fuego bajo 40 minutos hasta que los víveres estén tiernos.",
+            "Sirve caliente en un tazón hondo."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Pescado guisado a la criolla",
+          "ingredients": [
+            "160 g Filete de pescado blanco",
+            "7 g Aceite vegetal",
+            "18 g Cebolla",
+            "12 g Ají cubanela",
+            "20 g Tomate",
+            "15 g Salsa de tomate",
+            "4 g Ajo",
+            "8 g Limón",
+            "1 g Sal"
+          ],
+          "recipe": [
+            "Sazona el filete de pescado blanco con limón, ajo y sal.",
+            "Sofríe la cebolla y el ají cubanela en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora el pescado y guisa a fuego bajo 8 minutos.",
+            "Sirve caliente."
+          ]
+        }
+      ]
+    }
+  ],
+  "_meta": {
+    "trampa_plural": true
+  }
+}

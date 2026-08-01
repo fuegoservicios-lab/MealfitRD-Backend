@@ -1,0 +1,187 @@
+{
+  "days": [
+    {
+      "day": 1,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Huevos revueltos con cebolla",
+          "ingredients": [
+            "100 g Huevo",
+            "7 g Aceite vegetal",
+            "25 g Cebolla",
+            "1 g Sal",
+            "0.3 g Pimienta negra"
+          ],
+          "recipe": [
+            "Bate los huevos con sal y pimienta negra.",
+            "Sofríe la cebolla en el aceite vegetal.",
+            "Vierte el huevo batido y revuelve hasta cuajar.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Merienda",
+          "name": "Casabe con queso",
+          "ingredients": [
+            "50 g Casabe",
+            "60 g Queso blanco"
+          ],
+          "recipe": [
+            "Corta el casabe en trozos.",
+            "Cubre con el queso blanco en láminas.",
+            "Sirve a temperatura ambiente.",
+            "Cuece el Casabe según las instrucciones del paquete."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Garbanzos guisados",
+          "ingredients": [
+            "60 g Garbanzos",
+            "20 g Cebolla",
+            "15 g Ají cubanela",
+            "20 g Tomate",
+            "18 g Salsa de tomate",
+            "5 g Ajo",
+            "4 g Cilantro",
+            "8 g Aceite vegetal",
+            "2 g Sal",
+            "80 g Zanahoria"
+          ],
+          "recipe": [
+            "Sofríe la cebolla, el ají cubanela y el ajo en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora los garbanzos cocidos con un poco de caldo y guisa hasta espesar.",
+            "Espolvorea cilantro y sirve caliente."
+          ]
+        },
+        {
+          "meal": "Merienda",
+          "name": "Batida de guineo",
+          "ingredients": [
+            "110 g Guineo",
+            "240 g Leche",
+            "10 g Miel"
+          ],
+          "recipe": [
+            "Licúa el guineo con la leche y la miel hasta obtener una bebida cremosa.",
+            "Sirve fría."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Pescado guisado a la criolla",
+          "ingredients": [
+            "160 g Filete de pescado blanco",
+            "7 g Aceite vegetal",
+            "18 g Cebolla",
+            "12 g Ají cubanela",
+            "20 g Tomate",
+            "15 g Salsa de tomate",
+            "4 g Ajo",
+            "8 g Limón",
+            "1 g Sal"
+          ],
+          "recipe": [
+            "Sazona el filete de pescado blanco con limón, ajo y sal.",
+            "Sofríe la cebolla y el ají cubanela en el aceite vegetal.",
+            "Agrega el tomate y la salsa de tomate, cocina 3 minutos.",
+            "Incorpora el pescado y guisa a fuego bajo 8 minutos.",
+            "Sirve caliente."
+          ]
+        }
+      ]
+    },
+    {
+      "day": 2,
+      "meals": [
+        {
+          "meal": "Desayuno",
+          "name": "Avena cocida con canela",
+          "ingredients": [
+            "50 g Avena",
+            "200 g Leche",
+            "0.5 g Canela en polvo"
+          ],
+          "recipe": [
+            "Hierve la leche a fuego medio.",
+            "Agrega la avena y la canela en polvo, revuelve.",
+            "Cocina 5 minutos hasta espesar.",
+            "Sirve caliente."
+          ]
+        },
+        {
+          "meal": "Merienda",
+          "name": "Yogurt griego con fresas y mango",
+          "ingredients": [
+            "170 g Yogurt griego sin azúcar",
+            "60 g Fresas",
+            "60 g Mango",
+            "8 g Miel"
+          ],
+          "recipe": [
+            "Sirve el yogurt griego en un bol.",
+            "Cubre con las fresas y el mango picados.",
+            "Añade un hilo de miel por encima.",
+            "Deja el yogurt griego sobre la plancha caliente unos minutos para intensificar su sabor."
+          ]
+        },
+        {
+          "meal": "Almuerzo",
+          "name": "Locrío de pollo",
+          "ingredients": [
+            "60 g Arroz blanco",
+            "65 g Pechuga de pollo",
+            "8 g Aceite vegetal",
+            "12 g Cebolla",
+            "15 g Tomate"
+          ],
+          "recipe": [
+            "Sofríe la cebolla y el tomate en el aceite vegetal.",
+            "Agrega la pechuga de pollo en trozos y dora.",
+            "Incorpora el arroz y el agua, guisa a fuego bajo hasta que el arroz esté cocido.",
+            "Sirve caliente.",
+            "Pechuga de pollo (ya viene cocido/a) — solo recaliéntalo/a antes de servir."
+          ]
+        },
+        {
+          "meal": "Merienda",
+          "name": "Pan integral con mantequilla de maní",
+          "ingredients": [
+            "56 g Pan integral personal",
+            "32 g Mantequilla de maní"
+          ],
+          "recipe": [
+            "Tuesta ligeramente las rebanadas de pan integral.",
+            "Unta con la mantequilla de maní.",
+            "Sirve."
+          ]
+        },
+        {
+          "meal": "Cena",
+          "name": "Moro de guandules",
+          "ingredients": [
+            "110 g Bacalao",
+            "120 g Papa",
+            "8 g Aceite de oliva",
+            "25 g Cebolla",
+            "12 g Ají cubanela",
+            "25 g Tomate",
+            "20 g Salsa de tomate",
+            "4 g Ajo",
+            "10 g Aceitunas",
+            "12 g Ají morrón"
+          ],
+          "recipe": [
+            "Sofríe la cebolla, el ají cubanela y el ají morrón en el aceite de oliva.",
+            "Agrega el tomate, la salsa de tomate y el ajo, cocina 3 minutos.",
+            "Incorpora el bacalao desalado y la papa en trozos con un poco de agua.",
+            "Guisa a fuego bajo 15 minutos hasta que la papa esté tierna.",
+            "Añade las aceitunas y sirve caliente."
+          ]
+        }
+      ]
+    }
+  ]
+}
