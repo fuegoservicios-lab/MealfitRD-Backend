@@ -33,13 +33,17 @@ Cobertura:
   (e) el knob se auto-registra en `_KNOBS_REGISTRY` al leerse.
   (f) parser: ambos call sites (`/analyze`, `/analyze/stream`) están
       cableados con el mismo `code`/`max` contract.
+  (g) SAFETY: Embarazo/Lactancia (chips gender-gated de QMedical, mismo
+      array `medicalConditions`) NO cuentan contra el cap — evita reabrir
+      el punto ciego que P1-PREGNANCY-INTAKE-CAPTURE cerró (una usuaria
+      embarazada con 3 condiciones reales NO debe recibir 422).
 """
 from pathlib import Path
 
 import pytest
 
 from knobs import _KNOBS_REGISTRY
-from routers.plans import _validate_medical_conditions_cap
+from routers.plans import _validate_medical_conditions_cap, _is_pregnancy_or_lactation_condition_item
 
 
 def _payload(conditions) -> dict:
@@ -208,6 +212,68 @@ def test_knob_registry_default_sin_override(monkeypatch):
     assert entry is not None
     assert entry["value"] == 3
     assert entry["is_override"] is False
+
+
+# ---------------------------------------------------------------------------
+# (g) SAFETY: Embarazo/Lactancia NO cuentan contra el cap.
+#
+# Bug que esto previene: los chips `PREGNANCY_CHIP_LABELS` (QMedical.jsx,
+# gender-gated) escriben "Embarazo"/"Lactancia" al MISMO array
+# `medicalConditions` que las 7 condiciones clínicas del checklist (ver
+# P1-PREGNANCY-INTAKE-CAPTURE · 2026-06-19). Si el cap las contara igual que
+# una condición clínica, una usuaria embarazada con 3 condiciones reales
+# (ej. Diabetes T2 + Hipertensión + Hipotiroidismo, combinación plausible)
+# recibiría 422 al marcar también "Embarazo" — bloqueada de generar CUALQUIER
+# plan, reabriendo el "punto ciego de alto riesgo/prevalencia" que
+# P1-PREGNANCY-INTAKE-CAPTURE cerró. Peor aún: el 422 ocurre ANTES de que el
+# gate de déficit calórico fail-hard (`nutrition_calculator.
+# _is_pregnancy_or_lactation`) tenga oportunidad de correr.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("term", ["Embarazo", "embarazo", "Lactancia", "lactancia", "Gestante"])
+def test_is_pregnancy_or_lactation_condition_item_detecta_terminos(term):
+    assert _is_pregnancy_or_lactation_condition_item(term.lower()) is True
+
+
+def test_is_pregnancy_or_lactation_condition_item_no_falso_positivo_en_condicion_real():
+    assert _is_pregnancy_or_lactation_condition_item("diabetes t2") is False
+    assert _is_pregnancy_or_lactation_condition_item("hipertension") is False
+
+
+def test_embarazo_no_cuenta_contra_el_cap():
+    """3 condiciones reales + Embarazo → pasa (Embarazo exento)."""
+    ok, count, cap = _validate_medical_conditions_cap(
+        _payload(["Diabetes T2", "Hipertensión", "Hipotiroidismo", "Embarazo"])
+    )
+    assert ok is True, f"Embarazo no debería contar contra el cap (count={count})"
+    assert count == 3
+
+
+def test_lactancia_no_cuenta_contra_el_cap():
+    ok, count, cap = _validate_medical_conditions_cap(
+        _payload(["Diabetes T2", "Hipertensión", "Hipotiroidismo", "Lactancia"])
+    )
+    assert ok is True
+    assert count == 3
+
+
+def test_embarazo_y_lactancia_juntos_no_cuentan():
+    """Caso límite: ambos chips de embarazo/lactancia marcados a la vez
+    (UI no lo previene explícitamente) + 3 reales → sigue pasando."""
+    ok, count, cap = _validate_medical_conditions_cap(
+        _payload(["Diabetes T2", "Hipertensión", "Hipotiroidismo", "Embarazo", "Lactancia"])
+    )
+    assert ok is True
+    assert count == 3
+
+
+def test_cuatro_condiciones_reales_mas_embarazo_sigue_rechazando():
+    """El exemption es solo para embarazo/lactancia — 4 condiciones REALES
+    siguen rechazando aunque además se marque Embarazo."""
+    ok, count, cap = _validate_medical_conditions_cap(
+        _payload(["Diabetes T2", "Hipertensión", "Hipotiroidismo", "Colesterol Alto", "Embarazo"])
+    )
+    assert ok is False
+    assert count == 4
 
 
 # ---------------------------------------------------------------------------

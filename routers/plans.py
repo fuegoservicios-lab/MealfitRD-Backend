@@ -739,6 +739,23 @@ def _validate_form_data_min(data: dict) -> tuple[bool, list[str]]:
 # sentinels ("Ninguna"/"ninguno"/"n/a"/"no"/"nada"/""). Un usuario que marca
 # "Ninguna" + hasta `cap` condiciones reales pasa sin problema.
 #
+# [SAFETY] Embarazo/Lactancia (chips `PREGNANCY_CHIP_LABELS` en
+# `QMedical.jsx`, gender-gated) NO cuentan contra el cap. Se persisten en el
+# mismo array `medicalConditions` (P1-PREGNANCY-INTAKE-CAPTURE · 2026-06-19,
+# "punto ciego de alto riesgo/prevalencia") para disparar el gate de déficit
+# calórico (`nutrition_calculator._is_pregnancy_or_lactation`, fail-hard) y la
+# ConditionRule de embarazo — NO son parte de la complejidad combinatoria que
+# el cap busca acotar (no son condiciones "a resolver" por el LLM, son un
+# estado fisiológico que activa un backstop determinista aparte). Contarlas
+# aquí bloquearía con 422 a una usuaria embarazada con 3 condiciones reales
+# (ej. Diabetes T2 + Hipertensión + Hipotiroidismo — combinación plausible),
+# reabriendo exactamente el punto ciego que P1-PREGNANCY-INTAKE-CAPTURE cerró.
+# Detección vía `PREGNANCY_CONDITION_TERMS` + `strip_accents` (mismo patrón
+# que `_is_pregnancy_or_lactation`) — sobre-inclusivo a propósito: un falso
+# positivo solo deja pasar una condición extra sin contar (laxo, no inseguro);
+# un falso negativo bloquearía a una embarazada (inseguro). Test dedicado:
+# `test_embarazo_lactancia_no_cuentan_contra_el_cap`.
+#
 # Knob `MEALFIT_MAX_MEDICAL_CONDITIONS` (default 3, clamp [1,7] vía
 # `_env_int` validator) permite ajustar el cap sin redeploy — auto-registrado
 # en `_KNOBS_REGISTRY`. Se lee EN CADA REQUEST (no cacheado a nivel módulo)
@@ -753,6 +770,21 @@ def _validate_form_data_min(data: dict) -> tuple[bool, list[str]]:
 # clinical data DESDE el perfil ya persistido (`_enrich_clinical_from_profile`)
 # y nunca invocan este check.
 # ============================================================
+def _is_pregnancy_or_lactation_condition_item(value: str) -> bool:
+    """True si un ítem individual de `medicalConditions` es un término de
+    embarazo/lactancia. Mismo vocabulario (`PREGNANCY_CONDITION_TERMS`) y
+    normalización (`strip_accents`) que `nutrition_calculator._is_pregnancy_or_lactation`,
+    pero a nivel de ítem (no de `form_data` completo) — lo que necesita el
+    exemption del cap para descartar SOLO las entradas de embarazo/lactancia
+    sin tocar el resto del array."""
+    try:
+        from constants import PREGNANCY_CONDITION_TERMS, strip_accents
+    except Exception:
+        return False
+    normalized = strip_accents(value)
+    return any(term in normalized for term in PREGNANCY_CONDITION_TERMS)
+
+
 def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
     """Valida que `medicalConditions` no exceda el cap de condiciones reales.
 
@@ -765,15 +797,18 @@ def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
     """
     cap = _env_int("MEALFIT_MAX_MEDICAL_CONDITIONS", 3, validator=lambda v: 1 <= v <= 7)
     raw = data.get("medicalConditions")
-    if isinstance(raw, (list, tuple, set)):
-        real_count = sum(
-            1 for x in raw
-            if str(x).strip() and str(x).strip().lower() not in _PROFILE_RISK_NEGATIVES
-        )
-    elif raw and str(raw).strip().lower() not in _PROFILE_RISK_NEGATIVES:
-        real_count = 1
-    else:
-        real_count = 0
+    items = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw else [])
+    real_count = 0
+    for x in items:
+        stripped = str(x).strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if lowered in _PROFILE_RISK_NEGATIVES:
+            continue
+        if _is_pregnancy_or_lactation_condition_item(lowered):
+            continue
+        real_count += 1
     return (real_count <= cap, real_count, cap)
 
 
