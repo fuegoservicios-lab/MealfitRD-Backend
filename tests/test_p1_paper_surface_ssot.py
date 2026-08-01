@@ -96,3 +96,53 @@ def test_marketing_routes_still_lists_the_same_six_today():
     no borrarlo: es el aviso de que la separación empezó a importar."""
     text = _MARKETING_JS.read_text(encoding="utf-8")
     assert _routes_from_array(text, "MARKETING_ROUTES") == _EXPECTED
+
+
+# ---------------------------------------------------------------------------
+# 2. Los lectores que comparan 'dark' en duro
+# ---------------------------------------------------------------------------
+_USE_THEME_COLOR = _FRONTEND / "src" / "components" / "common" / "useThemeColor.js"
+_MANIFEST = _FRONTEND / "public" / "manifest.json"
+
+_PAPER_HEX = "#FBFBFA"
+_OLD_BRAND_INDIGO = "#4F46E5"
+
+
+def test_use_theme_color_has_a_paper_branch():
+    """`isDarkActive()` compara `=== 'dark'` en duro (theme.js:96), así que
+    bajo `paper` devuelve False y las 5 rutas de marketing que no son `/`
+    caen al `else` final → #4F46E5 indigo en la barra de estado de Android
+    y en el PWA standalone de iOS, sobre una página blanco y negro."""
+    text = _USE_THEME_COLOR.read_text(encoding="utf-8")
+    assert "isPaperSurface" in text, (
+        "P1-PAPER-THEME: useThemeColor.js debe consultar `isPaperSurface` y "
+        "devolver el papel para las 6 rutas de marketing."
+    )
+    assert _PAPER_HEX in text, (
+        f"P1-PAPER-THEME: useThemeColor.js debe emitir {_PAPER_HEX} en la rama papel."
+    )
+
+
+def test_splash_has_paper_rules():
+    """El splash vive FUERA de #root, así que no lo alcanza ningún CSS de
+    React. Sin reglas propias cae a su base: dos radiales indigo + rosa
+    sobre #F8FAFC, en cada carga directa o refresh de las 6 rutas."""
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    assert 'html[data-theme="paper"] #pwa-splash' in html, (
+        "P1-PAPER-THEME: falta la regla del splash para la superficie papel."
+    )
+    assert f'<meta name="theme-color" content="{_PAPER_HEX}"' in html, (
+        f"P1-PAPER-THEME: el theme-color por defecto debe ser {_PAPER_HEX}."
+    )
+
+
+def test_no_brand_indigo_left_in_pwa_surfaces():
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+    manifest = _MANIFEST.read_text(encoding="utf-8")
+    assert _OLD_BRAND_INDIGO not in manifest, (
+        f"P1-PAPER-THEME: manifest.json sigue con {_OLD_BRAND_INDIGO} — el splash "
+        "nativo de Android y el chrome de la PWA instalada quedarian indigo."
+    )
+    assert _OLD_BRAND_INDIGO not in html, (
+        f"P1-PAPER-THEME: index.html sigue con {_OLD_BRAND_INDIGO}."
+    )
