@@ -112,6 +112,15 @@ Ambas idempotentes (`IF NOT EXISTS` / `array_append` con guard `NOT (... = ANY(.
 
 3 falsos positivos reales encontrados por el examen contra Neon (no por los tests unitarios sintéticos): `Arroz blanco` mencionado por su forma genérica "el arroz" (cerrado con `_mencionado_por_prefijo`, con guard de ambigüedad contra prefijos compartidos tipo "Ají morrón"/"Ají cubanela"), `dora` mal clasificado bajo `tostar` (cerrado moviéndolo a `saltear`), y `Leche` sin `hervir` en su metadata (cerrado con la migración `leche%hervir`, no en el scan — es un hueco de datos, no de lógica).
 
+### Calibración capa1 2026-08-01 (plan real 165dd761, primer plan en producción, fase warn)
+
+El primer plan real que pasó por el guard en producción midió **9 violaciones V1, las 9 falsos positivos** — de solo 2 mecanismos, ambos cerrados en `culinary_coherence.py` (P1-CULINARY-CONTRACT-FP1):
+
+- **Clase participio/montaje (6/9):** el `\w*` genérico tras la raíz del verbo capturaba la forma PARTICIPIAL/ADJETIVAL, no solo el imperativo — «el yaniqueque HORNEADO», «pollo desmechado SALTEADO con los vegetales», «las TOSTADAS», «almendras TOSTADAS» — y las 6 vivían en pasos de "Montaje:" (que por construcción ensambla, nunca cocina). Fix: negative-lookahead de participio (`d[oa]s?\b`/`t[oa]s?\b`) en cada raíz de `VERB_TO_METHOD` cuya forma participial existe en español (hornear/guisar/saltear-sofreír-dorar/licuar/tostar) + skip explícito de pasos que empiezan con "Montaje:" en V1 (V2/V3 sin cambios — V3 sigue necesitando leer montaje para las menciones).
+- **Clase ventana post-verbo (3/9):** el verbo apuntaba a un alimento NO catalogado (p.ej. "almendras" en «tuesta las almendras aparte») y, sin destinatario válido en el catálogo, la salvaguarda multi-alimento de `_v1_verbo_alimento` acusaba a los acompañantes catalogados del mismo paso (avena/leche/clara) que no eran el objeto real del verbo. Fix: veto de ventana post-verbo (`_post_verb_resolves`, ~4 palabras tras el match) cuando NINGÚN alimento del paso acepta el método — si el objeto inmediato del verbo no resuelve al catálogo, no se acusa a nadie por ese verbo.
+
+Cerrada. Los 9 FPs (re-evaluados con catálogo sintético que reproduce el caso real) dan 0 tras el fix — casos anclados como tests sintéticos PERMANENTES en [`test_p1_culinary_contract.py`](../tests/test_p1_culinary_contract.py) (sección "FP reales 2026-08-01 plan 165dd761"), no en los fixtures del golden set (el ground truth no se toca — el golden set sigue en 100%/0FP, re-confirmado tras el fix). Traza completa por fragmento de verbo: `.superpowers/culinary-fp-round1-report.md`.
+
 ---
 
 ## Juez LLM (Capa 2, F3): rúbrica y calibración

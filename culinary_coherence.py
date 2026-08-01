@@ -20,12 +20,34 @@ PREP_VOCAB = ("hervir", "plancha", "freir", "hornear", "guisar", "saltear",
               "licuar", "tostar", "crudo", "ninguno")
 
 # fragmento-regex → método canónico. Centraliza (y supera) _COOKING_VERB_RE.
+#
+# [P1-CULINARY-CONTRACT-FP1 · 2026-08-01, clase A] Primer plan real en prod
+# (165dd761) midió 9 violaciones V1, las 6 de esta clase todas en pasos de
+# "Montaje:" — el `\w*` genérico tras cada raíz tragaba la forma PARTICIPIAL/
+# ADJETIVAL, no solo el imperativo: «el yaniqueque HORNEADO», «pollo
+# desmechado SALTEADO», «las TOSTADAS», «almendras TOSTADAS» disparaban V1
+# como si el paso estuviera COCINANDO el alimento, cuando en realidad lo
+# describía ya cocido (un paso de montaje no cocina — ver además el skip
+# explícito en `_v1_verbo_alimento`). Fix: negative-lookahead de participio
+# (`d[oa]s?\b` / `t[oa]s?\b` para las irregulares -frito/-sofrito) tras cada
+# raíz cuya forma participial existe en español. Verificado LETRA A LETRA
+# (reporte `.superpowers/culinary-fp-round1-report.md`, sección "Traza"):
+#   - hervir: "hervido" NO matchea 'hierv' (h-e-r-v ≠ h-i-e-r-v) y "cocido"
+#     NO matchea 'coce' (c-o-c-i ≠ c-o-c-e) — el gap de orden de letras ya
+#     los excluía. SIN cambios.
+#   - freir: "frito/frita" tampoco matchea ('fr[ií]e' exige una 'e' justo
+#     tras la i/í; 'fre[ií]r' exige una 'r' justo tras la e) — SIN cambios.
+#   - hornear/guisar/saltear-sofreír-dorar/licuar/tostar: SÍ colisionaban
+#     (hornea+do, guisa+do, saltea+do, sofr[ií]+to, dora+do, licua+do,
+#     tosta+da) — lookahead aplicado a las 5 raíces + a la irregular sofrito.
+#     'tuesta\w*' no tiene forma participial propia (el participio de
+#     "tostar" es "tostado", no "tuestado") — SIN cambios.
 VERB_TO_METHOD = {
     r"hierv\w*|hirv\w*|cuec\w*|coce\w*|cocci[oó]n": "hervir",
     r"plancha|parrilla": "plancha",
     r"fr[ií]e\w*|fre[ií]r": "freir",
-    r"hornea\w*|horno|airfryer": "hornear",
-    r"guisa\w*": "guisar",
+    r"hornea(?!d[oa]s?\b)\w*|horno|airfryer": "hornear",
+    r"guisa(?!d[oa]s?\b)\w*": "guisar",
     # [Task-4 RESOLUCIÓN 1 · controller] "sofr[ií]\w*" vive en ESTA alternancia
     # (fusionado con "saltea\w*"), NO bajo "freir" (el brief original lo
     # agrupaba junto con freír). Sofreír cebolla/ají es la base de TODA
@@ -51,9 +73,9 @@ VERB_TO_METHOD = {
     # (Pechuga de pollo / Carne de res sin 'tostar' en prep_methods) —
     # detectado por `test_capa1_cero_fp_sobre_los_buenos`, NO por un test
     # unitario con catálogo sintético.
-    r"saltea\w*|sofr[ií]\w*|dora\w*": "saltear",
-    r"lic[uú]a\w*": "licuar",
-    r"tuesta\w*|tosta\w*": "tostar",
+    r"saltea(?!d[oa]s?\b)\w*|sofr[ií](?!t[oa]s?\b)\w*|dora(?!d[oa]s?\b)\w*": "saltear",
+    r"lic[uú]a(?!d[oa]s?\b)\w*": "licuar",
+    r"tuesta\w*|tosta(?!d[oa]s?\b)\w*": "tostar",
 }
 _VERB_RES = [(re.compile(rf"\b(?:{frag})", re.IGNORECASE), metodo)
              for frag, metodo in VERB_TO_METHOD.items()]
@@ -66,6 +88,44 @@ CONDIMENT_EXEMPT = frozenset({
 })
 
 _RE_ESTADO = re.compile(r"ya\s+vien[e]?\s+cocid|ya\s+est[aá]\s+cocid", re.IGNORECASE)
+
+# [P1-CULINARY-CONTRACT-FP1 · 2026-08-01, clase A refuerzo] Un paso de
+# "Montaje:" ensambla componentes YA preparados (el prefijo lo garantiza la
+# convención de secciones `_CULINARY_STEP_SECTIONS` en cron_tasks.py) — jamás
+# cocina, así que V1 no debe leerlo. Anclado sobre el FP real: «Montaje:
+# Sirve el revoltillo sobre el yaniqueque horneado y el Casabe.» V2/V3 SÍ
+# siguen leyendo montaje sin cambios (V3 en particular NECESITA las
+# menciones de montaje para no marcar huérfanos que solo aparecen ahí).
+_RE_MONTAJE_STEP = re.compile(r"^\s*montaje\s*:", re.IGNORECASE)
+
+_WINDOW_WORDS = 4
+_WORD_RE = re.compile(r"\S+")
+
+
+def _post_verb_resolves(paso_norm: str, ends: list, index: dict) -> bool:
+    """[P1-CULINARY-CONTRACT-FP1 · 2026-08-01, clase B] True si el objeto
+    directo inmediato de AL MENOS UNA ocurrencia de este verbo en el paso
+    (heurística: las `_WINDOW_WORDS` palabras que siguen al match) resuelve a
+    un alimento del catálogo.
+
+    Por qué existe: el FP real «El Toque de Fuego: Coloca la Avena y la
+    Leche en la olla; tuesta las almendras aparte.» acusaba a Avena/Leche de
+    'tostar' — el verbo real apuntaba a "almendras" (no catalogado), pero la
+    salvaguarda multi-alimento de `_v1_verbo_alimento` no se activaba porque
+    NINGÚN alimento del paso (Avena/Leche) acepta 'tostar', y sin destinatario
+    válido la salvaguarda por diseño acusa a todos.
+
+    Límites documentados (heurística simple por espacios, NO parsing
+    sintáctico): no resuelve cruces de coma/conjunción hacia OTRA cláusula
+    ("Cuece a fuego lento; luego agrega el Casabe" con Casabe fuera de la
+    ventana de 4 palabras tras "Cuece" fail-abre igual — trade-off aceptado,
+    mismo criterio fail-open que el resto del módulo: mejor callar que
+    acusar al alimento equivocado)."""
+    for end in ends:
+        tail = " ".join(_WORD_RE.findall(paso_norm[end:])[:_WINDOW_WORDS])
+        if tail and find_catalog_foods(tail, index):
+            return True
+    return False
 
 
 def _norm(text: str) -> str:
@@ -157,18 +217,27 @@ def _iter_meals(plan_data: dict):
 def _v1_verbo_alimento(day, meal, index) -> list:
     out = []
     for paso in meal.get("recipe") or []:
-        # dict.fromkeys en vez de list comp: cinturón y tirantes contra la
-        # próxima clave de VERB_TO_METHOD que alguien añada resolviendo a un
-        # método ya cubierto por otra clave (orden de primera aparición
-        # preservado; sin esto, dos claves→mismo método duplican `metodos` y
-        # por tanto duplican la violación V1 para el mismo (food, método)).
-        metodos = list(dict.fromkeys(
-            met for rx, met in _VERB_RES if rx.search(_norm(paso))))
-        if not metodos:
+        paso_norm = _norm(paso)
+        if _RE_MONTAJE_STEP.match(paso_norm):
+            # [FP1 clase A refuerzo] paso de montaje: nunca cocina, V1 no aplica.
+            continue
+        # met_ends: método → posiciones (fin de match) de cada ocurrencia del
+        # verbo que resuelve a ese método en ESTE paso. dict en vez de un
+        # simple `set`/list de métodos: cinturón y tirantes contra la próxima
+        # clave de VERB_TO_METHOD que alguien añada resolviendo a un método ya
+        # cubierto por otra clave (sin esto, dos claves→mismo método duplican
+        # la violación V1 para el mismo (food, método)) Y necesarias para la
+        # heurística de ventana post-verbo (Clase B) de más abajo.
+        met_ends = {}
+        for rx, met in _VERB_RES:
+            positions = [m.end() for m in rx.finditer(paso_norm)]
+            if positions:
+                met_ends.setdefault(met, []).extend(positions)
+        if not met_ends:
             continue
         foods = find_catalog_foods(paso, index)
         metas = {food: (index.get(_norm(food)) or {}) for food in foods}
-        for met in metodos:
+        for met, ends in met_ends.items():
             # [Task-4 RESOLUCIÓN 2 · controller] atribución verbo→alimento por
             # paso: todo verbo del paso se cruza con todo alimento del paso
             # (letra del brief), PERO con salvaguarda — si el paso menciona
@@ -183,6 +252,16 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                          if meta.get("prep_methods") is not None
                          and met in meta.get("prep_methods")}
             safeguard = len(foods) >= 2 and len(accepting) >= 1
+            # [FP1 clase B] si NADIE en el paso acepta el método (accepting
+            # vacío) Y el objeto directo inmediato del verbo (ventana
+            # post-verbo, ver `_post_verb_resolves`) tampoco resuelve a un
+            # alimento del catálogo, el destinatario real es un no-catalogado
+            # (p.ej. "almendras") — no acusar a los DEMÁS alimentos del paso
+            # por un verbo que no era para ellos. Si accepting NO está vacío
+            # (hay destinatario válido en el paso), este veto no aplica — la
+            # salvaguarda de arriba ya decide caso a caso.
+            if not accepting and not _post_verb_resolves(paso_norm, ends, index):
+                continue
             for food in foods:
                 if food in accepting:
                     continue

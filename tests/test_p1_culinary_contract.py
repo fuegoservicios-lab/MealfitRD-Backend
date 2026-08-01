@@ -453,6 +453,105 @@ def test_degrade_offending_steps_matcher_canonico_no_substring():
     assert n == 1, f"debe degradar exactamente 1 paso (Casabe), no {n}"
 
 
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT-FP1 · 2026-08-01] FP reales 2026-08-01 plan 165dd761 —
+# primer plan real en producción (fase warn), 9/9 violaciones V1 eran falsos
+# positivos de 2 mecanismos: Clase A — participio/adjetival capturado por el
+# `\w*` genérico tras la raíz del verbo (6/9, TODAS en pasos de "Montaje:"):
+# «el yaniqueque HORNEADO», «pollo desmechado SALTEADO», «las TOSTADAS» ×2.
+# Clase B — atribución cruzada (3/9): el verbo apuntaba a un alimento
+# no-catalogado ("almendras") y, sin destinatario válido, la salvaguarda
+# multi-alimento acusaba a los acompañantes catalogados (avena/leche/clara)
+# que sí estaban en el paso pero NO eran el objeto real del verbo.
+# Fix: negative-lookahead de participio en VERB_TO_METHOD (hornear/guisar/
+# saltear-sofreír-dorar/licuar/tostar) + skip de pasos "Montaje:" en V1
+# (nunca cocina) + veto de ventana post-verbo (~4 palabras) cuando NINGÚN
+# alimento del paso acepta el método. Traza completa por fragmento de verbo:
+# `.superpowers/culinary-fp-round1-report.md`.
+# ---------------------------------------------------------------------------
+
+_CAT_FP1 = _CAT + [
+    {"name": "Yaniqueque", "prep_methods": ["hornear", "freir"], "ready_to_eat": True},
+    {"name": "Avena", "prep_methods": ["hervir", "ninguno"], "ready_to_eat": None},
+    {"name": "Leche", "prep_methods": ["ninguno", "crudo", "licuar", "hervir"], "ready_to_eat": True},
+]
+
+
+def test_fp1_step_has_cooking_verb_no_lee_participios():
+    """Aísla el mecanismo del participio (Clase A) vía la función pública
+    `step_has_cooking_verb` — independiente del skip de Montaje y de la
+    ventana post-verbo (que viven en `_v1_verbo_alimento`, no en el regex).
+    Las 4 formas participiales de los 9 FPs reales + el resto del
+    vocabulario con participio en español NO deben leerse como verbo de
+    cocción; los imperativos/gerundios reales SIGUEN detectándose."""
+    participios_no_deben_matchear = [
+        "el yaniqueque horneado", "pollo desmechado salteado con los vegetales",
+        "coloca el huevo sobre las tostadas", "almendras tostadas",
+        "pollo guisado listo para servir", "el sofrito de la olla",
+        "pollo dorado", "un licuado de frutas",
+    ]
+    for texto in participios_no_deben_matchear:
+        assert cc.step_has_cooking_verb(texto) is False, texto
+
+    imperativos_deben_matchear = [
+        "Hornea el pollo", "Saltea los vegetales", "Sofríe la cebolla",
+        "Dora la carne", "Tuesta el pan", "Licua las frutas",
+        "Guisa el pollo", "Hierve el agua", "Cuece el arroz",
+    ]
+    for texto in imperativos_deben_matchear:
+        assert cc.step_has_cooking_verb(texto) is True, texto
+
+
+def test_fp1_clase_a_montaje_con_participio_no_dispara_v1():
+    """(a) FP real literal: 'Montaje: Sirve el revoltillo sobre el
+    yaniqueque horneado y el Casabe.' NO produce V1 — doble defensa
+    (participio 'horneado' ya excluido del regex de hornear, Y el paso
+    entero es 'Montaje:' así que V1 ni siquiera lo evalúa)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Montaje: Sirve el revoltillo sobre el yaniqueque horneado y el Casabe."],
+        ["1 Yaniqueque", "30 g Casabe"]), _CAT_FP1)
+    assert not [x for x in v if x["check"] == "V1"], v
+
+
+def test_fp1_clase_b_ventana_post_verbo_no_resoluble_no_acusa():
+    """(b) FP real literal: 'El Toque de Fuego: Coloca la Avena y la Leche
+    en la olla; tuesta las almendras aparte.' con Avena/Leche en catálogo
+    (ninguna acepta 'tostar') y 'almendras' FUERA del catálogo → 0 V1. El
+    verbo 'tuesta' apunta a 'almendras' (ventana post-verbo no resuelve a
+    ningún alimento del catálogo), así que la salvaguarda no debe extender
+    la acusación a los acompañantes Avena/Leche."""
+    v = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Coloca la Avena y la Leche en la olla; "
+         "tuesta las almendras aparte."],
+        ["100 g Avena", "200 ml Leche"]), _CAT_FP1)
+    assert not [x for x in v if x["check"] == "V1"], v
+
+
+def test_fp1_positivos_reales_siguen_disparando():
+    """(c) Los positivos de siempre SIGUEN disparando tras el fix — ni el
+    negative-lookahead de participio ni el veto de ventana post-verbo deben
+    apagar un imperativo real con destinatario catalogado."""
+    v1 = cc.culinary_contract_scan(_plan(
+        ["Cuece el Casabe según el paquete."], ["30 g Casabe"]), _CAT)
+    assert any(x["check"] == "V1" and x["food"] == "Casabe" for x in v1), v1
+
+    v2 = cc.culinary_contract_scan(_plan(["Tuesta la Pechuga de pollo."]), _CAT)
+    hits = [x for x in v2 if x["check"] == "V1"]
+    assert hits and hits[0]["food"] == "Pechuga de pollo", v2
+
+
+def test_fp1_montaje_skip_es_especifico_de_v1_no_afecta_v3():
+    """El skip de 'Montaje:' vive SOLO en `_v1_verbo_alimento` — V3 sigue
+    leyendo el blob completo de pasos (incluido Montaje) para resolver
+    menciones. Si el skip se filtrara a V3, un ingrediente solo nombrado en
+    el paso de Montaje se marcaría huérfano por error; aquí Repollo SÍ se
+    menciona (en Montaje) y NO debe reportarse huérfano."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Montaje: Sirve el Repollo sobre el plato."],
+        ["80 g Repollo"]), _CAT)
+    assert not [x for x in v if x["check"] == "V3" and x["food"] == "Repollo"], v
+
+
 def test_degrade_offending_steps_acota_por_meal():
     """[Fix post-review, Important #2] El bloque original ignoraba
     `_v["meal"]` y barría TODAS las comidas del edge_day por cada violación
