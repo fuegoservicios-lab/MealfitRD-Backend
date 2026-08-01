@@ -715,6 +715,210 @@ def test_fp_round2_anclas_existentes_siguen_vivas():
     assert any(x["check"] == "V1" and x["food"] == "Casabe" for x in dispara_2), dispara_2
 
 
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT-FP round 3 · 2026-08-01] FPs reales del plan 5fba379a
+# (score 96.5, corr a046005f) — 7/7 violaciones V1 eran falsos positivos de
+# UN SOLO mecanismo nuevo, distinto de rounds 1/2: `_v1_verbo_alimento`
+# atribuía alimentos por PASO COMPLETO en vez de por ORACIÓN (cláusula) del
+# verbo — si CUALQUIER ocurrencia de un método en el paso resolvía a un
+# alimento legítimo, la acusación se desbloqueaba para TODOS los alimentos
+# del paso, incluidos los de oraciones SIN relación con esa ocurrencia:
+#   - Huevo (Desayuno real): «Tuesta el pan integral... [oración 2, sin
+#     'tostar': agrega el huevo... cocina 3-4 min...]; tuesta las semillas
+#     de calabaza...» — la 2ª ocurrencia de 'tostar' (semillas de calabaza,
+#     legítima, sin metadata ⇒ fail-open) "rescataba" el veto para el paso
+#     ENTERO y acusaba a Huevo, que vive en la oración del MEDIO y no es
+#     objeto de NINGUNA ocurrencia de 'tostar'. "pan integral" (2 tokens) en
+#     el paso NO resuelve al catálogo real, que solo tiene "Pan integral
+#     personal"/"Pan integral familiar" (3 tokens) — la heurística de objeto
+#     inmediato de round 2 SÍ vetaba correctamente la 1ª ocurrencia
+#     ('vetoes', pan integral no catalogado), pero el veto viejo era
+#     agregado por MÉTODO (`_post_verb_resolves` con TODOS los spans), así
+#     que la 2ª ocurrencia (otra oración) igual desbloqueaba el paso entero.
+#   - Cebolla/Ají cubanela/Ajo/Tomate/Berenjena/Limón (Almuerzo real): la
+#     ÚNICA ocurrencia de 'tostar' del paso («Tuesta las semillas de
+#     calabaza...») vive en la ÚLTIMA oración; el resto son sofrito/guisado
+#     de oraciones ANTERIORES sin relación con 'tostar' — mismo mecanismo.
+# Fix: la atribución de alimentos pasa de PASO a CLÁUSULA (oración,
+# `_clause_bounds`) POR OCURRENCIA — cada ocurrencia del verbo solo "ve" los
+# alimentos de SU PROPIA oración. La heurística de objeto inmediato de
+# round 2 (`_object_inmediato_status`/`_occurrence_resolves`) se conserva
+# sin cambios — sigue resolviendo el caso "dos verbos, misma oración, unidos
+# por 'y'" (FP-C) que el acotado por cláusula por sí solo NO cubre.
+# Traza completa (incluida la reproducción SQL contra el plan real vía
+# `culinary_coherence.py` puro, sin tocar prod): `.superpowers/culinary-fp-
+# round1-report.md`, sección "Ronda 3".
+# ---------------------------------------------------------------------------
+
+_CAT_FP3 = _CAT + [
+    {"name": "Huevo", "prep_methods": ["hervir", "plancha", "freir", "hornear", "guisar", "saltear"], "ready_to_eat": False},
+    {"name": "Cebolla", "prep_methods": ["hervir", "saltear", "plancha", "hornear", "guisar", "crudo"], "ready_to_eat": None},
+    {"name": "Ají cubanela", "prep_methods": ["hervir", "saltear", "plancha", "hornear", "guisar", "crudo"], "ready_to_eat": None},
+    {"name": "Ajo", "prep_methods": ["hervir", "saltear", "plancha", "hornear", "guisar", "crudo"], "ready_to_eat": None},
+    {"name": "Tomate", "prep_methods": ["hervir", "saltear", "plancha", "hornear", "guisar", "crudo"], "ready_to_eat": None},
+    {"name": "Berenjena", "prep_methods": ["hervir", "saltear", "plancha", "hornear", "guisar", "crudo"], "ready_to_eat": None},
+    {"name": "Limón", "prep_methods": ["crudo", "licuar", "ninguno"], "ready_to_eat": True},
+    {"name": "Pan integral familiar", "prep_methods": ["tostar", "ninguno"], "ready_to_eat": True},
+    # Sin metadata en el catálogo real (fail-open) — incluidos para fidelidad
+    # con el plan real, no participan en ninguna aserción por sí mismos.
+    {"name": "Semillas de calabaza", "prep_methods": None, "ready_to_eat": None},
+    {"name": "Aceite de oliva", "prep_methods": None, "ready_to_eat": None},
+    {"name": "Pimienta negra", "prep_methods": None, "ready_to_eat": None},
+    {"name": "Orégano dominicano", "prep_methods": None, "ready_to_eat": None},
+    {"name": "Laurel", "prep_methods": None, "ready_to_eat": None},
+    {"name": "Arroz blanco", "prep_methods": None, "ready_to_eat": None},
+]
+
+# Texto REAL del plan 5fba379a, día 2, Desayuno paso "El Toque de Fuego"
+# (única fuente: SELECT plan_data->'days' contra Neon, solo lectura).
+_FP3_PASO_DESAYUNO = (
+    "El Toque de Fuego: Tuesta el pan integral en sartén a fuego medio "
+    "durante 2-3 minutos por lado. En la misma sartén, calienta el aceite "
+    "de oliva a fuego medio, agrega el huevo con la pimienta negra y el "
+    "orégano dominicano, y cocina 3-4 minutos hasta que estén completamente "
+    "cuajados; tuesta las semillas de calabaza a fuego bajo durante 2 "
+    "minutos."
+)
+
+# Texto REAL del plan 5fba379a, día 2, Almuerzo paso "El Toque de Fuego".
+_FP3_PASO_ALMUERZO = (
+    "El Toque de Fuego: Precalienta el horno a 200°C. Coloca los guineítos "
+    "verdes en una bandeja y hornéalos 18-20 minutos hasta que estén "
+    "tiernos. Mientras tanto, calienta el aceite de oliva en una sartén a "
+    "fuego medio; sofríe la cebolla, el ají cubanela y el ajo durante 3 "
+    "minutos. Añade el pollo, el tomate, la hoja de laurel, el orégano "
+    "dominicano y la pimienta negra, y cocina 10-12 minutos hasta que el "
+    "pollo alcance cocción completa. Incorpora la berenjena y cocina 5 "
+    "minutos más; retira la hoja de laurel y termina con el jugo de limón. "
+    "Tuesta las semillas de calabaza en una sartén seca a fuego bajo "
+    "durante 2 minutos."
+)
+
+
+def test_fp3_huevo_oracion_intermedia_no_contaminada_por_tostar_de_otra_oracion():
+    """Huevo real: el FP acusaba a Huevo de 'tostar' porque el paso tiene
+    DOS ocurrencias de 'tostar' en DOS oraciones distintas (pan integral —
+    oración 1 — y semillas de calabaza — oración 3) y Huevo vive en la
+    oración del MEDIO, sin relación con ninguna. 0 V1 tras el fix."""
+    v = cc.culinary_contract_scan(_plan(
+        [_FP3_PASO_DESAYUNO],
+        ["2 rebanadas de pan integral familiar", "2 huevos",
+         "1½ cdtas de aceite de oliva", "Pimienta negra al gusto",
+         "Orégano dominicano al gusto"]), _CAT_FP3)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert not v1, v1
+
+
+def test_fp3_pan_integral_no_resuelve_al_catalogo_de_dos_tres_tokens():
+    """Ancla el porqué exacto de la 1ª oración: 'pan integral' (2 tokens en
+    el paso) NO matchea 'Pan integral familiar' (3 tokens en el catálogo
+    real) — el alias exige la frase completa. Confirma que la 1ª ocurrencia
+    de 'tostar' no tiene NINGÚN alimento catalogado en su propia cláusula
+    (no por casualidad del fix, sino porque el objeto real es no-catalogado)."""
+    clause_start, clause_end = cc._clause_bounds(cc._norm(_FP3_PASO_DESAYUNO), 19)
+    index = cc.build_culinary_index(_CAT_FP3)
+    clausula = cc._norm(_FP3_PASO_DESAYUNO)[clause_start:clause_end]
+    assert cc.find_catalog_foods(clausula, index) == [], (
+        f"'pan integral' no debe resolver al catálogo dentro de su propia "
+        f"oración: {clausula!r}")
+
+
+def test_fp3_sofrito_y_guisado_no_contaminados_por_tostar_de_otra_oracion():
+    """Almuerzo real: Cebolla/Ají cubanela/Ajo (sofrito) y Tomate/Berenjena
+    (guisado) y Limón (exprimido crudo) viven en oraciones ANTERIORES a la
+    única ocurrencia de 'tostar' del paso ('Tuesta las semillas de
+    calabaza...', última oración) — ninguno debe acusarse de 'tostar'.
+    0 V1 tras el fix (antes: 6 FPs, uno por cada alimento de esas
+    oraciones)."""
+    v = cc.culinary_contract_scan(_plan(
+        [_FP3_PASO_ALMUERZO],
+        ["1 cebolla", "1 ají cubanela", "1½ dientes de ajo",
+         "½ tomate mediano", "1½ berenjena pequeña", "1 limón",
+         "10 g de semillas de calabaza"]), _CAT_FP3)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert not v1, v1
+
+
+def test_fp3_ocurrencia_ilegitima_en_su_propia_oracion_sigue_disparando():
+    """Control positivo: el fix acota por CLÁUSULA, no apaga el check. Un
+    'tostar' cuyo objeto real (en SU PROPIA oración) SÍ está catalogado y NO
+    acepta el método sigue disparando — y un alimento de OTRA oración con un
+    método que SÍ acepta sigue sin acusarse (misma separación que protege
+    los FPs reales, ahora probada en sentido positivo)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Sofríe el Repollo. Tuesta el Bistec de res en la sartén."],
+        ["80 g Repollo", "120 g Bistec de res"]), _CAT)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert [x["food"] for x in v1] == ["Bistec de res"], v1
+
+
+def test_fp3_dedup_ocurrencias_repetidas_mismo_metodo_en_oraciones_distintas():
+    """[P1-CULINARY-CONTRACT-FP round 3] El dedup `(food, método)` vive a
+    nivel de PASO (set `accused` fuera del loop de ocurrencias) — dos
+    ocurrencias del MISMO método en DOS oraciones distintas que ambas
+    apuntan al MISMO alimento no-catalogado-para-ese-método deben producir
+    UNA sola violación, no dos (a diferencia de round 1, donde 'Sofríe y
+    saltea...' probaba el dedup dentro de una ÚNICA cláusula; aquí el
+    dedup debe sobrevivir CRUZANDO cláusulas)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Tuesta el Bistec de res. Tuesta el Bistec de res otra vez."],
+        ["120 g Bistec de res"]), _CAT)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert len(v1) == 1 and v1[0]["food"] == "Bistec de res", v1
+
+
+def test_fp_round3_anclas_existentes_siguen_vivas():
+    """Regresión explícita: los anclas de round 1/2 (participio+montaje,
+    ventana post-verbo, objeto inmediato, horno-sustantivo, multi-alimento)
+    siguen disparando/callando igual tras el refactor de atribución por
+    cláusula de round 3."""
+    # round 1/2: Cuece a fuego medio... el Casabe -> dispara.
+    v1 = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Cuece a fuego medio por 15 minutos hasta "
+         "ablandar el Casabe."],
+        ["30 g Casabe"]), _CAT)
+    hits = [x for x in v1 if x["check"] == "V1"]
+    assert hits and hits[0]["food"] == "Casabe", hits
+
+    # round 1: almendras no catalogadas -> avena/leche NO se acusan.
+    v2 = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Coloca la Avena y la Leche en la olla; "
+         "tuesta las almendras aparte."],
+        ["100 g Avena", "200 ml Leche"]), _CAT_FP1)
+    assert not [x for x in v2 if x["check"] == "V1"], v2
+
+    # round 1: participio en Montaje -> no dispara.
+    v3 = cc.culinary_contract_scan(_plan(
+        ["Montaje: Sirve el revoltillo sobre el yaniqueque horneado y el Casabe."],
+        ["1 Yaniqueque", "30 g Casabe"]), _CAT_FP1)
+    assert not [x for x in v3 if x["check"] == "V1"], v3
+
+    # round 2 FP-C: objeto inmediato no catalogado ('tortilla') veta Huevo,
+    # aunque Huevo esté en la MISMA oración tras un 'y coloca'.
+    v4 = cc.culinary_contract_scan(_plan(
+        ["Tuesta la tortilla integral en una sartén y coloca el Huevo encima."],
+        ["1 Huevo"]), _CAT_FP2)
+    assert not [x for x in v4 if x["check"] == "V1"], v4
+
+    # round 2 FP-D: 'apto para horno' es el envase, no cocina.
+    v5 = cc.culinary_contract_scan(_plan(
+        ["Coloca la pasta en un recipiente apto para horno, distribuye el "
+         "Queso de hoja."],
+        ["30 g Queso de hoja"]), _CAT_FP2)
+    assert not [x for x in v5 if x["check"] == "V1"], v5
+
+    # multi-alimento con destinatario válido -> no acusa al acompañante.
+    v6 = cc.culinary_contract_scan(_plan(
+        ["Hierve el Repollo y sirve con Casabe."],
+        ["80 g Repollo", "30 g Casabe"]), _CAT)
+    assert not [x for x in v6 if x["check"] == "V1"], v6
+
+    # positivo de siempre: Tuesta la Pechuga de pollo -> sigue disparando.
+    v7 = cc.culinary_contract_scan(_plan(["Tuesta la Pechuga de pollo."]), _CAT)
+    hits7 = [x for x in v7 if x["check"] == "V1"]
+    assert hits7 and hits7[0]["food"] == "Pechuga de pollo", hits7
+
+
 def test_degrade_offending_steps_acota_por_meal():
     """[Fix post-review, Important #2] El bloque original ignoraba
     `_v["meal"]` y barría TODAS las comidas del edge_day por cada violación

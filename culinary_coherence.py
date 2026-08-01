@@ -167,7 +167,7 @@ def _object_inmediato_status(tail: str, index: dict) -> str:
     dígitos puros; el primer token de CONTENIDO decide: abre una mención
     catalogada → 'resolves'; es contenido no-catalogado → 'vetoes'; se
     agota la cola sin ningún token de contenido → 'empty' (el llamador
-    decide el fallback — ver `_post_verb_resolves`)."""
+    decide el fallback — ver `_occurrence_resolves`)."""
     spans = _catalog_food_spans(tail, index)
     for m in _WORD_RE.finditer(tail):
         tok = m.group()
@@ -179,43 +179,79 @@ def _object_inmediato_status(tail: str, index: dict) -> str:
     return "empty"
 
 
-def _post_verb_resolves(paso_norm: str, spans: list, index: dict) -> bool:
-    """[P1-CULINARY-CONTRACT-FP round 1+2 · 2026-08-01] True si el objeto
-    directo de AL MENOS UNA ocurrencia de este verbo — heurística de objeto
-    inmediato (ver bloque de comentario arriba) sobre la ventana hasta la
-    frontera de oración ('.'/';' o fin del paso) — resuelve a un alimento
-    del catálogo.
+# [P1-CULINARY-CONTRACT-FP round 3 · 2026-08-01] Plan real 5fba379a (score
+# 96.5, corr a046005f) midió 7/7 violaciones V1 FALSO POSITIVAS de UN SOLO
+# mecanismo nuevo, distinto de rounds 1/2: la ventana/veto de rounds 1-2
+# decidía "¿algún alimento acepta el método, o el objeto inmediato resuelve?"
+# UNA VEZ POR MÉTODO agregando TODAS sus ocurrencias en el paso — y si
+# CUALQUIER ocurrencia resolvía, `_v1_verbo_alimento` acusaba a TODOS los
+# alimentos del PASO ENTERO (`foods = find_catalog_foods(paso, index)`, sin
+# acotar), aunque vivieran en una ORACIÓN distinta a la de esa ocurrencia:
+#   - Huevo (Desayuno): «Tuesta el pan integral... [oración 2: cuece el
+#     huevo]... tuesta las semillas de calabaza.» — la 2ª ocurrencia de
+#     'tostar' (semillas de calabaza, legítima) desbloqueaba la acusación
+#     para TODO el paso, incluyendo a Huevo en la oración del medio, que no
+#     es objeto de NINGUNA ocurrencia de 'tostar'.
+#   - Cebolla/Ají cubanela/Ajo/Tomate/Berenjena/Limón (Almuerzo): la ÚNICA
+#     ocurrencia de 'tostar' del paso («Tuesta las semillas de calabaza...»)
+#     vive en la ÚLTIMA oración; el resto son sofrito/guisado de OTRAS
+#     oraciones anteriores, sin relación con 'tostar'.
+# Fix: la atribución de alimentos pasa de PASO a CLÁUSULA (oración,
+# `_SENTENCE_BOUNDARY_RE`) POR OCURRENCIA — `_clause_bounds` acota la
+# oración de cada ocurrencia y `_v1_verbo_alimento` solo considera
+# `find_catalog_foods` DENTRO de esa cláusula (no del paso completo) para
+# decidir accepting/safeguard/acusación de ESA ocurrencia. La heurística de
+# objeto inmediato de round 2 (`_object_inmediato_status`) se conserva sin
+# cambios — sigue resolviendo el caso "dos verbos, misma oración, unidos por
+# 'y'" (FP-C) que el acotado por cláusula por sí solo NO cubre (ambos objetos
+# viven en la MISMA oración ahí, no en oraciones distintas). Traza completa:
+# `.superpowers/culinary-fp-round1-report.md`, sección "Ronda 3".
+def _clause_bounds(paso_norm: str, pos: int) -> tuple:
+    """[start, end) de la cláusula (oración) de `paso_norm` que contiene la
+    posición `pos`, acotada por `_SENTENCE_BOUNDARY_RE` ('.'/';') o los
+    extremos del paso — la MISMA noción de "oración" que el antiguo
+    `_post_verb_resolves` (round 1/2, renombrado/refactorizado a
+    `_occurrence_resolves` en round 3) ya usaba para la ventana hacia
+    adelante y el fallback hacia atrás, ahora factorizada para además
+    acotar qué alimentos cuentan como "del paso" en `_v1_verbo_alimento`
+    (round 3)."""
+    start = 0
+    for m in _SENTENCE_BOUNDARY_RE.finditer(paso_norm):
+        if m.end() <= pos:
+            start = m.end()
+        else:
+            break
+    end_match = _SENTENCE_BOUNDARY_RE.search(paso_norm, pos)
+    end = end_match.start() if end_match else len(paso_norm)
+    return start, end
 
-    Por qué existe (caso original round 1): el FP real «El Toque de Fuego:
-    Coloca la Avena y la Leche en la olla. Tuesta las almendras aparte.»
-    acusaba a Avena/Leche de 'tostar' — el verbo real apuntaba a
-    "almendras" (no catalogado), pero la salvaguarda multi-alimento de
-    `_v1_verbo_alimento` no se activaba porque NINGÚN alimento del paso
-    (Avena/Leche) acepta 'tostar', y sin destinatario válido la salvaguarda
-    por diseño acusa a todos.
 
-    `spans` es una lista de tuplas `(start, end)` — una por ocurrencia del
-    verbo en `paso_norm` — no solo el `end` (round 1): el fallback (c)
-    necesita el `start` para acotar la búsqueda hacia atrás a la cláusula
-    del verbo."""
-    for start, end in spans:
-        tail_full = paso_norm[end:]
-        boundary = _SENTENCE_BOUNDARY_RE.search(tail_full)
-        tail = tail_full[:boundary.start()] if boundary else tail_full
-        status = _object_inmediato_status(tail, index)
-        if status == "resolves":
-            return True
-        if status == "vetoes":
-            continue
-        # status == "empty": nada nombrado hacia adelante en esta cláusula.
-        # Fallback (c): mirar hacia atrás, acotado a la MISMA cláusula.
-        head = paso_norm[:start]
-        prev_boundaries = list(_SENTENCE_BOUNDARY_RE.finditer(head))
-        clause_start = prev_boundaries[-1].end() if prev_boundaries else 0
-        head_tail = paso_norm[clause_start:start]
-        if head_tail.strip() and find_catalog_foods(head_tail, index):
-            return True
-    return False
+def _occurrence_resolves(paso_norm: str, start: int, end: int,
+                          clause_start: int, clause_end: int, index: dict) -> bool:
+    """[P1-CULINARY-CONTRACT-FP round 1+2+3 · 2026-08-01] True si el objeto
+    directo de ESTA ocurrencia del verbo (`start`,`end`) — heurística de
+    objeto inmediato (ver bloque de comentario arriba), ventana hacia
+    adelante hasta el fin de la cláusula (`clause_end`) con fallback hacia
+    atrás hasta el inicio de la cláusula (`clause_start`) — resuelve a un
+    alimento del catálogo.
+
+    [round 3] Antes evaluaba TODAS las ocurrencias de un método en el paso y
+    bastaba con que UNA sola resolviera para desbloquear la acusación sobre
+    el paso ENTERO (`_post_verb_resolves`, plural). Ahora `_v1_verbo_alimento`
+    llama esta función UNA VEZ POR OCURRENCIA, con `foods`/`accepting` ya
+    acotados a la cláusula de esa ocurrencia — cierra el caso real donde una
+    2ª ocurrencia legítima en otra oración "rescataba" el veto y contaminaba
+    alimentos de una oración intermedia que no era el objeto de nadie."""
+    tail = paso_norm[end:clause_end]
+    status = _object_inmediato_status(tail, index)
+    if status == "resolves":
+        return True
+    if status == "vetoes":
+        return False
+    # status == "empty": nada nombrado hacia adelante en esta cláusula.
+    # Fallback (c, round 2): mirar hacia atrás, acotado a la MISMA cláusula.
+    head = paso_norm[clause_start:start]
+    return bool(head.strip() and find_catalog_foods(head, index))
 
 
 def _norm(text: str) -> str:
@@ -322,66 +358,85 @@ def _v1_verbo_alimento(day, meal, index) -> list:
         if _RE_MONTAJE_STEP.match(paso_norm):
             # [FP1 clase A refuerzo] paso de montaje: nunca cocina, V1 no aplica.
             continue
-        # met_ends: método → spans (start, end) de cada ocurrencia del verbo
+        # met_spans: método → spans (start, end) de cada ocurrencia del verbo
         # que resuelve a ese método en ESTE paso. dict en vez de un simple
         # `set`/list de métodos: cinturón y tirantes contra la próxima clave
         # de VERB_TO_METHOD que alguien añada resolviendo a un método ya
-        # cubierto por otra clave (sin esto, dos claves→mismo método duplican
-        # la violación V1 para el mismo (food, método)) Y necesarias para la
-        # heurística de objeto inmediato de más abajo — el `start` (además
-        # del `end`, round 1) hace falta para el fallback (c) de
-        # `_post_verb_resolves` (buscar hacia atrás dentro de la cláusula).
-        met_ends = {}
+        # cubierto por otra clave. El `start` (además del `end`) hace falta
+        # para `_clause_bounds`/`_occurrence_resolves` (round 1-3).
+        met_spans = {}
         for rx, met in _VERB_RES:
             spans = [(m.start(), m.end()) for m in rx.finditer(paso_norm)]
             if spans:
-                met_ends.setdefault(met, []).extend(spans)
-        if not met_ends:
+                met_spans.setdefault(met, []).extend(spans)
+        if not met_spans:
             continue
-        foods = find_catalog_foods(paso, index)
-        metas = {food: (index.get(_norm(food)) or {}) for food in foods}
-        for met, spans in met_ends.items():
-            # [Task-4 RESOLUCIÓN 2 · controller] atribución verbo→alimento por
-            # paso: todo verbo del paso se cruza con todo alimento del paso
-            # (letra del brief), PERO con salvaguarda — si el paso menciona
-            # ≥2 alimentos y ≥1 de ellos SÍ acepta el método, el check se
-            # salta los demás alimentos de ese paso para ESE método. Un paso
-            # multi-alimento con un destinatario válido del verbo no acusa a
-            # los acompañantes: "Hierve el arroz y sirve con casabe" no es
-            # cocer el casabe. Si NINGÚN alimento acepta el método, la
-            # salvaguarda no aplica y se acusa a todos (no hay "destinatario
-            # válido" que lo lea como paso legítimo con acompañante inocente).
-            accepting = {f for f, meta in metas.items()
-                         if meta.get("prep_methods") is not None
-                         and met in meta.get("prep_methods")}
-            safeguard = len(foods) >= 2 and len(accepting) >= 1
-            # [FP1 clase B] si NADIE en el paso acepta el método (accepting
-            # vacío) Y el objeto directo inmediato del verbo (ventana
-            # post-verbo, ver `_post_verb_resolves`) tampoco resuelve a un
-            # alimento del catálogo, el destinatario real es un no-catalogado
-            # (p.ej. "almendras") — no acusar a los DEMÁS alimentos del paso
-            # por un verbo que no era para ellos. Si accepting NO está vacío
-            # (hay destinatario válido en el paso), este veto no aplica — la
-            # salvaguarda de arriba ya decide caso a caso.
-            if not accepting and not _post_verb_resolves(paso_norm, spans, index):
-                continue
-            for food in foods:
-                if food in accepting:
+        # [P1-CULINARY-CONTRACT-FP round 3] `accused` deduplica por
+        # (food, método) a través de OCURRENCIAS del mismo método en el mismo
+        # paso (p.ej. "Sofríe y saltea..." dispara 2 ocurrencias de 'saltear'
+        # — sin esto, si ambas resolvieran, el mismo alimento se acusaría
+        # dos veces vía dos ocurrencias distintas).
+        accused = set()
+        for met, spans in met_spans.items():
+            for start, end in spans:
+                # [P1-CULINARY-CONTRACT-FP round 3] atribución por CLÁUSULA
+                # (oración), no por paso completo — ver bloque de comentario
+                # sobre `_clause_bounds`. Cada ocurrencia del verbo solo
+                # "ve" los alimentos de SU PROPIA oración; una ocurrencia
+                # legítima en otra oración del mismo paso ya no desbloquea
+                # la acusación sobre alimentos de oraciones ajenas.
+                clause_start, clause_end = _clause_bounds(paso_norm, start)
+                clause_text = paso_norm[clause_start:clause_end]
+                foods = find_catalog_foods(clause_text, index)
+                if not foods:
                     continue
-                meta = metas[food]
-                prep = meta.get("prep_methods")
-                if prep is None:
-                    continue                      # fail-open: sin metadata no se juzga
-                if safeguard:
-                    continue                       # acompañante del destinatario válido
-                if meta.get("ready_to_eat") is True:
-                    out.append(_viol(day, meal, "V1", food,
-                                     f"paso aplica '{met}' a un listo-para-comer: {paso[:120]}",
-                                     "minor", False))
-                else:
-                    out.append(_viol(day, meal, "V1", food,
-                                     f"'{met}' no está en prep_methods{tuple(prep)}: {paso[:120]}",
-                                     "minor", False))
+                metas = {food: (index.get(_norm(food)) or {}) for food in foods}
+                # [Task-4 RESOLUCIÓN 2 · controller] atribución verbo→alimento
+                # dentro de la CLÁUSULA de esta ocurrencia (letra del brief
+                # era "por paso"; round 3 la acota a oración — ver arriba),
+                # con salvaguarda — si la cláusula menciona ≥2 alimentos y
+                # ≥1 de ellos SÍ acepta el método, el check se salta los
+                # demás alimentos de esa cláusula para ESE método. Un paso
+                # multi-alimento con un destinatario válido del verbo no
+                # acusa a los acompañantes: "Hierve el arroz y sirve con
+                # casabe" no es cocer el casabe. Si NINGÚN alimento acepta
+                # el método, la salvaguarda no aplica y se acusa a todos (no
+                # hay "destinatario válido" que lo lea como paso legítimo
+                # con acompañante inocente).
+                accepting = {f for f, meta in metas.items()
+                             if meta.get("prep_methods") is not None
+                             and met in meta.get("prep_methods")}
+                safeguard = len(foods) >= 2 and len(accepting) >= 1
+                # [FP1 clase B] si NADIE en la cláusula acepta el método
+                # (accepting vacío) Y el objeto directo inmediato de ESTA
+                # ocurrencia (ver `_occurrence_resolves`) tampoco resuelve a
+                # un alimento del catálogo, el destinatario real es un
+                # no-catalogado (p.ej. "almendras") — no acusar a los DEMÁS
+                # alimentos de la cláusula por un verbo que no era para
+                # ellos. Si accepting NO está vacío (hay destinatario válido
+                # en la cláusula), este veto no aplica — la salvaguarda de
+                # arriba ya decide caso a caso.
+                if not accepting and not _occurrence_resolves(
+                        paso_norm, start, end, clause_start, clause_end, index):
+                    continue
+                for food in foods:
+                    if food in accepting or (food, met) in accused:
+                        continue
+                    meta = metas[food]
+                    prep = meta.get("prep_methods")
+                    if prep is None:
+                        continue                      # fail-open: sin metadata no se juzga
+                    if safeguard:
+                        continue                       # acompañante del destinatario válido
+                    accused.add((food, met))
+                    if meta.get("ready_to_eat") is True:
+                        out.append(_viol(day, meal, "V1", food,
+                                         f"paso aplica '{met}' a un listo-para-comer: {paso[:120]}",
+                                         "minor", False))
+                    else:
+                        out.append(_viol(day, meal, "V1", food,
+                                         f"'{met}' no está en prep_methods{tuple(prep)}: {paso[:120]}",
+                                         "minor", False))
     return out
 
 
