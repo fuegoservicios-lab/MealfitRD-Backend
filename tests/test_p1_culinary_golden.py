@@ -89,6 +89,54 @@ def test_manifest_cruza_con_fixtures():
     assert clases_vistas == _CLASES, f"clases sin mutación: {_CLASES - clases_vistas}"
 
 
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · Task 5] Sección scan: capa 1 (V1+V2+V3) contra el
+# catálogo REAL de Neon. Contrato F1 (spec §6): 100% de las clases capa1:* en
+# los 5 mutados, 0 falsos positivos en los 5 buenos. Si falla: el fix va a
+# `culinary_coherence.py`, JAMÁS al fixture (ground truth aprobado).
+# ---------------------------------------------------------------------------
+
+def _catalogo_golden():
+    """Catálogo para CI SIN DB: el manifest lista los foods usados; aquí se
+    materializa metadata mínima determinista (los tests unitarios ya cubren la
+    semántica fina)."""
+    import db_core
+    if getattr(db_core, "connection_pool", None):
+        try:
+            db_core.connection_pool.open()
+            from shopping_calculator import get_master_ingredients
+            cat = get_master_ingredients()
+            if cat:
+                return cat
+        except Exception:
+            pass
+    pytest.skip("sin catálogo DB para la sección scan")
+
+
+def test_capa1_cero_fp_sobre_los_buenos():
+    import culinary_coherence as cc
+    cat = _catalogo_golden()
+    for i in range(1, 6):
+        v = cc.culinary_contract_scan(_load(f"golden_{i:02d}_bueno"), cat)
+        assert not v, f"golden_{i:02d}_bueno: FPs de capa 1: {v}"
+
+
+def test_capa1_atrapa_100pct_de_sus_clases():
+    import culinary_coherence as cc
+    cat = _catalogo_golden()
+    man = _load("golden_manifest")
+    fallos = []
+    for nombre, entry in man["mutados"].items():
+        v = cc.culinary_contract_scan(_load(nombre), cat)
+        for df in entry["defects"]:
+            if not df["expected_by"].startswith("capa1:"):
+                continue
+            check = df["expected_by"].split(":")[1]
+            if not any(x["check"] == check and x["day"] == df["day"] for x in v):
+                fallos.append(f"{nombre}: {df['class']} (día {df['day']}) no atrapado por {check}")
+    assert not fallos, "Si falla: el fix va al scan, JAMÁS relajar el fixture.\n" + "\n".join(fallos)
+
+
 def test_slugs_de_catalogo_vivos():
     """Anti-caducidad: los alimentos que el golden set usa siguen en el catálogo.
     Sin pool DB → skip (no flakiness en CI sin red)."""

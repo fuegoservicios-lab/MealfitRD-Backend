@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 _BACKEND = Path(__file__).resolve().parent.parent
 _MIG = _BACKEND / "migrations" / "p1_culinary_metadata_master_ingredients_2026_07_31.sql"
 _MIG_ROOT = _BACKEND.parent / "migrations" / _MIG.name
@@ -138,3 +140,57 @@ def test_v1_sofr_y_saltea_en_el_mismo_paso_no_duplica_violacion():
                                         ["120 g Bistec de res"]), _CAT)
     v1 = [x for x in v if x["check"] == "V1"]
     assert len(v1) == 1, v1
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · Task 5] V2 (estado imposible) + V3 (huérfanos).
+# ---------------------------------------------------------------------------
+
+def test_v2_ya_viene_cocido_sobre_fresco():
+    v = cc.culinary_contract_scan(_plan(
+        ["Sirve la Pechuga de pollo (ya viene cocida) sobre la ensalada."]), _CAT)
+    hit = [x for x in v if x["check"] == "V2"]
+    assert hit and hit[0]["severity"] == "high", v
+
+
+def test_v2_legal_sobre_ready_to_eat():
+    v = cc.culinary_contract_scan(_plan(["Sirve el Casabe (ya viene cocido)."],
+                                        ["30 g Casabe"]), _CAT)
+    assert not [x for x in v if x["check"] == "V2"], v
+
+
+def test_v3_huerfano_resoluble_al_catalogo():
+    v = cc.culinary_contract_scan(_plan(
+        ["Cocina la Pechuga de pollo a la plancha y sirve."],
+        ["120 g Pechuga de pollo", "80 g Repollo"]), _CAT)   # Repollo sin paso
+    hit = [x for x in v if x["check"] == "V3"]
+    assert hit and hit[0]["food"] == "Repollo" and hit[0]["repairable"] is True, v
+
+
+def test_v3_ignora_condimentos_y_no_resolubles():
+    """'picados' (participio) no matchea catálogo ⇒ jamás huérfano (el FP del
+    plan real 43ec0576); condimentos exentos por lista canónica."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Cocina la Pechuga de pollo a la plancha."],
+        ["120 g Pechuga de pollo", "tomates picados", "1 pizca de sal", "aceite de oliva"]), _CAT)
+    hit = [x for x in v if x["check"] == "V3"]
+    assert [x["food"] for x in hit] == ["Tomate"], (
+        f"solo Tomate (resoluble, sin paso) debe ser huérfano — nunca 'picados' "
+        f"ni condimentos: {hit}")
+
+
+def test_v3_plural_singular_no_da_fp():
+    v = cc.culinary_contract_scan(_plan(
+        ["Ralla el tomate encima."], ["2 tomates", "120 g Pechuga de pollo",
+                                      "Cocina la pechuga"]), _CAT)
+    assert not [x for x in v if x["check"] == "V3" and x["food"] == "Tomate"], v
+
+
+def test_scan_coverage_fraccion_con_y_sin_metadata():
+    """[Task-5, gap señalado en el review de T4] scan_coverage con _CAT: un
+    plan que menciona 2 alimentos CON metadata (Pechuga de pollo, Tomate) y 1
+    SIN metadata (Misterio sin metadata) ⇒ coverage == 2/3."""
+    plan = _plan(["Cocina la Pechuga de pollo y sirve con Tomate."],
+                 ["120 g Pechuga de pollo", "50 g Tomate", "10 g Misterio sin metadata"])
+    cov = cc.scan_coverage(plan, _CAT)
+    assert cov == pytest.approx(2 / 3), cov

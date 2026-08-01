@@ -39,9 +39,21 @@ VERB_TO_METHOD = {
     # distintas resolviendo al mismo método producían DOS entradas
     # duplicadas en `metodos` por paso (p.ej. "Sofríe y saltea..."), y por
     # tanto dos violaciones V1 idénticas para el mismo (food, método).
-    r"saltea\w*|sofr[ií]\w*": "saltear",
+    # [Task-5 · golden set] "dora\w*" vive AQUÍ (fusionado con saltear/sofreír),
+    # NO con "tuesta\w*|tosta\w*". "Agrega la pechuga de pollo en trozos y
+    # dora"/"Agrega la carne de res y dora" son el paso de sellado en caliente
+    # que abre CADA guiso dominicano (Pechuga de pollo, Carne de res: fresh
+    # proteins con 'saltear' y 'freir' en prep_methods pero SIN 'tostar' —
+    # tostar es para pan/casabe, dorar carne es sellar en sartén/grasa, la
+    # misma técnica que sofreír). Antes de este fix, "dora" resolvía a
+    # 'tostar' y el golden set (5/5 buenos con "... y dora." en Locrío/
+    # Sancocho) disparaba V1 falso-positivo real contra el catálogo de Neon
+    # (Pechuga de pollo / Carne de res sin 'tostar' en prep_methods) —
+    # detectado por `test_capa1_cero_fp_sobre_los_buenos`, NO por un test
+    # unitario con catálogo sintético.
+    r"saltea\w*|sofr[ií]\w*|dora\w*": "saltear",
     r"lic[uú]a\w*": "licuar",
-    r"tuesta\w*|tosta\w*|dora\w*": "tostar",
+    r"tuesta\w*|tosta\w*": "tostar",
 }
 _VERB_RES = [(re.compile(rf"\b(?:{frag})", re.IGNORECASE), metodo)
              for frag, metodo in VERB_TO_METHOD.items()]
@@ -168,6 +180,86 @@ def _v1_verbo_alimento(day, meal, index) -> list:
     return out
 
 
+def _v2_estado_imposible(day, meal, index) -> list:
+    out = []
+    textos = list(meal.get("recipe") or []) + list(meal.get("ingredients") or [])
+    for t in textos:
+        if not _RE_ESTADO.search(_norm(t)):
+            continue
+        for food in find_catalog_foods(t, index):
+            meta = index.get(_norm(food)) or {}
+            if meta.get("ready_to_eat") is False:      # NULL ⇒ fail-open
+                out.append(_viol(day, meal, "V2", food,
+                                 f"'(ya viene cocido)' sobre alimento fresco: {str(t)[:120]}",
+                                 "high", False))
+    return out
+
+
+def _mencionado_por_prefijo(food: str, pasos_norm: str, comida_foods: list) -> bool:
+    """[Task-5 · golden set] Nombres compuestos con calificador final ('Arroz
+    blanco', 'Yogurt griego sin azúcar') que la prosa dominicana menciona por
+    su forma genérica ('el arroz', 'el yogurt griego') — el calificador
+    completo casi nunca se repite en la receta si ya está en `ingredients`.
+    Detectado por `test_capa1_cero_fp_sobre_los_buenos` contra el catálogo
+    real (NO por los tests unitarios con catálogo sintético, que no tienen
+    ningún alimento de 2+ palabras con calificador recortable).
+
+    Prueba prefijos DECRECIENTES del nombre (nunca el nombre completo — eso ya
+    lo cubre `food in en_pasos` antes de llamar aquí) y acepta el más largo
+    que aparezca en los pasos, EXCEPTO si ese prefijo es ambiguo con otro
+    alimento de la MISMA comida que comparte la cabeza pero difiere después
+    ('Ají cubanela' vs 'Ají morrón' — el guard existe precisamente porque el
+    golden set inyecta 'Ají morrón' huérfano en comidas que sí mencionan 'el
+    ají cubanela'; caer a la cabeza sola 'ají' lo habría enmascarado)."""
+    tokens = _norm(food).split()
+    for k in range(len(tokens) - 1, 0, -1):
+        prefijo = tokens[:k]
+        ambiguo = any(
+            otro != food and _norm(otro).split()[:k] == prefijo
+            for otro in comida_foods
+        )
+        if ambiguo:
+            continue
+        patron = re.compile(
+            r"\b" + r"\s+".join(_sing_plural_pattern(t) for t in prefijo) + r"\b")
+        if patron.search(pasos_norm):
+            return True
+    return False
+
+
+def _v3_huerfanos(day, meal, index) -> list:
+    pasos_blob = " || ".join(meal.get("recipe") or [])
+    pasos_norm = _norm(pasos_blob)
+    en_pasos = set(find_catalog_foods(pasos_blob, index))
+    ingredientes = meal.get("ingredients") or []
+    # Alimentos de ESTA comida ya resueltos por ingrediente — solo para el
+    # guard de ambigüedad de `_mencionado_por_prefijo` (no cambia qué cuenta
+    # como huérfano por sí solo).
+    comida_foods = []
+    for ing in ingredientes:
+        resuelto = find_catalog_foods(ing, index)
+        if resuelto:
+            comida_foods.append(resuelto[0])
+
+    out = []
+    for ing in ingredientes:
+        n = _norm(ing)
+        if any(ex in n for ex in CONDIMENT_EXEMPT):
+            continue
+        foods = find_catalog_foods(ing, index)
+        if not foods:
+            continue          # no resoluble al catálogo (p.ej. 'picados') ⇒ skip
+        food = foods[0]       # el alias más largo/primero del string
+        if food in en_pasos:
+            continue
+        if _mencionado_por_prefijo(food, pasos_norm, comida_foods):
+            continue
+        out.append(_viol(day, meal, "V3", food,
+                         f"listado ('{str(ing)[:60]}') pero ningún paso lo menciona",
+                         "minor", True))
+    return out
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -184,6 +276,8 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
         out = []
         for day, meal in _iter_meals(plan_data):
             out.extend(_v1_verbo_alimento(day, meal, index))
+            out.extend(_v2_estado_imposible(day, meal, index))
+            out.extend(_v3_huerfanos(day, meal, index))
         return out
     except Exception:
         return []
