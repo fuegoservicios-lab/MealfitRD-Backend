@@ -95,6 +95,17 @@ CONDIMENT_EXEMPT = frozenset({
     "condimento", "especia", "caldo", "cubito", "ajo en polvo", "canela", "comino",
 })
 
+# [V4 · 2026-08-01] Tolerancia de divergencia de gramaje entre `ingredients` y
+# los pasos, sobre `|N_ingrediente − N_paso| / max(N)`. 25% es GENEROSO a
+# propósito: redondeos de lonjas/tazas/piezas a un gramaje "bonito" son
+# legítimos (1¾ lonjas ≈ 45 g de un ingrediente cuya línea de compra dice
+# "30 g" es 33% de divergencia — SÍ dispara; una lonja de más/menos entre 100
+# g y 110 g es 9% — NO dispara). Caso real que motiva el check: plan
+# 5f4bb17e, día 2 — ingrediente "30 g de queso" vs Mise en place "desmenuza
+# 1¾ lonjas/pedazos de queso de hoja (45 g)": el usuario ve dos números para
+# el MISMO alimento y no sabe a cuál creer.
+V4_TOLERANCIA = 0.25
+
 _RE_ESTADO = re.compile(r"ya\s+vien[e]?\s+cocid|ya\s+est[aá]\s+cocid", re.IGNORECASE)
 
 # [P1-CULINARY-CONTRACT-FP1 · 2026-08-01, clase A refuerzo] Un paso de
@@ -565,6 +576,116 @@ def _v3_huerfanos(day, meal, index) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · V4 · 2026-08-01] Consistencia de cantidades
+# ingredientes↔Mise en place. Caso real (plan 5f4bb17e, capturas del owner):
+# `ingredients` dice "30 g de queso" pero el paso de Mise en place dice
+# "desmenuza 1¾ lonjas/pedazos de queso de hoja (45 g)" — 30≠45, ambos en
+# GRAMOS del MISMO alimento, y el usuario no sabe a cuál creer.
+#
+# REGLAS DURAS:
+#   (a) SOLO compara gramos con gramos — nunca inventa una conversión
+#       taza/cdta/unidad → gramos. Si un lado no declara "N g" explícito,
+#       se salta esa comparación en silencio (no es una violación "no
+#       comparable", simplemente no aplica).
+#   (b) El alimento se resuelve con el matcher canónico del módulo
+#       (`find_catalog_foods`/`_catalog_food_spans`, word-boundary + alias
+#       más largo gana) — jamás substring.
+#   (c) Si un alimento tiene gramaje explícito en varios pasos, manda la
+#       PRIMERA mención de Mise en place; si Mise en place no lo declara,
+#       cae al primer paso (en orden) que sí lo declare.
+#   (d) Fail-open total — hereda el try/except de `culinary_contract_scan`.
+# ---------------------------------------------------------------------------
+
+_V4_GRAMS_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramos?)\b", re.IGNORECASE)
+_RE_MISE_STEP = re.compile(r"^\s*mise en place\s*:", re.IGNORECASE)
+
+
+def _v4_grams_by_food(text_norm: str, index: dict) -> dict:
+    """{food: gramos} de TODAS las menciones con gramaje explícito de
+    `text_norm` (ya normalizado, `_norm`). Empareja cada número "N g" con el
+    alimento catalogado MÁS CERCANO dentro de la MISMA cláusula (oración,
+    `clause_bounds`) — nunca con el primero que matchee en todo el texto:
+    "mide 15 g de merey y 10 g de granola" debe emparejar 15↔merey y
+    10↔granola por PROXIMIDAD, no ambos con el primer alimento que aparezca.
+    Si un alimento tiene ≥2 menciones con gramaje en el mismo texto, se queda
+    con la PRIMERA (orden de aparición, cláusula por cláusula)."""
+    out = {}
+    for c_start, c_end in clause_bounds(text_norm):
+        clause = text_norm[c_start:c_end]
+        foods = _catalog_food_spans(clause, index)
+        if not foods:
+            continue
+        grams = [(m.start(), m.end(), float(m.group(1).replace(",", ".")))
+                 for m in _V4_GRAMS_RE.finditer(clause)]
+        for g_start, g_end, val in grams:
+            best_food, best_dist = None, None
+            for f_start, f_end, f_name in foods:
+                if g_start >= f_end:
+                    dist = g_start - f_end
+                elif g_end <= f_start:
+                    dist = f_start - g_end
+                else:
+                    dist = 0
+                if best_dist is None or dist < best_dist:
+                    best_dist, best_food = dist, f_name
+            if best_food is not None and best_food not in out:
+                out[best_food] = val
+    return out
+
+
+def _v4_cantidad_inconsistente(day, meal, index) -> list:
+    out = []
+    ingredientes = meal.get("ingredients") or []
+    pasos = meal.get("recipe") or []
+
+    # Lado ingrediente: convención del repo es 1 alimento resoluble por
+    # renglón ("CADA CONDIMENTO EN SU PROPIO RENGLÓN") — se resuelve el
+    # primer alimento del renglón (mismo criterio que V3, `foods[0]`) y se
+    # busca SU gramaje dentro de ESE MISMO renglón.
+    ing_grams = {}
+    for ing in ingredientes:
+        n = _norm(str(ing))
+        foods = find_catalog_foods(n, index)
+        if not foods:
+            continue
+        food = foods[0]
+        if food in ing_grams:
+            continue          # renglón duplicado del mismo alimento: se queda con el primero
+        pares = _v4_grams_by_food(n, index)
+        if food in pares:
+            ing_grams[food] = pares[food]
+
+    if not ing_grams:
+        return out             # ningún ingrediente declara gramaje explícito ⇒ nada que comparar
+
+    # Lado pasos: prioriza Mise en place (regla c); si un alimento no
+    # declara gramaje ahí, cae al primer paso (en orden) que sí lo declare.
+    mise_grams, primer_grams = {}, {}
+    for paso in pasos:
+        n = _norm(str(paso))
+        pares = _v4_grams_by_food(n, index)
+        es_mise = bool(_RE_MISE_STEP.match(n))
+        for food, val in pares.items():
+            if food not in primer_grams:
+                primer_grams[food] = val
+            if es_mise and food not in mise_grams:
+                mise_grams[food] = val
+
+    for food, ing_val in ing_grams.items():
+        paso_val = mise_grams.get(food, primer_grams.get(food))
+        if paso_val is None:
+            continue           # ningún paso declara gramaje explícito para este alimento ⇒ skip
+        denom = max(ing_val, paso_val)
+        if denom <= 0:
+            continue
+        if abs(ing_val - paso_val) / denom > V4_TOLERANCIA:
+            out.append(_viol(day, meal, "V4", food,
+                             f"ingrediente declara {ing_val:g} g, pasos declaran {paso_val:g} g",
+                             "minor", False))
+    return out
+
+
 def _viol(day, meal, check, food, detail, severity, repairable):
     return {"day": day, "meal": meal.get("meal") or meal.get("name"),
             "check": check, "food": food, "detail": detail,
@@ -583,6 +704,7 @@ def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
             out.extend(_v1_verbo_alimento(day, meal, index))
             out.extend(_v2_estado_imposible(day, meal, index))
             out.extend(_v3_huerfanos(day, meal, index))
+            out.extend(_v4_cantidad_inconsistente(day, meal, index))
         return out
     except Exception:
         return []

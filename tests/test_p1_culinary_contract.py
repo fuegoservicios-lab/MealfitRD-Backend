@@ -1028,3 +1028,114 @@ def test_v1_legitimo_licuar_yogur_no_dispara():
                  ["⅔ taza de Yogurt griego sin azúcar", "1 mango"])
     v = cc.culinary_contract_scan(plan, _CAT_YOGUR)
     assert not [x for x in v if x["check"] == "V1"], v
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · V4 · 2026-08-01] Consistencia de cantidades
+# ingredientes↔Mise en place. Caso real que motiva el check (plan 5f4bb17e,
+# capturas del owner): `ingredients` dice "30 g de queso" pero el paso de
+# Mise en place dice "desmenuza 1¾ lonjas/pedazos de queso de hoja (45 g)" —
+# 30≠45, ambos EN GRAMOS del MISMO alimento, y el usuario no sabe a cuál
+# creer. V4 SOLO compara gramos con gramos (nunca inventa una conversión
+# taza/cdta/unidad → gramos) y resuelve el alimento con el matcher canónico
+# del módulo (`find_catalog_foods`, word-boundary), jamás substring.
+# ---------------------------------------------------------------------------
+
+_CAT_V4 = _CAT + [
+    {"name": "Queso de hoja", "prep_methods": ["ninguno", "crudo"], "ready_to_eat": True},
+    {"name": "Merey", "prep_methods": ["crudo", "tostar"], "ready_to_eat": True},
+    {"name": "Granola", "prep_methods": ["ninguno", "crudo"], "ready_to_eat": True},
+    {"name": "Yogurt", "prep_methods": ["ninguno", "crudo", "licuar"], "ready_to_eat": True},
+]
+
+
+def test_v4_caso_real_queso_30_vs_45():
+    """(a) Caso real literal del plan 5f4bb17e: ingrediente "30 g de queso de
+    hoja" vs Mise en place "... (45 g)" — 30≠45 (33% de divergencia, por
+    encima del 25% de tolerancia) debe disparar V4 con ambos números en el
+    detail."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: desmenuza 1¾ lonjas/pedazos de queso de hoja (45 g)."],
+        ["30 g de queso de hoja"]), _CAT_V4)
+    v4 = [x for x in v if x["check"] == "V4"]
+    assert v4 and v4[0]["food"] == "Queso de hoja" and v4[0]["severity"] == "minor" \
+        and v4[0]["repairable"] is False, v4
+    assert "30" in v4[0]["detail"] and "45" in v4[0]["detail"], v4
+
+
+def test_v4_dentro_de_tolerancia_no_dispara():
+    """(b) 100 g vs 110 g = 9% de divergencia, por debajo del 25% de
+    tolerancia (generosa a propósito: redondeos de lonjas/tazas legítimos) —
+    0 violaciones."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: pesa 110 g de queso de hoja."],
+        ["100 g de queso de hoja"]), _CAT_V4)
+    assert not [x for x in v if x["check"] == "V4"], v
+
+
+def test_v4_unidades_no_comparables_skip():
+    """(c) Ingrediente en taza (SIN 'N g' explícito) vs paso con paréntesis
+    en gramos — regla dura (a): jamás inventar una conversión taza↔gramo, se
+    salta la comparación en silencio."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: sirve el yogurt (120 g)."],
+        ["½ taza de yogurt"]), _CAT_V4)
+    assert not [x for x in v if x["check"] == "V4"], v
+
+
+def test_v4_multi_alimento_misma_clausula_empareja_por_proximidad():
+    """(d) "mide 15 g de merey y 10 g de granola" con ingredientes "15 g de
+    merey"/"10 g de granola" separados — cada gramaje debe emparejarse con SU
+    alimento por proximidad dentro de la cláusula, no con el primero que
+    matchee (si emparejara mal, 15↔granola/10↔merey dispararía V4 falso)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: mide 15 g de merey y 10 g de granola."],
+        ["15 g de merey", "10 g de granola"]), _CAT_V4)
+    assert not [x for x in v if x["check"] == "V4"], v
+
+
+def test_v4_fail_open_catalogo_vacio():
+    """(e) Catálogo vacío ⇒ `build_culinary_index` produce un índice vacío y
+    `culinary_contract_scan` retorna [] antes de evaluar ningún check
+    (incluido V4) — fail-open total, nunca una excepción."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: desmenuza 1¾ lonjas de queso de hoja (45 g)."],
+        ["30 g de queso de hoja"]), [])
+    assert v == []
+
+
+def test_v4_prioriza_mise_en_place_sobre_otros_pasos():
+    """(c del diseño) Con gramaje en DOS pasos (Mise en place Y El Toque de
+    Fuego) que DIVERGEN entre sí, V4 debe comparar contra la primera mención
+    de Mise en place, no contra la de El Toque de Fuego — aunque esta última
+    coincida exactamente con el ingrediente (lo que enmascararía el bug real
+    si el check mirara el paso equivocado)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: desmenuza 1¾ lonjas de queso de hoja (45 g).",
+         "El Toque de Fuego: calienta el queso de hoja (30 g) en la sartén."],
+        ["30 g de queso de hoja"]), _CAT_V4)
+    v4 = [x for x in v if x["check"] == "V4"]
+    assert v4 and v4[0]["food"] == "Queso de hoja", (
+        f"debe comparar contra Mise en place (45 g), no contra El Toque de "
+        f"Fuego (30 g, que coincidiría y enmascararía el bug): {v4}")
+
+
+def test_v4_sin_mise_en_place_cae_al_primer_paso():
+    """Sin paso de Mise en place, V4 cae al primer paso (en orden) que
+    declare gramaje explícito para el alimento."""
+    v = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: calienta 60 g de queso de hoja en la sartén."],
+        ["30 g de queso de hoja"]), _CAT_V4)
+    v4 = [x for x in v if x["check"] == "V4"]
+    assert v4 and v4[0]["food"] == "Queso de hoja", v4
+    assert "30" in v4[0]["detail"] and "60" in v4[0]["detail"], v4
+
+
+def test_v4_ingrediente_sin_gramaje_no_dispara():
+    """Ingrediente sin gramaje explícito ('1 lonja de queso de hoja', sin
+    'N g') no tiene con qué comparar aunque el paso sí declare gramos —
+    skip silencioso, no falla."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Mise en place: desmenuza el queso de hoja (45 g)."],
+        ["1 lonja de queso de hoja"]), _CAT_V4)
+    assert not [x for x in v if x["check"] == "V4"], v
