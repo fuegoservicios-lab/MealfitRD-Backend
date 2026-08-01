@@ -24326,15 +24326,26 @@ _SLICE_GRAMS_FLOOR = 15      # mínimo medible
 
 
 _STEP_QTY_UNITS = (r"g|gr|gramos?|kg|ml|l|taza(?:s)?|cda(?:s)?|cdta(?:s)?|cucharada(?:s)?|"
-                   r"cucharadita(?:s)?|unidad(?:es)?|oz|lb|lonja(?:s)?|rebanada(?:s)?")
+                   r"cucharadita(?:s)?|unidad(?:es)?|oz|lb|lonja(?:s)?|rebanada(?:s)?|pedazo(?:s)?")
 # [P2-QTYSYNC-FRACTION-GUARD · 2026-07-05] lookbehind `(?<![\d/])`: en pasos con fracción ASCII
 # ("con 1/2 cda de aceite") el qty matcheaba SOLO el denominador ("2 cda de...") y la reescritura
 # producía basura tipo "con 1/1.25 cda" / "1/¾ cda" (3 avistamientos en planes vivos: corridas
 # 99583727 y f938c091). Con el guard, esas menciones quedan intactas (conservador anti-corrupción).
+# [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] unidad COMPUESTA con slash ("1¾ lonjas/pedazos de queso
+# (45 g)", plan real 5f4bb17e — diagnóstico `.superpowers/esparragos-600g-diagnostico.md` §3):
+# `pedazo(?:s)?` faltaba de `_STEP_QTY_UNITS` Y aunque "lonja" ya estaba, el slash pegado
+# ("lonjas/pedazos", sin espacio) rompía el match porque tras la 1ª unidad el patrón exigía
+# `\.?\s+de\s+` inmediatamente — el "/pedazos" se interponía. `(?:/(?:...))?` opcional tolera un
+# 2º token de unidad pegado por slash sin cambiar el grupo `unit` capturado (sigue siendo el
+# primero, "lonjas"): la reescritura reemplaza el mention COMPLETO (qty+unit(+/unit2)+"de"+food)
+# por "<qty_actual> <unit_actual> de <food>", así que un unit compuesto en el ORIGEN no necesita
+# sobrevivir al destino. Solo se toca esta regex (no `_ING_LEAD_QTY_RE`/`_ING_LEAD_QTY_MIXED_RE`,
+# lado ingredientes): las líneas de `ingredients[]` no se escriben con la forma "unidad/unidad".
 _STEP_QTY_MENTION_RE = _re.compile(
     # [P2-QTYSYNC-CADA-TOTAL · 2026-07-05] + números MIXTOS "2½ cdas" (antes el lookbehind
     # bloqueaba la fracción pegada al dígito y la mención entera era invisible al sync).
-    r"(?<![\d/])(?P<qty>\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s+de\s+"
+    r"(?<![\d/])(?P<qty>\d+(?:[.,]\d+)?[½¼¾⅓⅔]?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")"
+    r"(?:/(?:" + _STEP_QTY_UNITS + r"))?\.?\s+de\s+"
     r"(?P<food>[A-Za-zÁÉÍÓÚÑÜáéíóúñü][\wáéíóúñü]*(?:\s+[\wáéíóúñü]+){0,2})")
 _ING_LEAD_QTY_RE = _re.compile(
     r"^\s*(?P<qty>\d+(?:[.,]\d+)?|½|¼|¾|⅓|⅔)\s*(?P<unit>" + _STEP_QTY_UNITS + r")\.?\s*(?:de\s+|del\s+)?"
@@ -29225,8 +29236,22 @@ REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
 # almidonado que hace de BASE de carbohidrato del plato (puré de auyama), no relleno de volumen.
 # Recortarla a 250 g le quitaría los carbos a la cena y el motor de macros tendría que
 # recomponer — es un cambio con consecuencias que merece su propia medición, no un token más.
+# [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] +esparrago/vainita/coles de bruselas/molondron. Forense
+# SOLO-LECTURA sobre los 17 planes de prod (`.superpowers/esparragos-600g-diagnostico.md`): el
+# solver LSQ per-meal (`_apply_macro_solver_to_meal`/`portion_solver.solve_meal_macros`) infla un
+# vegetal ACUOSO diluido cuando es el único "carbs driver" barato en gramos del plato (100g de
+# espárragos → 343g, factor 3.43×, reproducido ejecutando el algoritmo real) — mismo mecanismo
+# que motivó P1-VEG-VOLUME-TOKENS, no un caso aislado. 3/17 planes (17.6%) medidos con ≥1 línea de
+# vegetal ≥300-400g, 4 vegetales DISTINTOS (ninguno repetido): "600 g de espárragos" (plan
+# 5f4bb17e, el 600 exacto evade además el techo genérico >600 estricto de LINE_GRAM_HARD_CAP),
+# "400 g de vainitas cortadas" (cf3a81fb), "2.75 tazas de coles de Bruselas (413g)" (7c545d59),
+# "21.5 molondrones medianos (≈322 g)" (7c545d59). "coles de bruselas" es multi-palabra a
+# propósito (no solo "bruselas"): el matcher del consumidor (`_re.search(r"\b" + t, il)`) hace
+# substring sobre texto ya lowercased+accent-stripped, así que el token con espacios matchea
+# igual que uno de una palabra — verificado con test funcional, no solo parser.
 _REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito", "apio",
-                              "coliflor", "brocoli", "repollo", "calabacin")
+                              "coliflor", "brocoli", "repollo", "calabacin",
+                              "esparrago", "vainita", "coles de bruselas", "molondron")
 REALISM_VEG_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_VEG_VOLUME_CAP_G", 250, lambda v: 100 <= v <= 500)
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
 # clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
