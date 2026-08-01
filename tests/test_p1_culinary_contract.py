@@ -221,6 +221,15 @@ def test_v3_condimento_exemption_legitima_multipalabra_y_plural():
     assert not [x for x in v if x["check"] == "V3"], v
 
 
+def test_v3_condimento_exemption_comino():
+    """[P1-CULINARY-CONTRACT] Comino listado como condimento exento — no debe
+    disparar V3 huérfano aunque ningún paso lo mencione (plan real 9bb38a86)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Cocina la Pechuga de pollo a la plancha."],
+        ["120 g Pechuga de pollo", "1 cdta comino"]), _CAT)
+    assert not [x for x in v if x["check"] == "V3"], v
+
+
 def test_scan_coverage_fraccion_con_y_sin_metadata():
     """[Task-5, gap señalado en el review de T4] scan_coverage con _CAT: un
     plan que menciona 2 alimentos CON metadata (Pechuga de pollo, Tomate) y 1

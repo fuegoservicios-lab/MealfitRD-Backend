@@ -92,7 +92,7 @@ _VERB_RES = [(re.compile(rf"\b(?:{frag})", re.IGNORECASE), metodo)
 # que contó 4/12 huérfanos (condimentos no cuentan).
 CONDIMENT_EXEMPT = frozenset({
     "aceite", "sal", "agua", "pimienta", "oregano", "vinagre", "sazon",
-    "condimento", "especia", "caldo", "cubito", "ajo en polvo", "canela",
+    "condimento", "especia", "caldo", "cubito", "ajo en polvo", "canela", "comino",
 })
 
 _RE_ESTADO = re.compile(r"ya\s+vien[e]?\s+cocid|ya\s+est[aá]\s+cocid", re.IGNORECASE)
