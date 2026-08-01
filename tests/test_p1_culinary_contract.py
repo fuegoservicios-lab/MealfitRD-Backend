@@ -285,3 +285,30 @@ def test_scan_corre_despues_de_los_reparadores():
     autopatch = _GO_SRC.index("huérfanos eliminados") if "huérfanos eliminados" in _GO_SRC \
         else _GO_SRC.index("AUTO-PATCH")
     assert _GO_SRC.index("culinary_contract_scan(") > autopatch
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · Task 7] Superficie 2 — paridad de
+# `_fix_refill_step_verb` en `finalize_plan_data_coherence`. Parser-based
+# sobre el SOURCE (mismo motivo que Superficie 1: no importar el módulo aquí).
+# ---------------------------------------------------------------------------
+
+def test_fix_refill_step_verb_corre_en_finalize():
+    """Gap de paridad (spec §4c): _fix_refill_step_verb hoy solo corría en
+    assemble; los paths que saltan assemble (partial/degradado/chunk) persistían
+    sin él. Ancla: su llamada debe existir DENTRO de finalize_plan_data_coherence.
+
+    [Task-7, fix sobre el brief] La ventana fija de 20000 chars del brief original
+    no alcanza: `finalize_plan_data_coherence` mide ~42000 chars (medido 2026-07-31,
+    ver el bloque P1-FINALIZE-TAIL-PARITY/gainmuscle-refill a mitad de función).
+    Mismo patrón ventana-dinámica que `test_review_invoca_el_scan_y_traduce_a_issues`
+    (Superficie 1, arriba): se acota al límite REAL de la función — el próximo
+    `def`/`async def` a nivel de módulo — en vez de un número inventado que
+    quedaría corto si la función sigue creciendo."""
+    i = _GO_SRC.index("def finalize_plan_data_coherence")
+    _next_def = re.search(r"\n(?:async )?def ", _GO_SRC[i + 30:])
+    end = (i + 30 + _next_def.start()) if _next_def else len(_GO_SRC)
+    fin = _GO_SRC[i:end]
+    assert "_fix_refill_step_verb(" in fin, (
+        "finalize_plan_data_coherence no invoca _fix_refill_step_verb — los "
+        "planes del path degradado/chunk siguen con '🍚 Cuece el Casabe'")

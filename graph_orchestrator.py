@@ -24737,17 +24737,29 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
     except Exception as _cg_pb_e:
         logger.warning(f"[P1-CURED-GHOST-STEPS] boundary no-op: {type(_cg_pb_e).__name__}: {_cg_pb_e}")
     # [P2-COOKED-RAW-ANNOTATION + P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] también en el boundary.
+    # [P1-CULINARY-CONTRACT · 2026-07-31] Paridad con assemble: el fix del verbo del refill
+    # (clase '🍚 Cuece el Casabe') corre también en los paths que saltan assemble (partial/
+    # degradado/SSE-fallback/chunk). Mismo orden relativo que assemble (justo tras
+    # `_align_closer_note_food_names`, ver ~L34602-34607): el defecto lo introduce un renombrado
+    # PREVIO del alimento, así que el fix debe correr después de ver el nombre ya renombrado.
+    # Idempotente + fail-safe ⇒ re-correrlo donde assemble ya lo aplicó es no-op (misma garantía
+    # que el resto de la cadena).
     try:
         _ncra = _fix_cooked_raw_annotations(days)
         _nal = 0
+        _nrv = 0
         for _d_al in days or []:
             for _m_al in (_d_al.get("meals") or []) if isinstance(_d_al, dict) else []:
                 if isinstance(_m_al, dict):
                     _nal += _align_closer_note_food_names(_m_al)
+                    if _fix_refill_step_verb(_m_al):
+                        _nrv += 1
         if _ncra:
             total += _ncra; parts.append(f"cooked_raw={_ncra}")
         if _nal:
             total += _nal; parts.append(f"note_align={_nal}")
+        if _nrv:
+            total += _nrv; parts.append(f"refill_verb={_nrv}")
     except Exception as _cra_pb_e:
         logger.warning(f"[P2-COOKED-RAW-ANNOTATION] boundary no-op: {type(_cra_pb_e).__name__}: {_cra_pb_e}")
     # [P2-BOUNDARY-DISPLAY-POLISH · 2026-07-05] (plato vivo "Cdta de miel (opcional)" PERSISTIDO:
