@@ -24737,29 +24737,17 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
     except Exception as _cg_pb_e:
         logger.warning(f"[P1-CURED-GHOST-STEPS] boundary no-op: {type(_cg_pb_e).__name__}: {_cg_pb_e}")
     # [P2-COOKED-RAW-ANNOTATION + P2-NOTE-LINE-NAME-ALIGN · 2026-07-05] también en el boundary.
-    # [P1-CULINARY-CONTRACT · 2026-07-31] Paridad con assemble: el fix del verbo del refill
-    # (clase '🍚 Cuece el Casabe') corre también en los paths que saltan assemble (partial/
-    # degradado/SSE-fallback/chunk). Mismo orden relativo que assemble (justo tras
-    # `_align_closer_note_food_names`, ver ~L34602-34607): el defecto lo introduce un renombrado
-    # PREVIO del alimento, así que el fix debe correr después de ver el nombre ya renombrado.
-    # Idempotente + fail-safe ⇒ re-correrlo donde assemble ya lo aplicó es no-op (misma garantía
-    # que el resto de la cadena).
     try:
         _ncra = _fix_cooked_raw_annotations(days)
         _nal = 0
-        _nrv = 0
         for _d_al in days or []:
             for _m_al in (_d_al.get("meals") or []) if isinstance(_d_al, dict) else []:
                 if isinstance(_m_al, dict):
                     _nal += _align_closer_note_food_names(_m_al)
-                    if _fix_refill_step_verb(_m_al):
-                        _nrv += 1
         if _ncra:
             total += _ncra; parts.append(f"cooked_raw={_ncra}")
         if _nal:
             total += _nal; parts.append(f"note_align={_nal}")
-        if _nrv:
-            total += _nrv; parts.append(f"refill_verb={_nrv}")
     except Exception as _cra_pb_e:
         logger.warning(f"[P2-COOKED-RAW-ANNOTATION] boundary no-op: {type(_cra_pb_e).__name__}: {_cra_pb_e}")
     # [P2-BOUNDARY-DISPLAY-POLISH · 2026-07-05] (plato vivo "Cdta de miel (opcional)" PERSISTIDO:
@@ -24987,15 +24975,34 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
         pass
     # [P2-MISE-COOK-SPLIT · 2026-07-06] cocción atrapada en el Mise sin pilar TdF → split ANTES
     # del lint (el advisory "falta El Toque de Fuego" era falso-positivo para el usuario).
+    # [P1-CULINARY-CONTRACT · 2026-07-31] Paridad con assemble: en `assemble_plan_node` el trío
+    # corre `_align_closer_note_food_names` → `_split_cooking_from_mise` → `_fix_refill_step_verb`,
+    # con el fix del refill AL FINAL (el comentario en ese callsite dice explícitamente "Va aquí,
+    # al final, porque el defecto lo introduce un renombrado POSTERIOR al productor del paso").
+    # En finalize ese trío vive repartido en dos loops distintos: `_align_closer_note_food_names`
+    # corre en el bloque P2-COOKED-RAW-ANNOTATION más arriba y `_split_cooking_from_mise` corre en
+    # ESTE loop tardío — así que el fix del refill se ancla AQUÍ, inmediatamente después de
+    # `_split_cooking_from_mise`, para que ningún pase finalize-only intermedio (los ~13 que corren
+    # entre ese bloque y este loop) quede sin cubrir por el fix. El loop en sí corre incondicional
+    # (`_fix_refill_step_verb` NO se gatea por `MISE_COOK_SPLIT_ENABLED`, que es el knob de una
+    # feature distinta — acoplarlo apagaría el fix del refill si alguien apaga mise-split).
+    # Idempotente + fail-safe ⇒ re-correrlo donde assemble ya lo aplicó es no-op (misma garantía
+    # que el resto de la cadena).
     try:
-        if MISE_COOK_SPLIT_ENABLED:
-            _nms = 0
-            for _d in days or []:
-                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
-                    if isinstance(_m, dict) and _split_cooking_from_mise(_m):
-                        _nms += 1
-            if _nms:
-                total += _nms; parts.append(f"mise_split={_nms}")
+        _nms = 0
+        _nrv = 0
+        for _d in days or []:
+            for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                if not isinstance(_m, dict):
+                    continue
+                if MISE_COOK_SPLIT_ENABLED and _split_cooking_from_mise(_m):
+                    _nms += 1
+                if _fix_refill_step_verb(_m):
+                    _nrv += 1
+        if _nms:
+            total += _nms; parts.append(f"mise_split={_nms}")
+        if _nrv:
+            total += _nrv; parts.append(f"refill_verb={_nrv}")
     except Exception as _ems:
         logger.warning(f"[P2-MISE-COOK-SPLIT] boundary no-op: {type(_ems).__name__}: {_ems}")
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-C) Contract-lint per-meal en el persist boundary: los
