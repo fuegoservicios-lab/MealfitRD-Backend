@@ -126,3 +126,15 @@ def test_v1_multi_alimento_sin_destinatario_valido_acusa_a_todos():
                                         ["30 g Casabe", "120 g Bistec de res"]), _CAT)
     v1_foods = {x["food"] for x in v if x["check"] == "V1"}
     assert v1_foods == {"Casabe", "Bistec de res"}, v
+
+
+def test_v1_sofr_y_saltea_en_el_mismo_paso_no_duplica_violacion():
+    """[Fix post-review] 'sofr[ií]\\w*' y 'saltea\\w*' resuelven al MISMO
+    método ('saltear'). Un paso que dispara ambos fragmentos regex
+    ('Sofríe y saltea...') debe producir UNA sola violación V1 por alimento,
+    no dos idénticas — la dedup vive en la alternancia fusionada de
+    VERB_TO_METHOD Y en `dict.fromkeys` al construir `metodos`."""
+    v = cc.culinary_contract_scan(_plan(["Sofríe y saltea el Bistec de res."],
+                                        ["120 g Bistec de res"]), _CAT)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert len(v1) == 1, v1

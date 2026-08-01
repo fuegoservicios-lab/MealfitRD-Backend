@@ -24,18 +24,22 @@ VERB_TO_METHOD = {
     r"hierv\w*|hirv\w*|cuec\w*|coce\w*|cocci[oó]n": "hervir",
     r"plancha|parrilla": "plancha",
     r"fr[ií]e\w*|fre[ií]r": "freir",
-    # [Task-4 RESOLUCIÓN 1 · controller] "sofr[ií]\w*" vive aquí, NO bajo
-    # "freir" (el brief original lo agrupaba junto con freír). Sofreír
-    # cebolla/ají es la base de TODA receta dominicana, y la metadata de
-    # Vegetales (migración T3) lleva "saltear" pero NO "freir" en
-    # prep_methods — dejarlo bajo freir habría hecho que "Sofríe la cebolla"
-    # disparara V1 falso-positivo en recetas legítimas del golden set (T5 lo
-    # habría medido como FP). Culinariamente sofreír Y saltear son la misma
-    # técnica (grasa caliente, movimiento constante, poco tiempo).
-    r"sofr[ií]\w*": "saltear",
     r"hornea\w*|horno|airfryer": "hornear",
     r"guisa\w*": "guisar",
-    r"saltea\w*": "saltear",
+    # [Task-4 RESOLUCIÓN 1 · controller] "sofr[ií]\w*" vive en ESTA alternancia
+    # (fusionado con "saltea\w*"), NO bajo "freir" (el brief original lo
+    # agrupaba junto con freír). Sofreír cebolla/ají es la base de TODA
+    # receta dominicana, y la metadata de Vegetales (migración T3) lleva
+    # "saltear" pero NO "freir" en prep_methods — dejarlo bajo freir habría
+    # hecho que "Sofríe la cebolla" disparara V1 falso-positivo en recetas
+    # legítimas del golden set (T5 lo habría medido como FP). Culinariamente
+    # sofreír Y saltear son la misma técnica (grasa caliente, movimiento
+    # constante, poco tiempo). [Fix post-review] va FUSIONADO en la misma
+    # clave que "saltea\w*" (no en una entrada separada): dos claves
+    # distintas resolviendo al mismo método producían DOS entradas
+    # duplicadas en `metodos` por paso (p.ej. "Sofríe y saltea..."), y por
+    # tanto dos violaciones V1 idénticas para el mismo (food, método).
+    r"saltea\w*|sofr[ií]\w*": "saltear",
     r"lic[uú]a\w*": "licuar",
     r"tuesta\w*|tosta\w*|dora\w*": "tostar",
 }
@@ -118,7 +122,13 @@ def _iter_meals(plan_data: dict):
 def _v1_verbo_alimento(day, meal, index) -> list:
     out = []
     for paso in meal.get("recipe") or []:
-        metodos = [met for rx, met in _VERB_RES if rx.search(_norm(paso))]
+        # dict.fromkeys en vez de list comp: cinturón y tirantes contra la
+        # próxima clave de VERB_TO_METHOD que alguien añada resolviendo a un
+        # método ya cubierto por otra clave (orden de primera aparición
+        # preservado; sin esto, dos claves→mismo método duplican `metodos` y
+        # por tanto duplican la violación V1 para el mismo (food, método)).
+        metodos = list(dict.fromkeys(
+            met for rx, met in _VERB_RES if rx.search(_norm(paso))))
         if not metodos:
             continue
         foods = find_catalog_foods(paso, index)
