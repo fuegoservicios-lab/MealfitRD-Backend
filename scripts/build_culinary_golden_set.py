@@ -675,7 +675,12 @@ def main():
             json.dumps(mutado, ensure_ascii=False, indent=2), encoding="utf-8")
         manifest["mutados"][f"golden_{i:02d}_mutado"] = {
             "base": f"golden_{i:02d}_bueno", "defects": defects}
-        usados |= _foods_de(bueno)
+        # [fix] El guard fail-loud debe cubrir TODO alimento de TODO plan, no solo el
+        # "bueno" — un ingrediente inyectado únicamente por una mutación (p.ej. "Salami"
+        # vía combo_absurdo) nunca pasaba por este check ni entraba a
+        # catalog_foods_used, dejando un blind spot en test_slugs_de_catalogo_vivos
+        # (que solo itera esa lista).
+        usados |= _foods_de(bueno) | _foods_de(mutado)
     desconocidos = sorted(f for f in usados if f not in CATALOG_NAMES)
     if desconocidos:
         raise SystemExit(f"alimentos fuera del catálogo: {desconocidos}")
