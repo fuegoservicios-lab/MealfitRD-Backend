@@ -1,0 +1,199 @@
+"""[P1-CULINARY-CONTRACT · 2026-07-31] Validador determinista de coherencia
+culinaria — SSOT (espejo del rol de shopping_calculator en el guard de lista).
+
+PURO a propósito: sin env vars, sin LLM, sin DB. El catálogo entra como
+argumento; los knobs viven en los callers (graph_orchestrator / cron_tasks).
+Matching: word-boundary + alias más largo gana + acentos fuera + plural↔singular
+BIDIRECCIONAL (lecciones pollo⊂repollo, sal⊂salami, FP tomates↔tomate del
+dry-run 2026-07-31). Fail-open POR CHECK: alimento sin metadata ⇒ se salta el
+check para ese alimento. El scan JAMÁS muta el plan.
+tooltip-anchor: P1-CULINARY-CONTRACT
+"""
+from __future__ import annotations
+
+import re
+
+from constants import strip_accents
+
+# Vocabulario canónico (el mismo de la migración; el sanity DO $$ lo enforza en DB)
+PREP_VOCAB = ("hervir", "plancha", "freir", "hornear", "guisar", "saltear",
+              "licuar", "tostar", "crudo", "ninguno")
+
+# fragmento-regex → método canónico. Centraliza (y supera) _COOKING_VERB_RE.
+VERB_TO_METHOD = {
+    r"hierv\w*|hirv\w*|cuec\w*|coce\w*|cocci[oó]n": "hervir",
+    r"plancha|parrilla": "plancha",
+    r"fr[ií]e\w*|fre[ií]r": "freir",
+    # [Task-4 RESOLUCIÓN 1 · controller] "sofr[ií]\w*" vive aquí, NO bajo
+    # "freir" (el brief original lo agrupaba junto con freír). Sofreír
+    # cebolla/ají es la base de TODA receta dominicana, y la metadata de
+    # Vegetales (migración T3) lleva "saltear" pero NO "freir" en
+    # prep_methods — dejarlo bajo freir habría hecho que "Sofríe la cebolla"
+    # disparara V1 falso-positivo en recetas legítimas del golden set (T5 lo
+    # habría medido como FP). Culinariamente sofreír Y saltear son la misma
+    # técnica (grasa caliente, movimiento constante, poco tiempo).
+    r"sofr[ií]\w*": "saltear",
+    r"hornea\w*|horno|airfryer": "hornear",
+    r"guisa\w*": "guisar",
+    r"saltea\w*": "saltear",
+    r"lic[uú]a\w*": "licuar",
+    r"tuesta\w*|tosta\w*|dora\w*": "tostar",
+}
+_VERB_RES = [(re.compile(rf"\b(?:{frag})", re.IGNORECASE), metodo)
+             for frag, metodo in VERB_TO_METHOD.items()]
+
+# Exentos de V3 (T5). UNA lista canónica — criterio del audit real 2026-07-31
+# que contó 4/12 huérfanos (condimentos no cuentan).
+CONDIMENT_EXEMPT = frozenset({
+    "aceite", "sal", "agua", "pimienta", "oregano", "vinagre", "sazon",
+    "condimento", "especia", "caldo", "cubito", "ajo en polvo", "canela",
+})
+
+_RE_ESTADO = re.compile(r"ya\s+vien[e]?\s+cocid|ya\s+est[aá]\s+cocid", re.IGNORECASE)
+
+
+def _norm(text: str) -> str:
+    return strip_accents(str(text or "").lower())
+
+
+def _sing_plural_pattern(word: str) -> str:
+    """Patrón que matchea la forma singular Y plural de `word` (bidireccional:
+    si word ya viene en plural, también matchea el singular)."""
+    w = re.escape(word)
+    if word.endswith("es") and len(word) > 4:
+        return rf"{re.escape(word[:-2])}(?:e?s)?"
+    if word.endswith("s") and len(word) > 3:
+        return rf"{re.escape(word[:-1])}s?"
+    return rf"{w}(?:e?s)?"
+
+
+def build_culinary_index(catalog: list) -> dict:
+    """Índice nombre-normalizado → metadata + regex word-boundary del alias."""
+    index = {}
+    for row in catalog or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        norm = _norm(name)
+        tokens = [_sing_plural_pattern(t) for t in norm.split()]
+        rx = re.compile(r"\b" + r"\s+".join(tokens) + r"\b")
+        index[norm] = {
+            "name": name,
+            "prep_methods": row.get("prep_methods"),
+            "ready_to_eat": row.get("ready_to_eat"),
+            "rx": rx,
+        }
+    return index
+
+
+def find_catalog_foods(text: str, index: dict) -> list:
+    """Alimentos del catálogo mencionados en `text`. Alias más largo gana:
+    los spans ya cubiertos por un match largo no re-matchean con uno corto."""
+    blob = _norm(text)
+    hits = []          # (start, end, name)
+    for norm_name in sorted(index, key=len, reverse=True):
+        for m in index[norm_name]["rx"].finditer(blob):
+            if any(s <= m.start() < e or s < m.end() <= e for s, e, _ in hits):
+                continue     # span ya reclamado por un alias más largo
+            hits.append((m.start(), m.end(), index[norm_name]["name"]))
+    seen, out = set(), []
+    for _, _, name in sorted(hits):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _iter_meals(plan_data: dict):
+    for d in (plan_data or {}).get("days") or []:
+        if not isinstance(d, dict):
+            continue
+        for m in d.get("meals") or []:
+            if isinstance(m, dict):
+                yield d.get("day"), m
+
+
+def _v1_verbo_alimento(day, meal, index) -> list:
+    out = []
+    for paso in meal.get("recipe") or []:
+        metodos = [met for rx, met in _VERB_RES if rx.search(_norm(paso))]
+        if not metodos:
+            continue
+        foods = find_catalog_foods(paso, index)
+        metas = {food: (index.get(_norm(food)) or {}) for food in foods}
+        for met in metodos:
+            # [Task-4 RESOLUCIÓN 2 · controller] atribución verbo→alimento por
+            # paso: todo verbo del paso se cruza con todo alimento del paso
+            # (letra del brief), PERO con salvaguarda — si el paso menciona
+            # ≥2 alimentos y ≥1 de ellos SÍ acepta el método, el check se
+            # salta los demás alimentos de ese paso para ESE método. Un paso
+            # multi-alimento con un destinatario válido del verbo no acusa a
+            # los acompañantes: "Hierve el arroz y sirve con casabe" no es
+            # cocer el casabe. Si NINGÚN alimento acepta el método, la
+            # salvaguarda no aplica y se acusa a todos (no hay "destinatario
+            # válido" que lo lea como paso legítimo con acompañante inocente).
+            accepting = {f for f, meta in metas.items()
+                         if meta.get("prep_methods") is not None
+                         and met in meta.get("prep_methods")}
+            safeguard = len(foods) >= 2 and len(accepting) >= 1
+            for food in foods:
+                if food in accepting:
+                    continue
+                meta = metas[food]
+                prep = meta.get("prep_methods")
+                if prep is None:
+                    continue                      # fail-open: sin metadata no se juzga
+                if safeguard:
+                    continue                       # acompañante del destinatario válido
+                if meta.get("ready_to_eat") is True:
+                    out.append(_viol(day, meal, "V1", food,
+                                     f"paso aplica '{met}' a un listo-para-comer: {paso[:120]}",
+                                     "minor", False))
+                else:
+                    out.append(_viol(day, meal, "V1", food,
+                                     f"'{met}' no está en prep_methods{tuple(prep)}: {paso[:120]}",
+                                     "minor", False))
+    return out
+
+
+def _viol(day, meal, check, food, detail, severity, repairable):
+    return {"day": day, "meal": meal.get("meal") or meal.get("name"),
+            "check": check, "food": food, "detail": detail,
+            "severity": severity, "repairable": repairable}
+
+
+def culinary_contract_scan(plan_data: dict, catalog: list) -> list:
+    """Escanea el plan completo. Retorna lista de Violations (vacía si todo
+    coherente o si no hay datos). Jamás lanza: fail-open total."""
+    try:
+        index = build_culinary_index(catalog)
+        if not index:
+            return []
+        out = []
+        for day, meal in _iter_meals(plan_data):
+            out.extend(_v1_verbo_alimento(day, meal, index))
+        return out
+    except Exception:
+        return []
+
+
+def scan_coverage(plan_data: dict, catalog: list) -> float:
+    """Fracción de alimentos mencionados en el plan que tienen metadata
+    (telemetría de cobertura para el rollout warn→block)."""
+    try:
+        index = build_culinary_index(catalog)
+        vistos, con_meta = set(), 0
+        for _, meal in _iter_meals(plan_data):
+            blob = " | ".join(list(meal.get("ingredients") or []) +
+                              list(meal.get("recipe") or []))
+            for f in find_catalog_foods(blob, index):
+                if f in vistos:
+                    continue
+                vistos.add(f)
+                if (index.get(_norm(f)) or {}).get("prep_methods") is not None:
+                    con_meta += 1
+        return (con_meta / len(vistos)) if vistos else 1.0
+    except Exception:
+        return 1.0
