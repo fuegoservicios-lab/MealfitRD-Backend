@@ -38500,6 +38500,46 @@ Responde ÚNICAMENTE con el JSON de revisión.
             logger.warning(f"[P1-CULINARY-CONTRACT] scan no-op (fail-open): "
                            f"{type(_cul_e).__name__}: {_cul_e}")
 
+    # [P1-CULINARY-JUDGE · 2026-08-01] Juicio culinario LLM (F3, Task 12). Va DESPUÉS
+    # del scan determinista de arriba (P1-CULINARY-CONTRACT) — esa capa mide con
+    # regex/metadata; el juez añade juicio holístico (combos, técnica, pasos, nombre)
+    # sobre el mismo plan. Señal ADITIVA: jamás aprueba en silencio lo que la capa 1
+    # ya rechazó. Nace OFF por knob (`CULINARY_JUDGE_GUARD`, T11) → con el default
+    # este bloque es un no-op perfecto (ni siquiera entra al `if`).
+    #
+    # Punto de inserción único, DESPUÉS del if/else bypass-vs-reviewer-LLM de arriba
+    # (línea ~37299: "Sin restricciones declaradas" vs FASE 1/2 con fact-checker) —
+    # ambas ramas convergen sin ningún `return` intermedio antes de este punto ⇒ el
+    # juez corre TAMBIÉN en la rama bypass, que de otro modo no tendría ningún ojo
+    # LLM sobre el plan.
+    #
+    # Gather con el fact-checker: NO aplicado. Su `await _safe_ainvoke(...)` vive
+    # dentro de un loop `for step in range(4)` con manejo condicional de tool_calls
+    # (fact-checking clínico iterativo) — no hay un único punto de espera limpio
+    # para envolver en `asyncio.gather`. Queda como optimización pendiente: el
+    # timeout de 45s del juez cabe en el budget del nodo, y el juez corre también
+    # cuando el reviewer hace bypass (rama sin fact-checker), donde de todas formas
+    # no habría nada con qué hacer gather.
+    # tooltip-anchor: P1-CULINARY-JUDGE
+    if CULINARY_JUDGE_GUARD != "off":
+        _cj = await run_culinary_judge(plan)
+        _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
+        plan.setdefault("_culinary_judge_history", []).append({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "model": CULINARY_JUDGE_MODEL,
+            "violations": _cj_viol,
+            "action_taken": ("blocked" if (_cj_viol and CULINARY_JUDGE_GUARD == "block")
+                             else "warn_only"),
+        })
+        if _cj_viol:
+            logger.warning(f"⚖️ [P1-CULINARY-JUDGE] {len(_cj_viol)} violación(es) "
+                           f"(guard={CULINARY_JUDGE_GUARD}): "
+                           f"{[(v['tipo'], v['day'], v['meal']) for v in _cj_viol[:6]]}")
+        if _cj_viol and CULINARY_JUDGE_GUARD == "block":
+            for _v in _cj_viol:
+                issues.append(f"Día {_v['day']}, {_v['meal']}: {_v['tipo']} — {_v['detalle']}")
+                severity = _severity_max(severity, _v["severidad"])
+
     assembly_errors = skeleton_fidelity_errors + structural_coherence_errors
     if assembly_errors:
         logger.error(f"❌ [REVISOR] Errores deterministas de ensamblaje detectados: {assembly_errors}")
