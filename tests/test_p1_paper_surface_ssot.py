@@ -173,3 +173,21 @@ def test_no_brand_indigo_left_in_pwa_surfaces():
     assert _OLD_BRAND_INDIGO not in html, (
         f"P1-PAPER-THEME: index.html sigue con {_OLD_BRAND_INDIGO}."
     )
+
+
+def test_theme_call_sites_write_paper_not_dark():
+    """Los 3 sitios tienen que viajar juntos. Si el boot script y el SPA
+    discrepan, la carga en frío parpadea a negro un frame en las 6 rutas."""
+    app = _APP_JSX.read_text(encoding="utf-8")
+    html = _INDEX_HTML.read_text(encoding="utf-8")
+
+    paper_writes = re.findall(r"setAttribute\(\s*['\"]data-theme['\"]\s*,\s*['\"]paper['\"]", app)
+    assert len(paper_writes) == 2, (
+        f"P1-PAPER-THEME: App.jsx debe escribir 'paper' en 2 sitios "
+        f"(PublicThemeLock y el useEffect de arranque); encontrados {len(paper_writes)}."
+    )
+    assert re.search(r"PAPER\.indexOf\(location\.pathname\)\s*!==\s*-1\s*\)\s*theme\s*=\s*['\"]paper['\"]", html), (
+        "P1-PAPER-THEME: el boot script de index.html debe fijar 'paper' para "
+        "las rutas de la superficie. Si se queda en 'dark', la carga en frío "
+        "parpadea antes de que el SPA corrija."
+    )
