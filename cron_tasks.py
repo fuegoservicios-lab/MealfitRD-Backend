@@ -24482,6 +24482,62 @@ def _culinary_meta_for(food_name: str) -> dict | None:
     return None
 
 
+_CULINARY_STEP_SECTIONS = ("Mise en place", "El Toque de Fuego", "Montaje")
+
+
+def _degrade_offending_steps(edge_day: dict, violaciones: list, index: dict) -> int:
+    """[P1-CULINARY-CONTRACT · 2026-07-31 · fix post-review] Degrada a "Sirve el
+    {food}." los pasos de `edge_day` que violan V1/V2 — acotado por MEAL y por
+    alimento exactos de cada violación (`_v["meal"]`/`_v["food"]`), NUNCA por
+    substring plano.
+
+    Dos correcciones sobre el bloque original (encontradas por el reviewer,
+    ganan sobre el pseudocódigo del brief que las contradecía):
+    1. Matching: `food.lower() in paso.lower()` es substring plano — la MISMA
+       clase de bug que este archivo ya cerró 150 líneas arriba
+       (P3-PANTRY-INTERSECT-WB, `"sal"⊂"salsa"`). Aquí el caso concreto es
+       `"Sal"⊂"Saltea"`: una violación sobre el alimento "Sal" degradaría
+       falsamente un paso "Saltea los vegetales" que no la menciona. Se usa
+       el matcher canónico del módulo (`find_catalog_foods`, word-boundary +
+       alias más largo gana — el mismo que decide qué es una violación en
+       primer lugar) en vez de reinventar un match más débil.
+    2. Scope: el bloque original barría TODAS las comidas del día por cada
+       violación — una violación en Desayuno podía degradar un paso de Cena
+       que ni siquiera se escaneó para esa violación. Se acota a la comida
+       exacta (`_v["meal"]`) que `culinary_contract_scan` ya identificó.
+
+    Preserva el prefijo de sección ("Mise en place:"/"El Toque de
+    Fuego:"/"Montaje:") que RecipesView (frontend) y el export a PDF usan
+    para agrupar pasos — sin él, el paso degradado perdería su sección y
+    RecipesView lo mostraría fuera de lugar.
+
+    Retorna el número de pasos degradados (0 si ninguno). Puro: no importa
+    nada de DB, `index` se construye afuera (una sola vez para todas las
+    violaciones — `build_culinary_index(catalogo)`)."""
+    from culinary_coherence import step_has_cooking_verb, find_catalog_foods
+
+    n = 0
+    for _v in violaciones or []:
+        _food = _v.get("food")
+        _meal_name = _v.get("meal")
+        if not _food or not _meal_name:
+            continue
+        for _m in edge_day.get("meals") or []:
+            if (_m.get("meal") or _m.get("name")) != _meal_name:
+                continue
+            _new_recipe = []
+            for p in (_m.get("recipe") or []):
+                if _food in find_catalog_foods(p, index) and step_has_cooking_verb(p):
+                    _head = p.split(":", 1)[0]
+                    _prefijo = f"{_head}: " if _head in _CULINARY_STEP_SECTIONS else ""
+                    _new_recipe.append(f"{_prefijo}Sirve el {_food}.")
+                    n += 1
+                else:
+                    _new_recipe.append(p)
+            _m["recipe"] = _new_recipe
+    return n
+
+
 def _build_filtered_edge_recipe_day(
     allergies: list | tuple | None,
     dislikes: list | tuple | None,
@@ -24711,23 +24767,19 @@ def _build_filtered_edge_recipe_day(
     # cual (no bloqueamos el path degradado por un fallo del scan — eso es
     # trabajo del backstop de seguridad de arriba, no de este).
     try:
-        from culinary_coherence import culinary_contract_scan, step_has_cooking_verb
+        from culinary_coherence import culinary_contract_scan, build_culinary_index
         from shopping_calculator import get_master_ingredients
-        _viol = [v for v in culinary_contract_scan({"days": [_edge_day]}, get_master_ingredients())
+        _catalog = get_master_ingredients()
+        _viol = [v for v in culinary_contract_scan({"days": [_edge_day]}, _catalog)
                  if v["check"] in ("V1", "V2")]
-        for _v in _viol:
-            _food_lower = _v["food"].lower()
-            for _m in _edge_day.get("meals") or []:
-                _m["recipe"] = [
-                    (f"Sirve el {_v['food']}." if _food_lower in p.lower()
-                     and step_has_cooking_verb(p) else p)
-                    for p in (_m.get("recipe") or [])
-                ]
         if _viol:
-            logger.warning(
-                f"🍳 [P1-CULINARY-CONTRACT/degradado] {len(_viol)} paso(s) degradado(s) "
-                f"a 'Sirve': {[(v['check'], v['food']) for v in _viol]}"
-            )
+            _index = build_culinary_index(_catalog)
+            _n_degraded = _degrade_offending_steps(_edge_day, _viol, _index)
+            if _n_degraded:
+                logger.warning(
+                    f"🍳 [P1-CULINARY-CONTRACT/degradado] {_n_degraded} paso(s) degradado(s) "
+                    f"a 'Sirve': {[(v['check'], v['food']) for v in _viol]}"
+                )
     except Exception:
         pass
 

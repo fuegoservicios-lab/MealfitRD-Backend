@@ -357,3 +357,87 @@ def test_step_has_cooking_verb_exportado_y_correcto():
     degradación, para que no vuelva a degradarse una segunda vez)."""
     assert cc.step_has_cooking_verb("Hierve el arroz.") is True
     assert cc.step_has_cooking_verb("Sirve el casabe.") is False
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · Task 8, fix post-review] `_degrade_offending_steps`
+# — helper privado extraído del bloque de degradación tras 2 hallazgos
+# Important del reviewer sobre el pseudocódigo del brief (que contradecía las
+# Global Constraints del plan; la constraint gana). Import LOCAL de
+# `cron_tasks` dentro de cada test (no a nivel de módulo, mismo patrón que
+# `tests/test_p0_degraded_safety_scan.py`): el resto de este archivo es
+# deliberadamente parser-based/puro para no arrastrar las dependencias de
+# import-time de `cron_tasks` (scheduler, DB pool) a la colección completa.
+# ---------------------------------------------------------------------------
+
+def test_degrade_offending_steps_matcher_canonico_no_substring():
+    """[Fix post-review, Important #1] El bloque original usaba
+    `food.lower() in paso.lower()` — substring plano, la MISMA clase de bug
+    que P3-PANTRY-INTERSECT-WB ya cerró 150 líneas arriba en este mismo
+    archivo (`"sal"⊂"salsa"`). Aquí el caso concreto: `"Sal"⊂"Saltea"`. Una
+    violación V1 sobre el alimento "Sal" NO debe degradar un paso "Saltea los
+    vegetales." que no lo menciona según el matcher canónico
+    (`find_catalog_foods`, word-boundary) — aunque `step_has_cooking_verb`
+    para ese paso sea True. Contraste positivo: una violación real (Casabe
+    horneado, imposible — Casabe solo acepta tostar/ninguno) SÍ degrada, y
+    preserva el prefijo de sección ("El Toque de Fuego: ") que RecipesView
+    usa para agrupar pasos."""
+    import cron_tasks as ct
+
+    catalog = [
+        {"name": "Casabe", "prep_methods": ["tostar", "ninguno"], "ready_to_eat": True},
+        {"name": "Sal", "prep_methods": ["ninguno"], "ready_to_eat": True},
+    ]
+    index = cc.build_culinary_index(catalog)
+
+    edge_day = {"meals": [
+        {"meal": "Desayuno", "recipe": [
+            "Mise en place: Prepara y mide los ingredientes.",
+            "El Toque de Fuego: Hornea el Casabe.",
+            "Montaje: Sirve junto al acompañante y disfruta.",
+        ]},
+        {"meal": "Almuerzo", "recipe": [
+            "El Toque de Fuego: Saltea los vegetales.",
+        ]},
+    ]}
+    violaciones = [
+        {"check": "V1", "food": "Casabe", "meal": "Desayuno"},
+        {"check": "V1", "food": "Sal", "meal": "Almuerzo"},
+    ]
+
+    n = ct._degrade_offending_steps(edge_day, violaciones, index)
+
+    assert edge_day["meals"][0]["recipe"] == [
+        "Mise en place: Prepara y mide los ingredientes.",
+        "El Toque de Fuego: Sirve el Casabe.",
+        "Montaje: Sirve junto al acompañante y disfruta.",
+    ], edge_day["meals"][0]["recipe"]
+    assert edge_day["meals"][1]["recipe"] == ["El Toque de Fuego: Saltea los vegetales."], (
+        "'Sal' NO debe emparejar con 'Saltea' vía substring — el matcher "
+        f"canónico no lo encuentra ahí: {edge_day['meals'][1]['recipe']}")
+    assert n == 1, f"debe degradar exactamente 1 paso (Casabe), no {n}"
+
+
+def test_degrade_offending_steps_acota_por_meal():
+    """[Fix post-review, Important #2] El bloque original ignoraba
+    `_v["meal"]` y barría TODAS las comidas del edge_day por cada violación
+    — una violación en Desayuno degradaba pasos de Cena que ni siquiera
+    generaron esa violación. Dos comidas con el MISMO paso ofensor
+    literal; la violación solo lista una — solo esa debe degradarse."""
+    import cron_tasks as ct
+
+    catalog = [{"name": "Casabe", "prep_methods": ["tostar", "ninguno"], "ready_to_eat": True}]
+    index = cc.build_culinary_index(catalog)
+
+    edge_day = {"meals": [
+        {"meal": "Desayuno", "recipe": ["El Toque de Fuego: Hornea el Casabe."]},
+        {"meal": "Cena", "recipe": ["El Toque de Fuego: Hornea el Casabe."]},
+    ]}
+    violaciones = [{"check": "V1", "food": "Casabe", "meal": "Desayuno"}]
+
+    n = ct._degrade_offending_steps(edge_day, violaciones, index)
+
+    assert edge_day["meals"][0]["recipe"][0] == "El Toque de Fuego: Sirve el Casabe."
+    assert edge_day["meals"][1]["recipe"][0] == "El Toque de Fuego: Hornea el Casabe.", (
+        "la violación de Desayuno NO debe degradar el paso idéntico de Cena")
+    assert n == 1
