@@ -194,3 +194,47 @@ def test_scan_coverage_fraccion_con_y_sin_metadata():
                  ["120 g Pechuga de pollo", "50 g Tomate", "10 g Misterio sin metadata"])
     cov = cc.scan_coverage(plan, _CAT)
     assert cov == pytest.approx(2 / 3), cov
+
+
+# [Fix post-review T5] red DB-independiente: los tests golden skipean sin pool
+# (CI no tiene NEON_DATABASE_URL). Los dos fixes que el examen golden encontró
+# (dora≠tostar, guard de ambigüedad de _mencionado_por_prefijo) solo estaban
+# anclados por esos tests golden-with-DB — si alguien los rompe, CI queda
+# verde. Estos dos tests anclan el MISMO comportamiento con catálogo sintético
+# local, sin DB.
+
+def test_v1_dora_no_es_tostar():
+    """[Fix post-review T5] red DB-independiente: los tests golden skipean sin
+    pool (CI no tiene NEON_DATABASE_URL). Ancla el fix del examen golden (FP
+    real Carne de res/Pechuga de pollo con "...y dora."): 'dora\\w*' vive bajo
+    'saltear', NO bajo 'tostar' — Pechuga de pollo acepta saltear pero no
+    tostar en _CAT."""
+    v = cc.culinary_contract_scan(_plan(["Dora la Pechuga de pollo en la sartén."]), _CAT)
+    assert not [x for x in v if x["check"] == "V1"], v
+
+    # Protección inversa: 'tostar' sigue detectándose como método propio
+    # (dora no absorbió/anuló la rama tostar\w*|tuesta\w*).
+    v2 = cc.culinary_contract_scan(_plan(["Tuesta la Pechuga de pollo."]), _CAT)
+    v1_hits = [x for x in v2 if x["check"] == "V1"]
+    assert v1_hits and v1_hits[0]["food"] == "Pechuga de pollo", v2
+
+
+def test_v3_prefijo_ambiguo_no_enmascara():
+    """[Fix post-review T5] red DB-independiente: los tests golden skipean sin
+    pool (CI no tiene NEON_DATABASE_URL). Ancla el mecanismo
+    `_mencionado_por_prefijo`: 'Ají morrón' y 'Ají cubanela' comparten la
+    cabeza 'ají'. Si los pasos solo mencionan 'ají cubanela', el guard de
+    ambigüedad NO debe dejar que ese match enmascare a 'Ají morrón' como
+    huérfano (el bug real que el examen golden habría reproducido con
+    'Ají morrón' inyectado junto a 'Ají cubanela' en la misma comida)."""
+    cat_aji = _CAT + [
+        {"name": "Ají morrón", "prep_methods": ["hervir", "saltear", "guisar"], "ready_to_eat": None},
+        {"name": "Ají cubanela", "prep_methods": ["hervir", "saltear", "guisar"], "ready_to_eat": None},
+    ]
+    v = cc.culinary_contract_scan(_plan(
+        ["Sofríe el ají cubanela."],
+        ["80 g Ají morrón", "50 g Ají cubanela"]), cat_aji)
+    hit = [x for x in v if x["check"] == "V3"]
+    assert hit and hit[0]["food"] == "Ají morrón", (
+        f"'Ají morrón' debe reportarse huérfano — el guard de ambigüedad no "
+        f"debe dejar que 'ají cubanela' en pasos lo enmascare: {hit}")
