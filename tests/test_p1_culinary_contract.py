@@ -465,8 +465,13 @@ def test_degrade_offending_steps_matcher_canonico_no_substring():
 # que sí estaban en el paso pero NO eran el objeto real del verbo.
 # Fix: negative-lookahead de participio en VERB_TO_METHOD (hornear/guisar/
 # saltear-sofreír-dorar/licuar/tostar) + skip de pasos "Montaje:" en V1
-# (nunca cocina) + veto de ventana post-verbo (~4 palabras) cuando NINGÚN
-# alimento del paso acepta el método. Traza completa por fragmento de verbo:
+# (nunca cocina) + veto de ventana post-verbo cuando NINGÚN alimento del
+# paso acepta el método. [P1-CULINARY-CONTRACT-FP2 · 2026-08-01] La ventana
+# post-verbo, originalmente un conteo fijo de 4 palabras, se reemplazó por
+# escaneo hasta la FRONTERA DE ORACIÓN (siguiente '.'/';' o fin del paso) —
+# el conteo fijo perdía recall sobre el patrón "verbo + relleno de tiempo/
+# fuego mandatado por el prompt SSOT + objeto" (ver sección FP reales round
+# 2 más abajo). Traza completa por fragmento de verbo + ronda 2:
 # `.superpowers/culinary-fp-round1-report.md`.
 # ---------------------------------------------------------------------------
 
@@ -550,6 +555,64 @@ def test_fp1_montaje_skip_es_especifico_de_v1_no_afecta_v3():
         ["Montaje: Sirve el Repollo sobre el plato."],
         ["80 g Repollo"]), _CAT)
     assert not [x for x in v if x["check"] == "V3" and x["food"] == "Repollo"], v
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT-FP2 · 2026-08-01] Regresión de recall encontrada por
+# el reviewer sobre la ronda 1 (ejecutando antes/después contra
+# `git show f788460:...`): la ventana post-verbo de 4 palabras SILENCIABA
+# «Cuece a fuego medio por 15 minutos hasta ablandar el Casabe.» — el prompt
+# SSOT de `day_generator` EXIGE "cocción con AL MENOS un TIEMPO concreto",
+# así que verbo + relleno-mandatado-de-tiempo/fuego + objeto es la NORMA de
+# los planes reales, no la excepción; 4 palabras se comen el relleno antes
+# de llegar al objeto. Fix: la ventana ahora corre hasta la FRONTERA DE
+# ORACIÓN (siguiente '.'/';' o fin del paso) — una frase adverbial de
+# tiempo/fuego no es otra cláusula, pero una cláusula real después de ';'
+# SÍ lo es (ver el caso (b) abajo, trade-off documentado y elegido a propósito).
+# ---------------------------------------------------------------------------
+
+def test_fp2_ventana_hasta_frontera_de_oracion_recall_tiempo_mandatado():
+    """(a) El patrón real de los planes: verbo + relleno de tiempo/fuego
+    MANDATADO por el prompt SSOT de day_generator + objeto, todo en la
+    MISMA oración. La ventana de 4 palabras fijas se comía el relleno y
+    silenciaba esto — la ventana hasta frontera de oración SÍ alcanza el
+    objeto real (Casabe) y el check debe seguir disparando."""
+    v = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Cuece a fuego medio por 15 minutos hasta "
+         "ablandar el Casabe."],
+        ["30 g Casabe"]), _CAT)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 and v1[0]["food"] == "Casabe", v1
+
+
+def test_fp2_frontera_de_oracion_no_cruza_hacia_la_clausula_siguiente():
+    """(b) Trade-off honesto y elegido a propósito: si el objeto real vive
+    en la cláusula DESPUÉS de un '.'/';' que cierra la oración del verbo
+    ("Cuece a fuego lento por 10 minutos; luego agrega el Casabe y sirve." —
+    el Casabe está en la cláusula posterior al ';', que es un 'agrega'
+    nuevo, no parte de la cocción), el veto de ventana SIGUE aplicando y el
+    check calla. Es el mismo criterio fail-open del resto del módulo:
+    mejor no acusar a un alimento que aparece en una cláusula distinta a la
+    del verbo que se está evaluando, aunque eso cueste algo de recall en
+    este caso límite. Si esto empieza a colar defectos reales en producción,
+    revisar — por ahora es la decisión documentada, no un bug."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Cuece a fuego lento por 10 minutos; luego agrega el Casabe y sirve."],
+        ["30 g Casabe"]), _CAT)
+    assert not [x for x in v if x["check"] == "V1"], v
+
+
+def test_fp2_caso_almendras_sigue_vetado_tras_el_fix_de_frontera():
+    """(c) El caso real de la ronda 1 (almendras no catalogadas) SIGUE
+    vetado tras cambiar a frontera de oración: la oración del verbo
+    ('Tuesta las almendras aparte.') es una oración PROPIA separada por '.'
+    de la oración de Avena/Leche — nada resoluble en ESA oración → veto
+    sigue aplicando, avena/leche no se acusan."""
+    v = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Coloca la Avena y la Leche en la olla. "
+         "Tuesta las almendras aparte."],
+        ["100 g Avena", "200 ml Leche"]), _CAT_FP1)
+    assert not [x for x in v if x["check"] == "V1"], v
 
 
 def test_degrade_offending_steps_acota_por_meal():

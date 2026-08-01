@@ -98,32 +98,47 @@ _RE_ESTADO = re.compile(r"ya\s+vien[e]?\s+cocid|ya\s+est[aá]\s+cocid", re.IGNOR
 # menciones de montaje para no marcar huérfanos que solo aparecen ahí).
 _RE_MONTAJE_STEP = re.compile(r"^\s*montaje\s*:", re.IGNORECASE)
 
-_WINDOW_WORDS = 4
-_WORD_RE = re.compile(r"\S+")
+# [P1-CULINARY-CONTRACT-FP2 · 2026-08-01] Reemplaza el conteo fijo de 4
+# palabras (regresión de recall encontrada por el reviewer): el prompt SSOT
+# de `day_generator` EXIGE "cocción con AL MENOS un TIEMPO concreto", así que
+# el patrón verbo + relleno-mandatado ("a fuego medio por 15 minutos hasta
+# ablandar") + objeto es la NORMA de los planes reales, no la excepción — 4
+# palabras se comen el relleno antes de llegar al objeto real. La ventana
+# ahora corre hasta la FRONTERA DE ORACIÓN (siguiente '.'/';' o fin del
+# paso): una frase adverbial de tiempo/fuego no es otra cláusula, así que no
+# debe cortar la ventana antes de tiempo.
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.;]")
 
 
 def _post_verb_resolves(paso_norm: str, ends: list, index: dict) -> bool:
-    """[P1-CULINARY-CONTRACT-FP1 · 2026-08-01, clase B] True si el objeto
-    directo inmediato de AL MENOS UNA ocurrencia de este verbo en el paso
-    (heurística: las `_WINDOW_WORDS` palabras que siguen al match) resuelve a
-    un alimento del catálogo.
+    """[P1-CULINARY-CONTRACT-FP1/FP2 · 2026-08-01, clase B] True si el
+    objeto directo de AL MENOS UNA ocurrencia de este verbo — heurística: la
+    MISMA ORACIÓN, desde el fin del match hasta el siguiente '.'/';' o fin
+    del paso — resuelve a un alimento del catálogo.
 
     Por qué existe: el FP real «El Toque de Fuego: Coloca la Avena y la
-    Leche en la olla; tuesta las almendras aparte.» acusaba a Avena/Leche de
+    Leche en la olla. Tuesta las almendras aparte.» acusaba a Avena/Leche de
     'tostar' — el verbo real apuntaba a "almendras" (no catalogado), pero la
     salvaguarda multi-alimento de `_v1_verbo_alimento` no se activaba porque
     NINGÚN alimento del paso (Avena/Leche) acepta 'tostar', y sin destinatario
     válido la salvaguarda por diseño acusa a todos.
 
-    Límites documentados (heurística simple por espacios, NO parsing
-    sintáctico): no resuelve cruces de coma/conjunción hacia OTRA cláusula
-    ("Cuece a fuego lento; luego agrega el Casabe" con Casabe fuera de la
-    ventana de 4 palabras tras "Cuece" fail-abre igual — trade-off aceptado,
-    mismo criterio fail-open que el resto del módulo: mejor callar que
-    acusar al alimento equivocado)."""
+    Límite REAL post-fix (frontera de oración, YA NO conteo de palabras):
+    la ventana cruza relleno adverbial de tiempo/fuego DENTRO de la misma
+    oración («Cuece a fuego medio por 15 minutos hasta ablandar el Casabe.»
+    → resuelve, V1 dispara), pero SIGUE sin cruzar hacia la oración
+    SIGUIENTE — si el objeto real vive después de un '.'/';' que cierra la
+    cláusula del verbo («Cuece a fuego lento por 10 minutos; luego agrega el
+    Casabe y sirve.» — el objeto está en la cláusula de DESPUÉS del ';»),
+    el veto sigue aplicando y el check calla. Trade-off aceptado y medido
+    (mismo criterio fail-open que el resto del módulo: mejor callar que
+    acusar al alimento equivocado) — ver el caso (b) en
+    `test_p1_culinary_contract.py` para el ejemplo exacto."""
     for end in ends:
-        tail = " ".join(_WORD_RE.findall(paso_norm[end:])[:_WINDOW_WORDS])
-        if tail and find_catalog_foods(tail, index):
+        tail_full = paso_norm[end:]
+        boundary = _SENTENCE_BOUNDARY_RE.search(tail_full)
+        tail = tail_full[:boundary.start()] if boundary else tail_full
+        if tail.strip() and find_catalog_foods(tail, index):
             return True
     return False
 
