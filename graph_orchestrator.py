@@ -38515,6 +38515,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     f"cobertura={_cul_cov:.0%}): "
                     f"{[(v['check'], v['food'], v['day']) for v in _cul_viol[:6]]}")
             if _cul_viol and CULINARY_CONTRACT_GUARD == "block":
+                # [P1-CULINARY-CONTRACT-BLOCK-FIX · post-review-final] Espeja
+                # `_shopping_coherence_block` (~38441): sin `approved = False` aquí,
+                # el veredicto `if approved:` de abajo nunca ve estas violaciones y
+                # "block" no rechazaba NADA — regresión clase P1-G (issues se
+                # apilaban pero el plan se entregaba igual que en warn).
+                approved = False
                 for _v in _cul_viol:
                     issues.append(
                         f"Día {_v['day']}, {_v['meal']}: incoherencia culinaria "
@@ -38560,6 +38566,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                            f"(guard={CULINARY_JUDGE_GUARD}): "
                            f"{[(v['tipo'], v['day'], v['meal']) for v in _cj_viol[:6]]}")
         if _cj_viol and CULINARY_JUDGE_GUARD == "block":
+            # [P1-CULINARY-JUDGE-BLOCK-FIX · post-review-final] Mismo fix que la capa 1
+            # (contract) arriba: sin `approved = False`, "block" del juez tampoco
+            # rechazaba nada — las violaciones se apilaban en `issues` pero el
+            # veredicto `if approved:` de abajo las ignoraba.
+            approved = False
             for _v in _cj_viol:
                 issues.append(f"Día {_v['day']}, {_v['meal']}: {_v['tipo']} — {_v['detalle']}")
                 severity = _severity_max(severity, _v["severidad"])
