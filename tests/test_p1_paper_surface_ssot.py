@@ -108,18 +108,45 @@ _PAPER_HEX = "#FBFBFA"
 _OLD_BRAND_INDIGO = "#4F46E5"
 
 
-def test_use_theme_color_has_a_paper_branch():
-    """`isDarkActive()` compara `=== 'dark'` en duro (theme.js:96), así que
-    bajo `paper` devuelve False y las 5 rutas de marketing que no son `/`
-    caen al `else` final → #4F46E5 indigo en la barra de estado de Android
-    y en el PWA standalone de iOS, sobre una página blanco y negro."""
+def test_use_theme_color_asks_the_theme_not_the_route():
+    """[fix1 · 2026-08-01] `isPaperSurface(path)` pregunta si la RUTA es
+    elegible para papel, no si el papel está ACTIVO. `PublicThemeLock`
+    (App.jsx) fuerza `data-theme="dark"` en esas mismas 6 rutas mientras
+    nadie emite `'paper'` — con `isPaperSurface` la rama disparaba HOY,
+    pisando #0B1120 con #FBFBFA antes de que exista ningún flip. La rama
+    correcta pregunta por el atributo del DOM, simétrica a `isDarkActive`."""
     text = _USE_THEME_COLOR.read_text(encoding="utf-8")
-    assert "isPaperSurface" in text, (
-        "P1-PAPER-THEME: useThemeColor.js debe consultar `isPaperSurface` y "
-        "devolver el papel para las 6 rutas de marketing."
+    assert "isPaperActive" in text, (
+        "P1-PAPER-THEME: useThemeColor.js debe consultar `isPaperActive` "
+        "(lee data-theme del DOM), no `isPaperSurface` (lee la ruta)."
+    )
+    assert "isPaperSurface" not in text, (
+        "P1-PAPER-THEME: useThemeColor.js NO debe volver a importar "
+        "`isPaperSurface` — esa función responde 'ruta elegible', no "
+        "'papel activo', y PublicThemeLock fuerza dark en las 6 rutas "
+        "elegibles mientras 'paper' no se emite."
     )
     assert _PAPER_HEX in text, (
         f"P1-PAPER-THEME: useThemeColor.js debe emitir {_PAPER_HEX} en la rama papel."
+    )
+    assert text.index("isPaperActive()") < text.index("else if (dark)"), (
+        "P1-PAPER-THEME: la rama papel debe evaluarse ANTES que `else if (dark)` "
+        "— si el orden se invierte, el tema oscuro real vuelve a ganarle al papel."
+    )
+
+
+def test_theme_exposes_a_paper_reader_without_touching_valid_prefs():
+    """`isPaperActive` es simétrica de `isDarkActive`: ambas leen
+    `data-theme` del DOM. `'paper'` no es una preferencia persistida en
+    localStorage, así que NO debe colarse en `VALID_PREFS`."""
+    theme = (_FRONTEND / "src" / "utils" / "theme.js").read_text(encoding="utf-8")
+    assert "export function isPaperActive" in theme, (
+        "P1-PAPER-THEME: theme.js debe exportar `isPaperActive`, simétrica de "
+        "`isDarkActive`, para que los lectores de tema pregunten al DOM y no a la ruta."
+    )
+    assert "'paper'" not in theme.split("VALID_PREFS")[1].split("]")[0], (
+        "P1-PAPER-THEME: 'paper' NO es una preferencia persistida en localStorage "
+        "— no debe añadirse a VALID_PREFS. Eso lo gobierna un flip aparte (Task 5)."
     )
 
 
