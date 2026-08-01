@@ -41,7 +41,17 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 7, 29)  # [P1-FALLBACK-CAUSE-SPLIT · 2026-07-29] incidente corr=23c65543:
+_PFIX_DATE_FLOOR = date(2026, 8, 1)  # [P2-CULINARY-METADATA-ROUND2 · 2026-08-01] backfill ronda 2 de
+# `prep_methods`/`ready_to_eat` en `master_ingredients`: cierra las 56/204 filas (categoría
+# 'Despensa', dejadas sin default a propósito por la ronda 1) que mantenían la cobertura del scan
+# culinario en ~61-69% — bajo el ≥80% que exige la precondición de F2
+# (P1-CULINARY-CONTRACT-BLOCK). Verificado por simulación contra el golden set ANTES de escribir
+# la migración (0 FP nuevos, defectos capa1: documentados siguen atrapados 100%) y medido en 5
+# planes reales de producción (cobertura media 0.655 → 1.000). Un hallazgo real durante la
+# medición contra planes de producción (no el golden set sintético): 'Tortilla integral' recibe
+# 'Dora la tortilla ... en una sartén seca' en 2/5 planes — 'dora' resuelve a 'saltear' en
+# VERB_TO_METHOD, y la metadata original (['tostar','ninguno']) no lo cubría; el fix fue expandir
+# la metadata del alimento, no relajar el scan. Floor previo P1-FALLBACK-CAUSE-SPLIT · 2026-07-29 incidente corr=23c65543:
 # el planificador entregó 1/3 días (medicamente APROBADOS) y el guardrail P0-2 rellenó el resto
 # matemáticamente; el guard SSE trataba CUALQUIER `_is_fallback=True` como emergencia total y
 # descartaba un pipeline exitoso sin avisar al usuario, con un log "LLM upstream caído" que era falso
