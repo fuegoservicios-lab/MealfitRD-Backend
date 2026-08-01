@@ -29249,10 +29249,112 @@ REALISM_FRUIT_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_FRUIT_VOLUME_CAP_G", 300,
 # propósito (no solo "bruselas"): el matcher del consumidor (`_re.search(r"\b" + t, il)`) hace
 # substring sobre texto ya lowercased+accent-stripped, así que el token con espacios matchea
 # igual que uno de una palabra — verificado con test funcional, no solo parser.
-_REALISM_VOLUME_VEG_TOKENS = ("pepino", "berro", "rabano", "rabanito", "apio",
+# [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] Tuple ESTÁTICA preservada como red de seguridad — NO
+# borrar. Renombrada de `_REALISM_VOLUME_VEG_TOKENS` (nombre original, aún importado por tests
+# legacy) a `_REALISM_VOLUME_VEG_TOKENS_FALLBACK`: el consumidor ya NO la lee directo, lee
+# `_watery_veg_tokens()` (abajo), que la UNE (no la sustituye) al set derivado del catálogo.
+_REALISM_VOLUME_VEG_TOKENS_FALLBACK = ("pepino", "berro", "rabano", "rabanito", "apio",
                               "coliflor", "brocoli", "repollo", "calabacin",
                               "esparrago", "vainita", "coles de bruselas", "molondron")
+_REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET = frozenset(_REALISM_VOLUME_VEG_TOKENS_FALLBACK)
+# Alias retro-compat: `test_p1_apio_stalk_cap.py`, `test_p1_recipe_blockers_2.py` y
+# `test_p1_veg_volume_tokens.py` importan `g._REALISM_VOLUME_VEG_TOKENS` directo para verificar
+# "sigue en la lista estática" — sigue siendo cierto (el fallback no cambia de contenido, solo de
+# nombre), así que el alias los mantiene verdes sin acoplarlos al set derivado (que ES un
+# superset y no debe usarse para esa aserción histórica).
+_REALISM_VOLUME_VEG_TOKENS = _REALISM_VOLUME_VEG_TOKENS_FALLBACK
 REALISM_VEG_VOLUME_CAP_G = _env_int("MEALFIT_REALISM_VEG_VOLUME_CAP_G", 250, lambda v: 100 <= v <= 500)
+
+# [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] (5º incidente en 4 semanas: "470 g de tayota" ×2, plan
+# 8d3f246a, UNA HORA después de parchear a mano los 4 tokens de arriba — 19-22.5 kcal/100g, el
+# MISMO mecanismo de solver LSQ que infla el vegetal acuoso más barato en gramos). "Una lista de
+# tokens que crece por-incidente garantiza el próximo incidente" (mismo diagnóstico que
+# P1-DIET-CANON-SSOT sobre las 3 tablas de dietType a mano). Fix ESTRUCTURAL: el set de vegetales
+# acuosos se DERIVA de `master_ingredients` (categoría 'Vegetales' + `kcal_per_100g` bajo, la
+# columna real medida contra prod — no una heurística de nombre) en vez de mantenerse a mano.
+# Cualquier vegetal nuevo del catálogo que cumpla el umbral entra SOLO — sin PR, sin redeploy.
+#
+# Umbral: `kcal_per_100g <= MEALFIT_WATERY_VEG_KCAL_MAX` (default 45.0). Medido contra los 39
+# `category='Vegetales'` de prod (2026-08-01): cubre 12.4 (Pepino) .. 44.2 (Zanahoria) — 30 filas
+# tras las 2 exclusiones de abajo — y EXCLUYE Remolacha (46.2), Alcachofa (47), Coles de Bruselas
+# (52), Puerro (61), Jengibre (85.2), Ajo (142.7), Nori (314): víveres/aromáticos densos que NO
+# son el patrón "relleno de volumen barato" que motiva este cap.
+#
+# Exclusiones documentadas (verificadas con SELECT contra los 204 nombres+aliases del catálogo
+# completo, `\b`-boundary substring — el MISMO matcher que usa el consumidor):
+#   - fila 'Tomate' (20.9 kcal): su forma base 'tomate' matchea 'Salsa de tomate' (Despensa) — un
+#     condimento, no el vegetal. Ninguna pérdida vs. el fallback (nunca estuvo ahí).
+#   - fila 'Cebolla' (42.7 kcal): su forma base 'cebolla' matchea 'Cebolla en polvo' (Despensa,
+#     4 formas de alias: "cebolla en polvo"/"cebolla molida"/"polvo de cebolla"/"cebolla
+#     deshidratada en polvo") — una especia, no la hortaliza fresca. Misma razón: cero regresión.
+#   - alias suelto 'cos' (de 'Lechuga romana', sinónimo inglés "cos lettuce"): 3 letras, matchea
+#     'Costilla de cerdo'/'costillitas' (Proteínas) — la clase EXACTA de bug ya documentada en la
+#     memoria del repo ('sal' ⊂ 'Salami'/'Salmón'). Se excluye el alias suelto, no la fila entera
+#     (el resto de aliases de Lechuga romana — 'romana', 'romaine', 'lechuga cos' — no colisionan).
+#
+# Los 4 tokens del parche manual de la sección anterior (esparrago/vainita/coles de bruselas/
+# molondron) + los 5 originales (pepino/berro/rabano/rabanito/apio) siguen SIEMPRE cubiertos: el
+# helper retorna la UNIÓN derivado∪fallback, nunca solo uno u otro — así "coles de bruselas"
+# (52 kcal, por encima del umbral y por ende ausente de la derivación) no desaparece del cap.
+# tooltip-anchor: P2-VEG-VOLUME-TOKENS-2
+MEALFIT_WATERY_VEG_KCAL_MAX = _env_float("MEALFIT_WATERY_VEG_KCAL_MAX", 45.0,
+                                          lambda v: 10.0 <= v <= 100.0)
+_WATERY_VEG_ROW_EXCLUDE = frozenset({"tomate", "cebolla"})
+_WATERY_VEG_TOKEN_EXCLUDE = frozenset({"cos"})
+_WATERY_VEG_TOKENS_CACHE: "frozenset | None" = None
+
+
+def _watery_veg_tokens() -> frozenset:
+    """{tokens de vegetales ACUOSOS} derivado de `master_ingredients` (categoría 'Vegetales',
+    `kcal_per_100g` <= MEALFIT_WATERY_VEG_KCAL_MAX), UNIDO siempre a
+    `_REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET`. Lazy, cacheado módulo-level con el MISMO gate
+    negative-TTL que `_phantom_catalog_index`/`_catalog_kcal_by_name` (`_catalog_index_should_
+    rebuild`/`_catalog_index_note_failure`, ~28177): un catálogo vacío (pool sin abrir, blip de
+    Neon) NO se sella para siempre — se reintenta pasado `MEALFIT_CATALOG_INDEX_NEG_TTL_S`.
+
+    FAIL-OPEN por diseño: si el catálogo está vacío o lanza, la parte derivada es `frozenset()`
+    y el retorno cae al piso `_REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET` (comportamiento IDÉNTICO
+    al pre-fix). El cap nunca se queda sin lista por un blip de DB.
+    tooltip-anchor: P2-VEG-VOLUME-TOKENS-2"""
+    global _WATERY_VEG_TOKENS_CACHE
+    if not _catalog_index_should_rebuild("_watery_veg_tokens", _WATERY_VEG_TOKENS_CACHE):
+        return _WATERY_VEG_TOKENS_CACHE | _REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET
+    derived: set = set()
+    try:
+        from shopping_calculator import get_master_ingredients
+        from constants import strip_accents as _sa_wv
+        for row in get_master_ingredients() or []:
+            if row.get("category") != "Vegetales":
+                continue
+            try:
+                kcal = float(row.get("kcal_per_100g"))
+            except (TypeError, ValueError):
+                continue
+            if kcal <= 0 or kcal > float(MEALFIT_WATERY_VEG_KCAL_MAX):
+                continue
+            base = _sa_wv((row.get("name") or "").strip().lower())
+            if base in _WATERY_VEG_ROW_EXCLUDE:
+                continue  # fila entera excluida (colisión documentada arriba)
+            keys = [row.get("name") or ""]
+            _al = row.get("aliases")
+            if isinstance(_al, (list, tuple)):
+                keys += [str(a) for a in _al if a]
+            for k in keys:
+                kk = _sa_wv(str(k).strip().lower())
+                if len(kk) < 3 or kk in _WATERY_VEG_TOKEN_EXCLUDE:
+                    continue
+                derived.add(kk)
+    except Exception as _e:
+        logger.warning(f"[P2-VEG-VOLUME-TOKENS-2] catálogo no disponible, derivación inactiva "
+                        f"esta llamada (piso estático sigue cubriendo): {type(_e).__name__}: {_e}")
+        derived = set()
+    result = frozenset(derived)
+    _WATERY_VEG_TOKENS_CACHE = result
+    if not result:
+        _catalog_index_note_failure("_watery_veg_tokens")
+        logger.warning("⚠️ [P2-VEG-VOLUME-TOKENS-2] set derivado VACÍO (catálogo no disponible) — "
+                        "cap de vegetales-acuosos corre SOLO con el piso estático hasta el reintento.")
+    return result | _REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
 # clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
 # (lookup miss) o una pasada TARDÍA infla la línea después de los caps por clase, NINGUNA línea
@@ -29601,6 +29703,10 @@ def _cap_unrealistic_portions(days, db=None) -> int:
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
+        # [P2-VEG-VOLUME-TOKENS-2] Una sola resolución por pasada (no por-línea): el helper ya
+        # cachea el set derivado módulo-level, pero llamarlo aquí evita incluso el costo del
+        # gate `_catalog_index_should_rebuild` en cada línea de cada comida.
+        _watery_tokens = _watery_veg_tokens()
         capped = 0
         for _d in days:
             for meal in (_d.get("meals") or []) if isinstance(_d, dict) else []:
@@ -29683,10 +29789,13 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         elif (cur_g > float(REALISM_FRUIT_VOLUME_CAP_G)
                               and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_FRUIT_TOKENS)):
                             factor = float(REALISM_FRUIT_VOLUME_CAP_G) / cur_g
-                        # [P1-VEG-VOLUME-CAP · 2026-07-07] 1.6) vegetal ACUOSO de volumen en gramos
-                        # ("545 g de pepino" en una ensalada de acompañamiento, plan vivo 4e7b8dbb).
+                        # [P1-VEG-VOLUME-CAP · 2026-07-07 · derivado del catálogo P2-VEG-VOLUME-
+                        # TOKENS-2 · 2026-08-01] 1.6) vegetal ACUOSO de volumen en gramos ("545 g de
+                        # pepino" en una ensalada de acompañamiento, plan vivo 4e7b8dbb; "470 g de
+                        # tayota" ×2, plan 8d3f246a, el 5º incidente que motivó derivar el set del
+                        # catálogo en vez de seguir parcheando tokens a mano).
                         elif (cur_g > float(REALISM_VEG_VOLUME_CAP_G)
-                              and any(_re.search(r"\b" + t, il) for t in _REALISM_VOLUME_VEG_TOKENS)):
+                              and any(_re.search(r"\b" + t, il) for t in _watery_tokens)):
                             factor = float(REALISM_VEG_VOLUME_CAP_G) / cur_g
                         # [P2-SNACK-CHEESE-CAP · 2026-07-06] 1.7) queso en MERIENDA sobre el techo
                         # servible ("210 g de queso" con ½ lechosa). Yogurt exento.

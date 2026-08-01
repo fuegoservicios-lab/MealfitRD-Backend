@@ -23,7 +23,12 @@ diagnóstico lo desaconseja explícitamente (bajarlo rompería porciones legíti
 household grande; el backstop correcto para vegetales acuosos es el cap específico, no el
 genérico). El refactor estructural que el diagnóstico propone (derivar el set desde
 `master_ingredients WHERE category='Vegetales'` en vez de una tuple a mano, mismo principio que
-P1-DIET-CANON-SSOT) queda documentado como follow-up, no implementado aquí.
+P1-DIET-CANON-SSOT) quedó documentado como follow-up — **implementado en la misma sesión, ver
+Sección 3**: UNA HORA después del parche de los 4 tokens de arriba, el siguiente plan real
+(8d3f246a) trajo un 5º vegetal fuera de lista ("470 g de tayota" ×2, 19-22.5 kcal/100g) —
+confirmando la lección ya anotada en la memoria del repo: "una lista de tokens que crece
+por-incidente garantiza el próximo incidente" (mismo diagnóstico que motivó P1-DIET-CANON-SSOT
+sobre las 3 tablas de dietType a mano).
 
 ## Sección 2 — qty-sync ciego a "lonjas/pedazos" (`_STEP_QTY_UNITS` + `_STEP_QTY_MENTION_RE`)
 
@@ -46,12 +51,27 @@ from __future__ import annotations
 import os
 import re
 
+import pytest
+
 import graph_orchestrator as g
+import shopping_calculator as sc
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BACKEND = os.path.dirname(_HERE)
 with open(os.path.join(_BACKEND, "graph_orchestrator.py"), encoding="utf-8") as f:
     _GO = f.read()
+
+
+@pytest.fixture(autouse=True)
+def _limpio_watery_veg_cache():
+    """El set derivado se cachea módulo-level (mismo gate negative-TTL que `_phantom_catalog_
+    index`/`_catalog_kcal_by_name`, ver `test_p1_catalog_index_no_sticky.py`) — sin resetear entre
+    tests, el primero que corre decide el catálogo (real o monkeypatcheado) para TODOS los demás."""
+    g._WATERY_VEG_TOKENS_CACHE = None
+    g._CATALOG_INDEX_NEG_AT.pop("_watery_veg_tokens", None)
+    yield
+    g._WATERY_VEG_TOKENS_CACHE = None
+    g._CATALOG_INDEX_NEG_AT.pop("_watery_veg_tokens", None)
 
 
 # ═══════════════════════ Sección 1 — veg volume tokens ═══════════════════════
@@ -185,3 +205,188 @@ def test_pedazos_solo_sin_slash_tambien_matchea():
     assert m is not None
     assert m.group("unit") == "pedazos"
     assert m.group("food") == "queso"
+
+
+# ═══════════════ Sección 3 — P2-VEG-VOLUME-TOKENS-2 estructural: derivar del catálogo ═══════════
+#
+# UNA HORA después de parchear los 4 tokens de la Sección 1, el siguiente plan real (8d3f246a)
+# trajo un 5º vegetal fuera de lista: "470 g de tayota" ×2 (19-22.5 kcal/100g). La lista a mano
+# había vuelto a quedarse corta antes de que se secara la tinta del fix anterior — la firma exacta
+# de "una lista de tokens que crece por-incidente garantiza el próximo incidente" (misma clase que
+# P1-DIET-CANON-SSOT, que colapsó 3 tablas de dietType a mano en una función SSOT).
+#
+# Fix: `_watery_veg_tokens()` (graph_orchestrator.py) deriva el set de `master_ingredients WHERE
+# category='Vegetales' AND kcal_per_100g <= MEALFIT_WATERY_VEG_KCAL_MAX` (default 45.0) — un
+# vegetal acuoso nuevo que el catálogo adquiera entra SOLO, sin PR. La tuple estática original
+# (renombrada `_REALISM_VOLUME_VEG_TOKENS_FALLBACK`) NO se borra: el consumidor usa la UNIÓN
+# derivado∪fallback SIEMPRE (no "derivado O fallback" condicionado a catálogo-vacío) — así los 4
+# tokens del parche manual (esparrago/vainita/coles de bruselas/molondron) y los 5 originales
+# (pepino/berro/rabano/rabanito/apio) están cubiertos pase lo que pase con la DB, incluso cuando
+# alguno de ellos (p.ej. "coles de bruselas", 52 kcal/100g) queda por ENCIMA del umbral de
+# derivación y por ende ausente de la parte derivada.
+#
+# Verificado contra el catálogo REAL de prod (Neon, SOLO-LECTURA, 2026-08-01, 204 filas / 39
+# 'Vegetales'): 30 filas Vegetales califican bajo el umbral 45.0, expandidas a 149 tokens vía
+# nombre+aliases (singular/plural/sinónimos EN incluidos gratis — el mismo mecanismo con el que
+# `_phantom_catalog_index` ya resuelve "esparrago" como alias de "Espárragos"). Colisiones
+# encontradas y excluidas (verificación exhaustiva: cada token candidato vs los 204 nombres+alias
+# del catálogo completo, con el MISMO matcher `\b`+substring que usa el consumidor):
+#   - fila 'Tomate' (fila completa excluida): su forma base 'tomate' matchea 'Salsa de tomate'
+#     (Despensa). Cero regresión — 'tomate' nunca estuvo en el fallback.
+#   - fila 'Cebolla' (fila completa excluida): su forma base 'cebolla' matchea 'Cebolla en polvo'
+#     (Despensa, 4 formas de alias). Cero regresión — 'cebolla' nunca estuvo en el fallback.
+#   - alias suelto 'cos' (de 'Lechuga romana', ing. "cos lettuce"): matchea 'Costilla de cerdo'
+#     (Proteínas) — la clase EXACTA ya documentada en la memoria del repo ('sal' ⊂ 'Salami'/
+#     'Salmón'). Se excluye solo el alias, no la fila (sus otros aliases no colisionan).
+# Union final medida contra prod: 151 tokens (149 derivados + 2 del fallback que no derivan por
+# umbral: 'coles de bruselas' 52 kcal, 'vainita' singular sin alias en el catálogo).
+
+
+class _SyntheticCatalog:
+    """Catálogo mínimo controlado — no depende de la DB real, hermético para CI."""
+
+    ROWS = [
+        {"name": "Tayota", "category": "Vegetales", "kcal_per_100g": 19.0,
+         "aliases": ["tayotas", "chayote"]},
+        {"name": "Espárragos", "category": "Vegetales", "kcal_per_100g": 25.4,
+         "aliases": ["esparrago", "esparragos verdes"]},
+        {"name": "Batata", "category": "Víveres", "kcal_per_100g": 90.0, "aliases": ["batatas"]},
+        {"name": "Ajo", "category": "Vegetales", "kcal_per_100g": 142.7,
+         "aliases": ["diente de ajo"]},  # denso, no acuoso: por encima del umbral
+        {"name": "Tomate", "category": "Vegetales", "kcal_per_100g": 20.9,
+         "aliases": ["tomates"]},  # fila colisionante — debe quedar excluida
+        {"name": "Salsa de tomate", "category": "Despensa", "kcal_per_100g": 28.7, "aliases": []},
+    ]
+
+    @classmethod
+    def get(cls):
+        return [dict(r) for r in cls.ROWS]
+
+
+# ───────────── (a) funcional: catálogo sintético inyectado ─────────────
+
+def test_a_tayota_bajo_kcal_entra_en_el_set(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert "tayota" in toks, f"tayota (19 kcal/100g, Vegetales) debe derivarse — set: {sorted(toks)}"
+
+
+def test_a_batata_densa_no_entra_por_categoria_ni_kcal(monkeypatch):
+    """Batata es 'Víveres' (no 'Vegetales') Y 90 kcal/100g > 45 — doble motivo de exclusión."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert "batata" not in toks
+
+
+def test_a_ajo_denso_no_entra_pese_a_ser_vegetales(monkeypatch):
+    """Control de umbral: categoría correcta pero kcal muy por encima — no debe colarse."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert "ajo" not in toks
+
+
+def test_a_tomate_excluido_por_colision_documentada(monkeypatch):
+    """'tomate' (20.9 kcal, Vegetales) colisiona con 'Salsa de tomate' (Despensa) — fila entera
+    excluida a propósito. No es una regresión: 'tomate' nunca estuvo en el fallback estático."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert "tomate" not in toks
+
+
+# ───────────── (b) fail-open: catálogo vacío → fallback estático ─────────────
+
+def test_b_catalogo_vacio_cae_al_fallback_estatico(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: [])
+    toks = g._watery_veg_tokens()
+    assert toks == g._REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET, (
+        "con catálogo vacío el set debe ser EXACTAMENTE el piso estático — el cap jamás se queda "
+        "sin lista por un blip de DB")
+
+
+def test_b_catalogo_que_lanza_excepcion_tambien_cae_al_fallback(monkeypatch):
+    def _boom():
+        raise RuntimeError("Neon caído (blip)")
+    monkeypatch.setattr(sc, "get_master_ingredients", _boom)
+    toks = g._watery_veg_tokens()
+    assert toks == g._REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET
+
+
+def test_b_fallo_no_se_pega_para_siempre(monkeypatch):
+    """Mismo contrato que `_phantom_catalog_index` (P1-CATALOG-INDEX-NO-STICKY): tras el TTL
+    negativo, la siguiente llamada reintenta contra el catálogo real."""
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: (_ for _ in ()).throw(
+        RuntimeError("blip")))
+    assert g._watery_veg_tokens() == g._REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET
+    monkeypatch.setattr(g, "_CATALOG_INDEX_NEG_TTL_S", 0.0)  # como si el TTL ya pasara
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert "tayota" in toks, "tras el TTL debe reintentar y reconstruir con el catálogo bueno"
+
+
+# ───────────── (c) caso real: 470 g de tayota → capeado a 250 ─────────────
+
+class _DB3:
+    def macros_from_ingredient_string(self, s):
+        return {"protein": 0.0, "carbs": 0.0, "fats": 0.0, "kcal": 0.0}
+
+    def lookup(self, s):
+        return object()
+
+    def _ingredient_macro_group(self, *a, **k):
+        return None
+
+
+def test_c_470g_de_tayota_capeado_a_250_caso_real_8d3f246a(monkeypatch):
+    """Caso literal del plan vivo 8d3f246a: "470 g de tayota" ×2 — el 5º vegetal fuera de lista,
+    UNA HORA después del parche manual de los 4 anteriores. Con el set derivado del catálogo,
+    tayota entra sin necesitar un 5º token a mano."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    meal = {"name": "Test", "meal": "Cena", "ingredients": ["470 g de tayota"],
+            "ingredients_raw": ["470 g de tayota"],
+            "protein": 24, "carbs": 62, "fats": 13, "cals": 464}
+    n = g._cap_unrealistic_portions([{"meals": [meal]}], db=_DB3())
+    assert n == 1
+    assert meal["ingredients"][0].startswith("250"), meal["ingredients"][0]
+    assert g.REALISM_VEG_VOLUME_CAP_G == 250
+
+
+# ───────────── (d) los 4 tokens del parche manual siguen cubiertos ─────────────
+
+@pytest.mark.parametrize("tok", ["esparrago", "vainita", "coles de bruselas", "molondron"])
+def test_d_los_4_tokens_del_parche_manual_siguen_cubiertos(tok, monkeypatch):
+    """Vía derivación O fallback — no importa cuál de las dos rutas los cubra, lo que no puede
+    pasar es que el refactor estructural haga desaparecer una cobertura ya probada en producción.
+    Ejercitado con un catálogo sintético que NO los contiene (fuerza la cobertura por fallback)."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert tok in toks, (
+        f"{tok!r} debe seguir cubierto (vía derivación o vía fallback) tras el refactor "
+        f"estructural — regresión del incidente P2-VEG-VOLUME-TOKENS-2")
+
+
+def test_d_los_5_originales_tambien_siguen_cubiertos(monkeypatch):
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    for orig in ("pepino", "berro", "rabano", "rabanito", "apio"):
+        assert orig in toks, orig
+
+
+def test_d_fallback_es_siempre_subconjunto_del_resultado(monkeypatch):
+    """Invariante de diseño: la unión NUNCA pierde el piso estático, catálogo presente o no."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    toks = g._watery_veg_tokens()
+    assert g._REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET <= toks
+
+
+# ───────────── knob + clamp ─────────────
+
+def test_knob_watery_veg_kcal_max_default_y_clamp():
+    assert g.MEALFIT_WATERY_VEG_KCAL_MAX == 45.0
+    assert "10.0 <= v <= 100.0" in _GO, "el clamp del knob MEALFIT_WATERY_VEG_KCAL_MAX debe seguir vivo"
+    assert "MEALFIT_WATERY_VEG_KCAL_MAX" in _GO
+
+
+def test_marker_estructural_anclado_en_fuente():
+    assert "P2-VEG-VOLUME-TOKENS-2" in _GO
+    assert "_watery_veg_tokens" in _GO
+    assert "8d3f246a" in _GO, "el plan vivo que motivó el refactor debe quedar anclado en el código"
