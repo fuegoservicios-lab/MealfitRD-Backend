@@ -3801,6 +3801,22 @@ class PlanState(TypedDict):
     #                                           la lee `review_plan_node` y el
     #                                           guard del plan entregado).
     #
+    # [P1-CULINARY-CONTRACT/JUDGE · post-review-final] TELEMETRÍA CULINARIA
+    # (capa 1 determinista + capa 2 juez LLM; viajan en `plan_result`, NO en
+    # state — escritas/leídas en `review_plan_node` y propagadas semana 2+ por
+    # el chunk worker en `cron_tasks.py`):
+    #   - `_culinary_contract_violations`     (lista — violaciones V1/V2/V3 del
+    #                                           scan determinista de ESTE chunk;
+    #                                           snapshot, no histórico).
+    #   - `_culinary_contract_coverage`       (float 0..1 — fracción de alimentos
+    #                                           del plan con metadata culinaria;
+    #                                           telemetría del rollout warn→block).
+    #   - `_culinary_judge_history`           (lista, cap 20 — entries del juez
+    #                                           LLM por attempt; gemelo de
+    #                                           `_shopping_coherence_block_history`,
+    #                                           se EXTIENDE entre semanas, no se
+    #                                           sobrescribe).
+    #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
     # campo en este TypedDict ANTES de tocar el call site — el bug equivalente

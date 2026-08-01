@@ -93,6 +93,19 @@ def _sing_plural_pattern(word: str) -> str:
     return rf"{w}(?:e?s)?"
 
 
+# [IMPORTANT-5 · post-review-final] Matching por TOKEN con word-boundary, no substring
+# plano — "sal" ⊂ "Salami"/"Salmón", "agua" ⊂ "Aguacate", "sal" ⊂ "EnSALada" (14ª
+# aparición documentada de esta clase de bug en el repo). `\b` no separa DENTRO de una
+# palabra continua (agua|cate no tiene borde entre 'a' y 'c'), así que exige la palabra
+# COMPLETA — reusa `_sing_plural_pattern` por token para seguir aceptando plurales
+# ("sales", "especias") y `\s+` entre tokens para exenciones multi-palabra ("ajo en
+# polvo"). Construido a import-time (frozenset CONDIMENT_EXEMPT es estable).
+_CONDIMENT_EXEMPT_RES = [
+    re.compile(r"\b" + r"\s+".join(_sing_plural_pattern(w) for w in ex.split()) + r"\b")
+    for ex in CONDIMENT_EXEMPT
+]
+
+
 def build_culinary_index(catalog: list) -> dict:
     """Índice nombre-normalizado → metadata + regex word-boundary del alias."""
     index = {}
@@ -254,7 +267,7 @@ def _v3_huerfanos(day, meal, index) -> list:
     out = []
     for ing in ingredientes:
         n = _norm(ing)
-        if any(ex in n for ex in CONDIMENT_EXEMPT):
+        if any(rx.search(n) for rx in _CONDIMENT_EXEMPT_RES):
             continue
         foods = find_catalog_foods(ing, index)
         if not foods:

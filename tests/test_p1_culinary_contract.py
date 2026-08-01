@@ -186,6 +186,41 @@ def test_v3_plural_singular_no_da_fp():
     assert not [x for x in v if x["check"] == "V3" and x["food"] == "Tomate"], v
 
 
+# ---------------------------------------------------------------------------
+# [IMPORTANT-5 · post-review-final] La exención V3 de condimentos matchea por TOKEN
+# con word-boundary, no substring plano. Antes del fix, `"sal" in n` exentaba
+# CUALQUIER ingrediente que contuviera "sal"/"agua" como substring —
+# "Salami"/"Salmón"/"EnSALada"/"Aguacate" quedaban falsamente exentos de V3 (14ª
+# aparición documentada de esta clase de bug en el repo).
+# ---------------------------------------------------------------------------
+def test_v3_condimento_exemption_no_es_substring_plano():
+    """Salami/Aguacate/Ensalada verde SON huérfanos resolubles al catálogo — la
+    exención de condimentos NO debe enmascararlos por contener 'sal'/'agua' como
+    substring dentro de otra palabra."""
+    cat = _CAT + [
+        {"name": "Salami", "prep_methods": ["freir"], "ready_to_eat": True},
+        {"name": "Aguacate", "prep_methods": ["crudo"], "ready_to_eat": True},
+        {"name": "Ensalada verde", "prep_methods": ["crudo"], "ready_to_eat": True},
+    ]
+    v = cc.culinary_contract_scan(_plan(
+        ["Cocina la Pechuga de pollo a la plancha y sirve."],
+        ["120 g Pechuga de pollo", "80 g Salami", "1 Aguacate", "1 Ensalada verde"]), cat)
+    hit_foods = {x["food"] for x in v if x["check"] == "V3"}
+    assert hit_foods == {"Salami", "Aguacate", "Ensalada verde"}, (
+        f"Salami/Aguacate/Ensalada verde son huérfanos resolubles al catálogo — NO deben "
+        f"quedar exentos por contener 'sal'/'agua' como substring: {v}")
+
+
+def test_v3_condimento_exemption_legitima_multipalabra_y_plural():
+    """Las exenciones legítimas (incluida la multi-palabra 'ajo en polvo' y el
+    plural 'sales'/'especias') SIGUEN exentas bajo el matching por token."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Cocina la Pechuga de pollo a la plancha."],
+        ["120 g Pechuga de pollo", "1 pizca de sal", "aceite de oliva",
+         "1 cdta ajo en polvo", "sales de mar", "especias variadas"]), _CAT)
+    assert not [x for x in v if x["check"] == "V3"], v
+
+
 def test_scan_coverage_fraccion_con_y_sin_metadata():
     """[Task-5, gap señalado en el review de T4] scan_coverage con _CAT: un
     plan que menciona 2 alimentos CON metadata (Pechuga de pollo, Tomate) y 1
