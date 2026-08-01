@@ -6113,6 +6113,204 @@ CULINARY_CONTRACT_GUARD = (_env_str("MEALFIT_CULINARY_CONTRACT_GUARD", "warn") o
 if CULINARY_CONTRACT_GUARD not in ("off", "warn", "block"):
     CULINARY_CONTRACT_GUARD = "warn"
 
+# [P1-CULINARY-JUDGE · 2026-08-01] Knobs del JUEZ LLM culinario (F3, Task 11 del spec de
+# coherencia culinaria). La capa de arriba (P1-CULINARY-CONTRACT) es determinista — regex/
+# metadata sobre técnica y horario. Este juez es la SEGUNDA capa: juicio holístico sobre el
+# plan completo (combos absurdos, técnica impropia, pasos de receta que se contradicen, nombre
+# que no corresponde). Nace TOTALMENTE OFF — necesita su propia ventana de calibración por
+# script (spec §6) antes de gastar tokens en producción; no hereda el "warn" de nacimiento del
+# contract-guard porque ESTE gasta una llamada LLM completa por plan (el contract-guard es
+# gratis, determinista). Modelo default FLASH — directiva del owner (P1-FLASH-PRIMARY), nunca
+# pro sin medición. Task 12 integra el reporte a `review_plan_node`; esta task SOLO define la
+# pieza y su red (fail-open total, ver `run_culinary_judge` más abajo).
+# tooltip-anchor: P1-CULINARY-JUDGE
+CULINARY_JUDGE_GUARD = (_env_str("MEALFIT_CULINARY_JUDGE_GUARD", "off") or "off").strip().lower()
+if CULINARY_JUDGE_GUARD not in ("off", "warn", "block"):
+    CULINARY_JUDGE_GUARD = "off"   # fail-safe: valor raro ⇒ el juez se queda apagado
+CULINARY_JUDGE_MODEL = _env_str("MEALFIT_CULINARY_JUDGE_MODEL", _FLASH_MODEL_NAME) or _FLASH_MODEL_NAME
+# [P1-REVIEWER-THINKING pattern] `extra_body.thinking` es DeepSeek-only — nace OFF (misma
+# convención medir→actuar que MEALFIT_REVIEWER_THINKING). Cuando ON, `run_culinary_judge` solo
+# lo activa si el modelo resuelto NO es OpenAI (gpt-5.6 razona nativo sin este knob).
+CULINARY_JUDGE_THINKING = _env_bool("MEALFIT_CULINARY_JUDGE_THINKING", False)
+CULINARY_JUDGE_TIMEOUT_S = _env_int("MEALFIT_CULINARY_JUDGE_TIMEOUT_S", 45,
+                                     validator=lambda v: 10 <= v <= 120)
+
+
+class CulinaryViolation(BaseModel):
+    """[P1-CULINARY-JUDGE] Una violación culinaria reportada por el juez LLM sobre un plato
+    concreto del plan. `tipo` son los 5 valores canónicos del spec F3 — NO añadir un 6º sin
+    actualizar el schema Y la rúbrica (`_CULINARY_JUDGE_RUBRIC`) a la vez, o el juez seguirá
+    describiendo solo 5 en el prompt mientras el schema acepta otro."""
+    day: int
+    meal: str
+    tipo: Literal["combo_absurdo", "tecnica_impropia", "paso_incoherente",
+                  "slot_inapropiado", "nombre_no_corresponde"]
+    detalle: str
+    severidad: Literal["minor", "high"]
+
+
+class CulinaryJudgeReport(BaseModel):
+    """[P1-CULINARY-JUDGE] Output estructurado de `run_culinary_judge`. Lista vacía = plan
+    culinariamente coherente a juicio del LLM (el default explícito evita que un plan sin
+    violaciones dependa de que el LLM emita `"violations": []` — con `with_structured_output`
+    normal el campo es requerido de todas formas, pero el default documenta la intención)."""
+    violations: list[CulinaryViolation] = []
+
+
+_CULINARY_JUDGE_SLOT_LABELS = {"desayuno": "Desayuno", "almuerzo": "Almuerzo",
+                               "cena": "Cena", "merienda": "Merienda"}
+
+
+def _build_culinary_judge_rubric() -> str:
+    """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
+    vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
+    string, vía SystemMessage) debe ser byte-a-byte idéntico entre invocaciones para que
+    DeepSeek dé cache hits sobre el bloque grande y estable; el payload variable (los platos
+    del plan a juzgar) va aparte, en el HumanMessage de `run_culinary_judge`.
+
+    Fuentes: hasta 10 nombres de ejemplo por slot desde `data/dish_templates.json` (slots en
+    minúscula del archivo, mapeados aquí a los 4 canónicos) + la regla dura documentada en el
+    `_note` de ese archivo (arroz/locrio/pasta/sopón NUNCA en desayuno ni cena; sopones solo
+    almuerzo) + `constants.SLOT_POSITIVE_HINT`. Cierra con las definiciones de los 5 tipos
+    canónicos de violación y la instrucción de precisión ("solo violaciones CLARAS" — la
+    creatividad dominicana legítima no es una violación).
+
+    Fail-open: JSON ausente/corrupto ⇒ rúbrica mínima hardcoded (el juez sigue siendo usable,
+    solo pierde los ejemplos curados). tooltip-anchor: P1-CULINARY-JUDGE-RUBRIC
+    """
+    try:
+        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
+        with open(_path, encoding="utf-8") as _f:
+            _data = json.load(_f)
+        _templates = _data.get("templates") or []
+        _by_slot: dict = {k: [] for k in _CULINARY_JUDGE_SLOT_LABELS}
+        for _t in _templates:
+            if not isinstance(_t, dict):
+                continue
+            _name = _t.get("name")
+            if not _name:
+                continue
+            for _s in (_t.get("slots") or []):
+                _sk = str(_s).strip().lower()
+                if _sk in _by_slot and len(_by_slot[_sk]) < 10:
+                    _by_slot[_sk].append(_name)
+        _ex_lines = [f"- {_label}: " + "; ".join(_by_slot[_sk])
+                     for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items() if _by_slot.get(_sk)]
+        _examples_block = (
+            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO (biblioteca curada, no "
+            "exhaustiva — la creatividad puede ir MÁS ALLÁ de esta lista):\n" + "\n".join(_ex_lines)
+        ) if _ex_lines else (
+            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
+            "juzga con criterio culinario dominicano general."
+        )
+    except Exception:
+        _examples_block = (
+            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
+            "juzga con criterio culinario dominicano general."
+        )
+    _hint_lines = []
+    try:
+        for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items():
+            _hint = SLOT_POSITIVE_HINT.get(_sk)
+            if _hint:
+                _hint_lines.append(f"- {_label}: {_hint}")
+    except Exception:
+        pass
+    _hints_block = ("GUÍA POSITIVA POR HORARIO:\n" + "\n".join(_hint_lines) + "\n\n") if _hint_lines else ""
+    return (
+        "Eres un juez culinario dominicano experto evaluando un plan de alimentación generado "
+        "por IA. Tu trabajo es señalar SOLO violaciones CLARAS e inequívocas de coherencia "
+        "culinaria — la creatividad dominicana legítima (fusiones, adaptaciones, platos "
+        "transformados como panqueques de avena, bollitos de yuca, pastelón) NO es una "
+        "violación; en la duda, NO reportes.\n\n"
+        + _examples_block + "\n\n"
+        + "REGLA DURA DE HORARIO: arroz, locrio, moro y pasta como base NUNCA van en desayuno "
+          "ni cena — son plato fuerte de almuerzo. Los sopones (asopao, sancocho, sopa espesa) "
+          "van SOLO en almuerzo.\n\n"
+        + _hints_block
+        + "TIPOS CANÓNICOS DE VIOLACIÓN (usa EXACTAMENTE uno de estos 5 valores en el campo "
+          "`tipo` de cada violación reportada):\n"
+          "- combo_absurdo: combinación de ingredientes o platos sin sentido culinario (ej. "
+          "cereal con pescado crudo, un postre como fuente principal de proteína).\n"
+          "- tecnica_impropia: la técnica de cocción declarada no corresponde al ingrediente ni "
+          "al resultado descrito (ej. 'a la plancha' para lo que es un guiso, algo crudo que "
+          "requiere cocción).\n"
+          "- paso_incoherente: un paso de la receta contradice otro paso o el resultado final "
+          "(ej. un ingrediente usado antes de aparecer en la lista, un paso que deshace la "
+          "cocción de un paso anterior).\n"
+          "- slot_inapropiado: el plato no corresponde a su horario (arroz/locrio/pasta/sopón "
+          "fuera de almuerzo; plato fuerte pesado como merienda; postre como plato principal de "
+          "cena).\n"
+          "- nombre_no_corresponde: el nombre del plato no describe lo que la receta realmente "
+          "prepara (ej. se llama 'ensalada' pero la receta es un guiso caliente).\n\n"
+          "Para cada violación reporta: day (número de día), meal (nombre del slot, ej. "
+          "'Almuerzo'), tipo (uno de los 5 valores canónicos), detalle (explicación breve y "
+          "concreta), severidad ('minor' si es cosmético/discutible, 'high' si un dominicano lo "
+          "vería como un error claro). Si el plan es culinariamente coherente, devuelve una "
+          "lista de violaciones VACÍA — no inventes problemas para llenar el reporte."
+    )
+
+
+# Construida UNA vez a import-time (no por-llamada): estable byte-a-byte ⇒ cache hits de
+# DeepSeek sobre este prefix en cada invocación de `run_culinary_judge`.
+_CULINARY_JUDGE_RUBRIC = _build_culinary_judge_rubric()
+
+
+async def run_culinary_judge(plan: dict):
+    """[P1-CULINARY-JUDGE] Juicio culinario LLM del plan COMPLETO (1 llamada batched, no por
+    día — evita N llamadas y preserva el prefix estable de `_CULINARY_JUDGE_RUBRIC` para cache
+    hits). Devuelve `CulinaryJudgeReport` o `None` (fail-open: knob OFF, timeout, o cualquier
+    error del LLM/parseo). NUNCA muta `plan` — Task 12 decide qué hacer con el reporte
+    (warn/block); esta función solo lo produce. Jamás aprueba en silencio lo que la capa 1
+    (P1-CULINARY-CONTRACT, determinista) ya rechazó — es señal aditiva, no un override.
+
+    El payload incluye la RECETA COMPLETA por comida (`recipe`) — el reviewer médico
+    (P1-REVIEWER-THINKING) nunca la ve, solo nombre+ingredientes; este es el único ojo LLM del
+    pipeline que juzga los PASOS de preparación.
+
+    tooltip-anchor: P1-CULINARY-JUDGE"""
+    if CULINARY_JUDGE_GUARD == "off":
+        return None
+    _node_token = _current_node_var.set("culinary_judge")
+    try:
+        _model = CULINARY_JUDGE_MODEL
+        _is_openai = is_openai_model(_model)
+        # [P1-REVIEWER-THINKING pattern · 2026-07-05] thinking (extra_body) es DeepSeek-only —
+        # nunca se activa sobre un modelo OpenAI (gpt-5.6 razona nativo sin este knob). thinking
+        # no soporta el tool_choice forzado de function_calling → json_mode en su lugar.
+        _use_thinking = bool(CULINARY_JUDGE_THINKING and not _is_openai)
+        if _use_thinking:
+            _llm = ChatDeepSeek(
+                model=_model, temperature=0.1, max_retries=0,
+                timeout=CULINARY_JUDGE_TIMEOUT_S,
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+            _judge = _llm.with_structured_output(CulinaryJudgeReport, method="json_mode")
+        else:
+            _llm = (ChatOpenAIInstrumented if _is_openai else ChatDeepSeek)(
+                model=_model, temperature=0.1, max_retries=0,
+                timeout=CULINARY_JUDGE_TIMEOUT_S,
+            )
+            _judge = _llm.with_structured_output(CulinaryJudgeReport)
+        _meals = [
+            {"day": d.get("day"), "slot": m.get("meal"), "name": m.get("name"),
+             "ingredients": m.get("ingredients"), "recipe": m.get("recipe")}
+            for d in (plan.get("days") or []) for m in (d.get("meals") or [])
+        ]
+        _msg = [
+            SystemMessage(content=_CULINARY_JUDGE_RUBRIC),
+            HumanMessage(content=json.dumps({"meals": _meals}, ensure_ascii=False)),
+        ]
+        return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S + 5)
+    except Exception as _cj_e:
+        logger.warning(
+            f"⚖️ [P1-CULINARY-JUDGE] fail-open ({type(_cj_e).__name__}): el plan sigue su "
+            f"path estándar sin juicio culinario."
+        )
+        return None
+    finally:
+        _current_node_var.reset(_node_token)
+
 # [P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento del day-gen, para
 # CUALQUIER proveedor. Nace VACÍO = default del proveedor: encenderlo es una
 # decisión explícita.
