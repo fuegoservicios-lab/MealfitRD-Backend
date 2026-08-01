@@ -45,6 +45,11 @@ from graph_orchestrator import (
     # consumer del router toca esos campos, pero el contrato explícito
     # previene regresiones.
     _merge_other_text_fields,
+    # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01] mismo set de sentinels que
+    # `_profile_has_medical_risk` usa para decidir el risk-tier del reviewer.
+    # Reutilizado aquí para que "Ninguna"/"ninguno"/"n/a"/etc no cuenten contra
+    # el cap de condiciones médicas simultáneas — un solo SSOT de negativos.
+    _PROFILE_RISK_NEGATIVES,
 )
 from ai_helpers import expand_recipe_agent
 from services import _save_plan_and_track_background, _process_swap_rejection_background, save_partial_plan_get_id, _persist_plan_persist_failed_alert
@@ -716,6 +721,60 @@ def _validate_form_data_min(data: dict) -> tuple[bool, list[str]]:
                 continue
             missing.append(field)
     return (len(missing) == 0, missing)
+
+
+# ============================================================
+# [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01] Cap de condiciones médicas
+# simultáneas por plan (decisión de producto del owner).
+# ------------------------------------------------------------
+# Razón: el alcance clínico del generador queda acotado al checklist de
+# condiciones que las reglas deterministas (`condition_rules.py`) SÍ saben
+# defender de forma consistente. Más de N condiciones reales simultáneas
+# multiplica combinatoriamente las interacciones (subs, topes, gates) que el
+# LLM debe resolver sin backstop determinista para todas — degrada la calidad
+# clínica del plan en vez de mejorarla.
+#
+# Cuenta SOLO condiciones REALES: reutiliza `_PROFILE_RISK_NEGATIVES` (mismo
+# set que `_profile_has_medical_risk` en graph_orchestrator.py) para excluir
+# sentinels ("Ninguna"/"ninguno"/"n/a"/"no"/"nada"/""). Un usuario que marca
+# "Ninguna" + hasta `cap` condiciones reales pasa sin problema.
+#
+# Knob `MEALFIT_MAX_MEDICAL_CONDITIONS` (default 3, clamp [1,7] vía
+# `_env_int` validator) permite ajustar el cap sin redeploy — auto-registrado
+# en `_KNOBS_REGISTRY`. Se lee EN CADA REQUEST (no cacheado a nivel módulo)
+# para que un rollback por knob surta efecto sin restart.
+#
+# Compatibilidad: esta validación corre SOLO sobre el REQUEST de generación
+# de un plan NUEVO (`/analyze`, `/analyze/stream`). Perfiles YA guardados con
+# más de `cap` condiciones (incluyendo los que las capturaron vía el texto
+# libre "Otra condición médica" pre-fix) NO se rompen — la lectura/hidratación
+# de `health_profile` existente no pasa por este validador; solo lo hace un
+# nuevo submit del formulario. `/swap-meal` e hidrataciones downstream leen
+# clinical data DESDE el perfil ya persistido (`_enrich_clinical_from_profile`)
+# y nunca invocan este check.
+# ============================================================
+def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
+    """Valida que `medicalConditions` no exceda el cap de condiciones reales.
+
+    Args:
+        data: payload crudo del request (`/analyze`, `/analyze/stream`).
+
+    Returns:
+        `(is_valid, real_count, cap)`. Si `is_valid=False`, el caller debe
+        rechazar la request con 422 (`code: too_many_medical_conditions`).
+    """
+    cap = _env_int("MEALFIT_MAX_MEDICAL_CONDITIONS", 3, validator=lambda v: 1 <= v <= 7)
+    raw = data.get("medicalConditions")
+    if isinstance(raw, (list, tuple, set)):
+        real_count = sum(
+            1 for x in raw
+            if str(x).strip() and str(x).strip().lower() not in _PROFILE_RISK_NEGATIVES
+        )
+    elif raw and str(raw).strip().lower() not in _PROFILE_RISK_NEGATIVES:
+        real_count = 1
+    else:
+        real_count = 0
+    return (real_count <= cap, real_count, cap)
 
 
 # ============================================================
@@ -2724,6 +2783,23 @@ def api_analyze(
                 },
             )
 
+        # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01] Cap de condiciones médicas
+        # simultáneas — decisión de producto del owner. Ver docstring de
+        # `_validate_medical_conditions_cap` para el rationale completo.
+        _mc_ok, _mc_count, _mc_cap = _validate_medical_conditions_cap(data)
+        if not _mc_ok:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "too_many_medical_conditions",
+                    "max": _mc_cap,
+                    "message": (
+                        "Para garantizar la calidad clínica del plan, selecciona máximo "
+                        f"{_mc_cap} condiciones prioritarias."
+                    ),
+                },
+            )
+
         # [P0-FORM-4] Telemetría de signal-loss en `dislikes`. NO bloquea, solo
         # alerta cuando un cliente no oficial bypassa el gate frontend. Ver
         # docstring del helper para el rationale completo.
@@ -3093,6 +3169,23 @@ async def api_analyze_stream(
                     "message": (
                         f"Faltan campos críticos para generar tu plan: {', '.join(_missing)}. "
                         f"Completa el formulario antes de continuar."
+                    ),
+                },
+            )
+
+        # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01] Mismo cap que el endpoint
+        # sync. Lanzar 422 ANTES de abrir el StreamingResponse (mismo motivo
+        # que los checks de arriba: JSON estándar > evento SSE de error).
+        _mc_ok, _mc_count, _mc_cap = _validate_medical_conditions_cap(data)
+        if not _mc_ok:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "too_many_medical_conditions",
+                    "max": _mc_cap,
+                    "message": (
+                        "Para garantizar la calidad clínica del plan, selecciona máximo "
+                        f"{_mc_cap} condiciones prioritarias."
                     ),
                 },
             )
