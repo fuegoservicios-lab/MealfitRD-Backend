@@ -38554,13 +38554,20 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if CULINARY_JUDGE_GUARD != "off":
         _cj = await run_culinary_judge(plan)
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
-        plan.setdefault("_culinary_judge_history", []).append({
+        _cj_hist = plan.setdefault("_culinary_judge_history", [])
+        _cj_hist.append({
             "ts": datetime.now(timezone.utc).isoformat(),
             "model": CULINARY_JUDGE_MODEL,
             "violations": _cj_viol,
             "action_taken": ("blocked" if (_cj_viol and CULINARY_JUDGE_GUARD == "block")
                              else "warn_only"),
         })
+        # [P1-CULINARY-JUDGE-HIST-CAP · post-review-final] Su gemelo
+        # `_shopping_coherence_block_history` se trunca a [-20:] en todos sus
+        # escritores — sin cap aquí, un plan con muchos ciclos shift/regen
+        # crece esta history sin techo. Mismo patrón, sin la maquinaria extra
+        # (knob/alertas) de su gemelo: esta capa nace OFF, sin tráfico en prod aún.
+        plan["_culinary_judge_history"] = _cj_hist[-20:]
         if _cj_viol:
             logger.warning(f"⚖️ [P1-CULINARY-JUDGE] {len(_cj_viol)} violación(es) "
                            f"(guard={CULINARY_JUDGE_GUARD}): "

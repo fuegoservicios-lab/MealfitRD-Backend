@@ -150,6 +150,13 @@ _CHAT_PLAN_PRUNE_KEYS = (
     "_shopping_coherence_block_history",
     "_archived_days",
     "calc_household_multiplier",
+    # [P1-CULINARY-CONTRACT · post-review-final] Gemelas de `_shopping_coherence_block*`
+    # arriba: telemetría interna del scan culinario determinista (capa 1) y del juez LLM
+    # (capa 2) — violaciones/cobertura/history no aportan al razonamiento del chat-agent
+    # y sin podarlas se serializaban al system prompt EN CADA turno (denylist no las tenía).
+    "_culinary_contract_violations",
+    "_culinary_contract_coverage",
+    "_culinary_judge_history",
     # [P1-CHAT-CLINICAL-TOOL · 2026-07-12] Reportes internos de QA del pipeline
     # — el agente no los necesita para conversar y engordaban CADA turno del
     # chat (audit del plan vivo del owner: dish_quality_report/variety_report/

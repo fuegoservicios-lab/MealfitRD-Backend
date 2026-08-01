@@ -680,6 +680,13 @@ P0_4_T2_INCREMENTAL_KEYS = (
     # descartaba el refresh y el Dashboard quedaba anclado a la extrapolación semana 1).
     'shopping_cost_summary',
     'budget_reconciliation',
+    # [P1-CULINARY-CONTRACT/JUDGE-CHUNK-PROPAGATE · post-review-final] Telemetría culinaria
+    # (capa 1 determinista + capa 2 juez LLM). `full_plan_data` ya trae el merge/cap correcto
+    # (incluido el extend de `_culinary_judge_history` sobre semanas previas, ver arriba) —
+    # este overlay solo la lleva del in-memory de T1 a la fila fresca que T2 re-lee.
+    '_culinary_contract_violations',
+    '_culinary_contract_coverage',
+    '_culinary_judge_history',
 )
 
 
@@ -32154,6 +32161,34 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 full_plan_data[_qd_k] = result[_qd_k]
                         logger.warning(f"[P2-10-CHUNK-QUALITY-DEGRADED] Plan {meal_plan_id} chunk {week_number} "
                                        f"_quality_degraded propagado (reason={result.get('_quality_degraded_reason')})")
+                except NameError:
+                    pass  # smart-shuffle path no rebindea `result`
+                # [P1-CULINARY-CONTRACT/JUDGE-CHUNK-PROPAGATE · post-review-final] Mismo gap que
+                # P2-10 cerró para `_quality_degraded*` arriba, ahora para la telemetría culinaria
+                # (capa 1 determinista + capa 2 juez LLM): sin propagar, semanas 2+ pierden la
+                # telemetría y la cobertura de T10 mediría solo semana 1. `result` puede no estar
+                # bound en el smart-shuffle path → NameError-guard (mismo patrón).
+                try:
+                    if isinstance(result, dict):
+                        # Snapshot del scan de ESTE chunk (no histórico, mismo trato que
+                        # `_quality_degraded*`) → overwrite directo.
+                        for _cul_k in ('_culinary_contract_violations', '_culinary_contract_coverage'):
+                            if _cul_k in result:
+                                full_plan_data[_cul_k] = result[_cul_k]
+                        # `_culinary_judge_history` SÍ es histórico — gemelo de
+                        # `_shopping_coherence_block_history`. A esta altura `full_plan_data` YA es
+                        # el `plan_data` que T1 leyó FOR UPDATE y mutó in-place (`plan_data['days']
+                        # = merged_days`, arriba) — conserva el history acumulado de semanas
+                        # 1..N-1. `result['_culinary_judge_history']` trae SOLO las entries nuevas
+                        # de ESTA semana (plan_result de este chunk nace fresco). Un overwrite
+                        # ciego (como el resto de estas claves) perdería las semanas previas —
+                        # se EXTIENDE y se recorta a 20, mismo cap que su gemelo shopping.
+                        _cj_new_hist = result.get('_culinary_judge_history')
+                        if isinstance(_cj_new_hist, list) and _cj_new_hist:
+                            _cj_prior_hist = full_plan_data.get('_culinary_judge_history')
+                            if not isinstance(_cj_prior_hist, list):
+                                _cj_prior_hist = []
+                            full_plan_data['_culinary_judge_history'] = (_cj_prior_hist + _cj_new_hist)[-20:]
                 except NameError:
                     pass  # smart-shuffle path no rebindea `result`
                 if _chunk_result_is_fallback or _chunk_review_failed:

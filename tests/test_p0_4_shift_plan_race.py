@@ -80,6 +80,12 @@ def test_t2_incremental_keys_includes_learning_shopping_quality():
         # anclado a la extrapolación de semana 1.
         'shopping_cost_summary',
         'budget_reconciliation',
+        # [P1-CULINARY-CONTRACT/JUDGE-CHUNK-PROPAGATE · post-review-final] Telemetría
+        # culinaria (capa 1 determinista + capa 2 juez LLM) — mismo gap que P2-10 cerró
+        # para _quality_degraded* arriba, ahora para el scan/juez culinario.
+        '_culinary_contract_violations',
+        '_culinary_contract_coverage',
+        '_culinary_judge_history',
     }
     assert set(P0_4_T2_INCREMENTAL_KEYS) == expected, (
         "Si añadiste un nuevo campo que el worker calcula entre T1 y T2 sin "

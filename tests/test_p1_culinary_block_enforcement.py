@@ -200,3 +200,18 @@ def test_judge_guard_block_rejects_plan(monkeypatch):
     assert any("tecnica_impropia" in i for i in issues), issues
     hist = plan.get("_culinary_judge_history")
     assert hist and hist[-1]["action_taken"] == "blocked", hist
+
+
+def test_judge_history_capped_at_20(monkeypatch):
+    """[IMPORTANT-4] `_culinary_judge_history` se trunca a [-20:] tras el append,
+    mismo patrón que su gemelo `_shopping_coherence_block_history`."""
+    monkeypatch.setattr(graph_orchestrator, "CULINARY_CONTRACT_GUARD", "off")
+    monkeypatch.setattr(graph_orchestrator, "CULINARY_JUDGE_GUARD", "warn")
+    monkeypatch.setattr(graph_orchestrator, "run_culinary_judge",
+                         _fake_judge_report_factory())
+    plan = _minimal_plan()
+    plan["_culinary_judge_history"] = [{"ts": "seed", "model": "x", "violations": [],
+                                         "action_taken": "warn_only"} for _ in range(25)]
+    state = _minimal_state(plan_result=plan)
+    _run(graph_orchestrator.review_plan_node(state))
+    assert len(plan["_culinary_judge_history"]) == 20, len(plan["_culinary_judge_history"])
