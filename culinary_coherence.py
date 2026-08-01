@@ -206,6 +206,31 @@ def _object_inmediato_status(tail: str, index: dict) -> str:
 # 'y'" (FP-C) que el acotado por cláusula por sí solo NO cubre (ambos objetos
 # viven en la MISMA oración ahí, no en oraciones distintas). Traza completa:
 # `.superpowers/culinary-fp-round1-report.md`, sección "Ronda 3".
+def clause_bounds(texto: str) -> list:
+    """[P1-SUBST-STALE-STEP · 2026-08-01, ronda 4b] Lista de `[start, end)` de TODAS las
+    cláusulas (oraciones) de `texto`, acotadas por `_SENTENCE_BOUNDARY_RE` ('.'/';'). Export
+    PÚBLICO de la lógica de fronteras que `_clause_bounds` (privado, ronda 3, ver abajo — ahora
+    un wrapper de ESTA función) ya usaba para resolver la cláusula de UNA sola posición; se
+    generaliza aquí a la partición completa del texto porque `graph_orchestrator._substitute_
+    blended_raw_egg` (P1-SUBST-STALE-STEP) la necesita para reescribir SOLO la cláusula
+    ofensora de un paso ("Hierve el yogur griego...") sin perder una acción legítima de OTRO
+    alimento en una cláusula vecina del mismo paso ("...; mientras tanto, tuesta el pan
+    integral..." — finding de review, ninguna evidencia en prod aún). Cláusulas vacías o
+    solo-whitespace (dos boundaries adyacentes, o el remanente tras la última boundary cuando
+    el texto termina en '.'/';') se OMITEN — un caller que reconstruya el texto original a
+    partir de esta lista debe recuperar el separador desde `texto[end]` (el carácter de
+    boundary), no asumir que las cláusulas devueltas son contiguas byte a byte."""
+    bounds = []
+    start = 0
+    for m in _SENTENCE_BOUNDARY_RE.finditer(texto):
+        if texto[start:m.start()].strip():
+            bounds.append((start, m.start()))
+        start = m.end()
+    if texto[start:].strip():
+        bounds.append((start, len(texto)))
+    return bounds
+
+
 def _clause_bounds(paso_norm: str, pos: int) -> tuple:
     """[start, end) de la cláusula (oración) de `paso_norm` que contiene la
     posición `pos`, acotada por `_SENTENCE_BOUNDARY_RE` ('.'/';') o los
@@ -214,16 +239,18 @@ def _clause_bounds(paso_norm: str, pos: int) -> tuple:
     `_occurrence_resolves` en round 3) ya usaba para la ventana hacia
     adelante y el fallback hacia atrás, ahora factorizada para además
     acotar qué alimentos cuentan como "del paso" en `_v1_verbo_alimento`
-    (round 3)."""
-    start = 0
-    for m in _SENTENCE_BOUNDARY_RE.finditer(paso_norm):
-        if m.end() <= pos:
-            start = m.end()
-        else:
-            break
-    end_match = _SENTENCE_BOUNDARY_RE.search(paso_norm, pos)
-    end = end_match.start() if end_match else len(paso_norm)
-    return start, end
+    (round 3).
+
+    [P1-SUBST-STALE-STEP · 2026-08-01, ronda 4b] Wrapper delegando a `clause_bounds` (público,
+    lista completa) — busca la cláusula cuyo span contiene `pos`. Equivalente al algoritmo
+    original para cualquier posición dentro de una cláusula NO vacía (el único caso real: `pos`
+    siempre es el offset de una ocurrencia de verbo, nunca cae en whitespace puro entre dos
+    boundaries). Fallback `(0, len(paso_norm))` si `pos` no cae en ninguna cláusula devuelta
+    (defensivo — no debería ocurrir con texto real)."""
+    for start, end in clause_bounds(paso_norm):
+        if start <= pos <= end:
+            return start, end
+    return 0, len(paso_norm)
 
 
 def _occurrence_resolves(paso_norm: str, start: int, end: int,

@@ -16352,6 +16352,97 @@ def _stale_cooking_verb_precedes_egg_swap(text: str, cooking_verb_check, window_
         return False
 
 
+# [P1-SUBST-STALE-STEP · 2026-08-01, ronda 4b — cierre del finding de review] La ronda 1 de este
+# fix (arriba) reescribía el PASO ENTERO en cuanto `_stale_cooking_verb_precedes_egg_swap`
+# resolvía True en CUALQUIER punto del texto — correcto para el caso real medido (Batido
+# Caribeño, plan 97.2: el paso es 100% fósil, "Hierve el huevo...; pélalos y córtalos en
+# trozos." no tiene NADA que rescatar). El review demostró por ejecución (no observado en prod
+# aún) que un paso que MEZCLE la cocción fósil del huevo con una acción legítima de OTRO
+# alimento en una cláusula vecina ("...; mientras tanto, tuesta el pan integral hasta que esté
+# dorado.") perdía esa acción también — la misma clase paso-vs-cláusula que las rondas 1-3 de
+# `culinary_coherence.py` (`_clause_bounds`/`_occurrence_resolves`) ya cerraron para el scan V1.
+def _rewrite_stale_cooking_step(original_step: str, current_text: str, cooking_verb_check,
+                                 clause_bounds_fn, window_words: int = 5) -> str:
+    """Reescribe SOLO la(s) cláusula(s) fósiles de `current_text` (paso ya swapeado huevo→yogur,
+    resultado de `_egg_step_subs` + `_fix_egg_swap_dangling_adjectives` + `_collapse_egg_swap_
+    stutter`) — no el paso entero.
+
+    1. El prefijo de sección ("El Toque de Fuego: ") se separa ANTES de partir en cláusulas —
+       los dos puntos no son boundary de `clause_bounds_fn` (`[.;]`, ver `culinary_coherence.
+       clause_bounds`) — y se re-antepone al final SIEMPRE, sin importar en qué cláusula caiga
+       la reescritura. `original_step` (el paso ANTES del swap) es de dónde sale el nombre de
+       sección — igual que la ronda 1, `_egg_step_subs` nunca toca el prefijo.
+    2. `clause_bounds_fn(body)` particiona el resto en cláusulas ('.'/';'). Cada cláusula se
+       evalúa independiente con `_stale_cooking_verb_precedes_egg_swap` (mismo helper de la
+       ronda 1, ahora invocado por cláusula en vez de sobre el paso completo — cierra también
+       el falso positivo simétrico donde un verbo de cocción de una cláusula VECINA colaba
+       dentro de la ventana de palabras y contaminaba una mención en la cláusula siguiente).
+    3. Cada cláusula ofensora abre un "barrido" hacia las cláusulas SIGUIENTES: una cláusula sin
+       verbo de cocción PROPIO (`cooking_verb_check`, catálogo `VERB_TO_METHOD`) se considera
+       continuación del mismo manejo fósil — "pélalos y córtalos en trozos" no nombra a NINGÚN
+       alimento, son pronombres del huevo ya hervido — y se funde en la MISMA reescritura. La
+       primera cláusula del barrido que SÍ trae su propio verbo de cocción ("tuesta el pan
+       integral") lo detiene: es una acción independiente de otro alimento, sobrevive intacta.
+       Cláusulas ANTES de la primera ofensora nunca se tocan (mise en place previo al Toque de
+       Fuego, p.ej.).
+    4. Cláusulas fósiles contiguas colapsan en UNA sola "Incorpora el yogur griego" (no una por
+       cláusula — evita "Incorpora el yogur griego. Incorpora el yogur griego." si el barrido
+       encuentra dos tramos fósiles seguidos). El separador ORIGINAL ('.'/';', leído de
+       `current_text` vía `body[end]` — no hardcodeado a "; ") se preserva entre cada cláusula
+       sobreviviente y su vecina, así que el punto final del paso nunca se pierde.
+
+    Si NINGUNA cláusula resuelve a ofensora, retorna `current_text` byte-idéntico (nunca
+    reescribe "por si acaso" — mismo principio que P1-SWAP-PROSE-HONEST). Fail-safe: cualquier
+    excepción retorna `current_text` intacto."""
+    try:
+        head = str(original_step or "").split(":", 1)[0]
+        prefix = (f"{head}: " if head in _EGG_SWAP_STEP_SECTIONS
+                  and current_text.startswith(f"{head}:") else "")
+        body = current_text[len(prefix):] if prefix else current_text
+        bounds = clause_bounds_fn(body)
+        if not bounds:
+            return current_text
+        offending = [_stale_cooking_verb_precedes_egg_swap(body[cs:ce], cooking_verb_check, window_words)
+                     for cs, ce in bounds]
+        if not any(offending):
+            return current_text
+        # barrido hacia adelante: una cláusula ofensora arrastra a las cláusulas SIGUIENTES sin
+        # verbo de cocción propio (continuación del mismo manejo fósil); se detiene en la
+        # primera cláusula con acción propia, que sobrevive y no se re-evalúa como ofensora.
+        swallow = list(offending)
+        sweeping = False
+        for i, (cs, ce) in enumerate(bounds):
+            if offending[i]:
+                sweeping = True
+                continue
+            if sweeping:
+                if cooking_verb_check(body[cs:ce]):
+                    sweeping = False  # acción propia de otro alimento — sobrevive, cierra el barrido
+                else:
+                    swallow[i] = True
+        segments = []
+        i, n = 0, len(bounds)
+        while i < n:
+            cs, ce = bounds[i]
+            if swallow[i]:
+                j = i
+                while j + 1 < n and swallow[j + 1]:
+                    j += 1
+                clause0 = body[cs:ce]
+                leading_ws = clause0[:len(clause0) - len(clause0.lstrip())]
+                last_ce = bounds[j][1]
+                sep = body[last_ce] if last_ce < len(body) else ""
+                segments.append(f"{leading_ws}Incorpora el yogur griego{sep}")
+                i = j + 1
+            else:
+                sep = body[ce] if ce < len(body) else ""
+                segments.append(f"{body[cs:ce]}{sep}")
+                i += 1
+        return prefix + "".join(segments)
+    except Exception:
+        return current_text
+
+
 def _fix_egg_swap_dangling_adjectives(text: str) -> str:
     """[P1-SWAP-PROSE-HONEST-2 · 2026-07-29] Repara la concordancia de género/número que
     `_egg_step_subs` deja rota inmediatamente DESPUÉS de "(el) yogur griego" — a diferencia de
@@ -16495,14 +16586,17 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                 (_re.compile(r"\bhuevos?(?:\s+crudos?|\s+pasteurizados?)?\b", _re.IGNORECASE),
                  lambda m: _egg_swap_cap_like(m.group(0), "yogur griego")),
             )
-            # [P1-SUBST-STALE-STEP · 2026-08-01] import lazy (mismo patrón que el resto de este
-            # módulo usa para culinary_coherence — ver `step_has_cooking_verb` en cron_tasks.py):
-            # `culinary_coherence` es puro/sin deps de import-time pesadas, pero graph_orchestrator
-            # no lo importa a nivel de módulo para no acoplar el árbol de imports de arranque.
+            # [P1-SUBST-STALE-STEP · 2026-08-01, ronda 4b añade `clause_bounds`] import lazy
+            # (mismo patrón que el resto de este módulo usa para culinary_coherence — ver
+            # `step_has_cooking_verb` en cron_tasks.py): `culinary_coherence` es puro/sin deps de
+            # import-time pesadas, pero graph_orchestrator no lo importa a nivel de módulo para
+            # no acoplar el árbol de imports de arranque.
             try:
                 from culinary_coherence import step_has_cooking_verb as _cc_cooking_verb_es
+                from culinary_coherence import clause_bounds as _cc_clause_bounds_es
             except Exception:
                 _cc_cooking_verb_es = None
+                _cc_clause_bounds_es = None
             if isinstance(rec, list):
                 for _i_es, _s_es in enumerate(rec):
                     if isinstance(_s_es, str) and not _is_recipe_safety_note_step(_s_es):
@@ -16519,19 +16613,16 @@ def _substitute_blended_raw_egg(meal: dict, db) -> bool:
                             # que opera sobre repeticiones literales de la frase, no adjetivos.
                             _t_es = _fix_egg_swap_dangling_adjectives(_t_es)
                             _t_es = _collapse_egg_swap_stutter(_t_es)
-                            # [P1-SUBST-STALE-STEP] el paso que cambió puede haber dejado la
-                            # INSTRUCCIÓN DE COCCIÓN del alimento original colgando ("Hierve el
-                            # yogur griego..."). Si una mención del sustituto todavía tiene un
-                            # verbo de cocción térmica a distancia de objeto inmediato (ver
-                            # `_stale_cooking_verb_precedes_egg_swap`), el paso entero quedó
-                            # stale — se reescribe a la acción correcta para un listo-para-comer,
-                            # preservando el prefijo de sección.
-                            if _cc_cooking_verb_es is not None and _stale_cooking_verb_precedes_egg_swap(
-                                    _t_es, _cc_cooking_verb_es):
-                                _head_es = _s_es.split(":", 1)[0]
-                                _prefijo_es = (f"{_head_es}: "
-                                               if _head_es in _EGG_SWAP_STEP_SECTIONS else "")
-                                _t_es = f"{_prefijo_es}Incorpora el yogur griego."
+                            # [P1-SUBST-STALE-STEP · ronda 4b] el paso que cambió puede haber
+                            # dejado la INSTRUCCIÓN DE COCCIÓN del alimento original colgando
+                            # ("Hierve el yogur griego..."). `_rewrite_stale_cooking_step` acota
+                            # la reescritura a la(s) CLÁUSULA(s) ofensora(s) — no al paso entero
+                            # — así que una acción legítima sobre OTRO alimento en una cláusula
+                            # vecina ("...; mientras tanto, tuesta el pan integral...") sobrevive;
+                            # el prefijo de sección se preserva siempre (ver docstring).
+                            if _cc_cooking_verb_es is not None and _cc_clause_bounds_es is not None:
+                                _t_es = _rewrite_stale_cooking_step(
+                                    _s_es, _t_es, _cc_cooking_verb_es, _cc_clause_bounds_es)
                             rec[_i_es] = _t_es
             _nm_es = str(meal.get("name") or "")
             if _nm_es:
