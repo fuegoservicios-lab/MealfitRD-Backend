@@ -158,6 +158,74 @@ def _build_holdout_probe():
     return plan, 1, "Almuerzo"
 
 
+# [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] 2 probes INFORMATIVOS adicionales, casos reales de las
+# capturas del owner. A diferencia de `_build_holdout_probe()` (que SÍ gatea `veredicto_final` vía
+# `probe_tipo_hit`), estos dos son puramente informativos para la PRÓXIMA calibración (T14): no
+# tienen ground-truth etiquetado en el golden set (a diferencia de `nombre_no_corresponde`, que sí
+# tiene 4 fixtures dedicados), así que un solo caso a mano no es evidencia suficiente para gatear
+# nada — el script solo REPORTA si el juez los caza, sin criterio de fallo. Meals sintéticos
+# construidos directamente (no son deep-copy de ningún fixture del golden set), estilo-real —
+# nunca persistidos a disco.
+def _build_holdout_probe_anillos():
+    """Probe (a) — pescado cortado 'en anillos' (la técnica de corte de CALAMAR aplicada a un
+    filete de pescado blanco, que se corta en trozos/postas, no en anillos). Caso real de las
+    capturas del owner. El juez debería marcar `tecnica_impropia` (técnica mal aplicada al
+    alimento) o `paso_incoherente` — pero como no hay fixture etiquetado en el golden set para
+    esta clase concreta, este probe solo reporta, no falla el script."""
+    plan = {"days": [{"day": 1, "meals": [{
+        "meal": "Almuerzo",
+        "name": "Filete de Pescado Blanco a la Plancha con Vegetales",
+        "ingredients": ["200 g de filete de pescado blanco", "1 taza de vegetales mixtos",
+                        "1 cdta de aceite de oliva", "Sal y pimienta al gusto"],
+        "recipe": [
+            "Mise en place: corta el filete de pescado blanco limpio en anillos y sazona con "
+            "sal y pimienta.",
+            "El Toque de Fuego: cocina a la plancha con el aceite de oliva 4 minutos por lado.",
+            "Montaje: sirve con los vegetales mixtos salteados.",
+        ],
+    }]}]}
+    return plan, 1, "Almuerzo"
+
+
+def _build_holdout_probe_doble_grano():
+    """Probe (b) — combo doble-grano: un plato con base de bulgur cuyo paso de El Toque de Fuego
+    instruye cocer TAMBIÉN arroz blanco como acompañante. Dos carbohidratos-base en el mismo
+    plato es un combo raro que no tiene fixture dedicado en el golden set — el juez debería
+    marcar `combo_absurdo` o `paso_incoherente`; este probe solo reporta, no falla el script."""
+    plan = {"days": [{"day": 1, "meals": [{
+        "meal": "Cena",
+        "name": "Bulgur con Pollo y Vegetales",
+        "ingredients": ["1 taza de bulgur cocido", "150 g de pechuga de pollo",
+                        "1 taza de vegetales mixtos", "1 cdta de aceite de oliva"],
+        "recipe": [
+            "Mise en place: cuece el bulgur según el paquete y corta el pollo en tiras.",
+            "El Toque de Fuego: saltea el pollo con el aceite de oliva 8 minutos. 🍚 Cuece el "
+            "arroz blanco de tus ingredientes según el paquete y sírvelo como acompañante.",
+            "Montaje: sirve el bulgur con el pollo y los vegetales.",
+        ],
+    }]}]}
+    return plan, 1, "Cena"
+
+
+async def _run_probe_informativo(nombre: str, builder, tipos_esperados: tuple[str, ...]):
+    """Corre un probe informativo y lo imprime — nunca afecta el veredicto (ver comentario sobre
+    `_build_holdout_probe_anillos`/`_build_holdout_probe_doble_grano` arriba)."""
+    plan, day, meal = builder()
+    rep = await go.run_culinary_judge(plan)
+    viol = [v for v in ((rep.violations if rep else []))
+            if v.day == day and v.meal == meal]
+    tipo_hit = any(v.tipo in tipos_esperados for v in viol)
+    estado = (f"CAZADO ({','.join(sorted({v.tipo for v in viol}))})" if viol
+              else "NO CAZADO")
+    print(f"Probe informativo {nombre}: día {day} {meal} → {estado} "
+          f"(tipos esperados: {'/'.join(tipos_esperados)})")
+    for v in viol:
+        print(f"   day={v.day} meal={v.meal} tipo={v.tipo} sev={v.severidad} detalle={v.detalle}")
+    print("   (informativo — NO gatea el veredicto; evidencia cruda para la próxima "
+          "calibración, T14)")
+    return tipo_hit
+
+
 async def main():
     cat = get_master_ingredients()
     assert cat, "catálogo vacío — ¿pool DB abierto? ¿NEON_DATABASE_URL en backend/.env?"
@@ -227,6 +295,18 @@ async def main():
     for v in probe_viol:
         if v.day == probe_day and v.meal == probe_meal:
             print(f"   day={v.day} meal={v.meal} tipo={v.tipo} sev={v.severidad} detalle={v.detalle}")
+
+    # [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] 2 probes informativos adicionales (casos reales de
+    # las capturas del owner) — ver docstring de `_build_holdout_probe_anillos`/
+    # `_build_holdout_probe_doble_grano` arriba. Sin criterio de fallo: NO entran en
+    # `veredicto_final`, solo dejan evidencia cruda en stdout para la próxima calibración (T14).
+    print("\n=== Probes informativos adicionales (sin criterio de fallo, evidencia para T14) ===")
+    await _run_probe_informativo(
+        "(a) pescado 'en anillos' (forma de calamar sobre un filete de pescado blanco)",
+        _build_holdout_probe_anillos, ("tecnica_impropia", "paso_incoherente"))
+    await _run_probe_informativo(
+        "(b) doble-grano bulgur + arroz en el mismo plato",
+        _build_holdout_probe_doble_grano, ("combo_absurdo", "paso_incoherente"))
 
     print("\nCriterios (spec §6): capa1 recall 1.00 + 0 FP (contrato F1, ya en CI — este script "
           "lo re-confirma). Juez: recall >= 0.80 en clases-juez para autorizar OFF->warn; "
