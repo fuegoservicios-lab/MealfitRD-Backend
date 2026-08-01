@@ -46,7 +46,15 @@ VERB_TO_METHOD = {
     r"hierv\w*|hirv\w*|cuec\w*|coce\w*|cocci[oó]n": "hervir",
     r"plancha|parrilla": "plancha",
     r"fr[ií]e\w*|fre[ií]r": "freir",
-    r"hornea(?!d[oa]s?\b)\w*|horno|airfryer": "hornear",
+    # [P1-CULINARY-CONTRACT-FP round 2 · 2026-08-01, FP-D] "apto para horno"
+    # / "recipiente apto para horno" describe el ENVASE (compatibilidad del
+    # recipiente), no una instrucción de cocción — antes del fix el
+    # sustantivo suelto "horno" disparaba V1 igual que "al horno"/"en el
+    # horno" (instrucciones reales de cocción). Lookbehind de ancho fijo
+    # `(?<!para )` excluye SOLO cuando "horno" viene precedido literalmente
+    # de "para " — "al horno"/"en el horno"/"lleva al horno" siguen
+    # disparando sin cambios porque no están precedidos de "para ".
+    r"hornea(?!d[oa]s?\b)\w*|(?<!para )horno|airfryer": "hornear",
     r"guisa(?!d[oa]s?\b)\w*": "guisar",
     # [Task-4 RESOLUCIÓN 1 · controller] "sofr[ií]\w*" vive en ESTA alternancia
     # (fusionado con "saltea\w*"), NO bajo "freir" (el brief original lo
@@ -110,35 +118,102 @@ _RE_MONTAJE_STEP = re.compile(r"^\s*montaje\s*:", re.IGNORECASE)
 _SENTENCE_BOUNDARY_RE = re.compile(r"[.;]")
 
 
-def _post_verb_resolves(paso_norm: str, ends: list, index: dict) -> bool:
-    """[P1-CULINARY-CONTRACT-FP1/FP2 · 2026-08-01, clase B] True si el
-    objeto directo de AL MENOS UNA ocurrencia de este verbo — heurística: la
-    MISMA ORACIÓN, desde el fin del match hasta el siguiente '.'/';' o fin
-    del paso — resuelve a un alimento del catálogo.
+# [P1-CULINARY-CONTRACT-FP round 2 · 2026-08-01, FP-C] La ventana hasta
+# frontera de oración (round 1) tiene demasiado alcance: cruza una
+# conjunción "y" que introduce un VERBO NUEVO («Tuesta la tortilla integral
+# ... y coloca el huevo encima.») y lee el destinatario del verbo SIGUIENTE
+# ("huevo", de "coloca") como si fuera el nuestro ("tuesta"). Fix:
+# heurística de OBJETO INMEDIATO — tras el verbo, saltar RELLENO canónico
+# (artículos, preposiciones, vocabulario de tiempo/fuego/temperatura,
+# verbos-de-resultado, y dígitos puros que solo cuantifican relleno como
+# "10 minutos") y mirar el PRIMER token de contenido:
+#   (a) si abre una mención catalogada  → el objeto es nuestro, resuelve.
+#   (b) si es contenido NO catalogado   → el destinatario fue nombrado
+#       explícitamente y NO es nuestro — veto, aunque otro alimento
+#       catalogado aparezca más adelante en la misma oración (ese es el
+#       objeto de OTRO verbo, como "coloca el huevo").
+#   (c) si TODA la cola es relleno (sin ningún token de contenido) → no hay
+#       destinatario nombrado hacia adelante. Mirar HACIA ATRÁS, acotado a
+#       la MISMA cláusula (desde el último '.'/';' antes del verbo, o el
+#       inicio del paso si no hay ninguno) — cubre la construcción "Lleva/
+#       Mete/Coloca [OBJETO] al horno" donde el alimento se nombra ANTES del
+#       disparador "horno" y nada lo sigue salvo relleno de tiempo ("por 10
+#       minutos"). Si tampoco hay nada resoluble hacia atrás EN ESA
+#       CLÁUSULA («Cuece a fuego lento por 10 minutos; luego agrega el
+#       Casabe y sirve.» — Casabe vive en la cláusula SIGUIENTE al ';', no
+#       en esta), el veto se mantiene — mismo trade-off fail-open de
+#       P1-CULINARY-CONTRACT-FP2 (mejor callar que acusar al alimento
+#       equivocado).
+_FILLER_TOKENS = frozenset({
+    # artículos
+    "el", "la", "los", "las", "un", "una", "unos", "unas",
+    # preposiciones
+    "a", "en", "de", "del", "al", "con", "por", "sobre",
+    # vocabulario de cocción no-alimento (tiempo/fuego/temperatura)
+    "fuego", "lento", "medio", "alto", "bajo", "minuto", "minutos", "min",
+    "hora", "horas", "temperatura", "grados", "hasta", "durante",
+    "aproximadamente", "cuidadosamente",
+    # verbos-de-resultado: describen el EFECTO de la cocción, no el
+    # alimento — sin estos, "... hasta ablandar el Casabe" perdía recall
+    # (el objeto inmediato tras "ablandar" nunca se alcanzaba a saltar).
+    "ablandar", "espesar", "reducir", "integrar", "combinar",
+})
+_WORD_RE = re.compile(r"\w+")
 
-    Por qué existe: el FP real «El Toque de Fuego: Coloca la Avena y la
-    Leche en la olla. Tuesta las almendras aparte.» acusaba a Avena/Leche de
-    'tostar' — el verbo real apuntaba a "almendras" (no catalogado), pero la
-    salvaguarda multi-alimento de `_v1_verbo_alimento` no se activaba porque
-    NINGÚN alimento del paso (Avena/Leche) acepta 'tostar', y sin destinatario
-    válido la salvaguarda por diseño acusa a todos.
 
-    Límite REAL post-fix (frontera de oración, YA NO conteo de palabras):
-    la ventana cruza relleno adverbial de tiempo/fuego DENTRO de la misma
-    oración («Cuece a fuego medio por 15 minutos hasta ablandar el Casabe.»
-    → resuelve, V1 dispara), pero SIGUE sin cruzar hacia la oración
-    SIGUIENTE — si el objeto real vive después de un '.'/';' que cierra la
-    cláusula del verbo («Cuece a fuego lento por 10 minutos; luego agrega el
-    Casabe y sirve.» — el objeto está en la cláusula de DESPUÉS del ';»),
-    el veto sigue aplicando y el check calla. Trade-off aceptado y medido
-    (mismo criterio fail-open que el resto del módulo: mejor callar que
-    acusar al alimento equivocado) — ver el caso (b) en
-    `test_p1_culinary_contract.py` para el ejemplo exacto."""
-    for end in ends:
+def _object_inmediato_status(tail: str, index: dict) -> str:
+    """'resolves' / 'vetoes' / 'empty' sobre `tail` (ya acotado a la
+    cláusula del verbo). Camina token a token saltando `_FILLER_TOKENS` y
+    dígitos puros; el primer token de CONTENIDO decide: abre una mención
+    catalogada → 'resolves'; es contenido no-catalogado → 'vetoes'; se
+    agota la cola sin ningún token de contenido → 'empty' (el llamador
+    decide el fallback — ver `_post_verb_resolves`)."""
+    spans = _catalog_food_spans(tail, index)
+    for m in _WORD_RE.finditer(tail):
+        tok = m.group()
+        if tok.isdigit() or tok in _FILLER_TOKENS:
+            continue
+        if any(s == m.start() for s, _, _ in spans):
+            return "resolves"
+        return "vetoes"
+    return "empty"
+
+
+def _post_verb_resolves(paso_norm: str, spans: list, index: dict) -> bool:
+    """[P1-CULINARY-CONTRACT-FP round 1+2 · 2026-08-01] True si el objeto
+    directo de AL MENOS UNA ocurrencia de este verbo — heurística de objeto
+    inmediato (ver bloque de comentario arriba) sobre la ventana hasta la
+    frontera de oración ('.'/';' o fin del paso) — resuelve a un alimento
+    del catálogo.
+
+    Por qué existe (caso original round 1): el FP real «El Toque de Fuego:
+    Coloca la Avena y la Leche en la olla. Tuesta las almendras aparte.»
+    acusaba a Avena/Leche de 'tostar' — el verbo real apuntaba a
+    "almendras" (no catalogado), pero la salvaguarda multi-alimento de
+    `_v1_verbo_alimento` no se activaba porque NINGÚN alimento del paso
+    (Avena/Leche) acepta 'tostar', y sin destinatario válido la salvaguarda
+    por diseño acusa a todos.
+
+    `spans` es una lista de tuplas `(start, end)` — una por ocurrencia del
+    verbo en `paso_norm` — no solo el `end` (round 1): el fallback (c)
+    necesita el `start` para acotar la búsqueda hacia atrás a la cláusula
+    del verbo."""
+    for start, end in spans:
         tail_full = paso_norm[end:]
         boundary = _SENTENCE_BOUNDARY_RE.search(tail_full)
         tail = tail_full[:boundary.start()] if boundary else tail_full
-        if tail.strip() and find_catalog_foods(tail, index):
+        status = _object_inmediato_status(tail, index)
+        if status == "resolves":
+            return True
+        if status == "vetoes":
+            continue
+        # status == "empty": nada nombrado hacia adelante en esta cláusula.
+        # Fallback (c): mirar hacia atrás, acotado a la MISMA cláusula.
+        head = paso_norm[:start]
+        prev_boundaries = list(_SENTENCE_BOUNDARY_RE.finditer(head))
+        clause_start = prev_boundaries[-1].end() if prev_boundaries else 0
+        head_tail = paso_norm[clause_start:start]
+        if head_tail.strip() and find_catalog_foods(head_tail, index):
             return True
     return False
 
@@ -202,9 +277,14 @@ def build_culinary_index(catalog: list) -> dict:
     return index
 
 
-def find_catalog_foods(text: str, index: dict) -> list:
-    """Alimentos del catálogo mencionados en `text`. Alias más largo gana:
-    los spans ya cubiertos por un match largo no re-matchean con uno corto."""
+def _catalog_food_spans(text: str, index: dict) -> list:
+    """Spans `(start, end, name)` de alimentos del catálogo mencionados en
+    `text` (posiciones sobre `_norm(text)`). Alias más largo gana: los spans
+    ya cubiertos por un match largo no re-matchean con uno corto. Factored
+    fuera de `find_catalog_foods` (P1-CULINARY-CONTRACT-FP round 2) para que
+    `_object_inmediato_status` pueda consultar POSICIONES, no solo nombres —
+    necesita saber si la mención catalogada arranca exactamente en el primer
+    token de contenido tras el verbo, no solo si existe en algún lugar."""
     blob = _norm(text)
     hits = []          # (start, end, name)
     for norm_name in sorted(index, key=len, reverse=True):
@@ -212,8 +292,14 @@ def find_catalog_foods(text: str, index: dict) -> list:
             if any(s <= m.start() < e or s < m.end() <= e for s, e, _ in hits):
                 continue     # span ya reclamado por un alias más largo
             hits.append((m.start(), m.end(), index[norm_name]["name"]))
+    return sorted(hits)
+
+
+def find_catalog_foods(text: str, index: dict) -> list:
+    """Alimentos del catálogo mencionados en `text`. Alias más largo gana:
+    los spans ya cubiertos por un match largo no re-matchean con uno corto."""
     seen, out = set(), []
-    for _, _, name in sorted(hits):
+    for _, _, name in _catalog_food_spans(text, index):
         if name not in seen:
             seen.add(name)
             out.append(name)
@@ -236,23 +322,25 @@ def _v1_verbo_alimento(day, meal, index) -> list:
         if _RE_MONTAJE_STEP.match(paso_norm):
             # [FP1 clase A refuerzo] paso de montaje: nunca cocina, V1 no aplica.
             continue
-        # met_ends: método → posiciones (fin de match) de cada ocurrencia del
-        # verbo que resuelve a ese método en ESTE paso. dict en vez de un
-        # simple `set`/list de métodos: cinturón y tirantes contra la próxima
-        # clave de VERB_TO_METHOD que alguien añada resolviendo a un método ya
+        # met_ends: método → spans (start, end) de cada ocurrencia del verbo
+        # que resuelve a ese método en ESTE paso. dict en vez de un simple
+        # `set`/list de métodos: cinturón y tirantes contra la próxima clave
+        # de VERB_TO_METHOD que alguien añada resolviendo a un método ya
         # cubierto por otra clave (sin esto, dos claves→mismo método duplican
         # la violación V1 para el mismo (food, método)) Y necesarias para la
-        # heurística de ventana post-verbo (Clase B) de más abajo.
+        # heurística de objeto inmediato de más abajo — el `start` (además
+        # del `end`, round 1) hace falta para el fallback (c) de
+        # `_post_verb_resolves` (buscar hacia atrás dentro de la cláusula).
         met_ends = {}
         for rx, met in _VERB_RES:
-            positions = [m.end() for m in rx.finditer(paso_norm)]
-            if positions:
-                met_ends.setdefault(met, []).extend(positions)
+            spans = [(m.start(), m.end()) for m in rx.finditer(paso_norm)]
+            if spans:
+                met_ends.setdefault(met, []).extend(spans)
         if not met_ends:
             continue
         foods = find_catalog_foods(paso, index)
         metas = {food: (index.get(_norm(food)) or {}) for food in foods}
-        for met, ends in met_ends.items():
+        for met, spans in met_ends.items():
             # [Task-4 RESOLUCIÓN 2 · controller] atribución verbo→alimento por
             # paso: todo verbo del paso se cruza con todo alimento del paso
             # (letra del brief), PERO con salvaguarda — si el paso menciona
@@ -275,7 +363,7 @@ def _v1_verbo_alimento(day, meal, index) -> list:
             # por un verbo que no era para ellos. Si accepting NO está vacío
             # (hay destinatario válido en el paso), este veto no aplica — la
             # salvaguarda de arriba ya decide caso a caso.
-            if not accepting and not _post_verb_resolves(paso_norm, ends, index):
+            if not accepting and not _post_verb_resolves(paso_norm, spans, index):
                 continue
             for food in foods:
                 if food in accepting:

@@ -615,6 +615,97 @@ def test_fp2_caso_almendras_sigue_vetado_tras_el_fix_de_frontera():
     assert not [x for x in v if x["check"] == "V1"], v
 
 
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT-FP round 2 · 2026-08-01] FP reales del plan bcb8bd98
+# (2 residuales tras round 1, dry-run):
+#   FP-C: «El Toque de Fuego: Tuesta la tortilla integral en una sartén
+#   antiadherente a fuego medio... y coloca el huevo...» acusaba a Huevo de
+#   'tostar' — la ventana hasta frontera de oración (round 1) cruzaba la
+#   conjunción "y coloca..." y leía el destinatario del verbo SIGUIENTE
+#   como si fuera de "tuesta". Fix: heurística de objeto inmediato — el
+#   primer token de contenido tras "tuesta" es "tortilla" (no catalogado),
+#   así que el destinatario real fue nombrado y NO es Huevo: veto, aunque
+#   Huevo aparezca más adelante en la misma oración.
+#   FP-D: «Coloca la pasta integral cocida en un recipiente apto para
+#   horno, distribuye el queso de hoja...» acusaba a Queso de hoja de
+#   'hornear' — el disparador era el SUSTANTIVO "horno" en "apto para
+#   horno" (describe el envase), no una instrucción de cocción. Fix:
+#   lookbehind `(?<!para )` en el fragmento de horno de VERB_TO_METHOD.
+#   Caso (c) [construcción "objeto ANTES del disparador"]: «Lleva el Queso
+#   de hoja al horno por 10 minutos.» SÍ debe seguir disparando — "al
+#   horno" es cocción real y el objeto (Queso de hoja) fue nombrado ANTES
+#   del disparador, con solo relleno de tiempo detrás ("por 10 minutos").
+#   El fallback de objeto inmediato (c) mira hacia atrás, acotado a la
+#   MISMA cláusula, cuando la cola hacia adelante es 100% relleno.
+# Traza completa: `.superpowers/culinary-fp-round1-report.md`, sección
+# "Ronda 2".
+# ---------------------------------------------------------------------------
+
+_CAT_FP2 = _CAT + [
+    {"name": "Huevo", "prep_methods": ["hervir", "plancha", "freir", "hornear", "guisar", "saltear"], "ready_to_eat": False},
+    {"name": "Queso de hoja", "prep_methods": ["ninguno", "crudo"], "ready_to_eat": True},
+]
+
+
+def test_fp_round2_caso_a_objeto_inmediato_no_catalogado_veta_huevo():
+    """(a) FP-C real: el objeto inmediato de 'tuesta' es 'tortilla' (no
+    catalogado) — no debe acusar a Huevo, mencionado más adelante en la
+    misma oración detrás de un 'y coloca' (verbo distinto)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Tuesta la tortilla integral en una sartén y coloca el Huevo encima."],
+        ["1 Huevo"]), _CAT_FP2)
+    assert not [x for x in v if x["check"] == "V1"], v
+
+
+def test_fp_round2_caso_b_horno_sustantivo_del_envase_no_dispara():
+    """(b) FP-D real: 'apto para horno' describe el recipiente, no cocina —
+    0 V1 sobre Queso de hoja."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Coloca la pasta en un recipiente apto para horno, distribuye el "
+         "Queso de hoja."],
+        ["30 g Queso de hoja"]), _CAT_FP2)
+    assert not [x for x in v if x["check"] == "V1"], v
+
+
+def test_fp_round2_caso_c_al_horno_con_objeto_antes_del_disparador_dispara():
+    """(c) 'al horno' SIGUE siendo instrucción real de cocción — y el
+    objeto (Queso de hoja, ready_to_eat sin 'hornear' en prep) vive ANTES
+    del disparador 'horno', con solo relleno de tiempo detrás. El fallback
+    de objeto inmediato hacia atrás debe seguir disparando V1."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Lleva el Queso de hoja al horno por 10 minutos."],
+        ["30 g Queso de hoja"]), _CAT_FP2)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 and v1[0]["food"] == "Queso de hoja", v1
+
+
+def test_fp_round2_anclas_existentes_siguen_vivas():
+    """(d) Los 4 anclas de round 1/FP2 siguen disparando/callando igual
+    tras el fix de round 2 (regresión explícita, no solo confiar en que el
+    resto de la suite los cubre)."""
+    dispara_1 = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Cuece a fuego medio por 15 minutos hasta "
+         "ablandar el Casabe."],
+        ["30 g Casabe"]), _CAT)
+    v1_1 = [x for x in dispara_1 if x["check"] == "V1"]
+    assert v1_1 and v1_1[0]["food"] == "Casabe", v1_1
+
+    calla_1 = cc.culinary_contract_scan(_plan(
+        ["El Toque de Fuego: Coloca la Avena y la Leche en la olla; "
+         "tuesta las almendras aparte."],
+        ["100 g Avena", "200 ml Leche"]), _CAT_FP1)
+    assert not [x for x in calla_1 if x["check"] == "V1"], calla_1
+
+    calla_2 = cc.culinary_contract_scan(_plan(
+        ["Montaje: Sirve el revoltillo sobre el yaniqueque horneado y el Casabe."],
+        ["1 Yaniqueque", "30 g Casabe"]), _CAT_FP1)
+    assert not [x for x in calla_2 if x["check"] == "V1"], calla_2
+
+    dispara_2 = cc.culinary_contract_scan(_plan(
+        ["Cuece el Casabe según el paquete."], ["30 g Casabe"]), _CAT)
+    assert any(x["check"] == "V1" and x["food"] == "Casabe" for x in dispara_2), dispara_2
+
+
 def test_degrade_offending_steps_acota_por_meal():
     """[Fix post-review, Important #2] El bloque original ignoraba
     `_v["meal"]` y barría TODAS las comidas del edge_day por cada violación
