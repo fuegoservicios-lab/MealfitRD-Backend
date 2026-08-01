@@ -1264,6 +1264,33 @@ async def lifespan(app: FastAPI):
             f"(best-effort): {_spawn_err}"
         )
 
+    # [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] calienta _watery_veg_tokens fuera de cualquier
+    # lock — P2-MUTATOR-PURITY (db_plans.py::update_plan_data_atomic) prohíbe que el
+    # `mutator` que corre DENTRO del `SELECT … FOR UPDATE` re-entre al pool. Rastreo del
+    # review: `_swap_mutator` (routers/plans.py) → `finalize_single_meal_recipe_coherence` →
+    # `_cap_unrealistic_portions` → `_watery_veg_tokens()`, que en cache-miss dispara
+    # `get_master_ingredients()` → `execute_sql_query` → re-entrada al pool. Sin este
+    # warm-up, el PRIMER swap tras cada restart pagaría ese miss reteniendo el row-lock +
+    # una conexión del pool sync durante el SELECT — violación del contrato aunque sea una
+    # ventana angosta (solo el primer uso tras boot). A diferencia del embed-cache de
+    # arriba (~96s, va a background thread) esto es un SELECT único y barato (204 filas) —
+    # se hace SÍNCRONO para garantizar cache poblado ANTES de servir tráfico, mismo estilo
+    # que el sweep de scheduler alerts / CB de arriba. Best-effort: si falla, el helper
+    # sigue siendo fail-open en runtime (cae al fallback estático) — este warm-up solo
+    # evita pagar el costo del primer miss DENTRO de un lock.
+    try:
+        from graph_orchestrator import _watery_veg_tokens as _warm_watery_veg_tokens
+        _n_watery_tokens = len(_warm_watery_veg_tokens())
+        logger.info(
+            f"🥒 [P2-VEG-VOLUME-TOKENS-2] _watery_veg_tokens() warmed ({_n_watery_tokens} "
+            "tokens) — ningún mutator bajo FOR UPDATE verá cache-miss."
+        )
+    except Exception as _warm_veg_err:
+        logger.warning(
+            f"[P2-VEG-VOLUME-TOKENS-2] warm-up falló (best-effort; el primer swap podría "
+            f"pagar el cache-miss dentro del lock): {type(_warm_veg_err).__name__}: {_warm_veg_err}"
+        )
+
     # [P1-SCHEDULER-LEADER-LOCK · 2026-05-27] Leader election ANTES de arrancar
     # los dos loops continuos (hard-floor + APScheduler). Sólo el leader los
     # ejecuta; en deploy multi-worker accidental los demás workers sirven HTTP

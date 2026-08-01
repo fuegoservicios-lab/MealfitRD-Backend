@@ -60,6 +60,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _BACKEND = os.path.dirname(_HERE)
 with open(os.path.join(_BACKEND, "graph_orchestrator.py"), encoding="utf-8") as f:
     _GO = f.read()
+with open(os.path.join(_BACKEND, "routers", "plans.py"), encoding="utf-8") as f:
+    _PLANS = f.read()
+with open(os.path.join(_BACKEND, "app.py"), encoding="utf-8") as f:
+    _APP = f.read()
 
 
 @pytest.fixture(autouse=True)
@@ -390,3 +394,131 @@ def test_marker_estructural_anclado_en_fuente():
     assert "P2-VEG-VOLUME-TOKENS-2" in _GO
     assert "_watery_veg_tokens" in _GO
     assert "8d3f246a" in _GO, "el plan vivo que motivó el refactor debe quedar anclado en el código"
+
+
+# ═══════════════ Sección 4 — P2-MUTATOR-PURITY: warm-up fuera de locks ═══════════════
+#
+# Review CRÍTICO post-Sección 3: `_watery_veg_tokens()` en cache-miss llama
+# `get_master_ingredients()` → `execute_sql_query` → re-entrada al pool. Ese código corre DENTRO
+# de `_swap_mutator` (routers/plans.py, vía `finalize_single_meal_recipe_coherence` →
+# `_cap_unrealistic_portions`), que `update_plan_data_atomic` (db_plans.py) ejecuta reteniendo
+# row-lock + una conexión del pool sync — violación del contrato P2-MUTATOR-PURITY
+# (db_plans.py:564: el mutator DEBE ser CPU-only, "nada de ... re-entrada al pool"). Ventana
+# real: solo el PRIMER swap tras cada restart (luego siempre cache-hit) — pero el contrato es
+# absoluto, no "casi siempre".
+#
+# Fix en 2 capas: (1) warm-up SÍNCRONO en `app.py::lifespan`, fuera de CUALQUIER lock y antes
+# de servir tráfico — con esto ningún mutator ve cache-miss en el camino feliz; (2) hoist
+# defensivo en `routers/plans.py`, justo antes de `update_plan_data_atomic(plan_id,
+# _swap_mutator, ...)` — cinturón por si el warm-up de arranque falló (DB caída al boot, etc).
+# `_watery_veg_tokens()` sigue siendo fail-open por su propio diseño (Sección 3) — esto es una
+# capa ADICIONAL que evita pagar el costo del miss DENTRO de un lock, no un reemplazo.
+
+
+# ───────────── (a) parser: el hoist vive ANTES de la llamada atómica del swap ─────────────
+
+def test_a_parser_warmup_hoist_antes_del_update_plan_data_atomic_swap():
+    """En routers/plans.py, la llamada de warm-up debe aparecer ANTES (offset menor) que
+    `update_plan_data_atomic(plan_id, _swap_mutator, ...)` en el mismo handler — si alguien
+    reordena el hoist DESPUÉS de la llamada atómica, deja de proteger nada."""
+    warmup_idx = _PLANS.find("_warm_watery_veg_tokens_sw()")
+    assert warmup_idx != -1, "falta la llamada de warm-up hoisteada en routers/plans.py"
+
+    # OJO: hay una mención de UNA LÍNEA en el docstring del handler (~6042, entre backticks,
+    # "update_plan_data_atomic(plan_id, _swap_mutator, user_id=...)") que NO es la llamada real
+    # — el regex exige salto de línea inmediatamente tras el "(" (la forma multi-línea real,
+    # `update_plan_data_atomic(\n    plan_id,\n    _swap_mutator,`), así que no matchea el
+    # docstring de una sola línea.
+    m = re.search(r"update_plan_data_atomic\(\n\s*plan_id,\n\s*_swap_mutator,", _PLANS)
+    assert m is not None, (
+        "no encontré la llamada real (multi-línea) a update_plan_data_atomic(plan_id, "
+        "_swap_mutator, ...) en routers/plans.py (¿cambió de forma?)")
+    mutator_call_idx = m.start()
+
+    assert warmup_idx < mutator_call_idx, (
+        f"el warm-up (offset {warmup_idx}) debe estar ANTES de "
+        f"update_plan_data_atomic(plan_id, _swap_mutator, ...) (offset {mutator_call_idx}) — "
+        f"si no, el mutator puede seguir viendo cache-miss dentro del lock")
+
+
+def test_a_parser_warmup_hoist_tiene_el_marker_y_la_razon():
+    assert "P2-VEG-VOLUME-TOKENS-2" in _PLANS
+    assert "P2-MUTATOR-PURITY" in _PLANS
+    assert "_watery_veg_tokens" in _PLANS
+
+
+# ───────────── (b) parser: el startup hook calienta el cache con el marker ─────────────
+
+def test_b_parser_startup_hook_calienta_watery_veg_tokens():
+    assert "async def lifespan" in _APP, "no encontré lifespan() en app.py — ¿se movió?"
+    lifespan_idx = _APP.find("async def lifespan")
+    warm_idx = _APP.find("_warm_watery_veg_tokens")
+    assert warm_idx != -1, "falta el warm-up de _watery_veg_tokens en app.py"
+    assert warm_idx > lifespan_idx, "el warm-up debe vivir DENTRO de lifespan(), no antes"
+    assert "P2-VEG-VOLUME-TOKENS-2" in _APP
+    assert "P2-MUTATOR-PURITY" in _APP
+
+
+def test_b_parser_startup_hook_es_best_effort_try_except():
+    """El warm-up de arranque debe ser fail-open — un fallo NO puede abortar el startup."""
+    warm_block_start = _APP.find("_watery_veg_tokens as _warm_watery_veg_tokens")
+    assert warm_block_start != -1
+    preceding = _APP[max(0, warm_block_start - 200):warm_block_start]
+    assert "try:" in preceding, (
+        "el warm-up de arranque debe estar envuelto en try/except (best-effort) — un fallo de "
+        "DB al boot no puede tumbar el startup completo")
+
+
+# ───────────── (c) funcional: con cache caliente, el mutator NO toca DB ─────────────
+
+def test_c_mutator_con_cache_caliente_no_toca_db(monkeypatch):
+    """Con el cache YA poblado (primera llamada exitosa, lo que hace el warm-up de arranque o
+    el hoist), una 2ª llamada NO debe invocar `get_master_ingredients()` — prueba que cualquier
+    código que corra DENTRO del mutator (bajo FOR UPDATE) sirve cache-hit puro."""
+    _llamadas = {"n": 0}
+
+    def _catalogo_ok():
+        _llamadas["n"] += 1
+        return _SyntheticCatalog.get()
+
+    monkeypatch.setattr(sc, "get_master_ingredients", _catalogo_ok)
+
+    # Warm-up: SÍ toca DB (una vez).
+    toks1 = g._watery_veg_tokens()
+    assert _llamadas["n"] == 1
+    assert "tayota" in toks1
+
+    # Simula la DB cayéndose — si el mutator re-entrara al pool pese al warm-up, esto explota.
+    def _catalogo_explota():
+        raise AssertionError(
+            "el mutator re-entró al pool pese al warm-up — violación de P2-MUTATOR-PURITY")
+
+    monkeypatch.setattr(sc, "get_master_ingredients", _catalogo_explota)
+
+    # Exactamente lo que hace `_cap_unrealistic_portions` dentro de `_swap_mutator`.
+    for _ in range(3):
+        assert g._watery_veg_tokens() == toks1
+
+    assert _llamadas["n"] == 1, (
+        "get_master_ingredients() se llamó de nuevo pese al cache caliente — el mutator NO "
+        "es puro bajo esta condición")
+
+
+def test_c_funcional_cap_unrealistic_portions_con_cache_caliente_no_toca_db(monkeypatch):
+    """Mismo contrato, pero ejercitando la función REAL que corre dentro del mutator
+    (`_cap_unrealistic_portions`) en vez de llamar `_watery_veg_tokens()` directo — cierra la
+    brecha entre 'el helper es puro' y 'el call site real también lo es'."""
+    monkeypatch.setattr(sc, "get_master_ingredients", _SyntheticCatalog.get)
+    g._watery_veg_tokens()  # warm-up simulado (lo que haría app.py lifespan / el hoist)
+
+    def _catalogo_explota():
+        raise AssertionError("_cap_unrealistic_portions re-entró al pool con cache caliente")
+
+    monkeypatch.setattr(sc, "get_master_ingredients", _catalogo_explota)
+
+    meal = {"name": "Test", "meal": "Cena", "ingredients": ["470 g de tayota"],
+            "ingredients_raw": ["470 g de tayota"],
+            "protein": 24, "carbs": 62, "fats": 13, "cals": 464}
+    n = g._cap_unrealistic_portions([{"meals": [meal]}], db=_DB3())
+    assert n == 1
+    assert meal["ingredients"][0].startswith("250"), meal["ingredients"][0]

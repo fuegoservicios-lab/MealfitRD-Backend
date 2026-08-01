@@ -6555,6 +6555,21 @@ def api_swap_meal_persist(
 
             return plan_data
 
+        # [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] warm-up fuera del FOR UPDATE (P2-MUTATOR-PURITY):
+        # el mutator solo puede ver cache-hit. `_swap_mutator` (arriba) llama
+        # `finalize_single_meal_recipe_coherence` → `_cap_unrealistic_portions` →
+        # `_watery_veg_tokens()`, que en cache-miss re-entra al pool (`get_master_ingredients()`).
+        # El startup ya calienta este cache (app.py lifespan), pero un mutator NUNCA debe
+        # depender únicamente de que otro proceso haya corrido primero — hoist defensivo,
+        # barato (cache-hit es memoria pura tras la 1ª llamada del proceso). Best-effort: si
+        # falla, `_watery_veg_tokens()` sigue siendo fail-open en runtime (cae al fallback
+        # estático dentro del mutator, con el mismo costo que antes de este fix).
+        try:
+            from graph_orchestrator import _watery_veg_tokens as _warm_watery_veg_tokens_sw
+            _warm_watery_veg_tokens_sw()
+        except Exception as _warm_veg_sw_e:
+            logger.debug(f"[P2-VEG-VOLUME-TOKENS-2] warm-up hoist (swap) no-op: {_warm_veg_sw_e}")
+
         result = update_plan_data_atomic(
             plan_id,
             _swap_mutator,
