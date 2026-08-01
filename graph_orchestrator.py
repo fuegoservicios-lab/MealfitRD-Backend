@@ -6105,6 +6105,14 @@ DAYGEN_CANARY_SCOPE = (_env_str("MEALFIT_DAYGEN_CANARY_SCOPE", "retry") or "retr
 if DAYGEN_CANARY_SCOPE not in ("retry", "all"):
     DAYGEN_CANARY_SCOPE = "retry"   # fail-safe: valor raro ⇒ el más barato
 
+# [P1-CULINARY-CONTRACT · 2026-07-31] Gate del scan culinario determinista en
+# review. Nace en WARN (telemetría sin poder) — la escalada a block es
+# P1-CULINARY-CONTRACT-BLOCK tras ventana de telemetría limpia, el mismo camino
+# que recorrió MEALFIT_SHOPPING_COHERENCE_GUARD. tooltip-anchor: P1-CULINARY-CONTRACT
+CULINARY_CONTRACT_GUARD = (_env_str("MEALFIT_CULINARY_CONTRACT_GUARD", "warn") or "warn").strip().lower()
+if CULINARY_CONTRACT_GUARD not in ("off", "warn", "block"):
+    CULINARY_CONTRACT_GUARD = "warn"
+
 # [P2-DAYGEN-EFFORT · 2026-07-31] Nivel de razonamiento del day-gen, para
 # CUALQUIER proveedor. Nace VACÍO = default del proveedor: encenderlo es una
 # decisión explícita.
@@ -38233,6 +38241,47 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # structural → severity='minor' → retry. Mejor retry que invención.
         if fwd_unpatched:
             structural_coherence_errors.extend(fwd_unpatched)
+
+    # [P1-CULINARY-CONTRACT · 2026-07-31] Scan culinario determinista (V1
+    # verbo↔alimento, V2 estado imposible, V3 huérfanos residuales). Corre
+    # DESPUÉS de los reparadores de arriba (dueño único: reparar → medir) — el
+    # AUTO-PATCH de huérfanos ya resolvió lo parcheable; este scan mide el
+    # residuo. El scan jamás muta el plan; en block los días afectados van a
+    # `issues` (mismo mecanismo que el resto de gates de review).
+    # Contrato verificado contra `_surgical_reject_targets` (grep su docstring):
+    # consume `rejection_reasons` SOLO vía substring-match contra
+    # `_SURGICAL_REJECT_SAFE_PREFIXES`/`_SURGICAL_REJECT_REJUDGED_PREFIXES` — el
+    # day-parsing regex `Día N:` corre sobre detectores RE-COMPUTADOS ahí
+    # (build_variety_report / _detect_slot_appropriateness /
+    # _detect_slot_incoherence), NUNCA sobre las strings de `issues` que este
+    # nodo produce. "incoherencia culinaria" no matchea ninguno de los dos
+    # prefix-sets ⇒ un rechazo de este gate cae a retry completo por diseño (F1
+    # no tiene ruta quirúrgica propia todavía, conservador a propósito).
+    # tooltip-anchor: P1-CULINARY-CONTRACT
+    if CULINARY_CONTRACT_GUARD != "off":
+        try:
+            from culinary_coherence import culinary_contract_scan, scan_coverage
+            from shopping_calculator import get_master_ingredients
+            _cul_cat = get_master_ingredients()
+            _cul_viol = culinary_contract_scan(plan, _cul_cat)
+            _cul_cov = scan_coverage(plan, _cul_cat)
+            plan["_culinary_contract_violations"] = _cul_viol
+            plan["_culinary_contract_coverage"] = round(_cul_cov, 3)
+            if _cul_viol:
+                logger.warning(
+                    f"🍳 [P1-CULINARY-CONTRACT] {len(_cul_viol)} violación(es) "
+                    f"culinaria(s) (guard={CULINARY_CONTRACT_GUARD}, "
+                    f"cobertura={_cul_cov:.0%}): "
+                    f"{[(v['check'], v['food'], v['day']) for v in _cul_viol[:6]]}")
+            if _cul_viol and CULINARY_CONTRACT_GUARD == "block":
+                for _v in _cul_viol:
+                    issues.append(
+                        f"Día {_v['day']}, {_v['meal']}: incoherencia culinaria "
+                        f"{_v['check']} sobre {_v['food']} — {_v['detail']}")
+                    severity = _severity_max(severity, _v["severity"])
+        except Exception as _cul_e:
+            logger.warning(f"[P1-CULINARY-CONTRACT] scan no-op (fail-open): "
+                           f"{type(_cul_e).__name__}: {_cul_e}")
 
     assembly_errors = skeleton_fidelity_errors + structural_coherence_errors
     if assembly_errors:

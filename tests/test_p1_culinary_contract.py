@@ -238,3 +238,50 @@ def test_v3_prefijo_ambiguo_no_enmascara():
     assert hit and hit[0]["food"] == "Ají morrón", (
         f"'Ají morrón' debe reportarse huérfano — el guard de ambigüedad no "
         f"debe dejar que 'ají cubanela' en pasos lo enmascare: {hit}")
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · Task 6] Superficie 1 — gate en `review_plan_node`
+# (warn default). Parser-based sobre el SOURCE de graph_orchestrator.py: el
+# módulo real no se importa aquí para no arrastrar sus dependencias de
+# import-time al test suite del culinary contract.
+# ---------------------------------------------------------------------------
+
+_GO_SRC = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+
+
+def test_knob_guard_nace_en_warn():
+    m = re.search(r'CULINARY_CONTRACT_GUARD = \(_env_str\("MEALFIT_CULINARY_CONTRACT_GUARD", "(\w+)"\)', _GO_SRC)
+    assert m, "falta el knob MEALFIT_CULINARY_CONTRACT_GUARD registrado vía _env_str"
+    assert m.group(1) == "warn", (
+        "F1 nace en warn (mismo camino warn→block que MEALFIT_SHOPPING_COHERENCE_GUARD); "
+        "la escalada a block es P1-CULINARY-CONTRACT-BLOCK (F2) con su propio test")
+
+
+def test_review_invoca_el_scan_y_traduce_a_issues():
+    i = _GO_SRC.index("async def review_plan_node")
+    # [Task-6, fix sobre el brief] `review_plan_node` mide ~109k chars (medido
+    # 2026-07-31) — muy por encima de una ventana fija de 60k (la del brief
+    # original, calibrada sin medir la función real). Se acota al límite REAL
+    # de la función — el próximo `def`/`async def` a nivel de módulo (columna
+    # 0) — en vez de un número inventado que quedaría corto si la función
+    # sigue creciendo.
+    _next_def = re.search(r"\n(?:async )?def ", _GO_SRC[i + 30:])
+    end = (i + 30 + _next_def.start()) if _next_def else len(_GO_SRC)
+    win = _GO_SRC[i:end]
+    assert "culinary_contract_scan(" in win, "review_plan_node no invoca el scan"
+    j = win.index("culinary_contract_scan(")
+    gate = win[j:j + 3000]
+    assert 'CULINARY_CONTRACT_GUARD == "block"' in gate
+    assert "_severity_max(" in gate, "en block las violaciones deben escalar severity"
+    assert "issues.append" in gate
+    assert "scan_coverage(" in win, "falta la telemetría de cobertura"
+
+
+def test_scan_corre_despues_de_los_reparadores():
+    """Orden reparar→medir (dueño único): el scan corre DESPUÉS del AUTO-PATCH
+    de huérfanos en review. Ancla: el callsite del scan aparece en el archivo
+    DESPUÉS del marker del auto-patch."""
+    autopatch = _GO_SRC.index("huérfanos eliminados") if "huérfanos eliminados" in _GO_SRC \
+        else _GO_SRC.index("AUTO-PATCH")
+    assert _GO_SRC.index("culinary_contract_scan(") > autopatch
