@@ -54,10 +54,30 @@ def test_orb_test_file_deleted_not_repaired():
 
 
 def test_hero_renders_the_figure():
+    """Ancla en el MARKUP, no en el texto del fichero.
+
+    El escaneo de fichero entero es la herramienta correcta para las
+    aserciones NEGATIVAS (`test_hero_has_no_video_machinery`: si la cadena
+    prohibida no está en ninguna parte, tampoco está en el código) y la
+    equivocada para las POSITIVAS. La versión original de este caso pedía
+    `"PlateExploded" in text` y `"Fig. 00" in text`, y las satisfacían el
+    `import` de la cabecera y un comentario: un Hero que importara el
+    componente, lo mencionara de pasada y no renderizara NADA pasaba el test.
+    Exigir `<PlateExploded` y `<figcaption` obliga a que estén montados.
+    """
     text = _HERO_JSX.read_text(encoding="utf-8")
-    assert "PlateExploded" in text, (
-        "P1-PAPER-HERO-FIG00: el hero debe montar la Fig. 00 (`PlateExploded`)."
+    assert "<PlateExploded" in text, (
+        "P1-PAPER-HERO-FIG00: el hero debe MONTAR la Fig. 00, no solo "
+        "importarla. Se busca la etiqueta `<PlateExploded` porque el nombre a "
+        "secas lo satisface el import de la línea 4."
+    )
+    assert "<figcaption" in text, (
+        "P1-PAPER-HERO-FIG00: la Fig. 00 necesita `<figcaption>`. El `<svg>` va "
+        "aria-hidden, así que el pie es el único canal accesible de la figura: "
+        "sin él, la información de la figura no existe para un lector de "
+        "pantalla."
     )
     assert "Fig. 00" in text, (
-        "P1-PAPER-HERO-FIG00: falta el pie de figura «Fig. 00 — …»."
+        "P1-PAPER-HERO-FIG00: falta el pie de figura «Fig. 00 — …». La "
+        "numeración es la que ata la figura a la prosa que la cita."
     )
