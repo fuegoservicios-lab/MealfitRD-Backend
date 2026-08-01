@@ -37,13 +37,29 @@ Cobertura:
       array `medicalConditions`) NO cuentan contra el cap — evita reabrir
       el punto ciego que P1-PREGNANCY-INTAKE-CAPTURE cerró (una usuaria
       embarazada con 3 condiciones reales NO debe recibir 422).
+
+  [FIX-REPORT 2026-08-01, code review post-implementación — 2 CRITICAL + 1
+  IMPORTANT verificados ejecutando]:
+  (h) CRITICAL-1: `_close_medical_freetext_scope` — `otherConditions`/
+      `otherMedications` se ignoran en requests NUEVOS de `/analyze` y
+      `/analyze/stream` (mutados a "" ANTES de `_validate_form_data_min` y
+      ANTES de que `pipeline_data = dict(data)` copie el payload). Cierra el
+      bypass del cap vía `_merge_other_text_fields` (que corre DESPUÉS de la
+      validación, a nivel router Y otra vez dentro de `arun_plan_pipeline`).
+  (i) CRITICAL-2: exención de embarazo/lactancia migrada de SUBSTRING match
+      (bug: "embarazo con diabetes" se eximía completo) a IGUALDAD EXACTA
+      canonicalizada contra los 2 valores literales de `PREGNANCY_CHIP_LABELS`.
 """
 from pathlib import Path
 
 import pytest
 
 from knobs import _KNOBS_REGISTRY
-from routers.plans import _validate_medical_conditions_cap, _is_pregnancy_or_lactation_condition_item
+from routers.plans import (
+    _validate_medical_conditions_cap,
+    _is_pregnancy_or_lactation_condition_item,
+    _close_medical_freetext_scope,
+)
 
 
 def _payload(conditions) -> dict:
@@ -215,7 +231,7 @@ def test_knob_registry_default_sin_override(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# (g) SAFETY: Embarazo/Lactancia NO cuentan contra el cap.
+# (g) SAFETY: Embarazo/Lactancia NO cuentan contra el cap — IGUALDAD EXACTA.
 #
 # Bug que esto previene: los chips `PREGNANCY_CHIP_LABELS` (QMedical.jsx,
 # gender-gated) escriben "Embarazo"/"Lactancia" al MISMO array
@@ -225,12 +241,23 @@ def test_knob_registry_default_sin_override(monkeypatch):
 # (ej. Diabetes T2 + Hipertensión + Hipotiroidismo, combinación plausible)
 # recibiría 422 al marcar también "Embarazo" — bloqueada de generar CUALQUIER
 # plan, reabriendo el "punto ciego de alto riesgo/prevalencia" que
-# P1-PREGNANCY-INTAKE-CAPTURE cerró. Peor aún: el 422 ocurre ANTES de que el
-# gate de déficit calórico fail-hard (`nutrition_calculator.
-# _is_pregnancy_or_lactation`) tenga oportunidad de correr.
+# P1-PREGNANCY-INTAKE-CAPTURE cerró.
+#
+# [CRITICAL-2-FIX · 2026-08-01, encontrado en code review, verificado
+# ejecutando] La primera versión de esta exención usaba SUBSTRING match
+# contra `PREGNANCY_CONDITION_TERMS` (vocabulario amplio pensado para el
+# gate de déficit calórico, intencionalmente sobre-inclusivo AHÍ). Aplicado
+# al cap, el sobre-inclusivo era el bug: `"embarazo con diabetes"` contiene
+# `"embaraz"` → se eximía (count no subía) PERO el string completo seguía
+# disparando `condition_rules.detect_active_rules` aguas abajo (mismo tipo
+# de substring match) → cap=0 pero complejidad clínica ilimitada. 5 strings
+# `"embarazo con diabetes-N"` pasaban las 5 sin sumar nada al cap. El fix es
+# igualdad EXACTA canonicalizada contra los 2 valores LITERALES que el chip
+# puede emitir ("embarazo"/"lactancia") — cualquier frase que solo MENCIONE
+# embarazo/lactancia ahora CUENTA como condición real.
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("term", ["Embarazo", "embarazo", "Lactancia", "lactancia", "Gestante"])
-def test_is_pregnancy_or_lactation_condition_item_detecta_terminos(term):
+@pytest.mark.parametrize("term", ["Embarazo", "embarazo", "Lactancia", "lactancia", "EMBARAZO", "LacTanCia"])
+def test_is_pregnancy_or_lactation_condition_item_detecta_valores_exactos(term):
     assert _is_pregnancy_or_lactation_condition_item(term.lower()) is True
 
 
@@ -239,8 +266,22 @@ def test_is_pregnancy_or_lactation_condition_item_no_falso_positivo_en_condicion
     assert _is_pregnancy_or_lactation_condition_item("hipertension") is False
 
 
+@pytest.mark.parametrize("phrase", [
+    "embarazo con diabetes",
+    "posible embarazo",
+    "lactancia materna exclusiva",
+    "gestante",  # vocabulario del gate de déficit (sobre-inclusivo AHÍ),
+                 # pero NO es el valor literal del chip → cuenta para el cap.
+    "postparto",
+])
+def test_is_pregnancy_or_lactation_condition_item_rechaza_frases_que_solo_mencionan(phrase):
+    """[CRITICAL-2-FIX] Ancla del bug: una frase que CONTIENE el término pero
+    no es el chip exacto ya NO se exime — debe contar como condición real."""
+    assert _is_pregnancy_or_lactation_condition_item(phrase.lower()) is False
+
+
 def test_embarazo_no_cuenta_contra_el_cap():
-    """3 condiciones reales + Embarazo → pasa (Embarazo exento)."""
+    """3 condiciones reales + Embarazo (valor exacto del chip) → pasa."""
     ok, count, cap = _validate_medical_conditions_cap(
         _payload(["Diabetes T2", "Hipertensión", "Hipotiroidismo", "Embarazo"])
     )
@@ -274,6 +315,28 @@ def test_cuatro_condiciones_reales_mas_embarazo_sigue_rechazando():
     )
     assert ok is False
     assert count == 4
+
+
+def test_critical_2_embarazo_con_diabetes_cuenta_contra_el_cap():
+    """[CRITICAL-2-FIX] Ancla exacta del incidente reportado: una frase que
+    MENCIONA embarazo pero no es el chip exacto cuenta como condición real
+    — 3 reales + esa frase = 4, excede el cap."""
+    ok, count, cap = _validate_medical_conditions_cap(
+        _payload(["Diabetes T2", "Hipertensión", "Hipotiroidismo", "embarazo con diabetes"])
+    )
+    assert ok is False
+    assert count == 4
+
+
+def test_critical_2_cinco_variantes_embarazo_x_cuentan_las_cinco():
+    """[CRITICAL-2-FIX] Ancla exacta del incidente reportado: 5×
+    "embarazo-N" (ninguna es el valor literal del chip) deben contar las 5
+    contra el cap — la versión con substring las eximía todas (count=0)."""
+    ok, count, cap = _validate_medical_conditions_cap(
+        _payload([f"embarazo-{i}" for i in range(1, 6)])
+    )
+    assert count == 5
+    assert ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -332,3 +395,126 @@ def test_regenerate_simplified_no_toma_body_ni_lleva_el_guard():
     body = src[start:next_marker]
     assert "Body(...)" not in body
     assert "_validate_medical_conditions_cap" not in body
+
+
+# ===========================================================================
+# [CRITICAL-1-FIX · 2026-08-01] `_close_medical_freetext_scope` — cierre del
+# bypass del cap vía `otherConditions`/`otherMedications`.
+#
+# Bug (encontrado en code review, verificado ejecutando): `_validate_medical_
+# conditions_cap` solo contaba `medicalConditions`, pero `_merge_other_text_
+# fields` corría DESPUÉS (a nivel router y otra vez dentro de
+# `arun_plan_pipeline`) fusionando `otherConditions` DENTRO de
+# `medicalConditions` — 3 chips + un `otherConditions` con 7 condiciones
+# separadas por coma = 10 condiciones reales llegando al pipeline sin que el
+# cap las hubiera visto. Cualquier browser con JS cacheado pre-deploy (el
+# input viejo aún sabe rellenar `otherConditions`) lo dispara sin intención
+# maliciosa.
+# ===========================================================================
+def test_close_medical_freetext_scope_vacia_otherConditions_poblado():
+    data = {"medicalConditions": ["Diabetes T2"], "otherConditions": "Gastritis, Asma, Anemia"}
+    _close_medical_freetext_scope(data)
+    assert data["otherConditions"] == ""
+
+
+def test_close_medical_freetext_scope_vacia_otherMedications_poblado():
+    data = {"medications": ["Metformina"], "otherMedications": "Ibuprofeno, Losartán"}
+    _close_medical_freetext_scope(data)
+    assert data["otherMedications"] == ""
+
+
+def test_close_medical_freetext_scope_no_toca_otros_campos_freetext():
+    """`otherAllergies`/`otherDislikes`/`otherStruggles` NO son parte de esta
+    decisión de producto (solo condiciones médicas + medicamentos) — deben
+    sobrevivir intactos."""
+    data = {
+        "otherConditions": "Gastritis",
+        "otherMedications": "Ibuprofeno",
+        "otherAllergies": "Mariscos",
+        "otherDislikes": "Cilantro",
+        "otherStruggles": "Antojos nocturnos",
+    }
+    _close_medical_freetext_scope(data)
+    assert data["otherConditions"] == ""
+    assert data["otherMedications"] == ""
+    assert data["otherAllergies"] == "Mariscos"
+    assert data["otherDislikes"] == "Cilantro"
+    assert data["otherStruggles"] == "Antojos nocturnos"
+
+
+def test_close_medical_freetext_scope_no_op_sobre_campos_ausentes_o_vacios():
+    data = {"medicalConditions": ["Ninguna"]}
+    _close_medical_freetext_scope(data)
+    assert data == {"medicalConditions": ["Ninguna"]}  # no añade keys nuevas
+
+
+def test_close_medical_freetext_scope_defensivo_ante_no_dict():
+    # No debe lanzar — mismo contrato defensivo que `_validate_form_data_min`.
+    _close_medical_freetext_scope(None)
+    _close_medical_freetext_scope([])
+    _close_medical_freetext_scope("no soy un dict")
+
+
+def test_critical_1_ancla_el_incidente_reportado_10_condiciones_via_freetext():
+    """[CRITICAL-1-FIX] Reproduce el incidente EXACTO del review: 3 chips +
+    otherConditions con 7 condiciones extra = 10 condiciones reales que
+    ANTES del fix llegaban al pipeline sin que el cap las contara (porque
+    el cap corre sobre `medicalConditions` PRE-merge). Tras el fix, el
+    payload procesado por el endpoint (que llama `_close_medical_freetext_
+    scope` ANTES de `_merge_other_text_fields`) nunca ve esas 7 condiciones
+    — `otherConditions` llega vacío al merge, que se vuelve no-op para ese
+    campo. Este test simula el orden real de operaciones del endpoint."""
+    data = {
+        "medicalConditions": ["Diabetes T2", "Hipertensión", "Colesterol Alto"],
+        "otherConditions": "Gastritis, Asma, Anemia, Migraña, Gota, Lupus, Fibromialgia",
+    }
+    # Orden real del endpoint: close-scope ANTES del cap check y ANTES de
+    # copiar a pipeline_data / correr el merge.
+    _close_medical_freetext_scope(data)
+    ok, count, cap = _validate_medical_conditions_cap(data)
+    assert ok is True
+    assert count == 3, "el cap debe seguir viendo solo los 3 chips, nunca las 7 de otherConditions"
+
+    # Y el merge downstream (import perezoso para no acoplar el import-time
+    # de graph_orchestrator a este test file) confirma el no-op: con
+    # otherConditions="" no hay nada que fusionar.
+    from graph_orchestrator import _merge_other_text_fields
+    pipeline_data = dict(data)
+    added = _merge_other_text_fields(pipeline_data)
+    assert added == 0, f"el merge no debería añadir nada con otherConditions vaciado; añadió {added}"
+    assert pipeline_data["medicalConditions"] == ["Diabetes T2", "Hipertensión", "Colesterol Alto"], (
+        "las 7 condiciones de otherConditions NUNCA deben aparecer en medicalConditions post-merge"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Parser: `_close_medical_freetext_scope` cableada en AMBOS endpoints, y
+# ANTES de `_validate_form_data_min` (para que tampoco pueda satisfacer el
+# companion-presence-check vía texto libre) — mismo patrón de anchor que el
+# resto de la sección (f).
+# ---------------------------------------------------------------------------
+def test_close_medical_freetext_scope_cableada_en_ambos_endpoints():
+    src = _read_plans_source()
+    call_count = src.count("_close_medical_freetext_scope(data)")
+    assert call_count == 2, (
+        f"Se esperaban exactamente 2 call sites de `_close_medical_freetext_scope(data)` "
+        f"(`/analyze` y `/analyze/stream`); se encontraron {call_count}."
+    )
+
+
+def test_close_medical_freetext_scope_corre_antes_de_validate_form_data_min():
+    src = _read_plans_source()
+    analyze_start = src.index('@router.post("/analyze")')
+    stream_start = src.index('@router.post("/analyze/stream")')
+    for label, start, end in (
+        ("/analyze", analyze_start, stream_start),
+        ("/analyze/stream", stream_start, stream_start + 6000),
+    ):
+        body = src[start:end]
+        close_pos = body.index("_close_medical_freetext_scope(data)")
+        min_pos = body.index("_validate_form_data_min(data)")
+        assert close_pos < min_pos, (
+            f"{label}: `_close_medical_freetext_scope` debe correr ANTES de "
+            f"`_validate_form_data_min` (para que el companion-presence-check "
+            f"de medicalConditions no pueda satisfacerse con texto libre)."
+        )

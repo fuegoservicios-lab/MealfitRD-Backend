@@ -770,19 +770,48 @@ def _validate_form_data_min(data: dict) -> tuple[bool, list[str]]:
 # clinical data DESDE el perfil ya persistido (`_enrich_clinical_from_profile`)
 # y nunca invocan este check.
 # ============================================================
+# [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01 · CRITICAL-2-FIX] Igualdad EXACTA
+# canonicalizada — NO substring. Espeja los 2 valores LITERALES que emite
+# `PREGNANCY_CHIP_LABELS` en `frontend/src/components/assessment/questions/
+# _shared.jsx` ("Embarazo", "Lactancia" — los únicos strings que el wizard
+# puede realmente producir para estos chips).
+#
+# Bug de la versión anterior (encontrado en code review, verificado
+# ejecutando): usaba `any(term in normalized for term in
+# PREGNANCY_CONDITION_TERMS)` — un SUBSTRING match contra un vocabulario
+# amplio ("embaraz", "gestac", etc., pensado para el gate de déficit
+# calórico de `nutrition_calculator`, que es intencionalmente
+# sobre-inclusivo ahí). Aplicado al EXEMPTION del cap, ese mismo
+# sobre-inclusivo se volvía un agujero: `"embarazo con diabetes"` contiene
+# `"embaraz"` → se eximía del cap con `real_count` sin incrementar, PERO el
+# string completo seguía llegando intacto a `condition_rules.
+# detect_active_rules` (mismo tipo de substring match aguas abajo) →
+# complejidad clínica que el cap existe para acotar, ahora ILIMITADA. Cinco
+# entradas `"embarazo-1".."embarazo-5"` pasaban las cinco sin sumar nada al
+# cap — vaciándolo de contenido por completo.
+#
+# La igualdad exacta cierra ambos huecos: SOLO el valor literal del chip se
+# exime (nunca una frase que lo mencione o lo contenga); cualquier otro
+# string —incluida una frase sobre embarazo— cuenta como condición real.
+# Defensa-en-profundidad independiente del cierre del canal de texto libre
+# (CRITICAL-1-FIX, `_close_medical_freetext_scope`): aunque ese cierre ya
+# impide que `"embarazo con diabetes"` llegue vía `otherConditions`, esta
+# función NUNCA debe eximir algo que no sea el chip exacto, sin importar
+# por qué canal haya llegado.
+_PREGNANCY_CHIP_LABELS_CANONICAL = frozenset({"embarazo", "lactancia"})
+
+
 def _is_pregnancy_or_lactation_condition_item(value: str) -> bool:
-    """True si un ítem individual de `medicalConditions` es un término de
-    embarazo/lactancia. Mismo vocabulario (`PREGNANCY_CONDITION_TERMS`) y
-    normalización (`strip_accents`) que `nutrition_calculator._is_pregnancy_or_lactation`,
-    pero a nivel de ítem (no de `form_data` completo) — lo que necesita el
-    exemption del cap para descartar SOLO las entradas de embarazo/lactancia
-    sin tocar el resto del array."""
+    """True SOLO si `value` (ya lowercased por el caller) es, tras
+    `strip_accents`, EXACTAMENTE uno de los 2 valores literales que emiten
+    los chips `PREGNANCY_CHIP_LABELS`. Igualdad exacta, NUNCA substring —
+    ver el bloque [CRITICAL-2-FIX] arriba para el vector que esto cierra."""
     try:
-        from constants import PREGNANCY_CONDITION_TERMS, strip_accents
+        from constants import strip_accents
     except Exception:
         return False
-    normalized = strip_accents(value)
-    return any(term in normalized for term in PREGNANCY_CONDITION_TERMS)
+    normalized = strip_accents(value).strip().lower()
+    return normalized in _PREGNANCY_CHIP_LABELS_CANONICAL
 
 
 def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
@@ -810,6 +839,73 @@ def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
             continue
         real_count += 1
     return (real_count <= cap, real_count, cap)
+
+
+# ============================================================
+# [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01 · CRITICAL-1-FIX] Cierre del canal
+# de texto libre clínico en requests NUEVOS de generación de plan.
+# ------------------------------------------------------------
+# Bug encontrado en code review (verificado ejecutando): `_validate_medical_
+# conditions_cap` solo cuenta `medicalConditions`, pero `_merge_other_text_
+# fields` corre JUSTO DESPUÉS (a nivel router Y OTRA VEZ dentro de
+# `arun_plan_pipeline`, graph_orchestrator.py ~línea 45560) y funde
+# `otherConditions` DENTRO de `medicalConditions` — 3 chips + un
+# `otherConditions` con 7 condiciones separadas por coma = 10 condiciones
+# reales llegando al LLM/reviewer sin el backstop determinista que el cap
+# existe para proteger. El cap se validaba contra el array PRE-merge y el
+# pipeline consumía el array POST-merge: dos vistas distintas del mismo
+# request. Cualquier browser con JS cacheado de antes de este deploy (que
+# aún sabe rellenar `otherConditions`) lo dispara sin intención maliciosa.
+#
+# Fix: en vez de intentar sincronizar el cap con el momento exacto del
+# merge (frágil — el merge corre en dos sitios), CERRAMOS la fuente: en los
+# dos endpoints de generación de plan NUEVO (`/analyze`, `/analyze/stream`)
+# ignoramos `otherConditions`/`otherMedications` del payload ANTES de
+# `_validate_form_data_min` (para que tampoco puedan satisfacer el
+# companion-presence-check de `medicalConditions` vía `_FREE_TEXT_
+# COMPANION_FIELDS`) y antes de que `pipeline_data = dict(data)` copie el
+# payload — así CUALQUIER consumer downstream (el merge del router, el
+# merge interno de `arun_plan_pipeline`, el backstop `medication_rules.
+# _norm_medications` que escanea `otherConditions`/`otherMedications`
+# directamente, y el JSON dump crudo al prompt) ve estos dos campos
+# siempre vacíos. Decisión de producto del owner (P1-MEDICAL-CONDITIONS-CAP):
+# el input "Otra condición médica..."/"Otro medicamento..." fue retirado del
+# wizard (QMedical.jsx) — el alcance clínico de una generación NUEVA queda
+# acotado al checklist. Perfiles YA GUARDADOS con texto libre legacy NO se
+# tocan: `health_profile` en DB, la hidratación de swap-meal
+# (`_enrich_clinical_from_profile`), y el merge para OTROS consumidores
+# (`otherAllergies`→`allergies`, `otherDislikes`→`dislikes`,
+# `otherStruggles`→`struggles`, que siguen siendo canales de texto libre
+# VIGENTES — esta decisión de producto fue específicamente condiciones
+# médicas + medicamentos) siguen leyendo/mergeando esos campos sin cambios.
+# Verificado: `_merge_other_text_fields` (graph_orchestrator.py) no tiene
+# más callsites que estos 2 del router + el interno de `arun_plan_pipeline`
+# — no se toca la función compartida, solo se vacía la fuente en el punto
+# de entrada de estos 2 endpoints.
+# ============================================================
+def _close_medical_freetext_scope(data: dict) -> None:
+    """Ignora `otherConditions`/`otherMedications` en un request NUEVO de
+    generación de plan — mutación in-place, mismo contrato que
+    `_merge_other_text_fields` usa para descartar contradicciones
+    (`data[field] = ""`, nunca borra la key, evita KeyError en consumers
+    que no usen `.get`).
+
+    Debe llamarse ANTES de `_validate_form_data_min` (para que el
+    companion-presence-check de `medicalConditions` no pueda satisfacerse
+    con texto libre) y ANTES de `pipeline_data = dict(data)` (para que
+    ningún consumer downstream —merge del router, merge interno del
+    pipeline, backstop de `medication_rules`, JSON dump al prompt— vea el
+    texto libre).
+
+    `otherAllergies`/`otherDislikes`/`otherStruggles` NO se tocan — fuera
+    del alcance de esta decisión de producto.
+    """
+    if not isinstance(data, dict):
+        return
+    if data.get("otherConditions"):
+        data["otherConditions"] = ""
+    if data.get("otherMedications"):
+        data["otherMedications"] = ""
 
 
 # ============================================================
@@ -2801,6 +2897,11 @@ def api_analyze(
         if session_id:
             _clear_cancelled_session(session_id)
 
+        # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01 · CRITICAL-1-FIX] Cierra el
+        # canal de texto libre clínico ANTES de cualquier validación/merge —
+        # ver docstring de `_close_medical_freetext_scope`.
+        _close_medical_freetext_scope(data)
+
         # [P1-5] Validación temprana de campos mínimos. Antes payloads incompletos
         # llegaban al pipeline y producían un plan basado en defaults genéricos
         # tras 30–90s de compute LLM. Ahora cortamos en <1ms con un 422 accionable.
@@ -3189,6 +3290,10 @@ async def api_analyze_stream(
         # se procesa normalmente porque el set vuelve a llenarse cuando llegue.
         if session_id:
             _clear_cancelled_session(session_id)
+
+        # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01 · CRITICAL-1-FIX] Mismo cierre
+        # que el endpoint sync — ver docstring de `_close_medical_freetext_scope`.
+        _close_medical_freetext_scope(data)
 
         # [P1-5] Misma validación temprana que el endpoint sync. Lanzar 422 ANTES
         # de abrir el StreamingResponse: si el payload es inválido, el cliente
