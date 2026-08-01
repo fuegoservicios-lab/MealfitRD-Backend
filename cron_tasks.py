@@ -24459,6 +24459,29 @@ def _sieve_catalog_for_safety(catalog: list, allergies, diet) -> list:
     return safe
 
 
+def _culinary_meta_for(food_name: str) -> dict | None:
+    """[P1-CULINARY-CONTRACT · 2026-07-31] Metadata culinaria (`prep_methods`/
+    `ready_to_eat`) de un alimento del catálogo maestro, por nombre exacto
+    (case-insensitive). Fail-open explícito: sin pool, sin catálogo, nombre
+    vacío, o cualquier excepción ⇒ `None` — el caller (verbo del placeholder
+    de Edge Recipes) cae al genérico "Cocina", nunca revienta la construcción
+    del día degradado. Itera el catálogo entero por llamada a propósito: los
+    Edge Recipes son un path frío (solo corre cuando el LLM falló), no vale
+    la pena un índice — `get_master_ingredients()` ya cachea 5 min, así que
+    esto no re-golpea la DB en cada llamada. Privado a este módulo."""
+    try:
+        from shopping_calculator import get_master_ingredients
+        target = str(food_name or "").strip().lower()
+        if not target:
+            return None
+        for row in get_master_ingredients() or []:
+            if str(row.get("name", "")).strip().lower() == target:
+                return row
+    except Exception:
+        pass
+    return None
+
+
 def _build_filtered_edge_recipe_day(
     allergies: list | tuple | None,
     dislikes: list | tuple | None,
@@ -24578,13 +24601,27 @@ def _build_filtered_edge_recipe_day(
             return f"{capped_g}g {ingredient}"
         return f"{default_g}g {ingredient}"
 
-    breakfast_protein = _cap_ingredient(random.choice(pantry_proteins), 150)
+    _breakfast_protein_name = random.choice(pantry_proteins)
+    breakfast_protein = _cap_ingredient(_breakfast_protein_name, 150)
     breakfast_carb = _cap_ingredient(random.choice(pantry_carbs), 100)
     lunch_protein = _cap_ingredient(random.choice(pantry_proteins), 200)
     lunch_carb = _cap_ingredient(random.choice(pantry_carbs), 150)
     lunch_veggie = _cap_ingredient(random.choice(pantry_veggies), 100)
     dinner_protein = _cap_ingredient(random.choice(pantry_proteins), 150)
     dinner_veggie = _cap_ingredient(random.choice(pantry_veggies), 150)
+
+    # [P1-CULINARY-CONTRACT · 2026-07-31] Verbo REAL desde prep_methods en vez
+    # del placeholder genérico anterior (Edge Recipes era la única superficie
+    # que aún inventaba un verbo sin base en el catálogo — spec §4c bonus).
+    # Fail-open: sin metadata (o alimento sin match en el catálogo) cae a
+    # "Cocina", nunca revienta la construcción del día.
+    _prep = (_culinary_meta_for(_breakfast_protein_name) or {}).get("prep_methods") or []
+    _verbo = {
+        "hervir": "Hierve", "plancha": "Cocina a la plancha", "freir": "Fríe",
+        "hornear": "Hornea", "guisar": "Guisa", "saltear": "Saltea",
+        "tostar": "Tuesta", "ninguno": "Sirve", "crudo": "Sirve",
+    }.get(_prep[0] if _prep else "", "Cocina")
+    _breakfast_fire_step = f"El Toque de Fuego: {_verbo} {_breakfast_protein_name} y sírvelo caliente."
 
     # [P2-EDGE-RECIPE-CANONICAL-KEYS · 2026-05-30] Emitir claves CANÓNICAS
     # (MealModel + frontend Recipes.jsx): `meal`/`desc`/`recipe` + macros planos
@@ -24610,7 +24647,7 @@ def _build_filtered_edge_recipe_day(
                 "cals": 400, "protein": 20, "carbs": 35, "fats": 15,
                 "recipe": [
                     "Mise en place: Prepara y mide los ingredientes.",
-                    "El Toque de Fuego: Cocina la proteína según método tradicional.",
+                    _breakfast_fire_step,
                     "Montaje: Sirve junto al acompañante y disfruta.",
                 ],
             },
@@ -24657,6 +24694,43 @@ def _build_filtered_edge_recipe_day(
             f"restricciones (dieta={diet!r}) → {_edge_violations[:3]}"
         )
         return None
+
+    # [P1-CULINARY-CONTRACT · 2026-07-31] Scan de coherencia culinaria del día
+    # ensamblado — misma filosofía que el bloque de seguridad de arriba: este
+    # path NUNCA pasa por `assemble_plan_node`/`review_plan_node` (no hay LLM
+    # aquí por construcción), así que el scan determinista es la ÚNICA capa
+    # posible (patrón P0-DEGRADED-SAFETY-SCAN). Violación V1 (verbo imposible
+    # sobre el alimento, p.ej. "Hornea" un listo-para-comer) o V2 (estado
+    # imposible, "ya viene cocido" sobre un alimento fresco) ⇒ degradar el
+    # paso ofensor a "Sirve el {food}." — un paso soso es estrictamente mejor
+    # que un paso imposible. V3 (huérfanos) se TOLERA aquí a propósito: los
+    # Edge Recipes son deliberadamente minimalistas (3 pasos fijos de
+    # "Mise en place"/"El Toque de Fuego"/"Montaje" que nunca listan cada
+    # ingrediente paso a paso), así que aplicar V3 aquí degradaría pasos que
+    # ya están bien. Fail-open total: si el scan revienta, el día sale tal
+    # cual (no bloqueamos el path degradado por un fallo del scan — eso es
+    # trabajo del backstop de seguridad de arriba, no de este).
+    try:
+        from culinary_coherence import culinary_contract_scan, step_has_cooking_verb
+        from shopping_calculator import get_master_ingredients
+        _viol = [v for v in culinary_contract_scan({"days": [_edge_day]}, get_master_ingredients())
+                 if v["check"] in ("V1", "V2")]
+        for _v in _viol:
+            _food_lower = _v["food"].lower()
+            for _m in _edge_day.get("meals") or []:
+                _m["recipe"] = [
+                    (f"Sirve el {_v['food']}." if _food_lower in p.lower()
+                     and step_has_cooking_verb(p) else p)
+                    for p in (_m.get("recipe") or [])
+                ]
+        if _viol:
+            logger.warning(
+                f"🍳 [P1-CULINARY-CONTRACT/degradado] {len(_viol)} paso(s) degradado(s) "
+                f"a 'Sirve': {[(v['check'], v['food']) for v in _viol]}"
+            )
+    except Exception:
+        pass
+
     return _edge_day
 
 

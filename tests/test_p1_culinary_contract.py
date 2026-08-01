@@ -312,3 +312,48 @@ def test_fix_refill_step_verb_corre_en_finalize():
     assert "_fix_refill_step_verb(" in fin, (
         "finalize_plan_data_coherence no invoca _fix_refill_step_verb — los "
         "planes del path degradado/chunk siguen con '🍚 Cuece el Casabe'")
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT · Task 8] Superficie 3 — path degradado
+# (`cron_tasks._build_filtered_edge_recipe_day`). Es la ÚNICA capa posible
+# ahí: por construcción no hay LLM en este path (patrón
+# P0-DEGRADED-SAFETY-SCAN), así que review_plan_node/assemble_plan_node nunca
+# corren sobre lo que sale de aquí. Parser-based sobre el SOURCE de
+# cron_tasks.py (mismo motivo que Superficies 1/2: no importar el módulo aquí
+# para no arrastrar sus dependencias de import-time — DB pool, scheduler,
+# etc. — al test suite del culinary contract).
+# ---------------------------------------------------------------------------
+
+_CRON_SRC = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+
+
+def test_degradado_pasa_por_el_scan():
+    """Única capa posible en el path degradado (no hay LLM ahí por construcción,
+    patrón P0-DEGRADED-SAFETY-SCAN). Cada edge_day se escanea; violación ⇒
+    degradar el paso a 'Sirve {food}' (jamás entregar el verbo imposible)."""
+    i = _CRON_SRC.index("def _build_filtered_edge_recipe_day")
+    win = _CRON_SRC[i:i + 15000]
+    assert "culinary_contract_scan(" in win, "el edge day no se escanea"
+
+
+def test_placeholder_generico_reemplazado():
+    """El placeholder genérico ("según método tradicional") no debe quedar
+    vivo en ninguna forma — ni en código ni en comentarios — porque invita a
+    reañadirlo citando el propio comentario. Verificado por grep manual antes
+    de escribir este assert: la única ocurrencia histórica era la línea que
+    esta tarea reemplaza; no hay otra legítima que excluir."""
+    assert "según método tradicional" not in _CRON_SRC, (
+        "el placeholder genérico sigue vivo — debe generarse el verbo real "
+        "desde prep_methods (spec §4c bonus)")
+
+
+def test_step_has_cooking_verb_exportado_y_correcto():
+    """[Fix post-review, controller Resolución 1] `culinary_coherence.py`
+    exporta `step_has_cooking_verb` en vez de forzar al path degradado a
+    alcanzar `_VERB_RES` (privado del módulo) vía `__import__`. Ancla
+    funcional DB-independiente: True sobre un paso con verbo de cocción
+    reconocido, False sobre un paso que ya es 'Sirve' (el destino de la
+    degradación, para que no vuelva a degradarse una segunda vez)."""
+    assert cc.step_has_cooking_verb("Hierve el arroz.") is True
+    assert cc.step_has_cooking_verb("Sirve el casabe.") is False

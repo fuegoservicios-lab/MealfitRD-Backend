@@ -72,6 +72,16 @@ def _norm(text: str) -> str:
     return strip_accents(str(text or "").lower())
 
 
+def step_has_cooking_verb(paso: str) -> bool:
+    """True si `paso` contiene algún verbo de cocción del vocabulario
+    canónico (`VERB_TO_METHOD`). Export público de lo que antes solo se leía
+    vía `_VERB_RES` (privado del módulo) — usado por el path degradado
+    (`cron_tasks._build_filtered_edge_recipe_day`) para identificar cuál paso
+    degradar a 'Sirve el {food}.' cuando el scan reporta V1/V2.
+    tooltip-anchor: P1-CULINARY-CONTRACT"""
+    return any(rx.search(_norm(paso)) for rx, _ in _VERB_RES)
+
+
 def _sing_plural_pattern(word: str) -> str:
     """Patrón que matchea la forma singular Y plural de `word` (bidireccional:
     si word ya viene en plural, también matchea el singular)."""
