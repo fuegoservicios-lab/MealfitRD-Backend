@@ -3163,8 +3163,24 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                         break 
                 
                 if not converted:
-                    # Solución 3: Conversor por default (5g aprox por porción imprecisa: "pizca", "ramita", "chorrito")
-                    fallback_g = gen_base_qty * 5.0
+                    # Solución 3: Conversor por default para unidades irresolubles.
+                    # [P1-VOLUME-FALLBACK-DENSITY · 2026-08-02] El "×5" original (5g aprox por
+                    # porción imprecisa: "rebanada", "lonja", conteos raros) se aplicaba TAMBIÉN
+                    # a 'ml' y 'g' — pero _to_base_unit ya normalizó volumen→ml y las porciones
+                    # abstractas (pizca/chorrito) ya salen en gramos de allá. Multiplicar ml×5
+                    # inventa densidad 5 g/ml: "1 taza de Lechosa" (236.6 ml) → 1183 g "excede
+                    # matemáticamente" una lechosa entera, y el LLM no puede corregir un fantasma
+                    # → agota retries → slot conservado (caso real regen-day 2026-08-02, destapado
+                    # por P1-PANTRY-STRICT-CONSENT al encoger los denominadores a la Nevera real).
+                    # ml → densidad agua (1 g/ml, mismo criterio que la línea de abajo que ya
+                    # decía "Asumir densidad agua"); g → ya son gramos; resto (conteos) → ×5.
+                    # tooltip-anchor: P1-VOLUME-FALLBACK-DENSITY
+                    if gen_base_unit == 'ml':
+                        fallback_g = gen_base_qty * 1.0
+                    elif gen_base_unit == 'g':
+                        fallback_g = gen_base_qty
+                    else:
+                        fallback_g = gen_base_qty * 5.0
                     for dispo_unit, available_qty in available_units_for_item.items():
                         req_qty_in_dispo_unit = None
                         
