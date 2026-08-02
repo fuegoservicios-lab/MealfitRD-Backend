@@ -7448,7 +7448,25 @@ def _map_day_reason(reason) -> str:
 
 
 def _inventory_grams_ledger(rows, db) -> dict:
-    """Live inventory → {nombre_canónico: gramos_disponibles} (para reservar entre platos del día)."""
+    """Live inventory → {nombre_canónico: gramos_disponibles} (para reservar entre platos del día).
+
+    [P1-CONTAINER-SERVABLE · 2026-08-02] EL ENVASE NO ES EL CONTENIDO: `db.to_grams` crudo no
+    sabe expandir un envase — "cartón (20 uds.)" no tiene `density_g_per_unit` para 'unidad'
+    genérica (o, peor, la hereda de OTRO contexto) y "pote (1.96 kg)" no matchea ningún
+    `canonicalize_unit` (el string trae la anotación de tamaño baked-in) → `to_grams` devuelve
+    `None`/0 con kilos reales en la nevera, y este ledger alimenta el gate de suficiencia +
+    revalidación macro de `regenerate-day` (líneas de arriba: `_day_exceeds_pantry`,
+    `evaluate_pantry_sufficiency`) → rechazo falso de un plato perfectamente cubierto.
+    `expand_container_to_servable` (canonical_units.py, SSOT compartido con
+    `constants.validate_ingredients_against_pantry`) expande PRIMERO envase→contenido
+    SERVABLE (uds. de un cartón, o gramos de un paquete/pote/lata/funda/botella vía
+    `container_weight_g` del SSOT `master_ingredients` o el fallback conservador por
+    categoría — `allow_category_fallback=True`, este mirror no tenía NINGÚN tratamiento de
+    contenedor antes, así que es estrictamente una mejora) y SOLO entonces se reusa `db.to_grams`
+    para el paso final servable→gramos (idéntico para 'unidad' vía `density_g_per_unit` y 'g'
+    passthrough). Fail-open: si no expande, cae al `to_grams` crudo de siempre (comportamiento
+    previo intacto). tooltip-anchor: P1-CONTAINER-SERVABLE"""
+    from canonical_units import expand_container_to_servable
     ledger: dict = {}
     for row in rows or []:
         try:
@@ -7458,7 +7476,20 @@ def _inventory_grams_ledger(rows, db) -> dict:
             qty = row.get("available_quantity")
             if qty is None:
                 qty = row.get("quantity") or 0
-            grams = db.to_grams(float(qty or 0), row.get("unit") or "", info)
+            qty_f = float(qty or 0)
+            unit_raw = row.get("unit") or ""
+            grams = None
+            try:
+                _expanded = expand_container_to_servable(
+                    info.name, qty_f, unit_raw, allow_category_fallback=True, db=db
+                )
+            except Exception:
+                _expanded = None
+            if _expanded is not None:
+                exp_qty, exp_unit = _expanded
+                grams = db.to_grams(exp_qty, exp_unit, info)
+            if grams is None:
+                grams = db.to_grams(qty_f, unit_raw, info)
             if grams and grams > 0:
                 ledger[info.name] = ledger.get(info.name, 0.0) + grams
         except Exception:

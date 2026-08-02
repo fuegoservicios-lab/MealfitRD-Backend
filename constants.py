@@ -2993,19 +2993,52 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         # (e.g., "1 Paquete (500g)"), usar ese peso en lugar de la unidad abstracta.
         # Esto evita que "1 Paquete de Pan integral" se registre como 30g (1 rebanada)
         # cuando en realidad el paquete pesa 500g.
-        container_match = _container_weight_re.search(p)
-        if container_match and unit in ['paquete', 'paquetes', 'pote', 'potes', 'cartón', 'carton',
-                                         'funda', 'fundas', 'lata', 'latas', 'sobre', 'sobres',
-                                         'fundita', 'funditas', 'botella', 'botellas']:
-            # [P3-PANTRY-GUARD-UNICODE-FRACTIONS · 2026-05-23] Acepta
-            # tanto decimales ("0.5") como fracciones Unicode ("½").
-            container_qty = _parse_fraction_or_number(container_match.group(1))
-            container_unit = container_match.group(2).lower()
-            # El peso total = cantidad de contenedores × peso por contenedor
-            real_weight = qty * container_qty
-            base_qty, base_unit = _to_base_unit(real_weight, container_unit)
+        #
+        # [P1-CONTAINER-SERVABLE · 2026-08-02] EL ENVASE NO ES EL CONTENIDO: el regex de
+        # arriba solo capturaba peso (g/gr/kg/oz/ml/l/lb/lbs) — nunca "(N uds.)". Un cartón
+        # de huevos ("2 cartones (20 uds.) de Huevo") caía al `else` de abajo, que trata
+        # cualquier envase informal como "1 unidad abstracta" (`_to_base_unit`: paquete/pote/
+        # cartón/etc → `(qty, 'unidad')`) — 2 cartones se contaban como 2 HUEVOS SUELTOS en
+        # vez de 40. Un plato de 3 huevos veía "límite: 2" con ~40 disponibles.
+        #
+        # `expand_container_to_servable` (canonical_units.py, SSOT compartido con
+        # `routers/plans._inventory_grams_ledger`) se intenta PRIMERO y SOLO resuelve el
+        # caso "(N uds.)" + el default RD de cartón de huevos sin anotación — devuelve
+        # `None` (fail-open) para cualquier otro caso, incluido "envase sin anotación de
+        # tamaño" (paquete/pote/lata genéricos), que sigue cayendo exactamente al mismo
+        # `else` de siempre. `allow_category_fallback=False` es DELIBERADO: el path de abajo
+        # (`container_match` + regex de peso) YA resuelve correctamente el envase CON peso
+        # anotado desde P3-PANTRY-GUARD-UNICODE-FRACTIONS — no se toca ese comportamiento
+        # (ejercitado por ~15 tests existentes que asumen "envase sin anotación → 1 unidad").
+        # tooltip-anchor: P1-CONTAINER-SERVABLE
+        _expanded_container = None
+        if unit in ['paquete', 'paquetes', 'pote', 'potes', 'cartón', 'carton',
+                    'funda', 'fundas', 'lata', 'latas', 'sobre', 'sobres',
+                    'fundita', 'funditas', 'botella', 'botellas']:
+            try:
+                from canonical_units import expand_container_to_servable
+                _expanded_container = expand_container_to_servable(
+                    name, qty, p, allow_category_fallback=False
+                )
+            except Exception:
+                _expanded_container = None
+
+        if _expanded_container is not None:
+            base_qty, base_unit = _expanded_container
         else:
-            base_qty, base_unit = _to_base_unit(qty, unit)
+            container_match = _container_weight_re.search(p)
+            if container_match and unit in ['paquete', 'paquetes', 'pote', 'potes', 'cartón', 'carton',
+                                             'funda', 'fundas', 'lata', 'latas', 'sobre', 'sobres',
+                                             'fundita', 'funditas', 'botella', 'botellas']:
+                # [P3-PANTRY-GUARD-UNICODE-FRACTIONS · 2026-05-23] Acepta
+                # tanto decimales ("0.5") como fracciones Unicode ("½").
+                container_qty = _parse_fraction_or_number(container_match.group(1))
+                container_unit = container_match.group(2).lower()
+                # El peso total = cantidad de contenedores × peso por contenedor
+                real_weight = qty * container_qty
+                base_qty, base_unit = _to_base_unit(real_weight, container_unit)
+            else:
+                base_qty, base_unit = _to_base_unit(qty, unit)
         
         if base_norm not in pantry_ledger:
             pantry_ledger[base_norm] = {}

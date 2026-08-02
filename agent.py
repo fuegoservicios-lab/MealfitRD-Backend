@@ -809,6 +809,18 @@ def swap_meal(form_data: dict):
             f"ingredientes que YA tienes disponibles. Si NO hay otra proteína disponible en tu despensa, "
             f"prioriza un plato VÁLIDO y coherente aunque repita (no inventes ingredientes que no tengas)."
         )
+        # [P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02] Si el plato nuevo reutiliza la MISMA base
+        # (avena/arroz/yuca/plátano/pan) de otra comida de hoy, NO basta con cambiar la fruta o
+        # guarnición — el swap debe entregar un FORMATO Y PERFIL distinto (cremoso/bowl ↔
+        # horneado/arepitas/panqueques ↔ batido; dulce ↔ salado). Ejemplo prohibido: "Avena
+        # Cremosa con mango" reemplazando un plato cuando la otra comida de hoy ya es "Bowl
+        # Cremoso de Avena Tostada con granola y canela" — misma fórmula, solo cambió la fruta.
+        context_extras += (
+            "\n    - ⛔ NO CLONES LA FÓRMULA: si vas a reutilizar la MISMA base de carbohidrato "
+            "(avena/arroz/yuca/plátano/pan) que otra comida de HOY, el plato nuevo debe cambiar de "
+            "FORMATO (cremoso/bowl ↔ horneado/arepitas/panqueques ↔ batido) Y de PERFIL (dulce ↔ "
+            "salado, caliente ↔ frío) — no alcanza con cambiar solo la fruta o el fruto seco."
+        )
 
     # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-F) variedad CROSS-DAY (preferencia suave): el swap era
     # ciego a los otros días — podía proponer el mismo plato que el usuario ya come ese slot 3 veces

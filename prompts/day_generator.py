@@ -211,6 +211,20 @@ REGLAS ESTRICTAS:
        - El plato debe sonar APETECIBLE: piensa si un dominicano se lo comería con gusto. Combos
          chocantes (fruta dulce + almidón salado, fruta + pescado, dulce + picante fuerte) están
          PROHIBIDOS salvo que sean un plato reconocido.
+
+    g) ⛔ NO CLONES LA FÓRMULA (P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02): si dos comidas de ESTE
+       DÍA reutilizan la MISMA BASE (avena/arroz/yuca/plátano/pan), el SEGUNDO plato debe cambiar
+       de FORMATO Y PERFIL — no solo la fruta o guarnición. Ejemplo PROHIBIDO real: desayuno
+       "Bowl Cremoso de Lechosa y Avena Tostada con granola y canela" + merienda "Avena Cremosa
+       con canela, mango y almendras tostadas" — es la MISMA fórmula (avena+canela+fruta+frutos
+       secos tostados en un bowl cremoso), solo cambió la fruta. Eso NO cuenta como variedad.
+       Cambia el FORMATO: cremosa/bowl ↔ horneada (arepitas, panqueques, tortitas) ↔ batida
+       (smoothie) ↔ en grano suelto (moro, ensalada de granos). Cambia el PERFIL: dulce ↔ salada,
+       caliente ↔ fría. Patrón válido: desayuno "Avena Cremosa con canela y mango" + merienda
+       "Arepitas de Avena saladas con queso" (misma base, formato y perfil DISTINTOS — sí cuenta
+       como variedad). El básico declarado (sección "BÁSICOS DEL USUARIO", si aplica) permite
+       repetir el INGREDIENTE con técnica distinta — NO exime clonar la fórmula entera del
+       desayuno/merienda.
 """
 
 # [P2-SLOT-SSOT-PROMPT · 2026-07-02] (audit v3 slots GAP-F) Bloque de reglas de horario DERIVADO del SSOT

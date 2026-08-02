@@ -48,6 +48,7 @@ PQI_ENABLED = _env_bool("MEALFIT_PLAN_QUALITY_INDEX", True)
 # no con intuición.
 _PEN_VARIEDAD = {
     "same_day_protein_repeats": 12,   # misma proteína 2 comidas el mismo día
+    "same_day_formula_repeats": 8,    # [P1-SAME-DAY-FORMULA-REPEAT] misma base+formato+≥2 acompañantes
     "same_day_repeats": 8,            # plato-base repetido el mismo día
     "fruit_repeats": 8,               # misma fruta dulce en 2 comidas del día
     "cross_day_dishes": 6,            # el mismo plato en días distintos

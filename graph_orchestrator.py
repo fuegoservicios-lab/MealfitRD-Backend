@@ -20274,6 +20274,108 @@ def _small_universe_active(form_data: dict) -> bool:
         return False
 
 
+# [P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02] El gate same-day-protein (arriba) solo mira
+# PROTEÍNA — un desayuno "Bowl Cremoso de Lechosa y Avena Tostada con granola y canela" seguido
+# de una merienda "Avena Cremosa con canela, mango y almendras tostadas" pasa ese gate limpio
+# (sin proteína repetida) pero es la MISMA FÓRMULA clonada: misma BASE (avena) + mismo FORMATO
+# (bowl/crema fría) + ≥2 acompañantes de la misma CLASE (canela + fruta — aunque la fruta
+# específica cambie de lechosa a mango, "fruta" es la MISMA clase). Detector WARN-ONLY (cuenta
+# en `issues`/el índice de calidad, NO bloquea — el gate duro se decide con datos, mismo
+# criterio que `fruit_repeats`/`sweet_savory_clash`).
+#
+# El staple-aware (`_staple_technique_exempt`, arriba) NO exime esto A PROPÓSITO: esa exención
+# es una decisión de producto sobre REPETIR UN INGREDIENTE con técnica distinta (huevo hervido +
+# huevo revuelto); esto es sobre CLONAR LA FÓRMULA ENTERA de un desayuno/merienda. Son ejes
+# distintos — un básico declarado (ej. avena) sigue sin poder aparecer como la MISMA fórmula dos
+# veces el mismo día.
+_FORMULA_BASE_TOKENS = ("avena", "arroz", "yuca", "platano", "pan")
+
+# Familias de FORMATO — vocabulario tomado del campo `technique` de las 87 plantillas de
+# `dish_library` ('frío'/'licuado' vs 'masa horneada'/'horneado' vs 'guisado'/'sopa'). Dos
+# comidas con la MISMA base solo cuentan como fórmula repetida si ADEMÁS caen en la MISMA
+# familia — un bowl cremoso y unas arepitas horneadas de la MISMA avena son platos distintos.
+# Formato no reconocido (`None`) NUNCA dispara el detector (conservador: mejor no detectar que
+# falso positivo).
+_FORMULA_FORMAT_FAMILIES = {
+    "cremoso_frio": ("cremos", "batido", "bowl", "smoothie", "licuado", "parfait", "frio", "fria"),
+    "horneado_masa": ("hornead", "arepita", "panqueque", "tortita", "waffle", "muffin", "bizcocho"),
+    "guisado_sopa": ("guisad", "estofad", "sancocho", "sopa"),
+}
+
+# Acompañantes/modificadores por CLASE (no por alimento exacto): "canela" es su propia clase;
+# "frutos_secos" agrupa almendra/nuez/maní/pistacho/castaña/avellana (cualquiera cuenta igual);
+# "fruta" reusa el matcher SSOT `_featured_fruits_in_name` — lechosa y mango son la MISMA clase
+# "fruta" aunque sean frutas distintas (es justo el caso real: cambiar SOLO la fruta no basta
+# para que sea un plato distinto).
+_FORMULA_ACCOMPANIMENT_TOKENS = {
+    "canela": ("canela",),
+    "frutos_secos": ("almendra", "nuez", "nueces", "mani", "pistacho", "castana", "avellana"),
+    "granola": ("granola",),
+    "miel": ("miel",),
+    "coco": ("coco",),
+}
+
+# 'salada'/'salado'/'saladas'/'salados' — un mismo base+formato con perfil dulce vs. salado
+# (avena cremosa dulce vs. arepitas de avena SALADAS) NO es fórmula repetida.
+_FORMULA_SAVORY_MARKER = "salad"
+
+
+def _meal_formula_signature(meal: dict, strip_accents) -> Optional[dict]:
+    """[P1-SAME-DAY-FORMULA-REPEAT] Firma de fórmula de una comida (base+formato+acompañantes+
+    perfil) para el detector de abajo. `None` si el plato no tiene ninguna BASE reconocida (nada
+    que comparar) — fail-safe conservador."""
+    try:
+        name_low = strip_accents(str((meal or {}).get("name", "")).lower())
+        if not name_low:
+            return None
+        base = next((b for b in _FORMULA_BASE_TOKENS if _name_has_token(b, name_low)), None)
+        if not base:
+            return None
+        fmt = None
+        for fam, toks in _FORMULA_FORMAT_FAMILIES.items():
+            if any(_name_has_token(t, name_low) for t in toks):
+                fmt = fam
+                break
+        accompaniments = set()
+        for cls, toks in _FORMULA_ACCOMPANIMENT_TOKENS.items():
+            if any(_name_has_token(t, name_low) for t in toks):
+                accompaniments.add(cls)
+        if _featured_fruits_in_name(name_low):
+            accompaniments.add("fruta")
+        savory = _name_has_token(_FORMULA_SAVORY_MARKER, name_low)
+        return {"base": base, "format": fmt, "accompaniments": accompaniments, "savory": savory}
+    except Exception:
+        return None
+
+
+def _same_day_formula_repeat_pairs(meals: list, strip_accents) -> list:
+    """[P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02] Pares de comidas del MISMO día que comparten
+    FÓRMULA: misma BASE + mismo FORMATO (ambos reconocidos) + mismo perfil dulce/salado + ≥2
+    clases de acompañante compartidas. Warn-only — ver comentario arriba de `_FORMULA_BASE_
+    TOKENS` sobre por qué NO es staple-aware. Devuelve `[(meal_a, meal_b, shared_classes), ...]`.
+    tooltip-anchor: P1-SAME-DAY-FORMULA-REPEAT"""
+    sigs = []
+    for m in meals or []:
+        sig = _meal_formula_signature(m, strip_accents)
+        if sig and sig.get("format"):
+            sigs.append((m, sig))
+    pairs = []
+    for i in range(len(sigs)):
+        for j in range(i + 1, len(sigs)):
+            m_a, sig_a = sigs[i]
+            m_b, sig_b = sigs[j]
+            if sig_a["base"] != sig_b["base"]:
+                continue
+            if sig_a["format"] != sig_b["format"]:
+                continue
+            if sig_a["savory"] != sig_b["savory"]:
+                continue
+            shared = sig_a["accompaniments"] & sig_b["accompaniments"]
+            if len(shared) >= 2:
+                pairs.append((m_a, m_b, shared))
+    return pairs
+
+
 def build_variety_report(plan: dict, user_staples: set = None) -> dict:
     """[P3-VARIETY · 2026-06-13] Reporte ADVISORY de variedad/pertinencia cultural (FS5):
     cuenta apariciones de huevo, descriptor 'cremoso', ingredientes premium, y platos-base
@@ -20294,6 +20396,7 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
     total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = sweet_savory_clash = 0
     same_day_protein_repeats = 0
+    same_day_formula_repeats = 0  # [P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02]
     meals_per_day_max = 0  # [P2-VARIETY-HIGH-MEALCOUNT-RELAX] mayor nº de comidas en un día (relaja gates en 5-6 comidas)
     # [P2-CROSSDAY-PREP-DIVERSITY · 2026-07-01] (audit creatividad G5) preparación → set de días en que aparece.
     # Antes NO existía medida de diversidad de PREPARACIONES dentro del plan: 7 cenas "a la plancha" o 5
@@ -20381,6 +20484,14 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
                     continue
                 same_day_protein_repeats += 1
                 issues.append(f"Día {day.get('day', '?')}: proteína '{_plabel}' en {n} comidas el mismo día (repetición)")
+        # [P1-SAME-DAY-FORMULA-REPEAT · 2026-08-02] misma BASE+FORMATO+≥2 acompañantes el mismo
+        # día (ver comentario arriba de `_FORMULA_BASE_TOKENS`). NO staple-aware a propósito.
+        for _m_a, _m_b, _shared in _same_day_formula_repeat_pairs(meals, strip_accents):
+            same_day_formula_repeats += 1
+            issues.append(
+                f"Día {day.get('day', '?')}: '{_m_a.get('name', '?')}' y '{_m_b.get('name', '?')}' "
+                f"comparten fórmula (misma base + formato + acompañantes: {', '.join(sorted(_shared))})"
+            )
     egg_cap = max(3, round(total_meals * 0.25))  # ~2-3 en 12 comidas
     if egg_meals > egg_cap:
         issues.append(f"Huevo en {egg_meals}/{total_meals} comidas (cap sugerido {egg_cap})")
@@ -20486,6 +20597,7 @@ def build_variety_report(plan: dict, user_staples: set = None) -> dict:
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
             "same_day_protein_repeats": same_day_protein_repeats,
+            "same_day_formula_repeats": same_day_formula_repeats,
             "meals_per_day": meals_per_day_max,
             "cross_day_proteins": cross_day_proteins,
             "cross_day_preps": cross_day_preps,
