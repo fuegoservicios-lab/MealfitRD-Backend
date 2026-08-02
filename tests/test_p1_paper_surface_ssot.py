@@ -46,9 +46,17 @@ _HEADER_JSX = _FRONTEND / "src" / "components" / "layout" / "Header.jsx"
 #   /about         — ídem.
 # `MARKETING_ROUTES` NO se tocó: gobierna el header de 19 patrones de ruta y
 # repuntarla dejaría 13 rutas sin nav ni CTA.
+# [P1-PAPER-LEGAL · 2026-08-02] +9 legales. El footer de las 10 rutas de papel
+# enlaza a TODAS ellas: el pliego terminaba en una tarjeta glass sobre un
+# degradado azulado. `/cookies` entra aunque NO renderice `LegalPages` (es un
+# `<Navigate to="/privacy">`, P3-COOKIES-MERGE, y por eso tampoco está en
+# `LEGAL_PATHS`): el boot script corre ANTES de que React resuelva el redirect,
+# así que sin ella una carga en frío de /cookies pinta un frame oscuro.
 _EXPECTED_PAPER = [
     "/", "/precios", "/como-funciona", "/funciones", "/precision", "/motor",
     "/research", "/novedades", "/supermercado", "/about",
+    "/privacy", "/terms", "/cookies", "/medical", "/data-protection",
+    "/ai-policy", "/refunds", "/acceptable-use", "/responsible-disclosure",
 ]
 # `/novedades/:slug` es DINÁMICA: ninguna lista exacta puede cubrirla sin
 # drift contra `data/news.js`. Va por prefijo, igual que `newsRoutes.js` ya

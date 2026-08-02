@@ -182,6 +182,17 @@ _PAPER_FILES = [
     # escáner queda apuntando al fichero para que reañadirlo sea un test rojo y
     # no un cambio silencioso — que es exactamente el riesgo (b) del spec §4.6.
     _FRONTEND_SRC / "data" / "news.js",
+    # [P1-PAPER-LEGAL · 2026-08-02] Las 9 páginas legales comparten UN módulo y
+    # UN jsx, y las 9 son superficie papel — así que su BASE se reescribió (no
+    # un bloque escopado) y el escáner los mira ENTEROS, igual que News/About.
+    # Es el fichero con más color literal que ha entrado a esta lista: 27 hex +
+    # 18 `rgb()` contra 12 `var()` antes de la reescritura (~79% literal), y su
+    # base no era oscura sino clara azulada — un `linear-gradient(135deg,
+    # #F8FAFC, #EFF6FF)` con tarjeta glass encima. Justo el caso que el remapeo
+    # global de tokens NO arrastra: sin este guard, cualquier trozo del
+    # degradado que sobreviviera a un merge volvería sin que nadie lo viera.
+    _FRONTEND_SRC / "pages" / "legal" / "LegalPages.module.css",
+    _FRONTEND_SRC / "pages" / "legal" / "LegalPages.jsx",
 ]
 
 # TODO(P2-PAPER-NO-INK): UNA exclusión temporal, verdadero positivo — NO
