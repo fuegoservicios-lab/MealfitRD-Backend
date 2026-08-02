@@ -56,6 +56,13 @@ TRACK_FREQ_ON_CHUNKED = _env_bool("MEALFIT_TRACK_FREQ_ON_CHUNKED", True)
 # `=1` restaura exactamente el comportamiento previo. Rollback sin redeploy.
 PANTRY_ROTATION_MIN_PROTEINS = max(1, min(3, _env_int("MEALFIT_PANTRY_ROTATION_MIN_PROTEINS", 2,
                                                       lambda v: 1 <= v <= 3)))
+# [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7) Lo extraído de la nevera
+# pasa por los MISMOS filtros de "puede ser base principal" que el sorteo (embutidos por goal,
+# baja densidad, curados en sal, frutas alto-IG en bariátrica) ANTES de decidir si sostiene la
+# rotación. Sin esto, una nevera de salami + longaniza se convertía en la base OBLIGATORIA de los
+# 3 días con `cycle_locked` puesto → rechazo clínico determinista y retries quemados.
+# `False` restaura exactamente el comportamiento previo. Rollback sin redeploy.
+PANTRY_FLOOR_CLINICAL_FILTER = _env_bool("MEALFIT_PANTRY_FLOOR_CLINICAL_FILTER", True)
 # [P2-LIGHT-PROTEIN-SEED · 2026-07-29] (audit solver+seeder v4) Sortea el ancla proteica de
 # desayuno/merienda (última categoría sin sorteo: 5 viñetas literales iguales para todos los planes).
 # Nace OFF esperando A/B — con el knob apagado el prompt queda BYTE-IDÉNTICO (bloque vacío).
@@ -244,6 +251,167 @@ _BARIATRIC_LOW_DENSITY_AS_MAIN = {
     "queso de freir", "queso blanco", "queso mozzarella",
     "queso de hoja", "queso parmesano", "queso cheddar", "queso gouda",
 }
+
+# ─────────── vocabularios clínicos del seeder (nivel módulo = SSOT único) ───────────
+# [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7) Estos cuatro
+# vocabularios vivían DENTRO de `get_deterministic_variety_prompt`, y dos de ellos dentro de un
+# `if` (`_SALT_CURED_PROTEIN_TOKENS` bajo `if _sb_penalty < 1.0`, `_HIGH_GI_FRUITS` bajo
+# `if _is_bariatric`), así que el bloque de la NEVERA —600 líneas más abajo, misma función— ni
+# siquiera podía leerlos sin arriesgar un `NameError`. Subirlos aquí es lo que permite que el
+# filtro de la nevera reuse los MISMOS conjuntos que los penalties del sorteo en vez de escribir
+# una quinta lista a mano (este repo ya arrastra cuatro copias del vocabulario curado y el
+# historial de drift que eso produce). Cero cambio de contenido en la subida.
+
+# Embutidos: procesados con sodio alto y grasas saturadas. Apropiados ocasionalmente en perfiles
+# 'balanced', contraindicados como base recurrente en ganancia muscular limpia / pérdida de grasa.
+_PROCESSED_MEAT_KEYWORDS = (
+    "salami", "longaniza", "jamón", "jamon", "chorizo",
+    "tocineta", "tocino", "salchichón", "salchichon", "salchicha",
+    "mortadela", "embutido",
+)
+# `_GOALS_PENALIZE_PROCESSED` NO sube aquí a propósito: sigue viviendo dentro de
+# `get_deterministic_variety_prompt`, junto al penalty del sorteo que decide con él y junto a
+# `_GOALS_FORCE_MAX_VARIETY`, que `test_p2_seeder_pairs_goals` valida contra `_MAIN_GOAL_ENUM`
+# leyendo el cuerpo de esa función. Por eso `_pantry_clinical_main_filter` recibe DECISIONES ya
+# tomadas (`penaliza_procesados` / `exige_densidad`) en vez de re-derivarlas: las dos condiciones
+# quedan escritas una al lado de la otra en el mismo cuerpo y no pueden drifear entre capas.
+# [P1-SODIUM-BOMB-POOL · 2026-07-05] Proteínas CURADAS EN SAL — la proteína ES sal: un solo día
+# con bacalao o salami revienta el techo OMS de 2000mg. Penalty universal en el sorteo (ver el
+# call site) y, desde P1-PANTRY-FLOOR-CLINICAL-FILTER, criterio del filtro de la nevera.
+_SALT_CURED_PROTEIN_TOKENS = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
+                              "mortadela", "tocino", "panceta", "longaniza", "chorizo",
+                              "salchicha", "embutido", "jamon")
+# [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] Frutas de ALTO índice glucémico: el revisor médico
+# rechazaba mango (clash) y guineo en porción grande por dumping (corr=5ffd78cf).
+_HIGH_GI_FRUITS = ("guineo", "banana", "mango", "uva", "pina", "platano", "melon", "sandia",
+                   "tamarindo")
+# [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] "Curado o embutido" como UN concepto, DERIVADO
+# de los dos vocabularios de arriba en vez de escrito por quinta vez. Los dos se solapan casi por
+# completo pero no del todo (`tocineta` solo está en el de embutidos), y una lista nueva a mano
+# garantizaría que la próxima incorporación entre en una y no en la otra.
+_CURED_OR_PROCESSED_TOKENS = tuple(sorted(
+    {strip_accents(str(t).lower()) for t in _SALT_CURED_PROTEIN_TOKENS}
+    | {strip_accents(str(t).lower()) for t in _PROCESSED_MEAT_KEYWORDS}
+))
+
+
+def _token_matches_wb(name, tokens) -> bool:
+    """¿`name` contiene alguno de `tokens` como PALABRA COMPLETA?
+
+    [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] Word-boundary, no subcadena. El repo lleva
+    13+ incidentes de esta clase (`"sal"`⊂`"Salami"`, `"res"`⊂`"fresas"`, `"pollo"`⊂`"repollo"`,
+    `"molida"`⊂`"linaza molida"`) y aquí hay uno REAL medido sobre el catálogo:
+    `"pina"` (token de «Piña», alto IG) ⊂ `"es**pina**cas"`. Un filtro por subcadena marcaría
+    las Espinacas como fruta de alto índice glucémico. Mismo patrón canónico que ya usan
+    `cpu_tasks.py`, el `fast_regex` de `constants.py` y `_pantry_pick` de este módulo:
+    `strip_accents` en los DOS lados + `\\b…\\b`."""
+    _n = strip_accents(str(name or "").lower())
+    if not _n:
+        return False
+    for t in (tokens or ()):
+        _t = strip_accents(str(t or "").lower()).strip()
+        if _t and re.search(r'\b' + re.escape(_t) + r'\b', _n):
+            return True
+    return False
+
+
+def _is_low_density_main(name, _is_bariatric: bool) -> bool:
+    """¿`name` es una proteína que NO debe ocupar el slot de proteína PRINCIPAL?
+
+    [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] Cuerpo subido desde el closure
+    `_should_replace_main` de `get_deterministic_variety_prompt` (que ahora delega aquí) para
+    que el filtro de la nevera aplique EXACTAMENTE el mismo criterio que el sorteo — eran las
+    dos mitades de la misma regla y solo una corría sobre lo extraído de la nevera.
+    Los dos sets son de EXACT-MATCH a propósito (P2-9 / P1-BARIATRIC-DENSE-ANCHOR: 'Yogurt' sí,
+    'Yogurt griego entero' no); solo los embutidos matchean por token — y ese match pasa de `in`
+    crudo a word-boundary. Medido sobre `DOMINICAN_PROTEINS` completo: cero divergencia entre los
+    dos operadores, así que es no-op para el sorteo (que solo ve nombres del catálogo) y cierra
+    la superficie de subcadena para el filtro de la nevera.
+    El parámetro se llama `_is_bariatric` para conservar intacto el anclaje textual de
+    `test_p1_bariatric_dense_anchor::test_branch_present_and_knob_reused`."""
+    _pl = strip_accents(str(name or "").lower())
+    if _pl in _LOW_DENSITY_AS_MAIN:
+        return True
+    if _is_bariatric and _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN:  # [P1-BARIATRIC-DENSE-ANCHOR] quesos-relleno
+        return True
+    if _is_bariatric and _token_matches_wb(_pl, _PROCESSED_MEAT_KEYWORDS):
+        return True
+    return False
+
+
+def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesados: bool = False,
+                                 exige_densidad: bool = False, is_bariatric: bool = False):
+    """[P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7)
+
+    Devuelve `(proteinas, frutas)` de la nevera que SÍ pueden ser BASE del día.
+
+    El seeder aplica sus penalties clínicos sobre los PESOS del sorteo (embutidos ×0.1 por goal,
+    curados en sal ×0.1 universal, reemplazo de mains de baja densidad para gain_muscle /
+    bariátrica, frutas alto-IG ×0.15). Cientos de líneas después el modo rotación REEMPLAZA el
+    pool por lo extraído de la nevera y activa `cycle_locked` ("NO SUGIERAS ALIMENTOS BASE
+    NUEVOS"): los penalties quedaban íntegramente bypaseados. Una nevera con «Salami
+    Dominicano» + «Longaniza» producía literalmente `['Salami Dominicano', 'Longaniza', 'Salami
+    Dominicano']` como bases obligatorias de los 3 días → rechazo determinista del revisor
+    clínico → el retry re-corre el seeder con la MISMA nevera → retries quemados. Misma clase
+    que P1-SODIUM-BOMB-POOL y P1-FRUIT-SEEDER-GATE-CONTRACT.
+
+    `penaliza_procesados` y `exige_densidad` los decide el CALLER, con las mismas condiciones
+    exactas que gobiernan los penalties del sorteo (que están escritos en el mismo cuerpo, unos
+    cientos de líneas más arriba). Re-derivarlas aquí crearía dos copias de la misma regla
+    clínica en capas distintas — justo el drift que este P-fix viene a cerrar.
+
+    Tres reglas, en este orden:
+
+      1. Goal que penaliza procesados (o perfil bariátrico) ⇒ embutidos y proteínas de baja
+         densidad salen del pool de MAINS. NO desaparecen de la nevera: el prompt de nevera
+         los sigue ofreciendo como acompañante/saborizante — solo dejan de ser la base del día.
+      2. 100% de lo extraído curado/embutido ⇒ pool de nevera VACÍO, para NINGÚN goal se activa
+         el lock. El presupuesto de sodio de la OMS no depende del objetivo, y un lock sobre
+         puros embutidos es el peor caso posible (obligatorio + irreparable por el LLM).
+      3. Espejo en frutas alto-IG SOLO si bariátrica, que es el único perfil donde hoy existe
+         ese penalty. No se inventa una regla nueva para otros perfiles.
+
+    Solo QUITA de lo que recibe (subconjunto ordenado): jamás puede reintroducir un alimento
+    que alergia/dieta/dislike ya excluyeron aguas arriba (`_pantry_pick` filtra contra los
+    `filtered_*`). Nunca reordena — la prioridad de ahorro de la nevera se conserva."""
+    _p = list(extracted_p or [])
+    _f = list(extracted_f or [])
+
+    # 1 · embutidos / baja densidad fuera del slot de MAIN. Cada mitad se aplica solo si el
+    #     caller la activó — extenderlas por cuenta propia (p.ej. sacar leguminosas también en
+    #     `lose_fat`, donde el sorteo NO las reemplaza) sería inventar una regla clínica nueva
+    #     por el camino en vez de cerrar el bypass.
+    if _p and (penaliza_procesados or exige_densidad):
+        _kept = [x for x in _p
+                 if not (penaliza_procesados and _token_matches_wb(x, _PROCESSED_MEAT_KEYWORDS))
+                 and not (exige_densidad and _is_low_density_main(x, is_bariatric))]
+        if len(_kept) < len(_p):
+            logger.info(
+                f"🩺 [P1-PANTRY-FLOOR-CLINICAL-FILTER] {len(_p) - len(_kept)} proteína(s) de la "
+                f"nevera fuera de las BASES clínicas"
+                f"{' (bariátrica)' if is_bariatric else ''}: "
+                f"{[x for x in _p if x not in _kept]} — siguen disponibles como acompañante.")
+            _p = _kept
+
+    # 2 · 100% curado/embutido ⇒ sin bases propias y sin lock, para cualquier goal
+    if _p and all(_token_matches_wb(x, _CURED_OR_PROCESSED_TOKENS) for x in _p):
+        logger.info(
+            f"🧂 [P1-PANTRY-FLOOR-CLINICAL-FILTER] la nevera solo aporta proteína curada/embutida "
+            f"({_p}) → NO sostiene la rotación: el pool se sortea completo y no se activa el "
+            f"cycle-lock (evita 3 días de embutido obligatorio).")
+        _p = []
+
+    # 3 · espejo de frutas alto-IG (solo bariátrica)
+    if _f and is_bariatric:
+        _kept_f = [x for x in _f if not _token_matches_wb(x, _HIGH_GI_FRUITS)]
+        if len(_kept_f) < len(_f):
+            logger.info(
+                f"🍌 [P1-PANTRY-FLOOR-CLINICAL-FILTER] {len(_f) - len(_kept_f)} fruta(s) de alto "
+                f"índice glucémico fuera de las asignadas por perfil bariátrico: "
+                f"{[x for x in _f if x not in _kept_f]}.")
+            _f = _kept_f
+
+    return _p, _f
 
 
 # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] El seeder y el gate de variedad hablaban vocabularios
@@ -801,11 +969,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # muscular limpia, pérdida de peso o mejora de salud cardiovascular.
     # Multiplicador 0.1 = 90% menos probabilidad de ser elegido (no eliminado:
     # puede aparecer ocasionalmente como variación cultural).
-    _PROCESSED_MEAT_KEYWORDS = (
-        "salami", "longaniza", "jamón", "jamon", "chorizo",
-        "tocineta", "tocino", "salchichón", "salchichon", "salchicha",
-        "mortadela", "embutido",
-    )
+    # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] `_PROCESSED_MEAT_KEYWORDS` vive ahora a
+    # nivel módulo (SSOT único): el filtro de la nevera de más abajo aplica el MISMO vocabulario
+    # que este penalty del sorteo, en vez de una quinta copia a mano.
     # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F28) Eran `"lose_weight"` y
     # `"health_improvement"`, ninguno en `_MAIN_GOAL_ENUM` ⇒ el penalty de embutidos solo aplicaba
     # a gain_muscle. `health_improvement` se ELIMINA en vez de remapearse: no tiene equivalente
@@ -900,9 +1066,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     except Exception:
         _sb_penalty = 0.1
     if _sb_penalty < 1.0:
-        _SALT_CURED_PROTEIN_TOKENS = ("bacalao", "arenque", "salami", "salchichon", "pepperoni",
-                                      "mortadela", "tocino", "panceta", "longaniza", "chorizo",
-                                      "salchicha", "embutido", "jamon")
+        # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] La tupla vivía AQUÍ dentro, o sea que
+        # con el knob en 1.0 ni siquiera existía; ahora es constante de módulo (SSOT único,
+        # compartida con el filtro de la nevera).
         _salt_penalized = 0
         for i, p in enumerate(available_proteins):
             p_norm = strip_accents(p.lower())
@@ -923,8 +1089,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # (guineo/mango/uva/piña/plátano) → prefiere bajo-IG (fresa/lechosa/mandarina/manzana). El revisor médico
         # rechazaba mango (clash) y guineo en porción grande por dumping (corr=5ffd78cf). Penalty ×0.15 (graceful:
         # si solo hay alto-IG disponible, igual se eligen). tooltip-anchor: P1-BARIATRIC-PROTEIN-DENSITY
+        # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] `_HIGH_GI_FRUITS` subida a nivel módulo
+        # (SSOT único): el espejo del filtro de la nevera usa la MISMA tupla.
         if _is_bariatric:
-            _HIGH_GI_FRUITS = ("guineo", "banana", "mango", "uva", "pina", "platano", "melon", "sandia", "tamarindo")
             for _i, _f in enumerate(available_fruits):
                 if any(_g in strip_accents(_f.lower()) for _g in _HIGH_GI_FRUITS):
                     fruit_weights[_i] *= 0.15
@@ -985,15 +1152,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if (_main_goal == "gain_muscle" or _is_bariatric) and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
         # [P1-BARIATRIC-PROTEIN-DENSITY] para bariátrica el set "reemplazable como main" incluye TAMBIÉN los
         # embutidos grasos (no solo baja densidad) → garantiza proteína animal magra en las comidas principales.
+        # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] Cuerpo subido a `_is_low_density_main`
+        # (nivel módulo). Este closure queda como delegación para que el filtro de la nevera
+        # aplique EXACTAMENTE el mismo criterio: eran las dos mitades de una sola regla y solo
+        # esta corría, así que lo extraído de la nevera la esquivaba entera.
         def _should_replace_main(_p):
-            _pl = strip_accents(_p.lower())
-            if _pl in _LOW_DENSITY_AS_MAIN:
-                return True
-            if _is_bariatric and _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN:  # [P1-BARIATRIC-DENSE-ANCHOR] quesos-relleno
-                return True
-            if _is_bariatric and any(_kw in _pl for _kw in _PROCESSED_MEAT_KEYWORDS):
-                return True
-            return False
+            return _is_low_density_main(_p, _is_bariatric)
         _low_mains = [p for p in unique_proteins if _should_replace_main(p)]
         if _low_mains:
             _hd_pool = [(p, w) for p, w in zip(available_proteins, protein_weights)
@@ -1240,6 +1404,27 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             if _f and _f not in extracted_f:
                 extracted_f.append(_f)
 
+        # [P1-PANTRY-FLOOR-CLINICAL-FILTER · 2026-08-02] (audit solver+seeder v7) Lo extraído pasa
+        # por los MISMOS filtros de "puede ser base principal" que el sorteo — que corren 400
+        # líneas más arriba y solo tocan PESOS, así que el reemplazo del pool por la nevera los
+        # bypaseaba enteros. Corre AQUÍ, ANTES del `len(extracted_p) >= _min_p` de abajo, a
+        # propósito: un pool que queda corto tras filtrar cae por la rama que YA existe (nevera
+        # primero + sorteo completa, sin lock) en vez de por una rama nueva. Los embutidos
+        # filtrados NO desaparecen de la nevera — dejan de ser candidatos a base del día y
+        # siguen ofrecidos como acompañante por el prompt de nevera. Rollback:
+        # MEALFIT_PANTRY_FLOOR_CLINICAL_FILTER=false.
+        # Las dos condiciones son COPIA LITERAL de las que gobiernan los penalties del sorteo
+        # (`_main_goal in _GOALS_PENALIZE_PROCESSED or _is_bariatric` para el ×0.1 de embutidos;
+        # `_main_goal == "gain_muscle" or _is_bariatric` + su knob para el reemplazo de mains de
+        # baja densidad), a propósito y sin ampliarlas: el bug era que la nevera las esquivaba,
+        # no que fueran insuficientes.
+        if PANTRY_FLOOR_CLINICAL_FILTER:
+            extracted_p, extracted_f = _pantry_clinical_main_filter(
+                extracted_p, extracted_f,
+                penaliza_procesados=(_main_goal in _GOALS_PENALIZE_PROCESSED or _is_bariatric),
+                exige_densidad=((_main_goal == "gain_muscle" or _is_bariatric)
+                                and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True)),
+                is_bariatric=_is_bariatric)
 
         # [P2-PANTRY-ROTATION-FLOOR · 2026-07-29] (audit solver+seeder v4) Esto REEMPLAZABA los pools
         # por lo extraído de la nevera y forzaba `cycle_locked = True` INCONDICIONALMENTE — sin sorteo,
