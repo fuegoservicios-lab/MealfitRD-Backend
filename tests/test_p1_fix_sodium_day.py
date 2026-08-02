@@ -19,6 +19,11 @@ Cobertura:
   (e) gating espejado a `/swap-meal` (parser) — mismo par `verify_api_quota` + RateLimiter
       propio.
   (f) marker anchor.
+  (g) [P1-FIX-SODIUM-DAY-HONEST] `micro_worst_day_ceiling` NO es sodio-exclusivo — si el
+      `high` del peor día persistido (`micronutrient_report.per_day_ceilings`) excluye
+      sodio → `ceiling_not_sodium` sin tocar nada (ni swap, ni persist, ni cobro); si lo
+      incluye, el flujo de arreglo sigue igual; si el SSOT no marca nada, cae al chequeo
+      de sodio existente sin bloquear.
 
 Harness: los mismos boundaries que el resto de la suite de swap monkeypatchea
 (`db_core.execute_sql_query`, `db.get_user_profile`, `routers.plans.swap_meal`,
@@ -312,7 +317,10 @@ def test_no_day_over_ceiling_touches_nothing(monkeypatch, patched_infra):
     assert result == {
         "fixed": False,
         "code": "no_day_over_ceiling",
-        "message": "Ya está bajo el techo de sodio — quizá el panel está por refrescar.",
+        "message": (
+            "Ningún día de tu plan está sobre el techo de sodio ahora mismo — quizá el "
+            "panel está por refrescar."
+        ),
     }
     assert swap_called == []
     assert persist_called == []
@@ -375,3 +383,127 @@ def test_swap_ai_unavailable_soft_fails_without_charge(monkeypatch, patched_infr
     assert result["fixed"] is False
     assert result["error_code"] == "swap_ai_unavailable"
     assert charge_called == []
+
+
+# ---------------------------------------------------------------------------
+# [P1-FIX-SODIUM-DAY-HONEST · 2026-08-02] `micro_worst_day_ceiling` NO es sodio-exclusivo:
+# `per_day_ceilings.worst_day.high` puede listar free_sugars_g/saturated_fat_g/potassium_mg
+# (dyslipidemia/renal) SIN sodio. El botón solo debe "arreglar" cuando sodio es de verdad
+# parte del problema del PEOR día — leído de la MISMA fuente persistida que ya leyó
+# `_maybe_mark_panel_degraded` (`plan['micronutrient_report']`), no un recompute nuevo.
+# ---------------------------------------------------------------------------
+def test_ceiling_not_sodium_when_worst_day_high_excludes_sodium(monkeypatch, patched_infra):
+    """Día 1 (índice 1) SÍ mide 1400mg de sodio con la tabla sintética (sobre el techo de
+    1000) — sin el gate, el flujo actual lo 'arreglaría'. Pero el `micronutrient_report`
+    persistido dice que el techo roto de ese día es `free_sugars_g`, NO sodio → debe
+    responder `ceiling_not_sodium` sin tocar nada (ni swap, ni persist, ni cobro)."""
+    patched_infra.plan_data["micronutrient_report"] = {
+        "per_day_ceilings": {
+            "flagged": True,
+            "worst_day": {"day_index": 1, "high": ["free_sugars_g"]},
+        },
+    }
+    swap_called = []
+    persist_called = []
+    charge_called = []
+    monkeypatch.setattr(_rp, "swap_meal", lambda mf: swap_called.append(mf))
+    monkeypatch.setattr(_rp, "api_swap_meal_persist", lambda *a, **k: persist_called.append(1))
+    monkeypatch.setattr(_rp, "log_api_usage", lambda *a, **k: charge_called.append(1))
+
+    result = _call_endpoint()
+
+    assert result["fixed"] is False
+    assert result["code"] == "ceiling_not_sodium"
+    assert result["nutrients"] == ["free_sugars_g"]
+    assert "Azúcares añadidos" in result["message"]
+    assert "no por sodio" in result["message"]
+    assert swap_called == [], "el chef NUNCA debe invocarse — el problema no es sodio"
+    assert persist_called == [], "el plan debe quedar INTACTO"
+    assert charge_called == [], "no se cobra crédito por un no-op"
+    # Un solo SELECT — el gate honesto corta ANTES de cualquier re-lectura.
+    assert patched_infra.select_calls == 1
+
+
+def test_ceiling_not_sodium_translates_multiple_nutrients_es_do(monkeypatch, patched_infra):
+    """Espejo del caso renal+dyslipidemia real: potasio (cap renal) y grasa saturada
+    (dyslipidemia) pueden co-ocurrir sin sodio. Las etiquetas vienen del MISMO `_LABELS`
+    que usa el panel — cero tabla de traducción duplicada."""
+    patched_infra.plan_data["micronutrient_report"] = {
+        "per_day_ceilings": {
+            "flagged": True,
+            "worst_day": {"day_index": 1, "high": ["potassium_mg", "saturated_fat_g"]},
+        },
+    }
+    monkeypatch.setattr(_rp, "swap_meal", lambda mf: pytest.fail("no debe invocarse"))
+
+    result = _call_endpoint()
+
+    assert result["code"] == "ceiling_not_sodium"
+    assert result["nutrients"] == ["potassium_mg", "saturated_fat_g"]
+    assert "Potasio" in result["message"] and "Grasa saturada" in result["message"]
+
+
+def test_sodium_in_high_list_still_proceeds_to_fix(monkeypatch, patched_infra):
+    """Cuando sodio SÍ está en el `high` del peor día (solo o acompañado de otros
+    nutrientes), el flujo de arreglo sigue exactamente igual que antes del gate honesto."""
+    patched_infra.plan_data["micronutrient_report"] = {
+        "per_day_ceilings": {
+            "flagged": True,
+            "worst_day": {"day_index": 1, "high": ["sodium_mg", "free_sugars_g"]},
+        },
+    }
+    persist_calls = []
+
+    def _fake_swap_meal(meal_form):
+        return {
+            "name": "Camarones al Ajillo con Vegetales Frescos",
+            "cals": 450, "prep_time": 20,
+            "recipe": ["Saltea los camarones con ajo y aceite de oliva."],
+            "ingredients": ["150g Camarones frescos"],
+            "ingredients_raw": ["150g Camarones frescos"],
+        }
+
+    def _fake_persist(plan_id, body, verified_user_id=None):
+        persist_calls.append(body)
+        d = patched_infra.plan_data["days"][body["day_index"]]
+        d["meals"][body["meal_index"]] = body["new_meal"]
+        return {"success": True}
+
+    monkeypatch.setattr(_rp, "swap_meal", _fake_swap_meal)
+    monkeypatch.setattr(_rp, "api_swap_meal_persist", _fake_persist)
+
+    result = _call_endpoint()
+
+    assert result["fixed"] is True
+    assert result["day"] == 1
+    assert len(persist_calls) == 1
+
+
+def test_gate_is_noop_when_worst_day_not_flagged(monkeypatch, patched_infra):
+    """`per_day_ceilings.flagged=False` (o ausente) → el gate honesto no bloquea nada; el
+    flujo cae al chequeo de sodio existente (backward-compat con planes sin el reporte, o
+    con el reporte diciendo que hoy no hay ningún techo roto)."""
+    patched_infra.plan_data["micronutrient_report"] = {
+        "per_day_ceilings": {"flagged": False, "worst_day": {"day_index": 0, "high": []}},
+    }
+    persist_calls = []
+    monkeypatch.setattr(_rp, "swap_meal", lambda mf: {
+        "name": "Nuevo plato", "cals": 450, "recipe": [], "ingredients": [], "ingredients_raw": [],
+    })
+    monkeypatch.setattr(_rp, "api_swap_meal_persist", lambda plan_id, body, verified_user_id=None: (
+        persist_calls.append(body) or {"success": True}
+    ))
+
+    result = _call_endpoint()
+    assert result["fixed"] is True, "el gate no debe bloquear cuando el SSOT no marca nada"
+    assert len(persist_calls) == 1
+
+
+def test_no_day_over_ceiling_message_scoped_to_sodium_now(monkeypatch, patched_infra):
+    """El mensaje del no-op honesto (P1-FIX-SODIUM-DAY-HONEST) habla del techo de sodio
+    AHORA MISMO ('ningún día... está sobre el techo de sodio ahora mismo'), sin implicar
+    que sodio fuera la única causa posible del banner original."""
+    monkeypatch.setattr(go, "_sodium_day_ceiling_mg_for_banner", lambda form_data=None: 5000.0)
+    result = _call_endpoint()
+    assert result["code"] == "no_day_over_ceiling"
+    assert "techo de sodio ahora mismo" in result["message"]

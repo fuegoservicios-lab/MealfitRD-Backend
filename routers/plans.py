@@ -6923,12 +6923,19 @@ def api_fix_sodium_day(
     cobrado post-éxito) + ``_FIX_SODIUM_DAY_LIMITER``.
 
     Flujo:
+      0. [P1-FIX-SODIUM-DAY-HONEST] `micro_worst_day_ceiling` (el motivo que gatea el botón
+         en el banner) NO es sodio-exclusivo — el `per_day_ceilings.worst_day.high` persistido
+         (`plan['micronutrient_report']`, misma fuente que leyó `_maybe_mark_panel_degraded`
+         para poner ese banner) puede listar `free_sugars_g`/`saturated_fat_g`/`potassium_mg`
+         SIN sodio. Si el peor día tiene `high` no vacío y sodio NO está en él → 200 soft
+         ``code=ceiling_not_sodium`` + ``nutrients=[...]`` (los reales) — cero escritura, el
+         plan queda intacto: este botón no finge arreglar un nutriente que no es sodio.
       1. Lee el plan (ownership). Techo = MISMA fuente que el banner
          (``_sodium_day_ceiling_mg_for_banner``, no el knob del autofix
          determinista — dos SSOT hermanos que pueden driftear); depende de
          género/edad/embarazo, así que el perfil SÍ se enriquece server-side
          (I2/P0-AGENT-1) incluso en el camino no-op, solo para calcular el
-         techo correcto. Si ningún día excede el techo → 200 soft
+         techo correcto. Si ningún día excede el techo de SODIO → 200 soft
          ``code=no_day_over_ceiling`` — cero escritura (ni swap ni persist).
       2. Dentro del peor día, la comida con MÁS sodio (mismo estimador).
       3. Invoca ``swap_meal`` (la MISMA función que ``/swap-meal``) con
@@ -6958,9 +6965,11 @@ def api_fix_sodium_day(
 
     Returns:
       ``{fixed, day, old_meal, new_meal, sodio_antes_mg, sodio_despues_mg,
-      day_under_ceiling}`` en éxito; ``{fixed:false, code:"no_day_over_ceiling",
-      message}`` cuando no hay nada que arreglar; ``{fixed:false, day,
-      old_meal, error_code, error_message}`` en soft-fail del chef.
+      day_under_ceiling}`` en éxito; ``{fixed:false, code:"ceiling_not_sodium",
+      nutrients:[...], message}`` cuando el techo roto del peor día NO es sodio;
+      ``{fixed:false, code:"no_day_over_ceiling", message}`` cuando no hay nada
+      que arreglar; ``{fixed:false, day, old_meal, error_code, error_message}``
+      en soft-fail del chef.
 
     Tooltip-anchor: P1-FIX-SODIUM-DAY.
     """
@@ -6986,6 +6995,41 @@ def api_fix_sodium_day(
             plan_data = _json.loads(plan_data)
         days = plan_data.get("days")
 
+        # [P1-FIX-SODIUM-DAY-HONEST · 2026-08-02] (finding de review) `micro_worst_day_ceiling`
+        # NO es sodio-exclusivo: `per_day_ceilings.worst_day.high` (micronutrients.py) puede listar
+        # `free_sugars_g`, `saturated_fat_g` (dyslipidemia) o `potassium_mg` (renal, cap en vez de
+        # piso) SIN sodio — `_maybe_mark_panel_degraded` asigna la razón del banner sin filtrar por
+        # nutriente. Antes de decidir CUALQUIER cosa, leemos la MISMA fuente que ese banner ya
+        # consultó (`plan['micronutrient_report']`, persistida — mismo read que
+        # `_maybe_mark_panel_degraded`, NO un recompute que podría discrepar del día que el banner
+        # ya le mostró al usuario): si el peor día SÍ tiene un `high` no vacío y sodio NO está en
+        # él, este botón "arregla" el nutriente equivocado — soft-fail honesto en vez de fingir que
+        # ya se resolvió. Si sodio SÍ está (solo o junto a otros) el flujo sigue igual que antes.
+        try:
+            from micronutrients import _LABELS as _NUTRIENT_LABELS_ES
+        except Exception:
+            _NUTRIENT_LABELS_ES = {}
+        _mn_persisted = plan_data.get("micronutrient_report")
+        _pdc_persisted = _mn_persisted.get("per_day_ceilings") if isinstance(_mn_persisted, dict) else None
+        if isinstance(_pdc_persisted, dict) and _pdc_persisted.get("flagged"):
+            _worst_high = list((_pdc_persisted.get("worst_day") or {}).get("high") or [])
+            if _worst_high and "sodium_mg" not in _worst_high:
+                _nutrient_names = [str(_NUTRIENT_LABELS_ES.get(n, n)) for n in _worst_high]
+                logger.info(
+                    f"🧂 [P1-FIX-SODIUM-DAY-HONEST] peor día sobre techo por {_worst_high} "
+                    f"(SIN sodio) → ceiling_not_sodium, sin tocar el plan."
+                )
+                return {
+                    "fixed": False,
+                    "code": "ceiling_not_sodium",
+                    "nutrients": _worst_high,
+                    "message": (
+                        f"El aviso de este día es por {', '.join(_nutrient_names)}, no por sodio "
+                        "— este arreglo no aplica. Usa Cambiar Plato en ese día si quieres "
+                        "ajustarlo."
+                    ),
+                }
+
         # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet/biométricos
         # SERVER-SIDE (nunca del body — I2/P0-AGENT-1) ANTES de calcular el techo (edad/sexo
         # afectan el DRI) y antes de construir el meal_form del swap.
@@ -7010,8 +7054,12 @@ def api_fix_sodium_day(
             return {
                 "fixed": False,
                 "code": "no_day_over_ceiling",
+                # [P1-FIX-SODIUM-DAY-HONEST] "quizá el panel refresca" ya NO implica que sodio
+                # fuera la única causa posible del banner (podía ser azúcar/grasa/potasio, cubierto
+                # arriba) — este mensaje es honesto específicamente sobre el SODIO medido ahora.
                 "message": (
-                    "Ya está bajo el techo de sodio — quizá el panel está por refrescar."
+                    "Ningún día de tu plan está sobre el techo de sodio ahora mismo — quizá el "
+                    "panel está por refrescar."
                 ),
             }
 
