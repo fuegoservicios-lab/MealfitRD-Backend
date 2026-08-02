@@ -161,6 +161,27 @@ _PAPER_FILES = [
     _FRONTEND_SRC / "pages" / "PrecisionPage.jsx",
     _FRONTEND_SRC / "pages" / "Engine.jsx",
     _FRONTEND_SRC / "pages" / "PricingPage.jsx",
+    # [P1-PAPER-SURFACE-EXTEND · 2026-08-02] Las 4 rutas nuevas de la superficie
+    # papel (/research, /novedades + /novedades/<slug>, /supermercado, /about).
+    # Sus módulos son EXCLUSIVOS de rutas papel, así que su base se reescribió en
+    # vez de escoparse — y por eso el escáner los mira enteros, no solo un bloque.
+    # `ResearchPage.jsx` comparte `HowItWorksPage.module.css` (ya escaneado); se
+    # añade su .jsx por el mismo motivo que los otros 6: los acentos históricos de
+    # este repo vivían en el JSX, no en el CSS.
+    _FRONTEND_SRC / "pages" / "ResearchPage.jsx",
+    _FRONTEND_SRC / "pages" / "News.module.css",
+    _FRONTEND_SRC / "pages" / "NewsPage.jsx",
+    _FRONTEND_SRC / "pages" / "NewsArticlePage.jsx",
+    _FRONTEND_SRC / "pages" / "Supermarket.module.css",
+    _FRONTEND_SRC / "pages" / "SupermarketPage.jsx",
+    _FRONTEND_SRC / "pages" / "AboutPage.module.css",
+    _FRONTEND_SRC / "pages" / "AboutPage.jsx",
+    # `data/news.js` NO es CSS ni JSX, pero es de donde venía el color de
+    # /novedades: el campo `art: [hex, hex, hex]` alimentaba los blobs de
+    # `NewsArt`. El componente se borró (0 consumidores) y el campo con él; el
+    # escáner queda apuntando al fichero para que reañadirlo sea un test rojo y
+    # no un cambio silencioso — que es exactamente el riesgo (b) del spec §4.6.
+    _FRONTEND_SRC / "data" / "news.js",
 ]
 
 # TODO(P2-PAPER-NO-INK): UNA exclusión temporal, verdadero positivo — NO
