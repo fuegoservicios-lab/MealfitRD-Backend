@@ -40,15 +40,17 @@ def test_gate_invokes_evaluator_knob_gated(swap_body: str):
 
 
 def test_gate_runs_before_quota_and_llm(swap_body: str):
-    """El gate (return soft-fail) DEBE preceder a `log_api_usage` y `swap_meal(`."""
+    """El gate (return soft-fail) DEBE preceder a `log_api_usage` y `swap_meal_with_consent(`.
+    [P1-PANTRY-STRICT-CONSENT · 2026-08-02] la llamada directa a `swap_meal` pasó al wrapper
+    `swap_meal_with_consent` — mismo contrato de ordering, nombre nuevo."""
     eval_idx = swap_body.find("evaluate_pantry_sufficiency")
     block_return_idx = swap_body.find("pantry_insufficient_for_goal")
     quota_idx = swap_body.find('log_api_usage(user_id, "llm_swap_meal")')
-    swap_idx = swap_body.find("swap_meal(data)")
+    swap_idx = swap_body.find("swap_meal_with_consent(data)")
     assert eval_idx > 0 and block_return_idx > 0, "gate ausente"
-    assert quota_idx > 0 and swap_idx > 0, "anclas log_api_usage/swap_meal ausentes"
+    assert quota_idx > 0 and swap_idx > 0, "anclas log_api_usage/swap_meal_with_consent ausentes"
     assert eval_idx < quota_idx, "el gate corre DESPUÉS de log_api_usage → descontaría cuota indebidamente"
-    assert eval_idx < swap_idx, "el gate corre DESPUÉS de swap_meal → llamaría al LLM indebidamente"
+    assert eval_idx < swap_idx, "el gate corre DESPUÉS de swap_meal_with_consent → llamaría al LLM indebidamente"
     assert block_return_idx < quota_idx, "el return de insuficiencia NO precede al cobro de cuota"
 
 

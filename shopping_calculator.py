@@ -3067,6 +3067,29 @@ def cheapest_supermarket_variant(item_name: str) -> dict | None:
         return None
 
 
+def estimate_new_ingredient_price_rd(item_name: str, qty_grams: float) -> float | None:
+    """[P1-PANTRY-STRICT-CONSENT · 2026-08-02] Precio aproximado RD$ de UN ingrediente
+    nuevo (fuera de la Nevera física) para el mensaje de consentimiento de
+    "Nevera estricta" (swap/regen-day/fix-sodium-day). Reusa el MISMO piso de precios
+    del Supermercado RD que ya cotiza la lista de compras (`cheapest_supermarket_variant`
+    + `_variant_price_per_g`) — NO un estimador nuevo, para no driftear de lo que el
+    usuario ve en la lista. Fail-open: `None` si el catálogo no tiene match o falta
+    peso/precio — el caller omite el precio del mensaje en vez de inventar uno.
+    Tooltip-anchor: P1-PANTRY-STRICT-CONSENT."""
+    try:
+        if not item_name or not qty_grams or float(qty_grams) <= 0:
+            return None
+        variant = cheapest_supermarket_variant(item_name)
+        if not variant:
+            return None
+        per_g = _variant_price_per_g(variant)
+        if not per_g or per_g <= 0:
+            return None
+        return round(per_g * float(qty_grams), 2)
+    except Exception:
+        return None
+
+
 # [P1-BUDGET-BRAND-PREMIUM · 2026-07-07] (decisión de producto del owner, ablanda levemente P2-H): en
 # el banner 'excedido' — y SOLO ahí, este helper solo corre en ese caso — informar cuánto CUESTA la
 # elección de marcas premium del usuario vs la opción más económica, como UN total accionable ("RD$X de

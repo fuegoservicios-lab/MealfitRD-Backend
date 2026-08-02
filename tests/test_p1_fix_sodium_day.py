@@ -101,8 +101,11 @@ def test_gating_mirrors_swap_meal():
 
 def test_charges_credit_only_after_swap_success(endpoint_body):
     """Espejo de P2-SWAP-CHARGE-ON-SUCCESS: log_api_usage debe ocurrir DESPUÉS de
-    `swap_meal(meal_form)`, nunca antes (si el LLM falla, no se cobra)."""
-    i_swap = endpoint_body.find("new_meal = swap_meal(meal_form)")
+    `swap_meal_with_consent(meal_form)`, nunca antes (si el LLM falla, no se cobra).
+    [P1-PANTRY-STRICT-CONSENT · 2026-08-02] la llamada directa a `swap_meal` pasó a
+    `swap_meal_with_consent` (el wrapper de "Nevera estricta + consentimiento") — mismo
+    contrato de ordering, nombre nuevo."""
+    i_swap = endpoint_body.find("new_meal = swap_meal_with_consent(meal_form)")
     i_charge = endpoint_body.find('log_api_usage(verified_user_id, "llm_fix_sodium_day")')
     assert -1 not in (i_swap, i_charge)
     assert i_swap < i_charge
@@ -273,7 +276,7 @@ def test_happy_path_fixes_worst_meal_of_worst_day(monkeypatch, patched_infra):
         d["meals"][body["meal_index"]] = body["new_meal"]
         return {"success": True}
 
-    monkeypatch.setattr(_rp, "swap_meal", _fake_swap_meal)
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", _fake_swap_meal)
     monkeypatch.setattr(_rp, "api_swap_meal_persist", _fake_persist)
 
     result = _call_endpoint()
@@ -317,7 +320,7 @@ def test_no_day_over_ceiling_touches_nothing(monkeypatch, patched_infra):
 
     swap_called = []
     persist_called = []
-    monkeypatch.setattr(_rp, "swap_meal", lambda mf: swap_called.append(mf))
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", lambda mf: swap_called.append(mf))
     monkeypatch.setattr(_rp, "api_swap_meal_persist", lambda *a, **k: persist_called.append(1))
 
     result = _call_endpoint()
@@ -342,7 +345,7 @@ def test_no_day_over_ceiling_touches_nothing(monkeypatch, patched_infra):
 def test_swap_retries_exhausted_leaves_plan_intact(monkeypatch, patched_infra):
     persist_called = []
     charge_called = []
-    monkeypatch.setattr(_rp, "swap_meal", lambda mf: (_ for _ in ()).throw(
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", lambda mf: (_ for _ in ()).throw(
         ValueError("SWAP_LLM_RETRIES_EXHAUSTED: el chef IA no pudo generar una alternativa.")
     ))
     monkeypatch.setattr(_rp, "api_swap_meal_persist", lambda *a, **k: persist_called.append(1))
@@ -365,7 +368,7 @@ def test_swap_retries_exhausted_leaves_plan_intact(monkeypatch, patched_infra):
 
 
 def test_swap_clinical_violation_soft_fails(monkeypatch, patched_infra):
-    monkeypatch.setattr(_rp, "swap_meal", lambda mf: (_ for _ in ()).throw(
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", lambda mf: (_ for _ in ()).throw(
         ValueError("CLINICAL_VIOLATION: alérgeno detectado")
     ))
     persist_called = []
@@ -383,7 +386,7 @@ def test_swap_ai_unavailable_soft_fails_without_charge(monkeypatch, patched_infr
     def _raise_cb(mf):
         raise LLMCircuitBreakerOpen("breaker open")
 
-    monkeypatch.setattr(_rp, "swap_meal", _raise_cb)
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", _raise_cb)
     charge_called = []
     monkeypatch.setattr(_rp, "log_api_usage", lambda *a, **k: charge_called.append(1))
 
@@ -414,7 +417,7 @@ def test_ceiling_not_sodium_when_worst_day_high_excludes_sodium(monkeypatch, pat
     swap_called = []
     persist_called = []
     charge_called = []
-    monkeypatch.setattr(_rp, "swap_meal", lambda mf: swap_called.append(mf))
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", lambda mf: swap_called.append(mf))
     monkeypatch.setattr(_rp, "api_swap_meal_persist", lambda *a, **k: persist_called.append(1))
     monkeypatch.setattr(_rp, "log_api_usage", lambda *a, **k: charge_called.append(1))
 
@@ -442,7 +445,7 @@ def test_ceiling_not_sodium_translates_multiple_nutrients_es_do(monkeypatch, pat
             "worst_day": {"day_index": 1, "high": ["potassium_mg", "saturated_fat_g"]},
         },
     }
-    monkeypatch.setattr(_rp, "swap_meal", lambda mf: pytest.fail("no debe invocarse"))
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", lambda mf: pytest.fail("no debe invocarse"))
 
     result = _call_endpoint()
 
@@ -477,7 +480,7 @@ def test_sodium_in_high_list_still_proceeds_to_fix(monkeypatch, patched_infra):
         d["meals"][body["meal_index"]] = body["new_meal"]
         return {"success": True}
 
-    monkeypatch.setattr(_rp, "swap_meal", _fake_swap_meal)
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", _fake_swap_meal)
     monkeypatch.setattr(_rp, "api_swap_meal_persist", _fake_persist)
 
     result = _call_endpoint()
@@ -495,7 +498,7 @@ def test_gate_is_noop_when_worst_day_not_flagged(monkeypatch, patched_infra):
         "per_day_ceilings": {"flagged": False, "worst_day": {"day_index": 0, "high": []}},
     }
     persist_calls = []
-    monkeypatch.setattr(_rp, "swap_meal", lambda mf: {
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", lambda mf: {
         "name": "Nuevo plato", "cals": 450, "recipe": [], "ingredients": [], "ingredients_raw": [],
     })
     monkeypatch.setattr(_rp, "api_swap_meal_persist", lambda plan_id, body, verified_user_id=None: (

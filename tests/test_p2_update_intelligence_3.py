@@ -72,13 +72,16 @@ def test_p2_3_ledger_decrement_on_kept_meals():
 
 # ── P2-4: swap cobra post-éxito + catch del breaker ───────────────────────────
 def test_p2_4_swap_charges_after_success():
+    """[P1-PANTRY-STRICT-CONSENT · 2026-08-02] la llamada directa a `swap_meal` pasó al
+    wrapper `swap_meal_with_consent` ("Nevera estricta + consentimiento") — mismo contrato
+    de ordering (cobro DESPUÉS del swap), nombre nuevo."""
     src = _func_src(PLANS, "api_swap_meal")
     assert "MEALFIT_SWAP_CHARGE_ON_SUCCESS_ONLY" in src
-    assert "result = swap_meal(data)" in src
-    # el cobro post-éxito debe aparecer DESPUÉS de la llamada a swap_meal
-    swap_call = src.index("result = swap_meal(data)")
+    assert "result = swap_meal_with_consent(data)" in src
+    # el cobro post-éxito debe aparecer DESPUÉS de la llamada a swap_meal_with_consent
+    swap_call = src.index("result = swap_meal_with_consent(data)")
     last_charge = src.rfind('log_api_usage(user_id, "llm_swap_meal")')
-    assert last_charge > swap_call, "el cobro debe ocurrir tras swap_meal (no antes)"
+    assert last_charge > swap_call, "el cobro debe ocurrir tras swap_meal_with_consent (no antes)"
 
 
 def test_p2_4_swap_catches_llm_unavailable():
@@ -86,8 +89,11 @@ def test_p2_4_swap_catches_llm_unavailable():
     assert "except (LLMRateLimitedError, LLMCircuitBreakerOpen)" in src, "debe capturar caída del proveedor"
     assert "swap_ai_unavailable" in src
     assert "No se descontó tu crédito" in src
-    # imports a nivel módulo
-    assert "from agent import analyze_preferences_agent, swap_meal, LLMRateLimitedError, LLMCircuitBreakerOpen" in PLANS
+    # imports a nivel módulo [P1-PANTRY-STRICT-CONSENT] +swap_meal_with_consent
+    assert (
+        "from agent import analyze_preferences_agent, swap_meal, swap_meal_with_consent, "
+        "LLMRateLimitedError, LLMCircuitBreakerOpen"
+    ) in PLANS
 
 
 # ── P2-6 + P2-7: chat-modify dislikes + densidad gain_muscle ───────────────────

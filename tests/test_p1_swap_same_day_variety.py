@@ -53,7 +53,8 @@ def test_router_wires_same_day_into_swap_data():
     src = (Path(__file__).resolve().parent.parent / "routers" / "plans.py").read_text(encoding="utf-8")
     assert "_same_day_other_meals_for_swap" in src
     assert 'data["same_day_other_meals"]' in src
-    # se inyecta ANTES de llamar swap_meal
+    # se inyecta ANTES de llamar swap_meal_with_consent (wrapper de "Nevera estricta +
+    # consentimiento" · P1-PANTRY-STRICT-CONSENT · 2026-08-02, antes llamaba swap_meal directo)
     i_inject = src.find('data["same_day_other_meals"]')
-    i_call = src.find("result = swap_meal(data)")
-    assert 0 < i_inject < i_call, "la inyección debe ocurrir antes de swap_meal(data)"
+    i_call = src.find("result = swap_meal_with_consent(data)")
+    assert 0 < i_inject < i_call, "la inyección debe ocurrir antes de swap_meal_with_consent(data)"

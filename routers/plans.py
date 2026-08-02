@@ -21,7 +21,7 @@ from db import (
     get_latest_meal_plan_with_id, update_meal_plan_data, insert_like
 )
 from memory_manager import build_memory_context, summarize_and_prune
-from agent import analyze_preferences_agent, swap_meal, LLMRateLimitedError, LLMCircuitBreakerOpen
+from agent import analyze_preferences_agent, swap_meal, swap_meal_with_consent, LLMRateLimitedError, LLMCircuitBreakerOpen
 from graph_orchestrator import (
     run_plan_pipeline,
     arun_plan_pipeline,
@@ -6081,10 +6081,21 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         _mri_ctx = _swap_meal_regen_flag_set(data, verified_user_id) \
             if (user_id and user_id != "guest") else None
         try:
-            result = swap_meal(data)
+            result = swap_meal_with_consent(data)
         except BaseException:
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
             raise
+        # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta + consentimiento": el chef
+        # no encontró alternativa SOLO con la Nevera real → soft-fail informativo (nombre +
+        # cantidad + precio estimado) en vez de introducir el ingrediente en silencio. Cero
+        # persist, cero cobro (retorna ANTES del bloque de log_api_usage de abajo) — espejo
+        # exacto de los demás soft-fails de este endpoint. El frontend re-llama con
+        # `allow_new_ingredients` si el usuario consiente, o reintenta normal si prefiere
+        # "buscar otra opción".
+        if isinstance(result, dict) and result.get("needs_new_ingredients"):
+            _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
+            logger.info(f"🧊 [P1-PANTRY-STRICT-CONSENT] needs_new_ingredients (swap-meal) user={user_id!r}")
+            return result
         # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (default): swap_meal entregó un plato.
         # Sus modos de fallo (retries/clínico/breaker/rate-limit) levantan ANTES de aquí → no se cobra.
         if user_id and user_id != "guest" and _swap_charge_on_success_only:
@@ -7170,7 +7181,7 @@ def api_fix_sodium_day(
         })
 
         try:
-            new_meal = swap_meal(meal_form)
+            new_meal = swap_meal_with_consent(meal_form)
         except ValueError as ve:
             _msg = str(ve)
             if _msg.startswith("SWAP_STRICT_PANTRY_NO_INVENTORY"):
@@ -7214,6 +7225,18 @@ def api_fix_sodium_day(
                     "El servicio de IA está ocupado en este momento. Reintenta en unos "
                     "segundos. No se descontó tu crédito."
                 ),
+            }
+
+        # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] Mismo soft-fail informativo que `/swap-meal`
+        # (SSOT en `swap_meal_with_consent`): el chef no encontró alternativa menos salada SOLO
+        # con la Nevera real → cero persist, cero cobro (return ANTES de `log_api_usage`).
+        if isinstance(new_meal, dict) and new_meal.get("needs_new_ingredients"):
+            logger.info(f"🧊 [P1-PANTRY-STRICT-CONSENT] needs_new_ingredients (fix-sodium-day) user={verified_user_id!r}")
+            return {
+                "fixed": False,
+                "day": day_index,
+                "old_meal": old_meal_name,
+                **new_meal,
             }
 
         # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (espejo de /swap-meal):
@@ -7701,6 +7724,19 @@ def api_regenerate_day(
                 logger.warning(f"⚠️ [P3-PANTRY-SUFFICIENCY] gate falló (no bloquea): {_suff_e}")
 
         # Loop de swaps pantry-strict con reserva de inventario entre platos.
+        # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] Decisión deliberada: este loop llama
+        # `swap_meal(...)` directo, NO `swap_meal_with_consent(...)`. `regenerate-day` YA
+        # valida contra la Nevera FÍSICA real (el `ledger` de abajo nace de
+        # `get_raw_user_inventory` + `pantry_override=True`, P2-REGEN-DAY-PANTRY-OVERRIDE) —
+        # no tiene el leak que este P-fix cierra (ese era exclusivo de `/swap-meal` y
+        # `/fix-sodium-day`, que NO seteaban `pantry_override`). Conectar el wrapper de
+        # consentimiento aquí añadiría 1 discovery-probe LLM extra por slot fallido SIN una UI
+        # de consentimiento intra-lote que lo consuma (¿pausar el día por N platos y preguntar
+        # N veces?) — costo/latencia sin beneficio real. El comportamiento actual (conservar el
+        # plato original cuando el slot no converge nevera-only, ver `except ValueError` abajo)
+        # YA es seguro: nada entra a la lista sin consentimiento. El usuario que quiera ese
+        # plato específico puede usar "Cambiar Plato" sobre ÉL, que SÍ ofrece el consentimiento
+        # (`swap_meal_with_consent` vía `/swap-meal`).
         from agent import swap_meal, LLMRateLimitedError, LLMCircuitBreakerOpen
         from nutrition_db import IngredientNutritionDB
         from db import get_raw_user_inventory

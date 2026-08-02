@@ -62,7 +62,10 @@ def test_b3_wiring_order_in_swap_endpoint():
     assert i != -1
     body = _PLANS[i:i + 30000]
     i_set = body.find("_swap_meal_regen_flag_set(data, verified_user_id)")
-    i_swap = body.find("result = swap_meal(data)")
+    # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] la llamada directa a `swap_meal` pasó a
+    # `swap_meal_with_consent` (wrapper de "Nevera estricta + consentimiento") — mismo
+    # contrato de ordering, nombre nuevo.
+    i_swap = body.find("result = swap_meal_with_consent(data)")
     i_persist = body.find("_persist_swap_server_side(_mri_ctx, result, verified_user_id)")
     assert -1 not in (i_set, i_swap, i_persist)
     assert i_set < i_swap < i_persist, (

@@ -485,7 +485,7 @@ def test_d_fix_sodium_day_end_to_end_panel_coherent_with_response(monkeypatch):
             "ingredients_raw": ["150g Camarones frescos", "1 cda Aceite de oliva"],
         }
 
-    monkeypatch.setattr(_rp, "swap_meal", _fake_swap_meal)
+    monkeypatch.setattr(_rp, "swap_meal_with_consent", _fake_swap_meal)
     monkeypatch.setattr(_rp, "log_api_usage", lambda *a, **k: None)
 
     result = _rp.api_fix_sodium_day("plan-refresh-1", data={}, verified_user_id="user-1", _rl=None)

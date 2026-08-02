@@ -41,7 +41,20 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 2)  # [P1-FIX-SODIUM-DAY · 2026-08-02] botón "Arreglar este
+_PFIX_DATE_FLOOR = date(2026, 8, 2)  # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta
+# + consentimiento": tras la compra inicial, swap/fix-sodium-day cocinan SOLO de la Nevera
+# FÍSICA real (`user_inventory` quantity>0), no del plan — cierra el leak donde `clean_ingredients`
+# se construía con `get_realtime_pantry(plan_data)` (acumulativo de TODOS los días, incluidos
+# archivados, solo decrementado por consumo loggeado en el diario) y dejaba pasar ingredientes
+# que el usuario NUNCA tuvo físicamente (caso real: catibías de yuca de un día archivado, 0 filas
+# en `user_inventory`, coló sin preguntar). Si el chef no converge nevera-only, soft-fail
+# `needs_new_ingredients` (nombre + cantidad + precio RD$ estimado vía el mismo piso del
+# Supermercado RD que cotiza la lista) — cero persist, cero cobro extra — y el nuevo parámetro
+# `allow_new_ingredients` (consentimiento explícito) reintenta con el universo ampliado. Knob
+# `MEALFIT_PANTRY_STRICT_UPDATES` (default True); OFF = comportamiento legacy exacto.
+# `regenerate-day` NO se tocó — ya usa la Nevera real vía `pantry_override`
+# (P2-REGEN-DAY-PANTRY-OVERRIDE), no tenía el leak. Histórico — floor previo
+# P1-FIX-SODIUM-DAY · 2026-08-02] botón "Arreglar este
 # día" en el banner `micro_worst_day_ceiling`: identifica el peor día sobre el techo de sodio +
 # su comida más salada (mismo estimador SSOT del banner/autofix), invoca el swap LLM existente
 # (`swap_meal`, reason explícita `high_sodium` + `sodium_resto_override_mg` que activa el guard

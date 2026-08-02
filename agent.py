@@ -8,7 +8,7 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
-from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry
+from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry, _to_base_unit
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
 from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
 from langchain_core.tools import tool
@@ -608,6 +608,64 @@ def _extract_clean_name_from_display_string(s: str) -> str:
     return cleaned2.strip() or cleaned
 
 
+# [P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta + consentimiento" — decisión del
+# owner: tras la compra inicial, swap/regen-day/fix-sodium-day cocinan SOLO de la Nevera
+# FÍSICA real (`user_inventory`) por default; si el chef no encuentra alternativa ahí, el
+# sistema PREGUNTA (nombre + cantidad + precio estimado) en vez de introducir el ingrediente
+# en silencio. Caso real que lo motiva: un swap metió catibías de YUCA (75g de un día YA
+# ARCHIVADO del plan, jamás registrada en `user_inventory`) sin preguntar — la lista de
+# compras "renació" con 1 ítem y el botón "Ya compré la lista" reapareció SIN que el usuario
+# hubiera dicho que sí a comprar nada. Causa raíz (ver reporte P1-PANTRY-STRICT-CONSENT):
+# `clean_ingredients` (el universo que valida `validate_ingredients_against_pantry`) se
+# construía con `get_realtime_pantry(plan_data)` — TODOS los ingredientes del plan
+# (acumulativo, nunca expira, solo decrementa por consumo LOGGEADO en el diario) — no con
+# la Nevera física. `regenerate-day` YA usa la Nevera real vía `pantry_override`
+# (P2-REGEN-DAY-PANTRY-OVERRIDE, routers/plans.py) — este fix cierra la MISMA brecha para
+# `/swap-meal` y `/fix-sodium-day`, que no seteaban ese override.
+def _pantry_strict_updates_enabled() -> bool:
+    """Knob `MEALFIT_PANTRY_STRICT_UPDATES` (default True). OFF ⇒ `swap_meal()` vuelve al
+    comportamiento legacy exacto (universo = plan completo vía `get_realtime_pantry`,
+    `allow_new_ingredients` ignorado, `swap_meal_with_consent` delega 1:1 a `swap_meal`)."""
+    return os.environ.get("MEALFIT_PANTRY_STRICT_UPDATES", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _swap_real_pantry_ledger_lines(user_id: str) -> list:
+    """Universo autorizado = Nevera FÍSICA real (`user_inventory` filas con quantity>0,
+    disponible = quantity - reserved_quantity), nombres canónicos vía
+    `IngredientNutritionDB.lookup` (mismo matching alias/sinónimo que usa el resto del
+    pipeline). Mirror INTENCIONAL de `routers/plans.py::_inventory_grams_ledger` +
+    `_ledger_to_pantry_lines` (P2-REGEN-DAY-PANTRY-OVERRIDE, ya probado en producción vía
+    regenerate-day) — no se importa desde ahí para evitar un ciclo `agent` ↔
+    `routers.plans` (`routers/plans.py` ya hace `from agent import swap_meal, ...`).
+    Fail-open: `[]` si falla el fetch (guest, DB caída, etc.) — el caller interpreta una
+    lista vacía como "Nevera vacía", NUNCA cae de vuelta al plan (ese fallback es
+    precisamente el leak que este fix cierra)."""
+    if not user_id or user_id == "guest":
+        return []
+    try:
+        from db import get_raw_user_inventory
+        from nutrition_db import IngredientNutritionDB
+        db = IngredientNutritionDB()
+        ledger: dict = {}
+        for row in get_raw_user_inventory(user_id) or []:
+            try:
+                info = db.lookup(row.get("ingredient_name") or "")
+                if not info:
+                    continue
+                qty = row.get("available_quantity")
+                if qty is None:
+                    qty = row.get("quantity") or 0
+                grams = db.to_grams(float(qty or 0), row.get("unit") or "", info)
+                if grams and grams > 0:
+                    ledger[info.name] = ledger.get(info.name, 0.0) + grams
+            except Exception:
+                continue
+        return [f"{int(round(g))}g de {name}" for name, g in ledger.items() if g and g > 0]
+    except Exception as e:
+        logger.debug(f"[P1-PANTRY-STRICT-CONSENT] ledger real no-op: {type(e).__name__}: {e}")
+        return []
+
+
 def swap_meal(form_data: dict):
     rejected_meal = form_data.get("rejected_meal", "")
     meal_type = form_data.get("meal_type", "Comida")
@@ -885,6 +943,14 @@ def swap_meal(form_data: dict):
     _override_lines = form_data.get("current_pantry_ingredients") if _pantry_override else None
     _has_override = bool(_override_lines and isinstance(_override_lines, list) and len(_override_lines) > 0)
 
+    # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] Knob + señal de qué universo terminó
+    # validando el guard — `_used_real_pantry_universe=True` desactiva los DOS fallbacks
+    # legacy plan-derived de abajo (frontend/aggregated_shopping_list): una Nevera real
+    # vacía debe levantar SWAP_STRICT_PANTRY_NO_INVENTORY honesto, no maquillarse con
+    # ingredientes del plan (el leak exacto que este fix cierra — ver docstring arriba).
+    _pantry_strict_updates_on = _pantry_strict_updates_enabled()
+    _used_real_pantry_universe = False
+
     # Intento Primario: Extraer ingredientes directamente del plan activo en BD
     if user_id and user_id != "guest":
         try:
@@ -906,6 +972,14 @@ def swap_meal(form_data: dict):
                 if _has_override:
                     # [P2-REGEN-DAY-PANTRY-OVERRIDE] El ledger reservado gana sobre la nevera-virtual del plan.
                     clean_ingredients = _agg_pantry([str(i).strip() for i in _override_lines if i and isinstance(i, str) and len(str(i)) > 2])
+                elif _pantry_strict_updates_on:
+                    # [P1-PANTRY-STRICT-CONSENT] Universo = Nevera FÍSICA real (`user_inventory`),
+                    # NO el plan. `/swap-meal` y `/fix-sodium-day` no setean `pantry_override` — sin
+                    # esta rama caían aquí ("Intento Primario") a `get_realtime_pantry`, el mismo
+                    # universo plan-derived que dejó pasar la yuca (75g de un día ya archivado, jamás
+                    # en `user_inventory`) sin preguntar.
+                    clean_ingredients = _swap_real_pantry_ledger_lines(user_id)
+                    _used_real_pantry_universe = True
                 else:
                     clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
 
@@ -960,8 +1034,27 @@ def swap_meal(form_data: dict):
         except Exception as e:
             logger.error(f"⚠️ [SWAP_MEAL] Error extrayendo inventario desde BD: {e}")
 
+    # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] Consentimiento explícito: el caller
+    # (`agent.py::swap_meal_with_consent` tras un discovery probe + el "sí" del usuario en el
+    # modal) puede sumar nombres al universo autorizado ANTES de los fallbacks legacy — se
+    # tratan como abundantes (9999g) para que el guard nunca los rechace por cantidad, solo
+    # por existencia previa. Gateado por el knob: OFF ⇒ ignorado (comportamiento legacy).
+    if _pantry_strict_updates_on:
+        _consented_new = form_data.get("allow_new_ingredients")
+        if isinstance(_consented_new, list) and _consented_new:
+            _consented_lines = [
+                f"9999 g de {str(_n).strip()}" for _n in _consented_new
+                if isinstance(_n, str) and str(_n).strip()
+            ]
+            if _consented_lines:
+                clean_ingredients = list(clean_ingredients or []) + _consented_lines
+                logger.info(f"✅ [P1-PANTRY-STRICT-CONSENT] {len(_consented_lines)} ingrediente(s) consentido(s) sumado(s) al universo: {_consented_new}")
+
     # Fallback: Usar lista enviada por el front si falló BD o es guest
-    if not clean_ingredients:
+    # [P1-PANTRY-STRICT-CONSENT] `and not _used_real_pantry_universe`: si YA validamos contra
+    # la Nevera real (autenticado + knob ON), una lista vacía es una Nevera vacía de verdad —
+    # NO se maquilla con lo que el frontend mandó (que es plan-derived, mismo leak).
+    if not clean_ingredients and not _used_real_pantry_universe:
         current_pantry_ingredients = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
         if current_pantry_ingredients and isinstance(current_pantry_ingredients, list) and len(current_pantry_ingredients) > 0:
             from shopping_calculator import aggregate_shopping_list
@@ -983,6 +1076,7 @@ def swap_meal(form_data: dict):
     # P1-SWAP-EMPTY-PANTRY-FALLBACK.
     if (
         not clean_ingredients
+        and not _used_real_pantry_universe  # [P1-PANTRY-STRICT-CONSENT] ídem: nevera real vacía != leer el PDF
         and user_id
         and user_id != "guest"
         and os.environ.get(
@@ -1388,6 +1482,17 @@ def swap_meal(form_data: dict):
     _strict_all = os.environ.get("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "true").strip().lower() in ("1", "true", "yes", "on")
     strict_pantry = True if _strict_all else (swap_reason not in ("cravings", "weekend"))
 
+    # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] Modo de DESCUBRIMIENTO: 1 probe interno que
+    # `swap_meal_with_consent()` (abajo, tras `swap_meal` en este mismo módulo) dispara SOLO
+    # cuando el intento nevera-strict normal ya falló y el usuario aún no consintió nada. Relaja
+    # el guard para ESTA llamada (nunca expuesta al usuario ni persistida) — el candidato
+    # resultante se diffea contra el universo autorizado para nombrar QUÉ falta. El flag NUNCA
+    # lo manda el cliente en un request normal (el router no lo reenvía); solo lo setea el
+    # wrapper interno.
+    _pantry_discovery_mode = bool(form_data.get("_pantry_discovery_mode")) and _pantry_strict_updates_enabled()
+    if _pantry_discovery_mode:
+        strict_pantry = False
+
     # [P2-SWAP-CONSISTENCY · 2026-05-22] Tolerancia de ingredientes externos
     # cuando el user pidió un antojo / plato festivo: hard-pantry colisionaba
     # con "indulgente" / "premium" (modal opts "Tengo un antojo" / "Fin de
@@ -1396,7 +1501,11 @@ def swap_meal(form_data: dict):
     # `MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED` (default 2, clamp [0, 5]).
     # cravings/weekend: usa el knob. Resto: 0 (legacy strict). Tooltip-anchor:
     # P2-SWAP-CONSISTENCY-EXTERNAL.
-    if swap_reason in ("cravings", "weekend") and not _strict_all:
+    if _pantry_discovery_mode:
+        # [P1-PANTRY-STRICT-CONSENT] el probe DEBE poder proponer ingredientes fuera del
+        # universo autorizado — es exactamente lo que queremos observar para nombrarlos.
+        _external_tolerance = 999
+    elif swap_reason in ("cravings", "weekend") and not _strict_all:
         try:
             _external_tolerance = int(os.environ.get("MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED", "2"))
         except (TypeError, ValueError):
@@ -2780,6 +2889,142 @@ def swap_meal(form_data: dict):
         except Exception:
             pass
     return _out
+
+
+# [P1-PANTRY-STRICT-CONSENT · 2026-08-02] Helpers del wrapper de consentimiento — SSOT del
+# mensaje/precio para que `/swap-meal` y `/fix-sodium-day` (routers/plans.py) no dupliquen
+# el copy es-DO ni la lógica de pricing.
+def _price_missing_ingredients(raw_items: list) -> list:
+    """Items CRUDOS `unauthorized` de `validate_ingredients_against_pantry(..., return_unauthorized=True)`
+    → `[{name, qty_needed, unit, est_price_rd}]`, de-duplicados por nombre normalizado.
+    `est_price_rd` es `None` cuando no hay match en el catálogo del Supermercado RD (fail-open,
+    NUNCA se inventa un precio) o cuando la cantidad no resuelve a gramos."""
+    from shopping_calculator import _parse_quantity, estimate_new_ingredient_price_rd
+    out = []
+    seen = set()
+    for raw in raw_items or []:
+        try:
+            qty, unit, name = _parse_quantity(str(raw))
+        except Exception:
+            continue
+        name = (name or str(raw)).strip()
+        if not name:
+            continue
+        key = strip_accents(name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        grams = None
+        try:
+            g, u = _to_base_unit(float(qty or 0), str(unit or ""))
+            if u == "g" and g and g > 0:
+                grams = g
+        except Exception:
+            grams = None
+        price = estimate_new_ingredient_price_rd(name, grams) if grams else None
+        out.append({
+            "name": name,
+            "qty_needed": qty,
+            "unit": unit,
+            "est_price_rd": price,
+        })
+    return out
+
+
+def _build_consent_message(missing: list) -> str:
+    """Copy es-DO honesto del prompt de consentimiento. Nombra hasta 3 ingredientes; si hay
+    más, resume el resto con conteo (no lista 8 ítems en un toast)."""
+    if not missing:
+        return "El chef necesita ingredientes que no están en tu Nevera."
+    parts = []
+    for m in missing[:3]:
+        try:
+            qty_txt = f"{float(m.get('qty_needed') or 0):g} {m.get('unit') or ''}".strip()
+        except (TypeError, ValueError):
+            qty_txt = ""
+        price = m.get("est_price_rd")
+        price_txt = f" (~RD${price:.0f})" if isinstance(price, (int, float)) and price > 0 else ""
+        parts.append(f"{m['name']} {qty_txt}{price_txt}".strip())
+    joined = ", ".join(parts)
+    if len(missing) > 3:
+        joined += f" y {len(missing) - 3} más"
+    return (
+        f"El chef necesita {joined} — no está en tu Nevera. "
+        "¿Lo añadimos a tu lista de compras y seguimos, o buscamos otra opción?"
+    )
+
+
+def swap_meal_with_consent(form_data: dict) -> dict:
+    """[P1-PANTRY-STRICT-CONSENT · 2026-08-02] Envoltorio de "Nevera estricta +
+    consentimiento" sobre `swap_meal()` — SSOT usado por `/swap-meal` y
+    `/fix-sodium-day` (routers/plans.py).
+
+    Contrato:
+      - Knob OFF (`MEALFIT_PANTRY_STRICT_UPDATES=false`) ⇒ delega 1:1 a `swap_meal(form_data)`
+        (comportamiento legacy exacto, cero discovery, cero consentimiento).
+      - Knob ON, swap nevera-only exitoso ⇒ retorna el plato normal (idéntico a `swap_meal`).
+      - Knob ON, swap nevera-only falla (`SWAP_STRICT_PANTRY_NO_INVENTORY` /
+        `SWAP_LLM_RETRIES_EXHAUSTED`) Y el caller YA mandó `allow_new_ingredients` (consintió)
+        ⇒ el fallo se propaga tal cual (soft-fail normal downstream) — NO se reintenta el
+        discovery de nuevo (evita loop; el universo ya se amplió y aun así no alcanzó).
+      - Knob ON, falla, SIN consentimiento previo ⇒ 1 probe de descubrimiento interno
+        (`_pantry_discovery_mode=True`, nunca persistido/expuesto) para nombrar qué le
+        falta al chef; si logra nombrar algo, retorna
+        `{"needs_new_ingredients": True, "missing_ingredients": [...], "message": ...}`
+        SIN levantar — el caller (router) responde 200 soft, no persiste nada, no cobra.
+        Si el discovery TAMBIÉN falla o no revela nada accionable, se propaga el ValueError
+        original (mismo soft-fail de siempre, cero regresión).
+    """
+    if not _pantry_strict_updates_enabled():
+        return swap_meal(form_data)
+    try:
+        return swap_meal(form_data)
+    except ValueError as ve:
+        _msg = str(ve)
+        if not (_msg.startswith("SWAP_STRICT_PANTRY_NO_INVENTORY") or _msg.startswith("SWAP_LLM_RETRIES_EXHAUSTED")):
+            raise
+        _consented = form_data.get("allow_new_ingredients")
+        if isinstance(_consented, list) and _consented:
+            raise
+        _user_id = form_data.get("user_id")
+        _universe = _swap_real_pantry_ledger_lines(_user_id) if _user_id and _user_id != "guest" else []
+        _discovery_form = dict(form_data)
+        _discovery_form["_pantry_discovery_mode"] = True
+        try:
+            _candidate = swap_meal(_discovery_form)
+        except Exception as _disc_e:
+            logger.debug(f"[P1-PANTRY-STRICT-CONSENT] discovery probe no-op: {type(_disc_e).__name__}: {_disc_e}")
+            raise ve
+        if not isinstance(_candidate, dict) or not _candidate.get("ingredients"):
+            raise ve
+        try:
+            _res, _unauthorized = validate_ingredients_against_pantry(
+                _candidate.get("ingredients") or [], _universe,
+                strict_quantities=True, tolerance=1.30, allow_external_count=0,
+                return_unauthorized=True,
+            )
+        except Exception as _val_e:
+            logger.debug(f"[P1-PANTRY-STRICT-CONSENT] discovery diff no-op: {type(_val_e).__name__}: {_val_e}")
+            raise ve
+        if not _unauthorized:
+            # El candidato del probe SÍ cabía en el universo real (p.ej. la Nevera se
+            # restockeó entre el intento normal y este probe) — no hay nada honesto que
+            # ofrecer como "falta"; preservamos el soft-fail original.
+            raise ve
+        missing = _price_missing_ingredients(_unauthorized)
+        if not missing:
+            raise ve
+        logger.info(
+            f"🧊 [P1-PANTRY-STRICT-CONSENT] needs_new_ingredients user={_user_id!r}: "
+            f"{[m['name'] for m in missing]}"
+        )
+        return {
+            "needs_new_ingredients": True,
+            "code": "needs_new_ingredients",
+            "missing_ingredients": missing,
+            "candidate_meal_name": _candidate.get("name"),
+            "message": _build_consent_message(missing),
+        }
 
 
 

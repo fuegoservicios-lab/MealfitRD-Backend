@@ -2862,7 +2862,7 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
     if req_unit == 'unidad' and dispo_unit == 'ml' and density and unit_weight: return (req_qty * unit_weight) / density
     return None
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0) -> bool | str:
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False):
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
@@ -2879,10 +2879,21 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
     NO relaja `over_limit` (cantidades excedidas siguen forzando retry —
     esas son problema cuantitativo distinto a "ingrediente nuevo").
     Tooltip-anchor: P2-SWAP-CONSISTENCY-ALLOW-EXTERNAL.
+
+    [P1-PANTRY-STRICT-CONSENT · 2026-08-02] `return_unauthorized` (default False,
+    back-compat total — callers existentes no pasan este flag y siguen recibiendo
+    `bool | str`): cuando True, retorna `(bool | str, list[str])` — el segundo
+    elemento son los items CRUDOS de `generated_ingredients` que no matchearon NINGÚN
+    ítem de `pantry_ingredients` (ni substring, ni cosine). Reusa el 100% de la lógica
+    de matching ya endurecida (fracciones Unicode, contenedores, embeddings) en vez de
+    duplicarla — el caller (`agent.py::swap_meal_with_consent`) diferencia "el chef
+    propuso algo que la Nevera real no tiene" de un rechazo genérico, para poder
+    ofrecer consentimiento nombrando el ingrediente exacto. NO expone `over_limit`
+    (cantidad insuficiente de algo que SÍ está) — ver limitación en el reporte.
     """
     if not pantry_ingredients:
         logger.debug("⚠️ [PANTRY GUARD] Lista de despensa vacía — guardrail desactivado.")
-        return True
+        return (True, []) if return_unauthorized else True
         
     try:
         from shopping_calculator import _parse_quantity
@@ -2969,8 +2980,8 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         pantry_ledger[base_norm][base_unit] += base_qty
 
     if not pantry_bases:
-        return True
-        
+        return (True, []) if return_unauthorized else True
+
     unauthorized = []
     over_limit = []
     
@@ -3137,10 +3148,10 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
 
         error_msg += "Corrige tu respuesta bajando las porciones estrictamente numéricas al límite exacto, O eliminando/sustituyendo ingredientes."
         logger.warning(f"🚨 [PANTRY GUARD] RECHAZO | unauthorized={len(unauthorized)} | over_limit={len(over_limit)}")
-        return error_msg
-        
+        return (error_msg, list(unauthorized)) if return_unauthorized else error_msg
+
     logger.debug(f"✅ [PANTRY GUARD] APROBADO (Cantidades & Confiabilidad validadas)")
-    return True
+    return (True, list(unauthorized)) if return_unauthorized else True
 
 
 def compute_household_multiplier(source: dict | None) -> float:
