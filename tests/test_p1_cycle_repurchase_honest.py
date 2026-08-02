@@ -66,12 +66,19 @@ def test_sube_el_costo_cuando_el_envase_NO_alcanza_ni_una_ida():
     """[P1-SKU-COVER-HONESTY · 2026-08-02] ratio<1 (el envase mínimo comprado no cubre ni una
     ida — el under-buy que ese fix deja de esconder en el selector): el `min(plano, ...)` de
     antes escondía que hacen falta MÁS recompras que el plano, no menos — decisión #5. Ya no se
-    clampa en este caso: el costo declarado del ciclo debe SUBIR para reflejar la recompra real."""
+    clampa en este caso: el costo declarado del ciclo debe SUBIR para reflejar la recompra real.
+
+    [MINOR ronda 1 · 2026-08-02] Faltaba cota superior — sin ella, un futuro bug que dispare
+    `n` a infinito (ej. división por cero mal guardada) pasaría este test. `cubre_dias` nunca
+    baja de 1 día (`max(1.0, trip_days*ratio)`), así que `n = cycle_days/cubre_dias` nunca
+    excede `cycle_days` (recomprar todos los días es el peor caso físicamente posible)."""
     plano = 30 / 7
+    cycle_days = 30
     for ratio in (0.1, 0.5):
         for shelf in (1, 3, 7, 30, 400):
-            n = sc._item_cycle_repurchases(_item(10, ratio=ratio, shelf=shelf), cycle_days=30)
+            n = sc._item_cycle_repurchases(_item(10, ratio=ratio, shelf=shelf), cycle_days=cycle_days)
             assert n >= plano - 1e-9, (ratio, shelf, n)
+            assert n <= cycle_days + 1e-9, (ratio, shelf, n)
 
 
 def test_sin_senal_conserva_el_comportamiento_previo():

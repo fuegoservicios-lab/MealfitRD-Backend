@@ -71,10 +71,12 @@ def test_yogurt_900_not_overshoot():
     # negativo y esconde el faltante. Acotado el under-buy a 10% (`SKU_FLOOR_MAX_UNDER_PCT`), ya
     # no alcanza; entre 2×2lb (RD$330) y 1×5lb (RD$235, cubre y es más barato), gana el 5lb.
     (1050, 2268, 235),   # 7d → 5 lb (antes 2 lb con 13,6% de faltante sin aviso)
-    (2250, 2268, 235),   # 15d → 5 lb
-    (4500, 4536, 327),   # 30d → 10 lb
+    (2250, 2268, 235),   # 15d → 5 lb (sin cambio)
+    (4500, 4536, 327),   # 30d → 10 lb (sin cambio)
 ])
-def test_arroz_unchanged(g, exp_grams, exp_cost):
+def test_arroz_tier_selection_by_duration(g, exp_grams, exp_cost):
+    """[MINOR ronda 1 · 2026-08-02] Renombrado de `test_arroz_unchanged` — el nombre ya no
+    describía el test tras P1-SKU-COVER-HONESTY: la fila de 1050g SÍ cambia (2lb→5lb)."""
     sel = _select_market_package(g, ARROZ)
     assert sel["grams"] == exp_grams
     assert _cost(sel) == exp_cost

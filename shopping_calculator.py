@@ -2172,17 +2172,44 @@ def _get_display_category(db_category: str, name: str = "") -> str:
 # absoluto a `SKU_FLOOR_MAX_UNDER_PCT` del total (default 10%, alineado con la tolerancia del
 # coherence guard) — por encima, se compra el paquete extra (ceil). La rama previa
 # `frac <= ANTI_WASTE_THRESHOLD` (colchón de 2% para errores de coma flotante, SKU-OVERSHOOT-FIX)
-# se conserva intacta: es política anti-desperdicio deliberada, no el bug. Clamp [0, 0.5]: en 0
-# nunca se retiene el floor por under-buy (siempre ceil salvo el colchón anti-desperdicio); en 0.5
-# se vuelve al comportamiento previo al fix (peor caso).
+# se conserva intacta: es política anti-desperdicio deliberada, no el bug.
+#
+# [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] (ronda 1 de revisión) El bound puro
+# `under_buy_g <= g_total * PCT` NO es uniformemente más estricto que el criterio viejo: escala
+# con `floor_units`, así que para conteos altos (`floor_units>=5` con PCT=0.10) permite MÁS
+# under-buy relativo que `under_buy < over_buy`, y desde `floor_units>=9` es directamente vacuo
+# (nunca fuerza ceil). Medido: Sazón 137g/sobre 14g → floor_units=9, el bound puro retiene 9
+# sobres (cover 0.92) donde el criterio viejo hacía ceil a 10 (cover 1.022) — un déficit NUEVO
+# que el código pre-fix no tenía. Fix: exigir AMBAS condiciones (`under_buy <= bound AND
+# under_buy < over_buy`), de modo que el conjunto de casos donde se retiene el floor es un
+# SUBCONJUNTO estricto del criterio viejo — nunca puede retener floor donde el código viejo
+# hacía ceil, sólo puede convertir floor→ceil donde el viejo criterio permitía under-buy
+# excesivo. Ver `test_bound_no_introduce_deficit_nuevo_en_floor_alto` (verificado con barrido
+# aleatorio, 0% de déficits nuevos — ver report). Clamp [0, 0.5]: en 0, el bound nunca se
+# satisface (con `under_buy>0`) y sólo el colchón anti-desperdicio retiene floor (máxima
+# corrección). En 0.5: como `under_buy = frac*size` y el bound equivale a
+# `frac <= PCT*floor_units/(1-PCT)`, en PCT=0.5 eso es `frac <= floor_units`, SIEMPRE cierto
+# (`frac<1<=floor_units` para floor_units>=1) — el AND se reduce EXACTAMENTE a `under_buy <
+# over_buy`, idéntico byte a byte al comportamiento pre-fix (no una aproximación).
 SKU_FLOOR_MAX_UNDER_PCT = _knob_env_float(
     "MEALFIT_SKU_FLOOR_MAX_UNDER_PCT", 0.10, lambda v: 0.0 <= v <= 0.5)
 
 # [P1-SKU-COVER-HONESTY · 2026-08-02] Umbral de `pkg_cover_ratio` bajo el cual se avisa
-# "alcanza ~N de 7 días — recompra" (mismo formato que P1-CAPPED-STAPLE-HONESTY) si el ítem no
+# "alcanza ~N de M días — recompra" (mismo formato que P1-CAPPED-STAPLE-HONESTY) si el ítem no
 # tiene ya un aviso de cap (`capped_by` manda — no duplicar sufijos, decisión #3). Clamp [0, 1].
+#
+# [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] Con el bound corregido, cuando SÍ se retiene el floor
+# (rama nueva), la cobertura mínima garantizada es exactamente `1 - SKU_FLOOR_MAX_UNDER_PCT`
+# (default 0.10 → cover_min=0.90). Si este umbral fuera <= ese mínimo garantizado (ej. el 0.9
+# original), la nota queda INALCANZABLE por construcción para cualquier ítem recién resuelto por
+# estos 3 sitios — medido: 60.000 casos aleatorios, 0 disparos legítimos con 0.9. Default subido
+# a 0.95 para que la nota cubra la banda real 5%-10% de déficit que el bound SÍ permite (entre
+# `1-SKU_FLOOR_MAX_UNDER_PCT` y este umbral) sin ser inerte ni volverse ruidosa.
+# `test_pkg_cover_note_min_no_es_inalcanzable_por_construccion` ancla `PKG_COVER_NOTE_MIN >
+# 1 - SKU_FLOOR_MAX_UNDER_PCT` para que un futuro cambio de default no la vuelva inerte en
+# silencio.
 PKG_COVER_NOTE_MIN = _knob_env_float(
-    "MEALFIT_PKG_COVER_NOTE_MIN", 0.9, lambda v: 0.0 <= v <= 1.0)
+    "MEALFIT_PKG_COVER_NOTE_MIN", 0.95, lambda v: 0.0 <= v <= 1.0)
 
 # ═══════════════════════════════════════════════════════════════
 # Helpers para SKU-Aware Sizing (P3)
@@ -2235,7 +2262,12 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
             # [P1-SKU-COVER-HONESTY · 2026-08-02] `under_buy < over_buy` retenía el floor con
             # under-buy de hasta 50% del total sin aviso. Acotado a `SKU_FLOOR_MAX_UNDER_PCT`
             # del total — la rama `frac <= anti_waste_pct` (colchón anti-desperdicio) intacta.
-            if frac <= anti_waste_pct or under_buy <= g_total * SKU_FLOOR_MAX_UNDER_PCT:
+            # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] El bound puro (sin `and under_buy < over_buy`)
+            # NO es uniformemente más estricto: escala con `floor_count`, así que para conteos
+            # altos (>=9 con el default 10%) es vacuo y PERMITE un déficit que el criterio viejo
+            # no permitía. Exigir ambas condiciones garantiza que el resultado es subconjunto del
+            # criterio viejo — nunca peor, sólo más estricto.
+            if frac <= anti_waste_pct or (under_buy <= g_total * SKU_FLOOR_MAX_UNDER_PCT and under_buy < over_buy):
                 count = floor_count
                 total_g = count * size
                 waste = max(0, g_total - total_g)
@@ -2328,12 +2360,16 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
         # desperdicio+conteo (el path legacy `_find_best_sku` penaliza el nº de paquetes,
         # lo que hacía comprar 2 four-packs de yogurt griego RD$730 cuando 6 potes sueltos
         # RD$600 —exacto— eran más baratos). Para cada tamaño contamos con el MISMO floor
-        # anti-desperdicio que _find_best_sku (under-buy permitido si under<over → NO
-        # over-compra bulk, p.ej. no elige 5 lb de arroz para una necesidad de ~2 lb) y
-        # tomamos el de MENOR costo total; desempate: menos desperdicio, menos paquetes,
-        # envase más grande. Verificado: arroz 7d→2lb/15d→5lb/30d→10lb y habichuelas
-        # mantienen su selección; yogurt 900g → 6 potes (no 2 four-packs). Tooltip-anchor:
-        # P1-PKG-COST-OPTIMAL.
+        # anti-desperdicio que _find_best_sku, acotado por `SKU_FLOOR_MAX_UNDER_PCT`
+        # (P1-SKU-COVER-HONESTY), y tomamos el de MENOR costo total; desempate: menos
+        # desperdicio, menos paquetes, envase más grande.
+        # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] El comentario previo decía "no elige 5 lb de
+        # arroz para una necesidad de ~2 lb" — eso era cierto SÓLO mientras el floor permitía el
+        # under-buy silencioso de 907g/1050g (13,6% corto). Con el bound corregido, 1050g SÍ
+        # elige 1×5lb (RD$235, más barato Y cubre) en vez de 1×2lb (RD$165, corto) o 2×2lb
+        # (RD$330) — ver `test_arroz_unchanged`→renombrado en `test_p1_pkg_cost_optimal.py`.
+        # Sigue verificado: arroz 15d→5lb/30d→10lb y habichuelas mantienen su selección; yogurt
+        # 900g → 6 potes (no 2 four-packs). Tooltip-anchor: P1-PKG-COST-OPTIMAL.
         best_key = None
         chosen = None
         for (g, pr, lbl, unit, pid) in pkgs:
@@ -2345,7 +2381,10 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
                 frac = raw - floor_c
                 # [P1-SKU-COVER-HONESTY · 2026-08-02] `under < over` (min-costo) FAVORECÍA el
                 # floor con under-buy de hasta 50% sin aviso. Mismo bound que los otros 2 sitios.
-                count_c = floor_c if (frac <= anti_waste_pct or under <= g_total * SKU_FLOOR_MAX_UNDER_PCT) else floor_c + 1
+                # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] `and under < over`: el bound puro solo
+                # (sin este AND) es vacuo para floor_c>=9 y permitiría un déficit NUEVO que el
+                # criterio viejo no permitía — ver knob doc arriba.
+                count_c = floor_c if (frac <= anti_waste_pct or (under <= g_total * SKU_FLOOR_MAX_UNDER_PCT and under < over)) else floor_c + 1
             else:
                 count_c = 1
             cost_c = count_c * pr
@@ -3572,17 +3611,24 @@ def _purchase_covers_need(item: dict, need_g: float) -> bool:
     except Exception:
         return False
 
-def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None):
+def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None, cycle_days: int = 7):
     """Motor determinístico de unidades de mercado dominicano.
-    
+
     Flujo de resolución (4 bloques, sin hardcoded weights):
       1. DB Container: market_container + container_weight_g → Potes, Paquetes, Cartones, etc.
          1a. SKU-Aware: si hay available_sizes_g, optimiza tamaño de empaque
       2. DB Density:   density_g_per_unit → Unidades físicas (frutas, vegetales, huevos)
       3. Dominican Lbs: Fracciones de libra (1/4, 1/2, 3/4) para carnes, quesos, granel
       4. Raw Fallback:  Cantidades crudas del AI sin conversión
-    
+
     Returns dict con confidence_score (1.0=DB+SKU, 0.95=DB, 0.85=density, 0.75=lbs, 0.5=raw)
+
+    `cycle_days` [P1-SKU-COVER-HONESTY-R1 · 2026-08-02]: cuántos días de necesidad representa
+    `weight_in_lbs`/`raw_qty` — default 7 (semanal), el comportamiento histórico. El caller es
+    responsable de pasar el valor real (15/30) cuando construye la necesidad para una lista
+    biweekly/monthly (el multiplicador de ciclo ya viene aplicado ANTES de esta función, así que
+    esta función no puede inferirlo). Sólo afecta el copy de la nota "alcanza ~N de M días —
+    recompra"; NO afecta ninguna decisión de cantidad/floor-ceil.
     """
     import math
     from constants import UNIT_WEIGHTS
@@ -3642,6 +3688,13 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     # que el costeo usó (default más barato O preferencia) → `brand_product_id`
     # del ítem → el picker lo pre-selecciona ("la marca que tu lista está usando").
     _pkg_product_id = None
+    # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] Señal para la nota de under-buy: cuando
+    # P2-PACK-UNITS-MATCH recuenta `sku_count` por UNIDADES reales del envase (no por gramos),
+    # el `pkg_cover_ratio` en gramos (que usa la density del MASTER, no la del SKU real) deja de
+    # ser una medida válida de cobertura — puede leer <0.9 con el conteo por-unidades ya
+    # correcto. Medido: ratio 0.712 con el conteo de unidades exacto. La nota se suprime cuando
+    # esta bandera queda en True (ver bloque de la nota, más abajo).
+    _pkg_units_recounted = False
 
     # Guards mínimos para Bloques 2 y 3 (solo 2 regex, eliminados los 15+ anteriores)
     is_meat_seafood = bool(re.search(r'\b(pollo|cerdo|carne|res|pescado|camar[oó]n|camarones|mariscos?|filetes?|chuletas?|longanizas?|salamis?|jam[oó]n|pavo|tocineta|bacon|salchichas?)\b', n_lower))
@@ -3719,6 +3772,10 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                                 f"≈{_units_needed:.1f} uds; density master {float(density_per_u):.0f}g "
                                 f"vs SKU {sku_size_g / _upp:.0f}g)")
                             sku_count = _cnt_u
+                            # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] el conteo ya no viene del
+                            # floor/ceil en gramos — `pkg_cover_ratio` (en gramos, density del
+                            # MASTER) deja de medir cobertura real; suprimir la nota de under-buy.
+                            _pkg_units_recounted = True
                 except (TypeError, ValueError, ZeroDivisionError):
                     pass
             _pkg_size_g = sku_size_g
@@ -3777,7 +3834,12 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                     # cover 0.69-0.81, aceite 0.70-0.93, camarones 0.76-0.79 sobre 18/22 planes).
                     # Acotado a `SKU_FLOOR_MAX_UNDER_PCT` del total; `frac <= ANTI_WASTE_THRESHOLD`
                     # (colchón anti-desperdicio de coma flotante, SKU-OVERSHOOT-FIX) intacto.
-                    if frac <= ANTI_WASTE_THRESHOLD or under_buy_g <= g_total * SKU_FLOOR_MAX_UNDER_PCT:
+                    # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] `and under_buy_g < over_buy_g`: el
+                    # bound puro solo (sin este AND) escala con `floor_units` y es vacuo desde
+                    # floor_units>=9 (default 10%) — permitiría un déficit NUEVO que el criterio
+                    # viejo no permitía (medido: Sazón 137g/sobre 14g). El AND garantiza que el
+                    # resultado es subconjunto estricto del criterio viejo: nunca peor.
+                    if frac <= ANTI_WASTE_THRESHOLD or (under_buy_g <= g_total * SKU_FLOOR_MAX_UNDER_PCT and under_buy_g < over_buy_g):
                         units_needed = floor_units
                     else:
                         units_needed = floor_units + 1
@@ -4100,6 +4162,15 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         # Limpiar sku_label para que el bloque post-format no anexe sufijos del
         # path corrupto (ej. "(150g c/u)" del market_container='cabeza' viejo).
         sku_label = None
+        # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] El guard reconstruye el ítem como PESO (lbs)
+        # pero dejaba `_pkg_size_g` con el tamaño del envase 'cabeza' descartado — el bloque de
+        # `pkg_cover_ratio` (más abajo) seguía viendo `_pkg_size_g` no-None y mezclaba unidades
+        # (gramos del envase 'cabeza' vs `weight_in_lbs` reconstruido), produciendo un
+        # `pkg_cover_ratio` sin sentido y disparando la nota de under-buy con un número falso.
+        # Reproducido: Zanahoria 900g con `market_container='cabeza'` → "2 lbs · alcanza ~2 de 7
+        # días — recompra" (cover 0.333) y encima inflaba `_item_cycle_repurchases` a ~12.9
+        # recompras contra un plano de 4.29. Limpiar junto con `sku_label`.
+        _pkg_size_g = None
         confidence = 0.80  # Bajamos confianza: hubo path bug detectado.
 
     # ═══ Formato Final ═══
@@ -4357,19 +4428,35 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         # [P1-SKU-COVER-HONESTY · 2026-08-02] `pkg_cover_ratio` se calculaba y persistía pero
         # nadie lo consumía para avisar under-buy (solo sobre-cobertura ≥2×, P1-OVERCOVER-LABEL).
         # Medido en prod: 18/22 planes con ≥1 ítem cover<0.9 sin nota. Mismo formato que
-        # P1-CAPPED-STAPLE-HONESTY ("alcanza ~N de M días — recompra"); acá M=7 (idas) porque
-        # `pkg_cover_ratio` mide cuántas idas de `trip_days=7` caben en el envase mínimo, no el
-        # ciclo completo (ver `_item_cycle_repurchases`). Si el ítem YA tiene `capped_by`
-        # (P1-CAPPED-STAPLE-HONESTY), esa nota manda — no se duplica sufijo (decisión #3).
+        # P1-CAPPED-STAPLE-HONESTY ("alcanza ~N de M días — recompra"). Si el ítem YA tiene
+        # `capped_by` (P1-CAPPED-STAPLE-HONESTY), esa nota manda — no se duplica sufijo
+        # (decisión #3).
+        #
+        # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] Dos correcciones de la ronda 1:
+        #
+        # (1) `M` ya NO es un `7` fijo. El multiplicador de ciclo (household ×
+        # `cycle_qty_multiplier(duration)` × `base_duration_scale`) entra en `weight_in_lbs`
+        # ANTES de esta función — así que en listas quincenal/mensual `pkg_cover_ratio` mide
+        # contra la necesidad de 15/30 días, no de 7. Hardcodear "de 7 días" ahí leía "alcanza
+        # ~5 de 7 días" sobre un arroz que en realidad dura ~21 de 30. `cycle_days` (parámetro
+        # nuevo, default 7 — mismo comportamiento previo para callers que no lo pasan) es la M
+        # correcta. Callers duration-aware deben pasarlo explícitamente (ver docstring del
+        # parámetro); si no lo hacen, el default 7 preserva el comportamiento pre-existente
+        # (correcto para listas semanales, la mayoría de callers hoy).
+        #
+        # (2) Se excluye cuando `_pkg_units_recounted` (P2-PACK-UNITS-MATCH): el conteo ahí se
+        # deriva por UNIDADES reales del envase, no por gramos — el `pkg_cover_ratio` en gramos
+        # (density del MASTER) deja de medir cobertura real y el único disparo vivo bajo el
+        # default anterior (0.9) era justo este falso positivo (ratio 0.712 con conteo correcto).
         try:
             _cover = result.get("pkg_cover_ratio")
             if (_cover is not None and float(_cover) < PKG_COVER_NOTE_MIN
-                    and not result.get("capped_by")):
-                _dias_cubiertos = max(1, int(round(7 * float(_cover))))
+                    and not result.get("capped_by") and not _pkg_units_recounted):
+                _dias_cubiertos = max(1, int(round(cycle_days * float(_cover))))
                 result["display_qty"] = (
-                    f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de 7 días — recompra")
+                    f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra")
                 result["display_string"] = (
-                    f"{result['display_string']} (alcanza ~{_dias_cubiertos} de 7 días — recompra)")
+                    f"{result['display_string']} (alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra)")
         except (TypeError, ValueError):
             pass
     # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] producto del súper que la lista usa.
@@ -8130,7 +8217,16 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None):
+    # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] `cycle_days` (NO confundir con `num_days`, que es
+    # días GENERADOS del plan/chunk para `base_duration_scale`): días que representa la
+    # necesidad total ya escalada (7/15/30, según `duration` weekly/biweekly/monthly) — viaja a
+    # `apply_smart_market_units` sólo para el copy de la nota "alcanza ~N de M días". Opcional;
+    # `None` conserva el default 7 de `apply_smart_market_units` (comportamiento previo, correcto
+    # para listas semanales). Callers duration-aware (`get_shopping_list_delta` y sus 15+
+    # call-sites en cron_tasks.py/routers/plans.py/tools.py) NO pasan este valor todavía — ver
+    # report de P1-SKU-COVER-HONESTY, ronda 1, sección de seguimiento.
+    _cycle_days_for_note = int(cycle_days) if cycle_days else 7
     # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
     # inicio de cada run del aggregator. Los caps que se apliquen durante
     # este run (P3-HERB-CAP, P5-VEG-CAP, P6-LEGUMES-DRY-CAP, P6-EGGS-AGGREGATE-CAP,
@@ -10669,7 +10765,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 _n_lower = name.lower()
                 if any(kw in _n_lower for kw in ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz']):
                     logging.info(f"  🔬 [RAW LBS] {name}: {weight_in_lbs:.4f} lbs (mult={multiplier})")
-                market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item)
+                market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item, cycle_days=_cycle_days_for_note)
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY redondeado (lo que
                 # se compra), no desde weight_in_lbs crudo -> cierra el sub-costeo de staples por-peso.
                 item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
@@ -10711,7 +10807,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 if added and u.lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.', 'cabeza', 'cabezas', 'diente', 'dientes', 'mazo', 'mazos']:
                     logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por {u} para '{name}' (ya tiene entrada por peso)")
                     continue
-                market_obj = apply_smart_market_units(name, 0.0, u, q, master_item)
+                market_obj = apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note)
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY (envase/carton
                 # redondeado); cubre huevo medio-carton (parsea "(N uds.)" x precio/30) y envases.
                 item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
@@ -10852,6 +10948,7 @@ def get_shopping_list_delta(
     *,
     inventory_override: list | None = None,
     consumed_override: list | None = None,
+    cycle_days: int | None = None,
 ):
     """Calcula el verdadero Delta: Ingredientes Totales del Plan - Inventario Físico Actual - (Opcional) Consumidos.
 
@@ -10862,6 +10959,13 @@ def get_shopping_list_delta(
     puede cambiar entre llamadas por Realtime channel, restock, cron) y
     `consumed_meals_since` — produciendo deltas inconsistentes que el
     frontend muestra al usuario al cambiar `groceryDuration`.
+
+    `cycle_days` [P1-SKU-COVER-HONESTY-R1 · 2026-08-02]: días que representa esta llamada
+    (7/15/30) — se propaga a `apply_smart_market_units` sólo para el copy de la nota "alcanza
+    ~N de M días". Opcional, default None → 7 (comportamiento previo). Los callers de HOY
+    (routers/plans.py, cron_tasks.py, tools.py) invocan esta función 3 veces por surface
+    (`aggr_7`/`aggr_15`/`aggr_30`) con el `multiplier` ya calculado por duración — ninguno pasa
+    todavía `cycle_days` explícito; es un seguimiento pendiente, no de este archivo.
     """
     # [P1-SUPERMARKET-COSTING · 2026-07-02] Marca preferida del usuario → costeo
     # con el envase elegido. Fetch UNA vez por run (todas las superficies —
@@ -10990,7 +11094,7 @@ def get_shopping_list_delta(
     # persona-semana necesitan deshacer el `base_duration_scale = 7/num_days` que se aplica tres
     # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
     # apretados en un ciclo de 14 días.
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days)
     
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
     urgent_items = plan_result.get("_pantry_supplement_required", [])
