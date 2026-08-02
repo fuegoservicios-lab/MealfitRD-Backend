@@ -7366,6 +7366,24 @@ def api_regenerate_day(
                     _sff_fats = float(SLOT_FATS_FLOOR_G)
             except Exception:
                 pass
+            # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Sodio del RESTO del día EN VIVO (ya-regenerados +
+            # pendientes, excluyendo el plato en curso) — MISMO universo que `same_day_other_meal_blobs`
+            # abajo. Es la fuente MÁS PRECISA posible: el fetch DB dentro de `swap_meal` (fallback para el
+            # `/swap-meal` standalone) refleja el plan ANTES de este regen — mid-loop quedaría stale (los
+            # platos ya regenerados en ESTA request no están persistidos todavía). Caso real que motiva
+            # esto (owner, 2026-08-01): regenerar la cena de un día que YA llevaba ricotta armó "Berenjenas
+            # con Camarones" → día en 2140/2000mg (banner DESPUÉS del hecho); con el presupuesto informado
+            # ANTES, el chef pudo elegir proteína fresca. Fail-safe: None si el estimador no está
+            # disponible → swap_meal cae a su propio fallback DB-based (o skip sodium-aware si tampoco
+            # aplica) — jamás bloquea el regen. tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
+            try:
+                from graph_orchestrator import _meal_sodium_mg as _sod_mm_rd
+                _sodium_resto_this_meal = sum(
+                    _sod_mm_rd(_mm, _db) for _mm in (new_meals + meals[len(new_meals) + 1:])
+                    if isinstance(_mm, dict)
+                )
+            except Exception:
+                _sodium_resto_this_meal = None
             meal_form = {
                 "user_id": user_id,
                 "session_id": data.get("session_id"),
@@ -7412,6 +7430,10 @@ def api_regenerate_day(
                 "medications": data.get("medications"),
                 # Pantry reservada (gramos restantes tras los platos ya aceptados de hoy).
                 "current_pantry_ingredients": _ledger_to_pantry_lines(ledger),
+                # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Override explícito del sodio EN VIVO del resto
+                # del día (computado arriba) — gana sobre el fallback DB-based interno de swap_meal (mismo
+                # patrón de precedencia que `pantry_override`/P2-REGEN-DAY-PANTRY-OVERRIDE).
+                "sodium_resto_override_mg": _sodium_resto_this_meal,
                 # [P2-REGEN-DAY-PANTRY-OVERRIDE · 2026-06-24] (re-audit P2-5) Señal explícita: swap_meal debe
                 # validar contra ESTE ledger reservado (reserva inter-plato D7), NO contra la nevera-virtual
                 # completa del plan → dos platos del mismo día no reclaman el mismo ingrediente escaso.

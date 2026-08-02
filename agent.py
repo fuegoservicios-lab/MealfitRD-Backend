@@ -840,6 +840,39 @@ def swap_meal(form_data: dict):
     _plan_meals_text_for_variety = ""
     user_id = form_data.get("user_id")
 
+    # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] "Colocación consciente de sodio" — decisión del owner:
+    # el sistema que prescribe la lista/nevera debe ELEGIR mejor el pareo del día en vez de prohibir
+    # alimentos. Caso real: regenerar la cena de un día que YA llevaba ricotta armó "Berenjenas con
+    # Camarones" → día en 2140/2000mg (7% sobre techo), banner "Menor" DESCUBIERTO tras el hecho. Antes
+    # de generar la alternativa calculamos cuánto sodio le queda al DÍA; después de generarla, si el
+    # candidato se pasa, UN reintento con directiva explícita — nunca un hard-gate (evidencia medida:
+    # gatear el queso same-day quemó 3 reintentos/plan). Knob de rollback sin redeploy (default ON).
+    _sodium_aware_on = os.environ.get(
+        "MEALFIT_SODIUM_AWARE_SWAP", "true"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    # Techo — MISMA fuente que el banner/panel (`micronutrients.dri_targets`, NO un literal nuevo).
+    _sodium_ceiling_mg = None
+    if _sodium_aware_on:
+        try:
+            from graph_orchestrator import _sodium_day_ceiling_mg_for_banner as _sod_ceil_fn
+            _sodium_ceiling_mg = _sod_ceil_fn(form_data)
+        except Exception as _sod_ceil_e:
+            logger.debug(f"[P1-SODIUM-AWARE-PLACEMENT] techo no-op: {type(_sod_ceil_e).__name__}: {_sod_ceil_e}")
+            _sodium_ceiling_mg = 2000.0
+    # Sodio del RESTO del día (las OTRAS comidas, sin el plato a cambiar). None = sin contexto de día
+    # (guest / sin plan / lookup falló) → el bloque de abajo skipea sodium-aware por completo (fail-open,
+    # jamás un literal inventado). regen-day (routers/plans.py) pasa `sodium_resto_override_mg` EN VIVO
+    # (ve los platos ya regenerados en ESTA request, que la BD todavía no tiene) — ese override GANA
+    # sobre el fallback DB-based de abajo (mismo patrón de precedencia que P2-REGEN-DAY-PANTRY-OVERRIDE).
+    _sodium_resto_mg = None
+    if _sodium_aware_on:
+        try:
+            _sod_override = form_data.get("sodium_resto_override_mg")
+            if _sod_override is not None:
+                _sodium_resto_mg = float(_sod_override)
+        except (TypeError, ValueError):
+            _sodium_resto_mg = None
+
     # [P2-REGEN-DAY-PANTRY-OVERRIDE · 2026-06-24] (re-audit P2-5) Cuando el caller (loop de regenerate-day)
     # provee un ledger de pantry YA reservado (gramos restantes tras los platos del día ya aceptados), ESE
     # ledger es la fuente de verdad de la nevera — NO la nevera-virtual completa del plan
@@ -897,6 +930,33 @@ def swap_meal(form_data: dict):
                     _plan_meals_text_for_variety = strip_accents(" ".join(_names).lower())
                 except Exception:
                     _plan_meals_text_for_variety = ""
+
+                # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Fallback DB-based del sodio del resto del día
+                # — cubre el swap standalone (`/swap-meal`), donde el plan en BD SÍ refleja el estado real
+                # del día (no hay loop concurrente mutándolo antes de persistir, a diferencia de regen-day,
+                # que manda su propio `sodium_resto_override_mg` en vivo y por eso este bloque se skipea
+                # arriba cuando ya hay un override). Solo corre si aún no tenemos `_sodium_resto_mg`.
+                if _sodium_aware_on and _sodium_resto_mg is None:
+                    try:
+                        from graph_orchestrator import _meal_sodium_mg as _sod_mm_swap
+                        from nutrition_db import IngredientNutritionDB as _SodDBSwap
+                        _sod_db_swap = _SodDBSwap()
+                        _rej_low_sod = strip_accents(str(rejected_meal or "").lower())
+                        for _d_sod in (plan_record["plan_data"].get("days") or []):
+                            _meals_sod = (_d_sod.get("meals") or []) if isinstance(_d_sod, dict) else []
+                            _names_sod = [str(_m.get("name", "")) for _m in _meals_sod if isinstance(_m, dict)]
+                            if any(strip_accents(_n.lower()).strip() == _rej_low_sod for _n in _names_sod):
+                                _sodium_resto_mg = sum(
+                                    _sod_mm_swap(_m, _sod_db_swap) for _m in _meals_sod
+                                    if isinstance(_m, dict)
+                                    and strip_accents(str(_m.get("name", "")).lower()).strip() != _rej_low_sod
+                                )
+                                break
+                    except Exception as _sod_ctx_e:
+                        logger.debug(
+                            f"[P1-SODIUM-AWARE-PLACEMENT] contexto de sodio del día no-op: "
+                            f"{type(_sod_ctx_e).__name__}: {_sod_ctx_e}"
+                        )
         except Exception as e:
             logger.error(f"⚠️ [SWAP_MEAL] Error extrayendo inventario desde BD: {e}")
 
@@ -1228,6 +1288,21 @@ def swap_meal(form_data: dict):
                 context_extras += "\n    " + _vc_block.strip()
         except Exception as _vcsw_e:
             logger.debug(f"[P2-VERIFIED-ONLY-UPDATE] verified catalog swap falló (no bloquea): {_vcsw_e}")
+
+    # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Directiva INFORMATIVA (no un hard-gate) del presupuesto
+    # de sodio restante del día — SIEMPRE que haya techo Y contexto de día (`_sodium_resto_mg` no-None).
+    # "Repartir, no prohibir": el chef decide con datos, el guard post-generación (más abajo, en
+    # invoke_with_retry) es el backstop de UN solo reintento si igual se excede.
+    _sodium_budget_mg = None
+    if _sodium_aware_on and _sodium_ceiling_mg is not None and _sodium_resto_mg is not None:
+        _sodium_budget_mg = max(0.0, _sodium_ceiling_mg - _sodium_resto_mg)
+        context_extras += (
+            f"\n    - 🧂 PRESUPUESTO DE SODIO: el resto del día ya suma ~{_sodium_resto_mg:.0f}mg de un "
+            f"techo de {_sodium_ceiling_mg:.0f}mg/día. Presupuesto restante para ESTE plato: "
+            f"~{_sodium_budget_mg:.0f}mg. Prefiere una proteína FRESCA no curada; evita combinar quesos "
+            f"curados/embutidos/enlatados/camarones si eso va a excederlo. Si la despensa solo da eso, "
+            f"úsalo con moderación — no es una prohibición, es una preferencia de colocación."
+        )
 
     prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
         rejected_meal=rejected_meal,
@@ -2180,6 +2255,70 @@ def swap_meal(form_data: dict):
             except Exception as _sd_e:
                 logger.warning(f"[P2-UPDATE-SAMEDAY-VARIETY] backstop same-day falló (no bloquea): "
                                f"{type(_sd_e).__name__}: {_sd_e}")
+
+        # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Backstop determinista: tras todos los ajustes
+        # deterministas (solver/closer/trim) y guards de calidad de arriba, si candidato+resto-del-día
+        # EXCEDE el techo → UN reintento con directiva explícita (mismo patrón single-retry-con-marker
+        # de P1-SWAP-BASE-REPEAT-GATE / P2-UPDATE-SAMEDAY-VARIETY arriba). El reintento de sodio comparte
+        # el presupuesto de 3 intentos de tenacity con TODOS los demás guards de esta función — NO tiene
+        # su propio @retry — por diseño: es exactamente el mismo modelo ya vigente para pantry/coherencia/
+        # macros/clínico/slot/appetibility/dish-quality/raw-staple/base-repeat/sameday-protein; inventar
+        # un budget aparte rompería esa invariante compartida sin beneficio (el swap ya falla-honesto a
+        # SWAP_LLM_RETRIES_EXHAUSTED cuando se agotan). Si el reintento tampoco baja el sodio → se ACEPTA
+        # el mejor candidato (el aviso existente `_quality_degraded`/panel cubre el resto) — jamás se
+        # falla el swap por sodio (repartir, no prohibir). Knob MEALFIT_SODIUM_AWARE_SWAP (default ON).
+        # tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
+        if _sodium_aware_on and _sodium_ceiling_mg is not None and _sodium_resto_mg is not None:
+            try:
+                from graph_orchestrator import _meal_sodium_mg as _sod_meal_fn
+                if _tu_db_holder[0] is None:
+                    from nutrition_db import IngredientNutritionDB as _SodMealDB
+                    _tu_db_holder[0] = _SodMealDB()
+                _cand_dump_sod = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                _cand_sodium_mg = _sod_meal_fn(_cand_dump_sod, _tu_db_holder[0])
+                _day_total_sod = _sodium_resto_mg + _cand_sodium_mg
+                if _day_total_sod > _sodium_ceiling_mg:
+                    _SOD_MARKER = "🧂 RETRY PRESUPUESTO DE SODIO"
+                    if _SOD_MARKER not in str(_current_prompt[0]):
+                        logger.warning(
+                            f"🧂 [P1-SODIUM-AWARE-PLACEMENT] candidato excede el presupuesto de sodio "
+                            f"(candidato≈{_cand_sodium_mg:.0f}mg + resto≈{_sodium_resto_mg:.0f}mg = "
+                            f"{_day_total_sod:.0f}mg > techo {_sodium_ceiling_mg:.0f}mg) | "
+                            f"meal_type={meal_type} | accion=retry_1x"
+                        )
+                        _current_prompt[0] = prompt_text + (
+                            f"\n\n{_SOD_MARKER} (OBLIGATORIO): el plato anterior aporta "
+                            f"~{_cand_sodium_mg:.0f}mg de sodio, pero el presupuesto restante del día era "
+                            f"~{max(0.0, _sodium_ceiling_mg - _sodium_resto_mg):.0f}mg (resto del día "
+                            f"~{_sodium_resto_mg:.0f}mg de un techo de {_sodium_ceiling_mg:.0f}mg). Cambia "
+                            f"la proteína principal a una FRESCA no curada (nada de quesos curados, "
+                            f"embutidos, enlatados ni camarones) y reduce sal/salsas añadidas. Mantén los "
+                            f"macros objetivo."
+                        )
+                        raise ValueError(
+                            f"SODIUM_BUDGET_EXCEEDED: candidato {_cand_sodium_mg:.0f}mg + resto "
+                            f"{_sodium_resto_mg:.0f}mg > techo {_sodium_ceiling_mg:.0f}mg"
+                        )
+                    logger.info(
+                        f"🧂 [P1-SODIUM-AWARE-PLACEMENT] sodio sigue sobre presupuesto tras el retry — "
+                        f"aceptado (repartir, no prohibir; el aviso existente cubre) | "
+                        f"meal_type={meal_type} | candidato≈{_cand_sodium_mg:.0f}mg | "
+                        f"accion=accepted_after_retry"
+                    )
+                else:
+                    logger.info(
+                        f"🧂 [P1-SODIUM-AWARE-PLACEMENT] candidato dentro de presupuesto "
+                        f"(candidato≈{_cand_sodium_mg:.0f}mg, resto≈{_sodium_resto_mg:.0f}mg, "
+                        f"techo={_sodium_ceiling_mg:.0f}mg) | meal_type={meal_type} | accion=within_budget"
+                    )
+            except ValueError:
+                raise
+            except Exception as _sod_guard_e:
+                logger.debug(
+                    f"[P1-SODIUM-AWARE-PLACEMENT] guard no-op: {type(_sod_guard_e).__name__}: {_sod_guard_e}"
+                )
 
         return res
 

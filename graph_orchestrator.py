@@ -26446,6 +26446,55 @@ _SODIUM_DAIRY_SWAP_LADDER = (
 _SODIUM_DAIRY_NAME_RX = r"queso\s+cottage|cottage\s+cheese|queso\s+blanco(?:\s+(?:fresco|rallado|dominicano))*"
 
 
+# [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Extraídos de las closures `_line_sodium`/`_day_sodium`
+# que vivían DENTRO de `_day_sodium_autofix` (P1-SODIUM-DAY-AUTOFIX) — a nivel de módulo para que
+# otros callers (swap sodium-aware pre-generación en agent.py::swap_meal) puedan REUTILIZAR el
+# MISMO primitivo (`db.micros_from_ingredient_string`) en vez de reimplementar un 2º estimador.
+# `_day_sodium_autofix` delega en estas dos funciones más abajo — cero cambio de comportamiento.
+# tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
+def _line_sodium_mg(ingredient_line, db) -> float:
+    """Sodio (mg) de UNA línea de ingrediente ("150 g de Pollo"), vía el catálogo. Fail-safe: 0.0."""
+    try:
+        mic = db.micros_from_ingredient_string(str(ingredient_line))
+        return float((mic or {}).get("sodium_mg") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _meal_sodium_mg(meal: dict, db) -> float:
+    """Sodio (mg) total de UNA comida — suma `_line_sodium_mg` sobre `ingredients_raw` (preferido,
+    mismo criterio que el panel/autofix) o `ingredients`. Fail-safe: 0.0 si `meal` no es dict."""
+    if not isinstance(meal, dict):
+        return 0.0
+    total = 0.0
+    _ings = meal.get("ingredients_raw") if isinstance(meal.get("ingredients_raw"), list) else meal.get("ingredients")
+    for _s in _ings or []:
+        if isinstance(_s, str):
+            total += _line_sodium_mg(_s, db)
+    return total
+
+
+def _sodium_day_ceiling_mg_for_banner(form_data: "dict | None" = None) -> float:
+    """[P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Techo diario de sodio — MISMA fuente que el banner
+    (`micronutrients.dri_targets(...)["sodium_mg"]["ceiling"]`, WHO <2000mg, el que alimenta
+    `micronutrient_report.gaps` y por ende `_maybe_mark_panel_degraded`/`apply_update_condition_ceilings`).
+    Deliberadamente NO reutiliza `SODIUM_DAY_CEILING_MG` (el knob del autofix determinista P1-SODIUM-
+    DAY-AUTOFIX arriba): son dos SSOT hermanos que hoy coinciden en 2000 pero pueden driftear si alguien
+    cambia solo uno de los dos knobs — el swap sodium-aware debe ver el MISMO número que el usuario ve
+    en el panel/banner, no el del corrector determinista. Fail-safe: 2000.0 si el lookup falla."""
+    try:
+        from micronutrients import dri_targets as _sod_dri
+        _fd = form_data or {}
+        _targets = _sod_dri(
+            sex=_fd.get("gender") or _fd.get("sex"),
+            age=_fd.get("age"),
+            pregnant=bool(_fd.get("pregnant")),
+        )
+        return float((_targets.get("sodium_mg") or {}).get("ceiling") or 2000.0)
+    except Exception:
+        return 2000.0
+
+
 def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
     """[P1-SODIUM-DAY-AUTOFIX · 2026-07-04] Corrector determinista del techo de sodio POR DÍA.
     Para cada día cuyo sodio medido (raw preferido, mismo medidor del panel) supere
@@ -26499,23 +26548,13 @@ def _day_sodium_autofix(days: list, form_data=None, db=None) -> int:
             _repl_ok_cache[_r] = _ok
             return _ok
 
+        # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Delegan al SSOT de módulo (arriba) — mismo
+        # comportamiento, cero duplicación del primitivo `db.micros_from_ingredient_string`.
         def _line_sodium(_s: str) -> float:
-            try:
-                mic = db.micros_from_ingredient_string(str(_s))
-                return float((mic or {}).get("sodium_mg") or 0.0)
-            except Exception:
-                return 0.0
+            return _line_sodium_mg(_s, db)
 
         def _day_sodium(_meals: list) -> float:
-            total = 0.0
-            for _m in _meals:
-                if not isinstance(_m, dict):
-                    continue
-                _ings = _m.get("ingredients_raw") if isinstance(_m.get("ingredients_raw"), list) else _m.get("ingredients")
-                for _s in _ings or []:
-                    if isinstance(_s, str):
-                        total += _line_sodium(_s)
-            return total
+            return sum(_meal_sodium_mg(_m, db) for _m in _meals if isinstance(_m, dict))
 
         actions = 0
         for _d in days if isinstance(days, list) else []:

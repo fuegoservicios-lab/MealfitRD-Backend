@@ -41,7 +41,13 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 1)  # [P2-CULINARY-METADATA-ROUND2 · 2026-08-01] backfill ronda 2 de
+_PFIX_DATE_FLOOR = date(2026, 8, 2)  # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] colocación consciente
+# de sodio en swap/regen-day: presupuesto de sodio restante del día inyectado como directiva
+# informativa antes de generar la alternativa; tras generarla, si el candidato excede, UN reintento
+# (comparte el presupuesto de 3 intentos de tenacity con TODOS los demás guards de swap_meal, no
+# tiene budget propio) y si sigue excedido se ACEPTA (repartir, no prohibir — nunca falla el swap
+# por sodio). Techo = misma fuente que el banner (`micronutrients.dri_targets`, no un literal
+# nuevo). Histórico — floor previo P2-CULINARY-METADATA-ROUND2 · 2026-08-01] backfill ronda 2 de
 # `prep_methods`/`ready_to_eat` en `master_ingredients`: cierra las 56/204 filas (categoría
 # 'Despensa', dejadas sin default a propósito por la ronda 1) que mantenían la cobertura del scan
 # culinario en ~61-69% — bajo el ≥80% que exige la precondición de F2
