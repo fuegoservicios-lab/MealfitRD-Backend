@@ -67,28 +67,29 @@ Por qué se filtran comentarios ANTES de escanear:
 fallo silencioso del stripper convierte el test de arriba en un test que no
 mira nada — y pasaría en verde para siempre.
 
-Excepciones activas (verdaderos positivos, NO relajar el test para
-acomodarlos — ver `_PENDING_REWORK` abajo):
-    - `BenchmarkShowcase.jsx` / `.module.css`: Task 11 del plan
-      ("SSOT del benchmark") está BLOQUEADA esperando una decisión del dueño
-      (benchmark LLM: 0 vs 55 — ver `.superpowers/sdd/2026-08-01-landing-
-      papel-tecnico/progress.md`). La sección sigue siendo el instrumento
-      oscuro de junio con sus acentos (`#2DD4BF`, `#34D399`, etc.) intactos.
-      [2026-08-02] Recibió una PIEL DE CONTENCIÓN: dejó de romper las reglas
-      absolutas del §2.3 en el perímetro que toca el papel, pero el interior
-      de la consola sigue sin migrar. El alcance exacto de lo que queda está
-      en el bloque `# TODO` de `_PENDING_REWORK`, abajo.
+Excepciones activas: NINGUNA [P1-PAPER-BENCHMARK · 2026-08-02].
+    `_PENDING_REWORK` quedó VACÍO. Las dos que hubo se retiraron al cerrar su
+    tarea, que es exactamente lo que
+    `test_pending_rework_exclusions_are_still_pending` existe para forzar:
 
-Excepción RETIRADA [P2-PAPER-NO-INK · 2026-08-02, Task 13]:
     - `Pricing.module.css` estuvo excluido mientras Task 13 ("Las páginas
       token-driven") no corría. Retenía hex saturados reales (`#047857`,
       `#8B5CF6` ×2), un blob de fondo entero en `rgba()` (`.pricing::before`,
       3 `radial-gradient` con índigo/rosa/esmeralda) y una píldora tintada
-      (`.badge`, `rgba(79, 70, 229, ...)`). Task 13 reescribió el módulo a
-      papel, así que la exclusión SE BORRA: mantenerla sería una excepción
-      fantasma detrás de la cual alguien podría colgar un color nuevo sin
-      que el escáner lo viera. `test_pending_rework_exclusions_are_still_
-      pending` es precisamente el guard que obliga a esta limpieza.
+      (`.badge`, `rgba(79, 70, 229, ...)`). Task 13 reescribió el módulo.
+    - `BenchmarkShowcase.jsx` / `.module.css` estuvieron excluidos mientras
+      Task 11 ("SSOT del benchmark") estuvo BLOQUEADA esperando una decisión
+      del dueño sobre una cifra que se contradecía entre ficheros (`llm: 0`
+      vs `llm: 55`). Fue la última sección del landing con la consola oscura
+      de junio: radar teal con `<animateTransform repeatCount="indefinite">`,
+      scanlines en bucle, glow pulsante y una caja de leyenda con puntos de
+      color. El dueño resolvió la cifra el 2026-08-02 y la sección se
+      reescribió entera; la exclusión se retiró en el mismo commit.
+
+    Mantener una exclusión que ya no tiene deuda detrás es peor que no
+    tenerla: queda una excepción documentada de la que alguien puede colgar
+    un color nuevo sin que el escáner lo vea. Es el mismo razonamiento que
+    CLAUDE.md ya deja escrito para la invariante I6.
 
 Límites conocidos [P2-PAPER-NO-INK · 2026-08-02]:
     Un guard con huecos ENUMERADOS es honesto. Uno con huecos que nadie ha
@@ -182,6 +183,12 @@ _PAPER_FILES = [
     # escáner queda apuntando al fichero para que reañadirlo sea un test rojo y
     # no un cambio silencioso — que es exactamente el riesgo (b) del spec §4.6.
     _FRONTEND_SRC / "data" / "news.js",
+    # [P1-PAPER-BENCHMARK · 2026-08-02] Mismo criterio que `news.js`: no es CSS
+    # ni JSX, pero alimenta a TRES superficies papel (el landing, /precision y
+    # /motor) y es el sitio natural donde alguien colgaría un color «de serie»
+    # junto a las cifras. Hoy no tiene ninguno; el escáner queda apuntando para
+    # que añadir uno sea un test rojo y no un cambio silencioso.
+    _FRONTEND_SRC / "data" / "benchmark.js",
     # [P1-PAPER-LEGAL · 2026-08-02] Las 9 páginas legales comparten UN módulo y
     # UN jsx, y las 9 son superficie papel — así que su BASE se reescribió (no
     # un bloque escopado) y el escáner los mira ENTEROS, igual que News/About.
@@ -195,42 +202,32 @@ _PAPER_FILES = [
     _FRONTEND_SRC / "pages" / "legal" / "LegalPages.jsx",
 ]
 
-# TODO(P2-PAPER-NO-INK): UNA exclusión temporal, verdadero positivo — NO
-# añadir más sin documentar aquí y en el docstring de arriba.
+# _PENDING_REWORK ESTÁ VACÍO, y eso es el estado deseado: cero excepciones.
 #
-#   1. BenchmarkShowcase.jsx / .module.css — Task 11 del plan de rediseño
-#      ("SSOT del benchmark") está BLOQUEADA esperando decisión del dueño
-#      (benchmark LLM: 0 vs 55). Quitar de esta lista en cuanto Task 11
-#      cierre y la sección quede repintada en papel.
+# Historia de las dos que hubo, conservada porque el guard inverso
+# (`test_pending_rework_exclusions_are_still_pending`) solo funciona si alguien
+# entiende para qué sirve la lista:
 #
-#      [P1-PAPER-THEME · piel de contención · 2026-08-02] La exclusión SIGUE
-#      viva, pero YA NO cubre lo mismo, y decirlo importa: lo que falta ahora
-#      es SOLO EL INTERIOR de la consola oscura. El perímetro que toca el
-#      papel se cerró en esta pasada — fondo de sección (era una banda
-#      lavanda `color-mix(#A78BFA 7%)` a toda anchura), `.titleAccent` (media
-#      frase del H2 a 1,80:1), `.modelBadge` + `.modelDot`, el radio de 24px y
-#      la sombra de 80px de blur de `.console`, el marco de `.footnote`, y
-#      `.footnoteIcon`. Los 11 aciertos que este escáner sigue viendo son los
-#      del instrumento: `--c-good`/`--c-good2`/`--c-llm`/`--c-muted`, el
-#      degradado `#0F1628 → #0A0F1C` del cuerpo, el barrido de scanlines, el
-#      relleno de los anillos del radar y los 2 `stopColor` del
-#      `<radialGradient>` del JSX.
+#   · `Pricing.module.css` — excluido mientras Task 13 no corría (3 hex
+#     saturados, un blob de fondo en `rgba()` y una píldora tintada). Task 13
+#     reescribió el módulo y la entrada se retiró el 2026-08-02.
+#   · `BenchmarkShowcase.jsx` / `.module.css` — excluidos mientras Task 11
+#     estuvo BLOQUEADA esperando una decisión del dueño sobre una cifra
+#     (benchmark `llm: 0` vs `llm: 55`). La sección siguió siendo el
+#     instrumento oscuro de junio —radar teal, scanlines, glow— durante todo
+#     el rediseño; el 2026-08-02 recibió una «piel de contención» (fondo
+#     papel, titular en tinta, marco de 1px, sin sombra ni radio) que cerró el
+#     perímetro que tocaba el papel pero NO el interior. El dueño resolvió la
+#     cifra ese mismo día [P1-PAPER-BENCHMARK] y la sección se reescribió
+#     entera: radar y SMIL borrados, dos figuras nuevas en `figures/`, tabla de
+#     capacidades semántica. **Entradas retiradas** — es lo que este mismo
+#     fichero llama una «excepción fantasma» si se deja puesta.
 #
-#      Consecuencia práctica: si la próxima pasada deja la consola en papel,
-#      este fichero pasa el escáner ENTERO y hay que borrar la entrada (lo
-#      exige `test_pending_rework_exclusions_are_still_pending`). Lo que NO
-#      se puede hacer es dar por hecho que "ya está migrado" viendo la home:
-#      lo que se arregló es la piel, no la sección.
-#
-# [P2-PAPER-NO-INK · 2026-08-02] `Pricing.module.css` SALIÓ de esta lista al
-# cerrar Task 13: el módulo se reescribió a papel (blob de fondo borrado,
-# anillo violeta sustituido por banda de tinta, píldoras a contorno). Ahora lo
-# escanea `test_no_saturated_color_in_paper_surfaces` como cualquier otro
-# archivo de `components/home/`.
-_PENDING_REWORK = {
-    _FRONTEND_SRC / "components" / "home" / "BenchmarkShowcase.jsx",
-    _FRONTEND_SRC / "components" / "home" / "BenchmarkShowcase.module.css",
-}
+# Si vuelves a añadir una entrada aquí: documenta QUÉ tarea la justifica y qué
+# la cierra, en este bloque Y en el docstring del módulo. Una exclusión sin
+# fecha de salida es un agujero permanente detrás del cual cabe cualquier
+# color nuevo sin que el escáner lo vea.
+_PENDING_REWORK: set = set()
 
 # --- Las 4 notaciones de color que CSS/JSX pueden usar --------------------
 _HEX6 = re.compile(r"#(?P<hex6>[0-9A-Fa-f]{6})\b")
