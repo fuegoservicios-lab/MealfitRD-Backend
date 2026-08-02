@@ -3,8 +3,14 @@
 
     1. frontend/src/utils/paperSurface.js   — SSOT de JS
     2. frontend/index.html                  — boot script inline (no puede importar)
-    3. frontend/src/utils/marketingRoutes.js — la lista del HEADER, que hoy
-       coincide pero gobierna un alcance distinto (19 rutas vs 6)
+    3. frontend/src/utils/marketingRoutes.js — la lista del HEADER, que
+       gobierna un alcance distinto (19 patrones vs las de papel)
+
+[P1-PAPER-SURFACE-EXTEND · 2026-08-02] Las listas (1)/(2) y (3) YA NO coinciden:
+la superficie papel creció a 10 rutas + 1 prefijo dinámico (`/novedades/<slug>`)
+y `MARKETING_ROUTES` se quedó en 6. Eso no es drift, es el motivo por el que
+existen dos listas — y desde hoy el test que las comparaba comprueba la relación
+correcta (marketing ⊆ papel) en vez de la igualdad.
 
 Antes de este P-fix la duplicación (1)↔(2) estaba sostenida SOLO por un
 comentario: cero tests. Tocar una sola producía flash de tema en carga
@@ -29,7 +35,26 @@ _INDEX_HTML = _FRONTEND / "index.html"
 _APP_JSX = _FRONTEND / "src" / "App.jsx"
 _HEADER_JSX = _FRONTEND / "src" / "components" / "layout" / "Header.jsx"
 
-_EXPECTED = ["/", "/precios", "/como-funciona", "/funciones", "/precision", "/motor"]
+# [P1-PAPER-SURFACE-EXTEND · 2026-08-02] La superficie papel dejó de coincidir
+# con `MARKETING_ROUTES`, que es exactamente el escenario que la separación de
+# listas anticipaba (ver docstring de `paperSurface.js`). Cuatro rutas más:
+#   /research      — comparte `HowItWorksPage.module.css` con las 3 páginas de
+#                    detalle que ya eran papel; era la única consumidora fuera.
+#   /novedades     — el landing la enlaza desde «05 / REGISTRO» (tabla B/N);
+#                    cierra la deuda con fecha del spec §10.3.
+#   /supermercado  — enlazada desde el footer de todas las rutas de papel.
+#   /about         — ídem.
+# `MARKETING_ROUTES` NO se tocó: gobierna el header de 19 patrones de ruta y
+# repuntarla dejaría 13 rutas sin nav ni CTA.
+_EXPECTED_PAPER = [
+    "/", "/precios", "/como-funciona", "/funciones", "/precision", "/motor",
+    "/research", "/novedades", "/supermercado", "/about",
+]
+# `/novedades/:slug` es DINÁMICA: ninguna lista exacta puede cubrirla sin
+# drift contra `data/news.js`. Va por prefijo, igual que `newsRoutes.js` ya
+# hacía para el header.
+_EXPECTED_PAPER_PREFIXES = ["/novedades/"]
+_EXPECTED_MARKETING = ["/", "/precios", "/como-funciona", "/funciones", "/precision", "/motor"]
 
 
 def _routes_from_array(text: str, const_name: str) -> list[str]:
@@ -43,14 +68,28 @@ def _routes_from_array(text: str, const_name: str) -> list[str]:
     return re.findall(r"['\"]([^'\"]+)['\"]", m.group("body"))
 
 
-def test_paper_surface_module_exists_and_lists_the_six_routes():
+def test_paper_surface_module_lists_every_paper_route():
     assert _PAPER_JS.exists(), (
         "P1-PAPER-SURFACE-SSOT: falta `frontend/src/utils/paperSurface.js`."
     )
     text = _PAPER_JS.read_text(encoding="utf-8")
-    assert _routes_from_array(text, "PAPER_SURFACE_ROUTES") == _EXPECTED
+    assert _routes_from_array(text, "PAPER_SURFACE_ROUTES") == _EXPECTED_PAPER
     assert "export const isPaperSurface" in text, (
         "P1-PAPER-SURFACE-SSOT: `paperSurface.js` debe exportar `isPaperSurface`."
+    )
+
+
+def test_paper_surface_module_lists_the_dynamic_prefixes():
+    """[P1-PAPER-SURFACE-EXTEND · 2026-08-02] `/novedades/:slug` no cabe en la
+    lista exacta. Sin este caso, alguien podría añadir la ruta estática
+    `/novedades` y creer que el artículo queda cubierto: no lo estaría, y el
+    síntoma sería un parpadeo a oscuro SOLO al abrir un anuncio — el borde que
+    nadie prueba a mano."""
+    text = _PAPER_JS.read_text(encoding="utf-8")
+    assert _routes_from_array(text, "PAPER_SURFACE_PREFIXES") == _EXPECTED_PAPER_PREFIXES
+    assert "startsWith" in text, (
+        "P1-PAPER-SURFACE-SSOT: `isPaperSurface` debe consultar los prefijos "
+        "(startsWith), no solo el `includes` de la lista exacta."
     )
 
 
@@ -58,9 +97,13 @@ def test_boot_script_copy_matches_the_ssot():
     """El boot script de index.html no puede importar el módulo, así que
     lleva una copia literal. Si divergen, la carga en frío parpadea."""
     html = _INDEX_HTML.read_text(encoding="utf-8")
-    assert _routes_from_array(html, r"var\s+PAPER") == _EXPECTED, (
+    assert _routes_from_array(html, r"var\s+PAPER") == _EXPECTED_PAPER, (
         "P1-PAPER-SURFACE-SSOT: la copia del boot script en index.html "
         "divergió de paperSurface.js. Las dos tienen que viajar juntas."
+    )
+    assert _routes_from_array(html, r"var\s+PAPER_PFX") == _EXPECTED_PAPER_PREFIXES, (
+        "P1-PAPER-SURFACE-SSOT: la copia de PREFIJOS del boot script divergió. "
+        "Una carga directa de /novedades/<slug> parpadearía a oscuro."
     )
 
 
@@ -126,12 +169,29 @@ def test_header_still_uses_marketing_routes():
     )
 
 
-def test_marketing_routes_still_lists_the_same_six_today():
-    """Hoy ambas listas coinciden. Cuando dejen de coincidir (p.ej. si
-    /supermercado pasa a papel), este test hay que RELAJARLO a propósito,
-    no borrarlo: es el aviso de que la separación empezó a importar."""
+def test_marketing_routes_did_not_move_when_the_paper_surface_grew():
+    """[P1-PAPER-SURFACE-EXTEND · 2026-08-02] Este test decía «hoy ambas listas
+    coinciden» y se anotó a sí mismo: *«cuando dejen de coincidir (p.ej. si
+    /supermercado pasa a papel), hay que RELAJARLO a propósito, no borrarlo»*.
+    Ese día llegó — /supermercado, /research, /novedades y /about pasaron a
+    papel — así que la aserción cambia de forma sin perder su trabajo.
+
+    Lo que comprueba ahora es lo que de verdad importa: que mover la superficie
+    NO movió el header. `MARKETING_ROUTES` sigue siendo las 6 de siempre y sigue
+    siendo un SUBCONJUNTO de la superficie papel (si dejara de serlo, habría una
+    ruta con nav de landing y tema de app, o al revés)."""
     text = _MARKETING_JS.read_text(encoding="utf-8")
-    assert _routes_from_array(text, "MARKETING_ROUTES") == _EXPECTED
+    marketing = _routes_from_array(text, "MARKETING_ROUTES")
+    assert marketing == _EXPECTED_MARKETING, (
+        "P1-PAPER-SURFACE-SSOT: `MARKETING_ROUTES` cambió. Esa lista gobierna el "
+        "HEADER (19 patrones vía isLandingLike), no el tema: repuntarla deja 13 "
+        "rutas sin nav y sin CTA. Si querías mover la superficie papel, el "
+        "fichero es `paperSurface.js`."
+    )
+    assert set(marketing).issubset(set(_EXPECTED_PAPER)), (
+        "P1-PAPER-SURFACE-SSOT: una ruta de marketing quedó fuera de la "
+        "superficie papel. Marketing ⊆ papel es invariante desde el flip."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +282,19 @@ def test_theme_call_sites_write_paper_not_dark():
         f"P1-PAPER-THEME: App.jsx debe escribir 'paper' en 2 sitios "
         f"(PublicThemeLock y el useEffect de arranque); encontrados {len(paper_writes)}."
     )
-    assert re.search(r"PAPER\.indexOf\(location\.pathname\)\s*!==\s*-1\s*\)\s*theme\s*=\s*['\"]paper['\"]", html), (
+    # [P1-PAPER-SURFACE-EXTEND · 2026-08-02] La aserción anterior exigía el
+    # literal `PAPER.indexOf(location.pathname) !== -1) theme = 'paper'`. Ese
+    # `indexOf` no puede ver `/novedades/<slug>`, así que el boot script pasó a
+    # un predicado único (`paperPath`) consultado por el camino normal Y por el
+    # `catch` — que es además lo que impide que los dos vuelvan a divergir.
+    assert re.search(r"paperPath\(location\.pathname\)\)\s*theme\s*=\s*['\"]paper['\"]", html), (
         "P1-PAPER-THEME: el boot script de index.html debe fijar 'paper' para "
         "las rutas de la superficie. Si se queda en 'dark', la carga en frío "
         "parpadea antes de que el SPA corrija."
+    )
+    assert re.search(r"paperPath\(location\.pathname\)\s*\?\s*['\"]paper['\"]\s*:\s*['\"]dark['\"]", html), (
+        "P1-PAPER-THEME: el `catch` del boot script debe consultar el MISMO "
+        "predicado. Si se queda con su propia copia de la condición, un fallo de "
+        "localStorage (Safari privado, ITP, webviews) pinta el splash en oscuro "
+        "sobre una ruta de papel."
     )
