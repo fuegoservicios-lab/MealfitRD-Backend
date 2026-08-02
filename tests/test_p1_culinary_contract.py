@@ -1196,3 +1196,126 @@ def test_v4_caso_real_30_vs_45_exactos_sigue_disparando_tras_el_fix():
     v4 = [x for x in v if x["check"] == "V4"]
     assert v4 and v4[0]["food"] == "Queso de hoja", v4
     assert "30" in v4[0]["detail"] and "45" in v4[0]["detail"], v4
+
+
+# ---------------------------------------------------------------------------
+# [P1-CULINARY-CONTRACT-BATTER · 2026-08-01] Clase FP "mezclas horneadas" —
+# la única que aún bloqueaba el reloj de F2 (necesita ≥7 días de warn limpio;
+# una torta de avena horneada dispara en CADA plan con desayuno horneado).
+# Caso real (plan 054a43c2, día 3 Desayuno — torta de avena horneada / baked
+# oats; el plan ya NO vive en Neon al momento de este fix — verificado por
+# SELECT de solo lectura, 0 filas — así que el texto abajo es fiel a la cita
+# TEXTUAL del reporte, con relleno plausible donde el reporte truncaba con
+# "..."). V1 acusaba a los 5 alimentos integrados (Avena, Leche descremada,
+# Polvo de hornear, Canela, Vainilla) porque ninguno lista 'hornear'
+# individualmente en `prep_methods` — cierto pero irrelevante: el nombre del
+# alimento "Polvo de hornear" contiene LITERALMENTE la palabra "hornear", así
+# que el regex de `VERB_TO_METHOD` lo lee como una ocurrencia real del verbo
+# de cocción dentro de la MISMA cláusula que lo integra ("Integra la avena,
+# la leche descremada, el polvo de hornear, la canela y la vainilla..."). El
+# plato es culinariamente NORMAL: lo que se hornea es LA MEZCLA resultante de
+# integrar los ingredientes, no cada componente por separado. Ver
+# `MEZCLA_VERBOS`/`_es_clausula_mezcla` en `culinary_coherence.py` para el
+# razonamiento completo (incluida la colisión "integral" ⊃ "integra" ya
+# protagonista de FP round 2, y por qué 'bate'/'une' usan alternancia exacta
+# en vez de raíz+comodín).
+# ---------------------------------------------------------------------------
+
+_CAT_MEZCLA = _CAT_FP1 + [
+    {"name": "Polvo de hornear", "prep_methods": ["ninguno"], "ready_to_eat": True},
+    {"name": "Canela", "prep_methods": ["ninguno"], "ready_to_eat": True},
+    {"name": "Vainilla", "prep_methods": ["ninguno"], "ready_to_eat": True},
+]
+
+_PASO_REAL_BAKED_OATS = (
+    "El Toque de Fuego: Precalienta el horno a 180°C. Integra la avena, la "
+    "leche descremada, el polvo de hornear, la canela y la vainilla en un "
+    "tazón hasta formar una mezcla homogénea. Vierte la mezcla en un molde "
+    "apto para horno y hornea durante 25 minutos hasta que esté firme."
+)
+
+
+def test_mezcla_caso_real_baked_oats_hornear_la_mezcla_no_los_componentes():
+    """Caso real completo (plan 054a43c2): la ocurrencia de 'hornear' que
+    antes disparaba las 5 acusaciones vive DENTRO de la cláusula de
+    integración ("...el polvo de hornear...", el propio nombre del alimento
+    contiene el verbo). La cláusula integra 5 alimentos (≥3) bajo 'integra'
+    → salvaguarda de mezcla activa → 0 V1. La ocurrencia de 'horno' en la
+    primera oración ("Precalienta el horno") y la de 'hornea' en la tercera
+    ("...y hornea durante 25 minutos") no acusan a nadie de todos modos —
+    ninguna de esas dos cláusulas menciona alimento alguno (el molde/la
+    mezcla no son alimentos catalogados) — la salvaguarda de mezcla ni
+    siquiera hace falta ahí (`if not foods: continue` ya las cubre)."""
+    v = cc.culinary_contract_scan(_plan(
+        [_PASO_REAL_BAKED_OATS],
+        ["50 g Avena", "100 ml Leche descremada", "5 g Polvo de hornear",
+         "2 g Canela", "5 ml Vainilla"],
+        nombre="Torta de avena horneada"), _CAT_MEZCLA)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 == [], v1
+
+
+def test_mezcla_control_a_un_solo_alimento_sin_integracion_sigue_disparando():
+    """(a) 'Cuece el Casabe según el paquete.' — 1 alimento, sin verbo de
+    integración: la salvaguarda de mezcla no debe apagar el positivo de
+    siempre (mismo caso que ancla `test_v1_verbo_imposible_sobre_ready_to_eat`,
+    repetido aquí como regresión explícita del fix de mezcla)."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Cuece el Casabe según el paquete."], ["30 g Casabe"]), _CAT)
+    assert any(x["check"] == "V1" and x["food"] == "Casabe" for x in v), v
+
+
+def test_mezcla_control_b_fosil_yogur_sin_verbo_integracion_sigue_disparando():
+    """(b) El fósil real (P1-CULINARY-CONTRACT-YOGUR): 'Hierve el yogur
+    griego en agua durante 8 minutos hasta que estén firmes; pélalos...' NO
+    tiene verbo de integración (`MEZCLA_VERBOS`) en su cláusula — la nueva
+    salvaguarda no debe apagarlo. Reusa el fixture REAL exacto de esa
+    regresión (`_CAT_YOGUR`/`_PASO_REAL_HIERVE_YOGUR`) en vez de reinventar
+    el texto."""
+    plan = _plan([_PASO_REAL_HIERVE_YOGUR],
+                 ["⅔ taza de Yogurt griego sin azúcar"],
+                 nombre="Batido Caribeño de Mango, Avena y Chía")
+    v = cc.culinary_contract_scan(plan, _CAT_YOGUR)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 and v1[0]["food"] == "Yogurt", v1
+
+
+def test_mezcla_control_c_tuesta_pechuga_de_pollo_sigue_disparando():
+    """(c) 'Tuesta la Pechuga de pollo.' — 1 alimento, sin integración,
+    'tostar' fuera de sus `prep_methods` reales: sigue disparando (mismo
+    caso que `test_fp1_positivos_reales_siguen_disparando`, repetido aquí
+    como regresión explícita del fix de mezcla)."""
+    v = cc.culinary_contract_scan(_plan(["Tuesta la Pechuga de pollo."]), _CAT)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 and v1[0]["food"] == "Pechuga de pollo", v1
+
+
+def test_mezcla_control_d_integracion_bajo_el_umbral_no_exime_al_licuado_aparte():
+    """(d) Un paso que integra SOLO 2 alimentos (Avena+Leche, bajo el umbral
+    de 3) en una cláusula, y LICÚA un tercero (Bistec de res) no-integrado
+    en una cláusula APARTE: la salvaguarda de mezcla no debe activarse en
+    NINGUNA de las dos cláusulas (la de integración no alcanza el umbral; la
+    del licuado no contiene verbo de integración) — Bistec de res sigue
+    acusado con normalidad. Prueba que la exención nunca escapa de su propia
+    cláusula de integración, ni se dispara por un umbral no alcanzado."""
+    v = cc.culinary_contract_scan(_plan(
+        ["Integra la Avena y la Leche en un tazón. Licúa el Bistec de res "
+         "con hielo."],
+        ["50 g Avena", "100 ml Leche", "120 g Bistec de res"]), _CAT_FP1)
+    v1 = [x for x in v if x["check"] == "V1"]
+    assert v1 and v1[0]["food"] == "Bistec de res", v1
+
+
+def test_mezcla_no_colisiona_con_integral_pan_arroz_tortilla():
+    """Guard adicional (no listado en los 4 controles, encontrado por
+    inspección propia): 'integral' (pan/arroz/tortilla integral, calificador
+    COMÚN en la prosa dominicana, protagonista real de FP round 2 caso FP-C)
+    NO debe leerse como una conjugación de 'integrar' — sin el lookahead
+    `al(?:es)?\\b` en `_MEZCLA_RE`, el mero hecho de decir 'tortilla
+    integral' en un paso con ≥3 alimentos catalogados activaría la
+    salvaguarda de mezcla de forma espuria y apagaría acusaciones legítimas
+    que nada tienen que ver con integrar/mezclar nada."""
+    assert not cc._MEZCLA_RE.search("tortilla integral")
+    assert not cc._MEZCLA_RE.search("arroz integral")
+    assert not cc._MEZCLA_RE.search("pan integrales")
+    assert cc._MEZCLA_RE.search("integra los ingredientes")

@@ -314,6 +314,82 @@ def _norm(text: str) -> str:
     return _YOGUR_T_RE.sub(lambda m: "yogur" + (m.group(1) or ""), s)
 
 
+# [P1-CULINARY-CONTRACT-BATTER · 2026-08-01] Clase FP "mezclas horneadas" —
+# única clase que aún bloqueaba el reloj de F2 (necesita ≥7 días de warn
+# limpio; una torta de avena horneada dispara en CADA plan con desayuno
+# horneado). Caso real (plan 054a43c2, día 3 Desayuno, "El Toque de Fuego:
+# Precalienta el horno a 180°C. Integra la avena, la leche descremada, el
+# polvo de hornear, la canela y la vainilla..."): V1 acusaba a los 5
+# alimentos integrados porque NINGUNO lista 'hornear' individualmente en
+# `prep_methods` — cierto, pero irrelevante: el nombre del alimento "Polvo
+# de hornear" contiene LITERALMENTE la palabra "hornear", así que el propio
+# regex de `VERB_TO_METHOD` lo lee como una ocurrencia real del verbo dentro
+# de la misma cláusula que lo integra ("Integra la avena, ..., el polvo de
+# hornear, ..."). El plato (baked oats) es culinariamente NORMAL: lo que se
+# hornea es LA MEZCLA resultante de integrar los ingredientes, no cada
+# componente por separado — nadie espera que "Polvo de hornear" por sí solo
+# acepte 'hornear' como método, igual que nadie espera que "Avena" cruda
+# acepte 'hornear': el batter entero sí, sus partes no.
+#
+# Regla: si una cláusula integra (verbo de MEZCLA_VERBOS) a ≥3 alimentos
+# resolubles, los verbos de COCCIÓN que caigan en ESA MISMA cláusula juzgan
+# a la mezcla resultante, no a sus componentes → V1 se salta esos alimentos
+# para esa ocurrencia. Scope deliberadamente ACOTADO a la cláusula de
+# integración (no "el paso completo", no "cláusulas adyacentes") — un paso
+# que integra 2 alimentos (bajo el umbral) y LICÚA un tercero en una
+# oración aparte NO debe exentar al tercero: "mantén simple" > generalizar
+# de más sobre un solo caso real. El caso real en sí no necesita mirar la
+# oración anterior ("Precalienta el horno", clause 1) porque esa cláusula
+# no menciona NINGÚN alimento — sin alimentos no hay acusación posible ahí,
+# con o sin esta regla (ver `if not foods: continue` más abajo).
+#
+# Verbos en forma imperativa (la receta SIEMPRE instruye en 2ª persona) con
+# el mismo anti-participio de VERB_TO_METHOD — "ya integrado"/"bien
+# mezclado" describe algo YA HECHO, no una instrucción de integrar ahora.
+# 'bate' y 'une' NO usan el patrón raíz+comodín de los demás: "bat\w*"
+# colisionaría con "Batata" (alimento real del catálogo) y "un\w*"
+# colisionaría con los artículos "un"/"una"/"unos"/"unas" — el mismo modo de
+# fallo documentado repetidas veces en este archivo (bug de 14 apariciones:
+# "sal"⊂"salami"/"sal"⊂"ensalada"). Ambos usan alternancia de formas EXACTAS
+# (imperativo + conjugaciones comunes de receta) en vez de raíz abierta.
+# 'integr' además excluye explícitamente el adjetivo "integral"/"integrales"
+# (pan/arroz/tortilla integral — calificador COMÚN en la prosa dominicana,
+# ya protagonista de un FP real: round 2 caso FP-C, "Tuesta la tortilla
+# integral..."): sin el lookahead `al(?:es)?\b`, "integral" matchearía como
+# si fuera una conjugación del verbo "integrar".
+MEZCLA_VERBOS = frozenset({
+    "integra", "mezcla", "combina", "bate", "incorpora", "une", "revuelve",
+})
+_MEZCLA_RE = re.compile(
+    r"\b(?:"
+    r"integr(?!al(?:es)?\b|ad[oa]s?\b)\w*"
+    r"|mezcl(?!ad[oa]s?\b)\w*"
+    r"|combin(?!ad[oa]s?\b)\w*"
+    r"|incorpor(?!ad[oa]s?\b)\w*"
+    r"|revuelv\w*"
+    r"|bat(?:e|es|imos|en|an|id)\b"
+    r"|un(?:e|en|imos)\b"
+    r")", re.IGNORECASE)
+
+# Umbral mínimo de alimentos "aplicado a ≥3 alimentos resolubles" (letra del
+# diseño) — por debajo de esto, un paso que integra 1-2 alimentos y cocina
+# uno de ellos individualmente sigue siendo un caso normal de V1 (p.ej.
+# "Integra el huevo y bate; cuece a fuego lento" con un único alimento no
+# debe volverse inmune solo por la presencia del verbo "bate").
+_MEZCLA_MIN_ALIMENTOS = 3
+
+
+def _es_clausula_mezcla(clause_text: str, foods: list) -> bool:
+    """True si `clause_text` (ya `_norm`, delimitada por `_clause_bounds`)
+    integra ≥`_MEZCLA_MIN_ALIMENTOS` alimentos resolubles bajo un verbo de
+    `MEZCLA_VERBOS` — en ese caso los verbos de cocción de ESTA MISMA
+    cláusula juzgan a la mezcla resultante, no a cada componente (ver
+    bloque de comentario arriba). `foods` ya viene calculado por el caller
+    (`find_catalog_foods` sobre `clause_text`) para no re-escanear dos
+    veces por ocurrencia."""
+    return len(foods) >= _MEZCLA_MIN_ALIMENTOS and bool(_MEZCLA_RE.search(clause_text))
+
+
 def step_has_cooking_verb(paso: str) -> bool:
     """True si `paso` contiene algún verbo de cocción del vocabulario
     canónico (`VERB_TO_METHOD`). Export público de lo que antes solo se leía
@@ -445,6 +521,16 @@ def _v1_verbo_alimento(day, meal, index) -> list:
                 clause_text = paso_norm[clause_start:clause_end]
                 foods = find_catalog_foods(clause_text, index)
                 if not foods:
+                    continue
+                # [P1-CULINARY-CONTRACT-BATTER] salvaguarda "mezcla": esta
+                # cláusula integra ≥3 alimentos resolubles bajo un verbo de
+                # MEZCLA_VERBOS — el verbo de cocción de ESTA ocurrencia
+                # juzga a la mezcla resultante, no a cada componente (caso
+                # real: "Integra la avena, la leche descremada, el polvo de
+                # hornear, la canela y la vainilla..." — 'hornear' matchea
+                # DENTRO del nombre "Polvo de hornear"). Ver bloque de
+                # comentario sobre `_es_clausula_mezcla` más arriba.
+                if _es_clausula_mezcla(clause_text, foods):
                     continue
                 metas = {food: (index.get(_norm(food)) or {}) for food in foods}
                 # [Task-4 RESOLUCIÓN 2 · controller] atribución verbo→alimento
