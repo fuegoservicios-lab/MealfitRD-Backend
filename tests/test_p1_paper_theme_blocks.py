@@ -1,5 +1,16 @@
 """[P2-PAPER-NO-INK · 2026-08-01] Paridad de bloques de tema.
 
+Renombrado `test_p2_paper_theme_blocks.py` → `test_p1_paper_theme_blocks.py`
+[2026-08-02]. El contenido no cambió; el NOMBRE sí tenía que cambiar. Razón:
+`test_p2_hist_audit_14_marker_test_link.py` exige que el slug de
+`_LAST_KNOWN_PFIX` (`backend/app.py`) matchee al menos un `tests/test_<slug>*.py`
+— es el guard que impide bumpear el marker sin añadir su test de regresión. El
+marker raíz de este rediseño es `P1-PAPER-THEME` (spec §8) → slug
+`p1_paper_theme`, y con el prefijo `p2_` ningún fichero matcheaba: el dueño no
+habría podido bumpear el marker. El marker INTERNO sigue siendo
+`P2-PAPER-NO-INK` a propósito — es el que describe lo que este fichero
+comprueba, y no tiene por qué coincidir con el nombre del archivo.
+
 (i) Ningún `:global(html[data-theme="dark"])` REAL sobrevive en
 `components/home/*.module.css` — esas secciones ya solo se renderizan bajo
 `paper` (la home no lleva toggle de tema), así que un bloque `dark` ahí es

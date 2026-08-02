@@ -78,15 +78,51 @@ def test_theme_call_sites_use_paper_surface_not_marketing_routes():
 
 
 def test_header_still_uses_marketing_routes():
-    """El HEADER conserva su alcance de 19 rutas. Si alguien lo repunta a
-    `isPaperSurface`, las legales y /supermercado pierden nav y CTA."""
+    """El HEADER conserva su alcance de 19 rutas: `isLandingLike` — el
+    predicado que decide nav completa + CTA sticky — se computa desde
+    `isMarketingRoute`, NO desde `isPaperSurface`.
+
+    [fix1 · 2026-08-02] Esta aserción era `'isPaperSurface' not in header`:
+    prohibía una CADENA en vez de comprobar el INVARIANTE, y se volvió falso
+    positivo en cuanto la Task 7 empezó a gatear tres ORNAMENTOS de papel
+    desde el mismo archivo (el cajetín `ES-DO / V1`, la numeración del menú
+    móvil y el glifo de 2 trazos del toggle). Ese uso es legítimo: son
+    elementos que solo existen en el vocabulario papel, y las 13 rutas
+    no-marketing que también montan este header (10 legales + 2 de novedades
+    + /supermercado) siguen en su propio claro/oscuro — heredar el cajetín
+    `ES-DO / V1` en la política de cookies sería el bug, no la defensa.
+
+    Lo que de verdad no puede pasar es que `isLandingLike` se repunte a la
+    lista de 6: eso deja esas 13 rutas SIN nav y SIN CTA. Así que el guard
+    ahora parsea la asignación de `isLandingLike` y comprueba su fuente.
+    Un uso ornamental de `isPaperSurface` pasa; repuntar el chrome falla.
+    """
     header = _HEADER_JSX.read_text(encoding="utf-8")
-    assert "isMarketingRoute" in header, (
-        "P1-PAPER-SURFACE-SSOT: Header.jsx debe seguir usando `isMarketingRoute`."
+    assert "from '../../utils/marketingRoutes'" in header, (
+        "P1-PAPER-SURFACE-SSOT: Header.jsx debe seguir importando "
+        "`isMarketingRoute` desde marketingRoutes.js (19 rutas)."
     )
-    assert "isPaperSurface" not in header, (
-        "P1-PAPER-SURFACE-SSOT: Header.jsx NO debe usar `isPaperSurface` — "
-        "el header cubre 19 rutas, la superficie papel solo 6."
+
+    m = re.search(
+        r"const\s+isLandingLike\s*=\s*(?P<expr>.*?);",
+        header,
+        re.DOTALL,
+    )
+    assert m is not None, (
+        "P1-PAPER-SURFACE-SSOT: no se encontró `const isLandingLike = …;` en "
+        "Header.jsx. Si lo renombraste, actualiza este guard — es el predicado "
+        "que decide qué rutas reciben nav completa + CTA sticky."
+    )
+    expr = m.group("expr")
+    assert "isMarketingRoute(" in expr, (
+        "P1-PAPER-SURFACE-SSOT: `isLandingLike` debe computarse desde "
+        f"`isMarketingRoute(...)`. Expresión encontrada: {expr!r}"
+    )
+    assert "isPaperSurface" not in expr and "isPaper" not in expr, (
+        "P1-PAPER-SURFACE-SSOT: `isLandingLike` NO puede depender de la "
+        "superficie papel — el header cubre 19 rutas (marketing + legales + "
+        "novedades + /supermercado) y el papel solo 6. Repuntarlo dejaría 13 "
+        f"rutas sin nav y sin CTA. Expresión encontrada: {expr!r}"
     )
 
 

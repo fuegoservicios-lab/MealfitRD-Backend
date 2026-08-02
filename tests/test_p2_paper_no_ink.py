@@ -73,8 +73,11 @@ acomodarlos — ver `_PENDING_REWORK` abajo):
       ("SSOT del benchmark") está BLOQUEADA esperando una decisión del dueño
       (benchmark LLM: 0 vs 55 — ver `.superpowers/sdd/2026-08-01-landing-
       papel-tecnico/progress.md`). La sección sigue siendo el instrumento
-      oscuro de junio con sus acentos (`#2DD4BF`, `#34D399`, `#A78BFA`, etc.)
-      intactos.
+      oscuro de junio con sus acentos (`#2DD4BF`, `#34D399`, etc.) intactos.
+      [2026-08-02] Recibió una PIEL DE CONTENCIÓN: dejó de romper las reglas
+      absolutas del §2.3 en el perímetro que toca el papel, pero el interior
+      de la consola sigue sin migrar. El alcance exacto de lo que queda está
+      en el bloque `# TODO` de `_PENDING_REWORK`, abajo.
 
 Excepción RETIRADA [P2-PAPER-NO-INK · 2026-08-02, Task 13]:
     - `Pricing.module.css` estuvo excluido mientras Task 13 ("Las páginas
@@ -167,6 +170,25 @@ _PAPER_FILES = [
 #      ("SSOT del benchmark") está BLOQUEADA esperando decisión del dueño
 #      (benchmark LLM: 0 vs 55). Quitar de esta lista en cuanto Task 11
 #      cierre y la sección quede repintada en papel.
+#
+#      [P1-PAPER-THEME · piel de contención · 2026-08-02] La exclusión SIGUE
+#      viva, pero YA NO cubre lo mismo, y decirlo importa: lo que falta ahora
+#      es SOLO EL INTERIOR de la consola oscura. El perímetro que toca el
+#      papel se cerró en esta pasada — fondo de sección (era una banda
+#      lavanda `color-mix(#A78BFA 7%)` a toda anchura), `.titleAccent` (media
+#      frase del H2 a 1,80:1), `.modelBadge` + `.modelDot`, el radio de 24px y
+#      la sombra de 80px de blur de `.console`, el marco de `.footnote`, y
+#      `.footnoteIcon`. Los 11 aciertos que este escáner sigue viendo son los
+#      del instrumento: `--c-good`/`--c-good2`/`--c-llm`/`--c-muted`, el
+#      degradado `#0F1628 → #0A0F1C` del cuerpo, el barrido de scanlines, el
+#      relleno de los anillos del radar y los 2 `stopColor` del
+#      `<radialGradient>` del JSX.
+#
+#      Consecuencia práctica: si la próxima pasada deja la consola en papel,
+#      este fichero pasa el escáner ENTERO y hay que borrar la entrada (lo
+#      exige `test_pending_rework_exclusions_are_still_pending`). Lo que NO
+#      se puede hacer es dar por hecho que "ya está migrado" viendo la home:
+#      lo que se arregló es la piel, no la sección.
 #
 # [P2-PAPER-NO-INK · 2026-08-02] `Pricing.module.css` SALIÓ de esta lista al
 # cerrar Task 13: el módulo se reescribió a papel (blob de fondo borrado,
