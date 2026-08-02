@@ -10504,8 +10504,8 @@ REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
 - Solo si NINGUNA proteína está duplicada en el skeleton (ej. skeleton dice "pavo" Y "queso") puedes alternarlas entre slots.
 
 CONTRATO DE VARIEDAD (los validadores RECHAZAN el plan COMPLETO si tu corrección lo viola):
-- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día. NO resuelvas una repetición metiendo huevo/revoltillo — usa pollo, pescado, res, yogurt, queso o habichuelas.
-- La MISMA proteína principal NO puede aparecer en 2+ comidas del MISMO día.
+- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día (salvo la excepción de básicos de abajo). NO resuelvas una repetición metiendo huevo/revoltillo — usa pollo, pescado, res, yogurt, queso o habichuelas.
+- La MISMA proteína principal NO puede aparecer en 2+ comidas del MISMO día. ⚠️ EXCEPCIÓN [P1-STAPLE-FOODS]: si la ASIGNACIÓN DEL PLANIFICADOR de arriba lista "BÁSICOS DEL USUARIO", ese alimento puede repetirse el mismo día SOLO si cada aparición usa una TÉCNICA distinta (hervido vs revuelto, guisado vs a la plancha) — técnicas SINÓNIMAS ("revoltillo"/"huevo revuelto", "horneado"/"al horno") NO cuentan como distintas. Sin esa sección, la regla es absoluta.
 - El MISMO plato-base (revoltillo, batido, ensalada, wrap, panqueques, arepitas...) NO puede repetirse en 3+ días del plan — revisa los platos de los otros días abajo antes de elegir.
 - La MISMA fruta dulce NO puede aparecer en 2+ comidas del mismo día.
 {_other_days_block}
@@ -20107,35 +20107,83 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
     return swaps
 
 
-# [P1-STAPLE-FOODS · 2026-08-02] Tokens de TÉCNICA de preparación (orden = prioridad de match;
-# vocabulario tomado del propio contrato de recetas del day-gen — prompts/day_generator.py §3/§6 y
-# el campo "technique" de dish_templates.json). Usado SOLO para la exención staple+técnica-distinta
-# del gate same-day-protein (decisión B del owner): "huevo hervido" en el desayuno y "huevo
-# revuelto" en la cena son técnicas DISTINTAS del mismo básico, no una repetición que fatiga.
-# Fail-safe por diseño: si ningún token matchea, la firma es None y el caller trata la comida como
-# "técnica no determinable" → NUNCA relaja el gate (conservador). tooltip-anchor: P1-STAPLE-FOODS
-_STAPLE_TECHNIQUE_TOKENS = (
-    "guisad", "horneado", "horno", "plancha", "salteado", "saltear", "hervid", "hervir",
-    "frito", "frita", "freir", "asado", "asar", "empaniz", "revoltillo", "revuelto",
-    "majado", "majar", "licuado", "licuada", "batido", "batida", "sopa", "crema", "ensalada",
-    "vapor", "airfryer", "mechada", "mechado", "estofado", "croqueta", "tortitas", "tortilla",
-    "sarten", "crudo", "cruda", "duro", "pochado", "pochada", "escalfado",
-)
+# [P1-STAPLE-FOODS · 2026-08-02, CRITICAL-FIX review] Mapa CANÓNICO de sinónimos de técnica —
+# antes "revoltillo" y "revuelto" (o "horneado" y "horno") resolvían a firmas de texto DISTINTAS,
+# gameable: el LLM (o un plan adversario) podía llamar "Revoltillo de Huevo" AM + "Huevo Revuelto"
+# PM y la exención de básicos se concedía aunque fuera LITERALMENTE la misma técnica con otro
+# nombre. Cada token de `_STAPLE_TECHNIQUE_TOKENS` (= las keys de este dict; orden = prioridad de
+# match) resuelve a UN nombre de técnica canónico compartido — dos comidas solo cuentan como
+# "técnica distinta" si sus nombres canónicos difieren.
+#
+# Vocabulario compartido con `culinary_coherence.VERB_TO_METHOD` donde el concepto se solapa
+# (hervir/plancha/freir/hornear/guisar/saltear/licuar/tostar) — MISMOS nombres canónicos a
+# propósito (SSOT de vocabulario técnico del repo), pero SIN reusar sus regex de conjugación
+# verbal: `VERB_TO_METHOD` valida verbos DENTRO de pasos de receta en prosa, con exclusiones
+# afinadas para ESE contexto (p.ej. `(?<!para )horno` para no confundir "apto para horno" —
+# envase— con una instrucción de cocción). Este matcher opera sobre NOMBRES DE PLATO + un extracto
+# corto de pasos (`_meal_technique_signature`), un contexto distinto donde esas exclusiones no
+# aplican igual — forzar la reutilización literal de las regex habría sido acoplar dos validadores
+# con supuestos de contexto incompatibles. Los conceptos que `VERB_TO_METHOD` NO cubre (revoltillo/
+# revuelto, empanizado, majado, batido, sopa/crema, ensalada, vapor, mechada/estofado, croqueta,
+# tortitas/tortilla, crudo/duro/pochado/escalfado) tienen su propio grupo canónico documentado acá.
+#
+# Usado SOLO para la exención staple+técnica-distinta del gate same-day-protein (decisión B del
+# owner): "huevo hervido" en el desayuno y "huevo revuelto" en la cena son técnicas DISTINTAS del
+# mismo básico, no una repetición que fatiga. Fail-safe por diseño: si ningún token matchea, la
+# firma es None y el caller trata la comida como "técnica no determinable" → NUNCA relaja el gate
+# (conservador). tooltip-anchor: P1-STAPLE-FOODS
+_STAPLE_TECHNIQUE_CANONICAL = {
+    # -- compartido con culinary_coherence.VERB_TO_METHOD (mismos nombres canónicos) --
+    "hervid": "hervir", "hervir": "hervir",
+    "plancha": "plancha",
+    "frito": "freir", "frita": "freir", "freir": "freir",
+    "horneado": "hornear", "horno": "hornear", "airfryer": "hornear",
+    "guisad": "guisar",
+    "salteado": "saltear", "saltear": "saltear",
+    "licuado": "licuar", "licuada": "licuar",
+    # NOTA: "tostar"/"tostado"/"tostada" (también en VERB_TO_METHOD) se dejó FUERA a propósito —
+    # "tostada" colisiona por substring con menciones de PAN TOSTADO como acompañante ("con
+    # Tostadas") que no describen la técnica de la proteína principal, produciendo una firma falsa
+    # (detectado en test: "Huevo Revuelto con Tostadas" resolvía a 'tostar' en vez de 'revuelto').
+    # Añadir tostar exigiría word-boundary + desambiguación de rol (¿tostada es el plato o un
+    # acompañante?) que no está en el alcance de este fix — mismo criterio conservador que el
+    # resto del módulo: mejor NO mapear una técnica que mapearla mal.
+    # -- propios (fuera del alcance de VERB_TO_METHOD, que solo valida verbos de cocción) --
+    "asado": "asado", "asar": "asado",
+    "empaniz": "empanizado",
+    "revoltillo": "revuelto", "revuelto": "revuelto",
+    "majado": "majado", "majar": "majado",
+    "batido": "batido", "batida": "batido",
+    "sopa": "sopa",
+    "crema": "crema",
+    "ensalada": "ensalada",
+    "vapor": "vapor",
+    "mechada": "estofado", "mechado": "estofado", "estofado": "estofado",
+    "croqueta": "croqueta",
+    "tortitas": "tortilla", "tortilla": "tortilla",
+    "sarten": "sarten",
+    "crudo": "crudo", "cruda": "crudo",
+    "duro": "duro",
+    "pochado": "pochado", "pochada": "pochado", "escalfado": "pochado",
+}
+_STAPLE_TECHNIQUE_TOKENS = tuple(_STAPLE_TECHNIQUE_CANONICAL.keys())
 
 
 def _technique_signature_from_text(text: str, strip_accents=None) -> str:
-    """[P1-STAPLE-FOODS] Primer token de técnica (`_STAPLE_TECHNIQUE_TOKENS`) detectado en un blob
-    de texto libre. None si no hay match. Puro, low-level: consumido tanto por
-    `_meal_technique_signature` (día-gen/reviewer, con dict de comida completo) como por el gate de
-    swap (agent.py), que solo tiene BLOBS de texto (nombre+ingredientes de las otras comidas del
-    día; nombre+receta del candidato). tooltip-anchor: P1-STAPLE-FOODS"""
+    """[P1-STAPLE-FOODS] Nombre de técnica CANÓNICO (`_STAPLE_TECHNIQUE_CANONICAL`) del primer
+    token detectado en un blob de texto libre — "revoltillo" y "revuelto" resuelven ambos a
+    'revuelto'; "horneado" y "horno" resuelven ambos a 'hornear' (ver comentario del dict arriba).
+    None si no hay match. Puro, low-level: consumido tanto por `_meal_technique_signature`
+    (día-gen/reviewer, con dict de comida completo) como por el gate de swap (agent.py), que solo
+    tiene BLOBS de texto (nombre+ingredientes de las otras comidas del día; nombre+receta del
+    candidato). tooltip-anchor: P1-STAPLE-FOODS"""
     try:
         if strip_accents is None:
             from constants import strip_accents as strip_accents  # noqa: PLW0127
         blob = strip_accents(str(text or "").lower())
         for tok in _STAPLE_TECHNIQUE_TOKENS:
             if tok in blob:
-                return tok
+                return _STAPLE_TECHNIQUE_CANONICAL[tok]
         return None
     except Exception:
         return None
@@ -22154,7 +22202,11 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
                 "(p.ej. HUEVO, pollo, pavo, cerdo, res, pescado, atún) aparece en 2+ comidas del mismo día — "
                 "comer lo mismo el mismo día fatiga. Usa una proteína DISTINTA en cada comida del día. Está "
                 "BIEN repetir un alimento en DÍAS DISTINTOS (p.ej. huevo el lunes y el miércoles), pero NO dos "
-                "veces el mismo día. Rota: huevo, pollo, res, cerdo, pescado, atún, queso, yogur, legumbres."
+                "veces el mismo día. Rota: huevo, pollo, res, cerdo, pescado, atún, queso, yogur, legumbres. "
+                "[P1-STAPLE-FOODS] Si este alimento es un BÁSICO declarado del usuario, esta repetición "
+                "TODAVÍA se rechazó porque las técnicas coincidieron (o no se pudo distinguirlas) — usa "
+                "técnicas GENUINAMENTE distintas (hervido vs revuelto, guisado vs horneado); "
+                "'revoltillo'/'huevo revuelto' y 'horneado'/'al horno' son la MISMA técnica con otro nombre."
             )
     except Exception:
         return []

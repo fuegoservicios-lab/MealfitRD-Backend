@@ -849,6 +849,111 @@ def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
 
 
 # ============================================================
+# [P1-STAPLE-FOODS-SANITIZE · 2026-08-02 · review-fix (a)] Sanitización server-side de
+# `staple_foods`/`stapleFoods` en el request de generación NUEVA (`/analyze`, `/analyze/stream`).
+# ------------------------------------------------------------
+# Espeja el punto de intervención de `_validate_medical_conditions_cap` de arriba (mismo lugar del
+# router, mismo momento: ANTES de que `data` se copie a `pipeline_data`/`form_data`), PERO con un
+# criterio DELIBERADAMENTE distinto:
+#
+#   - El cap médico devuelve 422 porque el alcance clínico del generador es finito por diseño (más
+#     condiciones = más interacciones sin backstop determinista) — rechazar es correcto: dejar
+#     pasar degradaría la SEGURIDAD clínica del plan.
+#   - `staple_foods` NO es una superficie clínica — es una preferencia de conveniencia UI (chips
+#     del catálogo, cap 8, decorativos para el gate de variedad). Un 422 aquí bloquearía la
+#     generación de un plan por un array viejo en localStorage o un typo, un costo desproporcionado
+#     para un dato que no protege nada crítico si se filtra silenciosamente. SANITIZAR-Y-SEGUIR
+#     (dropear lo inválido con `logger.warning`, cap a 8) es proporcionado.
+#
+# Por qué hace falta (encontrado en code review, verificado con un payload hostil real): antes de
+# este fix, el ÚNICO validador de `staple_foods` era el `PUT /api/user/preferences/staple-foods`
+# (Ajustes) — `_validate_staple_foods` en `routers/user_data.py`. El body de `/analyze`/
+# `/analyze/stream` NUNCA pasa por ese endpoint: un payload con 50 entradas mixtas (nombres reales
+# + basura tipo "Krokodilo") entraba SIN VALIDAR, se copiaba a `form_data`, y de ahí a DOS
+# superficies de prompt-injection: (1) el dump crudo `json.dumps(_sanitize_form_data_for_prompt
+# (form_data))` que arma el contexto del day-gen (graph_orchestrator.py) — CUALQUIER key de
+# `form_data` viaja ahí tal cual; (2) los bloques `user_staples`/`context_extras` que
+# `build_day_assignment_context` (prompts/day_generator.py) y el swap (agent.py) interpolan
+# DIRECTO en el prompt del LLM sin volver a filtrar contra el catálogo. Además, sin cap server-side
+# aquí, el límite de 8 declarado en la UI era puramente decorativo — un cliente no-oficial podía
+# mandar cualquier cantidad.
+#
+# Muta `data` IN-PLACE: normaliza a la clave canónica `staple_foods` (snake_case, la que lee
+# `graph_orchestrator._raw_staple_foods`) y BORRA la clave alterna `stapleFoods` — así ningún
+# consumidor downstream (incluido el dump crudo del punto 1) puede ver una copia sin sanitizar bajo
+# la clave que este saneo no tocó.
+_STAPLE_FOODS_SANITIZE_PREFILTER_CAP = 200  # techo defensivo PRE-query (evita un IN-list gigante)
+
+
+def _sanitize_staple_foods_for_generation(data: dict) -> None:
+    """Filtra `data['staple_foods']`/`data['stapleFoods']` contra el catálogo real
+    (`master_ingredients`), cap 8, IN-PLACE. NUNCA rechaza la request — dropea lo inválido y
+    loggea. Ver el bloque de comentario de arriba para el rationale completo."""
+    if not isinstance(data, dict):
+        return
+    raw = data.get("staple_foods")
+    if not raw:
+        raw = data.get("stapleFoods")
+    if not isinstance(raw, list) or not raw:
+        data["staple_foods"] = []
+        data.pop("stapleFoods", None)
+        return
+
+    seen_lower = set()
+    candidates = []
+    for x in raw:
+        s = str(x or "").strip()
+        if not s:
+            continue
+        sl = s.lower()
+        if sl in seen_lower:
+            continue
+        seen_lower.add(sl)
+        candidates.append(s)
+        if len(candidates) >= _STAPLE_FOODS_SANITIZE_PREFILTER_CAP:
+            break
+
+    if not candidates:
+        data["staple_foods"] = []
+        data.pop("stapleFoods", None)
+        return
+
+    try:
+        from db import execute_sql_query
+        rows = execute_sql_query(
+            "SELECT name FROM master_ingredients WHERE lower(name) = ANY(%s)",
+            (list(seen_lower),),
+            fetch_all=True,
+        ) or []
+        valid_lower = {str(r["name"]).strip().lower() for r in rows}
+    except Exception as _sf_e:
+        # Fail-safe: si el catálogo no responde, NO se puede validar → se descartan TODOS los
+        # staples de este request en vez de dejarlos pasar sin filtrar (más seguro que confiar en
+        # un payload no verificado ante un fallo del validador).
+        logger.warning(
+            f"[P1-STAPLE-FOODS-SANITIZE] catálogo no disponible ({type(_sf_e).__name__}: {_sf_e}) "
+            f"— {len(candidates)} staple(s) descartado(s) por precaución, sin inyectar al prompt."
+        )
+        data["staple_foods"] = []
+        data.pop("stapleFoods", None)
+        return
+
+    valid = [c for c in candidates if c.lower() in valid_lower]
+    invalid = [c for c in candidates if c.lower() not in valid_lower]
+    kept = valid[:8]
+    over_cap = valid[8:]
+    if invalid or over_cap:
+        logger.warning(
+            f"⚠️ [P1-STAPLE-FOODS-SANITIZE] payload de staples saneado: {len(candidates)} "
+            f"recibido(s), {len(invalid)} fuera del catálogo real descartado(s) "
+            f"({invalid[:10]}{'…' if len(invalid) > 10 else ''}), {len(over_cap)} sobre el cap de "
+            f"8 descartado(s). Mantenidos: {kept}"
+        )
+    data["staple_foods"] = kept
+    data.pop("stapleFoods", None)
+
+
+# ============================================================
 # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01 · CRITICAL-1-FIX] Cierre del canal
 # de texto libre clínico en requests NUEVOS de generación de plan.
 # ------------------------------------------------------------
@@ -2992,6 +3097,11 @@ def api_analyze(
                 },
             )
 
+        # [P1-STAPLE-FOODS-SANITIZE · 2026-08-02 · review-fix (a)] Mismo punto que el cap médico
+        # de arriba, criterio DISTINTO: staples NO son clínica → sanea-y-sigue (dropea inválidos +
+        # cap 8, NO 422). Ver docstring de `_sanitize_staple_foods_for_generation`.
+        _sanitize_staple_foods_for_generation(data)
+
         # [P0-FORM-4] Telemetría de signal-loss en `dislikes`. NO bloquea, solo
         # alerta cuando un cliente no oficial bypassa el gate frontend. Ver
         # docstring del helper para el rationale completo.
@@ -3385,6 +3495,11 @@ async def api_analyze_stream(
                     ),
                 },
             )
+
+        # [P1-STAPLE-FOODS-SANITIZE · 2026-08-02 · review-fix (a)] Mismo punto que el cap médico
+        # de arriba, criterio DISTINTO: staples NO son clínica → sanea-y-sigue (dropea inválidos +
+        # cap 8, NO 422). Ver docstring de `_sanitize_staple_foods_for_generation`.
+        _sanitize_staple_foods_for_generation(data)
 
         # [P0-FORM-4] Telemetría de signal-loss en `dislikes`. Mismo helper que
         # el endpoint sync — defense-in-depth para detectar bypasses del gate
