@@ -20297,7 +20297,11 @@ _FORMULA_BASE_TOKENS = ("avena", "arroz", "yuca", "platano", "pan")
 # Formato no reconocido (`None`) NUNCA dispara el detector (conservador: mejor no detectar que
 # falso positivo).
 _FORMULA_FORMAT_FAMILIES = {
-    "cremoso_frio": ("cremos", "batido", "bowl", "smoothie", "licuado", "parfait", "frio", "fria"),
+    # 'batid'/'licuad' son STEMS (no 'batido'/'licuado'): _name_has_token es prefix-match y la
+    # forma femenina "Batida de lechosa" es corriente en es-DO — con el token masculino completo
+    # quedaba fuera del vocabulario mientras 'cremos'/'hornead'/'guisad' sí cubrían ambos géneros
+    # (finding del review pre-deploy 2026-08-02).
+    "cremoso_frio": ("cremos", "batid", "bowl", "smoothie", "licuad", "parfait", "frio", "fria"),
     "horneado_masa": ("hornead", "arepita", "panqueque", "tortita", "waffle", "muffin", "bizcocho"),
     "guisado_sopa": ("guisad", "estofad", "sancocho", "sopa"),
 }

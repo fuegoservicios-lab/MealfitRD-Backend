@@ -55,6 +55,25 @@ def test_real_case_pairs_helper_directly():
     assert shared == {"canela", "fruta"}
 
 
+def test_batida_feminine_word_form_detects():
+    """[review 2026-08-02] 'Batida' (femenino, corriente en es-DO) debe caer en cremoso_frio
+    igual que 'Batido' — el vocabulario usa el stem 'batid' (prefix-match), no la forma completa
+    masculina. Pre-fix este par NO disparaba: format=None para la batida."""
+    plan = {"days": [{"day": 1, "meals": [
+        _meal("Batida de Lechosa con avena, canela y granola"),
+        _meal("Avena Cremosa con canela y mango"),
+    ]}]}
+    rep = build_variety_report(plan)
+    assert rep["same_day_formula_repeats"] == 1, rep["issues"]
+
+
+def test_licuada_feminine_word_form_shares_format_family():
+    """'Licuada' cae en cremoso_frio vía el stem 'licuad' (misma clase de fix que 'batida')."""
+    from constants import strip_accents
+    sig = _meal_formula_signature(_meal("Licuada de avena con canela"), strip_accents)
+    assert sig is not None and sig["format"] == "cremoso_frio"
+
+
 # ---------------------------------------------------------------------------
 # B) Caso negativo: formato Y perfil distintos → NO detecta
 # ---------------------------------------------------------------------------
