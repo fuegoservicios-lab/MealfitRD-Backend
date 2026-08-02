@@ -75,14 +75,51 @@ acomodarlos — ver `_PENDING_REWORK` abajo):
       papel-tecnico/progress.md`). La sección sigue siendo el instrumento
       oscuro de junio con sus acentos (`#2DD4BF`, `#34D399`, `#A78BFA`, etc.)
       intactos.
-    - `Pricing.module.css`: Task 13 ("Las páginas token-driven") todavía no
-      se ha ejecutado (sin `task-13-report.md` en el ledger SDD al momento
-      de escribir este test). El archivo retiene hex saturados reales
-      (`#047857`, `#8B5CF6` ×2) Y un blob de fondo entero en `rgba()`
-      (`.pricing::before`, 3 `radial-gradient` con índigo/rosa/esmeralda) Y
-      una píldora tintada (`.badge`, `rgba(79, 70, 229, ...)`) heredados del
-      tema oscuro/claro pre-rediseño. `Pricing.jsx` en sí SÍ está limpio
-      (0 color) — la exclusión es solo del módulo CSS.
+
+Excepción RETIRADA [P2-PAPER-NO-INK · 2026-08-02, Task 13]:
+    - `Pricing.module.css` estuvo excluido mientras Task 13 ("Las páginas
+      token-driven") no corría. Retenía hex saturados reales (`#047857`,
+      `#8B5CF6` ×2), un blob de fondo entero en `rgba()` (`.pricing::before`,
+      3 `radial-gradient` con índigo/rosa/esmeralda) y una píldora tintada
+      (`.badge`, `rgba(79, 70, 229, ...)`). Task 13 reescribió el módulo a
+      papel, así que la exclusión SE BORRA: mantenerla sería una excepción
+      fantasma detrás de la cual alguien podría colgar un color nuevo sin
+      que el escáner lo viera. `test_pending_rework_exclusions_are_still_
+      pending` es precisamente el guard que obliga a esta limpieza.
+
+Límites conocidos [P2-PAPER-NO-INK · 2026-08-02]:
+    Un guard con huecos ENUMERADOS es honesto. Uno con huecos que nadie ha
+    escrito da falsa confianza — el mismo argumento por el que se amplió el
+    escáner a 4 notaciones (arriba) y a los 2 separadores CSS Color 4. Cuatro
+    huecos que este test NO cierra, a propósito o por costo/riesgo:
+
+    1. Imágenes raster. Ningún escáner de texto ve píxeles. Violación viva
+       ahora mismo: `/motor` renderiza `/model-v1.jpeg` a 671×671 a todo
+       color sin filtro — escalada a Task 13, no a este test.
+    2. Indirección vía custom properties. Las 3 páginas de papel usan
+       `color-mix(in srgb, var(--primary) …)` masivamente. El valor REAL de
+       `--primary` bajo `data-theme="paper"` vive en `index.css`, que
+       NINGÚN guard escanea — ni podría: ese mismo fichero define
+       legítimamente `--primary: #4F46E5` para el tema claro no-papel. Hoy
+       el remapeo bajo papel es correcto (`#0B0B0B`), pero nada lo ancla —
+       si alguien cambia esa línea de `index.css`, este test no se entera.
+    3. `Header.module.css` / `Footer.module.css`. `test_p2_paper_theme_
+       blocks.py::test_shared_modules_have_paper_where_they_have_dark`
+       comprueba EXISTENCIA del bloque `paper`, no los VALORES dentro de
+       él. Y `components/layout/` está fuera de este escáner de tinta a
+       propósito (ver arriba). Resultado: nada verifica que las
+       declaraciones dentro del bloque `paper` de esos dos módulos sean
+       neutras — y se montan en las 6 rutas de forma permanente y visible.
+    4. CERRADO, no declarado: los `.jsx` de página. Hasta ahora `_PAPER_
+       FILES` solo tenía el `.module.css` de 3 páginas — sus `.jsx`, y los
+       de las otras 3 rutas papel, quedaban fuera. Ese hueco SÍ contradecía
+       la razón de ser de este test (los acentos vivían en JSX, no en CSS
+       — ver "Por qué el JSX y no solo el CSS" arriba), y era barato de
+       cerrar: los 6 `.jsx` de página (uno por cada ruta de
+       `paperSurface.js`) se verificaron limpios con la herramienta `Grep`
+       dedicada (no shell — ver aviso operativo de la ronda 3) antes de
+       añadirlos a `_PAPER_FILES`. Si alguno deja de estarlo, ahora SÍ lo
+       ve este test.
 
 Tooltip-anchor: P2-PAPER-NO-INK
 """
@@ -108,24 +145,37 @@ _PAPER_FILES = [
     _FRONTEND_SRC / "pages" / "HowItWorksPage.module.css",
     _FRONTEND_SRC / "pages" / "Engine.module.css",
     _FRONTEND_SRC / "pages" / "PrecisionPage.module.css",
+    # [P2-PAPER-NO-INK · 2026-08-02] Cierra el límite #4 del docstring: hasta
+    # ahora solo el .module.css de 3 páginas tenía guard, sus .jsx no — y los
+    # de las otras 3 rutas papel (Home, FeaturesPage, PricingPage) no tenían
+    # NINGÚN guard. Contradecía la razón de ser de este test (los acentos
+    # pastel vivían en JSX, no en CSS). Los 6, uno por cada ruta de
+    # `paperSurface.js`, verificados limpios (0 hex/rgb/hsl) con `Grep`
+    # dedicado antes de añadirlos.
+    _FRONTEND_SRC / "pages" / "Home.jsx",
+    _FRONTEND_SRC / "pages" / "HowItWorksPage.jsx",
+    _FRONTEND_SRC / "pages" / "FeaturesPage.jsx",
+    _FRONTEND_SRC / "pages" / "PrecisionPage.jsx",
+    _FRONTEND_SRC / "pages" / "Engine.jsx",
+    _FRONTEND_SRC / "pages" / "PricingPage.jsx",
 ]
 
-# TODO(P2-PAPER-NO-INK): dos exclusiones temporales, verdaderos positivos
-# ambas — NO añadir más sin documentar aquí y en el docstring de arriba.
+# TODO(P2-PAPER-NO-INK): UNA exclusión temporal, verdadero positivo — NO
+# añadir más sin documentar aquí y en el docstring de arriba.
 #
 #   1. BenchmarkShowcase.jsx / .module.css — Task 11 del plan de rediseño
 #      ("SSOT del benchmark") está BLOQUEADA esperando decisión del dueño
 #      (benchmark LLM: 0 vs 55). Quitar de esta lista en cuanto Task 11
 #      cierre y la sección quede repintada en papel.
-#   2. Pricing.module.css — Task 13 ("Las páginas token-driven") todavía no
-#      se ejecutó; el módulo retiene color saturado real en 3 notaciones
-#      (hex, rgb() del blob de fondo, rgb() de la píldora de badge) del
-#      tema oscuro/claro pre-rediseño. Quitar de esta lista en cuanto
-#      Task 13 cierre.
+#
+# [P2-PAPER-NO-INK · 2026-08-02] `Pricing.module.css` SALIÓ de esta lista al
+# cerrar Task 13: el módulo se reescribió a papel (blob de fondo borrado,
+# anillo violeta sustituido por banda de tinta, píldoras a contorno). Ahora lo
+# escanea `test_no_saturated_color_in_paper_surfaces` como cualquier otro
+# archivo de `components/home/`.
 _PENDING_REWORK = {
     _FRONTEND_SRC / "components" / "home" / "BenchmarkShowcase.jsx",
     _FRONTEND_SRC / "components" / "home" / "BenchmarkShowcase.module.css",
-    _FRONTEND_SRC / "components" / "home" / "Pricing.module.css",
 }
 
 # --- Las 4 notaciones de color que CSS/JSX pueden usar --------------------
@@ -135,8 +185,16 @@ _HEX6 = re.compile(r"#(?P<hex6>[0-9A-Fa-f]{6})\b")
 # un hex de 6 (ahí el char siguiente sigue siendo hex, así que \b ya falla
 # por sí solo; el lookahead lo deja explícito).
 _HEX3 = re.compile(r"#(?P<hex3>[0-9A-Fa-f]{3})\b(?![0-9A-Fa-f])")
-_RGB_FN = re.compile(r"\brgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", re.IGNORECASE)
-_HSL_FN = re.compile(r"\bhsla?\(\s*[\d.]+(?:deg|turn|rad)?\s*,\s*([\d.]+)%", re.IGNORECASE)
+# [P2-PAPER-NO-INK · 2026-08-02] Separador coma U espacio: CSS Color 4
+# permite `rgb(220 38 38 / 0.5)` / `hsl(250 84% 60%)` sin comas, y el repo YA
+# usa ese estilo — `frontend/src/index.css:329-332,436-439` tiene sombras en
+# `rgb(15 23 42 / 0.05)`, hoy fuera de los ficheros escaneados, pero es
+# exactamente el patrón que alguien copiaría de `index.css` a una página de
+# papel mañana. La versión anterior de esta regex exigía coma y dejaba pasar
+# esa sintaxis en silencio — el mismo modo de fallo por el que se amplió el
+# escáner más allá de `#RRGGBB` (ver docstring del módulo).
+_RGB_FN = re.compile(r"\brgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)", re.IGNORECASE)
+_HSL_FN = re.compile(r"\bhsla?\(\s*[\d.]+(?:deg|turn|rad)?[,\s]+([\d.]+)%", re.IGNORECASE)
 
 # Un neutro tiene los tres canales casi iguales. 24/255 deja pasar los grises
 # ligeramente cálidos del papel (#FBFBFA, #F4F4F2) y nada más — y sí rechaza
@@ -242,7 +300,8 @@ def test_the_comment_stripper_actually_strips():
 
 
 def test_the_scanner_catches_every_color_notation():
-    """[P2-PAPER-NO-INK · 2026-08-02] Ancla las 4 notaciones a la vez.
+    """[P2-PAPER-NO-INK · 2026-08-02] Ancla las 4 notaciones a la vez, en
+    AMBOS estilos de separador (coma clásica y espacio CSS Color 4).
 
     Por qué existe: la primera versión de este escáner solo miraba
     `#RRGGBB`. Verificar `/precios` en un navegador real (no solo grep)
@@ -253,6 +312,14 @@ def test_the_scanner_catches_every_color_notation():
     lo que el test ya dice cubrir. Sin este caso, un agujero de notación
     (el próximo `hsl(...)` o `#RGB` que alguien pegue) no lo ve nadie hasta
     que alguien vuelva a abrir un navegador de casualidad.
+
+    [P2-PAPER-NO-INK · 2026-08-02] Los 4 casos de sintaxis-espacio (sin
+    coma) anclan el MISMO tipo de agujero, encontrado en revisión de código
+    en vez de en el navegador esta vez: `rgb(220 38 38 / 0.5)` y
+    `hsl(250 84% 60%)` pasaban en silencio con la regex solo-coma original.
+    No es teórico — `frontend/src/index.css` ya usa `rgb(15 23 42 / 0.05)`
+    para sombras, fuera de los ficheros escaneados hoy, pero es el patrón
+    que un futuro copy-paste traería a una página de papel.
     """
     assert _saturated_colors_in("color: #34D399;")
     assert _saturated_colors_in("color: #F00;")
@@ -262,20 +329,29 @@ def test_the_scanner_catches_every_color_notation():
     assert not _saturated_colors_in("color: #3D3D3B;")
     assert not _saturated_colors_in("background: rgba(11, 11, 11, 0.06);")
     assert not _saturated_colors_in("background: hsl(60, 3%, 98%);")
+    # CSS Color 4 — separador espacio, sin coma.
+    assert _saturated_colors_in("background: rgb(220 38 38 / 0.5);")
+    assert _saturated_colors_in("background: hsl(250 84% 60%);")
+    assert not _saturated_colors_in("background: rgb(11 11 11 / 0.06);")
+    assert not _saturated_colors_in("background: hsl(60 3% 98%);")
 
 
 def test_pending_rework_exclusions_are_still_pending():
-    """Guard inverso: si BenchmarkShowcase o Pricing.module.css alguna vez
-    quedan limpios de color saturado en CUALQUIER notación (Task 11 / Task
-    13 cerradas), esta excepción debe RETIRARSE de `_PENDING_REWORK` — de lo
-    contrario queda una excepción documentada que ya no aplica, invitando a
-    colgar un color nuevo detrás de ella sin que el escáner lo vea (el mismo
-    modo de fallo que I6 del CLAUDE.md ya describe para otra whitelist de
-    este repo).
+    """Guard inverso: si BenchmarkShowcase alguna vez queda limpio de color
+    saturado en CUALQUIER notación (Task 11 cerrada), esta excepción debe
+    RETIRARSE de `_PENDING_REWORK` — de lo contrario queda una excepción
+    documentada que ya no aplica, invitando a colgar un color nuevo detrás
+    de ella sin que el escáner lo vea (el mismo modo de fallo que I6 del
+    CLAUDE.md ya describe para otra whitelist de este repo).
 
-    Si este test falla, es BUENA noticia: significa que alguien cerró Task 11
-    o Task 13. Acción: borrar la entrada correspondiente de `_PENDING_REWORK`
-    (y de los docstrings que la documentan), no marcar este test como xfail.
+    `Pricing.module.css` YA pasó por este ciclo: estuvo en `_PENDING_REWORK`
+    mientras Task 13 no corría, Task 13 cerró y la entrada se retiró (ver
+    "Excepción RETIRADA" en el docstring del módulo) — este test es la razón
+    mecánica por la que esa limpieza no se puede posponer indefinidamente.
+
+    Si este test falla, es BUENA noticia: significa que alguien cerró Task
+    11. Acción: borrar la entrada correspondiente de `_PENDING_REWORK` (y de
+    los docstrings que la documentan), no marcar este test como xfail.
     """
     still_saturated = []
     for path in sorted(_PENDING_REWORK):
