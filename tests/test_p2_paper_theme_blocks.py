@@ -27,15 +27,16 @@ Por qué (i) filtra comentarios y el brief original NO lo hacía:
     EJECUTANDO antes de fijar esta versión: el chequeo sin stripping falla
     hoy sobre `DashboardShowcase.module.css`; con `_strip_comments` pasa.
 
-Por qué (i) excluye `Pricing.module.css` explícitamente:
-    Task 13 del plan de rediseño ("Las páginas token-driven", que migra
-    `Pricing.module.css` a papel) todavía no se ha ejecutado. El archivo
-    retiene DOS bloques `:global(html[data-theme="dark"])` reales — no en
-    comentario — heredados del tema oscuro pre-rediseño
-    (`.pricing::after` y `.btnOutline:hover`). Es un verdadero positivo, no
-    un artefacto del stripper: excluirlo aquí (con el mismo criterio que
-    `test_p2_paper_no_ink.py::_PENDING_REWORK`) documenta la deuda en vez de
-    esconderla detrás de un test relajado.
+Por qué (i) YA NO excluye `Pricing.module.css` [P2-PAPER-NO-INK · 2026-08-02]:
+    Mientras Task 13 del plan de rediseño ("Las páginas token-driven") no
+    corrió, el archivo retenía DOS bloques `:global(html[data-theme="dark"])`
+    reales — no en comentario — heredados del tema oscuro pre-rediseño
+    (`.pricing::after` y `.btnOutline:hover`), y quedaba excluido con el mismo
+    criterio que `test_p2_paper_no_ink.py::_PENDING_REWORK`. Task 13 reescribió
+    el módulo a papel y borró los dos bloques en el mismo commit, así que la
+    exclusión desaparece: `_PENDING_REWORK` queda VACÍO aquí. Una excepción
+    documentada que ya no aplica es peor que ninguna — invita a reañadir un
+    bloque dark citando la doc (mismo razonamiento que I6 del CLAUDE.md).
 
 Tooltip-anchor: P2-PAPER-NO-INK
 """
@@ -52,13 +53,14 @@ _SHARED = [
     _SRC / "components" / "layout" / "Footer.module.css",
 ]
 
-# TODO(P2-PAPER-NO-INK): Task 13 ("Las páginas token-driven") todavía no
-# migró Pricing.module.css a papel — retiene 2 bloques dark reales
-# (`.pricing::after`, `.btnOutline:hover`). Quitar de aquí en cuanto Task 13
-# cierre. Mismo archivo excluido en test_p2_paper_no_ink.py::_PENDING_REWORK
-# (ahí por hex saturado; aquí por bloque dark real) — dos síntomas de la
-# misma deuda, no dos deudas distintas.
-_PENDING_REWORK = {_HOME / "Pricing.module.css"}
+# [P2-PAPER-NO-INK · 2026-08-02] VACÍO a propósito. Contenía
+# `Pricing.module.css` mientras Task 13 ("Las páginas token-driven") no
+# migraba el módulo a papel: retenía 2 bloques dark reales (`.pricing::after`,
+# `.btnOutline:hover`). Task 13 los borró en el mismo commit que reescribió el
+# archivo, así que la entrada se retira. El set se conserva (en vez de borrar
+# el mecanismo) porque Task 11 podría necesitarlo para BenchmarkShowcase si esa
+# sección acaba llevando bloque dark — hoy no lo lleva.
+_PENDING_REWORK: set[Path] = set()
 
 # Mismo par de regexes y misma razón que test_p2_paper_no_ink.py::_strip_comments:
 # un comentario que EXPLICA un bloque dark borrado no es un bloque dark vivo.
