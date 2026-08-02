@@ -2965,6 +2965,51 @@ def _cycle_trip_count(duration: str) -> int:
     return int(math.ceil(_CYCLE_DAYS_BY_DURATION.get(str(duration or "").strip().lower(), 7) / 7.0))
 
 
+def _cycle_qty_fractional_enabled() -> bool:
+    """Knob de la CANTIDAD del periodo — hermano de `_cost_summary_enabled` pero para
+    CANTIDAD, no COSTO. True (default): `cycle_qty_multiplier` escala días/7 FRACCIONAL.
+    False: rollback sin redeploy a los literales viejos 2.0/4.0 (14/28 días) que este
+    P-fix reemplaza. tooltip-anchor: P1-CYCLE-QTY-FRACTIONAL."""
+    return _knob_env_bool("MEALFIT_CYCLE_QTY_FRACTIONAL", True)
+
+
+# [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] Hermano de `_cycle_cost_multiplier` (COSTO, ya
+# fraccional desde P1-CYCLE-COVERAGE-FRACTIONAL) pero para la CANTIDAD comprada. Los
+# callsites que construyen las listas biweekly/monthly llamaban a
+# `get_shopping_list_delta(..., multiplier=household_multiplier * N, ...)` con `N`
+# HARDCODEADO en 2.0/4.0 — 2/4 SEMANAS ENTERAS = 14/28 días — para ciclos declarados de
+# 15/30 días. El delta de `get_shopping_list_delta` YA proyecta a 7 días
+# (`base_duration_scale = 7.0/num_days`); multiplicar por 2.0/4.0 compra 14/28 días de
+# estables (arroz, aceite, avena) para un ciclo que promete 15/30: déficit sistemático
+# ~6.7%, invisible al guard de coherencia (compara contra la base SEMANAL con tolerancia
+# 10%, nunca ve el ciclo completo). La sección del PDF "DESPENSA DEL MES — compra una
+# sola vez" mentía 2 días.
+#
+# Entra ANTES del redondeo a envases comprables: multiplier → effective_multiplier
+# (`get_shopping_list_delta`) → qty escalada (`aggregate_and_deduct_shopping_list`,
+# "plan_ingredients: qty * multiplier") → weight_in_lbs → `apply_smart_market_units`.
+# El redondeo a paquete sigue absorbiendo el ~7% de aumento igual que absorbe cualquier
+# otro valor de multiplier — este fix no introduce un salto de envase nuevo.
+#
+# Los caps `_person_weeks` (P1-PERSON-WEEKS-CYCLE-AWARE) heredan el multiplicador nuevo
+# automáticamente: `_person_weeks = multiplier * num_days / 7.0` cancela exactamente el
+# `base_duration_scale = 7/num_days` que ya viene aplicado en `multiplier`, así que
+# `_person_weeks = household × cycle_qty_multiplier(duration)` sin cambios en esa fórmula.
+#
+# Duración desconocida → 1.0 (fail-safe: nunca infla una compra por un valor que no
+# entiende). Público (sin underscore): lo importan graph_orchestrator.py, cron_tasks.py,
+# tools.py y routers/plans.py. Rollback sin redeploy:
+# MEALFIT_CYCLE_QTY_FRACTIONAL=false reproduce los literales viejos exactos (2.0/4.0).
+# tooltip-anchor: P1-CYCLE-QTY-FRACTIONAL. Test: test_p1_cycle_qty_fractional.py.
+def cycle_qty_multiplier(duration: str) -> float:
+    d = str(duration or "").strip().lower()
+    if not _cycle_qty_fractional_enabled():
+        return {"biweekly": 2.0, "monthly": 4.0}.get(d, 1.0)
+    if d not in _CYCLE_DAYS_BY_DURATION:
+        return 1.0
+    return _CYCLE_DAYS_BY_DURATION[d] / 7.0
+
+
 def _cost_summary_enabled() -> bool:
     return _knob_env_bool("MEALFIT_SHOPPING_COST_SUMMARY", True)
 

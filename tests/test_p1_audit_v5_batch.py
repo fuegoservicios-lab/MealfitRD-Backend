@@ -166,7 +166,22 @@ def test_chatmodify_duration_uses_ssot():
 
 
 def test_chatmodify_deltas_scale_by_multiplier():
-    """Las 3 llamadas get_shopping_list_delta escalan 1×/2×/4× el multiplier SSOT."""
+    """Las 3 llamadas get_shopping_list_delta escalan 1×/biweekly×/monthly× el multiplier
+    SSOT. [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] Los literales 2.0/4.0 (2/4 SEMANAS
+    ENTERAS = 14/28 días) fueron reemplazados por `cycle_qty_multiplier(...)`
+    (días/7 fraccional: 15/7, 30/7) para que el ciclo quincenal/mensual quede cubierto
+    completo, no 14/28 días. La intención original de este test — las 3 superficies
+    escalan 1×/2×/4× coherentemente — se preserva vía la llamada al mismo helper SSOT,
+    no vía el literal viejo."""
     block = _modify_lists_block()
-    for factor in ("1.0 * household", "2.0 * household", "4.0 * household"):
+    assert "cycle_qty_multiplier" in block, (
+        "el recompute de listas debe usar el helper SSOT cycle_qty_multiplier, no un "
+        "literal hardcodeado"
+    )
+    assert "1.0 * household" in block, "falta multiplier=1.0 * household (semanal) en el recompute de listas"
+    for factor in ('cycle_qty_multiplier("biweekly") * household', 'cycle_qty_multiplier("monthly") * household'):
         assert factor in block, f"falta multiplier={factor} en el recompute de listas"
+    # No-regresión: los literales viejos (14/28 días) no deben volver.
+    assert "2.0 * household" not in block and "4.0 * household" not in block, (
+        "volvió el literal 14/28 días — debe ser cycle_qty_multiplier(...)"
+    )

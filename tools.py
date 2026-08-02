@@ -2130,7 +2130,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 or "weekly"
             ).strip().lower()
             
-            from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
+            from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier
             # [P1-AUDIT-1 · 2026-05-15] `household` ya inicializado arriba del
             # try-block para garantizar que el callback lo vea por closure
             # incluso si el try-block lanza antes de la recomputación.
@@ -2145,16 +2145,17 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # el frontend (Dashboard.buildDeltaShoppingList). Cierre del bug
             # "agotar+reponer rompe PDF" — mismo invariante que en
             # /recalculate-shopping-list (plans.py).
+            # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
             aggr_7 = get_shopping_list_delta(
                 user_id, plan_data, is_new_plan=True, structured=True, multiplier=1.0 * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
             )
             aggr_15 = get_shopping_list_delta(
-                user_id, plan_data, is_new_plan=True, structured=True, multiplier=2.0 * household,
+                user_id, plan_data, is_new_plan=True, structured=True, multiplier=cycle_qty_multiplier("biweekly") * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
             )
             aggr_30 = get_shopping_list_delta(
-                user_id, plan_data, is_new_plan=True, structured=True, multiplier=4.0 * household,
+                user_id, plan_data, is_new_plan=True, structured=True, multiplier=cycle_qty_multiplier("monthly") * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
             )
             
