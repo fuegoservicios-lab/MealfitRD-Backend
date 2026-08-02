@@ -2862,6 +2862,28 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
     if req_unit == 'unidad' and dispo_unit == 'ml' and density and unit_weight: return (req_qty * unit_weight) / density
     return None
 
+# [P1-PANTRY-STRICT-CONSENT · 2026-08-02, review finding] Condimentos exentos del guard
+# de despensa — matching por TOKEN con word-boundary, NUNCA substring plano. Pre-fix,
+# `any(c in item_lower for c in allowed_condiments)` aprobaba "200 g de Salami"/"150 g de
+# Salmón fresco" como condimento porque "sal" ⊂ "Salami"/"Salmón" — verificado ejecutando
+# (review): ambos pasaban el guard SIN estar en la Nevera, exactamente el leak que
+# P1-PANTRY-STRICT-CONSENT cierra en otro punto del mismo guard. Es la 15ª aparición
+# documentada de esta clase de bug en el repo (ver `culinary_coherence.py::
+# CONDIMENT_EXEMPT`, comentario IMPORTANT-5, que cerró la 14ª con el mismo patrón:
+# "agua" ⊂ "Aguacate", "sal" ⊂ "EnSALada"). `\b` no separa DENTRO de una palabra
+# continua (sal|ami no tiene borde entre 'l' y 'a'), así que exige la palabra COMPLETA;
+# `(?:e?s)?` opcional para plural ("sales", "ajos"). Construido a import-time (tupla
+# estable). Tooltip-anchor: P1-PANTRY-STRICT-CONSENT.
+_ALLOWED_CONDIMENTS = (
+    "sal", "pimienta", "agua", "ajo", "oregano", "cilantro",
+    "limon", "aceite", "soya", "canela", "vinagre",
+)
+_ALLOWED_CONDIMENTS_RES = [
+    re.compile(r"\b" + re.escape(c) + r"(?:e?s)?\b")
+    for c in _ALLOWED_CONDIMENTS
+]
+
+
 def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0, return_unauthorized: bool = False):
     """
     Función guardrail estricta y matemática. Comprueba:
@@ -2892,6 +2914,19 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
     (cantidad insuficiente de algo que SÍ está) — ver limitación en el reporte.
     """
     if not pantry_ingredients:
+        # [P1-PANTRY-STRICT-CONSENT · 2026-08-02, decisión de producto documentada tras
+        # review] Nevera vacía ⇒ el modo estricto NO aplica — un universo vacío no es
+        # cocinable, así que el guard se desactiva y el chef genera libre (FREE_GENERATION)
+        # en vez de bloquear cada swap con `SWAP_STRICT_PANTRY_NO_INVENTORY`. El feature es
+        # opt-in por USO de la Nevera: si el usuario nunca la pobló (o la vació), "Nevera
+        # estricta" no tiene nada que hacer estricto. Verificado ejecutando: cuando
+        # `agent.py::swap_meal` pasa `_swap_real_pantry_ledger_lines(user_id) == []` como
+        # `pantry_ingredients`, ESTE early-return es lo que hace que el swap normal
+        # converja sin pasar por `needs_new_ingredients` — el guard nunca ve la propuesta
+        # del LLM para rechazarla. `swap_meal_with_consent` no interviene aquí (solo actúa
+        # cuando `swap_meal()` LEVANTA una excepción; con el guard desactivado no levanta
+        # nada). Ver test `test_empty_real_pantry_bypasses_strict_mode_free_generation`
+        # (test_p1_pantry_strict_consent.py).
         logger.debug("⚠️ [PANTRY GUARD] Lista de despensa vacía — guardrail desactivado.")
         return (True, []) if return_unauthorized else True
         
@@ -2994,12 +3029,8 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         base = normalize_ingredient_for_tracking(gen_name) or strip_accents(gen_name.lower().strip())
         
         item_lower = strip_accents(item.lower())
-        allowed_condiments = {
-            "sal", "pimienta", "agua", "ajo", "oregano", "cilantro", 
-            "limon", "aceite", "soya", "canela", "vinagre"
-        }
-        
-        if base in allowed_condiments or any(c in item_lower for c in allowed_condiments):
+
+        if base in _ALLOWED_CONDIMENTS or any(rx.search(item_lower) for rx in _ALLOWED_CONDIMENTS_RES):
             continue
             
         matched_pantry_key = None

@@ -263,6 +263,71 @@ def test_return_unauthorized_true_empty_pantry_shortcircuit():
 
 
 # ---------------------------------------------------------------------------
+# Section C2 — condimentos exentos por WORD-BOUNDARY, no substring [review finding]
+#
+# Pre-fix: `any(c in item_lower for c in allowed_condiments)` era substring plano —
+# "sal" ⊂ "Salami" / "Salmón" aprobaba esos platos como "condimento" sin serlo, dejando
+# pasar carnes/pescados enteros sin estar en la Nevera (15ª aparición documentada de esta
+# clase de bug — ver culinary_coherence.py::CONDIMENT_EXEMPT, IMPORTANT-5, que cerró la
+# 14ª con el mismo patrón word-boundary). Pantry SIN salami/salmón/pollo real para que el
+# resultado dependa 100% de si el matching de condimento fue correcto.
+# ---------------------------------------------------------------------------
+
+def test_salami_is_not_approved_as_condiment_by_substring():
+    """'200 g de Salami' NO debe colarse como condimento vía 'sal' ⊂ 'Salami' — sin
+    salami en la Nevera, debe quedar `unauthorized`."""
+    from constants import validate_ingredients_against_pantry
+    res, unauthorized = validate_ingredients_against_pantry(
+        ["200 g de Salami"], ["500 g de Pollo"], return_unauthorized=True,
+    )
+    assert res != True
+    assert any("Salami" in item for item in unauthorized), (
+        f"Salami debió quedar unauthorized (no es condimento), pero: {unauthorized}"
+    )
+
+
+def test_salmon_is_not_approved_as_condiment_by_substring():
+    """'150 g de Salmón fresco' NO debe colarse vía 'sal' ⊂ 'Salmón'."""
+    from constants import validate_ingredients_against_pantry
+    res, unauthorized = validate_ingredients_against_pantry(
+        ["150 g de Salmon fresco"], ["500 g de Pollo"], return_unauthorized=True,
+    )
+    assert res != True
+    assert any("Salmon" in item for item in unauthorized), (
+        f"Salmón debió quedar unauthorized (no es condimento), pero: {unauthorized}"
+    )
+
+
+@pytest.mark.parametrize("item", [
+    "1 pizca de sal",
+    "aceite de oliva",
+    "ajo en polvo",
+    "2 sales de mesa",   # plural — sigue exento
+])
+def test_real_condiments_still_exempt_after_word_boundary_fix(item):
+    """Los condimentos REALES (palabra completa, con o sin plural) siguen exentos —
+    el fix es de PRECISIÓN (rechaza falsos positivos por substring), no una restricción
+    nueva sobre el set de condimentos ya aceptado."""
+    from constants import validate_ingredients_against_pantry
+    res, unauthorized = validate_ingredients_against_pantry(
+        [item], ["500 g de Pollo"], return_unauthorized=True,
+    )
+    assert res is True, f"{item!r} debería seguir exento de condimento: {res}"
+    assert unauthorized == []
+
+
+def test_agua_not_approved_as_condiment_substring_of_aguacate():
+    """Bonus del mismo fix (no pedido explícitamente, pero el mismo mecanismo lo cierra):
+    'agua' ⊂ 'Aguacate' ya NO aprueba aguacate como condimento."""
+    from constants import validate_ingredients_against_pantry
+    res, unauthorized = validate_ingredients_against_pantry(
+        ["1 Aguacate mediano"], ["500 g de Pollo"], return_unauthorized=True,
+    )
+    assert res != True
+    assert any("guacate" in item.lower() for item in unauthorized)
+
+
+# ---------------------------------------------------------------------------
 # Section D — `shopping_calculator.estimate_new_ingredient_price_rd`
 # ---------------------------------------------------------------------------
 
@@ -497,3 +562,135 @@ def test_build_consent_message_empty_list_fail_safe():
     import agent
     msg = agent._build_consent_message([])
     assert isinstance(msg, str) and len(msg) > 0
+
+
+# ---------------------------------------------------------------------------
+# Section H — Nevera vacía = bypass INTENCIONAL del modo estricto [review finding]
+#
+# Verificado ejecutando (review): con `user_inventory` REALMENTE vacía, el swap normal
+# NO levanta `SWAP_STRICT_PANTRY_NO_INVENTORY` ni dispara `needs_new_ingredients` — el
+# guard (`validate_ingredients_against_pantry`) se auto-desactiva ante una lista vacía
+# (`if not pantry_ingredients: return True`, constants.py), así que `swap_meal()`
+# converge en FREE_GENERATION con lo que el chef proponga. Decisión de producto
+# documentada en el bypass (constants.py) y aquí: "Nevera estricta" es opt-in por USO
+# de la Nevera — un universo vacío no es cocinable, no hay nada que "estrictar".
+#
+# Este test corre el pipeline REAL de `swap_meal()` (no mockea `agent.swap_meal`
+# como el resto de este archivo) para probar el mecanismo end-to-end, mismo patrón
+# que `test_p1_sodium_aware_placement.py::_sodium_swap_env` (fake ChatDeepSeek +
+# fake circuit breaker + fake IngredientNutritionDB + guards hermanos desactivados
+# vía knob — con `clean_ingredients` vacío, la mayoría de los guards hermanos
+# skip-en-silencio por su propio `not (strict_pantry and not clean_ingredients)`).
+# ---------------------------------------------------------------------------
+
+class _FakeCBAlwaysOpen:
+    def can_proceed(self):
+        return True
+
+    def record_success(self):
+        pass
+
+    def record_failure(self):
+        pass
+
+
+class _FakeSwapLLMOnce:
+    def __init__(self, envelope):
+        self._envelope = envelope
+        self.calls = 0
+
+    def invoke(self, prompt):
+        self.calls += 1
+        return self._envelope
+
+
+class _FakeChatDeepSeekOnce:
+    def __init__(self, envelope):
+        self._envelope = envelope
+        self.swap_llm = None
+
+    def with_structured_output(self, *a, **kw):
+        self.swap_llm = _FakeSwapLLMOnce(self._envelope)
+        return self.swap_llm
+
+
+@pytest.fixture
+def _empty_pantry_swap_env(monkeypatch):
+    import agent
+    import nutrition_db
+    import db as db_module
+    import db_plans
+
+    monkeypatch.setenv("MEALFIT_PANTRY_STRICT_UPDATES", "true")
+    monkeypatch.setattr(agent, "UPDATE_CLINICAL_GUARD", False)
+    monkeypatch.setattr(agent, "_get_circuit_breaker", lambda *a, **kw: _FakeCBAlwaysOpen())
+    monkeypatch.setattr(nutrition_db, "IngredientNutritionDB", _FakePantryDB)
+    monkeypatch.setattr(db_module, "get_raw_user_inventory", lambda uid: [])  # Nevera REALMENTE vacía
+    monkeypatch.setattr(
+        db_plans, "get_latest_meal_plan_with_id",
+        lambda uid: {"plan_data": {"days": []}},  # sin created_at → se salta get_consumed_meals_since
+    )
+    monkeypatch.setenv("MEALFIT_SODIUM_AWARE_SWAP", "false")
+    monkeypatch.setenv("MEALFIT_SWAP_BASE_REPEAT_GATE", "false")
+    monkeypatch.setenv("MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE", "false")
+    monkeypatch.setenv("MEALFIT_UPDATE_MACRO_TRUTHUP", "false")
+    monkeypatch.setenv("MEALFIT_SWAP_DETERMINISTIC_RESCALE", "false")
+    monkeypatch.setenv("MEALFIT_SWAP_PROTEIN_CLOSER", "false")
+    monkeypatch.setenv("MEALFIT_SWAP_FATS_TRIM", "false")
+    monkeypatch.setenv("MEALFIT_UPDATE_SUPERPERS", "false")
+    monkeypatch.setenv("MEALFIT_UPDATE_CONDITION_DIRECTIVES", "false")
+    # [review finding] `target_calories` no viene en el form_data del test → swap_meal
+    # deriva un target vía `get_nutrition_targets` con biométricos DEFAULT (25yo, 'lb'
+    # legacy) → 765kcal/46g proteína, muy lejos del candidato fijo del test (400kcal).
+    # Ortogonal a lo que este test prueba (el bypass del guard de PANTRY, no de macros)
+    # — se aísla apagando el validador de macros, mismo patrón que
+    # `MEALFIT_UPDATE_MACRO_TRUTHUP=false` arriba para el resto de guards hermanos.
+    monkeypatch.setenv("MEALFIT_SWAP_MACROS_VALIDATE", "false")
+    return agent
+
+
+def test_empty_real_pantry_bypasses_strict_mode_free_generation(_empty_pantry_swap_env, monkeypatch):
+    """(b) Nevera REALMENTE vacía (`get_raw_user_inventory` → []) → el swap normal
+    CONVERGE con lo que el chef proponga (aquí: camarones, nada que ver con una Nevera
+    vacía) en UNA sola llamada LLM — NO `needs_new_ingredients`, NO
+    `SWAP_STRICT_PANTRY_NO_INVENTORY`. Corrige la Concern #2 original del reporte, que
+    afirmaba lo segundo sin haberlo verificado ejecutando."""
+    agent = _empty_pantry_swap_env
+    from schemas import MealModel
+    envelope = {
+        "raw": None,
+        "parsed": MealModel(
+            meal="Cena", name="Camarones al Ajillo", desc="Camarones salteados con ajo.",
+            prep_time="15 min", cals=400, protein=25, carbs=20, fats=15,
+            ingredients=["300 g de camarones frescos", "2 dientes de ajo"],
+            recipe=["Mise en place: limpia los camarones.",
+                    "El Toque de Fuego: saltea con ajo.",
+                    "Montaje: sirve caliente."],
+        ),
+        "parsing_error": None,
+    }
+    holder = {}
+
+    def _fake_chat_deepseek(*a, **kw):
+        inst = _FakeChatDeepSeekOnce(envelope)
+        holder["inst"] = inst
+        return inst
+
+    monkeypatch.setattr(agent, "ChatDeepSeek", _fake_chat_deepseek)
+
+    result = agent.swap_meal_with_consent({
+        "user_id": "user-empty-nevera", "rejected_meal": "Ensalada vieja",
+        "meal_type": "Cena", "swap_reason": "dislike", "diet_type": "balanced",
+    })
+
+    assert holder["inst"].swap_llm.calls == 1, (
+        "1 sola llamada LLM: con la Nevera vacía el guard se auto-desactiva y el "
+        "candidato converge de inmediato — cero retry por rechazo de pantry."
+    )
+    assert not (isinstance(result, dict) and result.get("needs_new_ingredients")), (
+        f"Nevera vacía NO debe disparar needs_new_ingredients (bypass intencional): {result}"
+    )
+    name = result.get("name") if isinstance(result, dict) else getattr(result, "name", None)
+    assert name == "Camarones al Ajillo", (
+        f"el swap debió converger con la propuesta libre del chef, resultado: {result}"
+    )
