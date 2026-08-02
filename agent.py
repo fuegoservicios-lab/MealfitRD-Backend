@@ -1482,9 +1482,18 @@ def swap_meal(form_data: dict):
     _update_macro_truthup_enabled = lambda: os.environ.get(  # noqa: E731
         "MEALFIT_UPDATE_MACRO_TRUTHUP", "true").strip().lower() in ("1", "true", "yes", "on")
 
+    # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02 · fix-review] SSOT del tope de intentos — el guard de
+    # sodio (más abajo) necesita saber si está corriendo en el ÚLTIMO intento disponible del
+    # presupuesto COMPARTIDO para NUNCA lanzar ahí (finding #2 del review adversarial: un candidato
+    # que llega al intento 3 porque pantry/macros ya rechazaron 1-2 podía, pre-fix, hacer que el
+    # `raise ValueError` de sodio se propagara vía `reraise=True` → SWAP_LLM_RETRIES_EXHAUSTED → 422,
+    # contradiciendo "jamás falla el swap por sodio"). Constante única para que el decorator de abajo
+    # y el guard NUNCA diverjan (antes el tope vivía como un literal `3` suelto en el decorator).
+    _SWAP_MAX_LLM_ATTEMPTS = 3
+
     # Invocar LLM con reintentos automáticos (tenacity)
     @retry(
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(_SWAP_MAX_LLM_ATTEMPTS),
         wait=wait_exponential(multiplier=1, min=2, max=8),
         reraise=True,
         before_sleep=lambda retry_state: logger.warning(
@@ -2256,63 +2265,118 @@ def swap_meal(form_data: dict):
                 logger.warning(f"[P2-UPDATE-SAMEDAY-VARIETY] backstop same-day falló (no bloquea): "
                                f"{type(_sd_e).__name__}: {_sd_e}")
 
-        # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Backstop determinista: tras todos los ajustes
-        # deterministas (solver/closer/trim) y guards de calidad de arriba, si candidato+resto-del-día
-        # EXCEDE el techo → UN reintento con directiva explícita (mismo patrón single-retry-con-marker
-        # de P1-SWAP-BASE-REPEAT-GATE / P2-UPDATE-SAMEDAY-VARIETY arriba). El reintento de sodio comparte
-        # el presupuesto de 3 intentos de tenacity con TODOS los demás guards de esta función — NO tiene
-        # su propio @retry — por diseño: es exactamente el mismo modelo ya vigente para pantry/coherencia/
-        # macros/clínico/slot/appetibility/dish-quality/raw-staple/base-repeat/sameday-protein; inventar
-        # un budget aparte rompería esa invariante compartida sin beneficio (el swap ya falla-honesto a
-        # SWAP_LLM_RETRIES_EXHAUSTED cuando se agotan). Si el reintento tampoco baja el sodio → se ACEPTA
-        # el mejor candidato (el aviso existente `_quality_degraded`/panel cubre el resto) — jamás se
-        # falla el swap por sodio (repartir, no prohibir). Knob MEALFIT_SODIUM_AWARE_SWAP (default ON).
-        # tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
+        # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] Backstop determinista: tras todos los
+        # ajustes deterministas (solver/closer/trim) y guards de calidad de arriba, si candidato+resto-
+        # del-día EXCEDE el techo → UN reintento con directiva explícita (mismo patrón single-retry-con-
+        # marker de P1-SWAP-BASE-REPEAT-GATE / P2-UPDATE-SAMEDAY-VARIETY arriba). El reintento de sodio
+        # comparte el presupuesto de `_SWAP_MAX_LLM_ATTEMPTS` intentos de tenacity con TODOS los demás
+        # guards de esta función — NO tiene su propio @retry — por diseño: es exactamente el mismo
+        # modelo ya vigente para pantry/coherencia/macros/clínico/slot/appetibility/dish-quality/raw-
+        # staple/base-repeat/sameday-protein.
+        #
+        # [FINDING #2 · review adversarial 2026-08-02] Presupuesto COMPARTIDO significa que la primera
+        # evaluación de sodio puede caer en el ÚLTIMO intento disponible (ej. pantry rechaza el 1 y el
+        # 2, sodio recién corre en el 3 — patrón real visto en logs de producción). Pre-fix, el `raise`
+        # ahí se propagaba vía `reraise=True` → `SWAP_LLM_RETRIES_EXHAUSTED` → 422 → EL SWAP ENTERO
+        # FALLABA por un candidato que, sin este guard, se habría aceptado — contradicción directa con
+        # "jamás falla el swap por sodio". Fix: el guard NUNCA lanza si `attempt_number >=
+        # _SWAP_MAX_LLM_ATTEMPTS` (no queda a dónde retirarse) — en ese caso ACEPTA directamente
+        # (accion=accept_final), igual que cuando el marker ya se usó. `attempt_number` se lee de
+        # `invoke_with_retry.statistics` (verificado empíricamente: tenacity 9.x expone el contador
+        # AHÍ, no en `invoke_with_retry.retry.statistics` — ese último es un dict compartido vacío;
+        # confirmar con `f.statistics` no `f.retry.statistics` si se audita de nuevo). Fail-safe: si la
+        # lectura falla, se ASUME que es el último intento (nunca arriesga el `raise`).
+        #
+        # [FINDING #1 · review adversarial 2026-08-02] Presupuesto IMPOSIBLE: si `_sodium_resto_mg` YA
+        # excede el techo ANTES de sumar el candidato (día ya cargado, p.ej. resto=2200 > techo=2000),
+        # NINGÚN candidato puede pasar — hasta uno con 0mg de sodio da resto > techo. Lanzar ahí quema
+        # 1 de los 3 intentos compartidos con cero posibilidad matemática de éxito, justo en el
+        # escenario donde el presupuesto restante es más escaso. Fix: skip TOTAL del post-check en ese
+        # caso (la directiva pre-generación ya está clampeada a ~0mg, así que el LLM sigue informado).
+        #
+        # Si el reintento tampoco baja el sodio (o no hay reintento posible) → se ACEPTA el mejor
+        # candidato (el aviso existente `_quality_degraded`/panel cubre el resto) — jamás se falla el
+        # swap por sodio (repartir, no prohibir). Knob MEALFIT_SODIUM_AWARE_SWAP (default ON).
+        # Telemetría: una línea por decisión, formato parseable
+        # `attempt=N/M presupuesto=Xmg candidato_mg=Ymg decision=<retry|accept_final|skip_imposible|
+        # accepted_after_retry|within_budget>`. tooltip-anchor: P1-SODIUM-AWARE-PLACEMENT
         if _sodium_aware_on and _sodium_ceiling_mg is not None and _sodium_resto_mg is not None:
             try:
-                from graph_orchestrator import _meal_sodium_mg as _sod_meal_fn
-                if _tu_db_holder[0] is None:
-                    from nutrition_db import IngredientNutritionDB as _SodMealDB
-                    _tu_db_holder[0] = _SodMealDB()
-                _cand_dump_sod = res.model_dump() if hasattr(res, "model_dump") else (
-                    res if isinstance(res, dict) else {}
-                )
-                _cand_sodium_mg = _sod_meal_fn(_cand_dump_sod, _tu_db_holder[0])
-                _day_total_sod = _sodium_resto_mg + _cand_sodium_mg
-                if _day_total_sod > _sodium_ceiling_mg:
-                    _SOD_MARKER = "🧂 RETRY PRESUPUESTO DE SODIO"
-                    if _SOD_MARKER not in str(_current_prompt[0]):
-                        logger.warning(
-                            f"🧂 [P1-SODIUM-AWARE-PLACEMENT] candidato excede el presupuesto de sodio "
-                            f"(candidato≈{_cand_sodium_mg:.0f}mg + resto≈{_sodium_resto_mg:.0f}mg = "
-                            f"{_day_total_sod:.0f}mg > techo {_sodium_ceiling_mg:.0f}mg) | "
-                            f"meal_type={meal_type} | accion=retry_1x"
-                        )
-                        _current_prompt[0] = prompt_text + (
-                            f"\n\n{_SOD_MARKER} (OBLIGATORIO): el plato anterior aporta "
-                            f"~{_cand_sodium_mg:.0f}mg de sodio, pero el presupuesto restante del día era "
-                            f"~{max(0.0, _sodium_ceiling_mg - _sodium_resto_mg):.0f}mg (resto del día "
-                            f"~{_sodium_resto_mg:.0f}mg de un techo de {_sodium_ceiling_mg:.0f}mg). Cambia "
-                            f"la proteína principal a una FRESCA no curada (nada de quesos curados, "
-                            f"embutidos, enlatados ni camarones) y reduce sal/salsas añadidas. Mantén los "
-                            f"macros objetivo."
-                        )
-                        raise ValueError(
-                            f"SODIUM_BUDGET_EXCEEDED: candidato {_cand_sodium_mg:.0f}mg + resto "
-                            f"{_sodium_resto_mg:.0f}mg > techo {_sodium_ceiling_mg:.0f}mg"
-                        )
+                # [FINDING #1] Presupuesto imposible ANTES de sumar el candidato → skip total, no
+                # consume ningún intento del presupuesto compartido.
+                if _sodium_resto_mg >= _sodium_ceiling_mg:
                     logger.info(
-                        f"🧂 [P1-SODIUM-AWARE-PLACEMENT] sodio sigue sobre presupuesto tras el retry — "
-                        f"aceptado (repartir, no prohibir; el aviso existente cubre) | "
-                        f"meal_type={meal_type} | candidato≈{_cand_sodium_mg:.0f}mg | "
-                        f"accion=accepted_after_retry"
+                        f"🧂 [P1-SODIUM-AWARE-PLACEMENT] attempt=?/{_SWAP_MAX_LLM_ATTEMPTS} "
+                        f"presupuesto=0mg candidato_mg=n/a decision=skip_imposible | "
+                        f"resto≈{_sodium_resto_mg:.0f}mg ya >= techo {_sodium_ceiling_mg:.0f}mg — "
+                        f"ningún candidato puede caber, post-check omitido (directiva pre-gen ya "
+                        f"clampeada a ~0mg) | meal_type={meal_type}"
                     )
                 else:
-                    logger.info(
-                        f"🧂 [P1-SODIUM-AWARE-PLACEMENT] candidato dentro de presupuesto "
-                        f"(candidato≈{_cand_sodium_mg:.0f}mg, resto≈{_sodium_resto_mg:.0f}mg, "
-                        f"techo={_sodium_ceiling_mg:.0f}mg) | meal_type={meal_type} | accion=within_budget"
+                    from graph_orchestrator import _meal_sodium_mg as _sod_meal_fn
+                    if _tu_db_holder[0] is None:
+                        from nutrition_db import IngredientNutritionDB as _SodMealDB
+                        _tu_db_holder[0] = _SodMealDB()
+                    _cand_dump_sod = res.model_dump() if hasattr(res, "model_dump") else (
+                        res if isinstance(res, dict) else {}
                     )
+                    _cand_sodium_mg = _sod_meal_fn(_cand_dump_sod, _tu_db_holder[0])
+                    _day_total_sod = _sodium_resto_mg + _cand_sodium_mg
+                    _sod_budget_left = max(0.0, _sodium_ceiling_mg - _sodium_resto_mg)
+
+                    # [FINDING #2] Detectar si este es el ÚLTIMO intento del presupuesto compartido de
+                    # tenacity — si lo es, el raise de sodio NUNCA es legal (no hay dónde aterrizar el
+                    # retry). Fail-safe: cualquier fallo en la lectura ASUME que es el último (nunca
+                    # arriesga el raise).
+                    try:
+                        _attempt_n = int((invoke_with_retry.statistics or {}).get("attempt_number") or _SWAP_MAX_LLM_ATTEMPTS)
+                    except Exception:
+                        _attempt_n = _SWAP_MAX_LLM_ATTEMPTS
+                    _is_final_attempt = _attempt_n >= _SWAP_MAX_LLM_ATTEMPTS
+
+                    if _day_total_sod > _sodium_ceiling_mg:
+                        _SOD_MARKER = "🧂 RETRY PRESUPUESTO DE SODIO"
+                        if _is_final_attempt:
+                            logger.info(
+                                f"🧂 [P1-SODIUM-AWARE-PLACEMENT] attempt={_attempt_n}/{_SWAP_MAX_LLM_ATTEMPTS} "
+                                f"presupuesto={_sod_budget_left:.0f}mg candidato_mg={_cand_sodium_mg:.0f} "
+                                f"decision=accept_final | excede el presupuesto pero es el ÚLTIMO intento "
+                                f"disponible — ACEPTADO sin reintentar (jamás se falla el swap por sodio; "
+                                f"el aviso existente cubre) | meal_type={meal_type}"
+                            )
+                        elif _SOD_MARKER not in str(_current_prompt[0]):
+                            logger.warning(
+                                f"🧂 [P1-SODIUM-AWARE-PLACEMENT] attempt={_attempt_n}/{_SWAP_MAX_LLM_ATTEMPTS} "
+                                f"presupuesto={_sod_budget_left:.0f}mg candidato_mg={_cand_sodium_mg:.0f} "
+                                f"decision=retry | candidato+resto={_day_total_sod:.0f}mg > techo "
+                                f"{_sodium_ceiling_mg:.0f}mg | meal_type={meal_type}"
+                            )
+                            _current_prompt[0] = prompt_text + (
+                                f"\n\n{_SOD_MARKER} (OBLIGATORIO): el plato anterior aporta "
+                                f"~{_cand_sodium_mg:.0f}mg de sodio, pero el presupuesto restante del día "
+                                f"era ~{_sod_budget_left:.0f}mg (resto del día ~{_sodium_resto_mg:.0f}mg de "
+                                f"un techo de {_sodium_ceiling_mg:.0f}mg). Cambia la proteína principal a "
+                                f"una FRESCA no curada (nada de quesos curados, embutidos, enlatados ni "
+                                f"camarones) y reduce sal/salsas añadidas. Mantén los macros objetivo."
+                            )
+                            raise ValueError(
+                                f"SODIUM_BUDGET_EXCEEDED: candidato {_cand_sodium_mg:.0f}mg + resto "
+                                f"{_sodium_resto_mg:.0f}mg > techo {_sodium_ceiling_mg:.0f}mg"
+                            )
+                        else:
+                            logger.info(
+                                f"🧂 [P1-SODIUM-AWARE-PLACEMENT] attempt={_attempt_n}/{_SWAP_MAX_LLM_ATTEMPTS} "
+                                f"presupuesto={_sod_budget_left:.0f}mg candidato_mg={_cand_sodium_mg:.0f} "
+                                f"decision=accepted_after_retry | sigue sobre presupuesto tras el retry — "
+                                f"aceptado (repartir, no prohibir; el aviso existente cubre) | "
+                                f"meal_type={meal_type}"
+                            )
+                    else:
+                        logger.info(
+                            f"🧂 [P1-SODIUM-AWARE-PLACEMENT] attempt={_attempt_n}/{_SWAP_MAX_LLM_ATTEMPTS} "
+                            f"presupuesto={_sod_budget_left:.0f}mg candidato_mg={_cand_sodium_mg:.0f} "
+                            f"decision=within_budget | meal_type={meal_type}"
+                        )
             except ValueError:
                 raise
             except Exception as _sod_guard_e:
