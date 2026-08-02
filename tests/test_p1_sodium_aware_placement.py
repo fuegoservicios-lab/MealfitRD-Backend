@@ -765,8 +765,16 @@ def test_regen_day_override_is_failsafe_none_on_error():
 # =====================================================================
 
 def test_pfix_marker_bumped_in_app_py():
-    src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    assert "P1-SODIUM-AWARE-PLACEMENT" in src, (
-        "_LAST_KNOWN_PFIX debe bumpearse al cerrar este P-fix (contrato de "
-        "test_p3_1_last_known_pfix_freshness / test_p2_hist_audit_14_marker_test_link)"
+    """`_LAST_KNOWN_PFIX` es un valor MUTABLE por diseño (CLAUDE.md: se bumpea con CADA cierre
+    de P-fix, apunta siempre al MÁS RECIENTE) — no puede seguir apuntando a
+    P1-SODIUM-AWARE-PLACEMENT para siempre sin violar esa misma convención (lo hizo el siguiente
+    cierre, P1-FIX-SODIUM-DAY · 2026-08-02, que reusa este mecanismo). El registro histórico
+    ESTABLE vive en la cadena append-only "Histórico — floor previo ..." de
+    `test_p3_1_last_known_pfix_freshness.py` — ahí se verifica que este P-fix no se perdió."""
+    freshness_src = (_BACKEND / "tests" / "test_p3_1_last_known_pfix_freshness.py").read_text(encoding="utf-8")
+    assert "P1-SODIUM-AWARE-PLACEMENT" in freshness_src, (
+        "El marker de este P-fix desapareció de la cadena histórica de "
+        "test_p3_1_last_known_pfix_freshness.py — cuando el SIGUIENTE P-fix bumpee "
+        "_LAST_KNOWN_PFIX, debe preservar la referencia a este en el comentario 'Histórico — "
+        "floor previo ...' (mismo patrón que ya usa esa cadena para P-fixes anteriores)."
     )

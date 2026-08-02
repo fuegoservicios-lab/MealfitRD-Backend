@@ -116,6 +116,13 @@ _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 # `_PLAN_GEN_LIMITER`. Tooltip-anchor: P2-GUEST-LLM-RATELIMIT.
 _SWAP_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
 _EXPAND_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
+# [P1-FIX-SODIUM-DAY · 2026-08-02] "Arreglar este día" (botón del banner
+# `micro_worst_day_ceiling`) es UN swap LLM + UN persist — mismo costo que
+# `/swap-meal`, así que espeja su gating exactamente: `verify_api_quota`
+# (paywall, cobrado post-éxito como el swap normal) + este limiter propio
+# (mismo cupo que `_SWAP_LIMITER`, bucket independiente para no compartir
+# cupo con swaps manuales del usuario).
+_FIX_SODIUM_DAY_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
 # [P1-BUDGET-FLOOR-PERSONALIZED · 2026-06-23] Cálculo del piso de presupuesto personalizado
 # (por calorías + hogar + ciclo). Se llama en cambios de input del form/dashboard → cupo generoso.
 # Pure-calc (sin DB, sin LLM); rate-limit por user/IP solo anti-spam.
@@ -6844,6 +6851,338 @@ def api_swap_meal_persist(
         )
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /swap-meal/persist: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P1-FIX-SODIUM-DAY · 2026-08-02] Puente de un clic entre el banner de aviso
+# `micro_worst_day_ceiling` (P2-PANEL-SOFT-REJECT) y el swap sodio-consciente
+# ya desplegado (P1-SODIUM-AWARE-PLACEMENT). Caso real que lo motiva: banner
+# "1 de 3 días se pasa del techo (peor: Día 1)" con ricotta+camarones — el
+# usuario tuvo que ADIVINAR qué plato cambiar (y cambió el de OTRO día).
+#
+# `_worst_sodium_day_and_meal` es una función PURA (recibe `sodium_of_meal`
+# ya resuelto, sin `db` ni I/O) para poder testearla sin catálogo real ni
+# mocks de infraestructura — mismo criterio ("peor día" = mayor sodio total
+# sobre `ceiling_mg`; dentro de él, la comida con MÁS sodio) que usa el
+# endpoint de abajo con el estimador SSOT real.
+def _worst_sodium_day_and_meal(days: list, ceiling_mg: float, sodium_of_meal) -> "Optional[dict]":
+    """Retorna ``{day_index, meal_index, day_sodium_mg, meal_sodium_mg}`` del
+    PEOR día (mayor sodio total) que exceda ``ceiling_mg``, y dentro de él la
+    comida con más sodio (empate → la primera). ``None`` si ningún día excede
+    el techo (incluye ``days`` vacío/inválido — vacuamente "nada que arreglar").
+    ``sodium_of_meal(meal: dict) -> float`` inyectado para poder testear con
+    un estimador sintético. Tooltip-anchor: P1-FIX-SODIUM-DAY."""
+    worst_day_idx = None
+    worst_day_sodium = 0.0
+    for idx, day in enumerate(days if isinstance(days, list) else []):
+        if not isinstance(day, dict):
+            continue
+        meals = day.get("meals") or []
+        total = sum(sodium_of_meal(m) for m in meals if isinstance(m, dict))
+        if total > ceiling_mg and total > worst_day_sodium:
+            worst_day_sodium = total
+            worst_day_idx = idx
+    if worst_day_idx is None:
+        return None
+    meals = days[worst_day_idx].get("meals") or []
+    worst_meal_idx = None
+    worst_meal_sodium = -1.0
+    for midx, m in enumerate(meals):
+        if not isinstance(m, dict):
+            continue
+        s = sodium_of_meal(m)
+        if s > worst_meal_sodium:
+            worst_meal_sodium = s
+            worst_meal_idx = midx
+    if worst_meal_idx is None:
+        return None
+    return {
+        "day_index": worst_day_idx,
+        "meal_index": worst_meal_idx,
+        "day_sodium_mg": worst_day_sodium,
+        "meal_sodium_mg": worst_meal_sodium,
+    }
+
+
+@router.post("/{plan_id}/fix-sodium-day")
+def api_fix_sodium_day(
+    plan_id: str,
+    data: dict = Body(default={}),
+    verified_user_id: Optional[str] = Depends(verify_api_quota),
+    _rl: None = Depends(_FIX_SODIUM_DAY_LIMITER),
+):
+    """[P1-FIX-SODIUM-DAY · 2026-08-02] "Arreglar este día": identifica el
+    peor día (más sodio, sobre el techo) y su comida más salada, y la
+    reemplaza vía UN swap LLM sodio-consciente + persist atómico — el mismo
+    swap que el usuario haría a mano desde el banner, pero sin que tenga que
+    adivinar CUÁL plato cambiar.
+
+    Ownership (I2): el SELECT y el persist filtran ``AND user_id = %s`` —
+    espejo de ``/swap-meal/persist``. Gating: espeja a ``/swap-meal`` (es
+    UN swap, ni más caro ni más barato) — ``verify_api_quota`` (paywall,
+    cobrado post-éxito) + ``_FIX_SODIUM_DAY_LIMITER``.
+
+    Flujo:
+      1. Lee el plan (ownership). Techo = MISMA fuente que el banner
+         (``_sodium_day_ceiling_mg_for_banner``, no el knob del autofix
+         determinista — dos SSOT hermanos que pueden driftear); depende de
+         género/edad/embarazo, así que el perfil SÍ se enriquece server-side
+         (I2/P0-AGENT-1) incluso en el camino no-op, solo para calcular el
+         techo correcto. Si ningún día excede el techo → 200 soft
+         ``code=no_day_over_ceiling`` — cero escritura (ni swap ni persist).
+      2. Dentro del peor día, la comida con MÁS sodio (mismo estimador).
+      3. Invoca ``swap_meal`` (la MISMA función que ``/swap-meal``) con
+         ``swap_reason="high_sodium"`` + ``sodium_resto_override_mg``
+         (sodio de las OTRAS comidas del día, en vivo) — activa el guard
+         P1-SODIUM-AWARE-PLACEMENT ya desplegado (presupuesto informado
+         ANTES de generar, reintento si el candidato lo excede, jamás
+         bloquea el swap por sodio).
+      4. Persiste vía ``api_swap_meal_persist`` IN-PROCESS (mismo patrón que
+         ``_persist_swap_server_side``, P1-SWAP-REGEN-RESUME) — NO duplica
+         la orquestación: el mutator de ese endpoint YA hace re-cuadre de
+         banda del día (P1-SWAP-PERSIST-DAY-BAND), recompute de micros +
+         techos de condición (que auto-limpia el banner si quedó resuelto,
+         P1-MICRO-DEGRADED-STALE-CLEAR) y rebuild inline de listas
+         (P1-UPDATE-LIST-INLINE-RECALC).
+      5. Responde con el delta honesto (sodio antes/después releído POST-
+         persist, no calculado — el day-band rebalance puede tocar las
+         OTRAS comidas del día).
+
+    Si ``swap_meal`` agota sus intentos / detecta violación clínica / la
+    Nevera estricta no alcanza / el proveedor LLM no está disponible: mismos
+    3 soft-fail codes que ``/swap-meal`` (``swap_llm_retries_exhausted`` |
+    ``swap_clinical_violation`` | ``swap_strict_pantry_no_inventory`` |
+    ``swap_ai_unavailable``) con ``fixed=false`` y el plan INTACTO (el
+    persist nunca corre — no hay nada que revertir). Crédito NO se cobra en
+    ningún soft-fail (cobro post-éxito, después de ``swap_meal``).
+
+    Returns:
+      ``{fixed, day, old_meal, new_meal, sodio_antes_mg, sodio_despues_mg,
+      day_under_ceiling}`` en éxito; ``{fixed:false, code:"no_day_over_ceiling",
+      message}`` cuando no hay nada que arreglar; ``{fixed:false, day,
+      old_meal, error_code, error_message}`` en soft-fail del chef.
+
+    Tooltip-anchor: P1-FIX-SODIUM-DAY.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Crea tu cuenta para usar Arreglar este día.")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
+    from db_core import execute_sql_query
+    from nutrition_db import IngredientNutritionDB
+    from graph_orchestrator import _meal_sodium_mg, _sodium_day_ceiling_mg_for_banner
+
+    try:
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+        plan_data = row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            plan_data = _json.loads(plan_data)
+        days = plan_data.get("days")
+
+        # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet/biométricos
+        # SERVER-SIDE (nunca del body — I2/P0-AGENT-1) ANTES de calcular el techo (edad/sexo
+        # afectan el DRI) y antes de construir el meal_form del swap.
+        data = data if isinstance(data, dict) else {}
+        data["user_id"] = verified_user_id
+        _enrich_clinical_from_profile(data, verified_user_id)
+
+        _ceiling_form = {"gender": data.get("gender"), "age": data.get("age")}
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _ipl_fsd
+            _ceiling_form["pregnant"] = bool(_ipl_fsd(data))
+        except Exception:
+            pass
+        ceiling_mg = _sodium_day_ceiling_mg_for_banner(_ceiling_form)
+
+        db = IngredientNutritionDB()
+        def _sodium_of_meal(m):
+            return _meal_sodium_mg(m, db)
+
+        found = _worst_sodium_day_and_meal(days, ceiling_mg, _sodium_of_meal)
+        if found is None:
+            return {
+                "fixed": False,
+                "code": "no_day_over_ceiling",
+                "message": (
+                    "Ya está bajo el techo de sodio — quizá el panel está por refrescar."
+                ),
+            }
+
+        day_index = found["day_index"]
+        meal_index = found["meal_index"]
+        day_sodium_mg = found["day_sodium_mg"]
+        meal_sodium_mg = found["meal_sodium_mg"]
+        meals = days[day_index].get("meals") or []
+        old_meal = meals[meal_index] if isinstance(meals[meal_index], dict) else {}
+        old_meal_name = old_meal.get("name")
+        sodium_resto_mg = max(0.0, day_sodium_mg - meal_sodium_mg)
+
+        _other_meals = [m for i2, m in enumerate(meals) if i2 != meal_index and isinstance(m, dict)]
+        same_day_other_meals = [str(m.get("name")) for m in _other_meals if m.get("name")]
+        same_day_other_meal_blobs = [
+            str(m.get("name", "")) + " " + " ".join(str(i) for i in (m.get("ingredients") or []))
+            for m in _other_meals
+        ]
+
+        # Espejo de `regenerateSingleMeal` (AssessmentContext.jsx): TODOS los
+        # ingredientes del plan como "nevera virtual" — el swap por default
+        # es strict-pantry (RESPETA LA NEVERA), así que sin esto el candidato
+        # se validaría contra una despensa vacía y fallaría espurio.
+        current_pantry_ingredients: list = []
+        for _d in (days or []):
+            if not isinstance(_d, dict):
+                continue
+            for _m in (_d.get("meals") or []):
+                if not isinstance(_m, dict):
+                    continue
+                for _ing in (_m.get("ingredients") or []):
+                    if isinstance(_ing, str) and len(_ing) > 2:
+                        current_pantry_ingredients.append(_ing)
+                    elif isinstance(_ing, dict):
+                        _nm = _ing.get("display_name") or _ing.get("name") or _ing.get("item_name")
+                        if _nm and len(str(_nm)) > 2:
+                            current_pantry_ingredients.append(str(_nm))
+
+        meal_form = dict(data)
+        meal_form.update({
+            "rejected_meal": old_meal_name,
+            "meal_type": old_meal.get("meal") or old_meal.get("meal_type") or "Comida",
+            # [P1-FIX-SODIUM-DAY] reason EXPLÍCITA de sodio: no dispara ningún elif especial
+            # del context_extras de `swap_meal` (mismo no-op que 'similar'/'budget' — RESPETA
+            # LA NEVERA genérico), pero el mecanismo REAL que hace el swap sodio-consciente es
+            # `sodium_resto_override_mg` (abajo), que activa P1-SODIUM-AWARE-PLACEMENT
+            # (presupuesto informado + reintento). Deliberadamente NO "dislike": ese reason
+            # dispara aprendizaje de gusto (abandoned_meal_reasons) en /swap-meal — este plato
+            # no se rechaza por sabor, se reemplaza por sodio.
+            "swap_reason": "high_sodium",
+            "target_calories": old_meal.get("cals"),
+            "target_protein": old_meal.get("protein"),
+            "target_carbs": old_meal.get("carbs"),
+            "target_fats": old_meal.get("fats"),
+            "sodium_resto_override_mg": sodium_resto_mg,
+            "same_day_other_meals": same_day_other_meals,
+            "same_day_other_meal_blobs": same_day_other_meal_blobs,
+            "current_pantry_ingredients": current_pantry_ingredients,
+        })
+
+        try:
+            new_meal = swap_meal(meal_form)
+        except ValueError as ve:
+            _msg = str(ve)
+            if _msg.startswith("SWAP_STRICT_PANTRY_NO_INVENTORY"):
+                logger.warning(f"⚠️ [P1-FIX-SODIUM-DAY] soft-fail (pantry vacía) → {_msg}")
+                return {
+                    "fixed": False, "day": day_index, "old_meal": old_meal_name,
+                    "error_code": "swap_strict_pantry_no_inventory",
+                    "error_message": (
+                        "Tu nevera está vacía. Agrega alimentos a tu nevera para que el "
+                        "chef pueda proponer un plato menos salado."
+                    ),
+                }
+            if _msg.startswith("SWAP_LLM_RETRIES_EXHAUSTED"):
+                logger.warning(f"⚠️ [P1-FIX-SODIUM-DAY] soft-fail (retries) → {_msg}")
+                return {
+                    "fixed": False, "day": day_index, "old_meal": old_meal_name,
+                    "error_code": "swap_llm_retries_exhausted",
+                    "error_message": (
+                        "El chef IA no pudo generar una alternativa menos salada tras varios "
+                        "intentos. Reintenta en un momento. No se descontó tu crédito."
+                    ),
+                }
+            if _msg.startswith("CLINICAL_VIOLATION"):
+                logger.warning(f"🛡 [P1-FIX-SODIUM-DAY] soft-fail (clínico) → {_msg}")
+                return {
+                    "fixed": False, "day": day_index, "old_meal": old_meal_name,
+                    "error_code": "swap_clinical_violation",
+                    "error_message": (
+                        "No pudimos generar una alternativa segura para tus alergias o "
+                        "restricciones. Tu plato actual se mantiene sin cambios."
+                    ),
+                }
+            logger.error(f"❌ [ERROR] Error en /fix-sodium-day: {_msg}")
+            raise HTTPException(status_code=500, detail=safe_error_detail(ve))
+        except (LLMRateLimitedError, LLMCircuitBreakerOpen):
+            logger.warning("⚠️ [P1-FIX-SODIUM-DAY] IA no disponible → soft-fail sin cobro")
+            return {
+                "fixed": False, "day": day_index, "old_meal": old_meal_name,
+                "error_code": "swap_ai_unavailable",
+                "error_message": (
+                    "El servicio de IA está ocupado en este momento. Reintenta en unos "
+                    "segundos. No se descontó tu crédito."
+                ),
+            }
+
+        # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (espejo de /swap-meal):
+        # swap_meal entregó un plato → recién aquí se cobra 1 crédito.
+        log_api_usage(verified_user_id, "llm_fix_sodium_day")
+
+        # Merge idéntico a `_persist_swap_server_side` (P1-SWAP-REGEN-RESUME): conserva el
+        # meal previo, superpone name/desc/cals/prep_time/recipe/ingredients + isExpanded=False;
+        # raw FRESCO del resultado (no arrastra el raw del plato viejo).
+        merged = dict(old_meal) if isinstance(old_meal, dict) else {}
+        for k in ("name", "desc", "cals", "prep_time"):
+            if k in new_meal:
+                merged[k] = new_meal.get(k)
+        merged["recipe"] = new_meal.get("recipe") or []
+        merged["ingredients"] = new_meal.get("ingredients") or []
+        merged["ingredients_raw"] = new_meal.get("ingredients_raw") or list(merged["ingredients"])
+        merged["isExpanded"] = False
+
+        # Persist IN-PROCESS reusando el endpoint protegido (FOR UPDATE + AND user_id +
+        # clinical guard + day-band rebalance + micros/listas) — NO se duplica lógica. Si
+        # levanta (404 plan desapareció / 422 clínico / 500), propaga tal cual: el plato
+        # generado por la IA ya se cobró pero NO se persistió, y no hay client-side fallback
+        # para reintentar el persist (a diferencia de P1-SWAP-REGEN-RESUME) — un error real
+        # aquí debe ser RUIDOSO, no un soft-fail silencioso.
+        api_swap_meal_persist(
+            plan_id,
+            {"day_index": day_index, "meal_index": meal_index, "new_meal": merged},
+            verified_user_id=verified_user_id,
+        )
+
+        # Sodio DESPUÉS releído POST-persist (no calculado): el day-band rebalance del
+        # mutator puede reescalar porciones de las OTRAS comidas del día también.
+        sodio_despues_mg = day_sodium_mg
+        try:
+            row2 = execute_sql_query(
+                "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+                (plan_id, verified_user_id), fetch_one=True,
+            )
+            pd2 = (row2 or {}).get("plan_data") or {}
+            if isinstance(pd2, str):
+                pd2 = _json.loads(pd2)
+            days2 = pd2.get("days") or []
+            if day_index < len(days2) and isinstance(days2[day_index], dict):
+                _meals2 = days2[day_index].get("meals") or []
+                sodio_despues_mg = sum(_sodium_of_meal(m) for m in _meals2 if isinstance(m, dict))
+        except Exception as _reread_e:
+            logger.debug(f"[P1-FIX-SODIUM-DAY] re-read post-persist no-op: {_reread_e}")
+
+        logger.info(
+            f"🧂 [P1-FIX-SODIUM-DAY] día {day_index + 1} arreglado: "
+            f"{round(day_sodium_mg)}mg → {round(sodio_despues_mg)}mg (techo {round(ceiling_mg)}mg) | "
+            f"'{old_meal_name}' → '{merged.get('name')}'"
+        )
+        return {
+            "fixed": True,
+            "day": day_index,
+            "old_meal": old_meal_name,
+            "new_meal": merged.get("name"),
+            "sodio_antes_mg": round(day_sodium_mg),
+            "sodio_despues_mg": round(sodio_despues_mg),
+            "day_under_ceiling": sodio_despues_mg <= ceiling_mg,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /fix-sodium-day: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

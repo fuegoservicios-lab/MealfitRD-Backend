@@ -41,7 +41,15 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 2)  # [P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] colocación consciente
+_PFIX_DATE_FLOOR = date(2026, 8, 2)  # [P1-FIX-SODIUM-DAY · 2026-08-02] botón "Arreglar este
+# día" en el banner `micro_worst_day_ceiling`: identifica el peor día sobre el techo de sodio +
+# su comida más salada (mismo estimador SSOT del banner/autofix), invoca el swap LLM existente
+# (`swap_meal`, reason explícita `high_sodium` + `sodium_resto_override_mg` que activa el guard
+# P1-SODIUM-AWARE-PLACEMENT ya desplegado) y persiste IN-PROCESS vía `api_swap_meal_persist`
+# (mismo mutator que el swap manual: day-band rebalance, recompute de micros/techos con
+# auto-clear del banner si quedó resuelto, listas inline). Un clic reemplaza "adivina qué plato
+# cambiar" (caso real: banner apuntaba al Día 1, el usuario cambió el de otro día). Histórico —
+# floor previo P1-SODIUM-AWARE-PLACEMENT · 2026-08-02] colocación consciente
 # de sodio en swap/regen-day: presupuesto de sodio restante del día inyectado como directiva
 # informativa antes de generar la alternativa; tras generarla, si el candidato excede, UN reintento
 # (comparte el presupuesto de 3 intentos de tenacity con TODOS los demás guards de swap_meal, no
