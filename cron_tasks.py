@@ -30910,7 +30910,17 @@ def process_plan_chunk_queue(target_plan_id=None):
                                         "main_goal": plan_data.get("main_goal"),
                                         "grocery_start_date": plan_data.get("grocery_start_date"),
                                     }
-                                    _apqfc_ck(_chain_view_ck, surface=f"chunk-T1 semana {week_number}")
+                                    # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] El contexto clínico va
+                                    # como ARGUMENTO de la llamada, NO como clave del view: el
+                                    # adapter lo pone en el dict `data` del shield (que es donde
+                                    # `_clin_ctx` lo busca), mientras que meterlo en el view lo
+                                    # convertiría en una clave de `plan_data` que nadie limpia.
+                                    # Aquí es donde más duele que faltara: los días de semanas 2+
+                                    # persisten con el UPDATE de abajo y NO hay ningún pase
+                                    # posterior que re-aplique cap_dm2/cap_bariatric sobre lo que
+                                    # el band-closer del chain acaba de re-dimensionar.
+                                    _apqfc_ck(_chain_view_ck, surface=f"chunk-T1 semana {week_number}",
+                                              form_data=form_data, user_id=user_id)
                                     logger.info(f"🧩 [P0-BAND-PRE-REVIEW] chain de calidad aplicado en merge T1 "
                                                 f"plan {meal_plan_id} semana {week_number} "
                                                 f"(scoped a {len(_chain_view_ck['days'])} día(s) nuevos).")

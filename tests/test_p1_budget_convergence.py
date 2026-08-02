@@ -109,7 +109,12 @@ def test_convergence_wired_in_assemble():
     blk_start = _GO.index('str(_bc_rec0.get("status") or "") == "excedido"')
     # [P0-BAND-PRE-REVIEW · 2026-07-10] 6000→7500: el re-fire del chain post-convergencia
     # (+~1k chars) empujaba el re-costeo fuera de la ventana fija.
-    blk = _GO[blk_start:blk_start + 7500]
+    # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] Segunda caducidad de la MISMA ventana: threadear el
+    # contexto clínico al chain añadió ~400 chars y volvió a dejar `_bc_cbr` fuera. Bumpear el
+    # número una tercera vez solo compra tiempo — el bloque se acota por su terminador
+    # ESTRUCTURAL: el `except` del fail-open propio de la convergencia (el mismo que
+    # `test_convergence_failopen_never_wipes_lists` exige que exista).
+    blk = _GO[blk_start:_GO.index("except Exception as _bc_e:", blk_start)]
     assert "force=True" in blk, "la pasada post-costeo usa force (todos los tiers con referencia)"
     assert "apply_update_macro_engine(result, surface=\"budget_convergence\"" in blk, \
         "tras sustituir, el motor de updates re-apunta la banda (P1-UPDATE-MACRO-PARITY)"

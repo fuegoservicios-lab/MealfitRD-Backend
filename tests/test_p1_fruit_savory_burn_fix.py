@@ -54,7 +54,11 @@ def test_refix_runs_after_the_quality_chain_and_before_the_reviewer():
     """El ORDEN es todo el fix: correr el corrector otra vez ANTES del chain no arregla nada,
     porque el pareo todavía no ha nacido."""
     l_pre = _line_of("_fs_fixed = _fruit_savory_autofix(days, form_data)")
-    l_chain = _line_of('await _adb(_apqfc, result, surface="assemble-tail")')
+    # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] El ancla era la llamada COMPLETA
+    # (`await _adb(_apqfc, result, surface="assemble-tail")`), así que añadirle un argumento la
+    # dejó en 0 apariciones. El literal correcto para anclar un callsite es el que lo IDENTIFICA
+    # —su `surface`, único en todo el archivo—, no su lista de argumentos, que crece.
+    l_chain = _line_of('surface="assemble-tail"')
     l_refix = _line_of("if FRUIT_SAVORY_LATE_REFIX_ENABLED:")
     l_review = _line_of('logger.info(f"🩺 [AGENTE REVISOR MÉDICO] Verificando plan')
     assert l_pre < l_chain < l_refix < l_review, (

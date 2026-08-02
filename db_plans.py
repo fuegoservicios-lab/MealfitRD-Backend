@@ -1188,7 +1188,23 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     # condición (sodio en HTA, potasio en ERC) — justo los que su propio comentario
                     # dice que existen porque "la dirección PELIGROSA de un techo es la
                     # SUB-estimación". Reusa el contexto ya resuelto arriba (una sola query).
-                    _rmr(_pd, _clin_ctx)
+                    #
+                    # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] (audit solver+seeder v7) Un panel
+                    # condicionado previo NUNCA debe ser pisado por uno computado sin condiciones.
+                    # Aquel fix cerró el contexto del INSERT, pero el MISMO shield corre en 5
+                    # superficies más vía `apply_plan_quality_finalize_chain`, cuyo adapter
+                    # construía `{"plan_data": plan_data}` a secas — sin `user_id` NI `form_data`,
+                    # así que ahí `_clin_ctx` seguía siendo `{}` por construcción y este recompute
+                    # re-escribía el panel con `sex='female'`/`conditions=[]` encima del panel
+                    # condicionado que el gate de sodio del review consume (para HTA/ERC el gate
+                    # quedaba MÁS laxo tras "refrescar").
+                    #
+                    # La asimetría del guard es deliberada, misma doctrina que
+                    # `build_clinical_form_from_profile`: `{}` significa "NO SÉ", no "sin
+                    # condiciones". Sin contexto solo se computa el panel que NO existe (uno
+                    # genérico es mejor que ninguno); el que ya existe se respeta.
+                    if _clin_ctx or not _pd.get("micronutrient_report"):
+                        _rmr(_pd, _clin_ctx)
                 except Exception as _rmr_e:
                     logger.debug(f"[P1-MICRO-PANEL-POST-FINALIZE] pre-INSERT no-op: "
                                  f"{type(_rmr_e).__name__}: {_rmr_e}")
@@ -1196,7 +1212,9 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
             logger.warning(f"[P1-COHERENCE-FINALIZE] {surface} no-op: {type(_fce).__name__}: {_fce}")
 
 
-def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "quality-chain") -> None:
+def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "quality-chain",
+                                      user_id: "str | None" = None,
+                                      form_data: "dict | None" = None) -> None:
     """[P0-BAND-PRE-REVIEW · 2026-07-10] Adapter público del chain de calidad/banda.
 
     Delegación pura a `_finalize_plan_data_for_insert({"plan_data": plan_data})` —
@@ -1215,12 +1233,31 @@ def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "qualit
       2. Merge T1 del chunk worker (semanas 2+) → paridad: los pases del shield
          cubren el 100% de los días del plan, no solo el primer chunk.
 
+    [P1-CHAIN-CLINICAL-CTX · 2026-08-02] (audit solver+seeder v7) `user_id`/`form_data` son el
+    contexto clínico del shield, y hasta hoy este adapter NO los transportaba: construía
+    `{"plan_data": plan_data}` a secas, así que `_clin_ctx` resolvía a `{}` en las 5 superficies
+    que pasan por aquí — incluso después de P1-PREINSERT-CLINICAL-CTX, que arregló el INSERT
+    derivando el perfil por `user_id`… un `user_id` que este dict nunca traía. Consecuencias
+    medibles: (a) el band-closer final (`reconcile_all_macros_band_post_finalize` →
+    `apply_update_macro_engine`) no podía re-aplicar `cap_dm2_high_gi_portions` /
+    `cap_bariatric_portions` sobre las porciones que su propio rebalance/refine acababa de
+    re-inflar —y en el merge T1 del chunk worker NO hay ningún punto posterior que re-capee—, y
+    (b) el recompute del panel de micros pisaba un panel condicionado con uno genérico.
+
+    Ambos son keyword-only y opcionales: los callers que solo pasan `plan_data` (y el propio
+    shield del INSERT, que llama a `_finalize_plan_data_for_insert` directo) siguen intactos.
+    Preferir `form_data` cuando esté en scope — el fallback por `user_id` cuesta una query al
+    perfil dentro del path caliente.
+
     Idempotente y fail-safe (hereda ambas garantías del shield). Mutación in-place;
     retorna None. tooltip-anchor: P0-BAND-PRE-REVIEW
     """
     if not isinstance(plan_data, dict):
         return
-    _finalize_plan_data_for_insert({"plan_data": plan_data}, surface=surface)
+    _finalize_plan_data_for_insert(
+        {"plan_data": plan_data, "user_id": user_id, "form_data": form_data},
+        surface=surface,
+    )
 
 
 def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False,

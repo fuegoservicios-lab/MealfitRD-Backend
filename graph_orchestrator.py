@@ -31292,7 +31292,13 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None) -
             logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] truth-up/re-banda no-op: {_tu2_e}")
         try:
             from db import apply_plan_quality_finalize_chain as _apqfc_t2
-            _apqfc_t2(plan_data, surface="t2-budget-convergence")
+            # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] el `form_data` que el motor de macros ya recibe
+            # dos líneas arriba tiene que llegar TAMBIÉN al chain: su band-closer final vuelve a
+            # mover cantidades y es el último pase antes de que el seam T2 persista. Superficie sin
+            # usuario mirando — un re-cap omitido aquí no lo caza nadie. Sin `user_id` por la
+            # misma razón que en la cola de assemble: el único candidato sería el crudo
+            # `form_data["user_id"]`, que puede traer el centinela `"guest"`.
+            _apqfc_t2(plan_data, surface="t2-budget-convergence", form_data=form_data or {})
         except Exception as _apq_t2_e:
             logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] finalize chain no-op: {_apq_t2_e}")
         logger.info(f"💰 [P1-BUDGET-T2-CONVERGENCE] {subs} sustitución(es) económica(s) aplicadas "
@@ -35694,7 +35700,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # no bloquear el event loop (~5-20s CPU: fuzzy matching + motor all-4).
     try:
         from db import apply_plan_quality_finalize_chain as _apqfc
-        await _adb(_apqfc, result, surface="assemble-tail")
+        # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] `form_data`/`user_id` viajan: el chain termina en
+        # el band-closer all-4, que RE-DIMENSIONA porciones — sin contexto no puede re-aplicar
+        # los caps clínicos (DM2 alto-IG / bariátrico) que la capa clínica de S1 acaba de
+        # imponer, y además re-escribía el panel de micros con perfil genérico (sin techo de
+        # sodio para HTA) encima del panel que el gate de sodio del review consume.
+        # NO se pasa `user_id`: el único identificador en scope aquí es el crudo
+        # `form_data["user_id"]`, que puede ser el centinela literal `"guest"` (el saneo
+        # `if not _uid or _uid == "guest"` vive más abajo, junto a las listas de compras) — y
+        # ese valor terminaría en `pipeline_metrics.user_id` vía el refresh de banda. Es
+        # innecesario además: `user_id` solo sirve de FALLBACK para hidratar el perfil cuando
+        # falta `form_data`, y aquí `form_data` siempre está.
+        await _adb(_apqfc, result, surface="assemble-tail", form_data=form_data)
         logger.info("🎯 [P0-BAND-PRE-REVIEW] chain de calidad/banda aplicado al estado final de "
                     "assemble (pre-shopping/pre-review).")
     except Exception as _apq_e:
@@ -36143,7 +36160,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     # la lista refleje las cantidades finales (coherencia receta↔lista).
                     try:
                         from db import apply_plan_quality_finalize_chain as _apqfc_bc
-                        await _adb(_apqfc_bc, result, surface="assemble-budget-convergence")
+                        # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] mismo contexto que el chain de la
+                        # cola: la convergencia SUSTITUYE alimentos (salmón→pescado blanco) y el
+                        # band-closer del chain re-dimensiona lo sustituido — re-cap clínico y
+                        # panel condicionado exigen `form_data`.
+                        await _adb(_apqfc_bc, result, surface="assemble-budget-convergence",
+                                   form_data=form_data, user_id=_uid)
                     except Exception as _apq_bc_e:
                         logger.debug(f"[P0-BAND-PRE-REVIEW] re-fire post-convergencia no-op: {_apq_bc_e}")
                     # rebuild de listas (mismos snapshots de la 1ª pasada) → re-costeo → re-reconcile.
@@ -47311,7 +47333,13 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 # listas reflejen las cantidades finales. Chain SSOT idempotente (fail-safe).
                 try:
                     from db_plans import apply_plan_quality_finalize_chain as _apqfc_pp
-                    _apqfc_pp(_rp_plan, surface="post-review-patch")
+                    # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] el auto-patch REMOVIÓ ingredientes, así
+                    # que el re-cierre de banda de aquí es justo el que más re-dimensiona lo que
+                    # queda — sin contexto clínico devolvía gramos a la porción capada. Se usa
+                    # `actual_form_data` (la copia saneada del pipeline, P1-Q8) y el `user_id` ya
+                    # resuelto con guest→None.
+                    _apqfc_pp(_rp_plan, surface="post-review-patch",
+                              form_data=actual_form_data, user_id=user_id)
                     logger.info("🎯 [P1-POST-PATCH-BAND-RECLOSE] banda re-cerrada tras review-patch (pre re-agregación).")
                 except Exception as _pp_band_e:
                     logger.debug(f"[P1-POST-PATCH-BAND-RECLOSE] no-op: {type(_pp_band_e).__name__}: {_pp_band_e}")
