@@ -113,7 +113,15 @@ def test_charges_credit_only_after_swap_success(endpoint_body):
 # ---------------------------------------------------------------------------
 def test_marker_anchored():
     assert _PLANS_SRC.count("P1-FIX-SODIUM-DAY") >= 3
-    assert '_LAST_KNOWN_PFIX = "P1-FIX-SODIUM-DAY · 2026-08-02"' in _APP_SRC
+    # [de-pin · 2026-08-02, mismo criterio que test_p2_update_intelligence_3.py]
+    # `_LAST_KNOWN_PFIX` es single-valued (backend/app.py) — pinear el string EXACTO
+    # de ESTE P-fix queda stale en cuanto un P-fix posterior (P1-MICRO-REPORT-REFRESH)
+    # bumpea el marker, que es el comportamiento CORRECTO y esperado (CLAUDE.md: "Cada
+    # cierre de P-fix DEBE bumpearlo"). Solo el FORMATO se ancla aquí; la frescura real
+    # la vigila test_p3_1_last_known_pfix_freshness.py.
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P\d+-[A-Z0-9-]+ · \d{4}-\d{2}-\d{2}"', _APP_SRC), (
+        "_LAST_KNOWN_PFIX debe existir con formato `Pn-... · YYYY-MM-DD`"
+    )
 
 
 # ---------------------------------------------------------------------------

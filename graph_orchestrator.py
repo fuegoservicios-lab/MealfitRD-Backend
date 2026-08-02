@@ -14370,6 +14370,69 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
         return False
 
 
+def _refresh_micronutrient_report(plan: dict, form_data: dict, db=None, *, surface: str = "refresh") -> bool:
+    """[P1-MICRO-REPORT-REFRESH · 2026-08-02] Refresco COMPLETO del panel de micros para superficies
+    de mutación que hoy NO recomputan nada — el gap vivo era `/shift-plan` (rolling window): pooda
+    los días ya transcurridos de `days` (`shifted_days[shift_amount:]`) pero `micronutrient_report`
+    seguía siendo el de la generación original, con `per_day_ceilings`/`per_day_floors` evaluando un
+    día YA ARCHIVADO (fuera de la ventana visible) — un banner `micro_worst_day_ceiling` marcado por
+    ESE día podado sobrevivía indefinidamente (nada lo podía "arreglar": el día ya no existe en
+    `days`). `/swap-meal/persist` y `/regenerate-day` (y `/fix-sodium-day`, que reusa swap-persist
+    in-process) YA hacen este mismo trabajo inline — este helper es la versión SSOT reusable para
+    quien NO lo tiene, sin duplicar su código.
+
+    Compone 3 pasos, en el MISMO orden que esas dos superficies:
+      1. `recompute_micronutrient_report_for_plan` — reconstruye `micronutrient_report` sobre el
+         `days` YA mutado (auto-limpia `micro_worst_day_ceiling` si el techo dejó de romperse,
+         P1-MICRO-DEGRADED-STALE-CLEAR).
+      2. `apply_update_condition_ceilings` — re-evalúa los 4 `_PANEL_DEGRADED_REASONS`
+         (condition_panel_gap/low_micros/high_sodium_sugar/vitamin_k_inconsistent) sobre el panel
+         fresco (bidireccional: marca o limpia).
+      3. Re-evaluación bidireccional EXTENDIDA (espejo exacto de P2-REGEN-DAY-PANEL-REEVAL, la misma
+         lógica que `/regenerate-day` ya corre) que además cubre `micro_worst_day`/
+         `micro_worst_day_ceiling` — el paso 1 solo limpia el caso ceiling; esta re-evaluación
+         también limpia el caso floor y vuelve a marcar cualquiera de los dos si el plan mutado los
+         rompe de nuevo (honesta en ambas direcciones, nunca miente).
+
+    P2-MUTATOR-PURITY: este helper en sí mismo hace CERO IO propia (delega toda la carga de datos a
+    `db`/`form_data` ya resueltos por el caller) salvo la que `recompute_micronutrient_report_for_plan`
+    haga internamente si `db=None` (instancia `IngredientNutritionDB()` lazy). Si el caller sostiene
+    un row lock (`FOR UPDATE` / `update_plan_data_atomic`), resuelve `form_data` y un `db` YA CARGADO
+    (`IngredientNutritionDB(rows=get_master_ingredients())`) ANTES de invocar este helper — cero
+    round-trip nuevo mientras el lock está sostenido.
+
+    Best-effort (nunca bloquea el caller). Devuelve True si el recompute del paso 1 corrió (mismo
+    contrato que `recompute_micronutrient_report_for_plan`). tooltip-anchor: P1-MICRO-REPORT-REFRESH"""
+    if not isinstance(plan, dict):
+        return False
+    _ok = recompute_micronutrient_report_for_plan(plan, form_data, db=db)
+    if not _ok:
+        return False
+    _fd = form_data or {}
+    try:
+        apply_update_condition_ceilings(plan, _fd, surface=surface)
+    except Exception as _ucc_e:
+        logger.debug(f"[P1-MICRO-REPORT-REFRESH] apply_update_condition_ceilings no-op: {type(_ucc_e).__name__}: {_ucc_e}")
+    try:
+        _panel_class = set(_PANEL_DEGRADED_REASONS) | {"micro_worst_day", "micro_worst_day_ceiling"}
+        _was_reason = plan.get("_quality_degraded_reason")
+        if plan.get("_quality_degraded") and _was_reason in _panel_class:
+            plan.pop("_quality_degraded", None)
+            plan.pop("_quality_degraded_reason", None)
+            plan.pop("_quality_degraded_severity", None)
+            _remarked = _maybe_mark_panel_degraded(plan, _fd, False, 1)
+            logger.info(
+                f"🧹 [P1-MICRO-REPORT-REFRESH] razón '{_was_reason}' re-evaluada sobre el panel "
+                f"fresco (surface={surface}) → "
+                f"{'sigue (' + str(plan.get('_quality_degraded_reason')) + ')' if _remarked else 'LIMPIA (banner fuera)'}"
+            )
+        else:
+            _maybe_mark_panel_degraded(plan, _fd, False, 1)
+    except Exception as _pr_e:
+        logger.debug(f"[P1-MICRO-REPORT-REFRESH] panel re-eval no-op: {type(_pr_e).__name__}: {_pr_e}")
+    return True
+
+
 def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_strict: bool = False) -> int:
     """[P1-MICRONUTRIENT-CLOSER · 2026-06-29 · cobertura+updates re-audit P1-MICRO-CLOSER-COVERAGE/UPDATES 2026-06-29]
     Lever DETERMINISTA de micros alcanzables —

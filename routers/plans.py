@@ -2812,6 +2812,55 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                         # si el plan fue modificado externamente durante el LLM call.
                         shifted_data['_plan_modified_at'] = datetime.now(timezone.utc).isoformat()
 
+                        # [P1-MICRO-REPORT-REFRESH · 2026-08-02] El shift PODA `shifted_days`
+                        # (arriba, `shifted_days[shift_amount:]`) sin recomputar
+                        # `micronutrient_report` — a diferencia de `/swap-meal/persist` y
+                        # `/regenerate-day` (que SÍ recomputan tras mutar `days`), este endpoint
+                        # dejaba el panel persistido en la generación original: el día ya PODADO
+                        # (fuera de la ventana visible, archivado en `_archived_days`) seguía
+                        # siendo evaluado por `per_day_ceilings`/`per_day_floors`, y un banner
+                        # `micro_worst_day_ceiling` marcado por ESE día sobrevivía indefinidamente
+                        # — nada podía "arreglarlo": el día ya no existe en `days`. Gateado a
+                        # `needs_shift` (contenido de `days` realmente cambió por poda) — el
+                        # refill-only (`chunks_enqueued>0` sin `needs_shift`) solo encola chunks
+                        # ASYNC que el chunk worker recompute ya cubre (cron_tasks.py,
+                        # `_mn_recompute_chunk`). El health_profile se lee con el MISMO `cursor`
+                        # ya abierto (idéntico patrón a las 2 lecturas de health_profile que este
+                        # mismo endpoint ya hace más arriba, líneas ~2541/~2695, para renewal/
+                        # rolling-refill) — CERO reentrada al pool (P2-MUTATOR-PURITY: la
+                        # preocupación real es `with connection_pool.connection()` anidado, no
+                        # una query más sobre la conexión que ya sostenemos). El catálogo de
+                        # nutrientes usa `db=None` (mismo lazy-load TTL-cacheado que
+                        # `/swap-meal/persist` y `/regenerate-day` ya aceptan). Mismo knob de
+                        # rollback que las otras 3 superficies (`MEALFIT_UPDATE_RECOMPUTE_MICROS`).
+                        # Best-effort — nunca bloquea el shift. tooltip-anchor: P1-MICRO-REPORT-REFRESH
+                        if needs_shift and os.environ.get(
+                                "MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
+                            try:
+                                cursor.execute("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,))
+                                _hp_row_shift = cursor.fetchone()
+                                _hp_shift = (_hp_row_shift or {}).get("health_profile", {}) or {}
+                                _mc_shift = _hp_shift.get("medicalConditions") or _hp_shift.get("medical_conditions") or []
+                                if isinstance(_mc_shift, str):
+                                    _mc_shift = [_mc_shift]
+                                _oc_shift = _hp_shift.get("otherConditions") or _hp_shift.get("other_conditions")
+                                if _oc_shift and str(_oc_shift).strip():
+                                    _mc_shift = list(_mc_shift) + [str(_oc_shift).strip()]
+                                _micro_form_shift = {
+                                    "gender": _hp_shift.get("gender") or _hp_shift.get("sex"),
+                                    "age": _hp_shift.get("age"),
+                                    "medicalConditions": _mc_shift,
+                                    "medications": _hp_shift.get("medications"),
+                                    "otherConditions": _oc_shift,
+                                    "otherMedications": _hp_shift.get("otherMedications") or _hp_shift.get("other_medications"),
+                                }
+                                from graph_orchestrator import _refresh_micronutrient_report as _rmr_shift
+                                _rmr_shift(shifted_data, _micro_form_shift, db=None, surface="shift_plan")
+                            except Exception as _rmr_shift_e:
+                                logger.debug(
+                                    f"[P1-MICRO-REPORT-REFRESH] recompute (shift) no-op: "
+                                    f"{type(_rmr_shift_e).__name__}: {_rmr_shift_e}")
+
                         # [P2-NEXT-1 · 2026-05-11] Filtro `AND user_id = %s` para
                         # cerrar drift defense-in-depth contra I2 (CLAUDE.md).
                         # `plan_id` se resolvió arriba (línea ~1585) vía SELECT
