@@ -497,8 +497,17 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 
 
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
-                                 daily_targets: dict = None) -> str:
-    """Genera el bloque de contexto con la asignación del planificador para un día."""
+                                 daily_targets: dict = None, user_staples: list = None,
+                                 small_universe: bool = False) -> str:
+    """Genera el bloque de contexto con la asignación del planificador para un día.
+
+    [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
+    `health_profile.staple_foods`) inyecta la directiva "úsalos como ancla, varía la técnica si se
+    repiten el mismo día". `small_universe` (True cuando la Nevera real tiene menos de
+    MEALFIT_SMALL_UNIVERSE_THRESHOLD alimentos distintos — ver `graph_orchestrator.
+    _small_universe_active`) inyecta la directiva de variar por TÉCNICA/FORMATO en vez de por
+    ingrediente. Ambos default a "sin básicos"/"universo normal" → prompt byte-idéntico al
+    pre-staples para callers que no los pasan (self_critique/surgical-regen callsites)."""
     import re as _re
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
     pool_lower = pool_str.lower()
@@ -702,6 +711,42 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     except Exception:
         _slot_targets_block = ""
 
+    # [P1-STAPLE-FOODS · 2026-08-02] "Mis básicos" — feature aprobada por el owner: alimentos que el
+    # usuario declaró que come de siempre (máx 8, chips del catálogo verificado — ver
+    # `health_profile.staple_foods`). Repetirlos ENTRE días no es un fallo de variedad; si se
+    # repiten el MISMO día, la técnica debe variar (huevo hervido AM / huevo revuelto PM). Vacío →
+    # "" (prompt byte-idéntico para usuarios sin básicos declarados).
+    staple_block = ""
+    _staples_clean = [str(s).strip() for s in (user_staples or []) if str(s).strip()][:8]
+    if _staples_clean:
+        staple_block = (
+            f"\n• 🥘 BÁSICOS DEL USUARIO (úsalos como ANCLA recurrente en este plan): "
+            f"{', '.join(_staples_clean)}.\n"
+            f"  Repetir estos alimentos entre días NO es un fallo de variedad — son lo que este "
+            f"usuario come de siempre y quiere seguir viendo en su plan. Si alguno aparece más de "
+            f"una vez EL MISMO día, cocínalo con una TÉCNICA distinta en cada aparición (ej. huevo "
+            f"hervido en el desayuno y huevo revuelto en la cena, o pollo guisado en el almuerzo y "
+            f"pollo a la plancha en la cena) — la variedad va en la PREPARACIÓN, no en evitar el "
+            f"alimento."
+        )
+
+    # [P1-STAPLE-FOODS · 2026-08-02] Modo universo-chico: cuando la Nevera/universo disponible es
+    # pequeño (`graph_orchestrator._small_universe_active`), el chef varía por TÉCNICA/FORMATO en
+    # vez de por ingrediente — los gates de variedad ESTÉTICA ceden, pero coherencia culinaria,
+    # banda de macros, reglas clínicas y sodio NO se relajan jamás (eso lo sigue exigiendo el resto
+    # de este mismo prompt, incluidos los §12-§18 de arriba).
+    small_universe_block = ""
+    if small_universe:
+        small_universe_block = (
+            "\n• 🔎 MODO UNIVERSO-CHICO (pocos alimentos distintos disponibles en la Nevera): la "
+            "variedad de este día viene de la TÉCNICA y el FORMATO, NO de rotar ingredientes que no "
+            "tienes. Recombina lo disponible en preparaciones distintas (guisado, horneado, a la "
+            "plancha, en tortitas/croquetas, en ensalada, licuado, majado) en vez de buscar un "
+            "ingrediente nuevo. Esto NO afloja nada más: sigues obligado a la coherencia culinaria, "
+            "la banda de macros, las reglas clínicas y el cap de sodio de este mismo prompt — solo "
+            "cede la exigencia de variedad por-ingrediente."
+        )
+
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}{cross_day_block}
@@ -709,7 +754,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(_carbs_asignados)}{carb_no_repeat_block}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}{_veggie_block}
-• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{_slot_targets_block}{dinner_identity_block}{protein_diversity_block}
+• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}{_slot_targets_block}{dinner_identity_block}{protein_diversity_block}{staple_block}{small_universe_block}
 {dish_library_block}{prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,

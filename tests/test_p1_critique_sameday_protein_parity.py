@@ -47,7 +47,10 @@ def test_hook_marks_unresolved_with_reason():
     """El hook post-corrección marca los días residuales con la razón canónica."""
     assert "same_day_protein_repeat_unresolved" in _GO
     # El hook debe usar el SSOT (llamar al helper) dentro del nodo self_critique.
-    i_helper_call = _GO.index("_days_with_same_day_protein_repeat(partial)")
+    # [P1-STAPLE-FOODS · 2026-08-02] la llamada ahora pasa `user_staples=_user_staple_labels(
+    # form_data)` para paridad con la exención staple+técnica-distinta del gate principal — el
+    # literal exacto de la call cambió, pero sigue siendo EL MISMO helper SSOT.
+    i_helper_call = _GO.index("_days_with_same_day_protein_repeat(partial, user_staples=")
     i_mark = _GO.index("same_day_protein_repeat_unresolved")
     assert abs(i_mark - i_helper_call) < 1500, "el marcado debe seguir a la verificación"
 

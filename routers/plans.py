@@ -5679,6 +5679,21 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
                 *[str(d).strip() for d in _body_dislikes if str(d).strip()],
                 *[str(d).strip() for d in _prof_dislikes if str(d).strip()],
             })
+        # [P1-STAPLE-FOODS · 2026-08-02] Hidratar staple_foods SERVER-SIDE desde el perfil (fuente
+        # durable vía PUT /api/user/preferences/staple-foods), espejo de dislikes arriba. El gate
+        # de swap (P1-SWAP-SAMEDAY-PROTEIN-GATE en agent.py) necesita conocer los básicos del
+        # usuario para aplicar la exención staple+técnica-distinta; si el cliente no los manda
+        # (ventana stale post-login, o edición reciente en Ajustes desde OTRO dispositivo), el body
+        # no los trae y la exención nunca aplicaría sin este merge. Cap 8 (mismo tope del PUT).
+        # Knob global MEALFIT_STAPLE_FOODS (default ON) desactiva TAMBIÉN esta hidratación —
+        # rollback total sin redeploy.
+        if os.environ.get("MEALFIT_STAPLE_FOODS", "true").strip().lower() in ("1", "true", "yes", "on"):
+            _prof_staples = hp.get("staple_foods") or []
+            _body_staples = data.get("staple_foods") or []
+            data["staple_foods"] = list({
+                *[str(s).strip() for s in _body_staples if str(s).strip()],
+                *[str(s).strip() for s in _prof_staples if str(s).strip()],
+            })[:8]
         data["diet_type"] = (
             data.get("diet_type") or data.get("dietType")
             or hp.get("dietType") or hp.get("diet_type") or "balanced"

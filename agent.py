@@ -1398,6 +1398,35 @@ def swap_meal(form_data: dict):
             f"úsalo con moderación — no es una prohibición, es una preferencia de colocación."
         )
 
+    # [P1-STAPLE-FOODS · 2026-08-02] Directiva de básicos + modo universo-chico también en el swap
+    # (no solo en el day-gen inicial) — un swap es tan capaz de violar "varía por técnica, no por
+    # ingrediente" como la generación completa. `staple_foods` llega en `form_data` (payload del
+    # cliente + hidratación server-side en `_enrich_clinical_from_profile`, routers/plans.py). Al
+    # vivir en `context_extras` (parte de `prompt_text`, la BASE de todos los reintentos vía
+    # `_current_prompt[0] = prompt_text + ...` más abajo) la directiva viaja automáticamente a
+    # CADA reintento — cierra el pedido "el retry no quema candidatos imposibles" sin lógica extra.
+    try:
+        from graph_orchestrator import _small_universe_active as _sua_sw, _raw_staple_foods as _rsf_sw
+        _staples_sw = _rsf_sw(form_data)[:8]
+        if _staples_sw:
+            context_extras += (
+                f"\n    - 🥘 BÁSICOS DEL USUARIO (puedes proponerlos de nuevo — repetirlos no es un "
+                f"fallo): {', '.join(_staples_sw)}. Si el básico ya aparece en OTRA comida de HOY "
+                f"(ver 'VARIEDAD DEL DÍA' abajo), cocínalo con una técnica DISTINTA a esa aparición "
+                f"(ej. huevo hervido vs huevo revuelto)."
+            )
+        if _sua_sw(form_data):
+            context_extras += (
+                f"\n    - 🔎 MODO UNIVERSO-CHICO: la Nevera disponible tiene pocos alimentos "
+                f"distintos. Si te quedas sin opciones de ingrediente NUEVO, recombina lo disponible "
+                f"con una TÉCNICA distinta (guisado, horneado, a la plancha, en tortitas, licuado) en "
+                f"vez de forzar un ingrediente que no está en la despensa. Esto NO afloja macros, "
+                f"reglas clínicas ni el cap de sodio — solo la exigencia de variedad por-ingrediente."
+            )
+    except Exception as _stp_ctx_e:
+        logger.debug(f"[P1-STAPLE-FOODS] directiva de swap no aplicada (no bloquea): "
+                     f"{type(_stp_ctx_e).__name__}: {_stp_ctx_e}")
+
     prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
@@ -1716,6 +1745,45 @@ def swap_meal(form_data: dict):
                 for _b_sd in _sd_blobs_gate:
                     _used_lbls_sd |= _pglt_sd(str(_b_sd))
                 _clash_sd = _cand_lbls_sd & _used_lbls_sd
+                # [P1-STAPLE-FOODS · 2026-08-02] Decisión B del owner (espejo del gate del revisor
+                # en graph_orchestrator.build_variety_report): un básico declarado por el usuario
+                # (`form_data['staple_foods']`) puede repetirse el mismo día si la TÉCNICA del
+                # candidato difiere de TODAS las apariciones previas de ese label. Solo se exime si
+                # TODOS los labels en conflicto son básicos (una mezcla básico+no-básico sigue
+                # rechazando por el no-básico) Y la técnica se pudo determinar en TODAS las
+                # comidas involucradas — igual de conservador que el gate del revisor: cualquier
+                # duda mantiene el rechazo. tooltip-anchor: P1-STAPLE-FOODS
+                if _clash_sd:
+                    try:
+                        from graph_orchestrator import (
+                            _user_staple_labels as _usl_sd,
+                            _technique_signature_from_text as _tsft_sd,
+                        )
+                        from constants import strip_accents as _sa_stp
+                        _user_staples_sd = _usl_sd(form_data)
+                        if _user_staples_sd and _clash_sd <= _user_staples_sd:
+                            _cand_recipe_sd = getattr(res, "recipe", None) if not isinstance(res, dict) else res.get("recipe")
+                            _cand_tech_blob_sd = _cand_blob_sd
+                            if isinstance(_cand_recipe_sd, list) and _cand_recipe_sd:
+                                _cand_tech_blob_sd += " " + " ".join(str(s) for s in _cand_recipe_sd[:2])
+                            _cand_sig_sd = _tsft_sd(_cand_tech_blob_sd, _sa_stp)
+                            _all_distinct_sd = bool(_cand_sig_sd)
+                            if _all_distinct_sd:
+                                for _b_sd2 in _sd_blobs_gate:
+                                    _other_sig_sd = _tsft_sd(str(_b_sd2), _sa_stp)
+                                    if not _other_sig_sd or _other_sig_sd == _cand_sig_sd:
+                                        _all_distinct_sd = False
+                                        break
+                            if _all_distinct_sd:
+                                logger.info(
+                                    f"🍳 [P1-STAPLE-FOODS] básico(s) {sorted(_clash_sd)} exentos del "
+                                    f"gate same-day-protein en swap — técnica '{_cand_sig_sd}' distinta "
+                                    f"de las demás comidas del día | meal_type={meal_type}"
+                                )
+                                _clash_sd = set()
+                    except Exception as _stp_exc:
+                        logger.debug(f"[P1-STAPLE-FOODS] exención no aplicada en swap (no bloquea): "
+                                     f"{type(_stp_exc).__name__}: {_stp_exc}")
                 if _clash_sd:
                     _clash_txt = ", ".join(sorted(_clash_sd))
                     logger.warning(

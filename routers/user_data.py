@@ -1142,3 +1142,110 @@ async def api_put_clinical_profile(
             logger.warning(f"[P1-CLINICAL-PANEL] No se pudo encolar extracción de facts: {_fx_err}")
 
     return {"clinical_profile": cleaned}
+
+
+# ---------------------------------------------------------------------------
+# "Mis básicos" (health_profile.staple_foods)
+# [P1-STAPLE-FOODS · 2026-08-02]
+# ---------------------------------------------------------------------------
+# Alimentos que el usuario declara que come "de siempre" (feature aprobada por el owner, ver
+# CLAUDE.md). Máx 8, SOLO nombres del catálogo verificado (`master_ingredients`) — a propósito
+# chips-únicamente, NO texto libre como dislikes/allergies: los básicos alimentan gates
+# deterministas (graph_orchestrator.build_variety_report, agent.py swap gate) que matchean por
+# alias exacto; texto libre arbitrario no matchearía nada y frustraría al usuario en silencio.
+# Persiste como sub-key JSONB de health_profile (sin migración — mismo patrón que
+# super_personalization/clinical_profile). Consumido vía `form_data['staple_foods']`: en la
+# generación inicial/renovación llega directo del cliente (mismo mecanismo que dislikes/allergies,
+# formData.stapleFoods → localStorage cifrado); en swap/regen-day se hidrata SERVER-SIDE desde
+# aquí en `_enrich_clinical_from_profile` (routers/plans.py) para que una edición reciente en
+# Ajustes no quede invisible por una ventana de cliente stale. Knob global MEALFIT_STAPLE_FOODS
+# (default ON) apaga el CONSUMO en graph_orchestrator/agent.py — este endpoint sigue disponible
+# incluso con el knob OFF (persistencia y consumo son kill-switches independientes a propósito).
+
+_STAPLE_FOODS_MAX = 8
+
+
+def _validate_staple_foods(names: list) -> list:
+    """Valida `names` contra `master_ingredients` (case-insensitive, catálogo verificado — NO texto
+    libre). 422 si excede el máximo o si algún nombre no matchea el catálogo (lista los inválidos
+    para que el frontend pueda señalarlos). Dedup case-insensitive preservando el primer casing
+    recibido. Vacío es válido (el usuario puede no tener básicos declarados)."""
+    if not isinstance(names, list):
+        raise HTTPException(status_code=422, detail="'staple_foods' debe ser una lista.")
+    cleaned: list = []
+    seen_lower: set = set()
+    for n in names:
+        s = str(n or "").strip()
+        if not s:
+            continue
+        sl = s.lower()
+        if sl in seen_lower:
+            continue
+        seen_lower.add(sl)
+        cleaned.append(s)
+    if len(cleaned) > _STAPLE_FOODS_MAX:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Máximo {_STAPLE_FOODS_MAX} básicos (recibidos {len(cleaned)}).",
+        )
+    if not cleaned:
+        return []
+    from db import execute_sql_query
+    rows = execute_sql_query(
+        "SELECT name FROM master_ingredients WHERE lower(name) = ANY(%s)",
+        (list(seen_lower),),
+        fetch_all=True,
+    ) or []
+    _valid_lower = {str(r["name"]).strip().lower() for r in rows}
+    _invalid = [c for c in cleaned if c.lower() not in _valid_lower]
+    if _invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Alimento(s) no encontrados en el catálogo verificado: {', '.join(_invalid)}.",
+        )
+    return cleaned
+
+
+@router.get("/user/preferences/staple-foods")
+async def api_get_staple_foods(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Devuelve los básicos declarados del usuario (o [] si no ha declarado ninguno). Read-only,
+    cero costo LLM (misma exención que el resto de /user/preferences)."""
+    uid = _require_user(verified_user_id)
+    from db import get_user_profile
+
+    profile = await asyncio.to_thread(get_user_profile, uid)
+    hp = (profile or {}).get("health_profile") or {}
+    sf = hp.get("staple_foods") if isinstance(hp, dict) else None
+    return {"staple_foods": sf if isinstance(sf, list) else []}
+
+
+class StapleFoodsBody(BaseModel):
+    staple_foods: List[str] = Field(default_factory=list)
+
+
+@router.put("/user/preferences/staple-foods")
+async def api_put_staple_foods(
+    body: StapleFoodsBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Persiste `health_profile.staple_foods` vía update_user_health_profile_atomic (SELECT…FOR
+    UPDATE + callback, I7 — sin lost-update bajo concurrencia). Filtra por user_id autenticado
+    (I2). Valida máx 8 + catálogo real (422 si no) — es un widget de CHIPS, no texto libre."""
+    uid = _require_user(verified_user_id)
+    cleaned = await asyncio.to_thread(_validate_staple_foods, body.staple_foods)
+
+    from db import update_user_health_profile_atomic
+
+    def _mutator(hp):
+        if not isinstance(hp, dict):
+            hp = {}
+        hp["staple_foods"] = cleaned
+        return hp
+
+    new_hp = await asyncio.to_thread(update_user_health_profile_atomic, uid, _mutator)
+    if new_hp is None:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+    return {"staple_foods": cleaned}

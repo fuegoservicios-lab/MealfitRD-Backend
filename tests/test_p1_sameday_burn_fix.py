@@ -103,7 +103,10 @@ def test_accent_variants_covered():
 
 def test_late_refix_wired_post_chain():
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
-    i = src.find("_late_rep_days = _days_with_same_day_protein_repeat(result)")
+    # [P1-STAPLE-FOODS · 2026-08-02] la call ahora pasa `user_staples=_user_staple_labels(
+    # form_data)` (paridad con la exención staple+técnica-distinta) — mismo helper SSOT, literal
+    # actualizado.
+    i = src.find("_late_rep_days = _days_with_same_day_protein_repeat(result, user_staples=")
     assert i != -1
     win = src[i:i + 1800]
     assert "SAMEDAY_LATE_REFIX_ENABLED" in win and "_protein_repeat_autofix(result.get(\"days\")" in win, (

@@ -7958,8 +7958,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _dg_targets = None
         except Exception:
             _dg_targets = None
-        assignment_context = build_day_assignment_context(skeleton_day, day_num, day_name=day_name,
-                                                          daily_targets=_dg_targets)
+        assignment_context = build_day_assignment_context(
+            skeleton_day, day_num, day_name=day_name, daily_targets=_dg_targets,
+            # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico.
+            user_staples=_raw_staple_foods(form_data),
+            small_universe=_small_universe_active(form_data),
+        )
 
         random_seed = random.randint(10000, 99999)
 
@@ -10436,7 +10440,12 @@ PLAN A EVALUAR (días generados):
                     skeleton_block = ""
                     if skeleton_day:
                         from prompts.day_generator import build_day_assignment_context
-                        skeleton_block = f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n{build_day_assignment_context(skeleton_day, day_num)}"
+                        # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico
+                        # también en el corrector (no solo en el day-gen inicial).
+                        skeleton_block = (
+                            f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data))}"
+                        )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
                     # full context — el corrector solo necesita targets duros,
@@ -10787,7 +10796,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     logger.warning(f"⚠️ [SELF-CRITIQUE/SLOT-PARITY] verify no-fatal: {type(_e_sp).__name__}: {_e_sp}")
             if SELF_CRITIQUE_VERIFY_SAME_DAY_PROTEIN:
                 try:
-                    _residual = _days_with_same_day_protein_repeat(partial)
+                    _residual = _days_with_same_day_protein_repeat(partial, user_staples=_user_staple_labels(form_data))
                     for _dn in _residual:
                         _td = next((d for d in days if d.get("day") == _dn), None)
                         if _td is not None and not _td.get("_critique_unresolved"):
@@ -11694,6 +11703,26 @@ VARIETY_GATE_SAME_DAY_PROTEIN = _env_bool("MEALFIT_VARIETY_GATE_SAME_DAY_PROTEIN
 # en todos los conteos. tooltip-anchor: P2-VARIETY-HIGH-MEALCOUNT-RELAX
 VARIETY_GATE_HIGH_MEALCOUNT_RELAX = _env_bool("MEALFIT_VARIETY_GATE_HIGH_MEALCOUNT_RELAX", True)
 VARIETY_GATE_RELAX_MIN_MEALS = _env_int("MEALFIT_VARIETY_GATE_RELAX_MIN_MEALS", 5)
+# [P1-STAPLE-FOODS · 2026-08-02] Kill switch global de "Mis básicos + modo universo-chico" (feature
+# aprobada por el owner): (a) los básicos declarados por el usuario pueden repetirse el MISMO día si
+# cada aparición usa una TÉCNICA de preparación distinta (huevo hervido AM + huevo revuelto PM no es
+# "lo mismo dos veces") — exención al gate VARIETY_GATE_SAME_DAY_PROTEIN de arriba y a su espejo en
+# agent.py (P1-SWAP-SAMEDAY-PROTEIN-GATE); (b) con la Nevera/universo disponible por debajo de
+# MEALFIT_SMALL_UNIVERSE_THRESHOLD, el day-gen y el swap reciben la directiva de variar por
+# TÉCNICA/FORMATO en vez de por ingrediente. Rollback total sin redeploy: False revierte AMBOS
+# mecanismos al comportamiento pre-staples (gate ciego a básicos, sin directiva de universo-chico).
+# Los mínimos de coherencia culinaria/macros/clínicos/sodio NUNCA dependen de este knob — solo los
+# gates de variedad ESTÉTICA. tooltip-anchor: P1-STAPLE-FOODS
+MEALFIT_STAPLE_FOODS_ENABLED = _env_bool("MEALFIT_STAPLE_FOODS", True)
+# [P1-STAPLE-FOODS] Tamaño del universo (nº de alimentos DISTINTOS en `current_pantry_ingredients`)
+# por debajo del cual el day-gen/swap entran en "modo universo-chico". Medido 2026-08-02 (SQL
+# forense sobre `user_inventory` en Neon): única muestra real disponible (2 usuarios con Nevera) da
+# 10 y 45 ítems — 45 es el owner con Nevera bien surtida (NO debe activar el modo). 15 se fijó por
+# composición estructural, no solo el dato puntual: el day-gen reparte protein_pool + carb_pool +
+# fruit_pool + veggie_pool (~2-4 ítems c/u) — por debajo de ~15 alimentos distintos ni siquiera esos
+# 4 pools pueden llenarse sin solaparse entre sí, así que la variedad POR INGREDIENTE queda
+# estructuralmente exhausta y la variedad POR TÉCNICA es la única palanca honesta. Clamp [1, 200].
+MEALFIT_SMALL_UNIVERSE_THRESHOLD = max(1, min(200, _env_int("MEALFIT_SMALL_UNIVERSE_THRESHOLD", 15)))
 # [P1-FRUIT-DEDUP · 2026-06-26] (auditoría gap #7) De-dup DETERMINISTA de fruta dulce repetida el mismo día:
 # reescribe la 2ª+ aparición a una fruta del pool no usada ese día (nombre + ingredientes). Cierra el cierre
 # que el gate de variedad dejaba abierto (project_variety_repeat_graceful: en el intento final el gate degrada
@@ -19891,15 +19920,20 @@ def _strip_protein_condiment_carriers(ings_low: str) -> str:
         return ings_low
 
 
-def _days_with_same_day_protein_repeat(plan: dict) -> list:
+def _days_with_same_day_protein_repeat(plan: dict, user_staples: set = None) -> list:
     """[P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY · 2026-07-08] Números de día donde una MISMA proteína
     principal aparece en ≥2 comidas del mismo día — detector con el MISMO SSOT que el gate del
-    revisor (`build_variety_report.same_day_protein_repeats`, líneas ~15716-15740): labels
+    revisor (`build_variety_report.same_day_protein_repeats`): labels
     `_SAME_DAY_PROTEIN_GATE_LABELS` (pesadas + huevo), aliases `_MAIN_PROTEIN_ALIASES`, match
     word-boundary (`_name_has_token`) sobre name+ingredients (sin acento, minúscula). Si esto
     retorna días, el gate P1-VARIETY-SAME-DAY-PROTEIN va a rechazar → esos días deben marcarse
     `_critique_unresolved` para que el retry sea QUIRÚRGICO. Espeja `_plan_has_same_day_fruit_repeat`
-    (fruta) para proteína. Puro, fail-safe → []. tooltip-anchor: P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY"""
+    (fruta) para proteína. Puro, fail-safe → []. tooltip-anchor: P1-CRITIQUE-SAMEDAY-PROTEIN-PARITY
+
+    [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (default None = comportamiento previo) aplica la
+    MISMA exención staple+técnica-distinta que `build_variety_report` — mantiene la paridad que
+    este detector promete en su propio docstring: si el gate principal NO va a rechazar por este
+    motivo (básico + técnica distinta), este detector tampoco debe marcar el día como pendiente."""
     try:
         from constants import strip_accents as _sa
     except Exception:
@@ -19925,9 +19959,12 @@ def _days_with_same_day_protein_repeat(plan: dict) -> list:
                         continue
                     if any(_name_has_token(_sa(_al), blob)
                            for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
-                        day_proteins[_plabel] = day_proteins.get(_plabel, 0) + 1
-            if any(n >= 2 for n in day_proteins.values()):
-                out.append(day.get("day"))
+                        day_proteins.setdefault(_plabel, []).append(meal)
+            for _plabel, _meals_for_label in day_proteins.items():
+                if len(_meals_for_label) >= 2 and not _staple_technique_exempt(
+                        _plabel, _meals_for_label, user_staples, _sa):
+                    out.append(day.get("day"))
+                    break
     except Exception:
         return []
     return [d for d in out if d is not None]
@@ -20070,12 +20107,137 @@ def dedup_featured_fruits_in_plan(plan: dict) -> int:
     return swaps
 
 
-def build_variety_report(plan: dict) -> dict:
+# [P1-STAPLE-FOODS · 2026-08-02] Tokens de TÉCNICA de preparación (orden = prioridad de match;
+# vocabulario tomado del propio contrato de recetas del day-gen — prompts/day_generator.py §3/§6 y
+# el campo "technique" de dish_templates.json). Usado SOLO para la exención staple+técnica-distinta
+# del gate same-day-protein (decisión B del owner): "huevo hervido" en el desayuno y "huevo
+# revuelto" en la cena son técnicas DISTINTAS del mismo básico, no una repetición que fatiga.
+# Fail-safe por diseño: si ningún token matchea, la firma es None y el caller trata la comida como
+# "técnica no determinable" → NUNCA relaja el gate (conservador). tooltip-anchor: P1-STAPLE-FOODS
+_STAPLE_TECHNIQUE_TOKENS = (
+    "guisad", "horneado", "horno", "plancha", "salteado", "saltear", "hervid", "hervir",
+    "frito", "frita", "freir", "asado", "asar", "empaniz", "revoltillo", "revuelto",
+    "majado", "majar", "licuado", "licuada", "batido", "batida", "sopa", "crema", "ensalada",
+    "vapor", "airfryer", "mechada", "mechado", "estofado", "croqueta", "tortitas", "tortilla",
+    "sarten", "crudo", "cruda", "duro", "pochado", "pochada", "escalfado",
+)
+
+
+def _technique_signature_from_text(text: str, strip_accents=None) -> str:
+    """[P1-STAPLE-FOODS] Primer token de técnica (`_STAPLE_TECHNIQUE_TOKENS`) detectado en un blob
+    de texto libre. None si no hay match. Puro, low-level: consumido tanto por
+    `_meal_technique_signature` (día-gen/reviewer, con dict de comida completo) como por el gate de
+    swap (agent.py), que solo tiene BLOBS de texto (nombre+ingredientes de las otras comidas del
+    día; nombre+receta del candidato). tooltip-anchor: P1-STAPLE-FOODS"""
+    try:
+        if strip_accents is None:
+            from constants import strip_accents as strip_accents  # noqa: PLW0127
+        blob = strip_accents(str(text or "").lower())
+        for tok in _STAPLE_TECHNIQUE_TOKENS:
+            if tok in blob:
+                return tok
+        return None
+    except Exception:
+        return None
+
+
+def _meal_technique_signature(meal: dict, strip_accents) -> str:
+    """[P1-STAPLE-FOODS] Firma de técnica de UNA comida: nombre + primeros 2 pasos de la receta
+    (Mise en place + El Toque de Fuego — ahí es donde el contrato del day-gen exige nombrar la
+    cocción, prompts/day_generator.py §3). Puro."""
+    try:
+        blob = str(meal.get("name", ""))
+        steps = meal.get("recipe")
+        if isinstance(steps, list) and steps:
+            blob += " " + " ".join(str(s) for s in steps[:2])
+        return _technique_signature_from_text(blob, strip_accents)
+    except Exception:
+        return None
+
+
+def _staple_technique_exempt(label: str, meals_for_label: list, user_staples, strip_accents) -> bool:
+    """[P1-STAPLE-FOODS · 2026-08-02] Decisión B del owner: un básico declarado por el usuario
+    (`user_staples`, set de labels del gate — ver `_user_staple_labels`) puede repetirse el MISMO
+    día si CADA aparición usa una técnica DISTINTA. Fail-safe conservador en 3 frentes: (1) knob
+    global OFF → False; (2) `label` no es un básico del usuario → False; (3) CUALQUIER aparición sin
+    técnica detectable, o dos apariciones con la MISMA técnica → False (sigue contando como
+    repetición). Solo exime cuando TODAS las técnicas se determinaron Y son mutuamente distintas.
+    Puro. tooltip-anchor: P1-STAPLE-FOODS"""
+    if not MEALFIT_STAPLE_FOODS_ENABLED or not user_staples or label not in user_staples:
+        return False
+    sigs = []
+    for m in meals_for_label:
+        sig = _meal_technique_signature(m, strip_accents)
+        if not sig:
+            return False
+        sigs.append(sig)
+    return len(sigs) == len(set(sigs))
+
+
+def _raw_staple_foods(form_data: dict) -> list:
+    """[P1-STAPLE-FOODS · 2026-08-02] Lista cruda (nombres del catálogo, sin mapear a labels) de
+    `form_data['staple_foods']` (snake_case — wire-format explícito de swap/regen-day) o
+    `form_data['stapleFoods']` (camelCase — la generación INICIAL/renovación manda
+    `JSON.stringify(formData)` completo, frontend camelCase). Mismo patrón dual que `diet_type`/
+    `dietType` en `_enrich_clinical_from_profile` (routers/plans.py). Fail-safe → []."""
+    if not MEALFIT_STAPLE_FOODS_ENABLED or not isinstance(form_data, dict):
+        return []
+    try:
+        staples = form_data.get("staple_foods") or form_data.get("stapleFoods")
+        if not staples or not isinstance(staples, list):
+            return []
+        return [str(s).strip() for s in staples if str(s or "").strip()]
+    except Exception:
+        return []
+
+
+def _user_staple_labels(form_data: dict) -> set:
+    """[P1-STAPLE-FOODS · 2026-08-02] Labels del gate same-day-protein (`_SAME_DAY_PROTEIN_GATE_
+    LABELS`) que el usuario declaró como 'básico de siempre' (ver `_raw_staple_foods`, máx 8,
+    nombres del catálogo verificado — persistido en `health_profile.staple_foods`, ver
+    `routers/user_data.py`). Reusa el matcher de aliases del gate (`_protein_gate_labels_in_text`)
+    para que 'Huevos' → 'huevo', 'Pechuga de Pollo' → 'pollo', etc. Fail-safe → set() (knob OFF,
+    campo ausente, o ningún staple mapea a un label del gate = comportamiento pre-staples).
+    tooltip-anchor: P1-STAPLE-FOODS"""
+    try:
+        staples = _raw_staple_foods(form_data)
+        if not staples:
+            return set()
+        return _protein_gate_labels_in_text(" ".join(staples))
+    except Exception:
+        return set()
+
+
+def _small_universe_active(form_data: dict) -> bool:
+    """[P1-STAPLE-FOODS · 2026-08-02] True cuando el universo de alimentos disponibles (Nevera
+    real, `form_data['current_pantry_ingredients']`) es más chico que
+    MEALFIT_SMALL_UNIVERSE_THRESHOLD. Solo aplica a planes con Nevera real (lista NO vacía) — un
+    plan 'libre' sin Nevera tiene el catálogo COMPLETO disponible y nunca debe activar el modo.
+    Fail-safe → False. tooltip-anchor: P1-STAPLE-FOODS"""
+    if not MEALFIT_STAPLE_FOODS_ENABLED:
+        return False
+    try:
+        pantry = form_data.get("current_pantry_ingredients") if isinstance(form_data, dict) else None
+        if not pantry or not isinstance(pantry, list):
+            return False
+        _clean = {str(p).strip().lower() for p in pantry if p and str(p).strip()}
+        return 0 < len(_clean) < MEALFIT_SMALL_UNIVERSE_THRESHOLD
+    except Exception:
+        return False
+
+
+def build_variety_report(plan: dict, user_staples: set = None) -> dict:
     """[P3-VARIETY · 2026-06-13] Reporte ADVISORY de variedad/pertinencia cultural (FS5):
     cuenta apariciones de huevo, descriptor 'cremoso', ingredientes premium, y platos-base
     repetidos el mismo día. NO bloquea (variedad es calidad blanda → un gate causaría loops
     de regen); surface telemetría + se inyecta a `result` para observabilidad. Cierra el
-    hallazgo de la auditoría (huevo 6/12, cremoso 4/12, ricotta×3). Anchor: P3-VARIETY."""
+    hallazgo de la auditoría (huevo 6/12, cremoso 4/12, ricotta×3). Anchor: P3-VARIETY.
+
+    [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (set de labels — ver `_user_staple_labels`,
+    default None = comportamiento pre-staples) exime `same_day_protein_repeats` cuando el
+    alimento repetido es un básico del usuario Y cada aparición usa una técnica distinta
+    (`_staple_technique_exempt`). Los demás componentes del reporte (fruta, plato-base, clash
+    dulce-salado) NO son staple-aware — la decisión del owner fue específica a proteína."""
     try:
         from constants import strip_accents
     except Exception:
@@ -20097,7 +20259,11 @@ def build_variety_report(plan: dict) -> dict:
             meals_per_day_max = len(meals)
         day_tokens = {}
         day_fruits = {}
-        day_proteins = {}  # [P1-VARIETY-SAME-DAY-PROTEIN] proteína principal → nº de comidas que la usan ese día
+        # [P1-VARIETY-SAME-DAY-PROTEIN] proteína principal → comidas (dicts) que la usan ese día.
+        # [P1-STAPLE-FOODS · 2026-08-02] Antes era un CONTADOR (label → int); ahora guarda los
+        # meal dicts para que la exención staple+técnica-distinta (_staple_technique_exempt) pueda
+        # inspeccionar nombre+receta de cada aparición.
+        day_proteins = {}
         for meal in meals:
             total_meals += 1
             name_low = strip_accents(str(meal.get("name", "")).lower())
@@ -20140,7 +20306,7 @@ def build_variety_report(plan: dict) -> dict:
                     continue
                 if any(_name_has_token(strip_accents(_al), _meal_blob)
                        for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
-                    day_proteins[_plabel] = day_proteins.get(_plabel, 0) + 1
+                    day_proteins.setdefault(_plabel, []).append(meal)
             # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Pareo intra-plato chocante en el NOMBRE:
             # fruta dulce dominante + base salada (mango+arroz / revoltillo+mango / coliflor+mango). El conteo
             # alimenta el gate de retry (_variety_repeat_gate_issues); aquí se surface también como issue advisory.
@@ -20158,8 +20324,13 @@ def build_variety_report(plan: dict) -> dict:
             if n >= 2:
                 fruit_repeats += 1
                 issues.append(f"Día {day.get('day', '?')}: fruta '{fr}' en {n} comidas el mismo día (repetición)")
-        for _plabel, n in day_proteins.items():
+        for _plabel, _meals_for_label in day_proteins.items():
+            n = len(_meals_for_label)
             if n >= 2:
+                # [P1-STAPLE-FOODS · 2026-08-02] Decisión B del owner: básico declarado +
+                # técnica distinta en CADA aparición → no cuenta como repetición que fatiga.
+                if _staple_technique_exempt(_plabel, _meals_for_label, user_staples, strip_accents):
+                    continue
                 same_day_protein_repeats += 1
                 issues.append(f"Día {day.get('day', '?')}: proteína '{_plabel}' en {n} comidas el mismo día (repetición)")
     egg_cap = max(3, round(total_meals * 0.25))  # ~2-3 en 12 comidas
@@ -23129,7 +23300,11 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # ── Guard 6 (FS5): reporte advisory de variedad/pertinencia cultural (espejo [P3-VARIETY]) ──
     if VARIETY_REPORT_ENABLED:
         try:
-            plan["variety_report"] = build_variety_report(plan)
+            # [P1-STAPLE-FOODS · 2026-08-02] user_staples alimenta la exención staple+técnica-
+            # distinta del gate same-day-protein — esta es la ÚNICA llamada que produce el
+            # variety_report que `should_retry`/`_variety_repeat_gate_issues` consumen para
+            # decidir el rechazo (ver plan.get("variety_report") en ambos).
+            plan["variety_report"] = build_variety_report(plan, user_staples=_user_staple_labels(form_data))
         except Exception as _vr_e:
             logger.warning(f"[P3-VARIETY] error: {type(_vr_e).__name__}: {_vr_e}")
 
@@ -35335,7 +35510,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # (P1-CLOSER-DAY-AWARE-PROTEIN); este warn es la evidencia para cazar cualquier
     # reintroductor restante ANTES de que el gate del review lo convierta en retry.
     try:
-        _late_rep_days = _days_with_same_day_protein_repeat(result)
+        # [P1-STAPLE-FOODS · 2026-08-02] user_staples evita que el autofix de abajo REESCRIBA una
+        # repetición que el gate principal ya exime (básico + técnica distinta).
+        _late_rep_days = _days_with_same_day_protein_repeat(result, user_staples=_user_staple_labels(form_data))
         # [P1-SAMEDAY-BURN-FIX · 2026-07-11] Repeat detectado POST-chain → re-pasada del
         # autofix (idempotente, determinista, costo LLM cero) ANTES de avisar: el warn de
         # abajo era profecía ("el gate va a rechazar") sin corrector — 2 intentos con banda
@@ -35346,7 +35523,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 from nutrition_db import IngredientNutritionDB as _INDB_lr
                 _n_lr = _protein_repeat_autofix(result.get("days") or [], form_data, _INDB_lr())
                 if _n_lr:
-                    _late_rep_days_post = _days_with_same_day_protein_repeat(result)
+                    _late_rep_days_post = _days_with_same_day_protein_repeat(result, user_staples=_user_staple_labels(form_data))
                     logger.info(f"🍗 [P1-SAMEDAY-BURN-FIX] re-autofix POST-chain reescribió "
                                 f"{_n_lr} comida(s) con repeat same-day (días antes: "
                                 f"{_late_rep_days} → después: {_late_rep_days_post or 'limpio'})")
@@ -36709,7 +36886,9 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         if skeleton_day:
             skeleton_block = (
                 f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
-                f"{build_day_assignment_context(skeleton_day, day_num)}"
+                # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico
+                # también en el regen quirúrgico (no solo en el day-gen inicial).
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data))}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.

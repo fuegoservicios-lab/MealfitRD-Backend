@@ -48,7 +48,11 @@ def test_shellfish_visible_to_same_day_gate():
 def test_sameday_protein_gate_wired_in_swap():
     i = _AGENT.find("P1-SWAP-SAMEDAY-PROTEIN-GATE")
     assert i > 0, "el gate determinista same-day desapareció del swap (el hint soft NO basta)"
-    blk = _AGENT[i: i + 3400]
+    # [P1-STAPLE-FOODS · 2026-08-02] ventana ampliada 3400→6800: la exención staple+técnica-
+    # distinta (decisión B del owner) se insertó ENTRE el cómputo de `_clash_sd` y el bloque de
+    # rechazo `SWAP_SAMEDAY_PROTEIN` — mismo patrón que el resto de la suite (ver
+    # test_p1_staple_foods.py::test_swap_gate_exemption_wired para el contrato de la exención).
+    blk = _AGENT[i: i + 6800]
     assert "_protein_gate_labels_in_text" in blk, "mismo SSOT del detector oficial (labels+aliases+word-boundary)"
     assert "same_day_other_meal_blobs" in blk, (
         "el gate necesita BLOBS (nombre+ingredientes) — con solo nombres el huevo embebido "
