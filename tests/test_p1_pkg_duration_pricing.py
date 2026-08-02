@@ -68,7 +68,14 @@ def test_marker_present_in_source():
 # ───────────────────────── selección por duración ─────────────────────────
 
 @pytest.mark.parametrize("g_total,exp_grams,exp_price", [
-    (1050, 907, 165),    # ~7 días → 2 lb
+    # [P1-SKU-COVER-HONESTY · 2026-08-02] 1050g contra el paquete de 2 lb (907g) es un under-buy
+    # de 13,6% (907/1050=0,864) — antes el cost-óptimo lo aceptaba igual (RD$165, "sin
+    # desperdicio" porque `waste=max(0, count*g-g_total)` no puede ir negativo y esconde el
+    # faltante). Acotado el under-buy a `SKU_FLOOR_MAX_UNDER_PCT` (10%), ya no alcanza — y entre
+    # comprar 2×2lb (RD$330, sobra 73%) o 1×5lb (RD$235, sobra 116%), el 5lb es más barato Y
+    # cubre. El selector cost-óptimo lo encuentra solo: la corrección de under-buy hizo AFLORAR
+    # una opción más barata que antes quedaba oculta detrás del under-buy silencioso.
+    (1050, 2268, 235),   # ~7 días → 5 lb (antes 2 lb con 13,6% de faltante sin aviso)
     (2250, 2268, 235),   # ~15 días → 5 lb
     (4500, 4536, 327),   # ~30 días → 10 lb
 ])
@@ -89,7 +96,9 @@ def test_select_market_package_none_without_data():
 # ───────────────── costo end-to-end (apply_smart_market_units + _cost_from_market) ─────────────────
 
 @pytest.mark.parametrize("g_total,exp_label,exp_cost", [
-    (1050, "2 lb", 165),
+    # [P1-SKU-COVER-HONESTY · 2026-08-02] ver comentario gemelo en
+    # `test_select_market_package_tier_by_grams` — mismo cambio, vista end-to-end.
+    (1050, "5 lb", 235),
     (2250, "5 lb", 235),
     (4500, "10 lb", 327),
 ])

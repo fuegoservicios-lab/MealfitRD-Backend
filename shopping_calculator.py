@@ -2165,6 +2165,25 @@ def _get_display_category(db_category: str, name: str = "") -> str:
         return "DESPENSA"
     return "OTROS"
 
+# [P1-SKU-COVER-HONESTY · 2026-08-02] La rama `under_buy_g < over_buy_g` (⟺ frac<0.5) de los 3
+# selectores de envase de abajo permitía retener el floor (comprar 1 envase de menos) con un
+# under-buy de hasta ~50% del total sin ningún aviso — medido en prod: 18/22 planes con ≥1 ítem
+# cover<0.9 sin nota (arroz 0.69-0.81, aceite 0.70-0.93, camarones 0.76-0.79). Acota ese under-buy
+# absoluto a `SKU_FLOOR_MAX_UNDER_PCT` del total (default 10%, alineado con la tolerancia del
+# coherence guard) — por encima, se compra el paquete extra (ceil). La rama previa
+# `frac <= ANTI_WASTE_THRESHOLD` (colchón de 2% para errores de coma flotante, SKU-OVERSHOOT-FIX)
+# se conserva intacta: es política anti-desperdicio deliberada, no el bug. Clamp [0, 0.5]: en 0
+# nunca se retiene el floor por under-buy (siempre ceil salvo el colchón anti-desperdicio); en 0.5
+# se vuelve al comportamiento previo al fix (peor caso).
+SKU_FLOOR_MAX_UNDER_PCT = _knob_env_float(
+    "MEALFIT_SKU_FLOOR_MAX_UNDER_PCT", 0.10, lambda v: 0.0 <= v <= 0.5)
+
+# [P1-SKU-COVER-HONESTY · 2026-08-02] Umbral de `pkg_cover_ratio` bajo el cual se avisa
+# "alcanza ~N de 7 días — recompra" (mismo formato que P1-CAPPED-STAPLE-HONESTY) si el ítem no
+# tiene ya un aviso de cap (`capped_by` manda — no duplicar sufijos, decisión #3). Clamp [0, 1].
+PKG_COVER_NOTE_MIN = _knob_env_float(
+    "MEALFIT_PKG_COVER_NOTE_MIN", 0.9, lambda v: 0.0 <= v <= 1.0)
+
 # ═══════════════════════════════════════════════════════════════
 # Helpers para SKU-Aware Sizing (P3)
 # ═══════════════════════════════════════════════════════════════
@@ -2213,7 +2232,10 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
         if floor_count >= 1:
             under_buy = g_total - (floor_count * size)
             over_buy = ((floor_count + 1) * size) - g_total
-            if frac <= anti_waste_pct or under_buy < over_buy:
+            # [P1-SKU-COVER-HONESTY · 2026-08-02] `under_buy < over_buy` retenía el floor con
+            # under-buy de hasta 50% del total sin aviso. Acotado a `SKU_FLOOR_MAX_UNDER_PCT`
+            # del total — la rama `frac <= anti_waste_pct` (colchón anti-desperdicio) intacta.
+            if frac <= anti_waste_pct or under_buy <= g_total * SKU_FLOOR_MAX_UNDER_PCT:
                 count = floor_count
                 total_g = count * size
                 waste = max(0, g_total - total_g)
@@ -2321,7 +2343,9 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
                 under = g_total - floor_c * g
                 over = (floor_c + 1) * g - g_total
                 frac = raw - floor_c
-                count_c = floor_c if (frac <= anti_waste_pct or under < over) else floor_c + 1
+                # [P1-SKU-COVER-HONESTY · 2026-08-02] `under < over` (min-costo) FAVORECÍA el
+                # floor con under-buy de hasta 50% sin aviso. Mismo bound que los otros 2 sitios.
+                count_c = floor_c if (frac <= anti_waste_pct or under <= g_total * SKU_FLOOR_MAX_UNDER_PCT) else floor_c + 1
             else:
                 count_c = 1
             cost_c = count_c * pr
@@ -2908,8 +2932,13 @@ def _item_cycle_repurchases(item: dict, cycle_days: int, trip_days: int = 7) -> 
     puede cubrir el mes en consumo y no aguantarlo en la nevera.
 
     Sin datos (ítem viejo, sin envase resuelto) devuelve el comportamiento previo: ciclo/ida.
-    Nunca menos de 1 ni más que el plano — este pase sólo puede BAJAR el costo declarado, jamás
-    inventar compras. tooltip-anchor: P1-CYCLE-REPURCHASE-HONEST
+    Nunca menos de 1. Cuando `ratio>=1` (el envase alcanza o sobra), nunca más que el plano — este
+    caso sólo puede BAJAR el costo declarado, jamás inventar compras (comportamiento original de
+    P1-CYCLE-REPURCHASE-HONEST). [P1-SKU-COVER-HONESTY · 2026-08-02] Cuando `ratio<1` (el envase
+    mínimo NO alcanza ni una ida — el under-buy que ese fix deja de esconder en silencio), el
+    clamp `min(plano, ...)` invertía la intención: escondía que se necesitan MÁS recompras que el
+    plano, no menos. Ya no se clampa en ese caso — el costo declarado del ciclo sube para reflejar
+    la recompra real. tooltip-anchor: P1-CYCLE-REPURCHASE-HONEST
     """
     plano = max(1.0, float(cycle_days) / max(1, trip_days))
     if not CYCLE_REPURCHASE_HONEST or not isinstance(item, dict):
@@ -2927,7 +2956,10 @@ def _item_cycle_repurchases(item: dict, cycle_days: int, trip_days: int = 7) -> 
             cubre_dias = min(cubre_dias, vida)
     except (TypeError, ValueError):
         pass
-    return max(1.0, min(plano, float(cycle_days) / cubre_dias))
+    recompras = float(cycle_days) / cubre_dias
+    if ratio < 1.0:
+        return max(1.0, recompras)
+    return max(1.0, min(plano, recompras))
 
 
 def _perishable_cycle_cost(items, cycle_days: int, weeks_flat: float) -> tuple[float, float]:
@@ -3740,7 +3772,12 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                 if floor_units >= 1:
                     under_buy_g = g_total - (floor_units * container_weight_g)
                     over_buy_g = ((floor_units + 1) * container_weight_g) - g_total
-                    if frac <= ANTI_WASTE_THRESHOLD or under_buy_g < over_buy_g:
+                    # [P1-SKU-COVER-HONESTY · 2026-08-02] `under_buy_g < over_buy_g` retenía el
+                    # floor con under-buy de hasta 50% del total sin aviso (medido en prod: arroz
+                    # cover 0.69-0.81, aceite 0.70-0.93, camarones 0.76-0.79 sobre 18/22 planes).
+                    # Acotado a `SKU_FLOOR_MAX_UNDER_PCT` del total; `frac <= ANTI_WASTE_THRESHOLD`
+                    # (colchón anti-desperdicio de coma flotante, SKU-OVERSHOOT-FIX) intacto.
+                    if frac <= ANTI_WASTE_THRESHOLD or under_buy_g <= g_total * SKU_FLOOR_MAX_UNDER_PCT:
                         units_needed = floor_units
                     else:
                         units_needed = floor_units + 1
@@ -4316,6 +4353,24 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             if _need_g > 0 and _pkg_total_g > 0:
                 result["pkg_cover_ratio"] = round(_pkg_total_g / _need_g, 3)
         except (TypeError, ValueError, ZeroDivisionError):
+            pass
+        # [P1-SKU-COVER-HONESTY · 2026-08-02] `pkg_cover_ratio` se calculaba y persistía pero
+        # nadie lo consumía para avisar under-buy (solo sobre-cobertura ≥2×, P1-OVERCOVER-LABEL).
+        # Medido en prod: 18/22 planes con ≥1 ítem cover<0.9 sin nota. Mismo formato que
+        # P1-CAPPED-STAPLE-HONESTY ("alcanza ~N de M días — recompra"); acá M=7 (idas) porque
+        # `pkg_cover_ratio` mide cuántas idas de `trip_days=7` caben en el envase mínimo, no el
+        # ciclo completo (ver `_item_cycle_repurchases`). Si el ítem YA tiene `capped_by`
+        # (P1-CAPPED-STAPLE-HONESTY), esa nota manda — no se duplica sufijo (decisión #3).
+        try:
+            _cover = result.get("pkg_cover_ratio")
+            if (_cover is not None and float(_cover) < PKG_COVER_NOTE_MIN
+                    and not result.get("capped_by")):
+                _dias_cubiertos = max(1, int(round(7 * float(_cover))))
+                result["display_qty"] = (
+                    f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de 7 días — recompra")
+                result["display_string"] = (
+                    f"{result['display_string']} (alcanza ~{_dias_cubiertos} de 7 días — recompra)")
+        except (TypeError, ValueError):
             pass
     # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] producto del súper que la lista usa.
     if _pkg_product_id:

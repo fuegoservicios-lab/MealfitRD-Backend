@@ -66,7 +66,11 @@ def test_yogurt_900_not_overshoot():
 # ─────────────────── COST-OPTIMAL: arroz/beans sin regresión ───────────────────
 
 @pytest.mark.parametrize("g,exp_grams,exp_cost", [
-    (1050, 907, 165),    # 7d → 2 lb
+    # [P1-SKU-COVER-HONESTY · 2026-08-02] 1050g contra el paquete de 2 lb (907g) es un under-buy
+    # de 13,6% — antes el cost-óptimo lo aceptaba (RD$165) porque `waste=max(0,...)` no puede ir
+    # negativo y esconde el faltante. Acotado el under-buy a 10% (`SKU_FLOOR_MAX_UNDER_PCT`), ya
+    # no alcanza; entre 2×2lb (RD$330) y 1×5lb (RD$235, cubre y es más barato), gana el 5lb.
+    (1050, 2268, 235),   # 7d → 5 lb (antes 2 lb con 13,6% de faltante sin aviso)
     (2250, 2268, 235),   # 15d → 5 lb
     (4500, 4536, 327),   # 30d → 10 lb
 ])

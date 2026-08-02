@@ -52,13 +52,26 @@ def test_la_vida_util_recorta_la_cobertura():
     assert n == pytest.approx(3.0, rel=0.01), n
 
 
-def test_jamas_sube_el_costo():
-    """Este pase sólo puede BAJAR lo declarado; no puede inventar compras."""
+def test_nunca_sube_el_costo_cuando_el_envase_alcanza_la_ida():
+    """ratio>=1 (el envase cubre o sobra una ida): este caso sólo puede BAJAR lo declarado; no
+    puede inventar compras. Invariante original de P1-CYCLE-REPURCHASE-HONEST, intacta."""
     plano = 30 / 7
-    for ratio in (0.1, 0.5, 1.0, 2.0, 12.0):
+    for ratio in (1.0, 2.0, 12.0):
         for shelf in (1, 3, 7, 30, 400):
             n = sc._item_cycle_repurchases(_item(10, ratio=ratio, shelf=shelf), cycle_days=30)
             assert 1.0 <= n <= plano + 1e-9, (ratio, shelf, n)
+
+
+def test_sube_el_costo_cuando_el_envase_NO_alcanza_ni_una_ida():
+    """[P1-SKU-COVER-HONESTY · 2026-08-02] ratio<1 (el envase mínimo comprado no cubre ni una
+    ida — el under-buy que ese fix deja de esconder en el selector): el `min(plano, ...)` de
+    antes escondía que hacen falta MÁS recompras que el plano, no menos — decisión #5. Ya no se
+    clampa en este caso: el costo declarado del ciclo debe SUBIR para reflejar la recompra real."""
+    plano = 30 / 7
+    for ratio in (0.1, 0.5):
+        for shelf in (1, 3, 7, 30, 400):
+            n = sc._item_cycle_repurchases(_item(10, ratio=ratio, shelf=shelf), cycle_days=30)
+            assert n >= plano - 1e-9, (ratio, shelf, n)
 
 
 def test_sin_senal_conserva_el_comportamiento_previo():
