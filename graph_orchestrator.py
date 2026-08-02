@@ -12818,6 +12818,16 @@ POSTQUANTIZE_RECHECK_TOL = max(0.01, min(0.2, _env_float("MEALFIT_POSTQUANTIZE_R
 # (borde: única línea macro-movible del día). Idempotente (solo actúa si un piso se re-abrió) +
 # re-trim de carbos preservando el cierre (mismo patrón P2-MICROCLOSER-BAND-RECHECK) + re-quantize.
 MICRO_POSTENGINE_RECHECK_ENABLED = _env_bool("MEALFIT_MICRO_POSTENGINE_RECHECK", True)
+# [P1-ASSEMBLE-CLINICAL-RECAP · 2026-08-02] (audit solver+seeder v7, gap gemelo de
+# P1-CARBFLOOR-CLINICAL-RECAP) `cap_dm2_high_gi_portions` y `cap_bariatric_portions` corren ANTES
+# del refinador global (`_rdi`) y del recheck post-quantize (`_rebalance_day_macros_to_target`,
+# bidireccional [0.3, 2.5]) dentro de `assemble_plan_node`. Ambos pases son macro-agnósticos a la
+# clínica y pueden devolver gramos a una línea ya recortada (batata DM2 150g → 300-375g) — nada
+# re-capea en el happy path de form-gen: el re-cap del update engine exige `_hit` fuera de banda,
+# la capa clínica de exits solo corre con `_is_fallback`, y `reapply_clinical_portion_caps` solo
+# se invocaba desde superficies de update. Re-cap idempotente al final del refine/postquantize.
+# Rollback sin redeploy: MEALFIT_ASSEMBLE_CLINICAL_RECAP=false. tooltip-anchor: P1-ASSEMBLE-CLINICAL-RECAP
+ASSEMBLE_CLINICAL_RECAP_ENABLED = _env_bool("MEALFIT_ASSEMBLE_CLINICAL_RECAP", True)
 # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-1) Recompute del panel de micros al FINAL del motor en
 # form-gen (espejo del chunk-merge P1-MICRONUTRIENT-CHUNK-RECOMPUTE): el panel se computa dentro de
 # la capa clínica (Guard 5) pero swap/rebalance/refine/recheck re-escalan ingredientes micro-portadores
@@ -35477,6 +35487,25 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 logger.warning(f"[P1-RECIPE-QTY-SYNC] sync en assemble no-op: {type(_sq_as_e).__name__}: {_sq_as_e}")
         except Exception as _fq_e:
             logger.warning(f"[P1-CLOSER-COHERENCE] quantize final en assemble falló (no bloquea): {type(_fq_e).__name__}: {_fq_e}")
+
+    # [P1-ASSEMBLE-CLINICAL-RECAP · 2026-08-02] El refinador global (_rdi) y el rebalance
+    # post-quantize corren DESPUÉS de cap_dm2/cap_bariatric y pueden devolver gramos a una línea
+    # capada (el propio docstring de `reapply_clinical_portion_caps` lo advierte). Re-cap
+    # idempotente al final del bloque refine+postquantize-recheck — espejo, para el happy path
+    # de form-gen, del P1-CARBFLOOR-CLINICAL-RECAP que cerró esta clase solo en superficies de
+    # update (swap-persist/chat-modify). No-op sin condición clínica y barato (idempotente).
+    try:
+        if ASSEMBLE_CLINICAL_RECAP_ENABLED and isinstance(form_data, dict) and form_data:
+            from nutrition_db import IngredientNutritionDB as _AcrDB
+            _acr_n = reapply_clinical_portion_caps(
+                result, form_data, db=_AcrDB(), surface="assemble_post_refine")
+            if _acr_n:
+                logger.info(f"🩺 [P1-ASSEMBLE-CLINICAL-RECAP] {_acr_n} porción(es) re-capada(s) tras "
+                            f"el refine/postquantize-recheck — el refinador había re-inflado un "
+                            f"almidón alto-IG por encima del cap clínico DM2/bariátrico.")
+    except Exception as _acr_e:
+        logger.warning(f"[P1-ASSEMBLE-CLINICAL-RECAP] recap post-refine falló (no bloquea): "
+                       f"{type(_acr_e).__name__}: {_acr_e}")
 
     # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-2) Micro-recheck post-motor: las pasadas de arriba
     # (swap C→P + rebalance dentro del engine, refine 5g, recheck post-quantize) son micro-agnósticas
