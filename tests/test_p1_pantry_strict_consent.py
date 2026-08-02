@@ -62,7 +62,16 @@ def test_marker_anchored_in_agent_py():
 
 
 def test_marker_bumped_in_app_py():
-    assert "P1-PANTRY-STRICT-CONSENT" in _APP_PY
+    # [de-pin · 2026-08-02] `_LAST_KNOWN_PFIX` es single-valued → pinear el literal
+    # "P1-PANTRY-STRICT-CONSENT" quedó stale apenas P1-CONTAINER-SERVABLE bumpeó el marker el
+    # mismo día (main no puede quedar rojo por un P-fix posterior legítimo). El contrato durable
+    # del bump (formato + floor de fecha + cross-link slug↔test) ya vive en
+    # test_p3_1_last_known_pfix_freshness.py + test_p2_hist_audit_14_marker_test_link.py — este
+    # test solo verifica que `_LAST_KNOWN_PFIX` EXISTE con el formato esperado. Mismo patrón
+    # establecido en test_p2_update_intelligence_3.py::test_last_known_pfix_bumped.
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P\d+-[A-Z0-9-]+ · \d{4}-\d{2}-\d{2}"', _APP_PY), (
+        "_LAST_KNOWN_PFIX debe existir con formato `Pn-... · YYYY-MM-DD`."
+    )
 
 
 def test_marker_anchor_filename():

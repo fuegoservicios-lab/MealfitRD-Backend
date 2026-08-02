@@ -21,6 +21,7 @@ Cubre:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -61,8 +62,15 @@ def test_marker_and_knob_present():
 
 
 def test_last_known_pfix_bumped():
-    assert "P1-STAPLE-FOODS" in _APP_SRC, (
-        "_LAST_KNOWN_PFIX debe apuntar a P1-STAPLE-FOODS tras este cierre (CLAUDE.md convención)."
+    # [de-pin · 2026-08-02] `_LAST_KNOWN_PFIX` es single-valued → pinear el literal
+    # "P1-STAPLE-FOODS" quedó stale apenas P1-CONTAINER-SERVABLE bumpeó el marker el mismo día
+    # (main no puede quedar rojo por un P-fix posterior legítimo). El contrato durable del bump
+    # (formato + floor de fecha + cross-link slug↔test) ya vive en
+    # test_p3_1_last_known_pfix_freshness.py + test_p2_hist_audit_14_marker_test_link.py — este
+    # test solo verifica que `_LAST_KNOWN_PFIX` EXISTE con el formato esperado. Mismo patrón
+    # establecido en test_p2_update_intelligence_3.py::test_last_known_pfix_bumped.
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P\d+-[A-Z0-9-]+ · \d{4}-\d{2}-\d{2}"', _APP_SRC), (
+        "_LAST_KNOWN_PFIX debe existir con formato `Pn-... · YYYY-MM-DD`."
     )
 
 
