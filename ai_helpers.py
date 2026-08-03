@@ -212,21 +212,39 @@ def _apply_recency_fatigue(freq_map, user_id):
     """Ingredientes usados recientemente pesan más que los usados hace 2 semanas."""
     if not freq_map or not user_id or user_id == "guest":
         return freq_map
-        
+
     try:
         # Query: ingredientes de los últimos 3 días pesan x3, últimos 7 días pesan x1.5
         recent_3d = get_user_ingredient_frequencies(user_id, days_limit=3)
         recent_7d = get_user_ingredient_frequencies(user_id, days_limit=7)
-        
+
         fatigued = {}
         for ing, freq in freq_map.items():
             recent_boost = recent_3d.get(ing, 0) * 3.0 + recent_7d.get(ing, 0) * 1.5
             fatigued[ing] = freq + recent_boost
-            
+
         return fatigued
     except Exception as e:
         logger.warning(f"⚠️ [FATIGUE] Error aplicando fatiga temporal: {e}")
         return freq_map
+
+
+# [P2-OVERUSE-RAW-FREQ · 2026-08-03] El veto textual «EVITA usar como base principal»
+# (`OVERUSE_THRESHOLD`, más abajo en `get_deterministic_variety_prompt`) comparaba
+# `freq >= 3` contra `db_freq_map` YA fatigado (`_apply_recency_fatigue`,
+# `recent_3d×3.0 + recent_7d×1.5`): un ingrediente comido UNA sola vez ayer da
+# `1 + 1*3.0 + 1*1.5 = 5.5 >= 3` y entra al veto textual, aunque el comentario de
+# calibración del umbral diga explícitamente que 1-2 usos NO deben marcarse "PROHIBIDOS"
+# (el soft-penalty `1/(freq+1)` de los PESOS ya castiga lo suficiente). En planes de
+# 15/30 días esto vetaba en el prompt los staples RECIÉN COMPRADOS.
+#
+# `True` (default): `used_proteins/used_carbs/used_veggies` se computan desde la
+# frecuencia CRUDA (snapshot pre-fatiga). Los PESOS del sorteo (`1/(freq+1)`) siguen
+# leyendo el mapa fatigado SIN CAMBIOS — la fatiga sigue siendo correcta para sesgar la
+# lotería; lo incorrecto era usarla también para el umbral binario de veto. `False`
+# restaura el comportamiento previo exacto (veto sobre fatigado) — rollback sin redeploy.
+# tooltip-anchor: P2-OVERUSE-RAW-FREQ
+OVERUSE_ON_RAW_FREQ = _env_bool("MEALFIT_OVERUSE_ON_RAW_FREQ", True)
 
 
 # [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23 · elevado a módulo P2-9 · 2026-06-23] Proteínas de BAJA
@@ -822,18 +840,24 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     fruit_freq = {}
     
     db_freq_map = {}
+    # [P2-OVERUSE-RAW-FREQ · 2026-08-03] Snapshot ANTES de la fatiga de recencia: el veto
+    # textual (`used_proteins/used_carbs/used_veggies`, más abajo) lee de aquí cuando el
+    # knob está encendido (default). Los pesos del sorteo siguen leyendo `db_freq_map`
+    # (fatigado) sin cambios.
+    raw_freq_map = {}
     if user_id and user_id != "guest":
         try:
             db_freq_map = get_user_ingredient_frequencies(user_id)
+            raw_freq_map = dict(db_freq_map)
             db_freq_map = _apply_recency_fatigue(db_freq_map, user_id)
         except Exception as e:
             logger.error(f"⚠️ [ANTI MODE-COLLAPSE] Error obteniendo frecuencias de DB: {e}")
-            
+
     if db_freq_map:
         # ======= NUEVO FLUJO OPTIMIZADO O(1) =======
         logger.info(f"⚡ [ANTI MODE-COLLAPSE] Usando Hash Map O(1) de DB con {len(db_freq_map)} métricas pre-calculadas.")
 
-        def _freq_for_pool_item(item: str, syn_map: dict) -> int:
+        def _freq_for_pool_item(item: str, syn_map: dict, freq_map: dict = None) -> int:
             """[P2-FREQ-LOOKUP-CANONICAL · 2026-07-29] (audit solver+seeder v4) El seeder LEÍA por
             alias y la tabla se ESCRIBE por la BASE canónica de `normalize_ingredient_for_tracking`
             (n-gramas contra `GLOBAL_REVERSE_MAP`). Para todo ítem del pool que es VARIANTE de otra
@@ -849,6 +873,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
 
             UNIÓN, no reemplazo: sumamos alias + clave canónica (si un ítem ya es su propia base, no
             pierde señal; el `set` evita contar dos veces cuando coinciden).
+
+            [P2-OVERUSE-RAW-FREQ · 2026-08-03] `freq_map` opcional (default `db_freq_map`,
+            fatigado): permite reutilizar el mismo lookup contra `raw_freq_map` (pre-fatiga)
+            para el veto textual, sin duplicar la lógica de alias/canónico.
             tooltip-anchor: P2-FREQ-LOOKUP-CANONICAL"""
             _keys = {strip_accents(s.lower()) for s in syn_map.get(item.lower(), [item.lower()])}
             if FREQ_LOOKUP_CANONICAL:
@@ -864,7 +892,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     logger.debug(
                         "[P2-SILENT-DEGRADATION] freq lookup canónico de %r: %s: %s",
                         item, type(_exc).__name__, str(_exc)[:160])
-            return sum(db_freq_map.get(_k, 0) for _k in _keys)
+            _map = db_freq_map if freq_map is None else freq_map
+            return sum(_map.get(_k, 0) for _k in _keys)
 
         for p in filtered_proteins:
             protein_freq[p] = _freq_for_pool_item(p, protein_synonyms)
@@ -874,6 +903,20 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             veggie_freq[v] = _freq_for_pool_item(v, veggie_fat_synonyms)
         for f in filtered_fruits:
             fruit_freq[f] = _freq_for_pool_item(f, fruit_synonyms)
+
+        # [P2-OVERUSE-RAW-FREQ · 2026-08-03] El veto textual (más abajo, `OVERUSE_THRESHOLD`)
+        # usa la frecuencia CRUDA (pre-fatiga) cuando el knob está encendido (default); los
+        # `*_freq` de arriba (fatigados) siguen alimentando SOLO los pesos del sorteo.
+        if OVERUSE_ON_RAW_FREQ:
+            protein_freq_for_veto = {p: _freq_for_pool_item(p, protein_synonyms, raw_freq_map)
+                                      for p in filtered_proteins}
+            carb_freq_for_veto = {c: _freq_for_pool_item(c, carb_synonyms, raw_freq_map)
+                                   for c in filtered_carbs}
+            veggie_freq_for_veto = {v: _freq_for_pool_item(v, veggie_fat_synonyms, raw_freq_map)
+                                     for v in filtered_veggies}
+        else:
+            protein_freq_for_veto, carb_freq_for_veto, veggie_freq_for_veto = (
+                protein_freq, carb_freq, veggie_freq)
     else:
         # ======= FALLBACK: Regex en Runtime (O(n×m)) para Invitados =======
         # Truncar historial a los últimos ~5000 chars (~1250 tokens) para proteger de O(N×M) si la sesión guest es larga.
@@ -891,14 +934,23 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 filtered_fruits, fruit_synonyms
             )
             protein_freq, carb_freq, veggie_freq, fruit_freq = future.result()
+        # [P2-OVERUSE-RAW-FREQ · 2026-08-03] Rama regex (guest / sin `db_freq_map`): no hay
+        # fatiga de recencia aplicada aquí (`_calcular_frecuencias_regex_cpu_bound` no la
+        # conoce), así que `protein_freq` etc. YA son la frecuencia cruda — el veto usa
+        # directamente lo mismo que los pesos, sin necesidad de un mapa separado.
+        protein_freq_for_veto, carb_freq_for_veto, veggie_freq_for_veto = (
+            protein_freq, carb_freq, veggie_freq)
 
     # Umbral mínimo: solo considerar "sobreusados" ingredientes con freq >= 3.
     # Con freq=1 o 2 el soft-penalty 1/(freq+1) ya reduce su probabilidad suficientemente;
     # marcarlos como "PROHIBIDOS" en el prompt contradice el modelo de penalización suave.
+    # [P2-OVERUSE-RAW-FREQ · 2026-08-03] Comparación contra `*_freq_for_veto` (crudo por
+    # default, ver `OVERUSE_ON_RAW_FREQ`), NO contra `*_freq` (que sigue fatigado para los
+    # pesos del sorteo, más abajo).
     OVERUSE_THRESHOLD = 3
-    used_proteins = [p for p, freq in protein_freq.items() if freq >= OVERUSE_THRESHOLD]
-    used_carbs = [c for c, freq in carb_freq.items() if freq >= OVERUSE_THRESHOLD]
-    used_veggies = [v for v, freq in veggie_freq.items() if freq >= OVERUSE_THRESHOLD]
+    used_proteins = [p for p, freq in protein_freq_for_veto.items() if freq >= OVERUSE_THRESHOLD]
+    used_carbs = [c for c, freq in carb_freq_for_veto.items() if freq >= OVERUSE_THRESHOLD]
+    used_veggies = [v for v, freq in veggie_freq_for_veto.items() if freq >= OVERUSE_THRESHOLD]
     
     # 2. Construir pools de candidatos con Penalización Suave (Soft Penalty)
     # En vez de un reset total cuando quedan pocos, SIEMPRE usamos toda la lista filtrada
