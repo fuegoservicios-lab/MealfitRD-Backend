@@ -2084,13 +2084,19 @@ def swap_meal(form_data: dict):
                             res = res.model_dump()
                         # `_solver_failed_macros`/`_solver_infeasible`/`_solver_residuals` nacieron
                         # el MISMO día que este bloque y quedaron fuera de la lista.
+                        # [P2-SOLVER-PIN-FROZEN · 2026-08-03] `_solver_frozen_lines` es la TERCERA
+                        # tanda que nace después de esta lista. Esta NO se olvida: sin ella, toda
+                        # comida SWAPEADA perdería el conteo y la serie nacería con el mismo agujero
+                        # que P2-SOLVER-CONVERGENCE-METRIC documentó arriba. Es copy-BACK (preserva
+                        # telemetría a través del `model_dump()` del structured output), NO un strip:
+                        # las `_solver_*` no se ocultan a la LLM aquí, viven en `plan_data`.
                         for _rk in ("ingredients", "ingredients_raw", "recipe",
                                     "protein", "carbs", "fats", "cals", "macros",
                                     "_solver_clamp_saturated", "_solver_clamp_saturated_hi",
                                     "_solver_clamp_saturated_lo", "_solver_greedy_fallback",
                                     "_solver_not_converged", "_solver_raw_by_food",
                                     "_solver_failed_macros", "_solver_infeasible",
-                                    "_solver_residuals"):
+                                    "_solver_residuals", "_solver_frozen_lines"):
                             if _rk in _rs_meal and _rs_meal[_rk] is not None and isinstance(res, dict):
                                 res[_rk] = _rs_meal[_rk]
                         logger.info(

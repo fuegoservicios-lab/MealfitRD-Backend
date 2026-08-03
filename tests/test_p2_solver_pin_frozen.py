@@ -19,6 +19,7 @@ Caso medido con el fixture de abajo (target proteina 80 g):
 100% OFFLINE: `StubDB` sustituye a `IngredientNutritionDB` (el .env apunta a PRODUCCION).
 """
 import inspect
+import re
 
 import pytest
 
@@ -251,3 +252,102 @@ def test_el_marker_vive_en_el_codigo_que_lo_implementa():
     src = inspect.getsource(ps._compute_scale_factors)
     assert "P2-SOLVER-PIN-FROZEN" in src, "marker ausente en `_compute_scale_factors`"
     assert "SOLVER_PIN_FROZEN" in src, "el knob no se lee donde se decide el pin"
+
+
+# ═════════════ 7 · el conteo llega al meal (no es telemetria muerta) ═════════════
+#
+# El repo tiene norma explicita contra el codigo inerte: "el sistema mide X y nadie consume X"
+# es clase de bug documentada. `frozen_lines` sale del solver; estos tests anclan que el WIRING
+# lo estampa en el meal (→ `plan_data` → consultable por SQL) y que el copy-back del swap no lo
+# pierde, que es exactamente como se perdieron sus tres hermanos antes (P2-SOLVER-CONVERGENCE-
+# METRIC y la nota de `_solver_failed_macros` en agent.py).
+
+class _WiringDB:
+    """DB para `_apply_macro_solver_to_meal`: pechuga/pollo/arroz resueltos, el resto bulk."""
+
+    _M = {
+        "pechuga": {"protein": 46.5, "carbs": 0.0, "fats": 5.4, "kcal": 247.5},
+        "pollo": {"protein": 27.0, "carbs": 0.0, "fats": 5.0, "kcal": 155.0},
+        "arroz": {"protein": 4.0, "carbs": 42.0, "fats": 0.5, "kcal": 195.0},
+    }
+
+    def macros_from_ingredient_string(self, s):
+        low = str(s).lower()
+        for tok, mac in self._M.items():
+            if tok in low:
+                return dict(mac)
+        return None
+
+    def macros_for_line(self, qty, unit, name):
+        return self.macros_from_ingredient_string(name)
+
+    def grams_from_ingredient_string(self, s):
+        return 100.0
+
+
+def _meal(lines):
+    return {"name": "Comida de prueba", "ingredients": list(lines),
+            "ingredients_raw": list(lines), "protein": 30, "carbs": 20, "fats": 10, "cals": 400}
+
+
+def test_el_wiring_estampa_el_conteo_de_congeladas_en_el_meal():
+    """(a) meal CON linea congelada ⇒ `_solver_frozen_lines` con el conteo."""
+    import graph_orchestrator as g
+    meal = _meal([PECHUGA, POLLO])
+    assert g._apply_macro_solver_to_meal(
+        meal, {"kcal": 600.0, "protein": 80.0, "carbs": 10.0, "fats": 15.0}, _WiringDB()) is True
+    assert meal.get("_solver_frozen_lines") == 1, (
+        f"el conteo no llego al meal (seguiria siendo telemetria muerta): "
+        f"{[k for k in meal if k.startswith('_solver')]}")
+
+
+def test_el_wiring_no_estampa_la_clave_cuando_no_hay_congeladas():
+    """(b) meal SIN congeladas ⇒ clave AUSENTE — mismo patron que los hermanos, que solo
+    estampan cuando el valor es significativo (`if _sat:`, `if _infe:`)."""
+    import graph_orchestrator as g
+    meal = _meal(["100 g de pollo", "150 g de arroz"])
+    g._apply_macro_solver_to_meal(
+        meal, {"kcal": 600.0, "protein": 45.0, "carbs": 55.0, "fats": 12.0}, _WiringDB())
+    assert "_solver_frozen_lines" not in meal, (
+        "una comida sin congeladas no debe cargar la clave (ruido en plan_data)")
+
+
+def test_el_copy_back_del_swap_no_pierde_el_conteo():
+    """(c) La lista de `agent.py` es un copy-BACK (preserva telemetria a traves del `model_dump()`
+    del structured output), NO un strip: las `_solver_*` no se ocultan a la LLM, viven en
+    `plan_data`. Su modo de fallo documentado es que las claves nacidas DESPUES quedan fuera —
+    le paso a `_solver_failed_macros`/`_solver_infeasible`/`_solver_residuals`. Esta no.
+    """
+    import os
+    _agent = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent.py")
+    with open(_agent, encoding="utf-8") as fh:
+        src = fh.read()
+    i = src.index('for _rk in ("ingredients", "ingredients_raw", "recipe"')
+    bloque = src[i:src.index("):", i)]
+    assert '"_solver_frozen_lines"' in bloque, (
+        "clave nueva fuera del copy-back: toda comida SWAPEADA perderia el conteo")
+    # y los hermanos siguen ahi (no la anadimos pisando a nadie)
+    for hermano in ("_solver_not_converged", "_solver_infeasible", "_solver_residuals"):
+        assert f'"{hermano}"' in bloque
+
+
+def test_el_conteo_viaja_en_los_logs_que_lo_vuelven_accionable():
+    """No emite log propio (hay congeladas en casi toda comida, ~28 solver-runs por plan: seria
+    ruido). Se ADJUNTA a los dos logs que ya existen y que lo hacen accionable."""
+    import os
+    _go = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "graph_orchestrator.py")
+    with open(_go, encoding="utf-8") as fh:
+        src = fh.read()
+    # Ventana = la FUNCION entera (hasta el siguiente `def` a nivel 0), no un numero de bytes
+    # a ojo: el bloque de telemetria vive a ~7.3k del `def` y una ventana corta lo dejaria
+    # fuera — la clase de anclaje que caduca sola (ya mordio en test_p3_audit_v6_solver_seeder).
+    i = src.index("def _apply_macro_solver_to_meal")
+    _m = re.search(r"\ndef ", src[i + 10:])
+    win = src[i:i + 10 + _m.start()] if _m else src[i:]
+    assert 'meal["_solver_frozen_lines"] = _frozen_n' in win
+    assert 'if _frozen_n:' in win, "debe estamparse solo cuando es significativo (>0)"
+    assert win.count("líneas congeladas=") == 2, (
+        "el conteo debe viajar en los DOS logs accionables (no-convergencia + infactibilidad)")
+    assert "logger.info(f\"📐 [P2-SOLVER-PIN-FROZEN]" not in win, (
+        "no debe emitir log propio: hay congeladas en casi toda comida (~28 runs/plan)")

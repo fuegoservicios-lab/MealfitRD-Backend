@@ -17306,6 +17306,23 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                 logger.info(f"📐 [P2-SOLVER-CLAMP-TELEMETRY] {_sat}/{len(factors)} factor(es) saturaron el clamp "
                             f"({_sat_hi}↑ quería-más / {_sat_lo}↓ quería-menos) en meal "
                             f"{str(meal.get('name'))[:40]!r} (slot fuera de banda pre-closer).")
+            # [P2-SOLVER-PIN-FROZEN · 2026-08-03] Cuántas líneas de la comida son INAMOVIBLES (sin
+            # cantidad líder que reescribir: «Pechuga a la plancha (150g)», «Cdta de miel»). Desde
+            # que el pin las clava a 1.0 en el LSQ, el solver YA NO reparte target entre ellas — así
+            # que el residuo que quede es honesto; pero SIN este conteo el operador no puede
+            # distinguir "el solver no llegó" de "el solver no PODÍA llegar, y aquí está cuánto del
+            # plato tenía las manos atadas". Mismo patrón que los hermanos: se estampa solo cuando
+            # es significativo (>0) y viaja en `plan_data` → consultable por SQL.
+            # NO emite log propio a propósito: hay líneas congeladas en casi toda comida (~28
+            # solver-runs por plan) y una línea de journal por comida sería ruido puro; el conteo se
+            # ADJUNTA a los dos logs que ya existen y que son los que lo vuelven accionable
+            # (no-convergencia e infactibilidad). Va ANTES del bloque S-P2-b y no en medio: el
+            # anclaje de `test_sp2b_method_obs_anchored` es una ventana de 900 bytes desde su
+            # marker, y partirla habría roto un test ajeno sin que nada estuviera mal.
+            # tooltip-anchor: P2-SOLVER-PIN-FROZEN
+            _frozen_n = int(res.get("frozen_lines") or 0)
+            if _frozen_n:
+                meal["_solver_frozen_lines"] = _frozen_n
             # [S-P2-b / P2-SOLVER-METHOD-OBS · 2026-07-07] converged/method eran telemetría MUERTA (el wiring
             # no las leía). Ahora: un meal que cayó SILENCIOSO al greedy (el algoritmo inferior que el LSQ
             # reemplaza — desacopla la grasa embebida) o que NO convergió deja flag + log. Observabilidad pura
@@ -17321,7 +17338,8 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                 if _cpm:
                     meal["_solver_failed_macros"] = [m for m, ok in _cpm.items() if not ok]
                 logger.info(f"📐 [P2-SOLVER-METHOD-OBS] meal {str(meal.get('name'))[:40]!r} NO convergió "
-                            f"(método={res.get('method')}, macros fuera={meal.get('_solver_failed_macros')}; "
+                            f"(método={res.get('method')}, macros fuera={meal.get('_solver_failed_macros')}, "
+                            f"líneas congeladas={_frozen_n}/{len(factors)}; "
                             f"el clamp no clavó el target — closer/rebalance cierran).")
             # [P3-SOLVER-FEASIBILITY · 2026-07-29] Distingue "falta escalado" de "falta un PORTADOR":
             # con `infeasible={'fats':'high'}` ninguna re-escala arregla el plato — hace falta añadir
@@ -17332,7 +17350,8 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
                 meal["_solver_residuals"] = res.get("residuals")
                 logger.info(f"📐 [P3-SOLVER-FEASIBILITY] meal {str(meal.get('name'))[:40]!r}: target "
                             f"INALCANZABLE con estos alimentos dentro del clamp → {_infe} "
-                            f"(no es re-escalado: falta/sobra un portador).")
+                            f"(no es re-escalado: falta/sobra un portador; "
+                            f"líneas congeladas={_frozen_n}/{len(factors)}).")
         except Exception:
             pass
         # [P1-SOLVER-RAW-BY-FOOD · 2026-07-25] CAUSA RAÍZ de la divergencia display↔raw.
