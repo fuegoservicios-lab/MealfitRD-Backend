@@ -29472,7 +29472,15 @@ def _rescale_raw_by_food(raw: list, ing_strs: list, factors: list) -> "tuple[lis
 # INVENTANDO una densidad (P1-VOLUME-FALLBACK-DENSITY, el ml×5 fantasma que hacía "1 taza de
 # lechosa" = 1183 g): "no sé" es una respuesta correcta; un número plausible no lo es.
 #
-# Rollback sin redeploy: MEALFIT_RECONCILE_CDA_DENSITY=false. tooltip-anchor: P1-RECONCILE-CDA-DENSITY
+# Rollback sin redeploy: MEALFIT_RECONCILE_CDA_DENSITY=false.
+#
+# ⚠️ El knob se lee en tiempo de LLAMADA, pero `_resolve_line_food_grams` memoiza en
+# `_LINE_FOOD_GRAMS_CACHE` por (línea, cheap) — sin el valor del knob en la clave. En producción
+# da igual (el env se lee una vez al importar el módulo y no cambia en caliente), pero un test
+# que monkeypatchee `RECONCILE_CDA_DENSITY` DEBE limpiar esa caché o seguirá leyendo el `None`
+# calculado con el valor anterior. No se mete el knob en la clave a propósito: encarecería cada
+# lookup de un pase que corre miles de veces por generación para cubrir un caso que solo existe
+# en tests. tooltip-anchor: P1-RECONCILE-CDA-DENSITY
 RECONCILE_CDA_DENSITY = _env_bool("MEALFIT_RECONCILE_CDA_DENSITY", True)
 _SPOON_UNITS_CDA = frozenset({"cda", "cdas", "cucharada", "cucharadas"})
 _SPOON_UNITS_CDTA = frozenset({"cdta", "cdtas", "cdita", "cditas",
@@ -29713,6 +29721,7 @@ def _reconcile_display_raw_lines(days: list, db=None) -> list:
                 A, B = _index(disp), _index(raw)
                 drop: set = set()
                 add: list = []
+                _qty_rows: list = []   # filas qty_divergence de ESTA comida (ronda 1)
                 for food, a in A.items():
                     b = B.get(food)
                     if b is None:
@@ -29728,22 +29737,38 @@ def _reconcile_display_raw_lines(days: list, db=None) -> list:
                         continue
                     drop.update(b["idx"])
                     add.extend(a["lines"])
-                    out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
-                                "food": food, "kind": "qty_divergence", "ratio": round(ratio, 2),
-                                "display": a["lines"][0], "raw": b["lines"][0]})
+                    _row = {"day": day.get("day"), "meal": str(meal.get("name") or "?"),
+                            "food": food, "kind": "qty_divergence", "ratio": round(ratio, 2),
+                            "display": a["lines"][0], "raw": b["lines"][0]}
+                    out.append(_row)
+                    _qty_rows.append(_row)
                 if drop or add:
                     meal["ingredients_raw"] = [x for i, x in enumerate(raw) if i not in drop] + add
-                    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02] El crédito nutricional vuelve a
-                    # seguir al display entregado. Solo en comidas REPARADAS: un plato coherente
-                    # no debe ver sus números reescritos por este pase.
-                    if RECONCILE_CDA_DENSITY:
+                    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02 · ronda 1] El crédito nutricional
+                    # vuelve a seguir al display entregado — pero SOLO cuando la reparación fue
+                    # una `qty_divergence`.
+                    #
+                    # Esa es la única que constata que el display y el raw declaraban CANTIDADES
+                    # distintas, o sea la evidencia de que los macros estampados pueden venir del
+                    # lado inflado. En `missing_in_raw` no hay tal evidencia: el display nunca
+                    # discrepó de nada, solo faltaba una línea en la lista de compras. Reescribir
+                    # ahí el bloque entero de macros excede la razón del fix, y se midió caro —
+                    # una comida con `cals=999` a la que solo se le apendeó una línea a raw salía
+                    # con `cals=135`.
+                    #
+                    # `changed` viaja a la telemetría (`macros_truthed_up`): sin eso, que los
+                    # macros se hayan movido no dejaba rastro en `_display_raw_reconciled` y
+                    # nadie podría auditar después de quién fue el cambio.
+                    if RECONCILE_CDA_DENSITY and _qty_rows:
                         try:
                             if db is None:
                                 from nutrition_db import IngredientNutritionDB as _RcDB
                                 db = _RcDB()
-                            _truth_up_meal_macros_from_strings(meal, db)
+                            _tu_changed = bool(_truth_up_meal_macros_from_strings(meal, db))
                         except Exception:
-                            pass
+                            _tu_changed = False
+                        for _row in _qty_rows:
+                            _row["macros_truthed_up"] = _tu_changed
             except Exception:
                 continue
     return out
@@ -29918,6 +29943,20 @@ def _watery_veg_tokens() -> frozenset:
 # La rama de GRAMOS conserva su matcher histórico a propósito: apretarlo estrecharía un cap ya
 # desplegado sin una medición previa contra planes reales, y eso no es lo que este fix cierra.
 # tooltip-anchor: P1-RECONCILE-CDA-DENSITY
+def _realism_lead_qty(text: str) -> "float | None":
+    """[P1-RECONCILE-CDA-DENSITY · ronda 1] Cantidad LÍDER de una línea ("4.54 calabacin" → 4.54,
+    "½ repollo" → 0.5), o None si no la hay. Mismo regex que usa el cap de conteo, así que
+    entiende decimal y fracción unicode. `text` en minúsculas y sin acentos."""
+    try:
+        m = _REALISM_COUNT_LEAD_RE.match(str(text))
+        if not m or not (m.group(1) or m.group(2)):
+            return None
+        return (float((m.group(1) or "0").replace(",", "."))
+                + _REALISM_FRAC_MAP.get(m.group(2) or "", 0.0))
+    except Exception:
+        return None
+
+
 def _watery_token_hits(text: str, tokens) -> bool:
     """¿Alguno de `tokens` aparece en `text` como palabra completa (o su plural es/s)?
 
@@ -30278,6 +30317,10 @@ def _cap_unrealistic_portions(days, db=None) -> int:
         return 0
     try:
         from nutrition_db import rescale_ingredient_string as _resc
+        # [P1-RECONCILE-CDA-DENSITY · ronda 1] Cuantizador SSOT (P3-PORTION-QUANTIZE) + SSOT de
+        # unidades: la rama de masa implícita los necesita para no fabricar conteos fraccionarios.
+        from nutrition_db import quantize_ingredient_string as _quant
+        from canonical_units import canonicalize_unit as _canon_u
         from constants import strip_accents as _sa
         if db is None:
             from nutrition_db import IngredientNutritionDB
@@ -30517,7 +30560,16 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                     # repollo aparece en el texto. Preguntarle al motor de macros de quién son
                     # esos gramos cierra la pregunta en vez de adivinarla — es la lección de
                     # "atribución por CLÁUSULA" de P1-CULINARY-CONTRACT, aplicada aquí.
-                    if RECONCILE_CDA_DENSITY and not (m_g or _paren_g):
+                    #
+                    # [ronda 1] El match barato contra `il` va PRIMERO y la resolución de macros
+                    # detrás. Esta rama corre por-línea dentro de `_swap_mutator`, o sea bajo el
+                    # `SELECT … FOR UPDATE`, y `macros_from_ingredient_string` con una
+                    # `IngredientNutritionDB` no inyectada puede caer al Tier 3 (`normalize_name`
+                    # → `get_semantic_cache`/`embed_query`: RED con reintentos). P2-MUTATOR-PURITY
+                    # obliga a que el camino base bajo el lock sea CPU puro; el token-match lo es,
+                    # así que la llamada cara queda como excepción y no como caso base.
+                    if (RECONCILE_CDA_DENSITY and not (m_g or _paren_g)
+                            and _watery_token_hits(il, _watery_tokens)):
                         try:
                             _wmc = db.macros_from_ingredient_string(s) or {}
                         except Exception:
@@ -30527,12 +30579,52 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                         if (_wg and float(_wg) > float(REALISM_VEG_VOLUME_CAP_G) and _wname
                                 and _watery_token_hits(_wname, _watery_tokens)):
                             _f_mass = float(REALISM_VEG_VOLUME_CAP_G) / float(_wg)
-                            factor = _f_mass if factor is None else min(factor, _f_mass)
-                            logger.info(
-                                f"🥒 [P1-RECONCILE-CDA-DENSITY] vegetal acuoso en unidad "
-                                f"no-gramo: {s[:44]!r} ≈ {float(_wg):.0f} g de {_wname!r} "
-                                f"(techo {REALISM_VEG_VOLUME_CAP_G} g) en "
-                                f"'{str(meal.get('name'))[:32]}'.")
+                            # [ronda 1] PISO DE 1 UNIDAD en líneas count-led. Sin él, capear por
+                            # masa con `CAP/_wg` fabricaba conteos que nadie puede cocinar ni
+                            # comprar — medido: "1 pepino"(300 g) → "0.83 pepino", "1 coliflor" →
+                            # "0.43 coliflor", "½ repollo" → "0.28 repollo". Una verdura ENTERA es
+                            # el mínimo servible/comprable: si el techo pediría menos de una, la
+                            # línea se queda como está y NO se capea. La rama de conteo histórica
+                            # nunca tuvo este defecto porque su factor (`_cap_n/cur_n`) cae en el
+                            # entero del techo por construcción.
+                            #
+                            # `canonicalize_unit` (SSOT de unidades) decide count-led vs
+                            # taza/cda: devuelve None para el sustantivo de un alimento
+                            # ("pepino") y 'taza'/'cda' para una unidad de medida real.
+                            _mq = _REALISM_COUNT_LEAD_RE.match(il)
+                            _lead_n = _realism_lead_qty(il)
+                            if (_lead_n and _lead_n > 0 and _mq
+                                    and _canon_u(_mq.group(3)) in (None, "unidad")):
+                                _f_mass = min(1.0, max(1.0, _lead_n * _f_mass) / _lead_n)
+                            # [ronda 1] Y el resultado pasa por el cuantizador SSOT
+                            # (`P3-PORTION-QUANTIZE`, "0.66 huevos matan la adherencia") en vez de
+                            # por un redondeo nuevo escrito aquí. Se compone en el FACTOR, no
+                            # sobre el string final: el bloque de abajo aplica ese mismo factor a
+                            # `ingredients` y a `ingredients_raw`, así que cuantizar aquí es lo
+                            # único que mantiene las dos listas en lockstep. Cuantizar después
+                            # habría dejado display "1 pepino" contra raw "0.83 pepino" — una
+                            # divergencia NUEVA en una línea que hoy sale limpia.
+                            #
+                            # El factor se REDERIVA de la cantidad cuantizada (`nueva/original`)
+                            # en vez de multiplicar los dos factores: componerlos arrastra el
+                            # redondeo de dos round-trips de string y escupía "2.24 tazas" donde
+                            # el cuantizador había dicho 2.25 — o sea el fix devolvía una
+                            # cantidad que su propio cuantizador no habría aprobado.
+                            if _f_mass < 1.0 and _lead_n and _lead_n > 0:
+                                try:
+                                    _q_new, _q_f = _quant(_resc(s, _f_mass))
+                                    _q_lead = _realism_lead_qty(_sa(str(_q_new).lower()))
+                                    if _q_lead and _q_lead > 0:
+                                        _f_mass = _q_lead / _lead_n
+                                except Exception:
+                                    pass
+                            if _f_mass < 0.999:
+                                factor = _f_mass if factor is None else min(factor, _f_mass)
+                                logger.info(
+                                    f"🥒 [P1-RECONCILE-CDA-DENSITY] vegetal acuoso en unidad "
+                                    f"no-gramo: {s[:44]!r} ≈ {float(_wg):.0f} g de {_wname!r} "
+                                    f"(techo {REALISM_VEG_VOLUME_CAP_G} g) en "
+                                    f"'{str(meal.get('name'))[:32]}'.")
                     if factor is not None and factor < 0.999:
                         try:
                             _new = _resc(s, factor)

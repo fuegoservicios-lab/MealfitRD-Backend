@@ -144,7 +144,14 @@ def test_el_guard_de_indice_ya_no_es_la_via_principal():
     i = src.index("def _cap_unrealistic_portions")
     # La función ronda las 220 líneas y el sitio de escritura está al final; una ventana corta
     # dejaba el assert siempre en verde por no llegar (ya me pasó dos veces hoy con otros tests).
-    cuerpo = src[i:i + 22000]
+    #
+    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02 · ronda 1] La ventana era `i + 22000` a pelo y la
+    # función creció al añadirle la rama de masa implícita: el assert empezó a fallar por NO
+    # LLEGAR al call site, no porque el call site hubiera desaparecido — o sea el mismo modo de
+    # fallo que el comentario de arriba ya describía, por el otro extremo. Bumpear la constante
+    # solo aplaza la próxima vez; el cuerpo se delimita hasta el siguiente `def` de nivel cero.
+    _j = src.find("\ndef ", i + 1)
+    cuerpo = src[i:_j if _j != -1 else len(src)]
     assert "_rescale_raw_by_food(raw, [s], [factor])" in cuerpo, (
         "el recorte se mapea por ALIMENTO; `raw[idx]` sólo queda como fallback"
     )

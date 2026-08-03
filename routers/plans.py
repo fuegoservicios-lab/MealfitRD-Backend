@@ -5652,16 +5652,13 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             logger.debug(f"[P2-EXPAND-MICRO-RECOMPUTE] no-op: {_rmr_e}")
                     # [P2-AUDIT-V7-BATCH · 2026-07-04] (P2-4) band-parity tras el motor: marca (o limpia)
                     # el banner de banda con las MISMAS keys de S1 + atribución de superficie.
-                    if _expand_added_ings:
-                        try:
-                            from graph_orchestrator import apply_update_band_parity as _ubp_exp
-                            _ubp_exp(plan_data_fresh, surface="recipe_expand")
-                        except Exception as _ubp_exp_e:
-                            logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) band-parity en expand no-op: {_ubp_exp_e}")
                     # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) el motor de macros
                     # de arriba (`_ume_exp`) MUEVE cantidades tras el finalize; sin esta pasada la
                     # divergencia display↔raw que introduzca se persiste y el rebuild de listas de
                     # aquí abajo la lee. Espejo del shield pre-INSERT, mismo knob de rollback.
+                    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02 · ronda 1] Movido ARRIBA de
+                    # `band_parity` — desde este fix el reconciliador re-sincroniza macros y la
+                    # banda los MIDE (razón completa en la superficie de swap).
                     if _expand_added_ings:
                         try:
                             from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_ex,
@@ -5673,6 +5670,12 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                                 f"display↔raw reconciliadas (recipe_expand).")
                         except Exception as _rabc_ex_e:
                             logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (expand) no-op: {_rabc_ex_e}")
+                    if _expand_added_ings:
+                        try:
+                            from graph_orchestrator import apply_update_band_parity as _ubp_exp
+                            _ubp_exp(plan_data_fresh, surface="recipe_expand")
+                        except Exception as _ubp_exp_e:
+                            logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) band-parity en expand no-op: {_ubp_exp_e}")
                     # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-C3) Rebuild inline de las 4 listas si el
                     # veg del finalizer entró a ingredients — expand era la ÚNICA superficie mutadora
                     # de ingredients sin recalc (el veg faltaba de la lista todo el ciclo, violando
@@ -6955,14 +6958,6 @@ def api_swap_meal_persist(
             # persist del swap: marca/limpia `_quality_degraded` (mismas keys del banner) según el plan
             # mutado quede fuera/dentro de banda. `_pantry_limited` (set por los reverts de agent.py,
             # P1-PANTRY-DEGRADED-SIGNAL) o el swap desde Nevera atribuyen la causa a inventario.
-            try:
-                from graph_orchestrator import apply_update_band_parity as _ubp_sw
-                _pl_sw = bool(isinstance(new_meal, dict)
-                              and (new_meal.get("_pantry_limited") or new_meal.get("pantry_constrained")))
-                _ubp_sw(plan_data, surface="swap_persist", pantry_limited=_pl_sw)
-            except Exception as _bp_sw_e:
-                logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (swap) no-op: {_bp_sw_e}")
-
             # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) Espejo de
             # P2-RECONCILE-AFTER-BAND-CLOSER, que solo existía en el shield pre-INSERT. En esta
             # superficie el motor (rebalance → refine 5g → trim de grasas) corre DESPUÉS del
@@ -6971,6 +6966,18 @@ def api_swap_meal_persist(
             # PRIMERO, así que la lista se construía sobre el lado divergente. El coherence guard
             # no puede verlo (lee raw en los dos lados). Display manda, idempotente, fail-open.
             # Rollback sin redeploy: MEALFIT_RECONCILE_AFTER_BAND_CLOSER=false.
+            #
+            # [P1-RECONCILE-CDA-DENSITY · 2026-08-02 · ronda 1] Movido ARRIBA de `band_parity`.
+            # Desde este fix el reconciliador también re-sincroniza los macros del plato reparado,
+            # y `apply_update_band_parity` MIDE la banda y refresca `delivered_macros`: corriendo
+            # después dejaba el banner `_quality_degraded`, los chips `_macro_band_low` y
+            # `delivered_macros` calculados sobre macros que el pase siguiente reescribía. Es la
+            # clase que este repo ya cerró dos veces (el clear de chips ámbar stale de regen-day
+            # y el refresh del reporte de micros). Mover el bloque (en vez de re-medir la banda
+            # después)
+            # es el cambio mínimo — cero código nuevo — y respeta igual la intención original del
+            # marker: sigue corriendo DESPUÉS del motor/closer y ANTES del rebuild de listas.
+            # `tools.py` (chat-modify) ya tenía este orden; estas 3 superficies eran la excepción.
             try:
                 from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_sw,
                                                 _reconcile_display_raw_lines as _rdrl_sw)
@@ -6981,6 +6988,14 @@ def api_swap_meal_persist(
                                     f"reconciliadas antes del rebuild de listas (swap_persist).")
             except Exception as _rabc_sw_e:
                 logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (swap) no-op: {_rabc_sw_e}")
+
+            try:
+                from graph_orchestrator import apply_update_band_parity as _ubp_sw
+                _pl_sw = bool(isinstance(new_meal, dict)
+                              and (new_meal.get("_pantry_limited") or new_meal.get("pantry_constrained")))
+                _ubp_sw(plan_data, surface="swap_persist", pantry_limited=_pl_sw)
+            except Exception as _bp_sw_e:
+                logger.debug(f"[P1-BAND-PARITY-UPDATES] parity (swap) no-op: {_bp_sw_e}")
 
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas (post closer/requantize/qty-sync → reflejan los
@@ -8647,6 +8662,21 @@ def api_regenerate_day(
             # persist del día regenerado: el aviso prosa de la respuesta (day_quality_warning) NO persiste;
             # esto marca/limpia `_quality_degraded` en el plan (banner tras reload, paridad con form-gen).
             # `_pantry_limited` atribuye la causa a la Nevera (regen-day es pantry-strict por diseño).
+            # [P1-RECONCILE-CDA-DENSITY · 2026-08-02 · ronda 1] El reconciliador (que desde este
+            # fix re-sincroniza macros) se hoisteó ARRIBA de la medición de banda: ver la razón
+            # completa en la superficie de swap. Aquí importa doble, porque justo debajo el clear
+            # de chips ámbar stale re-mide el día para decidir si los limpia.
+            try:
+                from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_rd,
+                                                _reconcile_display_raw_lines as _rdrl_rd)
+                if _rabc_rd:
+                    _rw_rd = _rdrl_rd(pd.get("days") or [])
+                    if _rw_rd:
+                        logger.info(f"⚖️ [P1-UPDATE-RAW-BY-FOOD] {len(_rw_rd)} línea(s) display↔raw "
+                                    f"reconciliadas antes del rebuild de listas (regen_day).")
+            except Exception as _rabc_rd_e:
+                logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (regen-day) no-op: {_rabc_rd_e}")
+
             try:
                 from graph_orchestrator import apply_update_band_parity as _ubp_rd
                 _ubp_rd(pd, surface="regen_day", pantry_limited=bool(_pantry_limited))
@@ -8679,16 +8709,8 @@ def api_regenerate_day(
             # misma orquestación del motor (rebalance → refine 5g → trim de grasas) y también
             # carecía de la reconciliación display↔raw que sí tiene el shield pre-INSERT. ANTES
             # del rebuild de listas, que lee `ingredients_raw` primero.
-            try:
-                from graph_orchestrator import (RECONCILE_AFTER_BAND_CLOSER as _rabc_rd,
-                                                _reconcile_display_raw_lines as _rdrl_rd)
-                if _rabc_rd:
-                    _rw_rd = _rdrl_rd(pd.get("days") or [])
-                    if _rw_rd:
-                        logger.info(f"⚖️ [P1-UPDATE-RAW-BY-FOOD] {len(_rw_rd)} línea(s) display↔raw "
-                                    f"reconciliadas antes del rebuild de listas (regen_day).")
-            except Exception as _rabc_rd_e:
-                logger.debug(f"[P1-UPDATE-RAW-BY-FOOD] reconcile (regen-day) no-op: {_rabc_rd_e}")
+            # [P1-RECONCILE-CDA-DENSITY · ronda 1] La invocación se hoisteó arriba (antes de la
+            # medición de banda y del clear de chips); sigue cumpliendo "antes del rebuild".
             # [P1-UPDATE-LIST-INLINE-RECALC · 2026-07-02] ÚLTIMO paso del mutator: rebuild
             # inline de las listas del plan con el día regenerado (el strip de arriba queda
             # como fallback si falla — contrato legacy con recalc del frontend).

@@ -120,6 +120,21 @@ ROWS = [
      "aliases": ["casabes"],
      "density_g_per_cup": 0.0, "density_g_per_unit": 0.0,
      "protein_per_100g": 1.0, "carbs_per_100g": 80.0, "fat_per_100g": 0.5},
+    # Los 3 casos que la ronda 1 midió como REGRESIÓN de la rama de masa: líneas de 1 unidad
+    # (o media) cuya masa supera el techo. Antes salían "0.83 pepino" / "0.43 coliflor" /
+    # "0.28 repollo" — conteos que nadie cocina ni compra.
+    {"name": "Pepino", "category": "Vegetales", "kcal_per_100g": 13.0,
+     "aliases": ["pepinos"],
+     "density_g_per_cup": 119.0, "density_g_per_unit": 300.0,
+     "protein_per_100g": 0.6, "carbs_per_100g": 3.6, "fat_per_100g": 0.1},
+    {"name": "Coliflor", "category": "Vegetales", "kcal_per_100g": 25.0,
+     "aliases": ["coliflores"],
+     "density_g_per_cup": 107.0, "density_g_per_unit": 580.0,
+     "protein_per_100g": 1.9, "carbs_per_100g": 5.0, "fat_per_100g": 0.3},
+    {"name": "Repollo", "category": "Vegetales", "kcal_per_100g": 25.0,
+     "aliases": ["repollos"],
+     "density_g_per_cup": 89.0, "density_g_per_unit": 900.0,
+     "protein_per_100g": 1.3, "carbs_per_100g": 5.8, "fat_per_100g": 0.1},
     # Vegetal acuoso (entra al set derivado) pero SIN densidad de unidad: la rama de masa no
     # puede medirlo, así que debe abstenerse. Y no tiene entrada en `_REALISM_COUNT_CAPS`, así
     # que ninguna otra rama lo tapa — el test mide exactamente lo que dice medir.
@@ -334,19 +349,109 @@ def _cap(line, *, meal_field="Almuerzo"):
 
 def test_conteo_de_calabacin_capeado_via_set_derivado():
     """Caso real: "4.54 calabacín mediano en cubos" = 908 g para una persona, y NINGUNA rama lo
-    veía (no es taza, no es cdta, y 'calabacin' no estaba en `_REALISM_COUNT_CAPS`)."""
+    veía (no es taza, no es cdta, y 'calabacin' no estaba en `_REALISM_COUNT_CAPS`).
+
+    [ronda 1] La salida es un ENTERO: 4.54 → 1.25 por masa → `1` por el cuantizador SSOT."""
     out, n = _cap("4.54 calabacin mediano en cubos")
-    assert n >= 1, "el conteo de vegetal acuoso seguía sin techo"
-    assert not out.startswith("4"), out
-    assert _db().grams_from_ingredient_string(out) <= g.REALISM_VEG_VOLUME_CAP_G + 1, out
+    assert n == 1, "el conteo de vegetal acuoso seguía sin techo"
+    assert out == "1 calabacin mediano en cubos", out
 
 
 def test_tazas_de_rabano_capeadas_via_set_derivado():
     """"30 tazas de rábanos" = 3480 g. `_REALISM_CUP_CAPS` solo cubre hierbas/aromáticos/frutas
-    de volumen/lácteos líquidos — el vegetal acuoso no tenía techo en tazas."""
+    de volumen/lácteos líquidos — el vegetal acuoso no tenía techo en tazas.
+
+    [ronda 1] En tazas SÍ se conservan fracciones (son medidas legítimas), pero pasan por el
+    cuantizador: 2.25 es un cuarto de taza exacto, no el "2.16" que salía antes. El snap va a la
+    fracción MÁS CERCANA, así que puede quedar un incremento por encima del techo (2.25 × 116 =
+    261 g vs 250) — es el trade-off que el propio `P3-PORTION-QUANTIZE` ya acepta en todo el
+    repo: una cantidad medible un pelo por encima vale más que una exacta e inservible."""
     out, n = _cap("30 tazas de rabanos")
-    assert n >= 1, "las tazas de vegetal acuoso seguían sin techo"
-    assert _db().grams_from_ingredient_string(out) <= g.REALISM_VEG_VOLUME_CAP_G + 1, out
+    assert n == 1, "las tazas de vegetal acuoso seguían sin techo"
+    assert out == "2.25 tazas de rabanos", out
+    assert (_db().grams_from_ingredient_string(out)
+            <= g.REALISM_VEG_VOLUME_CAP_G * 1.10), out
+
+
+# ───────────── [ronda 1] los 4 conteos fraccionarios medidos como regresión ─────────────
+#
+# La rama de masa aplicaba `CAP/_wg` a pelo y no snapeaba a una cantidad medible, así que
+# fabricaba conteos que ningún humano escribe en líneas que HOY salen limpias. El propio archivo
+# ya denunciaba esta clase ("y encima fraccionario, que ningún humano escribe",
+# P1-CAP-STRICTEST-WINS) y `P3-PORTION-QUANTIZE` existe justo por esto ("0.66 huevos matan la
+# adherencia"). La rama de conteo histórica nunca tuvo el defecto: su factor es `_cap_n/cur_n`,
+# o sea cae en el entero del techo por construcción.
+
+@pytest.mark.parametrize("linea,antes_medido", [
+    ("1 pepino", "0.83 pepino"),
+    ("1 coliflor", "0.43 coliflor"),
+    ("½ repollo", "0.28 repollo"),
+])
+def test_una_unidad_entera_es_el_piso_no_se_capea_por_debajo(linea, antes_medido):
+    """Una verdura ENTERA es el mínimo cocinable y comprable. Si el techo de 250 g pediría menos
+    de una unidad, la línea NO se capea — no existe "0.43 coliflor" ni en la cocina ni en el
+    colmado."""
+    out, n = _cap(linea)
+    assert out == linea, f"salió {out!r} (la ronda 1 midió {antes_medido!r})"
+    assert n == 0
+
+
+def test_dos_calabacines_se_capean_a_un_entero():
+    out, n = _cap("2 calabacines")
+    assert out == "1 calabacines", out
+    assert n == 1
+
+
+@pytest.mark.parametrize("linea", ["1 pepino", "1 coliflor", "½ repollo", "2 calabacines",
+                                   "4.54 calabacin mediano en cubos", "30 tazas de rabanos"])
+def test_tras_el_cap_display_y_raw_siguen_coincidiendo(linea):
+    """El cuantizador se compone en el FACTOR, antes del rescale compartido, así que las dos
+    listas reciben la MISMA cantidad. Cuantizar después (o dejar que el pulido final redondee
+    solo el display) habría fabricado divergencia display↔raw NUEVA — con macros stale encima —
+    en líneas que hoy salen limpias."""
+    meal = {"name": "Ensalada", "meal": "Almuerzo", "ingredients": [linea],
+            "ingredients_raw": [linea], "protein": 2, "carbs": 12, "fats": 1, "cals": 60}
+    g._cap_unrealistic_portions([{"meals": [meal]}], db=_db())
+    assert meal["ingredients"][0] == meal["ingredients_raw"][0], (
+        f"display {meal['ingredients'][0]!r} != raw {meal['ingredients_raw'][0]!r}")
+
+
+@pytest.mark.parametrize("linea", ["1 pepino", "½ repollo", "2 calabacines",
+                                   "4.54 calabacin mediano en cubos", "30 tazas de rabanos"])
+def test_tras_el_pulido_de_display_las_dos_listas_siguen_diciendo_lo_mismo(linea):
+    """El cierre honesto de "display y raw coinciden": el boundary polish
+    (`_prettify_quantity_display`) reescribe SOLO el display, así que la pregunta real es si
+    puede cambiar la CANTIDAD.
+
+    Antes de la ronda 1 sí podía: el cap dejaba "1.25 calabacines" y el pulido lo volvía
+    "1¼ calabacines" mientras raw se quedaba en 1.25 — y "0.83 pepino" ni lo tocaba, llegando así
+    al PDF. Ahora los conteos salen enteros (el pulido es no-op) y las tazas salen en cuartos
+    exactos, donde el pulido solo cambia el GLIFO (2.25 → 2¼): mismo número, que es justo lo que
+    esta aserción comprueba — se comparan gramos parseados, no cadenas."""
+    from humanize_ingredients import _prettify_quantity_display as _pretty
+    meal = {"name": "Ensalada", "meal": "Almuerzo", "ingredients": [linea],
+            "ingredients_raw": [linea], "protein": 2, "carbs": 12, "fats": 1, "cals": 60}
+    g._cap_unrealistic_portions([{"meals": [meal]}], db=_db())
+    disp_pulido = _pretty(meal["ingredients"][0])
+    raw_final = meal["ingredients_raw"][0]
+    gd = _db().grams_from_ingredient_string(disp_pulido)
+    gr = _db().grams_from_ingredient_string(raw_final)
+    assert gd is not None and gr is not None, (disp_pulido, raw_final)
+    assert abs(gd - gr) < 0.5, (
+        f"tras el pulido el display dice {gd:.1f} g ({disp_pulido!r}) y la lista compra "
+        f"{gr:.1f} g ({raw_final!r})")
+
+
+def test_la_salida_del_cap_no_deja_conteos_fraccionarios_raros():
+    """Barrido: ninguna línea count-led capeada puede salir con una cantidad que el cuantizador
+    SSOT no aprobaría (enteros o ½ para discretos)."""
+    for linea in ("1 pepino", "1 coliflor", "½ repollo", "2 calabacines", "9 pepinos",
+                  "4.54 calabacin mediano en cubos", "3 coliflores"):
+        out, _ = _cap(linea)
+        lead = g._realism_lead_qty(out.lower())
+        if lead is None:
+            continue
+        assert abs(lead * 2 - round(lead * 2)) < 1e-6, f"{linea!r} → {out!r} (lead {lead})"
 
 
 def test_porcion_razonable_en_tazas_no_se_toca():
@@ -423,13 +528,17 @@ def test_knob_off_devuelve_el_conteo_a_su_estado_sin_techo(monkeypatch):
     assert n == 0
 
 
-def test_costilla_de_cerdo_no_se_capea_pese_al_alias_cos():
-    """Funcional de punta a punta del fallo de subcadena: 'cos' es alias de 'Lechuga romana' y es
-    subcadena de 'costillas'. Si la rama nueva usara el matcher histórico (`\\b` + token, sin
-    límite final), 4 costillas de cerdo (360 g) quedarían recortadas a 250 g de proteína."""
-    out, n = _cap("4 costillas de cerdo")
-    assert out == "4 costillas de cerdo", out
-    assert n == 0
+def test_el_alias_cos_no_entra_al_set_derivado():
+    """[ronda 1] Reemplaza a un test que era VACUO: comprobaba que "4 costillas de cerdo" no se
+    capeaba por el alias 'cos', pero 'cos' está en `_WATERY_VEG_TOKEN_EXCLUDE` y por tanto nunca
+    entra al set — el test no ejercitaba nada. Lo que SÍ es un invariante real es la exclusión
+    misma; eso es lo que se ancla aquí. La segunda línea de defensa (que el matcher protegería a
+    'costillas' aunque la exclusión desapareciera) la cubre el parametrizado de arriba."""
+    toks = g._watery_veg_tokens()
+    assert "cos" not in toks, (
+        "'cos' (alias de Lechuga romana) volvió al set derivado — colisiona con "
+        "'Costilla de cerdo'; es la clase 'sal' ⊂ 'Salami' documentada en el repo")
+    assert "romana" in toks, "el resto de aliases de la fila NO debe excluirse"
 
 
 def test_mencionar_un_vegetal_acuoso_no_recorta_el_alimento_principal():
@@ -479,6 +588,124 @@ def test_sin_reparacion_no_se_tocan_los_macros():
             "protein": 0, "carbs": 2, "fats": 0, "cals": 777}
     g._reconcile_display_raw_lines([{"day": 1, "meals": [meal]}], db=_db())
     assert meal["cals"] == 777
+
+
+def test_missing_in_raw_no_dispara_el_truth_up():
+    """[ronda 1] El truth-up solo se justifica cuando se CONSTATÓ que display y raw declaraban
+    cantidades distintas (`qty_divergence`) — esa es la evidencia de que los macros estampados
+    pueden venir del lado inflado. En `missing_in_raw` el display nunca discrepó de nada: solo
+    faltaba una línea en la lista. Reescribir ahí el bloque entero de macros excede la razón del
+    fix, y se midió caro: `cals=999` salía como `cals=135`."""
+    meal = {"name": "Ensalada", "ingredients": ["2 cdas de cebolla picada", "1 taza de rabanos"],
+            "ingredients_raw": ["2 cdas de cebolla picada"],
+            "protein": 9, "carbs": 90, "fats": 9, "cals": 999}
+    out = g._reconcile_display_raw_lines([{"day": 1, "meals": [meal]}], db=_db())
+    assert [r["kind"] for r in out] == ["missing_in_raw"]
+    assert meal["ingredients_raw"] == ["2 cdas de cebolla picada", "1 taza de rabanos"], (
+        "la reparación de raw sí debe ocurrir")
+    assert meal["cals"] == 999, "los macros NO deben reescribirse en missing_in_raw"
+
+
+def test_la_telemetria_declara_si_los_macros_se_movieron():
+    """[ronda 1] Descartar el `changed` de `_truth_up_meal_macros_from_strings` dejaba el cambio
+    de macros sin rastro en `_display_raw_reconciled`: nadie podía auditar después de quién fue."""
+    meal = _meal_caso_real()
+    out = g._reconcile_display_raw_lines([{"day": 1, "meals": [meal]}], db=_db())
+    assert out and out[0]["kind"] == "qty_divergence"
+    assert out[0].get("macros_truthed_up") is True, out[0]
+
+
+def test_missing_in_raw_no_lleva_la_clave_de_truth_up():
+    meal = {"name": "Ensalada", "ingredients": ["2 cdas de cebolla picada", "1 taza de rabanos"],
+            "ingredients_raw": ["2 cdas de cebolla picada"]}
+    out = g._reconcile_display_raw_lines([{"day": 1, "meals": [meal]}], db=_db())
+    assert "macros_truthed_up" not in out[0]
+
+
+# ═══════ Sección 4b — [ronda 1] pureza del mutator: la llamada cara es la excepción ═══════
+
+class _DBEspia:
+    """Cuenta las resoluciones de macros. `macros_from_ingredient_string` puede caer al Tier 3
+    (`normalize_name` → `get_semantic_cache`/`embed_query`: RED con reintentos) cuando la
+    `IngredientNutritionDB` no viene inyectada, y esta rama corre por-línea DENTRO de
+    `_swap_mutator`, o sea bajo el `SELECT … FOR UPDATE`. P2-MUTATOR-PURITY exige que el camino
+    base bajo el lock sea CPU puro."""
+
+    def __init__(self):
+        self.n = 0
+        self._real = _db()
+
+    def macros_from_ingredient_string(self, s):
+        self.n += 1
+        return self._real.macros_from_ingredient_string(s)
+
+    def grams_from_ingredient_string(self, s):
+        return self._real.grams_from_ingredient_string(s)
+
+    def lookup(self, s):
+        return self._real.lookup(s)
+
+
+def test_linea_sin_token_acuoso_no_resuelve_macros():
+    """El match de tokens (CPU puro) va PRIMERO; la resolución de macros solo si pasó el filtro."""
+    espia = _DBEspia()
+    meal = {"name": "X", "meal": "Cena", "ingredients": ["3 costillas de cerdo"],
+            "ingredients_raw": ["3 costillas de cerdo"]}
+    g._cap_unrealistic_portions([{"meals": [meal]}], db=espia)
+    assert espia.n == 0, (
+        f"se resolvieron macros {espia.n} vez/veces para una línea sin ningún vegetal acuoso — "
+        f"la llamada cara debe ser la excepción, no el caso base")
+
+
+def test_linea_con_token_acuoso_si_resuelve_macros():
+    """Control positivo: sin esto, el test de arriba pasaría también con la rama muerta."""
+    espia = _DBEspia()
+    meal = {"name": "X", "meal": "Cena", "ingredients": ["4.54 calabacin mediano en cubos"],
+            "ingredients_raw": ["4.54 calabacin mediano en cubos"]}
+    g._cap_unrealistic_portions([{"meals": [meal]}], db=espia)
+    assert espia.n >= 1
+    assert meal["ingredients"][0] == "1 calabacin mediano en cubos"
+
+
+# ═══════ Sección 4c — [ronda 1] el reconcile corre ANTES de medir la banda ═══════
+#
+# `apply_update_band_parity` computa el band score y refresca `delivered_macros`. Desde este fix
+# el reconciliador REESCRIBE los macros del plato reparado, así que corriendo después dejaba el
+# banner `_quality_degraded`, los chips `_macro_band_low` y `delivered_macros` calculados sobre
+# números que el pase siguiente cambiaba — la clase que el repo ya cerró en
+# P2-REGEN-DAY-CHIP-STALE-CLEAR y P1-MICRO-REPORT-REFRESH. `tools.py` (chat-modify) ya tenía el
+# orden correcto; las 3 superficies de `routers/plans.py` eran la excepción.
+
+with open(os.path.join(_BACKEND, "routers", "plans.py"), encoding="utf-8") as _f:
+    _PLANS = _f.read()
+with open(os.path.join(_BACKEND, "tools.py"), encoding="utf-8") as _f:
+    _TOOLS = _f.read()
+
+
+@pytest.mark.parametrize("alias_reconcile,alias_banda", [
+    ("_rdrl_sw(", "apply_update_band_parity as _ubp_sw"),
+    ("_rdrl_rd(", "apply_update_band_parity as _ubp_rd"),
+    ("_rdrl_ex(", "apply_update_band_parity as _ubp_exp"),
+])
+def test_reconcile_antes_de_band_parity_en_las_3_superficies(alias_reconcile, alias_banda):
+    i_rec, i_band = _PLANS.find(alias_reconcile), _PLANS.find(alias_banda)
+    assert i_rec != -1 and i_band != -1, (alias_reconcile, alias_banda)
+    assert i_rec < i_band, (
+        f"{alias_reconcile} (offset {i_rec}) debe correr ANTES de {alias_banda} (offset "
+        f"{i_band}): el reconcile reescribe macros y la banda los mide")
+
+
+def test_el_reconcile_sigue_antes_del_rebuild_de_listas():
+    """No-regresión del contrato original de P1-UPDATE-RAW-BY-FOOD: mover el bloque arriba no
+    puede dejarlo después del rebuild, que lee `ingredients_raw` primero."""
+    assert _PLANS.find("_rdrl_sw(") < _PLANS.find(
+        '_rebuild_plan_shopping_lists_inline(\n                plan_data, verified_user_id')
+
+
+def test_chat_modify_ya_tenia_el_orden_correcto():
+    """Ancla del precedente citado en los comentarios: si alguien invierte tools.py, este test
+    avisa de que la excepción cambió de bando."""
+    assert _TOOLS.find("_rdrl_cm(") < _TOOLS.find("apply_update_band_parity as _ubp_cm")
 
 
 # ═══════════════ Sección 5 — knob, marker y bump anclados ═══════════════
