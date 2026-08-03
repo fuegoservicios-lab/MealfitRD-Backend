@@ -346,19 +346,18 @@ def test_los_4_alimentos_de_los_planes_reales_no_colapsan_entre_si():
         ("Vainitas", "Vainitas"),  # invariable
         ("Calabacín", "Calabacines"),
     )
-    resueltos: dict[str, str] = {}
+    canonicos: dict[str, str] = {}
     for singular, plural in familias:
-        assert sc.canonicalize_shopping_food_name(singular, {}) == singular
+        canon_sing = sc.canonicalize_shopping_food_name(singular, {})
+        assert canon_sing == singular
         # La forma plural puede o no colapsar a la singular (no hay regla familiar para estos 4);
         # lo que se exige es que se quede DENTRO de su familia y no caiga en la de otro.
         canon_plural = sc.canonicalize_shopping_food_name(plural, {})
         assert canon_plural in (singular, plural), (
             f"'{plural}' resolvió a '{canon_plural}', fuera de su familia — una regla de la cola "
             f"de consolidación se lo llevó a otro alimento")
-        resueltos[singular] = singular
-        resueltos.setdefault(plural, canon_plural)
+        canonicos[singular] = canon_sing
     # Ningún par de familias puede compartir canónico.
-    canonicos = {sing: sc.canonicalize_shopping_food_name(sing, {}) for sing, _ in familias}
     assert len(set(canonicos.values())) == len(familias), (
         f"dos de los 4 alimentos colapsan al mismo canónico: {canonicos}")
 

@@ -14,7 +14,10 @@ el mismo ventaneo en el lado esperado del guard.
 [ronda 1 · 2026-08-02] El knob nace en **False**: la ventana solo entra con
 `len(days) > 7` y la medicion contra produccion (40 planes recientes, 23 con datos) da
 `n_days` 2 en 3 planes y 3 en 20 — cero por encima de 7. La capacidad queda dormida hasta
-que se cierren los 3 prerequisitos documentados junto al knob. Por eso los tests de
+que se cierren TODOS los prerequisitos documentados junto al knob (son cuatro, (a)-(d);
+[review final 2026-08-03] aqui decia "los 3", el mismo conteo caduco que el codigo y el doc
+arrastraban desde que la ronda 1 anadio el (d) — un numero literal al lado de una lista es
+deuda que caduca sola). Por eso los tests de
 COMPORTAMIENTO piden la fixture `knob_on`, y hay tests explicitos del default OFF.
 
 Los tests son 100% OFFLINE: `get_master_ingredients` se stubea a `[]` (el `.env` apunta a

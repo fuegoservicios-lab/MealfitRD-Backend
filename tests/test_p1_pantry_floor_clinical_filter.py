@@ -226,11 +226,23 @@ def test_ningun_alimento_del_catalogo_cae_por_subcadena():
     assert "Espinacas" in divergencias, f"colisiones detectadas: {divergencias!r}"
     # El complemento: donde los dos operadores coinciden, el filtro DEBE morder. Si el
     # word-boundary se volviera un no-op (o se relajara a "nunca matchea"), `divergencias`
-    # crecería y esta lista se vaciaría — y sin esta línea el test seguiría verde.
-    assert coincidencias, (
-        "ningún alimento del catálogo matchea por AMBOS operadores: el matcher se volvió un no-op")
-    for food, tokens in coincidencias:
-        assert ah._token_matches_wb(food, tokens) is True, food
+    # crecería y esta lista se vaciaría — y sin esta comprobación el test seguiría verde.
+    #
+    # [ronda 2 · 2026-08-03] Mi primera versión cerraba con
+    # `for food, tokens in coincidencias: assert _token_matches_wb(food, tokens) is True`, que es
+    # tautológico: `coincidencias` se construyó con `if naive and wb`. Sustituido por el conjunto
+    # ESPERADO, escrito a mano desde el catálogo real: así el test dice qué debe filtrarse y falla
+    # si el matcher deja de morder en un alimento concreto, no solo si se apaga entero.
+    nombres = {f for f, _ in coincidencias}
+    esperados = {
+        "Salami Dominicano", "Longaniza", "Jamón de pavo",   # embutidos/curados
+        "Bacalao", "Arenque",                                # salazones
+        "Piña", "Mango", "Melón", "Sandía", "Uva", "Guineo",  # frutas alto-IG
+    }
+    assert esperados <= nombres, (
+        f"el filtro dejó de morder en alimentos que SÍ debe filtrar: "
+        f"{sorted(esperados - nombres)!r}. Si un alimento salió del catálogo, quítalo de "
+        f"`esperados`; si el matcher cambió, ese es el bug.")
 
 
 def test_los_matches_legitimos_siguen_vivos():

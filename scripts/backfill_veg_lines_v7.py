@@ -41,10 +41,20 @@ receta (texto) contradice su propia lista de compras — el residuo de DATOS que
      DENTRO del `FOR UPDATE`. Es la misma tensión con P2-MUTATOR-PURITY que ya tiene
      `api_swap_meal_persist`; este script la asume por ser one-shot y SECUENCIAL (un lock a la vez,
      cero concurrencia). Si alguien copia el patrón a un path concurrente, tiene que saberlo.
-  6. Si el rebuild de la lista falla en un plan, el UPDATE de ESE plan se ABORTA (no se persiste el
-     recorte "a medias" con la lista vieja: eso sería la incoherencia receta↔lista que el repo
-     defiende con tres capas, sobre datos reales y sin segunda pasada). El plan se reporta en el
-     bloque de OMITIDOS del resumen y se puede re-correr.
+  6. Si el rebuild de la lista NO SE COMPLETA en un plan, el UPDATE de ESE plan se ABORTA (no se
+     persiste el recorte "a medias" con la lista vieja: eso sería la incoherencia receta↔lista que
+     el repo defiende con tres capas, sobre datos reales y sin segunda pasada). El plan se reporta
+     en el bloque de OMITIDOS del resumen y se puede re-correr.
+     ⚠️ [review final · ronda 2 · 2026-08-03] "No se completa" se detecta por el VALOR DE RETORNO,
+     no por una excepción: `_rebuild_plan_shopping_lists_inline` **nunca lanza** —su cuerpo entero
+     está envuelto y devuelve `False`, y también devuelve `False` con el knob
+     `MEALFIT_UPDATE_INLINE_LIST_RECALC` apagado—. La primera versión de este punto 6 describía una
+     garantía que el código NO daba: el `except` era código muerto, el retorno se descartaba y el
+     medio-plan se persistía igual. Que un comentario prometa una garantía inexistente es
+     literalmente el defecto que este bloque dice haber cerrado.
+     Y la decisión "aplicado vs omitido" NO se toma por la truthiness de `update_plan_data_atomic`:
+     cuando el mutator devuelve `False` esa función devuelve el `plan_data` actual (truthy), así que
+     un plan abortado se contaba como aplicado. Se usa una señal propia del mutator.
 
 ## ⚠️ Esta sesión NO ejecuta `--apply`
 
@@ -180,16 +190,26 @@ def _process_one_plan(row: dict, *, db, warm_master_map_note: bool = False) -> d
     list_diffs = []
     try:
         from routers.plans import _rebuild_plan_shopping_lists_inline
-        _rebuild_plan_shopping_lists_inline(
+        # [review final · ronda 2 · 2026-08-03] Mismo defecto que en `_apply_one_plan`: esta función
+        # NUNCA lanza (fail-open interno + knob), así que confiar sólo en el `except` dejaba al
+        # operador leyendo «sin cambio detectable en la lista» cuando en realidad el rebuild no
+        # había corrido. En el dry-run no se escribe nada, pero es el diff sobre el que se decide
+        # aplicar en producción: tiene que distinguir «no cambió» de «no se midió».
+        _rb_ok = _rebuild_plan_shopping_lists_inline(
             working, user_id, surface="backfill_veg_lines_v7_dry_run", plan_id_hint=plan_id,
         )
-        list_diffs = _diff_shopping_list_items(
-            original.get("aggregated_shopping_list_weekly") or [],
-            working.get("aggregated_shopping_list_weekly") or [],
-        )
+        if not _rb_ok:
+            print("  ⚠️ el rebuild de lista NO se completó (falló internamente o "
+                  "MEALFIT_UPDATE_INLINE_LIST_RECALC está apagado): el diff de lista de abajo NO "
+                  "se midió. Con --apply, este plan se OMITIRÍA.")
+        else:
+            list_diffs = _diff_shopping_list_items(
+                original.get("aggregated_shopping_list_weekly") or [],
+                working.get("aggregated_shopping_list_weekly") or [],
+            )
     except Exception as _rebuild_exc:
-        print(f"  ⚠️ rebuild de lista falló (fail-open, sólo se reporta el recorte de líneas): "
-              f"{type(_rebuild_exc).__name__}: {_rebuild_exc}")
+        print(f"  ⚠️ rebuild de lista lanzó excepción (el diff de lista no se midió; con --apply "
+              f"este plan se OMITIRÍA): {type(_rebuild_exc).__name__}: {_rebuild_exc}")
 
     return {
         "plan_id": plan_id, "user_id": user_id, "n_capped": n_capped,
@@ -235,7 +255,13 @@ def _apply_one_plan(plan_id: str, user_id: str, *, db) -> tuple[bool, str]:
     from graph_orchestrator import _cap_unrealistic_portions
     from routers.plans import _rebuild_plan_shopping_lists_inline
 
-    _estado = {"motivo": "sin cambios"}
+    # [review final · ronda 2 · 2026-08-03] `persistido` es la señal PROPIA de que el mutator llegó
+    # al final y devolvió el dict. NO se puede decidir por el retorno de `update_plan_data_atomic`:
+    # cuando el mutator devuelve `False` esa función hace `return current` (db_plans.py, rama
+    # `if result is False`), y `current` es el `plan_data` de la fila — TRUTHY. Con `if not result:`
+    # un plan abortado se contaba como aplicado y salía con ✅; el bloque de OMITIDOS solo era
+    # alcanzable para "fila inexistente / otro user_id", que es cuando la función devuelve `{}`.
+    _estado = {"motivo": "sin cambios", "persistido": False}
 
     def _mutator(plan_data: dict):
         days = plan_data.get("days") or []
@@ -243,33 +269,53 @@ def _apply_one_plan(plan_id: str, user_id: str, *, db) -> tuple[bool, str]:
         if not n:
             _estado["motivo"] = "sin recortes al releer bajo lock"
             return False  # nada que cambiar — aborta el UPDATE (ver contrato de la función)
+        # [review final · ronda 2 · 2026-08-03] Se decide por el VALOR DE RETORNO, no por una
+        # excepción. `_rebuild_plan_shopping_lists_inline` NUNCA lanza: su cuerpo entero está
+        # envuelto en un try/except que devuelve `False` (routers/plans.py, fail-open documentado),
+        # y devuelve `False` también cuando el knob `MEALFIT_UPDATE_INLINE_LIST_RECALC` está
+        # apagado. O sea que la ronda 1 de este arreglo era INERTE por partida doble: el `except`
+        # era código muerto y el retorno se descartaba, así que un rebuild fallido seguía
+        # persistiendo la receta recortada junto a la lista VIEJA — exactamente el medio-plan que
+        # el hallazgo denunciaba, intacto.
+        #
+        # Con el retorno falso se ABORTA el UPDATE: el plan se queda como estaba (estado
+        # consistente) y se puede re-correr el script. Es un one-shot sobre datos de usuarios
+        # reales: no hay segunda pasada que arregle una incoherencia receta↔lista sembrada aquí.
         try:
-            _rebuild_plan_shopping_lists_inline(
+            _rb_ok = _rebuild_plan_shopping_lists_inline(
                 plan_data, user_id, surface="backfill_veg_lines_v7_apply", plan_id_hint=plan_id,
             )
         except Exception as _rb_exc:
-            # [review final · 2026-08-03] ANTES: `except Exception: pass` — fail-open silencioso.
-            # Persistía las recetas ya recortadas junto a la `aggregated_shopping_list*` VIEJA: la
-            # lista compraba más de lo que la receta pide, o sea la incoherencia receta↔lista que
-            # el repo defiende con tres capas, sobre datos de usuarios reales y sin una segunda
-            # pasada que lo corrija. Y el resumen imprimía ✅ igual. Ahora se ABORTA el UPDATE: el
-            # plan se queda como estaba (estado consistente) y se puede re-correr el script.
-            # Nada de I/O aquí dentro: el mutator corre bajo el row lock y un `print` puede
-            # reventar por sí solo (consola cp1252 + emoji ⇒ UnicodeEncodeError), que escaparía
-            # del mutator y abortaría la corrida entera. El motivo viaja por closure y lo imprime
-            # el caller, fuera de la transacción.
-            _estado["motivo"] = (f"rebuild de lista falló, UPDATE abortado para no dejar el plan a "
-                                 f"medias: {type(_rb_exc).__name__}: {_rb_exc}")
+            # Cinturón y tirantes: hoy no puede lanzar, pero si un refactor futuro deja escapar una
+            # excepción, el resultado tiene que ser el MISMO (abortar), no el fail-open de antes.
+            # Nada de I/O aquí dentro: el mutator corre bajo el row lock y un `print` puede reventar
+            # por sí solo (consola cp1252 + emoji ⇒ UnicodeEncodeError), escaparía del mutator y
+            # abortaría la corrida entera. El motivo viaja por closure y lo imprime el caller.
+            _estado["motivo"] = (f"rebuild de lista lanzó excepción, UPDATE abortado para no dejar "
+                                 f"el plan a medias: {type(_rb_exc).__name__}: {_rb_exc}")
+            return False
+        if not _rb_ok:
+            _estado["motivo"] = (
+                "rebuild de lista NO se completó (falló internamente o "
+                "MEALFIT_UPDATE_INLINE_LIST_RECALC está apagado), UPDATE abortado para no dejar "
+                "el plan a medias: recetas recortadas + aggregated_shopping_list* vieja")
             return False
         _estado["motivo"] = "aplicado"
+        _estado["persistido"] = True
         return plan_data
 
     result = update_plan_data_atomic(plan_id, _mutator, user_id=user_id)
-    if not result:
+    if not _estado["persistido"]:
         motivo = _estado["motivo"]
         if motivo == "sin cambios":
+            # El mutator ni siquiera corrió: la fila no existe o no es de este user_id (la función
+            # devuelve `{}` en ese caso).
             motivo = "fila desapareció o no pertenece al user_id"
         return False, motivo
+    if not result:
+        # No debería ocurrir (el mutator devolvió el dict), pero si la escritura no confirmó, se
+        # reporta como omitido: nunca inventar un ✅.
+        return False, "el UPDATE no confirmó pese a que el mutator completó"
     return True, "aplicado"
 
 
