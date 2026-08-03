@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import re
 
 import pytest
@@ -96,13 +97,59 @@ def test_nevera_100pct_embutidos_no_activa_lock():
 
 
 def test_nevera_100pct_embutidos_no_es_main_con_goal_que_penaliza():
-    """El lock es la mitad del daño; la otra es que ocupen los slots de main."""
-    out = _prompt(["Salami Dominicano", "Longaniza", "Repollo"], mainGoal="gain_muscle")
-    mains = _mains(out)
-    assert len(mains) == 3, f"no se pudieron leer las 3 bases del prompt: {mains!r}"
-    for banned in ("Salami Dominicano", "Longaniza"):
-        assert banned not in mains, (
-            f"'{banned}' llegó a base principal por la puerta de la nevera: {mains!r}")
+    """El lock es la mitad del daño; la otra es que ocupen los slots de main.
+
+    ⚠️ [re-review audit-v7-p1 · 2026-08-03] Este test era FLAKY y su redacción prometía un
+    "nunca" que el sistema no da. Se cazó en la corrida completa de la suite (con la junction
+    puesta, o sea con todos los ficheros colectándose): falló con
+    `['Longaniza', 'Queso de hoja', 'Salmón']` mientras el log confirmaba que el filtro SÍ había
+    corrido (`2 proteína(s) de la nevera fuera de las BASES clínicas`). No era una regresión: es
+    que la defensa de esta capa es un PESO, no una exclusión. El filtro de la nevera saca a los
+    embutidos de las bases derivadas de la nevera —eso sí es determinista— pero en el sorteo
+    general siguen en el pool con `×0.1` (goal penalty) y `×0.1` (P1-SODIUM-BOMB-POOL), así que
+    con mala suerte salen igual. El seeder usa el `random` global SIN semilla y el test no
+    sembraba: cualquier cambio en el orden o el número de tests de la suite mueve el stream del
+    RNG y voltea el resultado.
+
+    Medido barriendo 400 semillas: **2/400 = 0,50%**  (semillas 134 y 280).
+
+    Reescrito para afirmar lo que es cierto y de forma REPRODUCIBLE: un barrido determinista de
+    100 semillas fijas con techo de tasa. Si alguien borra el `×0.1` de embutidos o el de
+    sodio-bomba, la tasa se dispara muy por encima del techo y el test cae. Lo que NO se hace es
+    sembrar una sola semilla afortunada y seguir escribiendo "nunca": eso sería un verde comprado.
+    """
+    ocurrencias = []
+    for semilla in range(100):
+        random.seed(semilla)
+        out = _prompt(["Salami Dominicano", "Longaniza", "Repollo"], mainGoal="gain_muscle")
+        mains = _mains(out)
+        assert len(mains) == 3, f"no se pudieron leer las 3 bases del prompt: {mains!r}"
+        malos = [b for b in ("Salami Dominicano", "Longaniza") if b in mains]
+        if malos:
+            ocurrencias.append((semilla, malos, mains))
+    tasa = len(ocurrencias) / 100.0
+    assert tasa <= 0.03, (
+        f"los embutidos de la nevera llegan a base principal en {tasa:.0%} de los sorteos "
+        f"(techo 3%, medido 0,5% sobre 400 semillas). Probable: se debilitó el ×0.1 de embutidos "
+        f"por goal o el ×0.1 de P1-SODIUM-BOMB-POOL. Casos: {ocurrencias[:3]!r}")
+
+
+def test_el_filtro_de_nevera_es_deterministico_aunque_el_sorteo_no():
+    """[re-review · 2026-08-03] La mitad DETERMINISTA de la garantía, que el test de arriba ya no
+    puede afirmar: pase lo que pase con el sorteo general, el filtro tiene que sacar a los
+    embutidos de las bases derivadas de la NEVERA en las 100 semillas. Ésa es la promesa literal
+    de P1-PANTRY-FLOOR-CLINICAL-FILTER; el resto es probabilidad."""
+    for semilla in range(100):
+        random.seed(semilla)
+        proteinas, _frutas = ah._pantry_clinical_main_filter(
+            ["Salami Dominicano", "Longaniza", "Pechuga de pollo"], [],
+            penaliza_procesados=True, exige_densidad=True,
+        )
+        assert "Salami Dominicano" not in proteinas and "Longaniza" not in proteinas, (
+            f"semilla {semilla}: el filtro de nevera dejó pasar un embutido a las bases: "
+            f"{proteinas!r}")
+        assert "Pechuga de pollo" in proteinas, (
+            "el filtro no puede ser un borrado indiscriminado: la proteína sana se queda")
 
 
 @pytest.mark.parametrize("goal", ["gain_muscle", "lose_fat", "maintenance", "performance", ""])
