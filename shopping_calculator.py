@@ -3081,6 +3081,21 @@ def cycle_qty_multiplier(duration: str) -> float:
     return _CYCLE_DAYS_BY_DURATION[d] / 7.0
 
 
+# [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] SSOT hermano de `cycle_qty_multiplier`: misma tabla
+# (`_CYCLE_DAYS_BY_DURATION`), mismo string `duration`, para que un callsite que YA pasa
+# `duration` a `cycle_qty_multiplier(...)` derive `cycle_days` de la MISMA fuente en vez de
+# escribir un literal `15`/`30` suelto al lado (dos SSOT que puedan driftear). Consumido por los
+# ~43 callsites de `get_shopping_list_delta` (routers/plans.py, cron_tasks.py, tools.py,
+# graph_orchestrator.py, agent.py) para que la nota "alcanza ~N de M días" de
+# `apply_smart_market_units` (parámetro `cycle_days`) diga el ciclo real, no el 7 fijo default.
+# Desconocida → 7 (mismo fail-safe que `cycle_qty_multiplier` → 1.0, aquí el equivalente en
+# días es la semana, el caso más común). Público (sin underscore): mismos 5 importadores que
+# `cycle_qty_multiplier`. Test: test_p1_sku_cover_honesty.py (sección "plumbing end-to-end").
+def cycle_days_for_duration(duration: str) -> int:
+    d = str(duration or "").strip().lower()
+    return int(_CYCLE_DAYS_BY_DURATION.get(d, 7))
+
+
 def _cost_summary_enabled() -> bool:
     return _knob_env_bool("MEALFIT_SHOPPING_COST_SUMMARY", True)
 
@@ -4448,15 +4463,28 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         # deriva por UNIDADES reales del envase, no por gramos — el `pkg_cover_ratio` en gramos
         # (density del MASTER) deja de medir cobertura real y el único disparo vivo bajo el
         # default anterior (0.9) era justo este falso positivo (ratio 0.712 con conteo correcto).
+        #
+        # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `round()` se contradecía a sí mismo: Leche
+        # 1000g/cartón 946g (el caso original de SKU-OVERSHOOT-FIX), cover=0,946 < 0,95 (el
+        # umbral subido en la ronda 1) → `round(7*0,946)=round(6,62)=7` → "alcanza ~7 de 7 días
+        # — recompra": afirma cobertura COMPLETA (7 de 7) y en la misma frase pide recomprar.
+        # Texto sin sentido para el usuario. `math.floor` en vez de `round` da 6 (0,946*7=6,62,
+        # floor=6) — "alcanza ~6 de 7 días" es cierto y accionable (falta 1 día). Como defensa
+        # adicional (no alcanzable hoy con `PKG_COVER_NOTE_MIN<1`, pero sí si ese knob se
+        # relaja a 1.0 en el futuro): si el floor iguala o supera `cycle_days`, la cobertura es
+        # efectivamente completa — no hay nada que avisar, se suprime la nota entera en vez de
+        # emitir "~N de N".
         try:
             _cover = result.get("pkg_cover_ratio")
             if (_cover is not None and float(_cover) < PKG_COVER_NOTE_MIN
                     and not result.get("capped_by") and not _pkg_units_recounted):
-                _dias_cubiertos = max(1, int(round(cycle_days * float(_cover))))
-                result["display_qty"] = (
-                    f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra")
-                result["display_string"] = (
-                    f"{result['display_string']} (alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra)")
+                _dias_cubiertos = math.floor(cycle_days * float(_cover))
+                if _dias_cubiertos < cycle_days:
+                    _dias_cubiertos = max(1, _dias_cubiertos)
+                    result["display_qty"] = (
+                        f"{result['display_qty']} · alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra")
+                    result["display_string"] = (
+                        f"{result['display_string']} (alcanza ~{_dias_cubiertos} de {cycle_days} días — recompra)")
         except (TypeError, ValueError):
             pass
     # [P1-BRAND-DEFAULT-PRESELECTED · 2026-07-06] producto del súper que la lista usa.

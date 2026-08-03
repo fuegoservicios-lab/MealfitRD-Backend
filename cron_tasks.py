@@ -11620,7 +11620,7 @@ def _persist_pantry_supplement_to_plan_data(
         # 2. Recalcular shopping lists con el flag presente para que el
         # appender de "🚨 Compra Urgente" en `get_shopping_list_delta` añada
         # los items urgentes a las 3 variantes (weekly / biweekly / monthly).
-        from shopping_calculator import get_shopping_list_delta as _gsld, cycle_qty_multiplier
+        from shopping_calculator import get_shopping_list_delta as _gsld, cycle_qty_multiplier, cycle_days_for_duration
         from constants import compute_household_multiplier
         # [P1-3] Multiplier efectivo: prefiere `calc_household_multiplier` (cacheado
         # por /recalculate-shopping-list), si no recompone desde form_data
@@ -11637,9 +11637,12 @@ def _persist_pantry_supplement_to_plan_data(
             # routers/plans.py P3-CANONICAL-AGG-WEEKLY.
             # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] cycle_qty_multiplier reemplaza los
             # literales 2.0/4.0 (14/28 días) por días/7 fraccional (15/7, 30/7).
+            # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` viaja al agregador para que
+            # la nota "alcanza ~N de M días" de `apply_smart_market_units` diga el ciclo real
+            # (15/30) en vez del 7 fijo default — mismo string que `cycle_qty_multiplier`.
             aggr_7 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier)
-            aggr_15 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("biweekly"))
-            aggr_30 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("monthly"))
+            aggr_15 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("biweekly"), cycle_days=cycle_days_for_duration("biweekly"))
+            aggr_30 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("monthly"), cycle_days=cycle_days_for_duration("monthly"))
         except Exception as _calc_err:
             # Si el recálculo del shopping list falla, persistimos al menos
             # el flag — el siguiente recalc post-merge lo resolverá.
@@ -11791,7 +11794,7 @@ def _clear_pantry_supplement_from_plan_data(
         # Recalcular shopping lists con el flag ya removido para que la
         # categoría urgente desaparezca del PDF en el siguiente fetch.
         try:
-            from shopping_calculator import get_shopping_list_delta as _gsld, cycle_qty_multiplier
+            from shopping_calculator import get_shopping_list_delta as _gsld, cycle_qty_multiplier, cycle_days_for_duration
             from constants import compute_household_multiplier
             # [P1-3] Multiplier efectivo (ver helper en constants.py).
             household_multiplier = (
@@ -11802,9 +11805,10 @@ def _clear_pantry_supplement_from_plan_data(
             household_multiplier = max(1.0, household_multiplier)
             # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] is_new_plan=True para canonical.
             # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
+            # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
             aggr_7 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier)
-            aggr_15 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("biweekly"))
-            aggr_30 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("monthly"))
+            aggr_15 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("biweekly"), cycle_days=cycle_days_for_duration("biweekly"))
+            aggr_30 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * cycle_qty_multiplier("monthly"), cycle_days=cycle_days_for_duration("monthly"))
             grocery_duration = (
                 plan_data.get("calc_grocery_duration")
                 or (plan_data.get("form_data") or {}).get("groceryDuration")
@@ -18545,7 +18549,7 @@ def _enqueue_plan_chunk(
 def _process_pending_shopping_lists():
     """[GAP F FIX] Recalcula shopping lists asincronamente para planes que fallaron su generacion sincrona."""
     try:
-        from shopping_calculator import get_shopping_list_delta, cycle_qty_multiplier
+        from shopping_calculator import get_shopping_list_delta, cycle_qty_multiplier, cycle_days_for_duration
         import json
 
         # [S11-2 · GAP-3 · 2026-05-29] Este cron corre como housekeeping al tope de
@@ -18630,15 +18634,18 @@ def _process_pending_shopping_lists():
                     multiplier=1.0 * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
                 )
+                # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
                 aggr_15 = get_shopping_list_delta(
                     user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=cycle_qty_multiplier("biweekly") * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
+                    cycle_days=cycle_days_for_duration("biweekly"),
                 )
                 aggr_30 = get_shopping_list_delta(
                     user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=cycle_qty_multiplier("monthly") * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
+                    cycle_days=cycle_days_for_duration("monthly"),
                 )
 
                 # [VISIÓN-C / HYBRID-SHOPPING-LIST] Combinar staples del periodo
@@ -31687,6 +31694,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                         get_shopping_list_delta,
                         fetch_inventory_and_consumed_for_plan,
                         cycle_qty_multiplier,
+                        cycle_days_for_duration,
                     )
                     from constants import compute_household_multiplier as _chm
                     # [P1-3] Multiplier efectivo (cacheado o desde form_data).
@@ -31712,17 +31720,20 @@ def process_plan_chunk_queue(target_plan_id=None):
                         multiplier=1.0 * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
                     )
+                    # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
                     aggr_15 = get_shopping_list_delta(
                         user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=cycle_qty_multiplier("biweekly") * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
+                        cycle_days=cycle_days_for_duration("biweekly"),
                     )
                     aggr_30 = get_shopping_list_delta(
                         user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=cycle_qty_multiplier("monthly") * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
+                        cycle_days=cycle_days_for_duration("monthly"),
                     )
-                    
+
                     # [VISIÓN-C] Híbrido: staples=periodo, perishables=semanal.
                     # [RIESGO-1] Cycle lock 7d para perecederos en mid-cycle.
                     try:
@@ -31839,15 +31850,18 @@ def process_plan_chunk_queue(target_plan_id=None):
                                             multiplier=1.0 * household,
                                             inventory_override=_inv_s, consumed_override=_cons_s,
                                         )
+                                        # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
                                         aggr_15 = get_shopping_list_delta(
                                             user_id, full_plan_data, is_new_plan=True, structured=True,
                                             multiplier=cycle_qty_multiplier("biweekly") * household,
                                             inventory_override=_inv_s, consumed_override=_cons_s,
+                                            cycle_days=cycle_days_for_duration("biweekly"),
                                         )
                                         aggr_30 = get_shopping_list_delta(
                                             user_id, full_plan_data, is_new_plan=True, structured=True,
                                             multiplier=cycle_qty_multiplier("monthly") * household,
                                             inventory_override=_inv_s, consumed_override=_cons_s,
+                                            cycle_days=cycle_days_for_duration("monthly"),
                                         )
                                         from shopping_calculator import _build_hybrid_shopping_list as _bh_t2b
                                         aggr_15_hybrid = _bh_t2b(aggr_7, aggr_15, restocked_at_iso=_restocked_at,

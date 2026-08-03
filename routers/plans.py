@@ -6387,6 +6387,7 @@ def _rebuild_plan_shopping_lists_inline(
             _build_hybrid_shopping_list as _hyb_il,
             compute_shopping_cost_summary as _ccs_il,
             cycle_qty_multiplier,
+            cycle_days_for_duration,
         )
         try:
             mult = float(plan_data.get("calc_household_multiplier") or 1.0)
@@ -6396,9 +6397,10 @@ def _rebuild_plan_shopping_lists_inline(
             mult = 1.0
         duration = str(plan_data.get("calc_grocery_duration") or "weekly").strip().lower()
         # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
+        # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
         s7 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult)
-        s15 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult * cycle_qty_multiplier("biweekly"))
-        s30 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult * cycle_qty_multiplier("monthly"))
+        s15 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult * cycle_qty_multiplier("biweekly"), cycle_days=cycle_days_for_duration("biweekly"))
+        s30 = _gsld_il(user_id, plan_data, is_new_plan=True, structured=True, multiplier=mult * cycle_qty_multiplier("monthly"), cycle_days=cycle_days_for_duration("monthly"))
         _restocked_at = plan_data.get("restocked_at_iso") if plan_data.get("is_restocked") else None
         _restocked_items = (
             plan_data.get("restocked_items")
@@ -10381,7 +10383,7 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         if not plan_data:
             return {"success": False, "message": "Datos de plan inválidos."}
 
-        from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier
+        from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration
         # [P1-RECALC-LOSTUPDATE · 2026-05-14] Migración del helper:
         # `update_meal_plan_data` → `update_plan_data_atomic`. Ver justificación
         # detallada en el bloque P1-RECALC-LOSTUPDATE más abajo, junto al
@@ -10491,15 +10493,18 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             inventory_override=_inv_snap, consumed_override=_cons_snap,
         )
         # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
+        # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
         scaled_15 = get_shopping_list_delta(
             user_id, plan_data, is_new_plan=True, structured=True,
             multiplier=household_multiplier * cycle_qty_multiplier("biweekly"),
             inventory_override=_inv_snap, consumed_override=_cons_snap,
+            cycle_days=cycle_days_for_duration("biweekly"),
         )
         scaled_30 = get_shopping_list_delta(
             user_id, plan_data, is_new_plan=True, structured=True,
             multiplier=household_multiplier * cycle_qty_multiplier("monthly"),
             inventory_override=_inv_snap, consumed_override=_cons_snap,
+            cycle_days=cycle_days_for_duration("monthly"),
         )
         
         # Debug: Log DETAILED per-item comparison to diagnose scaling

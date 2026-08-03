@@ -44,6 +44,24 @@ detalle completo con números medidos. Resumen:
    `cycle_days` (default 7, backward-compatible) reemplaza el 7 hardcodeado en el copy. Ver
    `test_nota_usa_cycle_days_real_en_vez_de_7_fijo`.
 ────────────────────────────────────────────────────────────────────────────────────────────────
+RONDA 2 DE REVISIÓN (2026-08-02) — 2 hallazgos. Ver el report sección "Ronda 2" para la tabla
+exhaustiva de callsites y el texto literal de los 3 casos de verificación. Resumen:
+
+1. **NOT ADDRESSED en la ronda 1**: el plumbing de `cycle_days` no llegaba a producción — los
+   callsites reales (`cron_tasks.py`, `routers/plans.py`, `tools.py`, y también
+   `graph_orchestrator.py`, que el reporte de la ronda 1 no había enumerado) nunca pasaban
+   `cycle_days=`. Fix: nuevo SSOT `cycle_days_for_duration(duration)` (hermano de
+   `cycle_qty_multiplier`, misma tabla `_CYCLE_DAYS_BY_DURATION`) + threading mecánico en los
+   ~26 callsites de periodo (biweekly/monthly) de los 4 archivos. Ver
+   `test_callsites_de_periodo_llevan_cycle_days`.
+2. **Rotura nueva de la ronda 1**: con `PKG_COVER_NOTE_MIN=0.95` y `round()`, Leche 1000g/cartón
+   946g (cover 0,946) imprimía "alcanza ~7 de 7 días — recompra" — cobertura completa Y pide
+   recomprar, contradictorio. Fix: `math.floor` en vez de `round` (da "~6 de 7", cierto) +
+   supresión de la nota si el floor iguala/supera `cycle_days` (defensivo, inalcanzable hoy por
+   construcción dado el gate `cover<PKG_COVER_NOTE_MIN<=1`, ver
+   `test_nota_suprimida_si_floor_iguala_o_supera_cycle_days`). Restaurada la aserción perdida en
+   `test_underbuy_marginal_sigue_floor` + nuevo `test_cobertura_completa_no_lleva_nota`.
+────────────────────────────────────────────────────────────────────────────────────────────────
 
 ⚠️ **Hallazgo aritmético (reportado en la ronda 0, sigue vigente)**: el caso propuesto originalmente
 para probar la nota (arroz 647,5 g / funda 453,6 g, cover ≈0.70) no puede disparar la nota vía la
@@ -81,12 +99,30 @@ def test_floor_no_permite_underbuy_mayor_al_knob():
 
 
 def test_underbuy_marginal_sigue_floor():
-    # frac 0.0571 (caso del SKU-OVERSHOOT-FIX original): under_buy=54 <= 1000*0.10=100 Y
-    # under_buy(54) < over_buy(892) → floor OK, sin nota (cover=0.946 >= 0.95... no, 0.946<0.95:
-    # ver test dedicado más abajo para el knob 0.95; aquí sólo ancla que el floor se retiene).
+    """[RONDA 2 · ítem 2] frac 0.0571 (caso del SKU-OVERSHOOT-FIX original): under_buy=54 <=
+    1000*0.10=100 Y under_buy(54) < over_buy(892) → floor se retiene (market_qty=1). Con el
+    `PKG_COVER_NOTE_MIN=0.95` de la ronda 1, cover=0,946 SÍ dispara la nota (0,946<0,95) — la
+    ronda 1 dejaba este test sin aserción sobre el texto (ambigüedad "sin nota" incorrecta,
+    encontrada por el revisor: con `round()` daba el contradictorio "alcanza ~7 de 7 días"). Con
+    `floor()` (fix de esta ronda) da correctamente "~6 de 7 días" — falta 1 día, cierto y
+    accionable. Ver `test_cobertura_completa_no_lleva_nota` para el caso SIN nota."""
     item = _por_gramos("Leche", 1000.0, CARTON)
     assert item["market_qty"] == 1
-    assert item["pkg_cover_ratio"] >= 0.9
+    assert item["pkg_cover_ratio"] == pytest.approx(0.946, abs=0.001)
+    assert "alcanza ~6 de 7 días — recompra" in item["display_qty"], item["display_qty"]
+    assert "alcanza ~7 de 7 días" not in item["display_qty"], (
+        "contradicción: 'alcanza ~7 de 7' con round() decía cobertura completa Y pedía recomprar")
+
+
+def test_cobertura_completa_no_lleva_nota():
+    """[RONDA 2 · ítem 2] Cuando la cobertura YA es completa (cover>=1, ej. Leche 900g contra un
+    cartón de 946g que sobra), la nota NO debe aparecer — no hay nada que avisar. Ancla la mitad
+    positiva de la garantía: "cobertura completa ⇒ SIN nota" (la otra mitad, cover parcial ⇒ CON
+    nota honesta, la ancla `test_underbuy_marginal_sigue_floor`)."""
+    item = _por_gramos("Leche", 900.0, CARTON)
+    assert item["pkg_cover_ratio"] >= 1.0
+    assert "alcanza" not in item.get("display_qty", "")
+    assert "alcanza" not in item.get("display_string", "")
 
 
 def test_arroz_audit_pasa_a_ceil():
@@ -150,13 +186,18 @@ def test_bound_nunca_produce_peor_cobertura_que_antes_barrido_aleatorio():
 def test_cover_bajo_lleva_nota_alcanza(monkeypatch):
     """Con `SKU_FLOOR_MAX_UNDER_PCT` en su tope de clamp (0.5), el under_buy real del arroz
     (193.9g de 647.5g) SIGUE cabiendo bajo el bound (647.5*0.5=323.75) Y bajo el criterio viejo
-    (193.9<259.7) → floor se retiene, cover≈0.70 < 0.95 y sin `capped_by` → debe llevar la nota."""
+    (193.9<259.7) → floor se retiene, cover≈0.70 < 0.95 y sin `capped_by` → debe llevar la nota.
+
+    [RONDA 2 · ítem 2] Días con `math.floor` (no `round`) — con round, 7*0,701=4,907 redondeaba
+    a 5; con floor da 4. La diferencia importa: floor nunca puede leer "completo" cuando no lo
+    está (ver `test_underbuy_marginal_sigue_floor` para el caso que expuso la contradicción)."""
+    import math
     monkeypatch.setattr(sc, "SKU_FLOOR_MAX_UNDER_PCT", 0.5)
     item = _por_gramos("Arroz blanco", 647.5, FUNDA_ARROZ)
     assert item["market_qty"] == 1
     assert item["pkg_cover_ratio"] < 0.95
     assert item.get("capped_by") is None
-    dias = max(1, round(7 * item["pkg_cover_ratio"]))
+    dias = max(1, math.floor(7 * item["pkg_cover_ratio"]))
     assert f"alcanza ~{dias} de 7 días — recompra" in item["display_qty"], item["display_qty"]
     assert f"alcanza ~{dias} de 7 días — recompra" in item["display_string"], item["display_string"]
 
@@ -214,11 +255,12 @@ def test_nota_usa_cycle_days_real_en_vez_de_7_fijo(monkeypatch):
     """[RONDA 1 · Important 4] Caso mensual: `weight_in_lbs` ya representa una necesidad de 30
     días (el multiplicador de ciclo entra ANTES de esta función), así que la nota debe decir
     "de 30 días", no "de 7 días" — mismos gramos/envase que `test_cover_bajo_lleva_nota_alcanza`,
-    sólo cambia `cycle_days`."""
+    sólo cambia `cycle_days`. [RONDA 2] días con `math.floor`, no `round` (ver ítem 2)."""
+    import math
     monkeypatch.setattr(sc, "SKU_FLOOR_MAX_UNDER_PCT", 0.5)
     item = _por_gramos("Arroz blanco", 647.5, FUNDA_ARROZ, cycle_days=30)
     assert item["market_qty"] == 1
-    dias = max(1, round(30 * item["pkg_cover_ratio"]))
+    dias = max(1, math.floor(30 * item["pkg_cover_ratio"]))
     assert f"alcanza ~{dias} de 30 días — recompra" in item["display_qty"], item["display_qty"]
     assert "de 7 días" not in item["display_qty"]
 
@@ -315,9 +357,9 @@ def test_repurchases_sin_senal_no_adivina():
 
 def test_cycle_days_plumbing_local():
     """`cycle_days` se propaga desde `get_shopping_list_delta` -> `aggregate_and_deduct_shopping_
-    list` -> los 2 call-sites de `apply_smart_market_units`, DENTRO de este archivo. Los 15+
-    call-sites externos (cron_tasks.py/routers/plans.py/tools.py) NO pasan todavía el valor real
-    — seguimiento pendiente documentado en el report, no de este archivo."""
+    list` -> los 2 call-sites de `apply_smart_market_units`, DENTRO de este archivo. [RONDA 2 ·
+    ítem 1] Los ~26 call-sites externos AHORA SÍ pasan el valor real — ver
+    `test_callsites_de_periodo_llevan_cycle_days` para la verificación cross-file."""
     from pathlib import Path
     src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
     i = src.index("def aggregate_and_deduct_shopping_list(")
@@ -332,3 +374,68 @@ def test_cycle_days_plumbing_local():
     j_end = src.index("\ndef ", j + 10)
     assert "cycle_days: int | None = None," in src[j:j_end]
     assert "cycle_days=cycle_days)" in src[j:j_end]
+    # [RONDA 2 · ítem 1] SSOT hermano de `cycle_qty_multiplier`, misma tabla
+    # `_CYCLE_DAYS_BY_DURATION` — evita que un callsite escriba un literal `15`/`30` suelto que
+    # pueda driftear de la tabla que ya usa `cycle_qty_multiplier`.
+    assert "def cycle_days_for_duration(duration: str) -> int:" in src
+
+
+# [RONDA 2 · ítem 1] Los 5 archivos reales que invocan `get_shopping_list_delta` con contexto de
+# duración (directo o via alias `_gsld`/`_gsld_il`/`_adb`). `agent.py` está en la lista por
+# completitud — sus 2 callsites NO tienen contexto de duración (sin `cycle_qty_multiplier`), así
+# que el conteo esperado ahí es 0==0 (ver tabla del report para la enumeración exhaustiva de las
+# ~43 invocaciones totales, no sólo las 26 de periodo).
+_EXTERNAL_CALLSITE_FILES = (
+    "cron_tasks.py", "routers/plans.py", "tools.py", "graph_orchestrator.py", "agent.py",
+)
+
+
+def test_callsites_de_periodo_llevan_cycle_days():
+    """[RONDA 2 · ítem 1] Parser-based, cross-file: cada callsite que pasa
+    `cycle_qty_multiplier("biweekly")` o `("monthly")` a `get_shopping_list_delta` (directo o via
+    alias `_gsld`/`_gsld_il`/`_adb`) DEBE llevar el `cycle_days=cycle_days_for_duration(...)`
+    gemelo con la MISMA duración — si no, la nota de un ciclo biweekly/monthly real vuelve a
+    decir "de 7 días" en silencio (el bug que esta ronda cierra; confirmado por el re-revisor
+    ejecutando el código, no sólo leyéndolo).
+
+    Conteo 1:1 por archivo y por duración en vez de un parser posicional sobre llamadas
+    multi-línea (más frágil, más difícil de mantener correcto) — detecta tanto callsites nuevos
+    sin `cycle_days` como un exceso accidental."""
+    from pathlib import Path
+    base = Path(sc.__file__).resolve().parent
+    total_checked = 0
+    for fname in _EXTERNAL_CALLSITE_FILES:
+        src = (base / fname).read_text(encoding="utf-8")
+        for duration in ("biweekly", "monthly"):
+            n_mult = src.count(f'cycle_qty_multiplier("{duration}")')
+            n_days = src.count(f'cycle_days_for_duration("{duration}")')
+            assert n_mult == n_days, (
+                f"{fname}: {n_mult} callsites de cycle_qty_multiplier('{duration}') vs "
+                f"{n_days} de cycle_days_for_duration('{duration}') -- deben ser 1:1 "
+                f"(cada llamada de periodo real necesita su cycle_days gemelo)"
+            )
+            total_checked += n_mult
+    # Sanity: el test no debe pasar vacuamente (0==0 en todos lados) si el refactor renombra las
+    # funciones — al menos las 26 parejas reales (13 trios × 2 duraciones) deben aparecer.
+    assert total_checked >= 26, (
+        f"sólo se encontraron {total_checked} callsites de periodo -- ¿un rename rompió el "
+        f"parser sin que nadie lo notara?"
+    )
+
+
+def test_nota_suprimida_si_floor_iguala_o_supera_cycle_days(monkeypatch):
+    """[RONDA 2 · ítem 2] Rama defensiva: si `math.floor(cycle_days*cover) >= cycle_days`, la
+    cobertura es efectivamente completa -- no se emite "~N de N" (que sería tan contradictorio
+    como el "~7 de 7" que motivó el fix a floor). Bajo los knobs por defecto esto es
+    inalcanzable por construcción (el gate externo ya exige `cover < PKG_COVER_NOTE_MIN <= 1`,
+    así que `floor(cycle_days*cover)` nunca alcanza `cycle_days`) -- se fuerza monkeypencheando
+    `PKG_COVER_NOTE_MIN` a un valor fuera de su clamp normal para ejercitar la rama directamente,
+    igual que `test_pkg_cover_note_min_no_es_inalcanzable_por_construccion` prueba la garantía
+    matemática en el otro sentido."""
+    monkeypatch.setattr(sc, "PKG_COVER_NOTE_MIN", 2.0)  # fuera del clamp real [0,1] -- a propósito
+    item = _por_gramos("Leche", 900.0, CARTON)  # cover ~1.05, "completo"
+    assert item["pkg_cover_ratio"] >= 1.0
+    assert "alcanza" not in item.get("display_qty", ""), (
+        "con PKG_COVER_NOTE_MIN inflado el gate externo se cumple (1.05<2.0) pero floor(7*1.05)="
+        "7>=cycle_days=7 debe suprimir la nota igual -- nunca '~7 de 7'"
+    )
