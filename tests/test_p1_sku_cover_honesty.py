@@ -378,7 +378,11 @@ def test_cycle_days_plumbing_local():
     j = src.index("def get_shopping_list_delta(")
     j_end = src.index("\ndef ", j + 10)
     assert "cycle_days: int | None = None," in src[j:j_end]
-    assert "cycle_days=cycle_days, text_demand_g_map=_text_demand_g_map)" in src[j:j_end]
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · review final] El mapa de texto ya no viaja crudo: pasa
+    # por el gate de homogeneidad `_tdg_para_agg` (vacío cuando la lista es un DELTA con deducción
+    # de Nevera, porque la demanda de recetas es BRUTA). El plumbing de `cycle_days`, que es lo que
+    # este test ancla, no cambia.
+    assert "cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg)" in src[j:j_end]
     # [RONDA 2 · ítem 1] SSOT hermano de `cycle_qty_multiplier`, misma tabla
     # `_CYCLE_DAYS_BY_DURATION` — evita que un callsite escriba un literal `15`/`30` suelto que
     # pueda driftear de la tabla que ya usa `cycle_qty_multiplier`.

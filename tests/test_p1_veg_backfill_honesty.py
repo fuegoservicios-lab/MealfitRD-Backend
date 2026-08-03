@@ -68,6 +68,33 @@ P1-CAPPED-STAPLE-HONESTY (el "dueño" histórico del copy), nunca duplicada.
      — `_cap_hit is None` guardia la rama nueva (`test_no_pisa_un_cap_real_ya_registrado`).
   2. Nunca dos sufijos "alcanza" en el mismo `display_qty` (`test_no_duplica_sufijo_con_sku_cover_honesty`).
   3. Un ítem cuya compra SÍ cubre el texto (>=90%) no recibe nada (`test_compra_suficiente_no_recibe_nota`).
+
+## Review final 2026-08-03 (1 CRITICAL + 1 IMPORTANT) — secciones 10 y 11
+
+4. **[CRITICAL] El sello sintético CEGABA al coherence guard justo en los ítems que detecta.**
+   `capped_pre` no es un campo de telemetría: el guard lo usa para SUSTITUIR la cantidad realmente
+   comprada al construir el lado ACTUAL (P1-COHERENCE-CAPPED-PRE). Para un cap REAL eso es legítimo
+   —`capped_pre` es lo que el AGREGADOR calculó por su cuenta antes del tope, un número
+   independiente del lado esperado, así que un agregador equivocado sigue divergiendo—. Para el
+   sello sintético, `pre_value` ES la demanda de las recetas: la misma
+   `expected_sum_from_recipes(..., multiplier=effective_multiplier)` con la que el guard construye
+   el lado ESPERADO. Resultado: el guard comparaba el esperado contra sí mismo. Reproducido
+   ejecutando — drift de magnitud 2× (recetas 2000 g, lista 1000 g): sin el sello,
+   `[{'delta_pct': 0.5}]`; con el sello, `[]`. Con el guard en modo `block` por default, ese ítem
+   dejaba de escalar, de forzar retry y de aparecer en `_shopping_coherence_block_history` — o sea
+   que el P-fix que venía a hacer VISIBLE el déficit lo volvía invisible para la única capa que
+   puede corregirlo. Fix: el déficit sintético viaja por claves PROPIAS (`shortfall_text_g` /
+   `shortfall_bought_g`) y `_extract_aggregated_food_dict` excluye explícitamente el sello de la
+   sustitución (defensa doble: el sello queda PERSISTIDO en las listas, así que una lista
+   construida por la versión anterior seguiría cegando al guard al releerla).
+5. **[IMPORTANT] El backstop comparaba demanda BRUTA contra compra NETA.** `_text_demand_g_map`
+   sale de las recetas sin restar nada, pero cuando hay `items_to_deduct` (Nevera + consumidos) el
+   lado comprado es un DELTA. Reproducido: receta 2100 g + nevera 500 g + compra 1600 g → nota de
+   recompra sobre algo que el usuario YA tiene en casa. Y `is_new_plan` es False POR DEFAULT, o sea
+   que las superficies afectadas son la tool del coach, `mark_shopping_list_purchased`, los dos
+   callsites de `agent.py` y `get_pantry_completion_list` (donde el falso positivo sería del 100%).
+   Fix: el mapa se pasa sólo cuando NO hubo deducción (gate por `items_to_deduct`, no por
+   `is_new_plan`: un delta con la nevera vacía también es homogéneo y ahí el mecanismo es correcto).
 """
 from __future__ import annotations
 
@@ -403,9 +430,235 @@ def test_plumbing_canonicalize_shopping_food_name_es_ssot_compartido():
 
 def test_plumbing_ventaneo_recibe_text_demand_g_map():
     """[MINOR ronda 1] La segunda pasada (ventaneo de perecederos, OFF por default) también debe
-    recibir el mapa — ya calculado sobre el plan completo, no hay razón para no pasarlo."""
+    recibir el mapa — ya calculado sobre el plan completo, no hay razón para no pasarlo.
+
+    [review final · 2026-08-03] Recibe el mapa YA GATEADO (`_tdg_para_agg`), no el crudo: si la
+    lista es un delta con deducción de Nevera, la segunda pasada tampoco puede comparar bruto
+    contra neto. Las dos pasadas deben ver exactamente la misma decisión."""
     from pathlib import Path
     src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
     i = src.index("_res_window = aggregate_and_deduct_shopping_list(")
     j = src.index(")", src.index("cycle_days=cycle_days,", i))
-    assert "text_demand_g_map=_text_demand_g_map" in src[i:j + 1]
+    assert "text_demand_g_map=_tdg_para_agg" in src[i:j + 1]
+
+
+# ───────── 10. [CRITICAL review final] el sello sintético NO puede cegar al coherence guard ─────
+#
+# El guard es la ÚNICA superficie que puede forzar retry (columna «Bloquea retry? = Sí» de
+# `coherence_surfaces_table.md`) y corre en modo `block` por default. Estos tests son de EFECTO:
+# llaman al guard real y miran la lista de divergencias que devuelve. Un test que sólo comprobara
+# que el campo se llama distinto no habría cazado nada — el defecto original era precisamente que
+# el nombre del campo era correcto para el otro productor.
+
+@pytest.fixture
+def _sin_master_db(monkeypatch):
+    """Stub de `get_master_ingredients` a `[]` — mismo patrón que
+    `test_p1_shopping_recipe_coherence.py::no_master_db`. Sin esto el guard intenta cargar el
+    master_map y golpea el pool de DB (que en el worktree no existe): ensucia logs y añade latencia.
+    Con `[]` corre el fallback sólo-reglas-inline, suficiente para el contrato del guard."""
+    monkeypatch.setattr(sc, "get_master_ingredients", lambda: [])
+    yield
+
+
+def _plan_con_drift(item_extra: dict | None = None) -> dict:
+    """Plan de 1 día cuya receta pide 2000 g de pollo y cuya lista sólo compra 1000 g — drift de
+    magnitud del 50%, muy por encima de la tolerancia default del guard (0,10)."""
+    item = {
+        "name": "Pollo",
+        "base_qty": 1000.0,
+        "base_unit": "g",
+        "market_qty_numeric": 2.2,
+        "market_unit": "lb",
+    }
+    item.update(item_extra or {})
+    return {
+        "days": [{"meals": [{"meal": "almuerzo", "ingredients_raw": ["2000 g pollo"]}]}],
+        "aggregated_shopping_list": [item],
+    }
+
+
+def test_el_sello_sintetico_NO_apaga_la_divergencia_de_magnitud(_sin_master_db, monkeypatch):
+    """EL test del hallazgo CRITICAL. Un ítem con el sello sintético —incluso uno PERSISTIDO por
+    una versión anterior, que sí traía `capped_pre`— debe seguir produciendo divergencia."""
+    monkeypatch.delenv("MEALFIT_SHOPPING_COHERENCE_GUARD", raising=False)
+    plan = _plan_con_drift({"capped_by": "qty_reconcile_v7",
+                            "capped_pre": 2000.0, "capped_post": 1000.0})
+    divs = sc.run_shopping_coherence_guard(plan, multiplier=1.0)
+    magnitud = [d for d in divs if d.get("magnitude")]
+    assert magnitud, (
+        "el sello sintético cegó al guard: sin divergencia no hay retry, no hay degradación y "
+        f"no hay fila en _shopping_coherence_block_history. divs={divs}")
+    assert magnitud[0]["expected_qty"] == pytest.approx(2000.0)
+    assert magnitud[0]["actual_qty"] == pytest.approx(1000.0), (
+        "el guard sigue sustituyendo la cantidad comprada por `capped_pre`")
+    assert magnitud[0]["delta_pct"] == pytest.approx(0.5)
+    # ...y en modo block la divergencia debe llegar al flag que consume `review_plan_node`.
+    assert plan.get("_shopping_coherence_block"), plan.keys()
+
+
+def test_un_cap_REAL_sigue_silenciando_la_divergencia(_sin_master_db, monkeypatch):
+    """Contrafactual obligatorio: la exclusión debe ser QUIRÚRGICA. Si silenciara también los caps
+    reales, habría revertido P1-COHERENCE-CAPPED-PRE (los topes de perecederos son una decisión de
+    producto, se le comunican al usuario y NO son incoherencias)."""
+    monkeypatch.delenv("MEALFIT_SHOPPING_COHERENCE_GUARD", raising=False)
+    plan = _plan_con_drift({"capped_by": "P5-VEG-CAP",
+                            "capped_pre": 2000.0, "capped_post": 1000.0})
+    divs = sc.run_shopping_coherence_guard(plan, multiplier=1.0)
+    assert [d for d in divs if d.get("magnitude")] == [], divs
+
+
+def test_el_item_que_produce_el_agregador_real_tampoco_ciega_al_guard(_sin_master_db, monkeypatch):
+    """E2E del productor al consumidor: se construye el ítem con la función REAL (no a mano) y se
+    lo pasa al guard REAL. Cierra el hueco de que el fix viva sólo en el lado del guard."""
+    monkeypatch.delenv("MEALFIT_SHOPPING_COHERENCE_GUARD", raising=False)
+    sc.reset_caps_applied_last_run()
+    item = sc.apply_smart_market_units(
+        "Pollo", 1000.0 / 453.592, "lb", 0.0, master_item=None, cycle_days=7,
+        text_demand_g=2000.0)
+    assert item.get("capped_by") == "qty_reconcile_v7", item
+    plan = {
+        "days": [{"meals": [{"meal": "almuerzo", "ingredients_raw": ["2000 g pollo"]}]}],
+        "aggregated_shopping_list": [item],
+    }
+    divs = [d for d in sc.run_shopping_coherence_guard(plan, multiplier=1.0) if d.get("magnitude")]
+    assert divs and divs[0]["actual_qty"] == pytest.approx(1000.0, abs=1.0), divs
+
+
+def test_el_deficit_sintetico_viaja_por_claves_propias():
+    """El canal `capped_pre`/`capped_post` es propiedad exclusiva de los caps REALES de
+    `_CAPS_APPLIED_LAST_RUN`. El sintético usa `shortfall_*`, que ningún consumidor del guard lee."""
+    sc.reset_caps_applied_last_run()
+    item = _por_gramos("Espárragos", 3000.0, text_demand_g=4200.0)
+    assert item.get("capped_by") == "qty_reconcile_v7"
+    assert item.get("capped_pre") is None, "el sintético NO debe escribir el canal del guard"
+    assert item.get("capped_post") is None
+    assert item.get("shortfall_text_g") == pytest.approx(4200.0)
+    assert item.get("shortfall_bought_g") == pytest.approx(3000.0, abs=1.0)
+
+
+def test_un_cap_real_SI_escribe_capped_pre():
+    """Simétrico del anterior: el arreglo no debe haberle quitado el canal a los caps reales (eso
+    reintroduciría el falso positivo que P1-COHERENCE-CAPPED-PRE cerró)."""
+    sc.reset_caps_applied_last_run()
+    try:
+        sc._record_cap_applied("Cebolla", 2000.0, 600.0, "P5-VEG-CAP")
+        item = _por_gramos("Cebolla", 600.0, text_demand_g=2000.0)
+        assert item.get("capped_by") == "P5-VEG-CAP"
+        assert item.get("capped_pre") == pytest.approx(2000.0)
+        assert item.get("capped_post") == pytest.approx(600.0)
+        assert item.get("shortfall_text_g") is None
+    finally:
+        sc.reset_caps_applied_last_run()
+
+
+def test_la_razon_sintetica_es_una_constante_compartida():
+    """Productor y consumidor (la exclusión del guard) deben leer el MISMO nombre. Dos literales
+    iguales en dos puntas del archivo son exactamente cómo se pierde una exclusión en el próximo
+    rename."""
+    from pathlib import Path
+    assert sc.QTY_RECONCILE_SYNTHETIC_REASON == "qty_reconcile_v7"
+    src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
+    i = src.index("def _extract_aggregated_food_dict(")
+    j = src.index("\ndef ", i + 10)
+    assert "QTY_RECONCILE_SYNTHETIC_REASON" in src[i:j], (
+        "la exclusión del sello sintético desapareció del constructor del lado ACTUAL del guard")
+
+
+# ───────── 11. [IMPORTANT review final] el backstop sólo compara magnitudes homogéneas ─────────
+#
+# ⚠️ El plan de estos tests tiene 7 días MATERIALIZADOS a propósito. Con un plan de 1 día,
+# `get_shopping_list_delta` proyecta a la semana (`base_duration_scale = 7/num_days = 7`) y la
+# deducción de la Nevera queda diluida ×7 — mi primera versión de este test usaba 1 día y PASABA
+# también con el código pre-fix, o sea que no probaba nada. Con 7 días la escala es 1 y los números
+# son literalmente los del caso reportado: receta 2100 g, nevera 500 g, compra 1600 g (76%).
+
+def _plan_7d_esparragos(gramos_por_dia: float = 300.0) -> dict:
+    return {"days": [{"meals": [{
+        "ingredients": [f"{gramos_por_dia:g} g de espárragos"],
+        "ingredients_raw": [f"{gramos_por_dia:g} g de espárragos"],
+    }]} for _ in range(7)]}
+
+
+def _expected_fijo(total_g: float):
+    def _fake(plan_data, *, apply_yield=False, multiplier=1.0):
+        return {"Espárragos": {"g": total_g * multiplier}}
+    return _fake
+
+
+def test_con_nevera_el_backstop_se_calla(monkeypatch):
+    """EL test del hallazgo IMPORTANT, reproducido con la función real: la receta pide 2100 g, el
+    usuario tiene 500 g en la Nevera y la lista (delta) compra 1600 g. Sin el gate, el backstop
+    comparaba 1600 (NETO) contra 2100 (BRUTO) = 76% < 90% y estampaba una nota de recompra sobre
+    algo que el usuario ya tiene en casa."""
+    monkeypatch.setattr(sc, "expected_sum_from_recipes", _expected_fijo(2100.0))
+    sc.reset_caps_applied_last_run()
+    items = sc.get_shopping_list_delta(
+        None, _plan_7d_esparragos(), False, False, True, 1.0,
+        inventory_override=[{"ingredient_name": "Espárragos", "quantity": 500, "unit": "g"}],
+        consumed_override=[],
+    )
+    esp = next(i for i in items if "esp" in str(i.get("name", "")).lower())
+    assert esp.get("base_qty") == pytest.approx(1600.0, abs=1.0), (
+        f"el fixture ya no reproduce el caso (compra neta esperada 1600 g): {esp}")
+    assert esp.get("capped_by") is None, (
+        f"nota de recompra sobre lo que el usuario YA tiene en la Nevera: {esp}")
+    assert "alcanza" not in esp.get("display_qty", ""), esp.get("display_qty")
+
+
+def test_sin_nevera_el_delta_conserva_el_backstop(monkeypatch):
+    """Contrafactual: el gate es por «¿hubo deducción?», NO por `is_new_plan`. Un delta con la
+    nevera vacía compara neto contra neto (no se restó nada), así que el mecanismo debe seguir
+    vivo — gatear por `is_new_plan` lo habría matado en este caso legítimo."""
+    plan = {"days": [{"meals": [{
+        "ingredients": ["600 g de espárragos"],
+        "ingredients_raw": ["600 g de espárragos"],
+    }]}]}
+
+    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0):
+        return {"Espárragos": {"g": 999999.0 * multiplier}}
+
+    monkeypatch.setattr(sc, "expected_sum_from_recipes", _fake_expected)
+    sc.reset_caps_applied_last_run()
+    items = sc.get_shopping_list_delta(
+        None, plan, False, False, True, 1.0,
+        inventory_override=[], consumed_override=[],
+    )
+    esp = next(i for i in items if "esp" in str(i.get("name", "")).lower())
+    assert esp.get("capped_by") == "qty_reconcile_v7", esp
+
+
+def test_con_consumidos_el_backstop_tambien_se_calla(monkeypatch):
+    """`items_to_deduct` = nevera + CONSUMIDOS. La segunda mitad deduce igual, así que el gate
+    tiene que mirar la lista combinada y no sólo el inventario físico."""
+    monkeypatch.setattr(sc, "expected_sum_from_recipes", _expected_fijo(2100.0))
+    sc.reset_caps_applied_last_run()
+    items = sc.get_shopping_list_delta(
+        None, _plan_7d_esparragos(), False, False, True, 1.0,
+        inventory_override=[],
+        consumed_override=["500 g de espárragos"],
+    )
+    esp = next(i for i in items if "esp" in str(i.get("name", "")).lower())
+    assert esp.get("base_qty") == pytest.approx(1600.0, abs=1.0), esp
+    assert esp.get("capped_by") is None, esp
+
+
+def test_la_lista_canonica_conserva_el_backstop(monkeypatch):
+    """La lista canónica (`is_new_plan=True`) fuerza `items_to_deduct` vacío por construcción — es
+    el camino donde se MIDIÓ el caso original (espárragos del plan 5f4bb17e) y donde el mecanismo
+    debe seguir intacto."""
+    plan = {"days": [{"meals": [{
+        "ingredients": ["600 g de espárragos"],
+        "ingredients_raw": ["600 g de espárragos"],
+    }]}]}
+
+    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0):
+        return {"Espárragos": {"g": 999999.0 * multiplier}}
+
+    monkeypatch.setattr(sc, "expected_sum_from_recipes", _fake_expected)
+    sc.reset_caps_applied_last_run()
+    items = sc.get_shopping_list_delta(
+        None, plan, True, False, True, 1.0,
+        inventory_override=[{"ingredient_name": "Espárragos", "quantity": 500, "unit": "g"}],
+    )
+    esp = next(i for i in items if "esp" in str(i.get("name", "")).lower())
+    assert esp.get("capped_by") == "qty_reconcile_v7", esp

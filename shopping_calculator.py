@@ -2540,11 +2540,31 @@ PKG_COVER_NOTE_MIN = _knob_env_float(
 # 583.33 g (103% de la compra semanal en una sola cena) con `capped_by=null` — espárragos no
 # vive en ningún dict de cap por categoría (P5-VEG-CAP, P6-*), así que el déficit llegaba mudo.
 # Cuando dispara, estampa `capped_by="qty_reconcile_v7"` SINTÉTICO para que el bloque de
-# P1-CAPPED-STAPLE-HONESTY (que ya sabe componer "alcanza ~N de 30 días — recompra") haga el
+# P1-CAPPED-STAPLE-HONESTY (que ya sabe componer el sufijo "alcanza ~N de M días") haga el
 # trabajo — no se reimplementa el copy. Clamp (0, 1]: en 1.0 sólo dispara con déficit exacto (no
 # realista); no se permite <=0 (compraría 0 y aun así "cubriría").
 QTY_SHORTFALL_NOTE_MIN = _knob_env_float(
     "MEALFIT_QTY_SHORTFALL_NOTE_MIN", 0.9, lambda v: 0.0 < v <= 1.0)
+
+# [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · review final] Razón del sello SINTÉTICO, como constante
+# y no como literal disperso. La necesita el productor (`apply_smart_market_units`) Y el consumidor
+# (`_extract_aggregated_food_dict`, que debe EXCLUIRLA de la sustitución `base_qty ← capped_pre`).
+# Dos literales iguales en dos puntas del archivo son exactamente cómo se pierde una exclusión.
+#
+# ⚠️ POR QUÉ EL SELLO SINTÉTICO NO ESCRIBE `capped_pre` (bug crítico del review final, reproducido
+# ejecutando): el guard de coherencia sustituye la cantidad realmente comprada por `capped_pre`
+# para los ítems con `capped_by` (P1-COHERENCE-CAPPED-PRE). Eso es correcto para un cap REAL,
+# donde `capped_pre` es lo que el AGREGADOR calculó por su cuenta antes del tope — un número
+# INDEPENDIENTE del lado esperado, así que si el agregador calcula mal la divergencia sigue
+# saliendo. Para el sello sintético `pre_value` ES la demanda de las recetas
+# (`expected_sum_from_recipes(..., multiplier=effective_multiplier)`), literalmente la misma
+# función y el mismo factor que el lado ESPERADO del guard: el guard acababa comparando el
+# esperado contra sí mismo. Medido: drift de magnitud 2× (recetas 2000 g, lista 1000 g) →
+# divergencias `[{'delta_pct': 0.5}]` sin el sello y `[]` con él. Y como el guard corre en modo
+# `block` por default, ese ítem dejaba de escalar, de reintentar y de aparecer en
+# `_shopping_coherence_block_history`. El déficit sintético viaja ahora por claves PROPIAS
+# (`shortfall_text_g` / `shortfall_bought_g`), que ningún consumidor del guard lee.
+QTY_RECONCILE_SYNTHETIC_REASON = "qty_reconcile_v7"
 
 # ═══════════════════════════════════════════════════════════════
 # Helpers para SKU-Aware Sizing (P3)
@@ -3987,7 +4007,13 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     (comportamiento previo byte-idéntico). Si viene y NINGÚN cap real ya explica el déficit
     (`_cap_hit` de P1-CAPPED-STAPLE-HONESTY sigue `None`), y `base_qty` resuelve por debajo de
     `QTY_SHORTFALL_NOTE_MIN × text_demand_g`, se estampa `capped_by="qty_reconcile_v7"` sintético
-    para que el bloque de abajo componga la misma nota "alcanza ~N de 30 días — recompra".
+    para que el bloque de abajo componga la misma nota "alcanza ~N de M días — recompra".
+    ⚠️ El caller DEBE pasar demanda homogénea con lo que compra: si su lista es un DELTA (resta la
+    Nevera / lo consumido), el mapa de texto tiene que venir vacío o la nota es falsa por
+    construcción — ver el gate `_tdg_para_agg` en `get_shopping_list_delta`.
+    ⚠️ El sello sintético NO escribe `capped_pre`/`capped_post` (usa `shortfall_text_g` /
+    `shortfall_bought_g`): esos dos campos son el canal que el coherence guard usa para SUSTITUIR
+    la cantidad comprada, y el `pre_value` del sintético es el propio lado esperado del guard.
     """
     import math
     from constants import UNIT_WEIGHTS
@@ -4714,7 +4740,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             if _bq_g is not None and _bq_g < QTY_SHORTFALL_NOTE_MIN * _td_g:
                 _cap_hit = {
                     "food_lower": str(name).lower(),
-                    "reason": "qty_reconcile_v7",
+                    "reason": QTY_RECONCILE_SYNTHETIC_REASON,
                     "pre_value": _td_g,
                     "post_value": _bq_g,
                 }
@@ -4765,8 +4791,27 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             _pre = float(_cap_hit.get("pre_value") or 0)
             _post = float(_cap_hit.get("post_value") or 0)
             result["capped_by"] = _cap_hit.get("reason")
-            result["capped_pre"] = round(_pre, 1)
-            result["capped_post"] = round(_post, 1)
+            # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · review final] Dos canales, no uno.
+            #
+            # `capped_pre`/`capped_post` son el canal de los caps REALES (`_CAPS_APPLIED_LAST_RUN`):
+            # el guard de coherencia los usa para SUSTITUIR la cantidad comprada por la que el
+            # agregador calculó antes del tope, y eso sólo es legítimo porque ese número es un
+            # cómputo INDEPENDIENTE del lado esperado (si el agregador se equivoca, la divergencia
+            # sigue apareciendo — «no es un mute», P1-COHERENCE-CAPPED-PRE).
+            #
+            # El déficit SINTÉTICO no cumple esa condición: su `pre_value` ES la demanda de las
+            # recetas, la misma `expected_sum_from_recipes(..., multiplier=effective_multiplier)`
+            # con la que el guard construye el lado esperado. Escribirlo en `capped_pre` hacía que
+            # el guard comparara el esperado contra sí mismo y no viera NINGUNA divergencia de
+            # magnitud (reproducido: recetas 2000 g / lista 1000 g → `[]`). Va por claves propias.
+            # tooltip-anchor: P1-QTY-SHORTFALL-OWN-CHANNEL
+            _es_sintetico = (_cap_hit.get("reason") == QTY_RECONCILE_SYNTHETIC_REASON)
+            if _es_sintetico:
+                result["shortfall_text_g"] = round(_pre, 1)
+                result["shortfall_bought_g"] = round(_post, 1)
+            else:
+                result["capped_pre"] = round(_pre, 1)
+                result["capped_post"] = round(_post, 1)
             # Fracción del ciclo que cubre lo comprado. Se expresa en % y no en días porque el cap
             # se aplica sobre la unidad del agregador (g/latas/paquetes) y no siempre hay días.
             _frac = (_post / _pre) if _pre > 0 else 0.0
@@ -4796,11 +4841,28 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             _tapa_avisa = not _purchase_covers_need(result, _pre)
             if not _tapa_avisa:
                 result["coverage_ok_by_package"] = True
+            # [P1-CAPPED-STAPLE-HONESTY · 2026-08-03 · review final] El denominador era un literal
+            # fijo de un mes, mientras la nota GEMELA de `pkg_cover_ratio` (60 líneas abajo, misma
+            # función) ya es paramétrica con `cycle_days` desde P1-SKU-COVER-HONESTY-R1. En una
+            # lista SEMANAL el usuario leía un ciclo mensual sobre una compra de 7 días, al lado de
+            # otra línea del MISMO PDF que declaraba el ciclo correcto; en la quincenal las dos
+            # notas se contradecían con dos ciclos distintos. Y el numerador tampoco era cierto:
+            # con cobertura 0,76 de la SEMANA la nota anunciaba tres semanas de autonomía.
+            # `cycle_days` es parámetro de esta función (default 7) y la ronda 2 de
+            # P1-SKU-COVER-HONESTY lo cableó a los ~26 callsites duration-aware justamente para
+            # esto. Se conserva `round` (no `math.floor` como la gemela): con el gate `_frac < 0.9`
+            # el redondeo nunca puede llegar a `cycle_days` (haría falta `_frac ≥ 1-0,5/cycle_days`,
+            # o sea ≥0,93 con 7 días), así que la nota no puede emitir el absurdo «~N de N».
+            #
+            # (el comentario NO reproduce el sufijo literal a propósito: `test_p1_capped_staple_
+            # honesty` cuenta sus apariciones en este bloque y un comentario que lo cite lo rompe —
+            # ya pasó con P1-RICE-STEP-HONEST, y volvió a pasar al escribir ESTE comentario)
+            _dias_alcanza = max(1, int(round(_frac * cycle_days)))
             if _frac and _frac < 0.9 and _tapa_avisa:
                 result["display_qty"] = (
-                    f"{display_qty_final} · alcanza ~{max(1, int(round(_frac * 30)))} de 30 días — recompra")
+                    f"{display_qty_final} · alcanza ~{_dias_alcanza} de {cycle_days} días — recompra")
                 result["display_string"] = (
-                    f"{final_str} (alcanza ~{max(1, int(round(_frac * 30)))} de 30 días — recompra)")
+                    f"{final_str} (alcanza ~{_dias_alcanza} de {cycle_days} días — recompra)")
         except Exception:
             pass
     if sku_label:
@@ -5887,7 +5949,22 @@ def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False
         #
         # Si el agregador calcula mal, `capped_pre` diverge y el guard lo sigue viendo: esto NO
         # es un mute. Knob de rollback: MEALFIT_COHERENCE_COMPARE_CAPPED_PRE=false.
-        if (item.get("capped_by") and _get_coherence_compare_capped_pre_knob()):
+        #
+        # ⚠️ [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · review final] EXCLUSIÓN del sello SINTÉTICO.
+        # La sustitución de arriba es legítima sólo cuando `capped_pre` es un cómputo del AGREGADOR
+        # independiente del lado esperado. El sello `qty_reconcile_v7` (déficit de texto sin cap
+        # real que lo explique) tiene como `pre_value` la propia demanda de las recetas — la misma
+        # `expected_sum_from_recipes` con el mismo multiplicador que construye el lado ESPERADO —
+        # así que sustituir convertía la comparación en una tautología y el guard dejaba de ver
+        # justo los ítems que compran de menos (modo `block` por default: sin divergencia no hay
+        # retry, no hay degradación y no hay fila en `_shopping_coherence_block_history`).
+        # Hoy el productor ya no escribe `capped_pre` para el sintético (usa `shortfall_*`), pero
+        # la exclusión se mantiene aquí porque el sello queda PERSISTIDO en las listas: una lista
+        # construida por una versión anterior seguiría cegando al guard al releerla.
+        # tooltip-anchor: P1-QTY-SHORTFALL-OWN-CHANNEL
+        if (item.get("capped_by")
+                and item.get("capped_by") != QTY_RECONCILE_SYNTHETIC_REASON
+                and _get_coherence_compare_capped_pre_knob()):
             _cp = item.get("capped_pre")
             if isinstance(_cp, (int, float)) and float(_cp) > 0 and _bu:
                 _bq = float(_cp)
@@ -11659,11 +11736,43 @@ def get_shopping_list_delta(
                         f"no-op): {type(_tdg_exc).__name__}: {_tdg_exc}")
         _text_demand_g_map = {}
 
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · review final] El backstop sólo puede comparar
+    # magnitudes HOMOGÉNEAS.
+    #
+    # `_text_demand_g_map` es demanda BRUTA: sale de las recetas y no resta nada. Pero cuando hay
+    # `items_to_deduct` (Nevera + consumidos), el lado comprado es un DELTA — el agregador hace
+    # `aggregated[name][unit] -= qty` antes de resolver unidades de mercado. Comparar neto contra
+    # bruto dispara el sello sobre EXACTAMENTE lo que el usuario ya tiene en casa: reproducido con
+    # receta 2100 g + nevera 500 g + compra 1600 g → nota de recompra falsa. Y el falso positivo
+    # crece cuanto mejor use el usuario la Nevera Inteligente, que es el incentivo invertido.
+    #
+    # Las superficies afectadas NO son marginales: `is_new_plan` es False POR DEFAULT en la firma,
+    # y con ese modo corren la tool del coach (`check_shopping_list`), `mark_shopping_list_purchased`
+    # (que además reinyecta el `display_string` a `restock_inventory`), los dos callsites de
+    # `agent.py` que meten el delta en el system prompt, y `get_pantry_completion_list` — cuyo
+    # propósito literal es «lo que el plan necesita MENOS lo que ya tiene», donde el falso positivo
+    # sería del 100%.
+    #
+    # Se gatea por `items_to_deduct` y no por `is_new_plan` porque la condición REAL es «¿hubo
+    # deducción?»: con `is_new_plan=True` la lista es canónica y `items_to_deduct` está vacío por
+    # construcción (arriba), pero un delta con la nevera vacía también es homogéneo y ahí el
+    # mecanismo sigue siendo correcto. Alternativa descartada: netear el mapa de texto con los
+    # mismos `items_to_deduct` — reimplementa la deducción (parse de unidades, canonicalización,
+    # orden de aplicación) en un segundo sitio, que es la clase de duplicación que este repo paga
+    # cada vez que la escribe. Fail-safe: en la duda se calla la nota, nunca se inventa.
+    # tooltip-anchor: P1-QTY-SHORTFALL-HOMOGENEO
+    _tdg_para_agg = _text_demand_g_map if not items_to_deduct else {}
+    if _text_demand_g_map and items_to_deduct:
+        logging.info(
+            f"[P1-VEG-BACKFILL-HONESTY] backstop de texto OMITIDO: la lista es un delta "
+            f"({len(items_to_deduct)} ítems deducidos) y la demanda de recetas es bruta"
+        )
+
     # [P1-PERSON-WEEKS-CYCLE-AWARE · 2026-07-30] `num_days` viaja al agregador porque los topes por
     # persona-semana necesitan deshacer el `base_duration_scale = 7/num_days` que se aplica tres
     # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
     # apretados en un ciclo de 14 días.
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days, text_demand_g_map=_text_demand_g_map)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg)
 
     # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Segunda pasada SOLO cuando hay ventana
     # de viaje: mismo agregador, mismos descuentos de inventario, misma aritmética —
@@ -11692,7 +11801,7 @@ def get_shopping_list_delta(
                 structured=structured, multiplier=multiplier * _window_scale,
                 brand_prefs=brand_prefs, brand_defaults=brand_defaults,
                 num_days=len(_trip_window), cycle_days=cycle_days,
-                text_demand_g_map=_text_demand_g_map,
+                text_demand_g_map=_tdg_para_agg,
             )
             res = _merge_trip_windowed_result(res, _res_window, window_len=len(_trip_window))
         except Exception as _tw_exc:

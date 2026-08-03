@@ -85,11 +85,20 @@ def test_el_item_lleva_la_metadata_del_cap():
 
 def test_el_sufijo_va_en_los_dos_strings_que_se_renderean():
     """`display_qty` lo usa la UI web y `display_string` el PDF. Sufijar sólo uno deja la mitad
-    mintiendo."""
+    mintiendo.
+
+    [review final · 2026-08-03] El denominador dejó de ser el literal `30`: es `cycle_days`, el
+    parámetro que la ronda 2 de P1-SKU-COVER-HONESTY cableó a los ~26 callsites duration-aware.
+    Antes, una lista SEMANAL emitía «alcanza ~23 de 30 días» al lado de la nota gemela de
+    `pkg_cover_ratio` que decía «~6 de 7 días» — dos ciclos contradictorios en el mismo PDF. Se
+    sigue contando 2 (uno por string renderizado): el conteo es lo que impide que alguien sufije
+    sólo uno de los dos."""
     bloque = _bloque_del_item()
     assert 'result["display_qty"]' in bloque
     assert 'result["display_string"]' in bloque
-    assert bloque.count("de 30 días — recompra") == 2
+    assert bloque.count("de {cycle_days} días — recompra") == 2
+    assert "de 30 días — recompra" not in bloque, \
+        "el denominador volvió a ser un literal: la nota miente en listas de 7 y 15 días"
 
 
 def test_no_sufija_cuando_el_cap_es_marginal():
@@ -137,11 +146,52 @@ def test_registro_de_cap_es_fail_safe():
 def test_el_item_devuelto_LLEVA_el_sufijo():
     sc.reset_caps_applied_last_run()
     sc._record_cap_applied("Atún en agua", 3546.7, 736.0, "P6-CANNED-PROTEIN-CAP")
-    out = sc.apply_smart_market_units("Atún en agua", 736.0 / 453.6, "g", 736.0)
+    # El caso vivo (plan 1070ceb1) era un ciclo MENSUAL: se pasa `cycle_days=30` explícito, que es
+    # lo que un caller duration-aware hace hoy. Con el default 7 la nota diría "~1 de 7 días" —
+    # también cierta, y ése es justo el punto del arreglo del review final.
+    out = sc.apply_smart_market_units("Atún en agua", 736.0 / 453.6, "g", 736.0, cycle_days=30)
     assert isinstance(out, dict)
     assert out.get("capped_by") == "P6-CANNED-PROTEIN-CAP"
-    assert "de 30 días — recompra" in out["display_qty"]
-    assert "de 30 días — recompra" in out["display_string"]
+    assert "alcanza ~6 de 30 días — recompra" in out["display_qty"]
+    assert "alcanza ~6 de 30 días — recompra" in out["display_string"]
+
+
+def test_el_denominador_del_sufijo_sigue_al_ciclo_de_la_lista():
+    """[review final · 2026-08-03] El defecto que este test cierra: el bloque hardcodeaba `30`, así
+    que la lista SEMANAL decía «alcanza ~23 de 30 días — recompra» sobre una compra de 7 días, al
+    lado de la nota gemela (`pkg_cover_ratio`, misma función) que sí decía «~6 de 7 días». En la
+    quincenal la contradicción era explícita: «de 15 días» y «de 30 días» en el mismo PDF.
+
+    Se ejecuta la función real con los tres ciclos y se exige que el denominador —y el numerador—
+    respondan. Un test que sólo mirase el fuente no habría visto que el parámetro se ignoraba."""
+    esperado = {7: "alcanza ~1 de 7 días — recompra",
+                15: "alcanza ~3 de 15 días — recompra",
+                30: "alcanza ~6 de 30 días — recompra"}
+    for cycle_days, sufijo in esperado.items():
+        sc.reset_caps_applied_last_run()
+        sc._record_cap_applied("Atún en agua", 3546.7, 736.0, "P6-CANNED-PROTEIN-CAP")
+        out = sc.apply_smart_market_units(
+            "Atún en agua", 736.0 / 453.6, "g", 736.0, cycle_days=cycle_days)
+        assert sufijo in out["display_qty"], (cycle_days, out["display_qty"])
+        assert sufijo in out["display_string"], (cycle_days, out["display_string"])
+
+
+def test_el_sufijo_nunca_promete_el_ciclo_completo():
+    """«alcanza ~7 de 7 días — recompra» es texto sin sentido (afirma cobertura total y pide
+    recomprar en la misma frase) — el mismo absurdo que la ronda 2 de P1-SKU-COVER-HONESTY tuvo que
+    arreglar en la nota gemela cambiando `round` por `math.floor`. Aquí se conserva `round` porque
+    el gate `_frac < 0.9` lo hace inalcanzable, pero eso es una propiedad que hay que ANCLAR: si
+    alguien relaja el umbral a 0.99 el absurdo vuelve. Barrido sobre la banda real del gate."""
+    for cycle_days in (7, 15, 30):
+        for pct in (0.05, 0.25, 0.5, 0.75, 0.89, 0.899):
+            sc.reset_caps_applied_last_run()
+            sc._record_cap_applied("Avena", 1000.0, 1000.0 * pct, "TEST-CAP")
+            out = sc.apply_smart_market_units(
+                "Avena", (1000.0 * pct) / 453.6, "g", 1000.0 * pct, cycle_days=cycle_days)
+            dq = out.get("display_qty", "")
+            if "recompra" not in dq:
+                continue
+            assert f"~{cycle_days} de {cycle_days} días" not in dq, (cycle_days, pct, dq)
 
 
 def test_el_acento_del_nombre_no_rompe_el_cruce():
