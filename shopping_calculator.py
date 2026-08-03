@@ -1260,8 +1260,14 @@ def _build_hybrid_shopping_list(
 # de forma permanente y `active_trip_window_days` devuelve `None` siempre.
 #
 # O sea: hoy el ventaneo es INERTE y sus riesgos (abajo) sí son reales. Se deja
-# implementado, probado y apagado hasta que alguien cierre los 3 prerequisitos y
-# vuelva a medir la distribución de `n_days`.
+# implementado, probado y apagado hasta que alguien cierre TODOS los prerequisitos
+# enumerados abajo y vuelva a medir la distribución de `n_days`.
+#
+# [review final audit-v7-p1 · 2026-08-03 · KNOB-3] Aquí (y en dos sitios más) decía «los 3
+# prerequisitos» mientras la lista enumeraba CUATRO: el (d) se añadió al corregir el reporte
+# de la ronda 1 y el conteo se quedó atrás. Un operador que lea el número cierra (a), (b) y (c)
+# y enciende con (d) abierto — el más silencioso de los cuatro. Se deja de escribir el número:
+# un conteo literal al lado de una lista es deuda que caduca sola.
 #
 # ### Condiciones para ENCENDER (`MEALFIT_TRIP_WINDOWED_PERISHABLES=true`)
 #
@@ -1289,7 +1295,9 @@ def _build_hybrid_shopping_list(
 #     final del plan no se re-agrega, así que su ventana nunca avanza.
 #
 # (d) [hallazgo al corregir el reporte, ronda 1] Los dos callsites read-only de tools.py
-#     (`calculate_shopping_list` y `mark_shopping_list_purchased`) NO están cableados y
+#     (`check_shopping_list` —la tool del coach «qué me falta comprar»; el nombre
+#     `calculate_shopping_list` que este bloque citaba NO existe en el repo, review final
+#     2026-08-03— y `mark_shopping_list_purchased`) NO están cableados y
 #     SÍ piden `structured=True` — con la ventana activa reconstruirían el promedio del
 #     plan mientras el usuario compró la lista ventaneada. Para `mark_shopping_list_
 #     purchased` eso significa cargar a la despensa una lista distinta de la comprada.
@@ -1312,8 +1320,9 @@ def _trip_windowed_perishables_enabled() -> bool:
 
     Default **False** (ronda 1): el ventaneo solo aplica con `len(days) > 7` y la
     medición contra producción del 2026-08-02 da 0/23 planes vivos por encima de 3 días
-    materializados — encenderlo hoy no cambiaría ninguna lista, pero sí expondría los 3
-    riesgos documentados en el bloque de arriba. `True` reactiva el ventaneo.
+    materializados — encenderlo hoy no cambiaría ninguna lista, pero sí expondría los
+    riesgos documentados en el bloque de arriba (son CUATRO, (a)-(d); el bloque los enumera
+    y ya no los cuenta). `True` reactiva el ventaneo.
 
     NO gobierna la INTERPRETACIÓN de listas ya construidas: el espejo del guard usa el
     sello `trip_window_days` y jamás este knob.
@@ -11566,7 +11575,7 @@ def get_shopping_list_delta(
     Gateado por `MEALFIT_TRIP_WINDOWED_PERISHABLES`, **default `False`** desde la ronda 1:
     con el knob apagado `window_days` no tiene efecto alguno (los callsites pasan el `None`
     que `active_trip_window_days` devuelve, y este método lo ignoraría igual). Ver el
-    bloque de cabecera del P-fix para la medición y los 3 prerequisitos de encendido.
+    bloque de cabecera del P-fix para la medición y los prerequisitos (a)-(d) de encendido.
     """
     # [P1-SUPERMARKET-COSTING · 2026-07-02] Marca preferida del usuario → costeo
     # con el envase elegido. Fetch UNA vez por run (todas las superficies —

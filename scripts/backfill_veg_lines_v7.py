@@ -31,11 +31,20 @@ receta (texto) contradice su propia lista de compras — el residuo de DATOS que
      `aggregated_shopping_list_weekly` cambiarían (antes → después).
   5. `--apply`: persiste vía `db_plans.update_plan_data_atomic(plan_id, mutator, user_id=user_id)`
      — `SELECT … FOR UPDATE` + callback fresh, invariante I7 (full-overwrite de `plan_data`
-     requiere este patrón o un advisory lock explícito). El mutator SOLO transforma el dict que
-     recibe (row-lock activo, P2-MUTATOR-PURITY): el catálogo (`get_master_ingredients()`,
+     requiere este patrón o un advisory lock explícito). El catálogo (`get_master_ingredients()`,
      `_watery_veg_tokens()`, `IngredientNutritionDB`) se calienta ANTES de entrar al mutator —
-     mismo patrón que `routers/plans.py::api_swap_meal_persist` (líneas ~7010-7023, comentario
-     "warm-up fuera del FOR UPDATE") — para que dentro de la transacción sólo haya cache-hits.
+     mismo patrón que `routers/plans.py::api_swap_meal_persist` (comentario "warm-up fuera del
+     FOR UPDATE") — para que el cap sea cache-hit puro dentro de la transacción.
+     ⚠️ [review final · 2026-08-03] El mutator NO es CPU-only, y decir lo contrario era falso:
+     `_rebuild_plan_shopping_lists_inline` → `get_shopping_list_delta` consulta las marcas del súper
+     (`fetch_brand_pref_packages(user_id)` + `fetch_brand_default_packages()`, knobs default True)
+     DENTRO del `FOR UPDATE`. Es la misma tensión con P2-MUTATOR-PURITY que ya tiene
+     `api_swap_meal_persist`; este script la asume por ser one-shot y SECUENCIAL (un lock a la vez,
+     cero concurrencia). Si alguien copia el patrón a un path concurrente, tiene que saberlo.
+  6. Si el rebuild de la lista falla en un plan, el UPDATE de ESE plan se ABORTA (no se persiste el
+     recorte "a medias" con la lista vieja: eso sería la incoherencia receta↔lista que el repo
+     defiende con tres capas, sobre datos reales y sin segunda pasada). El plan se reporta en el
+     bloque de OMITIDOS del resumen y se puede re-correr.
 
 ## ⚠️ Esta sesión NO ejecuta `--apply`
 
@@ -204,31 +213,64 @@ def _print_report(result: dict) -> None:
               "la receta se corrigió, o el rebuild falló arriba)")
 
 
-def _apply_one_plan(plan_id: str, user_id: str, *, db) -> bool:
+def _apply_one_plan(plan_id: str, user_id: str, *, db) -> tuple[bool, str]:
     """[NUNCA invocado en esta sesión] Persiste el recorte vía `update_plan_data_atomic`
-    (invariante I7 — full-overwrite de `plan_data` bajo row lock). El mutator corre DENTRO del
-    `SELECT … FOR UPDATE`: por P2-MUTATOR-PURITY debe ser CPU-only sobre el dict que recibe — el
-    catálogo (`db`, ya resuelto por el caller ANTES de esta función) entra por closure, ninguna
-    llamada nueva a la DB ocurre dentro del mutator."""
+    (invariante I7 — full-overwrite de `plan_data` bajo row lock).
+
+    Devuelve `(aplicado, motivo)`: el motivo distingue «la fila no era del user_id / desapareció»
+    de «el rebuild de la lista falló y se abortó a propósito», que antes se confundían en el mismo
+    mensaje.
+
+    ⚠️ El mutator corre DENTRO del `SELECT … FOR UPDATE` y NO es CPU-only: el catálogo (`db`) entra
+    por closure ya resuelto, pero `_rebuild_plan_shopping_lists_inline` → `get_shopping_list_delta`
+    consulta las marcas del súper (`fetch_brand_pref_packages(user_id)` y
+    `fetch_brand_default_packages()`, ambas con knob default True). Es el mismo patrón que
+    `api_swap_meal_persist` en routers/plans.py, y es una tensión REAL con P2-MUTATOR-PURITY que
+    este script asume por ser one-shot y secuencial (un solo lock a la vez, sin concurrencia).
+    [review final · 2026-08-03] El docstring anterior afirmaba lo contrario («ninguna llamada nueva
+    a la DB ocurre dentro del mutator») — un comentario que miente sobre una invariante de
+    concurrencia es peor que no tenerlo: el próximo que copie este patrón a un path concurrente lo
+    hará creyendo que es puro."""
     from db_plans import update_plan_data_atomic
     from graph_orchestrator import _cap_unrealistic_portions
     from routers.plans import _rebuild_plan_shopping_lists_inline
+
+    _estado = {"motivo": "sin cambios"}
 
     def _mutator(plan_data: dict):
         days = plan_data.get("days") or []
         n = _cap_unrealistic_portions(days, db=db)
         if not n:
+            _estado["motivo"] = "sin recortes al releer bajo lock"
             return False  # nada que cambiar — aborta el UPDATE (ver contrato de la función)
         try:
             _rebuild_plan_shopping_lists_inline(
                 plan_data, user_id, surface="backfill_veg_lines_v7_apply", plan_id_hint=plan_id,
             )
-        except Exception:
-            pass  # fail-open: el recorte de líneas ya vale la pena persistir sin el rebuild
+        except Exception as _rb_exc:
+            # [review final · 2026-08-03] ANTES: `except Exception: pass` — fail-open silencioso.
+            # Persistía las recetas ya recortadas junto a la `aggregated_shopping_list*` VIEJA: la
+            # lista compraba más de lo que la receta pide, o sea la incoherencia receta↔lista que
+            # el repo defiende con tres capas, sobre datos de usuarios reales y sin una segunda
+            # pasada que lo corrija. Y el resumen imprimía ✅ igual. Ahora se ABORTA el UPDATE: el
+            # plan se queda como estaba (estado consistente) y se puede re-correr el script.
+            # Nada de I/O aquí dentro: el mutator corre bajo el row lock y un `print` puede
+            # reventar por sí solo (consola cp1252 + emoji ⇒ UnicodeEncodeError), que escaparía
+            # del mutator y abortaría la corrida entera. El motivo viaja por closure y lo imprime
+            # el caller, fuera de la transacción.
+            _estado["motivo"] = (f"rebuild de lista falló, UPDATE abortado para no dejar el plan a "
+                                 f"medias: {type(_rb_exc).__name__}: {_rb_exc}")
+            return False
+        _estado["motivo"] = "aplicado"
         return plan_data
 
     result = update_plan_data_atomic(plan_id, _mutator, user_id=user_id)
-    return bool(result)
+    if not result:
+        motivo = _estado["motivo"]
+        if motivo == "sin cambios":
+            motivo = "fila desapareció o no pertenece al user_id"
+        return False, motivo
+    return True, "aplicado"
 
 
 def main(argv: list[str]) -> int:
@@ -263,6 +305,7 @@ def main(argv: list[str]) -> int:
 
         n_changed = 0
         n_applied = 0
+        omitidos = []
         for row in rows:
             result = _process_one_plan(row, db=db)
             if result is None:
@@ -270,17 +313,25 @@ def main(argv: list[str]) -> int:
             n_changed += 1
             _print_report(result)
             if do_apply:
-                ok = _apply_one_plan(result["plan_id"], result["user_id"], db=db)
+                ok, motivo = _apply_one_plan(result["plan_id"], result["user_id"], db=db)
                 if ok:
                     n_applied += 1
                     print(f"  ✅ APLICADO (plan {result['plan_id']}).")
                 else:
-                    print(f"  ⚠️ no se aplicó (fila desapareció o no pertenece al user_id, "
-                          f"plan {result['plan_id']}).")
+                    omitidos.append((result["plan_id"], motivo))
+                    print(f"  ⚠️ NO aplicado (plan {result['plan_id']}): {motivo}")
 
         print(f"\n[backfill-veg-lines-v7] {n_changed}/{len(rows)} plan(es) con líneas para "
               f"recortar." + (f" {n_applied} aplicado(s)." if do_apply else " Dry-run — nada "
               f"escrito (re-correr con --apply --yes-i-mean-it tras revisar el diff arriba)."))
+        # [review final · 2026-08-03] El resumen distingue aplicados de omitidos: antes un plan que
+        # fallaba el rebuild se contaba igual y salía con ✅. Un one-shot sobre datos reales no
+        # tiene segunda pasada que lo corrija, así que el operador tiene que ver la lista.
+        if omitidos:
+            print(f"[backfill-veg-lines-v7] {len(omitidos)} plan(es) OMITIDO(s) sin escribir "
+                  f"(estado consistente, se pueden re-correr):")
+            for pid, motivo in omitidos:
+                print(f"  - {pid}: {motivo}")
         return 0
     finally:
         try:

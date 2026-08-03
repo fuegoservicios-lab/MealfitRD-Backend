@@ -100,7 +100,7 @@ completo, usar `/health/version` o `get_knobs_registry_snapshot()`.
 
 | Knob | Default | Cuándo cambiar |
 |---|---|---|
-| `MEALFIT_TRIP_WINDOWED_PERISHABLES` | **`False`** | Encender SOLO tras cerrar los 3 prerequisitos y re-medir `n_days` (ver abajo). Hoy es inerte |
+| `MEALFIT_TRIP_WINDOWED_PERISHABLES` | **`False`** | Encender SOLO tras cerrar TODOS los prerequisitos de abajo y re-medir `n_days`. Hoy es inerte |
 
 **[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02]** Con el knob en `True`, los PERECEDEROS de
 la lista se agregan solo desde los 7 días del viaje activo (los ESTABLES siguen del
@@ -125,6 +125,12 @@ Prerequisitos para encender (detalle en el bloque de cabecera del P-fix en
 2. Medir el impacto sobre `budget_reconciliation`: `cycle_total_rd` pasa a extrapolar la
    semana 1 al ciclo, y un `status="excedido"` **sustituye alimentos** del plan.
 3. El último chunk de un plan de 30 días no tiene rebuild posterior.
+4. [review final · 2026-08-03] Los dos callsites read-only de `tools.py`
+   (`check_shopping_list` y `mark_shopping_list_purchased`) NO están cableados y sí piden
+   `structured=True`: con la ventana activa reconstruirían el promedio del plan mientras el
+   usuario compró la lista ventaneada, y `mark_shopping_list_purchased` cargaría a la despensa
+   una lista distinta de la comprada. Este cuarto prerequisito existía en el código desde la
+   ronda 1 y faltaba aquí — el doc listaba 3 y el código enumeraba 4.
 
 El knob gobierna **cómo se construyen listas nuevas**, nunca **cómo se interpretan las ya
 construidas**: el espejo del guard se dispara por el sello `trip_window_days` de la propia

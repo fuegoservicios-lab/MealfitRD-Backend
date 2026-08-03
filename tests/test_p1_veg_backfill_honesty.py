@@ -330,17 +330,37 @@ def test_los_4_alimentos_de_los_planes_reales_no_colapsan_entre_si():
     """Espárragos/tayota/vainitas/calabacín (los 4 alimentos de los planes reales 5f4bb17e/
     8d3f246a/cf3a81fb) no tienen regla de consolidación familiar — deben salir IDÉNTICOS (mismo
     nombre, singular tal cual lo escribió el LLM), confirmando que el SSOT no inventa colisiones
-    donde no las había."""
-    for singular, plural in (
+    donde no las había.
+
+    [review final audit-v7-p1 · 2026-08-03 · T7] El cuerpo descartaba el resultado de la forma
+    plural (`_ = sc.canonicalize...`) justo en la línea donde el comentario declaraba el
+    invariante — la mitad del test que le da nombre («no colapsan ENTRE SÍ») no se comprobaba.
+    Ahora se afirma: cada forma resuelve a su propia familia (la singular o la plural del MISMO
+    alimento) y jamás al canónico de otro de los 4. Si una regla nueva de la cola de 13 regex
+    colapsara «Calabacines» a «Calabaza», o dos de estos alimentos al mismo canónico, sus
+    demandas se fusionarían en `text_demand_g_map` y el backstop mediría la suma de dos
+    alimentos distintos."""
+    familias = (
         ("Espárragos", "Espárragos"),  # ya es invariable en plural en es
         ("Tayota", "Tayotas"),
         ("Vainitas", "Vainitas"),  # invariable
         ("Calabacín", "Calabacines"),
-    ):
+    )
+    resueltos: dict[str, str] = {}
+    for singular, plural in familias:
         assert sc.canonicalize_shopping_food_name(singular, {}) == singular
-        # la forma plural puede o no colapsar a la singular (no hay regla familiar para estos 4);
-        # lo único que se exige es que NO colisione con un alimento DISTINTO.
-        _ = sc.canonicalize_shopping_food_name(plural, {})
+        # La forma plural puede o no colapsar a la singular (no hay regla familiar para estos 4);
+        # lo que se exige es que se quede DENTRO de su familia y no caiga en la de otro.
+        canon_plural = sc.canonicalize_shopping_food_name(plural, {})
+        assert canon_plural in (singular, plural), (
+            f"'{plural}' resolvió a '{canon_plural}', fuera de su familia — una regla de la cola "
+            f"de consolidación se lo llevó a otro alimento")
+        resueltos[singular] = singular
+        resueltos.setdefault(plural, canon_plural)
+    # Ningún par de familias puede compartir canónico.
+    canonicos = {sing: sc.canonicalize_shopping_food_name(sing, {}) for sing, _ in familias}
+    assert len(set(canonicos.values())) == len(familias), (
+        f"dos de los 4 alimentos colapsan al mismo canónico: {canonicos}")
 
 
 def test_text_demand_g_map_matchea_nombre_canonico_no_crudo(monkeypatch):

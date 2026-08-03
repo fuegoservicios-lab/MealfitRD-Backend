@@ -192,7 +192,16 @@ def test_alimento_sano_con_token_prohibido_dentro_no_se_filtra():
 def test_ningun_alimento_del_catalogo_cae_por_subcadena():
     """Barrido sobre los 4 catálogos REALES: todo alimento donde subcadena y límite-de-palabra
     discrepan debe quedar FUERA del filtro. Se exige que el barrido no sea vacío (si no, el
-    test no probaría nada) y que contenga el caso documentado."""
+    test no probaría nada) y que contenga el caso documentado.
+
+    [review final audit-v7-p1 · 2026-08-03 · T6] Aquí vivía `assert wb is False` DENTRO de
+    `if naive and not wb:` — verdadera por álgebra (`_token_matches_wb` está anotada `-> bool` y
+    solo retorna literales), o sea inalcanzable como fallo. Daba la impresión de que el barrido
+    comprobaba algo por alimento cuando lo único que probaba eran las dos líneas finales.
+    Sustituida por la comprobación que el docstring ya prometía y el cuerpo no hacía: se recoge
+    también el complemento (`naive and wb` — subcadena Y límite de palabra coinciden) y se afirma
+    que TODO alimento de ese complemento sí es filtrado por el matcher real. Así el barrido
+    contrasta las dos ramas y no solo una."""
     grupos = (
         (DOMINICAN_PROTEINS, ah._CURED_OR_PROCESSED_TOKENS),
         (DOMINICAN_PROTEINS, ah._PROCESSED_MEAT_KEYWORDS),
@@ -200,19 +209,28 @@ def test_ningun_alimento_del_catalogo_cae_por_subcadena():
         (DOMINICAN_CARBS, ah._CURED_OR_PROCESSED_TOKENS),
         (DOMINICAN_VEGGIES_FATS, ah._HIGH_GI_FRUITS),
     )
-    divergencias = []
+    divergencias = []      # subcadena dice sí, límite-de-palabra dice no → NO se filtra
+    coincidencias = []     # ambos dicen sí → SÍ se filtra
     for catalogo, tokens in grupos:
         for food in catalogo:
             n = strip_accents(str(food).lower())
             naive = any(strip_accents(str(t).lower()) in n for t in tokens)
             wb = ah._token_matches_wb(food, tokens)
-            if naive and not wb:
+            if naive and wb:
+                coincidencias.append((food, tokens))
+            elif naive:
                 divergencias.append(food)
-                assert wb is False  # el filtro NO puede excluirlo
     assert divergencias, (
         "el barrido no encontró ninguna colisión de subcadena en el catálogo — el test sería "
         "vacío; añade el caso a mano antes de aceptarlo")
     assert "Espinacas" in divergencias, f"colisiones detectadas: {divergencias!r}"
+    # El complemento: donde los dos operadores coinciden, el filtro DEBE morder. Si el
+    # word-boundary se volviera un no-op (o se relajara a "nunca matchea"), `divergencias`
+    # crecería y esta lista se vaciaría — y sin esta línea el test seguiría verde.
+    assert coincidencias, (
+        "ningún alimento del catálogo matchea por AMBOS operadores: el matcher se volvió un no-op")
+    for food, tokens in coincidencias:
+        assert ah._token_matches_wb(food, tokens) is True, food
 
 
 def test_los_matches_legitimos_siguen_vivos():
