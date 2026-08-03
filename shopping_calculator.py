@@ -2532,6 +2532,20 @@ SKU_FLOOR_MAX_UNDER_PCT = _knob_env_float(
 PKG_COVER_NOTE_MIN = _knob_env_float(
     "MEALFIT_PKG_COVER_NOTE_MIN", 0.95, lambda v: 0.0 <= v <= 1.0)
 
+# [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Umbral bajo el cual la cantidad FINAL resuelta por
+# `apply_smart_market_units` (`base_qty`, gramos) queda por debajo de lo que las recetas piden
+# (`text_demand_g`, mismo parse que usa el guard — `expected_sum_from_recipes` threaded desde
+# `get_shopping_list_delta`) y NINGÚN cap conocido (`_CAPS_APPLIED_LAST_RUN`) lo explica. Caso
+# medido en prod: plan 5f4bb17e, receta "600 g de espárragos" en una cena vs lista semanal
+# 583.33 g (103% de la compra semanal en una sola cena) con `capped_by=null` — espárragos no
+# vive en ningún dict de cap por categoría (P5-VEG-CAP, P6-*), así que el déficit llegaba mudo.
+# Cuando dispara, estampa `capped_by="qty_reconcile_v7"` SINTÉTICO para que el bloque de
+# P1-CAPPED-STAPLE-HONESTY (que ya sabe componer "alcanza ~N de 30 días — recompra") haga el
+# trabajo — no se reimplementa el copy. Clamp (0, 1]: en 1.0 sólo dispara con déficit exacto (no
+# realista); no se permite <=0 (compraría 0 y aun así "cubriría").
+QTY_SHORTFALL_NOTE_MIN = _knob_env_float(
+    "MEALFIT_QTY_SHORTFALL_NOTE_MIN", 0.9, lambda v: 0.0 < v <= 1.0)
+
 # ═══════════════════════════════════════════════════════════════
 # Helpers para SKU-Aware Sizing (P3)
 # ═══════════════════════════════════════════════════════════════
@@ -3947,7 +3961,7 @@ def _purchase_covers_need(item: dict, need_g: float) -> bool:
     except Exception:
         return False
 
-def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None, cycle_days: int = 7):
+def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw_qty: float, master_item: dict = None, cycle_days: int = 7, text_demand_g: float = None):
     """Motor determinístico de unidades de mercado dominicano.
 
     Flujo de resolución (4 bloques, sin hardcoded weights):
@@ -3965,6 +3979,15 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     biweekly/monthly (el multiplicador de ciclo ya viene aplicado ANTES de esta función, así que
     esta función no puede inferirlo). Sólo afecta el copy de la nota "alcanza ~N de M días —
     recompra"; NO afecta ninguna decisión de cantidad/floor-ceil.
+
+    `text_demand_g` [P1-VEG-BACKFILL-HONESTY · 2026-08-02]: demanda en GRAMOS que las recetas
+    piden para este alimento (mismo parse que usa el coherence guard —
+    `expected_sum_from_recipes` + `_normalize_food_units_to_base`, threaded desde
+    `get_shopping_list_delta`/`aggregate_and_deduct_shopping_list`). Default `None` = no-op
+    (comportamiento previo byte-idéntico). Si viene y NINGÚN cap real ya explica el déficit
+    (`_cap_hit` de P1-CAPPED-STAPLE-HONESTY sigue `None`), y `base_qty` resuelve por debajo de
+    `QTY_SHORTFALL_NOTE_MIN × text_demand_g`, se estampa `capped_by="qty_reconcile_v7"` sintético
+    para que el bloque de abajo componga la misma nota "alcanza ~N de 30 días — recompra".
     """
     import math
     from constants import UNIT_WEIGHTS
@@ -4655,6 +4678,37 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                             f"'{str(name)[:40]}': {type(_cap_e).__name__}: {str(_cap_e)[:120]}")
             _cap_hit = None
 
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Backstop: si NINGÚN cap real explicó el déficit
+    # (`_cap_hit` sigue `None` — no pisamos un cap real, decisión #1 del riesgo), comparar la
+    # cantidad final resuelta (`base_qty`, en gramos) contra lo que las recetas piden
+    # (`text_demand_g`, mismo parse que usa el guard). Caso medido en prod: espárragos no vive en
+    # `_VEG_PER_WEEK_PER_PERSON` (P5-VEG-CAP) ni en ningún otro cap por categoría — el déficit
+    # llegaba mudo (`capped_by=null`) aunque una sola cena agotara el 103% de la compra semanal.
+    # Reusa `_coherence_base_fields` (misma fuente que `result["base_qty"]` más abajo) en vez de
+    # re-derivar la conversión: una sola definición de "cuánto se está comprando en gramos".
+    _base_fields = _coherence_base_fields(raw_qty, unit_str, weight_in_lbs)
+    if _cap_hit is None and text_demand_g is not None:
+        try:
+            _td_g = float(text_demand_g)
+        except (TypeError, ValueError):
+            _td_g = 0.0
+        if _td_g > 0:
+            _bq = _base_fields.get("base_qty")
+            _bu = str(_base_fields.get("base_unit") or "").strip().lower()
+            _bq_g = None
+            if _bq is not None:
+                if _bu in ("g", "gr", "gramo", "gramos"):
+                    _bq_g = float(_bq)
+                elif _bu in ("lb", "lbs"):
+                    _bq_g = float(_bq) * _LB_TO_G
+            if _bq_g is not None and _bq_g < QTY_SHORTFALL_NOTE_MIN * _td_g:
+                _cap_hit = {
+                    "food_lower": str(name).lower(),
+                    "reason": "qty_reconcile_v7",
+                    "pre_value": _td_g,
+                    "post_value": _bq_g,
+                }
+
     result = {
         "name": name,
         "market_qty": formatted_market_qty,
@@ -4691,7 +4745,10 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         # Es el mismo modo de fallo que dejó muerto P1-CAPPED-STAPLE-HONESTY: código presente,
         # efecto ausente, y solo se ve midiendo el resultado.
         # tooltip-anchor: P1-COHERENCE-BASE-QTY
-        **_coherence_base_fields(raw_qty, unit_str, weight_in_lbs),
+        # [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Reusa `_base_fields` (ya computado arriba para el
+        # backstop de texto) en vez de llamar `_coherence_base_fields` una segunda vez — misma
+        # función pura, mismo resultado, sin doble trabajo.
+        **_base_fields,
     }
     if _cap_hit:
         try:
@@ -8680,7 +8737,7 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None):
     # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] `cycle_days` (NO confundir con `num_days`, que es
     # días GENERADOS del plan/chunk para `base_duration_scale`): días que representa la
     # necesidad total ya escalada (7/15/30, según `duration` weekly/biweekly/monthly) — viaja a
@@ -11228,7 +11285,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 _n_lower = name.lower()
                 if any(kw in _n_lower for kw in ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz']):
                     logging.info(f"  🔬 [RAW LBS] {name}: {weight_in_lbs:.4f} lbs (mult={multiplier})")
-                market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item, cycle_days=_cycle_days_for_note)
+                market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item, cycle_days=_cycle_days_for_note, text_demand_g=(text_demand_g_map or {}).get(name))
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY redondeado (lo que
                 # se compra), no desde weight_in_lbs crudo -> cierra el sub-costeo de staples por-peso.
                 item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
@@ -11270,7 +11327,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 if added and u.lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.', 'cabeza', 'cabezas', 'diente', 'dientes', 'mazo', 'mazos']:
                     logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por {u} para '{name}' (ya tiene entrada por peso)")
                     continue
-                market_obj = apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note)
+                market_obj = apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note, text_demand_g=(text_demand_g_map or {}).get(name))
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY (envase/carton
                 # redondeado); cubre huevo medio-carton (parsea "(N uds.)" x precio/30) y envases.
                 item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
@@ -11599,11 +11656,39 @@ def get_shopping_list_delta(
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
         
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Demanda de las RECETAS por alimento, en gramos —
+    # mismo parse que usa el coherence guard (`expected_sum_from_recipes`, misma función que
+    # `compare_expected_vs_aggregated` consume) y misma normalización de unidades
+    # (`_normalize_food_units_to_base`, que unifica g/kg/ml/taza/cda dentro del mismo sistema
+    # físico). Se calcula con el MISMO `effective_multiplier` que escala `all_ingredients` abajo —
+    # ambos lados de la comparación quedan a la misma escala. Threaded hasta
+    # `apply_smart_market_units` para que, si la cantidad final resuelta cae por debajo de
+    # `QTY_SHORTFALL_NOTE_MIN × texto` sin que ningún cap real lo explique, se estampe
+    # `capped_by="qty_reconcile_v7"` sintético. Fail-open: si el parse falla, el mapa queda vacío
+    # y el mecanismo nuevo es no-op (comportamiento previo).
+    try:
+        _text_demand_g_map = {
+            _food: _units.get("g")
+            for _food, _units in (
+                {
+                    f: _normalize_food_units_to_base(u or {})
+                    for f, u in (expected_sum_from_recipes(
+                        plan_result, apply_yield=False, multiplier=effective_multiplier,
+                    ) or {}).items()
+                }
+            ).items()
+            if isinstance(_units.get("g"), (int, float)) and _units.get("g", 0) > 0
+        }
+    except Exception as _tdg_exc:
+        logging.warning(f"[P1-VEG-BACKFILL-HONESTY] text_demand_g_map falló (fail-open, "
+                        f"no-op): {type(_tdg_exc).__name__}: {_tdg_exc}")
+        _text_demand_g_map = {}
+
     # [P1-PERSON-WEEKS-CYCLE-AWARE · 2026-07-30] `num_days` viaja al agregador porque los topes por
     # persona-semana necesitan deshacer el `base_duration_scale = 7/num_days` que se aplica tres
     # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
     # apretados en un ciclo de 14 días.
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days, text_demand_g_map=_text_demand_g_map)
 
     # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Segunda pasada SOLO cuando hay ventana
     # de viaje: mismo agregador, mismos descuentos de inventario, misma aritmética —

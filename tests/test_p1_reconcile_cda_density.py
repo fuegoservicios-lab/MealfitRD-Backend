@@ -725,4 +725,15 @@ def test_marker_anclado_en_fuente():
 
 
 def test_last_known_pfix_bumpeado():
-    assert '_LAST_KNOWN_PFIX = "P1-RECONCILE-CDA-DENSITY · 2026-08-02"' in _APP
+    """[REESCRITO · 2026-08-02, P1-VEG-BACKFILL-HONESTY] Antes afirmaba que `_LAST_KNOWN_PFIX`
+    contuviera ESTE P-fix — imposible de sostener: la convención del repo obliga a bumpear ese
+    marker en CADA P-fix (`test_p3_1_last_known_pfix_freshness`), así que la aserción exacta solo
+    podía pasar en el commit donde este P-fix fue el último; el siguiente bump (el mismo día) la
+    rompe permanentemente. Mismo rewrite que `test_p1_account_delete_1.py::test_marker_bumped`
+    (2026-07-26): el contrato verificable desde HEAD es que el marker exista con forma válida, no
+    que sea literalmente el de este P-fix."""
+    import re
+    linea = _APP.split("_LAST_KNOWN_PFIX = ")[1].split("\n")[0].strip()
+    assert re.match(r'^"P\d+[A-Z0-9\-]* · \d{4}-\d{2}-\d{2}"$', linea), (
+        f"_LAST_KNOWN_PFIX con formato inválido: {linea!r}. Formato: \"Pn-SLUG · YYYY-MM-DD\"."
+    )

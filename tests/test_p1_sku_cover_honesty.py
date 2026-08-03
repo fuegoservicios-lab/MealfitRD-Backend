@@ -359,21 +359,26 @@ def test_cycle_days_plumbing_local():
     """`cycle_days` se propaga desde `get_shopping_list_delta` -> `aggregate_and_deduct_shopping_
     list` -> los 2 call-sites de `apply_smart_market_units`, DENTRO de este archivo. [RONDA 2 ·
     ítem 1] Los ~26 call-sites externos AHORA SÍ pasan el valor real — ver
-    `test_callsites_de_periodo_llevan_cycle_days` para la verificación cross-file."""
+    `test_callsites_de_periodo_llevan_cycle_days` para la verificación cross-file.
+
+    [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Los 2 call-sites ganaron un kwarg más
+    (`text_demand_g=...`) el mismo día — el substring exacto se actualiza para reflejar la firma
+    real en vez de quedar ciego a un rename de `cycle_days=_cycle_days_for_note)` a
+    `cycle_days=_cycle_days_for_note, text_demand_g=...)`."""
     from pathlib import Path
     src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
     i = src.index("def aggregate_and_deduct_shopping_list(")
     assert "cycle_days: int | None = None" in src[i:i + 400]
     assert src.count(
-        "apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item, cycle_days=_cycle_days_for_note)"
+        "apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item, cycle_days=_cycle_days_for_note, text_demand_g=(text_demand_g_map or {}).get(name))"
     ) == 1
     assert src.count(
-        "apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note)"
+        "apply_smart_market_units(name, 0.0, u, q, master_item, cycle_days=_cycle_days_for_note, text_demand_g=(text_demand_g_map or {}).get(name))"
     ) == 1
     j = src.index("def get_shopping_list_delta(")
     j_end = src.index("\ndef ", j + 10)
     assert "cycle_days: int | None = None," in src[j:j_end]
-    assert "cycle_days=cycle_days)" in src[j:j_end]
+    assert "cycle_days=cycle_days, text_demand_g_map=_text_demand_g_map)" in src[j:j_end]
     # [RONDA 2 · ítem 1] SSOT hermano de `cycle_qty_multiplier`, misma tabla
     # `_CYCLE_DAYS_BY_DURATION` — evita que un callsite escriba un literal `15`/`30` suelto que
     # pueda driftear de la tabla que ya usa `cycle_qty_multiplier`.
