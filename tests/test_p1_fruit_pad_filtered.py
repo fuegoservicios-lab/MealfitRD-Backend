@@ -103,6 +103,9 @@ def test_el_padding_consulta_el_pool_filtrado():
     with open(os.path.join(here, "ai_helpers.py"), encoding="utf-8") as f:
         src = f.read()
     i = src.index("_DEFAULT_DR_FRUITS = (")
-    blk = src[i:src.index("chosen_proteins = unique_proteins[:3]", i)]
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] El corte era `unique_proteins[:3]`; el 3 literal pasó a
+    # `_dc` (días del chunk). Solo cambia el ancla que DELIMITA el bloque — lo que este test
+    # protege (que el padding consulte `filtered_fruits`) se comprueba igual.
+    blk = src[i:src.index("chosen_proteins = unique_proteins[:_dc]", i)]
     assert "filtered_fruits" in blk, (
         "el padding de frutas no consulta el pool filtrado por alergias/dislikes/dieta")

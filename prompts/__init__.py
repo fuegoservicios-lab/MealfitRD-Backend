@@ -26,6 +26,9 @@ from prompts.preferences import (
     # [P2-SEEDER-DAYS-COUNT · 2026-08-03] La plantilla parametrizada por días del chunk.
     # `DETERMINISTIC_VARIETY_PROMPT` es su instancia de 3 días y sigue exportándose.
     build_deterministic_variety_prompt,
+    # SSOT de la etiqueta del día (0→A). `ai_helpers` la usa para el ancla liviana: dos tablas
+    # de letras divergen en el primer cambio.
+    option_letter,
 )
 
 # --- Meal Operations ---

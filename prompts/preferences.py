@@ -42,10 +42,19 @@ _OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _OPTION_DOTS = ("🔴", "🔵", "🟢", "🟡", "🟣", "🟠")
 
 
-def _option_letter(i: int) -> str:
+def option_letter(i: int) -> str:
     """Letra de la opción del día `i` (0→A). Más allá del alfabeto cae al ordinal — no puede
-    ocurrir con el cap `_MAX_DAYS_TO_GENERATE` (=6), pero un IndexError aquí tumbaría el nodo."""
+    ocurrir con el cap `_MAX_DAYS_TO_GENERATE` (=6), pero un IndexError aquí tumbaría el nodo.
+
+    PÚBLICA a propósito: `ai_helpers` etiqueta con ella las líneas del ancla liviana ("día A →
+    …"), y las dos etiquetas tienen que salir del MISMO sitio o divergen en cuanto alguien toque
+    el alfabeto. Cruzar la frontera de privacidad de otro módulo (`_option_letter`) es
+    exactamente el acoplamiento que invita a ese drift."""
     return _OPTION_LETTERS[i] if i < len(_OPTION_LETTERS) else str(i + 1)
+
+
+# Alias interno histórico: este módulo lo usa en sus propios helpers.
+_option_letter = option_letter
 
 
 def _variety_option_line(i: int) -> str:

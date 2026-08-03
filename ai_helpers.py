@@ -13,9 +13,11 @@ import concurrent.futures
 # Prompts
 from prompts import (
     TITLE_GENERATION_PROMPT,
-    DETERMINISTIC_VARIETY_PROMPT,
-    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] plantilla parametrizada por días del chunk.
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] plantilla parametrizada por días del chunk. Sustituye
+    # al import de `DETERMINISTIC_VARIETY_PROMPT`, que se quedó sin consumo aquí (sigue exportado
+    # por `prompts/__init__` como la instancia de 3 días).
     build_deterministic_variety_prompt,
+    option_letter as _prompt_option_letter,
     RECIPE_EXPANSION_PROMPT
 )
 
@@ -2224,8 +2226,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                           for s in _light_slots[:_dc]]
                     while len(_l) < _dc:
                         _l.append(_l[-1] if _l else "")
-                    from prompts.preferences import _option_letter as _ol
-                    _light_dias = " · ".join(f"día {_ol(_i)} → {_l[_i]}" for _i in range(_dc))
+                    # SSOT de la etiqueta del día: la misma función que numera las OPCIONES del
+                    # prompt (importada arriba). Una segunda tabla de letras diverge en cuanto
+                    # alguien toque el alfabeto, y las dos frases hablarían de días distintos.
+                    _light_dias = " · ".join(
+                        f"día {_prompt_option_letter(_i)} → {_l[_i]}" for _i in range(_dc))
                     _light_block = (
                         f"\n     ⭐ ANCLA LIVIANA SORTEADA POR DÍA (prioriza ESTA sobre las viñetas "
                         f"genéricas de abajo): {_light_dias}.")

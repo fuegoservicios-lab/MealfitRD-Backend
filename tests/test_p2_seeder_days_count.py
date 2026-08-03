@@ -262,13 +262,84 @@ def test_el_prompt_no_promete_mas_proteinas_distintas_de_las_que_hay(monkeypatch
 
 # ───────────── 5 · el caller pasa el tamaño REAL del chunk ─────────────
 
-def test_build_shared_context_pasa_el_tamano_del_chunk():
-    """El dato existe (`form_data['_days_to_generate']`, el mismo que usan `plan_skeleton_node`
-    y `generate_days_parallel_node`). Sin pasarlo, todo lo anterior queda INERTE en producción."""
+# `nutrition` mínimo que `_build_shared_context` recorre entero (`build_nutrition_context` y
+# `build_minimal_correction_context` indexan estas claves con `[...]`, no con `.get`).
+_NUTRICION_MINIMA = {
+    "bmr": 1600, "tdee": 2200, "target_calories": 2000, "calories": 2000,
+    "goal_label": "Ganar músculo", "kinematics": {}, "calculation_details": {}, "alergias": [],
+    "macros": {"protein_g": 150, "carbs_g": 200, "fats_g": 60, "fiber_g": 30,
+               "protein_str": "150g", "carbs_str": "200g", "fats_str": "60g", "fiber_str": "30g"},
+}
+
+
+def _espiar_days_count(monkeypatch, dias_del_chunk):
+    """EJECUTA `_build_shared_context` con un spy sobre el seeder y devuelve los kwargs reales.
+
+    El spy se instala en `ai_helpers.get_deterministic_variety_prompt` (no en el namespace del
+    orquestador) porque el callsite hace `from ai_helpers import ...` DENTRO del cuerpo de la
+    función: resuelve el nombre en cada llamada."""
+    import ai_helpers
+    import graph_orchestrator as go
+
+    capturado: dict = {}
+
+    def _spy(*args, **kwargs):
+        capturado["args"] = args
+        capturado["kwargs"] = kwargs
+        return ""
+
+    monkeypatch.setattr(ai_helpers, "get_deterministic_variety_prompt", _spy)
+    estado = {
+        "form_data": {"user_id": "guest", "mainGoal": "gain_muscle",
+                      "_days_to_generate": dias_del_chunk},
+        "nutrition": dict(_NUTRICION_MINIMA),
+    }
+    go._build_shared_context(estado)
+    return capturado
+
+
+@pytest.mark.parametrize("dias", [3, 4, 6])
+def test_build_shared_context_pasa_el_tamano_del_chunk(monkeypatch, dias):
+    """⚠️ La afirmación MÁS importante de la tarea, y por eso se EJECUTA en vez de parsearse:
+    sin este cableado todo lo demás queda INERTE en producción y un test parser-based no lo
+    notaría (es la lección «un test parser-based no ejecuta nada» que ya costó un P-fix aquí).
+
+    Los tres tamaños son los que `split_with_absorb` produce de verdad: 3 (chunk inicial),
+    4 (el dominante en 15d/30d) y 6 (el leftover absorbido de 21d)."""
+    cap = _espiar_days_count(monkeypatch, dias)
+    assert cap, "`_build_shared_context` no llegó a invocar el seeder"
+    assert cap["kwargs"].get("days_count") == dias, (
+        f"el callsite pasó days_count={cap['kwargs'].get('days_count')!r} para un chunk de "
+        f"{dias} días — el fix no llega al pipeline real")
+    # y el canal tipado del reparto (P2-VEGGIE-CHANNEL-DAYGEN / P2-SEEDER-PAIRS-CHANNEL) sigue vivo
+    assert isinstance(cap["kwargs"].get("out_assignment"), dict), (
+        "se perdió `out_assignment`: el reparto dejaría de viajar como DATO al esqueleto")
+
+
+def test_sin_days_to_generate_el_caller_cae_al_chunk_size(monkeypatch):
+    """El path no-chunked (planes ≤3 días) no setea `_days_to_generate`: debe caer a
+    `PLAN_CHUNK_SIZE`, no a `None` ni a 0."""
+    import ai_helpers
+    import graph_orchestrator as go
+    from constants import PLAN_CHUNK_SIZE
+
+    capturado: dict = {}
+    monkeypatch.setattr(ai_helpers, "get_deterministic_variety_prompt",
+                        lambda *a, **k: capturado.update(k) or "")
+    go._build_shared_context({
+        "form_data": {"user_id": "guest", "mainGoal": "gain_muscle"},
+        "nutrition": dict(_NUTRICION_MINIMA),
+    })
+    assert capturado.get("days_count") == PLAN_CHUNK_SIZE
+
+
+def test_el_callsite_lee_days_to_generate_y_no_otra_fuente():
+    """Defensa barata y complementaria al spy: la fuente del dato debe ser la MISMA clave que
+    usan `plan_skeleton_node` y `generate_days_parallel_node`. El spy prueba que llega un
+    número; esto prueba de DÓNDE sale (un `days_count=4` hardcodeado pasaría el spy)."""
     i = _GO.index("variety_prompt = get_deterministic_variety_prompt(")
     bloque = _GO[i - 1500:i + 500]
-    assert "days_count=" in bloque, (
-        "el callsite no pasa `days_count` — el fix no llega al pipeline real")
+    assert "days_count=" in bloque
     assert "_days_to_generate" in bloque, (
         "el tamaño del chunk debe venir de `_days_to_generate`, no inventarse")
 
@@ -289,6 +360,23 @@ def test_el_reparto_no_tiene_el_tres_hardcodeado():
     src = inspect.getsource(a._rotate_pairs)
     assert "range(days)" in src, "`_rotate_pairs` volvió a fijar el número de días"
     assert "for i in range(3)" not in src
+
+
+def test_la_letra_del_dia_sale_de_un_solo_sitio(monkeypatch):
+    """El prompt nombra el día DOS veces con letra: en la etiqueta «OPCIÓN D» y en el ancla
+    liviana («día D → …»). Si cada una lleva su propia tabla de letras, divergen en cuanto
+    alguien toque el alfabeto y las dos frases hablarían de días distintos. Funcional: se
+    enciende `MEALFIT_LIGHT_PROTEIN_SEED` (OFF por default) para que el ancla exista."""
+    monkeypatch.setattr(a, "LIGHT_PROTEIN_SEED", True)
+    p = _prompt(days_count=4)
+    assert "ANCLA LIVIANA SORTEADA POR DÍA" in p, "el knob no encendió el bloque"
+    letras_ancla = set(re.findall(r"día ([A-Z]) →", p))
+    letras_opcion = set(re.findall(r"OPCIÓN ([A-Z]) \(Alternativa", p))
+    assert letras_ancla == letras_opcion == {"A", "B", "C", "D"}, (
+        f"ancla={sorted(letras_ancla)} vs opciones={sorted(letras_opcion)}")
+    # y `ai_helpers` no puede llevar su propio alfabeto: usa el helper público del módulo de prompts
+    assert "ABCDEFG" not in _AH, "ai_helpers duplicó la tabla de letras en vez de importarla"
+    assert "option_letter" in _AH
 
 
 def test_las_opciones_del_prompt_se_generan_no_se_copian():
