@@ -4720,9 +4720,17 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     # el day-generator pueda honrarlo. Antes esa decisión solo existía en la prosa del prompt del
     # planner, y su salida tipada no tenía dónde transportarla.
     _seeder_assignment: dict = {}
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] (audit solver+seeder v7) El seeder repartía SIEMPRE para
+    # 3 días mientras el chunk dominante de los planes largos es de 4 (`split_with_absorb`:
+    # 15d → [3,4,4,4], 30d → [3,4,4,4,4,4,4,3], 21d → [3,4,4,4,6]). Como el estampado al esqueleto
+    # es por módulo, el día índice 3 recibía el reparto del día 0 — proteína, carbos, vegetales y
+    # fruta clonados. Se pasa el tamaño REAL del chunk, la misma expresión que usan
+    # `plan_skeleton_node` y `generate_days_parallel_node` sobre este mismo `form_data`.
+    _seeder_days = form_data.get("_days_to_generate", PLAN_CHUNK_SIZE) or PLAN_CHUNK_SIZE
     variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid,
                                                       rejection_reasons=rejection_reasons,
-                                                      out_assignment=_seeder_assignment)
+                                                      out_assignment=_seeder_assignment,
+                                                      days_count=_seeder_days)
     # [P1-MED-CONTEXT-DAYGEN · 2026-06-22] Las directivas clínicas deterministas (condición +
     # medicación) se computan en un bloque PROPIO (`clinical_directives_context`) para que lleguen
     # NO SOLO al esqueleto (vía variety_prompt, abajo) sino TAMBIÉN al day-generator de producción

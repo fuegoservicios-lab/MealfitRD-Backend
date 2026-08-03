@@ -147,7 +147,10 @@ def test_el_pad_de_frutas_usa_la_misma_clave_en_ambos_chequeos():
     import ai_helpers as ah
 
     src = inspect.getsource(ah.get_deterministic_variety_prompt)
-    i = src.index("while len(unique_fruits) < 4:")
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] El objetivo del pad pasó de `4` fijo a `_dc + 1`
+    # (una fruta más que días del chunk). Solo cambia el ancla para localizar el bloque; lo que
+    # este test protege —que ambos chequeos usen `_fruit_key`— se comprueba igual.
+    i = src.index("while len(unique_fruits) < _dc + 1:")
     blk = src[i: i + 900]
     codigo = "\n".join(l for l in blk.splitlines() if not l.lstrip().startswith("#"))
     assert "{f.lower() for f in unique_fruits}" not in codigo, (
@@ -159,15 +162,32 @@ def test_el_pad_de_frutas_usa_la_misma_clave_en_ambos_chequeos():
 # ═════════════ F33 · P3-VEGGIE-SLOTS-CONSUME-SIX ═════════════
 
 def test_los_seis_vegetales_sorteados_se_usan():
-    """Se sorteaban 6 y la rotación consumía 4: 2 picks inertes y el log decía 6."""
+    """Se sorteaban 6 y la rotación consumía 4: 2 picks inertes y el log decía 6.
+
+    [P2-SEEDER-DAYS-COUNT · 2026-08-03] El literal `(_vg6[4], _vg6[5])` que este test anclaba se
+    generalizó a `2*_dc` vegetales (2 por día del chunk, que ya no son siempre 3 días). La
+    comprobación pasa de textual a FUNCIONAL sobre el reparto publicado en `out_assignment`:
+    verifica lo mismo —cero picks inertes— y además para cualquier tamaño de chunk, que es
+    estrictamente más fuerte que el ancla anterior."""
     import inspect
     import ai_helpers as ah
 
     src = inspect.getsource(ah.get_deterministic_variety_prompt)
-    assert "_vg6" in src, "falta el reparto en 3 pares disjuntos sobre los 6 sorteados"
-    i = src.index("_vg6 = ")
-    blk = src[i: i + 400]
-    assert "(_vg6[4], _vg6[5])" in blk, "los dos últimos vegetales siguen sin asignarse a ningún día"
+    assert "_vg6" in src, "falta el reparto en pares disjuntos sobre los vegetales sorteados"
+    assert "_veg_slots = [(_vg6[2 * _i], _vg6[2 * _i + 1]) for _i in range(_dc)]" in src, (
+        "los pares disjuntos ya no salen de los 2×días sorteados"
+    )
+    for dias in (3, 4, 6):
+        asignacion: dict = {}
+        ah.get_deterministic_variety_prompt("", {"mainGoal": "gain_muscle"}, None,
+                                            out_assignment=asignacion, days_count=dias)
+        pares = asignacion.get("veggie_pairs") or []
+        assert len(pares) == dias, f"{dias} días → {len(pares)} par(es) de vegetales"
+        usados = [v for par in pares for v in par]
+        assert len(set(usados)) == 2 * dias, (
+            f"con {dias} días se sortean {2 * dias} vegetales y solo se asignan "
+            f"{len(set(usados))}: quedan picks inertes"
+        )
 
 
 # ═════════════ C1 · P3-LIGHT-ANCHOR-NOT-BLOCKED ═════════════

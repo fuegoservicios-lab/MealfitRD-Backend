@@ -14,6 +14,8 @@ import concurrent.futures
 from prompts import (
     TITLE_GENERATION_PROMPT,
     DETERMINISTIC_VARIETY_PROMPT,
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] plantilla parametrizada por días del chunk.
+    build_deterministic_variety_prompt,
     RECIPE_EXPANSION_PROMPT
 )
 
@@ -29,7 +31,10 @@ from constants import (
     CARB_SYNONYMS as carb_synonyms,
     VEGGIE_FAT_SYNONYMS as veggie_fat_synonyms,
     FRUIT_SYNONYMS as fruit_synonyms,
-    _get_fast_filtered_catalogs
+    _get_fast_filtered_catalogs,
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] techo del reparto = el mismo cap que el orquestador
+    # aplica a `_days_to_generate` (2×PLAN_CHUNK_SIZE).
+    PLAN_CHUNK_SIZE,
 )
 from db import (get_user_profile, update_user_health_profile, update_user_health_profile_atomic,
                 get_user_ingredient_frequencies,
@@ -449,7 +454,7 @@ def _n_gate_fruits(fruits) -> int:
         return 0
 
 
-def _rotate_fruit_pairs(fruits):
+def _rotate_fruit_pairs(fruits, days: int = 3):
     """Reparte el pool en (fruta_a, fruta_b) por día — DOS distintas cada día.
 
     Día i recibe `(fruits[i], fruits[i+1])` sobre la rotación, así que 4 frutas distintas cubren 3
@@ -469,7 +474,8 @@ def _rotate_fruit_pairs(fruits):
         return None
     # reconocidas primero, conservando el orden relativo (el shuffle previo ya dio la aleatoriedad)
     ordenadas = [f for f in base if _ffn(f)] + [f for f in base if not _ffn(f)]
-    return _rotate_pairs(ordenadas)
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] `days` se delega íntegro al helper compartido.
+    return _rotate_pairs(ordenadas, days=days)
 
 
 # [P1-BARIATRIC-PROTEIN-DENSITY] Nueces/semillas ENTERAS: riesgo OBSTRUCTIVO del pouch. Las formas
@@ -737,7 +743,7 @@ def _pick_light_anchor_candidates(pool, k: int = 4) -> list:
     return random.sample(_items, min(int(k), len(_items)))
 
 
-def _rotate_pairs(items):
+def _rotate_pairs(items, days: int = 3):
     """[P1-CARB-SEEDER-PAIRS · 2026-07-27] Núcleo de la rotación en pares, extraído de
     `_rotate_fruit_pairs` para que carbos y frutas usen LA MISMA: día i recibe
     `(items[i], items[i+1])` sobre la rotación circular.
@@ -754,26 +760,78 @@ def _rotate_pairs(items):
     cazado en vivo (05:48) un pool colapsado a ['Arroz Blanco']×3 — len 3 pasaba el guard
     y cada día recibía (Arroz, Arroz): la "2ª base distinta" era LA MISMA, derrotando el
     propósito del par. Con dedupe, el degenerado cae al fallback del caller ("otra base
-    distinta del catálogo"), que sí empuja variedad."""
+    distinta del catálogo"), que sí empuja variedad.
+
+    [P2-SEEDER-DAYS-COUNT · 2026-08-03] `days` (default 3 = comportamiento previo para los
+    callers no migrados) en vez del `range(3)` hardcodeado. El chunk DOMINANTE de los planes
+    largos es de 4 días (`split_with_absorb`: 15d → [3,4,4,4]) y el estampado al esqueleto
+    reparte por módulo, así que con 3 pares el día índice 3 recibía el reparto del día 0.
+    Con el pool más corto que `days` la rotación se repite (degradación deliberada, ver el
+    docstring de `get_deterministic_variety_prompt`), pero nunca produce dos días CONSECUTIVOS
+    con el mismo par: con n≥2 elementos `(base[i], base[i+1]) != (base[i+1], base[i+2])`.
+    tooltip-anchor: P2-SEEDER-DAYS-COUNT"""
     base = [x for x in (items or []) if x and str(x).strip()]
     _vistos: set = set()
     base = [x for x in base if not (x in _vistos or _vistos.add(x))]
     if len(base) < 2:
         return None
     n = len(base)
-    return [(base[i % n], base[(i + 1) % n]) for i in range(3)]
+    days = max(1, int(days or 1))
+    return [(base[i % n], base[(i + 1) % n]) for i in range(days)]
 
 
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None,
                                      rejection_reasons: list = None,
-                                     out_assignment: dict = None) -> str:
+                                     out_assignment: dict = None,
+                                     *, days_count: int = 3) -> str:
     # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] `out_assignment` (opcional) recibe el reparto que el
     # seeder decide, como DATO además de como prosa. Hoy transporta `veggie_pairs`: el
     # day-generator es quien escribe los ingredientes reales y no tenía forma de recibir esa
     # rotación (el esqueleto tipado no la declaraba), así que generaba ciego y caía en su default.
     # Opcional y no-mutante si el caller no lo pasa → cero impacto en los callers existentes.
-    """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
+    """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM.
+
+    [P2-SEEDER-DAYS-COUNT · 2026-08-03] (audit solver+seeder v7) `days_count` = días del chunk que
+    se está generando. Keyword-only con default 3 (= comportamiento previo) para que ningún caller
+    no migrado cambie de conducta.
+
+    ## Por qué existe
+
+    Todo el reparto estaba fijado a 3 días: `_rotate_pairs` con `range(3)`, tres opciones A/B/C
+    en el prompt y `num_proteins_to_pick = min(3, ...)`. Pero `constants.split_with_absorb`
+    reparte 15d → [3,4,4,4] y 30d → [3,4,4,4,4,4,4,3]: la forma DOMINANTE de chunk es de 4 días.
+    Como el orquestador estampa el reparto al esqueleto por módulo
+    (`_pairs_all[_di % len(_pairs_all)]`), el día índice 3 recibía EXACTAMENTE el reparto del
+    día 0 — misma proteína, mismos carbos, mismos vegetales, misma fruta. En un plan de 30 días
+    son ~6 pares de días clonados por construcción, y el contrato «1 proteína distinta por día»
+    de `variety_level=max` (auto-promovido para gain_muscle/lose_fat y bariátrica) era
+    aritméticamente insatisfacible en el 4º día de cada chunk.
+
+    ## Degradación deliberada con pool corto
+
+    Si el pool filtrado (alergias + dislikes + dieta + filtros clínicos) tiene menos elementos que
+    `days_count` —el caso real de los chunks de 6 días de un plan de 21— el reparto DEGRADA al
+    módulo de siempre: los días extra reciclan bases ya asignadas. No se emite ningún gate ni se
+    exige lo imposible; es la lección de P1-FRUIT-SEEDER-GATE-CONTRACT (una instrucción
+    insatisfacible no produce mejores planes, produce retries quemados). El prompt tampoco
+    PROMETE N proteínas distintas: enumera el reparto y ya.
+
+    Rollback sin redeploy: `MEALFIT_SEEDER_DAYS_COUNT=false` → 3 días fijos, byte-idéntico al
+    comportamiento previo. tooltip-anchor: P2-SEEDER-DAYS-COUNT
+    """
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
+    # El knob se lee en CADA llamada (no a nivel módulo) para que el rollback no necesite
+    # redeploy ni reimport, igual que MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN.
+    if not _env_bool("MEALFIT_SEEDER_DAYS_COUNT", True):
+        days_count = 3
+    try:
+        _dc = int(days_count or 3)
+    except (TypeError, ValueError):
+        _dc = 3
+    # Mismo techo que `graph_orchestrator._MAX_DAYS_TO_GENERATE` (2×PLAN_CHUNK_SIZE): un
+    # `_days_to_generate` corrupto no debe inflar el prompt ni el sorteo. Piso 1 (chunk de 1 día
+    # existe: `split_with_absorb` no lo produce, pero `/regenerate-day` sí genera de a uno).
+    _dc = max(1, min(_dc, PLAN_CHUNK_SIZE * 2))
     history_lower = history_text.lower() if history_text else ""
     history_normalized = strip_accents(history_lower)
     force_variety = bool(form_data.get("_force_variety")) if form_data else False
@@ -1045,15 +1103,21 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             f"(más proteínas distintas = menos repetición almuerzo↔cena)."
         )
     
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] `_dc` (días del chunk) en vez del 3 literal. En
+    # `standard` el 2 se QUEDA a propósito: ahí "2 proteínas" es una decisión de COSTO de
+    # supermercado (documentada arriba), no el techo aritmético que este fix corrige — el padding
+    # de más abajo las cicla hasta cubrir los `_dc` días.
     if variety_level == "max":
-        num_proteins_to_pick = min(3, len(available_proteins))   # 1 proteína distinta por día
-        num_carbs_to_pick = min(3, len(available_carbs))         # 1 carb distinto por día
-        num_veggies_to_pick = min(6, len(available_veggies))   # 2 vegetales distintos por día
-        logger.info(f"🎯 [ANTI MODE-COLLAPSE] variety_level=max → distribución máxima (3P/3C/3V)")
+        num_proteins_to_pick = min(_dc, len(available_proteins))   # 1 proteína distinta por día
+        num_carbs_to_pick = min(_dc, len(available_carbs))         # 1 carb distinto por día
+        num_veggies_to_pick = min(2 * _dc, len(available_veggies))   # 2 vegetales distintos por día
+        logger.info(f"🎯 [ANTI MODE-COLLAPSE] variety_level=max → distribución máxima "
+                    f"({num_proteins_to_pick}P/{num_carbs_to_pick}C/{num_veggies_to_pick}V "
+                    f"para {_dc} día(s))")
     else:
         num_proteins_to_pick = min(2, len(available_proteins))
         num_carbs_to_pick = min(2, len(available_carbs))
-        num_veggies_to_pick = min(6, len(available_veggies))   # 2 vegetales distintos por día
+        num_veggies_to_pick = min(2 * _dc, len(available_veggies))   # 2 vegetales distintos por día
     num_fruits_to_pick = min(2, len(available_fruits)) if available_fruits else 0
     
     # Pesos inversos: ingredientes menos usados tienen más probabilidad de ser elegidos.
@@ -1815,14 +1879,17 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
 
     # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
     # Si no se pudieron elegir 3, rellenamos ciclando lo que hay
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] Los objetivos del padding escalan con el chunk: `_dc`
+    # bases (1/día) y `2*_dc` vegetales (2/día). Sin esto el reparto seguiría teniendo material
+    # para 3 días aunque el helper pidiera 4 pares.
     _base_proteins = list(unique_proteins)
-    while len(unique_proteins) < 3:
+    while len(unique_proteins) < _dc:
         unique_proteins.append(_base_proteins[len(unique_proteins) % len(_base_proteins)])
     _base_carbs = list(unique_carbs)
-    while len(unique_carbs) < 3:
+    while len(unique_carbs) < _dc:
         unique_carbs.append(_base_carbs[len(unique_carbs) % len(_base_carbs)])
     _base_veggies = list(unique_veggies)
-    while len(unique_veggies) < 6:
+    while len(unique_veggies) < 2 * _dc:
         unique_veggies.append(_base_veggies[len(unique_veggies) % len(_base_veggies)])
     # [CROSS-DAY-FRUIT-DIVERSITY 2026-05-07] Bug observable plan 55da8e9b:
     # cuando el picker dejaba <3 frutas únicas, el padding usaba siempre
@@ -1864,7 +1931,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         _allowed_fruit_keys = {_fruit_key(_f) for _f in (filtered_fruits or [])}
         # [P1-FRUIT-SEEDER-GATE-CONTRACT] 4 y no 3: el reparto da 2 frutas distintas por día
         # rotando sobre 4, así la semana usa 4 frutas en vez de las 6 que costaría 2×3 sin reutilizar.
-        while len(unique_fruits) < 4:
+        # [P2-SEEDER-DAYS-COUNT · 2026-08-03] `_dc + 1` generaliza ese "4 para 3 días": con n+1
+        # frutas la rotación da n pares todos distintos (el último es (f[n-1], f[0])) y el día n-1
+        # no clona al día 0. Con `_dc=3` sigue siendo 4, byte-idéntico.
+        while len(unique_fruits) < _dc + 1:
             # [P3-FRUIT-PAD-KEY-SYMMETRY · 2026-07-31] (audit v6 · F21) Era `{f.lower() ...}`: el
             # chequeo de PERMITIDAS normalizaba singular/plural con `_fruit_key` y el de DUPLICADAS
             # no, así que con 'Fresa' ya en la lista el pad añadía 'Fresas' y un día recibía
@@ -1893,14 +1963,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             else:
                 break  # Salida segura
     
-    chosen_proteins = unique_proteins[:3]
-    chosen_carbs = unique_carbs[:3]
-    chosen_veggies = unique_veggies[:6]
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] Los cortes escalan con el chunk (ver el padding arriba).
+    chosen_proteins = unique_proteins[:_dc]
+    chosen_carbs = unique_carbs[:_dc]
+    chosen_veggies = unique_veggies[:2 * _dc]
     # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] 4 frutas: `_rotate_fruit_pairs` las reparte en
     # 2 por día reutilizándolas entre días.
-    chosen_fruits = unique_fruits[:4] if unique_fruits else []
-    
-    # Repetimos mezcla final de los 3 días elegidos para distribuir el orden
+    chosen_fruits = unique_fruits[:_dc + 1] if unique_fruits else []
+
+    # Repetimos mezcla final de los días elegidos para distribuir el orden
     random.shuffle(chosen_proteins)
     random.shuffle(chosen_carbs)
     random.shuffle(chosen_veggies)
@@ -2065,14 +2136,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Reparto CONSERVADOR con la lista de compras en mente: 4 frutas distintas por semana en vez de
     # 3, y cada día recibe dos consecutivas de la rotación (día i → frutas[i], frutas[i+1]), así
     # que las frutas se reutilizan entre días en lugar de comprar 6.
-    _fruit_slots = _rotate_fruit_pairs(chosen_fruits)
+    _fruit_slots = _rotate_fruit_pairs(chosen_fruits, days=_dc)
     if _fruit_slots:
-        fruit_params = {f"fruit_{i}": _fruit_slots[i][0] for i in range(3)}
-        fruit_params.update({f"fruit_{i}b": _fruit_slots[i][1] for i in range(3)})
+        fruit_params = {f"fruit_{i}": _fruit_slots[i][0] for i in range(_dc)}
+        fruit_params.update({f"fruit_{i}b": _fruit_slots[i][1] for i in range(_dc)})
     else:
         _fallback_fruit = "elige la fruta dominicana que mejor combine con la preparación"
-        fruit_params = {k: _fallback_fruit for k in
-                        ("fruit_0", "fruit_0b", "fruit_1", "fruit_1b", "fruit_2", "fruit_2b")}
+        fruit_params = {}
+        for _i in range(_dc):
+            fruit_params[f"fruit_{_i}"] = _fallback_fruit
+            fruit_params[f"fruit_{_i}b"] = _fallback_fruit
 
     # [P1-CARB-SEEDER-PAIRS · 2026-07-27] SEGUNDA base por día — el mismo contrato roto que
     # P1-FRUIT-SEEDER-GATE-CONTRACT cerró ayer para la fruta, con la última categoría que quedaba.
@@ -2096,17 +2169,19 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # base y en la misma frase PROHÍBE repetirla. Medido: 29 de 90 días colisionaban.
     # Frutas y vegetales ya tomaban ambos slots del mismo `_slots[i]`; los carbos eran la única
     # categoría fuera del contrato. tooltip-anchor: P2-SEEDER-PAIRS-GOALS
-    _carb_slots = _rotate_pairs(chosen_carbs)
+    _carb_slots = _rotate_pairs(chosen_carbs, days=_dc)
     if _carb_slots:
-        carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(3)}
-        carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(3)})
+        carb_params = {f"carb_{i}": _carb_slots[i][0] for i in range(_dc)}
+        carb_params.update({f"carb_{i}b": _carb_slots[i][1] for i in range(_dc)})
     else:
         # Una sola base única: `_rotate_pairs` devuelve None y pedir "no repitas" es insatisfacible.
         # Fail-open deliberado (P1-CARB-BASE-NO-REPEAT), no tocar.
-        carb_params = {f"carb_{i}": chosen_carbs[i] for i in range(3)}
-        carb_params.update({f"carb_{i}b": "otra base distinta del catálogo" for i in range(3)})
+        # [P2-SEEDER-DAYS-COUNT] `% len(chosen_carbs)` porque el padding puede haber quedado corto
+        # si el pool llegó vacío por otra vía; un IndexError aquí tumbaría el nodo entero.
+        carb_params = {f"carb_{i}": chosen_carbs[i % len(chosen_carbs)] for i in range(_dc)}
+        carb_params.update({f"carb_{i}b": "otra base distinta del catálogo" for i in range(_dc)})
     logger.info(f"✅ [P1-CARB-SEEDER-PAIRS] par de bases por día (las dos del mismo reparto): "
-                f"{[(carb_params[f'carb_{i}'], carb_params[f'carb_{i}b']) for i in range(3)]}")
+                f"{[(carb_params[f'carb_{i}'], carb_params[f'carb_{i}b']) for i in range(_dc)]}")
 
     # [P2-LIGHT-PROTEIN-SEED · 2026-07-29] (audit solver+seeder v4) El seeder reparte por día proteína
     # principal, carbo (×2, P1-CARB-SEEDER-PAIRS), vegetal/grasa (×2) y fruta (×2,
@@ -2139,15 +2214,21 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             if len(_light_pool) >= 2:
                 # [P2-SEEDER-PAIRS-GOALS · 2026-07-31] (audit v6 · F18) era `_light_pool[:4]`,
                 # un slice posicional que cortaba antes del primer lácteo. Ver el helper.
-                _light_slots = _rotate_pairs(_pick_light_anchor_candidates(_light_pool, 4))
+                # [P2-SEEDER-DAYS-COUNT · 2026-08-03] El ancla se sortea para los `_dc` días del
+                # chunk, no para 3: con 4 días el día D se quedaba sin línea propia (el prompt
+                # solo nombraba A/B/C) mientras el resto del reparto sí escalaba.
+                _light_slots = _rotate_pairs(
+                    _pick_light_anchor_candidates(_light_pool, max(4, _dc + 1)), days=_dc)
                 if _light_slots:
                     _l = [" o ".join(s) if isinstance(s, (list, tuple)) else str(s)
-                          for s in _light_slots[:3]]
-                    while len(_l) < 3:
+                          for s in _light_slots[:_dc]]
+                    while len(_l) < _dc:
                         _l.append(_l[-1] if _l else "")
+                    from prompts.preferences import _option_letter as _ol
+                    _light_dias = " · ".join(f"día {_ol(_i)} → {_l[_i]}" for _i in range(_dc))
                     _light_block = (
                         f"\n     ⭐ ANCLA LIVIANA SORTEADA POR DÍA (prioriza ESTA sobre las viñetas "
-                        f"genéricas de abajo): día A → {_l[0]} · día B → {_l[1]} · día C → {_l[2]}.")
+                        f"genéricas de abajo): {_light_dias}.")
                     logger.info(f"🥚 [P2-LIGHT-PROTEIN-SEED] anclas livianas por día: {_l}")
         except Exception as _lp_e:
             _light_block = ""   # fail-open: el literal de siempre nunca es peor que hoy
@@ -2170,14 +2251,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # vegetal se repite entre días, que es la intención documentada en `num_veggies_to_pick`);
     # con menos de 6 se cae al helper compartido, mismo contrato que fruta y carbo.
     # tooltip-anchor: P3-VEGGIE-SLOTS-CONSUME-SIX
-    _vg6 = list(dict.fromkeys(chosen_veggies[:6]))
-    if len(_vg6) >= 6:
-        _veg_slots = [(_vg6[0], _vg6[1]), (_vg6[2], _vg6[3]), (_vg6[4], _vg6[5])]
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] `2*_dc` en vez del 6 literal: la intención documentada
+    # es "2 vegetales distintos por día", que con 4 días son 8 y no 6.
+    _vg6 = list(dict.fromkeys(chosen_veggies[:2 * _dc]))
+    if len(_vg6) >= 2 * _dc:
+        _veg_slots = [(_vg6[2 * _i], _vg6[2 * _i + 1]) for _i in range(_dc)]
     else:
-        _veg_slots = _rotate_pairs(chosen_veggies[:6])
+        _veg_slots = _rotate_pairs(chosen_veggies[:2 * _dc], days=_dc)
     if _veg_slots:
         veggie_params = {}
-        for _i in range(3):
+        for _i in range(_dc):
             veggie_params[f"veggie_{_i}"] = _veg_slots[_i][0]
             veggie_params[f"veggie_{_i}b"] = _veg_slots[_i][1]
         # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] (audit solver+seeder v5) El reparto se publica
@@ -2186,7 +2269,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # transportarlo; parsear el prompt de vuelta sería frágil —los dos vegetales del día
         # viven en frases distintas— y se rompería con cualquier reescritura del copy.
         if isinstance(out_assignment, dict):
-            out_assignment["veggie_pairs"] = [tuple(p) for p in _veg_slots[:3]]
+            # [P2-SEEDER-DAYS-COUNT · 2026-08-03] `[:_dc]`: las listas viajan con un par POR DÍA
+            # del chunk. El estampado del orquestador sigue siendo `% len(pares)` sin cambios —
+            # con largo == nº de días del esqueleto el módulo es la identidad, y si el pool
+            # degradó a menos pares el módulo sigue siendo el fallback correcto.
+            out_assignment["veggie_pairs"] = [tuple(p) for p in _veg_slots[:_dc]]
             # [P2-SEEDER-PAIRS-CHANNEL · 2026-07-31] (audit v6 · F23) Los repartos de carbo y fruta
             # se calculaban igual de determinísticamente que el de vegetales pero solo salían como
             # PROSA del prompt del planner: llegaban al day-gen únicamente si el LLM se molestaba
@@ -2194,26 +2281,28 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             # en el esqueleto cuando el planner los deja cortos, que es cuando se pierde la regla
             # anti-repetición y el gate quema un retry. tooltip-anchor: P2-SEEDER-PAIRS-CHANNEL
             if _carb_slots:
-                out_assignment["carb_pairs"] = [tuple(p) for p in _carb_slots[:3]]
+                out_assignment["carb_pairs"] = [tuple(p) for p in _carb_slots[:_dc]]
             if _fruit_slots:
-                out_assignment["fruit_pairs"] = [tuple(p) for p in _fruit_slots[:3]]
+                out_assignment["fruit_pairs"] = [tuple(p) for p in _fruit_slots[:_dc]]
     else:
         # <2 únicos: fallback textual (mismo patrón que carb_ib) en vez de repetir el mismo nombre.
-        veggie_params = {f"veggie_{_i}": chosen_veggies[_i] for _i in range(3)}
+        veggie_params = {f"veggie_{_i}": chosen_veggies[_i % len(chosen_veggies)]
+                         for _i in range(_dc)}
         veggie_params.update({f"veggie_{_i}b": "otro vegetal distinto del catálogo"
-                              for _i in range(3)})
-    prompt = DETERMINISTIC_VARIETY_PROMPT.format(
+                              for _i in range(_dc)})
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] La plantilla se CONSTRUYE con el nº de días del chunk
+    # (`build_deterministic_variety_prompt`) en vez de ser el literal de 3 opciones. Con `_dc=3`
+    # devuelve byte a byte el prompt histórico.
+    prompt = build_deterministic_variety_prompt(_dc).format(
         light_protein_block=_light_block,
-        protein_0=chosen_proteins[0],
-        protein_1=chosen_proteins[1],
-        protein_2=chosen_proteins[2],
         blocked_text=blocked_text,
+        **{f"protein_{_i}": chosen_proteins[_i % len(chosen_proteins)] for _i in range(_dc)},
         **veggie_params,
         **carb_params,
         **fruit_params
     )
-    logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas para 3 días (rotadas si es necesario): {chosen_proteins}")
-    logger.info(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos para 3 días (rotados si es necesario): {chosen_carbs}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas para {_dc} día(s) (rotadas si es necesario): {chosen_proteins}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos para {_dc} día(s) (rotados si es necesario): {chosen_carbs}")
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
     # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] Se loguea el reparto POR DÍA y cuántas de las
     # frutas cuentan para el gate: el log anterior ("Fruta sugerida: [...]") no permitía ver que el

@@ -21,19 +21,86 @@ Redacta el perfil de gustos AHORA. El formato DEBE ser directo y dictatorial par
 PROHIBICIONES TEMPORALES ACTIVAS: Está prohibido servirle [ingrediente principal del rechazo 1], [ingrediente principal del rechazo 2] porque los rechazó recientemente. Cero tolerancia con estos ingredientes en este plan."
 """
 
-DETERMINISTIC_VARIETY_PROMPT = """
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# [P2-SEEDER-DAYS-COUNT · 2026-08-03] (audit solver+seeder v7) Las opciones del reparto eran TRES
+# literales copiados (A/B/C), y ese literal era el techo aritmético de todo el seeder.
+#
+# `constants.split_with_absorb` reparte 15d → [3,4,4,4] y 30d → [3,4,4,4,4,4,4,3]: la forma
+# DOMINANTE de chunk es de 4 días, no de 3. Como el estampado al esqueleto reparte por módulo
+# (`_pairs_all[_di % len(_pairs_all)]`), el día índice 3 recibía exactamente el reparto del día 0
+# — misma proteína, mismos carbos, mismos vegetales, misma fruta. En 30 días son ~6 pares de días
+# clonados POR CONSTRUCCIÓN, y el contrato «1 proteína distinta por día» de `variety_level=max`
+# era insatisfacible en el 4º día de cada chunk.
+#
+# Las opciones se GENERAN por join en vez de copiarse: tres literales es cómo se llegó al techo,
+# y un cuarto literal solo movería el techo a 5 (los chunks de 21d llegan a 6 días).
+# `DETERMINISTIC_VARIETY_PROMPT` se conserva como la instancia de 3 días (byte-idéntica a la
+# anterior) porque es el contrato público que importan `prompts/__init__.py` y varios tests.
+# tooltip-anchor: P2-SEEDER-DAYS-COUNT
+_OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+# Un color por día. Se cicla con módulo: el color es decoración, la letra es la identidad.
+_OPTION_DOTS = ("🔴", "🔵", "🟢", "🟡", "🟣", "🟠")
+
+
+def _option_letter(i: int) -> str:
+    """Letra de la opción del día `i` (0→A). Más allá del alfabeto cae al ordinal — no puede
+    ocurrir con el cap `_MAX_DAYS_TO_GENERATE` (=6), pero un IndexError aquí tumbaría el nodo."""
+    return _OPTION_LETTERS[i] if i < len(_OPTION_LETTERS) else str(i + 1)
+
+
+def _variety_option_line(i: int) -> str:
+    """Una línea de reparto. Devuelve la plantilla CON sus placeholders `{protein_i}` etc.
+    intactos: quien la consume es el `.format(...)` de `ai_helpers`."""
+    return (
+        f"- {_OPTION_DOTS[i % len(_OPTION_DOTS)]} OPCIÓN {_option_letter(i)} (Alternativa {i + 1})"
+        f" -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {{protein_{i}}} +"
+        f" {{carb_{i}}} y como acompañante vegetal/grasa: {{veggie_{i}}}. Si OTRA comida del día"
+        f" lleva base de carbohidrato (desayuno, merienda o la otra comida fuerte), usa"
+        f" {{carb_{i}b}} — NUNCA la misma base dos veces el mismo día. En las DEMÁS comidas del"
+        f" día (desayuno/merienda), usa: {{veggie_{i}b}}. Frutas asignadas al día (usa una"
+        f" DISTINTA en cada comida que lleve fruta, NUNCA la misma dos veces el mismo día):"
+        f" {{fruit_{i}}} y {{fruit_{i}b}}."
+    )
+
+
+def build_deterministic_variety_prompt(days_count: int = 3) -> str:
+    """Plantilla del prompt de variedad para un chunk de `days_count` días.
+
+    Con `days_count=3` devuelve BYTE A BYTE el prompt histórico (prompt-cache preservado y diff
+    del refactor revisable). Los placeholders `{protein_i}` / `{carb_i}` / `{carb_i}b` /
+    `{veggie_i}` / `{fruit_i}` quedan sin resolver a propósito: los llena el `.format(...)` de
+    `ai_helpers.get_deterministic_variety_prompt`.
+
+    tooltip-anchor: P2-SEEDER-DAYS-COUNT"""
+    n = max(1, int(days_count or 1))
+    opciones = "\n".join(_variety_option_line(i) for i in range(n))
+    carbos_asignados = " / ".join(f"{{carb_{i}}}+{{carb_{i}b}}" for i in range(n))
+    # "Opción A→{protein_0}, B→{protein_1}, …" — el prefijo "Opción" solo en la primera, igual
+    # que el literal original.
+    proteina_por_opcion = "Opción " + ", ".join(
+        f"{_option_letter(i)}→{{protein_{i}}}" for i in range(n))
+    proteinas_lista = "/".join(f"{{protein_{i}}}" for i in range(n))
+    return (_DETERMINISTIC_VARIETY_SKELETON
+            .replace("@@OPCIONES@@", opciones)
+            .replace("@@CARBOS_ASIGNADOS@@", carbos_asignados)
+            .replace("@@PROTEINA_POR_OPCION@@", proteina_por_opcion)
+            .replace("@@PROTEINAS_LISTA@@", proteinas_lista))
+
+
+# Sentinelas `@@...@@` en vez de `{...}`: el resto de la plantilla ESTÁ llena de `{placeholders}`
+# que debe conservar intactos para el `.format(...)` del consumidor, así que el andamiaje no
+# puede usar la misma notación.
+_DETERMINISTIC_VARIETY_SKELETON = """
 ⚠️ REGLA DE INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ⚠️
 Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccionado los núcleos base obligatorios. Debes construir las Opciones alrededor de estos ingredientes (o basar los almuerzos / cenas principales en ellos):
 
-- 🔴 OPCIÓN A (Alternativa 1) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_0} + {carb_0} y como acompañante vegetal/grasa: {veggie_0}. Si OTRA comida del día lleva base de carbohidrato (desayuno, merienda o la otra comida fuerte), usa {carb_0b} — NUNCA la misma base dos veces el mismo día. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_0b}. Frutas asignadas al día (usa una DISTINTA en cada comida que lleve fruta, NUNCA la misma dos veces el mismo día): {fruit_0} y {fruit_0b}.
-- 🔵 OPCIÓN B (Alternativa 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. Si OTRA comida del día lleva base de carbohidrato (desayuno, merienda o la otra comida fuerte), usa {carb_1b} — NUNCA la misma base dos veces el mismo día. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_1b}. Frutas asignadas al día (usa una DISTINTA en cada comida que lleve fruta, NUNCA la misma dos veces el mismo día): {fruit_1} y {fruit_1b}.
-- 🟢 OPCIÓN C (Alternativa 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. Si OTRA comida del día lleva base de carbohidrato (desayuno, merienda o la otra comida fuerte), usa {carb_2b} — NUNCA la misma base dos veces el mismo día. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_2b}. Frutas asignadas al día (usa una DISTINTA en cada comida que lleve fruta, NUNCA la misma dos veces el mismo día): {fruit_2} y {fruit_2b}.
+@@OPCIONES@@
 
 🥞 REGLA DE BASES TRANSFORMABLES (creatividad real, no plato combinatorio):
-Los carbohidratos asignados ({carb_0}+{carb_0b} / {carb_1}+{carb_1b} / {carb_2}+{carb_2b} — dos por día para que ninguna base se repita dentro del mismo día) son BASES A TRANSFORMAR según el slot, no solo "hervido como acompañante". Si la base del día es harina de trigo, harina de maíz o avena — que NO se sirven hervidas como plato fuerte — úsala TRANSFORMADA en el desayuno o la merienda de ese día (panqueques de avena/harina, arepitas, tortitas, bollitos al horno) y pon en el plato fuerte un carbo apropiado de almuerzo (arroz/víver/pasta). Si la base es yuca/plátano/víver, además del hervido clásico puedes transformarla (bollitos de yuca, majado, arepitas de yuca, mangú). La MISMA base puede repetirse entre días SOLO como platos DISTINTOS (harina→panqueques el lunes, arepitas el jueves — jamás el mismo plato dos días).
+Los carbohidratos asignados (@@CARBOS_ASIGNADOS@@ — dos por día para que ninguna base se repita dentro del mismo día) son BASES A TRANSFORMAR según el slot, no solo "hervido como acompañante". Si la base del día es harina de trigo, harina de maíz o avena — que NO se sirven hervidas como plato fuerte — úsala TRANSFORMADA en el desayuno o la merienda de ese día (panqueques de avena/harina, arepitas, tortitas, bollitos al horno) y pon en el plato fuerte un carbo apropiado de almuerzo (arroz/víver/pasta). Si la base es yuca/plátano/víver, además del hervido clásico puedes transformarla (bollitos de yuca, majado, arepitas de yuca, mangú). La MISMA base puede repetirse entre días SOLO como platos DISTINTOS (harina→panqueques el lunes, arepitas el jueves — jamás el mismo plato dos días).
 
 ⛔ REGLA DE PROTEÍNA EXCLUSIVA POR DÍA (CRÍTICA — el day_generator la enforced):
-La proteína asignada a CADA día (Opción A→{protein_0}, B→{protein_1}, C→{protein_2}) es la ÚNICA carne/leguminosa principal permitida ese día. NO sustituyas ni complementes con otra carne distinta:
+La proteína asignada a CADA día (@@PROTEINA_POR_OPCION@@) es la ÚNICA carne/leguminosa principal permitida ese día. NO sustituyas ni complementes con otra carne distinta:
    - Si la Opción A dice "{protein_0}", el día A NO puede tener cerdo, pollo, res ni pescado salvo que esa sea la proteína {protein_0}.
    - El `protein_pool` que pases en el skeleton al day_generator es enforced: el sistema rechazará cualquier carne distinta que el LLM intente meter como "complemento".
    - Para el desayuno y la merienda usa SIEMPRE al menos UNA de estas fuentes de proteína livianas (no cuentan como otra carne principal y son OBLIGATORIAS — ver regla de abajo):{light_protein_block}
@@ -43,7 +110,7 @@ La proteína asignada a CADA día (Opción A→{protein_0}, B→{protein_1}, C�
      • Frutos secos (almendras, nueces, maní)
      • Mantequilla de maní o de almendras
 
-⚠️ REGLA DE VARIEDAD INTRA-DÍA: NO uses la misma proteína principal ({protein_0}/{protein_1}/{protein_2}) en TODAS las comidas del día. La proteína PRINCIPAL (carne/leguminosa asignada) va en almuerzo y/o cena; el desayuno y la merienda llevan SU PROPIA proteína de la lista liviana de arriba.
+⚠️ REGLA DE VARIEDAD INTRA-DÍA: NO uses la misma proteína principal (@@PROTEINAS_LISTA@@) en TODAS las comidas del día. La proteína PRINCIPAL (carne/leguminosa asignada) va en almuerzo y/o cena; el desayuno y la merienda llevan SU PROPIA proteína de la lista liviana de arriba.
 
 🥩 REGLA DE PROTEÍNA EN CADA COMIDA (CRÍTICA para la precisión de macros del plan): las CUATRO comidas — incluyendo desayuno y merienda — DEBEN contener una fuente de proteína real, dimensionada para aportar proteína de verdad (no como adorno simbólico). El objetivo de proteína del día se REPARTE entre las 4 comidas, NO se concentra solo en almuerzo+cena. Está terminantemente PROHIBIDO:
    • Un desayuno de solo almidón/fruta (mangú solo, casabe solo, avena con agua, pan con aguacate sin huevo/queso).
@@ -63,3 +130,9 @@ Toda comida pobre en proteína deja el plan corto del objetivo diario y produce 
 
 {blocked_text}
 """
+
+# [P2-SEEDER-DAYS-COUNT · 2026-08-03] La instancia de 3 días — byte-idéntica al literal que este
+# módulo exponía antes del refactor. Se conserva porque es el nombre público (`prompts/__init__`,
+# `agent.py`, y los tests que anclan `{carb_0b}` / "BASES A TRANSFORMAR" / "panqueques"). Los
+# callers que conocen el tamaño real del chunk deben usar `build_deterministic_variety_prompt(n)`.
+DETERMINISTIC_VARIETY_PROMPT = build_deterministic_variety_prompt(3)

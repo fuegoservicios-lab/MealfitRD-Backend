@@ -23,6 +23,9 @@ from prompts.chat_agent import (
 from prompts.preferences import (
     PREFERENCES_AGENT_PROMPT,
     DETERMINISTIC_VARIETY_PROMPT,
+    # [P2-SEEDER-DAYS-COUNT · 2026-08-03] La plantilla parametrizada por días del chunk.
+    # `DETERMINISTIC_VARIETY_PROMPT` es su instancia de 3 días y sigue exportándose.
+    build_deterministic_variety_prompt,
 )
 
 # --- Meal Operations ---
