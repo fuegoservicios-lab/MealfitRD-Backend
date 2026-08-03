@@ -25,8 +25,15 @@ Contrato que ancla este archivo:
      excluyendo la base aunque esté en la lista de compras.
   5. **Solo en chunks de continuación** (`_days_offset > 0`). En un plan fresco no hay nada
      comprado todavía: sesgarlo sería resucitar el cycle-lock que el dueño apagó.
-  6. **Matching por LÍMITE DE PALABRA.** Este repo lleva 13+ incidentes de subcadena
-     (`"sal"`⊂`"Salami"`, `"pollo"`⊂`"repollo"`, `"res"`⊂`"fresas"`, `"pina"`⊂`"Espinacas"`).
+  6. **Matching por LÍMITE DE PALABRA.** Este repo lleva 13+ incidentes de subcadena. Los casos
+     que se prueban aquí están MEDIDOS contra los catálogos vivos, no elegidos a ojo: un barrido
+     de los 4 catálogos completos contra los pools de proteína y carbo da exactamente 4 falsos
+     positivos del matcher ingenuo, **todos en proteínas** (`Repollo`/`Repollo morado`→Pollo,
+     `Fresa`→Res, `Almendras fileteadas`→Res, esta última vía el alias genérico `'filete'`).
+     **En carbos hay 0 colisiones alcanzables hoy**: esa mitad del guard es PREVENTIVA y así
+     queda dicho, en vez de insinuar que cerró un agujero vivo.
+     (`"pina"`⊂`"espinacas"` es trampa real en otras superficies, pero aquí no: Piña es fruta y
+     la afinidad solo toca proteínas y carbos, así que ese par nunca es alcanzable.)
   7. **Fail-open**: si el lector del plan revienta, el seeder entrega su prompt igual.
 
 Todo el archivo es OFFLINE: cero conexiones a DB (los 4 lectores del seeder van stubeados).
@@ -325,19 +332,52 @@ def test_ciclo_expirado_no_aplica(offline, monkeypatch):
 # --------------------------------------------------------------------------------------
 # Contrato 6 — subcadena (13+ incidentes en este repo)
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("compra,victima,categoria", [
-    ("Fresas", RES, "prot"),        # 'res'   ⊂ 'f-RES-as'
-    ("Repollo", POLLO, "prot"),     # 'pollo' ⊂ 're-POLLO'
-    ("Espinacas", "Piña", "prot"),  # 'pina'  ⊂ 'es-PINA-cas'  (no está en proteínas: debe dar 0)
+def _naive_matches(nombre, catalogo, syn_map):
+    """El matcher INGENUO (`in` crudo) que este repo lleva 13+ incidentes pagando.
+
+    Normaliza EXACTAMENTE igual que el código real (`strip_accents` en los dos lados) — que es
+    la parte que hace visible la trampa: `"piña"` contra `"espinacas"` no colisiona hasta que
+    ambos pierden el acento. Existe para PROBAR que el caso elegido es una trampa de verdad,
+    no para afirmarlo."""
+    from constants import strip_accents
+    _n = strip_accents(str(nombre).lower()).strip()
+    out = set()
+    for food in catalogo:
+        for s in syn_map.get(food.lower(), [food.lower()]):
+            _s = strip_accents(str(s).lower()).strip()
+            if _s and _s in _n:
+                out.add(food)
+    return out
+
+
+# Los 3 pares son trampas MEDIDAS contra los catálogos vivos, no elegidas a ojo: un barrido de
+# los 4 catálogos completos contra proteínas y carbos encontró exactamente 4 falsos positivos del
+# matcher ingenuo, todos en proteínas (`Repollo`/`Repollo morado`→Pollo, `Fresa`→Res,
+# `Almendras fileteadas`→Res). El tercero es el caso del ALIAS: `PROTEIN_SYNONYMS['res']` incluye
+# el alias genérico `'filete'`, que vive dentro de "fileteadas".
+@pytest.mark.parametrize("compra,victima", [
+    ("Fresas", RES),                  # 'res'    ⊂ 'f-RES-as'
+    ("Repollo", POLLO),               # 'pollo'  ⊂ 're-POLLO'
+    ("Almendras fileteadas", RES),    # 'filete' ⊂ 'FILETE-adas'  (alias genérico de Res)
 ])
-def test_no_hay_colision_por_subcadena(offline, monkeypatch, compra, victima, categoria):
-    """Comprar `compra` NO puede darle afinidad a `victima`. Con `in` crudo, sí la daría."""
+def test_no_hay_colision_por_subcadena(offline, monkeypatch, compra, victima):
+    """Comprar `compra` NO puede darle afinidad a `victima`. Con `in` crudo, sí se la daría."""
+    from constants import DOMINICAN_PROTEINS, PROTEIN_SYNONYMS
     monkeypatch.setenv("MEALFIT_CYCLE_BASE_AFFINITY", "6.0")
     freqs = {"res": 8, "pollo": 8}
 
-    # Sanity: el operador crudo SÍ colisiona — el test no es vacuo.
-    assert victima.lower()[:4] in compra.lower() or compra.lower() in victima.lower() or True
+    # 1) La trampa EXISTE: el matcher ingenuo sí cae. Sin `or True` — si algún día este par deja
+    #    de colisionar (un alias que se renombra), este test debe fallar y pedir otro par, en vez
+    #    de seguir pasando como evidencia de una protección que ya no prueba nada.
+    assert victima in _naive_matches(compra, DOMINICAN_PROTEINS, PROTEIN_SYNONYMS), (
+        f"'{compra}' ya no es trampa para '{victima}': el caso dejó de ser representativo")
 
+    # 2) El matcher real NO cae.
+    assert ah._catalog_pick_wb(
+        __import__("constants").strip_accents(compra.lower()),
+        DOMINICAN_PROTEINS, PROTEIN_SYNONYMS, set(DOMINICAN_PROTEINS)) != victima
+
+    # 3) Y por tanto el sorteo no se mueve ni un ápice.
     offline(_Reader([_item(compra, category="Granos", shelf=365)]), freqs=freqs)
     con = [_picks(_seed_call(s)) for s in range(150)]
 
@@ -346,6 +386,30 @@ def test_no_hay_colision_por_subcadena(offline, monkeypatch, compra, victima, ca
 
     assert con == sin, (
         f"comprar '{compra}' no puede mover el sorteo de '{victima}' (colisión por subcadena)")
+
+
+def test_en_carbos_el_guard_es_PREVENTIVO_no_hay_colision_alcanzable():
+    """Medición, no afirmación: hoy NINGÚN nombre de catálogo engaña al matcher de carbos.
+
+    Barrido de los 75 nombres de `DOMINICAN_PROTEINS + DOMINICAN_CARBS` contra el pool de carbos:
+    0 falsos positivos del matcher ingenuo. O sea, la mitad-carbo de la protección es PREVENTIVA
+    — cubre alias futuros, no un agujero vivo. Queda escrito para que nadie cite el word-boundary
+    de carbos como evidencia de haber cerrado un incidente real.
+
+    Si algún día alguien añade un carbo cuyo alias vive dentro de otro nombre, este test falla y
+    obliga a mover el caso a la parametrización de arriba (donde sí se prueba end-to-end)."""
+    from constants import (DOMINICAN_CARBS, DOMINICAN_PROTEINS, CARB_SYNONYMS,
+                           strip_accents)
+    trampas = []
+    for compra in list(DOMINICAN_PROTEINS) + list(DOMINICAN_CARBS):
+        _n = strip_accents(compra.lower())
+        wb = ah._catalog_pick_wb(_n, DOMINICAN_CARBS, CARB_SYNONYMS, set(DOMINICAN_CARBS))
+        for falso in _naive_matches(compra, DOMINICAN_CARBS, CARB_SYNONYMS) - {wb}:
+            if ah._catalog_pick_wb(_n, [falso], CARB_SYNONYMS, {falso}) is None:
+                trampas.append((compra, falso))
+    assert trampas == [], (
+        f"apareció una colisión de carbo alcanzable: {trampas}. Muévela al test parametrizado "
+        f"de subcadena para que se pruebe end-to-end.")
 
 
 def test_el_matcher_de_limite_de_palabra_es_el_canonico():
