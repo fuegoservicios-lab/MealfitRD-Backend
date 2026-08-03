@@ -68,7 +68,11 @@ def test_helper_zero_subs_is_pure_noop(monkeypatch):
 
 def test_t2_seam_wired_with_rebuild_and_rereconcile():
     i = _CRON.index("P1-BUDGET-T2-CONVERGENCE")
-    blk = _CRON[i:i + 4200]
+    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] 4200 -> 5000: el ventaneo anadio
+    # `window_days=_trip_win` a las 3 llamadas + su comentario dentro de ESTE bloque, y
+    # `_rbr_t2(full_plan_data)` quedaba fuera de la ventana fija. El tamano del slice es
+    # detalle del test (no un contrato): las aserciones de abajo son las mismas.
+    blk = _CRON[i:i + 5000]
     assert 'str(_bc_rec_t2.get("status") or "") == "excedido"' in blk, "gate por status excedido"
     assert "apply_budget_convergence_for_days" in blk
     assert blk.count("get_shopping_list_delta(") == 3, "rebuild de las 3 multiplicidades"

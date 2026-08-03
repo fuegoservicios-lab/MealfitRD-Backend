@@ -35945,9 +35945,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _uid = form_data.get("user_id")
     if not _uid or _uid == "guest": _uid = None
 
-    from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration
+    from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
     from constants import compute_household_multiplier
     try:
+        # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Ventana del viaje activo: los
+        # perecederos salen de los 7 días que el usuario va a cocinar, no del promedio
+        # del plan. `None` (≤7 días materializados, que es el caso del viaje 1 de un plan
+        # recién generado) ⇒ comportamiento idéntico al previo.
+        _trip_win = active_trip_window_days(result)
         # [P1-3] householdComposition (adults/children) — fallback a householdSize legacy.
         household = compute_household_multiplier(form_data)
         if household > 1.0:
@@ -35981,13 +35986,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
             aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
                 _adb(get_shopping_list_delta, _uid, result, True, False, True, 1.0 * household,
-                     inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                     inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
+                     window_days=_trip_win),
                 _adb(get_shopping_list_delta, _uid, result, True, False, True, cycle_qty_multiplier("biweekly") * household,
                      inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
-                     cycle_days=cycle_days_for_duration("biweekly")),
+                     cycle_days=cycle_days_for_duration("biweekly"), window_days=_trip_win),
                 _adb(get_shopping_list_delta, _uid, result, True, False, True, cycle_qty_multiplier("monthly") * household,
                      inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
-                     cycle_days=cycle_days_for_duration("monthly")),
+                     cycle_days=cycle_days_for_duration("monthly"), window_days=_trip_win),
             )
         else:
             # [P1-GUEST-SHOPPING · 2026-06-21] Sin user_id (invitado) no hay inventario
@@ -36000,13 +36006,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
                 aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
                     _adb(get_shopping_list_delta, None, result, True, False, True, 1.0 * household,
-                         inventory_override=[], consumed_override=[]),
+                         inventory_override=[], consumed_override=[], window_days=_trip_win),
                     _adb(get_shopping_list_delta, None, result, True, False, True, cycle_qty_multiplier("biweekly") * household,
                          inventory_override=[], consumed_override=[],
-                         cycle_days=cycle_days_for_duration("biweekly")),
+                         cycle_days=cycle_days_for_duration("biweekly"), window_days=_trip_win),
                     _adb(get_shopping_list_delta, None, result, True, False, True, cycle_qty_multiplier("monthly") * household,
                          inventory_override=[], consumed_override=[],
-                         cycle_days=cycle_days_for_duration("monthly")),
+                         cycle_days=cycle_days_for_duration("monthly"), window_days=_trip_win),
                 )
             except Exception as _e_guest_shop:
                 logger.warning(f"⚠️ [P1-GUEST-SHOPPING] Builder falló para invitado, lista vacía: {_e_guest_shop}")
@@ -36178,27 +36184,31 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     # rebuild de listas (mismos snapshots de la 1ª pasada) → re-costeo → re-reconcile.
                     # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
                     # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
+                    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] re-derivada: la
+                    # convergencia pudo sustituir alimentos, pero los días son los mismos.
+                    _bc_trip_win = active_trip_window_days(result)
                     if _uid:
                         _bc7, _bc15, _bc30 = await asyncio.gather(
                             _adb(get_shopping_list_delta, _uid, result, True, False, True, 1.0 * household,
-                                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
+                                 window_days=_bc_trip_win),
                             _adb(get_shopping_list_delta, _uid, result, True, False, True, cycle_qty_multiplier("biweekly") * household,
                                  inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
-                                 cycle_days=cycle_days_for_duration("biweekly")),
+                                 cycle_days=cycle_days_for_duration("biweekly"), window_days=_bc_trip_win),
                             _adb(get_shopping_list_delta, _uid, result, True, False, True, cycle_qty_multiplier("monthly") * household,
                                  inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
-                                 cycle_days=cycle_days_for_duration("monthly")),
+                                 cycle_days=cycle_days_for_duration("monthly"), window_days=_bc_trip_win),
                         )
                     else:
                         _bc7, _bc15, _bc30 = await asyncio.gather(
                             _adb(get_shopping_list_delta, None, result, True, False, True, 1.0 * household,
-                                 inventory_override=[], consumed_override=[]),
+                                 inventory_override=[], consumed_override=[], window_days=_bc_trip_win),
                             _adb(get_shopping_list_delta, None, result, True, False, True, cycle_qty_multiplier("biweekly") * household,
                                  inventory_override=[], consumed_override=[],
-                                 cycle_days=cycle_days_for_duration("biweekly")),
+                                 cycle_days=cycle_days_for_duration("biweekly"), window_days=_bc_trip_win),
                             _adb(get_shopping_list_delta, None, result, True, False, True, cycle_qty_multiplier("monthly") * household,
                                  inventory_override=[], consumed_override=[],
-                                 cycle_days=cycle_days_for_duration("monthly")),
+                                 cycle_days=cycle_days_for_duration("monthly"), window_days=_bc_trip_win),
                         )
                     from shopping_calculator import _build_hybrid_shopping_list as _bc_hybrid
                     _bc15h = _bc_hybrid(_bc7, _bc15) if _bc15 else _bc15
@@ -37861,10 +37871,14 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
         _build_hybrid_shopping_list as _build_hybrid,
         cycle_qty_multiplier,
         cycle_days_for_duration,
+        active_trip_window_days,
     )
     from constants import compute_household_multiplier
 
     household = compute_household_multiplier(form_data)
+    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] mismo ventaneo que assemble: el swap
+    # cambia UNA comida, no el calendario del viaje.
+    _trip_win = active_trip_window_days(plan_result)
 
     if _uid:
         inv_snapshot, consumed_snapshot = await _adb(
@@ -37874,13 +37888,14 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
         # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
         aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
             _adb(get_shopping_list_delta, _uid, plan_result, True, False, True, 1.0 * household,
-                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
+                 window_days=_trip_win),
             _adb(get_shopping_list_delta, _uid, plan_result, True, False, True, cycle_qty_multiplier("biweekly") * household,
                  inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
-                 cycle_days=cycle_days_for_duration("biweekly")),
+                 cycle_days=cycle_days_for_duration("biweekly"), window_days=_trip_win),
             _adb(get_shopping_list_delta, _uid, plan_result, True, False, True, cycle_qty_multiplier("monthly") * household,
                  inventory_override=inv_snapshot, consumed_override=consumed_snapshot,
-                 cycle_days=cycle_days_for_duration("monthly")),
+                 cycle_days=cycle_days_for_duration("monthly"), window_days=_trip_win),
         )
     else:
         aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []

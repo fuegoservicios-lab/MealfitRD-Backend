@@ -2130,7 +2130,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 or "weekly"
             ).strip().lower()
             
-            from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration
+            from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
             # [P1-AUDIT-1 · 2026-05-15] `household` ya inicializado arriba del
             # try-block para garantizar que el callback lo vea por closure
             # incluso si el try-block lanza antes de la recomputación.
@@ -2147,19 +2147,24 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # /recalculate-shopping-list (plans.py).
             # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
             # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
+            # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] perecederos del viaje activo.
+            _trip_win = active_trip_window_days(plan_data)
             aggr_7 = get_shopping_list_delta(
                 user_id, plan_data, is_new_plan=True, structured=True, multiplier=1.0 * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
+                window_days=_trip_win,
             )
             aggr_15 = get_shopping_list_delta(
                 user_id, plan_data, is_new_plan=True, structured=True, multiplier=cycle_qty_multiplier("biweekly") * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
                 cycle_days=cycle_days_for_duration("biweekly"),
+                window_days=_trip_win,
             )
             aggr_30 = get_shopping_list_delta(
                 user_id, plan_data, is_new_plan=True, structured=True, multiplier=cycle_qty_multiplier("monthly") * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
                 cycle_days=cycle_days_for_duration("monthly"),
+                window_days=_trip_win,
             )
             
             # [VISIÓN-C] Híbrido: staples=periodo, perishables=semanal.

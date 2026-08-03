@@ -18549,7 +18549,7 @@ def _enqueue_plan_chunk(
 def _process_pending_shopping_lists():
     """[GAP F FIX] Recalcula shopping lists asincronamente para planes que fallaron su generacion sincrona."""
     try:
-        from shopping_calculator import get_shopping_list_delta, cycle_qty_multiplier, cycle_days_for_duration
+        from shopping_calculator import get_shopping_list_delta, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
         import json
 
         # [S11-2 · GAP-3 · 2026-05-29] Este cron corre como housekeeping al tope de
@@ -18629,10 +18629,13 @@ def _process_pending_shopping_lists():
                 # para que recalcs futuros no observen estado inconsistente.
                 # Frontend deduce inventario at-render-time.
                 # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
+                # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] perecederos del viaje activo.
+                _trip_win = active_trip_window_days(plan_data)
                 aggr_7 = get_shopping_list_delta(
                     user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=1.0 * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
+                    window_days=_trip_win,
                 )
                 # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
                 aggr_15 = get_shopping_list_delta(
@@ -18640,12 +18643,14 @@ def _process_pending_shopping_lists():
                     multiplier=cycle_qty_multiplier("biweekly") * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
                     cycle_days=cycle_days_for_duration("biweekly"),
+                    window_days=_trip_win,
                 )
                 aggr_30 = get_shopping_list_delta(
                     user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=cycle_qty_multiplier("monthly") * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
                     cycle_days=cycle_days_for_duration("monthly"),
+                    window_days=_trip_win,
                 )
 
                 # [VISIÓN-C / HYBRID-SHOPPING-LIST] Combinar staples del periodo
@@ -31695,6 +31700,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                         fetch_inventory_and_consumed_for_plan,
                         cycle_qty_multiplier,
                         cycle_days_for_duration,
+                        active_trip_window_days,
                     )
                     from constants import compute_household_multiplier as _chm
                     # [P1-3] Multiplier efectivo (cacheado o desde form_data).
@@ -31715,10 +31721,17 @@ def process_plan_chunk_queue(target_plan_id=None):
                     # para almacenar lista canónica. Chunk worker T2 persist
                     # final del plan. Ver justificación SSOT en plans.py.
                     # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
+                    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Este es EL seam donde el
+                    # bug mordía: T2 re-agrega con TODOS los días ya acumulados (14+ tras
+                    # varios chunks), así que el promedio del plan diluía los perecederos de
+                    # la semana que el usuario cocina AHORA y colaba los de dentro de 3
+                    # semanas. La ventana los devuelve al viaje que les toca.
+                    _trip_win = active_trip_window_days(full_plan_data)
                     aggr_7 = get_shopping_list_delta(
                         user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=1.0 * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
+                        window_days=_trip_win,
                     )
                     # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
                     aggr_15 = get_shopping_list_delta(
@@ -31726,12 +31739,14 @@ def process_plan_chunk_queue(target_plan_id=None):
                         multiplier=cycle_qty_multiplier("biweekly") * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
                         cycle_days=cycle_days_for_duration("biweekly"),
+                        window_days=_trip_win,
                     )
                     aggr_30 = get_shopping_list_delta(
                         user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=cycle_qty_multiplier("monthly") * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
                         cycle_days=cycle_days_for_duration("monthly"),
+                        window_days=_trip_win,
                     )
 
                     # [VISIÓN-C] Híbrido: staples=periodo, perishables=semanal.
@@ -31845,10 +31860,13 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     from graph_orchestrator import apply_budget_convergence_for_days as _abc_t2
                                     if _abc_t2(full_plan_data, form_data):
                                         # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
+                                        # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] misma ventana
+                                        # que la 1ª pasada (la convergencia sustituye alimentos, no días).
                                         aggr_7 = get_shopping_list_delta(
                                             user_id, full_plan_data, is_new_plan=True, structured=True,
                                             multiplier=1.0 * household,
                                             inventory_override=_inv_s, consumed_override=_cons_s,
+                                            window_days=_trip_win,
                                         )
                                         # [P1-SKU-COVER-HONESTY-R2 · 2026-08-02] `cycle_days` → nota "de M días" real.
                                         aggr_15 = get_shopping_list_delta(
@@ -31856,12 +31874,14 @@ def process_plan_chunk_queue(target_plan_id=None):
                                             multiplier=cycle_qty_multiplier("biweekly") * household,
                                             inventory_override=_inv_s, consumed_override=_cons_s,
                                             cycle_days=cycle_days_for_duration("biweekly"),
+                                            window_days=_trip_win,
                                         )
                                         aggr_30 = get_shopping_list_delta(
                                             user_id, full_plan_data, is_new_plan=True, structured=True,
                                             multiplier=cycle_qty_multiplier("monthly") * household,
                                             inventory_override=_inv_s, consumed_override=_cons_s,
                                             cycle_days=cycle_days_for_duration("monthly"),
+                                            window_days=_trip_win,
                                         )
                                         from shopping_calculator import _build_hybrid_shopping_list as _bh_t2b
                                         aggr_15_hybrid = _bh_t2b(aggr_7, aggr_15, restocked_at_iso=_restocked_at,

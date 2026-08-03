@@ -1216,6 +1216,255 @@ def _build_hybrid_shopping_list(
 
     return hybrid
 
+
+# ============================================================
+# [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] La lista del viaje traía el PROMEDIO
+# del plan, no la semana que el usuario va a cocinar.
+# ------------------------------------------------------------
+# `get_shopping_list_delta` promedia TODOS los días materializados y proyecta a 7
+# (`base_duration_scale = 7.0 / num_days`). Eso es correcto mientras las semanas del
+# plan sean intercambiables — y DEJARON de serlo: el seeder hace las semanas
+# deliberadamente distintas (freq-tracking cross-chunk). Con 14 días materializados
+# (pollo la semana 1, pescado la semana 2) el viaje 1 traía la MITAD del pollo que sí
+# se cocina esta semana y la mitad del pescado que no se cocina hasta dentro de 8 días
+# (se daña en la nevera). Con 27 días la fracción es peor.
+#
+# El guard de coherencia era estructuralmente CIEGO a esto: espeja la misma fórmula
+# (`P1-COHERENCE-DAY-BASIS` escala el lado esperado ×7/num_days), así que el promedio
+# se cancelaba a ambos lados y la divergencia jamás aparecía.
+#
+# Fix: SOLO los PERECEDEROS se ventanean a los 7 días del viaje activo. Los ESTABLES
+# siguen saliendo del agregado del periodo completo, que es lo correcto: se compran UNA
+# vez para todo el ciclo (misma partición que `_build_hybrid_shopping_list` ya hace
+# entre lista semanal y lista de periodo, con el MISMO clasificador
+# `_classify_perishability` — dos criterios distintos se contradirían: un ítem podría
+# ventanearse aquí y tomarse del periodo allá).
+#
+# Cobertura de los días 8..N: el plan es una ventana RODANTE. El shift
+# (`_background_shift_plan_for_user` / `/shift-plan`) poda los días ya consumidos, deja
+# `days[0] = hoy` y reescribe `grocery_start_date`; cada chunk que aterriza dispara el
+# rebuild T2 de las listas. Así el viaje k ve la semana k. La suma de los N viajes sigue
+# cubriendo el plan (se re-reparte en el tiempo, no se recorta): antes cada viaje traía
+# el promedio ×7 días, ahora cada viaje trae SUS 7 días. Ver la sección de riesgos del
+# reporte del P-fix.
+#
+# Knob de rollback: `MEALFIT_TRIP_WINDOWED_PERISHABLES=false` reproduce el promedio
+# byte-idéntico (el helper devuelve None y `window_days` deja de tener efecto).
+# tooltip-anchor: P1-TRIP-WINDOWED-PERISHABLES
+# ============================================================
+TRIP_WINDOW_DAYS = 7
+
+
+def _trip_windowed_perishables_enabled() -> bool:
+    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Knob del ventaneo de perecederos.
+    True (default): los perecederos salen de los 7 días del viaje activo. False:
+    rollback sin redeploy al promedio del plan proyectado a 7 (comportamiento previo,
+    byte-idéntico)."""
+    return _knob_env_bool("MEALFIT_TRIP_WINDOWED_PERISHABLES", True)
+
+
+def _parse_plan_day_date(value):
+    """`'YYYY-MM-DD'` o ISO completo → `date`. `None` si no parsea (los planes
+    pre-P1-CHAT-PAST-DAYS no traen `date` en los días)."""
+    if not value:
+        return None
+    from datetime import date as _date_cls, datetime as _dt_cls
+    if isinstance(value, _dt_cls):
+        return value.date()
+    if isinstance(value, _date_cls):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return _dt_cls.fromisoformat(raw.replace("Z", "+00:00")).date()
+    except (TypeError, ValueError):
+        pass
+    try:
+        return _dt_cls.strptime(raw[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def active_trip_window_days(plan_data: dict, window_len: int = TRIP_WINDOW_DAYS) -> list | None:
+    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Los `window_len` días del viaje
+    ACTIVO, o `None` si ventanear es un no-op.
+
+    Devuelve `None` (y el caller conserva el comportamiento de siempre) cuando:
+      - el knob está apagado,
+      - el plan no tiene días,
+      - el plan cabe entero en la ventana (`len(days) <= window_len`) — el caso de
+        producción del viaje 1, donde solo hay 2-3 días materializados y "la ventana"
+        y "el plan completo" son lo MISMO.
+
+    Anclaje: `grocery_start_date` (el campo que el shift reescribe a hoy siguiendo a
+    `days[0]`) → se seleccionan los días cuya `date` cae en `[ancla, ancla+window_len)`.
+    Si el plan no trae fechas parseables (legacy) o el filtro sale vacío, cae a
+    `days[:window_len]` — que tras el shift ES el viaje activo, porque el shift poda
+    los días consumidos y deja `days[0] = hoy`.
+    """
+    if not _trip_windowed_perishables_enabled():
+        return None
+    if not isinstance(plan_data, dict):
+        return None
+    days = plan_data.get("days")
+    if not isinstance(days, list) or not days:
+        return None
+    try:
+        win = max(1, int(window_len))
+    except (TypeError, ValueError):
+        win = TRIP_WINDOW_DAYS
+    if len(days) <= win:
+        return None
+
+    anchor = _parse_plan_day_date(plan_data.get("grocery_start_date"))
+    if anchor is None and isinstance(days[0], dict):
+        anchor = _parse_plan_day_date(days[0].get("date"))
+    if anchor is not None:
+        from datetime import timedelta as _td_win
+        limit = anchor + _td_win(days=win)
+        selected = []
+        for d in days:
+            if not isinstance(d, dict):
+                continue
+            day_date = _parse_plan_day_date(d.get("date"))
+            if day_date is not None and anchor <= day_date < limit:
+                selected.append(d)
+        if selected and len(selected) < len(days):
+            return selected
+    return [d for d in days[:win] if isinstance(d, dict)] or None
+
+
+def _aggregated_trip_window_len(aggregated_list) -> int | None:
+    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Lee el sello `trip_window_days` que
+    `get_shopping_list_delta` estampa en cada ítem de una lista ventaneada.
+
+    Es lo que permite que el espejo del guard sea AUTO-SINCRONIZADO: el guard no
+    necesita saber qué superficie construyó la lista (assemble, rebuild T2, recalc,
+    cron), solo si la lista que tiene delante es un promedio del plan o el viaje activo.
+    Sin ese sello el guard mirroreaba a ciegas y fabricaba divergencias falsas masivas
+    contra cualquier lista producida por una superficie sin ventanear."""
+    for item in aggregated_list or []:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("trip_window_days")
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _merge_trip_windowed_result(full_res, window_res, *, window_len: int):
+    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Perecederos de la ventana + estables
+    del periodo, conservando la forma del contenedor (lista estructurada o dict por
+    categoría). Estampa `trip_window_days` en cada ítem del resultado.
+
+    Reglas (espejo exacto de `_build_hybrid_shopping_list`, mismo clasificador):
+      - estable  → se toma del agregado del PERIODO (se compra una vez para el ciclo).
+      - perecedero presente en la ventana → cantidades de la VENTANA, categoría del
+        periodo (para no mover el ítem de sección del PDF).
+      - perecedero AUSENTE de la ventana → fuera de este viaje (es el pescado de la
+        semana 3: comprarlo hoy es tirarlo).
+      - perecedero SOLO en la ventana → entra (la deducción de inventario puede
+        borrarlo del agregado del periodo, que pide menos por día, y no del de la
+        ventana, que pide el consumo real de estos 7 días).
+    """
+    from constants import strip_accents
+
+    def _flatten(res):
+        if isinstance(res, dict):
+            out = []
+            for cat, lst in res.items():
+                if not isinstance(lst, list):
+                    return None
+                for it in lst:
+                    if not isinstance(it, dict):
+                        return None
+                    out.append((cat, it))
+            return out
+        if isinstance(res, list):
+            out = []
+            for it in res:
+                if not isinstance(it, dict):
+                    return None
+                out.append((None, it))
+            return out
+        return None
+
+    full_items = _flatten(full_res)
+    window_items = _flatten(window_res)
+    if full_items is None or window_items is None:
+        logging.warning(
+            "[P1-TRIP-WINDOWED-PERISHABLES] resultado no estructurado (%s/%s): se "
+            "conserva el agregado del periodo sin ventanear.",
+            type(full_res).__name__, type(window_res).__name__,
+        )
+        return full_res
+
+    def _key(item):
+        return strip_accents(str(item.get("name", "")).lower().strip())
+
+    def _is_perishable(item):
+        return _classify_perishability(item.get("name", "") or "", item) == "perishable"
+
+    window_by_key = {}
+    for _cat, item in window_items:
+        window_by_key.setdefault(_key(item), item)
+    full_keys = {_key(item) for _cat, item in full_items}
+
+    merged = []
+    dropped = []
+    windowed = 0
+    for cat, item in full_items:
+        if not _is_perishable(item):
+            merged.append((cat, dict(item)))
+            continue
+        win_item = window_by_key.get(_key(item))
+        if win_item is None:
+            dropped.append(str(item.get("name") or "?"))
+            continue
+        out_item = dict(win_item)
+        # La categoría manda la sección del PDF: la del periodo es la que el resto de
+        # la lista ya usa para este alimento.
+        if item.get("category") is not None:
+            out_item["category"] = item.get("category")
+        if item.get("display_category") is not None:
+            out_item["display_category"] = item.get("display_category")
+        merged.append((cat, out_item))
+        windowed += 1
+    for cat, item in window_items:
+        if _key(item) in full_keys:
+            continue
+        if _is_perishable(item):
+            merged.append((cat, dict(item)))
+            windowed += 1
+
+    for _cat, item in merged:
+        item["trip_window_days"] = int(window_len)
+
+    logging.info(
+        "🗓️ [P1-TRIP-WINDOWED-PERISHABLES] ventana=%dd → %d perecedero(s) del viaje, "
+        "%d fuera de este viaje (%s)",
+        int(window_len), windowed, len(dropped), ", ".join(sorted(dropped)[:12]) or "-",
+    )
+
+    if isinstance(full_res, dict):
+        out_dict: dict = {}
+        for cat, item in merged:
+            out_dict.setdefault(cat, []).append(item)
+        for cat in out_dict:
+            out_dict[cat].sort(key=lambda x: str(x.get("display_string", "")))
+        return out_dict
+    merged_list = [item for _cat, item in merged]
+    merged_list.sort(key=lambda x: str(x.get("display_string", "")))
+    return merged_list
+
+
 def parse_fraction(val: str) -> float:
     val = val.strip()
     try:
@@ -4639,6 +4888,78 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
     return {name: dict(units) for name, units in aggregated.items()}
 
 
+def _mirror_trip_window_expected(
+    plan_result: dict,
+    expected_raw: dict,
+    *,
+    mult: float,
+    window_len: int,
+    day_basis_applied: bool,
+) -> dict:
+    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Espejo del ventaneo en el lado ESPERADO.
+
+    Reconstruye `expected_raw` con la MISMA partición que `_merge_trip_windowed_result`
+    aplicó a la lista: perecederos desde los días del viaje activo (escalados
+    `7/len(ventana)` — el mismo factor que el agregador), estables desde el plan completo.
+    Un perecedero ausente de la ventana desaparece del set esperado: no está en la lista
+    porque no se cocina esta semana, no porque falte.
+
+    `day_basis_applied` replica la condicionalidad de P1-COHERENCE-DAY-BASIS: si esa
+    normalización está apagada por knob, el lado esperado no lleva escala de días y el
+    ventaneo tampoco debe llevarla (mirroring, no una heurística nueva).
+
+    La clasificación reusa `_classify_perishability` con el ítem de la lista agregada como
+    `master_item` (mismo fallback que `_build_hybrid_shopping_list`: el ítem ya trae
+    `category`/`shelf_life_days` inyectados por P1-PDF-2). Sin match, cae a los hints por
+    nombre — el mismo camino que el agregador usó para decidir.
+    """
+    if not isinstance(expected_raw, dict) or not expected_raw:
+        return expected_raw
+    window = active_trip_window_days(plan_result, window_len=window_len)
+    if not window:
+        return expected_raw
+
+    window_scale = (7.0 / float(len(window))) if day_basis_applied else 1.0
+    expected_window = expected_sum_from_recipes(
+        {"days": window}, apply_yield=False, multiplier=mult * window_scale
+    )
+
+    from constants import strip_accents
+    aggregated_list = (plan_result.get("aggregated_shopping_list_weekly")
+                       or plan_result.get("aggregated_shopping_list") or [])
+    master_by_name: dict = {}
+    for item in aggregated_list:
+        if isinstance(item, dict) and item.get("name"):
+            master_by_name.setdefault(
+                strip_accents(str(item["name"]).lower().strip()), item
+            )
+
+    def _is_perishable(food) -> bool:
+        key = strip_accents(str(food).lower().strip())
+        return _classify_perishability(str(food), master_by_name.get(key)) == "perishable"
+
+    mirrored: dict = {}
+    dropped = []
+    for food, units in expected_raw.items():
+        if not _is_perishable(food):
+            mirrored[food] = units
+            continue
+        if food in expected_window:
+            mirrored[food] = expected_window[food]
+        else:
+            dropped.append(str(food))
+    for food, units in expected_window.items():
+        if food not in expected_raw and _is_perishable(food):
+            mirrored[food] = units
+
+    logging.info(
+        "[COH-GUARD/P1-TRIP-WINDOWED-PERISHABLES] espejo ventana=%dd · %d alimento(s) "
+        "esperados, %d perecedero(s) fuera de este viaje (%s)",
+        len(window), len(mirrored), len(dropped), ", ".join(sorted(dropped)[:12]) or "-",
+    )
+    return mirrored
+
+
 def _classify_divergence_hypothesis(
     exp_qty: float,
     act_qty: float,
@@ -7502,6 +7823,7 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     # la lista SEMANAL: la lista activa (quincenal/mensual) tiene otra base y es el caso que
     # P2-COH-WEEKLY-BASIS evita precisamente por eso.
     _basis_scale = 1.0
+    _day_basis_applied = False
     if _get_coherence_day_basis_norm_knob() and (plan_result.get("aggregated_shopping_list_weekly")):
         try:
             _n_days_basis = len(plan_result.get("days") or [])
@@ -7509,6 +7831,7 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             _n_days_basis = 0
         if _n_days_basis > 0:
             _basis_scale = 7.0 / float(_n_days_basis)
+            _day_basis_applied = True
             if abs(_basis_scale - 1.0) > 1e-9:
                 logging.info(
                     "[COH-GUARD/DAY-BASIS] días materializados=%d → escalando el lado esperado "
@@ -7523,6 +7846,35 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     except Exception as e:
         logging.warning(f"[COH-GUARD] expected_sum_from_recipes falló: {e}")
         return []
+
+    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] ESPEJO OBLIGATORIO del ventaneo.
+    # Si la lista contra la que vamos a comparar se construyó con la ventana del viaje
+    # (perecederos = 7 días activos, estables = periodo completo), el lado ESPERADO tiene
+    # que hacer exactamente la misma partición. Sin este espejo el guard reportaría
+    # `expected_only` para TODO perecedero que no se cocina esta semana (el pescado de la
+    # semana 3) y una divergencia de magnitud ~2× para los que sí — divergencias falsas
+    # masivas, y en modo `block` un retry-storm. Es la simétrica de P1-COHERENCE-DAY-BASIS
+    # (que espeja `7/num_days`) para la base temporal NUEVA.
+    #
+    # El disparador es el SELLO `trip_window_days` que la propia lista lleva, no un
+    # parámetro del caller: así el espejo sigue a la lista que tiene delante (assemble,
+    # rebuild T2, recalc, cron re-validando un plan persistido) en vez de asumir que
+    # todas las superficies ventanean a la vez.
+    try:
+        _trip_win_len = _aggregated_trip_window_len(
+            plan_result.get("aggregated_shopping_list_weekly")
+            or plan_result.get("aggregated_shopping_list") or []
+        )
+        if _trip_win_len and _trip_windowed_perishables_enabled():
+            expected_raw = _mirror_trip_window_expected(
+                plan_result, expected_raw, mult=mult,
+                window_len=_trip_win_len, day_basis_applied=_day_basis_applied,
+            )
+    except Exception as _mirror_exc:
+        logging.warning(
+            f"[COH-GUARD/P1-TRIP-WINDOWED-PERISHABLES] espejo de la ventana falló "
+            f"(se compara contra la base del plan): {type(_mirror_exc).__name__}: {_mirror_exc}"
+        )
 
     # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] ESPEJO del drop del aggregator:
     # filtra el lado ESPERADO (recetas) a ingredientes verificados con la MISMA
@@ -10977,6 +11329,7 @@ def get_shopping_list_delta(
     inventory_override: list | None = None,
     consumed_override: list | None = None,
     cycle_days: int | None = None,
+    window_days: list | None = None,
 ):
     """Calcula el verdadero Delta: Ingredientes Totales del Plan - Inventario Físico Actual - (Opcional) Consumidos.
 
@@ -10994,6 +11347,15 @@ def get_shopping_list_delta(
     (routers/plans.py, cron_tasks.py, tools.py) invocan esta función 3 veces por surface
     (`aggr_7`/`aggr_15`/`aggr_30`) con el `multiplier` ya calculado por duración — ninguno pasa
     todavía `cycle_days` explícito; es un seguimiento pendiente, no de este archivo.
+
+    `window_days` [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02]: días del viaje ACTIVO
+    (típicamente `active_trip_window_days(plan_result)` → los 7 días desde
+    `grocery_start_date`/`days[0]` tras el shift). Si viene, los PERECEDEROS se agregan
+    SOLO de esa ventana (escala `7/len(window)`) y los ESTABLES siguen del agregado del
+    periodo completo. `None` (default) = comportamiento previo: promedio de todos los días
+    materializados proyectado a 7. Requiere `structured=True` (la partición necesita el
+    nombre de cada ítem); con salida en texto plano se ignora con un WARNING. Knob de
+    rollback: `MEALFIT_TRIP_WINDOWED_PERISHABLES=false`.
     """
     # [P1-SUPERMARKET-COSTING · 2026-07-02] Marca preferida del usuario → costeo
     # con el envase elegido. Fetch UNA vez por run (todas las superficies —
@@ -11051,42 +11413,74 @@ def get_shopping_list_delta(
     logging.info(f"🔄 [SHOPPING MATH] days_len={num_days} base_scale={base_duration_scale} raw_mult={multiplier} eff_mult={effective_multiplier}")
 
 
-    meal_count = 0
-    for day in days:
-        for meal in day.get("meals", []):
-            # [P2-4] SSOT: helper compartido con expected_sum_from_recipes y
-            # el extractor de facts. Garantiza simetría capa-B del coherence
-            # guard (expected ≡ aggregated en cuanto a qué meals contribuyen).
-            if _should_skip_meal_for_aggregation(meal):
+    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Extracción de ingredientes extraída a
+    # un helper local para poder correrla DOS veces sobre subconjuntos distintos de días
+    # (plan completo → estables; ventana del viaje → perecederos) sin duplicar el
+    # contrato de parseo. Cuerpo idéntico al loop previo.
+    def _collect_ingredients(day_list):
+        collected = []
+        meals_seen = 0
+        for day in day_list:
+            if not isinstance(day, dict):
                 continue
-            meal_count += 1
-            # [P1-4] Preferir `ingredients_raw` (pre-humanización) sobre
-            # `ingredients` (display-friendly). El humanize convierte
-            # "200g pechuga de pollo" → "1 pechuga de pollo (porción)" para
-            # la UI; al re-agregar el plan persistido, la versión humanizada
-            # pierde la unidad métrica y `_parse_quantity` cae a unit='unidad'
-            # con qty=1, perdiendo el peso real. `humanize_plan_ingredients`
-            # preserva el original en `ingredients_raw` desde P1-4.
-            # Fallback al humanizado solo si el plan es legacy (pre-P1-4).
-            ingredients = meal.get("ingredients_raw") or meal.get("ingredients", [])
-            if not ingredients:
-                # Fallback: check if ingredients are inside a 'recipe' dict
-                recipe = meal.get("recipe")
-                if isinstance(recipe, dict):
-                    ingredients = recipe.get("ingredients", [])
-            for i in ingredients:
-                if isinstance(i, str):
-                    all_ingredients.append(i)
-                elif isinstance(i, dict):
-                    q = i.get("quantity", 0)
-                    u = i.get("unit", "unidad")
-                    n = i.get("name") or i.get("item_name") or i.get("display_name") or "Desconocido"
-                    if q > 0 or u in ['pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito']:
-                        all_ingredients.append(f"{q} {u} de {n}")
-                    else:
-                        all_ingredients.append(n)
-                    
+            for meal in day.get("meals", []):
+                # [P2-4] SSOT: helper compartido con expected_sum_from_recipes y
+                # el extractor de facts. Garantiza simetría capa-B del coherence
+                # guard (expected ≡ aggregated en cuanto a qué meals contribuyen).
+                if _should_skip_meal_for_aggregation(meal):
+                    continue
+                meals_seen += 1
+                # [P1-4] Preferir `ingredients_raw` (pre-humanización) sobre
+                # `ingredients` (display-friendly). El humanize convierte
+                # "200g pechuga de pollo" → "1 pechuga de pollo (porción)" para
+                # la UI; al re-agregar el plan persistido, la versión humanizada
+                # pierde la unidad métrica y `_parse_quantity` cae a unit='unidad'
+                # con qty=1, perdiendo el peso real. `humanize_plan_ingredients`
+                # preserva el original en `ingredients_raw` desde P1-4.
+                # Fallback al humanizado solo si el plan es legacy (pre-P1-4).
+                ingredients = meal.get("ingredients_raw") or meal.get("ingredients", [])
+                if not ingredients:
+                    # Fallback: check if ingredients are inside a 'recipe' dict
+                    recipe = meal.get("recipe")
+                    if isinstance(recipe, dict):
+                        ingredients = recipe.get("ingredients", [])
+                for i in ingredients:
+                    if isinstance(i, str):
+                        collected.append(i)
+                    elif isinstance(i, dict):
+                        q = i.get("quantity", 0)
+                        u = i.get("unit", "unidad")
+                        n = i.get("name") or i.get("item_name") or i.get("display_name") or "Desconocido"
+                        if q > 0 or u in ['pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito']:
+                            collected.append(f"{q} {u} de {n}")
+                        else:
+                            collected.append(n)
+        return collected, meals_seen
+
+    all_ingredients, meal_count = _collect_ingredients(days)
+
     logging.info(f"🛒 [SHOPPING EXTRACT] {len(days)} days, {meal_count} meals, {len(all_ingredients)} raw ingredients")
+
+    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Validación de la ventana del viaje.
+    # Se descarta (no-op, comportamiento previo byte-idéntico) cuando: knob apagado, no
+    # vino ventana, la ventana ES el plan completo (caso de producción del viaje 1: solo
+    # 2-3 días materializados) o la salida no es estructurada (la partición
+    # perecedero/estable necesita el nombre de cada ítem, imposible sobre strings).
+    _trip_window: list | None = None
+    if window_days and _trip_windowed_perishables_enabled():
+        try:
+            _candidate = [d for d in window_days if isinstance(d, dict)]
+        except TypeError:
+            _candidate = []
+        if not structured:
+            if _candidate:
+                logging.warning(
+                    "[P1-TRIP-WINDOWED-PERISHABLES] window_days ignorada: requiere "
+                    "structured=True (salida en texto plano no permite particionar "
+                    "perecedero/estable)."
+                )
+        elif 0 < len(_candidate) < num_days:
+            _trip_window = _candidate
 
     # [P1-5] Inventario + consumidos: si el caller pasó overrides (typical
     # cuando invoca el delta con N multiplicidades), reutilizamos su snapshot
@@ -11123,7 +11517,40 @@ def get_shopping_list_delta(
     # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
     # apretados en un ciclo de 14 días.
     res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days)
-    
+
+    # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Segunda pasada SOLO cuando hay ventana
+    # de viaje: mismo agregador, mismos descuentos de inventario, misma aritmética —
+    # únicamente cambia la base temporal (`7/len(ventana)` en vez de `7/num_days`). El
+    # merge se queda los perecederos de esta pasada y los estables de la del periodo.
+    # `num_days=len(ventana)` mantiene los topes por persona-semana idénticos
+    # (`_person_weeks = multiplier_eff * num_days / 7` cancela la escala en ambas ramas).
+    # Correr el agregador dos veces con el MISMO `items_to_deduct` no doble-descuenta:
+    # cada ítem del resultado sale de exactamente UNA de las dos pasadas.
+    if _trip_window:
+        try:
+            _window_ingredients, _window_meals = _collect_ingredients(_trip_window)
+            _window_scale = 7.0 / float(len(_trip_window))
+            logging.info(
+                f"🗓️ [P1-TRIP-WINDOWED-PERISHABLES] ventana={len(_trip_window)}d de "
+                f"{num_days}d materializados · meals={_window_meals} · "
+                f"scale={_window_scale:.4f} (plan={base_duration_scale:.4f})"
+            )
+            _res_window = aggregate_and_deduct_shopping_list(
+                _window_ingredients, items_to_deduct, categorize=categorize,
+                structured=structured, multiplier=multiplier * _window_scale,
+                brand_prefs=brand_prefs, brand_defaults=brand_defaults,
+                num_days=len(_trip_window), cycle_days=cycle_days,
+            )
+            res = _merge_trip_windowed_result(res, _res_window, window_len=len(_trip_window))
+        except Exception as _tw_exc:
+            # Fail-open: cualquier fallo del ventaneo deja la lista del periodo intacta
+            # (comportamiento previo). Jamás abortar la construcción de la lista.
+            logging.warning(
+                f"⚠️ [P1-TRIP-WINDOWED-PERISHABLES] ventaneo falló, se conserva el "
+                f"agregado del periodo: {type(_tw_exc).__name__}: {_tw_exc}"
+            )
+
+
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
     urgent_items = plan_result.get("_pantry_supplement_required", [])
     if urgent_items:
