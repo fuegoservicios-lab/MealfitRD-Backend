@@ -296,11 +296,19 @@ def test_claude_md_has_breathing_room_after_cleanup():
     cap_match = re.search(r"_DEFAULT_CAP\s*=\s*(\d+)", cap_text)
     assert cap_match, "No pude parsear _DEFAULT_CAP del test cap."
     cap = int(cap_match.group(1))
+    # [2026-07-31] `st_size` son BYTES, no caracteres. El mensaje decía "chars" y en un
+    # documento en español la diferencia no es cosmética: ~1000 acentos y emojis pesan
+    # 2+ bytes cada uno, así que hoy son 58001 bytes contra 56967 caracteres — 1034 de
+    # discrepancia, más que el margen que este test exige. Quien mida con
+    # `len(read_text())` para depurar este fallo obtiene otro número y cree que el
+    # fichero cambió bajo sus pies. Se conserva la medida en BYTES (proxy conservador
+    # del coste en tokens); lo que se corrige es la etiqueta.
     size = claude_md.stat().st_size
     margin = cap - size
     assert margin >= 800, (
-        f"CLAUDE.md size={size}, cap={cap}, margin={margin} chars. "
-        f"Esperaba >=800 chars de margen tras el cleanup P1-PROD-FINAL-1. "
+        f"CLAUDE.md size={size} bytes, cap={cap}, margin={margin} bytes "
+        f"(ojo: BYTES, no caracteres — `len(texto)` da ~1000 menos por los acentos). "
+        f"Esperaba >=800 bytes de margen tras el cleanup P1-PROD-FINAL-1. "
         f"Si está más cerca del cap, repite la pasada de limpieza "
         f"estructural antes de añadir nuevo contenido."
     )
