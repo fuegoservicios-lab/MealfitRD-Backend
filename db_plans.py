@@ -1075,6 +1075,77 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _ramb(_pd, form_data=_clin_ctx)
                 except Exception as _ramb_e:
                     logger.debug(f"[P0-1-FINAL-BAND-CLOSER] pre-INSERT no-op: {type(_ramb_e).__name__}: {_ramb_e}")
+                # [P2-CAPS-AFTER-BAND-CLOSER · 2026-08-03] (audit solver+seeder v7) Los TECHOS DE
+                # REALISMO, otra vez como última palabra — la misma clase de defecto que el
+                # reconciliador de abajo, sobre la otra garantía.
+                #
+                # `P1-CAPS-LAST-WORD` fijó la doctrina ("correr los caps al final los convierte en
+                # invariante en vez de en un pase más de la cadena") y movió la última
+                # `_cap_unrealistic_portions` al FINAL de `finalize_plan_data_coherence`. Pero
+                # "el final" era el final de _fpc, no el del chain: `_rpb` (bump de proteína hasta
+                # ×1.2) y sobre todo `_ramb` corren DESPUÉS y RE-DIMENSIONAN porciones sin
+                # consultar ningún cap. El motor de `_ramb` (`_rebalance_day_macros_to_target`)
+                # escala TODAS las líneas del grupo macro-dominante por un factor común clampeado
+                # a [0.3, 2.5]: un «250 g de pepino» recién capado es carbo-dominante, así que
+                # entra SIEMPRE al set movible del pase de carbs y puede salir a 350-600 g en el
+                # ÚLTIMO pase antes de persistir. Es la clase literal de 943c604b (360 g de queso
+                # cottage), reabierta un nivel más abajo — y como allí, no falla el cap: falla el
+                # ORDEN. Ningún pase posterior capea realismo: el recap de
+                # P1-UPDATE-RECAP-ALL-SURFACES que `_ramb` lleva dentro es CLÍNICO (DM2 alto-IG /
+                # bariátrico) y no sabe nada de estos techos; el único cap que quedaba detrás es
+                # el de condimentos (ajo/cebolla).
+                #
+                # Va ANTES del reconcile display↔raw y del polish para que ambos midan el estado
+                # ya recortado (y con ellos `_rbs`, que persiste el band score: el número refleja
+                # el plato REAL). Los dos caps son idempotentes y SOLO-BAJAN → re-ejecutarlos no
+                # puede inventar comida.
+                #
+                # Trade-off asumido, heredado palabra por palabra de P1-CAPS-LAST-WORD: si el
+                # recorte reabre el hueco de macro que `_ramb` acababa de cerrar, GANA EL CAP.
+                # Deliberadamente NO se añade un segundo rebalance detrás — dos guardas sobre el
+                # mismo campo oscilan (lección repetida del repo).
+                #
+                # MEDIDO (motor real `_rebalance_day_macros_to_target` + `_cap_unrealistic_portions`
+                # sobre una `IngredientNutritionDB(rows=…)` con per-100g publicados; banda del gate
+                # [0.90, 1.12]):
+                #   · caso típico (pepino = 1 de 3 líneas carbo-dominantes, día bajo en carbos):
+                #     `_ramb` lo infla 250→770 g y clava carbos en 1.000; el re-cap retira 6 g de
+                #     carbos = 2.7 pp del target → ratio 0.973, DENTRO de banda.
+                #   · caso patológico (el pepino es la ÚNICA palanca de carbos del día): `_ramb`
+                #     escribe 1645 g y "clava" la banda; el re-cap lo baja y el día sale de banda
+                #     (0.367). Es exactamente el trade-off de arriba: 1.6 kg de pepino no es un
+                #     plato, y la banda que ese número compraba era ficticia.
+                #   · día ya en banda: no-op (0 líneas tocadas).
+                # NO dispara retry sistemático: el gate es una FRACCIÓN de celdas día×macro sobre
+                # un umbral de 0.5/0.6, y este mecanismo solo puede afectar la celda de carbos ⇒
+                # aunque tocara TODOS los días, el score no bajaría de 0.75.
+                #
+                # ⚠️ Alcance real de UNA pasada: los topes por gramos son una cascada `if/elif`, así
+                # que `LINE_GRAM_HARD_CAP` (600 g) tiene precedencia sobre el techo de vegetal
+                # acuoso (250 g). Medido: 601/770/1645 g → 600 g en la 1ª pasada y 250 g en la 2ª
+                # (punto fijo estable). O sea, una inflación por encima de 600 g queda acotada a
+                # 600 g aquí, no al techo de la clase. Es la MISMA semántica del callsite hermano
+                # (CAPS_LAST_WORD dentro de `_fpc`) y precede a este fix; se deja igual a propósito
+                # para no introducir asimetría entre los dos callsites. La convergencia de la
+                # cascada es un defecto propio, registrado aparte.
+                # Rollback sin redeploy: MEALFIT_CAPS_AFTER_BAND_CLOSER=false.
+                try:
+                    from graph_orchestrator import (CAPS_AFTER_BAND_CLOSER as _cabc,
+                                                    PORTION_REALISM_CAP_ENABLED as _prce,
+                                                    _cap_unrealistic_portions as _cup,
+                                                    _cap_cheese_dumps_final as _ccdf)
+                    if _cabc:
+                        _cap_n = 0
+                        if _prce:
+                            _cap_n += _cup(_pd.get("days") or [], db=_db_ins)
+                        _cap_n += _ccdf(_pd.get("days") or [], db=_db_ins)
+                        if _cap_n:
+                            logger.info(f"📏 [P2-CAPS-AFTER-BAND-CLOSER] {_cap_n} línea(s) recortada(s) "
+                                        f"al techo de realismo tras el band-closer pre-INSERT "
+                                        f"(antes se persistían re-infladas por el rebalance).")
+                except Exception as _cabc_e:
+                    logger.debug(f"[P2-CAPS-AFTER-BAND-CLOSER] pre-INSERT no-op: "
+                                 f"{type(_cabc_e).__name__}: {_cabc_e}")
                 # [P2-RECONCILE-AFTER-BAND-CLOSER · 2026-07-29] (audit solver+seeder v4) El único
                 # reconciliador display↔raw que actúa como "última palabra" vive DENTRO de
                 # `finalize_plan_data_coherence` (_fpc, más arriba). Pero `_rpb` y sobre todo `_ramb`

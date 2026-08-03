@@ -214,10 +214,22 @@ def test_marker_bumped():
     app_src = _read(_APP)
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', app_src)
     assert m, "No se encontró _LAST_KNOWN_PFIX en app.py."
-    # Floor: el marker debe ser este P-fix o uno posterior (no re-anclamos el
-    # valor exacto para no romper con futuros bumps).
-    assert m.group(1) >= "P2-HELP-CHATBOT · 2026-07-04" or "2026-07" in m.group(1), (
-        f"Marker sospechosamente viejo: {m.group(1)!r}"
+    marker = m.group(1)
+    # Floor: el marker debe ser de este P-fix o POSTERIOR (no se re-ancla el valor exacto
+    # para no romper con futuros bumps).
+    #
+    # [P2-CAPS-AFTER-BAND-CLOSER · 2026-08-03] El floor se compara sobre la FECHA, no sobre
+    # el marker entero. La versión previa hacía `marker >= "P2-HELP-CHATBOT · 2026-07-04"`,
+    # o sea una comparación LEXICOGRÁFICA del slug: pasaba o fallaba según la inicial del
+    # P-fix, no según su fecha. `P2-SEEDER-…` pasaba ('S' > 'H') y `P2-CAPS-… · 2026-08-03`
+    # fallaba ('C' < 'H') pese a ser UN MES MÁS NUEVO — el guard estaba verde por suerte
+    # alfabética, y habría bloqueado a cualquier P-fix futuro cuyo slug empiece antes de
+    # "HELP". El `or "2026-07" in marker` era el parche de ese mismo síntoma y caducaba
+    # solo al cambiar de mes. Las fechas ISO sí ordenan bien como string.
+    _fecha = re.search(r"(\d{4}-\d{2}-\d{2})\s*$", marker)
+    assert _fecha, f"Marker sin fecha ISO al final (formato `Pn-X · YYYY-MM-DD`): {marker!r}"
+    assert _fecha.group(1) >= "2026-07-04", (
+        f"Marker sospechosamente viejo: {marker!r} (floor P2-HELP-CHATBOT · 2026-07-04)"
     )
 
 

@@ -11047,6 +11047,18 @@ RAW_PAIR_BY_FOOD = _env_bool("MEALFIT_RAW_PAIR_BY_FOOD", True)
 # sin que nadie vuelva a reconciliar. Toda divergencia que esos pases introduzcan se PERSISTE.
 # Este knob añade la pasada final. Rollback sin redeploy: =false → cadena pre-INSERT como antes.
 RECONCILE_AFTER_BAND_CLOSER = _env_bool("MEALFIT_RECONCILE_AFTER_BAND_CLOSER", True)
+# [P2-CAPS-AFTER-BAND-CLOSER · 2026-08-03] (audit solver+seeder v7) Gemelo exacto del knob de
+# arriba, sobre la otra garantía que esos mismos dos band-closers rompieron por acreción: los
+# TECHOS DE REALISMO. `P1-CAPS-LAST-WORD` fijó la doctrina —"correr los caps al final los
+# convierte en invariante en vez de en un pase más de la cadena"— pero esa última invocación
+# vive DENTRO de `finalize_plan_data_coherence`, y `_rpb`/`_ramb` corren detrás y RE-DIMENSIONAN
+# porciones sin consultar ningún cap: `_rebalance_day_macros_to_target` escala TODAS las líneas
+# del grupo macro-dominante por un factor común clampeado a [0.3, 2.5]. Un "250 g de pepino" ya
+# capado es carbo-dominante ⇒ entra SIEMPRE al set movible del pase de carbs ⇒ puede salir a
+# 350-600 g en el ÚLTIMO pase antes de persistir. Es la clase literal del caso vivo 943c604b
+# (360 g de queso cottage, el doble del techo por comida), reabierta un nivel más abajo.
+# Con el knob ON, los dos caps de realismo se re-invocan tras `_ramb`. Rollback: =false.
+CAPS_AFTER_BAND_CLOSER = _env_bool("MEALFIT_CAPS_AFTER_BAND_CLOSER", True)
 # [P2-SOLVER-CONVERGENCE-METRIC · 2026-07-29] (audit solver+seeder v4) Añade `not_converged_meals` /
 # `greedy_fallback_meals` / `not_converged_ratio` a la métrica per-run `solver_clamp` que YA se
 # emite. Telemetría pura (cero impacto sobre el plan) → default ON. Rollback: =false.
