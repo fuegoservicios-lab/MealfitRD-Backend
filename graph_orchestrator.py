@@ -31407,14 +31407,24 @@ def _budget_pinned_food_keys(form_data) -> set:
 
 
 def _budget_food_matches_key_set(food_text: str, keys: set) -> bool:
-    """SSOT del matcher alimento↔set-de-claves de los pases de presupuesto. Misma
-    normalización + escalera de contención word-boundary que `_resolve_brand_pref`
-    (shopping_calculator) — 'sal' NO matchea 'salsa'. Fail-open: False (en duda,
-    comportamiento previo = sustituir).
-    [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] Extraído del cuerpo de
-    `_budget_food_is_brand_pinned` porque ahora hay DOS sets de claves con la misma
-    semántica de "no toques este alimento": las marcas fijadas y lo que el usuario ya
-    tiene en la Nevera. Un segundo matcher a mano habría driftado del primero."""
+    """SSOT del matcher alimento↔set-de-claves de los pases de presupuesto. Normalización
+    de `_norm_pref_food` + contención word-boundary bidireccional — 'sal' NO matchea
+    'salsa'. Fail-open: False (en duda, comportamiento previo = sustituir).
+
+    DERIVADO de la escalera de `_resolve_brand_pref` (shopping_calculator:3365), con dos
+    diferencias DELIBERADAS — el docstring anterior decía "misma escalera" y era falso:
+      - sin tier singular (`_singular_pref_key`): aquí 'almendras' en el plan NO matchea
+        'almendra' en el set de claves (medido). Dirección conservadora: pierde skips,
+        no los inventa.
+      - umbral de longitud 3, no 4.
+    Comportamiento extraído TAL CUAL del cuerpo previo de `_budget_food_is_brand_pinned`
+    (P1-BUDGET-RESPECT-BRAND-PIN): alinearlo con `_resolve_brand_pref` sería un cambio de
+    comportamiento del guard de marcas fijadas, y eso se mide antes, no se hace de paso.
+
+    [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] Extraído a función propia porque ahora
+    hay DOS sets de claves con la misma semántica de "no toques este alimento": las marcas
+    fijadas y lo que el usuario ya tiene en la Nevera. Un segundo matcher a mano habría
+    driftado del primero."""
     if not keys or not food_text:
         return False
     try:
