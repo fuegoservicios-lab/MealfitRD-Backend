@@ -129,11 +129,35 @@ def test_convergence_failopen_never_wipes_lists():
     # el bloque vive dentro del try de SHOPPING MATH (que resetea listas a [] al fallar):
     # DEBE tener su propio try/except que trague todo (fail-open al estado de la 1ª pasada).
     blk_start = _GO.index("tooltip-anchor: P1-BUDGET-CONVERGENCE")
-    # [P0-BAND-PRE-REVIEW · 2026-07-10] 7000→10000: mismo motivo que arriba (re-fire del chain;
-    # el except del fail-open quedó a ~8.6k del anchor).
-    blk = _GO[blk_start:blk_start + 10000]
-    assert "except Exception as _bc_e:" in blk
+    # [P0-BAND-PRE-REVIEW · 2026-07-10] 7000→10000: la ventana fija se quedó corta (re-fire del
+    # chain; el except del fail-open quedó a ~8.6k del anchor).
+    #
+    # [review final audit-v7-p1 · 2026-08-03] TERCERA caducidad de la misma ventana, y la que la
+    # jubila: la ronda 2 de P1-SKU-COVER-HONESTY metió `cycle_days=cycle_days_for_duration(...)` y
+    # P1-TRIP-WINDOWED-PERISHABLES metió `window_days=_bc_trip_win` DENTRO de este bloque, que pasó
+    # de 8.982 a 10.468 chars — el test quedó ROJO al mergear y nadie lo vio porque las tareas
+    # midieron "sin regresiones" contra un baseline que ya lo contenía. El hermano de arriba ya
+    # había migrado al terminador estructural en esta misma rama, con el comentario «bumpear el
+    # número una tercera vez solo compra tiempo», y este se quedó atrás.
+    #
+    # Aquí NO se puede delimitar por el `except` interno (es justo lo que se afirma: sería
+    # tautológico). Se delimita por el terminador del try EXTERIOR —el handler de SHOPPING MATH que
+    # resetea las 4 listas a `[]`—, que es exactamente la frontera semántica del test: «dentro del
+    # try que borra las listas, ¿hay un except propio ANTES?».
+    _outer_handler = "[SHOPPING MATH] Error agregando lista delta"
+    blk = _GO[blk_start:_GO.index(_outer_handler, blk_start)]
+    assert "except Exception as _bc_e:" in blk, (
+        "la pasada de convergencia perdió su try/except propio: una excepción ahí cae al handler "
+        "de SHOPPING MATH y el usuario recibe el plan con las 4 aggregated_shopping_list* en []"
+    )
     assert "pasada de convergencia no-op" in blk
+    # Y que el handler exterior siga siendo el que borra las listas — si dejara de serlo, este test
+    # estaría vigilando una frontera que ya no significa nada.
+    _outer = _GO[_GO.index(_outer_handler):]
+    assert 'result["aggregated_shopping_list_weekly"] = []' in _outer[:1500], (
+        "el handler de SHOPPING MATH dejó de resetear las listas: revisar si este guard sigue "
+        "protegiendo lo que dice proteger"
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════════

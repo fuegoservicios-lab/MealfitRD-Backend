@@ -210,19 +210,27 @@ def test_coherence_side_invokes_helper(helper_name):
     )
 
 
+# [review final audit-v7-p1 · 2026-08-03] El lado AGGREGATOR de la simetría vive hoy en
+# `canonicalize_shopping_food_name`. `P1-VEG-BACKFILL-HONESTY` extrajo la cadena entera de
+# `aggregate_and_deduct_shopping_list` para que el lado TEXTO del backstop de cantidades usara el
+# MISMO código que el lado comprado. El bilateral que P3-NEW-6 vigila (guard ↔ lista) es idéntico;
+# lo que cambió es en qué función vive la mitad de la lista. Se ancla además la delegación.
+_AGG_CANON_FUNC = "canonicalize_shopping_food_name"
+
+
 @pytest.mark.parametrize("helper_name", [
     "canonicalize_viveres",
     "canonicalize_musaceae",
 ])
 def test_aggregator_invokes_helper(helper_name):
-    """`aggregate_and_deduct_shopping_list` (aggregator) debe invocar
-    ambos canonicalizers. Sin esto, las preparaciones múltiples del
-    mismo producto siguen como líneas separadas en la shopping list.
+    """El lado LISTA DE COMPRAS (hoy `canonicalize_shopping_food_name`, antes inline en
+    `aggregate_and_deduct_shopping_list`) debe invocar ambos canonicalizers. Sin esto, las
+    preparaciones múltiples del mismo producto siguen como líneas separadas en la shopping list.
     """
     src = _SHOPPING_CALCULATOR_PY.read_text(encoding="utf-8")
-    body = _extract_function_body(src, "aggregate_and_deduct_shopping_list")
+    body = _extract_function_body(src, _AGG_CANON_FUNC)
     assert f"{helper_name}(" in body, (
-        f"P3-NEW-6 regresión: `aggregate_and_deduct_shopping_list` no "
+        f"P3-NEW-6 regresión: `{_AGG_CANON_FUNC}` no "
         f"invoca `{helper_name}(...)`. Sin esto, recetas con "
         f"preparaciones múltiples del mismo vívere/musácea siguen "
         f"generando líneas separadas en la lista de compras (bug "
@@ -231,25 +239,35 @@ def test_aggregator_invokes_helper(helper_name):
 
 
 def test_aggregator_calls_happen_after_inline_canon():
-    """En el aggregator, los nuevos helpers viven en la rama `else` del
+    """En el lado lista, los nuevos helpers viven en la rama `else` del
     bloque `_consolidate_inline_canon` (después de la consolidación de
     Huevo/Ñame/Miel/Ajo). Esto preserva precedence:
       - Ñame ya tiene canónico fijo via inline_canon → no entra al
         viveres path (que NO incluye Ñame intencionalmente).
     """
     src = _SHOPPING_CALCULATOR_PY.read_text(encoding="utf-8")
-    body = _extract_function_body(src, "aggregate_and_deduct_shopping_list")
+    body = _extract_function_body(src, _AGG_CANON_FUNC)
     # Encontrar la posición del bloque `_consolidate_inline_canon`.
     inline_pos = body.find("_consolidate_inline_canon(canonical_name)")
     assert inline_pos > 0, (
         "P3-NEW-6 regresión: no se encontró call `_consolidate_inline_canon"
-        "(canonical_name)` en aggregator. ¿Refactor masivo?"
+        "(canonical_name)` en el SSOT de canonicalización. ¿Refactor masivo?"
     )
     viveres_pos = body.find("canonicalize_viveres(")
     assert viveres_pos > inline_pos, (
         "P3-NEW-6 regresión: `canonicalize_viveres` debe llamarse DESPUÉS "
         "del bloque `_consolidate_inline_canon` para preservar precedence "
         "(Ñame ya cubierto por inline_canon)."
+    )
+
+
+def test_el_agregador_delega_en_el_ssot_de_canonicalizacion():
+    """[review final · 2026-08-03] La mitad que faltaba: si el agregador deja de delegar, los dos
+    canonicalizers dejan de aplicarse a la lista real aunque sigan escritos en el SSOT."""
+    src = _SHOPPING_CALCULATOR_PY.read_text(encoding="utf-8")
+    body = _extract_function_body(src, "aggregate_and_deduct_shopping_list")
+    assert f"{_AGG_CANON_FUNC}(name, master_map)" in body, (
+        "P3-NEW-6 regresión: el agregador dejó de delegar en el SSOT de canonicalización."
     )
 
 

@@ -7442,12 +7442,39 @@ def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
         elif _orig_name_lower.strip() == 'pavo':
             canonical_name = 'Pavo'
 
+    # [P0-SHOPPING-CALC-NAMEERROR · 2026-05-15] `_can_lower` se usa en las 13 regex de
+    # consolidación de abajo (Fresas, Almendras, Orégano, Tortilla, Tomate, Cebolla, Espinacas,
+    # Zanahoria, Vainitas, Habichuelas, Tofu, Perejil). Pre-fix la variable nunca se asignaba en
+    # este scope → `NameError: name '_can_lower' is not defined` en cada plan generado, lo que
+    # tumbaba toda la agregación (`aggregate_and_deduct_shopping_list` lanzaba) y dejaba la lista
+    # de compras vacía/incompleta. Síntoma user-facing: el coherence guard reportaba 35
+    # "divergencias críticas" (todos los ingredientes de las recetas marcados como
+    # `presence=expected_only`) y el plan llegaba con `_shopping_coherence_block` no resuelto.
+    # IMPORTANTE: se calcula DESPUÉS del bloque pavo porque el pavo puede mutar `canonical_name`;
+    # las 13 regex de abajo necesitan ver el `canonical_name` post-pavo.
+    #
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · review final] Este comentario, y el del orégano de
+    # tres reglas más abajo, se perdieron al extraer el bloque desde
+    # `aggregate_and_deduct_shopping_list` a esta función: dos tests parser-based anclaban en ellos
+    # y quedaron rojos, y con ellos se fue la razón escrita de una decisión de producto no obvia.
+    # Es la inversión exacta de la convención del repo («incluir tooltip-anchor en el código fuente
+    # para que un renombre falle el test antes de cambiar producción»): el anchor se borró y el
+    # test murió con él. Al mover código, los comentarios se mueven CON él.
+    # tooltip-anchor: P0-SHOPPING-CALC-NAMEERROR
     _can_lower = canonical_name.lower()
 
+    # Consolidación: Fresas variantes (congeladas, frescas) → Fresas
     if re.search(r'^fresas?\b', _can_lower):
         canonical_name = 'Fresas'
+    # Consolidación: Almendras variantes → Almendras fileteadas
     if re.search(r'^almendras?\b', _can_lower) and 'mantequilla' not in _can_lower:
         canonical_name = 'Almendras fileteadas'
+    # [P3-OREGANO-DISPLAY-NAME · 2026-06-20] Variantes de orégano (seco, dominicano) → 'Orégano'
+    # (display; el owner pidió quitar 'dominicano', redundante en es-DO). Este literal ES el
+    # nombre mostrado/almacenado en `aggregated_shopping_list` (NO `master_ingredients.name`).
+    # 'Orégano' resuelve en `master_map` para el lookup de precio/envase vía el alias
+    # 'orégano'.title()='Orégano' del catálogo (slug='oregano'). NO revertir sin re-alinear.
+    # tooltip-anchor: P3-OREGANO-DISPLAY-NAME
     if re.search(r'^or[eé]gano\b', _can_lower):
         canonical_name = 'Orégano'
     if re.search(r'^tortillas?\s+integral', _can_lower):

@@ -246,11 +246,32 @@ def guard_body(sc_src) -> str:
 
 @pytest.fixture(scope="module")
 def aggregator_body(sc_src) -> str:
-    body = _extract_function_body(sc_src, "aggregate_and_deduct_shopping_list")
+    """[review final audit-v7-p1 · 2026-08-03] El lado LISTA DE COMPRAS de la simetría vive hoy en
+    `canonicalize_shopping_food_name`, no inline en `aggregate_and_deduct_shopping_list`.
+
+    `P1-VEG-BACKFILL-HONESTY` extrajo la cadena entera para que el lado TEXTO del backstop de
+    cantidades usara EXACTAMENTE el mismo código que el lado comprado (antes 'Tomates' vs 'Tomate' y
+    el emparejamiento fallaba en silencio). La simetría que P2-NEW-A vigila —guard y lista
+    canonicalizan las mismas familias— no cambió; cambió dónde vive una de las dos mitades. Se
+    ancla también la delegación (abajo), para que mover el bloque otra vez no pueda pasar mudo."""
+    body = _extract_function_body(sc_src, "canonicalize_shopping_food_name")
     assert body is not None, (
-        "P2-NEW-A sanity: `aggregate_and_deduct_shopping_list` no encontrada."
+        "P2-NEW-A sanity: `canonicalize_shopping_food_name` no encontrada (SSOT de canonicalización "
+        "del lado lista de compras)."
     )
     return body
+
+
+def test_el_agregador_delega_en_el_ssot_de_canonicalizacion(sc_src):
+    """[review final · 2026-08-03] La otra mitad: `aggregate_and_deduct_shopping_list` debe seguir
+    llegando a los canonicalizers por delegación. Si deja de delegar, la lista vuelve a mostrar
+    'mango verde' y 'mango maduro' como 2 líneas aunque el guard las consolide — el falso positivo
+    `cap_swallowed_modifier` que P2-NEW-A cerró."""
+    body = _extract_function_body(sc_src, "aggregate_and_deduct_shopping_list")
+    assert body is not None
+    assert "canonicalize_shopping_food_name(name, master_map)" in body, (
+        "P2-NEW-A regresión: el agregador dejó de delegar en el SSOT de canonicalización."
+    )
 
 
 @pytest.mark.parametrize(

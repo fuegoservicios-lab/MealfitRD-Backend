@@ -19,12 +19,31 @@ _SC = Path(__file__).resolve().parent.parent / "shopping_calculator.py"
 
 
 def test_oregano_consolidation_display_is_oregano():
+    """[review final audit-v7-p1 · 2026-08-03] Dos cambios de anclaje, misma garantía:
+
+    (1) Se ancla en `tooltip-anchor: P3-OREGANO-DISPLAY-NAME` y no en el marker suelto. El marker
+        suelto aparece también en cualquier comentario que HABLE del fix (le pasó a este test al
+        reponer el bloque perdido: un comentario vecino que lo citaba se llevó el `index` y la
+        ventana leyó la región equivocada). El tooltip-anchor es el marcador de SITIO, uno solo.
+    (2) La ventana fija de 700 chars se sustituye por el delimitador ESTRUCTURAL de la regla: la
+        siguiente sentencia `if re.search(` después de la asignación. Así el test no caduca cuando
+        alguien añade una línea de comentario, que es como murió su hermano de
+        `test_p1_budget_convergence`.
+
+    El bloque vive hoy en `canonicalize_shopping_food_name` (SSOT extraído del aggregator por
+    P1-VEG-BACKFILL-HONESTY); la garantía —el literal MOSTRADO es 'Orégano', no 'Orégano
+    dominicano', porque el segundo huerfaniza el lookup de precio en master_map— no cambió."""
     src = _SC.read_text(encoding="utf-8")
-    idx = src.index("P3-OREGANO-DISPLAY-NAME")
-    block = src[idx:idx + 700]  # cubre el comentario + las líneas del bloque de consolidación
+    idx = src.index("tooltip-anchor: P3-OREGANO-DISPLAY-NAME")
+    asignacion = src.index("canonical_name = ", src.index("if re.search(", idx))
+    fin_regla = src.index("if re.search(", asignacion)
+    block = src[idx:fin_regla]
     assert "canonical_name = 'Orégano'" in block, (
         "el target de consolidación de orégano debe ser el display 'Orégano'"
     )
     assert "canonical_name = 'Orégano dominicano'" not in block, (
         "NO revertir a 'Orégano dominicano' — huerfaniza el lookup de precio en master_map"
+    )
+    assert "or[eé]gano" in block, (
+        "el tooltip-anchor se separó de la regla que documenta: el test estaría vigilando otro sitio"
     )

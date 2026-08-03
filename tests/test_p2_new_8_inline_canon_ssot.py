@@ -145,12 +145,26 @@ def test_non_matches_return_none(name):
 # ---------------------------------------------------------------------------
 # 2. Drift detection — ambos call sites usan el helper SSOT
 # ---------------------------------------------------------------------------
+# [review final audit-v7-p1 · 2026-08-03] El segundo call site cambió de nombre, no de existencia.
+#
+# `P1-VEG-BACKFILL-HONESTY` extrajo la cadena de canonicalización de
+# `aggregate_and_deduct_shopping_list` a `canonicalize_shopping_food_name` (SSOT compartido con el
+# lado TEXTO del backstop de cantidades). La llamada a `_consolidate_inline_canon` se fue con ella.
+# El contrato de P2-NEW-8 —«los dos lados de la comparación consolidan Huevo/Ñame/Miel/Ajo con el
+# MISMO código»— sigue siendo exactamente el mismo, y el drift que vigila también: si el lado del
+# guard (`_canonicalize_for_coherence`) y el lado de la lista dejan de compartir el helper, el guard
+# vuelve a reportar «Huevo missing» falsos.
+#
+# Se ancla además que el agregador DELEGUE, para que mover el bloque a un tercer sitio sin actualizar
+# este test no pueda pasar en silencio otra vez.
+_CALL_SITES = ("_canonicalize_for_coherence", "canonicalize_shopping_food_name")
+
+
 def test_both_call_sites_invoke_helper():
-    """`_canonicalize_for_coherence` Y `aggregate_and_deduct_shopping_list`
-    deben invocar `_consolidate_inline_canon`. Si alguno reintroduce las
-    reglas inline, falsea el contrato SSOT."""
+    """Los DOS lados de la comparación (el del guard y el de la lista de compras) deben invocar
+    `_consolidate_inline_canon`. Si alguno reintroduce las reglas inline, falsea el contrato SSOT."""
     src = _SHOPPING_CALCULATOR_PY.read_text(encoding="utf-8")
-    for fn_name in ("_canonicalize_for_coherence", "aggregate_and_deduct_shopping_list"):
+    for fn_name in _CALL_SITES:
         body = _extract_function_body(src, fn_name)
         assert "_consolidate_inline_canon(" in body, (
             f"P2-NEW-8 regresión: `{fn_name}` no invoca "
@@ -158,6 +172,18 @@ def test_both_call_sites_invoke_helper():
             f"reintrodujeron, falsea el contrato SSOT — drift entre call "
             f"sites es exactamente el bug que este helper cierra."
         )
+
+
+def test_el_agregador_sigue_llegando_al_helper_por_delegacion():
+    """[review final · 2026-08-03] `aggregate_and_deduct_shopping_list` ya no llama al helper
+    directamente: delega en `canonicalize_shopping_food_name`. Esa delegación es lo que mantiene
+    vivo el contrato para la lista de compras — si desaparece, el agregador deja de consolidar
+    Huevo/Ñame/Miel/Ajo y el guard vuelve a ver divergencias `expected_only` falsas."""
+    src = _SHOPPING_CALCULATOR_PY.read_text(encoding="utf-8")
+    body = _extract_function_body(src, "aggregate_and_deduct_shopping_list")
+    assert "canonicalize_shopping_food_name(name, master_map)" in body, (
+        "P2-NEW-8 regresión: el agregador dejó de delegar en el SSOT de canonicalización."
+    )
 
 
 # Patrones legacy que NO deben aparecer fuera del helper (cada regla).
@@ -170,7 +196,7 @@ _LEGACY_PATTERNS = {
 
 
 @pytest.mark.parametrize("fn_name", [
-    "_canonicalize_for_coherence",
+    *_CALL_SITES,
     "aggregate_and_deduct_shopping_list",
 ])
 def test_call_site_bodies_dont_contain_legacy_regex(fn_name):

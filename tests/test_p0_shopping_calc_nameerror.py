@@ -30,6 +30,22 @@ Fresas variantes").
 
 Este test es parser-based — verifica que la asignación está presente y
 en la posición correcta. NO ejecuta el pipeline LLM.
+
+## [review final audit-v7-p1 · 2026-08-03] Re-apuntado tras la extracción SSOT
+
+`P1-VEG-BACKFILL-HONESTY` (ronda 1) extrajo toda la cadena de canonicalización —master_map,
+`_consolidate_inline_canon`, los 5 canonicalizers de P3-NEW-12/P2-NEW-A, el bloque pavo y las 13
+regex de cola— de `aggregate_and_deduct_shopping_list` a la función nueva
+`canonicalize_shopping_food_name`, para que `get_shopping_list_delta` pudiera canonicalizar el
+lado TEXTO con el MISMO código que el lado comprado (antes "300 g de tomates" quedaba keyed por
+'Tomates' y el ítem comprado por 'Tomate', y el emparejamiento fallaba en silencio).
+
+El invariante de producción NO cambió: las 16 referencias a `_can_lower` y su asignación siguen
+juntas, en la misma función que las usa — sólo que esa función ahora es
+`canonicalize_shopping_food_name`. Lo que quedó roto fue este guard, que buscaba en un cuerpo ya
+vacío y por tanto medía 0 referencias. Se re-apunta a la función REAL y se añade la mitad que
+faltaba: que el agregador DELEGUE (si alguien reintroduce la cadena inline, el drift entre los dos
+lados vuelve, que es el bug que la extracción cerró).
 """
 from __future__ import annotations
 
@@ -117,26 +133,57 @@ def test_can_lower_assigned_after_pavo_block():
     )
 
 
+def _func_body(text: str, func_name: str) -> str:
+    """Cuerpo de una función top-level, delimitado por la SIGUIENTE `def` de columna 0.
+
+    Es un ancla estructural, no una ventana de N caracteres: crece con la función y no caduca
+    cuando alguien añade líneas (el modo de fallo de `test_convergence_failopen_never_wipes_lists`,
+    que llevaba tres bumpeos de constante)."""
+    start = text.find(f"def {func_name}")
+    assert start > 0, f"Función `{func_name}` no encontrada."
+    next_def = re.search(r"^def \w+", text[start + 1:], re.MULTILINE)
+    end = (start + 1 + next_def.start()) if next_def else len(text)
+    return text[start:end]
+
+
+# Función que HOY contiene la cadena de canonicalización. Ver el bloque de la docstring del módulo:
+# hasta 2026-08-03 vivía inline en `aggregate_and_deduct_shopping_list`.
+_CANON_FUNC = "canonicalize_shopping_food_name"
+
+
 def test_all_can_lower_references_within_same_function():
-    """Las 13 referencias a `_can_lower` deben estar todas dentro de
-    `aggregate_and_deduct_shopping_list`. Si una se mueve afuera por
-    refactor sin renombrar, NameError ahí también."""
+    """Las 13+ referencias a `_can_lower` deben estar todas dentro de la MISMA función que hace la
+    asignación. Si una se mueve afuera por refactor sin renombrar, NameError ahí también.
+
+    [review final · 2026-08-03] Esa función es hoy `canonicalize_shopping_food_name` (extracción
+    SSOT de P1-VEG-BACKFILL-HONESTY). El invariante es idéntico; sólo cambió el contenedor."""
     text = _strip_comments(_read_calc())
-    # Localizar fronteras de la función
-    func_start = text.find("def aggregate_and_deduct_shopping_list")
-    assert func_start > 0, "Función `aggregate_and_deduct_shopping_list` no encontrada."
-    # Buscar la siguiente `def` top-level (col 0)
-    next_def = re.search(r"^def \w+", text[func_start + 1 :], re.MULTILINE)
-    func_end = (func_start + 1 + next_def.start()) if next_def else len(text)
-    func_body = text[func_start:func_end]
+    func_body = _func_body(text, _CANON_FUNC)
 
     references = re.findall(r"_can_lower", func_body)
     # Esperamos: 1 asignación + 13 referencias en regex (= 14 menciones mínimo).
     assert len(references) >= 14, (
-        f"Esperaba ≥14 menciones de `_can_lower` dentro de "
-        f"`aggregate_and_deduct_shopping_list` (1 asignación + 13 usos), "
-        f"encontré {len(references)}. Si alguna se removió, verificar que la "
-        f"regex correspondiente también se removió."
+        f"Esperaba ≥14 menciones de `_can_lower` dentro de `{_CANON_FUNC}` "
+        f"(1 asignación + 13 usos), encontré {len(references)}. Si alguna se removió, "
+        f"verificar que la regex correspondiente también se removió."
+    )
+
+
+def test_el_agregador_delega_en_el_ssot_y_no_reintroduce_la_cadena_inline():
+    """[review final · 2026-08-03] La otra mitad del guard, que faltaba.
+
+    `aggregate_and_deduct_shopping_list` debe DELEGAR en el SSOT y no volver a contener la cadena.
+    Si alguien la reintroduce inline (por "performance", por un merge, por costumbre), el lado
+    comprado y el lado texto del backstop vuelven a divergir en silencio: el bug exacto que la
+    extracción cerró, y el que P2-NEW-8/P3-NEW-6 llevan documentando desde mayo."""
+    text = _strip_comments(_read_calc())
+    agg_body = _func_body(text, "aggregate_and_deduct_shopping_list")
+    assert f"{_CANON_FUNC}(name, master_map)" in agg_body, (
+        "el agregador dejó de delegar en el SSOT de canonicalización"
+    )
+    assert not re.search(r"_can_lower", agg_body), (
+        "la cadena de canonicalización volvió a vivir inline en el agregador: eso reintroduce el "
+        "drift entre el lado comprado y el lado texto/guard"
     )
 
 
@@ -147,10 +194,7 @@ def test_orig_name_lower_only_in_pavo_block():
     'Usar SOLO `name.lower()` (raw del parser) ... NO `_can_lower` (post-master_map)'
     pero eso aplica solo al matching de pavo."""
     text = _strip_comments(_read_calc())
-    func_start = text.find("def aggregate_and_deduct_shopping_list")
-    next_def = re.search(r"^def \w+", text[func_start + 1 :], re.MULTILINE)
-    func_end = (func_start + 1 + next_def.start()) if next_def else len(text)
-    func_body = text[func_start:func_end]
+    func_body = _func_body(text, _CANON_FUNC)
 
     # Cuenta usos. Debe haber 1 asignación + N usos dentro del bloque pavo.
     # No verificamos número exacto (puede crecer), solo que existe.
