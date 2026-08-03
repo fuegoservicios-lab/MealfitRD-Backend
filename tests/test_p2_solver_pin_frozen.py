@@ -12,6 +12,10 @@ Caso medido con el fixture de abajo (target proteina 80 g):
   antes → factor crudo de la congelada 1.4276 (fantasma) · movil 0.503 · achieved P = 60.1 g
   ahora → congelada clavada a 1.0             · movil 1.231 · achieved P = 79.7 g
 
+⚠️ EL PIN VIVE SOLO EN LA RAMA LSQ. El defecto espejo del greedy se implemento, se MIDIO sobre
+312 comidas con target de 4 filas y se RETIRO: LSQ mejora 189 / empeora 19, pero greedy mejora 74
+/ empeora 116 (peor caso 0.236 → 0.424). Ver `test_el_greedy_no_lleva_el_pin_ni_con_el_knob_on`.
+
 100% OFFLINE: `StubDB` sustituye a `IngredientNutritionDB` (el .env apunta a PRODUCCION).
 """
 import inspect
@@ -86,24 +90,47 @@ def test_la_movil_absorbe_el_residual_que_la_congelada_no_puede_entregar():
     assert abs(res["achieved"]["protein"] / 80.0 - 1.0) < 0.05
 
 
-def test_el_greedy_excluye_la_contribucion_congelada_del_denominador(monkeypatch):
-    """Espejo del defecto en el fallback: `current` contaba la congelada y diluia el factor."""
+def test_el_greedy_no_lleva_el_pin_ni_con_el_knob_on(monkeypatch):
+    """ASIMETRIA DELIBERADA. El defecto espejo del greedy (`current` cuenta la congelada) se
+    implemento, se MIDIO y se retiro: barrido de 312 comidas con target de 4 filas →
+    LSQ mejora 189 / empeora 19, pero GREEDY mejora 74 / empeora 116 (peor caso 0.236 → 0.424).
+
+    Causa: el greedy modela solo el macro dominante de su grupo, asi que al cubrir el residual
+    arrastra la kcal/grasa embebida sin nada que lo frene. Ademas solo corre como fallback.
+
+    Este test ancla el comportamiento PRE-FIX del greedy: si alguien "completa la migracion"
+    por simetria con el LSQ, falla aqui y tiene que re-medir el barrido antes de mergear.
+    """
     monkeypatch.setattr(ps, "SOLVER_LSQ", False)
-    res = _solve([PECHUGA, POLLO])
-    assert res["method"] == "greedy"
-    # antes: 75.9 g (factor 1.0884 repartido tambien a la congelada). Ahora: 80.0 g.
-    assert abs(res["achieved"]["protein"] - 80.0) < 1.0, (
-        f"el greedy sigue repartiendo mal el residual: {res['achieved']}")
+    con_pin = _solve([PECHUGA, POLLO])
+    assert con_pin["method"] == "greedy"
+    # Comportamiento historico: factor 1.0884 repartido TAMBIEN a la congelada ⇒ 75.9 g.
+    # (Con pin habria dado 1.2407 y 80.0 g — mejor en ESTA comida, peor en el agregado.)
+    assert con_pin["factors_applied"][1] == pytest.approx(1.0884, abs=1e-3), (
+        f"el greedy dejo de comportarse como pre-fix: {con_pin['factors_applied']}")
+    assert con_pin["achieved"]["protein"] == pytest.approx(75.9, abs=0.2)
+
+    monkeypatch.setattr(ps, "SOLVER_PIN_FROZEN", False)
+    sin_pin = _solve([PECHUGA, POLLO])
+    assert con_pin == sin_pin, "el knob NO debe mover ni un valor en la rama greedy"
 
 
 # ═════════════ 2 · el knob apaga el cambio por completo ═════════════
 
 def test_el_knob_off_restaura_el_comportamiento_previo_byte_a_byte(monkeypatch):
+    """El rollback devuelve el dict de retorno COMPLETO, no solo el factor que miramos."""
+    con_pin = _solve([PECHUGA, POLLO])
     monkeypatch.setattr(ps, "SOLVER_PIN_FROZEN", False)
-    res = _solve([PECHUGA, POLLO])
-    assert res["factors_applied"][1] == pytest.approx(0.503, abs=1e-3), (
-        f"el rollback no reprodujo la linea base medida: {res['factors_applied']}")
-    assert res["achieved"]["protein"] == pytest.approx(60.1, abs=0.2)
+    sin_pin = _solve([PECHUGA, POLLO])
+    # linea base medida sobre el arbol sin el fix (golden de 23 casos):
+    assert sin_pin["factors_applied"] == [1.0, pytest.approx(0.503, abs=1e-3)], (
+        f"el rollback no reprodujo la linea base medida: {sin_pin['factors_applied']}")
+    assert sin_pin["achieved"] == {"kcal": 325.5, "protein": 60.1, "carbs": 0.0, "fats": 7.9}
+    assert sin_pin["ingredients"] == [PECHUGA, "50.3 g de pollo"]
+    assert sin_pin["saturated_hi"] == 0 and sin_pin["saturated_lo"] == 0
+    assert sin_pin["converged"] is False
+    # ...y el pin SI cambia el dict: si no, el test de arriba seria vacuo.
+    assert con_pin != sin_pin
 
 
 def test_el_knob_existe_y_se_auto_registra_en_el_registry():
@@ -166,28 +193,58 @@ def test_entries_sin_la_clave_movable_se_asumen_movibles():
 
 def test_la_factibilidad_y_el_solver_dejan_de_contradecirse(monkeypatch):
     """P3-FEASIBILITY-FROZEN-LINE ya clavaba la congelada a 1.0 en las COTAS del reporte, mientras
-    el solver la escalaba hasta 3.5x: DOS modelos contradictorios del mismo plato.
+    el solver la escalaba hasta 3.5x: DOS modelos del mismo plato que no se hablaban.
 
     Plato: «Cdta de mantequilla de mani» (4.0 g de grasa, CONGELADA) + «150 g de arroz» (0.5 g,
-    movible) contra un target de 8 g de grasa. La cota frozen-aware del reporte es
-    4.0x1.0 + 0.5x3.5 = 5.75 g ⇒ veredicto 'high' (inalcanzable, falta un PORTADOR).
+    movible). Target REALISTA de 4 filas — la forma que arma produccion. La cota frozen-aware de
+    grasa es 4.0x1.0 + 0.5x3.5 = 5.75 g < 8 ⇒ veredicto 'high' (falta un PORTADOR, no escalado).
 
-    Antes: el reporte decia "5.75 es el maximo" y el solver entregaba 4.6 g — se quedaba CORTO de su
-    propio techo porque creia que el mani cubriria el hueco. Ahora entrega 5.8 g: el solver exprime
-    lo unico que puede mover y el numero coincide con la cota que el reporte publica.
+    ⚠️ El fixture NO usa un target de una sola fila. Con `{protein:0, carbs:0, fats:8}` la movil se
+    va a x3.5 y "alcanza" justo la cota publicada — un numero bonito que es ARTEFACTO de haber
+    quitado las filas que lo frenarian. Con las 4 filas el mismo plato da x1.18 y el deficit de
+    grasa PERSISTE, que es la verdad: no hay portador.
+
+    Lo que el pin cambia aqui no es llegar al target — es dejar de RETENER la unica linea que se
+    puede mover porque el optimizador creia que el mani escalaria: 0.891 → 1.182.
     """
-    lines, tgt = [MANI, ARROZ], {"protein": 0.0, "carbs": 0.0, "fats": 8.0}
-    res = _solve(lines, tgt)
-    assert (res["infeasible"] or {}).get("fats") == "high", (
-        f"el fixture dejo de ejercitar el caso infactible: {res['infeasible']}")
-    assert res["achieved"]["fats"] == pytest.approx(5.75, abs=0.1), (
-        f"el solver no llega a la cota que el propio reporte publica: {res['achieved']}")
-    assert res["factors_applied"][1] == pytest.approx(3.5), "la unica movible debe ir al techo"
-
+    lines = [MANI, ARROZ]
+    tgt = {"kcal": 300, "protein": 12, "carbs": 40, "fats": 8}
+    con_pin = _solve(lines, tgt)
     monkeypatch.setattr(ps, "SOLVER_PIN_FROZEN", False)
-    viejo = _solve(lines, tgt)
-    assert viejo["achieved"]["fats"] == pytest.approx(4.6, abs=0.1), (
-        "linea base de la contradiccion: reporte 'high' con cota 5.75 vs 4.6 g entregados")
+    sin_pin = _solve(lines, tgt)
+
+    # La senal de factibilidad ya era frozen-aware y NO se toca: mismo veredicto en ambos.
+    assert (con_pin["infeasible"] or {}).get("fats") == "high", (
+        f"el fixture dejo de ejercitar el caso infactible: {con_pin['infeasible']}")
+    assert (sin_pin["infeasible"] or {}).get("fats") == "high"
+    # La congelada nunca se mueve (eso ya lo garantizaba `_f_eff`); lo que cambia es la movil.
+    assert con_pin["factors_applied"][0] == sin_pin["factors_applied"][0] == 1.0
+    assert sin_pin["factors_applied"][1] == pytest.approx(0.8913, abs=1e-3)
+    assert con_pin["factors_applied"][1] == pytest.approx(1.1815, abs=1e-3)
+    assert con_pin["factors_applied"][1] > sin_pin["factors_applied"][1], (
+        "el solver sigue reteniendo la movil por contar con una linea que no se mueve")
+    # El deficit de grasa que QUEDA es el que el reporte explica, no escalado sin usar.
+    assert con_pin["achieved"]["fats"] < tgt["fats"]
+    # Honestidad: aqui la unica movil es una bomba de carbos, asi que soltarla sobre-entrega
+    # carbos (38.9 → 51.1 g). El veredicto agregado NO sale de esta comida sino del barrido de
+    # 312 (LSQ: mejora 189 / empeora 19). Este test ancla el mecanismo, no la victoria.
+    assert con_pin["achieved"]["carbs"] > sin_pin["achieved"]["carbs"]
+
+
+def test_el_retorno_declara_cuantas_lineas_estan_congeladas():
+    """`frozen_lines` es la senal honesta para "una congelada que el target QUERRIA mover es
+    informacion": ninguna clave del retorno lo decia. Aditiva — los consumidores leen por `.get()`.
+    """
+    assert _solve([PECHUGA, POLLO])["frozen_lines"] == 1
+    assert _solve([PECHUGA, MANI], {"kcal": 300, "protein": 20, "carbs": 5, "fats": 10})[
+        "frozen_lines"] == 2
+    assert _solve([POLLO, ARROZ], {"kcal": 600, "protein": 45, "carbs": 55, "fats": 12})[
+        "frozen_lines"] == 0
+    # El path dict no declara `movable`: expone la clave igual (contrato comun) y siempre en 0.
+    dicts = ps.solve_portion_macros([{"name": "pollo", "quantity": 100, "unit": "g"}],
+                                    {"kcal": 300, "protein": 40, "carbs": 0, "fats": 6},
+                                    db=StubDB())
+    assert dicts["frozen_lines"] == 0
 
 
 def test_el_marker_vive_en_el_codigo_que_lo_implementa():

@@ -289,8 +289,9 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     el resto `max_scale`. Retorna (factors, method, saturated_hi, saturated_lo) — `saturated_*` cuenta los
     factores clavados en su bound per-línea (telemetría exacta, no un umbral fijo).
     [P2-SOLVER-PIN-FROZEN · 2026-08-03] `lo` también por-COORDENADA: las líneas `movable=False` van con
-    `lo = hi = 1.0` (el LSQ redistribuye el target a las móviles solo; el greedy trabaja sobre el
-    residual `tv − frozen_contrib`). Sin la clave se asume movible: preserva el path dict."""
+    `lo = hi = 1.0` y el LSQ redistribuye el target a las móviles solo. **Solo en la rama LSQ** — el
+    greedy conserva su comportamiento previo (razón MEDIDA en el comentario largo de esa rama).
+    Sin la clave se asume movible: preserva el path dict."""
     factors = [1.0] * len(entries)
     sc = [i for i, e in enumerate(entries) if e.get("macros") and e.get("group")]
     if not sc:
@@ -299,6 +300,7 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     # [P2-SOLVER-PIN-FROZEN · 2026-08-03] ¿Qué coordenadas están CLAVADAS? Se lee `movable` con la
     # MISMA semántica que `_feasibility_report` (truthiness, default True) a propósito: el objetivo
     # del fix es que solver y señal de factibilidad compartan una sola definición de "frozen".
+    # Lo consume SOLO la rama LSQ de abajo — el greedy quedó fuera por medición, no por olvido.
     _pin = [(SOLVER_PIN_FROZEN and not entries[i].get("movable", True)) for i in sc]
     _hi_sc = [(1.0 if _pin[j] else (_mxp if entries[i]["group"] == "protein" else max_scale))
               for j, i in enumerate(sc)]  # hi por-coordenada
@@ -344,32 +346,38 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                 _log.warning(f"⚠ [P3-SOLVER-LSQ-ERROR-LOUD] LSQ falló ({_et}: {str(_lsq_e)[:120]}) "
                              f"— fallback al greedy por grupo. Se reporta una vez por tipo.")
     # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
-    # [P2-SOLVER-PIN-FROZEN · 2026-08-03] Defecto ESPEJO del LSQ: `current` sumaba también las
-    # congeladas, así que el factor del grupo salía diluido (46.5 g de pechuga inamovible + 27 g de
-    # pollo contra un target de 80 → 1.0884 para ambas, y la pechuga no se movía ⇒ 75.9 g). Ahora la
-    # congelada aporta su valor TAL CUAL: sale del denominador Y se descuenta del target. Con el knob
-    # OFF `frozen` queda en 0.0 y la expresión colapsa a la de siempre.
+    #
+    # ⚠️ [P2-SOLVER-PIN-FROZEN · 2026-08-03] ESTA RAMA **NO** LLEVA EL PIN, A PROPÓSITO. No es un
+    # olvido ni una migración a medias: se implementó, se MIDIÓ y se retiró.
+    #
+    # El defecto espejo existe y es real — `current` suma también las congeladas, así que el factor
+    # del grupo sale diluido (46.5 g de pechuga inamovible + 27 g de pollo contra un target de 80 →
+    # 1.0884 para ambas, y la pechuga no se mueve ⇒ 75.9 g entregados). Pero arreglarlo aquí EMPEORA
+    # el plato. Barrido de 312 comidas sintéticas con target de 4 filas (la forma que arma
+    # producción), comparando el error ENTREGADO con y sin pin:
+    #     LSQ    → mejora 189 / empeora 19 · error medio −0.033 · `converged` 0 True→False, 75 False→True
+    #     GREEDY → mejora  74 / empeora 116 · `converged` 14 True→False vs 7 False→True
+    #              peor caso 0.236 → 0.424 (kcal entregadas 1144 → 1359)
+    #
+    # La causa es estructural, no un mal tuning: el greedy modela ÚNICAMENTE el macro dominante de
+    # cada grupo. Al forzar a las móviles a cubrir el residual que la congelada no entrega, arrastra
+    # la kcal/grasa EMBEBIDA de esas líneas sin nada que la frene — el LSQ sí tiene las otras tres
+    # filas para pagar ese coste, y por eso allí el mismo cambio gana rotundo. Además el greedy solo
+    # corre como FALLBACK (crash del LSQ, `A_rows` vacío, o `MEALFIT_SOLVER_LSQ=false`): dejarlo
+    # estable minimiza el riesgo de un camino que se toma justo cuando algo ya salió mal.
+    #
+    # Si alguien vuelve a intentarlo: el cambio es `current` sin congeladas + `tv − frozen_contrib`,
+    # y hay que RE-MEDIR el barrido, no razonar por simetría con el LSQ. Test que ancla esta
+    # asimetría: `test_p2_solver_pin_frozen.py::test_el_greedy_no_lleva_el_pin_ni_con_el_knob_on`.
+    # tooltip-anchor: P2-SOLVER-PIN-FROZEN
     gf = {}
     for macro in _KCAL_PER_G:
-        current = frozen = 0.0
-        for j, i in enumerate(sc):
-            if entries[i]["group"] != macro:
-                continue
-            if _pin[j]:
-                frozen += entries[i]["macros"][macro]
-            else:
-                current += entries[i]["macros"][macro]
+        current = sum(entries[i]["macros"][macro] for i in sc if entries[i]["group"] == macro)
         tv = tgt.get(macro, 0)
         _hi_m = _mxp if macro == "protein" else max_scale
-        # Residual ≤ 0 (la congelada sola ya excede el target) ⇒ `max(min_scale, ...)` deja las
-        # móviles en el piso, que es lo máximo que el greedy puede hacer por ese macro.
-        gf[macro] = (max(min_scale, min(_hi_m, (tv - frozen) / current))
-                     if (current > 0 and tv > 0) else 1.0)
+        gf[macro] = max(min_scale, min(_hi_m, tv / current)) if (current > 0 and tv > 0) else 1.0
     sat_hi = sat_lo = 0
-    for j, i in enumerate(sc):
-        if _pin[j]:
-            factors[i] = 1.0   # clavada: ni factor fantasma ni conteo de saturación
-            continue
+    for i in sc:
         factors[i] = gf[entries[i]["group"]]
         _hi_i = _mxp if entries[i]["group"] == "protein" else max_scale
         if factors[i] >= _hi_i * 0.999:
@@ -635,6 +643,10 @@ def solve_portion_macros(
         "lsq_error": (_LAST_LSQ_ERROR if method == "greedy" else None),
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
+        # [P2-SOLVER-PIN-FROZEN · 2026-08-03] ver el gemelo en `solve_meal_macros`. En el path dict
+        # ninguna entry declara `movable`, así que esto es SIEMPRE 0 — se emite igual para que las
+        # dos funciones expongan el mismo contrato (P3-SOLVER-DICT-PATH-PARITY).
+        "frozen_lines": sum(1 for e in entries if not e.get("movable", True)),
         "converged": converged,
         # [P3-SOLVER-CONVERGED-BAND] qué macro falló, no solo que falló alguno.
         "converged_per_macro": converged_per_macro,
@@ -784,6 +796,13 @@ def solve_meal_macros(
         "lsq_error": (_LAST_LSQ_ERROR if method == "greedy" else None),
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
+        # [P2-SOLVER-PIN-FROZEN · 2026-08-03] Cuántas líneas de la comida son INAMOVIBLES (sin
+        # cantidad líder que reescribir). Hasta ahora ninguna clave del retorno lo decía, y es la
+        # señal honesta para la objeción legítima al pin: "una congelada que el target QUERRÍA mover
+        # es información, no ruido". Con `frozen_lines > 0` + `infeasible`/`residuals` el caller
+        # distingue «el solver no llegó» de «el solver no PUDO llegar y aquí está el motivo».
+        # Aditivo: todos los consumidores leen por `.get()`; nadie enumera este dict.
+        "frozen_lines": sum(1 for e in entries if not e.get("movable", True)),
         "converged": converged,
         # [P3-SOLVER-CONVERGED-BAND] qué macro falló, no solo que falló alguno.
         "converged_per_macro": converged_per_macro,
