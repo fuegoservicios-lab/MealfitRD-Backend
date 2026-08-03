@@ -31858,7 +31858,13 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 _bc_rec_t2 = full_plan_data.get("budget_reconciliation") or {}
                                 if str(_bc_rec_t2.get("status") or "") == "excedido":
                                     from graph_orchestrator import apply_budget_convergence_for_days as _abc_t2
-                                    if _abc_t2(full_plan_data, form_data):
+                                    # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] `_inv_s` es
+                                    # el MISMO snapshot de Nevera que las 3 multiplicidades ya
+                                    # usaron arriba: pasarlo es cero IO nuevo dentro del worker, y
+                                    # sin él la convergencia sustituiría alimentos que el usuario
+                                    # ya compró (gasto real ARRIBA con el banner en "dentro"). La
+                                    # ventana de días futuros se deriva dentro del helper (hoy RD).
+                                    if _abc_t2(full_plan_data, form_data, inventory_names=_inv_s):
                                         # [P1-CYCLE-QTY-FRACTIONAL · 2026-08-02] días/7 fraccional en vez de 2.0/4.0.
                                         # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] misma ventana
                                         # que la 1ª pasada (la convergencia sustituye alimentos, no días).

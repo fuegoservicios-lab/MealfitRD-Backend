@@ -29,10 +29,14 @@ def _plan():
 
 def test_helper_orchestrates_and_marks(monkeypatch):
     calls = {}
+    # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] `**kw` por la MISMA razón que el doble
+    # del motor de macros documentada abajo: los dos pases recibieron `inventory_names=` (skip
+    # de lo ya comprado) y con firma cerrada el TypeError lo tragaba el fail-open del helper →
+    # 0 sustituciones y este test caía por "no orquestó" cuando sí orquestaba.
     monkeypatch.setattr(go, "_apply_budget_driver_aware_pass",
-                        lambda days, fd, weekly: calls.setdefault("driver", (len(days), len(weekly))) and 2 or 2)
+                        lambda days, fd, weekly, **kw: calls.setdefault("driver", (len(days), len(weekly))) and 2 or 2)
     monkeypatch.setattr(go, "_apply_budget_cheapen_pass",
-                        lambda days, fd, force=False: calls.setdefault("cheapen_force", force) or 1)
+                        lambda days, fd, force=False, **kw: calls.setdefault("cheapen_force", force) or 1)
     monkeypatch.setattr(go, "_protein_repeat_autofix", lambda days, fd: 0)
     # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] `**kw` a propósito: el doble del motor tenía
     # firma CERRADA (`pd, surface, db`), así que al empezar a pasarle `form_data=` el stub lanzaba
@@ -72,7 +76,11 @@ def test_t2_seam_wired_with_rebuild_and_rereconcile():
     # `window_days=_trip_win` a las 3 llamadas + su comentario dentro de ESTE bloque, y
     # `_rbr_t2(full_plan_data)` quedaba fuera de la ventana fija. El tamano del slice es
     # detalle del test (no un contrato): las aserciones de abajo son las mismas.
-    blk = _CRON[i:i + 5000]
+    # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] 5000 -> 7000: el comentario que
+    # justifica pasarle `inventory_names=_inv_s` al helper volvió a empujar
+    # `_rbr_t2(full_plan_data)` fuera de la ventana fija. Segunda vez que pasa — el slice
+    # sigue siendo detalle del test, no un contrato.
+    blk = _CRON[i:i + 7000]
     assert 'str(_bc_rec_t2.get("status") or "") == "excedido"' in blk, "gate por status excedido"
     assert "apply_budget_convergence_for_days" in blk
     assert blk.count("get_shopping_list_delta(") == 3, "rebuild de las 3 multiplicidades"

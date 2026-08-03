@@ -31229,6 +31229,22 @@ BUDGET_CHEAPEN_MAX_SUBS = _env_int("MEALFIT_BUDGET_CHEAPEN_MAX_SUBS", 3, lambda 
 # no solo economía) → una pasada extra del cheapen (force) → re-banda → rebuild de listas →
 # re-costeo → re-reconciliación. Acotado a 1 pasada. Ver bloque en assemble_plan_node.
 BUDGET_CONVERGENCE_ENABLED = _env_bool("MEALFIT_BUDGET_CONVERGENCE", True)
+# [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] (audit v7 · P2) La convergencia barría
+# `plan_data["days"]` COMPLETO sin filtro temporal, y su seam más caliente (T2 del chunk
+# worker) corre DÍAS después de la generación — con lo que la sustitución quinoa→arroz caía
+# sobre dos cosas que ya no son negociables:
+#   (a) los días que el usuario YA COCINÓ. `consultar_dia_del_plan` (chat) y el quality index
+#       leen esos días: reescribirlos le cuenta al usuario una comida que nunca hizo.
+#   (b) las semanas cuya despensa YA SE PAGÓ. La quinoa comprada queda huérfana y la lista
+#       nueva exige comprar arroz ADEMÁS: el gasto REAL sube mientras el banner dice "dentro".
+#       La convergencia converge en el papel y encarece en la caja.
+# Con el knob ON, solo los días con fecha `>= hoy` reciben sustituciones (`date` ISO de
+# P1-CHAT-PAST-DAYS, fallback índice relativo a `grocery_start_date`) y los alimentos que ya
+# están en la Nevera del usuario no se sustituyen. El RE-COSTEO posterior sigue viendo el plan
+# ENTERO — el costo del ciclo es de todo el plan; solo la ESCRITURA se ventanea.
+# Rollback sin redeploy: MEALFIT_BUDGET_CONVERGENCE_FUTURE_ONLY=false (barrido completo,
+# byte-idéntico al pre-fix). Test: test_p2_budget_convergence_future_only.py.
+BUDGET_CONVERGENCE_FUTURE_ONLY = _env_bool("MEALFIT_BUDGET_CONVERGENCE_FUTURE_ONLY", True)
 # [P1-BUDGET-DRIVER-AWARE · 2026-07-04] (audit v7 · P1-2) El cerebro de la convergencia deja
 # de ser ciego: en vez de barrer días en orden contra la tabla estática de 8 pares, RANKEA los
 # ítems que realmente encarecen la lista costeada (`estimated_cost_rd` desc) y ataca esos
@@ -31390,31 +31406,152 @@ def _budget_pinned_food_keys(form_data) -> set:
         return set()
 
 
-def _budget_food_is_brand_pinned(food_text: str, pinned_keys: set) -> bool:
-    """True si `food_text` (nombre de driver o substring de ingrediente) corresponde
-    a un alimento con marca fijada. Misma normalización + escalera de contención
-    word-boundary que `_resolve_brand_pref` (shopping_calculator) para que las claves
-    calcen exactamente contra `fetch_brand_pref_packages` — 'sal' NO matchea 'salsa'.
-    Fail-open: False (en duda, comportamiento previo = sustituir)."""
-    if not pinned_keys or not food_text:
+def _budget_food_matches_key_set(food_text: str, keys: set) -> bool:
+    """SSOT del matcher alimento↔set-de-claves de los pases de presupuesto. Misma
+    normalización + escalera de contención word-boundary que `_resolve_brand_pref`
+    (shopping_calculator) — 'sal' NO matchea 'salsa'. Fail-open: False (en duda,
+    comportamiento previo = sustituir).
+    [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] Extraído del cuerpo de
+    `_budget_food_is_brand_pinned` porque ahora hay DOS sets de claves con la misma
+    semántica de "no toques este alimento": las marcas fijadas y lo que el usuario ya
+    tiene en la Nevera. Un segundo matcher a mano habría driftado del primero."""
+    if not keys or not food_text:
         return False
     try:
         from shopping_calculator import _norm_pref_food as _npf
         key = _npf(food_text)
         if not key or len(key) < 3:
             return False
-        if key in pinned_keys:
+        if key in keys:
             return True
         padded = f" {key} "
         return any(
             len(pk) >= 3 and (f" {pk} " in padded or f" {key} " in f" {pk} ")
-            for pk in pinned_keys
+            for pk in keys
         )
     except Exception:
         return False
 
 
-def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
+def _budget_food_is_brand_pinned(food_text: str, pinned_keys: set) -> bool:
+    """True si `food_text` (nombre de driver o substring de ingrediente) corresponde
+    a un alimento con marca fijada. Las claves calcan exactamente contra
+    `fetch_brand_pref_packages`. Fail-open: False."""
+    return _budget_food_matches_key_set(food_text, pinned_keys)
+
+
+def _budget_owned_food_keys(inventory_names) -> set:
+    """[P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] {claves normalizadas} de lo que
+    el usuario YA TIENE comprado (Nevera / restock). Oráculo PURO: recibe el snapshot que
+    el caller ya cargó — jamás abre conexión propia (el seam T2 corre dentro del chunk
+    worker, con su pool y su lock ya tomados; una query nueva ahí sería IO oculto en el
+    peor sitio posible).
+
+    Acepta las tres formas en que la flota transporta ese dato sin obligar al caller a
+    normalizar: filas crudas de `user_inventory` (`{ingredient_name, quantity}` — el
+    `_inv_s` de `fetch_inventory_and_consumed_for_plan`), strings sueltos, y dicts tipo
+    `restocked_items` ({nombre_norm: iso_ts}, que al iterar rinde sus claves).
+    Fail-open: set() (en duda, comportamiento previo = sustituir)."""
+    if not inventory_names:
+        return set()
+    try:
+        from shopping_calculator import _norm_pref_food as _npf
+        out: set = set()
+        for it in inventory_names:
+            if isinstance(it, dict):
+                # Fila cruda de user_inventory: cantidad 0 = consumido, ya no lo tiene.
+                try:
+                    if "quantity" in it and float(it.get("quantity") or 0) <= 0:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                name = it.get("ingredient_name") or it.get("name") or ""
+            else:
+                name = it
+            key = _npf(name)
+            # <3 chars nunca entra: la escalera de contención de
+            # `_budget_food_matches_key_set` se vuelve ruido con claves cortas.
+            if key and len(key) >= 3:
+                out.add(key)
+        return out
+    except Exception as _bok_e:
+        logger.debug(f"[P2-BUDGET-CONVERGENCE-FUTURE-ONLY] owned-keys no-op: {_bok_e}")
+        return set()
+
+
+def _budget_future_days_window(plan_data: dict, days: list, today=None) -> list:
+    """[P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] Sub-lista de `days` que la
+    convergencia PUEDE reescribir: los días cuya fecha es HOY o posterior. Devuelve los
+    MISMOS objetos (no copias) — los pases mutan in-place y el plan persistido debe ver
+    esas mutaciones.
+
+    Resolución de fecha, en este orden (subconjunto deliberado de
+    `chat_history_context.resolve_day_dates`):
+      1. `date` ISO estampada en el día (P1-CHAT-PAST-DAYS, los 3 sitios de renumeración).
+      2. Ancla = primera `date` estampada del plan, o `grocery_start_date` → `days[0]`
+         (es el campo que el shift REESCRIBE a hoy siguiendo a `days[0]`), + índice.
+
+    NO se usan los tiers 3/4 de aquel helper (`day_name` y `cycle_start_date`) a
+    propósito: `cycle_start_date` es el ancla INMUTABLE de creación, así que en un plan
+    ya shifteado fecha el plan entero en el pasado y dejaría a la convergencia sin UN
+    SOLO día que tocar — apagarla en silencio es peor que el bug que este fix cierra.
+
+    Día sin fecha resoluble (y plan sin ancla) → ENTRA a la ventana. Fail-open explícito:
+    mejor sustituir de más que dejar de converger por un dato ausente; el daño de no
+    converger (banner rojo permanente en un plan que sí podía abaratarse) es del usuario,
+    el de sustituir de más en un plan sin fechas es recuperable.
+
+    `today` inyectable (date | datetime | 'YYYY-MM-DD'); None → hoy en RD (UTC-4, misma
+    convención que `rd_today`), derivado con `datetime.now(timezone.utc)` — el `utcnow()`
+    naive está prohibido en el repo (P3-DEPRECATED-UTCNOW).
+    tooltip-anchor: P2-BUDGET-CONVERGENCE-FUTURE-ONLY"""
+    try:
+        from chat_history_context import _parse_date as _pdate, _to_local_date as _tlocal
+        if today is None:
+            _today = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+        elif isinstance(today, datetime):
+            _today = today.date()
+        elif isinstance(today, str):
+            _today = _pdate(today)
+        else:
+            _today = today
+        if _today is None:
+            return list(days)
+
+        anchor_idx, anchor_date = None, None
+        for i, d in enumerate(days):
+            stamped = _pdate(d.get("date")) if isinstance(d, dict) else None
+            if stamped:
+                anchor_idx, anchor_date = i, stamped
+                break
+        if anchor_date is None:
+            gsd = _tlocal((plan_data or {}).get("grocery_start_date"))
+            if gsd:
+                anchor_idx, anchor_date = 0, gsd
+
+        out: list = []
+        n_past = 0
+        for i, d in enumerate(days):
+            day_date = _pdate(d.get("date")) if isinstance(d, dict) else None
+            if day_date is None and anchor_date is not None:
+                day_date = anchor_date + timedelta(days=i - anchor_idx)
+            if day_date is None or day_date >= _today:
+                out.append(d)
+            else:
+                n_past += 1
+        if n_past:
+            logger.info(f"💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] ventana de sustitución: "
+                        f"{len(out)}/{len(days)} día(s) (excluidos {n_past} ya cocinado(s)/"
+                        f"comprado(s), hoy={_today}).")
+        return out
+    except Exception as _bfw_e:
+        logger.warning(f"[P2-BUDGET-CONVERGENCE-FUTURE-ONLY] ventana no-op (barrido completo): "
+                       f"{type(_bfw_e).__name__}: {_bfw_e}")
+        return list(days)
+
+
+def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
+                               inventory_names=None) -> int:
     """Sustituye hasta BUDGET_CHEAPEN_MAX_SUBS ingredientes premium por su
     equivalente económico cuando el presupuesto pide economía. Retorna nº de
     sustituciones. Fail-open total (0 y plan intacto ante cualquier duda).
@@ -31422,7 +31559,12 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
     gate de economía: el caller YA sabe que el plan excede su referencia (cualquier
     tier) — los guards de alergia/dislike/≥30%-más-barato/max-subs siguen intactos.
     [P1-BUDGET-RESPECT-BRAND-PIN · 2026-07-29] tampoco toca un alimento con marca
-    fijada por el usuario (ver helpers arriba)."""
+    fijada por el usuario (ver helpers arriba).
+    [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] ni un alimento que el usuario YA
+    TIENE comprado (`inventory_names`): sustituirlo deja el original huérfano en la
+    Nevera y añade el sustituto a la lista — el gasto REAL sube mientras el banner
+    dice "dentro". El caller decide la ventana de `days` (esta función no filtra por
+    fecha: recibe ya la lista que puede reescribir)."""
     if not BUDGET_CHEAPEN_PASS_ENABLED or BUDGET_CHEAPEN_MAX_SUBS <= 0 or not days:
         return 0
     if not force:
@@ -31438,6 +31580,7 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
         allergies = (form_data or {}).get("allergies")
         dislikes = {_sa(str(d).strip().lower()) for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()}
         pinned_keys = _budget_pinned_food_keys(form_data)
+        owned_keys = _budget_owned_food_keys(inventory_names)
         subs = 0
         for _d in days:
             if subs >= BUDGET_CHEAPEN_MAX_SUBS:
@@ -31466,6 +31609,14 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
                         # para ESTE alimento en 'Marcas del súper' — no pisar esa elección
                         # explícita con la sustitución económica genérica.
                         if _budget_food_is_brand_pinned(m.group(0), pinned_keys):
+                            continue
+                        # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] el usuario YA
+                        # COMPRÓ este alimento: cambiarlo no ahorra, ENCARECE (el original
+                        # queda huérfano en la Nevera y el sustituto entra a la lista).
+                        if _budget_food_matches_key_set(m.group(0), owned_keys):
+                            logger.info(f"💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] skip "
+                                        f"'{m.group(0)} → {candidate}': ya está comprado "
+                                        f"(Nevera) — sustituirlo subiría el gasto real.")
                             continue
                         cand_low = _sa(candidate.lower())
                         # El candidato debe: existir con precio en catálogo, ser realmente
@@ -31530,7 +31681,8 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False) -> int:
         return 0
 
 
-def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None) -> int:
+def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *,
+                                      today=None, inventory_names=None) -> int:
     """[P1-BUDGET-T2-CONVERGENCE · 2026-07-29] Cuerpo SÍNCRONO de la convergencia de
     presupuesto, reutilizable fuera de assemble. Razón de existir: en el flujo deep-search
     el costeo de assemble sale VACÍO (la lista aún no trae precios) → reconcile/convergencia
@@ -31541,23 +31693,46 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None) -
     force → protein-repeat refix → truth-up → motor all-4 → panel micros → finalize chain);
     el REBUILD de listas + re-costeo + re-reconcile quedan en el CALLER (cada seam tiene sus
     snapshots). Retorna nº de sustituciones (0 = nada que re-costear). Fail-open TOTAL.
+
+    [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] Este seam corre DÍAS después de la
+    generación, así que "el plan" ya no es todo negociable: los días vividos son historial
+    y las semanas pagadas son dinero gastado. Bajo el knob, las sustituciones se escriben
+    SOLO sobre `_budget_future_days_window(...)` y saltan lo que ya está en la Nevera
+    (`inventory_names`, snapshot que el caller ya tiene — cero IO nuevo aquí dentro). El
+    re-costeo del CALLER sigue viendo `plan_data` completo a propósito: el costo del ciclo
+    es de todo el plan, ventanear la medición mentiría al banner.
     tooltip-anchor: P1-BUDGET-T2-CONVERGENCE"""
     try:
         days = (plan_data or {}).get("days") or []
         if not days:
             return 0
+        # Ventana de ESCRITURA. Con el knob OFF, `days_win is days` y `_inv` es None →
+        # las dos llamadas de abajo son byte-idénticas al pre-fix.
+        _future_only = BUDGET_CONVERGENCE_FUTURE_ONLY
+        days_win = _budget_future_days_window(plan_data, days, today) if _future_only else days
+        _inv = inventory_names if _future_only else None
+        if not days_win:
+            logger.info("💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] cero días futuros — no hay "
+                        "nada que abaratar sin reescribir historial; el estado de "
+                        "`budget_reconciliation` queda como está (honesto).")
+            return 0
         subs = 0
         if BUDGET_DRIVER_AWARE_ENABLED:
             subs = _apply_budget_driver_aware_pass(
-                days, form_data or {},
+                days_win, form_data or {},
                 plan_data.get("aggregated_shopping_list_weekly") or [],
+                inventory_names=_inv,
             )
-        subs += _apply_budget_cheapen_pass(days, form_data or {}, force=True)
+        subs += _apply_budget_cheapen_pass(days_win, form_data or {}, force=True,
+                                           inventory_names=_inv)
         if not subs:
             return 0
         plan_data["_budget_adjusted"] = True
         try:
-            _pr_n = _protein_repeat_autofix(days, form_data or {})
+            # La ventana también aquí: el autofix de proteína repetida es day-local (no
+            # pierde detección al recortar días) pero REESCRIBE comidas — sobre un día ya
+            # cocinado sería la misma corrupción de historial que este fix cierra.
+            _pr_n = _protein_repeat_autofix(days_win, form_data or {})
             if _pr_n:
                 logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] post-budget (T2): {_pr_n} comida(s) "
                             f"re-diversificada(s).")
@@ -31648,7 +31823,8 @@ _BUDGET_DRIVER_FAMILIES = (
 )
 
 
-def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
+def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
+                                    inventory_names=None) -> int:
     """[P1-BUDGET-DRIVER-AWARE · 2026-07-04] (audit v7 · P1-2) Sustitución económica
     guiada por el COSTO REAL: rankea los ítems más caros de la lista semanal costeada
     (`estimated_cost_rd` desc, top BUDGET_DRIVER_AWARE_TOP_ITEMS), resuelve la familia
@@ -31662,6 +31838,8 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
     ('Marcas del súper') se excluyen del pool de drivers — su costo, aunque real, es una
     elección explícita del usuario en otro panel: no debe empujar la ranking que decide
     QUÉ OTRA comida (no elegida por el usuario) se sustituye para compensarlo.
+    [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] mismo skip por `inventory_names`
+    que el pase estático; la ventana temporal la decide el caller vía `days`.
     tooltip-anchor: P1-BUDGET-DRIVER-AWARE"""
     if not BUDGET_DRIVER_AWARE_ENABLED or BUDGET_DRIVER_AWARE_MAX_SUBS <= 0:
         return 0
@@ -31675,6 +31853,7 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
         allergies = (form_data or {}).get("allergies")
         dislikes = {_sa(str(d).strip().lower()) for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()}
         pinned_keys = _budget_pinned_food_keys(form_data)
+        owned_keys = _budget_owned_food_keys(inventory_names)
 
         # 1. Drivers: ítems con precio, de mayor a menor costo. Los ítems con marca
         # fijada se excluyen ANTES de tomar el top-N — no son sustituibles y no deben
@@ -31763,6 +31942,13 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list) -> int:
                         # alimento con marca fijada — no pisar la elección del usuario aunque
                         # el driver que abrió esta familia haya sido otro ítem no-pineado.
                         if _budget_food_is_brand_pinned(m.group(0), pinned_keys):
+                            continue
+                        # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] ya comprado →
+                        # sustituirlo ENCARECE (original huérfano + sustituto nuevo).
+                        if _budget_food_matches_key_set(m.group(0), owned_keys):
+                            logger.info(f"💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] skip driver "
+                                        f"'{m.group(0)} → {candidate}': ya está comprado "
+                                        f"(Nevera) — sustituirlo subiría el gasto real.")
                             continue
                         # [P1-CHEAPEN-DAY-AWARE · 2026-07-10] mismo guard del pase estático: la
                         # familia mariscos→pescado colapsa labels distintos en uno y puede crear
