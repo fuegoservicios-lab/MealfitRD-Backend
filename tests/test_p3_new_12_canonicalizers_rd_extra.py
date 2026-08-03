@@ -272,11 +272,30 @@ def test_guard_side_wires_all_5(src: str):
         )
 
 
+# [review final audit-v7-p1 · 2026-08-03] El lado LISTA DE COMPRAS del espejo vive hoy en
+# `canonicalize_shopping_food_name`, no inline en `aggregate_and_deduct_shopping_list`.
+#
+# `P1-VEG-BACKFILL-HONESTY` extrajo la cadena entera a un SSOT para que el lado TEXTO del backstop
+# de cantidades canonicalizara con EXACTAMENTE el mismo código que el lado comprado. El espejo que
+# P3-NEW-12 vigila (guard ↔ lista) no cambió: cambió en qué función vive una de las dos mitades.
+# Se delimita por la siguiente `def` de columna 0 (ancla estructural) en vez de por una ventana de
+# 30.000 chars, que es cómo caducan estos guards, y se ancla además que el agregador DELEGUE — sin
+# esa segunda mitad, mover el bloque a un tercer sitio volvería a pasar mudo.
+_LISTA_SIDE_FUNC = "canonicalize_shopping_food_name"
+
+
+def _cuerpo_de(src: str, fn_name: str) -> str:
+    """Cuerpo de una función top-level, delimitado por la siguiente `def` de columna 0."""
+    start = src.find(f"def {fn_name}(")
+    assert start >= 0, f"función `{fn_name}` no encontrada"
+    m = re.search(r"^def \w+", src[start + 1:], re.MULTILINE)
+    end = (start + 1 + m.start()) if m else len(src)
+    return src[start:end]
+
+
 def test_aggregator_side_wires_all_5(src: str):
-    """`aggregate_and_deduct_shopping_list` debe invocar las 5 fns nuevas."""
-    func_start = src.find("def aggregate_and_deduct_shopping_list(")
-    # Boundary: usamos un rango amplio porque el aggregator es largo.
-    body = src[func_start:func_start + 30000]
+    """El lado LISTA DE COMPRAS debe invocar las 5 fns nuevas."""
+    body = _cuerpo_de(src, _LISTA_SIDE_FUNC)
     for fn in (
         "canonicalize_citricos",
         "canonicalize_tomate",
@@ -285,16 +304,26 @@ def test_aggregator_side_wires_all_5(src: str):
         "canonicalize_frutos_secos",
     ):
         assert fn in body, (
-            f"P3-NEW-12 regresión: `aggregate_and_deduct_shopping_list` ya "
+            f"P3-NEW-12 regresión: `{_LISTA_SIDE_FUNC}` ya "
             f"no invoca `{fn}`. Sin el wire del aggregator side, la lista "
             f"de compras output mostrará N líneas separadas para variantes "
             f"que deberían colapsar."
         )
 
 
+def test_el_agregador_delega_en_el_ssot_de_canonicalizacion(src: str):
+    """[review final · 2026-08-03] La mitad que faltaba: si `aggregate_and_deduct_shopping_list`
+    deja de delegar, las 5 familias dejan de aplicarse a la lista real aunque sigan escritas en el
+    SSOT — y el espejo guard↔lista se rompe sin que ningún test lo diga."""
+    agg = _cuerpo_de(src, "aggregate_and_deduct_shopping_list")
+    assert f"{_LISTA_SIDE_FUNC}(name, master_map)" in agg, (
+        "P3-NEW-12 regresión: el agregador dejó de delegar en el SSOT de canonicalización."
+    )
+
+
 def test_marker_present_in_both_sites(src: str):
-    """`P3-NEW-12` aparece en el bloque del guard y en el bloque del
-    aggregator (anchor para grep)."""
+    """`P3-NEW-12` aparece en el bloque del guard y en el bloque del lado lista
+    (anchor para grep). Las dos mitades del espejo tienen que ser correlacionables."""
     guard_idx = src.find("def _canonicalize_for_coherence(")
     guard_end = src.find("\ndef run_shopping_coherence_guard(", guard_idx)
     guard_body = src[guard_idx:guard_end]
@@ -302,10 +331,8 @@ def test_marker_present_in_both_sites(src: str):
         "P3-NEW-12 regresión: marker no presente en el bloque del guard."
     )
 
-    agg_idx = src.find("def aggregate_and_deduct_shopping_list(")
-    agg_body = src[agg_idx:agg_idx + 30000]
-    assert "P3-NEW-12" in agg_body, (
-        "P3-NEW-12 regresión: marker no presente en el bloque del "
-        "aggregator. Sin él un revisor no correlaciona ambas mitades del "
+    assert "P3-NEW-12" in _cuerpo_de(src, _LISTA_SIDE_FUNC), (
+        "P3-NEW-12 regresión: marker no presente en el bloque del lado "
+        "lista de compras. Sin él un revisor no correlaciona ambas mitades del "
         "wiring."
     )

@@ -123,9 +123,27 @@ def test_no_unanchored_canonicalizers_in_source() -> None:
     pat = re.compile(r"^def\s+(canonicalize_[a-z_]+)\s*\(", re.MULTILINE)
     found = {m.group(1) for m in pat.finditer(src)}
     # Excluir helpers internos que NO sean canonicalizers de coherencia.
-    # Hoy no hay ninguno; si en el futuro algún `canonicalize_X` no es
-    # del guard (e.g., un helper de display), añadirlo aquí.
-    _NON_GUARD_PREFIX_ALLOWLIST: set[str] = set()
+    #
+    # [P1-VEG-BACKFILL-HONESTY · review final 2026-08-03] Opción 3 del mensaje de este assert,
+    # decidida explícitamente y no por comodidad: `canonicalize_shopping_food_name` NO es un
+    # canonicalizer de FAMILIA — es el ORQUESTADOR de la cadena completa (master_map →
+    # `_consolidate_inline_canon` → los 17 canonicalizers de familia → bloque pavo → las 13 regex
+    # de consolidación de cola), extraído de `aggregate_and_deduct_shopping_list` para que el lado
+    # TEXTO del backstop de cantidades canonicalizara con el MISMO código que el lado comprado.
+    #
+    # Por qué NO va en `_CANONICALIZERS_EXISTING`: esa lista es el inventario de FAMILIAS cubiertas
+    # —se razona sobre ella para decidir si promover una familia candidata cuando el cron diario
+    # muestra >5% del bucket `unknown`—. Meter ahí un orquestador que no cubre ninguna familia
+    # propia contaminaría justo la cuenta que la lista existe para sostener. Su gemelo del lado
+    # guard, `_canonicalize_for_coherence`, tampoco aparece en la lista (el prefijo `_` lo saca del
+    # patrón), así que la simetría se mantiene: los dos orquestadores fuera, las familias dentro.
+    #
+    # Lo que este guard protege sigue intacto: si mañana alguien añade un `canonicalize_<familia>`
+    # nuevo, no está en esta allowlist ni en la lista anclada, y el test sigue exigiendo la
+    # decisión humana.
+    _NON_GUARD_PREFIX_ALLOWLIST: set[str] = {
+        "canonicalize_shopping_food_name",
+    }
     found_guard = found - _NON_GUARD_PREFIX_ALLOWLIST
 
     unexpected = found_guard - _CANONICALIZERS_EXISTING

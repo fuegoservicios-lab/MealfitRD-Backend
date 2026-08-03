@@ -283,6 +283,21 @@ _KNOWN_CALLERS_BY_FILE: set[str] = {
     # plan_id viene de `get_latest_meal_plan_with_id(user_id)` que filtra
     # por user_id. Pasa `user_id=user_id` al helper.
     "backend/tools.py",
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-02 · registrado en el review final 2026-08-03]
+    # scripts/backfill_veg_lines_v7.py 1 sitio documentado:
+    #   - _apply_one_plan → _mutator
+    # Script ONE-SHOT de operador (NO runtime: cero crons, cero endpoints lo invocan; dry-run por
+    # defecto y `--apply` exige además `--yes-i-mean-it`). Barre TODOS los planes con
+    # `generation_status='complete'`, o sea que no hay "usuario autenticado" aguas arriba contra
+    # el que validar — la cadena de ownership es consistent-by-construction, igual que
+    # `proactive_agent.py`: `_select_active_plans` hace
+    # `SELECT id::text AS plan_id, user_id::text AS user_id, plan_data FROM meal_plans WHERE ...`
+    # y `main()` pasa al helper el `user_id` DEL MISMO ROW (`result["user_id"]`), nunca uno de
+    # entrada ni inferido. `_apply_one_plan` lo threadea como `user_id=user_id`, así que el
+    # `SELECT … FOR UPDATE` y el `UPDATE` llevan `AND user_id = %s` sobre la fila que los
+    # produjo: la invariante I2 se cumple por fila y un plan jamás puede escribirse bajo el
+    # user_id de otro. `test_backfill_veg_lines_v7_ownership_por_fila` (abajo) ancla esa cadena.
+    "backend/scripts/backfill_veg_lines_v7.py",
 }
 
 
@@ -338,6 +353,46 @@ def test_known_callers_anchor() -> None:
         )
 
     assert not msgs, "[P3-OPEN-1] Drift detection:\n\n" + "\n\n".join(msgs)
+
+
+# ---------------------------------------------------------------------------
+# 3.b Cadena de ownership del caller nuevo (script one-shot de backfill)
+# ---------------------------------------------------------------------------
+def test_backfill_veg_lines_v7_ownership_por_fila() -> None:
+    """[review final audit-v7-p1 · 2026-08-03] Registrar el caller en el anchor no basta: hay que
+    anclar POR QUÉ es legítimo, o el registro se vuelve una firma en blanco.
+
+    El script no tiene usuario autenticado aguas arriba (barre todos los planes `complete`), así
+    que su garantía I2 depende enteramente de que el `user_id` que threadea salga del MISMO row que
+    el `plan_id`. Si alguien cambia el SELECT para dejar de traer `user_id`, o pasa uno de un
+    argumento/variable global, la pareja deja de ser consistent-by-construction y el `AND user_id
+    = %s` del helper pasa a filtrar contra un valor ajeno.
+
+    Parser-based a propósito: importar el módulo ejecuta `load_dotenv(.env)` y ese `.env` apunta a
+    PRODUCCIÓN — un test que lo importe contamina el entorno del resto de la corrida."""
+    script = _BACKEND / "scripts" / "backfill_veg_lines_v7.py"
+    assert script.exists(), "el script del backfill desapareció; quitar la entrada del anchor"
+    src = script.read_text(encoding="utf-8")
+
+    # (1) El SELECT trae user_id del mismo row que el plan_id.
+    assert re.search(
+        r"SELECT\s+id::text\s+AS\s+plan_id,\s*user_id::text\s+AS\s+user_id",
+        src, re.IGNORECASE,
+    ), ("P2-OPEN-1: el SELECT del backfill dejó de traer `user_id` junto al `plan_id`; la pareja "
+        "ya no es consistent-by-construction.")
+
+    # (2) El caller pasa el user_id DEL ROW, no uno inferido.
+    assert '_apply_one_plan(result["plan_id"], result["user_id"]' in src, (
+        "P2-OPEN-1: el backfill dejó de pasar el `user_id` del propio row al helper.")
+
+    # (3) El helper lo threadea al `update_plan_data_atomic` (filtro I2 por fila).
+    assert "update_plan_data_atomic(plan_id, _mutator, user_id=user_id)" in src, (
+        "P2-OPEN-1: el backfill dejó de pasar `user_id=` a `update_plan_data_atomic`.")
+
+    # (4) Sigue siendo tooling one-shot, no runtime: el doble flag de seguridad no se relajó.
+    assert "do_apply = args.apply and args.yes_i_mean_it" in src, (
+        "P2-OPEN-1: el backfill perdió su doble confirmación — deja de ser tooling one-shot y "
+        "su justificación de ownership (operador humano, cero superficie de request) no aplica.")
 
 
 # ---------------------------------------------------------------------------

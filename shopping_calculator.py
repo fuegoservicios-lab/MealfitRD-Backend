@@ -7394,6 +7394,9 @@ def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
             if _mus is not None:
                 canonical_name = _mus
             else:
+                # [P2-NEW-A · 2026-05-11] Frutas tropicales / verduras de hoja / aceites: tres
+                # familias más cuyas variantes inflan la lista si no consolidamos. Mismo orden y
+                # patrón que el guard (mirror): primer match gana, cada uno mutex.
                 _fr = canonicalize_frutas_tropicales(canonical_name)
                 if _fr is not None:
                     canonical_name = _fr
@@ -7406,6 +7409,20 @@ def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
                         if _ac is not None:
                             canonical_name = _ac
                         else:
+                            # [P3-NEW-12 · 2026-05-11] 5 canonicalizers adicionales (cítricos,
+                            # tomate, cebolla, quesos blancos RD, frutos secos). Mismo patrón
+                            # mirror que P2-NEW-A. Sin estos, variantes triviales como "limón
+                            # verde" vs "limón persa" o "tomate criollo" vs "tomate maduro" se
+                            # quedan en líneas separadas en la lista de compras.
+                            #
+                            # [review final · 2026-08-03] Este comentario —y el de P2-NEW-A de
+                            # arriba— viajaron con el bloque al extraerlo del agregador a esta
+                            # función: `test_p3_new_12_canonicalizers_rd_extra::test_marker_
+                            # present_in_both_sites` exige el marker en las DOS mitades del
+                            # espejo (guard + lista) para que un revisor las correlacione por
+                            # grep, y se había quedado sin la mitad de la lista. Tercera vez que
+                            # esta rama pierde un marker al mover código: los comentarios se
+                            # mueven CON él.
                             _cit = canonicalize_citricos(canonical_name)
                             if _cit is not None:
                                 canonical_name = _cit
