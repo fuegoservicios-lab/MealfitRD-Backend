@@ -245,35 +245,47 @@ def test_funcional_el_band_closer_reinfla_el_pepino_y_el_recap_lo_devuelve_al_te
     )
 
 
-def test_funcional_por_encima_del_hard_cap_una_pasada_solo_llega_al_hard_cap(
-        chain_offline, monkeypatch):
-    """ALCANCE HONESTO del fix, anclado para que nadie lo lea de mas.
+@pytest.mark.parametrize("inflado", [601, 770, 1645])
+def test_funcional_el_recap_converge_al_techo_de_clase_por_encima_del_hard_cap(
+        chain_offline, monkeypatch, inflado):
+    """Por encima de `LINE_GRAM_HARD_CAP` UNA pasada no basta, y el re-cap itera.
 
     Los topes por gramos de `_cap_unrealistic_portions` son una cascada `if/elif`: el techo
-    DURO generico `LINE_GRAM_HARD_CAP` (600 g) casa primero y deja sin evaluar el techo de
-    vegetal acuoso (250 g). Medido: 601/770/1645 g -> 600 g en la 1a pasada, 250 g en la 2a
-    (punto fijo estable). O sea, una inflacion por encima de 600 g queda ACOTADA a 600 g en
-    este callsite, no recortada al techo de su clase.
+    DURO generico (600 g) casa primero y deja sin evaluar el techo de vegetal acuoso (250 g).
+    Medido: 601/770/1645 g -> 600 g en la 1a pasada, 250 g en la 2a (punto fijo estable).
 
-    Es semantica PREEXISTENTE, identica en el callsite hermano (CAPS_LAST_WORD dentro de
-    `_fpc`), y se deja igual a proposito para no crear asimetria entre los dos. Si algun dia
-    se hace converger la cascada, este test debe ACTUALIZARSE (no borrarse): pasaria a
-    esperar `<= REALISM_VEG_VOLUME_CAP_G`.
+    Que el caso TIPICO caiga en este regimen no es teorico: el clamp x2.5 de
+    `_rebalance_day_macros_to_target` es POR PASE y corre con `passes=3` (hasta x15.6
+    compuesto), asi que 250 -> 770 es lo normal, no un borde. Con una sola pasada el fix
+    persistia 600 g de pepino (2.4x el techo de clase) en el caso tipico y el titular "los
+    techos vuelven a ser la ultima palabra" era falso.
     """
     import graph_orchestrator as g
-    monkeypatch.setattr(g, "reconcile_all_macros_band_post_finalize", _inflar(1645))
+    monkeypatch.setattr(g, "reconcile_all_macros_band_post_finalize", _inflar(inflado))
 
     plan = _plan_con("250 g de pepino")
     chain_offline.apply_plan_quality_finalize_chain(plan)
 
     linea = plan["days"][0]["meals"][0]["ingredients"][0]
-    obtenido = _lead_g(linea)
-    assert obtenido <= float(g.LINE_GRAM_HARD_CAP), (
-        f"ni siquiera el techo DURO generico se aplico tras el band-closer: {linea!r}"
+    assert _lead_g(linea) <= float(g.REALISM_VEG_VOLUME_CAP_G), (
+        f"inflado a {inflado} g, el chain persistio {linea!r}: el re-cap no convergio al techo "
+        f"de clase ({g.REALISM_VEG_VOLUME_CAP_G} g). Si solo llego a LINE_GRAM_HARD_CAP "
+        f"({g.LINE_GRAM_HARD_CAP} g), el bucle a punto fijo se rompio."
     )
-    assert obtenido > float(g.REALISM_VEG_VOLUME_CAP_G), (
-        f"la cascada converge en una sola pasada ({linea!r}): el fix quedo mejor de lo "
-        f"documentado — actualiza este test y el comentario de db_plans.py en vez de borrarlos"
+
+
+def test_parser_el_recap_itera_hasta_punto_fijo():
+    """Ancla estructural del bucle: sin el, la cascada `if/elif` deja el caso tipico en
+    `LINE_GRAM_HARD_CAP` y el fix incumple su propio titular."""
+    body = _fn_body(_DBP, "_finalize_plan_data_for_insert")
+    i_ramb = body.index("_ramb(_pd,")
+    i_reconcile = body.index("RECONCILE_AFTER_BAND_CLOSER", i_ramb)
+    bloque = body[i_ramb:i_reconcile]
+    assert "for _ in range(" in bloque, (
+        "el re-cap debe iterar: una sola pasada solo alcanza LINE_GRAM_HARD_CAP"
+    )
+    assert "break" in bloque, (
+        "el bucle debe cortar en la pasada que no cambia nada (punto fijo, no N vueltas fijas)"
     )
 
 
@@ -371,7 +383,154 @@ def test_funcional_el_chain_sigue_siendo_fail_safe_si_el_recap_revienta(
     assert plan.get("grocery_start_date"), "el chain se abortó: los pases posteriores no corrieron"
 
 
-# ═════════════════════ 3 · El gemelo del assemble (hallazgo, no fix) ═════════════════════
+# ═══════════ 3 · La PREMISA, con el motor real (no con un fake de `_ramb`) ═══════════
+#
+# Los funcionales de arriba monkeypatchean `_ramb` para aislar el ORDEN del chain. Eso deja sin
+# probar la premisa de la que cuelga todo el fix: que el rebalance REAL re-infla una linea que el
+# cap acaba de recortar. Vivia solo en prosa y en un harness desechable — o sea, si la premisa
+# dejara de ser cierta, ningun test del repo se enteraria.
+#
+# Aqui corre el motor de verdad (`_rebalance_day_macros_to_target` + los dos caps) sobre una
+# `IngredientNutritionDB(rows=...)` con per-100g PUBLICADOS (USDA). Offline: `rows=` evita el
+# pool. No es un benchmark sintetico de calidad — lo que se mide es el MECANISMO, no la nutricion.
+
+_ROWS_REALES = [
+    {"name": "Pepino", "aliases": ["pepinos"], "kcal_per_100g": 15,
+     "protein_g_per_100g": 0.65, "carbs_g_per_100g": 3.63, "fats_g_per_100g": 0.11,
+     "category": "vegetal", "density_g_per_unit": 300, "density_g_per_cup": 120},
+    {"name": "Arroz blanco", "aliases": ["arroz"], "kcal_per_100g": 130,
+     "protein_g_per_100g": 2.69, "carbs_g_per_100g": 28.17, "fats_g_per_100g": 0.28,
+     "category": "cereal", "density_g_per_cup": 158},
+    {"name": "Batata", "aliases": ["batatas"], "kcal_per_100g": 86,
+     "protein_g_per_100g": 1.57, "carbs_g_per_100g": 20.12, "fats_g_per_100g": 0.05,
+     "category": "viveres", "density_g_per_unit": 130},
+    {"name": "Pechuga de pollo", "aliases": ["pollo"], "kcal_per_100g": 165,
+     "protein_g_per_100g": 31.0, "carbs_g_per_100g": 0.0, "fats_g_per_100g": 3.6,
+     "category": "proteina"},
+    {"name": "Aceite de oliva", "aliases": ["aceite"], "kcal_per_100g": 884,
+     "protein_g_per_100g": 0.0, "carbs_g_per_100g": 0.0, "fats_g_per_100g": 100.0,
+     "category": "grasa", "density_g_per_cup": 216},
+]
+
+_TARGET_CARBS, _TARGET_FATS, _TARGET_PROT = 220.0, 60.0, 140.0
+
+
+def _db_real():
+    from nutrition_db import IngredientNutritionDB
+    return IngredientNutritionDB(rows=_ROWS_REALES)
+
+
+def _dia_tipico(db):
+    """Dia BAJO en carbos (ratio inicial ~0.32) con el pepino como 1 de 3 lineas
+    carbo-dominantes — el reparto realista, no el borde."""
+    import graph_orchestrator as g
+
+    def _meal(nombre, comida, lineas):
+        m = {"name": nombre, "meal": comida, "ingredients": list(lineas),
+             "ingredients_raw": list(lineas)}
+        p = c = f = 0.0
+        for s in lineas:
+            mc = db.macros_from_ingredient_string(s) or {}
+            p += mc.get("protein") or 0
+            c += mc.get("carbs") or 0
+            f += mc.get("fats") or 0
+        m["protein"], m["carbs"], m["fats"] = round(p), round(c), round(f)
+        m["cals"] = round(4 * m["protein"] + 4 * m["carbs"] + 9 * m["fats"])
+        return m
+
+    return [_meal("Almuerzo criollo", "Almuerzo",
+                  ["150 g de arroz blanco", "120 g de pechuga de pollo",
+                   "10 g de aceite de oliva"]),
+            _meal("Ensalada fria de pepino", "Cena",
+                  ["250 g de pepino", "100 g de batata", "100 g de pechuga de pollo"])]
+
+
+def _pepino(meals):
+    for m in meals:
+        for s in m["ingredients"]:
+            if "pepino" in s.lower():
+                return s
+    return ""
+
+
+def _carbs(meals):
+    import graph_orchestrator as g
+    return sum(g._meal_macro_num(m.get("carbs")) for m in meals)
+
+
+def test_premisa_el_rebalance_REAL_reinfla_una_linea_recien_capada():
+    """LA PREMISA DEL FIX. Sin esto, todo lo demas es teoria.
+
+    El clamp x2.5 de `_rebalance_day_macros_to_target` es POR PASE y la funcion corre con
+    `passes=3` (hasta x15.6 compuesto), asi que la inflacion tipica supera de largo el techo
+    DURO de 600 g — por eso una sola pasada del cap no basta."""
+    import graph_orchestrator as g
+    db = _db_real()
+    meals = _dia_tipico(db)
+
+    assert _lead_g(_pepino(meals)) == 250.0, "fixture: la linea entra YA capada al techo"
+
+    g._rebalance_day_macros_to_target(meals, _TARGET_CARBS, _TARGET_FATS, db,
+                                      target_protein=_TARGET_PROT)
+
+    inflado = _lead_g(_pepino(meals))
+    assert inflado > float(g.REALISM_VEG_VOLUME_CAP_G), (
+        f"el rebalance REAL no re-inflo la linea capada ({inflado} g): si esto deja de pasar, "
+        f"P2-CAPS-AFTER-BAND-CLOSER ya no tiene motivo de existir"
+    )
+    assert inflado > float(g.LINE_GRAM_HARD_CAP), (
+        f"la inflacion tipica ({inflado} g, medido 770) deberia superar el techo DURO de "
+        f"{g.LINE_GRAM_HARD_CAP} g — es lo que hace insuficiente UNA pasada del cap"
+    )
+
+
+def test_premisa_el_recap_iterado_devuelve_la_linea_al_techo_y_el_dia_sigue_en_banda():
+    """El caso TIPICO completo, con el motor real: el re-cap a punto fijo devuelve el pepino a
+    250 g y el dia se queda DENTRO de la banda del gate (medido 0.914, piso 0.90).
+
+    El margen es estrecho a proposito en la documentacion: 8.6 pp de drift sobre 220 g de
+    target. No se anade un segundo rebalance para recuperarlo — dos guardas sobre el mismo
+    campo oscilan, y el trade-off aceptado es que gana el cap."""
+    import graph_orchestrator as g
+    db = _db_real()
+    meals = _dia_tipico(db)
+
+    g._rebalance_day_macros_to_target(meals, _TARGET_CARBS, _TARGET_FATS, db,
+                                      target_protein=_TARGET_PROT)
+    carbs_tras_ramb = _carbs(meals)
+
+    for _ in range(3):  # mismo bucle a punto fijo que el chain
+        n = g._cap_unrealistic_portions([{"meals": meals}], db=db)
+        n += g._cap_cheese_dumps_final([{"meals": meals}], db=db)
+        if not n:
+            break
+
+    assert _lead_g(_pepino(meals)) <= float(g.REALISM_VEG_VOLUME_CAP_G), _pepino(meals)
+
+    ratio = _carbs(meals) / _TARGET_CARBS
+    assert g.BAND_SCORE_LOWER <= ratio <= g.BAND_SCORE_UPPER, (
+        f"el caso TIPICO sale de banda tras el re-cap (ratio {ratio:.3f}, banda "
+        f"[{g.BAND_SCORE_LOWER}, {g.BAND_SCORE_UPPER}]); carbs {carbs_tras_ramb}->{_carbs(meals)}. "
+        f"Si esto empieza a fallar, el trade-off del fix cambio y hay que re-medirlo."
+    )
+
+
+def test_premisa_un_dia_ya_en_banda_es_no_op():
+    """Control negativo con el motor real: sin inflacion no hay recorte."""
+    import graph_orchestrator as g
+    db = _db_real()
+    meals = _dia_tipico(db)
+    # dia ya en banda: no se corre el rebalance, solo los caps
+    antes = [list(m["ingredients"]) for m in meals]
+    for _ in range(3):
+        n = g._cap_unrealistic_portions([{"meals": meals}], db=db)
+        n += g._cap_cheese_dumps_final([{"meals": meals}], db=db)
+        if not n:
+            break
+    assert [m["ingredients"] for m in meals] == antes, "el re-cap toco un dia que ya cumplia"
+
+
+# ═════════════════════ 4 · El gemelo del assemble (hallazgo, no fix) ═════════════════════
 
 def test_parser_assemble_cierra_los_caps_de_realismo_delegando_en_el_chain():
     """`assemble_plan_node` tiene su propio rebalance post-quantize
@@ -382,13 +541,22 @@ def test_parser_assemble_cierra_los_caps_de_realismo_delegando_en_el_chain():
     gemelo lo cierra este mismo fix, siempre que la cola siga delegando en el chain.
 
     Este test ancla esa DEPENDENCIA: si alguien saca el chain de la cola de assemble, el
-    rebalance post-quantize se queda otra vez sin cap detras."""
-    i_reb = _GO.index("_rebalance_day_macros_to_target(")
+    rebalance post-quantize se queda otra vez sin cap detras.
+
+    Se ancla el CALLSITE EJECUTABLE (`_adb(_apqfc, ...)`), no la mencion del nombre. La
+    primera version buscaba `apply_plan_quality_finalize_chain` a secas y casaba con el
+    COMENTARIO que hay encima ("SSOT `db_plans.apply_plan_quality_finalize_chain`"): borrar la
+    llamada dejando el comentario habria mantenido el test VERDE. Es la trampa "comentario que
+    documenta codigo borrado", que este repo ya ha pagado varias veces."""
     i_reb = _GO.index("if _drift and _rebalance_day_macros_to_target(")
-    i_chain = _GO.find("apply_plan_quality_finalize_chain", i_reb)
+    i_chain = _GO.find("_adb(_apqfc,", i_reb)
     assert i_chain != -1, (
-        "la cola de assemble ya no delega en apply_plan_quality_finalize_chain: el rebalance "
-        "post-quantize se queda sin caps de realismo detras (mismo agujero, otra superficie)"
+        "la cola de assemble ya no INVOCA el chain (`_adb(_apqfc, ...)`): el rebalance "
+        "post-quantize se queda sin caps de realismo detras (mismo agujero, otra superficie). "
+        "Ojo: que el nombre siga apareciendo en un comentario no es que se ejecute."
+    )
+    assert "await " in _GO[max(0, i_chain - 20):i_chain], (
+        "el callsite del chain en assemble debe seguir siendo el await real, no una mencion"
     )
 
 

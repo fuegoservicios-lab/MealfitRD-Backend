@@ -1109,40 +1109,60 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                 # sobre una `IngredientNutritionDB(rows=…)` con per-100g publicados; banda del gate
                 # [0.90, 1.12]):
                 #   · caso típico (pepino = 1 de 3 líneas carbo-dominantes, día bajo en carbos):
-                #     `_ramb` lo infla 250→770 g y clava carbos en 1.000; el re-cap retira 6 g de
-                #     carbos = 2.7 pp del target → ratio 0.973, DENTRO de banda.
+                #     `_ramb` lo infla 250→770 g y clava carbos en 1.000; el re-cap lo devuelve al
+                #     techo de clase (250 g) retirando 19 g de carbos = 8.6 pp → ratio 0.914,
+                #     DENTRO de banda, aunque con poco margen sobre el piso 0.90.
                 #   · caso patológico (el pepino es la ÚNICA palanca de carbos del día): `_ramb`
-                #     escribe 1645 g y "clava" la banda; el re-cap lo baja y el día sale de banda
-                #     (0.367). Es exactamente el trade-off de arriba: 1.6 kg de pepino no es un
-                #     plato, y la banda que ese número compraba era ficticia.
+                #     escribe 1645 g y "clava" la banda; el re-cap lo baja a 250 g y el día sale de
+                #     banda (0.150). Es exactamente el trade-off de arriba: 1,6 kg de pepino no es
+                #     un plato, y la banda que ese número compraba era ficticia.
                 #   · día ya en banda: no-op (0 líneas tocadas).
-                # NO dispara retry sistemático: el gate es una FRACCIÓN de celdas día×macro sobre
-                # un umbral de 0.5/0.6, y este mecanismo solo puede afectar la celda de carbos ⇒
-                # aunque tocara TODOS los días, el score no bajaría de 0.75.
+                # Ojo con el clamp de `_ramb`: el ×2.5 es POR PASE y corre con `passes=3`, o sea
+                # hasta ×15.6 compuesto. Por eso el caso típico es 250→770 y no un borde estrecho
+                # de 600-625: una sola pasada del cap (que sólo llega a `LINE_GRAM_HARD_CAP`) NO
+                # basta, y de ahí el bucle a punto fijo de abajo.
                 #
-                # ⚠️ Alcance real de UNA pasada: los topes por gramos son una cascada `if/elif`, así
-                # que `LINE_GRAM_HARD_CAP` (600 g) tiene precedencia sobre el techo de vegetal
-                # acuoso (250 g). Medido: 601/770/1645 g → 600 g en la 1ª pasada y 250 g en la 2ª
-                # (punto fijo estable). O sea, una inflación por encima de 600 g queda acotada a
-                # 600 g aquí, no al techo de la clase. Es la MISMA semántica del callsite hermano
-                # (CAPS_LAST_WORD dentro de `_fpc`) y precede a este fix; se deja igual a propósito
-                # para no introducir asimetría entre los dos callsites. La convergencia de la
-                # cascada es un defecto propio, registrado aparte.
+                # ⚠️ SÍ puede forzar retry en el régimen patológico. Una versión previa de este
+                # comentario afirmaba una imposibilidad estructural ("el score no bajaría de
+                # 0.75") que es FALSA; se midió ejecutando el gate real y sale lo contrario:
+                #   · el agregado que se compara es `score_macros_only` (3 celdas P/C/F, no 4),
+                #     así que con sólo carbos fuera vale 0.667 — no 0.75.
+                #   · y da igual: con 0.667 ≥ 0.6 el agregado PASA, pero `_per_macro_trigger`
+                #     (umbral 0.5, ignora el agregado) dispara con carbos fuera en >½ de los días.
+                #   · el re-cap llama `_truth_up_meal_macros_from_strings`, que reescribe también
+                #     `cals` ⇒ `_kcal_trigger` (banda kcal [0.95,1.05], más estrecha) puede
+                #     dispararse solo.
+                #   medido con 4 días a carbs_ratio=0.60: score_macros_only=0.667 (agg_trigger
+                #   False), per_macro={'carbs': 0.0} ⇒ per_macro_trigger True, kcal cell 0.0 ⇒
+                #   kcal_trigger True ⇒ RETRY=True.
+                # El retry NO es gratis: escala `day_generator` (driver #1 del gasto LLM, ver
+                # P0-BAND-PRE-REVIEW). Se asume igual — la banda que compraba 1,6 kg de pepino era
+                # ficticia, y un retry es más barato que persistir un plato que nadie puede comer.
+                # Si esto se volviera ruidoso en producción, el rollback es el knob, no relajar el cap.
                 # Rollback sin redeploy: MEALFIT_CAPS_AFTER_BAND_CLOSER=false.
                 try:
                     from graph_orchestrator import (CAPS_AFTER_BAND_CLOSER as _cabc,
-                                                    PORTION_REALISM_CAP_ENABLED as _prce,
                                                     _cap_unrealistic_portions as _cup,
                                                     _cap_cheese_dumps_final as _ccdf)
                     if _cabc:
                         _cap_n = 0
-                        if _prce:
-                            _cap_n += _cup(_pd.get("days") or [], db=_db_ins)
-                        _cap_n += _ccdf(_pd.get("days") or [], db=_db_ins)
+                        # Itera HASTA PUNTO FIJO (tope 3). Una sola pasada no basta: los topes
+                        # por gramos son una cascada `if/elif`, así que `LINE_GRAM_HARD_CAP`
+                        # (600 g) casa primero y deja sin evaluar el techo de la clase. Ambos
+                        # caps se auto-gatean por su knob y sólo BAJAN, así que la sucesión es
+                        # monótona decreciente y acotada ⇒ termina. El `break` en la pasada que
+                        # no cambia nada es lo que la convierte en punto fijo y no en un número
+                        # mágico de vueltas.
+                        for _ in range(3):
+                            _pass_n = _cup(_pd.get("days") or [], db=_db_ins)
+                            _pass_n += _ccdf(_pd.get("days") or [], db=_db_ins)
+                            _cap_n += _pass_n
+                            if not _pass_n:
+                                break
                         if _cap_n:
-                            logger.info(f"📏 [P2-CAPS-AFTER-BAND-CLOSER] {_cap_n} línea(s) recortada(s) "
-                                        f"al techo de realismo tras el band-closer pre-INSERT "
-                                        f"(antes se persistían re-infladas por el rebalance).")
+                            logger.info(f"📏 [P2-CAPS-AFTER-BAND-CLOSER] {_cap_n} recorte(s) al techo de "
+                                        f"realismo tras el band-closer pre-INSERT (antes se persistían "
+                                        f"re-infladas por el rebalance).")
                 except Exception as _cabc_e:
                     logger.debug(f"[P2-CAPS-AFTER-BAND-CLOSER] pre-INSERT no-op: "
                                  f"{type(_cabc_e).__name__}: {_cabc_e}")
