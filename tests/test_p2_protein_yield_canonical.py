@@ -41,6 +41,7 @@ recompra falsa sobre una compra que en realidad es correcta.
 """
 from __future__ import annotations
 
+import inspect
 from unittest.mock import patch
 
 import pytest
@@ -52,6 +53,7 @@ from shopping_calculator import (
     expected_sum_from_recipes,
     run_shopping_coherence_guard,
     aggregate_and_deduct_shopping_list,
+    get_shopping_list_delta,
 )
 from knobs import get_knobs_registry_snapshot
 
@@ -134,6 +136,9 @@ class TestCalculateYieldMultiplier:
         "(sobrante)",
         "(sobrantes)",
         "(preparado extra)",
+        "(sobras)",  # [ronda 1] stem coloquial más común, distinto de "sobrante(s)"
+        "(del día anterior)",  # [ronda 1]
+        "(del dia anterior)",  # [ronda 1] sin tilde
     ])
     def test_marcador_de_reuso_excluye_yield(self, marker):
         raw = f"pollo cocido y desmenuzado {marker}"
@@ -279,6 +284,8 @@ class TestGetShoppingListDeltaE2E:
         pollo = _pollo_item(items)
         # num_days=1 -> base_duration_scale=7 -> 1 lb * 1.35 * 7 = 9.45 lb crudo.
         assert pollo["base_qty"] == pytest.approx(1.35 * 7 * _LB_TO_G, rel=0.01)
+        # [ronda 1] El SELLO queda estampado — el guard lo leerá en vez del knob vigente.
+        assert pollo.get("protein_yield_applied") is True
 
     def test_knob_off_default_byte_identico(self, monkeypatch):
         monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
@@ -287,6 +294,8 @@ class TestGetShoppingListDeltaE2E:
         items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
         pollo = _pollo_item(items)
         assert pollo["base_qty"] == pytest.approx(1.0 * 7 * _LB_TO_G, rel=0.01)
+        # [ronda 1] Sin el flag, ningún ítem lleva el sello (byte-idéntico: la key ni existe).
+        assert "protein_yield_applied" not in pollo
 
     def test_linea_de_reuso_sin_yield_e2e(self, monkeypatch):
         monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "true")
@@ -341,15 +350,92 @@ class TestGuardComposition:
 
 
 # ---------------------------------------------------------------------------
+# 7b. [ronda 1 · 2026-08-03] El guard sigue al SELLO `protein_yield_applied`,
+#     NO al knob VIGENTE en el momento de re-evaluar. Precedente: `trip_window_days`
+#     (Task 6, P1-TRIP-WINDOWED-PERISHABLES) — "el sello ES la evidencia de cómo se
+#     construyó ESTA lista", nunca el knob al momento de re-leerla (cron diario
+#     re-validando `plan_data` persistido, rebuild, rollback a mitad de camino).
+#
+#     Medido por el revisor: lista construida con knob OFF (1.435 g), re-evaluada con
+#     knob ON → 25,9% de divergencia + `magnitude=True`. Ese bug es justo lo que este
+#     bloque ancla que NO pase.
+# ---------------------------------------------------------------------------
+class TestGuardSealNotLiveKnob:
+    def _plan_con_lista_real(self, build_knob_on: bool):
+        """Construye la lista con el knob en el estado `build_knob_on` — el estado del
+        knob AL MOMENTO DE CONSTRUIR, que puede diferir del estado al momento en que el
+        guard la re-evalúa (eso es justo lo que este bloque prueba)."""
+        import os
+        prev = os.environ.get("MEALFIT_PROTEIN_YIELD_ON_CANONICAL")
+        os.environ["MEALFIT_PROTEIN_YIELD_ON_CANONICAL"] = "true" if build_knob_on else "false"
+        try:
+            plan = {"days": [{"meals": [{"meal": "almuerzo",
+                                          "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
+            real_list = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
+        finally:
+            if prev is None:
+                os.environ.pop("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", None)
+            else:
+                os.environ["MEALFIT_PROTEIN_YIELD_ON_CANONICAL"] = prev
+        plan["aggregated_shopping_list_weekly"] = real_list
+        return plan, real_list
+
+    def test_lista_sellada_re_evaluada_con_knob_apagado_cero_divergencias(self, monkeypatch):
+        """Rollback / cron corriendo DESPUÉS de apagar el A/B: la lista nació con el
+        knob ON (sellada), pero el guard la re-evalúa con el knob YA apagado. El
+        espejo debe seguir al sello -> cero divergencias, igual que si el knob
+        siguiera ON."""
+        plan, real_list = self._plan_con_lista_real(build_knob_on=True)
+        assert any(it.get("protein_yield_applied") is True for it in real_list), (
+            "la lista debía nacer sellada (knob ON al construir)"
+        )
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "false")
+        divs = run_shopping_coherence_guard(plan, multiplier=1.0)
+        assert divs == [], f"el guard debía seguir el SELLO, no el knob apagado: {divs}"
+
+    def test_lista_sin_sello_re_evaluada_con_knob_encendido_cero_divergencias(self, monkeypatch):
+        """A/B recién encendido: la lista nació con el knob OFF (sin sello), pero el
+        guard la re-evalúa con el knob YA encendido (cron diario re-validando un plan
+        viejo). El espejo debe seguir al AUSENTE sello -> cero divergencias, igual
+        que si el knob siguiera OFF."""
+        plan, real_list = self._plan_con_lista_real(build_knob_on=False)
+        assert not any(it.get("protein_yield_applied") for it in real_list), (
+            "la lista debía nacer SIN sello (knob OFF al construir)"
+        )
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "true")
+        divs = run_shopping_coherence_guard(plan, multiplier=1.0)
+        assert divs == [], f"el guard debía ignorar el knob encendido y seguir el sello ausente: {divs}"
+
+    def test_falsabilidad_si_el_guard_leyera_el_knob_en_vez_del_sello(self, monkeypatch):
+        """Reproduce el bug que esta ronda cierra: si el guard leyera el knob VIGENTE
+        (en vez de `_protein_yield_seal_applied`), el escenario del test anterior SÍ
+        fabricaría una divergencia de magnitud severa. Ancla la regresión, no solo el
+        estado feliz — mutación de `_protein_yield_seal_applied` para que ignore el
+        sello y siga el knob, restaurada por monkeypatch al salir del test."""
+        plan, real_list = self._plan_con_lista_real(build_knob_on=False)
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "true")
+        monkeypatch.setattr(
+            sc, "_protein_yield_seal_applied",
+            lambda _lst: sc._protein_yield_on_canonical_enabled(),
+        )
+        divs = run_shopping_coherence_guard(plan, multiplier=1.0)
+        mag = [d for d in divs if d.get("magnitude")]
+        assert mag, (
+            "sin el sello (bug pre-fix simulado), un knob ON sobre una lista construida "
+            "sin yield debería fabricar una divergencia de magnitud"
+        )
+
+
+# ---------------------------------------------------------------------------
 # 8. Composición con el backstop de Task 8 (P1-VEG-BACKFILL-HONESTY) —
 #    el yield NO debe fabricar una nota de recompra falsa.
 # ---------------------------------------------------------------------------
 class TestBackstopComposition:
     def test_sin_capped_by_sintetico_con_knob_on(self, monkeypatch):
-        """Riesgo explícito de la tarea: el yield 1.35× sube TANTO el lado
-        comprado como `text_demand_g_map` (mismo `expected_sum_from_recipes`
-        con el mismo flag) — así que el ratio comprado/texto se queda en ~1.0
-        y el backstop `qty_reconcile_v7` no dispara sobre una compra correcta."""
+        """El yield 1.35× sube TANTO el lado comprado como `text_demand_g_map` (mismo
+        `expected_sum_from_recipes` con el mismo flag) — así que el ratio comprado/
+        texto se queda en ~1.0 y el backstop `qty_reconcile_v7` no dispara sobre una
+        compra correcta."""
         monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "true")
         plan = {"days": [{"meals": [{"meal": "almuerzo",
                                       "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
@@ -364,3 +450,69 @@ class TestBackstopComposition:
         items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
         pollo = _pollo_item(items)
         assert pollo.get("capped_by") is None
+
+
+# ---------------------------------------------------------------------------
+# 8b. [ronda 1 · 2026-08-03] El test anterior NO discrimina: el revisor ejecutó el
+#     contrafactual y, quitando el espejo, `capped_by` seguía `None` igual (falso
+#     negativo del test). La asimetría que SÍ fabrica la nota falsa es la INVERSA —
+#     texto CON yield fantasma, compra SIN yield (compra literal, knob apagado o
+#     desincronizado del lado de texto). Este bloque ancla ESA dirección.
+# ---------------------------------------------------------------------------
+class TestBackstopDiscriminatesDirection:
+    def test_espejo_roto_direccion_texto_inflado_fabrica_nota_falsa(self, monkeypatch):
+        """Simula el bug real que el espejo previene: `text_demand_g_map` se computa
+        con yield (texto inflado 1.35×) mientras la compra real queda en peso literal
+        (knob apagado — la RECETA no cambia, la interpretación del backstop sí). Sin
+        el espejo correcto, esto fabrica `capped_by='qty_reconcile_v7'` sobre una
+        compra que en realidad es exactamente lo que el plan pide."""
+        monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+        plan = {"days": [{"meals": [{"meal": "almuerzo",
+                                      "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
+
+        _real_expected = sc.expected_sum_from_recipes
+
+        def _fake_expected_forces_protein_yield(plan_data, **kw):
+            # Simula el bug: el cómputo de `text_demand_g_map` SIEMPRE yieldea,
+            # ignorando el flag real que le llega desde `get_shopping_list_delta`.
+            kw["apply_protein_yield"] = True
+            return _real_expected(plan_data, **kw)
+
+        monkeypatch.setattr(sc, "expected_sum_from_recipes", _fake_expected_forces_protein_yield)
+
+        items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
+        pollo = _pollo_item(items)
+        assert pollo.get("capped_by") == "qty_reconcile_v7", (
+            f"sin el espejo correcto, el texto inflado 1.35× debía fabricar una nota "
+            f"de recompra falsa sobre una compra literal correcta: {pollo}"
+        )
+
+    def test_espejo_intacto_no_fabrica_nota_falsa(self, monkeypatch):
+        """Control positivo: con el código REAL (sin monkeypatch — mismo flag en
+        ambos lados), la MISMA receta no dispara la nota, ni con knob OFF ni ON."""
+        monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+        plan = {"days": [{"meals": [{"meal": "almuerzo",
+                                      "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
+        items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
+        pollo = _pollo_item(items)
+        assert pollo.get("capped_by") is None
+
+    def test_source_call_real_lleva_el_flag_del_mirror(self):
+        """[ronda 1] Complemento parser-based del contrafactual de arriba: el monkeypatch
+        de `expected_sum_from_recipes` prueba la CONSECUENCIA de la asimetría, pero NO
+        detecta que alguien borre `apply_protein_yield=_apply_protein_yield` del callsite
+        REAL que construye `text_demand_g_map` — verificado ejecutando: con ese kwarg
+        quitado a mano de `get_shopping_list_delta`, TODOS los tests de
+        `TestBackstopComposition` siguen en verde (knob ON compra 1.35× más que el texto
+        literal → ratio >1.0, nunca dispara el backstop de shortfall) — exactamente el
+        punto ciego que el revisor señaló. Este ancla de source cierra ese hueco."""
+        src = inspect.getsource(get_shopping_list_delta)
+        i = src.index("_text_demand_g_map: dict = {}")
+        # El bloque que construye _tdg_raw_units vive ANTES de esta línea.
+        block = src[:i]
+        j = block.rindex("_tdg_raw_units = {")
+        block = block[j:]
+        assert "apply_protein_yield=_apply_protein_yield" in block, (
+            "el callsite de expected_sum_from_recipes que alimenta text_demand_g_map "
+            "debe pasar el MISMO flag que recibe el aggregator del lado comprado"
+        )

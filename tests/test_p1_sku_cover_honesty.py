@@ -382,7 +382,14 @@ def test_cycle_days_plumbing_local():
     # por el gate de homogeneidad `_tdg_para_agg` (vacío cuando la lista es un DELTA con deducción
     # de Nevera, porque la demanda de recetas es BRUTA). El plumbing de `cycle_days`, que es lo que
     # este test ancla, no cambia.
-    assert "cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg)" in src[j:j_end]
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03 · ronda 1] El substring se extiende con
+    # `apply_protein_yield=_apply_protein_yield)` (nuevo kwarg al final de la MISMA llamada) — el
+    # ancla se actualiza a la línea real en vez de recortar antes del kwarg nuevo, que dejaría
+    # pasar en verde un futuro editor que borre el plumbing de `cycle_days` sin tocar el final.
+    assert (
+        "cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg, "
+        "apply_protein_yield=_apply_protein_yield)"
+    ) in src[j:j_end]
     # [RONDA 2 · ítem 1] SSOT hermano de `cycle_qty_multiplier`, misma tabla
     # `_CYCLE_DAYS_BY_DURATION` — evita que un callsite escriba un literal `15`/`30` suelto que
     # pueda driftear de la tabla que ya usa `cycle_qty_multiplier`.

@@ -1438,6 +1438,31 @@ def _aggregated_trip_window_len(aggregated_list) -> int | None:
     return None
 
 
+def _protein_yield_seal_applied(aggregated_list) -> bool:
+    """[P2-PROTEIN-YIELD-CANONICAL · 2026-08-03 · ronda 1] Lee el sello
+    `protein_yield_applied` que `aggregate_and_deduct_shopping_list` estampa en cada ítem
+    cuando construyó la lista con la regla #2 (proteínas cocidas → 1.35× crudo) activa.
+
+    Gemela exacta de `_aggregated_trip_window_len`/`trip_window_days` (Task 6,
+    P1-TRIP-WINDOWED-PERISHABLES): el guard debe espejar cómo se CONSTRUYÓ la lista que
+    tiene delante, NUNCA el knob `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` vigente en el momento
+    de re-evaluarla. El knob gobierna la CONSTRUCCIÓN de listas nuevas (get_shopping_list_
+    delta lo lee para decidir si aplicar yield); leerlo también aquí, en la INTERPRETACIÓN
+    de una lista ya construida, fabrica divergencias fantasma en dos direcciones:
+      - A/B: plan construido con knob OFF, re-evaluado (cron diario, rebuild) con knob ON
+        → el guard ve el lado esperado subir 1.35× mientras el comprado se queda igual.
+      - Rollback: knob ON→OFF a mitad de camino → listas ya sembradas con yield real
+        dejan de ser reconocidas por el guard.
+    Medido por el revisor: lista real de 1.435 g construida con knob OFF, evaluada con
+    knob ON → 25,9% de divergencia + `magnitude=True`. Con el sello, cero divergencia en
+    ambas direcciones (test `test_p2_protein_yield_canonical.py::TestGuardSealComposition`).
+    """
+    for item in aggregated_list or []:
+        if isinstance(item, dict) and item.get("protein_yield_applied") is True:
+            return True
+    return False
+
+
 def _merge_trip_windowed_result(full_res, window_res, *, window_len: int):
     """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Perecederos de la ventana + estables
     del periodo, conservando la forma del contenedor (lista estructurada o dict por
@@ -1997,11 +2022,18 @@ _PROTEIN_FOOD_WORDS_RE = re.compile(r'\b(pollo|carne|res|pescado|cerdo|camar|pav
 # proteína ya se compró para otra comida del mismo ciclo. Aplicarle yield la
 # sobre-compraría (el usuario NO necesita comprar 1.35× de algo que no va a cocinar de
 # cero). Patrón derivado del dato real: paréntesis que menciona otro slot de comida
-# (desayuno/almuerzo/cena/merienda) o una frase explícita de reuso (sobrante/preparado
-# extra). Deliberadamente NO excluye la línea entera del yield de legumbres (regla #1);
-# solo desactiva la regla #2 nueva.
+# (desayuno/almuerzo/cena/merienda) o una frase explícita de reuso (sobra/sobrante/
+# preparado extra/día anterior).
+#
+# [ronda 1 · 2026-08-03] `sobras?` (stem "sobra"/"sobras", la forma coloquial MÁS común
+# en RD — distinta de "sobrante"/"sobrantes", ya cubierto) y `d[ií]a\s+anterior` («del día
+# anterior») añadidos. Esto es DETECCIÓN BEST-EFFORT CONSERVADORA sobre el vocabulario de
+# reuso observado hasta ahora, no un intento de cobertura exhaustiva — un futuro sinónimo
+# no listado aquí simplemente recibe yield (sobre-compra leve, ~26%), nunca al revés
+# (nunca se infla silenciosamente una línea que SÍ es de reuso real y detectada).
 _PROTEIN_REUSE_PAREN_RE = re.compile(
-    r'\([^)]*\b(?:desayuno|almuerzo|cena|merienda|sobrantes?|preparad[oa]\s+extra)\b[^)]*\)',
+    r'\([^)]*\b(?:desayuno|almuerzo|cena|merienda|sobras?|sobrantes?|'
+    r'preparad[oa]\s+extra|d[ií]a\s+anterior)\b[^)]*\)',
     re.IGNORECASE,
 )
 
@@ -8232,13 +8264,16 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     Items con `is_staple=True` o categoría "Urgente" se filtran del lado
     aggregated en ambas capas (no provienen de recetas, son ruido).
 
-    [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] El lado esperado espeja el knob
-    `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` sin condición adicional: las 6 surfaces
-    que persisten `aggregated_shopping_list*` SIEMPRE lo hacen con
-    `is_new_plan=True` (P3-CANONICAL-AGG-WEEKLY), así que si el knob está ON el
-    aggregator que construyó la lista ya aplicó yield 1.35× a proteínas cocidas
-    — este espejo evita que el guard vea una divergencia de magnitud fantasma
-    (~35%) contra su propia compra correcta.
+    [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03 · ronda 1] El lado esperado espeja el SELLO
+    `protein_yield_applied` que la lista ya lleva (estampado por
+    `aggregate_and_deduct_shopping_list` al construirla), NUNCA el knob
+    `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` vigente en el momento de re-evaluar. Mismo
+    criterio que el sello `trip_window_days` (P1-TRIP-WINDOWED-PERISHABLES): leer el
+    knob en vez del sello fabrica divergencias fantasma cuando el guard re-valida un
+    plan persistido (cron diario, rebuild) bajo un estado de knob distinto al que
+    construyó la lista — en cualquiera de las dos direcciones del A/B (encendido
+    después de construir, o rollback después de encender). Ver
+    `_protein_yield_seal_applied`.
 
     Args:
         plan_result: dict con `days` y `aggregated_shopping_list`. Opcional
@@ -8359,13 +8394,19 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
                     _n_days_basis, _basis_scale,
                 )
 
-    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `aggregated_shopping_list*` (el lado
-    # COMPRADO que este guard compara) SIEMPRE se construye con `is_new_plan=True`
-    # (P3-CANONICAL-AGG-WEEKLY: todo productor de esas keys — assemble, recalc, agent
-    # tool, chunk worker — pasa `is_new_plan=True`). Así que el guard no necesita
-    # replicar el check de `is_new_plan`: basta con leer el knob, exactamente como lo
-    # haría el aggregator que construyó la lista que tiene delante.
-    _apply_protein_yield = _protein_yield_on_canonical_enabled()
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03 · ronda 1] El espejo sigue al SELLO
+    # `protein_yield_applied` que la lista lleva, NUNCA al knob VIGENTE — exactamente el
+    # mismo criterio que el espejo del ventaneo unas líneas más abajo (sello
+    # `trip_window_days`, comentario "el sello ES la evidencia de cómo se construyó ESTA
+    # lista"). Leer el knob aquí en vez del sello fabrica divergencias fantasma en las DOS
+    # direcciones del A/B: lista construida con knob OFF + cron re-evaluando con knob ON
+    # (medido: 25,9% de divergencia sobre un ítem de 1.435 g), y el rollback simétrico
+    # (knob ON→OFF con listas ya sembradas). Ver `_protein_yield_seal_applied`.
+    _protein_yield_agg_list = (
+        plan_result.get("aggregated_shopping_list_weekly")
+        or plan_result.get("aggregated_shopping_list") or []
+    )
+    _apply_protein_yield = _protein_yield_seal_applied(_protein_yield_agg_list)
 
     try:
         expected_raw = expected_sum_from_recipes(
@@ -11572,9 +11613,23 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 categorized_results[display_cat].append(item_val)
                 added = True
                 
-        # Removido el PANTRY_STAPLES force-add ("Disponible"). 
-        # Si un alimento (incluyendo los estables) se deduce al 100%, 
+        # Removido el PANTRY_STAPLES force-add ("Disponible").
+        # Si un alimento (incluyendo los estables) se deduce al 100%,
         # no debe irrumpir en la lista de compras del supermercado.
+
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03 · ronda 1] SELLO `protein_yield_applied` en
+    # cada ítem, mismo patrón que `trip_window_days` (Task 6, P1-TRIP-WINDOWED-PERISHABLES):
+    # el guard debe espejar cómo se CONSTRUYÓ la lista que tiene delante, no el knob VIGENTE
+    # en el momento de re-evaluarla. Sin este sello, un cron re-validando un `plan_data`
+    # persistido (o un rollback de knob ON→OFF, o un A/B ON→OFF a mitad de camino) fabrica
+    # divergencias de magnitud fantasma: medido por el revisor, lista construida con knob OFF
+    # (1.435 g) re-evaluada con knob ON → 25,9% de divergencia + `magnitude=True`. `results` y
+    # `categorized_results[*]` comparten los MISMOS dicts (`item_val` se appendea a ambos
+    # arriba), así que estampar aquí cubre las dos formas de salida.
+    if structured and apply_protein_yield:
+        for _it in results:
+            if isinstance(_it, dict):
+                _it["protein_yield_applied"] = True
 
     results.sort(key=lambda x: x["display_string"] if structured else x)
     
