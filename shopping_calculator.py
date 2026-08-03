@@ -4686,8 +4686,18 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     # llegaba mudo (`capped_by=null`) aunque una sola cena agotara el 103% de la compra semanal.
     # Reusa `_coherence_base_fields` (misma fuente que `result["base_qty"]` más abajo) en vez de
     # re-derivar la conversión: una sola definición de "cuánto se está comprando en gramos".
+    #
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · ronda de revisión] Este backstop ALIMENTA el mismo
+    # `_cap_hit`/nota que P1-CAPPED-STAPLE-HONESTY — así que respeta el MISMO kill switch
+    # `CAPPED_STAPLE_HONESTY` ("Flip a False si el copy molesta; el número NO cambia con el knob,
+    # sólo se deja de decir"). Reproducido pre-fix: con el knob en `False` el lookup de arriba ni
+    # corre (queda dentro de su propio `if CAPPED_STAPLE_HONESTY:`), pero este bloque nuevo corría
+    # de todas formas y la nota "alcanza..." seguía saliendo — un operador que apaga el knob en un
+    # incidente no lograba callarla. Simétrico con el cap REAL: cuando el knob está OFF, ni el
+    # cap real ni este sintético dejan `capped_by` en el ítem (mismo invariante "sin capped_by ⟺
+    # knob off o nada que reportar" para ambos caminos).
     _base_fields = _coherence_base_fields(raw_qty, unit_str, weight_in_lbs)
-    if _cap_hit is None and text_demand_g is not None:
+    if _cap_hit is None and text_demand_g is not None and CAPPED_STAPLE_HONESTY:
         try:
             _td_g = float(text_demand_g)
         except (TypeError, ValueError):
@@ -7234,6 +7244,157 @@ _TRAILING_MODIFIERS_ES = frozenset({
 })
 
 
+def _build_shopping_master_map() -> dict:
+    """[P1-VEG-BACKFILL-HONESTY · 2026-08-03] SSOT del índice nombre/alias -> fila de
+    `master_ingredients`. Extraído de `aggregate_and_deduct_shopping_list` (bloque "RESOLUCIÓN DE
+    FRICCIÓN DE UNIDADES") para que otros consumidores (`get_shopping_list_delta::text_demand_g_
+    map`) puedan canonicalizar con la MISMA tabla que usa el lado comprado, sin reimplementar el
+    índice ni arriesgar drift."""
+    master_map: dict = {}
+    for m in get_master_ingredients():
+        master_map[m["name"]] = m
+        for alias in (m.get("aliases") or []):
+            master_map[alias.strip().lower()] = m
+            master_map[alias.strip().title()] = m
+    return master_map
+
+
+def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
+    """[P1-VEG-BACKFILL-HONESTY · 2026-08-03] SSOT de la cadena de canonicalización por-nombre
+    que `aggregate_and_deduct_shopping_list` aplicaba INLINE dentro de su loop de agregación
+    (`master_map` lookup → `_consolidate_inline_canon` → familias de canonicalizers →
+    pavo fresh/procesado → 13 regex de consolidación de cola). Extraída (ronda de revisión
+    2026-08-03 de esta misma tarea) para que el backstop de texto
+    (`get_shopping_list_delta::text_demand_g_map`, P1-VEG-BACKFILL-HONESTY) resuelva el MISMO
+    nombre final que el lado comprado — antes cada lado tenía su propia copia y podían divergir
+    silenciosamente.
+
+    Medido en vivo: sin este SSOT, "300 g de tomates" parseaba a `'Tomates'` (el parser NO
+    singulariza) y el `text_demand_g_map` quedaba con esa key — pero el lado comprado, que SÍ pasa
+    por esta cadena, resolvía `'Tomate'` (vía `canonicalize_tomate`). El backstop quedaba MUDO
+    para cualquier receta en plural (la mitad de las veces, así escriben los LLM) — mismo modo de
+    fallo para "cebollas" (`canonicalize_cebolla` → 'Cebolla') y "espinacas"
+    (`canonicalize_verduras_hoja` → 'Espinaca', singular).
+
+    NO cubre el post-proceso CROSS-KEY de `aggregate_and_deduct_shopping_list` (PLURAL-MERGE /
+    P6-LACTEOS-MERGE): esos dos pasos deciden entre variantes que YA coexisten como keys en el
+    dict agregado completo (ej. "si además existe la key hermana en singular, cuál gana") — no
+    son una función pura de un solo nombre, así que replicarlos aquí exigiría construir el dict
+    completo del lado texto, que es más de lo que este backstop necesita (fail-open: sin esa
+    fusión final, el peor caso es que el backstop no dispare para esa fusión específica, nunca
+    que dispare mal).
+
+    Args:
+        name: nombre crudo (post-parse, pre-canonicalización) — mismo `name` que devuelve
+            `_parse_quantity`.
+        master_map: índice de `_build_shopping_master_map()` (o el que ya tenga el caller — el
+            aggregator reusa el suyo, ya construido para esta misma llamada).
+
+    Returns:
+        Nombre canónico. Igual a `name` si ninguna regla de la cadena aplica.
+    """
+    m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
+    canonical_name = m_item["name"] if m_item else name
+
+    _inline_canon = _consolidate_inline_canon(canonical_name)
+    if _inline_canon is not None:
+        canonical_name = _inline_canon
+    else:
+        _viv = canonicalize_viveres(canonical_name)
+        if _viv is not None:
+            canonical_name = _viv
+        else:
+            _mus = canonicalize_musaceae(canonical_name)
+            if _mus is not None:
+                canonical_name = _mus
+            else:
+                _fr = canonicalize_frutas_tropicales(canonical_name)
+                if _fr is not None:
+                    canonical_name = _fr
+                else:
+                    _vh = canonicalize_verduras_hoja(canonical_name)
+                    if _vh is not None:
+                        canonical_name = _vh
+                    else:
+                        _ac = canonicalize_aceites(canonical_name)
+                        if _ac is not None:
+                            canonical_name = _ac
+                        else:
+                            _cit = canonicalize_citricos(canonical_name)
+                            if _cit is not None:
+                                canonical_name = _cit
+                            else:
+                                _tom = canonicalize_tomate(canonical_name)
+                                if _tom is not None:
+                                    canonical_name = _tom
+                                else:
+                                    _ceb = canonicalize_cebolla(canonical_name)
+                                    if _ceb is not None:
+                                        canonical_name = _ceb
+                                    else:
+                                        _qb = canonicalize_quesos_blancos_rd(canonical_name)
+                                        if _qb is not None:
+                                            canonical_name = _qb
+                                        else:
+                                            _fs = canonicalize_frutos_secos(canonical_name)
+                                            if _fs is not None:
+                                                canonical_name = _fs
+
+    # Ver comentario original en `aggregate_and_deduct_shopping_list`: SOLO `name.lower()` (raw
+    # del parser), NO el post-master_map — un alias que ya canonicalizó "Pechuga de pavo" →
+    # "Jamón de pavo" auto-activaría la regex procesada aunque el LLM dijo "pechuga fresca".
+    _orig_name_lower = name.lower()
+    if re.search(r'\bpavo\b', _orig_name_lower):
+        _has_fresh_marker = bool(re.search(r'\bfresc[oa]s?\b|\bfresh\b', _orig_name_lower))
+        _has_processed_marker = bool(re.search(
+            r'jam[oó]n\s+de\s+pavo|'
+            r'pavo\s+en\s+lonjas?|'
+            r'lonjas?\s+de\s+pavo|'
+            r'pavo\s+procesado|'
+            r'pavo\s+en\s+rebanadas?',
+            _orig_name_lower
+        ))
+        if _has_fresh_marker:
+            canonical_name = 'Pechuga de pavo'
+        elif _has_processed_marker:
+            canonical_name = 'Jamón de pavo'
+        elif re.search(r'pavo\s+molido|carne\s+de\s+pavo', _orig_name_lower):
+            canonical_name = 'Pavo molido'
+        elif re.search(r'pechuga\s+de\s+pavo|filete\s+de\s+pavo', _orig_name_lower):
+            canonical_name = 'Pechuga de pavo'
+        elif _orig_name_lower.strip() == 'pavo':
+            canonical_name = 'Pavo'
+
+    _can_lower = canonical_name.lower()
+
+    if re.search(r'^fresas?\b', _can_lower):
+        canonical_name = 'Fresas'
+    if re.search(r'^almendras?\b', _can_lower) and 'mantequilla' not in _can_lower:
+        canonical_name = 'Almendras fileteadas'
+    if re.search(r'^or[eé]gano\b', _can_lower):
+        canonical_name = 'Orégano'
+    if re.search(r'^tortillas?\s+integral', _can_lower):
+        canonical_name = 'Tortilla integral'
+    if re.search(r'^tomates?\b', _can_lower) and 'pasta' not in _can_lower and 'salsa' not in _can_lower:
+        canonical_name = 'Tomate'
+    if re.search(r'^cebollas?\s+(blanca|roja|morada|amarilla)', _can_lower):
+        canonical_name = 'Cebolla'
+    if re.search(r'^espinacas?$', _can_lower):
+        canonical_name = 'Espinacas'
+    if re.search(r'^zanahorias?$', _can_lower):
+        canonical_name = 'Zanahoria'
+    if re.search(r'^vainitas?$', _can_lower):
+        canonical_name = 'Vainitas'
+    if re.search(r'^habichuelas?$', _can_lower):
+        canonical_name = 'Habichuelas'
+    if re.search(r'^tofu\b', _can_lower):
+        canonical_name = 'Tofu'
+    if re.search(r'\bperejil\b', _can_lower):
+        canonical_name = 'Perejil'
+
+    return canonical_name
+
+
 def _singularize_food_es(name: str) -> str:
     """[P1-1 · 2026-05-10] Singulariza un nombre de comida en español.
 
@@ -8908,16 +9069,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         aggregated[name][unit] -= float(qty)  # P2-NEW-11: SIN multiplier (ver contrato arriba)
 
     # --- RESOLUCIÓN DE FRICCIÓN DE UNIDADES (Híbridas) ---
-    master_list = get_master_ingredients()
-    # Mapeo por nombre canónico + aliases para resolución robusta
-    master_map = {}
-    for m in master_list:
-        master_map[m["name"]] = m
-        # Indexar todos los aliases para resolución fuzzy
-        for alias in (m.get("aliases") or []):
-            master_map[alias.strip().lower()] = m
-            # También indexar con capitalización Title
-            master_map[alias.strip().title()] = m
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-03] `master_map` + la resolución de nombre canónico se
+    # extrajeron a `_build_shopping_master_map()`/`canonicalize_shopping_food_name()` (SSOT
+    # compartido con `get_shopping_list_delta::text_demand_g_map` — ver docstring de esa función
+    # para el bug que motivó la extracción: plurales rompían el emparejamiento en silencio).
+    master_map = _build_shopping_master_map()
 
     # ── Re-agrupación por Nombre Canónico ──
     # Si el LLM devolvió "Huevo", "Huevos" y "Huevos enteros", el agregador original
@@ -8925,200 +9081,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # para que su volumen se sume correctamente antes de calcular empaques comerciales.
     canonical_aggregated = defaultdict(lambda: defaultdict(float))
     for name, units in aggregated.items():
-        m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
-        canonical_name = m_item["name"] if m_item else name
-
-        # [P2-NEW-8 · 2026-05-11] SSOT: las 4 reglas inline Huevo/Ñame/Miel/Ajo
-        # ahora viven en `_consolidate_inline_canon` (paralelo a la llamada en
-        # `_canonicalize_for_coherence`). Sin SSOT, un drift entre los dos
-        # sitios producía false positives del guard recetas↔lista.
-        _inline_canon = _consolidate_inline_canon(canonical_name)
-        if _inline_canon is not None:
-            canonical_name = _inline_canon
-        else:
-            # [P3-NEW-6 · 2026-05-11] Víveres y musáceas: consolidar variantes
-            # del mismo producto en una sola línea de shopping. "Yuca hervida"
-            # + "Yuca con mojo" → 1 línea "Yuca". "Plátano verde" + "Plátano
-            # maduro" → 1 línea "Plátano" (madurez es estado temporal, no
-            # producto distinto). Bilateral con el guard (mirror en
-            # `_canonicalize_for_coherence`).
-            _viv = canonicalize_viveres(canonical_name)
-            if _viv is not None:
-                canonical_name = _viv
-            else:
-                _mus = canonicalize_musaceae(canonical_name)
-                if _mus is not None:
-                    canonical_name = _mus
-                else:
-                    # [P2-NEW-A · 2026-05-11] Frutas tropicales / verduras de
-                    # hoja / aceites: tres familias más cuyas variantes inflan
-                    # la lista si no consolidamos. Mismo orden y patrón que el
-                    # guard (mirror): primer match gana, cada uno mutex.
-                    _fr = canonicalize_frutas_tropicales(canonical_name)
-                    if _fr is not None:
-                        canonical_name = _fr
-                    else:
-                        _vh = canonicalize_verduras_hoja(canonical_name)
-                        if _vh is not None:
-                            canonical_name = _vh
-                        else:
-                            _ac = canonicalize_aceites(canonical_name)
-                            if _ac is not None:
-                                canonical_name = _ac
-                            else:
-                                # [P3-NEW-12 · 2026-05-11] 5 canonicalizers
-                                # adicionales (cítricos, tomate, cebolla,
-                                # quesos blancos RD, frutos secos). Mismo
-                                # patrón mirror que P2-NEW-A. Sin estos,
-                                # variantes triviales como "limón verde" vs
-                                # "limón persa" o "tomate criollo" vs
-                                # "tomate maduro" se quedan en líneas
-                                # separadas en la lista de compras.
-                                _cit = canonicalize_citricos(canonical_name)
-                                if _cit is not None:
-                                    canonical_name = _cit
-                                else:
-                                    _tom = canonicalize_tomate(canonical_name)
-                                    if _tom is not None:
-                                        canonical_name = _tom
-                                    else:
-                                        _ceb = canonicalize_cebolla(canonical_name)
-                                        if _ceb is not None:
-                                            canonical_name = _ceb
-                                        else:
-                                            _qb = canonicalize_quesos_blancos_rd(canonical_name)
-                                            if _qb is not None:
-                                                canonical_name = _qb
-                                            else:
-                                                _fs = canonicalize_frutos_secos(canonical_name)
-                                                if _fs is not None:
-                                                    canonical_name = _fs
-
-        # [P3-PROTEIN-CAP-2] Consolidación de pavo con distinción
-        # FRESH vs PROCESADO. Antes la regla colapsaba CUALQUIER
-        # "pavo + (pechuga|lonjas|rebanada|picadito)" a "Jamón de pavo",
-        # tratando pechuga FRESCA como deli procesado. Diferencia real
-        # crítica para el usuario:
-        #   - Pechuga fresca: ~$80 RD$/lb, sodio bajo, proteína magra clean.
-        #   - Jamón de pavo en lonjas: ~$150 RD$/lb, sodio 4× mayor,
-        #     contiene nitritos y conservantes.
-        # Caso real 2026-05-05 02:14: LLM pidió "pechuga de pavo fresca"
-        # → aggregator mostraba "27 lbs de Jamón de pavo" en la lista
-        # → usuario compraría producto equivocado, costo +90% y nutrición
-        # peor.
-        #
-        # Reglas, en orden de precedencia:
-        #   1. Marker EXPLÍCITO de fresh (`fresca`, `fresh`) → Pechuga de pavo
-        #      (gana sobre cualquier indicador de presentación)
-        #   2. Marker explícito de procesado (`jamón de pavo`, `pavo en
-        #      lonjas`, `pavo procesado`) sin fresh → Jamón de pavo
-        #   3. `pavo molido` o `carne de pavo` → Pavo molido (lean ground,
-        #      no procesado deli)
-        #   4. `pechuga de pavo` o `filete de pavo` (sin marker explícito de
-        #      procesado) → Pechuga de pavo (default seguro: en RD el
-        #      consumidor que dice "pechuga de pavo" usualmente quiere fresca)
-        #   5. Else: deja canonical_name del master_map sin tocar.
-        # Usar SOLO `name.lower()` (raw del parser) para el matching, NO
-        # `_can_lower` (post-master_map). Razón: master_map puede tener
-        # alias que canonicaliza "Pechuga de pavo" → "Jamón de pavo"
-        # (alias en PROTEIN_SYNONYMS / DB). Si hiciéramos matching sobre
-        # `_can_lower`, la regex `jam[oó]n de pavo` se autoactivaría aunque
-        # el LLM dijo "pechuga fresca", produciendo la conflación que
-        # justamente queremos evitar. El raw name preserva la intención
-        # original del LLM/usuario.
-        _orig_name_lower = name.lower()
-        if re.search(r'\bpavo\b', _orig_name_lower):
-            _has_fresh_marker = bool(re.search(r'\bfresc[oa]s?\b|\bfresh\b', _orig_name_lower))
-            _has_processed_marker = bool(re.search(
-                r'jam[oó]n\s+de\s+pavo|'
-                r'pavo\s+en\s+lonjas?|'
-                r'lonjas?\s+de\s+pavo|'
-                r'pavo\s+procesado|'
-                r'pavo\s+en\s+rebanadas?',
-                _orig_name_lower
-            ))
-            if _has_fresh_marker:
-                canonical_name = 'Pechuga de pavo'
-            elif _has_processed_marker:
-                canonical_name = 'Jamón de pavo'
-            elif re.search(r'pavo\s+molido|carne\s+de\s+pavo', _orig_name_lower):
-                canonical_name = 'Pavo molido'
-            elif re.search(r'pechuga\s+de\s+pavo|filete\s+de\s+pavo', _orig_name_lower):
-                # Default seguro: pechuga de pavo (sin marker procesado) → fresca
-                canonical_name = 'Pechuga de pavo'
-            elif _orig_name_lower.strip() == 'pavo':
-                # "Pavo" solo, sin descriptores → canonical genérico (no
-                # auto-conflate via master alias a Jamón de pavo).
-                canonical_name = 'Pavo'
-
-        # [P0-SHOPPING-CALC-NAMEERROR · 2026-05-15] `_can_lower` se usa en
-        # las 13 regex de consolidación de abajo (Fresas, Almendras, Orégano,
-        # Tortilla, Tomate, Cebolla, Espinacas, Zanahoria, Vainitas,
-        # Habichuelas, Tofu, Perejil). Pre-fix la variable nunca se asignaba
-        # en este scope → `NameError: name '_can_lower' is not defined` en
-        # cada plan generado, lo que tumbaba toda la agregación
-        # (`aggregate_and_deduct_shopping_list` lanzaba) y dejaba la lista
-        # de compras vacía/incompleta. Síntoma user-facing: coherence guard
-        # reportaba 35 "divergencias críticas" (todos los ingredientes de
-        # las recetas marcados como `presence=expected_only`) y el plan
-        # llegaba con `_shopping_coherence_block` no resuelto.
-        # IMPORTANTE: se calcula DESPUÉS del bloque pavo porque el pavo
-        # puede mutar canonical_name; las 13 regex de abajo necesitan ver
-        # el canonical_name post-pavo.
-        _can_lower = canonical_name.lower()
-
-        # Consolidación: Fresas variantes (congeladas, frescas) → Fresas
-        if re.search(r'^fresas?\b', _can_lower):
-            canonical_name = 'Fresas'
-
-        # Consolidación: Almendras variantes → Almendras fileteadas
-        if re.search(r'^almendras?\b', _can_lower) and 'mantequilla' not in _can_lower:
-            canonical_name = 'Almendras fileteadas'
-
-        # [P3-OREGANO-DISPLAY-NAME · 2026-06-20] Variantes de orégano (seco, dominicano) → 'Orégano'
-        # (display; el owner pidió quitar 'dominicano', redundante en es-DO). Este literal ES el
-        # nombre mostrado/almacenado en aggregated_shopping_list (NO master_ingredients.name).
-        # 'Orégano' resuelve en master_map (:5491) para el lookup de precio/envase (:5773) vía el
-        # alias 'orégano'.title()='Orégano' del catálogo (slug='oregano'). NO revertir sin re-alinear.
-        if re.search(r'^or[eé]gano\b', _can_lower):
-            canonical_name = 'Orégano'
-
-        # Consolidación: Tortilla/Tortillas integral/integrales → Tortilla integral
-        if re.search(r'^tortillas?\s+integral', _can_lower):
-            canonical_name = 'Tortilla integral'
-
-        # Consolidación: Tomate variantes (de ensalada, bugalú, sin semillas, etc.) → Tomate
-        if re.search(r'^tomates?\b', _can_lower) and 'pasta' not in _can_lower and 'salsa' not in _can_lower:
-            canonical_name = 'Tomate'
-
-        # Consolidación: Cebolla variantes (blanca, roja, morada) → Cebolla
-        if re.search(r'^cebollas?\s+(blanca|roja|morada|amarilla)', _can_lower):
-            canonical_name = 'Cebolla'
-
-        # Consolidación: Espinaca/Espinacas → Espinacas
-        if re.search(r'^espinacas?$', _can_lower):
-            canonical_name = 'Espinacas'
-
-        # Consolidación: Zanahoria/Zanahorias → Zanahoria
-        if re.search(r'^zanahorias?$', _can_lower):
-            canonical_name = 'Zanahoria'
-
-        # Consolidación: Vainita/Vainitas → Vainitas
-        if re.search(r'^vainitas?$', _can_lower):
-            canonical_name = 'Vainitas'
-
-        # Consolidación: Habichuela variantes sin adjetivo (solo habichuela/habichuelas) → Habichuelas
-        if re.search(r'^habichuelas?$', _can_lower):
-            canonical_name = 'Habichuelas'
-
-        # Consolidación: Tofu variantes (ahumado, firme, suave) → Tofu
-        if re.search(r'^tofu\b', _can_lower):
-            canonical_name = 'Tofu'
-
-        # Consolidación: Perejil variantes → Perejil
-        if re.search(r'\bperejil\b', _can_lower):
-            canonical_name = 'Perejil'
-
+        canonical_name = canonicalize_shopping_food_name(name, master_map)
         for u, q in units.items():
             canonical_aggregated[canonical_name][u] += q
 
@@ -11666,19 +11629,31 @@ def get_shopping_list_delta(
     # `QTY_SHORTFALL_NOTE_MIN × texto` sin que ningún cap real lo explique, se estampe
     # `capped_by="qty_reconcile_v7"` sintético. Fail-open: si el parse falla, el mapa queda vacío
     # y el mecanismo nuevo es no-op (comportamiento previo).
+    #
+    # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · ronda de revisión] `expected_sum_from_recipes`
+    # devuelve nombres CRUDOS (post-parse, pre-canonicalización) pero el lado comprado (dentro de
+    # `aggregate_and_deduct_shopping_list`) resuelve por nombre CANÓNICO
+    # (`canonicalize_shopping_food_name`, mismo SSOT que ahora usa ese aggregator). Sin pasar los
+    # nombres de este mapa por la MISMA cadena, "300 g de tomates" quedaba con la key 'Tomates'
+    # mientras el ítem comprado resolvía 'Tomate' -> `.get(name)` fallaba SIEMPRE que la receta
+    # usara plural (medido: tomate/cebolla/espinaca — la mitad del vocabulario real de un LLM).
+    # `canonicalize_shopping_food_name` puede colapsar varias keys crudas al mismo canónico (ej.
+    # "Tomate" y "Tomates" en dos líneas de receta distintas) — se SUMAN, no se sobreescriben.
     try:
-        _text_demand_g_map = {
-            _food: _units.get("g")
-            for _food, _units in (
-                {
-                    f: _normalize_food_units_to_base(u or {})
-                    for f, u in (expected_sum_from_recipes(
-                        plan_result, apply_yield=False, multiplier=effective_multiplier,
-                    ) or {}).items()
-                }
-            ).items()
-            if isinstance(_units.get("g"), (int, float)) and _units.get("g", 0) > 0
+        _tdg_master_map = _build_shopping_master_map()
+        _tdg_raw_units = {
+            f: _normalize_food_units_to_base(u or {})
+            for f, u in (expected_sum_from_recipes(
+                plan_result, apply_yield=False, multiplier=effective_multiplier,
+            ) or {}).items()
         }
+        _text_demand_g_map: dict = {}
+        for _food, _units in _tdg_raw_units.items():
+            _g = _units.get("g")
+            if not (isinstance(_g, (int, float)) and _g > 0):
+                continue
+            _canon_food = canonicalize_shopping_food_name(_food, _tdg_master_map)
+            _text_demand_g_map[_canon_food] = _text_demand_g_map.get(_canon_food, 0.0) + float(_g)
     except Exception as _tdg_exc:
         logging.warning(f"[P1-VEG-BACKFILL-HONESTY] text_demand_g_map falló (fail-open, "
                         f"no-op): {type(_tdg_exc).__name__}: {_tdg_exc}")
@@ -11707,11 +11682,17 @@ def get_shopping_list_delta(
                 f"{num_days}d materializados · meals={_window_meals} · "
                 f"scale={_window_scale:.4f} (plan={base_duration_scale:.4f})"
             )
+            # [P1-VEG-BACKFILL-HONESTY · 2026-08-03 · ronda de revisión] El mapa ya está calculado
+            # sobre el plan COMPLETO (arriba) — sin pasarlo aquí, los ítems que esta segunda
+            # pasada resuelve (perecederos de la ventana del viaje) nunca reciben el backstop.
+            # Bug latente (este camino está OFF por default, `MEALFIT_TRIP_WINDOWED_PERISHABLES`)
+            # que dejarlo coherente evita para cuando se encienda.
             _res_window = aggregate_and_deduct_shopping_list(
                 _window_ingredients, items_to_deduct, categorize=categorize,
                 structured=structured, multiplier=multiplier * _window_scale,
                 brand_prefs=brand_prefs, brand_defaults=brand_defaults,
                 num_days=len(_trip_window), cycle_days=cycle_days,
+                text_demand_g_map=_text_demand_g_map,
             )
             res = _merge_trip_windowed_result(res, _res_window, window_len=len(_trip_window))
         except Exception as _tw_exc:
