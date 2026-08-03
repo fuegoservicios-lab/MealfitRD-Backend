@@ -1482,6 +1482,15 @@ def _pantry_deduction_seal(aggregated_list) -> bool | None:
                   el caller cae al default conservador `True` y conserva el comportamiento
                   previo. Colapsar ausencia con `False` haría que el cron diario empezara a
                   marcar severas las listas viejas CON deducción legítima.
+
+    Matiz conocido: «deducción efectiva» se mide por CANTIDAD (`qty > 0`), así que una Nevera
+    de puros condimentos «al gusto» (qty 0) sella `False` aunque `P2-SEASONING-RESTOCK-CLEAR`
+    SÍ haya usado esos nombres para dropear ítems de la lista por presencia. Inocuo hoy y a
+    propósito: lo que el sello alimenta es la pregunta «¿pudo el inventario RESTAR gramos de
+    este alimento?», y un drop por presencia no resta gramos de ningún otro — el alimento
+    dropeado desaparece de la lista (no queda con cantidad corta que malinterpretar), y los
+    demás quedan intactos. Si algún día el keep/drop por presencia empezara a recortar
+    cantidades, este sello tendría que mirar también ese camino.
     """
     _seen_false = False
     for item in aggregated_list or []:
@@ -5443,22 +5452,19 @@ def _classify_divergence_hypothesis(
     # La exención original queda intacta donde era correcta (con deducción REAL el ratio bajo
     # sigue siendo el artefacto conocido del delta y sigue sin forzar retry).
     #
-    # ⚠️ COMPANION DE FRONTEND PENDIENTE (repo hermano, no se puede commitear desde aquí):
-    # `magnitude_undersupply` necesita DOS entradas en `frontend/src/utils/`:
-    #   1. `coherenceLabels.js` → `COHERENCE_HYPOTHESIS_LABELS`: sin ella
-    #      `getCoherenceHypothesisLabel` devuelve `null` y el banner cae a "revisar"
-    #      (degradación cosmética, no rompe).
-    #   2. `renderCoherenceWarnings.js` → `_ACTIONABLE_HYPOTHESES`: ESTA sí importa. Es el
-    #      espejo del set de `summarize_divergences_for_ui` y gobierna el toast histórico
-    #      ("Tu lista tuvo N revisiones"); sin ella, una entry cuya única hipótesis accionable
-    #      sea el sub-suministro deja de contarse — la misma regresión silenciosa que el set
-    #      del backend evita.
-    # Y OJO: `test_p1_3_coherence_labels_cross_language.py` NO detecta la falta. Su parser
-    # extrae `return\s+["\']([a-z_]+)["\']`, que solo ve el literal PEGADO al `return` — el
-    # ternario de abajo lo esquiva sin querer. Vale para cualquier hipótesis futura que se
-    # devuelva desde una condicional: el drift test es ciego a esa forma.
+    # [ronda 1] El desdoble en DOS `return` no es estilo: `test_p1_3_coherence_labels_cross_
+    # language.py` extrae las hipótesis con `return\s+["\']([a-z_]+)["\']`, que solo ve el
+    # literal PEGADO al `return`. Con un ternario, `magnitude_undersupply` era invisible para
+    # el parser — el drift test cross-language quedaba ciego justo con la hipótesis nueva, y
+    # cuando el frontend añadiese su label saltaría `test_no_orphan_hypothesis_in_js` ("el JS
+    # tiene hipótesis que el backend no emite") con un mensaje que acusa al lado equivocado.
+    # Companions es-DO ya aterrizados en el repo frontend: `coherenceLabels.js`
+    # (`COHERENCE_HYPOTHESIS_LABELS`) y `renderCoherenceWarnings.js` (`_ACTIONABLE_HYPOTHESES`,
+    # espejo del set de `summarize_divergences_for_ui` que gobierna el toast histórico).
     if exp_qty > 0 and 0 < act_qty < exp_qty * overdeduct_threshold:
-        return "pantry_overdeduct" if pantry_deduction_applied else "magnitude_undersupply"
+        if not pantry_deduction_applied:
+            return "magnitude_undersupply"
+        return "pantry_overdeduct"
 
     # 5. [P1-COHERENCE-UNQUANTIFIED-LABEL · 2026-07-26] El alimento está en la lista pero las
     # recetas NO le ponen cantidad. Es el caso de los condimentos: "Sal al gusto" parsea a
@@ -5876,20 +5882,36 @@ _COHERENCE_SEVERE_MAGNITUDE_THRESHOLD = 0.50
 
 
 def _get_guard_undersupply_severe_knob() -> bool:
-    """[P2-GUARD-UNDERSUPPLY-CANONICAL · 2026-08-03] Lee `MEALFIT_GUARD_UNDERSUPPLY_SEVERE`.
+    """[P2-GUARD-UNDERSUPPLY-CANONICAL · 2026-08-03 · default False en ronda 1] Lee
+    `MEALFIT_GUARD_UNDERSUPPLY_SEVERE`. **Default `False`: telemetry-first.**
 
-    Default True: `magnitude_undersupply` (sub-suministro en lista SIN deducción de nevera)
-    cuenta como severa y puede escalar warn→block en las superficies que lo consultan.
+    Qué NO está gateado (llega desde el día uno, sin tocar el knob):
+      - la clasificación `magnitude_undersupply` en vez de `pantry_overdeduct`,
+      - su presencia en `_shopping_coherence_block_history`, en el log del guard, en el
+        `Counter` por hipótesis del cron diario y en el banner accionable.
+      Es decir: la OBSERVABILIDAD del agujero se enciende inmediatamente. Lo único gateado
+      es que la divergencia cuente como *severa* para escalar warn→block.
 
-    Rollback sin redeploy: `MEALFIT_GUARD_UNDERSUPPLY_SEVERE=false` mantiene la hipótesis
-    (la ETIQUETA es telemetría honesta y no se apaga) pero la devuelve al lado exento, con lo
-    que la escalada vuelve a ser byte-idéntica a la de antes de este P-fix. Está separado del
-    clasificador a propósito: si el volumen de retries nuevos resulta mayor de lo previsto, se
-    apaga la CONSECUENCIA sin perder la medición que justifica reencenderla.
+    Por qué el default arranca apagado (evidencia medida en la ronda 1, contra el brief que
+    pedía `True`): la consecuencia real en la surface #3 (`_chunk_worker` T2 con
+    `block_severe_only`) es que un `block_set` lanza `RuntimeError` DENTRO de un retry loop
+    que re-corre un cómputo **determinista** — mismos días, mismo inventario, mismo catálogo
+    ⇒ mismo resultado. Los 3 intentos fallan igual → `shopping_list_ok=False` → re-encolado
+    con backoff → `CHUNK_MAX_FAILURE_ATTEMPTS` → **dead letter**. Y la población que llega a
+    T2 con sub-oferta ≥0.5 es justo la que la surface #1 ya no pudo arreglar regenerando.
+    Es el mismo mecanismo de P1-COHERENCE-SEVERE-NO-NOISE (2026-07-07): una escalada T2 en
+    falso que quemó 3 retries + re-encolado. Reintroducirlo a ciegas para arreglar una
+    exención a ciegas sería cambiar un error por su simétrico.
+
+    Cómo encenderlo (secuencia, no fecha): medir en producción el volumen real de
+    `magnitude_undersupply` en `_shopping_coherence_block_history` — cuántos planes, cuántos
+    alimentos por plan, y cuántos de ellos vienen de T2. Si el volumen es el esperado
+    (unidades, no decenas) y el retry tiene alguna posibilidad de converger,
+    `MEALFIT_GUARD_UNDERSUPPLY_SEVERE=true` sin redeploy.
 
     Tooltip-anchor: P2-GUARD-UNDERSUPPLY-CANONICAL-KNOB
     """
-    return _knob_env_bool("MEALFIT_GUARD_UNDERSUPPLY_SEVERE", True)
+    return _knob_env_bool("MEALFIT_GUARD_UNDERSUPPLY_SEVERE", False)
 
 
 def _has_severe_divergence(divergences: list) -> bool:
@@ -5907,11 +5929,13 @@ def _has_severe_divergence(divergences: list) -> bool:
       - hypothesis == 'pantry_overdeduct' (caso conocido del aggregator).
       - hypothesis == 'unit_mismatch' / 'yield_uncovered' con delta menor.
 
-    [P2-GUARD-UNDERSUPPLY-CANONICAL · 2026-08-03] `magnitude_undersupply` SÍ es severa: es
-    el mismo rango de magnitud que `pantry_overdeduct` pero sobre una lista que NO dedujo
-    nevera, así que no hay artefacto del delta que lo explique — la lista compra menos de la
-    mitad de lo que las recetas exigen y el plato no sale. Knob
-    `MEALFIT_GUARD_UNDERSUPPLY_SEVERE=false` la devuelve al lado exento (rollback).
+    [P2-GUARD-UNDERSUPPLY-CANONICAL · 2026-08-03 · default False en ronda 1]
+    `magnitude_undersupply` es el mismo rango de magnitud que `pantry_overdeduct` pero sobre
+    una lista que NO dedujo nevera, así que no hay artefacto del delta que lo explique: la
+    lista compra menos de la mitad de lo que las recetas exigen y el plato no sale. Cuenta
+    como severa SOLO con `MEALFIT_GUARD_UNDERSUPPLY_SEVERE=true`; el default (`False`) la
+    mantiene exenta mientras se mide el volumen en producción — ver el docstring del knob
+    para el modo de fallo (dead-letter determinista en T2) que motivó arrancar apagado.
     """
     if not divergences:
         return False
@@ -8518,11 +8542,16 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     # direcciones del A/B: lista construida con knob OFF + cron re-evaluando con knob ON
     # (medido: 25,9% de divergencia sobre un ítem de 1.435 g), y el rollback simétrico
     # (knob ON→OFF con listas ya sembradas). Ver `_protein_yield_seal_applied`.
-    _protein_yield_agg_list = (
+    #
+    # [P2-GUARD-UNDERSUPPLY-CANONICAL · 2026-08-03 · ronda 1] La variable se llama
+    # `_guard_agg_list` y no `_protein_yield_agg_list` porque ya la leen DOS sellos (proteína
+    # y nevera) y previsiblemente los que vengan: es "la lista contra la que este guard va a
+    # comparar", no la lista de una regla concreta.
+    _guard_agg_list = (
         plan_result.get("aggregated_shopping_list_weekly")
         or plan_result.get("aggregated_shopping_list") or []
     )
-    _apply_protein_yield = _protein_yield_seal_applied(_protein_yield_agg_list)
+    _apply_protein_yield = _protein_yield_seal_applied(_guard_agg_list)
 
     # [P2-GUARD-UNDERSUPPLY-CANONICAL · 2026-08-03] Misma disciplina de sello para la otra
     # pregunta que el clasificador no podía responder: ¿a esta lista se le restó nevera?
@@ -8530,10 +8559,13 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     # cualquier `0 < act < exp/2` por umbral puro, y `_has_severe_divergence` exime esa
     # hipótesis → el sub-suministro real de una lista CANÓNICA (donde la deducción es
     # imposible por construcción) heredaba la exención para siempre.
-    _pantry_seal = _pantry_deduction_seal(_protein_yield_agg_list)
+    _pantry_seal = _pantry_deduction_seal(_guard_agg_list)
     _pantry_deduction_applied = True if _pantry_seal is None else _pantry_seal
     if _pantry_seal is False:
-        logging.info(
+        # `debug` y no `info`: la lista canónica es el caso NORMAL de este guard (toda
+        # construcción con `is_new_plan=True`), así que a nivel info serían 4 líneas por
+        # corrida describiendo que todo va como debe. Se loguea la anomalía, no la rutina.
+        logging.debug(
             "[COH-GUARD/P2-GUARD-UNDERSUPPLY-CANONICAL] lista CANÓNICA (sello "
             "pantry_deduction_applied=False): el sub-suministro por debajo del 50% de lo "
             "que exigen las recetas se clasifica `magnitude_undersupply`, no "
