@@ -1248,19 +1248,77 @@ def _build_hybrid_shopping_list(
 # el promedio ×7 días, ahora cada viaje trae SUS 7 días. Ver la sección de riesgos del
 # reporte del P-fix.
 #
-# Knob de rollback: `MEALFIT_TRIP_WINDOWED_PERISHABLES=false` reproduce el promedio
-# byte-idéntico (el helper devuelve None y `window_days` deja de tener efecto).
+# ------------------------------------------------------------
+# [P1-TRIP-WINDOWED-PERISHABLES · ronda 1 · 2026-08-02] DEFAULT **OFF**. Capacidad
+# dormida, NO código muerto: la ventana solo entra cuando `len(days) > 7`, y esa
+# condición HOY no se cumple nunca en producción.
+#
+# Medición contra la DB de producción (2026-08-02, SELECT sobre los 40 planes más
+# recientes; 23 con datos): `n_days=2` en 3 planes, `n_days=3` en 20 planes.
+# **0 planes por encima de 3 días materializados.** El shift poda los días consumidos
+# a la misma velocidad a la que los chunks los añaden, así que `len(days)` orbita 2-3
+# de forma permanente y `active_trip_window_days` devuelve `None` siempre.
+#
+# O sea: hoy el ventaneo es INERTE y sus riesgos (abajo) sí son reales. Se deja
+# implementado, probado y apagado hasta que alguien cierre los 3 prerequisitos y
+# vuelva a medir la distribución de `n_days`.
+#
+# ### Condiciones para ENCENDER (`MEALFIT_TRIP_WINDOWED_PERISHABLES=true`)
+#
+# (a) **El shift debe reconstruir —o marcar para recálculo— la lista de compras.**
+#     Hoy NINGUNO de los dos paths del shift toca `aggregated_shopping_list`
+#     (`_background_shift_plan_for_user` en cron_tasks.py y `api_shift_plan` en
+#     routers/plans.py: 0 referencias en ambos cuerpos). Sin la ventana, una lista
+#     stale post-shift es un promedio viejo benigno; CON la ventana, la lista habla de
+#     una semana que ya pasó y el guard produce una divergencia SEVERA
+#     (`Pescado expected_only` / `cap_swallowed_modifier`, que escala warn→block por
+#     P2-COHERENCE-1 y puede desatar retries). Mecanismo candidato que YA existe para
+#     drenarlo: marcar el plan como `partial_no_shopping` en el shift para que el cron
+#     `_process_pending_shopping_lists` (housekeeping al tope de
+#     `process_plan_chunk_queue`, ~cada minuto) lo re-agregue con el `days` ya avanzado.
+#
+# (b) **`cycle_total_rd` pasa a extrapolar la SEMANA 1 al ciclo**, no el promedio del
+#     plan (`compute_shopping_cost_summary` multiplica los perecederos del viaje ×
+#     semanas). Ese número alimenta `budget_reconciliation`, y un
+#     `status == "excedido"` dispara la convergencia de presupuesto, que **sustituye
+#     alimentos en el plan** (`apply_budget_convergence_for_days`). Un plan cuya semana
+#     cara sea la 3 puede dejar de converger (o converger de más si la cara es la 1).
+#     Hay que MEDIR el impacto sobre la distribución de `status` antes de encender.
+#
+# (c) **El último chunk de un plan de 30 días no tiene rebuild posterior**: el tramo
+#     final del plan no se re-agrega, así que su ventana nunca avanza.
+#
+# (d) [hallazgo al corregir el reporte, ronda 1] Los dos callsites read-only de tools.py
+#     (`calculate_shopping_list` y `mark_shopping_list_purchased`) NO están cableados y
+#     SÍ piden `structured=True` — con la ventana activa reconstruirían el promedio del
+#     plan mientras el usuario compró la lista ventaneada. Para `mark_shopping_list_
+#     purchased` eso significa cargar a la despensa una lista distinta de la comprada.
+#     Cablearlos (o hacerlos leer la lista persistida) es parte de encender.
+#
+# El knob gobierna **cómo se construyen listas nuevas**. NUNCA cómo se interpretan las
+# ya construidas: el espejo del guard se dispara por el SELLO `trip_window_days` de la
+# propia lista, sin consultar el knob (ver `_mirror_trip_window_expected` y el
+# `ignore_knob` de `active_trip_window_days`). Sin esa asimetría, apagar el knob con
+# listas ya selladas en DB fabricaba exactamente la divergencia severa que el espejo
+# existe para evitar — medido: knob ON → `[]`, knob OFF → `Pescado expected_only` +
+# `Pollo 700 vs 1400`.
 # tooltip-anchor: P1-TRIP-WINDOWED-PERISHABLES
 # ============================================================
 TRIP_WINDOW_DAYS = 7
 
 
 def _trip_windowed_perishables_enabled() -> bool:
-    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Knob del ventaneo de perecederos.
-    True (default): los perecederos salen de los 7 días del viaje activo. False:
-    rollback sin redeploy al promedio del plan proyectado a 7 (comportamiento previo,
-    byte-idéntico)."""
-    return _knob_env_bool("MEALFIT_TRIP_WINDOWED_PERISHABLES", True)
+    """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Knob de CONSTRUCCIÓN de listas nuevas.
+
+    Default **False** (ronda 1): el ventaneo solo aplica con `len(days) > 7` y la
+    medición contra producción del 2026-08-02 da 0/23 planes vivos por encima de 3 días
+    materializados — encenderlo hoy no cambiaría ninguna lista, pero sí expondría los 3
+    riesgos documentados en el bloque de arriba. `True` reactiva el ventaneo.
+
+    NO gobierna la INTERPRETACIÓN de listas ya construidas: el espejo del guard usa el
+    sello `trip_window_days` y jamás este knob.
+    """
+    return _knob_env_bool("MEALFIT_TRIP_WINDOWED_PERISHABLES", False)
 
 
 def _parse_plan_day_date(value):
@@ -1286,12 +1344,24 @@ def _parse_plan_day_date(value):
         return None
 
 
-def active_trip_window_days(plan_data: dict, window_len: int = TRIP_WINDOW_DAYS) -> list | None:
+def active_trip_window_days(
+    plan_data: dict,
+    window_len: int = TRIP_WINDOW_DAYS,
+    *,
+    ignore_knob: bool = False,
+) -> list | None:
     """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Los `window_len` días del viaje
     ACTIVO, o `None` si ventanear es un no-op.
 
+    `ignore_knob=True` [ronda 1]: salta la consulta al knob. Lo usa ÚNICAMENTE el espejo
+    del guard, que no decide si ventanear —eso ya lo decidió quien construyó la lista— sino
+    que RE-DERIVA la ventana que esa lista declara vía su sello `trip_window_days`. Con el
+    knob apagado y listas selladas vivas en DB, respetar el knob aquí devolvía `None`, el
+    espejo se volvía identidad y el guard fabricaba la divergencia severa que el espejo
+    existe para evitar. Los constructores de listas NUNCA pasan este flag.
+
     Devuelve `None` (y el caller conserva el comportamiento de siempre) cuando:
-      - el knob está apagado,
+      - el knob está apagado (salvo `ignore_knob`),
       - el plan no tiene días,
       - el plan cabe entero en la ventana (`len(days) <= window_len`) — el caso de
         producción del viaje 1, donde solo hay 2-3 días materializados y "la ventana"
@@ -1303,7 +1373,7 @@ def active_trip_window_days(plan_data: dict, window_len: int = TRIP_WINDOW_DAYS)
     `days[:window_len]` — que tras el shift ES el viaje activo, porque el shift poda
     los días consumidos y deja `days[0] = hoy`.
     """
-    if not _trip_windowed_perishables_enabled():
+    if not ignore_knob and not _trip_windowed_perishables_enabled():
         return None
     if not isinstance(plan_data, dict):
         return None
@@ -1453,16 +1523,18 @@ def _merge_trip_windowed_result(full_res, window_res, *, window_len: int):
         int(window_len), windowed, len(dropped), ", ".join(sorted(dropped)[:12]) or "-",
     )
 
+    # [ronda 1 · 2026-08-02] SIN re-ordenar. El agregador ya ordenó por `display_string`,
+    # que empieza por la CANTIDAD ("1 ½ lbs de Arroz"), así que re-ordenar con las
+    # cantidades nuevas de la ventana reorganizaba la lista visible por texto de cantidad
+    # —ni por nombre ni por categoría— sustituyendo el orden nativo del agregador.
+    # `merged` conserva el orden de `full_res`; los perecederos que solo existen en la
+    # ventana van al final, en el orden en que la ventana los produjo.
     if isinstance(full_res, dict):
         out_dict: dict = {}
         for cat, item in merged:
             out_dict.setdefault(cat, []).append(item)
-        for cat in out_dict:
-            out_dict[cat].sort(key=lambda x: str(x.get("display_string", "")))
         return out_dict
-    merged_list = [item for _cat, item in merged]
-    merged_list.sort(key=lambda x: str(x.get("display_string", "")))
-    return merged_list
+    return [item for _cat, item in merged]
 
 
 def parse_fraction(val: str) -> float:
@@ -4915,7 +4987,10 @@ def _mirror_trip_window_expected(
     """
     if not isinstance(expected_raw, dict) or not expected_raw:
         return expected_raw
-    window = active_trip_window_days(plan_result, window_len=window_len)
+    # `ignore_knob=True` [ronda 1]: re-derivar la ventana que la lista YA declara no es
+    # una decisión de construcción — es leer su sello. Respetar el knob aquí rompía el
+    # rollback (ver el bloque de cabecera del P-fix).
+    window = active_trip_window_days(plan_result, window_len=window_len, ignore_knob=True)
     if not window:
         return expected_raw
 
@@ -7860,12 +7935,20 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     # parámetro del caller: así el espejo sigue a la lista que tiene delante (assemble,
     # rebuild T2, recalc, cron re-validando un plan persistido) en vez de asumir que
     # todas las superficies ventanean a la vez.
+    #
+    # [ronda 1 · 2026-08-02] Y explícitamente SIN consultar
+    # `_trip_windowed_perishables_enabled()`: el sello ES la evidencia de cómo se
+    # construyó ESTA lista. Apagar el knob detiene la construcción de listas
+    # ventaneadas nuevas, pero las ya persistidas siguen siendo ventaneadas y su
+    # esperado debe ventanearse igual. Con la consulta al knob aquí, el rollback
+    # fabricaba `Pescado expected_only` (`cap_swallowed_modifier`, severa → warn/block)
+    # sobre cada lista sellada viva — el rollback se volvía más peligroso que el fix.
     try:
         _trip_win_len = _aggregated_trip_window_len(
             plan_result.get("aggregated_shopping_list_weekly")
             or plan_result.get("aggregated_shopping_list") or []
         )
-        if _trip_win_len and _trip_windowed_perishables_enabled():
+        if _trip_win_len:
             expected_raw = _mirror_trip_window_expected(
                 plan_result, expected_raw, mult=mult,
                 window_len=_trip_win_len, day_basis_applied=_day_basis_applied,
@@ -11354,8 +11437,12 @@ def get_shopping_list_delta(
     SOLO de esa ventana (escala `7/len(window)`) y los ESTABLES siguen del agregado del
     periodo completo. `None` (default) = comportamiento previo: promedio de todos los días
     materializados proyectado a 7. Requiere `structured=True` (la partición necesita el
-    nombre de cada ítem); con salida en texto plano se ignora con un WARNING. Knob de
-    rollback: `MEALFIT_TRIP_WINDOWED_PERISHABLES=false`.
+    nombre de cada ítem); con salida en texto plano se ignora con un WARNING.
+
+    Gateado por `MEALFIT_TRIP_WINDOWED_PERISHABLES`, **default `False`** desde la ronda 1:
+    con el knob apagado `window_days` no tiene efecto alguno (los callsites pasan el `None`
+    que `active_trip_window_days` devuelve, y este método lo ignoraría igual). Ver el
+    bloque de cabecera del P-fix para la medición y los 3 prerequisitos de encendido.
     """
     # [P1-SUPERMARKET-COSTING · 2026-07-02] Marca preferida del usuario → costeo
     # con el envase elegido. Fetch UNA vez por run (todas las superficies —

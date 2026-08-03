@@ -96,6 +96,41 @@ completo, usar `/health/version` o `get_knobs_registry_snapshot()`.
 | `MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT` | `0.10` | Subir a 0.15-0.20 si el LLM tiende a sub/sobre-multiplier por household >2x |
 | `MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY` | `True` | Flip a `False` para revertir al warn-only puro si el block-severe genera retry storms |
 
+### Lista de compras — ventana del viaje
+
+| Knob | Default | Cuándo cambiar |
+|---|---|---|
+| `MEALFIT_TRIP_WINDOWED_PERISHABLES` | **`False`** | Encender SOLO tras cerrar los 3 prerequisitos y re-medir `n_days` (ver abajo). Hoy es inerte |
+
+**[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02]** Con el knob en `True`, los PERECEDEROS de
+la lista se agregan solo desde los 7 días del viaje activo (los ESTABLES siguen del
+agregado del periodo completo) en vez de promediar todos los días materializados y
+proyectar a 7. Arregla que la lista del viaje 1 de un plan de 15/30 días trajera una
+fracción del pollo de la semana 1 y una fracción del pescado de la semana 3 (que se daña).
+
+**Nace apagado — capacidad dormida, no código muerto.** La ventana solo entra cuando
+`len(days) > 7`, y la medición contra producción (2026-08-02, 40 planes más recientes, 23
+con datos) da `n_days=2` en 3 planes y `n_days=3` en 20: **cero por encima de 3**. El shift
+poda los días consumidos a la misma velocidad a la que los chunks los añaden, así que
+`len(days)` orbita 2-3 permanentemente y `active_trip_window_days` devuelve `None` siempre.
+Encenderlo hoy no cambiaría ninguna lista, pero sí expondría sus riesgos.
+
+Prerequisitos para encender (detalle en el bloque de cabecera del P-fix en
+[`shopping_calculator.py`](../shopping_calculator.py), tooltip-anchor
+`P1-TRIP-WINDOWED-PERISHABLES`):
+
+1. El shift debe reconstruir —o marcar para recálculo— la lista (hoy ninguno de sus dos
+   paths toca `aggregated_shopping_list`); una lista stale post-shift pasa de promedio
+   viejo benigno a divergencia SEVERA del guard.
+2. Medir el impacto sobre `budget_reconciliation`: `cycle_total_rd` pasa a extrapolar la
+   semana 1 al ciclo, y un `status="excedido"` **sustituye alimentos** del plan.
+3. El último chunk de un plan de 30 días no tiene rebuild posterior.
+
+El knob gobierna **cómo se construyen listas nuevas**, nunca **cómo se interpretan las ya
+construidas**: el espejo del guard se dispara por el sello `trip_window_days` de la propia
+lista y no consulta este knob. Sin esa asimetría, apagarlo con listas selladas vivas en DB
+fabricaba la divergencia severa que el espejo existe para evitar.
+
 ### Sentry sampling (costo)
 
 | Knob | Default | Cuándo cambiar |

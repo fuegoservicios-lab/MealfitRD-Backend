@@ -11,6 +11,12 @@ El fix ventanea SOLO los PERECEDEROS a los 7 dias del viaje activo (los estables
 saliendo del agregado del periodo completo: se compran UNA vez para todo el ciclo) y espeja
 el mismo ventaneo en el lado esperado del guard.
 
+[ronda 1 · 2026-08-02] El knob nace en **False**: la ventana solo entra con
+`len(days) > 7` y la medicion contra produccion (40 planes recientes, 23 con datos) da
+`n_days` 2 en 3 planes y 3 en 20 — cero por encima de 7. La capacidad queda dormida hasta
+que se cierren los 3 prerequisitos documentados junto al knob. Por eso los tests de
+COMPORTAMIENTO piden la fixture `knob_on`, y hay tests explicitos del default OFF.
+
 Los tests son 100% OFFLINE: `get_master_ingredients` se stubea a `[]` (el `.env` apunta a
 produccion y el worktree no tiene `.env`; jamas dependemos de `master_ingredients` vivo).
 Con catalogo vacio la clasificacion cae en `_PERISHABLE_NAME_HINTS`/`_STAPLE_NAME_HINTS`
@@ -68,10 +74,39 @@ def _delta(plan, **kw):
         )
 
 
+@pytest.fixture
+def knob_on(monkeypatch):
+    """[ronda 1] El default es OFF (capacidad dormida). Los tests de COMPORTAMIENTO
+    del ventaneo lo encienden explicitamente."""
+    monkeypatch.setenv("MEALFIT_TRIP_WINDOWED_PERISHABLES", "true")
+
+
+# ---------------------------------------------------------------------------
+# 0. Default OFF: byte-identico al comportamiento previo al P-fix
+# ---------------------------------------------------------------------------
+def test_default_off_es_byte_identico_al_comportamiento_previo(monkeypatch):
+    """Con el knob en su DEFAULT (sin env var), un plan de 14 dias produce exactamente
+    la misma lista que antes de esta tarea: pasar `window_days` no cambia nada y no hay
+    sello. Es la verificacion de que la capacidad esta dormida, no a medio encender."""
+    monkeypatch.delenv("MEALFIT_TRIP_WINDOWED_PERISHABLES", raising=False)
+    plan = _plan_14d()
+    previo = _delta(plan)                                  # comportamiento pre-P-fix
+    con_ventana = _delta(plan, window_days=plan["days"][:7])
+    assert con_ventana == previo
+    assert not any("trip_window_days" in i for i in con_ventana)
+    # Y el helper que los callsites invocan devuelve None -> ningun callsite ventanea.
+    assert sc.active_trip_window_days(plan) is None
+
+
+def test_default_del_knob_es_false(monkeypatch):
+    monkeypatch.delenv("MEALFIT_TRIP_WINDOWED_PERISHABLES", raising=False)
+    assert sc._trip_windowed_perishables_enabled() is False
+
+
 # ---------------------------------------------------------------------------
 # 1. El bug: el viaje 1 debe traer la semana 1, no el promedio del plan
 # ---------------------------------------------------------------------------
-def test_viaje_1_trae_la_semana_1_no_el_promedio():
+def test_viaje_1_trae_la_semana_1_no_el_promedio(knob_on):
     plan = _plan_14d()
     items = _delta(plan, window_days=plan["days"][:7])
     by_name = _by_name(items)
@@ -88,7 +123,7 @@ def test_viaje_1_trae_la_semana_1_no_el_promedio():
     )
 
 
-def test_estable_de_la_semana_2_sobrevive_la_ventana():
+def test_estable_de_la_semana_2_sobrevive_la_ventana(knob_on):
     """Los ESTABLES se compran UNA vez para todo el ciclo: el aceite de la semana 2
     debe seguir en la lista aunque no se cocine esta semana."""
     plan = _plan_14d()
@@ -121,7 +156,7 @@ def test_knob_off_es_byte_identico_al_promedio(monkeypatch):
     assert con_ventana == base
 
 
-def test_plan_mas_corto_que_la_ventana_no_regresiona():
+def test_plan_mas_corto_que_la_ventana_no_regresiona(knob_on):
     """3 dias materializados (el caso de produccion del viaje 1): la ventana ES el
     plan completo -> mismo resultado que sin ventana."""
     plan = {"days": [_day("pollo", i) for i in range(1, 4)], "grocery_start_date": "2026-08-03"}
@@ -130,7 +165,7 @@ def test_plan_mas_corto_que_la_ventana_no_regresiona():
     assert con_ventana == base
 
 
-def test_la_suma_de_los_viajes_cubre_el_plan_completo():
+def test_la_suma_de_los_viajes_cubre_el_plan_completo(knob_on):
     """El riesgo del ventaneo seria convertir un problema de TIMING en uno de CANTIDAD
     total (el viaje 1 trae menos y ningun viaje posterior trae el resto). No ocurre: el
     plan es una ventana RODANTE — el shift poda los dias consumidos y deja `days[0]=hoy`,
@@ -166,7 +201,7 @@ def test_la_suma_de_los_viajes_cubre_el_plan_completo():
     assert _q(o1, "pescado") + _q(o2, "pescado") == pytest.approx(2100.0, rel=0.05)
 
 
-def test_el_hibrido_no_resucita_el_perecedero_de_la_semana_2():
+def test_el_hibrido_no_resucita_el_perecedero_de_la_semana_2(knob_on):
     """Razon por la que la ventana va TAMBIEN a las llamadas de 15/30 dias:
     `_build_hybrid_shopping_list` incluye los items que estan SOLO en la lista de
     periodo. Si el periodo no se ventanea, el pescado de la semana 2 vuelve a la lista
@@ -190,7 +225,7 @@ def test_el_hibrido_no_resucita_el_perecedero_de_la_semana_2():
 # ---------------------------------------------------------------------------
 # 2. Helper de derivacion de la ventana
 # ---------------------------------------------------------------------------
-def test_helper_deriva_la_ventana_del_viaje_activo():
+def test_helper_deriva_la_ventana_del_viaje_activo(knob_on):
     plan = _plan_14d()
     win = sc.active_trip_window_days(plan)
     assert win is not None
@@ -198,7 +233,7 @@ def test_helper_deriva_la_ventana_del_viaje_activo():
     assert win[0]["day"] == 1 and win[-1]["day"] == 7
 
 
-def test_helper_none_cuando_el_plan_cabe_en_la_ventana():
+def test_helper_none_cuando_el_plan_cabe_en_la_ventana(knob_on):
     """<=7 dias materializados -> None (no-op explicito: ventana == plan completo)."""
     plan = {"days": [_day("pollo", i) for i in range(1, 4)]}
     assert sc.active_trip_window_days(plan) is None
@@ -211,7 +246,20 @@ def test_helper_respeta_el_knob(monkeypatch):
     assert sc.active_trip_window_days(_plan_14d()) is None
 
 
-def test_helper_ancla_en_grocery_start_date_cuando_days0_ya_paso():
+def test_helper_ignore_knob_es_la_puerta_del_espejo(monkeypatch):
+    """[ronda 1] `ignore_knob=True` existe SOLO para el espejo del guard: re-derivar la
+    ventana que una lista YA declara no es una decision de construccion, es leer su
+    sello. Sin esta puerta, el rollback dejaba el espejo inerte."""
+    monkeypatch.setenv("MEALFIT_TRIP_WINDOWED_PERISHABLES", "false")
+    plan = _plan_14d()
+    assert sc.active_trip_window_days(plan) is None
+    win = sc.active_trip_window_days(plan, ignore_knob=True)
+    assert win is not None and len(win) == 7
+    p = inspect.signature(sc.active_trip_window_days).parameters["ignore_knob"]
+    assert p.kind == inspect.Parameter.KEYWORD_ONLY and p.default is False
+
+
+def test_helper_ancla_en_grocery_start_date_cuando_days0_ya_paso(knob_on):
     """El shift reescribe `grocery_start_date` a HOY siguiendo a `days[0]`. Si las
     fechas del plan arrancan despues del ancla, la ventana sigue las FECHAS."""
     plan = _plan_14d()
@@ -226,7 +274,7 @@ def test_helper_ancla_en_grocery_start_date_cuando_days0_ya_paso():
 # ---------------------------------------------------------------------------
 # 3. Espejo del guard (obligatorio: sin el, divergencias falsas masivas)
 # ---------------------------------------------------------------------------
-def test_guard_no_fabrica_divergencias_con_lista_ventaneada():
+def test_guard_no_fabrica_divergencias_con_lista_ventaneada(knob_on):
     plan = _plan_14d()
     items = _delta(plan, window_days=plan["days"][:7])
     plan_result = dict(plan)
@@ -247,7 +295,35 @@ def test_guard_no_fabrica_divergencias_con_lista_ventaneada():
     )
 
 
-def test_el_espejo_del_guard_es_load_bearing_no_cosmetico():
+def test_el_sello_manda_sobre_el_knob_apagado(monkeypatch):
+    """[ronda 1] LA asimetria del P-fix: el knob gobierna COMO SE CONSTRUYEN listas
+    nuevas, jamas COMO SE INTERPRETAN las ya construidas.
+
+    Escenario real del rollback: hay listas ventaneadas persistidas en DB y el operador
+    apaga el knob. Si el espejo consultara el knob, se volveria identidad y el guard
+    fabricaria sobre CADA una de esas listas la divergencia severa `Pescado
+    expected_only` / `cap_swallowed_modifier` (escala warn->block por P2-COHERENCE-1) —
+    el rollback seria mas peligroso que el fix. El sello de la lista manda.
+    """
+    monkeypatch.setenv("MEALFIT_TRIP_WINDOWED_PERISHABLES", "true")
+    plan = _plan_14d()
+    items = _delta(plan, window_days=plan["days"][:7])
+    assert all(i.get("trip_window_days") == 7 for i in items)
+
+    # El operador apaga el knob DESPUES de que la lista ya existe.
+    monkeypatch.setenv("MEALFIT_TRIP_WINDOWED_PERISHABLES", "false")
+    plan_result = dict(plan)
+    plan_result["aggregated_shopping_list_weekly"] = items
+    plan_result["calc_household_multiplier"] = 1.0
+    with patch.object(sc, "get_master_ingredients", return_value=[]):
+        divs = sc.run_shopping_coherence_guard(plan_result, mode_override="warn")
+    assert divs == [], (
+        f"con el knob apagado el espejo DEBE seguir el sello de la lista; "
+        f"divergencias fabricadas por el rollback: {divs}"
+    )
+
+
+def test_el_espejo_del_guard_es_load_bearing_no_cosmetico(knob_on):
     """Prueba de que el espejo HACE algo (no un parser test): con el espejo
     neutralizado, el guard fabrica `Pescado expected_only` (hipotesis
     `cap_swallowed_modifier`, una de las SEVERAS que escalan warn->block en
@@ -288,7 +364,7 @@ def test_guard_sigue_ciego_sin_ventana():
     )
 
 
-def test_lista_ventaneada_lleva_el_sello():
+def test_lista_ventaneada_lleva_el_sello(knob_on):
     """El sello `trip_window_days` es lo que permite al guard (y a un lector futuro)
     saber que esta lista NO es el promedio del plan."""
     plan = _plan_14d()
