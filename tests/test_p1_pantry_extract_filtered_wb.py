@@ -175,4 +175,12 @@ def test_el_loop_usa_word_boundary_y_pools_filtrados():
     assert "for f in DOMINICAN_FRUITS" not in blk, "el loop debe iterar filtered_fruits"
     assert "filtered_proteins" in blk and "filtered_carbs" in blk
     assert "filtered_veggies" in blk and "filtered_fruits" in blk
-    assert r"\b" in blk, "el match debe ser word-boundary, no substring"
+    # [P1-CYCLE-BASE-AFFINITY · 2026-08-02] El cuerpo del matcher se subió a `_catalog_pick_wb`
+    # (nivel módulo) para que la afinidad de ciclo —que corre ANTES del sorteo— use EXACTAMENTE
+    # este match en vez de nacer como cuarta implementación. El `\b` ya no vive dentro de este
+    # bloque, así que el ancla sigue al SSOT: el bloque DELEGA y el delegado es word-boundary.
+    assert "_catalog_pick_wb" in blk, "el bloque debe delegar en el matcher SSOT"
+    import inspect
+    import ai_helpers as _ah
+    assert r"\b" in inspect.getsource(_ah._catalog_pick_wb), \
+        "el match debe ser word-boundary, no substring"

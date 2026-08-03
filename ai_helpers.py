@@ -31,7 +31,10 @@ from constants import (
     FRUIT_SYNONYMS as fruit_synonyms,
     _get_fast_filtered_catalogs
 )
-from db import get_user_profile, update_user_health_profile, update_user_health_profile_atomic, get_user_ingredient_frequencies
+from db import (get_user_profile, update_user_health_profile, update_user_health_profile_atomic,
+                get_user_ingredient_frequencies,
+                # [P1-CYCLE-BASE-AFFINITY · 2026-08-02] la compra persistida del ciclo vigente.
+                get_latest_meal_plan_with_id)
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
 from knobs import _env_str, _env_float, _env_bool, _env_int  # [P3-FLASH-LITE-COST-CUT · 2026-05-21] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] / [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23] / [P2-PANTRY-ROTATION-FLOOR · 2026-07-29]
 
@@ -500,6 +503,168 @@ def _intersect_cycle_base(persisted, allowed) -> "list | None":
         return _out or None
     except Exception:
         return None
+
+
+def _catalog_pick_wb(item_norm: str, full_catalog, syn_map, allowed) -> "str | None":
+    """[P1-PANTRY-EXTRACT-FILTERED-WB · 2026-07-30] Resuelve una línea de texto libre
+    ("2 lb de filete de pescado") al alimento del catálogo que nombra.
+
+    [P1-CYCLE-BASE-AFFINITY · 2026-08-02] Subida a nivel de módulo (SSOT único). Vivía como
+    closure `_pantry_pick` DENTRO del bloque de nevera, ~280 líneas DESPUÉS del sorteo, así que
+    la afinidad de ciclo —que corre ANTES del sorteo— no podía usarla y habría necesitado su
+    propia comparación de nombres. Esa cuarta implementación es exactamente la trampa que este
+    repo lleva 13+ incidentes pagando (`"sal"`⊂`"Salami"`, `"res"`⊂`"fresas"`,
+    `"pollo"`⊂`"repollo"`, `"pina"`⊂`"Espinacas"`). El closure queda delegando aquí.
+
+    Las tres reglas, que hacen falta JUNTAS:
+      1. LÍMITE DE PALABRA (`\\b`) sobre texto sin acentos — no subcadena cruda.
+      2. Gana el alias MÁS ESPECÍFICO (el más largo) evaluado sobre el catálogo COMPLETO —
+         `PROTEIN_SYNONYMS['res']` incluye el alias genérico `'filete'`, que ES palabra completa
+         dentro de "filete de pescado".
+      3. El ganador solo se devuelve si está en `allowed` (el pool YA filtrado por
+         alergia/dieta/dislike). Si el ítem nombra un alimento excluido, NO se degrada a un
+         match genérico más débil: simplemente no aporta base.
+    tooltip-anchor: P1-CYCLE-BASE-AFFINITY (matcher SSOT)"""
+    _best, _len = None, 0
+    for _food in full_catalog:
+        for s in syn_map.get(_food.lower(), [_food.lower()]):
+            _s = strip_accents(str(s).lower()).strip()
+            if _s and len(_s) > _len and re.search(r'\b' + re.escape(_s) + r'\b', item_norm):
+                _best, _len = _food, len(_s)
+    return _best if (_best is not None and _best in allowed) else None
+
+
+# ======= [P1-CYCLE-BASE-AFFINITY · 2026-08-02] (audit solver+seeder v7 · Task 9) =======
+# La lista quincenal/mensual extrapola las bases de la ventana visible (3-4 días) a 15/30 días,
+# pero la fatiga por recencia (`recent_3d×3.0 + recent_7d×1.5` = ×4,5 EN CONTRA de lo recién
+# comido) empuja los chunks siguientes hacia OTRAS bases. El usuario compra un saco de arroz
+# para 30 días y desde el chunk 2 el plan le pide pasta: el sistema manda comprar una cosa y
+# cocinar otra.
+#
+# El `MEALFIT_GROCERY_CYCLE_LOCK` que existía para esto es BINARIO ("REGLA DE AHORRO EXTREMA…
+# usa EXACTAMENTE las proteínas asignadas") y está OFF por decisión explícita del dueño
+# (P1-VARIETY-RENEWAL-NO-CYCLE-LOCK: "no me des los mismos a menos que lo necesite"). Esto es la
+# fuerza INTERMEDIA que faltaba: un multiplicador SUAVE sobre los pesos del sorteo. La variedad
+# sigue siendo posible; solo se sesga hacia lo que el usuario ya tiene en casa.
+#
+# **DEFAULT 1.0 = APAGADO, y es deliberado.** El dueño eligió variedad sobre reuso a sabiendas;
+# encender esto es decisión suya, no nuestra. Con el default el sorteo es byte-idéntico al
+# anterior y ni siquiera se lee el plan (cero I/O añadida) — ver
+# `test_default_apagado_no_cambia_el_sorteo_ni_hace_io`.
+_CYCLE_AFFINITY_MIN, _CYCLE_AFFINITY_MAX = 1.0, 6.0
+
+
+def _cycle_base_affinity_factor() -> float:
+    """Multiplicador del peso de las bases compradas. `1.0` = apagado. Clamp [1.0, 6.0].
+
+    Se lee en CADA llamada (no se cachea) para conservar el rollback sin redeploy, y vía
+    `_env_float` para auto-registrarse en `_KNOBS_REGISTRY` — un knob que no aparece en el
+    snapshot de `/health/version` es invisible durante un incidente de sorteo sesgado
+    (P3-SEEDER-KNOBS-REGISTRY)."""
+    try:
+        return min(_CYCLE_AFFINITY_MAX, max(_CYCLE_AFFINITY_MIN, _env_float(
+            "MEALFIT_CYCLE_BASE_AFFINITY", 1.0,
+            lambda v: _CYCLE_AFFINITY_MIN <= v <= _CYCLE_AFFINITY_MAX)))
+    except Exception:
+        return 1.0
+
+
+def _shopping_item_is_stable(item: dict) -> bool:
+    """¿Este ítem de la lista se compró para TODO el ciclo (no perecedero)?
+
+    Fuente primaria: el flag `is_perishable` que `_build_hybrid_shopping_list` (VISIÓN-C) ya
+    persiste en cada ítem — es LA decisión que el sistema tomó al armar la compra: los staples
+    llevan cantidad del periodo completo y los perecederos, cantidad semanal. Reusarla en vez de
+    re-derivarla evita que las dos superficies opinen distinto.
+
+    Fallback para planes viejos sin el flag: el clasificador canónico `is_perishable_category`.
+    Sin ninguna de las dos señales → False (fail-closed): "no sé" no es "no perecedero"."""
+    if not isinstance(item, dict):
+        return False
+    _flag = item.get("is_perishable")
+    if isinstance(_flag, bool):
+        return _flag is False
+    _cat, _name = item.get("category"), item.get("name")
+    if not _cat:
+        return False
+    try:
+        from shopping_calculator import is_perishable_category
+        return not is_perishable_category(_cat, item.get("shelf_life_days"), _name)
+    except Exception as _exc:
+        # [P2-SILENT-DEGRADATION] sin clasificador no hay afinidad (fail-closed), pero deja traza.
+        logger.debug("[P1-CYCLE-BASE-AFFINITY] clasificación de perecibilidad falló (%s): %s: %s",
+                     str(_name)[:60], type(_exc).__name__, str(_exc)[:160])
+        return False
+
+
+def _purchased_cycle_bases(user_id: str, grocery_days: int, grocery_duration: str,
+                           allowed_proteins, allowed_carbs) -> "tuple[set, set]":
+    """Bases NO perecederas que el usuario YA compró en el ciclo vigente.
+
+    **Fuente: la lista de compras persistida del propio plan**, no `grocery_cycle.base_*`.
+    Medido contra producción (2026-08-02): 0 de 23 planes tienen `plan_data->'grocery_cycle'` y
+    no existe columna `grocery*`/`cycle*` en el esquema — leer de ahí habría entregado código
+    inerte que consulta una clave que nunca está. `aggregated_shopping_list*` sí existe (22 de
+    23 planes) y es LITERALMENTE lo que se le mandó a comprar: la ground truth de "lo que ya
+    tiene en casa".
+
+    Fail-open en bloque: cualquier fallo devuelve conjuntos vacíos y el sorteo queda intacto.
+    tooltip-anchor: P1-CYCLE-BASE-AFFINITY (fuente de datos)"""
+    _empty = (set(), set())
+    try:
+        record = get_latest_meal_plan_with_id(user_id)
+        if not record or not isinstance(record.get("plan_data"), dict):
+            return _empty
+        # El ciclo tiene que seguir VIVO: un plan más viejo que su propia duración significa que
+        # el usuario ya volvió al súper, y sesgar hacia una compra vencida es peor que no sesgar.
+        _created = record.get("created_at")
+        if _created is not None:
+            if isinstance(_created, str):
+                from constants import safe_fromisoformat
+                _created = safe_fromisoformat(_created)
+            if _created.tzinfo is None:
+                _created = _created.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - _created).days >= grocery_days:
+                logger.info("🛒 [P1-CYCLE-BASE-AFFINITY] ciclo vencido (plan de hace ≥%s días) → "
+                            "sin afinidad.", grocery_days)
+                return _empty
+        _plan = record["plan_data"]
+        # La lista del PERIODO es la que lleva el `is_perishable` de la híbrida; el top-level es
+        # su espejo para la duración elegida y sirve de fallback.
+        _key = {"monthly": "aggregated_shopping_list_monthly",
+                "biweekly": "aggregated_shopping_list_biweekly"}.get(grocery_duration)
+        _items = (_plan.get(_key) if _key else None) or _plan.get("aggregated_shopping_list") or []
+        if not isinstance(_items, list) or not _items:
+            return _empty
+
+        _allow_p, _allow_c = set(allowed_proteins), set(allowed_carbs)
+        _bases_p, _bases_c = set(), set()
+        for _it in _items:
+            if not _shopping_item_is_stable(_it):
+                continue
+            _norm = strip_accents(str(_it.get("name") or "").lower()).strip()
+            if not _norm:
+                continue
+            # `allowed` = el pool YA filtrado por alergia/dieta/dislike y por los penalties
+            # clínicos: la afinidad NUNCA puede resucitar una base excluida (decisión #4).
+            _p = _catalog_pick_wb(_norm, DOMINICAN_PROTEINS, protein_synonyms, _allow_p)
+            if _p:
+                _bases_p.add(_p)
+            _c = _catalog_pick_wb(_norm, DOMINICAN_CARBS, carb_synonyms, _allow_c)
+            if _c:
+                _bases_c.add(_c)
+        return _bases_p, _bases_c
+    except Exception as _exc:
+        logger.warning("[P1-CYCLE-BASE-AFFINITY] lectura de la compra del ciclo falló → sorteo "
+                       "sin afinidad (fail-open): %s: %s", type(_exc).__name__, str(_exc)[:200])
+        return _empty
+
+
+def _apply_cycle_affinity(names, weights, bases, factor) -> list:
+    """Multiplica el peso de las bases compradas. Pura, sin I/O, index-alineada con `names`."""
+    if not bases or factor <= 1.0:
+        return weights
+    return [w * (factor if n in bases else 1.0) for n, w in zip(names, weights)]
 
 
 def _build_light_protein_pool(veggies, proteins, *, bariatric: bool = False) -> list:
@@ -1096,6 +1261,44 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 if any(_g in strip_accents(_f.lower()) for _g in _HIGH_GI_FRUITS):
                     fruit_weights[_i] *= 0.15
 
+    # ======= [P1-CYCLE-BASE-AFFINITY · 2026-08-02] AFINIDAD CON LA COMPRA DEL CICLO =======
+    # Va AQUÍ a propósito: DESPUÉS de la fatiga por recencia y DESPUÉS de todos los filtros y
+    # penalties (alergia/dieta/dislike + embutidos + curados en sal + carnes grasas + alto-IG +
+    # el filtro clínico de la nevera), y JUSTO ANTES del sorteo. Un orden distinto la volvería
+    # peligrosa: aplicada antes de los filtros, resucitaría un alimento excluido.
+    #
+    # `available_proteins`/`available_carbs` YA son el pool filtrado, así que el matching contra
+    # ellos no puede reintroducir nada: una alergia registrada a mitad de ciclo sigue ganándole a
+    # la lista de compras aunque la base esté comprada.
+    _aff_bases_p, _aff_bases_c = set(), set()
+    _aff_factor = _cycle_base_affinity_factor()
+    if _aff_factor > 1.0 and form_data and user_id and user_id != "guest":
+        _aff_duration = form_data.get("groceryDuration", "weekly")
+        _aff_days = {"biweekly": 15, "monthly": 30}.get(_aff_duration, 7)
+        # Dos gates que definen "existe la divergencia":
+        #   · ciclo > 7 días — en el semanal se re-compra cada semana y no hay nada que honrar.
+        #   · `_days_offset > 0` — chunk de CONTINUACIÓN. En un plan fresco (chunk 1) no hay nada
+        #     comprado todavía; sesgarlo hacia la compra del plan ANTERIOR sería reimplantar por
+        #     la puerta de atrás el cycle-lock que el dueño apagó (P1-VARIETY-RENEWAL-NO-CYCLE-LOCK
+        #     se tomó justamente para las RENOVACIONES). El refill JIT sí corre con offset > 0.
+        try:
+            _aff_offset = int(form_data.get("_days_offset") or 0)
+        except (TypeError, ValueError):
+            _aff_offset = 0
+        if _aff_days > 7 and _aff_offset > 0:
+            _aff_bases_p, _aff_bases_c = _purchased_cycle_bases(
+                user_id, _aff_days, _aff_duration, available_proteins, available_carbs)
+            if _aff_bases_p or _aff_bases_c:
+                logger.info(
+                    "🛒 [P1-CYCLE-BASE-AFFINITY] afinidad ×%.1f hacia lo YA comprado del ciclo "
+                    "(%s días, día %s): proteínas=%s carbos=%s. Sesgo, no lock: el resto del pool "
+                    "sigue pudiendo salir.",
+                    _aff_factor, _aff_days, _aff_offset,
+                    sorted(_aff_bases_p) or "—", sorted(_aff_bases_c) or "—")
+    protein_weights = _apply_cycle_affinity(
+        available_proteins, protein_weights, _aff_bases_p, _aff_factor)
+    # ======================================================================================
+
     # random.choices puede dar duplicados, así que aseguramos unicidad
     unique_proteins = []
     _pool_p = list(zip(available_proteins, protein_weights))
@@ -1196,6 +1399,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         if _ss_n:
             logger.info(f"🧂 [P1-CATALOG-VARIETY-OPENED] {_ss_n} base(s) de carbohidrato alta(s) en "
                         f"sodio/azúcar penalizada(s) ×{_ss_penalty} en el sorteo (salen, pero raro).")
+
+    # [P1-CYCLE-BASE-AFFINITY · 2026-08-02] Segundo punto de aplicación. El penalty de carbos
+    # altos en sodio/azúcar (arriba) corre DESPUÉS del sorteo de proteínas, así que la afinidad de
+    # carbos tiene que aplicarse aquí para conservar la regla "después de todos los penalties,
+    # justo antes del sorteo". El conjunto ya se resolvió arriba (una sola lectura del plan).
+    carb_weights = _apply_cycle_affinity(
+        available_carbs, carb_weights, _aff_bases_c, _aff_factor)
 
     unique_carbs = []
     _pool_c = list(zip(available_carbs, carb_weights))
@@ -1379,14 +1589,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         #       dislike), NO se degrada a un match genérico más débil — ese ítem simplemente no
         #       aporta base. Medido: 'filete de pescado' → Pescado(17) gana a Res(6); 'salmon
         #       fresco' → Pescado; 'repollo'/'fresas' → ningún match proteico.
+        # [P1-CYCLE-BASE-AFFINITY · 2026-08-02] Cuerpo subido a `_catalog_pick_wb` (nivel módulo).
+        # Este closure queda como delegación para que la afinidad de ciclo —que corre ANTES del
+        # sorteo, ~280 líneas más arriba— aplique EXACTAMENTE el mismo matching y no nazca una
+        # cuarta implementación de comparación de nombres.
         def _pantry_pick(item_norm: str, full_catalog, syn_map, allowed) -> str | None:
-            _best, _len = None, 0
-            for _food in full_catalog:
-                for s in syn_map.get(_food.lower(), [_food.lower()]):
-                    _s = strip_accents(str(s).lower()).strip()
-                    if _s and len(_s) > _len and re.search(r'\b' + re.escape(_s) + r'\b', item_norm):
-                        _best, _len = _food, len(_s)
-            return _best if (_best is not None and _best in allowed) else None
+            return _catalog_pick_wb(item_norm, full_catalog, syn_map, allowed)
 
         _allow_p, _allow_c = set(filtered_proteins), set(filtered_carbs)
         _allow_v, _allow_f = set(filtered_veggies), set(filtered_fruits)
