@@ -196,6 +196,32 @@ if SOLVER_MAX_SCALE_PROTEIN < SOLVER_MAX_SCALE:
         f"({SOLVER_MAX_SCALE}) — la proteína no debe escalar MENOS que el general. Igualado al general.")
     SOLVER_MAX_SCALE_PROTEIN = SOLVER_MAX_SCALE
 
+# [P2-SOLVER-PIN-FROZEN · 2026-08-03] (audit solver+seeder v7 · Task 10) El solver repartía target
+# entre líneas que él mismo YA SABÍA inamovibles. `solve_meal_macros` marca cada entry con `movable`
+# (P3-FEASIBILITY-FROZEN-LINE: `rescale_ingredient_string` devuelve el string INTACTO cuando no hay
+# cantidad líder — «Pechuga a la plancha (150g)», «Cdta de mantequilla de maní»), pero
+# `_compute_scale_factors` NO lo consumía: la congelada entraba a `sc` con techo 3.5/5.0 y el
+# optimizador "resolvía" escalándola. El descarte post-hoc `_f_eff = 1.0` (P2-SOLVER-ACHIEVED-HONEST)
+# tira ese factor fantasma DESPUÉS, cuando las móviles ya salieron diluidas.
+#
+# Medido con «Pechuga a la plancha (150g)» (46.5 P) + «100 g de pollo» (27 P) y target proteína 80 g:
+#   antes → congelada 1.4276 (fantasma, se descarta) · móvil 0.503 · proteína entregada 60.1 g (75%)
+#   ahora → congelada 1.0 (clavada)                  · móvil 1.231 · proteína entregada 79.7 g (100%)
+# La móvil no bajaba por capricho: el optimizador creía tener 66.4 g de proteína de la pechuga y
+# usaba el pollo para no pasarse de grasa. Aguas abajo ese déficit de ~20 g lo pagaba el closer
+# AÑADIENDO una línea nueva (costo de variedad + ítem extra en la lista de compras) para algo que el
+# solver podía cerrar con los alimentos que el LLM ya había elegido.
+#
+# Con el pin, los bounds del solver coinciden con las cotas de `_feasibility_report` (que clava las
+# congeladas a 1.0 desde P3-FEASIBILITY-FROZEN-LINE): una sola fuente de verdad sobre "frozen".
+# ⚠️ Efecto esperado: targets que antes "se cerraban" con factores fantasma ahora se reportan
+# INFACTIBLES de verdad (`infeasible`/`converged` honestos) y los correctores aguas abajo reciben
+# más trabajo real — eso es la señal correcta, no una regresión.
+# Rollback sin redeploy: `MEALFIT_SOLVER_PIN_FROZEN=false` → comportamiento previo idéntico (incluida
+# la incoherencia con `_feasibility_report`, que es justo lo que un rollback significa).
+# tooltip-anchor: P2-SOLVER-PIN-FROZEN
+SOLVER_PIN_FROZEN = _envb("MEALFIT_SOLVER_PIN_FROZEN", True)
+
 
 # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] (audit solver+seeder v6 · F3) Estado del reporte del
 # fallo del LSQ. `_LSQ_ERR_SEEN` deduplica el WARNING por TIPO de excepción (el solver corre ~28
@@ -261,13 +287,22 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     `macros` ({kcal,protein,carbs,fats}|None) y `group` (macro dominante|None).
     [S-P2-a] `hi` por-COORDENADA: las líneas PROTEÍNA-dominantes usan `max_scale_protein` (≥ max_scale);
     el resto `max_scale`. Retorna (factors, method, saturated_hi, saturated_lo) — `saturated_*` cuenta los
-    factores clavados en su bound per-línea (telemetría exacta, no un umbral fijo)."""
+    factores clavados en su bound per-línea (telemetría exacta, no un umbral fijo).
+    [P2-SOLVER-PIN-FROZEN · 2026-08-03] `lo` también por-COORDENADA: las líneas `movable=False` van con
+    `lo = hi = 1.0` (el LSQ redistribuye el target a las móviles solo; el greedy trabaja sobre el
+    residual `tv − frozen_contrib`). Sin la clave se asume movible: preserva el path dict."""
     factors = [1.0] * len(entries)
     sc = [i for i, e in enumerate(entries) if e.get("macros") and e.get("group")]
     if not sc:
         return factors, "none", 0, 0
     _mxp = max_scale if max_scale_protein is None else max_scale_protein
-    _hi_sc = [(_mxp if entries[i]["group"] == "protein" else max_scale) for i in sc]  # hi por-coordenada
+    # [P2-SOLVER-PIN-FROZEN · 2026-08-03] ¿Qué coordenadas están CLAVADAS? Se lee `movable` con la
+    # MISMA semántica que `_feasibility_report` (truthiness, default True) a propósito: el objetivo
+    # del fix es que solver y señal de factibilidad compartan una sola definición de "frozen".
+    _pin = [(SOLVER_PIN_FROZEN and not entries[i].get("movable", True)) for i in sc]
+    _hi_sc = [(1.0 if _pin[j] else (_mxp if entries[i]["group"] == "protein" else max_scale))
+              for j, i in enumerate(sc)]  # hi por-coordenada
+    _lo_sc = [(1.0 if p else min_scale) for p in _pin]  # lo por-coordenada (pin ⇒ lo == hi == 1.0)
     if SOLVER_LSQ:
         try:
             _w = {"kcal": SOLVER_W_KCAL, "protein": SOLVER_W_PROTEIN,
@@ -279,13 +314,18 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                     brow.append(float(tgt[m]))
                     wrow.append(_w[m])
             if A_rows:
-                xs = _box_lsq(A_rows, brow, wrow, min_scale, _hi_sc, SOLVER_LSQ_REG)
+                xs = _box_lsq(A_rows, brow, wrow, _lo_sc, _hi_sc, SOLVER_LSQ_REG)
                 sat_hi = sat_lo = 0
                 for j, i in enumerate(sc):
                     factors[i] = xs[j]
+                    # [P2-SOLVER-PIN-FROZEN] una línea CLAVADA no "satura" ningún clamp: contarla
+                    # inflaría la serie `solver_clamp` que motivó S-P2-a ("~74% de meals saturando")
+                    # con líneas que ni se intentaron mover. Se excluye de ambos contadores.
+                    if _pin[j]:
+                        continue
                     if xs[j] >= _hi_sc[j] * 0.999:
                         sat_hi += 1
-                    elif xs[j] <= min_scale * 1.001:
+                    elif xs[j] <= _lo_sc[j] * 1.001:
                         sat_lo += 1
                 return factors, "lsq", sat_hi, sat_lo
         except Exception as _lsq_e:
@@ -304,14 +344,32 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                 _log.warning(f"⚠ [P3-SOLVER-LSQ-ERROR-LOUD] LSQ falló ({_et}: {str(_lsq_e)[:120]}) "
                              f"— fallback al greedy por grupo. Se reporta una vez por tipo.")
     # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
+    # [P2-SOLVER-PIN-FROZEN · 2026-08-03] Defecto ESPEJO del LSQ: `current` sumaba también las
+    # congeladas, así que el factor del grupo salía diluido (46.5 g de pechuga inamovible + 27 g de
+    # pollo contra un target de 80 → 1.0884 para ambas, y la pechuga no se movía ⇒ 75.9 g). Ahora la
+    # congelada aporta su valor TAL CUAL: sale del denominador Y se descuenta del target. Con el knob
+    # OFF `frozen` queda en 0.0 y la expresión colapsa a la de siempre.
     gf = {}
     for macro in _KCAL_PER_G:
-        current = sum(entries[i]["macros"][macro] for i in sc if entries[i]["group"] == macro)
+        current = frozen = 0.0
+        for j, i in enumerate(sc):
+            if entries[i]["group"] != macro:
+                continue
+            if _pin[j]:
+                frozen += entries[i]["macros"][macro]
+            else:
+                current += entries[i]["macros"][macro]
         tv = tgt.get(macro, 0)
         _hi_m = _mxp if macro == "protein" else max_scale
-        gf[macro] = max(min_scale, min(_hi_m, tv / current)) if (current > 0 and tv > 0) else 1.0
+        # Residual ≤ 0 (la congelada sola ya excede el target) ⇒ `max(min_scale, ...)` deja las
+        # móviles en el piso, que es lo máximo que el greedy puede hacer por ese macro.
+        gf[macro] = (max(min_scale, min(_hi_m, (tv - frozen) / current))
+                     if (current > 0 and tv > 0) else 1.0)
     sat_hi = sat_lo = 0
-    for i in sc:
+    for j, i in enumerate(sc):
+        if _pin[j]:
+            factors[i] = 1.0   # clavada: ni factor fantasma ni conteo de saturación
+            continue
         factors[i] = gf[entries[i]["group"]]
         _hi_i = _mxp if entries[i]["group"] == "protein" else max_scale
         if factors[i] >= _hi_i * 0.999:
