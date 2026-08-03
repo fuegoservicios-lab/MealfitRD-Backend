@@ -1964,7 +1964,50 @@ def _citrus_juice_is_buyable(fruit_token: str) -> bool:
     return any(k.startswith(tok) for k in _CITRUS_JUICE_BUYABLE_CACHE)
 
 
-def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = False) -> float:
+def _protein_yield_on_canonical_enabled() -> bool:
+    """[P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] Knob del A/B: reactiva la regla #2
+    (proteínas cocidas → 1.35× crudo) SOLO en la lista CANÓNICA (`is_new_plan=True`,
+    sin lado inventario que la asimetría P1-2 deba proteger).
+
+    Medición contra los 23 planes vivos (SELECT-only, 2026-08-03, ver
+    `scripts/measure_cooked_protein_lines.py`): 12/5.899 líneas de `ingredients_raw`
+    (0,203%) matchean la regla #2, pero **5/23 planes (~22%) tienen al menos una** —
+    ejemplos reales: «205 g de pollo cocido y desmenuzado», «160 g de pescado cocido»,
+    «45 g de costilla de cerdo cocida y desmenuzada», «100 g de cerdo magro cocido y
+    desmenuzado». Cada match es ~26% de under-buy de proteína en ese alimento (1 lb
+    cocida declarada ⇒ solo 0,74 lb cruda comprada). NO es un no-op: procede con el
+    knob en OFF por default para A/B antes de encender.
+
+    Default `False`: leído inline (no cacheado a nivel de módulo) para que los tests
+    puedan togglear via `monkeypatch.setenv` sin `importlib.reload` — mismo patrón que
+    `_semantic_cache_disabled`/`_trip_windowed_perishables_enabled`.
+    """
+    return _knob_env_bool("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", False)
+
+
+# [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] Regex de la regla #2, extraídas a constantes
+# de módulo para que el chequeo temprano (dentro de `only_legumbres_grains`) y el chequeo
+# default (sin `only_legumbres_grains`) usen EXACTAMENTE el mismo criterio — cero riesgo
+# de que un futuro edit añada un adjetivo/proteína a un lado y no al otro.
+_PROTEIN_COOKED_ADJ_RE = re.compile(r'\b(cocid[oa]|hervid[oa]|asad[oa]|hornead[oa]|desmenuzad[oa]|frit[oa])\b')
+_PROTEIN_FOOD_WORDS_RE = re.compile(r'\b(pollo|carne|res|pescado|cerdo|camar|pavo|salm[oó]n|filete)\b')
+
+# [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] Caso borde medido en datos reales: «205 g de
+# pollo cocido y desmenuzado (del almuerzo o preparado extra)» — línea de REUSO, la
+# proteína ya se compró para otra comida del mismo ciclo. Aplicarle yield la
+# sobre-compraría (el usuario NO necesita comprar 1.35× de algo que no va a cocinar de
+# cero). Patrón derivado del dato real: paréntesis que menciona otro slot de comida
+# (desayuno/almuerzo/cena/merienda) o una frase explícita de reuso (sobrante/preparado
+# extra). Deliberadamente NO excluye la línea entera del yield de legumbres (regla #1);
+# solo desactiva la regla #2 nueva.
+_PROTEIN_REUSE_PAREN_RE = re.compile(
+    r'\([^)]*\b(?:desayuno|almuerzo|cena|merienda|sobrantes?|preparad[oa]\s+extra)\b[^)]*\)',
+    re.IGNORECASE,
+)
+
+
+def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = False,
+                                 apply_protein_yield: bool = False) -> float:
     """Devuelve el multiplicador de yield (cocido↔crudo) para `raw_name`.
 
     Reglas (en orden):
@@ -1988,6 +2031,17 @@ def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = 
     el delta hacia over-buy). Para PROTEÍNAS la asimetría es ~25%
     (aceptable). Para LEGUMBRES/GRANOS es 3× (material) y los SKUs son
     SECOS — la regla #1 cierra el gap sin reintroducir la asimetría #2.
+
+    [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `apply_protein_yield` reabre
+    SELECTIVAMENTE la regla #2 dentro de `only_legumbres_grains=True`
+    (modo aggregator). Solo tiene efecto cuando el caller es la lista
+    CANÓNICA (`is_new_plan=True`): ahí no existe lado inventario que la
+    asimetría P1-2 deba proteger, así que "1 lb de pollo cocido" compra el
+    equivalente crudo (1.35 lb) en vez de comprar 1 lb literal que rinde
+    solo ~0.74 lb cocidas tras la cocción (~26% menos proteína de la que
+    el plan calculó). Excluye líneas con marcador de REUSO (paréntesis
+    "(del almuerzo/de la cena/...)" o "preparado extra"/"sobrante"): esa
+    proteína ya se compró para otra comida, aplicarle yield sobre-compraría.
     """
     n = raw_name.lower()
     # 1. Pastas y Granos cocidos (Expanden, necesitas menos crudo)
@@ -2032,10 +2086,20 @@ def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = 
     if only_legumbres_grains:
         # Modo aggregator: NO aplicar reglas #2-4 para preservar la simetría
         # plan↔inventario establecida en P1-2.
+        #
+        # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] EXCEPCIÓN: el caller canónico
+        # (is_new_plan=True, sin lado inventario) puede pedir explícitamente que la
+        # regla #2 SÍ aplique — ahí no existe simetría que proteger. Reusa el mismo
+        # regex de la regla #2 default (constantes de módulo), y excluye líneas de
+        # REUSO ("(del almuerzo/de la cena/...)" / "preparado extra"/"sobrante"): esa
+        # proteína ya se compró para otra comida, aplicarle yield sobre-compraría.
+        if (apply_protein_yield and not _PROTEIN_REUSE_PAREN_RE.search(n)
+                and bool(_PROTEIN_COOKED_ADJ_RE.search(n)) and bool(_PROTEIN_FOOD_WORDS_RE.search(n))):
+            return 1.35
         return 1.0
 
     # 2. Proteínas cocidas (Se encogen por humedad, necesitas más crudo)
-    if bool(re.search(r'\b(cocid[oa]|hervid[oa]|asad[oa]|hornead[oa]|desmenuzad[oa]|frit[oa])\b', n)) and bool(re.search(r'\b(pollo|carne|res|pescado|cerdo|camar|pavo|salm[oó]n|filete)\b', n)):
+    if bool(_PROTEIN_COOKED_ADJ_RE.search(n)) and bool(_PROTEIN_FOOD_WORDS_RE.search(n)):
         return 1.35
 
     # 3. Merma de Cáscara/Limpieza (Víveres y Mariscos pelados)
@@ -2128,7 +2192,8 @@ def _reconcile_qty_with_gram_hint(raw_line, qty, unit):
         return qty, unit
 
 
-def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_yield_only: bool = False):
+def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_yield_only: bool = False,
+                     apply_protein_yield: bool = False):
     """[P1-2] Parsea un string de ingrediente a (qty, unit, name).
 
     `apply_yield_multiplier` controla si `_calculate_yield_multiplier` se
@@ -2157,6 +2222,14 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
     para LEGUMBRES la asimetría es 3× y se cierra solo en este lado
     porque el inventario también se canonicaliza al name seco antes de
     deducir.
+
+    [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `apply_protein_yield` reabre
+    SELECTIVAMENTE la regla #2 (proteínas cocidas) dentro del modo
+    `apply_legumbres_yield_only=True`. Solo tiene efecto real cuando el
+    caller pasa AMBOS flags juntos (ver `aggregate_and_deduct_shopping_list`
+    con `is_new_plan=True` y el knob `MEALFIT_PROTEIN_YIELD_ON_CANONICAL`
+    encendido) — con `apply_yield_multiplier=True` (callers históricos) esta
+    regla ya corre incondicionalmente y este flag no cambia nada.
     """
     # [P1-DOUBLE-QTY-PARSE · 2026-07-27] "1½ 1/2 cdas de mantequilla de maní (39 g)" degradaba en
     # silencio: la unidad caía de 'cda' a 'unidad' y el NOMBRE salía como "1/2 cdas de mantequilla
@@ -2221,7 +2294,9 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
     if apply_yield_multiplier:
         yield_mult = _calculate_yield_multiplier(rest_str)
     elif apply_legumbres_yield_only:
-        yield_mult = _calculate_yield_multiplier(rest_str, only_legumbres_grains=True)
+        yield_mult = _calculate_yield_multiplier(
+            rest_str, only_legumbres_grains=True, apply_protein_yield=apply_protein_yield,
+        )
     else:
         yield_mult = 1.0
     qty = raw_qty * yield_mult
@@ -5009,7 +5084,8 @@ def _should_skip_meal_for_aggregation(meal: dict) -> bool:
     return False
 
 
-def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0) -> dict:
+def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0,
+                               apply_protein_yield: bool = False) -> dict:
     """[P1-shop-coh-1 · 2026-05-07] Suma esperada de ingredientes desde el plan.
 
     Recorre `plan_data["days"][*]["meals"][*]` aplicando el MISMO contrato de
@@ -5036,6 +5112,13 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
             simetría, comparar magnitudes producía ratios espurios. Default
             1.0 preserva el comportamiento v1 (presence/absence). Acepta
             int|float; valores inválidos (NaN/inf/<=0) se clampan a 1.0.
+        apply_protein_yield: [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] espejo
+            OBLIGATORIO del mismo flag en `aggregate_and_deduct_shopping_list`
+            — cuando el caller (aggregator canónico o el guard) aplica yield
+            1.35× a proteínas cocidas del lado COMPRADO, este lado ESPERADO
+            debe aplicarlo también para no reventar la tolerancia del
+            coherence guard (±10% default, 35% de brecha si un solo lado
+            yieldea). Default `False` preserva el comportamiento previo.
 
     Returns:
         `{food_name: {canonical_unit: total_qty}}`. Vacío si no hay días.
@@ -5088,6 +5171,7 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
                     raw,
                     apply_yield_multiplier=apply_yield,
                     apply_legumbres_yield_only=True,
+                    apply_protein_yield=apply_protein_yield,
                 )
                 if not name:
                     continue
@@ -5105,6 +5189,7 @@ def _mirror_trip_window_expected(
     mult: float,
     window_len: int,
     day_basis_applied: bool,
+    apply_protein_yield: bool = False,
 ) -> dict:
     """[P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Espejo del ventaneo en el lado ESPERADO.
 
@@ -5122,6 +5207,9 @@ def _mirror_trip_window_expected(
     `master_item` (mismo fallback que `_build_hybrid_shopping_list`: el ítem ya trae
     `category`/`shelf_life_days` inyectados por P1-PDF-2). Sin match, cae a los hints por
     nombre — el mismo camino que el agregador usó para decidir.
+
+    [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `apply_protein_yield` se propaga al
+    `expected_sum_from_recipes` de la ventana — mismo espejo que el resto del guard.
     """
     if not isinstance(expected_raw, dict) or not expected_raw:
         return expected_raw
@@ -5134,7 +5222,8 @@ def _mirror_trip_window_expected(
 
     window_scale = (7.0 / float(len(window))) if day_basis_applied else 1.0
     expected_window = expected_sum_from_recipes(
-        {"days": window}, apply_yield=False, multiplier=mult * window_scale
+        {"days": window}, apply_yield=False, multiplier=mult * window_scale,
+        apply_protein_yield=apply_protein_yield,
     )
 
     from constants import strip_accents
@@ -8143,6 +8232,14 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     Items con `is_staple=True` o categoría "Urgente" se filtran del lado
     aggregated en ambas capas (no provienen de recetas, son ruido).
 
+    [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] El lado esperado espeja el knob
+    `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` sin condición adicional: las 6 surfaces
+    que persisten `aggregated_shopping_list*` SIEMPRE lo hacen con
+    `is_new_plan=True` (P3-CANONICAL-AGG-WEEKLY), así que si el knob está ON el
+    aggregator que construyó la lista ya aplicó yield 1.35× a proteínas cocidas
+    — este espejo evita que el guard vea una divergencia de magnitud fantasma
+    (~35%) contra su propia compra correcta.
+
     Args:
         plan_result: dict con `days` y `aggregated_shopping_list`. Opcional
             `calc_household_multiplier` (cacheado por P1-3).
@@ -8262,9 +8359,18 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
                     _n_days_basis, _basis_scale,
                 )
 
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `aggregated_shopping_list*` (el lado
+    # COMPRADO que este guard compara) SIEMPRE se construye con `is_new_plan=True`
+    # (P3-CANONICAL-AGG-WEEKLY: todo productor de esas keys — assemble, recalc, agent
+    # tool, chunk worker — pasa `is_new_plan=True`). Así que el guard no necesita
+    # replicar el check de `is_new_plan`: basta con leer el knob, exactamente como lo
+    # haría el aggregator que construyó la lista que tiene delante.
+    _apply_protein_yield = _protein_yield_on_canonical_enabled()
+
     try:
         expected_raw = expected_sum_from_recipes(
-            plan_result, apply_yield=False, multiplier=mult * _basis_scale
+            plan_result, apply_yield=False, multiplier=mult * _basis_scale,
+            apply_protein_yield=_apply_protein_yield,
         )
     except Exception as e:
         logging.warning(f"[COH-GUARD] expected_sum_from_recipes falló: {e}")
@@ -8300,6 +8406,7 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             expected_raw = _mirror_trip_window_expected(
                 plan_result, expected_raw, mult=mult,
                 window_len=_trip_win_len, day_basis_applied=_day_basis_applied,
+                apply_protein_yield=_apply_protein_yield,
             )
     except Exception as _mirror_exc:
         logging.warning(
@@ -9028,7 +9135,18 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     return 0.0
 
 
-def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None):
+def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0, brand_prefs: dict | None = None, brand_defaults: dict | None = None, num_days: int | None = None, cycle_days: int | None = None, text_demand_g_map: dict | None = None, apply_protein_yield: bool = False):
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `apply_protein_yield`: el caller
+    # (`get_shopping_list_delta`) lo activa SOLO cuando `is_new_plan=True` (lista
+    # CANÓNICA, sin lado inventario) Y el knob `MEALFIT_PROTEIN_YIELD_ON_CANONICAL`
+    # está ON. Reabre la regla #2 de `_calculate_yield_multiplier` (proteínas
+    # cocidas → 1.35× crudo) SOLO en el loop de `plan_ingredients` de abajo — el
+    # loop de `consumed_ingredients` (Nevera/consumido real) NUNCA la recibe,
+    # incluso si un caller la pasara por error: en modo canónico ese loop está
+    # vacío por construcción (ver `get_shopping_list_delta`), y aplicar yield a
+    # inventario/consumido real reintroduciría la asimetría P1-2 que el
+    # aggregator existe para evitar. Default `False` → comportamiento previo
+    # byte-idéntico.
     # [P1-SKU-COVER-HONESTY-R1 · 2026-08-02] `cycle_days` (NO confundir con `num_days`, que es
     # días GENERADOS del plan/chunk para `base_duration_scale`): días que representa la
     # necesidad total ya escalada (7/15/30, según `duration` weekly/biweekly/monthly) — viaja a
@@ -9149,7 +9267,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     plan_names = set()
     for item in plan_ingredients:
         if not item or len(item) < 3: continue
-        qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
+        qty, unit, name = _parse_quantity(
+            item, apply_yield_multiplier=False, apply_legumbres_yield_only=True,
+            apply_protein_yield=apply_protein_yield,
+        )
         if not name: continue
         # [P3-AGG-CLEAN-LEADING-PUNCT · 2026-05-23] Strip bullets/punct al
         # inicio del name; cierra modo de fallo donde el LLM emite
@@ -11748,7 +11869,14 @@ def get_shopping_list_delta(
         items_to_deduct.extend([f"{item.get('quantity', 0)} {item.get('unit', 'unidad')} de {item.get('ingredient_name')}" for item in physical_inventory])
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
-        
+
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] Solo la lista CANÓNICA (`is_new_plan=True`,
+    # sin lado inventario) puede reabrir la regla #2 de yield (proteínas cocidas → 1.35×
+    # crudo) — con `is_new_plan=False` el delta sigue siendo peso literal en ambos lados
+    # (asimetría P1-2 intacta, byte-idéntico). Gateado además por el knob
+    # `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` (default False) para A/B antes de encender.
+    _apply_protein_yield = bool(is_new_plan) and _protein_yield_on_canonical_enabled()
+
     # [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Demanda de las RECETAS por alimento, en gramos —
     # mismo parse que usa el coherence guard (`expected_sum_from_recipes`, misma función que
     # `compare_expected_vs_aggregated` consume) y misma normalización de unidades
@@ -11775,6 +11903,13 @@ def get_shopping_list_delta(
             f: _normalize_food_units_to_base(u or {})
             for f, u in (expected_sum_from_recipes(
                 plan_result, apply_yield=False, multiplier=effective_multiplier,
+                # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] Espejo obligatorio: si el
+                # aggregator (más abajo) compra 1.35× para proteínas cocidas, la demanda
+                # de texto que alimenta el backstop de Task 8 (P1-VEG-BACKFILL-HONESTY)
+                # debe subir la MISMA 1.35× — de lo contrario el backstop vería "se
+                # compró 135% del texto" y fabricaría una nota de recompra falsa sobre
+                # una compra que en realidad es correcta.
+                apply_protein_yield=_apply_protein_yield,
             ) or {}).items()
         }
         _text_demand_g_map: dict = {}
@@ -11825,7 +11960,7 @@ def get_shopping_list_delta(
     # persona-semana necesitan deshacer el `base_duration_scale = 7/num_days` que se aplica tres
     # líneas más arriba. Sin él, `_person_weeks` usaba un `3` hardcodeado y los topes salían 4,7×
     # apretados en un ciclo de 14 días.
-    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier, brand_prefs=brand_prefs, brand_defaults=brand_defaults, num_days=num_days, cycle_days=cycle_days, text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield)
 
     # [P1-TRIP-WINDOWED-PERISHABLES · 2026-08-02] Segunda pasada SOLO cuando hay ventana
     # de viaje: mismo agregador, mismos descuentos de inventario, misma aritmética —
@@ -11854,7 +11989,7 @@ def get_shopping_list_delta(
                 structured=structured, multiplier=multiplier * _window_scale,
                 brand_prefs=brand_prefs, brand_defaults=brand_defaults,
                 num_days=len(_trip_window), cycle_days=cycle_days,
-                text_demand_g_map=_tdg_para_agg,
+                text_demand_g_map=_tdg_para_agg, apply_protein_yield=_apply_protein_yield,
             )
             res = _merge_trip_windowed_result(res, _res_window, window_len=len(_trip_window))
         except Exception as _tw_exc:

@@ -32,6 +32,7 @@ no servible.
 Knob de rollback sin redeploy: MEALFIT_CAPS_AFTER_BAND_CLOSER=false => chain identico al previo.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -146,8 +147,22 @@ def test_parser_no_se_anadio_un_segundo_rebalance_detras_del_recap():
 
 
 def test_parser_last_known_pfix_bumpeado():
-    assert '"P2-CAPS-AFTER-BAND-CLOSER · 2026-08-03"' in _APP, (
-        "_LAST_KNOWN_PFIX sin bumpear en app.py"
+    """[P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `_LAST_KNOWN_PFIX` es un marker GLOBAL de
+    UN SOLO P-fix a la vez — el siguiente cierre (esta misma tanda P2) lo sobreescribe
+    legítimamente. Re-anclar el valor EXACTO de este P-fix rompía con el próximo bump, la
+    MISMA clase que ya se corrigió en `test_p2_help_chatbot.py::test_marker_bumped` (ahí el
+    bug era comparar el marker completo lexicográficamente; acá es peor: comparar el string
+    literal completo, que deja de existir en cuanto CUALQUIER P-fix futuro bumpea). El
+    contrato real (formato + floor de fecha, sin re-anclar el slug) ya vive en
+    `test_p3_1_last_known_pfix_freshness.py` — este test se reduce a verificar que el floor
+    de fecha no retrocedió por debajo de ESTE P-fix, sin asumir que sigue siendo el vigente."""
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', _APP)
+    assert m, "No se encontró _LAST_KNOWN_PFIX en app.py."
+    marker = m.group(1)
+    _fecha = re.search(r"(\d{4}-\d{2}-\d{2})\s*$", marker)
+    assert _fecha, f"Marker sin fecha ISO al final (formato `Pn-X · YYYY-MM-DD`): {marker!r}"
+    assert _fecha.group(1) >= "2026-08-03", (
+        f"Marker sospechosamente viejo: {marker!r} (floor P2-CAPS-AFTER-BAND-CLOSER · 2026-08-03)"
     )
 
 

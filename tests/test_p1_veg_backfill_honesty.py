@@ -257,7 +257,9 @@ def test_e2e_shopping_list_delta_dispara_nota_cuando_texto_infla(monkeypatch):
         "ingredients_raw": ["600 g de espárragos"],
     }]}]}
 
-    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0):
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `**_kw` absorbe `apply_protein_yield` (nuevo
+    # kwarg de `expected_sum_from_recipes`) — este doble no necesita simular esa regla.
+    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0, **_kw):
         return {"Espárragos": {"g": 999999.0 * multiplier}}
 
     monkeypatch.setattr(sc, "expected_sum_from_recipes", _fake_expected)
@@ -381,7 +383,8 @@ def test_text_demand_g_map_matchea_nombre_canonico_no_crudo(monkeypatch):
         "ingredients_raw": ["300 g de rúcula"],
     }]}]}
 
-    def _fake_expected_plural(plan_data, *, apply_yield=False, multiplier=1.0):
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `**_kw` absorbe `apply_protein_yield`.
+    def _fake_expected_plural(plan_data, *, apply_yield=False, multiplier=1.0, **_kw):
         # Simula lo que el parser real produce para una receta que SÍ usa plural ("300 g de
         # rúculas"): key cruda 'Rúculas', pre-canonicalización.
         return {"Rúculas": {"g": 999999.0 * multiplier}}
@@ -599,7 +602,8 @@ def _plan_7d_esparragos(gramos_por_dia: float = 300.0) -> dict:
 
 
 def _expected_fijo(total_g: float):
-    def _fake(plan_data, *, apply_yield=False, multiplier=1.0):
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `**_kw` absorbe `apply_protein_yield`.
+    def _fake(plan_data, *, apply_yield=False, multiplier=1.0, **_kw):
         return {"Espárragos": {"g": total_g * multiplier}}
     return _fake
 
@@ -633,7 +637,8 @@ def test_sin_nevera_el_delta_conserva_el_backstop(monkeypatch):
         "ingredients_raw": ["600 g de espárragos"],
     }]}]}
 
-    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0):
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `**_kw` absorbe `apply_protein_yield`.
+    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0, **_kw):
         return {"Espárragos": {"g": 999999.0 * multiplier}}
 
     monkeypatch.setattr(sc, "expected_sum_from_recipes", _fake_expected)
@@ -670,7 +675,8 @@ def test_la_lista_canonica_conserva_el_backstop(monkeypatch):
         "ingredients_raw": ["600 g de espárragos"],
     }]}]}
 
-    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0):
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `**_kw` absorbe `apply_protein_yield`.
+    def _fake_expected(plan_data, *, apply_yield=False, multiplier=1.0, **_kw):
         return {"Espárragos": {"g": 999999.0 * multiplier}}
 
     monkeypatch.setattr(sc, "expected_sum_from_recipes", _fake_expected)

@@ -51,8 +51,9 @@ def test_guard_uses_weekly_not_active_functional(monkeypatch):
     import shopping_calculator as sc
 
     # expected fijo (sin parsear recetas reales): 100 g de arroz blanco.
+    # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] `**_kw` absorbe `apply_protein_yield`.
     monkeypatch.setattr(sc, "expected_sum_from_recipes",
-                        lambda plan, apply_yield=False, multiplier=1.0: {"Arroz blanco": {"g": 100.0}})
+                        lambda plan, apply_yield=False, multiplier=1.0, **_kw: {"Arroz blanco": {"g": 100.0}})
     monkeypatch.setattr(sc, "_is_verified_for_shopping", lambda name: True, raising=False)
 
     def _mk_item(qty):
