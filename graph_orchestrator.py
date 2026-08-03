@@ -15953,7 +15953,10 @@ def _resolve_line_food_grams(line: str, *, cheap: bool = False) -> "tuple[str | 
                 resolved = _phantom_resolve_food(m.group(4))
                 if resolved and qty > 0:
                     food = resolved[0]
-                    out = (food, _dup_merge_line_to_grams(qty, unit, resolved[1]))
+                    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02] `allow_spoon=True`: este resolvedor
+                    # alimenta al reconciliador y al tracer, no al dedupe (ver el helper).
+                    out = (food, _dup_merge_line_to_grams(qty, unit, resolved[1],
+                                                          allow_spoon=True))
         else:
             from shopping_calculator import _parse_quantity as _pq
             parsed = _pq(str(line), apply_yield_multiplier=False)
@@ -15961,7 +15964,8 @@ def _resolve_line_food_grams(line: str, *, cheap: bool = False) -> "tuple[str | 
                 q, u, canon = parsed
                 if canon and q:
                     out = (_sa_rl(str(canon).lower()),
-                           _dup_merge_line_to_grams(float(q), str(u), str(canon)))
+                           _dup_merge_line_to_grams(float(q), str(u), str(canon),
+                                                    allow_spoon=True))
     except Exception:
         out = (None, None)
     # [P1-RESOLVE-PAREN-GRAMS · 2026-07-26] Si la línea DECLARA su masa en el paréntesis, esa masa
@@ -29441,8 +29445,54 @@ def _rescale_raw_by_food(raw: list, ing_strs: list, factors: list) -> "tuple[lis
         return list(raw), 0
 
 
-def _dup_merge_line_to_grams(qty: float, unit: str, canon: str) -> "float | None":
-    """(0.5, 'unidad', 'Aguacate') → 125.0 g. None si la unidad no convierte con confianza."""
+# [P1-RECONCILE-CDA-DENSITY · 2026-08-02] El reconciliador display↔raw era CIEGO a las
+# cucharadas, y por esa puerta la inflación del solver llegaba entregada al usuario.
+#
+# `_dup_merge_line_to_grams` devolvía `None` para `cda`/`cdta`. Ese `None` viaja por
+# `_resolve_line_food_grams` hasta `_reconcile_display_raw_lines`, que marca la entrada
+# `known=False` y SALTA la reparación `qty_divergence`. No es que el reconciliador decidiera
+# dejar la línea: es que no podía verla.
+#
+# Plan vivo e2bbb280 (entregado 2026-08-01), medido línea a línea:
+#
+#     display  "½ cda de cebolla picada"          raw  "30 cdas de cebolla picada"      60×
+#     display  "½ taza de rábanos"                raw  "30 tazas de rábanos"            60×
+#     display   —                                 raw  "34.75 cdas de cebollín picado"
+#
+# La lista de compras se construye del lado raw, así que el usuario recibió Calabacín 2270 g para
+# UNA persona y notas de recompra fabricadas por la basura del solver ("Cebollín: alcanza ~3 de
+# 30 días — recompra", ~10 mazos al mes para un adorno de dos cucharadas).
+#
+# La conversión NO inventa nada: `cda = density_g_per_cup / 16` y `cdta = density_g_per_cup / 48`
+# son exactamente lo que ya calcula `nutrition_db.to_grams` por la vía
+# `to_base_amount(q,'cda') → 15 ml → × density_g_per_cup/240` (240/15 = 16, 240/5 = 48). Que los
+# dos parsers del sistema digan lo MISMO sobre la misma línea es el punto entero de este fix.
+#
+# Sin `density_g_per_cup` en el catálogo se sigue devolviendo `None`. Este repo ya se quemó
+# INVENTANDO una densidad (P1-VOLUME-FALLBACK-DENSITY, el ml×5 fantasma que hacía "1 taza de
+# lechosa" = 1183 g): "no sé" es una respuesta correcta; un número plausible no lo es.
+#
+# Rollback sin redeploy: MEALFIT_RECONCILE_CDA_DENSITY=false. tooltip-anchor: P1-RECONCILE-CDA-DENSITY
+RECONCILE_CDA_DENSITY = _env_bool("MEALFIT_RECONCILE_CDA_DENSITY", True)
+_SPOON_UNITS_CDA = frozenset({"cda", "cdas", "cucharada", "cucharadas"})
+_SPOON_UNITS_CDTA = frozenset({"cdta", "cdtas", "cdita", "cditas",
+                               "cucharadita", "cucharaditas"})
+
+
+def _dup_merge_line_to_grams(qty: float, unit: str, canon: str, *,
+                             allow_spoon: bool = False) -> "float | None":
+    """(0.5, 'unidad', 'Aguacate') → 125.0 g. None si la unidad no convierte con confianza.
+
+    [P1-RECONCILE-CDA-DENSITY · 2026-08-02] `allow_spoon=True` habilita cda/cdta por densidad.
+
+    Es keyword-only y default **False** a propósito, no por timidez: el otro consumidor de este
+    helper es el dedupe (`_merge_duplicate_food_lines`), que formatea el total con
+    `_dup_merge_format` — y ese escritor no sabe escribir cucharadas. Para una unidad que no es
+    g/ml/taza cae a `f"{qty_txt} {canon}"`, así que un grupo cda-dominante saldría del dedupe como
+    **"3 Cebolla"**: una línea sin unidad, que es peor que no fusionar. Habilitar la conversión
+    ahí exige además un escritor de cucharadas y medir el impacto sobre el dedupe — otro fix.
+    El default deja ese camino byte a byte como estaba.
+    """
     u = (unit or "").strip().lower()
     if u in ("g", "gr", "gramo", "gramos", "ml"):
         return float(qty)
@@ -29451,12 +29501,17 @@ def _dup_merge_line_to_grams(qty: float, unit: str, canon: str) -> "float | None
     except Exception:
         return None
     per_u, per_cup = _catalog_density_index().get(_sa_dm(str(canon).strip().lower()), (0.0, 0.0))
+    _spoon = allow_spoon and RECONCILE_CDA_DENSITY and per_cup > 0
     if u in ("taza", "tazas"):
         g = per_cup
     elif u in ("unidad", "unidades", "ud", "uds"):
         g = per_u
+    elif _spoon and u in _SPOON_UNITS_CDA:
+        g = per_cup / 16.0
+    elif _spoon and u in _SPOON_UNITS_CDTA:
+        g = per_cup / 48.0
     else:
-        return None   # cda/cdta/lonja/pote/lata/"al gusto": no se fusiona
+        return None   # lonja/pote/lata/"al gusto" (y cda/cdta sin densidad): no se fusiona
     return float(qty) * g if g > 0 else None
 
 
@@ -29595,7 +29650,7 @@ RECONCILE_DISPLAY_RAW_TOL = _env_float("MEALFIT_RECONCILE_DISPLAY_RAW_TOL", 0.10
                                        lambda v: 0.02 <= v <= 0.50)
 
 
-def _reconcile_display_raw_lines(days: list) -> list:
+def _reconcile_display_raw_lines(days: list, db=None) -> list:
     """Alinea `ingredients_raw` (lo que se compra) con `ingredients` (lo que se lee y de donde
     salen los macros). Devuelve telemetría [{day, meal, food, kind, ratio, display, raw}].
 
@@ -29607,6 +29662,19 @@ def _reconcile_display_raw_lines(days: list) -> list:
 
     El caso inverso (en raw y no en display) NO se toca: es de `_restore_display_from_raw_orphans`
     (P1-DISPLAY-RESTORE-FROM-RAW), que lo repone prettificado y con su propio cap.
+
+    [P1-RECONCILE-CDA-DENSITY · 2026-08-02] Una comida REPARADA re-sincroniza sus macros con el
+    display entregado (`_truth_up_meal_macros_from_strings`): el plato del plan e2bbb280
+    declaraba 689 kcal con un display de ~350 — los números estampados seguían al lado inflado
+    del solver mientras el usuario leía otra cosa.
+
+    `db` es opcional y se construye PEREZOSAMENTE si no se pasa, igual que hacen
+    `_cap_unrealistic_portions` / `_cap_cheese_dumps_final` / `annotate_bigfruit_fractional_hint`.
+    Eso es deliberado: este pase tiene 7 callsites (assemble, finalize, db_plans, tools y tres en
+    routers) y NINGUNO tiene una instancia a mano. Un parámetro que nadie llena habría dejado la
+    corrección de macros INERTE pareciendo sana — el modo de fallo que ya cazamos en
+    P1-PLAN-QUALITY-INDEX. Con catálogo caído el truth-up no resuelve nada y se abstiene solo
+    (contrato propio de P2-MACRO-TRUTHUP), así que la degradación es la de siempre.
 
     Idempotente (tras alinear, el ratio es 1.0) y fail-safe por comida.
     """
@@ -29665,6 +29733,17 @@ def _reconcile_display_raw_lines(days: list) -> list:
                                 "display": a["lines"][0], "raw": b["lines"][0]})
                 if drop or add:
                     meal["ingredients_raw"] = [x for i, x in enumerate(raw) if i not in drop] + add
+                    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02] El crédito nutricional vuelve a
+                    # seguir al display entregado. Solo en comidas REPARADAS: un plato coherente
+                    # no debe ver sus números reescritos por este pase.
+                    if RECONCILE_CDA_DENSITY:
+                        try:
+                            if db is None:
+                                from nutrition_db import IngredientNutritionDB as _RcDB
+                                db = _RcDB()
+                            _truth_up_meal_macros_from_strings(meal, db)
+                        except Exception:
+                            pass
             except Exception:
                 continue
     return out
@@ -29821,6 +29900,40 @@ def _watery_veg_tokens() -> frozenset:
         logger.warning("⚠️ [P2-VEG-VOLUME-TOKENS-2] set derivado VACÍO (catálogo no disponible) — "
                         "cap de vegetales-acuosos corre SOLO con el piso estático hasta el reintento.")
     return result | _REALISM_VOLUME_VEG_TOKENS_FALLBACK_SET
+
+
+# [P1-RECONCILE-CDA-DENSITY · 2026-08-02] Matcher con límite de palabra AL FINAL.
+#
+# El matcher histórico del cap de gramos es `_re.search(r"\b" + t, il)`: límite de palabra al
+# INICIO y nada al final, o sea prefijo. Con eso el alias suelto `cos` (de 'Lechuga romana')
+# matchea dentro de `costillas` — la clase de fallo que este repo ya pagó media docena de veces
+# (`"sal"` ⊂ `"Salami"`, `"pollo"` ⊂ `"repollo"`, `"pina"` ⊂ `"Espinacas"`, `"res"` ⊂ `"fresco"`,
+# `"guisa"` ⊂ `"guisantes"`). Hoy `cos` está tapado a mano en `_WATERY_VEG_TOKEN_EXCLUDE`, pero
+# una exclusión por-incidente es exactamente el patrón que P2-VEG-VOLUME-TOKENS-2 vino a matar:
+# el catálogo puede traer mañana otro alias corto y nadie se enteraría.
+#
+# `(?:e?s)?\b` tolera el plural español sin abrir el prefijo: "molondron" sigue matcheando
+# "molondrones" y "rabano" sigue matcheando "rabanos", pero "cos" ya no alcanza "costillas".
+#
+# La rama de GRAMOS conserva su matcher histórico a propósito: apretarlo estrecharía un cap ya
+# desplegado sin una medición previa contra planes reales, y eso no es lo que este fix cierra.
+# tooltip-anchor: P1-RECONCILE-CDA-DENSITY
+def _watery_token_hits(text: str, tokens) -> bool:
+    """¿Alguno de `tokens` aparece en `text` como palabra completa (o su plural es/s)?
+
+    `text` debe venir ya en minúsculas y sin acentos (el mismo `il` que usan los caps)."""
+    try:
+        t_low = str(text)
+        for tok in tokens or ():
+            if not tok:
+                continue
+            if _re.search(r"\b" + _re.escape(str(tok)) + r"(?:e?s)?\b", t_low):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 # [P1-LINE-GRAM-CEILING · 2026-07-05] Techo DURO genérico por-línea en gramos — backstop de la
 # clase "1250 g de queso blanco" (plan 3aa6e58a): cuando la clasificación por grupo/tokens falla
 # (lookup miss) o una pasada TARDÍA infla la línea después de los caps por clase, NINGUNA línea
@@ -30375,6 +30488,51 @@ def _cap_unrealistic_portions(days, db=None) -> int:
                                     # [P1-CAP-STRICTEST-WINS] gana el más estricto, no el primero.
                                     _f_count = _cap_n / cur_n
                                     factor = _f_count if factor is None else min(factor, _f_count)
+                    # [P1-RECONCILE-CDA-DENSITY · 2026-08-02] 4) MASA IMPLÍCITA de vegetal acuoso
+                    # en las unidades que ninguna rama de masa ve (taza / cda / cdta / conteo).
+                    #
+                    # Las ramas 2/2b/3 clasifican por TUPLAS A MANO (`_REALISM_CUP_CAPS`,
+                    # `_REALISM_COUNT_CAPS`) mientras la rama 1.6 ya consume el set DERIVADO del
+                    # catálogo. Los comentarios de arriba llevan tres incidentes admitiéndolo
+                    # ("CADA unidad necesita su rama… tercera vez") y el plan vivo e2bbb280 cobró
+                    # la factura otra vez: "4.54 calabacín mediano en cubos" (908 g para una
+                    # persona) y "30 tazas de rábanos" (3480 g) salieron ENTREGADOS porque el
+                    # calabacín no está en `_REALISM_COUNT_CAPS` y ningún vegetal acuoso tiene
+                    # techo en tazas. La respuesta correcta NO es un token más a mano: es que la
+                    # rama consuma el mismo set derivado que ya usa la de gramos.
+                    #
+                    # Se capea por MASA, no por un conteo inventado. Un "máx. 2 unidades" genérico
+                    # para todo vegetal acuoso habría destrozado "20 rabanitos" (240 g, ración
+                    # normal) para arreglar el calabacín: el tamaño de la pieza varía dos órdenes
+                    # de magnitud dentro de la misma clase, la masa servible no.
+                    #
+                    # Se abstiene cuando la línea DECLARA gramos (líder o entre paréntesis): esa
+                    # dimensión ya tiene dueño (ramas 0-1.10) y duplicar el gobierno invita a
+                    # recortes compuestos. Sin densidad en el catálogo, sin cap (no adivinar).
+                    #
+                    # La clase se decide sobre el NOMBRE CANÓNICO al que pertenece la masa
+                    # (`macros_from_ingredient_string()["name"]`), no sobre la línea entera. Las
+                    # ramas históricas buscan el token en `il` y eso confunde MENCIÓN con
+                    # ATRIBUCIÓN: "3 muslos de pollo con repollo" recortaría el POLLO porque el
+                    # repollo aparece en el texto. Preguntarle al motor de macros de quién son
+                    # esos gramos cierra la pregunta en vez de adivinarla — es la lección de
+                    # "atribución por CLÁUSULA" de P1-CULINARY-CONTRACT, aplicada aquí.
+                    if RECONCILE_CDA_DENSITY and not (m_g or _paren_g):
+                        try:
+                            _wmc = db.macros_from_ingredient_string(s) or {}
+                        except Exception:
+                            _wmc = {}
+                        _wg = _wmc.get("grams")
+                        _wname = _sa(str(_wmc.get("name") or "").lower())
+                        if (_wg and float(_wg) > float(REALISM_VEG_VOLUME_CAP_G) and _wname
+                                and _watery_token_hits(_wname, _watery_tokens)):
+                            _f_mass = float(REALISM_VEG_VOLUME_CAP_G) / float(_wg)
+                            factor = _f_mass if factor is None else min(factor, _f_mass)
+                            logger.info(
+                                f"🥒 [P1-RECONCILE-CDA-DENSITY] vegetal acuoso en unidad "
+                                f"no-gramo: {s[:44]!r} ≈ {float(_wg):.0f} g de {_wname!r} "
+                                f"(techo {REALISM_VEG_VOLUME_CAP_G} g) en "
+                                f"'{str(meal.get('name'))[:32]}'.")
                     if factor is not None and factor < 0.999:
                         try:
                             _new = _resc(s, factor)
