@@ -173,6 +173,38 @@ def find_plan_day_for_date(plan_data: Any, target: date, today: date) -> Optiona
     return None
 
 
+def compute_chunk_overdue(plan_data, in_flight_count, today=None):
+    """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] ¿Hoy debería existir un día del plan que no
+    existe, sin nada en la cola que lo vaya a resolver solo?
+
+    SSOT del predicado — 3 consumidores (/chunk-status, cron horario, índice del coach).
+    Fail-open doble: plan legacy sin `date` estampada ⇒ (False, None) (no alerta en falso);
+    cualquier excepción ⇒ (False, None). `today` inyectable para tests deterministas; en
+    producción usa rd_today() (date-only TZ RD — NUNCA datetime.utcnow())."""
+    try:
+        if not isinstance(plan_data, dict):
+            return (False, None)
+        days = plan_data.get("days")
+        if not isinstance(days, list) or not days:
+            return (False, None)
+        total = int(plan_data.get("total_days_requested") or 0)
+        if total <= len(days) or int(in_flight_count or 0) > 0:
+            return (False, None)
+        last = None
+        for d in days:
+            pd = _parse_date(d.get("date")) if isinstance(d, dict) else None
+            if pd is not None and (last is None or pd > last):
+                last = pd
+        if last is None:
+            return (False, None)  # legacy sin dates: fail-open
+        _today = today or rd_today()
+        if _today > last:
+            return (True, (last + timedelta(days=1)).isoformat())
+        return (False, None)
+    except Exception:
+        return (False, None)
+
+
 # ---------------------------------------------------------------------------
 # Knobs — auto-registran en `_KNOBS_REGISTRY` (P3-NEW-D).
 # tooltip-anchor: P1-CHAT-PAST-DAYS-KNOBS

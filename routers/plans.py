@@ -252,6 +252,12 @@ SLOT_FATS_FLOOR_MIN_KCAL = _env_int(
     "MEALFIT_SLOT_FATS_FLOOR_MIN_KCAL", 450, validator=lambda v: 200 <= v <= 900
 )
 
+# [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Días futuros visibles en `/chunk-status`
+# (upcoming_chunks + overdue/overdue_since). Lambda (no constante de import-time)
+# a propósito: se re-evalúa por-request para permitir rollback vía env var sin
+# reiniciar el worker Y para que tests puedan flip-earlo con monkeypatch.setenv.
+_upcoming_days_ui_enabled = lambda: _env_bool("MEALFIT_UPCOMING_DAYS_UI", True)
+
 
 def _try_acquire_pipeline_slot() -> bool:
     """Reserva un slot de pipeline si hay capacidad. True = admitido, False = en el cap.
@@ -11238,6 +11244,38 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             plan_data.get("_recovery_exhausted_chunks") if isinstance(plan_data, dict) else None
         )
 
+        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Días futuros visibles: la cola completa
+        # pending/processing (hoy solo se exponen las pausadas) + el predicado overdue SSOT.
+        # Gateado por knob para rollback sin redeploy: OFF ⇒ payload idéntico al previo y el
+        # frontend degrada solo (los campos ausentes son el comportamiento actual).
+        _upcoming_payload = {}
+        if _upcoming_days_ui_enabled():
+            _up_rows = execute_sql_query(
+                """SELECT id::text AS chunk_id, week_number, days_offset, days_count,
+                          status, execute_after
+                   FROM plan_chunk_queue
+                   WHERE meal_plan_id = %s AND status IN ('pending', 'processing')
+                   ORDER BY execute_after ASC NULLS LAST""",
+                (plan_id,),
+            ) or []
+            payload_upcoming = [{
+                "chunk_id": r.get("chunk_id"),
+                "week_number": r.get("week_number"),
+                "days_offset": r.get("days_offset"),
+                "days_count": r.get("days_count"),
+                "status": r.get("status"),
+                "execute_after": (r["execute_after"].isoformat()
+                                  if r.get("execute_after") is not None and hasattr(r["execute_after"], "isoformat")
+                                  else r.get("execute_after")),
+            } for r in _up_rows]
+            from chat_history_context import compute_chunk_overdue
+            _ov, _ov_since = compute_chunk_overdue(plan_data, int(counters_row.get("in_flight_count") or 0))
+            _upcoming_payload = {
+                "upcoming_chunks": payload_upcoming,
+                "overdue": _ov,
+                "overdue_since": _ov_since,
+            }
+
         return {
             "status": status,
             "days_generated": days_generated,
@@ -11264,6 +11302,9 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             "failed_count": int(counters_row.get("failed_count") or 0),
             "completed_count": int(counters_row.get("completed_count") or 0),
             "paused_chunks": paused_chunks,
+            # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `upcoming_chunks`/`overdue`/
+            # `overdue_since` — presentes SOLO con el knob ON (dict vacío = no-op).
+            **_upcoming_payload,
         }
     except HTTPException:
         raise
