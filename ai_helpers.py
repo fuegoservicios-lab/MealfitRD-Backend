@@ -581,6 +581,69 @@ def _apply_low_template_coverage_penalty(names, weights, field: str, factor: flo
     return _out, _n
 
 
+# ─────── [P3-BUDGET-POOL-FLOOR · 2026-08-04] piso del boost económico del sorteo ───────
+# (audit solver+seeder v7 · Task 20)
+#
+# `P1-BUDGET-TIER-LEVERS` multiplica ×2 el peso de las proteínas/carbos del TERCIO MÁS BARATO
+# cuando el presupuesto pide economía. Pero el peso base es `1/(freq+1)`: un staple barato comido
+# 33 veces pesa 1/34 = 0,029 y ×2 sigue siendo 0,059 contra el 1,0 de un premium fresco — 17:1 EN
+# CONTRA del barato. El caso general está sano (un barato NO reciente pesa 2,0 y gana); el residuo
+# es el ciclo de 15/30 días con pool barato chico, donde el tercio barato ENTERO se fatiga y el
+# sorteo se va a los premium — que el cheapen-pass de `assemble` corrige después con churn y
+# colapso de variedad. El cheapen-pass sigue ahí como RED; esto evita tener que usarla.
+#
+# El piso es RELATIVO a la mediana de los pesos del pool, no absoluto: los pesos dependen del
+# historial de cada usuario, así que un número fijo no significaría lo mismo en dos pools.
+# tooltip-anchor: P3-BUDGET-POOL-FLOOR
+
+
+def _bw_median(values) -> float:
+    """Mediana (idéntica a `statistics.median`, sin importar el módulo por un solo uso)."""
+    _v = sorted(float(x) for x in (values or []))
+    if not _v:
+        return 0.0
+    _n = len(_v)
+    return _v[_n // 2] if _n % 2 else (_v[_n // 2 - 1] + _v[_n // 2]) / 2.0
+
+
+def _budget_pool_floor() -> float:
+    """Fracción de la mediana del pool por debajo de la cual no cae un ítem del tercio barato.
+
+    `0.0` = OFF (el sorteo vuelve a ser byte-idéntico al de P1-BUDGET-TIER-LEVERS). El tope 1.5
+    existe para poder pasar la mediana cuando el dueño quiera reuso agresivo; con el default 0.8
+    el piso queda POR DEBAJO de la mediana por construcción, así que un barato fatigado NO
+    adelanta a un premium fresco — sesgo, no lock. Se lee en CADA llamada (rollback sin redeploy).
+    """
+    try:
+        return min(1.5, max(0.0, _env_float(
+            "MEALFIT_BUDGET_POOL_FLOOR", 0.8, lambda v: 0.0 <= v <= 1.5)))
+    except Exception:
+        return 0.8
+
+
+def _budget_boost_with_floor(weights, prices, boost: float, floor: float):
+    """Boost económico del tercio más barato CON piso relativo. Devuelve pesos nuevos.
+
+    `prices` viene alineado con `weights` (None = precio no resoluble ⇒ peso intacto: sin precio
+    no se puede afirmar que el ítem sea barato). Conserva intacto el contrato heredado de
+    P1-BUDGET-TIER-LEVERS: con menos de 4 precios resolubles no hay tercil que calcular y los
+    pesos se devuelven sin tocar.
+
+    El piso se calcula sobre la mediana de los pesos ANTES del boost — o sea, sobre la escala de
+    fatiga del pool tal como quedó. Y es un `max`, nunca un reemplazo: un barato FRESCO conserva
+    su ×2 en vez de perderlo contra el piso."""
+    _w = list(weights)
+    _valid = sorted(_p for _p in prices if _p and _p > 0)
+    if len(_valid) < 4:
+        return _w
+    _p33 = _valid[max(0, int(0.33 * (len(_valid) - 1)))]
+    _floor_w = (_bw_median(_w) * floor) if floor > 0 else 0.0
+    return [
+        (max(_wi * boost, _floor_w) if (_p and _p <= _p33) else _wi)
+        for _wi, _p in zip(_w, prices)
+    ]
+
+
 # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] El seeder y el gate de variedad hablaban vocabularios
 # distintos: de las 30 frutas del catálogo el gate reconocía 16, así que un pool de 3 salía sin
 # ninguna reconocida el 9% de las veces y con ≤1 el 44,8%. Estos dos helpers cierran el contrato por
@@ -1362,16 +1425,17 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                                 _best = _mk
                     return _pmap.get(_best) if _best else None
 
+                # [P3-BUDGET-POOL-FLOOR · 2026-08-04] El tercil + el boost viven ahora en
+                # `_budget_boost_with_floor` (nivel módulo): el piso relativo necesita la mediana
+                # del pool y probarlo por sorteo sería adivinar. Con `MEALFIT_BUDGET_POOL_FLOOR=0`
+                # devuelve exactamente `w × boost`, o sea el comportamiento previo byte a byte.
+                # El gating NO cambia: esto sigue corriendo sólo dentro del `budget_prefers_economy`
+                # de P1-BUDGET-TIER-LEVERS. tooltip-anchor: P3-BUDGET-POOL-FLOOR
+                _bp_floor = _budget_pool_floor()
+
                 def _bw_boost_cheapest(_names, _weights, _pmap):
                     _prices = [_bw_resolve(_n, _pmap) for _n in _names]
-                    _valid = sorted(_p for _p in _prices if _p and _p > 0)
-                    if len(_valid) < 4:
-                        return _weights
-                    _p33 = _valid[max(0, int(0.33 * (len(_valid) - 1)))]
-                    return [
-                        _w * (_bud_boost if (_p and _p <= _p33) else 1.0)
-                        for _w, _p in zip(_weights, _prices)
-                    ]
+                    return _budget_boost_with_floor(_weights, _prices, _bud_boost, _bp_floor)
 
                 _pmap_bw = _bw_price_map()
                 if _pmap_bw:
