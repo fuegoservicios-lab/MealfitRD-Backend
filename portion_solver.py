@@ -102,26 +102,66 @@ SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
 # objetivo**: los otros tres knobs `SOLVER_W_*` movían décimas de punto porcentual, y el problema
 # quedaba mal condicionado para el descenso por coordenadas (ver `iters` en `_box_lsq`).
 #
-# ⚠️ Lo que este cambio NO hace: con 0.1 la fila kcal SIGUE dominando (share 81.7-84.0% según el
-# slot) — solo domina MENOS. Los pesos declarados siguen sin ser los efectivos. Devolverles su
-# significado exige re-tunear los CUATRO simultáneamente contra un harness de comidas vivas; esto
-# compra los +10.1 pp medidos y nada más. No leer este knob como "el objetivo ya está bien puesto".
-#
-# Medido re-solviendo 416 comidas VIVAS (30 planes) con el mismo `_box_lsq`, variando SOLO este peso:
-#   w=1.2 (previo) → 67.5% de comidas con P/C/F en ±10%   ·  w=0.1 → 77.6% (+10.1 pp)
+# Medido entonces re-solviendo 416 comidas VIVAS (30 planes) con el mismo `_box_lsq`, variando SOLO
+# este peso:  w=1.2 (previo) → 67.5% de comidas con P/C/F en ±10%  ·  w=0.1 → 77.6% (+10.1 pp).
 # NO bajarlo a 0 (quitar la fila): P/C/F sube a 80.3% pero el MAPE de kcal salta a 2.3% y la banda
 # kcal es la ESTRECHA [0.95, 1.05] → el all-4 empeora. Se conserva como regularizador suave del
 # agregado. Rollback sin redeploy: `MEALFIT_SOLVER_W_KCAL=1.2`.
+#
+# [P3-SOLVER-W-RETUNE · 2026-08-04] (audit solver+seeder v7 · Task 17) Aquí vivía el ⚠️ que declaraba
+# el residuo: «con 0.1 la fila kcal SIGUE dominando (share 81.7-84.0%) — los pesos declarados siguen
+# sin ser los efectivos; devolverles su significado exige re-tunear los CUATRO simultáneamente contra
+# un harness de comidas vivas». Hecho. Los CUATRO defaults de abajo son ahora un punto MEDIDO, no
+# heredado. Harness reproducible y versionado: `scripts/retune_solver_weights.py` (el tune anterior se
+# hizo con un script efímero, por eso su único registro era esta frase).
+#
+# Medido sobre **349 comidas vivas de 23 planes** (`--meals <json de prod>`, 343 con macros
+# estampados), espejando el callsite real: lista `ingredients` (no `ingredients_raw`), gate de
+# cobertura `P1-SOLVER-COVERAGE-GATE` y clamp parcial `SOLVER_PARTIAL_MAX_SCALE`:
+#
+#   punto                       all-4 ±10%   banda clínica*   MAPE proteína   share kcal
+#   (0.1, 1.5, 1.1, 1.4) previo    58.6%         62.4%            7.8%          79.6%
+#   (0.02, 4.0, 0.5, 5.0) NUEVO    75.2%         75.2%            6.4%          42.4%
+#                                 +16.6 pp      +12.8 pp
+#   * banda REAL de `SOLVER_BAND_*`: P/C/F [0.90, 1.12] y kcal la ESTRECHA [0.95, 1.05].
+#
+# Por qué NO el máximo del criterio ±10% simétrico: el óptimo de ESA métrica está en w_kcal≈0.007
+# (all-4 76.7%, +1.5 pp más) pero paga −5.2 pp de banda CLÍNICA, porque hunde la autoridad de la fila
+# kcal justo donde la banda es más estrecha. Es el mismo argumento con el que el fix anterior se negó
+# a bajar el peso a 0; cambiar 5.2 pp de la banda que producción enforza por 1.5 pp de una banda
+# simétrica que no existe aguas abajo es un mal negocio. El punto elegido empata AMBOS criterios en
+# 75.2% y vive en una MESETA plana (73.5-75.5% en all-4 y 74.3-75.5% en banda para w_kcal ∈
+# [0.015, 0.05] × w_protein ∈ [3, 6] × w_fats ∈ [5, 8]) — no es un filo.
+#
+# Robustez verificada (no es sobreajuste ni artefacto del catálogo del harness):
+#   · mitades disjuntas POR PLAN: A +15.5 pp (n=220) · B +18.7 pp (n=123) — las dos mejoran.
+#   · sub-conjunto de ALTA FIDELIDAD (196 comidas donde la reconstrucción offline coincide con los
+#     macros estampados a ±10%, o sea donde el catálogo del harness casi no yerra): +13.8 pp all-4 y
+#     +10.2 pp de banda. La ganancia NO viene de líneas que al harness le faltan.
+#
+# ⚠️ Lo que este re-tune SÍ cierra: la fila kcal pasa de llevarse el 79.6% del objetivo al 42.4% y
+# NINGUNA fila queda inerte (la grasa venía del 1.1% — `SOLVER_W_FATS` era decorativo, y su MAPE era
+# el peor del panel: 17.7% → 11.8%). Lo que NO cierra: los pesos siguen SIN ser los efectivos (`w·b²`
+# no es `w`), y eso es deliberado — normalizar las filas para igualarlos está REFUTADO por medición
+# (ver el párrafo de abajo). Lo que se ganó es que los cuatro knobs ejerzan un peso del mismo ORDEN
+# DE MAGNITUD, que es lo que vuelve accionable tocarlos.
+# ⚠️ El harness usa un stub-catálogo offline (réplica aproximada de `master_ingredients`; sin `.env`
+# el catálogo real sale VACÍO), así que los NIVELES absolutos de arriba no son los de producción — lo
+# comparable son las DIFERENCIAS entre puntos sobre el mismo conjunto. Antes de re-tunear otra vez,
+# correr `--mode baseline` y leer la calibración que imprime. Helper para medir el share sin volver a
+# calcularlo a mano: `effective_row_shares(A_rows, b, w)`.
+# Rollback sin redeploy al punto previo: `MEALFIT_SOLVER_W_KCAL=0.1 MEALFIT_SOLVER_W_PROTEIN=1.5
+# MEALFIT_SOLVER_W_CARBS=1.1 MEALFIT_SOLVER_W_FATS=1.4`. tooltip-anchor: P3-SOLVER-W-RETUNE
 #
 # ⚠️ NO "arreglar" esto normalizando las filas (`A/b`, `b=1`) para que los pesos declarados sean los
 # efectivos: MEDIDO sobre las mismas 416 comidas, regresa **−27.1 pp** de convergencia (78.1% → 51.0%,
 # MAPE proteína 4.7% → 9.9%). Con filas absolutas `w·b²` da a la proteína (b≈40 g) ~6.7× el peso de la
 # grasa (b≈16 g), que es clínicamente lo que se quiere; normalizar las iguala y de-prioriza la proteína.
 # Lo que sobra es la FILA KCAL, no la escala. tooltip-anchor: P1-SOLVER-KCAL-ROW-REDUNDANT
-SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 0.1, lambda v: 0.0 < v <= 10.0)
-SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 1.5, lambda v: 0.0 < v <= 10.0)
-SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.1, lambda v: 0.0 < v <= 10.0)
-SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 0.02, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 4.0, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 0.5, lambda v: 0.0 < v <= 10.0)
+SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 5.0, lambda v: 0.0 < v <= 10.0)
 # Regularización hacia el porcionado original del LLM (x=1): evita porciones absurdas (un
 # ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
 SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10, lambda v: 0.0 <= v <= 5.0)
@@ -282,6 +322,51 @@ def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
         if max_delta < 1e-7:
             break
     return x
+
+
+def effective_row_shares(A_rows: list, b: list, w: list) -> list:
+    """[P3-SOLVER-W-RETUNE · 2026-08-04] Share EFECTIVO de cada fila en el objetivo del LSQ.
+
+    El objetivo es `Σ_r w_r (a_r·x − b_r)²` con las filas en unidades ABSOLUTAS (kcal ~500-720
+    contra macros ~16-72 g), así que el peso que un operador escribe en `SOLVER_W_*` NO es el que
+    la fila ejerce: la escala de `b` entra al CUADRADO. El peso efectivo de la fila r es `w_r·b_r²`
+    normalizado — el número que `P1-SOLVER-KCAL-ROW-REDUNDANT` citó a mano ("98.2% del objetivo"
+    con w=1.2, "81.7-84.0%" con w=0.1) y que hasta ahora había que recalcular a ojo cada vez que
+    alguien quería tocar los pesos. Función PURA: no toca el solver, no lee knobs, no muta nada.
+
+    `A_rows` no es decorativo: una fila cuyos coeficientes son TODOS cero es una constante del
+    objetivo (ninguna `x` puede reducirla) y por tanto su influencia sobre la solución es 0, aunque
+    `w·b²` sea grande. Caso real: un target de grasa contra un plato sin ningún portador de grasa
+    (`no_carrier` de `_feasibility_report`). Contarla inflaría el share y escondería quién manda de
+    verdad. tooltip-anchor: P3-SOLVER-W-RETUNE
+
+    Args:
+        A_rows: filas de coeficientes (una por macro con target > 0), como las arma
+            `_compute_scale_factors`.
+        b: término independiente por fila (el target del macro), alineado con `A_rows`.
+        w: peso declarado por fila (`SOLVER_W_*`), alineado con `A_rows`.
+
+    Returns:
+        lista de shares en [0, 1] alineada con `A_rows` (suma 1.0; todo ceros si no hay ninguna
+        fila accionable). Lista vacía si las tres entradas no son coherentes en largo — el helper
+        no adivina qué fila falta.
+    """
+    nrows = len(A_rows or [])
+    if nrows == 0 or len(b or []) < nrows or len(w or []) < nrows:
+        return []
+    mass = []
+    for r in range(nrows):
+        row = A_rows[r] or []
+        try:
+            actionable = any(float(a) != 0.0 for a in row)
+            bb = float(b[r] or 0.0)
+            mass.append(float(w[r]) * bb * bb if actionable else 0.0)
+        except (TypeError, ValueError):
+            mass.append(0.0)
+    total = sum(mass)
+    if total <= 0:
+        return [0.0] * nrows
+    return [m / total for m in mass]
 
 
 def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale: float,

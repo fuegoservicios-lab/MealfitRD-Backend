@@ -40,11 +40,23 @@ _TOOLS = _read("tools.py")
 # ═════════════════ P1-1 · P1-SOLVER-KCAL-ROW-REDUNDANT ═════════════════
 
 def test_p1_1_kcal_weight_default_lowered():
-    assert 'SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 0.1' in _PS
+    """[P3-SOLVER-W-RETUNE · 2026-08-04] SUPERSEDED en los NÚMEROS, vigente en la PROPIEDAD.
+
+    Este P1 bajó SOLO el peso kcal (1.2 → 0.1) y dejó los otros tres intactos a propósito: su
+    alcance era la fila redundante. Su propio comentario declaraba el residuo («re-tunear los
+    CUATRO simultáneamente contra un harness de comidas vivas»), y eso es lo que P3-SOLVER-W-RETUNE
+    hizo: los cuatro defaults son ahora (0.02, 4.0, 0.5, 5.0), MEDIDOS sobre 349 comidas vivas.
+
+    El test no se borra ni se afloja: lo que este P1 conquistó —que la fila kcal no domine el
+    objetivo— sigue siendo la propiedad anclada abajo (`test_p1_1_kcal_row_dominance_reduced`), y
+    ahora con más margen. Aquí solo se sincronizan los valores. La ANCLA ESTRICTA del punto nuevo
+    vive en `test_p3_solver_w_retune.py::test_los_cuatro_defaults_son_el_punto_medido`."""
+    assert 'SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 0.02' in _PS
     import portion_solver as ps
-    assert ps.SOLVER_W_KCAL == 0.1
-    # los otros tres NO se tocan (el cambio es sobre la fila redundante, no sobre la preferencia)
-    assert (ps.SOLVER_W_PROTEIN, ps.SOLVER_W_CARBS, ps.SOLVER_W_FATS) == (1.5, 1.1, 1.4)
+    assert ps.SOLVER_W_KCAL == 0.02
+    # el peso kcal siguió BAJANDO respecto al 1.2 original: la dirección del P1 se conserva.
+    assert ps.SOLVER_W_KCAL < 0.1
+    assert (ps.SOLVER_W_PROTEIN, ps.SOLVER_W_CARBS, ps.SOLVER_W_FATS) == (4.0, 0.5, 5.0)
 
 
 def test_p1_1_anchor_and_normalize_guardrail_present():
@@ -68,8 +80,14 @@ def test_p1_1_kcal_row_dominance_reduced(tgt):
     ⚠️ HONESTIDAD DEL UMBRAL: bajar el peso NO devuelve los pesos declarados a su significado — la
     fila kcal SIGUE dominando, solo que menos. Es lo que compra los +10.1 pp de convergencia medidos
     en 416 comidas vivas, ni un ápice más. El umbral 0.90 ancla esa mejora concreta (revertir a 1.2
-    lo rompe) sin pretender una propiedad que el cambio no tiene. Cerrar el resto de la brecha exige
-    re-tunear los CUATRO pesos contra el harness de comidas vivas — trabajo aparte, con A/B."""
+    lo rompe) sin pretender una propiedad que el cambio no tiene.
+
+    [P3-SOLVER-W-RETUNE · 2026-08-04] El "trabajo aparte" que este párrafo pedía (re-tunear los
+    CUATRO contra un harness de comidas vivas) YA SE HIZO: con los defaults vigentes el share de
+    estos tres slots es 41.7% / 43.6% / 36.3%, muy por debajo del 0.90 de aquí. El umbral NO se
+    aprieta a propósito — es el anclaje de ESTE P1 (que la fila redundante no vuelva al régimen
+    1.2) y apretarlo lo convertiría en el anclaje de otro fix. La cota estricta del punto nuevo
+    vive en `test_p3_solver_w_retune.py::test_caracterizacion_share_kcal_tras_el_retune`."""
     import portion_solver as ps
     w = {"kcal": ps.SOLVER_W_KCAL, "protein": ps.SOLVER_W_PROTEIN,
          "carbs": ps.SOLVER_W_CARBS, "fats": ps.SOLVER_W_FATS}

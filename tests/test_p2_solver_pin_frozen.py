@@ -119,15 +119,22 @@ def test_el_greedy_no_lleva_el_pin_ni_con_el_knob_on(monkeypatch):
 # ═════════════ 2 · el knob apaga el cambio por completo ═════════════
 
 def test_el_knob_off_restaura_el_comportamiento_previo_byte_a_byte(monkeypatch):
-    """El rollback devuelve el dict de retorno COMPLETO, no solo el factor que miramos."""
+    """El rollback devuelve el dict de retorno COMPLETO, no solo el factor que miramos.
+
+    [P3-SOLVER-W-RETUNE · 2026-08-04] Los goldens numericos de abajo se RE-MIDIERON: dependen de
+    los pesos `SOLVER_W_*`, que el re-tune movio de (0.1, 1.5, 1.1, 1.4) a (0.02, 4.0, 0.5, 5.0).
+    Antes: factor 0.503 / proteina 60.1 g. Lo que este test ancla NO es el numero sino que el
+    rollback reproduzca el dict COMPLETO del comportamiento sin pin — y eso sigue intacto. Si
+    vuelves a tocar los pesos, re-mide estos cuatro valores (no los "arregles" a ojo).
+    """
     con_pin = _solve([PECHUGA, POLLO])
     monkeypatch.setattr(ps, "SOLVER_PIN_FROZEN", False)
     sin_pin = _solve([PECHUGA, POLLO])
-    # linea base medida sobre el arbol sin el fix (golden de 23 casos):
-    assert sin_pin["factors_applied"] == [1.0, pytest.approx(0.503, abs=1e-3)], (
+    # linea base medida sobre el arbol sin el fix (golden de 23 casos), re-medida tras el re-tune:
+    assert sin_pin["factors_applied"] == [1.0, pytest.approx(0.4492, abs=1e-3)], (
         f"el rollback no reprodujo la linea base medida: {sin_pin['factors_applied']}")
-    assert sin_pin["achieved"] == {"kcal": 325.5, "protein": 60.1, "carbs": 0.0, "fats": 7.9}
-    assert sin_pin["ingredients"] == [PECHUGA, "50.3 g de pollo"]
+    assert sin_pin["achieved"] == {"kcal": 317.1, "protein": 58.6, "carbs": 0.0, "fats": 7.6}
+    assert sin_pin["ingredients"] == [PECHUGA, "44.92 g de pollo"]
     assert sin_pin["saturated_hi"] == 0 and sin_pin["saturated_lo"] == 0
     assert sin_pin["converged"] is False
     # ...y el pin SI cambia el dict: si no, el test de arriba seria vacuo.
@@ -206,7 +213,12 @@ def test_la_factibilidad_y_el_solver_dejan_de_contradecirse(monkeypatch):
     grasa PERSISTE, que es la verdad: no hay portador.
 
     Lo que el pin cambia aqui no es llegar al target — es dejar de RETENER la unica linea que se
-    puede mover porque el optimizador creia que el mani escalaria: 0.891 → 1.182.
+    puede mover porque el optimizador creia que el mani escalaria: 0.967 → 1.155.
+
+    [P3-SOLVER-W-RETUNE · 2026-08-04] Los dos factores se RE-MIDIERON tras mover los pesos de
+    (0.1, 1.5, 1.1, 1.4) a (0.02, 4.0, 0.5, 5.0); antes eran 0.891 → 1.182. El MECANISMO que este
+    test ancla (con pin la movil sube, y la congelada no se toca) es independiente de los pesos y
+    sigue verde — la desigualdad de abajo es la asercion que importa; los absolutos son contexto.
     """
     lines = [MANI, ARROZ]
     tgt = {"kcal": 300, "protein": 12, "carbs": 40, "fats": 8}
@@ -220,8 +232,8 @@ def test_la_factibilidad_y_el_solver_dejan_de_contradecirse(monkeypatch):
     assert (sin_pin["infeasible"] or {}).get("fats") == "high"
     # La congelada nunca se mueve (eso ya lo garantizaba `_f_eff`); lo que cambia es la movil.
     assert con_pin["factors_applied"][0] == sin_pin["factors_applied"][0] == 1.0
-    assert sin_pin["factors_applied"][1] == pytest.approx(0.8913, abs=1e-3)
-    assert con_pin["factors_applied"][1] == pytest.approx(1.1815, abs=1e-3)
+    assert sin_pin["factors_applied"][1] == pytest.approx(0.9674, abs=1e-3)
+    assert con_pin["factors_applied"][1] == pytest.approx(1.1553, abs=1e-3)
     assert con_pin["factors_applied"][1] > sin_pin["factors_applied"][1], (
         "el solver sigue reteniendo la movil por contar con una linea que no se mueve")
     # El deficit de grasa que QUEDA es el que el reporte explica, no escalado sin usar.
