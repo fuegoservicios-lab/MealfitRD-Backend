@@ -205,6 +205,70 @@ def compute_chunk_overdue(plan_data, in_flight_count, today=None):
         return (False, None)
 
 
+def build_pending_plan_days_lines(plan_data: dict, today: date, in_flight_count: int) -> list[str]:
+    """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Índice de los días que el plan
+    TODAVÍA NO tiene generados — para que el coach declare PENDIENTE/ATRASADO
+    en vez de inventar un menú que aún no existe (mismo modo de fallo que
+    `DÍAS QUE YA PASARON` cierra hacia atrás, este lo cierra hacia adelante).
+
+    Deriva las fechas esperadas como `última date estampada + i` (i=1..N días
+    pendientes, `total_days_requested - len(days)`) y usa `compute_chunk_overdue`
+    (SSOT ya usado por `/chunk-status` y el cron horario) para decidir si el
+    plan está ATRASADO; un día individual solo se marca ATRASADO si el flag
+    global es True Y su fecha esperada ya llegó (`<= today`) — el resto son
+    PENDIENTE. Cap DURO de 3 líneas de día + 1 línea resumen ("… y N día(s)
+    más pendientes") si sobran más — presupuesto del índice, mismo principio
+    que `_assemble` arriba pero sin recorte dinámico (el volumen máximo de
+    días pendientes es acotado por `total_days_requested`, no por texto libre).
+
+    Fail-open a `[]`: plan legacy sin ninguna `date` estampada (mismo criterio
+    que `compute_chunk_overdue`), plan ya completo (`total <= len(days)`), o
+    cualquier excepción — sin este índice el coach simplemente no menciona los
+    días futuros, que es el comportamiento previo (no regresión).
+    tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-COACH
+    """
+    try:
+        if not isinstance(plan_data, dict):
+            return []
+        days = plan_data.get("days")
+        if not isinstance(days, list) or not days:
+            return []
+        total = int(plan_data.get("total_days_requested") or 0)
+        n_pending = total - len(days)
+        if n_pending <= 0:
+            return []
+
+        last = None
+        for d in days:
+            pd = _parse_date(d.get("date")) if isinstance(d, dict) else None
+            if pd is not None and (last is None or pd > last):
+                last = pd
+        if last is None:
+            return []  # legacy sin dates: fail-open, mismo criterio que compute_chunk_overdue
+
+        overdue, _since = compute_chunk_overdue(plan_data, in_flight_count, today=today)
+
+        cap = 3
+        shown = min(n_pending, cap)
+        lines: list[str] = []
+        for k in range(1, shown + 1):
+            day_num = len(days) + k
+            expected = last + timedelta(days=k)
+            fecha = _fmt_date_es(expected)
+            if overdue and expected <= today:
+                lines.append(f"- día {day_num} ({fecha}): ATRASADO desde el {fecha}")
+            else:
+                lines.append(f"- día {day_num} ({fecha}): PENDIENTE — se genera por etapas")
+
+        remaining = n_pending - shown
+        if remaining > 0:
+            lines.append(f"… y {remaining} día(s) más pendientes")
+        return lines
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] build_pending_plan_days_lines fail-open: {e}")
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Knobs — auto-registran en `_KNOBS_REGISTRY` (P3-NEW-D).
 # tooltip-anchor: P1-CHAT-PAST-DAYS-KNOBS

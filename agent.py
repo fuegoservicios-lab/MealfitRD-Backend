@@ -34,7 +34,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, slot_coherence_backstop_for_meal, SLOT_APPROPRIATENESS_GATE_ENABLED, appetibility_fix_for_update, _meal_has_sweet_savory_clash, UPDATE_APPETIBILITY_GUARD
 import concurrent.futures
 import traceback
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
 from memory_manager import build_memory_context
 from fact_extractor import get_embedding
@@ -284,6 +284,7 @@ from prompts.chat_agent import (
 from chat_history_context import (
     build_past_diary_block,
     build_past_plan_days_block,
+    build_pending_plan_days_lines,
     chat_history_days,
     rd_today,
 )
@@ -4594,6 +4595,42 @@ def _clamp_tz_offset_mins(value, default_mins: int = 240) -> int:
     return cand if -840 <= cand <= 840 else default_mins
 
 
+def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today: date) -> str:
+    """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Envuelve `build_pending_plan_days_lines`
+    con el COUNT barato de `plan_chunk_queue` que alimenta `compute_chunk_overdue`
+    (mismo predicado SSOT que `/chunk-status` y el cron horario). El COUNT SOLO
+    se paga si el plan tiene días pendientes (`total_days_requested > len(days)`)
+    — un plan ya completo (el caso común, la mayoría de mensajes de chat) sale
+    por el guard de arriba sin tocar la DB. Fail-open a "".
+    tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-AGENT
+    """
+    try:
+        if not isinstance(current_plan, dict) or not user_id or user_id == "guest":
+            return ""
+        days = current_plan.get("days")
+        total = int(current_plan.get("total_days_requested") or 0)
+        if not isinstance(days, list) or total <= len(days):
+            return ""
+        from db import execute_sql_query
+        cnt = execute_sql_query(
+            "SELECT count(*)::int AS c FROM plan_chunk_queue "
+            "WHERE user_id = %s AND status IN ('pending', 'processing', 'stale')",
+            (user_id,), fetch_one=True,
+        ) or {}
+        in_flight_count = int(cnt.get("c") or 0)
+        lines = build_pending_plan_days_lines(current_plan, today, in_flight_count)
+        if not lines:
+            return ""
+        return (
+            "\n\n🗓️ DÍAS QUE FALTAN POR GENERARSE — todavía NO existen, así que NUNCA "
+            "inventes su menú (si preguntan, di que se generan por etapas):\n"
+            + "\n".join(lines)
+        )
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] pending days block fail-open: {e}")
+        return ""
+
+
 def _build_past_days_context(user_id: str, current_plan, local_date_str: Optional[str] = None,
                               tz_offset: Optional[int] = None) -> str:
     """[P1-CHAT-PAST-DAYS · 2026-07-27] Los dos bloques de días pasados:
@@ -4627,6 +4664,9 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         tz_offset_mins = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else 240
 
         out = build_past_plan_days_block(current_plan, today, days_back=days_back)
+        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
+        # una 2ª pasada al LLM ni un bloque nuevo): días PENDIENTE/ATRASADO.
+        out += _build_pending_days_lines_block(user_id, current_plan, today)
 
         try:
             from db_facts import get_consumed_meals_since

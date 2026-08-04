@@ -300,3 +300,33 @@ def test_alert_key_documentada_en_la_tabla():
     from pathlib import Path
     doc = (Path(__file__).resolve().parents[1] / "docs" / "system_alerts_resolution_table.md").read_text(encoding="utf-8")
     assert "chunk_overdue:" in doc
+
+
+# ---------------------------------------------------------------------------
+# Índice del coach (Task 3) — `build_pending_plan_days_lines` declara los
+# días PENDIENTE/ATRASADO para que el chat no invente un menú que aún no
+# existe. Mismo helper `_plan` de arriba, mismo predicado SSOT por debajo.
+# ---------------------------------------------------------------------------
+
+
+def test_coach_declara_dias_pendientes():
+    plan = _plan(["2026-08-02", "2026-08-03", "2026-08-04"], 7)
+    lines = chc.build_pending_plan_days_lines(plan, today=date(2026, 8, 4), in_flight_count=1)
+    assert any("PENDIENTE" in l for l in lines) and not any("ATRASADO" in l for l in lines)
+
+
+def test_coach_declara_atrasado_cuando_el_predicado_lo_dice():
+    plan = _plan(["2026-08-01", "2026-08-02", "2026-08-03"], 15)
+    lines = chc.build_pending_plan_days_lines(plan, today=date(2026, 8, 5), in_flight_count=0)
+    assert any("ATRASADO" in l for l in lines)
+
+
+def test_coach_legacy_sin_dates_no_declara_nada():
+    plan = {"total_days_requested": 15, "days": [{"day_name": "Lunes"}]}
+    assert chc.build_pending_plan_days_lines(plan, date(2026, 8, 9), 0) == []
+
+
+def test_coach_cap_de_lineas():
+    plan = _plan(["2026-08-02", "2026-08-03", "2026-08-04"], 30)
+    lines = chc.build_pending_plan_days_lines(plan, date(2026, 8, 4), 1)
+    assert len(lines) <= 4 and "más pendientes" in lines[-1]
