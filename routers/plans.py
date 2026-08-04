@@ -11335,10 +11335,12 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             #
             # Este conjunto queda DELIBERADAMENTE distinto del de
             # `upcoming_chunks` (la query de arriba, sin `pending_user_action`): esos días ya
-            # se pintan vía `paused_chunks`, y el frontend distingue 'pausado' de
-            # 'en proceso' con `puac > 0 && in_flight === 0` — meterlos en la
-            # lista rompería esa discriminación. El instinto de "alinear los dos
-            # filtros" es correcto para `stale` (FIX 2) y equivocado aquí.
+            # se pintan vía `paused_chunks`, de donde el frontend saca su propio
+            # fantasma. El cliente elige el chunk FUENTE por `days_offset` mínimo
+            # entre `paused_chunks ∪ upcoming_chunks` y etiqueta según ESE chunk —
+            # meter los pausados aquí duplicaría el mismo día en las dos listas.
+            # El instinto de "alinear los dos filtros" es correcto para `stale`
+            # (FIX 2) y equivocado aquí.
             # Los campos `in_flight_count`/`pending_user_action_count` del payload
             # NO cambian: el frontend los necesita separados.
             #
@@ -11353,8 +11355,8 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             #     _ov_blockers = in_flight + (pausados con paused_seconds < UMBRAL)
             # y lo único que falta es el UMBRAL, que es decisión de producto (¿cuánto
             # tiempo esperamos a un usuario antes de tratar su plan como atrasado?),
-            # no técnica. Caso real medido: plan `51c9b3d3`, reason_code
-            # `learning_zero_logs`, `paused_seconds = 2646`.
+            # no técnica. Caso real medido: plan `9cf5e313`, chunk `51c9b3d3`,
+            # reason_code `learning_zero_logs`, `paused_seconds = 2646`.
             _ov_blockers = (int(counters_row.get("in_flight_count") or 0)
                             + int(counters_row.get("pending_user_action_count") or 0))
             _ov, _ov_since = compute_chunk_overdue(plan_data, _ov_blockers)
