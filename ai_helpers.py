@@ -442,6 +442,145 @@ def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesado
     return _p, _f
 
 
+# ─────── [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] cobertura de plantillas por base ───────
+# (audit solver+seeder v7 · Task 19)
+#
+# El sorteo repartía bases sin saber cuántas variantes de plato REALES soporta cada una.
+# `dish_library` le ofrece al day-generator ~87 plantillas dominicanas curadas, pero
+# `_protein_matches_pool` sólo deja pasar las que NOMBRAN la base asignada. Bases como
+# Chivo/Conejo/Pulpo/Bacalao no aparecen en NINGUNA plantilla de almuerzo: cuando el sorteo
+# —o peor, la nevera bajo `cycle_locked`— se las impone 2-3 días del chunk, el day-gen compone
+# esos platos SIN recombinación y tiende a la fórmula clonada (que hoy sólo se mide DESPUÉS,
+# con el detector de P1-CONTAINER-SERVABLE).
+#
+# El audit lo ajustó a la baja a propósito: las plantillas de clase genérica aplican a todo
+# pool, así que esto es **degradación suave, no bloqueo**. Por eso el cierre es un multiplicador
+# ×0.5 sobre el peso del sorteo —jamás una exclusión— más un WARNING cuando la base viene de la
+# nevera y va a ocupar ≥2 días. tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
+
+# Slot PRINCIPAL: el almuerzo es donde aterriza la base proteica/carbo del día (la cena reusa el
+# mismo par, ver P1-CARB-SEEDER-PAIRS). Medir ahí es medir dónde duele la falta de plantilla.
+_TEMPLATE_COVERAGE_MAIN_SLOT = "almuerzo"
+# 'none'/'mixta' aplican a TODO pool y no nombran ningún alimento: no distinguen a nadie, así que
+# no pueden contar como cobertura de nada (si contaran, ninguna base daría 0 y el fix sería inerte).
+_TEMPLATE_CLASS_NAMELESS = ("none", "mixta")
+# Las otras tres clases genéricas de `_protein_matches_pool` SÍ nombran una clase concreta: una
+# plantilla de huevo habla del huevo. 'huevo'/'queso' alcanzan sus bases por límite de palabra;
+# 'legumbre' es un nombre de CATEGORÍA, no de alimento, así que se puentea con el SSOT
+# `constants.NUTRITIONAL_CATEGORIES` en vez de escribir una lista de leguminosas a mano (que
+# drifearía contra `LEGUME_NAMES` y contra la GARANTÍA de leguminosa del propio seeder).
+_TEMPLATE_CLASS_CATEGORY = {
+    "huevo": "huevos y lácteos",
+    "queso": "huevos y lácteos",
+    "legumbre": "legumbres",
+}
+# (slot, campo) -> (id(lista_de_plantillas), {token: nº}). La clave lleva el `id` de la lista que
+# `dish_library` cachea, así que un reload/stub de la biblioteca invalida la entrada solo.
+_TEMPLATE_COVERAGE_CACHE: dict = {}
+
+
+def _template_token_names_base(token: str, base_ascii: str, base_lower: str) -> bool:
+    """¿La clase de plato `token` NOMBRA a esta base?
+
+    MISMA forma que la rama no-genérica de `dish_library._protein_matches_pool`: `\\b` al inicio y
+    NADA al final ('huevo' debe alcanzar 'Huevos' y 'papa' a 'Papas'). Word-boundary y no
+    subcadena — este repo lleva 14+ incidentes de esa clase y aquí hay dos MEDIDOS contra los
+    catálogos vivos: `'pollo'` ⊂ `'re**pollo**'` (18 plantillas heredadas) y `'res'` ⊂
+    `'f**res**a'` (6). La paridad con el matcher de la biblioteca está anclada por test: si
+    divergen, esta cobertura mediría una biblioteca que el day-gen no ve.
+    tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE"""
+    if not token or not base_ascii:
+        return False
+    if re.search(r"\b" + re.escape(token), base_ascii):
+        return True
+    _cat = _TEMPLATE_CLASS_CATEGORY.get(token)
+    if not _cat:
+        return False
+    try:
+        from constants import get_nutritional_category
+        return get_nutritional_category(base_lower) == _cat
+    except Exception:
+        return False
+
+
+def _dish_template_class_counts(slot: str, field: str) -> dict:
+    """{token_de_clase: nº de plantillas} del slot, DERIVADO del JSON vivo. Fail-open → {}."""
+    try:
+        from dish_library import load_dish_templates
+        _tpls = load_dish_templates() or []
+    except Exception as _tc_e:
+        logger.debug("[P3-SEEDER-TEMPLATE-COVERAGE] biblioteca no disponible: %s: %s",
+                     type(_tc_e).__name__, str(_tc_e)[:160])
+        return {}
+    _key = (slot, field)
+    _hit = _TEMPLATE_COVERAGE_CACHE.get(_key)
+    if _hit is not None and _hit[0] == id(_tpls):
+        return _hit[1]
+    _counts: dict = {}
+    for _t in _tpls:
+        if not isinstance(_t, dict) or slot not in (_t.get("slots") or []):
+            continue
+        _tok = strip_accents(str(_t.get(field) or "none").lower()).strip()
+        if not _tok or _tok in _TEMPLATE_CLASS_NAMELESS:
+            continue
+        _counts[_tok] = _counts.get(_tok, 0) + 1
+    if len(_TEMPLATE_COVERAGE_CACHE) > 32:      # cota anti-bloat si alguien stubea la biblioteca
+        _TEMPLATE_COVERAGE_CACHE.clear()
+    _TEMPLATE_COVERAGE_CACHE[_key] = (id(_tpls), _counts)
+    return _counts
+
+
+def _template_coverage(base: str, field: str = "protein", slot: str = None) -> int:
+    """Nº de plantillas del slot principal que NOMBRAN a `base`.
+
+    `field` es `'protein'` para el pool de proteínas y `'base'` para el de carbos (los dos campos
+    que la plantilla declara). Devuelve **-1** cuando no hay biblioteca legible: "no sé" NO es
+    "cero" — un 0 ahí penalizaría el pool entero por igual y disfrazaría la avería de decisión."""
+    _counts = _dish_template_class_counts(slot or _TEMPLATE_COVERAGE_MAIN_SLOT, field)
+    if not _counts:
+        return -1
+    _ascii = strip_accents(str(base or "").lower()).strip()
+    if not _ascii:
+        return -1
+    _lower = str(base or "").strip().lower()
+    return sum(_n for _tok, _n in _counts.items()
+               if _template_token_names_base(_tok, _ascii, _lower))
+
+
+def _low_template_coverage_penalty() -> float:
+    """Multiplicador del sorteo para las bases sin ninguna plantilla propia. `1.0` = OFF.
+
+    Se lee en CADA llamada (no a nivel módulo) para que el rollback no necesite redeploy, igual
+    que `MEALFIT_CYCLE_BASE_AFFINITY`. Clamp [0.1, 1.0]: el piso impide que alguien convierta un
+    sesgo en una exclusión de facto escribiendo 0."""
+    try:
+        return min(1.0, max(0.1, _env_float(
+            "MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY", 0.5, lambda v: 0.1 <= v <= 1.0)))
+    except Exception:
+        return 0.5
+
+
+def _apply_low_template_coverage_penalty(names, weights, field: str, factor: float):
+    """Devuelve `(pesos, nº penalizados)`. Multiplicador SUAVE, jamás exclusión.
+
+    Sólo baja el peso de las bases con cobertura EXACTAMENTE 0; el resto queda byte-idéntico (es
+    un sesgo, no una redistribución). Sin biblioteca legible es no-op: `_template_coverage`
+    devuelve -1 y ninguna base entra."""
+    _w = list(weights)
+    if factor >= 1.0 or not names:
+        return _w, 0
+    if not _dish_template_class_counts(_TEMPLATE_COVERAGE_MAIN_SLOT, field):
+        return _w, 0
+    _out, _n = [], 0
+    for _name, _wi in zip(names, _w):
+        if _template_coverage(_name, field) == 0:
+            _out.append(_wi * factor)
+            _n += 1
+        else:
+            _out.append(_wi)
+    return _out, _n
+
+
 # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] El seeder y el gate de variedad hablaban vocabularios
 # distintos: de las 30 frutas del catálogo el gate reconocía 16, así que un pool de 3 salía sin
 # ninguna reconocida el 9% de las veces y con ≤1 el 44,8%. Estos dos helpers cierran el contrato por
@@ -1379,6 +1518,31 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 if any(_g in strip_accents(_f.lower()) for _g in _HIGH_GI_FRUITS):
                     fruit_weights[_i] *= 0.15
 
+    # ======= [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] COBERTURA DE PLANTILLAS =======
+    # Multiplicador SUAVE sobre las bases que no aparecen en NINGUNA plantilla de la biblioteca
+    # de platos. Va aquí, entre los demás penalties y antes del sorteo: todos son multiplicativos
+    # (conmutan), así que el orden no altera el resultado, pero la regla "la afinidad de ciclo es
+    # SIEMPRE la última antes del sorteo" se conserva intacta.
+    # NUNCA excluye — con pool corto la base sin plantillas sigue pudiendo salir, que es lo
+    # correcto: mejor un plato improvisado que un pool vacío. Rollback sin redeploy:
+    # MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY=1.0. tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
+    _tpl_factor = _low_template_coverage_penalty()
+    if _tpl_factor < 1.0:
+        try:
+            protein_weights, _tpl_np = _apply_low_template_coverage_penalty(
+                available_proteins, protein_weights, "protein", _tpl_factor)
+            carb_weights, _tpl_nc = _apply_low_template_coverage_penalty(
+                available_carbs, carb_weights, "base", _tpl_factor)
+            if _tpl_np or _tpl_nc:
+                logger.info(
+                    "🍽️ [P3-SEEDER-TEMPLATE-COVERAGE] %d proteína(s) y %d carbo(s) sin ninguna "
+                    "plantilla de %s en la biblioteca → peso ×%.2f en el sorteo (sesgo, no "
+                    "exclusión: el day-gen las improvisa y tiende a clonar la fórmula).",
+                    _tpl_np, _tpl_nc, _TEMPLATE_COVERAGE_MAIN_SLOT, _tpl_factor)
+        except Exception as _tpl_e:
+            logger.debug("[P3-SEEDER-TEMPLATE-COVERAGE] penalty no-op: %s: %s",
+                         type(_tpl_e).__name__, str(_tpl_e)[:160])
+
     # ======= [P1-CYCLE-BASE-AFFINITY · 2026-08-02] AFINIDAD CON LA COMPRA DEL CICLO =======
     # Va AQUÍ a propósito: DESPUÉS de la fatiga por recencia y DESPUÉS de todos los filtros y
     # penalties (alergia/dieta/dislike + embutidos + curados en sal + carnes grasas + alto-IG +
@@ -1670,6 +1834,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # ==========================================================
 
     # ======= CURRENT PANTRY INGREDIENTS INJECTION (ROTATION MODE) =======
+    # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] Las bases que salen de la NEVERA se guardan aparte
+    # para la telemetría de cobertura de más abajo: `extracted_p`/`extracted_c` viven dentro del
+    # `if` y el chequeo necesita además `chosen_proteins`/`chosen_carbs`, que se calculan 300
+    # líneas después (tras dedupe, shuffle y padding). Sin nevera quedan vacías y el chequeo es
+    # no-op — el WARNING es sobre la base IMPUESTA, no sobre cualquier base sorteada.
+    _tpl_pantry_p, _tpl_pantry_c = [], []
     current_pantry_ingredients = (form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])) if form_data else []
     if current_pantry_ingredients:
         logger.info(f"🔄 [ROTATION MODE] Extrayendo ingredientes base de la lista actual.")
@@ -1751,6 +1921,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 exige_densidad=((_main_goal == "gain_muscle" or _is_bariatric)
                                 and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True)),
                 is_bariatric=_is_bariatric)
+
+        # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] Snapshot POST-filtro clínico: lo que el filtro
+        # de arriba descartó ya no puede ocupar días, así que tampoco debe generar telemetría.
+        _tpl_pantry_p, _tpl_pantry_c = list(extracted_p), list(extracted_c)
 
         # [P2-PANTRY-ROTATION-FLOOR · 2026-07-29] (audit solver+seeder v4) Esto REEMPLAZABA los pools
         # por lo extraído de la nevera y forzaba `cycle_locked = True` INCONDICIONALMENTE — sin sorteo,
@@ -1977,6 +2151,30 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # [P1-FRUIT-SEEDER-GATE-CONTRACT · 2026-07-26] 4 frutas: `_rotate_fruit_pairs` las reparte en
     # 2 por día reutilizándolas entre días.
     chosen_fruits = unique_fruits[:_dc + 1] if unique_fruits else []
+
+    # [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] TELEMETRÍA, no guard. Una base de la nevera sin
+    # ninguna plantilla propia que además ocupa ≥2 de los días del chunk es el caso que el audit
+    # describe: bajo `cycle_locked` el prompt prohíbe introducir bases nuevas, así que esos dos
+    # días se componen enteros por improvisación y acaban pareciéndose. Se registra ANTES de
+    # decidir un guard más duro (rotar la base, relajar el lock) porque no hay serie que diga
+    # cuántas veces pasa de verdad; el sorteo NO la excluye y este bloque no cambia nada.
+    # tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
+    try:
+        for _tpl_cat, _tpl_field, _tpl_bases, _tpl_chosen in (
+                ("proteína", "protein", _tpl_pantry_p, chosen_proteins),
+                ("carbohidrato", "base", _tpl_pantry_c, chosen_carbs)):
+            for _tpl_b in _tpl_bases:
+                _tpl_days = sum(1 for _x in _tpl_chosen if _x == _tpl_b)
+                if _tpl_days >= 2 and _template_coverage(_tpl_b, _tpl_field) == 0:
+                    logger.warning(
+                        "🍽️ [P3-SEEDER-TEMPLATE-COVERAGE] la %s '%s' viene de la NEVERA, no tiene "
+                        "NINGUNA plantilla de %s en la biblioteca y ocupa %d de %d día(s) del "
+                        "chunk: esos días se componen sin recombinación y tienden a clonar la "
+                        "fórmula. Telemetría — el sorteo NO la excluye.",
+                        _tpl_cat, _tpl_b, _TEMPLATE_COVERAGE_MAIN_SLOT, _tpl_days, _dc)
+    except Exception as _tpl_w_e:
+        logger.debug("[P3-SEEDER-TEMPLATE-COVERAGE] telemetría de nevera no-op: %s: %s",
+                     type(_tpl_w_e).__name__, str(_tpl_w_e)[:160])
 
     # Repetimos mezcla final de los días elegidos para distribuir el orden
     random.shuffle(chosen_proteins)

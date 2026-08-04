@@ -19,6 +19,7 @@ sin mirar dieta ni alergias: el LLM adaptaba una plantilla de carne para un vege
 la rechazaba y el swap quemaba reintentos — un fallo de producto inducido por una señal que el
 propio sistema fabricó.
 """
+import random
 import re
 
 import pytest
@@ -77,18 +78,54 @@ def test_los_knobs_del_seeder_no_leen_environ_en_crudo():
 
 # --------------------------------------------------------------- F16 · word-boundary en la nevera
 
-def test_la_sal_de_la_nevera_no_hace_preferir_salami():
-    """'sal' (3 chars) matcheaba dentro de 'Salami Dominicano' por substring bidireccional."""
+def _tasa_salami_del_dia_degradado(pantry, semillas=range(120)):
+    """Fracción de semillas en las que el día degradado incluye salami. MEDICIÓN."""
     import cron_tasks
+    hits, vistos = 0, 0
+    for s in semillas:
+        random.seed(s)
+        dia = cron_tasks._build_filtered_edge_recipe_day([], [], "", pantry_items=pantry)
+        if dia is None:
+            continue
+        vistos += 1
+        hits += "salami" in " ".join(
+            i for m in dia["meals"] for i in m["ingredients"]).lower()
+    return (hits / vistos) if vistos else None
 
-    dia = cron_tasks._build_filtered_edge_recipe_day(
-        [], [], "", pantry_items=["sal", "arroz", "cebolla"])
-    if dia is None:
+
+def test_la_sal_de_la_nevera_no_hace_preferir_salami():
+    """'sal' (3 chars) matcheaba dentro de 'Salami Dominicano' por substring bidireccional.
+
+    [P3-SEEDER-TEMPLATE-COVERAGE · 2026-08-04] Este test afirmaba un **"nunca"** que el sistema
+    NO da: `_build_filtered_edge_recipe_day` sortea con el `random` global sin sembrarlo, y
+    Salami Dominicano es un miembro legítimo del catálogo de proteínas — medido sobre 400
+    semillas, sale en el **5,0 %** de los días degradados **con o sin salero** (5,0 % en ambos
+    casos; 5,5 % sin nevera ninguna). O sea que el `assert "salami" not in texto` pasaba por la
+    suerte del estado ambiente del RNG, y cualquier cambio en el número de llamadas a `random`
+    de un test ANTERIOR del mismo proceso lo volteaba: así se detectó, al cambiar la
+    distribución del sorteo del seeder en otro archivo.
+
+    La reparación conserva la INTENCIÓN (un salero no puede sesgar el día hacia el embutido) y
+    la vuelve medible: se comparan las dos tasas sobre las MISMAS semillas fijas. El control
+    positivo de más abajo prueba que el mecanismo de nevera no está muerto."""
+    con_sal = _tasa_salami_del_dia_degradado(["sal", "arroz", "cebolla"])
+    sin_sal = _tasa_salami_del_dia_degradado(["arroz", "cebolla"])
+    if con_sal is None or sin_sal is None:
         pytest.skip("el catálogo no permitió construir un edge day en este entorno")
-    texto = " ".join(i for m in dia["meals"] for i in m["ingredients"]).lower()
-    assert "salami" not in texto, (
-        f"un salero en la nevera hizo entrar embutido al día degradado: {texto}"
-    )
+    assert con_sal <= sin_sal + 0.02, (
+        f"un salero en la nevera sesgó el día degradado hacia el embutido: "
+        f"con 'sal'={con_sal:.1%} vs sin 'sal'={sin_sal:.1%}")
+
+
+def test_el_salami_REAL_de_la_nevera_si_se_prefiere():
+    """Control positivo del test anterior: sin esto, `con_sal <= sin_sal` pasaría también si el
+    mecanismo de nevera estuviera completamente muerto."""
+    import cron_tasks
+    tasa = _tasa_salami_del_dia_degradado(["salami dominicano", "arroz", "cebolla"],
+                                          semillas=range(30))
+    if tasa is None:
+        pytest.skip("el catálogo no permitió construir un edge day en este entorno")
+    assert tasa > 0.5, f"un salami REAL en la nevera casi no se prefiere ({tasa:.1%})"
 
 
 def test_la_nevera_sigue_intersectando_por_nombre_real():
