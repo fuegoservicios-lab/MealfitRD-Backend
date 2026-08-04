@@ -283,6 +283,26 @@ def test_marker_presente_en_ambos_archivos():
 
 
 def test_last_known_pfix_bumpeado():
+    """[HIGIENE · 2026-08-04, re-review de D1] Ancla la fecha-floor, NO el slug literal.
+
+    La versión anterior (`assert "P3-AGG-NUM-DAYS-PROPAGATE" in app_src[...]`) exigía el
+    marker EXACTO de este P-fix — se ponía roja con CADA P-fix posterior que bumpeara
+    `_LAST_KNOWN_PFIX` a un slug distinto, aunque el bump hubiera ocurrido correctamente.
+    Es el mismo anti-patrón que `test_p2_help_chatbot.py::test_marker_bumped` y
+    `test_p2_live_9_...::test_marker_bumped_to_p2_live` ya corrigieron: comparar por
+    FECHA (que ordena bien como string ISO) en vez de por el slug (que no)."""
+    import re
+    from datetime import date, datetime
+
     app_src = (_BACKEND / "app.py").read_text(encoding="utf-8")
-    i = app_src.index("_LAST_KNOWN_PFIX")
-    assert "P3-AGG-NUM-DAYS-PROPAGATE" in app_src[i:i + 200]
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', app_src)
+    assert m, "No se encontró _LAST_KNOWN_PFIX en app.py."
+    marker = m.group(1)
+    fecha = re.search(r"(\d{4}-\d{2}-\d{2})", marker)
+    assert fecha, f"Marker sin fecha ISO al final (formato `Pn-X · YYYY-MM-DD`): {marker!r}"
+    marker_date = datetime.strptime(fecha.group(1), "%Y-%m-%d").date()
+    floor = date(2026, 8, 4)  # cierre de P3-AGG-NUM-DAYS-PROPAGATE
+    assert marker_date >= floor, (
+        f"_LAST_KNOWN_PFIX={marker!r} (fecha={marker_date}) anterior al floor {floor} "
+        f"de cierre de P3-AGG-NUM-DAYS-PROPAGATE."
+    )

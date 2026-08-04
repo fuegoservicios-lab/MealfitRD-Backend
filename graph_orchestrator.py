@@ -32011,10 +32011,36 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *
                 # es el que medía 150 g → 650 g sobre un día ya comido; corre dentro del freeze.
                 apply_update_macro_engine(plan_data, surface="budget_convergence_t2", db=_db2,
                                           form_data=form_data or {})
-                if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
-                    recompute_micronutrient_report_for_plan(plan_data, form_data or {}, db=_db2)
             except Exception as _tu2_e:
                 logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] truth-up/re-banda no-op: {_tu2_e}")
+        # [P3-MICRO-PANEL-POST-RESTORE · 2026-08-04] (higiene, re-review de P2-T2-PAST-DAYS-FROZEN)
+        # Este recompute vivía DENTRO del `with _hist_guard:` de arriba, ANTES del restore — medía
+        # el panel sobre el estado INTERMEDIO que `apply_update_macro_engine` acaba de escribir
+        # (ese motor no tiene ventana de fechas, así que también reescribe los días pasados que el
+        # `with` va a devolver a su sitio al salir). El propio contrato documentado en
+        # `restore_past_days` nombra EXPLÍCITAMENTE "panel de micros" entre las métricas derivadas
+        # que deben quedar DETRÁS del restore — este call lo violaba.
+        #
+        # Hoy el síntoma quedaba tapado por un guard AJENO en
+        # `db_plans._finalize_plan_data_for_insert` (línea ~1342): `if _clin_ctx or not
+        # _pd.get("micronutrient_report"): _rmr(_pd, _clin_ctx)`, que corre DESPUÉS de su propio
+        # restore (dentro de `_apqfc_t2` más abajo) y sobre-escribe el panel incorrecto con uno
+        # correcto — pero SOLO si `_clin_ctx` resuelve truthy (`form_data` no vacío o perfil
+        # resoluble por `user_id`). El seam T2 NO pasa `user_id` a `_apqfc_t2` a propósito (ver
+        # comentario de abajo), así que si `form_data` llegara vacío, `_clin_ctx` caería a `{}` y
+        # el guard de db_plans NO recomputaría — el panel INTERMEDIO mal medido quedaría
+        # persistido sin que nadie lo corrija. Depender de un guard ajeno para que un bug local no
+        # se note es la misma fragilidad que el contrato de `restore_past_days` existe para evitar.
+        #
+        # Fix: mover el recompute AQUÍ, fuera del `with` — mide el estado FINAL (ya restaurado)
+        # como segunda capa de seguridad independiente de lo que haga la superficie downstream. El
+        # recompute de db_plans sigue corriendo después (idempotente sobre el mismo estado ya
+        # correcto): no hay doble-conteo de comportamiento, solo doble seguridad.
+        if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
+            try:
+                recompute_micronutrient_report_for_plan(plan_data, form_data or {})
+            except Exception as _rmr2_e:
+                logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] recompute micro post-restore no-op: {_rmr2_e}")
         try:
             from db import apply_plan_quality_finalize_chain as _apqfc_t2
             # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] el `form_data` que el motor de macros ya recibe
