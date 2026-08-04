@@ -2038,10 +2038,14 @@ def _protein_yield_on_canonical_enabled() -> bool:
     Medición contra los 23 planes vivos (SELECT-only, 2026-08-03, ver
     `scripts/measure_cooked_protein_lines.py`): 12/5.899 líneas de `ingredients_raw`
     (0,203%) matchean la regla #2, pero **5/23 planes (~22%) tienen al menos una** —
-    ejemplos reales: «205 g de pollo cocido y desmenuzado», «160 g de pescado cocido»,
-    «45 g de costilla de cerdo cocida y desmenuzada», «100 g de cerdo magro cocido y
-    desmenuzado». Cada match es ~26% de under-buy de proteína en ese alimento (1 lb
-    cocida declarada ⇒ solo 0,74 lb cruda comprada).
+    ejemplos reales (las 4 líneas MEDIDAS en la tabla de `test_p3_protein_yield_decision.py`,
+    ninguna inventada): «160 g de pescado cocido», «100 g de cerdo magro cocido y
+    desmenuzado», «45 g de costilla de cerdo cocida y desmenuzada», «40 g de pechuga de pollo
+    cocido». [M-1 · review final] Aparte —EXCLUIDA del yield, control negativo con Δ=0, NO
+    una de las 4 medidas—: «205 g de pollo cocido y desmenuzado (del almuerzo o preparado
+    extra)», con el paréntesis COMPLETO: es justo lo que dispara `_PROTEIN_REUSE_PAREN_RE`.
+    Cada match no-reuso es ~26% de under-buy de proteína en ese alimento (1 lb cocida
+    declarada ⇒ solo 0,74 lb cruda comprada).
 
     [P3-PROTEIN-YIELD-DECISION · 2026-08-04] Decisión delegada: **FLIP a `True`**. De las
     12 líneas, 1 es de REUSO (ya excluida por `_PROTEIN_REUSE_PAREN_RE`) → 11 realmente

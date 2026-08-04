@@ -623,6 +623,27 @@ def test_el_dia_de_hoy_cuenta_como_futuro(offline):
     assert offline.frozen_past_day_indices(plan, plan["days"]) == [0, 1, 2]
 
 
+def test_i1_vista_mixta_solo_congela_el_dia_con_date_propia(offline):
+    """[I-1 · review final] Reproducción exacta del hallazgo: el gate anterior solo preguntaba
+    "¿hay AL MENOS una `date` estampada en TODOS los días?" en vez de "¿esta `date` es de ESTE
+    día?" — con el día 0 estampado (fecha pasada) y los días 1-2 SIN `date` propia,
+    `_budget_future_days_window` los extrapolaba por índice sobre el ancla del día 0 y el
+    complemento los metía en el freeze. El docstring del oráculo prohíbe el tier
+    `grocery_start_date + índice` para CONGELAR — solo el día con `date` propia debe congelarse."""
+    hoy = _hoy_rd()
+    dia0 = _dia(1, (hoy - timedelta(days=3)).isoformat())
+    dia1 = _dia(2, None)
+    dia2 = _dia(3, None)
+    plan = {
+        "days": [dia0, dia1, dia2],
+        "grocery_start_date": (hoy - timedelta(days=3)).isoformat(),
+    }
+    assert offline.frozen_past_day_indices(plan, plan["days"]) == [0], (
+        "el oráculo congeló un día SIN `date` propia por extrapolación de índice — exactamente "
+        "el tier que su propio docstring dice rechazar"
+    )
+
+
 def test_vista_parcial_sin_fechas_no_se_congela(offline):
     """Guard P0-CHUNK-CHAIN-SCOPED: la vista del merge T1 lleva el `grocery_start_date` del plan
     completo y solo los días nuevos. Fecharlos por índice los pondría en el pasado."""

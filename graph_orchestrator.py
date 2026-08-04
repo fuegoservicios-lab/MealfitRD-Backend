@@ -31646,13 +31646,24 @@ def frozen_past_day_indices(plan_data: dict, days: list, today=None) -> list:
     pregunta drifean, y ese ya está anclado por sus propios tests. El complemento de su ventana
     (lo que la convergencia NO puede tocar) es exactamente lo que el resto del seam no puede tocar.
 
-    Fail-open en dos capas, ambas en la dirección "no congeles":
-      1. Sin NINGUNA `date` ESTAMPADA en los días → `[]`. Deliberadamente NO se acepta el tier
-         `grocery_start_date + índice` que la ventana de la convergencia sí usa: cualquier VISTA
-         PARCIAL del plan (el merge T1 del chunk worker arma una, `P0-CHUNK-CHAIN-SCOPED`) lleva
-         el `grocery_start_date` del plan COMPLETO y solo un tramo de días; fecharlos por índice
-         los pondría en los días 1..k y congelaría un tramo recién generado.
-      2. Cualquier excepción → `[]` (comportamiento previo, plan entero procesable).
+    Fail-open en tres capas, todas en la dirección "no congeles":
+      1. Sin NINGUNA `date` ESTAMPADA en los días → `[]` (bail-out rápido, ni se deriva ventana).
+      2. [I-1 · review final de audit-v7-p3] Cada índice candidato (el complemento de la ventana
+         que devuelve `_budget_future_days_window`) se DESCARTA si SU PROPIO día no lleva `date`
+         estampada. Esto es lo que hace estructuralmente INALCANZABLE el tier
+         `grocery_start_date + índice` para CONGELAR — aunque `_budget_future_days_window` sí lo
+         use para decidir SUSTITUIR (esa es una decisión distinta, "no toques lo ya vivido", con
+         fail-open hacia sustituir de más). Un día sin `date` propia solo puede volverse
+         "candidato a frozen" por EXTRAPOLACIÓN sobre el ancla de OTRO día, y esa extrapolación es
+         precisamente lo que una VISTA PARCIAL (el merge T1 del chunk worker arma una,
+         `P0-CHUNK-CHAIN-SCOPED`) no puede garantizar: lleva el `grocery_start_date` del plan
+         COMPLETO y solo un tramo de días, fecharlos por índice los pondría en los días 1..k y
+         congelaría un tramo recién generado. Sin este segundo filtro, un plan con SOLO el día 0
+         con `date` pasada arrastraba los días 1..k (sin `date` propia) al freeze por la
+         extrapolación de `_budget_future_days_window` — la vista MIXTA reproducida en el review
+         final (día 0 con `date` pasada + días 1-2 sin `date`) congelaba `[0, 1, 2]` en vez de
+         `[0]`, contradiciendo el punto 1 de este mismo docstring.
+      3. Cualquier excepción → `[]` (comportamiento previo, plan entero procesable).
     El día de HOY cuenta como FUTURO: todavía se puede cocinar.
 
     ⚠️ Asimetría de parseo heredada de `_budget_future_days_window`: la `date` del día se lee con
@@ -31684,6 +31695,12 @@ def frozen_past_day_indices(plan_data: dict, days: list, today=None) -> list:
                 j += 1
             else:
                 out.append(i)
+        # [I-1 · review final de audit-v7-p3] El complemento de la ventana puede contener
+        # índices cuyo día llegó ahí por EXTRAPOLACIÓN (índice sobre el ancla de OTRO día
+        # dentro de `_budget_future_days_window`), no por su propia `date`. El contrato de
+        # este oráculo (punto 2 del docstring) es no congelar NUNCA por índice — descarta
+        # cualquier candidato cuyo propio dict no lleve `date` estampada.
+        out = [i for i in out if isinstance(days[i], dict) and days[i].get("date")]
         return out
     except Exception as _fpd_e:
         logger.warning(f"[P2-T2-PAST-DAYS-FROZEN] oráculo no-op (plan completo procesable): "
@@ -32038,7 +32055,16 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *
         # correcto): no hay doble-conteo de comportamiento, solo doble seguridad.
         if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
             try:
-                recompute_micronutrient_report_for_plan(plan_data, form_data or {})
+                # [M-2 · review final de audit-v7-p3] `db=` reusa el `IngredientNutritionDB` ya
+                # creado (e indexado) unas líneas arriba para el truth-up — sin el kwarg,
+                # `recompute_micronutrient_report_for_plan` reconstruye Y reindexa una instancia
+                # NUEVA por cada corrida de este seam. `locals().get("_db2")` y no la variable
+                # pelada: `_db2` nace dentro de un `try` (arriba) que puede fallar ANTES de
+                # asignarla (import/constructor); si eso pasa, `locals().get` devuelve `None`
+                # fail-safe en vez de un `NameError`, y `recompute_micronutrient_report_for_plan`
+                # cae a su propio fallback (crea su instancia), igual que antes de este fix.
+                recompute_micronutrient_report_for_plan(plan_data, form_data or {},
+                                                        db=locals().get("_db2"))
             except Exception as _rmr2_e:
                 logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] recompute micro post-restore no-op: {_rmr2_e}")
         try:

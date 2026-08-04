@@ -79,18 +79,41 @@ def test_los_knobs_del_seeder_no_leen_environ_en_crudo():
 # --------------------------------------------------------------- F16 · word-boundary en la nevera
 
 def _tasa_salami_del_dia_degradado(pantry, semillas=range(120)):
-    """Fracción de semillas en las que el día degradado incluye salami. MEDICIÓN."""
+    """Fracción de semillas en las que el día degradado incluye salami. MEDICIÓN.
+
+    [M-3 · review final] `random.seed(s)` siembra el RNG GLOBAL. Sin guardarlo/restaurarlo,
+    este helper dejaría el proceso con una semilla fija después de correr — exactamente la
+    MISMA clase de fuga que el docstring de `test_la_sal_de_la_nevera_no_hace_preferir_salami`
+    diagnostica para el caso INVERSO (heredar el estado de un test ANTERIOR). getstate/setstate
+    en try/finally aísla el efecto a esta función."""
     import cron_tasks
     hits, vistos = 0, 0
-    for s in semillas:
-        random.seed(s)
-        dia = cron_tasks._build_filtered_edge_recipe_day([], [], "", pantry_items=pantry)
-        if dia is None:
-            continue
-        vistos += 1
-        hits += "salami" in " ".join(
-            i for m in dia["meals"] for i in m["ingredients"]).lower()
+    _rng_state = random.getstate()
+    try:
+        for s in semillas:
+            random.seed(s)
+            dia = cron_tasks._build_filtered_edge_recipe_day([], [], "", pantry_items=pantry)
+            if dia is None:
+                continue
+            vistos += 1
+            hits += "salami" in " ".join(
+                i for m in dia["meals"] for i in m["ingredients"]).lower()
+    finally:
+        random.setstate(_rng_state)
     return (hits / vistos) if vistos else None
+
+
+def test_medir_salami_no_deja_efecto_lateral_en_el_rng_global():
+    """[M-3 · review final] El helper de medición sembraba el RNG global sin restaurarlo: un
+    test que corriera DESPUÉS en el mismo proceso heredaría una semilla fija — la misma clase
+    de fuga que este mismo archivo diagnostica (para el caso inverso) en el docstring de
+    `test_la_sal_de_la_nevera_no_hace_preferir_salami`."""
+    estado_antes = random.getstate()
+    _tasa_salami_del_dia_degradado(["arroz"], semillas=range(5))
+    assert random.getstate() == estado_antes, (
+        "_tasa_salami_del_dia_degradado dejó el RNG global en un estado distinto al que tenía "
+        "antes de correr — efecto lateral sobre tests que se ejecuten después en el mismo proceso"
+    )
 
 
 def test_la_sal_de_la_nevera_no_hace_preferir_salami():

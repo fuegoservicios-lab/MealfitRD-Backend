@@ -11,7 +11,10 @@ constante de módulo), para que un rollback de un knob tome efecto sin reiniciar
 100% OFFLINE: no golpea red ni DB (las funciones de presupuesto son cálculo puro).
 """
 import inspect
+import logging
 import re
+
+import pytest
 
 import nutrition_calculator as nc
 from knobs import get_knobs_registry_snapshot
@@ -129,3 +132,46 @@ def test_override_sigue_funcionando_sin_reiniciar_proceso(monkeypatch):
     assert nc._budget_usd_to_dop() == 75.0
     monkeypatch.delenv("MEALFIT_BUDGET_USD_TO_DOP", raising=False)
     assert nc._budget_usd_to_dop() == 60.0
+
+
+# ---- [I-2 · review final] fuera-de-rango cae al DEFAULT completo, NO al borde clampeado -------
+
+@pytest.mark.parametrize("env_name, fuera_de_rango, reader, default_esperado", [
+    # KCAL_REF: validator `v >= 800.0`. 500 está fuera; el clamp viejo daba 800, el helper da 2000.
+    ("MEALFIT_BUDGET_FLOOR_KCAL_REF", "500", nc._budget_floor_kcal_ref, 2000.0),
+    # USD_TO_DOP: validator `v >= 1.0`. 0.5 está fuera.
+    ("MEALFIT_BUDGET_USD_TO_DOP", "0.5", nc._budget_usd_to_dop, 60.0),
+    # TOLERANCE_PCT: validator `0.0 <= v <= 0.5`. 0.9 está fuera.
+    ("MEALFIT_BUDGET_FLOOR_TOLERANCE_PCT", "0.9", nc._budget_floor_tolerance_pct, 0.05),
+])
+def test_override_fuera_de_rango_cae_al_default_no_al_borde(
+        monkeypatch, caplog, env_name, fuera_de_rango, reader, default_esperado):
+    """[I-2 · review final] `_env_float(..., validator=...)` (knobs.py) NO clampa al borde del
+    rango permitido cuando el validator rechaza el valor: loguea WARNING y cae al DEFAULT
+    COMPLETO. Antes de la migración a knobs.py, el código recortaba (`max`/`min`) — un comentario
+    decía "el rango pasa a validator=" como si fuera equivalente, y no lo es: KCAL_REF=500 (bajo
+    el piso 800 del validator) daba 800 con el clamp viejo, da 2000 (el default) con el helper
+    nuevo — un piso 2,5× MÁS ALTO que el que el operador buscaba BAJAR."""
+    monkeypatch.setenv(env_name, fuera_de_rango)
+    with caplog.at_level(logging.WARNING):
+        resultado = reader()
+    assert resultado == default_esperado, (
+        f"{env_name}={fuera_de_rango!r} fuera de rango debe caer al DEFAULT completo "
+        f"({default_esperado}), no clamparse al borde del validator"
+    )
+    assert any("fuera de rango" in rec.message for rec in caplog.records), (
+        f"{env_name} fuera de rango debe loguear WARNING (patrón `knobs.py:_env_float`)"
+    )
+
+
+def test_override_bool_si_en_espanol_no_es_verdadero(monkeypatch, caplog):
+    """[I-2 · review final] Colateral documentado en el mismo comentario del bloque: el parser
+    laxo anterior aceptaba `si` (español) como verdadero; `_env_bool` (knobs.py) acepta
+    LITERALMENTE solo `1/true/yes/on` — `si`/`sí` no están en esa lista y caen a `False`. No es
+    un bug de `_env_bool` (mismo helper que usa todo el repo) sino una operación .env que debe
+    escribirse en el vocabulario que el helper entiende."""
+    monkeypatch.setenv("MEALFIT_BUDGET_FLOOR_ENABLED", "si")
+    assert nc._budget_floor_enabled() is False, (
+        "'si' (español) no está en la lista aceptada por _env_bool (1/true/yes/on) y debe caer "
+        "a False, no a True"
+    )

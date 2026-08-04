@@ -1740,6 +1740,25 @@ def get_nutrition_targets(form_data: dict) -> dict:
 # (precedente en este MISMO archivo: P2-SOLVER-KNOBS-REGISTRY, línea ~285, para
 # `MEALFIT_PROTEIN_CEILING_G_PER_KG`). Migrados a `_env_float`/`_env_bool` con el MISMO default;
 # donde el código ya recortaba a un rango (`max`/`min`), el rango pasa a `validator=` del helper.
+#
+# [I-2 · review final de audit-v7-p3 · 2026-08-04] ⚠️ Recortar y validar NO SON LO MISMO, y la
+# frase de arriba ("el rango pasa a validator=") lo hacía sonar equivalente. `_env_float(...,
+# validator=...)` (`knobs.py`) NO clampa al borde cuando el valor cae fuera de rango: loguea
+# WARNING y cae al DEFAULT COMPLETO (`knobs.py:_env_float`, rama `if not ok: ... return
+# default`). Un override que ANTES se recortaba al borde ahora se IGNORA entero. Ejemplo medido:
+# `MEALFIT_BUDGET_FLOOR_KCAL_REF=500` (el validator exige `v >= 800.0`) daba `800` con el clamp
+# viejo y da `2000` (el default) con el helper nuevo — un piso **2,5× MÁS ALTO** que el que el
+# operador buscaba BAJAR. Mismo patrón en cualquier otro knob `MEALFIT_BUDGET_*` con
+# `validator=` de este bloque: fuera de rango ⇒ WARNING + default, nunca el borde.
+#
+# Colateral en `_env_bool` (sin `validator=`, pero el mismo cambio de parser subyace):
+# `MEALFIT_BUDGET_FLOOR_ENABLED=si` daba `True` con el parser laxo anterior y da `False` con
+# `_env_bool` — el helper de `knobs.py` acepta LITERALMENTE solo `1/true/yes/on`
+# (case-insensitive) como verdadero; cualquier otro valor no vacío —incluido "sí"/"si", que es
+# como un operador es-DO escribiría "verdadero" en español— cae a falso. NO se cambia el
+# helper (es el patrón SSOT del resto del repo, `knobs.py:_env_bool`): si un operador necesita
+# encender/apagar este knob por `.env`, debe usar `true`/`false` (o `1`/`0`), no `si`/`no`.
+#
 # Diferencia deliberada con el precedente: la lectura sigue siendo POR-LLAMADA (no constante de
 # módulo) — un override toma efecto en la SIGUIENTE invocación, sin reiniciar el proceso (varias
 # de estas funciones se llaman una vez por generación de plan, no una vez por arranque).

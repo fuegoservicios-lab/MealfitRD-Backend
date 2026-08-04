@@ -188,8 +188,15 @@ class TestMedicionReplicadaConDefault:
 # 4. La decisión (números) queda documentada en el comentario del knob
 # ---------------------------------------------------------------------------
 def test_comentario_del_knob_documenta_la_medicion():
+    """[M-1 · review final de audit-v7-p3] Delimitar por conteo fijo de chars (2400) es la
+    misma clase de fragilidad que el repo ya documentó y corrigió en otros parser-tests
+    (`test_p3_oregano_display_name` pasó de 700 chars a un delimitador estructural): una
+    corrección legítima del docstring (alinear los "ejemplos reales" con la tabla medida, ver
+    M-1) alargó el bloque y empujó "RD$136" fuera de una ventana arbitraria. Delimita por el
+    siguiente `def` de columna 0 — el fin REAL de la función — en vez de un número mágico."""
     i = _SRC.index("def _protein_yield_on_canonical_enabled")
-    doc = _SRC[i:i + 2400]
+    j = _SRC.index("\ndef ", i + 10)
+    doc = _SRC[i:j]
     for pieza in ("P3-PROTEIN-YIELD-DECISION", "RD$136", "RD$247", "FLIP", "True"):
         assert pieza in doc, (
             f"el docstring de `_protein_yield_on_canonical_enabled` debe citar {pieza!r} "
