@@ -2048,8 +2048,8 @@ def _protein_yield_on_canonical_enabled() -> bool:
     afectadas. Medido OFFLINE ejecutando `get_shopping_list_delta` (misma convención
     `num_days=1` → `base_duration_scale=7` que ancla `test_p2_protein_yield_canonical.py`)
     sobre las 4 líneas no-reuso de las que tenemos texto exacto + precios RD$/lb del
-    catálogo VERSIONADO (`scripts/add_foods_batch1_2026_06_26.py`: Muslo de pollo 68,
-    Costilla de cerdo 189; `scripts/add_foods_batch2_2026_06_26.py`/
+    catálogo VERSIONADO (`scripts/add_foods_batch1_2026_06_26.py`: Muslo de pollo 68;
+    `scripts/add_foods_batch2_2026_06_26.py`: Costilla de cerdo 189;
     `seed_supermarket_2026_07_02.py`: Cerdo genérico 115, Filete pechuga de pollo 135;
     rango real RD$68–290/lb según corte):
 
@@ -2060,11 +2060,12 @@ def _protein_yield_on_canonical_enabled() -> bool:
         (control: la línea de REUSO medida da Δ=0 con el sello intacto)
 
     Promedio ≈ RD$61.85/línea × 2.2 líneas/plan (11 líneas / 5 planes afectados) ⇒ delta
-    semanal PROMEDIO por plan afectado ≈ **RD$136**; peor caso observado (las 4 proteínas
-    distintas en un mismo plan) ≈ **RD$247**. Ambos números son una fracción menor (<10%)
-    del costo semanal típico de una lista (RD$3.000–6.000, CLAUDE.md) — bajo el umbral
-    ~RD$200 de la decisión delegada (el peor caso lo roza pero sigue siendo ruido frente
-    al presupuesto semanal). El sello `protein_yield_applied` ya blinda al guard de
+    semanal PROMEDIO por plan afectado ≈ **RD$136**; peor caso CONSTRUIDO (cota superior:
+    las 4 proteínas sumadas, ninguna de las 5 planes medidos tuvo de hecho las 4 a la
+    vez) ≈ **RD$247**. Ambos números son una fracción menor (<10%) del costo semanal
+    típico de una lista (RD$3.000–6.000, CLAUDE.md) — bajo el umbral ~RD$200 de la
+    decisión delegada (la cota superior lo roza pero sigue siendo ruido frente al
+    presupuesto semanal). El sello `protein_yield_applied` ya blinda al guard de
     coherencia en cualquier dirección del A/B (`TestGuardSealNotLiveKnob`), así que
     encender no reintroduce el bug que ese sello cerró.
 

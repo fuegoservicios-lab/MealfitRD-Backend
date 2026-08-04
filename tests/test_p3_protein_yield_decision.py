@@ -25,26 +25,31 @@ que tenemos texto exacto (4 no-reuso + la de reuso, como control negativo):
     | «205 g ... (del almuerzo o preparado extra)»        | Pollo (REUSO)     | 0.00      | —                             | 0.0 (control) |
 
 Precios RD$/lb: catálogo VERSIONADO del repo (grep `price_per_lb` en `scripts/`) —
-`scripts/add_foods_batch1_2026_06_26.py` (Muslo de pollo 68, Costilla de cerdo 189),
-`scripts/add_foods_batch2_2026_06_26.py`/`seed_supermarket_2026_07_02.py` (Cerdo genérico
-115, Filete pechuga de pollo 135, Tilapia 130, Mero 290; "Filete de pescado blanco" 127.5
-citado en `graph_orchestrator.py` L32061). Rango real medido: **RD$68–290/lb** según
-corte/proteína.
+`scripts/add_foods_batch1_2026_06_26.py` (Muslo de pollo 68, Tilapia 130, Mero 290),
+`scripts/add_foods_batch2_2026_06_26.py` (Costilla de cerdo 189),
+`seed_supermarket_2026_07_02.py` (Cerdo genérico 115, Filete pechuga de pollo 135;
+"Filete de pescado blanco" Paquete 32 Oz RD$255 → RD$127.5/lb, línea 145 del mismo
+archivo — misma derivación citada en el comentario `P1-BUDGET-PREMIUM-SHELLFISH` dentro
+de `_BUDGET_DRIVER_FAMILIES`, graph_orchestrator.py; se cita por símbolo/marker y no por
+número de línea porque el archivo se sigue editando y la línea drifea). Rango real
+medido: **RD$68–290/lb** según corte/proteína.
 
 Promedio por línea no-reuso: (110.2+62.1+45.9+29.2)/4 ≈ **RD$61.85/línea**. Con 11 líneas
 no-reuso repartidas en 5 planes afectados (2.2 líneas/plan promedio) ⇒ delta semanal
-**PROMEDIO por plan afectado ≈ RD$136**. Peor caso observado (las 4 proteínas DISTINTAS
-coincidiendo en un mismo plan) ≈ **RD$247**. Ambos números son una fracción menor (<10%)
-del costo semanal típico de una lista (RD$3.000–6.000, CLAUDE.md) — incluso el peor caso
-roza pero no cruza de forma significativa el umbral ~RD$200 de la decisión delegada, y
-sigue siendo ruido frente al presupuesto semanal real.
+**PROMEDIO por plan afectado ≈ RD$136**. Peor caso CONSTRUIDO (cota superior: las 4
+proteínas DISTINTAS sumadas — ningún plan de los 5 medidos tuvo de hecho las 4 a la vez,
+el promedio real es 2.2 líneas/plan) ≈ **RD$247**. Ambos números son una fracción menor
+(<10%) del costo semanal típico de una lista (RD$3.000–6.000, CLAUDE.md) — incluso la
+cota superior roza pero no cruza de forma significativa el umbral ~RD$200 de la decisión
+delegada, y sigue siendo ruido frente al presupuesto semanal real.
 
 ## Decisión
 
 **FLIP a `True`.** El mecanismo cierra un under-buy real (~26% menos proteína cruda de la
-necesaria por línea matcheada) a un costo marginal (RD$136 promedio / RD$247 peor caso, por
-semana, solo en el ~22% de planes que matchean) — y el sello `protein_yield_applied`
-(`_protein_yield_seal_applied`, ronda 1 de Task 14) ya blinda al guard de coherencia contra
+necesaria por línea matcheada) a un costo marginal (RD$136 promedio / RD$247 cota
+superior construida, por semana, solo en el ~22% de planes que matchean) — y el sello
+`protein_yield_applied` (`_protein_yield_seal_applied`, ronda 1 de Task 14) ya blinda al
+guard de coherencia contra
 divergencias fantasma en cualquier dirección del A/B (verificado por
 `TestGuardSealNotLiveKnob` en `test_p2_protein_yield_canonical.py`). El knob se mantiene
 como rollback: `MEALFIT_PROTEIN_YIELD_ON_CANONICAL=false` sin redeploy.
