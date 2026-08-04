@@ -4651,6 +4651,10 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
             # resolver" — la acción del usuario lo resuelve. Sin él, el coach
             # declaraba ATRASADO un día que solo espera consentimiento de nevera
             # y prometía un reintento automático que no existe.
+            # ⚠️ [Ronda 5 · N-4 · DECISIÓN DIFERIDA] Sin término temporal: una pausa
+            # encallada silencia el ATRASADO indefinidamente (el coach dirá
+            # PENDIENTE para siempre). Umbral pendiente de producto — ver el
+            # comentario de N-4 en `routers/plans.py::api_chunk_status`.
             cnt = execute_sql_query(
                 "SELECT count(*)::int AS c FROM plan_chunk_queue "
                 "WHERE meal_plan_id = %s AND status IN "

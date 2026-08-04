@@ -183,9 +183,12 @@ def upcoming_days_signal_enabled() -> bool:
     Antes solo gateaba el payload del endpoint: el cron horario y el `COUNT`
     por turno del coach seguían vivos sin palanca. El cron es justo la pieza
     que hubo que corregir de urgencia (19 de 23 planes alertando), o sea la
-    que MÁS necesita rollback sin redeploy. Se lee por-llamada (no constante
-    de import-time) para que flipear la env var no requiera reiniciar el
-    worker."""
+    que MÁS necesita rollback **sin redeploy**. Se lee por-llamada (no
+    constante de import-time), pero eso NO significa "sin reiniciar": el `.env`
+    se carga en el import del proceso, así que en el VPS cambiar la variable
+    sigue exigiendo `systemctl restart`. Lo que la lectura por-llamada compra
+    es que no haya que empaquetar y desplegar código — y que los tests puedan
+    flipearlo con `monkeypatch.setenv`."""
     from knobs import _env_bool
     return _env_bool("MEALFIT_UPCOMING_DAYS_UI", True)
 
@@ -209,9 +212,17 @@ def plan_cycle_window(plan_data):
 
     **B3 — la caducidad.** El conteo no tiene término de vencimiento: un plan
     abandonado sigue "debiendo días" para siempre, así que declaraba ATRASADO
-    también a +30 días, cuando `api_shift_plan` ya no puede encolar nada (no
-    existe camino de resolución y la alerta del cron quedaba abierta sin
-    remedio). Medido contra `76a6836d` en producción.
+    también a +30 días sobre un ciclo que ya terminó, y la alerta del cron
+    quedaba abierta sin nada que la cerrara. Medido contra `76a6836d` en
+    producción. [Ronda 5 · N-6] Precisión sobre el porqué: la afirmación fuerte
+    "`api_shift_plan` ya no puede encolar nada" NO es lo que sostiene el código
+    — ese endpoint calcula `days_remaining_in_plan` desde `grocery_start_date`,
+    que él mismo reescribe a hoy en cada shift, así que para un plan que se
+    shiftea a diario el refill nunca "expira". Lo que sí se sostiene es la
+    conclusión operativa: la caducidad solo actúa sobre planes que NO se están
+    shifteando (uno que sí lo hace archiva los días vividos y deja `days=[]`,
+    y el predicado sale antes por el guard de `days` vacío), que es justo donde
+    "el ciclo terminó" es la lectura correcta.
 
     **Por qué el ancla es un campo NUEVO y no uno de los que ya existen.**
     Medido contra los 24 planes de producción (2026-08-04,
@@ -444,7 +455,9 @@ def build_pending_plan_days_lines(plan_data: dict, today: date, in_flight_count:
         days = [d for d in (plan_data.get("days") or []) if isinstance(d, dict)]
         if not days:
             return []
-        archived = [d for d in (plan_data.get("_archived_days") or []) if isinstance(d, dict)]
+        # [Ronda 5 · N-7] `archived` ya no se lee aquí: el conteo de entregados
+        # vive en `plan_cycle_pending_days`. Dejarlo vivo invitaba a volver a
+        # contar arrays en esta función, que es justo lo que B1 eliminó.
         total = int(plan_data.get("total_days_requested") or 0)
 
         last = None

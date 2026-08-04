@@ -232,7 +232,17 @@ si hoy cae dentro de esa ventana. Dos razones, ambas medidas:
   de resolución en un plan cuyo ciclo terminó. 44 divergencias sobre filas
   reales a +30/+60 días.
 
-El inicio del ciclo sale de `_cycle_started_at`, que **estampa la renovación**.
+El inicio del ciclo sale de `_cycle_started_at`, que estampan **los dos caminos
+de renovación** — `routers/plans.py::api_shift_plan` (rama `P0-1 RENEWAL`) y
+`cron_tasks.py::_background_shift_plan_for_user` (cron diario BG-REFILL, cuya
+población son los usuarios inactivos ≥3 días). Son dos y no uno: el segundo se
+quedó sin la marca en la Ronda 4 y el test que la anclaba parseaba solo el
+primero. Hoy lo vigila un guard blanket sobre **ambos** ficheros
+(`test_b1_TODO_camino_de_renovacion_estampa_el_ancla_del_ciclo`), que caza
+también un tercer camino que aparezca mañana. Se persiste como **fecha local**
+(`today.date().isoformat()`): `today` ya lleva el `tz_offset` restado, así que
+un timestamp haría que el lector se lo restara otra vez y las renovaciones
+entre 00:00 y 04:00 RD anclaran un día antes.
 No sirve ninguno de los campos que ya existían, medido sobre los 24 planes de
 producción (2026-08-04): `grocery_start_date == days[0].date` en **23/23** (es
 la ventana rolling, el shift la reescribe en cada rotación) y

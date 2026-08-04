@@ -6326,8 +6326,8 @@ def _chunk_overdue_alert_job():
     esperando al usuario no es un fallo del sistema y no merece alerta de
     operador); el predicado caduca con el ciclo del plan
     (`chat_history_context.plan_cycle_window`, B3 — antes una alerta sobre un
-    plan vencido no tenía NINGÚN camino de resolución y quedaba abierta para
-    siempre); y el job entero está gateado por `MEALFIT_UPCOMING_DAYS_UI`
+    plan cuyo ciclo ya terminó se quedaba abierta sin nada que la cerrara);
+    y el job entero está gateado por `MEALFIT_UPCOMING_DAYS_UI`
     (B4), que apagado no emite y resuelve lo abierto.
 
     Tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL.
@@ -6385,6 +6385,15 @@ def _chunk_overdue_alert_job():
             # generaba una alerta de operador por algo que no es un fallo.
             # Conjunto deliberadamente distinto del de `upcoming_chunks` en
             # `/chunk-status` — ver el comentario de B2 allí.
+            #
+            # ⚠️ [Ronda 5 · N-4 · DECISIÓN DIFERIDA] Y sin término: una pausa de 3
+            # semanas silencia esta alerta igual que una de 40 minutos. Aquí pesa
+            # más que en el endpoint, porque esto es lo ÚNICO que le avisa al
+            # operador. Acotarlo es añadir `AND (status <> 'pending_user_action' OR
+            # updated_at > NOW() - INTERVAL '<UMBRAL>')` a este COUNT — el dato está
+            # en la tabla (`updated_at`, que es de donde sale el `paused_seconds`
+            # del payload); falta el UMBRAL, que es decisión de producto. Ver el
+            # comentario largo de N-4 en `routers/plans.py::api_chunk_status`.
             cnt = execute_sql_query(
                 "SELECT count(*)::int AS c FROM plan_chunk_queue "
                 "WHERE meal_plan_id = %s AND status IN "
@@ -33753,6 +33762,25 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                                     current_offset += chunk_count
                                 shifted_days = []
                                 shifted_data["grocery_start_date"] = today.isoformat()
+                                # [Ronda 5 · N-1 · 2026-08-04] Ancla del ciclo VIGENTE, gemela
+                                # de la de `api_shift_plan` (rama P0-1 RENEWAL). Este es el
+                                # SEGUNDO camino de renovación y se quedó sin ella: un plan
+                                # renovado por aquí quedaba MUDO en las tres superficies
+                                # (`compute_chunk_overdue` contaba archivados de dos ciclos,
+                                # alcanzaba `total_days_requested` y se apagaba para siempre).
+                                # Medido lado a lado sobre la misma forma: por el camino API
+                                # `(True, '2026-07-04')` con 4 líneas de coach; por aquí
+                                # `(False, None)` y 0 líneas. Y la población de este cron son
+                                # los usuarios inactivos ≥3 días — justo aquellos para quienes
+                                # el atraso pasa desapercibido y el coach es la primera
+                                # superficie que tocan al volver.
+                                #
+                                # [N-5] `.date().isoformat()`: `today` ya lleva `tz_offset`
+                                # restado (su reloj es local), así que persistirlo como
+                                # timestamp haría que `_to_local_date` se lo reste otra vez y
+                                # las renovaciones entre 00:00 y 04:00 RD anclaran un día antes.
+                                # tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-ANCHOR
+                                shifted_data["_cycle_started_at"] = today.date().isoformat()
                                 shifted_data["generation_status"] = "generating_next"
                                 modified = True
                                 logger.info(

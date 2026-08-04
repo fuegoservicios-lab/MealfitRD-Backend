@@ -942,21 +942,86 @@ def test_b1_plan_renovado_el_indice_del_coach_tambien_lo_declara():
     assert "día 4" in lines[0], lines
 
 
-def test_b1_la_renovacion_estampa_el_ancla_del_ciclo():
-    """La rama P0-1 RENEWAL de `api_shift_plan` debe persistir `_cycle_started_at`
-    junto al `grocery_start_date` que ya reescribe. Sin esa marca no existe forma
-    de distinguir el ciclo 2 del ciclo 1: ambos comparten `_archived_days`,
-    `total_days_requested` y una línea temporal de fechas CONTIGUA (la renovación
-    empieza el día siguiente al último archivado), así que el ciclo no es
-    recuperable de `plan_data` por fechas.
-    tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-ANCHOR"""
+_RENOVACION_RE = re.compile(
+    r"""^[ \t]*\w+\[['"]grocery_start_date['"]\][ \t]*=[ \t]*today\b.*$""", re.MULTILINE)
+_ANCLA_ASSIGN_RE = re.compile(r"""^[ \t]*\w+\[['"]_cycle_started_at['"]\][ \t]*=""")
+
+
+def _ficheros_que_renuevan():
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "routers" / "plans.py").read_text(encoding="utf-8")
-    i = src.find("[P0-1 RENEWAL] Plan semanal")
-    assert i != -1, "no se encontró la rama P0-1 RENEWAL"
-    bloque = src[max(0, i - 2500):i]
-    assert "_cycle_started_at" in bloque, (
-        "la renovación no estampa `_cycle_started_at`:\n" + bloque[-900:])
+    raiz = Path(__file__).resolve().parents[1]
+    return {"routers/plans.py": raiz / "routers" / "plans.py",
+            "cron_tasks.py": raiz / "cron_tasks.py"}
+
+
+def test_b1_TODO_camino_de_renovacion_estampa_el_ancla_del_ciclo():
+    """[Ronda 5 · N-1+N-5] BLANKET sobre los DOS caminos de renovación.
+
+    Hay dos sitios que hacen la misma transformación (mismo `plan_id`,
+    `days=[]`, `grocery_start_date=hoy`, `generation_status='generating_next'`,
+    encolado del ciclo 2): `api_shift_plan` (`routers/plans.py`, rama P0-1
+    RENEWAL) y `_background_shift_plan_for_user` (`cron_tasks.py`, el cron
+    diario BG-REFILL). Sin `_cycle_started_at` el ciclo 2 es indistinguible del
+    1: comparten `_archived_days`, `total_days_requested` y una línea temporal
+    de fechas CONTIGUA, así que el ciclo no es recuperable de `plan_data`.
+
+    Por qué este test es BLANKET y no dos asserts: la versión anterior parseaba
+    SOLO `routers/plans.py` y por eso no podía ver que el cron no estampaba nada
+    — el mismo patrón que ya nos mordió con el guard duplicado del coach (una
+    regla en dos ficheros, un guard mirando uno). La firma que se busca es
+    "asignar `grocery_start_date` a **today**", que es exactamente la
+    renovación: un shift normal lo asigna a `new_plan_start_iso`. Un TERCER
+    camino de renovación que aparezca mañana cae aquí solo.
+
+    [N-5] Y exige `.date().isoformat()`: `today` es en ambos ficheros un
+    `datetime` al que YA se le restó `tz_offset` (su reloj es hora local), así
+    que persistirlo con `.isoformat()` deja un timestamp que `_to_local_date`
+    vuelve a bajar 240 min al leerlo — toda renovación entre 00:00 y 04:00 RD
+    anclaría un día antes (ver `test_n5_...` abajo para el mecanismo).
+    tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-ANCHOR"""
+    total = 0
+    for nombre, ruta in _ficheros_que_renuevan().items():
+        src = ruta.read_text(encoding="utf-8")
+        sitios = list(_RENOVACION_RE.finditer(src))
+        assert sitios, (
+            f"{nombre}: no se encontró ningún sitio de renovación "
+            f"(`grocery_start_date = today`). ¿Se renombró? Este test dejaría de "
+            f"vigilar el fichero en silencio.")
+        lineas = src.splitlines()
+        for m in sitios:
+            n = src[:m.start()].count("\n")  # índice 0-based de la línea del match
+            # Ventana en LÍNEAS, no en chars: el bloque de comentario que explica
+            # el ancla mide >1400 chars y una ventana por caracteres lo dejaba
+            # fuera (el propio test lo demostró en rojo la primera vez).
+            ventana = lineas[n:n + 40]
+            asignaciones = [ln for ln in ventana
+                            if _ANCLA_ASSIGN_RE.match(ln)]
+            assert asignaciones, (
+                f"{nombre} línea ~{n + 1}: esta renovación NO estampa "
+                f"`_cycle_started_at`. Un plan renovado por este camino queda MUDO en "
+                f"las tres superficies.\n" + "\n".join(ventana[:6]))
+            for ln in asignaciones:
+                assert ".date().isoformat()" in ln, (
+                    f"{nombre}: el ancla debe persistirse como FECHA local "
+                    f"(`today.date().isoformat()`), no como timestamp — `today` ya lleva "
+                    f"el tz_offset restado y `_to_local_date` se lo volvería a restar.\n{ln}")
+            total += 1
+    assert total == 2, f"caminos de renovación encontrados: {total} (esperados 2)"
+
+
+def test_n5_por_que_el_ancla_va_como_fecha_y_no_como_timestamp():
+    """El mecanismo del off-by-one, ejecutado sobre el lector REAL.
+
+    Nota de honestidad: este test pasa también contra el código pre-fix — no
+    verifica el call site (eso lo hace el blanket de arriba), documenta POR QUÉ
+    el blanket exige `.date()`. `today` en ambos caminos de renovación es
+    `datetime.now(utc) - tz_offset`: un instante cuyo reloj ya es hora local."""
+    from datetime import datetime, timezone
+    hoy_local_0130 = datetime(2026, 7, 1, 1, 30, tzinfo=timezone.utc)  # 01:30 RD
+    # Persistido como timestamp: `_to_local_date` le resta 240 min OTRA vez.
+    assert chc._to_local_date(hoy_local_0130.isoformat()) == date(2026, 6, 30)
+    # Persistido como fecha (10 chars): se devuelve tal cual.
+    assert chc._to_local_date(hoy_local_0130.date().isoformat()) == date(2026, 7, 1)
 
 
 def test_b1_sin_ancla_un_plan_legacy_degrada_a_la_primera_fecha_entregada():

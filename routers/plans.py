@@ -254,8 +254,10 @@ SLOT_FATS_FLOOR_MIN_KCAL = _env_int(
 
 # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Días futuros visibles en `/chunk-status`
 # (upcoming_chunks + overdue/overdue_since). NO es constante de import-time a
-# propósito: se re-evalúa por-request para permitir rollback vía env var sin
-# reiniciar el worker Y para que tests puedan flip-earlo con monkeypatch.setenv.
+# propósito: se re-evalúa por-request para permitir rollback vía env var **sin
+# redeploy** Y para que tests puedan flip-earlo con monkeypatch.setenv. [Ronda 5
+# · N-6] "sin redeploy" no es "sin reiniciar": el `.env` se carga en el import
+# del proceso, así que en el VPS el cambio sigue necesitando `systemctl restart`.
 #
 # [Ronda 4 · B4] Delega en el helper SSOT en vez de releer la env var: el knob
 # gatea ahora TRES superficies (este payload, el cron horario y el índice del
@@ -2723,8 +2725,17 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                         # igual a `days[0].date`, o sea sigue a la ventana rolling
                                         # (este mismo shift la reescribe en cada rotación).
                                         # Consumido por `chat_history_context.plan_cycle_window`.
+                                        #
+                                        # [Ronda 5 · N-5] `.date().isoformat()`, NO `.isoformat()`:
+                                        # `today` aquí es un datetime al que YA se le restó
+                                        # `tz_offset` (su reloj es hora local), así que persistirlo
+                                        # como timestamp hace que `_to_local_date` le reste los 240
+                                        # min OTRA vez al leerlo — toda renovación entre 00:00 y
+                                        # 04:00 RD anclaría un día antes. Los vecinos de esta misma
+                                        # función (`day_obj['date']`, `_arch_day['date']`) ya
+                                        # estampan `.date().isoformat()` por la misma razón.
                                         # tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-ANCHOR
-                                        shifted_data['_cycle_started_at'] = today.isoformat()
+                                        shifted_data['_cycle_started_at'] = today.date().isoformat()
                                         shifted_data['generation_status'] = 'generating_next'
                                         modified = True
                                         logger.info(f"🔄 [P0-1 RENEWAL] Plan semanal {plan_id} renovado.")
@@ -11330,6 +11341,20 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             # filtros" es correcto para `stale` (FIX 2) y equivocado aquí.
             # Los campos `in_flight_count`/`pending_user_action_count` del payload
             # NO cambian: el frontend los necesita separados.
+            #
+            # ⚠️ [Ronda 5 · N-4 · DECISIÓN DIFERIDA, no un olvido] Esta supresión no
+            # tiene término: un chunk encallado en `pending_user_action` apaga
+            # `overdue` (y con él la alerta del operador) IGUAL a los 40 minutos que
+            # a las 3 semanas. La pausa legítima ("el usuario aún no ha confirmado su
+            # nevera") y la pausa muerta ("lleva 3 semanas y nadie va a volver") son
+            # indistinguibles aquí. El dato para acotarlo YA VIAJA: `paused_seconds`
+            # por chunk en `paused_chunks` (calculado arriba, `EXTRACT(EPOCH FROM
+            # (NOW() - updated_at))`), así que cerrar esto es
+            #     _ov_blockers = in_flight + (pausados con paused_seconds < UMBRAL)
+            # y lo único que falta es el UMBRAL, que es decisión de producto (¿cuánto
+            # tiempo esperamos a un usuario antes de tratar su plan como atrasado?),
+            # no técnica. Caso real medido: plan `51c9b3d3`, reason_code
+            # `learning_zero_logs`, `paused_seconds = 2646`.
             _ov_blockers = (int(counters_row.get("in_flight_count") or 0)
                             + int(counters_row.get("pending_user_action_count") or 0))
             _ov, _ov_since = compute_chunk_overdue(plan_data, _ov_blockers)
