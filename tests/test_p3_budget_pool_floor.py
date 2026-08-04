@@ -92,6 +92,8 @@ def offline(monkeypatch):
     monkeypatch.setattr(sc, "get_master_ingredients", _master_rows, raising=False)
     # El penalty de cobertura de plantillas (P3-SEEDER-TEMPLATE-COVERAGE) también pesa el sorteo
     # y castigaría a Salmón: neutralizado para que lo medido aquí sea SÓLO el piso económico.
+    # [ronda 1 · 2026-08-04] Hoy es REDUNDANTE (ese knob nació apagado) y se queda a propósito: es
+    # lo que impide que encenderlo algún día cambie esta medición en silencio.
     monkeypatch.setenv("MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY", "1.0")
 
     # El tercio barato ENTERO fatigado — el residuo que el audit describe.

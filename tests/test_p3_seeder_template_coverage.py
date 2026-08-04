@@ -18,8 +18,15 @@ Contrato que ancla este archivo:
   1. **El mapa se DERIVA del JSON vivo** (`data/dish_templates.json` vía `dish_library`), no de
      una lista a mano: si mañana entra una plantilla de chivo, la cobertura sube sola y este
      test lo nota (patrón live-anchor de P3-MICRO-CARRIER-LIVE-ANCHOR).
-  2. **Knob** `MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY`: float, default 0.5, clamp [0.1, 1.0],
-     `1.0` = OFF. Registrado en `_KNOBS_REGISTRY` (visible en `/health/version`).
+  2. **Knob** `MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY`: float, **default 1.0 (OFF)**, clamp
+     [0.1, 1.0]. Registrado en `_KNOBS_REGISTRY` (visible en `/health/version`).
+
+     [ronda 1 · 2026-08-04] El default pasó de 0.5 a 1.0: encenderlo compra −1,25 pp sobre la
+     base descubierta y paga +15,5 pp de concentración en 15/49 proteínas, contra la preferencia
+     declarada del dueño por variedad; y el metro tiene dos defectos abiertos (mide sólo
+     `almuerzo` cuando el reparto dice «Almuerzo o Cena» ⇒ 12 falsos positivos medidos; la mitad
+     carbo no tiene consumidor aguas abajo). Los tests de EFECTO de más abajo siguen midiendo el
+     mecanismo con el knob forzado — apagado por default no significa sin probar.
   3. **El multiplicador es exacto y quirúrgico**: sólo toca las bases de cobertura 0, deja el
      resto byte-idéntico. Es un sesgo, no una redistribución.
   4. **Efecto MEDIDO end-to-end** sobre semillas fijas, no afirmado.
@@ -186,15 +193,16 @@ def test_la_biblioteca_no_deja_sin_cobertura_a_las_leguminosas_de_la_GARANTIA():
 # Contrato 2 — knob
 # --------------------------------------------------------------------------------------
 def test_knob_default(monkeypatch):
+    """[ronda 1 · 2026-08-04] NACE APAGADO. Ver el contrato 2 del docstring del módulo."""
     monkeypatch.delenv(KNOB, raising=False)
-    assert ah._low_template_coverage_penalty() == 0.5
+    assert ah._low_template_coverage_penalty() == 1.0
 
 
 @pytest.mark.parametrize("raw,esperado", [
-    ("0.0", 0.5),      # bajo el clamp → default
-    ("0.05", 0.5),     # bajo el clamp → default
-    ("1.5", 0.5),      # sobre el clamp → default
-    ("basura", 0.5),   # no-parseable → default
+    ("0.0", 1.0),      # bajo el clamp → default (= OFF)
+    ("0.05", 1.0),     # bajo el clamp → default (= OFF)
+    ("1.5", 1.0),      # sobre el clamp → default (= OFF)
+    ("basura", 1.0),   # no-parseable → default (= OFF)
     ("1.0", 1.0),      # el OFF explícito
     ("0.1", 0.1),      # el mínimo
     ("0.8", 0.8),
@@ -301,13 +309,17 @@ def test_nunca_excluye_ni_en_el_minimo_del_knob(offline, monkeypatch):
 # Contrato 5 — con el knob en 1.0 el bloque es demostrablemente inerte
 # --------------------------------------------------------------------------------------
 def test_knob_en_uno_equivale_a_no_tener_biblioteca(offline, monkeypatch):
-    """Equivalencia NO circular: se compara `knob=1.0` contra la biblioteca AUSENTE (el otro
-    camino por el que el bloque no aplica). Si coinciden semilla a semilla, el knob en 1.0 es
-    byte-idéntico al comportamiento previo al fix."""
+    """Equivalencia NO circular: se compara el DEFAULT (sin env var) contra la biblioteca AUSENTE
+    (el otro camino por el que el bloque no aplica). Si coinciden semilla a semilla, el fix entra
+    a producción byte-idéntico al comportamiento previo.
+
+    [ronda 1 · 2026-08-04] La rama de referencia BORRA la variable en vez de setearla a "1.0":
+    así el test ancla «nace apagado» y no sólo «1.0 apaga». Si alguien devuelve el default a 0.5,
+    esto falla — que es exactamente lo que debe pasar."""
     import dish_library as dl
 
     offline(_freqs_pareja_fresca())
-    monkeypatch.setenv(KNOB, "1.0")
+    monkeypatch.delenv(KNOB, raising=False)
     con_knob_off = [_prot_picks(_seed_call(s)) for s in range(80)]
 
     monkeypatch.setenv(KNOB, "0.5")

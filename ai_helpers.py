@@ -455,11 +455,40 @@ def _pantry_clinical_main_filter(extracted_p, extracted_f, *, penaliza_procesado
 #
 # El audit lo ajustó a la baja a propósito: las plantillas de clase genérica aplican a todo
 # pool, así que esto es **degradación suave, no bloqueo**. Por eso el cierre es un multiplicador
-# ×0.5 sobre el peso del sorteo —jamás una exclusión— más un WARNING cuando la base viene de la
+# sobre el peso del sorteo —jamás una exclusión— más un WARNING cuando la base viene de la
 # nevera y va a ocupar ≥2 días. tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
+#
+# ═══ [ronda 1 · 2026-08-04] EL MULTIPLICADOR NACE APAGADO (`1.0`). Por qué ═══
+#
+# Medido, no opinado: encenderlo a 0.5 compra **−1,25 pp** sobre la base descubierta (38,50 % →
+# 37,25 % en 400 semillas — la normalización del sorteo se come casi todo el castigo) y paga
+# **+15,5 pp de CONCENTRACIÓN** en las 15/49 proteínas que sí tienen plantilla (41,50 % → 57,00 %
+# sobre la base cubierta). Eso es exactamente lo contrario de la preferencia declarada del dueño
+# (`P1-VARIETY-RENEWAL-NO-CYCLE-LOCK`: variedad de ingredientes sobre reuso). Un fix cuyo efecto
+# medido es 12× mayor en el eje que NO quería mover no se entrega encendido.
+#
+# **La palanca real es AÑADIR PLANTILLAS, no bajar el knob**: chivo/conejo/pulpo/calamar/salmón/
+# tilapia/mero del lado proteico y quinoa/casabe/ñame/yautía del lado carbo. Con la biblioteca
+# cubriendo más bases, el conjunto penalizado se encoge solo y el ×0,5 vuelve a significar lo que
+# dice (aislado a una sola base, la caída end-to-end SÍ es ×0,50 — está medido en el test).
+#
+# DOS PREREQUISITOS DUROS antes de encenderlo (los dos son defectos del METRO, no del sorteo):
+#   (a) **El metro es ciego al slot real.** Mide sólo `almuerzo`, pero el reparto que consume esta
+#       base dice literalmente «El Almuerzo **o Cena** principal DEBE incluir…»
+#       (`prompts/preferences.py:65`). Medido: **12 de las 34 proteínas penalizadas SÍ tienen
+#       plantilla de CENA** — Atún, Huevos, Yogurt y los 9 quesos. Son falsos positivos puros.
+#   (b) **La mitad carbo no tiene mecanismo aguas abajo.** `dish_library.sample_templates_for_slot`
+#       filtra por `slots` y por `protein`, y **jamás lee el campo `base`**: la cobertura de carbos
+#       que este módulo calcula no corresponde a NADA que el day-gen llegue a ver. Penalizar 15/26
+#       carbos por una señal que no tiene consumidor es castigar por una biblioteca imaginaria.
+#
+# El WARNING de nevera NO depende del knob y sigue emitiendo con el multiplicador apagado: es la
+# serie que hace falta para decidir si esto merece encenderse alguna vez.
 
 # Slot PRINCIPAL: el almuerzo es donde aterriza la base proteica/carbo del día (la cena reusa el
 # mismo par, ver P1-CARB-SEEDER-PAIRS). Medir ahí es medir dónde duele la falta de plantilla.
+# [ronda 1] …y es también el prerequisito (a) de arriba: el reparto dice «Almuerzo o Cena», así
+# que este literal deja 12 falsos positivos. NO subir el knob sin arreglar esto primero.
 _TEMPLATE_COVERAGE_MAIN_SLOT = "almuerzo"
 # 'none'/'mixta' aplican a TODO pool y no nombran ningún alimento: no distinguen a nadie, así que
 # no pueden contar como cobertura de nada (si contaran, ninguna base daría 0 y el fix sería inerte).
@@ -469,6 +498,11 @@ _TEMPLATE_CLASS_NAMELESS = ("none", "mixta")
 # 'legumbre' es un nombre de CATEGORÍA, no de alimento, así que se puentea con el SSOT
 # `constants.NUTRITIONAL_CATEGORIES` en vez de escribir una lista de leguminosas a mano (que
 # drifearía contra `LEGUME_NAMES` y contra la GARANTÍA de leguminosa del propio seeder).
+# [ronda 1 · 2026-08-04] Que conste con precisión: el crédito que este puente le da a las
+# leguminosas es una **EXENCIÓN DE POLÍTICA**, no una medición. Las 5 leguminosas de la GARANTÍA
+# NUTRICIONAL se declaran cubiertas porque el seeder las IMPONE como proteína principal, y un
+# penalty que las castigue sería una segunda guarda tirando contra la primera. NO borrar el
+# puente «por coherencia con el resto del metro»: sin él, este fix y la GARANTÍA oscilan.
 _TEMPLATE_CLASS_CATEGORY = {
     "huevo": "huevos y lácteos",
     "queso": "huevos y lácteos",
@@ -550,14 +584,22 @@ def _template_coverage(base: str, field: str = "protein", slot: str = None) -> i
 def _low_template_coverage_penalty() -> float:
     """Multiplicador del sorteo para las bases sin ninguna plantilla propia. `1.0` = OFF.
 
-    Se lee en CADA llamada (no a nivel módulo) para que el rollback no necesite redeploy, igual
+    [ronda 1 · 2026-08-04] **Default `1.0`: NACE APAGADO.** Encenderlo a 0.5 compra −1,25 pp sobre
+    la base descubierta y paga +15,5 pp de concentración en 15/49 proteínas — 12× más efecto en el
+    eje que el dueño NO quería mover. Además el metro tiene dos defectos abiertos (mide sólo
+    `almuerzo` cuando el reparto dice «Almuerzo o Cena» ⇒ 12 falsos positivos; y la mitad carbo no
+    tiene consumidor aguas abajo, `sample_templates_for_slot` jamás lee `base`). La palanca real es
+    AÑADIR PLANTILLAS, no mover este número. Razonamiento completo y prerequisitos: en la cabecera
+    del bloque, arriba. El WARNING de nevera NO pasa por aquí y sigue emitiendo apagado.
+
+    Se lee en CADA llamada (no a nivel módulo) para que encenderlo no necesite redeploy, igual
     que `MEALFIT_CYCLE_BASE_AFFINITY`. Clamp [0.1, 1.0]: el piso impide que alguien convierta un
     sesgo en una exclusión de facto escribiendo 0."""
     try:
         return min(1.0, max(0.1, _env_float(
-            "MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY", 0.5, lambda v: 0.1 <= v <= 1.0)))
+            "MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY", 1.0, lambda v: 0.1 <= v <= 1.0)))
     except Exception:
-        return 0.5
+        return 1.0
 
 
 def _apply_low_template_coverage_penalty(names, weights, field: str, factor: float):
@@ -631,7 +673,13 @@ def _budget_boost_with_floor(weights, prices, boost: float, floor: float):
 
     El piso se calcula sobre la mediana de los pesos ANTES del boost — o sea, sobre la escala de
     fatiga del pool tal como quedó. Y es un `max`, nunca un reemplazo: un barato FRESCO conserva
-    su ×2 en vez de perderlo contra el piso."""
+    su ×2 en vez de perderlo contra el piso.
+
+    [ronda 1 · 2026-08-04] Precisión que el docstring anterior no hacía: esto es el piso del
+    sorteo **BASE**. Es cierto de este helper, NO del pipeline — los multiplicadores posteriores
+    (cobertura de plantillas `P3-SEEDER-TEMPLATE-COVERAGE`, afinidad de ciclo
+    `P1-CYCLE-BASE-AFFINITY`) corren DESPUÉS y pueden perforarlo. Medido: con el penalty de
+    cobertura encendido, un barato sin plantilla pierde ~23 % del rescate que este piso le dio."""
     _w = list(weights)
     _valid = sorted(_p for _p in prices if _p and _p > 0)
     if len(_valid) < 4:
@@ -1588,8 +1636,21 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # (conmutan), así que el orden no altera el resultado, pero la regla "la afinidad de ciclo es
     # SIEMPRE la última antes del sorteo" se conserva intacta.
     # NUNCA excluye — con pool corto la base sin plantillas sigue pudiendo salir, que es lo
-    # correcto: mejor un plato improvisado que un pool vacío. Rollback sin redeploy:
-    # MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY=1.0. tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
+    # correcto: mejor un plato improvisado que un pool vacío.
+    #
+    # [ronda 1 · 2026-08-04] **APAGADO por default** (`MEALFIT_LOW_TEMPLATE_COVERAGE_PENALTY=1.0`),
+    # así que este bloque es hoy un no-op y el `if` de abajo no entra. Encenderlo a 0.5 compra
+    # −1,25 pp sobre la base descubierta y paga +15,5 pp de concentración en 15/49 proteínas (mide
+    # 34/49 proteínas y 15/26 carbos como «sin plantilla»). Antes de subirlo hay que arreglar el
+    # metro: (a) mide sólo `almuerzo` y el reparto dice «Almuerzo o Cena» ⇒ 12 falsos positivos
+    # medidos (Atún, Huevos, Yogurt, 9 quesos, todos CON plantilla de cena); (b) la mitad carbo no
+    # tiene mecanismo — `sample_templates_for_slot` nunca lee el campo `base`. Y la palanca real
+    # sigue siendo AÑADIR PLANTILLAS (chivo/conejo/pulpo/calamar/salmón/tilapia/mero; quinoa/
+    # casabe/ñame/yautía), no mover el knob. Ver la cabecera del bloque a nivel módulo.
+    # OJO al apilamiento: con presupuesto económico este penalty muerde a los baratos SIN plantilla,
+    # que es justo la población que `P3-BUDGET-POOL-FLOOR` rescata (el revisor midió −23 % del
+    # rescate sobre Sardinas en lata). Encender esto sin re-medir T20 deshace parte de T20.
+    # tooltip-anchor: P3-SEEDER-TEMPLATE-COVERAGE
     _tpl_factor = _low_template_coverage_penalty()
     if _tpl_factor < 1.0:
         try:
