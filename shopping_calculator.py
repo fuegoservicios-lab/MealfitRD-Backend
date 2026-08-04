@@ -11835,8 +11835,27 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         
     return results
 
-def aggregate_shopping_list(ingredients_list: list[str]) -> list[str]:
-    return aggregate_and_deduct_shopping_list(ingredients_list, [])
+def aggregate_shopping_list(
+    ingredients_list: list[str], *, num_days: int | None = None, multiplier: float = 1.0
+) -> list[str]:
+    """[P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] Wrapper delgado — plumbing puro, sin
+    lógica propia. ANTES llamaba a `aggregate_and_deduct_shopping_list` sin `num_days`
+    ni `multiplier`: el agregador caía al fallback `_pw_days=3.0` (línea ~9948) →
+    `_person_weeks = max(1.0, 1.0*3.0/7.0) = 1.0` SIEMPRE, sin importar cuántas personas
+    ni qué duración (semanal/quincenal/mensual) tenga el plan real. Los caps P6 (latas de
+    atún, aceite, especias, endulzantes...) leen `_person_weeks` para fijar su techo, así
+    que recortaban una demanda mensual/multi-persona al mismo techo que una semanal de 1
+    persona — verificado: atún household=2 mensual capaba a 2 latas (368g) en vez de las
+    9 (1656g) que le corresponden.
+
+    `num_days`/`multiplier` son keyword-only con default = comportamiento histórico exacto
+    (`None`/`1.0`, byte-idéntico a antes de este fix) — un caller que no los pase no ve
+    cambiar su resultado. Callers reales (`agent.py::swap_meal`, `chat_with_agent`,
+    `chat_with_agent_stream`) los derivan del plan vía
+    `agent._virtual_pantry_num_days_and_multiplier` (mismo SSOT que
+    `get_shopping_list_delta`/`routers/plans.py::scaled_30`: `num_days` = días REALMENTE
+    generados, `multiplier` = `household × cycle_qty_multiplier(duración) × 7/num_days`)."""
+    return aggregate_and_deduct_shopping_list(ingredients_list, [], num_days=num_days, multiplier=multiplier)
 
 def get_aggregated_shopping_list_for_plan(plan_result: dict) -> list[str]:
     return get_realtime_pantry(plan_result, [])
@@ -12334,7 +12353,17 @@ def compute_pantry_completion_delta(
     )
 
 
-def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> list[str]:
+def get_realtime_pantry(
+    plan_result: dict, consumed_ingredients: list[str], *, num_days: int | None = None, multiplier: float = 1.0
+) -> list[str]:
+    """[P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] Wrapper delgado — plumbing puro. ANTES
+    llamaba a `aggregate_and_deduct_shopping_list` sin `num_days`/`multiplier`: la
+    «nevera virtual» que ve el LLM del swap (path PRIMARIO, `agent.py::swap_meal`) caía
+    al fallback `_pw_days=3.0`/`_person_weeks=1.0` y quedaba capada a 1 persona-semana en
+    CUALQUIER plan multi-semana/household>1 (ver docstring de `aggregate_shopping_list`
+    para los números verificados). `num_days`/`multiplier` keyword-only, default = `None`/
+    `1.0` (comportamiento histórico exacto, byte-idéntico para callers que no los pasen).
+    Callers reales derivan ambos del plan vía `agent._virtual_pantry_num_days_and_multiplier`."""
     all_ingredients = []
     days = plan_result.get("days", [])
     if not days and plan_result.get("meals"):
@@ -12360,5 +12389,7 @@ def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> l
                         all_ingredients.append(f"{q} {u} de {n}")
                     else:
                         all_ingredients.append(n)
-                    
-    return aggregate_and_deduct_shopping_list(all_ingredients, consumed_ingredients)
+
+    return aggregate_and_deduct_shopping_list(
+        all_ingredients, consumed_ingredients, num_days=num_days, multiplier=multiplier
+    )

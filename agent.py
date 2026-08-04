@@ -608,6 +608,50 @@ def _extract_clean_name_from_display_string(s: str) -> str:
     return cleaned2.strip() or cleaned
 
 
+# [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `get_realtime_pantry`/`aggregate_shopping_list`
+# (shopping_calculator.py) cachean el techo de sus caps P6 en `_person_weeks =
+# multiplier * num_days / 7.0` — sin `num_days`/`multiplier` reales, ese cómputo cae al
+# fallback `_pw_days=3.0` + `multiplier=1.0` ⇒ `_person_weeks=1.0` SIEMPRE, sin importar
+# household ni duración (semanal/quincenal/mensual) del plan real. Verificado ejecutando
+# el agregador: un plan mensual de 2 personas veía el cap de atún caer de 9 latas
+# (correcto) a 2 (semanal-para-1, el default) — la «nevera virtual» que ve el LLM del
+# swap (path PRIMARIO) quedaba capada a 1 persona-semana en cualquier plan
+# multi-semana/household>1.
+#
+# Mismo SSOT que `get_shopping_list_delta`/`routers/plans.py::scaled_30`: `num_days` =
+# días REALMENTE generados (el ciclo base, típ. `PLAN_CHUNK_SIZE`=3) y `multiplier` =
+# `household × cycle_qty_multiplier(duración) × 7/num_days` — el último factor deshace
+# el promedio-a-7-días que ese mismo cómputo aplica upstream (comentario en `_pw_days`/
+# `_person_weeks`, shopping_calculator.py:~9923), para que `_person_weeks` recupere
+# exactamente `household × cycle_qty_multiplier(duración)` (la invariante que ancla
+# `test_p1_person_weeks_cycle_aware.py`).
+#
+# `plan_data` sin `days` (guest sin plan, BD caída, dict incompleto) → `(None, 1.0)`,
+# el fallback histórico exacto de `aggregate_and_deduct_shopping_list` — fail-open, nunca
+# inventa un household/duración que no existe.
+def _virtual_pantry_num_days_and_multiplier(plan_data) -> tuple:
+    if not isinstance(plan_data, dict):
+        return None, 1.0
+    days = plan_data.get("days") or []
+    num_days = len(days)
+    if num_days < 1:
+        return None, 1.0
+    try:
+        household = float(plan_data.get("calc_household_multiplier") or 1.0)
+    except (TypeError, ValueError):
+        household = 1.0
+    if not household or household <= 0:
+        household = 1.0
+    duration_key = str(plan_data.get("calc_grocery_duration") or "").strip().lower()
+    try:
+        from shopping_calculator import cycle_qty_multiplier as _cycle_qty_mult_vp
+        duration_factor = _cycle_qty_mult_vp(duration_key)
+    except Exception:
+        duration_factor = 1.0
+    multiplier = household * duration_factor * (7.0 / num_days)
+    return num_days, multiplier
+
+
 # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta + consentimiento" — decisión del
 # owner: tras la compra inicial, swap/regen-day/fix-sodium-day cocinan SOLO de la Nevera
 # FÍSICA real (`user_inventory`) por default; si el chef no encuentra alternativa ahí, el
@@ -993,7 +1037,14 @@ def swap_meal(form_data: dict):
                     clean_ingredients = _swap_real_pantry_ledger_lines(user_id)
                     _used_real_pantry_universe = True
                 else:
-                    clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
+                    # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] Antes: sin num_days/multiplier,
+                    # la nevera-virtual caía al techo default (person_weeks=1.0) sin importar
+                    # household ni duración reales del plan. Derivamos ambos aquí.
+                    _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(plan_record["plan_data"])
+                    clean_ingredients = get_realtime_pantry(
+                        plan_record["plan_data"], consumed_ingredients,
+                        num_days=_vp_num_days, multiplier=_vp_multiplier,
+                    )
 
                 # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] Leer el flag del cap renal del plan persistido.
                 try:
@@ -1070,6 +1121,13 @@ def swap_meal(form_data: dict):
         current_pantry_ingredients = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
         if current_pantry_ingredients and isinstance(current_pantry_ingredients, list) and len(current_pantry_ingredients) > 0:
             from shopping_calculator import aggregate_shopping_list
+            # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] Este fallback NO tiene num_days/multiplier
+            # reales en scope: a diferencia de `chat_with_agent`/`chat_with_agent_stream` (que
+            # reciben `current_plan`), `swap_meal(form_data)` no recibe el plan completo — solo
+            # `current_pantry_ingredients`, sin duración ni household adjuntos. Los defaults
+            # (num_days=None→3.0, multiplier=1.0) preservan el comportamiento previo exacto;
+            # documentar la ausencia de contexto es mejor que inventar un `household=1`
+            # silencioso que finja una certeza que no existe.
             clean_ingredients = aggregate_shopping_list([item.strip() for item in current_pantry_ingredients if item and isinstance(item, str) and len(item) > 2])
 
     # [P1-SWAP-EMPTY-PANTRY-FALLBACK · 2026-05-22] Si el realtime pantry quedó
@@ -5202,18 +5260,30 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
 
     # Fallbacks
+    # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `current_plan` (parámetro de esta función) SÍ
+    # está en scope aquí — a diferencia de `swap_meal`, tanto el guest (que lo manda en el
+    # body) como el autenticado (hidratado desde BD arriba) traen el plan completo. Derivamos
+    # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
+    # persona-semana cuando el plan real es multi-semana/household>1.
+    _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
     if not inventory_str and form_data:
         current_pantry = form_data.get("current_pantry_ingredients", [])
         if current_pantry and isinstance(current_pantry, list):
             from shopping_calculator import aggregate_shopping_list
-            cleaned_pantry = aggregate_shopping_list([item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2])
+            cleaned_pantry = aggregate_shopping_list(
+                [item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2],
+                num_days=_vp_num_days, multiplier=_vp_multiplier,
+            )
             inventory_str = ", ".join(cleaned_pantry)
 
     if not shopping_delta_str and form_data:
         current_shopping = form_data.get("current_shopping_list", [])
         if current_shopping and isinstance(current_shopping, list):
             from shopping_calculator import aggregate_shopping_list
-            cleaned_shop = aggregate_shopping_list([item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2])
+            cleaned_shop = aggregate_shopping_list(
+                [item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2],
+                num_days=_vp_num_days, multiplier=_vp_multiplier,
+            )
             shopping_delta_str = ", ".join(cleaned_shop)
 
     system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
@@ -5580,18 +5650,30 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
 
     # Fallbacks
+    # [P3-AGG-NUM-DAYS-PROPAGATE · 2026-08-04] `current_plan` (parámetro de esta función) SÍ
+    # está en scope aquí — a diferencia de `swap_meal`, tanto el guest (que lo manda en el
+    # body) como el autenticado (hidratado desde BD arriba) traen el plan completo. Derivamos
+    # num_days/multiplier reales para que estos dos fallbacks no capen la nevera/lista a 1
+    # persona-semana cuando el plan real es multi-semana/household>1.
+    _vp_num_days, _vp_multiplier = _virtual_pantry_num_days_and_multiplier(current_plan)
     if not inventory_str and form_data:
         current_pantry = form_data.get("current_pantry_ingredients", [])
         if current_pantry and isinstance(current_pantry, list):
             from shopping_calculator import aggregate_shopping_list
-            cleaned_pantry = aggregate_shopping_list([item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2])
+            cleaned_pantry = aggregate_shopping_list(
+                [item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2],
+                num_days=_vp_num_days, multiplier=_vp_multiplier,
+            )
             inventory_str = ", ".join(cleaned_pantry)
 
     if not shopping_delta_str and form_data:
         current_shopping = form_data.get("current_shopping_list", [])
         if current_shopping and isinstance(current_shopping, list):
             from shopping_calculator import aggregate_shopping_list
-            cleaned_shop = aggregate_shopping_list([item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2])
+            cleaned_shop = aggregate_shopping_list(
+                [item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2],
+                num_days=_vp_num_days, multiplier=_vp_multiplier,
+            )
             shopping_delta_str = ", ".join(cleaned_shop)
 
     system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
