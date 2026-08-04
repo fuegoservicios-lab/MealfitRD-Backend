@@ -211,36 +211,71 @@ def build_pending_plan_days_lines(plan_data: dict, today: date, in_flight_count:
     en vez de inventar un menú que aún no existe (mismo modo de fallo que
     `DÍAS QUE YA PASARON` cierra hacia atrás, este lo cierra hacia adelante).
 
-    Deriva las fechas esperadas como `última date estampada + i` (i=1..N días
-    pendientes, `total_days_requested - len(days)`) y usa `compute_chunk_overdue`
-    (SSOT ya usado por `/chunk-status` y el cron horario) para decidir si el
-    plan está ATRASADO; un día individual solo se marca ATRASADO si el flag
-    global es True Y su fecha esperada ya llegó (`<= today`) — el resto son
-    PENDIENTE. Cap DURO de 3 líneas de día + 1 línea resumen ("… y N día(s)
-    más pendientes") si sobran más — presupuesto del índice, mismo principio
-    que `_assemble` arriba pero sin recorte dinámico (el volumen máximo de
-    días pendientes es acotado por `total_days_requested`, no por texto libre).
+    [Ronda 1 · fix ALTO 1] `days` es una VENTANA ROLLING: cada shift poda los
+    días vividos hacia `_archived_days` y renumera `days` 1..N, mientras
+    `total_days_requested` nunca se toca. Contar/numerar solo contra `days`
+    (como hacía la v1 de esta función) sobrecuenta pendientes y desnumera en
+    CUALQUIER plan que ya rotó al menos una vez — reproducido con 10
+    archivados + 5 vivos + total 20 (15 generados, 5 pendientes reales):
+    la v1 declaraba 15 "pendientes" numerados desde el 4. El fix reusa la
+    MISMA técnica que `resolve_day_dates` arriba: la unión `_archived_days +
+    days` es el conteo real de días ya generados (`n_generated`), y
+    `total_days_requested - n_generated` es el pendiente real. La fecha ancla
+    (`last`) sigue viniendo SOLO de `days` (los archivados son estrictamente
+    anteriores — ver comentario de `_live_anchor`), pero la NUMERACIÓN del
+    día (`día N`) arranca en `n_generated + 1`, no en `len(days) + 1`.
 
-    Fail-open a `[]`: plan legacy sin ninguna `date` estampada (mismo criterio
-    que `compute_chunk_overdue`), plan ya completo (`total <= len(days)`), o
-    cualquier excepción — sin este índice el coach simplemente no menciona los
-    días futuros, que es el comportamiento previo (no regresión).
+    Deriva las fechas esperadas como `última date estampada + i` (i=1..N días
+    pendientes) y usa `compute_chunk_overdue` (SSOT ya usado por
+    `/chunk-status` y el cron horario) para decidir si el plan está ATRASADO;
+    un día individual solo se marca ATRASADO si el flag global es True Y su
+    fecha esperada ya llegó (`<= today`) — el resto son PENDIENTE. Cap DURO
+    de 3 líneas de día + 1 línea resumen ("… y N día(s) más pendientes") si
+    sobran más.
+
+    [Ronda 1 · MEDIO 4] Este cap NO pasa por `_assemble()`/`chat_history_max_chars()`
+    (el presupuesto de chars compartido de los otros dos bloques del módulo).
+    Es deliberado, no un descuido: el volumen de ESTE bloque está acotado
+    ESTRUCTURALMENTE por `total_days_requested` (máximo 4 líneas, ~400 chars
+    en el peor caso), mientras que los bloques hermanos (`build_past_plan_days_block`,
+    `build_past_diary_block`) llevan texto libre sin cota (nombres de recetas,
+    N días de historial) y por eso SÍ necesitan recorte dinámico. Compartir el
+    pool de `_assemble` aquí sería presupuesto para un problema que este
+    bloque no tiene.
+
+    [Ronda 1 · decisión (b)] El "ATRASADO desde el <fecha>" de cada línea es
+    la fecha esperada de ESE día individual — NO el `overdue_since` global
+    que devuelven `/chunk-status` y la alerta del cron (que siempre es
+    `último día vivo + 1`, fijo, sin importar cuántos días lleve atrasado el
+    plan). Es una segunda fuente de verdad DELIBERADA (más útil para el
+    coach, que habla de UN día a la vez) — un operador que cruce el chat
+    contra `/chunk-status` durante un incidente puede ver fechas "desde"
+    distintas para días distintos sin que eso sea drift entre sistemas.
+
+    Fail-open a `[]`: plan legacy sin ninguna `date` estampada en `days`
+    (mismo criterio que `compute_chunk_overdue` — los archivados nunca son la
+    única fuente de fecha, ver `_live_anchor`), plan ya completo (`total <=
+    n_generated`), o cualquier excepción — sin este índice el coach
+    simplemente no menciona los días futuros, que es el comportamiento previo
+    (no regresión).
     tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-COACH
     """
     try:
         if not isinstance(plan_data, dict):
             return []
-        days = plan_data.get("days")
-        if not isinstance(days, list) or not days:
+        days = [d for d in (plan_data.get("days") or []) if isinstance(d, dict)]
+        if not days:
             return []
+        archived = [d for d in (plan_data.get("_archived_days") or []) if isinstance(d, dict)]
+        n_generated = len(archived) + len(days)
         total = int(plan_data.get("total_days_requested") or 0)
-        n_pending = total - len(days)
+        n_pending = total - n_generated
         if n_pending <= 0:
             return []
 
         last = None
         for d in days:
-            pd = _parse_date(d.get("date")) if isinstance(d, dict) else None
+            pd = _parse_date(d.get("date"))
             if pd is not None and (last is None or pd > last):
                 last = pd
         if last is None:
@@ -252,7 +287,7 @@ def build_pending_plan_days_lines(plan_data: dict, today: date, in_flight_count:
         shown = min(n_pending, cap)
         lines: list[str] = []
         for k in range(1, shown + 1):
-            day_num = len(days) + k
+            day_num = n_generated + k
             expected = last + timedelta(days=k)
             fecha = _fmt_date_es(expected)
             if overdue and expected <= today:

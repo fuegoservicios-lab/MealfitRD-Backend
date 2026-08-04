@@ -4595,29 +4595,52 @@ def _clamp_tz_offset_mins(value, default_mins: int = 240) -> int:
     return cand if -840 <= cand <= 840 else default_mins
 
 
-def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today: date) -> str:
+def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today: date,
+                                     plan_id: Optional[str] = None) -> str:
     """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Envuelve `build_pending_plan_days_lines`
     con el COUNT barato de `plan_chunk_queue` que alimenta `compute_chunk_overdue`
     (mismo predicado SSOT que `/chunk-status` y el cron horario). El COUNT SOLO
-    se paga si el plan tiene días pendientes (`total_days_requested > len(days)`)
-    — un plan ya completo (el caso común, la mayoría de mensajes de chat) sale
-    por el guard de arriba sin tocar la DB. Fail-open a "".
+    se paga si el plan tiene días pendientes (`total_days_requested > n_generated`,
+    contando `_archived_days + days` — ver `build_pending_plan_days_lines`) — un
+    plan ya completo (el caso común, la mayoría de mensajes de chat) sale por el
+    guard de arriba sin tocar la DB. Fail-open a "".
+
+    [Ronda 1 · fix ALTO 2] El COUNT filtra por `meal_plan_id = plan_id`, la
+    columna canónica de `plan_chunk_queue` (FK NOT NULL; el consumidor SSOT
+    `_chunk_overdue_alert_job` cuenta igual). Filtrar por `user_id` en su
+    lugar suma chunks de CUALQUIER plan del usuario — tras `/restore` el plan
+    viejo sigue cancelándose en segundo plano con chunks propios todavía
+    `pending/processing/stale`, así que un COUNT por `user_id` puede dar
+    `in_flight_count > 0` por un plan AJENO al que el usuario está viendo, y
+    el índice diría "PENDIENTE" sobre un día que en realidad está ATRASADO
+    (falso negativo). Si `plan_id` no está disponible en el callsite, este
+    helper SALTA el COUNT — nunca cuenta por `user_id` como aproximación —
+    y fuerza `in_flight_count=1` (⇒ `compute_chunk_overdue` siempre da
+    `overdue=False`): sin certeza sobre la cola, el índice solo declara
+    PENDIENTE, nunca ATRASADO. Contar de más es peor que no declarar nada.
     tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-AGENT
     """
     try:
         if not isinstance(current_plan, dict) or not user_id or user_id == "guest":
             return ""
-        days = current_plan.get("days")
-        total = int(current_plan.get("total_days_requested") or 0)
-        if not isinstance(days, list) or total <= len(days):
+        days = [d for d in (current_plan.get("days") or []) if isinstance(d, dict)]
+        if not days:
             return ""
-        from db import execute_sql_query
-        cnt = execute_sql_query(
-            "SELECT count(*)::int AS c FROM plan_chunk_queue "
-            "WHERE user_id = %s AND status IN ('pending', 'processing', 'stale')",
-            (user_id,), fetch_one=True,
-        ) or {}
-        in_flight_count = int(cnt.get("c") or 0)
+        archived = [d for d in (current_plan.get("_archived_days") or []) if isinstance(d, dict)]
+        n_generated = len(archived) + len(days)
+        total = int(current_plan.get("total_days_requested") or 0)
+        if total <= n_generated:
+            return ""
+        if plan_id:
+            from db import execute_sql_query
+            cnt = execute_sql_query(
+                "SELECT count(*)::int AS c FROM plan_chunk_queue "
+                "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
+                (plan_id,), fetch_one=True,
+            ) or {}
+            in_flight_count = int(cnt.get("c") or 0)
+        else:
+            in_flight_count = 1  # sin plan_id: no ATRASADO por certeza insuficiente (ver docstring)
         lines = build_pending_plan_days_lines(current_plan, today, in_flight_count)
         if not lines:
             return ""
@@ -4632,7 +4655,7 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
 
 
 def _build_past_days_context(user_id: str, current_plan, local_date_str: Optional[str] = None,
-                              tz_offset: Optional[int] = None) -> str:
+                              tz_offset: Optional[int] = None, plan_id: Optional[str] = None) -> str:
     """[P1-CHAT-PAST-DAYS · 2026-07-27] Los dos bloques de días pasados:
     lo que el plan MANDABA + lo que el usuario REGISTRÓ. Fail-open a "".
 
@@ -4644,6 +4667,12 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
     `consumed_at` y una comida de las 10:30pm RD se atribuye al día SIGUIENTE
     — y de paso el día real queda declarado 'SIN REGISTRO'. `tz_offset` es
     input de request body: se guarda la coerción a int, nunca se confía ciego.
+
+    `plan_id`: [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] id de `meal_plans` del
+    plan activo, cuando el callsite ya lo resolvió (`get_latest_meal_plan_with_id`
+    para el shopping-delta, unas líneas antes en ambos paths). Se reenvía tal
+    cual a `_build_pending_days_lines_block` — ver esa función para por qué
+    filtrar el COUNT por `meal_plan_id` en vez de `user_id` importa.
     tooltip-anchor: P1-CHAT-PAST-DAYS-AGENT
     """
     try:
@@ -4666,7 +4695,7 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         out = build_past_plan_days_block(current_plan, today, days_back=days_back)
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no
         # una 2ª pasada al LLM ni un bloque nuevo): días PENDIENTE/ATRASADO.
-        out += _build_pending_days_lines_block(user_id, current_plan, today)
+        out += _build_pending_days_lines_block(user_id, current_plan, today, plan_id=plan_id)
 
         try:
             from db_facts import get_consumed_meals_since
@@ -5281,7 +5310,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 
     inventory_str = ""
     shopping_delta_str = ""
-    
+    # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
+    # (que ya resuelve `get_latest_meal_plan_with_id` para el shopping-delta)
+    # para que `plan_record` esté siempre en scope más abajo, incluso si el
+    # try revienta antes de la asignación o si `user_id` es guest.
+    plan_record = None
+
     if user_id and user_id != "guest":
         try:
             from db_inventory import get_user_inventory
@@ -5416,7 +5450,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += _build_plan_today_context(current_plan, local_date_str=None)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
         # path no recibe `tz_offset` del cliente: el helper cae a 240 (RD).
-        system_prompt += _build_past_days_context(user_id, current_plan)
+        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
+        # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
+        # y permite filtrar el COUNT de la cola por `meal_plan_id`.
+        system_prompt += _build_past_days_context(
+            user_id, current_plan, plan_id=(plan_record or {}).get("id"),
+        )
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -5671,7 +5710,12 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
 
     inventory_str = ""
     shopping_delta_str = ""
-    
+    # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Definido ANTES del try de abajo
+    # (que ya resuelve `get_latest_meal_plan_with_id` para el shopping-delta)
+    # para que `plan_record` esté siempre en scope más abajo, incluso si el
+    # try revienta antes de la asignación o si `user_id` es guest.
+    plan_record = None
+
     if user_id and user_id != "guest":
         try:
             from db_inventory import get_user_inventory
@@ -5812,7 +5856,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
         # (índice barato) + diario real. Va DESPUÉS del DIARIO DE HOY y del
         # prefijo estático — ver docs/chat_past_days_memory.md §3 Pieza 2.
-        system_prompt += _build_past_days_context(user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset)
+        # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
+        # arriba para el shopping-delta — reenviar su `id` evita un 2º roundtrip
+        # y permite filtrar el COUNT de la cola por `meal_plan_id`.
+        system_prompt += _build_past_days_context(
+            user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
+            plan_id=(plan_record or {}).get("id"),
+        )
 
     config = {"configurable": {"thread_id": session_id}}
 

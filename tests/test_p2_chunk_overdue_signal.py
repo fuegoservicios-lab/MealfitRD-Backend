@@ -330,3 +330,113 @@ def test_coach_cap_de_lineas():
     plan = _plan(["2026-08-02", "2026-08-03", "2026-08-04"], 30)
     lines = chc.build_pending_plan_days_lines(plan, date(2026, 8, 4), 1)
     assert len(lines) <= 4 and "más pendientes" in lines[-1]
+
+
+# ---------------------------------------------------------------------------
+# Ronda 1 de arreglos (revisor) — ALTO 1: `days` es ventana rolling; contar/
+# numerar solo contra `days` (sin sumar `_archived_days`) sobrecuenta
+# pendientes y desnumera en cualquier plan que ya rotó. Caso EXACTO medido
+# por el revisor: 10 archivados + 5 vivos + total 20 ⇒ 5 pendientes reales,
+# numerados desde el día 16 (no 15 "pendientes" numerados desde el 4).
+# ---------------------------------------------------------------------------
+
+
+def test_archivados_cuentan_para_el_pendiente_y_la_numeracion():
+    archived_dates = [
+        "2026-07-24", "2026-07-25", "2026-07-26", "2026-07-27", "2026-07-28",
+        "2026-07-29", "2026-07-30", "2026-07-31", "2026-08-01", "2026-08-02",
+    ]  # 10 archivados
+    live_dates = ["2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07"]  # 5 vivos
+    plan = {
+        "total_days_requested": 20,
+        "_archived_days": [{"date": d, "meals": []} for d in archived_dates],
+        "days": [{"date": d, "meals": []} for d in live_dates],
+    }
+    # in_flight_count=1 fuerza overdue=False: aísla el fix de conteo/numeración
+    # del cálculo de ATRASADO, que ya cubren los otros tests de esta sección.
+    lines = chc.build_pending_plan_days_lines(plan, today=date(2026, 8, 7), in_flight_count=1)
+
+    assert len(lines) == 4, lines  # cap 3 días + 1 resumen (5 pendientes > cap 3)
+    assert "día 16" in lines[0], lines
+    assert "día 17" in lines[1], lines
+    assert "día 18" in lines[2], lines
+    assert "y 2 día(s) más pendientes" in lines[3], lines
+    # Regresión explícita contra la numeración VIEJA (buggy): `len(days)+k` con
+    # k=1..3 daría "día 6"/"día 7"/"día 8" — NUNCA deben aparecer.
+    assert not any("día 6" in l or "día 7" in l or "día 8" in l for l in lines[:3])
+
+
+# ---------------------------------------------------------------------------
+# Ronda 1 de arreglos (revisor) — MEDIO 3: el test de legacy-sin-dates pasaba
+# por ACCIDENTE — quitar el guard `if last is None: return []` no lo rompía
+# porque el try/except externo atrapa el TypeError de `last + timedelta(...)`
+# igual. Este test ancla el comportamiento REAL del guard: para un plan
+# legacy, `compute_chunk_overdue` NUNCA llega a invocarse.
+# ---------------------------------------------------------------------------
+
+
+def test_coach_legacy_sin_dates_no_llega_a_computar_overdue():
+    plan = {"total_days_requested": 15, "days": [{"day_name": "Lunes"}]}
+    with patch("chat_history_context.compute_chunk_overdue") as mock_overdue:
+        result = chc.build_pending_plan_days_lines(plan, date(2026, 8, 9), 0)
+    assert result == []
+    mock_overdue.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Ronda 1 de arreglos (revisor) — ALTO 2: `agent._build_pending_days_lines_block`
+# debe filtrar el COUNT de `plan_chunk_queue` por `meal_plan_id`, NUNCA por
+# `user_id` — un COUNT por user_id sumaría chunks de OTRO plan del mismo
+# usuario (p.ej. el plan viejo cancelándose en segundo plano tras /restore) y
+# escondería un ATRASADO real detrás de un in_flight_count ajeno. Sin
+# `plan_id` en el callsite: saltar el COUNT por completo (nunca contar por
+# user_id como aproximación) y no declarar ATRASADO por falta de certeza.
+# ---------------------------------------------------------------------------
+
+
+def _plan_atrasado_con_pendientes():
+    """total=15, 3 días vivos con dates viejas (última 2026-08-03) — con
+    today=2026-08-10 y sin nada in-flight para ESE plan, el día 4 (04/08)
+    está ATRASADO."""
+    return _plan(["2026-08-01", "2026-08-02", "2026-08-03"], 15)
+
+
+def test_agent_count_filtra_por_meal_plan_id_no_por_user_id(monkeypatch):
+    import agent
+
+    plan = _plan_atrasado_con_pendientes()
+    calls = []
+
+    def _fake_execute(query, params=None, **kwargs):
+        calls.append({"query": query, "params": params})
+        return {"c": 0}  # cola vacía PARA ESTE PLAN → el día 4 sale ATRASADO
+
+    monkeypatch.setattr("db.execute_sql_query", _fake_execute)
+
+    out = agent._build_pending_days_lines_block(
+        "user-1", plan, date(2026, 8, 10), plan_id="plan-abc-123",
+    )
+
+    assert len(calls) == 1, calls
+    assert "meal_plan_id = %s" in calls[0]["query"], calls
+    assert "WHERE user_id" not in calls[0]["query"], calls
+    assert calls[0]["params"] == ("plan-abc-123",)
+    assert "ATRASADO" in out, out
+
+
+def test_agent_sin_plan_id_salta_el_count_y_no_declara_atrasado(monkeypatch):
+    import agent
+
+    plan = _plan_atrasado_con_pendientes()
+
+    def _boom(*a, **kw):
+        raise AssertionError("no debería tocar la DB sin plan_id")
+
+    monkeypatch.setattr("db.execute_sql_query", _boom)
+
+    out = agent._build_pending_days_lines_block(
+        "user-1", plan, date(2026, 8, 10), plan_id=None,
+    )
+
+    assert "ATRASADO" not in out, out
+    assert "PENDIENTE" in out, out
