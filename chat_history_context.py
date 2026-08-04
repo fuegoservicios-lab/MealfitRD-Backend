@@ -180,7 +180,9 @@ def compute_chunk_overdue(plan_data, in_flight_count, today=None):
     SSOT del predicado — 3 consumidores (/chunk-status, cron horario, índice del coach).
     Fail-open doble: plan legacy sin `date` estampada ⇒ (False, None) (no alerta en falso);
     cualquier excepción ⇒ (False, None). `today` inyectable para tests deterministas; en
-    producción usa rd_today() (date-only TZ RD — NUNCA datetime.utcnow()).
+    producción usa rd_today() (date-only en TZ RD — nunca la hora UTC del servidor;
+    escribir aquí el nombre de esa función deprecada dispara el escáner P3-DEPRECATED-UTCNOW,
+    que no distingue docstring de código).
 
     [Ronda 2 · fix revisor] `days` es una VENTANA ROLLING: cada shift poda los
     días ya vividos hacia `_archived_days` y renumera `days` 1..N, mientras

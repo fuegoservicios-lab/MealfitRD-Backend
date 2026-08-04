@@ -6264,10 +6264,38 @@ def _chunk_overdue_alert_job():
 
     Predicado SSOT `compute_chunk_overdue` (chat_history_context.py, Task 1):
     ¿hoy debería existir un día del plan que no existe, sin nada en la cola
-    que lo vaya a resolver solo? Barre `meal_plans` en estados activos
-    (generating/generating_next/partial/complete_partial), y por cada plan
-    calcula el in-flight count de `plan_chunk_queue` para alimentar el
-    predicado.
+    que lo vaya a resolver solo? Barre el plan VIGENTE de cada usuario cuyo
+    `generation_status` esté activo (generating/generating_next/partial/
+    complete_partial), y por cada plan calcula el in-flight count de
+    `plan_chunk_queue` para alimentar el predicado.
+
+    [Ronda 3 · FIX 1 · 2026-08-04] POR QUÉ SOLO EL PLAN VIGENTE — no borres
+    este acotamiento creyendo que el cron mira demasiado poco. Medido contra
+    Neon producción con el predicado real: barriendo TODO `meal_plans` en
+    estados activos, **19 de 23 planes alertarían el día 1 y ninguno es un
+    fallo**; acotado al plan vigente, **0**. De esos 23 planes activos,
+    **20 ni siquiera eran el plan vigente de su usuario**.
+
+    La cadena causal: al insertar un plan nuevo, `db_plans.py` (P0-3) pone en
+    `'cancelled'` TODOS los chunks vivos del usuario, y el cron GAP-11 purga
+    las filas `cancelled` a las 48h. Resultado: el plan SUPERADO se queda para
+    siempre con `generation_status='complete_partial'`, N días de M y CERO
+    filas en la cola ⇒ `in_flight_count == 0` ⇒ el predicado lo declara
+    ATRASADO, correctamente según su propia definición. Pero regenerar el plan
+    es una acción NORMAL del usuario: ese ruido es el caso común, no un borde.
+
+    La UI (`/chunk-status`) y el coach nunca sufrieron esto porque ambos
+    operan sobre el plan vigente (`get_latest_meal_plan_with_id`, db_plans.py:
+    `ORDER BY created_at DESC LIMIT 1`). Solo el cron divergía en POBLACIÓN;
+    el predicado es el mismo en los tres. El acotamiento usa ese mismo
+    criterio para que las tres superficies hablen del mismo plan.
+
+    ⚠️ EL ORDEN IMPORTA: el `DISTINCT ON (user_id)` elige el más reciente
+    entre TODOS los planes del usuario y el filtro de `generation_status` va
+    en la consulta EXTERNA. Filtrando por estado primero, un `complete_partial`
+    viejo sería el único candidato del usuario y ganaría el `DISTINCT ON`
+    aunque su plan vigente esté `complete` — exactamente el bug. Anclado por
+    `test_cron_filtra_el_estado_DESPUES_de_elegir_el_vigente`.
 
     Modelo de resolution **Auto (implicit)**: el job re-emite (UPSERT,
     `resolved_at = NULL`) mientras la condición exista, y auto-resuelve
@@ -6277,24 +6305,48 @@ def _chunk_overdue_alert_job():
     ventana rolling exige sumar los archivados o subcuenta cualquier plan
     que ya rotó).
 
+    [Ronda 3 · FIX 1] La resolución es UN barrido final, no un `else` por
+    plan. Consecuencia directa del acotamiento: un plan que YA tenía alerta
+    abierta y luego deja de ser el vigente (el usuario regeneró) SALE de la
+    población, y un `else` dentro del loop solo corre para lo que el loop ve
+    ⇒ su alerta quedaría abierta PARA SIEMPRE, rompiendo el Auto (implicit)
+    que la tabla de `docs/system_alerts_resolution_table.md` declara. El
+    barrido resuelve toda `chunk_overdue` abierta que no esté en la lista de
+    exclusión de esta corrida.
+
     Fail-open POR PLAN: una excepción calculando/persistiendo la alerta de
     UN plan (SELECT corrupto, COUNT fallido, INSERT fallido) se loggea y el
     barrido continúa con el resto — no aborta el tick completo por un solo
-    plan con datos raros.
+    plan con datos raros. Ese plan entra igualmente en la lista de exclusión:
+    "no pude calcularlo" no es "ya no pasa", y cerrar su alerta por una
+    excepción transitoria sería inventar un veredicto que nadie midió.
 
     Tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL.
     """
     from chat_history_context import compute_chunk_overdue
     try:
         rows = execute_sql_query(
-            """SELECT id::text AS plan_id, user_id::text AS user_id, plan_data
-               FROM meal_plans
-               WHERE plan_data->>'generation_status' IN
+            """SELECT plan_id, uid AS user_id, plan_data
+               FROM (
+                   SELECT DISTINCT ON (user_id)
+                          id::text AS plan_id, user_id::text AS uid, plan_data,
+                          plan_data->>'generation_status' AS gstatus
+                   FROM meal_plans
+                   ORDER BY user_id, created_at DESC
+               ) vigente
+               WHERE gstatus IN
                      ('generating', 'generating_next', 'partial', 'complete_partial')""",
         ) or []
     except Exception as e:
+        # Sin población NO se barre: resolver con la lista de exclusión vacía
+        # tras un SELECT fallido cerraría todas las alertas legítimas por un
+        # fallo transitorio de la DB.
         logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] No se pudo consultar meal_plans: {e}")
         return
+
+    # Keys que el barrido final NO puede cerrar: las emitidas en esta corrida
+    # y las de los planes que no se pudieron evaluar.
+    _keep_open: list[str] = []
 
     for r in rows:
         plan_id = r.get("plan_id")
@@ -6323,15 +6375,28 @@ def _chunk_overdue_alert_job():
                                     "overdue_since": since}, ensure_ascii=False),
                     ),
                 )
-            else:
-                execute_sql_write(
-                    "UPDATE system_alerts SET resolved_at = NOW() "
-                    "WHERE alert_key = %s AND resolved_at IS NULL",
-                    (alert_key,),
-                )
+                _keep_open.append(alert_key)
         except Exception as _ov_e:
             logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] plan {plan_id}: {_ov_e}")
+            if plan_id:
+                _keep_open.append(f"chunk_overdue:{plan_id}")
             continue
+
+    # Barrido de resolución (ver docstring): cierra toda `chunk_overdue`
+    # abierta que esta corrida NO reemitió y no dejó indeterminada. Cubre los
+    # dos caminos de salida — el día apareció / el plan terminó (el plan sigue
+    # en la población y hoy no alerta) y el plan dejó de ser el vigente del
+    # usuario (ya no aparece en NINGUNA corrida futura, así que este UPDATE es
+    # lo único que puede cerrar su alerta).
+    try:
+        execute_sql_write(
+            "UPDATE system_alerts SET resolved_at = NOW() "
+            "WHERE alert_type = 'chunk_overdue' AND resolved_at IS NULL "
+            "AND NOT (alert_key = ANY(%s::text[]))",
+            (_keep_open,),
+        )
+    except Exception as _sweep_e:
+        logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] barrido de resolución falló: {_sweep_e}")
 
 
 def register_plan_chunk_scheduler(scheduler) -> None:

@@ -1,4 +1,5 @@
 """[P2-CHUNK-OVERDUE-SIGNAL] Predicado SSOT + payload de /chunk-status + cron + coach."""
+import re
 from datetime import date
 from unittest.mock import patch
 
@@ -71,8 +72,14 @@ def _fake_chunk_status_queries(plan_data, upcoming_rows):
     def _fake(query, params=None, **kwargs):
         if "FROM meal_plans" in query:
             return {"user_id": _USER_A, "plan_data": plan_data}
-        if "id::text AS chunk_id" in query and "status IN ('pending', 'processing')" in query:
+        if "id::text AS chunk_id" in query and "ORDER BY execute_after" in query:
             # [P2-CHUNK-OVERDUE-SIGNAL] query nueva de upcoming_chunks.
+            # [Ronda 3 · FIX 2] El dispatcher enrutaba por la lista literal de
+            # estados (`status IN ('pending', 'processing')`), así que añadir
+            # 'stale' a la query de producción lo dejaba sin matchear y el test
+            # media contra un `None`. Ahora enruta por la FORMA de la consulta
+            # (proyección + orden), que es lo que la distingue de sus hermanas:
+            # el ETA no proyecta chunk_id y las pausadas ordenan por semana.
             return upcoming_rows
         if "SELECT execute_after FROM plan_chunk_queue" in query:
             return None  # next_chunk_eta (fetch_one), sin next chunk aquí
@@ -205,11 +212,30 @@ def _cron_complete_plan_row(plan_id=_CRON_PLAN_ID, user_id=_CRON_USER_ID):
             "plan_data": {"total_days_requested": 3, "days": days}}
 
 
+def _upserts(captured):
+    return [c for c in captured if "INSERT INTO system_alerts" in c["sql"]]
+
+
+def _sweeps(captured):
+    """El UPDATE único de resolución (Ronda 3): resuelve TODA alerta
+    `chunk_overdue` abierta que no esté en la lista de exclusión."""
+    return [c for c in captured
+            if "UPDATE system_alerts" in c["sql"] and "alert_type = 'chunk_overdue'" in c["sql"]]
+
+
 def test_cron_overdue_upsertea_y_autoresuelve(monkeypatch):
     """Corrida 1: 1 plan overdue (dates viejas, total 15, cola vacía) → upsert
     con alert_key='chunk_overdue:<id>'. Corrida 2 con el plan ya completo
-    (total == len(days)) → UPDATE resolved_at (auto-resuelve, modelo Auto
-    implicit: el job re-emite mientras la condición exista)."""
+    (total == len(days)) → resolved_at (auto-resuelve, modelo Auto implicit:
+    el job re-emite mientras la condición exista).
+
+    [Ronda 3 · FIX 1] La resolución dejó de ser un UPDATE POR PLAN dentro del
+    loop y pasó a ser un único UPDATE de barrido al final (ver
+    `test_cron_resuelve_alertas_huerfanas_...`): con el acotamiento al plan
+    vigente, un plan que deja de ser el vigente SALE de la población barrida y
+    un `else` por-plan jamás volvería a verlo. Este test conserva sus dos
+    aserciones originales (se emite / se resuelve la alerta de ESE plan), leídas
+    ahora sobre la forma nueva."""
     import cron_tasks as ct
     monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
 
@@ -232,11 +258,13 @@ def test_cron_overdue_upsertea_y_autoresuelve(monkeypatch):
     monkeypatch.setattr(ct, "execute_sql_query", _fake_query_overdue)
     ct._chunk_overdue_alert_job()
 
-    assert len(captured) == 1, captured
-    upsert = captured[0]
-    assert "INSERT INTO system_alerts" in upsert["sql"]
+    assert len(_upserts(captured)) == 1, captured
+    upsert = _upserts(captured)[0]
     assert "ON CONFLICT" in upsert["sql"]
     assert upsert["params"][0] == f"chunk_overdue:{_CRON_PLAN_ID}"
+    # El barrido de resolución NO puede cerrar la alerta que acabamos de emitir.
+    assert len(_sweeps(captured)) == 1, captured
+    assert f"chunk_overdue:{_CRON_PLAN_ID}" in _sweeps(captured)[0]["params"][0]
 
     # --- Corrida 2: mismo plan ahora completo → resolve ---
     captured.clear()
@@ -251,17 +279,24 @@ def test_cron_overdue_upsertea_y_autoresuelve(monkeypatch):
     monkeypatch.setattr(ct, "execute_sql_query", _fake_query_complete)
     ct._chunk_overdue_alert_job()
 
-    assert len(captured) == 1, captured
-    resolve = captured[0]
-    assert "UPDATE system_alerts" in resolve["sql"]
+    assert _upserts(captured) == [], captured
+    assert len(_sweeps(captured)) == 1, captured
+    resolve = _sweeps(captured)[0]
     assert "resolved_at = NOW()" in resolve["sql"]
-    assert resolve["params"][0] == f"chunk_overdue:{_CRON_PLAN_ID}"
+    # Lista de exclusión VACÍA ⇒ el barrido resuelve toda alerta abierta,
+    # incluida la de este plan (que ya no cumple la condición).
+    assert resolve["params"][0] == [], resolve
 
 
 def test_cron_overdue_fail_open_por_plan(monkeypatch):
     """El primer plan lanza excepción en su COUNT in-flight; el segundo es
     overdue. El job NO debe abortar: el segundo plan recibe su alerta igual
-    (fail-open POR PLAN, no fail-open global)."""
+    (fail-open POR PLAN, no fail-open global).
+
+    [Ronda 3 · FIX 1] Y el plan que NO se pudo evaluar debe quedar EXCLUIDO del
+    barrido de resolución: "no pude calcularlo" no es "ya no pasa". Cerrar su
+    alerta por una excepción transitoria del COUNT sería inventar un veredicto
+    que nadie midió."""
     import cron_tasks as ct
     monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
 
@@ -292,8 +327,13 @@ def test_cron_overdue_fail_open_por_plan(monkeypatch):
 
     ct._chunk_overdue_alert_job()  # no debe lanzar
 
-    assert len(captured) == 1, captured
-    assert captured[0]["params"][0] == f"chunk_overdue:{_CRON_PLAN_ID}"
+    assert len(_upserts(captured)) == 1, captured
+    assert _upserts(captured)[0]["params"][0] == f"chunk_overdue:{_CRON_PLAN_ID}"
+
+    assert len(_sweeps(captured)) == 1, captured
+    excluidos = _sweeps(captured)[0]["params"][0]
+    assert f"chunk_overdue:{_plan_boom_id}" in excluidos, excluidos
+    assert f"chunk_overdue:{_CRON_PLAN_ID}" in excluidos, excluidos
 
 
 def test_alert_key_documentada_en_la_tabla():
@@ -530,3 +570,296 @@ def test_archivados_ausente_o_invalido_no_rompe_ni_cambia_comportamiento():
                             {"date": "2026-07-30", "meals": []}],
     }
     assert chc.compute_chunk_overdue(plan_basura, 0, today=date(2026, 8, 4)) == (True, "2026-08-04")
+
+
+# ---------------------------------------------------------------------------
+# Ronda 3 · FIX 1 — el cron alertaba sobre la POBLACIÓN equivocada.
+#
+# Medido contra Neon producción con el predicado real (2026-08-04): 19 de 23
+# planes en estado activo alertarían el día 1 del despliegue, y NINGUNO es un
+# fallo. Cadena causal: al insertar un plan nuevo, `db_plans.py:1526` cancela
+# TODOS los chunks vivos del usuario y el cron GAP-11 purga las filas
+# `cancelled` a las 48h. El plan SUPERADO se queda para siempre con
+# `generation_status='complete_partial'`, N días de M y CERO filas en la cola
+# ⇒ `in_flight_count == 0` ⇒ el predicado lo declara ATRASADO. Regenerar el
+# plan es una acción NORMAL: el ruido es el caso común, no un borde. De los 23
+# planes activos, 20 ni siquiera eran el plan vigente de su usuario.
+#
+# La UI y el coach nunca sufrieron esto porque ambos operan sobre el plan
+# vigente (`get_latest_meal_plan_with_id`, ORDER BY created_at DESC LIMIT 1).
+# Solo el cron divergía en población.
+# ---------------------------------------------------------------------------
+
+
+def _capturar_sql_de_planes(monkeypatch, rows=None):
+    """Corre el cron y devuelve el SQL REAL emitido contra `meal_plans`.
+
+    Se recoge lo EJECUTADO, no el texto del fuente: un test que lee el archivo
+    seguiría verde si el job dejara de usar esa query."""
+    import cron_tasks as ct
+    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+    monkeypatch.setattr(ct, "execute_sql_write", lambda *a, **k: None)
+
+    visto = {}
+
+    def _fake_query(sql, params=None, **kwargs):
+        if "FROM meal_plans" in sql:
+            visto["sql"] = sql
+            return rows if rows is not None else []
+        if "FROM plan_chunk_queue" in sql:
+            return {"c": 0}
+        raise AssertionError(f"query inesperada: {sql}")
+
+    monkeypatch.setattr(ct, "execute_sql_query", _fake_query)
+    ct._chunk_overdue_alert_job()
+    assert "sql" in visto, "el cron no consultó meal_plans"
+    return visto["sql"]
+
+
+def _span_de_la_subconsulta_distinct_on(sql):
+    """(interior, exterior) del paréntesis que envuelve al `DISTINCT ON`.
+
+    Escanea hacia atrás desde `DISTINCT ON` buscando el `(` sin cerrar que lo
+    contiene, y hacia adelante balanceando paréntesis hasta su `)`. Si el
+    `DISTINCT ON` NO está dentro de ninguna subconsulta (la versión ingenua:
+    un solo nivel con el filtro de estado en su WHERE) el helper falla — que es
+    exactamente el caso que hay que rechazar."""
+    i = sql.upper().find("DISTINCT ON")
+    assert i != -1, f"sin DISTINCT ON:\n{sql}"
+    depth, open_idx = 0, None
+    for j in range(i - 1, -1, -1):
+        if sql[j] == ")":
+            depth += 1
+        elif sql[j] == "(":
+            if depth == 0:
+                open_idx = j
+                break
+            depth -= 1
+    assert open_idx is not None, (
+        "El DISTINCT ON no está dentro de una subconsulta: el filtro de estado "
+        f"solo puede ir en la consulta EXTERNA.\n{sql}")
+    depth, close_idx = 0, None
+    for j in range(open_idx, len(sql)):
+        if sql[j] == "(":
+            depth += 1
+        elif sql[j] == ")":
+            depth -= 1
+            if depth == 0:
+                close_idx = j
+                break
+    assert close_idx is not None, f"subconsulta sin cerrar:\n{sql}"
+    return sql[open_idx:close_idx + 1], sql[close_idx + 1:]
+
+
+def test_cron_elige_el_plan_vigente_de_cada_usuario(monkeypatch):
+    """El barrido usa el MISMO criterio que `get_latest_meal_plan_with_id`
+    (el plan que ven la UI y el coach): el más reciente por `created_at` de
+    cada usuario."""
+    sql = _capturar_sql_de_planes(monkeypatch)
+    normal = " ".join(sql.split())
+    assert "DISTINCT ON (user_id)" in normal, normal
+    assert "ORDER BY user_id, created_at DESC" in normal, normal
+
+
+def test_cron_filtra_el_estado_DESPUES_de_elegir_el_vigente(monkeypatch):
+    """LA TRAMPA. `DISTINCT ON` debe elegir el plan más reciente del usuario
+    entre TODOS sus planes, y SOLO DESPUÉS filtrar por `generation_status`.
+
+    Caso concreto que esto cierra (y que es el bug medido): usuario con un
+    `complete_partial` VIEJO (plan superado, cola purgada) y un `complete`
+    NUEVO (su plan vigente, ya entregado). Filtrando por estado PRIMERO, el
+    `DISTINCT ON` solo ve el viejo — es el único candidato — y lo devuelve
+    como si fuera el plan del usuario ⇒ alerta ATRASADO sobre un plan que
+    nadie está esperando. Filtrando DESPUÉS, el `DISTINCT ON` devuelve el
+    `complete`, el WHERE externo lo descarta por estado, y el usuario
+    desaparece del barrido: cero alertas, que es lo correcto.
+
+    Verificación semántica (no cabe en un test unitario, queda anclada aquí):
+    la query se ejecutó contra un Postgres real con las dos filas de este caso
+    inyectadas vía CTE que sombrea `meal_plans` — 0 filas devueltas con el
+    orden correcto, 1 fila (el `complete_partial` viejo) con el orden
+    invertido."""
+    sql = _capturar_sql_de_planes(monkeypatch)
+    interior, exterior = _span_de_la_subconsulta_distinct_on(sql)
+
+    # `complete_partial` solo aparece en la lista de estados activos: es el
+    # marcador inequívoco de DÓNDE está aplicado el filtro.
+    assert "'complete_partial'" not in interior, (
+        "El filtro de generation_status está DENTRO del DISTINCT ON: un plan "
+        f"superado ganaría cuando el vigente está `complete`.\n{interior}")
+    assert "'complete_partial'" in exterior, exterior
+    for estado in ("'generating'", "'generating_next'", "'partial'"):
+        assert estado in exterior, (estado, exterior)
+
+
+# ---------------------------------------------------------------------------
+# Ronda 3 · FIX 1 (consecuencia) — alertas HUÉRFANAS.
+#
+# Con el acotamiento al plan vigente, un plan que YA tenía alerta abierta y
+# luego deja de ser el vigente (el usuario regenera) SALE de la población
+# barrida. Una resolución por-plan dentro del loop solo corre para lo que el
+# barrido ve ⇒ su alerta quedaría abierta PARA SIEMPRE, y el modelo declarado
+# en docs/system_alerts_resolution_table.md es Auto (implicit), que exige
+# auto-resolución. Por eso la resolución es un único UPDATE de barrido al
+# final, con lista de exclusión.
+# ---------------------------------------------------------------------------
+
+
+def test_cron_resuelve_alertas_huerfanas_de_planes_fuera_de_la_poblacion(monkeypatch):
+    """Un solo plan overdue en la población ⇒ el barrido final resuelve TODA
+    alerta `chunk_overdue` abierta salvo la suya. La alerta de un plan que ya
+    no se barre (regeneración) cae ahí dentro: es lo único que puede cerrarla,
+    porque ese plan_id ya no aparece en ninguna corrida."""
+    import cron_tasks as ct
+    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+
+    captured = []
+    monkeypatch.setattr(ct, "execute_sql_write",
+                        lambda sql, params=None, **k: captured.append({"sql": sql, "params": params}))
+
+    def _fake_query(sql, params=None, **kwargs):
+        if "FROM meal_plans" in sql:
+            return [_cron_overdue_plan_row()]
+        if "FROM plan_chunk_queue" in sql:
+            return {"c": 0}
+        raise AssertionError(f"query inesperada: {sql}")
+
+    monkeypatch.setattr(ct, "execute_sql_query", _fake_query)
+    ct._chunk_overdue_alert_job()
+
+    sweeps = _sweeps(captured)
+    assert len(sweeps) == 1, captured
+    sql = " ".join(sweeps[0]["sql"].split())
+    assert "resolved_at = NOW()" in sql, sql
+    assert "resolved_at IS NULL" in sql, sql
+    # La exclusión tiene que ser por LISTA de keys vivas; un UPDATE por
+    # alert_key concreto no puede cerrar lo que ya no barre.
+    assert "alert_key = ANY(" in sql, sql
+    assert "NOT" in sql, sql
+    assert sweeps[0]["params"][0] == [f"chunk_overdue:{_CRON_PLAN_ID}"], sweeps[0]
+
+
+def test_cron_no_resuelve_nada_si_el_select_de_planes_falla(monkeypatch):
+    """Si la consulta de planes revienta, el job sale SIN barrer. Resolver con
+    la lista de exclusión vacía tras un SELECT fallido cerraría todas las
+    alertas legítimas por un fallo transitorio de la DB.
+
+    Nota de honestidad: este test PASA también contra el código pre-fix (donde
+    no había barrido que pudiera dispararse de más). Su valor es como guard del
+    barrido nuevo: mueve el `return` del except antes del sweep y se pone
+    rojo — comprobado."""
+    import cron_tasks as ct
+    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+
+    captured = []
+    monkeypatch.setattr(ct, "execute_sql_write",
+                        lambda sql, params=None, **k: captured.append({"sql": sql, "params": params}))
+
+    def _boom(sql, params=None, **kwargs):
+        raise RuntimeError("boom: SELECT de meal_plans falló")
+
+    monkeypatch.setattr(ct, "execute_sql_query", _boom)
+    ct._chunk_overdue_alert_job()  # no debe lanzar
+
+    assert captured == [], captured
+
+
+def test_cron_documenta_el_acotamiento_con_los_numeros_medidos():
+    """El docstring del job debe explicar POR QUÉ mira solo el plan vigente,
+    con los números medidos. Sin eso, el próximo lector "arregla" el
+    acotamiento creyendo que el cron mira demasiado poco."""
+    import cron_tasks as ct
+    doc = ct._chunk_overdue_alert_job.__doc__ or ""
+    assert "vigente" in doc.lower(), doc
+    assert "19" in doc and "23" in doc, doc
+    assert "get_latest_meal_plan_with_id" in doc, doc
+
+
+# ---------------------------------------------------------------------------
+# Ronda 3 · FIX 2 — un chunk `stale` quedaba INVISIBLE.
+#
+# `/chunk-status` construía `upcoming_chunks` con `status IN
+# ('pending','processing')`, pero el `in_flight_count` que alimenta el
+# predicado cuenta `('pending','processing','stale')`. Y `stale` NO es
+# terminal: `db_plans.py:1511` lo documenta ("el worker los re-pickea al
+# refrescar pantry") y la consulta con la que el worker reclama trabajo lo
+# incluye (`cron_tasks.py:8225`, `WHERE q.status IN ('pending','stale')`).
+#
+# Consecuencia: un chunk `stale` suprimía el aviso de ATRASADO (correcto, va a
+# ejecutarse) pero NO pintaba pestaña fantasma ⇒ volvían a existir días
+# encolados que el usuario no ve, que es literalmente el bug que esta feature
+# existe para cerrar.
+# ---------------------------------------------------------------------------
+
+
+def _capturar_queries_de_chunk_status(monkeypatch, plan_data, upcoming_rows):
+    """Corre el endpoint y devuelve (queries emitidas, body)."""
+    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+    queries = []
+    base = _fake_chunk_status_queries(plan_data, upcoming_rows)
+
+    def _fake(query, params=None, **kwargs):
+        queries.append(query)
+        return base(query, params, **kwargs)
+
+    client = _build_test_client()
+    from auth import get_verified_user_id
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
+
+    with patch("db_core.execute_sql_query", side_effect=_fake):
+        r = client.get(f"/api/plans/{_PLAN_A}/chunk-status")
+    assert r.status_code == 200, r.text
+    return queries, r.json()
+
+
+_ESTADOS_RE = re.compile(r"status\s+IN\s*\(([^)]*)\)", re.IGNORECASE)
+
+
+def _conjunto_de_estados(sql):
+    m = _ESTADOS_RE.search(sql)
+    assert m, sql
+    return {s.strip().strip("'\"") for s in m.group(1).split(",")}
+
+
+def test_chunk_status_upcoming_y_in_flight_usan_el_mismo_conjunto_de_estados(monkeypatch):
+    """LA INVARIANTE. El conjunto de estados con el que se LISTAN los chunks
+    futuros y el conjunto con el que se CUENTA el in-flight que suprime el
+    aviso de atrasado tienen que ser el MISMO. Cualquier estado que esté solo
+    en el contador es un día encolado que el usuario no ve y del que tampoco
+    se le avisa — invisible por partida doble."""
+    queries, _ = _capturar_queries_de_chunk_status(
+        monkeypatch, _plan_3_dias_viejo(), _upcoming_rows_1_pending())
+
+    upcoming_sql = [q for q in queries
+                    if "id::text AS chunk_id" in q and "ORDER BY execute_after" in q]
+    counters_sql = [q for q in queries if "AS in_flight_count" in q]
+    assert len(upcoming_sql) == 1, queries
+    assert len(counters_sql) == 1, queries
+
+    estados_listados = _conjunto_de_estados(upcoming_sql[0])
+    estados_contados = _conjunto_de_estados(counters_sql[0])
+    assert estados_listados == estados_contados, (estados_listados, estados_contados)
+    assert "stale" in estados_listados, estados_listados
+
+
+def test_chunk_status_expone_un_chunk_stale(monkeypatch):
+    """Un chunk `stale` (única fila de la cola) llega al payload. Es el caso
+    real: el worker lo re-pickea al refrescar pantry, así que el día existe y
+    hay que pintarlo.
+
+    Nota de honestidad: bajo mocks la query no filtra de verdad, así que este
+    test PASA también pre-fix. Los dientes del FIX 2 están en el test de
+    arriba (los dos conjuntos de estados deben coincidir, y ese sí era rojo);
+    este ancla que ningún post-filtro del endpoint descarte un `stale` camino
+    del payload."""
+    stale_rows = [{
+        "chunk_id": _CHUNK_A,
+        "week_number": 2,
+        "days_offset": 3,
+        "days_count": 4,
+        "status": "stale",
+        "execute_after": None,
+    }]
+    _, body = _capturar_queries_de_chunk_status(
+        monkeypatch, _plan_3_dias_viejo(), stale_rows)
+    assert body["upcoming_chunks"] == stale_rows

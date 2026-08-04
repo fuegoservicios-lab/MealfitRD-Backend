@@ -11250,11 +11250,24 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         # frontend degrada solo (los campos ausentes son el comportamiento actual).
         _upcoming_payload = {}
         if _upcoming_days_ui_enabled():
+            # [Ronda 3 · FIX 2 · 2026-08-04] `stale` va en esta lista porque va
+            # en el `in_flight_count` de `counters_row` (arriba), y los dos
+            # conjuntos TIENEN que ser el mismo: el contador alimenta el
+            # predicado que decide si se avisa "atrasado", y esta lista decide
+            # qué días se PINTAN. Un estado presente solo en el contador es un
+            # día que suprime el aviso (correcto: va a ejecutarse) pero no pinta
+            # pestaña ⇒ vuelve a existir un día encolado que el usuario no ve,
+            # que es el bug exacto que esta feature cierra.
+            #
+            # Y `stale` NO es terminal: `db_plans.py` (P0-3) lo documenta — "el
+            # worker los re-pickea al refrescar pantry" — y la consulta con la
+            # que el worker reclama trabajo lo incluye (`WHERE q.status IN
+            # ('pending','stale')`, cron_tasks.py).
             _up_rows = execute_sql_query(
                 """SELECT id::text AS chunk_id, week_number, days_offset, days_count,
                           status, execute_after
                    FROM plan_chunk_queue
-                   WHERE meal_plan_id = %s AND status IN ('pending', 'processing')
+                   WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')
                    ORDER BY execute_after ASC NULLS LAST""",
                 (plan_id,),
             ) or []
