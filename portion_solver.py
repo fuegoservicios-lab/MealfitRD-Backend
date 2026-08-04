@@ -106,7 +106,10 @@ SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
 # este peso:  w=1.2 (previo) → 67.5% de comidas con P/C/F en ±10%  ·  w=0.1 → 77.6% (+10.1 pp).
 # NO bajarlo a 0 (quitar la fila): P/C/F sube a 80.3% pero el MAPE de kcal salta a 2.3% y la banda
 # kcal es la ESTRECHA [0.95, 1.05] → el all-4 empeora. Se conserva como regularizador suave del
-# agregado. Rollback sin redeploy: `MEALFIT_SOLVER_W_KCAL=1.2`.
+# agregado. (El rollback que este bloque publicaba —`MEALFIT_SOLVER_W_KCAL=1.2`— quedó OBSOLETO con
+# P3-SOLVER-W-RETUNE y se eliminó: era 60× el default vigente y aparecía ANTES del rollback correcto,
+# así que un operador buscando "Rollback" encontraba primero el equivocado. El vigente, con los
+# CUATRO pesos, está al final del bloque de abajo.)
 #
 # [P3-SOLVER-W-RETUNE · 2026-08-04] (audit solver+seeder v7 · Task 17) Aquí vivía el ⚠️ que declaraba
 # el residuo: «con 0.1 la fila kcal SIGUE dominando (share 81.7-84.0%) — los pesos declarados siguen
@@ -130,18 +133,29 @@ SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
 # kcal justo donde la banda es más estrecha. Es el mismo argumento con el que el fix anterior se negó
 # a bajar el peso a 0; cambiar 5.2 pp de la banda que producción enforza por 1.5 pp de una banda
 # simétrica que no existe aguas abajo es un mal negocio. El punto elegido empata AMBOS criterios en
-# 75.2% y vive en una MESETA plana (73.5-75.5% en all-4 y 74.3-75.5% en banda para w_kcal ∈
-# [0.015, 0.05] × w_protein ∈ [3, 6] × w_fats ∈ [5, 8]) — no es un filo.
+# 75.2% y vive en una MESETA: BARRIDO EXHAUSTIVO de la caja w_kcal ∈ {0.015, 0.02, 0.03, 0.05} ×
+# w_protein ∈ {3, 4, 5, 6} × w_carbs ∈ {0.35, 0.5} × w_fats ∈ {5, 6.5, 8} (96 puntos, todos medidos)
+# → all-4 entre **72.6% y 75.8%** y banda entre **73.5% y 75.8%**. El peor rincón de los 96 es
+# (0.05, 6.0, 0.5, 5.0) con 72.6% — o sea que el rincón MÁS malo de la caja sigue 14 pp por encima
+# del punto previo. No es un filo: es cota medida, no muestreo optimista.
 #
 # Robustez verificada (no es sobreajuste ni artefacto del catálogo del harness):
 #   · mitades disjuntas POR PLAN: A +15.5 pp (n=220) · B +18.7 pp (n=123) — las dos mejoran.
+#   · ⚠️ el dataset está CONCENTRADO: 1 plan (93d6cd70) aporta 104 de las 343 comidas (30.3%) y cae
+#     ENTERO en la mitad A, así que las mitades no son tan independientes como su nombre sugiere.
+#     Medido por separado: excluyendo ese plan **+16.3 pp** (n=239) · SOLO ese plan **+17.3 pp**
+#     (n=104). El resultado no cuelga de él. Re-derivable: `--exclude-plan` / `--only-plan`.
 #   · sub-conjunto de ALTA FIDELIDAD (196 comidas donde la reconstrucción offline coincide con los
 #     macros estampados a ±10%, o sea donde el catálogo del harness casi no yerra): +13.8 pp all-4 y
 #     +10.2 pp de banda. La ganancia NO viene de líneas que al harness le faltan.
 #
 # ⚠️ Lo que este re-tune SÍ cierra: la fila kcal pasa de llevarse el 79.6% del objetivo al 42.4% y
-# NINGUNA fila queda inerte (la grasa venía del 1.1% — `SOLVER_W_FATS` era decorativo, y su MAPE era
-# el peor del panel: 17.7% → 11.8%). Lo que NO cierra: los pesos siguen SIN ser los efectivos (`w·b²`
+# ninguna fila queda con un SHARE residual (la grasa pesaba el 1.1% del objetivo — el orden de
+# magnitud de un decimal, no el de un knob — y ahora el 10.1%; su MAPE, el peor del panel, baja de
+# 17.7% a 12.5%). Ojo con la prosa aquí: `SOLVER_W_FATS` NO era inerte en el sentido de "no movía
+# nada" —duplicarlo movía el MAPE de grasa ~2.5 pp incluso en el régimen viejo—; lo que era ínfimo
+# es su PESO RELATIVO en el objetivo, que es lo que esta línea afirma y lo que el test asserta.
+# Lo que NO cierra: los pesos siguen SIN ser los efectivos (`w·b²`
 # no es `w`), y eso es deliberado — normalizar las filas para igualarlos está REFUTADO por medición
 # (ver el párrafo de abajo). Lo que se ganó es que los cuatro knobs ejerzan un peso del mismo ORDEN
 # DE MAGNITUD, que es lo que vuelve accionable tocarlos.
@@ -349,10 +363,17 @@ def effective_row_shares(A_rows: list, b: list, w: list) -> list:
     Returns:
         lista de shares en [0, 1] alineada con `A_rows` (suma 1.0; todo ceros si no hay ninguna
         fila accionable). Lista vacía si las tres entradas no son coherentes en largo — el helper
-        no adivina qué fila falta.
+        no adivina qué fila falta NI cuál sobra.
+
+    [P3-SOLVER-W-RETUNE · ronda 1] El guard exige largo EXACTO, no "al menos". Antes solo rechazaba
+    `b`/`w` más CORTOS: con uno más largo truncaba en silencio contra lo que el docstring promete.
+    Un `w` de 4 pesos contra un `A_rows` de 3 filas (el caso real: un macro con target 0 no genera
+    fila, ver `_compute_scale_factors`) devolvía shares atribuyendo a cada fila el peso de OTRA —
+    la respuesta parecía sana y estaba desalineada, que es la peor clase de error para un helper
+    cuyo único trabajo es medir.
     """
     nrows = len(A_rows or [])
-    if nrows == 0 or len(b or []) < nrows or len(w or []) < nrows:
+    if nrows == 0 or len(b or []) != nrows or len(w or []) != nrows:
         return []
     mass = []
     for r in range(nrows):

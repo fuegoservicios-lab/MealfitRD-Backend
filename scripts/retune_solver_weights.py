@@ -14,10 +14,35 @@ Uso:
     python scripts/retune_solver_weights.py --meals ... --mode baseline
     python scripts/retune_solver_weights.py --meals ... --mode grid --top 20
 
-El JSON de comidas NO se versiona (sale de `plan_data` de producción: dato de usuario).
-Se pasa por CLI. Forma esperada — lista de objetos con al menos:
-    {"plan": str, "meal_name": str, "ingredients_raw": [str, ...],
+EL DATASET (cómo re-derivar LA TABLA del comentario de `portion_solver.py`)
+---------------------------------------------------------------------------
+El JSON de comidas NO se versiona (sale de `plan_data` de producción: dato de usuario) y se pasa
+por CLI. La corrida que fijó los defaults vigentes usó `meals_harness.json` — 349 comidas de los
+30 planes más recientes, 343 con macros estampados, 22 planes distintos tras descartar las sin
+target — extraído READ-ONLY el 2026-08-03 a:
+
+    <scratchpad de la sesión>/meals_harness.json
+
+Ese scratchpad es efímero: si el fichero ya no está, se re-extrae con el patrón SQL forense del
+repo (ver CLAUDE.md → «SQL forense antes de tocar código»): `load_dotenv(backend/.env)` +
+`psycopg.connect(os.environ["NEON_DATABASE_URL"])` y
+
+    SELECT left(id::text, 8), plan_data->'days', plan_data->'target_macros', plan_data->'calories'
+    FROM public.meal_plans ORDER BY created_at DESC LIMIT 30;
+
+aplanando `days[] → meals[]` a un objeto por comida. Forma esperada — lista de objetos con:
+    {"plan": str, "meal_name": str, "ingredients": [str, ...], "ingredients_raw": [str, ...],
      "meal_macros": {"cals"|"calories": n, "protein": n, "carbs": n, "fats": n}}
+⚠️ Un re-extract da OTRAS comidas (los 30 planes más recientes cambian), así que los niveles
+absolutos no serán idénticos; lo que debe reproducirse es el SIGNO y el orden de magnitud de las
+diferencias entre puntos.
+
+⚠️ CONCENTRACIÓN del dataset usado: NO es una muestra balanceada. Un solo plan (`93d6cd70`) aporta
+104 de las 343 comidas (**30.3%**) y cae ENTERO en la mitad A del split por plan — o sea que la
+comprobación "las dos mitades mejoran" es menos independiente de lo que su nombre sugiere.
+Verificado por separado con `--exclude-plan` / `--only-plan`: sin ese plan la ganancia es
+**+16.3 pp** (n=239) y con SOLO ese plan **+17.3 pp** (n=104), contra los +16.6 pp del conjunto.
+No cuelga de él, pero cualquier métrica nueva sobre este dataset debe reportarse con el corte.
 
 DE DÓNDE SALEN LOS MACROS POR ALIMENTO (decisión documentada)
 -------------------------------------------------------------
@@ -90,7 +115,13 @@ _STUB_CATALOG: dict = {
     "Vinagre blanco": (18, 0.0, 0.04, 0.0, 239, None, ("vinagre",)),
     "Polvo de hornear": (53, 0.0, 27.7, 0.0, 220, None, ()),
     "Vainilla": (288, 0.1, 12.6, 0.1, 208, None, ("extracto de vainilla",)),
-    "Agua": (0, 0, 0, 0, 240, None, ("agua fria", "agua potable", "hielo", "ola")),
+    # ⚠️ NO añadir `"ola"` como alias: NO es un sinónimo de agua, es un ARTEFACTO DE SUBCADENA.
+    # `shopping_calculator._parse_quantity("1 chinola")` devuelve el nombre canónico `"Ola"`
+    # (la clase `"res"⊂"fresco"` del repo), así que "Ola" aparece en la lista de frecuencias del
+    # dataset como si fuera un alimento y se cuela al copiarla. Con ese alias, `chinola` (fruta,
+    # 97 kcal/100g) podía degradar a agua (0 kcal) en cuanto el matcher perdiera la frontera de
+    # palabra. La chinola ya está en el catálogo, abajo, como `Pulpa de chinola`.
+    "Agua": (0, 0, 0, 0, 240, None, ("agua fria", "agua potable", "hielo")),
     # --- grasas
     "Aceite de oliva": (884, 0, 0, 100, 216, None, ("aceite oliva",)),
     "Aceite vegetal": (884, 0, 0, 100, 218, None, ("aceite de maiz", "aceite")),
@@ -604,6 +635,12 @@ def main(argv=None) -> int:
     ap.add_argument("--meals", required=True, help="JSON de comidas vivas (NO versionado)")
     ap.add_argument("--mode", default="tune", choices=("baseline", "tune", "confirm", "points"))
     ap.add_argument("--point", default="", help="confirm: 'kcal,prot,carb,fats' a contrastar")
+    # [P3-SOLVER-W-RETUNE · ronda 1] Sin esto, `confirm` contrasta el candidato contra los defaults
+    # VIGENTES del módulo — y en cuanto el candidato se adopta como default, el mismo comando que
+    # documenta la ganancia empieza a imprimir "+0.0 pp" contra sí mismo. Quien re-corriera la línea
+    # del comentario concluiría que la medición era falsa. El punto de referencia se declara.
+    ap.add_argument("--baseline", default="",
+                    help="confirm: punto de referencia 'k,p,c,f' (default: los knobs vigentes)")
     ap.add_argument("--points", default="",
                     help="points: lista 'k,p,c,f;k,p,c,f;…' a evaluar tal cual (candidatos "
                          "REDONDOS: un default que un operador no puede leer no es un default)")
@@ -612,6 +649,11 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=0, help="usar solo las primeras N comidas")
     ap.add_argument("--no-gate", action="store_true",
                     help="NO espejar el gate de cobertura de producción (mide el sesgo del stub)")
+    # [P3-SOLVER-W-RETUNE · ronda 1] El dataset está CONCENTRADO (un plan aporta el 30% de las
+    # comidas). Estos dos flags dejan re-derivar la comprobación de que el resultado no cuelga de
+    # ese plan, en vez de pedir que se confíe en la frase del comentario.
+    ap.add_argument("--exclude-plan", default="", help="omitir las comidas de ese plan (prefijo id)")
+    ap.add_argument("--only-plan", default="", help="usar SOLO las comidas de ese plan")
     ap.add_argument("--quiet-logs", action="store_true", default=True)
     args = ap.parse_args(argv)
 
@@ -623,6 +665,10 @@ def main(argv=None) -> int:
 
     db = CachingDB(IngredientNutritionDB(rows=build_stub_rows()))
     cases = load_cases(args.meals)
+    if args.exclude_plan:
+        cases = [c for c in cases if c[0] != args.exclude_plan]
+    if args.only_plan:
+        cases = [c for c in cases if c[0] == args.only_plan]
     if args.limit:
         cases = cases[: args.limit]
     cases = attach_entries(cases, db, apply_gate=not args.no_gate)
@@ -660,6 +706,9 @@ def main(argv=None) -> int:
 
     if args.mode == "confirm":
         cand = tuple(float(x) for x in args.point.split(","))
+        if args.baseline:
+            actual = tuple(float(x) for x in args.baseline.split(","))
+            print(f"\n(referencia explícita: {actual} — NO los knobs vigentes)")
         hi = high_fidelity(cases, db)
         print(f"\nsub-conjunto ALTA FIDELIDAD (kcal reconstruida a ±10% de la estampada): "
               f"{len(hi)} de {len(cases)} comidas")

@@ -80,9 +80,24 @@ def test_una_fila_sin_ningun_portador_no_pesa():
 
 
 def test_largos_incoherentes_devuelven_vacio_sin_adivinar():
+    # más CORTOS
     assert ps.effective_row_shares(A_ROWS, B_ROW[:3], [0.1, 1.5, 1.1, 1.4]) == []
     assert ps.effective_row_shares(A_ROWS, B_ROW, [0.1, 1.5]) == []
     assert ps.effective_row_shares([], [], []) == []
+
+
+def test_largos_de_mas_tampoco_se_truncan_en_silencio():
+    """[P3-SOLVER-W-RETUNE · ronda 1] El guard exigía "al menos N" y truncaba lo que sobrara. Es el
+    caso REAL, no un borde teórico: `_compute_scale_factors` NO emite fila para un macro con target
+    0, así que un caller natural pasa los 4 pesos `SOLVER_W_*` contra 3 filas — y el helper devolvía
+    shares atribuyendo a cada fila el peso de OTRA, con pinta de respuesta sana. Para un helper cuyo
+    único trabajo es MEDIR, desalinear en silencio es peor que no responder."""
+    tres_filas = A_ROWS[:3]
+    assert ps.effective_row_shares(tres_filas, B_ROW[:3], [0.02, 4.0, 0.5, 5.0]) == []
+    assert ps.effective_row_shares(tres_filas, B_ROW, [0.02, 4.0, 0.5]) == []
+    # y el uso correcto (los 3 pesos de las 3 filas presentes) sí responde
+    ok = ps.effective_row_shares(tres_filas, B_ROW[:3], [0.02, 4.0, 0.5])
+    assert len(ok) == 3 and sum(ok) == pytest.approx(1.0)
 
 
 def test_sin_ninguna_fila_accionable_devuelve_ceros_no_nan():
@@ -105,12 +120,17 @@ def test_el_helper_es_puro():
 def test_caracterizacion_share_kcal_tras_el_retune():
     """ANCLA DE CARACTERIZACIÓN (medida, no aspiracional). En esta comida sintética la fila kcal se
     llevaba **98.4%** del objetivo con el default original `w=1.2`, **84.0%** con `w=0.1`, y tras el
-    re-tune medido baja a **41.7%**. La grasa iba del 0.1% → 1.5% → **13.3%**: `SOLVER_W_FATS` era
-    literalmente decorativo y ahora ejerce.
+    re-tune medido baja a **41.7%**. La grasa iba del 0.1% → 1.5% → **13.3%** del objetivo.
 
-    Las cotas son tolerantes a propósito (no clavan el decimal): lo que anclan es el RÉGIMEN — la
-    fila redundante dejó de mandar y ninguna fila quedó inerte. Si alguien revierte los pesos a la
-    vecindad previa, esto falla antes de que el cambio llegue a producción.
+    ⚠️ PRECISIÓN DE LA AFIRMACIÓN: esto habla del SHARE, no de la potencia del knob. `SOLVER_W_FATS`
+    no era "decorativo" en el sentido de no mover nada —duplicarlo movía el MAPE de grasa ~2.5 pp
+    incluso en el régimen viejo—; lo que era ínfimo es su peso RELATIVO en el objetivo (1.5%: el
+    orden de magnitud de un decimal, no el de un knob), y eso es exactamente lo que las aserciones
+    de abajo miden. La prosa y el assert dicen lo mismo a propósito.
+
+    Las cotas son tolerantes (no clavan el decimal): lo que anclan es el RÉGIMEN — la fila
+    redundante dejó de mandar y ninguna fila quedó con un share residual. Si alguien revierte los
+    pesos a la vecindad previa, esto falla antes de que el cambio llegue a producción.
 
     ⚠️ NO dice que los pesos declarados sean YA los efectivos: `w·b²` sigue sin ser `w` (igualar
     ambos exige normalizar las filas, REFUTADO por medición, −27.1 pp). Dice que los cuatro pesan el
@@ -121,8 +141,8 @@ def test_caracterizacion_share_kcal_tras_el_retune():
         f"la fila kcal volvió a dominar el objetivo ({shares['kcal']:.1%}) — "
         f"régimen previo al re-tune. Shares: {_pretty}")
     assert shares["protein"] >= 0.25, f"la fila de proteína se diluyó: {_pretty}"
-    # ninguna fila queda INERTE (la grasa estaba en 1.5% — un knob que no movía nada)
-    assert min(shares.values()) >= 0.08, f"hay una fila prácticamente inerte: {_pretty}"
+    # ninguna fila baja al share RESIDUAL del que venía la grasa (1.5% del objetivo)
+    assert min(shares.values()) >= 0.08, f"hay una fila con share residual: {_pretty}"
     # y la fila redundante ya no pesa un ORDEN DE MAGNITUD más que la clínicamente crítica
     assert shares["kcal"] / shares["protein"] <= 1.5, (
         f"kcal vuelve a pesar {shares['kcal'] / shares['protein']:.1f}× la proteína: {_pretty}")
