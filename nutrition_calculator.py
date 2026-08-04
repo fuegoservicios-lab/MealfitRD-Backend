@@ -1733,12 +1733,42 @@ def get_nutrition_targets(form_data: dict) -> dict:
 # precio demasiado bajo. El presupuesto NO toca los pisos clínicos (proteína/calorías son
 # budget-blind, ver Fase 2); este floor sólo evita prometer un plan profesional con un monto
 # imposible. Tooltip-anchor: P2-BUDGET-FLOOR.
-# ============================================================
+#
+# [P3-BUDGET-KNOBS-REGISTRY · 2026-08-04] Los ~10 knobs `MEALFIT_BUDGET_*` de este bloque (+
+# reconciliación + tight-custom-factor más abajo en el archivo) leían `os.environ.get(...)` crudo:
+# invisibles en `_KNOBS_REGISTRY`/`/health/version`, a diferencia de todo el resto del repo
+# (precedente en este MISMO archivo: P2-SOLVER-KNOBS-REGISTRY, línea ~285, para
+# `MEALFIT_PROTEIN_CEILING_G_PER_KG`). Migrados a `_env_float`/`_env_bool` con el MISMO default;
+# donde el código ya recortaba a un rango (`max`/`min`), el rango pasa a `validator=` del helper.
+# Diferencia deliberada con el precedente: la lectura sigue siendo POR-LLAMADA (no constante de
+# módulo) — un override toma efecto en la SIGUIENTE invocación, sin reiniciar el proceso (varias
+# de estas funciones se llaman una vez por generación de plan, no una vez por arranque).
+# tooltip-anchor: P3-BUDGET-KNOBS-REGISTRY
+try:
+    from knobs import _env_bool as _nc_env_bool_budget, _env_float as _nc_env_float_budget
+except Exception:  # pragma: no cover - knobs siempre disponible en prod
+    def _nc_env_bool_budget(name: str, default: bool) -> bool:
+        return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
+
+    def _nc_env_float_budget(name: str, default: float, validator=None) -> float:
+        try:
+            v = float(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
+        if validator is not None:
+            try:
+                if not validator(v):
+                    return default
+            except Exception:
+                return default
+        return v
+
+
 _GROCERY_DURATION_DAYS = {"weekly": 7, "biweekly": 15, "monthly": 30}
 
 
 def _budget_floor_enabled() -> bool:
-    return os.environ.get("MEALFIT_BUDGET_FLOOR_ENABLED", "true").lower() != "false"
+    return _nc_env_bool_budget("MEALFIT_BUDGET_FLOOR_ENABLED", True)
 
 
 # [BUDGET-MIN-NONLINEAR · 2026-06-23] Piso TOTAL por ciclo (DOP) a la caloría de referencia,
@@ -1758,32 +1788,20 @@ def _budget_cycle_floor_dop(days: int) -> float:
         # Ciclo no estándar (no debería ocurrir): interpola desde el piso de 7 días (conservador).
         per_day_7 = float(_BUDGET_CYCLE_FLOOR_DEFAULTS_DOP[7]) / 7.0
         return max(0.0, per_day_7 * max(1, int(days)))
-    try:
-        return max(0.0, float(os.environ.get(f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_DOP", default)))
-    except (TypeError, ValueError):
-        return float(default)
+    return _nc_env_float_budget(
+        f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_DOP", float(default), lambda v: v >= 0.0)
 
 
 def _budget_floor_kcal_ref() -> float:
-    try:
-        return max(800.0, float(os.environ.get("MEALFIT_BUDGET_FLOOR_KCAL_REF", "2000")))
-    except (TypeError, ValueError):
-        return 2000.0
+    return _nc_env_float_budget("MEALFIT_BUDGET_FLOOR_KCAL_REF", 2000.0, lambda v: v >= 800.0)
 
 
 def _budget_usd_to_dop() -> float:
-    try:
-        return max(1.0, float(os.environ.get("MEALFIT_BUDGET_USD_TO_DOP", "60")))
-    except (TypeError, ValueError):
-        return 60.0
+    return _nc_env_float_budget("MEALFIT_BUDGET_USD_TO_DOP", 60.0, lambda v: v >= 1.0)
 
 
 def _budget_floor_tolerance_pct() -> float:
-    try:
-        v = float(os.environ.get("MEALFIT_BUDGET_FLOOR_TOLERANCE_PCT", "0.05"))
-        return min(0.5, max(0.0, v))
-    except (TypeError, ValueError):
-        return 0.05
+    return _nc_env_float_budget("MEALFIT_BUDGET_FLOOR_TOLERANCE_PCT", 0.05, lambda v: 0.0 <= v <= 0.5)
 
 
 def min_budget_for_goals(form_data: dict) -> dict:
@@ -1896,16 +1914,12 @@ _BUDGET_VALID_TIERS = ("low", "medium", "high", "unlimited", "custom")
 
 
 def _budget_reconcile_enabled() -> bool:
-    return os.environ.get("MEALFIT_BUDGET_RECONCILE", "true").lower() != "false"
+    return _nc_env_bool_budget("MEALFIT_BUDGET_RECONCILE", True)
 
 
 def _budget_reconcile_tolerance_pct() -> float:
     """Margen sobre la referencia antes de marcar `excedido` (default 10%)."""
-    try:
-        v = float(os.environ.get("MEALFIT_BUDGET_RECONCILE_TOL_PCT", "0.10"))
-        return min(0.5, max(0.0, v))
-    except (TypeError, ValueError):
-        return 0.10
+    return _nc_env_float_budget("MEALFIT_BUDGET_RECONCILE_TOL_PCT", 0.10, lambda v: 0.0 <= v <= 0.5)
 
 
 def _budget_reconcile_min_coverage() -> float:
@@ -1914,11 +1928,7 @@ def _budget_reconcile_min_coverage() -> float:
     `partial_pricing=True` (estimado parcial — el banner verde podría
     subestimar). NO cambia el status (más informativo que callar); el
     frontend baja el tono y anexa el caveat. Knob clamp [0.0, 1.0]."""
-    try:
-        v = float(os.environ.get("MEALFIT_BUDGET_RECONCILE_MIN_COVERAGE", "0.7"))
-        return min(1.0, max(0.0, v))
-    except (TypeError, ValueError):
-        return 0.7
+    return _nc_env_float_budget("MEALFIT_BUDGET_RECONCILE_MIN_COVERAGE", 0.7, lambda v: 0.0 <= v <= 1.0)
 
 
 def _budget_tier_band_factor(tier: str) -> float | None:
@@ -1927,10 +1937,7 @@ def _budget_tier_band_factor(tier: str) -> float | None:
     default = _BUDGET_TIER_BAND_DEFAULTS.get(tier)
     if default is None:
         return None
-    try:
-        return max(1.0, float(os.environ.get(f"MEALFIT_BUDGET_BAND_{tier.upper()}", default)))
-    except (TypeError, ValueError):
-        return float(default)
+    return _nc_env_float_budget(f"MEALFIT_BUDGET_BAND_{tier.upper()}", float(default), lambda v: v >= 1.0)
 
 
 def build_budget_reference(form_data: dict) -> dict | None:
@@ -2179,11 +2186,7 @@ def refresh_budget_reconciliation(plan_data: dict, active_household: int | None 
 def _budget_tight_custom_factor() -> float:
     """Factor × piso-de-metas bajo el cual un monto `custom` se considera
     AJUSTADO (activa las palancas de economía). Knob MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR."""
-    try:
-        v = float(os.environ.get("MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR", "1.3"))
-        return min(3.0, max(1.0, v))
-    except (TypeError, ValueError):
-        return 1.3
+    return _nc_env_float_budget("MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR", 1.3, lambda v: 1.0 <= v <= 3.0)
 
 
 def budget_prefers_economy(form_data: dict) -> bool:
