@@ -6321,9 +6321,37 @@ def _chunk_overdue_alert_job():
     "no pude calcularlo" no es "ya no pasa", y cerrar su alerta por una
     excepción transitoria sería inventar un veredicto que nadie midió.
 
+    [Ronda 4] Tres cambios más, todos con su porqué en el sitio donde se
+    aplican: el COUNT incluye `pending_user_action` (B2 — un plan pausado
+    esperando al usuario no es un fallo del sistema y no merece alerta de
+    operador); el predicado caduca con el ciclo del plan
+    (`chat_history_context.plan_cycle_window`, B3 — antes una alerta sobre un
+    plan vencido no tenía NINGÚN camino de resolución y quedaba abierta para
+    siempre); y el job entero está gateado por `MEALFIT_UPCOMING_DAYS_UI`
+    (B4), que apagado no emite y resuelve lo abierto.
+
     Tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL.
     """
-    from chat_history_context import compute_chunk_overdue
+    from chat_history_context import compute_chunk_overdue, upcoming_days_signal_enabled
+
+    # [Ronda 4 · B4] Mismo knob que el payload de `/chunk-status` y que el
+    # índice del coach: el rollback de la señal tiene que apagar las TRES
+    # superficies, y ésta es la que ya hubo que corregir de urgencia (19 de 23
+    # planes alertando). Apagado ⇒ no se emite nada Y se resuelve lo que quedó
+    # abierto: el único uso del kill switch es cortar una inundación de alertas,
+    # así que dejarlas abiertas al apagarlo lo haría inútil.
+    if not upcoming_days_signal_enabled():
+        try:
+            execute_sql_write(
+                "UPDATE system_alerts SET resolved_at = NOW() "
+                "WHERE alert_type = 'chunk_overdue' AND resolved_at IS NULL "
+                "AND NOT (alert_key = ANY(%s::text[]))",
+                ([],),
+            )
+        except Exception as _off_e:
+            logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] knob OFF, cierre de alertas falló: {_off_e}")
+        return
+
     try:
         rows = execute_sql_query(
             """SELECT plan_id, uid AS user_id, plan_data
@@ -6351,9 +6379,16 @@ def _chunk_overdue_alert_job():
     for r in rows:
         plan_id = r.get("plan_id")
         try:
+            # [Ronda 4 · B2] `pending_user_action` cuenta como "algo que lo va a
+            # resolver": ese chunk espera una acción del USUARIO (consentimiento
+            # de nevera), no un reintento del sistema. Sin él, un plan pausado
+            # generaba una alerta de operador por algo que no es un fallo.
+            # Conjunto deliberadamente distinto del de `upcoming_chunks` en
+            # `/chunk-status` — ver el comentario de B2 allí.
             cnt = execute_sql_query(
                 "SELECT count(*)::int AS c FROM plan_chunk_queue "
-                "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
+                "WHERE meal_plan_id = %s AND status IN "
+                "('pending', 'processing', 'stale', 'pending_user_action')",
                 (plan_id,), fetch_one=True,
             ) or {}
             overdue, since = compute_chunk_overdue(r.get("plan_data"), cnt.get("c") or 0)

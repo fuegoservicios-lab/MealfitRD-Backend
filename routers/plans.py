@@ -253,10 +253,17 @@ SLOT_FATS_FLOOR_MIN_KCAL = _env_int(
 )
 
 # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Días futuros visibles en `/chunk-status`
-# (upcoming_chunks + overdue/overdue_since). Lambda (no constante de import-time)
-# a propósito: se re-evalúa por-request para permitir rollback vía env var sin
+# (upcoming_chunks + overdue/overdue_since). NO es constante de import-time a
+# propósito: se re-evalúa por-request para permitir rollback vía env var sin
 # reiniciar el worker Y para que tests puedan flip-earlo con monkeypatch.setenv.
-_upcoming_days_ui_enabled = lambda: _env_bool("MEALFIT_UPCOMING_DAYS_UI", True)
+#
+# [Ronda 4 · B4] Delega en el helper SSOT en vez de releer la env var: el knob
+# gatea ahora TRES superficies (este payload, el cron horario y el índice del
+# coach) y tener el nombre y el default escritos en tres sitios es la receta
+# para que un día uno de ellos no se apague.
+def _upcoming_days_ui_enabled() -> bool:
+    from chat_history_context import upcoming_days_signal_enabled
+    return upcoming_days_signal_enabled()
 
 
 def _try_acquire_pipeline_slot() -> bool:
@@ -2702,6 +2709,22 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                                             current_offset += chunk_count
                                         shifted_days = []
                                         shifted_data['grocery_start_date'] = today.isoformat()
+                                        # [Ronda 4 · B1 · 2026-08-04] Ancla del ciclo VIGENTE.
+                                        # La renovación reusa el mismo plan_id, conserva
+                                        # `total_days_requested` y NUNCA vacía `_archived_days`:
+                                        # sin esta marca, el ciclo 2 es indistinguible del 1
+                                        # (comparten array de archivados y una línea temporal de
+                                        # fechas CONTIGUA — la renovación arranca el día siguiente
+                                        # al último archivado), así que `compute_chunk_overdue`
+                                        # contaba archivados de DOS ciclos, alcanzaba
+                                        # `total_days_requested` y se apagaba PARA SIEMPRE con 27
+                                        # días sin generar y la cola vacía. `grocery_start_date` NO
+                                        # sirve de ancla: medido en 23/23 planes de producción es
+                                        # igual a `days[0].date`, o sea sigue a la ventana rolling
+                                        # (este mismo shift la reescribe en cada rotación).
+                                        # Consumido por `chat_history_context.plan_cycle_window`.
+                                        # tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-ANCHOR
+                                        shifted_data['_cycle_started_at'] = today.isoformat()
                                         shifted_data['generation_status'] = 'generating_next'
                                         modified = True
                                         logger.info(f"🔄 [P0-1 RENEWAL] Plan semanal {plan_id} renovado.")
@@ -11268,7 +11291,13 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
                           status, execute_after
                    FROM plan_chunk_queue
                    WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')
-                   ORDER BY execute_after ASC NULLS LAST""",
+                   -- [Ronda 4 · B5] `execute_after` es NULLABLE y ~12 paths de
+                   -- recovery la reescriben a NOW(): sin desempate, dos chunks
+                   -- empatados dejan `upcoming[0]` (el que el frontend usa para
+                   -- days_offset/days_count/estado) al azar entre corridas.
+                   ORDER BY execute_after ASC NULLS LAST,
+                            week_number ASC NULLS LAST,
+                            days_offset ASC NULLS LAST""",
                 (plan_id,),
             ) or []
             payload_upcoming = [{
@@ -11282,7 +11311,28 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
                                   else r.get("execute_after")),
             } for r in _up_rows]
             from chat_history_context import compute_chunk_overdue
-            _ov, _ov_since = compute_chunk_overdue(plan_data, int(counters_row.get("in_flight_count") or 0))
+            # [Ronda 4 · B2 · 2026-08-04] Al predicado se le suma
+            # `pending_user_action_count`. Los chunks pausados esperando al
+            # usuario NO están en ('pending','processing','stale'), así que un
+            # plan pausado por consentimiento de nevera daba in_flight=0 y se
+            # anunciaba como ATRASADO: la pestaña prometía "el sistema lo
+            # reintenta solo la próxima vez que abras la app" — falso, ese chunk
+            # espera una acción SUYA — y el cron le mandaba al operador una
+            # alerta por algo que no es un fallo del sistema. El criterio del
+            # predicado es "¿hay algo que lo vaya a resolver?", y la acción del
+            # usuario lo resuelve.
+            #
+            # Este conjunto queda DELIBERADAMENTE distinto del de
+            # `upcoming_chunks` (la query de arriba, sin `pending_user_action`): esos días ya
+            # se pintan vía `paused_chunks`, y el frontend distingue 'pausado' de
+            # 'en proceso' con `puac > 0 && in_flight === 0` — meterlos en la
+            # lista rompería esa discriminación. El instinto de "alinear los dos
+            # filtros" es correcto para `stale` (FIX 2) y equivocado aquí.
+            # Los campos `in_flight_count`/`pending_user_action_count` del payload
+            # NO cambian: el frontend los necesita separados.
+            _ov_blockers = (int(counters_row.get("in_flight_count") or 0)
+                            + int(counters_row.get("pending_user_action_count") or 0))
+            _ov, _ov_since = compute_chunk_overdue(plan_data, _ov_blockers)
             _upcoming_payload = {
                 "upcoming_chunks": payload_upcoming,
                 "overdue": _ov,

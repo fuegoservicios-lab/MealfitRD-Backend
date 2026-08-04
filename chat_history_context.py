@@ -173,6 +173,150 @@ def find_plan_day_for_date(plan_data: Any, target: date, today: date) -> Optiona
     return None
 
 
+_CYCLE_ANCHOR_KEY = "_cycle_started_at"
+
+
+def upcoming_days_signal_enabled() -> bool:
+    """[Ronda 4 · B4] Knob ÚNICO de la señal de días futuros, para las TRES
+    superficies (`/chunk-status`, cron horario, índice del coach).
+
+    Antes solo gateaba el payload del endpoint: el cron horario y el `COUNT`
+    por turno del coach seguían vivos sin palanca. El cron es justo la pieza
+    que hubo que corregir de urgencia (19 de 23 planes alertando), o sea la
+    que MÁS necesita rollback sin redeploy. Se lee por-llamada (no constante
+    de import-time) para que flipear la env var no requiera reiniciar el
+    worker."""
+    from knobs import _env_bool
+    return _env_bool("MEALFIT_UPCOMING_DAYS_UI", True)
+
+
+def plan_cycle_window(plan_data):
+    """[Ronda 4 · B1+B3] `(inicio, fin_EXCLUSIVO)` de la ventana de fechas que el
+    ciclo VIGENTE del plan pretende cubrir. `(None, None)` si no se puede anclar.
+
+    SSOT del término "¿el plan aún debe días?" para las tres superficies. Antes
+    era un CONTEO (`len(_archived_days) + len(days) >= total_days_requested`) y
+    ese conteo tiene dos agujeros que esta ventana cierra a la vez:
+
+    **B1 — la RENOVACIÓN.** `_archived_days` NUNCA se vacía, ni cuando el plan
+    renueva (`P0-1 RENEWAL`, `routers/plans.py`): mismo `plan_id`,
+    `total_days_requested` intacto, `days=[]` y offsets desde 0. Dos ciclos
+    comparten el array, así que el conteo alcanza `total` y apaga el predicado
+    PARA SIEMPRE. Reproducido ejecutando la función: plan de 30 días renovado
+    (30 archivados + 3 vivos, 27 sin generar, cola vacía) devolvía
+    `(False, None)` — las tres superficies mudas justo en el bug que la feature
+    existe para cerrar.
+
+    **B3 — la caducidad.** El conteo no tiene término de vencimiento: un plan
+    abandonado sigue "debiendo días" para siempre, así que declaraba ATRASADO
+    también a +30 días, cuando `api_shift_plan` ya no puede encolar nada (no
+    existe camino de resolución y la alerta del cron quedaba abierta sin
+    remedio). Medido contra `76a6836d` en producción.
+
+    **Por qué el ancla es un campo NUEVO y no uno de los que ya existen.**
+    Medido contra los 24 planes de producción (2026-08-04,
+    `scratchpad/forense_ciclo.py`), NO por el nombre del campo:
+
+    - `grocery_start_date == days[0].date` en **23 de 23** planes con dato. Es
+      la fecha de la VENTANA ROLLING (el shift la reescribe a HOY en cada
+      rotación, `routers/plans.py`), no la del ciclo. Anclar ahí daría una
+      ventana que se desplaza con el consumo y nunca vence.
+    - `cycle_start_date == created_at` en **19 de 23** (los otros 4 difieren un
+      día por TZ). Es el ancla INMUTABLE de creación y la renovación NO la
+      toca, así que para un plan renovado apunta al ciclo ANTERIOR.
+
+    Ninguno marca el inicio del ciclo vigente, y por fechas el ciclo tampoco es
+    recuperable: la renovación arranca el día siguiente al último archivado, de
+    modo que la línea temporal entregada es CONTIGUA y un ciclo nuevo es
+    indistinguible de uno viejo completo. Por eso la renovación estampa
+    `_cycle_started_at` (ver `test_b1_la_renovacion_estampa_el_ancla_del_ciclo`).
+
+    Cascada del ancla:
+      1. `_cycle_started_at` — escrito por la renovación. Autoritativo.
+      2. La primera fecha ENTREGADA (archivados + vivos). Para un plan que
+         nunca renovó ES el inicio del ciclo — los 24 planes de la flota hoy.
+      3. `days[0].date - len(_archived_days)` cuando los archivados no llevan
+         fecha (planes anteriores a P1-CHAT-PAST-DAYS). Se toma la estimación
+         MÁS TEMPRANA de 2 y 3: adelantar el inicio adelanta el fin, y el modo
+         de fallo que más caro sale es el falso ATRASADO.
+
+    Nota honesta: sin el ancla (planes legacy ya renovados) el fallback NO
+    recupera la renovación y el plan sigue mudo — el comportamiento de hoy, no
+    una regresión. Anclado en
+    `test_b1_sin_ancla_un_plan_renovado_legacy_queda_mudo_a_sabiendas`.
+    tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-WINDOW
+    """
+    try:
+        if not isinstance(plan_data, dict):
+            return (None, None)
+        total = int(plan_data.get("total_days_requested") or 0)
+        if total <= 0:
+            return (None, None)
+        live = [d for d in (plan_data.get("days") or []) if isinstance(d, dict)]
+        archived = [d for d in (plan_data.get("_archived_days") or []) if isinstance(d, dict)]
+
+        start = _to_local_date(plan_data.get(_CYCLE_ANCHOR_KEY))
+        if start is None:
+            dated = [p for p in (_parse_date(d.get("date")) for d in archived + live)
+                     if p is not None]
+            start = min(dated) if dated else None
+            first_live = None
+            for d in live:
+                p = _parse_date(d.get("date"))
+                if p is not None and (first_live is None or p < first_live):
+                    first_live = p
+            if first_live is not None and archived:
+                by_count = first_live - timedelta(days=len(archived))
+                start = by_count if start is None else min(start, by_count)
+        if start is None:
+            return (None, None)
+        return (start, start + timedelta(days=total))
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] plan_cycle_window fail-open: {e}")
+        return (None, None)
+
+
+def plan_cycle_pending_days(plan_data) -> int:
+    """[Ronda 4 · B1] Días que el ciclo VIGENTE todavía NO ha entregado. `0` si
+    ya terminó, si no hay ancla o ante cualquier shape rara (fail-open).
+
+    Segundo consumidor de `plan_cycle_window`, y la razón de que exista como
+    función y no como tres copias: este cálculo vivía DUPLICADO en
+    `build_pending_plan_days_lines` (numeración del índice del coach) y en
+    `agent._build_pending_days_lines_block` (short-circuit para no pagar el
+    COUNT), cada uno con su propio `len(archived) + len(days)`. Duplicar el
+    criterio es exactamente cómo el defecto de ventana rolling llegó a tener
+    cuatro instancias.
+
+    Se mide por FECHAS (`último_día_vivo - inicio_ciclo + 1`), no contando
+    arrays, para que los archivados del ciclo anterior no cuenten como
+    entregados tras una renovación."""
+    try:
+        if not isinstance(plan_data, dict):
+            return 0
+        days = [d for d in (plan_data.get("days") or []) if isinstance(d, dict)]
+        if not days:
+            return 0
+        total = int(plan_data.get("total_days_requested") or 0)
+        if total <= 0:
+            return 0
+        last = None
+        for d in days:
+            pd = _parse_date(d.get("date"))
+            if pd is not None and (last is None or pd > last):
+                last = pd
+        if last is None:
+            return 0
+        cycle_start, _cycle_end = plan_cycle_window(plan_data)
+        if cycle_start is None:
+            return 0
+        delivered = max(0, min((last - cycle_start).days + 1, total))
+        return max(0, total - delivered)
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] plan_cycle_pending_days fail-open: {e}")
+        return 0
+
+
 def compute_chunk_overdue(plan_data, in_flight_count, today=None):
     """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] ¿Hoy debería existir un día del plan que no
     existe, sin nada en la cola que lo vaya a resolver solo?
@@ -194,21 +338,30 @@ def compute_chunk_overdue(plan_data, in_flight_count, today=None):
     un falso positivo PERMANENTE (todo plan terminado cuyo usuario pasó el
     último día queda ATRASADO para siempre — el cron horario emitiría
     `chunk_overdue:<plan_id>` indefinidamente sobre un plan ya completo, el
-    modo de fallo invertido que la alerta existe para evitar). Fix: mismo
-    patrón que `resolve_day_dates` (arriba) y que
-    `build_pending_plan_days_lines` ya aplica — `n_generated = len(archived)
-    + len(days)`. La fecha ancla (`last`) sigue viniendo SOLO de `days` (los
-    archivados son estrictamente anteriores, ver `_live_anchor`)."""
+    modo de fallo invertido que la alerta existe para evitar).
+
+    [Ronda 4 · B1+B3] Ese guard pasó de CONTAR (`len(archived) + len(days)`)
+    a la VENTANA DE FECHAS de `plan_cycle_window` (arriba está el porqué con
+    los números medidos contra producción). El conteo seguía roto en dos
+    formas: se contamina entre ciclos cuando el plan RENUEVA
+    (`_archived_days` nunca se vacía ⇒ predicado mudo PARA SIEMPRE, con 27
+    días sin generar y la cola vacía) y no tenía término de caducidad (⇒
+    alerta ATRASADO sin ningún camino de resolución en un plan cuyo ciclo ya
+    venció). La ventana cubre ambas y además SUBSUME al conteo: si el ciclo
+    entregó sus `total` días contiguos, el último día vivo es `fin - 1`, así
+    que `hoy > último_vivo` implica `hoy >= fin` y el plan sale por la
+    ventana — el caso de la Ronda 2 sigue dando `(False, None)`, ahora por la
+    razón correcta (su ciclo terminó) y no por un conteo de arrays.
+
+    La fecha ancla (`last`) sigue viniendo SOLO de `days` (los archivados son
+    estrictamente anteriores, ver `_live_anchor`)."""
     try:
         if not isinstance(plan_data, dict):
             return (False, None)
         days = [d for d in (plan_data.get("days") or []) if isinstance(d, dict)]
         if not days:
             return (False, None)
-        archived = [d for d in (plan_data.get("_archived_days") or []) if isinstance(d, dict)]
-        n_generated = len(archived) + len(days)
-        total = int(plan_data.get("total_days_requested") or 0)
-        if total <= n_generated or int(in_flight_count or 0) > 0:
+        if int(in_flight_count or 0) > 0:
             return (False, None)
         last = None
         for d in days:
@@ -217,10 +370,15 @@ def compute_chunk_overdue(plan_data, in_flight_count, today=None):
                 last = pd
         if last is None:
             return (False, None)  # legacy sin dates: fail-open
+        cycle_start, cycle_end = plan_cycle_window(plan_data)
+        if cycle_start is None:
+            return (False, None)  # sin ancla de ciclo: fail-open
         _today = today or rd_today()
-        if _today > last:
-            return (True, (last + timedelta(days=1)).isoformat())
-        return (False, None)
+        if _today <= last:
+            return (False, None)  # ya existe un día para hoy
+        if not (cycle_start <= _today < cycle_end):
+            return (False, None)  # el ciclo venció: el plan ya no promete hoy
+        return (True, (last + timedelta(days=1)).isoformat())
     except Exception:
         return (False, None)
 
@@ -287,11 +445,7 @@ def build_pending_plan_days_lines(plan_data: dict, today: date, in_flight_count:
         if not days:
             return []
         archived = [d for d in (plan_data.get("_archived_days") or []) if isinstance(d, dict)]
-        n_generated = len(archived) + len(days)
         total = int(plan_data.get("total_days_requested") or 0)
-        n_pending = total - n_generated
-        if n_pending <= 0:
-            return []
 
         last = None
         for d in days:
@@ -300,6 +454,17 @@ def build_pending_plan_days_lines(plan_data: dict, today: date, in_flight_count:
                 last = pd
         if last is None:
             return []  # legacy sin dates: fail-open, mismo criterio que compute_chunk_overdue
+
+        # [Ronda 4 · B1] El conteo `len(archived) + len(days)` era la CUARTA
+        # instancia del defecto de ventana rolling — y aquí vivía DUPLICADO
+        # (esta función y `compute_chunk_overdue` llevaban cada una su copia,
+        # así que arreglar solo el predicado habría dejado mudo al coach).
+        # Ahora ambas pasan por `plan_cycle_pending_days`, que mide por fechas
+        # y no se contamina con los archivados del ciclo anterior tras renovar.
+        n_pending = plan_cycle_pending_days(plan_data)
+        if n_pending <= 0:
+            return []
+        n_generated = total - n_pending
 
         overdue, _since = compute_chunk_overdue(plan_data, in_flight_count, today=today)
 

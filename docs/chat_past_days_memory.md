@@ -213,6 +213,33 @@ resuelta en `days[]` + `_archived_days`.
 | `MEALFIT_CHAT_HISTORY_DAYS` | `7` | `[0, 30]` | Ventana de los bloques de Piezas 2 y 3. **`0` apaga ambos** (rollback sin redeploy) |
 | `MEALFIT_CHAT_HISTORY_MAX_CHARS` | `3000` | `[500, 20000]` | Cap duro **por bloque**; al excederse se truncan los días más antiguos primero |
 | `MEALFIT_CHAT_PLAN_DAY_TOOL_ENABLED` | `True` | — | Kill switch de la tool de la Pieza 4 |
+| `MEALFIT_UPCOMING_DAYS_UI` | `True` | — | [P2-CHUNK-OVERDUE-SIGNAL · Ronda 4/B4] Kill switch de la señal de **días futuros** (PENDIENTE/ATRASADO) en sus **tres** superficies: el payload `upcoming_chunks`/`overdue` de `/chunk-status`, el cron horario `_chunk_overdue_alert_job` y el índice del coach. SSOT del knob: `chat_history_context.upcoming_days_signal_enabled()` — las tres lo leen de ahí, no cada una la env var. Apagarlo además **resuelve** las alertas `chunk_overdue` abiertas: el único uso del switch es cortar una inundación (pasó: 19 de 23 planes), así que dejarlas abiertas lo haría inútil |
+
+### La ventana del ciclo (`plan_cycle_window`)
+
+[Ronda 4 · B1+B3] El término "¿el plan aún debe días?" que usan el predicado
+`compute_chunk_overdue` y el índice del coach **no es un conteo** de
+`_archived_days + days`, sino una **ventana de fechas**: el ciclo vigente
+pretende cubrir `total_days_requested` días desde su inicio, y solo hay atraso
+si hoy cae dentro de esa ventana. Dos razones, ambas medidas:
+
+- **Renovación.** `_archived_days` nunca se vacía, tampoco cuando el plan
+  renueva (`P0-1 RENEWAL`): dos ciclos comparten el array, el conteo alcanza
+  `total` y apagaba las tres superficies **para siempre**. Verificado aplicando
+  la transformación real de la renovación a una fila real de producción: antes
+  `(False, None)` con 27 días sin generar; después `(True, …)`.
+- **Caducidad.** El conteo no vencía nunca ⇒ alerta ATRASADO sin ningún camino
+  de resolución en un plan cuyo ciclo terminó. 44 divergencias sobre filas
+  reales a +30/+60 días.
+
+El inicio del ciclo sale de `_cycle_started_at`, que **estampa la renovación**.
+No sirve ninguno de los campos que ya existían, medido sobre los 24 planes de
+producción (2026-08-04): `grocery_start_date == days[0].date` en **23/23** (es
+la ventana rolling, el shift la reescribe en cada rotación) y
+`cycle_start_date == created_at` en **19/23** (ancla inmutable de creación, la
+renovación no la toca). Planes sin la marca degradan a la primera fecha
+entregada — correcto para todo plan que nunca renovó, mudo para uno que ya
+renovó (limitación asumida y anclada en test).
 
 [P1-CHAT-PAST-DAYS · 2026-07-28] `MEALFIT_CHAT_HISTORY_MAX_CHARS` es **por
 bloque, no combinado**: `_assemble` se invoca una vez por bloque con el mismo

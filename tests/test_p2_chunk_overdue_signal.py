@@ -1,6 +1,6 @@
 """[P2-CHUNK-OVERDUE-SIGNAL] Predicado SSOT + payload de /chunk-status + cron + coach."""
 import re
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -66,7 +66,7 @@ def _build_test_client():
     return TestClient(app)
 
 
-def _fake_chunk_status_queries(plan_data, upcoming_rows):
+def _fake_chunk_status_queries(plan_data, upcoming_rows, counters=None):
     """Dispatcher por-query: cada SELECT del endpoint tiene una firma
     textual distinta que permite enrutar sin tocar orden de invocación."""
     def _fake(query, params=None, **kwargs):
@@ -83,15 +83,23 @@ def _fake_chunk_status_queries(plan_data, upcoming_rows):
             return upcoming_rows
         if "SELECT execute_after FROM plan_chunk_queue" in query:
             return None  # next_chunk_eta (fetch_one), sin next chunk aquí
-        if "status = 'pending_user_action'" in query:
-            return []  # paused_rows
+        # [Ronda 4] El orden de estas dos ramas IMPORTA y estaba al revés: la
+        # query de counters contiene `COUNT(*) FILTER (WHERE status =
+        # 'pending_user_action')`, o sea la subcadena por la que se enrutaba
+        # `paused_rows`. Resultado: los counters devolvían `[]` ⇒ `counters_row`
+        # quedaba `{}` ⇒ TODOS los contadores del endpoint se leían como 0 en
+        # cada test de este fichero, y un test sobre `pending_user_action_count`
+        # no podía fallar aunque el endpoint lo ignorase. Se evalúa primero la
+        # rama específica (agregado) y luego la de la lista.
         if "COUNT(*) FILTER" in query:
-            return {
+            return counters or {
                 "in_flight_count": 0,
                 "pending_user_action_count": 0,
                 "failed_count": 0,
                 "completed_count": 3,
             }
+        if "status = 'pending_user_action'" in query:
+            return []  # paused_rows
         if "FROM user_profiles" in query:
             return None
         if "quality_tier, COUNT" in query:
@@ -792,11 +800,12 @@ def test_cron_documenta_el_acotamiento_con_los_numeros_medidos():
 # ---------------------------------------------------------------------------
 
 
-def _capturar_queries_de_chunk_status(monkeypatch, plan_data, upcoming_rows):
+def _capturar_queries_de_chunk_status(monkeypatch, plan_data, upcoming_rows,
+                                      counters=None, hoy=date(2026, 8, 10)):
     """Corre el endpoint y devuelve (queries emitidas, body)."""
-    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+    monkeypatch.setattr(chc, "rd_today", lambda: hoy)
     queries = []
-    base = _fake_chunk_status_queries(plan_data, upcoming_rows)
+    base = _fake_chunk_status_queries(plan_data, upcoming_rows, counters)
 
     def _fake(query, params=None, **kwargs):
         queries.append(query)
@@ -863,3 +872,294 @@ def test_chunk_status_expone_un_chunk_stale(monkeypatch):
     _, body = _capturar_queries_de_chunk_status(
         monkeypatch, _plan_3_dias_viejo(), stale_rows)
     assert body["upcoming_chunks"] == stale_rows
+
+
+# ===========================================================================
+# Ronda 4 · review de rama completa (B1-B5)
+# ===========================================================================
+#
+# B1 y B3 se cierran JUNTOS sustituyendo el término "¿el plan aún debe días?"
+# —que era un CONTEO de `_archived_days + days`— por una VENTANA DE FECHAS: el
+# ciclo vigente pretende cubrir `total_days_requested` días desde su inicio, y
+# solo hay atraso si HOY cae dentro de esa ventana.
+#
+# Por qué el conteo no podía sobrevivir: `_archived_days` NUNCA se vacía, ni
+# siquiera cuando el plan RENUEVA (P0-1 RENEWAL, routers/plans.py) — mismo
+# plan_id, `total_days_requested` intacto, `days=[]` y offsets desde 0. Dos
+# ciclos comparten el mismo array de archivados, así que `len(archived)+len(days)`
+# alcanza `total` y apaga el predicado PARA SIEMPRE.
+#
+# Y por qué la ventana necesita un ancla EXPLÍCITA (`_cycle_started_at`): medido
+# contra los 24 planes de producción (scratchpad/forense_ciclo.py),
+#   · `grocery_start_date == days[0].date` en 23/23 planes con dato ⇒ sigue a la
+#     VENTANA ROLLING, no al ciclo: el shift lo reescribe a HOY en cada rotación.
+#   · `cycle_start_date == created_at` en 19/23 (los otros 4 difieren 1 día por
+#     TZ) ⇒ es el ancla INMUTABLE de creación y la renovación no la toca.
+# Ninguno de los dos marca el inicio del ciclo VIGENTE. Por eso la renovación
+# estampa el ancla, y los planes legacy degradan a la primera fecha entregada
+# (que para un plan que nunca renovó ES el inicio del ciclo).
+# ===========================================================================
+
+
+def _d(iso):
+    return {"date": iso, "meals": []}
+
+
+def _plan_renovado(con_ancla=True):
+    """Fixture EXACTA del revisor (scratchpad/probe_renewal.py), reachable por
+    construcción: plan de 30 días creado el 2026-06-01 y consumido entero; el
+    2026-07-01 `api_shift_plan` ve `days_since_creation >= total` ⇒ archiva los
+    30 días, `days=[]`, `grocery_start_date=hoy` y encola el ciclo 2. El chunk 1
+    genera 3 días (07-01..07-03) y ahí se queda: 27 días sin generar."""
+    ciclo1 = [(date(2026, 6, 1) + timedelta(days=i)).isoformat() for i in range(30)]
+    plan = {
+        "total_days_requested": 30,
+        "_archived_days": [_d(x) for x in ciclo1],
+        "days": [_d(x) for x in ["2026-07-01", "2026-07-02", "2026-07-03"]],
+    }
+    if con_ancla:
+        plan["_cycle_started_at"] = "2026-07-01"
+    return plan
+
+
+def test_b1_plan_renovado_declara_atrasado():
+    """LA REGRESIÓN QUE B1 CIERRA. Con el conteo, este plan devolvía
+    `(False, None)`: 30 archivados + 3 vivos >= 30 ⇒ "ya entregó todo", cuando
+    en realidad debe 27 días y la cola está vacía. Las tres superficies quedaban
+    MUDAS justo en el bug que la feature existe para cerrar."""
+    plan = _plan_renovado()
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 7, 20)) == (True, "2026-07-04")
+
+
+def test_b1_plan_renovado_el_indice_del_coach_tambien_lo_declara():
+    """El coach llevaba su PROPIA copia del guard de conteo
+    (`agent._build_pending_days_lines_block`), así que arreglar solo el
+    predicado lo habría dejado mudo igual. Ambos leen ahora el mismo helper."""
+    lines = chc.build_pending_plan_days_lines(_plan_renovado(), date(2026, 7, 20), 0)
+    assert lines, "el índice del coach no declaró nada"
+    assert any("ATRASADO" in l for l in lines), lines
+    # Numeración por CICLO: el día que falta es el 4 del ciclo vigente, no el 34.
+    assert "día 4" in lines[0], lines
+
+
+def test_b1_la_renovacion_estampa_el_ancla_del_ciclo():
+    """La rama P0-1 RENEWAL de `api_shift_plan` debe persistir `_cycle_started_at`
+    junto al `grocery_start_date` que ya reescribe. Sin esa marca no existe forma
+    de distinguir el ciclo 2 del ciclo 1: ambos comparten `_archived_days`,
+    `total_days_requested` y una línea temporal de fechas CONTIGUA (la renovación
+    empieza el día siguiente al último archivado), así que el ciclo no es
+    recuperable de `plan_data` por fechas.
+    tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL-CYCLE-ANCHOR"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "routers" / "plans.py").read_text(encoding="utf-8")
+    i = src.find("[P0-1 RENEWAL] Plan semanal")
+    assert i != -1, "no se encontró la rama P0-1 RENEWAL"
+    bloque = src[max(0, i - 2500):i]
+    assert "_cycle_started_at" in bloque, (
+        "la renovación no estampa `_cycle_started_at`:\n" + bloque[-900:])
+
+
+def test_b1_sin_ancla_un_plan_legacy_degrada_a_la_primera_fecha_entregada():
+    """Planes anteriores al ancla (los 24 de producción hoy) usan la primera
+    fecha entregada. Para un plan que NUNCA renovó eso ES el inicio del ciclo,
+    así que el comportamiento no cambia: sigue detectando el atraso real."""
+    plan = {
+        "total_days_requested": 20,
+        "_archived_days": [_d(x) for x in ["2026-07-24", "2026-07-25", "2026-07-26"]],
+        "days": [_d(x) for x in ["2026-07-27", "2026-07-28"]],
+    }
+    # ciclo 07-24..08-12; hoy 07-30 está dentro y el último día vivo es 07-28.
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 7, 30)) == (True, "2026-07-29")
+
+
+def test_b1_sin_ancla_un_plan_renovado_legacy_queda_mudo_a_sabiendas():
+    """Honestidad: sin `_cycle_started_at` la renovación NO es recuperable, y el
+    plan legacy renovado sigue mudo (el comportamiento de hoy, no una regresión).
+    Se ancla para que nadie lo lea como que el fallback cubre la renovación."""
+    assert chc.compute_chunk_overdue(
+        _plan_renovado(con_ancla=False), 0, today=date(2026, 7, 20)) == (False, None)
+
+
+# --- B3: caducidad de la ventana -------------------------------------------
+
+
+def _plan_15d_abandonado():
+    """Forma de `76a6836d` en producción (2026-08-04): plan de 15 días con
+    2 archivados + 1 vivo, ciclo iniciado el 2026-08-02."""
+    return {
+        "total_days_requested": 15,
+        "_archived_days": [_d("2026-08-02"), _d("2026-08-03")],
+        "days": [_d("2026-08-04")],
+    }
+
+
+def test_b3_fuera_de_la_ventana_del_ciclo_no_hay_atraso():
+    """B3 medido por el revisor: `76a6836d` devolvía `(True, …)` también a +30
+    días, cuando ya no quedan días de plan y `api_shift_plan` no puede encolar
+    nada — una alerta SIN camino de resolución, abierta para siempre. El ciclo
+    (15 días desde el 2026-08-02) termina el 2026-08-17: pasado eso el plan
+    terminó, no está atrasado."""
+    plan = _plan_15d_abandonado()
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 9, 3)) == (False, None)
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 8, 17)) == (False, None)
+
+
+def test_b3_dentro_de_la_ventana_sigue_alertando():
+    """La caducidad NO puede apagar la detección legítima: el mismo plan, dentro
+    de su ventana, sigue declarando el atraso."""
+    plan = _plan_15d_abandonado()
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 8, 9)) == (True, "2026-08-05")
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 8, 16)) == (True, "2026-08-05")
+
+
+# --- B2: un plan pausado esperando al usuario NO está atrasado --------------
+#
+# Los chunks en `pending_user_action` no están en ('pending','processing','stale')
+# ⇒ `in_flight_count = 0` ⇒ el predicado decía ATRASADO, y la pestaña prometía
+# "el sistema lo reintenta solo la próxima vez que abras la app", que es FALSO:
+# ese chunk espera una acción del USUARIO (consentimiento de nevera). Y el cron
+# le mandaba una alerta al operador por algo que no es un fallo del sistema.
+#
+# El criterio del predicado es "¿hay algo que lo vaya a resolver?" — y la acción
+# del usuario lo resuelve. Este conjunto queda DELIBERADAMENTE distinto del de
+# `upcoming_chunks` (que NO incluye pending_user_action: esos días ya se pintan
+# vía `paused_chunks`, y el frontend distingue 'pausado' de 'en proceso' con
+# `puac > 0 && in_flight === 0`).
+
+
+def test_b2_pausado_por_el_usuario_no_es_atrasado_en_chunk_status(monkeypatch):
+    counters = {"in_flight_count": 0, "pending_user_action_count": 1,
+                "failed_count": 0, "completed_count": 3}
+    _, body = _capturar_queries_de_chunk_status(
+        monkeypatch, _plan_3_dias_viejo(), [], counters=counters, hoy=date(2026, 8, 4))
+    assert body["overdue"] is False, body
+    assert body["overdue_since"] is None, body
+    # Los contadores del payload NO cambian: el frontend los usa para distinguir
+    # 'pausado' de 'en proceso'.
+    assert body["in_flight_count"] == 0 and body["pending_user_action_count"] == 1
+
+
+def test_b2_upcoming_chunks_NO_incluye_pending_user_action(monkeypatch):
+    """Divergencia deliberada. El instinto de "alinear los dos filtros" es justo
+    lo que hicimos en la ronda anterior por el motivo CONTRARIO; aquí el conjunto
+    del predicado y el de la lista pintable dejan de coincidir a propósito."""
+    queries, _ = _capturar_queries_de_chunk_status(
+        monkeypatch, _plan_3_dias_viejo(), _upcoming_rows_1_pending())
+    upcoming_sql = [q for q in queries
+                    if "id::text AS chunk_id" in q and "ORDER BY execute_after" in q]
+    assert len(upcoming_sql) == 1, queries
+    assert "pending_user_action" not in upcoming_sql[0], upcoming_sql[0]
+
+
+def test_b2_el_cron_cuenta_pending_user_action(monkeypatch):
+    """El COUNT del cron incluye `pending_user_action` ⇒ el plan pausado no
+    genera alerta de operador."""
+    import cron_tasks as ct
+    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+
+    captured = []
+    monkeypatch.setattr(ct, "execute_sql_write",
+                        lambda sql, params=None, **k: captured.append({"sql": sql, "params": params}))
+    counts = []
+
+    def _fake_query(sql, params=None, **kwargs):
+        if "FROM meal_plans" in sql:
+            return [_cron_overdue_plan_row()]
+        if "FROM plan_chunk_queue" in sql:
+            counts.append(sql)
+            # 1 chunk pausado esperando al usuario, nada más en la cola.
+            return {"c": 1 if "pending_user_action" in sql else 0}
+        raise AssertionError(f"query inesperada: {sql}")
+
+    monkeypatch.setattr(ct, "execute_sql_query", _fake_query)
+    ct._chunk_overdue_alert_job()
+
+    assert counts and "pending_user_action" in counts[0], counts
+    assert _upserts(captured) == [], captured
+
+
+def test_b2_el_coach_cuenta_pending_user_action(monkeypatch):
+    import agent
+
+    plan = _plan(["2026-08-01", "2026-08-02", "2026-08-03"], 15)
+    vistas = []
+
+    def _fake_execute(query, params=None, **kwargs):
+        vistas.append(query)
+        return {"c": 1 if "pending_user_action" in query else 0}
+
+    monkeypatch.setattr("db.execute_sql_query", _fake_execute)
+    out = agent._build_pending_days_lines_block(
+        "user-1", plan, date(2026, 8, 10), plan_id="plan-abc-123")
+
+    assert vistas and "pending_user_action" in vistas[0], vistas
+    assert "ATRASADO" not in out, out
+    assert "PENDIENTE" in out, out
+
+
+# --- B4: el knob tiene que apagar las TRES superficies ----------------------
+
+
+def test_b4_knob_off_apaga_el_cron_y_resuelve_lo_abierto(monkeypatch):
+    """Con el knob apagado el cron no emite NADA. Y resuelve lo que quedó
+    abierto: el rollback existe justamente para cortar una inundación de
+    alertas (19 de 23 planes), así que dejarlas abiertas al apagar la señal
+    frustraría el único uso del knob."""
+    import cron_tasks as ct
+    monkeypatch.setenv("MEALFIT_UPCOMING_DAYS_UI", "false")
+    monkeypatch.setattr(chc, "rd_today", lambda: date(2026, 8, 10))
+
+    captured = []
+    monkeypatch.setattr(ct, "execute_sql_write",
+                        lambda sql, params=None, **k: captured.append({"sql": sql, "params": params}))
+
+    def _fake_query(sql, params=None, **kwargs):
+        if "FROM meal_plans" in sql:
+            raise AssertionError("con el knob OFF el cron no debería consultar planes")
+        raise AssertionError(f"query inesperada: {sql}")
+
+    monkeypatch.setattr(ct, "execute_sql_query", _fake_query)
+    ct._chunk_overdue_alert_job()
+
+    assert _upserts(captured) == [], captured
+    assert len(_sweeps(captured)) == 1, captured
+    assert _sweeps(captured)[0]["params"][0] == [], captured
+
+
+def test_b4_knob_off_apaga_el_indice_del_coach(monkeypatch):
+    """Ojo con la forma de este test: `_build_pending_days_lines_block` fail-opena
+    a "" ante CUALQUIER excepción, así que un fake que lanza haría pasar el test
+    contra el código sin gatear (la excepción se traga y devuelve ""). Se cuentan
+    las llamadas en vez de lanzar."""
+    import agent
+    monkeypatch.setenv("MEALFIT_UPCOMING_DAYS_UI", "false")
+
+    llamadas = []
+
+    def _spy(query, params=None, **kwargs):
+        llamadas.append(query)
+        return {"c": 0}
+
+    monkeypatch.setattr("db.execute_sql_query", _spy)
+    out = agent._build_pending_days_lines_block(
+        "user-1", _plan(["2026-08-01", "2026-08-02", "2026-08-03"], 15),
+        date(2026, 8, 10), plan_id="plan-abc-123")
+    assert llamadas == [], llamadas
+    assert out == "", out
+
+
+# --- B5: orden determinista ------------------------------------------------
+
+
+def test_b5_upcoming_chunks_tiene_desempate_determinista(monkeypatch):
+    """`execute_after` es NULLABLE y ~12 paths la reescriben a `NOW()`: dos
+    chunks empatados hacen que `upcoming[0]` (el que el frontend usa para
+    `days_offset`/`days_count`/estado) salga al azar entre corridas."""
+    queries, _ = _capturar_queries_de_chunk_status(
+        monkeypatch, _plan_3_dias_viejo(), _upcoming_rows_1_pending())
+    upcoming_sql = [q for q in queries
+                    if "id::text AS chunk_id" in q and "ORDER BY execute_after" in q]
+    assert len(upcoming_sql) == 1, queries
+    orden = " ".join(upcoming_sql[0].split()).split("ORDER BY", 1)[1]
+    assert "week_number" in orden, orden
+    assert "days_offset" in orden, orden

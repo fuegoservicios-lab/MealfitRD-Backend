@@ -4600,10 +4600,16 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
     """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Envuelve `build_pending_plan_days_lines`
     con el COUNT barato de `plan_chunk_queue` que alimenta `compute_chunk_overdue`
     (mismo predicado SSOT que `/chunk-status` y el cron horario). El COUNT SOLO
-    se paga si el plan tiene días pendientes (`total_days_requested > n_generated`,
-    contando `_archived_days + days` — ver `build_pending_plan_days_lines`) — un
-    plan ya completo (el caso común, la mayoría de mensajes de chat) sale por el
-    guard de arriba sin tocar la DB. Fail-open a "".
+    se paga si al ciclo VIGENTE del plan le quedan días por entregar
+    (`plan_cycle_pending_days`, chat_history_context) — un plan ya completo (el
+    caso común, la mayoría de mensajes de chat) sale por el guard de arriba sin
+    tocar la DB. Fail-open a "".
+
+    [Ronda 4] Ese guard medía `total_days_requested > len(_archived_days) + len(days)`,
+    un conteo que se contamina entre ciclos cuando el plan renueva; ahora es el
+    mismo helper de fechas que usan las otras dos superficies. El COUNT incluye
+    `pending_user_action` (B2) y todo el bloque está gateado por
+    `MEALFIT_UPCOMING_DAYS_UI` (B4).
 
     [Ronda 1 · fix ALTO 2] El COUNT filtra por `meal_plan_id = plan_id`, la
     columna canónica de `plan_chunk_queue` (FK NOT NULL; el consumidor SSOT
@@ -4623,19 +4629,32 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
     try:
         if not isinstance(current_plan, dict) or not user_id or user_id == "guest":
             return ""
+        # [Ronda 4 · B4] Mismo knob que `/chunk-status` y el cron horario: sin
+        # esto el `COUNT` por turno del coach seguía vivo con la señal apagada.
+        from chat_history_context import plan_cycle_pending_days, upcoming_days_signal_enabled
+        if not upcoming_days_signal_enabled():
+            return ""
         days = [d for d in (current_plan.get("days") or []) if isinstance(d, dict)]
         if not days:
             return ""
-        archived = [d for d in (current_plan.get("_archived_days") or []) if isinstance(d, dict)]
-        n_generated = len(archived) + len(days)
-        total = int(current_plan.get("total_days_requested") or 0)
-        if total <= n_generated:
+        # [Ronda 4 · B1] El short-circuit barato que evita pagar el COUNT era una
+        # COPIA del guard de conteo (`len(archived) + len(days) >= total`), o sea
+        # la misma 4ª instancia del defecto de ventana rolling: en un plan
+        # RENOVADO se disparaba y el coach quedaba mudo aunque el predicado
+        # dijera ATRASADO. Ahora usa el mismo helper SSOT que
+        # `build_pending_plan_days_lines` — un solo criterio, tres superficies.
+        if plan_cycle_pending_days(current_plan) <= 0:
             return ""
         if plan_id:
             from db import execute_sql_query
+            # [Ronda 4 · B2] `pending_user_action` cuenta como "algo que lo va a
+            # resolver" — la acción del usuario lo resuelve. Sin él, el coach
+            # declaraba ATRASADO un día que solo espera consentimiento de nevera
+            # y prometía un reintento automático que no existe.
             cnt = execute_sql_query(
                 "SELECT count(*)::int AS c FROM plan_chunk_queue "
-                "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
+                "WHERE meal_plan_id = %s AND status IN "
+                "('pending', 'processing', 'stale', 'pending_user_action')",
                 (plan_id,), fetch_one=True,
             ) or {}
             in_flight_count = int(cnt.get("c") or 0)
