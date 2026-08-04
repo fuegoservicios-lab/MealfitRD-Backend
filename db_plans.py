@@ -950,7 +950,8 @@ def _apply_inherited_lifetime_lessons(user_id: str, insert_data: dict, cursor=No
     )
 
 
-def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -> None:
+def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT",
+                                   freeze_past_days: bool = False) -> None:
     """[P0-PERSIST-TXN-IDLE · 2026-07-10] Pases de normalización/finalize de
     `plan_data` previos a CUALQUIER INSERT de meal_plans (mutación in-place).
 
@@ -971,11 +972,10 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
     merge T1 del chunk worker (semanas 2+). Kw-only con default → los callers y
     monkeypatches existentes (1 arg posicional) siguen intactos.
 
-    [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] Los días YA COCINADOS (fecha < hoy) son
-    registro histórico: se snapshotean antes del primer pase que mueve gramos y se
-    restauran byte-a-byte tras el último, de modo que las métricas del cierre (band
-    score, panel de micros) midan el estado final real. Un único punto para todos los
-    pases del chain, presentes y futuros. Fail-open sin ancla de fechas.
+    [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] `freeze_past_days` (kw-only, default False) congela
+    los días ya cocidos. OPT-IN estricto: el único caller que lo enciende es el seam T2.
+    ⚠️ NO lo enciendas desde una superficie de GENERACIÓN — razón y evidencia en el bloque
+    inline de abajo y en el knob `MEALFIT_CHAIN_PAST_DAYS_FROZEN` (graph_orchestrator).
 
     Idempotente (cada pase interno lo es) y fail-safe (nunca bloquea el INSERT).
     """
@@ -1024,27 +1024,27 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _db_ins = _NDB_ins()
                 except Exception:
                     _db_ins = None
-                # [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3)
-                # SNAPSHOT de los días YA COCINADOS, antes del primer pase que mueve gramos.
-                # Restauración byte-a-byte más abajo, tras el último. UN solo punto garantiza
-                # la política para todos los pases —presentes y futuros— del chain; ventanear
-                # pase por pase habría creado N ventanas que drifean (la de la convergencia de
-                # presupuesto ya existía, y este chain que ella misma invoca la contradecía).
-                # Fail-open: sin ancla de fechas o ante cualquier error, cero días congelados.
-                _frozen_idx: list = []
-                _frozen_snap: list = []
-                _frozen_len = len(_pd.get("days") or [])
-                try:
-                    from graph_orchestrator import frozen_past_day_indices as _fpdi
-                    _frozen_idx = _fpdi(_pd, _pd["days"])
-                    if _frozen_idx:
-                        import copy as _copy_frozen
-                        _frozen_snap = [_copy_frozen.deepcopy(_pd["days"][_i])
-                                        for _i in _frozen_idx]
-                except Exception as _frz_e:
-                    _frozen_idx, _frozen_snap = [], []
-                    logger.warning(f"[P2-CHAIN-PAST-DAYS-FROZEN] snapshot no-op ({surface}): "
-                                   f"{type(_frz_e).__name__}: {_frz_e}")
+                # [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3) SNAPSHOT
+                # de los días YA COCIDOS, antes del primer pase que mueve gramos; restauración
+                # más abajo, tras el último y ANTES del estampado de métricas. UN solo punto
+                # cubre todos los pases del chain, presentes y futuros — ventanear pase por pase
+                # habría creado N ventanas que drifean, que es exactamente cómo nació este bug.
+                #
+                # OPT-IN estricto (`freeze_past_days`, default False). Fuera del seam T2 la
+                # inferencia "fecha pasada ⇒ el usuario ya lo comió" es FALSA: la `date` de un
+                # día se estampa desde el `_plan_start_date` ORIGINAL del snapshot de la cola y
+                # toda desviación del gate temporal va hacia el pasado, así que un chunk
+                # diferido 12h ×2 (rutinario), un `/retry-chunk` o el resume de un freeze
+                # emiten días RECIÉN GENERADOS con `date` pasada. Congelarlos los persistiría
+                # tal cual los escupió la LLM —sin coherence stack, sin `LINE_GRAM_HARD_CAP`
+                # (900 g de arroz sobreviven), sin band-closer, sin caps clínicos— y encima con
+                # el log presumiendo de "día ya cocinado". Ver el bloque del knob.
+                # Sin el kwarg esto es un `snapshot_past_days` que no se llega a llamar: cero
+                # coste y chain byte-idéntico al pre-fix.
+                _frozen_token = None
+                if freeze_past_days:
+                    from graph_orchestrator import snapshot_past_days as _spd
+                    _frozen_token = _spd(_pd, surface=surface)
                 _n, _summ = _fpc(_pd["days"], db=_db_ins, target_fats=_tf_ins,
                                  main_goal=_pd.get("main_goal"), target_macros=_tm_ins)
                 if _n:
@@ -1245,48 +1245,24 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _fica(_pd)
                 except Exception as _fica_e:
                     logger.debug(f"[P3-2-INGREDIENT-COUNT-AGREEMENT] pre-INSERT no-op: {type(_fica_e).__name__}: {_fica_e}")
-                # [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] RESTAURACIÓN de los días ya
-                # cocinados. Va AQUÍ, y no más arriba ni más abajo, por una razón en cada
-                # dirección:
+                # [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] RESTAURACIÓN de los días congelados. Va
+                # AQUÍ, y no más arriba ni más abajo, por una razón en cada dirección:
                 #   · la concordancia número-sustantivo de arriba es el ÚLTIMO pase que toca
                 #     el contenido de un día — restaurar antes dejaría que el siguiente pase
                 #     volviera a reescribir el historial;
                 #   · todo lo que viene detrás es lectura o metadata plan-level (los dos
                 #     detectores warn-only, el clear del banner de degradado, el refresh del
                 #     band score y el recompute del panel de micros). Restaurar ANTES de ellos
-                #     es lo que hace que las métricas PERSISTIDAS midan el estado final REAL y
-                #     no un intermedio que nunca existió: la lección del repo es que dos
-                #     mediciones honestas que discrepan son un bug. El refresh de banda arrastra
-                #     además `delivered_macros`, así que el resumen entregado también se re-mide.
-                # Las listas de compras se construyen aguas ARRIBA de este helper (assemble y el
-                # seam T2 las rearman DESPUÉS de llamar al chain) → ven los pasados restaurados,
-                # que es justo lo que el usuario tiene apuntado.
-                # Se restaura por POSICIÓN sobre la misma lista (el adapter promete no
-                # reemplazarla, y ningún pase del chain altera su tamaño ni su orden — verificado
-                # pase por pase). El guard de longitud es la red por si un pase futuro lo hiciera:
-                # ante desalineación NO se restaura (fail-open al comportamiento previo) y se
-                # avisa, porque restaurar un día sobre el índice equivocado sería peor que el bug.
-                try:
-                    if _frozen_idx:
-                        if len(_pd.get("days") or []) != _frozen_len:
-                            logger.warning(
-                                f"[P2-CHAIN-PAST-DAYS-FROZEN] {surface}: la lista de días cambió "
-                                f"de tamaño durante el chain ({_frozen_len}→"
-                                f"{len(_pd.get('days') or [])}); NO se restauran los "
-                                f"{len(_frozen_idx)} día(s) pasado(s) (restaurar por índice "
-                                f"desalineado corrompería el plan)."
-                            )
-                        else:
-                            for _pos, _i in enumerate(_frozen_idx):
-                                _pd["days"][_i] = _frozen_snap[_pos]
-                            logger.info(
-                                f"🧊 [P2-CHAIN-PAST-DAYS-FROZEN] {surface}: {len(_frozen_idx)} "
-                                f"día(s) ya cocinado(s) restaurado(s) tal cual el usuario los "
-                                f"tiene (de {_frozen_len} del plan)."
-                            )
-                except Exception as _frz_r_e:
-                    logger.warning(f"[P2-CHAIN-PAST-DAYS-FROZEN] restauración no-op ({surface}): "
-                                   f"{type(_frz_r_e).__name__}: {_frz_r_e}")
+                #     es lo que cumple el contrato de `restore_past_days`: las métricas
+                #     PERSISTIDAS miden el estado final REAL y no un intermedio que nunca
+                #     existió. El refresh de banda arrastra además `delivered_macros`, así que
+                #     el resumen entregado también se re-mide.
+                # Las listas de compras se construyen aguas ARRIBA de este helper (el seam T2 y
+                # assemble las rearman DESPUÉS de llamar al chain) → ven los pasados
+                # restaurados, que es justo lo que el usuario tiene apuntado.
+                if _frozen_token is not None:
+                    from graph_orchestrator import restore_past_days as _rpd_frz
+                    _rpd_frz(_pd, _frozen_token)
                 # [P0-1-PAIRING-PLAUSIBILITY-GATE · 2026-07-10] (recipe plausibility roadmap) fase 1
                 # warn-only: detecta combinaciones implausibles (mantequilla de maní + tubérculo hervido/
                 # gajos cítricos/queso salado) sobre el estado ENTREGADO. Telemetría pura, no muta el plan
@@ -1374,7 +1350,8 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
 
 def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "quality-chain",
                                       user_id: "str | None" = None,
-                                      form_data: "dict | None" = None) -> None:
+                                      form_data: "dict | None" = None,
+                                      freeze_past_days: bool = False) -> None:
     """[P0-BAND-PRE-REVIEW · 2026-07-10] Adapter público del chain de calidad/banda.
 
     Delegación pura a `_finalize_plan_data_for_insert({"plan_data": plan_data})` —
@@ -1409,6 +1386,19 @@ def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "qualit
     Preferir `form_data` cuando esté en scope — el fallback por `user_id` cuesta una query al
     perfil dentro del path caliente.
 
+    [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] `freeze_past_days` (default False) se pasa tal cual al
+    shield. De las 6 superficies, la ÚNICA que lo enciende es el seam T2 del chunk worker
+    (`apply_budget_convergence_for_days`): es la única que corre DÍAS después de la generación
+    sobre días ya finalizados. Las otras cinco son de GENERACIÓN y ahí "fecha pasada" no implica
+    "ya lo comió" — ver el docstring del shield.
+
+    ⚠️ Nota para quien venga a "completar" el chain: en la cola de assemble hay dos autofixes que
+    corren FUERA de él (`_protein_repeat_autofix` y `_fruit_savory_autofix`, justo antes de la
+    llamada). Hoy da igual porque assemble no congela nada; si alguien los mueve aquí dentro
+    PENSANDO que así quedan cubiertos, y alguien más enciende el freeze en assemble, esos dos
+    pases pasarían a operar bajo una ventana que no les corresponde. Son cosas independientes:
+    muévelos si quieres, pero no como parte de un cambio de freeze.
+
     Idempotente y fail-safe (hereda ambas garantías del shield). Mutación in-place;
     retorna None. tooltip-anchor: P0-BAND-PRE-REVIEW
     """
@@ -1417,6 +1407,7 @@ def apply_plan_quality_finalize_chain(plan_data: dict, *, surface: str = "qualit
     _finalize_plan_data_for_insert(
         {"plan_data": plan_data, "user_id": user_id, "form_data": form_data},
         surface=surface,
+        freeze_past_days=freeze_past_days,
     )
 
 

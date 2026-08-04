@@ -37,7 +37,7 @@ import asyncio
 import weakref
 import contextvars
 import functools
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager, asynccontextmanager, nullcontext
 
 
 # ============================================================
@@ -31523,7 +31523,7 @@ def _budget_future_days_window(plan_data: dict, days: list, today=None, *,
     MISMOS objetos (no copias) — los pases mutan in-place y el plan persistido debe ver
     esas mutaciones.
 
-    [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] `quiet=True` silencia el log (que habla de
+    [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] `quiet=True` silencia el log (que habla de
     "sustitución") cuando el consumidor NO es la convergencia sino el freeze del
     finalize-chain: la derivación de fechas es la misma —por eso se reusa en vez de
     duplicarla— pero la telemetría de cada superficie lleva su propio marker.
@@ -31593,54 +31593,80 @@ def _budget_future_days_window(plan_data: dict, days: list, today=None, *,
         return list(days)
 
 
-# [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3) Los días que el usuario
-# YA COCINÓ son REGISTRO HISTÓRICO: ningún pase global del finalize-chain puede reescribirlos.
+# [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3) Los días que el usuario YA
+# COCINÓ son REGISTRO HISTÓRICO: el seam T2 del chunk worker —que corre DÍAS después de generar—
+# no puede reescribirlos.
 #
-# `P2-BUDGET-CONVERGENCE-FUTURE-ONLY` ventaneó la convergencia de presupuesto… y acto seguido
-# invoca el chain de calidad (`apply_plan_quality_finalize_chain`), que barre el plan ENTERO. Los
-# pases que mueven gramos (band-closer de proteína, band-closer all-4 con su rebalance
-# ×[0.3, 2.5] por pase, re-cap de realismo iterado, reconcile display↔raw, polish, cap de
-# condimentos) no distinguen "día 3, cocinado el martes" de "día 12, aún por comprar". Es la
-# colisión que el review final de la tanda P2 dejó anotada, y el diferido SEC-CLIN-4/X4.
+# `P2-BUDGET-CONVERGENCE-FUTURE-ONLY` ventaneó las SUSTITUCIONES de la convergencia de
+# presupuesto… y acto seguido el mismo seam invoca el motor de macros y el chain de calidad, que
+# barren el plan ENTERO. Los pases que mueven gramos (band-closer de proteína, band-closer all-4
+# con su rebalance ×[0.3, 2.5] por pase, re-cap de realismo iterado, reconcile display↔raw,
+# polish, cap de condimentos) no distinguen "día 3, cocinado el martes" de "día 12, aún por
+# comprar". Es la colisión que el review final de la tanda P2 dejó anotada, y el diferido
+# SEC-CLIN-4/X4.
 #
 # El daño no es cosmético: `consultar_dia_del_plan` (la tool con la que el coach responde "¿qué
 # comí el martes?") y el índice de calidad leen un historial que el sistema reescribe DESPUÉS de
-# cocinado. El usuario cocinó 150 g de arroz y el plan dice 210 g porque un rebalance de tres
+# cocinado. El usuario cocinó 150 g de arroz y el plan dice 650 g porque un rebalance de tres
 # días más tarde necesitaba carbos en otra parte.
 #
-# Es corrección de INTEGRIDAD DEL HISTORIAL, no un experimento: nace encendido. El knob existe
-# por si sorprende en producción, no para pilotarlo.
-# Rollback sin redeploy: MEALFIT_CHAIN_PAST_DAYS_FROZEN=false ⇒ chain byte-idéntico al previo.
-# tooltip-anchor: P2-CHAIN-PAST-DAYS-FROZEN
+# ⚠️ POR QUÉ ESTO ES OPT-IN Y NO UN DEFAULT DEL CHAIN (ronda 1 de review, hallazgo Critical).
+# La primera versión de este fix congelaba por fecha DENTRO de `_finalize_plan_data_for_insert`,
+# o sea para TODAS sus superficies. En una superficie de GENERACIÓN eso es estructuralmente
+# incorrecto: la `date` de un día se estampa desde el `_plan_start_date` ORIGINAL del snapshot de
+# la cola, y toda desviación del gate temporal es UNIDIRECCIONAL hacia el pasado. Tres rutas
+# alcanzables y reproducidas dejan días RECIÉN GENERADOS con `date` pasada al llegar a
+# `assemble-tail`: el deferral learning-ready de 12h ×2 (rutinario en usuarios que no registran,
+# −1 día), `/retry-chunk` sin guard de ventana (chunk entero), y el resume de un freeze (hasta
+# −30 días). Con el freeze global esos días se persistían EXACTAMENTE como los emitió el LLM —
+# sin coherence stack, sin `LINE_GRAM_HARD_CAP` (900 g de arroz sobreviven), sin band-closer, sin
+# caps clínicos — y el log presumía de "día ya cocinado restaurado" sobre días generados segundos
+# antes. En una superficie de generación, "fecha pasada" NO significa "el usuario ya lo comió".
+#
+# De ahí el contrato actual: `freeze_past_days` es un kwarg EXPLÍCITO (default False) y el único
+# caller que lo pone en True es el seam T2, la única superficie que (a) corre días después de la
+# generación y (b) tiene la garantía de que sus días ya fueron finalizados en su día.
+#
+# Este knob es el KILL-SWITCH de ese opt-in, no su interruptor: con `false`, `freeze_past_days=True`
+# se ignora y el seam vuelve a comportarse byte-idéntico al pre-fix.
+# Rollback sin redeploy: MEALFIT_CHAIN_PAST_DAYS_FROZEN=false.
+# tooltip-anchor: P2-T2-PAST-DAYS-FROZEN
 CHAIN_PAST_DAYS_FROZEN = _env_bool("MEALFIT_CHAIN_PAST_DAYS_FROZEN", True)
 
 
 def frozen_past_day_indices(plan_data: dict, days: list, today=None) -> list:
-    """[P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] Índices de `days` que el finalize-chain debe
-    dejar EXACTAMENTE como los recibió: los días ya cocinados (fecha < hoy).
+    """[P2-T2-PAST-DAYS-FROZEN · 2026-08-04] Índices de `days` cuya fecha ya pasó (< hoy RD).
 
-    Oráculo puro (no toca el plan, no abre conexión). Devuelve índices y no objetos a
-    propósito: el consumidor (`db_plans._finalize_plan_data_for_insert`) restaura por posición
-    sobre la MISMA lista, que el adapter promete no reemplazar.
+    Oráculo PURO: no toca el plan, no abre conexión y NO consulta el knob — solo responde "¿qué
+    días quedaron atrás?". Quién actúa sobre esa respuesta (y si el kill-switch lo permite) es
+    decisión de `snapshot_past_days`. Devuelve índices y no objetos a propósito: el consumidor
+    restaura por posición sobre la MISMA lista.
 
     Reusa `_budget_future_days_window` para derivar fechas — dos derivadores sobre la misma
     pregunta drifean, y ese ya está anclado por sus propios tests. El complemento de su ventana
-    (lo que la convergencia NO puede tocar) es exactamente lo que el chain no puede tocar.
+    (lo que la convergencia NO puede tocar) es exactamente lo que el resto del seam no puede tocar.
 
-    Dos capas de fail-open, ambas en la dirección "no congeles":
+    Fail-open en dos capas, ambas en la dirección "no congeles":
       1. Sin NINGUNA `date` ESTAMPADA en los días → `[]`. Deliberadamente NO se acepta el tier
-         `grocery_start_date + índice` que la ventana de la convergencia sí usa: el merge T1 del
-         chunk worker pasa por el chain una VISTA PARCIAL del plan (`P0-CHUNK-CHAIN-SCOPED`) que
-         lleva el `grocery_start_date` del plan COMPLETO pero solo los días NUEVOS de la semana
-         N. Fecharlos por índice los pondría en los días 1..k (pasado) y congelaría el chunk
-         entero: el chain se volvería un no-op silencioso para ~7/8 de los días de un plan
-         mensual. Un freeze que se pasa de ancho apaga la calidad sin decirlo.
-      2. Cualquier excepción → `[]` (comportamiento previo, plan entero procesado).
+         `grocery_start_date + índice` que la ventana de la convergencia sí usa: cualquier VISTA
+         PARCIAL del plan (el merge T1 del chunk worker arma una, `P0-CHUNK-CHAIN-SCOPED`) lleva
+         el `grocery_start_date` del plan COMPLETO y solo un tramo de días; fecharlos por índice
+         los pondría en los días 1..k y congelaría un tramo recién generado.
+      2. Cualquier excepción → `[]` (comportamiento previo, plan entero procesable).
     El día de HOY cuenta como FUTURO: todavía se puede cocinar.
 
+    ⚠️ Asimetría de parseo heredada de `_budget_future_days_window`: la `date` del día se lee con
+    `chat_history_context._parse_date` (DATE-ONLY: de un ISO con hora se queda con los 10 primeros
+    caracteres, sin convertir zona) mientras que el ancla `grocery_start_date` se lee con
+    `_to_local_date` (timestamp → fecha LOCAL RD, UTC-4). Hoy es inocuo porque los 3 sitios de
+    renumeración estampan `date` como 'YYYY-MM-DD' pelado. Si algún día se persiste `date` como
+    timestamptz UTC, un día estampado a las 02:00 UTC pasaría a leerse como el día SIGUIENTE al
+    que el usuario vivió y el corte se movería 24 h en silencio: en ese momento hay que mover
+    `date` a `_to_local_date` en AMBOS helpers a la vez, no en uno.
+
     `today` inyectable (date | datetime | 'YYYY-MM-DD'); None → hoy en RD (UTC-4).
-    tooltip-anchor: P2-CHAIN-PAST-DAYS-FROZEN"""
-    if not CHAIN_PAST_DAYS_FROZEN or not isinstance(days, list) or not days:
+    tooltip-anchor: P2-T2-PAST-DAYS-FROZEN"""
+    if not isinstance(days, list) or not days:
         return []
     try:
         if not any(isinstance(d, dict) and d.get("date") for d in days):
@@ -31660,9 +31686,102 @@ def frozen_past_day_indices(plan_data: dict, days: list, today=None) -> list:
                 out.append(i)
         return out
     except Exception as _fpd_e:
-        logger.warning(f"[P2-CHAIN-PAST-DAYS-FROZEN] oráculo no-op (chain sobre el plan "
-                       f"completo): {type(_fpd_e).__name__}: {_fpd_e}")
+        logger.warning(f"[P2-T2-PAST-DAYS-FROZEN] oráculo no-op (plan completo procesable): "
+                       f"{type(_fpd_e).__name__}: {_fpd_e}")
         return []
+
+
+def snapshot_past_days(plan_data: dict, *, today=None, surface: str = "?"):
+    """[P2-T2-PAST-DAYS-FROZEN · 2026-08-04] Copia profunda de los días ya cocidos de
+    `plan_data`. Devuelve un token opaco para `restore_past_days`, o `None` si no hay nada que
+    congelar (kill-switch apagado, plan sin `date` estampada, cero días pasados, o error).
+
+    Aquí —y no en el oráculo— vive el gate del knob: el oráculo responde una pregunta de
+    calendario, este helper decide si se actúa sobre la respuesta.
+
+    Fail-safe absoluto: cualquier error → `None` (el caller sigue con el comportamiento previo).
+    tooltip-anchor: P2-T2-PAST-DAYS-FROZEN"""
+    if not CHAIN_PAST_DAYS_FROZEN or not isinstance(plan_data, dict):
+        return None
+    days = plan_data.get("days")
+    if not isinstance(days, list) or not days:
+        return None
+    try:
+        idx = frozen_past_day_indices(plan_data, days, today)
+        if not idx:
+            return None
+        import copy as _copy_fpd
+        return (tuple(idx), [_copy_fpd.deepcopy(days[i]) for i in idx], len(days), surface)
+    except Exception as _sfd_e:
+        logger.warning(f"[P2-T2-PAST-DAYS-FROZEN] snapshot no-op ({surface}): "
+                       f"{type(_sfd_e).__name__}: {_sfd_e}")
+        return None
+
+
+def restore_past_days(plan_data: dict, token) -> int:
+    """[P2-T2-PAST-DAYS-FROZEN · 2026-08-04] Devuelve los días congelados a su estado exacto.
+    Retorna cuántos restauró (0 = no-op). `token` None → 0.
+
+    Restaura por POSICIÓN sobre la misma lista (ningún pase del seam ni del chain altera su
+    tamaño ni su orden — verificado pase por pase). El guard de longitud es la red por si un pase
+    futuro lo hiciera: ante desalineación NO se restaura (fail-open al comportamiento previo) y
+    se avisa, porque restaurar un día sobre el índice equivocado sería peor que el bug.
+
+    El contenido se devuelve con `clear()+update()` sobre el MISMO dict, no reasignando el
+    elemento de la lista. No es cosmética: por el sistema circulan VISTAS que son listas nuevas
+    con los mismos dicts de día (`P0-CHUNK-CHAIN-SCOPED` arma una), y sobre una vista una
+    reasignación `days[i] = snapshot` escribe en la vista y NUNCA alcanza el plan — un restore
+    silenciosamente INERTE. Mutar el dict in-place llega al plan por las dos vías.
+
+    ⚠️ CONTRATO DEL CALLER: todo estampado de MÉTRICAS derivadas del plan (band score,
+    `delivered_macros`, panel de micros) tiene que quedar DETRÁS de esta llamada. Si se mide
+    antes, la métrica persistida describe un estado intermedio que nunca existió — y la lección
+    del repo es que dos mediciones honestas que discrepan son un bug. Anclado por test en las dos
+    superficies que usan este helper. tooltip-anchor: P2-T2-PAST-DAYS-FROZEN"""
+    if not token or not isinstance(plan_data, dict):
+        return 0
+    try:
+        idx, snap, n_days, surface = token
+        days = plan_data.get("days")
+        if not isinstance(days, list):
+            return 0
+        if len(days) != n_days:
+            logger.warning(f"[P2-T2-PAST-DAYS-FROZEN] {surface}: la lista de días cambió de "
+                           f"tamaño ({n_days}→{len(days)}); NO se restauran los {len(idx)} "
+                           f"día(s) pasado(s) (restaurar por índice desalineado corrompería "
+                           f"el plan).")
+            return 0
+        for _pos, _i in enumerate(idx):
+            _cur, _orig = days[_i], snap[_pos]
+            if isinstance(_cur, dict) and isinstance(_orig, dict):
+                _cur.clear()
+                _cur.update(_orig)
+            else:
+                days[_i] = _orig
+        logger.info(f"🧊 [P2-T2-PAST-DAYS-FROZEN] {surface}: {len(idx)} día(s) ya cocinado(s) "
+                    f"restaurado(s) tal cual el usuario los tiene (de {n_days} del plan).")
+        return len(idx)
+    except Exception as _rfd_e:
+        logger.warning(f"[P2-T2-PAST-DAYS-FROZEN] restauración no-op: "
+                       f"{type(_rfd_e).__name__}: {_rfd_e}")
+        return 0
+
+
+@contextmanager
+def frozen_past_days(plan_data: dict, *, surface: str = "?", today=None):
+    """[P2-T2-PAST-DAYS-FROZEN · 2026-08-04] Azúcar sobre `snapshot_past_days` +
+    `restore_past_days` para envolver un bloque entero de mutaciones.
+
+    La restauración corre en `finally`: si el bloque revienta a media escritura, el historial
+    vuelve igual. Lo usa el seam T2 alrededor de la convergencia + el motor de macros; el chain
+    pre-INSERT usa los dos helpers sueltos porque su restauración tiene que caer en un punto
+    INTERMEDIO de la función (antes de su propio estampado de métricas), no al salir de un
+    bloque. tooltip-anchor: P2-T2-PAST-DAYS-FROZEN"""
+    token = snapshot_past_days(plan_data, today=today, surface=surface)
+    try:
+        yield token
+    finally:
+        restore_past_days(plan_data, token)
 
 
 def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
@@ -31816,6 +31935,13 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *
     (`inventory_names`, snapshot que el caller ya tiene — cero IO nuevo aquí dentro). El
     re-costeo del CALLER sigue viendo `plan_data` completo a propósito: el costo del ciclo
     es de todo el plan, ventanear la medición mentiría al banner.
+
+    [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] Aquel fix ventaneó las SUSTITUCIONES, pero todo lo que
+    viene detrás de ellas —el truth-up, `apply_update_macro_engine` (rebalance ×[0.3, 2.5] +
+    refine de 5 g + re-cap clínico) y el finalize chain— seguía barriendo `plan_data` ENTERO.
+    Medido: 150 g de arroz en un día pasado salían del seam en 650 g. El freeze envuelve el
+    bloque completo, así que el snapshot se toma ANTES del motor de macros (y no después, que era
+    "conservar fielmente lo que el caller acababa de reescribir").
     tooltip-anchor: P1-BUDGET-T2-CONVERGENCE"""
     try:
         days = (plan_data or {}).get("days") or []
@@ -31824,51 +31950,71 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *
         # Ventana de ESCRITURA. Con el knob OFF, `days_win is days` y `_inv` es None →
         # las dos llamadas de abajo son byte-idénticas al pre-fix.
         _future_only = BUDGET_CONVERGENCE_FUTURE_ONLY
-        days_win = _budget_future_days_window(plan_data, days, today) if _future_only else days
-        _inv = inventory_names if _future_only else None
-        if not days_win:
-            logger.info("💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] cero días futuros — no hay "
-                        "nada que abaratar sin reescribir historial; el estado de "
-                        "`budget_reconciliation` queda como está (honesto).")
-            return 0
-        subs = 0
-        if BUDGET_DRIVER_AWARE_ENABLED:
-            subs = _apply_budget_driver_aware_pass(
-                days_win, form_data or {},
-                plan_data.get("aggregated_shopping_list_weekly") or [],
-                inventory_names=_inv,
-            )
-        subs += _apply_budget_cheapen_pass(days_win, form_data or {}, force=True,
-                                           inventory_names=_inv)
-        if not subs:
-            return 0
-        plan_data["_budget_adjusted"] = True
-        try:
-            # La ventana también aquí: el autofix de proteína repetida es day-local (no
-            # pierde detección al recortar días) pero REESCRIBE comidas — sobre un día ya
-            # cocinado sería la misma corrupción de historial que este fix cierra.
-            _pr_n = _protein_repeat_autofix(days_win, form_data or {})
-            if _pr_n:
-                logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] post-budget (T2): {_pr_n} comida(s) "
-                            f"re-diversificada(s).")
-        except Exception:
-            pass
-        try:
-            from nutrition_db import IngredientNutritionDB as _BCDB2
-            _db2 = _BCDB2()
-            for _d2 in days:
-                for _m2 in (_d2.get("meals") or []) if isinstance(_d2, dict) else []:
-                    if isinstance(_m2, dict) and _m2.get("_budget_substitutions"):
-                        _truth_up_meal_macros_from_strings(_m2, _db2)
-            # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) ídem que T1: sin
-            # `form_data` el re-cap clínico se omitía. Esta superficie es la más silenciosa del sistema
-            # (chunk worker de semanas 2+, sin usuario mirando, persiste directo).
-            apply_update_macro_engine(plan_data, surface="budget_convergence_t2", db=_db2,
-                                      form_data=form_data or {})
-            if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
-                recompute_micronutrient_report_for_plan(plan_data, form_data or {}, db=_db2)
-        except Exception as _tu2_e:
-            logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] truth-up/re-banda no-op: {_tu2_e}")
+        # [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] El freeze abre AQUÍ, antes de la primera
+        # escritura del seam, y cierra justo antes del chain — que recibe el plan con los días
+        # pasados ya devueltos a su sitio y aplica su propio freeze sobre esa MISMA línea base.
+        # Dos ventanas consecutivas, un solo estado de referencia. El REBUILD de listas del
+        # caller corre después de que esta función retorne ⇒ lista lo que el usuario realmente
+        # tiene apuntado, no un intermedio.
+        #
+        # Cuelga de `_future_only` y no solo de su propio kill-switch: los dos knobs responden
+        # la MISMA pregunta en el MISMO seam ("¿puede esto reescribir días que el usuario ya
+        # vivió?") y que se contradigan es el bug, no la feature. Con
+        # `MEALFIT_BUDGET_CONVERGENCE_FUTURE_ONLY=false` el operador pide explícitamente el
+        # barrido completo; si el freeze siguiera puesto, ese rollback quedaría medio inerte
+        # —las sustituciones caerían sobre los días pasados y el restore las borraría acto
+        # seguido— y tendríamos un knob que ya no revierte lo que dice revertir.
+        _hist_guard = (frozen_past_days(plan_data, surface="t2-budget-convergence/pre-chain",
+                                        today=today)
+                       if _future_only else nullcontext())
+        with _hist_guard:
+            days_win = _budget_future_days_window(plan_data, days, today) if _future_only else days
+            _inv = inventory_names if _future_only else None
+            if not days_win:
+                logger.info("💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] cero días futuros — no hay "
+                            "nada que abaratar sin reescribir historial; el estado de "
+                            "`budget_reconciliation` queda como está (honesto).")
+                return 0
+            subs = 0
+            if BUDGET_DRIVER_AWARE_ENABLED:
+                subs = _apply_budget_driver_aware_pass(
+                    days_win, form_data or {},
+                    plan_data.get("aggregated_shopping_list_weekly") or [],
+                    inventory_names=_inv,
+                )
+            subs += _apply_budget_cheapen_pass(days_win, form_data or {}, force=True,
+                                               inventory_names=_inv)
+            if not subs:
+                return 0
+            plan_data["_budget_adjusted"] = True
+            try:
+                # La ventana también aquí: el autofix de proteína repetida es day-local (no
+                # pierde detección al recortar días) pero REESCRIBE comidas — sobre un día ya
+                # cocinado sería la misma corrupción de historial que este fix cierra.
+                _pr_n = _protein_repeat_autofix(days_win, form_data or {})
+                if _pr_n:
+                    logger.info(f"🍗 [P1-PROTEIN-REPEAT-AUTOFIX] post-budget (T2): {_pr_n} comida(s) "
+                                f"re-diversificada(s).")
+            except Exception:
+                pass
+            try:
+                from nutrition_db import IngredientNutritionDB as _BCDB2
+                _db2 = _BCDB2()
+                for _d2 in days:
+                    for _m2 in (_d2.get("meals") or []) if isinstance(_d2, dict) else []:
+                        if isinstance(_m2, dict) and _m2.get("_budget_substitutions"):
+                            _truth_up_meal_macros_from_strings(_m2, _db2)
+                # [P1-UPDATE-RECAP-ALL-SURFACES · 2026-07-30] (audit solver+seeder v5) ídem que T1: sin
+                # `form_data` el re-cap clínico se omitía. Esta superficie es la más silenciosa del sistema
+                # (chunk worker de semanas 2+, sin usuario mirando, persiste directo).
+                # [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] Este motor NO tiene ventana de fechas y
+                # es el que medía 150 g → 650 g sobre un día ya comido; corre dentro del freeze.
+                apply_update_macro_engine(plan_data, surface="budget_convergence_t2", db=_db2,
+                                          form_data=form_data or {})
+                if MICRO_POSTENGINE_RECOMPUTE_ENABLED:
+                    recompute_micronutrient_report_for_plan(plan_data, form_data or {}, db=_db2)
+            except Exception as _tu2_e:
+                logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] truth-up/re-banda no-op: {_tu2_e}")
         try:
             from db import apply_plan_quality_finalize_chain as _apqfc_t2
             # [P1-CHAIN-CLINICAL-CTX · 2026-08-02] el `form_data` que el motor de macros ya recibe
@@ -31877,7 +32023,18 @@ def apply_budget_convergence_for_days(plan_data: dict, form_data: dict | None, *
             # usuario mirando — un re-cap omitido aquí no lo caza nadie. Sin `user_id` por la
             # misma razón que en la cola de assemble: el único candidato sería el crudo
             # `form_data["user_id"]`, que puede traer el centinela `"guest"`.
-            _apqfc_t2(plan_data, surface="t2-budget-convergence", form_data=form_data or {})
+            # [P2-T2-PAST-DAYS-FROZEN · 2026-08-04] ÚNICO caller del sistema que enciende el
+            # freeze del chain. Es legítimo aquí y en ningún otro sitio: este seam corre DÍAS
+            # después de la generación sobre días que ya fueron finalizados en su momento, así
+            # que "fecha pasada" sí significa "el usuario ya lo comió". En las superficies de
+            # GENERACIÓN (assemble-tail, chunk T1, post-review-patch, INSERT) esa inferencia es
+            # falsa —un chunk diferido/reintentado emite días nuevos con `date` pasada— y
+            # congelarlos los persistiría crudos, sin coherence stack ni caps. Ver el bloque del
+            # knob para las 3 rutas reproducidas.
+            # `_future_only` y no un `True` literal: mismo argumento que el guard de arriba —
+            # el rollback del barrido completo tiene que revertir el seam ENTERO.
+            _apqfc_t2(plan_data, surface="t2-budget-convergence", form_data=form_data or {},
+                      freeze_past_days=_future_only)
         except Exception as _apq_t2_e:
             logger.debug(f"[P1-BUDGET-T2-CONVERGENCE] finalize chain no-op: {_apq_t2_e}")
         logger.info(f"💰 [P1-BUDGET-T2-CONVERGENCE] {subs} sustitución(es) económica(s) aplicadas "
