@@ -223,14 +223,18 @@ if SOLVER_MAX_SCALE_PROTEIN < SOLVER_MAX_SCALE:
 SOLVER_PIN_FROZEN = _envb("MEALFIT_SOLVER_PIN_FROZEN", True)
 
 
-# [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] (audit solver+seeder v6 · F3) Estado del reporte del
-# fallo del LSQ. `_LSQ_ERR_SEEN` deduplica el WARNING por TIPO de excepción (el solver corre ~28
-# veces por plan; un crash sistemático inundaría el journal). `_LAST_LSQ_ERROR` deja el último
-# tipo+mensaje disponible para que el caller lo estampe junto a `_solver_greedy_fallback` y el
-# operador pueda distinguir "knob OFF" de "LSQ crasheó" sin abrir logs.
-# tooltip-anchor: P3-SOLVER-LSQ-ERROR-LOUD
+# [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] (audit solver+seeder v6 · F3) `_LSQ_ERR_SEEN` deduplica
+# el WARNING por TIPO de excepción (el solver corre ~28 veces por plan; un crash sistemático
+# inundaría el journal).
+# [P3-LSQ-ERROR-PER-CALL · 2026-08-04] (audit v7 · Task 18) `_LAST_LSQ_ERROR` ERA un global de
+# módulo: se escribía en el `except` de `_compute_scale_factors` y JAMÁS se limpiaba. `method ==
+# "greedy"` tiene TRES causas (knob OFF / `A_rows` vacío / crash real), y tras UN crash, cualquier
+# comida POSTERIOR que cayera a greedy por OTRA razón heredaba el TypeError viejo de OTRA comida —
+# compartido entre threads, sin lock. El error ahora viaja como 5º elemento del tuple de retorno de
+# `_compute_scale_factors` (`None` si el greedy no vino de un crash): cada llamada reporta SU
+# PROPIO resultado, sin estado compartido entre llamadas ni entre threads.
+# tooltip-anchor: P3-LSQ-ERROR-PER-CALL
 _LSQ_ERR_SEEN: set = set()
-_LAST_LSQ_ERROR = None
 
 
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
@@ -286,16 +290,19 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     si está habilitado; si no (o si falla), cae al greedy por-grupo. `entries[i]` debe tener
     `macros` ({kcal,protein,carbs,fats}|None) y `group` (macro dominante|None).
     [S-P2-a] `hi` por-COORDENADA: las líneas PROTEÍNA-dominantes usan `max_scale_protein` (≥ max_scale);
-    el resto `max_scale`. Retorna (factors, method, saturated_hi, saturated_lo) — `saturated_*` cuenta los
-    factores clavados en su bound per-línea (telemetría exacta, no un umbral fijo).
+    el resto `max_scale`. Retorna (factors, method, saturated_hi, saturated_lo, lsq_error) — `saturated_*`
+    cuenta los factores clavados en su bound per-línea (telemetría exacta, no un umbral fijo).
     [P2-SOLVER-PIN-FROZEN · 2026-08-03] `lo` también por-COORDENADA: las líneas `movable=False` van con
     `lo = hi = 1.0` y el LSQ redistribuye el target a las móviles solo. **Solo en la rama LSQ** — el
     greedy conserva su comportamiento previo (razón MEDIDA en el comentario largo de esa rama).
-    Sin la clave se asume movible: preserva el path dict."""
+    Sin la clave se asume movible: preserva el path dict.
+    [P3-LSQ-ERROR-PER-CALL · 2026-08-04] `lsq_error`: `str(tipo: mensaje)` si el LSQ crasheó EN ESTA
+    llamada y se cayó a greedy por eso; `None` en cualquier otro caso (LSQ exitoso, knob OFF, o
+    greedy por `A_rows` vacío sin excepción). Sin estado compartido entre llamadas."""
     factors = [1.0] * len(entries)
     sc = [i for i, e in enumerate(entries) if e.get("macros") and e.get("group")]
     if not sc:
-        return factors, "none", 0, 0
+        return factors, "none", 0, 0, None
     _mxp = max_scale if max_scale_protein is None else max_scale_protein
     # [P2-SOLVER-PIN-FROZEN · 2026-08-03] ¿Qué coordenadas están CLAVADAS? Se lee `movable` con la
     # MISMA semántica que `_feasibility_report` (truthiness, default True) a propósito: el objetivo
@@ -305,6 +312,9 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     _hi_sc = [(1.0 if _pin[j] else (_mxp if entries[i]["group"] == "protein" else max_scale))
               for j, i in enumerate(sc)]  # hi por-coordenada
     _lo_sc = [(1.0 if p else min_scale) for p in _pin]  # lo por-coordenada (pin ⇒ lo == hi == 1.0)
+    # [P3-LSQ-ERROR-PER-CALL · 2026-08-04] local a la LLAMADA (no global de módulo): permanece `None`
+    # salvo que el `except` de abajo lo estampe con el crash de ESTA invocación.
+    _lsq_err = None
     if SOLVER_LSQ:
         try:
             _w = {"kcal": SOLVER_W_KCAL, "protein": SOLVER_W_PROTEIN,
@@ -329,7 +339,7 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                         sat_hi += 1
                     elif xs[j] <= _lo_sc[j] * 1.001:
                         sat_lo += 1
-                return factors, "lsq", sat_hi, sat_lo
+                return factors, "lsq", sat_hi, sat_lo, None
         except Exception as _lsq_e:
             # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] (audit v6 · F3) Era `pass`. `method="greedy"`
             # colapsa TRES causas distintas en un solo valor: knob apagado, sin filas de target, y
@@ -339,8 +349,11 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
             # exacto y un rename apagaría en silencio el flag `_solver_greedy_fallback`.
             # Dedup por TIPO: esto corre 1 vez por comida (~28/plan) y un crash sistemático
             # inundaría el journal. tooltip-anchor: P3-SOLVER-LSQ-ERROR-LOUD
+            # [P3-LSQ-ERROR-PER-CALL · 2026-08-04] `_lsq_err` es LOCAL (no `globals()[...]`): antes
+            # sobrevivía a la llamada y contaminaba la SIGUIENTE comida que cayera a greedy por otra
+            # razón (knob OFF / `A_rows` vacío). Ahora viaja solo en el `return` de ESTA invocación.
             _et = type(_lsq_e).__name__
-            globals()["_LAST_LSQ_ERROR"] = f"{_et}: {str(_lsq_e)[:120]}"
+            _lsq_err = f"{_et}: {str(_lsq_e)[:120]}"
             if _et not in _LSQ_ERR_SEEN:
                 _LSQ_ERR_SEEN.add(_et)
                 _log.warning(f"⚠ [P3-SOLVER-LSQ-ERROR-LOUD] LSQ falló ({_et}: {str(_lsq_e)[:120]}) "
@@ -384,7 +397,7 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
             sat_hi += 1
         elif factors[i] <= min_scale * 1.001:
             sat_lo += 1
-    return factors, "greedy", sat_hi, sat_lo
+    return factors, "greedy", sat_hi, sat_lo, _lsq_err
 
 
 def _converged_report(achieved: dict, tgt: dict, tolerance_pct: float) -> tuple:
@@ -569,7 +582,7 @@ def solve_portion_macros(
 
     # 2) factor de escalado POR-INGREDIENTE (LSQ multi-macro; greedy fallback). El `report`
     #    greedy por-macro se conserva como telemetría.
-    ing_factors, method, _sat_hi, _sat_lo = _compute_scale_factors(
+    ing_factors, method, _sat_hi, _sat_lo, _lsq_error = _compute_scale_factors(
         entries, tgt, min_scale, max_scale, max_scale_protein)
     report = {}
     for macro in _KCAL_PER_G:  # protein, carbs, fats
@@ -640,7 +653,9 @@ def solve_portion_macros(
         # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] `method` sigue siendo "greedy" (el caller lo
         # compara exacto); el TIPO del fallo viaja aparte para que el operador distinga
         # "knob OFF" de "LSQ crashó". None cuando el greedy corrió por otra razón.
-        "lsq_error": (_LAST_LSQ_ERROR if method == "greedy" else None),
+        # [P3-LSQ-ERROR-PER-CALL · 2026-08-04] `_lsq_error` ya viene per-call desde el tuple de
+        # `_compute_scale_factors` (antes: global de módulo stale entre llamadas).
+        "lsq_error": _lsq_error,
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
         # [P2-SOLVER-PIN-FROZEN · 2026-08-03] ver el gemelo en `solve_meal_macros`. En el path dict
@@ -717,7 +732,7 @@ def solve_meal_macros(
 
     # [M2-SOLVER-NNLS] Factor POR-INGREDIENTE (LSQ multi-macro; greedy fallback). Reemplaza el
     # factor único por-grupo. El `report` greedy se conserva como telemetría por-macro.
-    ing_factors, method, _sat_hi, _sat_lo = _compute_scale_factors(
+    ing_factors, method, _sat_hi, _sat_lo, _lsq_error = _compute_scale_factors(
         entries, tgt, min_scale, max_scale, max_scale_protein)
     report = {}
     for macro in _KCAL_PER_G:
@@ -793,7 +808,9 @@ def solve_meal_macros(
         # [P3-SOLVER-LSQ-ERROR-LOUD · 2026-07-31] `method` sigue siendo "greedy" (el caller lo
         # compara exacto); el TIPO del fallo viaja aparte para que el operador distinga
         # "knob OFF" de "LSQ crashó". None cuando el greedy corrió por otra razón.
-        "lsq_error": (_LAST_LSQ_ERROR if method == "greedy" else None),
+        # [P3-LSQ-ERROR-PER-CALL · 2026-08-04] `_lsq_error` ya viene per-call desde el tuple de
+        # `_compute_scale_factors` (antes: global de módulo stale entre llamadas).
+        "lsq_error": _lsq_error,
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
         # [P2-SOLVER-PIN-FROZEN · 2026-08-03] Cuántas líneas de la comida son INAMOVIBLES (sin

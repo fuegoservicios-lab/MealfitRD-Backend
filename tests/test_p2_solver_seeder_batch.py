@@ -40,7 +40,7 @@ def test_sp2a_protein_gets_higher_max_scale():
         {"macros": {"kcal": 130, "protein": 3, "carbs": 28, "fats": 0.5}, "group": "carbs"},
     ]
     tgt = {"kcal": 99999, "protein": 99999, "carbs": 99999, "fats": 0}  # imposible → maxea ambos
-    f, method, sat_hi, sat_lo = ps._compute_scale_factors(ents, tgt, 0.3, 3.5, 5.0)
+    f, method, sat_hi, sat_lo, _err = ps._compute_scale_factors(ents, tgt, 0.3, 3.5, 5.0)
     assert method == "lsq"
     assert f[0] > 3.5, f"proteína debería pasar de 3.5: {f[0]}"
     assert f[1] <= 3.501, f"carbo debería capear en 3.5: {f[1]}"
@@ -51,8 +51,8 @@ def test_sp2a_protein_rollback_equals_general():
     """Rollback (MEALFIT_SOLVER_MAX_SCALE_PROTEIN=3.5) → la proteína se capea como el general."""
     import portion_solver as ps
     ents = [{"macros": {"kcal": 165, "protein": 31, "carbs": 0, "fats": 4}, "group": "protein"}]
-    f, _, _, _ = ps._compute_scale_factors(ents, {"kcal": 99999, "protein": 99999, "carbs": 0, "fats": 0},
-                                           0.3, 3.5, 3.5)
+    f, _, _, _, _ = ps._compute_scale_factors(ents, {"kcal": 99999, "protein": 99999, "carbs": 0, "fats": 0},
+                                              0.3, 3.5, 3.5)
     assert f[0] <= 3.501
 
 

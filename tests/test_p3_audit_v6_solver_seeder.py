@@ -30,12 +30,14 @@ def test_el_fallo_del_lsq_deja_de_ser_mudo(monkeypatch, caplog):
     entries = [{"s": "100 g de pollo", "macros": {"kcal": 165, "protein": 31, "carbs": 0, "fats": 3.6},
                 "group": "protein", "movable": True}]
     with caplog.at_level("WARNING"):
-        factors, method, _hi, _lo = ps._compute_scale_factors(
+        factors, method, _hi, _lo, lsq_error = ps._compute_scale_factors(
             entries, {"kcal": 300, "protein": 60, "carbs": 0, "fats": 0}, 0.5, 3.5, 5.0)
 
     assert method == "greedy", "el valor de `method` NO cambia: el caller lo compara exacto"
     assert "ValueError" in caplog.text, f"el TIPO de la excepción no llegó al log: {caplog.text[:200]}"
-    assert ps._LAST_LSQ_ERROR and "ValueError" in ps._LAST_LSQ_ERROR
+    # [P3-LSQ-ERROR-PER-CALL · 2026-08-04] el error ahora viaja en el tuple de retorno, no en un
+    # global de módulo (`ps._LAST_LSQ_ERROR` ya no existe).
+    assert lsq_error and "ValueError" in lsq_error
 
 
 def test_el_fallo_del_lsq_no_inunda_el_journal(monkeypatch, caplog):

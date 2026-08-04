@@ -73,7 +73,7 @@ def test_la_congelada_recibe_factor_exactamente_1_no_un_fantasma():
     Antes salia 1.4276 y el descarte post-hoc lo borraba — pero el reparto ya estaba hecho.
     """
     entries = [_entry(PECHUGA, "protein", False), _entry(POLLO, "protein", True)]
-    factors, method, _sh, _sl = ps._compute_scale_factors(entries, TGT_BRIEF, 0.3, 3.5, 5.0)
+    factors, method, _sh, _sl, _err = ps._compute_scale_factors(entries, TGT_BRIEF, 0.3, 3.5, 5.0)
     assert method == "lsq"
     assert factors[0] == 1.0, (
         f"la linea congelada sigue recibiendo un factor fantasma: {factors[0]!r}")
@@ -165,7 +165,7 @@ def test_la_congelada_no_se_cuenta_como_clamp_saturado():
     """`lo=hi=1.0` haria que toda congelada contara como `saturated_hi` — la serie que motivo
     S-P2-a ("~74% de meals saturando el clamp") quedaria inflada por lineas que ni se movieron."""
     entries = [_entry(PECHUGA, "protein", False), _entry(POLLO, "protein", True)]
-    _f, _m, sat_hi, sat_lo = ps._compute_scale_factors(entries, TGT_BRIEF, 0.3, 3.5, 5.0)
+    _f, _m, sat_hi, sat_lo, _err = ps._compute_scale_factors(entries, TGT_BRIEF, 0.3, 3.5, 5.0)
     assert sat_hi == 0 and sat_lo == 0, (
         f"una linea PINNED no satura ningun clamp: hi={sat_hi} lo={sat_lo}")
 
