@@ -138,12 +138,16 @@ def test_claude_md_size_under_cap():
          >10% en una sesión, planifica una limpieza estructural (~3-6
          horas, ahorra hasta 50% del tamaño según pattern 2026-05-14).
     """
+    # [2026-07-31] BYTES, no caracteres — ver la nota en `test_p1_prod_final_1.py`.
+    # En español la brecha es de ~1000 (acentos y emojis a 2+ bytes), así que quien
+    # depure con `len(read_text())` verá otro número. La medida se queda en bytes
+    # (conservadora); la etiqueta es la que estaba mal.
     size = _CLAUDE_MD.stat().st_size
     cap = _get_cap()
     assert size <= cap, (
         f"\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"CLAUDE.md = {size:,} chars > cap {cap:,} chars (diff +{size - cap:,})\n"
+        f"CLAUDE.md = {size:,} bytes > cap {cap:,} bytes (diff +{size - cap:,})\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"\n"
         f"CLAUDE.md se auto-carga en CADA turn de la conversación con\n"
