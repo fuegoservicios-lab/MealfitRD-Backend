@@ -866,8 +866,20 @@ def build_budget_context(form_data: dict) -> str:
     usuario eligió "Personalizar", el monto total en RD$ + la duración del ciclo,
     para que el LLM ajuste la selección de ingredientes (cortes económicos,
     proteínas accesibles, productos locales de temporada) al presupuesto.
-    Es una señal CUALITATIVA, no un cálculo exacto de costos — la app no tiene
-    base de precios por ingrediente. Fail-soft: '' si no hay budget."""
+
+    [P3-BUDGET-DOCSTRING-PRICES · 2026-08-04] Es una señal CUALITATIVA **por
+    diseño**, no por falta de datos: la app SÍ tiene base de precios
+    (`master_ingredients.price_per_lb` + `supermarket_products`,
+    P1-SUPERMARKET-DB). Los cálculos EXACTOS de costo viven en las palancas
+    deterministas POST-generación — no en el prompt: cheapen-pass
+    (`_apply_budget_cheapen_pass`, sustituciones curadas premium→económico),
+    driver-aware (`BUDGET_DRIVER_AWARE_*`, ataca los ítems más caros del
+    carrito) y la reconciliación costo-real-vs-presupuesto
+    (`build_budget_reference`/`refresh_budget_reconciliation`,
+    P1-BUDGET-RECONCILE). Este bloque solo orienta la SELECCIÓN de
+    ingredientes del LLM — pedirle que calcule precios exactos sería
+    redundante con esas palancas y menos preciso. Fail-soft: '' si no hay
+    budget."""
     budget = (str(form_data.get("budget") or "")).strip().lower()
     if not budget:
         return ""
