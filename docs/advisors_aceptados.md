@@ -39,6 +39,31 @@ Esta sección documenta los advisors de Supabase que han sido auditados y declar
 | `unused_index` (`idx_llm_usage_events_model_created`) | **INFO intencional** | Sirve queries analytics admin-only de cost-by-model en `/api/admin/cost-by-node` ([`routers/system.py:1010+`](backend/routers/system.py#L1010)). Endpoint esporádico (incident diagnosis) → advisor reporta 0 scans. Mantener para diagnóstico de incidentes de costo. | Migración SSOT `p2_unused_idx_advisor_anchors_2026_05_20.sql` (P2-UNUSED-IDX · 2026-05-20). |
 | `unused_index` (`idx_user_depleted_items_master_ingredient_id`) | **INFO intencional** | Partial index cubre FK `ON DELETE SET NULL` desde `master_ingredients`. Misma lección P2-PERF-1. | [`project_p2_prod_harden_2026_05_23.md`](~/.claude/projects/.../memory/project_p2_prod_harden_2026_05_23.md) · migración SSOT [`p2_user_depleted_items_fk_idx_2026_05_23.sql`](migrations/p2_user_depleted_items_fk_idx_2026_05_23.sql) |
 
+> **[P3-CLAUDEMD-MARGIN-RESTORE · 2026-08-04]** Bloque movido ÍNTEGRO desde `CLAUDE.md`
+> (sección «Advisors aceptados») para restaurar el margen del cap (`test_p1_prod_final_1`
+> exige ≥800 bytes bajo el cap de `test_p3_claudemd_cap`). CLAUDE.md conserva la REGLA en
+> una línea + link a este doc; el INVENTARIO (qué functions, qué migración, qué GRANT) vive
+> aquí. El texto de abajo es literalmente el que vivía en CLAUDE.md — cero contenido perdido.
+> Nota: la línea introductoria de «Advisors aceptados» en CLAUDE.md ya prometa este
+> contenido en este doc desde 2026-07-26; hasta hoy la promesa era falsa.
+
+### Pattern: `SET search_path = ''` en functions Postgres
+
+[P3-NEW-2 · 2026-05-10] Patrón canónico para functions nuevas: `SET search_path = ''` + `SECURITY <DEFINER|INVOKER>` explícito. La cadena vacía fuerza qualifier explícito (`public.<obj>`, `auth.<obj>`) y previene shadowing por temp tables (vs `'public'` que es vulnerable). Narrativa "por qué `''` no `'public'`" + ejemplo SQL boilerplate: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). **Functions ya bajo el pattern:**
+
+| Function | Migración | `search_path` | EXECUTE granted to |
+|---|---|---|---|
+| `set_meal_plans_updated_at` | `p2_new_1_set_meal_plans_updated_at_search_path.sql` | `''` | trigger (no-direct) |
+| `apply_inventory_delta` | `p0_4_apply_inventory_delta_rpc.sql` | `'public'` (acepta — refs qualified) | `service_role` |
+| `increment_inventory_quantity` | runtime/historical | `auth, public, extensions` (legacy, ver P2-4 memoria) | `authenticated` + `service_role` (P2-4) |
+| `handle_new_user` | [`p1_definer_functions_lockdown_2026_05_12.sql`](migrations/p1_definer_functions_lockdown_2026_05_12.sql) | `''` (P1-DEFINER-LOCKDOWN) | `service_role` (REVOKE explícito) |
+| `get_monthly_plan_count` | mismo | `''` | `service_role` (REVOKE explícito; función huérfana, 0 callsites) |
+| `log_unknown_ingredient_rpc` | mismo | `''` | `service_role` (REVOKE explícito; callsite [`db_plans.py`](backend/db_plans.py)) |
+
+Si añades function nueva: aplicar el pattern, justificar excepción en COMMENT ON FUNCTION + memoria si necesitas resolver nombres sin qualifier.
+
+**[P1-DEFINER-LOCKDOWN · 2026-05-12]** Functions `SECURITY DEFINER` que aceptan `user_id`/`p_user_id` parameter sin validar contra `auth.uid()` DEBEN incluir `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` explícito en migración SSOT — defensa contra GRANT por error que abriría IDOR cross-user. Test: [`test_p1_definer_lockdown_migration.py`](backend/tests/test_p1_definer_lockdown_migration.py).
+
 ### Cómo verificar
 
 Cada item está respaldado por `COMMENT ON INDEX` (índices) o `COMMENT ON FUNCTION` (definers) en migración SSOT — el linter ve el COMMENT pero sigue reportando el advisor (es informational, no auto-suprimido). El operador debe leer el comment vía `\d+ <objeto>` o `obj_description(<oid>, 'pg_class')` antes de actuar.
