@@ -2041,14 +2041,39 @@ def _protein_yield_on_canonical_enabled() -> bool:
     ejemplos reales: «205 g de pollo cocido y desmenuzado», «160 g de pescado cocido»,
     «45 g de costilla de cerdo cocida y desmenuzada», «100 g de cerdo magro cocido y
     desmenuzado». Cada match es ~26% de under-buy de proteína en ese alimento (1 lb
-    cocida declarada ⇒ solo 0,74 lb cruda comprada). NO es un no-op: procede con el
-    knob en OFF por default para A/B antes de encender.
+    cocida declarada ⇒ solo 0,74 lb cruda comprada).
 
-    Default `False`: leído inline (no cacheado a nivel de módulo) para que los tests
+    [P3-PROTEIN-YIELD-DECISION · 2026-08-04] Decisión delegada: **FLIP a `True`**. De las
+    12 líneas, 1 es de REUSO (ya excluida por `_PROTEIN_REUSE_PAREN_RE`) → 11 realmente
+    afectadas. Medido OFFLINE ejecutando `get_shopping_list_delta` (misma convención
+    `num_days=1` → `base_duration_scale=7` que ancla `test_p2_protein_yield_canonical.py`)
+    sobre las 4 líneas no-reuso de las que tenemos texto exacto + precios RD$/lb del
+    catálogo VERSIONADO (`scripts/add_foods_batch1_2026_06_26.py`: Muslo de pollo 68,
+    Costilla de cerdo 189; `scripts/add_foods_batch2_2026_06_26.py`/
+    `seed_supermarket_2026_07_02.py`: Cerdo genérico 115, Filete pechuga de pollo 135;
+    rango real RD$68–290/lb según corte):
+
+        160 g pescado cocido        → Δ392.00 g/sem × RD$127.5/lb ≈ RD$110.2
+        100 g cerdo magro cocido     → Δ245.00 g/sem × RD$115/lb   ≈ RD$62.1
+        45 g costilla de cerdo       → Δ110.25 g/sem × RD$189/lb   ≈ RD$45.9
+        40 g pechuga de pollo cocido → Δ98.00 g/sem  × RD$135/lb   ≈ RD$29.2
+        (control: la línea de REUSO medida da Δ=0 con el sello intacto)
+
+    Promedio ≈ RD$61.85/línea × 2.2 líneas/plan (11 líneas / 5 planes afectados) ⇒ delta
+    semanal PROMEDIO por plan afectado ≈ **RD$136**; peor caso observado (las 4 proteínas
+    distintas en un mismo plan) ≈ **RD$247**. Ambos números son una fracción menor (<10%)
+    del costo semanal típico de una lista (RD$3.000–6.000, CLAUDE.md) — bajo el umbral
+    ~RD$200 de la decisión delegada (el peor caso lo roza pero sigue siendo ruido frente
+    al presupuesto semanal). El sello `protein_yield_applied` ya blinda al guard de
+    coherencia en cualquier dirección del A/B (`TestGuardSealNotLiveKnob`), así que
+    encender no reintroduce el bug que ese sello cerró.
+
+    Default `True`: leído inline (no cacheado a nivel de módulo) para que los tests
     puedan togglear via `monkeypatch.setenv` sin `importlib.reload` — mismo patrón que
-    `_semantic_cache_disabled`/`_trip_windowed_perishables_enabled`.
+    `_semantic_cache_disabled`/`_trip_windowed_perishables_enabled`. Rollback sin
+    redeploy: `MEALFIT_PROTEIN_YIELD_ON_CANONICAL=false`.
     """
-    return _knob_env_bool("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", False)
+    return _knob_env_bool("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", True)
 
 
 # [P2-PROTEIN-YIELD-CANONICAL · 2026-08-03] Regex de la regla #2, extraídas a constantes
@@ -12136,7 +12161,10 @@ def get_shopping_list_delta(
     # sin lado inventario) puede reabrir la regla #2 de yield (proteínas cocidas → 1.35×
     # crudo) — con `is_new_plan=False` el delta sigue siendo peso literal en ambos lados
     # (asimetría P1-2 intacta, byte-idéntico). Gateado además por el knob
-    # `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` (default False) para A/B antes de encender.
+    # `MEALFIT_PROTEIN_YIELD_ON_CANONICAL` — [P3-PROTEIN-YIELD-DECISION · 2026-08-04]
+    # default `True` tras medir el delta real (~RD$136/semana promedio por plan afectado,
+    # ver docstring de `_protein_yield_on_canonical_enabled`); rollback sin redeploy con
+    # `MEALFIT_PROTEIN_YIELD_ON_CANONICAL=false`.
     _apply_protein_yield = bool(is_new_plan) and _protein_yield_on_canonical_enabled()
 
     # [P1-VEG-BACKFILL-HONESTY · 2026-08-02] Demanda de las RECETAS por alimento, en gramos —

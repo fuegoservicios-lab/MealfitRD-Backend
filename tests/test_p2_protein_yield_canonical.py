@@ -86,13 +86,27 @@ def _pollo_item(items):
 
 
 # ---------------------------------------------------------------------------
-# 1. Knob se auto-registra, default OFF
+# 1. Knob se auto-registra
+#
+# [P3-PROTEIN-YIELD-DECISION · 2026-08-04] El default FLIPEÓ a `True` (decisión medida,
+# ver shopping_calculator.py::_protein_yield_on_canonical_enabled y
+# test_p3_protein_yield_decision.py para los números). Este archivo ancla el
+# COMPORTAMIENTO del A/B (la regla #2 + sus flags), no el valor del default — eso vive
+# en el test de la decisión. Los tests de aquí que dependían del default (vía
+# `delenv`) pasan a setear el estado EXPLÍCITO que necesitan, para no drifear con
+# futuros cambios de default.
 # ---------------------------------------------------------------------------
-def test_knob_registrado_default_false(monkeypatch):
+def test_knob_registrado_default_true(monkeypatch):
     monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
-    assert sc._protein_yield_on_canonical_enabled() is False
+    assert sc._protein_yield_on_canonical_enabled() is True
     reg = get_knobs_registry_snapshot()
-    assert reg["MEALFIT_PROTEIN_YIELD_ON_CANONICAL"]["default"] is False
+    assert reg["MEALFIT_PROTEIN_YIELD_ON_CANONICAL"]["default"] is True
+
+
+def test_knob_off_via_env(monkeypatch):
+    """Rollback explícito sin redeploy — sigue disponible tras el flip del default."""
+    monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "false")
+    assert sc._protein_yield_on_canonical_enabled() is False
 
 
 def test_knob_on_via_env(monkeypatch):
@@ -287,8 +301,13 @@ class TestGetShoppingListDeltaE2E:
         # [ronda 1] El SELLO queda estampado — el guard lo leerá en vez del knob vigente.
         assert pollo.get("protein_yield_applied") is True
 
-    def test_knob_off_default_byte_identico(self, monkeypatch):
-        monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+    def test_knob_off_explicito_byte_identico_al_legado(self, monkeypatch):
+        """[P3-PROTEIN-YIELD-DECISION · 2026-08-04] Antes de la decisión este test
+        confiaba en `delenv` para ejercitar el default (que era OFF). El default
+        FLIPEÓ a True — este test pasa a setear el rollback EXPLÍCITO
+        (`MEALFIT_PROTEIN_YIELD_ON_CANONICAL=false`), que sigue siendo el mismo
+        comportamiento byte-idéntico al legado pre-Task-14."""
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "false")
         plan = {"days": [{"meals": [{"meal": "almuerzo",
                                       "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
         items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
@@ -324,10 +343,10 @@ class TestGetShoppingListDeltaE2E:
 # ---------------------------------------------------------------------------
 class TestGuardComposition:
     def _plan_con_lista_real(self, monkeypatch, knob_on: bool):
-        if knob_on:
-            monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "true")
-        else:
-            monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+        # [P3-PROTEIN-YIELD-DECISION · 2026-08-04] Explícito en AMBAS direcciones — el
+        # default ya no es OFF, así que `knob_on=False` necesita el rollback explícito
+        # para de verdad ejercitar el estado apagado.
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "true" if knob_on else "false")
         plan = {"days": [{"meals": [{"meal": "almuerzo",
                                       "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
         real_list = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
@@ -444,7 +463,8 @@ class TestBackstopComposition:
         assert pollo.get("capped_by") is None
 
     def test_sin_capped_by_sintetico_con_knob_off(self, monkeypatch):
-        monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+        # [P3-PROTEIN-YIELD-DECISION · 2026-08-04] Explícito: el default ya no es OFF.
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "false")
         plan = {"days": [{"meals": [{"meal": "almuerzo",
                                       "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
         items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
@@ -465,8 +485,13 @@ class TestBackstopDiscriminatesDirection:
         con yield (texto inflado 1.35×) mientras la compra real queda en peso literal
         (knob apagado — la RECETA no cambia, la interpretación del backstop sí). Sin
         el espejo correcto, esto fabrica `capped_by='qty_reconcile_v7'` sobre una
-        compra que en realidad es exactamente lo que el plan pide."""
-        monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+        compra que en realidad es exactamente lo que el plan pide.
+
+        [P3-PROTEIN-YIELD-DECISION · 2026-08-04] Con el default ahora en True, `delenv`
+        ya NO deja la compra real en peso literal (el knob real está ON por default) —
+        el rollback explícito a `false` es lo que reproduce la asimetría que este test
+        necesita (compra literal vs texto forzado a yieldear)."""
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", "false")
         plan = {"days": [{"meals": [{"meal": "almuerzo",
                                       "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
 
@@ -487,10 +512,15 @@ class TestBackstopDiscriminatesDirection:
             f"de recompra falsa sobre una compra literal correcta: {pollo}"
         )
 
-    def test_espejo_intacto_no_fabrica_nota_falsa(self, monkeypatch):
+    @pytest.mark.parametrize("knob", ["false", "true"])
+    def test_espejo_intacto_no_fabrica_nota_falsa(self, monkeypatch, knob):
         """Control positivo: con el código REAL (sin monkeypatch — mismo flag en
-        ambos lados), la MISMA receta no dispara la nota, ni con knob OFF ni ON."""
-        monkeypatch.delenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", raising=False)
+        ambos lados), la MISMA receta no dispara la nota, ni con knob OFF ni ON.
+
+        [P3-PROTEIN-YIELD-DECISION · 2026-08-04] Ambos estados EXPLÍCITOS (antes uno
+        de los dos era el default implícito vía `delenv`) para que el control positivo
+        siga cubriendo las dos direcciones tras el flip."""
+        monkeypatch.setenv("MEALFIT_PROTEIN_YIELD_ON_CANONICAL", knob)
         plan = {"days": [{"meals": [{"meal": "almuerzo",
                                       "ingredients_raw": ["1 lb de pollo cocido desmenuzado"]}]}]}
         items = _delta(plan, is_new_plan=True, inventory_override=[], consumed_override=[])
