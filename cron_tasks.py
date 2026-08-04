@@ -6259,6 +6259,79 @@ def _auth_failure_alert_job():
             pass
 
 
+def _chunk_overdue_alert_job():
+    """[P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Detección horaria de chunks atrasados.
+
+    Predicado SSOT `compute_chunk_overdue` (chat_history_context.py, Task 1):
+    ¿hoy debería existir un día del plan que no existe, sin nada en la cola
+    que lo vaya a resolver solo? Barre `meal_plans` en estados activos
+    (generating/generating_next/partial/complete_partial), y por cada plan
+    calcula el in-flight count de `plan_chunk_queue` para alimentar el
+    predicado.
+
+    Modelo de resolution **Auto (implicit)**: el job re-emite (UPSERT,
+    `resolved_at = NULL`) mientras la condición exista, y auto-resuelve
+    (`resolved_at = NOW()`) en la corrida donde deja de cumplirse — ya sea
+    porque el día apareció (chunk worker lo generó) o porque el plan terminó
+    (total_days_requested == len(days)).
+
+    Fail-open POR PLAN: una excepción calculando/persistiendo la alerta de
+    UN plan (SELECT corrupto, COUNT fallido, INSERT fallido) se loggea y el
+    barrido continúa con el resto — no aborta el tick completo por un solo
+    plan con datos raros.
+
+    Tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL.
+    """
+    from chat_history_context import compute_chunk_overdue
+    try:
+        rows = execute_sql_query(
+            """SELECT id::text AS plan_id, user_id::text AS user_id, plan_data
+               FROM meal_plans
+               WHERE plan_data->>'generation_status' IN
+                     ('generating', 'generating_next', 'partial', 'complete_partial')""",
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] No se pudo consultar meal_plans: {e}")
+        return
+
+    for r in rows:
+        plan_id = r.get("plan_id")
+        try:
+            cnt = execute_sql_query(
+                "SELECT count(*)::int AS c FROM plan_chunk_queue "
+                "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
+                (plan_id,), fetch_one=True,
+            ) or {}
+            overdue, since = compute_chunk_overdue(r.get("plan_data"), cnt.get("c") or 0)
+            alert_key = f"chunk_overdue:{plan_id}"
+            if overdue:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
+                    VALUES (%s, 'chunk_overdue', 'warning', %s, %s, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        "Chunk de plan atrasado",
+                        f"El plan {str(plan_id)[:8]} debería tener el día de hoy generado y no lo "
+                        f"tiene, sin nada en la cola que lo vaya a resolver (atrasado desde {since}).",
+                        json.dumps({"plan_id": plan_id, "user_id": r.get("user_id"),
+                                    "overdue_since": since}, ensure_ascii=False),
+                    ),
+                )
+            else:
+                execute_sql_write(
+                    "UPDATE system_alerts SET resolved_at = NOW() "
+                    "WHERE alert_key = %s AND resolved_at IS NULL",
+                    (alert_key,),
+                )
+        except Exception as _ov_e:
+            logger.warning(f"[P2-CHUNK-OVERDUE-SIGNAL] plan {plan_id}: {_ov_e}")
+            continue
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -7703,6 +7776,25 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"⏰ [P2-STRANDED-PARTIAL] Cron _alert_stranded_partial_plans "
             f"registrado cada {_STRANDED_INT_MIN} min "
             f"(age_h={_env_int('MEALFIT_STRANDED_PARTIAL_AGE_HOURS', 72)})."
+        )
+
+    # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] Detección horaria de chunks
+    # atrasados (predicado SSOT `compute_chunk_overdue`, Task 1). Modelo Auto
+    # (implicit): el job re-emite mientras la condición exista y auto-resuelve
+    # cuando el día aparece o el plan termina.
+    if not scheduler.get_job("chunk_overdue_alert"):
+        _add_job_jittered(scheduler,
+            _chunk_overdue_alert_job,
+            "interval",
+            hours=1,
+            id="chunk_overdue_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            "⏰ [P2-CHUNK-OVERDUE-SIGNAL] Cron _chunk_overdue_alert_job registrado cada 1h."
         )
 
 
