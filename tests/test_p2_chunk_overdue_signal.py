@@ -440,3 +440,93 @@ def test_agent_sin_plan_id_salta_el_count_y_no_declara_atrasado(monkeypatch):
 
     assert "ATRASADO" not in out, out
     assert "PENDIENTE" in out, out
+
+
+# ---------------------------------------------------------------------------
+# Ronda 2 de arreglos (revisor) — el MISMO bug de Ronda 1/ALTO 1, pero en
+# `compute_chunk_overdue` mismo (la Ronda 1 solo lo arregló en
+# `build_pending_plan_days_lines`, que LLAMA al predicado pero no cambia su
+# guard interno). `days` es ventana rolling: el guard `total <= len(days)`
+# necesita `len(_archived_days) + len(days)`, igual que `resolve_day_dates`
+# (líneas 121-165) y que `build_pending_plan_days_lines` ya aplica. Reproducido
+# por el revisor EJECUTANDO la función: plan de 20 días YA COMPLETO (15
+# archivados + 5 vivos) daba (True, '2026-08-13') en vez de (False, None) —
+# todo plan terminado cuyo usuario pasó el último día queda ATRASADO PARA
+# SIEMPRE (el cron horario emitiría `chunk_overdue:<plan_id>` indefinidamente
+# sobre un plan ya completo).
+# ---------------------------------------------------------------------------
+
+
+def test_archivados_cuentan_plan_completo_no_es_overdue():
+    """Caso EXACTO reproducido por el revisor: 15 archivados + 5 vivos,
+    total=20 (plan ya completo: 15+5=20), hoy 4 días después del último día
+    vivo. Pre-fix: (True, '2026-08-13') — falso positivo permanente.
+    Post-fix: (False, None)."""
+    archived_dates = [
+        "2026-07-24", "2026-07-25", "2026-07-26", "2026-07-27", "2026-07-28",
+        "2026-07-29", "2026-07-30", "2026-07-31", "2026-08-01", "2026-08-02",
+        "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
+    ]  # 15 archivados
+    live_dates = ["2026-08-08", "2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12"]  # 5 vivos
+    plan = {
+        "total_days_requested": 20,
+        "_archived_days": [{"date": d, "meals": []} for d in archived_dates],
+        "days": [{"date": d, "meals": []} for d in live_dates],
+    }
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 8, 16)) == (False, None)
+
+
+def test_archivados_no_esconden_un_overdue_legitimo():
+    """El fix NO debe matar la detección legítima: 10 archivados + 3 vivos,
+    total=20 (13 generados, plan AÚN NO completo — 7 días pendientes reales),
+    hoy 3 días después del último día vivo, sin nada in-flight ⇒ sigue
+    ATRASADO. Nota de honestidad (mismo patrón que el comentario MEDIO-3 de
+    arriba): con estos números concretos el guard `total <= n_generated`
+    (13) sigue siendo False tanto pre-fix (`total <= len(days)`=3) como
+    post-fix — total=20 es mucho mayor que ambos denominadores, así que este
+    test PASA contra el código pre-fix también. Su valor es como regression
+    guard de que el fix (sumar archivados) no sobre-actúa y apaga la
+    detección legítima de ATRASADO cuando el plan de verdad no ha terminado."""
+    archived_dates = [
+        "2026-07-24", "2026-07-25", "2026-07-26", "2026-07-27", "2026-07-28",
+        "2026-07-29", "2026-07-30", "2026-07-31", "2026-08-01", "2026-08-02",
+    ]  # 10 archivados
+    live_dates = ["2026-08-03", "2026-08-04", "2026-08-05"]  # 3 vivos
+    plan = {
+        "total_days_requested": 20,
+        "_archived_days": [{"date": d, "meals": []} for d in archived_dates],
+        "days": [{"date": d, "meals": []} for d in live_dates],
+    }
+    assert chc.compute_chunk_overdue(plan, 0, today=date(2026, 8, 8)) == (True, "2026-08-06")
+
+
+def test_archivados_ausente_o_invalido_no_rompe_ni_cambia_comportamiento():
+    """`_archived_days` ausente / no-lista / con basura ⇒ tratado como vacío
+    (mismo patrón `[d for d in (... or []) if isinstance(d, dict)]` que
+    `resolve_day_dates`/`build_pending_plan_days_lines`), sin crashear."""
+    base_days = ["2026-08-01", "2026-08-02", "2026-08-03"]
+
+    # Ausente: comportamiento idéntico a los 6 tests originales del predicado
+    # (ninguno tenía `_archived_days` — deben seguir intactos).
+    plan_ausente = _plan(base_days, 15)
+    assert chc.compute_chunk_overdue(plan_ausente, 0, today=date(2026, 8, 4)) == (True, "2026-08-04")
+
+    # No-lista (string): filtrado a vacío, no crashea.
+    plan_string = {**_plan(base_days, 15), "_archived_days": "corrupted"}
+    assert chc.compute_chunk_overdue(plan_string, 0, today=date(2026, 8, 4)) == (True, "2026-08-04")
+
+    # No-lista (dict): filtrado a vacío, no crashea.
+    plan_dict = {**_plan(base_days, 15), "_archived_days": {"oops": "no es lista"}}
+    assert chc.compute_chunk_overdue(plan_dict, 0, today=date(2026, 8, 4)) == (True, "2026-08-04")
+
+    # Lista con basura: solo cuentan los elementos dict válidos (2 de 5) —
+    # total=8 hace que el conteo SIN filtrar (5 archivados + 3 vivos = 8)
+    # dispararía el guard "ya completo" incorrectamente (8<=8 → False,None);
+    # filtrando correctamente (2 archivados válidos + 3 vivos = 5) el plan
+    # sigue incompleto (8 > 5) y el overdue real se preserva.
+    plan_basura = {
+        **_plan(base_days, 8),
+        "_archived_days": ["nope", 123, None, {"date": "2026-07-31", "meals": []},
+                            {"date": "2026-07-30", "meals": []}],
+    }
+    assert chc.compute_chunk_overdue(plan_basura, 0, today=date(2026, 8, 4)) == (True, "2026-08-04")

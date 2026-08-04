@@ -180,19 +180,37 @@ def compute_chunk_overdue(plan_data, in_flight_count, today=None):
     SSOT del predicado — 3 consumidores (/chunk-status, cron horario, índice del coach).
     Fail-open doble: plan legacy sin `date` estampada ⇒ (False, None) (no alerta en falso);
     cualquier excepción ⇒ (False, None). `today` inyectable para tests deterministas; en
-    producción usa rd_today() (date-only TZ RD — NUNCA datetime.utcnow())."""
+    producción usa rd_today() (date-only TZ RD — NUNCA datetime.utcnow()).
+
+    [Ronda 2 · fix revisor] `days` es una VENTANA ROLLING: cada shift poda los
+    días ya vividos hacia `_archived_days` y renumera `days` 1..N, mientras
+    `total_days_requested` nunca se toca. El guard "¿el plan ya entregó todo?"
+    NO puede comparar `total_days_requested` contra `len(days)` — eso
+    subcuenta cualquier plan que ya rotó al menos una vez. Reproducido
+    ejecutando la función: plan de 20 días YA COMPLETO (15 archivados + 5
+    vivos), hoy 4 días después del último día vivo → `(True, '2026-08-13')`,
+    un falso positivo PERMANENTE (todo plan terminado cuyo usuario pasó el
+    último día queda ATRASADO para siempre — el cron horario emitiría
+    `chunk_overdue:<plan_id>` indefinidamente sobre un plan ya completo, el
+    modo de fallo invertido que la alerta existe para evitar). Fix: mismo
+    patrón que `resolve_day_dates` (arriba) y que
+    `build_pending_plan_days_lines` ya aplica — `n_generated = len(archived)
+    + len(days)`. La fecha ancla (`last`) sigue viniendo SOLO de `days` (los
+    archivados son estrictamente anteriores, ver `_live_anchor`)."""
     try:
         if not isinstance(plan_data, dict):
             return (False, None)
-        days = plan_data.get("days")
-        if not isinstance(days, list) or not days:
+        days = [d for d in (plan_data.get("days") or []) if isinstance(d, dict)]
+        if not days:
             return (False, None)
+        archived = [d for d in (plan_data.get("_archived_days") or []) if isinstance(d, dict)]
+        n_generated = len(archived) + len(days)
         total = int(plan_data.get("total_days_requested") or 0)
-        if total <= len(days) or int(in_flight_count or 0) > 0:
+        if total <= n_generated or int(in_flight_count or 0) > 0:
             return (False, None)
         last = None
         for d in days:
-            pd = _parse_date(d.get("date")) if isinstance(d, dict) else None
+            pd = _parse_date(d.get("date"))
             if pd is not None and (last is None or pd > last):
                 last = pd
         if last is None:
