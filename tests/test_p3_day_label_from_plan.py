@@ -76,13 +76,12 @@ def test_fallback_to_old_compute_preserved():
     )
 
 
-def test_no_silent_break_of_existing_pattern():
-    """Defensa: el cálculo viejo `new Date() + visibleIdx` sigue presente
-    para el path de skeleton placeholders (días no generados aún). Esos
-    no tienen day_name del backend porque el chunk no se generó."""
-    # Anchor: el skeleton placeholder más abajo
-    skel_idx = _DASHBOARD.find("_d.setDate(_d.getDate() + _slotVisibleIdx)")
-    assert skel_idx > 0, (
-        "Skeleton placeholder path fue removido — los tabs de días futuros "
-        "no generados (chunk-2 in flight) perderían su label estimado."
-    )
+# [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `test_no_silent_break_of_existing_pattern` anclaba
+# `_d.setDate(_d.getDate() + _slotVisibleIdx)`, el cálculo del label de los skeleton
+# placeholders (días futuros aún no generados). Ese bloque completo fue removido de
+# Dashboard.jsx y absorbido por `UpcomingDayTabs.jsx` — el label de cada "fantasma" ahora lo
+# calcula `ghostName()` (ancla en la última `date` ISO viva, con fallback a `Día N` si no hay
+# fecha estampada), cubierto por su propio test `UpcomingDayTabs.test.jsx` ("sin date
+# estampada degrada a 'Dia N' sin romper"). El label de los tabs REALES (con `day_name` del
+# backend) sigue intacto y cubierto arriba por `test_day_name_read_from_plan_day` +
+# `test_fallback_to_old_compute_preserved`.

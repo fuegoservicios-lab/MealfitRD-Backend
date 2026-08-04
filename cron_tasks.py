@@ -6273,7 +6273,9 @@ def _chunk_overdue_alert_job():
     `resolved_at = NULL`) mientras la condición exista, y auto-resuelve
     (`resolved_at = NOW()`) en la corrida donde deja de cumplirse — ya sea
     porque el día apareció (chunk worker lo generó) o porque el plan terminó
-    (total_days_requested == len(days)).
+    (`total_days_requested <= len(archived) + len(days)` — Ronda 2, la
+    ventana rolling exige sumar los archivados o subcuenta cualquier plan
+    que ya rotó).
 
     Fail-open POR PLAN: una excepción calculando/persistiendo la alerta de
     UN plan (SELECT corrupto, COUNT fallido, INSERT fallido) se loggea y el

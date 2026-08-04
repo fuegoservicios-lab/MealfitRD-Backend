@@ -131,18 +131,12 @@ def test_visible_plan_days_uses_max_window():
     )
 
 
-def test_skeleton_uses_max_window():
-    """El cálculo de `_missingSlots` para skeleton placeholders debe usar
-    `_MAX_WINDOW`, no `_WINDOW_SIZE` (que ya no existe)."""
-    pattern = re.search(
-        r"_missingSlots\s*=\s*_MAX_WINDOW\s*-\s*visiblePlanDays\.length",
-        _DASHBOARD,
-    )
-    assert pattern, (
-        "Skeleton placeholders deben calcular `_missingSlots` contra "
-        "`_MAX_WINDOW`. Si quedó como `_WINDOW_SIZE`, va a romper en runtime "
-        "(ReferenceError: _WINDOW_SIZE is not defined)."
-    )
+# [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `test_skeleton_uses_max_window` anclaba el bloque
+# inline `_missingSlots = _MAX_WINDOW - visiblePlanDays.length` que calculaba los slots de
+# skeleton — ese bloque fue removido de Dashboard.jsx y absorbido por `UpcomingDayTabs.jsx`
+# (componente propio con su test dedicado `UpcomingDayTabs.test.jsx`). El uso VIVO de
+# `_MAX_WINDOW` (el cap real de la ventana, NO el skeleton) sigue cubierto por el hermano
+# `test_visible_plan_days_uses_max_window`, arriba, que sigue en verde.
 
 
 def test_use_effect_active_day_uses_max_window():
