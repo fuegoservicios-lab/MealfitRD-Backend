@@ -31516,11 +31516,17 @@ def _budget_owned_food_keys(inventory_names) -> set:
         return set()
 
 
-def _budget_future_days_window(plan_data: dict, days: list, today=None) -> list:
+def _budget_future_days_window(plan_data: dict, days: list, today=None, *,
+                               quiet: bool = False) -> list:
     """[P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] Sub-lista de `days` que la
     convergencia PUEDE reescribir: los días cuya fecha es HOY o posterior. Devuelve los
     MISMOS objetos (no copias) — los pases mutan in-place y el plan persistido debe ver
     esas mutaciones.
+
+    [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] `quiet=True` silencia el log (que habla de
+    "sustitución") cuando el consumidor NO es la convergencia sino el freeze del
+    finalize-chain: la derivación de fechas es la misma —por eso se reusa en vez de
+    duplicarla— pero la telemetría de cada superficie lleva su propio marker.
 
     Resolución de fecha, en este orden (subconjunto deliberado de
     `chat_history_context.resolve_day_dates`):
@@ -31576,7 +31582,7 @@ def _budget_future_days_window(plan_data: dict, days: list, today=None) -> list:
                 out.append(d)
             else:
                 n_past += 1
-        if n_past:
+        if n_past and not quiet:
             logger.info(f"💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] ventana de sustitución: "
                         f"{len(out)}/{len(days)} día(s) (excluidos {n_past} ya cocinado(s)/"
                         f"comprado(s), hoy={_today}).")
@@ -31585,6 +31591,78 @@ def _budget_future_days_window(plan_data: dict, days: list, today=None) -> list:
         logger.warning(f"[P2-BUDGET-CONVERGENCE-FUTURE-ONLY] ventana no-op (barrido completo): "
                        f"{type(_bfw_e).__name__}: {_bfw_e}")
         return list(days)
+
+
+# [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3) Los días que el usuario
+# YA COCINÓ son REGISTRO HISTÓRICO: ningún pase global del finalize-chain puede reescribirlos.
+#
+# `P2-BUDGET-CONVERGENCE-FUTURE-ONLY` ventaneó la convergencia de presupuesto… y acto seguido
+# invoca el chain de calidad (`apply_plan_quality_finalize_chain`), que barre el plan ENTERO. Los
+# pases que mueven gramos (band-closer de proteína, band-closer all-4 con su rebalance
+# ×[0.3, 2.5] por pase, re-cap de realismo iterado, reconcile display↔raw, polish, cap de
+# condimentos) no distinguen "día 3, cocinado el martes" de "día 12, aún por comprar". Es la
+# colisión que el review final de la tanda P2 dejó anotada, y el diferido SEC-CLIN-4/X4.
+#
+# El daño no es cosmético: `consultar_dia_del_plan` (la tool con la que el coach responde "¿qué
+# comí el martes?") y el índice de calidad leen un historial que el sistema reescribe DESPUÉS de
+# cocinado. El usuario cocinó 150 g de arroz y el plan dice 210 g porque un rebalance de tres
+# días más tarde necesitaba carbos en otra parte.
+#
+# Es corrección de INTEGRIDAD DEL HISTORIAL, no un experimento: nace encendido. El knob existe
+# por si sorprende en producción, no para pilotarlo.
+# Rollback sin redeploy: MEALFIT_CHAIN_PAST_DAYS_FROZEN=false ⇒ chain byte-idéntico al previo.
+# tooltip-anchor: P2-CHAIN-PAST-DAYS-FROZEN
+CHAIN_PAST_DAYS_FROZEN = _env_bool("MEALFIT_CHAIN_PAST_DAYS_FROZEN", True)
+
+
+def frozen_past_day_indices(plan_data: dict, days: list, today=None) -> list:
+    """[P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] Índices de `days` que el finalize-chain debe
+    dejar EXACTAMENTE como los recibió: los días ya cocinados (fecha < hoy).
+
+    Oráculo puro (no toca el plan, no abre conexión). Devuelve índices y no objetos a
+    propósito: el consumidor (`db_plans._finalize_plan_data_for_insert`) restaura por posición
+    sobre la MISMA lista, que el adapter promete no reemplazar.
+
+    Reusa `_budget_future_days_window` para derivar fechas — dos derivadores sobre la misma
+    pregunta drifean, y ese ya está anclado por sus propios tests. El complemento de su ventana
+    (lo que la convergencia NO puede tocar) es exactamente lo que el chain no puede tocar.
+
+    Dos capas de fail-open, ambas en la dirección "no congeles":
+      1. Sin NINGUNA `date` ESTAMPADA en los días → `[]`. Deliberadamente NO se acepta el tier
+         `grocery_start_date + índice` que la ventana de la convergencia sí usa: el merge T1 del
+         chunk worker pasa por el chain una VISTA PARCIAL del plan (`P0-CHUNK-CHAIN-SCOPED`) que
+         lleva el `grocery_start_date` del plan COMPLETO pero solo los días NUEVOS de la semana
+         N. Fecharlos por índice los pondría en los días 1..k (pasado) y congelaría el chunk
+         entero: el chain se volvería un no-op silencioso para ~7/8 de los días de un plan
+         mensual. Un freeze que se pasa de ancho apaga la calidad sin decirlo.
+      2. Cualquier excepción → `[]` (comportamiento previo, plan entero procesado).
+    El día de HOY cuenta como FUTURO: todavía se puede cocinar.
+
+    `today` inyectable (date | datetime | 'YYYY-MM-DD'); None → hoy en RD (UTC-4).
+    tooltip-anchor: P2-CHAIN-PAST-DAYS-FROZEN"""
+    if not CHAIN_PAST_DAYS_FROZEN or not isinstance(days, list) or not days:
+        return []
+    try:
+        if not any(isinstance(d, dict) and d.get("date") for d in days):
+            return []
+        win = _budget_future_days_window(plan_data if isinstance(plan_data, dict) else {},
+                                         days, today, quiet=True)
+        # `win` es una SUBSECUENCIA de `days` con los mismos objetos y en el mismo orden: el
+        # avance con dos punteros identifica los excluidos sin depender de `==` (dos días
+        # distintos pueden ser iguales por valor) ni de `id()` (dos posiciones pueden aliasar
+        # el mismo dict).
+        out: list = []
+        j = 0
+        for i, d in enumerate(days):
+            if j < len(win) and win[j] is d:
+                j += 1
+            else:
+                out.append(i)
+        return out
+    except Exception as _fpd_e:
+        logger.warning(f"[P2-CHAIN-PAST-DAYS-FROZEN] oráculo no-op (chain sobre el plan "
+                       f"completo): {type(_fpd_e).__name__}: {_fpd_e}")
+        return []
 
 
 def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,

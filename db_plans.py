@@ -971,6 +971,12 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
     merge T1 del chunk worker (semanas 2+). Kw-only con default → los callers y
     monkeypatches existentes (1 arg posicional) siguen intactos.
 
+    [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] Los días YA COCINADOS (fecha < hoy) son
+    registro histórico: se snapshotean antes del primer pase que mueve gramos y se
+    restauran byte-a-byte tras el último, de modo que las métricas del cierre (band
+    score, panel de micros) midan el estado final real. Un único punto para todos los
+    pases del chain, presentes y futuros. Fail-open sin ancla de fechas.
+
     Idempotente (cada pase interno lo es) y fail-safe (nunca bloquea el INSERT).
     """
     # [P0-1-RECOVERY/C] Defensa centralizada: cualquier path que use este helper para
@@ -1018,6 +1024,27 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _db_ins = _NDB_ins()
                 except Exception:
                     _db_ins = None
+                # [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] (audit solver+seeder v7 · P3)
+                # SNAPSHOT de los días YA COCINADOS, antes del primer pase que mueve gramos.
+                # Restauración byte-a-byte más abajo, tras el último. UN solo punto garantiza
+                # la política para todos los pases —presentes y futuros— del chain; ventanear
+                # pase por pase habría creado N ventanas que drifean (la de la convergencia de
+                # presupuesto ya existía, y este chain que ella misma invoca la contradecía).
+                # Fail-open: sin ancla de fechas o ante cualquier error, cero días congelados.
+                _frozen_idx: list = []
+                _frozen_snap: list = []
+                _frozen_len = len(_pd.get("days") or [])
+                try:
+                    from graph_orchestrator import frozen_past_day_indices as _fpdi
+                    _frozen_idx = _fpdi(_pd, _pd["days"])
+                    if _frozen_idx:
+                        import copy as _copy_frozen
+                        _frozen_snap = [_copy_frozen.deepcopy(_pd["days"][_i])
+                                        for _i in _frozen_idx]
+                except Exception as _frz_e:
+                    _frozen_idx, _frozen_snap = [], []
+                    logger.warning(f"[P2-CHAIN-PAST-DAYS-FROZEN] snapshot no-op ({surface}): "
+                                   f"{type(_frz_e).__name__}: {_frz_e}")
                 _n, _summ = _fpc(_pd["days"], db=_db_ins, target_fats=_tf_ins,
                                  main_goal=_pd.get("main_goal"), target_macros=_tm_ins)
                 if _n:
@@ -1218,6 +1245,48 @@ def _finalize_plan_data_for_insert(data: dict, *, surface: str = "pre-INSERT") -
                     _fica(_pd)
                 except Exception as _fica_e:
                     logger.debug(f"[P3-2-INGREDIENT-COUNT-AGREEMENT] pre-INSERT no-op: {type(_fica_e).__name__}: {_fica_e}")
+                # [P2-CHAIN-PAST-DAYS-FROZEN · 2026-08-04] RESTAURACIÓN de los días ya
+                # cocinados. Va AQUÍ, y no más arriba ni más abajo, por una razón en cada
+                # dirección:
+                #   · la concordancia número-sustantivo de arriba es el ÚLTIMO pase que toca
+                #     el contenido de un día — restaurar antes dejaría que el siguiente pase
+                #     volviera a reescribir el historial;
+                #   · todo lo que viene detrás es lectura o metadata plan-level (los dos
+                #     detectores warn-only, el clear del banner de degradado, el refresh del
+                #     band score y el recompute del panel de micros). Restaurar ANTES de ellos
+                #     es lo que hace que las métricas PERSISTIDAS midan el estado final REAL y
+                #     no un intermedio que nunca existió: la lección del repo es que dos
+                #     mediciones honestas que discrepan son un bug. El refresh de banda arrastra
+                #     además `delivered_macros`, así que el resumen entregado también se re-mide.
+                # Las listas de compras se construyen aguas ARRIBA de este helper (assemble y el
+                # seam T2 las rearman DESPUÉS de llamar al chain) → ven los pasados restaurados,
+                # que es justo lo que el usuario tiene apuntado.
+                # Se restaura por POSICIÓN sobre la misma lista (el adapter promete no
+                # reemplazarla, y ningún pase del chain altera su tamaño ni su orden — verificado
+                # pase por pase). El guard de longitud es la red por si un pase futuro lo hiciera:
+                # ante desalineación NO se restaura (fail-open al comportamiento previo) y se
+                # avisa, porque restaurar un día sobre el índice equivocado sería peor que el bug.
+                try:
+                    if _frozen_idx:
+                        if len(_pd.get("days") or []) != _frozen_len:
+                            logger.warning(
+                                f"[P2-CHAIN-PAST-DAYS-FROZEN] {surface}: la lista de días cambió "
+                                f"de tamaño durante el chain ({_frozen_len}→"
+                                f"{len(_pd.get('days') or [])}); NO se restauran los "
+                                f"{len(_frozen_idx)} día(s) pasado(s) (restaurar por índice "
+                                f"desalineado corrompería el plan)."
+                            )
+                        else:
+                            for _pos, _i in enumerate(_frozen_idx):
+                                _pd["days"][_i] = _frozen_snap[_pos]
+                            logger.info(
+                                f"🧊 [P2-CHAIN-PAST-DAYS-FROZEN] {surface}: {len(_frozen_idx)} "
+                                f"día(s) ya cocinado(s) restaurado(s) tal cual el usuario los "
+                                f"tiene (de {_frozen_len} del plan)."
+                            )
+                except Exception as _frz_r_e:
+                    logger.warning(f"[P2-CHAIN-PAST-DAYS-FROZEN] restauración no-op ({surface}): "
+                                   f"{type(_frz_r_e).__name__}: {_frz_r_e}")
                 # [P0-1-PAIRING-PLAUSIBILITY-GATE · 2026-07-10] (recipe plausibility roadmap) fase 1
                 # warn-only: detecta combinaciones implausibles (mantequilla de maní + tubérculo hervido/
                 # gajos cítricos/queso salado) sobre el estado ENTREGADO. Telemetría pura, no muta el plan
