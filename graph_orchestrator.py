@@ -31406,17 +31406,26 @@ def _budget_pinned_food_keys(form_data) -> set:
         return set()
 
 
-def _budget_food_matches_key_set(food_text: str, keys: set) -> bool:
+def _budget_food_matches_key_set(food_text: str, keys: set, *, skip_prep_conflict: bool = False) -> bool:
     """SSOT del matcher alimento↔set-de-claves de los pases de presupuesto. Normalización
     de `_norm_pref_food` + contención word-boundary bidireccional — 'sal' NO matchea
     'salsa'. Fail-open: False (en duda, comportamiento previo = sustituir).
 
-    DERIVADO de la escalera de `_resolve_brand_pref` (shopping_calculator:3365), con dos
-    diferencias DELIBERADAS — el docstring anterior decía "misma escalera" y era falso:
+    DERIVADO de la escalera de `_resolve_brand_pref` (shopping_calculator:3406), con TRES
+    diferencias DELIBERADAS — el docstring anterior decía "dos" y omitía la tercera:
       - sin tier singular (`_singular_pref_key`): aquí 'almendras' en el plan NO matchea
         'almendra' en el set de claves (medido). Dirección conservadora: pierde skips,
         no los inventa.
       - umbral de longitud 3, no 4.
+      - [FINAL-REVIEW-P2 · 2026-08-03] sin `_brand_prep_distinct_conflict` ("mantequilla
+        de maní" ≠ "maní") por DEFAULT — `_resolve_brand_pref` SIEMPRE lo aplica en su
+        rama de contención. Aquí el guard es OPT-IN vía `skip_prep_conflict=True`, y solo
+        lo pasa el set de Nevera (`_budget_food_is_owned`); el de marcas fijadas
+        (`_budget_food_is_brand_pinned`) NO lo pasa y queda byte-idéntico al pre-fix —
+        alinearlo es cambio a medir aparte, igual que las otras dos diferencias de arriba.
+        Sin el guard, con 'maní' en la Nevera la sustitución de 'Mantequilla de maní' se
+        SALTABA por completo (perdía ahorro) — mismo vector que P1-BRAND-PREF-PREP-DISTINCT
+        (RD$110; también trigo/Harina de trigo, coco/Leche de coco).
     Comportamiento extraído TAL CUAL del cuerpo previo de `_budget_food_is_brand_pinned`
     (P1-BUDGET-RESPECT-BRAND-PIN): alinearlo con `_resolve_brand_pref` sería un cambio de
     comportamiento del guard de marcas fijadas, y eso se mide antes, no se hace de paso.
@@ -31435,10 +31444,19 @@ def _budget_food_matches_key_set(food_text: str, keys: set) -> bool:
         if key in keys:
             return True
         padded = f" {key} "
-        return any(
-            len(pk) >= 3 and (f" {pk} " in padded or f" {key} " in f" {pk} ")
-            for pk in keys
-        )
+        if not skip_prep_conflict:
+            return any(
+                len(pk) >= 3 and (f" {pk} " in padded or f" {key} " in f" {pk} ")
+                for pk in keys
+            )
+        from shopping_calculator import _brand_prep_distinct_conflict as _bpdc
+        for pk in keys:
+            if not (len(pk) >= 3 and (f" {pk} " in padded or f" {key} " in f" {pk} ")):
+                continue
+            if _bpdc(key, pk):
+                continue  # base↔preparación ("maní" vs "mantequilla de maní") — no es lo mismo
+            return True
+        return False
     except Exception:
         return False
 
@@ -31448,6 +31466,15 @@ def _budget_food_is_brand_pinned(food_text: str, pinned_keys: set) -> bool:
     a un alimento con marca fijada. Las claves calcan exactamente contra
     `fetch_brand_pref_packages`. Fail-open: False."""
     return _budget_food_matches_key_set(food_text, pinned_keys)
+
+
+def _budget_food_is_owned(food_text: str, owned_keys: set) -> bool:
+    """[FINAL-REVIEW-P2 · 2026-08-03] True si `food_text` corresponde a algo que el
+    usuario YA TIENE en la Nevera (mismo matcher que `_budget_food_is_brand_pinned`,
+    MÁS `_brand_prep_distinct_conflict`: 'maní' en la Nevera no debe saltarse la
+    sustitución económica de 'Mantequilla de maní' — son productos distintos aunque
+    el segundo contenga al primero como substring). Fail-open: False."""
+    return _budget_food_matches_key_set(food_text, owned_keys, skip_prep_conflict=True)
 
 
 def _budget_owned_food_keys(inventory_names) -> set:
@@ -31623,7 +31650,7 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
                         # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] el usuario YA
                         # COMPRÓ este alimento: cambiarlo no ahorra, ENCARECE (el original
                         # queda huérfano en la Nevera y el sustituto entra a la lista).
-                        if _budget_food_matches_key_set(m.group(0), owned_keys):
+                        if _budget_food_is_owned(m.group(0), owned_keys):
                             logger.info(f"💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] skip "
                                         f"'{m.group(0)} → {candidate}': ya está comprado "
                                         f"(Nevera) — sustituirlo subiría el gasto real.")
@@ -31955,7 +31982,7 @@ def _apply_budget_driver_aware_pass(days, form_data, weekly_list, *,
                             continue
                         # [P2-BUDGET-CONVERGENCE-FUTURE-ONLY · 2026-08-03] ya comprado →
                         # sustituirlo ENCARECE (original huérfano + sustituto nuevo).
-                        if _budget_food_matches_key_set(m.group(0), owned_keys):
+                        if _budget_food_is_owned(m.group(0), owned_keys):
                             logger.info(f"💰 [P2-BUDGET-CONVERGENCE-FUTURE-ONLY] skip driver "
                                         f"'{m.group(0)} → {candidate}': ya está comprado "
                                         f"(Nevera) — sustituirlo subiría el gasto real.")

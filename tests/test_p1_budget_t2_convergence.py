@@ -63,11 +63,24 @@ def test_helper_orchestrates_and_marks(monkeypatch):
 
 
 def test_helper_zero_subs_is_pure_noop(monkeypatch):
-    monkeypatch.setattr(go, "_apply_budget_driver_aware_pass", lambda *a: 0)
-    monkeypatch.setattr(go, "_apply_budget_cheapen_pass", lambda *a, **k: 0)
+    # [FINAL-REVIEW-P2 · 2026-08-03] 3ª vez de la clase: un stub de firma CERRADA
+    # (`lambda *a`) no acepta el kwarg `inventory_names=` que el caller pasa
+    # incondicionalmente (P2-BUDGET-CONVERGENCE-FUTURE-ONLY) → TypeError tragado por
+    # el fail-open `except Exception` del helper → `apply_budget_convergence_for_days`
+    # retorna 0 ANTES de invocar el segundo stub, y el test pasaba sin haber ejecutado
+    # nada (verificado: con el stub viejo, `reached` quedaba `[]`). Firma abierta
+    # (`**k`) en AMBOS stubs + contador que prueba que de verdad se alcanzaron.
+    reached = []
+    monkeypatch.setattr(go, "_apply_budget_driver_aware_pass",
+                        lambda *a, **k: reached.append("driver") or 0)
+    monkeypatch.setattr(go, "_apply_budget_cheapen_pass",
+                        lambda *a, **k: reached.append("cheapen") or 0)
     plan = _plan()
     assert go.apply_budget_convergence_for_days(plan, {}) == 0
     assert "_budget_adjusted" not in plan
+    assert reached == ["driver", "cheapen"], (
+        "los dos stubs deben ser alcanzados de verdad — si uno solo aparece (o ninguno), "
+        "un TypeError por firma cerrada se está tragando silenciosamente el fail-open")
 
 
 def test_t2_seam_wired_with_rebuild_and_rereconcile():

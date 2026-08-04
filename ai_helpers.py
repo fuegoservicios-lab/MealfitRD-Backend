@@ -1934,8 +1934,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # [P1-FRUIT-SEEDER-GATE-CONTRACT] 4 y no 3: el reparto da 2 frutas distintas por día
         # rotando sobre 4, así la semana usa 4 frutas en vez de las 6 que costaría 2×3 sin reutilizar.
         # [P2-SEEDER-DAYS-COUNT · 2026-08-03] `_dc + 1` generaliza ese "4 para 3 días": con n+1
-        # frutas la rotación da n pares todos distintos (el último es (f[n-1], f[0])) y el día n-1
-        # no clona al día 0. Con `_dc=3` sigue siendo 4, byte-idéntico.
+        # frutas (n = _dc días) la rotación da n pares `(f[i], f[i+1])` para i en 0..n-1 SIN
+        # reciclar índices (n+1 > n, así que nunca hace falta el módulo) — el último es
+        # [FINAL-REVIEW-P2 · 2026-08-03] (f[n-1], f[n]), no (f[n-1], f[0]) como decía este
+        # comentario (verificado ejecutando `_rotate_pairs`). La razón real sigue siendo la
+        # economía de lista: n+1 frutas cubren n días con 2 distintas cada uno, en vez de las
+        # 2n que costaría sin reutilizar — y el día n-1 nunca clona el par del día 0 porque su
+        # segundo elemento es f[n], no f[0]. Con `_dc=3` sigue siendo 4, byte-idéntico.
         while len(unique_fruits) < _dc + 1:
             # [P3-FRUIT-PAD-KEY-SYMMETRY · 2026-07-31] (audit v6 · F21) Era `{f.lower() ...}`: el
             # chequeo de PERMITIDAS normalizaba singular/plural con `_fruit_key` y el de DUPLICADAS

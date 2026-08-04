@@ -8826,8 +8826,9 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     #       de pan / ½ cabeza de repollo pero el mínimo vendible es la funda/paquete/cabeza
     #       entera → la lista TIENE de sobra, la receta es cocinable, no hay divergencia real.
     #       La sobre-oferta de PROTEÍNA por peso (pollo/pescado/pavo 4×) SÍ se preserva (over-buy).
-    # Se PRESERVAN: yield_uncovered (banda diagnóstica), pantry_overdeduct y unknown POR DEBAJO
-    # (falta real "qty mitad"), sobre-oferta de PROTEÍNA por peso, y toda la capa presence.
+    # Se PRESERVAN: yield_uncovered (banda diagnóstica), pantry_overdeduct,
+    # magnitude_undersupply [P2-GUARD-UNDERSUPPLY-CANONICAL] y unknown POR DEBAJO (falta real
+    # "qty mitad"), sobre-oferta de PROTEÍNA por peso, y toda la capa presence.
     # Reversible: MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER=false.
     if _knob_env_bool("MEALFIT_COHERENCE_PACKAGING_NOISE_FILTER", True) and magnitude_divs:
         try:
