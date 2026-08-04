@@ -5934,6 +5934,24 @@ def _get_guard_undersupply_severe_knob() -> bool:
     (unidades, no decenas) y el retry tiene alguna posibilidad de converger,
     `MEALFIT_GUARD_UNDERSUPPLY_SEVERE=true` sin redeploy.
 
+    [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] "Medir el volumen" no tenía SELECT
+    programado — el default se habría vuelto permanente por inercia (nadie mira una
+    tabla a mano todos los días). El cron diario `_shopping_coherence_alert_job`
+    (cron_tasks.py) ahora expone `undersupply_count` como campo EXPLÍCITO en el tick
+    `_shopping_coherence_alert_job_tick` (mismo patrón que `cap_count`) + una línea de
+    log dedicada con este mismo marker — la serie diaria completa (ceros incluidos)
+    queda visible sin SELECT manual.
+
+    **Criterio de encendido con el baseline**: encender cuando la serie diaria muestre
+    `magnitude_undersupply` estable y bajo (p.ej. <5% de las entries diarias, sin
+    ráfagas concentradas en un solo plan — una ráfaga sugiere un bug puntual, no el
+    volumen difuso que este knob asume). Baseline medido 2026-08-04 (~1,4h post-deploy,
+    22 planes con history, 186 entries): **0 sobre 186 entries históricas** — la
+    hipótesis literalmente no ha aparecido todavía (aún sin tráfico de listas nuevas
+    construidas con el sello `pantry_deduction_applied` que necesita). Sigue en
+    observación: encender requiere que la serie diaria acumule volumen suficiente para
+    juzgar "estable y bajo" contra algo que no sea ruido de muestra pequeña.
+
     Tooltip-anchor: P2-GUARD-UNDERSUPPLY-CANONICAL-KNOB
     """
     return _knob_env_bool("MEALFIT_GUARD_UNDERSUPPLY_SEVERE", False)

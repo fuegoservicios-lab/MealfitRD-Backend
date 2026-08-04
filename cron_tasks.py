@@ -980,6 +980,13 @@ def _shopping_coherence_alert_job():
     _tick_n_plans = 0
     _tick_plans_with_div = 0
     _tick_cap_count = 0
+    # [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] Espejo de `_tick_cap_count` para la
+    # hipótesis `magnitude_undersupply` (P2-GUARD-UNDERSUPPLY-CANONICAL): el Counter
+    # `by_hypothesis` ya la agregaba, pero sin campo EXPLÍCITO en el tick su volumen
+    # solo era visible con un SELECT manual contra `_shopping_coherence_block_history`
+    # — exactamente el gap que el knob `MEALFIT_GUARD_UNDERSUPPLY_SEVERE` pedía cerrar
+    # antes de decidir su encendido.
+    _tick_undersupply_count = 0
     _tick_eval_errors = 0
     _tick_persisted_count = 0
     _tick_persist_errors = 0
@@ -1136,10 +1143,15 @@ def _shopping_coherence_alert_job():
         plan_fraction = plans_with_div / n if n else 0.0
         cap_count = by_hypothesis.get("cap_swallowed_modifier", 0)
         cap_ratio = cap_count / n if n else 0.0
+        # [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] mismo cómputo que `cap_count`, para la
+        # hipótesis que motivó el knob `MEALFIT_GUARD_UNDERSUPPLY_SEVERE`.
+        undersupply_count = by_hypothesis.get("magnitude_undersupply", 0)
+        undersupply_ratio = undersupply_count / n if n else 0.0
 
         # P2-LIVE-9: propagar a flags del tick
         _tick_plans_with_div = plans_with_div
         _tick_cap_count = cap_count
+        _tick_undersupply_count = undersupply_count
         _tick_eval_errors = eval_errors
         _tick_persisted_count = persisted_count
         _tick_persist_errors = persist_errors
@@ -1158,6 +1170,20 @@ def _shopping_coherence_alert_job():
             _tick_alert_emitted = True
         else:
             logger.info(summary)
+
+        # [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] Línea de log DEDICADA: el Counter
+        # `by_hypothesis` de arriba ya incluye `magnitude_undersupply`, pero mezclada con
+        # el resto de hipótesis en un dict — la visibilidad de esta hipótesis en concreto
+        # (la que decide si `MEALFIT_GUARD_UNDERSUPPLY_SEVERE` puede encenderse) no puede
+        # depender de que un operador sepa que esa clave existe ahí dentro. Se emite
+        # siempre que el cron evalúa planes (no solo cuando hay alerta), espejo de
+        # `summary` arriba, para que la serie diaria completa (incluidos los ceros) quede
+        # en logs sin necesidad del SELECT manual contra
+        # `_shopping_coherence_block_history` que el knob pedía.
+        logger.info(
+            f"[P3-UNDERSUPPLY-VISIBILITY] magnitude_undersupply: {undersupply_count}/{n} "
+            f"planes evaluados ({undersupply_ratio:.2%})."
+        )
     finally:
         # [P2-LIVE-9 · 2026-05-11] Tick observable SIEMPRE (patrón P3-LIVE-1
         # / P1-LIVE-4). Confirma que el cron diario 04:00 UTC corrió aunque
@@ -1176,6 +1202,9 @@ def _shopping_coherence_alert_job():
                         "n_plans": _tick_n_plans,
                         "plans_with_div": _tick_plans_with_div,
                         "cap_count": _tick_cap_count,
+                        # [P3-UNDERSUPPLY-VISIBILITY · 2026-08-04] campo explícito — ver
+                        # el comentario junto a `_tick_undersupply_count` más arriba.
+                        "undersupply_count": _tick_undersupply_count,
                         "eval_errors": _tick_eval_errors,
                         "persisted_count": _tick_persisted_count,
                         "persist_errors": _tick_persist_errors,
