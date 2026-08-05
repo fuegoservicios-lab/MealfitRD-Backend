@@ -9680,8 +9680,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                     "SELECT id::text AS id, brand FROM public.supermarket_products "
                     "WHERE id = ANY(%s::uuid[])",
                     (list(_bp_ids),),
-                    fetch_all=True,
-                ) or []
+                    ) or []
                 _bp_map = {r["id"]: (str(r.get("brand") or "").strip() or "Genérico") for r in _bp_rows}
                 for it in filtered_ingredients:
                     if isinstance(it, dict) and it.get("brand_product_id"):
@@ -11310,6 +11309,13 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
                             week_number ASC NULLS LAST,
                             days_offset ASC NULLS LAST""",
                 (plan_id,),
+                # [P1-UPCOMING-FETCHALL · 2026-08-05] Explícito, no por default.
+                # Sin esto `db_core` emite un WARNING por CADA llamada ("el caller
+                # debería marcar fetch_all=True") y este endpoint lo pollea el
+                # Dashboard cada pocos segundos: medido en producción, 50 de los 70
+                # warnings de 45 minutos salían de aquí — el 71% del ruido del log,
+                # ahogando las señales que sí importan.
+                fetch_all=True,
             ) or []
             payload_upcoming = [{
                 "chunk_id": r.get("chunk_id"),
