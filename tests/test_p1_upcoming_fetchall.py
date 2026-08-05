@@ -24,6 +24,7 @@ from pathlib import Path
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _PLANS = _BACKEND_ROOT / "routers" / "plans.py"
+_CRON = _BACKEND_ROOT / "cron_tasks.py"
 
 
 def _plans_source() -> str:
@@ -61,4 +62,30 @@ def test_upcoming_chunks_declares_fetch_all():
         "La query de `upcoming_chunks` no declara `fetch_all=True`. Sin él, "
         "db_core emite un WARNING por CADA llamada y el Dashboard pollea este "
         "endpoint cada pocos segundos: medido, el 71% del ruido del log."
+    )
+
+
+def _sin_comentarios(bloque: str) -> str:
+    return "\n".join(
+        linea for linea in bloque.splitlines()
+        if not linea.lstrip().startswith("#")
+    )
+
+
+def test_cron_chunk_overdue_declara_fetch_all():
+    """El cron horario tiene la query GEMELA y el mismo defecto.
+
+    La primera version de este fichero solo vigilaba `/chunk-status`. Revisando
+    los logs de produccion aparecio el segundo sitio: `corr=cron:chunk_overdue_alert`
+    emitiendo el mismo aviso de `db_core`. Un guard que cubre un sitio de dos da
+    una falsa sensacion de cierre — la misma clase de agujero que ya obligo a
+    rehacer el ancla de la renovacion como blanket sobre dos ficheros.
+    """
+    src = io.open(_CRON, encoding="utf-8").read()
+    start = src.index("SELECT DISTINCT ON (user_id)")
+    end = src.index(") or []", start)
+    bloque = _sin_comentarios(src[start:end])
+    assert re.search(r"fetch_all\s*=\s*True", bloque), (
+        "La query del cron `_chunk_overdue_alert_job` no declara `fetch_all=True`. "
+        "Sin el, db_core avisa en cada corrida horaria."
     )
