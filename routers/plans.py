@@ -5020,6 +5020,51 @@ async def api_budget_floor(
 
 
 @router.post("/pending-status/ack")
+def _emit_change_outcome_metric(kind: str, outcome: str, **campos) -> None:
+    """[P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Una fila por CAMBIO que el usuario
+    pide: cambiar un plato (`swap`) o regenerar el día (`regen_day`).
+
+    POR QUÉ EXISTE. El desenlace de cada cambio solo vivía en el journal del VPS, que
+    rota. Inventario de `pipeline_metrics` el 2026-08-05: 18.644 filas de
+    `coherence_guard_validation`, 2.727 de `review_plan`… y CERO de swap o regen. O
+    sea: la pregunta que un landing querría responder —«¿los cambios de plato salen
+    al primer intento?»— no tenía datos, y cada sesión de uso se evaporaba.
+
+    Guarda el desenlace, no el intento: una operación = una fila. `outcome` ∈
+    {ok, failed}; `error_code` dice POR QUÉ (pantry / macros / retries agotados),
+    que es lo que convierte un porcentaje en algo accionable.
+
+    Best-effort: se traga sus fallos. Es telemetría, no puede tumbar un cambio de
+    plato — mismo contrato que `_emit_slot_drift_metric_best_effort`.
+    """
+    try:
+        from db import execute_sql_write
+        import json as _json_co
+        meta = {"kind": kind, "outcome": outcome}
+        meta.update({k: v for k, v in campos.items() if v is not None})
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, %s, %s, %s, %s, 0, 0, %s::jsonb)
+            """,
+            (
+                campos.get("user_id") if campos.get("user_id") not in (None, "guest") else None,
+                None,
+                f"change_{kind}",
+                int(campos.get("duration_ms") or 0),
+                int(campos.get("attempts") or 0),
+                _json_co.dumps(meta, ensure_ascii=False),
+            ),
+        )
+    except Exception as _e_co:
+        try:
+            logger.debug(f"[P1-CHANGE-OUTCOME-TELEMETRY] emit falló: {_e_co!r}")
+        except Exception:
+            pass
+
+
 async def api_pending_pipeline_ack(
     verified_user_id: str = Depends(get_verified_user_id),
     session_id: Optional[str] = Query(None),
@@ -6286,6 +6331,13 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # [P1-SWAP-REGEN-RESUME · 2026-07-11] persist server-side + retiro del flag: si el
         # cliente refrescó, el plato YA quedó guardado y su resume lo detecta por
         # _plan_modified_at/nombre; si sigue vivo, su persist propio es idempotente.
+        # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace del cambio de plato.
+        _emit_change_outcome_metric(
+            "swap", "ok",
+            user_id=verified_user_id,
+            meal_type=(body.mealType if hasattr(body, "mealType") else None),
+            band_low=bool(isinstance(result, dict) and result.get("_macro_band_low")),
+        )
         if _mri_ctx and isinstance(result, dict) and not result.get("swap_failed"):
             result["persisted"] = _persist_swap_server_side(_mri_ctx, result, verified_user_id)
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
@@ -6325,6 +6377,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "variedad') para que el chef pueda proponer un plato."
                 ),
             }
+            # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace fallido, con su CAUSA:
+            # es lo que convierte un porcentaje en algo accionable.
+            _emit_change_outcome_metric(
+                "swap", "failed",
+                user_id=verified_user_id,
+                error_code=_payload.get("error_code"),
+                meal_type=(body.mealType if hasattr(body, "mealType") else None),
+            )
             if _hard_fail_422:
                 raise HTTPException(status_code=422, detail={
                     "code": _payload["error_code"],
@@ -6344,6 +6404,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "No se descontó tu crédito."
                 ),
             }
+            # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace fallido, con su CAUSA:
+            # es lo que convierte un porcentaje en algo accionable.
+            _emit_change_outcome_metric(
+                "swap", "failed",
+                user_id=verified_user_id,
+                error_code=_payload.get("error_code"),
+                meal_type=(body.mealType if hasattr(body, "mealType") else None),
+            )
             if _hard_fail_422:
                 raise HTTPException(status_code=422, detail={
                     "code": _payload["error_code"],
@@ -6365,6 +6433,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "No se descontó tu crédito."
                 ),
             }
+            # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace fallido, con su CAUSA:
+            # es lo que convierte un porcentaje en algo accionable.
+            _emit_change_outcome_metric(
+                "swap", "failed",
+                user_id=verified_user_id,
+                error_code=_payload.get("error_code"),
+                meal_type=(body.mealType if hasattr(body, "mealType") else None),
+            )
             if _hard_fail_422:
                 raise HTTPException(status_code=422, detail={
                     "code": _payload["error_code"],
@@ -7934,6 +8010,9 @@ def api_regenerate_day(
                         f"🧊 [P3-PANTRY-SUFFICIENCY] día bloqueado — Nevera insuficiente "
                         f"(deficits={[d.get('nutrient') for d in _suff.get('deficits', [])]})"
                     )
+                    _emit_change_outcome_metric(
+                        "regen_day", "failed", user_id=user_id, error_code="pantry_insufficient_for_goal",
+                    )
                     return {
                         "regen_failed": True,
                         "error_code": "pantry_insufficient_for_goal",
@@ -8254,6 +8333,9 @@ def api_regenerate_day(
                 logger.debug(f"[P1-DAY-REGEN-SERVER-FLAG] clear soft-fail no-op: {_rdf2_e}")
             if _ai_unavailable:
                 # Fallo transitorio del proveedor → NO consumir cuota; pedir reintento.
+                _emit_change_outcome_metric(
+                    "regen_day", "failed", user_id=user_id, error_code="ai_unavailable",
+                )
                 return {
                     "regen_failed": True,
                     "error_code": "ai_unavailable",
@@ -8274,6 +8356,9 @@ def api_regenerate_day(
                 for _r in _kept_reasons
             )
             if _pantry_reason:
+                _emit_change_outcome_metric(
+                    "regen_day", "failed", user_id=user_id, error_code="pantry_insufficient_for_goal",
+                )
                 return {
                     "regen_failed": True,
                     "error_code": "pantry_insufficient_for_goal",
@@ -8283,6 +8368,9 @@ def api_regenerate_day(
                     ),
                     "deficits": [],
                 }
+            _emit_change_outcome_metric(
+                "regen_day", "failed", user_id=user_id, error_code="ai_exhausted_retries",
+            )
             return {
                 "regen_failed": True,
                 "error_code": "ai_exhausted_retries",
@@ -8864,6 +8952,15 @@ def api_regenerate_day(
             except Exception as _bw_e:
                 logger.debug(f"[P2-REGEN-DAY-BAND-WARN] no-op: {_bw_e}")
 
+        # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace del dia completo.
+        # `slots_kept` > 0 = exito PARCIAL: platos que no se pudieron cambiar.
+        _emit_change_outcome_metric(
+            "regen_day", "ok",
+            user_id=user_id,
+            regenerated=len(regenerated or []),
+            kept=len(slots_kept or []),
+            band_score=_band_score,
+        )
         return {
             "success": True,
             "day_index": day_index,
