@@ -346,9 +346,21 @@ def test_f_agent_cb_gate_uses_same_uid_as_constructor():
     assert "_cb_model = _chat_agent_model_name(_model_uid)" in src, (
         "el gate CB de call_model debe resolver con el MISMO _model_uid"
     )
-    # swap_meal: ídem con _swap_uid.
-    assert "model=_chat_agent_swap_model_name(_swap_uid)" in src
-    assert "_swap_cb_model = _chat_agent_swap_model_name(_swap_uid)" in src
+    # swap_meal: [P1-SWAP-LUNA · 2026-08-05] ya no se comprueba que las DOS llamadas
+    # repitan el mismo `_swap_uid` — ahora hay UNA sola resolución a una variable que
+    # consumen el constructor y el gate. La divergencia que este test vigilaba dejó de
+    # ser posible por construcción, así que se afirma la propiedad nueva (más fuerte)
+    # en vez del texto viejo: una única resolución, alimentada por el uid del form, y
+    # ambos consumidores leyendo de ella.
+    assert "_swap_model_name = _chat_agent_swap_model_name(_swap_uid)" in src, (
+        "el swap debe resolver su modelo UNA vez desde el helper, con _swap_uid"
+    )
+    assert src.count("_chat_agent_swap_model_name(_swap_uid)") == 1, (
+        "si vuelve a haber dos resoluciones, pueden divergir otra vez — que es "
+        "exactamente el bug que este test existe para impedir"
+    )
+    assert "model=_swap_model_name" in src, "el constructor debe leer esa variable"
+    assert "_swap_cb_model = _swap_model_name" in src, "y el gate CB, la MISMA variable"
 
 
 def test_f2_chat_helpers_tier_routed_with_override(monkeypatch):

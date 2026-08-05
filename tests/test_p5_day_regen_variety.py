@@ -33,7 +33,10 @@ def test_feasibility_fallback_retries_without_exclusions():
     # El reintento usa meal_form crudo (sin las exclusiones de variedad).
     # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] el fallback usa _form_relaxed (meal_form
     # sin los gates same-day/cross-día) — factibilidad primero, sin slots imposibles.
-    assert re.search(r"nm = swap_meal\(_form_relaxed\)", _PLANS)
+    # [P1-SWAP-LUNA · 2026-08-05] El regex tolera argumentos extra: el bucle del dia
+    # ahora pasa `surface="day"` para pedir su propio reasoning_effort. Lo vigilado
+    # sigue siendo QUE se llame a swap_meal ahi, no su lista exacta de argumentos.
+    assert re.search(r"nm = swap_meal\(_form_relaxed\b", _PLANS)
     assert '_form_relaxed.pop("same_day_other_meal_blobs", None)' in _PLANS
 
 

@@ -60,7 +60,10 @@ def tools_src() -> str:
 def swap_meal_body(agent_src: str) -> str:
     """Extrae el cuerpo de `def swap_meal(form_data: dict):` hasta el
     siguiente `def ` de top-level."""
-    idx = agent_src.find("def swap_meal(form_data: dict):")
+    # [P1-SWAP-LUNA · 2026-08-05] Ancla por el NOMBRE, no por la firma completa: al
+    # anadir el parametro `surface` la firma literal dejo de existir y estos 5 tests
+    # murieron en el setup, sin llegar a evaluar nada de lo que vigilan.
+    idx = agent_src.find("def swap_meal(form_data")
     assert idx > 0, "def swap_meal no encontrado en agent.py"
     # Limitamos a ~12kb para captar la función entera (es larga)
     next_def = re.search(r"\ndef\s+[a-zA-Z_]", agent_src[idx + 100:])

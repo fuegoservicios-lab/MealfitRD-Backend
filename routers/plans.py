@@ -8258,7 +8258,7 @@ def api_regenerate_day(
                     _form_v = dict(meal_form)
                     if _variety_on and day_avoid:
                         _form_v["disliked_meals"] = list(day_avoid)
-                    nm = swap_meal(_form_v)
+                    nm = swap_meal(_form_v, surface="day")
                 except ValueError:
                     if _variety_on and day_avoid:
                         logger.info(f"[P5-DAY-REGEN-VARIETY] reintento SIN exclusiones de variedad para {meal.get('name')!r}")
@@ -8268,7 +8268,7 @@ def api_regenerate_day(
                         _form_relaxed = dict(meal_form)
                         _form_relaxed.pop("same_day_other_meal_blobs", None)
                         _form_relaxed.pop("cross_day_meal_names", None)
-                        nm = swap_meal(_form_relaxed)
+                        nm = swap_meal(_form_relaxed, surface="day")
                     else:
                         raise
                 if isinstance(nm, dict) and nm.get("name"):

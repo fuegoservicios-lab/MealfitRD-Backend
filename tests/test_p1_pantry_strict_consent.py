@@ -119,7 +119,10 @@ def test_regenerate_day_deliberately_untouched():
     assert "P1-PANTRY-STRICT-CONSENT" in body, (
         "Falta el comentario que documenta POR QUÉ regenerate-day no usa el wrapper."
     )
-    assert re.search(r"nm\s*=\s*swap_meal\(_form_v\)", body)
+    # [P1-SWAP-LUNA · 2026-08-05] El regex tolera argumentos extra: el bucle del dia
+    # ahora pasa `surface="day"` para pedir su propio reasoning_effort. Lo vigilado
+    # sigue siendo QUE se llame a swap_meal ahi, no su lista exacta de argumentos.
+    assert re.search(r"nm\s*=\s*swap_meal\(_form_v\b", body)
     assert not re.search(r"=\s*swap_meal_with_consent\(", body), (
         "regenerate-day NO debe LLAMAR al wrapper de consentimiento (decisión deliberada, "
         "ver comentario P1-PANTRY-STRICT-CONSENT en el loop) — mención en prosa OK."
@@ -685,7 +688,13 @@ def test_empty_real_pantry_bypasses_strict_mode_free_generation(_empty_pantry_sw
         holder["inst"] = inst
         return inst
 
-    monkeypatch.setattr(agent, "ChatDeepSeek", _fake_chat_deepseek)
+    # [P1-SWAP-LUNA · 2026-08-05] El punto de intercepcion se movio: `swap_meal` ya no
+    # instancia `ChatDeepSeek` directamente, sino que pide el cliente a la fabrica por
+    # proveedor (`build_chat_llm`), porque el modelo del swap paso a ser de OpenAI.
+    # Parchear `agent.ChatDeepSeek` aqui dejaria de interceptar EN SILENCIO y este test
+    # llamaria al proveedor DE VERDAD (medido: la suite tardo 149s haciendo llamadas
+    # reales antes de corregir esto).
+    monkeypatch.setattr(agent, "build_chat_llm", _fake_chat_deepseek)
 
     result = agent.swap_meal_with_consent({
         "user_id": "user-empty-nevera", "rejected_meal": "Ensalada vieja",

@@ -125,7 +125,7 @@ inválido cae al default del tier, nunca a uno más caro. Knobs:
 |---|---|---|
 | Pipeline plan-gen (`_route_model`: planner dinámico, day-gen, correctores via PRO/FLASH) | **Tier** | ContextVar `user_id_var` (seteado por `arun_plan_pipeline`, cubre chunks de fondo) |
 | Chat agent (`call_model`) | **Tier** | `state.user_id` / `state.session_id` |
-| Chat swap (`swap_meal`) | **Tier** | `form_data.user_id` (validado vs JWT en `api_swap_meal`) |
+| Chat swap (`swap_meal`) — y por herencia `/regenerate-day`, que es un bucle de swaps | **`gpt-5.6-luna` fijo** (P1-SWAP-LUNA · 2026-08-05), con `reasoning_effort` **por superficie**: plato individual → `medium`, día completo → `low`. Fail-safe sin `OPENAI_API_KEY` → router por tier. Knobs: `MEALFIT_CHAT_AGENT_SWAP_MODEL`, `MEALFIT_SWAP_EFFORT_INDIVIDUAL`, `MEALFIT_SWAP_EFFORT_DAY` | `form_data.user_id` (validado vs JWT en `api_swap_meal`) |
 | Tool `modify_single_meal` | **Tier** | `user_id` forzado por P0-AGENT-1 |
 | Reviewer médico con perfil de riesgo | **Por TIER** (P1-REVIEWER-TIER-MODELS · 2026-07-31): free/guest → `gpt-5.6-luna`; basic/plus/ultra → `gpt-5.6-terra` | `_reviewer_risk_model_for_tier()`; fail-safe sin `OPENAI_API_KEY` → flash + alerta; el guard de desvío alerta ante cualquier modelo ≠ esperado del tier |
 | Fact-checker clínico con perfil de riesgo | **risk-tier FLASH fijo** (P1-FLASH-PRIMARY) | `_REVIEWER_RISK_TIER_DEFAULT` — sin cambio de provider (tool-calling loop medido en DeepSeek) |

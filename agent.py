@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry, _to_base_unit
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
-from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
+from llm_provider import (ChatDeepSeek, DEEPSEEK_FLASH, GPT56_LUNA,
+                          build_chat_llm, is_openai_model, resolve_model_for_user)
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -336,11 +337,81 @@ def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
         return override
     return resolve_model_for_user(user_id)
 
+# [P1-SWAP-LUNA · 2026-08-05] El swap (y por herencia `regenerate-day`, que es un bucle
+# de swaps) pasa de `deepseek-v4-flash` a `gpt-5.6-luna` — el mismo modelo con el que ya
+# NACE el plan en `day_generator`.
+#
+# La asimetría que cierra: el plan se generaba con luna y cada plato que el usuario
+# sustituía después lo escribía flash. Es decir, cada actualización cambiaba un plato del
+# modelo bueno por uno del modelo barato, dentro de un día cuyos macros ya estaban
+# cuadrados.
+#
+# Medido contra la API real desde el VPS (2026-08-05, mismo prompt de swap, 3 corridas):
+#
+#   flash  temperature=0.3        8,1 s   → "Salmón glaseado…" LAS TRES VECES
+#   luna   reasoning_effort=low   8,2 s   → mofongo tropical / mofongo con camarones /
+#                                            pescado en escabeche criollo
+#   luna   reasoning_effort=med  16,5 s   → 3 platos distintos
+#
+# Luna en `low` cuesta lo MISMO en espera que flash y ya rompe el colapso de flash hacia
+# el salmón (que el dueño reportó como "¿por qué me apareció este salmón de repente?").
+# `medium` dobla la espera; ver `_swap_reasoning_effort` para por qué cada superficie usa
+# uno distinto.
+#
+# ⚠️ Fail-safe explícito: `build_chat_llm` LEVANTA si le pides un modelo OpenAI sin
+# `OPENAI_API_KEY` en el entorno (contrato fail-loud de `_openai_api_key`). Un swap es
+# user-facing: preferimos degradar al router por tier (flash) que devolverle un 500 al
+# usuario porque falta una env var. Mismo criterio que la red post-fallo P1-NET-LUNA, que
+# degrada a `deepseek-v4-pro` cuando la key no está.
+_SWAP_MODEL_DEFAULT = GPT56_LUNA
+
+
 def _chat_agent_swap_model_name(user_id: Optional[str] = None) -> str:
     override = _env_str("MEALFIT_CHAT_AGENT_SWAP_MODEL", "")
     if override:
         return override
-    return resolve_model_for_user(user_id)
+    if is_openai_model(_SWAP_MODEL_DEFAULT) and not os.environ.get("OPENAI_API_KEY"):
+        logger.warning(
+            "⚠ [P1-SWAP-LUNA] swap pedido en %r sin OPENAI_API_KEY → fail-safe al "
+            "router por tier. El swap sigue funcionando, con el modelo anterior.",
+            _SWAP_MODEL_DEFAULT,
+        )
+        return resolve_model_for_user(user_id)
+    return _SWAP_MODEL_DEFAULT
+
+
+# Valores que el API acepta de verdad para `reasoning_effort` en gpt-5.6-luna.
+# ⚠️ Verificado CONTRA LA API, no contra la documentación (2026-08-05): `minimal` NO
+# existe en este modelo — devuelve 400 "Supported values are: 'none', 'low', 'medium',
+# 'high', and 'xhigh'". Un valor inválido aquí no degrada: rompe el swap entero.
+_SWAP_EFFORT_VALID = ("none", "low", "medium", "high", "xhigh")
+
+# Effort por SUPERFICIE, porque no cuestan lo mismo aunque sean el mismo motor:
+#
+#   · plato individual (`/swap-meal`) → UNA llamada. `medium` = ~16,5 s. Se tolera.
+#   · día completo (`/regenerate-day`) → bucle EN SERIE de 4-5 swaps (no hay paralelismo;
+#     `for meal in meals:` en routers/plans.py). Con `medium` el día pasa de ~35 s a
+#     66-83 s. Más de un minuto de spinner es un problema de UX peor que el que este
+#     cambio arregla, y en el A/B del day-gen la escalera de effort salió DECRECIENTE
+#     (más effort no compró calidad proporcional). Por eso el día va en `low`, que mide
+#     igual que flash.
+#
+# Decisión del dueño (2026-08-05) con estas cifras delante. Ambos son knobs: si el
+# `band_score` por operación (P1-CHANGE-OUTCOME-TELEMETRY) muestra que `medium` sí gana
+# precisión de macros, se sube el del día sin redeploy.
+_SWAP_EFFORT_DEFAULTS = {"individual": "medium", "day": "low"}
+
+
+def _swap_reasoning_effort(surface: str = "individual") -> str:
+    """Effort de razonamiento para la superficie de swap dada.
+
+    Cae al default de la superficie ante cualquier valor no reconocido — un knob mal
+    escrito degrada a la configuración conocida, nunca a un 400 del provider.
+    """
+    key = surface if surface in _SWAP_EFFORT_DEFAULTS else "individual"
+    default = _SWAP_EFFORT_DEFAULTS[key]
+    val = (_env_str("MEALFIT_SWAP_EFFORT_%s" % key.upper(), default) or "").strip().lower()
+    return val if val in _SWAP_EFFORT_VALID else default
 
 def _chat_title_model_name() -> str:
     return _env_str(
@@ -758,7 +829,17 @@ def pantry_contains_food(blob: str, name: str) -> bool:
     return all(t in disponibles for t in toks)
 
 
-def swap_meal(form_data: dict):
+def swap_meal(form_data: dict, surface: str = "individual"):
+    """Sustituye una comida por otra que cumpla los targets del slot.
+
+    Args:
+        form_data: contexto del swap (comida rechazada, targets, dieta, user_id…).
+        surface: quién pide el swap — ``"individual"`` (``/swap-meal``, UNA llamada) o
+            ``"day"`` (``/regenerate-day``, bucle EN SERIE de 4-5). Solo decide el
+            ``reasoning_effort`` cuando el modelo es de OpenAI; ver
+            ``_swap_reasoning_effort``. El default deja intactos a los callers que no lo
+            pasan, que son todos los individuales.
+    """
     rejected_meal = form_data.get("rejected_meal", "")
     meal_type = form_data.get("meal_type", "Comida")
     target_calories = form_data.get("target_calories", 0)
@@ -1568,10 +1649,34 @@ def swap_meal(form_data: dict):
     # (`_swap_base_llm`) porque el emit helper resuelve el modelo desde `.model`/`.model_name`.
     # Bonus: un fallo de PARSE ya no revienta como excepción de provider (contaba como CB
     # failure) — llega como parsed=None y se convierte en ValueError retryable (guardrail).
-    _swap_base_llm = ChatDeepSeek(
-        model=_chat_agent_swap_model_name(_swap_uid),
-        temperature=temp,
+    # [P1-SWAP-LUNA · 2026-08-05] `build_chat_llm` en vez de `ChatDeepSeek` fijo.
+    #
+    # El hardcode era el bug latente: `MEALFIT_CHAT_AGENT_SWAP_MODEL` ya existía y parecía
+    # bastar para mover el swap a otro modelo, pero solo cambiaba el NOMBRE — el cliente
+    # seguía siendo el de DeepSeek. Ponerle un ID de OpenAI habría mandado cada swap al
+    # base_url de DeepSeek con la key equivocada. Mismo defecto que P1-DAYGEN-LUNA-CANARY
+    # ya había corregido en `_build_day_llm`, donde el comentario también decía "provider
+    # correcto por prefijo" sin que estuviera implementado.
+    #
+    # ⚠️ La temperatura NO se le pasa a los modelos OpenAI: solo aceptan la de por defecto
+    # y LangChain la descarta EN SILENCIO. Pasarla igualmente dejaría en el código una
+    # garantía (`temp = 0.3`) que el runtime no cumple, que es peor que no tenerla. Aquí
+    # 0.3 era un empujón hacia la variedad, no un contrato de determinismo — y el modelo
+    # nuevo da más variedad que el viejo, no menos (flash devolvía salmón 3 de 3).
+    # El modelo se resuelve UNA vez y se reusa: lo necesitan el detector de proveedor, el
+    # constructor y el gate del circuit breaker de abajo. Antes cada uno llamaba al helper
+    # por su cuenta y existía un test (P0-DEEPSEEK-MIGRATION `test_f_...`) solo para vigilar
+    # que no divergieran en el `user_id`; con una variable única eso deja de ser posible.
+    _swap_model_name = _chat_agent_swap_model_name(_swap_uid)
+    _swap_effort_kwargs = (
+        {"reasoning_effort": _swap_reasoning_effort(surface)}
+        if is_openai_model(_swap_model_name)
+        else {"temperature": temp}
+    )
+    _swap_base_llm = build_chat_llm(
+        model=_swap_model_name,
         timeout=_chat_swap_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+        **_swap_effort_kwargs,
     )
     swap_llm = _swap_base_llm.with_structured_output(MealModel, include_raw=True)
 
@@ -1588,7 +1693,9 @@ def swap_meal(form_data: dict):
     # explícito y defendible: 503 le dice al user "el sistema sabe que
     # algo está mal", el plato fallback parecería decisión culinaria.
     # Tooltip-anchor: P1-CHAT-CB-EXTEND.
-    _swap_cb_model = _chat_agent_swap_model_name(_swap_uid)
+    # [P1-SWAP-LUNA] Reusa la MISMA variable que el constructor: el gate y el cliente
+    # no pueden divergir ni en modelo ni en user_id porque no hay dos resoluciones.
+    _swap_cb_model = _swap_model_name
     _swap_cb = _get_circuit_breaker(_swap_cb_model)
     if not _swap_cb.can_proceed():
         logger.warning(

@@ -109,7 +109,11 @@ def test_all_5_callsites_pass_timeout(agent_src: str):
     de args. Pre-fix: cero callsites lo tenían.
     [P0-DEEPSEEK-MIGRATION · 2026-06-12] constructor renombrado."""
     no_comments = re.sub(r"#[^\n]*", "", agent_src)
-    callsite_re = re.compile(r"ChatDeepSeek\s*\(")
+    # [P1-SWAP-LUNA · 2026-08-05] El regex cubre AMBOS constructores. `swap_meal` pasó a
+    # `build_chat_llm` (fábrica por proveedor) porque su modelo es de OpenAI. Bajar el
+    # conteo de 5 a 4 habría puesto el test en verde dejando ese callsite SIN VIGILAR
+    # para siempre — que es justo lo contrario de para lo que existe este tripwire.
+    callsite_re = re.compile(r"(?:ChatDeepSeek|build_chat_llm)\s*\(")
     callsites = list(callsite_re.finditer(no_comments))
 
     assert len(callsites) == 5, (

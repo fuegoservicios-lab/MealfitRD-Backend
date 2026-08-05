@@ -117,20 +117,42 @@ def test_all_5_callsites_use_helper(agent_src: str):
     [P0-DEEPSEEK-MIGRATION] El constructor es ChatDeepSeek y los helpers de
     chat/swap reciben el user_id para tier-routing — el regex acepta args."""
     no_comments = re.sub(r"#[^\n]*", "", agent_src)
+    # [P1-SWAP-LUNA · 2026-08-05] El regex cubre AMBOS constructores. `swap_meal` pasó a
+    # `build_chat_llm` (fábrica por proveedor) porque su modelo es de OpenAI. Bajar el
+    # conteo de 5 a 4 habría puesto el test en verde dejando ese callsite SIN VIGILAR
+    # para siempre — que es justo lo contrario de para lo que existe este tripwire.
     callsite_re = re.compile(
-        r"ChatDeepSeek\s*\(",
+        r"(?:ChatDeepSeek|build_chat_llm)\s*\(",
     )
     callsites = list(callsite_re.finditer(no_comments))
     # Cada `ChatDeepSeek(...)` puede cerrar en distintas posiciones.
     # Extraemos un window de ~400 chars tras el paréntesis abierto para
     # capturar `model=...` argument.
     helper_re = re.compile(r"model\s*=\s*_chat_\w+_model_name\s*\([^)]*\)")
+
+    # [P1-SWAP-LUNA · 2026-08-05] También vale `model=<var>` cuando esa variable se asigna
+    # desde un helper. El callsite del swap resuelve el modelo UNA vez a una variable porque
+    # lo necesitan tres consumidores (detector de proveedor, constructor y gate del circuit
+    # breaker); obligarlo a repetir la llamada inline sería peor código.
+    #
+    # La indirección NO se acepta a ciegas: la variable tiene que estar asignada desde uno de
+    # los helpers en este mismo fichero. Si no, `_x = "gpt-4-hardcoded"` + `model=_x` colaría
+    # justo lo que este test existe para impedir.
+    var_re = re.compile(r"model\s*=\s*([A-Za-z_]\w*)\s*[,)]")
+    vars_desde_helper = set(
+        re.findall(r"^\s*([A-Za-z_]\w*)\s*=\s*_chat_\w+_model_name\s*\(", no_comments, re.M)
+    )
+
     offenders = []
     for m in callsites:
         window = no_comments[m.end():m.end() + 400]
-        if not helper_re.search(window):
-            line_no = no_comments.count("\n", 0, m.start()) + 1
-            offenders.append(f"line {line_no}")
+        if helper_re.search(window):
+            continue
+        mv = var_re.search(window)
+        if mv and mv.group(1) in vars_desde_helper:
+            continue
+        line_no = no_comments.count("\n", 0, m.start()) + 1
+        offenders.append(f"line {line_no}")
     assert not offenders, (
         f"P2-AUDIT-1 regresión: {len(offenders)} callsites de "
         f"`ChatDeepSeek(...)` no usan `model=_chat_*_model_name(...)`: "

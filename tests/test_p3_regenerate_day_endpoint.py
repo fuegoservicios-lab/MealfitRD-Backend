@@ -58,8 +58,11 @@ def test_softfail_no_quota_when_insufficient(body: str):
 def test_loop_swaps_strict_pantry_with_reservation(body: str):
     # [P1-SWAP-SAMEDAY-PROTEIN-GATE · 2026-07-10] la iteración usa la variante con
     # exclusiones (_form_v) y el fallback relajado (_form_relaxed); meal_form es la base.
-    assert "swap_meal(_form_v)" in body, "debe iterar swap_meal por plato (variante con variedad)"
-    assert "swap_meal(_form_relaxed)" in body, "fallback de factibilidad sin gates"
+    # [P1-SWAP-LUNA · 2026-08-05] Sin el parentesis de cierre: el bucle del dia ahora
+    # pasa `surface="day"` para pedir su propio reasoning_effort. Lo que este test
+    # vigila es que SE ITERE swap_meal por plato, no la lista exacta de argumentos.
+    assert "swap_meal(_form_v" in body, "debe iterar swap_meal por plato (variante con variedad)"
+    assert "swap_meal(_form_relaxed" in body, "fallback de factibilidad sin gates"
     assert "current_pantry_ingredients" in body, "cada swap debe recibir la Nevera como restricción"
     assert "_decrement_ledger_by_meal(ledger" in body, "debe reservar inventario entre platos (D7)"
     assert "_inventory_grams_ledger(" in body
