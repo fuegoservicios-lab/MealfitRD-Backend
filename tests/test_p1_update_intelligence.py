@@ -62,7 +62,20 @@ def test_p1_3_regenerate_day_retargets_to_goal():
     assert "MEALFIT_REGEN_DAY_RETARGET_TO_GOAL" in src
     assert "day_quality_warning" in src, "debe avisar si el día quedó bajo en proteína (honestidad)"
     # max por nutriente (no bajar de la meta)
-    assert "max(day_target" in src
+    # [P1-RETARGET-NO-PERPETUA-EXCESO · 2026-08-05] El `max(day_target, meta)` salió del
+    # cuerpo del endpoint y vive en `_retarget_macro_target`, junto al techo nuevo. El
+    # invariante que este assert protege —el SUELO, nunca por debajo de la meta— no cambia;
+    # lo que cambió es dónde está escrito, así que se verifica EJECUTÁNDOLO en vez de
+    # buscar el literal.
+    assert "_retarget_macro_target(" in src, (
+        "el retarget dejó de pedirle el objetivo al helper: el suelo contra la meta puede "
+        "no estar aplicándose"
+    )
+    import routers.plans as _rp
+    assert _rp._retarget_macro_target(80.0, 123.0) == 123.0, (
+        "un día por DEBAJO de la meta debe subir a la meta — es la razón por la que "
+        "P1-REGEN-DAY-RETARGET existe"
+    )
 
 
 # ── P1-4: super-personalización en updates ────────────────────────────────────

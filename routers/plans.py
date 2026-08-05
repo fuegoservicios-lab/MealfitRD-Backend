@@ -5839,6 +5839,53 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         logger.error(f"❌ [ERROR] Error en /api/recipe/expand: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
+def _retarget_band_ceiling() -> float:
+    """[P1-RETARGET-NO-PERPETUA-EXCESO · 2026-08-05] Techo del objetivo de un día al
+    regenerarlo, como múltiplo de la meta real.
+
+    Existe porque el `max(suma_actual, meta)` del retarget solo protege contra el
+    DÉFICIT: un día que venía un 50% por encima de la meta fijaba ese exceso como
+    objetivo, y el aviso de calidad declaraba «por debajo de tu objetivo» un día que en
+    realidad se había ACERCADO a la meta (caso real 2026-08-05: meta 123 g de proteína,
+    día previo 184 g, regenerado 159 g → aviso culpando a la Nevera).
+
+    Default 1.12 = `MEALFIT_BAND_SCORE_UPPER`, el techo de banda que el resto del sistema
+    ya usa para decidir si un día está dentro de objetivo. Mantener ambos alineados es el
+    punto: perpetuar un valor que otro gate considera fuera de banda es incoherente.
+
+    Rollback sin redeploy: `MEALFIT_REGEN_DAY_RETARGET_BAND_CEILING=0` desactiva el techo
+    y restaura el `max` puro. Clamp [1.0, 3.0] — por debajo de 1.0 recortaría por debajo
+    de la meta, que es justo lo que el retarget existe para impedir.
+    """
+    try:
+        _raw = os.environ.get("MEALFIT_REGEN_DAY_RETARGET_BAND_CEILING", "")
+        if _raw.strip() == "":
+            _raw = os.environ.get("MEALFIT_BAND_SCORE_UPPER", "1.12")
+        _v = float(_raw)
+    except (TypeError, ValueError):
+        return 1.12
+    if _v <= 0:
+        return 0.0  # techo desactivado (rollback explícito)
+    return min(max(_v, 1.0), 3.0)
+
+
+def _retarget_macro_target(suma_actual: float, meta: float) -> float:
+    """Objetivo de UN macro al regenerar un día: nunca por debajo de la meta, nunca por
+    encima de la banda aceptable.
+
+    SSOT de la aritmética del retarget. Vive fuera del endpoint a propósito: dentro de
+    `api_regenerate_day` (cientos de líneas, requiere plan + usuario + LLM) esta regla solo
+    se podría verificar leyendo el texto del código, y un test parser-based certifica que
+    algo está ESCRITO, no que se DECIDA así. Aquí se puede ejecutar con los números del
+    caso real.
+    """
+    _t = max(float(suma_actual or 0.0), float(meta or 0.0))
+    _ceil = _retarget_band_ceiling()
+    if _ceil > 0 and meta and meta > 0:
+        _t = min(_t, float(meta) * _ceil)
+    return _t
+
+
 def _pantry_sufficiency_gate_on() -> bool:
     """[P2-PANTRY-SUFFICIENCY · 2026-06-23] Master switch del gate de suficiencia de la
     Nevera para los botones de actualizar platos (swap individual + día completo).
@@ -7997,7 +8044,30 @@ def api_regenerate_day(
                             # que exime renal). Las demás macros (kcal/carbs/fats) sí retargetean normal.
                             if _kk == "protein_g" and _renal_capped:
                                 continue
-                            day_target[_kk] = max(day_target.get(_kk, 0.0), _goal_day.get(_kk, 0.0))
+                            _t = _retarget_macro_target(
+                                day_target.get(_kk, 0.0), _goal_day.get(_kk, 0.0))
+                            # ⚠️ [P1-RETARGET-NO-PERPETUA-EXCESO · 2026-08-05] Acotar por arriba.
+                            #
+                            # El `max` de la línea anterior protege en UNA sola dirección: si el día
+                            # venía por DEBAJO de la meta la sube (que es para lo que se escribió), pero
+                            # si venía por ENCIMA la conserva — y entonces le pide al motor que
+                            # REPRODUZCA el exceso.
+                            #
+                            # Caso real medido (owner, 2026-08-05): meta 123 g de proteína, el día traía
+                            # 184 g (+50%), así que el objetivo se fijó en 184. El día regenerado salió
+                            # en 159 g — MÁS CERCA de la meta real — y el aviso lo declaró «por debajo
+                            # de tu objetivo» y culpó a la Nevera, mandando al usuario a comprar comida
+                            # que no necesitaba. Contra su meta real, 159 sigue estando un 29% ARRIBA.
+                            #
+                            # El techo es la banda que el propio sistema ya considera aceptable
+                            # (`MEALFIT_BAND_SCORE_UPPER`, 1.12): por encima de ahí el día está fuera de
+                            # banda para todos los demás gates, así que perpetuarlo es incoherente.
+                            # Se conserva intacta la intención original — nunca por debajo de la meta.
+                            _ceil = _retarget_band_ceiling()
+                            _meta_kk = _goal_day.get(_kk, 0.0)
+                            if _ceil > 0 and _meta_kk > 0:
+                                _t = min(_t, _meta_kk * _ceil)
+                            day_target[_kk] = _t
                         _meal_scale = {
                             "cals": day_target["kcal"] / max(_sum_current["kcal"], 1.0),
                             "protein": day_target["protein_g"] / max(_sum_current["protein_g"], 1.0),
