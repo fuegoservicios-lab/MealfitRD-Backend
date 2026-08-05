@@ -18283,7 +18283,12 @@ _PHANTOM_PROTEIN_SYNS = {
     # hizo creer al namefix que había RES real y renombró el fantasma → "Claras de RES" (plan
     # vivo c8fa78c5, 12ª mordida — esta vez de sinónimo). Solo frases inequívocas.
     "res": ["res", "carne de res", "bistec", "carne molida", "res molida", "molida de res"],
-    "pescado": ["pescado", "filete", "tilapia", "dorado", "mero", "bacalao", "salmon", "salmón",
+    # ⚠️ [P1-DORADO-NO-ES-PEZ · 2026-08-05] "dorado" fuera — mismo motivo que en
+    # `constants.PROTEIN_SYNONYMS` (ver allí el detalle medido). Aquí el daño era el banner:
+    # "Pastel Dorado de Batata y Queso" recibió el aviso "el nombre puede no reflejar la
+    # proteína real" porque este diccionario leyó el PEZ en el adjetivo. El plato no
+    # prometía pescado; prometía estar dorado.
+    "pescado": ["pescado", "filete", "tilapia", "mero", "bacalao", "salmon", "salmón",
                 "merluza", "chillo", "sardina", "corvina"],
     "pavo": ["pavo"],
     "salami": ["salami"],

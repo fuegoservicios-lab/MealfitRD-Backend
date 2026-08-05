@@ -6,8 +6,8 @@ propia receta (porque había escrito un alias) y reintentaba con el mismo
 alias — verificado en log productivo 2026-05-22 23:04-23:05:
 
   attempt 1: 42g Queso unauthorized → retry
-  attempt 2: "dorado" mentioned, "pescado" not listed → retry
-  attempt 3: SAME "dorado" → fallback (Plato Fallback feo, P3-SWAP-FALLBACK-TITLE-COPY)
+  attempt 2: "tilapia" mentioned, "pescado" not listed → retry
+  attempt 3: SAME "tilapia" → fallback (Plato Fallback feo, P3-SWAP-FALLBACK-TITLE-COPY)
 
 Dos fixes coordinados para subir señal al LLM:
 
@@ -23,6 +23,17 @@ Cross-link con ``test_p2_hist_audit_14_marker_test_link``: slug
 ``p3_swap_retry_coherence_hint`` ↔ filename
 ``test_p3_swap_retry_coherence_hint.py``.
 """
+# [P1-DORADO-NO-ES-PEZ · 2026-08-05] El fixture era 'dorado' y paso a 'tilapia'.
+#
+# El invariante NO cambia: el summary debe citar el ALIAS que el LLM escribio, no solo
+# el canonico -- si dijera solo 'pescado', el reintento no sabria que palabra corregir.
+# Lo que caduco es el EJEMPLO: 'dorado' dejo de ser alias de pescado porque es el
+# participio de cocina mas comun del espanol ('hornea hasta que este dorado') y provoco
+# 18 rechazos de platos correctos en 7 dias -- incluido el que dejo al usuario sin poder
+# usar 'Arreglar este dia'. 'tilapia' cumple lo mismo (alias != canonico) y SI se compra.
+#
+# Nota: este test nacio de un intento previo de arreglar el sintoma de 'dorado', y
+# adopto como fixture justo el token defectuoso.
 import pathlib
 import re
 
@@ -40,31 +51,31 @@ NUTR_PY = (BACKEND_ROOT / "nutrition_calculator.py").read_text(encoding="utf-8")
 
 def test_validator_summary_includes_mentioned_alias_not_just_canonical():
     """[FUNCIONAL] Cuando ``divergences = {'pescado': {'mentioned_alias':
-    'dorado', 'listed': False}}``, el summary debe contener ``"dorado"``
+    'tilapia', 'listed': False}}``, el summary debe contener ``"tilapia"``
     (el alias que el LLM escribió) en addition al canónico ``"pescado"``."""
     pytest.importorskip("langchain_google_genai", reason="nutrition_calculator requiere langchain")
     from nutrition_calculator import validate_meal_recipe_ingredients_coherence
 
-    # Mock meal con recipe que menciona "dorado" pero ingredients listan otra cosa
+    # Mock meal con recipe que menciona "tilapia" pero ingredients listan otra cosa
     meal = {
-        "name": "Plato con dorado",
+        "name": "Plato con tilapia",
         "ingredients": ["100g arroz", "50g lechuga"],
         "recipe": [
-            "Marina el dorado en limón.",
-            "Cocina el dorado a la plancha 5 min por lado.",
+            "Marina el tilapia en limón.",
+            "Cocina el tilapia a la plancha 5 min por lado.",
             "Sirve con arroz y lechuga.",
         ],
     }
     passed, divs, summary = validate_meal_recipe_ingredients_coherence(meal)
     assert passed is False, f"Validator debió detectar divergence pero passed={passed}"
     assert "pescado" in divs, f"Esperaba canonical 'pescado' en divs, got {list(divs.keys())}"
-    assert divs["pescado"].get("mentioned_alias") == "dorado", (
-        f"Esperaba mentioned_alias='dorado', got {divs['pescado'].get('mentioned_alias')!r}"
+    assert divs["pescado"].get("mentioned_alias") == "tilapia", (
+        f"Esperaba mentioned_alias='tilapia', got {divs['pescado'].get('mentioned_alias')!r}"
     )
 
-    # El summary nuevo DEBE citar el alias 'dorado'
-    assert "dorado" in summary, (
-        f"Summary debe mencionar el alias 'dorado' que el LLM escribió. "
+    # El summary nuevo DEBE citar el alias 'tilapia'
+    assert "tilapia" in summary, (
+        f"Summary debe mencionar el alias 'tilapia' que el LLM escribió. "
         f"Si solo dice 'pescado' (canónico), el LLM no encuentra qué corregir "
         f"y reintenta con el mismo alias. Summary: {summary!r}"
     )
@@ -111,17 +122,17 @@ def test_validator_summary_handles_multiple_divergences():
         "name": "Plato mixto",
         "ingredients": ["100g arroz"],
         "recipe": [
-            "Marina el dorado.",
+            "Marina el tilapia.",
             "Saltea el cerdo con cebolla.",
             "Sirve con arroz.",
         ],
     }
     passed, divs, summary = validate_meal_recipe_ingredients_coherence(meal)
     assert passed is False
-    # Al menos dorado o cerdo debe estar mencionado
-    aliases_in_summary = sum(1 for alias in ["dorado", "cerdo"] if alias in summary)
+    # Al menos tilapia o cerdo debe estar mencionado
+    aliases_in_summary = sum(1 for alias in ["tilapia", "cerdo"] if alias in summary)
     assert aliases_in_summary >= 1, (
-        f"Summary debe citar al menos uno de los aliases ('dorado', 'cerdo'). "
+        f"Summary debe citar al menos uno de los aliases ('tilapia', 'cerdo'). "
         f"Summary: {summary!r}"
     )
 
@@ -197,9 +208,9 @@ def test_divergences_dict_shape_unchanged_for_back_compat():
     from nutrition_calculator import validate_meal_recipe_ingredients_coherence
 
     meal = {
-        "name": "Plato con dorado",
+        "name": "Plato con tilapia",
         "ingredients": ["100g arroz"],
-        "recipe": ["Cocina el dorado a la plancha."],
+        "recipe": ["Cocina el tilapia a la plancha."],
     }
     passed, divs, summary = validate_meal_recipe_ingredients_coherence(meal)
     assert isinstance(divs, dict)

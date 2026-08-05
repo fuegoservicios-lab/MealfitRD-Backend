@@ -1449,7 +1449,34 @@ PROTEIN_SYNONYMS = {
     # como sinónimo (incidente 2026-05-05 — plan rechazado y entregado roto).
     # `mahi-mahi` y `mahi mahi` se incluyen ambos para tolerar la convención
     # de hyphenation que el LLM elige inconsistentemente.
-    "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "salmon", "tilapia", "filete de pescado",
+    # ⚠️ [P1-DORADO-NO-ES-PEZ · 2026-08-05] "dorado" SUELTO fuera: es el adjetivo de cocina
+    # más común del español ("hornea hasta que esté dorado", "dora la cebolla"), y este
+    # diccionario lo leía como el PEZ.
+    #
+    # Medido en producción (7 días de journal): 18 divergencias de coherencia por el alias
+    # `dorado` — la causa NÚMERO UNO, más que ninguna otra palabra. El alias `pescado` real
+    # aparece UNA vez. Y en `master_ingredients` NO existe ningún alimento con "dorad": el
+    # pez no es comprable en esta app, así que el LLM jamás podrá listarlo como ingrediente.
+    # Un alias que no puede acertar solo puede fallar.
+    #
+    # Daño real observado el 2026-08-05: la receta decía "hornea hasta que esté dorado" y el
+    # guard de coherencia concluyó "la receta usa pescado que no está en `ingredients`" →
+    # rechazó el plato 3 veces → "Arreglar este día" murió con retries agotados y el usuario
+    # vio "el chef IA no pudo arreglar este día".
+    #
+    # TERCERA vez que esta palabra quema reintentos, y las dos anteriores trataron el
+    # síntoma: P3-SWAP-RETRY-COHERENCE-HINT (2026-05-22) le pidió al LLM auto-revisarse
+    # ("verificado: 3 intentos seguidos con el alias dorado") y P1-SWAP-COHERENCE-REPAIR
+    # (2026-07-10) intentó REPARAR añadiendo la línea que falta — imposible aquí, porque no
+    # hay nada que añadir: el alimento no existe.
+    #
+    # Las frases INEQUÍVOCAS se quedan ("filete de dorado" más abajo): ahí el sustantivo es
+    # el pez sin ambigüedad. Mismo criterio que P1-MENU-COHERENCE-2 aplicó a "molida".
+    #
+    # ⚠️ NO tocar las listas de ALÉRGENOS (graph_orchestrator, condition_rules): ahí marcar
+    # de más es la dirección segura — a un alérgico al pescado un aviso de sobra no le hace
+    # daño, y uno de menos sí.
+    "pescado": ["pescado", "chillo", "mero", "salmón", "salmon", "tilapia", "filete de pescado",
                 "bacalao", "bacalao desalado", "bacalao salado", "filete de bacalao",
                 "filete de mero", "filete de tilapia", "filete de chillo", "filete de dorado",
                 "merluza", "filete de merluza",

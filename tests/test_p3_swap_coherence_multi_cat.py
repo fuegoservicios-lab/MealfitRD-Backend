@@ -11,6 +11,17 @@ Cross-link con ``test_p2_hist_audit_14_marker_test_link``: slug
 ``p3_swap_coherence_multi_cat`` ↔ filename
 ``test_p3_swap_coherence_multi_cat.py``.
 """
+# [P1-DORADO-NO-ES-PEZ · 2026-08-05] El fixture era 'dorado' y paso a 'tilapia'.
+#
+# El invariante NO cambia: el summary debe citar el ALIAS que el LLM escribio, no solo
+# el canonico -- si dijera solo 'pescado', el reintento no sabria que palabra corregir.
+# Lo que caduco es el EJEMPLO: 'dorado' dejo de ser alias de pescado porque es el
+# participio de cocina mas comun del espanol ('hornea hasta que este dorado') y provoco
+# 18 rechazos de platos correctos en 7 dias -- incluido el que dejo al usuario sin poder
+# usar 'Arreglar este dia'. 'tilapia' cumple lo mismo (alias != canonico) y SI se compra.
+#
+# Nota: este test nacio de un intento previo de arreglar el sintoma de 'dorado', y
+# adopto como fixture justo el token defectuoso.
 import os
 import pathlib
 import re
@@ -138,7 +149,7 @@ def test_multiple_categories_can_diverge_simultaneously():
         "name": "Plato test",
         "ingredients": ["100g arroz blanco"],  # solo carb base
         "recipe": [
-            "Marina el dorado en limón.",  # proteína no listada
+            "Marina el tilapia en limón.",  # proteína no listada
             "Hierve la papa.",  # carb extra no listado
             "Agrega aguacate al servir.",  # veggie no listada
         ],
@@ -248,20 +259,20 @@ def test_summary_omits_qualifier_when_alias_equals_canonical():
 
 
 def test_summary_keeps_qualifier_when_alias_differs_from_canonical():
-    """[FUNCIONAL] Cuando el alias es distinto (ej. "dorado" → canónico
+    """[FUNCIONAL] Cuando el alias es distinto (ej. "tilapia" → canónico
     "pescado"), el qualifier "(que cuenta como pescado)" SÍ debe aparecer
     — es load-bearing para que el LLM mapee el alias al canónico."""
     validator = _import_validator()
     meal = {
         "name": "Plato test",
         "ingredients": ["100g arroz"],
-        "recipe": ["Marina el dorado en limón."],
+        "recipe": ["Marina el tilapia en limón."],
     }
     passed, divs, summary = validator(meal)
     assert passed is False
     if "pescado" in divs:
         assert "(que cuenta como pescado)" in summary, (
-            f"Qualifier debe aparecer cuando alias 'dorado' difiere del "
+            f"Qualifier debe aparecer cuando alias 'tilapia' difiere del "
             f"canónico 'pescado'. Summary: {summary!r}"
         )
 
