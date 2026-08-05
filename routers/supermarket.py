@@ -24,6 +24,9 @@ Tipos para JSON: uuid→::text, numeric→::float8, timestamptz→to_jsonb(...)#
 
 import asyncio
 import logging
+import os
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,6 +44,53 @@ router = APIRouter(prefix="/api/supermarket", tags=["supermarket"])
 # Público per-IP (el landing no exige sesión). 60/60s es generoso para navegación
 # humana y frena scraping/hammering básico.
 _PUBLIC_LIST_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] Cache in-process del catalogo.
+#
+# `/match` cargaba la tabla ENTERA en cada llamada -dos SELECT completos, sin
+# cache- y el Dashboard lo pide en cada refresco de pagina. Medido el 2026-08-05
+# contra Neon: 1.739 filas activas (251 alimentos distintos), 236-382 ms solo de
+# DB por llamada. El trabajo en Python es irrelevante al lado (el parser de
+# presentaciones: 2 ms sobre las 597 filas que lo necesitan), asi que el tiempo
+# que el usuario ve esperando "Buscando marcas en el supermercado..." es
+# basicamente latencia de dos consultas que devuelven SIEMPRE lo mismo.
+#
+# El catalogo solo cambia cuando un admin lo edita, y esas tres rutas invalidan
+# la cache explicitamente -asi un cambio se ve al instante y el TTL es solo una
+# red de seguridad, no el mecanismo-.
+#
+# ⚠️ LA INVALIDACION ES POR PROCESO. Hoy es completa porque el servicio corre con
+# `uvicorn --workers 1` (verificado en el systemd del VPS el 2026-08-05). Si algun
+# dia se sube ese numero, un PATCH atendido por el worker A NO limpiaria la cache
+# del worker B, que serviria precios viejos hasta que expire su TTL (<=5 min por
+# defecto). Si eso llega a pasar: o se baja el TTL, o la invalidacion pasa a un
+# canal compartido (Redis pub/sub o una fila en `app_kv_store` que los workers
+# consulten). No es hipotetico-lejano: subir workers es lo primero que se toca
+# cuando llega trafico.
+# ─────────────────────────────────────────────────────────────────────────────
+def _catalog_cache_ttl_s() -> int:
+    """TTL en segundos. Knob `MEALFIT_SUPERMARKET_CATALOG_CACHE_TTL_S`; 0 = sin
+    cache (rollback sin redeploy). Clamp [0, 3600]."""
+    try:
+        v = int(os.environ.get("MEALFIT_SUPERMARKET_CATALOG_CACHE_TTL_S", "300"))
+    except (TypeError, ValueError):
+        v = 300
+    return max(0, min(3600, v))
+
+
+_CATALOG_CACHE: Dict[str, Any] = {"at": 0.0, "rows": None, "master": None}
+_CATALOG_LOCK = threading.Lock()
+
+
+def _invalidate_catalog_cache() -> None:
+    """Tras cualquier mutacion admin. Sin esto un precio editado tardaria hasta
+    el TTL en verse, y el editor vive en la MISMA pagina que lo consume."""
+    with _CATALOG_LOCK:
+        _CATALOG_CACHE["rows"] = None
+        _CATALOG_CACHE["master"] = None
+        _CATALOG_CACHE["at"] = 0.0
+
 
 _MAX_LIMIT = 1000
 
@@ -230,8 +280,25 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
     """Matching de nombres de la lista de compras contra el catálogo del súper."""
 
     def _match() -> Dict[str, Any]:
-        rows = execute_sql_query(
-            """
+        # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] Las dos consultas del catalogo
+        # se sirven de cache cuando esta caliente. Ver el bloque del helper arriba.
+        _ttl = _catalog_cache_ttl_s()
+        with _CATALOG_LOCK:
+            _hot = (
+                _ttl > 0
+                and _CATALOG_CACHE["rows"] is not None
+                and (time.time() - float(_CATALOG_CACHE["at"] or 0)) < _ttl
+            )
+            if _hot:
+                rows = _CATALOG_CACHE["rows"]
+                master_rows_cached = _CATALOG_CACHE["master"]
+            else:
+                rows = None
+                master_rows_cached = None
+
+        if rows is None:
+            rows = execute_sql_query(
+                """
             SELECT id::text AS id, food_name, brand, presentation,
                    price_rd::float8 AS price_rd,
                    size_grams::float8 AS size_grams,
@@ -248,8 +315,8 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
             -- test_p1_brand_budget_coherence_match_order.py).
             ORDER BY lower(food_name), price_rd NULLS LAST, (brand IS NOT NULL)
             """,
-            fetch_all=True,
-        ) or []
+                fetch_all=True,
+            ) or []
 
         # [P1-BRAND-SIZE-FILTER · 2026-07-06] `size_g` efectivo por variante:
         # size_grams (admin UI) autoritativo; fallback al parser SSOT del costeo
@@ -282,14 +349,22 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
                 "size_g": _size_g(r),
             })
 
-        master_rows = execute_sql_query(
-            """
-            SELECT DISTINCT master_food_name, food_name
-            FROM public.supermarket_products
-            WHERE active AND master_food_name IS NOT NULL
-            """,
-            fetch_all=True,
-        ) or []
+        if master_rows_cached is not None:
+            master_rows = master_rows_cached
+        else:
+            master_rows = execute_sql_query(
+                """
+                SELECT DISTINCT master_food_name, food_name
+                FROM public.supermarket_products
+                WHERE active AND master_food_name IS NOT NULL
+                """,
+                fetch_all=True,
+            ) or []
+            if _catalog_cache_ttl_s() > 0:
+                with _CATALOG_LOCK:
+                    _CATALOG_CACHE["rows"] = rows
+                    _CATALOG_CACHE["master"] = master_rows
+                    _CATALOG_CACHE["at"] = time.time()
         for r in master_rows:
             mk, fk = _norm_food(r["master_food_name"]), _norm_food(r["food_name"])
             if mk and mk not in foods and fk in foods:
@@ -502,6 +577,11 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
+    # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina
+    # que consume el catalogo: sin invalidar, el admin editaria un precio y no lo
+    # veria hasta que expirase el TTL.
+    _invalidate_catalog_cache()
+
     def _insert():
         return execute_sql_write(
             f"""
@@ -559,6 +639,11 @@ async def api_supermarket_update(request: Request, product_id: str, body: Superm
     sets.append("updated_at = now()")
     params.append(product_id)
 
+    # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina
+    # que consume el catalogo: sin invalidar, el admin editaria un precio y no lo
+    # veria hasta que expirase el TTL.
+    _invalidate_catalog_cache()
+
     def _update():
         return execute_sql_write(
             f"""
@@ -593,6 +678,11 @@ async def api_supermarket_delete(request: Request, product_id: str):
     usar PATCH active=false."""
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
+
+    # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina
+    # que consume el catalogo: sin invalidar, el admin editaria un precio y no lo
+    # veria hasta que expirase el TTL.
+    _invalidate_catalog_cache()
 
     def _delete():
         return execute_sql_write(
