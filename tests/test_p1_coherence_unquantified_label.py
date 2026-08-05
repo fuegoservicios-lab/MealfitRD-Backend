@@ -80,9 +80,22 @@ def test_sobrededuccion_sigue_detectandose():
 
 
 def test_unknown_sigue_existiendo_para_lo_que_no_encaja():
-    """No se agota el espacio: una divergencia real por debajo, fuera de las bandas, sigue
-    siendo `unknown` — y ESA es la que bloquea."""
-    assert _clf(100.0, 70.0, {"g": 100.0}, {"g": 70.0}) == "unknown"
+    """No se agota el espacio: sigue habiendo divergencias sin nombre.
+
+    [P1-COHERENCE-MILD-SHORT · 2026-08-05] El caso que usaba este test (ratio 0.7,
+    compra POR DEBAJO de la receta) ya no es `unknown`: era el 98,5% del bucket
+    —128 de 130 incógnitas medidas sobre 25 planes— y ahora se llama
+    `magnitude_mild_short`. Lo que queda sin nombre es la SOBRE-oferta (act > exp),
+    que es lo que el propio guard afirma en `_has_critical_divergence`: «`unknown`
+    de magnitud es SIEMPRE sobre-oferta». Esa nota era falsa mientras el
+    sub-suministro leve vivía dentro; ahora es cierta, y este test lo ancla.
+
+    La intención original —el bucket no se vacía— se conserva intacta.
+    """
+    # Sobre-oferta: la lista compra el doble de lo que piden las recetas.
+    assert _clf(100.0, 200.0, {"g": 100.0}, {"g": 200.0}) == "unknown"
+    # Y el caso de antes ya no cae aquí: tiene nombre propio.
+    assert _clf(100.0, 70.0, {"g": 100.0}, {"g": 70.0}) == "magnitude_mild_short"
 
 
 @pytest.mark.parametrize("act", [0.0, -1.0])

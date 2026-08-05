@@ -711,6 +711,53 @@ def _swap_real_pantry_ledger_lines(user_id: str) -> list:
         return []
 
 
+def _pantry_singular_key(token: str) -> str:
+    """[P1-SWAP-PANTRY-PLURAL · 2026-08-05] Clave singular/plural de UN token.
+
+    Solo recorta la `s` final en tokens de mas de 3 letras: `res`, `mas`, `sal`
+    quedan intactos. No es un stemmer: es lo minimo para que `huevos` y `huevo`
+    compartan clave.
+    """
+    t = (token or "").strip()
+    return t[:-1] if len(t) > 3 and t.endswith("s") else t
+
+
+def _pantry_tokens(blob: str) -> set:
+    """Tokens de la nevera, ya reducidos a su clave singular."""
+    return {_pantry_singular_key(t) for t in re.split(r"[^a-z0-9]+", blob or "") if t}
+
+
+def pantry_contains_food(blob: str, name: str) -> bool:
+    """La nevera (blob de `clean_ingredients`) contiene este alimento?
+
+    [P1-SWAP-PANTRY-PLURAL · 2026-08-05] El chequeo era `name in blob`, subcadena
+    cruda. Con la nevera diciendo "Huevo" y el guard preguntando por "huevos", la
+    subcadena falla porque el PLURAL es mas largo que el singular: `"huevos" in
+    "huevo"` es False. Medido en produccion el 2026-08-05 contra la nevera real
+    del dueno (45 items, "Huevo: 2 carton"): el reparador determinista de
+    `P1-SWAP-COHERENCE-REPAIR` se declaraba "fuera de nevera" y el swap moria tras
+    3 intentos IDENTICOS -> 422 -> plato original conservado. Era la causa
+    dominante de los cambios que no devolvian nada.
+
+    Emparejamos por TOKEN COMPLETO, no por subcadena: es lo que impide la familia
+    de bugs de esta casa (`pollo` dentro de `repollo`, `sal` dentro de `salsa`,
+    `res` dentro de `fresco`). Un alimento multi-palabra exige que TODOS sus
+    tokens esten.
+
+    La subcadena se conserva como primera via para no perder ninguna coincidencia
+    que hoy funcione: esto solo ANADE emparejamientos, nunca quita.
+    """
+    if not blob or not name:
+        return False
+    if name in blob:
+        return True
+    toks = [_pantry_singular_key(t) for t in re.split(r"[^a-z0-9]+", name) if t]
+    if not toks:
+        return False
+    disponibles = _pantry_tokens(blob)
+    return all(t in disponibles for t in toks)
+
+
 def swap_meal(form_data: dict):
     rejected_meal = form_data.get("rejected_meal", "")
     meal_type = form_data.get("meal_type", "Comida")
@@ -1937,8 +1984,12 @@ def swap_meal(form_data: dict):
                         for _cf_food, _cf_info in coh_divs.items():
                             _alias = str((_cf_info or {}).get("mentioned_alias") or _cf_food).strip()
                             _alias_norm = _coh_sa(_alias.lower())
-                            if clean_ingredients and _alias_norm not in _pantry_blob \
-                                    and _coh_sa(str(_cf_food).lower()) not in _pantry_blob:
+                            # [P1-SWAP-PANTRY-PLURAL · 2026-08-05] Por TOKEN, no por
+                            # subcadena: "huevos" jamás casaba contra una nevera que
+                            # dice "Huevo", y el swap moría en 3 intentos idénticos.
+                            if clean_ingredients \
+                                    and not pantry_contains_food(_pantry_blob, _alias_norm) \
+                                    and not pantry_contains_food(_pantry_blob, _coh_sa(str(_cf_food).lower())):
                                 _rep_ok = False  # fuera de nevera en modo pantry → no reparable
                                 break
                             _cat = _coh_sa(str((_cf_info or {}).get("category") or "").lower())

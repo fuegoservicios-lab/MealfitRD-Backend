@@ -123,8 +123,12 @@ class TestPantryOverdeductThresholdBehavior:
         monkeypatch.delenv("MEALFIT_PANTRY_OVERDEDUCT_RATIO_THRESHOLD", raising=False)
         # ratio=0.2 (< 0.5, fuera de yield bands) → pantry_overdeduct.
         assert self._classify(100.0, 20.0) == "pantry_overdeduct"
-        # ratio=0.6 (> 0.5, fuera de yield bands) → unknown.
-        assert self._classify(100.0, 60.0) == "unknown"
+        # [P1-COHERENCE-MILD-SHORT · 2026-08-05] Lo que cae FUERA del bucket de
+        # overdeduct pero sigue por debajo de la receta ya no es `unknown`: tiene
+        # nombre propio. El comportamiento del KNOB -que es lo que este test mide-
+        # no cambia; cambia como se llama el bucket de al lado.
+        # ratio=0.6 (> 0.5, fuera de yield bands) → banda leve.
+        assert self._classify(100.0, 60.0) == "magnitude_mild_short"
 
     def test_knob_0_75_expands_overdeduct_bucket(self, monkeypatch):
         """Knob=0.75 captura ratios entre 0.5 y 0.75 que antes caían a
@@ -133,8 +137,12 @@ class TestPantryOverdeductThresholdBehavior:
         monkeypatch.setenv("MEALFIT_PANTRY_OVERDEDUCT_RATIO_THRESHOLD", "0.75")
         # ratio=0.67 — antes unknown, ahora pantry_overdeduct.
         assert self._classify(3000.0, 2000.0) == "pantry_overdeduct"
-        # ratio=0.8 — todavía sobre threshold → unknown.
-        assert self._classify(100.0, 80.0) == "unknown"
+        # [P1-COHERENCE-MILD-SHORT · 2026-08-05] Lo que cae FUERA del bucket de
+        # overdeduct pero sigue por debajo de la receta ya no es `unknown`: tiene
+        # nombre propio. El comportamiento del KNOB -que es lo que este test mide-
+        # no cambia; cambia como se llama el bucket de al lado.
+        # ratio=0.8 — todavía sobre threshold → banda leve.
+        assert self._classify(100.0, 80.0) == "magnitude_mild_short"
 
     def test_knob_invalid_falls_back_to_default(self, monkeypatch):
         """Validator `0.0 < v < 1.0` rechaza valores fuera de banda;
@@ -161,8 +169,12 @@ class TestPantryOverdeductThresholdBehavior:
         del knob.
         """
         monkeypatch.setenv("MEALFIT_PANTRY_OVERDEDUCT_RATIO_THRESHOLD", "0.25")
-        # ratio=0.5 — > 0.25 → unknown (antes pantry_overdeduct con default 0.5).
-        assert self._classify(100.0, 50.0) == "unknown"
+        # [P1-COHERENCE-MILD-SHORT · 2026-08-05] Lo que cae FUERA del bucket de
+        # overdeduct pero sigue por debajo de la receta ya no es `unknown`: tiene
+        # nombre propio. El comportamiento del KNOB -que es lo que este test mide-
+        # no cambia; cambia como se llama el bucket de al lado.
+        # ratio=0.5 — > 0.25 → banda leve (antes pantry_overdeduct con default 0.5).
+        assert self._classify(100.0, 50.0) == "magnitude_mild_short"
         # ratio=0.2 — < 0.25 → pantry_overdeduct.
         assert self._classify(100.0, 20.0) == "pantry_overdeduct"
 

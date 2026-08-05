@@ -5496,6 +5496,25 @@ def _classify_divergence_hypothesis(
             return "magnitude_undersupply"
         return "pantry_overdeduct"
 
+    # 4-bis. [P1-COHERENCE-MILD-SHORT · 2026-08-05] Compra POR DEBAJO de lo que piden las
+    # recetas, pero lejos del sub-suministro severo: el hueco entre el umbral de overdeduct
+    # (0.5) y la tolerancia (~0.9). Nada lo nombraba, así que caía en `unknown`.
+    #
+    # `_bucket_unknown_magnitude_ratios` (P1-COHERENCE-UNKNOWN-RATIO-TELEMETRY) existe justo
+    # para exigir ver la FORMA antes de inventar categorías — el propio código advierte "NO
+    # añadir categorías sin ver la forma de esos ratios". Medida sobre el historial persistido
+    # de 25 planes / 228 evaluaciones: `unknown` es el 28,2% de TODAS las hipótesis (202 de
+    # 717), el segundo bucket; y de las incógnitas con ratio registrado, **128 de 130 (98,5%)
+    # caen en la banda 0.5-0.9**. No es una nube dispersa: es un hueco único y bien definido.
+    #
+    # Es SOLO una etiqueta —mismo linaje que P1-COHERENCE-UNQUANTIFIED-LABEL, que rebautizó
+    # 831 de 879 divergencias sin tocar comportamiento—. NO entra en `_ACTIONABLE_HYPOTHESES`:
+    # comprar un 20% por debajo es ruido de envase y redondeo, no algo que el usuario deba
+    # corregir a mano. Nombrarlo es lo que permite que las cifras de coherencia signifiquen
+    # algo: un medidor que responde "no sé" el 28% de las veces no sostiene ninguna afirmación.
+    if exp_qty > 0 and 0 < act_qty < exp_qty:
+        return "magnitude_mild_short"
+
     # 5. [P1-COHERENCE-UNQUANTIFIED-LABEL · 2026-07-26] El alimento está en la lista pero las
     # recetas NO le ponen cantidad. Es el caso de los condimentos: "Sal al gusto" parsea a
     # `0.0 pizca`, cantidad cero, así que `expected` no lo tiene y sale `delta_pct = inf`.
@@ -5989,7 +6008,21 @@ def _has_severe_divergence(divergences: list) -> bool:
         return False
     # [P2-GUARD-UNDERSUPPLY-CANONICAL] Una sola lectura del knob por llamada (el default no
     # cambia a mitad de una lista de divergencias) en vez de una por ítem.
-    _exempt_hypotheses = ["unknown", "pantry_overdeduct"]
+    # [P1-COHERENCE-MILD-SHORT · 2026-08-05] `magnitude_mild_short` hereda la exención
+    # de `unknown`, que es de donde salió. Sin esto el reetiquetado NO sería "solo una
+    # etiqueta": esas divergencias pasarían de exentas a candidatas a escalar.
+    #
+    # Hoy no escalarían por un margen fino —la banda 0.5-0.9 produce |delta| ≤ 0.49 y el
+    # check de severidad exige > 0.50—, pero eso es una coincidencia aritmética, no un
+    # diseño: basta bajar `MEALFIT_PANTRY_OVERDEDUCT_RATIO_THRESHOLD` a 0.3 (knob que
+    # existe y tiene tests propios) para que la banda llegue a |delta| 0.7 y empiece a
+    # forzar retries. Sería el modo de fallo que P1-COHERENCE-SEVERE-NO-NOISE cerró:
+    # sobre-oferta de envase escalando T2 warn→block en falso, 3 retries + re-encolado.
+    #
+    # Y de paso alinea el código con lo que la nota de abajo YA afirmaba: "`unknown` de
+    # magnitud es SIEMPRE sobre-oferta". Era falso mientras el sub-suministro leve vivía
+    # ahí dentro; con la banda separada, ahora es cierto.
+    _exempt_hypotheses = ["unknown", "pantry_overdeduct", "magnitude_mild_short"]
     if not _get_guard_undersupply_severe_knob():
         _exempt_hypotheses.append("magnitude_undersupply")
     for d in divergences:
