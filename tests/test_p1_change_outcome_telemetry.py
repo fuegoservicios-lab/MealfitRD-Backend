@@ -120,3 +120,34 @@ def test_un_fallo_de_db_no_rompe_el_cambio():
         rp._emit_change_outcome_metric("swap", "ok", user_id="u1")  # no debe levantar
     finally:
         db.execute_sql_write = orig
+
+
+def test_ningun_callsite_puede_tumbar_la_operacion():
+    """⚠️ [P1-TELEMETRY-ARGS-CANT-THROW · 2026-08-05] Cada llamada va envuelta en try.
+
+    ESTE TEST NACE DE UN FALLO EN PRODUCCION QUE LOS DE ARRIBA NO CAZARON. La primera
+    version pasaba `regenerated=len(regenerated or [])`, pero `regenerated` es un
+    CONTADOR (`= 0` ... `+= 1`), no una lista. `len()` de un int levanta TypeError — y
+    los argumentos se evaluan ANTES de entrar en la funcion, asi que el try/except
+    INTERNO del helper nunca llegaba a verlo. Resultado: HTTP 500 en /regenerate-day
+    durante ~30 minutos, con el usuario viendo "No se pudo actualizar el dia".
+
+    O sea: la telemetria que medía la feature tumbó la feature. Los tests de arriba
+    ejercitaban el emisor AISLADO y por eso pasaban en verde mientras produccion ardia.
+
+    Ser best-effort DENTRO del helper no basta. Lo que se evalua para construir los
+    argumentos tambien tiene que estar protegido.
+    """
+    src = _src()
+    fallos = []
+    for m in re.finditer(r"^(\s*)_emit_change_outcome_metric\(", src, re.M):
+        ini = m.start()
+        # Las ~6 lineas previas deben contener el `try:` que lo envuelve.
+        previo = src[max(0, ini - 260):ini]
+        if "try:" not in previo:
+            linea = src[:ini].count("\n") + 1
+            fallos.append(linea)
+    assert not fallos, (
+        f"Callsites de telemetria SIN try/except envolvente en las lineas {fallos}. "
+        "Un argumento que levante tumba la operacion entera del usuario — ya paso una vez."
+    )

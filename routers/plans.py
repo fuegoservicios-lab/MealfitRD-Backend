@@ -6332,12 +6332,15 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # cliente refrescó, el plato YA quedó guardado y su resume lo detecta por
         # _plan_modified_at/nombre; si sigue vivo, su persist propio es idempotente.
         # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace del cambio de plato.
-        _emit_change_outcome_metric(
-            "swap", "ok",
-            user_id=verified_user_id,
-            meal_type=(body.mealType if hasattr(body, "mealType") else None),
-            band_low=bool(isinstance(result, dict) and result.get("_macro_band_low")),
-        )
+        try:
+            _emit_change_outcome_metric(
+                "swap", "ok",
+                user_id=verified_user_id,
+                meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                band_low=bool(isinstance(result, dict) and result.get("_macro_band_low")),
+            )
+        except Exception:
+            pass
         if _mri_ctx and isinstance(result, dict) and not result.get("swap_failed"):
             result["persisted"] = _persist_swap_server_side(_mri_ctx, result, verified_user_id)
             _swap_meal_regen_flag_clear(_mri_ctx, verified_user_id)
@@ -6379,12 +6382,15 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             }
             # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace fallido, con su CAUSA:
             # es lo que convierte un porcentaje en algo accionable.
-            _emit_change_outcome_metric(
-                "swap", "failed",
-                user_id=verified_user_id,
-                error_code=_payload.get("error_code"),
-                meal_type=(body.mealType if hasattr(body, "mealType") else None),
-            )
+            try:
+                _emit_change_outcome_metric(
+                    "swap", "failed",
+                    user_id=verified_user_id,
+                    error_code=_payload.get("error_code"),
+                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                )
+            except Exception:
+                pass
             if _hard_fail_422:
                 raise HTTPException(status_code=422, detail={
                     "code": _payload["error_code"],
@@ -6406,12 +6412,15 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             }
             # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace fallido, con su CAUSA:
             # es lo que convierte un porcentaje en algo accionable.
-            _emit_change_outcome_metric(
-                "swap", "failed",
-                user_id=verified_user_id,
-                error_code=_payload.get("error_code"),
-                meal_type=(body.mealType if hasattr(body, "mealType") else None),
-            )
+            try:
+                _emit_change_outcome_metric(
+                    "swap", "failed",
+                    user_id=verified_user_id,
+                    error_code=_payload.get("error_code"),
+                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                )
+            except Exception:
+                pass
             if _hard_fail_422:
                 raise HTTPException(status_code=422, detail={
                     "code": _payload["error_code"],
@@ -6435,12 +6444,15 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             }
             # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace fallido, con su CAUSA:
             # es lo que convierte un porcentaje en algo accionable.
-            _emit_change_outcome_metric(
-                "swap", "failed",
-                user_id=verified_user_id,
-                error_code=_payload.get("error_code"),
-                meal_type=(body.mealType if hasattr(body, "mealType") else None),
-            )
+            try:
+                _emit_change_outcome_metric(
+                    "swap", "failed",
+                    user_id=verified_user_id,
+                    error_code=_payload.get("error_code"),
+                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                )
+            except Exception:
+                pass
             if _hard_fail_422:
                 raise HTTPException(status_code=422, detail={
                     "code": _payload["error_code"],
@@ -8010,9 +8022,12 @@ def api_regenerate_day(
                         f"🧊 [P3-PANTRY-SUFFICIENCY] día bloqueado — Nevera insuficiente "
                         f"(deficits={[d.get('nutrient') for d in _suff.get('deficits', [])]})"
                     )
-                    _emit_change_outcome_metric(
-                        "regen_day", "failed", user_id=user_id, error_code="pantry_insufficient_for_goal",
-                    )
+                    try:
+                        _emit_change_outcome_metric(
+                            "regen_day", "failed", user_id=user_id, error_code="pantry_insufficient_for_goal",
+                        )
+                    except Exception:
+                        pass
                     return {
                         "regen_failed": True,
                         "error_code": "pantry_insufficient_for_goal",
@@ -8333,9 +8348,12 @@ def api_regenerate_day(
                 logger.debug(f"[P1-DAY-REGEN-SERVER-FLAG] clear soft-fail no-op: {_rdf2_e}")
             if _ai_unavailable:
                 # Fallo transitorio del proveedor → NO consumir cuota; pedir reintento.
-                _emit_change_outcome_metric(
-                    "regen_day", "failed", user_id=user_id, error_code="ai_unavailable",
-                )
+                try:
+                    _emit_change_outcome_metric(
+                        "regen_day", "failed", user_id=user_id, error_code="ai_unavailable",
+                    )
+                except Exception:
+                    pass
                 return {
                     "regen_failed": True,
                     "error_code": "ai_unavailable",
@@ -8356,9 +8374,12 @@ def api_regenerate_day(
                 for _r in _kept_reasons
             )
             if _pantry_reason:
-                _emit_change_outcome_metric(
-                    "regen_day", "failed", user_id=user_id, error_code="pantry_insufficient_for_goal",
-                )
+                try:
+                    _emit_change_outcome_metric(
+                        "regen_day", "failed", user_id=user_id, error_code="pantry_insufficient_for_goal",
+                    )
+                except Exception:
+                    pass
                 return {
                     "regen_failed": True,
                     "error_code": "pantry_insufficient_for_goal",
@@ -8368,9 +8389,12 @@ def api_regenerate_day(
                     ),
                     "deficits": [],
                 }
-            _emit_change_outcome_metric(
-                "regen_day", "failed", user_id=user_id, error_code="ai_exhausted_retries",
-            )
+            try:
+                _emit_change_outcome_metric(
+                    "regen_day", "failed", user_id=user_id, error_code="ai_exhausted_retries",
+                )
+            except Exception:
+                pass
             return {
                 "regen_failed": True,
                 "error_code": "ai_exhausted_retries",
@@ -8954,13 +8978,30 @@ def api_regenerate_day(
 
         # [P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Desenlace del dia completo.
         # `slots_kept` > 0 = exito PARCIAL: platos que no se pudieron cambiar.
-        _emit_change_outcome_metric(
-            "regen_day", "ok",
-            user_id=user_id,
-            regenerated=len(regenerated or []),
-            kept=len(slots_kept or []),
-            band_score=_band_score,
-        )
+        # ⚠️ [P1-TELEMETRY-ARGS-CANT-THROW · 2026-08-05] El `try` va AQUÍ FUERA, no solo
+        # dentro del helper.
+        #
+        # La primera versión hacía `regenerated=len(regenerated or [])` — pero
+        # `regenerated` es un CONTADOR (`= 0` … `+= 1`), no una lista. El `len()` de un
+        # int levanta TypeError, y los argumentos se evalúan ANTES de entrar en la
+        # función: el try/except interno del helper nunca llegaba a verlo. Resultado en
+        # producción: HTTP 500 en `/regenerate-day` durante ~30 min y el usuario viendo
+        # «No se pudo actualizar el día».
+        #
+        # O sea, tumbé la feature con la telemetría que medía la feature — exactamente
+        # lo que el docstring de su propio test advertía. "Best-effort dentro del helper"
+        # NO basta: lo que se pasa como argumento tiene que ser inofensivo o estar
+        # protegido aquí.
+        try:
+            _emit_change_outcome_metric(
+                "regen_day", "ok",
+                user_id=user_id,
+                regenerated=regenerated,  # ya es un conteo
+                kept=len(slots_kept or []),
+                band_score=_band_score,
+            )
+        except Exception:
+            pass
         return {
             "success": True,
             "day_index": day_index,
