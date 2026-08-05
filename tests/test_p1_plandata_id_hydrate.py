@@ -41,6 +41,32 @@ def test_merges_repair_idless_prev():
     )
 
 
+def test_pantry_recalc_adoption_attaches_id():
+    """[2026-08-05] El path que el fix original NO cubrio, cazado en vivo:
+    vaciar la Nevera + importar -> `_recalcShoppingListAfterPantryChange`
+    adoptaba `result.plan_data` PELADO (el recalc devuelve el JSONB, sin el id
+    de la columna) y persistia ese estado sin id a localStorage. El siguiente
+    `regenerateDay` moria con "No encontramos tu plan activo" hasta refrescar.
+
+    La ironia que delata la clase: EN LA MISMA FUNCION, la rama de drift
+    (P2-NEW-4) si adjunta (`fresh.id = latest.id`); la de adopcion no lo hacia.
+
+    Contrato: la adopcion adjunta el id, y se AUTO-REPARA con el id que el
+    pre-check ya trajo del servidor -- porque un recalc anterior pudo dejar
+    el localStorage tambien sin id (el fallback local no basta)."""
+    pantry = (_ROOT / "frontend" / "src" / "pages" / "Pantry.jsx").read_text(encoding="utf-8")
+    assert "P1-PLANDATA-ID-HYDRATE" in pantry, (
+        "el marker debe vivir en el sitio del fix (convencion tooltip-anchor)"
+    )
+    assert "_serverKnownPlanId = latest.id" in pantry, (
+        "el pre-check captura SIEMPRE el id del servidor (no solo en la rama drift) "
+        "-- es lo que permite auto-reparar un localStorage ya despojado"
+    )
+    assert "if (result.plan_data.id == null)" in pantry, (
+        "la adopcion re-adjunta el id antes de setPlanData/localStorage"
+    )
+
+
 def test_restore_session_hydration_intact():
     assert "latestPlan.id = planId" in _CTX, (
         "la hidratación original de restoreSessionData sigue siendo la fuente primaria"
