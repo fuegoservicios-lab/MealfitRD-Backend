@@ -39890,6 +39890,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if BAND_RETRY_GATE_ENABLED:
         try:
             _bsr = compute_clinical_band_score(plan, {})
+            # [P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] `slot_drift` se calculaba y se
+            # TIRABA: nadie leía esa clave. El porqué y la medición que lo destapó,
+            # en el docstring de `_emit_slot_drift_metric_best_effort`.
+            _emit_slot_drift_metric_best_effort(_bsr.get("slot_drift"), plan)
             # [P1-BAND-GATE-ALL4 · 2026-07-01] el umbral acompaña al score elegido: macros-only usa el umbral
             # RE-TUNEADO (0.45; combined 0.5 ≈ macros-only 0.33 por la celda kcal≈1.0 — reusar 0.5 a ciegas
             # sería mass-retry). Rollback MEALFIT_BAND_GATE_USE_MACROS_ONLY=false → score+umbral combinados.
@@ -44461,6 +44465,45 @@ def _plan_goal_is_gainmuscle(plan: dict, explicit_goal=None) -> bool:
         return any(tok in g for tok in _GAINMUSCLE_GOAL_TOKENS)
     except Exception:
         return False
+
+
+def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
+    """[P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] Persiste `slot_drift` a `pipeline_metrics`.
+
+    El cómputo existía desde `P2-SLOT-DRIFT-TELEMETRY` (2026-07-29) pero su resultado no
+    salía a ningún sitio: el único consumidor del dict que lo contiene es el gate de retry,
+    que lee `score`/`per_macro` y descarta el resto. Medido el 2026-08-05: 0 menciones en
+    24 h de log, 0 filas en la DB. Una medición que nadie puede leer no puede sostener la
+    decisión que aplazó — encender o no `MEALFIT_SLOT_AWARE_DAY_REPAIR`.
+
+    Best-effort y sin efectos: cualquier fallo se traga: es telemetría, no puede tumbar una
+    generación. `node='slot_drift'` para poder agrupar sin parsear texto.
+    """
+    if not isinstance(slot_drift, dict) or not slot_drift:
+        return
+    try:
+        from db_core import execute_sql_write
+        import json as _json_sd
+        _days = len((plan.get("days") or [])) if isinstance(plan, dict) else 0
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, %s, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                None,
+                None,
+                "slot_drift",
+                _json_sd.dumps({"slot_drift": slot_drift, "days": _days}, ensure_ascii=False),
+            ),
+        )
+    except Exception as _e_sd:
+        try:
+            logger.debug(f"[P1-SLOT-DRIFT-OBSERVABLE] emit slot_drift falló: {_e_sd!r}")
+        except Exception:
+            pass
 
 
 def _compute_slot_drift(plan: dict) -> "dict | None":

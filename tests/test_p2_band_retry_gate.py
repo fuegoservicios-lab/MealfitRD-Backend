@@ -66,7 +66,16 @@ def test_gate_ancla_en_review():
     # desplazaron el cierre del gate (severity a offset ~2643); el contrato anclado no cambió.
     # [P1-GAINMUSCLE-KCAL-BAND · 2026-07-06] 3000→4600: el logging branch-aware (P2-BAND-RETRY-GATE-LOG
     # 2026-07-05, if/elif/else con f-strings largos) empujó `_severity_max` a offset ~4282; contrato intacto.
-    region = src[idx: idx + 4600]
+    #
+    # [P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] La ventana deja de contarse en CHARS. Iba por su
+    # tercera caducidad —tres comentarios distintos la han desbordado sin que el contrato cambiara
+    # ni una vez— y cada ampliación solo compra tiempo hasta el siguiente comentario. El límite
+    # pasa a ser ESTRUCTURAL: desde el gate hasta el final de su función (el próximo `def` a nivel
+    # de módulo). Un comentario ya no puede romperlo; mover el gate de función, sí — y eso SÍ es un
+    # cambio de contrato que merece fallar.
+    _fin = src.find("\ndef ", idx)
+    assert _fin > idx, "No se encontró el final de la función que contiene el gate."
+    region = src[idx:_fin]
     assert "compute_clinical_band_score(plan" in region
     assert "BAND_RETRY_THRESHOLD" in region
     assert "_severity_max(severity, \"high\")" in region
