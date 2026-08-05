@@ -8869,6 +8869,26 @@ def api_regenerate_day(
             "day_index": day_index,
             "meals_regenerated": regenerated,
             "slots_kept": slots_kept,
+            # [P1-KEPT-REASON-HONEST · 2026-08-05] POR QUÉ se conservaron esos slots.
+            #
+            # `P2-REGEN-DAY-HONEST-CODE` (2026-07-10) ya clasificaba la causa real —Nevera vs
+            # guardrail del LLM— pero SOLO en la rama donde no se regeneró NADA. En la rama
+            # PARCIAL (algunos platos sí cambiaron, otros no) el backend mandaba únicamente los
+            # nombres y el cliente rellenaba el motivo a mano, siempre el mismo: «tu Nevera no
+            # daba para cambiarlos». Medido en producción el 2026-08-05: 26 de 28 reintentos
+            # fueron `guardrail_rejection` (macros fuera de banda) y ninguno de despensa, con la
+            # Nevera llena — o sea el aviso mandaba al usuario a comprar comida para arreglar un
+            # problema de porciones. Es el MISMO daño que aquel P-fix documentó ("erosiona
+            # confianza, visto en vivo con Nevera llena"), en la rama que se quedó fuera.
+            #
+            # Mismo criterio, misma fuente (`_kept_reasons`): 'pantry' solo si algún slot falló
+            # por inventario; si no, 'ai'. `None` cuando no se conservó ninguno.
+            "slots_kept_reason": (
+                ("pantry" if any(
+                    ("SWAP_STRICT_PANTRY_NO_INVENTORY" in _r) or ("ERRORES DE DESPENSA" in _r)
+                    for _r in _kept_reasons
+                ) else "ai") if slots_kept else None
+            ),
             # [P2-REGEN-DAY-BAND-SCORE] precisión de macros del día (telemetría; null si falló el cálculo).
             "band_score": _band_score,
             # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
