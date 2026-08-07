@@ -335,8 +335,12 @@ def _remote_post(api_base, path, payload, timeout_s, max_429_retries=4):
             continue
         if r.status_code >= 400:
             # El body lleva el `detail` de FastAPI — sin él un 4xx/5xx es indiagnosticable
-            # desde fuera (lección smoke 2026-08-07: tres 500 mudos).
-            raise RuntimeError(f"HTTP {r.status_code} en {path}: {r.text[:400]}")
+            # desde fuera (lección smoke 2026-08-07: tres 500 mudos). El header
+            # X-Bioboros-Review-Diag (P1-LANDING-BENCH-2) trae las razones del rechazo
+            # crítico que el detail-string no puede llevar.
+            _diag = r.headers.get("x-bioboros-review-diag")
+            _diag_sfx = f" | diag: {_diag[:1200]}" if _diag else ""
+            raise RuntimeError(f"HTTP {r.status_code} en {path}: {r.text[:400]}{_diag_sfx}")
         return r.json()
     raise RuntimeError(f"rate-limit persistente en {path} tras {max_429_retries} reintentos")
 
@@ -409,12 +413,14 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s):
     return row
 
 
-def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s):
+def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, ids=None):
     from concurrent.futures import ThreadPoolExecutor
     from plan_gym import aggregate_scores
 
     profiles = build_landing_profiles()
-    if n:
+    if ids:
+        profiles = [p for p in profiles if p["_id"] in ids]
+    elif n:
         profiles = profiles[:n]
     # conc default 1: el /analyze de un guest comparte RateLimiter por IP (3/60s);
     # con generaciones de minutos, 1-2 en vuelo no lo rozan pero >2 sí al arrancar.
@@ -546,6 +552,8 @@ def main():
     ap.add_argument("--provider", choices=("default", "openai"), default="default",
                     help="live: openai fuerza toda la corrida a gpt-5.6 (cero DeepSeek)")
     ap.add_argument("--api-base", help="remote: URL base del API desplegado (p.ej. https://app.bioboros.com)")
+    ap.add_argument("--ids", help="remote: perfiles específicos por id, p.ej. '3,9,10,13,15' "
+                                  "(los clínicos; gana sobre el N posicional)")
     ap.add_argument("--timeout", type=int, default=1200, help="remote: timeout por plan en segundos")
     ap.add_argument("--days", type=int, default=30, help="telemetry: ventana en días")
     ap.add_argument("--plans", help="score: JSON de una corrida live/remote --save-plans")
@@ -566,8 +574,9 @@ def main():
         if not args.api_base:
             ap.error("--api-base es obligatorio en modo remote")
         save_path = f"landing_plans_{os.getpid()}.json" if args.save_plans else None
+        _ids = {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
         sections = _remote_sections(args.api_base, args.n, max(1, args.conc or 1),
-                                    args.changes, save_path, args.timeout)
+                                    args.changes, save_path, args.timeout, ids=_ids)
         if save_path:
             print(f"planes crudos: {save_path}")
     elif args.mode == "telemetry":

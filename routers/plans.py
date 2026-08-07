@@ -3338,7 +3338,24 @@ def api_analyze(
                 logger.warning(
                     f"🛑 [FALLBACK-GUARD] Rechazo crítico (restricción declarada). Devolviendo 422 sin "
                     f"persistir. user={actual_user_id or 'guest'}")
-                raise HTTPException(status_code=422, detail=_crit_msg)
+                # [P1-LANDING-BENCH-2 · 2026-08-07] Diagnóstico del rechazo en un HEADER, no en el
+                # detail: el frontend identifica critical_restriction por `typeof detail === 'string'`
+                # (P2-CRITICAL-REJECTION-CODE) — cambiar la forma del detail lo rompería. Las razones
+                # (`_review_issues`) se logueaban server-side y se DESCARTABAN del response; la corrida
+                # n=20 del benchmark (2026-08-07, 13/20 rechazos críticos, issue #9) quedó ciega por
+                # eso. Son datos del PROPIO plan del solicitante (sin UUIDs ni cross-user); ASCII-safe
+                # (headers son latin-1) y truncado. tooltip-anchor: P1-LANDING-BENCH-2
+                _diag_headers = None
+                try:
+                    import json as _diag_json
+                    _issues = [str(i)[:160] for i in (result.get("_review_issues") or [])[:5]]
+                    _diag = _diag_json.dumps(
+                        {"fallback_reason": result.get("_fallback_reason"), "review_issues": _issues},
+                        ensure_ascii=True)[:3000]
+                    _diag_headers = {"X-Bioboros-Review-Diag": _diag}
+                except Exception:
+                    pass
+                raise HTTPException(status_code=422, detail=_crit_msg, headers=_diag_headers)
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Distinguir spending-cap (persistente)
             # de saturación transitoria: el mensaje "intenta en 1-2 min" es FALSO
             # cuando el cap mensual de Gemini está agotado (reintentar no ayuda).
