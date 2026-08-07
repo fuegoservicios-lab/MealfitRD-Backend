@@ -85,6 +85,11 @@ jobs:
             tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # El JSON al LOG (no solo al artifact): el sandbox que orquesta esto no
+          # alcanza el blob storage de artifacts — el log del job sí es legible vía API.
+          echo "== JSON (primeros 6000 bytes) =="
+          head -c 6000 landing_benchmark_remote.json 2>/dev/null || true
+          echo ""
       - name: Publicar reporte como artifact
         if: always()
         uses: actions/upload-artifact@v4
