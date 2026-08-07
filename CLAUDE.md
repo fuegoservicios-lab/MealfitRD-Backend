@@ -300,6 +300,8 @@ Override emite `WARN [P0-AGENT-1]` con `tool=/llm_user_id=/trusted=` para identi
 
 [P1-CULINARY-CONTRACT] Coherencia culinaria determinista: metadata en master_ingredients + scan V1/V2/V3 en review/finalize/degradado (warn). Doc: backend/docs/culinary_coherence.md. Test test_p1_culinary_contract.py.
 
+[P1-PANTRY-NAME-RESOLUTION] La identidad de una fila de la Nevera se decide SOLO en `constants.pantry_names_match` (case/acentos/cantidad/plural, por token completo). **No la reimplementes sobre `GLOBAL_REVERSE_MAP`**: ese mapa colapsa `pechuga`→`pollo` a propósito, así que comerte una pechuga descontaría del muslo. Los 4 call sites resolvían por igualdad exacta y `"2 huevos"` contra la fila `Huevo` devolvía **éxito sin descontar, sin fila en `failed_inventory_deductions` y sin alerta**. Doc: backend/docs/pantry_name_resolution.md. Test test_p1_pantry_name_resolution.py.
+
 ---
 
 ## Anti-patrones de autenticación prohibidos

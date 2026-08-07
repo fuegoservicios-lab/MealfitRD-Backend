@@ -700,6 +700,27 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                     f"llamar log_consumed_meal con la cantidad incluida en el string "
                     f"del ingrediente."
                 )
+            # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Distinto del bloque de
+            # arriba: acá la cantidad SÍ se entendió, lo que no existe es la
+            # fila en la nevera. Pre-fix esto ni se distinguía de un descuento
+            # exitoso, así que el coach afirmaba haber actualizado la nevera
+            # cuando no la había tocado. Decirlo es lo que la hace sólida: el
+            # usuario descubre que ese alimento no lo tiene registrado.
+            absent = deduct_summary.get("not_in_pantry") or []
+            if absent:
+                preview_abs = absent[:5]
+                more_abs = len(absent) - len(preview_abs)
+                abs_str = ", ".join(f"'{x}'" for x in preview_abs)
+                if more_abs > 0:
+                    abs_str += f" (+{more_abs} más)"
+                msg += (
+                    f"\n\nℹ️ Aviso para el asistente: {len(absent)} ingrediente(s) "
+                    f"NO estaban en la nevera del usuario, así que el consumo quedó "
+                    f"registrado pero la nevera no bajó por ellos: {abs_str}. NO le "
+                    f"digas que los descontaste. Si viene al caso, coméntale que no "
+                    f"los tiene registrados y ofrécele agregarlos "
+                    f"(modify_pantry_inventory)."
+                )
         return msg
     else:
         return "Hubo un error al intentar registrar la comida consumida. Por favor, intenta de nuevo."

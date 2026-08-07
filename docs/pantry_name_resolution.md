@@ -1,0 +1,212 @@
+# Resolución de filas de la Nevera
+
+[P1-PANTRY-NAME-RESOLUTION · 2026-08-07]
+
+Doc canónica de **cómo se decide qué fila de `user_inventory` corresponde a un
+nombre de alimento suelto**. Es la base sobre la que se apoya "la nevera solo
+baja por lo que el usuario registra": sin resolución fiable, conectar más
+superficies de consumo solo multiplica los descuentos fantasma.
+
+---
+
+## El incidente
+
+Reproducido contra la nevera real del dueño (43 items; la fila dice `Huevo`):
+
+```
+coach registra "2 huevos"
+  → _parse_quantity            → name = "Huevos"
+  → WHERE ingredient_name = 'Huevos'        → 0 filas
+  → quantity = -2
+      · no entra al INSERT       (exige quantity >= 0.01)
+      · no entra al guard de unidad incompatible (exige existing_rows no vacío)
+  → return True                             ← MIENTE
+```
+
+Consecuencias encadenadas, todas silenciosas:
+
+| Capa | Qué debió pasar | Qué pasaba |
+|---|---|---|
+| `user_inventory` | 3 huevos → 1 | queda en 3 |
+| `failed_inventory_deductions` | fila para reintento | nada |
+| cron de backlog | alerta | nada que alertar |
+| `ToolMessage` al coach | "no pude descontar" | "¡Éxito!" |
+| Usuario | ve la nevera bajar | ve 3 huevos para siempre |
+
+Un descuento que falla es diagnosticable. Uno que **falla reportando éxito** no:
+no deja rastro en ninguna de las tres capas de observabilidad que el repo ya
+tenía montadas para exactamente este problema.
+
+Familia conocida: `P1-SWAP-PANTRY-PLURAL` (2026-08-05) cerró el MISMO plural en
+el reparador de coherencia (`"huevos" in "huevo"` es `False` porque el plural es
+más largo) y dejó abierto el lado del inventario.
+
+---
+
+## La escalera
+
+SSOT del criterio: [`constants.py`](../constants.py) →
+`canonical_pantry_key` + `pantry_names_match`
+(tooltip-anchor `P1-PANTRY-NAME-RESOLUTION-SSOT`).
+
+SSOT del acceso a datos: [`db_inventory.py`](../db_inventory.py) →
+`find_pantry_rows_for_name`
+(tooltip-anchor `P1-PANTRY-NAME-RESOLUTION-RESOLVER`).
+
+| # | Peldaño | Qué tolera | Coste |
+|---|---|---|---|
+| 1 | `exact` | nada — igualdad de string | 1 query indexada |
+| 2 | `canonical` | case, acentos, espacios, cantidad al inicio, singular/plural | 1 query por usuario (~45 filas), comparación en memoria |
+| — | `none` | — | no hay fila: el caller decide qué reportar |
+
+El peldaño 2 solo corre si el 1 falla. No se puede indexar sin una columna
+generada, y eso es DDL: iría a `migrations/`, no a un fix de comportamiento.
+
+### Equivalencia singular/plural
+
+`_pantry_token_variants` devuelve un **conjunto** de formas singulares
+plausibles por token, no una sola. El español no permite decidir sin lexicón si
+`-nes` viene de `-n` o de `-ne`:
+
+- `limones` → limón (quitar `-es`)
+- `carnes` → carne (quitar `-s`)
+
+Emitir ambas y exigir intersección acierta en los dos casos. Forzar una sola
+regla inventa un fallo en el otro. Las formas de más no crean falsos positivos
+porque el match sigue siendo **token a token y con el mismo número de tokens**.
+
+Tokens de menos de 4 letras no se singularizan nunca: es la disciplina de
+`P1-SWAP-PANTRY-PLURAL` — `res`, `sal`, `ajo`, `mas` son palabras completas.
+(`reses` y `sales` sí resuelven a `res`/`sal`: es la palabra LARGA la que se
+singulariza, nunca la corta.)
+
+---
+
+## Lo que el matcher NO hace, y por qué
+
+> ⚠️ **No conviertas esto en un cuarto consumidor de `GLOBAL_REVERSE_MAP`.**
+
+`normalize_ingredient_for_tracking` colapsa **sinónimos**: `pechuga`→`pollo`,
+`muslo`→`pollo`, `lomo`→`cerdo`. Eso es correcto para tracking de frecuencia y
+para el guard de coherencia recetas↔lista, y catastrófico acá:
+
+- comerte una pechuga descontaría de la fila `Muslo de pollo`
+- la Nevera fusionaría dos alimentos que el usuario compró por separado, con
+  precio y unidad distintos
+
+La identidad de una fila física es **ortogonal** al parentesco nutricional.
+`test_p1_pantry_name_resolution.py::test_does_not_reuse_the_synonym_normalizer`
+falla si alguien "simplifica" delegando en el mapa de sinónimos.
+
+Tampoco matchea:
+
+| No matchea | Por qué |
+|---|---|
+| `Arroz integral` ↔ `Arroz` | compras distintas, precio y unidad distintos |
+| `Leche de coco` ↔ `Leche` | alimentos distintos |
+| `Pollo` ↔ `Repollo`, `Sal` ↔ `Salsa`, `Res` ↔ `Fresco` | los casos trampa de `P1-SWAP-PANTRY-PLURAL`: jamás por subcadena |
+| `Guineo` ↔ `Plátano` | en RD son alimentos distintos (`P2-VISION-GUINEO-PLATANO`) |
+
+**Regla de diseño:** ante la duda, NO matchear. Un no-match degrada a "no está
+en tu nevera" — visible y seguro. Un match de más descuenta del alimento
+equivocado — silencioso y corrupto.
+
+---
+
+## Call sites
+
+Los cuatro sitios que resolvían filas tenían su propia copia del `WHERE
+ingredient_name = %s` exacto, así que el mismo plural rompía los cuatro por
+separado.
+
+| Función | Qué se perdía pre-fix |
+|---|---|
+| `add_or_update_inventory_item` | el descuento del consumo (el incidente) |
+| `_consume_reserved_inventory` | la reserva del plan quedaba colgada tras consumir |
+| `_apply_reservation_delta` | la reserva no se creaba → `get_user_inventory_net` reportaba más disponible del real |
+| `deduct_consumed_meal_from_inventory` | clasificaba la ausencia como éxito |
+
+Cuando el match es canónico, **la ortografía de la nevera gana**: el resto de la
+función (lookup en `master_ingredients`, refresh de `brand`, INSERT de fallback)
+opera sobre el nombre que el usuario tiene, no sobre el que emitió la LLM. Sin
+eso, el INSERT de fallback crearía justo la fila duplicada que se quiere evitar.
+
+`reserve_plan_ingredients` pasa el lote completo del batch fetch en vez del dict
+`rows_by_name` indexado por nombre exacto — ese índice heredaba el mismo punto
+ciego que el SELECT que evitaba.
+
+---
+
+## `not_in_pantry`: la cuarta categoría
+
+`deduct_consumed_meal_from_inventory` devuelve:
+
+```python
+{"succeeded": [...], "inferred": [...], "failed_to_deduct": [...], "not_in_pantry": [...]}
+```
+
+`not_in_pantry` es nueva. Pre-fix la ausencia y la deducción real caían **ambas**
+en `succeeded`, así que el resumen decía "descontados 4 items" con la nevera
+intacta.
+
+**No se enruta a `failed_inventory_deductions`** a propósito: esa cola es de
+fallos REINTENTABLES y su cron reintenta hasta dead-letter. Un item que no existe
+en la nevera no mejora reintentándolo — solo gasta ticks y ensucia la alerta de
+backlog (`failed_inventory_deductions_backlog`).
+
+`tools.log_consumed_meal` lo expone en el `ToolMessage` para que el coach diga
+"no los tenías registrados" en vez de afirmar que descontó.
+
+### Presencia: un solo snapshot por comida
+
+La clasificación usa **un** fetch de la nevera para todos los ingredientes de la
+comida. Resolver item por item habría sumado 1-2 SELECT por ingrediente encima de
+los que ya hacen `_consume_reserved_inventory` y `add_or_update_inventory_item`
+(comida de 5 ingredientes: 30 queries en vez de 10).
+
+El snapshot se usa **solo** para el sí/no de presencia. La aritmética de
+cantidades sigue leyendo filas frescas dentro de `add_or_update_inventory_item`:
+reutilizar cantidades del snapshot reabriría la ventana de lost-update que `P0-4`
+cerró con la RPC `apply_inventory_delta`.
+
+Si el snapshot falla, **no** se clasifica nada como ausente (eso sería la mentira
+que este fix elimina): degrada a resolución per-item.
+
+---
+
+## Knob
+
+| Knob | Default | Efecto |
+|---|---|---|
+| `MEALFIT_PANTRY_CANONICAL_MATCH` | `True` | A `False` desactiva el peldaño 2 y vuelve al comportamiento exact-only, sin redeploy. El peldaño 1 y la clasificación `not_in_pantry` siguen activos. |
+
+---
+
+## Cómo verificar
+
+```bash
+pytest backend/tests/test_p1_pantry_name_resolution.py -v
+```
+
+48 casos: el matcher (plurales sí / sinónimos y subcadenas no / simetría), la
+escalera del resolver, la clasificación `not_in_pantry`, el knob de rollback, y
+anclajes parser-based que hacen fallar el test si algún call site vuelve a
+resolver por igualdad exacta o si el `ToolMessage` deja de reportar las ausencias.
+
+---
+
+## Lo que este P-fix NO resuelve
+
+- **La foto no descuenta.** `ScanMealModal` → `POST /api/diary/consumed` no
+  acepta `ingredients` (`ConsumedMealRequest` no tiene el campo, y
+  `extra: "ignore"` lo descartaría). El scan registra macros y no toca la nevera.
+- **"Deshacer registro" no devuelve la comida a la nevera.**
+  `DELETE /api/diary/consumed/{meal_id}` borra la fila del diario; el descuento
+  ya aplicado no se revierte. Necesita un ledger de eventos de consumo.
+- **Deriva por no registrar.** Lo que el usuario come sin registrar nunca sale
+  de la nevera. Mitigación propuesta sin romper la regla "solo acciones del
+  usuario reducen": reconciliación periódica que PREGUNTA (usa el
+  `shelf_life` de `_infer_shelf_life_days`), no descuento automático.
+- **Cantidades inferidas siguen aplicándose sin marcar.**
+  `_infer_typical_portion` adivina 50 g / 1 unidad y lo aplica; el usuario no
+  puede distinguir números reales de adivinados.

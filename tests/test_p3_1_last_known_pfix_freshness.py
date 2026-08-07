@@ -41,7 +41,13 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 2)  # [P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta
+_PFIX_DATE_FLOOR = date(2026, 8, 7)  # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] la Nevera
+# descontaba fantasmas: los 4 sitios que resolvían fila de `user_inventory` usaban igualdad
+# EXACTA de string, así que "2 huevos" contra la fila "Huevo" devolvía éxito sin descontar,
+# sin fila en `failed_inventory_deductions` y sin alerta. Escalera SSOT
+# `constants.pantry_names_match` (case/acentos/plural, NUNCA sinónimos) + categoría
+# `not_in_pantry` para que la ausencia real deje de contarse como éxito.
+# Histórico — floor previo [P1-PANTRY-STRICT-CONSENT · 2026-08-02] "Nevera estricta
 # + consentimiento": tras la compra inicial, swap/fix-sodium-day cocinan SOLO de la Nevera
 # FÍSICA real (`user_inventory` quantity>0), no del plan — cierra el leak donde `clean_ingredients`
 # se construía con `get_realtime_pantry(plan_data)` (acumulativo de TODOS los días, incluidos

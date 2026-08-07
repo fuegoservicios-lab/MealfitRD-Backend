@@ -74,27 +74,52 @@ def test_retries_still_refetch(db_inv_src: str):
 
     [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el SELECT fresh viaja por
     `execute_sql_query(... FROM user_inventory ...)` en lugar del builder
-    PostgREST legacy."""
+    PostgREST legacy.
+
+    [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Re-anclado otra vez: el SELECT
+    fresh ya no se escribe inline, lo emite `find_pantry_rows_for_name` (el
+    SSOT de resolución de fila, que antes era un `WHERE ingredient_name = %s`
+    exacto y perdía la fila por plural). La INVARIANTE que este test protege
+    NO cambió — retries re-consultan la DB y jamás reutilizan `prefetched_rows`
+    stale — solo cambió quién emite la query."""
     body = _extract_fn_body(db_inv_src, "_apply_reservation_delta")
     # El else-branch del check `attempt == 0 and prefetched_rows is not None`
-    # debe contener el SELECT fresh.
+    # debe re-resolver contra la DB (sin pasarle el prefetch stale).
     assert re.search(
-        r"else:\s*\n[\s\S]{0,200}execute_sql_query\([\s\S]{0,300}FROM user_inventory",
+        r"else:\s*\n\s*rows, _ = find_pantry_rows_for_name\(user_id, ingredient_name\)",
         body,
     ), (
-        "P1-N1-RESERVATION-DELTA: el else-branch (retries) ya no hace SELECT "
+        "P1-N1-RESERVATION-DELTA: el else-branch (retries) ya no re-consulta "
         "fresh — usar prefetched stale en retries podría perder mutaciones "
-        "concurrentes detectadas via CAS."
+        "concurrentes detectadas via CAS. Si mueves la query, el reemplazo "
+        "debe seguir SIN recibir `prefetched_rows`."
+    )
+    assert "prefetched_rows" not in body.split("else:")[-1][:200], (
+        "el branch de retry no debe volver a pasar el prefetch stale."
     )
 
 
 def test_reserve_plan_does_batch_fetch(db_inv_src: str):
-    """`reserve_plan_ingredients` debe hacer un SELECT al inicio agrupando
-    por `ingredient_name`."""
+    """`reserve_plan_ingredients` debe hacer UN SELECT batch al inicio.
+
+    [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Antes este test exigía el dict
+    `rows_by_name`, indexado por `ingredient_name` EXACTO. Ese índice era
+    justamente el punto ciego: la nevera dice "Huevo", el plan pide "huevos",
+    `rows_by_name.get("Huevos")` → None → el prefetch no servía de nada y la
+    reserva se perdía. Hoy se pasa el lote COMPLETO a
+    `find_pantry_rows_for_name`, que aplica la escalera (exacto → canónico)
+    en memoria. La invariante que este test protege es la del P1-N1 original
+    —un solo roundtrip para todo el plan, no uno por ingrediente— y sigue viva.
+    """
     body = _extract_fn_body(db_inv_src, "reserve_plan_ingredients")
-    assert "rows_by_name" in body, (
-        "P1-N1-RESERVATION-DELTA: el diccionario `rows_by_name` (batch index "
-        "por ingredient_name) no aparece."
+    assert "batch_rows" in body, (
+        "P1-N1-RESERVATION-DELTA: el batch fetch upfront (`batch_rows`) no "
+        "aparece — sin él vuelve el N+1 de un SELECT por ingrediente."
+    )
+    assert "rows_by_name" not in body, (
+        "P1-PANTRY-NAME-RESOLUTION: el índice por `ingredient_name` exacto "
+        "volvió. Ese dict re-introduce el punto ciego por plural: pasa el "
+        "lote completo a `find_pantry_rows_for_name` en su lugar."
     )
     # [P1-NEON-DB-MIGRATION · 2026-06-12] El SELECT batch va por
     # execute_sql_query (SQL directo), no por el builder PostgREST legacy.

@@ -110,11 +110,17 @@ class _FakeCasStore:
         assert "FROM user_inventory" in sql, f"SELECT inesperado: {sql!r}"
         assert "user_id = %s" in sql, "el SELECT debe filtrar por user_id"
         self.select_calls += 1
-        user_id, ingredient = params[0], params[1]
-        return [
-            dict(r) for r in self._rows
-            if r.get("user_id") == user_id and r.get("ingredient_name") == ingredient
-        ]
+        # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] `find_pantry_rows_for_name`
+        # emite DOS formas: el peldaño exacto `(user_id, ingredient_name)` y,
+        # cuando ese falla, el canónico `(user_id,)` que trae la nevera entera
+        # para comparar por case/acentos/plural en memoria. El fake asumía
+        # siempre 2 params y reventaba con IndexError en el segundo.
+        user_id = params[0]
+        rows = [dict(r) for r in self._rows if r.get("user_id") == user_id]
+        if len(params) < 2:
+            return rows
+        ingredient = params[1]
+        return [r for r in rows if r.get("ingredient_name") == ingredient]
 
     def fake_write(self, sql, params=None, returning=False):
         if self.before_write is not None:
