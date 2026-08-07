@@ -65,7 +65,11 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.inventory_consumption_events (
     id                BIGSERIAL PRIMARY KEY,
-    user_id           UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    -- `public.user_profiles`, NO `auth.users`: el schema `auth` es de Supabase y
+    -- no existe en Neon (ver el bloque "SIN RLS" abajo — mismo error, misma
+    -- causa). Es la convención de las tablas user-scoped nacidas ya en Neon,
+    -- p.ej. `user_taste_events` (2026-07-02).
+    user_id           UUID NOT NULL REFERENCES public.user_profiles(id) ON DELETE CASCADE,
     -- Sin FK a consumed_meals — ver DISEÑO.
     consumed_meal_id  UUID NULL,
     source            TEXT NOT NULL,
@@ -112,18 +116,30 @@ CREATE INDEX IF NOT EXISTS idx_ice_consumed_meal_pending
 CREATE INDEX IF NOT EXISTS idx_ice_user_created_at_desc
     ON public.inventory_consumption_events (user_id, created_at DESC);
 
--- RLS owner-only. El backend escribe con service role (bypassea RLS); estas
--- policies son la defensa si algún día se lee desde el cliente.
-ALTER TABLE public.inventory_consumption_events ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "ice_select_own" ON public.inventory_consumption_events;
-CREATE POLICY "ice_select_own" ON public.inventory_consumption_events
-    FOR SELECT TO authenticated
-    USING ((select auth.uid()) = user_id);
-
--- Sin policies de INSERT/UPDATE/DELETE para `authenticated` a propósito: un
--- ledger que el cliente puede escribir o borrar no prueba nada. Solo el
--- backend (service role) lo muta.
+-- SIN RLS, y no es un olvido.
+--
+-- La primera versión de esta migración traía `ENABLE ROW LEVEL SECURITY` + una
+-- policy `USING ((select auth.uid()) = user_id)`, copiada de las migraciones
+-- viejas del repo. Reventó al aplicarse:
+--
+--     psycopg.errors.InvalidSchemaName: schema "auth" does not exist
+--
+-- `auth.uid()` y el rol `authenticated` son construcciones de **Supabase**, que
+-- este repo eliminó por completo en P1-NEON-DB-MIGRATION (2026-06-12). En Neon
+-- no existe ese schema, así que la policy no protegía nada: hacía la migración
+-- IMPOSIBLE de aplicar, y como todo va dentro de BEGIN/COMMIT, tumbaba la tabla
+-- entera con ella.
+--
+-- Y aunque el schema existiera, la policy sobraría. RLS defiende contra un
+-- cliente que abre conexión a la base; en esta arquitectura no hay ninguno:
+-- PostgREST está prohibido (CLAUDE.md), el backend habla por `execute_sql_*` y
+-- el frontend va por endpoints de `routers/user_data.py`. La frontera de
+-- seguridad de este ledger es el `AND user_id = %s` de la invariante I2, igual
+-- que en las otras tablas user-scoped nacidas ya en Neon — `user_taste_events`
+-- (2026-07-02) y `ai_training_consent` (2026-07-04) tampoco llevan RLS.
+--
+-- Si algún día se expone lectura directa desde el cliente, ESE es el momento de
+-- añadir RLS, con el mecanismo de identidad que exista entonces.
 
 DO $$
 BEGIN
@@ -132,12 +148,6 @@ BEGIN
         WHERE table_schema = 'public' AND table_name = 'inventory_consumption_events'
     ) THEN
         RAISE EXCEPTION 'P1-CONSUMPTION-LEDGER sanity: tabla NO se creó';
-    END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_class c
-        WHERE c.relname = 'inventory_consumption_events' AND c.relrowsecurity = true
-    ) THEN
-        RAISE EXCEPTION 'P1-CONSUMPTION-LEDGER sanity: RLS no enabled';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_indexes

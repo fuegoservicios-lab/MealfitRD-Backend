@@ -67,15 +67,70 @@ def test_migration_constrains_outcome_and_positive_quantity():
 
 
 def test_migration_does_not_let_the_client_write_the_ledger():
-    """Un ledger que el cliente puede escribir o borrar no prueba nada."""
+    """Un ledger que el cliente puede escribir o borrar no prueba nada.
+
+    [corregido 2026-08-07] Este test EXIGÍA `ENABLE ROW LEVEL SECURITY` + una
+    policy con `auth.uid()`. Pasaba en verde y la migración era imposible de
+    aplicar: `auth` es un schema de Supabase, eliminado en P1-NEON-DB-MIGRATION.
+    Al correrla contra Neon: `InvalidSchemaName: schema "auth" does not exist`.
+
+    Un test parser-based que exige sintaxis muerta es peor que no tenerlo:
+    da confianza sin verificar nada. Lo que de verdad impide que el cliente
+    escriba el ledger en esta arquitectura NO es RLS — es que el cliente no abre
+    conexión a la base (PostgREST prohibido; el frontend va por endpoints). Así
+    que el contrato pasa a ser: la migración no le concede NADA a un rol
+    client-facing, ni invoca identidad que no existe.
+    """
     sql = _MIGRATION.read_text(encoding="utf-8")
-    assert "ENABLE ROW LEVEL SECURITY" in sql
-    assert re.search(r'CREATE POLICY "ice_select_own"', sql)
+    # Sin comentarios: la migración CITA el error que la rompía para que nadie
+    # lo reintroduzca, y ese texto no debe disparar el propio assert.
+    sql = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
+    # `auth.` a secas, no solo `auth.uid()`: la primera corrección arregló la
+    # policy y dejó viva `REFERENCES auth.users(id)`, que falla idéntico.
+    for muerto in ("auth.", "TO authenticated", "TO anon"):
+        assert muerto not in sql, (
+            f"`{muerto}` es de Supabase; en Neon no existe y hace que la "
+            f"migración falle al aplicarse (schema \"auth\" does not exist)."
+        )
     for verbo in ("FOR INSERT", "FOR UPDATE", "FOR DELETE"):
         assert verbo not in sql, (
-            f"apareció una policy {verbo} para `authenticated` — solo el "
-            f"backend (service role) debe mutar el ledger."
+            f"apareció una policy {verbo} — solo el backend muta el ledger."
         )
+    assert "GRANT" not in sql, (
+        "un GRANT a un rol client-facing abriría el ledger a escritura directa."
+    )
+
+
+def test_no_post_neon_migration_resurrects_the_supabase_auth_schema():
+    """El bug de arriba es de CLASE, no de este archivo.
+
+    Cualquier migración nueva escrita copiando una vieja arrastra `auth.uid()` y
+    revienta igual — y como el fallo aparece recién al APLICARLA en producción,
+    nadie se entera hasta ese momento. Alcance: solo migraciones fechadas
+    2026-06-12 o después (el corte de P1-NEON-DB-MIGRATION). Las anteriores son
+    historia de la era Supabase y se dejan como están.
+    """
+    corte = (2026, 6, 12)
+    culpables = []
+    for f in sorted(_MIGRATION.parent.glob("*.sql")):
+        m = re.search(r"_(\d{4})_(\d{2})_(\d{2})\.sql$", f.name)
+        if not m:
+            continue  # sin fecha en el nombre => pre-convención, pre-Neon
+        if tuple(int(g) for g in m.groups()) < corte:
+            continue
+        cuerpo = f.read_text(encoding="utf-8")
+        # Ignorar comentarios: esta misma migración EXPLICA el error citándolo.
+        codigo = "\n".join(l for l in cuerpo.splitlines()
+                           if not l.strip().startswith("--"))
+        # `auth.` cubre las DOS formas que rompieron esta migración: la policy
+        # (`auth.uid()`) y el foreign key (`REFERENCES auth.users(id)`).
+        if "auth." in codigo or "TO authenticated" in codigo:
+            culpables.append(f.name)
+
+    assert not culpables, (
+        "migraciones post-Neon que invocan el schema `auth` de Supabase "
+        f"(no existe en Neon; fallan al aplicarse): {culpables}"
+    )
 
 
 # ---------------------------------------------------------------------------
