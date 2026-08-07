@@ -651,7 +651,14 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # gate, la 2ª emisión saltaba el INSERT (calorías OK) pero corría la
     # deducción de nuevo → la nevera se descontaba AL DOBLE del consumo real.
     if has_ingredients and result != "deduped":
-        deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
+        # [P1-CONSUMPTION-LEDGER · 2026-08-07] `result` es el id de la fila
+        # recien insertada en `consumed_meals` — atarlo aqui es lo que permite
+        # que "Deshacer registro" devuelva despues esta comida a la Nevera.
+        deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(
+            user_id, ingredients,
+            consumed_meal_id=(result if isinstance(result, str) and result != "deduped" else None),
+            source="chat",
+        )
 
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")

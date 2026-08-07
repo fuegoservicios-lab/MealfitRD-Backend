@@ -1953,7 +1953,157 @@ def _infer_typical_portion(name: str) -> Optional[tuple]:
     return (50.0, "g")
 
 
-def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str]):
+# ============================================================
+# [P1-CONSUMPTION-LEDGER · 2026-08-07] Descuentos reversibles
+# ============================================================
+# `DELETE /api/diary/consumed/{meal_id}` borraba la fila del diario y dejaba la
+# Nevera descontada. Devolver la comida exige saber QUÉ se descontó, y eso se
+# perdía al aplicar el delta: el string original ("2 huevos") no basta porque
+# la resolución de nombre (P1-PANTRY-NAME-RESOLUTION) pudo mapearlo a la fila
+# "Huevo" y la inferencia de porción (P1-PANTRY-INFER) pudo inventar la
+# cantidad. Re-parsear al revertir repetiría ambas decisiones y podría llegar a
+# otra respuesta — devolviendo una cantidad distinta de la que se quitó.
+#
+# El ledger guarda el nombre YA RESUELTO y la cantidad YA APLICADA. Revertir es
+# leer y sumar, no volver a interpretar.
+#
+# Tooltip-anchor: P1-CONSUMPTION-LEDGER-ENGINE
+
+# Solo estos movieron la Nevera. `not_in_pantry` y `failed` no tocaron nada:
+# devolverlos CREARÍA comida que el usuario nunca tuvo.
+_REVERSIBLE_OUTCOMES = ("deducted", "inferred")
+
+
+def _persist_consumption_events(
+    user_id: str,
+    consumed_meal_id: Optional[str],
+    source: str,
+    events: List[Dict[str, Any]],
+) -> int:
+    """Escribe los eventos del ledger en UN solo INSERT. Best-effort.
+
+    Devuelve cuántos se escribieron (0 si no había o si falló). NO propaga:
+    el descuento ya ocurrió y hacer fallar al caller por un problema de
+    auditoría le costaría al usuario el registro calórico entero.
+    """
+    if not _db_available() or not user_id or not events:
+        return 0
+    try:
+        values, params = [], []
+        for e in events:
+            try:
+                qty = float(e.get("qty") or 0)
+            except (TypeError, ValueError):
+                continue
+            # El CHECK de la tabla exige quantity > 0: el signo lo pone la
+            # operación, no el evento.
+            if qty <= 0 or not e.get("name"):
+                continue
+            values.append("(%s, %s, %s, %s, %s, %s, %s)")
+            params.extend([
+                user_id,
+                consumed_meal_id,
+                str(source or "unknown")[:32],
+                str(e["name"])[:120],
+                round(qty, 4),
+                str(e.get("unit") or "unidad")[:32],
+                str(e.get("outcome") or "failed")[:32],
+            ])
+        if not values:
+            return 0
+        execute_sql_write(
+            "INSERT INTO inventory_consumption_events "
+            "(user_id, consumed_meal_id, source, ingredient_name, quantity, unit, outcome) "
+            "VALUES " + ", ".join(values),
+            tuple(params),
+        )
+        return len(values)
+    except Exception as e:
+        logger.warning(
+            f"[P1-CONSUMPTION-LEDGER] no se pudo persistir el rastro de "
+            f"{len(events)} evento(s) para meal={consumed_meal_id} "
+            f"({type(e).__name__}). El descuento SÍ se aplicó; lo que se pierde "
+            f"es poder deshacerlo automáticamente."
+        )
+        return 0
+
+
+def revert_consumption_events(user_id: str, consumed_meal_id: str) -> Dict[str, Any]:
+    """Devuelve a la Nevera lo que un registro de diario había descontado.
+
+    Idempotente vía `reverted_at`: un segundo DELETE del mismo meal no vuelve a
+    sumar. Filtra `AND user_id = %s` (invariante I2) — un `meal_id` ajeno,
+    adivinado o enumerado, no toca nada.
+
+    Se marcan como revertidos ANTES de sumar, no después: si el proceso muere a
+    mitad, el modo de fallo es "no devolví todo" (la Nevera queda baja, el
+    usuario lo ve y puede corregir a mano) en vez de "devolví dos veces" (la
+    Nevera queda alta, nadie lo nota, y el plan compra de menos). Entre dos
+    fallos parciales, el que se detecta gana.
+    """
+    out = {"reverted": [], "skipped": 0}
+    if not _db_available() or not user_id or not consumed_meal_id:
+        return out
+    try:
+        rows = execute_sql_write(
+            "UPDATE inventory_consumption_events SET reverted_at = NOW() "
+            "WHERE consumed_meal_id = %s AND user_id = %s "
+            "AND reverted_at IS NULL AND outcome = ANY(%s) "
+            "RETURNING ingredient_name, quantity::float8 AS quantity, unit",
+            (consumed_meal_id, user_id, list(_REVERSIBLE_OUTCOMES)),
+            returning=True,
+        ) or []
+    except Exception as e:
+        logger.error(
+            f"[P1-CONSUMPTION-LEDGER] no se pudieron reclamar los eventos de "
+            f"meal={consumed_meal_id}: {e}"
+        )
+        return out
+
+    for r in rows:
+        name = r.get("ingredient_name")
+        try:
+            qty = float(r.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        unit = r.get("unit") or "unidad"
+        if not name or qty <= 0:
+            out["skipped"] += 1
+            continue
+        try:
+            # Suma con la MISMA (name, unit) que se restó. `mutation_type`
+            # distinto de 'consumption' para que un audit sepa que esta fila
+            # subió por una devolución, no por una compra.
+            ok = add_or_update_inventory_item(
+                user_id, name, qty, unit, mutation_type="consumption_revert")
+            if ok is False:
+                out["skipped"] += 1
+                logger.warning(
+                    f"[P1-CONSUMPTION-LEDGER] revert de {name!r} ({qty} {unit}) "
+                    f"no se pudo aplicar para user={str(user_id)[:8]}."
+                )
+            else:
+                out["reverted"].append(f"{qty} {unit} de {name}")
+        except Exception as e:
+            out["skipped"] += 1
+            logger.warning(f"[P1-CONSUMPTION-LEDGER] revert de {name!r} falló: {e}")
+
+    if out["reverted"]:
+        logger.info(
+            f"🧊 [P1-CONSUMPTION-LEDGER] devueltos {len(out['reverted'])} item(s) "
+            f"a la Nevera de user={str(user_id)[:8]} tras deshacer "
+            f"meal={consumed_meal_id}."
+        )
+    return out
+
+
+def deduct_consumed_meal_from_inventory(
+    user_id: str,
+    ingredients_list: List[str],
+    *,
+    consumed_meal_id: Optional[str] = None,
+    source: str = "unknown",
+):
     """
     Resta matemáticamente una lista de ingredientes crudos (los de una comida consumida)
     de la tabla de inventario físico.
@@ -2006,6 +2156,10 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     # parseó bien pero NO existe fila en la nevera del usuario. Ni éxito
     # (no bajó nada) ni fallo (no hay nada que reintentar).
     not_in_pantry_strs: List[str] = []
+    # [P1-CONSUMPTION-LEDGER · 2026-08-07] Eventos a persistir al final, en
+    # UN solo INSERT. Se acumulan en vez de escribir por item para no meter
+    # N roundtrips en el path caliente del descuento.
+    ledger_events: List[Dict[str, Any]] = []
 
     # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] UN solo fetch de la nevera para
     # clasificar presencia de TODOS los items de la comida. Resolver item por
@@ -2079,6 +2233,9 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
                     f"hay fila que descontar."
                 )
                 not_in_pantry_strs.append(str(item))
+                ledger_events.append({
+                    "name": name, "qty": qty, "unit": unit, "outcome": "not_in_pantry",
+                })
                 continue
 
             _consume_reserved_inventory(user_id, name, qty, unit)
@@ -2096,7 +2253,14 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
                     "reason": "deduction_returned_false",
                 })
                 failed_strs.append(str(item))
+                ledger_events.append({
+                    "name": name, "qty": qty, "unit": unit, "outcome": "failed",
+                })
             else:
+                ledger_events.append({
+                    "name": name, "qty": qty, "unit": unit,
+                    "outcome": "inferred" if used_inference else "deducted",
+                })
                 if used_inference:
                     inferred_strs.append(str(item))
                 else:
@@ -2115,6 +2279,13 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     # los items del mismo log_consumed_meal). Si la lista está vacía, no
     # hacemos round-trip a DB.
     _persist_failed_inventory_deductions(user_id, failed_items)
+
+    # [P1-CONSUMPTION-LEDGER · 2026-08-07] Rastro reversible. Best-effort a
+    # propósito: si el ledger falla, el descuento YA ocurrió y negarlo sería
+    # peor — el usuario perdería el registro calórico por un fallo de
+    # auditoría. Lo que se pierde es la capacidad de deshacer ESE registro, y
+    # eso se declara en el log en vez de tragárselo.
+    _persist_consumption_events(user_id, consumed_meal_id, source, ledger_events)
 
     # [P1-AGENT-HINT · 2026-05-22] Retornar resumen para que el caller (típicamente
     # `tools.log_consumed_meal`) pueda enriquecer el ToolMessage con un hint a la
@@ -2634,7 +2805,11 @@ def sync_inventory_after_chunk_completion(
                 # sigue siendo INCONDICIONAL e intencional (filas sin ingredientes
                 # parseables NO deben reintentarse cada cierre de chunk) — solo
                 # corregimos la exactitud del contador.
-                _summary = deduct_consumed_meal_from_inventory(user_id, ingredients_list)
+                _summary = deduct_consumed_meal_from_inventory(
+                    user_id, ingredients_list,
+                    consumed_meal_id=str(row_id) if row_id else None,
+                    source="chunk_reconcile",
+                )
                 if isinstance(_summary, dict):
                     stats["items_deducted"] += (
                         len(_summary.get("succeeded", [])) + len(_summary.get("inferred", []))

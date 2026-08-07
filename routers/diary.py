@@ -749,7 +749,13 @@ def api_log_consumed_meal(
         if _ingredients and not _already_logged:
             import db_inventory
             _summary = db_inventory.deduct_consumed_meal_from_inventory(
-                user_id, _ingredients) or {}
+                user_id, _ingredients,
+                # [P1-CONSUMPTION-LEDGER · 2026-08-07] `_logged_ok` es el id de
+                # la fila recién insertada: atarlo aquí es lo que permite que
+                # "Deshacer registro" devuelva esta comida a la Nevera.
+                consumed_meal_id=(_logged_ok if isinstance(_logged_ok, str) else None),
+                source="photo",
+            ) or {}
 
         # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background.
         # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top del archivo.
@@ -906,7 +912,10 @@ def api_log_consumed_meal_from_plan(
         if ingredients and not already_logged:
             import db_inventory
             summary = db_inventory.deduct_consumed_meal_from_inventory(
-                verified_user_id, ingredients) or {}
+                verified_user_id, ingredients,
+                consumed_meal_id=(logged if isinstance(logged, str) else None),
+                source="plan_meal",
+            ) or {}
 
         if not already_logged:
             background_tasks.add_task(trigger_incremental_learning, verified_user_id)
@@ -1090,6 +1099,22 @@ def api_delete_consumed_meal(
         if not verified_user_id:
             raise HTTPException(status_code=403, detail="Prohibido.")
 
+        # [P1-CONSUMPTION-LEDGER · 2026-08-07] Devolver ANTES de borrar.
+        #
+        # El orden importa y no es simétrico. Si se borrara primero y el revert
+        # fallara, la comida se perdería sin rastro visible: el usuario ve el
+        # diario limpio y la Nevera baja, sin nada que explique la diferencia.
+        # Al revés, si el revert funciona y el DELETE falla, el usuario ve la
+        # comida todavía en su diario y reintenta — el revert es idempotente
+        # (`reverted_at`), así que el segundo intento no vuelve a sumar y el
+        # DELETE se completa. Entre dos fallos parciales gana el recuperable.
+        #
+        # `revert_consumption_events` ya filtra `AND user_id = %s`, así que un
+        # `meal_id` ajeno no devuelve nada — no hace falta pre-verificar
+        # propiedad para evitar tocar la Nevera de otro.
+        import db_inventory
+        _revert = db_inventory.revert_consumption_events(verified_user_id, meal_id)
+
         deleted = delete_consumed_meal(verified_user_id, meal_id)
         if not deleted:
             raise HTTPException(
@@ -1097,7 +1122,13 @@ def api_delete_consumed_meal(
                 detail="Comida no encontrada (o ya fue eliminada).",
             )
 
-        return {"success": True, "message": "Comida eliminada del diario."}
+        return {
+            "success": True,
+            "message": "Comida eliminada del diario.",
+            # Lo devuelto viaja al cliente para que el toast pueda decirlo: si
+            # la Nevera sube y nadie lo explica, parece un bug.
+            "returned_to_pantry": _revert.get("reverted") or [],
+        }
     except HTTPException as he:
         raise he
     except Exception as e:

@@ -239,9 +239,8 @@ concreto — justo el dato que al heurístico le falta. El registro se guarda po
   > usuario declara haber comido fuera del plan, igual que si lo escribiera en
   > el chat; no hay fuente server-side contra la cual verificarlos. La
   > confirmación humana en el modal es la autorización.
-- **"Deshacer registro" no devuelve la comida a la nevera.**
-  `DELETE /api/diary/consumed/{meal_id}` borra la fila del diario; el descuento
-  ya aplicado no se revierte. Necesita un ledger de eventos de consumo.
+- ~~**"Deshacer registro" no devuelve la comida a la nevera.**~~ Cerrado por
+  `P1-CONSUMPTION-LEDGER` (2026-08-07) — ver "Descuentos reversibles" abajo.
 - **Deriva por no registrar.** Lo que el usuario come sin registrar nunca sale
   de la nevera. Mitigación propuesta sin romper la regla "solo acciones del
   usuario reducen": reconciliación periódica que PREGUNTA (usa el
@@ -249,3 +248,89 @@ concreto — justo el dato que al heurístico le falta. El registro se guarda po
 - **Cantidades inferidas siguen aplicándose sin marcar.**
   `_infer_typical_portion` adivina 50 g / 1 unidad y lo aplica; el usuario no
   puede distinguir números reales de adivinados.
+
+---
+
+## Descuentos reversibles (el ledger)
+
+[P1-CONSUMPTION-LEDGER · 2026-08-07]
+
+`DELETE /api/diary/consumed/{meal_id}` borraba la fila del diario y dejaba la
+Nevera descontada:
+
+```
+registra "2 huevos"  → diario +1 fila, Nevera 3 → 1
+deshace el registro  → diario −1 fila, Nevera SIGUE EN 1
+```
+
+La asimetría es visible para el usuario y erosiona la confianza más rápido que
+cualquier error de estimación.
+
+### Por qué hacía falta una tabla
+
+Para devolver hay que saber **qué** se descontó, y eso se perdía al aplicar el
+delta. El string original (`"2 huevos"`) no basta:
+
+- `P1-PANTRY-NAME-RESOLUTION` pudo mapearlo a la fila `Huevo` (otra ortografía).
+- `P1-PANTRY-INFER` pudo **inventar** la cantidad cuando el parse no la extrajo.
+
+Re-parsear el string al revertir repetiría ambas decisiones y podría llegar a
+otra respuesta — devolviendo una cantidad distinta de la que se quitó. El ledger
+guarda el nombre **ya resuelto** y la cantidad **ya aplicada**: revertir es leer
+y sumar, no volver a interpretar.
+
+### Qué es reversible
+
+| `outcome` | ¿Movió la Nevera? | ¿Reversible? |
+|---|---|---|
+| `deducted` | sí | **sí** |
+| `inferred` | sí (cantidad inferida) | **sí** |
+| `not_in_pantry` | no | no — devolverlo **crearía** comida inexistente |
+| `failed` | no | no |
+
+### Decisiones de diseño
+
+- **Sin FK a `consumed_meals`.** La fila es borrable por el usuario: un
+  `CASCADE` borraría el registro de una devolución que **sí** ocurrió, y un
+  `RESTRICT` impediría el propio `DELETE` que este ledger existe para soportar.
+  La integridad que importa es el rastro, no la referencia.
+- **`reverted_at` en vez de borrar la fila.** Hace el revert idempotente (un
+  segundo `DELETE` no vuelve a sumar) y conserva la historia. Un ledger que se
+  borra a sí mismo no es un ledger.
+- **`CHECK (quantity > 0)`.** Los eventos registran magnitud; el signo lo pone
+  la operación. Un evento negativo, al revertirse, restaría más.
+- **Se marca `reverted_at` ANTES de sumar.** Si el proceso muere a mitad, el
+  modo de fallo es "no devolví todo" (la Nevera queda baja — visible, el
+  usuario lo corrige) en vez de "devolví dos veces" (queda alta, nadie lo nota,
+  y el plan compra de menos). Entre dos fallos parciales, gana el detectable.
+- **El revert corre ANTES del `DELETE`.** Si se borrara primero y el revert
+  fallara, la comida se pierde sin rastro visible. Al revés, el usuario ve la
+  comida aún en su diario y reintenta; el revert es idempotente, así que el
+  segundo intento no duplica.
+- **Persistir el ledger es best-effort.** Si falla, el descuento ya ocurrió y
+  negarlo costaría el registro calórico entero. Se pierde la capacidad de
+  deshacer *ese* registro, y eso se declara en el log.
+
+### Productores
+
+Los cuatro atan el evento a su fila de `consumed_meals` — sin `consumed_meal_id`
+el evento es huérfano y el revert no lo encuentra:
+
+| `source` | Call site |
+|---|---|
+| `plan_meal` | `POST /api/diary/consumed-from-plan` |
+| `photo` | `POST /api/diary/consumed` |
+| `chat` | `tools.log_consumed_meal` |
+| `chunk_reconcile` | `sync_inventory_after_chunk_completion` |
+
+`source` no es decorativo: cuando una Nevera no cuadra, la primera pregunta es
+"¿qué la movió?", y las superficies tienen fiabilidades muy distintas.
+
+### Cómo verificar
+
+```bash
+pytest backend/tests/test_p1_consumption_ledger.py -v   # 20 casos
+```
+
+Migración: [`migrations/p1_consumption_ledger_2026_08_07.sql`](../migrations/p1_consumption_ledger_2026_08_07.sql)
+(idempotente; ⚠️ recordar la copia de workspace-root por `P3-MIGRATIONS-SSOT`).
