@@ -107,9 +107,16 @@ def test_reconciles_unsynced_rows_in_window():
         },
     ])
     deducted_calls = []
+    deducted_kwargs = []
 
-    def _fake_deduct(user_id, ingredients):
+    # [P1-CONSUMPTION-LEDGER · 2026-08-07] El fake acepta los kwargs del ledger
+    # (`consumed_meal_id`/`source`) porque el call site real los pasa. Sin ellos
+    # el fake lanzaba TypeError, el `except` por fila del bucle lo tragaba, y el
+    # test fallaba con `reconciled_count == 0` — un fallo que NO decía nada sobre
+    # producción, solo que el mock se había quedado viejo.
+    def _fake_deduct(user_id, ingredients, *, consumed_meal_id=None, source=None):
         deducted_calls.append((user_id, list(ingredients)))
+        deducted_kwargs.append({"consumed_meal_id": consumed_meal_id, "source": source})
 
     # connection_pool truthy → entra por la rama execute_sql_query.
     with patch("db_core.connection_pool", object()), \
@@ -126,6 +133,13 @@ def test_reconciles_unsynced_rows_in_window():
     assert stats["items_deducted"] == 3  # 2 + 1 ingredientes
     assert len(deducted_calls) == 2
     assert sorted(fake.updates) == [1, 2]
+
+    # El ledger etiqueta el origen: 'chunk_reconcile' es uno de los 7 valores del
+    # CHECK de `inventory_consumption_events.source`. Renombrarlo sin tocar la
+    # migración haría que este cron reventara contra la constraint EN PRODUCCIÓN,
+    # y en silencio: el `except` por fila se lo traga y solo baja el contador.
+    assert [k["source"] for k in deducted_kwargs] == ["chunk_reconcile"] * 2
+    assert [k["consumed_meal_id"] for k in deducted_kwargs] == ["1", "2"]
 
 
 # ---------------------------------------------------------------------------

@@ -212,7 +212,7 @@ _MEAL_VISION_PROMPT = (
     "2 lascas de queso, 1 taza de arroz) y 'unit' una de: unidad, lasca, "
     "rodaja, taza, cucharada, g, lb. Si un componente esta claramente ahi "
     "pero no puedes estimar cuanto, ponlo igual con la cantidad que mejor "
-    "puedas aproximar — el usuario la corrige antes de confirmar. NO inventes "
+    "puedas aproximar - el usuario la corrige antes de confirmar. NO inventes "
     "componentes que no se vean. "
     "SI ES 'plato': haz un INVENTARIO en 'description': "
     "lista TODOS los componentes visibles sin omitir ninguno - la base de "
