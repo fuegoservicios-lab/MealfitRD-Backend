@@ -4541,7 +4541,13 @@ async def api_analyze_stream(
                                         f"No se persiste. user={actual_user_id or 'guest'}")
                                     # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] Rechazo crítico (restricción declarada no satisfecha) → no cobrar.
                                     _plan_delivery_failed = True
-                                    yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'critical_restriction', 'message': _crit_msg}})}\n\n"
+                                    # [P1-LANDING-BENCH-2 · 2026-08-07] Diagnóstico también por SSE: el header
+                                    # X-Bioboros-Review-Diag del endpoint síncrono no puede viajar en un stream
+                                    # ya abierto → las razones van DENTRO del payload del error (mismo truncado;
+                                    # datos del propio plan del solicitante). El frontend lee solo code+message
+                                    # (claves extra ignoradas); el benchmark las consume para el issue #9.
+                                    _crit_issues = [str(i)[:160] for i in (result.get("_review_issues") or [])[:5]]
+                                    yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'critical_restriction', 'message': _crit_msg, 'fallback_reason': result.get('_fallback_reason'), 'review_issues': _crit_issues}}, ensure_ascii=False, default=str)}\n\n"
                                     break
                                 # [P1-SPEND-CAP-ALERT · 2026-05-28] Mensaje honesto
                                 # cuando el fallback fue por spending-cap de Gemini:
