@@ -76,7 +76,9 @@ jobs:
         run: pip install -q -r requirements.txt
       - name: Benchmark remote (guest) contra el deploy
         run: |
-          N="${{ github.event.inputs.n || '3' }}"
+          # Fallback del trigger push: '0' = matriz completa (el smoke n=3 ya validó
+          # el flujo el 2026-08-07; el dispatch manual sigue aceptando cualquier n).
+          N="${{ github.event.inputs.n || '0' }}"
           EXTRA=""
           if [ "${{ github.event.inputs.changes || 'true' }}" = "true" ]; then EXTRA="--changes"; fi
           PYTHONPATH=. python scripts/landing_benchmark.py remote "$N" \
