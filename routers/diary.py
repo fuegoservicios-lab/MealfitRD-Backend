@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from error_utils import safe_error_detail
 from typing import Optional
+import json
 import logging
 import math
 import uuid
@@ -93,6 +94,30 @@ class ConsumedMealRequest(BaseModel):
         return v
 
 
+class ConsumedFromPlanRequest(BaseModel):
+    """[P1-EAT-PLAN-MEAL · 2026-08-07] Payload para
+    `POST /api/diary/consumed-from-plan`.
+
+    El cliente manda SOLO coordenadas — jamás el contenido. Nombre, slot,
+    macros e ingredientes se leen server-side del `plan_data` del propio
+    usuario. Es la misma doctrina que I-Billing-1 (`tier` derivado del
+    `plan_id` de PayPal, no de `data.get("tier")`) e I1 (`plan_id` nace del
+    INSERT backend): si el cliente pudiera declarar los ingredientes, podría
+    descontar de la Nevera lo que quisiera y en la cantidad que quisiera.
+
+    Los límites superiores de los índices son cota de forma, no de negocio:
+    rechazan basura estructural antes de tocar la DB. El rango real se valida
+    contra el plan.
+    """
+    plan_id: str = Field(..., min_length=1, max_length=64)
+    day_index: int = Field(..., ge=0, le=365)
+    meal_index: int = Field(..., ge=0, le=50)
+    # Mismo rango que `ConsumedMealRequest.days_ago` y `tools._CONSUMED_MAX_DAYS_AGO`.
+    days_ago: int = Field(default=0, ge=0, le=7)
+
+    model_config = {"extra": "ignore"}
+
+
 class ProgressRequest(BaseModel):
     """Payload para `POST /api/diary/progress` (weight tracking)."""
     user_id: Optional[str] = None
@@ -144,6 +169,20 @@ _VISION_UPLOAD_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # retorna el `verified_user_id` — el endpoint NO necesita un segundo
 # `Depends(get_verified_user_id)` aparte (mismo patrón que api_restock).
 _DELETE_CONSUMED_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
+# [P1-EAT-PLAN-MEAL · 2026-08-07] Rate-limiter para
+# `POST /consumed-from-plan`. Quota-exempt por la MISMA doctrina que
+# `/restock` e `/inventory/consume` (P1-NEVERA-QUOTA-EXEMPT): marcar como
+# comido un plato que el usuario YA pagó al generar el plan no tiene costo
+# LLM — es un SELECT sobre `plan_data` + un INSERT + restas en la Nevera.
+# Aplicarle `verify_api_quota` sería doblemente absurdo: al llegar al cap el
+# usuario no podría registrar lo que come (congelando la Nevera y el diario
+# calórico justo cuando más los necesita), y `get_monthly_api_usage` cuenta
+# toda fila de `api_usage` sin filtrar endpoint — así que registrar una
+# comida quemaría crédito de PLANES. 20/60s es el house default de esta
+# clase (mutación barata, anti-spam sin restringir uso legítimo: 5-6 comidas
+# al día están holgadamente dentro).
+_PLAN_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -679,6 +718,162 @@ def api_log_consumed_meal(
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed-from-plan")
+def api_log_consumed_meal_from_plan(
+    payload: ConsumedFromPlanRequest,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    # [P1-EAT-PLAN-MEAL · 2026-08-07] Quota-exempt (ver `_PLAN_MEAL_LIMITER`).
+    # `RateLimiter.__call__` ya envuelve `Depends(get_verified_user_id)` y
+    # devuelve el user_id autenticado — no hace falta un segundo Depends
+    # (mismo patrón que `api_delete_consumed_meal` / `api_restock`).
+    verified_user_id: Optional[str] = Depends(_PLAN_MEAL_LIMITER),
+):
+    """[P1-EAT-PLAN-MEAL · 2026-08-07] "Me comí este plato del plan".
+
+    El camino de consumo MÁS PRECISO del sistema, y el único sin adivinanza:
+    el plato del plan ya trae su lista de ingredientes con cantidades (la
+    misma que lee `reserve_plan_ingredients`), así que descontar la Nevera es
+    aritmética sobre datos que el backend escribió — cero LLM, cero visión,
+    cero `_infer_typical_portion`.
+
+    Contrasta con los otros dos surfaces:
+      - chat (`tools.log_consumed_meal`): la LLM tiene que ACERTAR la lista de
+        ingredientes y sus cantidades a partir de texto libre.
+      - foto (`/upload` → `/consumed`): hoy ni siquiera manda ingredientes, así
+        que no toca la Nevera.
+
+    **El cliente manda coordenadas, nunca contenido.** `plan_data` se lee
+    server-side filtrando `AND user_id = %s` (invariante I2), y de ahí salen
+    nombre, slot, macros e ingredientes. Un cliente que pudiera declararlos
+    descontaría de la Nevera lo que quisiera.
+
+    Relación con el matcher por SLOT (P1-TODAY-REMAINING): ese heurístico
+    DERIVA "ya comiste" comparando `meal_type` del diario contra el slot del
+    plan, y se declara ambiguo cuando hay ≥2 slots iguales (2-3 meriendas).
+    Este endpoint no compite con él: convierte la inferencia en una
+    DECLARACIÓN del usuario sobre un plato concreto, que es justamente el dato
+    que al heurístico le falta. El registro sigue guardándose por `meal_type`,
+    así que el matcher lo ve y atenúa la card como siempre.
+
+    Tooltip-anchor: P1-EAT-PLAN-MEAL-ENDPOINT
+    """
+    try:
+        assert_valid_uuid(payload.plan_id)
+
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+
+        # Invariante I2: la lectura filtra por dueño. El 404 es el MISMO para
+        # "no existe" y "es de otro" — no filtramos existencia cross-user.
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (payload.plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado.")
+
+        plan_data = row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                raise HTTPException(status_code=422, detail="El plan está corrupto.")
+
+        days = plan_data.get("days") or []
+        if not isinstance(days, list) or payload.day_index >= len(days):
+            raise HTTPException(status_code=404, detail="Ese día no existe en tu plan.")
+
+        meals = (days[payload.day_index] or {}).get("meals") or []
+        if not isinstance(meals, list) or payload.meal_index >= len(meals):
+            raise HTTPException(status_code=404, detail="Ese plato no existe en tu plan.")
+
+        meal = meals[payload.meal_index] or {}
+        meal_name = str(meal.get("name") or "").strip()
+        if not meal_name:
+            # Un plato sin nombre es plan corrupto, no input inválido del
+            # cliente: 422 con mensaje propio en vez de registrar basura.
+            raise HTTPException(status_code=422, detail="Ese plato no tiene nombre.")
+
+        # `meal` es el SLOT del plan ('Desayuno'/'Almuerzo'/...). El diario lo
+        # guarda en `meal_type`, que es la clave por la que el matcher
+        # P1-TODAY-REMAINING atenúa la card.
+        meal_type = str(meal.get("meal") or "snack").strip().lower() or "snack"
+
+        def _macro(key: str) -> int:
+            try:
+                v = float(meal.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+            return int(v) if math.isfinite(v) and v > 0 else 0
+
+        # El esquema del plato usa `fats`; el diario, `healthy_fats`.
+        calories, protein = _macro("cals"), _macro("protein")
+        carbs, healthy_fats = _macro("carbs"), _macro("fats")
+
+        ingredients = [
+            str(i) for i in (meal.get("ingredients") or [])
+            if i and len(str(i).strip()) >= 3
+        ]
+
+        from datetime import datetime, timezone, timedelta
+        _days_ago = _clamp_diary_days_ago(payload.days_ago)
+        consumed_at_override = (
+            datetime.now(timezone.utc) - timedelta(days=_days_ago)
+        ).isoformat()
+
+        # `mark_inventory_synced` solo si vamos a descontar acto seguido — si
+        # no, la reconciliación al cierre del chunk debe poder recogerlo.
+        logged = log_consumed_meal(
+            verified_user_id, meal_name, calories, protein, carbs, healthy_fats,
+            ingredients=ingredients or None,
+            meal_type=meal_type,
+            mark_inventory_synced=bool(ingredients),
+            consumed_at_override=consumed_at_override,
+        )
+        if not logged:
+            # Fail-loud (doctrina P1-PROD-AUDIT-3): sin esto un blip de DB
+            # devolvía success:true sobre data fantasma.
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo registrar la comida. Reintenta en unos segundos.",
+            )
+
+        # [P2-CONSUMED-DEDUP-INVENTORY · 2026-05-30] `"deduped"` = doble-tap
+        # dentro de la ventana: NO hubo INSERT nuevo, así que descontar otra vez
+        # bajaría la Nevera al doble del consumo real.
+        already_logged = (logged == "deduped")
+        summary = {}
+        if ingredients and not already_logged:
+            import db_inventory
+            summary = db_inventory.deduct_consumed_meal_from_inventory(
+                verified_user_id, ingredients) or {}
+
+        if not already_logged:
+            background_tasks.add_task(trigger_incremental_learning, verified_user_id)
+
+        return {
+            "success": True,
+            "already_logged": already_logged,
+            "meal_name": meal_name,
+            "meal_type": meal_type,
+            "calories": calories,
+            # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] `not_in_pantry` viaja al
+            # cliente para que la UI pueda decir QUÉ no bajó de la Nevera. Sin
+            # esto el usuario ve "registrado" y asume que todo se descontó —
+            # exactamente la mentira que aquel P-fix eliminó del lado del chat.
+            "deducted": summary.get("succeeded") or [],
+            "inferred": summary.get("inferred") or [],
+            "not_in_pantry": summary.get("not_in_pantry") or [],
+            "failed_to_deduct": summary.get("failed_to_deduct") or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed-from-plan: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 

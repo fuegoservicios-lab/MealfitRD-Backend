@@ -195,6 +195,33 @@ resolver por igualdad exacta o si el `ToolMessage` deja de reportar las ausencia
 
 ---
 
+## Superficies de consumo y su precisión
+
+[P1-EAT-PLAN-MEAL · 2026-08-07] Los tres caminos por los que un consumo puede
+llegar a la Nevera, ordenados por cuánto tienen que adivinar:
+
+| Surface | Cómo obtiene los ingredientes | ¿Descuenta? |
+|---|---|---|
+| **"Me lo comí"** (`POST /api/diary/consumed-from-plan`) | los lee del plato del plan, que ya los trae con cantidades | Sí — **sin adivinanza** |
+| Chat (`tools.log_consumed_meal`) | la LLM tiene que acertarlos desde texto libre; `_infer_typical_portion` rellena las cantidades que falten | Sí, con estimación |
+| Foto (`/upload` → `/consumed`) | no los manda | **No** |
+
+El botón "Me lo comí" (Dashboard, cards de HOY) es el camino preciso: el
+cliente manda **coordenadas** (`plan_id` + `day_index` + `meal_index`), nunca
+contenido, y el backend relee `plan_data` filtrando `AND user_id = %s` — misma
+doctrina que I-Billing-1. Un cliente que pudiera declarar `ingredients`
+descontaría de la Nevera lo que quisiera. Test:
+[`test_p1_eat_plan_meal.py`](../tests/test_p1_eat_plan_meal.py).
+
+Relación con el matcher por slot: `P1-TODAY-REMAINING` **deriva** "ya comiste"
+comparando `meal_type` del diario contra el slot del plan, y se declara ambiguo
+cuando hay ≥2 slots iguales (2-3 meriendas). El botón no compite con él:
+convierte la inferencia en una **declaración** del usuario sobre un plato
+concreto — justo el dato que al heurístico le falta. El registro se guarda por
+`meal_type`, así que el matcher lo ve y atenúa la card como siempre.
+
+---
+
 ## Lo que este P-fix NO resuelve
 
 - **La foto no descuenta.** `ScanMealModal` → `POST /api/diary/consumed` no
