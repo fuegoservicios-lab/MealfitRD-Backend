@@ -1,0 +1,111 @@
+# [P1-LANDING-BENCH-1 · 2026-08-07] Corrida del benchmark del landing en modo REMOTE
+# (cuenta de invitado) — CERO secrets: el runner llama al API de PRODUCCIÓN como
+# user_id=guest y el servidor genera con sus propias claves (routing por tier: para un
+# guest, day-gen/swap/reviewer corren en gpt-5.6 Luna = OpenAI — P1-DAYGEN-TIER-MODEL /
+# P1-SWAP-LUNA / P1-REVIEWER-TIER-MODELS). El scoring (seguridad clínica + gym 7 ejes)
+# es local al runner con los scorers puros de landing_benchmarks.py.
+#
+# Por qué Actions: un sandbox de desarrollo con egress restringido no alcanza el deploy;
+# el runner sí. Paths ROOT-relative (convención macro-benchmark-nightly.yml).
+#
+# Trigger doble: push del PROPIO archivo en la rama del P-fix (SMOKE automático n=3) +
+# workflow_dispatch manual (default n=20, la matriz completa). Concurrencia 1 y con
+# backoff 429 en el cliente: el /analyze de prod tiene RateLimiter 3/60s per IP.
+name: landing-benchmark-remote-guest
+
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "límite de perfiles (0 = los 20 de la matriz)"
+        default: "20"
+      changes:
+        description: "ejercitar swap individual vía API (true/false)"
+        default: "true"
+      api_base:
+        description: "URL base del deploy (vacío = auto-descubrir)"
+        default: ""
+  push:
+    branches: [claude/landing-benchmarks-plan-generation-5ujyio]
+    paths:
+      - ".github/workflows/landing-benchmark-remote-guest.yml"
+      - "scripts/landing_benchmark.py"
+
+concurrency:
+  group: landing-benchmark-remote-guest
+  cancel-in-progress: false
+
+jobs:
+  landing-benchmark-remote-guest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descubrir API base del deploy
+        id: discover
+        run: |
+          BASE="${{ github.event.inputs.api_base }}"
+          if [ -z "$BASE" ]; then
+            for host in https://app.bioboros.com https://mealfitrd.com https://www.mealfitrd.com https://bioboros.com; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -m 10 "$host/health" || true)
+              echo "  $host/health -> $code"
+              if [ "$code" = "200" ]; then BASE="$host"; break; fi
+            done
+          fi
+          if [ -z "$BASE" ]; then
+            echo "::error::Ningún candidato respondió 200 en /health — no hay deploy alcanzable."
+            {
+              echo "## 🛑 Benchmark remote-guest ABORTADO"
+              echo ""
+              echo "Ningún dominio candidato respondió \`200\` en \`/health\`. Re-lanzar con el"
+              echo "input \`api_base\` apuntando al deploy correcto."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "API base: $BASE"
+          # Estado del deploy ANTES de bench: /ready expone si el plan graph compila
+          # (P3-READY-REASON) y /health/version el P-fix vivo — si prod está caído,
+          # el benchmark mediría el outage, no el motor.
+          echo "== /ready ==";          curl -s -m 10 "$BASE/ready" || true; echo ""
+          echo "== /health/version =="; curl -s -m 10 "$BASE/health/version" || true; echo ""
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend deps (scorers locales)
+        run: pip install -q -r requirements.txt
+      - name: Benchmark remote (guest) contra el deploy
+        run: |
+          # Fallback del trigger push: '0' = matriz completa (el smoke n=3 ya validó
+          # el flujo el 2026-08-07; el dispatch manual sigue aceptando cualquier n).
+          N="${{ github.event.inputs.n || '0' }}"
+          EXTRA=""
+          if [ "${{ github.event.inputs.changes || 'true' }}" = "true" ]; then EXTRA="--changes"; fi
+          PYTHONPATH=. python scripts/landing_benchmark.py remote "$N" \
+            --api-base "${{ steps.discover.outputs.base }}" \
+            --conc 1 $EXTRA --save-plans \
+            --out landing_benchmark_remote.json | tee run_stdout.txt
+      - name: Resumen al step summary
+        if: always()
+        run: |
+          {
+            echo "## Landing benchmark remote-guest — resumen"
+            echo '```'
+            tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # El JSON al LOG (no solo al artifact): el sandbox que orquesta esto no
+          # alcanza el blob storage de artifacts — el log del job sí es legible vía API.
+          echo "== JSON (primeros 6000 bytes) =="
+          head -c 6000 landing_benchmark_remote.json 2>/dev/null || true
+          echo ""
+      - name: Publicar reporte como artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: landing-benchmark-remote-guest
+          path: |
+            landing_benchmark_remote.json
+            landing_plans_*.json
+          if-no-files-found: warn
+          retention-days: 30

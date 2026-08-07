@@ -1,0 +1,108 @@
+# [P1-LANDING-BENCH-1 · 2026-08-07] Corrida on-demand del benchmark del landing con la
+# corrida FORZADA a OpenAI (gpt-5.6, cero DeepSeek) — `scripts/landing_benchmark.py live
+# --provider openai`. Los perfiles de la matriz corren como user_id=guest (cuenta de
+# invitado); el runner de Actions aporta el egress que un sandbox de desarrollo no tiene.
+#
+# Paths ROOT-relative (convención de macro-benchmark-nightly.yml, P2-NIGHTLY-WORKFLOW-RELOCATE):
+# en este repo la raíz del checkout ES el backend — un prefijo `backend/` rompe el job
+# (es exactamente el bug estructural que mantiene rojo a ci.yml).
+#
+# SECRETS que necesita (Settings → Secrets and variables → Actions):
+#   OPENAI_API_KEY            ✅ (la corrida es --provider openai; sin ella el guard salta RUIDOSO)
+#   NEON_DATABASE_URL         ✅ (sin DB el catálogo sale vacío y "mides el vacío" — lección
+#   NEON_DATABASE_URL_POOLED  ✅  P0-CLINICAL-VALIDATION: PoolClosed ⇒ todo fallback)
+#   COHERE_API_KEY            opcional (embeddings; degrada keyword sin ella)
+#   DEEPSEEK_API_KEY          opcional (periferia no-forzada; el pipeline va 100% gpt-5.6)
+#
+# Trigger doble: workflow_dispatch (corrida manual con inputs) + push del PROPIO archivo en la
+# rama del P-fix (primera corrida automática al aterrizar el workflow, con el mismo guard).
+name: landing-benchmark-openai
+
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "límite de perfiles (0 = los 20 de la matriz)"
+        default: "20"
+      changes:
+        description: "ejercitar swap individual + bucle de día (true/false)"
+        default: "true"
+  push:
+    branches: [claude/landing-benchmarks-plan-generation-5ujyio]
+    paths: [".github/workflows/landing-benchmark-openai.yml"]
+
+concurrency:
+  group: landing-benchmark-openai
+  cancel-in-progress: false
+
+jobs:
+  landing-benchmark-openai:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      NEON_DATABASE_URL_POOLED: ${{ secrets.NEON_DATABASE_URL_POOLED }}
+      MEALFIT_DB_BACKEND: neon
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard — skip RUIDOSO si faltan secrets
+        id: guard
+        run: |
+          missing=""
+          [ -z "$OPENAI_API_KEY" ] && missing="$missing OPENAI_API_KEY"
+          [ -z "$NEON_DATABASE_URL_POOLED" ] && missing="$missing NEON_DATABASE_URL_POOLED"
+          [ -z "$NEON_DATABASE_URL" ] && missing="$missing NEON_DATABASE_URL"
+          if [ -n "$missing" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::landing-benchmark-openai AUTO-SALTADO — faltan secrets:$missing"
+            {
+              echo "## ⚠️ Landing benchmark (OpenAI) SALTADO — no corrió"
+              echo ""
+              echo "Faltan secrets del repo:**$missing**"
+              echo ""
+              echo "**Activación (owner):** Settings → Secrets and variables → Actions → New repository secret."
+              echo "La corrida es \`live --provider openai\` (gpt-5.6, cero DeepSeek) con perfiles guest;"
+              echo "sin \`OPENAI_API_KEY\` no es lo que dice ser y sin Neon el catálogo sale vacío"
+              echo "(medirías el fallback matemático, no el motor). SOP: \`docs/landing_benchmarks.md\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip == 'false'
+        with:
+          python-version: "3.12"
+      - name: Install backend deps
+        if: steps.guard.outputs.skip == 'false'
+        run: pip install -q -r requirements.txt
+      - name: Landing benchmark — live --provider openai (perfiles guest)
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          N="${{ github.event.inputs.n || '20' }}"
+          EXTRA=""
+          if [ "${{ github.event.inputs.changes || 'true' }}" = "true" ]; then EXTRA="--changes"; fi
+          PYTHONPATH=. python scripts/landing_benchmark.py live "$N" \
+            --provider openai --conc 2 $EXTRA --save-plans \
+            --out landing_benchmark_openai.json | tee run_stdout.txt
+      - name: Resumen al step summary
+        if: always() && steps.guard.outputs.skip == 'false'
+        run: |
+          {
+            echo "## Landing benchmark (OpenAI) — resumen"
+            echo '```'
+            tail -30 run_stdout.txt 2>/dev/null || echo "(sin stdout — revisar log del paso anterior)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publicar reporte como artifact
+        if: always() && steps.guard.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: landing-benchmark-openai
+          path: |
+            landing_benchmark_openai.json
+            landing_plans_*.json
+          if-no-files-found: warn
+          retention-days: 30
