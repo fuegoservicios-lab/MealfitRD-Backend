@@ -40,7 +40,11 @@ on:
 # clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
 env:
   PUSH_RUN_N: "2"
-  PUSH_RUN_IDS: ""
+  # [2026-08-07] Corrida DIAGNÓSTICA post-deploy P1-LANDING-BENCH-2: un perfil por
+  # clase de regla clínica (dm2, hta, bariátrica, embarazo, warfarina, alergias,
+  # vegetariana, vegana×dm2). El header X-Bioboros-Review-Diag ya está vivo en prod
+  # → los 422 traerán las razones exactas del rechazo (issue #9).
+  PUSH_RUN_IDS: "3,4,9,10,13,17,19,20"
   PUSH_RUN_CHANGES: "false"
 
 concurrency:
