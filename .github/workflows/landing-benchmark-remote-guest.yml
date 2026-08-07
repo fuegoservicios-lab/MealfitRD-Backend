@@ -19,6 +19,9 @@ on:
       n:
         description: "límite de perfiles (0 = los 20 de la matriz)"
         default: "20"
+      ids:
+        description: "perfiles específicos, p.ej. '3,4,12,15' (gana sobre n; vacío = usar n)"
+        default: ""
       changes:
         description: "ejercitar swap individual vía API (true/false)"
         default: "true"
@@ -30,6 +33,15 @@ on:
     paths:
       - ".github/workflows/landing-benchmark-remote-guest.yml"
       - "scripts/landing_benchmark.py"
+
+# [P1-LANDING-BENCH-2] Parámetros del trigger PUSH (editables en este archivo — el
+# dispatch por API no está disponible para la integración de la sesión, 403). El push
+# corre un smoke BARATO por default; para una corrida dirigida (p.ej. solo los perfiles
+# clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
+env:
+  PUSH_RUN_N: "2"
+  PUSH_RUN_IDS: ""
+  PUSH_RUN_CHANGES: "false"
 
 concurrency:
   group: landing-benchmark-remote-guest
@@ -76,11 +88,13 @@ jobs:
         run: pip install -q -r requirements.txt
       - name: Benchmark remote (guest) contra el deploy
         run: |
-          # Fallback del trigger push: '0' = matriz completa (el smoke n=3 ya validó
-          # el flujo el 2026-08-07; el dispatch manual sigue aceptando cualquier n).
-          N="${{ github.event.inputs.n || '0' }}"
+          # dispatch → inputs; push → env PUSH_RUN_* (editables arriba).
+          N="${{ github.event.inputs.n || '' }}"; [ -z "$N" ] && N="$PUSH_RUN_N"
+          IDS="${{ github.event.inputs.ids || '' }}"; [ -z "$IDS" ] && IDS="$PUSH_RUN_IDS"
+          CHANGES="${{ github.event.inputs.changes || '' }}"; [ -z "$CHANGES" ] && CHANGES="$PUSH_RUN_CHANGES"
           EXTRA=""
-          if [ "${{ github.event.inputs.changes || 'true' }}" = "true" ]; then EXTRA="--changes"; fi
+          [ "$CHANGES" = "true" ] && EXTRA="--changes"
+          [ -n "$IDS" ] && EXTRA="$EXTRA --ids $IDS"
           PYTHONPATH=. python scripts/landing_benchmark.py remote "$N" \
             --api-base "${{ steps.discover.outputs.base }}" \
             --conc 1 $EXTRA --save-plans \
