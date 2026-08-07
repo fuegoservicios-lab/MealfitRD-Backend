@@ -342,14 +342,19 @@ def _remote_post(api_base, path, payload, timeout_s, max_429_retries=4):
 
 
 def _run_one_remote(api_base, profile, do_changes, timeout_s):
+    import uuid
     from plan_gym import score_plan
     fd = strip_benchmark_meta(profile)
     payload = {
         **fd,
-        # Mismo shape que Plan.jsx::dataToSend para guests: session_id efímero,
-        # totalDays por groceryDuration (weekly=7), tzOffset RD (UTC-4 → 240 min),
-        # y las claves acompañantes que el cliente SIEMPRE envía (aunque vacías).
-        "session_id": f"guest_landing_bench_{os.getpid()}_{profile['_id']}",
+        # Mismo shape que Plan.jsx::dataToSend para un GUEST REAL: `user_id: null`
+        # (NO el literal "guest" — eso es convención del harness in-process; contra
+        # el API revienta un cast ::uuid server-side → 500, smoke 2026-08-07) y
+        # `session_id: crypto.randomUUID()`. totalDays por groceryDuration
+        # (weekly=7), tzOffset RD (UTC-4 → 240 min), y las claves acompañantes que
+        # el cliente SIEMPRE envía aunque vacías.
+        "user_id": None,
+        "session_id": str(uuid.uuid4()),
         "totalDays": 7,
         "tzOffset": 240,
         "previous_meals": [],
@@ -386,6 +391,7 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s):
             target = meals0[min(1, len(meals0) - 1)]
             mtype = str(target.get("meal_type") or target.get("type") or "Almuerzo")
             sp = _swap_payload(profile, target, mtype)
+            sp["user_id"] = None  # guest real (ver nota del payload de /analyze)
             sp["session_id"] = payload["session_id"]
             t1 = time.time()
             try:
