@@ -40,11 +40,11 @@ on:
 # clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
 env:
   PUSH_RUN_N: "2"
-  # [2026-08-07] Diagnóstico completado (issue #9): la corrida dirigida con ids
-  # 3,4,9,10,13,17,19,20 reveló las causas (pools sin filtrar por dieta, directiva
-  # ausente, sal inyectada en HTA, cero retries en críticos). De vuelta a smoke
-  # barato; re-poner esos ids TRAS desplegar P1-DAYGEN-DIET-CONVERGE para medir el delta.
-  PUSH_RUN_IDS: ""
+  # [2026-08-07] VERIFICACIÓN post-deploy de P1-DAYGEN-DIET-CONVERGE (confirmado vivo:
+  # live_marker/expected en el VPS, drift=false). Mismos 8 ids clínicos y mismo
+  # changes=false que la corrida diagnóstica → comparación limpia contra la línea
+  # base de 2/8 entregados. Tras analizar, devolver PUSH_RUN_IDS a "".
+  PUSH_RUN_IDS: "3,4,9,10,13,17,19,20"
   PUSH_RUN_CHANGES: "false"
 
 concurrency:
