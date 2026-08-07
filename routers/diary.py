@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from error_utils import safe_error_detail
-from typing import Optional
+from typing import List, Optional
 import json
 import logging
 import math
@@ -81,7 +81,35 @@ class ConsumedMealRequest(BaseModel):
     # defensiva (mismo patrón que `_reject_non_finite` sobre los macros).
     days_ago: int = Field(default=0, ge=0, le=7)
 
+    # [P1-PHOTO-DEDUCTS · 2026-08-07] Ingredientes CONFIRMADOS por el usuario en
+    # el modal del escáner, para descontarlos de la Nevera. Antes este modelo no
+    # tenía el campo y `extra: "ignore"` lo descartaba en silencio: escanear
+    # comida registraba macros y la Nevera no se enteraba. Es el ÚNICO surface
+    # donde el cliente sí manda ingredientes — y puede, porque no describen un
+    # plato del plan sino lo que el usuario declara haber comido, igual que si
+    # lo escribiera en el chat. La confirmación humana en el modal es la
+    # autorización; el backend solo la ejecuta.
+    #
+    # Caps de forma (no de negocio): un plato real no pasa de ~30 componentes,
+    # y cada string es "2 huevos", no un párrafo. Sin cap, un payload gigante
+    # haría girar el loop de resolución + N queries por item.
+    ingredients: Optional[List[str]] = Field(default=None, max_length=40)
+
     model_config = {"extra": "ignore"}
+
+    @field_validator("ingredients")
+    @classmethod
+    def _clean_ingredients(cls, v):
+        """Descarta entradas vacías/basura y capa el largo por item.
+
+        `_parse_quantity` ya ignora strings de <3 chars, pero filtrarlos acá
+        evita que lleguen a `not_in_pantry` y le ensucien al usuario el aviso
+        de "no estaban registrados" con ruido que él nunca escribió.
+        """
+        if v is None:
+            return None
+        limpio = [str(x).strip()[:120] for x in v if x and len(str(x).strip()) >= 3]
+        return limpio or None
 
     @field_validator("calories", "protein", "carbs", "healthy_fats")
     @classmethod
@@ -697,9 +725,14 @@ def api_log_consumed_meal(
         # (404 en None) y /water-intake (503), y del caller chat-agent que ya
         # chequea `if result is not None` (tools.py). log_consumed_meal retorna
         # truthy en éxito (incl. True en dedup-skip) y None/falsy en fallo.
+        # [P1-PHOTO-DEDUCTS · 2026-08-07] `mark_inventory_synced` solo si vamos a
+        # descontar acto seguido; si no, la reconciliación al cierre del chunk
+        # debe poder recogerlo (misma regla que `consumed-from-plan`).
+        _ingredients = payload.ingredients or None
         _logged_ok = log_consumed_meal(
             user_id, meal_name, int(calories), int(protein), int(carbs),
-            int(healthy_fats), meal_type=meal_type,
+            int(healthy_fats), ingredients=_ingredients, meal_type=meal_type,
+            mark_inventory_synced=bool(_ingredients),
             consumed_at_override=consumed_at_override,
         )
         if not _logged_ok:
@@ -708,12 +741,35 @@ def api_log_consumed_meal(
                 detail="No se pudo registrar la comida. Reintenta en unos segundos.",
             )
 
+        # [P2-CONSUMED-DEDUP-INVENTORY · 2026-05-30] `"deduped"` = doble-tap
+        # dentro de la ventana: NO hubo INSERT nuevo, así que descontar otra vez
+        # bajaría la Nevera al DOBLE del consumo real.
+        _already_logged = (_logged_ok == "deduped")
+        _summary = {}
+        if _ingredients and not _already_logged:
+            import db_inventory
+            _summary = db_inventory.deduct_consumed_meal_from_inventory(
+                user_id, _ingredients) or {}
+
         # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background.
         # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top del archivo.
         # Solo se programa tras confirmar la escritura (no sobre fantasma).
-        background_tasks.add_task(trigger_incremental_learning, user_id)
+        if not _already_logged:
+            background_tasks.add_task(trigger_incremental_learning, user_id)
 
-        return {"success": True, "message": "Comida registrada exitosamente."}
+        return {
+            "success": True,
+            "message": "Comida registrada exitosamente.",
+            "already_logged": _already_logged,
+            # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Lo que NO bajó viaja al
+            # cliente. Sin esto el modal diría "registrado" y el usuario
+            # asumiría que la Nevera se movió entera — la misma mentira que
+            # aquel P-fix eliminó del chat.
+            "deducted": _summary.get("succeeded") or [],
+            "inferred": _summary.get("inferred") or [],
+            "not_in_pantry": _summary.get("not_in_pantry") or [],
+            "failed_to_deduct": _summary.get("failed_to_deduct") or [],
+        }
     except HTTPException as he:
         raise he
     except Exception as e:

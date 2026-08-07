@@ -203,8 +203,8 @@ llegar a la Nevera, ordenados por cuánto tienen que adivinar:
 | Surface | Cómo obtiene los ingredientes | ¿Descuenta? |
 |---|---|---|
 | **"Me lo comí"** (`POST /api/diary/consumed-from-plan`) | los lee del plato del plan, que ya los trae con cantidades | Sí — **sin adivinanza** |
+| **Foto** (`/upload` → `/consumed`) | el vision agent los emite como `items` estructurados y **el usuario los confirma** en el modal | Sí, confirmados |
 | Chat (`tools.log_consumed_meal`) | la LLM tiene que acertarlos desde texto libre; `_infer_typical_portion` rellena las cantidades que falten | Sí, con estimación |
-| Foto (`/upload` → `/consumed`) | no los manda | **No** |
 
 El botón "Me lo comí" (Dashboard, cards de HOY) es el camino preciso: el
 cliente manda **coordenadas** (`plan_id` + `day_index` + `meal_index`), nunca
@@ -224,9 +224,21 @@ concreto — justo el dato que al heurístico le falta. El registro se guarda po
 
 ## Lo que este P-fix NO resuelve
 
-- **La foto no descuenta.** `ScanMealModal` → `POST /api/diary/consumed` no
-  acepta `ingredients` (`ConsumedMealRequest` no tiene el campo, y
-  `extra: "ignore"` lo descartaría). El scan registra macros y no toca la nevera.
+- ~~**La foto no descuenta.**~~ Cerrado por `P1-PHOTO-DEDUCTS` +
+  `P1-VISION-PLATO-ITEMS` (2026-08-07): el prompt de visión ahora pide los
+  componentes del plato **estructurados** (antes decía literalmente "deja items
+  vacio" para `photo_kind='plato'`, y `_coerce_meal_scan` los descartaba con un
+  `"items": []` hardcodeado), y `ConsumedMealRequest` acepta `ingredients`
+  confirmados por el usuario. Test
+  [`test_p1_photo_deducts.py`](../tests/test_p1_photo_deducts.py).
+
+  > **Por qué aquí sí puede el cliente mandar ingredientes y en
+  > `consumed-from-plan` no**: allí describen un plato del plan, que el backend
+  > puede releer y verificar — aceptarlos del cliente sería dejarle declarar el
+  > contenido de un dato que el servidor ya posee. Aquí describen lo que el
+  > usuario declara haber comido fuera del plan, igual que si lo escribiera en
+  > el chat; no hay fuente server-side contra la cual verificarlos. La
+  > confirmación humana en el modal es la autorización.
 - **"Deshacer registro" no devuelve la comida a la nevera.**
   `DELETE /api/diary/consumed/{meal_id}` borra la fila del diario; el descuento
   ya aplicado no se revierte. Necesita un ledger de eventos de consumo.
