@@ -873,6 +873,20 @@ def _apply_reservation_delta(
     """
     import time
 
+    # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Cuarto call site de la misma
+    # familia: reservar "2 huevos" contra la fila "Huevo" no encontraba nada y
+    # la reserva se perdía en silencio, así que `get_user_inventory_net`
+    # reportaba MÁS disponible de lo real y el siguiente chunk planificaba
+    # sobre comida ya comprometida. Se resuelve UNA vez antes del loop CAS y
+    # se adopta la ortografía de la nevera; los retries re-SELECTean sobre el
+    # nombre ya resuelto (peldaño 1, indexado).
+    _resolved_rows, _level = find_pantry_rows_for_name(
+        user_id, ingredient_name, prefetched_rows=prefetched_rows)
+    if _level == "canonical" and _resolved_rows:
+        _pantry_name = _resolved_rows[0].get("ingredient_name")
+        if _pantry_name:
+            ingredient_name = _pantry_name
+
     master_list = get_master_ingredients()
     master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
 
@@ -882,15 +896,9 @@ def _apply_reservation_delta(
         # prefetched_rows si está disponible; retries siempre re-SELECT
         # para ver state fresh post-conflicto CAS.
         if attempt == 0 and prefetched_rows is not None:
-            rows = prefetched_rows
+            rows = _resolved_rows
         else:
-            rows = execute_sql_query(
-                "SELECT id, quantity::float8 AS quantity, unit, "
-                "reserved_quantity::float8 AS reserved_quantity, reservation_details "
-                "FROM user_inventory WHERE user_id = %s AND ingredient_name = %s",
-                (user_id, ingredient_name),
-                fetch_all=True,
-            ) or []
+            rows, _ = find_pantry_rows_for_name(user_id, ingredient_name)
 
         if not rows:
             return False
@@ -985,27 +993,26 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
     # [P1-N1-RESERVATION-DELTA · 2026-05-15] Batch fetch del inventory completo
     # del usuario. Best-effort: si falla, fallback al patrón legacy (None →
     # cada `_apply_reservation_delta` hace su propio SELECT).
-    rows_by_name: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Antes se indexaba por
+    # `ingredient_name` exacto en un dict, así que el prefetch heredaba el
+    # mismo fallo por plural que el SELECT que evitaba. Ahora se pasa el lote
+    # COMPLETO y `find_pantry_rows_for_name` aplica la escalera en memoria —
+    # sin roundtrip extra y sin el punto ciego.
+    batch_rows: Optional[List[Dict[str, Any]]] = None
     try:
-        _batch_rows = execute_sql_query(
+        batch_rows = execute_sql_query(
             "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
             "reserved_quantity::float8 AS reserved_quantity, reservation_details "
             "FROM user_inventory WHERE user_id = %s",
             (user_id,),
             fetch_all=True,
         ) or []
-        rows_by_name = {}
-        for _r in _batch_rows:
-            _nm = _r.get("ingredient_name")
-            if not _nm:
-                continue
-            rows_by_name.setdefault(_nm, []).append(_r)
     except Exception as _batch_err:
         logger.debug(
             f"[P1-N1-RESERVATION-DELTA] batch-fetch falló (best-effort, "
             f"fallback a SELECT per-ingredient): {_batch_err}"
         )
-        rows_by_name = None
+        batch_rows = None
 
     reserved_items = 0
     for day in days:
@@ -1017,10 +1024,9 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
                 try:
                     qty, unit, name = _parse_quantity(str(item))
                     if name and qty > 0:
-                        _prefetched = rows_by_name.get(name) if rows_by_name is not None else None
                         if _apply_reservation_delta(
                             user_id, name, qty, unit, reservation_key,
-                            prefetched_rows=_prefetched,
+                            prefetched_rows=batch_rows,
                         ):
                             reserved_items += 1
                 except Exception as e:
@@ -1182,17 +1188,119 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
     return released
 
 
+# ============================================================
+# [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Resolución de fila de Nevera
+# ============================================================
+# Un solo sitio decide QUÉ fila de `user_inventory` corresponde a un nombre
+# suelto. Antes cada call site hacía su propio `WHERE ingredient_name = %s`
+# exacto, y el mismo plural rompía los tres por separado.
+#
+# Escalera (para y devuelve en el primer peldaño que acierte):
+#   1. exact     — igualdad de string. Query indexada, es el hot path.
+#   2. canonical — `constants.pantry_names_match` (case/acentos/plural).
+#
+# Coste: el peldaño 2 solo corre cuando el 1 falla, y trae las filas del
+# usuario (~45 en la nevera real del dueño) para comparar en memoria. No hay
+# forma de hacerlo indexado sin una columna generada, que es DDL — y la
+# regla de la casa es que el DDL vive en `migrations/`, no en un hotfix.
+#
+# Knob `MEALFIT_PANTRY_CANONICAL_MATCH` (default True): a False vuelve al
+# comportamiento exact-only sin redeploy.
+#
+# Tooltip-anchor: P1-PANTRY-NAME-RESOLUTION-RESOLVER
+
+def find_pantry_rows_for_name(
+    user_id: str,
+    ingredient_name: str,
+    *,
+    prefetched_rows: Optional[List[Dict[str, Any]]] = None,
+) -> tuple:
+    """Resuelve `ingredient_name` a filas de la Nevera del usuario.
+
+    Returns:
+        `(rows, match_level)` con `match_level` ∈ {'exact', 'canonical', 'none'}.
+        Las filas traen siempre `ingredient_name` para que el caller pueda
+        adoptar la ortografía QUE EL USUARIO TIENE en su nevera (ver
+        `add_or_update_inventory_item`) en lugar de la que emitió la LLM.
+
+    NO gatea por `_db_available()` ni traga excepciones de SQL, a propósito:
+    los cuatro call sites ya tienen su propio gate/try (o deliberadamente no
+    lo tienen, como `_apply_reservation_delta`), y devolver `([], 'none')` ante
+    un blip de DB convertiría un fallo REINTENTABLE en un "no está en tu
+    nevera" definitivo — el mismo tipo de mentira silenciosa que este P-fix
+    existe para eliminar.
+    """
+    if not user_id or not ingredient_name:
+        return ([], "none")
+
+    _COLS = (
+        "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
+        "reserved_quantity::float8 AS reserved_quantity, reservation_details "
+        "FROM user_inventory WHERE user_id = %s"
+    )
+
+    # Peldaño 1: exacto.
+    if prefetched_rows is not None:
+        exact = [r for r in prefetched_rows if r.get("ingredient_name") == ingredient_name]
+    else:
+        exact = execute_sql_query(
+            _COLS + " AND ingredient_name = %s",
+            (user_id, ingredient_name),
+            fetch_all=True,
+        ) or []
+    if exact:
+        return (exact, "exact")
+
+    try:
+        from knobs import _env_bool as _knob_env_bool
+        if not _knob_env_bool("MEALFIT_PANTRY_CANONICAL_MATCH", True):
+            return ([], "none")
+    except Exception:
+        pass
+
+    # Peldaño 2: canónico (case / acentos / cantidad al inicio / plural).
+    try:
+        from constants import pantry_names_match
+    except Exception as _imp_e:
+        logger.warning(f"[P1-PANTRY-NAME-RESOLUTION] import de matcher falló: {_imp_e!r}")
+        return ([], "none")
+
+    if prefetched_rows is not None:
+        all_rows = list(prefetched_rows)
+    else:
+        all_rows = execute_sql_query(_COLS, (user_id,), fetch_all=True) or []
+
+    matched = [
+        r for r in all_rows
+        if r.get("ingredient_name") and pantry_names_match(ingredient_name, r["ingredient_name"])
+    ]
+    if not matched:
+        return ([], "none")
+
+    # Orden determinista: si el bug histórico dejó "Huevo" Y "Huevos" como
+    # filas separadas, siempre se elige la misma y las compras posteriores
+    # van consolidando sobre ella.
+    matched.sort(key=lambda r: (str(r.get("ingredient_name") or ""), str(r.get("id") or "")))
+    logger.info(
+        f"🧊 [P1-PANTRY-NAME-RESOLUTION] {ingredient_name!r} → "
+        f"{matched[0].get('ingredient_name')!r} (match canónico, "
+        f"{len(matched)} fila(s), user={str(user_id)[:8]})"
+    )
+    return (matched, "canonical")
+
+
 def _consume_reserved_inventory(user_id: str, ingredient_name: str, quantity: float, unit: str) -> bool:
     """Convierte reserva planificada en consumo real reduciendo reserved_quantity antes del descuento físico."""
     if not _db_available() or quantity <= 0:
         return False
 
-    existing_rows = execute_sql_query(
-        "SELECT id, unit, reserved_quantity::float8 AS reserved_quantity, reservation_details "
-        "FROM user_inventory WHERE user_id = %s AND ingredient_name = %s AND reserved_quantity > 0",
-        (user_id, ingredient_name),
-        fetch_all=True,
-    )
+    # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Antes: `WHERE ingredient_name = %s`
+    # exacto. Mismo plural, mismo no-op silencioso que en el deduct — la reserva
+    # del plan quedaba colgada y el descuento físico corría sin liberarla.
+    _resolved, _level = find_pantry_rows_for_name(user_id, ingredient_name)
+    existing_rows = [r for r in _resolved if float(r.get("reserved_quantity") or 0) > 0]
+    if _level == "canonical" and existing_rows:
+        ingredient_name = existing_rows[0].get("ingredient_name") or ingredient_name
 
     master_list = get_master_ingredients()
     master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
@@ -1284,13 +1392,22 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
     """
     if not _db_available(): return False
     try:
-        # Extraemos sin filtrar por 'unit' para buscar compatibles
-        existing_rows = execute_sql_query(
-            "SELECT id, quantity::float8 AS quantity, unit FROM user_inventory "
-            "WHERE user_id = %s AND ingredient_name = %s",
-            (user_id, ingredient_name),
-            fetch_all=True,
-        ) or []
+        # Extraemos sin filtrar por 'unit' para buscar compatibles.
+        # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] La resolución dejó de ser
+        # igualdad exacta de string: ese `WHERE ingredient_name = %s` es el
+        # origen del descuento fantasma ("2 huevos" contra la fila "Huevo" →
+        # 0 filas → return True sin descontar ni reportar). Ver el bloque
+        # `find_pantry_rows_for_name` para la escalera completa.
+        existing_rows, _match_level = find_pantry_rows_for_name(user_id, ingredient_name)
+
+        # Cuando el match fue canónico, la ortografía de LA NEVERA gana sobre la
+        # que emitió la LLM. Sin esto el resto de la función (lookup en master,
+        # refresh de `brand`, INSERT de fallback) seguiría operando sobre
+        # "Huevos" y acabaría creando la fila duplicada que queríamos evitar.
+        if _match_level == "canonical" and existing_rows:
+            _pantry_name = existing_rows[0].get("ingredient_name")
+            if _pantry_name:
+                ingredient_name = _pantry_name
 
         master_list = get_master_ingredients()
         master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
@@ -1836,7 +1953,355 @@ def _infer_typical_portion(name: str) -> Optional[tuple]:
     return (50.0, "g")
 
 
-def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str]):
+# ============================================================
+# [P1-CONSUMPTION-LEDGER · 2026-08-07] Descuentos reversibles
+# ============================================================
+# `DELETE /api/diary/consumed/{meal_id}` borraba la fila del diario y dejaba la
+# Nevera descontada. Devolver la comida exige saber QUÉ se descontó, y eso se
+# perdía al aplicar el delta: el string original ("2 huevos") no basta porque
+# la resolución de nombre (P1-PANTRY-NAME-RESOLUTION) pudo mapearlo a la fila
+# "Huevo" y la inferencia de porción (P1-PANTRY-INFER) pudo inventar la
+# cantidad. Re-parsear al revertir repetiría ambas decisiones y podría llegar a
+# otra respuesta — devolviendo una cantidad distinta de la que se quitó.
+#
+# El ledger guarda el nombre YA RESUELTO y la cantidad YA APLICADA. Revertir es
+# leer y sumar, no volver a interpretar.
+#
+# Tooltip-anchor: P1-CONSUMPTION-LEDGER-ENGINE
+
+# Solo estos movieron la Nevera. `not_in_pantry` y `failed` no tocaron nada:
+# devolverlos CREARÍA comida que el usuario nunca tuvo.
+_REVERSIBLE_OUTCOMES = ("deducted", "inferred")
+
+
+def _persist_consumption_events(
+    user_id: str,
+    consumed_meal_id: Optional[str],
+    source: str,
+    events: List[Dict[str, Any]],
+) -> int:
+    """Escribe los eventos del ledger en UN solo INSERT. Best-effort.
+
+    Devuelve cuántos se escribieron (0 si no había o si falló). NO propaga:
+    el descuento ya ocurrió y hacer fallar al caller por un problema de
+    auditoría le costaría al usuario el registro calórico entero.
+    """
+    if not _db_available() or not user_id or not events:
+        return 0
+    try:
+        values, params = [], []
+        for e in events:
+            try:
+                qty = float(e.get("qty") or 0)
+            except (TypeError, ValueError):
+                continue
+            # El CHECK de la tabla exige quantity > 0: el signo lo pone la
+            # operación, no el evento.
+            if qty <= 0 or not e.get("name"):
+                continue
+            values.append("(%s, %s, %s, %s, %s, %s, %s)")
+            params.extend([
+                user_id,
+                consumed_meal_id,
+                str(source or "unknown")[:32],
+                str(e["name"])[:120],
+                round(qty, 4),
+                str(e.get("unit") or "unidad")[:32],
+                str(e.get("outcome") or "failed")[:32],
+            ])
+        if not values:
+            return 0
+        execute_sql_write(
+            "INSERT INTO inventory_consumption_events "
+            "(user_id, consumed_meal_id, source, ingredient_name, quantity, unit, outcome) "
+            "VALUES " + ", ".join(values),
+            tuple(params),
+        )
+        return len(values)
+    except Exception as e:
+        logger.warning(
+            f"[P1-CONSUMPTION-LEDGER] no se pudo persistir el rastro de "
+            f"{len(events)} evento(s) para meal={consumed_meal_id} "
+            f"({type(e).__name__}). El descuento SÍ se aplicó; lo que se pierde "
+            f"es poder deshacerlo automáticamente."
+        )
+        return 0
+
+
+def revert_consumption_events(user_id: str, consumed_meal_id: str) -> Dict[str, Any]:
+    """Devuelve a la Nevera lo que un registro de diario había descontado.
+
+    Idempotente vía `reverted_at`: un segundo DELETE del mismo meal no vuelve a
+    sumar. Filtra `AND user_id = %s` (invariante I2) — un `meal_id` ajeno,
+    adivinado o enumerado, no toca nada.
+
+    Se marcan como revertidos ANTES de sumar, no después: si el proceso muere a
+    mitad, el modo de fallo es "no devolví todo" (la Nevera queda baja, el
+    usuario lo ve y puede corregir a mano) en vez de "devolví dos veces" (la
+    Nevera queda alta, nadie lo nota, y el plan compra de menos). Entre dos
+    fallos parciales, el que se detecta gana.
+    """
+    out = {"reverted": [], "skipped": 0}
+    if not _db_available() or not user_id or not consumed_meal_id:
+        return out
+    try:
+        rows = execute_sql_write(
+            "UPDATE inventory_consumption_events SET reverted_at = NOW() "
+            "WHERE consumed_meal_id = %s AND user_id = %s "
+            "AND reverted_at IS NULL AND outcome = ANY(%s) "
+            "RETURNING ingredient_name, quantity::float8 AS quantity, unit",
+            (consumed_meal_id, user_id, list(_REVERSIBLE_OUTCOMES)),
+            returning=True,
+        ) or []
+    except Exception as e:
+        logger.error(
+            f"[P1-CONSUMPTION-LEDGER] no se pudieron reclamar los eventos de "
+            f"meal={consumed_meal_id}: {e}"
+        )
+        return out
+
+    for r in rows:
+        name = r.get("ingredient_name")
+        try:
+            qty = float(r.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        unit = r.get("unit") or "unidad"
+        if not name or qty <= 0:
+            out["skipped"] += 1
+            continue
+        try:
+            # Suma con la MISMA (name, unit) que se restó. `mutation_type`
+            # distinto de 'consumption' para que un audit sepa que esta fila
+            # subió por una devolución, no por una compra.
+            ok = add_or_update_inventory_item(
+                user_id, name, qty, unit, mutation_type="consumption_revert")
+            if ok is False:
+                out["skipped"] += 1
+                logger.warning(
+                    f"[P1-CONSUMPTION-LEDGER] revert de {name!r} ({qty} {unit}) "
+                    f"no se pudo aplicar para user={str(user_id)[:8]}."
+                )
+            else:
+                out["reverted"].append(f"{qty} {unit} de {name}")
+        except Exception as e:
+            out["skipped"] += 1
+            logger.warning(f"[P1-CONSUMPTION-LEDGER] revert de {name!r} falló: {e}")
+
+    if out["reverted"]:
+        logger.info(
+            f"🧊 [P1-CONSUMPTION-LEDGER] devueltos {len(out['reverted'])} item(s) "
+            f"a la Nevera de user={str(user_id)[:8]} tras deshacer "
+            f"meal={consumed_meal_id}."
+        )
+    return out
+
+
+# ============================================================
+# [P1-PANTRY-RECONCILIATION · 2026-08-07] La Nevera pregunta
+# ============================================================
+# La regla del producto es "la Nevera solo baja por lo que el usuario
+# registra", y es la correcta. Su consecuencia inevitable: lo que come sin
+# registrar NUNCA sale. A las 2-3 semanas la Nevera sobre-reporta, la lista de
+# compras sub-compra, y el usuario deja de creerle.
+#
+# El arreglo NO es descontar automático — eso rompe la regla y devuelve al
+# problema que P1-PANTRY-NAME-RESOLUTION cerró (mover la Nevera por algo que el
+# usuario no puede auditar). El arreglo es PREGUNTAR. La reducción sigue
+# exigiendo una acción humana; el sistema solo la hace barata.
+#
+# ⚠️ QUÉ SEÑAL USA, Y POR QUÉ NO SOLO `updated_at`
+#
+# `user_inventory.updated_at` NO se mantiene en el camino principal: el RPC
+# `apply_inventory_delta` escribe quantity/master_id/last_mutation_type y no
+# toca la columna, y no hay trigger BEFORE UPDATE (a diferencia de
+# `meal_plans`, que necesitó `p0_2_meal_plans_updated_at.sql`). Solo la edición
+# manual del Pantry la escribe explícitamente. Construir "no se ha movido en N
+# días" sobre ella preguntaría por comida que SÍ se usó.
+#
+# Por eso el ancla es el MÁXIMO de tres evidencias independientes:
+#
+#   created_at            cuándo entró a la Nevera (piso: lo recién comprado
+#                         nunca es stale)
+#   updated_at            ediciones manuales, y cualquier mutación si alguien
+#                         añade el trigger algún día
+#   ledger                último evento de `inventory_consumption_events`
+#                         para ese ingrediente (verdadero por construcción)
+#
+# Degrada bien en los dos mundos: sin trigger, el ledger carga la señal; con
+# trigger, ambos suman. Ninguno solo es suficiente — el ledger no ve restocks
+# y `updated_at` no ve consumo.
+#
+# Tooltip-anchor: P1-PANTRY-RECONCILIATION-ENGINE
+
+
+def _reconciliation_knobs() -> tuple:
+    """(días de quietud, tamaño máximo del lote). Clamps defensivos."""
+    try:
+        from knobs import _env_int
+        dias = _env_int("MEALFIT_PANTRY_RECONCILE_STALE_DAYS", 14,
+                        validator=lambda v: 3 <= v <= 180)
+        lote = _env_int("MEALFIT_PANTRY_RECONCILE_BATCH", 8,
+                        validator=lambda v: 1 <= v <= 50)
+    except Exception:
+        dias, lote = 14, 8
+    return dias, lote
+
+
+def get_reconciliation_candidates(user_id: str) -> List[Dict[str, Any]]:
+    """Items de la Nevera sobre los que vale la pena preguntar.
+
+    El lote se CAPEA (knob `MEALFIT_PANTRY_RECONCILE_BATCH`, default 8) y se
+    ordena por más antiguo primero. El cap no es cosmético: la primera vez que
+    esto corre sobre una Nevera vieja, casi todo califica — y una lista de 40
+    preguntas no se contesta, se ignora, y entonces la feature no existe.
+    Preguntar por 8 y volver mañana sí se contesta.
+    """
+    if not _db_available() or not user_id:
+        return []
+    dias, lote = _reconciliation_knobs()
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT ui.id,
+                   ui.ingredient_name,
+                   ui.quantity::float8 AS quantity,
+                   ui.unit,
+                   GREATEST(
+                       ui.created_at,
+                       COALESCE(ui.updated_at, ui.created_at),
+                       COALESCE((SELECT MAX(e.created_at)
+                                   FROM inventory_consumption_events e
+                                  WHERE e.user_id = ui.user_id
+                                    AND lower(e.ingredient_name) = lower(ui.ingredient_name)),
+                                ui.created_at)
+                   ) AS last_signal
+              FROM user_inventory ui
+             WHERE ui.user_id = %s
+               AND ui.quantity > 0
+             ORDER BY last_signal ASC
+             LIMIT %s
+            """,
+            # Se piden más filas de las que se devuelven: el corte por fecha se
+            # aplica en Python (para poder parsear timestamps que llegan como
+            # string vía to_jsonb en otros paths) y algunas caen. Pedir 4× el
+            # lote deja margen sin traerse la Nevera entera.
+            (user_id, lote * 4),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-RECONCILIATION] no se pudieron leer candidatos: {e}")
+        return []
+
+    from datetime import datetime, timezone, timedelta
+    corte = datetime.now(timezone.utc) - timedelta(days=dias)
+    fuera = []
+    for r in rows:
+        sig = r.get("last_signal")
+        try:
+            if isinstance(sig, str):
+                sig = datetime.fromisoformat(sig.replace("Z", "+00:00"))
+            if sig is not None and sig.tzinfo is None:
+                sig = sig.replace(tzinfo=timezone.utc)
+        except Exception:
+            sig = None
+        # Sin señal parseable NO se pregunta: inventar que algo está quieto
+        # sería la misma clase de mentira que este workstream viene cerrando.
+        if sig is None or sig > corte:
+            continue
+        fuera.append({
+            "id": r.get("id"),
+            "ingredient_name": r.get("ingredient_name"),
+            "quantity": float(r.get("quantity") or 0),
+            "unit": r.get("unit") or "unidad",
+            "days_quiet": max(0, (datetime.now(timezone.utc) - sig).days),
+        })
+        if len(fuera) >= lote:
+            break
+    return fuera
+
+
+# `keep` escribe `updated_at` EXPLÍCITAMENTE (no depende de trigger): es
+# literalmente "confirmé que esto sigue aquí en esta fecha", que es justo lo
+# que la columna debería significar.
+_RECONCILE_ACTIONS = ("used", "spoiled", "keep")
+
+
+def resolve_reconciliation_item(user_id: str, row_id: Any, action: str) -> Dict[str, Any]:
+    """Aplica la respuesta del usuario a un item de la reconciliación.
+
+    `used`/`spoiled` sacan el item de la Nevera y dejan evento en el ledger con
+    su motivo — se distinguen porque el desperdicio es información de COMPRA,
+    no de consumo, y colapsarlos haría imposible medirlo.
+
+    `keep` no toca la cantidad: solo reinicia el reloj.
+
+    Filtra `AND user_id = %s` (invariante I2): un `row_id` ajeno no toca nada.
+    """
+    if action not in _RECONCILE_ACTIONS:
+        return {"ok": False, "reason": "invalid_action"}
+    if not _db_available() or not user_id or row_id in (None, ""):
+        return {"ok": False, "reason": "missing_args"}
+
+    try:
+        row = execute_sql_query(
+            "SELECT ingredient_name, quantity::float8 AS quantity, unit "
+            "FROM user_inventory WHERE id = %s AND user_id = %s",
+            (row_id, user_id),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-RECONCILIATION] lookup falló: {e}")
+        return {"ok": False, "reason": "lookup_failed"}
+    if not row:
+        return {"ok": False, "reason": "not_found"}
+
+    name = row.get("ingredient_name")
+    qty = float(row.get("quantity") or 0)
+    unit = row.get("unit") or "unidad"
+
+    if action == "keep":
+        try:
+            execute_sql_write(
+                "UPDATE user_inventory SET updated_at = NOW() "
+                "WHERE id = %s AND user_id = %s",
+                (row_id, user_id),
+            )
+        except Exception as e:
+            logger.warning(f"[P1-PANTRY-RECONCILIATION] no se pudo reiniciar el reloj: {e}")
+            return {"ok": False, "reason": "touch_failed"}
+        return {"ok": True, "action": "keep", "ingredient_name": name}
+
+    # used | spoiled → sale de la Nevera.
+    try:
+        execute_sql_write(
+            "DELETE FROM user_inventory WHERE id = %s AND user_id = %s",
+            (row_id, user_id),
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-RECONCILIATION] no se pudo retirar {name!r}: {e}")
+        return {"ok": False, "reason": "remove_failed"}
+
+    # Rastro en el MISMO ledger que el resto de movimientos: "¿qué movió mi
+    # Nevera?" debe contestarse en un solo sitio. `consumed_meal_id` queda NULL
+    # a propósito — no hay registro de diario que deshacer, así que estos
+    # eventos quedan naturalmente fuera del revert sin caso especial.
+    _persist_consumption_events(
+        user_id, None, "reconciliation",
+        [{"name": name, "qty": qty, "unit": unit,
+          "outcome": "spoiled" if action == "spoiled" else "deducted"}],
+    )
+    return {"ok": True, "action": action, "ingredient_name": name,
+            "quantity": qty, "unit": unit}
+
+
+def deduct_consumed_meal_from_inventory(
+    user_id: str,
+    ingredients_list: List[str],
+    *,
+    consumed_meal_id: Optional[str] = None,
+    source: str = "unknown",
+):
     """
     Resta matemáticamente una lista de ingredientes crudos (los de una comida consumida)
     de la tabla de inventario físico.
@@ -1845,8 +2310,16 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     devuelve False) se acumulan en `failed_items` y se persisten al final
     en `failed_inventory_deductions` para que el cron de alerta los detecte.
     Item ausente en pantry NO es failure — el usuario puede haber consumido
-    algo que no tenía registrado (el deduct devuelve True silencioso si no
-    hay row compatible).
+    algo que no tenía registrado.
+
+    [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Ese "ausente" ya NO se confunde
+    con éxito. Pre-fix la ausencia y la deducción real devolvían ambas `True`
+    y caían juntas en `succeeded`, así que el resumen decía "descontados 4
+    items" cuando la nevera no se había movido — y como la resolución era por
+    igualdad exacta de string, la mayoría de las "ausencias" ni siquiera eran
+    reales: eran la fila "Huevo" que no matcheaba el texto "2 huevos". Ahora
+    la resolución pasa por `find_pantry_rows_for_name` (case/acentos/plural) y
+    lo que de verdad no está sale por la clave `not_in_pantry` del resumen.
 
     [P1-PANTRY-INFER · 2026-05-22] Cuando el chat agent registra una comida
     desde texto natural ("me comí una taza de avena"), `_parse_quantity`
@@ -1877,6 +2350,42 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     succeeded_strs: List[str] = []
     inferred_strs: List[str] = []
     failed_strs: List[str] = []
+    # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Cuarta categoría: el item se
+    # parseó bien pero NO existe fila en la nevera del usuario. Ni éxito
+    # (no bajó nada) ni fallo (no hay nada que reintentar).
+    not_in_pantry_strs: List[str] = []
+    # [P1-CONSUMPTION-LEDGER · 2026-08-07] Eventos a persistir al final, en
+    # UN solo INSERT. Se acumulan en vez de escribir por item para no meter
+    # N roundtrips en el path caliente del descuento.
+    ledger_events: List[Dict[str, Any]] = []
+
+    # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] UN solo fetch de la nevera para
+    # clasificar presencia de TODOS los items de la comida. Resolver item por
+    # item aquí habría sumado 1-2 SELECT por ingrediente encima de los que ya
+    # hacen `_consume_reserved_inventory` y `add_or_update_inventory_item`
+    # (una comida de 5 ingredientes: 30 queries en vez de 10).
+    #
+    # Este snapshot se usa SOLO para el sí/no de presencia. La aritmética de
+    # cantidades sigue leyendo filas frescas dentro de `add_or_update_...`:
+    # reutilizar cantidades de un snapshot reabriría la ventana de lost-update
+    # que P0-4 cerró con la RPC.
+    try:
+        _pantry_snapshot = execute_sql_query(
+            "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
+            "reserved_quantity::float8 AS reserved_quantity, reservation_details "
+            "FROM user_inventory WHERE user_id = %s",
+            (user_id,),
+            fetch_all=True,
+        ) or []
+    except Exception as _snap_e:
+        # Sin snapshot NO clasificamos como ausente (eso sería la mentira que
+        # este fix elimina): se degrada a resolución por item.
+        logger.warning(
+            f"[P1-PANTRY-NAME-RESOLUTION] snapshot de nevera falló "
+            f"({type(_snap_e).__name__}); clasificación de presencia degrada "
+            f"a resolución per-item."
+        )
+        _pantry_snapshot = None
     for item in ingredients_list:
         if not item or len(item) < 3: continue
         try:
@@ -1903,6 +2412,30 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
                     })
                     failed_strs.append(str(item))
                     continue
+            # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] "No está en tu nevera" y
+            # "sí está y lo descontamos" eran el MISMO desenlace: ambos caían en
+            # `succeeded`. Son opuestos — uno significa que el usuario comió algo
+            # que no tenía registrado (informativo, y el coach puede decirlo), el
+            # otro que la nevera bajó de verdad. Se separan acá, ANTES de mutar.
+            #
+            # NO se enruta a `failed_inventory_deductions`: esa cola es de fallos
+            # REINTENTABLES y su cron reintenta hasta dead-letter. Un item que no
+            # existe en la nevera no mejora reintentándolo — reintentarlo solo
+            # gasta ticks y ensucia la alerta de backlog.
+            _rows_for_item, _lvl_for_item = find_pantry_rows_for_name(
+                user_id, name, prefetched_rows=_pantry_snapshot)
+            if not _rows_for_item:
+                logger.info(
+                    f"🧊 [P1-PANTRY-NAME-RESOLUTION] {name!r} no está en la nevera "
+                    f"de user={str(user_id)[:8]} — se registra el consumo pero no "
+                    f"hay fila que descontar."
+                )
+                not_in_pantry_strs.append(str(item))
+                ledger_events.append({
+                    "name": name, "qty": qty, "unit": unit, "outcome": "not_in_pantry",
+                })
+                continue
+
             _consume_reserved_inventory(user_id, name, qty, unit)
             # Actualizar restando
             ok = add_or_update_inventory_item(user_id, name, -qty, unit, mutation_type="consumption")
@@ -1918,7 +2451,14 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
                     "reason": "deduction_returned_false",
                 })
                 failed_strs.append(str(item))
+                ledger_events.append({
+                    "name": name, "qty": qty, "unit": unit, "outcome": "failed",
+                })
             else:
+                ledger_events.append({
+                    "name": name, "qty": qty, "unit": unit,
+                    "outcome": "inferred" if used_inference else "deducted",
+                })
                 if used_inference:
                     inferred_strs.append(str(item))
                 else:
@@ -1938,6 +2478,13 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     # hacemos round-trip a DB.
     _persist_failed_inventory_deductions(user_id, failed_items)
 
+    # [P1-CONSUMPTION-LEDGER · 2026-08-07] Rastro reversible. Best-effort a
+    # propósito: si el ledger falla, el descuento YA ocurrió y negarlo sería
+    # peor — el usuario perdería el registro calórico por un fallo de
+    # auditoría. Lo que se pierde es la capacidad de deshacer ESE registro, y
+    # eso se declara en el log en vez de tragárselo.
+    _persist_consumption_events(user_id, consumed_meal_id, source, ledger_events)
+
     # [P1-AGENT-HINT · 2026-05-22] Retornar resumen para que el caller (típicamente
     # `tools.log_consumed_meal`) pueda enriquecer el ToolMessage con un hint a la
     # LLM cuando algún item quedó sin procesar. Callers legacy que ignoran el
@@ -1946,6 +2493,10 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
         "succeeded": succeeded_strs,
         "inferred": inferred_strs,
         "failed_to_deduct": failed_strs,
+        # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Clave nueva. Callers legacy
+        # que hacen `.get("succeeded")` siguen intactos; los que quieran
+        # distinguir "no lo tenías" de "lo descontamos" leen esta.
+        "not_in_pantry": not_in_pantry_strs,
     }
 
 def restock_inventory(user_id: str, ingredients_list: list):
@@ -2452,7 +3003,11 @@ def sync_inventory_after_chunk_completion(
                 # sigue siendo INCONDICIONAL e intencional (filas sin ingredientes
                 # parseables NO deben reintentarse cada cierre de chunk) — solo
                 # corregimos la exactitud del contador.
-                _summary = deduct_consumed_meal_from_inventory(user_id, ingredients_list)
+                _summary = deduct_consumed_meal_from_inventory(
+                    user_id, ingredients_list,
+                    consumed_meal_id=str(row_id) if row_id else None,
+                    source="chunk_reconcile",
+                )
                 if isinstance(_summary, dict):
                     stats["items_deducted"] += (
                         len(_summary.get("succeeded", [])) + len(_summary.get("inferred", []))

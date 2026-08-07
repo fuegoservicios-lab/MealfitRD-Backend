@@ -28,10 +28,31 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _GRAPH = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
-_ENV = (_BACKEND_ROOT / ".env").read_text(encoding="utf-8")
+
+# [P1-CI-SIBLING-CHECKOUT · 2026-08-07] `.env` está en .gitignore: existe en la
+# máquina del operador y en el VPS, nunca en un runner de CI. Leerlo a nivel de
+# módulo hacía que este archivo explotara AL IMPORTARSE, y pytest trata un error
+# de colección como fatal (`Interrupted: N errors during collection`) — o sea que
+# este único archivo dejaba en cero la suite entera del backend en CI, incluidos
+# los ~1689 tests que no tienen nada que ver con `.env`.
+#
+# Los dos tests que interrogan el `.env` siguen siendo valiosos donde el archivo
+# existe (verifican que el operador tenga el knob explícito, no el default
+# silencioso), así que se hacen SKIP en vez de borrarse. En una máquina con
+# `.env` corren exactamente igual que antes.
+_ENV_PATH = _BACKEND_ROOT / ".env"
+_ENV = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.is_file() else None
+
+_requires_env = pytest.mark.skipif(
+    _ENV is None,
+    reason="`.env` no existe (gitignored). Estos dos contratos aplican a la "
+           "config del operador, no al código versionado.",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +123,7 @@ def test_hedge_max_concurrent_no_hardcoded_div_2():
     )
 
 
+@_requires_env
 def test_env_sets_hedge_max_concurrent_at_3():
     """El `.env` debe setear el knob explícitamente para que un operador sepa
     qué valor está activo sin tener que mirar el código del default.
@@ -128,6 +150,7 @@ def test_env_sets_hedge_max_concurrent_at_3():
     )
 
 
+@_requires_env
 def test_env_comment_references_pfix_marker():
     """El bloque de comentario en .env debe nombrar el marker P-fix para que
     un mantenedor futuro pueda buscar la historia."""

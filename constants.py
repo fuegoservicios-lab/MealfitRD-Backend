@@ -2281,6 +2281,122 @@ def normalize_ingredient_for_tracking(raw: str) -> str:
     return text
 
 
+# ============================================================
+# [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Identidad de una fila de la Nevera
+# ============================================================
+# El SSOT de "¿este nombre se refiere a la MISMA fila física de `user_inventory`?".
+#
+# Por qué existe, con el incidente que lo motivó:
+#   `db_inventory.add_or_update_inventory_item` resolvía la fila con igualdad
+#   EXACTA de string (`WHERE ingredient_name = %s`). La nevera del dueño dice
+#   "Huevo"; el coach registra "2 huevos" → 0 filas → cantidad negativa → ni
+#   entra al INSERT (`quantity >= 0.01`) ni al guard de unidad incompatible
+#   (exige `existing_rows` no vacío) → cae al `return True` final. Resultado:
+#   NO descuenta, NO registra el fallo en `failed_inventory_deductions`, NO
+#   alerta, y le dice al caller que todo salió bien. Un descuento que miente
+#   es peor que uno que falla: nadie lo puede diagnosticar.
+#   Familia ya conocida — P1-SWAP-PANTRY-PLURAL (2026-08-05) cerró el MISMO
+#   plural del lado del reparador de coherencia y dejó este lado abierto.
+#
+# ⚠️ NO uses `normalize_ingredient_for_tracking` para esto, y NO conviertas
+# esta función en un cuarto consumidor de `GLOBAL_REVERSE_MAP`. Ese mapa
+# colapsa SINÓNIMOS ("pechuga"→"pollo", "muslo"→"pollo", "lomo"→"cerdo"),
+# que es correcto para tracking de frecuencia y para el guard de coherencia,
+# y CATASTRÓFICO acá: haría que comerte una pechuga descuente de la fila
+# "Muslo de pollo", y fusionaría en la Nevera dos alimentos que el usuario
+# compró por separado y a precios distintos. La identidad de una fila física
+# es ortogonal al parentesco nutricional entre alimentos.
+#
+# Escalera deliberadamente CONSERVADORA (solo variaciones ortográficas del
+# MISMO alimento): case → acentos → espacios → cantidad al inicio → plural.
+# Un fallo de match degrada a "no lo encontré en tu nevera" (visible, seguro);
+# un match de más descuenta del alimento equivocado (silencioso, corrupto).
+# Ante la duda, NO matchear.
+#
+# Tooltip-anchor: P1-PANTRY-NAME-RESOLUTION-SSOT
+
+# Plurales cuya forma singular las reglas generales no aciertan. Mantener
+# CORTO: cada entrada es una excepción que hay que justificar.
+_PANTRY_IRREGULAR_SINGULARS = {
+    "lunes": "lunes", "cuscus": "cuscus",  # invariables: no los toques
+}
+
+# Bajo este largo NO se singulariza. Es la disciplina de P1-SWAP-PANTRY-PLURAL:
+# "res"/"sal"/"mas"/"ajo" son palabras completas, no plurales de "re"/"sa".
+_PANTRY_MIN_SINGULARIZE_LEN = 4
+
+
+def canonical_pantry_key(raw: str) -> str:
+    """Clave normalizada de un nombre de Nevera (SIN singularizar).
+
+    lower + sin acentos + sin cantidad al inicio + espacios colapsados.
+    Es el peldaño 2 de la escalera (el 1 es igualdad exacta de string) y la
+    forma que se emite en logs/telemetría. Para comparar dos nombres usa
+    `pantry_names_match`, que además tolera singular/plural.
+    """
+    if not raw or not str(raw).strip():
+        return ""
+    text = str(raw).lower().strip()
+    stripped_qty = _QUANTITY_PATTERN.sub('', text).strip()
+    # Si el input era SOLO cantidad ("200g"), conservar el original: quedarnos
+    # con "" haría que dos items sin nombre matchearan entre sí.
+    if stripped_qty:
+        text = stripped_qty
+    text = strip_accents(text)
+    return " ".join(text.split())
+
+
+def _pantry_token_variants(token: str) -> set:
+    """Formas singulares plausibles de un token ya normalizado.
+
+    Devuelve un CONJUNTO en vez de elegir una sola forma a propósito: el
+    español no permite decidir sin lexicón si "-nes" viene de "-n" o de
+    "-ne" ("limones"→limón pero "carnes"→carne). Emitir ambas y exigir
+    intersección acierta en los dos casos; forzar una sola inventaría un
+    fallo en el otro. Las formas de más nunca crean falsos positivos entre
+    alimentos distintos porque el match sigue siendo token a token.
+    """
+    if not token:
+        return set()
+    if token in _PANTRY_IRREGULAR_SINGULARS:
+        return {token, _PANTRY_IRREGULAR_SINGULARS[token]}
+    variants = {token}
+    if len(token) < _PANTRY_MIN_SINGULARIZE_LEN:
+        return variants
+    # "arroces"→arroz, "nueces"→nuez, "peces"→pez, "raices"→raiz.
+    if token.endswith("ces") and len(token) >= 5:
+        variants.add(token[:-3] + "z")
+    # Consonante + "es": "limones"→limon, "panes"→pan, "frijoles"→frijol.
+    if token.endswith("es") and len(token) >= 5 and token[-3] not in "aeiou":
+        variants.add(token[:-2])
+    # Vocal + "s": "huevos"→huevo, "papas"→papa, "carnes"→carne.
+    if token.endswith("s") and len(token) >= 4 and token[-2] in "aeiou":
+        variants.add(token[:-1])
+    return variants
+
+
+def pantry_names_match(a: str, b: str) -> bool:
+    """¿`a` y `b` nombran la MISMA fila física de la Nevera?
+
+    Compara token a token sobre la clave canónica, aceptando equivalencia
+    singular/plural por token. Exige el MISMO número de tokens: "leche de
+    coco" no matchea "leche", y "arroz integral" no matchea "arroz" — son
+    compras distintas con precio y unidad distintos. Un no-match degrada a
+    "no está en tu nevera", que es un desenlace seguro y visible.
+    """
+    key_a, key_b = canonical_pantry_key(a), canonical_pantry_key(b)
+    if not key_a or not key_b:
+        return False
+    if key_a == key_b:
+        return True
+    toks_a, toks_b = key_a.split(), key_b.split()
+    if len(toks_a) != len(toks_b) or not toks_a:
+        return False
+    return all(
+        _pantry_token_variants(ta) & _pantry_token_variants(tb)
+        for ta, tb in zip(toks_a, toks_b)
+    )
+
 
 # ============================================================
 # TÉCNICAS DE COCCIÓN Y SUPLEMENTOS

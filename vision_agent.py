@@ -197,7 +197,24 @@ _MEAL_VISION_PROMPT = (
     "compra (funda del super, productos con empaque, frutas o verduras "
     "crudas, el interior de una nevera o despensa); 'otro' si no hay comida. "
     "SI ES 'otro': is_food=false, macros en 0, meal_name vacio, items vacio. "
-    "SI ES 'plato' (deja items vacio): haz un INVENTARIO en 'description': "
+    # [P1-VISION-PLATO-ITEMS · 2026-08-07] Antes decia "deja items vacio" para
+    # 'plato', asi que escanear comida NUNCA podia descontar la Nevera: el
+    # endpoint recibia macros y un texto, pero ni un solo ingrediente con
+    # cantidad. El inventario de componentes YA se le pedia en 'description'
+    # (texto libre); ahora ademas se pide ESTRUCTURADO en 'items', que es lo
+    # que el modal puede cotejar contra la Nevera y el usuario confirmar.
+    # Mismo roundtrip, mismo costo — solo deja de tirar el dato.
+    "SI ES 'plato': ademas de lo de abajo, llena 'items' con los MISMOS "
+    "componentes que listes en 'description', uno por entrada, con la "
+    "cantidad SERVIDA EN EL PLATO (no la del empaque): 'name' generico en "
+    "espanol dominicano SIN marca ('huevo', 'queso frito', 'platano verde', "
+    "'salami'), 'quantity' el numero de piezas/porciones visibles (2 huevos, "
+    "2 lascas de queso, 1 taza de arroz) y 'unit' una de: unidad, lasca, "
+    "rodaja, taza, cucharada, g, lb. Si un componente esta claramente ahi "
+    "pero no puedes estimar cuanto, ponlo igual con la cantidad que mejor "
+    "puedas aproximar - el usuario la corrige antes de confirmar. NO inventes "
+    "componentes que no se vean. "
+    "SI ES 'plato': haz un INVENTARIO en 'description': "
     "lista TODOS los componentes visibles sin omitir ninguno - la base de "
     "carbohidrato (mangu, arroz, yuca, platano, pan), las proteinas (huevo, "
     "salami, queso frito, pollo, carne) y las guarniciones (cebolla roja "
@@ -370,11 +387,29 @@ def _coerce_meal_scan(data: dict) -> dict:
             "calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0,
         }
 
-    # ---- Modo PLATO: contrato v3 intacto ----
+    # ---- Modo PLATO: contrato v3 + componentes estructurados ----
+    # [P1-VISION-PLATO-ITEMS · 2026-08-07] `items` era `[]` HARDCODED aquí, así
+    # que aunque el modelo los emitiera se tiraban. Ese `[]` es la razón de que
+    # escanear comida nunca haya podido descontar la Nevera: el modal recibía
+    # macros y un párrafo, jamás un ingrediente con cantidad que cotejar.
+    # Se sanitizan con las MISMAS reglas que el modo 'items' (mismo helper) —
+    # una segunda ruta de sanitización sería justo el tipo de duplicado que
+    # deriva. A diferencia del modo 'items', aquí un `items` vacío NO degrada
+    # a "otro": un plato con macros sigue siendo un registro válido de diario
+    # aunque el modelo no haya sabido desglosarlo.
+    plato_items = []
+    for it in (data.get("items") or [])[:30]:
+        name = str((it or {}).get("name") or "").strip()[:60]
+        if not name:
+            continue
+        unit = str((it or {}).get("unit") or "unidad").strip().lower()[:20]
+        qty = _sane_item_qty((it or {}).get("quantity"), unit)
+        plato_items.append({"name": name, "quantity": qty, "unit": unit})
+
     result = {
         "photo_kind": "plato",
         "is_food": True,
-        "items": [],
+        "items": plato_items,
         "description": description or "Comida detectada en la foto.",
         "meal_name": meal_name,
         "calories": _macro("calories"),

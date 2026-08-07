@@ -651,7 +651,14 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     # gate, la 2ª emisión saltaba el INSERT (calorías OK) pero corría la
     # deducción de nuevo → la nevera se descontaba AL DOBLE del consumo real.
     if has_ingredients and result != "deduped":
-        deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
+        # [P1-CONSUMPTION-LEDGER · 2026-08-07] `result` es el id de la fila
+        # recien insertada en `consumed_meals` — atarlo aqui es lo que permite
+        # que "Deshacer registro" devuelva despues esta comida a la Nevera.
+        deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(
+            user_id, ingredients,
+            consumed_meal_id=(result if isinstance(result, str) and result != "deduped" else None),
+            source="chat",
+        )
 
     if result is not None:
         _cuando = "" if _days_ago == 0 else (" (con fecha de AYER — no cuenta en las macros de hoy)" if _days_ago == 1 else f" (con fecha de hace {_days_ago} días — no cuenta en las macros de hoy)")
@@ -699,6 +706,27 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                     f"cuánto consumió (ej. '1 taza', '100g', '2 cdas') y vuelve a "
                     f"llamar log_consumed_meal con la cantidad incluida en el string "
                     f"del ingrediente."
+                )
+            # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Distinto del bloque de
+            # arriba: acá la cantidad SÍ se entendió, lo que no existe es la
+            # fila en la nevera. Pre-fix esto ni se distinguía de un descuento
+            # exitoso, así que el coach afirmaba haber actualizado la nevera
+            # cuando no la había tocado. Decirlo es lo que la hace sólida: el
+            # usuario descubre que ese alimento no lo tiene registrado.
+            absent = deduct_summary.get("not_in_pantry") or []
+            if absent:
+                preview_abs = absent[:5]
+                more_abs = len(absent) - len(preview_abs)
+                abs_str = ", ".join(f"'{x}'" for x in preview_abs)
+                if more_abs > 0:
+                    abs_str += f" (+{more_abs} más)"
+                msg += (
+                    f"\n\nℹ️ Aviso para el asistente: {len(absent)} ingrediente(s) "
+                    f"NO estaban en la nevera del usuario, así que el consumo quedó "
+                    f"registrado pero la nevera no bajó por ellos: {abs_str}. NO le "
+                    f"digas que los descontaste. Si viene al caso, coméntale que no "
+                    f"los tiene registrados y ofrécele agregarlos "
+                    f"(modify_pantry_inventory)."
                 )
         return msg
     else:
