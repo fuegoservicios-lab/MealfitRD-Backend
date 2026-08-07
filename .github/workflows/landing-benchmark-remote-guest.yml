@@ -27,7 +27,9 @@ on:
         default: ""
   push:
     branches: [claude/landing-benchmarks-plan-generation-5ujyio]
-    paths: [".github/workflows/landing-benchmark-remote-guest.yml"]
+    paths:
+      - ".github/workflows/landing-benchmark-remote-guest.yml"
+      - "scripts/landing_benchmark.py"
 
 concurrency:
   group: landing-benchmark-remote-guest
@@ -62,6 +64,11 @@ jobs:
           fi
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "API base: $BASE"
+          # Estado del deploy ANTES de bench: /ready expone si el plan graph compila
+          # (P3-READY-REASON) y /health/version el P-fix vivo — si prod está caído,
+          # el benchmark mediría el outage, no el motor.
+          echo "== /ready ==";          curl -s -m 10 "$BASE/ready" || true; echo ""
+          echo "== /health/version =="; curl -s -m 10 "$BASE/health/version" || true; echo ""
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

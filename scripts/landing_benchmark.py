@@ -328,12 +328,16 @@ def _remote_post(api_base, path, payload, timeout_s, max_429_retries=4):
     url = f"{api_base.rstrip('/')}{path}"
     for attempt in range(max_429_retries + 1):
         r = httpx.post(url, json=payload, timeout=timeout_s)
-        if r.status_code != 429:
-            r.raise_for_status()
-            return r.json()
-        wait = 30 * (attempt + 1)
-        print(f"  429 en {path} — backoff {wait}s (intento {attempt + 1}/{max_429_retries})")
-        time.sleep(wait)
+        if r.status_code == 429:
+            wait = 30 * (attempt + 1)
+            print(f"  429 en {path} — backoff {wait}s (intento {attempt + 1}/{max_429_retries})")
+            time.sleep(wait)
+            continue
+        if r.status_code >= 400:
+            # El body lleva el `detail` de FastAPI — sin él un 4xx/5xx es indiagnosticable
+            # desde fuera (lección smoke 2026-08-07: tres 500 mudos).
+            raise RuntimeError(f"HTTP {r.status_code} en {path}: {r.text[:400]}")
+        return r.json()
     raise RuntimeError(f"rate-limit persistente en {path} tras {max_429_retries} reintentos")
 
 
@@ -343,10 +347,17 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s):
     payload = {
         **fd,
         # Mismo shape que Plan.jsx::dataToSend para guests: session_id efímero,
-        # totalDays por groceryDuration (weekly=7), tzOffset RD (UTC-4 → 240 min).
+        # totalDays por groceryDuration (weekly=7), tzOffset RD (UTC-4 → 240 min),
+        # y las claves acompañantes que el cliente SIEMPRE envía (aunque vacías).
         "session_id": f"guest_landing_bench_{os.getpid()}_{profile['_id']}",
         "totalDays": 7,
         "tzOffset": 240,
+        "previous_meals": [],
+        "current_pantry_ingredients": [],
+        "durable_pantry_ingredients": [],
+        "update_reason": None,
+        "renewal_pantry_aware": False,
+        "is_plan_expired": False,
     }
     t0 = time.time()
     try:
