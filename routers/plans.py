@@ -150,6 +150,15 @@ _RESTOCK_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _CHECKIN_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _CONSUME_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
+# [P1-PANTRY-RECONCILIATION · 2026-08-07] Reconciliación de la Nevera.
+# Quota-exempt por la misma doctrina que `/restock` e `/inventory/consume`
+# (P1-NEVERA-QUOTA-EXEMPT): contestar "¿lo usaste o se dañó?" es mantenimiento
+# de datos del usuario sobre su propia Nevera, cero costo LLM. Al cap el
+# usuario no podría corregir su inventario Y cada respuesta quemaría crédito de
+# PLANES (`get_monthly_api_usage` no filtra por endpoint). El GET es un poll
+# barato del banner; el POST resuelve un item.
+_RECONCILE_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
 # [P1-16] Registry global de session_ids cancelados durante la generación.
 # Cuando el usuario clickea "Cancelar" en el frontend, el SSE se aborta
 # del lado cliente — pero ANTES de P1-16 el pipeline backend seguía
@@ -10075,6 +10084,84 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/restock: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+@router.get("/inventory/reconcile")
+def api_get_reconciliation_candidates(
+    # [P1-PANTRY-RECONCILIATION · 2026-08-07] Quota-exempt — ver `_RECONCILE_LIMITER`.
+    verified_user_id: Optional[str] = Depends(_RECONCILE_LIMITER),
+):
+    """Items sobre los que la Nevera quiere preguntar.
+
+    `{"items": [{id, ingredient_name, quantity, unit, days_quiet}, ...]}`,
+    lista vacía si no hay nada que preguntar (el banner no se pinta).
+
+    La señal de "quieto" NO es solo `updated_at`: esa columna no se mantiene en
+    el camino principal de descuento (el RPC `apply_inventory_delta` no la
+    toca y no hay trigger), así que sola preguntaría por comida que SÍ se usó.
+    Ver `db_inventory.get_reconciliation_candidates`.
+
+    Tooltip-anchor: P1-PANTRY-RECONCILIATION-ENDPOINT
+    """
+    try:
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        from db_inventory import get_reconciliation_candidates
+        return {"items": get_reconciliation_candidates(verified_user_id)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/plans/inventory/reconcile GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/inventory/reconcile")
+def api_resolve_reconciliation_item(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_RECONCILE_LIMITER),
+):
+    """Aplica la respuesta del usuario: `used` | `spoiled` | `keep`.
+
+    Body: `{"item_id": <id>, "action": "used"|"spoiled"|"keep"}`.
+
+    `used`/`spoiled` retiran el item y dejan rastro en el ledger con su motivo
+    (el desperdicio es información de COMPRA, no de consumo: colapsarlos haría
+    imposible medirlo). `keep` no toca la cantidad — solo reinicia el reloj.
+
+    Un `item_id` ajeno devuelve 404: el helper filtra `AND user_id = %s`
+    (invariante I2) y no encuentra fila.
+    """
+    try:
+        if not verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        item_id = data.get("item_id")
+        action = str(data.get("action") or "").strip().lower()
+        if item_id in (None, ""):
+            raise HTTPException(status_code=422, detail="Falta `item_id`.")
+
+        from db_inventory import resolve_reconciliation_item, _RECONCILE_ACTIONS
+        if action not in _RECONCILE_ACTIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"`action` debe ser uno de: {', '.join(_RECONCILE_ACTIONS)}.",
+            )
+
+        out = resolve_reconciliation_item(verified_user_id, item_id, action)
+        if not out.get("ok"):
+            # `not_found` cubre tanto "no existe" como "es de otro usuario" —
+            # mismo 404 para no filtrar existencia cross-user.
+            if out.get("reason") == "not_found":
+                raise HTTPException(status_code=404, detail="Ese item no está en tu Nevera.")
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo actualizar la Nevera. Reintenta en unos segundos.",
+            )
+        return {"success": True, **out}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/plans/inventory/reconcile POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
 
 @router.post("/inventory/consume")
 def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_CONSUME_LIMITER)):  # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] vaciar consumidos, cero costo LLM → NO paywall

@@ -2097,6 +2097,204 @@ def revert_consumption_events(user_id: str, consumed_meal_id: str) -> Dict[str, 
     return out
 
 
+# ============================================================
+# [P1-PANTRY-RECONCILIATION · 2026-08-07] La Nevera pregunta
+# ============================================================
+# La regla del producto es "la Nevera solo baja por lo que el usuario
+# registra", y es la correcta. Su consecuencia inevitable: lo que come sin
+# registrar NUNCA sale. A las 2-3 semanas la Nevera sobre-reporta, la lista de
+# compras sub-compra, y el usuario deja de creerle.
+#
+# El arreglo NO es descontar automático — eso rompe la regla y devuelve al
+# problema que P1-PANTRY-NAME-RESOLUTION cerró (mover la Nevera por algo que el
+# usuario no puede auditar). El arreglo es PREGUNTAR. La reducción sigue
+# exigiendo una acción humana; el sistema solo la hace barata.
+#
+# ⚠️ QUÉ SEÑAL USA, Y POR QUÉ NO SOLO `updated_at`
+#
+# `user_inventory.updated_at` NO se mantiene en el camino principal: el RPC
+# `apply_inventory_delta` escribe quantity/master_id/last_mutation_type y no
+# toca la columna, y no hay trigger BEFORE UPDATE (a diferencia de
+# `meal_plans`, que necesitó `p0_2_meal_plans_updated_at.sql`). Solo la edición
+# manual del Pantry la escribe explícitamente. Construir "no se ha movido en N
+# días" sobre ella preguntaría por comida que SÍ se usó.
+#
+# Por eso el ancla es el MÁXIMO de tres evidencias independientes:
+#
+#   created_at            cuándo entró a la Nevera (piso: lo recién comprado
+#                         nunca es stale)
+#   updated_at            ediciones manuales, y cualquier mutación si alguien
+#                         añade el trigger algún día
+#   ledger                último evento de `inventory_consumption_events`
+#                         para ese ingrediente (verdadero por construcción)
+#
+# Degrada bien en los dos mundos: sin trigger, el ledger carga la señal; con
+# trigger, ambos suman. Ninguno solo es suficiente — el ledger no ve restocks
+# y `updated_at` no ve consumo.
+#
+# Tooltip-anchor: P1-PANTRY-RECONCILIATION-ENGINE
+
+
+def _reconciliation_knobs() -> tuple:
+    """(días de quietud, tamaño máximo del lote). Clamps defensivos."""
+    try:
+        from knobs import _env_int
+        dias = _env_int("MEALFIT_PANTRY_RECONCILE_STALE_DAYS", 14,
+                        validator=lambda v: 3 <= v <= 180)
+        lote = _env_int("MEALFIT_PANTRY_RECONCILE_BATCH", 8,
+                        validator=lambda v: 1 <= v <= 50)
+    except Exception:
+        dias, lote = 14, 8
+    return dias, lote
+
+
+def get_reconciliation_candidates(user_id: str) -> List[Dict[str, Any]]:
+    """Items de la Nevera sobre los que vale la pena preguntar.
+
+    El lote se CAPEA (knob `MEALFIT_PANTRY_RECONCILE_BATCH`, default 8) y se
+    ordena por más antiguo primero. El cap no es cosmético: la primera vez que
+    esto corre sobre una Nevera vieja, casi todo califica — y una lista de 40
+    preguntas no se contesta, se ignora, y entonces la feature no existe.
+    Preguntar por 8 y volver mañana sí se contesta.
+    """
+    if not _db_available() or not user_id:
+        return []
+    dias, lote = _reconciliation_knobs()
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT ui.id,
+                   ui.ingredient_name,
+                   ui.quantity::float8 AS quantity,
+                   ui.unit,
+                   GREATEST(
+                       ui.created_at,
+                       COALESCE(ui.updated_at, ui.created_at),
+                       COALESCE((SELECT MAX(e.created_at)
+                                   FROM inventory_consumption_events e
+                                  WHERE e.user_id = ui.user_id
+                                    AND lower(e.ingredient_name) = lower(ui.ingredient_name)),
+                                ui.created_at)
+                   ) AS last_signal
+              FROM user_inventory ui
+             WHERE ui.user_id = %s
+               AND ui.quantity > 0
+             ORDER BY last_signal ASC
+             LIMIT %s
+            """,
+            # Se piden más filas de las que se devuelven: el corte por fecha se
+            # aplica en Python (para poder parsear timestamps que llegan como
+            # string vía to_jsonb en otros paths) y algunas caen. Pedir 4× el
+            # lote deja margen sin traerse la Nevera entera.
+            (user_id, lote * 4),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-RECONCILIATION] no se pudieron leer candidatos: {e}")
+        return []
+
+    from datetime import datetime, timezone, timedelta
+    corte = datetime.now(timezone.utc) - timedelta(days=dias)
+    fuera = []
+    for r in rows:
+        sig = r.get("last_signal")
+        try:
+            if isinstance(sig, str):
+                sig = datetime.fromisoformat(sig.replace("Z", "+00:00"))
+            if sig is not None and sig.tzinfo is None:
+                sig = sig.replace(tzinfo=timezone.utc)
+        except Exception:
+            sig = None
+        # Sin señal parseable NO se pregunta: inventar que algo está quieto
+        # sería la misma clase de mentira que este workstream viene cerrando.
+        if sig is None or sig > corte:
+            continue
+        fuera.append({
+            "id": r.get("id"),
+            "ingredient_name": r.get("ingredient_name"),
+            "quantity": float(r.get("quantity") or 0),
+            "unit": r.get("unit") or "unidad",
+            "days_quiet": max(0, (datetime.now(timezone.utc) - sig).days),
+        })
+        if len(fuera) >= lote:
+            break
+    return fuera
+
+
+# `keep` escribe `updated_at` EXPLÍCITAMENTE (no depende de trigger): es
+# literalmente "confirmé que esto sigue aquí en esta fecha", que es justo lo
+# que la columna debería significar.
+_RECONCILE_ACTIONS = ("used", "spoiled", "keep")
+
+
+def resolve_reconciliation_item(user_id: str, row_id: Any, action: str) -> Dict[str, Any]:
+    """Aplica la respuesta del usuario a un item de la reconciliación.
+
+    `used`/`spoiled` sacan el item de la Nevera y dejan evento en el ledger con
+    su motivo — se distinguen porque el desperdicio es información de COMPRA,
+    no de consumo, y colapsarlos haría imposible medirlo.
+
+    `keep` no toca la cantidad: solo reinicia el reloj.
+
+    Filtra `AND user_id = %s` (invariante I2): un `row_id` ajeno no toca nada.
+    """
+    if action not in _RECONCILE_ACTIONS:
+        return {"ok": False, "reason": "invalid_action"}
+    if not _db_available() or not user_id or row_id in (None, ""):
+        return {"ok": False, "reason": "missing_args"}
+
+    try:
+        row = execute_sql_query(
+            "SELECT ingredient_name, quantity::float8 AS quantity, unit "
+            "FROM user_inventory WHERE id = %s AND user_id = %s",
+            (row_id, user_id),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-RECONCILIATION] lookup falló: {e}")
+        return {"ok": False, "reason": "lookup_failed"}
+    if not row:
+        return {"ok": False, "reason": "not_found"}
+
+    name = row.get("ingredient_name")
+    qty = float(row.get("quantity") or 0)
+    unit = row.get("unit") or "unidad"
+
+    if action == "keep":
+        try:
+            execute_sql_write(
+                "UPDATE user_inventory SET updated_at = NOW() "
+                "WHERE id = %s AND user_id = %s",
+                (row_id, user_id),
+            )
+        except Exception as e:
+            logger.warning(f"[P1-PANTRY-RECONCILIATION] no se pudo reiniciar el reloj: {e}")
+            return {"ok": False, "reason": "touch_failed"}
+        return {"ok": True, "action": "keep", "ingredient_name": name}
+
+    # used | spoiled → sale de la Nevera.
+    try:
+        execute_sql_write(
+            "DELETE FROM user_inventory WHERE id = %s AND user_id = %s",
+            (row_id, user_id),
+        )
+    except Exception as e:
+        logger.warning(f"[P1-PANTRY-RECONCILIATION] no se pudo retirar {name!r}: {e}")
+        return {"ok": False, "reason": "remove_failed"}
+
+    # Rastro en el MISMO ledger que el resto de movimientos: "¿qué movió mi
+    # Nevera?" debe contestarse en un solo sitio. `consumed_meal_id` queda NULL
+    # a propósito — no hay registro de diario que deshacer, así que estos
+    # eventos quedan naturalmente fuera del revert sin caso especial.
+    _persist_consumption_events(
+        user_id, None, "reconciliation",
+        [{"name": name, "qty": qty, "unit": unit,
+          "outcome": "spoiled" if action == "spoiled" else "deducted"}],
+    )
+    return {"ok": True, "action": action, "ingredient_name": name,
+            "quantity": qty, "unit": unit}
+
+
 def deduct_consumed_meal_from_inventory(
     user_id: str,
     ingredients_list: List[str],

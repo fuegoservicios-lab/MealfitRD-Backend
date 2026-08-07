@@ -334,3 +334,94 @@ pytest backend/tests/test_p1_consumption_ledger.py -v   # 20 casos
 
 Migración: [`migrations/p1_consumption_ledger_2026_08_07.sql`](../migrations/p1_consumption_ledger_2026_08_07.sql)
 (idempotente; ⚠️ recordar la copia de workspace-root por `P3-MIGRATIONS-SSOT`).
+
+---
+
+## La reconciliación que pregunta
+
+[P1-PANTRY-RECONCILIATION · 2026-08-07]
+
+La regla del producto es **"la Nevera solo baja por lo que el usuario
+registra"**, y es la correcta. Su consecuencia inevitable: lo que come sin
+registrar nunca sale. A las 2-3 semanas la Nevera sobre-reporta, la lista de
+compras sub-compra, y el usuario deja de creerle.
+
+El arreglo **no** es descontar automático — eso rompe la regla y devuelve al
+problema que `P1-PANTRY-NAME-RESOLUTION` cerró: mover la Nevera por algo que el
+usuario no puede auditar. El arreglo es **preguntar**. La reducción sigue
+exigiendo una acción humana; el sistema solo la hace barata.
+
+### ⚠️ La señal NO es `updated_at`
+
+`user_inventory.updated_at` **no se mantiene en el camino principal de
+descuento**: el RPC `apply_inventory_delta` escribe `quantity` /
+`master_ingredient_id` / `last_mutation_type` y no toca la columna, y no hay
+trigger `BEFORE UPDATE` (a diferencia de `meal_plans`, que necesitó
+`p0_2_meal_plans_updated_at.sql`). Solo la edición manual del Pantry la escribe.
+
+**Construir "no se ha movido en N días" sobre ella preguntaría por comida que sí
+se usó.** Por eso el ancla es el máximo de tres evidencias independientes:
+
+| Fuente | Qué aporta |
+|---|---|
+| `created_at` | piso — lo recién comprado nunca es stale |
+| `updated_at` | ediciones manuales, y todo lo demás si algún día se añade el trigger |
+| `inventory_consumption_events` | último movimiento real del ingrediente (verdadero por construcción) |
+
+Degrada bien en ambos mundos: sin trigger el ledger carga la señal; con trigger
+ambos suman. Ninguno solo basta — el ledger no ve restocks y `updated_at` no ve
+consumo.
+
+> Esto además documenta dos bugs **preexistentes** que dependen de la misma
+> columna: `get_inventory_activity_since` (P0-D, el proxy de adherencia) y el
+> ancla de gracia del plan-freeze. Ver
+> [PR #8 comment](https://github.com/fuegoservicios-lab/MealfitRD-Backend/pull/8#issuecomment-5219076650).
+
+### Las tres respuestas
+
+| Acción | Qué hace | Por qué |
+|---|---|---|
+| `used` | retira el item, evento `deducted` | consumo normal no registrado |
+| `spoiled` | retira el item, evento **`spoiled`** | el desperdicio es información de **compra** (comprar menos perecedero, o envase más chico). Colapsarlo con consumo lo hace inmedible |
+| `keep` | **no toca la cantidad**, solo `updated_at = NOW()` | "confirmé que sigue aquí" — escritura explícita, no depende de trigger |
+
+Los eventos de reconciliación nacen con `consumed_meal_id IS NULL`, y
+`revert_consumption_events` busca **por** `consumed_meal_id` — así que quedan
+fuera del "Deshacer registro" sin necesidad de un caso especial. Es correcto:
+no hay registro de diario que deshacer, y devolver comida que el usuario declaró
+dañada la resucitaría.
+
+### El lote está capeado
+
+La primera corrida sobre una Nevera vieja califica casi todo. Una lista de 40
+preguntas no se contesta: se ignora — y entonces la feature no existe. Se
+pregunta por los 8 más antiguos (knob) y se vuelve mañana.
+
+| Knob | Default | Clamp |
+|---|---|---|
+| `MEALFIT_PANTRY_RECONCILE_STALE_DAYS` | `14` | `[3, 180]` |
+| `MEALFIT_PANTRY_RECONCILE_BATCH` | `8` | `[1, 50]` |
+
+### Endpoints
+
+`GET /api/plans/inventory/reconcile` → `{items: [{id, ingredient_name, quantity, unit, days_quiet}]}`
+`POST /api/plans/inventory/reconcile` → `{item_id, action}` con `action ∈ {used, spoiled, keep}`
+
+Ambos quota-exempt (doctrina `P1-NEVERA-QUOTA-EXEMPT`): corregir tu propia
+Nevera no tiene costo LLM, y al cap el usuario no podría hacerlo **y** cada
+respuesta quemaría crédito de planes.
+
+### Cómo verificar
+
+```bash
+pytest backend/tests/test_p1_pantry_reconciliation.py -v   # 25 casos
+```
+
+Migración: [`migrations/p1_pantry_reconciliation_2026_08_07.sql`](../migrations/p1_pantry_reconciliation_2026_08_07.sql)
+— extiende los CHECK del ledger (no crea tabla paralela).
+
+### Lo que falta
+
+El **banner en la Nevera** (`/dashboard/pantry`) que consume estos endpoints, y
+el enganche al `_dispatch_pantry_nudge` existente (cooldown 6h) para traer al
+usuario. Hasta entonces el backend responde pero nadie pregunta.
