@@ -1,24 +1,36 @@
 # [P2-LOGGER-EXEMPT: CLI de benchmark — salida humana a stdout por diseño]
 """[P1-LANDING-BENCH-1 · 2026-08-07] Runner del benchmark del landing.
 
-Cuatro modos (componibles con el mismo schema de salida — ver
+Cinco modos (componibles con el mismo schema de salida — ver
 `landing_benchmarks.LANDING_REPORT_SECTIONS` y docs/landing_benchmarks.md):
 
   structural  Hechos contables (reglas clínicas, micros DRI, catálogo) — sin LLM;
               DB opcional (best-effort para conteos de catálogo).
   live        Genera N planes REALES con la matriz fiel-al-formulario y los puntúa
-              (seguridad clínica + gym 7-ejes + latencia). Requiere DEEPSEEK_API_KEY
+              (seguridad clínica + gym 7-ejes + latencia). Requiere claves LLM
               y URLs de Neon. --changes ejercita además swap individual y el bucle
               de día (las superficies de /swap-meal y /regenerate-day).
+              --provider openai fuerza la corrida COMPLETA a la familia gpt-5.6
+              (cero DeepSeek) vía los knobs per-feature sancionados — requiere
+              OPENAI_API_KEY.
+  remote      La corrida "cuenta de invitado": genera contra un API DESPLEGADO
+              (--api-base) como user_id=guest — CERO claves locales; el routing
+              de modelos lo decide el servidor (guest ⇒ day-gen/swap/reviewer en
+              Luna = OpenAI desde P1-DAYGEN-TIER-MODEL / P1-SWAP-LUNA /
+              P1-REVIEWER-TIER-MODELS). Puntúa localmente igual que live.
+              --changes ejercita swap (regenerate-day requiere plan persistido
+              con auth → fuera del alcance guest, documentado).
   telemetry   Agrega las series de PRODUCCIÓN (pipeline_metrics: change_swap /
               change_regen_day / clinical_band_final; meal_plans._quality_index;
               llm_usage_events) — solo DB, sin LLM.
-  score       Re-puntúa planes crudos guardados por una corrida `live --save-plans`
-              (mide un cambio de scorer sin pagar LLM).
+  score       Re-puntúa planes crudos guardados por una corrida `live/remote
+              --save-plans` (mide un cambio de scorer sin pagar LLM).
 
 Uso (desde backend/, con .env cargable):
     python scripts/landing_benchmark.py structural
     python scripts/landing_benchmark.py live 5 --conc 2 --changes --save-plans
+    python scripts/landing_benchmark.py live 20 --provider openai --conc 2
+    python scripts/landing_benchmark.py remote --api-base https://app.bioboros.com --changes
     python scripts/landing_benchmark.py telemetry --days 30
     python scripts/landing_benchmark.py score --plans landing_plans_1234.json
 
@@ -51,6 +63,40 @@ from landing_benchmarks import (
     strip_benchmark_meta,
     structural_facts,
 )
+
+
+# [P1-LANDING-BENCH-1-OPENAI] Forzado "todo OpenAI, cero DeepSeek" para el modo live.
+# SOLO knobs per-feature sancionados (P3-PREVIEW-MODEL-KNOB) — el override global de
+# modelo fue ELIMINADO adrede (P1-DEEPSEEK-ONLY-RESTORE: colapsaba también el reviewer
+# clínico risk-tier a un provider de test) y NO se reintroduce aquí. Estos 4 knobs
+# mueven el pipeline (flash nodes + router por tier + red post-fallo); el reviewer
+# (Luna/Terra/Sol), day-gen (Luna por tier) y swap (Luna fijo) YA son OpenAI por
+# default y conservan su routing fail-secure propio.
+_OPENAI_FORCE_KNOBS = {
+    "MEALFIT_FLASH_MODEL": "gpt-5.6-luna",
+    "MEALFIT_MODEL_FREE_TIER": "gpt-5.6-luna",
+    "MEALFIT_MODEL_PAID_TIER": "gpt-5.6-luna",
+    "MEALFIT_PRO_MODEL": "gpt-5.6-luna",
+}
+
+
+def _force_openai_provider():
+    """Aplica el forzado ANTES de los imports lazy de graph_orchestrator (la red
+    post-fallo se resuelve al boot del módulo). Fail-loud sin OPENAI_API_KEY: sin
+    key, graph_orchestrator degradaría la red a DeepSeek en silencio y la corrida
+    dejaría de ser lo que dice ser."""
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise SystemExit(
+            "--provider openai requiere OPENAI_API_KEY en el entorno. Sin ella la "
+            "red post-fallo cae a DeepSeek (fail-safe P1-NET-LUNA) y la corrida no "
+            "sería 'todo OpenAI'. Exporta la key y reintenta."
+        )
+    for k, v in _OPENAI_FORCE_KNOBS.items():
+        os.environ[k] = v
+    print("provider=openai — knobs forzados (solo este proceso):")
+    for k, v in _OPENAI_FORCE_KNOBS.items():
+        print(f"  {k}={v}")
+    print("  (reviewer/day-gen/swap ya rutean a gpt-5.6 por defecto de tier)")
 
 
 def _open_pools():
@@ -273,6 +319,131 @@ async def _live_sections(n, conc, do_changes, save_plans_path):
     }
 
 
+# ─────────────────────────────── remote (cuenta de invitado) ───────────────────────────────
+
+def _remote_post(api_base, path, payload, timeout_s, max_429_retries=4):
+    """POST con backoff ante 429 (el /analyze tiene RateLimiter 3/60s per user|ip;
+    /swap-meal 20/60s). httpx respeta HTTPS_PROXY/SSL_CERT_FILE del entorno."""
+    import httpx
+    url = f"{api_base.rstrip('/')}{path}"
+    for attempt in range(max_429_retries + 1):
+        r = httpx.post(url, json=payload, timeout=timeout_s)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r.json()
+        wait = 30 * (attempt + 1)
+        print(f"  429 en {path} — backoff {wait}s (intento {attempt + 1}/{max_429_retries})")
+        time.sleep(wait)
+    raise RuntimeError(f"rate-limit persistente en {path} tras {max_429_retries} reintentos")
+
+
+def _run_one_remote(api_base, profile, do_changes, timeout_s):
+    from plan_gym import score_plan
+    fd = strip_benchmark_meta(profile)
+    payload = {
+        **fd,
+        # Mismo shape que Plan.jsx::dataToSend para guests: session_id efímero,
+        # totalDays por groceryDuration (weekly=7), tzOffset RD (UTC-4 → 240 min).
+        "session_id": f"guest_landing_bench_{os.getpid()}_{profile['_id']}",
+        "totalDays": 7,
+        "tzOffset": 240,
+    }
+    t0 = time.time()
+    try:
+        plan = _remote_post(api_base, "/api/plans/analyze", payload, timeout_s)
+    except Exception as e:
+        return {"id": profile["_id"], "label": profile["_label"],
+                "error": f"{type(e).__name__}: {e}"}
+    dur = round(time.time() - t0, 1)
+    row = {"id": profile["_id"], "label": profile["_label"],
+           "goal": profile.get("mainGoal"), "conditions": profile.get("medicalConditions"),
+           "medications": profile.get("medications"), "diet": profile.get("dietType"),
+           "duration_s": dur, "_plan": plan}
+    try:
+        row["safety"] = score_plan_safety(plan, profile)
+    except Exception as e:
+        row["safety_error"] = f"{type(e).__name__}: {e}"
+    try:
+        row["gym"] = score_plan(plan, fd)
+    except Exception as e:
+        row["gym_error"] = f"{type(e).__name__}: {e}"
+
+    if do_changes:
+        days = (plan or {}).get("days") or []
+        meals0 = (days[0] or {}).get("meals") if days else None
+        if meals0:
+            target = meals0[min(1, len(meals0) - 1)]
+            mtype = str(target.get("meal_type") or target.get("type") or "Almuerzo")
+            sp = _swap_payload(profile, target, mtype)
+            sp["session_id"] = payload["session_id"]
+            t1 = time.time()
+            try:
+                res = _remote_post(api_base, "/api/plans/swap-meal", sp, timeout_s=120)
+                ok = isinstance(res, dict) and not res.get("swap_failed")
+                row["changes"] = {"swap": {
+                    "ok": ok, "duration_s": round(time.time() - t1, 1),
+                    "band_low": bool(isinstance(res, dict) and res.get("_macro_band_low")),
+                    "violaciones_post": _validate_swapped(res, profile) if ok else None,
+                }, "regen_day": None}  # requiere plan persistido + auth → no-guest
+            except Exception as e:
+                row["changes"] = {"swap": {"ok": False, "duration_s": round(time.time() - t1, 1),
+                                           "error": f"{type(e).__name__}: {e}"},
+                                  "regen_day": None}
+    return row
+
+
+def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s):
+    from concurrent.futures import ThreadPoolExecutor
+    from plan_gym import aggregate_scores
+
+    profiles = build_landing_profiles()
+    if n:
+        profiles = profiles[:n]
+    # conc default 1: el /analyze de un guest comparte RateLimiter por IP (3/60s);
+    # con generaciones de minutos, 1-2 en vuelo no lo rozan pero >2 sí al arrancar.
+    with ThreadPoolExecutor(max_workers=max(1, conc)) as ex:
+        rows = list(ex.map(lambda p: _run_one_remote(api_base, p, do_changes, timeout_s), profiles))
+
+    if save_plans_path:
+        with open(save_plans_path, "w", encoding="utf-8") as f:
+            json.dump({"plans": [{"id": r["id"], "label": r.get("label"), "plan": r.get("_plan")}
+                                 for r in rows if r.get("_plan")]}, f,
+                      ensure_ascii=False, default=str)
+    for r in rows:
+        r.pop("_plan", None)
+
+    gym_rows = [{"id": r["id"], "score": r["gym"]} for r in rows if r.get("gym")]
+    changes = None
+    if do_changes:
+        swaps = [r["changes"]["swap"] for r in rows if (r.get("changes") or {}).get("swap")]
+        changes = {
+            "swap": {
+                "n": len(swaps),
+                "ok_pct": round(100.0 * sum(1 for s in swaps if s.get("ok")) / len(swaps), 1) if swaps else None,
+                "latency_s": _percentiles([s.get("duration_s") for s in swaps]),
+                "con_violaciones_post": sum(1 for s in swaps if s.get("violaciones_post")),
+            },
+            "regen_day": {"skipped": "requiere plan persistido con auth — fuera del alcance guest"},
+            "per_profile": [{"id": r["id"], **r["changes"]} for r in rows if r.get("changes")],
+        }
+    return {
+        "meta": {
+            "api_base": api_base, "guest": True,
+            "routing": ("modelos decididos por el SERVIDOR: guest ⇒ day-gen/swap/reviewer "
+                        "en gpt-5.6 (Luna) por P1-DAYGEN-TIER-MODEL/P1-SWAP-LUNA/"
+                        "P1-REVIEWER-TIER-MODELS; nodos auxiliares según knobs del deploy"),
+        },
+        "safety": {
+            "aggregate": aggregate_safety([r.get("safety") for r in rows if r.get("safety")]),
+            "per_profile": [r.get("safety") or {"id": r["id"], "error": r.get("error") or r.get("safety_error")}
+                            for r in rows],
+        },
+        "gym": {"aggregate": aggregate_scores(gym_rows), "per_profile": rows},
+        "latency": {"generation_s": _percentiles([r.get("duration_s") for r in rows])},
+        "changes": changes,
+    }
+
+
 # ─────────────────────────────── telemetry ───────────────────────────────
 
 def _telemetry_section(days):
@@ -348,13 +519,19 @@ def main():
     except Exception:
         pass
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("mode", choices=("structural", "live", "telemetry", "score"))
-    ap.add_argument("n", nargs="?", type=int, default=0, help="live: límite de perfiles (0 = todos)")
-    ap.add_argument("--conc", type=int, default=2)
-    ap.add_argument("--changes", action="store_true", help="live: ejercitar swap + día")
-    ap.add_argument("--save-plans", action="store_true", help="live: guardar planes crudos para `score`")
+    ap.add_argument("mode", choices=("structural", "live", "remote", "telemetry", "score"))
+    ap.add_argument("n", nargs="?", type=int, default=0, help="live/remote: límite de perfiles (0 = todos)")
+    ap.add_argument("--conc", type=int, default=None,
+                    help="concurrencia (default: live=2, remote=1 por el rate-limit per-IP)")
+    ap.add_argument("--changes", action="store_true", help="live/remote: ejercitar cambios")
+    ap.add_argument("--save-plans", action="store_true",
+                    help="live/remote: guardar planes crudos para `score`")
+    ap.add_argument("--provider", choices=("default", "openai"), default="default",
+                    help="live: openai fuerza toda la corrida a gpt-5.6 (cero DeepSeek)")
+    ap.add_argument("--api-base", help="remote: URL base del API desplegado (p.ej. https://app.bioboros.com)")
+    ap.add_argument("--timeout", type=int, default=1200, help="remote: timeout por plan en segundos")
     ap.add_argument("--days", type=int, default=30, help="telemetry: ventana en días")
-    ap.add_argument("--plans", help="score: JSON de una corrida live --save-plans")
+    ap.add_argument("--plans", help="score: JSON de una corrida live/remote --save-plans")
     ap.add_argument("--out", help="ruta del JSON de salida")
     args = ap.parse_args()
 
@@ -362,8 +539,18 @@ def main():
         _open_pools()
         sections = {"structural": _structural_section()}
     elif args.mode == "live":
+        if args.provider == "openai":
+            _force_openai_provider()
         save_path = f"landing_plans_{os.getpid()}.json" if args.save_plans else None
-        sections = asyncio.run(_live_sections(args.n, max(1, args.conc), args.changes, save_path))
+        sections = asyncio.run(_live_sections(args.n, max(1, args.conc or 2), args.changes, save_path))
+        if save_path:
+            print(f"planes crudos: {save_path}")
+    elif args.mode == "remote":
+        if not args.api_base:
+            ap.error("--api-base es obligatorio en modo remote")
+        save_path = f"landing_plans_{os.getpid()}.json" if args.save_plans else None
+        sections = _remote_sections(args.api_base, args.n, max(1, args.conc or 1),
+                                    args.changes, save_path, args.timeout)
         if save_path:
             print(f"planes crudos: {save_path}")
     elif args.mode == "telemetry":
@@ -381,6 +568,8 @@ def main():
 
     print("\n========== LANDING BENCHMARK - resumen ==========")
     print(f"modo: {args.mode} | schema v{report['schema_version']}")
+    if "meta" in report:
+        print(f"  remote: {report['meta'].get('api_base')} (guest) — {report['meta'].get('routing')}")
     if "structural" in report:
         s = report["structural"]
         print(f"  micros DRI: {s['micronutrientes_dri']} | reglas condición: "
@@ -405,9 +594,10 @@ def main():
         print(f"  latencia generación: {report['latency'].get('generation_s')}")
     if report.get("changes"):
         c = report["changes"]
-        print(f"  swap: ok={c['swap'].get('ok_pct')}% lat={c['swap'].get('latency_s')} | "
-              f"día: {c['regen_day'].get('meals_ok')}/{c['regen_day'].get('meals_total')} "
-              f"lat={c['regen_day'].get('latency_day_s')}")
+        rd = c.get("regen_day") or {}
+        dia = rd.get("skipped") or (f"{rd.get('meals_ok')}/{rd.get('meals_total')} "
+                                    f"lat={rd.get('latency_day_s')}")
+        print(f"  swap: ok={c['swap'].get('ok_pct')}% lat={c['swap'].get('latency_s')} | día: {dia}")
     if "telemetry" in report:
         t = report["telemetry"]
         print(f"  telemetría ({t['window_days']}d): cambios={t['changes']} | "

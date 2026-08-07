@@ -293,12 +293,46 @@ def test_report_contract_rejects_unknown_sections():
 
 def test_runner_and_doc_exist_with_all_modes():
     runner = (_BACKEND / "scripts" / "landing_benchmark.py").read_text(encoding="utf-8")
-    for mode in ("structural", "live", "telemetry", "score"):
+    for mode in ("structural", "live", "remote", "telemetry", "score"):
         assert f'"{mode}"' in runner, f"el runner perdió el modo {mode}"
     doc = (_BACKEND / "docs" / "landing_benchmarks.md").read_text(encoding="utf-8")
     assert "P1-LANDING-BENCH-1" in doc and "Matriz de perfiles" in doc
     # La guía de mejora es la mitad del valor del doc: cada métrica → palanca.
     assert "palanca" in doc.lower()
+
+
+def test_openai_forcing_uses_only_sanctioned_knobs():
+    """El override GLOBAL de modelo fue eliminado adrede (P1-DEEPSEEK-ONLY-RESTORE:
+    colapsaba también el reviewer clínico risk-tier a un provider de test). El
+    forzado --provider openai del runner debe vivir SOLO en estos 4 knobs
+    per-feature — si alguien le añade un knob del reviewer o reintroduce
+    MEALFIT_LLM_MODEL_OVERRIDE, este test lo convierte en decisión consciente."""
+    runner = (_BACKEND / "scripts" / "landing_benchmark.py").read_text(encoding="utf-8")
+    m = re.search(r"_OPENAI_FORCE_KNOBS\s*=\s*\{(.*?)\}", runner, re.DOTALL)
+    assert m, "el runner perdió _OPENAI_FORCE_KNOBS (--provider openai)"
+    keys = set(re.findall(r'"(MEALFIT_[A-Z0-9_]+)"\s*:', m.group(1)))
+    assert keys == {
+        "MEALFIT_FLASH_MODEL", "MEALFIT_MODEL_FREE_TIER",
+        "MEALFIT_MODEL_PAID_TIER", "MEALFIT_PRO_MODEL",
+    }, f"forzado fuera del set sancionado: {sorted(keys)}"
+    assert "MEALFIT_LLM_MODEL_OVERRIDE" not in runner, (
+        "el override global eliminado (P1-DEEPSEEK-ONLY-RESTORE) no puede volver por el runner")
+    assert "OPENAI_API_KEY" in runner, "--provider openai debe ser fail-loud sin key"
+
+
+def test_openai_forcing_actually_routes_pipeline_to_openai(monkeypatch):
+    """Funcional: con los 4 knobs seteados, el router por tier y el modelo flash
+    del pipeline resuelven a la familia OpenAI (cero DeepSeek en la corrida).
+    La red post-fallo (`_pro_model_name`) se resuelve al boot del módulo, por eso
+    el runner setea env ANTES de los imports lazy — aquí se validan los paths que
+    leen env en call-time."""
+    for k in ("MEALFIT_FLASH_MODEL", "MEALFIT_MODEL_FREE_TIER", "MEALFIT_MODEL_PAID_TIER"):
+        monkeypatch.setenv(k, "gpt-5.6-luna")
+    from llm_provider import is_openai_model, model_free_tier, model_paid_tier
+    import graph_orchestrator as go
+    assert is_openai_model(model_free_tier())
+    assert is_openai_model(model_paid_tier())
+    assert is_openai_model(go._plan_flash_model_name())
 
 
 # ---------------------------------------------------------------------------

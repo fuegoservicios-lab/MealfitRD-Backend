@@ -20,19 +20,22 @@ Desde P1-MEDICAL-CONDITIONS-CAP (2026-08-01) el wizard emite **solo chips cerrad
 (+ Embarazo/Lactancia si `gender=female`), 14 medicamentos, 6 alergias, 3 dietas. Este benchmark
 ejercita EXACTAMENTE ese espacio — cada chip literal, con la forma de payload que envía `Plan.jsx`.
 
-## Los 4 modos
+## Los 5 modos
 
 | Modo | Necesita | Qué mide | Secciones del JSON |
 |---|---|---|---|
 | `structural` | nada (DB opcional) | hechos contables: reglas clínicas, micros DRI, catálogo | `structural` |
-| `live [N] --conc 2 [--changes] [--save-plans]` | DEEPSEEK_API_KEY + Neon | genera N planes reales con la matriz y puntúa seguridad + gym + latencia; `--changes` ejercita swap individual y bucle de día | `structural`, `safety`, `gym`, `latency`, `changes` |
+| `live [N] --conc 2 [--changes] [--save-plans] [--provider openai]` | claves LLM + Neon | genera N planes reales con la matriz y puntúa seguridad + gym + latencia; `--changes` ejercita swap individual y bucle de día. `--provider openai` fuerza TODA la corrida a gpt-5.6 (cero DeepSeek) vía los 4 knobs sancionados (`MEALFIT_FLASH_MODEL`, `MEALFIT_MODEL_FREE_TIER`, `MEALFIT_MODEL_PAID_TIER`, `MEALFIT_PRO_MODEL`); requiere `OPENAI_API_KEY`, fail-loud sin ella. NO reintroduce el override global eliminado (P1-DEEPSEEK-ONLY-RESTORE): reviewer/day-gen/swap conservan su routing propio, que YA es OpenAI por defecto | `structural`, `safety`, `gym`, `latency`, `changes` |
+| `remote [N] --api-base URL [--conc 1] [--changes] [--save-plans]` | **cero claves** (solo red al deploy) | la corrida «cuenta de invitado»: genera contra el API desplegado como `user_id=guest` y puntúa LOCALMENTE (los scorers son funciones puras). El routing de modelos lo decide el servidor — para un guest, day-gen/swap/reviewer corren en Luna = OpenAI (P1-DAYGEN-TIER-MODEL/P1-SWAP-LUNA/P1-REVIEWER-TIER-MODELS). `--changes` ejercita solo swap (regenerate-day exige plan persistido con auth). Respeta el RateLimiter de `/analyze` (3/60s por IP): conc default 1, backoff ante 429 | `meta`, `safety`, `gym`, `latency`, `changes` |
 | `telemetry --days 30` | Neon | series de PROD: éxito de cambios a la primera, banda entregada, fallback rate, PQI, costo por nodo | `telemetry` |
-| `score --plans f.json` | nada | re-puntúa planes crudos de una corrida `live --save-plans` (cambio de scorer sin pagar LLM) | `safety` |
+| `score --plans f.json` | nada | re-puntúa planes crudos de una corrida `live/remote --save-plans` (cambio de scorer sin pagar LLM) | `safety` |
 
 ```bash
 # desde backend/, con .env cargable
 python scripts/landing_benchmark.py structural
 python scripts/landing_benchmark.py live 5 --conc 2 --changes --save-plans
+python scripts/landing_benchmark.py live 20 --provider openai --conc 2
+python scripts/landing_benchmark.py remote 20 --api-base https://app.bioboros.com --changes
 python scripts/landing_benchmark.py telemetry --days 30
 ```
 
