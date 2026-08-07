@@ -45,7 +45,7 @@ env:
   # de dieta reportadas — pero 5/8 cayeron por disconnect del endpoint síncrono (el retry
   # informado alarga el pipeline sobre el proxy_read_timeout). Siguiente: transporte SSE
   # en el runner. De vuelta a smoke barato.
-  PUSH_RUN_IDS: ""
+  PUSH_RUN_IDS: "4,9,17,19,20"
   PUSH_RUN_CHANGES: "false"
 
 concurrency:

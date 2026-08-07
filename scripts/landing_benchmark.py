@@ -345,7 +345,57 @@ def _remote_post(api_base, path, payload, timeout_s, max_429_retries=4):
     raise RuntimeError(f"rate-limit persistente en {path} tras {max_429_retries} reintentos")
 
 
-def _run_one_remote(api_base, profile, do_changes, timeout_s):
+def _remote_generate_stream(api_base, payload, timeout_s, max_429_retries=4):
+    """[P1-LANDING-BENCH-3 · 2026-08-07] Genera vía /analyze/stream (SSE) — el MISMO transporte
+    del frontend. El endpoint síncrono corta generaciones largas (proxy_read_timeout de nginx:
+    5/8 disconnects en la verificación 2026-08-07, agravado por el retry informado de
+    P1-DAYGEN-DIET-CONVERGE); el stream emite heartbeats → el timeout que importa es ENTRE
+    eventos (read=300s), no el total. El diagnóstico de un rechazo crítico viaja DENTRO del
+    evento error (`review_issues`, paridad con el header del síncrono)."""
+    import httpx
+    import json as _j
+    url = f"{api_base.rstrip('/')}/api/plans/analyze/stream"
+    timeout = httpx.Timeout(connect=30.0, read=300.0, write=60.0, pool=60.0)
+    for attempt in range(max_429_retries + 1):
+        with httpx.stream("POST", url, json=payload, timeout=timeout) as r:
+            if r.status_code == 429:
+                wait = 30 * (attempt + 1)
+                print(f"  429 en /analyze/stream — backoff {wait}s "
+                      f"(intento {attempt + 1}/{max_429_retries})")
+                time.sleep(wait)
+                continue
+            ctype = r.headers.get("content-type", "")
+            if r.status_code != 200 or "text/event-stream" not in ctype:
+                r.read()
+                raise RuntimeError(
+                    f"stream no disponible (HTTP {r.status_code}, {ctype[:40]}): {r.text[:200]}")
+            deadline = time.time() + timeout_s
+            for line in r.iter_lines():
+                if time.time() > deadline:
+                    raise RuntimeError(f"stream excedió el presupuesto total de {timeout_s}s")
+                if not line or not line.startswith("data: "):
+                    continue
+                try:
+                    evt = _j.loads(line[6:])
+                except Exception:
+                    continue
+                kind = evt.get("event")
+                if kind == "complete":
+                    return evt.get("data")
+                if kind == "error":
+                    d = evt.get("data") or {}
+                    _diag_sfx = ""
+                    if d.get("review_issues"):
+                        _diag_sfx = " | diag: " + _j.dumps(
+                            {"fallback_reason": d.get("fallback_reason"),
+                             "review_issues": d.get("review_issues")}, ensure_ascii=True)[:1200]
+                    raise RuntimeError(
+                        f"SSE error code={d.get('code')}: {str(d.get('message'))[:200]}{_diag_sfx}")
+            raise RuntimeError("stream terminó sin evento 'complete' ni 'error'")
+    raise RuntimeError(f"rate-limit persistente en /analyze/stream tras {max_429_retries} reintentos")
+
+
+def _run_one_remote(api_base, profile, do_changes, timeout_s, transport="sse"):
     import uuid
     from plan_gym import score_plan
     fd = strip_benchmark_meta(profile)
@@ -370,7 +420,17 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s):
     }
     t0 = time.time()
     try:
-        plan = _remote_post(api_base, "/api/plans/analyze", payload, timeout_s)
+        if transport == "sse":
+            try:
+                plan = _remote_generate_stream(api_base, payload, timeout_s)
+            except RuntimeError as _sse_e:
+                if "stream no disponible" not in str(_sse_e):
+                    raise
+                # Deploy sin SSE utilizable → mismo fallback que el frontend: endpoint síncrono.
+                print(f"  (aviso) SSE no disponible, cayendo al síncrono: {str(_sse_e)[:120]}")
+                plan = _remote_post(api_base, "/api/plans/analyze", payload, timeout_s)
+        else:
+            plan = _remote_post(api_base, "/api/plans/analyze", payload, timeout_s)
     except Exception as e:
         return {"id": profile["_id"], "label": profile["_label"],
                 "error": f"{type(e).__name__}: {e}"}
@@ -413,7 +473,8 @@ def _run_one_remote(api_base, profile, do_changes, timeout_s):
     return row
 
 
-def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, ids=None):
+def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, ids=None,
+                     transport="sse"):
     from concurrent.futures import ThreadPoolExecutor
     from plan_gym import aggregate_scores
 
@@ -425,7 +486,9 @@ def _remote_sections(api_base, n, conc, do_changes, save_plans_path, timeout_s, 
     # conc default 1: el /analyze de un guest comparte RateLimiter por IP (3/60s);
     # con generaciones de minutos, 1-2 en vuelo no lo rozan pero >2 sí al arrancar.
     with ThreadPoolExecutor(max_workers=max(1, conc)) as ex:
-        rows = list(ex.map(lambda p: _run_one_remote(api_base, p, do_changes, timeout_s), profiles))
+        rows = list(ex.map(
+            lambda p: _run_one_remote(api_base, p, do_changes, timeout_s, transport=transport),
+            profiles))
 
     if save_plans_path:
         with open(save_plans_path, "w", encoding="utf-8") as f:
@@ -554,6 +617,9 @@ def main():
     ap.add_argument("--api-base", help="remote: URL base del API desplegado (p.ej. https://app.bioboros.com)")
     ap.add_argument("--ids", help="remote: perfiles específicos por id, p.ej. '3,9,10,13,15' "
                                   "(los clínicos; gana sobre el N posicional)")
+    ap.add_argument("--transport", choices=("sse", "sync"), default="sse",
+                    help="remote: sse (default; /analyze/stream con heartbeats, inmune al "
+                         "proxy_read_timeout) o sync (endpoint de un solo response)")
     ap.add_argument("--timeout", type=int, default=1200, help="remote: timeout por plan en segundos")
     ap.add_argument("--days", type=int, default=30, help="telemetry: ventana en días")
     ap.add_argument("--plans", help="score: JSON de una corrida live/remote --save-plans")
@@ -576,7 +642,8 @@ def main():
         save_path = f"landing_plans_{os.getpid()}.json" if args.save_plans else None
         _ids = {int(x) for x in args.ids.split(",") if x.strip()} if args.ids else None
         sections = _remote_sections(args.api_base, args.n, max(1, args.conc or 1),
-                                    args.changes, save_path, args.timeout, ids=_ids)
+                                    args.changes, save_path, args.timeout, ids=_ids,
+                                    transport=args.transport)
         if save_path:
             print(f"planes crudos: {save_path}")
     elif args.mode == "telemetry":
