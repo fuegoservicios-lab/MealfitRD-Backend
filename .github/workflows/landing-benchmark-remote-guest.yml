@@ -40,11 +40,12 @@ on:
 # clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
 env:
   PUSH_RUN_N: "2"
-  # [2026-08-07] VERIFICACIÓN post-deploy de P1-DAYGEN-DIET-CONVERGE (confirmado vivo:
-  # live_marker/expected en el VPS, drift=false). Mismos 8 ids clínicos y mismo
-  # changes=false que la corrida diagnóstica → comparación limpia contra la línea
-  # base de 2/8 entregados. Tras analizar, devolver PUSH_RUN_IDS a "".
-  PUSH_RUN_IDS: "3,4,9,10,13,17,19,20"
+  # [2026-08-07] Verificación post-deploy analizada (issue #9): DM2 pasó a entrega LIMPIA
+  # con banda 100, la sal fabricada desapareció de los diagnósticos HTA, cero violaciones
+  # de dieta reportadas — pero 5/8 cayeron por disconnect del endpoint síncrono (el retry
+  # informado alarga el pipeline sobre el proxy_read_timeout). Siguiente: transporte SSE
+  # en el runner. De vuelta a smoke barato.
+  PUSH_RUN_IDS: ""
   PUSH_RUN_CHANGES: "false"
 
 concurrency:
