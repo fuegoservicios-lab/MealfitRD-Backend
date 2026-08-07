@@ -535,6 +535,24 @@ HARDEN_CONDITION_CATALOG = _env_bool("MEALFIT_HARDEN_CONDITION_CATALOG", False) 
 HARDEN_SALTCURED_MAIN    = _env_bool("MEALFIT_HARDEN_SALTCURED_MAIN", False)      # clase 5
 HARDEN_SAMEDAY_PROTEIN   = _env_bool("MEALFIT_HARDEN_SAMEDAY_PROTEIN", False)     # clase 1
 HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)      # clase 2
+
+# [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Convergencia clínica en GENERACIÓN. Origen: benchmark del
+# landing (issue #9) — 13/20 perfiles con restricciones rechazados por el guard crítico; el diagnóstico
+# (header X-Bioboros-Review-Diag) mostró planes vegan/vegetarian NACIENDO con camarones/atún/lácteos y
+# perfiles HTA con "Sal al gusto" fabricada en cada comida. Los guards funcionan; el generador
+# desobedecía. Cuatro capas, cada una con rollback sin redeploy:
+#   1. Scrub de DIETA sobre los pools del skeleton — el pool se vuelve la lista de AUTORIZADOS del
+#      day-gen (build_day_assignment_context invierte a "PROHIBIDO ABSOLUTO" lo que NO está): un pool
+#      sin filtrar AUTORIZA la violación. Reusa _scan_diet_violations (mismo matcher, cero 4ª tabla).
+#   2. Bloque de directiva de DIETA con la prioridad tipográfica del bloque de alergias, en skeleton y
+#      day-gen — la dieta viajaba como campo JSON enterrado mientras las alergias gritan.
+#   3. Gate clínico del splitter de sal (P3-SALT-SEPARATE-LINE): con HTA/renal activa, solo pimienta.
+#   4. Un rechazo crítico de DIETA/ALÉRGENO obtiene UN retry INFORMADO (ver should_retry) en vez del
+#      abort a cero-retries; si reincide, el fallback terminal es idéntico al de hoy.
+SKELETON_DIET_SCRUB_ENABLED = _env_bool("MEALFIT_SKELETON_DIET_SCRUB", True)
+DIET_DIRECTIVE_BLOCK_ENABLED = _env_bool("MEALFIT_DIET_DIRECTIVE_BLOCK", True)
+SALT_LINE_CONDITION_GATE = _env_bool("MEALFIT_SALT_LINE_CONDITION_GATE", True)
+DIET_CRITICAL_REGEN_ENABLED = _env_bool("MEALFIT_DIET_CRITICAL_REGEN", True)
 # [P0-2-POOL-MAIN-ARITY · 2026-07-10] clase 6. Forensic corr=d57ffe04: 49% de los rechazos del
 # reviewer en 72h (39/80) = "misma proteína repetida el mismo día" — causa estructural: el pool traía
 # menos proteínas gate-label distintas que comidas principales del día. Target=3 (desayuno/almuerzo/
@@ -4890,6 +4908,10 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # reales). "" si el perfil no tiene condición/medicamento cubierto. tooltip-anchor:
         # P1-MED-CONTEXT-DAYGEN
         "clinical_directives_context": clinical_directives,
+        # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA con la prioridad tipográfica del
+        # bloque de alergias — antes la dieta era solo un campo del JSON de form_data y un modelo
+        # effort-low la ignoraba (benchmark issue #9). "" para balanced (cache preservado).
+        "diet_directive_context": _build_diet_directive_context(form_data),
         # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables (magnesio/calcio/
         # hierro/fibra/potasio) como guía cuantitativa de densidad nutricional. "" si knob OFF/no aplica.
         "micronutrient_targets_context": micronutrient_targets_context,
@@ -7029,6 +7051,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n{ctx['history_context']}\n"
         # [P1-RECENT-DISHES-FEEDFORWARD] blocklist literal FUERA del history_context comprimible
         f"{ctx['recent_dishes_blocklist_context']}\n"
+        # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA ANTES de los pools: el prompt
+        # del planner sugiere proteínas animales ("pollo, pescado fresco, huevo") con una sola
+        # cláusula suave de dieta — así aterrizaba atún en pools vegetarianos. "" para balanced.
+        f"{ctx['diet_directive_context']}\n"
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['pantry_drift_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
@@ -7293,6 +7319,29 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             d['protein_pool'] = [p for p in pool if p not in embutidos_in_pool]
             logger.info(f"🧹 [SKELETON SCRUB] Día {d.get('day')}: eliminados embutidos "
                   f"{embutidos_in_pool} (conflicto con atún presente)")
+
+    # 2.5 [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Scrub de DIETA sobre los pools del skeleton.
+    # El planner LLM escribía proteína animal en pools de veganos (benchmark 2026-08-07, issue #9:
+    # camarones/atún/lácteos en planes vegan/vegetarian → rechazo crítico) — y el pool se convierte
+    # aguas abajo en la lista de AUTORIZADOS del day-gen (`build_day_assignment_context` invierte a
+    # "PROHIBIDO ABSOLUTO" lo que NO está): un pool sin filtrar AUTORIZA la violación. Matching =
+    # `_scan_diet_violations` reusado ítem a ítem (cero 4ª tabla). Pools vaciados caen al fallback
+    # del paso 3, que ya es diet+allergy-aware. Rollback: MEALFIT_SKELETON_DIET_SCRUB=false.
+    # tooltip-anchor: P1-DAYGEN-DIET-CONVERGE
+    if SKELETON_DIET_SCRUB_ENABLED:
+        _diet_scrub_type = form_data.get("dietType") or form_data.get("diet")
+        if _canonicalize_diet_type(_diet_scrub_type) != "balanced":
+            for _dsd in skel_days:
+                for _pool_key in ("protein_pool", "carb_pool", "fruit_pool"):
+                    _pool = _dsd.get(_pool_key) or []
+                    _kept = [p for p in _pool if not _diet_pool_item_banned(p, _diet_scrub_type)]
+                    if len(_kept) != len(_pool):
+                        _removed = [p for p in _pool if p not in _kept]
+                        _dsd[_pool_key] = _kept
+                        logger.warning(
+                            f"🥦 [SKELETON DIET SCRUB] Día {_dsd.get('day')}: {_pool_key} pierde "
+                            f"{_removed} — el planner los asignó pese a la dieta declarada "
+                            f"('{_diet_scrub_type}'); sin este scrub el day-gen los tenía AUTORIZADOS")
 
     # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar una proteína SEGURA.
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (audit form · contradicción C1) El fallback era
@@ -8000,6 +8049,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # reales. Antes solo llegaban al esqueleto; ahora también al day-gen (incluido Flash en
             # tier gratis). "" si el perfil no aplica. tooltip-anchor: P1-MED-CONTEXT-DAYGEN
             f"{ctx['clinical_directives_context']}\n"
+            # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA al nodo que elige los
+            # ingredientes — la dieta solo viajaba enterrada en el JSON de form_data. "" balanced.
+            f"{ctx['diet_directive_context']}\n"
             # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables al day-gen
             # (densidad nutricional cuantitativa, no solo cantidad). "" cuando knob OFF/no aplica.
             f"{ctx['micronutrient_targets_context']}\n"
@@ -8358,6 +8410,17 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # El prompt (regla 8) ya pide emitirlos separados; esto lo GARANTIZA. tooltip-anchor: P3-SALT-SEPARATE-LINE
                 _sl = _scrubbed.lower()
                 if _re.search(r'\bsal\b', _sl) and _re.search(r'\bpimienta\b', _sl):
+                    # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Gate clínico del splitter: para HTA/ERC
+                    # este backstop FABRICABA un renglón "Sal al gusto" por comida — la razón #1 de
+                    # rechazo del reviewer en perfiles HTA (benchmark issue #9: "¼ cdta de sal en
+                    # desayuno, almuerzo y cena ≈ 1.725 mg de sodio solo de sal añadida"). Con sodio
+                    # restringido: solo pimienta — la sal ni a la receta ni a la lista de compras.
+                    # Rollback: MEALFIT_SALT_LINE_CONDITION_GATE=false.
+                    if SALT_LINE_CONDITION_GATE and _salt_restricted_profile(form_data):
+                        _new_ings.append("Pimienta negra al gusto")
+                        logger.info(f"🧂 [DÍA {day_num}/P1-DAYGEN-DIET-CONVERGE] '{_ing}' → solo "
+                                    f"'Pimienta negra al gusto' (sodio restringido: HTA/renal activa)")
+                        continue
                     _new_ings.append("Sal al gusto")
                     _new_ings.append("Pimienta negra al gusto")
                     logger.info(f"🧂 [DÍA {day_num}/P3-SALT-SEPARATE-LINE] Separado '{_ing}' → "
@@ -14012,6 +14075,63 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
                     violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
+
+
+def _diet_pool_item_banned(item, diet_type) -> bool:
+    """[P1-DAYGEN-DIET-CONVERGE · 2026-08-07] ¿Este ítem de pool del skeleton viola la dieta?
+
+    REUSA `_scan_diet_violations` tal cual (mini-plan de un solo ingrediente): mismo matcher
+    word-boundary + plurales + excusa plant-adjacent ('carne de soya', 'leche de coco'), mismas
+    tuplas SSOT `_DIET_*_TERMS`. NO es una 4ª tabla (P1-DIET-CANON-SSOT) — es el mismo contrato
+    del guard aplicado ANTES de generar en vez de después. 'Fresas' no matchea 'res' (boundary).
+    Fail-open: los guards duros downstream validan igual. tooltip-anchor: P1-DAYGEN-DIET-CONVERGE"""
+    try:
+        return bool(_scan_diet_violations(
+            {"days": [{"meals": [{"name": "_pool", "ingredients": [str(item)]}]}]}, diet_type))
+    except Exception:
+        return False
+
+
+def _salt_restricted_profile(form_data) -> bool:
+    """[P1-DAYGEN-DIET-CONVERGE · 2026-08-07] ¿El perfil restringe sodio (HTA o renal activa)?
+    Detección vía el registry SSOT (`condition_rules.detect_active_rules`) — cero tabla nueva de
+    términos. Fail-open (False): sin señal, el splitter de sal conserva su comportamiento histórico."""
+    try:
+        from condition_rules import detect_active_rules
+        return any(r.id in ("hta", "renal") for r in detect_active_rules(form_data or {}))
+    except Exception:
+        return False
+
+
+def _build_diet_directive_context(form_data) -> str:
+    """[P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Bloque de directiva de DIETA para skeleton + day-gen.
+
+    La dieta viajaba como un campo JSON enterrado en form_data mientras las alergias tienen un
+    bloque PRIORIDAD-1 a gritos (prompts/plan_generator.py) — asimetría que un modelo effort-low
+    ignora (benchmark 2026-08-07: camarones/atún/lácteos en planes vegan/vegetarian). Devuelve ""
+    para balanced → prompt byte-equivalente (cache preservado) para la mayoría. Canonicaliza SOLO
+    vía `constants.canonicalize_diet_type` (P1-DIET-CANON-SSOT). Sin tofu en sugerencias
+    (P3-TOFU-REMOVE: no se vende). tooltip-anchor: P1-DAYGEN-DIET-CONVERGE"""
+    if not DIET_DIRECTIVE_BLOCK_ENABLED:
+        return ""
+    canon = _canonicalize_diet_type((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
+    if canon == "vegan":
+        return ("🛑 DIETA VEGANA (PRIORIDAD 1 — RESTRICCIÓN ABSOLUTA): CERO productos animales en "
+                "TODOS los pools, platos e ingredientes. PROHIBIDO: toda carne (pollo, res, cerdo, "
+                "pavo, embutidos), todo pescado y marisco (atún, camarones, salmón, sardinas), "
+                "huevos, y TODO lácteo (leche, queso, yogur, mantequilla, crema). Proteínas válidas: "
+                "leguminosas (habichuelas, lentejas, garbanzos), quinoa, avena, frutos secos. "
+                "UN SOLO ingrediente animal invalida el plan COMPLETO.\n")
+    if canon == "vegetarian":
+        return ("🛑 DIETA VEGETARIANA (PRIORIDAD 1 — RESTRICCIÓN ABSOLUTA): CERO carne y CERO "
+                "pescado/marisco en TODOS los pools, platos e ingredientes (ni pollo, ni res, ni "
+                "cerdo, ni atún, ni camarones, ni embutidos). Huevos y lácteos SÍ están permitidos. "
+                "UN SOLO ingrediente de carne o pescado invalida el plan COMPLETO.\n")
+    if canon == "pescatarian":
+        return ("🛑 DIETA PESCETARIANA (PRIORIDAD 1 — RESTRICCIÓN ABSOLUTA): CERO carne de tierra "
+                "(pollo, res, cerdo, pavo, embutidos) en pools, platos e ingredientes. Pescado, "
+                "mariscos, huevos y lácteos SÍ permitidos.\n")
+    return ""
 
 
 # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Knob del backstop clínico determinista para las
@@ -41183,6 +41303,33 @@ def should_retry(state: PlanState) -> str:
     # 'critical' = peligro médico (alergia/condición). Abortar y delegar a P0-1 guardrail
     # para entregar fallback matemático con disclaimer.
     if severity == "critical":
+        # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Un crítico de DIETA/ALÉRGENO obtiene UN retry
+        # INFORMADO antes del abort. "No tiene sentido reintentar con el mismo contexto" era falso
+        # para esta clase: el retry SÍ recibe las razones (review_feedback → correction_context del
+        # day-gen) y las capas de este P-fix (pools diet-scrubbed + directiva de dieta) cambian el
+        # contexto de generación. NO debilita el guard — la severidad SIGUE siendo critical (a
+        # diferencia del downgrade DM2/bariátrico): el reviewer re-gatea el retry con los MISMOS
+        # escáneres deterministas y, si reincide (attempt>1), este branch aborta al fallback
+        # terminal idéntico al de hoy. Gate attempt==1 (sin flag de state: los conditional edges no
+        # persisten mutaciones) + budget. Rollback: MEALFIT_DIET_CRITICAL_REGEN=false.
+        # tooltip-anchor: P1-DAYGEN-DIET-CONVERGE
+        _dcr_reasons = state.get("rejection_reasons") or []
+        _diet_allergen_critical = any(
+            ("DIETA INCOMPATIBLE" in str(r)) or ("DIETA NO VERIFICABLE" in str(r))
+            or ("ALÉRGENO DETECTADO" in str(r)) or ("ALERGENO DETECTADO" in str(r))
+            for r in _dcr_reasons)
+        if (DIET_CRITICAL_REGEN_ENABLED and _diet_allergen_critical
+                and int(state.get("attempt", 1)) == 1):
+            _dcr_start = state.get("pipeline_start")
+            _dcr_remaining = (
+                (GLOBAL_TIMEOUT - (time.time() - _dcr_start))
+                if isinstance(_dcr_start, (int, float)) and _dcr_start > 0 else -1.0)
+            if _dcr_remaining >= MIN_RETRY_BUDGET_S:
+                logger.warning(
+                    f"🔁 [P1-DAYGEN-DIET-CONVERGE] Crítico de dieta/alérgeno en attempt 1 → UN retry "
+                    f"informado (budget restante {_dcr_remaining:.0f}s ≥ {MIN_RETRY_BUDGET_S}s). "
+                    f"Si reincide, fallback terminal. Razones: {_dcr_reasons[:2]}")
+                return "retry"
         logger.error("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
         _emit_plan_quality_degraded_alert(state, exit_reason="critical", severity=severity)
         return "end"

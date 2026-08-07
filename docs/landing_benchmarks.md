@@ -113,6 +113,17 @@ Cuando una métrica sale mal, esta tabla dice QUÉ tocar (sin redeploy cuando es
 | `telemetry.fallback_rate` | entrega | cron `_plan_fallback_rate_alert_job` (umbral `MEALFIT_FALLBACK_RATE_THRESHOLD`) |
 | `telemetry.quality_index` | PQI (variedad/coherencia/nutrición) | pesos `MEALFIT_PQI_PESO_*`; leer defectos en `GET /api/system/admin/plan-quality` |
 
+## Diagnóstico de convergencia clínica (2026-08-07, corrida dirigida post-P1-LANDING-BENCH-2)
+
+El header `X-Bioboros-Review-Diag` reveló por qué 13/20 perfiles con restricciones terminaban en
+fallback crítico: los pools del skeleton NO se filtraban por dieta (camarones/atún/lácteos
+AUTORIZADOS en planes vegan/vegetarian), la dieta viajaba como campo JSON sin directiva propia,
+un splitter determinista fabricaba «Sal al gusto» por comida en perfiles HTA, y un rechazo
+crítico abortaba con CERO retries. Fix: **P1-DAYGEN-DIET-CONVERGE** (4 capas knob-gated:
+`MEALFIT_SKELETON_DIET_SCRUB`, `MEALFIT_DIET_DIRECTIVE_BLOCK`, `MEALFIT_SALT_LINE_CONDITION_GATE`,
+`MEALFIT_DIET_CRITICAL_REGEN`), test ancla `test_p1_daygen_diet_converge.py`. Verificación: tras
+deploy, re-correr los ids `3,4,9,10,13,17,19,20` y comparar contra la línea base (2/8 entregados).
+
 ## Hallazgos de producto del análisis del formulario (2026-08-07)
 
 1. **Condiciones solo-backend**: `structural.condiciones_solo_backend = [anemia, gout, nafld, renal]`

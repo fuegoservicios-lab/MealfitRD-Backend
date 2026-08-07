@@ -40,11 +40,11 @@ on:
 # clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
 env:
   PUSH_RUN_N: "2"
-  # [2026-08-07] Corrida DIAGNÓSTICA post-deploy P1-LANDING-BENCH-2: un perfil por
-  # clase de regla clínica (dm2, hta, bariátrica, embarazo, warfarina, alergias,
-  # vegetariana, vegana×dm2). El header X-Bioboros-Review-Diag ya está vivo en prod
-  # → los 422 traerán las razones exactas del rechazo (issue #9).
-  PUSH_RUN_IDS: "3,4,9,10,13,17,19,20"
+  # [2026-08-07] Diagnóstico completado (issue #9): la corrida dirigida con ids
+  # 3,4,9,10,13,17,19,20 reveló las causas (pools sin filtrar por dieta, directiva
+  # ausente, sal inyectada en HTA, cero retries en críticos). De vuelta a smoke
+  # barato; re-poner esos ids TRAS desplegar P1-DAYGEN-DIET-CONVERGE para medir el delta.
+  PUSH_RUN_IDS: ""
   PUSH_RUN_CHANGES: "false"
 
 concurrency:
