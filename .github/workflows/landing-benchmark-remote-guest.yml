@@ -40,10 +40,11 @@ on:
 # clínicos tras un deploy) editar PUSH_RUN_IDS y pushear.
 env:
   PUSH_RUN_N: "2"
-  # [2026-08-07] Diagnóstico completado (issue #9): la corrida dirigida con ids
-  # 3,4,9,10,13,17,19,20 reveló las causas (pools sin filtrar por dieta, directiva
-  # ausente, sal inyectada en HTA, cero retries en críticos). De vuelta a smoke
-  # barato; re-poner esos ids TRAS desplegar P1-DAYGEN-DIET-CONVERGE para medir el delta.
+  # [2026-08-07] Verificación post-deploy analizada (issue #9): DM2 pasó a entrega LIMPIA
+  # con banda 100, la sal fabricada desapareció de los diagnósticos HTA, cero violaciones
+  # de dieta reportadas — pero 5/8 cayeron por disconnect del endpoint síncrono (el retry
+  # informado alarga el pipeline sobre el proxy_read_timeout). Siguiente: transporte SSE
+  # en el runner. De vuelta a smoke barato.
   PUSH_RUN_IDS: ""
   PUSH_RUN_CHANGES: "false"
 
