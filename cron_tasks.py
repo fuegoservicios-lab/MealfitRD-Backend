@@ -29865,7 +29865,39 @@ def process_plan_chunk_queue(target_plan_id=None):
 
                         # [P0-3] Validación post-generación: todos los ingredientes deben estar en la nevera.
                         # strict_quantities=False: solo validamos existencia, no cantidades exactas.
+                        #
+                        # [P1-PANTRY-EXIST-WAIVER · 2026-08-08] Esta era la TERCERA guarda de
+                        # nevera del worker y la única fuera de P1-PANTRY-GATE-SSOT: decidía
+                        # sola con `if _pantry_snapshot:` — ciega a flexible/advisory/guest/
+                        # initial-autonomy (no leía flag alguno, por eso el blanket del SSOT
+                        # nunca la vio). Un chunk resucitado en modo flexible generaba CON
+                        # permiso de salirse de la nevera y esta guarda lo pausaba por usar
+                        # ese permiso: el lazo del plan 69f9e03d por la tercera puerta.
+                        # Medido en f380821a w2 (2026-08-08): resume flexible 07:39 → ~21 min
+                        # de LLM → re-pausa 08:00 con la MISMA reason
+                        # `pantry_violation_after_retries` y `_pantry_flexible_mode=true`.
+                        # Mismos args que `_res_waiver` (gate de reservas). Salida espejo del
+                        # path advisory (`_pantry_ok=True; break`): también salta el drift
+                        # check `_finalize_live_pantry_validation`, que pausa por otra puerta
+                        # (`persistent_drift`) y es igual de ciego al waiver. rolling_refill/
+                        # catchup SIN modo flexible conservan la validación estricta ÍNTEGRA.
+                        # tooltip-anchor: P1-PANTRY-EXIST-WAIVER
                         _pantry_snapshot = form_data.get("current_pantry_ingredients", [])
+                        _exist_waiver = _pantry_gate_waiver_reason(
+                            chunk_kind=chunk_kind,
+                            snapshot=snap,
+                            form_data=form_data,
+                            fresh_inventory_source=form_data.get("_fresh_pantry_source"),
+                        )
+                        if _pantry_snapshot and _exist_waiver:
+                            logger.info(
+                                f"[P1-PANTRY-EXIST-WAIVER] Chunk {week_number} plan {meal_plan_id}: "
+                                f"validación de nevera post-generación OMITIDA (waiver={_exist_waiver!r}) — "
+                                f"la lista de compras del plan define qué comprar."
+                            )
+                            _pantry_ok = True
+                            form_data.pop("_pantry_correction", None)
+                            break
                         if _pantry_snapshot:
                             _all_gen_ing = [
                                 ing for d in new_days
