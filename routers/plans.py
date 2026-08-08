@@ -2407,6 +2407,18 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     days = plan_data.get("days", [])
                     total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
                     
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Gemela EXACTA de la
+                    # rama del cron, y en la MISMA posición: por encima del
+                    # guard de "plan vacío". El plan que más necesita el
+                    # reanclaje es justo el que tiene CERO días vivos; ponerla
+                    # debajo la deja inerte para él (medido con el plan
+                    # 76a6836d: 0 días y el relleno programado una semana
+                    # después). Con `len(days)=0` los offsets caen a 0 y el
+                    # chunk sale ya. La aritmética es SSOT en
+                    # `constants.rebase_pending_chunk_offsets`.
+                    from cron_tasks import _rebase_pending_chunk_offsets_sql as _p1cor_pre
+                    _p1cor_pre(cursor, plan_id, len(days))
+
                     if len(days) == 0:
                         return {"success": False, "message": "El plan está vacío."}
 
@@ -2529,15 +2541,6 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
 
                     needs_shift = days_since_creation > 0
                     needs_fill_initial = len(days) < window_needed  # Para la guard de cortocircuito inicial
-
-                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Igual que en la rama
-                    # del cron: la cura va ANTES del cortocircuito de abajo. Un
-                    # plan "al día y completo" puede tener la cola descuadrada de
-                    # un shift anterior, y salir por ese return sin tocarla la
-                    # dejaría rota para siempre. La llamada post-shift de más
-                    # abajo refina con la ventana ya podada; ambas idempotentes.
-                    from cron_tasks import _rebase_pending_chunk_offsets_sql as _p1cor_rebase
-                    _p1cor_rebase(cursor, plan_id, len(days))
 
                     if not needs_shift and not needs_fill_initial:
                         # [P0-2] Resumen de pantry-degraded + headers para esta rama.

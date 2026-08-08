@@ -33389,6 +33389,16 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
 
                     plan_data = plan_record.get("plan_data", {})
                     days = plan_data.get("days", [])
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Antes del `if not
+                    # days: return False` de abajo, y no es un detalle: el plan
+                    # que MÁS necesita esto es justo el que tiene CERO días
+                    # vivos. Con la cura debajo del guard, el usuario sin plan
+                    # se quedaba esperando su relleno una semana (plan
+                    # 76a6836d: 0 días, relleno al 08-12). Con `len(days)=0` los
+                    # offsets caen a 0 y el chunk sale ya.
+                    _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(days))
+
                     if not days:
                         return False
 
@@ -33397,23 +33407,6 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                     today = datetime.now(timezone.utc)
                     if tz_offset:
                         today -= timedelta(minutes=int(tz_offset))
-
-                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Cura ANTES de los
-                    # guards de abajo, no después: esta función hace `return
-                    # False` para planes `partial` y para los que ya tienen
-                    # chunks en cola — que es EXACTAMENTE el estado de los
-                    # planes con la cola descuadrada (7 pendientes, status
-                    # partial). Puesta después del shift habría nacido inerte
-                    # justo para los casos que existe para arreglar.
-                    #
-                    # Aquí la ventana viva es la actual (`plan_data['days']`):
-                    # si el shift de más abajo llega a correr, vuelve a llamar
-                    # con la ventana ya podada y refina. Las dos llamadas son
-                    # idempotentes — `plan_chunk_offset_moves` no devuelve nada
-                    # cuando la cola ya está cuadrada.
-                    _rebase_pending_chunk_offsets_sql(
-                        cursor, plan_id, len(plan_data.get("days") or [])
-                    )
 
                     start_date_str = plan_data.get("grocery_start_date")
                     if not start_date_str:
