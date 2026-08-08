@@ -13673,10 +13673,11 @@ def _recover_pantry_paused_chunks() -> None:
         ) or []
         # [G-B2 · P2-CRON-OPT-4 · 2026-05-31] `days_offset` añadido al batch SELECT para
         # eliminar dos re-queries por-fila al MISMO row (tz_unresolved + prev_chunk branches)
-        # en este cron de ~1 min. La columna es inmutable para una fila en 'pending_user_action':
-        # su único writer es el UPSERT `days_offset = EXCLUDED.days_offset`, que solo aplica a
-        # filas status='failed' (índice parcial ux_plan_chunk_queue_live_week NO cubre
-        # pending_user_action). Misma clase que el meal_plan_id re-query ya eliminado (S08-1 GAP-2).
+        # en este cron de ~1 min. [P1-CHUNK-REBASE-PAUSED · 2026-08-08] La columna YA NO es
+        # inmutable para 'pending_user_action': `_rebase_pending_chunk_offsets_sql` la reancla
+        # también en filas pausadas (antes solo el UPSERT sobre status='failed'). El valor del
+        # batch puede quedar ≤1 tick (~1 min) desfasado si un shift corre en medio — tolerable:
+        # aquí solo alimenta re-evals de gates, y el próximo tick re-lee fresco.
 
         for row in paused_rows:
             snap = copy.deepcopy(row.get("pipeline_snapshot") or {})
@@ -33263,6 +33264,16 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
     `NOW()` deja que el scheduler recoja de inmediato lo que ya debía haber
     corrido, en vez de programarlo al pasado.
 
+    [P1-CHUNK-REBASE-PAUSED · 2026-08-08] La cadena incluye TAMBIÉN los chunks
+    `pending_user_action`: un pausado NO está muerto — el recovery cron lo
+    resucita (TTL → flexible_mode) con `execute_after=NOW()` y SIN recalcular
+    offsets, así que su tramo tiene que seguir reservado y su offset anclado.
+    Dejarlos fuera repartía su tramo al siguiente pendiente (medido en vivo
+    2026-08-08, plan f380821a: w2 pausada offset 0 y w4 reanclada encima) y las
+    dos generaciones escribían los MISMOS días. Para los pausados el UPDATE de
+    `execute_after` es inerte (el worker no los toma y el recovery lo pisa con
+    NOW() al resucitar): lo que importa es el `days_offset`.
+
     Devuelve cuántas filas movió (0 = ya estaba cuadrada, o knob apagado).
     """
     if not _env_bool("MEALFIT_CHUNK_OFFSET_REBASE", True):
@@ -33284,7 +33295,7 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
 
         cursor.execute(
             "SELECT id, days_offset, days_count FROM plan_chunk_queue "
-            "WHERE meal_plan_id = %s AND status IN ('pending', 'stale') "
+            "WHERE meal_plan_id = %s AND status IN ('pending', 'stale', 'pending_user_action') "
             "ORDER BY week_number ASC, days_offset ASC",
             (plan_id,),
         )
@@ -33314,7 +33325,7 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
                 "        NOW() + make_interval(days => %s)"
                 "    ), "
                 "    updated_at = NOW() "
-                "WHERE id = %s AND status IN ('pending', 'stale')",
+                "WHERE id = %s AND status IN ('pending', 'stale', 'pending_user_action')",
                 (nuevo_offset, delta, dias_hasta_su_turno, chunk_id),
             )
             movidas += 1
