@@ -33231,6 +33231,19 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
         return 0
     from constants import plan_chunk_offset_moves, rebase_pending_chunk_offsets  # noqa: F401
     try:
+        # Los chunks EN VUELO ya están fabricando días que el plan todavía no
+        # tiene. Si no se cuentan, el siguiente pendiente ocupa su sitio (offset
+        # 0) y salen los dos a la vez a generar el MISMO tramo — observado en
+        # vivo el 2026-08-07 con el plan 76a6836d: la semana 3 en `processing` y
+        # la 4 reanclada encima de ella. La ventana real es "días vivos + días
+        # que ya vienen en camino".
+        cursor.execute(
+            "SELECT COALESCE(SUM(days_count), 0) AS en_vuelo FROM plan_chunk_queue "
+            "WHERE meal_plan_id = %s AND status = 'processing'",
+            (plan_id,),
+        )
+        en_vuelo = int((cursor.fetchone() or {}).get("en_vuelo") or 0)
+
         cursor.execute(
             "SELECT id, days_offset, days_count FROM plan_chunk_queue "
             "WHERE meal_plan_id = %s AND status IN ('pending', 'stale') "
@@ -33240,6 +33253,7 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
         filas = cursor.fetchall() or []
         if not filas:
             return 0
+        live_days_count = max(0, int(live_days_count or 0)) + en_vuelo
         # `plan_chunk_offset_moves` compone la rebase (SSOT) con el delta ya
         # listo para el UPDATE. Vive en constants y no aquí porque este módulo
         # no se puede importar sin el stack LLM entero — la aritmética tiene que

@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+_BACKEND_SQL = Path(__file__).resolve().parents[1]
+
 from constants import (
     chunk_refill_arrives_in_time,
     plan_chunk_offset_moves,
@@ -133,6 +135,32 @@ def test_sin_chunks_no_hay_movimientos():
     assert plan_chunk_offset_moves(3, []) == []
 
 
+def test_los_dias_que_ya_vienen_en_camino_cuentan_como_ventana():
+    """Un chunk EN VUELO ya está fabricando días que el plan aún no tiene. El
+    ejecutor SQL le suma su `days_count` a la ventana antes de llamar aquí; sin
+    eso el siguiente pendiente se reancla ENCIMA del que está corriendo y los dos
+    generan el mismo tramo. Observado en vivo el 2026-08-07 (plan 76a6836d,
+    semana 3 en `processing` y la 4 aterrizando sobre ella).
+
+    Aquí se comprueba la consecuencia: con la ventana ya sumada (0 vivos + 4 en
+    vuelo), el pendiente arranca DESPUÉS, no encima."""
+    assert plan_chunk_offset_moves(0 + 4, [("wk4", 11, 4)]) == [("wk4", 4, 7, 0)]
+    # ...y sin sumar el vuelo aterrizaría en 0, pisando al que corre.
+    assert plan_chunk_offset_moves(0, [("wk4", 11, 4)])[0][1] == 0
+
+
+def test_el_ejecutor_sql_suma_los_chunks_en_vuelo():
+    """Parser-based: el SELECT de `processing` no puede desaparecer en un
+    refactor sin que esto lo cante."""
+    src = (_BACKEND_SQL / "cron_tasks.py").read_text(encoding="utf-8")
+    ini = src.index("def _rebase_pending_chunk_offsets_sql(")
+    cuerpo = src[ini: src.index("\ndef ", ini + 10)]
+    assert "status = 'processing'" in cuerpo and "en_vuelo" in cuerpo, (
+        "El reanclaje dejó de contar los chunks en vuelo: el siguiente pendiente "
+        "volverá a aterrizar encima del que está generando."
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. El predicado de sequía (lo que la telemetría podrá vigilar)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,7 +192,7 @@ def test_sin_chunk_pendiente_no_opina():
 # este test lo caza antes que producción.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_BACKEND = Path(__file__).resolve().parents[1]
+_BACKEND = _BACKEND_SQL
 
 
 def _cuerpo(path: Path, nombre: str) -> str:
