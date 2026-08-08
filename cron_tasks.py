@@ -13657,10 +13657,13 @@ def _recover_pantry_paused_chunks() -> None:
         # no podemos rehidratar plan_data (`anchor_recovery`, `flexible_mode`
         # persistence, mode_history), así que el row sería un consumidor de
         # ciclos LLM sin output útil. Saltamos en el origen.
+        # [P1-PAUSE-AGE-TRUE-CLOCK · 2026-08-07] `paused_seconds` sale del
+        # fragmento SSOT, no de `updated_at`: los recordatorios y las re-pausas
+        # refrescan esa columna y el TTL de 12h no llegaba nunca a cumplirse.
         paused_rows = execute_sql_query(
-            """
+            f"""
             SELECT id, user_id, meal_plan_id, week_number, days_offset, pipeline_snapshot,
-                   EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds
+                   ({pause_age_seconds_sql()})::int AS paused_seconds
             FROM plan_chunk_queue
             WHERE status = 'pending_user_action'
               AND meal_plan_id IS NOT NULL
@@ -33208,6 +33211,41 @@ def trigger_incremental_learning(user_id: str):
 
 
 # ─── P0-2: ROLLING REFILL EN BACKGROUND (usuarios que no abren la app) ───────
+
+# [P1-PAUSE-AGE-TRUE-CLOCK · 2026-08-07] La edad de una pausa NO es
+# `NOW() - updated_at`.
+#
+# Cada recordatorio (cada 4h) y cada re-pausa escriben `updated_at = NOW()`, así
+# que un chunk que entra en bucle —pausa → TTL → escala a flexible → vuelve a
+# violar la nevera → se re-pausa— reinicia su propio reloj en cada vuelta y
+# NUNCA alcanza los umbrales de 12h/24h. El vigilante mide justo el reloj que el
+# fallo que persigue mantiene fresco.
+#
+# Medido en producción 2026-08-07:
+#     chunk          updated_at    edad REAL
+#     76a6836d wk2      6,9h        18,9h
+#     9cf5e313 wk2      5,2h        17,2h
+# y `chunk_paused_indefinitely` llevaba UNA sola emisión en toda la historia,
+# con chunks dando vueltas durante días (`_mode_history` muestra la misma
+# escalada repetida el 05, el 06 y el 07).
+#
+# `_pantry_pause_started_at` sí sobrevive a las vueltas (se escribe con
+# `setdefault`). El regex evita que un valor corrupto reviente el cast y con él
+# el cron entero: sin match, degrada al comportamiento viejo.
+_PAUSE_AGE_SECONDS_SQL = """
+    EXTRACT(EPOCH FROM (NOW() - CASE
+        WHEN {alias}pipeline_snapshot->>'_pantry_pause_started_at' ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}T'
+        THEN ({alias}pipeline_snapshot->>'_pantry_pause_started_at')::timestamptz
+        ELSE {alias}updated_at
+    END))
+"""
+
+
+def pause_age_seconds_sql(alias: str = "") -> str:
+    """Fragmento SQL SSOT de la edad real de una pausa. `alias` con punto
+    incluido (p.ej. `"q."`) o vacío."""
+    return _PAUSE_AGE_SECONDS_SQL.format(alias=alias)
+
 
 def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
     """[P1-CHUNK-OFFSET-REBASE · 2026-08-07] Re-ancla la cola de chunks contra la
