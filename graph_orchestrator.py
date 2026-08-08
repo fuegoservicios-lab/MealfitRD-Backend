@@ -18356,16 +18356,34 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
-def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> list:
+def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=None) -> list:
     """[P3-PROTEIN-FLOOR] Proteínas de ALTA densidad (≥min_protein g/100g) del catálogo
     dominicano que son allergen-SAFE para el usuario y resuelven en el catálogo nutricional.
     Ordenadas por magrez (proteína/kcal) desc → el closer prefiere la de menor costo calórico.
-    Retorna [(leanness, name, info), …]. Cero alérgeno (reusa el mapa de sinónimos C2)."""
+    Retorna [(leanness, name, info), …]. Cero alérgeno (reusa el mapa de sinónimos C2).
+
+    [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] `diet`: los candidatos que violan la dieta canónica
+    declarada se EXCLUYEN (matcher SSOT `_scan_diet_violations` por ítem — cero 4ª tabla). La
+    verificación post-deploy del issue #9 midió al closer del piso de proteína atornillando
+    '230g de atún'/'225g de camarones'/'2 tazas de Yogurt' a planes veg* que el LLM YA generaba
+    limpios (conceptos «Yogur de Soya»/«Tofu»): este builder filtraba por ALERGIAS pero no por
+    DIETA, y el guard aguas abajo rechazaba el plan entero. balanced/None → sin filtro
+    (byte-idéntico). Vegan puede quedar VACÍO si el catálogo denso no tiene fuente vegetal ≥
+    min_protein — correcto: mejor un déficit honesto (retry informado con fuentes aptas) que
+    una violación fabricada."""
     try:
         from constants import DOMINICAN_PROTEINS, strip_accents
     except Exception:
         return []
     import re as _re
+    _diet_canon_hd = None
+    if diet is not None:
+        try:
+            from constants import canonicalize_diet_type as _cdt_hd
+            _c_hd = _cdt_hd(diet)
+            _diet_canon_hd = _c_hd if _c_hd != "balanced" else None
+        except Exception:
+            _diet_canon_hd = None
     forbidden = set()
     if _has_real_medical_flags(allergies):
         al = allergies if isinstance(allergies, list) else [allergies]
@@ -18387,6 +18405,13 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> lis
         nlow = strip_accents(str(name).lower())
         if forbidden and any(f and (f in nlow or nlow in f) for f in forbidden):
             continue  # alérgeno → excluir (fail-secure)
+        if _diet_canon_hd:
+            try:
+                _mini_hd = {"days": [{"meals": [{"name": str(name), "ingredients": [str(name)]}]}]}
+                if _scan_diet_violations(_mini_hd, _diet_canon_hd):
+                    continue  # no apto para la dieta declarada (el guard rechazaría el plan entero)
+            except Exception:
+                continue  # fail-secure: si no puedo verificar el candidato, no lo ofrezco
         info = db.lookup(name)
         if info and info.protein >= min_protein and info.kcal > 0:
             out.append((info.protein / info.kcal, name, info))
@@ -18838,7 +18863,7 @@ def _is_savory_cheese_name(nlow: str) -> bool:
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0, enforce_min_threshold: bool = True,
-                                day_used_proteins=None) -> int:
+                                day_used_proteins=None, diet=None) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -18901,8 +18926,9 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             if CLOSER_SWEET_DAIRY_ENABLED and allergies is not None:
                 _sweet_dairy = []
                 _seen_sd = set()
+                # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] diet= filtra lácteos para vegan.
                 for (_ln_sd, _nm_sd, _info_sd) in _safe_high_density_proteins(
-                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN):
+                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN, diet=diet):
                     _ndlow = _sa(str(_info_sd.name).lower())
                     if _ndlow in _seen_sd or not any(t in _ndlow for t in _SWEET_DAIRY_TOKENS):
                         continue
@@ -34829,7 +34855,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         # (densidad media; cap bariátrico 120g, el add ≤90g es seguro) ADEMÁS de la carne densa. Excluimos QUESOS/leche
         # (cap 30g → 90g los excedería; los caps NO re-corren tras FASE A). En platos SALADOS el closer prefiere la
         # carne densa por categoría; el yogur queda para los dulces vía el no_cook/dairy-egg + sweet-guard.
-        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0)
+        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0,
+                                             diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
         _DAIRY_EXCLUDE = ("queso", "ricotta", "cottage", "requeson", "leche")  # quesos (cap 30g) + leche; yogur SÍ entra
         _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY_EXCLUDE)]
         if not _cands:
@@ -34884,7 +34911,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                                                  allergies=form_data.get("allergies"),
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
-                                                 day_used_proteins=_used_others)
+                                                 day_used_proteins=_used_others,
+                                                 diet=form_data.get("dietType"))
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
@@ -34937,7 +34965,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
             # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
             # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
-            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0)
+            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0,
+                                                          diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
                               if PROTEIN_FLOOR_ENABLED else [])
             # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
             # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
@@ -35003,7 +35032,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                             _m, _slot_target["protein"], _nut_db, _egg_cands,
                             allergies=form_data.get("allergies"),
                             fill_pct=PROTEIN_FLOOR_FILL_PCT,
-                            day_used_proteins=_used_mi)
+                            day_used_proteins=_used_mi,
+                            diet=form_data.get("dietType"))
                         if _g_mi > 0:
                             # el add recién hecho debe ser visible para las siguientes comidas del día
                             _day_meal_labels[_mi] = _protein_gate_labels_in_meal(_m)
@@ -35108,7 +35138,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             if not _renal_capped:
                 from nutrition_db import IngredientNutritionDB as _SwapNDB
                 _swap_db = _SwapNDB()
-                _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0)
+                _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0,
+                                                          diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
                 _swapped_days = 0
                 for _d in (days or []):
                     if _swap_excess_carbs_to_protein_for_day(
