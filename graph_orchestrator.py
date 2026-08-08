@@ -550,6 +550,11 @@ HARDEN_CROSSDAY_QUOTA    = _env_bool("MEALFIT_HARDEN_CROSSDAY_QUOTA", False)    
 #   4. Un rechazo crítico de DIETA/ALÉRGENO obtiene UN retry INFORMADO (ver should_retry) en vez del
 #      abort a cero-retries; si reincide, el fallback terminal es idéntico al de hoy.
 SKELETON_DIET_SCRUB_ENABLED = _env_bool("MEALFIT_SKELETON_DIET_SCRUB", True)
+# [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Scrub de ALÉRGENOS en pools (era diet-only) +
+# downgrade determinista de demandas de verificación del reviewer (certificación/vigilancia →
+# advisory, no crítico guest). Kill switches independientes.
+SKELETON_ALLERGEN_SCRUB_ENABLED = _env_bool("MEALFIT_SKELETON_ALLERGEN_SCRUB", True)
+REVIEWER_VERIFICATION_ADVISORY_ENABLED = _env_bool("MEALFIT_REVIEWER_VERIFICATION_ADVISORY", True)
 DIET_DIRECTIVE_BLOCK_ENABLED = _env_bool("MEALFIT_DIET_DIRECTIVE_BLOCK", True)
 SALT_LINE_CONDITION_GATE = _env_bool("MEALFIT_SALT_LINE_CONDITION_GATE", True)
 DIET_CRITICAL_REGEN_ENABLED = _env_bool("MEALFIT_DIET_CRITICAL_REGEN", True)
@@ -7364,6 +7369,25 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                             f"{_removed} — el planner los asignó pese a la dieta declarada "
                             f"('{_diet_scrub_type}'); sin este scrub el day-gen los tenía AUTORIZADOS")
 
+    # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Scrub de ALÉRGENOS sobre los pools —
+    # el scrub de arriba es diet-only y declaró «limpio» un pool con Huevos+Queso para un
+    # alérgico a huevo/lácteos (run 31232856541): el pool es la lista de AUTORIZADOS del
+    # day-gen, así que un alérgeno asignado es un alérgeno AUTORIZADO. Mismo patrón mini-plan.
+    if SKELETON_ALLERGEN_SCRUB_ENABLED:
+        _scrub_allergies = form_data.get("allergies")
+        if _has_real_medical_flags(_scrub_allergies):
+            for _dsd in skel_days:
+                for _pool_key in ("protein_pool", "carb_pool", "fruit_pool"):
+                    _pool = _dsd.get(_pool_key) or []
+                    _kept = [p for p in _pool if not _allergen_pool_item_banned(p, _scrub_allergies)]
+                    if len(_kept) != len(_pool):
+                        _removed = [p for p in _pool if p not in _kept]
+                        _dsd[_pool_key] = _kept
+                        logger.warning(
+                            f"🛡 [SKELETON ALLERGEN SCRUB] Día {_dsd.get('day')}: {_pool_key} pierde "
+                            f"{_removed} — el planner asignó alérgeno(s) declarados; sin este scrub "
+                            f"el day-gen los tenía AUTORIZADOS")
+
     # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar una proteína SEGURA.
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (audit form · contradicción C1) El fallback era
     # 'Lentejas' INCONDICIONAL — ciego a las alergias declaradas: un vegano alérgico a
@@ -13949,6 +13973,18 @@ _ALLERGEN_SYNONYMS = {
 }
 
 
+# [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Excusa plant-adjacent COMPARTIDA por los dos
+# scanners (dieta ya la tenía; el de alérgenos no — FPs medidos: «mantequilla»⊂«mantequilla de
+# maní», «leche»⊂«leche de coco», 16ª subcadena). Dirección segura intacta: el maní-alérgico
+# matchea «mantequilla de maní» vía el término «maní» directo.
+import re as _re_mod
+_PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
+    r"^\s*(?:de\s+|estilo\s+|tipo\s+|a\s+la\s+)?"
+    r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|maranon|"
+    r"anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
+)
+
+
 def _scan_allergen_violations(plan: dict, allergies) -> list:
     """[C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de seguridad de alérgenos
     (encima del revisor LLM, que puede fallar). Escanea cada ingrediente del plan contra
@@ -13989,7 +14025,14 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                 for f in forbidden:
                     # `(?:s|es)?` captura el plural español (fresa→fresas, pan→panes,
                     # camaron→camarones) SIN falsos positivos de prefijo (leche≠lechosa).
-                    if f and _re.search(r"\b" + _re.escape(f) + r"(?:s|es)?\b", ing_low):
+                    _m_al = _re.search(r"\b" + _re.escape(f) + r"(?:s|es)?\b", ing_low) if f else None
+                    if _m_al:
+                        # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] misma excusa plant-adj
+                        # del scan de dieta: «leche de coco»/«mantequilla de maní»/«yogur de soya»
+                        # no violan la alergia a LÁCTEOS (el alérgico a maní/coco matchea vía su
+                        # propio término directo).
+                        if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
+                            continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break
     return violations
@@ -14111,6 +14154,52 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
                     violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
+
+
+_VERIFICATION_DEMAND_RX = _re_mod.compile(
+    r"(certificaci[oó]n|certificad[oa]s?|contaminaci[oó]n cruzada|debe(?:n)? verificarse|"
+    r"requiere[n]? verificaci[oó]n|verificar (?:la |las )?etiquetas?|sin indicar certificaci[oó]n|"
+    r"requiere[n]? confirmaci[oó]n|debe[n]? confirmarse|requiere[n]? vigilancia|"
+    r"vigilancia de (?:la )?funci[oó]n|requiere[n]? supervisi[oó]n)",
+    _re_mod.IGNORECASE,
+)
+
+
+def _downgrade_reviewer_verification_demands(approved, issues, severity):
+    """[P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Demandas de VERIFICACIÓN del reviewer LLM
+    («requiere certificación sin gluten», «contaminación cruzada», «vigilancia tiroidea») →
+    advisory, NO rechazo crítico guest: son irrefutables por construcción (no existe dato de
+    marca que el generador pueda emitir) y ENVENENAN el retry (viajan en la directiva — corridas
+    31232856541/31241353361, perfiles 17/20). «pasteurizado» (food-safety embarazo) queda FUERA
+    del patrón a propósito. Los guards DETERMINISTAS (alérgeno/dieta/piso) corren después y
+    conservan la última palabra. Devuelve (approved, issues_reales, severity, advisories)."""
+    if not REVIEWER_VERIFICATION_ADVISORY_ENABLED or approved or not issues:
+        return approved, list(issues or []), severity, []
+    real, advisories = [], []
+    for it in issues:
+        (advisories if _VERIFICATION_DEMAND_RX.search(str(it)) else real).append(it)
+    if not advisories:
+        return approved, real, severity, []
+    if real:
+        logger.info(f"📋 [P1-REVIEWER-VERIFICATION-ADVISORY] {len(advisories)} demanda(s) de "
+                    f"verificación degradadas a advisory; {len(real)} issue(s) reales se quedan.")
+        return approved, real, severity, advisories
+    logger.warning(f"📋 [P1-REVIEWER-VERIFICATION-ADVISORY] TODAS las {len(advisories)} issues del "
+                   f"reviewer eran demandas de verificación → plan aprobado por el LLM (los guards "
+                   f"deterministas validan aparte).")
+    return True, [], "low", advisories
+
+
+def _allergen_pool_item_banned(item, allergies) -> bool:
+    """[P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] ¿Este ítem de pool del skeleton viola
+    una ALERGIA declarada? Sibling exacto de `_diet_pool_item_banned` — el scrub era diet-only
+    y asignó Huevos+Queso a un alérgico a huevo/lácteos declarando «limpio» (run 31232856541).
+    Reusa `_scan_allergen_violations` (mini-plan, sinónimos C2, excusa plant-adj). Fail-open."""
+    try:
+        return bool(_scan_allergen_violations(
+            {"days": [{"meals": [{"name": "_pool", "ingredients": [str(item)]}]}]}, allergies))
+    except Exception:
+        return False
 
 
 def _diet_pool_item_banned(item, diet_type) -> bool:
@@ -39577,6 +39666,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
             issues = result.issues
             severity = result.severity
             llm_affected_days = result.affected_days
+            # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] demandas de verificación → advisory
+            # ANTES de los guards deterministas y de que envenenen el retry.
+            approved, issues, severity, _verif_advisories = \
+                _downgrade_reviewer_verification_demands(approved, issues, severity)
+            if _verif_advisories and isinstance(plan, dict):
+                plan["_reviewer_advisories"] = _verif_advisories
         except Exception as e:
             approved = False
             llm_affected_days = []
