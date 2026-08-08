@@ -30800,7 +30800,21 @@ def process_plan_chunk_queue(target_plan_id=None):
                         # a chunk pause instead of an annotation. The advisory annotation is the
                         # contract; the post-merge guard should only catch UNEXPECTED new violations.
                         _p04_advisory_skip = bool(form_data.get("_pantry_quantity_violations"))
-                        if _p04_pantry and not _p04_advisory_skip:
+                        # [P1-FLEX-DELIVER · 2026-08-08] TERCERA guarda de la misma condición:
+                        # pre-gen (waiver) y post-gen (entrega flexible) ya toleran faltantes en
+                        # modo flexible TTL-escalado, pero este guard duro post-merge re-imponía
+                        # strict → _PantryViolationPostMerge → ROLLBACK del merge → re-pausa con
+                        # OTRA reason (pantry_violation_post_merge) → el ciclo seguía vivo con
+                        # otra cabeza (medido en f380821a tras el fix post-gen: la lista creció
+                        # 85→191 appendeando Compra Urgente en cada vuelta). Tres guardas sobre
+                        # la misma condición OSCILAN. En flexible la entrega marcada es el contrato.
+                        _p04_flex_skip = bool(form_data.get("_pantry_flexible_mode"))
+                        if _p04_flex_skip and _p04_pantry:
+                            logger.warning(
+                                f"🛒 [P1-FLEX-DELIVER/POST-MERGE] Plan {meal_plan_id} chunk {week_number}: "
+                                f"guard duro post-merge OMITIDO en modo flexible TTL-escalado — la "
+                                f"entrega con 🚨 Compra Urgente es el contrato del flexible.")
+                        if _p04_pantry and not _p04_advisory_skip and not _p04_flex_skip:
                             # [P2-CHUNK-5] El rango de días NUEVOS se deriva de prior_count
                             # (días pre-existentes post-dedup), NO de days_offset. El merge
                             # re-renumera todo a 1..N desde prior_count+1 (líneas ~26803),

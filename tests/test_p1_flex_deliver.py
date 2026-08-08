@@ -47,6 +47,19 @@ def test_maquinaria_de_honestidad_se_conserva():
     assert "emergency_pantry_unsafe" in blk
 
 
+def test_post_merge_tercera_guarda_tambien_omite_en_flexible():
+    # La 3ª guarda (post-merge, _PantryViolationPostMerge) re-imponía strict en flexible y
+    # revivía el ciclo con OTRA reason (pantry_violation_post_merge) — medido: lista 85→191.
+    i = _CT.find("HARD VALIDATION POST-MERGE")
+    assert i > 0, "el bloque post-merge desapareció"
+    blk = _CT[i: _CT.find("Recalcular contadores absolutos", i)]
+    assert "_p04_flex_skip" in blk and "_pantry_flexible_mode" in blk, (
+        "el guard duro post-merge debe omitirse en modo flexible TTL-escalado (3ª cabeza del ciclo)")
+    assert "not _p04_advisory_skip and not _p04_flex_skip" in blk, (
+        "el skip flexible debe componerse con el advisory, no reemplazarlo")
+    assert "_PantryViolationPostMerge(" in blk, "el raise sigue vivo para el modo estricto"
+
+
 def test_pausa_sigue_viva_para_stale_snapshot():
     # El return False de la pausa NO desaparece del bloque: la rama no-TTL (stale_snapshot)
     # lo conserva — quitar la pausa por completo sería el error simétrico.
