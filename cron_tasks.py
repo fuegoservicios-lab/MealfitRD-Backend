@@ -33209,6 +33209,77 @@ def trigger_incremental_learning(user_id: str):
 
 # ─── P0-2: ROLLING REFILL EN BACKGROUND (usuarios que no abren la app) ───────
 
+def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
+    """[P1-CHUNK-OFFSET-REBASE · 2026-08-07] Re-ancla la cola de chunks contra la
+    ventana viva. Ejecutor compartido por las DOS ramas del shift.
+
+    Por qué existe: `execute_after` se calcula `ancla + days_offset`, y el shift
+    reescribe el ancla a HOY al archivar los días vividos. Dejar los offsets
+    quietos descuadra el par por exactamente los días archivados, y el relleno
+    llega tarde esa misma cantidad (plan f380821a, 2026-08-07: ancla 08-05→08-07,
+    offset 3 intacto ⇒ el chunk saltó del 08-08 al 08-10, con UN día vivo).
+
+    `execute_after` se mueve por el MISMO delta que el offset en vez de
+    recalcularse desde cero: así preserva la hora del día (medianoche local +30m)
+    y cualquier adelanto que `safety_margin` ya le hubiera aplicado. El clamp a
+    `NOW()` deja que el scheduler recoja de inmediato lo que ya debía haber
+    corrido, en vez de programarlo al pasado.
+
+    Devuelve cuántas filas movió (0 = ya estaba cuadrada, o knob apagado).
+    """
+    if not _env_bool("MEALFIT_CHUNK_OFFSET_REBASE", True):
+        return 0
+    from constants import plan_chunk_offset_moves, rebase_pending_chunk_offsets  # noqa: F401
+    try:
+        cursor.execute(
+            "SELECT id, days_offset, days_count FROM plan_chunk_queue "
+            "WHERE meal_plan_id = %s AND status IN ('pending', 'stale') "
+            "ORDER BY week_number ASC, days_offset ASC",
+            (plan_id,),
+        )
+        filas = cursor.fetchall() or []
+        if not filas:
+            return 0
+        # `plan_chunk_offset_moves` compone la rebase (SSOT) con el delta ya
+        # listo para el UPDATE. Vive en constants y no aquí porque este módulo
+        # no se puede importar sin el stack LLM entero — la aritmética tiene que
+        # ser testeable en cualquier entorno, incluido el del dueño.
+        movimientos = plan_chunk_offset_moves(
+            live_days_count,
+            [(f["id"], f.get("days_offset"), f.get("days_count")) for f in filas],
+        )
+        movidas = 0
+        for chunk_id, nuevo_offset, delta, dias_hasta_su_turno in movimientos:
+            # El suelo NO es `NOW()`: es `NOW() + los días que faltan para el
+            # turno de ESTE chunk`. Con `NOW()` a secas, todos los chunks
+            # vencidos de un plan salen a la vez y dos generaciones concurrentes
+            # escriben el mismo `plan_data`.
+            cursor.execute(
+                "UPDATE plan_chunk_queue "
+                "SET days_offset = %s, "
+                "    execute_after = GREATEST("
+                "        execute_after - make_interval(days => %s), "
+                "        NOW() + make_interval(days => %s)"
+                "    ), "
+                "    updated_at = NOW() "
+                "WHERE id = %s AND status IN ('pending', 'stale')",
+                (nuevo_offset, delta, dias_hasta_su_turno, chunk_id),
+            )
+            movidas += 1
+        if movidas:
+            logger.info(
+                f"[P1-CHUNK-OFFSET-REBASE] plan={plan_id} vivos={live_days_count} "
+                f"chunks_reanclados={movidas}/{len(filas)}."
+            )
+        return movidas
+    except Exception as e:
+        # Degradar, NUNCA abortar: esto corre dentro de la transacción que
+        # sostiene el advisory lock del shift. Reventar aquí dejaría al usuario
+        # sin renovación, que es peor que un relleno tarde.
+        logger.warning(f"[P1-CHUNK-OFFSET-REBASE] no se pudo reanclar plan={plan_id}: {e}")
+        return 0
+
+
 def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
     """
     Replica la lógica de api_shift_plan() sin autenticación HTTP.
@@ -33326,6 +33397,23 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                     today = datetime.now(timezone.utc)
                     if tz_offset:
                         today -= timedelta(minutes=int(tz_offset))
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Cura ANTES de los
+                    # guards de abajo, no después: esta función hace `return
+                    # False` para planes `partial` y para los que ya tienen
+                    # chunks en cola — que es EXACTAMENTE el estado de los
+                    # planes con la cola descuadrada (7 pendientes, status
+                    # partial). Puesta después del shift habría nacido inerte
+                    # justo para los casos que existe para arreglar.
+                    #
+                    # Aquí la ventana viva es la actual (`plan_data['days']`):
+                    # si el shift de más abajo llega a correr, vuelve a llamar
+                    # con la ventana ya podada y refina. Las dos llamadas son
+                    # idempotentes — `plan_chunk_offset_moves` no devuelve nada
+                    # cuando la cola ya está cuadrada.
+                    _rebase_pending_chunk_offsets_sql(
+                        cursor, plan_id, len(plan_data.get("days") or [])
+                    )
 
                     start_date_str = plan_data.get("grocery_start_date")
                     if not start_date_str:
@@ -33459,6 +33547,16 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 240) -> bool:
                         day_obj["date"] = target_date.date().isoformat()
 
                     modified = needs_shift
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] El ancla acaba de
+                    # moverse a hoy; los `days_offset` de la cola tienen que
+                    # moverse con ella o el relleno llega tarde por los días
+                    # archivados. Va SIEMPRE (no solo si `needs_shift`): también
+                    # cura las colas que ya quedaron descuadradas por shifts
+                    # anteriores, que es el estado en el que las encontré.
+                    # `rebase_pending_chunk_offsets` es el SSOT de la aritmética.
+                    _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(shifted_days))
+
                     needs_fill_after_shift = (
                         len(shifted_days) < window_needed
                         and days_remaining_in_plan > 0

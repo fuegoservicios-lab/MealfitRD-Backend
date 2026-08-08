@@ -2530,6 +2530,15 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     needs_shift = days_since_creation > 0
                     needs_fill_initial = len(days) < window_needed  # Para la guard de cortocircuito inicial
 
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Igual que en la rama
+                    # del cron: la cura va ANTES del cortocircuito de abajo. Un
+                    # plan "al día y completo" puede tener la cola descuadrada de
+                    # un shift anterior, y salir por ese return sin tocarla la
+                    # dejaría rota para siempre. La llamada post-shift de más
+                    # abajo refina con la ventana ya podada; ambas idempotentes.
+                    from cron_tasks import _rebase_pending_chunk_offsets_sql as _p1cor_rebase
+                    _p1cor_rebase(cursor, plan_id, len(days))
+
                     if not needs_shift and not needs_fill_initial:
                         # [P0-2] Resumen de pantry-degraded + headers para esta rama.
                         _p02_summary = _attach_pantry_degraded_response_meta(response, plan_data)
@@ -2590,6 +2599,17 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     # 3. Rolling window: si el plan no ha expirado y la ventana actual tiene menos de window_size días,
                     #    y no hay ya un chunk de IA en camino, encolar generación IA real (aprendizaje continuo).
                     modified = needs_shift
+
+                    # [P1-CHUNK-OFFSET-REBASE · 2026-08-07] Gemela EXACTA de la
+                    # rama del cron (`_background_shift_plan_for_user`): el ancla
+                    # se acaba de mover a hoy y los `days_offset` de la cola
+                    # tienen que moverse con ella, o el relleno llega tarde por
+                    # los días archivados. La aritmética vive en
+                    # `constants.rebase_pending_chunk_offsets` (SSOT) y el
+                    # ejecutor SQL en cron_tasks, compartido por las dos ramas —
+                    # arreglar una sola reproduce el bug en la otra.
+                    from cron_tasks import _rebase_pending_chunk_offsets_sql
+                    _rebase_pending_chunk_offsets_sql(cursor, plan_id, len(shifted_days))
                     is_partial = plan_data.get('generation_status') in ('partial', 'generating_next')
                     needs_fill = len(shifted_days) < window_needed and days_remaining_in_plan > 0
 

@@ -1258,6 +1258,116 @@ def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
     # Distribuir el resto (+1) entre los últimos `rem` chunks
     n_base = n_full - rem
     return [base] * n_base + [base + 1] * rem
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-CHUNK-OFFSET-REBASE · 2026-08-07] La cola de chunks se re-ancla al shift.
+#
+# `execute_after` de un chunk se calcula `ancla + days_offset` (modo `strict`,
+# CHUNK_PROACTIVE_MARGIN_DAYS=0). El shift rolling reescribe el ancla a HOY
+# (`grocery_start_date`, propagada al snapshot como `_plan_start_date`) al
+# archivar los días ya vividos — pero dejaba los `days_offset` quietos. El par
+# (ancla, offset) quedaba descuadrado por exactamente los días archivados, y el
+# relleno llegaba tarde esa misma cantidad.
+#
+# Medido en producción 2026-08-07 (plan f380821a): ancla 08-05 → 08-07, offsets
+# 3/7/11/… intactos ⇒ el chunk que debía disparar el 08-08 (justo cuando se
+# acababa la ventana viva) pasó al 08-10. 3 de 3 planes con chunks pendientes
+# estaban tarde. Efecto colateral que lo hizo visible: la lista de compras se
+# calcula sobre los días VIVOS, así que encogía con la ventana (34 → 25 ítems) y
+# con ella la Nevera, que es su espejo.
+#
+# La regla no es nueva: las DOS ramas del shift ya encolan sus chunks nuevos con
+# `days_offset = len(shifted_days)`. Esto la aplica también a los que ya existen.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _entero_no_negativo(valor, default: int = 0) -> int:
+    """Coacción defensiva: el shift corre dentro de una transacción con advisory
+    lock, así que una excepción aquí abortaría la renovación entera."""
+    try:
+        return max(0, int(valor))
+    except (TypeError, ValueError):
+        return default
+
+
+def rebase_pending_chunk_offsets(live_days_count, chunks):
+    """Re-ancla los `days_offset` de la cola contra la ventana viva actual.
+
+    Args:
+        live_days_count: días que le quedan al plan tras el shift (`len(days)`).
+        chunks: secuencia `(id, days_count)` en el orden en que se ejecutarán
+            (week_number ascendente). `days_count` es heterogéneo — lo produce
+            `split_with_absorb`, que mezcla 3 y 4 — así que la cadena suma el
+            tamaño real de cada chunk, NO un paso fijo.
+
+    Returns:
+        `[(id, nuevo_offset)]`. El primero vale `live_days_count`: cubre el día
+        siguiente al último día vivo, que es la definición de "llegar a tiempo".
+
+    Idempotente: aplicarla sobre su propia salida no mueve nada.
+    """
+    offset = _entero_no_negativo(live_days_count)
+    salida = []
+    for chunk_id, days_count in (chunks or []):
+        salida.append((chunk_id, offset))
+        # Un `days_count` corrupto (0/None/basura) no debe colapsar la cadena y
+        # dejar dos chunks compitiendo por el mismo día: avanza al menos 1.
+        offset += max(1, _entero_no_negativo(days_count, 1))
+    return salida
+
+
+def plan_chunk_offset_moves(live_days_count, chunks):
+    """Traduce la rebase a movimientos concretos, ya listos para el UPDATE.
+
+    Args:
+        chunks: `(id, days_offset_actual, days_count)` en orden de ejecución.
+
+    Returns:
+        `[(id, nuevo_offset, delta_dias, dias_hasta_su_turno)]` SOLO de los que
+        se mueven.
+
+        `delta` es `viejo - nuevo`: positivo = el chunk se ADELANTA esos días
+        (el caso del bug), negativo = se retrasa. El caller resta `delta` a
+        `execute_after`, así que el signo importa — invertirlo empujaría el
+        relleno al futuro en vez de traerlo, que es el fallo que esto arregla.
+
+        `dias_hasta_su_turno` (= `nuevo_offset - vivos`, piso 0) es el SUELO del
+        adelanto: el caller no debe programar un chunk antes de `NOW() + eso`.
+        Sin ese suelo, todos los chunks vencidos de un plan colapsan a `NOW()` y
+        salen a la vez — dos generaciones concurrentes escribiendo el MISMO
+        `plan_data`. Medido en el ensayo contra producción (plan 9cf5e313): las
+        semanas 4 y 5 caían ambas a la misma hora.
+
+    Los que ya están en su sitio se omiten: un UPDATE que no cambia nada aún
+    escribe `updated_at` y ensucia la señal de "quién tocó este chunk".
+    """
+    vivos = _entero_no_negativo(live_days_count)
+    actuales = {}
+    for chunk_id, offset_actual, _ in (chunks or []):
+        actuales[chunk_id] = _entero_no_negativo(offset_actual)
+    movimientos = []
+    for chunk_id, nuevo in rebase_pending_chunk_offsets(
+        live_days_count, [(c[0], c[2]) for c in (chunks or [])]
+    ):
+        delta = actuales.get(chunk_id, 0) - nuevo
+        if delta:
+            movimientos.append((chunk_id, nuevo, delta, max(0, nuevo - vivos)))
+    return movimientos
+
+
+def chunk_refill_arrives_in_time(live_days_count, next_offset):
+    """¿El próximo chunk pendiente llega antes de que el usuario se quede sin plan?
+
+    `None` cuando no hay chunk pendiente — "no opina" NO es "está bien": un plan
+    sin cola viva y sin días es otro modo de fallo (`compute_chunk_overdue` en
+    `chat_history_context` es quien lo cubre).
+
+    Adelantado (`offset < vivos`) cuenta como a tiempo: el modo `safety_margin`
+    adelanta chunks a propósito.
+    """
+    if next_offset is None:
+        return None
+    return _entero_no_negativo(next_offset) <= _entero_no_negativo(live_days_count)
 # --- VECTOR SEARCH CACHE ---
 
 # [P1-EMBEDDING-CACHE-BOUNDED · 2026-05-24] Caches de embeddings con bound LRU.
