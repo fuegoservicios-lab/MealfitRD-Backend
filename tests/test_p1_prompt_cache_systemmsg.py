@@ -139,10 +139,19 @@ def test_day_generator_constructs_system_instruction_under_knob():
     assert "PROMPT_CACHE_SYSTEM_MESSAGE" in region, (
         "La construcción del schema del day_generator debe gatear por el knob."
     )
-    assert "day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED" in region, (
-        "Cuando knob=True, `day_system_instruction` debe ser la constante "
-        "pre-computada `_DAY_SYSTEM_INSTRUCTION_CACHED` (que embebe "
-        "`DAY_GENERATOR_SYSTEM_PROMPT` + schema, 5K tokens cacheables)."
+    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] El system instruction ahora se selecciona POR DIETA
+    # (`_day_system_instruction_for_diet`): balanced devuelve la MISMA constante pre-computada
+    # (`return _DAY_SYSTEM_INSTRUCTION_CACHED` — byte-idéntica, cache intacto) y veg* usa un
+    # render cacheado por variante. El contrato de cacheabilidad se mantiene.
+    assert "day_system_instruction = _day_system_instruction_for_diet(form_data)" in region, (
+        "Cuando knob=True, `day_system_instruction` debe venir de "
+        "`_day_system_instruction_for_diet(form_data)` (balanced → constante pre-computada "
+        "`_DAY_SYSTEM_INSTRUCTION_CACHED`; veg* → render por dieta cacheado)."
+    )
+    _helper = re.search(r"def _day_system_instruction_for_diet.*?\n\n", text, re.DOTALL)
+    assert _helper and "return _DAY_SYSTEM_INSTRUCTION_CACHED" in _helper.group(0), (
+        "El helper por dieta debe devolver la constante pre-computada para balanced "
+        "(byte-identidad = prompt-cache intacto para la mayoría)."
     )
     assert "day_system_instruction = None" in region, (
         "Cuando knob=False, `day_system_instruction = None` señala al messages "
@@ -174,14 +183,19 @@ def test_day_generator_dynamic_text_excludes_static_when_knob_true():
     assert "dynamic_day_prompt = (" in text, (
         "Falta la asignación de `dynamic_day_prompt` en day_generator."
     )
+    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] la rama legacy (knob=False) concatena el render
+    # POR DIETA (`_bdgsp_nc(...)` = build_day_generator_system_prompt); la rama knob=True sigue
+    # sin duplicar el system prompt en el HumanMessage — que es el contrato de este test.
     m = re.search(
-        r"if PROMPT_CACHE_SYSTEM_MESSAGE:\s*\n\s*prompt_text\s*=\s*dynamic_day_prompt\s*\n\s*else:\s*\n\s*prompt_text\s*=\s*dynamic_day_prompt\s*\+\s*DAY_GENERATOR_SYSTEM_PROMPT",
+        r"if PROMPT_CACHE_SYSTEM_MESSAGE:\s*\n\s*prompt_text\s*=\s*dynamic_day_prompt\s*\n\s*else:"
+        r".*?prompt_text\s*=\s*dynamic_day_prompt\s*\+\s*_bdgsp_nc\(",
         text,
+        re.DOTALL,
     )
     assert m, (
         "P1-PROMPT-CACHE-SYSTEMMSG: el day_generator debe usar el patrón "
         "`dynamic_day_prompt` + branch knob para evitar duplicar el system prompt "
-        "en el HumanMessage."
+        "en el HumanMessage (legacy: + build_day_generator_system_prompt por dieta)."
     )
 
 
