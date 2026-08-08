@@ -4850,7 +4850,8 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
                 sex=form_data.get("gender", "female"), age=form_data.get("age"),
                 conditions=_condition_strings(form_data), daily_kcal=_mn_kcal,
                 pregnant=_mn_preg, k_elevating_med=_mn_kelev,
-                goal=form_data.get("mainGoal"))  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
+                goal=form_data.get("mainGoal"),  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
+                diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES] PRIORIDAD sin "fuente animal" en veg*
         except Exception:
             micronutrient_targets_context = ""
 
@@ -5174,6 +5175,26 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = (
     + _DAY_SCHEMA_INSTRUCTION
     + _NUTRITION_LOOKUP_INSTRUCTION
 )
+
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] System instruction del day-gen POR DIETA. El render
+# balanced es la constante de arriba (byte-idéntica → prompt-cache intacto para la mayoría);
+# veg* usa `build_day_generator_system_prompt` (los fragmentos que ordenaban proteína animal se
+# reemplazan por fuentes aptas — issue #9: la directiva PRIORIDAD-1 perdía contra esas órdenes).
+# Cache por variante, patrón P2-VERIFIED-CATALOG-NOT-FILTERED. tooltip-anchor: P1-DIET-BLIND-DIRECTIVES
+_DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE = {}
+
+
+def _day_system_instruction_for_diet(form_data) -> str:
+    from constants import canonicalize_diet_type as _cdt
+    from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
+    canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
+    if canon not in ("vegan", "vegetarian"):
+        return _DAY_SYSTEM_INSTRUCTION_CACHED
+    cached = _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE.get(canon)
+    if cached is None:
+        cached = _bdgsp(canon) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
+        _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE[canon] = cached
+    return cached
 
 
 # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Catálogo verificado inyectado al
@@ -8020,6 +8041,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico.
             user_staples=_raw_staple_foods(form_data),
             small_universe=_small_universe_active(form_data),
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
+            diet_type=(form_data or {}).get("dietType"),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -8066,7 +8089,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         if PROMPT_CACHE_SYSTEM_MESSAGE:
             prompt_text = dynamic_day_prompt
         else:
-            prompt_text = dynamic_day_prompt + DAY_GENERATOR_SYSTEM_PROMPT
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Render por dieta también en el path sin cache.
+            from prompts.day_generator import build_day_generator_system_prompt as _bdgsp_nc
+            prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"))
 
         # [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo DeepSeek): deepseek-v4-flash → deepseek-v4-pro
         # (bariátrico → [deepseek-v4-pro]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
@@ -8148,7 +8173,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # Restringe al LLM a los alimentos con precio La Sirena; "" si el knob está off.
             # [P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] Se pasa form_data → el catálogo excluye
             # alérgenos/dieta del usuario (cache keyed por set excluido; base sin restricción = idéntico).
-            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED + _get_verified_catalog_instruction(form_data)
+            # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Render por dieta (balanced = byte-idéntico).
+            day_system_instruction = _day_system_instruction_for_diet(form_data) + _get_verified_catalog_instruction(form_data)
         else:
             streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION + _get_verified_catalog_instruction(form_data)
             day_system_instruction = None
@@ -10064,7 +10090,7 @@ def _detect_slot_incoherence(days: list) -> list:
     return issues
 
 
-def _detect_slot_appropriateness(days: list) -> list:
+def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Detector DETERMINISTA de platos cuyo TIPO
     no encaja con su horario para un dominicano: arroz/locrio/pasta en DESAYUNO; "arroz de noche" /
     comida de desayuno (cereal/panqueque) en la CENA. Reusa el SSOT
@@ -10072,7 +10098,12 @@ def _detect_slot_appropriateness(days: list) -> list:
     NO flagea "Panqueques de harina de arroz" por el modificador, protegiendo la creatividad G5).
     Devuelve una lista de dicts {day, slot, name, label, hard, text}. Es el PRODUCTOR del gate de retry
     en `review_plan_node` (S1). El prompt del day_generator (§9/§15) ya pedía esto advisory; este gate lo
-    vuelve enforced. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    vuelve enforced. tooltip-anchor: P1-SLOT-APPROPRIATENESS
+    [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] `form_data` opcional: el hint correctivo del mensaje
+    respeta la dieta (`constants.slot_positive_hint`) — el hint base sugería "pescado/pollo a la
+    plancha" dentro del rechazo de un plan vegano."""
+    from constants import slot_positive_hint as _sph
+    _diet_for_hint = (form_data or {}).get("dietType") if isinstance(form_data, dict) else None
     issues: list = []
     for day in days or []:
         if not isinstance(day, dict):
@@ -10086,7 +10117,7 @@ def _detect_slot_appropriateness(days: list) -> list:
                 continue
             name = m.get("name", "")
             for v in slot_violations_for_meal_name(name, slot_key):
-                _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
+                _fix = _sph(slot_key, _diet_for_hint)
                 issues.append({
                     "day": day_num, "slot": slot_key, "name": name,
                     "label": v["label"], "hard": v["hard"],
@@ -10105,7 +10136,7 @@ def _detect_slot_appropriateness(days: list) -> list:
                 from constants import slot_ingredient_violations as _siv
                 _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key))
                 for v in _siv(m.get("ingredients") or [], slot_key):
-                    _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
+                    _fix = _sph(slot_key, _diet_for_hint)
                     # [P2-SLOT-EVASION-TELEMETRY · 2026-07-02] (audit v4 slots) Evasión por nombre novel:
                     # el pase ingredient-level cazó lo que el name-level NO vio. Serie greppable para
                     # calibrar la cobertura semántica de tokens (¿faltan tokens de nombre? ¿qué evade?).
@@ -10276,7 +10307,7 @@ async def self_critique_node(state: PlanState) -> dict:
     # texto ya trae día/slot/plato + hint positivo → directiva exacta para el corrector.
     if CRITIQUE_SLOT_PARITY_ENABLED:
         try:
-            for _sa_issue in _detect_slot_appropriateness(days):
+            for _sa_issue in _detect_slot_appropriateness(days, state.get("form_data")):
                 _t = _sa_issue.get("text") if isinstance(_sa_issue, dict) else None
                 if _t:
                     slot_issues.append(_t)
@@ -10515,7 +10546,7 @@ PLAN A EVALUAR (días generados):
                         # también en el corrector (no solo en el day-gen inicial).
                         skeleton_block = (
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data))}"
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'))}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -10558,6 +10589,11 @@ PLAN A EVALUAR (días generados):
                     except Exception:
                         _other_days_block = ""
 
+                    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La rotación anti-huevo del contrato
+                    # de variedad ordenaba "pollo, pescado, res..." también a planes veg*.
+                    from constants import diet_protein_suggestions as _dps_cf
+                    _critique_rotation_sources = (_dps_cf((state.get("form_data") or {}).get("dietType"))
+                                                  or "pollo, pescado, res, yogurt, queso o habichuelas")
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}
@@ -10575,7 +10611,7 @@ REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
 - Solo si NINGUNA proteína está duplicada en el skeleton (ej. skeleton dice "pavo" Y "queso") puedes alternarlas entre slots.
 
 CONTRATO DE VARIEDAD (los validadores RECHAZAN el plan COMPLETO si tu corrección lo viola):
-- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día (salvo la excepción de básicos de abajo). NO resuelvas una repetición metiendo huevo/revoltillo — usa pollo, pescado, res, yogurt, queso o habichuelas.
+- HUEVO: máximo 3 comidas con huevo en TODO el plan y JAMÁS huevo en 2+ comidas del MISMO día (salvo la excepción de básicos de abajo). NO resuelvas una repetición metiendo huevo/revoltillo — usa {_critique_rotation_sources}.
 - La MISMA proteína principal NO puede aparecer en 2+ comidas del MISMO día. ⚠️ EXCEPCIÓN [P1-STAPLE-FOODS]: si la ASIGNACIÓN DEL PLANIFICADOR de arriba lista "BÁSICOS DEL USUARIO", ese alimento puede repetirse el mismo día SOLO si cada aparición usa una TÉCNICA distinta (hervido vs revuelto, guisado vs a la plancha) — técnicas SINÓNIMAS ("revoltillo"/"huevo revuelto", "horneado"/"al horno") NO cuentan como distintas. Sin esa sección, la regla es absoluta.
 - El MISMO plato-base (revoltillo, batido, ensalada, wrap, panqueques, arepitas...) NO puede repetirse en 3+ días del plan — revisa los platos de los otros días abajo antes de elegir.
 - La MISMA fruta dulce NO puede aparecer en 2+ comidas del mismo día.
@@ -10849,7 +10885,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             # QUIRÚRGICO en vez de descubrirlo en el reject del reviewer (espejo del SAMEDAY).
             if CRITIQUE_SLOT_PARITY_ENABLED:
                 try:
-                    _residual_slot = _detect_slot_appropriateness(days)
+                    _residual_slot = _detect_slot_appropriateness(days, state.get("form_data"))
                     for _rs in _residual_slot:
                         _dn_rs = _rs.get("day")
                         _td_rs = next((d for d in days if d.get("day") == _dn_rs), None)
@@ -14132,6 +14168,40 @@ def _build_diet_directive_context(form_data) -> str:
                 "(pollo, res, cerdo, pavo, embutidos) en pools, platos e ingredientes. Pescado, "
                 "mariscos, huevos y lácteos SÍ permitidos.\n")
     return ""
+
+
+def _protein_floor_directive_text(sd_str: str, eff_pct: float, tgt_p: float, diet, motivo: str) -> str:
+    """[P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Texto del rechazo del piso de proteína, POR DIETA.
+
+    La versión única ordenaba "fuente animal de alta densidad (pollo, pescado, cerdo, res...)"
+    también a planes veg* — y como este texto viaja INYECTADO en la directiva del retry informado
+    (P1-DAYGEN-DIET-CONVERGE), el único retry recibía a la vez "reemplaza por vegetales" y "DEBE
+    incluir fuente animal": el modelo obedeció la contradicción (pechuga de pollo en el intento 2
+    del perfil vegana_dm2 — journal 2026-08-08 02:00 UTC, issue #9). Es el mismo defecto que ya
+    obligó a la exención renal de este piso ("su directiva ordena justo lo CONTRARIO de lo
+    clínicamente correcto"). balanced conserva el texto EXACTO (byte-anchor en el test).
+    Fuentes veg* desde el SSOT `constants.diet_protein_suggestions` (cero 4ª tabla)."""
+    from constants import diet_protein_suggestions as _dps, canonicalize_diet_type as _cdt
+    _sources = _dps(diet)
+    if _sources:
+        _lbl = "vegana" if _cdt(diet) == "vegan" else "vegetariana"
+        return (
+            f"DÉFICIT DE PROTEÍNA (rechazo clínico — {motivo}): el plan no "
+            f"alcanza el piso de proteína en {sd_str}. Cada comida PRINCIPAL (almuerzo y "
+            f"cena) DEBE incluir una fuente proteica DENSA apta para la dieta {_lbl} "
+            f"({_sources}) dimensionada en gramos para que cada día sume al menos "
+            f"{int(eff_pct * 100)}% del target ({int(tgt_p)}g). PROHIBIDO resolver el "
+            f"déficit con alimentos que la dieta excluye: sube los GRAMOS de las fuentes "
+            f"aptas y repártelas entre las comidas principales."
+        )
+    return (
+        f"DÉFICIT DE PROTEÍNA (rechazo clínico — {motivo}): el plan no "
+        f"alcanza el piso de proteína en {sd_str}. Cada comida PRINCIPAL (almuerzo y "
+        f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
+        f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
+        f"{int(eff_pct * 100)}% del target ({int(tgt_p)}g). NO dependas solo "
+        f"de leguminosas/almidón en las comidas principales."
+    )
 
 
 # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Knob del backstop clínico determinista para las
@@ -18603,7 +18673,8 @@ def build_update_micronutrient_directive(form_data: dict) -> str:
             sex=form_data.get("gender", "female"), age=form_data.get("age"),
             conditions=_condition_strings(form_data), daily_kcal=_kcal,
             pregnant=_preg, k_elevating_med=_kelev,
-            goal=form_data.get("mainGoal") or form_data.get("goal"))
+            goal=form_data.get("mainGoal") or form_data.get("goal"),
+            diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
     except Exception as _ms_e:
         logger.debug(f"[P2-UPDATE-MICRO-STEER] directiva falló (no bloquea): {type(_ms_e).__name__}: {_ms_e}")
         return ""
@@ -37879,7 +37950,7 @@ def _surgical_reject_targets(state) -> dict | None:
         except Exception:
             pass
         try:
-            for _v in _detect_slot_appropriateness(days) or []:
+            for _v in _detect_slot_appropriateness(days, state.get("form_data")) or []:
                 _dnum = _v.get("day")
                 if isinstance(_dnum, int):
                     issues_by_day.setdefault(_dnum, []).append(
@@ -38054,7 +38125,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                 # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico
                 # también en el regen quirúrgico (no solo en el day-gen inicial).
-                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data))}"
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'))}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.
@@ -39605,14 +39676,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
         logger.warning(f"🛡 [P3-PROTEIN-FLOOR] {len(_short_days)} día(s) bajo el piso de "
                        f"proteína ({int(_eff_pct*100)}% de {int(_tgt_p)}g): {_sd_str}")
         approved = False
-        issues.append(
-            f"DÉFICIT DE PROTEÍNA (rechazo clínico — {_motivo}): el plan no "
-            f"alcanza el piso de proteína en {_sd_str}. Cada comida PRINCIPAL (almuerzo y "
-            f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
-            f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
-            f"{int(_eff_pct*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
-            f"de leguminosas/almidón en las comidas principales."
-        )
+        # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Texto por dieta: la versión única ordenaba
+        # "fuente animal" también a veg* y viajaba inyectada al retry informado (ver helper).
+        issues.append(_protein_floor_directive_text(
+            _sd_str, _eff_pct, _tgt_p, (form_data or {}).get("dietType"), _motivo))
         severity = _severity_max(severity, "high")
 
     # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (gap-audit G3) Techo renal de proteína como GATE, no
@@ -39708,7 +39775,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # gate lo vuelve enforced (espejo de _variety_repeat_gate_issues). Anchor: P1-SLOT-APPROPRIATENESS.
     if SLOT_APPROPRIATENESS_GATE_ENABLED:
         try:
-            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []) if isinstance(plan, dict) else [])
+            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []) if isinstance(plan, dict) else [], form_data)
             if _slot_app_issues:
                 _sa_attempt = int(state.get("attempt", 1))
                 _sa_is_final = _sa_attempt >= MAX_ATTEMPTS
@@ -39726,7 +39793,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     try:
                         _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True)
                         if _nrc_fixed:
-                            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []))
+                            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []), form_data)
                             logger.info(
                                 f"🕒 [P1-NIGHT-RICE-COMPOUND-FINAL] {_nrc_fixed} plato(s) compuesto(s) "
                                 f"de cena convertidos a guiso+tubérculo en intento final; "

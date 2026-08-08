@@ -2716,6 +2716,66 @@ def canonicalize_diet_type(diet) -> str:
     return _DIET_CANON_LOOKUP.get(strip_accents(diet.strip().lower()), "balanced")
 
 
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] SSOT de las FUENTES DE PROTEÍNA sugeribles por dieta.
+# Razón (benchmark issue #9, journal 2026-08-08 01:53-02:00 UTC): el stack de prompts ordenaba
+# "fuente animal de alta densidad (pollo, pescado, cerdo, res...)" sin mirar la dieta — el retry
+# informado de un plan VEGANO llevaba esa orden inyectada, y el modelo obedecía (pechuga de pollo
+# en el intento 2). Toda directiva/sugerencia de proteína que viaje a un prompt debe derivar de
+# aquí; `None` para balanced/pescatarian ⇒ el caller conserva su literal actual (byte-identidad,
+# prompt-cache intacto para la mayoría). Canonicaliza vía `canonicalize_diet_type` (cero 4ª tabla).
+# Sin tofu (P3-TOFU-REMOVE: no se vende). tooltip-anchor: P1-DIET-BLIND-DIRECTIVES
+def diet_protein_suggestions(diet) -> "str | None":
+    canon = canonicalize_diet_type(diet)
+    if canon == "vegan":
+        return ("habichuelas/lentejas/garbanzos, edamame, maní o mantequilla de maní, "
+                "semillas (girasol, chía, ajonjolí) y frutos secos")
+    if canon == "vegetarian":
+        return ("huevos, queso fresco/ricotta, yogur griego, habichuelas/lentejas/garbanzos, "
+                "edamame y frutos secos")
+    return None
+
+
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Variantes por dieta de SLOT_POSITIVE_HINT. El hint base
+# sugería "pescado/pollo a la plancha" hasta dentro del RECHAZO de un plan vegano (gate S1) — la
+# corrección pedía exactamente lo prohibido. pescatarian usa los base (pescado permitido);
+# vegetarian solo redefine almuerzo/cena (huevo/lácteo permitidos en desayuno/merienda base).
+_SLOT_POSITIVE_HINT_BY_DIET = {
+    "vegetarian": {
+        "almuerzo": ("El almuerzo es el plato fuerte: arroz+habichuela+proteína vegetariana "
+                     "(huevo/queso/leguminosas)+ensalada, moro de habichuelas/gandules/lentejas "
+                     "con queso, pasta criolla con vegetales y queso, o revoltillo/tortilla con "
+                     "tubérculo y vegetal."),
+        "cena": ("La cena es más ligera que el almuerzo: tortilla/revoltillo de cena, sopa ligera "
+                 "de vegetales con queso, wrap o bowl de huevo/queso/leguminosas + vegetales + un "
+                 "tubérculo (batata/yuca/casabe). Evita el \"arroz de noche\" y los guisos pesados."),
+    },
+    "vegan": {
+        "desayuno": ("El desayuno dominicano va: mangú/víveres, avena/cereales calientes, "
+                     "pan/tostadas o batido/bowl — con proteína vegetal (maní, semillas, "
+                     "leguminosas) y fruta."),
+        "almuerzo": ("El almuerzo es el plato fuerte: arroz+habichuela+ensalada, moro de "
+                     "habichuelas/gandules/lentejas, o guiso de leguminosas (lentejas, garbanzos, "
+                     "edamame) con tubérculo y vegetal."),
+        "cena": ("La cena es más ligera que el almuerzo: sopa ligera de vegetales con leguminosas, "
+                 "wrap o bowl de leguminosas + vegetales + un tubérculo (batata/yuca/casabe). "
+                 "Evita el \"arroz de noche\" y los guisos pesados."),
+        "merienda": ("La merienda es un snack ligero (150-300 kcal): fruta con maní, casabe con "
+                     "mantequilla de maní, batido de fruta con avena, o frutos secos con fruta."),
+    },
+}
+
+
+def slot_positive_hint(slot_key: str, diet=None) -> str:
+    """[P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Hint positivo por slot RESPETANDO la dieta.
+    Reemplaza el acceso directo a SLOT_POSITIVE_HINT en mensajes de gate/prompts de update.
+    balanced/pescatarian/desconocido → hint base (byte-idéntico)."""
+    canon = canonicalize_diet_type(diet)
+    variant = _SLOT_POSITIVE_HINT_BY_DIET.get(canon, {}).get(slot_key)
+    if variant:
+        return variant
+    return SLOT_POSITIVE_HINT.get(slot_key, "")
+
+
 def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     """Filtra el catálogo dominicano basado en restricciones del usuario O(N) sin Cache Thrashing volátil."""
     filtered_proteins = DOMINICAN_PROTEINS.copy()

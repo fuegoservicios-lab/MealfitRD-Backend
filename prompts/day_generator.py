@@ -313,6 +313,106 @@ DAY_GENERATOR_SYSTEM_PROMPT = DAY_GENERATOR_SYSTEM_PROMPT + (
 )
 
 
+# [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] El prompt estático de arriba ordena proteína ANIMAL en
+# ≥6 fragmentos (rotación de huevo, "proteína fresca", patrones de almuerzo/cena) sin mirar la
+# dieta — el benchmark del issue #9 midió que la directiva de dieta PRIORIDAD-1 PIERDE contra esas
+# órdenes específicas (atún en el desayuno vegetariano con pools limpios, journal 2026-08-08
+# 01:53-01:55 UTC). Este builder emite el render por dieta REEMPLAZANDO los fragmentos por sus
+# variantes aptas; balanced/pescatarian devuelven la constante intacta (byte-idéntica →
+# prompt-cache preservado; patrón P2-VERIFIED-CATALOG-NOT-FILTERED). Cada fragmento balanced debe
+# existir VERBATIM en la constante — el test ancla `test_p1_diet_blind_directives.py` falla si un
+# edit del prompt los deriva. tooltip-anchor: P1-DIET-BLIND-DIRECTIVES
+_DIET_FRAGMENT_TABLE = [
+    # (balanced_verbatim, vegetarian_repl, vegan_repl)
+    (
+        "para proteína fresca usa pollo, pescado, res, cerdo, huevos o queso — NUNCA agregues pavo por tu cuenta.",
+        "para proteína usa huevos, queso o leguminosas del catálogo — NUNCA agregues pavo ni ningún embutido.",
+        "para proteína usa leguminosas, edamame, maní o semillas del catálogo — NUNCA agregues pavo ni ningún embutido.",
+    ),
+    (
+        "(pollo, pescado blanco, res molida magra, cerdo, atún, camarones, queso fresco/de freír, yogur griego, habichuelas/lentejas/garbanzos)",
+        "(queso fresco/de freír, yogur griego, habichuelas/lentejas/garbanzos, edamame, frutos secos)",
+        "(habichuelas/lentejas/garbanzos, edamame, maní, semillas de girasol/chía, frutos secos)",
+    ),
+    (
+        "en las demás comidas sube la proteína con carne/pescado/lácteos/leguminosas, NO con más huevo",
+        "en las demás comidas sube la proteína con lácteos/leguminosas, NO con más huevo",
+        "en las demás comidas sube la proteína con leguminosas/semillas, NO con más huevo",
+    ),
+    (
+        """       • Bandera: arroz blanco + habichuela guisada + proteína (carne/pollo/pescado) + ensalada/vegetal
+       • Locrio (pollo, cerdo, gandules, arenque, bacalao)
+       • Asopao / sancocho / sopa sustanciosa
+       • Moro de habichuelas/gandules/lentejas + proteína + ensalada
+       • Pasta criolla con proteína (espaguetis con pollo, lasagna, pastelón)
+       • Mofongo/Mangú de almuerzo + proteína guisada
+       • Pescado/pollo/cerdo a la plancha/horno + tubérculo + ensalada/vegetal""",
+        """       • Bandera vegetariana: arroz blanco + habichuela guisada + huevo o queso + ensalada/vegetal
+       • Locrio de gandules (sin embutido) + ensalada
+       • Asopao / sopa sustanciosa de leguminosas y vegetales
+       • Moro de habichuelas/gandules/lentejas + huevo o queso + ensalada
+       • Pasta criolla con vegetales y queso (pastelón de berenjena con queso)
+       • Mofongo/Mangú de almuerzo + revoltillo o queso guisado
+       • Revoltillo/tortilla al horno + tubérculo + ensalada/vegetal""",
+        """       • Bandera vegana: arroz blanco + habichuela guisada + ensalada/vegetal (la leguminosa ES la proteína)
+       • Locrio de gandules (sin embutido) + ensalada
+       • Asopao / sopa sustanciosa de leguminosas y vegetales
+       • Moro de habichuelas/gandules/lentejas + ensalada
+       • Guiso de garbanzos o lentejas + tubérculo + vegetal
+       • Mofongo/Mangú de almuerzo + guiso de leguminosas
+       • Berenjena guisada con garbanzos + tubérculo + ensalada/vegetal""",
+    ),
+    (
+        "las demás comidas del día usan OTRA proteína (pollo, res, cerdo, pescado, atún, queso, yogur, legumbres)",
+        "las demás comidas del día usan OTRA proteína (queso, yogur, habichuelas, lentejas, garbanzos)",
+        "las demás comidas del día usan OTRA proteína (habichuelas, lentejas, garbanzos, edamame, maní, semillas)",
+    ),
+    (
+        """       • Pescado/pollo a la plancha + ensalada + tubérculo distinto al del almuerzo
+       • Tortilla/revoltillo de cena con vegetales + casabe o pan integral
+       • Sopa ligera de pollo/vegetales con proteína magra
+       • Wrap/pita con proteína + vegetales
+       • Bowl de proteína magra + vegetales asados + 1 carbo""",
+        """       • Tortilla/revoltillo de cena con vegetales + casabe o pan integral
+       • Sopa ligera de vegetales con queso o huevo
+       • Wrap/pita de huevo/queso/leguminosas + vegetales
+       • Bowl de queso fresco o leguminosas + vegetales asados + 1 carbo""",
+        """       • Sopa ligera de vegetales con leguminosas
+       • Wrap/pita de leguminosas + vegetales
+       • Bowl de leguminosas + vegetales asados + 1 carbo
+       • Guiso ligero de lentejas o garbanzos + casabe o pan integral""",
+    ),
+    (
+        """         • Pinchitos sencillos (pollo/queso) + fruta
+         • Huevo duro + fruta + nueces""",
+        """         • Pinchitos sencillos de queso + fruta
+         • Huevo duro + fruta + nueces""",
+        """         • Fruta + mantequilla de maní extra o frutos secos
+         • Chia pudding con fruta""",
+    ),
+]
+
+_DIET_PROMPT_RENDER_CACHE = {}
+
+
+def build_day_generator_system_prompt(diet=None) -> str:
+    """Render del system prompt del day-gen por dieta canónica. balanced/pescatarian → la
+    constante intacta. Cacheado por variante (3 entradas máx)."""
+    from constants import canonicalize_diet_type
+    canon = canonicalize_diet_type(diet)
+    if canon not in ("vegetarian", "vegan"):
+        return DAY_GENERATOR_SYSTEM_PROMPT
+    cached = _DIET_PROMPT_RENDER_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    idx = 1 if canon == "vegetarian" else 2
+    rendered = DAY_GENERATOR_SYSTEM_PROMPT
+    for row in _DIET_FRAGMENT_TABLE:
+        rendered = rendered.replace(row[0], row[idx])
+    _DIET_PROMPT_RENDER_CACHE[canon] = rendered
+    return rendered
+
+
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.
 # Clave: término de búsqueda en el pool (lowercase). Valor: etiqueta para el LLM.
 #
@@ -512,7 +612,7 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
-                                 small_universe: bool = False) -> str:
+                                 small_universe: bool = False, diet_type=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -682,8 +782,33 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"cena. Si el desayuno o la merienda ya llevan una de las dos, tanto mejor variar."
         )
 
+    # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] La versión balanced de este bloque ordenaba
+    # "prioriza proteína animal magra (pollo, pescado, res...)" también a dietas veg* — una de las
+    # órdenes que le ganaban a la directiva de dieta PRIORIDAD-1 (issue #9). El render veg* rota
+    # entre fuentes aptas del SSOT; vegan además omite el ancla de queso (sugerir "máximo 1 comida
+    # con queso" a un vegano implica que el queso es usable). Sin diet_type → byte-idéntico.
+    _diet_canon_ctx = None
+    try:
+        from constants import canonicalize_diet_type as _cdt, diet_protein_suggestions as _dps
+        _diet_canon_ctx = _cdt(diet_type) if diet_type else None
+    except Exception:
+        _diet_canon_ctx = None
     protein_diversity_block = ""
-    if _protein_diversity_on:
+    if _protein_diversity_on and _diet_canon_ctx == "vegan":
+        protein_diversity_block = (
+            "\n• ⚠️ DIVERSIDAD DE PROTEÍNA (dieta vegana): varía la fuente proteica entre las "
+            f"comidas del día ({_dps('vegan')}). Evita que 2+ comidas del mismo día dependan de la "
+            "MISMA fuente (ej. maní en desayuno Y merienda): rota leguminosa ↔ semillas ↔ edamame."
+        )
+    elif _protein_diversity_on and _diet_canon_ctx == "vegetarian":
+        protein_diversity_block = (
+            "\n• ⚠️ DIVERSIDAD DE PROTEÍNA (dieta vegetariana): el queso (de freír, cottage, crema, "
+            "blanco) es ALTO EN SODIO — úsalo como proteína PRINCIPAL en máximo 1 comida del día, NO "
+            f"en varias. Para el resto de las comidas rota entre las fuentes aptas ({_dps('vegetarian')}). "
+            "Evita que 2+ comidas del mismo día dependan del queso para su proteína: aporta menos "
+            "variedad y dispara el sodio del día."
+        )
+    elif _protein_diversity_on:
         protein_diversity_block = (
             "\n• ⚠️ DIVERSIDAD DE PROTEÍNA: el queso (de freír, cottage, crema, blanco) es ALTO EN SODIO — "
             "úsalo como proteína PRINCIPAL en máximo 1 comida del día, NO en varias. Para el resto de las "
