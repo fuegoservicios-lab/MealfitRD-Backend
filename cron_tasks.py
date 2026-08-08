@@ -30181,15 +30181,33 @@ def process_plan_chunk_queue(target_plan_id=None):
                                                     if missing_list:
                                                         m['_missing_ingredients'] = missing_list
 
-                                    # [P0-C] Pasar missing_list al pause helper para que el recovery
-                                    # cron pueda detectar cuándo el usuario las añadió a la nevera y
-                                    # reanudar el chunk sin esperar el TTL escalation a flexible_mode.
-                                    _pause_chunk_for_final_inventory_validation(
-                                        task_id, user_id, week_number,
-                                        reason="flexible_live_unreachable",
-                                        missing_ingredients=missing_list or None,
-                                    )
-                                    return False
+                                    # [P1-FLEX-DELIVER · 2026-08-08] Si el chunk llegó aquí por el
+                                    # TTL-escalation a flexible (el usuario NO repuso a tiempo), la
+                                    # pausa re-creaba el ciclo infinito pausa→TTL→flexible→generar→
+                                    # pausa (medido en f380821a: una generación de 4 días quemada
+                                    # cada ~2h). El flexible existe PORQUE la nevera no cubre; el
+                                    # waiver pre-gen del mismo día ya fijó la semántica («la lista
+                                    # de compras define qué comprar») — completar la decisión en
+                                    # este seam: ENTREGAR con la Compra Urgente persistida + push +
+                                    # días marcados (todo ya hecho arriba), sin re-pausar. La rama
+                                    # stale_snapshot conserva la pausa: ahí el faltante puede ser
+                                    # espejismo del snapshot viejo, no decisión de producto.
+                                    if form_data.get("_pantry_flexible_mode"):
+                                        logger.warning(
+                                            f"🛒 [P1-FLEX-DELIVER] Chunk {week_number} plan {meal_plan_id}: "
+                                            f"{len(missing_list or [])} faltante(s) en modo flexible TTL-escalado "
+                                            f"→ ENTREGA con 🚨 Compra Urgente (re-pausar recreaba el ciclo "
+                                            f"infinito que quemaba una generación por TTL).")
+                                    else:
+                                        # [P0-C] Pasar missing_list al pause helper para que el recovery
+                                        # cron pueda detectar cuándo el usuario las añadió a la nevera y
+                                        # reanudar el chunk sin esperar el TTL escalation a flexible_mode.
+                                        _pause_chunk_for_final_inventory_validation(
+                                            task_id, user_id, week_number,
+                                            reason="flexible_live_unreachable",
+                                            missing_ingredients=missing_list or None,
+                                        )
+                                        return False
                                 else:
                                     # [P0-A] Validación flexible exitosa: el live inventory
                                     # cubre lo que este chunk necesita. Si chunks previos
