@@ -7388,6 +7388,36 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                             f"{_removed} — el planner asignó alérgeno(s) declarados; sin este scrub "
                             f"el day-gen los tenía AUTORIZADOS")
 
+    # [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Scrub de contraindicados de EMBARAZO sobre los
+    # pools: si guanábana/cundeamor nunca entran a la lista de AUTORIZADOS del day-gen, no hay
+    # nada que el reviewer rechace después (el sub determinista de la capa clínica queda como
+    # red para lo que el LLM improvise fuera del pool). Perseguir el rechazo fruta-por-fruta es
+    # whack-a-mole; excluir en la FUENTE lo cierra. Tokens = triggers de las subs SSOT
+    # (condition_rules), sin lista paralela que driftee.
+    if SKELETON_ALLERGEN_SCRUB_ENABLED:
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _sps_ipl
+            if _sps_ipl(form_data):
+                from condition_rules import (_PREGNANCY_UTEROTONIC_SUBS as _sps_ut,
+                                             _PREGNANCY_AVOID_FRUIT_SUBS as _sps_af)
+                from constants import strip_accents as _sps_sa
+                _preg_avoid = tuple(_sps_sa(str(t).lower())
+                                    for row in (_sps_ut + _sps_af) for t in row[0])
+                for _dsd in skel_days:
+                    for _pool_key in ("protein_pool", "carb_pool", "fruit_pool"):
+                        _pool = _dsd.get(_pool_key) or []
+                        _kept = [p for p in _pool
+                                 if not any(_name_has_token(_t, _sps_sa(str(p).lower()))
+                                            for _t in _preg_avoid)]
+                        if len(_kept) != len(_pool):
+                            _dsd[_pool_key] = _kept
+                            logger.warning(
+                                f"🤰 [SKELETON PREGNANCY SCRUB] Día {_dsd.get('day')}: {_pool_key} "
+                                f"pierde {[p for p in _pool if p not in _kept]} — contraindicado "
+                                f"en embarazo (guanábana/cundeamor), excluido en la FUENTE")
+        except Exception as _sps_e:
+            logger.warning(f"[SKELETON PREGNANCY SCRUB] no-op: {type(_sps_e).__name__}: {_sps_e}")
+
     # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar una proteína SEGURA.
     # [P1-FORM-AUDIT-BATCH · 2026-07-03] (audit form · contradicción C1) El fallback era
     # 'Lentejas' INCONDICIONAL — ciego a las alergias declaradas: un vegano alérgico a
@@ -11697,6 +11727,16 @@ RAW_VIVER_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_VIVER_SAFETY", True)
 # sin «cocción completa»). Note-only (macro-preservante, shopping-safe), recompute por corrida
 # (absolution-aware). Default True; flip a False revierte sin redeploy.
 PREGNANCY_SAFETY_NOTES_ENABLED = _env_bool("MEALFIT_PREGNANCY_SAFETY_NOTES", True)
+# [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Generalización del patrón a las demás condiciones
+# (HTA/dislipidemia/gastritis/SOP/hipotiroidismo) — los 10 fallos de la corrida 31304538636 eran
+# la misma clase «no lo especifica» fuera de embarazo. Ver _CONDITION_SAFETY_CLAUSES.
+CONDITION_SAFETY_NOTES_ENABLED = _env_bool("MEALFIT_CONDITION_SAFETY_NOTES", True)
+# [P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] Un critical MÉDICO del reviewer (no dieta/alérgeno, que
+# ya tienen el suyo) obtiene UN retry informado en attempt 1 — hoy va directo al fallback
+# matemático, y la clase medida («no especifica descremado/bajo en sodio») es corregible con la
+# directiva. NO debilita el guard: severity sigue critical, el reviewer re-gatea, reincidencia →
+# fallback terminal idéntico. Mismo patrón/presupuesto que P1-DAYGEN-DIET-CONVERGE.
+MEDICAL_CRITICAL_REGEN_ENABLED = _env_bool("MEALFIT_MEDICAL_CRITICAL_REGEN", True)
 # [P2-UNDERCOOK-TIME-NOTE · 2026-07-01] (audit v2 recetas GAP-4, batch P2-AUDIT-V2-BATCH) Lint de
 # plausibilidad de tiempos de cocción para pollo/cerdo — nota de seguridad si el tiempo del paso es
 # implausiblemente corto (< MEALFIT_MIN_COOK_MINUTES_POULTRY_PORK, default 5). Ver _apply_food_safety_fixes.
@@ -17611,6 +17651,112 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
     return annotated
 
 
+# [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Registro de cláusulas por CONDICIÓN — generalización
+# del patrón que convirtió embarazo/lactancia de 0% a entregable (anotar determinista + hacer
+# visible al reviewer). Los 10 fallos de la corrida 31304538636 son la MISMA clase en otras
+# condiciones, con las cláusulas dictadas por el propio reviewer: HTA «versiones bajas en sodio»
+# (perfil 4), dislipidemia «descremados»/yemas (5), gastritis «irritantes» (6), SOP porciones de
+# fruta alto-IG (7), hipotiroidismo interacciones levotiroxina (8). Keys = ConditionRule.id
+# (SSOT detect_active_rules). Tokens ESTRECHOS y word-boundary (lección 'pan'⊂'pana': _name_has_token
+# no tiene frontera FINAL — nada de raíces desnudas ambiguas). covered escanea receta+nombre+
+# ingredientes (misma semántica que las cláusulas de embarazo). Note-only, macro-preservante.
+_CONDITION_SAFETY_CLAUSES = {
+    "dyslipidemia": (
+        ("lacteo_magro", ("yogur", "yogurt", "queso", "leche"),
+         ("descremad", "desnatad", "0%", "bajo en grasa", "light"),
+         "usa los lácteos DESCREMADOS o 0-2% de grasa (yogur/queso/leche)"),
+        ("yemas", ("huevo", "huevos", "yema", "yemas"),
+         ("claras", "solo clara"),
+         "limita las yemas a 3-4 por semana; las claras puedes usarlas libremente"),
+    ),
+    "hta": (
+        ("sodio", ("queso", "jamon", "salami", "embutido", "tocineta", "enlatado",
+                   "pan integral", "pan de agua", "tortilla integral", "atun en agua"),
+         ("bajo en sodio", "baja en sodio", "sin sal"),
+         "elige las versiones BAJAS EN SODIO (queso/pan/enlatados) y no añadas sal en la mesa"),
+    ),
+    "hypothyroid": (
+        ("levotiroxina", ("leche", "yogur", "yogurt", "queso", "soya", "soja", "tofu",
+                          "linaza", "espinaca", "espinacas", "cafe"),
+         ("levotiroxina",),
+         "toma la levotiroxina en ayunas y separa estos alimentos (lácteos/soya/linaza/"
+         "espinacas/café) al menos 4 horas de la dosis — interfieren su absorción"),
+    ),
+    "pcos": (
+        ("fruta_ig", ("mango", "lechosa", "papaya", "pina", "guineo", "banana", "uva",
+                      "uvas", "sandia", "melon", "batido"),
+         ("porcion pequena", "media taza", "acompanada de proteina"),
+         "sirve la fruta dulce en porción PEQUEÑA (~½ taza) y acompáñala de proteína o "
+         "grasa (yogur, queso, maní) para suavizar el pico glucémico"),
+    ),
+    "gastritis": (
+        ("irritantes", ("limon", "naranja", "toronja", "pina", "vinagre", "picante",
+                        "aji picante", "cafe", "salsa de tomate"),
+         ("version suave", "sin picante"),
+         "prepara la versión SUAVE: poco cítrico/vinagre, nada de picante, y prefiere "
+         "cocción hervida, guisada u horneada sobre frituras"),
+    ),
+}
+
+
+def _apply_condition_safety_annotations(plan: dict, form_data: dict) -> int:
+    """[P1-CONDITION-SAFETY-NOTES · 2026-08-09] Nota clínica combinada por comida para las
+    condiciones NO-embarazo (registro `_CONDITION_SAFETY_CLAUSES`, keys = ConditionRule.id vía
+    detect_active_rules — SSOT). Hermana de `_apply_pregnancy_food_safety_annotations` con su
+    misma mecánica: note-only (macro-preservante, shopping-safe), recompute por corrida
+    (absolution-aware), cláusula ya escrita por el LLM (covered en receta+nombre+ingredientes)
+    se omite. El reviewer VE estas notas vía `_meal_safety_notes_for_summary`.
+    Knob `MEALFIT_CONDITION_SAFETY_NOTES`. tooltip-anchor: P1-CONDITION-SAFETY-NOTES"""
+    if not CONDITION_SAFETY_NOTES_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from condition_rules import detect_active_rules
+        from constants import strip_accents as _sa_csn
+        _active = [r.id for r in detect_active_rules(form_data or {})]
+    except Exception:
+        return 0
+    _clause_sets = [(_cid, _CONDITION_SAFETY_CLAUSES[_cid]) for _cid in _active
+                    if _cid in _CONDITION_SAFETY_CLAUSES]
+    _prefix = "⚕️ Nota clínica: "
+    annotated = 0
+    try:
+        for day in plan.get("days") or []:
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = [str(i) for i in (meal.get("ingredients") or [])]
+                blob = _sa_csn((str(meal.get("name", "")) + " " + " ".join(ings)).lower())
+                rec = meal.get("recipe")
+                rec = ([] if rec is None else [str(s) for s in rec]) if not isinstance(rec, list) \
+                    else [str(s) for s in rec]
+                base_rec = [s for s in rec if _prefix not in s]
+                rec_blob = _sa_csn(" ".join(base_rec).lower())
+                clauses = []
+                for _cid, _cls in _clause_sets:
+                    for _key, _toks, _covered, _text in _cls:
+                        if not any(_name_has_token(_sa_csn(_t), blob) for _t in _toks):
+                            continue
+                        if any(_sa_csn(c) in rec_blob or _sa_csn(c) in blob for c in _covered):
+                            continue
+                        if _text not in clauses:
+                            clauses.append(_text)
+                new_note = (_prefix + "; ".join(clauses) + ".") if clauses else None
+                had_note = len(base_rec) != len(rec)
+                if new_note:
+                    meal["recipe"] = base_rec + [new_note]
+                    if not had_note or rec[-1] != new_note:
+                        annotated += 1
+                elif had_note:
+                    meal["recipe"] = base_rec
+        if annotated:
+            logger.info(f"⚕️ [P1-CONDITION-SAFETY-NOTES] {annotated} comida(s) anotada(s) por "
+                        f"condición ({', '.join(c for c, _ in _clause_sets)}) — visibles al reviewer.")
+    except Exception as _csn_e:
+        logger.warning(f"[P1-CONDITION-SAFETY-NOTES] no-op: {type(_csn_e).__name__}: {_csn_e}")
+        return annotated
+    return annotated
+
+
 def _meal_safety_notes_for_summary(meal: dict) -> str:
     """[P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Notas de seguridad alimentaria del plato
     (🤰 embarazo + P3-FOOD-SAFETY huevo/seafood/víver) en formato compacto para el RESUMEN que
@@ -17623,8 +17769,10 @@ def _meal_safety_notes_for_summary(meal: dict) -> str:
         rec = meal.get("recipe")
         if not isinstance(rec, list):
             return ""
+        # [P1-CONDITION-SAFETY-NOTES] también las notas clínicas por condición viajan al reviewer.
         notes = [str(s).strip() for s in rec
-                 if isinstance(s, str) and "Seguridad alimentaria" in s]
+                 if isinstance(s, str)
+                 and ("Seguridad alimentaria" in s or "Nota clínica" in s)]
         if not notes:
             return ""
         return " [" + " | ".join(n[:300] for n in notes[:2]) + "]"
@@ -23814,6 +23962,17 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                            f"seguridad de embarazo/lactancia (rechazos del reviewer prevenidos)")
     except Exception as _psn_le:
         logger.warning(f"[P1-PREGNANCY-SAFETY-NOTES] guard no-op: {type(_psn_le).__name__}: {_psn_le}")
+
+    # ── Guard 3.6: notas clínicas por condición (HTA/dislipidemia/gastritis/SOP/hipotiroidismo) ──
+    # [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Mismo patrón que Guard 3.5, registro por
+    # ConditionRule.id. Post-subs por la misma razón (anota la composición FINAL).
+    try:
+        _csn_n = _apply_condition_safety_annotations(plan, form_data)
+        if _csn_n:
+            logger.warning(f"⚕️ [P1-CONDITION-SAFETY-NOTES] {_csn_n} comida(s) con nota clínica "
+                           f"por condición (rechazos del reviewer prevenidos)")
+    except Exception as _csn_le:
+        logger.warning(f"[P1-CONDITION-SAFETY-NOTES] guard no-op: {type(_csn_le).__name__}: {_csn_le}")
 
     # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini) Nota determinista de bajo-sodio para
     # enlatados/quesos en HTA/ERC — la 2ª razón del rechazo del revisor ("atún en agua/habichuelas/queso
@@ -41779,17 +41938,31 @@ def should_retry(state: PlanState) -> str:
             ("DIETA INCOMPATIBLE" in str(r)) or ("DIETA NO VERIFICABLE" in str(r))
             or ("ALÉRGENO DETECTADO" in str(r)) or ("ALERGENO DETECTADO" in str(r))
             for r in _dcr_reasons)
-        if (DIET_CRITICAL_REGEN_ENABLED and _diet_allergen_critical
-                and int(state.get("attempt", 1)) == 1):
+        # [P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] El resto de criticals MÉDICOS del reviewer
+        # obtiene el MISMO único retry informado: la clase medida en la corrida 31304538636
+        # («no especifica descremado/bajo en sodio/porción», 10/20 perfiles al fallback SIN
+        # intento de corrección) es corregible con la directiva + las notas deterministas
+        # (P1-CONDITION-SAFETY-NOTES) que el retry ya encuentra puestas. NO debilita el guard:
+        # severity sigue critical, el reviewer re-gatea con los mismos escáneres y la
+        # reincidencia aborta al fallback terminal idéntico al de hoy. Rollback:
+        # MEALFIT_MEDICAL_CRITICAL_REGEN=false. tooltip-anchor: P1-MEDICAL-CRITICAL-RETRY
+        _critical_retry_ok = (
+            (DIET_CRITICAL_REGEN_ENABLED and _diet_allergen_critical)
+            or (MEDICAL_CRITICAL_REGEN_ENABLED and not _diet_allergen_critical))
+        if _critical_retry_ok and int(state.get("attempt", 1)) == 1:
             _dcr_start = state.get("pipeline_start")
             _dcr_remaining = (
                 (GLOBAL_TIMEOUT - (time.time() - _dcr_start))
                 if isinstance(_dcr_start, (int, float)) and _dcr_start > 0 else -1.0)
             if _dcr_remaining >= MIN_RETRY_BUDGET_S:
+                _dcr_tag = ("P1-DAYGEN-DIET-CONVERGE" if _diet_allergen_critical
+                            else "P1-MEDICAL-CRITICAL-RETRY")
                 logger.warning(
-                    f"🔁 [P1-DAYGEN-DIET-CONVERGE] Crítico de dieta/alérgeno en attempt 1 → UN retry "
-                    f"informado (budget restante {_dcr_remaining:.0f}s ≥ {MIN_RETRY_BUDGET_S}s). "
-                    f"Si reincide, fallback terminal. Razones: {_dcr_reasons[:2]}")
+                    f"🔁 [{_dcr_tag}] Crítico "
+                    f"{'de dieta/alérgeno' if _diet_allergen_critical else 'médico del reviewer'} "
+                    f"en attempt 1 → UN retry informado (budget restante {_dcr_remaining:.0f}s ≥ "
+                    f"{MIN_RETRY_BUDGET_S}s). Si reincide, fallback terminal. "
+                    f"Razones: {_dcr_reasons[:2]}")
                 return "retry"
         logger.error("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
         _emit_plan_quality_degraded_alert(state, exit_reason="critical", severity=severity)

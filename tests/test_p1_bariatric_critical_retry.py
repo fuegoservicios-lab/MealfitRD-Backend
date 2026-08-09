@@ -65,8 +65,11 @@ def test_high_regenerable_bariatric_retries(monkeypatch):
 
 
 def test_critical_still_ends_in_should_retry():
-    # should_retry NO hace el downgrade (eso es review_plan_node); un crítico sin degradar sigue → end
-    assert g.should_retry(_state("critical", _FOOD_ISSUE, attempt=1)) == "end"
+    # should_retry NO hace el downgrade (eso es review_plan_node). [reapuntado
+    # P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] En attempt 1 con budget el crítico obtiene
+    # UN retry informado; la REINCIDENCIA sigue → end (la intención original: sin loop,
+    # el downgrade no vive aquí).
+    assert g.should_retry(_state("critical", _FOOD_ISSUE, attempt=2)) == "end"
 
 
 def test_max_attempts_stops_retry(monkeypatch):

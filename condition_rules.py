@@ -161,6 +161,14 @@ _PREGNANCY_UTEROTONIC_SUBS = (
     (("cundeamor", "melon amargo", "melón amargo", "bitter melon", "momordica"),
      "Tayota", "uterotónico contraindicado en embarazo", True),
 )
+# [P1-CONDITION-SAFETY-NOTES · 2026-08-09] Guanábana (annonacina — neurotóxica en consumo
+# sostenido; sin evidencia de seguridad en embarazo): el reviewer la rechazó CRITICAL en un plan
+# de embarazo REAL (corrida 31304538636, corr=9909fb32 attempt final). Mango = fruta segura del
+# catálogo, misma porción. Tupla propia (mismo criterio index-sensitive que el uterotónico).
+_PREGNANCY_AVOID_FRUIT_SUBS = (
+    (("guanabana", "guanábana", "graviola", "soursop"),
+     "Mango", "fruta sin evidencia de seguridad en embarazo (annonacina)", True),
+)
 
 _DYSLIPIDEMIA_NEGATIVES = ("descremad", "baja en grasa", "bajo en grasa", "light", "desnatad",
                            "sin grasa", "0% grasa", "0 grasa",
@@ -284,7 +292,8 @@ CONDITION_RULES: tuple = (
         # [P2-PREGNANCY-MERCURY-GUARD · 2026-06-22] Swap determinista de pescado alto en mercurio (ver
         # `_PREGNANCY_MERCURY_SUBS`). Antes embarazo era advisory-puro (solo prompt + FS9).
         # [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] + cundeamor uterotónico (tupla propia, ver arriba).
-        substitutions=_PREGNANCY_MERCURY_SUBS + _PREGNANCY_UTEROTONIC_SUBS,
+        # [P1-CONDITION-SAFETY-NOTES · 2026-08-09] + guanábana (annonacina, rechazo CRITICAL medido).
+        substitutions=_PREGNANCY_MERCURY_SUBS + _PREGNANCY_UTEROTONIC_SUBS + _PREGNANCY_AVOID_FRUIT_SUBS,
         sub_negatives=_PREGNANCY_MERCURY_NEGATIVES,
         prompt_block=(
             "🤰 REGLA CLÍNICA — EMBARAZO / LACTANCIA (SEGURIDAD — REQUIERE OBSTETRA/NUTRICIONISTA):\n"

@@ -122,10 +122,14 @@ def test_new_conditions_are_referral_not_substitution():
     reviewer clínico lo rechazó CRITICAL en un plan de embarazo REAL (corr=d395f5c8, 2026-08-08:
     «contraindicado durante todo el embarazo por riesgo abortivo y uterotónico») y es
     contraindicación estándar en obstetricia — mismo criterio que el mercurio: contraindicación
-    a nivel de ALIMENTO que el motor puede remover deterministamente. La clasificación sigue
-    siendo referral y las otras 4 condiciones permanecen sin sustituciones. Si pregnancy gana
-    una 3ª sustitución o alguna de las otras 4 gana la primera, este test debe caer y forzar
-    la conversación clínica.
+    a nivel de ALIMENTO que el motor puede remover deterministamente.
+    [reapuntado 2026-08-09 · P1-CONDITION-SAFETY-NOTES] 3ª sustitución deliberada: guanábana
+    (annonacina — neurotóxica en consumo sostenido, sin evidencia de seguridad en embarazo) →
+    Mango. Rechazo CRITICAL medido en el intento FINAL de un plan real (corrida 31304538636,
+    corr=9909fb32) — el mismo criterio alimento-nivel de las dos anteriores. La clasificación
+    sigue siendo referral y las otras 4 condiciones permanecen sin sustituciones. Si pregnancy
+    gana una 4ª sustitución o alguna de las otras 4 gana la primera, este test debe caer y
+    forzar la conversación clínica.
     """
     for rid in ("hypothyroid", "gout", "nafld", "pcos"):
         rule = cr._RULES_BY_ID[rid]
@@ -133,10 +137,10 @@ def test_new_conditions_are_referral_not_substitution():
         assert rule.classification == cr.CLINICAL_REFERRAL, rid
     preg = cr._RULES_BY_ID["pregnancy"]
     assert preg.classification == cr.CLINICAL_REFERRAL
-    assert len(preg.substitutions) == 2, (
-        "pregnancy debe tener EXACTAMENTE las 2 sustituciones documentadas (mercurio e07bdea + "
-        "cundeamor uterotónico P1-PREGNANCY-SAFETY-NOTES); una 3ª requiere revisión clínica "
-        "explícita"
+    assert len(preg.substitutions) == 3, (
+        "pregnancy debe tener EXACTAMENTE las 3 sustituciones documentadas (mercurio e07bdea + "
+        "cundeamor P1-PREGNANCY-SAFETY-NOTES + guanábana P1-CONDITION-SAFETY-NOTES); una 4ª "
+        "requiere revisión clínica explícita"
     )
     _triggers = " ".join(preg.substitutions[0][0])
     assert "tiburon" in _triggers and "pez espada" in _triggers, preg.substitutions[0][0]
@@ -144,6 +148,9 @@ def test_new_conditions_are_referral_not_substitution():
     _ut_triggers = " ".join(preg.substitutions[1][0])
     assert "cundeamor" in _ut_triggers, preg.substitutions[1][0]
     assert str(preg.substitutions[1][1]).lower() == "tayota"
+    _gb_triggers = " ".join(preg.substitutions[2][0])
+    assert "guanabana" in _gb_triggers, preg.substitutions[2][0]
+    assert str(preg.substitutions[2][1]).lower() == "mango"
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

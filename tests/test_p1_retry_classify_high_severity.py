@@ -168,7 +168,10 @@ class TestShouldRetryUnaffected:
     """Verificar que mi cambio NO regresa el comportamiento de otros paths."""
 
     def test_critical_aborta_siempre(self):
-        """CRITICAL aborta sin importar regenerabilidad — política inmutable."""
+        """[reapuntado P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] La «política inmutable» ya
+        tenía una excepción (dieta/alérgenos, P1-DAYGEN-DIET-CONVERGE) y ahora es general:
+        attempt 1 + budget = UN retry informado para todo critical. Lo que SÍ es inmutable:
+        la reincidencia aborta (sin loops)."""
         state = {
             "_rejection_severity": "critical",
             "rejection_reasons": ["Repetición excesiva (clasificado crítico por context)"],
@@ -176,7 +179,9 @@ class TestShouldRetryUnaffected:
             "attempt": 1,
             "pipeline_start": time.time(),
         }
-        assert should_retry(state) == "end"
+        assert should_retry(state) == "retry"
+        state["attempt"] = 2
+        assert should_retry(state) == "end", "reincidencia crítica = terminal, siempre"
 
     def test_minor_attempt1_retry(self):
         """MINOR sigue permitiendo retry (sin cambio)."""

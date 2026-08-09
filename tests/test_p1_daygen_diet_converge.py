@@ -150,8 +150,13 @@ def test_diet_critical_retry_is_single_and_guard_stays_terminal(monkeypatch):
     # attempt 2 (el retry ya corrió y reincidió) → fallback terminal idéntico al de hoy.
     state = _critical_state(["DIETA INCOMPATIBLE: ..."], attempt=2)
     assert go.should_retry(state) == "end"
-    # Un crítico NO-dieta/alérgeno (p.ej. schema) conserva el abort inmediato.
+    # [reapuntado P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] Un crítico NO-dieta/alérgeno
+    # (p.ej. schema — la clase MÁS regenerable) ya no aborta de inmediato: obtiene el mismo
+    # ÚNICO retry informado en attempt 1; su reincidencia sí es terminal.
     state = _critical_state(["SCHEMA INVÁLIDO: el plan no cumple la estructura esperada"])
+    assert go.should_retry(state) == "retry"
+    state = _critical_state(["SCHEMA INVÁLIDO: el plan no cumple la estructura esperada"],
+                            attempt=2)
     assert go.should_retry(state) == "end"
     # Sin budget → no se intenta el retry.
     state = _critical_state(["DIETA INCOMPATIBLE: ..."])

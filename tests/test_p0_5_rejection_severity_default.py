@@ -78,8 +78,16 @@ def test_should_retry_with_none_severity_with_budget_returns_retry():
 # 2. Severidades explícitas — comportamiento documentado.
 # ---------------------------------------------------------------------------
 def test_should_retry_critical_aborts_no_retry():
+    # [reapuntado P1-MEDICAL-CRITICAL-RETRY · 2026-08-09] El contrato viejo («critical aborta
+    # SIEMPRE») quedó superado: en attempt 1 con budget, TODO critical obtiene UN retry
+    # informado (medido: 10/20 perfiles iban al fallback sin intento de corrección). La
+    # intención REAL de este test (P0-5: sin loops silenciosos) se preserva: la REINCIDENCIA
+    # (attempt>1) sigue siendo terminal.
     state = _state_with_budget(severity="critical", elapsed_s=0.0)
-    assert should_retry(state) == "end"
+    assert should_retry(state) == "retry"
+    state2 = _state_with_budget(severity="critical", elapsed_s=0.0)
+    state2["attempt"] = 2
+    assert should_retry(state2) == "end", "reincidencia crítica = fallback terminal (no loop)"
 
 
 def test_should_retry_high_contextual_aborts_no_retry():
