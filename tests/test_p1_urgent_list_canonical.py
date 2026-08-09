@@ -125,6 +125,24 @@ def test_restock_nace_categorizado():
     assert "master_category" in di[i:i + 1400], "la categoría viene del master ya resuelto"
 
 
+def test_badge_rojo_se_evalua_en_vivo():
+    # La caja «Compra Urgente Requerida» era una FOTO de generación: el owner compró la lista
+    # entera y los avisos seguían. El badge debe filtrar contra la Nevera VIVA
+    # (filterStillMissing: subconjunto por token, jamás substring — «sal» no absuelve «salsa»).
+    dj = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src",
+                           "pages", "Dashboard.jsx"), encoding="utf-8").read()
+    assert "const filterStillMissing" in dj or "filterStillMissing =" in dj
+    i = dj.index("PANTRY UNSAFE BADGE")
+    win = dj[i:i + 1200]
+    assert "filterStillMissing(" in win, (
+        "el badge debe evaluar los faltantes contra el inventario VIVO, no la foto de generación")
+    assert "_still.length === 0" in win and "return null" in win, (
+        "Nevera cubre todo → sin caja roja")
+    j = dj.index("const _missingNormTokens")
+    assert "every(t => foodTokens.has(t))" in dj[j:j + 1400], (
+        "matching por SUBCONJUNTO de tokens completos — substring reintroduciría la 15ª clase")
+
+
 def test_frontend_ceil_de_empaques():
     dj = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src",
                            "pages", "Dashboard.jsx"), encoding="utf-8").read()
