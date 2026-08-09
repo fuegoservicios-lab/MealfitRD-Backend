@@ -292,6 +292,26 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod
     _PROTEIN_CEILING_RAW = 2.2
 
 
+# [P1-VEGAN-PROTEIN-CEILING · 2026-08-08] Techo proteico VEGAN-aware (palanca 2 del 65%,
+# issue #9/#14, decisión del owner). El perfil vegana_dm2 recibía target 188g (techo estándar
+# 2.2 g/kg): inalcanzable con fuentes vegetales del catálogo es-DO — entregaba 126-169g y el
+# piso rechazaba SIEMPRE (el closer diet-aware ya no fabrica violaciones; el déficit era
+# estructural del TARGET, no de la generación). 1.8 g/kg es el rango alto realista de ingesta
+# proteica en dieta 100% vegetal; las kcal liberadas van a carbos por la redistribución C1
+# existente. Clamp [1.0, 2.2] (nunca sobre el techo estándar). Rollback sin redeploy.
+try:
+    _PROTEIN_CEILING_VEGAN_RAW = _nc_env_float("MEALFIT_PROTEIN_CEILING_G_PER_KG_VEGAN", 1.8)
+except Exception:
+    _PROTEIN_CEILING_VEGAN_RAW = 1.8
+
+
+def _protein_ceiling_vegan_g_per_kg() -> float:
+    try:
+        return max(1.0, min(2.2, float(_PROTEIN_CEILING_VEGAN_RAW)))
+    except (TypeError, ValueError):
+        return 1.8
+
+
 def _protein_ceiling_g_per_kg() -> float:
     """[C1-PROTEIN-CEILING · 2026-06-13] Techo clínico de proteína por kg de peso corporal.
     Knob `MEALFIT_PROTEIN_CEILING_G_PER_KG` (default 2.2, clamp [1.6, 3.0]). Posición ISSN:
@@ -305,7 +325,7 @@ def _protein_ceiling_g_per_kg() -> float:
 
 
 def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
-                     body_fat_pct: float = None) -> dict:
+                     body_fat_pct: float = None, diet=None) -> dict:
     """
     Calcula los gramos exactos de cada macronutriente basándose en:
     - Proteína: 4 cal/g
@@ -335,7 +355,18 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
         if body_fat_pct and body_fat_pct > 30:
             _lbm = float(weight_kg) * (1 - (float(body_fat_pct) / 100.0))
             _ceiling_wkg = _lbm + 0.25 * (float(weight_kg) - _lbm)  # peso ajustado (obesidad)
-        ceiling_g = _protein_ceiling_g_per_kg() * _ceiling_wkg
+        _ceiling_gkg = _protein_ceiling_g_per_kg()
+        # [P1-VEGAN-PROTEIN-CEILING · 2026-08-08] dieta vegana → techo 1.8 g/kg (canonicaliza
+        # vía SSOT; balanced/vegetarian/pescatarian conservan el estándar — huevo/lácteo/pescado
+        # sí alcanzan densidad). Nunca SUBE el techo (min con el estándar).
+        if diet is not None:
+            try:
+                from constants import canonicalize_diet_type as _cdt_nc
+                if _cdt_nc(diet) == "vegan":
+                    _ceiling_gkg = min(_ceiling_gkg, _protein_ceiling_vegan_g_per_kg())
+            except Exception:
+                pass
+        ceiling_g = _ceiling_gkg * _ceiling_wkg
         if protein_g > ceiling_g:
             freed_cals = (protein_g - ceiling_g) * 4.0
             protein_g = ceiling_g
@@ -343,7 +374,7 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
             carbs_cals += freed_cals  # redistribuir a carbos (macro flexible)
             _wlabel = "ajustado" if abs(_ceiling_wkg - float(weight_kg)) > 0.05 else "total"
             logger.info(
-                f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_protein_ceiling_g_per_kg()} g/kg "
+                f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_ceiling_gkg} g/kg "
                 f"× {round(_ceiling_wkg, 1)}kg ({_wlabel}) = {round(protein_g)}g "
                 f"(era {round(target_calories * split['protein_pct'] / 4)}g); {round(freed_cals)} kcal → carbos."
             )
@@ -1637,10 +1668,12 @@ def get_nutrition_targets(form_data: dict) -> dict:
     original_target_calories = target_calories
     # [C1-PROTEIN-CEILING] `weight` (kg) → techo clínico de proteína por peso corporal.
     # [P2-PROTEIN-CEILING-ADJ-WEIGHT] `body_fat` → peso ajustado para el techo en obesidad (>30% grasa).
-    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
+    # [P1-VEGAN-PROTEIN-CEILING] diet → techo vegano 1.8 g/kg en la derivación del target.
+    _diet_nc = form_data.get("dietType") or form_data.get("diet")
+    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=body_fat, diet=_diet_nc)
 
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
-    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
+    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat, diet=_diet_nc)
 
     # [P1-BARIATRIC-PROTEIN-TARGET · 2026-06-27] El pouch post-bariátrico no tolera el volumen de proteína
     # de un target estándar por peso (visto en vivo corr=5b30b71f: target 100g → la comida pequeña no lo
