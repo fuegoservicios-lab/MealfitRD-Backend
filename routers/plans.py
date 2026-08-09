@@ -6438,7 +6438,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             _emit_change_outcome_metric(
                 "swap", "ok",
                 user_id=verified_user_id,
-                meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 band_low=bool(isinstance(result, dict) and result.get("_macro_band_low")),
             )
         except Exception:
@@ -6489,7 +6489,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "swap", "failed",
                     user_id=verified_user_id,
                     error_code=_payload.get("error_code"),
-                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                    meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 )
             except Exception:
                 pass
@@ -6519,7 +6519,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "swap", "failed",
                     user_id=verified_user_id,
                     error_code=_payload.get("error_code"),
-                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                    meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 )
             except Exception:
                 pass
@@ -6551,7 +6551,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "swap", "failed",
                     user_id=verified_user_id,
                     error_code=_payload.get("error_code"),
-                    meal_type=(body.mealType if hasattr(body, "mealType") else None),
+                    meal_type=data.get("mealType"),  # [P1-SWAP-TELEMETRY-NAMEERROR] era `body.*`: NameError tragado por el best-effort → 0 filas change_swap DESDE SIEMPRE
                 )
             except Exception:
                 pass
