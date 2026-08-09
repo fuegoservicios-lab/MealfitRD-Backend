@@ -156,6 +156,20 @@ def test_knob_default_on():
     assert ag._swap_macro_repair_enabled() is True
 
 
+def test_chat_modify_tiene_el_mismo_repair():
+    # tools.execute_modify_single_meal usa el MISMO validador y tenía la MISMA espiral —
+    # el repair debe correr también ahí, antes de su raise.
+    src = open(os.path.join(os.path.dirname(__file__), "..", "tools.py"),
+               encoding="utf-8").read()
+    i_val = src.index("Drift en modify_meal")
+    i_raise = src.index("raise ValueError(summary)", i_val)
+    win = src[i_val:i_raise]
+    assert "_repair_swap_candidate_macros" in win or "_mr_repair(" in win, (
+        "la espiral del chat-modify es la misma que la del swap — mismo repair"
+    )
+    assert "_swap_macro_repair_enabled" in win or "_mr_enabled()" in win
+
+
 def test_writeback_a_res_incluye_los_campos_honestos():
     # el write-back (mismo patrón probado de P2-SWAP-FATS-TRIM) debe propagar ingredientes
     # y macros reparados a `res` — sin esto el repair es cosmético.

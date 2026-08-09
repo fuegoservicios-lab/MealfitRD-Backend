@@ -17676,11 +17676,17 @@ _CONDITION_SAFETY_CLAUSES = {
          "elige las versiones BAJAS EN SODIO (queso/pan/enlatados) y no añadas sal en la mesa"),
     ),
     "hypothyroid": (
+        # [P1-SWAP-MACRO-REPAIR-BATCH · 2026-08-09] +toronja (rechazo medido run 31311796944:
+        # «la toronja puede reducir la absorción de levotiroxina»). covered pasa de
+        # («levotiroxina») a («4 horas»): mencionar el fármaco SIN la práctica correcta no
+        # absuelve — el mismo run mostró al reviewer leyendo una separación de «1-12 minutos»
+        # (el DESAYUNO con lácteos minutos después de la dosis en ayunas); la separación
+        # horaria del slot es clase aparte (composición del desayuno), documentada en #14.
         ("levotiroxina", ("leche", "yogur", "yogurt", "queso", "soya", "soja", "tofu",
-                          "linaza", "espinaca", "espinacas", "cafe"),
-         ("levotiroxina",),
+                          "linaza", "espinaca", "espinacas", "cafe", "toronja", "pomelo"),
+         ("4 horas",),
          "toma la levotiroxina en ayunas y separa estos alimentos (lácteos/soya/linaza/"
-         "espinacas/café) al menos 4 horas de la dosis — interfieren su absorción"),
+         "espinacas/café/toronja) al menos 4 horas de la dosis — interfieren su absorción"),
     ),
     "pcos": (
         ("fruta_ig", ("mango", "lechosa", "papaya", "pina", "guineo", "banana", "uva",

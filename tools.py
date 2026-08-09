@@ -1520,10 +1520,39 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                         f"⚠️ [P1-SWAP-MACROS] Drift en modify_meal | "
                         f"meal_type={meal_type} | drifts={drifts}"
                     )
-                    current_prompt[0] = modify_prompt + (
-                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
-                    )
-                    raise ValueError(summary)
+                    # [P1-SWAP-MACRO-REPAIR · 2026-08-09] Mismo repair determinista que
+                    # `agent.py::swap_meal` (misma espiral, mismo validador): re-porcionar
+                    # el candidato con el motor ANTES de quemar un retry LLM. La identidad
+                    # del plato (pedido del usuario) no se toca — solo porciones.
+                    from agent import (_repair_swap_candidate_macros as _mr_repair,
+                                       _swap_macro_repair_enabled as _mr_enabled)
+                    if _mr_enabled():
+                        if _tu_db_holder[0] is None:
+                            from nutrition_db import IngredientNutritionDB as _MRDB
+                            _tu_db_holder[0] = _MRDB()
+                        _mr_passed, _mr_drifts, _mr_summary = _mr_repair(
+                            meal_dump,
+                            {"cals": original_cals, "protein": original_protein,
+                             "carbs": original_carbs, "fats": original_fats},
+                            _tu_db_holder[0])
+                        if _mr_passed:
+                            for _fk in ("ingredients", "ingredients_raw", "recipe",
+                                        "protein", "carbs", "fats", "cals", "macros"):
+                                if _fk in meal_dump and meal_dump[_fk] is not None:
+                                    if isinstance(res, dict):
+                                        res[_fk] = meal_dump[_fk]
+                                    elif hasattr(res, _fk):
+                                        setattr(res, _fk, meal_dump[_fk])
+                            passed = True
+                            logger.info(
+                                f"🔧 [P1-SWAP-MACRO-REPAIR] chat-modify re-porcionado "
+                                f"deterministamente a banda (drift original={drifts}) — "
+                                f"retry LLM evitado | meal_type={meal_type}")
+                    if not passed:
+                        current_prompt[0] = modify_prompt + (
+                            f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
+                        )
+                        raise ValueError(summary)
             except ValueError:
                 raise
             except Exception as _macros_exc:
