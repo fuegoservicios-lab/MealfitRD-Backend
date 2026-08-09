@@ -15,14 +15,17 @@ _AGENT = open(os.path.join(os.path.dirname(__file__), "..", "agent.py"), encodin
 
 
 def test_waiver_existe_antes_del_uso_del_universo():
+    # [P0-SWAP-WAIVER-UNBOUND · 2026-08-09] La versión original de este test validaba
+    # PROXIMIDAD a «if clean_ingredients:» — había VARIOS y el waiver quedó anclado al
+    # equivocado, ~400 líneas ANTES de que `strict_pantry` naciera → UnboundLocalError →
+    # 500 en el 100% de los swaps durante ~1 día. El ORDEN correcto (nace strict_pantry →
+    # waiver → raise honesto) lo verifica por AST test_p0_swap_waiver_unbound.py; aquí
+    # queda la existencia + kill switch + que desactiva de verdad.
     i = _AGENT.find("P1-SWAP-EMPTY-PANTRY-WAIVER")
     assert i > 0, "el waiver de nevera vacía desapareció del swap"
-    blk = _AGENT[i: i + 1400]
+    blk = _AGENT[i: i + 1800]
     assert "strict_pantry = False" in blk, "el waiver debe DESACTIVAR strict, no solo loguear"
     assert "MEALFIT_SWAP_EMPTY_PANTRY_WAIVER" in blk, "kill switch obligatorio"
-    # orden: el waiver corre ANTES del bloque `if clean_ingredients:` que arma el prompt
-    j = _AGENT.find("if clean_ingredients:", i)
-    assert 0 < j - i < 1600, "el waiver debe vivir junto al cierre de la resolución del universo"
 
 
 def test_condicion_exacta_strict_y_vacio():

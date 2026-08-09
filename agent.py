@@ -1332,23 +1332,6 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 f"{_shop_fallback_exc}"
             )
 
-    # [P1-SWAP-EMPTY-PANTRY-WAIVER · 2026-08-09] Espejo de la exención de GENERACIÓN
-    # («nevera vacía desactiva el modo estricto», decisión intencional anclada): con universo
-    # VACÍO (guest, o Nevera real sin ítems) strict_pantry garantizaba el fallo — el LLM
-    # recibía un universo imposible, agotaba retries y moría en SWAP_STRICT_PANTRY_NO_INVENTORY.
-    # Medido con la telemetría resucitada (2026-08-09): 4/4 fallos guest con ese ÚNICO
-    # error_code (36% de los swaps). Con el waiver se genera del catálogo verificado con TODAS
-    # las guardas clínicas activas. El raise honesto sigue vivo para strict con nevera NO vacía.
-    # Rollback sin redeploy: MEALFIT_SWAP_EMPTY_PANTRY_WAIVER=false.
-    _swap_empty_waiver_on = os.environ.get(
-        "MEALFIT_SWAP_EMPTY_PANTRY_WAIVER", "true").strip().lower() in ("1", "true", "yes", "on")
-    if strict_pantry and not clean_ingredients and _swap_empty_waiver_on:
-        strict_pantry = False
-        logger.warning(
-            "🧊 [P1-SWAP-EMPTY-PANTRY-WAIVER] Universo de nevera VACÍO (guest o Nevera sin "
-            "ítems) → modo estricto desactivado para este swap; se genera del catálogo "
-            "verificado con las guardas clínicas activas.")
-
     if clean_ingredients:
         # [P5-SWAP-PORTION-DISCIPLINE · 2026-06-23] Antes el bloque listaba los ingredientes
         # pero NO daba disciplina de PORCIÓN → el LLM proponía cantidades grandes y el pantry
@@ -1763,6 +1746,27 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     _pantry_discovery_mode = bool(form_data.get("_pantry_discovery_mode")) and _pantry_strict_updates_enabled()
     if _pantry_discovery_mode:
         strict_pantry = False
+
+    # [P1-SWAP-EMPTY-PANTRY-WAIVER · 2026-08-09 · reubicado P0-SWAP-WAIVER-UNBOUND] Espejo de la
+    # exención de GENERACIÓN («nevera vacía desactiva el modo estricto», decisión intencional
+    # anclada): con universo VACÍO (guest, o Nevera real sin ítems) strict_pantry garantizaba el
+    # fallo — el LLM recibía un universo imposible, agotaba retries y moría en
+    # SWAP_STRICT_PANTRY_NO_INVENTORY. Con el waiver se genera del catálogo verificado con TODAS
+    # las guardas clínicas activas. El raise honesto sigue vivo para strict con nevera NO vacía.
+    # [P0-SWAP-WAIVER-UNBOUND · 2026-08-09] Este bloque vivió ~400 líneas ANTES de que
+    # `strict_pantry` naciera (asignación de arriba): la asignación del waiver convirtió el nombre
+    # en local para TODA la función → UnboundLocalError → **500 en el 100% de los swaps** desde el
+    # deploy (medido: swap ok_pct=0.0, latency p50=0.2s en la corrida 31304538636). DEBE vivir
+    # DESPUÉS de la asignación de strict_pantry y del override de discovery, ANTES del primer
+    # read (prompt) y del raise honesto. Rollback sin redeploy: MEALFIT_SWAP_EMPTY_PANTRY_WAIVER=false.
+    _swap_empty_waiver_on = os.environ.get(
+        "MEALFIT_SWAP_EMPTY_PANTRY_WAIVER", "true").strip().lower() in ("1", "true", "yes", "on")
+    if strict_pantry and not clean_ingredients and _swap_empty_waiver_on:
+        strict_pantry = False
+        logger.warning(
+            "🧊 [P1-SWAP-EMPTY-PANTRY-WAIVER] Universo de nevera VACÍO (guest o Nevera sin "
+            "ítems) → modo estricto desactivado para este swap; se genera del catálogo "
+            "verificado con las guardas clínicas activas.")
 
     # [P2-SWAP-CONSISTENCY · 2026-05-22] Tolerancia de ingredientes externos
     # cuando el user pidió un antojo / plato festivo: hard-pantry colisionaba
