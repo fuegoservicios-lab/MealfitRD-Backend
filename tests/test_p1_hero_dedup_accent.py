@@ -191,3 +191,94 @@ def test_accent_stays_off_the_controls_and_the_cartridge():
         "P1-HERO-DEDUP-ACCENT: `.datumNum` debe llevar el acento — es el segundo "
         "y último call site."
     )
+
+
+# ── Escala (§3 del spec) ─────────────────────────────────────────────────────
+
+def test_title_grows_at_the_top_but_not_at_the_bottom():
+    """El diagnóstico era que el H1 no dominaba su propia pantalla: 64 px a peso
+    400 con tres franjas de mono gris compitiendo.
+
+    El PISO se queda en 2.5rem y no es timidez: `Nutrición calculada,` son 20
+    caracteres y a 375 px solo hay 327 px de columna. Subir el piso desborda la
+    línea. Lo que sobraba era techo, no suelo."""
+    css = _HERO_CSS.read_text(encoding="utf-8")
+    m = re.search(r"^\.title\s*\{([^}]*)\}", css, re.MULTILINE)
+    assert m, "P1-HERO-DEDUP-ACCENT: no encuentro la regla .title"
+    block = m.group(1)
+    clamp = re.search(r"font-size:\s*clamp\(([^,]+),([^,]+),([^)]+)\)", block)
+    assert clamp, "P1-HERO-DEDUP-ACCENT: .title debe seguir usando clamp()"
+    floor, _, cap = (v.strip() for v in clamp.groups())
+    assert floor == "2.5rem", (
+        f"P1-HERO-DEDUP-ACCENT: el piso del titular es {floor}, debe ser 2.5rem. "
+        "A 375 px no caben 20 caracteres por encima de eso."
+    )
+    assert cap == "6.5rem", (
+        f"P1-HERO-DEDUP-ACCENT: el techo del titular es {cap}, debe ser 6.5rem "
+        "(era 4rem = 64 px, que en escritorio no dominaba la pantalla)."
+    )
+    assert "font-weight: 500" in block, (
+        "P1-HERO-DEDUP-ACCENT: el titular debe ir a peso 500 (era 400)."
+    )
+
+
+def test_the_title_balances_its_lines_instead_of_breaking_by_hand():
+    """`text-wrap: balance` es LOAD-BEARING, no cosmético: quitarlo devuelve el
+    corte natural y con él la huérfana.
+
+    El titular llevaba un `<br />` fijo. A 104 px eso dejaba «no» solo en su
+    propia línea — el pivote de la afirmación, en el peor sitio. Y NO se
+    arregla con un techo más bajo: MEDIDO, «no improvisada» pide 6,36 × el
+    tamaño de fuente contra una columna de 625 px, así que con `8.2vw` esa
+    línea solo cabe por encima de ~1209 px de viewport; y a 1200 px exactos la
+    columna ENCOGE 46 px (el padding del contenedor salta de 2rem a 4rem)
+    mientras la fuente sigue creciendo. No hay número fijo que estabilice el
+    corte en toda la banda.
+
+    Reparto verificado con Range.getClientRects() en 320/375/900/1024/1200/
+    1440/1920: 2-3 líneas, cero desbordes, cero scroll horizontal."""
+    css = _HERO_CSS.read_text(encoding="utf-8")
+    m = re.search(r"^\.title\s*\{([^}]*)\}", css, re.MULTILINE)
+    assert m and "text-wrap: balance" in m.group(1), (
+        "P1-HERO-DEDUP-ACCENT: `.title` perdió `text-wrap: balance`. Sin él el "
+        "titular vuelve al corte natural y a la línea huérfana."
+    )
+    jsx = _HERO_JSX.read_text(encoding="utf-8")
+    h1 = re.search(r"<motion\.h1[^>]*>(.*?)</motion\.h1>", jsx, re.DOTALL)
+    assert h1, "P1-HERO-DEDUP-ACCENT: no encuentro el <motion.h1> del hero"
+    assert "<br" not in h1.group(1), (
+        "P1-HERO-DEDUP-ACCENT: volvió un salto de línea fijo dentro del titular. "
+        "Un corte a mano compite con `balance` y reintroduce la huérfana en la "
+        "banda donde la línea no cabe."
+    )
+
+
+def test_the_rule_under_the_title_is_a_rule_not_a_hairline():
+    css = _HERO_CSS.read_text(encoding="utf-8")
+    m = re.search(r"^\.titleRule\s*\{([^}]*)\}", css, re.MULTILINE)
+    assert m, "P1-HERO-DEDUP-ACCENT: no encuentro la regla .titleRule"
+    assert "height: 3px" in m.group(1), (
+        "P1-HERO-DEDUP-ACCENT: .titleRule debe medir 3px. A 1px remataba un "
+        "titular de 104 px con una hairline gris — subrayado tímido."
+    )
+    assert "transform-origin: left" in m.group(1), (
+        "P1-HERO-DEDUP-ACCENT: .titleRule perdió su transform-origin. El trazado "
+        "scaleX de 520 ms se dibujaría desde el centro."
+    )
+
+
+def test_figure_and_caption_grow_together():
+    """`.caption` tiene max-width igual al encuadre del dibujo a propósito: su
+    regla superior tiene que coincidir con el ancho de la figura. Subir una sin
+    la otra deja el pie desalineado — y es el fallo que no se ve en el diff."""
+    fig = _FIG_CSS.read_text(encoding="utf-8")
+    m = re.search(r"^\.fig00\s*\{([^}]*)\}", fig, re.MULTILINE)
+    assert m and "max-width: 560px" in m.group(1), (
+        "P1-HERO-DEDUP-ACCENT: .fig00 debe topar en 560px (era 420px)."
+    )
+    css = _HERO_CSS.read_text(encoding="utf-8")
+    cap = re.search(r"^\.caption\s*\{([^}]*)\}", css, re.MULTILINE)
+    assert cap and "max-width: 560px" in cap.group(1), (
+        "P1-HERO-DEDUP-ACCENT: .caption debe topar en 560px, igual que .fig00. "
+        "El comentario de esa regla explica por qué van atadas."
+    )
