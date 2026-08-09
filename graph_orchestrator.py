@@ -12439,7 +12439,7 @@ CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
 # directiva del prompt). Recupera las calorías escalando los ingredientes NO-almidón del plato → mantiene las
 # kcal en banda (los carbos bajan, que es el objetivo DM2). Default ON. Rollback: =false. Anchor: P1-DM2-GLYCEMIC-PORTION-CAP
 DM2_GLYCEMIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_DM2_GLYCEMIC_PORTION_CAP", True)
-DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 150, validator=lambda v: 60 <= v <= 400)
+DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 100, validator=lambda v: 60 <= v <= 400)  # [P1-DM2-MAIZ-CAP] 150→100: alineado al criterio del reviewer (~100g/comida)
 
 # [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para pacientes post-cirugía bariátrica, cap DURO de la porción de
 # QUESO y LÁCTEOS por comida — el revisor médico rechazó un plan bariátrico por "5¼ lonjas de queso en una
@@ -24453,7 +24453,12 @@ def _enforce_meal_count(days: list, target_meal_types: list) -> int:
 # [P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Víveres/almidones de ALTO índice glucémico (tokens normalizados,
 # word-boundary). NO incluye arroz/pan blancos (los swapea condition_rules a integral antes) ni plátano VERDE
 # (bajo IG, recomendado en DM2). 'papa' lleva exclusión de 'papaya' (colisión de prefijo).
-_DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa")
+# [P1-DM2-MAIZ-CAP · 2026-08-08] +"maiz dulce": escapaba al cap y el reviewer rechazaba planes
+# DM2 guest con 150-180g/comida (criterio ~100g; benchmark issue #9, perfil vegana_dm2 —
+# palanca 1 del 65%). Multi-palabra a propósito: "maiz" pelado colapsaría harina/tortillas
+# (la exclusión "harina de" cubre una sola). El default del cap baja 150→100 alineado al
+# criterio clínico del reviewer; rollback sin redeploy vía MEALFIT_DM2_HIGH_GI_CAP_G.
+_DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa", "maiz dulce")
 _DM2_HIGH_GI_CAP_EXCLUDE = ("papaya", "harina de", "leche de", "vinagre de", "agua de")
 
 
