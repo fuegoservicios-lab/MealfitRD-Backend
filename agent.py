@@ -829,6 +829,60 @@ def pantry_contains_food(blob: str, name: str) -> bool:
     return all(t in disponibles for t in toks)
 
 
+def _swap_macro_repair_enabled() -> bool:
+    """[P1-SWAP-MACRO-REPAIR · 2026-08-09] Kill switch del repair determinista de porciones."""
+    return os.environ.get("MEALFIT_SWAP_MACRO_REPAIR", "true").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _repair_swap_candidate_macros(meal_dump: dict, targets: dict, db):
+    """[P1-SWAP-MACRO-REPAIR · 2026-08-09] Re-porciona DETERMINISTAMENTE el candidato del swap a
+    los targets del slot antes de quemar un retry LLM. Medido (corr=78a438e0, run 31311796944):
+    el swap le pedía al LLM aritmética de porciones multi-restricción y el LLM espiraleaba
+    (carbs 110→151→269→332→344→422g contra target 146g) hasta SWAP_LLM_RETRIES_EXHAUSTED —
+    8/14 swaps muertos en 73-117s. La generación NUNCA le pide esto al LLM: el motor re-porciona.
+    Aquí igual: `_rebalance_day_macros_to_target` sobre [meal] (la MISMA maquinaria de prod,
+    escala líneas macro-dominantes, re-cuantiza, deltas honestos, raw lockstep) + truth-up +
+    step-sync, y re-valida. La IDENTIDAD del plato (ingredientes) no se toca — solo porciones.
+    Muta `meal_dump`. Retorna (passed, drifts, summary) post-repair, o (False, None, None) si
+    no hubo palanca (sin líneas dominantes movibles). Fail-safe: excepción → (False, None, None).
+    tooltip-anchor: P1-SWAP-MACRO-REPAIR"""
+    try:
+        if not isinstance(meal_dump, dict) or not isinstance(meal_dump.get("ingredients"), list) \
+                or not meal_dump.get("ingredients"):
+            return (False, None, None)
+        from graph_orchestrator import (
+            _rebalance_day_macros_to_target as _mr_reb,
+            _truth_up_meal_macros_from_strings as _mr_truthup,
+            _sync_recipe_step_quantities as _mr_stepsync,
+        )
+        from nutrition_calculator import validate_meal_macros_against_targets as _mr_validate
+        applied = _mr_reb(
+            [meal_dump],
+            float(targets.get("carbs") or 0),
+            float(targets.get("fats") or 0),
+            db,
+            target_protein=float(targets.get("protein") or 0),
+            tol=0.05,
+        )
+        if not applied:
+            return (False, None, None)
+        try:
+            _mr_truthup(meal_dump, db)
+        except Exception as _exc:
+            logger.debug("[P1-SWAP-MACRO-REPAIR] truth-up post-repair no aplicado: %s: %s",
+                         type(_exc).__name__, str(_exc)[:160])
+        try:
+            _mr_stepsync(meal_dump)
+        except Exception as _exc:
+            logger.debug("[P1-SWAP-MACRO-REPAIR] step-sync post-repair no aplicado: %s: %s",
+                         type(_exc).__name__, str(_exc)[:160])
+        return _mr_validate(meal_dump, targets)
+    except Exception as _mr_exc:
+        logger.warning(f"[P1-SWAP-MACRO-REPAIR] no-op: {type(_mr_exc).__name__}: {_mr_exc}")
+        return (False, None, None)
+
+
 def swap_meal(form_data: dict, surface: str = "individual"):
     """Sustituye una comida por otra que cumpla los targets del slot.
 
@@ -2502,10 +2556,39 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                         f"⚠️ [P1-SWAP-MACROS] Drift detectado attempt-pending | "
                         f"meal_type={meal_type} | drifts={drifts}"
                     )
-                    _current_prompt[0] = prompt_text + (
-                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
-                    )
-                    raise ValueError(summary)
+                    # [P1-SWAP-MACRO-REPAIR · 2026-08-09] ANTES de quemar un retry LLM:
+                    # re-porcionado determinista del candidato (la identidad del plato la
+                    # puso el LLM; las porciones las pone el motor — como en generación).
+                    if _swap_macro_repair_enabled():
+                        _mr_targets = {
+                            "cals": target_calories,
+                            "protein": target_protein,
+                            "carbs": target_carbs,
+                            "fats": target_fats,
+                        }
+                        if _tu_db_holder[0] is None:
+                            from nutrition_db import IngredientNutritionDB as _MRDB
+                            _tu_db_holder[0] = _MRDB()
+                        _mr_passed, _mr_drifts, _mr_summary = _repair_swap_candidate_macros(
+                            meal_dump, _mr_targets, _tu_db_holder[0])
+                        if _mr_passed:
+                            for _fk in ("ingredients", "ingredients_raw", "recipe",
+                                        "protein", "carbs", "fats", "cals", "macros"):
+                                if _fk in meal_dump and meal_dump[_fk] is not None:
+                                    if isinstance(res, dict):
+                                        res[_fk] = meal_dump[_fk]
+                                    elif hasattr(res, _fk):
+                                        setattr(res, _fk, meal_dump[_fk])
+                            passed = True
+                            logger.info(
+                                f"🔧 [P1-SWAP-MACRO-REPAIR] candidato re-porcionado "
+                                f"deterministamente a banda (drift original={drifts}) — "
+                                f"retry LLM evitado | meal_type={meal_type}")
+                    if not passed:
+                        _current_prompt[0] = prompt_text + (
+                            f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
+                        )
+                        raise ValueError(summary)
             except ValueError:
                 raise
             except Exception as _macros_exc:
