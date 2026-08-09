@@ -13990,6 +13990,18 @@ _PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
     r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|maranon|"
     r"anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
 )
+# [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] Excusa de PREFIJO (la plant-adj mira el sufijo): un
+# token de alérgeno inmediatamente precedido por negación («sin gluten», «libre de gluten», «cero
+# gluten», «no contiene gluten») declara AUSENCIA — el generador estaba CUMPLIENDO («avena
+# certificada sin gluten» para el alérgico, 7+ FPs en las corridas N=20, vivo corr=abb71a1d) y el
+# scanner castigaba el cumplimiento; el mismo matcher alimenta el SKELETON ALLERGEN SCRUB, que le
+# quitaba al day-gen la avena sin gluten que el planner asignó bien. Solo se absuelve el token
+# NEGADO: «leche sin lactosa» sigue violando 'lácteos' (proteína láctea presente), «pan sin
+# gluten» sigue flagged vía 'pan' — el sesgo a sobre-detectar queda intacto. Máx 1 palabra de
+# relleno («sin trazas gluten»); más relleno NO absuelve (fail-secure).
+_ALLERGEN_NEGATION_PREFIX_RX = _re_mod.compile(
+    r"(?:\bsin|\blibres?\s+de|\bcero|\bno\s+contienen?)\s+(?:\w+\s+)?$"
+)
 
 
 def _scan_allergen_violations(plan: dict, allergies) -> list:
@@ -14039,6 +14051,11 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         # no violan la alergia a LÁCTEOS (el alérgico a maní/coco matchea vía su
                         # propio término directo).
                         if _PLANT_ADJ_EXCUSE_RX.match(ing_low[_m_al.end(): _m_al.end() + 18]):
+                            continue
+                        # [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] «sin/libre de/cero/no
+                        # contiene <token>» = ausencia declarada del token — no violación.
+                        if _ALLERGEN_NEGATION_PREFIX_RX.search(
+                                ing_low[max(0, _m_al.start() - 24): _m_al.start()]):
                             continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break
@@ -17474,6 +17491,16 @@ _PREGNANCY_PLANT_DAIRY_RX = _re.compile(
     r"\b(?:leche|yogur[t]?|queso)\s+(?:de\s+|vegana?\s+de\s+)?(?:coco|almendras?|soya|soja|"
     r"avena|arroz|anacardo|mani|marañon|maranon|ajonjoli)", _re.IGNORECASE)
 _PREGNANCY_DAIRY_CLAUSE = "usa solo lácteos PASTEURIZADOS (leche, queso, yogur)"
+# [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Leguminosa SECA en la línea del ingrediente
+# (forma de compra que P1-LEGUME-DRY-WORDING escribe a propósito) → el reviewer exige el proceso
+# de cocción explícito (fitohemaglutinina; medido run 31299769707: «se indican secas y el plan
+# no especifica el proceso de cocción»). Por LÍNEA, como los lácteos.
+_PREGNANCY_LEGUME_TOKENS = ("habichuela", "habichuelas", "frijol", "frijoles", "lenteja",
+                            "lentejas", "garbanzo", "garbanzos", "haba", "habas",
+                            "gandul", "gandules")
+_PREGNANCY_DRY_RX = _re.compile(r"\bsec[oa]s?\b", _re.IGNORECASE)
+_PREGNANCY_LEGUME_CLAUSE = ("remoja y hierve las leguminosas secas hasta que estén "
+                            "completamente tiernas (nunca a medio cocer)")
 # El atún enlatado ya está cocido: si la ÚNICA fuente marina del plato es enlatada, la cláusula
 # de cocción de mariscos sería ruido. Contexto de lata sobre la línea del ingrediente.
 _PREGNANCY_CANNED_RX = _re.compile(r"en agua|en lata|enlatad|en aceite", _re.IGNORECASE)
@@ -17537,6 +17564,16 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                                 and not _PREGNANCY_PLANT_DAIRY_RX.search(_sa_psn(_l))):
                             clauses.append(_PREGNANCY_DAIRY_CLAUSE)
                             break
+                # [P1-REVIEWER-SEES-SAFETY-NOTES] leguminosa SECA por LÍNEA → proceso de
+                # cocción explícito (la forma «guisada/cocida» no lleva 'seca' → no dispara).
+                if "tiernas" not in rec_blob and "remoja" not in rec_blob:
+                    for _l in ings:
+                        _ll = _sa_psn(_l.lower())
+                        if (_PREGNANCY_DRY_RX.search(_ll)
+                                and any(_name_has_token(_t, _ll)
+                                        for _t in _PREGNANCY_LEGUME_TOKENS)):
+                            clauses.append(_PREGNANCY_LEGUME_CLAUSE)
+                            break
                 new_note = (_PREGNANCY_NOTE_PREFIX + "; ".join(clauses) + ".") if clauses else None
                 had_note = len(base_rec) != len(rec)
                 if new_note:
@@ -17552,6 +17589,27 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
         logger.warning(f"[P1-PREGNANCY-SAFETY-NOTES] no-op: {type(_psn_e).__name__}: {_psn_e}")
         return annotated
     return annotated
+
+
+def _meal_safety_notes_for_summary(meal: dict) -> str:
+    """[P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Notas de seguridad alimentaria del plato
+    (🤰 embarazo + P3-FOOD-SAFETY huevo/seafood/víver) en formato compacto para el RESUMEN que
+    el reviewer LLM recibe. Medido (corr=0b4ca77c, run 31299769707): la pasada anotó 9 comidas
+    y el reviewer rechazó CRITICAL con «el plan no lo especifica» — porque `all_meals_summary`
+    serializa solo nombre+ingredientes y las notas viven en `recipe`, que el reviewer NUNCA ve.
+    Una nota invisible para quien juzga no previene nada. Solo comidas anotadas pagan tokens.
+    Vacío si no hay notas. tooltip-anchor: P1-REVIEWER-SEES-SAFETY-NOTES"""
+    try:
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            return ""
+        notes = [str(s).strip() for s in rec
+                 if isinstance(s, str) and "Seguridad alimentaria" in s]
+        if not notes:
+            return ""
+        return " [" + " | ".join(n[:300] for n in notes[:2]) + "]"
+    except Exception:
+        return ""
 
 
 def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
@@ -39453,7 +39511,13 @@ async def review_plan_node(state: PlanState) -> dict:
             meal_name = meal.get("name", "Sin nombre")
             ingredients = meal.get("ingredients", [])
             all_ingredients.extend(ingredients)
-            all_meals_summary.append(f"- Día {day_num} | {meal.get('meal', '?')}: {meal_name} → Ingredientes: {', '.join(ingredients)}")
+            # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Las notas de seguridad del plato
+            # viajan EN el resumen: el reviewer solo ve esto (no las recetas), y sin ellas
+            # «no lo especifica» es rechazo garantizado en embarazo (corr=0b4ca77c: 9 comidas
+            # anotadas → rechazo critical igual).
+            all_meals_summary.append(
+                f"- Día {day_num} | {meal.get('meal', '?')}: {meal_name} → Ingredientes: "
+                f"{', '.join(ingredients)}{_meal_safety_notes_for_summary(meal)}")
 
     start_time = time.time()
     
