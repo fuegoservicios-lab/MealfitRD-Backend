@@ -11690,6 +11690,13 @@ RAW_SEAFOOD_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_SEAFOOD_SAFETY", True)
 # absuelve el caso COCIDO, que en es-DO es la inmensa mayoría → falsos-positivos mínimos. Macro-preservante (solo nota, como
 # el seafood). Default True (seguridad); flip a False revierte. Anchor: P1-RAW-VIVER-SAFETY.
 RAW_VIVER_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_VIVER_SAFETY", True)
+# [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Anotaciones deterministas de seguridad alimentaria para
+# perfiles de embarazo/lactancia: el reviewer (Sol en perfiles difíciles) rechaza recetas SEGURAS
+# que no DICEN las palabras de seguridad (corr=86482b8c: 5 rechazos en una review — huevo sin
+# «yema y clara firmes», deli sin «74 °C», hojas sin «lavado», lechosa sin «madura», champiñones
+# sin «cocción completa»). Note-only (macro-preservante, shopping-safe), recompute por corrida
+# (absolution-aware). Default True; flip a False revierte sin redeploy.
+PREGNANCY_SAFETY_NOTES_ENABLED = _env_bool("MEALFIT_PREGNANCY_SAFETY_NOTES", True)
 # [P2-UNDERCOOK-TIME-NOTE · 2026-07-01] (audit v2 recetas GAP-4, batch P2-AUDIT-V2-BATCH) Lint de
 # plausibilidad de tiempos de cocción para pollo/cerdo — nota de seguridad si el tiempo del paso es
 # implausiblemente corto (< MEALFIT_MIN_COOK_MINUTES_POULTRY_PORK, default 5). Ver _apply_food_safety_fixes.
@@ -17425,6 +17432,126 @@ def _apply_food_safety_fixes(plan: dict) -> int:
         except Exception as _uc_e:
             logger.debug(f"[P2-UNDERCOOK-TIME-NOTE] lint no-op: {type(_uc_e).__name__}: {_uc_e}")
     return fixed
+
+
+# [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Cláusulas de la nota combinada de embarazo/lactancia.
+# Cada fila: (key, tokens gatillo (word-boundary sobre nombre+ingredientes, sin acentos),
+# substrings que ABSUELVEN la cláusula si la receta ya los dice, texto de la cláusula).
+# Los tokens espejan los rechazos MEDIDOS del reviewer (corr=86482b8c/d395f5c8/140dfe19) — no
+# es una lista aspiracional. 'atun' EXCLUIDO del bloque mariscos a propósito: el enlatado ya
+# está cocido (mismo criterio que _PREGNANCY_MERCURY_SUBS, que también lo excluye).
+_PREGNANCY_NOTE_PREFIX = "🤰 Seguridad alimentaria (embarazo/lactancia): "
+_PREGNANCY_SAFETY_CLAUSES = (
+    ("huevo", ("huevo", "huevos", "clara", "claras", "yema", "yemas"),
+     ("yema y clara firmes",),
+     "cocina el huevo POR COMPLETO (yema y clara firmes, sin puntos líquidos)"),
+    ("deli", ("jamon", "salami", "mortadela", "fiambre", "embutido", "deli",
+              "salchicha", "salchichon", "pepperoni", "tocineta", "tocino"),
+     ("74 °c", "74°c", "hasta que humee"),
+     "calienta los embutidos/carnes tipo deli hasta que humeen (74 °C) y sírvelos al momento — "
+     "fríos hay riesgo de listeria"),
+    ("hojas", ("espinaca", "espinacas", "rucula", "arugula", "lechuga", "repollo",
+               "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy"),
+     ("desinfecta",),
+     "lava y desinfecta bien las hojas y vegetales que se sirvan crudos"),
+    ("papaya", ("lechosa", "papaya"),
+     ("completamente madura",),
+     "usa la lechosa/papaya COMPLETAMENTE madura (verde o pintona está contraindicada)"),
+    ("hongos", ("champinon", "champinones", "hongo", "hongos", "setas", "portobello"),
+     ("champinones por completo", "hongos por completo"),
+     "cocina los champiñones/hongos por completo (nunca crudos)"),
+    ("mariscos", ("pescado", "mejillon", "mejillones", "camaron", "camarones", "pulpo",
+                  "calamar", "cangrejo", "langosta", "tilapia", "salmon", "mero",
+                  "arenque", "bacalao", "sardina", "sardinas"),
+     ("mariscos por completo",),
+     "cocina el pescado y los mariscos POR COMPLETO (opacos y firmes; nada crudo ni a "
+     "medio cocer)"),
+)
+# Lácteos: cláusula aparte porque el match es POR LÍNEA de ingrediente (la excusa vegetal
+# «leche de coco/almendras» debe absolver SU línea sin absolver el queso fresco del mismo plato).
+_PREGNANCY_DAIRY_TOKENS = ("leche", "yogur", "yogurt", "queso")
+_PREGNANCY_PLANT_DAIRY_RX = _re.compile(
+    r"\b(?:leche|yogur[t]?|queso)\s+(?:de\s+|vegana?\s+de\s+)?(?:coco|almendras?|soya|soja|"
+    r"avena|arroz|anacardo|mani|marañon|maranon|ajonjoli)", _re.IGNORECASE)
+_PREGNANCY_DAIRY_CLAUSE = "usa solo lácteos PASTEURIZADOS (leche, queso, yogur)"
+# El atún enlatado ya está cocido: si la ÚNICA fuente marina del plato es enlatada, la cláusula
+# de cocción de mariscos sería ruido. Contexto de lata sobre la línea del ingrediente.
+_PREGNANCY_CANNED_RX = _re.compile(r"en agua|en lata|enlatad|en aceite", _re.IGNORECASE)
+
+
+def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int:
+    """[P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Nota combinada de seguridad alimentaria por comida
+    para perfiles de embarazo/lactancia. El reviewer de perfiles difíciles exige que la receta DIGA
+    la instrucción de seguridad aunque el plato sea seguro (5 rechazos en una sola review,
+    corr=86482b8c); P1-REVIEWER-VERIFICATION-ADVISORY dejó esta clase fuera A PROPÓSITO porque —
+    a diferencia de «verificar la etiqueta» — la receta sí puede decirla: el fix es upstream.
+    Note-only (macro-preservante, no muta tokens → shopping-safe). La nota se RECOMPUTA por
+    corrida: cláusulas nuevas entran, las de ingredientes que salieron se van (absolution-aware,
+    clase P1-RAW-COOKED-ABSOLUTION), y una cláusula que la receta ya dice con sus palabras se
+    omite. Superficie: capa clínica (generación + fallbacks); el swap individual queda fuera
+    (surface aparte, sin form_data completo). Retorna comidas anotadas.
+    tooltip-anchor: P1-PREGNANCY-SAFETY-NOTES"""
+    if not PREGNANCY_SAFETY_NOTES_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from nutrition_calculator import _is_pregnancy_or_lactation as _psn_ipl
+        if not _psn_ipl(form_data or {}):
+            return 0
+        from constants import strip_accents as _sa_psn
+    except Exception:
+        return 0
+    annotated = 0
+    try:
+        for day in plan.get("days") or []:
+            for meal in (day.get("meals") or []) if isinstance(day, dict) else []:
+                if not isinstance(meal, dict):
+                    continue
+                ings = [str(i) for i in (meal.get("ingredients") or [])]
+                blob = _sa_psn((str(meal.get("name", "")) + " " + " ".join(ings)).lower())
+                rec = meal.get("recipe")
+                rec = ([] if rec is None else [str(s) for s in rec]) if not isinstance(rec, list) \
+                    else [str(s) for s in rec]
+                base_rec = [s for s in rec if _PREGNANCY_NOTE_PREFIX not in s]
+                rec_blob = _sa_psn(" ".join(base_rec).lower())
+                clauses = []
+                for _key, _toks, _covered, _text in _PREGNANCY_SAFETY_CLAUSES:
+                    if not any(_name_has_token(_t, blob) for _t in _toks):
+                        continue
+                    if any(_sa_psn(c) in rec_blob for c in _covered):
+                        continue  # el LLM ya escribió la instrucción con sus palabras
+                    if _key == "mariscos":
+                        # solo lata ("atún en agua" ni siquiera matchea; "sardinas en lata" sí):
+                        # si TODA línea marina es enlatada, ya está cocida → cláusula fuera.
+                        _marine_lines = [
+                            _l for _l in ings
+                            if any(_name_has_token(_t, _sa_psn(_l.lower())) for _t in _toks)]
+                        if _marine_lines and all(
+                                _PREGNANCY_CANNED_RX.search(_l) for _l in _marine_lines):
+                            continue
+                    clauses.append(_text)
+                # lácteos por LÍNEA (la leche vegetal absuelve su línea, no el plato entero)
+                if "pasteuriz" not in rec_blob:
+                    for _l in ings:
+                        _ll = _sa_psn(_l.lower())
+                        if (any(_name_has_token(_t, _ll) for _t in _PREGNANCY_DAIRY_TOKENS)
+                                and not _PREGNANCY_PLANT_DAIRY_RX.search(_sa_psn(_l))):
+                            clauses.append(_PREGNANCY_DAIRY_CLAUSE)
+                            break
+                new_note = (_PREGNANCY_NOTE_PREFIX + "; ".join(clauses) + ".") if clauses else None
+                had_note = len(base_rec) != len(rec)
+                if new_note:
+                    meal["recipe"] = base_rec + [new_note]
+                    if not had_note or rec[-1] != new_note:
+                        annotated += 1
+                elif had_note:
+                    meal["recipe"] = base_rec  # absolución: el riesgo salió del plato
+        if annotated:
+            logger.info(f"🤰 [P1-PREGNANCY-SAFETY-NOTES] {annotated} comida(s) anotada(s) con "
+                        f"seguridad alimentaria de embarazo/lactancia (note-only, pre-reviewer).")
+    except Exception as _psn_e:
+        logger.warning(f"[P1-PREGNANCY-SAFETY-NOTES] no-op: {type(_psn_e).__name__}: {_psn_e}")
+        return annotated
+    return annotated
 
 
 def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
@@ -23597,6 +23724,18 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                f"(azúcar/sodio/satfat) en {_sg_n} comida(s)")
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
+
+    # ── Guard 3.5 (FS-embarazo): anotaciones de seguridad alimentaria embarazo/lactancia ──
+    # [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] DESPUÉS de las sustituciones (Guard 2.5/3): la nota
+    # describe la composición FINAL del plato (anotar un ingrediente que el sub acaba de sacar
+    # sería una nota fantasma). Note-only → no interfiere con quantize/micros aguas abajo.
+    try:
+        _psn_n = _apply_pregnancy_food_safety_annotations(plan, form_data)
+        if _psn_n:
+            logger.warning(f"🤰 [P1-PREGNANCY-SAFETY-NOTES] {_psn_n} comida(s) con nota de "
+                           f"seguridad de embarazo/lactancia (rechazos del reviewer prevenidos)")
+    except Exception as _psn_le:
+        logger.warning(f"[P1-PREGNANCY-SAFETY-NOTES] guard no-op: {type(_psn_le).__name__}: {_psn_le}")
 
     # [P2-HTA-SALT-NORMALIZE · 2026-07-02] (test clínico gemini) Nota determinista de bajo-sodio para
     # enlatados/quesos en HTA/ERC — la 2ª razón del rechazo del revisor ("atún en agua/habichuelas/queso

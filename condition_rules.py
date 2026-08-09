@@ -151,6 +151,16 @@ _PREGNANCY_MERCURY_SUBS = (
      "Filete de pescado blanco", "pescado alto en mercurio", True),
 )
 _PREGNANCY_MERCURY_NEGATIVES = ("bajo en mercurio", "blanco", "tilapia")
+# [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] Cundeamor (melón amargo, Momordica charantia) =
+# uterotónico/abortivo — el reviewer lo rechazó CRITICAL en un plan de embarazo real
+# (corr=d395f5c8, 2026-08-08). Sale por el MISMO mecanismo SSOT que el mercurio, en su PROPIA
+# tupla: `_scan_mercury_pregnancy_violations` (graph_orchestrator) indexa
+# `_PREGNANCY_MERCURY_SUBS[0][0]` y mutar esa tupla lo rompería en silencio. Tayota = sub
+# culinario natural (vegetal de guiso verificado en catálogo), misma porción.
+_PREGNANCY_UTEROTONIC_SUBS = (
+    (("cundeamor", "melon amargo", "melón amargo", "bitter melon", "momordica"),
+     "Tayota", "uterotónico contraindicado en embarazo", True),
+)
 
 _DYSLIPIDEMIA_NEGATIVES = ("descremad", "baja en grasa", "bajo en grasa", "light", "desnatad",
                            "sin grasa", "0% grasa", "0 grasa",
@@ -273,7 +283,9 @@ CONDITION_RULES: tuple = (
         precedence=15, classification=CLINICAL_REFERRAL,
         # [P2-PREGNANCY-MERCURY-GUARD · 2026-06-22] Swap determinista de pescado alto en mercurio (ver
         # `_PREGNANCY_MERCURY_SUBS`). Antes embarazo era advisory-puro (solo prompt + FS9).
-        substitutions=_PREGNANCY_MERCURY_SUBS, sub_negatives=_PREGNANCY_MERCURY_NEGATIVES,
+        # [P1-PREGNANCY-SAFETY-NOTES · 2026-08-09] + cundeamor uterotónico (tupla propia, ver arriba).
+        substitutions=_PREGNANCY_MERCURY_SUBS + _PREGNANCY_UTEROTONIC_SUBS,
+        sub_negatives=_PREGNANCY_MERCURY_NEGATIVES,
         prompt_block=(
             "🤰 REGLA CLÍNICA — EMBARAZO / LACTANCIA (SEGURIDAD — REQUIERE OBSTETRA/NUTRICIONISTA):\n"
             "   • NUNCA un déficit calórico: usa AL MENOS mantenimiento (el requerimiento sube en 2º/3º "

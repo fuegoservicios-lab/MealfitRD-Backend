@@ -117,9 +117,15 @@ def test_new_conditions_are_referral_not_substitution():
     DELIBERADAMENTE por el gate embarazo/lactancia (commit e07bdea, P1-3): pregnancy ganó UNA
     sustitución — pescado alto en mercurio (tiburón/pez espada/marlin/king mackerel) → pescado
     blanco. Es contraindicación de libro en embarazo; sustituir es MÁS seguro que solo derivar.
-    La clasificación sigue siendo referral (no reemplaza la consulta médica) y las otras 4
-    condiciones permanecen sin sustituciones. Si pregnancy gana una 2ª sustitución o alguna de
-    las otras 4 gana la primera, este test debe caer y forzar la conversación clínica.
+    [reapuntado 2026-08-09 · P1-PREGNANCY-SAFETY-NOTES] 2ª sustitución deliberada: cundeamor
+    (melón amargo, Momordica charantia) → Tayota. Justificación clínica del reapunte: el propio
+    reviewer clínico lo rechazó CRITICAL en un plan de embarazo REAL (corr=d395f5c8, 2026-08-08:
+    «contraindicado durante todo el embarazo por riesgo abortivo y uterotónico») y es
+    contraindicación estándar en obstetricia — mismo criterio que el mercurio: contraindicación
+    a nivel de ALIMENTO que el motor puede remover deterministamente. La clasificación sigue
+    siendo referral y las otras 4 condiciones permanecen sin sustituciones. Si pregnancy gana
+    una 3ª sustitución o alguna de las otras 4 gana la primera, este test debe caer y forzar
+    la conversación clínica.
     """
     for rid in ("hypothyroid", "gout", "nafld", "pcos"):
         rule = cr._RULES_BY_ID[rid]
@@ -127,13 +133,17 @@ def test_new_conditions_are_referral_not_substitution():
         assert rule.classification == cr.CLINICAL_REFERRAL, rid
     preg = cr._RULES_BY_ID["pregnancy"]
     assert preg.classification == cr.CLINICAL_REFERRAL
-    assert len(preg.substitutions) == 1, (
-        "pregnancy debe tener EXACTAMENTE la sustitución de mercurio (e07bdea); una 2ª requiere "
-        "revisión clínica explícita"
+    assert len(preg.substitutions) == 2, (
+        "pregnancy debe tener EXACTAMENTE las 2 sustituciones documentadas (mercurio e07bdea + "
+        "cundeamor uterotónico P1-PREGNANCY-SAFETY-NOTES); una 3ª requiere revisión clínica "
+        "explícita"
     )
     _triggers = " ".join(preg.substitutions[0][0])
     assert "tiburon" in _triggers and "pez espada" in _triggers, preg.substitutions[0][0]
     assert "pescado blanco" in str(preg.substitutions[0][1]).lower()
+    _ut_triggers = " ".join(preg.substitutions[1][0])
+    assert "cundeamor" in _ut_triggers, preg.substitutions[1][0]
+    assert str(preg.substitutions[1][1]).lower() == "tayota"
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
