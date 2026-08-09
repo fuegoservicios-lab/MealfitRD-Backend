@@ -29495,10 +29495,11 @@ def _normalize_cooked_grain_lines(days: list) -> list:
                             continue
                         food = m.group(4).strip()
                         flat = _sa_ck(food.lower())
-                        ref = next((r for toks, r in _COOKED_GRAIN_REF_KCAL
-                                    if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
-                        if ref is None:
+                        _row_ck = next(((toks, r) for toks, r in _COOKED_GRAIN_REF_KCAL
+                                        if any(_re.search(r"\b" + t + r"\b", flat) for t in toks)), None)
+                        if _row_ck is None:
                             continue
+                        _toks_ck, ref = _row_ck
                         dry_kcal = kcal_idx.get(flat) or kcal_idx.get(flat.split()[0])
                         if not dry_kcal or dry_kcal / ref < 1.5:
                             # La fila ya está en cocido (o no resuelve): nada que convertir.
@@ -29509,9 +29510,16 @@ def _normalize_cooked_grain_lines(days: list) -> list:
                             continue
                         # Concordancia: "cocidas"→"crudas", "cocido"→"crudo". El usuario lee
                         # esta línea en la app y en el PDF; "habichuelas rojas crudo" canta.
+                        # [P1-LEGUME-DRY-WORDING · 2026-08-08] LEGUMINOSAS → "secas", no "crudas":
+                        # el reviewer rechazaba el plan entero por fitohemaglutinina al leer
+                        # "15 g de habichuelas crudas" (última costura de vegana_dm2, issue #14).
+                        # Misma conversión a secos; la palabra culinaria correcta no implica
+                        # consumo crudo. Granos conservan "crudo" (inocuo y ya anclado en tests).
                         _st = m.group(5).lower()
                         _end = _st[-2:] if _st[-2:] in ("os", "as") else _st[-1]
-                        new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} crud{_end}"
+                        _is_legume_ck = "habichuela" in _toks_ck
+                        _word_ck = "sec" if _is_legume_ck else "crud"
+                        new_line = f"{m.group(1)}{int(round(dry_g))} g de {food} {_word_ck}{_end}"
                         ings[i] = new_line
                         out.append({"day": day.get("day"), "meal": str(meal.get("name") or "?"),
                                     "list": _key, "before": str(line), "after": new_line})
