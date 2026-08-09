@@ -11718,6 +11718,45 @@ def _mark_meals_violating_pantry(result: dict, pantry_ingredients: list) -> int:
     return marked
 
 
+def _meal_scoped_missing(meal: dict, missing_list: list) -> list:
+    """[P1-URGENT-LIST-CANONICAL · 2026-08-09] Filtra la unión de faltantes del CHUNK a las
+    líneas que pertenecen a ESTA comida. Estampar la unión entera en cada meal pintaba una
+    pared roja de 27 ítems en CADA plato del Dashboard (hígado/sardinas/mejillones «faltando»
+    en un bowl de avena — plan f380821a del owner, 2026-08-09). Matching en dos niveles,
+    normalizado (lower + sin acentos + espacios colapsados):
+      1) línea EXACTA presente en los ingredientes del meal;
+      2) fallback: la parte de ALIMENTO (línea sin el prefijo de cantidad) contenida en el
+         blob de ingredientes — cubre drift de formato («35g de X» vs «35 g de X»).
+    Puro, fail-safe → [] (sin faltantes propios, sin caja roja). tooltip-anchor:
+    P1-URGENT-LIST-CANONICAL"""
+    try:
+        from constants import strip_accents as _sa
+        import re as _re
+
+        def _norm(s):
+            return _re.sub(r"\s+", " ", _sa(str(s).strip().lower()))
+
+        _ings = [_norm(i) for i in (meal.get("ingredients") or []) if str(i).strip()]
+        if not _ings:
+            return []
+        _blob = " | ".join(_ings)
+        out = []
+        for x in (missing_list or []):
+            nx = _norm(x)
+            if not nx:
+                continue
+            if nx in _ings:
+                out.append(x)
+                continue
+            _food = _re.sub(r"^[\d\s\./½¼¾⅓⅔]+(?:g|gr|ml|kg|l|cdta|cda|cdas|cdtas|taza|tazas|"
+                            r"unidad(?:es)?|ud|uds)?\s*(?:de\s+)?", "", nx).strip()
+            if len(_food) >= 4 and _food in _blob:
+                out.append(x)
+        return out
+    except Exception:
+        return []
+
+
 def _extract_missing_ingredients_from_violation(violation_str) -> list:
     """[P0-A] Extrae nombres de ingredientes faltantes desde la cadena de error
     devuelta por `validate_ingredients_against_pantry`. Esa cadena tiene dos
@@ -30179,7 +30218,19 @@ def process_plan_chunk_queue(target_plan_id=None):
                                                 if isinstance(m, dict):
                                                     m['_pantry_unsafe_after_flexible'] = True
                                                     if missing_list:
-                                                        m['_missing_ingredients'] = missing_list
+                                                        # [P1-URGENT-LIST-CANONICAL · 2026-08-09]
+                                                        # missing_list es la unión del CHUNK;
+                                                        # estamparla entera en cada comida pintaba
+                                                        # una pared roja de 27 ítems en CADA plato
+                                                        # del Dashboard (hígado y mejillones «faltando»
+                                                        # en un bowl de avena — plan f380821a del
+                                                        # owner). Cada comida recibe SOLO las líneas
+                                                        # que le pertenecen (matching normalizado
+                                                        # contra sus propios ingredientes).
+                                                        _own_missing = _meal_scoped_missing(
+                                                            m, missing_list)
+                                                        if _own_missing:
+                                                            m['_missing_ingredients'] = _own_missing
 
                                     # [P1-FLEX-DELIVER · 2026-08-08] Si el chunk llegó aquí por el
                                     # TTL-escalation a flexible (el usuario NO repuso a tiempo), la

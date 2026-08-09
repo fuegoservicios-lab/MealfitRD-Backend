@@ -154,10 +154,18 @@ def test_urgent_supplement_items_have_market_qty_numeric():
     # en los dos sitios de injection (tests por contrato del archivo).
     import shopping_calculator
     src = open(shopping_calculator.__file__, encoding="utf-8").read()
-    # Ambos paths (categorize + non-categorize) deben tener market_qty_numeric.
+    # [reapuntado P1-URGENT-LIST-CANONICAL · 2026-08-09] Antes exigía ≥2 ocurrencias porque
+    # las DOS ramas (categorize/flat) duplicaban el dict crudo; el refactor las unificó en el
+    # helper SSOT `_raw_urgent` (1 sitio) — «count(...)==N castiga el uso correcto del SSOT»
+    # (clase documentada). El contrato real: (a) el fallback crudo lleva el espejo numérico,
+    # (b) el path CANONICAL lo GARANTIZA aunque el agregador no lo traiga.
     occurrences = src.count('"market_qty_numeric": 1.0')
-    assert occurrences >= 2, \
-        f"esperado al menos 2 sitios con market_qty_numeric en urgent items, got {occurrences}"
+    assert occurrences >= 1, \
+        f"el fallback crudo de urgentes perdió market_qty_numeric (got {occurrences})"
+    i = src.index("def _tag_urgent")
+    win = src[i:i + 1200]
+    assert 'entry["market_qty_numeric"]' in win, \
+        "el tag canónico debe GARANTIZAR market_qty_numeric (P0-2) en toda entrada urgente"
 
 
 def test_apply_smart_market_units_result_contract():

@@ -12348,49 +12348,76 @@ def get_shopping_list_delta(
 
 
     # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
+    # [P1-URGENT-LIST-CANONICAL · 2026-08-09] Los urgentes son LÍNEAS DE RECETA por-comida
+    # («95 g de mango en cubos», «1 cdta de pimentón») — inyectarlas VERBATIM infló la lista del
+    # owner a 104 ítems (33 pseudo-productos), el contador «Marcas del súper» los contaba y el
+    # PDF mostraba absurdos («20 g de avena en hojuelas · 0.87 ud»). Ahora pasan por el MISMO
+    # agregador que reduce las líneas del plan a productos canónicos (funde duplicados: 3 líneas
+    # de mango → 1 Mango con su cantidad real). Fail-open: si el agregador falla o devuelve
+    # vacío con urgentes presentes, cae a la inyección cruda de siempre (mejor crudo que ausente
+    # — son compras de seguridad del modo flexible). tooltip-anchor: P1-URGENT-LIST-CANONICAL
     urgent_items = plan_result.get("_pantry_supplement_required", [])
     if urgent_items:
+        def _tag_urgent(entry):
+            if isinstance(entry, dict):
+                entry = dict(entry)
+                entry["category"] = "🚨 Compra Urgente"
+                entry["display_category"] = "🚨 Compra Urgente"
+                entry["is_staple"] = False
+                # [P1-PDF-2] urgentes = perecederos ("comprar pronto"), explícito.
+                entry["is_perishable"] = True
+                # [P0-2] contrato: espejo numérico SIEMPRE presente (el frontend no parsea
+                # "1 1/2"). Si la entrada del agregador no lo trae, se deriva o cae a 1.0.
+                if not isinstance(entry.get("market_qty_numeric"), (int, float)):
+                    try:
+                        entry["market_qty_numeric"] = float(entry.get("market_qty"))
+                    except (TypeError, ValueError):
+                        entry["market_qty_numeric"] = 1.0
+                _ds = str(entry.get("display_string") or entry.get("name") or "")
+                if not _ds.startswith("⚠️"):
+                    entry["display_string"] = f"⚠️ {_ds}"
+                return entry
+            return f"⚠️ {entry}"
+
+        def _raw_urgent(item):
+            return {
+                "name": item,
+                "market_qty": 1,
+                # [P0-2] Espejo numérico siempre presente (el frontend no parsea "1 1/2").
+                "market_qty_numeric": 1.0,
+                "market_unit": "ud",
+                "display_qty": item,
+                "display_string": f"⚠️ {item}",
+                "category": "🚨 Compra Urgente",
+                "display_category": "🚨 Compra Urgente",
+                "is_staple": False,
+                "is_perishable": True,
+            } if structured else f"⚠️ {item}"
+
+        _urgent_entries = None
+        try:
+            _canon = aggregate_and_deduct_shopping_list(
+                [str(i) for i in urgent_items], [],
+                categorize=False, structured=structured, multiplier=1.0)
+            if isinstance(_canon, list) and _canon:
+                _urgent_entries = [_tag_urgent(e) for e in _canon]
+                logging.info(
+                    f"🧺 [P1-URGENT-LIST-CANONICAL] {len(urgent_items)} línea(s) urgente(s) "
+                    f"→ {len(_urgent_entries)} producto(s) canónicos en la lista")
+        except Exception as _uc_exc:
+            logging.warning(
+                f"[P1-URGENT-LIST-CANONICAL] canonicalización falló, inyección cruda "
+                f"(fail-open): {type(_uc_exc).__name__}: {_uc_exc}")
+        if _urgent_entries is None:
+            _urgent_entries = [_raw_urgent(item) for item in urgent_items]
+
         if categorize:
             if isinstance(res, dict):
-                res["🚨 Compra Urgente"] = []
-                for item in urgent_items:
-                    res["🚨 Compra Urgente"].append({
-                        "name": item,
-                        "market_qty": 1,
-                        # [P0-2] Espejo numérico siempre presente para que el
-                        # frontend nunca tenga que parsear `market_qty` (que
-                        # en otros items puede venir como "1 1/2"/"1/2").
-                        "market_qty_numeric": 1.0,
-                        "market_unit": "ud",
-                        "display_qty": item,
-                        "display_string": f"⚠️ {item}",
-                        "category": "🚨 Compra Urgente",
-                        "display_category": "🚨 Compra Urgente",
-                        "is_staple": False,
-                        # [P1-PDF-2] Items urgentes son siempre perecederos
-                        # ("comprar pronto"). El helper también lo deriva por
-                        # substring "urgente" pero lo marcamos explícito para
-                        # robustez (independiente de cualquier renombre futuro).
-                        "is_perishable": True,
-                    } if structured else f"⚠️ {item}")
+                res["🚨 Compra Urgente"] = list(_urgent_entries)
         else:
             if isinstance(res, list):
-                for item in urgent_items:
-                    res.append({
-                        "name": item,
-                        "market_qty": 1,
-                        # [P0-2] Espejo numérico — ver comentario equivalente arriba.
-                        "market_qty_numeric": 1.0,
-                        "market_unit": "ud",
-                        "display_qty": item,
-                        "display_string": f"⚠️ {item}",
-                        "category": "🚨 Compra Urgente",
-                        "display_category": "🚨 Compra Urgente",
-                        "is_staple": False,
-                        # [P1-PDF-2] Ver comentario equivalente arriba.
-                        "is_perishable": True,
-                    } if structured else f"⚠️ {item}")
-    
+                res.extend(_urgent_entries)
+
     return res
 
 
