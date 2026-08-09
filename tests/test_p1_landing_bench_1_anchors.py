@@ -274,11 +274,30 @@ def test_structural_facts_are_derived_and_honest():
     facts = structural_facts()
     assert facts["micronutrientes_dri"] == 17, (
         "los micros DRI cambiaron — actualizar systemFacts.js Y el copy del landing")
-    # El hallazgo de producto (2026-08-07): condiciones con regla backend que el
-    # formulario YA NO puede expresar (texto libre retirado). Si esto cambia (p.ej.
-    # se añade el chip ERC), actualizar docs/landing_benchmarks.md §Hallazgos.
-    assert "renal" in facts["condiciones_solo_backend"]
-    assert "maoi" in facts["medicaciones_solo_backend"]
+    # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] HALLAZGO CERRADO — aserción INVERTIDA
+    # a propósito, no relajada.
+    #
+    # Este test codificaba el hallazgo del 2026-08-07: `renal` y `maoi` tenían
+    # regla clínica y el formulario no podía expresarlas. Su propio comentario
+    # decía «si se añade el chip ERC, actualizar docs/landing_benchmarks.md
+    # §Hallazgos» — es exactamente lo que pasó: se añadieron los 5 chips que
+    # faltaban (renal, anemia, gota, hígado graso, IMAO).
+    #
+    # Ahora afirma lo contrario, y con más fuerza: NINGUNA regla puede quedarse
+    # fuera del alcance del formulario. Dejarlo como estaba habría sido preservar
+    # el bug en forma de test; relajarlo a «no compruebes nada» habría perdido la
+    # vigilancia. Si mañana se añade una regla clínica sin su chip, esto cae.
+    assert not facts["condiciones_solo_backend"], (
+        "P1-MEDICAL-SCOPE-GATE: hay reglas de condición inalcanzables desde el "
+        f"formulario: {facts['condiciones_solo_backend']}. Una regla sin chip es una "
+        "capa clínica que el usuario no puede activar y de cuya ausencia no se entera."
+    )
+    assert not facts["medicaciones_solo_backend"], (
+        "P1-MEDICAL-SCOPE-GATE: hay reglas de medicamento inalcanzables desde el "
+        f"formulario: {facts['medicaciones_solo_backend']}. El caso original fue `maoi` "
+        "(tiramina↔IMAO, crisis hipertensiva): el motor sabía protegerte y el wizard "
+        "no dejaba decirlo."
+    )
     assert facts["reglas_condicion_backend"] >= len(facts["condiciones_alcanzables_desde_formulario"])
 
 

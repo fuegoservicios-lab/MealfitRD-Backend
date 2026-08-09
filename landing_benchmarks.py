@@ -29,19 +29,35 @@ from __future__ import annotations
 #    tooltip-anchor: P1-LANDING-BENCH-1-CHIPS
 # ════════════════════════════════════════════════════════════════════════════════════════════
 
+# [P1-MEDICAL-SCOPE-GATE · 2026-08-09] +4 chips. `renal`, `anemia`, `gout` y `nafld`
+# tenían regla clínica completa y NO eran declarables desde el wizard: quien las tenía
+# recibía un plan sin ninguna de sus reglas y sin aviso. Con esto, el hallazgo del audit
+# «renal ya NO expresable desde el form» (docs/landing_benchmarks.md) queda cerrado.
+#
+# NO incluye el chip «Otra condición (no listada)»: ese no es una condición clínica sino
+# la señal del gate de alcance (bloquea la generación, ver `_has_out_of_scope_clinical_
+# declaration` en routers/plans.py). Meterlo aquí haría que el benchmark intentara
+# generar perfiles que el propio sistema rechaza por diseño.
 FORM_CONDITION_CHIPS = (
     "Diabetes T2", "Hipertensión", "Colesterol Alto", "Gastritis",
     "SOP (PCOS)", "Hipotiroidismo", "Cirugía Bariátrica",
+    "Enfermedad Renal", "Anemia", "Gota / Ácido Úrico", "Hígado Graso",
 )
 
 # Solo visibles con gender=female (QMedical.jsx / PREGNANCY_CHIP_LABELS); comparten
 # el array medicalConditions y están EXENTOS del cap de 3 condiciones.
 FORM_PREGNANCY_CHIPS = ("Embarazo", "Lactancia")
 
+# [P1-MEDICAL-SCOPE-GATE · 2026-08-09] +«Antidepresivo IMAO». Era el ÚNICO chip cuya
+# regla (`maoi`, tiramina — quesos curados, embutidos, fermentados) no tenía forma de
+# dispararse desde el wizard, y es la interacción más peligrosa del registry: tiramina
+# + IMAO es crisis hipertensiva. Mismo criterio que arriba — «Otro medicamento (no
+# listado)» NO entra: es señal de gate, no un fármaco.
 FORM_MEDICATION_CHIPS = (
     "Metformina", "Insulina", "Glibenclamida", "Lisinopril", "Losartán",
     "Amlodipina", "Hidroclorotiazida", "Espironolactona", "Atorvastatina",
     "Levotiroxina", "Omeprazol", "Prednisona", "Warfarina", "Alopurinol",
+    "Antidepresivo IMAO",
 )
 
 FORM_ALLERGY_CHIPS = ("Lacteos", "Gluten", "Huevo", "Mariscos", "Frutos Secos", "Soya")
@@ -62,6 +78,11 @@ CONDITION_CHIP_EXPECTED_RULE = {
     "Cirugía Bariátrica": "bariatric",
     "Embarazo": "pregnancy",
     "Lactancia": "pregnancy",
+    # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] Los 4 que tenian regla y no tenian chip.
+    "Enfermedad Renal": "renal",
+    "Anemia": "anemia",
+    "Gota / Ácido Úrico": "gout",
+    "Hígado Graso": "nafld",
 }
 
 MEDICATION_CHIP_EXPECTED_RULE = {
@@ -79,6 +100,8 @@ MEDICATION_CHIP_EXPECTED_RULE = {
     "Prednisona": "corticosteroid",
     "Warfarina": "anticoagulant",
     "Alopurinol": "gout",
+    # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] El unico fármaco del registry sin chip.
+    "Antidepresivo IMAO": "maoi",
 }
 
 
@@ -206,6 +229,39 @@ def build_landing_profiles() -> list:
                 conditions=["Diabetes T2"], medications=["Metformina"],
                 expect=e(diet="vegan", condition_rules=["dm2"],
                          medication_rules=["metformin"], fs9=True)),
+        # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] Perfiles 21-25: los 5 chips que el
+        # motor sabía manejar y el formulario no dejaba declarar. Sin estos, la
+        # matriz mediría un formulario que ya no existe.
+        #
+        # El 21 es el que más aporta: la ERC no solo activa su regla, activa las
+        # DOS ramas de precedencia que `build_condition_prompt` tiene escritas
+        # (dm2+renal y hta+renal, donde el potasio del patrón DASH choca con la
+        # moderación renal). Hasta ahora ese código no era alcanzable desde un
+        # perfil del formulario, así que nunca se ejercitaba.
+        _perfil(21, "renal_hta", gender="male", age=67, weight=79, height=170,
+                goal="maintenance", activity="sedentary",
+                conditions=["Enfermedad Renal", "Hipertensión"], medications=["Losartán"],
+                expect=e(condition_rules=["renal", "hta"], medication_rules=["ace_arb"],
+                         fs9=True)),
+        _perfil(22, "anemia_ferropenica", gender="female", age=29, weight=54, height=161,
+                goal="maintenance", activity="moderate",
+                conditions=["Anemia"],
+                expect=e(condition_rules=["anemia"])),
+        _perfil(23, "gota_alopurinol", gender="male", age=52, weight=94, height=175,
+                goal="lose_fat", activity="light",
+                conditions=["Gota / Ácido Úrico"], medications=["Alopurinol"],
+                expect=e(condition_rules=["gout"], medication_rules=["gout"], fs9=True)),
+        _perfil(24, "higado_graso", gender="male", age=48, weight=98, height=173,
+                goal="lose_fat", activity="sedentary",
+                conditions=["Hígado Graso"],
+                expect=e(condition_rules=["nafld"])),
+        # Tiramina + IMAO = crisis hipertensiva. Es la interacción más peligrosa
+        # del registry y hasta hoy NINGÚN perfil podía activarla, porque el chip
+        # no existía.
+        _perfil(25, "imao_tiramina", gender="female", age=41, weight=68, height=165,
+                goal="maintenance", activity="light",
+                medications=["Antidepresivo IMAO"],
+                expect=e(medication_rules=["maoi"], fs9=True)),
     ]
 
 

@@ -126,13 +126,24 @@ deploy, re-correr los ids `3,4,9,10,13,17,19,20` y comparar contra la línea bas
 
 ## Hallazgos de producto del análisis del formulario (2026-08-07)
 
-1. **Condiciones solo-backend**: `structural.condiciones_solo_backend = [anemia, gout, nafld, renal]`
-   — el backend tiene reglas para ellas pero el formulario **ya no puede expresarlas** (el texto
-   libre se retiró el 2026-08-01). Implicación landing: el sub de CAPS dice «DM2 · renal · HTA ·
-   alergias» — *renal* hoy solo llega desde perfiles legacy; decidir si (a) se añade el chip ERC,
-   o (b) se ajusta el copy. Misma situación `maoi` en medicaciones (IMAO sin chip).
-2. **Medicamentos fuera de los 14 chips quedan sin capturar en silencio** (nota en QMedical.jsx) —
-   el benchmark solo puede cubrir lo que el formulario puede decir.
+1. ~~**Condiciones solo-backend**: `[anemia, gout, nafld, renal]` — el backend tiene reglas y el
+   formulario no puede expresarlas.~~ **CERRADO [P1-MEDICAL-SCOPE-GATE · 2026-08-09]**: se optó
+   por (a), añadir los chips. El wizard ofrece ahora `Enfermedad Renal`, `Anemia`,
+   `Gota / Ácido Úrico` e `Hígado Graso`, y `Antidepresivo IMAO` en medicamentos —
+   `condiciones_solo_backend` y `medicaciones_solo_backend` quedan **vacíos**, y el test ancla
+   invirtió su aserción para exigir que sigan vacíos: una regla clínica sin chip es una capa que
+   el usuario no puede activar y de cuya ausencia no se entera. El sub de CAPS del landing («DM2 ·
+   renal · HTA · alergias») deja de ser una promesa que el formulario no podía cumplir.
+   Matriz: +5 perfiles (21-25). El 21 (`renal_hta`) es el que más aporta — activa las dos ramas de
+   precedencia de `build_condition_prompt` (dm2+renal, hta+renal) que hasta ahora ningún perfil del
+   formulario podía alcanzar.
+2. ~~**Medicamentos fuera de los 14 chips quedan sin capturar en silencio.**~~ **CERRADO
+   [P1-MEDICAL-SCOPE-GATE · 2026-08-09]**: ya no es silencio. Lo no listado se declara con los chips
+   `Otra condición` / `Otro medicamento`, y esa señal **bloquea la generación** (422
+   `clinical_scope_exceeded`, en las dos puertas: `/analyze` y `/analyze/stream`). El gate compara
+   por VALOR EXACTO, nunca por subcadena — un blocklist sobre prosa sería la 17ª de esa clase en
+   este repo, y aquí un falso positivo deniega servicio y un falso negativo entrega un plan
+   inseguro. Estos dos chips NO entran en `FORM_*_CHIPS`: no son clínica, son la señal del gate.
 3. **«4 a 5 minutos» (FAQ) no tiene fuente** — `latency.generation_s`/`telemetry` la miden; el
    baseline del gym (2026-07-03) tenía mediana ~10 min con outliers de 20 (motor pre-P1-FLASH-PRIMARY).
    Verificar antes de sostener el claim.

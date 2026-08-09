@@ -845,6 +845,47 @@ def _is_pregnancy_or_lactation_condition_item(value: str) -> bool:
     return normalized in _PREGNANCY_CHIP_LABELS_CANONICAL
 
 
+# ============================================================
+# [P1-MEDICAL-SCOPE-GATE · 2026-08-09] FUERA DEL ALCANCE CLÍNICO → NO SE GENERA.
+# ------------------------------------------------------------
+# El motor aplica reglas de un registry ACOTADO: `condition_rules.CONDITION_RULES`
+# (12) y `medication_rules.MEDICATION_RULES` (13). Lo que cae fuera no producía ni
+# regla ni aviso — se generaba un plan como si el usuario no hubiera declarado nada.
+# Estos dos literales son la señal explícita que el wizard emite para «tengo algo
+# que no está en tu lista», y aquí se rechaza.
+#
+# SON LITERALES EXACTOS, NO PALABRAS SUELTAS QUE BUSCAR EN PROSA. `detect_active_rules`
+# matchea por SUBCADENA y este repo lleva 16 incidentes de esa clase; un blocklist
+# sobre texto libre sería el 17º, y aquí las dos direcciones del error son graves
+# (falso positivo = denegar servicio; falso negativo = entregar plan inseguro).
+# Por eso la comparación es de igualdad sobre el valor canónico.
+#
+# Espejo de `OUT_OF_SCOPE_CONDITION`/`OUT_OF_SCOPE_MEDICATION` en
+# `frontend/src/components/assessment/questions/QMedical.jsx`. Si drifean, el gate
+# deja de reconocer lo que el formulario emite y el bloqueo se evapora EN SILENCIO
+# — por eso `test_p1_medical_scope_gate.py` ancla que los 4 literales coincidan.
+_OUT_OF_SCOPE_CONDITION = "Otra condición (no listada)"
+_OUT_OF_SCOPE_MEDICATION = "Otro medicamento (no listado)"
+
+
+def _has_out_of_scope_clinical_declaration(data: dict) -> bool:
+    """¿El usuario declaró una condición o fármaco fuera del registry clínico?
+
+    Igualdad sobre el valor canónico (normalizado a minúsculas + strip), nunca
+    contención: el punto de este gate es no depender de interpretar prosa.
+    """
+    def _declared(field: str, sentinel: str) -> bool:
+        raw = data.get(field)
+        items = raw if isinstance(raw, (list, tuple, set)) else ([raw] if raw else [])
+        target = sentinel.strip().lower()
+        return any(str(x).strip().lower() == target for x in items)
+
+    return (
+        _declared("medicalConditions", _OUT_OF_SCOPE_CONDITION)
+        or _declared("medications", _OUT_OF_SCOPE_MEDICATION)
+    )
+
+
 def _validate_medical_conditions_cap(data: dict) -> tuple[bool, int, int]:
     """Valida que `medicalConditions` no exceda el cap de condiciones reales.
 
@@ -3152,6 +3193,24 @@ def api_analyze(
                 },
             )
 
+        # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] SEGUNDA CAPA del gate de alcance
+        # clínico (la primera es el botón deshabilitado de QMedical.jsx). Va ANTES
+        # del cap: si el perfil está fuera de alcance, cuántas condiciones marcó es
+        # irrelevante. Fail-secure y explícito — nunca degradar a "genero igual".
+        if _has_out_of_scope_clinical_declaration(data):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "clinical_scope_exceeded",
+                    "message": (
+                        "Todavía no podemos calcular un plan seguro para una condición o "
+                        "medicamento fuera de nuestra lista clínica verificada. Preferimos "
+                        "decírtelo antes que entregarte un plan que parezca calculado y no "
+                        "lo esté."
+                    ),
+                },
+            )
+
         # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01] Cap de condiciones médicas
         # simultáneas — decisión de producto del owner. Ver docstring de
         # `_validate_medical_conditions_cap` para el rationale completo.
@@ -3564,6 +3623,24 @@ async def api_analyze_stream(
                     "message": (
                         f"Faltan campos críticos para generar tu plan: {', '.join(_missing)}. "
                         f"Completa el formulario antes de continuar."
+                    ),
+                },
+            )
+
+        # [P1-MEDICAL-SCOPE-GATE · 2026-08-09] Mismo gate de alcance que el endpoint
+        # sync, y por el mismo motivo por el que el cap de abajo se duplica aquí:
+        # son DOS puertas de generación y una guarda en una sola es un agujero.
+        # También antes de abrir el StreamingResponse (JSON estándar > evento SSE).
+        if _has_out_of_scope_clinical_declaration(data):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "clinical_scope_exceeded",
+                    "message": (
+                        "Todavía no podemos calcular un plan seguro para una condición o "
+                        "medicamento fuera de nuestra lista clínica verificada. Preferimos "
+                        "decírtelo antes que entregarte un plan que parezca calculado y no "
+                        "lo esté."
                     ),
                 },
             )
