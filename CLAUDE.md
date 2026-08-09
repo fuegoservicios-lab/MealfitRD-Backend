@@ -187,6 +187,10 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 
 [P2-PAPER-NO-INK · 2026-08-01] Las 6 rutas de marketing pasan de oscuro a blanco y negro estricto («papel técnico») vía un 4º `data-theme="paper"`; dashboard intacto. `P3-LANDING-DARK-ONLY` (landing sin configuración de apariencia, siempre oscuro) queda **SUPERSEDED**: el dueño la anuló a sabiendas del precedente en `feedback_marketing_design_minimalist_scientific.md` (dos reverts 2026-07-02 pedían NO monocromatizar los centerpieces). Spec + estado real (nada mergeado aún, benchmark pendiente de decisión): [`docs/superpowers/specs/2026-08-01-landing-papel-tecnico-design.md`](docs/superpowers/specs/2026-08-01-landing-papel-tecnico-design.md).
 
+### `P1-HERO-DEDUP-ACCENT` (el acento del landing) — supersede parcial de `P2-PAPER-NO-INK`
+
+[P1-HERO-DEDUP-ACCENT · 2026-08-09] Nace `--pa-accent: #C1200E` (5,83:1 contra el papel en AMBAS direcciones), la única tinta de color del sistema. **Marca LA CIFRA de un SSOT — condición necesaria, no suficiente**: 2 call sites (cotas de la Fig. 00, numeral de créditos), nunca en un control ni en el CTA (el botón ya es la única tinta sólida de la pantalla: teñirlo REBAJA la jerarquía). Cierra además 7 duplicaciones hero↔header↔franja, incluida la franja de 5 celdas de la que 4 reformulaban el párrafo de encima. El titular perdió su `<br />` fijo: `text-wrap: balance` es load-bearing (sin él vuelve la línea huérfana). Spec: [`docs/superpowers/specs/2026-08-09-hero-landing-llamativo-design.md`](docs/superpowers/specs/2026-08-09-hero-landing-llamativo-design.md). Test [`test_p1_hero_dedup_accent.py`](backend/tests/test_p1_hero_dedup_accent.py).
+
 ---
 
 ## Advisors aceptados (no actuar)
