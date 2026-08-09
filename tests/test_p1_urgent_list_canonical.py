@@ -111,6 +111,20 @@ def test_scoping_fail_safe():
     assert ct._meal_scoped_missing(None, ["x"]) == []
 
 
+def test_restock_nace_categorizado():
+    # Las 49 filas del restock del owner nacieron con category NULL → todas caían en la
+    # pestaña Alacena mientras el header contaba 49 y «Nevera» decía vacía. El INSERT del
+    # inventario debe llevar la categoría del master (ya resuelto en la misma función).
+    di = open(os.path.join(os.path.dirname(__file__), "..", "db_inventory.py"),
+              encoding="utf-8").read()
+    i = di.index("INSERT INTO user_inventory")
+    win = di[i:i + 900]
+    assert "category" in win.split("VALUES")[0], "el INSERT debe incluir la columna category"
+    assert "category = COALESCE(EXCLUDED.category, user_inventory.category)" in win, (
+        "on-conflict no debe borrar una categoría existente con NULL")
+    assert "master_category" in di[i:i + 1400], "la categoría viene del master ya resuelto"
+
+
 def test_frontend_ceil_de_empaques():
     dj = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src",
                            "pages", "Dashboard.jsx"), encoding="utf-8").read()

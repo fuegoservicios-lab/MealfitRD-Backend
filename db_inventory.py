@@ -1413,6 +1413,13 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
         master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
         master_id_raw = master_item.get("id", None) if master_item else None
         master_id = str(master_id_raw) if master_id_raw is not None else None
+        # [P1-URGENT-LIST-CANONICAL · 2026-08-09] La categoría viaja al INSERT: las 49 filas
+        # del restock del owner nacieron con category NULL → getZoneForCategory(null)='pantry'
+        # → TODAS caían en la pestaña Alacena mientras el header contaba 49 y la pestaña
+        # Nevera decía «vacía». Con la categoría del master (ya resuelto aquí mismo), cada
+        # ítem nace en su zona real (Frutas→gaveta, Lácteos→estante, Despensa→alacena).
+        master_category = (str(master_item.get("category")).strip()
+                           if master_item and master_item.get("category") else None)
 
         updated = False
 
@@ -1609,13 +1616,14 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                     """
                     INSERT INTO user_inventory
                         (user_id, ingredient_name, quantity, unit,
-                         master_ingredient_id, last_mutation_type, source, brand)
-                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s, %s)
+                         master_ingredient_id, last_mutation_type, source, brand, category)
+                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s, %s, %s)
                     ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE
                         SET quantity = user_inventory.quantity + EXCLUDED.quantity,
                             master_ingredient_id = COALESCE(EXCLUDED.master_ingredient_id, user_inventory.master_ingredient_id),
                             last_mutation_type = EXCLUDED.last_mutation_type,
-                            brand = COALESCE(EXCLUDED.brand, user_inventory.brand)
+                            brand = COALESCE(EXCLUDED.brand, user_inventory.brand),
+                            category = COALESCE(EXCLUDED.category, user_inventory.category)
                     """,
                     (
                         user_id,
@@ -1626,6 +1634,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                         mutation_type,
                         source,
                         (str(brand).strip() or None) if brand else None,
+                        master_category,
                     ),
                 )
             elif quantity < 0 and existing_rows:
