@@ -64,6 +64,32 @@ def test_clausula_legumbre_seca():
     )
 
 
+def test_canela_gana_ceilan_y_ceilan_declarada_absuelve():
+    # residual medido corr=9909fb32: cumarina de la Cassia — «reducir a pizca o Ceilán».
+    p1 = {"days": [{"meals": [{"name": "Avena con canela",
+                               "ingredients": ["30 g de avena", "1 cdta de canela"],
+                               "recipe": []}]}]}
+    go._apply_pregnancy_food_safety_annotations(p1, {"medicalConditions": ["Embarazo"]})
+    assert any("Ceilán" in str(s) for s in p1["days"][0]["meals"][0]["recipe"])
+    p2 = {"days": [{"meals": [{"name": "Avena",
+                               "ingredients": ["1 pizca de canela de Ceilán"],
+                               "recipe": []}]}]}
+    go._apply_pregnancy_food_safety_annotations(p2, {"medicalConditions": ["Embarazo"]})
+    assert not any("Cassia" in str(s) for s in p2["days"][0]["meals"][0]["recipe"]), (
+        "el ingrediente ya nombra Ceilán — la cláusula sobra")
+
+
+def test_fruta_y_hierba_ganan_lavado():
+    # residual medido corr=9909fb32: «no explicitadas para TODOS los platos» — la versión
+    # hojas-only dejaba mango/cilantro fuera y el reviewer generalizaba el rechazo.
+    p = {"days": [{"meals": [{"name": "Pollo guisado con mango y cilantro",
+                              "ingredients": ["150 g de pollo", "80 g de mango",
+                                              "5 g de cilantro"],
+                              "recipe": []}]}]}
+    go._apply_pregnancy_food_safety_annotations(p, {"medicalConditions": ["Embarazo"]})
+    assert any("lava y desinfecta" in str(s) for s in p["days"][0]["meals"][0]["recipe"])
+
+
 def test_legumbre_cocida_no_gana_clausula():
     plan = {"days": [{"meals": [{"name": "Habichuelas guisadas",
                                  "ingredients": ["100 g de habichuelas rojas guisadas"],

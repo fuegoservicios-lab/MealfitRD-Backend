@@ -17467,10 +17467,27 @@ _PREGNANCY_SAFETY_CLAUSES = (
      ("74 °c", "74°c", "hasta que humee"),
      "calienta los embutidos/carnes tipo deli hasta que humeen (74 °C) y sírvelos al momento — "
      "fríos hay riesgo de listeria"),
+    # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Generalizada tras el residual medido
+    # (corr=9909fb32: «lavado… no explicitadas para TODOS los platos» — la versión hojas-only
+    # dejaba frutas/hierbas fuera y el reviewer generalizaba el rechazo). El lavado es guía
+    # válida aunque el producto se cocine después.
     ("hojas", ("espinaca", "espinacas", "rucula", "arugula", "lechuga", "repollo",
-               "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy"),
+               "berro", "berros", "acelga", "acelgas", "kale", "col rizada", "bok choy",
+               "cilantro", "perejil", "albahaca", "tomate", "pepino", "zanahoria", "apio",
+               "remolacha", "mango", "lechosa", "papaya", "pina", "fresa", "fresas",
+               "guineo", "banana", "melon", "sandia", "uva", "uvas", "manzana", "pera",
+               "chinola", "maracuya", "limon", "naranja", "toronja", "aguacate", "kiwi",
+               "granada", "guayaba"),
      ("desinfecta",),
-     "lava y desinfecta bien las hojas y vegetales que se sirvan crudos"),
+     "lava y desinfecta las frutas, verduras y hierbas frescas antes de usarlas (aunque "
+     "se vayan a cocinar)"),
+    # [P1-REVIEWER-SEES-SAFETY-NOTES · 2026-08-09] Canela: residual medido corr=9909fb32
+    # («1 cucharadita de canela… debe reducirse a una pizca o sustituirse por canela de
+    # Ceilán» — cumarina de la Cassia). La absolución «ceilan» aplica también si el
+    # ingrediente ya la nombra (covered escanea receta + nombre + ingredientes).
+    ("canela", ("canela",),
+     ("ceilan",),
+     "usa canela de Ceilán (no Cassia) y limítala a una pizca durante el embarazo"),
     ("papaya", ("lechosa", "papaya"),
      ("completamente madura",),
      "usa la lechosa/papaya COMPLETAMENTE madura (verde o pintona está contraindicada)"),
@@ -17544,7 +17561,9 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                 for _key, _toks, _covered, _text in _PREGNANCY_SAFETY_CLAUSES:
                     if not any(_name_has_token(_t, blob) for _t in _toks):
                         continue
-                    if any(_sa_psn(c) in rec_blob for c in _covered):
+                    # covered escanea receta + nombre + ingredientes: «canela de Ceilán» o
+                    # «leche pasteurizada» EN la línea del ingrediente también absuelven.
+                    if any(_sa_psn(c) in rec_blob or _sa_psn(c) in blob for c in _covered):
                         continue  # el LLM ya escribió la instrucción con sus palabras
                     if _key == "mariscos":
                         # solo lata ("atún en agua" ni siquiera matchea; "sardinas en lata" sí):
@@ -17556,8 +17575,9 @@ def _apply_pregnancy_food_safety_annotations(plan: dict, form_data: dict) -> int
                                 _PREGNANCY_CANNED_RX.search(_l) for _l in _marine_lines):
                             continue
                     clauses.append(_text)
-                # lácteos por LÍNEA (la leche vegetal absuelve su línea, no el plato entero)
-                if "pasteuriz" not in rec_blob:
+                # lácteos por LÍNEA (la leche vegetal absuelve su línea, no el plato entero;
+                # «leche pasteurizada» en cualquier línea absuelve el plato)
+                if "pasteuriz" not in rec_blob and "pasteuriz" not in blob:
                     for _l in ings:
                         _ll = _sa_psn(_l.lower())
                         if (any(_name_has_token(_t, _ll) for _t in _PREGNANCY_DAIRY_TOKENS)
