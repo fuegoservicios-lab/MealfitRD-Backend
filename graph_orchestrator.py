@@ -22693,6 +22693,28 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
     return out
 
 
+def _refresh_variety_report_for_gates(plan: dict, form_data: dict) -> None:
+    """[P1-VARIETY-REPORT-FRESH · 2026-08-09] Recompute de `plan["variety_report"]` en el punto de
+    DECISIÓN (review), sobre los días actuales. El reporte nace en la capa clínica (dentro de
+    `_apply_macro_engine`), pero el tail de assemble sigue mutando los días DESPUÉS (P0-BAND-PRE-REVIEW,
+    P1-SAMEDAY-BURN-FIX, P1-FRUIT-SAVORY-BURN-FIX, phantom-dairy, grain-dry, dup-merge…) → el gate
+    juzgaba con un reporte RANCIO. Medido en los N=20 del 2026-08-08/09: 10 correlaciones con
+    "re-autofix … → después: limpio" seguido del rechazo 🍓 por la repetición YA corregida
+    (e67afefd y 66512b91 quemaron sus DOS intentos así, y la directiva de retry le acusaba al LLM
+    un defecto que el plan ya no tenía). Corta en las dos direcciones: también VE la repetición
+    que un pase tardío introdujo (el reporte viejo la absolvía). Mismo `user_staples` que el
+    productor (paridad de la exención staple+técnica). Fail-safe: si el recompute falla, el
+    reporte previo se conserva (rancio > ausente). tooltip-anchor: P1-VARIETY-REPORT-FRESH"""
+    if not isinstance(plan, dict) or not plan.get("days"):
+        return
+    try:
+        plan["variety_report"] = build_variety_report(
+            plan, user_staples=_user_staple_labels(form_data))
+    except Exception as _vrf_e:
+        logger.warning(f"[P1-VARIETY-REPORT-FRESH] recompute no-op (se conserva el reporte "
+                       f"previo): {type(_vrf_e).__name__}: {_vrf_e}")
+
+
 # [P3-SLOT-DISTRIBUTION · 2026-06-13] Mapa nombre-de-slot (es-DO) → key del split canónico.
 _SLOT_KEY_MAP = {
     "desayuno": "desayuno", "breakfast": "desayuno",
@@ -23833,9 +23855,12 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     if VARIETY_REPORT_ENABLED:
         try:
             # [P1-STAPLE-FOODS · 2026-08-02] user_staples alimenta la exención staple+técnica-
-            # distinta del gate same-day-protein — esta es la ÚNICA llamada que produce el
-            # variety_report que `should_retry`/`_variety_repeat_gate_issues` consumen para
-            # decidir el rechazo (ver plan.get("variety_report") en ambos).
+            # distinta del gate same-day-protein. [P1-VARIETY-REPORT-FRESH · 2026-08-09] Este
+            # reporte YA NO es el que los gates del review juzgan: el tail de assemble sigue
+            # mutando los días después de aquí, así que `review_plan_node` lo REFRESCA con
+            # `_refresh_variety_report_for_gates` justo antes de consumirlo. Esta llamada queda
+            # como productor para los consumidores de mitad de assemble y los paths que no
+            # pasan por review (fallbacks).
             plan["variety_report"] = build_variety_report(plan, user_staples=_user_staple_labels(form_data))
         except Exception as _vr_e:
             logger.warning(f"[P3-VARIETY] error: {type(_vr_e).__name__}: {_vr_e}")
@@ -39855,6 +39880,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 "iatrogénico; se entrega un plan de contingencia renal-capeado en su lugar."
             )
             severity = _severity_max(severity, "critical")
+
+    # [P1-VARIETY-REPORT-FRESH · 2026-08-09] El reporte que los gates de abajo consumen se computó
+    # a MITAD de assemble; el tail siguió mutando los días (autofixes tardíos, phantom-dairy, merges).
+    # Refrescarlo AQUÍ garantiza que el gate juzga los días que realmente va a entregar — sin esto,
+    # el review rechazaba repeticiones YA corregidas (10 correlaciones medidas en los N=20 del
+    # 2026-08-08/09) y era ciego a las introducidas después del reporte.
+    _refresh_variety_report_for_gates(plan, form_data)
 
     # [P3-VARIETY-HARD-GATE · 2026-06-13] Cap de huevo como restricción DURA (era advisory FS5).
     # Si el huevo aparece en > cap + slack comidas, rechaza → retry con directiva. ACOTADO por
