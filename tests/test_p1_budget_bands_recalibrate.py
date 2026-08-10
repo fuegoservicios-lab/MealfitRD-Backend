@@ -142,3 +142,14 @@ def test_the_minimum_message_also_states_the_expectation():
         "backend, no de una constante repetida en el frontend — si se duplica, el día "
         "que se recalibren las bandas el formulario seguirá diciendo el número viejo."
     )
+    # La expectativa tiene que estar en las DOS ramas del mensaje. La primera
+    # versión de este P-fix solo la puso en la rama normal, y el owner lo vio en
+    # producción: quien escribe un monto POR DEBAJO del mínimo —justo el que más
+    # necesita saber cuánto cuesta un plan— seguía viendo solo el piso.
+    ramas = re.findall(r"typicalCost \?", jsx)
+    assert len(ramas) >= 2, (
+        f"P1-BUDGET-BANDS-RECALIBRATE: la expectativa aparece en {len(ramas)} rama(s) "
+        "del mensaje. Debe estar tanto en el aviso de «por debajo del mínimo» como en "
+        "el texto normal — dar el piso sin la expectativa es el defecto que este "
+        "P-fix corrige, y dejarlo solo en una rama lo corrige a medias."
+    )
