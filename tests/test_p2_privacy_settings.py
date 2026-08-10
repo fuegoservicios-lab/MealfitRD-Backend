@@ -90,10 +90,16 @@ def test_export_payload_hygiene():
 
 
 def test_marker_bumped():
+    """[reparado P1-OAUTH-CHALLENGE-COOKIE · 2026-08-10] Antes exigía la subcadena
+    literal «2026-07» en el marker, así que caducó al llegar agosto y llevaba en
+    rojo desde entonces. Un mes es una subcadena, no una comparación: lo que
+    quería decir era «no anterior a este P-fix»."""
     src = _read(_APP)
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
     assert m, "No se encontró _LAST_KNOWN_PFIX."
-    assert "2026-07" in m.group(1), f"Marker sospechosamente viejo: {m.group(1)!r}"
+    fecha = re.search(r"(\d{4}-\d{2}-\d{2})", m.group(1))
+    assert fecha, f"el marker no lleva fecha legible: {m.group(1)!r}"
+    assert fecha.group(1) >= "2026-07-04", f"Marker sospechosamente viejo: {m.group(1)!r}"
 
 
 def test_frontend_privacy_section_wired():
