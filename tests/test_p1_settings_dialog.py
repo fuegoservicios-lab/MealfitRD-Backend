@@ -175,6 +175,54 @@ def test_the_entry_points_pass_the_background_location():
     )
 
 
+# ── 5. Acabado visual ───────────────────────────────────────────────────────
+
+def test_the_panel_does_not_paint_a_focus_ring_around_itself():
+    """[P1-SETTINGS-DIALOG-POLISH · 2026-08-10] EL CERCO BLANCO AL REFRESCAR, que
+    reportó el dueño.
+
+    El hook de a11y enfoca el panel al abrirlo para que un lector de pantalla lo
+    anuncie. Refrescar es una acción de TECLADO (F5 / Ctrl+R), así que la
+    heurística `:focus-visible` de Chrome da por hecho que el usuario navega con
+    teclado y le pinta al panel su anillo por defecto: blanco, rodeando la
+    ventana entera.
+
+    Quitarlo NO es perder accesibilidad: es un destino de foco programático
+    (`tabindex="-1"`) que nadie puede tabular. El anillo significa algo en los
+    controles de dentro, y ahí sigue intacto."""
+    css = _strip_comments(
+        (_SRC / "components" / "dashboard" / "SettingsDialog.module.css").read_text(encoding="utf-8")
+    )
+    bloque = re.search(r"\.panel:focus[^{]*\{([^}]*)\}", css)
+    assert bloque and "outline: none" in bloque.group(1), (
+        "P1-SETTINGS-DIALOG: el panel vuelve a pintar su anillo de foco. Como se "
+        "enfoca solo al abrir, cualquier apertura con el teclado (refrescar, por "
+        "ejemplo) dibuja un cerco blanco alrededor de toda la ventana."
+    )
+
+
+def test_the_dialog_flattens_the_page_chrome():
+    """Una superficie elevada no necesita elevar a sus hijos. Dentro de la
+    ventana, la lista de secciones y el panel de contenido dejan de ser tarjetas
+    con borde, sombra y blur — si no, son tres fronteras dibujadas una encima de
+    otra, que es exactamente lo que el dueño describió como recargado.
+
+    Se comprueba el PREFIJO DE TEMA además de la clase: sin él, el override se
+    aplica en claro y no en oscuro (`html[data-theme="dark"] .sidebarNav` pesa
+    más), que fue el primer intento fallido."""
+    jsx = _strip_comments(_SETTINGS.read_text(encoding="utf-8"))
+    assert "styles.inDialog" in jsx, (
+        "P1-SETTINGS-DIALOG: Settings dejó de marcar su raíz en modo ventana; sin "
+        "esa clase no hay nada de lo que colgar el aplanado."
+    )
+    css = _strip_comments((_SRC / "pages" / "Settings.module.css").read_text(encoding="utf-8"))
+    assert re.search(r'html\[data-theme="dark"\]\)\s*\.inDialog\s+\.sidebarNav', css), (
+        "P1-SETTINGS-DIALOG: el aplanado perdió su variante para tema oscuro. La "
+        "regla por tema pesa más y las tarjetas reaparecen SOLO en oscuro — que "
+        "es el tema del dashboard."
+    )
+
+
 # ── 4. UNA sola configuración ───────────────────────────────────────────────
 
 def test_there_is_exactly_one_settings_surface():
