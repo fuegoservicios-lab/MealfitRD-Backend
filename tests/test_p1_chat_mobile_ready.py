@@ -182,6 +182,83 @@ def test_los_mensajes_se_apilan_desde_abajo_en_movil():
 # --------------------------------------------------------------------------
 # 4. Zonas táctiles
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# 5. El teclado de iOS
+# --------------------------------------------------------------------------
+def test_el_contenedor_encoge_con_el_teclado():
+    """`dvh` en iOS NO encoge al abrirse el teclado: el contenedor seguía midiendo la
+    pantalla entera y el final de la conversación quedaba detrás del teclado. El
+    handler solo subía el input con `transform` — movía dónde se escribe, no dónde se
+    lee."""
+    assert "var(--kb-inset, 0px)" in _AP, "el alto móvil debe restar el teclado"
+    i = _AP.find("const updateInputPosition")
+    win = _AP[i:i + 4200]
+    assert "setProperty('--kb-inset'" in win, "el handler debe publicar el alto del teclado"
+    assert "closest('.agent-container')" in win, (
+        "la variable va en el CONTENEDOR, no en :root: esta página sobrevive oculta "
+        "con display:none al navegar (P1-AGENT-KEEP-ALIVE) y una variable global "
+        "escrita desde un componente invisible contaminaría las demás rutas"
+    )
+    assert "translateY(-" not in win, (
+        "el transform y el encogimiento no pueden convivir: levantarían el input dos veces"
+    )
+
+
+# --------------------------------------------------------------------------
+# 6. Borrar conversaciones desde el teléfono
+# --------------------------------------------------------------------------
+def test_la_papelera_es_alcanzable_sin_hover():
+    """Se revelaba SOLO con `:hover`, y en un teléfono no hay hover: desde el móvil no
+    se podía borrar NINGUNA conversación (con tope de 40, la lista solo crecía)."""
+    assert re.search(r"@media \(hover: none\)\s*\{[^}]*\.chat-actions-hover", _AP, re.S), (
+        "sin puntero fino la acción tiene que ser visible: es la única forma de alcanzarla"
+    )
+    m = re.search(r"\.chat-session-btn \.chat-actions-hover \{([^}]*)\}", _AP)
+    assert m and "visibility: hidden" in m.group(1), (
+        "opacity:0 + pointer-events:none deja el botón tabulable: un borrado "
+        "activable a ciegas por teclado o VoiceOver"
+    )
+    i = _AP.find("const handleDeleteChat")
+    win = _AP[i:i + 2600]
+    assert win.count("toast.error") >= 2, (
+        "las dos ramas de fallo solo hacían console.error: la conversación seguía ahí "
+        "y el usuario no sabía si había borrado"
+    )
+
+
+# --------------------------------------------------------------------------
+# 7. Escribir y adjuntar
+# --------------------------------------------------------------------------
+def test_en_movil_enter_no_envia():
+    """En un teclado táctil no existe Shift+Enter: «Enter envía salvo con Shift» dejaba
+    imposible escribir un segundo párrafo desde el teléfono."""
+    i = _AP.find("const handleKeyDown")
+    win = _AP[i:i + 900]
+    assert "if (isMobile) return;" in win, "en móvil manda el botón de enviar"
+    assert "isComposing" in win, (
+        "con acentos/dictado el navegador emite Enter con keyCode 229: enviar ahí "
+        "manda un mensaje a medio escribir"
+    )
+    assert 'enterKeyHint={isMobile ? "enter" : "send"}' in _AP, (
+        "la tecla del teclado debe anunciar lo que de verdad hace"
+    )
+
+
+def test_la_foto_que_el_servidor_rechaza_no_gasta_un_turno():
+    """Se leía el cuerpo sin mirar el status: 413/415/429 salían como «el analizador no
+    está disponible» y AUN ASÍ se enviaba el turno al chat."""
+    i = _AP.find("const uploadRes = await fetchWithAuth")
+    win = _AP[i:i + 2200]
+    assert "if (!uploadRes.ok)" in win, "hay que mirar el status antes que el cuerpo"
+    for status in ("413", "415", "429"):
+        assert status in win, f"falta el copy propio para {status}"
+    api = _read("config", "api.ts")
+    assert "'/diary/upload'" in api, (
+        "el análisis de foto tarda 30-90s y la UI lo anuncia: con el timeout por "
+        "defecto de 60s se abortaba solo y se mostraba como «sin conexión»"
+    )
+
+
 def test_los_botones_de_la_cabecera_se_pueden_tocar():
     """24px de icono + 2×6,4 de relleno daban 36,8px. El propio repo se impuso 44
     por escrito en BottomTabBar.module.css."""

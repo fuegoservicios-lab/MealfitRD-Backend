@@ -210,13 +210,24 @@ def test_visualviewport_handler_solo_escribe_transform():
     sin padding-bottom en desktop (rompía el centrado de P3-AGENT-INPUT-CENTER).
 
     `transform` sí es exclusivo del handler (React no lo declara), por eso es la
-    única propiedad que puede escribir.
+    única propiedad que puede escribir SOBRE EL WRAPPER.
+
+    [P1-CHAT-KEYBOARD-FIT · 2026-08-10] El handler publica además `--kb-inset`, pero
+    eso NO viola lo que este caso protege: es otro ELEMENTO (el contenedor, no el
+    wrapper), es una custom property que React tampoco declara, y no hay shorthand
+    que la borre al limpiarla. La regla sigue siendo la misma —nadie escribe
+    imperativamente algo que React ya posee—; lo que cambió es que ahora el teclado
+    encoge el contenedor en vez de levantar el input, porque levantar la caja de
+    escribir dejaba los últimos mensajes detrás del teclado.
     """
     src = _read(_AGENT_PAGE)
     i = src.find("const updateInputPosition")
     assert i != -1, "no se encontró el handler del visualViewport"
-    body = _strip_js_comments(src[i:i + 2500])
-    assert "wrapper.style.transform" in body, "el handler debe seguir aplicando el lift"
+    body = _strip_js_comments(src[i:i + 4200])
+    assert "wrapper.style.transform" in body, (
+        "el handler debe seguir siendo el único dueño de `transform` en el wrapper "
+        "(hoy lo usa para LIMPIARLO: el lift lo hace el encogimiento del contenedor)"
+    )
     assert "paddingBottom" not in body, (
         "el handler visualViewport no debe escribir paddingBottom — React posee "
         "`padding` vía shorthand; el colapso con teclado abierto lo da el CSS "
