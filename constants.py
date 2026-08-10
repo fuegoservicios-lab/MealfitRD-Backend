@@ -2634,6 +2634,84 @@ def resolve_scanned_food(detected_name: str, catalog_names, aliases_by_name=None
     return candidatos[0] if len(candidatos) == 1 else None
 
 
+# ------------------------------------------------------------------
+# [P1-MEAL-NAME-BACKED · 2026-08-10] El nombre corto del plato no puede
+# contradecir su propio inventario
+# ------------------------------------------------------------------
+# EL DEFECTO: el dueño escaneó un plato y la tarjeta dijo «Arroz blanco con
+# lazaña». En los logs, el modelo había descrito bien lo que veía — «Arroz blanco
+# y carne molida guisada con vegetales y salsa» — y aun así llenó `meal_name` con
+# una lasaña que no estaba. Las macros (560/25/65/8) correspondían al inventario
+# correcto; solo el rótulo mentía.
+#
+# Por qué se puede comprobar: el prompt YA obliga a que `description` sea un
+# inventario completo de componentes (P1-MEAL-SCAN-DR-DISHES v3, escrito tras dos
+# fallos del mismo campo). O sea que hay un dato fiable contra el que contrastar el
+# rótulo, y no se estaba usando. Van tres versiones del prompt para este campo: un
+# aviso no es un guard.
+#
+# LA REGLA: cada token significativo del nombre debe aparecer en la descripción.
+# Excepción necesaria — los platos criollos con NOMBRE PROPIO («la bandera» es
+# arroz + habichuelas + carne; «los tres golpes» es mangú + huevo + salami +
+# queso): ahí el nombre legítimamente no comparte palabras con sus componentes, y
+# el prompt los pide a propósito. Por eso van en una lista explícita y corta.
+#
+# Un nombre no respaldado NO se descarta a ciegas: se sustituye por uno derivado
+# de la propia descripción, que es el dato que sí se verificó. El usuario puede
+# editarlo antes de registrar, así que el peor caso es un nombre más largo y
+# literal — nunca un plato que no comió.
+#
+# Tooltip-anchor: P1-MEAL-NAME-BACKED
+
+# Clásicos dominicanos cuyo nombre propio NO describe sus componentes. Corta a
+# propósito: cada entrada es un permiso para que el rótulo no cuadre con el
+# inventario, y ese permiso es justo lo que falló aquí.
+DR_DISH_PROPER_NAMES = frozenset({
+    "bandera", "golpes", "mangu", "mofongo", "sancocho", "locrio", "asopao",
+    "chicharron", "chimichurri", "chimi", "yaroa", "quipe", "pastelon",
+    "moro", "bollito", "catibia", "chacas", "chenchen", "mondongo",
+})
+
+
+def meal_name_backed_by_description(meal_name: str, description: str) -> bool:
+    """¿Todo lo que nombra el rótulo aparece en el inventario del plato?"""
+    nombre_tokens = _significant_food_tokens(meal_name)
+    if not nombre_tokens:
+        return True          # sin rótulo no hay nada que contradecir
+    desc_tokens = set(_significant_food_tokens(description))
+    if not desc_tokens:
+        return True          # sin inventario no hay con qué comparar: no se castiga
+    # La exención mira el nombre ENTERO, no token a token: «los tres golpes»
+    # empieza por «tres», que no es nombre de plato, y comprobarlo dentro del
+    # bucle lo descartaba antes de llegar a «golpes».
+    if any(t in DR_DISH_PROPER_NAMES for t in nombre_tokens):
+        return True
+    for t in nombre_tokens:
+        variantes = _pantry_token_variants(t)
+        if not any(variantes & _pantry_token_variants(d) for d in desc_tokens):
+            return False
+    return True
+
+
+def derive_meal_name_from_description(description: str, max_words: int = 8) -> str:
+    """Rótulo construido desde el inventario verificado, recortado a `max_words`.
+
+    Se corta en la primera frase para no arrastrar la estimación de macros que el
+    modelo concatena al final del texto.
+    """
+    texto = str(description or "").strip()
+    if not texto:
+        return ""
+    for corte in (".", "(", ";"):
+        if corte in texto:
+            texto = texto.split(corte, 1)[0].strip()
+    palabras = texto.split()
+    if not palabras:
+        return ""
+    corto = " ".join(palabras[:max_words]).rstrip(",;:").strip()
+    return corto[:1].upper() + corto[1:] if corto else ""
+
+
 # ============================================================
 # TÉCNICAS DE COCCIÓN Y SUPLEMENTOS
 # ============================================================

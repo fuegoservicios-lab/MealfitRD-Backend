@@ -19,6 +19,9 @@ from pydantic import BaseModel, Field
 
 from db import save_visual_entry
 from image_prep import prepare_image_for_vision  # [P1-VISION-LUNA · 2026-07-28]
+# [P1-MEAL-NAME-BACKED · 2026-08-10] El contraste rótulo↔inventario vive en
+# constants, junto al resto de la resolución de nombres de alimentos.
+from constants import meal_name_backed_by_description, derive_meal_name_from_description
 import logging
 
 logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
@@ -228,6 +231,13 @@ _MEAL_VISION_PROMPT = (
     "huevo frito + salami + queso frito; 'La bandera' = arroz + habichuelas "
     "+ carne; mofongo, sancocho); si no, nombra los componentes principales "
     "EMPEZANDO por la base (ej: 'Mangu con huevo, salami y queso'). "
+    # [P1-MEAL-NAME-BACKED · 2026-08-10] Vivo (owner): description correcta —
+    # «Arroz blanco y carne molida guisada con vegetales y salsa»— y meal_name
+    # «Arroz blanco con lazaña». La lasaña no estaba en el plato ni en el
+    # inventario. El backstop determinista lo corrige aunque el modelo insista.
+    "El meal_name SOLO puede nombrar componentes que ya listaste en "
+    "'description' (o el nombre propio del clasico): no metas en el nombre un "
+    "plato o ingrediente que no este en tu propio inventario. "
     "Macros: estima calorias, proteina, carbohidratos y grasas de CADA "
     "componente del inventario POR SEPARADO y SUMA los totales de la porcion "
     "visible (no por 100g; ej: mangu ~300 kcal, huevo frito ~110, 2 rodajas "
@@ -337,6 +347,31 @@ def _coerce_meal_scan(data: dict) -> dict:
     is_food = bool(data.get("is_food"))
     description = str(data.get("description") or "").strip()[:600]
     meal_name = str(data.get("meal_name") or "").strip()[:120]
+
+    # [P1-MEAL-NAME-BACKED · 2026-08-10] El rótulo corto no puede contradecir su
+    # propio inventario. Caso real (owner, scan del 2026-08-10 20:44): el modelo
+    # describió bien «Arroz blanco y carne molida guisada con vegetales y salsa» y
+    # las macros correspondían a eso, pero llenó `meal_name` con «Arroz blanco con
+    # lazaña» — una lasaña que no estaba en el plato. Lo único que mentía era el
+    # nombre, que es justo lo que el usuario ve en su diario.
+    #
+    # Se puede comprobar porque el prompt YA obliga a que `description` sea el
+    # inventario completo de componentes (P1-MEAL-SCAN-DR-DISHES v3): había un dato
+    # verificado al lado y no se estaba usando. Van tres versiones del prompt para
+    # este mismo campo — un aviso no es un guard.
+    #
+    # No se descarta a ciegas: se sustituye por un rótulo derivado de la propia
+    # descripción. El modal lo precarga en un campo EDITABLE, así que el peor caso
+    # es un nombre más largo y literal, nunca un plato que el usuario no comió.
+    if meal_name and description and not meal_name_backed_by_description(meal_name, description):
+        _derivado = derive_meal_name_from_description(description)
+        logger.warning(
+            "[P1-MEAL-NAME-BACKED] el rótulo no está respaldado por el inventario: "
+            f"meal_name={meal_name!r} description={description[:120]!r} "
+            f"→ se usa {_derivado!r}"
+        )
+        if _derivado:
+            meal_name = _derivado[:120]
 
     kind = str(data.get("photo_kind") or "").strip().lower()
     if kind not in ("plato", "items", "otro"):
