@@ -201,6 +201,51 @@ def test_the_panel_does_not_paint_a_focus_ring_around_itself():
     )
 
 
+def test_the_dialog_width_does_not_depend_on_what_the_section_contains():
+    """[P1-SETTINGS-DIALOG-STABLE · 2026-08-10] «Cada vez que cambio de sección se
+    mueve todo», reportado por el dueño. No era una impresión: MEDIDO, el
+    contenido de la ventana valía 1040px en Privacidad, 941 en Súper
+    Personalización y 698 en Plan & Objetivo, y la navegación saltaba 171px.
+
+    La causa es una herencia sutil. Como página, `.wrapper` lleva `margin: 0
+    auto` para centrarse en pantallas anchas. Dentro del diálogo es hijo de un
+    flex en columna, y **un margen automático en el eje cruzado anula el
+    `stretch`**: el wrapper deja de ocupar su contenedor y pasa a medir su
+    CONTENIDO. Cada sección tiene un contenido distinto, así que cada sección
+    tenía una ventana distinta.
+
+    Por eso se ancla `margin: 0` explícito y no basta con el `width`: mientras el
+    margen automático siga ahí, el ancho declarado convive con un elemento que
+    sigue autodimensionándose."""
+    css = _strip_comments((_SRC / "pages" / "Settings.module.css").read_text(encoding="utf-8"))
+    bloque = re.search(r"\.inDialog\s*\{([^}]*)\}", css)
+    assert bloque, "P1-SETTINGS-DIALOG: desapareció el bloque `.inDialog`."
+    cuerpo = bloque.group(1)
+    assert re.search(r"width:\s*100%", cuerpo), (
+        "P1-SETTINGS-DIALOG: el contenido de la ventana dejó de fijar su ancho; "
+        "volverá a medir lo que cada sección tenga dentro."
+    )
+    assert re.search(r"margin:\s*0\s*;", cuerpo), (
+        "P1-SETTINGS-DIALOG: volvió el margen automático heredado de la página. "
+        "En un flex anula el stretch y el ancho pasa a depender del contenido — "
+        "que es exactamente el defecto que este bloque cerró."
+    )
+
+
+def test_the_scrollbar_never_moves_the_content():
+    """Unas secciones desbordan y otras no (1358px de alto contra 774). Sin hueco
+    reservado, la barra aparece y desaparece al navegar y desplaza el contenido su
+    ancho en cada cambio — el mismo defecto que arriba, a menor escala."""
+    css = _strip_comments(
+        (_SRC / "components" / "dashboard" / "SettingsDialog.module.css").read_text(encoding="utf-8")
+    )
+    assert "scrollbar-gutter: stable" in css, (
+        "P1-SETTINGS-DIALOG: el hueco de la barra de scroll dejó de reservarse. "
+        "En Windows la barra ocupa sitio real: el contenido salta ~15px entre una "
+        "sección larga y una corta."
+    )
+
+
 def test_the_dialog_flattens_the_page_chrome():
     """Una superficie elevada no necesita elevar a sus hijos. Dentro de la
     ventana, la lista de secciones y el panel de contenido dejan de ser tarjetas
