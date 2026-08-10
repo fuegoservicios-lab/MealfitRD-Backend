@@ -175,6 +175,77 @@ def test_the_entry_points_pass_the_background_location():
     )
 
 
+# ── 4. UNA sola configuración ───────────────────────────────────────────────
+
+def test_there_is_exactly_one_settings_surface():
+    """[P1-SETTINGS-ONE-SURFACE · 2026-08-10] Había DOS: el panel del dashboard y
+    una página liviana en `/configuracion` (apariencia + cuenta + contraseña +
+    borrar cuenta) que era un subconjunto de la otra, mantenida aparte. Dos
+    configuraciones divergen con el primer cambio que alguien haga en una sola.
+
+    Se comprueba la ausencia del FICHERO y no del literal de la ruta: la ruta
+    sigue viva como redirect, a propósito, porque llevaba meses enlazada y un
+    404 sería el final del camino para quien tenga el marcador."""
+    vieja = _SRC / "pages" / "AccountSettings.jsx"
+    assert not vieja.exists(), (
+        "P1-SETTINGS-ONE-SURFACE: volvió a existir una segunda página de "
+        "configuración. Lo que necesite vivir ahí va como sección de "
+        "`/dashboard/settings`, que es la única superficie."
+    )
+    app = _strip_comments(_APP.read_text(encoding="utf-8"))
+    assert re.search(
+        r'path="/configuracion"\s+element=\{<Navigate to="/dashboard/settings" replace', app
+    ), (
+        "P1-SETTINGS-ONE-SURFACE: `/configuracion` dejó de redirigir. Los "
+        "marcadores y pestañas abiertas de meses caerían al catch-all."
+    )
+
+
+def test_an_account_without_a_plan_can_still_reach_its_settings():
+    """LA CONDICIÓN QUE HACÍA IMPOSIBLE BORRAR LA PÁGINA VIEJA, y la que se
+    romperá si alguien «limpia» la exención por parecer una excepción rara.
+
+    Una cuenta recién creada (OTP/OAuth) sin assessment NO puede entrar a
+    `/dashboard/*`: el gate la manda al formulario. Si esta ruta no está exenta,
+    esa cuenta se queda sin apariencia, sin cambiar contraseña y sin poder
+    BORRAR SU CUENTA — requisito de la App Store, no una comodidad."""
+    src = _strip_comments(
+        (_SRC / "components" / "layout" / "ProtectedRoute.jsx").read_text(encoding="utf-8")
+    )
+    exencion = re.search(r"const isOnAccountSettings = location\.pathname === '([^']+)'", src)
+    assert exencion, (
+        "P1-SETTINGS-ONE-SURFACE: desapareció la exención del gate de assessment "
+        "para la configuración."
+    )
+    assert exencion.group(1) == "/dashboard/settings", (
+        "P1-SETTINGS-ONE-SURFACE: la exención apunta a "
+        f"`{exencion.group(1)}`, que ya no es la configuración. Una cuenta sin "
+        "plan rebotaría al formulario y no podría llegar a borrar su cuenta."
+    )
+    assert "!isOnAccountSettings" in src, (
+        "P1-SETTINGS-ONE-SURFACE: la exención existe pero el gate ya no la "
+        "consulta — es una variable inerte con aspecto de defensa."
+    )
+
+
+def test_the_header_entry_points_at_the_surviving_settings():
+    """El ⚙ del Header es el ÚNICO acceso de una cuenta sin plan (no puede entrar
+    al dashboard por su propio pie). Si apunta a la ruta vieja, el redirect lo
+    salva; si apunta a cualquier otra cosa, esa cuenta se queda sin camino."""
+    header = _strip_comments(
+        (_SRC / "components" / "layout" / "Header.jsx").read_text(encoding="utf-8")
+    )
+    assert 'to="/configuracion"' not in header, (
+        "P1-SETTINGS-ONE-SURFACE: el Header vuelve a enlazar la ruta vieja. "
+        "Funcionaría por el redirect, pero enseña como destino algo que ya no "
+        "es una página."
+    )
+    assert header.count('to="/dashboard/settings"') >= 2, (
+        "P1-SETTINGS-ONE-SURFACE: falta alguno de los dos accesos del Header "
+        "(menú de cuenta de escritorio y menú móvil) a la configuración."
+    )
+
+
 # ── 3. Las capas ────────────────────────────────────────────────────────────
 
 def test_the_a11y_hook_can_yield_to_a_layer_above_it():
