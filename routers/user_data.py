@@ -425,7 +425,20 @@ _VISION_PROMPT = (
     # banana dulce = 'guineo' en RD, no 'platano' (alimento distinto).
     "OJO en RD: el GUINEO es la banana dulce (delgada, curva, cascara fina, se "
     "come cruda) - NO lo llames platano; el PLATANO es mas grande y grueso y se "
-    "cocina. Responde SOLO el JSON."
+    "cocina. "
+    # [P1-SCAN-BREAD-GENERIC · 2026-08-10] El dueño fotografio pan de agua y salio
+    # «pan de hot dog». El modelo no tiene por que acertar el tipo de pan desde una
+    # foto en una funda, y aqui equivocarse SI cuesta: el catalogo no tiene ni «pan
+    # de agua» ni «pan de hot dog», asi que un tipo inventado se queda sin match y
+    # el usuario no puede agregar su pan — mientras que «pan» a secas es alias de
+    # «Pan blanco familiar» y entra. Preferir el generico no es rendirse: es que el
+    # nombre generico SI existe en el catalogo y el especifico inventado no.
+    "OJO tambien con el PAN: en RD el pan de agua y el pan sobao son panes de mesa "
+    "(sueltos, redondos u ovalados, NO vienen rebanados en funda) y no son pan de "
+    "hot dog ni de hamburguesa (esos vienen ya partidos para rellenar). Si ves pan "
+    "y no distingues el tipo con CERTEZA, escribe simplemente 'pan' - vale mas el "
+    "nombre generico que acertar el tipo por suerte. "
+    "Responde SOLO el JSON."
 )
 
 
@@ -491,7 +504,11 @@ def _match_catalog(detected_name: str, catalog: list) -> Optional[Dict[str, Any]
 
     Medido con 34 detecciones etiquetadas contra el catálogo real: 19 aciertos y
     15 mapeos al alimento equivocado antes; 34 aciertos y cero después."""
-    match_name = resolve_scanned_food(detected_name, [row["name"] for row in catalog])
+    match_name = resolve_scanned_food(
+        detected_name,
+        [row["name"] for row in catalog],
+        {row["name"]: (row.get("aliases") or []) for row in catalog},
+    )
     if not match_name:
         return None
     for row in catalog:
@@ -563,8 +580,11 @@ async def api_inventory_photo_scan(
 
     def _match_against_catalog():
         from db import execute_sql_query
+        # [P1-SCAN-ALIASES · 2026-08-10] `aliases` entra al SELECT: son los 816
+        # sinónimos curados del catálogo y esta consulta ni los pedía, así que el
+        # escáner resolvía nombres a ciegas teniendo la respuesta al lado.
         catalog = execute_sql_query(
-            "SELECT id::text AS id, name, market_container, default_unit FROM master_ingredients",
+            "SELECT id::text AS id, name, aliases, market_container, default_unit FROM master_ingredients",
             fetch_all=True,
         ) or []
         out = []

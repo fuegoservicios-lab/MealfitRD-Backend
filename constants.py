@@ -2575,21 +2575,45 @@ def _food_tokens_covered(needle: tuple, haystack: tuple) -> bool:
     )
 
 
-def resolve_scanned_food(detected_name: str, catalog_names) -> Optional[str]:
+def resolve_scanned_food(detected_name: str, catalog_names, aliases_by_name=None) -> Optional[str]:
     """Nombre del catálogo al que corresponde `detected_name`, o None.
 
     `None` NO es un fallo del resolutor: es su respuesta correcta cuando el
     alimento no está en el catálogo o cuando hay varios candidatos igual de
     válidos. El caller debe mostrarlo como "sin match" y NO agregarlo solo.
+
+    [P1-SCAN-ALIASES · 2026-08-10] `aliases_by_name` es la columna `aliases` de
+    `master_ingredients`: 816 sinónimos escritos a mano («pollo»→Pechuga de pollo,
+    «baking powder»→Polvo de hornear, «harina pan»→Harina de maíz precocida). Es
+    la respuesta CURADA a esta misma pregunta y el escáner no la leía — ni
+    siquiera la pedía en su SELECT. 484 de los 816 no llevaban a su alimento.
+    Ningún heurístico de tokens compite con un sinónimo que alguien escribió a
+    mano: por eso va antes que la regla 3.
     """
     detected = str(detected_name or "").strip()
     if not detected:
         return None
 
-    # 1. Identidad canónica.
+    # 1. Identidad canónica contra el NOMBRE. Va primero para que un alias no le
+    #    robe la identidad a un alimento propio: «repollo morado» es alias de
+    #    «Repollo» Y nombre de «Repollo morado» — gana el nombre.
     for name in catalog_names:
         if pantry_names_match(detected, name):
             return name
+
+    # 2. Identidad canónica contra los ALIASES. Único, o nada: 4 aliases del
+    #    catálogo apuntan a varios alimentos a la vez («nueces» → Almendras
+    #    fileteadas y Nueces mixtas; «mariscos» → Pulpo, Calamar y Mejillones), y
+    #    ahí elegir sería adivinar igual que en la regla 3.
+    if aliases_by_name:
+        por_alias = [
+            name for name in catalog_names
+            if any(pantry_names_match(detected, a) for a in (aliases_by_name.get(name) or ()))
+        ]
+        if len(por_alias) == 1:
+            return por_alias[0]
+        if len(por_alias) > 1:
+            return None
 
     d_sig = _significant_food_tokens(detected)
     if not d_sig:

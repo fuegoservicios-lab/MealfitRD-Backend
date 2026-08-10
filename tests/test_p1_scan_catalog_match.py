@@ -65,6 +65,8 @@ CATALOGO = [
     ("jugo de naranja", None),         # NO «Naranja»
     ("pollo entero", None),            # NO «Pechuga de pollo»
     # --- ambigüedad: varios candidatos igual de válidos ---
+    # (sin la columna `aliases`; con ella, «pan» sí resuelve — ver la clase de
+    #  abajo: un sinónimo escrito a mano gana sobre el empate)
     ("pan", None),
     ("yogurt griego", None),
     ("vinagre", None),
