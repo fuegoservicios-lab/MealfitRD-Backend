@@ -2508,6 +2508,108 @@ def pantry_names_match(a: str, b: str) -> bool:
     )
 
 
+# ------------------------------------------------------------------
+# [P1-SCAN-CATALOG-MATCH · 2026-08-10] Texto libre → alimento del catálogo
+# ------------------------------------------------------------------
+# `pantry_names_match` responde "¿son la misma fila de la Nevera?". Esta sección
+# responde la pregunta VECINA que hace el escáner de fotos: "el modelo de visión
+# leyó este texto libre — ¿a qué alimento de `master_ingredients` corresponde?".
+# Vive aquí, junto al otro resolutor de nombres, para que ambas preguntas
+# compartan normalización y disciplina en vez de driftar (este repo ya pagó ese
+# precio: la canonicalización de dieta vivía en tres tablas a mano).
+#
+# EL DEFECTO QUE CIERRA (reportado por el dueño con una foto de un pan):
+# el matcher del escáner aceptaba UN token en común como prueba de identidad, y
+# "de" es un token. 36 de los 204 alimentos del catálogo lo llevan en el nombre,
+# y el primero en orden de lectura es «Polvo de hornear» — así que CUALQUIER
+# detección con la palabra "de" que no matcheara por otra vía aterrizaba ahí.
+# «pan de hamburguesa» → «Polvo de hornear». El modelo había leído bien; lo que
+# falló fue esto.
+#
+# Medido contra el catálogo real con 34 detecciones realistas etiquetadas a mano:
+# el matcher viejo acertaba 19 y mapeaba 15 al alimento EQUIVOCADO — «salami»→Sal,
+# «ajo»→Ajo en polvo, «leche de coco»→Coco, «guineo»→Guineo verde (justo la
+# distinción que el prompt de visión se esfuerza en explicar). Con estas reglas:
+# 34/34 y cero mapeos equivocados.
+#
+# LAS TRES REGLAS, en orden:
+#   1. Identidad canónica (`pantry_names_match`): mismo número de tokens, token a
+#      token, tolerando singular/plural. «huevos» → «Huevo».
+#   2. Especificación: uno de los dos nombres dice MÁS que el otro y lo cubre
+#      entero — pero solo cuenta si comparten NÚCLEO (primer token significativo).
+#      Sin el núcleo, «azúcar» se colaba en «Yogurt griego sin azúcar» y «jugo de
+#      naranja» en «Naranja»: cubrir no es ser.
+#   3. Si la regla 2 deja VARIOS candidatos, no se elige ninguno. «pan» tiene tres
+#      panes en el catálogo; quedarse con el primero es adivinar, y adivinar aquí
+#      mete un alimento que el usuario no tiene en su Nevera.
+#
+# La disciplina es la misma que ya declara `canonical_pantry_key` un poco más
+# arriba: un no-match degrada a "no lo encontré" (visible, el usuario lo ve
+# marcado como sin match), y un match de más corrompe la Nevera en silencio y de
+# ahí pasa al plan y a la lista de compras. Ante la duda, NO matchear.
+#
+# Tooltip-anchor: P1-SCAN-CATALOG-MATCH
+
+# Conectores gramaticales: no son evidencia de identidad entre dos alimentos.
+# Deliberadamente CORTO y solo gramatical — nada de "polvo", "salsa" o "fresco",
+# que sí distinguen alimentos («Ajo» vs «Ajo en polvo» son compras distintas).
+# NO es `RECIPE_INGREDIENT_STOPWORDS`: esa lista sirve para extraer el sustantivo
+# principal de un ingrediente de RECETA y es mucho más agresiva a propósito.
+FOOD_CONNECTOR_TOKENS = frozenset({
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "y", "e", "o", "u", "en", "con", "sin", "al", "a", "para",
+})
+
+
+@lru_cache(maxsize=2048)
+def _significant_food_tokens(name: str) -> tuple:
+    """Tokens del nombre que sí distinguen un alimento de otro."""
+    return tuple(t for t in canonical_pantry_key(name).split() if t not in FOOD_CONNECTOR_TOKENS)
+
+
+def _food_tokens_covered(needle: tuple, haystack: tuple) -> bool:
+    """¿Cada token de `needle` tiene equivalente (singular/plural) en `haystack`?"""
+    return all(
+        any(_pantry_token_variants(a) & _pantry_token_variants(b) for b in haystack)
+        for a in needle
+    )
+
+
+def resolve_scanned_food(detected_name: str, catalog_names) -> Optional[str]:
+    """Nombre del catálogo al que corresponde `detected_name`, o None.
+
+    `None` NO es un fallo del resolutor: es su respuesta correcta cuando el
+    alimento no está en el catálogo o cuando hay varios candidatos igual de
+    válidos. El caller debe mostrarlo como "sin match" y NO agregarlo solo.
+    """
+    detected = str(detected_name or "").strip()
+    if not detected:
+        return None
+
+    # 1. Identidad canónica.
+    for name in catalog_names:
+        if pantry_names_match(detected, name):
+            return name
+
+    d_sig = _significant_food_tokens(detected)
+    if not d_sig:
+        return None
+
+    # 2. Especificación con núcleo común, en cualquier dirección.
+    candidatos = []
+    for name in catalog_names:
+        c_sig = _significant_food_tokens(name)
+        if not c_sig:
+            continue
+        if not (_pantry_token_variants(d_sig[0]) & _pantry_token_variants(c_sig[0])):
+            continue
+        if _food_tokens_covered(d_sig, c_sig) or _food_tokens_covered(c_sig, d_sig):
+            candidatos.append(name)
+
+    # 3. Ambigüedad: elegir sería adivinar.
+    return candidatos[0] if len(candidatos) == 1 else None
+
+
 # ============================================================
 # TÉCNICAS DE COCCIÓN Y SUPLEMENTOS
 # ============================================================

@@ -39,6 +39,9 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
+# [P1-SCAN-CATALOG-MATCH · 2026-08-10] La resolución «texto libre → alimento del
+# catálogo» es SSOT en constants, junto a `pantry_names_match`.
+from constants import pantry_names_match, resolve_scanned_food
 
 logger = logging.getLogger(__name__)
 
@@ -472,29 +475,29 @@ def vision_scan_provider() -> str:
     return (os.environ.get("MEALFIT_VISION_PROVIDER") or "off").strip().lower()
 
 
-def _norm_food_name(s: str) -> str:
-    import unicodedata
-    s = unicodedata.normalize("NFD", str(s or "").lower())
-    return "".join(c for c in s if not unicodedata.combining(c)).strip()
-
-
 def _match_catalog(detected_name: str, catalog: list) -> Optional[Dict[str, Any]]:
-    """Match laxo contra master_ingredients: exacto/contención normalizada,
-    luego overlap de tokens (≥1). Devuelve row del catálogo o None."""
-    d = _norm_food_name(detected_name)
-    if not d:
+    """Row de `master_ingredients` al que corresponde lo que leyó la visión, o None.
+
+    [P1-SCAN-CATALOG-MATCH · 2026-08-10] La regla vive en
+    `constants.resolve_scanned_food` (SSOT, junto a `pantry_names_match`) — aquí
+    solo se traduce nombre → row.
+
+    LO QUE HABÍA ANTES: contención de substring en ambas direcciones y, si eso
+    fallaba, UN token en común bastaba. Como "de" es un token y 36 de los 204
+    alimentos lo llevan, cualquier detección con esa palabra caía en el primer
+    alimento del catálogo que la tuviera — «pan de hamburguesa» → «Polvo de
+    hornear», que es lo que reportó el dueño. Y el substring en la dirección
+    catálogo⊆detectado producía la familia clásica de este repo: «salami» → «Sal».
+
+    Medido con 34 detecciones etiquetadas contra el catálogo real: 19 aciertos y
+    15 mapeos al alimento equivocado antes; 34 aciertos y cero después."""
+    match_name = resolve_scanned_food(detected_name, [row["name"] for row in catalog])
+    if not match_name:
         return None
     for row in catalog:
-        n = row["_norm"]
-        if d == n or d in n or n in d:
+        if row["name"] == match_name:
             return row
-    d_tokens = set(d.split())
-    best, best_overlap = None, 0
-    for row in catalog:
-        overlap = len(d_tokens & set(row["_norm"].split()))
-        if overlap > best_overlap:
-            best_overlap, best = overlap, row
-    return best if best_overlap >= 1 else None
+    return None
 
 
 async def _cloud_vision_scan(image_bytes: bytes) -> list:
@@ -564,8 +567,6 @@ async def api_inventory_photo_scan(
             "SELECT id::text AS id, name, market_container, default_unit FROM master_ingredients",
             fetch_all=True,
         ) or []
-        for row in catalog:
-            row["_norm"] = _norm_food_name(row["name"])
         out = []
         for it in items[:40]:
             match = _match_catalog(it.get("name"), catalog)
@@ -575,6 +576,18 @@ async def api_inventory_photo_scan(
             # siempre" es SOLO elección manual del usuario (un OCR equivocado no
             # debe contaminar sus marcas preferidas globales).
             _brand = (str(it.get("brand") or "").strip() or None)
+            # [P1-SCAN-CATALOG-MATCH · 2026-08-10] ¿El mapeo RENOMBRA lo que leyó
+            # la visión? La lista de confirmación mostraba `catalog_name` a secas,
+            # así que un mapeo equivocado borraba de la pantalla lo que el modelo
+            # había dicho: el dueño vio «Polvo de hornear» sobre la foto de un pan
+            # y concluyó, razonablemente, que el modelo había confundido las dos
+            # cosas — cuando el modelo había leído bien y falló el mapeo. Con este
+            # flag el cliente puede enseñar ambas y el error deja de ser invisible.
+            # Solo se marca cuando el nombre cambia DE VERDAD (no por plural ni
+            # acento), para no ensuciar «huevos» → «Huevo».
+            _renamed = bool(match) and not pantry_names_match(
+                str(it.get("name") or ""), match["name"]
+            )
             out.append({
                 "detected_name": str(it.get("name") or "")[:80],
                 "detected_brand": _brand[:40] if _brand else None,
@@ -583,6 +596,7 @@ async def api_inventory_photo_scan(
                 "confidence": max(0.0, min(1.0, float(it.get("confidence") or 0))),
                 "master_ingredient_id": match["id"] if match else None,
                 "catalog_name": match["name"] if match else None,
+                "catalog_renamed": _renamed,
                 "catalog_unit": (match.get("market_container") or match.get("default_unit")) if match else None,
             })
         return out
