@@ -56,6 +56,10 @@ _HERO_CSS = _SRC / "components" / "home" / "Hero.module.css"
 _HOWITWORKS_CSS = _SRC / "components" / "home" / "HowItWorks.module.css"
 _SEEMORE_CSS = _SRC / "components" / "home" / "SeeMoreLink.module.css"
 _FOOTER_CSS = _SRC / "components" / "layout" / "Footer.module.css"
+_BENCHMARK_CSS = _SRC / "components" / "home" / "BenchmarkShowcase.module.css"
+_BENCHMARK_JSX = _SRC / "components" / "home" / "BenchmarkShowcase.jsx"
+_SHOWCASE_JSX = _SRC / "components" / "home" / "DashboardShowcase.jsx"
+_SERVICE_WORKER = _SRC / "custom-sw.js"
 _E2E_SPEC = _REPO_ROOT / "frontend" / "e2e" / "mobile_no_overflow.spec.js"
 
 # El ancho de contrato más estrecho del repo. Un iPhone con Display Zoom
@@ -65,6 +69,14 @@ _CONTRACT_WIDTH = 320
 
 def _strip_comments(css: str) -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+
+
+def _strip_js_comments(src: str) -> str:
+    """Bloque Y línea. La versión de CSS no basta aquí: las notas de este repo
+    explican qué literal se retiró, y un escáner que las lea acusa al arreglo de
+    ser el defecto. (Un `//` dentro de una URL también cae; para buscar una
+    frase prohibida da igual.)"""
+    return re.sub(r"//[^\n]*", "", _strip_comments(src))
 
 
 def _media_blocks(css: str) -> list[tuple[int | None, str]]:
@@ -163,6 +175,32 @@ def test_the_step_descriptions_are_not_truncated():
         )
 
 
+def test_a_fold_is_only_legitimate_when_something_can_unfold_it():
+    """LA REGLA GENERAL detrás del caso de arriba, y la que se va a erosionar.
+
+    Recortar texto no está prohibido; recortarlo SIN CONTROL sí. La metodología
+    del benchmark (663 caracteres = 20 líneas a 320px) se pliega a 4 en móvil, y
+    es legítimo porque un botón la devuelve entera. Si alguien deja el recorte y
+    se lleva el botón, esto cae — que es el único momento en que el plegado se
+    convierte en el defecto que este P-fix vino a quitar."""
+    css = _strip_comments(_BENCHMARK_CSS.read_text(encoding="utf-8"))
+    prop = "-webkit-line" + "-clamp"
+    recorta = any(prop in body for body in _rule_body(css, ".footnoteText"))
+    if not recorta:
+        return  # sin recorte no hay nada que exigir
+    assert _rule_body(css, ".footnoteToggle"), (
+        "P1-MOBILE-FIT: la metodología se recorta pero su control desapareció. "
+        "Un recorte sin expansor promete un resto que nadie puede cobrar — es "
+        "exactamente el defecto que este P-fix quitó de HowItWorks."
+    )
+    jsx = _BENCHMARK_JSX.read_text(encoding="utf-8")
+    assert "aria-expanded" in jsx and "aria-controls" in jsx, (
+        "P1-MOBILE-FIT: el control del plegado perdió su semántica. Sin "
+        "`aria-expanded`/`aria-controls`, un lector de pantalla anuncia un botón "
+        "que no dice qué gobierna ni si está abierto."
+    )
+
+
 # ── 3. Los objetivos táctiles ───────────────────────────────────────────────
 
 def _has_touch_pseudo(css: str, selector: str) -> bool:
@@ -200,6 +238,33 @@ def test_social_icons_are_reachable_with_a_thumb():
         "29×29 bajo papel — el footer se monta en 21 rutas, así que esto no es "
         "solo del landing."
     )
+
+
+# ── Nomenclatura: un título regulado no nombra una feature ──────────────────
+
+def test_no_regulated_title_names_a_feature():
+    """Directiva permanente del dueño: es creador único y sin credenciales
+    clínicas, así que ninguna feature puede llamarse con un título regulado.
+    «Nutricionista IA» vivía en DOS sitios donde nombra al producto: el rótulo
+    de la sección 04 del landing —contradiciendo a su propia tarjeta, que ya
+    decía la fórmula correcta 20px más abajo— y el título de respaldo de las
+    notificaciones push, que es lo que se lee en una pantalla de bloqueo, sin
+    nada alrededor que lo matice.
+
+    LO QUE ESTE TEST NO PROHÍBE, y por eso mira solo dos ficheros: el sustantivo
+    común. «Consulta con tu nutricionista» en un aviso legal o en un banner
+    clínico es correcto y necesario — ahí la palabra señala a un profesional
+    HUMANO al que remitimos, que es justo lo contrario de apropiarse del título.
+    Y `utils/recipeSteps.js` la usa para PARSEAR texto que genera el backend:
+    renombrarla ahí no cambia nomenclatura, rompe el parser."""
+    prohibido = re.compile(r"nutricionista\s+(ia|ai)\b", re.IGNORECASE)
+    for ruta in (_SHOWCASE_JSX, _SERVICE_WORKER):
+        limpio = _strip_js_comments(ruta.read_text(encoding="utf-8"))
+        assert not prohibido.search(limpio), (
+            f"P1-MOBILE-FIT: {ruta.name} vuelve a nombrar una feature con un "
+            "título regulado. La fórmula acordada describe la función sin "
+            "reclamar la credencial."
+        )
 
 
 # ── 4. La guarda que faltaba ────────────────────────────────────────────────
