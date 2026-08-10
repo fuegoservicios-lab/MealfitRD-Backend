@@ -619,7 +619,34 @@ async def api_get_catalog(
             fetch_all=True,
         ) or []
 
-    return {"items": await asyncio.to_thread(_catalog)}
+    items = await asyncio.to_thread(_catalog)
+
+    # [P1-STAPLE-SEARCH-RANK · 2026-08-09] Rótulo del gate same-day-protein por
+    # alimento, calculado AQUÍ desde el SSOT (`_MAIN_PROTEIN_ALIASES` +
+    # `_SAME_DAY_PROTEIN_GATE_LABELS`) y servido al cliente.
+    #
+    # El motivo de servirlo en vez de que el frontend lo deduzca: dos alimentos
+    # distintos del catálogo pueden colapsar al MISMO rótulo (clara de huevo y
+    # huevo → "huevo"), así que declarar ambos como básicos gasta dos de los
+    # ocho cupos para un solo efecto. Para avisarlo, el cliente necesita conocer
+    # el rótulo — y la única forma de que no se desincronice con el motor es que
+    # NO tenga su propia copia de la tabla de alias. Este repo ya pagó ese
+    # precio: la canonicalización de dieta vivía en tres tablas a mano, driftaron,
+    # y la del filtro servía pollo a vegetarianas.
+    #
+    # `None` cuando el alimento no participa del gate (legumbres, vegetales,
+    # cereales): esos ya pueden repetirse libremente, así que no hay nada que
+    # avisar. Fail-safe: cualquier error deja el campo ausente y el cliente
+    # degrada a no mostrar el aviso.
+    try:
+        from graph_orchestrator import _protein_gate_labels_in_text
+        for _it in items:
+            _labels = _protein_gate_labels_in_text(str(_it.get("name") or ""))
+            _it["staple_gate_label"] = "+".join(sorted(_labels)) if _labels else None
+    except Exception:
+        logger.warning("[P1-STAPLE-SEARCH-RANK] no se pudo anotar el catálogo con el rótulo del gate", exc_info=True)
+
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------
