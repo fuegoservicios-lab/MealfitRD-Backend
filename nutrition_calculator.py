@@ -1848,8 +1848,41 @@ def _budget_floor_kcal_ref() -> float:
     return _nc_env_float_budget("MEALFIT_BUDGET_FLOOR_KCAL_REF", 2000.0, lambda v: v >= 800.0)
 
 
+# [P1-BUDGET-FX-STALENESS · 2026-08-09] El tipo de cambio es un número que
+# ENVEJECE, y hasta ahora envejecía EN SILENCIO: si el peso se mueve y nadie
+# toca el knob, el presupuesto declarado en USD se convierte mal, la referencia
+# sale mal, y NADA falla. Silencio incorrecto — el peor modo.
+#
+# La moneda USD se queda (caso de uso real del owner: visitantes de EE.UU. en
+# RD). Lo que se añade es que el número diga CUÁNDO se revisó por última vez y
+# avise cuando lleve demasiado sin revisarse. No bloquea ni corrige: convierte
+# un dato que caduca callado en uno que pide revisión.
+_BUDGET_FX_REVIEWED_DEFAULT = "2026-08-09"
+
+
+def _budget_fx_max_age_days() -> int:
+    return int(_nc_env_float_budget("MEALFIT_BUDGET_FX_MAX_AGE_DAYS", 120.0, lambda v: 1.0 <= v <= 3650.0))
+
+
 def _budget_usd_to_dop() -> float:
-    return _nc_env_float_budget("MEALFIT_BUDGET_USD_TO_DOP", 60.0, lambda v: v >= 1.0)
+    rate = _nc_env_float_budget("MEALFIT_BUDGET_USD_TO_DOP", 60.0, lambda v: v >= 1.0)
+    try:
+        import os as _os
+        from datetime import date as _date
+        reviewed = str(_os.environ.get("MEALFIT_BUDGET_USD_TO_DOP_REVIEWED")
+                       or _BUDGET_FX_REVIEWED_DEFAULT).strip()
+        age = (_date.today() - _date.fromisoformat(reviewed)).days
+        max_age = _budget_fx_max_age_days()
+        if age > max_age:
+            logger.warning(
+                f"[P1-BUDGET-FX-STALENESS] USD→DOP={rate} sin revisar hace {age} días "
+                f"(tope {max_age}). Los presupuestos declarados en USD se están "
+                f"convirtiendo con una tasa vieja. Actualiza MEALFIT_BUDGET_USD_TO_DOP "
+                f"y MEALFIT_BUDGET_USD_TO_DOP_REVIEWED."
+            )
+    except Exception as e:  # fecha mal escrita, etc. — nunca romper el costeo por el aviso
+        logger.warning(f"[P1-BUDGET-FX-STALENESS] no pude evaluar la edad del FX ({type(e).__name__}); sigo con {rate}")
+    return rate
 
 
 def _budget_floor_tolerance_pct() -> float:
@@ -1961,7 +1994,34 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
 # Tooltip-anchor: P1-BUDGET-RECONCILE. Test: test_p1_budget_intelligence.py.
 # ============================================================
 
-_BUDGET_TIER_BAND_DEFAULTS = {"low": "1.15", "medium": "1.6", "high": "2.5"}
+# [P1-BUDGET-BANDS-RECALIBRATE · 2026-08-09] 1.15/1.6/2.5 → 1.05/1.25/1.9.
+#
+# MEDIDO contra el costo real de los planes vivos (21 planes: 30 días, precios
+# completos, ≥20 ítems; se excluyeron 2 con `items_priced=1/1` — planes rotos,
+# no baratos, que contaminaban la mediana hacia abajo):
+#
+#     piso de metas ....... RD$ 13.650 / 30 días
+#     costo real típico ... RD$ 15.747   → 1,15 × piso
+#     referencia `medium` . RD$ 21.840   → sobreestimaba un 39 %
+#
+# El hallazgo que ordena todo: el factor real medido (1,15) era EXACTAMENTE el
+# factor que tenía `low`. Es decir, cuando el usuario elegía Moderado su plan
+# costaba lo que la banda Económico predecía — la escalera estaba corrida un
+# escalón entera.
+#
+# CONSECUENCIA QUE NO ERA COSMÉTICA: con la referencia 39 % por encima del costo
+# típico, `reconcile_budget_with_cost` decía «dentro» casi siempre (22 de 26 en
+# los datos) — un veredicto que no puede fallar no informa. Bajar la referencia
+# devuelve significado al estado, aunque produzca más «excedido»: un «excedido»
+# cierto vale más que un «dentro» garantizado.
+#
+# ⚠ LÍMITE DE LA EVIDENCIA, explícito: los 21 planes son TODOS de tier `medium`
+# (3 usuarios, muestra de pruebas). Solo el centro de la escalera está medido.
+# `low` y `high` se mueven para conservar una escalera monótona y coherente
+# alrededor del punto medido — son JUICIO, no medición, y hay que remedirlos
+# cuando existan planes reales en esos tiers. Rollback sin redeploy:
+# MEALFIT_BUDGET_BAND_{LOW,MEDIUM,HIGH}.
+_BUDGET_TIER_BAND_DEFAULTS = {"low": "1.05", "medium": "1.25", "high": "1.9"}
 _BUDGET_VALID_TIERS = ("low", "medium", "high", "unlimited", "custom")
 
 
