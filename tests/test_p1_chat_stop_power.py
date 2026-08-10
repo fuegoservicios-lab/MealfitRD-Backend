@@ -27,11 +27,60 @@ with open(os.path.join(_ROOT, "frontend", "src", "pages", "AgentPage.jsx"),
 
 
 def test_stop_button_covers_recovery_phase():
-    assert "(isLoading || recoveringTurn) ? (" in _AP, \
-        "el ■ debe verse también durante 'Recuperando tu respuesta…'"
+    """[actualizado P1-CHAT-TURN-ACTIVE · 2026-08-10] Antes este caso afirmaba la
+    cadena literal `(isLoading || recoveringTurn) ? (`. Su INTENCIÓN —que el ■ rojo
+    cubra todas las fases en que hay algo que detener— se cumple ahora MEJOR, y por
+    eso el literal cambia en vez de conservarse.
+
+    `isLoading` se apaga en el PRIMER token, así que el gate viejo hacía desaparecer
+    el botón justo al empezar a escribirse la respuesta: la fase más larga del turno
+    y la que el usuario más quiere poder cortar. `isTurnActive` dura hasta el
+    `finally`, o sea hasta que el turno termina de verdad."""
+    assert "(isTurnActive || recoveringTurn) ? (" in _AP, \
+        "el ■ debe verse durante TODO el turno (incluido el streaming) y la recuperación"
+    assert "(isLoading || recoveringTurn) ? (" not in _AP, \
+        "volvió el gate que ocultaba el ■ en cuanto llegaba el primer token"
     i = _AP.find("const handleStopGeneration")
     win = _AP[i:i + 2400]
     assert "setRecoveringTurn(false)" in win
+
+
+def test_un_turno_en_vuelo_bloquea_el_siguiente():
+    """[P1-CHAT-TURN-ACTIVE · 2026-08-10] `isLoading` significa «está pensando», no
+    «hay un turno en vuelo»: deja de ser cierto en el primer token. Como gobernaba
+    también el guard de entrada, desde ese instante se podía lanzar un SEGUNDO stream
+    que escribe sobre la MISMA burbuja que el primero sigue llenando — conversación
+    corrupta y sin aviso.
+
+    El guard lee el REF y no el state a propósito: dos toques dentro del mismo frame
+    de React verían ambos el valor viejo (misma lección que P1-FORM-4)."""
+    i = _AP.find("const handleSend = async")
+    win = _AP[i:i + 900]
+    assert "isTurnActiveRef.current) return;" in win, \
+        "el guard de entrada debe mirar el turno, no el 'pensando'"
+
+    # Encendido único y apagado único: si alguien apaga el turno en una rama
+    # concreta del stream, el hueco se reabre por esa puerta.
+    assert _AP.count("_setTurnActive(true)") == 1, \
+        "el turno debe encenderse en un solo sitio (handleSend)"
+    i_fin = _AP.find("} finally {", i)
+    assert i_fin > 0 and "_setTurnActive(false)" in _AP[i_fin:i_fin + 400], \
+        "el apagado autoritativo va en el finally: cubre done, error, abort y excepción"
+
+    # «Nuevo chat» era el único camino sin guard alguno.
+    i_new = _AP.find("const handleNewChat")
+    assert "isTurnActiveRef.current" in _AP[i_new:i_new + 700], \
+        "abrir un chat nuevo a mitad de un turno debe cortar el stream anterior"
+
+
+def test_detener_cierra_la_burbuja():
+    """Detener es TERMINAR el turno, no dejarlo colgado: si la burbuja se queda con
+    `isStreaming: true`, nunca ofrece Copiar/Regenerar sobre lo que sí llegó y el
+    efecto de caché se salta la persistencia."""
+    i = _AP.find("const handleStopGeneration")
+    win = _AP[i:i + 1600]
+    assert "isStreaming: false" in win, \
+        "el stop debe cerrar la burbuja en curso"
 
 
 def test_stop_dismissal_survives_refresh_and_leaves_feedback():
