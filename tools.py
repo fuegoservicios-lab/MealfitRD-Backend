@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
-from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules
+from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules, canonicalize_diet_type
 logger = logging.getLogger(__name__)
 
 from db import (
@@ -30,6 +30,9 @@ import threading
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
 from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, appetibility_fix_for_update, SLOT_APPROPRIATENESS_GATE_ENABLED
+# [P0-CHAT-ALLERGY-SSOT · 2026-08-11] Los mismos matchers que el pipeline de planes.
+# No se reescriben aqui: reescribirlos fue el defecto.
+from graph_orchestrator import _allergen_pool_item_banned, _diet_pool_item_banned
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -284,8 +287,51 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
         else:
             _new_field_value = new_value
 
+        # [P0-CHAT-ALLERGY-MERGE · 2026-08-11] Las alergias y las condiciones médicas se
+        # FUNDEN; no se reemplazan.
+        #
+        # Antes esto era `_hp[field] = _new_field_value`, y el system prompt ordena al
+        # modelo llamar esta tool «OBLIGATORIO y SIN EXCEPCIÓN cada vez que el usuario
+        # mencione un dato nuevo», con «soy intolerante a la lactosa» de ejemplo literal.
+        # Secuencia real: perfil con ["Mariscos","Frutos Secos"] → el usuario menciona la
+        # lactosa → el modelo obedece → queda ["Lacteos"]. Los otros dos desaparecen. Y
+        # justo después se borran los `user_facts` de categoría alergia, que eran el
+        # respaldo. `health_profile` no guarda historial: no hay de dónde recuperarlos.
+        #
+        # La asimetría es deliberada. Añadir una alergia de más cuesta que el usuario
+        # coma menos variado y lo diga; perder una cuesta una reacción alérgica. Ante la
+        # duda, se acumula.
+        #
+        # RETIRAR una alergia sigue siendo posible, pero no por este camino: el usuario
+        # la desmarca en Configuración, que es una acción suya, deliberada y visible. Una
+        # frase de pasada en un chat no es una retirada de consentimiento clínico.
+        #
+        # Los gustos y los obstáculos SÍ se reemplazan: son preferencias, cambian, y
+        # acumularlos para siempre convertiría «no me gusta el tomate» de un martes en
+        # una restricción permanente que nadie puede quitar.
+        _CLINICOS_ACUMULATIVOS = ('allergies', 'medicalConditions')
+
         def _field_mutator(_hp):
-            _hp[field] = _new_field_value
+            if field in _CLINICOS_ACUMULATIVOS and isinstance(_new_field_value, list):
+                _previos = _hp.get(field) or []
+                if not isinstance(_previos, list):
+                    _previos = [_previos]
+                _vistos, _union = set(), []
+                for _v in [*_previos, *_new_field_value]:
+                    _t = str(_v).strip()
+                    _k = strip_accents(_t.lower())
+                    if _t and _k not in _vistos:
+                        _vistos.add(_k)
+                        _union.append(_t)
+                if len(_union) > len(_new_field_value):
+                    logger.info(
+                        f"🛡 [P0-CHAT-ALLERGY-MERGE] {field}: se conservan "
+                        f"{len(_union) - len(_new_field_value)} valor(es) previos que el "
+                        f"modelo no repitió ({_previos} + {_new_field_value} → {_union})"
+                    )
+                _hp[field] = _union
+            else:
+                _hp[field] = _new_field_value
             return None
 
         update_user_health_profile_atomic(user_id, _field_mutator)
@@ -3431,16 +3477,21 @@ _MICRO_NUTRIENT_COLUMNS = {
     "cholesterol": ("cholesterol_mg_per_100g", "colesterol", "mg", True),
 }
 
-# Tokens para filtrar el catálogo por tipo de dieta (best-effort; la LLM hace el
-# filtro final con las restricciones completas del perfil en el system prompt).
-_VEGETARIAN_EXCLUDE = [
-    "carne", "pollo", "pavo", "pescado", "cerdo", "chuleta", "bacalao", "salami",
-    "jamon", "tocino", "longaniza", "salchich", "atun", "sardina", "marisco",
-    "camaron", "higado", "chicharron", "res ", "bistec", "costilla",
-]
-_VEGAN_EXCLUDE = _VEGETARIAN_EXCLUDE + [
-    "huevo", "leche", "queso", "yogur", "mantequilla", "crema", "lacteo", "miel",
-]
+# [P0-CHAT-ALLERGY-SSOT · 2026-08-11] AQUÍ VIVÍAN `_VEGETARIAN_EXCLUDE` y
+# `_VEGAN_EXCLUDE`: una CUARTA tabla de dieta escrita a mano, que es exactamente lo que
+# `P1-DIET-CANON-SSOT` prohíbe por escrito («No escribas una 4ª»). Se borran.
+#
+# El filtro de dieta y el de alérgenos usan ahora los mismos matchers que el pipeline
+# de planes —`_diet_pool_item_banned` y `_allergen_pool_item_banned`, respaldados por
+# los `_DIET_*_TERMS` y por `_ALLERGEN_SYNONYMS`—, con coincidencia por palabra
+# completa, plurales y la excusa plant-adjacent («leche de coco» no es lácteo).
+#
+# Por qué importaba: el filtro viejo comparaba la ETIQUETA DEL CHIP contra el NOMBRE
+# del alimento como subcadena. El formulario guarda «Lacteos» (QAllergies.jsx:48) y
+# ningún alimento se llama «lácteo», así que no bloqueaba nada. Medido contra las 206
+# filas reales: Lácteos 0 de 24, Gluten 0 de 15, Mariscos 0 de 4, Frutos Secos 0 de 6.
+# «Huevo» y «Maní» sí acertaban —porque la etiqueta coincide con el nombre— y por eso
+# parecía que funcionaba.
 
 # [P3-MICRO-FOOD-SUGGEST] Condimentos/especias/hierbas secas: densísimos por 100g
 # pero se consumen en pizcas → no son "fuentes" prácticas de un micronutriente.
@@ -3499,6 +3550,7 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
         # Restricciones del usuario (best-effort). Las listas pueden venir como
         # list o como string "Lacteos, Gluten".
         allergies, dislikes, diet_type = [], [], "balanced"
+        _clin_form = {}
         try:
             profile = get_user_profile(user_id) or {}
             hp = profile.get("health_profile") or {}
@@ -3510,17 +3562,22 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
                     return [x.strip() for x in v.split(",") if x.strip()]
                 return []
 
-            allergies = [strip_accents(str(a).lower()) for a in _as_list(hp.get("allergies"))]
+            # [P0-CHAT-ALLERGY-SSOT] Las alergias viajan CRUDAS al matcher: él hace su
+            # propia normalización y resuelve la etiqueta del chip («Lacteos») a sus ~30
+            # sinónimos. Normalizarlas aquí a mano fue justo el origen del defecto.
+            allergies = [str(a) for a in _as_list(hp.get("allergies")) if str(a).strip()]
             dislikes = [strip_accents(str(d).lower()) for d in _as_list(hp.get("dislikes"))]
-            diet_type = (hp.get("dietType") or "balanced").strip().lower()
+            diet_type = canonicalize_diet_type(hp.get("dietType"))
+            _clin_form = {
+                "medicalConditions": _as_list(hp.get("medicalConditions")),
+                "medications": _as_list(hp.get("medications")),
+            }
         except Exception as _pe:
             logger.warning(f"⚠ [TOOL] suggest_foods_for_nutrient: perfil no disponible ({_pe})")
 
-        exclude_tokens = [t for t in (allergies + dislikes) if t]
-        if diet_type == "vegetarian":
-            exclude_tokens += _VEGETARIAN_EXCLUDE
-        elif diet_type == "vegan":
-            exclude_tokens += _VEGAN_EXCLUDE
+        # Los gustos siguen siendo subcadena: son una PREFERENCIA, y colarse de más
+        # ahí no hace daño. Las alergias no son una preferencia.
+        exclude_tokens = [t for t in dislikes if t]
 
         from shopping_calculator import get_master_ingredients
         rows = get_master_ingredients() or []
@@ -3542,6 +3599,14 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
             name_norm = strip_accents(str(name).lower())
             if any(tok in name_norm for tok in exclude_tokens):
                 continue
+            # [P0-CHAT-ALLERGY-SSOT · 2026-08-11] El mismo matcher que usa el pipeline
+            # de planes, no uno propio. Fail-OPEN por diseño en los helpers (devuelven
+            # False si algo revienta), así que este bloque nunca deja al coach mudo —
+            # pero sí deja de recomendar queso a un alérgico a lácteos.
+            if allergies and _allergen_pool_item_banned(name, allergies):
+                continue
+            if diet_type and _diet_pool_item_banned(name, diet_type):
+                continue
             # Condimentos/especias: densos por 100g pero no son fuentes prácticas.
             if any(tok in name_norm for tok in _CONDIMENT_EXCLUDE):
                 continue
@@ -3561,10 +3626,59 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
 
         verb = "más bajos en" if is_ceiling else "más ricos en"
         body = "\n".join(f"- {name}: {round(val, 1)}{unit} por cada 100g" for name, val in top)
+
+        # [P0-CHAT-ALLERGY-SSOT · 2026-08-11] Aquí la guía le prometía al modelo que la
+        # lista venía depurada de antemano, y era FALSO: no bloqueaba ni un lácteo.
+        # (La frase literal no se reproduce aquí a propósito: el guard que impide que
+        # vuelva escanea este archivo, y citarla lo haría fallar contra su propia
+        # explicación.)
+        # Peor que el filtro roto era la frase, porque el modelo no tiene otra fuente con
+        # la que contradecirla — se le quitaba el único motivo para dudar.
+        #
+        # Ahora el filtro sí funciona, y aun así la frase NO vuelve. Se le dice al modelo
+        # QUÉ se aplicó y qué NO, que es lo que le permite seguir vigilando: la lista pasa
+        # por alergias y dieta, pero el cruce medicamento↔nutriente (potasio con IECA,
+        # vitamina K con warfarina) vive hoy solo en el pipeline de planes, así que aquí
+        # se declara como contexto para que el modelo lo tenga en cuenta él.
+        # Se nombran las DIMENSIONES aplicadas, no los valores. Repetir aquí la lista de
+        # alergias no le añade nada al modelo —ya la tiene en su contexto clínico— y sí
+        # mete los nombres de los alérgenos dentro del texto de la respuesta, que es
+        # justo donde un lector automático (o un test) los busca para comprobar que NO
+        # se están recomendando.
+        _avisos = []
+        if allergies:
+            _avisos.append("sus alergias declaradas")
+        if diet_type and diet_type != "balanced":
+            _avisos.append("su tipo de dieta")
+        _filtrado = (
+            f"La lista YA excluye lo incompatible con {' y '.join(_avisos)}."
+            if _avisos else
+            "El perfil no declara alergias ni dieta restrictiva, así que la lista va sin filtrar."
+        )
+
+        _clinico = ""
+        try:
+            from condition_rules import detect_active_rules as _dar
+            _reglas = _dar(_clin_form) if _clin_form else []
+            _meds = [str(m) for m in (_clin_form.get("medications") or []) if str(m).strip()]
+            _ctx = []
+            if _reglas:
+                _ctx.append("condiciones activas: " + ", ".join(r.label for r in _reglas))
+            if _meds:
+                _ctx.append("medicamentos: " + ", ".join(_meds))
+            if _ctx:
+                _clinico = (
+                    f" OJO — este filtro NO contempla {' ni '.join(_ctx)}; "
+                    "revísalo tú antes de recomendar (p. ej. potasio con IECA/ARA-II, "
+                    "vitamina K con warfarina, calcio/hierro con levotiroxina)."
+                )
+        except Exception:
+            pass
+
         guidance = (
-            f"Estos son alimentos del catálogo {verb} {label}, ya filtrados por las "
-            "restricciones del usuario. Recomiéndale 2-3 opciones prácticas con cantidades "
-            "realistas para integrarlas a su plan; NO listes todos crudos ni inventes valores."
+            f"Estos son alimentos del catálogo {verb} {label}. {_filtrado}{_clinico} "
+            "Recomiéndale 2-3 opciones prácticas con cantidades realistas para integrarlas "
+            "a su plan; NO listes todos crudos ni inventes valores."
         )
         return f"ALIMENTOS {verb.upper()} {label.upper()} (catálogo, por 100g):\n{body}\n\n{guidance}"
 

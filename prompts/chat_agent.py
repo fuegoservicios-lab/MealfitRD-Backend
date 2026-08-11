@@ -296,7 +296,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `search_deep_memory` cuando el usuario pregunte sobre datos de su pasado que no estén en el contexto inmediato del chat, como preferencias antiguas, alergias reportadas antes, o historial lejano.
 - Usa `check_hydration_today` cuando el usuario pregunte sobre su hidratación del día ('¿cuánta agua llevo?', '¿cumplí la meta de agua?', '¿voy bien con el agua?'), o cuando necesites contexto para sugerirle tomar agua.
 - Usa `log_water_glass` cuando el usuario diga que tomó agua o se equivocó marcando ('me tomé un vaso', 'marca dos más', 'borra el último', 'llevo 5 vasos'). Para valores absolutos, primero usa `check_hydration_today` para conocer el conteo actual y luego pasa el delta correcto.
-- Usa `suggest_foods_for_nutrient` cuando el usuario pregunte qué comer para mejorar un micronutriente específico de su plan (ej: '¿qué como para más fibra?', 'necesito más hierro', 'cómo subo la vitamina D', 'cómo bajo el sodio'). Devuelve alimentos del catálogo (criollos) ya filtrados por las alergias/rechazos/dieta del usuario; úsalos para recomendarle 2-3 opciones prácticas con cantidades realistas, NO inventes valores de nutrientes.
+- Usa `suggest_foods_for_nutrient` cuando el usuario pregunte qué comer para mejorar un micronutriente específico de su plan (ej: '¿qué como para más fibra?', 'necesito más hierro', 'cómo subo la vitamina D', 'cómo bajo el sodio'). Devuelve alimentos del catálogo (criollos) y te dice en su propia respuesta QUÉ excluyó y qué NO — léelo, porque el filtro cubre alergias, rechazos y dieta pero NO el cruce medicamento↔nutriente. [P0-CHAT-ALLERGY-SSOT · 2026-08-11] Antes esta línea te prometía la lista depurada de antemano, y era falso: el filtro comparaba la etiqueta del chip contra el nombre del alimento y no bloqueaba ni un lácteo. Ya está arreglado, pero la afirmación NO vuelve: darte una garantía por adelantado te quita el único motivo para revisar, y el filtro sigue sin cubrirlo todo. Úsalos para recomendarle 2-3 opciones prácticas con cantidades realistas, NO inventes valores de nutrientes.
 - Usa `check_clinical_profile` SOLO cuando el usuario pregunte por sus laboratorios o valores clínicos ('¿cómo está mi glucosa?', '¿qué dice mi colesterol?', '¿mis labs afectan el plan?'). Cita los valores tal cual, interpreta con prudencia de coach (NO diagnostiques) y recuérdale que no sustituye una consulta médica.
 {_plan_day_tool_bullet()}
 
@@ -320,7 +320,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `modify_pantry_inventory` cuando el usuario diga que comió, gastó, botó o compró un ingrediente específico (ej: 'me quedé sin aguacates', 'añade leche'). Modificará el inventario directamente.
 - Usa `search_deep_memory` cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta, o datos que no aparecen en la memoria reciente (ej: '¿Recuerdas qué comía al principio?', '¿Cómo me sentía hace meses?').
 - Usa `check_hydration_today` cuando pregunte sobre su agua del día ('¿cuánta agua llevo?', '¿voy bien?'). Usa `log_water_glass` cuando diga que se tomó agua o se equivocó marcando ('me tomé un vaso' → delta=1; 'borra uno' → delta=-1). Para absolutos, primero check y calcula el delta.
-- Usa `suggest_foods_for_nutrient` cuando pregunte qué comer para mejorar un micronutriente (ej: '¿qué como para más fibra?', 'necesito hierro', 'cómo bajo el sodio'). Devuelve alimentos del catálogo filtrados por sus alergias/dieta; recomiéndale 2-3 opciones prácticas con cantidades.
+- Usa `suggest_foods_for_nutrient` cuando pregunte qué comer para mejorar un micronutriente (ej: '¿qué como para más fibra?', 'necesito hierro', 'cómo bajo el sodio'). Devuelve alimentos del catálogo y te dice en su respuesta QUÉ excluyó y qué NO — léelo: cubre alergias, rechazos y dieta, pero NO el cruce medicamento↔nutriente. [P0-CHAT-ALLERGY-SSOT · 2026-08-11] No te fíes de una garantía por adelantado: antes esta línea daba una que era falsa. Recomiéndale 2-3 opciones prácticas con cantidades.
 - Usa `check_clinical_profile` SOLO si pregunta por sus laboratorios/valores clínicos ('¿cómo está mi glucosa?'). Cita valores tal cual, prudencia de coach (NO diagnostiques), recuerda que no sustituye consulta médica.
 {_plan_day_tool_bullet()}
 
@@ -472,3 +472,77 @@ REGLAS CRÍTICAS:
 Mensaje del usuario: 
 "{first_message}"
 """
+
+
+def build_clinical_guard_context(form_data: dict) -> str:
+    """[P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Alergias, condiciones y medicamentos, SIEMPRE
+    en el prompt del coach.
+
+    EL HUECO QUE CIERRA. `build_user_identity_context` dice en su docstring que es «NO
+    clínico: NO inyecta alergias, condiciones ni medicamentos (esos viven en sus bloques
+    estrictos)». La frase es cierta para el GENERADOR DE PLANES —que sí tiene su bloque
+    PRIORIDAD 1 (`plan_generator.py:1842`)— y falsa para el CHAT, que no tenía ninguno.
+    Leída dentro de `chat_agent.py` se entendía como que el chat también los recibía.
+
+    Hasta hoy, la única vía por la que el coach podía enterarse de una alergia era la
+    inyección RAG de `user_facts` (probabilística) o ir a buscarla con
+    `search_deep_memory` (tiene que decidir hacerlo). O sea: el coach que te recomienda
+    qué comer podía no saber a qué eres alérgico.
+
+    POR QUÉ AHORA Y NO ANTES. Hoy el chat es una superficie secundaria al lado de un plan
+    que sí pasa por el reviewer clínico y por `clinical_backstop_for_meal`. El modo
+    seguimiento que viene invierte eso: convierte el chat en la ÚNICA superficie de
+    recomendación, para justo los usuarios que nunca pasarán por esa cadena. Una defensa
+    que vive en un CAMINO y no en el DATO desaparece cuando se abre un camino nuevo.
+
+    LO QUE NO HACE. Esto no valida las respuestas del modelo: es contexto, no un guard.
+    El tamiz determinista de `suggest_foods_for_nutrient` es lo que de verdad filtra
+    (P0-CHAT-ALLERGY-SSOT); esto es la segunda capa, para todo lo que el coach dice
+    fuera de esa herramienta — que es la mayoría de lo que dice.
+
+    Devuelve "" si no hay nada declarado: un bloque vacío que dice «ninguna alergia»
+    gasta tokens en las cuatro llamadas y le da al modelo una certeza que no tiene (un
+    perfil incompleto no es un perfil sin alergias)."""
+    if not isinstance(form_data, dict):
+        return ""
+
+    def _lista(clave):
+        v = form_data.get(clave)
+        if isinstance(v, str):
+            v = [x.strip() for x in v.split(",")]
+        if not isinstance(v, list):
+            return []
+        # Los centinelas de «nada declarado» del formulario no son datos clínicos.
+        _vacios = {"", "ninguna", "ninguno", "no", "n/a", "na", "nada"}
+        return [str(x).strip() for x in v if str(x).strip() and str(x).strip().lower() not in _vacios]
+
+    alergias = _lista("allergies")
+    condiciones = _lista("medicalConditions")
+    medicamentos = _lista("medications")
+    if not (alergias or condiciones or medicamentos):
+        return ""
+
+    lineas = ["\n\n🛑 PERFIL CLÍNICO DEL USUARIO — PRIORIDAD 1, POR ENCIMA DE CUALQUIER PREFERENCIA:"]
+    if alergias:
+        lineas.append(
+            f"- ALERGIAS / INTOLERANCIAS: {', '.join(alergias)}. NUNCA le recomiendes estos "
+            "alimentos ni sus derivados, aunque te los pida, aunque le gusten y aunque "
+            "aparezcan en una lista que te devuelva una herramienta."
+        )
+    if condiciones:
+        lineas.append(
+            f"- CONDICIONES MÉDICAS: {', '.join(condiciones)}. Tenlas en cuenta en cada "
+            "recomendación."
+        )
+    if medicamentos:
+        lineas.append(
+            f"- MEDICAMENTOS: {', '.join(medicamentos)}. Vigila los cruces conocidos con "
+            "nutrientes (potasio con IECA/ARA-II, vitamina K con warfarina, calcio y "
+            "hierro con levotiroxina, B12 con metformina) — ninguna herramienta los filtra "
+            "por ti."
+        )
+    lineas.append(
+        "Si el usuario te pide algo que choca con esto, dilo y ofrece una alternativa; no "
+        "lo ignores ni lo cumplas en silencio."
+    )
+    return "\n".join(lineas) + "\n"

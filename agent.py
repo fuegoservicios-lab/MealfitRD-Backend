@@ -279,6 +279,7 @@ from prompts.chat_agent import (
     build_tools_instructions_stream,
     build_inventory_context,
     build_user_identity_context,
+    build_clinical_guard_context,
 )
 # [P1-CHAT-PAST-DAYS · 2026-07-27] Memoria de días pasados — doc:
 # backend/docs/chat_past_days_memory.md
@@ -5670,6 +5671,13 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         if user_id and user_id != session_id and user_id != "guest":
             _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
         system_prompt += build_user_identity_context(form_data or {}, _id_name)
+        # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
+        # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
+        # porque las alergias «viven en sus bloques estrictos» — cierto para el
+        # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
+        # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
+        # yendo a buscarla él. Ver `build_clinical_guard_context`.
+        system_prompt += build_clinical_guard_context(form_data or {})
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
@@ -6068,6 +6076,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         if user_id and user_id != session_id and user_id != "guest":
             _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
         system_prompt += build_user_identity_context(form_data or {}, _id_name)
+        # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
+        # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
+        # porque las alergias «viven en sus bloques estrictos» — cierto para el
+        # generador de planes, falso para el chat, que no tenía ninguno. Hasta hoy el
+        # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
+        # yendo a buscarla él. Ver `build_clinical_guard_context`.
+        system_prompt += build_clinical_guard_context(form_data or {})
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
