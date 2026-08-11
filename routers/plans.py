@@ -5151,7 +5151,6 @@ async def api_budget_floor(
         return {"ok": False}
 
 
-@router.post("/pending-status/ack")
 def _emit_change_outcome_metric(kind: str, outcome: str, **campos) -> None:
     """[P1-CHANGE-OUTCOME-TELEMETRY · 2026-08-05] Una fila por CAMBIO que el usuario
     pide: cambiar un plato (`swap`) o regenerar el día (`regen_day`).
@@ -5197,6 +5196,23 @@ def _emit_change_outcome_metric(kind: str, outcome: str, **campos) -> None:
             pass
 
 
+# [P0-ACK-ROUTE-REBOUND · 2026-08-10] Este decorador estaba 45 líneas más arriba,
+# pegado a `_emit_change_outcome_metric` — un helper de telemetría que alguien insertó
+# ENTRE el decorador y su handler (P1-CHANGE-OUTCOME-TELEMETRY, 2026-08-05). Un
+# decorador no busca "la función que le corresponde": decora la SIGUIENTE. Así que la
+# ruta quedó apuntando al helper, y este handler sin decorar: código muerto.
+#
+# CONSECUENCIA MEDIDA EN PRODUCCIÓN: `POST /pending-status/ack` devolvía **422 en el
+# 100% de las llamadas** (el helper exige `kind` y `outcome`), o sea que el acuse NUNCA
+# limpiaba el KV. Cada carga de página volvía a leer 'complete' y a lanzar el aviso
+# «Tu plan está listo» de un plan entregado hacía días. El dueño lo reportó como «cada
+# vez que refresco me sigue apareciendo».
+#
+# No lo vio nadie porque el frontend hacía `catch { /* best-effort */ }` sin mirar el
+# status: un 422 constante era indistinguible del éxito. Ese silencio se cierra aparte.
+#
+# Y de rebote el helper de telemetría quedó EXPUESTO como endpoint HTTP público.
+@router.post("/pending-status/ack")
 async def api_pending_pipeline_ack(
     verified_user_id: str = Depends(get_verified_user_id),
     session_id: Optional[str] = Query(None),
