@@ -258,11 +258,17 @@ def test_failed_log_still_fails_loud():
 # ---------------------------------------------------------------------------
 
 def test_endpoint_gates_deduction_on_dedup_sentinel():
+    # [P1-MANUAL-FOOD-LOG · 2026-08-11] El sentinel se mudó con el cuerpo a
+    # `_persist_consumed_meal`, el camino común de la foto y el componedor manual. La
+    # propiedad es la misma de siempre: un doble-tap dentro de la ventana NO descuenta
+    # dos veces. La condición ganó el término `deduct` (el interruptor de Nevera del
+    # componedor); si pierde el `not _already_logged`, el doble-tap vuelve a bajar la
+    # Nevera al doble del consumo real.
     src = _DIARY.read_text(encoding="utf-8")
-    body = src[src.index("def api_log_consumed_meal("):]
+    body = src[src.index("def _persist_consumed_meal("):]
     body = body[:body.index("\n@router.")]
     assert '_logged_ok == "deduped"' in body
-    assert "if _ingredients and not _already_logged" in body
+    assert "if _ingredients and deduct and not _already_logged" in body
 
 
 def test_markers_alive():

@@ -60,6 +60,40 @@ router = APIRouter(
 # que envíen campos extra (no romper rollouts).
 # ---------------------------------------------------------------------------
 
+# [P1-MANUAL-FOOD-LOG · 2026-08-11] El componedor manda REFERENCIAS, nunca macros
+# (doctrina de `consumed-from-plan`): la aritmética corre server-side en
+# `food_search.resolve_line`, una vez, al enviar. La única excepción es
+# `ref="custom"` — un alimento que el catálogo no conoce, donde el usuario declara
+# con la misma autoridad que ya tiene el escáner de fotos (y con los mismos topes).
+class ManualMealLine(BaseModel):
+    ref: str = Field(..., min_length=1, max_length=200)
+    qty: float = Field(default=1.0, gt=0.0, le=5000.0)
+    unit: str = Field(default="g", max_length=24)
+    name: Optional[str] = Field(default=None, max_length=120)
+    macros: Optional[dict] = None
+
+
+class ManualMealRequest(BaseModel):
+    lines: List[ManualMealLine] = Field(..., min_length=1, max_length=12)
+    meal_name: Optional[str] = Field(default=None, max_length=200)
+    # `extra` NO está en `_SLOT_CANON_MAP`: no atenúa ningún plato del plan ni
+    # bloquea swap/PDF (P1-EATEN-RECIPE-LOCK). Es el default correcto para el
+    # componedor: lo que SÍ es del plan ya tiene «me lo comí».
+    meal_type: str = Field(default="extra", max_length=32)
+    days_ago: int = Field(default=0, ge=0, le=7)
+    # Arranca APAGADO en el cliente: descontar sin pedirlo convierte cada antojo
+    # anotado en una mutación de inventario que el usuario no pidió.
+    deduct_pantry: bool = False
+
+
+class RepeatMealRequest(BaseModel):
+    """Repetir toma COORDENADAS (el id de una fila propia), no contenido — el
+    cliente no puede inventar macros por esta vía tampoco."""
+    source_meal_id: str = Field(..., min_length=8, max_length=64)
+    meal_type: Optional[str] = Field(default=None, max_length=32)
+    days_ago: int = Field(default=0, ge=0, le=7)
+
+
 class ConsumedMealRequest(BaseModel):
     """Payload para `POST /api/diary/consumed`. Campos numéricos clamp a
     rangos sanos para evitar NaN/Infinity contamination en agregados."""
@@ -211,6 +245,17 @@ _DELETE_CONSUMED_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 # clase (mutación barata, anti-spam sin restringir uso legítimo: 5-6 comidas
 # al día están holgadamente dentro).
 _PLAN_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
+# [P1-MANUAL-FOOD-LOG · 2026-08-11] Los cuatro writes/reads del registro manual son
+# cero costo LLM ⇒ quota-exempt con RateLimiter, la misma doctrina que las filas de
+# «Historial-quota-exemption» (CLAUDE.md): al cap, el usuario tiene que poder seguir
+# anotando lo que come, y cada anotación NO puede quemar crédito de PLANES.
+# `_CONSUMED_WRITE_LIMITER` cierra además una omisión histórica: /consumed era el
+# único write del diario SIN limitador.
+_CONSUMED_WRITE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+_MANUAL_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+_FOOD_FREQUENT_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+_REPEAT_MEAL_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
@@ -671,11 +716,78 @@ def _clamp_diary_days_ago(days_ago) -> int:
     return max(0, min(_DIARY_MAX_DAYS_AGO, d))
 
 
+def _persist_consumed_meal(
+    *, user_id: str, meal_name: str, meal_type: str, calories, protein, carbs,
+    healthy_fats, ingredients, days_ago, background_tasks: BackgroundTasks,
+    source: str, deduct: bool = True,
+) -> dict:
+    """[P1-MANUAL-FOOD-LOG · 2026-08-11] EL camino de escritura del diario, extraído
+    del cuerpo de `/consumed` para que la foto y el componedor manual lo COMPARTAN en
+    vez de copiarlo. Aquí viven, una sola vez: el fail-loud de persistencia
+    (P1-PROD-AUDIT-3), el sentinel «deduped» del doble-tap (P2-CONSUMED-DEDUP-
+    INVENTORY), el atado al ledger (P1-CONSUMPTION-LEDGER), el backdate que preserva
+    la hora (P1-DIARY-EDITABLE) y la forma de la respuesta con lo que NO bajó
+    (P1-PANTRY-NAME-RESOLUTION). Una copia garantizaría que en tres meses uno de los
+    dos endpoints tenga el próximo fix y el otro no.
+
+    `source` viaja al ledger — antes estaba clavado a "photo" en el único caller.
+
+    `deduct=False` con ingredientes: se GUARDAN (el coach los lee) pero se marcan
+    `inventory_synced` igual, porque la decisión explícita del usuario de no tocar su
+    Nevera debe sobrevivir también a la reconciliación del cierre de chunk — si no,
+    el «no» de hoy se convertiría en un descuento silencioso dentro de unos días."""
+    from datetime import datetime, timezone, timedelta
+    _days_ago = _clamp_diary_days_ago(days_ago)
+    consumed_at_override = (
+        datetime.now(timezone.utc) - timedelta(days=_days_ago)
+    ).isoformat()
+
+    _ingredients = ingredients or None
+    _logged_ok = log_consumed_meal(
+        user_id, meal_name, int(calories), int(protein), int(carbs),
+        int(healthy_fats), ingredients=_ingredients, meal_type=meal_type,
+        mark_inventory_synced=bool(_ingredients),
+        consumed_at_override=consumed_at_override,
+    )
+    if not _logged_ok:
+        raise HTTPException(
+            status_code=500,
+            detail="No se pudo registrar la comida. Reintenta en unos segundos.",
+        )
+
+    _already_logged = (_logged_ok == "deduped")
+    _summary = {}
+    if _ingredients and deduct and not _already_logged:
+        import db_inventory
+        _summary = db_inventory.deduct_consumed_meal_from_inventory(
+            user_id, _ingredients,
+            consumed_meal_id=(_logged_ok if isinstance(_logged_ok, str) else None),
+            source=source,
+        ) or {}
+
+    if not _already_logged:
+        background_tasks.add_task(trigger_incremental_learning, user_id)
+
+    return {
+        "success": True,
+        "message": "Comida registrada exitosamente.",
+        "already_logged": _already_logged,
+        "meal_id": (_logged_ok if isinstance(_logged_ok, str) else None),
+        "deducted": _summary.get("succeeded") or [],
+        "inferred": _summary.get("inferred") or [],
+        "not_in_pantry": _summary.get("not_in_pantry") or [],
+        "failed_to_deduct": _summary.get("failed_to_deduct") or [],
+    }
+
+
 @router.post("/consumed")
 def api_log_consumed_meal(
     payload: ConsumedMealRequest,
     background_tasks: BackgroundTasks = BackgroundTasks(),
-    verified_user_id: str = Depends(get_verified_user_id)
+    # [P1-MANUAL-FOOD-LOG · 2026-08-11] Era el único write del diario sin RateLimiter
+    # (omisión histórica). `RateLimiter.__call__` envuelve `get_verified_user_id` y
+    # devuelve el user_id autenticado — mismo patrón que los vecinos.
+    verified_user_id: Optional[str] = Depends(_CONSUMED_WRITE_LIMITER),
 ):
     """Registra una comida consumida manualmente desde el frontend.
 
@@ -684,18 +796,14 @@ def api_log_consumed_meal(
     antes del handler (422 con detalle estructurado en lugar de 500
     silencioso).
 
-    [P1-DIARY-EDITABLE · 2026-07-28] `days_ago` (0..7) permite backdatear —
-    antes el POST siempre escribía `NOW()` y un usuario que olvidó loguear
-    el fin de semana no podía corregirlo retroactivamente.
+    [P1-DIARY-EDITABLE · 2026-07-28] `days_ago` (0..7) permite backdatear.
+
+    [P1-MANUAL-FOOD-LOG · 2026-08-11] El cuerpo vive en `_persist_consumed_meal`,
+    compartido con el componedor manual. Aquí solo quedan las decisiones de ESTA
+    superficie: IDOR, guests y `source="photo"`.
     """
     try:
         user_id = payload.user_id
-        meal_name = payload.meal_name
-        meal_type = payload.meal_type
-        calories = payload.calories
-        protein = payload.protein
-        carbs = payload.carbs
-        healthy_fats = payload.healthy_fats
 
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -705,81 +813,156 @@ def api_log_consumed_meal(
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
 
-        # [P1-DIARY-EDITABLE · 2026-07-28] `consumed_at_override`: fecha real
-        # de consumo en el día LOCAL del usuario (RD = UTC-4). Restar días
-        # enteros a "ahora" (en vez de anclar a medianoche UTC/local)
-        # preserva la hora del día — una comida backdateada sigue pareciendo
-        # una comida real (14:32) en vez de un timestamp sospechoso (00:00:00).
-        from datetime import datetime, timezone, timedelta
-        _days_ago = _clamp_diary_days_ago(payload.days_ago)
-        consumed_at_override = (
-            datetime.now(timezone.utc) - timedelta(days=_days_ago)
-        ).isoformat()
-
-        # [P1-PROD-AUDIT-3 · 2026-05-30] Fail-loud en fallo de persistencia.
-        # ANTES se descartaba el return de log_consumed_meal y se devolvía
-        # success:true incondicional → en un blip de DB (la helper captura toda
-        # excepción y `return None`, db_facts.py) el usuario veía "registrada
-        # exitosamente" sin que nada persistiera, y `trigger_incremental_learning`
-        # se programaba sobre data fantasma. Hermano del fail-loud de /progress
-        # (404 en None) y /water-intake (503), y del caller chat-agent que ya
-        # chequea `if result is not None` (tools.py). log_consumed_meal retorna
-        # truthy en éxito (incl. True en dedup-skip) y None/falsy en fallo.
-        # [P1-PHOTO-DEDUCTS · 2026-08-07] `mark_inventory_synced` solo si vamos a
-        # descontar acto seguido; si no, la reconciliación al cierre del chunk
-        # debe poder recogerlo (misma regla que `consumed-from-plan`).
-        _ingredients = payload.ingredients or None
-        _logged_ok = log_consumed_meal(
-            user_id, meal_name, int(calories), int(protein), int(carbs),
-            int(healthy_fats), ingredients=_ingredients, meal_type=meal_type,
-            mark_inventory_synced=bool(_ingredients),
-            consumed_at_override=consumed_at_override,
+        return _persist_consumed_meal(
+            user_id=user_id, meal_name=payload.meal_name, meal_type=payload.meal_type,
+            calories=payload.calories, protein=payload.protein, carbs=payload.carbs,
+            healthy_fats=payload.healthy_fats, ingredients=payload.ingredients,
+            days_ago=payload.days_ago, background_tasks=background_tasks,
+            source="photo",
         )
-        if not _logged_ok:
-            raise HTTPException(
-                status_code=500,
-                detail="No se pudo registrar la comida. Reintenta en unos segundos.",
-            )
-
-        # [P2-CONSUMED-DEDUP-INVENTORY · 2026-05-30] `"deduped"` = doble-tap
-        # dentro de la ventana: NO hubo INSERT nuevo, así que descontar otra vez
-        # bajaría la Nevera al DOBLE del consumo real.
-        _already_logged = (_logged_ok == "deduped")
-        _summary = {}
-        if _ingredients and not _already_logged:
-            import db_inventory
-            _summary = db_inventory.deduct_consumed_meal_from_inventory(
-                user_id, _ingredients,
-                # [P1-CONSUMPTION-LEDGER · 2026-08-07] `_logged_ok` es el id de
-                # la fila recién insertada: atarlo aquí es lo que permite que
-                # "Deshacer registro" devuelva esta comida a la Nevera.
-                consumed_meal_id=(_logged_ok if isinstance(_logged_ok, str) else None),
-                source="photo",
-            ) or {}
-
-        # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background.
-        # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top del archivo.
-        # Solo se programa tras confirmar la escritura (no sobre fantasma).
-        if not _already_logged:
-            background_tasks.add_task(trigger_incremental_learning, user_id)
-
-        return {
-            "success": True,
-            "message": "Comida registrada exitosamente.",
-            "already_logged": _already_logged,
-            # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] Lo que NO bajó viaja al
-            # cliente. Sin esto el modal diría "registrado" y el usuario
-            # asumiría que la Nevera se movió entera — la misma mentira que
-            # aquel P-fix eliminó del chat.
-            "deducted": _summary.get("succeeded") or [],
-            "inferred": _summary.get("inferred") or [],
-            "not_in_pantry": _summary.get("not_in_pantry") or [],
-            "failed_to_deduct": _summary.get("failed_to_deduct") or [],
-        }
     except HTTPException as he:
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed/manual")
+def api_log_manual_meal(
+    payload: ManualMealRequest,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    verified_user_id: Optional[str] = Depends(_MANUAL_MEAL_LIMITER),
+):
+    """[P1-MANUAL-FOOD-LOG · 2026-08-11] El componedor: buscar → apilar líneas →
+    registrar, sin foto, sin chat y sin gastar un crédito.
+
+    El cliente manda referencias (`dish:`/`food:`/`custom`); la aritmética corre aquí
+    UNA vez. Si una ref no resuelve: 422 y NO se registra a medias — el usuario vería
+    949 kcal en pantalla y 589 en el diario."""
+    try:
+        if not verified_user_id:
+            return {"success": False, "message": "Inicia sesión para registrar comidas."}
+
+        import food_search
+        from shopping_calculator import get_master_ingredients
+        catalogo = get_master_ingredients() or []
+
+        resueltas, pantry = [], []
+        totales = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0}
+        for ln in payload.lines:
+            try:
+                r = food_search.resolve_line(ln.model_dump(), catalogo)
+            except food_search.LineaIrresoluble as li:
+                raise HTTPException(status_code=422, detail=f"Línea irresoluble: {li}")
+            resueltas.append(r)
+            pantry.extend(r["pantry_lines"])
+            for k in totales:
+                totales[k] += float(r["macros"].get(k) or 0.0)
+
+        pantry = food_search.merge_pantry_lines(pantry)
+        meal_name = (payload.meal_name or "").strip() or food_search.derive_meal_name(
+            [r["name"] for r in resueltas]
+        )
+
+        resp = _persist_consumed_meal(
+            user_id=verified_user_id, meal_name=meal_name, meal_type=payload.meal_type,
+            calories=totales["kcal"], protein=totales["protein"], carbs=totales["carbs"],
+            healthy_fats=totales["fats"], ingredients=(pantry or None),
+            days_ago=payload.days_ago, background_tasks=background_tasks,
+            source="manual", deduct=bool(payload.deduct_pantry),
+        )
+        resp["totals"] = {k: int(v) for k, v in totales.items()}
+        resp["lines"] = [
+            {"name": r["name"], "grams": r["grams"], "kcal": int(r["macros"]["kcal"])}
+            for r in resueltas
+        ]
+        return resp
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed/manual POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.get("/foods/frequent")
+def api_frequent_foods(
+    limit: int = 8,
+    verified_user_id: Optional[str] = Depends(_FOOD_FREQUENT_LIMITER),
+):
+    """[P1-MANUAL-FOOD-LOG · 2026-08-11] «Lo que más registras»: GROUP BY de 30 días
+    sobre `consumed_meals`. Sin tabla de favoritos y sin curación manual — pedirle al
+    usuario que mantenga una lista es pedirle trabajo por algo que el sistema calcula
+    solo. Devuelve además el id de la fila más reciente de cada grupo, que es la
+    coordenada que `/consumed/repeat` acepta."""
+    try:
+        if not verified_user_id:
+            return {"items": []}
+        limit = max(1, min(20, int(limit or 8)))
+        rows = execute_sql_query(
+            """
+            SELECT meal_name,
+                   COUNT(*)::int AS veces,
+                   ROUND(AVG(calories))::int AS kcal,
+                   ROUND(AVG(protein))::int AS protein,
+                   ROUND(AVG(carbs))::int AS carbs,
+                   ROUND(AVG(healthy_fats))::int AS fats,
+                   (ARRAY_AGG(id::text ORDER BY consumed_at DESC))[1] AS last_meal_id
+            FROM consumed_meals
+            WHERE user_id = %s AND consumed_at > NOW() - INTERVAL '30 days'
+            GROUP BY meal_name
+            ORDER BY COUNT(*) DESC, MAX(consumed_at) DESC
+            LIMIT %s
+            """,
+            (verified_user_id, limit),
+            fetch_all=True,
+        ) or []
+        return {"items": rows}
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/foods/frequent: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/consumed/repeat")
+def api_repeat_consumed_meal(
+    payload: RepeatMealRequest,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    verified_user_id: Optional[str] = Depends(_REPEAT_MEAL_LIMITER),
+):
+    """[P1-MANUAL-FOOD-LOG · 2026-08-11] «Lo mismo de ayer»: re-registra una fila
+    PROPIA por su id. Coordenadas, no contenido. La lectura filtra por dueño y el 404
+    es el mismo para «no existe» y «es de otro» (invariante I2 aplicada al diario).
+
+    NO descuenta Nevera: repetir es la vía rápida de anotar, y un descuento implícito
+    en una acción de un toque es exactamente la mutación-sin-pedir que el interruptor
+    del componedor existe para evitar."""
+    try:
+        if not verified_user_id:
+            return {"success": False, "message": "Inicia sesión para registrar comidas."}
+
+        row = execute_sql_query(
+            """
+            SELECT meal_name, meal_type, calories, protein, carbs, healthy_fats, ingredients
+            FROM consumed_meals WHERE id = %s AND user_id = %s
+            """,
+            (payload.source_meal_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Comida no encontrada.")
+
+        return _persist_consumed_meal(
+            user_id=verified_user_id, meal_name=row["meal_name"],
+            meal_type=(payload.meal_type or row.get("meal_type") or "extra"),
+            calories=row.get("calories") or 0, protein=row.get("protein") or 0,
+            carbs=row.get("carbs") or 0, healthy_fats=row.get("healthy_fats") or 0,
+            ingredients=(row.get("ingredients") or None),
+            days_ago=payload.days_ago, background_tasks=background_tasks,
+            source="manual", deduct=False,
+        )
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed/repeat POST: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
