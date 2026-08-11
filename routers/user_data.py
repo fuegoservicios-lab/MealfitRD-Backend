@@ -39,6 +39,10 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
+# [P1-GUEST-CATALOG · 2026-08-11] El catálogo responde también sin sesión; el limitador
+# es su contrapeso. Mismo singleton de módulo que usan los de `routers/plans.py`, que
+# ya sabe agrupar por `ip:<host>` cuando no hay usuario (extensión P1-6).
+from rate_limiter import RateLimiter
 # [P1-SCAN-CATALOG-MATCH · 2026-08-10] La resolución «texto libre → alimento del
 # catálogo» es SSOT en constants, junto a `pantry_names_match`.
 from constants import pantry_names_match, resolve_scanned_food
@@ -627,14 +631,42 @@ async def api_inventory_photo_scan(
     return {"items": results, "provider": provider}
 
 
+# [P1-GUEST-CATALOG · 2026-08-11] Campos que un SELECTOR de alimentos necesita, y ni uno
+# más. El resto de columnas del catálogo —precios por libra y por unidad, densidades,
+# envase de mercado, tamaños disponibles— no las usa ningún buscador: las usa la Nevera
+# para calcular costos y conversiones, y son el trabajo curado de este producto. Un
+# invitado no las necesita para escribir «arroz».
+_CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "category", "aliases", "default_unit", "staple_gate_label")
+
+# Anti-abuso del camino sin sesión: el catálogo es ~20KB y el cliente lo cachea 24h, así
+# que un uso legítimo pide esto UNA vez por wizard. El límite no molesta a nadie real y
+# evita que un endpoint sin auth se convierta en un grifo de scraping barato.
+_CATALOG_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
+
+
 @router.get("/catalog")
 async def api_get_catalog(
-    verified_user_id: str = Depends(get_verified_user_id),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    _rl: None = Depends(_CATALOG_LIMITER),
 ):
     """Catálogo master_ingredients (cuasi-inmutable, ~20KB). El frontend
-    mantiene su cache singleton de 24h — este endpoint solo cambia el
-    transporte. Auth requerida (paridad con el acceso RLS previo)."""
-    _require_user(verified_user_id)
+    mantiene su cache singleton de 24h — este endpoint solo cambia el transporte.
+
+    [P1-GUEST-CATALOG · 2026-08-11] SIN SESIÓN TAMBIÉN RESPONDE, con una proyección
+    reducida. Antes exigía auth «(paridad con el acceso RLS previo)» — o sea, la
+    restricción venía del TRANSPORTE anterior, no de una necesidad de privacidad:
+    `master_ingredients` es una tabla global de referencia, no datos de nadie.
+
+    La consecuencia era un paso del formulario que un invitado no podía completar. El
+    wizard es público (`/assessment` sin login) y su paso 15 —«Tus básicos de siempre»—
+    busca contra este catálogo: sin sesión la lista llegaba vacía, así que el buscador
+    no autocompletaba nada y no se podía añadir ningún alimento. No fallaba de forma
+    visible; simplemente no encontraba nada, que es peor, porque parece que el alimento
+    no existe.
+
+    Lo que NO se abre: precios, densidades y datos de envase. Un buscador necesita
+    nombres; el resto es el trabajo curado del producto y sigue detrás de la sesión.
+    """
 
     def _catalog():
         from db import execute_sql_query
@@ -647,7 +679,13 @@ async def api_get_catalog(
                    price_per_lb::float8 AS price_per_lb,
                    price_per_unit::float8 AS price_per_unit,
                    market_container, container_weight_g::float8 AS container_weight_g,
-                   available_sizes_g, default_unit
+                   available_sizes_g, default_unit,
+                   kcal_per_100g::float8 AS kcal_per_100g,
+                   protein_g_per_100g::float8 AS protein_g_per_100g,
+                   carbs_g_per_100g::float8 AS carbs_g_per_100g,
+                   fats_g_per_100g::float8 AS fats_g_per_100g,
+                   fiber_g_per_100g::float8 AS fiber_g_per_100g,
+                   sodium_mg_per_100g::float8 AS sodium_mg_per_100g
             FROM master_ingredients ORDER BY name ASC
             """,
             fetch_all=True,
@@ -680,7 +718,52 @@ async def api_get_catalog(
     except Exception:
         logger.warning("[P1-STAPLE-SEARCH-RANK] no se pudo anotar el catálogo con el rótulo del gate", exc_info=True)
 
+    # [P1-MANUAL-FOOD-LOG · 2026-08-11] Porciones PRECOMPUTADAS server-side. El
+    # componedor del diario las multiplica (`qty × grams_per_qty`) y eso es aritmética;
+    # decidir cuántos gramos tiene «1 taza de arroz» es del catálogo y de nadie más. Si
+    # el cliente llevara su propia tabla de conversión, sería otra copia del motor
+    # esperando a driftar — el precio que este repo ya pagó con la dieta.
+    # La resolución REAL al enviar vuelve a correr server-side (`food_search`); esto
+    # existe solo para que la vista previa del cliente enseñe los mismos números.
+    for _it in items:
+        _p = [{"unit": "g", "grams_per_qty": 1.0, "label": "g"}]
+        if _it.get("density_g_per_cup"):
+            _p.append({"unit": "taza", "grams_per_qty": float(_it["density_g_per_cup"]), "label": "taza"})
+        if _it.get("density_g_per_unit"):
+            _p.append({"unit": "unidad", "grams_per_qty": float(_it["density_g_per_unit"]), "label": "unidad"})
+        _du = str(_it.get("default_unit") or "").strip().lower()
+        _def = "unidad" if (_du in ("unidad", "unit") and len(_p) > 2) else ("taza" if any(x["unit"] == "taza" for x in _p) and _du not in ("lb", "unidad") else _p[-1]["unit"])
+        for _x in _p:
+            _x["default"] = (_x["unit"] == _def)
+        _it["portions"] = _p
+
+    # [P1-GUEST-CATALOG · 2026-08-11] La poda va DESPUÉS de anotar el rótulo del gate: ese
+    # campo lo calcula el backend a propósito (ver la nota de P1-STAPLE-SEARCH-RANK justo
+    # arriba) y el buscador de básicos lo necesita para avisar de que dos alimentos gastan
+    # un solo cupo. Podar antes lo dejaría fuera y el invitado perdería ese aviso.
+    if not verified_user_id:
+        items = [
+            {k: it.get(k) for k in _CATALOG_CAMPOS_INVITADO}
+            for it in items
+        ]
+
     return {"items": items}
+
+
+@router.get("/catalog/dishes")
+async def api_get_catalog_dishes(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-MANUAL-FOOD-LOG · 2026-08-11] Los 60 platos criollos curados
+    (`data/dominican_dishes.json`), en su vista pública: label + ración
+    (`finished_g`) + `per_100g`. SIN `constituents` — la expansión a Nevera es
+    server-side y el cliente no necesita saber de qué está hecho el moro.
+
+    Cuasi-inmutable como el catálogo (~4 KB gzip): el frontend lo cachea 24 h en
+    `pantryCache` junto al resto. Auth por paridad con `/catalog`."""
+    _require_user(verified_user_id)
+    import food_search
+    return {"items": await asyncio.to_thread(food_search.dishes_for_client)}
 
 
 # ---------------------------------------------------------------------------
