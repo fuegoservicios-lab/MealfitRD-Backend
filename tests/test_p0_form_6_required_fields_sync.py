@@ -227,7 +227,11 @@ _QUOTED_STRING = re.compile(r"'([^']+)'")
 # pero el backend sigue tratando ausente como generación libre — perfiles
 # legacy y payloads de regeneración directa no traen el campo. Mismo patrón
 # que dietType.
-_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource"})
+# [P1-APPMODE-REQUIRED · 2026-08-12] appMode: el paso 0 del wizard (¿plan o
+# contador?) también obligatorio por el owner. Puro ruteo del wizard: el
+# backend JAMÁS lee appMode del payload — el modo se conmuta por el endpoint
+# /api/profile/plan-mode, no por el formulario.
+_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource", "appMode"})
 
 
 def _read_form_validation_js() -> str:
@@ -356,8 +360,12 @@ def test_exclusiones_intencionales_son_exactamente_las_documentadas():
         del plan); el backend trata ausente como generación libre — perfiles
         legacy y regeneración directa (useRegeneratePlan) no traen el campo y
         el downstream es benigno.
+      - appMode (P1-APPMODE-REQUIRED · 2026-08-12): paso 0 del wizard, puro
+        ruteo de rama (plan vs contador). El backend jamás lo lee del payload:
+        el modo se conmuta vía /api/profile/plan-mode. Exigirlo backend-side
+        sería exigir un campo que ningún caller no-wizard puede conocer.
     """
-    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource"}), (
+    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource", "appMode"}), (
         f"Conjunto de exclusiones cambió: {sorted(_FRONTEND_ONLY_BY_DESIGN)}.\n"
         f"Cada exclusión bypasses la red de safety cross-language. Documenta "
         f"la razón en el comentario de `_FRONTEND_ONLY_BY_DESIGN` Y en el "
