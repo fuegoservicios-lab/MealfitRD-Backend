@@ -262,6 +262,56 @@ def _limpiar_caches_de_catalogo():
 # ---------------------------------------------------------------------------
 # Core fixture: synthetic user + plan_id, with full teardown
 # ---------------------------------------------------------------------------
+_TABLAS_USER_ID_CACHE: list | None = None
+
+# Las que ya limpian los DELETE explícitos del teardown, en su orden de claves foráneas.
+# Se excluyen del barrido para no repetir trabajo — no por corrección: repetir un DELETE
+# ya hecho es inofensivo.
+_TABLAS_YA_EXPLICITAS = frozenset({"plan_chunk_queue", "meal_plans", "user_inventory", "user_profiles"})
+
+
+def _tablas_con_user_id() -> list:
+    """[P1-TEARDOWN-SWEEP · 2026-08-12] Tablas de `public` con columna `user_id`.
+
+    Se pregunta al CATÁLOGO en vez de mantener una lista: una lista escrita el día que
+    había tres tablas se queda corta en cuanto alguien añade la cuarta, y nadie se entera
+    hasta que aparecen miles de filas huérfanas. Esta pregunta no envejece.
+
+    Se consulta UNA vez por sesión (el esquema no cambia a mitad de corrida) y se cachea:
+    el teardown corre por cada test.
+
+    Fail-soft a la lista conocida: si el catálogo no se puede leer, es preferible limpiar
+    lo de siempre que reventar el teardown entero y dejarlo TODO sucio.
+    """
+    global _TABLAS_USER_ID_CACHE
+    if _TABLAS_USER_ID_CACHE is not None:
+        return _TABLAS_USER_ID_CACHE
+
+    try:
+        filas = execute_sql_query(
+            """
+            SELECT c.table_name
+              FROM information_schema.columns c
+              JOIN information_schema.tables t
+                ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+             WHERE c.table_schema = 'public'
+               AND c.column_name = 'user_id'
+               AND t.table_type = 'BASE TABLE'
+             ORDER BY c.table_name
+            """,
+            fetch_all=True,
+        ) or []
+        nombres = [
+            r["table_name"] if isinstance(r, dict) else r[0]
+            for r in filas
+        ]
+        _TABLAS_USER_ID_CACHE = [n for n in nombres if n not in _TABLAS_YA_EXPLICITAS]
+    except Exception:
+        _TABLAS_USER_ID_CACHE = []
+
+    return _TABLAS_USER_ID_CACHE
+
+
 def _safe_write(query: str, params: tuple, label: str) -> None:
     """[P0-TEST-DB-ISOLATION · 2026-07-29] DELETE de teardown aislado: un fallo en
     UNA sentencia (lock, blip de red) ya no aborta las siguientes — cada tabla se
@@ -367,6 +417,30 @@ def seeded_user_profile():
         _safe_write("DELETE FROM plan_chunk_queue WHERE user_id = %s", (user_id,), "plan_chunk_queue(user_id)")
         _safe_write("DELETE FROM meal_plans WHERE user_id = %s", (user_id,), "meal_plans(user_id)")
         _safe_write("DELETE FROM user_inventory WHERE user_id = %s", (user_id,), "user_inventory")
+
+        # [P1-TEARDOWN-SWEEP · 2026-08-12] Barrido de TODA tabla con `user_id`, antes de
+        # borrar el perfil.
+        #
+        # POR QUÉ EXISTE. Este teardown limpiaba tres tablas a mano. Las suites escriben
+        # en muchas más —telemetría, coste, métricas de chunk, frecuencias de
+        # ingrediente—, así que cada corrida dejaba filas cuyo dueño desaparecía un
+        # instante después. Medido en producción el 2026-08-12: **7.540 filas huérfanas
+        # de 600 dueños fantasma**, ninguno con un solo plan, comida o mensaje. Y el
+        # 42% del libro de coste por usuario era de ellos, o sea que cualquier análisis
+        # de gasto por persona estaba contaminado.
+        #
+        # POR QUÉ SE DERIVA DEL ESQUEMA Y NO ES UNA LISTA. Añadir los seis nombres que
+        # faltaban hoy repetiría el error: la lista se escribió cuando había tres tablas,
+        # y se quedó corta sin que nadie la tocara. Lo que no envejece es la pregunta
+        # «¿qué tablas tienen un `user_id`?», y esa la contesta el catálogo. Una tabla
+        # nueva queda cubierta el día que se crea.
+        #
+        # Va DESPUÉS de los DELETE explícitos de arriba (que son los que respetan el
+        # orden de claves foráneas entre plan y cola) y ANTES de `user_profiles`, que es
+        # la raíz. Cada uno aislado: una tabla que falle no puede dejar las demás sucias.
+        for _tabla in _tablas_con_user_id():
+            _safe_write(f"DELETE FROM {_tabla} WHERE user_id::text = %s", (user_id,), f"sweep {_tabla}")
+
         _safe_write("DELETE FROM user_profiles WHERE id = %s", (user_id,), "user_profiles")
 
 
@@ -473,16 +547,30 @@ def _reportar_telemetria_fantasma():
     `pytest_sessionfinish_algo` no lo ejecutaría nadie y sería un detector inerte —
     verde para siempre, vigilando nada.
     """
+    # [P1-TEARDOWN-SWEEP · 2026-08-12] Antes miraba UNA tabla: `chunk_lesson_telemetry`.
+    # Por eso no vio nada cuando había 7.540 filas huérfanas repartidas en SEIS tablas
+    # (llm_usage_events 2.576, pipeline_metrics 1.868, plan_chunk_metrics 1.225,
+    # chunk_deferrals 886, ingredient_frequencies 690 y, sí, 295 en la que sí miraba).
+    #
+    # Un detector que vigila una tabla de seis no es que avise poco: es que su silencio
+    # se lee como «todo limpio». Ahora pregunta al catálogo igual que el barrido del
+    # teardown, así que una tabla nueva entra en la vigilancia el día que se crea y no el
+    # día que alguien se acuerda.
+    _tablas = ["meal_plans", "user_inventory", "plan_chunk_queue"] + list(_tablas_con_user_id())
+    if not _tablas:
+        return
+    _union = "\n UNION ALL\n".join(
+        f"""SELECT '{t}' AS tabla, count(*)::int AS n,
+                   count(DISTINCT x.user_id::text)::int AS usuarios
+              FROM {t} x
+             WHERE x.user_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM user_profiles p
+                                WHERE p.id::text = x.user_id::text)
+            HAVING count(*) > 0"""
+        for t in _tablas
+    )
     try:
-        filas = execute_sql_query(
-            """
-            SELECT 'chunk_lesson_telemetry' AS tabla, count(*)::int AS n,
-                   count(DISTINCT t.user_id)::int AS usuarios
-            FROM chunk_lesson_telemetry t
-            WHERE NOT EXISTS (SELECT 1 FROM user_profiles p WHERE p.id = t.user_id)
-            HAVING count(*) > 0
-            """
-        ) or []
+        filas = execute_sql_query(_union) or []
     except Exception:  # sin DB / red caída: el detector nunca estorba
         return
     if not filas:
@@ -498,10 +586,12 @@ def _reportar_telemetria_fantasma():
         )
     if _gravedad == "AVISO":
         print(
-            "    Por qué importa: los crons de ratio de síntesis agregan ESTA tabla sin "
-            "filtrar, así que estas filas mueven una métrica de producto.\n"
-            "    Limpieza: DELETE FROM chunk_lesson_telemetry t WHERE NOT EXISTS "
-            "(SELECT 1 FROM user_profiles p WHERE p.id = t.user_id);",
+            "    Por qué importa: varios crons agregan estas tablas SIN filtrar por "
+            "usuario, así que estas filas mueven métricas de producto — y el libro de "
+            "coste por usuario deja de poder responder cuánto gasta la gente de verdad.\n"
+            "    Limpieza (por cada tabla de arriba):\n"
+            "      DELETE FROM <tabla> x WHERE x.user_id IS NOT NULL AND NOT EXISTS\n"
+            "        (SELECT 1 FROM user_profiles p WHERE p.id::text = x.user_id::text);",
             file=_sys_tel.stderr,
         )
     else:
