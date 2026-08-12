@@ -222,7 +222,12 @@ _QUOTED_STRING = re.compile(r"'([^']+)'")
 # Si en el futuro se decide subir alguno a required-presence backend, eliminar
 # del set Y eliminar el test específico que protege la decisión (ej.
 # `test_diet_type_NO_es_required_por_compat_legacy`).
-_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType"})
+# [P1-PLANSOURCE-REQUIRED · 2026-08-12] planSource: obligatoria en el wizard por
+# decisión del owner (elegir libre vs Nevera es la primera decisión del plan),
+# pero el backend sigue tratando ausente como generación libre — perfiles
+# legacy y payloads de regeneración directa no traen el campo. Mismo patrón
+# que dietType.
+_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType", "planSource"})
 
 
 def _read_form_validation_js() -> str:
@@ -339,14 +344,22 @@ def test_frontend_required_minus_design_exclusions_equals_backend():
     )
 
 
-def test_diettype_es_la_unica_exclusion_intencional():
-    """Anchor: solo `dietType` debe estar en `_FRONTEND_ONLY_BY_DESIGN`. Si en
-    el futuro se decide excluir otro campo, este test falla intencionalmente
-    para forzar review del trade-off (silently default downstream vs 422 estricto).
+def test_exclusiones_intencionales_son_exactamente_las_documentadas():
+    """Anchor: el set de `_FRONTEND_ONLY_BY_DESIGN` es EXACTO — crece solo con
+    review explícito del trade-off (silently default downstream vs 422 estricto).
+
+    Historial de reviews:
+      - dietType (P3-NEW-4 · 2026-05-11): perfiles antiguos sin dietType siguen
+        funcionando con default "balanced" en graph_orchestrator.
+      - planSource (P1-PLANSOURCE-REQUIRED · 2026-08-12): obligatoria en el
+        wizard por decisión del owner (libre vs Nevera es la primera decisión
+        del plan); el backend trata ausente como generación libre — perfiles
+        legacy y regeneración directa (useRegeneratePlan) no traen el campo y
+        el downstream es benigno.
     """
-    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType"}), (
+    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType", "planSource"}), (
         f"Conjunto de exclusiones cambió: {sorted(_FRONTEND_ONLY_BY_DESIGN)}.\n"
         f"Cada exclusión bypasses la red de safety cross-language. Documenta "
-        f"la razón en el comentario de `_FRONTEND_ONLY_BY_DESIGN` antes de "
-        f"actualizar este test (ej. compat legacy, downstream benigno, etc.)."
+        f"la razón en el comentario de `_FRONTEND_ONLY_BY_DESIGN` Y en el "
+        f"historial del docstring antes de actualizar este test."
     )
