@@ -87,6 +87,12 @@ PICKUP_GATE_SQL = """
 # Los cinco estados que el apagado cancela. Módulo-nivel para que el test los ancle.
 CANCELLABLE_STATES = ("pending", "processing", "stale", "pending_user_action", "failed")
 
+# [P1-RESUME-REVIVES-QUEUE · 2026-08-12] La firma que la pausa deja en
+# `dead_letter_reason` de sus cancelados. Es EL contrato de la reanudación: solo
+# las filas con esta firma exacta (y dead_lettered_at NULL) se reviven — un
+# cancelled de cualquier otro origen sigue siendo terminal, como siempre.
+PAUSE_CANCEL_REASON = "[P1-PLAN-MODE] paused_by_user"
+
 
 def get_plan_mode(user_id: str) -> dict:
     row = execute_sql_query(
@@ -117,16 +123,23 @@ def pause_plan_generation(user_id: str) -> dict:
     )
 
     # 2. Cancelar la cola. RETURNING para contar y para el log forense.
+    #    [P1-RESUME-REVIVES-QUEUE · 2026-08-12] La pausa FIRMA sus cancelados en
+    #    `dead_letter_reason` (dead_lettered_at queda NULL — no es dead-letter).
+    #    Sin la firma, reanudar no sabía cuáles filas eran suyas: el primer ciclo
+    #    real de pausa→reanuda dejó el plan en 3/30 PARA SIEMPRE, porque ningún
+    #    otro mecanismo rellena un plan partial de un usuario activo (el catch-up
+    #    del shift es solo no-partial, el bg-refill es solo inactivos ≥3 días, y
+    #    el recovery ignora cancelled a propósito).
     cancelados = execute_sql_write(
         """
         UPDATE plan_chunk_queue
-        SET status = 'cancelled', updated_at = NOW()
+        SET status = 'cancelled', dead_letter_reason = %s, updated_at = NOW()
         WHERE user_id = %s
           AND status IN ('pending', 'processing', 'stale', 'pending_user_action', 'failed')
           AND dead_lettered_at IS NULL
         RETURNING id
         """,
-        (user_id,), returning=True,
+        (PAUSE_CANCEL_REASON, user_id), returning=True,
     ) or []
 
     # 3. Locks. Sin FK a meal_plans: nadie los limpia por CASCADE (el DELETE del plan
@@ -153,6 +166,69 @@ def pause_plan_generation(user_id: str) -> dict:
     n = len(cancelados)
     logger.info(f"⏸ [P1-PLAN-MODE] user {user_id}: pausa — {n} chunk(s) cancelados, locks liberados")
     return {"plan_mode": "tracking", "chunks_cancelled": n}
+
+
+def _revive_paused_chunks(user_id: str) -> dict:
+    """[P1-RESUME-REVIVES-QUEUE · 2026-08-12] Revive los chunks que ESTA pausa
+    canceló (firma exacta en dead_letter_reason) y rebasea sus offsets contra la
+    ventana viva de cada plan con el SSOT del ancla.
+
+    Por qué existe: el primer ciclo real pausa→reanuda dejó un plan partial en
+    3/30 sin NADIE que lo rellenara — catch-up del shift (solo no-partial),
+    bg-refill (solo inactivos ≥3 días) y recovery (ignora cancelled a propósito)
+    lo cubren todos MENOS este caso. La reanudación reencola lo que la pausa
+    apagó; `cancelled` sigue siendo terminal para todo lo demás.
+
+    El rebase NO es opcional: los offsets de esas filas quedaron anclados al
+    ancla de ANTES de la pausa, y el shift ya la movió a hoy — dejarlos quietos
+    es la clase f380821a (dos generaciones sobre los mismos días / relleno
+    tarde). Best-effort: si el pool no está o algo revienta, se loggea GRITADO y
+    resume sigue — el banner de plan-incompleto queda como red manual."""
+    try:
+        from db_core import connection_pool
+        from psycopg.rows import dict_row
+        if not connection_pool:
+            logger.warning("⚠️ [P1-RESUME-REVIVES-QUEUE] sin pool: cola NO revivida (red manual: banner).")
+            return {"revived": 0, "plans": 0}
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE plan_chunk_queue
+                        SET status = 'pending', dead_letter_reason = NULL,
+                            attempts = 0, updated_at = NOW()
+                        WHERE user_id = %s
+                          AND status = 'cancelled'
+                          AND dead_letter_reason = %s
+                          AND dead_lettered_at IS NULL
+                        RETURNING id, meal_plan_id
+                        """,
+                        (user_id, PAUSE_CANCEL_REASON),
+                    )
+                    filas = cursor.fetchall() or []
+                    planes = sorted({str(f["meal_plan_id"]) for f in filas if f.get("meal_plan_id")})
+                    for pid in planes:
+                        cursor.execute(
+                            "SELECT jsonb_array_length(COALESCE(plan_data->'days', '[]'::jsonb)) AS d "
+                            "FROM meal_plans WHERE id = %s",
+                            (pid,),
+                        )
+                        dias_vivos = int((cursor.fetchone() or {}).get("d") or 0)
+                        # Lazy: cron_tasks importa plan_mode (el gate del pickup) —
+                        # a nivel de módulo sería circular.
+                        from cron_tasks import _rebase_pending_chunk_offsets_sql
+                        movidas = _rebase_pending_chunk_offsets_sql(cursor, pid, dias_vivos)
+                        logger.info(
+                            f"▶ [P1-RESUME-REVIVES-QUEUE] plan {pid[:8]}: rebase post-revive "
+                            f"({dias_vivos} días vivos, {movidas} fila(s) movidas)"
+                        )
+        if filas:
+            logger.info(f"▶ [P1-RESUME-REVIVES-QUEUE] user {user_id}: {len(filas)} chunk(s) revividos en {len(planes)} plan(es)")
+        return {"revived": len(filas), "plans": len(planes)}
+    except Exception as e:
+        logger.error(f"❌ [P1-RESUME-REVIVES-QUEUE] revive falló (resume sigue; red manual: banner): {e}")
+        return {"revived": 0, "plans": 0}
 
 
 def resume_plan_generation(user_id: str) -> dict:
@@ -198,7 +274,12 @@ def resume_plan_generation(user_id: str) -> dict:
         (user_id,), returning=True,
     ) or []
 
-    # 3. ¿Venció la ventana? Se calcula sobre plan_mode_changed_at (la pausa pudo no
+    # 3. Revivir la cola que ESTA pausa canceló (firma exacta) + rebase de offsets
+    #    contra la ventana viva. DESPUÉS de la bandera (paso 1): revivir con el gate
+    #    puesto dejaría chunks pending que el pickup ignora — invisibles.
+    _revive = _revive_paused_chunks(user_id)
+
+    # 4. ¿Venció la ventana? Se calcula sobre plan_mode_changed_at (la pausa pudo no
     #    tener plan vivo). El caller (endpoint) decide shiftear o pedir plan nuevo.
     row = execute_sql_query(
         """
@@ -220,6 +301,7 @@ def resume_plan_generation(user_id: str) -> dict:
         "plan_status": restored,
         "paused_days": paused_days,
         "plan_expired": expired,
+        "chunks_revived": _revive["revived"],
     }
 
 
