@@ -845,7 +845,13 @@ async def api_nutrition_targets(
         profile = await asyncio.to_thread(get_user_profile, verified_user_id)
         hp = (profile or {}).get("health_profile") or {}
 
-        _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal")
+        # [P1-TRACKING-FINISH-SENSITIVE-GUARD · 2026-08-12] medicalConditions es
+        # requerida TAMBIÉN aquí: el gate de embarazo/lactancia del calculador lee
+        # esa lista, y sin exigirla un perfil con condiciones vacías (hidratación
+        # rota, PATCH viejo destructivo) devolvía metas CON DÉFICIT y ok:true —
+        # fail-open silencioso del gate. `[]` es falsy ⇒ cuenta como faltante.
+        # En la rama plan el contrato equivalente vive en _REQUIRED_FORM_FIELDS.
+        _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal", "medicalConditions")
         faltan = [c for c in _requeridos if not hp.get(c)]
         if faltan:
             return {"ok": False, "missing_fields": faltan}

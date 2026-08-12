@@ -2105,7 +2105,12 @@ def _postprocess_pipeline_result(
     # requests. Inyectado explícitamente — antes venía vía `data["tz_offset_minutes"]`
     # (mutación que P1-12 elimina).
     if actual_user_id:
-        hp_data = {k: v for k, v in data.items() if k not in ('session_id', 'user_id')}
+        # [P1-APPMODE-REQUIRED · 2026-08-12] `appMode` fuera del health_profile:
+        # es ruteo del wizard (¿plan o contador?), no dato de salud. El modo real
+        # vive en la COLUMNA user_profiles.plan_mode (endpoint plan-mode); dejarlo
+        # colarse al jsonb creaba una segunda verdad que la rama tracking declara
+        # explícitamente querer evitar.
+        hp_data = {k: v for k, v in data.items() if k not in ('session_id', 'user_id', 'appMode')}
         hp_data["tz_offset_minutes"] = tz_offset_mins
         if hp_data:
             try:
