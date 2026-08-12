@@ -833,15 +833,23 @@ async def api_nutrition_targets(
     if not verified_user_id:
         return {"ok": False, "missing_fields": ["session"], "reason": "guest"}
 
-    profile = await asyncio.to_thread(get_user_profile, verified_user_id)
-    hp = (profile or {}).get("health_profile") or {}
-
-    _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal")
-    faltan = [c for c in _requeridos if not hp.get(c)]
-    if faltan:
-        return {"ok": False, "missing_fields": faltan}
-
+    # [P1-TARGETS-NAMEERROR · 2026-08-12] TODO el camino con DB va dentro del try:
+    # este endpoint es fail-closed POR CONTRATO ({ok:false} honesto, jamás 500 crudo
+    # al cliente) y la primera versión lo violó del modo más tonto — el fetch del
+    # perfil vivía FUERA del try y usaba `get_user_profile` sin importarlo (el
+    # idioma del archivo es import lazy por-endpoint). NameError es runtime-only:
+    # el import-check del módulo pasa, y el test estructural también pasaba. El
+    # test nuevo llama el happy path DE VERDAD.
     try:
+        from db import get_user_profile
+        profile = await asyncio.to_thread(get_user_profile, verified_user_id)
+        hp = (profile or {}).get("health_profile") or {}
+
+        _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal")
+        faltan = [c for c in _requeridos if not hp.get(c)]
+        if faltan:
+            return {"ok": False, "missing_fields": faltan}
+
         from nutrition_calculator import get_nutrition_targets
         t = await asyncio.to_thread(get_nutrition_targets, hp)
         m = t.get("macros") or {}
