@@ -219,9 +219,42 @@ def _revive_paused_chunks(user_id: str) -> dict:
                         # a nivel de módulo sería circular.
                         from cron_tasks import _rebase_pending_chunk_offsets_sql
                         movidas = _rebase_pending_chunk_offsets_sql(cursor, pid, dias_vivos)
+                        # El rebase mueve execute_after POR EL DELTA del offset — y en
+                        # filas que pasaron la pausa canceladas, el par offset/exec se
+                        # desincronizó SOLO en exec (el shift movió el ancla mientras el
+                        # rebase no las tocaba por canceladas: offset quedó casualmente
+                        # cuadrado y exec congelado del ancla vieja → delta 0 → relleno
+                        # TARDE, medido en vivo: w4 exec 08-17 con ancla 08-12+3=08-15).
+                        # Re-sincronizar: retro-mover exec por los días que excede a
+                        # `d0 + offset` — conserva la hora del día (medianoche local
+                        # +30m) sin aritmética de TZ, porque d0 y offset ya son locales.
+                        cursor.execute(
+                            """
+                            UPDATE plan_chunk_queue q
+                            SET execute_after = GREATEST(
+                                    q.execute_after - make_interval(days =>
+                                        (q.execute_after::date
+                                         - (p.plan_data->'days'->0->>'date')::date
+                                         - q.days_offset)),
+                                    NOW()
+                                ),
+                                updated_at = NOW()
+                            FROM meal_plans p
+                            WHERE p.id = q.meal_plan_id
+                              AND q.meal_plan_id = %s
+                              AND q.status = 'pending'
+                              AND (p.plan_data->'days'->0->>'date') IS NOT NULL
+                              AND (q.execute_after::date
+                                   - (p.plan_data->'days'->0->>'date')::date
+                                   - q.days_offset) <> 0
+                            """,
+                            (pid,),
+                        )
+                        resinc = cursor.rowcount
                         logger.info(
                             f"▶ [P1-RESUME-REVIVES-QUEUE] plan {pid[:8]}: rebase post-revive "
-                            f"({dias_vivos} días vivos, {movidas} fila(s) movidas)"
+                            f"({dias_vivos} días vivos, {movidas} offset(s) movidos, "
+                            f"{resinc} exec re-sincronizados contra d0+offset)"
                         )
         if filas:
             logger.info(f"▶ [P1-RESUME-REVIVES-QUEUE] user {user_id}: {len(filas)} chunk(s) revividos en {len(planes)} plan(es)")

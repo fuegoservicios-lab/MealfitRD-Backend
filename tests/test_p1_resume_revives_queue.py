@@ -81,3 +81,19 @@ def test_resume_revive_despues_de_la_bandera_y_lo_reporta():
     i_revive = cuerpo.index("_revive_paused_chunks(user_id)")
     assert i_bandera < i_revive
     assert '"chunks_revived": _revive["revived"]' in cuerpo
+
+
+def test_exec_resincronizado_contra_d0_mas_offset():
+    """El rebase mueve exec POR DELTA de offset; una fila que pasó la pausa
+    cancelada quedó con offset casualmente cuadrado y exec del ancla VIEJA
+    (delta 0 ⇒ relleno tarde, medido: w4 exec 08-17 con ancla 08-12+3=08-15).
+    El revive re-deriva exec contra `d0 + offset` conservando la hora local."""
+    src = Path(pm.__file__).read_text(encoding="utf-8")
+    cuerpo = src[src.index("def _revive_paused_chunks"):src.index("def resume_plan_generation")]
+    assert "q.execute_after::date" in cuerpo
+    assert "- (p.plan_data->'days'->0->>'date')::date" in cuerpo
+    assert "- q.days_offset" in cuerpo
+    # con d0 ausente (plan legacy) NO se toca la fila
+    assert "IS NOT NULL" in cuerpo
+    # y el suelo es NOW(): jamás programar al pasado
+    assert "NOW()" in cuerpo
