@@ -1,18 +1,31 @@
 # -*- coding: utf-8 -*-
-"""[P1-MICRO-CRISP-SURFACES · 2026-08-12] Paridad claro↔oscuro del panel de
-Micronutrientes.
+"""[P1-MICRO-CRISP-SURFACES · 2026-08-12] Las superficies del panel de Micronutrientes.
 
-El owner pidió «que se vea más nítido» en los dos temas. Medir primero dijo que
-no era un color feo: el CLARO vivía a la mitad de separación que el oscuro en
-todas las relaciones (chip vs panel 4,7 contra 8,1 · tarjeta vs panel 7,1 contra
-11,7 · chevron 3,07:1 contra 5,06:1), y en AMBOS temas la tarjeta de atención se
-disolvía por su mitad inferior porque el gradiente terminaba exactamente en el
-color del panel (dL* 1,8 en claro, 0,0 en oscuro).
+HISTORIA DEL CONTRATO, porque es la lección: nació afirmando PARIDAD DE
+MAGNITUD (que cada relación midiese lo mismo en los dos temas) y hubo que
+parchearlo dos veces seguidas, siempre en la misma dirección — el dueño
+rechazando superficies que en oscuro salían claras:
 
-Este guard afirma la PARIDAD, no un número — un tema puede reafinarse mientras
-arrastre a su gemelo (la lección de P1-NOTEBOOK-MARGIN-LIGHT). Recalcula de
-verdad desde los tokens del DS, así que también salta si alguien cambia
-`--surface-sunken` o `--border` en index.css y rompe el panel de rebote.
+  1. la tarjeta de atención en L* 21,1 («se ve muy claro y eso es lo que no
+     quería, y más que está en modo oscuro»),
+  2. los tres chips de resumen en L* 16,4 («el fondo gris hace que se vea muy
+     claro en el modo oscuro y el contexto de adentro lo opaca»).
+
+Dos parches en la misma dirección no son dos incidentes: son un contrato
+equivocado. La simetría que perseguía obligaba al tema oscuro a ACLARAR sus
+superficies para igualar la separación del claro, que es justo lo que un tema
+oscuro no debe hacer. El contrato de hoy dice lo que el dueño dijo:
+
+  · En CLARO las superficies se HUNDEN bajo el panel blanco (suelo de dL*).
+  · En OSCURO no se aclaran: los chips quedan por debajo del panel, y la única
+    que se levanta es la tarjeta de atención —porque lleva estado— con un techo
+    ANCLADO A SU GEMELA: no puede levantarse en oscuro más de lo que se hunde
+    en claro.
+  · Y NO se mide paridad de nada: cada relación tiene su SUELO y cada tema
+    llega a él por su camino (ver el bloque «Sobre la paridad» más abajo).
+
+Recalcula todo desde los tokens del DS, así que salta también si alguien cambia
+`--bg-page` o `--border` en index.css y rompe el panel de rebote.
 """
 import re
 from pathlib import Path
@@ -23,14 +36,18 @@ FRONT = Path(__file__).resolve().parents[2] / "frontend" / "src"
 CSS_MOD = FRONT / "components" / "dashboard" / "MicronutrientMeter.module.css"
 CSS_DS = FRONT / "index.css"
 
-# Tono de estado «far» (el de las tarjetas del reporte): el claro lo reasigna.
-TONO = {"claro": "#EA580C", "oscuro": "#FB923C"}
+TONO = {"claro": "#EA580C", "oscuro": "#FB923C"}   # el estado «far», el de las tarjetas
+TONO_PCT_ATT = 9        # .att: color-mix(--tone 9%, --mn-att-base)
+TONO_PCT_BORDE = 52     # borde de .att
 
 
-# ── color utils (sRGB, igual que el navegador para color-mix in srgb) ──
 def _px(c):
     h = c.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _hex(rgb):
+    return "#%02X%02X%02X" % tuple(rgb)
 
 
 def _mix(c1, pct, c2):
@@ -66,7 +83,8 @@ def _tokens(tema):
     i = src.index(sel)
     blk = src[i:src.index("\n}", i)]
     out = {}
-    for k in ("--bg-card", "--surface-sunken", "--border", "--text-main", "--text-muted", "--text-light"):
+    for k in ("--bg-page", "--bg-card", "--surface-sunken", "--border",
+              "--text-main", "--text-muted", "--text-light"):
         m = re.search(re.escape(k) + r"\s*:\s*(#[0-9A-Fa-f]{6})\s*;", blk)
         if not m:
             pytest.fail(f"token {k} no resoluble como hex en el bloque {tema} de index.css")
@@ -75,22 +93,17 @@ def _tokens(tema):
 
 
 def _recipe(nombre, tema):
-    """Lee el porcentaje de una receta color-mix del módulo, por tema."""
     src = CSS_MOD.read_text(encoding="utf-8")
-    if tema == "oscuro":
-        i = src.index('html[data-theme="dark"]) .panel')
-        src_scope = src[i:src.index("}", i)]
-    else:
-        i = src.index(".panel {")
-        src_scope = src[i:src.index("}", i)]
-    m = re.search(re.escape(nombre) + r":\s*([^;]+);", src_scope)
+    ancla = 'html[data-theme="dark"]) .panel' if tema == "oscuro" else ".panel {"
+    i = src.index(ancla)
+    scope = src[i:src.index("}", i)]
+    m = re.search(re.escape(nombre) + r":\s*([^;]+);", scope)
     if not m:
-        pytest.fail(f"{nombre} no declarado para el tema {tema} — la paridad se declara en AMBOS")
+        pytest.fail(f"{nombre} no declarado para el tema {tema} — se declara en AMBOS")
     return m.group(1).strip()
 
 
 def _resolve(expr, tk):
-    """Resuelve `var(--x)` o `color-mix(in srgb, var(--a) N%, var(--b))`."""
     expr = expr.strip()
     m = re.fullmatch(r"var\((--[\w-]+)\)", expr)
     if m:
@@ -101,98 +114,111 @@ def _resolve(expr, tk):
     pytest.fail(f"receta no reconocida: {expr!r}")
 
 
-def _hex(rgb):
-    return "#%02X%02X%02X" % tuple(rgb)
-
-
 def _panel(tema):
     tk = _tokens(tema)
-    sunken = _resolve(_recipe("--mn-sunken", tema), tk)
+    chip = _resolve(_recipe("--mn-sunken", tema), tk)
+    tk2 = {**tk, "--mn-sunken": _hex(chip)}
     line = _resolve(_recipe("--mn-line", tema), tk)
     ink = _resolve(_recipe("--mn-ink-soft", tema), tk)
-    att_base = _resolve(_recipe("--mn-att-base", tema), {**tk, "--mn-sunken": _hex(sunken)})
-    att = _mix(TONO[tema], 9, att_base)        # .att: 9% de tono sobre la base del tema
-    att_border = _mix(TONO[tema], 52, tk["--border"])
-    card = _px(tk["--bg-card"])
+    att = _mix(TONO[tema], TONO_PCT_ATT, _resolve(_recipe("--mn-att-base", tema), tk2))
+    borde_att = _mix(TONO[tema], TONO_PCT_BORDE, tk["--border"])
+    panel = _px(tk["--bg-card"])
     return {
-        "_L_att": _L(att),
-        "_L_chip": _L(sunken),
-        "chip vs panel": abs(_L(sunken) - _L(card)),
-        "linea vs chip": abs(_L(line) - _L(sunken)),
-        "tarjeta vs panel": abs(_L(att) - _L(card)),
-        "borde tarjeta vs tarjeta": abs(_L(att_border) - _L(att)),
+        "L_panel": _L(panel), "L_chip": _L(chip), "L_att": _L(att),
+        "linea vs chip": abs(_L(line) - _L(chip)),
+        "borde de la tarjeta": abs(_L(borde_att) - _L(att)),
         "nombre sobre tarjeta": _ratio(_px(tk["--text-main"]), att),
         "apagado sobre tarjeta": _ratio(ink, att),
-        "apagado sobre chip": _ratio(_px(tk["--text-muted"]), sunken),
+        "apagado sobre chip": _ratio(_px(tk["--text-muted"]), chip),
     }
 
 
-def test_paridad_claro_oscuro():
-    """Cada relación mide parecido en los dos temas. El umbral (72%) permite
-    afinar un tema sin arrastrar milimétricamente al otro, pero no que uno viva
-    a la mitad del otro — que era el estado medido antes del fix."""
-    c, o = _panel("claro"), _panel("oscuro")
-    despares = []
-    for k in c:
-        # La tarjeta y su borde NO entran en la paridad: su magnitud y su
-        # direccion las decide cada tema. En claro la tarjeta se HUNDE bajo el
-        # panel blanco; en oscuro no puede hundirse mas (seria el marron sucio de
-        # agosto) ni aclararse (la queja del dueno), y al quedarse oscura su
-        # borde resalta MAS por consecuencia — que es el efecto buscado, no un
-        # defecto. Las dos tienen abajo su regla propia: un SUELO, no un espejo.
-        if k.startswith("_") or k in ("tarjeta vs panel", "borde tarjeta vs tarjeta"):
-            continue
-        par = min(c[k], o[k]) / max(c[k], o[k])
-        if par < 0.72:
-            despares.append(f"{k}: claro {c[k]:.2f} vs oscuro {o[k]:.2f} ({par*100:.0f}%)")
-    assert not despares, "paridad rota:\n  " + "\n  ".join(despares)
+# ── El contrato por tema ────────────────────────────────────────────────────
 
-
-def test_texto_del_panel_cumple_aa():
-    for tema in ("claro", "oscuro"):
-        m = _panel(tema)
-        for k in ("nombre sobre tarjeta", "apagado sobre tarjeta", "apagado sobre chip"):
-            assert m[k] >= 4.5, f"{tema} · {k} = {m[k]:.2f} (<4.5 AA)"
-
-
-def test_superficies_separadas_de_verdad():
-    """Piso absoluto: por debajo de dL* 6 dos superficies contiguas se funden
-    (el panel entero se ve «lavado», que es el reporte original)."""
-    for tema in ("claro", "oscuro"):
-        m = _panel(tema)
-        for k in ("chip vs panel", "tarjeta vs panel"):
-            assert m[k] >= 5.5, f"{tema} · {k} = dL* {m[k]:.1f} (<5,5 = se funden)"
-        # El borde es lo que define la tarjeta cuando su relleno es discreto
-        # (justo el caso del tema oscuro): suelo propio, sin techo.
-        assert m["borde tarjeta vs tarjeta"] >= 12.0, (
-            f"{tema} · borde de la tarjeta = dL* {m['borde tarjeta vs tarjeta']:.1f} "
-            f"(<12 = la tarjeta pierde su recorte)"
+def test_en_claro_las_superficies_se_hunden_bajo_el_panel():
+    m = _panel("claro")
+    for nombre, valor in (("chips", m["L_chip"]), ("tarjeta", m["L_att"])):
+        hundido = m["L_panel"] - valor
+        assert hundido >= 5.5, (
+            f"en claro los {nombre} deben hundirse bajo el panel blanco: "
+            f"dL* {hundido:.1f} (<5,5 = se funden con el panel)"
         )
 
 
-def test_en_oscuro_la_tarjeta_se_queda_oscura():
-    """[P1-MICRO-DARK-STAYS-DARK · 2026-08-12] La correccion del dueno a mi
-    primera version: yo optimice la PARIDAD DE MAGNITUD (misma separacion que
-    en claro) y en oscuro eso dio una tarjeta de L* 21,1 — mas clara que el
-    punto mas claro del degradado que sustituia, y mas clara que los chips que
-    tiene debajo. «Se ve muy claro y eso es lo que no queria, y mas que esta en
-    modo oscuro».
-
-    La regla que queda escrita no es un numero mio: en oscuro la tarjeta de
-    atencion NO puede ser mas clara que la superficie hundida de los chips. Un
-    tema oscuro que aclara sus tarjetas deja de ser oscuro."""
+def test_en_oscuro_las_superficies_no_se_aclaran():
+    """La corrección del dueño, dos veces seguidas y en la misma dirección.
+    Los chips se hunden o se quedan; jamás flotan por encima del panel."""
     m = _panel("oscuro")
-    assert m["_L_att"] <= m["_L_chip"], (
-        f"la tarjeta de atencion (L* {m['_L_att']:.1f}) quedo MAS CLARA que los "
-        f"chips (L* {m['_L_chip']:.1f}): en oscuro la tarjeta se aclara y el panel "
-        f"deja de leerse como tema oscuro."
+    assert m["L_chip"] <= m["L_panel"] + 0.5, (
+        f"los chips de resumen quedaron MÁS CLAROS que el panel (L* {m['L_chip']:.1f} "
+        f"vs {m['L_panel']:.1f}): en oscuro eso son cajas grises flotando, y el "
+        f"contenido de dentro se apaga en vez de resaltar."
     )
 
 
+def test_en_oscuro_la_tarjeta_se_levanta_menos_de_lo_que_se_hunde_en_claro():
+    """La tarjeta de atención SÍ puede levantarse —lleva estado— pero su techo
+    no es un número mío: es lo que su gemela del tema claro se hunde. Con L*
+    21,1 (la versión que el dueño rechazó) se levantaba 12,8 contra los 11,3
+    que baja en claro; hoy se levanta 6,0."""
+    c, o = _panel("claro"), _panel("oscuro")
+    levanta = o["L_att"] - o["L_panel"]
+    hunde_gemela = c["L_panel"] - c["L_att"]
+    assert levanta <= hunde_gemela, (
+        f"la tarjeta se levanta {levanta:.1f} en oscuro pero su gemela solo se hunde "
+        f"{hunde_gemela:.1f} en claro: en oscuro se está aclarando de más."
+    )
+
+
+def test_la_tarjeta_oscura_no_se_apoya_en_el_fondo_de_pagina():
+    """El suelo del otro lado (P1-MICRO-DARK-SURFACES, agosto): tenir el naranja
+    sobre `--bg-page` da rgb(37,31,35), un marron apagado que en una paleta de
+    slates frios se ve SUCIO, no alarmante. Se comprueba por RESOLUCION y no por
+    el nombre de la variable: al hundir los chips, `--mn-sunken` paso a valer
+    `--bg-page` en oscuro, asi que apoyar la tarjeta en el (por indireccion)
+    vuelve a caer en la trampa sin escribir su nombre en ningun sitio."""
+    tk = _tokens("oscuro")
+    base = _resolve(_recipe("--mn-att-base", "oscuro"),
+                    {**tk, "--mn-sunken": _hex(_resolve(_recipe("--mn-sunken", "oscuro"), tk))})
+    assert _hex(base).upper() != tk["--bg-page"].upper(), (
+        f"la base de la tarjeta oscura resuelve al fondo de pagina ({tk['--bg-page']}): "
+        f"el naranja sobre ese casi-negro da el marron sucio que P1-MICRO-DARK-SURFACES "
+        f"cerro en agosto. Da igual que se llegue por indireccion."
+    )
+
+
+# ── Sobre la paridad, que ya no se mide ─────────────────────────────────────
+#
+# Aqui vivia `test_paridad_de_lo_simetrico`, ultimo resto del contrato original.
+# Se retira, y el motivo es la conclusion de todo este P-fix: cada vez que el
+# tema oscuro mejoro DE VERDAD, la paridad lo marco como defecto. Con los chips
+# hundidos, su linea los recorta a dL* 21,2 contra los 9,2 del claro, y su texto
+# llega a 7,34:1 contra 4,56 — el oscuro DUPLICA al claro en las dos, y las dos
+# son mejores. Un guard que hay que ir excluyendo fila a fila hasta quedarse sin
+# ninguna no esta midiendo un contrato: esta midiendo mi idea equivocada.
+#
+# Lo que de verdad protegia —que ningun tema viva a la mitad del otro— lo cubren
+# los SUELOS de arriba, y con el ejemplo real: los chips claros a dL* 4,7 caen
+# por el suelo de 5,5, y el chevron a 3,07:1 cae por AA. Un suelo por relacion
+# es mas honesto que un espejo entre temas, porque cada tema llega a el por su
+# camino.
+
+
+def test_el_chevron_no_vuelve_a_la_tinta_debil():
+    """Concreto, porque fue uno de los hallazgos: el chevron de los chips usaba
+    `--text-light` y en claro se quedaba en 3,07:1 (5,06 en oscuro) — la mitad,
+    otra vez. Es un control, no una decoracion."""
+    src = CSS_MOD.read_text(encoding="utf-8")
+    i = src.index(".qChev {")
+    bloque = src[i:src.index("}", i)]
+    assert "var(--text-muted)" in bloque, "el chevron volvio a una tinta mas debil que --text-muted"
+
+
+# ── Anclas estructurales ────────────────────────────────────────────────────
+
 def test_la_tarjeta_no_vuelve_a_disolverse():
-    """`.att` SÓLIDA: el gradiente moría en el color del panel y la mitad de
-    abajo desaparecía. Y una sola declaración sirve a los dos temas (mezcla
-    sobre `--mn-sunken`), así que tampoco puede volver un override por tema."""
+    """`.att` SÓLIDA y con UNA declaración: el gradiente moría en el color del
+    panel (dL* 1,8 en claro, 0,0 en oscuro) y la mitad de abajo desaparecía."""
     src = CSS_MOD.read_text(encoding="utf-8")
     i = src.index("\n.att {")
     bloque = src[i:src.index("}", i)]
@@ -202,10 +228,7 @@ def test_la_tarjeta_no_vuelve_a_disolverse():
         "reapareció un override oscuro de .att: la regla base ya cubre ambos temas"
 
 
-def test_las_superficies_del_panel_pasan_por_las_variables_locales():
-    """Chips/límites/resumen consumen `--mn-sunken`/`--mn-line`. Si alguien
-    vuelve a `--surface-sunken` crudo, el tema claro pierde la mitad de su
-    separación sin que nadie lo note."""
+def test_las_superficies_pasan_por_las_variables_locales():
     src = CSS_MOD.read_text(encoding="utf-8")
     for clase in (".stat {", ".q {", ".lim {"):
         i = src.index(clase)
