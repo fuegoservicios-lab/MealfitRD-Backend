@@ -170,8 +170,9 @@ def pause_plan_generation(user_id: str) -> dict:
 
 def _revive_paused_chunks(user_id: str) -> dict:
     """[P1-RESUME-REVIVES-QUEUE · 2026-08-12] Revive los chunks que ESTA pausa
-    canceló (firma exacta en dead_letter_reason) y rebasea sus offsets contra la
-    ventana viva de cada plan con el SSOT del ancla.
+    canceló (firma exacta en dead_letter_reason), les RECONSTRUYE el snapshot
+    desde el perfil y rebasea sus offsets contra la ventana viva de cada plan
+    con el SSOT del ancla.
 
     Por qué existe: el primer ciclo real pausa→reanuda dejó un plan partial en
     3/30 sin NADIE que lo rellenara — catch-up del shift (solo no-partial),
@@ -179,12 +180,24 @@ def _revive_paused_chunks(user_id: str) -> dict:
     lo cubren todos MENOS este caso. La reanudación reencola lo que la pausa
     apagó; `cancelled` sigue siendo terminal para todo lo demás.
 
+    [P1-PAUSE-GC-SURVIVAL · 2026-08-12] Los snapshots vacíos son LA NORMA, no la
+    excepción: el GC eager del worker (GAP 7) vacía `pipeline_snapshot` de todo
+    cancelled en su siguiente tick (1 min) — ninguna reanudación humana llega
+    antes. Revivir la fila sin reconstruir su materia prima produce pending
+    huecos que el TZ-SYNC corrompía (+4h/tick sobre "tz 0" fabricado) y el
+    dead-letter escalaba a `_user_action_required`. La forma del snapshot es la
+    del catch-up del shift (plans.py): form_data = {**health_profile, user_id,
+    totalDays, _plan_start_date=d0} + previous_meals de los días vivos.
+
     El rebase NO es opcional: los offsets de esas filas quedaron anclados al
     ancla de ANTES de la pausa, y el shift ya la movió a hoy — dejarlos quietos
     es la clase f380821a (dos generaciones sobre los mismos días / relleno
     tarde). Best-effort: si el pool no está o algo revienta, se loggea GRITADO y
     resume sigue — el banner de plan-incompleto queda como red manual."""
     try:
+        import json as _json
+        from datetime import datetime, timezone
+
         from db_core import connection_pool
         from psycopg.rows import dict_row
         if not connection_pool:
@@ -193,6 +206,20 @@ def _revive_paused_chunks(user_id: str) -> dict:
         with connection_pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
+                    # 0. El perfil PRIMERO: es la materia prima del snapshot. Sin él,
+                    #    revivir produce pending imposibles de generar (peor que
+                    #    seguir en pausa: dead-letter + banner acusando al plan).
+                    cursor.execute(
+                        "SELECT health_profile FROM user_profiles WHERE id = %s",
+                        (user_id,),
+                    )
+                    hp = (cursor.fetchone() or {}).get("health_profile") or None
+                    if not isinstance(hp, dict) or not hp:
+                        logger.error(
+                            f"❌ [P1-PAUSE-GC-SURVIVAL] user {user_id} sin health_profile: "
+                            f"cola NO revivida (sin materia prima no hay generación)."
+                        )
+                        return {"revived": 0, "plans": 0}
                     cursor.execute(
                         """
                         UPDATE plan_chunk_queue
@@ -202,7 +229,7 @@ def _revive_paused_chunks(user_id: str) -> dict:
                           AND status = 'cancelled'
                           AND dead_letter_reason = %s
                           AND dead_lettered_at IS NULL
-                        RETURNING id, meal_plan_id
+                        RETURNING id, meal_plan_id, days_count
                         """,
                         (user_id, PAUSE_CANCEL_REASON),
                     )
@@ -210,11 +237,51 @@ def _revive_paused_chunks(user_id: str) -> dict:
                     planes = sorted({str(f["meal_plan_id"]) for f in filas if f.get("meal_plan_id")})
                     for pid in planes:
                         cursor.execute(
-                            "SELECT jsonb_array_length(COALESCE(plan_data->'days', '[]'::jsonb)) AS d "
-                            "FROM meal_plans WHERE id = %s",
+                            """
+                            SELECT jsonb_array_length(COALESCE(plan_data->'days', '[]'::jsonb)) AS d,
+                                   COALESCE(plan_data->'days'->0->>'date',
+                                            plan_data->>'grocery_start_date') AS d0,
+                                   plan_data->'days' AS days
+                            FROM meal_plans WHERE id = %s
+                            """,
                             (pid,),
                         )
-                        dias_vivos = int((cursor.fetchone() or {}).get("d") or 0)
+                        info = cursor.fetchone() or {}
+                        dias_vivos = int(info.get("d") or 0)
+                        d0 = info.get("d0") or datetime.now(timezone.utc).date().isoformat()
+                        previous_meals = [
+                            m.get("name", "")
+                            for dia in (info.get("days") or [])
+                            for m in (dia.get("meals") or [])
+                            if isinstance(m, dict) and m.get("name")
+                        ]
+                        # 1. Snapshot reconstruido por fila (totalDays = SU days_count).
+                        for fila in filas:
+                            if str(fila.get("meal_plan_id")) != pid:
+                                continue
+                            n_dias = int(fila.get("days_count") or 0) or 3
+                            snapshot = {
+                                "form_data": {
+                                    **hp,
+                                    "user_id": user_id,
+                                    "totalDays": n_dias,
+                                    "_plan_start_date": d0,
+                                    "_pantry_captured_at": datetime.now(timezone.utc).isoformat(),
+                                },
+                                "taste_profile": "",
+                                "memory_context": "",
+                                "previous_meals": previous_meals,
+                                "totalDays": n_dias,
+                                "_is_rolling_refill": True,
+                            }
+                            cursor.execute(
+                                """
+                                UPDATE plan_chunk_queue
+                                SET pipeline_snapshot = %s::jsonb, updated_at = NOW()
+                                WHERE id = %s
+                                """,
+                                (_json.dumps(snapshot, ensure_ascii=False), fila["id"]),
+                            )
                         # Lazy: cron_tasks importa plan_mode (el gate del pickup) —
                         # a nivel de módulo sería circular.
                         from cron_tasks import _rebase_pending_chunk_offsets_sql

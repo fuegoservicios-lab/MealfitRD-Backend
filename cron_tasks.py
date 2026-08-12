@@ -8633,10 +8633,15 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
 
     base_query = """
         SELECT q.id, q.user_id, q.execute_after,
+               -- [P1-PAUSE-GC-SURVIVAL · 2026-08-12] SIN brazo `0`: un snapshot sin
+               -- form_data/tz (el GC GAP 7 los vacía a '{}' al minuto) debe salir
+               -- NULL y caer en la rama defensiva de abajo. El `, 0` fabricaba
+               -- "tz 0" de la ausencia ⇒ drift=240 ⇒ +4h/tick en bucle infinito
+               -- desde DOS crons (medido: exec de agosto empujado a septiembre,
+               -- dead-letter execute_after_beyond_plan_window en 5/5 chunks).
                COALESCE(
                  (q.pipeline_snapshot->'form_data'->>'tz_offset_minutes')::int,
-                 (q.pipeline_snapshot->'form_data'->>'tzOffset')::int,
-                 0
+                 (q.pipeline_snapshot->'form_data'->>'tzOffset')::int
                ) AS snapshot_tz,
                COALESCE(
                  (p.health_profile->>'tz_offset_minutes')::int,
@@ -8679,18 +8684,21 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
         if snapshot_tz is None:
             try:
                 live_tz_int = int(live_tz)
+                # [P1-PAUSE-GC-SURVIVAL] jsonb_set con path hijo '{form_data,...}'
+                # NO crea el padre: sobre un snapshot '{}' era un no-op SILENCIOSO
+                # y esta rama re-warneaba cada tick para siempre. Se escribe
+                # '{form_data}' entero: COALESCE del padre || los dos tz keys.
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
                     SET pipeline_snapshot = jsonb_set(
-                            jsonb_set(
-                                pipeline_snapshot,
-                                '{form_data,tzOffset}',
-                                to_jsonb(%s::int),
-                                true
-                            ),
-                            '{form_data,tz_offset_minutes}',
-                            to_jsonb(%s::int),
+                            pipeline_snapshot,
+                            '{form_data}',
+                            COALESCE(pipeline_snapshot->'form_data', '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'tzOffset', %s::int,
+                                    'tz_offset_minutes', %s::int
+                                ),
                             true
                         ),
                         updated_at = NOW()
@@ -8747,18 +8755,18 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
         try:
             if force_now:
                 # Disparar inmediatamente: el chunk debió ejecutarse antes del resync.
+                # [P1-PAUSE-GC-SURVIVAL] '{form_data}' entero — ver rama defensiva.
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
                     SET pipeline_snapshot = jsonb_set(
-                            jsonb_set(
-                                pipeline_snapshot,
-                                '{form_data,tzOffset}',
-                                to_jsonb(%s::int),
-                                true
-                            ),
-                            '{form_data,tz_offset_minutes}',
-                            to_jsonb(%s::int),
+                            pipeline_snapshot,
+                            '{form_data}',
+                            COALESCE(pipeline_snapshot->'form_data', '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'tzOffset', %s::int,
+                                    'tz_offset_minutes', %s::int
+                                ),
                             true
                         ),
                         execute_after = NOW(),
@@ -8775,18 +8783,18 @@ def _sync_chunk_queue_tz_offsets(target_user_id: str | None = None) -> int:
                     f"forzando execute_after=NOW() para disparar ya."
                 )
             else:
+                # [P1-PAUSE-GC-SURVIVAL] '{form_data}' entero — ver rama defensiva.
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
                     SET pipeline_snapshot = jsonb_set(
-                            jsonb_set(
-                                pipeline_snapshot,
-                                '{form_data,tzOffset}',
-                                to_jsonb(%s::int),
-                                true
-                            ),
-                            '{form_data,tz_offset_minutes}',
-                            to_jsonb(%s::int),
+                            pipeline_snapshot,
+                            '{form_data}',
+                            COALESCE(pipeline_snapshot->'form_data', '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'tzOffset', %s::int,
+                                    'tz_offset_minutes', %s::int
+                                ),
                             true
                         ),
                         execute_after = execute_after + make_interval(mins => %s),
@@ -26153,12 +26161,24 @@ def process_plan_chunk_queue(target_plan_id=None):
         logger.warning(f" [CHUNK] Error limpiando snapshots pesados: {e}")
 
     # [GAP 11 FIX: Purga definitiva de chunks cancelados > 48h]
+    # [P1-PAUSE-GC-SURVIVAL · 2026-08-12] EXCEPTO las filas firmadas por la pausa
+    # (dead_letter_reason = PAUSE_CANCEL_REASON sin dead_lettered_at): la
+    # reanudación las revive hasta MEALFIT_PLAN_PAUSE_MAX_RESUME_DAYS (30d) —
+    # purgarlas a las 48h dejaba cualquier resume>2d sin cola que revivir y el
+    # plan partial PARA SIEMPRE. Vencida la ventana, se purgan igual (el brazo
+    # make_interval): una pausa abandonada no acumula filas eternas.
     try:
+        from plan_mode import PAUSE_CANCEL_REASON as _PAUSE_SIG, _resume_max_days
         execute_sql_write("""
             DELETE FROM plan_chunk_queue
             WHERE status = 'cancelled'
             AND updated_at < NOW() - INTERVAL '48 hours'
-        """)
+            AND NOT (
+                dead_letter_reason = %s
+                AND dead_lettered_at IS NULL
+                AND updated_at > NOW() - make_interval(days => %s)
+            )
+        """, (_PAUSE_SIG, int(_resume_max_days())))
     except Exception as e:
         logger.warning(f" [CHUNK] Error purgando chunks cancelados: {e}")
 

@@ -27,7 +27,9 @@ def test_pausa_firma_sus_cancelados():
 
 def test_revive_solo_las_filas_firmadas_y_rebasea(monkeypatch):
     """Funcional: el revive filtra por firma EXACTA + cancelled + no-dead-letter,
-    y por cada plan revivido corre el rebase del SSOT con los días vivos."""
+    y por cada plan revivido corre el rebase del SSOT con los días vivos.
+    [P1-PAUSE-GC-SURVIVAL] El revive ahora lee el perfil PRIMERO (materia prima
+    del snapshot reconstruido) — el mock refleja esa secuencia."""
     from unittest.mock import MagicMock
 
     ejecutadas = []
@@ -36,11 +38,14 @@ def test_revive_solo_las_filas_firmadas_y_rebasea(monkeypatch):
     def _exec(sql, params=None):
         ejecutadas.append((" ".join(str(sql).split()), params))
     cursor.execute.side_effect = _exec
-    cursor.fetchall.return_value = [
-        {"id": "c1", "meal_plan_id": "plan-aa"},
-        {"id": "c2", "meal_plan_id": "plan-aa"},
+    cursor.fetchone.side_effect = [
+        {"health_profile": {"age": 30}},
+        {"d": 3, "d0": "2026-08-12", "days": []},
     ]
-    cursor.fetchone.return_value = {"d": 3}
+    cursor.fetchall.return_value = [
+        {"id": "c1", "meal_plan_id": "plan-aa", "days_count": 4},
+        {"id": "c2", "meal_plan_id": "plan-aa", "days_count": 4},
+    ]
 
     pool = MagicMock()
     pool.connection.return_value.__enter__.return_value.transaction.return_value.__enter__.return_value = MagicMock()
@@ -55,8 +60,9 @@ def test_revive_solo_las_filas_firmadas_y_rebasea(monkeypatch):
 
     out = pm._revive_paused_chunks("u-revive")
     assert out == {"revived": 2, "plans": 1}
-    _sql_revive, _params = ejecutadas[0]
-    assert "SET status = 'pending'" in _sql_revive
+    revives = [(s, p) for s, p in ejecutadas if "SET status = 'pending'" in s]
+    assert len(revives) == 1
+    _sql_revive, _params = revives[0]
     assert "dead_letter_reason = NULL" in _sql_revive
     assert "AND status = 'cancelled'" in _sql_revive
     assert "AND dead_letter_reason = %s" in _sql_revive
