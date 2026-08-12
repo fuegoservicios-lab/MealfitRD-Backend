@@ -988,6 +988,27 @@ def build_supplements_context(form_data: dict) -> str:
     from constants import SUPPLEMENT_NAMES
     import logging as _logging
 
+    # [P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] Veto clínico ANTES de armar el
+    # prompt: los suplementos eran la única pieza sin gate (el backstop mira
+    # comidas, el Revisor no los mencionaba) y la rama de selección ORDENA
+    # incluirlos «ni más, ni menos» — sin este filtro, un hipertenso que marcó
+    # Pre-Entreno lo recibía por orden directa. Registry-driven (condition_rules
+    # + medication_rules), tabla SSOT en constants.
+    from condition_rules import contraindicated_supplements
+    _vetados = contraindicated_supplements(form_data)
+
+    def _bloque_prohibidos() -> str:
+        if not _vetados:
+            return ""
+        _lineas = "\n".join(
+            f"  - {SUPPLEMENT_NAMES.get(k, k)}: {razon}" for k, razon in sorted(_vetados.items())
+        )
+        return (
+            "\n⛔ PROHIBIDOS POR SEGURIDAD CLÍNICA para ESTE perfil (NUNCA los incluyas,\n"
+            "ni aunque el usuario los haya pedido, ni como sugerencia libre):\n"
+            f"{_lineas}\n"
+        )
+
     raw_selected = form_data.get("selectedSupplements", []) or []
     # [P1-FORM-11] Filtro defensivo: descarta strings que no estén en
     # `SUPPLEMENT_NAMES`. El validador en `routers/plans.py` ya rechaza con 422
@@ -1004,6 +1025,18 @@ def build_supplements_context(form_data: dict) -> str:
             f"{' ...(truncado)' if len(_dropped) > 10 else ''}. "
             f"Caller no pasó por `_validate_form_data_ranges` o hay drift de schema."
         )
+    # [P1-SUPPLEMENT-CLINICAL-GATE] El veto clínico filtra DESPUÉS del enum:
+    # si el usuario seleccionó un contraindicado (chip viejo, estado stale, o
+    # condición añadida después), sale de la lista DEBES y entra al bloque
+    # prohibido. Si el veto vacía la selección, cae a la rama libre — que
+    # también lleva el bloque.
+    _vetados_seleccionados = [s for s in selected_supps if s in _vetados]
+    if _vetados_seleccionados:
+        _logging.getLogger(__name__).warning(
+            f"[P1-SUPPLEMENT-CLINICAL-GATE] {len(_vetados_seleccionados)} suplemento(s) "
+            f"seleccionados vetados por perfil clínico: {_vetados_seleccionados!r}."
+        )
+        selected_supps = [s for s in selected_supps if s not in _vetados]
     if selected_supps:
         supp_names = [SUPPLEMENT_NAMES[s] for s in selected_supps]
         all_supps = set(SUPPLEMENT_NAMES.keys())
@@ -1021,8 +1054,9 @@ def build_supplements_context(form_data: dict) -> str:
         ctx += (
             "\nPara CADA día del plan, agrega una sección 'supplements' con SOLO los suplementos listados arriba.\n"
             "Cada suplemento: 'name' (nombre exacto), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación).\n"
-            "---------------------------------------------------\n"
         )
+        ctx += _bloque_prohibidos()
+        ctx += "---------------------------------------------------\n"
         return ctx
     else:
         return (
@@ -1032,7 +1066,8 @@ def build_supplements_context(form_data: dict) -> str:
             "Cada suplemento debe tener: 'name' (nombre), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación breve).\n"
             "Adapta las recomendaciones al objetivo del usuario, su nivel de actividad y condiciones médicas.\n"
             "Ejemplos: Proteína Whey, Creatina Monohidrato, Omega-3, Vitamina D3, Multivitamínico, Magnesio, etc.\n"
-            "---------------------------------------------------\n"
+            + _bloque_prohibidos()
+            + "---------------------------------------------------\n"
         )
 
 

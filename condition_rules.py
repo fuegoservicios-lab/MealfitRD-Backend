@@ -647,6 +647,30 @@ def active_condition_labels(form_data) -> list:
     return [r.label for r in detect_active_rules(form_data)]
 
 
+def contraindicated_supplements(form_data) -> dict:
+    """[P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] `{supp_key: razón}` de los
+    suplementos vetados para ESTE perfil. Determinista y registry-driven: las
+    condiciones salen de `detect_active_rules` (chips + texto libre, mismos
+    términos que el resto del motor clínico) y los medicamentos de
+    `medication_rules.detect_active_medications` (con su veto de ambigüedad).
+    La tabla es SSOT en `constants.SUPPLEMENT_CONTRAINDICATIONS`.
+
+    Consumidores: `prompts.plan_generator.build_supplements_context` (filtra la
+    selección y emite prohibición), la barredora post-gen de graph_orchestrator
+    (strip por keywords), y — como espejo UI no-enforzante — los chips
+    deshabilitados del wizard."""
+    from constants import SUPPLEMENT_CONTRAINDICATIONS
+    import medication_rules as _mr
+
+    cond_ids = {r.id for r in detect_active_rules(form_data)}
+    med_ids = {r.id for r in _mr.detect_active_medications(form_data)}
+    vetados = {}
+    for supp, spec in SUPPLEMENT_CONTRAINDICATIONS.items():
+        if cond_ids.intersection(spec["conditions"]) or med_ids.intersection(spec["medications"]):
+            vetados[supp] = spec["reason"]
+    return vetados
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # [P0-ALLERGEN-SUBS · 2026-06-14] Sustitución determinista de ALÉRGENOS IgE declarados
 # ════════════════════════════════════════════════════════════════════════════════════════════════

@@ -2862,6 +2862,85 @@ SUPPLEMENT_NAMES = {
     "electrolytes":  "Electrolitos (Sodio + Potasio + Magnesio)",
 }
 
+# [P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] Contraindicaciones deterministas de
+# suplementos. Los suplementos eran la ÚNICA pieza del plan sin gate clínico
+# (el backstop opera sobre comidas y el Revisor Médico no los mencionaba), y el
+# prompt con selección explícita ORDENA incluirlos «ni más, ni menos» — un
+# hipertenso que marcaba Pre-Entreno lo recibía por orden directa.
+#
+# CONTRATO: keys ⊆ SUPPLEMENT_NAMES; `conditions` son IDs de
+# `condition_rules.CONDITION_RULES` y `medications` IDs de
+# `medication_rules.MEDICATION_RULES` — NO strings del wizard: los detectores
+# existentes ya resuelven chips + texto libre con veto de ambigüedad
+# (P1-MED-AMBIGUOUS-TERM-VETO). No reimplementes matching aquí.
+# El detector vive en `condition_rules.contraindicated_supplements`; espejo UI
+# (chips deshabilitados) en `frontend/src/config/formValidation.js::SUPPLEMENT_BLOCKERS`.
+# Tabla CONSERVADORA a propósito: solo pares clínicamente indefendibles de
+# omitir. Ampliarla = editar aquí + espejo frontend + test de paridad.
+SUPPLEMENT_CONTRAINDICATIONS = {
+    "pre_workout": {
+        "conditions": ("hta", "pregnancy", "gastritis"),
+        "medications": ("maoi",),
+        "reason": (
+            "Estimulantes concentrados (cafeína + beta-alanina): elevan presión "
+            "arterial, irritan mucosa gástrica, sin datos de seguridad en "
+            "embarazo/lactancia, e interaccionan con IMAO."
+        ),
+    },
+    "fat_burner": {
+        "conditions": ("hta", "pregnancy", "gastritis", "hypothyroid"),
+        "medications": ("maoi",),
+        "reason": (
+            "Termogénicos con estimulantes: presión arterial, mucosa gástrica, "
+            "embarazo/lactancia, interfieren con la función tiroidea e "
+            "interaccionan con IMAO."
+        ),
+    },
+    "creatine": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Carga renal adicional medible: contraindicada con enfermedad renal.",
+    },
+    "whey_protein": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Proteína suplementaria concentrada: el perfil renal ya lleva cap proteico estricto en la comida.",
+    },
+    "vegan_protein": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Proteína suplementaria concentrada: el perfil renal ya lleva cap proteico estricto en la comida.",
+    },
+    "bcaa": {
+        "conditions": ("renal",),
+        "medications": (),
+        "reason": "Aminoácidos suplementarios suman carga proteica al perfil renal capado.",
+    },
+    "omega3": {
+        "conditions": (),
+        "medications": ("anticoagulant",),
+        "reason": (
+            "Dosis suplementarias de omega-3 potencian el efecto anticoagulante "
+            "(riesgo de sangrado con warfarina/acenocumarol)."
+        ),
+    },
+}
+
+# [P1-SUPPLEMENT-CLINICAL-GATE] Keywords por suplemento para reconocer el nombre
+# LIBRE que el LLM escribe en las secciones `supplements` del plan generado
+# (la barredora post-gen de graph_orchestrator). Mismo idioma substring-lowercase
+# que la `_supp_keywords` histórica de includeSupplements=False; tokens ≥4 chars
+# para no repetir la clase «sal ⊆ salami».
+SUPPLEMENT_MATCH_KEYWORDS = {
+    "pre_workout": ("pre-entreno", "preentreno", "pre entreno", "pre workout", "beta-alanina", "beta alanina"),
+    "fat_burner": ("quemador", "termogénico", "termogenico", "fat burner"),
+    "creatine": ("creatina", "creatine"),
+    "whey_protein": ("whey", "suero de leche"),
+    "vegan_protein": ("proteína vegana", "proteina vegana", "vegan protein", "guisante"),
+    "bcaa": ("bcaa", "aminoácidos ramificados", "aminoacidos ramificados"),
+    "omega3": ("omega-3", "omega 3", "aceite de pescado", "fish oil"),
+}
+
 # [P2-CATALOG-FILTER-SSOT · 2026-07-31] (audit solver+seeder v6 · F15) Índice
 # nombre-del-catálogo → blob con todos sus sinónimos, para que un dislike/alergia escrito con
 # OTRO nombre del mismo alimento ('Hongos' por 'Champiñones', 'setas', 'palta' por 'Aguacate')

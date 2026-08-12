@@ -35897,6 +35897,44 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 f"💊 [SUPPLEMENTS] Eliminados {_stripped_supps} en campo supplements + "
                 f"{_stripped_ings} colados en ingredients (includeSupplements=false)."
             )
+    else:
+        # [P1-SUPPLEMENT-CLINICAL-GATE · 2026-08-12] Suplementos ACTIVADOS: barrer
+        # los CONTRAINDICADOS para este perfil de las secciones `supplements`.
+        # El prompt ya los prohíbe (build_supplements_context) pero eso es
+        # prompt-trustable, no enforced — esta es la capa determinista, simétrica
+        # a la barredora de includeSupplements=False de arriba. Match por
+        # keywords canónicas (SSOT constants.SUPPLEMENT_MATCH_KEYWORDS) contra el
+        # nombre LIBRE que el LLM escribió; mismo idioma substring-lowercase que
+        # la barredora histórica, tokens ≥4 chars.
+        try:
+            from condition_rules import contraindicated_supplements as _cs
+            from constants import SUPPLEMENT_MATCH_KEYWORDS as _smk
+            _gate_vetados = _cs(form_data)
+        except Exception as _gate_err:
+            # Fail-safe explícito: sin veto calculable no barremos (el prompt y el
+            # Revisor siguen siendo capas), pero lo dejamos gritado en el log.
+            logger.warning(f"⚠️ [P1-SUPPLEMENT-CLINICAL-GATE] veto no calculable, barredora inactiva: {_gate_err}")
+            _gate_vetados = {}
+        if _gate_vetados:
+            _gate_kws = [kw for k in _gate_vetados for kw in _smk.get(k, ())]
+            _gate_removed = 0
+            for _d in result.get("days") or []:
+                _supps = _d.get("supplements") or []
+                if not _supps:
+                    continue
+                _kept = []
+                for _s in _supps:
+                    _sname = str(_s.get("name", "") if isinstance(_s, dict) else _s).lower()
+                    if any(kw in _sname for kw in _gate_kws):
+                        _gate_removed += 1
+                        continue
+                    _kept.append(_s)
+                _d["supplements"] = _kept
+            if _gate_removed:
+                logger.warning(
+                    f"🛡 [P1-SUPPLEMENT-CLINICAL-GATE] {_gate_removed} suplemento(s) "
+                    f"contraindicados barridos del plan (vetados: {sorted(_gate_vetados)})."
+                )
 
     # [EGG-WHITE-CAP] Cap programático de claras de huevo por meal y por día.
     # El planner las usa como proteína fácil sin límite (visto 2026-05-06: 16
