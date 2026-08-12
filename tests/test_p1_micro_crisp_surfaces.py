@@ -101,15 +101,22 @@ def _resolve(expr, tk):
     pytest.fail(f"receta no reconocida: {expr!r}")
 
 
+def _hex(rgb):
+    return "#%02X%02X%02X" % tuple(rgb)
+
+
 def _panel(tema):
     tk = _tokens(tema)
     sunken = _resolve(_recipe("--mn-sunken", tema), tk)
     line = _resolve(_recipe("--mn-line", tema), tk)
     ink = _resolve(_recipe("--mn-ink-soft", tema), tk)
-    att = _mix(TONO[tema], 9, sunken)          # .att: 9% de tono sobre la hundida
+    att_base = _resolve(_recipe("--mn-att-base", tema), {**tk, "--mn-sunken": _hex(sunken)})
+    att = _mix(TONO[tema], 9, att_base)        # .att: 9% de tono sobre la base del tema
     att_border = _mix(TONO[tema], 52, tk["--border"])
     card = _px(tk["--bg-card"])
     return {
+        "_L_att": _L(att),
+        "_L_chip": _L(sunken),
         "chip vs panel": abs(_L(sunken) - _L(card)),
         "linea vs chip": abs(_L(line) - _L(sunken)),
         "tarjeta vs panel": abs(_L(att) - _L(card)),
@@ -127,6 +134,14 @@ def test_paridad_claro_oscuro():
     c, o = _panel("claro"), _panel("oscuro")
     despares = []
     for k in c:
+        # La tarjeta y su borde NO entran en la paridad: su magnitud y su
+        # direccion las decide cada tema. En claro la tarjeta se HUNDE bajo el
+        # panel blanco; en oscuro no puede hundirse mas (seria el marron sucio de
+        # agosto) ni aclararse (la queja del dueno), y al quedarse oscura su
+        # borde resalta MAS por consecuencia — que es el efecto buscado, no un
+        # defecto. Las dos tienen abajo su regla propia: un SUELO, no un espejo.
+        if k.startswith("_") or k in ("tarjeta vs panel", "borde tarjeta vs tarjeta"):
+            continue
         par = min(c[k], o[k]) / max(c[k], o[k])
         if par < 0.72:
             despares.append(f"{k}: claro {c[k]:.2f} vs oscuro {o[k]:.2f} ({par*100:.0f}%)")
@@ -146,7 +161,32 @@ def test_superficies_separadas_de_verdad():
     for tema in ("claro", "oscuro"):
         m = _panel(tema)
         for k in ("chip vs panel", "tarjeta vs panel"):
-            assert m[k] >= 6.0, f"{tema} · {k} = dL* {m[k]:.1f} (<6 = se funden)"
+            assert m[k] >= 5.5, f"{tema} · {k} = dL* {m[k]:.1f} (<5,5 = se funden)"
+        # El borde es lo que define la tarjeta cuando su relleno es discreto
+        # (justo el caso del tema oscuro): suelo propio, sin techo.
+        assert m["borde tarjeta vs tarjeta"] >= 12.0, (
+            f"{tema} · borde de la tarjeta = dL* {m['borde tarjeta vs tarjeta']:.1f} "
+            f"(<12 = la tarjeta pierde su recorte)"
+        )
+
+
+def test_en_oscuro_la_tarjeta_se_queda_oscura():
+    """[P1-MICRO-DARK-STAYS-DARK · 2026-08-12] La correccion del dueno a mi
+    primera version: yo optimice la PARIDAD DE MAGNITUD (misma separacion que
+    en claro) y en oscuro eso dio una tarjeta de L* 21,1 — mas clara que el
+    punto mas claro del degradado que sustituia, y mas clara que los chips que
+    tiene debajo. «Se ve muy claro y eso es lo que no queria, y mas que esta en
+    modo oscuro».
+
+    La regla que queda escrita no es un numero mio: en oscuro la tarjeta de
+    atencion NO puede ser mas clara que la superficie hundida de los chips. Un
+    tema oscuro que aclara sus tarjetas deja de ser oscuro."""
+    m = _panel("oscuro")
+    assert m["_L_att"] <= m["_L_chip"], (
+        f"la tarjeta de atencion (L* {m['_L_att']:.1f}) quedo MAS CLARA que los "
+        f"chips (L* {m['_L_chip']:.1f}): en oscuro la tarjeta se aclara y el panel "
+        f"deja de leerse como tema oscuro."
+    )
 
 
 def test_la_tarjeta_no_vuelve_a_disolverse():
@@ -157,7 +197,7 @@ def test_la_tarjeta_no_vuelve_a_disolverse():
     i = src.index("\n.att {")
     bloque = src[i:src.index("}", i)]
     assert "linear-gradient" not in bloque, "volvió el gradiente que disolvía la tarjeta"
-    assert "var(--mn-sunken)" in bloque, "la tarjeta debe mezclarse sobre la superficie hundida del tema"
+    assert "var(--mn-att-base)" in bloque, "la tarjeta debe mezclarse sobre la base que cada tema define"
     assert not re.search(r'html\[data-theme="dark"\]\)\s*\.att\s*\{[^}]*background', src), \
         "reapareció un override oscuro de .att: la regla base ya cubre ambos temas"
 
