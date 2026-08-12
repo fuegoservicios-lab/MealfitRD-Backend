@@ -6326,6 +6326,64 @@ def _chunk_overdue_alert_job():
 
     Tooltip-anchor: P2-CHUNK-OVERDUE-SIGNAL.
     """
+
+    # [P1-PLAN-MODE · 2026-08-11] plan_paused_with_live_queue:<plan_id> — modelo Auto
+    # (implicit). Dispara si hay chunks VIVOS (>1 h) de un usuario en modo seguimiento:
+    # significa que algo encoló DETRÁS del apagado y estamos apoyados en una sola capa
+    # (el gate del pickup). Cero filas es el estado sano. Vive aquí y no en un cron
+    # propio porque este job ya es el barrido horario de salud de la cola.
+    try:
+        import json as _pm_json
+        _paused_rows = execute_sql_query(
+            """
+            SELECT q.meal_plan_id::text AS plan_id, q.user_id::text AS uid, count(*)::int AS vivos
+            FROM plan_chunk_queue q
+            JOIN user_profiles up ON up.id = q.user_id
+            WHERE up.plan_mode = 'tracking'
+              AND q.status IN ('pending', 'processing', 'stale', 'pending_user_action')
+              AND q.dead_lettered_at IS NULL
+              AND q.updated_at < NOW() - INTERVAL '1 hour'
+            GROUP BY q.meal_plan_id, q.user_id
+            """,
+            fetch_all=True,
+        ) or []
+        for _pr in _paused_rows:
+            # El nombre de variable ES contrato: test_p2_audit_4 escanea asignaciones
+            # `alert_key = f"..."` para casar productores con la tabla de docs.
+            # Sin comillas anidadas en el f-string: el parser de test_p2_audit_4
+            # extrae la key con una regex que corta en la primera comilla interior.
+            _pid = _pr['plan_id']
+            alert_key = f"plan_paused_with_live_queue:{_pid}"
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata)
+                VALUES (%s, 'plan_paused_with_live_queue', 'warning', %s, %s, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                """,
+                (
+                    alert_key,
+                    "Cola viva detrás de un apagado",
+                    (
+                        f"{_pr['vivos']} chunk(s) vivos >1h del plan {_pr['plan_id']} con su "
+                        "usuario en modo seguimiento: algo encoló detrás del apagado. El gate "
+                        "del pickup los bloquea (no gastan), pero la pausa debió cancelarlos."
+                    ),
+                    _pm_json.dumps({"plan_id": _pr["plan_id"], "user_hash": _pr["uid"][:8], "vivos": _pr["vivos"]}),
+                ),
+            )
+        # Auto-resolve implícito: si la condición desapareció, la alerta se cierra.
+        _abiertas = [f"plan_paused_with_live_queue:{r['plan_id']}" for r in _paused_rows]
+        execute_sql_write(
+            "UPDATE system_alerts SET resolved_at = NOW() "
+            "WHERE alert_type = 'plan_paused_with_live_queue' AND resolved_at IS NULL "
+            "AND NOT (alert_key = ANY(%s::text[]))",
+            (_abiertas,),
+        )
+    except Exception as _pm_alert_err:
+        logger.warning(f"[P1-PLAN-MODE] chequeo de cola-viva-en-pausa falló (best-effort): {_pm_alert_err}")
+
     from chat_history_context import compute_chunk_overdue, upcoming_days_signal_enabled
 
     # [Ronda 4 · B4] Mismo knob que el payload de `/chunk-status` y que el
@@ -26256,6 +26314,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                     SELECT 1 FROM plan_chunk_queue q3
                     WHERE q3.meal_plan_id = q1.meal_plan_id AND q3.status = 'processing'
                 )
+__PLAN_MODE_GATE__
                 ORDER BY q1.created_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -26314,6 +26373,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                     SELECT 1 FROM plan_chunk_queue q3
                     WHERE q3.meal_plan_id = q1.meal_plan_id AND q3.status = 'processing'
                 )
+__PLAN_MODE_GATE__
                 ORDER BY q1.created_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT 3
@@ -26323,6 +26383,15 @@ def process_plan_chunk_queue(target_plan_id=None):
                       expected_preemption_seconds, escalated_at, attempts;
         """
         params = ()
+
+    # [P1-PLAN-MODE-PICKUP-GATE · 2026-08-11] El freno del modo seguimiento, inyectado
+    # en LAS DOS ramas via token. Fragmento CONSTANTE de plan_mode.PICKUP_GATE_SQL
+    # (cero entrada de usuario en el SQL); el knob MEALFIT_PLAN_MODE_SWITCH lo apaga
+    # entero. Si reescribes una de las CTE y se te lleva el token por delante, el
+    # apagado deja de apagar EN ESA RAMA y nadie lo nota: test_p1_plan_mode.py ancla
+    # que el token aparece dos veces.
+    from plan_mode import PICKUP_GATE_SQL as _pm_gate_sql, PLAN_MODE_SWITCH_ENABLED as _pm_on
+    query = query.replace("__PLAN_MODE_GATE__", _pm_gate_sql.rstrip() if _pm_on else "")
 
     try:
         tasks = execute_sql_write(query, params, returning=True)
@@ -34132,10 +34201,18 @@ def trigger_background_rolling_refill() -> None:
         # `ORDER BY` de abajo ya colapsan a la fila más reciente por usuario, sin el
         # index-scan por fila que duplicaba esa lógica. El consumer sólo usa `mp.user_id`
         # (re-resuelve el plan él mismo), así que el set de user_ids es idéntico.
+        # [P1-PLAN-MODE · 2026-08-11] Este cron es EL PEOR para el modo seguimiento:
+        # selecciona por inactividad ≥3 días SIN ningún filtro de plan, así que iba a
+        # buscar cada 4 h exactamente al usuario que apagó y se fue. LEFT JOIN y no
+        # JOIN interno a propósito: un usuario sin fila de perfil desaparecería del
+        # cron con un join interno, y este cron es la red que garantiza la promesa
+        # temporal del plan — COALESCE trata «sin perfil» como 'plan', no como fuera.
         query = """
             SELECT DISTINCT ON (mp.user_id) mp.user_id
             FROM meal_plans mp
-            WHERE mp.user_id NOT IN (
+            LEFT JOIN user_profiles up ON up.id = mp.user_id
+            WHERE COALESCE(up.plan_mode, 'plan') <> 'tracking'
+              AND mp.user_id NOT IN (
                 SELECT DISTINCT user_id
                 FROM agent_sessions
                 WHERE user_id IS NOT NULL

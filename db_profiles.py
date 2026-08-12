@@ -917,8 +917,22 @@ def attach_plan_id_to_usage_events(plan_id: str, correlation_id: str,
         return 0
 
 
-def get_monthly_api_usage(user_id: str) -> int:
-    """Cuenta cuántas llamadas a la API ha hecho el usuario este mes."""
+def get_monthly_api_usage(user_id: str, kind: str = "generation") -> int:
+    """Cuenta el uso mensual, POR MEDIDOR.
+
+    [P1-COACH-METER · 2026-08-11] El medidor se parte en dos. Diagnóstico medido: la
+    escalera (10/50/200/500) está tarifada por generación de plan (~$0,25/crédito) y
+    el chat cobraba EL MISMO crédito por ~$0,0026 — 96 veces más barato al mismo
+    precio. Un usuario gratis en modo seguimiento tenía 10 mensajes de coach AL MES:
+    la promesa del recomendador moría el día 2.
+
+      kind="generation"  todo lo que NO es chat — la escalera actual, sin cambios
+      kind="coach"       solo endpoint='llm_chat' — límites propios (auth.py)
+
+    AVISO DE IMPLEMENTACIÓN, y es el modo de fallo de este diseño: la lista va EN
+    NEGATIVO (todo lo que no es llm_chat cuenta como generación). En positivo, un
+    endpoint nuevo quedaría GRATIS por olvido; en negativo queda caro por defecto
+    y alguien lo nota."""
     if not user_id or user_id == "guest": return 0
     from datetime import datetime
     
@@ -931,7 +945,11 @@ def get_monthly_api_usage(user_id: str) -> int:
         from db_core import connection_pool
         if not connection_pool:
             return 0
-        res = execute_sql_query("SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s", (user_id, start_date), fetch_one=True)
+        if kind == "coach":
+            _sql = "SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s AND endpoint = 'llm_chat'"
+        else:
+            _sql = "SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s AND COALESCE(endpoint, '') <> 'llm_chat'"
+        res = execute_sql_query(_sql, (user_id, start_date), fetch_one=True)
         if res and 'total' in res:
             return int(res['total'])
         return 0

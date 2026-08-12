@@ -2084,6 +2084,20 @@ def _postprocess_pipeline_result(
     inter-chunk diseñada por P0-α/P0-3. Default `"sync"` por compat
     histórica; los call sites deben pasar el label explícito de su transporte.
     """
+
+    # [P1-PLAN-MODE · 2026-08-11] GENERAR UN PLAN ES EL CONSENTIMIENTO DE GENERAR.
+    # Punto unico por el que pasan /analyze y /analyze/stream. Sin esto, un usuario en
+    # modo seguimiento que pulsa «Generar plan» paga su credito, recibe la semana 1
+    # por SSE, y las semanas 2..N quedan bloqueadas por nuestro propio gate del
+    # pickup — en silencio, sin error, con chunk_overdue alertando cada hora sobre un
+    # plan pagado que no puede completarse.
+    if actual_user_id and actual_user_id != "guest":
+        try:
+            from plan_mode import ensure_plan_generation_enabled
+            ensure_plan_generation_enabled(actual_user_id)
+        except Exception as _pm_err:
+            logger.warning(f"[P1-PLAN-MODE] re-encendido automatico fallo (best-effort): {_pm_err}")
+
     # 1. Health profile (DB write auxiliar — fallar no rompe la respuesta).
     # [P1-12] `tz_offset_mins` se persiste como `tz_offset_minutes` en
     # health_profile para que `_resolve_request_tz_offset` (linea ~53) pueda
@@ -2388,6 +2402,26 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
             
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado.")
+
+        # [P1-PLAN-MODE · 2026-08-11] El Dashboard llama este endpoint AL MONTAR, y en
+        # modo seguimiento el usuario entra al dashboard todos los días (es su
+        # contador): sin este guard, él mismo re-encolaría su plan cada mañana.
+        # Soft-fail 200 (P3-SWAP-SOFT-FAIL-200): que el shift no corra porque el
+        # usuario pausó es business-as-usual; un 4xx pintaría rojo en su consola
+        # a diario sin que nada esté roto.
+        try:
+            from plan_mode import get_plan_mode, PLAN_MODE_SWITCH_ENABLED as _pm_on
+            if _pm_on and get_plan_mode(user_id).get("plan_mode") == "tracking":
+                return {
+                    "success": True,
+                    "operation_skipped": True,
+                    "reason_code": "plan_generation_paused",
+                    "message": "Planes en pausa: el shift no corre en modo seguimiento.",
+                }
+        except Exception as _pm_err:
+            # Fail-open a proposito: si el modulo no carga, el shift se comporta como
+            # siempre — la capa que de verdad frena el gasto es el gate del pickup.
+            logger.warning(f"[P1-PLAN-MODE] no se pudo leer plan_mode en shift: {_pm_err}")
 
         # P0-2 FIX: Get latest plan using FOR UPDATE to prevent race conditions with chunk workers doing blind overwrites
         from db_core import connection_pool

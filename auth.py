@@ -375,6 +375,42 @@ def clear_session_cookie(response: Response) -> None:
     )
 
 
+# [P1-COACH-METER · 2026-08-11] Límites del medidor de COACH, por tier. 60 mensajes
+# gratis ≈ $0,16/mes de LLM: un producto usable en el tier gratis que sigue costando
+# el 6% de un plan. Knobs para ajustar sin redeploy.
+_COACH_LIMITS = {
+    "gratis": int(os.environ.get("MEALFIT_COACH_LIMIT_GRATIS", "60")),
+    "basic": int(os.environ.get("MEALFIT_COACH_LIMIT_BASIC", "300")),
+    "plus": int(os.environ.get("MEALFIT_COACH_LIMIT_PLUS", "1500")),
+    "ultra": int(os.environ.get("MEALFIT_COACH_LIMIT_ULTRA", "5000")),
+}
+
+
+def verify_coach_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:
+    """[P1-COACH-METER · 2026-08-11] Paywall del CHAT, separado del de generación.
+
+    Antes el chat gastaba del mismo pozo que los planes (get_monthly_api_usage sin
+    filtrar endpoint): 10 mensajes/mes en el tier gratis, la promesa del recomendador
+    muerta el día 2. Ahora cuenta solo endpoint='llm_chat' contra su propia escalera.
+    La de generación no se toca."""
+    if verified_user_id:
+        used = get_monthly_api_usage(verified_user_id, kind="coach")
+        plan_tier = "gratis"
+        profile = get_user_profile(verified_user_id)
+        if profile:
+            plan_tier = profile.get("plan_tier", "gratis")
+        limit = _COACH_LIMITS.get(plan_tier, _COACH_LIMITS["gratis"])
+        if used >= limit:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"Alcanzaste tus {limit} mensajes de coach de este mes. "
+                    "Mejora tu plan para seguir conversando."
+                ),
+            )
+    return verified_user_id
+
+
 def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:
     """Dependencia para verificar los límites de uso de la API (Paywall) evitando repetición (DRY)."""
     if verified_user_id:

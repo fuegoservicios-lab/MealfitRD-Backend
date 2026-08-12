@@ -643,6 +643,13 @@ _CATALOG_CAMPOS_INVITADO = ("id", "slug", "name", "category", "aliases", "defaul
 # evita que un endpoint sin auth se convierta en un grifo de scraping barato.
 _CATALOG_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
 
+# [P1-PLAN-MODE · 2026-08-11] El interruptor y la puerta de metas. Quota-exempt por
+# la doctrina de /restock: aplicar el paywall al botón de APAGAR el gasto es
+# exactamente al revés — un usuario topado en 402 que no puede apagar deja al chunk
+# worker gastándole dinero al negocio, porque los crons no cobran.
+_PLAN_MODE_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
+_TARGETS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
 
 @router.get("/catalog")
 async def api_get_catalog(
@@ -764,6 +771,94 @@ async def api_get_catalog_dishes(
     _require_user(verified_user_id)
     import food_search
     return {"items": await asyncio.to_thread(food_search.dishes_for_client)}
+
+
+@router.get("/profile/plan-mode")
+async def api_get_plan_mode(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-PLAN-MODE · 2026-08-11] La postura del usuario sobre la generación."""
+    _require_user(verified_user_id)
+    from plan_mode import get_plan_mode
+    return await asyncio.to_thread(get_plan_mode, verified_user_id)
+
+
+class PlanModeBody(BaseModel):
+    plan_mode: str = Field(..., pattern="^(plan|tracking)$")
+
+
+@router.put("/profile/plan-mode")
+async def api_put_plan_mode(
+    body: PlanModeBody,
+    verified_user_id: Optional[str] = Depends(_PLAN_MODE_LIMITER),
+):
+    """[P1-PLAN-MODE · 2026-08-11] Apagar/encender la generación de planes.
+
+    NO pasa por PATCH /api/profile ni por `_PROFILE_SCALAR_WHITELIST` a propósito:
+    cambiar el modo no es editar un escalar — es una transacción (cancelar cola,
+    liberar locks, estampar el plan) y una regla que vive en dos puertas se cumple
+    en una. La respuesta dice LO QUE PASÓ (chunks cancelados, estado restaurado,
+    si el plan venció) para que la UI no adivine ni refetchee el perfil entero.
+
+    Apagar es GRATIS y no es negociable: cobrar por el freno es cobrar por dejar
+    de cobrar. Reanudar dentro de la ventana también (los chunks ya se pagaron);
+    tras vencer, el camino es un /analyze nuevo, que ya se cobra solo."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Inicia sesión.")
+    from plan_mode import pause_plan_generation, resume_plan_generation
+    if body.plan_mode == "tracking":
+        out = await asyncio.to_thread(pause_plan_generation, verified_user_id)
+    else:
+        out = await asyncio.to_thread(resume_plan_generation, verified_user_id)
+    # Espejo client-side para el arranque en frío del dashboard (ver el wrapper de
+    # Dashboard.jsx): si el perfil llega lento, «no sé» no puede leerse como «plan».
+    return {"success": True, **out}
+
+
+@router.get("/nutrition/targets")
+async def api_nutrition_targets(
+    verified_user_id: Optional[str] = Depends(_TARGETS_LIMITER),
+):
+    """[P1-PLAN-MODE · 2026-08-11] Las metas del contador SIN plan.
+
+    `get_nutrition_targets` es pura (sin DB, sin LLM) y hoy solo corre dentro del
+    pipeline: sin esta puerta, la tarjeta de progreso pinta 2000/150/200/60 — los
+    cuatro `||` de TrackingProgress son un plan genérico disfrazado de meta
+    personal, y una barra que miente es peor que una barra ausente.
+
+    Contrato: la FORMA es idéntica a plan_data (`calories` numérico +
+    `macros.{protein,carbs,fats}` strings con 'g') para que la tarjeta consuma una
+    sola forma venga de donde venga. `missing_fields` es lo que la hace honesta:
+    fail-CLOSED — sin `ok:true` el cliente no pinta barras."""
+    if not verified_user_id:
+        return {"ok": False, "missing_fields": ["session"], "reason": "guest"}
+
+    profile = await asyncio.to_thread(get_user_profile, verified_user_id)
+    hp = (profile or {}).get("health_profile") or {}
+
+    _requeridos = ("gender", "age", "height", "weight", "weightUnit", "activityLevel", "mainGoal")
+    faltan = [c for c in _requeridos if not hp.get(c)]
+    if faltan:
+        return {"ok": False, "missing_fields": faltan}
+
+    try:
+        from nutrition_calculator import get_nutrition_targets
+        t = await asyncio.to_thread(get_nutrition_targets, hp)
+        m = t.get("macros") or {}
+        return {
+            "ok": True,
+            "calories": int(t.get("target_calories") or 0),
+            "macros": {
+                "protein": m.get("protein_str") or f"{m.get('protein_g', 0)}g",
+                "carbs": m.get("carbs_str") or f"{m.get('carbs_g', 0)}g",
+                "fats": m.get("fats_str") or f"{m.get('fats_g', 0)}g",
+            },
+            "goal_label": t.get("goal_label"),
+            "kinematics": t.get("kinematics"),
+        }
+    except Exception as e:
+        logger.error(f"[P1-PLAN-MODE] /nutrition/targets falló: {e}")
+        return {"ok": False, "missing_fields": [], "reason": "calc_error"}
 
 
 # ---------------------------------------------------------------------------

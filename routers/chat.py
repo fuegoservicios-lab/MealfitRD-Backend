@@ -7,7 +7,7 @@ import logging
 import traceback
 import json
 
-from auth import get_verified_user_id, verify_api_quota
+from auth import get_verified_user_id, verify_api_quota, verify_coach_quota
 from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import (
@@ -630,7 +630,7 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
 
 
 @router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
-def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
+def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
@@ -889,7 +889,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
 
 @router.post("", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
-def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
+def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_coach_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")

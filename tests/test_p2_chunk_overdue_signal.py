@@ -321,6 +321,13 @@ def test_cron_overdue_fail_open_por_plan(monkeypatch):
     _count_results = iter([RuntimeError("boom: COUNT falló"), {"c": 0}])
 
     def _fake_query(sql, params=None, **kwargs):
+        # [P1-PLAN-MODE · 2026-08-11] El mismo job ahora abre con el chequeo
+        # cola-viva-en-pausa (JOIN a user_profiles.plan_mode). Se contesta ANTES
+        # que la rama de plan_chunk_queue — su SQL también la menciona — y con
+        # cero filas (estado sano), para que NO consuma el iterador del COUNT
+        # que este test scriptea posicionalmente.
+        if "plan_mode = 'tracking'" in sql:
+            return []
         if "FROM meal_plans" in sql:
             return [plan_boom, plan_ok]
         if "FROM plan_chunk_queue" in sql:

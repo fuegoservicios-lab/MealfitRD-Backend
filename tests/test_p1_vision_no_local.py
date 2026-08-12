@@ -347,21 +347,21 @@ def test_gate_no_longer_references_is_vision_local():
 
 def test_get_monthly_api_usage_sigue_sin_filtro_de_endpoint():
     """Redundante a propósito con test_p1_vision_luna.py (ver docstring de
-    esa función homónima) -- ancla que P1-VISION-NO-LOCAL, al tocar el mismo
-    gate de diary.py, no reintrodujo un filtro por endpoint en el libro de
-    cuota compartido. Cambiar este SELECT alteraría la facturación de TODOS
-    los endpoints, no solo el de visión."""
+    esa función homónima, actualizada por [P1-COACH-METER · 2026-08-11]):
+    el medidor se partió en dos y el ancla ahora afirma el contrato nuevo —
+    default generation en LISTA NEGATIVA y 'llm_chat' como ÚNICO literal de
+    endpoint del libro. Un segundo literal sería un endpoint whitelisteándose
+    fuera del medidor compartido (usar log_llm_usage_event en su lugar)."""
     src = _src("db_profiles.py")
     m = re.search(
         r"^def get_monthly_api_usage\(.*?(?=^def )", src, re.MULTILINE | re.DOTALL
     )
     assert m, "get_monthly_api_usage no encontrada en db_profiles.py."
     body = m.group(0)
-    assert (
-        "SELECT count(*) as total FROM api_usage WHERE user_id = %s "
-        "AND created_at >= %s"
-    ) in body
-    assert "endpoint" not in body
+    assert 'kind: str = "generation"' in body
+    assert "COALESCE(endpoint, '') <> 'llm_chat'" in body
+    _literales = set(re.findall(r"endpoint\s*(?:=|<>)\s*'([^']+)'", body))
+    assert _literales == {"llm_chat"}
 
 
 # ---------------------------------------------------------------------------

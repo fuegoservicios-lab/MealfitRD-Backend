@@ -747,12 +747,15 @@ def test_shift_plan_skips_refill_when_target_week_chunk_already_exists(mock_pool
     mock_conn.transaction.return_value.__enter__.return_value = MagicMock()
     mock_cursor = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-    # [P2-LOCK-2 · 2026-05-10] fetchone #1 = SELECT id (resolución sin lock); #2 = SELECT
+    # [P1-PLAN-MODE · 2026-08-11] fetchone #1 = get_plan_mode (el guard de pausa
+    # lee user_profiles ANTES de tocar el plan; en 'plan' el shift sigue igual).
+    # [P2-LOCK-2 · 2026-05-10] #2 = SELECT id (resolución sin lock); #3 = SELECT
     # plan_data FOR UPDATE. El plan de 15d vencido por shift cae en el catch-up
-    # (not is_partial and needs_fill): #3 health_profile, #4 MAX(week_number) no-cancelado,
-    # #5 chunk conflictivo para la semana objetivo → como existe, enqueue NO se llama.
+    # (not is_partial and needs_fill): #4 health_profile, #5 MAX(week_number) no-cancelado,
+    # #6 chunk conflictivo para la semana objetivo → como existe, enqueue NO se llama.
     # (El stub legacy traía un {"cnt": 0} espurio de una estructura de query anterior.)
     mock_cursor.fetchone.side_effect = [
+        {"plan_mode": "plan", "plan_mode_changed_at": None},
         {"id": "plan_15d"},
         {"plan_data": plan_data},
         {"health_profile": {"budget": "mid"}},
