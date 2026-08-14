@@ -29,6 +29,8 @@ Cobertura:
   - Cap mínimo (max(1, ...) o max(2, ...) según corresponda)
   - Cap por gramos (cuando el LLM emite peso explícito)
 """
+import math
+
 import pytest
 
 from shopping_calculator import (
@@ -272,9 +274,15 @@ class TestVegCapScaling:
     ])
     def test_cap_scales_with_person_weeks(self, scenario, multiplier, expected_max_units):
         actual_g = self._cebolla_qty_g(multiplier)
-        # Cap en gramos: assumimos density 150g/cebolla (típico).
-        # En el path 'unidad' nuestro helper × 150 produce esto directamente.
-        cap_g = expected_max_units * 150.0 * 1.10  # 10% margen redondeo
+        # [alineado al mecanismo real · 2026-08-14] El margen era un 10% a ojo y no
+        # cubría el caso de 1 person-week: el cap NO se calcula en gramos sino en
+        # MEDIAS LIBRAS (`_cap_lbs = max(0.5, round(lbs * 2) / 2)`), así que 4 cebollas
+        # × 150 g = 600 g = 1,32 lb redondea a 1,5 lb = 680,4 g y el test cantaba
+        # «recibido 680g» contra un tope inventado de 660. La cifra de producción era
+        # correcta; el modelo del test era otro. Ahora el test redondea igual que el
+        # código, así que el límite deja de ser un número de conveniencia.
+        _MEDIA_LIBRA_G = 453.592 / 2
+        cap_g = math.ceil((expected_max_units * 150.0) / _MEDIA_LIBRA_G) * _MEDIA_LIBRA_G
         assert actual_g > 0, f"Cebolla debe aparecer: {actual_g}"
         assert actual_g <= cap_g, (
             f"{scenario} (mult={multiplier:.2f}): cap={expected_max_units} "

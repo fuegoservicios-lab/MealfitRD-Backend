@@ -62,9 +62,17 @@ def test_kcal_antes_vs_despues():
     assert antes / despues > 2.5
 
 
+# [actualizado a P1-LEGUME-DRY-WORDING · 2026-08-08 · test alineado 2026-08-14]
+# Las LEGUMINOSAS dicen "secas", no "crudas": «habichuelas crudas» se lee como una
+# instrucción de comerlas crudas. Los GRANOS conservan "crudo". El cambio está
+# documentado con marker en `_normalize_cooked_grain_lines`, y su autor anotó que los
+# granos «ya están anclados en tests» — estas dos filas de legumbre eran justo las que
+# no vio, así que la suite llevaba desde el 08-ago acusando a producción de su propio
+# fix. *Cuando cambies una palabra que el usuario lee, busca TODOS los tests que la
+# afirman, no solo los de la clase que estás mirando.*
 @pytest.mark.parametrize("line,expected_prefix", [
-    ("120 g de habichuelas rojas cocidas", "44 g de habichuelas rojas crud"),
-    ("90 g de lentejas hervidas", "32 g de lentejas crud"),
+    ("120 g de habichuelas rojas cocidas", "44 g de habichuelas rojas sec"),
+    ("90 g de lentejas hervidas", "32 g de lentejas sec"),
     ("100 g de pasta integral cocida", "43 g de pasta integral crud"),
 ])
 def test_otras_clases(line, expected_prefix):
@@ -74,11 +82,15 @@ def test_otras_clases(line, expected_prefix):
 
 
 def test_concordancia_de_genero_y_numero():
-    """El usuario lee esta línea en la app y en el PDF: 'habichuelas rojas crudo' canta."""
+    """El usuario lee esta línea en la app y en el PDF: 'habichuelas rojas crudo' canta.
+
+    La concordancia (femenino plural / masculino singular) es lo que este test
+    protege; la RAÍZ de la palabra la decide P1-LEGUME-DRY-WORDING: legumbre → 'secas',
+    grano → 'crudo'."""
     days = _days("120 g de habichuelas rojas cocidas", "65 g de arroz blanco cocido")
     go._normalize_cooked_grain_lines(days)
     ings = days[0]["meals"][0]["ingredients"]
-    assert ings[0].endswith("crudas"), ings[0]
+    assert ings[0].endswith("secas"), ings[0]
     assert ings[1].endswith("crudo"), ings[1]
 
 
