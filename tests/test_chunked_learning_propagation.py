@@ -1340,7 +1340,12 @@ def test_smart_shuffle_excludes_high_fatigue_days_using_learned_bases():
 # Test 7 (P1-1): hybrid quantity mode — reintentar y anotar, nunca fallar
 # ---------------------------------------------------------------------------
 
-def test_hybrid_mode_retries_on_quantity_violation_then_annotates():
+# [2026-08-14] Pide `_coherencia_t2_warn_only`: la lista mockeada de este archivo
+# es `{"categories": []}` y con las recetas del fixture el guard severo la lee como
+# 3 ausencias, escala T2 warn->block y RE-ENCOLA el chunk — el pipeline se queda en 1
+# llamada y el test decia "debe llamar 3 veces" sobre un flujo que nunca llego ahi.
+# La fixture ya existia para esto exacto; a estos dos les faltaba pedirla.
+def test_hybrid_mode_retries_on_quantity_violation_then_annotates(_coherencia_t2_warn_only):
     """
     Hybrid: LLM solicita 250g pollo con solo 100g en despensa (>130% límite).
     Debe reintentar _PANTRY_MAX_RETRIES veces (pipeline llamado 3x) y luego
@@ -1407,7 +1412,12 @@ def test_hybrid_mode_retries_on_quantity_violation_then_annotates():
     assert len(merged.get("days", [])) == 6, "El plan debe continuar con los 6 días generados"
 
 
-def test_advisory_mode_does_not_retry_on_quantity_violation():
+# [2026-08-14] Pide `_coherencia_t2_warn_only`: la lista mockeada de este archivo
+# es `{"categories": []}` y con las recetas del fixture el guard severo la lee como
+# 3 ausencias, escala T2 warn->block y RE-ENCOLA el chunk — el pipeline se queda en 1
+# llamada y el test decia "debe llamar 3 veces" sobre un flujo que nunca llego ahi.
+# La fixture ya existia para esto exacto; a estos dos les faltaba pedirla.
+def test_advisory_mode_does_not_retry_on_quantity_violation(_coherencia_t2_warn_only):
     """
     Advisory: misma violación de cantidades que en hybrid, pero el pipeline se llama
     una sola vez — anota inmediatamente sin reintentar.

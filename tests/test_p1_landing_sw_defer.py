@@ -104,14 +104,38 @@ def test_el_motivo_del_defer_esta_escrito_junto_al_registro():
 # ---------------------------------------------------------------------------
 
 def _glob_ignores(text: str) -> list[str]:
-    m = re.search(r"globIgnores\s*:\s*\[(.*?)\]", text, re.DOTALL)
-    if not m:
+    """Entradas de `globIgnores`, emparejando corchetes y saltando comentarios.
+
+    [2026-08-14] Antes era `\\[(.*?)\\]` no-codicioso: se detenía en el PRIMER `]`, que
+    hoy es el del marker `[P2-LANDING-PRERENDER-META · 2026-08-14]` dentro de un
+    comentario de la propia lista. Resultado: la función devolvía `[]` y los cinco
+    tests de iconos gritaban «no está en globIgnores» sobre cinco entradas que sí
+    están. Es la misma trampa que ya mordió a este archivo: *la prosa que explica una
+    estructura contiene los caracteres de esa estructura.*
+    """
+    i = text.find("globIgnores:")
+    if i == -1:
         pytest.fail(
             "[P1-LANDING-SW-DEFER] No se encontró `globIgnores` en vite.config.js "
             "(lo introdujo P2-PWA-PRECACHE-TRIM). Si el recorte del precache se movió "
             "a otro mecanismo, actualiza este guard."
         )
-    return re.findall(r"['\"]([^'\"]+)['\"]", m.group(1))
+    a = text.index("[", i)
+    prof = 0
+    fin = None
+    for k in range(a, len(text)):
+        if text[k] == "[":
+            prof += 1
+        elif text[k] == "]":
+            prof -= 1
+            if prof == 0:
+                fin = k
+                break
+    assert fin is not None, "globIgnores sin cierre — ¿config a medio editar?"
+    cuerpo = "\n".join(
+        ln for ln in text[a:fin + 1].splitlines() if not ln.strip().startswith("//")
+    )
+    return re.findall(r"['\"]([^'\"]+)['\"]", cuerpo)
 
 
 @pytest.mark.parametrize(

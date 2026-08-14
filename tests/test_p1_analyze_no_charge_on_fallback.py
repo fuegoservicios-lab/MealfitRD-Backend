@@ -96,10 +96,20 @@ def test_rollback_knob_default_false(body: str):
 def test_fallback_break_sets_flag(body: str, error_code: str):
     """Cada rama de fallback que emite `error` + `break` debe setear el flag ANTES,
     para que el finally no cobre ese exit."""
-    code_idx = body.find(f"'code': '{error_code}'")
+    # [reapuntado 2026-08-14] La ventana de 400 caracteres se medía sobre el fuente
+    # CRUDO, comentarios incluidos. P1-LANDING-BENCH-2 (07-ago) documentó el
+    # diagnóstico por SSE justo entre el flag y el yield: 791 caracteres de distancia,
+    # de los cuales UNA sola línea es código. El test dijo «cobraría sin entregar
+    # plan» sobre una rama que sí marca el flag — un falso rojo con acusación de
+    # facturación. Se mide sobre código SIN comentarios: la distancia real entre dos
+    # sentencias no la cambia la prosa que las explica.
+    _codigo = "\n".join(
+        ln for ln in body.splitlines() if not ln.lstrip().startswith("#")
+    )
+    code_idx = _codigo.find(f"'code': '{error_code}'")
     assert code_idx > 0, f"no se encontró la rama del error_code {error_code!r}."
     # Una asignación del flag debe aparecer en la ventana inmediatamente anterior al yield.
-    window = body[max(0, code_idx - 400): code_idx]
+    window = _codigo[max(0, code_idx - 400): code_idx]
     assert "_plan_delivery_failed = True" in window, (
         f"[P1-ANALYZE-NO-CHARGE-ON-FALLBACK] la rama '{error_code}' no setea "
         f"`_plan_delivery_failed = True` antes de emitir el error → cobraría sin entregar plan."

@@ -118,7 +118,14 @@ def test_db_coverage_and_atwater_consistency():
         # computadas): chía 464.29 = 130 kcal/28g exacto (label serving), tortilla
         # integral 228.07 (fibra-corregida). Van a la banda de sanidad como el resto
         # de la data real.
-        script_names -= {"Semillas de chía", "Tortilla integral"}
+        # [2026-08-14] `Pan de agua` entra a la misma lista y por la misma razón. Está
+        # en USDA_QUERY del script, pero su fila REAL la siembra la migración
+        # P1-BREAD-CATALOG (2026-08-10) con kcal de etiqueta: 270 contra 262 de Atwater
+        # (3%), la divergencia normal del pan francés —los factores específicos no son
+        # los genéricos 4/4/9—. Exigirle ±2 sería obligar a falsear la kcal real para
+        # que cuadre con una fórmula aproximada. Cae a la banda de sanidad como el
+        # resto de la data real (270/262 = 1,03, muy dentro de [0,40, 1,40]).
+        script_names -= {"Semillas de chía", "Tortilla integral", "Pan de agua"}
         bad_strict, bad_sanity = [], []
         for name, k, p, c, f in cur.fetchall():
             atwater = 4 * float(p) + 4 * float(c) + 9 * float(f)

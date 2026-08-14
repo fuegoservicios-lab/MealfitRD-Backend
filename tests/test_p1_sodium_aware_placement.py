@@ -335,11 +335,18 @@ def _fake_invoke_result(meal_kwargs: dict) -> dict:
 
 
 def _meal_kwargs(name, ingredients):
+    # [2026-08-14] Los pasos eran «prepara los ingredientes / cocina / sirve». El gate
+    # de calidad (`receta no sustantiva`) descuenta los prefijos rituales y exige ≥2
+    # pasos de ≥12 caracteres que no estén en la lista de genéricos: con los de antes
+    # contaba UNO y el swap moría con DISH_QUALITY antes de llegar a la lógica de
+    # sodio que este archivo mide. La fixture no puede ser más pobre que el mínimo que
+    # producción exige, o el test mide el guard equivocado.
     return dict(
         meal="Cena", name=name, desc="Descripción de prueba", prep_time="15 min",
         cals=350, protein=20, carbs=30, fats=10, ingredients=ingredients,
-        recipe=["Mise en place: prepara los ingredientes.",
-                "El Toque de Fuego: cocina.", "Montaje: sirve."],
+        recipe=["Mise en place: pica la cebolla y el ajo en brunoise fina.",
+                "El Toque de Fuego: sella la proteína 4 minutos por lado a fuego medio-alto.",
+                "Montaje: sirve con los vegetales al lado y termina con cilantro fresco."],
     )
 
 
@@ -410,8 +417,15 @@ def test_e2e_exceeds_then_fresh_candidate_accepted(_sodium_swap_env, monkeypatch
             ["300 g de camarones", "50 g de queso curado", "2 berenjenas medianas"],
         )),
         _fake_invoke_result(_meal_kwargs(
-            "Pollo a la Plancha con Arroz",
-            ["200 g de pechuga de pollo fresca", "1 taza de arroz integral"],
+            # [2026-08-14] Era «Pollo a la Plancha con Arroz». El slot de esta fixture
+            # es CENA y el backstop de coherencia horaria es-DO rechaza arroz/locrio/
+            # moro de noche — un guard posterior a este test. El swap agotaba sus
+            # reintentos por el arroz y nunca llegaba a evaluar el sodio, que es lo que
+            # este archivo mide. La berenjena ya está en la tabla de sodio de la
+            # fixture (3 mg), así que el candidato sigue siendo FRESCO y bajo en sodio:
+            # cambia el acompañante, no la aritmética.
+            "Pollo a la Plancha con Berenjenas",
+            ["200 g de pechuga de pollo fresca", "2 berenjenas medianas asadas"],
         )),
     ]
     fake_instance_holder = {}

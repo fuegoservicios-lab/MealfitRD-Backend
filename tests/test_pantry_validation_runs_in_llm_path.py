@@ -126,7 +126,22 @@ def _make_3day_pipeline_return(ingredients_per_day):
 
 # -------------------------------------------------------------------------
 
-def test_phantom_ingredient_triggers_retry():
+# [2026-08-14] `monkeypatch` para apagar la escalada T2 del guard de coherencia:
+# la lista de compras mockeada de este archivo es incoherente con las recetas POR
+# DISENO, y desde P2-COHERENCE-1 esa incoherencia escala warn->block, hace fallar
+# los 3 intentos de shopping list y RE-ENCOLA el chunk — el pipeline se queda en 1
+# llamada y el test decia "deberia haber reintentado por ingrediente fantasma"
+# sobre un flujo que nunca llego al validador. Es el mismo knob de rollback que
+# produccion expone, y el mismo remedio que test_chunked_learning_propagation ya
+# tenia como fixture opt-in.
+def test_phantom_ingredient_triggers_retry(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+    # [P1-PANTRY-VIABILITY-FLOOR · 2026-07-28] Con una nevera de 3 items (<12) el
+    # floor conmuta a modo FLEXIBLE, que ENTREGA el plato con «Compra Urgente» en
+    # vez de reintentar — o sea, el fantasma deja de disparar el reintento que este
+    # test mide. La fixture de test_chunked_learning_propagation ya fija el piso a 0
+    # por la misma razon; este archivo se quedo sin ella.
+    monkeypatch.setattr(cron_tasks, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
     """Ingredientes fantasma deben hacer que el LLM se reinvoque > 1 vez."""
     tasks = _make_tasks(
         week_number=2, days_offset=3, days_count=3,
