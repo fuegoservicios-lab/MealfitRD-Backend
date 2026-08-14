@@ -321,6 +321,14 @@ Override emite `WARN [P0-AGENT-1]` con `tool=/llm_user_id=/trusted=` para identi
 
 [P1-CULINARY-CONTRACT] Coherencia culinaria determinista: metadata en master_ingredients + scan V1/V2/V3 en review/finalize/degradado (warn). Doc: backend/docs/culinary_coherence.md. Test test_p1_culinary_contract.py.
 
+[P1-LANDING-SW-DEFER · 2026-08-14] El SW se registraba con `immediate: true`: el install (73 entradas ≈ 988 KiB en el apex) arrancaba al evaluar el entry, o sea compitiendo con el chunk del hero. Ahora espera a `load`, y los `apple-touch-icon*` salen del precache — los pide el SO al INSTALAR y no se renderizan nunca. **Fuera del PRECACHE, NO borrados**: `manifest.json` los referencia y BRAND-FAVICON-B los declara fallback de root. Test test_p1_landing_sw_defer.py.
+
+[P1-LANDING-OBS-PAPER] Replay de Sentry y autocapture de PostHog no corren en el apex. La política es SSOT en `utils/observabilityScope.js` y corta **por HOST, no por ruta** (`/precios` existe también en app.*, donde sí hay sesión que depurar). **`VITE_SENTRY_REPLAYS_SESSION_RATE=0` NO ahorra un byte** — regula la ingesta y el chunk se descarga igual; sólo saltarse el import lo hace. El opt-out de analítica pasa además a cookie de `.bioboros.com`: `localStorage` es por ORIGEN, así que el interruptor de Configuración era invisible para el landing. PostHog declarado en Privacidad §7/§8/§12/§13. Tests test_p1_landing_obs_paper.py + ObservabilityScope.p1_landing_obs_paper.test.js.
+
+[P1-LANDING-HEAD-PRELOAD] El chunk del landing se precarga desde un bloque **gateado por host** (plugin `bioboros-landing-head`, `scripts/landingHead.mjs`): hay UN solo index.html para dos hosts, así que un `<link>` fijo le daría 226 kB de landing eager a app.* — lo que P3-APP-SUBDOMAIN-BUILD-SEP quitó de ahí. Los nombres salen del bundle porque llevan hash: escritos a mano caducan y fallan en **silencio** (un preload a un 404 no rompe nada, sólo deja de servir). El preconnect de Neon Auth deja de ser incondicional: el apex no contacta ese origen (P3-APEX-NO-SESSION). Test test_p1_landing_head_preload.py.
+
+Plan de producción del landing (25 gaps, 0 P0, 3 P1): [`docs/superpowers/specs/2026-08-14-landing-produccion-design.md`](docs/superpowers/specs/2026-08-14-landing-produccion-design.md).
+
 [P1-PANTRY-NAME-RESOLUTION] La identidad de una fila de la Nevera se decide SOLO en `constants.pantry_names_match` (case/acentos/cantidad/plural, por token completo). **No la reimplementes sobre `GLOBAL_REVERSE_MAP`**: ese mapa colapsa `pechuga`→`pollo` a propósito, así que comerte una pechuga descontaría del muslo. Los 4 call sites resolvían por igualdad exacta y `"2 huevos"` contra la fila `Huevo` devolvía **éxito sin descontar, sin fila en `failed_inventory_deductions` y sin alerta**. Doc: backend/docs/pantry_name_resolution.md. Test test_p1_pantry_name_resolution.py.
 
 ---

@@ -129,6 +129,25 @@ def test_frontend_analytics_opt_out_real():
         "toggle de Privacidad sería un ajuste falso."
     )
     settings = _read(_SETTINGS)
-    assert "ANALYTICS_OPT_OUT_KEY" in settings and "handleToggleAnalytics" in settings, (
+    # [P1-LANDING-OBS-PAPER · 2026-08-14] Esta aserción exigía ver
+    # `ANALYTICS_OPT_OUT_KEY` DENTRO de Settings.jsx, o sea que la pantalla
+    # escribiera la clave a pelo. Estaba atada al CÓMO, y el cómo era el bug:
+    # `localStorage` es por ORIGEN, así que el opt-out escrito aquí (app.*) era
+    # invisible para el landing (apex) y el usuario seguía siendo rastreado
+    # después de apagarlo. Ahora se escribe por `persistAnalyticsOptOut`, que
+    # deja coherentes los dos soportes (localStorage + cookie de dominio).
+    #
+    # Reescrita al QUÉ —«el toggle persiste el opt-out de verdad»— y además
+    # endurecida: prohíbe explícitamente volver a la escritura cruda, que es la
+    # regresión concreta a evitar.
+    assert "handleToggleAnalytics" in settings, (
         "Falta el toggle de analytics en la sección Privacidad."
+    )
+    assert "persistAnalyticsOptOut" in settings, (
+        "El toggle debe persistir por `persistAnalyticsOptOut` (SSOT). Escribir "
+        "sólo `localStorage` deja el opt-out invisible para el apex, que es otro "
+        "origen — el usuario lo apaga y el landing lo sigue rastreando."
+    )
+    assert not re.search(r"safeLocalStorageSet\(\s*ANALYTICS_OPT_OUT_KEY", settings), (
+        "Volvió la escritura cruda de la clave del opt-out en Settings.jsx."
     )
