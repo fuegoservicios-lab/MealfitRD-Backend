@@ -66,6 +66,24 @@ if [ -n "${js:-}" ]; then
   grep -qi 'immutable' <<<"$cc" && ok "assets immutable" || mal "assets sin immutable ('$cc')"
 fi
 
+echo "-- Meta por ruta (P2-LANDING-PRERENDER-META) --"
+# Se comprueba SIN seguir redirects a propósito: el primer intento sirvió el
+# contenido correcto detrás de un 301 a la ruta con barra final, y un `curl -L`
+# lo habría dado por bueno.
+for ruta in precios motor supermercado; do
+  cod="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$ORIGEN/$ruta" || true)"
+  if [ "$cod" != "200" ]; then
+    mal "/$ruta responde $cod (¿301 de barra final? mira try_files)"
+    continue
+  fi
+  cuerpo="$(curl -sS --max-time 20 "$ORIGEN/$ruta" || true)"
+  url="$(printf '%s' "$cuerpo" | tr '>' '\n' | sed -n 's/.*og:url" content="\([^"]*\)".*/\1/p' | head -1)"
+  case "$url" in
+    */"$ruta") ok "/$ruta se declara canónica de sí misma" ;;
+    *) mal "/$ruta declara og:url='$url' (debería terminar en /$ruta)" ;;
+  esac
+done
+
 echo "-- Sourcemaps NO servibles (segunda barrera) --"
 if [ -n "${js:-}" ]; then
   cod="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$ORIGEN$js.map" || true)"
