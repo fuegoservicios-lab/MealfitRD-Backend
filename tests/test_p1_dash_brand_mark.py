@@ -81,7 +81,36 @@ def test_el_dashboard_renderiza_isotipo_Y_wordmark():
 
 def test_el_isotipo_es_decorativo_para_lectores_de_pantalla():
     """Va SIEMPRE con el wordmark, que ya dice «Bioboros». Un alt descriptivo haría que
-    un lector de pantalla anunciara la marca dos veces seguidas."""
+    un lector de pantalla anunciara la marca dos veces seguidas.
+
+    [P1-BRAND-MARK-MONO · 2026-08-14] Dejó de ser un `<img alt="">` y pasó a ser un
+    `<span>` pintado con máscara CSS, así que la afirmación cambia de sitio pero no de
+    intención: sigue siendo invisible para un lector de pantalla."""
     src = _MARK_COMPONENT.read_text(encoding="utf-8")
-    assert re.search(r'alt=""', src), "el isotipo debe llevar `alt=\"\"` (es decorativo)"
     assert 'aria-hidden="true"' in src, "el isotipo debe llevar aria-hidden"
+    assert 'role="presentation"' in src or re.search(r'alt=""', src), (
+        "el isotipo debe declararse decorativo (`role=\"presentation\"` en el span, o "
+        "`alt=\"\"` si vuelve a ser un <img>)"
+    )
+
+
+def test_la_tinta_del_isotipo_la_pone_el_tema_no_el_PNG():
+    """[P1-BRAND-MARK-MONO] El wordmark es monocromo por decisión del dueño y se
+    rechazaron DOS versiones con color. Un símbolo índigo al lado reintroducía ese
+    acento por la puerta de atrás — y además pesaba 2,9× menos que la palabra contra el
+    fondo (5,18:1 vs 15,11:1), leyéndose como adorno y no como parte del logo.
+
+    La máscara hace que herede `currentColor`; si alguien vuelve a un `<img>` de color
+    fijo, el tema claro pierde además su tinta oscura automática."""
+    css = (_MARK_COMPONENT.parent / "BrandMark.module.css").read_text(encoding="utf-8")
+    sin_comentarios = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    assert "currentColor" in sin_comentarios, (
+        "el isotipo dejó de heredar la tinta del bloque de marca"
+    )
+    assert "mask" in sin_comentarios and "bioboros-mark.png" in sin_comentarios, (
+        "el PNG debe entrar como MÁSCARA (su alfa es la forma), no como color"
+    )
+    # el respaldo para navegadores sin máscaras no puede desaparecer en silencio
+    assert "@supports" in sin_comentarios, (
+        "falta el respaldo `@supports`: sin máscaras el símbolo saldría invisible"
+    )
