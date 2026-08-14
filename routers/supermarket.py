@@ -33,6 +33,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from auth import get_verified_user_id
@@ -96,7 +97,11 @@ def _catalog_cache_ttl_s() -> int:
 # exactamente la misma ventana, solo que desplazada. Lo que la cierra es que el
 # rellenador compruebe si la generacion cambio mientras el leia; si cambio, tira
 # lo que trajo en vez de publicarlo.
-_CATALOG_CACHE: Dict[str, Any] = {"at": 0.0, "rows": None, "master": None, "gen": 0}
+_CATALOG_CACHE: Dict[str, Any] = {
+    "at": 0.0, "rows": None, "master": None, "gen": 0,
+    # [P2-SUPERMARKET-LIST-CACHE] Ranura del LISTADO: otro juego de columnas.
+    "list_rows": None, "list_at": 0.0,
+}
 _CATALOG_LOCK = threading.Lock()
 
 
@@ -158,6 +163,12 @@ def _invalidate_catalog_cache() -> None:
         _CATALOG_CACHE["rows"] = None
         _CATALOG_CACHE["master"] = None
         _CATALOG_CACHE["at"] = 0.0
+        # [P2-SUPERMARKET-LIST-CACHE 2026-08-14] La ranura del listado se limpia
+        # aqui tambien. Olvidarla dejaria al admin editando un precio y viendo el
+        # viejo en la grilla hasta el TTL -- justo el bug que la invalidacion
+        # explicita existe para evitar, reintroducido por una ranura nueva.
+        _CATALOG_CACHE["list_rows"] = None
+        _CATALOG_CACHE["list_at"] = 0.0
         _CATALOG_CACHE["gen"] = int(_CATALOG_CACHE.get("gen") or 0) + 1
 
 
@@ -245,12 +256,148 @@ class SupermarketProductPatch(BaseModel):
     active: Optional[bool] = None
 
 
+# [P2-SUPERMARKET-LIST-CACHE · 2026-08-14] Columnas del LISTADO.
+#
+# Igual que `_SELECT_COLS` menos `created_at`/`updated_at`, que no tiene un solo
+# consumidor: verificado con grep sobre `SupermarketPage.jsx` y `SupermarketBrands.jsx`.
+#
+# ⚠️ NO se recortan `notes` ni `description` aunque no se pinten en la grilla: el
+# formulario de EDICION los lee de la misma fila, asi que quitarlos dejaria al
+# admin editando campos vacios sin un solo error. (El plan de auditoria proponia
+# recortarlos; el grep lo desmintio.) `category`, `brand` e `image_url` tampoco:
+# la pagina deriva de ellos las facetas del filtro.
+_LIST_COLS = """
+    id::text AS id,
+    food_name,
+    brand,
+    presentation,
+    portion_label,
+    duration_label,
+    price_rd::float8 AS price_rd,
+    size_grams::float8 AS size_grams,
+    notes,
+    category,
+    master_food_name,
+    image_url,
+    description,
+    is_verified,
+    active
+"""
+
+
+def _cached_active_rows() -> Optional[List[Dict[str, Any]]]:
+    """Las filas ACTIVAS del catalogo para el LISTADO, o `None` si esta fria.
+
+    POR QUE EXISTE. `_CATALOG_CACHE` la introdujo P1-SUPERMARKET-CATALOG-CACHE y
+    sólo la consultaba `/match`. El listado -- la unica API de datos del landing, y
+    la que dispara un visitante anonimo al abrir /supermercado -- nunca la miró.
+    Medido contra produccion el 2026-08-14: 1.739 filas, 905 KB crudos en dos
+    peticiones serializadas por visita, con TRES consultas cada una (SELECT +
+    count + GROUP BY) = seis por visita, de las cuales el count y el group-by
+    devuelven siempre lo mismo.
+
+    ⚠️ RANURA PROPIA (`list_rows`), NO la de `/match`. Es el detalle que casi se
+    me escapa: `/match` cachea un SELECT MAS ESTRECHO (sin `notes`,
+    `master_food_name`, `image_url`, `description`, `active`, `portion_label` ni
+    `duration_label`). Servir esas filas al listado habria dejado la pagina sin la
+    mitad de los campos SIN UN SOLO ERROR -- las tarjetas a medio pintar y el
+    formulario de edicion con campos vacios. Dos consumidores con dos formas
+    distintas necesitan dos ranuras, aunque el dato de origen sea el mismo.
+
+    Comparte `gen` con la otra, asi que una mutacion admin las invalida a las dos.
+    """
+    ttl = _catalog_cache_ttl_s()
+    if ttl <= 0:
+        return None
+    with _CATALOG_LOCK:
+        rows = _CATALOG_CACHE.get("list_rows")
+        fresca = (
+            rows is not None
+            and (time.time() - float(_CATALOG_CACHE.get("list_at") or 0)) < ttl
+        )
+        return list(rows) if fresca else None
+
+
+def _publish_list_rows(rows, gen_al_empezar: int) -> bool:
+    """Publica el listado cacheado si nadie invalido mientras se leia la DB.
+
+    Mismo contrato que `_publish_catalog_cache`: el contador de generacion es lo
+    unico que cierra la ventana entre `_invalidate_catalog_cache()` y el `await`
+    de la escritura que la motiva.
+    """
+    with _CATALOG_LOCK:
+        if int(_CATALOG_CACHE.get("gen") or 0) != gen_al_empezar:
+            return False
+        _CATALOG_CACHE["list_rows"] = rows
+        _CATALOG_CACHE["list_at"] = time.time()
+        return True
+
+
 def _clean(value: Optional[str]) -> Optional[str]:
     """Trimea y colapsa strings vacíos a NULL (evita '' vs NULL en el unique index)."""
     if value is None:
         return None
     value = value.strip()
     return value or None
+
+
+def _fetch_todas_activas() -> List[Dict[str, Any]]:
+    """Todas las filas ACTIVAS, sin paginar. La fuente de la cache del listado.
+
+    Una sola consulta: el total es `len(rows)` y las categorias se derivan de las
+    mismas filas, asi que sustituye a las TRES que hacia `_fetch` (SELECT +
+    count(*) + GROUP BY). Sin `LIMIT` a proposito -- cachear una pagina y llamarla
+    catalogo es exactamente el bug que este helper existe para no repetir.
+    """
+    return execute_sql_query(
+        f"""
+        SELECT {_LIST_COLS}
+        FROM public.supermarket_products
+        WHERE active
+        ORDER BY category NULLS LAST, lower(food_name), lower(coalesce(brand,'')), lower(coalesce(presentation,''))
+        """,
+        (),
+        fetch_all=True,
+    ) or []
+
+
+def _paginar(rows: List[Dict[str, Any]], limit: int, offset: int) -> List[Dict[str, Any]]:
+    return rows[offset: offset + limit]
+
+
+def _categorias_de(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Las facetas del filtro, derivadas de las filas ya en memoria.
+
+    Sustituye al `GROUP BY category` -- una de las tres consultas por peticion --
+    cuando el listado se sirve de cache. El orden replica el `ORDER BY category`
+    del SQL para que la barra de filtros no baile entre una respuesta cacheada y
+    una fresca.
+    """
+    conteo: Dict[str, int] = {}
+    for r in rows:
+        c = r.get("category")
+        if c:
+            conteo[c] = conteo.get(c, 0) + 1
+    return [{"category": c, "n": float(n)} for c, n in sorted(conteo.items())]
+
+
+def _respuesta_listado(products, total, categories, *, publico: bool) -> JSONResponse:
+    """[P2-SUPERMARKET-LIST-CACHE · 2026-08-14] La respuesta, con su Cache-Control.
+
+    El catalogo cambia cuando un admin lo edita, o sea casi nunca: 5 minutos en el
+    navegador ahorran re-descargar ~900 KB a quien navega dentro de /supermercado.
+
+    ⚠️ Y `no-store` en modo edicion, que no es simetria decorativa: cachear la
+    vista del admin en SU navegador le escondería su propia escritura -- el mismo
+    bug que la invalidacion del servidor existe para evitar, un piso más arriba.
+    """
+    cabeceras = {
+        "Cache-Control": "public, max-age=300" if publico else "no-store",
+    }
+    return JSONResponse(
+        content={"products": products, "total": total, "categories": categories},
+        headers=cabeceras,
+    )
 
 
 @router.get("/products")
@@ -288,7 +435,7 @@ async def api_supermarket_list(
     def _fetch() -> Dict[str, Any]:
         rows = execute_sql_query(
             f"""
-            SELECT {_SELECT_COLS}
+            SELECT {_LIST_COLS}
             FROM public.supermarket_products
             {where_sql}
             ORDER BY category NULLS LAST, lower(food_name), lower(coalesce(brand,'')), lower(coalesce(presentation,''))
@@ -318,11 +465,59 @@ async def api_supermarket_list(
             "categories": cats or [],
         }
 
+    # [P2-SUPERMARKET-LIST-CACHE · 2026-08-14] El caso COMUN se sirve de memoria.
+    #
+    # "Comun" es: sin busqueda, sin filtro de categoria y sin modo edicion. Es lo
+    # que pide un visitante anonimo al abrir /supermercado, o sea la inmensa
+    # mayoria del trafico de este endpoint. Filtrar y paginar 1.739 filas en Python
+    # cuesta microsegundos; las tres consultas que evita costaban 236-382 ms de DB.
+    #
+    # Los otros casos van a la DB a proposito: cachear cada combinacion de busqueda
+    # seria cachear ruido, y el modo edicion DEBE ver lo que el admin acaba de
+    # escribir (es la razon por la que las mutaciones invalidan explicitamente).
+    es_caso_comun = not include_inactive and not _clean(q) and not _clean(category)
+
+    if es_caso_comun:
+        cacheadas = _cached_active_rows()
+        if cacheadas is None:
+            # Cache fria: se trae el catalogo ENTERO de una vez y se cachea.
+            #
+            # ⚠️ NO se reutiliza el `_fetch` paginado, y esta es la leccion cara de
+            # este P-fix: la primera version cacheaba el resultado de `_fetch`
+            # cuando `limit >= _MAX_LIMIT`. Parecia razonable -- "pidio el maximo,
+            # luego lo tiene todo" -- y es FALSO: `_MAX_LIMIT` son 1000 y el
+            # catalogo tiene 1.739 filas. La cache quedo con 1.000 y sirviendo
+            # `total: 1000`, o sea un supermercado TRUNCADO, y encima con pinta de
+            # funcionar. Se detecto midiendo el payload en produccion.
+            #
+            # La condicion honesta no es "pidio mucho" sino "esto es todo": una
+            # consulta SIN limite. De paso ahorra las otras dos (el `count(*)` es
+            # `len(rows)` y las categorias salen de las mismas filas).
+            try:
+                todas = await asyncio.to_thread(_fetch_todas_activas)
+            except Exception as exc:
+                logger.error(f"❌ [P2-SUPERMARKET-LIST-CACHE] carga completa falló: {exc}")
+                raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
+            _publish_list_rows(todas, _catalog_generation())
+            cacheadas = todas
+        return _respuesta_listado(
+            _paginar(cacheadas, limit, offset), len(cacheadas),
+            _categorias_de(cacheadas), publico=True,
+        )
+
+    # La generacion se captura ANTES de tocar la DB: si un admin escribe mientras
+    # leemos, el relleno se descarta en vez de publicar filas pre-escritura.
+    gen_al_empezar = _catalog_generation()
+
     try:
-        return await asyncio.to_thread(_fetch)
+        datos = await asyncio.to_thread(_fetch)
     except Exception as exc:
         logger.error(f"❌ [P1-SUPERMARKET-DB] list falló: {exc}")
         raise HTTPException(status_code=500, detail="No se pudo cargar el supermercado.")
+
+    return _respuesta_listado(
+        datos["products"], datos["total"], datos["categories"], publico=not include_inactive,
+    )
 
 
 # ── [P1-SUPERMARKET-MATCH · 2026-07-02] lista de compras → variantes del súper ──
