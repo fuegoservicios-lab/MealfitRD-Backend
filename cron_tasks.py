@@ -13772,6 +13772,22 @@ def _recover_pantry_paused_chunks() -> None:
             FROM plan_chunk_queue
             WHERE status = 'pending_user_action'
               AND meal_plan_id IS NOT NULL
+              -- [P1-FREEZE-OWNS-ITS-CHUNKS · 2026-08-14] Los chunks de un plan
+              -- CONGELADO (P1-PLAN-FREEZE) son propiedad del freeze: los pausó
+              -- él y los reanuda él (restock hook + sweep horario). Este cron
+              -- es un dueño MÁS VIEJO del mismo estado y no sabía del flag: a
+              -- las 12-24h los «rescataba» en modo flexible con exec=NOW(), en
+              -- cadena — medido: 7 semanas (vencimientos hasta septiembre)
+              -- generadas por LLM en UNA hora, para un plan cuyos días «no
+              -- corren» (cb361844, 13-ago 21:08→22:06). Es la trampa que
+              -- P1-PLAN-MODE esquivó eligiendo `cancelled` para su pausa. El
+              -- filtro va AQUÍ, en el único SELECT, porque cubre de una vez
+              -- las ~6 ramas de abajo que escriben execute_after=NOW().
+              AND NOT EXISTS (
+                  SELECT 1 FROM meal_plans mpf
+                  WHERE mpf.id = plan_chunk_queue.meal_plan_id
+                    AND mpf.plan_data ? '_frozen_at'
+              )
             ORDER BY updated_at ASC
             LIMIT 50
             """,
@@ -25999,6 +26015,22 @@ def _sweep_synthetic_test_plans() -> int:
             )
 
 
+# [P1-FREEZE-OWNS-ITS-CHUNKS · 2026-08-14] Gate del pickup para planes
+# CONGELADOS (P1-PLAN-FREEZE): un plan cuyos días no corren no quema LLM,
+# encole quien encole detrás. Fragmento CONSTANTE (cero entrada de usuario en
+# el SQL), inyectado junto al de plan_mode en el token __PLAN_MODE_GATE__ de
+# las DOS CTEs del pickup. Es la 2ª capa; la 1ª es el filtro del rescate de
+# nevera (_recover_pantry_paused_chunks), que fue el mecanismo que convirtió
+# el congelado del plan cb361844 en un burst de 7 generaciones LLM en 1 hora.
+_FREEZE_GATE_SQL = """
+                AND NOT EXISTS (
+                    SELECT 1 FROM meal_plans mpf
+                    WHERE mpf.id = q1.meal_plan_id
+                      AND mpf.plan_data ? '_frozen_at'
+                )
+"""
+
+
 @_with_worker_metrics
 def process_plan_chunk_queue(target_plan_id=None):
     """Worker que genera las semanas 2-N de planes de largo plazo. Corre cada minuto vía APScheduler.
@@ -26411,7 +26443,18 @@ __PLAN_MODE_GATE__
     # apagado deja de apagar EN ESA RAMA y nadie lo nota: test_p1_plan_mode.py ancla
     # que el token aparece dos veces.
     from plan_mode import PICKUP_GATE_SQL as _pm_gate_sql, PLAN_MODE_SWITCH_ENABLED as _pm_on
-    query = query.replace("__PLAN_MODE_GATE__", _pm_gate_sql.rstrip() if _pm_on else "")
+    # [P1-FREEZE-OWNS-ITS-CHUNKS · 2026-08-14] Segunda capa del congelado, la que
+    # detiene el GASTO (misma receta de dos capas que plan_mode: la capa 1 —el
+    # filtro del rescate de nevera— evita que los revivan; esta evita que el
+    # worker los ejecute si CUALQUIER otro mecanismo los flipea a pending). Un
+    # plan con días congelados no debe quemar LLM: sus semanas se generan cuando
+    # el usuario repone y el plan vuelve a correr. `_resume_frozen_plan` limpia
+    # `_frozen_at` ANTES de devolver los chunks a pending, así que lo reanudado
+    # pasa el gate en el mismo tick. Condicionado al knob del propio freeze: sin
+    # feature no hay flag legítimo que leer.
+    _freeze_on = _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True)
+    _gates_sql = (_pm_gate_sql.rstrip() if _pm_on else "") + (_FREEZE_GATE_SQL.rstrip() if _freeze_on else "")
+    query = query.replace("__PLAN_MODE_GATE__", _gates_sql)
 
     try:
         tasks = execute_sql_write(query, params, returning=True)
