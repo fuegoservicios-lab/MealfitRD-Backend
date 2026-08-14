@@ -1797,7 +1797,25 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
     mock_db_consumed, mock_cron_consumed, mock_db_facts, mock_cron_facts, mock_build_facts,
     mock_analyze, mock_db_rejections, mock_cron_rejections, mock_db_likes,
     mock_cron_likes, mock_build_memory_context, mock_pipeline, mock_shop, mock_pool
+,
+    monkeypatch
 ):
+    # [2026-08-14] La lista mockeada (`{"categories": []}`) es incoherente con las
+    # recetas POR DISENO. Desde P2-COHERENCE-1 el guard severo lee 3 ausencias,
+    # escala T2 warn->block, la shopping list falla sus 3 intentos y el chunk se
+    # RE-ENCOLA: el flujo nunca llega a la validacion de inventario vivo que este
+    # test mide. El sintoma («el pipeline corrio 1 vez, esperaba 3») acusaba a un
+    # detector de drift que esta intacto. Mismo knob de rollback que produccion
+    # expone y que el archivo hermano ya usa como fixture opt-in.
+    monkeypatch.setenv("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY", "false")
+    # [P1-PANTRY-VIABILITY-FLOOR + P1-PANTRY-EXIST-WAIVER] La nevera de esta fixture
+    # tiene 4 items (<12), asi que el piso conmuta el chunk a modo FLEXIBLE — y en
+    # flexible el waiver de existencia OMITE la validacion post-generacion ENTERA,
+    # incluido el drift check que este test mide (el comentario del propio waiver lo
+    # dice: «tambien salta el drift check»). Por eso el pipeline corria 1 vez: no es
+    # que el detector fallara, es que nadie lo llamaba.
+    import cron_tasks as _ct_floor
+    monkeypatch.setattr(_ct_floor, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
     tasks = [{
         "id": 1,
         "user_id": "user_123",
@@ -1805,6 +1823,13 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
         "week_number": 2,
         "days_offset": 3,
         "days_count": 3,
+        # [2026-08-14] `chunk_kind` explicito. Sin el, la fila cae a `initial_plan` y
+        # P1-INITIAL-CHUNK-PANTRY-AUTONOMY exime al plan INICIAL de la validacion de
+        # nevera post-generacion ENTERA — incluido el drift check que este test mide
+        # (es la decision de producto de la semana 1: la lista de compras define que
+        # comprar, asi que la nevera vacia del dia 0 no puede frenarla). Un chunk de
+        # semana 2 es un relleno rodante, no el plan inicial.
+        "chunk_kind": "rolling_refill",
         "pipeline_snapshot": {
             "form_data": {
                 "_plan_start_date": "2026-04-21T00:00:00+00:00",
@@ -1844,7 +1869,12 @@ def test_chunk_pauses_when_live_inventory_drifts_during_generation(
     # este test, así que una lista posicional dejaba que el generador consumiera ya la
     # nevera derivada y el detector comparaba derivada-contra-derivada → drift=0.0%.
     # (La versión original repetía el mismo valor 3 veces justo por eso, y aun así medía 0.)
-    _INV_INICIAL = ["pollo", "arroz", "huevos", "avena"]
+    # [2026-08-14] Cinco items, no cuatro: la compuerta PREVIA al LLM exige
+    # `items_meaningful >= 5` para un rolling_refill y con 4 pausaba el chunk ANTES
+    # de generar (`[P1-1/PANTRY-EMPTY] items_meaningful=4 < min=5`), dejando el
+    # pipeline en 0 llamadas. La fixture debe superar el minimo de viabilidad para
+    # poder ejercitar lo que mide, que es el DRIFT durante la generacion.
+    _INV_INICIAL = ["pollo", "arroz", "huevos", "avena", "cebolla"]
     _EXTRAS = ["yogurt", "queso", "leche", "mantequilla", "cebolla", "ajo", "tomate"]
     _lecturas = {"n": 0}
 

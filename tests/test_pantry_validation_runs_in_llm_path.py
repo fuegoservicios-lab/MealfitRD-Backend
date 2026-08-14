@@ -143,9 +143,15 @@ def test_phantom_ingredient_triggers_retry(monkeypatch):
     # por la misma razon; este archivo se quedo sin ella.
     monkeypatch.setattr(cron_tasks, "CHUNK_PANTRY_STRICT_MIN_ITEMS", 0)
     """Ingredientes fantasma deben hacer que el LLM se reinvoque > 1 vez."""
+    # [2026-08-14] `rolling_refill` + nevera de 5 alimentos: con el default
+    # `initial_plan` la validacion post-generacion esta EXENTA
+    # (P1-INITIAL-CHUNK-PANTRY-AUTONOMY) y con menos de 5 items significativos la
+    # compuerta previa pausa antes del LLM. Las dos cosas dejaban el pipeline en 1
+    # llamada y el test culpaba al detector de fantasmas.
     tasks = _make_tasks(
         week_number=2, days_offset=3, days_count=3,
-        extra_snapshot={"current_pantry_ingredients": ["pollo", "arroz", "tomate"]},
+        extra_snapshot={"current_pantry_ingredients": ["pollo", "arroz", "tomate", "huevos", "avena"]},
+        chunk_kind="rolling_refill",
     )
     prior_plan = {"total_days_requested": 7, "days": []}
 
@@ -157,11 +163,11 @@ def test_phantom_ingredient_triggers_retry(monkeypatch):
     vip_mock = MagicMock(side_effect=_make_vip_mock(reject_keywords=["fantasma"]))
     with patch.object(constants, "validate_ingredients_against_pantry", vip_mock):
         with patch("cron_tasks.get_raw_user_inventory", return_value=[{"item": "pollo", "quantity": 1000}]):
-            with patch("cron_tasks.get_user_inventory_net", return_value=["pollo", "arroz", "tomate"]):
+            with patch("cron_tasks.get_user_inventory_net", return_value=["pollo", "arroz", "tomate", "huevos", "avena"]):
                 _, mocks = _run_process(
                     tasks, prior_plan,
                     mock_pipeline_return=pipeline_return,
-                    inventory=["pollo", "arroz", "tomate"],
+                    inventory=["pollo", "arroz", "tomate", "huevos", "avena"],
                     user_profile={"_pantry_quantity_mode": "strict"},
                 )
 

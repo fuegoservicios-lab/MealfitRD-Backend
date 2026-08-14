@@ -69,16 +69,37 @@ def test_renewal_pantry_empty_aborts_generation(
         "generation_status": "complete"
     }
 
-    mock_cursor.fetchone.side_effect = [
-        # 1. SELECT id FROM meal_plans (resolve plan_id sin row lock — P2-LOCK-2)
-        {"id": plan_id},
-        # 2. SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE
-        {"plan_data": plan_data},
-        # 3. SELECT COUNT(*) chunks en vuelo -> 0
-        {"cnt": 0},
-        # 4. SELECT health_profile
-        {"health_profile": {"diet": "mediterranean"}},
-    ]
+    # [mock reescrito a DESPACHADOR · 2026-08-14] Era una lista POSICIONAL de 4 filas.
+    # El shift añadió lecturas desde entonces (el gate de modo de P1-PLAN-MODE, las
+    # sumas de `days_count` en vuelo), la lista se agotaba y el `StopIteration` subía
+    # hasta el `except` de `_background_shift_plan_for_user`, que lo tragaba y devolvía
+    # False ANTES de escribir. El test veía «falta el UPDATE de generation_status» y
+    # culpaba a producción de no marcar el plan — cuando lo que faltaba eran filas en
+    # el andamiaje. Pista para la próxima vez: en el log, la excepción salía con
+    # mensaje VACÍO, que es la firma de `StopIteration`.
+    _ultimo_sql = {"q": ""}
+
+    def _exec(sql, *a, **k):
+        _ultimo_sql["q"] = " ".join(str(sql).split())
+
+    def _fetchone():
+        q = _ultimo_sql["q"]
+        if "plan_mode" in q:
+            return {"plan_mode": "plan", "plan_mode_changed_at": None}
+        if "SELECT id FROM meal_plans" in q:
+            return {"id": plan_id}
+        if "plan_data" in q:
+            return {"plan_data": plan_data}
+        if "en_vuelo" in q:
+            return {"en_vuelo": 0}
+        if "COUNT(*) AS cnt" in q or "cnt" in q:
+            return {"cnt": 0}
+        if "health_profile" in q:
+            return {"health_profile": {"diet": "mediterranean"}}
+        return None
+
+    mock_cursor.execute.side_effect = _exec
+    mock_cursor.fetchone.side_effect = _fetchone
 
     # 2. Simulate empty pantry (less than CHUNK_MIN_FRESH_PANTRY_ITEMS)
     mock_inventory.return_value = ["Sal"] # Only 1 item
