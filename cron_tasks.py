@@ -5304,7 +5304,7 @@ def _emit_hot_table_bloat_tick() -> None:
             WHERE t.schemaname = 'public'
               AND t.relname = ANY(%s::text[])
             """,
-            (list(_P1B_TABLES),),
+            (list(_P1B_TABLES),), fetch_all=True
         ) or []
     except Exception as q_err:
         logger.warning(
@@ -5652,7 +5652,7 @@ def _drain_pending_facts_queue() -> None:
             "SELECT DISTINCT user_id FROM pending_facts_queue "
             "WHERE user_id IS NOT NULL "
             "LIMIT %s",
-            (int(batch_limit),),
+            (int(batch_limit),), fetch_all=True
         ) or []
     except Exception as q_err:
         logger.warning(
@@ -5793,7 +5793,7 @@ def _clinical_band_drift_alert_job():
                AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
                AND confidence IS NOT NULL
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         vals = []
         for r in rows:
@@ -5893,7 +5893,7 @@ def _plan_fallback_rate_alert_job():
              WHERE node = 'clinical_band'
                AND created_at > NOW() - (%s || ' hours')::interval
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         if rows:
             try:
@@ -5985,7 +5985,7 @@ def _resolution_coverage_drift_alert_job():
                AND created_at > NOW() - (%s || ' hours')::interval
                AND confidence IS NOT NULL
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         vals = []
         for r in rows:
@@ -6083,7 +6083,7 @@ def _review_failed_delivered_rate_alert_job():
                AND created_at > NOW() - (%s || ' hours')::interval
                AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
             """,
-            (str(lookback_h),),
+            (str(lookback_h),), fetch_all=True
         ) or []
         if rows:
             try:
@@ -8402,7 +8402,7 @@ def _proactive_refresh_pending_pantry_snapshots(now_utc: datetime | None = None)
                 now_utc + timedelta(hours=horizon_hours),
                 now_utc - timedelta(hours=refresh_threshold_hours),
                 max_users * 8,
-            ),
+            ), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-C/PROACTIVE] Error consultando candidatos: {e}")
@@ -10074,7 +10074,7 @@ def _rebuild_recent_chunk_lessons_from_queue(
               AND learning_metrics IS NOT NULL
             ORDER BY week_number ASC
             """,
-            (str(meal_plan_id), int(up_to_week_exclusive)),
+            (str(meal_plan_id), int(up_to_week_exclusive)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-1/REBUILD] Fallo SELECT learning_metrics para plan {meal_plan_id}: {e}")
@@ -13790,7 +13790,7 @@ def _recover_pantry_paused_chunks() -> None:
               )
             ORDER BY updated_at ASC
             LIMIT 50
-            """,
+            """, fetch_all=True
         ) or []
         # [G-B2 · P2-CRON-OPT-4 · 2026-05-31] `days_offset` añadido al batch SELECT para
         # eliminar dos re-queries por-fila al MISMO row (tz_unresolved + prev_chunk branches)
@@ -14860,7 +14860,7 @@ def _escalate_failed_window_expired_chunks() -> int:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (CHUNK_RECOVERY_MIN_AGE_MINUTES, CHUNK_RECOVERY_BATCH_LIMIT),
+            (CHUNK_RECOVERY_MIN_AGE_MINUTES, CHUNK_RECOVERY_BATCH_LIMIT), fetch_all=True
         ) or []
 
         for row in expired_failed:
@@ -15999,7 +15999,7 @@ def _finalize_zombie_partial_plans() -> int:
             ORDER BY mp.created_at ASC
             LIMIT %s
             """,
-            (CHUNK_ZOMBIE_PARTIAL_MIN_AGE_HOURS, CHUNK_ZOMBIE_PARTIAL_BATCH_LIMIT),
+            (CHUNK_ZOMBIE_PARTIAL_MIN_AGE_HOURS, CHUNK_ZOMBIE_PARTIAL_BATCH_LIMIT), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P0-A/ZOMBIE-PARTIAL] SELECT de candidatos falló: {e}")
@@ -16097,7 +16097,7 @@ def _recover_orphan_chunk_reservations() -> int:
               AND reservation_details::text <> '{}'
             LIMIT %s
             """,
-            (CHUNK_ORPHAN_RESERVATION_BATCH_LIMIT,),
+            (CHUNK_ORPHAN_RESERVATION_BATCH_LIMIT,), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P1-A/CLEANUP] SELECT inicial falló: {e}")
@@ -16158,7 +16158,7 @@ def _recover_orphan_chunk_reservations() -> int:
             FROM plan_chunk_queue
             WHERE id = ANY(%s::uuid[])
             """,
-            (CHUNK_ORPHAN_RESERVATION_MIN_TERMINAL_AGE_HOURS, _uuid_chunk_ids),
+            (CHUNK_ORPHAN_RESERVATION_MIN_TERMINAL_AGE_HOURS, _uuid_chunk_ids), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P1-A/CLEANUP] SELECT plan_chunk_queue falló: {e}")
@@ -16253,7 +16253,7 @@ def _nudge_chronic_zero_log_users() -> int:
                 CHUNK_ZERO_LOG_NUDGE_DETECTION_DAYS,
                 CHUNK_ZERO_LOG_NUDGE_COOLDOWN_HOURS,
                 CHUNK_ZERO_LOG_NUDGE_MAX_USERS,
-            ),
+            ), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-2/ZERO-LOG-NUDGE] SELECT falló: {e}")
@@ -20166,7 +20166,7 @@ def _detect_chronic_deferrals() -> None:
             GROUP BY user_id, meal_plan_id, week_number
             HAVING COUNT(*) >= %s
             """,
-            (int(CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS), int(CHUNK_CHRONIC_DEFERRAL_MIN_COUNT)),
+            (int(CHUNK_CHRONIC_DEFERRAL_WINDOW_HOURS), int(CHUNK_CHRONIC_DEFERRAL_MIN_COUNT)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-2/CHRONIC] No se pudo consultar chunk_deferrals: {e}")
@@ -20239,7 +20239,7 @@ def _detect_chronic_deferrals() -> None:
             (
                 candidate_alert_keys,
                 int(CHUNK_CHRONIC_DEFERRAL_NOTIFY_COOLDOWN_HOURS),
-            ),
+            ), fetch_all=True
         ) or []
         deduped_keys = {
             r.get("alert_key") for r in deduped_rows if r.get("alert_key")
@@ -20999,7 +20999,7 @@ def _alert_new_dead_lettered_chunks() -> None:
             GROUP BY COALESCE(dead_letter_reason, 'unknown')
             ORDER BY cnt DESC
             """,
-            (window_hours,),
+            (window_hours,), fetch_all=True
         ) or []
         by_reason = {str(r.get("reason") or "unknown"): int(r.get("cnt") or 0) for r in reason_rows}
     except Exception as _reason_err:
@@ -21021,7 +21021,7 @@ def _alert_new_dead_lettered_chunks() -> None:
             GROUP BY COALESCE(chunk_kind, 'unknown')
             ORDER BY cnt DESC
             """,
-            (window_hours,),
+            (window_hours,), fetch_all=True
         ) or []
         by_chunk_kind = {str(r.get("chunk_kind") or "unknown"): int(r.get("cnt") or 0) for r in kind_rows}
     except Exception as _kind_err:
@@ -21067,7 +21067,7 @@ def _alert_new_dead_lettered_chunks() -> None:
               AND user_id IS NOT NULL
             LIMIT 200
             """,
-            (window_hours,),
+            (window_hours,), fetch_all=True
         ) or []
         affected_user_ids = [r["user_id"] for r in uid_rows if r.get("user_id")]
     except Exception:
@@ -21177,7 +21177,7 @@ def _gc_dead_lettered_chunks() -> None:
             GROUP BY COALESCE(dead_letter_reason, 'unknown'),
                      COALESCE(chunk_kind, 'unknown')
             """,
-            (ttl_days,),
+            (ttl_days,), fetch_all=True
         ) or []
         for r in rows:
             reason = str(r.get("reason") or "unknown")
@@ -21206,7 +21206,7 @@ def _gc_dead_lettered_chunks() -> None:
             WHERE id IN (SELECT id FROM victims)
             RETURNING id
             """,
-            (ttl_days, batch),
+            (ttl_days, batch), fetch_all=True
         ) or []
         purged_count = len(result)
         if purged_count > 0:
@@ -21286,7 +21286,7 @@ def _nudge_users_with_unresolved_tz() -> None:
             ORDER BY oldest_pause ASC
             LIMIT %s
             """,
-            (int(CHUNK_TZ_NUDGE_THRESHOLD_HOURS), int(CHUNK_TZ_NUDGE_MAX_USERS)),
+            (int(CHUNK_TZ_NUDGE_THRESHOLD_HOURS), int(CHUNK_TZ_NUDGE_MAX_USERS)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-β/TZ-NUDGE] No se pudo consultar plan_chunk_queue: {e}")
@@ -21359,7 +21359,7 @@ def _alert_chunks_stuck_in_tz_unresolved() -> None:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS), int(CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT)),
+            (int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS), int(CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-α/TZ-STUCK-ALERT] No se pudo consultar plan_chunk_queue: {e}")
@@ -21506,7 +21506,7 @@ def _alert_stuck_chunks() -> None:
             ORDER BY MIN(q.execute_after) ASC
             LIMIT %s
             """,
-            (int(_overdue_h), int(_overdue_h), int(_batch_limit)),
+            (int(_overdue_h), int(_overdue_h), int(_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P2-STUCK-CHUNKS] No se pudo consultar plan_chunk_queue: {e}")
@@ -21627,7 +21627,7 @@ def _alert_chunks_stuck_processing() -> None:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (int(_hours), int(_limit)),
+            (int(_hours), int(_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P2-CHUNK-9/STUCK-PROCESSING] consulta plan_chunk_queue falló: {e}")
@@ -21769,7 +21769,7 @@ def _alert_stranded_partial_plans() -> None:
             ORDER BY mp.created_at ASC
             LIMIT %s
             """,
-            (int(_age_h), int(_batch_limit)),
+            (int(_age_h), int(_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P2-STRANDED-PARTIAL] No se pudo consultar meal_plans: {e}")
@@ -21968,7 +21968,7 @@ def _alert_stranded_partial_plans() -> None:
             ORDER BY mp.created_at ASC
             LIMIT %s
             """,
-            (int(_abandoned_age_h), int(_abandoned_batch_limit)),
+            (int(_abandoned_age_h), int(_abandoned_batch_limit)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P1-ROLLING-ABANDONED] No se pudo consultar meal_plans: {e}")
@@ -22364,7 +22364,7 @@ def _alert_chunk_lag_excessive() -> None:
             ORDER BY q.effective_lag_seconds_at_pickup DESC
             LIMIT 100
             """,
-            (int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS), int(CHUNK_LAG_ALERT_WINDOW_HOURS)),
+            (int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS), int(CHUNK_LAG_ALERT_WINDOW_HOURS)), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-γ/LAG-ALERT] No se pudo consultar plan_chunk_queue: {e}")
@@ -22499,7 +22499,7 @@ def _alert_chunk_dual_processing() -> None:
             ORDER BY dup_count DESC, oldest_update ASC
             LIMIT 50
             """,
-            (int(CHUNK_DUAL_PROCESSING_GRACE_SECONDS),),
+            (int(CHUNK_DUAL_PROCESSING_GRACE_SECONDS),), fetch_all=True
         ) or []
     except Exception as e:
         logger.warning(f"[P0-γ/DUAL-PROC-ALERT] No se pudo consultar plan_chunk_queue: {e}")
@@ -22725,7 +22725,7 @@ def _alert_chunks_paused_indefinitely() -> None:
             ORDER BY q.updated_at ASC
             LIMIT %s
             """,
-            (alert_age_hours, batch_limit),
+            (alert_age_hours, batch_limit), fetch_all=True
         ) or []
         # [P1-AUDIT-HIST-5 · 2026-05-09] Defensa contra chunks
         # huérfanos. plan_chunk_queue.meal_plan_id es ON DELETE
@@ -23096,7 +23096,7 @@ def _persist_quality_degradation_alert(is_refill: bool, ratio: float, degraded: 
               AND user_id IS NOT NULL
               AND meal_plan_id IS NOT NULL
             """,
-            (is_refill,),
+            (is_refill,), fetch_all=True
         ) or []
         affected_user_ids = [str(row.get("user_id")) for row in degraded_rows if row.get("user_id")]
 
@@ -25174,7 +25174,7 @@ def _detect_and_escalate_stuck_chunks():
               AND (escalated_at IS NULL OR escalated_at < NOW() - INTERVAL '30 minutes')
             ORDER BY execute_after ASC
             LIMIT 50
-            """,
+            """, fetch_all=True
         ) or []
 
         if stuck_rows:
@@ -25239,7 +25239,7 @@ def _detect_and_escalate_stuck_chunks():
               AND escalated_at < NOW() - INTERVAL '72 hours'
               AND COALESCE(attempts, 0) >= 3
             LIMIT 50
-            """,
+            """, fetch_all=True
         ) or []
 
         if terminal:
@@ -33421,7 +33421,7 @@ def trigger_incremental_learning(user_id: str):
         # 1. Obtener el plan activo
         plan_res = execute_sql_query(
             "SELECT plan_data FROM meal_plans WHERE user_id = %s AND status = 'active' ORDER BY created_at DESC LIMIT 1",
-            (user_id,)
+            (user_id,), fetch_all=True
         )
         if not plan_res:
             return

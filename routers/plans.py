@@ -10094,7 +10094,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 _bp_rows = execute_sql_query(
                     "SELECT id::text AS id, brand FROM public.supermarket_products "
                     "WHERE id = ANY(%s::uuid[])",
-                    (list(_bp_ids),),
+                    (list(_bp_ids),), fetch_all=True
                     ) or []
                 _bp_map = {r["id"]: (str(r.get("brand") or "").strip() or "Genérico") for r in _bp_rows}
                 for it in filtered_ingredients:
@@ -11592,7 +11592,7 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         if status in ['failed', 'complete_partial']:
             chunks_res = execute_sql_query(
                 "SELECT id, week_number, status, attempts FROM plan_chunk_queue WHERE meal_plan_id = %s AND status = 'failed' ORDER BY week_number ASC",
-                (plan_id,)
+                (plan_id,), fetch_all=True
             )
             if chunks_res:
                 failed_chunks = chunks_res
@@ -11657,7 +11657,7 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
               AND status = 'pending_user_action'
             ORDER BY week_number ASC NULLS LAST, days_offset ASC NULLS LAST
             """,
-            (plan_id,),
+            (plan_id,), fetch_all=True
         ) or []
 
         counters_row = execute_sql_query(
@@ -11747,7 +11747,7 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             FROM plan_chunk_queue
             WHERE meal_plan_id = %s AND status = 'completed' AND quality_tier IS NOT NULL
             GROUP BY quality_tier
-        """, (plan_id,)) or []
+        """, (plan_id,), fetch_all=True) or []
         tier_summary = {r['quality_tier']: int(r['cnt']) for r in tier_breakdown}
 
         # [P0-2] Resumen de pantry-degraded para el polling de chunk-status. El frontend
@@ -12047,7 +12047,7 @@ def api_blocked_reasons(
             WHERE meal_plan_id = %s AND ({_status_filter})
             ORDER BY week_number ASC
             """,
-            (plan_id, *(_params[1:])),
+            (plan_id, *(_params[1:])), fetch_all=True
         ) or []
 
         # [P1-4] Lectura de logging_preference para enriquecer el motivo learning_zero_logs:
@@ -15367,7 +15367,7 @@ def api_admin_chunks_stuck(
             ORDER BY q.execute_after ASC
             LIMIT %s
             """,
-            (int(min_lag_hours), int(limit)),
+            (int(min_lag_hours), int(limit)), fetch_all=True
         ) or []
 
         # Resumen agregado
@@ -15446,7 +15446,7 @@ def api_admin_chunks_dead_lettered(
         sql += " ORDER BY q.dead_lettered_at DESC LIMIT %s"
         params.append(int(limit))
 
-        rows = execute_sql_query(sql, tuple(params)) or []
+        rows = execute_sql_query(sql, tuple(params), fetch_all=True) or []
 
         # Resumen agregado por reason (mismo shape que la alerta de cron).
         by_reason: dict = {}
@@ -15507,7 +15507,7 @@ def api_admin_chunk_deferrals(
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (user_id, int(window_hours), int(limit)),
+            (user_id, int(window_hours), int(limit)), fetch_all=True
         ) or []
 
         # Agregado por (meal_plan_id, week_number, reason) para detectar patrones.
@@ -15781,7 +15781,7 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
               AND quality_tier IN ('shuffle', 'edge', 'emergency')
               AND pipeline_snapshot::text != '{}'
             ORDER BY week_number ASC
-        """, (plan_id,)) or []
+        """, (plan_id,), fetch_all=True) or []
 
         if not degraded_chunks:
             return {
@@ -15936,7 +15936,7 @@ def api_admin_metrics(
             ORDER BY cnt DESC
             LIMIT 10
             """,
-            (interval_str,),
+            (interval_str,), fetch_all=True
         ) or []
 
         # [P1-6] Learning loss: agrega events `learning_rebuild_failed` desde
@@ -15972,7 +15972,7 @@ def api_admin_metrics(
                 GROUP BY COALESCE(metadata->>'reason', 'unknown')
                 ORDER BY cnt DESC
                 """,
-                (interval_str,),
+                (interval_str,), fetch_all=True
             ) or []
             # [P1-7] Ratio de aprendizaje basado en proxy/synthesis vs user_logs en
             # el lifetime acumulado de planes ACTIVOS. Si crece, indica que muchos

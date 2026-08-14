@@ -1412,7 +1412,7 @@ def admin_cost_by_node(request: Request, hours: int = 24):
             GROUP BY node, model
             ORDER BY cost_micros_sum DESC
             """,
-            (window_h,),
+            (window_h,), fetch_all=True
         )
     except Exception as e:
         logger.warning(f"[P1-COST-BY-NODE-ENDPOINT] query falló: {e}")
@@ -1526,7 +1526,7 @@ def admin_plan_quality(request: Request, days: int = 14, limit: int = 40):
              ORDER BY m.created_at DESC
              LIMIT %s
             """,
-            (str(win_d), lim),
+            (str(win_d), lim), fetch_all=True
         ) or []
     except Exception as e:
         logger.error(f"[P1-PLAN-QUALITY-INDEX] query falló: {e!r}")

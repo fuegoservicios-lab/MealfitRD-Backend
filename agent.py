@@ -3616,7 +3616,7 @@ def _try_claim_title_lock_cross_worker(session_id: str) -> bool:
                   < %s::float
             RETURNING key
             """,
-            (_kv_key, _now_ts, _now_ts, _now_ts - _TITLE_LOCK_TTL_S),
+            (_kv_key, _now_ts, _now_ts, _now_ts - _TITLE_LOCK_TTL_S), fetch_all=True
         )
         return bool(result)
     except Exception as _e_claim:
