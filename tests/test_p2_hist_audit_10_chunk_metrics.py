@@ -145,7 +145,13 @@ def test_chunk_metrics_404_when_plan_not_owned():
 # ---------------------------------------------------------------------------
 def test_sql_uses_left_join_with_plan_chunk_metrics():
     """LEFT JOIN preserva chunks aún sin row en `plan_chunk_metrics`
-    (chunks pending/failed sin commit de stats)."""
+    (chunks pending/failed sin commit de stats).
+
+    [P1-HIST-METRICS-DEDUP · 2026-08-13] La forma pasó de JOIN directo a
+    LEFT JOIN LATERAL (último intento, LIMIT 1) porque la tabla guarda una
+    fila POR INTENTO y el directo multiplicaba chunks en el modal. La
+    propiedad que ESTE test protege (LEFT: el chunk sobrevive sin metrics)
+    se cumple igual con `LATERAL ... ON TRUE`."""
     captured = {}
 
     def _fake(query, params=None, **kwargs):
@@ -155,7 +161,7 @@ def test_sql_uses_left_join_with_plan_chunk_metrics():
         # queries contra plan_chunk_queue (SELECT principal con LEFT
         # JOIN + COUNT separado). Capturamos solo la principal por
         # `LEFT JOIN plan_chunk_metrics` que es única a esa.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             captured["query"] = query
             return []
         # COUNT separado: devolvemos un dict para que el handler
@@ -175,10 +181,12 @@ def test_sql_uses_left_join_with_plan_chunk_metrics():
     assert r.status_code == 200
 
     norm = re.sub(r"\s+", " ", captured["query"] or "")
-    assert "LEFT JOIN plan_chunk_metrics" in norm.upper().replace(
-        "LEFT JOIN PLAN_CHUNK_METRICS", "LEFT JOIN plan_chunk_metrics"
-    ) or re.search(
-        r"LEFT\s+JOIN\s+plan_chunk_metrics", norm, re.IGNORECASE
+    # LEFT (directo o LATERAL) sobre plan_chunk_metrics: lo que importa es
+    # que el chunk sobreviva sin fila de metrics, no la forma del join.
+    assert re.search(
+        r"LEFT\s+JOIN\s+(LATERAL\s*\(\s*SELECT[^()]*FROM\s+)?plan_chunk_metrics",
+        norm,
+        re.IGNORECASE,
     )
 
 
@@ -189,7 +197,7 @@ def test_sql_filters_by_user_id_defense_in_depth():
         if "FROM meal_plans WHERE id" in query:
             return {"id": _PLAN_A}
         # [P1-HIST-NEW-4 · 2026-05-09] Capturar solo SELECT principal.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             captured["query"] = query
             captured["params"] = params
             return []
@@ -221,7 +229,7 @@ def test_sql_orders_by_week_then_days_offset():
         if "FROM meal_plans WHERE id" in query:
             return {"id": _PLAN_A}
         # [P1-HIST-NEW-4 · 2026-05-09] Capturar solo SELECT principal.
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             captured["query"] = query
             return []
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:
@@ -254,7 +262,7 @@ def test_sql_caps_at_50_chunks():
             return {"id": _PLAN_A}
         # [P1-HIST-NEW-4 · 2026-05-09] Capturar solo SELECT principal —
         # el COUNT separado NO tiene LIMIT (escanea la partición full).
-        if "LEFT JOIN plan_chunk_metrics" in query:
+        if "FROM plan_chunk_queue q" in query:
             captured["query"] = query
             return []
         if "SELECT COUNT(*)" in query and "plan_chunk_queue" in query:

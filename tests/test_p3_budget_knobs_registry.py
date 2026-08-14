@@ -39,6 +39,12 @@ EXPECTED_KNOB_NAMES = {
     "MEALFIT_BUDGET_BAND_MEDIUM",
     "MEALFIT_BUDGET_BAND_HIGH",
     "MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR",
+    # [P1-BUDGET-FX-STALENESS · 2026-08-09, fa6a99d] El aviso de tasa FX vieja.
+    # Documentados aquí en la auditoría 2026-08-13 (el commit los añadió sin
+    # actualizar este inventario; la fecha además se leía con os.environ crudo
+    # — migrada a _env_str en la misma auditoría).
+    "MEALFIT_BUDGET_FX_MAX_AGE_DAYS",
+    "MEALFIT_BUDGET_USD_TO_DOP_REVIEWED",
 }
 
 
@@ -114,9 +120,13 @@ def test_los_defaults_registrados_coinciden_con_los_defaults_historicos():
         "MEALFIT_BUDGET_RECONCILE": True,
         "MEALFIT_BUDGET_RECONCILE_TOL_PCT": 0.10,
         "MEALFIT_BUDGET_RECONCILE_MIN_COVERAGE": 0.7,
-        "MEALFIT_BUDGET_BAND_LOW": 1.15,
-        "MEALFIT_BUDGET_BAND_MEDIUM": 1.6,
-        "MEALFIT_BUDGET_BAND_HIGH": 2.5,
+        # [P1-BUDGET-BANDS-RECALIBRATE · 2026-08-09, fa6a99d] 1.15/1.6/2.5 →
+        # 1.05/1.25/1.9 medido contra 21 planes vivos. El commit recalibró
+        # producción y olvidó esta tabla — detectado por el propio test en la
+        # auditoría del Historial 2026-08-13.
+        "MEALFIT_BUDGET_BAND_LOW": 1.05,
+        "MEALFIT_BUDGET_BAND_MEDIUM": 1.25,
+        "MEALFIT_BUDGET_BAND_HIGH": 1.9,
         "MEALFIT_BUDGET_TIGHT_CUSTOM_FACTOR": 1.3,
     }
     for name, expected_default in expected_defaults.items():

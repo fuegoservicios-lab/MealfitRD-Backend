@@ -1867,10 +1867,16 @@ def _budget_fx_max_age_days() -> int:
 def _budget_usd_to_dop() -> float:
     rate = _nc_env_float_budget("MEALFIT_BUDGET_USD_TO_DOP", 60.0, lambda v: v >= 1.0)
     try:
-        import os as _os
         from datetime import date as _date
-        reviewed = str(_os.environ.get("MEALFIT_BUDGET_USD_TO_DOP_REVIEWED")
-                       or _BUDGET_FX_REVIEWED_DEFAULT).strip()
+        # [P1-HIST-METRICS-DEDUP · 2026-08-13, drift de fa6a99d] vía knobs
+        # (_env_str auto-registra en _KNOBS_REGISTRY) — la lectura os.environ
+        # cruda violaba el contrato de test_p3_budget_knobs_registry y dejaba
+        # el knob invisible en /health/version. Una fecha ISO sobrevive el
+        # lower+strip del helper sin cambios.
+        from knobs import _env_str as _fx_env_str
+        reviewed = _fx_env_str(
+            "MEALFIT_BUDGET_USD_TO_DOP_REVIEWED", _BUDGET_FX_REVIEWED_DEFAULT
+        ).strip()
         age = (_date.today() - _date.fromisoformat(reviewed)).days
         max_age = _budget_fx_max_age_days()
         if age > max_age:

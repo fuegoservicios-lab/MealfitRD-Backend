@@ -14157,7 +14157,21 @@ def api_plan_chunk_metrics(
                 COALESCE(deferrals.deferrals_count, 0) AS deferrals_count,
                 deferrals.deferral_reasons AS deferral_reasons
             FROM plan_chunk_queue q
-            LEFT JOIN plan_chunk_metrics m ON m.chunk_id = q.id
+            -- [P1-HIST-METRICS-DEDUP · 2026-08-13] plan_chunk_metrics guarda
+            -- UNA FILA POR INTENTO (el worker inserta al completar cada
+            -- ejecución, incluidas las degradadas que luego se reintentan).
+            -- El JOIN directo `ON m.chunk_id = q.id` multiplicaba: un chunk
+            -- con 3 intentos salía 3 veces en el tab Métricas del modal
+            -- («Semana 2 · Días 1-4» repetido con duraciones distintas,
+            -- contradiciendo el contador de la cabecera). LATERAL al ÚLTIMO
+            -- intento: una fila por chunk, la del desenlace real.
+            LEFT JOIN LATERAL (
+                SELECT pm.*
+                FROM plan_chunk_metrics pm
+                WHERE pm.chunk_id = q.id
+                ORDER BY pm.created_at DESC
+                LIMIT 1
+            ) m ON TRUE
             -- [P2-HIST-AUDIT-F · 2026-05-09] Lock activo del usuario.
             -- chunk_user_locks tiene PK user_id (1:1) — el LEFT JOIN
             -- es 1:0..1.
