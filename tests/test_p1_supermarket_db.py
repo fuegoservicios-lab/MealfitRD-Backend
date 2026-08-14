@@ -158,9 +158,21 @@ def test_all_mutations_require_admin_token():
                 "supermarket_products — eso exige el gate admin."
             )
             continue
-        assert "_verify_admin_token(" in body, (
+        # [P2-SUPERMARKET-TOKEN-SPLIT · 2026-08-14] El gate ya no es el maestro.
+        # Esta aserción exigía `_verify_admin_token`, o sea el `CRON_SECRET` — el
+        # mismo secreto que abre `purge-data` sobre 33 tablas — tecleado en un
+        # formulario de una página PÚBLICA. El contrato que P1-SUPERMARKET-DB
+        # protege es «ninguna mutación sin token admin verificado», y eso sigue
+        # intacto; lo que cambió es CUÁL token, que era el punto del split.
+        assert "_verify_supermarket_token(" in body, (
             f"P1-SUPERMARKET-DB violation: el handler {verb.upper()} NO llama "
-            "_verify_admin_token — abriría escritura pública a supermarket_products."
+            "_verify_supermarket_token — abriría escritura pública a supermarket_products."
+        )
+        assert "_verify_admin_token(" not in body, (
+            f"P2-SUPERMARKET-TOKEN-SPLIT violation: el handler {verb.upper()} volvió "
+            "al gate MAESTRO. El editor del catálogo vive en una página pública: "
+            "pedir ahí el CRON_SECRET vuelve a atar el radio de daño del catálogo "
+            "al de los crons y al de la purga de cuentas."
         )
         assert "_check_admin_rate_limit(" in body, (
             f"P1-SUPERMARKET-DB violation: el handler {verb.upper()} debe aplicar "

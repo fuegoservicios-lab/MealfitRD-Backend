@@ -4,14 +4,16 @@ Endpoints de la base de datos `supermarket_products` (Neon): el "supermercado
 dominicano" de Bioboros. Cada fila es UNA presentación comprable de un alimento
 verificado (alimento + marca opcional + presentación + porción + duración +
 precio RD$). Se navega públicamente desde el landing (/supermercado) y se edita
-desde la misma página con el gate admin (Bearer CRON_SECRET).
+desde la misma página con un gate admin PROPIO (Bearer SUPERMARKET_ADMIN_TOKEN;
+ver `_verify_supermarket_token` y P2-SUPERMARKET-TOKEN-SPLIT — antes era el
+CRON_SECRET, el mismo secreto que abre `purge-data` sobre 33 tablas).
 
 Contrato:
 - GET  /api/supermarket/products      → público, read-only, RateLimiter per-IP
   (60/60s). Solo filas `active` salvo `include_inactive=1` con token admin.
   NO usa `verify_api_quota` (cero costo LLM, página pública de marketing —
   misma razón que la historial-quota-exemption de CLAUDE.md).
-- POST /api/supermarket/products      → admin (`_verify_admin_token`).
+- POST /api/supermarket/products      → admin (`_verify_supermarket_token`).
 - PATCH /api/supermarket/products/{id}  → admin.
 - DELETE /api/supermarket/products/{id} → admin (hard delete; para "ocultar"
   preferir PATCH active=false).
@@ -23,6 +25,7 @@ Tipos para JSON: uuid→::text, numeric→::float8, timestamptz→to_jsonb(...)#
 """
 
 import asyncio
+import hmac
 import logging
 import os
 import threading
@@ -35,7 +38,7 @@ from pydantic import BaseModel, Field
 from auth import get_verified_user_id
 from db import execute_sql_query, execute_sql_write
 from rate_limiter import RateLimiter
-from routers.plans import _check_admin_rate_limit, _verify_admin_token
+from routers.plans import _check_admin_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,51 @@ def _catalog_cache_ttl_s() -> int:
 # lo que trajo en vez de publicarlo.
 _CATALOG_CACHE: Dict[str, Any] = {"at": 0.0, "rows": None, "master": None, "gen": 0}
 _CATALOG_LOCK = threading.Lock()
+
+
+def _verify_supermarket_token(authorization: Optional[str]) -> None:
+    """[P2-SUPERMARKET-TOKEN-SPLIT · 2026-08-14] Gate PROPIO del catálogo.
+
+    POR QUÉ NO SE REUTILIZA `_verify_admin_token`. `/supermercado` es una página
+    PÚBLICA del apex con un editor dentro: el admin teclea un token en un
+    formulario y edita precios. Ese token era `CRON_SECRET`, el mismo que abre
+    TODOS los `/admin/*` — incluido `POST /api/system/admin/account/purge-data`,
+    que borra las 33 tablas de un `user_id` arbitrario del body.
+
+    No había vector explotable (cero sinks XSS en la superficie pública,
+    comparación constant-time, 60 intentos/min), así que esto no cierra un agujero
+    abierto: acota el RADIO DE DAÑO y desacopla la ROTACIÓN. Antes, rotar el
+    secreto del catálogo obligaba a rotar el de los crons y viceversa.
+
+    ⚠️ EL PRECIO, aceptado a sabiendas: ahora son DOS secretos que rotar. Está
+    escrito también en la fila de CLAUDE.md.
+
+    COMPATIBILIDAD DURANTE EL ROLLOUT, que no es opcional: mientras
+    `SUPERMARKET_ADMIN_TOKEN` no esté configurada se sigue aceptando
+    `CRON_SECRET`. Si no, el backend nuevo rompería el editor para los navegadores
+    que ya tienen el token viejo en sessionStorage, justo en mitad del despliegue.
+    En cuanto la env var existe, el maestro deja de valer aquí — que es el estado
+    final que se busca.
+    """
+    propio = os.environ.get("SUPERMARKET_ADMIN_TOKEN")
+    maestro = os.environ.get("CRON_SECRET")
+
+    # Fail-secure: sin ningún secreto configurado no se abre, se apaga.
+    aceptados = [s for s in ([propio] if propio else [propio, maestro]) if s]
+    if not aceptados:
+        raise HTTPException(
+            status_code=503,
+            detail="Supermarket admin disabled: SUPERMARKET_ADMIN_TOKEN not configured",
+        )
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization.replace("Bearer ", "").strip()
+    # Constant-time, mismo patrón que P1-ADMIN-TOKEN-CONSTTIME: un `!=` plano corta
+    # en el primer byte distinto y filtra el secreto byte a byte por timing.
+    # `any(...)` sobre una lista de 1-2 elementos no reintroduce el canal: el
+    # número de comparaciones no depende del token recibido.
+    if not any(hmac.compare_digest(token, s) for s in aceptados):
+        raise HTTPException(status_code=403, detail="Invalid supermarket admin token")
 
 
 def _catalog_generation() -> int:
@@ -218,7 +266,7 @@ async def api_supermarket_list(
     """Listado público del supermercado. `include_inactive=1` requiere token admin
     (los productos ocultos solo son visibles en modo edición)."""
     if include_inactive:
-        _verify_admin_token(request.headers.get("authorization"))
+        _verify_supermarket_token(request.headers.get("authorization"))
 
     limit = max(1, min(int(limit), _MAX_LIMIT))
     offset = max(0, int(offset))
@@ -621,7 +669,7 @@ async def api_put_brand_preference(
 @router.post("/products")
 async def api_supermarket_create(request: Request, body: SupermarketProductIn):
     """Crea un producto/variante. Admin only (Bearer CRON_SECRET)."""
-    _verify_admin_token(request.headers.get("authorization"))
+    _verify_supermarket_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
     # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina
@@ -667,7 +715,7 @@ async def api_supermarket_create(request: Request, body: SupermarketProductIn):
 @router.patch("/products/{product_id}")
 async def api_supermarket_update(request: Request, product_id: str, body: SupermarketProductPatch):
     """Actualiza campos de un producto (parcial). Admin only."""
-    _verify_admin_token(request.headers.get("authorization"))
+    _verify_supermarket_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
     # Solo campos presentes en el payload (exclude_unset) y whitelisted.
@@ -723,7 +771,7 @@ async def api_supermarket_update(request: Request, product_id: str, body: Superm
 async def api_supermarket_delete(request: Request, product_id: str):
     """Elimina un producto (hard delete). Admin only. Para ocultar sin borrar,
     usar PATCH active=false."""
-    _verify_admin_token(request.headers.get("authorization"))
+    _verify_supermarket_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
 
     # [P1-SUPERMARKET-CATALOG-CACHE · 2026-08-05] El editor vive en la MISMA pagina
