@@ -67,12 +67,36 @@ def test_clear_is_inside_is_fallback_guard():
     )
 
 
+def _bloque_del_guard(src: str, idx: int) -> str:
+    """El bloque del FALLBACK-GUARD, delimitado por INDENTACIÓN.
+
+    [2026-08-14] Antes era una ventana fija de 3.200 caracteres. El bloque creció
+    con el tiempo y el `break` acabó en el carácter 3.910: el test empezó a decir
+    «no se encontró el break» cuando el break seguía ahí y la invariante se cumplía
+    (el upsert está en el 1.139, mucho antes). *Un guard cuyo alcance es un número
+    de caracteres caduca solo, y su falso rojo acusa a producción de un defecto que
+    no tiene.* La indentación es el límite real del bloque y no envejece.
+    """
+    ini_linea = src.rfind("\n", 0, idx) + 1
+    resto = src[ini_linea:]
+    indent = len(resto) - len(resto.lstrip())
+    pos, fin = ini_linea, len(src)
+    for linea in resto.splitlines(keepends=True):
+        s = linea.strip()
+        if s and not s.startswith("#") and pos > ini_linea:
+            if (len(linea) - len(linea.lstrip())) < indent:
+                fin = pos
+                break
+        pos += len(linea)
+    return src[idx:fin]
+
+
 def test_mark_runs_before_break():
     """El upsert failed debe ejecutarse ANTES del primer `break` del guard —
     si no, el break sale del loop SSE sin limpiar el KV."""
     src = _PLANS_PY.read_text(encoding="utf-8")
     idx = src.index(_ANCHOR)
-    window = src[idx:idx + 3200]
+    window = _bloque_del_guard(src, idx)
     upsert_pos = window.find('status="failed"')
     # `\n\s+break\b` matchea el STATEMENT break, no la palabra "breaks" del comentario.
     _m = re.search(r"\n\s+break\b", window)

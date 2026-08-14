@@ -25,6 +25,7 @@ Cobertura del test:
 from __future__ import annotations
 
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -104,12 +105,23 @@ def test_script_uses_same_marker_regex_as_freshness_test():
 def test_dry_run_does_not_require_db():
     """`--dry-run` debe imprimir el marker y exit 0 sin tocar DB. Útil
     para CI / pre-flight checks."""
+    # [2026-08-14] `text=True` a secas decodifica con la codificación del sistema:
+    # en Windows es cp1252 y el marker lleva '·' (U+00B7), así que el hilo lector de
+    # subprocess moría con UnicodeDecodeError y `result.stdout` llegaba como None —
+    # el test fallaba con «argument of type 'NoneType' is not iterable», que no dice
+    # nada del script. En Linux (la CI) pasaba. *Un test que solo falla en el SO del
+    # desarrollador bloquea su deploy y es invisible en CI.* Se fija UTF-8 en ambos
+    # lados: el hijo lo emite (PYTHONIOENCODING) y el padre lo decodifica.
+    _env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     result = subprocess.run(
         [sys.executable, str(_SCRIPT), "--dry-run"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
         cwd=str(_BACKEND_ROOT),
+        env=_env,
     )
     assert result.returncode == 0, (
         f"--dry-run debió exit 0; got {result.returncode}.\n"

@@ -43,7 +43,12 @@ def _sql_text() -> str:
 def test_migracion_existe_en_ambos_dirs_identica():
     assert _MIG.exists(), "falta la migración en backend/migrations/"
     assert _MIG_ROOT.exists(), "falta la copia en migrations/ (P3-MIGRATIONS-SSOT)"
-    assert _MIG.read_bytes() == _MIG_ROOT.read_bytes(), "las dos copias divergen"
+    # [2026-08-14] Normalizado el salto de línea, misma razón que en
+    # test_p2_migrations_ssot_no_drift: los dos dirs viven en repos distintos y un
+    # checkout Windows dejó uno con CRLF y otro con LF. Acusaba «divergen» sobre un
+    # archivo idéntico línea por línea; un CR no cambia el esquema.
+    _norm = lambda p: p.read_bytes().replace(b"\r\n", b"\n")  # noqa: E731
+    assert _norm(_MIG) == _norm(_MIG_ROOT), "las dos copias divergen"
 
 
 # ---------------------------------------------------------------------------

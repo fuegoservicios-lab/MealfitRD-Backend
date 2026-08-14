@@ -715,11 +715,38 @@ def test_shift_plan_blocks_rolling_refill_for_active_7_day_plan(mock_pool, mock_
     # deadlocks. Eso son DOS fetchone antes de usar plan_data (el stub legacy daba uno
     # solo). Tercera fetchone = COUNT de chunks vivos del plan de 7d (línea ~1931): con
     # cnt>=1 hay chunks en vuelo → disable_rolling_refill_for_active_7d → enqueue NO se llama.
-    mock_cursor.fetchone.side_effect = [
-        {"id": "plan_7d"},
-        {"plan_data": plan_data},
-        {"cnt": 1},
-    ]
+    # [mock reescrito a DESPACHADOR · 2026-08-14] Era una lista POSICIONAL de 3 filas y
+    # el endpoint hoy hace SEIS lecturas: el gate de modo (P1-PLAN-MODE, un
+    # `execute_sql_query(fetch_one=True)` que con el pool mockeado sale por este MISMO
+    # cursor) y dos sumas de `days_count` añadidas después. Cada consulta nueva corría la
+    # lista un puesto: primero `KeyError: 'id'` (el SELECT id recibía la fila del plan) y
+    # luego `StopIteration`. Una lista posicional convierte «se añadió una consulta» en
+    # «el endpoint devuelve 500», que es un diagnóstico falso.
+    #
+    # Despachar por el SQL sobrevive a que se añadan lecturas: cada consulta recibe SU
+    # fila, y una consulta no prevista falla con un mensaje que la nombra en vez de
+    # corromper la siguiente.
+    _ultimo_sql = {"q": ""}
+
+    def _exec(sql, *a, **k):
+        _ultimo_sql["q"] = " ".join(str(sql).split())
+
+    def _fetchone():
+        q = _ultimo_sql["q"]
+        if "plan_mode" in q:
+            return {"plan_mode": "plan", "plan_mode_changed_at": None}
+        if "SELECT id FROM meal_plans" in q:
+            return {"id": "plan_7d"}
+        if "plan_data" in q:
+            return {"plan_data": plan_data}
+        if "en_vuelo" in q:
+            return {"en_vuelo": 0}
+        if "COUNT(*) AS cnt" in q:
+            return {"cnt": 1}  # ≥1 ⇒ hay chunks vivos ⇒ NO se re-encola
+        raise AssertionError(f"consulta no prevista por el mock: {q[:120]}")
+
+    mock_cursor.execute.side_effect = _exec
+    mock_cursor.fetchone.side_effect = _fetchone
 
     response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
