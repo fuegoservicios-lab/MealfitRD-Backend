@@ -1666,6 +1666,84 @@ _MODIFIER_ONLY_ALIASES = frozenset({
     "grande", "mediano", "pequeno", "magro", "magra",
 })
 
+
+# [P1-COHERENCE-ALIAS-INDEX · 2026-08-14] El índice de alias, construido UNA vez
+# por catálogo en lugar de una vez por llamada.
+#
+# El coherence guard rebasó su umbral de 5s 17 veces en 7 días (hasta 11,5s), una
+# de ellas dentro de un `/recalculate-shopping-list` SÍNCRONO. Perfilado contra el
+# plan real cb361844 (26 días, 104 comidas): 17,4s de los 19,4s del guard vivían en
+# `expected_sum_from_recipes`, y de esos 14,8s eran **compilar regex** — 481.240
+# llamadas a `re._compile`.
+#
+# La causa: los INTENTOS 2 y 4 recorrían los ~700 alias del catálogo construyendo
+# `r'\b' + re.escape(alias) + r'\b'` en caliente. La caché interna de `re` guarda
+# 512 patrones; con más alias que huecos se vacía sola y cada llamada recompila casi
+# todo. Y encima `all_aliases` se reconstruía y se REORDENABA (700 elementos) en cada
+# una de las 973 llamadas. Nada de ese trabajo depende del texto a normalizar: depende
+# solo del catálogo.
+#
+# Invalidación por IDENTIDAD (`is`), no por TTL. `get_master_ingredients()` devuelve
+# el mismo objeto mientras su caché viva, así que la identidad detecta la recarga sin
+# ventana ciega — y un test que parchea el catálogo no hereda el índice del test
+# anterior, que es justo la fuga que un TTL habría creado aquí.
+_NORMALIZE_ALIAS_INDEX: dict | None = None
+
+# Umbral del tier fuzzy (INTENTO 5 de `normalize_name`). Vive en UNA constante
+# porque la poda por longitud lo lee también: si la aceptación bajara a 0.80 y la
+# poda se quedara en 0.87, la poda empezaría a descartar matches VÁLIDOS sin que
+# nadie lo note. Un umbral duplicado es un umbral que ya drifteó.
+_FUZZY_MATCH_THRESHOLD = 0.87
+
+
+def _construir_indice_alias(master_list: list) -> tuple[list, list]:
+    """`(all_aliases, contains_compilados)` para un catálogo dado.
+
+    `all_aliases` conserva el orden descendente por longitud del código original:
+    es load-bearing, no cosmético — con orden arbitrario 'maduro' (6) le gana a
+    'mango' (5) y un desayuno de mango mete PLÁTANO en la lista (P1-MODIFIER-ONLY-ALIAS).
+    """
+    from constants import strip_accents
+
+    all_aliases = []
+    for master in master_list:
+        master_name = master["name"]
+        all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
+        for alias in (master.get("aliases") or []):
+            all_aliases.append((strip_accents(alias.strip().lower()), master_name))
+    all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
+
+    contains = [
+        (re.compile(r'\b' + re.escape(alias_stripped) + r'\b', re.IGNORECASE), master_name)
+        for (alias_stripped, master_name) in all_aliases
+        if alias_stripped and alias_stripped not in _MODIFIER_ONLY_ALIASES
+    ]
+    return all_aliases, contains
+
+
+def _get_normalize_alias_index(master_list: list) -> tuple[list, list]:
+    """Índice cacheado; se reconstruye solo si el catálogo es otro objeto (o cambió
+    de tamaño, por si alguien lo muta en sitio)."""
+    global _NORMALIZE_ALIAS_INDEX
+    cache = _NORMALIZE_ALIAS_INDEX
+    if (
+        cache is not None
+        and cache["src"] is master_list
+        and cache["len"] == len(master_list)
+    ):
+        return cache["all_aliases"], cache["contains"]
+    all_aliases, contains = _construir_indice_alias(master_list)
+    # Se guarda la referencia al catálogo, no solo su id(): mantenerlo vivo es lo
+    # que impide que un id reciclado por el GC valide un índice ajeno.
+    _NORMALIZE_ALIAS_INDEX = {
+        "src": master_list,
+        "len": len(master_list),
+        "all_aliases": all_aliases,
+        "contains": contains,
+    }
+    return all_aliases, contains
+
+
 def normalize_name(orig_name: str) -> str:
     n = str(orig_name).lower().strip()
     n = _NORMALIZE_PAREN_RE.sub('', n).strip()
@@ -1763,15 +1841,9 @@ def normalize_name(orig_name: str) -> str:
     # Recolectar todos los aliases + nombres canónicos para búsqueda,
     # ordenados por longitud (más largos primero) para evitar que 
     # 'platano' se trague 'platano maduro' o 'queso' se trague 'queso cottage'
-    all_aliases = []
-    for master in master_list:
-        # El nombre canónico también cuenta como alias para búsqueda exacta
-        master_name = master["name"]
-        all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
-        for alias in (master.get("aliases") or []):
-            all_aliases.append((strip_accents(alias.strip().lower()), master_name))
-
-    all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
+    # [P1-COHERENCE-ALIAS-INDEX · 2026-08-14] Construido una vez por catálogo (ver
+    # el helper): antes se rearmaba y reordenaba en CADA llamada, 973 veces por guard.
+    all_aliases, _aliases_for_contains = _get_normalize_alias_index(master_list)
 
     # [P1-MODIFIER-ONLY-ALIAS · 2026-07-26] Un alias que es SOLO un modificador no puede
     # resolver un alimento por su cuenta dentro de un texto más grande.
@@ -1794,8 +1866,8 @@ def normalize_name(orig_name: str) -> str:
     # Los tiers de match EXACTO (1 y 3) los conservan: si alguien escribe literalmente
     # "maduro" a secas, resolver a plátano maduro es defendible. Lo que se prohíbe es que un
     # modificador secuestre un texto que ya nombra otro alimento.
-    _aliases_for_contains = [(a, m) for (a, m) in all_aliases
-                             if a not in _MODIFIER_ONLY_ALIASES]
+    # El filtro vive dentro del índice cacheado (P1-COHERENCE-ALIAS-INDEX), que además
+    # trae ya compilado el patrón de cada alias superviviente.
 
     # ── INTENTO 1: Match Exacto sobre el texto RAW (sin mutilar por stops) ──
     # Esto es CRÍTICO porque los stops eliminan palabras como 'natural', 'descremado',
@@ -1807,8 +1879,8 @@ def normalize_name(orig_name: str) -> str:
     # ── INTENTO 2: Regex sobre el texto RAW (sin mutilar) ──
     # Buscar "queso mozzarella bajo en grasa" dentro de "queso mozzarella bajo en grasa rallado"
     # [P1-MODIFIER-ONLY-ALIAS] lista filtrada: un modificador suelto no secuestra el texto.
-    for alias_stripped, master_name in _aliases_for_contains:
-        if re.search(r'\b' + re.escape(alias_stripped) + r'\b', n_stripped, flags=re.IGNORECASE):
+    for _pat, master_name in _aliases_for_contains:
+        if _pat.search(n_stripped):
             return master_name
 
     # ── INTENTO 3: Match Exacto sobre clean_n (texto limpio, fallback) ──
@@ -1818,8 +1890,8 @@ def normalize_name(orig_name: str) -> str:
 
     # ── INTENTO 4: Regex sobre clean_n (último recurso antes de fuzzy/semántica) ──
     # [P1-MODIFIER-ONLY-ALIAS] misma lista filtrada que el INTENTO 2.
-    for alias_stripped, master_name in _aliases_for_contains:
-        if re.search(r'\b' + re.escape(alias_stripped) + r'\b', clean_n_stripped, flags=re.IGNORECASE):
+    for _pat, master_name in _aliases_for_contains:
+        if _pat.search(clean_n_stripped):
             return master_name
 
     # ── INTENTO 5 [P4-UNIFIED-RESOLVER · 2026-06-14]: Fuzzy (difflib) ANTES de gastar un embedding.
@@ -1855,10 +1927,27 @@ def normalize_name(orig_name: str) -> str:
         for alias_stripped, master_name in all_aliases:
             if not alias_stripped:
                 continue
-            _r = max(difflib.SequenceMatcher(None, f, alias_stripped).ratio() for f in _fuzz_forms)
+            # [P1-COHERENCE-ALIAS-INDEX · 2026-08-14] Poda por longitud ANTES de
+            # gastar un difflib. No es una heurística: es una cota. Como
+            # `ratio = 2·M/(la+lf)` y los caracteres casados `M` no pueden superar
+            # `min(la, lf)`, el ratio nunca pasa de `2·min/(la+lf)`. Si esa cota ya
+            # queda bajo el umbral, ese par NO puede ser un match — comparar es
+            # trabajo tirado. Los pares que sí alcanzan el umbral tienen cota ≥ su
+            # propio ratio, así que jamás se podan: el veredicto es idéntico, no
+            # aproximado (test `test_la_poda_es_equivalente_no_aproximada`).
+            # Medido: era el 45% del guard tras quitar la tormenta de regex.
+            _la = len(alias_stripped)
+            _r = 0.0
+            for f in _fuzz_forms:
+                _lf = len(f)
+                if (2.0 * min(_la, _lf)) / (_la + _lf) < _FUZZY_MATCH_THRESHOLD:
+                    continue
+                _rr = difflib.SequenceMatcher(None, f, alias_stripped).ratio()
+                if _rr > _r:
+                    _r = _rr
             if _r > _fuzz_best:
                 _fuzz_best, _fuzz_name = _r, master_name
-        if _fuzz_best >= 0.87 and _fuzz_name:
+        if _fuzz_best >= _FUZZY_MATCH_THRESHOLD and _fuzz_name:
             logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
             return _fuzz_name
 
