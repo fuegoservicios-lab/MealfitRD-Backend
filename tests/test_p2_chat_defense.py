@@ -127,15 +127,36 @@ def test_sanitize_applied_in_chat_with_agent_return(agent_py_src: str):
 
 def test_sanitize_applied_to_chunk_yield(agent_py_src: str):
     """En `chat_with_agent_stream`, el `chunk_content` debe pasar por el
-    helper antes del `yield`."""
-    pattern = re.compile(
-        r"chunk_content\s*=\s*_sanitize_chat_output_for_wire\s*\(\s*chunk_content\s*\)"
-        r"[\s\S]{0,200}?yield\s+f[\"'].*?'type':\s*'chunk'",
+    helper antes del `yield` — y nadie puede re-ensuciarlo en medio.
+
+    [reescrito · 2026-08-14] La versión anterior exigía que el `yield` estuviera a
+    menos de 200 caracteres del saneado. P1-CHAT-DELIBERATION-HIDDEN (2026-07-31)
+    metió entre ambos un comentario y una rama legítimos y la distancia pasó a 493:
+    el test gritó «regresión de saneado» sobre un saneado que seguía aplicándose.
+    Un umbral de PROXIMIDAD no es la invariante; la invariante es el ORDEN y que la
+    variable no se reasigne por el camino. Eso último es además más estricto que la
+    distancia: 200 caracteres de margen habrían dejado pasar un
+    `chunk_content = <algo crudo>` justo antes del yield.
+    """
+    m_san = re.search(
+        r"chunk_content\s*=\s*_sanitize_chat_output_for_wire\s*\(\s*chunk_content\s*\)",
+        agent_py_src,
     )
-    assert pattern.search(agent_py_src), (
+    assert m_san, (
         "P2-CHAT-SANITIZE regresión: chunk yield no aplica el helper. "
         "Cada chunk SSE debería pasar por `_sanitize_chat_output_for_wire` "
         "antes del json.dumps."
+    )
+    resto = agent_py_src[m_san.end():]
+    m_yield = re.search(r"yield\s+f[\"'].*?'type':\s*'chunk'", resto)
+    assert m_yield, (
+        "P2-CHAT-SANITIZE: no hay `yield` de chunk DESPUÉS del saneado — o el "
+        "stream dejó de emitir chunks, o el saneado quedó después del envío."
+    )
+    entre = resto[: m_yield.start()]
+    assert not re.search(r"\bchunk_content\s*=(?!=)", entre), (
+        "P2-CHAT-SANITIZE: `chunk_content` se REASIGNA entre el saneado y el yield "
+        f"— el frontend recibiría el valor crudo. Fragmento: {entre[:200]!r}"
     )
 
 
