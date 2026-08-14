@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-LANDING-HEAD-PRELOAD · 2026-08-14"
+_LAST_KNOWN_PFIX = "P2-LANDING-COPY-TRUTH · 2026-08-14"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2128,28 +2128,21 @@ def admin_cron_health():
         return {"error": f"{type(e).__name__}: {e}"}
 
 
-@app.get("/api/admin/test-proactive")
-def api_test_proactive(background_tasks: BackgroundTasks):
-    # [P2-1 2026-05-08] Antes existían dos handlers `@app.get("/api/admin/test-proactive")`
-    # consecutivos: uno síncrono y este async-via-background. FastAPI registra el
-    # último decorador, así que la versión síncrona quedaba sobrescrita y nunca se
-    # ejecutaba. Eliminada para que el lector no asuma que existen dos modos.
-    import traceback
-    def run_push():
-        with open("push_log.txt", "w", encoding="utf-8") as f:
-            try:
-                from test_push import trigger_manual_notification
-                import sys, io
-                old_stdout = sys.stdout
-                sys.stdout = io.StringIO()
-                trigger_manual_notification("Almuerzo", "1:30 PM")
-                f.write(sys.stdout.getvalue())
-                sys.stdout = old_stdout
-            except Exception as e:
-                f.write(traceback.format_exc())
-
-    background_tasks.add_task(run_push)
-    return {"status": "started", "message": "Task queued"}
+# [P2-BACKEND-DEAD-ADMIN-ENDPOINT · 2026-08-14] Aquí vivía
+# `GET /api/admin/test-proactive`: sin `Depends`, sin limitador, y alcanzable
+# desde internet — nginx SÍ proxya `/api/admin/*` (a diferencia de `/admin/*`,
+# que devuelve el shell del SPA). Además llevaba muerto quién sabe cuánto: su
+# primera sentencia dentro del `try` era `from test_push import
+# trigger_manual_notification`, y ese módulo no existe en el repo, así que toda
+# invocación caía directa al `except` y escribía un traceback a `push_log.txt`.
+#
+# Cero llamantes en `frontend/src` y cero tests que lo tocaran: el barrido de
+# `test_p2_admin_rate_limit.py` sólo mira plans/system/notifications, así que
+# `app.py` le quedaba fuera. Se borra en vez de arreglarse — no compraba nada y
+# era superficie de ataque gratis.
+#
+# Si algún día hace falta un disparador manual de notificaciones, su sitio es un
+# router con `_verify_admin_token` + `_check_admin_rate_limit`, no `app.py` suelto.
 
 from auth import get_verified_user_id, verify_api_quota, clear_session_cookie
 from rate_limiter import RateLimiter

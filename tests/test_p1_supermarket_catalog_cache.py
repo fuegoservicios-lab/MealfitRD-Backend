@@ -100,6 +100,13 @@ def test_la_segunda_query_tambien_se_cachea():
         "La query de `master_food_name` no consulta la caché: seguiría pegándole "
         "a la DB en cada llamada."
     )
-    assert re.search(r'_CATALOG_CACHE\["master"\]\s*=', ventana), (
+    # [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] Antes se exigía la asignación
+    # LITERAL `_CATALOG_CACHE["master"] = …`. Ese guard estaba atado al mecanismo,
+    # y el mecanismo cambió a propósito: las escrituras directas de la caché
+    # esquivaban la comprobación de generación que cierra la carrera
+    # invalidación-antes-del-`await`, así que ahora TODAS pasan por
+    # `_publish_catalog_cache(...)`. El contrato que importa —que la segunda
+    # consulta también se cachee— no se toca.
+    assert "_publish_catalog_cache(" in ventana, (
         "La query de `master_food_name` no se guarda en la caché."
     )

@@ -79,8 +79,28 @@ def _catalog_cache_ttl_s() -> int:
     return max(0, min(3600, v))
 
 
-_CATALOG_CACHE: Dict[str, Any] = {"at": 0.0, "rows": None, "master": None}
+# [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] `gen` es un contador de generacion.
+#
+# EL DEFECTO QUE CIERRA. Los tres handlers admin invalidan la cache ANTES de
+# ejecutar la escritura:  `_invalidate_catalog_cache()` … `await
+# asyncio.to_thread(_insert)`. Ese `await` es un punto de cesion GARANTIZADO, asi
+# que `/match` puede correr entera en medio: encuentra la cache vacia, relee las
+# filas PRE-escritura y las repuebla con `at = time.time()` fresco. Resultado:
+# hasta 5 minutos (el TTL) de precios obsoletos alimentando el costeo de marca
+# del Dashboard y de la Nevera, justo despues de que un admin los corrigiera.
+#
+# ⚠️ Mover la invalidacion a DESPUES de la escritura NO cierra la carrera: deja
+# exactamente la misma ventana, solo que desplazada. Lo que la cierra es que el
+# rellenador compruebe si la generacion cambio mientras el leia; si cambio, tira
+# lo que trajo en vez de publicarlo.
+_CATALOG_CACHE: Dict[str, Any] = {"at": 0.0, "rows": None, "master": None, "gen": 0}
 _CATALOG_LOCK = threading.Lock()
+
+
+def _catalog_generation() -> int:
+    """La generacion vigente. Se captura ANTES de leer la DB."""
+    with _CATALOG_LOCK:
+        return int(_CATALOG_CACHE.get("gen") or 0)
 
 
 def _invalidate_catalog_cache() -> None:
@@ -90,6 +110,22 @@ def _invalidate_catalog_cache() -> None:
         _CATALOG_CACHE["rows"] = None
         _CATALOG_CACHE["master"] = None
         _CATALOG_CACHE["at"] = 0.0
+        _CATALOG_CACHE["gen"] = int(_CATALOG_CACHE.get("gen") or 0) + 1
+
+
+def _publish_catalog_cache(rows, master_rows, gen_al_empezar: int) -> bool:
+    """Publica el relleno SOLO si nadie invalido mientras se leia la DB.
+
+    Devuelve False cuando descarta: quien lea eso sabra que su lectura era de
+    antes de una escritura y que la siguiente peticion volvera a la DB.
+    """
+    with _CATALOG_LOCK:
+        if int(_CATALOG_CACHE.get("gen") or 0) != gen_al_empezar:
+            return False
+        _CATALOG_CACHE["rows"] = rows
+        _CATALOG_CACHE["master"] = master_rows
+        _CATALOG_CACHE["at"] = time.time()
+        return True
 
 
 _MAX_LIMIT = 1000
@@ -296,6 +332,11 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
                 rows = None
                 master_rows_cached = None
 
+        # [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] La generacion se captura AQUI,
+        # antes de tocar la DB. Si una mutacion admin la bumpea mientras leemos, el
+        # relleno se descarta al final en vez de publicar filas pre-escritura.
+        _gen_al_empezar = _catalog_generation()
+
         if rows is None:
             rows = execute_sql_query(
                 """
@@ -361,10 +402,16 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
                 fetch_all=True,
             ) or []
             if _catalog_cache_ttl_s() > 0:
-                with _CATALOG_LOCK:
-                    _CATALOG_CACHE["rows"] = rows
-                    _CATALOG_CACHE["master"] = master_rows
-                    _CATALOG_CACHE["at"] = time.time()
+                # [P2-BACKEND-SUPERMARKET-CACHE · 2026-08-14] Publica SOLO si nadie
+                # invalido mientras leiamos. Si un admin escribio en medio, estas
+                # filas son de antes de su cambio: cachearlas las dejaria vivas
+                # hasta el TTL, que es justo el bug. Descartar cuesta una consulta
+                # mas en la siguiente peticion.
+                if not _publish_catalog_cache(rows, master_rows, _gen_al_empezar):
+                    logger.info(
+                        "[P2-BACKEND-SUPERMARKET-CACHE] relleno descartado: hubo una "
+                        "mutacion admin mientras se leia el catalogo"
+                    )
         for r in master_rows:
             mk, fk = _norm_food(r["master_food_name"]), _norm_food(r["food_name"])
             if mk and mk not in foods and fk in foods:

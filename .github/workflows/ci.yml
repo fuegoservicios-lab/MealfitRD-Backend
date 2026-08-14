@@ -125,15 +125,20 @@ jobs:
   # paralizaría todo. Por eso `continue-on-error: true`: el job EJECUTA y reporta
   # status visible en GitHub UI, pero NO bloquea el merge.
   #
-  # Roadmap: tras cleanup incremental que reduzca el count a 0, flippear a
-  # `continue-on-error: false` para convertirlo en gate bloqueante real. Hasta
-  # entonces este job sirve como telemetría: si un PR introduce errores nuevos,
-  # se ven en el status check aunque no bloquee.
+  # [P2-LINT-GATE · 2026-08-14] ROADMAP CUMPLIDO. El count llegó a 5 errores y se
+  # cerraron los cinco: cuatro `no-unused-vars` triviales y uno real —
+  # `useModalAccessibility` escribía un ref DURANTE el render, que no se arregla
+  # con un `disable` porque el hook gobierna el focus-trap y el ESC de los modales
+  # anidados. `continue-on-error` fuera: el job bloquea.
+  #
+  # ⚠️ Bloquea por ERRORES, no por warnings: quedan ~180 (localStorage crudo,
+  # directivas huérfanas) y son deuda conocida y tolerada. Si esto empezara a
+  # fallar por warnings, alguien lo revertiría al primer PR rojo y volveríamos a
+  # tener telemetría en vez de un gate.
   frontend-lint:
-    name: Frontend lint (non-blocking)
+    name: Frontend lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
