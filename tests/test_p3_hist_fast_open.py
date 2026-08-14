@@ -66,12 +66,30 @@ def test_onclick_is_synchronous_not_async():
     )
 
 def test_setSelectedPlan_called_before_loadPlanDataLazy():
-    """[reapuntado 2026-07-28] Mismo contrato, nombres nuevos: dentro de `openPlanModal`, el
+    """[reapuntado 2026-07-28] Mismo contrato, nombres nuevos: el
     `setSelectedPlan({ ...plan, plan_data: ... })` optimista va ANTES del
-    `_loadPlanDataLazy(plan).then(...)` — el usuario ve el modal al instante y los datos llegan
-    después."""
-    i = _HISTORY_JSX.index("const openPlanModal")
-    fin = _HISTORY_JSX.find("};", i)
+    `_loadPlanDataLazy(plan).then(...)` — el usuario ve el modal al instante y los datos
+    llegan después.
+
+    [reapuntado 2026-08-14] P1-HIST-MODAL-DEEPLINK extrajo ese cuerpo a
+    `_abrirPlanEnEstado` y dejó `openPlanModal` como el entry point que abre Y escribe
+    `?plan=<id>`. El test seguía mirando `openPlanModal` —ahora tres líneas— y concluía
+    que el optimista «desapareció»: la invariante no se había movido ni un milímetro,
+    se había mudado de función. Ahora se comprueba la CADENA, que es lo que de verdad
+    protege al usuario: el entry point DELEGA, y el delegado hace el optimista antes
+    del lazy. Así una extracción futura no puede esconder la invariante sin romper el
+    eslabón que la conecta."""
+    # 1) el entry point de la UI delega (si deja de hacerlo, el modal se abre por otra vía)
+    i0 = _HISTORY_JSX.index("const openPlanModal")
+    fin0 = _HISTORY_JSX.find("};", i0)
+    assert "_abrirPlanEnEstado(plan)" in _HISTORY_JSX[i0:fin0], (
+        "openPlanModal dejó de delegar en _abrirPlanEnEstado: el optimista puede haberse "
+        "quedado fuera del camino que usa la UI."
+    )
+
+    # 2) el delegado conserva el ORDEN
+    i = _HISTORY_JSX.index("const _abrirPlanEnEstado")
+    fin = _HISTORY_JSX.find("\n    };", i)
     cuerpo = _HISTORY_JSX[i:fin]
     a = cuerpo.find("setSelectedPlan({ ...plan")
     b = cuerpo.find("_loadPlanDataLazy(plan)")

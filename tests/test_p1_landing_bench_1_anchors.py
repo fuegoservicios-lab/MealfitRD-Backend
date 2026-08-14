@@ -406,6 +406,21 @@ def test_landing_consumers_import_facts_not_literals():
         assert not re.search(r"10\s+planes", code, re.IGNORECASE), (
             f"{name} volvió a escribir '10 planes' a mano — es TIER_CREDITS.gratis.")
 
+    # [reapuntado 2026-08-14] P2-LANDING-PRERENDER-META sacó las tablas de title/
+    # description de RouteTitle.jsx a `data/routeMeta.js`, porque ahora las consumen
+    # DOS sitios (la navegación SPA y el script que estampa el HTML por ruta en el
+    # build). El SSOT no se perdió: se mudó. La aserción anterior mezclaba dos
+    # condiciones bajo un mensaje que culpaba al '+200' — y lo que fallaba era la otra
+    # mitad (`systemFacts` ya no se importa AQUÍ), así que el test acusaba de una
+    # regresión de copy lo que era una extracción correcta. Ahora se comprueba dónde
+    # vive el copy: en routeMeta.js, derivado del SSOT y sin cifras a mano.
+    route_meta = _js_code(_FRONTEND_SRC / "data" / "routeMeta.js")
+    assert "systemFacts" in route_meta, (
+        "data/routeMeta.js dejó de derivar del SSOT systemFacts.js.")
+    assert "+200 alimentos" not in route_meta, (
+        "routeMeta.js conserva la 4ª grafía del catálogo ('+200') — usa VERIFIED_FOODS_LABEL.")
     route_title = _js_code(_FRONTEND_SRC / "components" / "layout" / "RouteTitle.jsx")
-    assert "systemFacts" in route_title and "+200 alimentos" not in route_title, (
-        "RouteTitle.jsx conserva la 4ª grafía del catálogo ('+200') — usa VERIFIED_FOODS_LABEL.")
+    assert "routeMeta" in route_title, (
+        "RouteTitle.jsx dejó de consumir routeMeta.js: el copy volvió a duplicarse.")
+    assert "+200 alimentos" not in route_title, (
+        "RouteTitle.jsx volvió a escribir el catálogo a mano — usa VERIFIED_FOODS_LABEL.")

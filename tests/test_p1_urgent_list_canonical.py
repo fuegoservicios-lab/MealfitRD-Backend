@@ -10,6 +10,25 @@
 import os
 import sys
 
+
+def _cuerpo_js(src: str, decl: str) -> str:
+    """Cuerpo de una función JS emparejando llaves desde su declaración.
+
+    [2026-08-14] Sustituye a las ventanas de N caracteres: el bloque crece con cada
+    comentario legítimo y el guard acaba fallando por unas decenas de bytes, acusando
+    a producción de haber borrado algo que sigue ahí."""
+    i = src.index(decl)
+    a = src.index("{", i)
+    prof = 0
+    for k in range(a, len(src)):
+        if src[k] == "{":
+            prof += 1
+        elif src[k] == "}":
+            prof -= 1
+            if prof == 0:
+                return src[i:k + 1]
+    raise AssertionError(f"no se cerró el cuerpo de {decl!r}")
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 os.environ.setdefault("MEALFIT_DB_BACKEND", "neon")
@@ -133,13 +152,27 @@ def test_badge_rojo_se_evalua_en_vivo():
                            "pages", "Dashboard.jsx"), encoding="utf-8").read()
     assert "const filterStillMissing" in dj or "filterStillMissing =" in dj
     i = dj.index("PANTRY UNSAFE BADGE")
-    win = dj[i:i + 1200]
+    # [2026-08-14] La ventana era de 1.200 caracteres fijos. P1-URGENT-FLASH-UNKNOWN
+    # (13-ago) metió dentro del bloque los TRES estados (cargando / fetch caído / array)
+    # con su comentario, y los marcadores se fueron al 1.595-1.969: el test dijo «el
+    # badge dejó de evaluar en vivo» sobre un badge que lo hace más fino que antes.
+    # El límite pasa a ser el BLOQUE: desde el ancla hasta el cierre del IIFE que lo
+    # renderiza (`})()}` al final del `&& (() => {`). No envejece con el contenido.
+    _fin = dj.find("})()}", i)
+    assert _fin > i, "no se encontró el cierre del IIFE del badge"
+    win = dj[i:_fin]
     assert "filterStillMissing(" in win, (
         "el badge debe evaluar los faltantes contra el inventario VIVO, no la foto de generación")
     assert "_still.length === 0" in win and "return null" in win, (
         "Nevera cubre todo → sin caja roja")
-    j = dj.index("const _missingNormTokens")
-    assert "every(t => foodTokens.has(t))" in dj[j:j + 1400], (
+    # [2026-08-14] Era `dj[j:j+1400]` desde `const _missingNormTokens` y el `every(...)`
+    # quedó en el 1.453: falló por 53 caracteres cuando P1-URGENT-FLASH-UNKNOWN documentó
+    # los tres estados dentro de la función. El matching por tokens NUNCA se movió.
+    # Ahora el límite es el CUERPO de `filterStillMissing`, emparejando llaves — exacto y
+    # sin número mágico que caduque con el próximo comentario.
+    cuerpo = _cuerpo_js(dj, "const filterStillMissing")
+    assert "_missingNormTokens" in cuerpo, "filterStillMissing dejó de tokenizar el nombre"
+    assert "every(t => foodTokens.has(t))" in cuerpo, (
         "matching por SUBCONJUNTO de tokens completos — substring reintroduciría la 15ª clase")
 
 

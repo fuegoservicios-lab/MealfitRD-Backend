@@ -131,11 +131,19 @@ def test_budget_currency_toggle_defaults_to_dop():
         "initialFormData no declara `budgetCurrency: 'DOP'` (default peso dominicano)."
     )
     # Frontend QBudget: toggle RD$/US$ que setea budgetCurrency.
-    assert "updateData('budgetCurrency', 'DOP')" in _IQ_JSX, (
-        "Falta el botón RD$ (setea budgetCurrency='DOP')."
+    # [reapuntado 2026-08-14] Eran dos botones con la moneda escrita en el literal
+    # (`updateData('budgetCurrency', 'DOP')`). Hoy es el `UnitToggle` compartido —el
+    # mismo patrón que LB/KG— y el valor viaja por el `onChange`, así que el literal
+    # desapareció mientras la capacidad seguía intacta. Se afirma la CAPACIDAD: que el
+    # control escriba en `budgetCurrency` y ofrezca las dos monedas con su rótulo.
+    assert re.search(r"onChange=\{\(\w+\)\s*=>\s*updateData\('budgetCurrency',\s*\w+\)\}", _IQ_JSX), (
+        "El control de moneda ya no escribe en `budgetCurrency`."
     )
-    assert "updateData('budgetCurrency', 'USD')" in _IQ_JSX, (
-        "Falta el botón US$ (setea budgetCurrency='USD')."
+    assert re.search(r"value:\s*'DOP'\s*,\s*label:\s*'RD\$'", _IQ_JSX), (
+        "Falta la opción RD$ (budgetCurrency='DOP')."
+    )
+    assert re.search(r"value:\s*'USD'\s*,\s*label:\s*'US\$'", _IQ_JSX), (
+        "Falta la opción US$ (budgetCurrency='USD')."
     )
     # El default visible es RD$ (peso) cuando el campo no se ha tocado.
     assert "formData.budgetCurrency || 'DOP'" in _IQ_JSX, (

@@ -236,12 +236,24 @@ def test_the_scrollbar_never_moves_the_content():
     """Unas secciones desbordan y otras no (1358px de alto contra 774). Sin hueco
     reservado, la barra aparece y desaparece al navegar y desplaza el contenido su
     ancho en cada cambio — el mismo defecto que arriba, a menor escala."""
-    css = _strip_comments(
-        (_SRC / "components" / "dashboard" / "SettingsDialog.module.css").read_text(encoding="utf-8")
-    )
-    assert "scrollbar-gutter: stable" in css, (
-        "P1-SETTINGS-DIALOG: el hueco de la barra de scroll dejó de reservarse. "
-        "En Windows la barra ocupa sitio real: el contenido salta ~15px entre una "
+    # [reapuntado 2026-08-14] La reserva se MUDÓ (no se borró) del contenedor del
+    # diálogo a la columna de contenido — P1-SETTINGS-SCROLL-HUGS-EDGE puso el
+    # scroller donde debía estar, y con él el gutter; el CSS del diálogo lo documenta
+    # («viajan»). El test miraba solo el archivo viejo y declaraba que la defensa
+    # había desaparecido. Lo que importa es que EL SCROLLER, viva donde viva, reserve
+    # el hueco: si no, la barra aparece y desaparece al navegar y desplaza el contenido.
+    _hojas = [
+        _SRC / "components" / "dashboard" / "SettingsDialog.module.css",
+        _SRC / "pages" / "Settings.module.css",
+    ]
+    _con_gutter = [
+        p.name for p in _hojas
+        if "scrollbar-gutter: stable" in _strip_comments(p.read_text(encoding="utf-8"))
+    ]
+    assert _con_gutter, (
+        "P1-SETTINGS-DIALOG: el hueco de la barra de scroll dejó de reservarse en "
+        f"NINGUNA de las hojas de Configuración ({[p.name for p in _hojas]}). En "
+        "Windows la barra ocupa sitio real: el contenido salta ~15px entre una "
         "sección larga y una corta."
     )
 

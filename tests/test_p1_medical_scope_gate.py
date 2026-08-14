@@ -176,9 +176,24 @@ def test_the_subtitle_no_longer_promises_a_field_that_does_not_exist():
     # Sin regex sobre el literal: el subtítulo lleva comillas ESCAPADAS dentro
     # (`\"Ninguna\"`), y cualquier patrón `[^"]*` corta ahí y captura media
     # frase. Se toma la línea entera, que es inequívoca y no tiene ese problema.
+    # [reapuntado 2026-08-14] El selector cogía el PRIMER `subtitle:` que empezara por
+    # «Marca todas las que apliquen» y desde AUDIT-FORM-COPY (12-ago) hay dos: el de
+    # ALERGIAS (que sí ofrece texto libre, y es correcto que lo ofrezca) y el médico.
+    # Cogía el de alergias y concluía que el subtítulo médico «no señala la vía real».
+    # Se ancla al paso por su campo — `fields: ['medicalConditions']` — y se toma el
+    # `subtitle:` que lo precede, que es inequívoco.
+    _lineas = flow.splitlines()
+    _i_campo = next(
+        (k for k, ln in enumerate(_lineas) if "fields: ['medicalConditions']" in ln),
+        None,
+    )
+    assert _i_campo is not None, (
+        "P1-MEDICAL-SCOPE-GATE: no encuentro el paso de condiciones médicas "
+        "(fields: ['medicalConditions'])"
+    )
     linea = next(
-        (ln for ln in flow.splitlines()
-         if "subtitle:" in ln and "Marca todas las que apliquen" in ln),
+        (_lineas[k] for k in range(_i_campo, max(-1, _i_campo - 15), -1)
+         if "subtitle:" in _lineas[k]),
         None,
     )
     assert linea, "P1-MEDICAL-SCOPE-GATE: no encuentro el subtítulo del paso médico"
