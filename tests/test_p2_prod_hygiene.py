@@ -184,6 +184,36 @@ def test_el_deploy_corre_los_tests_antes_de_empaquetar():
     )
 
 
+def test_el_gate_puede_pasar_de_verdad():
+    """Un gate que nunca pasa entrena a saltárselo, y entonces no existe.
+
+    La primera versión de este gate corría `run_ci.ps1` entero, o sea
+    `pytest tests/ -x`. La suite del backend tiene una BASELINE ROJA —43 fallos
+    medidos el 2026-08-14, casi todos anteriores a esta tanda— así que se paraba
+    en el primero y abortaba TODOS los despliegues. El efecto real no habría sido
+    más calidad: habría sido `-SkipTests` por costumbre, que es exactamente el
+    fallo contra el que avisa el comentario del propio gate.
+
+    Mientras la baseline siga roja, el gate corre lo que está verde (vitest +
+    build) y lo declara por escrito. Cuando se limpie, se quita el `-SkipBackend`.
+    """
+    deploy = _read(_DEPLOY)
+    # Ancla en la INVOCACIÓN, no en el nombre: el comentario que explica el gate
+    # también dice «run_ci.ps1», y un `find` del nombre a secas caía ahí — la
+    # quinta vez hoy que una prosa que describe código confunde a un guard que
+    # lo busca.
+    m = re.search(r"&\s*pwsh[^\n]*run_ci\.ps1[^\n]*", deploy)
+    assert m, "[P2-DEPLOY-CI-GATE] No se encontró la invocación de `run_ci.ps1`."
+    ventana = deploy[max(0, m.start() - 400): m.end()]
+    assert "-SkipBackend" in ventana, (
+        "[P2-DEPLOY-CI-GATE] El gate volvió a incluir la suite del backend.\n"
+        "Si has limpiado la baseline roja (43 fallos el 2026-08-14), quita también "
+        "esta aserción y su explicación — el guard existe para que el cambio sea "
+        "deliberado, no para impedirlo. Si NO la has limpiado, el gate abortará "
+        "todos los despliegues y el operador aprenderá a pasar `-SkipTests`."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 3. El gate de lint cierra su propio roadmap
 # ---------------------------------------------------------------------------
