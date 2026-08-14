@@ -818,20 +818,59 @@ def test_shift_plan_uses_max_non_cancelled_week_when_failed_chunk_exists(mock_po
     # plan_data FOR UPDATE. El plan de 30d vencido por shift cae en el catch-up:
     # #3 health_profile, #4 MAX(week_number) no-cancelado=4 → next_week=5, #5 chunk
     # conflictivo=None → se encola con week_number=5.
-    mock_cursor.fetchone.side_effect = [
-        {"id": "plan_30d"},
-        {"plan_data": plan_data},
-        {"health_profile": {"budget": "mid"}},
-        {"max_week": 4},
-        None,
-    ]
+    # [mock reescrito a DESPACHADOR · 2026-08-14] La lista posicional de 5 filas se
+    # desplazó con las consultas que el endpoint añadió después (gate de modo, sumas
+    # de days_count) y el test moría con KeyError/StopIteration.
+    #
+    # Y al destaparlo salió algo peor: la lista se AGOTABA en la 2ª vuelta del bucle
+    # de catch-up, el `StopIteration` subía, y el `except` de producción («Error
+    # encolando chunk IA») se lo tragaba cortando el bucle. O sea que el
+    # `assert_called_once()` original no describía a producción: describía el momento
+    # en que al mock se le acababan las filas. *Un test verde porque el andamiaje
+    # revienta es un test que no está mirando nada.*
+    #
+    # Lo que este test dice proteger —y lo que se afirma ahora— es la NUMERACIÓN:
+    # con un chunk fallido, `next_week` sale del MAX no-cancelado (4) ⇒ 5. Cuántos
+    # chunks se encolan lo decide [P0-5] («enqueue ALL missing days»): un plan de 30
+    # días con 2 materializados encola el hueco entero, y eso es el diseño.
+    _ultimo_sql = {"q": ""}
+
+    def _exec(sql, *a, **k):
+        _ultimo_sql["q"] = " ".join(str(sql).split())
+
+    def _fetchone():
+        q = _ultimo_sql["q"]
+        if "plan_mode" in q:
+            return {"plan_mode": "plan", "plan_mode_changed_at": None}
+        if "SELECT id FROM meal_plans" in q:
+            return {"id": "plan_30d"}
+        if "plan_data" in q:
+            return {"plan_data": plan_data}
+        if "health_profile" in q:
+            return {"health_profile": {"budget": "mid"}}
+        if "MAX(week_number)" in q:
+            return {"max_week": 4}      # ← el chunk fallido NO cuenta ⇒ next_week = 5
+        if "en_vuelo" in q:
+            return {"en_vuelo": 0}
+        if "COUNT(*) AS cnt" in q:
+            return {"cnt": 0}
+        return None                     # no hay chunk conflictivo para esa semana
+
+    mock_cursor.execute.side_effect = _exec
+    mock_cursor.fetchone.side_effect = _fetchone
 
     response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
     assert response["success"] is True
-    mock_enqueue.assert_called_once()
-    enqueue_args = mock_enqueue.call_args[0]
-    assert enqueue_args[2] == 5
+    assert mock_enqueue.call_count >= 1, "el catch-up no encoló nada"
+    # La numeración es lo que este test protege: el chunk FALLIDO no debe contar
+    # para el MAX, así que la primera semana encolada es la 5 (no la del fallido).
+    primera = mock_enqueue.call_args_list[0][0]
+    assert primera[2] == 5, f"primera semana encolada = {primera[2]}, esperada 5"
+    # Y las siguientes continúan la secuencia sin repetir semana (el bug que
+    # P1-5/P1-2 cierran: dos catch-ups duplicando la misma week_number).
+    semanas = [c[0][2] for c in mock_enqueue.call_args_list]
+    assert semanas == list(range(5, 5 + len(semanas))), f"semanas no consecutivas: {semanas}"
 
 
 def test_learning_metrics_tracks_ingredient_base_repeats_even_when_names_change():
