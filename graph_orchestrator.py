@@ -39199,6 +39199,70 @@ def _coherence_block_history_cap() -> int:
     return cap
 
 
+# [P1-COH-HISTORY-SIGNAL · 2026-08-14] Hipótesis que el propio guard ya declara NO
+# accionables: la receta no cuantificó el condimento («sal al gusto»), la lista compra
+# por envase, o la unidad difiere (dientes vs cabezas). No son incoherencias: son la
+# forma normal en que un menú se escribe.
+#
+# Medido en producción (journal del VPS, 7 días): **395 `COH-GUARD/block` y 302 de ellos
+# con hipótesis EXCLUSIVAMENTE `recipe_unquantified`** — sal, pimienta, comino. Y el
+# efecto colateral que motiva este fix: **234 `COH-HISTORY-TRUNCATED` en la misma
+# ventana**. El historial tiene cap 20 y era FIFO puro, así que ese chorro de ruido
+# EXPULSABA las entradas que sí importan (un `cap_swallowed_modifier` es «la receta pide
+# pollo y la lista no lo trae»). El registro que existe para diagnosticar acababa
+# guardando 20 veces «sal al gusto».
+#
+# NO se toca la severidad ni lo que se reporta: `recipe_unquantified` sigue entrando al
+# historial y a las métricas. Lo único que cambia es A QUIÉN se desaloja cuando el cap
+# aprieta — primero el ruido, y solo si no hay bastante ruido se cae al FIFO de siempre.
+_HIPOTESIS_DE_RUIDO = frozenset({
+    "recipe_unquantified",
+    "unit_mismatch",
+    "unknown",
+    "magnitude_mild_short",
+})
+
+
+def _entrada_de_historial_es_ruido(entry) -> bool:
+    """True si TODAS las hipótesis de la entrada son no accionables.
+
+    Conservador por diseño: una entrada sin `hypotheses` legibles, o con una sola
+    hipótesis desconocida para esta lista, cuenta como SEÑAL. Ante la duda se conserva
+    — perder una entrada accionable es el fallo caro; conservar una benigna, no.
+    """
+    if not isinstance(entry, dict):
+        return False
+    hyp = entry.get("hypotheses")
+    if not isinstance(hyp, dict) or not hyp:
+        return False
+    return all(str(k) in _HIPOTESIS_DE_RUIDO for k in hyp)
+
+
+def _desalojar_priorizando_ruido(historial: list, cap: int) -> list:
+    """Recorta `historial` a `cap` tirando primero las entradas de RUIDO más antiguas.
+
+    La entrada nueva (la última) nunca se desaloja: es el evento que se acaba de
+    registrar. Si no hay suficiente ruido que tirar, se completa por antigüedad, que
+    es el comportamiento FIFO anterior.
+    """
+    sobran = len(historial) - cap
+    if sobran <= 0:
+        return list(historial)
+    candidatas = range(len(historial) - 1)  # todas menos la recién añadida
+    a_tirar = set()
+    for i in candidatas:
+        if len(a_tirar) >= sobran:
+            break
+        if _entrada_de_historial_es_ruido(historial[i]):
+            a_tirar.add(i)
+    if len(a_tirar) < sobran:
+        for i in candidatas:
+            if len(a_tirar) >= sobran:
+                break
+            a_tirar.add(i)
+    return [e for i, e in enumerate(historial) if i not in a_tirar]
+
+
 def _apply_coherence_history_cap(
     prior_history,
     new_entry,
@@ -39226,7 +39290,7 @@ def _apply_coherence_history_cap(
     cap = _coherence_block_history_cap()
     if len(new_history) > cap:
         truncated_count = len(new_history) - cap
-        new_history = new_history[-cap:]
+        new_history = _desalojar_priorizando_ruido(new_history, cap)
         try:
             logger.warning(
                 "[P2-HIST-AUDIT-4/COH-HISTORY-TRUNCATED] plan=%s "
