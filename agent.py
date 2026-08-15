@@ -315,6 +315,42 @@ def _plan_context_for_chat(user_id, current_plan):
     )
 
 
+def _plan_vigente_para_prompt(user_id, current_plan):
+    """[P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El plan que GOBIERNA el día, o
+    `None` si el usuario lo tiene en pausa.
+
+    POR QUÉ EXISTE ESTE DATO Y NO OTRO GATE POR CALL SITE. Esta misma mañana
+    `_plan_context_for_chat` aprendió la pausa y la auditoría encontró que otros
+    cuatro bloques del MISMO prompt la contradecían unas líneas más abajo:
+    «HOY es el día N del menú», «DÍAS QUE FALTAN POR GENERARSE… ATRASADO», «hoy
+    te quedan N comidas del plan», y el presupuesto de kcal del plan congelado.
+    Gatear call sites es exactamente lo que produjo ese agujero: se arregla el
+    que se ve y quedan los demás.
+
+    Aquí el modo se resuelve UNA vez por turno y se deriva un DATO. Las secciones
+    prescriptivas reciben `plan_vigente`; sus guardas de shape (que ya existían,
+    `isinstance(current_plan, dict)`) las apagan solas. Los builders no aprenden
+    nada de modos, y uno futuro que reciba este dato queda gateado sin que nadie
+    se acuerde de gatearlo.
+
+    Ojo con la distinción, que es todo el diseño:
+      `current_plan`  el plan real. Lo sigue recibiendo `_plan_context_for_chat`,
+                      que en pausa lo entrega con su encuadre (PAUSADO ≠
+                      AMPUTADO: si el usuario pregunta por su plan hay que poder
+                      responderle y ofrecerle reanudar).
+      `plan_vigente`  el plan que manda HOY. `None` mientras esté en pausa.
+
+    Fail-open al comportamiento histórico: si el modo no se puede leer, se asume
+    'plan'. Degradar el chat de todos por un fallo de DB sería peor que el bug.
+    """
+    try:
+        if _plan_mode_for_chat(user_id) == "tracking":
+            return None
+    except Exception as e:
+        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] plan_mode ilegible, asumo 'plan': {e}")
+    return current_plan
+
+
 def _prune_plan_for_chat(plan):
     """[P2-GENCHUNK-SPEED · 2026-06-01] Devuelve una copia shallow de `plan`
     sin las claves derivadas/pesadas de `_CHAT_PLAN_PRUNE_KEYS`, para reducir
@@ -4957,6 +4993,19 @@ def _build_pending_days_lines_block(user_id: Optional[str], current_plan, today:
     try:
         if not isinstance(current_plan, dict) or not user_id or user_id == "guest":
             return ""
+        # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] Un plan PAUSADO no tiene días
+        # en camino: la pausa CANCELA la cola. Anunciar días «que se generan por
+        # etapas», o declararlos «ATRASADOS», es hablarle al modelo de un trabajo
+        # que nadie va a hacer — y «atrasado» invita a ofrecer soluciones a un
+        # problema inexistente.
+        #
+        # Se pregunta al DATO (el propio plan) y no al modo de sesión: este bloque
+        # llega anidado dentro de `_build_past_days_context`, y hacerle llegar el
+        # modo exigiría enhebrar un parámetro por dos funciones y dos paths, que es
+        # el hilo que se rompe en el próximo refactor. Preguntarle al plan cuesta
+        # cero y sigue siendo correcto si mañana lo invoca un camino nuevo.
+        if str(current_plan.get("generation_status") or "") == "paused_by_user":
+            return ""
         # [Ronda 4 · B4] Mismo knob que `/chunk-status` y el cron horario: sin
         # esto el `COUNT` por turno del coach seguía vivo con la señal apagada.
         from chat_history_context import plan_cycle_pending_days, upcoming_days_signal_enabled
@@ -5711,7 +5760,19 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             )
             shopping_delta_str = ", ".join(cleaned_shop)
 
-    system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El modo se resuelve UNA vez por
+    # turno y se deriva el DATO que apaga las secciones prescriptivas. Se calcula
+    # ANTES del primer consumidor (la lista de compras): definirlo mas abajo daba
+    # NameError en los dos paths.
+    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
+    # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
+    # funciona igual en modo contador.
+    system_prompt += build_inventory_context(
+        inventory_str, shopping_delta_str,
+        plan_en_pausa=bool(current_plan) and plan_vigente is None,
+    )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
     # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
@@ -5751,6 +5812,8 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # de serializar (shopping agregados, coherence telemetry, archived days).
         # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Encuadre por modo (helper
         # compartido con el stream): en pausa, el plan viaja pero NO como lo de hoy.
+        # Este bloque recibe `current_plan` A PROPÓSITO — es el único que debe ver
+        # el plan real en pausa (PAUSADO ≠ AMPUTADO).
         system_prompt += _plan_context_for_chat(user_id, current_plan)
         
         if form_data and form_data.get("includeSupplements"):
@@ -5774,8 +5837,21 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
-                if not target_calories and current_plan:
-                    target_calories = current_plan.get("calories")
+                # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
+                # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
+                # congelado presentadas como la meta de HOY, mientras el dashboard del
+                # contador pintaba otras. El coach y su propia pantalla decian cifras
+                # distintas. Sin plan vigente se usan las metas del modo seguimiento --
+                # `get_nutrition_targets`, la MISMA funcion pura que sirve
+                # /api/nutrition/targets, sin roundtrip HTTP.
+                if not target_calories and plan_vigente:
+                    target_calories = plan_vigente.get("calories")
+                if not target_calories and form_data:
+                    try:
+                        from nutrition_calculator import get_nutrition_targets
+                        target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
+                    except Exception as _tgt_e:
+                        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
@@ -5790,7 +5866,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         # comidas del plan restantes hoy — SSOT compartida con el
                         # path stream (`_build_today_remaining_context`).
                         system_prompt += _build_today_remaining_context(
-                            current_plan, consumed_today, target_cal_int, total_consumed,
+                            plan_vigente, consumed_today, target_cal_int, total_consumed,
                             local_date_str=None,
                         )
                     except ValueError:
@@ -5807,7 +5883,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(current_plan, local_date_str=None)
+        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=None)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Paridad con el path stream. Este
         # path no recibe `tz_offset` del cliente: el helper cae a 240 (RD).
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `plan_record` ya se resolvió
@@ -6120,7 +6196,19 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             )
             shopping_delta_str = ", ".join(cleaned_shop)
 
-    system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El modo se resuelve UNA vez por
+    # turno y se deriva el DATO que apaga las secciones prescriptivas. Se calcula
+    # ANTES del primer consumidor (la lista de compras): definirlo mas abajo daba
+    # NameError en los dos paths.
+    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
+    # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
+    # funciona igual en modo contador.
+    system_prompt += build_inventory_context(
+        inventory_str, shopping_delta_str,
+        plan_en_pausa=bool(current_plan) and plan_vigente is None,
+    )
 
     # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
     # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
@@ -6187,8 +6275,21 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
                 
                 target_calories = form_data.get("target_calories") if form_data else None
-                if not target_calories and current_plan:
-                    target_calories = current_plan.get("calories")
+                # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El respaldo sale del plan
+                # VIGENTE, no del pausado: en modo contador esas eran las kcal de un plan
+                # congelado presentadas como la meta de HOY, mientras el dashboard del
+                # contador pintaba otras. El coach y su propia pantalla decian cifras
+                # distintas. Sin plan vigente se usan las metas del modo seguimiento --
+                # `get_nutrition_targets`, la MISMA funcion pura que sirve
+                # /api/nutrition/targets, sin roundtrip HTTP.
+                if not target_calories and plan_vigente:
+                    target_calories = plan_vigente.get("calories")
+                if not target_calories and form_data:
+                    try:
+                        from nutrition_calculator import get_nutrition_targets
+                        target_calories = (get_nutrition_targets(form_data) or {}).get("target_calories")
+                    except Exception as _tgt_e:
+                        logger.warning(f"[P1-CHAT-PAUSED-PROMPT-BLOCKS] metas del contador ilegibles: {_tgt_e}")
                 
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. [P1-CHAT-ACT-DONT-ASK] Úsalo para NO DUPLICAR, no para pedir permiso: si una foto o mensaje nuevo coincide con algo que ya está aquí, felicítalo o coméntalo sin volver a registrarlo de nuevo; si ya tiene una cena registrada y llega otra foto de noche, asume que es un snack nocturno (o pregúntale por qué repite) en vez de tratarla como si fuera la cena otra vez. Fuera de ese caso de duplicado, sigue la regla general: comida nueva en pasado = regístrala YA, sin preguntar."
                 # [P1-CHAT-MACRO-CONTEXT · 2026-07-12] Macros desglosadas del
@@ -6203,7 +6304,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         # comidas del plan restantes hoy — SSOT compartida con el
                         # path non-stream (`_build_today_remaining_context`).
                         system_prompt += _build_today_remaining_context(
-                            current_plan, consumed_today, target_cal_int, total_consumed,
+                            plan_vigente, consumed_today, target_cal_int, total_consumed,
                             local_date_str=local_date,
                         )
                     except ValueError:
@@ -6221,7 +6322,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # [P1-CHAT-PANTRY-AWARE · 2026-07-12] Snapshot real de la Nevera.
         system_prompt += _build_pantry_context(user_id)
         # [P1-CHAT-TODAY-CONTEXT · 2026-07-12] HOY → día del menú + ciclo.
-        system_prompt += _build_plan_today_context(current_plan, local_date_str=local_date)
+        system_prompt += _build_plan_today_context(plan_vigente, local_date_str=local_date)
         # [P1-CHAT-PAST-DAYS · 2026-07-27] Días que ya pasaron: plan prescrito
         # (índice barato) + diario real. Va DESPUÉS del DIARIO DE HOY y del
         # prefijo estático — ver docs/chat_past_days_memory.md §3 Pieza 2.

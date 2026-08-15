@@ -332,8 +332,18 @@ TIENES HERRAMIENTAS DISPONIBLES:
 El user_id actual es: {user_id}"""
 
 
-def build_inventory_context(inventory_str: str, shopping_delta_str: str) -> str:
-    """Genera el bloque de estado de despensa y compras en tiempo real."""
+def build_inventory_context(inventory_str: str, shopping_delta_str: str,
+                            plan_en_pausa: bool = False) -> str:
+    """Genera el bloque de estado de despensa y compras en tiempo real.
+
+    [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] `plan_en_pausa` reencuadra SOLO la
+    parte de compras. El INVENTARIO sigue siendo verdad literal en modo contador
+    —la Nevera funciona igual, se escanea y se registra igual—, pero la lista de
+    compras de un plan pausado no es una obligación pendiente: no hay listas de
+    mantenimiento mientras la generación esté apagada. Decirle al modelo que el
+    usuario «AÚN DEBE COMPRAR … para completar su plan alimenticio» lo empuja a
+    presionar por un plan que el usuario paró.
+    """
     if not inventory_str and not shopping_delta_str:
         return ""
 
@@ -344,8 +354,14 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str) -> str:
         ctx += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
 
     if shopping_delta_str:
-        ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
-    else:
+        if plan_en_pausa:
+            ctx += (f"\n- 📝 [LISTA DEL PLAN EN PAUSA]: {shopping_delta_str}. Es la lista que quedó "
+                    "de su plan PAUSADO, NO una compra pendiente: mientras use la app como contador "
+                    "no hay listas de mantenimiento. Menciónala solo si él pregunta por ella o por "
+                    "reanudar su plan; NUNCA le digas que 'debe comprar' esto.")
+        else:
+            ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
+    elif not plan_en_pausa:
         ctx += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual.\n"
 
     return ctx
