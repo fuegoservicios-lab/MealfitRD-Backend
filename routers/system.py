@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from error_utils import safe_error_detail
 import hashlib
 import logging
@@ -53,6 +53,26 @@ def _hash_uuid_for_public(value: Optional[str]) -> Optional[str]:
 # sola implementación de auth admin (CRON_SECRET). Importar desde el sibling
 # router no genera ciclo: plans.py no importa system.py.
 from routers.plans import _verify_admin_token, _check_admin_rate_limit  # noqa: E402
+from rate_limiter import RateLimiter  # noqa: E402
+
+# [P2-HEALTH-LIMITER - 2026-08-15] Freno per-IP para los health PUBLICOS.
+#
+# Los cinco (`/atomic-pool-health`, `/chunk-queue-health`,
+# `/pantry-tolerance-health`, `/tz-fallback-health`, `/health/plan-graph`) son
+# publicos A PROPOSITO: P3-HEALTH-AGGREGATES-DISCLOSURE-DEFERRED decidio que un
+# poller externo (Grafana, UptimeRobot) pueda leerlos sin credenciales. Eso NO se
+# toca aqui, y por eso NO se usa `_check_admin_rate_limit`: ese helper es del gate
+# admin y su test de divulgacion lo prohibe explicitamente en estos endpoints.
+#
+# Lo que faltaba era otra cosa: eran `def` (no `async def`), asi que corren en el
+# threadpool de anyio -- 40 tokens para TODO el proceso. `chunk-queue-health`
+# ademas ejecuta tres `execute_sql_query`. Una inundacion no los tumba a ellos:
+# degrada la latencia de todos los handlers sincronos de la app.
+#
+# 60/60s deja a un poller legitimo (1/min) dos ordenes de magnitud por debajo.
+# Publico y con freno no son opuestos: lo contrario de publico es autenticado, no
+# ilimitado.
+_HEALTH_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
 
 @router.get("/health")
 def get_system_health(request: Request):
@@ -239,7 +259,7 @@ def get_system_health(request: Request):
 
 
 @router.get("/atomic-pool-health")
-def get_atomic_pool_health():
+def get_atomic_pool_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-4] Salud del `connection_pool` que sustenta
     `update_user_health_profile_atomic`.
 
@@ -284,7 +304,7 @@ def get_atomic_pool_health():
 
 
 @router.get("/chunk-queue-health")
-def get_chunk_queue_health():
+def get_chunk_queue_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-5] Visibilidad del worker de chunks: backlog, antigüedad, último run y
     tasa de fallos en las últimas 24h.
 
@@ -374,7 +394,7 @@ def get_chunk_queue_health():
 
 
 @router.get("/pantry-tolerance-health")
-def get_pantry_tolerance_health():
+def get_pantry_tolerance_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-4] Visibilidad de fallbacks de `_get_pantry_tolerance_for_user`.
 
     Cada vez que el helper cae al default por una razón inesperada (DB blip,
@@ -437,7 +457,7 @@ def get_pantry_tolerance_health():
 
 
 @router.get("/tz-fallback-health")
-def get_tz_fallback_health():
+def get_tz_fallback_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P2-1] Visibilidad agregada de fallbacks TZ en `_enqueue_plan_chunk`.
 
     Antes cada chunk que caía al fallback TZ emitía una línea WARNING; un plan
@@ -524,7 +544,7 @@ def get_tz_fallback_health():
 
 
 @router.get("/health/plan-graph")
-def get_plan_graph_health():
+def get_plan_graph_health(_rl: object = Depends(_HEALTH_LIMITER)):
     """[P1-9] Health detallado del grafo LangGraph del orquestador.
 
     Antes la única señal era el endpoint global `/ready` en `app.py`, que es
