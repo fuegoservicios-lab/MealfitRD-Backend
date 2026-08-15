@@ -53,7 +53,24 @@ def _cron_source() -> str:
 
 
 def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text)
+    """Colapsa espacios, y ANTES quita los comentarios `--` de SQL.
+
+    [P2-SQL-COMENTARIOS-NORMALIZE · 2026-08-15] El orden es todo. Colapsar
+    `\\s+` primero convierte el salto de línea que TERMINA un comentario `--` en
+    un espacio, así que el comentario se traga el resto de la consulta: a partir
+    de ahí, ningún patrón vuelve a casar.
+
+    Se descubrió cuando `P2-PUSH-RESPECTS-PAUSE` metió seis líneas de comentario
+    dentro del WHERE de `_alert_chronic_deferrals` para explicar por qué un plan
+    pausado no debe generar avisos de «parece atrasado». El SQL era correcto y el
+    filtro que este fichero vigila seguía intacto — pero el test no podía verlo.
+
+    Se quitan sólo los `--` que empiezan la línea o van tras espacio, para no
+    tocar un `--` que viviera dentro de una cadena. En este fichero no hay
+    ninguno; la cautela es para el día que lo haya.
+    """
+    sin_comentarios = re.sub(r"(?m)(?<![\w'\"])--[^\n]*", " ", text)
+    return re.sub(r"\s+", " ", sin_comentarios)
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +171,21 @@ def test_alert_chronic_deferrals_filters_meal_plan_id_not_null():
     norm = _normalize(text)
     # Buscar el SELECT específico de chunk_deferrals con
     # reason='temporal_gate' y verificar que tiene el filtro.
+    # [P2-SQL-ALIAS-TOLERANTE · 2026-08-15] El patrón admite un ALIAS de tabla.
+    #
+    # Se puso rojo cuando `P2-PUSH-RESPECTS-PAUSE` añadió `FROM chunk_deferrals cd`
+    # — el alias hacía falta para el `NOT EXISTS (SELECT 1 FROM user_profiles up
+    # WHERE up.id = cd.user_id AND up.plan_mode = 'tracking')` que excluye del aviso
+    # a quien tiene el plan en pausa. Un cambio correcto, y el filtro que este test
+    # vigila (`meal_plan_id IS NOT NULL`) seguía exactamente donde estaba.
+    #
+    # Es la cuarta vez en el día que un guard parser-based se pone rojo por la
+    # GRAFÍA y no por la conducta. El coste no es el rato de arreglarlo: es que a un
+    # rojo injusto se le responde relajando el test, y entonces se pierde el guard
+    # de verdad. Aquí el alias es opcional en el patrón, así que tolera las dos
+    # formas sin dejar de exigir el filtro.
     m = re.search(
-        r"FROM\s+chunk_deferrals\s+WHERE[^;]*?'temporal_gate'[^;]*?GROUP\s+BY",
+        r"FROM\s+chunk_deferrals(?:\s+(?:AS\s+)?\w+)?\s+WHERE[^;]*?'temporal_gate'[^;]*?GROUP\s+BY",
         norm,
         re.IGNORECASE | re.DOTALL,
     )
