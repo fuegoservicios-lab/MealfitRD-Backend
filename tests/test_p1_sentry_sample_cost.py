@@ -162,7 +162,16 @@ def test_frontend_sentry_init_uses_variable_not_literal():
     # (`Sentry.init({...})`) a un named import `import { init as sentryInit }`
     # (`sentryInit({...})`) para habilitar tree-shaking. El regex acepta ambas
     # formas para reflejar el callsite real sin re-acoplar al star-import viejo.
-    m = re.search(r"(?:Sentry\.init|sentryInit)\(\{\s*(.*?)\n\}\)", src, re.DOTALL)
+    # [P1-APEX-ENTRY-DIET · 2026-08-14] Tercera forma: `_configSentry = () => ({...})`.
+    # El `init` se difirió a idle —`@sentry/*` era el 37,2% del entry síncrono del
+    # apex, 427.010 B de fuente— y para eso la configuración se separó del arranque
+    # en un objeto plano. Lo que este test protege no cambia: sigue siendo el
+    # CONTENIDO del bloque de config (que los sample rates salgan de variables y no
+    # de literales). Sólo cambió el nombre del sitio donde ese bloque vive.
+    m = re.search(
+        r"(?:Sentry\.init\(|sentryInit\(|_configSentry\s*=\s*\(\)\s*=>\s*\()\{\s*(.*?)\n\}\)",
+        src, re.DOTALL,
+    )
     assert m is not None, (
         "No se encontró bloque `Sentry.init({...})` ni `sentryInit({...})` en main.jsx"
     )

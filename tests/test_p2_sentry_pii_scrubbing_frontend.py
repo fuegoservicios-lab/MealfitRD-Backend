@@ -84,7 +84,15 @@ def test_sentry_init_uses_before_send_and_before_breadcrumb():
     formas y un `;` opcional de cierre.
     """
     src = _read_main()
-    m = re.search(r"(?:Sentry\.init|sentryInit)\(\{\s*(.*?)\n\}\);?", src, re.DOTALL)
+    # [P1-APEX-ENTRY-DIET · 2026-08-14] Tercera forma: `_configSentry = () => ({...})`.
+    # El `init` se difirió a idle (era el 37,2% del entry síncrono del apex) y la
+    # configuración se separó del arranque en un objeto plano. La invariante que
+    # este test protege —que `beforeSend`/`beforeBreadcrumb` scrubbean PII— vive en
+    # ese mismo bloque; sólo cambió cómo se llama el sitio.
+    m = re.search(
+        r"(?:Sentry\.init\(|sentryInit\(|_configSentry\s*=\s*\(\)\s*=>\s*\()\{\s*(.*?)\n\}\);?",
+        src, re.DOTALL,
+    )
     assert m is not None, (
         "No se encontró bloque `Sentry.init({...})` / `sentryInit({...})` en main.jsx"
     )

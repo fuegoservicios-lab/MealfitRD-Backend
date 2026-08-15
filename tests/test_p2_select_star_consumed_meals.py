@@ -229,6 +229,13 @@ class TestAgentPageSentryCapture:
         # importado desde @sentry/react para la captura de errores) es
         # idéntica; aceptamos AMBAS formas (star-import legacy O named
         # imports que incluyan `captureException`).
+        # [P1-APEX-ENTRY-DIET · 2026-08-14] Tercera forma aceptada, y ahora la
+        # PREFERIDA: la fachada `utils/observability`. `@sentry/*` quedó con una
+        # sola puerta en todo el árbol (`utils/sentryBoot.js`) porque el `init` se
+        # difirió — eran 427.010 B de fuente, el 37,2% del entry síncrono del apex.
+        # La invariante que este test protege («AgentPage reporta sus errores a
+        # Sentry») no cambia: cambia por dónde. Y la fachada la mejora, porque
+        # ENCOLA lo que llegue antes de que el SDK arranque en vez de perderlo.
         star_import = re.search(
             r"import\s+\*\s+as\s+Sentry\s+from\s+['\"]@sentry/react['\"]",
             agent_page_src,
@@ -237,10 +244,14 @@ class TestAgentPageSentryCapture:
             r"import\s+\{[^}]*\bcaptureException\b[^}]*\}\s+from\s+['\"]@sentry/react['\"]",
             agent_page_src,
         )
-        assert star_import or named_import, (
-            "P2-AGENTPAGE-ERROR-SENTRY: no se importa Sentry desde "
-            "'@sentry/react' (ni `import * as Sentry` ni named import de "
-            "`captureException`)."
+        facade_import = re.search(
+            r"import\s+\{[^}]*\bcaptureException\b[^}]*\}\s+from\s+['\"][^'\"]*utils/observability['\"]",
+            agent_page_src,
+        )
+        assert star_import or named_import or facade_import, (
+            "P2-AGENTPAGE-ERROR-SENTRY: AgentPage no importa `captureException` "
+            "de ningún sitio (ni `@sentry/react` ni la fachada "
+            "`utils/observability`). Sin eso sus errores no llegan a Sentry."
         )
 
     def test_capture_helper_defined(self, agent_page_src: str):
