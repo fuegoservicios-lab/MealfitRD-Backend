@@ -31,6 +31,31 @@ def _read_plan() -> str:
     return _PLAN_PATH.read_text(encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# [P1-I18N-DASHBOARD · 2026-08-15] Etiqueta visible «Cancelar», envuelta o no
+# en `t()`.
+#
+# Qué se aceptó: el children del `<motion.button>` pasó de `Cancelar` a
+# `{t('Cancelar')}`.
+#
+# Por qué la propiedad vigilada NO cambió: este test no defiende el copy —
+# defiende que el botón de cancelar sea TEXTO-ONLY SUTIL (`background:
+# 'transparent'`, sin border pill rojo) y no el pill prominente pre-rediseño.
+# La etiqueta sólo sirve para LOCALIZAR el bloque del botón dentro de
+# Plan.jsx. Además, en el motor de i18n del repo la clave ES el texto
+# español (`frontend/src/i18n/index.js`): en es-DO `t('Cancelar')` pinta
+# «Cancelar», o sea el render no cambió ni un píxel.
+#
+# Lo que se sigue rechazando (el guard NO se relajó):
+#   - que desaparezca el marker `P3-CANCEL-ONE-CLICK`;
+#   - que no exista un `<motion.button>` etiquetado «Cancelar» tras él;
+#   - que ese botón pierda `background: 'transparent'`;
+#   - que recupere el border rojo `rgba(239, 68, 68…)`.
+# El literal español sigue anclado: `t('Cerrar')` o `{cancelLabel}` NO casan.
+# ---------------------------------------------------------------------------
+_LABEL_CANCELAR = r"(?:Cancelar|\{\s*t\(\s*['\"]Cancelar['\"]\s*\)\s*\})"
+
+
 def test_marker_stamped_in_loading_screen():
     text = _read_plan()
     assert "P3-LOADING-PREMIUM-REDESIGN" in text, (
@@ -93,7 +118,9 @@ def test_cancel_button_minimalist_not_pill():
     # label "Cancelar". DOTALL + lazy con backtracking salta los `>` internos de
     # las arrow functions del onClick hasta el `>` real del tag de apertura.
     region = re.search(
-        r'P3-CANCEL-ONE-CLICK.*?<motion\.button\b.*?>\s*Cancelar\s*</motion\.button>',
+        r'P3-CANCEL-ONE-CLICK.*?<motion\.button\b.*?>\s*'
+        + _LABEL_CANCELAR
+        + r'\s*</motion\.button>',
         text,
         re.DOTALL,
     )

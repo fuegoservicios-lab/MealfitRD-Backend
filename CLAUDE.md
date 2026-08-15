@@ -181,13 +181,11 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 
 [P1-VIEWPORT-ZOOM-LOCK · 2026-07-09 · doc 2026-08-15] `user-scalable=no` + `maximum-scale=1`. **Decisión del dueño, YA revertida una vez** (`P2-A11Y-VIEWPORT-ZOOM` lo quitó por a11y y se revirtió: feel de app nativa). Trade-off WCAG 1.4.4 aceptado; la vía real es la escala de fuente del SO (`text-size-adjust: 100%`). **Lighthouse lo reporta en CADA auditoría** y es lo que deja la nota en 91: no lo "arregles". Test [`test_p1_viewport_zoom_lock.py`](backend/tests/test_p1_viewport_zoom_lock.py).
 
-### `i18n: es-DO permanente`
+### `P3-I18N-DEFERRED` (i18n: es-DO permanente) — SUPERSEDED por `P1-I18N-DASHBOARD`
 
-[P3-I18N-DEFERRED · 2026-05-13] El producto es 100% español dominicano (es-DO). UI copy, mensajes de validación, toasts, aria-labels, error handlers — todo hardcoded en literal strings es-DO. **NO hay infraestructura i18n** (cero deps `react-i18next` / `i18next` / `react-intl`) y es intencional.
+[P1-I18N-DASHBOARD · 2026-08-15] El dashboard se lee en 5 idiomas (es-DO base, en-US, pt-BR, fr-FR, it-IT); selector en Configuración → Idioma. Se traduce la **interfaz**; NO el contenido (plan/recetas/coach los escribe el LLM en español), los legales (traducir un contrato genera obligaciones) ni **los nombres de alimentos, JAMÁS**: son el SSOT del motor — `pantry_names_match`, guard de coherencia y backstop de alergias resuelven por esos nombres exactos, así que traducir «Pollo» rompe las tres, dos en silencio.
 
-**Por qué:** mercado RD únicamente, sin roadmap multilocale; `react-i18next` hoy = bundle +30KB + mantenimiento por string + abstracción no-usada ("Don't design for hypothetical future requirements"). El refactor incremental futuro cuesta lo mismo que el scaffold preventivo de hoy.
-
-**Cuándo revisitar:** si producto decide expandir geográficamente (reabrir con `react-i18next` + `src/i18n/locales/` empezando por `components/common/`). Floor de revisión: 2027-01-01. Test [`test_p3_i18n_deferred.py`](backend/tests/test_p3_i18n_deferred.py): si alguien añade `react-i18next`/`i18next` a `package.json` sin actualizar esta sección, falla con copy explicativo.
+Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catálogo (0 bytes para la base actual) y lo no traducido cae a español, no a la clave — no crees `es-DO.json`. Cambiar el copy huérfana su traducción **en silencio**; lo paga `npm run i18n:check`, y borrarlo desarma la única defensa. Doc: [`backend/docs/i18n_dashboard.md`](backend/docs/i18n_dashboard.md). Test [`test_p1_i18n_dashboard.py`](backend/tests/test_p1_i18n_dashboard.py); `test_p3_i18n_deferred.py` reconvertido: «no añadas una librería encima del motor propio».
 
 ### `chat-agent safety_settings relajados` (SUPERSEDED por DeepSeek)
 

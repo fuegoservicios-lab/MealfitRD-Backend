@@ -70,11 +70,59 @@ def test_frontend_consumes_server_min_with_fallback():
     assert "const belowMin = count < minItems;" in _QPB_SRC
 
 
+# [P1-I18N-DASHBOARD · 2026-08-15] El label del CTA dejó de ser un template
+# literal (`Agrega al menos ${minItems} alimentos (${count}/${minItems})`) y pasa
+# ahora por el traductor:
+#     t('Agrega al menos {minimo} alimentos ({actual}/{minimo})',
+#       { minimo: minItems, actual: count })
+# La PROPIEDAD vigilada NO cambió — el CTA sigue gateado por `belowMin` y el label
+# sigue mostrando progreso `(actual/piso)` construido con los mismos dos datos
+# (`count` y `minItems`); lo que cambió es la grafía del interpolador. El guard
+# acepta AMBAS formas pero, en la forma `t()`, exige además que cada placeholder
+# esté BINDEADO a su variable real: el motor (`i18n/index.js::_interpolate`) sólo
+# sustituye claves presentes en el objeto de vars, así que un binding perdido deja
+# el literal «{minimo}» pintado en el botón. Eso es un bug visible, no cosmética.
+_PH_MIN = r"(?:\$\{minItems\}|\{[A-Za-z_]\w*\})"   # `${minItems}` | `{minimo}`
+_PH_CUR = r"(?:\$\{count\}|\{[A-Za-z_]\w*\})"      # `${count}`    | `{actual}`
+_PROGRESS_LABEL_RE = re.compile(
+    r"Agrega al menos (?P<min1>" + _PH_MIN + r") alimentos "
+    r"\((?P<cur>" + _PH_CUR + r")/(?P<min2>" + _PH_MIN + r")\)"
+)
+
+
+def _next_button_block() -> str:
+    """Slice del CTA final del paso (`<NextButton ... />`)."""
+    idx = _QPB_SRC.find("<NextButton")
+    assert idx > 0, "El CTA <NextButton> del paso Nevera desapareció"
+    end = _QPB_SRC.find("/>", idx)
+    assert end > idx, "Cierre del <NextButton> no encontrado"
+    return _QPB_SRC[idx:end]
+
+
 def test_frontend_cta_gated_with_progress_label():
-    assert "disabled={isSubmitting || belowMin}" in _QPB_SRC
-    assert "Agrega al menos ${minItems} alimentos (${count}/${minItems})" in _QPB_SRC, (
+    block = _next_button_block()
+    assert "disabled={isSubmitting || belowMin}" in block, (
+        "el CTA debe seguir deshabilitado bajo el piso (`belowMin`) — es el gate"
+    )
+    m = _PROGRESS_LABEL_RE.search(block)
+    assert m, (
         "el label debe mostrar progreso hacia el piso — un disabled mudo frustra"
     )
+    min1, cur, min2 = m.group("min1"), m.group("cur"), m.group("min2")
+    assert min1 == min2, (
+        "el piso del texto y el denominador del progreso deben ser el MISMO dato "
+        f"(texto={min1!r}, denominador={min2!r})"
+    )
+    # Forma `t()`: el placeholder debe resolverse a la variable correcta. En el
+    # template literal la variable ya viaja dentro del propio `${...}`.
+    for placeholder, var in ((min1, "minItems"), (cur, "count")):
+        if placeholder.startswith("${"):
+            continue
+        name = placeholder[1:-1]
+        assert re.search(rf"\b{name}\s*:\s*{var}\b", block), (
+            f"el placeholder «{placeholder}» del label no está bindeado a `{var}` "
+            f"en la llamada a t() — el usuario vería «{placeholder}» literal"
+        )
 
 
 def test_marker_anchored_in_source():

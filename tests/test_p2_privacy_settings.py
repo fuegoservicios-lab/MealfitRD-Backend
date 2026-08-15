@@ -105,8 +105,26 @@ def test_marker_bumped():
 def test_frontend_privacy_section_wired():
     src = _read(_SETTINGS)
     assert "'privacy'" in src, "Falta 'privacy' en SECTION_IDS / sectionsConfig."
-    assert re.search(r"label:\s*'Privacidad'", src), (
-        "Falta la entry 'Privacidad' en sectionsConfig (nav de Settings)."
+    # [P1-I18N-DASHBOARD · 2026-08-15] `label: 'Privacidad'` pasó a
+    # `label: t('Privacidad')`. La PROPIEDAD vigilada —«la fila de Privacidad
+    # existe en el nav de Settings, rotulada»— no cambió: en es-DO `t()` no
+    # tiene catálogo y devuelve el mismo español, así que la pantalla se lee
+    # igual que ayer. Cambió la GRAFÍA del valor, no el cableado.
+    #
+    # Se acepta el literal Y la forma envuelta, y de paso se APRIETA: antes
+    # bastaba con que la subcadena `label: 'Privacidad'` apareciera en
+    # CUALQUIER punto del fichero (un título suelto la habría satisfecho con la
+    # fila del nav borrada). Ahora el rótulo tiene que estar dentro del MISMO
+    # objeto que declara `id: 'privacy'`.
+    fila = re.search(r"\{[^{}]*id:\s*'privacy'[^{}]*\}", src)
+    assert fila, (
+        "Falta la entry con `id: 'privacy'` en sectionsConfig (nav de Settings)."
+    )
+    assert re.search(
+        r"label:\s*(?:'Privacidad'|t\(\s*'Privacidad'\s*\))", fila.group(0)
+    ), (
+        "La entry `id: 'privacy'` de sectionsConfig perdió su rótulo "
+        f"'Privacidad' (ni literal ni via t()): {fila.group(0)[:160]!r}"
     )
     assert "activeSection === 'privacy'" in src, (
         "Falta el render condicional de la sección Privacidad."

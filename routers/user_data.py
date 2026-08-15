@@ -885,7 +885,29 @@ async def api_nutrition_targets(
 # server-derived desde PayPal (I-Billing-1, P0-BILLING-1); aceptar
 # plan_tier del cliente reabriría el upgrade gratis via DevTools.
 # Tooltip-anchor: P1-NEON-PROFILE-SCALAR-WHITELIST.
-_PROFILE_SCALAR_WHITELIST = frozenset({"full_name"})
+#
+# [P1-I18N-DASHBOARD · 2026-08-15] `locale` entra aquí y NO en un endpoint
+# propio. La razón está escrita al revés en el docstring de PUT
+# /profile/plan-mode: aquel quedó FUERA del whitelist porque cambiar el modo es
+# una TRANSACCIÓN (cancela la cola, libera locks, estampa el plan). Elegir
+# idioma es literalmente escribir un escalar y no tiene efectos laterales, así
+# que un endpoint propio solo añadiría un limitador más, una fila más en la
+# tabla de exención de cuota y una segunda puerta al mismo UPDATE.
+_PROFILE_SCALAR_WHITELIST = frozenset({"full_name", "locale"})
+
+# [P1-I18N-DASHBOARD · 2026-08-15] Valores admitidos de `locale`.
+#
+# El whitelist de arriba valida CLAVES, no VALORES — nunca necesitó mirarlos
+# porque `full_name` es texto libre. `locale` sí: es un enum, y la columna lleva
+# un CHECK en la DB (migración p1_i18n_dashboard_locale_2026_08_15.sql). Sin
+# esta validación el CHECK haría el trabajo, pero devolviendo un 500 crudo de
+# psycopg en vez de un 400 que explica qué pasó. Fail-closed y legible.
+#
+# SSOT de la lista: `frontend/src/i18n/locales.js`. Este frozenset, el CHECK de
+# la migración y el boot de `index.html` son espejos suyos —
+# `test_p1_i18n_dashboard.py` falla si divergen.
+# Tooltip-anchor: P1-I18N-DASHBOARD-LOCALE-VALUES.
+_LOCALE_VALUES = frozenset({"es-DO", "en-US", "pt-BR", "fr-FR", "it-IT"})
 
 
 class ProfilePatchBody(BaseModel):
@@ -929,6 +951,18 @@ async def api_patch_profile(
                 "entitlement son server-derived (I-Billing-1)."
             ),
         )
+    # [P1-I18N-DASHBOARD · 2026-08-15] Validación de VALOR para los escalares
+    # que son enum. El whitelist de arriba solo mira claves; sin esto, el 400
+    # honesto lo daría el CHECK de la DB como un 500 de psycopg.
+    if "locale" in fields and fields["locale"] not in _LOCALE_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Idioma no soportado: {fields['locale']!r}. "
+                f"Permitidos: {sorted(_LOCALE_VALUES)}."
+            ),
+        )
+
     if not body.health_profile and not fields:
         raise HTTPException(status_code=400, detail="Nada que actualizar.")
 

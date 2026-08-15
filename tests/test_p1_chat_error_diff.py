@@ -12,8 +12,8 @@ Por qué este test:
     usuario claridad sobre si era saturación transitoria (esperar) vs
     timeout (reintentar) vs problema de su red. Tests acá anclan:
         1. Helper `_buildAgentErrorMessage` existe en AgentPage.jsx.
-        2. Map `_AGENT_ERROR_COPY` tiene entries diferenciadas para los
-           status canónicos del backend (504/503/429/402/401/403/0).
+        2. El map de copy tiene entries diferenciadas para los status
+           canónicos del backend (504/503/429/402/401/403/0).
         3. handleSend invoca el helper en el bloque !response.ok Y en el
            catch outer (network errors).
         4. El string legacy "❌ Error al comunicarse con la IA" ya no se
@@ -55,6 +55,59 @@ def message_bubble_src() -> str:
 
 
 # -----------------------------------------------------------------------------
+# [P1-I18N-DASHBOARD · 2026-08-15] Reanclaje: la GRAFÍA del map cambió, la
+# CONDUCTA no.
+#
+# El dashboard pasó a multiidioma con un motor propio (`frontend/src/i18n/`) en
+# el que **la clave ES el texto español**: `t('Sin conexión al servidor…')`
+# devuelve esa misma cadena en es-DO (no hay catálogo español, es el fallback) y
+# su traducción en los otros 4 idiomas. Dos cambios de grafía llegaron aquí:
+#
+#   1. `const _AGENT_ERROR_COPY = {…};`  →  `const _agentErrorCopy = () => ({…});`
+#      Un objeto de copy en ámbito de módulo se evalúa AL IMPORTAR — antes de que
+#      el catálogo cargue — y quedaría congelado en español para siempre. Por eso
+#      es función: se llama en cada `_buildAgentErrorMessage`.
+#   2. `text: 'Sin conexión…'`  →  `text: t('Sin conexión…')`
+#
+# Lo que este test vigila NO cambió y sigue verificándose entry por entry: que
+# existan las 7 clases semánticas de status, que su copy sea DISTINTO entre
+# 504/503/402, y que los flags `retryable` conserven su valor (402/401/403 en
+# `false`; 504/503/0 en `true`). Se aceptan AMBAS grafías para que un revert del
+# i18n tampoco deje el guard ciego.
+#
+# Se añade además `test_build_agent_error_message_reads_the_copy_map`: convertir
+# una constante en función abre un modo de fallo nuevo y SILENCIOSO — si el call
+# site se queda en `_agentErrorCopy[status]` (sin invocar), el lookup devuelve
+# `undefined`, TODOS los status caen al copy genérico y la diferenciación se
+# pierde sin lanzar un error.
+# -----------------------------------------------------------------------------
+
+# Forma constante (pre-i18n) | forma función (post-i18n, `() => ({…})`).
+_ERROR_COPY_DECL_RE = re.compile(
+    r"const\s+_AGENT_ERROR_COPY\s*=\s*\{([\s\S]*?)\n\};"
+    r"|"
+    r"const\s+_agentErrorCopy\s*=\s*\(\s*\)\s*=>\s*\(\{([\s\S]*?)\n\}\);"
+)
+
+# Valor de un campo de texto: literal `'…'` | envuelto `t('…')`. En ambos casos
+# capturamos la CADENA ESPAÑOLA, que en este motor es a la vez clave y fallback.
+_TEXT_VALUE_RE = r"(?:t\(\s*)?['\"]([^'\"]+)['\"]"
+
+
+def _extract_error_copy_body(src: str) -> str:
+    """Devuelve el cuerpo del map status→copy, sea constante o función."""
+    m = _ERROR_COPY_DECL_RE.search(src)
+    assert m, (
+        "P1-CHAT-ERROR-DIFF regresión: el map status→copy no se encontró. Se "
+        "aceptan `const _AGENT_ERROR_COPY = {…};` y (post P1-I18N-DASHBOARD) "
+        "`const _agentErrorCopy = () => ({…});`. Si lo renombraste otra vez, "
+        "actualiza `_ERROR_COPY_DECL_RE` — pero NO borres la comprobación: es "
+        "la que ancla las 7 clases de status."
+    )
+    return m.group(1) if m.group(1) is not None else m.group(2)
+
+
+# -----------------------------------------------------------------------------
 # AgentPage.jsx — helper + invocations
 # -----------------------------------------------------------------------------
 
@@ -75,8 +128,40 @@ def test_helper_build_agent_error_message_defined(agent_page_src: str):
     )
 
 
+def test_build_agent_error_message_reads_the_copy_map(agent_page_src: str):
+    """[P1-I18N-DASHBOARD · 2026-08-15] `_buildAgentErrorMessage` debe LEER el
+    map — invocándolo si es función (`_agentErrorCopy()[status]`).
+
+    Al convertir la constante en función nació un modo de fallo silencioso:
+    `_agentErrorCopy[status]` (sin `()`) es `undefined` para TODO status, así
+    que cada error caería al copy genérico "El servidor tuvo un problema
+    inesperado" con `retryable: true` — 402 y 401/403 incluidos. No lanza
+    excepción: la diferenciación se pierde sin una sola señal.
+    """
+    body_match = re.search(
+        r"const\s+_buildAgentErrorMessage\s*=\s*\([\s\S]*?\n\};",
+        agent_page_src,
+    )
+    assert body_match, (
+        "P1-CHAT-ERROR-DIFF regresión: no se pudo delimitar el cuerpo de "
+        "`_buildAgentErrorMessage`."
+    )
+    helper_body = body_match.group(0)
+    lookup = re.search(
+        r"_AGENT_ERROR_COPY\s*\[|_agentErrorCopy\s*\(\s*\)\s*\[",
+        helper_body,
+    )
+    assert lookup, (
+        "P1-CHAT-ERROR-DIFF regresión: `_buildAgentErrorMessage` no consulta el "
+        "map de copy (`_AGENT_ERROR_COPY[status]` o `_agentErrorCopy()[status]`). "
+        "Ojo con la forma función: `_agentErrorCopy[status]` SIN invocar devuelve "
+        "undefined para todo status → todos los errores caen al copy genérico "
+        "retryable, incluidos 402/401/403. Falla en silencio."
+    )
+
+
 def test_error_copy_map_covers_canonical_status_codes(agent_page_src: str):
-    """`_AGENT_ERROR_COPY` debe declarar entries para 504, 503, 429, 402,
+    """El map de copy debe declarar entries para 504, 503, 429, 402,
     401, 403 y 0 (network).
 
     Razón: cada uno representa una clase semántica distinta del backend:
@@ -87,14 +172,7 @@ def test_error_copy_map_covers_canonical_status_codes(agent_page_src: str):
       - 401/403: auth (NO retryable)
       - 0: network/offline (status=0 sentinela en catch)
     """
-    map_match = re.search(
-        r"const\s+_AGENT_ERROR_COPY\s*=\s*\{([\s\S]*?)\n\};",
-        agent_page_src,
-    )
-    assert map_match, (
-        "P1-CHAT-ERROR-DIFF regresión: `_AGENT_ERROR_COPY` no encontrado."
-    )
-    body = map_match.group(1)
+    body = _extract_error_copy_body(agent_page_src)
     required_keys = ["504", "503", "429", "402", "401", "403", "0"]
     missing = [
         k for k in required_keys
@@ -112,17 +190,17 @@ def test_error_copy_distinct_per_status(agent_page_src: str):
 
     Cierra regresión "alguien copió todos los entries con el mismo texto"
     — si pasa eso, perdemos la diferenciación que el P-fix intenta dar.
+
+    [P1-I18N-DASHBOARD] Se compara la CADENA ESPAÑOLA, esté suelta (`'…'`) o
+    envuelta (`t('…')`): en este motor la clave es el propio texto es-DO, así
+    que dos entries con el mismo `t('…')` seguirían siendo idénticas en los 5
+    idiomas — exactamente la regresión que este test persigue.
     """
-    map_match = re.search(
-        r"const\s+_AGENT_ERROR_COPY\s*=\s*\{([\s\S]*?)\n\};",
-        agent_page_src,
-    )
-    assert map_match
-    body = map_match.group(1)
+    body = _extract_error_copy_body(agent_page_src)
     texts = {}
     for key in ["504", "503", "402"]:
         m = re.search(
-            rf"(?ms)^\s*{key}\s*:\s*\{{[^}}]*?text\s*:\s*['\"]([^'\"]+)['\"]",
+            rf"(?ms)^\s*{key}\s*:\s*\{{[^}}]*?text\s*:\s*{_TEXT_VALUE_RE}",
             body,
         )
         assert m, f"P1-CHAT-ERROR-DIFF: text para status {key} no encontrado."
@@ -140,12 +218,7 @@ def test_error_copy_distinct_per_status(agent_page_src: str):
 def test_retryable_flag_quota_and_auth_are_false(agent_page_src: str):
     """402 (quota), 401 y 403 (auth) NO deben ser retryable (reintentar
     no resuelve el problema; mostraría el mismo error)."""
-    map_match = re.search(
-        r"const\s+_AGENT_ERROR_COPY\s*=\s*\{([\s\S]*?)\n\};",
-        agent_page_src,
-    )
-    assert map_match
-    body = map_match.group(1)
+    body = _extract_error_copy_body(agent_page_src)
     for key in ["402", "401", "403"]:
         entry_re = re.compile(
             rf"(?ms)^\s*{key}\s*:\s*\{{([^}}]*?)\}}"
@@ -167,12 +240,7 @@ def test_retryable_flag_quota_and_auth_are_false(agent_page_src: str):
 def test_retryable_flag_timeout_and_saturated_are_true(agent_page_src: str):
     """504 (timeout) y 503 (CB abierto) DEBEN ser retryable; el botón
     da al usuario control para reintentar tras esperar."""
-    map_match = re.search(
-        r"const\s+_AGENT_ERROR_COPY\s*=\s*\{([\s\S]*?)\n\};",
-        agent_page_src,
-    )
-    assert map_match
-    body = map_match.group(1)
+    body = _extract_error_copy_body(agent_page_src)
     for key in ["504", "503", "0"]:
         entry_re = re.compile(
             rf"(?ms)^\s*{key}\s*:\s*\{{([^}}]*?)\}}"

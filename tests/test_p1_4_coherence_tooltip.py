@@ -228,9 +228,19 @@ class TestFrontendWiring:
         # Anchor: cualquier interpolación de h o hypothesis sin envolver en
         # getCoherenceHypothesisLabel sería un bug.
         # Buscamos pattern: `${h}` o similar SIN la función helper en su
-        # vecindad. Heurística: si `getCoherenceHypothesisLabel(h)` aparece en
-        # el archivo, asumimos que se usa correctamente. Sanity check:
-        assert "getCoherenceHypothesisLabel(h)" in src, (
+        # vecindad. Heurística: si el helper humanizador aparece en el archivo,
+        # asumimos que se usa correctamente. Sanity check:
+        #
+        # [P1-I18N-DASHBOARD · 2026-08-15] Se acepta también la variante
+        # `getCoherenceHypothesisLabelI18n(h, t)`. La propiedad vigilada es que
+        # el código en snake_case NUNCA llegue crudo al usuario, y la variante
+        # i18n hace exactamente lo mismo —delega en la original y luego traduce—,
+        # así que humaniza igual. Anclar solo al nombre viejo convertía en fallo
+        # el hecho de que además se tradujera.
+        assert (
+            "getCoherenceHypothesisLabel(h)" in src
+            or "getCoherenceHypothesisLabelI18n(h, t)" in src
+        ), (
             "Hypothesis NO se humaniza en el tooltip; el usuario vería "
             "`cap_swallowed_modifier` raw."
         )

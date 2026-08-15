@@ -60,6 +60,32 @@ def _strip_comments(src: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# [P1-I18N-DASHBOARD · 2026-08-15] Prefijo de un `toast.error` cuyo PRIMER
+# argumento es un literal español, envuelto o no en `t()`.
+#
+# Qué se aceptó: `toast.error(t('Formato no soportado…'))` además de
+# `toast.error('Formato no soportado…')`.
+#
+# Por qué la propiedad vigilada NO cambió: en el motor de i18n del repo
+# (`frontend/src/i18n/index.js`) LA CLAVE ES EL TEXTO ESPAÑOL — `t('X')`
+# devuelve «X» tal cual en es-DO (no hay catálogo español: es el fallback).
+# El envoltorio no altera ni el método (`error`, lectura assertiva roja) ni
+# el copy; sólo añade la traducción para los otros 4 idiomas. Lo que este
+# test defiende —cero `alert()` nativos y que el reemplazo sea `toast.error`
+# con ESE copy— es idéntico antes y después de la migración.
+#
+# Lo que se sigue rechazando (el guard NO se relajó):
+#   - `toast.info(...)` / `toast.success(...)` / `toast(...)` a secas.
+#   - `toast.error(otraVariable)` — el copy tiene que estar literal aquí.
+#   - `toast.error(t('otro mensaje'))` — el texto español sigue anclado.
+#   - cualquier `alert(` activo (tests 1 y 3, intactos).
+# Sólo se tolera UN nivel de envoltorio `t(`, no una cadena arbitraria de
+# llamadas.
+# ---------------------------------------------------------------------------
+_TOAST_ERROR_LITERAL = r"toast\.error\s*\(\s*(?:t\s*\(\s*)?['\"][^'\"]*"
+
+
+# ---------------------------------------------------------------------------
 # 1. AgentPage.jsx: cero `alert(...)` activos
 # ---------------------------------------------------------------------------
 def test_agentpage_no_native_alert(agentpage_src: str):
@@ -88,12 +114,14 @@ def test_agentpage_uses_toast_error(agentpage_src: str):
     `toast.success`) — es feedback de un input inválido."""
     no_comments = _strip_comments(agentpage_src)
     assert re.search(
-        r"toast\.error\s*\(\s*['\"][^'\"]*[Ff]ormato\s+no\s+soportado",
+        _TOAST_ERROR_LITERAL + r"[Ff]ormato\s+no\s+soportado",
         no_comments,
     ), (
         "P3-AUDIT-2 regresión: `toast.error('Formato no soportado...')` no "
         "encontrado en AgentPage.jsx. El replacement del `alert` original "
-        "debe usar el método error (rojo, lectura assertiva)."
+        "debe usar el método error (rojo, lectura assertiva). "
+        "[P1-I18N-DASHBOARD] También vale `toast.error(t('Formato no "
+        "soportado...'))` — la clave de i18n ES el texto español."
     )
 
 
@@ -125,7 +153,7 @@ def test_paymentmodal_imports_toast_from_sonner(payment_modal_src: str):
 def test_paymentmodal_uses_toast_error(payment_modal_src: str):
     no_comments = _strip_comments(payment_modal_src)
     assert re.search(
-        r"toast\.error\s*\(\s*['\"][^'\"]*no configurado",
+        _TOAST_ERROR_LITERAL + r"no configurado",
         no_comments,
     ), (
         "P3-AUDIT-2 regresión: `toast.error('Plan de pago no configurado…')` "

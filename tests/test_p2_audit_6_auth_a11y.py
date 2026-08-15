@@ -61,12 +61,55 @@ def reset_src() -> str:
 
 def _count_htmlfor_id_pairs(src: str) -> int:
     """Cuenta `htmlFor="X"` que tenga un `id="X"` correspondiente en el
-    mismo archivo. Patrón canónico de label↔input association."""
+    mismo archivo. Patrón canónico de label↔input association.
+
+    [P1-I18N-DASHBOARD · 2026-08-15] Sin cambios y a propósito: el texto VISIBLE
+    de la `<label>` se envolvió en `t('...')`, pero `htmlFor`/`id` son
+    identificadores del DOM, no copy — traducirlos rompería la asociación en
+    4 de los 5 idiomas. Que este contador siga midiendo literales es
+    exactamente lo que queremos: si alguien envolviera un `htmlFor` en `t()`
+    (o perdiera el par al reindentar el JSX), el par desaparece y el test cae.
+    """
     htmlfor_re = re.compile(r'htmlFor\s*=\s*["\']([^"\']+)["\']')
     id_re = re.compile(r'\bid\s*=\s*["\']([^"\']+)["\']')
     htmlfor_ids = set(htmlfor_re.findall(src))
     page_ids = set(id_re.findall(src))
     return len(htmlfor_ids & page_ids)
+
+
+# [P1-I18N-DASHBOARD · 2026-08-15] `aria-label="Correo electrónico"` pasó a
+# `aria-label={t('Correo electrónico')}`. La PROPIEDAD vigilada —«ningún input
+# queda sin etiqueta para el lector de pantalla»— no cambió: `t()` devuelve el
+# mismo español en es-DO (no hay catálogo español: es el fallback) y su
+# traducción en los otros 4 idiomas. Lo que cambió es la GRAFÍA del valor.
+#
+# Se acepta el literal Y la forma envuelta. Y de paso se APRIETA: antes el test
+# contaba `aria-label="` en TODO el fichero contra el número de `<input`, así
+# que dos aria-label sobre iconos decorativos habrían tapado dos inputs mudos.
+# Ahora se exige la etiqueta DENTRO de cada etiqueta `<input …/>`.
+_ARIA_LABEL_VALUE = re.compile(
+    r"""aria-label\s*=\s*(?:"([^"]+)"|'([^']+)'|\{\s*t\(\s*['"]([^'"]+)['"])""",
+)
+
+
+def _self_closing_tags(src: str, tag: str) -> list[str]:
+    """Devuelve el cuerpo de cada `<tag …/>` del JSX.
+
+    Corta en el `/>` (los `<input>` de React son self-closing) en vez de en el
+    primer `>`: dentro del tag hay flechas (`onChange={(e) => …}`) que llevan
+    `>`. El assert de `<` impide que una extracción mal cerrada se trague el
+    siguiente tag y el test pase por accidente.
+    """
+    bodies: list[str] = []
+    for m in re.finditer(rf"<{tag}\b", src):
+        end = src.find("/>", m.end())
+        assert end != -1, f"<{tag}> en posición {m.start()} sin cierre `/>`."
+        body = src[m.end():end]
+        assert "<" not in body, (
+            f"Extracción dudosa de <{tag}> (hay otro tag dentro): {body[:120]!r}"
+        )
+        bodies.append(body)
+    return bodies
 
 
 # ---------------------------------------------------------------------------
@@ -76,13 +119,24 @@ def test_login_has_min_htmlfor_id_pairs(login_src: str):
     """[reapuntado 2026-07-28] El Login migró a OTP (2026-06-21): los 3 pares htmlFor/id del
     flujo de contraseña murieron con él. El idioma vivo es `aria-label` por input — sustituto
     válido de la asociación label/input para lectores de pantalla. La invariante real: NINGÚN
-    input sin etiquetar (hoy: 2 inputs — correo y código — con 2 aria-label)."""
-    inputs = len(re.findall(r"<input\b", login_src))
-    etiquetados = len(re.findall(r'aria-label\s*=\s*"', login_src))
-    assert inputs >= 2, f"Login OTP debe tener al menos correo y código: {inputs} inputs"
-    assert etiquetados >= inputs, (
-        f"P2-AUDIT-6 regresión: {inputs} inputs pero solo {etiquetados} aria-label — "
-        f"hay inputs sin etiqueta para el lector de pantalla."
+    input sin etiquetar (hoy: 2 inputs — correo y código — con 2 aria-label).
+
+    [P1-I18N-DASHBOARD · 2026-08-15] Acepta `aria-label="X"` y `aria-label={t('X')}`,
+    y ahora comprueba la etiqueta input a input (ver `_ARIA_LABEL_VALUE`)."""
+    campos = _self_closing_tags(login_src, "input")
+    assert len(campos) >= 2, (
+        f"Login OTP debe tener al menos correo y código: {len(campos)} inputs"
+    )
+    mudos = []
+    for i, body in enumerate(campos):
+        m = _ARIA_LABEL_VALUE.search(body)
+        texto = next((g for g in m.groups() if g), "") if m else ""
+        if not texto.strip():
+            id_m = re.search(r'\bid\s*=\s*["\']([^"\']+)["\']', body)
+            mudos.append(id_m.group(1) if id_m else f"input#{i}")
+    assert not mudos, (
+        f"P2-AUDIT-6 regresión: {len(campos)} inputs y estos no tienen aria-label "
+        f"(ni literal ni via t()): {mudos} — quedan mudos para el lector de pantalla."
     )
 
 

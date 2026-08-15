@@ -23,14 +23,33 @@ _Q = _REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions"
 _FLOW = _REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx"
 
 
+# [P1-I18N-DASHBOARD · 2026-08-15] El atributo puede venir en dos GRAFÍAS:
+# el literal de siempre (`label="…"`) o envuelto en el traductor
+# (`label={t('…')}`). Lo que estos tests vigilan es el TEXTO es-DO de las dos
+# etiquetas —que ninguna reclame la IA en exclusiva, que ninguna se llame
+# «completa»—, y ese texto es idéntico en ambas formas: la clave del catálogo
+# ES el español. Anclar a la grafía ponía los 3 tests en rojo el día que la app
+# se volvió multiidioma, sin que la propiedad vigilada hubiera cambiado un ápice.
+_ATTR = r'(?:"([^"]+)"|\{t\(\'([^\']+)\'\)\})'
+
+
+def _attr_value(m: re.Match) -> str:
+    """Devuelve el texto es-DO venga de la comilla o del `t()`."""
+    return next(g for g in m.groups()[-2:] if g is not None)
+
+
 def _labels() -> dict[str, str]:
     """{valor -> label} de las dos RadioCard del paso."""
     src = _Q.read_text(encoding="utf-8")
     out = {}
     for val in ("scratch", "pantry"):
-        m = re.search(rf'value="{val}"[^>]*?\n\s*label="([^"]+)"', src, re.DOTALL)
-        assert m, f"P1-PLANSOURCE-COPY-PARITY: no encuentro el label de `{val}`"
-        out[val] = m.group(1)
+        m = re.search(rf'value="{val}"[^>]*?\n\s*label={_ATTR}', src, re.DOTALL)
+        assert m, (
+            f"P1-PLANSOURCE-COPY-PARITY: no encuentro el label de `{val}`. Se "
+            f"aceptan `label=\"…\"` y `label={{t('…')}}`; si apareció una tercera "
+            f"forma, extender `_ATTR`."
+        )
+        out[val] = _attr_value(m)
     return out
 
 
@@ -79,9 +98,9 @@ def test_the_claim_about_not_reading_the_pantry_stays_true():
     libre también lo consultara, la frase pasaría a ser mentira — este test ata
     la afirmación al comentario que documenta el mecanismo."""
     src = _Q.read_text(encoding="utf-8")
-    m = re.search(r'value="scratch".*?desc="([^"]+)"', src, re.DOTALL)
+    m = re.search(rf'value="scratch".*?desc={_ATTR}', src, re.DOTALL)
     assert m, "P1-PLANSOURCE-COPY-PARITY: no encuentro la descripción de `scratch`"
-    if "no mira" in m.group(1).lower():
+    if "no mira" in _attr_value(m).lower():
         assert "server-side" in src, (
             "P1-PLANSOURCE-COPY-PARITY: el copy afirma que el modo libre no mira la "
             "Nevera, pero el archivo ya no documenta que la inyección del inventario "

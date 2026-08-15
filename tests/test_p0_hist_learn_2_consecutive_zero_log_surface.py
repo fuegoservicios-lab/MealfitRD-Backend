@@ -38,6 +38,7 @@ Cobertura:
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -265,9 +266,20 @@ def test_threshold_ssot_in_cron():
     frontend lo hardcodea con cita explícita. Si alguien cambia el
     threshold del cron sin actualizar el frontend, el chip aparecería
     al threshold viejo. Este test asserta el literal ≥3 sigue presente
-    en cron_tasks — falla si el cron cambia (alerta cross-language)."""
+    en cron_tasks — falla si el cron cambia (alerta cross-language).
+
+    [P1-I18N-DASHBOARD · 2026-08-15] El fuente se resuelve desde `__file__`,
+    no desde el cwd. El `open("cron_tasks.py")` relativo sólo encontraba el
+    archivo con cwd=backend/: invocado desde la raíz del repo el guard moría
+    en `FileNotFoundError` — un rojo que no dice nada del threshold, y que
+    en un runner con cwd distinto podría haberse "arreglado" relajándolo.
+    La propiedad vigilada no cambia: el literal `>= 3` sigue en el cron.
+    (La cita del frontend, `_czl >= 3` en `History.jsx`, sobrevivió intacta a
+    la envoltura `t()` — el copy se traduce, el umbral no es copy.)
+    """
     import re
-    with open("cron_tasks.py", encoding="utf-8") as f:
+    _CRON = Path(__file__).resolve().parent.parent / "cron_tasks.py"
+    with open(_CRON, encoding="utf-8") as f:
         src = f.read()
     # Dos call sites: _build_zero_log_push_payload + el bloque en
     # _record_zero_log que dispara push + flip de status. Ambos deben
