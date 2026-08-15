@@ -35,6 +35,38 @@ calidad defendible es un producto; once con hindi y coreano de terminología
 nutricional sin revisar es una demo. **Añadir el sexto es un JSON y cuatro líneas** —
 ver §6.
 
+### Las etiquetas: sin país, y el código NO sigue a la etiqueta
+
+`P1-I18N-LABEL-NEUTRAL · 2026-08-15`. El selector muestra **«Español», «English»,
+«Português», «Français», «Italiano»** — sin paréntesis de país. La regla:
+
+> El paréntesis existe para **desambiguar**, y no hay nada que desambiguar cuando se
+> ofrece **una sola variante** por idioma.
+
+Nació de un caso concreto: la etiqueta original decía «Español (República Dominicana)»
+y a un cliente español le comunica *«esto no es para ti»* — lo contrario de lo que hace
+falta si el producto se vende fuera de RD. Quitarlo solo del español dejaba a los otros
+cuatro con país, lo que se lee como descuido, así que la regla se aplicó a los cinco.
+
+El día que existan **dos** variantes de una lengua, el paréntesis vuelve **a las dos**:
+«Español (España)» + «Español (Latinoamérica)», nunca a una sola — una lista donde una
+variante lo lleva y su gemela no obliga al usuario a deducir cuál es cuál.
+`test_p1_i18n_dashboard.py::test_a4` enforza ambas direcciones.
+
+**⚠️ El CÓDIGO se queda en `es-DO`, y no es inercia.** `Intl` formatea:
+
+| Locale | Ejemplo |
+|---|---|
+| `es-DO`, `es-419`, `es-MX` | `2,000` · `1,234.5` |
+| `es`, `es-ES` | `2000` · `1234,5` |
+
+República Dominicana usa la convención de EE.UU. «Neutralizar» el código a `es` porque
+la etiqueta se neutralizó movería los separadores de miles y decimales de **toda la base
+actual**, en silencio, porque ningún test de i18n mira cifras. La etiqueta es lo único
+que el usuario lee; el código es un identificador interno con consecuencias de formato.
+Cambiarlo sería una migración de datos deliberada (reescribir `user_profiles.locale`),
+no un renombre. Anclado en `test_a5`.
+
 ## 3. El motor
 
 `frontend/src/i18n/`. Propio, ~250 líneas, **cero dependencias**.

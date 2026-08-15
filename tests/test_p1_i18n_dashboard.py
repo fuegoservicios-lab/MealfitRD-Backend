@@ -44,6 +44,10 @@ _MIGRATION_BACKEND = _REPO_ROOT / "backend" / "migrations" / _MIGRATION_NAME
 # `es-DO` es el único locale SIN catálogo (las claves del código son su texto).
 _BASE_LOCALE = "es-DO"
 
+# Alias legible para el test que explica por qué el CÓDIGO no se neutraliza
+# aunque la ETIQUETA sí (ver test_a5).
+DEFAULT_LOCALE_ES_DO = _BASE_LOCALE
+
 
 def _read(p: Path) -> str:
     assert p.exists(), f"P1-I18N-DASHBOARD: no existe {p}"
@@ -133,6 +137,67 @@ def test_a2_sin_codigos_duplicados():
     assert not dupes, (
         f"P1-I18N-DASHBOARD: códigos duplicados en LOCALES: {sorted(dupes)}. "
         "El selector pintaría dos filas idénticas."
+    )
+
+
+def test_a4_el_parentesis_de_pais_solo_donde_hay_algo_que_desambiguar():
+    """[P1-I18N-LABEL-NEUTRAL · 2026-08-15] Un idioma con UNA sola variante no
+    lleva país; uno con DOS, las dos lo llevan.
+
+    La etiqueta original era «Español (República Dominicana)», y a un cliente
+    español eso le dice «esto no es para ti» — justo lo contrario de lo que hace
+    falta si el producto se vende fuera de RD. Quitarlo solo del español dejaba
+    a los otros cuatro con país, que se lee como descuido; así que la regla es
+    general y esto la enforza en las dos direcciones:
+
+      · Una lengua con una sola variante y país en la etiqueta → sobra el país.
+      · Dos variantes de la misma lengua y solo una con país → el usuario tiene
+        que ADIVINAR cuál es cuál. Es el caso peor y el que más probable es que
+        aparezca al añadir es-ES.
+    """
+    src = _read(_LOCALES_JS)
+    entries = re.findall(
+        r"\{\s*code:\s*'([a-z]{2})-[A-Z]{2}',\s*native:\s*'([^']+)'", src
+    )
+    assert entries, "P1-I18N-DASHBOARD: no pude leer los pares (código, etiqueta)."
+
+    por_lengua: dict[str, list[tuple[str, str]]] = {}
+    for lang, native in entries:
+        por_lengua.setdefault(lang, []).append((lang, native))
+
+    for lang, filas in por_lengua.items():
+        con_pais = [n for _, n in filas if "(" in n]
+        if len(filas) == 1:
+            assert not con_pais, (
+                f"P1-I18N-LABEL-NEUTRAL: «{con_pais[0]}» lleva paréntesis de país "
+                f"siendo la ÚNICA variante de '{lang}'. El paréntesis existe para "
+                "desambiguar; sin gemela no desambigua nada y sí acota el mercado "
+                "(fue el caso de «Español (República Dominicana)»)."
+            )
+        else:
+            assert len(con_pais) == len(filas), (
+                f"P1-I18N-LABEL-NEUTRAL: '{lang}' tiene {len(filas)} variantes pero "
+                f"solo {len(con_pais)} llevan país. O todas o ninguna: una lista "
+                "donde una variante lo lleva y su gemela no obliga al usuario a "
+                "deducir cuál es cuál."
+            )
+
+
+def test_a5_el_codigo_base_sigue_siendo_es_do_por_el_formato_de_numeros():
+    """El CÓDIGO no sigue a la etiqueta, y hay una razón medida.
+
+    `Intl` formatea `es-DO` como 2,000 / 1,234.5 (convención de EE.UU., que es
+    la dominicana) y `es`/`es-ES` como 2000 / 1234,5. «Neutralizar» el código a
+    `es` porque la etiqueta se neutralizó movería los separadores de miles y
+    decimales de TODA la base actual sin que nadie lo pidiera — y encima en
+    silencio, porque ningún test de i18n mira cifras.
+    """
+    assert DEFAULT_LOCALE_ES_DO in _locales_from_ssot(), (
+        f"P1-I18N-DASHBOARD: el código {DEFAULT_LOCALE_ES_DO!r} desapareció de "
+        "LOCALES. Si se cambió a 'es' o 'es-ES', las cifras de todos los usuarios "
+        "actuales pasan de «2,000» a «2000» y de «1,234.5» a «1234,5». Eso es una "
+        "migración de datos visible, no un renombre: exige decidirlo a propósito y "
+        "reescribir la columna `locale` de los perfiles existentes."
     )
 
 
