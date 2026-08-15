@@ -12,6 +12,9 @@ Plumbing: `_pkg_from_product_row` lleva `id` del producto → `_select_market_pa
 lo arrastra al envase elegido → `apply_smart_market_units` lo expone como
 `brand_product_id` del ítem → el picker matchea contra `variant.id` del /match.
 """
+import re
+from pathlib import Path
+
 import pytest
 
 import shopping_calculator as sc
@@ -105,4 +108,71 @@ def test_tapping_default_pins_it():
     jsx = _jsx()
     assert "tócala para fijarla como tu preferida" in jsx, (
         "tocar el default lo convierte en preferencia permanente (persistPref con su id)"
+    )
+
+
+# ── [P2-BRANDS-CHIP-CASCADE · 2026-08-15] El rótulo no se arma a trozos ──────
+
+def _brands_src() -> str:
+    p = (
+        Path(__file__).resolve().parents[2]
+        / "frontend" / "src" / "components" / "dashboard" / "SupermarketBrands.jsx"
+    )
+    assert p.exists(), f"P2-BRANDS-CHIP-CASCADE: no existe {p}"
+    return p.read_text(encoding="utf-8")
+
+
+def test_prefs_arrancan_del_cache_local_no_de_un_objeto_vacio():
+    """El rótulo del chip se armaba en TRES pasos visibles al refrescar.
+
+    Primero «Marcas del súper» a secas, luego «· N/M con opciones» al aterrizar
+    /supermarket/match, y por último «· N elegidas» al aterrizar
+    /supermarket/preferences: dos viajes de red independientes, cada uno
+    reescribiendo el texto.
+
+    El caché local (`readLocalPrefs`) ya contenía la respuesta —lo escribe este
+    mismo componente en cada elección— pero solo se leía en la rama de FALLO del
+    fetch. O sea: en el camino feliz el dato estaba disponible y sin usar
+    mientras la UI esperaba a la red para decir lo mismo.
+
+    Volver a `useState({})` reintroduce el tercer paso, y es un cambio que parece
+    inocuo («inicializar vacío es lo normal»).
+    """
+    src = _brands_src()
+    m = re.search(r"const \[prefs, setPrefs\] = useState\(([^)]*)\)", src)
+    assert m, "P2-BRANDS-CHIP-CASCADE: no encuentro el useState de `prefs`."
+    inicial = m.group(1).strip()
+    assert inicial == "readLocalPrefs", (
+        f"P2-BRANDS-CHIP-CASCADE: `prefs` arranca en {inicial!r}. Debe ser "
+        "`readLocalPrefs` (la FUNCIÓN, sin paréntesis: inicialización perezosa, "
+        "para no leer localStorage en cada render). Con `{}` el sufijo «· N "
+        "elegidas» espera un segundo viaje de red y el rótulo se arma en tres "
+        "pasos visibles."
+    )
+
+
+def test_el_servidor_sigue_mandando_sobre_el_cache_local():
+    """El caché local es un ARRANQUE optimista, no la verdad.
+
+    Si el fetch de preferencias dejara de sobrescribir `prefs`, la elección
+    hecha en otro dispositivo nunca llegaría — y el bug sería mucho peor que el
+    parpadeo que este cambio arregla.
+    """
+    src = _brands_src()
+    # Se ancla a la LLAMADA (`fetchWithAuth('…')`), no a la ruta suelta: la ruta
+    # aparece antes en un comentario que explica de dónde salen las preferencias,
+    # y un `find` de la cadena pelada aterrizaba en esa prosa — la misma trampa
+    # que ya mordió al guard del remontaje de idioma.
+    i_fetch = src.find("fetchWithAuth('/api/supermarket/preferences')")
+    assert i_fetch != -1, (
+        "P2-BRANDS-CHIP-CASCADE: desapareció la llamada "
+        "`fetchWithAuth('/api/supermarket/preferences')`. Si cambió de forma, "
+        "actualiza este ancla."
+    )
+    ventana = src[i_fetch:i_fetch + 900]
+    assert "setPrefs(flat)" in ventana and "setPrefsSource('server')" in ventana, (
+        "P2-BRANDS-CHIP-CASCADE: la respuesta del servidor ya no sobrescribe "
+        "`prefs`. El caché local solo debe cubrir la ventana entre el montaje y "
+        "esa respuesta; si deja de corregirse, una elección hecha en otro "
+        "dispositivo no aparece nunca."
     )
