@@ -177,6 +177,10 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 
 [P1-PLAN-MODE · 2026-08-11] El usuario puede usar la app SOLO como contador de macros/diario (estilo MyFitnessPal): paso 0 del wizard (¿plan o contador?, rama corta de 10 pasos cuyos 12 campos saltados quedan AUSENTES — no se inventan) e interruptor en Configuración → Capacidades con el plan ya creado. La pausa es DOS capas: gate SQL en el pickup del chunk worker (`plan_mode='tracking'` en `user_profiles` — LA que detiene el gasto, porque el pickup no lee flags del jsonb) + cancelación de la cola (los 5 estados resucitables, INCLUIDO `pending_user_action`: el recovery cron los revive a las 12h). Orden flag-first en ambas direcciones. El plan pausado conserva `plan_data` con snapshot `_paused_prev_generation_status` (guard I8: jamás restaurar `complete` con days=[]). Motor SSOT [`backend/plan_mode.py`](backend/plan_mode.py); knob `MEALFIT_PLAN_MODE_SWITCH`; ventana de reanudación `MEALFIT_PLAN_PAUSE_MAX_RESUME_DAYS`. Nav del dashboard por modo: SSOT `frontend/src/config/dashboardNav.js`. Tests [`test_p1_plan_mode.py`](backend/tests/test_p1_plan_mode.py) (backend, 22) + `frontend/src/__tests__/PlanMode.contract.test.jsx` (15).
 
+### `P1-VIEWPORT-ZOOM-LOCK` (el pinch-zoom bloqueado, a sabiendas)
+
+[P1-VIEWPORT-ZOOM-LOCK · 2026-07-09 · doc 2026-08-15] `user-scalable=no` + `maximum-scale=1`. **Decisión del dueño, YA revertida una vez** (`P2-A11Y-VIEWPORT-ZOOM` lo quitó por a11y y se revirtió: feel de app nativa). Trade-off WCAG 1.4.4 aceptado; la vía real es la escala de fuente del SO (`text-size-adjust: 100%`). **Lighthouse lo reporta en CADA auditoría** y es lo que deja la nota en 91: no lo "arregles". Test [`test_p1_viewport_zoom_lock.py`](backend/tests/test_p1_viewport_zoom_lock.py).
+
 ### `i18n: es-DO permanente`
 
 [P3-I18N-DEFERRED · 2026-05-13] El producto es 100% español dominicano (es-DO). UI copy, mensajes de validación, toasts, aria-labels, error handlers — todo hardcoded en literal strings es-DO. **NO hay infraestructura i18n** (cero deps `react-i18next` / `i18next` / `react-intl`) y es intencional.
@@ -236,8 +240,6 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 | `MEALFIT_CB_LOCAL_HEALTH_TTL_S` | 1.0 | TTL del cache local in-process antes de re-consultar Redis/DB |
 | `MEALFIT_CB_KV_STALENESS_HOURS` | 2 | Edad mínima de `last_failure` para que el sweep P2-NEW-D considere stale |
 | `MEALFIT_CB_KV_STALENESS_SWEEP_INTERVAL_MIN` | 60 | Frecuencia del cron del sweep |
-
----
 
 ---
 
