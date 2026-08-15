@@ -142,8 +142,19 @@ def _glob_ignores(text: str) -> list[str]:
     "patron",
     [
         # Los que enlaza `manifest.json` (icono del PWA instalado + shortcuts).
+        #
+        # [P3-APPLE-ICON-180-HUERFANO · 2026-08-15] Sale `apple-touch-icon-180.png`,
+        # y sale porque la premisa de esta lista era FALSA para él: `manifest.json`
+        # nunca lo nombró — sólo a `apple-touch-icon.png` (4 veces) y a `-192`.
+        # `index.html` usa `-180-v2`. Cero referencias en todo el repo, así que el
+        # fichero se borró (23.802 B) y su línea de `globIgnores` con él.
+        #
+        # Un `globIgnore` que ya no puede casar con nada no es inofensivo: se lee
+        # como «esto ya está excluido» y manda a buscar los bytes a otro sitio. Es
+        # la misma trampa que este mismo P-fix encontró con la entrada muerta de
+        # `og-image.png`. El test `test_globignores_no_lista_ficheros_inexistentes`
+        # de abajo es el que vigila justo eso.
         "apple-touch-icon.png",
-        "apple-touch-icon-180.png",
         "apple-touch-icon-192.png",
         # Los que enlaza `index.html` (BRAND-FAVICON-B les dio nombre nuevo porque
         # iOS cachea el apple-touch-icon a nivel de SO e ignora el `?v=`).
