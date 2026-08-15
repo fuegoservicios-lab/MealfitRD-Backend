@@ -250,6 +250,71 @@ def _resolve_swap_slot_key(meal_type, slots: dict) -> "str | None":
     return None
 
 
+def _plan_mode_for_chat(user_id):
+    """El modo del usuario (`'plan'` | `'tracking'`), para el encuadre del chat.
+
+    [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Wrapper fino sobre
+    `plan_mode.get_plan_mode` que existe por dos razones: (a) los tests lo
+    monkeypatchean sin tocar la DB, y (b) el fail-open vive AQUÍ y no en cada
+    caller — si la lectura falla, se asume 'plan', que es el comportamiento
+    histórico y el de la inmensa mayoría de usuarios. Degradar el chat de todos
+    por un fallo puntual de DB sería peor que el bug que esto arregla.
+    """
+    from plan_mode import get_plan_mode
+    return str((get_plan_mode(user_id) or {}).get("plan_mode") or "plan")
+
+
+def _plan_context_for_chat(user_id, current_plan):
+    """[P1-AGENT-WELCOME-TRACKING · 2026-08-14] El bloque del plan para el system
+    prompt, con el ENCUADRE que corresponde al modo del usuario.
+
+    EL BUG QUE CIERRA. Los dos paths del chat (stream y no-stream) inyectaban el
+    plan con el literal «tiene este plan de comidas activo» / «Plan activo» —
+    incondicional. La pausa del modo contador conserva `plan_data` a propósito
+    (es lo que permite «Reanudar»), así que el modelo recibía un plan PAUSADO
+    jurado como vigente y contestaba «¿qué me toca hoy?» con él. La mitad visible
+    (el saludo del frontend recitando la cena) la reportó el dueño con captura;
+    esta es la misma mentira un piso más abajo.
+
+    PAUSADO ≠ AMPUTADO: el plan viaja igual en ambos modos. El usuario puede
+    preguntar qué tenía su plan, y el agente debe poder responder y ofrecer
+    reanudar — la puerta de vuelta que P1-PLAN-MODE dejó abierta. Lo que cambia
+    es el encuadre: en pausa, el modelo tiene PROHIBIDO presentarlo como lo que
+    toca hoy.
+
+    Es un helper y no dos f-strings inline por la lección de P1-CHAT-PAST-DAYS:
+    «la divergencia entre ambos [paths] ya ha causado bugs antes».
+    """
+    plan_json = json.dumps(_prune_plan_for_chat(current_plan))
+    try:
+        en_pausa = _plan_mode_for_chat(user_id) == "tracking"
+    except Exception as e:
+        logger.warning(f"[P1-AGENT-WELCOME-TRACKING] plan_mode ilegible, asumo 'plan': {e}")
+        en_pausa = False
+
+    if en_pausa:
+        return (
+            "\n\nCONTEXTO CRÍTICO: El usuario puso su plan de comidas EN PAUSA — "
+            "eligió usar la app solo como contador de macros y diario (modo "
+            "seguimiento). El plan se conserva para cuando quiera reanudarlo:\n"
+            f"{plan_json}\n\n"
+            "NO presentes las comidas de este plan como lo que le toca comer hoy, "
+            "ni lo recites al saludar, ni sugieras cambios sobre él como si "
+            "estuviera vigente: hoy el usuario decide libremente qué come y tu "
+            "papel es ayudarle a registrarlo y a cuadrar sus macros. Si ÉL "
+            "pregunta por su plan pausado, respóndele con estos datos y "
+            "recuérdale que puede reanudarlo desde su Historial (es gratis y "
+            "retoma donde quedó)."
+        )
+    return (
+        "\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas "
+        f"activo:\n{plan_json}\n\n"
+        "Usa esta información para responder con exactitud preguntas sobre lo que "
+        "le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado "
+        "(como desayuno, almuerzo o cena)."
+    )
+
+
 def _prune_plan_for_chat(plan):
     """[P2-GENCHUNK-SPEED · 2026-06-01] Devuelve una copia shallow de `plan`
     sin las claves derivadas/pesadas de `_CHAT_PLAN_PRUNE_KEYS`, para reducir
@@ -5684,7 +5749,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
         # de serializar (shopping agregados, coherence telemetry, archived days).
-        system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(_prune_plan_for_chat(current_plan))}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
+        # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Encuadre por modo (helper
+        # compartido con el stream): en pausa, el plan viaja pero NO como lo de hoy.
+        system_prompt += _plan_context_for_chat(user_id, current_plan)
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
@@ -6089,7 +6156,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
         # _prune_plan_for_chat) antes de serializar — paridad con el path no-stream.
-        system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(_prune_plan_for_chat(current_plan))}\n"
+        # [P1-AGENT-WELCOME-TRACKING · 2026-08-14] Mismo helper que el path
+        # no-stream — la divergencia entre ambos ya costó bugs (P1-CHAT-PAST-DAYS).
+        system_prompt += _plan_context_for_chat(user_id, current_plan)
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
