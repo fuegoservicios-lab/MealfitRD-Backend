@@ -66,6 +66,25 @@ def _proactive_tz_offset_min() -> int:
         validator=lambda v: 0 <= v <= 720,
     )
 
+def _usuario_en_modo_contador(user_id) -> bool:
+    """[P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] ¿Este usuario apagó la generación?
+
+    El coach proactivo era el único camino que no pasa por `_plan_context_for_chat`,
+    así que necesita su propia lectura del modo. Reusa `plan_mode.get_plan_mode`
+    —la MISMA fuente que el chat— en vez de consultar `user_profiles` por su cuenta:
+    dos lecturas del mismo campo drift ean en cuanto una de las dos aprende algo.
+
+    Fail-open a False (asumir 'plan'): un fallo de DB no puede cambiar el mensaje
+    que reciben todos los usuarios normales, que son la inmensa mayoría.
+    """
+    try:
+        from plan_mode import get_plan_mode
+        return str((get_plan_mode(user_id) or {}).get("plan_mode") or "plan") == "tracking"
+    except Exception as e:
+        logger.warning(f"[P2-CHAT-PLAN-TOOLS-PAUSE] plan_mode ilegible para {user_id}: {e}")
+        return False
+
+
 def get_active_users_for_proactive() -> list:
     """Busca session_ids que pertenezcan a usuarios registrados con actividad reciente."""
     try:
@@ -443,11 +462,24 @@ def run_proactive_checks():
                 else:
                     # Enviar mensaje especial: No comió nada
                     logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró NADA. Generando nudge indulgente...")
+                    # [P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] Este era el UNICO camino del
+                    # coach que no pasa por `_plan_context_for_chat`, y su oferta —«restamos
+                    # lo de hoy de tu nevera como si lo hubieras cocinado»— presupone un plan
+                    # que prescribio algo. En modo contador no existe «lo de hoy»: restar de
+                    # la Nevera «como si lo hubieras cocinado» no tiene referente.
+                    #
+                    # El nudge NO se apaga: recordar que registres es exactamente para lo que
+                    # sirve el contador. Lo que cae es la oferta anclada al plan.
+                    _en_pausa = _usuario_en_modo_contador(user_id)
+                    _cierre = ("\"Veo que no registraste nada hoy, ¿se te paso anotar o comiste fuera?\""
+                               if _en_pausa else
+                               "\"Veo que no registraste nada hoy, ¿restamos lo de hoy de tu nevera "
+                               "como si lo hubieras cocinado o comiste fuera?\"")
                     prompt = f"""
 Eres tu nutricionista IA. Son las {trigger_time_str} de la noche.
 He notado que el paciente no ha registrado NINGUNA comida en todo el día en su diario de Bioboros.
 Escríbele un mensaje corto (máximo 2 líneas) muy amistoso e indulgente al estilo WhatsApp preguntándole:
-"Veo que no registraste nada hoy, ¿restamos lo de hoy de tu nevera como si lo hubieras cocinado o comiste fuera?"
+{_cierre}
 No uses demasiados emojis. Sé directo, breve y empático.
 """
             else:

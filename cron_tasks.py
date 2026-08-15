@@ -20159,10 +20159,22 @@ def _detect_chronic_deferrals() -> None:
                    week_number,
                    COUNT(*)::int AS deferral_count,
                    MAX(created_at) AS last_at
-            FROM chunk_deferrals
+            FROM chunk_deferrals cd
             WHERE created_at > NOW() - make_interval(hours => %s)
               AND reason = 'temporal_gate'
               AND meal_plan_id IS NOT NULL
+              -- [P2-PUSH-RESPECTS-PAUSE · 2026-08-15] Quien apagó la generación no
+              -- recibe avisos de que su plan «parece atrasado». Sus filas siguen
+              -- dentro de la ventana horas después de pausar, y esos reintentos son
+              -- el RESULTADO de la pausa, no una avería: el push le decía que
+              -- revisara su zona horaria por un plan que él mismo apagó.
+              -- Mismo `NOT EXISTS` que el nudge de zero-log y el freeze sweep; el
+              -- filtro va en SQL para no construir destinatarios que luego haya que
+              -- acordarse de podar en Python.
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_profiles up
+                  WHERE up.id = cd.user_id AND up.plan_mode = 'tracking'
+              )
             GROUP BY user_id, meal_plan_id, week_number
             HAVING COUNT(*) >= %s
             """,
@@ -30340,7 +30352,14 @@ __PLAN_MODE_GATE__
                                             user_id=user_id,
                                             title="Tu plan tiene compras urgentes",
                                             body=f"Generamos los días {days_offset+1}-{days_offset+days_count} pero te faltan ingredientes. Revisa tu lista de compras.",
-                                            url="/shopping-list"
+                                            # [P2-PUSH-RESPECTS-PAUSE · 2026-08-15] Era
+                                            # "/shopping-list", que NO existe en App.jsx:
+                                            # tocar el push abría un 404 justo después de
+                                            # prometerle al usuario su lista. Era el único
+                                            # de los 18 deeplinks del fichero que no
+                                            # apuntaba a /dashboard — un valor huérfano se
+                                            # detecta comparándolo con sus hermanos.
+                                            url="/dashboard/shopping"
                                         )
 
                                     for d in new_days:

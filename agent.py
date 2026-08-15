@@ -5610,8 +5610,18 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     _chat_total_started_at = _time_chat_total.monotonic()
     _chat_total_outcome = "ok"
 
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
+    #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
+    #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
+    #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
+    #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
+    #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
+
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
     memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
+
     
     # === RAG INJECTION (con Query Routing inteligente) ===
     user_facts_text = ""
@@ -5691,7 +5701,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     if _chat_prompt_static_prefix():
         system_prompt = CHAT_AGENT_INLINE_PROMPT
         system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
-        system_prompt += build_tools_instructions(user_id)
+        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context()
         system_prompt += build_circadian_context(schedule_type)
@@ -5706,7 +5716,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
         if rag_context:
             system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions(user_id)
+        system_prompt += build_tools_instructions(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -5759,12 +5769,6 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 num_days=_vp_num_days, multiplier=_vp_multiplier,
             )
             shopping_delta_str = ", ".join(cleaned_shop)
-
-    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El modo se resuelve UNA vez por
-    # turno y se deriva el DATO que apaga las secciones prescriptivas. Se calcula
-    # ANTES del primer consumidor (la lista de compras): definirlo mas abajo daba
-    # NameError en los dos paths.
-    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
 
     # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
     # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera
@@ -6024,6 +6028,14 @@ from sentiment_classifier import classify_sentiment
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis") -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
+    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14 · subido P2-CHAT-PLAN-TOOLS-PAUSE
+    #  2026-08-15] El modo se resuelve UNA vez por turno y se deriva el DATO que
+    #  apaga las secciones PRESCRIPTIVAS del prompt. Vive al TOPE de la funcion,
+    #  donde solo depende de sus parametros: cada vez que un consumidor nuevo
+    #  aparecia mas arriba habia que volver a moverlo, y una de esas veces se
+    #  colo un NameError. Aqui ya no puede quedar por debajo de nadie.
+    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
+
     memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
     
     # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
@@ -6122,7 +6134,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if _chat_prompt_static_prefix():
         system_prompt = _base_inline
         system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
-        system_prompt += build_tools_instructions_stream(user_id)
+        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
         # --- bloques dinámicos (volátiles) al final ---
         system_prompt += build_temporal_context(local_date=local_date, tz_offset=tz_offset)
         system_prompt += build_circadian_context(schedule_type)
@@ -6142,7 +6154,7 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             system_prompt += f"\n\n{sentiment_result['instruction']}"
         system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
         if rag_context: system_prompt += f"\n{rag_context}"
-        system_prompt += build_tools_instructions_stream(user_id)
+        system_prompt += build_tools_instructions_stream(user_id, plan_en_pausa=bool(current_plan) and plan_vigente is None)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -6195,12 +6207,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 num_days=_vp_num_days, multiplier=_vp_multiplier,
             )
             shopping_delta_str = ", ".join(cleaned_shop)
-
-    # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] El modo se resuelve UNA vez por
-    # turno y se deriva el DATO que apaga las secciones prescriptivas. Se calcula
-    # ANTES del primer consumidor (la lista de compras): definirlo mas abajo daba
-    # NameError en los dos paths.
-    plan_vigente = _plan_vigente_para_prompt(user_id, current_plan)
 
     # [P1-CHAT-PAUSED-PROMPT-BLOCKS · 2026-08-14] En pausa la lista de compras del
     # plan deja de ser una obligacion pendiente. El inventario NO cambia: la Nevera

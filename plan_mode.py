@@ -337,6 +337,26 @@ def resume_plan_generation(user_id: str) -> dict:
     if not PLAN_MODE_SWITCH_ENABLED:
         return {"plan_mode": "plan", "skipped": "switch_off"}
 
+    # 0. [P2-PAUSE-CLOCK-BEFORE-RESET · 2026-08-15] LEER el reloj antes de pisarlo.
+    #    El paso 1 estampa `plan_mode_changed_at = NOW()` (su CASE entra SIEMPRE al
+    #    reanudar, porque reanudar siempre viene de 'tracking'), así que medir la
+    #    pausa DESPUÉS daba 0 días invariablemente y `plan_expired` era código
+    #    inalcanzable: un usuario que volvía a los seis meses recibía «la generación
+    #    continúa donde quedó» y se le reencolaba un plan cuyas fechas son historia.
+    #
+    #    Se adelanta la LECTURA, no el paso 1: el orden de la bandera es
+    #    load-bearing (ver su comentario). Un reloj puesto a cero antes de leerlo
+    #    no mide nada, sólo confirma que lo acabas de poner a cero.
+    _reloj = execute_sql_query(
+        """
+        SELECT GREATEST(0, EXTRACT(EPOCH FROM (NOW() - plan_mode_changed_at)) / 86400.0)::int
+                   AS paused_days
+        FROM user_profiles WHERE id = %s
+        """,
+        (user_id,), fetch_one=True,
+    ) or {}
+    paused_days = int(_reloj.get("paused_days") or 0)
+
     # 1. Bandera primero: encolar con el gate puesto deja chunks que el pickup ignora.
     execute_sql_write(
         """
@@ -379,16 +399,9 @@ def resume_plan_generation(user_id: str) -> dict:
     #    puesto dejaría chunks pending que el pickup ignora — invisibles.
     _revive = _revive_paused_chunks(user_id)
 
-    # 4. ¿Venció la ventana? Se calcula sobre plan_mode_changed_at (la pausa pudo no
-    #    tener plan vivo). El caller (endpoint) decide shiftear o pedir plan nuevo.
-    row = execute_sql_query(
-        """
-        SELECT GREATEST(0, EXTRACT(EPOCH FROM (NOW() - plan_mode_changed_at)) / 86400.0)::int AS paused_days
-        FROM user_profiles WHERE id = %s
-        """,
-        (user_id,), fetch_one=True,
-    ) or {}
-    paused_days = int(row.get("paused_days") or 0)
+    # 4. ¿Venció la ventana? Aritmética sobre el snapshot del paso 0 — la columna
+    #    `plan_mode_changed_at` ya está pisada por el paso 1, así que volver a
+    #    consultarla aquí devolvería 0 por construcción.
     expired = paused_days > _resume_max_days()
 
     restored = filas[0].get("restored_status") if filas else None
