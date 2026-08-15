@@ -462,3 +462,60 @@ def test_no_border_on_mobile_where_the_panel_is_the_screen():
         "completa ese 1px no delimita nada: solo roba un píxel de contenido por "
         "cada lado."
     )
+
+
+# ── 5. El fallback de carga no repinta el fondo ─────────────────────────────
+
+_INDEX_CSS = _SRC / "index.css"
+_DASH_CSS = _SRC / "components" / "dashboard" / "DashboardLayout.module.css"
+
+
+def test_the_page_loader_does_not_paint_over_the_ambient_background():
+    """[P2-LOADER-FLAT-PATCH · 2026-08-15] `.page-loader` va TRANSPARENTE.
+
+    El fondo del dashboard en oscuro no es un color plano: `.container` pinta
+    `--bg-page` MÁS una capa `::before` con cuatro glows radiales. El fallback de
+    Suspense se pintaba con el color plano y a pantalla completa, así que durante
+    el instante que tarda el chunk de la página en llegar tapaba los glows con un
+    rectángulo mate del ancho de `.mainContent` (max-width 1200px, centrado) —
+    visible como «una parte de la base del dashboard de diferente color».
+
+    Volver a ponerle `background: var(--bg-page)` parece lo correcto (¡es el
+    token del fondo!) y es justo el cambio que reintroduce el parche. El fondo ya
+    lo pintan el contenedor y, como último respaldo, `body`.
+    """
+    css = _INDEX_CSS.read_text(encoding="utf-8")
+    m = re.search(r"\.page-loader\s*\{(.*?)\}", css, re.DOTALL)
+    assert m, "P2-LOADER-FLAT-PATCH: no encuentro la regla `.page-loader`."
+    fondo = re.search(r"background(?:-color)?:\s*([^;]+);", m.group(1))
+    assert fondo, (
+        "P2-LOADER-FLAT-PATCH: `.page-loader` dejó de declarar `background`. "
+        "Declararlo `transparent` EXPLÍCITAMENTE es la documentación de que la "
+        "omisión es deliberada; sin la línea, el próximo lector la añade."
+    )
+    assert "transparent" in fondo.group(1), (
+        f"P2-LOADER-FLAT-PATCH: `.page-loader` pinta {fondo.group(1).strip()!r}. "
+        "Debe ser `transparent`: sus tres usos viven dentro de un contenedor que "
+        "ya pinta el fondo (con sus glows encima), y un relleno opaco los tapa "
+        "mientras carga el chunk."
+    )
+
+
+def test_the_dark_dashboard_background_really_is_layered():
+    """El guard de arriba solo tiene sentido si el fondo TIENE capas.
+
+    Si algún día el dashboard oscuro pasara a ser un color plano, exigir que el
+    loader sea transparente dejaría de proteger nada — y este test lo diría en
+    vez de quedarse en verde vigilando un problema que ya no existe.
+    """
+    css = _DASH_CSS.read_text(encoding="utf-8")
+    assert re.search(
+        r'html\[data-theme="dark"\]\)\s*\.container::before\s*\{[^}]*radial-gradient',
+        css,
+        re.DOTALL,
+    ), (
+        "P2-LOADER-FLAT-PATCH: el fondo ambiental del dashboard oscuro "
+        "(`.container::before` con glows radiales) desapareció. Si el fondo pasó "
+        "a ser plano, `.page-loader` ya puede pintarlo sin diferencia visible y "
+        "este par de guards debe revisarse."
+    )
