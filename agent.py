@@ -343,6 +343,13 @@ def _plan_vigente_para_prompt(user_id, current_plan):
     Fail-open al comportamiento histórico: si el modo no se puede leer, se asume
     'plan'. Degradar el chat de todos por un fallo de DB sería peor que el bug.
     """
+    # [P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] Sin plan que gatear no hay nada que
+    # preguntar: el resultado sería `None` en los dos modos. Este helper subió al
+    # tope de ambas funciones de chat, así que corre en TODOS los turnos —
+    # incluidos los de invitados y los de usuarios sin plan; sin este corte serían
+    # otros tantos roundtrips a `user_profiles` que no cambian nada.
+    if not current_plan or not user_id or user_id == "guest":
+        return current_plan
     try:
         if _plan_mode_for_chat(user_id) == "tracking":
             return None
