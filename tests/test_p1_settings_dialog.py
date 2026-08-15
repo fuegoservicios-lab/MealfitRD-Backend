@@ -366,3 +366,99 @@ def test_the_a11y_hook_can_yield_to_a_layer_above_it():
         "P1-SETTINGS-DIALOG: falta el test de comportamiento de las capas "
         "anidadas. Este fichero es un parser: no puede pulsar ESC."
     )
+
+
+# ── 4. El marco: tamaño y canto ─────────────────────────────────────────────
+
+_DIALOG_CSS = _SRC / "components" / "dashboard" / "SettingsDialog.module.css"
+
+
+def test_the_panel_has_a_real_border_and_not_just_a_shadow():
+    """[P1-SETTINGS-PANEL-CRISP · 2026-08-15] El panel nació SIN borde.
+
+    Su único canto era una sombra de 70px de difuminado, y sobre un backdrop
+    oscuro eso no delimita nada: panel oscuro contra fondo oscuro, sin línea que
+    los separe. El dueño lo describió como que «se veía blando», y tenía razón —
+    no era la sombra, era la ausencia de borde.
+    """
+    css = _DIALOG_CSS.read_text(encoding="utf-8")
+    panel = re.search(r"\.panel\s*\{(.*?)\n\}", css, re.DOTALL)
+    assert panel, "P1-SETTINGS-PANEL-CRISP: no encuentro la regla `.panel`."
+    assert re.search(r"border:\s*1px solid", panel.group(1)), (
+        "P1-SETTINGS-PANEL-CRISP: `.panel` perdió su borde. Una sombra difusa da "
+        "profundidad pero NO da canto; sin el borde, la ventana vuelve a fundirse "
+        "con el fondo en tema oscuro."
+    )
+
+
+def test_the_dark_border_is_stronger_than_the_global_token_on_purpose():
+    """El `#334155` NO es drift: es una medición.
+
+    `var(--border)` (#1F2937) contra el panel #0B1120 da 1,28 de contraste — a
+    1px, invisible. #334155 da 1,82, que se ve sin parecer un contorno duro.
+    El token global está calibrado para superficies DENTRO de la página, donde el
+    fondo circundante es el mismo; aquí la ventana flota sobre un backdrop
+    atenuado que apaga todo alrededor.
+
+    Este test existe porque el color a pelo INVITA a «limpiarlo» devolviéndolo al
+    token, que es precisamente el cambio que reintroduce el problema.
+    """
+    css = _DIALOG_CSS.read_text(encoding="utf-8")
+    assert re.search(
+        r'html\[data-theme="dark"\]\)\s*\.panel\s*\{[^}]*border-color:\s*#334155',
+        css,
+        re.DOTALL | re.IGNORECASE,
+    ), (
+        "P1-SETTINGS-PANEL-CRISP: el override de borde en tema oscuro desapareció "
+        "o volvió a `var(--border)`. Medido: var(--border) da 1,28 de contraste "
+        "contra el panel (invisible a 1px) y #334155 da 1,82. Si quieres cambiar "
+        "el valor, mídelo antes — no lo devuelvas al token global, que está "
+        "calibrado para tarjetas sobre la página y no para una ventana flotante."
+    )
+
+
+def test_the_panel_is_not_full_screen_on_desktop():
+    """Que quepa aire alrededor es lo que la hace leerse como ventana.
+
+    Se redujo de 1040×780 a 960×720 por petición del dueño. El guard no fija las
+    cifras exactas —eso convertiría cualquier ajuste fino en un fallo— sino el
+    TECHO: si alguien vuelve a subirla por encima de lo que un portátil de 13"
+    puede enmarcar, la ventana deja de parecer una ventana.
+    """
+    css = _DIALOG_CSS.read_text(encoding="utf-8")
+    panel = re.search(r"\.panel\s*\{(.*?)\n\}", css, re.DOTALL)
+    assert panel
+    ancho = re.search(r"width:\s*min\((\d+)px", panel.group(1))
+    alto = re.search(r"height:\s*min\((\d+)vh,\s*(\d+)px\)", panel.group(1))
+    assert ancho and alto, (
+        "P1-SETTINGS-PANEL-CRISP: `.panel` ya no declara width/height con `min()`. "
+        "Ese `min()` es lo que impide que la ventana desborde en pantallas chicas."
+    )
+    assert int(ancho.group(1)) <= 1000, (
+        f"P1-SETTINGS-PANEL-CRISP: la ventana mide {ancho.group(1)}px de ancho. "
+        "Por encima de ~1000px vuelve a ocupar casi todo el escritorio y deja de "
+        "leerse como ventana (era 1040 y por eso se bajó)."
+    )
+    assert int(alto.group(1)) <= 86, (
+        f"P1-SETTINGS-PANEL-CRISP: la ventana ocupa {alto.group(1)}vh de alto. "
+        "Sin aire arriba y abajo el marco desaparece en pantallas bajas."
+    )
+
+
+def test_no_border_on_mobile_where_the_panel_is_the_screen():
+    """En móvil el panel ES la pantalla: ese 1px no separa de nada.
+
+    Dibujaría una línea pegada a los cantos del teléfono y le robaría un píxel al
+    contenido por los cuatro lados. Es la misma razón por la que ese bloque ya
+    ponía `border-radius: 0`.
+    """
+    css = _DIALOG_CSS.read_text(encoding="utf-8")
+    movil = re.search(r"@media \(max-width: 768px\)\s*\{(.*)", css, re.DOTALL)
+    assert movil, "P1-SETTINGS-PANEL-CRISP: falta el bloque móvil."
+    panel_movil = re.search(r"\.panel\s*\{(.*?)\n    \}", movil.group(1), re.DOTALL)
+    assert panel_movil, "P1-SETTINGS-PANEL-CRISP: falta `.panel` dentro del bloque móvil."
+    assert re.search(r"border:\s*0", panel_movil.group(1)), (
+        "P1-SETTINGS-PANEL-CRISP: el panel móvil recuperó borde. A pantalla "
+        "completa ese 1px no delimita nada: solo roba un píxel de contenido por "
+        "cada lado."
+    )
