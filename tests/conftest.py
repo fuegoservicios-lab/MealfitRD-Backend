@@ -382,8 +382,34 @@ def seeded_user_profile():
         )
 
         # 3. user_inventory  (enough staples so pantry checks pass)
+        #
+        # [P2-E2E-PANTRY-STOCK · 2026-08-15] El pollo se dimensiona por lo que COMEN
+        # los mocks, no "a ojo". `test_chunked_30days_e2e` encola 9 chunks × 3 días y
+        # su mock pide "100g pollo" TODOS los días: 2.700 g. Con 1.000 g las reservas
+        # —que se acumulan tras cada merge y NO se liberan al completar (los
+        # `release_chunk_reservations` son todos rutas de error)— agotaban la fila en
+        # el chunk 5, y en el 6 la fila DESAPARECÍA de la nevera viva
+        # (`db_inventory.py`: `available = max(qty - reserved, 0)` y luego
+        # `if qty <= 0: continue`). El guard duro post-merge lo reportaba como
+        # "Ingredientes COMPLETAMENTE INEXISTENTES: 100g pollo" — un mensaje que
+        # acusa de ausencia lo que en realidad estaba RESERVADO por los chunks
+        # anteriores del mismo plan.
+        #
+        # POR QUÉ APARECIÓ AHORA y no antes: hasta `P1-PANTRY-NAME-RESOLUTION`
+        # (2026-08-07) la reserva era un no-op silencioso — buscaba por igualdad
+        # exacta y 'Pechuga de pollo' ≠ 'Pechuga de Pollo', así que la nevera del
+        # fixture nunca se vaciaba. Aquel P-fix arregló el descuento y destapó que
+        # este fixture estaba 2,7× corto. El test no se rompió: se volvió honesto.
+        #
+        # ⚠️ NO se arregla stubeando `reserve_plan_ingredients` como hacen los tests
+        # hermanos. Este es el E2E: la reserva real ES cobertura, y precisamente del
+        # camino que cambió hace ocho días. Se arregla dándole de comer.
+        #
+        # 5.000 g = 2.700 g necesarios + margen. El margen no es adorno: si algún día
+        # `pantry_names_match` resuelve "150g res" contra la fila `Res` (hoy NO lo
+        # hace, por tokens distintos), ese ingrediente empezará a reservar también.
         pantry_items = [
-            ("Pechuga de Pollo", 1000, "g"),
+            ("Pechuga de Pollo", 5000, "g"),
             ("Arroz", 2000, "g"),
             ("Habichuelas", 500, "g"),
             ("Res", 800, "g"),
