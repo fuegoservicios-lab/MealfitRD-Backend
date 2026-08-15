@@ -55,11 +55,6 @@ def login_src() -> str:
 
 
 @pytest.fixture(scope="module")
-def register_src() -> str:
-    return _REGISTER_JSX.read_text(encoding="utf-8")
-
-
-@pytest.fixture(scope="module")
 def reset_src() -> str:
     return _RESET_JSX.read_text(encoding="utf-8")
 
@@ -117,23 +112,38 @@ def test_login_success_box_has_status_role(login_src: str):
 
 
 # ---------------------------------------------------------------------------
-# 2. Register.jsx: ≥4 pairs (name, email, password, confirm)
+# 2. Register.jsx: RETIRADO — la página ya no existe
 # ---------------------------------------------------------------------------
-def test_register_has_min_htmlfor_id_pairs(register_src: str):
-    n = _count_htmlfor_id_pairs(register_src)
-    assert n >= 4, (
-        f"P2-AUDIT-6 regresión: Register.jsx tiene {n} pairs htmlFor/id "
-        f"(esperado ≥4 — name, email, password, confirm)."
-    )
+# [P2-DEAD-CODE-SWEEP · 2026-08-15] Aquí vivían dos tests sobre `Register.jsx`
+# (≥4 pares htmlFor/id, y `role="alert"` en el errorBox).
+#
+# `P1-EMAIL-OTP · 2026-06-21` retiró el registro con formulario: el login por
+# código crea la cuenta, y `App.jsx` dejó `/register` como
+# `<Navigate to="/login" replace />`. Desde entonces `Register.jsx` no tenía
+# ruta, ni import, ni chunk en `dist/` — y estos tests llevaban ~2 meses
+# vigilando la accesibilidad de una página que nadie podía abrir. Un test verde
+# sobre un fichero muerto no protege a ningún usuario: sólo hace creer que sí.
+#
+# LA COBERTURA NO SE PIERDE, que es la condición para poder borrarlos. Las dos
+# invariantes siguen ancladas donde SÍ hay formulario: `Login.jsx` (el OTP) y
+# `ResetPassword.jsx` conservan sus propios tests de pares htmlFor/id y de
+# `role="alert"` en este mismo fichero.
+#
+# El fichero se borró; el test de abajo impide que vuelva sin una decisión.
+def test_register_jsx_sigue_borrado():
+    """Resucitar `Register.jsx` sería reabrir un formulario que el producto retiró.
 
-
-def test_register_error_box_has_alert_role(register_src: str):
-    assert re.search(
-        r'<div[^>]*className=\{styles\.errorBox\}[^>]*role\s*=\s*["\']alert["\']',
-        register_src,
-    ), (
-        "P2-AUDIT-6 regresión: errorBox en Register.jsx no tiene "
-        "`role=\"alert\"`."
+    No es una prohibición dogmática: si algún día vuelve el registro con
+    contraseña, este test debe caer y hay que quitarlo A LA VEZ que se
+    restauran sus guardas de a11y y de longitud mínima. Lo que impide es que
+    reaparezca por inercia —un revert, un merge— con nadie mirando.
+    """
+    assert not _REGISTER_JSX.exists(), (
+        f"{_REGISTER_JSX} volvió a existir. `P1-EMAIL-OTP` retiró el registro con "
+        "formulario (el login por código crea la cuenta) y `/register` es un "
+        "redirect. Si el registro con contraseña vuelve de verdad, restaura "
+        "también sus tests de a11y (pares htmlFor/id, role=alert) y el de mínimo "
+        "8 caracteres de test_p3_prod_audit_6.py — se retiraron con el fichero."
     )
 
 
@@ -181,10 +191,8 @@ def test_anchor_present_in_login(path_label, getter):
     )
 
 
-def test_anchor_present_in_register(register_src: str):
-    assert "P2-AUDIT-6" in register_src, (
-        "P2-AUDIT-6 regresión: anchor perdido en Register.jsx."
-    )
+# [P2-DEAD-CODE-SWEEP · 2026-08-15] `test_anchor_present_in_register` retirado con
+# el fichero. Ver la lápida de la sección 2.
 
 
 def test_anchor_present_in_reset(reset_src: str):

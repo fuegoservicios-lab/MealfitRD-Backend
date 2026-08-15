@@ -70,9 +70,11 @@ def proactive_src() -> str:
     return _PROACTIVE_PY.read_text(encoding="utf-8")
 
 
-@pytest.fixture(scope="module")
-def register_src() -> str:
-    return _REGISTER_JSX.read_text(encoding="utf-8")
+# [P2-DEAD-CODE-SWEEP · 2026-08-15] Fixture `register_src` retirada con su test.
+# Dejarla habría sido peor que inútil: al ser `scope="module"` y perezosa, no
+# fallaría hasta que alguien la pidiera — o sea que un test futuro la usaría
+# creyendo que `Register.jsx` existe y reventaría con FileNotFoundError lejos de
+# aquí.
 
 
 @pytest.fixture(scope="module")
@@ -163,21 +165,20 @@ def test_no_datetime_utcnow_in_production_paths():
 # Section 3: P3-PASSWORD-MIN-LENGTH
 # ============================================================================
 
-def test_register_password_min_8(register_src: str):
-    """Register.jsx debe exigir mínimo 8 caracteres."""
-    # Patrón legacy prohibido
-    assert "password.length < 6" not in register_src, (
-        "P3-PASSWORD-MIN-LENGTH regresión: Register.jsx volvió a aceptar "
-        "passwords de 6 caracteres. OWASP recomienda ≥ 8."
-    )
-    assert "password.length < 8" in register_src, (
-        "P3-PASSWORD-MIN-LENGTH: Register.jsx no exige mínimo 8 caracteres."
-    )
-    # Error message coherente
-    assert "al menos 8 caracteres" in register_src, (
-        "P3-PASSWORD-MIN-LENGTH: el error message de Register.jsx aún "
-        "menciona 6 caracteres. Sync con el check `< 8`."
-    )
+# [P2-DEAD-CODE-SWEEP · 2026-08-15] `test_register_password_min_8` RETIRADO.
+#
+# `P1-EMAIL-OTP · 2026-06-21` sustituyó el registro con formulario por login con
+# código: **el alta ya no pide contraseña**. `Register.jsx` quedó sin ruta, sin
+# import y sin chunk, y se borró en este pase. Un test de longitud mínima sobre un
+# formulario que no existe no protege ninguna cuenta.
+#
+# La regla OWASP ≥8 NO se pierde: sigue anclada donde todavía se ESTABLECE una
+# contraseña, que es `ResetPassword.jsx` — el test de abajo, que ya existía y
+# comprueba exactamente lo mismo (prohíbe `< 6`, exige `< 8` y que el mensaje
+# concuerde). Esa es la condición que hacía seguro retirar este: la invariante
+# tenía otro sitio donde vivir.
+#
+# Si el registro con contraseña vuelve, este test vuelve con él.
 
 
 def test_reset_password_min_8(reset_password_src: str):
