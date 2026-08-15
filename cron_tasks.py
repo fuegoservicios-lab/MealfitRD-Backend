@@ -34560,11 +34560,37 @@ def try_unfreeze_plan_for_user(user_id: str) -> bool:
         if not _env_bool("MEALFIT_PLAN_FREEZE_ENABLED", True) or not user_id:
             return False
         row = execute_sql_query(
-            "SELECT id::text AS plan_id, plan_data->>'_frozen_at' AS frozen_at "
+            "SELECT id::text AS plan_id, plan_data->>'_frozen_at' AS frozen_at, "
+            "plan_data->>'generation_status' AS gstatus "
             "FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
             (user_id,), fetch_one=True,
         )
         if not row or not row.get("frozen_at"):
+            return False
+        # [P1-UNFREEZE-RESPECTS-PAUSE · 2026-08-14] MISMO criterio que el sweep
+        # (`_plan_freeze_sweep`, más abajo): si el plan no está en un estado
+        # "vivo", este hook no lo toca. `paused_by_user` no está en la tupla.
+        #
+        # POR QUÉ HACÍA FALTA. La pausa del modo contador NO limpia `_frozen_at`
+        # —`plan_mode.py` ni lo menciona; su propio comentario CITA ese flag como
+        # precedente de "una bandera que el pickup no lee"—, así que un plan
+        # pausado seguía pareciendo aquí "solo congelado". Pulsar «Ya compré la
+        # lista» le corría las CUATRO anclas del plan (justo el dato del que
+        # depende «retoma exactamente donde quedó»), revivía la cola por detrás
+        # de la pausa —la condición exacta de la alerta
+        # `plan_paused_with_live_queue`— y mandaba un push «¡Tu plan está de
+        # vuelta!» de un plan que el usuario había apagado.
+        #
+        # La defensa ya existía en el sweep y faltaba en este camino. Se comparte
+        # la tupla en vez de escribir aquí un `!= 'paused_by_user'`: dos listas
+        # de estados driftean (`canonicalize_diet_type` llegó a tener tres, y la
+        # del filtro olvidó 'vegetariana').
+        if str(row.get("gstatus") or "") not in _PLAN_FREEZE_ACTIVE_STATUSES:
+            logger.debug(
+                f"[P1-UNFREEZE-RESPECTS-PAUSE] deshielo omitido para user "
+                f"{user_id[:8]}: generation_status={row.get('gstatus')!r} no es un "
+                "estado activo (p.ej. el usuario tiene el plan en pausa)."
+            )
             return False
         inv = execute_sql_query(
             "SELECT ingredient_name FROM user_inventory WHERE user_id = %s AND quantity > 0",
