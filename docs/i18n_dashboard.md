@@ -117,14 +117,36 @@ const getTabs = () => [{ label: t('Plan') }]; // ✅
 Un array de copy evaluado al importar corre **antes** de que el catálogo exista. Y en
 es-DO se ve perfecto, así que pasa cualquier revisión visual. `i18n:check` lo detecta.
 
-### Por qué se **remonta** al cambiar de idioma
+### Cambiar de idioma REPINTA — no remonta (y por qué se retiró el remontaje)
 
-`LocaleBoundary` (App.jsx) usa `key={locale}`: cambiar de idioma remonta el subárbol de
-rutas. No es exceso — hay copy que se calcula fuera de componentes y subárboles
-memoizados, y un re-render no alcanza a ninguno de los dos. El precio es perder estado
-transitorio de la vista en un acto deliberado y único. Los providers (sesión, TanStack
-Query, wizard) quedan **por encima** de la frontera; `BrowserRouter` relee
-`window.location` al montar, así que la ruta se conserva.
+`P1-I18N-SWAP-SMOOTH · 2026-08-15`. La primera versión envolvía las rutas en un
+`LocaleBoundary` con `key={locale}` para forzar un remontaje completo. La intención era
+defensiva: había copy calculado fuera de componentes y subárboles memoizados que un
+re-render no alcanzaría.
+
+**Se retiró porque el precio se sentía en cada cambio** y el peligro resultó no existir.
+El dueño lo describió como que «se siente raro»: estando en Configuración, el diálogo se
+volvía a montar, repetía su animación de apertura y el scroll saltaba arriba — justo
+mientras mirabas la lista de idiomas.
+
+Lo que se midió antes de quitarlo:
+
+| Riesgo supuesto | Realidad |
+|---|---|
+| Subárboles memoizados no se enteran | **`React.memo` NO bloquea la propagación de contexto.** Los 3 componentes memoizados usan `useT()`, así que se re-renderizan igual. |
+| Módulos que importan `t` sin el hook | Son funciones llamadas en render (`getMacros()`, `textoNeveraBaja()`) o toasts imperativos (`confirmToast`, `renderCoherenceWarnings`), que leen el catálogo **vivo** en el momento de la llamada. |
+| `useMemo` con deps vacías capturando copy | **El único hueco real**: 2 casos en `Plan.jsx` (pantalla de carga). Ahora dependen de `locale`. |
+
+Queda lo natural: el texto cambia en el sitio, sin parpadeo ni salto de scroll.
+
+### El clic también tiene que responder al instante
+
+`setLocale` espera al `import()` del catálogo — 100-300 ms la primera vez que se elige
+cada idioma. Sin nada más, pulsabas una fila y **no pasaba nada** durante ese rato (ni la
+marca se movía), y luego cambiaba todo de golpe: se leía como que el clic no había
+registrado. Por eso `Settings.jsx` lleva `pendingLocale`, que mueve la marca de selección
+**ya** y se limpia en un `finally` — si la carga falla, la marca vuelve al idioma que de
+verdad está activo. Un optimismo que no sabe retroceder es una mentira.
 
 ## 4. Persistencia: el idioma sigue al **usuario**
 

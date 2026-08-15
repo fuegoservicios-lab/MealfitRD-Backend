@@ -54,6 +54,19 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
+def _strip_js_comments(src: str) -> str:
+    """Quita `/* … */` y `// …` para que un guard mire CÓDIGO y no prosa.
+
+    Hace falta de verdad: los comentarios de este repo describen con precisión lo
+    que está prohibido —citando el patrón exacto— así que un regex sobre el
+    fichero crudo encuentra la advertencia y la confunde con la reincidencia.
+    Pasó al escribir `test_g`: el comentario que explica la retirada del
+    remontaje menciona `key={locale}` literalmente y ponía el test en rojo.
+    """
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    return re.sub(r"(?m)^\s*//.*$", "", src)
+
+
 # ---------------------------------------------------------------------------
 # Extractores — uno por lenguaje. Cada uno ancla su sitio.
 # ---------------------------------------------------------------------------
@@ -434,4 +447,97 @@ def test_f_existe_el_script_i18n_check_y_su_npm_script():
         "P1-I18N-DASHBOARD: `i18n:check` desapareció de los scripts de "
         "package.json. Un validador que nadie puede invocar por nombre no se "
         "invoca."
+    )
+
+
+# ---------------------------------------------------------------------------
+# G) El cambio de idioma REPINTA, no remonta
+# ---------------------------------------------------------------------------
+
+_APP_JSX = _FRONTEND / "src" / "App.jsx"
+
+
+def test_g_no_hay_frontera_de_remontaje_por_idioma():
+    """[P1-I18N-SWAP-SMOOTH · 2026-08-15] `key={locale}` está prohibido en App.jsx.
+
+    La primera versión envolvía las rutas en un `LocaleBoundary` con
+    `key={locale}` para forzar un remontaje completo al cambiar de idioma. La
+    intención era defensiva; el efecto era que el diálogo de Configuración se
+    volvía a montar, repetía su animación de apertura y el scroll saltaba arriba
+    justo mientras el usuario miraba la lista de idiomas.
+
+    Se midió antes de retirarlo y el peligro no existía:
+
+      · `React.memo` NO bloquea la propagación de contexto — los 3 componentes
+        memoizados usan `useT()` y se re-renderizan igual.
+      · Los módulos que importan `t` sin el hook son funciones llamadas en render
+        o toasts imperativos: leen el catálogo VIVO al invocarse.
+      · El único hueco real eran 2 `useMemo` con deps vacías en Plan.jsx, que
+        ahora dependen de `locale` (ver test_g2).
+
+    Este guard existe porque reintroducir el remontaje es LA reacción natural
+    ante el primer reporte de «una pantalla se quedó en el idioma viejo» — y
+    sería cambiar un bug puntual y localizable por una molestia en cada cambio.
+    Si aparece ese reporte, lo correcto es arreglar ESE sitio, no remontar todo.
+    """
+    # Se mira el CÓDIGO, no la prosa. La primera versión de este guard se puso
+    # roja contra sí misma: el comentario que explica qué se retiró menciona
+    # `key={locale}` literalmente, y el regex no distingue una advertencia de una
+    # reincidencia. Un guard que lee comentarios vigila los comentarios.
+    src = _strip_js_comments(_read(_APP_JSX))
+    assert "LocaleBoundary" not in src, (
+        "P1-I18N-SWAP-SMOOTH: volvió `LocaleBoundary` a App.jsx. Remontar el "
+        "árbol al cambiar de idioma destruye el estado de la vista (scroll y "
+        "sección abierta del diálogo de Configuración, que es justo donde el "
+        "usuario está cuando cambia de idioma). Si una pantalla concreta se "
+        "queda en el idioma viejo, arregla esa pantalla."
+    )
+    assert not re.search(r"key=\{locale\}", src), (
+        "P1-I18N-SWAP-SMOOTH: apareció un `key={locale}` en App.jsx. Es la forma "
+        "de forzar un remontaje por idioma, y se retiró a propósito."
+    )
+
+
+def test_g2_los_memo_de_copy_dependen_del_locale():
+    """Sin el remontaje, un `useMemo` con deps vacías CONGELA su copy.
+
+    Es el único hueco que dejaba la retirada de la frontera, y vive en la
+    pantalla de carga de Plan.jsx. Se manifiesta solo si el usuario cambia de
+    idioma mientras se genera un plan — raro, pero real, y silencioso.
+    """
+    plan = _read(_FRONTEND / "src" / "pages" / "Plan.jsx")
+    for fn in ("getLoadingSteps", "getLoadingTips"):
+        m = re.search(rf"useMemo\(\(\) => {fn}\(\), \[([^\]]*)\]\)", plan)
+        assert m, (
+            f"P1-I18N-SWAP-SMOOTH: no encuentro el `useMemo` de `{fn}` en "
+            "Plan.jsx. Si cambió de forma, actualiza este guard."
+        )
+        assert "locale" in m.group(1), (
+            f"P1-I18N-SWAP-SMOOTH: `{fn}` volvió a memoizarse con deps vacías. "
+            "Sin la frontera de remontaje, eso deja la pantalla de carga "
+            "congelada en el idioma que hubiera al montar."
+        )
+
+
+def test_g3_el_selector_marca_la_fila_antes_de_esperar_al_catalogo():
+    """`setLocale` espera al `import()` del catálogo: 100-300 ms la primera vez.
+
+    Sin optimismo, pulsabas una fila y no pasaba NADA durante ese rato —ni la
+    marca se movía— y luego cambiaba todo de golpe. Se leía como que el clic no
+    había registrado, y era la mitad de la sensación de «raro».
+    """
+    settings = _read(_FRONTEND / "src" / "pages" / "Settings.jsx")
+    assert "pendingLocale" in settings, (
+        "P1-I18N-SWAP-SMOOTH: desapareció `pendingLocale` de Settings.jsx. Sin "
+        "él la marca de selección no se mueve hasta que baja el catálogo, y el "
+        "clic parece no haber registrado."
+    )
+    assert re.search(r"\(pendingLocale \?\? locale\) === opt\.code", settings), (
+        "P1-I18N-SWAP-SMOOTH: la fila marcada dejó de mirar `pendingLocale`. El "
+        "optimismo tiene que llegar al RENDER, no quedarse en el estado."
+    )
+    assert re.search(r"finally\s*\{\s*setPendingLocale\(null\)", settings), (
+        "P1-I18N-SWAP-SMOOTH: `pendingLocale` ya no se limpia en un `finally`. "
+        "Si la carga del catálogo falla, la marca se queda en un idioma que NO "
+        "está activo — un optimismo que no sabe retroceder es una mentira."
     )
