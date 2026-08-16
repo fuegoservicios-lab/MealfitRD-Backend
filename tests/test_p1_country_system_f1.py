@@ -456,3 +456,319 @@ def test_finding5_guard_vale_tambien_para_vegan():
 
     hits = _DOMINICAN_TOKEN_RX.findall(scoped)
     assert not hits, f"sobrevivientes NO documentados (vegan): {hits}"
+
+
+# ── T3: bloque de país en el contexto compartido + jueces ───────────────────
+#
+# `_country_context_block(country)` es el fan-in: se computa UNA vez dentro de
+# `_build_shared_context` y viaja a planner+day-gen vía `ctx['country_context']` — el MISMO
+# patrón que `diet_directive_context` (P1-DAYGEN-DIET-CONVERGE), cablearlo en los consumidores
+# por separado sería duplicarlo. DO/None/desconocido ⇒ "" (byte-identidad del tramo dinámico).
+# Los 3 jueces (self-critique cultural_score, juez culinario, feedback de retry del swap en
+# agent.py) derivan país por su propio spine y re-anclan SOLO la nacionalidad, preservando el
+# REQUISITO/rúbrica — mismo principio que T2 aplicó a las reglas 2/19 del day-gen ("la
+# REQUISICIÓN se preserva, solo se re-ancla su nacionalidad").
+
+def _cuerpo_build_shared_context() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def _build_shared_context")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    return sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+
+
+def test_country_context_block_do_o_desconocido_es_vacio():
+    import graph_orchestrator as go
+    assert go._country_context_block("DO") == ""
+    assert go._country_context_block(None) == ""
+    assert go._country_context_block("xx") == ""  # fail-safe de canonicalize_country ⇒ DO
+
+
+def test_country_context_block_beta_contiene_name_es():
+    import graph_orchestrator as go
+    assert _BETA_CCS, "no hay países beta en COUNTRY_PROFILES — fixture vacío"
+    for cc in _BETA_CCS:
+        name_es = constants.COUNTRY_PROFILES[cc]["name_es"]
+        out = go._country_context_block(cc)
+        assert out != "", f"{cc}: bloque vacío para un país beta"
+        assert name_es in out, f"{cc}: name_es {name_es!r} ausente del bloque"
+
+
+def test_build_shared_context_llama_country_context_block_una_sola_vez():
+    """El fan-in de planner+day-gen: UNA sola llamada a `_country_context_block(` dentro del
+    cuerpo de `_build_shared_context` — cablearlo en los consumidores por separado (planner Y
+    day-gen invocándolo cada uno) sería duplicarlo (brief T3, Interfaces)."""
+    cuerpo = _cuerpo_build_shared_context()
+    n = cuerpo.count("_country_context_block(")
+    assert n == 1, f"se esperaba exactamente 1 llamada a _country_context_block(, hallada(s) {n}"
+
+
+def test_build_shared_context_deriva_pais_via_ssot():
+    _assert_deriva_pais_via_ssot(_cuerpo_build_shared_context(), "_build_shared_context")
+
+
+def test_build_shared_context_expone_country_context_key():
+    cuerpo = _cuerpo_build_shared_context()
+    assert '"country_context"' in cuerpo, (
+        "_build_shared_context no expone ctx['country_context'] — el bloque de país nacería "
+        "pero no llegaría a ningún consumidor (clase P2-DREAMING-PLAN-DEADWRITE)."
+    )
+
+
+def test_planner_y_daygen_consumen_country_context():
+    """Los 2 fan-out de `_build_shared_context` (planner + day-gen) deben LEER
+    `ctx['country_context']` — si el bloque nace pero nadie lo interpola en el prompt, es un
+    dead-write (misma clase que P2-DREAMING-PLAN-DEADWRITE: `_dream_plan_constraints` se
+    computaba pero nunca se inyectaba)."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    n = src.count("ctx['country_context']")
+    assert n >= 2, (
+        f"se esperaban >=2 usos de ctx['country_context'] (planner + day-gen), hallados {n}"
+    )
+
+
+def test_cero_form_data_get_country_crudo_en_agent_py():
+    """Espejo de F0's `test_el_dato_viaja_pero_el_motor_no_lo_lee_todavia` (que ya cubre
+    graph_orchestrator.py), aplicado a agent.py — T3 añade los primeros lectores de país en
+    este archivo (feedback de retry del swap)."""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    lectores = re.findall(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]", src)
+    assert not lectores, (
+        "agent.py lee form_data['country']/form_data.get('country') crudo — todo lector debe "
+        "pasar por country_for_form_data (T1), el mismo drift que P1-DIET-CANON-SSOT pagó."
+    )
+
+
+# ── T3: cultural_score (self-critique) ───────────────────────────────────────
+#
+# Dos sitios ligados: el texto del SystemMessage (`_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION`,
+# constante estática a import-time) y el `Field(description=...)` de `cultural_score` en
+# `CritiqueEvaluation` (BaseModel, schema enviado al LLM vía with_structured_output — el LLM
+# LEE esa descripción como parte del contrato de salida). Mecanismo elegido: helper
+# `_critique_evaluator_artifacts_for_country` devuelve AMBOS (instrucción + clase modelo) desde
+# una cache por país; DO es literalmente los objetos globales (mismo `is`).
+
+def test_critique_evaluator_do_es_byte_identico():
+    import graph_orchestrator as go
+    instruction, model_cls = go._critique_evaluator_artifacts_for_country("DO")
+    assert instruction is go._CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION
+    assert model_cls is go.CritiqueEvaluation
+    assert "3. Coherencia cultural Dominicana (cultural_score)" in instruction
+    assert (
+        model_cls.model_fields["cultural_score"].description
+        == "Coherencia Cultural Dominicana (1-10)"
+    )
+
+
+def test_critique_evaluator_pais_desconocido_cae_a_do():
+    import graph_orchestrator as go
+    instruction, model_cls = go._critique_evaluator_artifacts_for_country("XX")
+    assert instruction is go._CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION
+    assert model_cls is go.CritiqueEvaluation
+
+
+def test_critique_evaluator_beta_contiene_name_es():
+    import graph_orchestrator as go
+    for cc in _BETA_CCS:
+        name_es = constants.COUNTRY_PROFILES[cc]["name_es"]
+        instruction, model_cls = go._critique_evaluator_artifacts_for_country(cc)
+        assert instruction is not go._CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION
+        assert "Coherencia cultural Dominicana" not in instruction
+        assert name_es in instruction
+        assert model_cls is not go.CritiqueEvaluation
+        assert name_es in model_cls.model_fields["cultural_score"].description
+        # el resto del schema se HEREDA intacto — no se reinventa el modelo entero.
+        assert (
+            model_cls.model_fields["visual_score"].description
+            == go.CritiqueEvaluation.model_fields["visual_score"].description
+        )
+
+
+def test_critique_evaluator_beta_memoizado_por_pais():
+    import graph_orchestrator as go
+    a = go._critique_evaluator_artifacts_for_country("ES")
+    b = go._critique_evaluator_artifacts_for_country("es")  # canonicaliza también en minúscula
+    assert a[0] is b[0]
+    assert a[1] is b[1]
+
+
+def _cuerpo_self_critique_node() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("async def self_critique_node")
+    fin = sin_comentarios.find("\nasync def ", ini + 10)
+    return sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+
+
+def test_self_critique_node_deriva_pais_via_ssot():
+    cuerpo = _cuerpo_self_critique_node()
+    assert "_critique_evaluator_artifacts_for_country(" in cuerpo, (
+        "self_critique_node no invoca _critique_evaluator_artifacts_for_country — "
+        "cultural_score se quedaría anclado a RD para países beta."
+    )
+    _assert_deriva_pais_via_ssot(cuerpo, "self_critique_node")
+
+
+def test_self_critique_node_no_muta_el_evaluator_payload_hardcoded():
+    """DO byte-identity de la construcción del SystemMessage/legacy-path: la línea que arma
+    `evaluator_payload` sigue leyendo el símbolo `_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION` (para
+    DO ese nombre resuelve, vía shadow LOCAL en la función, al MISMO objeto global — ver
+    test_critique_evaluator_do_es_byte_identico) — anclado también por
+    test_p3_cost_cut_v2.py::test_evaluator_uses_payload_list_when_cache_on, que este cambio NO
+    debe romper."""
+    cuerpo = _cuerpo_self_critique_node()
+    assert "SystemMessage(content=_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION)" in cuerpo
+    assert "_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION + \"\\n\\n\" + human_content" in cuerpo
+
+
+# ── T3: juez culinario ────────────────────────────────────────────────────────
+
+def test_culinary_judge_rubric_do_es_byte_identico():
+    import graph_orchestrator as go
+    assert go._culinary_judge_rubric_for_country("DO") is go._CULINARY_JUDGE_RUBRIC
+    assert "Eres un juez culinario dominicano experto" in go._CULINARY_JUDGE_RUBRIC
+
+
+def test_culinary_judge_rubric_pais_desconocido_cae_a_do():
+    import graph_orchestrator as go
+    assert go._culinary_judge_rubric_for_country("garbage") is go._CULINARY_JUDGE_RUBRIC
+
+
+def test_culinary_judge_rubric_beta_contiene_name_es():
+    import graph_orchestrator as go
+    for cc in _BETA_CCS:
+        name_es = constants.COUNTRY_PROFILES[cc]["name_es"]
+        out = go._culinary_judge_rubric_for_country(cc)
+        assert out != go._CULINARY_JUDGE_RUBRIC
+        assert "Eres un juez culinario dominicano experto" not in out
+        assert (
+            f"Eres un juez culinario experto en la cocina de {name_es} y cocina internacional"
+            in out
+        )
+        # el resto de la rúbrica (ejemplos + reglas duras) sobrevive intacto — no se reescribe
+        # todo el prompt, solo se re-ancla la frase de apertura.
+        assert "REGLA DURA DE HORARIO" in out
+        assert "TIPOS CANÓNICOS DE VIOLACIÓN" in out
+
+
+def test_culinary_judge_rubric_beta_memoizada():
+    import graph_orchestrator as go
+    a = go._culinary_judge_rubric_for_country("ES")
+    b = go._culinary_judge_rubric_for_country("ES")
+    assert a is b
+
+
+def test_run_culinary_judge_acepta_country_con_default_do():
+    """El default 'DO' preserva a TODOS los callers preexistentes (scripts/calibrate_culinary_
+    judge.py llama con 1 solo argumento) — nadie queda roto por la firma nueva."""
+    import inspect
+    import graph_orchestrator as go
+    sig = inspect.signature(go.run_culinary_judge)
+    assert "country" in sig.parameters
+    assert sig.parameters["country"].default == "DO"
+
+
+def test_run_culinary_judge_callsite_deriva_pais_via_ssot():
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    i = sin_comentarios.index('if CULINARY_JUDGE_GUARD != "off":')
+    cuerpo = sin_comentarios[i:i + 400]
+    _assert_deriva_pais_via_ssot(cuerpo, "callsite de run_culinary_judge")
+    assert "run_culinary_judge(plan, " in cuerpo, (
+        "el callsite productivo debe pasar el país derivado como 2º argumento"
+    )
+
+
+# ── T3: feedback de retry del swap (agent.py) ─────────────────────────────────
+#
+# Extraídos a helpers PUROS (`_swap_slot_feedback_suffix`, `_swap_raw_staple_feedback_suffix`)
+# para poder testearlos funcionalmente SIN invocar el pipeline de swap completo (que exige LLM)
+# — el brief pide "functional or parser per lo testable sin llamadas LLM"; una función pura de
+# (país, ...) -> str es lo más barato y honesto de verificar.
+
+def test_swap_slot_feedback_do_es_byte_identico():
+    import agent
+    out = agent._swap_slot_feedback_suffix("DO", "Cena", ["ejemplo"])
+    assert (
+        out
+        == "\n\n🕒 COHERENCIA DE HORARIO (OBLIGATORIO): el plato anterior no encaja con el horario "
+        "«Cena»: ejemplo. Propón un plato que SÍ corresponda a ese momento "
+        "del día para un dominicano — el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno); "
+        "la cena es ligera (evita 'arroz de noche' y comidas de desayuno). Mantén los macros objetivo."
+    )
+
+
+def test_swap_slot_feedback_pais_desconocido_es_como_do():
+    import agent
+    assert agent._swap_slot_feedback_suffix("xx", "Cena", []) == agent._swap_slot_feedback_suffix("DO", "Cena", [])
+
+
+def test_swap_slot_feedback_beta_contiene_name_es():
+    import agent
+    for cc in _BETA_CCS:
+        name_es = constants.COUNTRY_PROFILES[cc]["name_es"]
+        out = agent._swap_slot_feedback_suffix(cc, "Cena", ["ejemplo"])
+        assert "para un dominicano" not in out
+        assert name_es in out
+        # la REGLA en sí (arroz/locrio/pasta, 'arroz de noche') es territorio de F1-T4
+        # (SLOT_INAPPROPIATE_FOODS por país) — sobrevive intacta, NO es scope de esta task.
+        assert "el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno)" in out
+        assert "'arroz de noche'" in out
+
+
+def test_swap_raw_staple_feedback_do_es_byte_identico():
+    import agent
+    out = agent._swap_raw_staple_feedback_suffix("DO", "🍳 RETRY PLATO TRANSFORMADO", "motivo")
+    assert out == (
+        "\n\n🍳 RETRY PLATO TRANSFORMADO (OBLIGATORIO): el plato anterior es un staple sin transformar "
+        "(motivo). Conviértelo en una preparación dominicana REAL — guiso, "
+        "locrio, revoltillo, arepitas, bollitos, al horno con majado — manteniendo los "
+        "macros objetivo y los mismos ingredientes base."
+    )
+
+
+def test_swap_raw_staple_feedback_pais_desconocido_es_como_do():
+    import agent
+    a = agent._swap_raw_staple_feedback_suffix("garbage", "M", "r")
+    b = agent._swap_raw_staple_feedback_suffix("DO", "M", "r")
+    assert a == b
+
+
+def test_swap_raw_staple_feedback_beta_contiene_name_es():
+    import agent
+    for cc in _BETA_CCS:
+        name_es = constants.COUNTRY_PROFILES[cc]["name_es"]
+        out = agent._swap_raw_staple_feedback_suffix(cc, "🍳 RETRY PLATO TRANSFORMADO", "motivo")
+        assert "una preparación dominicana REAL" not in out
+        assert name_es in out
+        # el REQUISITO (transformar el staple) sigue intacto — mismo trato que T2 dio a la
+        # regla 19 del day-gen: se preserva la orden, se re-ancla solo la nacionalidad.
+        assert "Conviértelo en una preparación real de la cocina de" in out
+
+
+def test_swap_meal_deriva_pais_una_sola_vez_via_ssot():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def swap_meal(form_data")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    cuerpo = sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+    n = cuerpo.count("country_for_form_data(form_data)")
+    assert n == 1, f"swap_meal debe derivar el país UNA sola vez, hallado {n}×"
+    assert not _RAW_COUNTRY_RX.search(cuerpo)
+
+
+def test_swap_meal_wire_los_dos_guards_con_el_pais_derivado():
+    """Los DOS guards de retry (slot-horario ~L2762, raw-staple ~L2843) deben reusar la MISMA
+    variable derivada (`_swap_country`), no recomputar country_for_form_data cada uno (eso
+    haría fallar el test de arriba, que exige exactamente 1 derivación)."""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert "_swap_slot_feedback_suffix(_swap_country" in src
+    assert "_swap_raw_staple_feedback_suffix(_swap_country" in src

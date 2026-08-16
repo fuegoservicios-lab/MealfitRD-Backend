@@ -157,7 +157,10 @@ def test_contract_guard_block_rejects_plan(monkeypatch):
 # Capa 2 — P1-CULINARY-JUDGE (juicio LLM, mockeado)
 # ---------------------------------------------------------------------------
 def _fake_judge_report_factory(*, severidad="high"):
-    async def _fake_run_culinary_judge(plan):
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] `run_culinary_judge` ganó un 2º parámetro
+    # (`country`, default 'DO' — F1-T3); el fake debe aceptarlo aunque no lo use (el
+    # comportamiento mockeado no depende del país).
+    async def _fake_run_culinary_judge(plan, country="DO"):
         return graph_orchestrator.CulinaryJudgeReport(violations=[
             graph_orchestrator.CulinaryViolation(
                 day=1, meal="Almuerzo", tipo="tecnica_impropia",

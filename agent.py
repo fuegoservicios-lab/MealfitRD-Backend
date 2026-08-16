@@ -992,6 +992,59 @@ def _repair_swap_candidate_macros(meal_dump: dict, targets: dict, db):
         return (False, None, None)
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Feedback de retry del swap por país. Extraídos a
+# funciones PURAS (país, ...) -> str — testeables sin invocar el pipeline LLM completo, y
+# reusadas por las DOS ramas de `swap_meal` (guard de slot-horario, guard de raw-staple) desde
+# la MISMA `_swap_country` derivada una sola vez.
+def _swap_slot_feedback_suffix(country: str, meal_type: str, viol: list) -> str:
+    """Sufijo de retry del backstop P1-SLOT-APPROPRIATENESS (swap fuera de horario). DO/país
+    desconocido ⇒ texto actual EXACTO — ancla «para un dominicano» (byte-identidad). País BETA
+    ⇒ el mismo texto con la nacionalidad reenmarcada a `name_es`; la REGLA en sí (arroz/locrio/
+    pasta en almuerzo/cena, 'arroz de noche') queda intacta — es el espejo prompt de
+    `SLOT_INAPPROPRIATE_FOODS`, territorio de F1-T4 (gates culturales por país), no de esta task.
+
+    tooltip-anchor: _swap_slot_feedback_suffix (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    quien = (
+        "para un dominicano" if canon == "DO"
+        else f"en {COUNTRY_PROFILES.get(canon, {}).get('name_es', canon)}"
+    )
+    return (
+        f"\n\n🕒 COHERENCIA DE HORARIO (OBLIGATORIO): el plato anterior no encaja con el horario "
+        f"«{meal_type}»: {'; '.join(viol)}. Propón un plato que SÍ corresponda a ese momento "
+        f"del día {quien} — el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno); "
+        f"la cena es ligera (evita 'arroz de noche' y comidas de desayuno). Mantén los macros objetivo."
+    )
+
+
+def _swap_raw_staple_feedback_suffix(country: str, marker: str, reason) -> str:
+    """Sufijo de retry del backstop P2-AUDIT-V5-BATCH-RAW-STAPLE-SWAP (staple sin transformar).
+    DO/país desconocido ⇒ texto actual EXACTO — ancla «una preparación dominicana REAL» (byte-
+    identidad). País BETA ⇒ se preserva el REQUISITO (transformar el staple), solo se re-ancla
+    la nacionalidad y las técnicas de ejemplo pasan a vocabulario genérico — mismo tratamiento
+    que F1-T2 le dio a la regla 19 del day-gen (regla íntegra, ejemplos internacionales).
+
+    tooltip-anchor: _swap_raw_staple_feedback_suffix (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        prep = "una preparación dominicana REAL"
+        tecnicas = "guiso, locrio, revoltillo, arepitas, bollitos, al horno con majado"
+    else:
+        name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+        prep = f"una preparación real de la cocina de {name_es} o internacional"
+        tecnicas = "guiso, salteado, revoltillo, panqueque/tortita, croqueta, al horno"
+    return (
+        f"\n\n{marker} (OBLIGATORIO): el plato anterior es un staple sin transformar "
+        f"({str(reason)[:80]}). Conviértelo en {prep} — "
+        f"{tecnicas} — manteniendo los "
+        "macros objetivo y los mismos ingredientes base."
+    )
+
+
 def swap_meal(form_data: dict, surface: str = "individual"):
     """Sustituye una comida por otra que cumpla los targets del slot.
 
@@ -1007,6 +1060,11 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     meal_type = form_data.get("meal_type", "Comida")
     target_calories = form_data.get("target_calories", 0)
     diet_type = form_data.get("diet_type", "balanced")
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) País del usuario — ÚNICA derivación por swap;
+    # ambos guards de retry (slot-horario, raw-staple) la reutilizan vía closure de
+    # `invoke_with_retry`. country_for_form_data es la ÚNICA puerta (T1); knob apagado ⇒ 'DO'.
+    from constants import country_for_form_data
+    _swap_country = country_for_form_data(form_data)
 
     # [P1-SWAP-MACROS · 2026-05-22] Targets per-meal: si el cliente envía
     # target_protein/carbs/fats explícitos (pre-rejected meal's macros) los
@@ -2756,12 +2814,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
                 logger.warning(
                     f"🕒 [P1-SLOT-APPROPRIATENESS] swap fuera de horario | meal_type={meal_type} | viol={_slot_viol}"
                 )
-                _current_prompt[0] = prompt_text + (
-                    f"\n\n🕒 COHERENCIA DE HORARIO (OBLIGATORIO): el plato anterior no encaja con el horario "
-                    f"«{meal_type}»: {'; '.join(_slot_viol)}. Propón un plato que SÍ corresponda a ese momento "
-                    f"del día para un dominicano — el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno); "
-                    f"la cena es ligera (evita 'arroz de noche' y comidas de desayuno). Mantén los macros objetivo."
-                )
+                _current_prompt[0] = prompt_text + _swap_slot_feedback_suffix(_swap_country, meal_type, _slot_viol)
                 raise ValueError("SLOT_INCOHERENCE: " + "; ".join(_slot_viol))
 
         # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Pareo chocante fruta+salado en swap
@@ -2838,12 +2891,7 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             if _rs_raw:
                 _RS_MARKER = "🍳 RETRY PLATO TRANSFORMADO"
                 if _RS_MARKER not in str(_current_prompt[0]):
-                    _current_prompt[0] = prompt_text + (
-                        f"\n\n{_RS_MARKER} (OBLIGATORIO): el plato anterior es un staple sin transformar "
-                        f"({str(_rs_reason)[:80]}). Conviértelo en una preparación dominicana REAL — guiso, "
-                        "locrio, revoltillo, arepitas, bollitos, al horno con majado — manteniendo los "
-                        "macros objetivo y los mismos ingredientes base."
-                    )
+                    _current_prompt[0] = prompt_text + _swap_raw_staple_feedback_suffix(_swap_country, _RS_MARKER, _rs_reason)
                     raise ValueError("RAW_STAPLE: " + str(_rs_reason)[:100])
                 logger.info(f"🍳 [P2-AUDIT-V5-BATCH] (GAP-13) swap sigue raw-staple tras el retry — "
                             f"entregado con advisory | meal_type={meal_type}")

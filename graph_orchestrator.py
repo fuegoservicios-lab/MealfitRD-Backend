@@ -24,7 +24,7 @@ from llm_provider import (
     get_user_tier,
     is_openai_model,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
 import logging
 import threading
@@ -4696,6 +4696,29 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
     return selected_techniques
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país del contexto DINÁMICO compartido —
+# el fan-in único que alimenta planner Y day-gen (ctx['country_context'], cableado UNA vez
+# dentro de `_build_shared_context` abajo; ver ese docstring). `'DO'`/desconocido ⇒ "" (byte-
+# identidad del tramo dinámico — los ~265 tests anclados a RD siguen siendo oráculos válidos).
+# País BETA (ES/US/MX/PR/CO) ⇒ bloque breve con `name_es`. Sin cache propia: a diferencia del
+# render del day-gen (T2, ~9K chars con scan-and-replace sobre 15 fragmentos), este bloque es
+# un f-string trivial — memoizarlo no paga su complejidad.
+def _country_context_block(country: str) -> str:
+    """País del usuario, formateado para el tramo DINÁMICO de los prompts (planner + day-gen).
+
+    tooltip-anchor: _country_context_block (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return ""
+    name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+    return (
+        f"\n**PAÍS DEL USUARIO: {name_es}.** Prioriza su cocina local e internacional; "
+        "los platos dominicanos NO son requisito.\n"
+    )
+
+
 def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict:
     """Construye todos los bloques de contexto compartidos entre nodos."""
     if not force_rebuild and state.get("_cached_context"):
@@ -4860,6 +4883,10 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         except Exception:
             micronutrient_targets_context = ""
 
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario, derivado UNA vez para el
+    # fan-in de abajo (ctx['country_context']) — country_for_form_data es la ÚNICA puerta (T1).
+    from constants import country_for_form_data
+
     return {
         "user_id": _uid,
         "quality_context": build_skeleton_quality_context(previous_plan_quality, meal_level_adherence),
@@ -4918,6 +4945,11 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # bloque de alergias — antes la dieta era solo un campo del JSON de form_data y un modelo
         # effort-low la ignoraba (benchmark issue #9). "" para balanced (cache preservado).
         "diet_directive_context": _build_diet_directive_context(form_data),
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país — fan-in ÚNICO hacia planner+
+        # day-gen (mismo patrón que diet_directive_context arriba). DO/knob-off ⇒ "" (byte-
+        # identidad del tramo dinámico). country_for_form_data es la ÚNICA puerta (T1) — jamás
+        # una lectura cruda de la clave "country" en form_data.
+        "country_context": _country_context_block(country_for_form_data(form_data)),
         # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables (magnesio/calcio/
         # hierro/fibra/potasio) como guía cuantitativa de densidad nutricional. "" si knob OFF/no aplica.
         "micronutrient_targets_context": micronutrient_targets_context,
@@ -6376,8 +6408,33 @@ def _build_culinary_judge_rubric() -> str:
 # DeepSeek sobre este prefix en cada invocación de `run_culinary_judge`.
 _CULINARY_JUDGE_RUBRIC = _build_culinary_judge_rubric()
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Variante por país del prefix del juez — DO usa el
+# MISMO objeto ya cacheado arriba (byte-identidad, cache DeepSeek intacto); beta sustituye SOLO
+# la frase de apertura ("Eres un juez culinario dominicano experto" → "...experto en la cocina
+# de {name_es} y cocina internacional"), reusando el resto de la rúbrica (ejemplos curados del
+# catálogo + reglas duras de horario) SIN releer dish_templates.json de nuevo — los ejemplos
+# siguen siendo dominicanos en Fase 1 (el catálogo por país es Fase 2), solo se re-ancla quién
+# es "el juez". Memoizado por país.
+_CULINARY_JUDGE_RUBRIC_CACHE: dict = {"DO": _CULINARY_JUDGE_RUBRIC}
 
-async def run_culinary_judge(plan: dict):
+
+def _culinary_judge_rubric_for_country(country: str) -> str:
+    """tooltip-anchor: _culinary_judge_rubric_for_country (test_p1_country_system_f1.py)"""
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    cached = _CULINARY_JUDGE_RUBRIC_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+    rendered = _CULINARY_JUDGE_RUBRIC.replace(
+        "Eres un juez culinario dominicano experto",
+        f"Eres un juez culinario experto en la cocina de {name_es} y cocina internacional",
+    )
+    _CULINARY_JUDGE_RUBRIC_CACHE[canon] = rendered
+    return rendered
+
+
+async def run_culinary_judge(plan: dict, country: str = "DO"):
     """[P1-CULINARY-JUDGE] Juicio culinario LLM del plan COMPLETO (1 llamada batched, no por
     día — evita N llamadas y preserva el prefix estable de `_CULINARY_JUDGE_RUBRIC` para cache
     hits). Devuelve `CulinaryJudgeReport` o `None` (fail-open: knob OFF, timeout, o cualquier
@@ -6388,6 +6445,9 @@ async def run_culinary_judge(plan: dict):
     El payload incluye la RECETA COMPLETA por comida (`recipe`) — el reviewer médico
     (P1-REVIEWER-THINKING) nunca la ve, solo nombre+ingredientes; este es el único ojo LLM del
     pipeline que juzga los PASOS de preparación.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) `country` (default 'DO', preserva callers
+    preexistentes) selecciona la rúbrica vía `_culinary_judge_rubric_for_country`.
 
     tooltip-anchor: P1-CULINARY-JUDGE"""
     if CULINARY_JUDGE_GUARD == "off":
@@ -6419,7 +6479,7 @@ async def run_culinary_judge(plan: dict):
             for d in (plan.get("days") or []) for m in (d.get("meals") or [])
         ]
         _msg = [
-            SystemMessage(content=_CULINARY_JUDGE_RUBRIC),
+            SystemMessage(content=_culinary_judge_rubric_for_country(country)),
             HumanMessage(content=json.dumps({"meals": _meals}, ensure_ascii=False)),
         ]
         return await asyncio.wait_for(_judge.ainvoke(_msg), timeout=CULINARY_JUDGE_TIMEOUT_S + 5)
@@ -7095,6 +7155,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         # del planner sugiere proteínas animales ("pollo, pescado fresco, huevo") con una sola
         # cláusula suave de dieta — así aterrizaba atún en pools vegetarianos. "" para balanced.
         f"{ctx['diet_directive_context']}\n"
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país — "" para DO/knob-off.
+        f"{ctx['country_context']}\n"
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['pantry_drift_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
@@ -8143,6 +8205,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P1-DAYGEN-DIET-CONVERGE · 2026-08-07] Directiva de DIETA al nodo que elige los
             # ingredientes — la dieta solo viajaba enterrada en el JSON de form_data. "" balanced.
             f"{ctx['diet_directive_context']}\n"
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) Bloque de país — "" para DO/knob-off.
+            f"{ctx['country_context']}\n"
             # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables al day-gen
             # (densidad nutricional cuantitativa, no solo cantidad). "" cuando knob OFF/no aplica.
             f"{ctx['micronutrient_targets_context']}\n"
@@ -9555,6 +9619,44 @@ class CritiqueEvaluation(BaseModel):
     needs_correction: bool = Field(description="True si >=2 scores son < 6, o si algún score es < 4")
     suggestions: str = Field(description="Si needs_correction es True, especifica exactamente qué cambiar.")
 
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) `cultural_score` por país — dos artefactos ligados:
+# el texto del criterio #3 dentro de `_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION` (SystemMessage,
+# estático a import-time) Y el `Field(description=...)` de `CritiqueEvaluation.cultural_score`
+# (va al LLM como parte del schema de with_structured_output — el modelo LEE esa descripción).
+# DO/desconocido ⇒ literalmente los objetos globales (mismo `is`, cache/schema intactos). Beta
+# ⇒ variante memoizada: `create_model(__base__=CritiqueEvaluation, ...)` hereda TODO el resto
+# del schema sin reescribirlo (verificado: no muta la clase base, ver test suite) y solo
+# sobreescribe la descripción de `cultural_score`.
+_CRITIQUE_COUNTRY_ARTIFACT_CACHE: dict = {}
+
+
+def _critique_evaluator_artifacts_for_country(country: str):
+    """Devuelve `(system_instruction, CritiqueEvaluation_variant)` para el evaluador del
+    self-critique. tooltip-anchor: _critique_evaluator_artifacts_for_country
+    (test_p1_country_system_f1.py)"""
+    from constants import canonicalize_country, COUNTRY_PROFILES
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION, CritiqueEvaluation
+    cached = _CRITIQUE_COUNTRY_ARTIFACT_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    name_es = COUNTRY_PROFILES.get(canon, {}).get("name_es", canon)
+    instruction = _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION.replace(
+        "3. Coherencia cultural Dominicana (cultural_score): ¿El desayuno tiene sentido? ¿La cena es coherente?",
+        f"3. Coherencia con la cocina de {name_es} (cultural_score): ¿El desayuno tiene sentido? ¿La cena es coherente?",
+    )
+    model_cls = create_model(
+        f"CritiqueEvaluationBeta_{canon}",
+        __base__=CritiqueEvaluation,
+        cultural_score=(int, Field(description=f"Coherencia con la cocina de {name_es} (1-10)")),
+    )
+    result = (instruction, model_cls)
+    _CRITIQUE_COUNTRY_ARTIFACT_CACHE[canon] = result
+    return result
+
+
 class CorrectedDays(BaseModel):
     days: list[SingleDayPlanModel] = Field(description="Lista de los 3 días con las correcciones aplicadas.")
 
@@ -10284,6 +10386,19 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         _evaluator_model = _self_critique_model_name()
     _evaluator_cb = _get_circuit_breaker(_evaluator_model)
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) `cultural_score` por país: rebind LOCAL
+    # deliberado de `_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION`/`CritiqueEvaluation` (shadow del
+    # global homónimo, SOLO dentro de este nodo) — preserva byte-a-byte el resto del cuerpo
+    # (SystemMessage/HumanMessage/legacy-path/anotación de tipo de `critique`, anclados por
+    # test_p3_cost_cut_v2.py) sin reescribirlo línea por línea. DO/knob-off ⇒ AMBOS resuelven
+    # al MISMO objeto global (mismo `is`, cache/schema intactos); beta ⇒ variante con
+    # cultural_score re-anclado a `name_es` (memoizada en _CRITIQUE_COUNTRY_ARTIFACT_CACHE).
+    from constants import country_for_form_data
+    form_data = state.get("form_data") or {}
+    _critique_country = country_for_form_data(form_data)
+    _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION, CritiqueEvaluation = (
+        _critique_evaluator_artifacts_for_country(_critique_country)
+    )
     # [P1-NET-LUNA · 2026-07-31] Dispatch por proveedor: EVALUATOR_USE_PRO apunta a
     # _PRO_MODEL_NAME (red, default OpenAI) y MEALFIT_SELF_CRITIQUE_MODEL es knob libre.
     evaluator_llm = (ChatOpenAIInstrumented if is_openai_model(_evaluator_model) else ChatDeepSeek)(
@@ -41085,7 +41200,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # no habría nada con qué hacer gather.
     # tooltip-anchor: P1-CULINARY-JUDGE
     if CULINARY_JUDGE_GUARD != "off":
-        _cj = await run_culinary_judge(plan)
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario para el juez culinario.
+        from constants import country_for_form_data
+        _cj_country = country_for_form_data(form_data)
+        _cj = await run_culinary_judge(plan, _cj_country)
         _cj_viol = [v.model_dump() for v in (_cj.violations if _cj else [])]
         _cj_hist = plan.setdefault("_culinary_judge_history", [])
         _cj_hist.append({

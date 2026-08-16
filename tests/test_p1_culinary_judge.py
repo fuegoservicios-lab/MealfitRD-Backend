@@ -84,6 +84,14 @@ def test_rubrica_existe_no_vacia_y_estable():
 # real (junto al scan T6, que vive cerca del final del nodo) y daría falsos
 # negativos contra una integración correcta. Se usa el límite exacto del nodo
 # (`def should_retry`, que es la siguiente función top-level) en su lugar.
+#
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] `run_culinary_judge` ganó un 2º parámetro
+# (`country`, default 'DO' — F1-T3) para poder pasarle el país al armar la rúbrica. El
+# callsite productivo pasó de `run_culinary_judge(plan)` a `run_culinary_judge(plan,
+# _cj_country)` — los anchors de abajo que buscaban el literal `"run_culinary_judge(plan)"`
+# (cierre exacto de paréntesis) se ensancharon a `"run_culinary_judge(plan, "` (con coma):
+# sigue probando que `plan` es el 1er argumento Y ahora exige explícitamente que se pase un
+# 2º argumento, sin fijarse en su nombre.
 # ============================================================
 
 _REVIEW_NODE_START = _GO.index("async def review_plan_node")
@@ -116,7 +124,7 @@ def test_juez_corre_despues_del_scan_deterministico_capa1():
     del residuo, nunca al revés."""
     win = _GO[_REVIEW_NODE_START:_REVIEW_NODE_END]
     i_scan = win.index("Scan culinario determinista")
-    i_judge = win.index("run_culinary_judge(plan)")
+    i_judge = win.index("run_culinary_judge(plan, ")
     assert i_judge > i_scan, "el bloque del juez debe vivir DESPUÉS del scan determinista de capa 1"
 
 
@@ -128,7 +136,7 @@ def test_juez_corre_tambien_en_rama_bypass_sin_return_intermedio():
     `return` intermedio que pueda saltárselo. Ancla contra regresión: si un
     futuro refactor mete un `return` entre el bypass y el bloque del juez,
     la rama bypass dejaría de tener cualquier ojo LLM sobre el plan."""
-    j = _GO.index("run_culinary_judge(plan)", _REVIEW_NODE_START)
+    j = _GO.index("run_culinary_judge(plan, ", _REVIEW_NODE_START)
     i_bypass = _GO.index("Sin restricciones declaradas", _REVIEW_NODE_START)
     assert _REVIEW_NODE_START < i_bypass < j, "el bloque del juez debe vivir después del gate bypass"
     between = _GO[i_bypass:j]
@@ -161,7 +169,7 @@ def test_history_entry_shape_y_action_taken_canonico():
     `blocked` — `off` nunca se persiste porque el bloque entero está gateado
     por `if CULINARY_JUDGE_GUARD != "off":`)."""
     win = _GO[_REVIEW_NODE_START:_REVIEW_NODE_END]
-    j = win.index("run_culinary_judge(plan)")
+    j = win.index("run_culinary_judge(plan, ")
     block = win[j:j + 1200]
     assert '"ts":' in block and "datetime.now(timezone.utc).isoformat()" in block
     assert '"model": CULINARY_JUDGE_MODEL' in block
@@ -186,7 +194,7 @@ def test_juez_no_op_perfecto_con_default_off():
     guard está OFF (T11) — doble cinturón: aunque algo invocara la función
     directamente fuera de este gate, no golpearía al LLM."""
     win = _GO[_REVIEW_NODE_START:_REVIEW_NODE_END]
-    j = win.index("run_culinary_judge(plan)")
+    j = win.index("run_culinary_judge(plan, ")
     # La línea del callsite (o la inmediatamente anterior) debe estar dentro
     # de un bloque gateado por el knob.
     pre = win[max(0, j - 400):j]
