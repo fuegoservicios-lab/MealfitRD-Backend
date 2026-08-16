@@ -11660,13 +11660,37 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             (plan_id,), fetch_all=True
         ) or []
 
+        # [P1-DASH-GENERATING-HONESTY · 2026-08-16] `scheduled_count` /
+        # `running_now_count` parten `in_flight_count` por el reloj, replicando
+        # las MISMAS condiciones que `api_plans_history_list` (su subquery
+        # `qstats`) para que las dos pantallas no discrepen sobre el mismo plan.
+        #
+        # NO se copia el `WHERE user_id = %s` de allá: aquí el ownership ya se
+        # resolvió arriba (P0-HIST-IDOR-2) y añadirlo obligaría a un segundo
+        # parámetro en la tupla `(plan_id,)` — un error de binding en CADA tick
+        # del polling del Dashboard.
+        #
+        # ⚠️ NO son una partición de `in_flight_count`: un chunk `processing` con
+        # `execute_after` futuro (alcanzable por la rama `target_plan_id` del
+        # pickup, que ignora `execute_after`) cae FUERA de los dos. Por eso el
+        # payload sigue exponiendo `in_flight_count` y el frontend lo conserva
+        # como respaldo — sustituirlo por la suma haría desaparecer ese día.
         counters_row = execute_sql_query(
             """
             SELECT
                 COUNT(*) FILTER (WHERE status IN ('pending','processing','stale'))::int AS in_flight_count,
                 COUNT(*) FILTER (WHERE status = 'pending_user_action')::int AS pending_user_action_count,
                 COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count,
-                COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count
+                COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count,
+                COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'stale')
+                      AND execute_after IS NOT NULL
+                      AND execute_after > NOW()
+                )::int AS scheduled_count,
+                COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'processing', 'stale')
+                      AND (execute_after IS NULL OR execute_after <= NOW())
+                )::int AS running_now_count
             FROM plan_chunk_queue
             WHERE meal_plan_id = %s
             """,
@@ -11890,6 +11914,17 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             "pending_user_action_count": int(counters_row.get("pending_user_action_count") or 0),
             "failed_count": int(counters_row.get("failed_count") or 0),
             "completed_count": int(counters_row.get("completed_count") or 0),
+            # [P1-DASH-GENERATING-HONESTY · 2026-08-16] Sin prefijo `chunk_`, al
+            # contrario que en `/history-list`: aquí la convención del payload es
+            # el nombre desnudo (`in_flight_count`), y de paso los asserts de
+            # `test_p3_hist_chunk_scheduled.py` sobre `"chunk_scheduled_count":`
+            # siguen hablando SOLO de su endpoint.
+            #
+            # Van en el dict INCONDICIONAL, nunca dentro de `**_upcoming_payload`:
+            # ese está gateado por `MEALFIT_UPCOMING_DAYS_UI` y apagarlo se
+            # llevaría por delante unos contadores que ese knob no gobierna.
+            "scheduled_count": int(counters_row.get("scheduled_count") or 0),
+            "running_now_count": int(counters_row.get("running_now_count") or 0),
             "paused_chunks": paused_chunks,
             # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] `upcoming_chunks`/`overdue`/
             # `overdue_since` — presentes SOLO con el knob ON (dict vacío = no-op).

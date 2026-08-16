@@ -42,7 +42,26 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _HISTORY_JSX = (
     _BACKEND_ROOT.parent / "frontend" / "src" / "pages" / "History.jsx"
 ).read_text(encoding="utf-8")
-_PLANS_ROUTER = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
+_PLANS_ROUTER_COMPLETO = (_BACKEND_ROOT / "routers" / "plans.py").read_text(encoding="utf-8")
+
+
+def _cuerpo_de_history_list() -> str:
+    """[P1-DASH-GENERATING-HONESTY · 2026-08-16] Acota los asserts al handler de
+    ESTE endpoint.
+
+    Hasta hoy buscaban sobre `plans.py` ENTERO, y eso funcionó mientras el split
+    existía en un solo sitio. Al replicarlo en `api_chunk_status` (el Dashboard
+    tenía la misma mentira que este endpoint cerró en mayo) el fichero pasó a
+    contener DOS juegos de `scheduled_count`/`running_now_count`: cualquiera de
+    los dos satisfacía estos asserts, así que borrar el de aquí habría dejado el
+    guard en verde. Un guard que otra copia puede satisfacer no vigila nada.
+    """
+    ini = _PLANS_ROUTER_COMPLETO.index("def api_plans_history_list(")
+    fin = _PLANS_ROUTER_COMPLETO.find("\ndef ", ini + 10)
+    return _PLANS_ROUTER_COMPLETO[ini: fin if fin != -1 else len(_PLANS_ROUTER_COMPLETO)]
+
+
+_PLANS_ROUTER = _cuerpo_de_history_list()
 
 
 def test_marker_present_in_source():
