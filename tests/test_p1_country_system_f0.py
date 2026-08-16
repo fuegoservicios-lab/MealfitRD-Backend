@@ -234,14 +234,39 @@ def test_country_no_es_sensible_y_es_decision_explicita():
 
 
 def test_el_dato_viaja_pero_el_motor_no_lo_lee_todavia():
-    """Fase 0 = SOLO el dato. El día que graph_orchestrator consuma country,
-    este test se REESCRIBE apuntando al SSOT (canonicalize_country) — si
-    aparece un lector suelto antes de Fase 1, es un lector sin canonicalizar."""
+    """Fase 0 = SOLO el dato — con una salvedad que la revisión de fase
+    encontró: `form_data` completo viaja como comodín (blacklist por prefijo
+    `_`) al prompt de plan-skeleton y day-gen vía `_sanitize_form_data_for_prompt`
+    (consumido en json.dumps(...) dos veces). Sin excluir `'country'` a mano
+    ahí, ESE canal sin nombre — no un lector nombrado — coló el campo nuevo al
+    LLM, violando la byte-identidad de Fase 0. Lo que mantiene el prompt
+    byte-idéntico hoy es la exclusión explícita dentro del sanitizer, no la
+    ausencia de un `form_data['country']` en el código (ese sigue anclado
+    abajo). El día que graph_orchestrator consuma country a propósito, este
+    test se REESCRIBE apuntando al SSOT (canonicalize_country) — si aparece
+    un lector suelto antes de Fase 1, es un lector sin canonicalizar."""
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+
+    # Ningún lector NOMBRADO de form_data['country'] / form_data.get('country').
     lectores = re.findall(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]", src)
     assert not lectores, (
         "graph_orchestrator lee form_data['country'] antes de la Fase 1: todo "
         "lector debe nacer detrás de canonicalize_country + COUNTRY_SYSTEM_ENABLED."
+    )
+
+    # El canal SIN NOMBRE: _sanitize_form_data_for_prompt debe excluir 'country'
+    # explícitamente del volcado comodín — si no, el campo nuevo cuela SIN gate
+    # (parser-based, CRLF-safe: mismo patrón que _cuerpo_similar_patterns arriba).
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def _sanitize_form_data_for_prompt")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    cuerpo = sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+    assert re.search(r"k\s*!=\s*['\"]country['\"]", cuerpo), (
+        "_sanitize_form_data_for_prompt ya no excluye 'country' del volcado "
+        "comodín: el dump wildcard (blacklist por prefijo `_`) lo colaría de "
+        "nuevo al prompt del LLM, violando la byte-identidad de Fase 0."
     )
 
 

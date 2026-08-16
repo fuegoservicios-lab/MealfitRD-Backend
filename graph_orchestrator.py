@@ -5752,7 +5752,16 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
         return form_data
     if not PROMPT_TRIM_FORM_DATA:
         return form_data
-    return {k: v for k, v in form_data.items() if not (isinstance(k, str) and k.startswith("_"))}
+    # [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] `country` NO viaja al prompt en esta fase:
+    # el volcado es comodín (blacklist por prefijo `_`) y dejaba pasar el campo nuevo
+    # — un segundo canal SIN gate que en Fase 1 diría "ES" contra 22 órdenes criollas
+    # (el modo de fallo P1-CHAT-PAUSED-PROMPT-BLOCKS). Fase 1 lo retira DELIBERADAMENTE
+    # cuando el prompt por variante lo consuma canonicalizado (constants.canonicalize_country).
+    return {
+        k: v
+        for k, v in form_data.items()
+        if not (isinstance(k, str) and k.startswith("_")) and k != "country"
+    }
 # [P3-PLAN-MODEL-KNOBS · 2026-05-20] Modelos del plan-gen pipeline ahora
 # via knobs (no hardcoded). Cierre del gap C4 del audit
 # `docs/gaps-audit-2026-05.md`: pre-fix estos eran string literals
