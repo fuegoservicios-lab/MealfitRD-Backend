@@ -5190,15 +5190,17 @@ _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE = {}
 
 
 def _day_system_instruction_for_diet(form_data) -> str:
-    from constants import canonicalize_diet_type as _cdt
+    from constants import canonicalize_diet_type as _cdt, country_for_form_data
     from prompts.day_generator import build_day_generator_system_prompt as _bdgsp
     canon = _cdt((form_data or {}).get("dietType") or (form_data or {}).get("diet"))
-    if canon not in ("vegan", "vegetarian"):
+    country = country_for_form_data(form_data)
+    if canon not in ("vegan", "vegetarian") and country == "DO":
         return _DAY_SYSTEM_INSTRUCTION_CACHED
-    cached = _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE.get(canon)
+    cache_key = (canon, country)
+    cached = _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE.get(cache_key)
     if cached is None:
-        cached = _bdgsp(canon) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
-        _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE[canon] = cached
+        cached = _bdgsp(canon, country) + _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION
+        _DAY_SYSTEM_INSTRUCTION_BY_DIET_CACHE[cache_key] = cached
     return cached
 
 
@@ -8156,8 +8158,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             prompt_text = dynamic_day_prompt
         else:
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] Render por dieta también en el path sin cache.
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] + país (T2): country_for_form_data es la ÚNICA
+            # puerta (T1) — knob apagado ⇒ 'DO' siempre ⇒ camino actual exacto.
             from prompts.day_generator import build_day_generator_system_prompt as _bdgsp_nc
-            prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"))
+            from constants import country_for_form_data
+            _nc_country = country_for_form_data(form_data)
+            prompt_text = dynamic_day_prompt + _bdgsp_nc((form_data or {}).get("dietType"), _nc_country)
 
         # [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo DeepSeek): deepseek-v4-flash → deepseek-v4-pro
         # (bariátrico → [deepseek-v4-pro]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
