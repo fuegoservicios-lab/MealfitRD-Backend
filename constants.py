@@ -2070,10 +2070,23 @@ SLOT_INAPPROPRIATE_FOODS = {
 # (identidad `is`, NO copia: el motor queda byte-idéntico). Beta ⇒ tabla derivada MEMOIZADA con
 # la MISMA estructura/tokens/excludes (las tuplas se comparten por referencia, no se copian) pero
 # CADA regla con hardness='soft': las reglas siguen disparando — telemetría para diseñar las
-# tablas nativas de Fase 2 — pero dejan de forzar retry (dejan de costar). Consumido por
-# `_detect_slot_appropriateness` (graph_orchestrator.py, T4) — `slot_violations_for_meal_name`
-# (abajo) sigue leyendo `SLOT_INAPPROPRIATE_FOODS` directo salvo que un caller le inyecte esta
-# tabla vía su nuevo parámetro `rules_table`. tooltip-anchor: slot_rules_for_country
+# tablas nativas de Fase 2. Consumido por `_detect_slot_appropriateness` (graph_orchestrator.py,
+# T4) — `slot_violations_for_meal_name` (abajo) sigue leyendo `SLOT_INAPPROPRIATE_FOODS` directo
+# salvo que un caller le inyecte esta tabla vía su nuevo parámetro `rules_table`.
+#
+# [HONESTIDAD · 2026-08-16 (T4 fix-round 1)] "hardness='soft'" NO significa "deja de forzar
+# retry" en `review_plan_node` (S1) — verificado contra su gate real (graph_orchestrator.py
+# ~40674-40732): en los intentos 1..N-1, CUALQUIER issue (hard O soft) pone `approved=False` y
+# fuerza retry por igual; `hard` solo decide qué pasa en el ÚLTIMO intento (`_sa_is_final`) — sin
+# violación dura, degrada a advisory y ACEPTA el plan; con violación dura, sigue rechazando. Para
+# la regla del arroz específicamente, ablandar el gate NO reduce la presión de retry en los
+# intentos tempranos — lo que sí cambia es que el AUTOFIX (`_night_rice_autofix`) ahora se salta
+# para país != DO (mismo fix-round), así que beta puede pagar MÁS retries que DO en la práctica
+# para esta regla puntual: DO nunca llega a ver la violación (el autofix la corrige en silencio
+# antes de `review_plan_node`); beta sí la ve, intento tras intento, hasta degradar en el último.
+# Cambiar el GATE de S1 para que soft deje de forzar retry en intentos no-finales es una decisión
+# de producto aparte — PARKED por ruling del controller, no incluida en esta task (tocar
+# review_plan_node es su propia task). tooltip-anchor: slot_rules_for_country
 # (test_p1_country_system_f1.py)
 _SLOT_RULES_COUNTRY_CACHE: dict = {}
 

@@ -10282,11 +10282,13 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     plancha" dentro del rechazo de un plan vegano.
     [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] El país se deriva UNA vez por evaluación vía
     `country_for_form_data` (la ÚNICA puerta T1) y resuelve la tabla de reglas vía
-    `constants.slot_rules_for_country` — DO ⇒ SLOT_INAPPROPRIATE_FOODS intacta (retries duros
-    como hoy); beta ⇒ tabla soft memoizada (MISMOS tokens — siguen midiendo como telemetría,
-    dejan de forzar retry). El pase INGREDIENT-LEVEL (arroz oculto en el desayuno,
-    `slot_ingredient_violations`) NO consume esta tabla — sigue siempre hard, independiente del
-    país (fuera del alcance de T4; documentado como residual en el reporte de la task)."""
+    `constants.slot_rules_for_country` — DO ⇒ SLOT_INAPPROPRIATE_FOODS intacta (issues duros como
+    hoy); beta ⇒ tabla soft memoizada (MISMOS tokens — siguen midiendo como telemetría).
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] El pase INGREDIENT-LEVEL (arroz oculto en
+    el desayuno, `slot_ingredient_violations`) NO consume `_rules_table` — la función compartida
+    sigue devolviendo hard=True incondicional — pero el flag `hard` del issue SE OVERRIDEA a False
+    para país != DO en el sitio de consumo (abajo), contenido a esta función; ningún otro
+    consumidor de `slot_ingredient_violations` hereda el override."""
     from constants import slot_positive_hint as _sph
     from constants import country_for_form_data, slot_rules_for_country
     _country = country_for_form_data(form_data)
@@ -10335,7 +10337,13 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
                         )
                     issues.append({
                         "day": day_num, "slot": slot_key, "name": name,
-                        "label": v["label"], "hard": v["hard"],
+                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `slot_ingredient_
+                        # violations` sigue devolviendo hard=True incondicional (SSOT compartida,
+                        # no tocada — ver docstring) pero el flag SE OVERRIDEA a False aquí, en el
+                        # sitio de consumo, para país != DO. Contenido: ningún otro consumidor de
+                        # `slot_ingredient_violations` (slot_coherence_backstop_for_meal en este
+                        # mismo archivo, tools.py) hereda este override.
+                        "hard": v["hard"] and _country == "DO",
                         "name_evaded": not _name_flagged,  # [P2-SLOT-EVASION-TELEMETRY]
                         "text": (
                             f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
@@ -14667,23 +14675,45 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, fo
     return out
 
 
-def slot_coherence_backstop_for_meal(meal: dict, meal_type: str) -> list:
+def slot_coherence_backstop_for_meal(meal: dict, meal_type: str, country: str = "DO") -> list:
     """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Backstop DETERMINISTA per-comida de coherencia
     de HORARIO, reusable por las superficies de UPDATE (swap S3 / regenerate-day S2). Espejo de
     `clinical_backstop_for_meal` pero CALIDAD, no seguridad: reusa el SSOT
     `constants.slot_violations_for_meal_name` (match word-boundary sobre el NOMBRE). Devuelve lista de
     strings de violación (vacía = ok). Gateado por SLOT_APPROPRIATENESS_GATE_ENABLED. FAIL-OPEN: un error
     del detector NUNCA bloquea el update (a diferencia del backstop clínico, abortivo) — la coherencia de
-    horario es cosmética; degradarla es preferible a un cero-plato. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    horario es cosmética; degradarla es preferible a un cero-plato.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `country` (default 'DO' — preserva los
+    callers preexistentes, incluidos los de test) resuelve `slot_rules_for_country(country)`. DO
+    incluye TODA violación del pase NAME-LEVEL sin filtrar por `hard` — byte-idéntico al
+    comportamiento pre-fix (algunas reglas, ej. "arroz de noche" en cena, ya eran nativamente soft
+    en `SLOT_INAPPROPRIATE_FOODS` y SIEMPRE dispararon este backstop; filtrar por `hard`
+    incondicionalmente habría roto ESE comportamiento existente, no solo el de beta — verificado
+    contra `test_backstop_for_update_surfaces`, que exige exactamente ese caso). País != DO incluye
+    SOLO violaciones `hard` — hoy `slot_rules_for_country(beta)` marca TODO soft, así que el pase
+    name-level nunca dispara este backstop para beta (equivalente semántico: "DO conserva su
+    comportamiento íntegro; beta pierde SOLO lo que ya no es hard"), pero la condición sigue
+    correcta si Fase 2 introduce una tabla beta con alguna regla nativamente hard. Sin esto, el
+    backstop llamaba `slot_violations_for_meal_name` sin tabla → SIEMPRE la tabla dura → `swap_meal`
+    (agent.py) levantaba `SLOT_INCOHERENCE` y forzaba hasta 3 retries LLM por una regla que
+    `_detect_slot_appropriateness`/T4 ya trata como soft/telemetría para países beta. El pase
+    INGREDIENT-LEVEL (`slot_ingredient_violations`, abajo) NO se filtra — sigue siempre hard,
+    residual documentado (mismo alcance que el de `_detect_slot_appropriateness`, no cubierto por
+    el review de este fix-round). tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
     if not SLOT_APPROPRIATENESS_GATE_ENABLED or not isinstance(meal, dict):
         return []
     try:
         slot_key = canonical_slot_key(meal_type) or _SLOT_KEY_MAP.get(_norm_text(meal_type))
         if not slot_key:
             return []
+        from constants import canonicalize_country as _cc_scbfm, slot_rules_for_country
+        _is_do = _cc_scbfm(country) == "DO"
+        _rules_table = slot_rules_for_country(country)
         out = []
-        for v in slot_violations_for_meal_name(meal.get("name", ""), slot_key):
-            out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
+        for v in slot_violations_for_meal_name(meal.get("name", ""), slot_key, _rules_table):
+            if _is_do or v.get("hard"):
+                out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
         # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1) paridad updates: el mismo pase
         # ingredient-level del productor S1 (arroz oculto en ingredients de un DESAYUNO con nombre inocuo).
         try:
@@ -26917,7 +26947,7 @@ def finalize_plan_data_coherence(days: list, db=None, allergies=None, target_fat
 
 def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False, allergies=None,
                                           skip_night_rice: bool = False, portion_floors: bool = True,
-                                          day_kcal_target: float | None = None) -> int:
+                                          day_kcal_target: float | None = None, country: str = "DO") -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -26935,7 +26965,15 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
     dirección forward (receta menciona proteína/carb/veg ausente) YA la cubre `validate_meal_recipe_ingredients_coherence`
     como retry-gate en swap/chat-modify. Idempotente (re-correr donde assemble ya aplicó = no-op), fail-open (un
     error NUNCA bloquea el update — espejo de los otros backstops de update). Muta `meal` in-place. Devuelve nº de
-    fixes aplicados. Gateado por UPDATE_RECIPE_FINALIZE_ENABLED. tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE"""
+    fixes aplicados. Gateado por UPDATE_RECIPE_FINALIZE_ENABLED.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `country` (default 'DO' — preserva TODOS
+    los callers preexistentes que no lo pasan) se reenvía SOLO al autofix de `_night_rice_autofix`
+    (abajo) — país != DO ⇒ ese autofix específico es no-op (el plato queda intacto POR ESE
+    autofix; el resto del finalizer — veg-guard/slice-grams/leaf-cap/qty-guard/etc — corre
+    exactamente igual, sin distinción de país). Callers reales verificados: `agent.py::swap_meal`
+    (pasa `_swap_country`) y `tools.py::execute_modify_single_meal` (pasa `_modify_country`).
+    tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE"""
     if not UPDATE_RECIPE_FINALIZE_ENABLED or not isinstance(meal, dict):
         return 0
     try:
@@ -27029,7 +27067,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bo
         # lo contrario de lo que pidió. Su deseo explícito gana también aquí.
         try:
             if not skip_night_rice:
-                total += _night_rice_autofix(_wrap, db)
+                total += _night_rice_autofix(_wrap, db, country=country)
         except Exception as _enr:
             logger.warning(f"[P2-SLOT-CORRECTOR] night-rice en finalizador de update no-op: {type(_enr).__name__}: {_enr}")
         # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Garantiza pasos cocinables si el LLM del update degradó.

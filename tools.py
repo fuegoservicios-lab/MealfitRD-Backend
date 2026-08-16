@@ -967,8 +967,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # puebla `state['form_data']` con el país del usuario, así que en la práctica esto sigue
     # cayendo a 'DO' hasta que una task futura conecte el país a la superficie de chat — honesto,
     # no un placeholder roto (knob apagado ⇒ 'DO' siempre, igual que el resto del sistema).
-    from constants import country_for_form_data
+    from constants import country_for_form_data, slot_rules_for_country
     _modify_country = country_for_form_data(form_data)
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] tabla resuelta UNA vez, reusada por el
+    # backstop P1-CHAT-SLOT-BACKSTOP más abajo (mismo shape que _detect_slot_appropriateness).
+    _modify_rules_table = slot_rules_for_country(_modify_country)
 
     # 1. Obtener el plan actual con su ID
     plan_record = get_latest_meal_plan_with_id(user_id)
@@ -1634,11 +1637,23 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     _meal_dump_s = res.model_dump() if hasattr(res, "model_dump") else (
                         res if isinstance(res, dict) else {}
                     )
-                    _meal_viols = slot_violations_for_meal_name(_meal_dump_s.get("name", ""), _slot_key)
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] `_modify_rules_table`
+                    # ya resuelto arriba. DO incluye TODA violación sin filtrar por `hard` (algunas
+                    # reglas, ej. "arroz de noche" en cena, ya eran nativamente soft y SIEMPRE
+                    # dispararon este backstop — filtrar incondicionalmente por hard rompería ESE
+                    # comportamiento existente). País != DO incluye SOLO violaciones `hard` — hoy
+                    # equivale a "nunca" (slot_rules_for_country ablanda TODO para beta), pero la
+                    # condición sigue correcta si Fase 2 introduce reglas beta nativamente hard.
+                    _meal_viols_all = slot_violations_for_meal_name(
+                        _meal_dump_s.get("name", ""), _slot_key, _modify_rules_table
+                    )
+                    _meal_viols = [v for v in _meal_viols_all if _modify_country == "DO" or v.get("hard")]
                     if _meal_viols:
                         # Etiquetas que el usuario pidió EXPLÍCITAMENTE en `changes` (mismo SSOT
                         # name-based aplicado al texto del pedido) → su deseo gana, no se reintenta.
-                        _requested = {v["label"] for v in slot_violations_for_meal_name(changes or "", _slot_key)}
+                        _requested = {
+                            v["label"] for v in slot_violations_for_meal_name(changes or "", _slot_key, _modify_rules_table)
+                        }
                         _unrequested = [v for v in _meal_viols if v["label"] not in _requested]
                         if _unrequested and _slot_attempt[0] < 3:
                             _slot_labels = "; ".join(v["label"] for v in _unrequested)
@@ -2063,9 +2078,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # deja el callsite listo; encender `db` en la ruta de chat enciende de paso
             # quantize/sanity-autofix, que es un cambio de alcance distinto y sin medir.
             from graph_orchestrator import _day_kcal_from_target_macros as _dkt_m
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_modify_country`
+            # (derivado UNA vez al inicio de execute_modify_single_meal) — DO ⇒ camino byte-idéntico.
             _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies,
                                 skip_night_rice=_wish_slot,
-                                day_kcal_target=_dkt_m((plan_data or {}).get("macros")))
+                                day_kcal_target=_dkt_m((plan_data or {}).get("macros")),
+                                country=_modify_country)
             if _nfix_m:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:

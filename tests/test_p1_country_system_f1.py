@@ -1243,3 +1243,184 @@ def test_surgical_marker_regen_node_deriva_pais_via_ssot_una_sola_vez():
 def test_surgical_marker_regen_build_day_assignment_context_wire_country():
     cuerpo = _cuerpo_surgical_marker_regen_node()
     assert "country=_surgical_country" in cuerpo
+
+
+# ── T4 fix-round 1 (review NEEDS FIXES): los backstops de retry país-blind ───────────────────
+#
+# El review encontró un TERCER gap no-disclosed: `slot_coherence_backstop_for_meal` (swap S3,
+# graph_orchestrator.py) y el P1-CHAT-SLOT-BACKSTOP inline de tools.py (chat-modify) llamaban
+# `slot_violations_for_meal_name` SIN tabla — SIEMPRE la tabla dura, sin importar el país — y
+# trataban CUALQUIER violación devuelta como retry-forzante (agent.py `raise ValueError(
+# "SLOT_INCOHERENCE"...)`  / tools.py `raise ValueError("plato fuera de horario"...)`), incluso
+# las que este mismo fix-round (T4 original) ya trata como soft/telemetría en el gate S1. Ambos
+# se corrigen con el MISMO shape: resolver `slot_rules_for_country(country)` y filtrar a "DO
+# incluye TODO — byte-idéntico a pre-fix, INCLUIDAS reglas nativamente soft como 'arroz de noche'
+# en cena, que YA disparaban este backstop antes de T4 — / país != DO incluye SOLO lo que sigue
+# siendo hard tras resolver la tabla". La primera versión de este fix filtraba por `hard`
+# INCONDICIONALMENTE (sin el `or country == "DO"`) y rompía `test_backstop_for_update_surfaces`
+# (test_p1_slot_appropriateness.py) — 'arroz de noche' en cena es soft incluso en la tabla DO
+# nativa, así que un filtro ciego por `hard` habría dejado de dispararlo también para DO. Los
+# tests de abajo anclan explícitamente ese caso como regresión.
+
+def test_slot_coherence_backstop_do_conserva_regla_nativamente_soft():
+    """Regresión: 'arroz de noche' en cena es hardness='soft' incluso en SLOT_INAPPROPRIATE_FOODS
+    nativa, y el backstop YA la incluía (ignoraba hardness por completo, pre-fix). Filtrar
+    incondicionalmente por `hard` (la primera versión de este fix) rompe ESTE caso."""
+    import graph_orchestrator as go
+    out_default = go.slot_coherence_backstop_for_meal({"name": "Pollo con arroz blanco"}, "Cena")
+    out_explicit_do = go.slot_coherence_backstop_for_meal({"name": "Pollo con arroz blanco"}, "Cena", "DO")
+    assert out_default, "DO (default) debe seguir viendo esta violación soft-nativa"
+    assert out_explicit_do, "DO (explícito) debe seguir viendo esta violación soft-nativa"
+    assert out_default == out_explicit_do
+
+
+def test_slot_coherence_backstop_do_sigue_forzando_hard():
+    import graph_orchestrator as go
+    out = go.slot_coherence_backstop_for_meal({"name": "Arroz con Huevo"}, "Desayuno", "DO")
+    assert out, "DO debe seguir viendo la violación hard (desayuno-arroz)"
+
+
+def test_slot_coherence_backstop_beta_no_dispara_para_violacion_soft():
+    import graph_orchestrator as go
+    assert _BETA_CCS, "fixture vacío"
+    for cc in _BETA_CCS:
+        out_hard_for_do = go.slot_coherence_backstop_for_meal({"name": "Arroz con Huevo"}, "Desayuno", cc)
+        assert out_hard_for_do == [], f"{cc}: violación hard-para-DO/soft-para-beta no debe disparar, hallado {out_hard_for_do}"
+        out_soft_for_do = go.slot_coherence_backstop_for_meal({"name": "Pollo con arroz blanco"}, "Cena", cc)
+        assert out_soft_for_do == [], f"{cc}: violación soft-nativa tampoco debe disparar, hallado {out_soft_for_do}"
+
+
+def test_slot_coherence_backstop_pais_desconocido_cae_a_do():
+    import graph_orchestrator as go
+    out_xx = go.slot_coherence_backstop_for_meal({"name": "Pollo con arroz blanco"}, "Cena", "xx")
+    out_do = go.slot_coherence_backstop_for_meal({"name": "Pollo con arroz blanco"}, "Cena", "DO")
+    assert out_xx == out_do
+
+
+def test_swap_meal_wire_slot_coherence_backstop_con_pais():
+    """agent.py's caller pasa `_swap_country` (ya derivado, T3) — sin esto el backstop cae al
+    default 'DO' sin importar el país real del usuario."""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert "slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_country)" in src
+
+
+def _tools_cuerpo_inline_backstop() -> str:
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("_meal_viols_all = slot_violations_for_meal_name(")
+    fin = sin_comentarios.index("if _unrequested and _slot_attempt[0] < 3:", ini)
+    return sin_comentarios[ini:fin]
+
+
+def test_chat_modify_backstop_thread_rules_table_y_filtro_pais():
+    cuerpo = _tools_cuerpo_inline_backstop()
+    assert "_modify_rules_table" in cuerpo
+    assert '_modify_country == "DO" or v.get("hard")' in cuerpo
+
+
+def _unrequested_labels_country_aware(meal_name: str, user_changes: str, slot_key: str, country: str) -> list:
+    """Réplica FUNCIONAL país-aware de la lógica del backstop inline de tools.py — mismo patrón
+    que test_p1_chat_slot_backstop.py::_unrequested_labels (pura, sin DB/LLM, sin importar
+    tools.py), extendida con el filtro de país de este fix-round."""
+    rules_table = constants.slot_rules_for_country(country)
+    meal_v_all = constants.slot_violations_for_meal_name(meal_name, slot_key, rules_table)
+    meal_v = [v for v in meal_v_all if country == "DO" or v.get("hard")]
+    if not meal_v:
+        return []
+    requested = {
+        v["label"] for v in constants.slot_violations_for_meal_name(user_changes or "", slot_key, rules_table)
+    }
+    return [v for v in meal_v if v["label"] not in requested]
+
+
+def test_chat_modify_backstop_do_conserva_presion_de_retry():
+    slot = constants.canonical_slot_key("Cena")
+    out = _unrequested_labels_country_aware("Arroz blanco con pollo guisado", "cámbiame la cena", slot, "DO")
+    assert out, "DO debe seguir viendo la violación (comportamiento pre-fix, incluida la soft-nativa)"
+
+
+def test_chat_modify_backstop_beta_sin_presion_de_retry_para_soft():
+    slot = constants.canonical_slot_key("Cena")
+    for cc in _BETA_CCS:
+        out = _unrequested_labels_country_aware("Arroz blanco con pollo guisado", "cámbiame la cena", slot, cc)
+        assert out == [], f"{cc}: no debe forzar retry para una violación soft-para-beta"
+
+
+# ── T4 fix-round 1: hard flag del pase INGREDIENT-LEVEL, overrideado por país (review IMPORTANT #2) ──
+
+def test_detect_slot_appropriateness_ingredient_hard_override_do():
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Bowl energetico criollo",
+                                    "ingredients": ["150g arroz blanco", "1 huevo"]}]}]
+    issues = go._detect_slot_appropriateness(days, {"country": "DO"})
+    assert issues and issues[0]["hard"] is True
+
+
+def test_detect_slot_appropriateness_ingredient_hard_override_beta(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Bowl energetico criollo",
+                                    "ingredients": ["150g arroz blanco", "1 huevo"]}]}]
+    issues = go._detect_slot_appropriateness(days, {"country": _BETA_CC_SAMPLE})
+    assert issues, "el issue debe seguir PRESENTE — sigue midiendo (telemetría)"
+    assert issues[0]["hard"] is False, "pero el flag hard debe overridearse a False para beta"
+
+
+def test_detect_slot_appropriateness_ingredient_override_no_toca_slot_ingredient_violations():
+    """Contenido (review: 'do NOT change slot_ingredient_violations itself'): la función
+    compartida sigue devolviendo hard=True incondicional — el override vive SOLO en el sitio de
+    consumo dentro de _detect_slot_appropriateness."""
+    v = constants.slot_ingredient_violations(["150g arroz blanco"], "desayuno")
+    assert v and v[0]["hard"] is True
+
+
+# ── T4 fix-round 1: finalizer país-aware (review IMPORTANT #3) ───────────────────────────────
+
+def _finalizer_fake_db():
+    class _FDB:
+        def grams_from_ingredient_string(self, s):
+            m = re.search(r"(\d+)\s*g", s)
+            return float(m.group(1)) if m else 150.0
+    return _FDB()
+
+
+def _cena_arroz_meal_finalizer():
+    return {"meal": "Cena", "name": "Pollo con Arroz Blanco",
+            "ingredients": ["200 g de pollo", "150 g de arroz blanco"],
+            "recipe": ["Cocina el arroz 15 min.", "Sirve con el pollo."]}
+
+
+def test_finalizer_do_default_sigue_autofix_de_arroz(monkeypatch):
+    import graph_orchestrator as go
+    monkeypatch.setattr(go, "NIGHT_RICE_AUTOFIX_ENABLED", True)
+    monkeypatch.setattr(go, "UPDATE_RECIPE_FINALIZE_ENABLED", True)
+    meal = _cena_arroz_meal_finalizer()
+    go.finalize_single_meal_recipe_coherence(meal, db=_finalizer_fake_db())
+    assert "arroz" not in meal["name"].lower()
+
+
+def test_finalizer_beta_salta_solo_el_autofix_de_arroz(monkeypatch):
+    import graph_orchestrator as go
+    monkeypatch.setattr(go, "NIGHT_RICE_AUTOFIX_ENABLED", True)
+    monkeypatch.setattr(go, "UPDATE_RECIPE_FINALIZE_ENABLED", True)
+    assert _BETA_CCS, "fixture vacío"
+    for cc in _BETA_CCS:
+        meal = _cena_arroz_meal_finalizer()
+        go.finalize_single_meal_recipe_coherence(meal, db=_finalizer_fake_db(), country=cc)
+        assert "arroz" in meal["name"].lower(), f"{cc}: el nombre no debe perder 'arroz' (autofix saltado)"
+        assert any("arroz" in i.lower() for i in meal["ingredients"]), (
+            f"{cc}: los ingredientes deben conservar arroz (autofix saltado)"
+        )
+
+
+def test_finalizer_wire_country_en_swap_y_chat_modify():
+    agent_src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert (
+        "_fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country)"
+        in agent_src
+    )
+    tools_src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    assert "country=_modify_country" in tools_src
+    assert "_fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies," in tools_src

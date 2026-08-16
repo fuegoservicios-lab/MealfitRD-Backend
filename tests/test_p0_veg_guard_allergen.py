@@ -106,7 +106,12 @@ def test_finalizer_passes_allergies_to_veg_guard():
 
 
 def test_wired_in_swap():
-    assert "allergies=allergies)" in _AGENT and "P0-VEG-GUARD-ALLERGEN" in _AGENT, \
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] Sin paréntesis de cierre: el finalizer
+    # ganó `country=_swap_country` DESPUÉS de `allergies=allergies` en el mismo call → el match
+    # exacto con `)` quedó stale, mismo caso que `test_wired_in_chat_modify` (P2-CHAT-EXPLICIT-
+    # SLOT-WISH) documenta arriba. El contrato es que el finalizer reciba las allergies del
+    # perfil, no la forma exacta del call.
+    assert "allergies=allergies" in _AGENT and "P0-VEG-GUARD-ALLERGEN" in _AGENT, \
         "swap (agent.py) no pasa allergies al finalizer"
 
 

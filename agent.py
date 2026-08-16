@@ -2809,7 +2809,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         if SLOT_APPROPRIATENESS_GATE_ENABLED and not (strict_pantry and not clean_ingredients):
             try:
                 _slot_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
-                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type)
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country`
+                # (derivado UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
+                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type, _swap_country)
             except Exception:
                 _slot_viol = []
             if _slot_viol:
@@ -3435,7 +3437,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # (clean_ingredients no vacío) → el finalizer NO añade veg de catálogo (no se puede comprar más).
             # [P0-VEG-GUARD-ALLERGEN · 2026-07-01] allergies (enriquecidas server-side) → el veg-guard del
             # finalizer NO inyecta un alérgeno post-backstop (este bloque corre DESPUÉS del scan clínico).
-            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] reusa `_swap_country` (derivado
+            # UNA vez al inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
+            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies, country=_swap_country)
             if _nfix:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix} fix(es) de coherencia de receta en plato de swap | meal_type={meal_type}")
         except Exception as _fin_e:
