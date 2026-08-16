@@ -125,3 +125,21 @@ def test_segmentacion_coldstart_gateada_apagada():
     assert re.search(
         r"_env_bool\(\s*\"MEALFIT_COUNTRY_COLDSTART_SEGMENT\"\s*,\s*False\s*\)", cuerpo
     ), "El knob debe nacer con default False."
+
+
+# ── paridad frontend↔backend ─────────────────────────────────────────────────
+
+def test_paridad_countries_js_con_country_profiles():
+    """Un país añadido en un solo lado es la clase de drift que P1-DIET-CANON-SSOT
+    pagó. Parser sobre el fuente JS (sin comentarios, CRLF-safe)."""
+    src = (_FRONTEND / "src" / "config" / "countries.js").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        re.sub(r"(^|\s)//.*$", r"\1", l)
+        for l in re.split(r"\r?\n", re.sub(r"/\*.*?\*/", "", src, flags=re.S))
+    )
+    codigos_js = re.findall(r"code:\s*'([A-Z]{2})'", sin_comentarios)
+    assert codigos_js, "No pude parsear los codes de countries.js"
+    assert set(codigos_js) == set(constants.COUNTRY_PROFILES.keys())
+    betas_js = dict(re.findall(r"code:\s*'([A-Z]{2})',[^}]*beta:\s*(true|false)", sin_comentarios))
+    for cc, perfil in constants.COUNTRY_PROFILES.items():
+        assert betas_js.get(cc) == ("true" if perfil["is_beta"] else "false"), cc
