@@ -182,3 +182,102 @@ def test_el_servidor_sigue_mandando_sobre_el_cache_local():
         "esa respuesta; si deja de corregirse, una elección hecha en otro "
         "dispositivo no aparece nunca."
     )
+
+
+# ── [P0-BRANDS-RETRY-STORM · 2026-08-15] La tormenta de reintentos ──────────
+
+def test_el_guard_de_load_no_depende_del_estado_que_el_propio_efecto_observa():
+    """16.105 respuestas 429 contra 12 doscientos, a ~12 peticiones por SEGUNDO.
+
+    El bucle se cerraba así:
+      1. `load` tenía deps `[matches, loading, names, t]` — `loading`, la variable
+         del guard, decidía la IDENTIDAD de la función.
+      2. El efecto de prefetch observaba `[names, load]` ⇒ cada cambio de
+         identidad lo re-disparaba.
+      3. El `catch` hacía setError + setLoading(false) sin tocar `matches`, así
+         que al reentrar el guard PASABA y lanzaba otro fetch.
+
+    Como este es el único llamante de /match con `fetch` pelado sin auth, su cupo
+    es por IP; el bucle lo quemaba en ~2 s y el limitador (que entonces sellaba la
+    ventana también con los rechazos) nunca drenaba. De ahí el 429 permanente.
+
+    La regla general, que es lo que este guard protege: **la variable que decide
+    si un efecto debe correr no puede estar en las deps de la función que ese
+    efecto invoca.** Es una realimentación, y se manifiesta como inundación.
+    """
+    src = _brands_src()
+    m = re.search(r"const load = useCallback\(.*?\n    \}, \[([^\]]*)\]\)", src, re.DOTALL)
+    assert m, "P0-BRANDS-RETRY-STORM: no encuentro las deps del useCallback `load`."
+    deps = [d.strip() for d in m.group(1).split(",") if d.strip()]
+    for prohibida in ("loading", "matches"):
+        assert prohibida not in deps, (
+            f"P0-BRANDS-RETRY-STORM: `{prohibida}` volvió a las deps de `load`. "
+            "El efecto de prefetch invoca `load`; si una variable del guard rota "
+            "su identidad, el efecto se re-dispara solo y el panel inunda el "
+            "endpoint (medido: 16.105 × 429). El guard vive en refs "
+            "(`inFlightRef`/`loadedRef`) justamente para que esto no pueda pasar."
+        )
+
+
+def test_el_efecto_de_prefetch_no_observa_la_identidad_de_load():
+    src = _brands_src()
+    m = re.search(
+        r"useEffect\(\(\) => \{\s*if \(names\.length > 0\) load\(\);.*?\}, \[([^\]]*)\]\)",
+        src,
+        re.DOTALL,
+    )
+    assert m, "P0-BRANDS-RETRY-STORM: no encuentro el efecto de prefetch."
+    deps = [d.strip() for d in m.group(1).split(",") if d.strip()]
+    assert "load" not in deps, (
+        "P0-BRANDS-RETRY-STORM: el efecto volvió a observar `load`. Esa era la "
+        "otra mitad del bucle: el efecto se re-dispara a sí mismo a través de la "
+        "identidad de la función que llama."
+    )
+
+
+def test_hay_tope_de_intentos_automaticos_y_el_error_no_se_borra_solo():
+    """Dos defensas independientes, y la segunda explica por qué NADIE vio el error.
+
+    `setError(null)` al reentrar borraba el mensaje ~1 frame después de ponerlo:
+    el usuario veía «Buscando marcas…» eterno y jamás el botón «Reintentar» que
+    habría cortado el bucle. Un error que se limpia solo es un error invisible.
+    """
+    src = _brands_src()
+    assert "autoAttemptRef" in src, (
+        "P0-BRANDS-RETRY-STORM: desapareció el tope de intentos automáticos. Sin "
+        "él, cualquier fallo persistente vuelve a ser una inundación."
+    )
+    assert re.search(r"if \(manual\) setError\(null\)", src), (
+        "P0-BRANDS-RETRY-STORM: `setError(null)` volvió a correr en la reentrada "
+        "automática. Eso hace INVISIBLE el fallo: el usuario ve un «Buscando…» "
+        "eterno en vez del error con su «Reintentar»."
+    )
+
+
+def test_el_limitador_no_sella_la_ventana_con_peticiones_rechazadas():
+    """[P1-RATELIMIT-NO-SELF-POISON] Un rechazo no puede alargar el castigo.
+
+    En la rama Redis el `zadd` corría DENTRO del pipeline, antes de comprobar el
+    cupo: cada 429 metía un timestamp nuevo en la ventana deslizante, así que un
+    cliente en bucle nunca drenaba. El límite dejaba de ser «30 por minuto» y
+    pasaba a ser «bloqueado mientras sigas intentando».
+
+    La rama en memoria NUNCA tuvo el fallo (lanza antes del `append`). Esto cierra
+    la asimetría: el comportamiento del limitador no debe depender de si Redis
+    está configurado.
+    """
+    rl = (Path(__file__).resolve().parents[1] / "rate_limiter.py").read_text(encoding="utf-8")
+    pipe_block = re.search(r"pipe = redis_client\.pipeline\(\)(.*?)results = pipe\.execute\(\)", rl, re.DOTALL)
+    assert pipe_block, "P1-RATELIMIT-NO-SELF-POISON: no encuentro el pipeline de Redis."
+    assert "zadd" not in pipe_block.group(1), (
+        "P1-RATELIMIT-NO-SELF-POISON: el `zadd` volvió al pipeline, o sea ANTES "
+        "de comprobar el cupo. Con eso, una petición rechazada vuelve a sellar la "
+        "ventana y un cliente en bucle se auto-prorroga el 429 indefinidamente "
+        "(medido: 16.105 seguidos). Debe ir DESPUÉS del `raise`."
+    )
+    i_raise = rl.find("status_code=429")
+    i_zadd = rl.find("redis_client.zadd")
+    assert i_zadd != -1 and i_zadd > i_raise, (
+        "P1-RATELIMIT-NO-SELF-POISON: el `zadd` de aceptación debe vivir DESPUÉS "
+        "del `raise` del 429 — solo se cuenta lo que se admite."
+    )
