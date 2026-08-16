@@ -158,21 +158,31 @@ def test_beta_es_balanced_contiene_pais_no_criollo():
 
 
 def test_beta_fragment_table_vegan_sin_carnes():
-    """Composición beta+vegan, SCOPED a los bloques reemplazados: itera las 4 filas de
-    _BETA_FRAGMENT_TABLE (almuerzo/cena/§15-header-desayuno/§15-snacks), columna 'vegan'. NO
-    se assertea sobre el prompt completo — legítimamente menciona pollo/res/cerdo/pescado en
-    secciones no tocadas por esta task (§2 distinción ají morrón/cubanela con "pollo a la
-    jardinera" como ejemplo, §12 caps de seguridad de embutidos/atún). 'res ' lleva espacio
-    final a propósito (memoria: 'res' es substring de 'interesante')."""
+    """Composición beta+vegan, SCOPED a las filas REALMENTE diet-aware (almuerzo/cena — donde
+    la columna 'vegan' es TEXTO DE MENÚ y por tanto difiere de 'balanced'). NO se assertea sobre
+    filas diet-invariantes (§15-header-desayuno, §15-snacks, y las del fix-round 1 como la
+    regla 8 de medidas caseras): esas comparten el MISMO texto en las 3 columnas — son PROSA DE
+    REGLA (ej. "1 pechuga de pollo" como EJEMPLO de formato de medida casera, no una sugerencia
+    de qué servirle a un vegano) y aplicar aquí el filtro de carnes sería un falso positivo (el
+    fix-round 1 lo encontró: la fila de medidas caseras quedó marcada por mencionar "pollo" en
+    un ejemplo de unidad, no de plato). Tampoco se assertea sobre el prompt completo —
+    legítimamente menciona pollo/res/cerdo/pescado en secciones no tocadas por esta task (§2
+    distinción ají morrón/cubanela con "pollo a la jardinera" como ejemplo, §12 caps de
+    seguridad de embutidos/atún). 'res ' lleva espacio final a propósito (memoria: 'res' es
+    substring de 'interesante')."""
     from prompts.day_generator import _BETA_FRAGMENT_TABLE
     forbidden = re.compile(r"pollo|res |cerdo|pescado")
     assert len(_BETA_FRAGMENT_TABLE) >= 2, "faltan filas mínimas (almuerzo + cena)"
+    diet_aware_rows = 0
     for i, (_target, repl) in enumerate(_BETA_FRAGMENT_TABLE):
         vegan_repl = repl.get("vegan")
-        if not vegan_repl:
-            continue
+        balanced_repl = repl.get("balanced")
+        if not vegan_repl or vegan_repl == balanced_repl:
+            continue  # diet-invariante: mismo texto para todos, no es "menú del vegano"
+        diet_aware_rows += 1
         hits = forbidden.findall(vegan_repl)
         assert not hits, f"fila beta #{i}: reemplazo vegano con carne/pescado {hits}: {vegan_repl!r}"
+    assert diet_aware_rows >= 2, "faltan filas diet-aware mínimas (almuerzo + cena)"
 
 
 def test_beta_vegan_es_render_sin_criollo():
@@ -308,3 +318,141 @@ def test_day_system_instruction_for_diet_beta_incluye_pais(monkeypatch):
     out = go._day_system_instruction_for_diet({"dietType": "balanced", "country": "es"})
     assert "España" in out
     assert out is not go._DAY_SYSTEM_INSTRUCTION_CACHED
+
+
+# ── T2 fix-round 1: órdenes dominicanas encontradas FUERA de §15 ────────────
+#
+# La review (post-Task-2) renderizó el prompt beta REAL y encontró que las órdenes MÁS
+# imperativas ("REGLA ESTRICTA" regla 2, "el validador RECHAZA" regla 19) viven fuera de §15 —
+# la cabecera de país (Task 2 original) no alcanza si dos líneas después la regla 2 ordena sin
+# condición "usa alimentos típicos de República Dominicana" (la misma forma de fallo que
+# P1-DIET-BLIND-DIRECTIVES ya midió: una directiva de alto nivel pierde contra órdenes
+# específicas). Ruling del controller: el hallazgo §16 (constants.build_meal_timing_rules
+# spliced a import-time + tools.py:1644) se MUEVE a Task 4 — NO se toca en esta sección.
+
+def test_finding1_rule2_ingredientes_locales():
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    assert "INGREDIENTES DOMINICANOS" not in out
+    assert "económicos de República Dominicana" not in out
+    assert "INGREDIENTES LOCALES" in out
+    assert "país del usuario" in out
+
+
+def test_finding2_rule25_sin_tabla_criolla_ni_ancla_paladar():
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    assert "PLATOS CRIOLLOS APETECIBLES" not in out
+    assert "paladar dominicano" not in out
+    assert "mofongo / mangú / tostones" not in out
+    assert "casabe" not in out.split("TRANSFORMA")[1].split("APETECIBILIDAD")[0] if "TRANSFORMA" in out else True
+    # el PRINCIPIO de transformación sigue vivo (no se perdió la regla, solo el ejemplo criollo):
+    assert "TRANSFORMA LOS STAPLES" in out
+    assert 'staple "crudo/simple"' in out
+
+
+def test_finding3_rule19_definicion_no_ancla_dominicana():
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    assert "PREPARACIÓN dominicana real" not in out
+    assert "locrios (almuerzo)" not in out
+    # el REQUISITO citado por el validador sigue exacto (no se relajó, solo se re-ancló):
+    assert "AL MENOS una preparación transformada por día" in out
+    assert "el validador RECHAZA un plan de puros staples servidos" in out
+
+
+def test_finding4_frases_sin_marco_nacional():
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    # 4a — regla 5 (sabor)
+    assert "sabor criollo real a guisos, locrios y habichuelas" not in out
+    assert "sabor real a guisos, salteados y leguminosas" in out
+    # 4b — regla 8 (medidas)
+    assert "MEDIDAS CASERAS DOMINICANAS" not in out
+    assert "medidas caseras dominicanas" not in out
+    assert "MEDIDAS CASERAS CLARAS" in out
+    # 4c — §15c header de categorías de merienda
+    assert "merienda dominicana" not in out
+    assert "Categorías VÁLIDAS de merienda:" in out
+    # 4d — §15c crudités (la regla queda, se retira el marco de nacionalidad)
+    assert "AMERICANA, no dominicana" not in out
+    assert "El gate determinista los rechaza." in out
+    # 4e — §15f apetecibilidad
+    assert "un dominicano se lo comería" not in out
+    assert "tu usuario se lo comería con gusto" in out
+    # 4f (auto-hallado durante el barrido amplio de finding 6, mismo patrón que 4a-4e: regla
+    # universal — no desperdiciar yemas — envuelta en un marco nacional innecesario) — §12
+    # HUEVOS: ENTEROS PRIMERO
+    assert "desperdicio real en cocina dominicana" not in out
+    assert "desperdicio real en la cocina" in out
+
+
+# Sobrevivientes DOCUMENTADOS del render beta tras el fix-round 1 (clasificación completa +
+# rationale en task-2-report.md, sección "Explícitamente NO tocado"):
+#   (b) PROHIBICIÓN legítima — universal independientemente del país (una merienda no debe ser
+#       un guiso pesado, una cena no debe llevar arroz, en CUALQUIER país; el nombre del plato
+#       prohibido es incidental a la regla).
+#   (c) referencia al ENUM de categorías del Planificador (Mangú/Avena/Pan/Batido/Revoltillo),
+#       compartido con ~40 archivos de catálogo/planner (dish_templates.json,
+#       dominican_dishes.json, planner.py, plan_generator.py...). Cambiar la ETIQUETA aquí sin
+#       cambiar el enum real que el Planificador asigna sería cosmético y potencialmente
+#       engañoso — Fase 2 (catálogo por país) es donde este enum se vuelve per-country de verdad.
+_B_CLASS_PROHIBICIONES = [
+    'PROHIBIDO ABSOLUTO: técnicas de plato fuerte (salteado, locrio, asopao, guisado, frito '
+    'completo, horneado tipo cazuela).',
+    'PROHIBIDO el "ARROZ DE NOCHE": NADA de arroz blanco/integral, locrio, moro, asopao NI '
+    'platos cuya BASE sea arroz aunque el nombre no diga "arroz" (chofán/arroz frito, paella, '
+    'risotto, congrí, mamposteao) en la cena (no se acostumbra en la cena dominicana y el gate '
+    'lo rechaza).',
+    "Evita frituras pesadas, locrios densos y guisos calóricos en la noche.",
+]
+_C_CLASS_CATALOG_ENUM = [
+    "IMPORTANTE: Usa la CATEGORÍA de desayuno asignada por el Planificador (Mangú/tubérculos, "
+    "Avena/cereales, Pan/tostadas, Batido/bowl, Revoltillo/tortilla). NO elijas mangú si el "
+    "planificador asignó otra categoría.",
+]
+_DOMINICAN_TOKEN_RX = re.compile(r"locrio|mofongo|mangú|bandera:", re.IGNORECASE)
+
+
+def _scoped_out_sin_s16(out: str) -> str:
+    """Excluye §16 (CONTRATO EXACTO DEL VALIDADOR DE HORARIO, derivado de
+    constants.build_meal_timing_rules) del texto escaneado — ruling del controller: MOVIDO a
+    Task 4, no es prompt-directive de day_generator sino el espejo del slot SSOT que T4
+    parameteriza. Tocarlo aquí estaría fuera del scope de este fix-round."""
+    i16 = out.index("16. CONTRATO EXACTO DEL VALIDADOR DE HORARIO")
+    i17 = out.index("\n17. PRESUPUESTO DE SODIO")
+    return out[:i16] + out[i17:]
+
+
+def test_finding5_guard_case_insensitive_sin_sobrevivientes_no_documentados():
+    """Guard HONESTO (no solo verde): escanea el render beta case-insensitive por los 4 tokens
+    duros, excluye §16 (T4) y los sobrevivientes DOCUMENTADOS arriba (clase b/c), y falla si
+    queda CUALQUIER OTRO hit — el mecanismo que impide que un futuro edit reintroduzca una orden
+    dominicana sin que nadie se entere."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    scoped = _scoped_out_sin_s16(build("balanced", "ES"))
+
+    for survivor in _B_CLASS_PROHIBICIONES + _C_CLASS_CATALOG_ENUM:
+        assert survivor in scoped, (
+            f"sobreviviente documentado ya no existe verbatim en el render — o cambió el texto "
+            f"fuente (actualiza esta lista) o ya se arregló (muévelo a los tests de arriba): "
+            f"{survivor[:70]!r}"
+        )
+        scoped = scoped.replace(survivor, "", 1)
+
+    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    assert not hits, f"sobrevivientes NO documentados de contenido dominicano: {hits}"
+
+
+def test_finding5_guard_vale_tambien_para_vegan():
+    """Los targets del fix-round 1 son diet-invariantes — el guard debe sostenerse igual sobre
+    vegan, no solo balanced."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    scoped = _scoped_out_sin_s16(build("vegan", "ES"))
+
+    for survivor in _B_CLASS_PROHIBICIONES + _C_CLASS_CATALOG_ENUM:
+        assert survivor in scoped, f"sobreviviente ausente en vegan: {survivor[:70]!r}"
+        scoped = scoped.replace(survivor, "", 1)
+
+    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    assert not hits, f"sobrevivientes NO documentados (vegan): {hits}"

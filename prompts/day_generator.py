@@ -567,6 +567,145 @@ _S15_MERIENDA_EJEMPLOS_BETA = (
     'mini-almuerzo.'
 )
 
+def _diet_invariant(fragment: str) -> dict:
+    """Fila diet-invariante: mismo fragmento en las 3 columnas de dieta (región NO tocada por
+    `_DIET_FRAGMENT_TABLE`). Azúcar sintáctico para no repetir el dict 3 veces por fila —
+    usado SOLO por las filas del fix-round 1 (abajo); las filas originales de Task 2 se
+    dejaron con el dict explícito para no aumentar el diff sobre código ya revisado."""
+    return {"balanced": fragment, "vegetarian": fragment, "vegan": fragment}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 2, fix-round 1)] La review encontró las órdenes
+# dominicanas MÁS IMPERATIVAS del prompt viviendo FUERA de §15 — reglas 2/2.5/19 son "REGLA
+# ESTRICTA"/"el validador RECHAZA", exactamente la forma del fallo que P1-DIET-BLIND-DIRECTIVES
+# ya había medido una vez (una directiva de alto nivel pierde contra órdenes específicas) — la
+# cabecera de país (Task 2) no alcanza si la regla 2, dos líneas después, ordena "usa alimentos
+# típicos de República Dominicana" sin condición. Todas diet-invariantes (verificado: ninguna
+# colisiona con un target de `_DIET_FRAGMENT_TABLE`).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Finding 1 (CRITICAL): regla 2, la declaración MÁS visible del prompt (línea 2 de las REGLAS
+# ESTRICTAS numeradas) — "REGLA ESTRICTA" sin condicionar al país es la contradicción directa
+# de la cabecera. Texto de reemplazo tal cual lo especificó la review.
+_RULE2_INGREDIENTES_DO = (
+    "2. INGREDIENTES DOMINICANOS: El menú usa alimentos típicos, accesibles y económicos de "
+    "República Dominicana."
+)
+_RULE2_INGREDIENTES_BETA = (
+    "2. INGREDIENTES LOCALES: El menú usa alimentos típicos, accesibles y económicos del país "
+    "del usuario (ver PAÍS DEL USUARIO arriba)."
+)
+
+# Finding 2 (CRITICAL): regla 2.5, la tabla staple→plato-criollo (mofongo/mangú/casabe/chacá) +
+# el ancla "paladar dominicano". Se conserva el PRINCIPIO (transformar staples, no servirlos
+# crudos) y TODO lo demás (zero-waste de catálogo, coherencia dulce/salado, no duplicar
+# proteína) — se retira SOLO la tabla de platos criollos y el ancla de paladar nacional.
+_RULE25_TRANSFORM_DO = (
+    '2.5. TRANSFORMA LOS STAPLES EN PLATOS CRIOLLOS APETECIBLES [P2-CREATIVITY-TRANSFORM · 2026-06-29]: NO sirvas el\n'
+    '   staple "crudo/simple" por defecto (ni "proteína a la plancha + arroz blanco" en cada comida). Conviértelo en una\n'
+    '   preparación criolla apetecible, manteniendo CADA componente desglosado en `ingredients` (para que la lista de\n'
+    '   compras lo costee). Ejemplos por staple: harina → panqueques / bollos / arepas / tortillas / empanadas al horno;\n'
+    '   avena → panqueques de avena / overnight oats / avena cremosa; yuca → bollos de yuca / arepitas / casabe / yuca al\n'
+    '   mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica\n'
+    '   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar\n'
+    '   alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).\n'
+    '   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el paladar dominicano,\n'
+    '   NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un\n'
+    '   "salteado salado" raro (avena con guisantes y soya = disparate). NO pegues una proteína que no encaje con el plato\n'
+    '   (sardinas/atún en lata dentro de un revoltillo de huevo; marisco en un plato dulce). Si la comida es ligera y ya\n'
+    '   tiene proteína coherente (huevo, queso), NO le añadas una 2ª proteína incongruente solo para subir gramos.'
+)
+_RULE25_TRANSFORM_BETA = (
+    '2.5. TRANSFORMA LOS STAPLES EN PREPARACIONES APETECIBLES [P2-CREATIVITY-TRANSFORM · 2026-06-29]: NO sirvas el\n'
+    '   staple "crudo/simple" por defecto (ni "proteína a la plancha + arroz blanco" en cada comida). Conviértelo en una\n'
+    '   preparación apetecible del contexto local e internacional del usuario, manteniendo CADA componente desglosado en\n'
+    '   `ingredients` (para que la lista de compras lo costee). Ejemplos de transformación: harina → panqueques / tortillas\n'
+    '   / panecillos al horno; avena → panqueques de avena / overnight oats / avena cremosa; tubérculos (yuca, papa,\n'
+    '   batata) → puré / gratín / tortitas al horno; plátano o banana → puré / tortitas / horneado; maíz → tortitas /\n'
+    '   arepas; huevo → tortilla / revoltillo. Aplica ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La\n'
+    '   creatividad es en la PREPARACIÓN, NUNCA en inventar alimentos fuera del catálogo verificado (regla 5 manda).\n'
+    '   Mantén la coherencia receta↔ingredientes (regla 8).\n'
+    '   APETECIBILIDAD [P1-DISH-PALATABILITY · 2026-06-30]: la combinación debe ser apetecible para el usuario,\n'
+    '   NO un disparate. La avena/staples dulces van en preparación DULCE (panqueques/overnight/cremosa), NUNCA en un\n'
+    '   "salteado salado" raro (avena con guisantes y soya = disparate). NO pegues una proteína que no encaje con el plato\n'
+    '   (sardinas/atún en lata dentro de un revoltillo de huevo; marisco en un plato dulce). Si la comida es ligera y ya\n'
+    '   tiene proteína coherente (huevo, queso), NO le añadas una 2ª proteína incongruente solo para subir gramos.'
+)
+
+# Finding 3 (CRITICAL): regla 19 — requisito CITADO POR EL VALIDADOR ("el validador RECHAZA"),
+# no prosa decorativa. Se conserva el REQUISITO EXACTO (≥1 preparación transformada/día) —
+# solo se ancla la definición a la cocina local/internacional del usuario en vez de "una
+# preparación dominicana real", y se sustituyen los ejemplos criollos (locrios, mangú, yuca)
+# por técnicas genéricas.
+_RULE19_TRANSFORMADAS_DO = (
+    "19. PREPARACIONES TRANSFORMADAS (el validador RECHAZA un plan de puros staples servidos):\n"
+    "    - Un plato 'transformado' es una PREPARACIÓN dominicana real donde los ingredientes se integran:\n"
+    "      guisos, locrios (almuerzo), panqueques/arepitas con las harinas, bollitos/buñuelos de yuca o\n"
+    "      víveres, revoltillos, tortitas/croquetas al horno, mangú, ensaladas COMPUESTAS. NO cuenta:\n"
+    "      proteína a la plancha + carbo hervido + vegetal crudo suelto servidos por separado (eso es un\n"
+    "      'staple servido' y el validador lo rechaza si el día NO trae ninguna preparación transformada).\n"
+    "    - Incluye AL MENOS una preparación transformada por día — idealmente que la comida principal lo sea.\n"
+    "      Un día entero de puros staples servidos se rechaza y se regenera (pierde tiempo y calidad).\n"
+    "    - Transformar es la TÉCNICA (cómo se cocina y se presenta), NO cambia los macros: mantén las mismas\n"
+    "      cantidades de proteína/carbohidrato/grasa del plato."
+)
+_RULE19_TRANSFORMADAS_BETA = (
+    "19. PREPARACIONES TRANSFORMADAS (el validador RECHAZA un plan de puros staples servidos):\n"
+    "    - Un plato 'transformado' es una PREPARACIÓN real (de la cocina local o internacional del usuario) donde los\n"
+    "      ingredientes se integran: guisos, salteados, panqueques/tortitas con las harinas, bollitos/croquetas al\n"
+    "      horno, revoltillos, gratines, ensaladas COMPUESTAS. NO cuenta:\n"
+    "      proteína a la plancha + carbo hervido + vegetal crudo suelto servidos por separado (eso es un\n"
+    "      'staple servido' y el validador lo rechaza si el día NO trae ninguna preparación transformada).\n"
+    "    - Incluye AL MENOS una preparación transformada por día — idealmente que la comida principal lo sea.\n"
+    "      Un día entero de puros staples servidos se rechaza y se regenera (pierde tiempo y calidad).\n"
+    "    - Transformar es la TÉCNICA (cómo se cocina y se presenta), NO cambia los macros: mantén las mismas\n"
+    "      cantidades de proteína/carbohidrato/grasa del plato."
+)
+
+# Finding 4 (IMPORTANT): 5 frases dispersas que enmarcan reglas GENÉRICAS (sabor, medidas,
+# categorías de merienda, apetecibilidad) como si fueran EXCLUSIVAS de República Dominicana. En
+# los 5 casos la REGLA sigue siendo válida en cualquier país — solo se retira el marco nacional.
+_RULE5_SABOR_DO = "úsalos activamente para dar sabor criollo real a guisos, locrios y habichuelas cuando aparezcan en el catálogo listado."
+_RULE5_SABOR_BETA = "úsalos activamente para dar sabor real a guisos, salteados y leguminosas cuando aparezcan en el catálogo listado."
+
+_RULE8_MEDIDAS_DO = (
+    '8. ESTRUCTURA DE INGREDIENTES Y MEDIDAS CASERAS DOMINICANAS:\n'
+    '   - PREFIERE usar medidas caseras dominicanas siempre que sea posible (ej: "½ plátano verde", "1 taza de arroz", "2 lonjas de queso", "1 pechuga de pollo", "1 cda de aceite").'
+)
+_RULE8_MEDIDAS_BETA = (
+    '8. ESTRUCTURA DE INGREDIENTES Y MEDIDAS CASERAS CLARAS:\n'
+    '   - PREFIERE usar medidas caseras claras o gramos siempre que sea posible (ej: "½ plátano verde", "1 taza de arroz", "2 lonjas de queso", "1 pechuga de pollo", "1 cda de aceite").'
+)
+
+_S15C_MERIENDA_HEADER_DO = "Categorías VÁLIDAS de merienda dominicana:"
+_S15C_MERIENDA_HEADER_BETA = "Categorías VÁLIDAS de merienda:"
+
+# La regla en sí (un vegetal crudo nunca es vehículo de una crema/dip) queda intacta — solo se
+# retira el marco "americana, no dominicana" que la justificaba por nacionalidad.
+_S15C_CRUDITES_DO = (
+    "NO generalices esto a VEGETALES: apio relleno\n"
+    "           de mantequilla de maní, bastones de zanahoria con crema, brócoli al vapor con dip de\n"
+    "           yogurt y demás crudités son merienda de dieta AMERICANA, no dominicana. Aquí un vegetal\n"
+    "           crudo NUNCA es el vehículo de una crema o un dip. El gate determinista los rechaza."
+)
+_S15C_CRUDITES_BETA = (
+    "NO generalices esto a VEGETALES: apio relleno\n"
+    "           de mantequilla de maní, bastones de zanahoria con crema, brócoli al vapor con dip de\n"
+    "           yogurt y demás crudités NO cuentan en esta categoría de merienda. Aquí un vegetal\n"
+    "           crudo NUNCA es el vehículo de una crema o un dip. El gate determinista los rechaza."
+)
+
+_S15F_APETECIBLE_DO = "El plato debe sonar APETECIBLE: piensa si un dominicano se lo comería con gusto."
+_S15F_APETECIBLE_BETA = "El plato debe sonar APETECIBLE: piensa si tu usuario se lo comería con gusto."
+
+# Finding 4f (auto-hallado durante el barrido amplio de la sección "Explícitamente NO tocado":
+# mismo patrón que 4a-4e — una regla UNIVERSAL, sección 12 "HUEVOS: ENTEROS PRIMERO", envuelta
+# en un marco nacional innecesario. No desperdiciar yemas separando huevos es válido en
+# cualquier cocina, no solo la dominicana.
+_RULE12_HUEVOS_DESPERDICIO_DO = "desperdicio real en cocina dominicana"
+_RULE12_HUEVOS_DESPERDICIO_BETA = "desperdicio real en la cocina"
+
 # (target_por_dieta, beta_repl_por_dieta) — mismo shape de fila que _DIET_FRAGMENT_TABLE, pero
 # cada valor es un dict {"balanced"|"vegetarian"|"vegan": fragmento}. `build_day_generator_
 # system_prompt` aplica CADA fila con la columna de dieta activa (`beta_key`, colapsa
@@ -586,6 +725,16 @@ _BETA_FRAGMENT_TABLE = [
         {"balanced": _S15_MERIENDA_EJEMPLOS_DO, "vegetarian": _S15_MERIENDA_EJEMPLOS_DO, "vegan": _S15_MERIENDA_EJEMPLOS_DO},
         {"balanced": _S15_MERIENDA_EJEMPLOS_BETA, "vegetarian": _S15_MERIENDA_EJEMPLOS_BETA, "vegan": _S15_MERIENDA_EJEMPLOS_BETA},
     ),
+    # ── fix-round 1 (findings 1-4) ──────────────────────────────────────────
+    (_diet_invariant(_RULE2_INGREDIENTES_DO), _diet_invariant(_RULE2_INGREDIENTES_BETA)),         # finding 1
+    (_diet_invariant(_RULE25_TRANSFORM_DO), _diet_invariant(_RULE25_TRANSFORM_BETA)),             # finding 2
+    (_diet_invariant(_RULE19_TRANSFORMADAS_DO), _diet_invariant(_RULE19_TRANSFORMADAS_BETA)),     # finding 3
+    (_diet_invariant(_RULE5_SABOR_DO), _diet_invariant(_RULE5_SABOR_BETA)),                       # finding 4a
+    (_diet_invariant(_RULE8_MEDIDAS_DO), _diet_invariant(_RULE8_MEDIDAS_BETA)),                   # finding 4b
+    (_diet_invariant(_S15C_MERIENDA_HEADER_DO), _diet_invariant(_S15C_MERIENDA_HEADER_BETA)),     # finding 4c
+    (_diet_invariant(_S15C_CRUDITES_DO), _diet_invariant(_S15C_CRUDITES_BETA)),                   # finding 4d
+    (_diet_invariant(_S15F_APETECIBLE_DO), _diet_invariant(_S15F_APETECIBLE_BETA)),               # finding 4e
+    (_diet_invariant(_RULE12_HUEVOS_DESPERDICIO_DO), _diet_invariant(_RULE12_HUEVOS_DESPERDICIO_BETA)),  # finding 4f
 ]
 
 _COUNTRY_PROMPT_RENDER_CACHE = {}
