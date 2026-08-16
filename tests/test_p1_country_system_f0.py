@@ -93,3 +93,35 @@ def test_knob_maestro_nace_apagado():
         "El knob maestro debe ser _env_bool('MEALFIT_COUNTRY_SYSTEM', False): "
         "la spec prohíbe encender nada hasta que los 5 países estén completos."
     )
+
+
+# ── el único lector preexistente queda tras knob APAGADO ────────────────────
+
+def _cuerpo_similar_patterns() -> str:
+    src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    ini = src.index("def get_similar_user_patterns")
+    fin = src.find("\ndef ", ini + 10)
+    cuerpo = src[ini: fin if fin != -1 else len(src)]
+    return "\n".join(l for l in cuerpo.splitlines() if not l.strip().startswith("#"))
+
+
+def test_segmentacion_coldstart_gateada_apagada():
+    """Poblar `country` (Fase 0 escribe 'DO' por default) NO debe revivir la
+    segmentación cultural del cold-start: con 1 usuario español el pool queda
+    vacío, y el dominicano que rellena el campo se segmenta contra un pool que
+    excluye a los legacy sin clave (el `=` no casa con clave ausente). Se
+    enciende con datos, no de rebote."""
+    cuerpo = _cuerpo_similar_patterns()
+    assert "MEALFIT_COUNTRY_COLDSTART_SEGMENT" in cuerpo, (
+        "La rama de país del cold-start perdió su knob: escribir country la "
+        "reactiva sin que nadie lo haya decidido."
+    )
+    pos_knob = cuerpo.index("MEALFIT_COUNTRY_COLDSTART_SEGMENT")
+    pos_filtro = cuerpo.find("health_profile->>'country'", pos_knob)
+    assert pos_filtro != -1, (
+        "El filtro por país ya no está DESPUÉS del knob: o se movió fuera del "
+        "gate o se eliminó — ambos cambian conducta sin decisión."
+    )
+    assert re.search(
+        r"_env_bool\(\s*\"MEALFIT_COUNTRY_COLDSTART_SEGMENT\"\s*,\s*False\s*\)", cuerpo
+    ), "El knob debe nacer con default False."

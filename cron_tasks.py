@@ -16826,7 +16826,15 @@ def get_similar_user_patterns(user_id: str, health_profile: dict):
     goal = health_profile.get('mainGoal')
     activity = health_profile.get('activityLevel')
     diet_types = health_profile.get('dietTypes', [])
-    country = health_profile.get('country')
+    # [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] Gate explícito: la Fase 0 empieza a
+    # escribir `country` (default 'DO') y esta rama era dead code que revivía
+    # sola. Dos problemas medidos en el mapa: (a) con 1 usuario de un país
+    # nuevo, su pool de patrones queda VACÍO; (b) el `=` no casa con clave
+    # ausente, así que un dominicano CON campo se segmenta contra un pool que
+    # excluye a todos los legacy SIN campo. Se enciende con datos, no de rebote.
+    country = health_profile.get('country') if _env_bool(
+        "MEALFIT_COUNTRY_COLDSTART_SEGMENT", False
+    ) else None
     
     if not goal or not activity:
         return []
