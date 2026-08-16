@@ -204,3 +204,18 @@ def test_rama_contador_persiste_el_pais():
         "modo contador el país se cae AL SUELO en silencio (hallazgo del "
         "escéptico del mapa — la rama corta es ALLOWLIST, no spread)."
     )
+
+
+# ── Task 5: selector en Configuración ────────────────────────────────────────
+
+def test_settings_tiene_selector_de_pais_gateado():
+    src = _js_sin_comentarios(_FRONTEND / "src" / "pages" / "Settings.jsx")
+    assert "COUNTRY_SYSTEM_UI" in src and "coerceCountry" in src, (
+        "Settings no monta el selector de país (o no está gateado en oscuro)."
+    )
+    ini = src.find("health_profile")
+    assert re.search(r"health_profile:\s*\{\s*country", src), (
+        "El selector debe persistir por PATCH /api/profile con "
+        "{health_profile:{country}} — el mismo merge key-level que usa la rama "
+        "contador. Un endpoint nuevo aquí sería plomería duplicada."
+    )
