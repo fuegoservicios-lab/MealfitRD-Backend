@@ -12139,6 +12139,16 @@ def api_blocked_reasons(
                 "cta": "Actualizar nevera",
                 "url": "/inventory",
             },
+            # [P1-FIRST-PURCHASE-PAUSE · 2026-08-16] La pausa una-vez-por-plan
+            # cuando la lista fue entregada y el usuario jamás marcó compra. El
+            # copy habla de la COMPRA (el paso que falta), no de una nevera rota,
+            # y promete la reanudación sola — el recovery la ejecuta a las 12h.
+            "awaiting_first_purchase": {
+                "title": "Tu primera compra está pendiente",
+                "body": "Te dimos la lista de compras y aún no marcaste nada como comprado. Márcalo en la Nevera — o espera, y seguiremos solos con la mejor información disponible.",
+                "cta": "Ir a la Nevera",
+                "url": "/inventory",
+            },
             # [P2-HIST-AUDIT-9 · 2026-05-09] Reasons faltantes
             # cubiertos. Antes caían al fallback `empty_pantry` (copy
             # incorrecto). Cada uno deriva de un cron específico:

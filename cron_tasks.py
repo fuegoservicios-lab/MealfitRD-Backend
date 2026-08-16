@@ -13635,11 +13635,102 @@ def _handle_reservation_reconciliation_exhausted(
             )
 
 
+def _first_purchase_plan_facts(meal_plan_id) -> dict | None:
+    """[P1-FIRST-PURCHASE-PAUSE · 2026-08-16] Los hechos del PLAN que el waiver de
+    autonomía necesita para decidir si cede una vez.
+
+    `None` ante cualquier fallo (fila ausente, DB blip, JSON raro) — y None
+    significa "sin hechos, la autonomía queda EXACTAMENTE como estaba". El mismo
+    principio conservador del guard proactivo P0-4: pausar con información
+    parcial es peor UX que aceptar un retraso.
+    """
+    try:
+        row = execute_sql_query(
+            "SELECT user_id::text AS user_id, "
+            "       (jsonb_array_length(COALESCE(plan_data->'aggregated_shopping_list', '[]'::jsonb)) > 0) "
+            "           AS shopping_list_delivered, "
+            "       plan_data->>'_first_purchase_pause_at' AS first_purchase_pause_at, "
+            "       lower(COALESCE(plan_data->>'is_restocked', '')) AS is_restocked_raw "
+            "FROM meal_plans WHERE id = %s",
+            (meal_plan_id,),
+            fetch_one=True,
+        )
+        if not row:
+            return None
+        return {
+            "user_id": row.get("user_id"),
+            "shopping_list_delivered": bool(row.get("shopping_list_delivered")),
+            "first_purchase_pause_at": row.get("first_purchase_pause_at"),
+            "is_restocked": row.get("is_restocked_raw") in ("true", "1"),
+        }
+    except Exception as _fp_err:
+        logger.debug(f"[P1-FIRST-PURCHASE-PAUSE] facts no disponibles para plan {meal_plan_id}: {_fp_err}")
+        return None
+
+
+def _first_purchase_pause_applies(plan_facts: dict | None) -> bool:
+    """[P1-FIRST-PURCHASE-PAUSE · 2026-08-16] ¿La autonomía de `initial_plan` debe
+    ceder UNA vez para pedir la primera compra?
+
+    Decisión del dueño (2026-08-16): el bloque 2+ de un plan cuya lista de compras
+    ya fue entregada NO debe generarse en silencio si el usuario JAMÁS ha marcado
+    una compra — se pausa una vez con CTA, y si no actúa, el recovery existente lo
+    genera solo a las 12h en modo flexible (TTL `CHUNK_PANTRY_EMPTY_TTL_HOURS`).
+    Refina P1-CHUNK-AUTONOMY, no lo revierte: la autonomía sigue siendo la regla y
+    esto es su única excepción, acotada por diseño.
+
+    Las cuatro condiciones, y POR QUÉ cada una es un no-pausar:
+      - sin hechos (`None`) → NO: fail-safe, conducta previa intacta.
+      - sin lista entregada → NO: es el cold start; pedir que compre una lista
+        que no existe es el interbloqueo que P2-CHUNK-AUTONOMY evita (la lista
+        NACE del plan). Esta condición es la diferencia entre "refinar el waiver"
+        y "resucitar el incidente del dry-run 2026-07-10".
+      - ya pausamos una vez (`_first_purchase_pause_at`) → NO: una pregunta por
+        plan. Repetirla en cada bloque convierte el CTA en spam y el plan en un
+        goteo de pausas de 12h.
+      - `is_restocked` → NO: el usuario YA usa la Nevera; si está vacía a mitad
+        de plan, eso es la autonomía normal (consumió lo que compró).
+    """
+    if not isinstance(plan_facts, dict):
+        return False
+    if not _env_bool("MEALFIT_FIRST_PURCHASE_PAUSE", True):
+        return False
+    if not plan_facts.get("shopping_list_delivered"):
+        return False
+    if plan_facts.get("first_purchase_pause_at"):
+        return False
+    if plan_facts.get("is_restocked"):
+        return False
+    return True
+
+
+def _mark_first_purchase_pause(meal_plan_id, user_id) -> None:
+    """[P1-FIRST-PURCHASE-PAUSE] Estampa el marker una-vez-por-plan.
+
+    `jsonb_set` quirúrgico (I7-exento) + `AND user_id` (I2). Best-effort: si el
+    UPDATE falla, el peor caso es una segunda pausa suave 12h después — acotado y
+    preferible a abortar la pausa ya decidida.
+    """
+    try:
+        execute_sql_write(
+            "UPDATE meal_plans SET plan_data = jsonb_set(plan_data, "
+            "'{_first_purchase_pause_at}', to_jsonb(NOW()::text)) "
+            "WHERE id = %s AND user_id = %s",
+            (meal_plan_id, user_id),
+        )
+    except Exception as _fp_mark_err:
+        logger.warning(
+            f"[P1-FIRST-PURCHASE-PAUSE] No se pudo estampar el marker en plan "
+            f"{meal_plan_id}: {_fp_mark_err} (acotado: reintentará a lo sumo una pausa más)."
+        )
+
+
 def _pantry_gate_waiver_reason(
     chunk_kind: str | None = None,
     snapshot: dict | None = None,
     form_data: dict | None = None,
     fresh_inventory_source: str | None = None,
+    plan_facts: dict | None = None,
 ) -> str | None:
     """[P1-PANTRY-GATE-SSOT · 2026-07-26] Motivo por el que la nevera NO puede bloquear
     este chunk, o `None` si sí puede.
@@ -13678,6 +13769,14 @@ def _pantry_gate_waiver_reason(
     if fresh_inventory_source == "guest":
         return "guest"
     if chunk_kind == "initial_plan" and _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_AUTONOMY", True):
+        # [P1-FIRST-PURCHASE-PAUSE · 2026-08-16] La autonomía cede UNA VEZ por plan
+        # cuando la lista ya fue entregada y el usuario jamás marcó compra: el
+        # incidente reportado fue un bloque generándose a las 00:06 con la Nevera
+        # a cero y sin que nada se lo dijera al usuario. `plan_facts=None` (caller
+        # sin hechos o query fallida) deja la autonomía intacta — el orden de las
+        # exenciones de arriba (flexible/advisory/guest) NO cambia.
+        if _first_purchase_pause_applies(plan_facts):
+            return None
         return "initial_plan_autonomy"
     return None
 
@@ -28321,13 +28420,19 @@ __PLAN_MODE_GATE__
                 # día 30 (dry-run 2026-07-10: prod 7d con reservas 0/N + neveras vacías →
                 # pending_user_action). rolling_refill/catchup CONSERVAN la pausa: a mitad de
                 # plan sí prometemos cocinar con lo que hay.
+                # [P1-FIRST-PURCHASE-PAUSE · 2026-08-16] Única excepción a la autonomía,
+                # decidida DENTRO del waiver SSOT: lista entregada + usuario que jamás marcó
+                # compra + primera vez ⇒ pausa suave una vez (reason propio, TTL 12h del
+                # recovery). `_first_purchase_plan_facts` es fail-safe: sin hechos, autonomía.
                 _meaningful = _count_meaningful_pantry_items(fresh_inventory)
+                _fp_facts = _first_purchase_plan_facts(meal_plan_id)
                 # [P1-PANTRY-GATE-SSOT · 2026-07-26] mismo predicado que el gate de reservas.
                 # Llegados aquí `_should_pause_for_empty_pantry` ya descartó flexible/advisory/
                 # guest, así que en la práctica solo puede devolver "initial_plan_autonomy" —
                 # pero se consulta la SSOT para que el knob tenga UN solo lector en el archivo.
                 _pause_waiver = _pantry_gate_waiver_reason(
-                    chunk_kind=chunk_kind, snapshot=snap, form_data=form_data
+                    chunk_kind=chunk_kind, snapshot=snap, form_data=form_data,
+                    plan_facts=_fp_facts,
                 )
                 if _pause_waiver:
                     logger.info(
@@ -28337,6 +28442,21 @@ __PLAN_MODE_GATE__
                         f"del plan define qué comprar)."
                     )
                 else:
+                    # [P1-FIRST-PURCHASE-PAUSE] El reason se deriva del MISMO helper que usó el
+                    # waiver (no una segunda decisión): si la denegación vino de la primera
+                    # compra, el copy del banner habla de la compra, no de una nevera rota.
+                    if chunk_kind == "initial_plan" and _first_purchase_pause_applies(_fp_facts):
+                        _mark_first_purchase_pause(meal_plan_id, user_id)
+                        logger.warning(
+                            f"[P1-FIRST-PURCHASE-PAUSE] Chunk {week_number} plan {meal_plan_id} "
+                            f"pausado UNA vez: lista entregada y ninguna compra marcada jamás "
+                            f"(items_meaningful={_meaningful}, source={fresh_inventory_source!r})."
+                        )
+                        _pause_chunk_for_pantry_refresh(
+                            task_id, user_id, week_number, fresh_inventory,
+                            reason="awaiting_first_purchase",
+                        )
+                        return
                     # [P1-1] Source distinto a "live" se pausaba antes silenciosamente. Logueamos
                     # explícitamente la fuente para detectar si la mayoría de pausas vienen de
                     # snapshots vacíos (síntoma de un frontend que no envía despensa al crear plan).
