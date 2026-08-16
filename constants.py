@@ -3121,6 +3121,33 @@ def canonicalize_country(raw) -> str:
     return "DO"
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] ÚNICA puerta de lectura de país del
+# motor; un lector que no pase por aquí es el drift que P1-DIET-CANON-SSOT
+# pagó (tres tablas de dieta a mano, driftaron, una sirvió Pollo a
+# vegetarianas — no escribas una 2ª aquí).
+def country_for_form_data(form_data) -> str:
+    """País canónico para un `form_data` de sesión de generación de plan.
+
+    Lee el knob maestro POR LLAMADA (`_env_bool("MEALFIT_COUNTRY_SYSTEM",
+    False)`, NO el `COUNTRY_SYSTEM_ENABLED` module-level) — mismo patrón que
+    el gate cold-start de `cron_tasks.get_similar_user_patterns`: el flip
+    solo exige restart del proceso, no redeploy de código.
+
+    Knob apagado (default) ⇒ 'DO' SIEMPRE, sin mirar `form_data` — el motor
+    queda byte-idéntico al de antes de Fase 1. Knob encendido ⇒
+    `canonicalize_country(form_data.get('country'))`. `form_data` no-dict ⇒
+    'DO' bajo cualquier estado del knob (defensa: algunos call sites pasan
+    `form_data or {}` pero no todos garantizan dict antes de esta puerta).
+
+    tooltip-anchor: country_for_form_data (test_p1_country_system_f1.py)
+    """
+    if not _env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+        return "DO"
+    if not isinstance(form_data, dict):
+        return "DO"
+    return canonicalize_country(form_data.get("country"))
+
+
 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] SSOT de las FUENTES DE PROTEÍNA sugeribles por dieta.
 # Razón (benchmark issue #9, journal 2026-08-08 01:53-02:00 UTC): el stack de prompts ordenaba
 # "fuente animal de alta densidad (pollo, pescado, cerdo, res...)" sin mirar la dieta — el retry

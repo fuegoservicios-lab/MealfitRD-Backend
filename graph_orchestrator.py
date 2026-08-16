@@ -5742,21 +5742,24 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
     """[P1-PROMPT-TRIM-FORM-DATA · 2026-05-15] Retorna una copia de
     `form_data` SIN las claves pipeline-internal con prefijo `_`.
 
-    Si `PROMPT_TRIM_FORM_DATA=False` (kill switch), retorna `form_data`
-    sin cambios (legacy behavior).
+    Si `PROMPT_TRIM_FORM_DATA=False` (kill switch), retorna `form_data` sin
+    tocar las demás claves (legacy behavior) salvo `country`
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16]: esa exclusión es incondicional en
+    AMBAS ramas, kill switch incluido — ver comentario inline.
 
     No muta el original. El código backend que consume `form_data["_xxx"]`
     debe seguir leyendo del state, NO del retorno de este helper.
     """
     if not isinstance(form_data, dict):
         return form_data
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] el país llega a prompts SOLO vía el
+    # sistema de variantes (F1-T2/T3), jamás como key de form_data —
+    # incondicional desde F1-T1 (descarga el ruling parked de F0). F0 solo
+    # excluía 'country' en la rama de trim; el passthrough del kill-switch
+    # de abajo (`MEALFIT_PROMPT_TRIM_FORM_DATA=False`) devolvía el dict
+    # completo y colaba el campo por ese segundo canal sin gate.
     if not PROMPT_TRIM_FORM_DATA:
-        return form_data
-    # [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] `country` NO viaja al prompt en esta fase:
-    # el volcado es comodín (blacklist por prefijo `_`) y dejaba pasar el campo nuevo
-    # — un segundo canal SIN gate que en Fase 1 diría "ES" contra 22 órdenes criollas
-    # (el modo de fallo P1-CHAT-PAUSED-PROMPT-BLOCKS). Fase 1 lo retira DELIBERADAMENTE
-    # cuando el prompt por variante lo consuma canonicalizado (constants.canonicalize_country).
+        return {k: v for k, v in form_data.items() if k != "country"}
     return {
         k: v
         for k, v in form_data.items()
