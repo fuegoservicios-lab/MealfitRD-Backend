@@ -106,12 +106,27 @@ def test_finalizer_passes_allergies_to_veg_guard():
 
 
 def test_wired_in_swap():
-    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] Sin paréntesis de cierre: el finalizer
-    # ganó `country=_swap_country` DESPUÉS de `allergies=allergies` en el mismo call → el match
-    # exacto con `)` quedó stale, mismo caso que `test_wired_in_chat_modify` (P2-CHAT-EXPLICIT-
-    # SLOT-WISH) documenta arriba. El contrato es que el finalizer reciba las allergies del
-    # perfil, no la forma exacta del call.
-    assert "allergies=allergies" in _AGENT and "P0-VEG-GUARD-ALLERGEN" in _AGENT, \
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] El finalizer ganó `country=_swap_country`
+    # DESPUÉS de `allergies=allergies` en el mismo call → el match exacto con `)` quedó stale,
+    # mismo caso que `test_wired_in_chat_modify` (P2-CHAT-EXPLICIT-SLOT-WISH) documenta abajo.
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 2)] La primera corrección (ensanchar a la
+    # substring DESNUDA "allergies=allergies") sobre-corrigió: ese texto también matchea agent.py
+    # en :2785 (`meal_dump, allergies=allergies, diet_type=diet_type, form_data=form_data`) y
+    # :3344 (`clinical_backstop_for_meal(_out, allergies=allergies, ...)`) — dos call sites AJENOS
+    # (scan clínico, no el finalizer de swap). Si alguien quitara `allergies=allergies` SOLO de la
+    # llamada al finalizer (:3442), el assert seguía en verde por los otros dos — ciego a la
+    # regresión que su propio docstring dice vigilar. Re-anclado al PREFIJO acotado de la llamada
+    # (alias `_fin_rc(` es único en agent.py — un solo import con ese alias, en la línea de arriba,
+    # sin paréntesis, así que NO colisiona) + suficientes argumentos para probar que `allergies`
+    # SÍ viaja a ESE call específico. Sin paréntesis de cierre ni `country=`: tolera que ese call
+    # gane más kwargs después (igual que ya pasó una vez) sin volver a quedar stale, y no acopla
+    # este test (sobre allergies) a un cambio futuro de `country` (fuera de su alcance).
+    _swap_finalizer_call = "_fin_rc(_out, pantry_strict=bool(clean_ingredients), allergies=allergies"
+    assert _AGENT.count(_swap_finalizer_call) == 1, (
+        "el ancla debe ser única en agent.py — si deja de serlo, este test puede volver a "
+        "quedar ciego a una regresión en OTRO call site que comparta el prefijo"
+    )
+    assert _swap_finalizer_call in _AGENT and "P0-VEG-GUARD-ALLERGEN" in _AGENT, \
         "swap (agent.py) no pasa allergies al finalizer"
 
 
