@@ -165,28 +165,60 @@ def check_fact_ownership(fact_id: str, user_id: str) -> bool:
         logger.error(f"Error en check_fact_ownership: {e}")
     return False
 
+def _tz_candidate_int(raw) -> Optional[int]:
+    """Parsea un candidato crudo de offset (texto de un `->>'clave'`) a int, o `None` si está
+    ausente o no es numérico (incluye overflow). Nunca lanza — usado por `user_tz_offset_min`
+    para poder ENCADENAR candidatos (intentar el siguiente si este falla) sin que una excepción
+    de parseo se confunda con una excepción de DB en el `try` del caller."""
+    if raw is None:
+        return None
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def user_tz_offset_min(user_id: str) -> int:
     """Resuelve el offset de huso horario PERSISTIDO del usuario, en minutos, convención
     `Date.getTimezoneOffset()` (positivo = oeste de UTC; RD=240, España en invierno=-60).
 
-    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Lee `user_profiles.health_profile->>'tzOffset'` —
-    la MISMA clave que el mutator atómico de `/shift-plan` (`routers/plans.py::_tz_mutator`)
-    escribe SIEMPRE junto con `tz_offset_minutes` cuando el request trae `tzOffset` explícito, así
-    que ambas quedan sincronizadas en el único write path conocido. Deliberadamente NO hace
-    COALESCE con `tz_offset_minutes` como sí hace `cron_tasks._get_user_tz_live` (que vive en una
-    capa que este módulo no puede importar sin ciclo: `cron_tasks` importa `db`/`db_facts`, nunca
-    al revés) — si un futuro caller encuentra perfiles con SOLO `tz_offset_minutes` poblado, es
-    señal para converger ambos helpers, no para bifurcar un tercer patrón de lectura aquí.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5, fix-round 1)] Lee `health_profile->>'tzOffset'`
+    primero; si esa clave está ausente o no es numérica, cae a
+    `health_profile->>'tz_offset_minutes'`. Mismo espíritu que el COALESCE de
+    `cron_tasks._get_user_tz_live` (que vive en una capa que este módulo no puede importar sin
+    ciclo: `cron_tasks` importa `db`/`db_facts`, nunca al revés) — con la prioridad INVERTIDA a
+    propósito: allá `tz_offset_minutes` gana primero; aquí `tzOffset` gana primero, porque es la
+    clave que el diseño original de este helper vincula. El orden solo importa cuando un perfil
+    tiene AMBAS claves con valores distintos (no debería pasar salvo drift, ver escritor #1
+    abajo); cuando solo una está poblada, cualquier orden llega al mismo resultado.
+
+    **Por qué el fallback existe — dos escritores conocidos, uno los sincroniza y el otro no**:
+
+      1. `routers/plans.py::_tz_mutator` (usado por `POST /api/plans/{plan_id}/shift-plan`) —
+         escribe `tz_offset_minutes` Y `tzOffset` JUNTOS, siempre, cuando el request trae
+         `tzOffset` explícito. Sincronizado por diseño.
+      2. `routers/plans.py::_postprocess_pipeline_result` (~línea 2107-2137; el escritor de
+         `health_profile` en CADA generación de plan vía `POST /api/plans/analyze` y
+         `/analyze/stream`) — construye `hp_data` como copia del payload crudo del form
+         (`{k: v for k, v in data.items() if k not in ('session_id', 'user_id', 'appMode')}`) y
+         SIEMPRE fija `hp_data["tz_offset_minutes"] = tz_offset_mins` (el valor YA RESUELTO por
+         `_resolve_request_tz_offset`, que puede venir del payload O de un fallback de perfil
+         previo). Si el payload crudo del cliente no traía una clave `tzOffset` — cliente legacy,
+         o el resolver cayó a su propio fallback — `hp_data` nunca hereda `tzOffset` del spread:
+         este escritor deja `tz_offset_minutes` poblado y `tzOffset` intacto (con frecuencia
+         nunca-seteado). Sin el fallback de este helper, cualquier perfil que solo pasó por ESTE
+         escritor degradaría a 240 PARA SIEMPRE — aunque `tz_offset_minutes` tuviera el offset
+         real correcto. (Hallado en review — la versión original de este docstring afirmaba que
+         `_tz_mutator` era "el único write path conocido"; era falso, y el gap era real.)
 
     Country-INDEPENDENT a propósito: el offset es el reloj PERSONAL del usuario (lo que su
     navegador/dispositivo reportó), no un default derivado de `constants.COUNTRY_PROFILES` — un
     dominicano viajando a España corta su día en hora española igual que un usuario español.
 
-    Fail-safe: perfil ausente, clave ausente/null, valor no numérico (incluye overflow) o
-    cualquier excepción de DB degradan a 240 (RD) — IDÉNTICO al hardcode de zona horaria previo
-    que este P-fix reemplaza en los 4 call sites. Clamp defensivo [-900, 900] (±15h, cubre
-    holgado el rango real de husos UTC-12..+14) contra un valor corrupto que reviente la
-    aritmética SQL corriente abajo.
+    Fail-safe: perfil ausente, AMBAS claves ausentes/null/no-numéricas, o cualquier excepción de
+    DB degradan a 240 (RD) — IDÉNTICO al hardcode de zona horaria previo que este P-fix reemplaza
+    en los 4 call sites. Clamp defensivo [-900, 900] (±15h, cubre holgado el rango real de husos
+    UTC-12..+14) contra un valor corrupto que reviente la aritmética SQL corriente abajo.
 
     Sin caché a propósito (per-call): estos call sites son lecturas de diario/coach, no un hot
     loop — correctness sobre micro-perf. Si un futuro caller lo invoca dentro de un loop
@@ -199,14 +231,19 @@ def user_tz_offset_min(user_id: str) -> int:
         return 240
     try:
         row = execute_sql_query(
-            "SELECT health_profile->>'tzOffset' AS tz FROM user_profiles WHERE id = %s",
+            "SELECT health_profile->>'tzOffset' AS tz, "
+            "health_profile->>'tz_offset_minutes' AS tz_legacy "
+            "FROM user_profiles WHERE id = %s",
             (user_id,),
             fetch_one=True,
         )
-        raw = row.get("tz") if row else None
-        if raw is None:
+        if not row:
             return 240
-        val = int(float(raw))
+        val = _tz_candidate_int(row.get("tz"))
+        if val is None:
+            val = _tz_candidate_int(row.get("tz_legacy"))
+        if val is None:
+            return 240
     except Exception as e:
         logger.debug(f"[P1-COUNTRY-SYSTEM-F1] user_tz_offset_min fallback 240 para {str(user_id)[:8]}: {e}")
         return 240

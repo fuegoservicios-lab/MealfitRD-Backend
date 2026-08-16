@@ -1545,13 +1545,59 @@ def test_user_tz_offset_min_clamp_y_coercion_numerica(monkeypatch, crudo, espera
 
 def test_user_tz_offset_min_query_apunta_a_health_profile_tzoffset(monkeypatch):
     import db_facts
-    calls = _mock_db_facts_query(monkeypatch, {"tz": "-60"})
+    calls = _mock_db_facts_query(monkeypatch, {"tz": "-60", "tz_legacy": None})
     db_facts.user_tz_offset_min("u-1")
     assert calls, "execute_sql_query no se invocó"
     q = calls[-1]["query"]
     assert "health_profile->>'tzOffset'" in q
+    assert "health_profile->>'tz_offset_minutes'" in q, (
+        "[fix-round 1] la query debe seleccionar TAMBIÉN tz_offset_minutes — sin esta columna "
+        "el fallback no tiene de dónde leer"
+    )
     assert "user_profiles" in q
     assert calls[-1]["params"] == ("u-1",)
+
+
+# ── T5 fix-round 1: fallback a tz_offset_minutes (segundo escritor no sincronizado) ──────────
+#
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5, fix-round 1)] Review encontró que el docstring
+# original afirmaba `_tz_mutator` (/shift-plan) como "el único write path conocido" — falso.
+# `routers/plans.py::_postprocess_pipeline_result` (~L2107-2137, el escritor de CADA
+# `/analyze`+`/analyze/stream`) también escribe `health_profile`, y su rama sin `tzOffset` crudo
+# en el payload deja `tz_offset_minutes` poblado SIN `tzOffset` — un perfil así degradaba a 240
+# para siempre bajo el diseño single-key original. Estos tests anclan el fallback que lo cierra.
+
+def test_user_tz_offset_min_solo_tz_offset_minutes_usa_el_fallback(monkeypatch):
+    """El caso exacto del segundo escritor: `tzOffset` nunca se poblo, `tz_offset_minutes` sí
+    (con el offset real resuelto por `_resolve_request_tz_offset`) — el helper debe devolverlo,
+    no degradar a 240."""
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": None, "tz_legacy": "-60"})
+    assert db_facts.user_tz_offset_min("u-1") == -60
+
+
+def test_user_tz_offset_min_ambas_claves_tzoffset_gana(monkeypatch):
+    """Cuando ambas claves están pobladas (el caso sincronizado de `_tz_mutator`), `tzOffset`
+    tiene prioridad — orden INVERSO al COALESCE de `cron_tasks._get_user_tz_live` (que prueba
+    `tz_offset_minutes` primero), a propósito: `tzOffset` es la clave que el diseño original de
+    este helper vincula."""
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": "-60", "tz_legacy": "300"})
+    assert db_facts.user_tz_offset_min("u-1") == -60
+
+
+def test_user_tz_offset_min_tzoffset_garbage_cae_al_fallback(monkeypatch):
+    """`tzOffset` PRESENTE pero no numérico no debe saltar directo a 240 — debe intentar
+    `tz_offset_minutes` antes de rendirse."""
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": "no-soy-un-numero", "tz_legacy": "-60"})
+    assert db_facts.user_tz_offset_min("u-1") == -60
+
+
+def test_user_tz_offset_min_ambas_claves_garbage_cae_a_240(monkeypatch):
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": "no-numero", "tz_legacy": "[1,2]"})
+    assert db_facts.user_tz_offset_min("u-1") == 240
 
 
 def test_user_tz_offset_min_sin_cache_entre_llamadas(monkeypatch):
