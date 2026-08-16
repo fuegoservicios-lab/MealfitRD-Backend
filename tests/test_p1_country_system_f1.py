@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 import constants
+import nutrition_calculator as nc
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _FRONTEND = _BACKEND.parent / "frontend"
@@ -1824,3 +1825,404 @@ def test_dst_america_santo_domingo_no_aplica_240_vale_todo_el_ano():
     invierno = datetime(2026, 1, 1, 12, 0, 0, tzinfo=rd)
     assert verano.utcoffset().total_seconds() / 60 == -240
     assert invierno.utcoffset().total_seconds() / 60 == -240
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ── T6: presupuesto EUR/MXN/COP — pisos provisionales + moneda local en 422 ──
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Mecanismo encontrado (pre-existente): `_budget_cycle_floor_dop(days)` es un
+# piso TOTAL por ciclo, NO lineal, en DOP, con knob por ciclo
+# `MEALFIT_BUDGET_FLOOR_TOTAL_{7,15,30}D_DOP`. `validate_budget_sufficient`
+# compara SIEMPRE en espacio DOP: para USD convierte con la tasa fija
+# `_budget_usd_to_dop()` (knob `MEALFIT_BUDGET_USD_TO_DOP`, default 60.0);
+# cualquier OTRA moneda no reconocida caía en el mismo `else` que DOP (se
+# trataba el número como si fuera DOP — el fail-safe pre-Fase-1).
+#
+# Extensión de T6 (ruling R2-F1): EUR/MXN/COP NO ganan una tasa FX propia —
+# ganan su PROPIO piso literal por ciclo (`_budget_cycle_floor_for_currency`),
+# derivado UNA vez del piso USD (80/140/260) por factor fijo y redondeado a
+# cifra amable, espejo exacto del frontend (`BUDGET_MIN_TOTAL` en
+# formValidation.js). La comparación es DIRECTA en la moneda declarada — la
+# MISMA semántica que el camino DOP histórico — nunca una conversión FX.
+
+# ── pisos backend: _budget_cycle_floor_for_currency ──────────────────────────
+
+def test_gate_currencies_son_exactamente_eur_mxn_cop():
+    assert set(nc._BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY.keys()) == {"EUR", "MXN", "COP"}
+
+
+def test_piso_eur_defaults():
+    assert nc._budget_cycle_floor_for_currency(7, "EUR") == 75
+    assert nc._budget_cycle_floor_for_currency(15, "EUR") == 135
+    assert nc._budget_cycle_floor_for_currency(30, "EUR") == 245
+
+
+def test_piso_mxn_defaults():
+    assert nc._budget_cycle_floor_for_currency(7, "MXN") == 1400
+    assert nc._budget_cycle_floor_for_currency(15, "MXN") == 2500
+    assert nc._budget_cycle_floor_for_currency(30, "MXN") == 4700
+
+
+def test_piso_cop_defaults():
+    assert nc._budget_cycle_floor_for_currency(7, "COP") == 350000
+    assert nc._budget_cycle_floor_for_currency(15, "COP") == 600000
+    assert nc._budget_cycle_floor_for_currency(30, "COP") == 1100000
+
+
+def test_piso_moneda_no_reconocida_delega_en_dop_sin_tocarlo():
+    """DOP/USD/basura: delega en `_budget_cycle_floor_dop` — el piso histórico
+    NO se toca ni se reimplementa por segunda vez."""
+    for days in (7, 15, 30):
+        assert nc._budget_cycle_floor_for_currency(days, "XYZ") == nc._budget_cycle_floor_dop(days)
+        assert nc._budget_cycle_floor_for_currency(days, "DOP") == nc._budget_cycle_floor_dop(days)
+        assert nc._budget_cycle_floor_for_currency(days, "USD") == nc._budget_cycle_floor_dop(days)
+
+
+def test_piso_ciclo_no_estandar_interpola_desde_7d_igual_que_dop():
+    per_day = 75.0 / 7.0
+    assert nc._budget_cycle_floor_for_currency(10, "EUR") == pytest.approx(per_day * 10)
+
+
+def test_piso_knob_override_por_ciclo_y_moneda_sin_contaminar_vecinos(monkeypatch):
+    monkeypatch.setenv("MEALFIT_BUDGET_FLOOR_TOTAL_7D_EUR", "999")
+    assert nc._budget_cycle_floor_for_currency(7, "EUR") == 999.0
+    # Ni el resto de ciclos de EUR ni las otras monedas se contaminan.
+    assert nc._budget_cycle_floor_for_currency(15, "EUR") == 135
+    assert nc._budget_cycle_floor_for_currency(7, "MXN") == 1400
+    assert nc._budget_cycle_floor_for_currency(7, "DOP") == nc._budget_cycle_floor_dop(7)
+
+
+def test_pisos_nuevos_registrados_en_knobs_registry():
+    from knobs import get_knobs_registry_snapshot
+    for currency in ("EUR", "MXN", "COP"):
+        for days in (7, 15, 30):
+            nc._budget_cycle_floor_for_currency(days, currency)
+    snap = get_knobs_registry_snapshot()
+    for currency in ("EUR", "MXN", "COP"):
+        for days in (7, 15, 30):
+            name = f"MEALFIT_BUDGET_FLOOR_TOTAL_{days}D_{currency}"
+            assert name in snap, f"{name} ausente del registry tras invocar su lector"
+
+
+# ── paridad frontend↔backend (patrón FORM-DRIFT-ANCHOR, cross-file) ──────────
+
+_BUDGET_MIN_TOTAL_BLOCK = re.compile(
+    r"export\s+const\s+BUDGET_MIN_TOTAL\s*=\s*\{(?P<body>.*?)\}\s*;", re.DOTALL)
+_CURRENCY_BLOCK = re.compile(r"(\w+):\s*\{([^}]*)\}")
+_CYCLE_NUMBER = re.compile(r"(\w+):\s*(\d+)")
+_DAYS_BY_CYCLE_NAME = {"weekly": 7, "biweekly": 15, "monthly": 30}
+
+
+def _read_form_validation_js() -> str:
+    path = _FRONTEND / "src" / "config" / "formValidation.js"
+    if not path.exists():
+        pytest.skip(f"formValidation.js no existe en {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _parse_budget_min_total(text: str) -> dict:
+    block = _BUDGET_MIN_TOTAL_BLOCK.search(text)
+    if not block:
+        raise AssertionError(
+            "No se encontró `export const BUDGET_MIN_TOTAL = {...};` en formValidation.js. "
+            "Si el formato cambió, actualiza _BUDGET_MIN_TOTAL_BLOCK."
+        )
+    body = block.group("body")
+    out = {}
+    for m in _CURRENCY_BLOCK.finditer(body):
+        currency, inner = m.group(1), m.group(2)
+        out[currency] = {cm.group(1): int(cm.group(2)) for cm in _CYCLE_NUMBER.finditer(inner)}
+    return out
+
+
+def test_parser_extrae_budget_min_total_dop_usd_sanity():
+    """Sanity del parser contra lo que YA existía antes de T6 — si esto falla,
+    el regex está roto y los tests de paridad de abajo miden sobre un parser
+    inválido, no sobre drift real."""
+    parsed = _parse_budget_min_total(_read_form_validation_js())
+    assert parsed.get("DOP") == {"weekly": 4000, "biweekly": 7000, "monthly": 13000}
+    assert parsed.get("USD") == {"weekly": 80, "biweekly": 140, "monthly": 260}
+
+
+@pytest.mark.parametrize("currency", ["EUR", "MXN", "COP"])
+def test_piso_frontend_backend_coincide(currency):
+    frontend = _parse_budget_min_total(_read_form_validation_js())
+    assert currency in frontend, f"{currency} ausente de BUDGET_MIN_TOTAL en formValidation.js"
+    backend = {
+        cycle_name: nc._budget_cycle_floor_for_currency(days, currency)
+        for cycle_name, days in _DAYS_BY_CYCLE_NAME.items()
+    }
+    assert frontend[currency] == backend, (
+        f"Drift de piso {currency}: frontend={frontend[currency]} backend={backend}"
+    )
+
+
+def test_mutacion_desincroniza_piso_eur_produce_mismatch_de_paridad(monkeypatch):
+    """Prueba que el mecanismo de paridad SÍ detecta drift (no que sea vacío):
+    fuerza el knob de override —el MISMO mecanismo que usaría un operador— a
+    un valor distinto del frontend y confirma que la comparación deja de
+    coincidir. Reproduce en miniatura qué pasaría si un futuro PR tocara un
+    piso en un solo lado."""
+    frontend = _parse_budget_min_total(_read_form_validation_js())
+    backend_before = nc._budget_cycle_floor_for_currency(7, "EUR")
+    assert frontend["EUR"]["weekly"] == backend_before, (
+        "precondición inválida: deben coincidir ANTES de mutar (si esto falla, "
+        "test_piso_frontend_backend_coincide ya debería estar en rojo)"
+    )
+    monkeypatch.setenv("MEALFIT_BUDGET_FLOOR_TOTAL_7D_EUR", str(int(backend_before) + 1))
+    backend_after = nc._budget_cycle_floor_for_currency(7, "EUR")
+    assert backend_after != frontend["EUR"]["weekly"], (
+        "la mutación no desincronizó el piso — este test de mutación no demuestra "
+        "que la paridad detecte drift real"
+    )
+
+
+# ── validate_budget_sufficient: gate del knob + monedas nuevas ───────────────
+
+def _budget_form(currency, amount, country=None, grocery="weekly", household=1):
+    f = {
+        "weight": 70, "weightUnit": "kg", "height": 170, "age": 30,
+        "gender": "male", "activityLevel": "moderate", "mainGoal": "maintenance",
+        "groceryDuration": grocery, "householdSize": household,
+        "budget": "custom", "budgetAmount": amount, "budgetCurrency": currency,
+    }
+    if country is not None:
+        f["country"] = country
+    return f
+
+
+def test_knob_off_moneda_nueva_se_trata_como_dop_igual_que_antes(monkeypatch):
+    """[byte-identidad] Con el knob OFF, budgetCurrency='EUR' cae en el `else`
+    de SIEMPRE — tratado como si fuera DOP, símbolo 'RD$' — EXACTAMENTE la
+    conducta pre-Fase-1 para cualquier moneda no reconocida. Prueba que la
+    rama nueva es INALCANZABLE con el knob apagado (no solo "nadie la llama
+    hoy"), aunque un cliente declare 'EUR' en budgetCurrency."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    ok_bajo, detail_bajo = nc.validate_budget_sufficient(_budget_form("EUR", 100))
+    assert ok_bajo is False
+    assert detail_bajo["currency"] == "EUR"
+    assert "RD$" in detail_bajo["message"]
+    ok_alto, detail_alto = nc.validate_budget_sufficient(_budget_form("EUR", 50000))
+    assert ok_alto is True and detail_alto is None
+
+
+def test_knob_on_pais_es_eur_bajo_piso_rechaza(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok, detail = nc.validate_budget_sufficient(_budget_form("EUR", 1, country="ES"))
+    assert ok is False
+    assert detail["currency"] == "EUR"
+    assert detail["min_budget"] > 0
+    assert "EUR" in detail["message"]
+    assert "RD$" not in detail["message"]
+
+
+def test_knob_on_pais_es_eur_sobre_piso_acepta(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok, detail = nc.validate_budget_sufficient(_budget_form("EUR", 50000, country="ES"))
+    assert ok is True and detail is None
+
+
+def test_knob_on_mx_mxn_bajo_piso_rechaza_con_mxn(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok, detail = nc.validate_budget_sufficient(_budget_form("MXN", 1, country="MX"))
+    assert ok is False
+    assert detail["currency"] == "MXN"
+    assert "MXN" in detail["message"]
+    assert "RD$" not in detail["message"]
+
+
+def test_knob_on_co_cop_bajo_piso_rechaza_con_cop(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok, detail = nc.validate_budget_sufficient(_budget_form("COP", 1, country="CO"))
+    assert ok is False
+    assert detail["currency"] == "COP"
+    assert "COP" in detail["message"]
+    assert "RD$" not in detail["message"]
+
+
+@pytest.mark.parametrize("currency,country", [("EUR", "ES"), ("MXN", "MX"), ("COP", "CO")])
+def test_mensaje_nuevo_nunca_hardcodea_rd_simbolo(monkeypatch, currency, country):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok, detail = nc.validate_budget_sufficient(_budget_form(currency, 1, country=country))
+    assert ok is False
+    assert "RD$" not in detail["message"], (
+        f"El mensaje para {currency} contiene 'RD$' hardcodeado — viola el contrato de Task 6."
+    )
+    assert currency in detail["message"]
+
+
+def test_usd_sigue_intacto_con_knob_on(monkeypatch):
+    """El país-system ON no debe tocar el mecanismo USD histórico (conversión
+    por _budget_usd_to_dop)."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    ok_off, detail_off = nc.validate_budget_sufficient(_budget_form("USD", 5))
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok_on, detail_on = nc.validate_budget_sufficient(_budget_form("USD", 5))
+    assert ok_off is False
+    assert ok_on is False
+    assert detail_off == detail_on
+
+
+def test_dop_sigue_intacto_con_knob_on(monkeypatch):
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    ok_off, detail_off = nc.validate_budget_sufficient(_budget_form("DOP", 100))
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ok_on, detail_on = nc.validate_budget_sufficient(_budget_form("DOP", 100))
+    assert ok_off is False
+    assert ok_on is False
+    assert detail_off == detail_on
+
+
+def test_do_path_mensaje_exacto_golden(monkeypatch):
+    """Ancla BYTE A BYTE el texto del 422 para un usuario DOP — el camino que
+    Task 6 promete dejar intacto. Congela `min_budget_for_goals` para aislar
+    el texto de la aritmética de calorías (competencia de OTRO test:
+    test_p2_budget_floor.py)."""
+    monkeypatch.setattr(nc, "min_budget_for_goals", lambda form_data: {
+        "min_budget_dop": 4000, "min_per_day_dop": 571, "days": 7, "household": 1,
+        "target_calories": 2000,
+    })
+    ok, detail = nc.validate_budget_sufficient(
+        {"budget": "custom", "budgetAmount": "100", "budgetCurrency": "DOP"})
+    assert ok is False
+    assert detail["message"] == (
+        "Tu presupuesto de RD$100 es insuficiente para tus metas (2000 kcal/día × 7 días). "
+        "El mínimo para un plan profesional es ~RD$4,000. Sube tu presupuesto o ajusta tus "
+        "metas (menos días, menos personas, o una meta calórica menor). No bajamos la calidad "
+        "nutricional para encajar en un presupuesto demasiado bajo."
+    )
+
+
+def test_eur_path_mensaje_exacto_golden(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    monkeypatch.setattr(nc, "min_budget_for_goals", lambda form_data: {
+        "min_budget_dop": 4000, "min_per_day_dop": 571, "days": 7, "household": 1,
+        "target_calories": 2000,
+    })
+    ok, detail = nc.validate_budget_sufficient(
+        {"budget": "custom", "budgetAmount": "50", "budgetCurrency": "EUR", "country": "ES"})
+    assert ok is False
+    assert detail["message"] == (
+        "Tu presupuesto de EUR 50 es insuficiente para tus metas (2000 kcal/día × 7 días). "
+        "El mínimo para un plan profesional es ~EUR 75. Sube tu presupuesto o ajusta tus "
+        "metas (menos días, menos personas, o una meta calórica menor). No bajamos la calidad "
+        "nutricional para encajar en un presupuesto demasiado bajo."
+    )
+
+
+def test_household_mayor_a_1_incluye_clausula_en_mensaje_eur(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    monkeypatch.setattr(nc, "min_budget_for_goals", lambda form_data: {
+        "min_budget_dop": 8000, "min_per_day_dop": 1143, "days": 7, "household": 2,
+        "target_calories": 2000,
+    })
+    ok, detail = nc.validate_budget_sufficient({
+        "budget": "custom", "budgetAmount": "50", "budgetCurrency": "EUR",
+        "country": "ES", "householdSize": 2,
+    })
+    assert ok is False
+    assert "× 2 personas" in detail["message"]
+
+
+def test_simbolo_nuevo_sale_de_country_profiles_no_de_tabla_propia(monkeypatch):
+    """Si COUNTRY_PROFILES dejara de reconocer 'EUR' como moneda de algún
+    país, el símbolo debe degradar a 'RD$' (fail-safe) — prueba que el
+    símbolo se VALIDA contra COUNTRY_PROFILES en vez de asumir ciegamente el
+    código que llegó en budgetCurrency."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    fake_profiles = {
+        cc: {**profile, "currency": "XXX" if profile["currency"] == "EUR" else profile["currency"]}
+        for cc, profile in constants.COUNTRY_PROFILES.items()
+    }
+    monkeypatch.setattr(constants, "COUNTRY_PROFILES", fake_profiles)
+    ok, detail = nc.validate_budget_sufficient(_budget_form("EUR", 1, country="ES"))
+    assert ok is False
+    assert "RD$" in detail["message"], (
+        "Con COUNTRY_PROFILES sin 'EUR' registrado, el símbolo debe caer a 'RD$' (fail-safe) — "
+        "si esto falla, el código no está realmente consultando COUNTRY_PROFILES en runtime."
+    )
+
+
+def test_gate_lee_mealfit_country_system_no_otro_nombre():
+    src = nc.__file__ and open(nc.__file__, encoding="utf-8").read()
+    assert '"MEALFIT_COUNTRY_SYSTEM"' in src, (
+        "El gate de EUR/MXN/COP debe leer el knob MEALFIT_COUNTRY_SYSTEM (mismo "
+        "nombre que constants.country_for_form_data) — no un knob paralelo."
+    )
+
+
+# ── QBudget.jsx: parser — dark intacto, lit condicionado, wiring completo ────
+
+def _read_qbudget_jsx() -> str:
+    path = _FRONTEND / "src" / "components" / "assessment" / "questions" / "QBudget.jsx"
+    if not path.exists():
+        pytest.skip(f"QBudget.jsx no existe en {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def test_qbudget_dark_toggle_literales_originales_intactos():
+    """[dark anchor] Los DOS literales que `test_p1_budget_custom.py` YA
+    ancla (`test_budget_currency_toggle_defaults_to_dop`) deben seguir
+    presentes verbatim — condición necesaria para que, con
+    COUNTRY_SYSTEM_UI=false, el toggle sea EXACTAMENTE [DOP, USD] de hoy."""
+    src = _read_qbudget_jsx()
+    assert re.search(r"value:\s*'DOP'\s*,\s*label:\s*'RD\$'", src)
+    assert re.search(r"value:\s*'USD'\s*,\s*label:\s*'US\$'", src)
+
+
+def test_qbudget_importa_country_system_ui_y_coerce_country():
+    src = _read_qbudget_jsx()
+    assert re.search(
+        r"import\s*\{[^}]*COUNTRY_SYSTEM_UI[^}]*\}\s*from\s*['\"]\.\./\.\./\.\./config/countries['\"]",
+        src,
+    ), "QBudget debe importar COUNTRY_SYSTEM_UI de config/countries (el flag dark del frontend)."
+    assert "coerceCountry" in src
+
+
+def test_qbudget_mapa_beta_currency_por_pais():
+    src = _read_qbudget_jsx()
+    assert re.search(r"ES:\s*'EUR'", src)
+    assert re.search(r"MX:\s*'MXN'", src)
+    assert re.search(r"CO:\s*'COP'", src)
+
+
+def test_qbudget_usa_helper_puro_exportado_para_las_opciones():
+    """El helper puro (probado en vitest sin montar el componente) debe
+    EXISTIR y ser lo que arma `currencyOptions` — no una copia inline que
+    pueda driftear de lo que el test de JS ejercita."""
+    src = _read_qbudget_jsx()
+    assert re.search(r"export (function|const) currencyOptionsForCountry", src), (
+        "El helper puro currencyOptionsForCountry debe estar exportado para el test vitest."
+    )
+    assert src.count("currencyOptionsForCountry(") >= 2, (
+        "El componente debe LLAMAR a currencyOptionsForCountry (definición + uso), no solo definirlo."
+    )
+
+
+def test_qbudget_currency_symbol_ramifica_por_beta_currency():
+    src = _read_qbudget_jsx()
+    m = re.search(r"const currencySymbol = ([\s\S]*?);\n", src)
+    assert m, "No se pudo aislar `const currencySymbol = ...;` en QBudget.jsx"
+    body = m.group(1)
+    assert "'USD'" in body and "US$" in body, "El símbolo USD debe seguir intacto."
+    assert "betaCurrency" in body, "El símbolo debe ramificar por `betaCurrency` para EUR/MXN/COP."
+    assert "'RD$'" in body, "El fallback DOP debe seguir siendo 'RD$'."
+
+
+def test_qbudget_placeholder_mxn_cop_con_ejemplo_propio():
+    src = _read_qbudget_jsx()
+    assert "budgetCurrency === 'MXN'" in src
+    assert "budgetCurrency === 'COP'" in src
+    assert "Ej. 2000" in src
+    assert "Ej. 400000" in src
+
+
+def test_qbudget_aria_label_cubre_monedas_nuevas_y_conserva_originales():
+    src = _read_qbudget_jsx()
+    assert "Presupuesto total en euros" in src
+    assert "Presupuesto total en pesos mexicanos" in src
+    assert "Presupuesto total en pesos colombianos" in src
+    # Byte-identidad del dark path: los 2 originales siguen ahí.
+    assert "Presupuesto total en dólares" in src
+    assert "Presupuesto total en pesos dominicanos" in src

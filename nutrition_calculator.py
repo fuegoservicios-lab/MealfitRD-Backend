@@ -1844,6 +1844,53 @@ def _budget_cycle_floor_dop(days: int) -> float:
         f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_DOP", float(default), lambda v: v >= 0.0)
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Pisos TOTALES por ciclo en EUR/MXN/COP,
+# PROVISIONALES: derivados del piso USD (BUDGET_MIN_TOTAL.USD del frontend —
+# 80/140/260) por un factor fijo documentado (ruling R2-F1 del plan) — EUR×0.95,
+# MXN×18, COP×4200 — redondeado a una cifra amable. Fase 3 los sustituye por
+# precios reales de mercado del país (`has_native_prices=False`, ver
+# COUNTRY_PROFILES). Espejo EXACTO del frontend
+# (frontend/src/config/formValidation.js BUDGET_MIN_TOTAL); test de paridad
+# cross-file en test_p1_country_system_f1.py (sección T6).
+#
+# Aritmética (crudo → redondeado a cifra amable):
+#   EUR: 80×0.95=76→75   140×0.95=133→135   260×0.95=247→245
+#   MXN: 80×18=1440→1400 140×18=2520→2500   260×18=4680→4700
+#   COP: 80×4200=336000→350000 140×4200=588000→600000 260×4200=1092000→1100000
+_BUDGET_CYCLE_FLOOR_DEFAULTS_EUR = {7: "75", 15: "135", 30: "245"}
+_BUDGET_CYCLE_FLOOR_DEFAULTS_MXN = {7: "1400", 15: "2500", 30: "4700"}
+_BUDGET_CYCLE_FLOOR_DEFAULTS_COP = {7: "350000", 15: "600000", 30: "1100000"}
+
+_BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY = {
+    "EUR": _BUDGET_CYCLE_FLOOR_DEFAULTS_EUR,
+    "MXN": _BUDGET_CYCLE_FLOOR_DEFAULTS_MXN,
+    "COP": _BUDGET_CYCLE_FLOOR_DEFAULTS_COP,
+}
+
+
+def _budget_cycle_floor_for_currency(days: int, currency: str) -> float:
+    """[P1-COUNTRY-SYSTEM-F1] Piso TOTAL del ciclo en EUR/MXN/COP, PROVISIONAL
+    (ver comentario de `_BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY` arriba).
+    `currency` fuera de {EUR,MXN,COP} (incluido 'DOP'/'USD') delega en
+    `_budget_cycle_floor_dop` SIN tocarlo — mismo fallback conservador que ese
+    piso ya usa para ciclos no estándar. Knob por ciclo×moneda:
+    MEALFIT_BUDGET_FLOOR_TOTAL_{days}D_{moneda} (mismo patrón de nombre que el
+    knob DOP, con la moneda interpolada — deliberadamente NO literal, para no
+    aparecer en el escaneo de `test_grep_del_archivo_no_encuentra_mas_knobs_
+    budget_que_los_documentados`, que enumera solo los knobs `MEALFIT_BUDGET_*`
+    documentados de ANTES de Fase 1).
+    tooltip-anchor: _budget_cycle_floor_for_currency (test_p1_country_system_f1.py)"""
+    defaults = _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY.get(currency)
+    if defaults is None:
+        return _budget_cycle_floor_dop(days)
+    default = defaults.get(int(days))
+    if default is None:
+        per_day_7 = float(defaults[7]) / 7.0
+        return max(0.0, per_day_7 * max(1, int(days)))
+    return _nc_env_float_budget(
+        f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_{currency}", float(default), lambda v: v >= 0.0)
+
+
 def _budget_floor_kcal_ref() -> float:
     return _nc_env_float_budget("MEALFIT_BUDGET_FLOOR_KCAL_REF", 2000.0, lambda v: v >= 800.0)
 
@@ -1935,7 +1982,17 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
     """Bloqueo pre-generación: si el presupuesto 'custom' declarado es insuficiente para las
     metas, retorna (False, detail) con los números para el mensaje accionable. Solo aplica a
     budget='custom' con monto explícito (las opciones categóricas son cualitativas). Fail-open:
-    ante cualquier error, NO bloquea (mejor generar que romper el flujo)."""
+    ante cualquier error, NO bloquea (mejor generar que romper el flujo).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Con MEALFIT_COUNTRY_SYSTEM encendido,
+    `budgetCurrency` en {EUR,MXN,COP} compara EN SU PROPIA moneda contra su propio piso
+    (`_budget_cycle_floor_for_currency`, escalado por el mismo multiplicador
+    calorías×hogar que ya aplica el piso DOP) — misma semántica que el camino DOP
+    histórico: comparación DIRECTA, sin conversión FX. El símbolo del mensaje sale del
+    propio código de moneda, validado contra COUNTRY_PROFILES (SSOT del sistema de
+    países) — nunca «RD$» hardcodeado en esta rama nueva. Knob apagado (default) ⇒
+    estas 3 monedas caen en el `else` de siempre (tratadas como DOP, conducta
+    PRE-Fase-1 EXACTA) — byte-identidad garantizada aunque un cliente las declare."""
     try:
         if not _budget_floor_enabled():
             return True, None
@@ -1949,14 +2006,50 @@ def validate_budget_sufficient(form_data: dict) -> tuple:
             # custom sin monto válido: build_budget_context cae a 'medium', no es nuestro bloqueo.
             return True, None
         currency = str(form_data.get("budgetCurrency") or "DOP").upper()
-        usd_dop = _budget_usd_to_dop()
-        declared_dop = declared * usd_dop if currency == "USD" else declared
-        info = min_budget_for_goals(form_data)
-        threshold = info["min_budget_dop"] * (1.0 - _budget_floor_tolerance_pct())
-        if declared_dop >= threshold:
+
+        # [P1-COUNTRY-SYSTEM-F1] Gate INLINE por-llamada (mismo patrón que
+        # constants.country_for_form_data): el flip solo exige restart. Con el
+        # knob apagado esta condición es SIEMPRE False — EUR/MXN/COP caen en
+        # el `else` de abajo, byte-idéntico a antes de Fase 1.
+        new_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY and _nc_env_bool_budget(
+            "MEALFIT_COUNTRY_SYSTEM", False)
+
+        if new_currency:
+            info = min_budget_for_goals(form_data)
+            # Piso PROPIO de la moneda declarada, escalado por el MISMO
+            # multiplicador (calorías×hogar) que min_budget_for_goals ya
+            # aplicó al piso DOP — recuperado por cociente en vez de duplicar
+            # esa fórmula. "Misma semántica que DOP": comparación DIRECTA, sin
+            # FX (declared_compare = declared, sin convertir).
+            dop_cycle_base = _budget_cycle_floor_dop(info["days"])
+            scale = (info["min_budget_dop"] / dop_cycle_base) if dop_cycle_base > 0 else 1.0
+            declared_compare = declared
+            threshold = _budget_cycle_floor_for_currency(info["days"], currency) * scale * (
+                1.0 - _budget_floor_tolerance_pct())
+        else:
+            # DOP/USD (o moneda no reconocida ⇒ tratada como DOP): mecanismo
+            # ORIGINAL, sin cambios — byte-identidad.
+            usd_dop = _budget_usd_to_dop()
+            declared_compare = declared * usd_dop if currency == "USD" else declared
+            info = min_budget_for_goals(form_data)
+            threshold = info["min_budget_dop"] * (1.0 - _budget_floor_tolerance_pct())
+
+        if declared_compare >= threshold:
             return True, None
-        min_in_currency = (info["min_budget_dop"] / usd_dop) if currency == "USD" else info["min_budget_dop"]
-        sym = "US$" if currency == "USD" else "RD$"
+
+        if new_currency:
+            min_in_currency = _budget_cycle_floor_for_currency(info["days"], currency) * scale
+            # Símbolo: el código de moneda, validado contra COUNTRY_PROFILES
+            # (SSOT del sistema de países) — jamás «RD$» hardcodeado aquí.
+            # Import local (mismo patrón que el resto de este archivo con
+            # `constants`) para no acoplar el módulo entero a ese import.
+            from constants import COUNTRY_PROFILES
+            valid_currencies = {p["currency"] for p in COUNTRY_PROFILES.values()}
+            sym = f"{currency} " if currency in valid_currencies else "RD$"
+        else:
+            min_in_currency = (info["min_budget_dop"] / usd_dop) if currency == "USD" else info["min_budget_dop"]
+            sym = "US$" if currency == "USD" else "RD$"
+
         msg = (
             f"Tu presupuesto de {sym}{round(declared):,} es insuficiente para tus metas "
             f"({info['target_calories']} kcal/día × {info['days']} días"
