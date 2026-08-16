@@ -3076,6 +3076,51 @@ def canonicalize_diet_type(diet) -> str:
     return _DIET_CANON_LOOKUP.get(strip_accents(diet.strip().lower()), "balanced")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] El país del usuario, canónico.
+#
+# ISO-3166 alpha-2 y UNA sola tabla — la lección de P1-DIET-CANON-SSOT (tres
+# tablas de dieta a mano driftaron y una sirvió Pollo a vegetarianas). El `val`
+# de los chips del wizard ES este código; texto humano jamás llega aquí como
+# dato válido: desconocido/ausente ⇒ 'DO', que deja a TODA la base instalada
+# byte-idéntica a hoy sin backfill.
+#
+# `default_tz_offset_min` usa la convención de getTimezoneOffset() (positivo al
+# oeste de UTC): DO/PR 240, US 300 (Eastern como default del país), MX 360,
+# CO 300, ES -60 (invierno). Es el default POR PAÍS para superficies sin
+# tzOffset del usuario; el del usuario siempre gana.
+# ─────────────────────────────────────────────────────────────────────────────
+
+COUNTRY_SYSTEM_ENABLED = _env_bool("MEALFIT_COUNTRY_SYSTEM", False)
+
+COUNTRY_PROFILES = {
+    "DO": {"name_es": "República Dominicana", "currency": "DOP", "is_beta": False,
+           "has_native_prices": True,  "default_tz_offset_min": 240},
+    "ES": {"name_es": "España",               "currency": "EUR", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": -60},
+    "US": {"name_es": "Estados Unidos",       "currency": "USD", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 300},
+    "MX": {"name_es": "México",               "currency": "MXN", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 360},
+    "PR": {"name_es": "Puerto Rico",          "currency": "USD", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 240},
+    "CO": {"name_es": "Colombia",             "currency": "COP", "is_beta": True,
+           "has_native_prices": False, "default_tz_offset_min": 300},
+}
+
+
+def canonicalize_country(raw) -> str:
+    """País canónico ISO-3166 alpha-2. Desconocido/ausente ⇒ 'DO' (fail-safe).
+
+    tooltip-anchor: canonicalize_country (test_p1_country_system_f0.py)
+    """
+    if isinstance(raw, str):
+        code = raw.strip().upper()
+        if code in COUNTRY_PROFILES:
+            return code
+    return "DO"
+
+
 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] SSOT de las FUENTES DE PROTEÍNA sugeribles por dieta.
 # Razón (benchmark issue #9, journal 2026-08-08 01:53-02:00 UTC): el stack de prompts ordenaba
 # "fuente animal de alta densidad (pollo, pescado, cerdo, res...)" sin mirar la dieta — el retry
