@@ -352,3 +352,41 @@ def test_el_reconcile_nunca_corre_contra_datos_de_cache():
         "P2-BRANDS-MATCH-CACHE: nadie baja la bandera de «rancio». Si no se baja, "
         "el reconcile NUNCA corre y la marca elegida se queda sin aplicar."
     )
+
+
+def test_el_espejo_local_de_prefs_se_escribe_tambien_con_sesion():
+    """[P2-BRANDS-PREFS-MIRROR · 2026-08-15] El último trozo del rótulo.
+
+    El espejo local nació como fallback offline y se escribía SOLO cuando
+    `prefsSource === 'local'` — o sea, solo cuando el servidor había fallado.
+    Para un usuario autenticado (el caso normal) nunca se escribía, así que
+    `readLocalPrefs()` devolvía `{}` en el primer pintado y el sufijo
+    «· N elegidas» faltaba hasta que respondía la red.
+
+    Espejar siempre lo arregla y, de paso, hace HONESTO el fallback: sin red, la
+    Nevera arranca con lo que el servidor confirmó, no con lo de la última vez
+    que hubo un fallo.
+    """
+    # Se busca sobre el CÓDIGO sin comentarios. La primera versión de este guard
+    # usaba una ventana de 900 caracteres desde `setPrefsSource('server')` y nació
+    # roja: el comentario que explica el arreglo ocupa ~700 y empujaba la línea
+    # vigilada fuera de la ventana. Tercera vez hoy que un guard tropieza con la
+    # prosa del repo — aquí los comentarios son largos por diseño, así que medir
+    # distancias en caracteres crudos es medir la documentación.
+    src = re.sub(r"(?m)^\s*//.*$", "", _brands_src())
+    i_ok = src.find("setPrefsSource('server')")
+    assert i_ok != -1, "P2-BRANDS-PREFS-MIRROR: no encuentro la rama de éxito del fetch."
+    ventana = src[i_ok:i_ok + 400]
+    assert "safeLocalStorageSet(LOCAL_PREFS_KEY" in ventana, (
+        "P2-BRANDS-PREFS-MIRROR: la respuesta del servidor ya no espeja las "
+        "preferencias en local. Sin ese espejo, el sufijo «· N elegidas» vuelve a "
+        "faltar en el primer pintado de cada refresh."
+    )
+    assert not re.search(
+        r"if \(prefsSource === 'local'\) \{\s*try \{ safeLocalStorageSet\(LOCAL_PREFS_KEY",
+        src,
+    ), (
+        "P2-BRANDS-PREFS-MIRROR: `persistPref` volvió a espejar SOLO en modo "
+        "local. Con sesión, la elección recién hecha no estaría en el primer "
+        "pintado del siguiente refresh."
+    )
