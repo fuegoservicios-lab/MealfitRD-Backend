@@ -143,3 +143,64 @@ def test_paridad_countries_js_con_country_profiles():
     betas_js = dict(re.findall(r"code:\s*'([A-Z]{2})',[^}]*beta:\s*(true|false)", sin_comentarios))
     for cc, perfil in constants.COUNTRY_PROFILES.items():
         assert betas_js.get(cc) == ("true" if perfil["is_beta"] else "false"), cc
+
+
+# ── el wizard y la rama contador ─────────────────────────────────────────────
+
+def _js_sin_comentarios(path: Path) -> str:
+    src = path.read_text(encoding="utf-8")
+    return "\n".join(
+        re.sub(r"(^|\s)//.*$", r"\1", l)
+        for l in re.split(r"\r?\n", re.sub(r"/\*.*?\*/", "", src, flags=re.S))
+    )
+
+
+def test_qcountry_usa_el_ssot_y_val_iso():
+    src = _js_sin_comentarios(
+        _FRONTEND / "src" / "components" / "assessment" / "questions" / "QCountry.jsx"
+    )
+    assert "from '../../../config/countries'" in src, "QCountry debe leer el SSOT"
+    assert "updateData('country'" in src
+    assert re.search(r"value=\{[a-zA-Z_.]*code\}", src) or "value={c.code}" in src, (
+        "El value del radio debe ser el CODE del SSOT — jamás un literal español."
+    )
+    assert "'República Dominicana'" not in src.replace("labelKey", ""), (
+        "Nombre de país como literal en QCountry: los labels salen del SSOT."
+    )
+
+
+def test_paso_pais_antes_del_submit_y_gated():
+    src = _js_sin_comentarios(
+        _FRONTEND / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx"
+    )
+    # [CONTROLLER-RULING · 2026-08-16] `src.find("QCountry")` matchearía la línea
+    # del IMPORT (arriba del todo), volviendo trivial el assert "antes del
+    # submit". `component: <QCountry` es única al objeto del step.
+    pos_country = src.find("component: <QCountry")
+    pos_supplements = src.find("component: <QSupplements")
+    assert pos_country != -1, "El paso QCountry no está en el flow."
+    assert pos_country < pos_supplements, (
+        "QCountry quedó DESPUÉS del paso que lleva el submit: el país se "
+        "preguntaría después de generar el plan — o sea, nunca."
+    )
+    ini = src.rfind("COUNTRY_SYSTEM_UI", 0, pos_country)
+    # [CONTROLLER-RULING · 2026-08-16] Ventana ampliada a 600 (era 400): el
+    # bloque del step (comentario + title/subtitle/fields/component) no cabía
+    # holgado en 400 chars tras stripping de comentarios.
+    assert ini != -1 and pos_country - ini < 600, (
+        "El paso QCountry no está gateado por COUNTRY_SYSTEM_UI: aparecería en "
+        "producción antes del flip (la spec exige oscuro total)."
+    )
+
+
+def test_rama_contador_persiste_el_pais():
+    src = _js_sin_comentarios(
+        _FRONTEND / "src" / "components" / "assessment" / "questions" / "QTrackingFinish.jsx"
+    )
+    ini = src.index("for (const extra of [")
+    bloque = src[ini: ini + 500]
+    assert "'country'" in bloque, (
+        "El bucle de acompañantes de QTrackingFinish no incluye 'country': en "
+        "modo contador el país se cae AL SUELO en silencio (hallazgo del "
+        "escéptico del mapa — la rama corta es ALLOWLIST, no spread)."
+    )
