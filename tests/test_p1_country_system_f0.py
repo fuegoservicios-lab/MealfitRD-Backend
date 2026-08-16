@@ -10,7 +10,6 @@ países tengan catálogo y vocabularios (decisión del dueño 2026-08-16).
 """
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -218,4 +217,56 @@ def test_settings_tiene_selector_de_pais_gateado():
         "El selector debe persistir por PATCH /api/profile con "
         "{health_profile:{country}} — el mismo merge key-level que usa la rama "
         "contador. Un endpoint nuevo aquí sería plomería duplicada."
+    )
+
+
+# ── cierres de fase ──────────────────────────────────────────────────────────
+
+def test_country_no_es_sensible_y_es_decision_explicita():
+    """`country` NO es PII médica: va en mealfit_form plano. La decisión se
+    ancla para que nadie lo mueva a SENSITIVE_FIELDS «por si acaso» (cifrar de
+    más degrada a no-persistir en browsers sin crypto.subtle) ni un campo
+    futuro se cuele sin clasificar citando este precedente."""
+    src = _js_sin_comentarios(_FRONTEND / "src" / "config" / "secureFormStorage.js")
+    ini = src.index("SENSITIVE_FIELDS = [")
+    bloque = src[ini: src.index("]", ini)]
+    assert "'country'" not in bloque
+
+
+def test_el_dato_viaja_pero_el_motor_no_lo_lee_todavia():
+    """Fase 0 = SOLO el dato. El día que graph_orchestrator consuma country,
+    este test se REESCRIBE apuntando al SSOT (canonicalize_country) — si
+    aparece un lector suelto antes de Fase 1, es un lector sin canonicalizar."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    lectores = re.findall(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]", src)
+    assert not lectores, (
+        "graph_orchestrator lee form_data['country'] antes de la Fase 1: todo "
+        "lector debe nacer detrás de canonicalize_country + COUNTRY_SYSTEM_ENABLED."
+    )
+
+
+def test_getcountrylabel_paridad_con_labelkey_de_countries_js():
+    """`getCountryLabel` (Settings.jsx) traduce por switch con literales
+    `t('...')` escritos a mano — NUNCA `t(c.labelKey)` — porque una clave
+    DINÁMICA es invisible para `scripts/i18n-check.mjs` (mismo motivo que
+    `sentinelLabel` en QAllergies.jsx; ver comentario en Settings.jsx). Si
+    `countries.js` gana un país sin que alguien añada su `case` aquí, esa fila
+    degrada en silencio a su código ISO crudo en Configuración — este test
+    ancla la PARIDAD, no la grafía de cada línea."""
+    settings_src = _js_sin_comentarios(_FRONTEND / "src" / "pages" / "Settings.jsx")
+    ini = settings_src.index("const getCountryLabel = ")
+    fin = settings_src.index("\n};", ini)
+    cuerpo = settings_src[ini:fin]
+    literales_t = set(re.findall(r"t\('([^']+)'\)", cuerpo))
+    assert literales_t, "No pude parsear los t('...') de getCountryLabel."
+
+    countries_src = _js_sin_comentarios(_FRONTEND / "src" / "config" / "countries.js")
+    label_keys = set(re.findall(r"labelKey:\s*'([^']+)'", countries_src))
+    assert label_keys, "No pude parsear los labelKey de countries.js."
+
+    assert literales_t == label_keys, (
+        "getCountryLabel (Settings.jsx) y labelKey (countries.js) divergen: un "
+        "7º país degradaría en silencio a su código ISO crudo en Configuración. "
+        f"Solo en getCountryLabel: {literales_t - label_keys}. "
+        f"Solo en countries.js: {label_keys - literales_t}."
     )
