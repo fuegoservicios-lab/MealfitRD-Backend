@@ -159,14 +159,20 @@ def test_el_servidor_sigue_mandando_sobre_el_cache_local():
     parpadeo que este cambio arregla.
     """
     src = _brands_src()
-    # Se ancla a la LLAMADA (`fetchWithAuth('…')`), no a la ruta suelta: la ruta
+    # Se ancla a la LLAMADA (`fetchWithAuth('…'`), no a la ruta suelta: la ruta
     # aparece antes en un comentario que explica de dónde salen las preferencias,
-    # y un `find` de la cadena pelada aterrizaba en esa prosa — la misma trampa
-    # que ya mordió al guard del remontaje de idioma.
-    i_fetch = src.find("fetchWithAuth('/api/supermarket/preferences')")
+    # y un `find` de la cadena pelada aterrizaba en esa prosa.
+    #
+    # Y SIN el paréntesis de cierre, aprendido a las horas de nacer: la primera
+    # versión exigía `...preferences')` — la llamada exacta SIN segundo
+    # argumento — y P2-BRANDS-LOAD-TIMEOUT la puso en rojo al añadirle
+    # `{ signal: AbortSignal.timeout(...) }`. La llamada seguía siendo la misma;
+    # lo que cambió fue su aridad. Anclar la grafía completa de una llamada es
+    # prohibirle argumentos futuros.
+    i_fetch = src.find("fetchWithAuth('/api/supermarket/preferences'")
     assert i_fetch != -1, (
         "P2-BRANDS-CHIP-CASCADE: desapareció la llamada "
-        "`fetchWithAuth('/api/supermarket/preferences')`. Si cambió de forma, "
+        "`fetchWithAuth('/api/supermarket/preferences'...)`. Si cambió de forma, "
         "actualiza este ancla."
     )
     ventana = src[i_fetch:i_fetch + 900]
