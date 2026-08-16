@@ -6,7 +6,7 @@ from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
 
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
-from db import get_consumed_meals_today, get_user_profile
+from db import get_consumed_meals_today, get_user_profile, user_tz_offset_min
 from fact_extractor import get_embedding
 from knobs import _env_int, _env_float
 
@@ -176,15 +176,24 @@ def get_daily_nudge_count(user_id: str) -> int:
         # AST que cruza el límite UTC a las 20:00, hasta 2 nudges diurnos (día
         # UTC D) + 2 vespertinos/Resumen 20:00-23:00 AST (día UTC D+1) = 4 en un
         # mismo día AST, el DOBLE del cap anti-fatiga (>=2). Convertir a AST
-        # alinea el conteo con el reloj de agendado. Reusa la conversión
-        # 'America/Santo_Domingo' ya usada en get_avg_meal_hour (db_facts.py).
+        # alinea el conteo con el reloj de agendado.
         # Tooltip-anchor: P2-PROACTIVE-NUDGE-BUDGET-TZ.
+        #
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] El hardcode 'America/Santo_Domingo' pasa a
+        # offset por usuario (`db_facts.user_tz_offset_min`, fail-safe 240=RD). `sent_at`/`NOW()`
+        # son timestamptz: `(col AT TIME ZONE 'zona')::date` == `(col - make_interval(mins =>
+        # offset_oeste))::date` — equivalencia algebraica exacta, offset=240 reproduce el
+        # hardcode previo byte a byte (verificado contra Neon 2026-08-16). Este sitio SIEMPRE fue
+        # el hop simple/correcto (a diferencia de `db_facts.get_avg_meal_hour`, que preserva un
+        # signo '+' heredado de un bug pre-existente — ver su comentario). Sin DST en
+        # America/Santo_Domingo: 240 vale los 365 días.
+        _tz_off = user_tz_offset_min(user_id)
         res = execute_sql_query(
             "SELECT COUNT(*) as total FROM nudge_outcomes "
             "WHERE user_id = %s "
-            "AND (sent_at AT TIME ZONE 'America/Santo_Domingo')::date "
-            "= (NOW() AT TIME ZONE 'America/Santo_Domingo')::date",
-            (user_id,), fetch_one=True,
+            "AND (sent_at - make_interval(mins => %s))::date "
+            "= (NOW() - make_interval(mins => %s))::date",
+            (user_id, _tz_off, _tz_off), fetch_one=True,
         )
         return res.get("total", 0) if res else 0
     except Exception as e:

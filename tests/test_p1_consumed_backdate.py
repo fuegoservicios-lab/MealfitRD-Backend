@@ -67,8 +67,14 @@ def test_dup_guard_scoped_to_main_meals_local_date():
     assert i != -1
     assert '("desayuno", "almuerzo", "cena")' in src[i:i + 120], \
         "solo comidas PRINCIPALES: merienda/snack se repiten legítimamente"
-    assert "AT TIME ZONE 'America/Santo_Domingo'" in src, \
-        "el 'mismo día' es el día LOCAL RD (UTC-4), no el día UTC del server"
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] El hardcode 'America/Santo_Domingo' pasó a
+    # offset resuelto por usuario (`db_facts.user_tz_offset_min`, fail-safe 240=RD — IDÉNTICO
+    # al hardcode previo cuando no hay perfil/tzOffset). El contrato de este test ("mismo día"
+    # es LOCAL, nunca el día UTC del server) no cambió — solo CÓMO se resuelve cuál es "local".
+    assert "user_tz_offset_min(user_id)" in src, \
+        "el 'mismo día' debe resolverse vía el offset del usuario, no quedar fijo a UTC"
+    assert "make_interval(mins => %s)" in src, \
+        "el corte de día debe seguir parametrizado por aritmética, no volver a un hardcode de zona"
     assert "repite esta herramienta con force=true" in src, \
         "el guard devuelve instrucción de confirmación, no un error mudo"
 

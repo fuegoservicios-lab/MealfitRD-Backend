@@ -58,8 +58,16 @@ def test_nudge_budget_counts_ast_day_not_utc():
         "El conteo de nudges UTC (DATE(sent_at)=CURRENT_DATE) debe haberse "
         "reemplazado por la conversión a día AST"
     )
-    assert "America/Santo_Domingo" in src, (
-        "El conteo de nudges debe convertir a la zona AST 'America/Santo_Domingo'"
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] El hardcode de zona pasó a offset resuelto por
+    # usuario (`user_tz_offset_min`, fail-safe 240=RD — idéntico al hardcode previo sin perfil).
+    # Ancla la PROPIEDAD (día LOCAL del usuario, no UTC), no la grafía: un check sobre el string
+    # crudo pasaría por casualidad mientras el comentario explicativo lo siga citando, aunque el
+    # mecanismo real cambiara — exactamente la lección de "ancla la propiedad, no la grafía".
+    assert "user_tz_offset_min(user_id)" in _code_only(src), (
+        "El conteo de nudges debe resolver el día vía el offset del usuario, no quedar fijo a UTC"
+    )
+    assert "make_interval(mins => %s)" in _code_only(src), (
+        "El corte de día debe seguir parametrizado por aritmética, no volver a un hardcode de zona"
     )
 
 

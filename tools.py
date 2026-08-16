@@ -20,7 +20,7 @@ from db import (
     log_consumed_meal as db_log_consumed_meal,
     update_consumed_meal as db_update_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
-    get_latest_meal_plan
+    get_latest_meal_plan, user_tz_offset_min
 )
 from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
@@ -570,13 +570,22 @@ def _rescue_dinner_slot(user_id: str, meal_type: str, calories: int, days_ago: i
         if int(calories or 0) < _DINNER_RESCUE_MIN_KCAL:
             return meal_type
         from db import execute_sql_query as _esq_ds
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Offset por usuario en vez del hardcode
+        # 'America/Santo_Domingo'. `consumed_at`/`now()` son timestamptz: `(col AT TIME ZONE
+        # 'zona')::date` == `(col - make_interval(mins => offset_oeste))::date` — álgebra exacta
+        # (offset=240 reproduce el hardcode previo byte a byte, verificado contra Neon
+        # 2026-08-16), a diferencia de `db_facts.get_avg_meal_hour` (que preserva un signo '+'
+        # heredado de un bug pre-existente — ver su comentario; ESTE sitio siempre fue el hop
+        # simple/correcto). América/Santo_Domingo no tiene DST (fijo UTC-4): 240 vale los 365
+        # días del año.
+        _tz_off_ds = user_tz_offset_min(user_id)
         _rows = _esq_ds(
             "SELECT meal_type, MAX(consumed_at) AS ultima FROM consumed_meals "
             "WHERE user_id = %s AND meal_type = ANY(%s) "
-            "AND (consumed_at AT TIME ZONE 'America/Santo_Domingo')::date "
-            "  = (now() AT TIME ZONE 'America/Santo_Domingo')::date "
+            "AND (consumed_at - make_interval(mins => %s))::date "
+            "  = (now() - make_interval(mins => %s))::date "
             "GROUP BY meal_type",
-            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES)),
+            (user_id, list(_CONSUMED_MAIN_MEAL_TYPES), _tz_off_ds, _tz_off_ds),
             fetch_all=True,
         ) or []
         _por_slot = {str(r.get("meal_type")): r.get("ultima") for r in _rows if isinstance(r, dict)}
@@ -656,13 +665,19 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     if _meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force:
         try:
             from db import execute_sql_query as _esq_cm
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] offset por usuario — ver nota gemela en
+            # `_rescue_dinner_slot` (misma equivalencia algebraica; offset=240 byte-idéntico al
+            # hardcode previo). Ambos lados de la comparación (la fila existente Y el evento
+            # nuevo `_consumed_at`) usan el MISMO offset resuelto — comparar "mismo día local"
+            # exige la misma vara de medir en los dos lados.
+            _tz_off_cm = user_tz_offset_min(user_id)
             _dup = _esq_cm(
                 "SELECT meal_name, calories, consumed_at FROM consumed_meals "
                 "WHERE user_id = %s AND meal_type = %s "
-                "AND (consumed_at AT TIME ZONE 'America/Santo_Domingo')::date = "
-                "((%s::timestamptz) AT TIME ZONE 'America/Santo_Domingo')::date "
+                "AND (consumed_at - make_interval(mins => %s))::date = "
+                "((%s::timestamptz) - make_interval(mins => %s))::date "
                 "ORDER BY consumed_at DESC LIMIT 1",
-                (user_id, _meal_type, _consumed_at),
+                (user_id, _meal_type, _tz_off_cm, _consumed_at, _tz_off_cm),
                 fetch_one=True,
             )
             if _dup:

@@ -1424,3 +1424,357 @@ def test_finalizer_wire_country_en_swap_y_chat_modify():
     tools_src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
     assert "country=_modify_country" in tools_src
     assert "_fin_rc_m(new_meal_data, pantry_strict=_ps_fin, allergies=_clin_allergies," in tools_src
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ── T5: fecha local por usuario (independiente del país) ────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Country-INDEPENDENT a propósito: un dominicano
+# viajando a España también debe cortar su día/hora en LA SUYA, no en RD fija — por eso
+# `db_facts.user_tz_offset_min(user_id)` NO deriva de `constants.COUNTRY_PROFILES` (eso es un
+# default de FORM para el motor de generación, T1-T4), sino de `health_profile->>'tzOffset'`, el
+# reloj PERSONAL que el cliente ya manda (`new Date().getTimezoneOffset()`, Dashboard.jsx/
+# Plan.jsx/etc.) y que `/shift-plan` ya sincroniza en el perfil (`routers/plans.py::_tz_mutator`,
+# escribe `tz_offset_minutes` Y `tzOffset` juntos).
+#
+# Reemplaza el hardcode `AT TIME ZONE 'America/Santo_Domingo'` en los 4 sitios SQL fuera de este
+# archivo por aritmética de offset: `(col ± make_interval(mins => %s))::date`/`EXTRACT` — álgebra
+# EXACTA para un huso de offset fijo (América/Santo_Domingo no tiene DST), verificada contra
+# Neon 2026-08-16 (ver task-5-report.md).
+#
+# ⚠️ UN sitio (`db_facts.get_avg_meal_hour`) usa `+` en vez de `-`: el forense contra Neon reveló
+# que `consumed_at` es `timestamptz` (no NAIVE), así que el idiom previo (doble
+# `AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo'`) NETEABA +offset en vez de -offset —
+# un bug preexistente (hora promedio de comida sesgada +8h, NO fecha) fuera de scope de T5 (que
+# solo parametriza el huso, no audita aritmética — ver comentario en el propio sitio). Preservar
+# ese signo es lo que exige la byte-identidad a offset=240; los tests de abajo lo anclan
+# EXPLÍCITAMENTE para que un futuro "cleanup" no lo "corrija" sin querer.
+#
+# Contrato con vecinos anclados (NO se tocan, corren tal cual): `test_p1_chat_past_days_memory.py`
+# (:329 `tz_offset: int = 240` en firmas, :471 prohíbe `tz_offset or 240`) y
+# `test_p1_diary_tz_default_rd.py` (`get_consumed_meals_today` sigue defaulteando 240 — concepto
+# DISTINTO, ventana Python-side, no SQL `AT TIME ZONE`).
+
+_T5_FILES = ("db_facts.py", "tools.py", "proactive_agent.py")
+
+
+def _sin_comentarios(rel_path: str) -> str:
+    src = (_BACKEND / rel_path).read_text(encoding="utf-8")
+    return "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+
+
+def _mock_db_facts_query(monkeypatch, result):
+    """Doble de `db_facts.execute_sql_query` que no toca la DB — mismo patrón que
+    `captured_window` en test_p1_diary_tz_default_rd.py. Devuelve `result` para cualquier query
+    (el helper bajo test solo hace una)."""
+    import db_facts
+    calls = []
+
+    def _fake(query, params=None, fetch_one=False, fetch_all=False, **kwargs):
+        calls.append({"query": query, "params": params})
+        return result
+
+    monkeypatch.setattr(db_facts, "execute_sql_query", _fake)
+    monkeypatch.setattr(db_facts, "connection_pool", object())
+    return calls
+
+
+# ── user_tz_offset_min: helper único ──────────────────────────────────────────
+
+def test_user_tz_offset_min_lee_tzoffset_del_perfil(monkeypatch):
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": "-60"})
+    assert db_facts.user_tz_offset_min("u-1") == -60
+
+
+def test_user_tz_offset_min_perfil_ausente_cae_a_240(monkeypatch):
+    import db_facts
+    _mock_db_facts_query(monkeypatch, None)
+    assert db_facts.user_tz_offset_min("u-1") == 240
+
+
+def test_user_tz_offset_min_clave_ausente_o_null_cae_a_240(monkeypatch):
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": None})
+    assert db_facts.user_tz_offset_min("u-1") == 240
+
+
+def test_user_tz_offset_min_garbage_cae_a_240(monkeypatch):
+    import db_facts
+    for basura in ("no-soy-un-numero", "", "[1,2]", "true"):
+        _mock_db_facts_query(monkeypatch, {"tz": basura})
+        assert db_facts.user_tz_offset_min("u-1") == 240, f"basura={basura!r}"
+
+
+def test_user_tz_offset_min_excepcion_de_db_cae_a_240(monkeypatch):
+    import db_facts
+
+    def _boom(*a, **k):
+        raise RuntimeError("Neon caído")
+
+    monkeypatch.setattr(db_facts, "execute_sql_query", _boom)
+    monkeypatch.setattr(db_facts, "connection_pool", object())
+    assert db_facts.user_tz_offset_min("u-1") == 240
+
+
+def test_user_tz_offset_min_sin_user_id_cae_a_240(monkeypatch):
+    import db_facts
+    calls = _mock_db_facts_query(monkeypatch, {"tz": "-60"})
+    assert db_facts.user_tz_offset_min(None) == 240
+    assert db_facts.user_tz_offset_min("") == 240
+    assert not calls, "no debería consultar la DB si user_id es falsy"
+
+
+def test_user_tz_offset_min_sin_connection_pool_cae_a_240(monkeypatch):
+    import db_facts
+    monkeypatch.setattr(db_facts, "connection_pool", None)
+    assert db_facts.user_tz_offset_min("u-1") == 240
+
+
+@pytest.mark.parametrize("crudo,esperado", [
+    ("899", 899), ("900", 900), ("901", 900), ("5000", 900),
+    ("-899", -899), ("-900", -900), ("-901", -900), ("-5000", -900),
+    ("240.0", 240), ("-60", -60),
+])
+def test_user_tz_offset_min_clamp_y_coercion_numerica(monkeypatch, crudo, esperado):
+    import db_facts
+    _mock_db_facts_query(monkeypatch, {"tz": crudo})
+    assert db_facts.user_tz_offset_min("u-1") == esperado, f"crudo={crudo!r}"
+
+
+def test_user_tz_offset_min_query_apunta_a_health_profile_tzoffset(monkeypatch):
+    import db_facts
+    calls = _mock_db_facts_query(monkeypatch, {"tz": "-60"})
+    db_facts.user_tz_offset_min("u-1")
+    assert calls, "execute_sql_query no se invocó"
+    q = calls[-1]["query"]
+    assert "health_profile->>'tzOffset'" in q
+    assert "user_profiles" in q
+    assert calls[-1]["params"] == ("u-1",)
+
+
+def test_user_tz_offset_min_sin_cache_entre_llamadas(monkeypatch):
+    """Per-call a propósito (brief: correctness sobre micro-perf en diario) — perfiles distintos
+    en llamadas consecutivas del MISMO user_id deben reflejarse siempre, nunca memoizado."""
+    import db_facts
+    valores = iter(["-60", "300"])
+
+    def _fake(query, params=None, fetch_one=False, fetch_all=False, **kwargs):
+        return {"tz": next(valores)}
+
+    monkeypatch.setattr(db_facts, "execute_sql_query", _fake)
+    monkeypatch.setattr(db_facts, "connection_pool", object())
+
+    assert db_facts.user_tz_offset_min("u-1") == -60
+    assert db_facts.user_tz_offset_min("u-1") == 300, (
+        "el segundo valor debe reflejar la NUEVA lectura — una cache lo congelaría en -60"
+    )
+
+
+# ── parser: cero 'America/Santo_Domingo' hardcoded en los 4 sitios ───────────
+
+def test_cero_america_santo_domingo_hardcoded_en_los_4_sitios():
+    """Los 4 SQL (db_facts.get_avg_meal_hour, tools._rescue_dinner_slot,
+    tools.log_consumed_meal, proactive_agent.get_daily_nudge_count) deben quedar en CERO
+    ocurrencias del literal fuera de comentarios (permitido en comentarios, brief). NO escanea
+    `schemas.py:145` (`timezone: Optional[str] = 'America/Santo_Domingo'`) — campo Pydantic NO
+    relacionado, fuera de scope de T5 a propósito."""
+    for rel_path in _T5_FILES:
+        cuerpo = _sin_comentarios(rel_path)
+        assert "America/Santo_Domingo" not in cuerpo, (
+            f"{rel_path}: todavía hardcodea 'America/Santo_Domingo' fuera de un comentario"
+        )
+
+
+def test_los_4_sitios_usan_make_interval_parametrizado():
+    """Guard positivo — evita que el test de arriba pase vacío si alguien borra el SQL entero en
+    vez de parametrizarlo. 2 usos en db_facts.py (HOUR+MINUTE), 4 en tools.py (2 sitios × 2), 2
+    en proactive_agent.py."""
+    minimos = {"db_facts.py": 2, "tools.py": 4, "proactive_agent.py": 2}
+    for rel_path, minimo in minimos.items():
+        cuerpo = _sin_comentarios(rel_path)
+        n = cuerpo.count("make_interval(mins => %s)")
+        assert n >= minimo, f"{rel_path}: esperaba >= {minimo} usos, hallado {n}"
+
+
+def test_los_4_sitios_derivan_offset_via_user_tz_offset_min():
+    """Ningún sitio puede resolver el offset por su cuenta (2ª tabla/lectura ad-hoc) — todos
+    pasan por el único helper, mismo principio que P1-DIET-CANON-SSOT."""
+    ocurrencias = {"db_facts.py": 1, "tools.py": 2, "proactive_agent.py": 1}
+    for rel_path, minimo in ocurrencias.items():
+        cuerpo = _sin_comentarios(rel_path)
+        n = cuerpo.count("user_tz_offset_min(")
+        assert n >= minimo, f"{rel_path}: esperaba >= {minimo} llamadas a user_tz_offset_min(, hallado {n}"
+
+
+# ── db_facts.get_avg_meal_hour: preserva-bug con signo '+' ───────────────────
+
+def test_get_avg_meal_hour_usa_offset_resuelto_con_signo_mas(monkeypatch):
+    """[T5] `consumed_at` es timestamptz (no NAIVE) — el doble AT TIME ZONE previo neteaba
+    +offset, no -offset (forense Neon 2026-08-16). La sustitución usa `+` para ser BYTE-IDÉNTICA
+    a offset=240; un '-' aquí sería una regresión silenciosa de conducta (aunque 'arreglaría' un
+    bug no pedido por T5). Ver task-5-report.md para el argumento completo."""
+    import db_facts
+
+    calls = []
+
+    def _fake(query, params=None, fetch_one=False, fetch_all=False, **kwargs):
+        calls.append({"query": query, "params": params})
+        return []
+
+    monkeypatch.setattr(db_facts, "execute_sql_query", _fake)
+    monkeypatch.setattr(db_facts, "connection_pool", object())
+    monkeypatch.setattr(db_facts, "user_tz_offset_min", lambda uid: -60)
+
+    db_facts.get_avg_meal_hour("u-1", "desayuno")
+
+    assert calls, "execute_sql_query no se invocó"
+    query, params = calls[-1]["query"], calls[-1]["params"]
+    assert query.count("consumed_at + make_interval(mins => %s)") == 2, (
+        "esperaba el signo '+' (preserva-bug) en HOUR y MINUTE"
+    )
+    assert "America/Santo_Domingo" not in query
+    assert params[0] == -60 and params[1] == -60, f"offset resuelto ausente: {params!r}"
+
+
+def test_get_avg_meal_hour_offset_240_por_defecto_sin_perfil(monkeypatch):
+    """Fallback: sin perfil (`user_tz_offset_min` REAL, sin mock, con SELECT que no encuentra
+    fila) ⇒ 240 — conducta IDÉNTICA al hardcode previo."""
+    import db_facts
+
+    calls = []
+
+    def _fake(query, params=None, fetch_one=False, fetch_all=False, **kwargs):
+        calls.append({"query": query, "params": params})
+        return None if fetch_one else []
+
+    monkeypatch.setattr(db_facts, "execute_sql_query", _fake)
+    monkeypatch.setattr(db_facts, "connection_pool", object())
+
+    db_facts.get_avg_meal_hour("u-1", "desayuno")
+
+    # la ÚLTIMA call es la query propia de avg_meal_hour; el offset viajó resuelto a 240.
+    query, params = calls[-1]["query"], calls[-1]["params"]
+    assert params[0] == 240 and params[1] == 240
+
+
+# ── tools._rescue_dinner_slot: signo '-' (hop simple, correcto) ──────────────
+
+def test_rescue_dinner_slot_usa_offset_resuelto_con_signo_menos(monkeypatch):
+    import tools
+    import db
+
+    calls = []
+
+    def _fake(query, params=None, fetch_all=False, fetch_one=False, **kwargs):
+        calls.append({"query": query, "params": params})
+        return []
+
+    monkeypatch.setattr(tools, "_DINNER_RESCUE_ENABLED", True)
+    monkeypatch.setattr(db, "execute_sql_query", _fake)
+    monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: -60)
+
+    tools._rescue_dinner_slot("u-1", "snack", 500, 0)
+
+    assert calls, "execute_sql_query no se invocó"
+    query, params = calls[-1]["query"], calls[-1]["params"]
+    assert query.count("- make_interval(mins => %s)") == 2
+    assert "America/Santo_Domingo" not in query
+    assert params[-2] == -60 and params[-1] == -60, f"offset resuelto ausente: {params!r}"
+
+
+# ── tools.log_consumed_meal (dup-guard): SQL exacto, signo '-' ───────────────
+
+def _cuerpo_log_consumed_meal_dup_guard() -> str:
+    cuerpo_completo = _sin_comentarios("tools.py")
+    ini = cuerpo_completo.index("_meal_type in _CONSUMED_MAIN_MEAL_TYPES and not force")
+    fin = cuerpo_completo.index("except Exception as _dup_err:", ini)
+    return cuerpo_completo[ini:fin]
+
+
+def test_log_consumed_meal_dup_guard_sql_exacto_offset_resuelto():
+    cuerpo = _cuerpo_log_consumed_meal_dup_guard()
+    assert "user_tz_offset_min(user_id)" in cuerpo
+    assert "America/Santo_Domingo" not in cuerpo
+    assert cuerpo.count("- make_interval(mins => %s)") == 2
+
+
+# ── proactive_agent.get_daily_nudge_count: signo '-' ──────────────────────────
+
+def test_get_daily_nudge_count_usa_offset_resuelto_no_240(monkeypatch):
+    import proactive_agent
+
+    calls = []
+
+    def _fake(query, params=None, fetch_one=False, **kwargs):
+        calls.append({"query": query, "params": params})
+        return {"total": 0}
+
+    monkeypatch.setattr(proactive_agent, "execute_sql_query", _fake)
+    monkeypatch.setattr(proactive_agent, "user_tz_offset_min", lambda uid: -60)
+
+    proactive_agent.get_daily_nudge_count("u-1")
+
+    assert calls, "execute_sql_query no se invocó"
+    query, params = calls[-1]["query"], calls[-1]["params"]
+    assert query.count("- make_interval(mins => %s)") == 2
+    assert "America/Santo_Domingo" not in query
+    assert params == ("u-1", -60, -60), f"offset resuelto ausente: {params!r}"
+
+
+def test_get_daily_nudge_count_offset_240_por_defecto_sin_perfil(monkeypatch):
+    import proactive_agent
+    import db_facts
+
+    calls = []
+
+    def _fake_execute(query, params=None, fetch_one=False, **kwargs):
+        calls.append({"query": query, "params": params})
+        return {"total": 0}
+
+    def _fake_query_for_helper(query, params=None, fetch_one=False, **kwargs):
+        return None  # sin perfil
+
+    monkeypatch.setattr(db_facts, "execute_sql_query", _fake_query_for_helper)
+    monkeypatch.setattr(db_facts, "connection_pool", object())
+    monkeypatch.setattr(proactive_agent, "execute_sql_query", _fake_execute)
+
+    proactive_agent.get_daily_nudge_count("u-1")
+
+    assert calls and calls[-1]["params"] == ("u-1", 240, 240)
+
+
+# ── funcional: el corte de día DIFIERE entre offset=240 y offset=-60 ─────────
+
+def test_offset_240_vs_menos60_difieren_en_el_corte_de_dia_a_las_03_utc():
+    """La demostración concreta que exige el brief: a las 03:00 UTC, RD (offset=240=UTC-4) ya
+    cruzó la medianoche hacia AYER; España en invierno (offset=-60=UTC+1) sigue en HOY. Reproduce
+    en Python puro la MISMA álgebra que `(col - make_interval(mins => %s))::date` usa en SQL —
+    `instant - timedelta(minutes=offset)` — verificada byte a byte contra Neon 2026-08-16 (ver
+    task-5-report.md). No requiere DB: es aritmética de calendario, no I/O."""
+    from datetime import datetime, timedelta, timezone
+    instante = datetime(2026, 8, 16, 3, 0, 0, tzinfo=timezone.utc)
+
+    fecha_rd = (instante - timedelta(minutes=240)).date()
+    fecha_es_invierno = (instante - timedelta(minutes=-60)).date()
+
+    assert fecha_rd.isoformat() == "2026-08-15", "RD (UTC-4) debe leer AYER a las 03:00 UTC"
+    assert fecha_es_invierno.isoformat() == "2026-08-16", "España invierno (UTC+1) debe leer HOY"
+    assert fecha_rd != fecha_es_invierno, "el corte de día debe DIFERIR entre offsets"
+
+
+def test_dst_america_santo_domingo_no_aplica_240_vale_todo_el_ano():
+    """[T5] Documenta la premisa DST del brief: América/Santo_Domingo NO observa horario de
+    verano (fijo UTC-4 los 365 días) — a diferencia de España (CET/CEST, sí tiene DST: su
+    tzOffset persistido puede ser -60 en invierno pero -120 en verano). Esto es lo que hace
+    seguro reemplazar `AT TIME ZONE 'America/Santo_Domingo'` por una constante 240 en vez de
+    requerir lógica de calendario — IANA tzdata resuelve el offset de RD a -4h para CUALQUIER
+    fecha del año."""
+    from zoneinfo import ZoneInfo
+    from datetime import datetime
+    rd = ZoneInfo("America/Santo_Domingo")
+    verano = datetime(2026, 7, 1, 12, 0, 0, tzinfo=rd)
+    invierno = datetime(2026, 1, 1, 12, 0, 0, tzinfo=rd)
+    assert verano.utcoffset().total_seconds() / 60 == -240
+    assert invierno.utcoffset().total_seconds() / 60 == -240

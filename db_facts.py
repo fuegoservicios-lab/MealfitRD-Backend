@@ -165,6 +165,58 @@ def check_fact_ownership(fact_id: str, user_id: str) -> bool:
         logger.error(f"Error en check_fact_ownership: {e}")
     return False
 
+def user_tz_offset_min(user_id: str) -> int:
+    """Resuelve el offset de huso horario PERSISTIDO del usuario, en minutos, convención
+    `Date.getTimezoneOffset()` (positivo = oeste de UTC; RD=240, España en invierno=-60).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Lee `user_profiles.health_profile->>'tzOffset'` —
+    la MISMA clave que el mutator atómico de `/shift-plan` (`routers/plans.py::_tz_mutator`)
+    escribe SIEMPRE junto con `tz_offset_minutes` cuando el request trae `tzOffset` explícito, así
+    que ambas quedan sincronizadas en el único write path conocido. Deliberadamente NO hace
+    COALESCE con `tz_offset_minutes` como sí hace `cron_tasks._get_user_tz_live` (que vive en una
+    capa que este módulo no puede importar sin ciclo: `cron_tasks` importa `db`/`db_facts`, nunca
+    al revés) — si un futuro caller encuentra perfiles con SOLO `tz_offset_minutes` poblado, es
+    señal para converger ambos helpers, no para bifurcar un tercer patrón de lectura aquí.
+
+    Country-INDEPENDENT a propósito: el offset es el reloj PERSONAL del usuario (lo que su
+    navegador/dispositivo reportó), no un default derivado de `constants.COUNTRY_PROFILES` — un
+    dominicano viajando a España corta su día en hora española igual que un usuario español.
+
+    Fail-safe: perfil ausente, clave ausente/null, valor no numérico (incluye overflow) o
+    cualquier excepción de DB degradan a 240 (RD) — IDÉNTICO al hardcode de zona horaria previo
+    que este P-fix reemplaza en los 4 call sites. Clamp defensivo [-900, 900] (±15h, cubre
+    holgado el rango real de husos UTC-12..+14) contra un valor corrupto que reviente la
+    aritmética SQL corriente abajo.
+
+    Sin caché a propósito (per-call): estos call sites son lecturas de diario/coach, no un hot
+    loop — correctness sobre micro-perf. Si un futuro caller lo invoca dentro de un loop
+    por-fila, cachear se vuelve obligatorio; hoy los 4 sitios lo llaman a lo sumo 1x por
+    invocación.
+
+    tooltip-anchor: user_tz_offset_min (test_p1_country_system_f1.py)
+    """
+    if not user_id or not connection_pool:
+        return 240
+    try:
+        row = execute_sql_query(
+            "SELECT health_profile->>'tzOffset' AS tz FROM user_profiles WHERE id = %s",
+            (user_id,),
+            fetch_one=True,
+        )
+        raw = row.get("tz") if row else None
+        if raw is None:
+            return 240
+        val = int(float(raw))
+    except Exception as e:
+        logger.debug(f"[P1-COUNTRY-SYSTEM-F1] user_tz_offset_min fallback 240 para {str(user_id)[:8]}: {e}")
+        return 240
+    if val > 900:
+        return 900
+    if val < -900:
+        return -900
+    return val
+
+
 def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Optional[float]:
     """Calcula la hora promedio en la que el usuario registra un tipo de comida (ej: 10.5 para 10:30 AM)."""
     if not connection_pool: return None
@@ -172,14 +224,33 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
         from datetime import datetime, timezone, timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
         
-        # Ajustamos a AST (-4) sumando/restando horas o simplemente extrayendo la hora local
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T5)] Offset resuelto por usuario en vez del
+        # hardcode 'America/Santo_Domingo'. `user_tz_offset_min` degrada a 240 (RD) sin
+        # perfil/error — comportamiento IDÉNTICO al hardcode previo para todo usuario sin
+        # `tzOffset` persistido. América/Santo_Domingo no tiene DST (fijo UTC-4), así que 240
+        # es válido los 365 días del año (no hace falta lógica de calendario).
+        #
+        # ⚠️ Preserva-bug A PROPÓSITO — signo '+', NO '-' como los otros 3 sitios de este mismo
+        # P-fix: el expr original hacía DOBLE `AT TIME ZONE` (`consumed_at AT TIME ZONE 'UTC' AT
+        # TIME ZONE 'America/Santo_Domingo'`), el idiom correcto para columnas TIMESTAMP NAIVE
+        # que guardan dígitos UTC. Pero `consumed_at` es `timestamptz` (verificado contra Neon,
+        # forense 2026-08-16: `SELECT pg_typeof(consumed_at) FROM consumed_meals`) — sobre
+        # timestamptz ese doble-hop NETEA +offset en vez de -offset (la 2ª conversión reinterpreta
+        # los dígitos ya-UTC del 1er hop como si fueran hora LOCAL AST, sumando el offset otra
+        # vez en vez de cancelarlo). Medido: un evento a las 14:00 UTC devolvía hora=18 (hora
+        # local AST real: 10:00) — +8h de más. Es un bug preexistente (nudge timing sesgado,
+        # NO fecha — esta función no hace ::date) fuera de alcance de T5, que solo parametriza
+        # el huso, no audita aritmética. Replicar el signo '+' preserva el comportamiento
+        # BYTE-IDÉNTICO a offset=240 que exige el contrato de este fix; un P-fix dedicado con su
+        # propio test debe decidir si corregir el signo. Detalle completo en task-5-report.md.
+        _tz_off = user_tz_offset_min(user_id)
         query = """
-            SELECT EXTRACT(HOUR FROM (consumed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo')) as hr,
-                   EXTRACT(MINUTE FROM (consumed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo')) as mn
+            SELECT EXTRACT(HOUR FROM (consumed_at + make_interval(mins => %s))) as hr,
+                   EXTRACT(MINUTE FROM (consumed_at + make_interval(mins => %s))) as mn
             FROM consumed_meals
             WHERE user_id = %s AND meal_type ILIKE %s AND consumed_at >= %s
         """
-        res = execute_sql_query(query, (user_id, f"%{meal_type}%", cutoff), fetch_all=True)
+        res = execute_sql_query(query, (_tz_off, _tz_off, user_id, f"%{meal_type}%", cutoff), fetch_all=True)
         if not res:
             return None
             
