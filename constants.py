@@ -1368,6 +1368,83 @@ def chunk_refill_arrives_in_time(live_days_count, next_offset):
     if next_offset is None:
         return None
     return _entero_no_negativo(next_offset) <= _entero_no_negativo(live_days_count)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-CHUNK-EXECUTE-CEILING · 2026-08-16] El techo de `execute_after`.
+#
+# `_rebase_pending_chunk_offsets_sql` mueve `execute_after` por el MISMO delta
+# que el offset — un movimiento RELATIVO. Eso preserva la hora local y cualquier
+# adelanto de `safety_margin`, que es lo que se quería, pero también preserva
+# cualquier error previo PARA SIEMPRE: nadie compara jamás el par contra el
+# ancla. Medido el 2026-08-16 sobre los 3 planes vivos con cola: los 2 que
+# habían pasado por el rebase estaban en `ancla + offset + 1` (el plan e2094da6
+# iba a dejar al usuario sin menú el día 20, y otra vez el 24, y el 28); el
+# tercero, cuyas filas nunca se reanclaron, estaba exacto en sus 3 chunks.
+#
+# La diferencia entre estar bien y estar mal era una sola columna: `updated_at`.
+#
+# Por qué un TECHO y no un recálculo: recalcular desde cero borraría los
+# adelantos legítimos (`safety_margin`) y la hora del día que el movimiento
+# relativo preserva a propósito. `LEAST` solo acota por arriba — un chunk que ya
+# llega antes de tiempo no lo toca. La regla que impone es la única que le
+# importa al usuario: **ningún bloque puede ejecutarse después de que haya
+# empezado el primer día que cubre**.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def chunk_execute_after_ceiling(snapshot, nuevo_offset):
+    """Instante límite para ejecutar un chunk: medianoche local de su primer día.
+
+    Args:
+        snapshot: `pipeline_snapshot` del chunk. Se usa SOLO su `form_data`
+            (`_plan_start_date` + `tzOffset`) — la fuente 1 de
+            `_resolve_chunk_start_anchor`, la única que no hace IO. Esto corre
+            dentro de la transacción que sostiene el advisory lock del shift:
+            abrir consultas ahí para adivinar una TZ es cambiar un relleno tarde
+            por un lock retenido de más.
+        nuevo_offset: offset YA reanclado del chunk (día 0 = el ancla).
+
+    Returns:
+        `datetime` aware en UTC, o `None` si el snapshot no permite anclar. None
+        significa "no opino": el caller debe conservar su comportamiento previo,
+        NUNCA tratarlo como techo cero (eso mandaría todo a NOW() a la vez, que
+        es el fallo de concurrencia que `dias_hasta_su_turno` ya existe para
+        evitar).
+
+    El `+30` minutos replica la fórmula del encolado (medianoche local + 30m).
+    Repetirla aquí sería una segunda tabla de aritmética; se repite el OFFSET,
+    no la política: si el encolado cambia de hora, este techo sigue siendo
+    correcto porque el techo es "cuándo empieza el día", no "cuándo se quiso
+    ejecutar".
+    """
+    form_data = snapshot.get("form_data") if isinstance(snapshot, dict) else None
+    if not isinstance(form_data, dict):
+        return None
+    inicio = form_data.get("_plan_start_date")
+    if not inicio:
+        return None
+    try:
+        ancla = safe_fromisoformat(inicio)
+    except Exception:
+        return None
+    if ancla is None:
+        return None
+    if ancla.tzinfo is None:
+        ancla = ancla.replace(tzinfo=timezone.utc)
+    try:
+        tz_min = int(
+            form_data.get("tzOffset")
+            or form_data.get("tz_offset_minutes")
+            or 0
+        )
+    except (TypeError, ValueError):
+        tz_min = 0
+    medianoche = datetime.combine(
+        ancla.date(), datetime.min.time()
+    ).replace(tzinfo=timezone.utc)
+    return medianoche + timedelta(
+        days=_entero_no_negativo(nuevo_offset), minutes=tz_min + 30
+    )
 # --- VECTOR SEARCH CACHE ---
 
 # [P1-EMBEDDING-CACHE-BOUNDED · 2026-05-24] Caches de embeddings con bound LRU.

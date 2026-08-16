@@ -33530,6 +33530,17 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
     `NOW()` deja que el scheduler recoja de inmediato lo que ya debía haber
     corrido, en vez de programarlo al pasado.
 
+    [P1-CHUNK-EXECUTE-CEILING · 2026-08-16] Ese movimiento relativo tiene un
+    precio que no se había cobrado hasta ahora: preserva TAMBIÉN el error previo,
+    porque nadie compara nunca el par (offset, execute_after) contra el ancla.
+    Medido sobre los 3 planes vivos con cola: los 2 reanclados alguna vez estaban
+    en `ancla + offset + 1` — el bloque se ejecutaba el día DESPUÉS de empezar el
+    tramo que cubre, dejando al usuario sin menú ese día, y otra vez al siguiente
+    bloque. El tercero, nunca reanclado, estaba exacto. `chunk_execute_after_ceiling`
+    acota el movimiento por arriba con la medianoche local del primer día que el
+    chunk cubre; un adelanto legítimo sigue ganando (el techo solo acota tarde) y
+    el suelo de NOW() sigue mandando sobre el techo.
+
     [P1-CHUNK-REBASE-PAUSED · 2026-08-08] La cadena incluye TAMBIÉN los chunks
     `pending_user_action`: un pausado NO está muerto — el recovery cron lo
     resucita (TTL → flexible_mode) con `execute_after=NOW()` y SIN recalcular
@@ -33544,7 +33555,11 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
     """
     if not _env_bool("MEALFIT_CHUNK_OFFSET_REBASE", True):
         return 0
-    from constants import plan_chunk_offset_moves, rebase_pending_chunk_offsets  # noqa: F401
+    from constants import (  # noqa: F401
+        chunk_execute_after_ceiling,
+        plan_chunk_offset_moves,
+        rebase_pending_chunk_offsets,
+    )
     try:
         # Los chunks EN VUELO ya están fabricando días que el plan todavía no
         # tiene. Si no se cuentan, el siguiente pendiente ocupa su sitio (offset
@@ -33560,7 +33575,8 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
         en_vuelo = int((cursor.fetchone() or {}).get("en_vuelo") or 0)
 
         cursor.execute(
-            "SELECT id, days_offset, days_count FROM plan_chunk_queue "
+            "SELECT id, days_offset, days_count, pipeline_snapshot "
+            "FROM plan_chunk_queue "
             "WHERE meal_plan_id = %s AND status IN ('pending', 'stale', 'pending_user_action') "
             "ORDER BY week_number ASC, days_offset ASC",
             (plan_id,),
@@ -33577,8 +33593,16 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
             live_days_count,
             [(f["id"], f.get("days_offset"), f.get("days_count")) for f in filas],
         )
+        snapshots = {f["id"]: f.get("pipeline_snapshot") for f in filas}
         movidas = 0
         for chunk_id, nuevo_offset, delta, dias_hasta_su_turno in movimientos:
+            # [P1-CHUNK-EXECUTE-CEILING · 2026-08-16] El techo del ancla acota el
+            # movimiento RELATIVO. Sin él, un `execute_after` que ya venía tarde
+            # se mueve tarde para siempre: el par (offset, execute_after) no lo
+            # compara nadie contra el ancla. `LEAST` va DENTRO del `GREATEST`
+            # porque el suelo de NOW() manda sobre el techo — un chunk vencido se
+            # programa cuanto antes, jamás al pasado.
+            techo = chunk_execute_after_ceiling(snapshots.get(chunk_id), nuevo_offset)
             # El suelo NO es `NOW()`: es `NOW() + los días que faltan para el
             # turno de ESTE chunk`. Con `NOW()` a secas, todos los chunks
             # vencidos de un plan salen a la vez y dos generaciones concurrentes
@@ -33587,12 +33611,15 @@ def _rebase_pending_chunk_offsets_sql(cursor, plan_id, live_days_count) -> int:
                 "UPDATE plan_chunk_queue "
                 "SET days_offset = %s, "
                 "    execute_after = GREATEST("
-                "        execute_after - make_interval(days => %s), "
+                "        LEAST("
+                "            execute_after - make_interval(days => %s), "
+                "            COALESCE(%s::timestamptz, 'infinity'::timestamptz)"
+                "        ), "
                 "        NOW() + make_interval(days => %s)"
                 "    ), "
                 "    updated_at = NOW() "
                 "WHERE id = %s AND status IN ('pending', 'stale', 'pending_user_action')",
-                (nuevo_offset, delta, dias_hasta_su_turno, chunk_id),
+                (nuevo_offset, delta, techo, dias_hasta_su_turno, chunk_id),
             )
             movidas += 1
         if movidas:

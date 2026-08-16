@@ -68,13 +68,29 @@ class _FakeCursor:
         elif sql.strip().upper().startswith("SELECT"):
             estados = self._statuses_in(sql)
             filas = [
-                {"id": r["id"], "days_offset": r["days_offset"], "days_count": r["days_count"]}
+                {
+                    "id": r["id"],
+                    "days_offset": r["days_offset"],
+                    "days_count": r["days_count"],
+                    "pipeline_snapshot": r.get("pipeline_snapshot"),
+                }
                 for r in sorted(self.rows.values(), key=lambda x: x["week_number"])
                 if r["status"] in estados
             ]
             self._result = filas
         elif sql.strip().upper().startswith("UPDATE"):
-            nuevo_offset, delta, _dias_turno, chunk_id = params
+            # [P1-CHUNK-EXECUTE-CEILING] 5 params desde 2026-08-16: el techo del
+            # ancla entró entre `delta` y `dias_hasta_su_turno`.
+            nuevo_offset, delta, techo, _dias_turno, chunk_id = params
+            # Estos fixtures no llevan `pipeline_snapshot`, así que el techo debe
+            # salir None y el UPDATE degradar al comportamiento previo. Se afirma
+            # en vez de ignorarse: si alguien añade snapshot a un fixture, este
+            # fake tiene que enterarse — un modelo que se salta la mitad del SQL
+            # que dice modelar no prueba nada.
+            assert techo is None, (
+                "El fixture trae snapshot: el fake ya no modela el UPDATE real. "
+                "Modela el LEAST contra el techo antes de seguir usándolo."
+            )
             estados = self._statuses_in(sql)
             fila = self.rows.get(chunk_id)
             if fila and fila["status"] in estados:
