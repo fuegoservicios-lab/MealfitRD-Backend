@@ -281,3 +281,74 @@ def test_el_limitador_no_sella_la_ventana_con_peticiones_rechazadas():
         "P1-RATELIMIT-NO-SELF-POISON: el `zadd` de aceptación debe vivir DESPUÉS "
         "del `raise` del 429 — solo se cuenta lo que se admite."
     )
+
+
+# ── [P2-BRANDS-MATCH-CACHE · 2026-08-15] El chip nace completo ───────────────
+
+def test_el_cache_de_matches_esta_claveado_por_la_lista_y_caduca():
+    """Sin firma, el caché mentiría al cambiar la lista de compras.
+
+    Las coincidencias de marca dependen de QUÉ ítems tiene la lista. Servir el
+    caché de otra lista mostraría marcas de alimentos que ya no compras. La firma
+    es el conjunto de nombres normalizado y ORDENADO — el orden no cambia qué
+    marcas existen, así que ordenar evita fallos de caché gratuitos.
+
+    Y caduca porque la respuesta lleva PRECIOS: un precio rancio es peor que un
+    rótulo que tarda 200 ms.
+    """
+    src = _brands_src()
+    assert "matchSignature" in src and "sort()" in src, (
+        "P2-BRANDS-MATCH-CACHE: el caché debe estar claveado por una firma "
+        "ORDENADA de los nombres de la lista."
+    )
+    m = re.search(r"MATCH_CACHE_TTL_MS\s*=\s*([^;]+);", src)
+    assert m, "P2-BRANDS-MATCH-CACHE: el caché de /match perdió su TTL."
+    assert re.search(r"parsed\.signature !== signature", src), (
+        "P2-BRANDS-MATCH-CACHE: la lectura del caché ya no compara la firma. "
+        "Sin esa comparación se sirven marcas de una lista de compras distinta."
+    )
+
+
+def test_el_cache_revalida_contra_la_red():
+    """Es stale-while-revalidate, no stale-y-punto.
+
+    Si la rama de caché marcara `loadedRef`, el fetch no correría y los precios
+    se quedarían congelados hasta el próximo cambio de lista o los 15 min de TTL.
+    El caché existe para cubrir el primer pintado, no para sustituir a la red.
+    """
+    src = _brands_src()
+    m = re.search(r"if \(cached\) \{(.*?)\} else \{", src, re.DOTALL)
+    assert m, "P2-BRANDS-MATCH-CACHE: no encuentro la rama de caché servida."
+    rama = m.group(1)
+    assert "loadedRef.current = true" not in rama, (
+        "P2-BRANDS-MATCH-CACHE: la rama de caché marca `loadedRef`, así que corta "
+        "la revalidación. El caché debe PINTAR y dejar que la red confirme."
+    )
+    assert "setLoading(true)" not in rama, (
+        "P2-BRANDS-MATCH-CACHE: la rama de caché enciende `loading`, tapando con "
+        "«Buscando…» un contenido que ya se puede leer."
+    )
+
+
+def test_el_reconcile_nunca_corre_contra_datos_de_cache():
+    """LA defensa importante: el reconcile dispara un RECÁLCULO, no un repintado.
+
+    `onPrefApplied()` recalcula la lista de compras en el backend. Comparando
+    contra `matches` rancios puede detectar una discrepancia que ya no existe y
+    lanzar ese trabajo por nada. La bandera se baja cuando responde la red, unos
+    cientos de ms después, y entonces el reconcile corre con datos que sí valen.
+    """
+    src = _brands_src()
+    i_efecto = src.find("if (reconcileFiredRef.current) return;")
+    assert i_efecto != -1, "P2-BRANDS-MATCH-CACHE: no encuentro el efecto de reconcile."
+    ventana = src[i_efecto:i_efecto + 900]
+    assert "matchesFromCacheRef.current) return" in ventana, (
+        "P2-BRANDS-MATCH-CACHE: el reconcile perdió su guarda contra datos de "
+        "caché. Sin ella, un `matches` rancio puede disparar un recálculo de la "
+        "lista de compras por una discrepancia inexistente."
+    )
+    i_raise = src.find("matchesFromCacheRef.current = false")
+    assert i_raise != -1, (
+        "P2-BRANDS-MATCH-CACHE: nadie baja la bandera de «rancio». Si no se baja, "
+        "el reconcile NUNCA corre y la marca elegida se queda sin aplicar."
+    )
