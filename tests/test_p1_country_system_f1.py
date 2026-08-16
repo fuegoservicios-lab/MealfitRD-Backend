@@ -772,3 +772,474 @@ def test_swap_meal_wire_los_dos_guards_con_el_pais_derivado():
     src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
     assert "_swap_slot_feedback_suffix(_swap_country" in src
     assert "_swap_raw_staple_feedback_suffix(_swap_country" in src
+
+
+# ── T4: gates culturales suaves por país (SLOT_INAPPROPRIATE_FOODS por país) ────────────────
+#
+# `constants.slot_rules_for_country(country)`: 'DO' (default, knob apagado) ⇒ el MISMO objeto
+# `SLOT_INAPPROPRIATE_FOODS` (identidad `is`); beta ⇒ tabla derivada MEMOIZADA con la MISMA
+# estructura/tokens/excludes pero TODA regla `hardness='soft'` — siguen disparando (telemetría
+# para diseñar las tablas nativas de Fase 2) pero dejan de forzar retry. `_detect_slot_
+# appropriateness` la resuelve UNA vez por evaluación; los autofixes de arroz (`_night_rice_
+# autofix`/`_breakfast_rice_autofix`) ganan un gate por país — DO reescribe como siempre, beta
+# deja el plato intacto (el sustituto arroz→tubérculo ES una preparación dominicana).
+# `build_meal_timing_rules` (§16/SLOT_POSITIVE_HINT — el hallazgo que el fix-round de T2 movió
+# aquí) gana el mismo `country`: DO exacto byte a byte; beta OMITE la enumeración "NO uses..."
+# (sus labels son intencionalmente dominicanos, por diseño arriba) y deja solo la guía positiva
+# neutral (`_SLOT_POSITIVE_HINT_NEUTRAL`). Los 3 "rezagados" de prompt (Part B del brief) — el
+# "según la cultura dominicana" de `build_day_assignment_context`, el hint del carbohidrato del
+# corrector de self-critique y el fallback de `surgical_marker_regen_node` — se re-anclan por
+# país con el MISMO principio que T2/T3 usaron: el REQUISITO sobrevive, solo se retira el marco
+# de nacionalidad.
+
+_BETA_CC_SAMPLE = _BETA_CCS[0] if _BETA_CCS else "ES"
+
+
+# ── slot_rules_for_country ────────────────────────────────────────────────────
+
+def test_slot_rules_for_country_do_es_identidad():
+    assert constants.slot_rules_for_country("DO") is constants.SLOT_INAPPROPRIATE_FOODS
+    assert constants.slot_rules_for_country("xx") is constants.SLOT_INAPPROPRIATE_FOODS  # fail-safe
+    assert constants.slot_rules_for_country(None) is constants.SLOT_INAPPROPRIATE_FOODS
+
+
+def test_slot_rules_for_country_beta_todo_soft_mismos_tokens():
+    assert _BETA_CCS, "no hay países beta en COUNTRY_PROFILES — fixture vacío"
+    for cc in _BETA_CCS:
+        table = constants.slot_rules_for_country(cc)
+        assert table is not constants.SLOT_INAPPROPRIATE_FOODS, cc
+        assert set(table.keys()) == set(constants.SLOT_INAPPROPRIATE_FOODS.keys()), cc
+        for slot, base_rules in constants.SLOT_INAPPROPRIATE_FOODS.items():
+            rules = table[slot]
+            assert len(rules) == len(base_rules), f"{cc}/{slot}"
+            for rule, base_rule in zip(rules, base_rules):
+                assert rule["hardness"] == "soft", f"{cc}/{slot}/{rule['label']}: {rule['hardness']!r}"
+                assert rule["label"] == base_rule["label"]
+                # mismos objetos tuple — no copia (mismos tokens/excludes, brief item 1)
+                assert rule["tokens"] is base_rule["tokens"], f"{cc}/{slot}: tokens debe ser el MISMO objeto"
+                assert rule.get("exclude") is base_rule.get("exclude"), f"{cc}/{slot}: exclude debe ser el MISMO objeto"
+
+
+def test_slot_rules_for_country_beta_memoizado():
+    a = constants.slot_rules_for_country(_BETA_CC_SAMPLE)
+    b = constants.slot_rules_for_country(_BETA_CC_SAMPLE)
+    assert a is b
+    c = constants.slot_rules_for_country(_BETA_CC_SAMPLE.lower())
+    assert a is c, "canonicaliza también en minúscula antes de memoizar"
+
+
+def test_slot_rules_for_country_no_muta_la_tabla_base():
+    """Llamar la variante beta NO debe mutar SLOT_INAPPROPRIATE_FOODS in-place — `dict(rule,
+    hardness='soft')` crea una COPIA del dict de la regla, nunca escribe sobre el original."""
+    before = {slot: [r["hardness"] for r in rules] for slot, rules in constants.SLOT_INAPPROPRIATE_FOODS.items()}
+    for cc in _BETA_CCS:
+        constants.slot_rules_for_country(cc)
+    after = {slot: [r["hardness"] for r in rules] for slot, rules in constants.SLOT_INAPPROPRIATE_FOODS.items()}
+    assert before == after
+    assert constants.SLOT_INAPPROPRIATE_FOODS["desayuno"][0]["hardness"] == "hard"
+
+
+# ── slot_violations_for_meal_name: rules_table opcional (inyección país-aware) ───────────────
+
+def test_slot_violations_for_meal_name_sin_rules_table_es_identico_a_antes():
+    """Backward-compat: sin 3er argumento (ni con None explícito), comportamiento byte-idéntico
+    — sigue leyendo SLOT_INAPPROPRIATE_FOODS. Ningún caller preexistente (tools.py chat-backstop,
+    plan_gym.py scoring, agent.py backstop) pasa este argumento."""
+    v1 = constants.slot_violations_for_meal_name("Arroz con Locrio", "desayuno")
+    v2 = constants.slot_violations_for_meal_name("Arroz con Locrio", "desayuno", None)
+    assert v1 == v2
+    assert v1 and v1[0]["hard"] is True
+
+
+def test_slot_violations_for_meal_name_rules_table_beta_ablanda_el_hard():
+    beta_table = constants.slot_rules_for_country(_BETA_CC_SAMPLE)
+    v_do = constants.slot_violations_for_meal_name("Arroz con Locrio", "desayuno")
+    v_beta = constants.slot_violations_for_meal_name("Arroz con Locrio", "desayuno", beta_table)
+    assert v_do and v_do[0]["hard"] is True
+    assert v_beta and v_beta[0]["hard"] is False
+    assert v_do[0]["label"] == v_beta[0]["label"], "mismo token/label — solo se ablanda hardness"
+
+
+# ── build_meal_timing_rules: §16/SLOT_POSITIVE_HINT por país ─────────────────────────────────
+
+_MEAL_TYPES_ES_DO = ("Desayuno", "Almuerzo", "Cena", "Merienda")
+
+
+def test_build_meal_timing_rules_do_byte_equal_explicito_e_implicito():
+    for mt in _MEAL_TYPES_ES_DO:
+        assert constants.build_meal_timing_rules(mt) == constants.build_meal_timing_rules(mt, "DO")
+        assert constants.build_meal_timing_rules(mt) == constants.build_meal_timing_rules(mt, country="DO")
+
+
+def test_build_meal_timing_rules_pais_desconocido_cae_a_do():
+    for mt in _MEAL_TYPES_ES_DO:
+        assert constants.build_meal_timing_rules(mt, "xx") == constants.build_meal_timing_rules(mt)
+
+
+def test_build_meal_timing_rules_do_contiene_mangu_y_locrio():
+    """Ancla el estado PRE-T4 (sentinel inverso): si esto deja de contener los tokens
+    dominicanos, el guard beta de abajo dejaría de tener contra qué contrastar (falso-verde
+    silencioso — la misma clase que P2-SLOT-SSOT-PROMPT ya vigila para el prompt del day-gen)."""
+    out = "\n".join(constants.build_meal_timing_rules(mt) for mt in _MEAL_TYPES_ES_DO)
+    assert "mangú" in out
+    assert "locrio" in out.lower()
+
+
+def test_build_meal_timing_rules_beta_sin_locrio_ni_mangu_ni_dominican():
+    for cc in _BETA_CCS:
+        out = "\n".join(constants.build_meal_timing_rules(mt, cc) for mt in _MEAL_TYPES_ES_DO)
+        assert "locrio" not in out.lower(), cc
+        assert "mangú" not in out.lower() and "mangu" not in out.lower(), cc
+        assert "dominican" not in out.lower(), cc
+        assert out.strip() != "", f"{cc}: el bloque no debe quedar vacío (guía positiva neutral sobrevive)"
+
+
+# ── §16 en el render completo del day-gen (extiende los render-guards de T2) ─────────────────
+
+def test_daygen_do_render_es_byte_identico_is_incluyendo_s16():
+    """T2 ya ancla la identidad `is` del prompt COMPLETO — repetido aquí como sentinel explícito
+    de que la nueva fila §16 de `_BETA_FRAGMENT_TABLE` (T4) no introduce un 2º `.replace()` que
+    la rompa: el camino DO/None sigue siendo el objeto EXACTO, sin recomputar nada."""
+    from prompts.day_generator import build_day_generator_system_prompt as build, DAY_GENERATOR_SYSTEM_PROMPT
+    assert build("balanced", "DO") is DAY_GENERATOR_SYSTEM_PROMPT
+    assert build("balanced") is DAY_GENERATOR_SYSTEM_PROMPT
+    assert build("vegan", "DO") is build("vegan")
+
+
+def test_daygen_do_s16_conserva_locrio_y_mangu():
+    """Sentinel inverso, acotado a §16 (no al prompt completo — eso ya lo cubre T2's finding5)."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "DO")
+    i16 = out.index("16. CONTRATO EXACTO DEL VALIDADOR DE HORARIO")
+    i17 = out.index("\n17. PRESUPUESTO DE SODIO")
+    s16 = out[i16:i17]
+    assert "locrio" in s16.lower()
+    assert "mangú" in s16.lower()
+
+
+def test_daygen_beta_s16_sin_locrio_ni_mangu_ni_dominican():
+    """Extiende los render-guards de T2: `test_finding5_guard_case_insensitive_sin_sobrevivientes_
+    no_documentados` EXCLUYE §16 a propósito (territorio T4, ver `_scoped_out_sin_s16`). Este test
+    escanea EXACTAMENTE la región complementaria — §16, en balanced Y vegan (la fila es
+    diet-invariante)."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    for diet in ("balanced", "vegan"):
+        out = build(diet, "ES")
+        i16 = out.index("16. CONTRATO EXACTO DEL VALIDADOR DE HORARIO")
+        i17 = out.index("\n17. PRESUPUESTO DE SODIO")
+        s16 = out[i16:i17]
+        assert "locrio" not in s16.lower(), diet
+        assert "mangú" not in s16.lower() and "mangu" not in s16.lower(), diet
+        assert "dominican" not in s16.lower(), diet
+
+
+# ── autofixes de arroz: gate por país ANTES de reescribir ────────────────────────────────────
+
+def _cuerpo_night_rice_autofix() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def _night_rice_autofix(")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    return sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+
+
+def _cuerpo_breakfast_rice_autofix() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def _breakfast_rice_autofix(")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    return sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+
+
+def test_night_rice_autofix_gate_pais_antes_del_try_de_reescritura():
+    cuerpo = _cuerpo_night_rice_autofix()
+    pos_gate = cuerpo.index('!= "DO"')
+    pos_try = cuerpo.index("\n    try:")
+    assert pos_gate < pos_try, "el gate por país debe aparecer ANTES del try/reescritura"
+
+
+def test_breakfast_rice_autofix_gate_pais_antes_del_try_de_reescritura():
+    cuerpo = _cuerpo_breakfast_rice_autofix()
+    pos_gate = cuerpo.index('!= "DO"')
+    pos_try = cuerpo.index("\n    try:")
+    assert pos_gate < pos_try, "el gate por país debe aparecer ANTES del try/reescritura"
+
+
+class _FakeDBT4:
+    """Doble mínimo de IngredientNutritionDB — parsea 'Ng' del string, fallback 150."""
+    def grams_from_ingredient_string(self, s):
+        m = re.search(r"(\d+)\s*g", s)
+        return float(m.group(1)) if m else 150.0
+
+
+def _cena_con_arroz(day=1):
+    return [{"day": day, "meals": [{"meal": "Cena", "name": "Pollo con Arroz Blanco",
+                                     "ingredients": ["200 g de pollo", "150 g de arroz blanco"],
+                                     "recipe": ["Cocina el arroz 15 min.", "Sirve con el pollo."]}]}]
+
+
+def _desayuno_con_arroz(day=1):
+    return [{"day": day, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo",
+                                     "ingredients": ["150 g de arroz blanco", "2 huevos"],
+                                     "recipe": ["Cocina el arroz 15 min.", "Sirve con huevo."]}]}]
+
+
+def _wire_autofix_knobs(monkeypatch):
+    import graph_orchestrator as go
+    monkeypatch.setattr(go, "_truth_up_meal_macros_from_strings", lambda m, db: True)
+    monkeypatch.setattr(go, "NIGHT_RICE_AUTOFIX_ENABLED", True)
+    monkeypatch.setattr(go, "BREAKFAST_RICE_AUTOFIX_ENABLED", True)
+
+
+def test_night_rice_autofix_do_reescribe_como_siempre(monkeypatch):
+    import graph_orchestrator as go
+    _wire_autofix_knobs(monkeypatch)
+    days = _cena_con_arroz()
+    fixed = go._night_rice_autofix(days, db=_FakeDBT4())
+    assert fixed == 1
+    assert "arroz" not in days[0]["meals"][0]["name"].lower()
+
+
+def test_night_rice_autofix_beta_deja_el_plato_intacto(monkeypatch):
+    import graph_orchestrator as go
+    import copy
+    _wire_autofix_knobs(monkeypatch)
+    for cc in _BETA_CCS:
+        days = _cena_con_arroz()
+        before = copy.deepcopy(days)
+        fixed = go._night_rice_autofix(days, db=_FakeDBT4(), country=cc)
+        assert fixed == 0, cc
+        assert days == before, f"{cc}: el plato beta debe quedar BYTE-IDÉNTICO — 0 reescrituras"
+
+
+def test_breakfast_rice_autofix_do_reescribe_como_siempre(monkeypatch):
+    import graph_orchestrator as go
+    _wire_autofix_knobs(monkeypatch)
+    days = _desayuno_con_arroz()
+    fixed = go._breakfast_rice_autofix(days, db=_FakeDBT4())
+    assert fixed == 1
+    assert "arroz" not in days[0]["meals"][0]["name"].lower()
+
+
+def test_breakfast_rice_autofix_beta_deja_el_plato_intacto(monkeypatch):
+    import graph_orchestrator as go
+    import copy
+    _wire_autofix_knobs(monkeypatch)
+    for cc in _BETA_CCS:
+        days = _desayuno_con_arroz()
+        before = copy.deepcopy(days)
+        fixed = go._breakfast_rice_autofix(days, db=_FakeDBT4(), country=cc)
+        assert fixed == 0, cc
+        assert days == before, f"{cc}: el plato beta debe quedar BYTE-IDÉNTICO — 0 reescrituras"
+
+
+# ── _detect_slot_appropriateness: consumidor de slot_rules_for_country ───────────────────────
+
+def _cuerpo_detect_slot_appropriateness() -> str:
+    """Acotado a `_detect_slot_appropriateness` en sí — el boundary naive `\\ndef ` (usado en el
+    resto del archivo) NO sirve aquí porque la SIGUIENTE definición es `async def self_critique_
+    node` decorada con `@_node_label(...)`: `\\ndef ` la salta entera y sigue de largo hasta el
+    próximo `def` a nivel de columna 0 (que puede vivir cientos/miles de líneas después, dentro
+    de OTRA función no relacionada) — exactamente el mismo punto ciego que hace que el propio
+    helper `_cuerpo_self_critique_node()` de arriba (T3) devuelva una región mucho más ancha que
+    el nodo real. Se toma el boundary MÁS CERCANO entre `\\ndef `/`\\nasync def `/`\\n@`."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def _detect_slot_appropriateness")
+    candidatos = [
+        p for p in (
+            sin_comentarios.find("\ndef ", ini + 10),
+            sin_comentarios.find("\nasync def ", ini + 10),
+            sin_comentarios.find("\n@", ini + 10),
+        ) if p != -1
+    ]
+    fin = min(candidatos) if candidatos else len(sin_comentarios)
+    return sin_comentarios[ini:fin]
+
+
+def test_detect_slot_appropriateness_deriva_pais_via_ssot_una_sola_vez():
+    cuerpo = _cuerpo_detect_slot_appropriateness()
+    _assert_deriva_pais_via_ssot(cuerpo, "_detect_slot_appropriateness")
+    n = cuerpo.count("country_for_form_data(form_data)")
+    assert n == 1, f"debe derivar el país UNA sola vez por evaluación, hallado {n}×"
+
+
+def test_detect_slot_appropriateness_usa_slot_rules_for_country():
+    """Cuenta EXACTAMENTE 2 (no solo `in`, que un mutante puede satisfacer vía el OTRO call site):
+    el pase name-level (línea del `issues.append` de la violación) Y el pre-check `_name_flagged`
+    del pase ingredient-level (P2-SLOT-EVASION-TELEMETRY) — AMBOS deben recibir la tabla resuelta.
+    `in cuerpo` sin contar dejaba pasar un mutante que revertía SOLO el primero (el segundo, que
+    también matchea el substring, lo enmascaraba) — confirmado con mutación explícita, ver reporte."""
+    cuerpo = _cuerpo_detect_slot_appropriateness()
+    assert "slot_rules_for_country(" in cuerpo
+    n = cuerpo.count("slot_violations_for_meal_name(name, slot_key, _rules_table)")
+    assert n == 2, (
+        f"esperaba 2 usos de slot_violations_for_meal_name(name, slot_key, _rules_table) (pase "
+        f"name-level + pre-check _name_flagged), hallado {n}× — si alguno cae de nuevo a 2 "
+        f"argumentos, ese sitio ignora slot_rules_for_country y beta deja de ablandar ahí."
+    )
+
+
+def test_detect_slot_appropriateness_knob_off_ignora_country_en_form_data(monkeypatch):
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    issues = go._detect_slot_appropriateness(days, {"country": "ES"})
+    assert issues and issues[0]["hard"] is True, "knob apagado ⇒ 'DO' siempre, sin mirar form_data"
+
+
+def test_detect_slot_appropriateness_beta_ablanda_hard_a_soft(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    issues_beta = go._detect_slot_appropriateness(days, {"country": _BETA_CC_SAMPLE})
+    assert issues_beta and issues_beta[0]["hard"] is False
+    issues_do = go._detect_slot_appropriateness(days, {"country": "DO"})
+    assert issues_do and issues_do[0]["hard"] is True
+    assert issues_beta[0]["label"] == issues_do[0]["label"], "mismo token — solo cambia hard"
+
+
+# ── Part B: los 3 rezagados de prompt (RULED-in por el review de T2) ─────────────────────────
+
+# ── (4) build_day_assignment_context: "según la cultura dominicana" ──────────────────────────
+
+def test_build_day_assignment_context_do_byte_equal_y_literal_exacto():
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": []}
+    do1 = bdac(skeleton, 1, day_name="Lunes")
+    do2 = bdac(skeleton, 1, day_name="Lunes", country="DO")
+    assert do1 == do2
+    assert "según la cultura dominicana" in do1
+
+
+def test_build_day_assignment_context_beta_sin_dominicana():
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": []}
+    for cc in _BETA_CCS:
+        out = bdac(skeleton, 1, day_name="Lunes", country=cc)
+        assert "según la cultura dominicana" not in out, cc
+        assert "según la cultura local del usuario" in out, cc
+
+
+def test_build_day_assignment_context_pais_desconocido_cae_a_do():
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": []}
+    assert bdac(skeleton, 1, day_name="Lunes", country="xx") == bdac(skeleton, 1, day_name="Lunes")
+
+
+def test_generate_days_parallel_node_wire_country_en_build_day_assignment_context():
+    """El callsite del brief (~L8146/8170): `generate_days_parallel_node` deriva el país vía SSOT
+    e inyecta `country=` al llamar `build_day_assignment_context` — sin esto, el bloque "adapta
+    la cultura" del día quedaría anclado a DO para siempre, sin importar el país real."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("assignment_context = build_day_assignment_context(")
+    fin = sin_comentarios.index("\n        )", ini) + len("\n        )")
+    cuerpo = sin_comentarios[ini:fin]
+    assert "country=country_for_form_data(form_data)" in cuerpo
+
+
+# ── (5) self_critique_node: hint del carbohidrato de la cena ─────────────────────────────────
+
+def _cuerpo_carb_hint_line() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("_carb_hint_line = (")
+    fin = sin_comentarios.index("\n                    )", ini) + len("\n                    )")
+    return sin_comentarios[ini:fin]
+
+
+def test_self_critique_carb_hint_do_literal_exacto():
+    cuerpo = _cuerpo_carb_hint_line()
+    assert (
+        '"  • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe)."'
+        in cuerpo
+    )
+
+
+def test_self_critique_carb_hint_beta_variante_presente():
+    cuerpo = _cuerpo_carb_hint_line()
+    assert '"  • Cambia el CARBOHIDRATO de la cena por otro del catálogo."' in cuerpo
+
+
+def test_self_critique_carb_hint_reusa_critique_country_no_rederiva():
+    """T3 ya deriva `_critique_country` una vez, arriba del nodo (shadow work) — este sitio debe
+    REUSARLO vía closure, no volver a llamar country_for_form_data ni leer form_data crudo."""
+    cuerpo = _cuerpo_carb_hint_line()
+    assert "_critique_country" in cuerpo
+    assert "country_for_form_data(" not in cuerpo
+    assert not _RAW_COUNTRY_RX.search(cuerpo)
+
+
+def test_self_critique_build_day_assignment_context_wire_country():
+    """El OTRO callsite de build_day_assignment_context dentro de self_critique_node (el
+    `skeleton_block` del corrector, ~L10745) también debe pasar el país derivado — mismo
+    razonamiento que el callsite de generate_days_parallel_node arriba."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "diet_type=(form_data or {}).get('dietType'), country=_critique_country)" in src
+
+
+# ── (6) surgical_marker_regen_node: fallback de plantilla matemática ─────────────────────────
+
+def _cuerpo_fallback_dish_clause() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("_fallback_dish_clause = (")
+    fin = sin_comentarios.index("\n            )", ini) + len("\n            )")
+    return sin_comentarios[ini:fin]
+
+
+def test_surgical_marker_regen_fallback_do_literal_exacto():
+    cuerpo = _cuerpo_fallback_dish_clause()
+    assert '"platos dominicanos reales" if _surgical_country == "DO" else' in cuerpo
+
+
+def test_surgical_marker_regen_fallback_beta_variante_presente():
+    cuerpo = _cuerpo_fallback_dish_clause()
+    assert '"platos reales de la cocina del usuario"' in cuerpo
+
+
+def test_surgical_marker_regen_fallback_reusa_surgical_country_no_rederiva():
+    cuerpo = _cuerpo_fallback_dish_clause()
+    assert "_surgical_country" in cuerpo
+    assert "country_for_form_data(" not in cuerpo
+    assert not _RAW_COUNTRY_RX.search(cuerpo)
+
+
+def _cuerpo_surgical_marker_regen_node() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("async def surgical_marker_regen_node")
+    fin = sin_comentarios.find("\nasync def ", ini + 10)
+    return sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+
+
+def test_surgical_marker_regen_node_deriva_pais_via_ssot_una_sola_vez():
+    """A diferencia de `self_critique_node` (cuyo boundary naive sobre-captura, ver
+    `_cuerpo_detect_slot_appropriateness`), la SIGUIENTE función top-level tras
+    `surgical_marker_regen_node` es otro `async def` cercano (`_recompute_aggregates_after_swap`)
+    — el boundary `\\nasync def ` acota correctamente sin colar funciones ajenas."""
+    cuerpo = _cuerpo_surgical_marker_regen_node()
+    assert "async def _recompute_aggregates_after_swap" not in cuerpo
+    _assert_deriva_pais_via_ssot(cuerpo, "surgical_marker_regen_node")
+    n = cuerpo.count("country_for_form_data(form_data)")
+    assert n == 1, f"debe derivar el país UNA sola vez, hallado {n}×"
+
+
+def test_surgical_marker_regen_build_day_assignment_context_wire_country():
+    cuerpo = _cuerpo_surgical_marker_regen_node()
+    assert "country=_surgical_country" in cuerpo

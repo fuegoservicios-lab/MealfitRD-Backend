@@ -8166,6 +8166,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _dg_targets = None
         except Exception:
             _dg_targets = None
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
+        # 'DO' siempre ⇒ assignment_context toma el camino DO byte-idéntico.
+        from constants import country_for_form_data
         assignment_context = build_day_assignment_context(
             skeleton_day, day_num, day_name=day_name, daily_targets=_dg_targets,
             # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico.
@@ -8173,6 +8176,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             small_universe=_small_universe_active(form_data),
             # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] bloque de diversidad de proteína por dieta.
             diet_type=(form_data or {}).get("dietType"),
+            country=country_for_form_data(form_data),
         )
 
         random_seed = random.randint(10000, 99999)
@@ -10275,8 +10279,18 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     vuelve enforced. tooltip-anchor: P1-SLOT-APPROPRIATENESS
     [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] `form_data` opcional: el hint correctivo del mensaje
     respeta la dieta (`constants.slot_positive_hint`) — el hint base sugería "pescado/pollo a la
-    plancha" dentro del rechazo de un plan vegano."""
+    plancha" dentro del rechazo de un plan vegano.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] El país se deriva UNA vez por evaluación vía
+    `country_for_form_data` (la ÚNICA puerta T1) y resuelve la tabla de reglas vía
+    `constants.slot_rules_for_country` — DO ⇒ SLOT_INAPPROPRIATE_FOODS intacta (retries duros
+    como hoy); beta ⇒ tabla soft memoizada (MISMOS tokens — siguen midiendo como telemetría,
+    dejan de forzar retry). El pase INGREDIENT-LEVEL (arroz oculto en el desayuno,
+    `slot_ingredient_violations`) NO consume esta tabla — sigue siempre hard, independiente del
+    país (fuera del alcance de T4; documentado como residual en el reporte de la task)."""
     from constants import slot_positive_hint as _sph
+    from constants import country_for_form_data, slot_rules_for_country
+    _country = country_for_form_data(form_data)
+    _rules_table = slot_rules_for_country(_country)
     _diet_for_hint = (form_data or {}).get("dietType") if isinstance(form_data, dict) else None
     issues: list = []
     for day in days or []:
@@ -10290,7 +10304,7 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
             if not slot_key:
                 continue
             name = m.get("name", "")
-            for v in slot_violations_for_meal_name(name, slot_key):
+            for v in slot_violations_for_meal_name(name, slot_key, _rules_table):
                 _fix = _sph(slot_key, _diet_for_hint)
                 issues.append({
                     "day": day_num, "slot": slot_key, "name": name,
@@ -10308,7 +10322,7 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
             # con excludes) — la cena ya tiene su pase ingredient-driven con autofix (_night_rice_autofix).
             try:
                 from constants import slot_ingredient_violations as _siv
-                _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key))
+                _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key, _rules_table))
                 for v in _siv(m.get("ingredients") or [], slot_key):
                     _fix = _sph(slot_key, _diet_for_hint)
                     # [P2-SLOT-EVASION-TELEMETRY · 2026-07-02] (audit v4 slots) Evasión por nombre novel:
@@ -10733,7 +10747,9 @@ PLAN A EVALUAR (días generados):
                         # también en el corrector (no solo en el day-gen inicial).
                         skeleton_block = (
                             f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
-                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'))}"
+                            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_critique_country`
+                            # (T3's shadow work) — DO ⇒ camino byte-idéntico.
+                            f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_critique_country)}"
                         )
 
                     # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
@@ -10781,6 +10797,14 @@ PLAN A EVALUAR (días generados):
                     from constants import diet_protein_suggestions as _dps_cf
                     _critique_rotation_sources = (_dps_cf((state.get("form_data") or {}).get("dietType"))
                                                   or "pollo, pescado, res, yogurt, queso o habichuelas")
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `_critique_country` YA derivado arriba
+                    # (T3's shadow work, consumido acá vía closure) — DO ⇒ literal EXACTO (mismo
+                    # ejemplo criollo de siempre); beta ⇒ hint neutro sin mandato de tubérculo local.
+                    _carb_hint_line = (
+                        "  • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe)."
+                        if _critique_country == "DO" else
+                        "  • Cambia el CARBOHIDRATO de la cena por otro del catálogo."
+                    )
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}
@@ -10791,7 +10815,7 @@ RESTRICCIONES NUTRICIONALES (respétalas siempre):
 REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
 - La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el critique pida cambiar una proteína/carbohidrato asignado.
 - Si el critique sugiere cambiar la proteína de almuerzo o cena (slot coherence violation), pero esa proteína FUE ASIGNADA por el planificador para este día, MANTÉN la proteína y resuelve la coherencia de slot por OTRO medio:
-  • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe).
+{_carb_hint_line}
   • Cambia la TÉCNICA de cocción (a la plancha→guisada→al horno→al vapor).
   • Cambia el VEGETAL/acompañamiento (ensalada→sopa, fresca→cocida).
   • Cambia la PRESENTACIÓN (bowl→wrap, plato→pita).
@@ -24014,12 +24038,16 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # mejor); los pools fallback no contienen compuestos. Rollback: NIGHT_RICE_AUTOFIX_ENABLED (mismo knob
     # del autofix — la función retorna 0 con el knob off). tooltip-anchor: P0-FALLBACK-CENA-ARROZ
     try:
-        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db)
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado ⇒
+        # 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
+        from constants import country_for_form_data
+        _dcl_country = country_for_form_data(form_data)
+        _nr_layer = _night_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _nr_layer:
             logger.warning(f"🌙 [P0-FALLBACK-CENA-ARROZ] capa clínica reescribió arroz nocturno en "
                            f"{_nr_layer} cena(s) (path sin assemble)")
         # [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] espejo matutino en la misma capa (paths sin assemble).
-        _br_layer = _breakfast_rice_autofix(plan.get("days") or [], _db)
+        _br_layer = _breakfast_rice_autofix(plan.get("days") or [], _db, country=_dcl_country)
         if _br_layer:
             logger.warning(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] capa clínica reescribió arroz de desayuno en "
                            f"{_br_layer} comida(s) (path sin assemble)")
@@ -27445,7 +27473,7 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3, 
     return added_total
 
 
-def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
+def _night_rice_autofix(days: list, db=None, *, compound: bool = False, country: str = "DO") -> int:
     """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
     ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
     — corre ANTES del macro engine para que el motor dimensione el tubérculo y el reviewer (gate
@@ -27463,8 +27491,19 @@ def _night_rice_autofix(days: list, db=None, *, compound: bool = False) -> int:
     convierte moro/locrio/morito/chofán/chaufa de la cena a su versión guisada con tubérculo — «Moro de gandules
     con pollo» → «Guiso de gandules con pollo» + arroz→tubérculo en ingredientes/pasos — en vez de entregar el
     disparate de horario. En el flujo normal (compound=False) los compuestos se dejan al gate (retry da al LLM
-    la oportunidad de un plato mejor)."""
+    la oportunidad de un plato mejor).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default 'DO' — preserva TODOS los callers
+    preexistentes, ninguno lo pasa) gatea la reescritura ANTES de tocar el plato: solo corre para
+    'DO'. Beta ⇒ no-op (el plato queda intacto, retorna 0) — el sustituto arroz→tubérculo
+    (batata/yuca/casabe) es una preparación DOMINICANA; imponerla a un país beta reintroduciría
+    exactamente el sesgo que Fase 1 retira. La detección de 'arroz de noche' sigue viva vía
+    `_detect_slot_appropriateness` (ahora soft para beta, telemetría); solo la REESCRITURA
+    automática se apaga."""
     if not NIGHT_RICE_AUTOFIX_ENABLED:
+        return 0
+    from constants import canonicalize_country as _cc_nra
+    if _cc_nra(country) != "DO":
         return 0
     try:
         from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
@@ -29070,7 +29109,7 @@ def _egg_cap_autofix(days: list, form_data=None, db=None) -> int:
         return 0
 
 
-def _breakfast_rice_autofix(days: list, db=None) -> int:
+def _breakfast_rice_autofix(days: list, db=None, *, country: str = "DO") -> int:
     """[P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] (audit v3 slots GAP-G) Autofix DETERMINISTA del arroz en el
     DESAYUNO — espejo de `_night_rice_autofix` acotado al slot desayuno. La regla es HARD en el gate (jamás
     degrada a advisory), pero sin corrector un LLM emperrado la entregaba degradada tras agotar retries,
@@ -29078,8 +29117,17 @@ def _breakfast_rice_autofix(days: list, db=None) -> int:
     pasos) por una base matutina criolla (puré de plátano/yuca/batata, rotada por día), carb-matched
     (~×{factor}). NO toca compuestos (moro/locrio al desayuno → al gate hard). Respeta exclusiones de
     modificadores (harina/leche/vinagre de arroz). Idempotente, fail-safe.
-    Rollback: MEALFIT_BREAKFAST_RICE_AUTOFIX. tooltip-anchor: P2-DESAYUNO-ARROZ-AUTOFIX"""
+    Rollback: MEALFIT_BREAKFAST_RICE_AUTOFIX.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default 'DO' — preserva TODOS los callers
+    preexistentes) gatea la reescritura ANTES de tocar el plato: solo corre para 'DO'. Beta ⇒
+    no-op (plato intacto, retorna 0) — mismo razonamiento que `_night_rice_autofix`: la base
+    matutina criolla (puré de plátano/yuca/batata) es una sustitución dominicana. tooltip-anchor:
+    P2-DESAYUNO-ARROZ-AUTOFIX"""
     if not BREAKFAST_RICE_AUTOFIX_ENABLED:
+        return 0
+    from constants import canonicalize_country as _cc_bra
+    if _cc_bra(country) != "DO":
         return 0
     try:
         from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
@@ -36793,12 +36841,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # backstop. Determinista, idempotente, fail-safe.
     if NIGHT_RICE_AUTOFIX_ENABLED:
         try:
-            _nr_fixed = _night_rice_autofix(days)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob apagado
+            # ⇒ 'DO' siempre ⇒ los dos autofixes de abajo corren exactamente como antes.
+            from constants import country_for_form_data
+            _apn_country = country_for_form_data(form_data)
+            _nr_fixed = _night_rice_autofix(days, country=_apn_country)
             if _nr_fixed:
                 logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
                             f"a tubérculo nocturno (batata/yuca/casabe) pre-reviewer.")
             # [P2-DESAYUNO-ARROZ-AUTOFIX · 2026-07-02] espejo matutino, mismo punto (pre-macro-engine).
-            _br_fixed = _breakfast_rice_autofix(days)
+            _br_fixed = _breakfast_rice_autofix(days, country=_apn_country)
             if _br_fixed:
                 logger.info(f"🌅 [P2-DESAYUNO-ARROZ-AUTOFIX] {_br_fixed} desayuno(s) con arroz reescrito(s) "
                             f"a base matutina criolla pre-reviewer.")
@@ -38789,6 +38841,12 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     ).with_structured_output(SingleDayPlanModel)
 
     ctx = _build_shared_context(state)
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez
+    # (mismo `form_data` que ya alimenta `_build_shared_context` arriba) — knob apagado ⇒ 'DO'
+    # siempre ⇒ los dos consumidores de abajo (texto del regen + build_day_assignment_context)
+    # toman el camino DO byte-idéntico.
+    from constants import country_for_form_data
+    _surgical_country = country_for_form_data(form_data)
 
     async def _re_correct_one(day_num: int):
         target_day = next((d for d in days if d.get("day") == day_num), None)
@@ -38814,10 +38872,16 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         # [P2-AUDIT-V5-BATCH · 2026-07-02] (GAP-03) Día de plantilla matemática sin issue del
         # critique: sintetizar el problema para que el corrector regenere un día real.
         if not original_issue and target_day.get("_day_fallback"):
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `_surgical_country` derivado arriba (una
+            # sola vez) — DO ⇒ literal EXACTO; beta ⇒ sin mandato de plato dominicano.
+            _fallback_dish_clause = (
+                "platos dominicanos reales" if _surgical_country == "DO" else
+                "platos reales de la cocina del usuario"
+            )
             original_issue = (
                 "Este día fue generado por una plantilla matemática de emergencia (el generador LLM "
-                "falló): los platos son genéricos y repetitivos. Re-genera el día COMPLETO con platos "
-                "dominicanos reales, creativos y cocinables, respetando la asignación del planificador."
+                f"falló): los platos son genéricos y repetitivos. Re-genera el día COMPLETO con {_fallback_dish_clause}, "
+                "creativos y cocinables, respetando la asignación del planificador."
             )
 
         if not await _corrector_cb.acan_proceed():
@@ -38836,7 +38900,9 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
                 f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
                 # [P1-STAPLE-FOODS · 2026-08-02] básicos del usuario + modo universo-chico
                 # también en el regen quirúrgico (no solo en el day-gen inicial).
-                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'))}"
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_surgical_country` (derivado
+                # arriba, una sola vez) — DO ⇒ camino byte-idéntico.
+                f"{build_day_assignment_context(skeleton_day, day_num, user_staples=_raw_staple_foods(form_data), small_universe=_small_universe_active(form_data), diet_type=(form_data or {}).get('dietType'), country=_surgical_country)}"
             )
 
         # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.
@@ -40585,7 +40651,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # limpiable se limpia antes de entregar, pase lo que pase con el veredicto.
                 if _sa_is_final and NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
                     try:
-                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True)
+                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) —
+                        # knob apagado ⇒ 'DO' siempre ⇒ conducta idéntica a pre-T4.
+                        from constants import country_for_form_data
+                        _rpn_country = country_for_form_data(form_data)
+                        _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True, country=_rpn_country)
                         if _nrc_fixed:
                             _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []), form_data)
                             logger.info(

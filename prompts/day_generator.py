@@ -248,6 +248,21 @@ if _SLOT_SSOT_RULES_BLOCK:
         "exactamente esto, sin excepciones):\n    " + _SLOT_SSOT_RULES_BLOCK + "\n"
     )
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 4)] Variante BETA del mismo bloque §16 — NO se splicea
+# a DAY_GENERATOR_SYSTEM_PROMPT arriba (ese splice es SIEMPRE DO, por diseño: la CONSTANTE del
+# módulo debe seguir siendo el prompt de RD, byte-idéntico). Esta variante alimenta la fila §16
+# de `_BETA_FRAGMENT_TABLE` (abajo) — el swap en RENDER-TIME que `build_day_generator_system_
+# prompt(diet, country=<beta>)` aplica sobre el render de dieta. 'ES' es un país beta arbitrario:
+# `constants.slot_rules_for_country` no varía POR país beta específico (mismo contenido soft para
+# TODOS), así que `build_meal_timing_rules(..., country=<cualquier beta>)` produce el MISMO
+# string sin importar cuál se use aquí.
+try:
+    _SLOT_SSOT_RULES_BLOCK_BETA = "\n".join(
+        _b for _b in (_bmtr_ssot(_s, country="ES") for _s in ("Desayuno", "Almuerzo", "Cena", "Merienda")) if _b
+    ).strip()
+except Exception:
+    _SLOT_SSOT_RULES_BLOCK_BETA = ""
+
 # [P1-PRECISION-LEVERS · 2026-07-04] (lever 1) Presupuesto CUANTITATIVO de sodio en el system
 # prompt. Evidencia en vivo 2026-07-04: un intento salió con 4,261 mg/día (el gate de sodio lo
 # rechazó → retry completo pagado) porque el prompt solo decía "modera la sal" sin números ni
@@ -735,6 +750,15 @@ _BETA_FRAGMENT_TABLE = [
     (_diet_invariant(_S15C_CRUDITES_DO), _diet_invariant(_S15C_CRUDITES_BETA)),                   # finding 4d
     (_diet_invariant(_S15F_APETECIBLE_DO), _diet_invariant(_S15F_APETECIBLE_BETA)),               # finding 4e
     (_diet_invariant(_RULE12_HUEVOS_DESPERDICIO_DO), _diet_invariant(_RULE12_HUEVOS_DESPERDICIO_BETA)),  # finding 4f
+    # ── Task 4 (F1-T4): §16 CONTRATO EXACTO DEL VALIDADOR DE HORARIO ────────
+    # Target = _SLOT_SSOT_RULES_BLOCK, el MISMO bloque que el splice de import-time (arriba)
+    # appendea a DAY_GENERATOR_SYSTEM_PROMPT — diet-invariante (SLOT_INAPPROPRIATE_FOODS/
+    # SLOT_POSITIVE_HINT no varían por dieta, así que _DIET_FRAGMENT_TABLE nunca lo toca; verbatim
+    # en las 3 columnas de dieta). Replacement = _SLOT_SSOT_RULES_BLOCK_BETA (build_meal_timing_
+    # rules país-aware, T4). Guard `if target:` en build_day_generator_system_prompt (abajo)
+    # protege el caso _SLOT_SSOT_RULES_BLOCK == "" (fail-safe del try/except de arriba) — un
+    # target vacío nunca llega a .replace() (evita el landmine de "".replace("", X)).
+    (_diet_invariant(_SLOT_SSOT_RULES_BLOCK), _diet_invariant(_SLOT_SSOT_RULES_BLOCK_BETA)),      # Task 4 · §16
 ]
 
 _COUNTRY_PROMPT_RENDER_CACHE = {}
@@ -982,7 +1006,7 @@ def build_slot_targets_block(daily_targets: dict, meal_types: list) -> str:
 
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
                                  daily_targets: dict = None, user_staples: list = None,
-                                 small_universe: bool = False, diet_type=None) -> str:
+                                 small_universe: bool = False, diet_type=None, country=None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día.
 
     [P1-STAPLE-FOODS · 2026-08-02] `user_staples` (lista de nombres del catálogo, máx 8 — ver
@@ -991,7 +1015,14 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     MEALFIT_SMALL_UNIVERSE_THRESHOLD alimentos distintos — ver `graph_orchestrator.
     _small_universe_active`) inyecta la directiva de variar por TÉCNICA/FORMATO en vez de por
     ingrediente. Ambos default a "sin básicos"/"universo normal" → prompt byte-idéntico al
-    pre-staples para callers que no los pasan (self_critique/surgical-regen callsites)."""
+    pre-staples para callers que no los pasan (self_critique/surgical-regen callsites).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default None, fail-safe de
+    canonicalize_country ⇒ 'DO') selecciona la frase de "adapta el estilo" del bloque de día de
+    la semana: DO ⇒ literal EXACTO ("según la cultura dominicana"); beta ⇒ "según la cultura
+    local del usuario". Los 3 callers conocidos (generate_days_parallel_node, self_critique_node,
+    surgical_marker_regen_node) YA derivan y pasan el país (T4); un caller futuro que no lo pase
+    sigue tomando el camino DO por defecto — byte-idéntico."""
     import re as _re
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
     pool_lower = pool_str.lower()
@@ -1056,7 +1087,10 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"yogurt, frutos secos, mantequilla de maní (estas son OK siempre, no cuentan como 'otra carne')."
         )
 
-    day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día según la cultura dominicana. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""
+    from constants import canonicalize_country as _cc_bdac
+    _cultura_txt = ("según la cultura dominicana" if _cc_bdac(country) == "DO"
+                    else "según la cultura local del usuario")
+    day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día {_cultura_txt}. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""
 
     breakfast_cat = skeleton_day.get('breakfast_category', '')
     breakfast_block = f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {breakfast_cat}\n  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. NO uses mangú/tubérculos si la categoría asignada es otra)." if breakfast_cat else ""

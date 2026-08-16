@@ -959,7 +959,17 @@ def _detect_same_day_protein_repeat(meal_name: str, other_names: list) -> str | 
 def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str, form_data: dict = None, allow_pantry_expansion: bool = False) -> str:
     """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
     logger.debug(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
-    
+
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez —
+    # consumido por los 2 call sites de build_meal_timing_rules de abajo (guía proactiva del
+    # prompt + retry-feedback del backstop). `form_data` es lo único disponible barato en esta
+    # tool (no hay columna `form_data` en `meal_plans` — solo `plan_data`); el chat-agent hoy no
+    # puebla `state['form_data']` con el país del usuario, así que en la práctica esto sigue
+    # cayendo a 'DO' hasta que una task futura conecte el país a la superficie de chat — honesto,
+    # no un placeholder roto (knob apagado ⇒ 'DO' siempre, igual que el resto del sistema).
+    from constants import country_for_form_data
+    _modify_country = country_for_form_data(form_data)
+
     # 1. Obtener el plan actual con su ID
     plan_record = get_latest_meal_plan_with_id(user_id)
     if not plan_record:
@@ -1216,7 +1226,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # SSOT constants.build_meal_timing_rules. Paridad de PROMPT con swap S3 / day_generator S1.
     try:
         from constants import build_meal_timing_rules as _bmtr
-        _timing_block = _bmtr(meal_type)
+        _timing_block = _bmtr(meal_type, _modify_country)
         if _timing_block:
             context_extras = _timing_block + "\n" + context_extras
     except Exception as _tr_e:
@@ -1641,7 +1651,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                                 f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n"
                                 f"El plato que devolviste NO corresponde al {_slot_key} dominicano "
                                 f"({_slot_labels}). El usuario NO pidió ese alimento; cámbialo por un "
-                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type) or "")
+                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type, _modify_country) or "")
                             )
                             raise ValueError(f"plato fuera de horario ({_slot_key}): {_slot_labels}")
             except ValueError:

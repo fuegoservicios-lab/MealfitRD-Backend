@@ -141,9 +141,13 @@ def test_p2c_dish_quality_report_in_chunk_t1():
 # P2-D — garantía cena-sin-arroz en intento final (aunque haya hard)
 # ════════════════════════════════════════════════════════════════════════════
 def test_p2d_autofix_runs_before_hard_split():
+    """[P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] El callsite ganó un kwarg (`country=`) — el
+    ancla se ensancha a la coma tras `compound=True` (sin paréntesis de cierre) para tolerar
+    CUALQUIER argumento extra sin perder la aserción de ORDEN real. Mismo patrón que
+    test_p1_night_rice_autofix.py::test_callsite_runs_before_macro_engine."""
     gate = _GO.index("_sa_is_final = _sa_attempt >= MAX_ATTEMPTS")
     blk = _GO[gate:gate + 4000]
-    idx_autofix = blk.index("_night_rice_autofix(plan.get(\"days\", []), compound=True)")
+    idx_autofix = blk.index("_night_rice_autofix(plan.get(\"days\", []), compound=True,")
     idx_hard = blk.index("_sa_has_hard = any(")
     assert idx_autofix < idx_hard, \
         "el autofix debe correr ANTES del split hard/soft — la mezcla hard+soft en intento final " \

@@ -1753,7 +1753,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
     if SLOT_APPROPRIATENESS_GATE_ENABLED:
         try:
             from constants import build_meal_timing_rules as _bmtr
-            _timing_block = _bmtr(meal_type)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] reusa `_swap_country` (derivado UNA vez al
+            # inicio de swap_meal, T3) — DO ⇒ camino byte-idéntico.
+            _timing_block = _bmtr(meal_type, _swap_country)
             if _timing_block:
                 context_extras += _timing_block
         except Exception as _tr_e:

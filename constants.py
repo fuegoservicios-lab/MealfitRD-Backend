@@ -2065,6 +2065,34 @@ SLOT_INAPPROPRIATE_FOODS = {
     ],
 }
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 4)] Gate cultural de slot POR PAÍS. 'DO' (default,
+# knob apagado — ver `country_for_form_data`) devuelve el MISMO objeto `SLOT_INAPPROPRIATE_FOODS`
+# (identidad `is`, NO copia: el motor queda byte-idéntico). Beta ⇒ tabla derivada MEMOIZADA con
+# la MISMA estructura/tokens/excludes (las tuplas se comparten por referencia, no se copian) pero
+# CADA regla con hardness='soft': las reglas siguen disparando — telemetría para diseñar las
+# tablas nativas de Fase 2 — pero dejan de forzar retry (dejan de costar). Consumido por
+# `_detect_slot_appropriateness` (graph_orchestrator.py, T4) — `slot_violations_for_meal_name`
+# (abajo) sigue leyendo `SLOT_INAPPROPRIATE_FOODS` directo salvo que un caller le inyecte esta
+# tabla vía su nuevo parámetro `rules_table`. tooltip-anchor: slot_rules_for_country
+# (test_p1_country_system_f1.py)
+_SLOT_RULES_COUNTRY_CACHE: dict = {}
+
+
+def slot_rules_for_country(country) -> dict:
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return SLOT_INAPPROPRIATE_FOODS
+    cached = _SLOT_RULES_COUNTRY_CACHE.get(canon)
+    if cached is not None:
+        return cached
+    softened = {
+        slot: [dict(rule, hardness="soft") for rule in rules]
+        for slot, rules in SLOT_INAPPROPRIATE_FOODS.items()
+    }
+    _SLOT_RULES_COUNTRY_CACHE[canon] = softened
+    return softened
+
+
 # Guía POSITIVA por slot (es-DO) inyectada a los prompts de UPDATE (swap/chat-modify) y usada
 # en los mensajes de rechazo del gate S1 — describe qué SÍ va en cada horario.
 SLOT_POSITIVE_HINT = {
@@ -2076,6 +2104,22 @@ SLOT_POSITIVE_HINT = {
              "cena, sopa ligera, wrap o bowl de proteína + vegetales + un tubérculo (batata/yuca/casabe). "
              "Evita el \"arroz de noche\" y los guisos pesados."),
     "merienda": ("La merienda es un snack ligero (150-300 kcal): yogur+fruta, batido, casabe/galleta "
+                 "integral con queso, fruta con maní, o huevo duro con fruta."),
+}
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 4)] Espejo NEUTRAL de SLOT_POSITIVE_HINT — mismo shape
+# (una entrada por slot), sin mandatos de plato dominicano (mangú/locrio/moro/casabe). Consumido
+# SOLO por `build_meal_timing_rules` cuando `country` != 'DO'. NO reemplaza SLOT_POSITIVE_HINT,
+# que sigue siendo el SSOT es-DO para el resto de consumidores (`slot_positive_hint()`, etc.).
+_SLOT_POSITIVE_HINT_NEUTRAL = {
+    "desayuno": ("El desayuno va: opciones ligeras (cereales/avena, pan/tostadas, batido/bowl, "
+                 "huevo o revoltillo) — con proteína y fruta."),
+    "almuerzo": ("El almuerzo es el plato fuerte: proteína + cereal/tubérculo + ensalada/vegetal, "
+                 "un guiso de leguminosas, pasta, o proteína a la plancha con acompañante."),
+    "cena": ("La cena es más ligera que el almuerzo: proteína a la plancha, tortilla/revoltillo, "
+             "sopa ligera, wrap o bowl de proteína + vegetales + un carbohidrato. Evita cenas "
+             "pesadas basadas en arroz."),
+    "merienda": ("La merienda es un snack ligero (150-300 kcal): yogur+fruta, batido, galleta "
                  "integral con queso, fruta con maní, o huevo duro con fruta."),
 }
 
@@ -2097,13 +2141,19 @@ def canonical_slot_key(meal_type: str):
     return _SLOT_CANON_MAP.get(strip_accents(str(meal_type or "").lower()).strip())
 
 
-def slot_violations_for_meal_name(name: str, slot_key: str) -> list:
+def slot_violations_for_meal_name(name: str, slot_key: str, rules_table: dict = None) -> list:
     """[P1-SLOT-APPROPRIATENESS] SSOT del detector de apropiación horaria. Devuelve
     [{label, hard}] de categorías de alimento que NO corresponden al `slot_key`
     (ya canonicalizado: desayuno/almuerzo/cena/merienda). Match WORD-BOUNDARY sobre el
     NOMBRE (anti-falso-positivo: no mira ingredientes; respeta exclusiones de modificadores
-    como 'harina de arroz'). Pura → unit-testable. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
-    rules = SLOT_INAPPROPRIATE_FOODS.get(slot_key)
+    como 'harina de arroz'). Pura → unit-testable.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `rules_table` opcional (default None ⇒
+    SLOT_INAPPROPRIATE_FOODS, byte-idéntico a pre-T4) permite a un caller país-aware inyectar
+    `slot_rules_for_country(country)` sin tocar la firma de los demás callers (tools.py chat-
+    backstop, plan_gym.py scoring, agent.py backstop) — ninguno de ellos pasa este argumento.
+    tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    table = rules_table if rules_table is not None else SLOT_INAPPROPRIATE_FOODS
+    rules = table.get(slot_key)
     if not rules:
         return []
     nlow = strip_accents(str(name or "").lower())
@@ -2156,22 +2206,37 @@ def slot_ingredient_violations(ingredients, slot_key) -> list:
         return []
 
 
-def build_meal_timing_rules(meal_type: str) -> str:
+def build_meal_timing_rules(meal_type: str, country: str = "DO") -> str:
     """[P1-SLOT-APPROPRIATENESS] SSOT del directivo compacto de coherencia de HORARIO para los
     prompts de UPDATE (swap S3 / chat-modify): qué NO va en este slot + guía positiva es-DO.
-    Devuelve '' si el slot no se reconoce. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    Devuelve '' si el slot no se reconoce.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `country` (default 'DO', fail-safe de
+    canonicalize_country) selecciona la variante: DO ⇒ idéntico byte a byte al string pre-T4
+    (SLOT_INAPPROPRIATE_FOODS + SLOT_POSITIVE_HINT directo, SIN pasar por slot_rules_for_country
+    — mismo código exacto que antes de T4). Beta ⇒ bloque NEUTRAL: la enumeración "NO uses..."
+    se OMITE por completo — sus labels son intencionalmente dominicanos (slot_rules_for_country
+    los preserva intactos para que `_detect_slot_appropriateness` siga midiendo por telemetría
+    vía el MISMO token), pero ya no son un requisito duro, y listarlos en un contrato que debe
+    leer neutral reintroduciría 'locrio'/'sancocho'/'yaroa' — exactamente lo que este bloque debe
+    evitar. Sobrevive SOLO la guía positiva, reescrita sin mandatos de plato dominicano
+    (`_SLOT_POSITIVE_HINT_NEUTRAL`). tooltip-anchor: build_meal_timing_rules
+    (test_p1_country_system_f1.py)"""
     slot = canonical_slot_key(meal_type)
     if not slot:
         return ""
+    canon_country = canonicalize_country(country)
     parts = []
-    rules = SLOT_INAPPROPRIATE_FOODS.get(slot)
-    if rules:
-        prohibited = "; ".join(r["label"] for r in rules)
-        parts.append(
-            f"- 🕒 COHERENCIA DE HORARIO ({meal_type}): este plato es para el {slot}. "
-            f"NO uses en este horario: {prohibited}."
-        )
-    hint = SLOT_POSITIVE_HINT.get(slot)
+    if canon_country == "DO":
+        rules = SLOT_INAPPROPRIATE_FOODS.get(slot)
+        if rules:
+            prohibited = "; ".join(r["label"] for r in rules)
+            parts.append(
+                f"- 🕒 COHERENCIA DE HORARIO ({meal_type}): este plato es para el {slot}. "
+                f"NO uses en este horario: {prohibited}."
+            )
+        hint = SLOT_POSITIVE_HINT.get(slot)
+    else:
+        hint = _SLOT_POSITIVE_HINT_NEUTRAL.get(slot)
     if hint:
         parts.append(f"- 🍽️ {hint}")
     return ("\n    " + "\n    ".join(parts)) if parts else ""
