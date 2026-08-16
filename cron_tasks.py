@@ -13707,14 +13707,18 @@ def _first_purchase_pause_applies(plan_facts: dict | None) -> bool:
 def _mark_first_purchase_pause(meal_plan_id, user_id) -> None:
     """[P1-FIRST-PURCHASE-PAUSE] Estampa el marker una-vez-por-plan.
 
-    `jsonb_set` quirúrgico (I7-exento) + `AND user_id` (I2). Best-effort: si el
-    UPDATE falla, el peor caso es una segunda pausa suave 12h después — acotado y
-    preferible a abortar la pausa ya decidida.
+    `jsonb_set` quirúrgico (I7-exento) + `AND user_id` (I2) + sello
+    `_plan_modified_at` anidado (P0-B: un UPDATE intermedio sin sello deja al CAS
+    del chunk worker ciego — un proceso concurrente que leyó el timestamp previo
+    declararía «sin cambios externos» sobre un plan_data que SÍ cambió).
+    Best-effort: si el UPDATE falla, el peor caso es una segunda pausa suave 12h
+    después — acotado y preferible a abortar la pausa ya decidida.
     """
     try:
         execute_sql_write(
-            "UPDATE meal_plans SET plan_data = jsonb_set(plan_data, "
-            "'{_first_purchase_pause_at}', to_jsonb(NOW()::text)) "
+            "UPDATE meal_plans SET plan_data = jsonb_set(jsonb_set(plan_data, "
+            "'{_first_purchase_pause_at}', to_jsonb(NOW()::text)), "
+            "'{_plan_modified_at}', to_jsonb(NOW()::text)) "
             "WHERE id = %s AND user_id = %s",
             (meal_plan_id, user_id),
         )
