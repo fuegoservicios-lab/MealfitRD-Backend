@@ -66,8 +66,13 @@ T5 (P1-BAKING-STAPLES generalizado, `shopping_calculator._COUNTRY_CATALOG_UNPRIC
 `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP`). MX/CO son países BETA (`pricing_mode='beta_no_prices'`).
 
 IDEMPOTENTE: dos modos —
-  1) Altas de fila nueva: salta por `name` existente CON el mismo `fdc_id`; si el `fdc_id` difiere
-     (re-sourceo), UPDATE (mismo patrón fix-round-1 de T5).
+  1) Altas de fila nueva: salta por `name` existente CON el mismo `fdc_id` Y el mismo `kcal`
+     (tolerancia 0.05); si CUALQUIERA de los dos difiere -- `fdc_id` (re-sourceo) O `kcal`
+     (corrección de una fila `manual` sin fdc_id, ej. Atwater-consistencia, micro-round 2 T6) --
+     UPDATE (mismo patrón fix-round-1 de T5). El chequeo de `kcal` es proxy de "algo en las
+     macros cambió" sin listar cada columna: en este script kcal SIEMPRE es Atwater-derivada de
+     las macros (nunca un valor independiente), así que un cambio real de macros implica cambio
+     de kcal.
   2) Sinónimos: `UPDATE ... SET aliases = aliases || nuevos_no_presentes` -- solo añade los alias
      que la fila destino AÚN NO tiene (append idempotente, nunca duplica, nunca pisa un alias
      existente). Si la fila destino no existe (typo/orden de ejecución), lo reporta y NO falla el
@@ -131,9 +136,15 @@ def _load_json(filename):
 def _apply_new_rows(conn, recs):
     hoy = datetime.date.today()
     puestos = ya = actualizados = 0
+    # [micro-round 2 T6 · 2026-08-17] antes solo comparaba `fdc_id` -- una fila `manual`
+    # (fdc_id=None en DB Y en el JSON nuevo, sin re-sourceo) que necesita SOLO una corrección
+    # de kcal/macros (ej. Atwater-consistencia) nunca disparaba el UPDATE: `None == None` la
+    # saltaba en silencio como "EXISTE (fdc_id igual)". Ahora también compara `kcal` (tolerancia
+    # 0.05 por redondeo float/Decimal) -- ver docstring del módulo.
     existen = {
-        row[0]: row[1]
-        for row in conn.execute("SELECT name, fdc_id FROM public.master_ingredients").fetchall()
+        row[0]: (row[1], row[2])
+        for row in conn.execute(
+            "SELECT name, fdc_id, kcal_per_100g FROM public.master_ingredients").fetchall()
     }
     for r in recs:
         nm = r["name"]
@@ -152,9 +163,14 @@ def _apply_new_rows(conn, recs):
             cols[dbcol] = r.get(k)
 
         if nm in existen:
-            db_fdc = existen[nm]
-            if db_fdc == cols["fdc_id"]:
-                print(f"  ~ EXISTE (fdc_id igual), salto: {nm}")
+            db_fdc, db_kcal = existen[nm]
+            new_kcal = cols.get("kcal_per_100g")
+            kcal_igual = (db_kcal is None and new_kcal is None) or (
+                db_kcal is not None and new_kcal is not None
+                and abs(float(db_kcal) - float(new_kcal)) <= 0.05
+            )
+            if db_fdc == cols["fdc_id"] and kcal_igual:
+                print(f"  ~ EXISTE (fdc_id+kcal igual), salto: {nm}")
                 ya += 1
                 continue
             nombres_upd = [c for c in cols if c not in ("slug", "name")]
@@ -164,7 +180,8 @@ def _apply_new_rows(conn, recs):
                     f"UPDATE public.master_ingredients SET {set_clause} WHERE name = %s",
                     [cols[c] for c in nombres_upd] + [nm])
             print(f"  {'~ ACTUALIZADO' if COMMIT else '~ (dry) actualizaria'}: {nm} [{r['category']}] "
-                  f"fdc_id {db_fdc} -> {cols['fdc_id']} fuente={r.get('_usda_description', '?')!r}")
+                  f"fdc_id {db_fdc} -> {cols['fdc_id']} kcal {db_kcal} -> {new_kcal} "
+                  f"fuente={r.get('_usda_description', '?')!r}")
             actualizados += 1
             continue
 
