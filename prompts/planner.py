@@ -68,3 +68,49 @@ Ejemplo INCORRECTO: Día 1=Yogurt+fresa, Día 2=Yogurt+granola, Día 3=Yogurt+nu
 Bug observado plan_id=fbd014b2 2026-05-16: "Staples repetidos detectados: avena en 2 días, claras de huevo
 en 3 días, yogurt griego en 2 días" → reviewer médico señaló "frecuencia excesiva".
 """
+
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] T2 pattern (prompts/day_generator.py::
+# build_day_generator_system_prompt) aplicado a la Categoría A de desayuno + su ejemplo CORRECTO
+# — los 2 fragmentos citados por la review final (spec §Fase 1.1 los nombra explícitamente; el
+# resto del prompt, incluido el ejemplo INCORRECTO de la línea siguiente, queda fuera de este
+# alcance). DO/None (o país desconocido, fail-safe canonicalize_country) ⇒ el MISMO objeto
+# PLANNER_SYSTEM_PROMPT (ancla `is`, byte-idéntico). Beta (ES/US/MX/PR/CO) ⇒ render cacheado por
+# país con la Categoría A neutralizada — sin "Mangú" ni tubérculos dominicanos nombrados.
+_CATEGORIA_A_DO = (
+    '  - Categoría A "Tubérculos/Mangú": Mangú (plátano, ñame, batata, yautía), mofongo matutino, bollitos.'
+)
+_CATEGORIA_A_BETA = (
+    '  - Categoría A "Tubérculos/Plátano": preparaciones de tubérculo o plátano del contexto local.'
+)
+_EJEMPLO_CORRECTO_DO = (
+    "Ejemplo CORRECTO: Día 1=Mangú (A), Día 2=Avena con frutas (B), Día 3=Tostadas con huevo (C)."
+)
+_EJEMPLO_CORRECTO_BETA = (
+    "Ejemplo CORRECTO: Día 1=Preparación de tubérculo/plátano (A), Día 2=Avena con frutas (B), "
+    "Día 3=Tostadas con huevo (C)."
+)
+
+_PLANNER_PROMPT_COUNTRY_CACHE: dict = {}
+
+
+def build_planner_system_prompt(country=None) -> str:
+    """Render del system prompt del Planificador por país (F1 FINAL-FIX, T2 pattern).
+
+    País DO/None (o desconocido — fail-safe de `canonicalize_country`) ⇒ el MISMO objeto
+    `PLANNER_SYSTEM_PROMPT` (ancla `is`, prompt-cache intacto). País beta (ES/US/MX/PR/CO) ⇒
+    Categoría A de desayuno + su ejemplo CORRECTO neutralizados (sin "Mangú"), cacheado por país
+    en `_PLANNER_PROMPT_COUNTRY_CACHE` (≤5 entradas — un país beta cada uno).
+
+    tooltip-anchor: build_planner_system_prompt (test_p1_country_system_f1.py)
+    """
+    from constants import canonicalize_country
+    canon_country = canonicalize_country(country)
+    if canon_country == "DO":
+        return PLANNER_SYSTEM_PROMPT
+    cached = _PLANNER_PROMPT_COUNTRY_CACHE.get(canon_country)
+    if cached is not None:
+        return cached
+    rendered = PLANNER_SYSTEM_PROMPT.replace(_CATEGORIA_A_DO, _CATEGORIA_A_BETA)
+    rendered = rendered.replace(_EJEMPLO_CORRECTO_DO, _EJEMPLO_CORRECTO_BETA)
+    _PLANNER_PROMPT_COUNTRY_CACHE[canon_country] = rendered
+    return rendered

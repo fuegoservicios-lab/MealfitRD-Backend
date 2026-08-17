@@ -372,9 +372,12 @@ def _prune_plan_for_chat(plan):
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 from prompts import (
-    DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
+    DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE,
     CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE,
-    TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT
+    TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] variante país-aware de
+    # SWAP_MEAL_PROMPT_TEMPLATE (T2 pattern) — swap_meal() la usa en vez del template crudo.
+    build_swap_meal_prompt_template
 )
 from prompts.chat_agent import (
     CHAT_AGENT_INLINE_PROMPT,
@@ -1849,7 +1852,9 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         logger.debug(f"[P1-STAPLE-FOODS] directiva de swap no aplicada (no bloquea): "
                      f"{type(_stp_ctx_e).__name__}: {_stp_ctx_e}")
 
-    prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_swap_country` (derivado UNA vez
+    # al inicio de swap_meal, T3) — DO ⇒ SWAP_MEAL_PROMPT_TEMPLATE byte-idéntico.
+    prompt_text = build_swap_meal_prompt_template(_swap_country).format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
         target_calories=target_calories,

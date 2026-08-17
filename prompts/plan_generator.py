@@ -920,13 +920,24 @@ def build_budget_context(form_data: dict) -> str:
         # sanitiza a {DOP, USD}; el símbolo + nombre vienen de un mapping FIJO
         # (no del valor crudo del cliente) → seguro contra prompt-injection.
         currency = (str(form_data.get("budgetCurrency") or "DOP")).strip().upper()
-        if currency not in ("DOP", "USD"):
-            currency = "DOP"
-        _sym = "US$" if currency == "USD" else "RD$"
-        _cur_name = (
-            "dólares estadounidenses" if currency == "USD"
-            else "pesos dominicanos"
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F3)] Antes de este gate, CUALQUIER moneda
+        # fuera de {DOP, USD} —incluida la EUR/MXN/COP que T6 ya sabe presupuestar
+        # (nutrition_calculator.py: budget_floor_in_currency/validate_budget_sufficient corren
+        # ANTES de generar)— se clampeaba a DOP aquí abajo y el bloque que el LLM SÍ LEE le
+        # mentía con «RD$» sobre un monto declarado en otra moneda. Mismo gate que T6 (symbol/
+        # code validado contra COUNTRY_PROFILES, knob MEALFIT_COUNTRY_SYSTEM por-llamada vía
+        # knobs._env_bool — la misma SSOT que country_for_form_data usa internamente) — DOP/USD
+        # quedan EXCLUIDOS a propósito (conservan su camino histórico, símbolo $ prefijo).
+        from knobs import _env_bool as _bc_env_bool
+        from constants import COUNTRY_PROFILES as _BC_COUNTRY_PROFILES
+        _bc_valid_currencies = {p["currency"] for p in _BC_COUNTRY_PROFILES.values()}
+        _budget_new_currency = (
+            currency in _bc_valid_currencies
+            and currency not in ("DOP", "USD")
+            and _bc_env_bool("MEALFIT_COUNTRY_SYSTEM", False)
         )
+        if not _budget_new_currency and currency not in ("DOP", "USD"):
+            currency = "DOP"
         if amount and amount > 0:
             duration = (str(form_data.get("groceryDuration") or "weekly")).strip().lower()
             _dur_es = {
@@ -934,10 +945,21 @@ def build_budget_context(form_data: dict) -> str:
                 "biweekly": "quincenal (15 días)",
                 "monthly": "mensual (30 días)",
             }.get(duration, "por ciclo")
+            if _budget_new_currency:
+                # Símbolo/code: el código de moneda EN SÍ (validado arriba contra
+                # COUNTRY_PROFILES), como SUFIJO del monto — «245 EUR», nunca «RD$245».
+                _monto_declarado = f"El usuario definió un presupuesto TOTAL de {amount:,.0f} {currency} "
+            else:
+                _sym = "US$" if currency == "USD" else "RD$"
+                _cur_name = (
+                    "dólares estadounidenses" if currency == "USD"
+                    else "pesos dominicanos"
+                )
+                _monto_declarado = f"El usuario definió un presupuesto TOTAL de {_sym}{amount:,.0f} ({_cur_name}) "
             return (
                 "\n--- 💰 PRESUPUESTO DE COMPRAS (OBLIGATORIO — AJUSTA INGREDIENTES) ---\n"
-                f"El usuario definió un presupuesto TOTAL de {_sym}{amount:,.0f} "
-                f"({_cur_name}) para su ciclo de compras {_dur_es}.\n"
+                f"{_monto_declarado}"
+                f"para su ciclo de compras {_dur_es}.\n"
                 "OBJETIVO: que la lista de compras del plan se MANTENGA CERCA de ese monto.\n"
                 "  - Prioriza ingredientes económicos y de alto rendimiento (pollo de "
                 "muslo, huevos, lentejas, habichuelas, arroz, avena, vegetales y frutas "

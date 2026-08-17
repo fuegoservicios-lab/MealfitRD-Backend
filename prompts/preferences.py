@@ -72,15 +72,39 @@ def _variety_option_line(i: int) -> str:
     )
 
 
-def build_deterministic_variety_prompt(days_count: int = 3) -> str:
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1b)] El bullet "FIDELIDAD CULTURAL es-DO" del
+# esqueleto (~6 líneas después del bloque de país en el fan-out de `ctx['variety_prompt']`, el
+# modo de fallo directiva-vs-orden medido por P1-DIET-BLIND-DIRECTIVES) ordena "SOLO ingredientes
+# dominicanos" incondicionalmente. Beta ⇒ bullet neutralizado; DO ⇒ intacto.
+_FIDELIDAD_CULTURAL_DO = (
+    "   • FIDELIDAD CULTURAL es-DO: usa SOLO ingredientes dominicanos accesibles y cotidianos. "
+    "NUNCA inventes ingredientes exóticos o no dominicanos (ej. Tajín mexicano, semillas/superfoods "
+    "de moda). Prioriza los pilares accesibles: pollo, habichuelas (rojas/negras/blancas), pescado "
+    "local, cerdo, huevos, y víveres (plátano, yuca, batata, ñame, yautía). Reserva ingredientes "
+    "premium/caros (ricotta, yogur griego, quesos finos) a MÁXIMO 1-2 apariciones en todo el plan, "
+    "no como base recurrente."
+)
+_FIDELIDAD_CONTEXTO_BETA = (
+    "   • FIDELIDAD AL CONTEXTO: usa ingredientes accesibles y cotidianos del país del usuario; "
+    "evita ingredientes difíciles de conseguir."
+)
+
+
+def build_deterministic_variety_prompt(days_count: int = 3, country=None) -> str:
     """Plantilla del prompt de variedad para un chunk de `days_count` días.
 
-    Con `days_count=3` devuelve BYTE A BYTE el prompt histórico (prompt-cache preservado y diff
-    del refactor revisable). Los placeholders `{protein_i}` / `{carb_i}` / `{carb_i}b` /
-    `{veggie_i}` / `{fruit_i}` quedan sin resolver a propósito: los llena el `.format(...)` de
+    Con `days_count=3` Y país DO/None (o desconocido — fail-safe de `canonicalize_country`)
+    devuelve BYTE A BYTE el prompt histórico (prompt-cache preservado y diff del refactor
+    revisable). Los placeholders `{protein_i}` / `{carb_i}` / `{carb_i}b` / `{veggie_i}` /
+    `{fruit_i}` quedan sin resolver a propósito: los llena el `.format(...)` de
     `ai_helpers.get_deterministic_variety_prompt`.
 
-    tooltip-anchor: P2-SEEDER-DAYS-COUNT"""
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1b)] `country` (default None) selecciona el
+    bullet "FIDELIDAD CULTURAL": DO ⇒ intacto; beta ⇒ `_FIDELIDAD_CONTEXTO_BETA` (sin mandato de
+    ingredientes exclusivamente dominicanos).
+
+    tooltip-anchor: P2-SEEDER-DAYS-COUNT / build_deterministic_variety_prompt
+    (test_p1_country_system_f1.py)"""
     n = max(1, int(days_count or 1))
     opciones = "\n".join(_variety_option_line(i) for i in range(n))
     carbos_asignados = " / ".join(f"{{carb_{i}}}+{{carb_{i}b}}" for i in range(n))
@@ -89,11 +113,15 @@ def build_deterministic_variety_prompt(days_count: int = 3) -> str:
     proteina_por_opcion = "Opción " + ", ".join(
         f"{_option_letter(i)}→{{protein_{i}}}" for i in range(n))
     proteinas_lista = "/".join(f"{{protein_{i}}}" for i in range(n))
-    return (_DETERMINISTIC_VARIETY_SKELETON
-            .replace("@@OPCIONES@@", opciones)
-            .replace("@@CARBOS_ASIGNADOS@@", carbos_asignados)
-            .replace("@@PROTEINA_POR_OPCION@@", proteina_por_opcion)
-            .replace("@@PROTEINAS_LISTA@@", proteinas_lista))
+    rendered = (_DETERMINISTIC_VARIETY_SKELETON
+                .replace("@@OPCIONES@@", opciones)
+                .replace("@@CARBOS_ASIGNADOS@@", carbos_asignados)
+                .replace("@@PROTEINA_POR_OPCION@@", proteina_por_opcion)
+                .replace("@@PROTEINAS_LISTA@@", proteinas_lista))
+    from constants import canonicalize_country
+    if canonicalize_country(country) != "DO":
+        rendered = rendered.replace(_FIDELIDAD_CULTURAL_DO, _FIDELIDAD_CONTEXTO_BETA)
+    return rendered
 
 
 # Sentinelas `@@...@@` en vez de `{...}`: el resto de la plantilla ESTÁ llena de `{placeholders}`

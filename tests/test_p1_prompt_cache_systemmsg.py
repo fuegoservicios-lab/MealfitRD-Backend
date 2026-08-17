@@ -54,7 +54,7 @@ def test_knob_registered_in_module():
 
 def test_planner_callsite_uses_systemmessage_under_knob():
     """En `invoke_planner` (dentro de `plan_skeleton_node`), el callsite a
-    `_safe_ainvoke` debe construir `[SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+    `_safe_ainvoke` debe construir `[SystemMessage(content=build_planner_system_prompt(...)),
     HumanMessage(content=...)]` cuando `PROMPT_CACHE_SYSTEM_MESSAGE` está True."""
     text = _read_graph()
     # [P1-PRECISION-LEVERS · 2026-07-04, boy-scout] El refactor P1-PLANNER-PRO-FALLBACK
@@ -71,8 +71,14 @@ def test_planner_callsite_uses_systemmessage_under_knob():
     assert "PROMPT_CACHE_SYSTEM_MESSAGE" in region, (
         "El callsite del planner debe gatear por `PROMPT_CACHE_SYSTEM_MESSAGE`."
     )
-    assert "SystemMessage(content=PLANNER_SYSTEM_PROMPT)" in region, (
-        "Cuando knob=True el SystemMessage debe contener `PLANNER_SYSTEM_PROMPT`."
+    # [stale-parser fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F1a · 2026-08-16] El SystemMessage
+    # dejó de envolver la constante `PLANNER_SYSTEM_PROMPT` directa: ahora envuelve
+    # `build_planner_system_prompt(ctx['country'])` (T2 pattern país-aware — DO/knob-off sigue
+    # devolviendo el MISMO objeto `PLANNER_SYSTEM_PROMPT`, byte-idéntico). El CONTRATO de este
+    # test (SystemMessage bajo knob) sigue intacto; solo el literal cambió.
+    assert "SystemMessage(content=build_planner_system_prompt(ctx['country']))" in region, (
+        "Cuando knob=True el SystemMessage debe contener "
+        "`build_planner_system_prompt(ctx['country'])`."
     )
     assert "HumanMessage(content=prompt_text)" in region, (
         "Cuando knob=True el HumanMessage debe contener el `prompt_text` dinámico."
@@ -80,28 +86,35 @@ def test_planner_callsite_uses_systemmessage_under_knob():
 
 
 def test_planner_dynamic_text_excludes_static_when_knob_true():
-    """El `prompt_text` que va al HumanMessage NO debe contener
-    `PLANNER_SYSTEM_PROMPT` cuando el knob está habilitado.
-    Si lo contiene, la región estática se duplica (SystemMessage + tail del
-    HumanMessage) y rompe el cache hit (Gemini ve prefix idéntico pero el
+    """El `prompt_text` que va al HumanMessage NO debe contener el system prompt del planner
+    cuando el knob está habilitado. Si lo contiene, la región estática se duplica (SystemMessage
+    + tail del HumanMessage) y rompe el cache hit (Gemini ve prefix idéntico pero el
     HumanMessage diverge en el tail estático)."""
     text = _read_graph()
     # Buscar la construcción de `dynamic_prompt_text` y verificar que el
-    # gate `if PROMPT_CACHE_SYSTEM_MESSAGE:` solo añade `PLANNER_SYSTEM_PROMPT`
+    # gate `if PROMPT_CACHE_SYSTEM_MESSAGE:` solo añade el system prompt del planner
     # en la rama legacy.
     # El bloque `dynamic_prompt_text = (...)` tiene paréntesis anidados de
     # f-strings — buscamos solo el branch knob (la firma única del fix).
     assert "dynamic_prompt_text = (" in text, (
         "Falta la asignación de `dynamic_prompt_text` en el planner."
     )
+    # [stale-parser fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F1a · 2026-08-16] La rama `else` ya no
+    # concatena la constante `PLANNER_SYSTEM_PROMPT` directa: concatena
+    # `build_planner_system_prompt(ctx['country'])` (T2 pattern país-aware; DO/knob-off ⇒ mismo
+    # objeto byte-idéntico). `.*?` con DOTALL absorbe el comentario nuevo entre `else:` y la
+    # asignación — mismo patrón que `test_day_generator_dynamic_text_excludes_static_when_knob_true`
+    # usa para `_bdgsp_nc(`.
     m = re.search(
-        r"if PROMPT_CACHE_SYSTEM_MESSAGE:\s*\n\s*prompt_text\s*=\s*dynamic_prompt_text\s*\n\s*else:\s*\n\s*prompt_text\s*=\s*dynamic_prompt_text\s*\+\s*PLANNER_SYSTEM_PROMPT",
+        r"if PROMPT_CACHE_SYSTEM_MESSAGE:\s*\n\s*prompt_text\s*=\s*dynamic_prompt_text\s*\n\s*else:"
+        r".*?prompt_text\s*=\s*dynamic_prompt_text\s*\+\s*build_planner_system_prompt\(",
         text,
+        re.DOTALL,
     )
     assert m, (
         "P1-PROMPT-CACHE-SYSTEMMSG: la composición del prompt del planner "
         "debe usar el patrón `dynamic_prompt_text` + branch `if knob: prompt_text "
-        "= dynamic; else: prompt_text = dynamic + PLANNER_SYSTEM_PROMPT`. "
+        "= dynamic; else: prompt_text = dynamic + build_planner_system_prompt(...)`. "
         "Cuando el knob=True el system prompt NO debe vivir dentro del "
         "HumanMessage — duplicarlo invalida el cache."
     )

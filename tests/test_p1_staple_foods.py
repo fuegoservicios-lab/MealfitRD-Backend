@@ -305,7 +305,11 @@ def test_staple_foods_hydrated_server_side_on_swap():
     cierra la ventana de cliente stale para el gate del swap."""
     i = _PLANS_SRC.find("def _enrich_clinical_from_profile")
     assert i > 0
-    blk = _PLANS_SRC[i: i + 4000]
+    # [stale-window fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F2a · 2026-08-16] 4000 → 4700: la
+    # hidratación de `country` (nueva, antes de dislikes/staple_foods en el cuerpo de la
+    # función) empujó estos dos targets a offset ~4300/4400 — el CONTRATO (staple_foods
+    # hidratado server-side) no cambió, solo su posición dentro de la función.
+    blk = _PLANS_SRC[i: i + 4700]
     assert 'hp.get("staple_foods")' in blk
     assert 'data["staple_foods"]' in blk
 

@@ -3998,7 +3998,7 @@ from prompts.plan_generator import (
     clinical_profile_active_flags,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
-from prompts.planner import PLANNER_SYSTEM_PROMPT
+from prompts.planner import PLANNER_SYSTEM_PROMPT, build_planner_system_prompt
 from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context
 
 
@@ -4968,6 +4968,11 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # identidad del tramo dinámico). country_for_form_data es la ÚNICA puerta (T1) — jamás
         # una lectura cruda de la clave "country" en form_data.
         "country_context": _country_context_block(_shared_ctx_country),
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] País CRUDO (no el bloque
+        # renderizado de arriba) — el fan-out para consumidores que necesitan el código en sí
+        # (ej. `build_planner_system_prompt(ctx['country'])` en `plan_skeleton_node`) en vez de
+        # re-derivar `country_for_form_data(form_data)` una 2ª vez dentro del nodo.
+        "country": _shared_ctx_country,
         # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables (magnesio/calcio/
         # hierro/fibra/potasio) como guía cuantitativa de densidad nutricional. "" si knob OFF/no aplica.
         "micronutrient_targets_context": micronutrient_targets_context,
@@ -7197,7 +7202,11 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     if PROMPT_CACHE_SYSTEM_MESSAGE:
         prompt_text = dynamic_prompt_text
     else:
-        prompt_text = dynamic_prompt_text + PLANNER_SYSTEM_PROMPT
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] país vía `ctx['country']` (T3's
+        # shared-context derivation, reusada — no re-deriva `country_for_form_data(form_data)`
+        # dentro del nodo). DO/knob-off ⇒ build_planner_system_prompt retorna PLANNER_SYSTEM_
+        # PROMPT intacto (byte-idéntico).
+        prompt_text = dynamic_prompt_text + build_planner_system_prompt(ctx['country'])
 
     if state.get("reflection_directive"):
         prompt_text = f"🧠 DIRECTIVA META-LEARNING (PRIORIDAD MÁXIMA):\n{state['reflection_directive']}\n\n" + prompt_text
@@ -7298,8 +7307,12 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Cuando el knob está
             # habilitado, enviar SystemMessage + HumanMessage como system_instruction separado.
             if PROMPT_CACHE_SYSTEM_MESSAGE:
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] país vía `ctx['country']`
+                # (T3's shared-context derivation, reusada — no re-deriva
+                # `country_for_form_data(form_data)` dentro del nodo). DO/knob-off ⇒
+                # build_planner_system_prompt retorna PLANNER_SYSTEM_PROMPT intacto (byte-idéntico).
                 planner_payload = [
-                    SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+                    SystemMessage(content=build_planner_system_prompt(ctx['country'])),
                     HumanMessage(content=prompt_text),
                 ]
             else:
@@ -10318,6 +10331,7 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
     consumidor de `slot_ingredient_violations` hereda el override."""
     from constants import slot_positive_hint as _sph
     from constants import country_for_form_data, slot_rules_for_country
+    from constants import _SLOT_POSITIVE_HINT_NEUTRAL as _dsa_hint_neutral
     _country = country_for_form_data(form_data)
     _rules_table = slot_rules_for_country(_country)
     _diet_for_hint = (form_data or {}).get("dietType") if isinstance(form_data, dict) else None
@@ -10334,15 +10348,30 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
                 continue
             name = m.get("name", "")
             for v in slot_violations_for_meal_name(name, slot_key, _rules_table):
-                _fix = _sph(slot_key, _diet_for_hint)
-                issues.append({
-                    "day": day_num, "slot": slot_key, "name": name,
-                    "label": v["label"], "hard": v["hard"],
-                    "text": (
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F4)] `_country` ya derivado
+                # arriba (T4) — reusado, no re-derivado. DO ⇒ texto+hint EXACTOS de siempre
+                # (`_sph`, diet-aware, DO-flavored). Beta ⇒ texto neutro (sin "rechazo de
+                # coherencia cultural es-DO" ni "dominicano") + `_SLOT_POSITIVE_HINT_NEUTRAL`
+                # (T4 la construyó para build_meal_timing_rules; se wirea aquí también en vez de
+                # `_sph`, que solo varía por dieta, nunca por país).
+                if _country == "DO":
+                    _fix = _sph(slot_key, _diet_for_hint)
+                    _text = (
                         f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
                         f"{slot_key}: «{name}» es {v['label']}, que no corresponde al {slot_key} dominicano. "
                         f"Cámbialo por un plato propio del horario. {_fix}"
-                    ),
+                    )
+                else:
+                    _fix = _dsa_hint_neutral.get(slot_key, "")
+                    _text = (
+                        f"COMIDA FUERA DE HORARIO: Día {day_num}, "
+                        f"{slot_key}: «{name}» es {v['label']}, que no corresponde al horario {slot_key}. "
+                        f"Cámbialo por un plato propio del horario. {_fix}"
+                    )
+                issues.append({
+                    "day": day_num, "slot": slot_key, "name": name,
+                    "label": v["label"], "hard": v["hard"],
+                    "text": _text,
                 })
             # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1, batch P2-AUDIT-V2-BATCH) El
             # detector de arriba es name-only → un desayuno con nombre inocuo ("Bowl energético criollo")

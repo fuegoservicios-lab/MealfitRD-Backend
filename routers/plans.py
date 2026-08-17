@@ -6116,6 +6116,19 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
             *[str(a).strip() for a in body_allergies if str(a).strip()],
             *[str(a).strip() for a in prof_allergies if str(a).strip()],
         })
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2a)] Hidratar `country` SERVER-SIDE
+        # desde el perfil — mismo sitio/forma que la hidratación de allergies de arriba: lee
+        # `hp.get('country')` (persistido en `user_profiles.health_profile->>'country'` por
+        # QCountry del wizard / el selector de Configuración, Fase 0) y solo rellena si el body
+        # no lo trae ya (mismo patrón "fill si falta" que medicalConditions/super_personalization
+        # más abajo — country es un escalar, no una lista que unionar). Se guarda CRUDO, SIN
+        # canonicalize_country aquí: la canonicalización ocurre en los LECTORES vía la ÚNICA
+        # puerta T1 (`country_for_form_data`) — escribir un 2º canonicalizador aquí sería la
+        # 2ª tabla que P1-DIET-CANON-SSOT ya pagó una vez. Sin esto, `swap_meal`/`regenerate-day`
+        # (T3/T4 ya wired para RECIBIR país) nunca veían uno real — la wiring quedaba mecánica
+        # pero inerte en runtime.
+        if not data.get("country") and hp.get("country"):
+            data["country"] = hp.get("country")
         # [P2-UPDATE-HYDRATE-DISLIKES · 2026-06-24] (re-audit P2-4) Hidratar dislikes server-side (UNION
         # body+perfil), espejo de allergies. El frontend los manda desde storage cifrado → en la ventana
         # stale post-login / cambio de dispositivo llegan vacíos y un swap reintroduce un alimento que el
@@ -8473,6 +8486,12 @@ def api_regenerate_day(
                 # cada slot → día fuera de banda. Aquí el retarget manda. tooltip-anchor: P2-REGEN-DAY-SLOT-OVERRIDE-SKIP
                 "_skip_slot_target_override": True,
                 "diet_type": data.get("diet_type") or data.get("dietType") or "balanced",
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2b)] Propaga `country` (hidratado
+                # server-side por `_enrich_clinical_from_profile`, F2a) al meal_form — mismo motivo
+                # que diet_type/allergies arriba: `meal_form` es un dict de keys EXPLÍCITAS (NO
+                # hace spread de `data`), así que sin esto `swap_meal(surface="day")` seguía
+                # cayendo a 'DO' aunque `data['country']` ya viniera hidratado.
+                "country": data.get("country"),
                 "goal": data.get("goal") or data.get("mainGoal"),
                 # [P2-REGEN-DAY-BIOMETRICS-PROPAGATE · 2026-06-29] (cierre follow-up testing en vivo) Propaga los
                 # biométricos —ya hidratados en `data` por _enrich_clinical_from_profile (block P2-UPDATE-HYDRATE-

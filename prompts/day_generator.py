@@ -1096,7 +1096,24 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día {_cultura_txt}. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""
 
     breakfast_cat = skeleton_day.get('breakfast_category', '')
-    breakfast_block = f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {breakfast_cat}\n  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. NO uses mangú/tubérculos si la categoría asignada es otra)." if breakfast_cat else ""
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1a)] La categoría A del schema
+    # (`breakfast_category`, schemas.py) es un ENUM VALUE interno ('Mangú/Tubérculos') — NO se
+    # toca (otros consumidores, ej. graph_orchestrator.py:8870, leen ese mismo valor exacto para
+    # el brief anti-repetición cross-day). Lo que se traduce es SOLO la LABEL mostrada al LLM en
+    # este bloque, reusando el `country` que la función YA recibe (T4) — nunca una 2ª derivación.
+    # DO ⇒ byte-idéntico (label + advertencia intactas).
+    _bdac_beta = _cc_bdac(country) != "DO"
+    _breakfast_cat_label = (
+        "Tubérculos/plátano (preparación local)"
+        if _bdac_beta and breakfast_cat == "Mangú/Tubérculos"
+        else breakfast_cat
+    )
+    _breakfast_cat_warn = "tubérculo/plátano" if _bdac_beta else "mangú/tubérculos"
+    breakfast_block = (
+        f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {_breakfast_cat_label}\n"
+        f"  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. "
+        f"NO uses {_breakfast_cat_warn} si la categoría asignada es otra)."
+    ) if breakfast_cat else ""
 
     # [P1-PRECISION-LEVERS · 2026-07-04] (lever 2) Anti-repetición ENTRE DÍAS: los días se generan
     # en PARALELO (asyncio.gather) y no se ven entre sí — el "salteado ×3" / "revoltillo ×3" solo lo

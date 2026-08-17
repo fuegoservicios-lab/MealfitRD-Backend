@@ -24,6 +24,10 @@ from db import (
 )
 from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] variante país-aware de
+# MODIFY_MEAL_PROMPT_TEMPLATE (T2 pattern) — execute_modify_single_meal() la usa en vez del
+# template crudo.
+from prompts import build_modify_meal_prompt_template
 from datetime import datetime
 import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
@@ -978,10 +982,20 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1), derivado UNA vez —
     # consumido por los 2 call sites de build_meal_timing_rules de abajo (guía proactiva del
     # prompt + retry-feedback del backstop). `form_data` es lo único disponible barato en esta
-    # tool (no hay columna `form_data` en `meal_plans` — solo `plan_data`); el chat-agent hoy no
-    # puebla `state['form_data']` con el país del usuario, así que en la práctica esto sigue
-    # cayendo a 'DO' hasta que una task futura conecte el país a la superficie de chat — honesto,
-    # no un placeholder roto (knob apagado ⇒ 'DO' siempre, igual que el resto del sistema).
+    # tool (no hay columna `form_data` en `meal_plans` — solo `plan_data`).
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F2c)] Trazado el flujo completo (el ruling
+    # T4 de arriba quedó desactualizado): `form_data` llega aquí desde `state['form_data']`
+    # (agent.py, nodo `execute_tools`, rama `tool_name == "modify_single_meal"`), que
+    # `chat_with_agent`/`chat_with_agent_stream` estampan DIRECTO del parámetro homónimo — y ESE
+    # parámetro es el retorno de `services.merge_form_data_with_profile(user_id, ...)`, llamado
+    # por los DOS endpoints de chat (`routers/chat.py`: `/api/chat/stream` y `/api/chat`). A
+    # diferencia de `_enrich_clinical_from_profile` (F2a, `routers/plans.py` — hidratación
+    # SELECTIVA campo-a-campo, que SÍ necesitó un fix explícito para `country`), ese merge
+    # SUSTITUYE `merged` por el `health_profile` COMPLETO cuando el perfil existe
+    # (`merged = existing_hp`, con el body del cliente solo pisando encima) — así que `country`
+    # ya viaja en cuanto vive en `health_profile` (Fase 0: QCountry del wizard + selector de
+    # Configuración lo escriben ahí), SIN hidratador dedicado en esta superficie. Cae a 'DO' solo
+    # para perfiles legacy que nunca fijaron país (fail-safe correcto, no un gap pendiente).
     from constants import country_for_form_data, slot_rules_for_country
     _modify_country = country_for_form_data(form_data)
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4 fix-round 1)] tabla resuelta UNA vez, reusada por el
@@ -1381,7 +1395,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     except Exception as _insp_cm_e:
         logger.debug(f"[P2-AUDIT-V6-BATCH] (P2-F) inspiración chat-modify no-op: {_insp_cm_e}")
 
-    modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1c)] reusa `_modify_country` (derivado UNA
+    # vez al inicio de execute_modify_single_meal, T4) — DO ⇒ MODIFY_MEAL_PROMPT_TEMPLATE
+    # byte-idéntico.
+    modify_prompt = build_modify_meal_prompt_template(_modify_country).format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
         meal=target_meal.get('meal'),

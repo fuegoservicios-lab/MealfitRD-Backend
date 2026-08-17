@@ -2626,7 +2626,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # [P2-SEEDER-DAYS-COUNT · 2026-08-03] La plantilla se CONSTRUYE con el nº de días del chunk
     # (`build_deterministic_variety_prompt`) en vez de ser el literal de 3 opciones. Con `_dc=3`
     # devuelve byte a byte el prompt histórico.
-    prompt = build_deterministic_variety_prompt(_dc).format(
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1b)] país vía la ÚNICA puerta (T1) —
+    # `form_data` es el parámetro homónimo de esta función. Knob apagado ⇒ 'DO' siempre ⇒ camino
+    # byte-idéntico.
+    from constants import country_for_form_data
+    prompt = build_deterministic_variety_prompt(_dc, country_for_form_data(form_data)).format(
         light_protein_block=_light_block,
         blocked_text=blocked_text,
         **{f"protein_{_i}": chosen_proteins[_i % len(chosen_proteins)] for _i in range(_dc)},

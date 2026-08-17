@@ -76,7 +76,12 @@ def test_directive_injected_before_prompt_format_when_ceiling_exists():
     `prompt_text` (para que el primer intento YA la incluya, no solo los reintentos)."""
     src = _swap_meal_block()
     i_budget = src.find("PRESUPUESTO DE SODIO")
-    i_format = src.find("prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(")
+    # [stale-parser fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F1c · 2026-08-16] `prompt_text` dejó de
+    # formatear la constante `SWAP_MEAL_PROMPT_TEMPLATE` directa: ahora formatea
+    # `build_swap_meal_prompt_template(_swap_country)` (T2 pattern país-aware — DO/knob-off sigue
+    # devolviendo el MISMO objeto, byte-idéntico). El CONTRATO de este test (la directiva de sodio
+    # se inyecta ANTES de construir prompt_text) sigue intacto; solo el literal buscado cambió.
+    i_format = src.find("prompt_text = build_swap_meal_prompt_template(_swap_country).format(")
     assert i_budget > 0, "directiva de presupuesto de sodio ausente"
     assert i_format > 0, "construcción de prompt_text ausente"
     assert i_budget < i_format, "la directiva debe inyectarse ANTES de formatear prompt_text"

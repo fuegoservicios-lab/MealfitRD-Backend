@@ -3446,3 +3446,471 @@ def test_scs_conteo_exacto_por_funcion():
     }
     actual = {fn: len(_scs_classify(fn)) for fn in _SCS_SPECS}
     assert actual == expected, f"conteo de call sites cambió: esperado {expected}, real {actual}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINAL-FIX (2026-08-16) — 4 hallazgos de la review final de Fase 1, todos flip-gated (nada
+# muerde en oscuro):
+#   F1 — planner/preferences/meal_operations sin wiring de país (spec §Fase 1.1 los nombra).
+#   F2 — el país nunca llegaba a swap/regen-day/chat: T3/T4 dejaron la MECÁNICA (los callers
+#        SABEN recibir `country=`) pero nada poblaba `country` en el `form_data`/`data` real —
+#        wiring presente en código, inerte en runtime.
+#   F3 — build_budget_context clampeaba cualquier moneda fuera de {DOP, USD} a DOP y el bloque
+#        que el LLM SÍ lee mentía con «RD$» sobre un monto declarado en otra moneda.
+#   F4 — el texto de rechazo del gate S1 (`_detect_slot_appropriateness`) seguía mandando
+#        "dominicano"/es-DO incondicionalmente pese a que T4 ya construyó
+#        `_SLOT_POSITIVE_HINT_NEUTRAL` para esta exacta necesidad.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── F1a: planner.py — Categoría A de desayuno + ejemplo CORRECTO ────────────
+
+def test_f1a_planner_do_o_none_es_byte_identico_is():
+    from prompts.planner import build_planner_system_prompt as build, PLANNER_SYSTEM_PROMPT
+    assert build("DO") is PLANNER_SYSTEM_PROMPT
+    assert build(None) is PLANNER_SYSTEM_PROMPT
+    assert build() is PLANNER_SYSTEM_PROMPT
+
+
+def test_f1a_planner_country_desconocido_cae_a_do():
+    from prompts.planner import build_planner_system_prompt as build, PLANNER_SYSTEM_PROMPT
+    assert build("xx") is PLANNER_SYSTEM_PROMPT
+    assert build("garbage") is PLANNER_SYSTEM_PROMPT
+
+
+def test_f1a_planner_beta_neutraliza_categoria_a_y_ejemplo():
+    from prompts.planner import build_planner_system_prompt as build
+    assert _BETA_CCS, "no hay países beta — fixture vacío"
+    for cc in _BETA_CCS:
+        out = build(cc)
+        assert 'Categoría A "Tubérculos/Mangú"' not in out, cc
+        assert "Ejemplo CORRECTO: Día 1=Mangú (A)" not in out, cc
+        assert "Tubérculos/Plátano" in out, cc
+        # Categorías B-E y el ejemplo INCORRECTO (fuera del alcance citado por la review) sobreviven.
+        assert 'Categoría B "Cereales/Avena"' in out, cc
+        assert "Ejemplo INCORRECTO: Día 1=Mangú de plátano (A)" in out, cc
+
+
+def test_f1a_planner_cache_dimensionada():
+    from prompts.planner import build_planner_system_prompt as build, _PLANNER_PROMPT_COUNTRY_CACHE
+    for cc in _BETA_CCS:
+        build(cc)
+    assert len(_PLANNER_PROMPT_COUNTRY_CACHE) <= len(_BETA_CCS)
+
+
+def test_f1a_shared_context_expone_country_key_crudo():
+    """`ctx['country']` (código crudo, distinto de `ctx['country_context']` el bloque
+    renderizado) es lo que `plan_skeleton_node` reusa para no re-derivar."""
+    cuerpo = _cuerpo_build_shared_context()
+    assert '"country":' in cuerpo, (
+        "_build_shared_context no expone ctx['country'] — plan_skeleton_node no puede reusar "
+        "la derivación de T3 sin re-derivar country_for_form_data(form_data) una 2ª vez."
+    )
+
+
+def test_f1a_plan_skeleton_node_wire_planner_con_ctx_country():
+    """Los 2 call sites del planner (SystemMessage bajo cache-knob + rama legacy sin cache)
+    deben threadear `ctx['country']` — no re-derivar `country_for_form_data(form_data)`.
+    Comentarios stripeados (mismo patrón que el resto del archivo): un 3er hit vive en prosa de
+    comentario (docstring de `_build_shared_context`, mencionando el call site como ejemplo) y
+    no cuenta como call site real."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    n = sin_comentarios.count("build_planner_system_prompt(ctx['country'])")
+    assert n == 2, f"esperaba 2 call sites (SystemMessage + rama sin-cache), hallado {n}"
+
+
+def test_f1a_breakfast_cat_label_do_byte_equal():
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": [], "breakfast_category": "Mangú/Tubérculos"}
+    do1 = bdac(skeleton, 1, day_name="Lunes")
+    do2 = bdac(skeleton, 1, day_name="Lunes", country="DO")
+    assert do1 == do2
+    assert "CATEGORÍA DE DESAYUNO ASIGNADA: Mangú/Tubérculos" in do1
+    assert "NO uses mangú/tubérculos" in do1
+
+
+def test_f1a_breakfast_cat_label_beta_traducida():
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": [], "breakfast_category": "Mangú/Tubérculos"}
+    for cc in _BETA_CCS:
+        out = bdac(skeleton, 1, day_name="Lunes", country=cc)
+        assert "Mangú/Tubérculos" not in out, cc
+        assert "CATEGORÍA DE DESAYUNO ASIGNADA: Tubérculos/plátano (preparación local)" in out, cc
+        assert "NO uses tubérculo/plátano" in out, cc
+
+
+def test_f1a_breakfast_cat_enum_value_del_skeleton_no_se_muta():
+    """El enum de schemas.py (skeleton_day['breakfast_category']) NUNCA se toca — solo la LABEL
+    mostrada al LLM en este bloque cambia. Otros consumidores del mismo dict (ej. el brief
+    anti-repetición cross-day en graph_orchestrator.py:8870) deben seguir viendo el valor exacto
+    del schema."""
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": [], "breakfast_category": "Mangú/Tubérculos"}
+    bdac(skeleton, 1, day_name="Lunes", country="ES")
+    assert skeleton["breakfast_category"] == "Mangú/Tubérculos"
+
+
+def test_f1a_breakfast_cat_otra_categoria_conserva_label_pero_hereda_warn_beta():
+    """Una categoría YA neutral (Avena/Cereales) no debe alterarse — el `.replace()` de la LABEL
+    exige match literal 'Mangú/Tubérculos'. La frase de advertencia SÍ cambia por país siempre
+    (es un anti-cheat genérico contra la categoría A, no condicionado a la asignación del día)."""
+    from prompts.day_generator import build_day_assignment_context as bdac
+    skeleton = {"protein_pool": [], "breakfast_category": "Avena/Cereales"}
+    out_do = bdac(skeleton, 1, day_name="Lunes", country="DO")
+    out_beta = bdac(skeleton, 1, day_name="Lunes", country="ES")
+    assert "CATEGORÍA DE DESAYUNO ASIGNADA: Avena/Cereales" in out_do
+    assert "CATEGORÍA DE DESAYUNO ASIGNADA: Avena/Cereales" in out_beta
+    assert "NO uses mangú/tubérculos" in out_do
+    assert "NO uses tubérculo/plátano" in out_beta
+
+
+# ── F1b: preferences.py — bullet "FIDELIDAD CULTURAL es-DO" del seeder ──────
+
+def test_f1b_variety_prompt_do_o_none_byte_identico():
+    import random
+    from prompts.preferences import build_deterministic_variety_prompt as build, DETERMINISTIC_VARIETY_PROMPT
+    random.seed(20260816)
+    a = build(3, "DO")
+    random.seed(20260816)
+    b = build(3, None)
+    random.seed(20260816)
+    c = build(3)
+    assert a == b == c
+    assert a == DETERMINISTIC_VARIETY_PROMPT
+
+
+def test_f1b_variety_prompt_country_desconocido_cae_a_do():
+    import random
+    from prompts.preferences import build_deterministic_variety_prompt as build
+    random.seed(2026)
+    do = build(3, "DO")
+    random.seed(2026)
+    xx = build(3, "xx")
+    assert do == xx
+
+
+def test_f1b_variety_prompt_beta_neutraliza_fidelidad_cultural():
+    from prompts.preferences import build_deterministic_variety_prompt as build
+    for cc in _BETA_CCS:
+        out = build(3, cc)
+        assert "FIDELIDAD CULTURAL es-DO" not in out, cc
+        assert "SOLO ingredientes dominicanos" not in out, cc
+        assert "FIDELIDAD AL CONTEXTO" in out, cc
+        assert "evita ingredientes difíciles de conseguir" in out, cc
+        # el resto del esqueleto (reglas de proteína/sodio/variedad) no se toca.
+        assert "REGLA DE SEGURIDAD ALIMENTARIA" in out, cc
+
+
+def _cuerpo_get_deterministic_variety_prompt() -> str:
+    src = (_BACKEND / "ai_helpers.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(
+        l for l in src.splitlines() if not l.strip().startswith("#")
+    )
+    ini = sin_comentarios.index("def get_deterministic_variety_prompt")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    return sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+
+
+def test_f1b_get_deterministic_variety_prompt_deriva_pais_via_ssot():
+    _assert_deriva_pais_via_ssot(
+        _cuerpo_get_deterministic_variety_prompt(), "get_deterministic_variety_prompt"
+    )
+
+
+def test_f1b_get_deterministic_variety_prompt_wire_country_en_el_builder():
+    cuerpo = _cuerpo_get_deterministic_variety_prompt()
+    assert "build_deterministic_variety_prompt(_dc, country_for_form_data(form_data))" in cuerpo
+
+
+# ── F1c: meal_operations.py — templates de swap/modify ──────────────────────
+
+def test_f1c_swap_template_do_o_none_es_byte_identico_is():
+    from prompts.meal_operations import build_swap_meal_prompt_template as build, SWAP_MEAL_PROMPT_TEMPLATE
+    assert build("DO") is SWAP_MEAL_PROMPT_TEMPLATE
+    assert build(None) is SWAP_MEAL_PROMPT_TEMPLATE
+    assert build("xx") is SWAP_MEAL_PROMPT_TEMPLATE
+
+
+def test_f1c_modify_template_do_o_none_es_byte_identico_is():
+    from prompts.meal_operations import build_modify_meal_prompt_template as build, MODIFY_MEAL_PROMPT_TEMPLATE
+    assert build("DO") is MODIFY_MEAL_PROMPT_TEMPLATE
+    assert build(None) is MODIFY_MEAL_PROMPT_TEMPLATE
+    assert build("garbage") is MODIFY_MEAL_PROMPT_TEMPLATE
+
+
+def test_f1c_swap_template_beta_neutraliza_reglas_25_y_3():
+    from prompts.meal_operations import build_swap_meal_prompt_template as build
+    for cc in _BETA_CCS:
+        out = build(cc)
+        assert "PLATO CRIOLLO" not in out, cc
+        assert "mofongo / mangú / tostones" not in out, cc
+        assert "gastronomía/ingredientes locales dominicanos" not in out, cc
+        assert "PREPARACIÓN APETECIBLE" in out, cc
+        assert "ingredientes accesibles y cotidianos del contexto del usuario" in out, cc
+        # el resto del template (reglas 1, 4-8) no se toca.
+        assert "COHERENCIA RECETA↔INGREDIENTES" in out, cc
+
+
+def test_f1c_modify_template_beta_neutraliza_reglas_4_y_65():
+    from prompts.meal_operations import build_modify_meal_prompt_template as build
+    for cc in _BETA_CCS:
+        out = build(cc)
+        assert "PLATO CRIOLLO" not in out, cc
+        assert "mofongo / mangú / tostones" not in out, cc
+        assert "4. Usa ingredientes dominicanos" not in out, cc
+        assert "4. Usa ingredientes accesibles y cotidianos del contexto del usuario" in out, cc
+        assert "COHERENCIA RECETA↔INGREDIENTES" in out, cc
+
+
+def test_f1c_swap_meal_wire_template_con_swap_country():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    assert "build_swap_meal_prompt_template(_swap_country).format(" in src
+
+
+def test_f1c_execute_modify_single_meal_wire_template_con_modify_country():
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    assert "build_modify_meal_prompt_template(_modify_country).format(" in src
+
+
+def test_f1c_meal_ops_cache_dimensionada():
+    from prompts.meal_operations import (
+        build_swap_meal_prompt_template as bs,
+        build_modify_meal_prompt_template as bm,
+        _MEAL_OPS_COUNTRY_CACHE,
+    )
+    for cc in _BETA_CCS:
+        bs(cc)
+        bm(cc)
+    assert len(_MEAL_OPS_COUNTRY_CACHE) <= 2 * len(_BETA_CCS)
+
+
+# ── F2: país nunca hidratado en swap/regen-day/chat (wiring inerte en runtime) ──────────────
+#
+# T3/T4 dejaron los CALLERS listos para recibir `country=` — pero el dict que le pasan
+# (`form_data`/`data`) nunca tenía la key poblada, así que en runtime SIEMPRE llegaba 'DO'. F2
+# cierra la fuente, no el consumo.
+
+def test_f2a_enrich_clinical_from_profile_hidrata_country_desde_perfil(monkeypatch):
+    import db
+    import routers.plans as rp
+    monkeypatch.setattr(db, "get_user_profile", lambda uid: {"health_profile": {"country": "MX"}})
+    data = {}
+    rp._enrich_clinical_from_profile(data, "user-1")
+    assert data.get("country") == "MX"
+
+
+def test_f2a_enrich_clinical_from_profile_perfil_ausente_no_agrega_key(monkeypatch):
+    import db
+    import routers.plans as rp
+    monkeypatch.setattr(db, "get_user_profile", lambda uid: None)
+    data = {}
+    rp._enrich_clinical_from_profile(data, "user-1")
+    assert "country" not in data, (
+        "sin perfil, la espina country_for_form_data cae a 'DO' downstream — no se inventa "
+        "una key aquí."
+    )
+
+
+def test_f2a_enrich_clinical_from_profile_perfil_sin_country_no_agrega_key(monkeypatch):
+    import db
+    import routers.plans as rp
+    monkeypatch.setattr(db, "get_user_profile", lambda uid: {"health_profile": {"allergies": []}})
+    data = {}
+    rp._enrich_clinical_from_profile(data, "user-1")
+    assert "country" not in data
+
+
+def test_f2a_enrich_clinical_from_profile_body_country_gana_sobre_perfil(monkeypatch):
+    import db
+    import routers.plans as rp
+    monkeypatch.setattr(db, "get_user_profile", lambda uid: {"health_profile": {"country": "MX"}})
+    data = {"country": "ES"}
+    rp._enrich_clinical_from_profile(data, "user-1")
+    assert data["country"] == "ES", "el body (ya validado por el cliente) gana sobre el perfil"
+
+
+def test_f2a_enrich_clinical_from_profile_guarda_crudo_sin_canonicalizar(monkeypatch):
+    """'store raw' — la canonicalización ocurre en los LECTORES vía la espina T1
+    (`country_for_form_data`), nunca en este hidratador (evitaría la 2ª tabla que
+    P1-DIET-CANON-SSOT ya pagó una vez)."""
+    import db
+    import routers.plans as rp
+    monkeypatch.setattr(db, "get_user_profile", lambda uid: {"health_profile": {"country": "mx"}})
+    data = {}
+    rp._enrich_clinical_from_profile(data, "user-1")
+    assert data.get("country") == "mx"
+
+
+def test_f2b_regenerate_day_meal_form_propaga_country():
+    src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
+    ini = src.index('"diet_type": data.get("diet_type") or data.get("dietType") or "balanced",')
+    fin = src.index('"goal": data.get("goal") or data.get("mainGoal"),', ini)
+    bloque = src[ini:fin]
+    assert '"country": data.get("country")' in bloque, (
+        "meal_form es un dict de keys EXPLÍCITAS (no hace spread de `data`) — sin esto, "
+        "swap_meal(surface='day') seguía cayendo a 'DO' aunque data['country'] ya viniera "
+        "hidratado por F2a."
+    )
+
+
+def test_f2c_tools_comment_documenta_el_mecanismo_real_no_el_ruling_obsoleto():
+    """El comentario honesto de execute_modify_single_meal debe citar el mecanismo REAL
+    (merge_form_data_with_profile) — no el ruling T4 desactualizado que declaraba el chat-agent
+    ciego al país."""
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    ini = src.index("def execute_modify_single_meal(")
+    fin = src.index("_modify_country = country_for_form_data(form_data)")
+    bloque = src[ini:fin]
+    assert "merge_form_data_with_profile" in bloque
+    assert "el chat-agent hoy no puebla" not in bloque, "el ruling T4 desactualizado sigue ahí"
+
+
+def test_f2d_doc_wiring_sentence_cita_la_hidratacion_final_fix():
+    doc = (_BACKEND / "docs" / "country_system_f1.md").read_text(encoding="utf-8")
+    ini = doc.index("SÍ están wired")
+    bloque = doc[ini: ini + 800]
+    assert "FINAL-FIX F2" in bloque
+    assert "_enrich_clinical_from_profile" in bloque
+    assert "merge_form_data_with_profile" in bloque
+
+
+# ── F3: build_budget_context clampeaba EUR/MXN/COP a RD$ ────────────────────
+
+def test_f3_build_budget_context_dop_usd_byte_identico_knob_on_y_off(monkeypatch):
+    from prompts.plan_generator import build_budget_context as build
+    fd_dop = {"budget": "custom", "budgetAmount": "5000"}
+    fd_usd = {"budget": "custom", "budgetAmount": "150", "budgetCurrency": "USD"}
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    dop_off, usd_off = build(fd_dop), build(fd_usd)
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dop_on, usd_on = build(fd_dop), build(fd_usd)
+    assert dop_off == dop_on, "DOP debe ser byte-idéntico con el knob ON u OFF"
+    assert usd_off == usd_on, "USD debe ser byte-idéntico con el knob ON u OFF"
+    assert "RD$5,000" in dop_on
+    assert "US$150" in usd_on
+
+
+def test_f3_build_budget_context_eur_knob_off_sigue_clampeando_a_dop(monkeypatch):
+    """Fail-safe preservado: sin el knob, EUR/MXN/COP se tratan como DOP — igual que ANTES de
+    esta fase (comportamiento histórico, no una regresión de F3)."""
+    from prompts.plan_generator import build_budget_context as build
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    out = build({"budget": "custom", "budgetAmount": "245", "budgetCurrency": "EUR"})
+    assert "RD$" in out
+    assert "EUR" not in out
+
+
+def test_f3_build_budget_context_eur_knob_on_no_clampea_ni_miente_rd(monkeypatch):
+    from prompts.plan_generator import build_budget_context as build
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    out = build({"budget": "custom", "budgetAmount": "245", "budgetCurrency": "EUR"})
+    assert "RD$" not in out
+    assert "US$" not in out
+    assert "EUR" in out
+    assert (
+        "El usuario definió un presupuesto TOTAL de 245 EUR para su ciclo de compras"
+        in out
+    )
+
+
+def test_f3_build_budget_context_mxn_cop_tambien_respetan_su_moneda(monkeypatch):
+    from prompts.plan_generator import build_budget_context as build
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    mxn = build({"budget": "custom", "budgetAmount": "1400", "budgetCurrency": "MXN"})
+    cop = build({"budget": "custom", "budgetAmount": "350000", "budgetCurrency": "COP"})
+    assert "MXN" in mxn and "RD$" not in mxn
+    assert "COP" in cop and "RD$" not in cop
+
+
+def test_f3_build_budget_context_moneda_no_reconocida_sigue_cayendo_a_dop(monkeypatch):
+    """Basura (`XYZ`) no es una moneda beta real — jamás debe escapar el clamp, con o sin knob."""
+    from prompts.plan_generator import build_budget_context as build
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    out = build({"budget": "custom", "budgetAmount": "500", "budgetCurrency": "XYZ"})
+    assert "RD$" in out
+
+
+def test_f3_tools_chat_consume_el_mismo_builder():
+    """[F3] tools.py:1162 (chat, GAP-07 budget en modify con expansión) consume
+    `build_budget_context` — un solo fix en el builder arregla las DOS superficies (form-gen +
+    chat-modify); no debe existir un 2º builder de presupuesto bifurcado."""
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    assert "from prompts.plan_generator import build_budget_context as _bbc_cm" in src
+
+
+# ── F4: S1 retry text seguía mandando criollo incondicionalmente para beta ──
+
+def test_f4_detect_slot_appropriateness_do_texto_intacto(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    issues = go._detect_slot_appropriateness(days, {"country": "DO"})
+    assert issues
+    text = issues[0]["text"]
+    assert "rechazo de coherencia cultural es-DO" in text
+    assert "que no corresponde al desayuno dominicano" in text
+
+
+def test_f4_detect_slot_appropriateness_knob_off_texto_do_pese_a_country_beta(monkeypatch):
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    issues = go._detect_slot_appropriateness(days, {"country": "ES"})
+    assert "rechazo de coherencia cultural es-DO" in issues[0]["text"], (
+        "knob apagado ⇒ 'DO' siempre, sin mirar form_data"
+    )
+
+
+def test_f4_detect_slot_appropriateness_beta_texto_neutro(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    for cc in _BETA_CCS:
+        issues = go._detect_slot_appropriateness(days, {"country": cc})
+        assert issues, cc
+        text = issues[0]["text"]
+        assert "es-DO" not in text, cc
+        assert "dominicano" not in text, cc
+        assert "no corresponde al horario desayuno" in text, cc
+
+
+def test_f4_detect_slot_appropriateness_beta_usa_slot_positive_hint_neutral(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    import graph_orchestrator as go
+    from constants import _SLOT_POSITIVE_HINT_NEUTRAL
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    issues = go._detect_slot_appropriateness(days, {"country": _BETA_CC_SAMPLE})
+    assert _SLOT_POSITIVE_HINT_NEUTRAL["desayuno"] in issues[0]["text"], (
+        "T4 construyó _SLOT_POSITIVE_HINT_NEUTRAL para build_meal_timing_rules — F4 lo wirea "
+        "TAMBIÉN aquí, en vez de slot_positive_hint() (que solo varía por dieta, nunca país)."
+    )
+
+
+def test_f4_detect_slot_appropriateness_do_y_beta_comparten_label_solo_difiere_hard_y_texto():
+    """Regresión del contrato T4 (hard soft/duro por país) — F4 no debe tocar `label`/`hard`,
+    solo el string `text` legible por el LLM."""
+    import graph_orchestrator as go
+    days = [{"day": 1, "meals": [{"meal": "Desayuno", "name": "Arroz con Huevo", "ingredients": []}]}]
+    import os as _os_f4
+    _prev = _os_f4.environ.get("MEALFIT_COUNTRY_SYSTEM")
+    _os_f4.environ["MEALFIT_COUNTRY_SYSTEM"] = "true"
+    try:
+        issues_do = go._detect_slot_appropriateness(days, {"country": "DO"})
+        issues_beta = go._detect_slot_appropriateness(days, {"country": _BETA_CC_SAMPLE})
+    finally:
+        if _prev is None:
+            _os_f4.environ.pop("MEALFIT_COUNTRY_SYSTEM", None)
+        else:
+            _os_f4.environ["MEALFIT_COUNTRY_SYSTEM"] = _prev
+    assert issues_do[0]["label"] == issues_beta[0]["label"]
+    assert issues_do[0]["hard"] is True and issues_beta[0]["hard"] is False
+    assert issues_do[0]["text"] != issues_beta[0]["text"]
+
+
+def test_f4_detect_slot_appropriateness_deriva_pais_una_sola_vez_se_mantiene():
+    """Regresión: el fix de F4 reusa `_country` (ya derivado por T4) — NO debe añadir una 2ª
+    derivación (el test T4 original ya lo exige; este lo re-ancla scoped al bloque que F4 tocó)."""
+    cuerpo = _cuerpo_detect_slot_appropriateness()
+    assert cuerpo.count("country_for_form_data(form_data)") == 1

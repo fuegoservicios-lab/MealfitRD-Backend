@@ -181,7 +181,12 @@ class TestToolsAlreadyCompliant:
         idx_fn = tools_src.find("def execute_modify_single_meal(")
         assert idx_fn > 0
         # Captura el bloque inicial de extracción de clean_ingredients
-        body = tools_src[idx_fn:idx_fn + 4000]
+        # [stale-window fix · P1-COUNTRY-SYSTEM-F1 FINAL-FIX F2c · 2026-08-16] 4000 → 4900: el
+        # comentario que traza de dónde sale `form_data` en esta tool (honesto tras F2c, ya no
+        # el ruling T4 desactualizado) creció al inicio de la función y empujó el target a
+        # offset ~4600 — el CONTRATO (aggregated_shopping_list leído) no cambió, solo su
+        # posición.
+        body = tools_src[idx_fn:idx_fn + 4900]
         assert "aggregated_shopping_list" in body, (
             "P1-SWAP-EMPTY-PANTRY-FALLBACK (tools.py sanity) regresión: "
             "`execute_modify_single_meal` ya no lee "
