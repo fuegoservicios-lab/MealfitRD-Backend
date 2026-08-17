@@ -2691,3 +2691,25 @@ def test_retarget_diff_committed_country_gaps_matched_field_vs_resolver_vivo(sc,
             for fname, food, matched, live in retargets
         )
     )
+
+
+# ── I11. "Quesito panela" — hermano de Critical #1, misma dirección queso→azúcar ─────────────────
+
+@pytest.mark.parametrize("food", ["Queso panela", "Queso panela fresco", "Quesito panela",
+                                   "Quesito panela fresco"])
+def test_queso_y_quesito_panela_resuelven_a_queso_blanco_nunca_a_panela(sc, food):
+    """[micro-fix T6 · review 2026-08-17, residual de fix-round 1] El reporte de fix-round 1
+    afirmaba (falso) que 'Quesito panela' ya resolvía a 'Queso blanco' — en vivo resolvía a
+    'Panela' (azúcar cruda), porque 'quesito' NO contiene 'queso' como subcadena ('quesito' diverge
+    de 'queso' en el 5º carácter: q-u-e-s-**i**-t-o vs q-u-e-s-**o**), así que el alias de rescate
+    'queso panela' (Critical #1, fix-round 1) nunca dispara para esta variante — solo el self-alias
+    bare 'panela' (T6) la ve, y gana por ser la única alternativa que matchea. Misma dirección
+    exacta que Critical #1 (queso→azúcar), variante de palabra distinta, alias de rescate distinto
+    requerido. Cubre las 4 variantes en un solo test: las 2 que YA resuelven bien desde fix-round 1
+    ('Queso panela'/'Queso panela fresco', control de no-regresión) y las 2 que NO ('Quesito
+    panela'/'Quesito panela fresco', el bug de este micro-round) — así que un futuro colapso de
+    CUALQUIERA de las 4 variantes se detecta en una sola corrida."""
+    assert sc.normalize_name(food) == "Queso blanco", (
+        f"{food!r} debe resolver a 'Queso blanco' (queso), no a 'Panela' (azúcar cruda) — "
+        "misma clase de bug que Critical #1 (fix-round 1), dirección queso→azúcar"
+    )

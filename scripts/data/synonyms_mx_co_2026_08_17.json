@@ -64,5 +64,13 @@
     "new_aliases": [
       "queso panela"
     ]
+  },
+  {
+    "target": "Queso blanco",
+    "country": "MX",
+    "item": "Quesito panela",
+    "new_aliases": [
+      "quesito panela"
+    ]
   }
 ]
