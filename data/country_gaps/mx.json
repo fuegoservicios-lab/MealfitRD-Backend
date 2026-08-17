@@ -1,7 +1,7 @@
 {
   "mode": "country",
   "country": "MX",
-  "generated_at": "2026-08-17T14:41:11.230780+00:00",
+  "generated_at": "2026-08-17T19:32:25.982733+00:00",
   "semantic_tier_active": true,
   "cohere_api_key_present": true,
   "fuzzy_threshold": 0.87,
@@ -360,7 +360,7 @@
     {
       "food": "Queso panela",
       "verdict": "RESUELVE-BIEN",
-      "matched": "Panela",
+      "matched": "Queso blanco",
       "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"

@@ -56,5 +56,13 @@
       "cuchuco",
       "cuchuco boyacense"
     ]
+  },
+  {
+    "target": "Queso blanco",
+    "country": "MX",
+    "item": "Queso panela",
+    "new_aliases": [
+      "queso panela"
+    ]
   }
 ]

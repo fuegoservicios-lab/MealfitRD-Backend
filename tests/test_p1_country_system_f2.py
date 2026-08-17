@@ -2180,7 +2180,13 @@ def test_get_fast_filtered_catalogs_sin_country_mx_co_sigue_siendo_do_byte_ident
 # test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_catalogo_vivo_ni_pools)
 
 @pytest.mark.parametrize("nombre", sorted(_DISH_TEMPLATES_MX_CO_NAMES))
-def test_is_country_catalog_unpriced_item_reconoce_cada_alta_t6(sc, nombre):
+def test_is_country_catalog_unpriced_item_reconoce_cada_alta_t6(sc, nombre, monkeypatch):
+    """[fix-round 1 T6 · review Critical #2] Knob ENCENDIDO — 'Tortilla de maíz' es el ÚNICO de
+    los 46 cuyo reconocimiento está gateado (colisión de pass-through con `resolve_preparation_distinct`,
+    ver docstring de `is_country_catalog_unpriced_item`); los otros 45 son indiferentes al knob
+    pero encenderlo no les cambia el resultado, así que un solo `monkeypatch` cubre los 46 casos
+    sin bifurcar el test."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
 
 
@@ -2334,33 +2340,97 @@ def test_pin_resoluciones_rd_es_no_cambiaron_tras_las_altas_t6(sc, query, espera
 
 
 @pytest.mark.e2e
-def test_homografo_tortilla_de_maiz_resuelve_a_su_propia_fila(sc):
+def test_homografo_tortilla_de_maiz_resuelve_a_su_propia_fila(sc, monkeypatch):
     """[homógrafo con más riesgo del task, citado explícito en el brief] 'tortilla' nombra TRES
     alimentos distintos en el sistema: Tortilla de trigo/integral (RD, harina de trigo), Tortilla
     española (ES/T5, huevo+patata) y Tortilla de maíz (MX/T6, maíz sin gluten) — ninguna alias
-    comparte token con otra."""
+    comparte token con otra.
+
+    [fix-round 1 T6 · review Critical #2] Requiere el knob `MEALFIT_COUNTRY_SYSTEM` ENCENDIDO —
+    la canonización a 'Tortilla de maíz' está gateada (ver `test_tortilla_de_maiz_knob_apagado_es_byte_identico_a_pre_t6`
+    para el control de byte-identidad con el knob apagado)."""
     import db_core
     if db_core.connection_pool is None:
         pytest.skip("connection_pool es None — e2e, no bloquea el gate")
     db_core.connection_pool.open()
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     assert sc.normalize_name("Tortillas de maíz") == "Tortilla de maíz"
     assert sc.normalize_name("tortilla de maiz picada") == "Tortilla de maíz"
     assert sc.normalize_name("Tortilla de trigo") == "Tortilla de trigo"
     assert sc.normalize_name("Tortilla integral") == "Tortilla integral"
 
 
-def test_resolve_preparation_distinct_tortilla_maiz_canoniza_a_fila_real(sc):
-    """[la MUTACIÓN de esta task, ver reporte] Pre-T6, `resolve_preparation_distinct` forzaba
-    `(True, None)` (pass-through, DROP) para 'tortilla de maíz' porque el catálogo solo tenía
-    tortillas de TRIGO — comentario original: "el catálogo solo tiene tortillas de TRIGO". Con
-    la alta real T6 debe CANONIZAR a la fila, no pasar de largo. RED-first: revertir la línea a
-    `return (True, None)` reproduce el DROP (ver reporte §Mutaciones)."""
+def test_resolve_preparation_distinct_tortilla_maiz_canoniza_a_fila_real(sc, monkeypatch):
+    """[la MUTACIÓN original de esta task, ver reporte] Pre-T6, `resolve_preparation_distinct`
+    forzaba `(True, None)` (pass-through, DROP) para 'tortilla de maíz' porque el catálogo solo
+    tenía tortillas de TRIGO — comentario original: "el catálogo solo tiene tortillas de TRIGO".
+    Con la alta real T6 Y el knob `MEALFIT_COUNTRY_SYSTEM` encendido, debe CANONIZAR a la fila.
+    RED-first: revertir a `return (True, None)` incondicional reproduce el DROP (ver reporte
+    §Mutaciones, mutación original). Con el knob APAGADO, ver el test hermano de byte-identidad."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     handled, canonical = sc.resolve_preparation_distinct("Tortillas de maíz")
     assert handled is True
     assert canonical == "Tortilla de maíz", (
-        f"resolve_preparation_distinct debe canonizar a 'Tortilla de maíz', devolvió {canonical!r} "
-        f"— si es None, la mutación pre-T6 (pass-through) revivió"
+        f"resolve_preparation_distinct debe canonizar a 'Tortilla de maíz' con el knob ON, "
+        f"devolvió {canonical!r} — si es None, la mutación pre-T6 (pass-through) revivió"
     )
+
+
+def test_resolve_preparation_distinct_tortilla_maiz_knob_apagado_es_pass_through_historico(sc, monkeypatch):
+    """[fix-round 1 T6 · review Critical #2 · RED-first dirección 1/2] Con el knob apagado (o
+    ausente — default de esta suite), `resolve_preparation_distinct` debe devolver EXACTAMENTE
+    `(True, None)` (pass-through histórico) para CUALQUIER país, incluido DO — byte-identidad.
+    Contra el HEAD pre-fix-round (canonización incondicional) este assert falla:
+    `resolve_preparation_distinct('Tortillas de maíz') == (True, 'Tortilla de maíz')`, no
+    `(True, None)`. Mutación: quitar el gate reproduce ese rojo (ver reporte)."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    assert sc.resolve_preparation_distinct("Tortillas de maíz") == (True, None), (
+        "con el knob apagado, 'tortilla de maíz' debe seguir siendo pass-through puro "
+        "(byte-idéntico a pre-T6) — si canoniza, el gate no está aplicado o no lee el knob"
+    )
+
+
+@pytest.mark.e2e
+def test_tortilla_de_maiz_knob_apagado_es_byte_identico_a_pre_t6_en_el_agregador(sc, monkeypatch):
+    """[fix-round 1 T6 · review Critical #2 · RED-first dirección 2/2, el gap que el propio
+    resolver-gate NO cerraba solo] Verificado en vivo durante el fix-round: gatear SOLO
+    `resolve_preparation_distinct` no bastaba -- `is_country_catalog_unpriced_item` reconocía
+    igual el texto pass-through ('Tortilla de maíz', idéntico al string de entrada) porque el
+    token 'tortilla de maiz' no estaba gateado. Con AMBOS gates, el agregador real debe DROPEAR
+    el ingrediente (mismo comportamiento pre-T6: 'antes pasaba de largo/se dropeaba') — no
+    debe sobrevivir como CATÁLOGO SIN PRECIO."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+    result = sc.aggregate_and_deduct_shopping_list(["80 g de Tortilla de maíz"], structured=True)
+    items = result if isinstance(result, list) else (result.get("items") or [])
+    nombres = [it.get("name") for it in items]
+    assert not nombres, (
+        f"con el knob apagado, 'Tortilla de maíz' debe DROPEARSE del agregador (byte-identidad "
+        f"pre-T6) — sobrevivió como: {nombres}"
+    )
+
+
+@pytest.mark.e2e
+def test_tortilla_de_maiz_knob_encendido_sobrevive_como_catalogo_sin_precio(sc, monkeypatch):
+    """Control positivo (espejo del test anterior): con el knob ENCENDIDO, el mismo ingrediente
+    SÍ debe sobrevivir en el agregador — confirma que el gate discrimina en vez de romper el
+    caso MX real que esta task existe para servir."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+    result = sc.aggregate_and_deduct_shopping_list(["80 g de Tortilla de maíz"], structured=True)
+    items = result if isinstance(result, list) else (result.get("items") or [])
+    tortilla = next((it for it in items if it.get("name") == "Tortilla de maíz"), None)
+    assert tortilla is not None, "con el knob encendido, 'Tortilla de maíz' debe sobrevivir"
+    assert tortilla.get("estimated_cost_rd") is None
+    assert tortilla.get("display_category") == "CATÁLOGO SIN PRECIO"
 
 
 @pytest.mark.e2e
@@ -2541,4 +2611,83 @@ def test_harness_mx_co_cierra_en_cero_drops_cero_silenciosas(cc, fname):
     )
     assert counts.get("RESUELVE-BIEN") == data.get("total_items"), (
         f"[{cc}] RESUELVE-BIEN debe cubrir el 100% de total_items en el cierre"
+    )
+
+
+# ── I10 (Durable Guard #6). Retarget-diff — el TARGET de cada item pineado, no solo el veredicto ──
+
+@pytest.mark.e2e
+def test_retarget_diff_committed_country_gaps_matched_field_vs_resolver_vivo(sc, monkeypatch):
+    """[Durable Guard #6 · fix-round 1 T6 · controller ruling 2026-08-17 — "cierra la CLASE, no
+    solo la instancia"] El test de arriba (`test_harness_mx_co_cierra_en_cero_drops_cero_silenciosas`,
+    y su hermano de T5 para ES) SOLO cuenta veredictos (`counts.DROP`/`counts['SUSTITUCION-SILENCIOSA']`)
+    — es CIEGO a que el TARGET de un item cambie mientras el veredicto se mantiene en
+    RESUELVE-BIEN. Eso fue exactamente Critical #1 del review de fix-round 1: 'Queso panela'
+    (MX) seguía siendo RESUELVE-BIEN antes y después de que el nuevo self-alias 'panela' (T6)
+    colisionara por longitud de alias, pero el TARGET saltó en silencio de 'Queso blanco' (queso)
+    a 'Panela' (azúcar cruda) — un veredicto ciego al target no lo habría detectado nunca; un
+    conteo agregado tampoco (76/76/0/0 antes Y después de la colisión).
+
+    Descubre los `country_gaps/*.json` COMMITEADOS dinámicamente (no una lista hardcodeada de
+    nombres) filtrando por `mode == "country"` — así un futuro T7/T8 (PR/US) queda cubierto
+    automáticamente sin tocar este test, y el `rd_drops.json` de telemetría del cron
+    (`_creativity_kpi_job`, schema `mode="rd-drops"` sin `items`/`matched`) se excluye solo. Para
+    CADA item con `matched` no-nulo (230 al momento de escribir este test: 80 ES + 76 MX + 74 CO,
+    los 3 cerrados en 0 DROP), re-resuelve en vivo contra `sc.normalize_name` y exige coincidencia
+    EXACTA con el `matched` ya comprometido en git. Un retarget INTENCIONAL (ej. un fix-round
+    futuro que mejora una sustitución) se cierra actualizando el JSON explícitamente vía
+    `scripts/country_catalog_gap.py --country <CC> --commit` — así el diff SIEMPRE pasa por
+    review, nunca en silencio.
+
+    Corre con el knob `MEALFIT_COUNTRY_SYSTEM` encendido: es la única condición bajo la cual
+    `mx.json` (regenerado en fix-round 1 tras el fix de Critical #2) es internamente consistente
+    consigo mismo — 'Tortillas de maíz' solo resuelve a 'Tortilla de maíz' con el knob ON (ver
+    `resolve_preparation_distinct`). Confirmado por grep que el knob se lee 2 veces en todo
+    `shopping_calculator.py`: la otra lectura (dentro de `is_country_catalog_unpriced_item`) no
+    participa de `normalize_name` en absoluto (es un filtro posterior, de agregación) — encender
+    el knob aquí no puede desviar NINGÚN otro item de es.json/co.json, solo habilita la única
+    resolución que de verdad lo necesita."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+
+    gaps_dir = _BACKEND / "data" / "country_gaps"
+    retargets = []
+    total_checked = 0
+    files_scanned = 0
+    for path in sorted(gaps_dir.glob("*.json")):
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("mode") != "country":
+            continue  # ej. rd_drops.json (telemetría del cron, schema distinto) — no aplica
+        files_scanned += 1
+        for item in payload.get("items") or []:
+            matched = item.get("matched")
+            if matched is None:
+                continue  # DROP genuino: no hay target que pinear
+            food = item["food"]
+            total_checked += 1
+            live = sc.normalize_name(food)
+            if live != matched:
+                retargets.append((path.name, food, matched, live))
+
+    assert files_scanned >= 3, (
+        f"esperaba >=3 archivos con mode=='country' en {gaps_dir}, encontró {files_scanned} — "
+        "¿el directorio se movió o el filtro de mode está mal?"
+    )
+    assert total_checked >= 220, (
+        f"esperaba >=220 items pineados entre los {files_scanned} archivos, solo {total_checked} "
+        "— ¿algún country_gaps/*.json se leyó vacío o con conteos DROP>0?"
+    )
+    assert not retargets, (
+        "RETARGET DETECTADO — el resolver vivo apunta distinto de lo que el JSON commiteado "
+        "declara. Si es intencional, actualiza el country_gaps/*.json correspondiente vía "
+        "`scripts/country_catalog_gap.py --country <CC> --commit` para que el diff quede "
+        "documentado en el PR, nunca en silencio:\n" +
+        "\n".join(
+            f"  [{fname}] {food!r}: json={matched!r} vs live={live!r}"
+            for fname, food, matched, live in retargets
+        )
     )

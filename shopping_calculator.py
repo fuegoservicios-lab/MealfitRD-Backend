@@ -838,13 +838,32 @@ def is_country_catalog_unpriced_item(name) -> bool:
     accent-stripped) — `Champiñones` es una fila RD PRICED real de `DOMINICAN_VEGGIES_FATS`, así
     que el bug marcaba un alimento de precio real como si fuera una alta sin precio de T5. 17ª
     colisión de substring documentada en el proyecto (sal⊂salsa, pollo⊂repollo, res⊂fresco...).
-    Usado por el keep del aggregator (generalización de P1-BAKING-STAPLES, T5)."""
+    Usado por el keep del aggregator (generalización de P1-BAKING-STAPLES, T5).
+
+    [fix-round 1 T6 · review Critical #2 · 2026-08-17] `"tortilla de maiz"` es el ÚNICO de los
+    78 tokens (32 T5 + 46 T6) con un camino de FALSO POSITIVO independiente de si la fila
+    realmente resolvió: `resolve_preparation_distinct` intercepta CUALQUIER "tortilla(s) de
+    maiz" ANTES de los tiers normales, y con el knob `MEALFIT_COUNTRY_SYSTEM` apagado devuelve
+    `(True, None)` (pass-through histórico — ver ese docstring) — el pass-through ECOA el texto
+    original ("Tortilla de maíz" tal cual lo escribió el usuario/la receta), que ESTE matcher
+    reconocería igual sin que hubiera resuelto de verdad a la fila. Verificado en vivo contra el
+    agregador real: con el gate del resolver YA puesto pero SIN este segundo gate,
+    `aggregate_and_deduct_shopping_list(['80 g de Tortilla de maíz'])` con el knob apagado SEGUÍA
+    sobreviviendo como CATÁLOGO SIN PRECIO — la fila no existía para efectos de DO antes de esta
+    task (`db_inventory.py` PANTRY_UNIT_HINTS ya anticipaba el string en flujos de Nevera DO), así
+    que debía dropearse, byte-idéntico. Ningún otro de los 78 tokens comparte este riesgo (ningún
+    otro nombre calza los 3 regex pre-existentes de `resolve_preparation_distinct` —
+    harina-de-X/caldo-de-X/crema-de-coco — que son los únicos que devuelven `(True, None)`
+    incondicionalmente antes de esta task)."""
     try:
         from constants import strip_accents as _sa
         low = _sa(str(name or "").lower())
+        tokens = _COUNTRY_CATALOG_UNPRICED_TOKENS
+        if not _knob_env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+            tokens = tuple(t for t in tokens if t != "tortilla de maiz")
         return any(
             re.search(r"\b" + re.escape(tok) + r"(?:s|es)?\b", low)
-            for tok in _COUNTRY_CATALOG_UNPRICED_TOKENS
+            for tok in tokens
         )
     except Exception:
         return False
@@ -7224,9 +7243,18 @@ def resolve_preparation_distinct(name) -> tuple:
         # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Antes de esta task el catálogo solo tenía
         # tortillas de TRIGO — el guard forzaba pass-through (True, None) para NO colapsar
         # "tortilla de maíz" a "Maíz dulce en granos" (kernel de maíz, macro ~4x distinto de una
-        # tortilla horneada). Con la alta real "Tortilla de maíz" (USDA, T6) el guard canoniza
-        # a SU fila propia en vez de pass-through — sigue sin colapsar al maíz crudo.
-        return (True, "Tortilla de maíz")
+        # tortilla horneada). Con la alta real "Tortilla de maíz" (USDA, T6) el guard PODRÍA
+        # canonizar a su fila propia — pero "tortilla de maíz" es un string que YA vive en rutas
+        # DO pre-existentes sin relación con esta task (`db_inventory.py` PANTRY_UNIT_HINTS línea
+        # ~1907, `P6-CARBS-CAP`) y este resolver no recibe country: canonizar sin gate cambiaría
+        # el comportamiento DO con el knob apagado (rompe byte-identidad — fix-round 1, review
+        # Critical #2). Gateado por el MISMO knob maestro que `country_for_form_data`, leído
+        # POR LLAMADA (no cacheado a nivel de módulo) — knob apagado ⇒ pass-through histórico
+        # SIEMPRE, para cualquier país; knob encendido ⇒ canoniza (sigue sin colapsar al maíz
+        # crudo en ningún caso).
+        if _knob_env_bool("MEALFIT_COUNTRY_SYSTEM", False):
+            return (True, "Tortilla de maíz")
+        return (True, None)
     if _PREP_CREMA_COCO_RE.search(low):
         return (True, None)  # crema de coco ≠ coco fresco (SKU distinto)
     # [P1-BROTH-NOT-MEAT · 2026-07-28] "caldo de pollo" resolvía a PECHUGA DE POLLO y "caldo de

@@ -29,15 +29,25 @@ contrato de la Task 6 — ver `task-6-report.md`).
 
 NUTRICIÓN: 100% USDA FoodData Central (SR Legacy + Foundation, mismo volcado bulk que T5 — sin
 USDA_API_KEY en este entorno, DEMO_KEY insuficiente, ver docstring de `add_foods_es_2026_08_17.py`).
-TRES filas SIN fdc_id real (`nutrition_source='manual'`, NO 'usda' — el CHECK constraint de la
+DOS filas SIN fdc_id real (`nutrition_source='manual'`, NO 'usda' — el CHECK constraint de la
 columna solo permite usda/off/faoinfoods/manual/NULL, 'manual' YA lo usan 16 filas pre-existentes):
-Achiote, Flor de Jamaica y Hoja santa — CERO entrada USDA cubre semilla de achiote/flor seca de
-jamaica/hoja santa (confirmado tras 5 rondas de búsqueda con sinónimos: achiote/annatto/bixa/
-urucu/bija, hibiscus/jamaica, hoja santa/acuyo — para achiote la única real, 'Seasoning mix, dry,
-sazon, coriander & annatto', es un sazonador con sodium_mg=17000 — 74% sal en peso — usarla
-representaría el achiote puro como sal casi pura, una distorsión clínicamente relevante para un
-usuario HTA/renal. Estimación conservadora documentada por fila
-en `_provenance` del JSON — ver Concern §11 del reporte de la task para el detalle).
+Achiote y Hoja santa — CERO entrada USDA cubre semilla de achiote/hoja santa (confirmado tras 5
+rondas de búsqueda con sinónimos: achiote/annatto/bixa/urucu/bija, hoja santa/acuyo — para achiote
+la única real, 'Seasoning mix, dry, sazon, coriander & annatto', es un sazonador con
+sodium_mg=17000mg/100g (~42.5% NaCl-equivalente aplicando el factor sodio→sal ×2.5; NO "74% sal
+en peso" — corrección fix-round 1 · 2026-08-17, el número original confundía el mg de sodio
+crudo con un porcentaje de sal sin aplicar el factor de conversión) — usarla representaría el
+achiote puro como sal casi pura, una distorsión clínicamente relevante para un usuario HTA/renal.
+Estimación conservadora documentada por fila en `_provenance` del JSON — ver Concern §11 del
+reporte de la task para el detalle.
+Flor de Jamaica SÍ tiene fdc_id real (168170, 'Roselle, raw') desde fix-round 1 · 2026-08-17 — la
+búsqueda original de 5 rondas usó 'hibiscus'/'jamaica' y no dio con ella; una 6ª ronda con la
+palabra 'roselle' (nombre en inglés de la especie Hibiscus sabdariffa) sí la encontró. La fila se
+deriva por un factor de deshidratación desde el dato crudo/húmedo de esa entrada (ver
+`_provenance` de esa fila en el JSON para el cálculo completo, con chequeo de autoconsistencia
+Atwater); `nutrition_source` se mantiene 'manual' porque el valor persistido es un DERIVADO, no
+una lectura directa del fdc — pero ahora cita una fuente USDA real en vez de ser una estimación
+sin ancla.
 
 REGLA FILA-vs-SINÓNIMO (contrato Task 6): mismo alimento nombre regional ⇒ alias sobre la fila
 EXISTENTE (Jitomate→Tomate, Mazorca/Choclo→Maíz dulce en granos, Malanga→Yautía, Cuchuco de
