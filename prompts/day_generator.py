@@ -237,6 +237,9 @@ REGLAS ESTRICTAS:
 # tooltip-anchor: P2-SLOT-SSOT-PROMPT
 try:
     from constants import build_meal_timing_rules as _bmtr_ssot
+    # [P1-COUNTRY-SYSTEM-F1 EXENTO: SIEMPRE DO a propósito — este bloque alimenta
+    # DAY_GENERATOR_SYSTEM_PROMPT, la constante estática que debe seguir siendo el prompt
+    # de RD byte-idéntico (ver comentario arriba). La variante beta vive aparte, abajo.]
     _SLOT_SSOT_RULES_BLOCK = "\n".join(
         _b for _b in (_bmtr_ssot(_s) for _s in ("Desayuno", "Almuerzo", "Cena", "Merienda")) if _b
     ).strip()

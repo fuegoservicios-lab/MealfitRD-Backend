@@ -3846,11 +3846,13 @@ class PlanState(TypedDict):
     #                                           ANTES del bloque de agregación, vía
     #                                           `constants.pricing_mode_for_form_data`;
     #                                           leída por `get_shopping_list_delta`
-    #                                           (suprime `estimated_cost_rd`) y por los 5
+    #                                           (suprime `estimated_cost_rd`) y por los 8
     #                                           call sites de `compute_shopping_cost_summary`
-    #                                           en graph_orchestrator.py/cron_tasks.py/
-    #                                           tools.py/routers/plans.py. DO/knob-off ⇒
-    #                                           la clave nunca se escribe — byte-identidad).
+    #                                           (reapuntado 5→8 · T8, ancla:
+    #                                           test_..._ocho_call_sites_exactos) en
+    #                                           graph_orchestrator.py/cron_tasks.py/tools.py/
+    #                                           routers/plans.py. DO/knob-off ⇒ la clave
+    #                                           nunca se escribe — byte-identidad).
     #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
@@ -10347,6 +10349,10 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
             # y "150g arroz blanco" en ingredients evadía la regla MÁS DURA del owner (desayuno-arroz =
             # hard, sin degradación). Pase ingredient-level SSOT, scope estrecho (solo desayuno + arroz
             # con excludes) — la cena ya tiene su pase ingredient-driven con autofix (_night_rice_autofix).
+            # [P1-COUNTRY-SYSTEM-F1 EXENTO: slot_ingredient_violations(ingredients, slot_key) no lleva
+            # parámetro de país en su firma — el override de "hard" ocurre en el dict del issue más
+            # abajo (país-aware, ver docstring de esta función), no en este call. Exento de wiring
+            # por argumento, no de país-consciencia.]
             try:
                 from constants import slot_ingredient_violations as _siv
                 _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key, _rules_table))
@@ -14741,6 +14747,9 @@ def slot_coherence_backstop_for_meal(meal: dict, meal_type: str, country: str = 
                 out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
         # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1) paridad updates: el mismo pase
         # ingredient-level del productor S1 (arroz oculto en ingredients de un DESAYUNO con nombre inocuo).
+        # [P1-COUNTRY-SYSTEM-F1 EXENTO: T4 fix-round 1 disclosure (docstring arriba) — el pase
+        # ingredient-level sigue siempre hard, sin override por país. Behavioral gap conocido y
+        # explícitamente dejado fuera del alcance de esa review; T8 lo confirma vivo, no lo cierra.]
         try:
             from constants import slot_ingredient_violations as _siv_b
             for v in _siv_b(meal.get("ingredients") or [], slot_key):

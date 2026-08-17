@@ -7126,6 +7126,11 @@ def api_swap_meal_persist(
                             day_kcal_target=_dkt_sp(plan_data.get("macros")))
                     _tu_sp(new_meal, _fdb_sp)
                     try:
+                        # [P1-COUNTRY-SYSTEM-F1 EXENTO: T4 fix-round 1 finding, no cerrado — este
+                        # call site corre DENTRO de update_plan_data_atomic's SELECT...FOR UPDATE
+                        # (P2-MUTATOR-PURITY prohíbe reentrar al pool aquí para resolver el país del
+                        # perfil); requiere pre-fetch antes del lock + threading por el closure de
+                        # _swap_mutator — real, acotado, no hecho en esta fase. country default 'DO'.]
                         _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""))
                         if _slot_viols_sp:
                             new_meal["_slot_advisory"] = True

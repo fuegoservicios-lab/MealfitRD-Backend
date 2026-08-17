@@ -845,8 +845,10 @@ def test_slot_rules_for_country_no_muta_la_tabla_base():
 
 def test_slot_violations_for_meal_name_sin_rules_table_es_identico_a_antes():
     """Backward-compat: sin 3er argumento (ni con None explícito), comportamiento byte-idéntico
-    — sigue leyendo SLOT_INAPPROPRIATE_FOODS. Ningún caller preexistente (tools.py chat-backstop,
-    plan_gym.py scoring, agent.py backstop) pasa este argumento."""
+    — sigue leyendo SLOT_INAPPROPRIATE_FOODS. [T8 slot-callers sweep] a día de hoy el único
+    caller de producción que aún NO pasa `rules_table` es `plan_gym.py` (gym offline, EXENTO —
+    ver backend/docs/country_system_f1.md); esta función sigue soportando la firma corta para él
+    y para cualquier caller futuro sin país en scope."""
     v1 = constants.slot_violations_for_meal_name("Arroz con Locrio", "desayuno")
     v2 = constants.slot_violations_for_meal_name("Arroz con Locrio", "desayuno", None)
     assert v1 == v2
@@ -3125,3 +3127,322 @@ def test_rebuild_plan_shopping_lists_inline_do_control_si_persiste(monkeypatch):
     assert ok is True
     assert "shopping_cost_summary" in plan_data
     assert plan_data["shopping_cost_summary"]["by_duration"]["weekly"]["trip_total_rd"] > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 8 — cierre de fase
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# T7 dejó como mandato: "barrido de TODOS los callers de las funciones derivadas
+# de SLOT_INAPPROPRIATE_FOODS antes de cerrar la fase" (progress.md, Task 4 fix
+# round 1) — el fix round 1 y 2 de T4 encontraron caller tras caller no-gateado
+# reviewer-por-reviewer (routers/plans.py, dos veces). Esta sección hace el
+# barrido de una vez: TODO caller de producción de las 6 funciones derivadas
+# (slot_violations_for_meal_name / slot_ingredient_violations /
+# slot_rules_for_country / _detect_slot_appropriateness /
+# slot_coherence_backstop_for_meal / build_meal_timing_rules), clasificado como
+# país-consciente (wired) o exento-documentado (marker `# [P1-COUNTRY-SYSTEM-F1
+# EXENTO: <razón>]` a pocas líneas), con el conteo anclado por función — un
+# NUEVO caller futuro sin ninguna de las dos etiquetas tira este test a rojo.
+# Tabla resultante (mismos números): backend/docs/country_system_f1.md.
+
+# ── Guard blanket: country_for_form_data es el ÚNICO lector de form_data['country'] ──
+# Extiende el guard de F0 (test_p1_country_system_f0.py::
+# test_el_dato_viaja_pero_el_motor_no_lo_lee_todavia, scope=solo
+# graph_orchestrator.py) a los 5 módulos restantes que F1 tocó. constants.py
+# queda FUERA del barrido a propósito: ahí vive el cuerpo de
+# country_for_form_data, la ÚNICA lectura legítima de la key.
+
+_COUNTRY_BLANKET_FILES = (
+    "graph_orchestrator.py", "cron_tasks.py", "shopping_calculator.py",
+    "nutrition_calculator.py", "agent.py", "tools.py",
+)
+_FORM_DATA_COUNTRY_RE = re.compile(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]")
+
+
+def test_country_for_form_data_es_el_unico_lector_en_los_6_modulos():
+    """Con o sin el knob, NINGÚN símbolo de estos 6 archivos debe leer
+    form_data['country']/form_data.get('country') directamente — la ÚNICA puerta
+    es constants.country_for_form_data. Comentarios stripeados ANTES de
+    matchear (mismo patrón que el guard F0). Mutación: reintroducir
+    `form_data.get('country')` crudo en cualquiera de los 6 ⇒ RED (verificado a
+    mano contra graph_orchestrator.py durante el desarrollo de este test)."""
+    offenders = {}
+    for fname in _COUNTRY_BLANKET_FILES:
+        src = (_BACKEND / fname).read_text(encoding="utf-8")
+        sin_comentarios = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+        hits = _FORM_DATA_COUNTRY_RE.findall(sin_comentarios)
+        if hits:
+            offenders[fname] = len(hits)
+    assert not offenders, (
+        f"Lector(es) suelto(s) de form_data['country'] fuera de "
+        f"country_for_form_data: {offenders} — todo consumo debe pasar por "
+        f"constants.country_for_form_data."
+    )
+
+
+# ── El barrido de callers de las 6 funciones derivadas de SLOT_INAPPROPRIATE_FOODS ──
+
+_SCS_EXENTO_RE = re.compile(r"P1-COUNTRY-SYSTEM-F1 EXENTO:")
+_SCS_WINDOW = 8  # líneas de margen del scanner; el AUTOR escribe el marker a ~5
+
+
+def _scs_mask_comments_preserve_lines(raw: str) -> str:
+    """Enmascara CONTENIDO de comentarios y strings (COMMENT/STRING/FSTRING_*) con el
+    tokenizer real de Python — inmune a strings multi-línea (docstrings) que un scanner
+    char-a-char por línea pierde de vista entre líneas. Bug real encontrado durante el
+    desarrollo de este test: una MENCIÓN en PROSA de una docstring (p.ej.
+    "resuelve `slot_rules_for_country(country)`", texto legítimo escrito por T4) se
+    contaba como una LLAMADA real con un masker ingenuo que resetea su estado 'dentro de
+    string' en cada salto de línea — 3 falsos positivos reproducidos y cerrados con este
+    tokenizer-based rewrite. Preserva saltos de línea exactos (line numbers intactos,
+    necesario para el check de ventana ±N líneas del marker EXENTO). Fallback: si el
+    archivo no tokeniza, retorna `raw` sin tocar (peor caso: un false-positive, nunca un
+    crash del scanner — verificado 0/86 archivos de backend/ fallan a tokenizar)."""
+    import tokenize
+    import io as _io
+    lines = raw.splitlines(keepends=True)
+    try:
+        tokens = list(tokenize.generate_tokens(_io.StringIO(raw).readline))
+    except Exception:
+        return raw
+    for tok in tokens:
+        tname = tokenize.tok_name.get(tok.type, "")
+        if tname != "COMMENT" and tname != "STRING" and "FSTRING" not in tname:
+            continue
+        (sr, sc), (er, ec) = tok.start, tok.end
+        if sr == er:
+            line = lines[sr - 1]
+            lines[sr - 1] = line[:sc] + (" " * (ec - sc)) + line[ec:]
+            continue
+        first = lines[sr - 1]
+        has_nl = first.endswith("\n")
+        body_len = len(first) - (1 if has_nl else 0)
+        lines[sr - 1] = first[:sc] + (" " * (body_len - sc)) + ("\n" if has_nl else "")
+        for mid in range(sr, er - 1):
+            line = lines[mid]
+            nl = "\n" if line.endswith("\n") else ""
+            lines[mid] = (" " * (len(line) - len(nl))) + nl
+        last = lines[er - 1]
+        lines[er - 1] = (" " * ec) + last[ec:]
+    return "".join(lines)
+
+
+def _scs_file_can_call(masked_src: str, fn_name: str) -> bool:
+    """True si `fn_name` está definido en este archivo O importado — single-line O
+    multi-línea parenthesized (`from constants import (\\n    ...\\n)`). Bug real
+    encontrado: graph_orchestrator.py importa slot_violations_for_meal_name /
+    build_meal_timing_rules en un bloque de 14 líneas; un check per-line los pierde,
+    produciendo un falso NEGATIVO (peor que un falso positivo: 2 call sites reales
+    quedaban invisibles al barrido)."""
+    if re.search(r"^\s*(?:async\s+)?def\s+" + re.escape(fn_name) + r"\s*\(", masked_src, re.MULTILINE):
+        return True
+    for m in re.finditer(r"\bimport\s", masked_src):
+        start = m.end()
+        if masked_src[start:start + 200].lstrip().startswith("("):
+            paren_start = masked_src.index("(", start)
+            depth, j = 0, paren_start
+            while j < len(masked_src):
+                if masked_src[j] == "(":
+                    depth += 1
+                elif masked_src[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            span = masked_src[start:j + 1]
+        else:
+            line_end = masked_src.find("\n", start)
+            span = masked_src[start: line_end if line_end != -1 else len(masked_src)]
+        if re.search(r"\b" + re.escape(fn_name) + r"\b", span):
+            return True
+    return False
+
+
+def _scs_split_top_level_args(inner: str) -> list:
+    """Divide el contenido ENTRE los parens externos de una llamada en argumentos
+    top-level, respetando anidamiento (),[],{}. El contenido de strings ya llegó
+    enmascarado (espacios) desde `_scs_mask_comments_preserve_lines`, así que no hace
+    falta lógica propia de escape/quote — solo depth-tracking de los 3 pares de
+    delimitadores."""
+    inner = inner.strip()
+    if not inner:
+        return []
+    args, buf, depth = [], [], 0
+    for c in inner:
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        if c == "," and depth == 0:
+            args.append("".join(buf))
+            buf = []
+            continue
+        buf.append(c)
+    args.append("".join(buf))
+    return [a.strip() for a in args if a.strip()]
+
+
+_scs_masked_cache: dict = {}
+
+
+def _scs_masked_files():
+    """[(path, masked_src), ...] — UNA sola tokenización+máscara por archivo, cacheada a
+    nivel de módulo (compartida entre las 6 funciones auditadas de este archivo de
+    test). Sin la cache, cada función re-tokeniza los ~86 archivos de backend/
+    (incluido graph_orchestrator.py, ~50k líneas) desde cero — medido: 30s el barrido
+    completo sin cache vs 6s con ella + el pre-filtro de abajo."""
+    if not _scs_masked_cache:
+        needles = tuple(_SCS_SPECS.keys())
+        for path in _css_iter_backend_py_files():
+            raw = path.read_text(encoding="utf-8")
+            # Pre-filtro barato: si NINGÚN nombre de las 6 funciones aparece ni como
+            # substring crudo, tokenizar es trabajo desperdiciado (medido: 79/86
+            # archivos de backend/ no mencionan ninguna de las 6).
+            if not any(n in raw for n in needles):
+                continue
+            _scs_masked_cache[path] = _scs_mask_comments_preserve_lines(raw)
+    return _scs_masked_cache.items()
+
+
+def _scs_find_calls(fn_name: str):
+    """[(relpath, lineno, callee_alias, args_list), ...] — TODO call site de
+    producción de `fn_name` (directo + vía alias de import), backend/ excluyendo
+    tests/scripts/venvs/etc (mismo set que T7, _CSS_EXCLUDED_TOP_DIRS)."""
+    calls = []
+    alias_re = re.compile(r"\b" + re.escape(fn_name) + r"\s+as\s+(\w+)")
+    for path, masked in _scs_masked_files():
+        names = set(alias_re.findall(masked))
+        if _scs_file_can_call(masked, fn_name):
+            names.add(fn_name)
+        for name in names:
+            call_re = re.compile(r"\b" + re.escape(name) + r"\s*\(")
+            for m in call_re.finditer(masked):
+                line_start = masked.rfind("\n", 0, m.start()) + 1
+                prefix = masked[line_start:m.start()].strip()
+                if prefix.endswith("def"):
+                    continue
+                i = m.end() - 1
+                depth, j = 0, i
+                while j < len(masked):
+                    if masked[j] == "(":
+                        depth += 1
+                    elif masked[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                inner = masked[i + 1:j]
+                lineno = masked[:m.start()].count("\n") + 1
+                calls.append((
+                    str(path.relative_to(_BACKEND)).replace("\\", "/"), lineno, name,
+                    _scs_split_top_level_args(inner),
+                ))
+    return calls
+
+
+# Config por función: `min_wired` = nº de args top-level que implica país-consciencia
+# (el arg extra más allá de la firma country-blind mínima); `kw` = prefijo keyword
+# alternativo (positional O keyword, cualquiera cuenta); `structural` = True cuando
+# la función NO tiene NINGÚN parámetro de país en su firma (slot_ingredient_violations)
+# — todo call site de una función `structural` exige el marker EXENTO sin excepción,
+# porque no hay argumento posible que lo vuelva "wired".
+_SCS_SPECS = {
+    "slot_rules_for_country": dict(min_wired=1, kw=None, structural=False),
+    "_detect_slot_appropriateness": dict(min_wired=2, kw="form_data=", structural=False),
+    "slot_coherence_backstop_for_meal": dict(min_wired=3, kw="country=", structural=False),
+    "build_meal_timing_rules": dict(min_wired=2, kw="country=", structural=False),
+    "slot_violations_for_meal_name": dict(min_wired=3, kw="rules_table=", structural=False),
+    "slot_ingredient_violations": dict(min_wired=None, kw=None, structural=True),
+}
+
+_scs_raw_lines_cache: dict = {}
+
+
+def _scs_raw_lines(relpath: str) -> list:
+    if relpath not in _scs_raw_lines_cache:
+        _scs_raw_lines_cache[relpath] = (_BACKEND / relpath).read_text(encoding="utf-8").splitlines()
+    return _scs_raw_lines_cache[relpath]
+
+
+def _scs_has_exento_nearby(relpath: str, lineno: int, window: int = _SCS_WINDOW) -> bool:
+    lines = _scs_raw_lines(relpath)
+    lo = max(0, lineno - 1 - window)
+    hi = min(len(lines), lineno - 1 + window + 1)
+    return any(_SCS_EXENTO_RE.search(l) for l in lines[lo:hi])
+
+
+def _scs_classify(fn_name: str):
+    """[(relpath, lineno, alias, status), ...] — status ∈ {'wired', 'exento', 'DESNUDO'}."""
+    spec = _SCS_SPECS[fn_name]
+    out = []
+    for relpath, lineno, alias, args in _scs_find_calls(fn_name):
+        if spec["structural"]:
+            status = "exento" if _scs_has_exento_nearby(relpath, lineno) else "DESNUDO"
+        else:
+            wired = len(args) >= spec["min_wired"]
+            if not wired and spec["kw"]:
+                wired = any(a.startswith(spec["kw"]) for a in args)
+            if wired:
+                status = "wired"
+            elif _scs_has_exento_nearby(relpath, lineno):
+                status = "exento"
+            else:
+                status = "DESNUDO"
+        out.append((relpath, lineno, alias, status))
+    return out
+
+
+def _scs_assert_no_desnudos(fn_name: str):
+    results = _scs_classify(fn_name)
+    assert results, f"{fn_name}: el escaneo no encontró NINGÚN call site — probablemente está roto."
+    desnudos = [(r, l, a) for r, l, a, s in results if s == "DESNUDO"]
+    assert not desnudos, (
+        f"{fn_name}: call site(s) SIN wiring de país NI marker EXENTO (añade "
+        f"`country=`/`rules_table=`/`form_data=` o `# [P1-COUNTRY-SYSTEM-F1 EXENTO: "
+        f"<razón>]` a ≤{_SCS_WINDOW} líneas):\n  - "
+        + "\n  - ".join(f"{r}:{l} (alias {a})" for r, l, a in desnudos)
+    )
+
+
+def test_scs_slot_rules_for_country_sin_desnudos():
+    _scs_assert_no_desnudos("slot_rules_for_country")
+
+
+def test_scs_detect_slot_appropriateness_sin_desnudos():
+    _scs_assert_no_desnudos("_detect_slot_appropriateness")
+
+
+def test_scs_slot_coherence_backstop_for_meal_sin_desnudos():
+    _scs_assert_no_desnudos("slot_coherence_backstop_for_meal")
+
+
+def test_scs_build_meal_timing_rules_sin_desnudos():
+    _scs_assert_no_desnudos("build_meal_timing_rules")
+
+
+def test_scs_slot_violations_for_meal_name_sin_desnudos():
+    _scs_assert_no_desnudos("slot_violations_for_meal_name")
+
+
+def test_scs_slot_ingredient_violations_sin_desnudos():
+    _scs_assert_no_desnudos("slot_ingredient_violations")
+
+
+def test_scs_conteo_exacto_por_funcion():
+    """Ancla el conteo de call sites de producción por función — mismos números que la
+    tabla de backend/docs/country_system_f1.md. Si sube, un call site NUEVO apareció (el
+    test `..._sin_desnudos` de esa función ya exige que esté wired/exento, pero éste
+    hace el crecimiento VISIBLE en vez de silencioso, mismo patrón que T7
+    `test_compute_shopping_cost_summary_ocho_call_sites_exactos`). Si baja, alguien
+    consolidó/eliminó un call site — probablemente bien, pero merece bajar a propósito."""
+    expected = {
+        "slot_rules_for_country": 3,
+        "_detect_slot_appropriateness": 5,
+        "slot_coherence_backstop_for_meal": 2,
+        "build_meal_timing_rules": 5,
+        "slot_violations_for_meal_name": 8,
+        "slot_ingredient_violations": 2,
+    }
+    actual = {fn: len(_scs_classify(fn)) for fn in _SCS_SPECS}
+    assert actual == expected, f"conteo de call sites cambió: esperado {expected}, real {actual}"

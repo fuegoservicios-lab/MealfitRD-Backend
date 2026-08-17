@@ -2051,10 +2051,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # [P1-CHAT-SLOT-BACKSTOP · 2026-06-29] Si tras los retries el plato AÚN queda fuera de horario
         # (deseo explícito del usuario o degradación en el intento final), marcamos advisory para
         # telemetría/frontend — espejo de `_slot_appropriateness_advisory_final` de S1. No bloquea.
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T8 slot-callers sweep)] `_modify_rules_table` (ya
+        # derivado al inicio de execute_modify_single_meal) reusado — mismo caller que el backstop
+        # de arriba (:1670). Es un chequeo booleano (¿hay violación?), y `slot_rules_for_country`
+        # hoy solo ablanda `hardness` sin tocar tokens/labels, así que el resultado no cambiaba —
+        # wireado igual para no dejar un 2º sitio leyendo SLOT_INAPPROPRIATE_FOODS por fuera del
+        # helper si Fase 2 diverge tokens por país.
         if SLOT_APPROPRIATENESS_GATE_ENABLED:
             try:
                 _slot_key_final = canonical_slot_key(meal_type)
-                if _slot_key_final and slot_violations_for_meal_name(new_meal_data.get("name", ""), _slot_key_final):
+                if _slot_key_final and slot_violations_for_meal_name(new_meal_data.get("name", ""), _slot_key_final, _modify_rules_table):
                     new_meal_data["_slot_advisory"] = True
                     logger.info(f"🕒 [P1-CHAT-SLOT-BACKSTOP] plato de modify entregado fuera de horario (advisory) | day={day_number} meal={meal_type}")
             except Exception as _slf_e:
@@ -2087,11 +2093,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # [P2-CHAT-EXPLICIT-SLOT-WISH · 2026-07-01] si el usuario PIDIÓ la violación de horario en su
             # texto ("ponme arroz en la cena"), el finalizer NO pisa su deseo con el night-rice autofix
             # (mismo SSOT name-based del backstop P1-CHAT-SLOT-BACKSTOP aplicado al pedido).
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T8 slot-callers sweep)] `_modify_rules_table`
+            # reusado (mismo razonamiento que la advisory de arriba): chequeo booleano, resultado
+            # hoy idéntico DO/beta, wireado por consistencia futura.
             _wish_slot = False
             try:
                 _sk_fin = canonical_slot_key(meal_type)
                 if _sk_fin:
-                    _wish_slot = bool(slot_violations_for_meal_name(changes or "", _sk_fin))
+                    _wish_slot = bool(slot_violations_for_meal_name(changes or "", _sk_fin, _modify_rules_table))
             except Exception:
                 _wish_slot = False
             # [P1-UPDATE-PROTAGONIST-FLOOR · 2026-07-29] day-target 4-4-9 del plan. NOTA: este

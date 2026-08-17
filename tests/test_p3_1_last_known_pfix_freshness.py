@@ -41,7 +41,14 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 7)  # [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] la Nevera
+_PFIX_DATE_FLOOR = date(2026, 8, 16)  # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Fase 1 del sistema
+# de países: con el knob encendido, un usuario de país beta deja de recibir imposición criolla
+# (prompts por variante, gates culturales suaves, fecha local, presupuesto en su moneda, lista
+# de compras sin precios con aviso honesto). 8 tasks SDD; con el knob apagado (default) el motor
+# es byte-idéntico a antes de la fase. Doc canónica (spine, surfaces wired, barrido de callers
+# de las 6 funciones derivadas de SLOT_INAPPROPRIATE_FOODS, parqueado Fase 2, runbook del flip):
+# backend/docs/country_system_f1.md. Test ancla: test_p1_country_system_f1.py.
+# Histórico — floor previo [P1-PANTRY-NAME-RESOLUTION · 2026-08-07] la Nevera
 # descontaba fantasmas: los 4 sitios que resolvían fila de `user_inventory` usaban igualdad
 # EXACTA de string, así que "2 huevos" contra la fila "Huevo" devolvía éxito sin descontar,
 # sin fila en `failed_inventory_deductions` y sin alerta. Escalera SSOT

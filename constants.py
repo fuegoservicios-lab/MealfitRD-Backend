@@ -2162,9 +2162,12 @@ def slot_violations_for_meal_name(name: str, slot_key: str, rules_table: dict = 
     como 'harina de arroz'). Pura → unit-testable.
     [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] `rules_table` opcional (default None ⇒
     SLOT_INAPPROPRIATE_FOODS, byte-idéntico a pre-T4) permite a un caller país-aware inyectar
-    `slot_rules_for_country(country)` sin tocar la firma de los demás callers (tools.py chat-
-    backstop, plan_gym.py scoring, agent.py backstop) — ninguno de ellos pasa este argumento.
-    tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    `slot_rules_for_country(country)` sin tocar la firma de los demás callers.
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T8 slot-callers sweep)] estado real tras T4 fix-round 1 +
+    T8: TODOS los callers de producción en graph_orchestrator.py/tools.py pasan `rules_table` hoy
+    (tabla canónica completa: backend/docs/country_system_f1.md). La única excepción viva es
+    `plan_gym.py` (gym de scoring OFFLINE, marcado EXENTO ahí — nunca corre en el request path de
+    un usuario). tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
     table = rules_table if rules_table is not None else SLOT_INAPPROPRIATE_FOODS
     rules = table.get(slot_key)
     if not rules:
