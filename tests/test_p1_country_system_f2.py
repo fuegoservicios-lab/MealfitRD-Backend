@@ -945,6 +945,93 @@ def test_tostada_sobre_detecta_almendras_tostadas_aceptado(go):
     )
 
 
+# ── G1-bis. fix-round 2: el leak del relleno libre `{0,2}` en `_GLUTEN_FORWARD_EXCUSE_RX` ──────
+#
+# [fix-round 2 · 2026-08-17 · re-review] El `{0,2}` de relleno de fix-round 1 aceptaba CUALQUIER
+# token (`\S+`) antes de la negación — no solo adjetivos de claim GF. Consecuencia: en un
+# ingrediente con DOS términos de gluten separados por una conjunción, la excusa se filtraba
+# HACIA ATRÁS sobre el término SIN claim propio. Medido por ejecución directa (reproducido tal
+# cual antes de tocar código, harness del re-review):
+#
+#     'Trigo y avena sin gluten' + [gluten] -> []   ← trigo (glutinoso incondicional) excusado mal
+#     'Avena y pan sin gluten'   + [gluten] -> []
+#     'Avena y agua sin gluten'  + [gluten] -> []   ← CUALQUIER 2 tokens de relleno se tragan
+#
+# Dirección peligrosa (fail-open) — exactamente lo que el sesgo de sobre-detección de este
+# vocabulario prohíbe. Ruling del controller: WHITELIST de tokens-adjetivo evidenciados, NO
+# blacklist de conjunciones/términos (una blacklist deja unknown-unknowns sin cubrir — el mismo
+# error de diseño en dirección opuesta).
+
+@pytest.mark.parametrize("ingrediente", [
+    "Trigo y avena sin gluten",
+    "Avena y pan sin gluten",
+    "Avena y agua sin gluten",
+])
+def test_relleno_libre_no_excusa_termino_vecino_sin_claim_propio(go, ingrediente):
+    """[fix-round 2 · el RED de este re-review] Los 3 casos exactos del leak reportado. Cada uno
+    DEBE violar gluten — el relleno de la excusa forward ya NO acepta tokens arbitrarios
+    (conjunción 'y' + un término/palabra cualquiera), solo la whitelist evidenciada de adjetivos
+    de claim GF ('certificada'). Ninguno de los 3 tiene 'certificada' cerca, así que ninguno debe
+    excusarse — el claim 'sin gluten' pertenece SOLO al término que lo tiene inmediatamente
+    adyacente (avena/pan en los casos 2-3; en el caso 1 NINGÚN término tiene claim propio: 'trigo'
+    no, porque lo que lo sigue es 'y avena', y aunque 'avena' sí se excusa a sí misma, eso no
+    excusa a 'trigo')."""
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": [ingrediente]}]}]}
+    v = go._scan_allergen_violations(plan, ["gluten"])
+    assert v, (
+        f"'{ingrediente}' debe violar gluten — el relleno libre NO debe excusar un término sin "
+        f"claim GF propio adyacente (leak de fix-round 1, cerrado en fix-round 2)"
+    )
+
+
+def test_trigo_con_avena_certificada_sin_gluten_excusa_solo_avena(go):
+    """[fix-round 2 · control de precisión] Cuando SÍ hay un claim legítimo adyacente a UN
+    término pero no al otro, cada término se evalúa por SU PROPIO contexto inmediato — no por
+    'algún claim en algún lugar de la frase'. 'trigo' sigue sin backstop GF real (no existe tal
+    cosa como trigo sin gluten) y debe violar; el hecho de que 'avena certificada sin gluten' sea
+    legítima justo después no lo excusa retroactivamente."""
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["Trigo y avena certificada sin gluten"]}]}]}
+    v = go._scan_allergen_violations(plan, ["gluten"])
+    assert v and v[0][2] == "trigo", (
+        "'trigo' debe seguir violando aunque 'avena certificada sin gluten' (legítimo) esté al lado"
+    )
+
+
+@pytest.mark.parametrize("ingrediente", [
+    "Avena con un poco sin gluten",       # 3+ fillers — ya fallaba estructuralmente, debe seguir
+    "Trigo, avena sin gluten",             # la coma rompe la excusa (sin espacio inicial válido)
+])
+def test_controles_del_leak_siguen_correctos_tras_whitelist(go, ingrediente):
+    """[fix-round 2 · controles nombrados por el re-review, deben seguir en verde] Ninguno de
+    estos dependía del relleno libre para funcionar correctamente — confirmán que la whitelist no
+    los rompió."""
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": [ingrediente]}]}]}
+    v = go._scan_allergen_violations(plan, ["gluten"])
+    assert v, f"'{ingrediente}' debe seguir violando (control pre-existente, no debe romperse)"
+
+
+def test_cereal_con_trigo_sigue_flageado(go):
+    """[fix-round 2 · control nombrado por el re-review] Sin ninguna negación cerca, 'trigo' debe
+    seguir flagged — no hay excusa que pudiera aplicar en ninguna versión del regex."""
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["Cereal con trigo"]}]}]}
+    v = go._scan_allergen_violations(plan, ["gluten"])
+    assert v and v[0][2] == "trigo"
+
+
+def test_camarones_sin_gluten_sigue_violando_mariscos(go):
+    """[fix-round 2 · ancla de paridad #3] 'camarones sin gluten' es una categoría DISTINTA
+    (mariscos) — la excusa forward está scoped a gluten únicamente, así que esta alergia ni
+    siquiera pasa por `_ALLERGEN_GLUTEN_TERM_SET`. Control de que la whitelist nueva no tiene
+    ningún efecto fuera de su categoría."""
+    plan = {"days": [{"meals": [{"name": "Cena", "ingredients": ["Camarones sin gluten"]}]}]}
+    v = go._scan_allergen_violations(plan, ["mariscos"])
+    # `forbidden` es un SET y 'camaron' Y 'camarones' son DOS entradas literales separadas del
+    # vocabulario — cuál se reporta depende del orden de iteración (hash aleatorio por proceso,
+    # mismo caso que `test_gluten_real_sigue_violando` ya documenta para 'trigo'/'harina de
+    # trigo'). Ambas contienen 'camaron' como substring — ese es el criterio estable.
+    assert v and "camaron" in v[0][2]
+
+
 # ── G2. EL GUARD DE PARIDAD — dieta ↔ alérgeno bidireccional (el producto real de este task) ──
 #
 # Clases con contraparte en AMBOS vocabularios (nombran alimentos de origen animal Y son alergia

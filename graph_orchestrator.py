@@ -14328,8 +14328,35 @@ _ALLERGEN_NEGATION_PREFIX_RX = _re_mod.compile(
 # fix-round: 'pan sin gluten' (pan real GF) pasa de violar a excusado — mejora de precisión
 # consciente, misma confianza en el claim "sin gluten" que 'avena'/'quinoa' certificadas ya
 # tenían (ver test_p1_allergen_negation_excuse.py y reporte T4 §Fix round 1).
+#
+# [fix-round 2 · re-review · 2026-08-17] El relleno `{0,2}` de fix-round 1 usaba `\S+` — CUALQUIER
+# token, no solo adjetivos de claim GF. Leak medido: en un ingrediente con DOS términos de gluten
+# separados por una conjunción («Trigo y avena sin gluten»), "y avena" se tragaba como relleno
+# genérico y la excusa se filtraba HACIA ATRÁS sobre 'trigo' (glutinoso incondicional, SIN claim
+# propio) — fail-open, la dirección que este vocabulario prohíbe. Ruling del controller: WHITELIST
+# de tokens evidenciados, NO blacklist de conjunciones/términos (una blacklist deja
+# unknown-unknowns sin cubrir — mismo error de diseño, signo opuesto). Whitelist derivada de una
+# revisión real (no especulativa) de los 8 tests de negation-excuse + los de este archivo +
+# `master_ingredients`/`supermarket_products` en vivo: el ÚNICO adjetivo que aparece en cualquier
+# claim GF evidenciado es 'certificada' («avena/quinoa certificada sin gluten»).
+# 'certificado'/'certificadas'/'organica'/'organico' NO aparecen en ningún test ni fila de
+# catálogo — omitidos a propósito. Si aparece evidencia real, añadir aquí CON un test que la
+# ancle primero (nunca al revés). Cada token de relleno consumido debe estar EN la whitelist —
+# no basta con que UNO de los 0-2 lo esté, así que "certificada avena" (adjetivo real + término
+# ajeno) tampoco cuela: 'avena' no está en la whitelist, así que el 2º slot falla y el intento se
+# repliega a probar menos relleno, nunca a aceptar el token no-whitelisted.
+#
+# Mismo criterio aplicado al hueco de relleno DESPUÉS de la negación (`(?:\S+\s+)?gluten` en
+# fix-round 1, p.ej. para «sin <algo> gluten»): NINGÚN test ni catálogo evidencia una sola palabra
+# ahí (todos los claims reales son «sin gluten» directo, 0 palabras) y el mismo slot con `\S+`
+# libre habría sido la MISMA clase de fuga en la posición simétrica (p.ej. «Trigo sin avena
+# gluten» tragándose 'avena' como relleno). Eliminado en vez de blanqueado: sin evidencia de
+# ningún uso real, no hay nada que whitelist-ear — 'gluten' debe seguir a la negación directamente
+# (solo espacio en medio).
+_GLUTEN_FORWARD_FILLER_WHITELIST = ("certificada",)
 _GLUTEN_FORWARD_EXCUSE_RX = _re_mod.compile(
-    r"^(?:\s+\S+){0,2}\s+(?:sin|libres?\s+de|cero|no\s+contienen?)\s+(?:\S+\s+)?gluten\b"
+    r"^(?:\s+(?:" + "|".join(_re_mod.escape(_w) for _w in _GLUTEN_FORWARD_FILLER_WHITELIST) + r")){0,2}"
+    r"\s+(?:sin|libres?\s+de|cero|no\s+contienen?)\s+gluten\b"
 )
 _ALLERGEN_GLUTEN_TERM_SET = frozenset(
     strip_accents(_s).lower() for _s in _ALLERGEN_SYNONYMS["gluten"]
