@@ -3226,6 +3226,40 @@ def country_for_form_data(form_data) -> str:
     return canonicalize_country(form_data.get("country"))
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Literal SSOT del flag "modo beta sin precios
+# nativos". `'beta_no_prices'` vive ÚNICAMENTE aquí — el aggregator, el resumen de costo, la
+# reconciliación de presupuesto, las sugerencias de ahorro, el mensaje de consentimiento del
+# chat y las 2 inyecciones de precios al LLM (prompt de generación + chat-modify) leen esta
+# MISMA función para decidir si suprimen montos en RD$. Un 2º chequeo `has_native_prices` a
+# mano en cualquiera de esos sitios sería la 2ª tabla que P1-DIET-CANON-SSOT ya pagó una vez
+# (3 tablas de dieta a mano, driftaron, una sirvió Pollo a vegetarianas).
+def pricing_mode_for_country(country: str) -> "str | None":
+    """`'beta_no_prices'` si `country` (ya canónico) NO tiene precios nativos
+    (`COUNTRY_PROFILES[country]['has_native_prices'] is False`); `None` si los tiene (DO) o si
+    el país no está registrado en `COUNTRY_PROFILES` (fail-safe: nunca inventa un modo para un
+    código desconocido). `None` es el valor que le dice al caller "no escribas la clave
+    `_pricing_mode`" — nunca se persiste `None` explícito en `plan_data`.
+
+    tooltip-anchor: pricing_mode_for_country (test_p1_country_system_f1.py)
+    """
+    profile = COUNTRY_PROFILES.get(country)
+    if profile is None:
+        return None
+    return None if profile.get("has_native_prices", True) else "beta_no_prices"
+
+
+def pricing_mode_for_form_data(form_data) -> "str | None":
+    """Composición de `country_for_form_data` (T1, la ÚNICA puerta de lectura de país de
+    `form_data`) + `pricing_mode_for_country` — el helper que TODO call site de generación o
+    mutación de plan debe usar para decidir si un plan nace/sigue en modo beta sin precios.
+    Knob apagado (default) o `form_data` no-dict ⇒ `country_for_form_data` ya cae a 'DO' ⇒
+    este helper devuelve `None` siempre — byte-identidad garantizada aguas abajo.
+
+    tooltip-anchor: pricing_mode_for_form_data (test_p1_country_system_f1.py)
+    """
+    return pricing_mode_for_country(country_for_form_data(form_data))
+
+
 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] SSOT de las FUENTES DE PROTEÍNA sugeribles por dieta.
 # Razón (benchmark issue #9, journal 2026-08-08 01:53-02:00 UTC): el stack de prompts ordenaba
 # "fuente animal de alta densidad (pollo, pescado, cerdo, res...)" sin mirar la dieta — el retry

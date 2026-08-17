@@ -11876,7 +11876,11 @@ def _compute_cost_summary_jsonb_extras(plan_data, aggr_7, aggr_15, aggr_30, groc
     try:
         from shopping_calculator import compute_shopping_cost_summary as _ccs_extras
         from nutrition_calculator import refresh_budget_reconciliation as _rbr_extras
-        _sum = _ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration)
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data ya trae la clave desde el
+        # INSERT del chunk 1 (jsonb_set quirúrgico nunca la toca) — beta ⇒ summary=None ⇒
+        # keys/params quedan vacíos, ninguna de las 2 keys se re-escribe (ver docstring).
+        _sum = _ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration,
+                            pricing_mode=plan_data.get("_pricing_mode"))
         if _sum:
             plan_data["shopping_cost_summary"] = _sum
             keys.append("shopping_cost_summary")
@@ -32452,7 +32456,12 @@ __PLAN_MODE_GATE__
                     try:
                         from shopping_calculator import compute_shopping_cost_summary as _ccs_t2
                         from nutrition_calculator import refresh_budget_reconciliation as _rbr_t2
-                        _sum_t2 = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration)
+                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] full_plan_data ya trae la clave
+                        # desde el INSERT del chunk 1 — beta ⇒ None, el "excedido" de abajo queda
+                        # inalcanzable (budget_reconciliation nunca se setea) y la 2ª pasada
+                        # (_sum_t2b, más abajo) no corre.
+                        _sum_t2 = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,
+                                           pricing_mode=full_plan_data.get("_pricing_mode"))
                         if _sum_t2:
                             full_plan_data["shopping_cost_summary"] = _sum_t2
                             _rbr_t2(full_plan_data)

@@ -3955,11 +3955,30 @@ def compute_shopping_cost_summary(
     biweekly_hybrid_list,
     monthly_hybrid_list,
     active_duration: str = "weekly",
+    *,
+    pricing_mode: "str | None" = None,
 ) -> dict | None:
     """SSOT del costo de la lista para las 3 duraciones. `cycle_total_rd` =
     estables 1× + perecederos × semanas del ciclo (las listas 15/30 ya son
     híbridas: estables al periodo, perecederos semanales). `trip_total_rd` =
-    lo que cuesta ESTA ida al súper (suma cruda de la lista)."""
+    lo que cuesta ESTA ida al súper (suma cruda de la lista).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `pricing_mode='beta_no_prices'` ⇒ `None` SIN
+    computar nada — un plan beta no tiene `estimated_cost_rd` en sus ítems (ver
+    `get_shopping_list_delta`/`_strip_prices_for_beta_pricing_mode`), así que sumarlos daría
+    un dict de CEROS técnicamente correcto pero engañoso (parece "sin costo" en vez de "sin
+    dato de costo"). `None`/ausente es el contrato honesto que ya usan el resto de los
+    fail-opens de esta función — `shopping_cost_summary` sale AUSENTE del plan, y todo lo que
+    depende de él (`budget_reconciliation`, `build_budget_suggestions`) queda río abajo
+    inalcanzable (los call sites productivos son todos `if summary: ...`). Keyword-only,
+    default `None` (comportamiento previo byte-idéntico para callers que no lo pasen).
+    Cada call site productivo pasa `pricing_mode=<plan_data>.get('_pricing_mode')` — el MISMO
+    dict del que ya leen `weekly_list`/etc., nunca un 2º chequeo de país.
+
+    tooltip-anchor: compute_shopping_cost_summary pricing_mode (test_p1_country_system_f1.py)
+    """
+    if pricing_mode == "beta_no_prices":
+        return None
     if not _cost_summary_enabled():
         return None
     try:
@@ -12104,6 +12123,53 @@ def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_ne
     return physical_inventory, consumed_ingredients
 
 
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Único punto donde el aggregator deja de emitir
+# montos en RD$ para un plan en modo beta (`plan_data['_pricing_mode'] == 'beta_no_prices'`).
+#
+# `aggregate_and_deduct_shopping_list` (arriba en este archivo) es la función de ~2000
+# líneas que CALCULA `estimated_cost_rd` por ítem — pero solo la invocan `structured=True`
+# los 3 call sites DENTRO de `get_shopping_list_delta` (pase principal, ventana de viaje,
+# canonicalización de urgentes); sus otros 2 call sites (`aggregate_shopping_list`,
+# `get_realtime_pantry`, "nevera virtual" del swap/chat) NUNCA piden `structured=True` — sus
+# ítems son texto plano sin campos de costo. Verificado por grep cross-archivo antes de
+# escribir este comentario: no hay una 4ª vía por la que un dict con `estimated_cost_rd`
+# salga de este módulo sin pasar por aquí.
+#
+# Por eso NO se tocó el agregador de ~2000 líneas (ni sus 15+ call sites indirectos vía
+# `get_shopping_list_delta`, documentados en su propio docstring): TODO caller de este
+# archivo pasa `plan_result` como el `plan_data` PERSISTIDO (o, para la generación inicial,
+# el `result` en construcción de `assemble_plan_node`, que ya lleva el flag estampado ANTES
+# de estas llamadas — ver ese nodo) — nunca un dict ad-hoc sin la clave. Confirmado
+# leyendo los ~15 call sites reales: agent.py (swap/chat), cron_tasks.py (T1/T2/GAP-F),
+# routers/plans.py (/recalculate-shopping-list), tools.py (chat-modify) — todos pasan
+# `plan_data`/`full_plan_data`/`plan_record["plan_data"]`, jamás un dict recortado.
+def _strip_prices_for_beta_pricing_mode(res):
+    """Muta `res` IN-PLACE anulando `estimated_cost_rd`/`estimated_cost` (si están presentes)
+    en cada ítem — `list[dict]` (`structured=True, categorize=False`) o
+    `dict[categoria, list[dict]]` (`structured=True, categorize=True`). Texto plano
+    (`structured=False`) no lleva estos campos → no-op seguro. Retorna `res` para poder
+    encadenarse inline en el `return` del caller.
+
+    tooltip-anchor: _strip_prices_for_beta_pricing_mode (test_p1_country_system_f1.py)
+    """
+    def _strip_item(it):
+        if isinstance(it, dict):
+            if "estimated_cost_rd" in it:
+                it["estimated_cost_rd"] = None
+            if "estimated_cost" in it:
+                it["estimated_cost"] = None
+
+    if isinstance(res, dict):
+        for items in res.values():
+            if isinstance(items, list):
+                for it in items:
+                    _strip_item(it)
+    elif isinstance(res, list):
+        for it in res:
+            _strip_item(it)
+    return res
+
+
 def get_shopping_list_delta(
     user_id: str,
     plan_result: dict,
@@ -12506,6 +12572,12 @@ def get_shopping_list_delta(
         else:
             if isinstance(res, list):
                 res.extend(_urgent_entries)
+
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `plan_result` es el `plan_data` persistido (o
+    # el `result` en construcción de assemble_plan_node, que ya lleva la clave estampada
+    # ANTES de llamar aquí) — ver el comentario de `_strip_prices_for_beta_pricing_mode`.
+    if isinstance(plan_result, dict) and plan_result.get("_pricing_mode") == "beta_no_prices":
+        _strip_prices_for_beta_pricing_mode(res)
 
     return res
 

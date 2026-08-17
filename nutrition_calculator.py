@@ -1891,6 +1891,35 @@ def _budget_cycle_floor_for_currency(days: int, currency: str) -> float:
         f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_{currency}", float(default), lambda v: v >= 0.0)
 
 
+def budget_floor_in_currency(days: int, currency: str, min_budget_dop: float) -> tuple[float, str]:
+    """[P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Convierte un piso ya PERSONALIZADO
+    (`min_budget_dop`, de `min_budget_for_goals` — ya incluye el escalado por calorías×hogar)
+    a la moneda declarada, para el endpoint hint `/api/plans/budget-floor`
+    (`routers/plans.py::api_budget_floor`).
+
+    Mismo gate/mecanismo EXACTO que `validate_budget_sufficient` usa para el 422 (T6): el
+    piso PROPIO de la moneda (`_budget_cycle_floor_for_currency`) escalado por el mismo
+    factor `min_budget_dop / _budget_cycle_floor_dop(days)` que ya absorbió calorías×hogar —
+    comparación DIRECTA en la moneda declarada, JAMÁS una conversión FX. `currency` fuera de
+    {EUR,MXN,COP} o knob `MEALFIT_COUNTRY_SYSTEM` apagado ⇒ cae al camino DOP/USD histórico
+    (`_budget_usd_to_dop`), byte-idéntico al `api_budget_floor` pre-T7.
+
+    Devuelve `(monto, moneda_efectiva)` — `moneda_efectiva` es el código que el caller debe
+    exponer en `currency` (nunca 'DOP' disfrazando un monto EUR, ni al revés): el "outcome
+    que importa" del brief — la respuesta del hint NUNCA mal-etiqueta un monto beta como DOP.
+
+    tooltip-anchor: budget_floor_in_currency (test_p1_country_system_f1.py)"""
+    new_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY and _nc_env_bool_budget(
+        "MEALFIT_COUNTRY_SYSTEM", False)
+    if new_currency:
+        dop_cycle_base = _budget_cycle_floor_dop(days)
+        scale = (min_budget_dop / dop_cycle_base) if dop_cycle_base > 0 else 1.0
+        return _budget_cycle_floor_for_currency(days, currency) * scale, currency
+    if currency == "USD":
+        return min_budget_dop / _budget_usd_to_dop(), "USD"
+    return min_budget_dop, "DOP"
+
+
 def _budget_floor_kcal_ref() -> float:
     return _nc_env_float_budget("MEALFIT_BUDGET_FLOOR_KCAL_REF", 2000.0, lambda v: v >= 800.0)
 
@@ -2153,8 +2182,24 @@ def _budget_tier_band_factor(tier: str) -> float | None:
 
 def build_budget_reference(form_data: dict) -> dict | None:
     """Referencia persistible contra la que se compara el costo real del ciclo.
-    Devuelve None si el formulario no declaró presupuesto (fail-open)."""
+    Devuelve None si el formulario no declaró presupuesto (fail-open).
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] País beta sin precios nativos
+    (`constants.pricing_mode_for_form_data(form_data) == 'beta_no_prices'`) ⇒ `None`
+    incondicional, ANTES de mirar `currency`. Cierra el mismo clamp que T6 dejó en
+    `budgetCurrency not in (DOP, USD) → DOP`: sin este guard, un `reference_rd` calculado
+    en el ESPACIO DOP quedaría etiquetado `currency: 'DOP'` para un plan cuyo usuario declaró
+    EUR/MXN/COP — un monto DOP mal etiquetado es peor que ausente. En la práctica esta
+    función ya es inalcanzable para beta (su único caller, `compute_budget_reconciliation`,
+    solo corre tras un `shopping_cost_summary` no-None — T7 lo apaga primero, ver
+    `compute_shopping_cost_summary`); este guard es defensa-en-profundidad explícita para
+    cualquier caller directo presente o futuro. DO/knob-off ⇒ `pricing_mode_for_form_data`
+    devuelve `None` ⇒ este `if` nunca dispara ⇒ byte-identidad total.
+    tooltip-anchor: build_budget_reference beta (test_p1_country_system_f1.py)"""
     try:
+        from constants import pricing_mode_for_form_data
+        if pricing_mode_for_form_data(form_data) == "beta_no_prices":
+            return None
         tier = str(form_data.get("budget") or "").strip().lower()
         if tier not in _BUDGET_VALID_TIERS:
             return None

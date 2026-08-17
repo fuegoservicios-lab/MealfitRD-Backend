@@ -18,6 +18,7 @@ suelta de form_data.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -2405,3 +2406,567 @@ def test_use_budget_floor_usa_effective_budget_currency():
         r"import\s*\{[^}]*effectiveBudgetCurrency[^}]*\}\s*from\s*['\"]\.\./config/formValidation['\"]",
         src,
     ), "useBudgetFloor.js no importa effectiveBudgetCurrency de config/formValidation."
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ── T7: lista de compras en modo beta honesto (_pricing_mode) ────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Con `COUNTRY_PROFILES[país]['has_native_prices'] is False` (los 5 betas: ES/US/MX/PR/CO),
+# el backend deja de emitir CUALQUIER monto denominado en RD$: el aggregator
+# (`estimated_cost_rd=None` en cada ítem), el resumen de costo (`shopping_cost_summary` ⇒
+# None/ausente), la reconciliación de presupuesto (`budget_reconciliation` ⇒ ausente — cae
+# río abajo de un summary None), las sugerencias de ahorro (`build_budget_suggestions` ⇒ []
+# — se filtran solas cuando ningún ítem tiene precio), el mensaje de consentimiento del chat
+# (`_build_consent_message` omite el "(~RD$...)"), y las 2 inyecciones de precios al LLM
+# (prompt de generación + chat-modify). DO / knob apagado ⇒ la clave `plan_data._pricing_mode`
+# NUNCA se escribe — byte-identidad total (ni siquiera aparece como `None` explícito).
+
+import json as _json
+
+
+def test_case_placeholder_t7_import_ok():
+    """Sanity: los módulos que T7 toca importan sin error (colección lazy de abajo)."""
+    import shopping_calculator as _sc
+    import agent as _agent
+    import tools as _tools
+    assert _sc and _agent and _tools
+
+
+# ── constants.pricing_mode_for_country / pricing_mode_for_form_data (SSOT del literal) ──────
+
+def test_pricing_mode_for_country_do_es_none():
+    assert constants.pricing_mode_for_country("DO") is None
+
+
+def test_pricing_mode_for_country_beta_es_beta_no_prices():
+    for cc in _BETA_CCS:
+        assert constants.pricing_mode_for_country(cc) == "beta_no_prices", cc
+
+
+def test_pricing_mode_for_country_desconocido_es_none():
+    """Fail-safe: un código fuera de COUNTRY_PROFILES nunca inventa un modo."""
+    assert constants.pricing_mode_for_country("ZZ") is None
+    assert constants.pricing_mode_for_country(None) is None
+
+
+def test_pricing_mode_for_form_data_knob_apagado_es_siempre_none(monkeypatch):
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    for fd in ({"country": "ES"}, {"country": "MX"}, {}, None, "no-dict"):
+        assert constants.pricing_mode_for_form_data(fd) is None
+
+
+def test_pricing_mode_for_form_data_knob_encendido_beta(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    assert constants.pricing_mode_for_form_data({"country": "es"}) == "beta_no_prices"
+    assert constants.pricing_mode_for_form_data({"country": "DO"}) is None
+    assert constants.pricing_mode_for_form_data({"country": "basura"}) is None
+    assert constants.pricing_mode_for_form_data({}) is None
+
+
+def test_pricing_mode_es_composicion_pura_de_country_for_form_data(monkeypatch):
+    """No debe reimplementar el gate del knob/canonicalización — solo componer las 2
+    puertas ya existentes (T1 + el mapa has_native_prices)."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    for fd in ({"country": "CO"}, {"country": "pr"}, {"country": "xx"}, {}):
+        expected = constants.pricing_mode_for_country(constants.country_for_form_data(fd))
+        assert constants.pricing_mode_for_form_data(fd) == expected
+
+
+# ── assemble_plan_node: estampado del flag ANTES de la agregación ───────────────────────────
+
+def test_assemble_plan_node_deriva_pricing_mode_via_ssot():
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i = src.index("async def assemble_plan_node")
+    j = src.index("from constants import pricing_mode_for_form_data", i)
+    assert i < j, "assemble_plan_node no deriva el pricing_mode vía el helper SSOT."
+    window = src[j:j + 300]
+    assert "_pricing_mode = pricing_mode_for_form_data(form_data)" in window
+    assert 'result["_pricing_mode"] = _pricing_mode' in window
+    # la clave SOLO se escribe si el helper devolvió algo truthy (DO/knob-off ⇒ None ⇒
+    # nunca se escribe) — nunca un `result["_pricing_mode"] = _pricing_mode` incondicional.
+    assert "if _pricing_mode:" in window
+
+
+def test_assemble_plan_node_estampa_pricing_mode_antes_del_primer_get_shopping_list_delta():
+    """El flag debe existir en `result` ANTES de que `get_shopping_list_delta` lo lea —
+    si no, la 1ª pasada de agregación de un plan nuevo no suprimiría precios."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    i_stamp = src.index('result["_pricing_mode"] = _pricing_mode')
+    i_first_call = src.index("get_shopping_list_delta,", i_stamp)  # el import, primera línea que la nombra
+    assert i_stamp < i_first_call
+
+
+# ── aggregator: get_shopping_list_delta suprime estimated_cost_rd/estimated_cost ────────────
+
+def _priced_plan_fixture(pricing_mode=None):
+    plan = {
+        "days": [{"day": 1, "meals": [{
+            "meal": "Almuerzo",
+            "ingredients": ["200 g de pollo", "1 taza de arroz"],
+            "ingredients_raw": ["200 g de pollo", "1 taza de arroz"],
+        }]}],
+    }
+    if pricing_mode:
+        plan["_pricing_mode"] = pricing_mode
+    return plan
+
+
+def test_get_shopping_list_delta_beta_anula_estimated_cost_rd(monkeypatch):
+    """Fuerza un precio no-cero vía `_cost_from_market` (el catálogo real está vacío en
+    este entorno de test sin .env — sin forzarlo, la ausencia de RD$ sería un falso verde
+    por falta de datos, no por el gate). Con `_pricing_mode='beta_no_prices'`, TODO ítem
+    estructurado debe salir con `estimated_cost_rd=None`."""
+    import shopping_calculator as sc
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 100.0)
+    sc.reset_caps_applied_last_run()
+    plan = _priced_plan_fixture(pricing_mode="beta_no_prices")
+    items = sc.get_shopping_list_delta(None, plan, True, False, True, 1.0)
+    assert items, "el fixture debe producir al menos un ítem agregado"
+    for it in items:
+        assert it.get("estimated_cost_rd") is None, it
+
+
+def test_get_shopping_list_delta_do_control_conserva_estimated_cost_rd(monkeypatch):
+    """Control NEGATIVO del test anterior: el MISMO fixture, MISMO monkeypatch, SIN la
+    clave `_pricing_mode` — debe conservar el precio forzado. Prueba que el monkeypatch
+    realmente inyecta un precio (si esto fallara, el test beta de arriba sería un falso
+    verde por catálogo vacío, no por el gate funcionando)."""
+    import shopping_calculator as sc
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 100.0)
+    sc.reset_caps_applied_last_run()
+    plan = _priced_plan_fixture(pricing_mode=None)
+    items = sc.get_shopping_list_delta(None, plan, True, False, True, 1.0)
+    assert items
+    assert any(it.get("estimated_cost_rd") == 100.0 for it in items), items
+
+
+def test_get_shopping_list_delta_pricing_mode_no_beta_no_es_no_op(monkeypatch):
+    """Cualquier valor de `_pricing_mode` que NO sea exactamente 'beta_no_prices' (typo,
+    valor legacy, etc.) NO debe suprimir precios — el chequeo es igualdad estricta,
+    nunca truthy genérico."""
+    import shopping_calculator as sc
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 100.0)
+    sc.reset_caps_applied_last_run()
+    plan = _priced_plan_fixture(pricing_mode="algo_que_no_es_el_literal")
+    items = sc.get_shopping_list_delta(None, plan, True, False, True, 1.0)
+    assert any(it.get("estimated_cost_rd") == 100.0 for it in items), items
+
+
+def test_strip_prices_for_beta_pricing_mode_structured_list():
+    import shopping_calculator as sc
+    items = [{"name": "Pollo", "estimated_cost_rd": 250.5, "estimated_cost": 250.5}]
+    out = sc._strip_prices_for_beta_pricing_mode(items)
+    assert out is items, "debe mutar in-place y retornar el mismo objeto"
+    assert items[0]["estimated_cost_rd"] is None
+    assert items[0]["estimated_cost"] is None
+
+
+def test_strip_prices_for_beta_pricing_mode_categorized_dict():
+    import shopping_calculator as sc
+    cats = {"Proteínas": [{"name": "Pollo", "estimated_cost_rd": 250.5}],
+            "Vegetales": [{"name": "Tomate", "estimated_cost_rd": 40.0}]}
+    sc._strip_prices_for_beta_pricing_mode(cats)
+    assert cats["Proteínas"][0]["estimated_cost_rd"] is None
+    assert cats["Vegetales"][0]["estimated_cost_rd"] is None
+
+
+def test_strip_prices_for_beta_pricing_mode_texto_plano_no_op():
+    """`structured=False` produce `list[str]`/`dict[str, list[str]]` — sin campos de
+    costo, el strip no debe reventar (items no son dict)."""
+    import shopping_calculator as sc
+    items = ["200 g de pollo", "1 taza de arroz"]
+    out = sc._strip_prices_for_beta_pricing_mode(items)
+    assert out == ["200 g de pollo", "1 taza de arroz"]
+
+
+def test_strip_prices_for_beta_pricing_mode_ausencia_de_campo_no_los_inventa():
+    """Un ítem SIN `estimated_cost_rd`/`estimated_cost` (ej. urgentes crudos) no debe
+    ganar la clave de la nada — `in` guardia cada asignación."""
+    import shopping_calculator as sc
+    items = [{"name": "Urgente sin precio"}]
+    sc._strip_prices_for_beta_pricing_mode(items)
+    assert "estimated_cost_rd" not in items[0]
+    assert "estimated_cost" not in items[0]
+
+
+# ── compute_shopping_cost_summary: pricing_mode ⇒ None (nunca dict de ceros) ─────────────────
+
+def test_compute_shopping_cost_summary_beta_es_none():
+    import shopping_calculator as sc
+    weekly = [{"name": "Pollo", "estimated_cost_rd": None, "is_perishable": True}]
+    out = sc.compute_shopping_cost_summary(weekly, weekly, weekly, "weekly",
+                                            pricing_mode="beta_no_prices")
+    assert out is None
+
+
+def test_compute_shopping_cost_summary_default_pricing_mode_es_byte_identico():
+    """Sin el kwarg (callers preexistentes que no lo pasan), comportamiento EXACTO a
+    antes de T7 — no debe volverse None por defecto."""
+    import shopping_calculator as sc
+    weekly = [{"name": "Pollo", "estimated_cost_rd": 100.0, "is_perishable": True}]
+    with_kwarg_none = sc.compute_shopping_cost_summary(weekly, weekly, weekly, "weekly", pricing_mode=None)
+    without_kwarg = sc.compute_shopping_cost_summary(weekly, weekly, weekly, "weekly")
+    assert with_kwarg_none is not None
+    assert without_kwarg is not None
+    assert with_kwarg_none["by_duration"]["weekly"]["trip_total_rd"] == \
+        without_kwarg["by_duration"]["weekly"]["trip_total_rd"]
+
+
+def test_compute_shopping_cost_summary_pricing_mode_no_beta_string_no_suprime():
+    import shopping_calculator as sc
+    weekly = [{"name": "Pollo", "estimated_cost_rd": 100.0, "is_perishable": True}]
+    out = sc.compute_shopping_cost_summary(weekly, weekly, weekly, "weekly", pricing_mode="DO")
+    assert out is not None
+
+
+_CSS_CALLSITE_FILES = {
+    "graph_orchestrator.py": '_p1b_ccs(\n                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration,\n                pricing_mode=result.get("_pricing_mode"),\n            )',
+    "cron_tasks.py": '_ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration,\n                            pricing_mode=plan_data.get("_pricing_mode"))',
+    "tools.py": 'pricing_mode=plan_data_fresh.get("_pricing_mode"),',
+    "routers/plans.py": 'pricing_mode=plan_data_fresh.get("_pricing_mode"))',
+}
+
+
+@pytest.mark.parametrize("relpath,needle", list(_CSS_CALLSITE_FILES.items()))
+def test_compute_shopping_cost_summary_callsites_pasan_pricing_mode(relpath, needle):
+    src = (_BACKEND / relpath).read_text(encoding="utf-8")
+    assert needle in src, f"{relpath}: call site de compute_shopping_cost_summary sin pricing_mode."
+
+
+def test_compute_shopping_cost_summary_t2_chunk_worker_pasa_pricing_mode():
+    """El call site de T2 (cron_tasks.py, distinto del helper _compute_cost_summary_jsonb_extras
+    de arriba) — cadena literal más larga para no confundirse con el helper genérico."""
+    src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    assert (
+        '_ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,\n'
+        '                                           pricing_mode=full_plan_data.get("_pricing_mode"))'
+    ) in src
+
+
+# ── build_budget_reference: beta ⇒ None incondicional (T6 fold) ─────────────────────────────
+
+def test_build_budget_reference_beta_es_none(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ref = nc.build_budget_reference({"budget": "custom", "budgetAmount": "500",
+                                      "budgetCurrency": "EUR", "country": "ES"})
+    assert ref is None
+
+
+def test_build_budget_reference_beta_es_none_para_los_5_paises_beta(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    for cc in _BETA_CCS:
+        for tier in ("low", "medium", "high", "unlimited", "custom"):
+            ref = nc.build_budget_reference({"budget": tier, "budgetAmount": "500", "country": cc})
+            assert ref is None, (cc, tier)
+
+
+def test_build_budget_reference_do_sigue_intacto(monkeypatch):
+    """DO / knob apagado ⇒ el guard de T7 nunca dispara — comportamiento EXACTO a antes."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    ref_off = nc.build_budget_reference({"budget": "medium", "groceryDuration": "weekly"})
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    ref_do_on = nc.build_budget_reference({"budget": "medium", "groceryDuration": "weekly", "country": "DO"})
+    assert ref_off is not None and ref_do_on is not None
+    assert ref_off == ref_do_on
+
+
+def test_build_budget_reference_beta_guard_deriva_pricing_mode_via_ssot():
+    src = nc.__file__ and open(nc.__file__, encoding="utf-8").read()
+    i = src.index("def build_budget_reference")
+    j = src.find("\ndef ", i + 10)
+    body = src[i:j if j != -1 else len(src)]
+    assert "from constants import pricing_mode_for_form_data" in body
+    assert 'pricing_mode_for_form_data(form_data) == "beta_no_prices"' in body
+    assert "return None" in body.split('pricing_mode_for_form_data(form_data) == "beta_no_prices"')[1][:40]
+
+
+# ── reconcile_budget_with_cost: contrato preexistente (cost_summary None ⇒ None) ────────────
+
+def test_reconcile_budget_with_cost_cost_summary_none_es_none():
+    """El 'camino degradado numérico' que el brief cita como YA existente — T7 lo dispara
+    con el flag (compute_shopping_cost_summary ⇒ None), no lo reimplementa."""
+    ref = {"tier": "custom", "basis": "custom", "currency": "EUR",
+           "reference_rd": 100, "floor_rd": 50, "days": 7, "household": 1}
+    assert nc.reconcile_budget_with_cost(ref, None) is None
+
+
+# ── build_budget_suggestions: [] natural (filtra por estimated_cost_rd > 0, sin cambios) ────
+
+def test_build_budget_suggestions_beta_lista_sin_precios_es_vacia():
+    import shopping_calculator as sc
+    weekly = [
+        {"name": "Camarones", "estimated_cost_rd": None},
+        {"name": "Salmón", "estimated_cost_rd": None},
+    ]
+    assert sc.build_budget_suggestions(weekly, user_id=None) == []
+
+
+def test_build_budget_suggestions_do_control_no_es_vacia():
+    """Control: el MISMO shape, con precio real, SÍ produce sugerencias (via
+    cheapest_supermarket_variant) — ancla que la lista vacía de arriba es por AUSENCIA
+    de precio, no por un bug que la deje siempre vacía."""
+    import shopping_calculator as sc
+    weekly = [{"name": "Aceite de oliva", "estimated_cost_rd": 500.0}]
+    # fail-open: sin catálogo de supermercado en este entorno de test, cheapest_supermarket_
+    # variant devuelve None y build_budget_suggestions no añade nada — el punto de este test
+    # es que NO explota, no que produzca contenido (eso ya lo cubre test_p1_budget_brand_premium.py).
+    out = sc.build_budget_suggestions(weekly, user_id=None)
+    assert isinstance(out, list)
+
+
+# ── _build_consent_message: omite "(~RD$...)" cuando el precio es None (sin cambios) ────────
+
+def test_build_consent_message_precio_none_omite_rd():
+    import agent
+    msg = agent._build_consent_message([{"name": "Camarón", "qty_needed": 1, "unit": "lb", "est_price_rd": None}])
+    assert "RD$" not in msg
+    assert "Camarón" in msg
+
+
+def test_build_consent_message_precio_numerico_control_incluye_rd():
+    """Control: con precio numérico (el camino DO), el mensaje SÍ incluye el monto — este
+    comportamiento es PRE-EXISTENTE y T7 no lo toca."""
+    import agent
+    msg = agent._build_consent_message([{"name": "Camarón", "qty_needed": 1, "unit": "lb", "est_price_rd": 350}])
+    assert "RD$350" in msg
+
+
+def test_swap_meal_with_consent_anula_est_price_rd_en_pais_beta():
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    i = src.index("def swap_meal_with_consent")
+    j = src.find("\ndef ", i + 10)
+    body = src[i:j if j != -1 else len(src)]
+    assert "missing = _price_missing_ingredients(_unauthorized)" in body
+    i_missing = body.index("missing = _price_missing_ingredients(_unauthorized)")
+    i_country = body.index("country_for_form_data(form_data)", i_missing)
+    i_strip = body.index('_m["est_price_rd"] = None', i_country)
+    i_call = body.index("_build_consent_message(missing)", i_strip)
+    # orden: computar missing -> derivar país -> anular precios -> RECIÉN entonces
+    # construir el mensaje (si el orden se invirtiera, el mensaje vería precios viejos).
+    assert i_missing < i_country < i_strip < i_call
+    assert "has_native_prices" in body
+
+
+def test_swap_meal_with_consent_missing_ingredients_payload_tambien_queda_limpio():
+    """El guard debe anular `est_price_rd` en los DICTS de `missing` (que también salen
+    tal cual en `missing_ingredients` del payload JSON) — no solo en el string del
+    mensaje. Ancla que la mutación vive ANTES del `return {...}` que expone `missing`."""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    i = src.index("def swap_meal_with_consent")
+    j = src.find("\ndef ", i + 10)
+    body = src[i:j if j != -1 else len(src)]
+    i_strip = body.index('_m["est_price_rd"] = None')
+    i_return = body.index('"missing_ingredients": missing,')
+    assert i_strip < i_return
+
+
+# ── tools.py execute_modify_single_meal: gate de la inyección de precios al chat ────────────
+
+def test_execute_modify_single_meal_gatea_inteligencia_de_precios_por_pricing_mode():
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    i = src.index("def execute_modify_single_meal")
+    j = src.find("\ndef ", i + 10)
+    body = src[i:j if j != -1 else len(src)]
+    assert 'if plan_data.get("_pricing_mode") != "beta_no_prices":' in body
+    i_gate = body.index('if plan_data.get("_pricing_mode") != "beta_no_prices":')
+    i_prices = body.index("INTELIGENCIA DE PRECIOS", i_gate)
+    assert i_gate < i_prices, "el gate debe envolver el bloque de inyección de precios."
+
+
+def test_execute_modify_single_meal_usa_plan_data_no_form_data_para_el_gate():
+    """[decisión deliberada] El gate usa `plan_data['_pricing_mode']` (fetcheado de DB,
+    confiable HOY) en vez de `_modify_country`/`form_data` (T4 ya documenta que el
+    chat-agent no puebla `country` en form_data todavía — un gate sobre esa variable
+    sería un placeholder inerte)."""
+    src = (_BACKEND / "tools.py").read_text(encoding="utf-8")
+    i = src.index("def execute_modify_single_meal")
+    j = src.find("\ndef ", i + 10)
+    body = src[i:j if j != -1 else len(src)]
+    i_plan_data_fetch = body.index('plan_data = plan_record["plan_data"]')
+    i_gate = body.index('if plan_data.get("_pricing_mode") != "beta_no_prices":')
+    assert i_plan_data_fetch < i_gate, "el gate debe leer plan_data DESPUÉS de fetchearlo."
+
+
+# ── graph_orchestrator._build_shared_context: prices_context (2ª inyección LLM) ─────────────
+
+def test_build_shared_context_prices_context_gatea_por_pais():
+    cuerpo = _cuerpo_build_shared_context()
+    assert "_shared_ctx_country = country_for_form_data(form_data)" in cuerpo
+    i_var = cuerpo.index("_shared_ctx_country = country_for_form_data(form_data)")
+    i_prices = cuerpo.index('"prices_context":', i_var)
+    window = cuerpo[i_prices:i_prices + 400]
+    assert "COUNTRY_PROFILES.get(_shared_ctx_country" in window
+    assert 'has_native_prices"' in window
+    # el predicado de budget histórico (P3-GENCHUNK-SPEED) sigue verbatim adentro —
+    # anclado también por test_j_prices_context_gated_on_budget (test_p2_genchunk_speed.py).
+    assert 'build_prices_context() if (str(form_data.get("budget") or "").strip())' in window
+
+
+def test_build_shared_context_country_context_reusa_la_misma_derivacion():
+    """`country_context` (T3) y `prices_context` (T7) deben compartir `_shared_ctx_country`
+    — country_for_form_data(form_data) se llama UNA sola vez en toda la función."""
+    cuerpo = _cuerpo_build_shared_context()
+    n = cuerpo.count("country_for_form_data(form_data)")
+    assert n == 1, f"se esperaba exactamente 1 derivación de país, hallada(s) {n}"
+    assert '"country_context": _country_context_block(_shared_ctx_country)' in cuerpo
+
+
+def test_p3_genchunk_speed_prices_gate_test_sigue_vivo():
+    """[anti-regresión cruzada] El test histórico J (test_p2_genchunk_speed.py) sigue
+    pudiendo encontrar el predicado de budget EXACTO en TODO el archivo — no solo dentro
+    de _build_shared_context — confirma que T7 no lo movió/reescribió."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert 'build_prices_context() if (str(form_data.get("budget") or "").strip())' in src
+    assert "P3-GENCHUNK-SPEED-PRICES-GATE" in src
+
+
+# ── api_budget_floor / budget_floor_in_currency: hint en la moneda REAL, nunca DOP mal etiquetado ──
+
+def test_budget_floor_in_currency_dop_usd_byte_identico_al_mecanismo_historico():
+    days, min_dop = 7, 4000.0
+    usd_dop = nc._budget_usd_to_dop()
+    amt_dop, cur_dop = nc.budget_floor_in_currency(days, "DOP", min_dop)
+    assert (round(amt_dop), cur_dop) == (round(min_dop), "DOP")
+    amt_usd, cur_usd = nc.budget_floor_in_currency(days, "USD", min_dop)
+    assert (round(amt_usd), cur_usd) == (round(min_dop / usd_dop), "USD")
+
+
+def test_budget_floor_in_currency_moneda_no_reconocida_cae_a_dop():
+    amt, cur = nc.budget_floor_in_currency(7, "XYZ", 4000.0)
+    assert (round(amt), cur) == (4000, "DOP")
+
+
+def test_budget_floor_in_currency_knob_apagado_beta_currency_cae_a_dop(monkeypatch):
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    amt, cur = nc.budget_floor_in_currency(7, "EUR", 4000.0)
+    assert (round(amt), cur) == (4000, "DOP")
+
+
+def test_budget_floor_in_currency_knob_encendido_eur_usa_su_propio_piso(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    # household=1, calorías de referencia ⇒ scale=1.0 ⇒ el piso propio de la moneda tal cual.
+    dop_base = nc._budget_cycle_floor_dop(7)
+    amt, cur = nc.budget_floor_in_currency(7, "EUR", dop_base)
+    assert cur == "EUR"
+    assert round(amt) == round(nc._budget_cycle_floor_for_currency(7, "EUR"))
+
+
+def test_budget_floor_in_currency_escala_por_el_mismo_factor_calorias_hogar(monkeypatch):
+    """min_budget_dop YA duplicado (simula calorías×hogar altos) ⇒ el monto en EUR debe
+    escalar por el MISMO factor 2×, no quedar anclado al piso base."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dop_base = nc._budget_cycle_floor_dop(7)
+    amt_1x, _ = nc.budget_floor_in_currency(7, "EUR", dop_base)
+    amt_2x, _ = nc.budget_floor_in_currency(7, "EUR", dop_base * 2)
+    assert amt_2x == pytest.approx(amt_1x * 2)
+
+
+def test_api_budget_floor_knob_on_pais_beta_responde_en_su_moneda(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    from routers.plans import api_budget_floor
+    res = asyncio.run(api_budget_floor(payload=_budget_form("EUR", 1, country="ES"), _uid=None))
+    assert res.get("ok") is True
+    assert res["currency"] == "EUR"
+    assert res["min_budget"] > 0
+    # NUNCA un monto DOP (miles) mal etiquetado como si fuera EUR (decenas/centenas).
+    dop_floor = nc._budget_cycle_floor_dop(7)
+    assert res["min_budget"] < dop_floor
+
+
+def test_api_budget_floor_knob_off_pais_beta_cae_a_dop_byte_identico(monkeypatch):
+    """Knob apagado (default) ⇒ EXACTAMENTE el mecanismo pre-T7, aunque el cliente declare
+    EUR + country=ES."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    from routers.plans import api_budget_floor
+    res = asyncio.run(api_budget_floor(payload=_budget_form("EUR", 1, country="ES"), _uid=None))
+    assert res.get("ok") is True
+    assert res["currency"] == "DOP"
+
+
+def test_api_budget_floor_mx_co_tambien_responden_en_su_moneda(monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    from routers.plans import api_budget_floor
+    for currency, cc in (("MXN", "MX"), ("COP", "CO")):
+        res = asyncio.run(api_budget_floor(payload=_budget_form(currency, 1, country=cc), _uid=None))
+        assert res["currency"] == currency, (currency, cc)
+
+
+def test_api_budget_floor_tier_references_en_beta_no_mezcla_escalas():
+    """`tier_references` (low/medium/high) debe escalar sobre `min_in_currency`, nunca
+    devolver la fórmula DOP/USD disfrazada de EUR — cada banda debe ser mayor que el
+    mínimo (factor >= 1.0 documentado en _budget_tier_band_factor)."""
+    import os
+    prev = os.environ.get("MEALFIT_COUNTRY_SYSTEM")
+    os.environ["MEALFIT_COUNTRY_SYSTEM"] = "true"
+    try:
+        from routers.plans import api_budget_floor
+        res = asyncio.run(api_budget_floor(payload=_budget_form("EUR", 1, country="ES"), _uid=None))
+        refs = res.get("tier_references") or {}
+        assert refs, "tier_references vacío para un país beta"
+        for tier_val in refs.values():
+            assert tier_val >= res["min_budget"]
+    finally:
+        if prev is None:
+            os.environ.pop("MEALFIT_COUNTRY_SYSTEM", None)
+        else:
+            os.environ["MEALFIT_COUNTRY_SYSTEM"] = prev
+
+
+# ── sweep final: 0 apariciones de 'RD$' y 0 estimated_cost_rd numérico en TODO el payload ───
+
+def test_t7_sweep_beta_plan_cero_rd_en_todo_el_payload(monkeypatch):
+    """[la lección del review final de F0] La prosa compuesta backend es donde se esconde
+    'RD$'. Construye un plan beta, corre aggregator + resumen + sugerencias + mensaje de
+    consentimiento, serializa TODO a JSON y barre 0 apariciones de 'RD$' y 0
+    `estimated_cost_rd` numérico. El precio se FUERZA vía monkeypatch (ver docstring de
+    test_get_shopping_list_delta_beta_anula_estimated_cost_rd) para que la ausencia sea
+    prueba del GATE, no de un catálogo vacío."""
+    import shopping_calculator as sc
+    import agent
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 999.0)
+    sc.reset_caps_applied_last_run()
+
+    plan = _priced_plan_fixture(pricing_mode="beta_no_prices")
+    items = sc.get_shopping_list_delta(None, plan, True, False, True, 1.0)
+    assert items
+
+    summary = sc.compute_shopping_cost_summary(
+        items, items, items, "weekly", pricing_mode=plan["_pricing_mode"]
+    )
+    suggestions = sc.build_budget_suggestions(items, user_id=None)
+    consent_msg = agent._build_consent_message(
+        [{"name": "Camarón", "qty_needed": 1, "unit": "lb", "est_price_rd": None}]
+    )
+
+    payload = {
+        "aggregated_shopping_list": items,
+        "shopping_cost_summary": summary,
+        "budget_suggestions": suggestions,
+        "consent_message": consent_msg,
+    }
+    blob = _json.dumps(payload, ensure_ascii=False, default=str)
+
+    assert "RD$" not in blob, blob
+    for it in items:
+        cost = it.get("estimated_cost_rd") if isinstance(it, dict) else None
+        assert cost is None or (isinstance(cost, (int, float)) and cost == 0), it
+    assert summary is None
+    assert suggestions == []
+
+
+def test_t7_sweep_control_do_plan_mismo_fixture_produce_rd(monkeypatch):
+    """Control NEGATIVO del sweep: el MISMO fixture/monkeypatch SIN `_pricing_mode` SÍ
+    produce 'RD$' en el payload — prueba que el sweep de arriba mide el gate real (si
+    esto fallara, ambos tests serían falsos-verdes por un fixture que nunca genera RD$)."""
+    import shopping_calculator as sc
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 999.0)
+    sc.reset_caps_applied_last_run()
+
+    plan = _priced_plan_fixture(pricing_mode=None)
+    items = sc.get_shopping_list_delta(None, plan, True, False, True, 1.0)
+    summary = sc.compute_shopping_cost_summary(items, items, items, "weekly", pricing_mode=None)
+    blob = _json.dumps({"aggregated_shopping_list": items, "shopping_cost_summary": summary},
+                        ensure_ascii=False, default=str)
+    assert any(it.get("estimated_cost_rd") == 999.0 for it in items), items
+    assert summary is not None

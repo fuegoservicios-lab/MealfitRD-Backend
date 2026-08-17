@@ -4883,9 +4883,13 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         except Exception:
             micronutrient_targets_context = ""
 
-    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3) país del usuario, derivado UNA vez para el
-    # fan-in de abajo (ctx['country_context']) — country_for_form_data es la ÚNICA puerta (T1).
-    from constants import country_for_form_data
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] (T3, +T7 reusa la misma derivación) país del
+    # usuario, derivado UNA vez para el fan-in de abajo (ctx['country_context']) —
+    # country_for_form_data es la ÚNICA puerta (T1). T7 reusa `_shared_ctx_country` para
+    # gatear `prices_context` (país beta sin precios nativos ⇒ el LLM no recibe la tabla
+    # RD$) en vez de derivar el país una 2ª vez.
+    from constants import country_for_form_data, COUNTRY_PROFILES
+    _shared_ctx_country = country_for_form_data(form_data)
 
     return {
         "user_id": _uid,
@@ -4949,7 +4953,7 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # day-gen (mismo patrón que diet_directive_context arriba). DO/knob-off ⇒ "" (byte-
         # identidad del tramo dinámico). country_for_form_data es la ÚNICA puerta (T1) — jamás
         # una lectura cruda de la clave "country" en form_data.
-        "country_context": _country_context_block(country_for_form_data(form_data)),
+        "country_context": _country_context_block(_shared_ctx_country),
         # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables (magnesio/calcio/
         # hierro/fibra/potasio) como guía cuantitativa de densidad nutricional. "" si knob OFF/no aplica.
         "micronutrient_targets_context": micronutrient_targets_context,
@@ -4967,7 +4971,16 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # — el LLM no necesita el catálogo de precios para diseñar un plan sano,
         # y el bloque crecería sin techo con la tabla master_ingredients.
         # tooltip-anchor: P3-GENCHUNK-SPEED-PRICES-GATE
-        "prices_context": build_prices_context() if (str(form_data.get("budget") or "").strip()) else "",
+        #
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Gate EXTERIOR adicional: un país beta
+        # (`has_native_prices=False`) nunca debe recibir la tabla RD$/lb del catálogo — el
+        # LLM no puede razonar sobre precios que el usuario no va a ver en su lista. DO/
+        # knob-off ⇒ COUNTRY_PROFILES[_shared_ctx_country] es DO (has_native_prices=True)
+        # ⇒ este `if` externo es SIEMPRE True ⇒ el predicado de budget de siempre decide
+        # solo, byte-idéntico a antes de T7.
+        "prices_context": (
+            build_prices_context() if (str(form_data.get("budget") or "").strip()) else ""
+        ) if COUNTRY_PROFILES.get(_shared_ctx_country, {}).get("has_native_prices", True) else "",
         "taste_profile": taste_profile,
         "history_context": history_context,
         # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Blocklist LITERAL de platos recientes en bloque
@@ -37741,6 +37754,29 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _uid = form_data.get("user_id")
     if not _uid or _uid == "guest": _uid = None
 
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] Flag "modo beta sin precios nativos",
+    # estampado ANTES del bloque de agregación de abajo: `get_shopping_list_delta` lee
+    # `plan_result.get('_pricing_mode')` (aquí `result`, el MISMO dict que reciben esas
+    # llamadas) para suprimir `estimated_cost_rd` en la MISMA pasada — no hay una 2ª pasada
+    # de "limpieza" post-agregación. DO / knob apagado ⇒ `pricing_mode_for_form_data`
+    # devuelve `None` ⇒ la clave NUNCA se escribe en `result` (byte-identidad: ni siquiera
+    # aparece como `None` explícito en el jsonb persistido).
+    #
+    # Cada chunk (T1 inicial y T2+ de continuación) invoca este `assemble_plan_node` con SU
+    # PROPIO `form_data` (`pipeline_snapshot.form_data`, congelado desde la generación) y
+    # re-deriva el flag de forma independiente — el país no cambia entre chunks del mismo
+    # plan, así que el valor sale idéntico cada vez. El flag persiste en DB desde el INSERT
+    # del chunk 1 porque los merges de T2+ son `jsonb_set` QUIRÚRGICOS sobre otras rutas
+    # (`{days}`, `{aggregated_shopping_list}`, ...) — nunca tocan esta clave de nivel
+    # superior (invariante I7 del lifecycle de plan_id). El re-cómputo en chunks 2+ es
+    # redundante para la PERSISTENCIA pero necesario para que ESE chunk propio también
+    # suprima precios en su propia pasada de agregación (T2 re-agrega contra `full_plan_data`
+    # ya fresco de DB, que YA trae la clave del INSERT — ver `get_shopping_list_delta`).
+    from constants import pricing_mode_for_form_data
+    _pricing_mode = pricing_mode_for_form_data(form_data)
+    if _pricing_mode:
+        result["_pricing_mode"] = _pricing_mode
+
     from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
     from constants import compute_household_multiplier
     try:
@@ -37857,7 +37893,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs
             _p1b_summary = _p1b_ccs(
-                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration
+                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration,
+                pricing_mode=result.get("_pricing_mode"),
             )
             if _p1b_summary:
                 result["shopping_cost_summary"] = _p1b_summary

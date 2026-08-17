@@ -1081,20 +1081,28 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     elif allow_pantry_expansion:
         context_extras = f"\n💡 PERMISO DE EXPANSIÓN DE DESPENSA: El usuario ha autorizado explícitamente agregar ingredientes nuevos que no están en su despensa para este cambio (¡Va de compras!). Siéntete libre de proponer CUALQUIER ingrediente ideal para lograr la mejor comida."
         
-    try:
-        from shopping_calculator import get_master_ingredients
-        master_list = get_master_ingredients()
-        prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
-        prices_context += "Costo promedio de los ingredientes (en RD$). Utilízalo si el usuario pide sustituciones más baratas u opciones económicas:\n"
-        for m in master_list:
-            price_lb = m.get("price_per_lb", 0)
-            price_u = m.get("price_per_unit", 0)
-            if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
-            elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
-        prices_context += "----------------------------------------------------------\n"
-        context_extras += prices_context
-    except Exception as e:
-        logger.error(f"Error cargando precios en modify_meal: {e}")
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] `plan_data` (ya fetcheado arriba, línea ~997)
+    # es la fuente MÁS confiable de "¿este plan tiene precios nativos?" en esta tool — a
+    # diferencia de `_modify_country`/`form_data` (T4, arriba), que el propio comentario de
+    # T4 documenta como no poblado todavía por el chat-agent (form_data no trae country en
+    # la práctica). `plan_data['_pricing_mode']` en cambio SÍ viene estampado desde el
+    # INSERT del plan (T7, assemble_plan_node) — funciona HOY, no cuando una task futura
+    # conecte el país a la superficie de chat.
+    if plan_data.get("_pricing_mode") != "beta_no_prices":
+        try:
+            from shopping_calculator import get_master_ingredients
+            master_list = get_master_ingredients()
+            prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
+            prices_context += "Costo promedio de los ingredientes (en RD$). Utilízalo si el usuario pide sustituciones más baratas u opciones económicas:\n"
+            for m in master_list:
+                price_lb = m.get("price_per_lb", 0)
+                price_u = m.get("price_per_unit", 0)
+                if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
+                elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
+            prices_context += "----------------------------------------------------------\n"
+            context_extras += prices_context
+        except Exception as e:
+            logger.error(f"Error cargando precios en modify_meal: {e}")
     
     # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Cargar alergias + dieta SERVER-SIDE desde el
     # health_profile del user_id (que ya viene FORZADO al valor autenticado por el override de
@@ -2572,9 +2580,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 try:
                     from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs_cm
                     from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr_cm
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data_fresh trae la clave desde
+                    # el INSERT del plan — beta ⇒ None, la reconciliación no se refresca.
                     _p1b_sum_cm = _p1b_ccs_cm(
                         aggr_7, aggr_15_hybrid, aggr_30_hybrid,
                         plan_data_fresh.get("calc_grocery_duration") or "weekly",
+                        pricing_mode=plan_data_fresh.get("_pricing_mode"),
                     )
                     if _p1b_sum_cm:
                         plan_data_fresh["shopping_cost_summary"] = _p1b_sum_cm

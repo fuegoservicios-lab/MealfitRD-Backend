@@ -5150,29 +5150,41 @@ async def api_budget_floor(
     Pure-calc sobre los campos provistos (NO lee DB, NO datos de usuario) → seguro sin auth,
     rate-limited por user/IP (anti-spam). Cero costo LLM (NO `verify_api_quota`). Fail-open:
     ante cualquier error devuelve `{ok: False}` y el frontend cae al mínimo estático.
-    Response: {ok, min_budget, min_budget_dop, currency, days, household, target_calories}."""
+    Response: {ok, min_budget, min_budget_dop, currency, days, household, target_calories}.
+
+    [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7, fold de T6)] `currency` fuera de {DOP,USD} caía
+    SIEMPRE a 'DOP' — con el knob ON y país beta el hint mentía RD$ mientras el gate real
+    comparaba en EUR/MXN/COP. `budget_floor_in_currency` (nutrition_calculator, SSOT del
+    gate) resuelve la MISMA moneda que usaría el 422. Knob OFF ⇒ byte-idéntico."""
     form = payload if isinstance(payload, dict) else {}
     try:
-        from nutrition_calculator import min_budget_for_goals, _budget_usd_to_dop
+        from nutrition_calculator import (
+            min_budget_for_goals, _budget_usd_to_dop, budget_floor_in_currency,
+            _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY,
+        )
         info = await asyncio.to_thread(min_budget_for_goals, form)
-        currency = str(form.get("budgetCurrency") or "DOP").upper()
-        if currency not in ("DOP", "USD"):
-            currency = "DOP"
+        currency_in = str(form.get("budgetCurrency") or "DOP").upper()
         usd_dop = _budget_usd_to_dop()
         min_dop = float(info["min_budget_dop"])
-        min_in_currency = round(min_dop / usd_dop) if currency == "USD" else round(min_dop)
-        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-I) Transparencia de la referencia por tier: el banner
-        # dentro/excedido compara contra piso×banda {low/medium/high} — un RD$Y que el usuario nunca
-        # declaró. Exponerlo AQUÍ permite al formulario mostrar "≈ RD$X por ciclo" bajo cada tier al
-        # elegirlo (misma fórmula exacta de build_budget_reference → cero drift form↔banner).
+        min_in_currency_raw, currency = await asyncio.to_thread(
+            budget_floor_in_currency, int(info["days"]), currency_in, min_dop
+        )
+        min_in_currency = round(min_in_currency_raw)
+        _is_beta_currency = currency in _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY
+        # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-I) referencia estimada por tier (piso×banda).
         tier_refs = {}
         try:
             from nutrition_calculator import _budget_tier_band_factor
             for _tier in ("low", "medium", "high"):
                 _f = _budget_tier_band_factor(_tier)
                 if _f:
-                    _ref_dop = min_dop * float(_f)
-                    tier_refs[_tier] = int(round(_ref_dop / usd_dop) if currency == "USD" else round(_ref_dop))
+                    # [P1-COUNTRY-SYSTEM-F1 · T7] beta: min_in_currency YA absorbió calorías×
+                    # hogar×piso-propio-de-la-moneda — aplicar el factor de banda encima.
+                    if _is_beta_currency:
+                        tier_refs[_tier] = int(round(min_in_currency * float(_f)))
+                    else:
+                        _ref_dop = min_dop * float(_f)
+                        tier_refs[_tier] = int(round(_ref_dop / usd_dop) if currency == "USD" else round(_ref_dop))
         except Exception:
             tier_refs = {}
         return {
@@ -11308,7 +11320,10 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             try:
                 from shopping_calculator import compute_shopping_cost_summary as _p1b_ccs
                 from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr
-                _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration)
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data_fresh trae la clave desde
+                # el INSERT del plan — beta ⇒ None, cero recalculo de costo/reconciliación.
+                _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration,
+                                         pricing_mode=plan_data_fresh.get("_pricing_mode"))
                 if _p1b_summary:
                     plan_data_fresh["shopping_cost_summary"] = _p1b_summary
                     # [P1-BUDGET-REF-RESCALE · 2026-07-02] hogar nuevo → re-escala tier-basis.

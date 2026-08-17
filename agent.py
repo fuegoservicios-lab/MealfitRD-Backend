@@ -3584,6 +3584,18 @@ def swap_meal_with_consent(form_data: dict) -> dict:
         missing = _price_missing_ingredients(_unauthorized)
         if not missing:
             raise ve
+        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] País beta sin precios nativos ⇒ anular
+        # `est_price_rd` ANTES de que llegue a `_build_consent_message` (que ya omite el
+        # "(~RD$...)" cuando el precio es None/falsy — cero cambio ahí) Y antes de que salga
+        # en `missing_ingredients` del payload JSON (el mismo campo, no solo la prosa — la
+        # lección del review final de F0: la prosa compuesta no es el único sitio donde
+        # esconde un monto). `form_data` es el mismo SSOT que ya deriva `_swap_country`
+        # arriba en `swap_meal` — country_for_form_data es la ÚNICA puerta (T1).
+        from constants import country_for_form_data, COUNTRY_PROFILES
+        _consent_cc = country_for_form_data(form_data)
+        if not COUNTRY_PROFILES.get(_consent_cc, {}).get("has_native_prices", True):
+            for _m in missing:
+                _m["est_price_rd"] = None
         logger.info(
             f"🧊 [P1-PANTRY-STRICT-CONSENT] needs_new_ingredients user={_user_id!r}: "
             f"{[m['name'] for m in missing]}"
