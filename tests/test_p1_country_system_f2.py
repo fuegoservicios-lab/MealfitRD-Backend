@@ -498,7 +498,12 @@ def test_build_language_directive_existe_y_es_invocable():
 def test_es_do_devuelve_cadena_vacia_is_e_igualdad():
     r = chat_agent_prompts.build_language_directive("es-DO")
     assert r == ""
-    assert r is ""  # CPython interna el string vacío — anclaje `is` válido además de `==`
+    # [fix-round 1 · 2026-08-17] `r is ""` es CIERTO en CPython (el string vacío está
+    # interned) pero el propio intérprete emite SyntaxWarning por comparar identidad
+    # contra un literal — la garantía es real, la SINTAXIS que la exhibe no. `len(r) == 0`
+    # confirma la misma propiedad (vacío de verdad, no un str truthy-vacío raro) sin activar
+    # el warning del parser.
+    assert r == "" and len(r) == 0
 
 
 @pytest.mark.parametrize("basura", [

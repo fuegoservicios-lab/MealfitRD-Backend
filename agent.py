@@ -4671,6 +4671,11 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
     Se ejecuta en un thread separado. Llama a Gemini para generar el título
     y luego lo guarda en agent_messages con role='SYSTEM_TITLE'.
     """
+    # [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] Decisión de alcance: este título NO gana
+    # `build_language_directive` — es una etiqueta de navegación de 2-4 palabras (más cerca
+    # del chrome del dashboard que de "prosa del coach"), no nombrada en el contrato de T3, y
+    # requeriría un `get_user_profile` nuevo (esta función no lee perfil hoy). Sigue en
+    # español para todo `locale`; follow-up propio si el dueño lo pide.
     # [P2-CHAT-CLEANUP · 2026-05-20] Migrado `dlog()` (escribía a
     # `title_debug.log` en disco append-mode sin rotación) a `logger.debug`.
     # Pre-fix: cada thread background abría el file en cada log line — disk

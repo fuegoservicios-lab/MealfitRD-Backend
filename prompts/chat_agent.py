@@ -595,8 +595,9 @@ def build_clinical_guard_context(form_data: dict) -> str:
 #
 # es-DO (o cualquier valor no reconocido: None, "", basura, tipos no-string) ⇒ "" — el system
 # prompt del coach queda BYTE-IDÉNTICO al de antes de esta task. `""` es el string vacío
-# INTERNADO por CPython: `build_language_directive("es-DO") is ""` es un anclaje válido,
-# además de `==`.
+# INTERNADO por CPython, así que `build_language_directive("es-DO") is ""` es cierto en la
+# práctica — pero el propio intérprete emite SyntaxWarning por comparar identidad contra un
+# literal (fix-round 1), así que el test ancla la propiedad con `== "" and len(r) == 0`.
 #
 # Cacheado por locale en `_LANGUAGE_DIRECTIVE_CACHE` — mismo patrón "variante-cacheada" que
 # `build_day_generator_system_prompt`/`_COUNTRY_PROMPT_RENDER_CACHE` (T2-F1,
