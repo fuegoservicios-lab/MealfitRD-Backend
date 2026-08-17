@@ -66,7 +66,7 @@ _HELP_CHAT_LLM_TIMEOUT_S = _env_float(
 
 _HELP_CHAT_UNAVAILABLE_MSG = (
     "El asistente no está disponible en este momento. "
-    "Escríbenos a fuego.servicios@gmail.com y te ayudamos por correo."
+    "Escríbenos a bioboros.support@gmail.com y te ayudamos por correo."
 )
 
 

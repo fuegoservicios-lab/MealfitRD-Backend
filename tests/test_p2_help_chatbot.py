@@ -130,7 +130,7 @@ def test_no_user_data_surface():
 
 def test_prompt_grounded():
     src = _read(_PROMPT)
-    assert "fuego.servicios@gmail.com" in src, (
+    assert "bioboros.support@gmail.com" in src, (
         "El prompt debe escalar al correo de soporte canónico."
     )
     # [P1-REBRAND-BIOBOROS · 2026-07-30] Era "MealfitRD". El bot de ayuda se
