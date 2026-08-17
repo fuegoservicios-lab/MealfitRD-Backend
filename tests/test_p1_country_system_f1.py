@@ -2152,7 +2152,25 @@ def test_gate_lee_mealfit_country_system_no_otro_nombre():
     )
 
 
-# ── QBudget.jsx: parser — dark intacto, lit condicionado, wiring completo ────
+# ═══════════════════════════════════════════════════════════════════════════
+# ── T6 fix-round 1 (review): moneda REALMENTE vigente en los 4 call sites ────
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Hallazgo del review: `currencySymbol` (QBudget) ya recomputaba `betaCurrency` en
+# cada render y por eso gateaba bien, pero `placeholder`/`aria-label` (QBudget) y los
+# pisos de `InteractiveAssessmentFlow.jsx`/`useBudgetFloor.js` leían `budgetCurrency`
+# CRUDO. Escenario real: usuario elige EUR con la bandera encendida, `budgetCurrency`
+# sobrevive en formData/localStorage, la bandera vuelve a apagarse (rollback) SIN que
+# nadie limpie `budgetCurrency` — placeholder seguía diciendo "Ej. 100" (EUR), el
+# lector de pantalla seguía anunciando "euros", y el gate cliente aceptaba "≥75"
+# pensando en EUR mientras el backend (mismo knob apagado) comparaba ese monto contra
+# el piso DOP (~4000+) y rechazaba con 422 en RD$.
+#
+# Fix de la CLASE (no de las instancias): `effectiveBudgetCurrency(country,
+# budgetCurrency)` — en `formValidation.js`, no en QBudget.jsx — es la ÚNICA función
+# que decide qué moneda está REALMENTE vigente; los 4 call sites (+ el símbolo/toggle
+# de QBudget, por uniformidad) pasan TODOS por ella. Reusa `currencyOptionsForCountry`
+# (movida al mismo módulo) — CERO segundo mapa país→moneda.
 
 def _read_qbudget_jsx() -> str:
     path = _FRONTEND / "src" / "components" / "assessment" / "questions" / "QBudget.jsx"
@@ -2161,68 +2179,229 @@ def _read_qbudget_jsx() -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_qbudget_dark_toggle_literales_originales_intactos():
-    """[dark anchor] Los DOS literales que `test_p1_budget_custom.py` YA
-    ancla (`test_budget_currency_toggle_defaults_to_dop`) deben seguir
-    presentes verbatim — condición necesaria para que, con
-    COUNTRY_SYSTEM_UI=false, el toggle sea EXACTAMENTE [DOP, USD] de hoy."""
-    src = _read_qbudget_jsx()
+def _read_interactive_assessment_flow_jsx() -> str:
+    path = _FRONTEND / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx"
+    if not path.exists():
+        pytest.skip(f"InteractiveAssessmentFlow.jsx no existe en {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _read_use_budget_floor_js() -> str:
+    path = _FRONTEND / "src" / "hooks" / "useBudgetFloor.js"
+    if not path.exists():
+        pytest.skip(f"useBudgetFloor.js no existe en {path}")
+    return path.read_text(encoding="utf-8")
+
+
+# ── formValidation.js: única fuente de los helpers de moneda ─────────────────
+
+def test_dark_toggle_literales_viven_en_formvalidation():
+    """[dark anchor] Los DOS literales que `test_p1_budget_custom.py` YA ancla
+    deben vivir en `formValidation.js` (movidos ahí en el fix-round 1) —
+    condición necesaria para que, con COUNTRY_SYSTEM_UI=false,
+    `currencyOptionsForCountry` arme EXACTAMENTE [DOP, USD]."""
+    src = _read_form_validation_js()
     assert re.search(r"value:\s*'DOP'\s*,\s*label:\s*'RD\$'", src)
     assert re.search(r"value:\s*'USD'\s*,\s*label:\s*'US\$'", src)
 
 
-def test_qbudget_importa_country_system_ui_y_coerce_country():
-    src = _read_qbudget_jsx()
-    assert re.search(
-        r"import\s*\{[^}]*COUNTRY_SYSTEM_UI[^}]*\}\s*from\s*['\"]\.\./\.\./\.\./config/countries['\"]",
-        src,
-    ), "QBudget debe importar COUNTRY_SYSTEM_UI de config/countries (el flag dark del frontend)."
-    assert "coerceCountry" in src
+def test_formvalidation_exporta_helpers_de_moneda_una_sola_vez():
+    """`currencyOptionsForCountry`/`effectiveBudgetCurrency`/`BETA_CURRENCY_BY_COUNTRY`
+    viven en formValidation.js. QBudget/InteractiveAssessmentFlow/useBudgetFloor
+    los IMPORTAN — ninguno los redefine localmente (eso sería el segundo mapa
+    país→moneda que el review pidió evitar)."""
+    formval_src = _read_form_validation_js()
+    assert re.search(r"export (function|const) currencyOptionsForCountry", formval_src)
+    assert re.search(r"export function effectiveBudgetCurrency", formval_src)
+    assert "export const BETA_CURRENCY_BY_COUNTRY" in formval_src
+
+    for label, src in (
+        ("QBudget.jsx", _read_qbudget_jsx()),
+        ("InteractiveAssessmentFlow.jsx", _read_interactive_assessment_flow_jsx()),
+        ("useBudgetFloor.js", _read_use_budget_floor_js()),
+    ):
+        assert "export const BETA_CURRENCY_BY_COUNTRY" not in src, (
+            f"{label} redefine BETA_CURRENCY_BY_COUNTRY localmente — segundo mapa país→moneda."
+        )
+        assert "export function currencyOptionsForCountry" not in src, (
+            f"{label} redefine currencyOptionsForCountry localmente."
+        )
+        assert "export function effectiveBudgetCurrency" not in src, (
+            f"{label} redefine effectiveBudgetCurrency localmente."
+        )
 
 
-def test_qbudget_mapa_beta_currency_por_pais():
-    src = _read_qbudget_jsx()
+def test_formvalidation_mapa_beta_currency_por_pais():
+    src = _read_form_validation_js()
     assert re.search(r"ES:\s*'EUR'", src)
     assert re.search(r"MX:\s*'MXN'", src)
     assert re.search(r"CO:\s*'COP'", src)
 
 
-def test_qbudget_usa_helper_puro_exportado_para_las_opciones():
-    """El helper puro (probado en vitest sin montar el componente) debe
-    EXISTIR y ser lo que arma `currencyOptions` — no una copia inline que
-    pueda driftear de lo que el test de JS ejercita."""
-    src = _read_qbudget_jsx()
-    assert re.search(r"export (function|const) currencyOptionsForCountry", src), (
-        "El helper puro currencyOptionsForCountry debe estar exportado para el test vitest."
-    )
-    assert src.count("currencyOptionsForCountry(") >= 2, (
-        "El componente debe LLAMAR a currencyOptionsForCountry (definición + uso), no solo definirlo."
+_BETA_CURRENCY_MAP_BLOCK = re.compile(r"BETA_CURRENCY_BY_COUNTRY\s*=\s*\{([^}]*)\}")
+_BETA_CURRENCY_PAIR = re.compile(r"(\w+):\s*'(\w+)'")
+
+
+def _parse_beta_currency_by_country(text: str) -> dict:
+    m = _BETA_CURRENCY_MAP_BLOCK.search(text)
+    if not m:
+        raise AssertionError(
+            "No se encontró `BETA_CURRENCY_BY_COUNTRY = {...}` en formValidation.js."
+        )
+    return dict(_BETA_CURRENCY_PAIR.findall(m.group(1)))
+
+
+def test_parser_extrae_beta_currency_by_country_sanity():
+    parsed = _parse_beta_currency_by_country(_read_form_validation_js())
+    assert parsed == {"ES": "EUR", "MX": "MXN", "CO": "COP"}
+
+
+def test_beta_currency_by_country_coincide_con_country_profiles():
+    """[fix-round 1 · review] El comentario de `BETA_CURRENCY_BY_COUNTRY` afirma que
+    un drift contra `COUNTRY_PROFILES` lo detecta ESTE test T6 — antes del fix-round
+    1 esa frase era falsa (el test previo solo comparaba contra un dict hardcoded
+    DENTRO del propio test, ciego a cualquier cambio real de COUNTRY_PROFILES).
+    Ahora compara de verdad, en las DOS direcciones, contra el backend."""
+    frontend_map = _parse_beta_currency_by_country(_read_form_validation_js())
+    for country_code, frontend_currency in frontend_map.items():
+        assert country_code in constants.COUNTRY_PROFILES, (
+            f"{country_code} está en BETA_CURRENCY_BY_COUNTRY (frontend) pero no en "
+            f"COUNTRY_PROFILES (backend)."
+        )
+        backend_currency = constants.COUNTRY_PROFILES[country_code]["currency"]
+        assert frontend_currency == backend_currency, (
+            f"Drift de moneda para {country_code}: frontend (BETA_CURRENCY_BY_COUNTRY) "
+            f"dice '{frontend_currency}', backend (COUNTRY_PROFILES) dice "
+            f"'{backend_currency}'."
+        )
+    # A la inversa: todo país beta con moneda propia (≠ DOP/USD) en el backend debe
+    # tener entrada en el frontend, o su toggle nunca ofrecerá esa moneda.
+    for country_code, profile in constants.COUNTRY_PROFILES.items():
+        if profile["is_beta"] and profile["currency"] not in ("DOP", "USD"):
+            assert country_code in frontend_map, (
+                f"{country_code} tiene moneda beta '{profile['currency']}' en "
+                f"COUNTRY_PROFILES (backend) pero no aparece en BETA_CURRENCY_BY_COUNTRY "
+                f"(frontend) — su toggle nunca la ofrecería."
+            )
+            assert frontend_map[country_code] == profile["currency"]
+
+
+def test_mutacion_desincroniza_beta_currency_produce_mismatch(monkeypatch):
+    """Igual que la mutación de pisos: prueba que la comparación SÍ detecta drift.
+    Muta COUNTRY_PROFILES (no el frontend — más simple que editar+revertir archivo
+    fuente para un solo dict) y confirma que deja de coincidir."""
+    frontend_map = _parse_beta_currency_by_country(_read_form_validation_js())
+    fake_profiles = {
+        cc: {**profile, "currency": "XXX" if cc == "ES" else profile["currency"]}
+        for cc, profile in constants.COUNTRY_PROFILES.items()
+    }
+    monkeypatch.setattr(constants, "COUNTRY_PROFILES", fake_profiles)
+    assert frontend_map["ES"] != constants.COUNTRY_PROFILES["ES"]["currency"], (
+        "la mutación no desincronizó — el test de mutación es inválido"
     )
 
 
-def test_qbudget_currency_symbol_ramifica_por_beta_currency():
+# ── QBudget.jsx: importa (no redefine) + usa effectiveCurrency en TODO lo visible ──
+
+def test_qbudget_importa_helpers_de_formvalidation():
     src = _read_qbudget_jsx()
+    assert re.search(
+        r"import\s*\{[^}]*currencyOptionsForCountry[^}]*effectiveBudgetCurrency[^}]*\}"
+        r"\s*from\s*['\"]\.\./\.\./\.\./config/formValidation['\"]"
+        r"|"
+        r"import\s*\{[^}]*effectiveBudgetCurrency[^}]*currencyOptionsForCountry[^}]*\}"
+        r"\s*from\s*['\"]\.\./\.\./\.\./config/formValidation['\"]",
+        src,
+    ), "QBudget debe importar currencyOptionsForCountry Y effectiveBudgetCurrency de config/formValidation."
+    assert re.search(
+        r"import\s*\{[^}]*COUNTRY_SYSTEM_UI[^}]*\}\s*from\s*['\"]\.\./\.\./\.\./config/countries['\"]",
+        src,
+    ), "QBudget debe seguir importando COUNTRY_SYSTEM_UI de config/countries."
+
+
+def test_qbudget_currency_symbol_y_toggle_usan_effective_currency():
+    """[fix-round 1 · review] `currencySymbol` Y el `value` resaltado del toggle
+    deben derivar de `effectiveCurrency` — dos mecanismos distintos para la misma
+    pregunta ("¿qué moneda es la vigente?") fue exactamente el origen del bug."""
+    src = _read_qbudget_jsx()
+    assert re.search(r"const effectiveCurrency = effectiveBudgetCurrency\(", src), (
+        "QBudget no calcula effectiveCurrency vía effectiveBudgetCurrency."
+    )
     m = re.search(r"const currencySymbol = ([\s\S]*?);\n", src)
     assert m, "No se pudo aislar `const currencySymbol = ...;` en QBudget.jsx"
-    body = m.group(1)
-    assert "'USD'" in body and "US$" in body, "El símbolo USD debe seguir intacto."
-    assert "betaCurrency" in body, "El símbolo debe ramificar por `betaCurrency` para EUR/MXN/COP."
-    assert "'RD$'" in body, "El fallback DOP debe seguir siendo 'RD$'."
+    symbol_body = m.group(1)
+    assert "effectiveCurrency" in symbol_body, "currencySymbol debe derivar de effectiveCurrency."
+    assert "'USD'" in symbol_body and "US$" in symbol_body, "El símbolo USD debe seguir intacto."
+    assert "'RD$'" in symbol_body, "El fallback DOP debe seguir siendo 'RD$'."
+    assert re.search(r"value=\{effectiveCurrency\}", src), (
+        "El UnitToggle no resalta `effectiveCurrency` — podría seguir resaltando una moneda STALE."
+    )
 
 
-def test_qbudget_placeholder_mxn_cop_con_ejemplo_propio():
+def test_qbudget_placeholder_usa_effective_currency():
     src = _read_qbudget_jsx()
-    assert "budgetCurrency === 'MXN'" in src
-    assert "budgetCurrency === 'COP'" in src
+    assert "effectiveCurrency === 'MXN'" in src
+    assert "effectiveCurrency === 'COP'" in src
+    assert "budgetCurrency === 'MXN'" not in src, (
+        "El placeholder volvió a leer budgetCurrency crudo en vez de effectiveCurrency."
+    )
+    assert "budgetCurrency === 'COP'" not in src
     assert "Ej. 2000" in src
     assert "Ej. 400000" in src
 
 
-def test_qbudget_aria_label_cubre_monedas_nuevas_y_conserva_originales():
+def test_qbudget_aria_label_usa_effective_currency_y_conserva_frases():
     src = _read_qbudget_jsx()
+    assert "effectiveCurrency === 'EUR'" in src
+    assert "budgetCurrency === 'EUR'" not in src, (
+        "El aria-label volvió a leer budgetCurrency crudo en vez de effectiveCurrency."
+    )
     assert "Presupuesto total en euros" in src
     assert "Presupuesto total en pesos mexicanos" in src
     assert "Presupuesto total en pesos colombianos" in src
     # Byte-identidad del dark path: los 2 originales siguen ahí.
     assert "Presupuesto total en dólares" in src
     assert "Presupuesto total en pesos dominicanos" in src
+
+
+# ── InteractiveAssessmentFlow.jsx / useBudgetFloor.js: los 2 call sites que el
+#    review encontró SIN gatear ────────────────────────────────────────────────
+
+def test_interactive_assessment_flow_gate_usa_effective_budget_currency():
+    """[fix-round 1 · review] `isCustomBudgetValid` (SSOT de las TRES puertas:
+    validateExtra del step, el salto a la última pregunta, y el submit) debe
+    resolver la moneda vía `effectiveBudgetCurrency` — no `fd.budgetCurrency`
+    crudo, o una moneda beta STALE (bandera apagada tras rollback) aceptaría un
+    monto que el backend, con el mismo knob apagado, rechazaría con 422 en RD$."""
+    src = _read_interactive_assessment_flow_jsx()
+    m = re.search(r"const isCustomBudgetValid = \(fd\) =>([\s\S]*?);\n\n", src)
+    assert m, "No se pudo aislar isCustomBudgetValid en InteractiveAssessmentFlow.jsx"
+    body = m.group(1)
+    assert "effectiveBudgetCurrency(" in body, (
+        "isCustomBudgetValid no usa effectiveBudgetCurrency — vulnerable al rollback "
+        "de moneda STALE (review de Task 6, fix-round 1)."
+    )
+    assert "fd.budgetCurrency || 'DOP'" not in body, (
+        "isCustomBudgetValid sigue usando fd.budgetCurrency crudo."
+    )
+    assert re.search(
+        r"import\s*\{[^}]*effectiveBudgetCurrency[^}]*\}\s*from\s*['\"]\.\./\.\./config/formValidation['\"]",
+        src,
+    ), "InteractiveAssessmentFlow.jsx no importa effectiveBudgetCurrency de config/formValidation."
+
+
+def test_use_budget_floor_usa_effective_budget_currency():
+    """[fix-round 1 · review] El piso ESTÁTICO (fallback sin red, lo que se ve
+    mientras el fetch personalizado no ha vuelto) de `useBudgetFloor` debe resolver
+    la moneda vía `effectiveBudgetCurrency` — mismo motivo que el gate del flow."""
+    src = _read_use_budget_floor_js()
+    assert re.search(r"const currency = effectiveBudgetCurrency\(", src), (
+        "useBudgetFloor no calcula `currency` vía effectiveBudgetCurrency."
+    )
+    assert "formData?.budgetCurrency || 'DOP'" not in src, (
+        "useBudgetFloor sigue leyendo formData?.budgetCurrency crudo."
+    )
+    assert re.search(
+        r"import\s*\{[^}]*effectiveBudgetCurrency[^}]*\}\s*from\s*['\"]\.\./config/formValidation['\"]",
+        src,
+    ), "useBudgetFloor.js no importa effectiveBudgetCurrency de config/formValidation."

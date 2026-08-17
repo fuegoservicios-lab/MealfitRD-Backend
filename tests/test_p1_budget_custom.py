@@ -30,6 +30,12 @@ _ORCH_PY = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8")
 _IQ_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "questions" / "QBudget.jsx").read_text(encoding="utf-8")
 _FLOW_JSX = (_REPO_ROOT / "frontend" / "src" / "components" / "assessment" / "InteractiveAssessmentFlow.jsx").read_text(encoding="utf-8")
 _CTX_JSX = (_REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx").read_text(encoding="utf-8")
+# [P1-COUNTRY-SYSTEM-F1 · fix-round 1 · review] `currencyOptionsForCountry` (por lo
+# tanto los literales `value:'DOP'/label:'RD$'` y `value:'USD'/label:'US$'`) y
+# `effectiveBudgetCurrency` viven en formValidation.js desde el fix-round 1 de Task 6
+# — QBudget/InteractiveAssessmentFlow/useBudgetFloor los IMPORTAN, ya no los definen
+# inline. Ver test_p1_country_system_f1.py sección T6 para el detalle completo.
+_FORMVAL_JS = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -139,11 +145,20 @@ def test_budget_currency_toggle_defaults_to_dop():
     assert re.search(r"onChange=\{\(\w+\)\s*=>\s*updateData\('budgetCurrency',\s*\w+\)\}", _IQ_JSX), (
         "El control de moneda ya no escribe en `budgetCurrency`."
     )
-    assert re.search(r"value:\s*'DOP'\s*,\s*label:\s*'RD\$'", _IQ_JSX), (
-        "Falta la opción RD$ (budgetCurrency='DOP')."
+    # [reapuntado 2026-08-16, P1-COUNTRY-SYSTEM-F1 fix-round 1] Los literales
+    # value:'DOP'/'USD' vivían inline en QBudget.jsx; ahora `currencyOptionsForCountry`
+    # (formValidation.js) los arma — QBudget solo IMPORTA y llama al helper (compartido
+    # con InteractiveAssessmentFlow/useBudgetFloor, que necesitan la misma tabla). Misma
+    # capacidad afirmada (las DOS opciones existen con su rótulo), archivo distinto.
+    assert re.search(r"value:\s*'DOP'\s*,\s*label:\s*'RD\$'", _FORMVAL_JS), (
+        "Falta la opción RD$ (budgetCurrency='DOP') en formValidation.js."
     )
-    assert re.search(r"value:\s*'USD'\s*,\s*label:\s*'US\$'", _IQ_JSX), (
-        "Falta la opción US$ (budgetCurrency='USD')."
+    assert re.search(r"value:\s*'USD'\s*,\s*label:\s*'US\$'", _FORMVAL_JS), (
+        "Falta la opción US$ (budgetCurrency='USD') en formValidation.js."
+    )
+    assert "currencyOptionsForCountry(" in _IQ_JSX, (
+        "QBudget ya no llama al helper compartido currencyOptionsForCountry — "
+        "podría haber vuelto a un array de opciones hardcodeado por su cuenta."
     )
     # El default visible es RD$ (peso) cuando el campo no se ha tocado.
     assert "formData.budgetCurrency || 'DOP'" in _IQ_JSX, (
@@ -172,15 +187,18 @@ def test_build_budget_context_uses_currency():
 # 7. [BUDGET-MIN · 2026-05-31] Mínimo viable escalado por duración + moneda
 # ---------------------------------------------------------------------------
 def test_budget_minimum_enforced_and_shared_ssot():
-    _FORMVAL = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
     # SSOT del mínimo en formValidation.
     # [BUDGET-MIN-NONLINEAR · 2026-06-23] La tabla per-ciclo reemplazó BUDGET_MIN_PER_DAY.
-    assert "export const minBudgetFor" in _FORMVAL and "BUDGET_MIN_TOTAL" in _FORMVAL, (
+    assert "export const minBudgetFor" in _FORMVAL_JS and "BUDGET_MIN_TOTAL" in _FORMVAL_JS, (
         "Falta el helper SSOT `minBudgetFor` / `BUDGET_MIN_TOTAL` en formValidation.js."
     )
     # El flow gatea "Siguiente Paso" con el MÍNIMO (no solo > 0).
-    assert "minBudgetFor(fd.budgetCurrency" in _FLOW_JSX, (
-        "El validateExtra del flow no exige el mínimo (minBudgetFor) — solo > 0."
+    # [reapuntado 2026-08-16, P1-COUNTRY-SYSTEM-F1 fix-round 1] `fd.budgetCurrency`
+    # crudo habría re-abierto el bug de rollback que el review encontró (una moneda
+    # beta STALE aceptando un monto que el backend, con el knob apagado, rechazaría) —
+    # ahora pasa por `effectiveBudgetCurrency` antes de `minBudgetFor`.
+    assert "minBudgetFor(effectiveBudgetCurrency(fd" in _FLOW_JSX, (
+        "El validateExtra del flow no exige el mínimo vía minBudgetFor(effectiveBudgetCurrency(...))."
     )
     # QBudget usa el mismo helper (SSOT) para el hint + el input min + la advertencia.
     # [P1-BUDGET-FLOOR-PERSONALIZADO · 2026-07-09] QBudget ya no llama minBudgetFor
