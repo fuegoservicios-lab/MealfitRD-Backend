@@ -6814,7 +6814,13 @@ def _rebuild_plan_shopping_lists_inline(
             logger.warning(f"[P1-UPDATE-LIST-INLINE-RECALC] guard no-op ({surface}): {_coh_il_e}")
         try:
             from nutrition_calculator import refresh_budget_reconciliation as _rbr_il
-            _sum_il = _ccs_il(s7, s15h, s30h, duration)
+            # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7 fix-round · review Critical)] plan_data
+            # ya trae la clave desde el INSERT del plan — beta ⇒ None, cero recalculo de
+            # costo/reconciliación. Este call site es DEFAULT-ON (MEALFIT_UPDATE_INLINE_LIST_
+            # RECALC="true") y corre en swap-persist/regen-day/recipe-expand — sin este gate,
+            # un plan beta con ítems `estimated_cost_rd=None` producía un dict de CEROS
+            # técnicamente no-None que SÍ se persistía como shopping_cost_summary.
+            _sum_il = _ccs_il(s7, s15h, s30h, duration, pricing_mode=plan_data.get("_pricing_mode"))
             if _sum_il:
                 plan_data["shopping_cost_summary"] = _sum_il
                 # [P2-AUDIT-V6-BATCH · 2026-07-03] (P2-H) user_id → sugerencias brand-aware.

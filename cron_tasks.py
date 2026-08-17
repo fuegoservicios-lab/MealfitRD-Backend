@@ -32517,7 +32517,16 @@ __PLAN_MODE_GATE__
                                         full_plan_data['aggregated_shopping_list'] = (
                                             aggr_15_hybrid if grocery_duration == "biweekly"
                                             else aggr_30_hybrid if grocery_duration == "monthly" else aggr_7)
-                                        _sum_t2b = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration)
+                                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7 fix-round · review
+                                        # Critical)] full_plan_data trae la clave desde el INSERT —
+                                        # gate explícito: este pase corre bajo "excedido" leído de
+                                        # DATOS PERSISTIDOS (full_plan_data.get('budget_reconciliation')),
+                                        # no de un cómputo fresco de ESTE chunk — una reconciliación
+                                        # STALE sembrada por un leak aguas arriba (ej. sitios sin este
+                                        # mismo gate) podría disparar este pase y auto-perpetuarse vía
+                                        # refresh_budget_reconciliation. No se asume inalcanzable.
+                                        _sum_t2b = _ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,
+                                                            pricing_mode=full_plan_data.get("_pricing_mode"))
                                         if _sum_t2b:
                                             full_plan_data["shopping_cost_summary"] = _sum_t2b
                                             _rbr_t2(full_plan_data)

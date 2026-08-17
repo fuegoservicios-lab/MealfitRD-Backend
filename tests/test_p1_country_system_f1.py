@@ -2620,28 +2620,99 @@ def test_compute_shopping_cost_summary_pricing_mode_no_beta_string_no_suprime():
     assert out is not None
 
 
-_CSS_CALLSITE_FILES = {
-    "graph_orchestrator.py": '_p1b_ccs(\n                aggr_list_7, aggr_list_15_hybrid, aggr_list_30_hybrid, grocery_duration,\n                pricing_mode=result.get("_pricing_mode"),\n            )',
-    "cron_tasks.py": '_ccs_extras(aggr_7, aggr_15, aggr_30, grocery_duration,\n                            pricing_mode=plan_data.get("_pricing_mode"))',
-    "tools.py": 'pricing_mode=plan_data_fresh.get("_pricing_mode"),',
-    "routers/plans.py": 'pricing_mode=plan_data_fresh.get("_pricing_mode"))',
+# [T7 fix-round · review Critical] La entrega original gateó 5 de 8 call sites reales de
+# `compute_shopping_cost_summary` — el escaneo era por ARCHIVO (un `needle` fijo por
+# fichero), así que un 2º call site en el MISMO archivo (T2 `_sum_t2b`, la 2ª pasada de
+# convergencia) o un call site en un archivo no listado (`routers/plans.py::_rebuild_
+# plan_shopping_lists_inline`, DEFAULT-ON, invocado desde swap-persist/regen-day/
+# recipe-expand) quedaban invisibles al test. El reviewer lo ejecutó empíricamente: un
+# plan beta con `estimated_cost_rd=None` en todos sus ítems producía un dict de CEROS
+# no-None que SÍ se persistía como `shopping_cost_summary` — el modo de fallo exacto que
+# el docstring de la función advierte.
+#
+# Reemplazo: escaneo GENÉRICO por CALL SITE, no por archivo. Encuentra TODO alias de
+# import de `compute_shopping_cost_summary` en cualquier .py de producción bajo backend/
+# (excluidos tests/, venvs, scripts/scratch — no código de app en caliente) y CADA
+# invocación de ese alias (paren-matched, multi-línea seguro), exige `pricing_mode=` en
+# la lista de argumentos. Comentarios stripeados ANTES de buscar — una mención en un
+# comentario no debe contar ni como import ni como call site.
+
+_CSS_EXCLUDED_TOP_DIRS = {
+    "tests", "venv", "venv-test", "test_venv", "__pycache__", "scripts", "scratch",
+    "migrations", "data", "docs", "infra", "uploads", ".git", ".pytest_cache", ".superpowers",
 }
+_CSS_ALIAS_IMPORT_RE = re.compile(r"compute_shopping_cost_summary\s+as\s+(\w+)")
 
 
-@pytest.mark.parametrize("relpath,needle", list(_CSS_CALLSITE_FILES.items()))
-def test_compute_shopping_cost_summary_callsites_pasan_pricing_mode(relpath, needle):
-    src = (_BACKEND / relpath).read_text(encoding="utf-8")
-    assert needle in src, f"{relpath}: call site de compute_shopping_cost_summary sin pricing_mode."
+def _css_strip_comment_lines(src: str) -> str:
+    return "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
 
 
-def test_compute_shopping_cost_summary_t2_chunk_worker_pasa_pricing_mode():
-    """El call site de T2 (cron_tasks.py, distinto del helper _compute_cost_summary_jsonb_extras
-    de arriba) — cadena literal más larga para no confundirse con el helper genérico."""
-    src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
-    assert (
-        '_ccs_t2(aggr_7, aggr_15_hybrid, aggr_30_hybrid, grocery_duration,\n'
-        '                                           pricing_mode=full_plan_data.get("_pricing_mode"))'
-    ) in src
+def _css_iter_backend_py_files():
+    for p in sorted(_BACKEND.rglob("*.py")):
+        rel = p.relative_to(_BACKEND)
+        if rel.parts and rel.parts[0] in _CSS_EXCLUDED_TOP_DIRS:
+            continue
+        yield p
+
+
+def _find_compute_shopping_cost_summary_calls():
+    """[(relpath, lineno_aprox, alias, args_text), ...] — CADA invocación real (no import,
+    no comentario) en código de producción, vía cualquier alias."""
+    calls = []
+    for path in _css_iter_backend_py_files():
+        raw = path.read_text(encoding="utf-8")
+        src = _css_strip_comment_lines(raw)
+        aliases = set(_CSS_ALIAS_IMPORT_RE.findall(src))
+        if path.name == "shopping_calculator.py":
+            # La propia definición del módulo no es un call site — nunca se importa
+            # "as compute_shopping_cost_summary" a sí misma, pero por si acaso.
+            aliases.discard("compute_shopping_cost_summary")
+        for alias in aliases:
+            call_re = re.compile(r"\b" + re.escape(alias) + r"\s*\(")
+            for m in call_re.finditer(src):
+                i = m.end() - 1  # posición de '('
+                depth = 0
+                j = i
+                while j < len(src):
+                    if src[j] == "(":
+                        depth += 1
+                    elif src[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                args_text = src[m.start(): j + 1]
+                lineno = src[: m.start()].count("\n") + 1
+                calls.append((str(path.relative_to(_BACKEND)).replace("\\", "/"), lineno, alias, args_text))
+    return calls
+
+
+def test_compute_shopping_cost_summary_todo_call_site_pasa_pricing_mode():
+    """Debe fallar si CUALQUIER call site (presente o un 9º futuro) no lleva
+    `pricing_mode=` en su lista de argumentos — sin importar en qué archivo viva ni
+    cuántas veces se invoque el mismo alias importado."""
+    calls = _find_compute_shopping_cost_summary_calls()
+    assert calls, "el escaneo no encontró NINGÚN call site — probablemente está roto."
+    missing = [
+        (relpath, lineno, alias) for relpath, lineno, alias, args in calls
+        if "pricing_mode=" not in args
+    ]
+    assert not missing, (
+        "Call site(s) de compute_shopping_cost_summary SIN pricing_mode=:\n  - "
+        + "\n  - ".join(f"{r}:~{n} (alias {a})" for r, n, a in missing)
+    )
+
+
+def test_compute_shopping_cost_summary_ocho_call_sites_exactos():
+    """Ancla el conteo que el review reprodujo empíricamente (8). Si sube, un call site
+    NUEVO apareció — el test de arriba ya lo cubre, pero este hace el crecimiento
+    visible en vez de silencioso. Si baja, alguien consolidó/eliminó un call site
+    (probablemente está bien, pero merece que el número baje a propósito, no por
+    accidente de este test)."""
+    calls = _find_compute_shopping_cost_summary_calls()
+    sites = ", ".join(f"{r}:~{n}" for r, n, _a, _args in calls)
+    assert len(calls) == 8, f"se esperaban 8 call sites, se hallaron {len(calls)}: {sites}"
 
 
 # ── build_budget_reference: beta ⇒ None incondicional (T6 fold) ─────────────────────────────
@@ -2970,3 +3041,87 @@ def test_t7_sweep_control_do_plan_mismo_fixture_produce_rd(monkeypatch):
                         ensure_ascii=False, default=str)
     assert any(it.get("estimated_cost_rd") == 999.0 for it in items), items
     assert summary is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ── T7 fix-round (review Critical) — el leak REAL que el reviewer ejecutó ───────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `compute_shopping_cost_summary` tiene 8 call sites de producción (no 6 como documentaba
+# la entrega original) — 3 quedaron sin `pricing_mode=`:
+#   1. `routers/plans.py::_rebuild_plan_shopping_lists_inline` (alias `_ccs_il`) — DEFAULT-ON
+#      (`MEALFIT_UPDATE_INLINE_LIST_RECALC` default "true"), invocado desde swap-persist,
+#      regen-day y recipe-expand. Sin el gate, un plan beta (`estimated_cost_rd=None` en
+#      TODOS sus ítems) producía un dict de CEROS técnicamente no-`None` que SÍ se
+#      persistía como `shopping_cost_summary` — el modo de fallo exacto que el docstring de
+#      la función ya advertía en prosa pero no cerraba en código.
+#   2. `graph_orchestrator.py::_bc_ccs` (2ª pasada de budget-convergence) — en la práctica
+#      inalcanzable (depende de `status=="excedido"`, que nunca ocurre sin un primer
+#      `shopping_cost_summary` no-None), pero gateado por el MISMO principio de
+#      defensa-en-profundidad que `build_budget_reference`.
+#   3. `cron_tasks.py::_ccs_t2` 2ª invocación (`_sum_t2b`) — el gate del primer llamado
+#      (`_sum_t2`) NO cubre este 2º call porque lee "excedido" desde
+#      `full_plan_data.get('budget_reconciliation')` — datos PERSISTIDOS, no un cómputo
+#      fresco de este chunk. Una reconciliación STALE sembrada por el leak #1 (que corre en
+#      OTRA superficie, antes de que este chunk corra) podría disparar este pase y
+#      auto-perpetuarse vía `refresh_budget_reconciliation`.
+#
+# Este bloque prueba el leak #1 FUNCIONALMENTE (el más grave: DEFAULT-ON, tráfico real de
+# usuario) invocando la función real, no un mock.
+
+def _inline_recalc_plan_fixture(pricing_mode=None):
+    plan = {
+        "days": [{"day": 1, "meals": [{
+            "meal": "Almuerzo",
+            "ingredients": ["200 g de pollo", "1 taza de arroz"],
+            "ingredients_raw": ["200 g de pollo", "1 taza de arroz"],
+        }]}],
+    }
+    if pricing_mode:
+        plan["_pricing_mode"] = pricing_mode
+    return plan
+
+
+def test_rebuild_plan_shopping_lists_inline_beta_no_persiste_shopping_cost_summary(monkeypatch):
+    """[T7 fix-round · review Critical] El leak REAL ejecutado por el reviewer: invoca
+    `_rebuild_plan_shopping_lists_inline` (routers/plans.py, DEFAULT-ON, swap-persist/
+    regen-day/recipe-expand) con un plan_data beta y un precio FORZADO vía monkeypatch
+    (mismo patrón anti-falso-verde del resto del archivo). `shopping_cost_summary` NO debe
+    quedar escrito en plan_data — antes del fix quedaba un dict de ceros no-None."""
+    import shopping_calculator as sc
+    from routers.plans import _rebuild_plan_shopping_lists_inline
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 999.0)
+    sc.reset_caps_applied_last_run()
+
+    plan_data = _inline_recalc_plan_fixture(pricing_mode="beta_no_prices")
+    ok = _rebuild_plan_shopping_lists_inline(plan_data, None, "test-surface-t7")
+
+    assert ok is True, "el rebuild inline debe reportar éxito (el gate de pricing NO es un fallo)."
+    assert "shopping_cost_summary" not in plan_data, (
+        f"REGRESIÓN: shopping_cost_summary quedó escrito para un plan beta: "
+        f"{plan_data.get('shopping_cost_summary')!r}"
+    )
+    assert "budget_reconciliation" not in plan_data
+    # El aggregator SÍ corrió (las listas se reconstruyeron) — el gate es específico al
+    # resumen de costo, no un abort general del rebuild.
+    weekly = plan_data.get("aggregated_shopping_list_weekly")
+    assert weekly, "el rebuild debe seguir reconstruyendo las listas incluso en modo beta."
+    for it in weekly:
+        assert it.get("estimated_cost_rd") is None, it
+
+
+def test_rebuild_plan_shopping_lists_inline_do_control_si_persiste(monkeypatch):
+    """Control DO: el MISMO fixture/monkeypatch SIN el flag SÍ persiste
+    `shopping_cost_summary` con costo real — ancla que el test de arriba mide el gate,
+    no un `_rebuild_plan_shopping_lists_inline` que jamás persiste nada."""
+    import shopping_calculator as sc
+    from routers.plans import _rebuild_plan_shopping_lists_inline
+    monkeypatch.setattr(sc, "_cost_from_market", lambda *a, **kw: 999.0)
+    sc.reset_caps_applied_last_run()
+
+    plan_data = _inline_recalc_plan_fixture(pricing_mode=None)
+    ok = _rebuild_plan_shopping_lists_inline(plan_data, None, "test-surface-t7-control")
+
+    assert ok is True
+    assert "shopping_cost_summary" in plan_data
+    assert plan_data["shopping_cost_summary"]["by_duration"]["weekly"]["trip_total_rd"] > 0

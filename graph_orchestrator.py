@@ -38066,7 +38066,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         else _bc30h if grocery_duration == "monthly" else _bc7
                     )
                     from shopping_calculator import compute_shopping_cost_summary as _bc_ccs
-                    _bc_sum = _bc_ccs(_bc7, _bc15h, _bc30h, grocery_duration)
+                    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7 fix-round · review Critical)]
+                    # `result` ya trae la clave (estampada al inicio de assemble_plan_node).
+                    # En la práctica este pase ya es inalcanzable para beta (status "excedido"
+                    # nunca se alcanza sin un shopping_cost_summary previo no-None) — gate
+                    # explícito de defensa-en-profundidad, mismo patrón que build_budget_reference.
+                    _bc_sum = _bc_ccs(_bc7, _bc15h, _bc30h, grocery_duration, pricing_mode=result.get("_pricing_mode"))
                     if _bc_sum:
                         result["shopping_cost_summary"] = _bc_sum
                         from nutrition_calculator import compute_budget_reconciliation as _bc_cbr
