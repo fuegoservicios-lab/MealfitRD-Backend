@@ -67,7 +67,12 @@ def test_close_happens_before_recalc_if_block():
     # [reapuntado 2026-07-28] 1200 → 3200: P1-DASH-BUDGET-AUTOFILL (06-23) insertó
     # ~20 líneas de sync de presupuesto (a ~60 columnas de indentación) entre el
     # anchor y el close — el ORDEN del contrato sigue intacto, solo quedó lejos.
-    window = _DASHBOARD[idx : idx + 3200]
+    # [reapuntado 2026-08-16] 3200 → 3800: P1-COUNTRY-SYSTEM-F1 Task 7 insertó un
+    # comentario de ~7 líneas justo tras el anchor (effectiveBudgetCurrency vs
+    # budgetCurrency crudo) — el `if` quedó a offset 3212, 12 bytes fuera de la
+    # ventana anterior. MISMA clase de reapuntado que el de arriba: el ORDEN del
+    # contrato sigue intacto, solo se alejó de nuevo. Ver test_p1_country_system_f1.py.
+    window = _DASHBOARD[idx : idx + 3800]
     close_pos = window.find("setShowDespensaDropdown(false)")
     if_pos = window.find("if (userProfile?.id && planData)")
     assert close_pos > 0, (
@@ -93,8 +98,12 @@ def test_no_duplicate_close_after_finally():
     anchor = "safeUpdateHealthProfile({ groceryDuration: opt.value });"
     idx = _DASHBOARD.find(anchor)
     assert idx > 0
-    # Ventana extendida (callback completo + onClick close)
-    window = _DASHBOARD[idx : idx + 3000]
+    # Ventana extendida (callback completo + onClick close).
+    # [reapuntado 2026-08-16] 3000 → 3800, misma razón que arriba (P1-COUNTRY-SYSTEM-F1
+    # Task 7): el único `setShowDespensaDropdown(false)` vive a offset 3128, dentro de la
+    # ventana anterior de 3000 por apenas 128 bytes de margen — el comentario nuevo lo dejó
+    # exactamente en el borde. Mismo tamaño que la ventana hermana de arriba por consistencia.
+    window = _DASHBOARD[idx : idx + 3800]
     count = window.count("setShowDespensaDropdown(false)")
     assert count == 1, (
         f"Se esperaba exactamente 1 llamada a setShowDespensaDropdown(false) "

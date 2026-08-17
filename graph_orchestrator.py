@@ -3840,6 +3840,18 @@ class PlanState(TypedDict):
     #                                           se EXTIENDE entre semanas, no se
     #                                           sobrescribe).
     #
+    # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (Task 7)] PRICING (modo beta sin precios nativos):
+    #   - `_pricing_mode`                     ('beta_no_prices' | ausente — NUNCA `None`
+    #                                           explícito. Escrita en `assemble_plan_node`
+    #                                           ANTES del bloque de agregación, vía
+    #                                           `constants.pricing_mode_for_form_data`;
+    #                                           leída por `get_shopping_list_delta`
+    #                                           (suprime `estimated_cost_rd`) y por los 5
+    #                                           call sites de `compute_shopping_cost_summary`
+    #                                           en graph_orchestrator.py/cron_tasks.py/
+    #                                           tools.py/routers/plans.py. DO/knob-off ⇒
+    #                                           la clave nunca se escribe — byte-identidad).
+    #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
     # campo en este TypedDict ANTES de tocar el call site — el bug equivalente
