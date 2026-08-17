@@ -13,6 +13,10 @@ from knobs import _env_int, _env_float
 logger = logging.getLogger(__name__)
 
 from prompts.proactive import PROACTIVE_PROMPT
+# [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum del dueño §2: el nudge proactivo es
+# la MISMA voz que el coach del chat — mismo directive, mismo builder SSOT (no reimplementa
+# el texto). Ver `run_proactive_checks` para los 2 call sites.
+from prompts.chat_agent import build_language_directive
 
 
 # [P3-PREVIEW-MODEL-KNOB · 2026-05-12] Knob para overridear el modelo LLM
@@ -440,6 +444,11 @@ def run_proactive_checks():
                 continue
             
             health = profile.get("health_profile", {})
+            # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` del MISMO `profile` ya
+            # leído arriba (get_user_profile) — cero round-trips extra. Ausente/falsy ⇒
+            # fallback explícito 'es-DO'; `build_language_directive` colapsa cualquier valor
+            # no reconocido a "" (byte-idéntico a hoy).
+            _nudge_locale = profile.get("locale") or "es-DO"
             schedule = health.get("scheduleType", "standard")
             if schedule == "night_shift" or schedule == "variable":
                 logger.info(f"🚫 [CRON] Usuario {user_id}: turno {schedule}. Saltando.")
@@ -491,6 +500,10 @@ Escríbele un mensaje corto (máximo 2 líneas) muy amistoso e indulgente al est
 {_cierre}
 No uses demasiados emojis. Sé directo, breve y empático.
 """
+                    # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: este nudge es
+                    # prosa LLM user-facing (chat + body de la Web Push) — misma frontera que
+                    # el coach: solo mueve el IDIOMA de la prosa, comida/nombres siguen español.
+                    prompt += build_language_directive(_nudge_locale)
             else:
                 # Checar si la comida objetivo o algo con ese nombre ya se consumió
                 already_ate = False
@@ -552,6 +565,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     tone_instruction=final_tone,
                     style_instruction=style_instruction
                 )
+                # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Mismo directive que el bloque
+                # "Resumen del día" arriba — ver esa nota para el contrato completo.
+                prompt += build_language_directive(_nudge_locale)
                 
             chat_llm = ChatDeepSeek(
                 model=_proactive_model_name(),

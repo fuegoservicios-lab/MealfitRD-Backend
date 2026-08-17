@@ -37,10 +37,15 @@ from pathlib import Path
 import pytest
 
 import constants
+import prompts.chat_agent as chat_agent_prompts
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _FRONTEND = _BACKEND.parent / "frontend"
 _SCRIPT = _BACKEND / "scripts" / "country_catalog_gap.py"
+_AGENT_PY = _BACKEND / "agent.py"
+_PROACTIVE_AGENT_PY = _BACKEND / "proactive_agent.py"
+_CHAT_AGENT_PY = _BACKEND / "prompts" / "chat_agent.py"
+_HELP_BOT_PY = _BACKEND / "prompts" / "help_bot.py"
 
 
 def _load():
@@ -428,3 +433,278 @@ def test_paridad_tz_country_map_con_country_profiles():
         f"Sin perfil backend: {codigos_tz - perfiles}. "
         f"Perfilados sin zona dedicada: {perfiles - codigos_tz}."
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# F. Task 3 — Coach en tu idioma, comida en español (Addendum §2)
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+# `prompts.chat_agent.build_language_directive(locale)` es el SSOT: una directiva de idioma
+# derivada de `user_profiles.locale` (los 5 valores de P1-I18N-DASHBOARD: es-DO, en-US, pt-BR,
+# fr-FR, it-IT), inyectada en AMBAS copias del coach (`agent.py::chat_with_agent` /
+# `chat_with_agent_stream`) Y en el agente proactivo (`proactive_agent.py::run_proactive_checks`,
+# notificaciones LLM user-facing — chat + push body). FRONTERA DURA (Addendum §2, nombrada dos
+# veces por el dueño): nombres de alimentos/platos y tool calls SIEMPRE en español canónico — la
+# propia directiva lo instruye Y las tool-instructions (`build_tools_instructions*`) NUNCA se
+# parametrizan por locale (test F8, "las tool calls no ganan ningún camino de traducción").
+#
+# `country` (cocina/precios) es un eje INDEPENDIENTE de `locale` (idioma) — spec Fase 2
+# "Limitaciones aceptadas": "no se infieren mutuamente". Nada aquí debe leer/reutilizar
+# `country_for_form_data`.
+#
+# Parser, NUNCA `import agent`/`import proactive_agent`: ambos módulos cargan LangGraph/DB pool/
+# .env a nivel de import (mismo motivo que test_p0_agent_1_user_id_override.py y
+# test_p1_prod_audit_3.py leen agent.py como texto plano). `prompts.chat_agent` SÍ se importa en
+# vivo para las pruebas funcionales de `build_language_directive` — su único import de módulo es
+# `datetime`/`typing` (cero DB/LLM), confirmado inocuo (mismo patrón que test_p3_chat_identity.py).
+#
+# Decisiones de alcance (documentadas, no gaps — ver reporte de la task para el detalle):
+#   - `prompts/help_bot.py` (el bot de "Obtener ayuda", marketing/producto): FUERA de alcance.
+#     Su propio docstring lo dice: "NO tiene tools, NO recibe user_id, NO toca DB" — no hay
+#     `locale` que leer (test F9).
+#   - `vision_agent.py` (escaneo de comida): el prompt de vision produce un INVENTARIO
+#     ESTRUCTURADO de ingredientes en español dominicano (alimenta `pantry_names_match`), no
+#     prosa conversacional — es "contenido", no "coach"; frontera del Addendum lo excluye.
+#   - `generate_chat_title_background`/`TITLE_GENERATION_PROMPT` (título del chat en el
+#     sidebar): es una etiqueta de navegación de 2-4 palabras, no "prosa del coach" ni
+#     "notificación" — más cercano a "chrome del dashboard" (categoría YA cubierta por el i18n
+#     de UI). El contrato de esta task no lo nombra explícitamente entre los archivos a tocar;
+#     queda fuera, documentado para que un futuro P-fix lo retome si el dueño lo pide.
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _fn_body(src: str, def_line: str, end_marker: str | None = None) -> str:
+    """Mismo helper que `test_p1_prod_audit_3.py::_fn_body` — cuerpo de una función desde
+    `def_line` hasta `end_marker` (si se da) o el próximo `\\ndef ` top-level, o EOF."""
+    start = src.index(def_line)
+    if end_marker:
+        return src[start: src.index(end_marker, start)]
+    nxt = src.find("\ndef ", start + 1)
+    return src[start: nxt if nxt != -1 else len(src)]
+
+
+# ── F1. build_language_directive existe (RED si el Task 3 no se implementó) ───────────────
+
+def test_build_language_directive_existe_y_es_invocable():
+    assert hasattr(chat_agent_prompts, "build_language_directive")
+    assert chat_agent_prompts.build_language_directive("en-US") is not None
+
+
+# ── F2. es-DO ⇒ "" byte-idéntico, is-anchored (contrato Task 3: "is/== exact") ─────────────
+
+def test_es_do_devuelve_cadena_vacia_is_e_igualdad():
+    r = chat_agent_prompts.build_language_directive("es-DO")
+    assert r == ""
+    assert r is ""  # CPython interna el string vacío — anclaje `is` válido además de `==`
+
+
+@pytest.mark.parametrize("basura", [
+    None, "", "xx-XX", "ES-do", "es-do", "es", 123, 4.5, ["en-US"], {"locale": "en-US"},
+])
+def test_locale_none_vacio_o_basura_retorna_cadena_vacia_fail_safe(basura):
+    """Locale garbage/NULL ⇒ es-DO (fail-safe) — incluye tipos no-string (nunca debe lanzar)."""
+    assert chat_agent_prompts.build_language_directive(basura) == ""
+
+
+# ── F3. en-US ⇒ directiva + excepción de nombres + regla de tool calls ─────────────────────
+
+def test_en_us_contiene_directiva_excepcion_de_nombres_y_regla_tool_calls():
+    r = chat_agent_prompts.build_language_directive("en-US")
+    assert "SIEMPRE en English" in r
+    assert "nombres de alimentos y platos" in r and "español" in r
+    assert "en las tool calls usa EXCLUSIVAMENTE los nombres canónicos en español" in r
+
+
+@pytest.mark.parametrize("locale,idioma", [
+    ("pt-BR", "Português"),
+    ("fr-FR", "Français"),
+    ("it-IT", "Italiano"),
+])
+def test_los_otros_3_idiomas_contienen_su_propia_directiva(locale, idioma):
+    r = chat_agent_prompts.build_language_directive(locale)
+    assert f"SIEMPRE en {idioma}" in r
+    assert "nombres de alimentos y platos" in r and "español" in r
+    assert "en las tool calls usa EXCLUSIVAMENTE los nombres canónicos en español" in r
+
+
+# ── F4. Variante-cacheada (patrón T2-F1, _COUNTRY_PROMPT_RENDER_CACHE) ─────────────────────
+
+def test_cacheado_por_variante_misma_instancia_segunda_llamada():
+    r1 = chat_agent_prompts.build_language_directive("en-US")
+    r2 = chat_agent_prompts.build_language_directive("en-US")
+    assert r1 is r2, "debe reusar el string cacheado, no reconstruirlo por llamada"
+
+
+def test_cache_no_colisiona_entre_idiomas():
+    en = chat_agent_prompts.build_language_directive("en-US")
+    pt = chat_agent_prompts.build_language_directive("pt-BR")
+    assert en != pt
+    assert "English" in en and "Português" in pt
+
+
+# ── F5. Ambas copias del coach cargan la directiva (parser, ancla por propiedad) ───────────
+#
+# Lección P1-CHAT-PAUSED-PROMPT-BLOCKS (2026-08-14): "un bloque arreglado y otro contradice"
+# es un bug real de este mismo archivo. Las dos funciones se verifican POR SEPARADO — no basta
+# con que la subcadena exista UNA vez en todo agent.py.
+
+def test_chat_with_agent_inline_llama_build_language_directive():
+    src = _read(_AGENT_PY)
+    body = _fn_body(src, "def chat_with_agent(session_id: str", end_marker="def chat_with_agent_stream(")
+    assert "build_language_directive(" in body
+
+
+def test_chat_with_agent_stream_llama_build_language_directive():
+    src = _read(_AGENT_PY)
+    body = _fn_body(src, "def chat_with_agent_stream(session_id: str")  # última función del archivo → EOF
+    assert "build_language_directive(" in body
+
+
+def test_agent_importa_build_language_directive_de_prompts_chat_agent():
+    src = _read(_AGENT_PY)
+    ini = src.index("from prompts.chat_agent import (")
+    fin = src.index("\n)", ini)
+    bloque = src[ini:fin]
+    assert "build_language_directive" in bloque
+
+
+# ── F6. Guests ⇒ es-DO (nunca leen `locale`, se quedan en el default) — parser + funcional ──
+
+@pytest.mark.parametrize("def_line,end_marker", [
+    ("def chat_with_agent(session_id: str", "def chat_with_agent_stream("),
+    ("def chat_with_agent_stream(session_id: str", None),
+])
+def test_guest_nunca_gana_locale_default_precede_al_guard_de_autenticado(def_line, end_marker):
+    """`_coach_locale = "es-DO"` DEBE quedar asignado ANTES del
+    `if user_id and user_id != session_id and user_id != "guest":` que lo sobre-escribe con el
+    valor real del perfil. Un guest (o user_id==session_id) NUNCA entra a ese `if`, así que su
+    locale se queda en el default 'es-DO' estructuralmente — sin branch propio que pueda
+    olvidarse de excluir al guest."""
+    src = _read(_AGENT_PY)
+    body = _fn_body(src, def_line, end_marker=end_marker)
+    pos_default = body.index('_coach_locale = "es-DO"')
+    pos_guard = body.index('if user_id and user_id != session_id and user_id != "guest":')
+    assert pos_default < pos_guard
+
+
+@pytest.mark.parametrize("def_line,end_marker", [
+    ("def chat_with_agent(session_id: str", "def chat_with_agent_stream("),
+    ("def chat_with_agent_stream(session_id: str", None),
+])
+def test_coach_locale_del_profile_tiene_fallback_es_do_si_es_falsy(def_line, end_marker):
+    """Segunda capa de fail-safe (además de la de `build_language_directive` misma): si
+    `profile.get("locale")` viniera None/"" de la DB, el `or "es-DO"` evita propagar un
+    falsy al builder."""
+    src = _read(_AGENT_PY)
+    body = _fn_body(src, def_line, end_marker=end_marker)
+    assert '_profile_for_prompt.get("locale") or "es-DO"' in body
+
+
+def test_build_language_directive_de_guest_es_cadena_vacia_extremo_funcional():
+    """Extremo funcional del F6 parser: el valor que un guest estructuralmente conserva
+    ('es-DO', el default) produce "" — cierra el circuito parser+funcional pedido por el
+    contrato ('Guests ⇒ es-DO path')."""
+    assert chat_agent_prompts.build_language_directive("es-DO") == ""
+
+
+# ── F7. Reuso del profile ya leído — cero round-trips DB extra (paridad con el patrón country) ─
+
+@pytest.mark.parametrize("def_line,end_marker", [
+    ("def chat_with_agent(session_id: str", "def chat_with_agent_stream("),
+    ("def chat_with_agent_stream(session_id: str", None),
+])
+def test_locale_se_lee_del_mismo_get_user_profile_que_full_name(def_line, end_marker):
+    """El contrato de la task pide TRAZAR primero cómo llega `locale` y REUSAR si el endpoint
+    ya lee el perfil. `chat_with_agent`/`_stream` YA llamaban `get_user_profile(user_id)` para
+    `full_name` (P3-CHAT-IDENTITY) — el fix debe capturar ESE resultado (`_profile_for_prompt`)
+    y leer `locale` de ahí, no añadir un segundo SELECT."""
+    src = _read(_AGENT_PY)
+    body = _fn_body(src, def_line, end_marker=end_marker)
+    assert body.count("get_user_profile(user_id)") == 1, (
+        "debe haber EXACTAMENTE una llamada a get_user_profile(user_id) en este bloque — "
+        "full_name y locale comparten la misma lectura, cero round-trips nuevos"
+    )
+    assert "_profile_for_prompt = get_user_profile(user_id)" in body
+    assert '_id_name = _profile_for_prompt.get("full_name")' in body
+
+
+# ── F8. Las tool calls NUNCA ganan un camino de traducción (frontera dura, parser) ─────────
+
+def test_build_tools_instructions_no_gana_parametro_locale():
+    """`build_tools_instructions`/`_stream` (las instrucciones de tool-calling que el coach
+    recibe) deben conservar EXACTAMENTE su firma pre-Task-3 — sin parámetro `locale`. Si
+    alguien threadeara locale hasta aquí para "traducir" las instrucciones de herramientas,
+    este test lo atrapa: la frontera dura del Addendum exige que las tool calls sigan en
+    español canónico SIEMPRE, sin ningún camino condicional por idioma."""
+    src = _read(_CHAT_AGENT_PY)
+    assert "def build_tools_instructions(user_id: str, plan_en_pausa: bool = False) -> str:" in src
+    assert "def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False) -> str:" in src
+
+    body_inline = _fn_body(src, "def build_tools_instructions(user_id: str, plan_en_pausa: bool = False) -> str:",
+                            end_marker="def build_tools_instructions_stream(")
+    body_stream = _fn_body(src, "def build_tools_instructions_stream(user_id: str, plan_en_pausa: bool = False) -> str:",
+                            end_marker="def build_inventory_context(")
+    assert "locale" not in body_inline
+    assert "locale" not in body_stream
+    assert "build_language_directive" not in body_inline
+    assert "build_language_directive" not in body_stream
+
+
+# ── F9. help_bot (marketing/producto) — FUERA de alcance, documentado ──────────────────────
+
+def test_help_bot_no_gana_la_directiva_de_idioma():
+    """`prompts/help_bot.py` es el Q&A de producto público de "Obtener ayuda": cero tools,
+    cero DB, cero user_id en el prompt (su propio docstring lo declara). No hay `locale` que
+    leer — la directiva NO debe importarse ni mencionarse ahí."""
+    src = _read(_HELP_BOT_PY)
+    assert "build_language_directive" not in src
+    assert "locale" not in src
+
+
+# ── F10. proactive_agent — notificaciones LLM user-facing (Addendum §2, "las notificaciones") ─
+#
+# `run_proactive_checks` arma DOS prompts LLM cuyo output es prosa mostrada al usuario (se
+# persiste como mensaje del coach vía `save_message(..., "model", content)` Y viaja como body
+# de la Web Push): el f-string de "Resumen del día" (usuario sin ningún registro hoy) y
+# `PROACTIVE_PROMPT.format(...)` (comida específica olvidada). `classify_nudge_sentiment` NO
+# entra aquí: su output es JSON estructurado interno (sentiment/meal_logged/causal_reason),
+# nunca se muestra al usuario.
+
+def test_proactive_agent_importa_build_language_directive():
+    src = _read(_PROACTIVE_AGENT_PY)
+    assert "from prompts.chat_agent import build_language_directive" in src
+
+
+def test_run_proactive_checks_aplica_directiva_en_ambos_prompts_antes_del_invoke():
+    src = _read(_PROACTIVE_AGENT_PY)
+    body = _fn_body(src, "def run_proactive_checks():", end_marker="def _trigger_week2_background_generation(")
+    n = body.count("build_language_directive(")
+    assert n >= 2, f"esperaba ≥2 call sites (Resumen del día + PROACTIVE_PROMPT), encontré {n}"
+    # La directiva se aplica ANTES de invocar el LLM que consumirá `prompt` — si se apilara
+    # DESPUÉS del primer invoke sería demasiado tarde para ese branch.
+    primer_directive = body.index("build_language_directive(")
+    primer_invoke = body.index("chat_llm.invoke(prompt)")
+    assert primer_directive < primer_invoke
+
+
+def test_run_proactive_checks_locale_viene_del_profile_ya_leido_sin_query_extra():
+    """`profile = get_user_profile(user_id)` YA se lee en esta función (para `scheduleType` /
+    turno nocturno) — el locale del nudge debe leer del MISMO `profile`, cero round-trips
+    nuevos. Mismo criterio de reuso que F7 para agent.py."""
+    src = _read(_PROACTIVE_AGENT_PY)
+    body = _fn_body(src, "def run_proactive_checks():", end_marker="def _trigger_week2_background_generation(")
+    assert body.count("get_user_profile(user_id)") == 1
+    pos_profile = body.index("profile = get_user_profile(user_id)")
+    pos_locale = body.index('_nudge_locale = profile.get("locale")')
+    assert pos_profile < pos_locale
+
+
+def test_classify_nudge_sentiment_no_toca_la_directiva():
+    """`classify_nudge_sentiment` clasifica la RESPUESTA del usuario a un JSON interno — nunca
+    genera prosa mostrada al usuario. No debe ganar la directiva (scope creep innecesario)."""
+    src = _read(_PROACTIVE_AGENT_PY)
+    body = _fn_body(src, "def classify_nudge_sentiment(user_reply: str) -> dict:", end_marker="def handle_nudge_response(")
+    assert "build_language_directive" not in body

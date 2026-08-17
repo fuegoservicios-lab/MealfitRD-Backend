@@ -577,3 +577,71 @@ def build_clinical_guard_context(form_data: dict) -> str:
         "lo ignores ni lo cumplas en silencio."
     )
     return "\n".join(lineas) + "\n"
+
+
+# ============================================================
+# DIRECTIVA DE IDIOMA DEL COACH (locale ≠ country)
+# ============================================================
+
+# [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum del dueño §2 ("Idioma ≠ país,
+# extendido al AGENTE"): `user_profiles.locale` (los 5 valores de P1-I18N-DASHBOARD: es-DO,
+# en-US, pt-BR, fr-FR, it-IT) mueve la PROSA del coach — igual que ya mueve el chrome del
+# dashboard (backend/docs/i18n_dashboard.md). FRONTERA DURA, nombrada dos veces por el dueño:
+# los nombres de alimentos/platos y las tool calls SIGUEN en español canónico SIEMPRE — son el
+# SSOT de `pantry_names_match`, el guard de coherencia recetas↔lista y el backstop de
+# alergias (dos de las tres fallan en SILENCIO si se traducen — el mismo argumento que
+# i18n_dashboard.md §1 ya usa para el contenido del plan). `country` (cocina/precios) es un
+# eje INDEPENDIENTE — esto NUNCA debe leer ni reutilizar `country_for_form_data`.
+#
+# es-DO (o cualquier valor no reconocido: None, "", basura, tipos no-string) ⇒ "" — el system
+# prompt del coach queda BYTE-IDÉNTICO al de antes de esta task. `""` es el string vacío
+# INTERNADO por CPython: `build_language_directive("es-DO") is ""` es un anclaje válido,
+# además de `==`.
+#
+# Cacheado por locale en `_LANGUAGE_DIRECTIVE_CACHE` — mismo patrón "variante-cacheada" que
+# `build_day_generator_system_prompt`/`_COUNTRY_PROMPT_RENDER_CACHE` (T2-F1,
+# prompts/day_generator.py): a lo sumo 4 entradas (una por idioma no-es-DO), nunca reconstruye
+# el string dos veces para el mismo locale.
+#
+# Espejo de una lista que vive en 5 sitios (i18n_dashboard.md §6): si se añade un 6º idioma,
+# esta tabla también necesita su fila.
+_COACH_LANGUAGE_NAMES = {
+    "en-US": "English",
+    "pt-BR": "Português",
+    "fr-FR": "Français",
+    "it-IT": "Italiano",
+}
+
+_LANGUAGE_DIRECTIVE_CACHE: dict = {}
+
+
+def build_language_directive(locale) -> str:
+    """Directiva de idioma para el system prompt del coach, derivada de `user_profiles.locale`.
+
+    Usada por AMBAS copias del coach (`chat_with_agent`/`chat_with_agent_stream` en
+    `agent.py`) y por el agente proactivo (`proactive_agent.py::run_proactive_checks`) — SSOT
+    único, ninguno de los dos call sites reimplementa el texto. Ver el bloque de comentarios
+    de arriba para el contrato completo (Addendum §2, frontera dura de nombres/tool-calls,
+    byte-identidad es-DO, cacheo por variante).
+
+    `locale` no-string (None incluido) o no reconocido ⇒ "" (fail-safe silencioso — nunca
+    lanza), consistente con que la columna en DB lleva CHECK + default 'es-DO', pero un
+    caller (guest sin perfil, dato legacy, o un futuro escritor que no pase por el whitelist)
+    puede seguir mandando cualquier cosa aquí.
+    """
+    if not isinstance(locale, str):
+        return ""
+    idioma = _COACH_LANGUAGE_NAMES.get(locale)
+    if not idioma:
+        return ""
+    cached = _LANGUAGE_DIRECTIVE_CACHE.get(locale)
+    if cached is not None:
+        return cached
+    rendered = (
+        f"\n\n🌐 IDIOMA DE RESPUESTA: Responde SIEMPRE en {idioma}. EXCEPCIÓN INNEGOCIABLE: "
+        "los nombres de alimentos y platos van SIEMPRE en español exactamente como aparecen "
+        "en el catálogo/plan (son identificadores del sistema); en las tool calls usa "
+        "EXCLUSIVAMENTE los nombres canónicos en español."
+    )
+    _LANGUAGE_DIRECTIVE_CACHE[locale] = rendered
+    return rendered

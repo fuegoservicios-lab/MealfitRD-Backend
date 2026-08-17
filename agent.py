@@ -391,6 +391,7 @@ from prompts.chat_agent import (
     build_inventory_context,
     build_user_identity_context,
     build_clinical_guard_context,
+    build_language_directive,
 )
 # [P1-CHAT-PAST-DAYS · 2026-07-27] Memoria de días pasados — doc:
 # backend/docs/chat_past_days_memory.md
@@ -5876,8 +5877,17 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # Best-effort: el nombre solo se carga para usuarios autenticados.
     try:
         _id_name = ""
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
+        # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
+        # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
+        # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
+        # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
+        # (Addendum §2: "Guests ⇒ es-DO always").
+        _coach_locale = "es-DO"
         if user_id and user_id != session_id and user_id != "guest":
-            _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
+            _profile_for_prompt = get_user_profile(user_id) or {}
+            _id_name = _profile_for_prompt.get("full_name") or ""
+            _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
         system_prompt += build_user_identity_context(form_data or {}, _id_name)
         # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
         # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
@@ -5886,6 +5896,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
         # yendo a buscarla él. Ver `build_clinical_guard_context`.
         system_prompt += build_clinical_guard_context(form_data or {})
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
+        # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
+        # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
+        system_prompt += build_language_directive(_coach_locale)
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
@@ -6312,8 +6326,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # personaliza. Aditivo, no clínico. Nombre solo para autenticados (best-effort).
     try:
         _id_name = ""
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] `locale` sale del MISMO perfil que ya
+        # se lee para `full_name` — cero round-trips extra (mismo criterio de reuso que
+        # `country_for_form_data`, pero locale vive en `user_profiles`, NO en `form_data`, así
+        # que no hay un funnel existente que reusar salvo esta lectura). Guest/user_id==
+        # session_id nunca entra al `if` ⇒ `_coach_locale` se queda en el default 'es-DO'
+        # (Addendum §2: "Guests ⇒ es-DO always").
+        _coach_locale = "es-DO"
         if user_id and user_id != session_id and user_id != "guest":
-            _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
+            _profile_for_prompt = get_user_profile(user_id) or {}
+            _id_name = _profile_for_prompt.get("full_name") or ""
+            _coach_locale = _profile_for_prompt.get("locale") or "es-DO"
         system_prompt += build_user_identity_context(form_data or {}, _id_name)
         # [P0-CHAT-CLINICAL-BLOCK · 2026-08-11] Va JUSTO DESPUÉS de la identidad y en
         # LOS DOS call sites. El de arriba declara en su docstring que es «NO clínico»
@@ -6322,6 +6345,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         # coach solo se enteraba de una alergia por la inyección RAG (probabilística) o
         # yendo a buscarla él. Ver `build_clinical_guard_context`.
         system_prompt += build_clinical_guard_context(form_data or {})
+        # [P1-COUNTRY-SYSTEM-F2 · Task 3 · 2026-08-17] Addendum §2: `locale` mueve la PROSA
+        # del coach; comida/tool calls SIGUEN en español (frontera dura, ver
+        # `build_language_directive`). es-DO/None/garbage ⇒ "" (byte-idéntico a hoy).
+        system_prompt += build_language_directive(_coach_locale)
     except Exception as _id_err:
         logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
