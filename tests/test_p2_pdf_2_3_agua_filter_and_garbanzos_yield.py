@@ -77,12 +77,21 @@ class TestAguaHieloFilter:
 
     def test_aguaymanto_NOT_filtered(self):
         """Boundary check: 'aguaymanto' empieza con 'agua' pero es una fruta
-        real (NO debe ser tratada como agua)."""
+        real (NO debe ser tratada como agua).
+
+        [P1-COUNTRY-SYSTEM-F2 · fix-wave deploy-gate · 2026-08-17] T6 dio de alta 'Uchuva' (CO)
+        con 'aguaymanto' como alias real (mismo alimento, nombre regional distinto -- verificado
+        en DB: aliases=['uvilla', 'physalis', 'aguaymanto', 'golden berry', 'uchuvas']). El
+        resolver ahora CANONIZA 'aguaymanto' -> 'Uchuva' en vez de dejarlo pasar literal como
+        antes de T6. El invariante que este test protege (el filtro agua/hielo NO debe tragarse
+        'aguaymanto' por empezar con 'agua') se preserva igual: el item SOBREVIVE, solo que bajo
+        su nombre canónico -- se acepta cualquiera de los dos nombres, nunca los DOS ausentes a
+        la vez (eso sí sería el filtro de agua tragándoselo, el bug real que este test vigila)."""
         names = self._ingredient_names([
             "1 unidad de aguaymanto",
             "200g de pollo",
         ])
-        assert any("aguaymanto" in n for n in names), (
+        assert any("aguaymanto" in n or "uchuva" in n for n in names), (
             f"aguaymanto fue filtrado erróneamente — names={names}"
         )
 

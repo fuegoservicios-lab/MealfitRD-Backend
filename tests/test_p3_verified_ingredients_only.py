@@ -113,14 +113,25 @@ def test_helper_classifies_invented_vs_verified():
 
 @pytest.mark.skipif(not _DB, reason="requiere connection_pool a Neon prod")
 def test_aggregator_drops_unverified_keeps_verified(_force_enforcement):
+    """[P1-COUNTRY-SYSTEM-F2 · fix-wave deploy-gate · 2026-08-17] 'achiote' salió del fixture:
+    T6 le dio de alta una fila real en `master_ingredients` (`is_country_catalog_unpriced_item`
+    lo reconoce, P1-BAKING-STAPLES generalizado) -- ya NO es un buen ejemplo de "ingrediente
+    inventado", sobrevive AHORA a propósito como CATÁLOGO SIN PRECIO (mismo mecanismo que T5 le
+    dio a Jamón serrano/Gambas/etc para ES). `_is_verified_for_shopping("achiote")` sigue siendo
+    False (verificado, sin cambio) -- lo que cambió es que el aggregator YA NO lo dropea, por el
+    branch separado de unpriced-keep, no por el gate `MEALFIT_VERIFIED_INGREDIENTS_ONLY`. Ese
+    comportamiento es el CORRECTO y esperado, no un bug -- ver `test_helper_classifies_invented_vs_verified`
+    (línea 102), que sigue anclando `achiote is False` sin cambios. Sustituido por 'clavo dulce'
+    (verificado en vivo: sigue sin resolver a ningún master, `is_country_catalog_unpriced_item`
+    también False) -- mismo invariante protegido (off-catálogo genuino se dropea), fixture vivo."""
     from shopping_calculator import aggregate_and_deduct_shopping_list
     res = aggregate_and_deduct_shopping_list(
         ["120g de pechuga de pollo", "70g de arroz blanco",
-         "1 cdta de achiote", "1 cdta de sazon en polvo", "1 cdta de oregano"],
+         "1 cdta de clavo dulce", "1 cdta de sazon en polvo", "1 cdta de oregano"],
         structured=True,
     )
     names = [str(i.get("name")).lower() for i in res]
-    assert not any("chiote" in n for n in names), "achiote (off-catálogo) debe dropearse"
+    assert not any("clavo dulce" in n for n in names), "clavo dulce (off-catálogo) debe dropearse"
     assert not any("sazon en polvo" in n for n in names), "sazón en polvo (off-catálogo) debe dropearse"
     assert any("ollo" in n for n in names), "pollo (verificado) debe quedar"
     assert any("rroz" in n for n in names), "arroz (verificado) debe quedar"

@@ -61,6 +61,18 @@ variedad): Acelgas (+26,1%, 19 kcal — a esa escala la fibra no aportada a Atwa
 de la diferencia absoluta, pocas kcal); Azafrán (+16,1%, especia deshidratada rica en fibra que
 nadie come en porciones de 100 g).
 
+[fix-wave deploy-gate · 2026-08-17] 6 filas de este lote tenían micros individuales en NULL
+(`test_catalog_micros_fully_populated`, deploy-gate blanket sobre las 18 columnas de
+`_MICRO_COLS`) — nunca se copiaron del fdc citado al JSON en el commit original. Boquerones/
+Butifarra: `vit_d_mcg=0` (fdc 174182/171631 no reportan vitamina D — mismo criterio del resto del
+catálogo). Cordero/Percebes: `sugars_g=0` matemáticamente forzado (`carbs_g` ya es 0/0.04 en esas
+filas) + `vit_d_mcg=0` (no reportado). Membrillo: `vit_d_mcg=0` (no reportado) + `sugars_g=10.34`
+sin cifra USDA para fdc 168163 — escalado del ratio sugars/carbs de Tomate (2.63/3.89=67,6%,
+fruta ya real del catálogo, único analog disponible en este micro-round) aplicado al `carbs_g`
+propio (15.3*0,676). Azafrán: `sugars_g=3.27` sin cifra USDA para fdc 170934 — estimado bajo
+(~5% de carbs_g=65.4) consistente con el perfil de especias secas molidas ya reales del catálogo
+(Cúrcuma 4,8%, Comino 5,1%).
+
 PRECIOS: NINGUNO de estos 32 lleva precio RD — a propósito (contrato de la Task 5: "fila
 master_ingredients SIN precio RD"). España es país BETA (`COUNTRY_PROFILES['ES']['is_beta']`,
 P1-COUNTRY-SYSTEM-F1): su lista de compras corre en `pricing_mode='beta_no_prices'`
@@ -73,12 +85,14 @@ mismo mecanismo/knob propio `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP`) — NO el g
 `_is_verified_for_shopping` (ese sigue exigiendo precio>0, intacto, `MEALFIT_VERIFIED_INGREDIENTS_ONLY`
 sin tocar).
 
-IDEMPOTENTE: salta por `name` ya existente CON el mismo `fdc_id` (mismo patrón que los 3 lotes
-previos) — re-correr no duplica. [fix-round 1 · 2026-08-17] Gana un segundo modo: si `name`
-existe pero el `fdc_id` de la DB difiere del `fdc_id` del JSON (alguien re-sourceó la fila —
-p.ej. Jamón serrano, ver §2 del reporte de la task: sodio 1280→2700mg, substrato húmedo→seco-
-curado), UPDATE en vez de skip. Nunca toca una fila cuyo `fdc_id` YA coincide (evita
-sobre-escribir sin motivo cada re-corrida).
+IDEMPOTENTE: salta por `name` ya existente CON `fdc_id` Y TODAS las columnas nutricionales de
+`_COLMAP` iguales (mismo patrón que los 3 lotes previos, generalizado) — re-correr no duplica.
+[fix-round 1 · 2026-08-17] si `fdc_id` difiere (re-sourceo — p.ej. Jamón serrano, ver §2 del
+reporte de la task: sodio 1280→2700mg, substrato húmedo→seco-curado), UPDATE en vez de skip.
+[fix-wave deploy-gate · 2026-08-17] generalizado: cualquier micro individual que difiera
+(backfill de NULLs — Boquerones/Butifarra/Cordero/Membrillo/Percebes/Azafrán) TAMBIÉN dispara
+UPDATE. Salvaguarda: el UPDATE solo escribe una columna nutricional cuando el JSON trae un valor
+no-nulo — un dict de macros parcial nunca sobreescribe con NULL un dato real ya persistido.
 
 USO:
     cd backend
@@ -143,10 +157,30 @@ def main():
 
     hoy = datetime.date.today()
     puestos = ya = actualizados = 0
+    # [P1-COUNTRY-SYSTEM-F2 · fix-wave deploy-gate · 2026-08-17] Generalizado más allá de solo
+    # `fdc_id` (mismo patrón aplicado a `add_foods_mx_co_2026_08_17.py` en micro-round 2 + este
+    # mismo fix-wave): ahora compara TODAS las columnas nutricionales de `_COLMAP` -- un UPDATE que
+    # solo rellena micros NULL (vitD/sugars/...) sin re-sourcear `fdc_id` dispara igual. Salvaguarda:
+    # el UPDATE solo escribe una columna nutricional cuando el JSON trae un valor no-nulo para ella
+    # -- un dict de macros parcial nunca sobreescribe con NULL un dato real ya persistido.
+    _nutri_cols = list(_COLMAP.values())
+    _cmp_cols = ["fdc_id"] + _nutri_cols
+
+    def _val_eq(a, b):
+        if a is None and b is None:
+            return True
+        if a is None or b is None:
+            return False
+        try:
+            return abs(float(a) - float(b)) <= 0.05
+        except (TypeError, ValueError):
+            return a == b
+
     with psycopg.connect(_NEON) as conn:
         existen = {
-            row[0]: row[1]
-            for row in conn.execute("SELECT name, fdc_id FROM public.master_ingredients").fetchall()
+            row[0]: dict(zip(_cmp_cols, row[1:]))
+            for row in conn.execute(
+                f"SELECT name, {', '.join(_cmp_cols)} FROM public.master_ingredients").fetchall()
         }
         for r in recs:
             nm = r["name"]
@@ -165,22 +199,25 @@ def main():
                 cols[dbcol] = r.get(k)
 
             if nm in existen:
-                db_fdc = existen[nm]
-                if db_fdc == cols["fdc_id"]:
-                    print(f"  ~ EXISTE (fdc_id igual), salto: {nm}")
+                db_row = existen[nm]
+                diffs = [c for c in _cmp_cols if not _val_eq(db_row.get(c), cols.get(c))]
+                if not diffs:
+                    print(f"  ~ EXISTE (sin diffs), salto: {nm}")
                     ya += 1
                     continue
-                # [fix-round 1 · 2026-08-17] fdc_id difiere del que ya vive en la fila — el JSON
-                # fue re-sourceado (ver docstring): UPDATE en vez de skip.
-                nombres_upd = [c for c in cols if c not in ("slug", "name")]
+                # [fix-round 1 · 2026-08-17] fdc_id difiere del que ya vive en la fila (re-sourceo)
+                # O [fix-wave deploy-gate · 2026-08-17] algún micro individual difiere (backfill de
+                # NULLs) -- ambos casos disparan UPDATE. Salvaguarda (ver comentario arriba):
+                # columnas nutricionales solo entran al SET si el JSON trae un valor no-nulo.
+                nombres_upd = [c for c in cols if c not in ("slug", "name")
+                               and (c not in _nutri_cols or cols[c] is not None)]
                 set_clause = ", ".join(f"{c} = %s" for c in nombres_upd)
                 if COMMIT:
                     conn.execute(
                         f"UPDATE public.master_ingredients SET {set_clause} WHERE name = %s",
                         [cols[c] for c in nombres_upd] + [nm])
                 print(f"  {'~ ACTUALIZADO' if COMMIT else '~ (dry) actualizaria'}: {nm} [{r['category']}] "
-                      f"fdc_id {db_fdc} -> {cols['fdc_id']} sodium_mg -> {r.get('sodium_mg','?')} "
-                      f"fuente={r.get('_usda_description', '?')!r}")
+                      f"diffs={diffs} fuente={r.get('_usda_description', '?')!r}")
                 actualizados += 1
                 continue
 

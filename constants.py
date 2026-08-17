@@ -3515,7 +3515,20 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
                                         "tortilla integral", "pan integral", "cuscus", "couscous",
                                         "seitan", "bulgur", "malta", "cerveza", "semola",
                                         "espagueti", "macarrones", "lasana", "lasagna",
-                                        "empanada", "bizcocho"])
+                                        "empanada", "bizcocho",
+                                        # [P1-COUNTRY-SYSTEM-F2 · fix-wave deploy-gate · 2026-08-17]
+                                        # `_ALLERGEN_SYNONYMS['gluten']` (graph_orchestrator.py) creció a
+                                        # 35 términos entre T4 (avena/pastas-panes de sustitución/
+                                        # tostada/macarron/coditos/fideo/tallarin/penne/ravioli/noqui/
+                                        # tortilla de harina/wheat) y este catch-all quedó en los 24
+                                        # originales de P2-CATALOG-FILTER-SSOT — la MISMA clase de drift
+                                        # que ese fix cerró, reabierta por un vocabulario que creció sin
+                                        # tocar su copia. `test_paridad_filtro_vs_escaner_canonico[Gluten]`
+                                        # lo atrapó: 'Avena' (fila real del catálogo) sobrevivía al chip
+                                        # de un celíaco. Sincronizado 1:1 con el canónico — los 11
+                                        # términos que faltaban, ninguno reinterpretado.
+                                        "wheat", "tostada", "macarron", "coditos", "fideo", "tallarin",
+                                        "penne", "ravioli", "noqui", "tortilla de harina", "avena"])
     if any(r in ["soya", "soja", "soy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["soya", "soja", "tofu", "salsa de soya", "edamame", "miso",
                                         "tempeh", "salsa teriyaki", "teriyaki", "natto",

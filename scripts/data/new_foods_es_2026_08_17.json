@@ -354,7 +354,8 @@
     "fdc_id": 174182,
     "_usda_description": "Fish, anchovy, european, raw",
     "_data_type": "SR Legacy",
-    "omega3_ala_g": 0.0
+    "omega3_ala_g": 0.0,
+    "vit_d_mcg": 0.0
   },
   {
     "name": "Anchoas",
@@ -432,7 +433,9 @@
     "_usda_description": "Lamb, composite of trimmed retail cuts, separable lean and fat, trimmed to 1/4\" fat, choice, raw",
     "_data_type": "SR Legacy",
     "vit_k_mcg": 0.0,
-    "omega3_ala_g": 0.0
+    "omega3_ala_g": 0.0,
+    "sugars_g": 0.0,
+    "vit_d_mcg": 0.0
   },
   {
     "name": "Requesón",
@@ -745,7 +748,9 @@
     "_data_type": "SR Legacy",
     "vit_e_mg": 0.0,
     "vit_k_mcg": 0.0,
-    "omega3_ala_g": 0.0
+    "omega3_ala_g": 0.0,
+    "sugars_g": 10.34,
+    "vit_d_mcg": 0.0
   },
   {
     "name": "Higo",
@@ -824,7 +829,8 @@
     "_data_type": "SR Legacy",
     "vit_e_mg": 0.0,
     "vit_k_mcg": 0.0,
-    "omega3_ala_g": 0.0
+    "omega3_ala_g": 0.0,
+    "sugars_g": 3.27
   },
   {
     "name": "Alioli",
@@ -1021,7 +1027,8 @@
     "_data_type": "SR Legacy",
     "folate_mcg_dfe": 0.0,
     "vit_e_mg": 0.0,
-    "vit_k_mcg": 0.0
+    "vit_k_mcg": 0.0,
+    "vit_d_mcg": 0.0
   },
   {
     "name": "Percebes",
@@ -1058,7 +1065,9 @@
     "_data_type": "SR Legacy",
     "vit_e_mg": 0.0,
     "vit_k_mcg": 0.0,
-    "omega3_ala_g": 0.0
+    "omega3_ala_g": 0.0,
+    "sugars_g": 0.0,
+    "vit_d_mcg": 0.0
   },
   {
     "name": "Vieira",
