@@ -1,0 +1,60 @@
+[
+  {
+    "target": "Tomate",
+    "country": "MX",
+    "item": "Jitomate",
+    "new_aliases": [
+      "jitomate",
+      "jitomates"
+    ]
+  },
+  {
+    "target": "Ají morrón",
+    "country": "MX",
+    "item": "Chile morrón",
+    "new_aliases": [
+      "chile morrón",
+      "chile morron",
+      "chiles morrones"
+    ]
+  },
+  {
+    "target": "Maíz dulce en granos",
+    "country": "CO",
+    "item": "Mazorca",
+    "new_aliases": [
+      "mazorca",
+      "mazorcas"
+    ]
+  },
+  {
+    "target": "Maíz dulce en granos",
+    "country": "CO",
+    "item": "Choclo",
+    "new_aliases": [
+      "choclo",
+      "choclos"
+    ]
+  },
+  {
+    "target": "Yautía",
+    "country": "CO",
+    "item": "Malanga",
+    "new_aliases": [
+      "malanga",
+      "malangas",
+      "malanga blanca",
+      "malanga amarilla"
+    ]
+  },
+  {
+    "target": "Bulgur",
+    "country": "CO",
+    "item": "Cuchuco de trigo",
+    "new_aliases": [
+      "cuchuco de trigo",
+      "cuchuco",
+      "cuchuco boyacense"
+    ]
+  }
+]

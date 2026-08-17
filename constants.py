@@ -1884,6 +1884,49 @@ COUNTRY_POOLS: dict[str, dict[str, list]] = {
             "Naranja", "Mandarina", "Membrillo", "Higo", "Uva", "Melón", "Limón",
         ],
     },
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismo criterio que 'ES' (T5): altas de catálogo de
+    # este task (`country_gaps/mx.json`/`co.json`) + los RESUELVE-BIEN de T1 más representativos
+    # de cada cocina, NO una traducción de DOMINICAN_*.
+    "MX": {
+        "proteins": [
+            "Chorizo mexicano", "Chorizo verde", "Cecina", "Camarones", "Filete de pescado blanco",
+            "Cerdo", "Pechuga de pollo", "Muslo de pollo", "Huevo", "Carne de res",
+            "Carne de res molida", "Longaniza dominicana", "Chivo", "Costilla de cerdo", "Salmón",
+            "Tilapia", "Bacalao", "Atún en agua", "Pavo molido", "Pechuga de pavo",
+        ],
+        "carbs": [
+            "Tortilla de maíz", "Arroz blanco", "Frijoles pintos", "Frijoles refritos",
+            "Habichuelas negras", "Papa", "Harina de trigo", "Harina de maíz precocida",
+            "Quinoa", "Avena",
+        ],
+        "veggies_fats": [
+            "Chile jalapeño", "Chile serrano", "Chile poblano", "Chile habanero", "Nopal",
+            "Jícama", "Epazote", "Cebolla", "Tomate", "Cilantro", "Aguacate", "Calabacín",
+            "Ajo", "Rábano", "Pepino",
+        ],
+        "fruits": [
+            "Tuna de nopal", "Xoconostle", "Mango", "Guayaba", "Tamarindo", "Piña", "Limón",
+        ],
+    },
+    "CO": {
+        "proteins": [
+            "Chicharrón", "Chorizo santarrosano", "Trucha", "Gallina criolla", "Carne de res",
+            "Carne de res molida", "Pechuga de pollo", "Costilla de cerdo", "Cerdo", "Huevo",
+            "Camarones", "Filete de pescado blanco", "Morcilla", "Longaniza dominicana", "Bacalao",
+            "Tilapia", "Salmón", "Atún en agua", "Pavo molido", "Chivo",
+        ],
+        "carbs": [
+            "Harina de maíz precocida", "Plátano verde", "Plátano maduro", "Yuca", "Papa",
+            "Frijol cargamanto", "Garbanzos", "Lentejas", "Arracacha", "Maíz dulce en granos",
+        ],
+        "veggies_fats": [
+            "Auyama", "Guascas", "Cilantro", "Ají cubanela", "Cebolla", "Tomate", "Aguacate",
+            "Palmito", "Achiote", "Ajo", "Apio", "Zanahoria", "Repollo", "Suero costeño",
+        ],
+        "fruits": [
+            "Lulo", "Curuba", "Uchuva", "Feijoa", "Granadilla", "Mora", "Guanábana", "Borojó",
+        ],
+    },
 }
 
 

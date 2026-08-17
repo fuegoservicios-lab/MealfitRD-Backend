@@ -62,6 +62,8 @@ _PROACTIVE_AGENT_PY = _BACKEND / "proactive_agent.py"
 _CHAT_AGENT_PY = _BACKEND / "prompts" / "chat_agent.py"
 _HELP_BOT_PY = _BACKEND / "prompts" / "help_bot.py"
 _DISH_TEMPLATES_ES_JSON = _BACKEND / "data" / "dish_templates_es.json"
+_DISH_TEMPLATES_MX_JSON = _BACKEND / "data" / "dish_templates_mx.json"
+_DISH_TEMPLATES_CO_JSON = _BACKEND / "data" / "dish_templates_co.json"
 _CRON_TASKS_PY = _BACKEND / "cron_tasks.py"
 _SHOPPING_CALCULATOR_PY = _BACKEND / "shopping_calculator.py"
 
@@ -1423,6 +1425,21 @@ _DISH_TEMPLATES_ES_NAMES = frozenset({
     "Vieira", "Chistorra", "Piñones", "Almendra marcona", "Membrillo dulce",
 })
 
+# [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Las 46 altas de catálogo MX/CO de esta task (nombre
+# CANÓNICO de fila — Achiote y Panela cuentan UNA vez cada una aunque satisfagan un item curado
+# de ambos países). Espejo de `_DISH_TEMPLATES_ES_NAMES` de arriba — mismo propósito: excluir del
+# sweep de "no debe reconocerlas" (son las que SÍ deben reconocerse).
+_DISH_TEMPLATES_MX_CO_NAMES = frozenset({
+    "Tortilla de maíz", "Chile jalapeño", "Chile serrano", "Chile poblano", "Chile chipotle",
+    "Chile guajillo", "Chile ancho", "Chile habanero", "Chile de árbol", "Chile pasilla",
+    "Chile mulato", "Nopal", "Jícama", "Epazote", "Chorizo mexicano", "Chorizo verde", "Cecina",
+    "Frijoles refritos", "Crema mexicana", "Tuna de nopal", "Flor de Jamaica", "Xoconostle",
+    "Achiote", "Hoja santa", "Chocolate de mesa", "Panela", "Huitlacoche", "Chicharrón",
+    "Chorizo santarrosano", "Trucha", "Chontaduro", "Frijol cargamanto", "Suero costeño",
+    "Guascas", "Arracacha", "Lulo", "Curuba", "Uchuva", "Arequipe", "Natilla", "Champús",
+    "Gallina criolla", "Borojó", "Feijoa", "Granadilla", "Mora",
+})
+
 
 @pytest.fixture(scope="module")
 def sc():
@@ -1653,11 +1670,14 @@ def test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_cat
         for key in ("proteins", "carbs", "veggies_fats", "fruits"):
             nombres_pools.update(pool.get(key) or [])
 
-    candidatos = (nombres_catalogo | nombres_pools) - _DISH_TEMPLATES_ES_NAMES
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] extendido: también excluye las 46 altas MX/CO —
+    # ESAS sí deben reconocerse (son el propósito de sus tokens nuevos en
+    # `_COUNTRY_CATALOG_UNPRICED_TOKENS`), así que no son "falsos positivos" si aparecen True.
+    candidatos = (nombres_catalogo | nombres_pools) - _DISH_TEMPLATES_ES_NAMES - _DISH_TEMPLATES_MX_CO_NAMES
 
     falsos_positivos = sorted(n for n in candidatos if sc.is_country_catalog_unpriced_item(n))
     assert not falsos_positivos, (
-        f"{len(falsos_positivos)} nombre(s) NO son una alta T5 pero "
+        f"{len(falsos_positivos)} nombre(s) NO son una alta T5/T6 pero "
         f"is_country_catalog_unpriced_item los reconoce igual (colisión de substring/token): "
         f"{falsos_positivos}"
     )
@@ -1798,17 +1818,26 @@ def test_culinary_judge_rubric_es_sustituye_ejemplos_y_encabezado(go):
 
 
 def test_dish_templates_path_for_country_es_usa_su_archivo_mx_cae_a_rd(go):
+    """[actualizado T6 · 2026-08-17] MX y CO GANAN archivo propio en esta task (antes caían al
+    fallback RD, como PR/US siguen haciendo hoy) — ver Sección I. PR (sin archivo dedicado, sin
+    task que se lo dé todavía) es el control vivo de que el fallback explícito sigue funcionando
+    para un país beta cualquiera sin archivo propio."""
     assert go._dish_templates_path_for_country("ES") == str(_DISH_TEMPLATES_ES_JSON)
-    assert go._dish_templates_path_for_country("MX") == go._DO_DISH_TEMPLATES_PATH
+    assert go._dish_templates_path_for_country("MX") == str(_DISH_TEMPLATES_MX_JSON)
+    assert go._dish_templates_path_for_country("CO") == str(_DISH_TEMPLATES_CO_JSON)
+    assert go._dish_templates_path_for_country("PR") == go._DO_DISH_TEMPLATES_PATH
     assert go._dish_templates_path_for_country("DO") == go._DO_DISH_TEMPLATES_PATH
 
 
-def test_culinary_judge_rubric_mx_sin_archivo_propio_cae_a_ejemplos_rd(go):
-    """País beta SIN `dish_templates_<cc>.json` dedicado (MX, hoy) conserva los ejemplos
-    dominicanos — fallback explícito, NO una excepción que rompa la rúbrica."""
-    rubric_mx = go._culinary_judge_rubric_for_country("MX")
-    assert "Mangú" in rubric_mx
-    assert "Tortilla española" not in rubric_mx
+def test_culinary_judge_rubric_pr_sin_archivo_propio_cae_a_ejemplos_rd(go):
+    """[actualizado T6 · 2026-08-17] País beta SIN `dish_templates_<cc>.json` dedicado (PR, hoy
+    — MX/CO YA NO son ejemplo de esto tras T6, ver Sección I) conserva los ejemplos dominicanos —
+    fallback explícito, NO una excepción que rompa la rúbrica."""
+    rubric_pr = go._culinary_judge_rubric_for_country("PR")
+    assert "Mangú" in rubric_pr
+    assert "Tortilla española" not in rubric_pr
+    assert "Tacos de pollo" not in rubric_pr
+    assert "Ajiaco" not in rubric_pr
 
 
 # ── H14. Golden fixture: slot soft (ES) vs hard (DO) para el MISMO día ─────────────────────────
@@ -1957,3 +1986,559 @@ def test_32_altas_es_existen_en_catalogo_vivo_sin_precio_con_fdc_id():
 
     no_usda = [n for n, r in por_nombre.items() if r.get("nutrition_source") != "usda"]
     assert not no_usda, f"altas T5 con nutrition_source != 'usda': {no_usda}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SECCIÓN I (Task 6) — Catálogo México + Colombia, dirigido por el JSON de T1
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# Mismo contrato que T5/Sección H, para dos países a la vez. `country_gaps/mx.json` (30 DROP de
+# 76) y `co.json` (26 DROP de 74) — medidos contra el catálogo POST-T5 (238 filas) — son la lista
+# de trabajo. Regla FILA-vs-SINÓNIMO (el eje nuevo de esta task, ausente en T5 porque España no
+# tenía homógrafos con el catálogo RD): mismo alimento con nombre regional ⇒ alias sobre la fila
+# YA EXISTENTE (Jitomate→Tomate, Mazorca/Choclo→Maíz dulce en granos, Malanga→Yautía, Cuchuco de
+# trigo→Bulgur, Chile cuaresmeño→Chile jalapeño, Piloncillo→Panela, Color (bijol)→Achiote — estos
+# 3 últimos viven EMBEBIDOS en los aliases de una fila NUEVA del mismo lote, no en
+# `scripts/data/synonyms_mx_co_2026_08_17.json`); alimento genuinamente distinto (aunque cercano
+# nutricionalmente a otro, ej. Frijol cargamanto vs Frijoles pintos) ⇒ fila nueva. 46 filas nuevas
+# + 6 operaciones de sinónimo vía script (+ 3 embebidas en altas del mismo lote) resuelven los 56
+# DROP. 3 filas SIN fdc_id real (`nutrition_source='manual'`): Achiote, Flor de Jamaica, Hoja
+# santa — ver docstring de `scripts/add_foods_mx_co_2026_08_17.py` y el reporte de la task.
+#
+# El SSOT real de "¿este sinónimo resuelve?" es `shopping_calculator.normalize_name` (lo que
+# `classify_food`/el harness llaman) — NO `constants.GLOBAL_REVERSE_MAP` (construido desde
+# PROTEIN_SYNONYMS/CARB_SYNONYMS/VEGGIE_FAT_SYNONYMS/FRUIT_SYNONYMS, consumido SOLO por
+# `normalize_ingredient_for_tracking`, el sistema de fatiga/variedad — CERO call sites en
+# `shopping_calculator.py`, verificado por grep). Los 6 sinónimos de esta task viven en el array
+# `aliases` de `master_ingredients` (la fila EXISTENTE gana un alias nuevo), que es lo que
+# `_construir_indice_alias` indexa — esta sección lo verifica contra el resolver REAL, no una
+# tabla muerta. `test_global_reverse_map_...` (I8) ancla que la tabla NO se tocó (control negativo
+# de que el trabajo real vive donde debe).
+
+def _load_dish_templates_mx() -> dict:
+    with open(_DISH_TEMPLATES_MX_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_dish_templates_co() -> dict:
+    with open(_DISH_TEMPLATES_CO_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── I1. dish_templates_mx.json / dish_templates_co.json — forma + regla dura de horario ─────────
+
+@pytest.mark.parametrize("cc,loader", [("MX", _load_dish_templates_mx), ("CO", _load_dish_templates_co)])
+def test_dish_templates_json_existe_con_forma_esperada(cc, loader):
+    data = loader()
+    templates = data.get("templates")
+    assert isinstance(templates, list)
+    assert 40 <= len(templates) <= 60, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    nombres = [t.get("name") for t in templates]
+    assert all(isinstance(n, str) and n.strip() for n in nombres), f"[{cc}] una plantilla sin name"
+    assert len(nombres) == len(set(nombres)), f"[{cc}] nombres de plantilla duplicados"
+    for t in templates:
+        assert isinstance(t.get("slots"), list) and t["slots"], f"[{cc}] {t.get('name')!r} sin slots"
+        assert set(t["slots"]) <= {"desayuno", "almuerzo", "cena", "merienda"}, (
+            f"[{cc}] {t.get('name')!r} tiene un slot fuera del canon de 4"
+        )
+        constituents = t.get("constituents")
+        assert isinstance(constituents, list) and constituents, f"[{cc}] {t.get('name')!r} sin constituents"
+        for c in constituents:
+            assert isinstance(c.get("name"), str) and c["name"].strip(), (
+                f"[{cc}] {t['name']!r}: constituent sin name"
+            )
+            assert isinstance(c.get("grams"), (int, float)) and c["grams"] > 0, (
+                f"[{cc}] {t['name']!r}: constituent {c.get('name')!r} sin gramos > 0"
+            )
+
+
+@pytest.mark.parametrize("cc,loader", [("MX", _load_dish_templates_mx), ("CO", _load_dish_templates_co)])
+def test_dish_templates_arroz_como_base_nunca_en_desayuno_ni_cena(cc, loader):
+    """Mismo SSOT que la regla dura del juez — arroz como BASE nunca en desayuno ni cena. MX
+    incluye platos rice-based (mole con arroz, camarones al mojo de ajo) TODOS en almuerzo; CO
+    incluye 'Calentado paisa' (culturalmente también desayuno) deliberadamente SOLO en almuerzo
+    para no contradecir la regla dura que la propia rúbrica del juez declara — ver `_note` del
+    archivo, mismo criterio que T5 corrigió para 'Sopa de fideos' en su §10."""
+    data = loader()
+    ofensoras = [
+        t["name"] for t in data["templates"]
+        if t.get("base") in ("arroz", "pasta") and set(t.get("slots", [])) & {"desayuno", "cena"}
+    ]
+    assert not ofensoras, f"[{cc}] plantillas con base arroz/pasta en desayuno/cena: {ofensoras}"
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("cc,loader", [("MX", _load_dish_templates_mx), ("CO", _load_dish_templates_co)])
+def test_dish_templates_constituents_resuelven_al_catalogo_vivo(cc, loader):
+    """[e2e] Contrato "nombres EXACTOS del catálogo" — cada `constituents[].name` debe ser un
+    `name` LITERAL de `master_ingredients` post-altas T6 (no un alias que resuelva vía
+    `normalize_name`). Mismo patrón que el equivalente de T5 para ES."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — faltan NEON_DATABASE_URL/.env (e2e, no bloquea el gate)")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+
+    data = loader()
+    nombres_usados = {c["name"] for t in data["templates"] for c in t["constituents"]}
+    rows = execute_sql_query("SELECT name FROM master_ingredients", fetch_all=True)
+    assert rows, "master_ingredients vino vacío con el pool abierto"
+    catalogo = {r["name"] for r in rows if r.get("name")}
+
+    faltantes = sorted(nombres_usados - catalogo)
+    assert not faltantes, (
+        f"[{cc}] {len(faltantes)} nombre(s) de constituents NO son un `name` exacto de "
+        f"master_ingredients: {faltantes}"
+    )
+
+
+# ── I2. _dish_templates_path_for_country + _culinary_judge_rubric_for_country MX/CO ──────────────
+
+def test_dish_templates_path_for_country_mx_co_usan_su_archivo_propio(go):
+    assert go._dish_templates_path_for_country("MX") == str(_DISH_TEMPLATES_MX_JSON)
+    assert go._dish_templates_path_for_country("CO") == str(_DISH_TEMPLATES_CO_JSON)
+
+
+def test_culinary_judge_rubric_mx_sustituye_ejemplos_y_encabezado(go):
+    rubric_mx = go._culinary_judge_rubric_for_country("MX")
+    rubric_do = go._culinary_judge_rubric_for_country("DO")
+    assert rubric_mx != rubric_do
+    assert "Tacos de pollo al pastor ligero" in rubric_mx
+    assert "Mangú" not in rubric_mx, "los ejemplos dominicanos no deben sobrevivir en la variante MX"
+    assert "PLATOS DE M" in rubric_mx.upper()
+    assert "cocina de México" in rubric_mx
+
+
+def test_culinary_judge_rubric_co_sustituye_ejemplos_y_encabezado(go):
+    rubric_co = go._culinary_judge_rubric_for_country("CO")
+    rubric_do = go._culinary_judge_rubric_for_country("DO")
+    assert rubric_co != rubric_do
+    assert "Ajiaco" in rubric_co
+    assert "Mangú" not in rubric_co, "los ejemplos dominicanos no deben sobrevivir en la variante CO"
+    assert "PLATOS DE C" in rubric_co.upper()
+    assert "cocina de Colombia" in rubric_co
+
+
+def test_culinary_judge_rubric_mx_co_es_do_no_se_contaminan_entre_si(go):
+    """Cada variante de país usa SOLO sus propios ejemplos — un plato MX nunca debe aparecer en
+    la rúbrica CO (ni viceversa), y ninguno de los dos debe traer platos ES ni DO. Prueba
+    puntual de que la sustitución de bloque (`rendered.replace(_do_block, _country_block)`) no
+    deja restos cruzados entre las 4 variantes ya cacheadas en el mismo proceso."""
+    rubric_mx = go._culinary_judge_rubric_for_country("MX")
+    rubric_co = go._culinary_judge_rubric_for_country("CO")
+    rubric_es = go._culinary_judge_rubric_for_country("ES")
+    assert "Ajiaco" not in rubric_mx and "Bandeja paisa" not in rubric_mx
+    assert "Tacos de pollo" not in rubric_co and "Pozole" not in rubric_co
+    assert "Tortilla española" not in rubric_mx and "Tortilla española" not in rubric_co
+    assert "Tacos de pollo" not in rubric_es and "Ajiaco" not in rubric_es
+
+
+def test_culinary_judge_rubric_do_sigue_byte_identico_tras_mx_co(go):
+    """Control de no-regresión: dar de alta MX/CO no debe tocar la ruta DO — mismo objeto
+    cacheado (identidad, no solo igualdad), verificado DESPUÉS de resolver MX/CO/ES en este
+    mismo proceso (el cache es un dict módulo-level; esto confirma que no hay mutación cruzada)."""
+    go._culinary_judge_rubric_for_country("MX")
+    go._culinary_judge_rubric_for_country("CO")
+    assert go._culinary_judge_rubric_for_country("DO") is go._CULINARY_JUDGE_RUBRIC
+
+
+# ── I3. COUNTRY_POOLS['MX']/['CO'] + _get_fast_filtered_catalogs(country=) ───────────────────────
+
+@pytest.mark.parametrize("cc", ["MX", "CO"])
+def test_country_pools_mx_co_estructura(cc):
+    pool = constants.COUNTRY_POOLS.get(cc)
+    assert isinstance(pool, dict)
+    for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+        assert isinstance(pool.get(key), list) and pool[key], f"COUNTRY_POOLS[{cc!r}][{key!r}] vacío"
+        assert all(isinstance(x, str) and x.strip() for x in pool[key])
+
+
+@pytest.mark.parametrize("cc", ["MX", "CO"])
+def test_get_fast_filtered_catalogs_usa_su_propio_pool(cc):
+    proteins_do, _, _, _ = constants._get_fast_filtered_catalogs((), (), "")
+    proteins, carbs, veg, fruits = constants._get_fast_filtered_catalogs((), (), "", country=cc)
+    assert proteins != proteins_do
+    assert set(proteins) == set(constants.COUNTRY_POOLS[cc]["proteins"])
+    assert set(carbs) == set(constants.COUNTRY_POOLS[cc]["carbs"])
+    assert set(veg) == set(constants.COUNTRY_POOLS[cc]["veggies_fats"])
+    assert set(fruits) == set(constants.COUNTRY_POOLS[cc]["fruits"])
+
+
+def test_get_fast_filtered_catalogs_sin_country_mx_co_sigue_siendo_do_byte_identico():
+    """Dar de alta MX/CO no debe tocar el fallback — `country=None`/'DO'/país sin pool siguen
+    devolviendo EXACTAMENTE `DOMINICAN_*` (byte-idéntico, mismo test que H8 para ES)."""
+    casos = [((), (), ""), (("mariscos",), (), ""), ((), (), "vegano")]
+    for allergies, dislikes, diet in casos:
+        base = constants._get_fast_filtered_catalogs(allergies, dislikes, diet)
+        con_none = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country=None)
+        con_pr = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country="PR")
+        assert base == con_none == con_pr, f"diverge para {(allergies, dislikes, diet)!r}"
+
+
+# ── I4. unpriced-keep: las 46 altas T6 reconocidas por su propio token ───────────────────────────
+# (el sweep e2e que prueba "nada MÁS se reconoce por accidente" ya se extendió arriba, I0 —
+# test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_catalogo_vivo_ni_pools)
+
+@pytest.mark.parametrize("nombre", sorted(_DISH_TEMPLATES_MX_CO_NAMES))
+def test_is_country_catalog_unpriced_item_reconoce_cada_alta_t6(sc, nombre):
+    assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
+
+
+def test_chile_serrano_no_colisiona_con_jamon_serrano_en_unpriced_keep(sc):
+    """[el mismo tipo de colisión que el fix-round 1 de T5, encontrada y evitada EN ESTA task
+    antes de commitear] El token bare 'serrano' habría colisionado con los aliases de 'Jamón
+    serrano' (T5: 'jamon serrano'/'serrano ham') — se eligió el token de 2 palabras 'chile
+    serrano' a propósito. Este test ancla que AMBOS resuelven a su propio alimento sin pisarse."""
+    assert sc.is_country_catalog_unpriced_item("Chile serrano")
+    assert sc.is_country_catalog_unpriced_item("Jamón serrano")
+    # 'Jamón serrano' NO debe matchear por el token 'chile serrano' (no lo contiene) — y
+    # viceversa, confirmando que son dos reconocimientos INDEPENDIENTES, no uno colándose en otro.
+    assert "chile serrano" not in constants.strip_accents("Jamón serrano").lower()
+    assert "jamon serrano" not in constants.strip_accents("Chile serrano").lower()
+
+
+# ── I5. Los 4 vocabularios — anchors narrow de las altas T6 ───────────────────────────────────────
+
+@pytest.mark.parametrize("clase,termino", [
+    ("pescado", "trucha"), ("pescado", "truchas"),
+    ("lacteos", "arequipe"), ("lacteos", "suero costeno"),
+    ("lactosa", "arequipe"), ("lactosa", "suero costeno"),
+])
+def test_altas_t6_presentes_en_allergen_synonyms(go, clase, termino):
+    assert termino in go._ALLERGEN_SYNONYMS[clase], f"{termino!r} ausente de _ALLERGEN_SYNONYMS[{clase!r}]"
+
+
+@pytest.mark.parametrize("termino", ["trucha", "truchas"])
+def test_altas_t6_presentes_en_diet_seafood_terms(go, termino):
+    assert termino in go._DIET_SEAFOOD_TERMS
+
+
+@pytest.mark.parametrize("termino", ["arequipe", "suero costeno"])
+def test_altas_t6_presentes_en_diet_dairy_terms(go, termino):
+    assert termino in go._DIET_DAIRY_TERMS
+
+
+def test_cecina_presente_en_diet_flesh_terms(go):
+    """'chicharron'/'gallina'/'chorizo' YA vivían en `_DIET_FLESH_TERMS` (cubren Chicharrón-CO/
+    Gallina criolla-CO/Chorizo mexicano-verde-santarrosano-MX-CO por substring) — 'cecina' es la
+    ÚNICA alta T6 de esta clase sin ningún término existente que la matchee."""
+    assert "cecina" in go._DIET_FLESH_TERMS
+
+
+@pytest.mark.parametrize("termino,catalogo_esperado", [
+    ("gallina", "Gallina criolla"), ("chicharron", "Chicharrón"),
+    ("chorizo", "Chorizo mexicano"), ("chorizo", "Chorizo verde"), ("chorizo", "Chorizo santarrosano"),
+])
+def test_terminos_preexistentes_ya_cubren_las_altas_t6_sin_cambios(go, termino, catalogo_esperado):
+    """[control negativo, honestidad de la task] Estas altas NO necesitaron ningún término nuevo
+    — ya vivían cubiertas por substring. Documenta explícitamente qué NO se tocó, para que un
+    futuro lector no asuma que toda alta requirió una entrada nueva en el vocabulario."""
+    assert termino in go._DIET_FLESH_TERMS
+    assert _term_matches(termino, catalogo_esperado)
+
+
+@pytest.mark.parametrize("ingrediente", ["Trucha a la plancha", "200 g de truchas"])
+def test_scan_allergen_violations_detecta_trucha_como_pescado(go, ingrediente):
+    plan = {"days": [{"meals": [{"name": "Cena", "ingredients": [ingrediente]}]}]}
+    v = go._scan_allergen_violations(plan, ["pescado"])
+    assert v, f"{ingrediente!r} debe violar la alergia a pescado"
+
+
+@pytest.mark.parametrize("ingrediente", ["Arequipe con queso", "40 g de suero costeño"])
+def test_scan_allergen_violations_detecta_arequipe_suero_costeno_como_lacteos(go, ingrediente):
+    plan = {"days": [{"meals": [{"name": "Merienda", "ingredients": [ingrediente]}]}]}
+    v = go._scan_allergen_violations(plan, ["lacteos"])
+    assert v, f"{ingrediente!r} debe violar la alergia a lácteos"
+
+
+def test_scan_diet_violations_detecta_cecina_para_vegano(go):
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["Cecina con huevo"]}]}]}
+    assert go._scan_diet_violations(plan, "vegano"), "'Cecina con huevo' no fue detectado para vegano"
+
+
+# ── I6. Regla FILA-vs-SINÓNIMO — el contrato central de esta task ────────────────────────────────
+
+def test_global_reverse_map_no_se_toco_en_esta_task():
+    """[requerido por el contrato de la task] `GLOBAL_REVERSE_MAP` (PROTEIN/CARB/VEGGIE_FAT/
+    FRUIT_SYNONYMS) es el vocabulario de `normalize_ingredient_for_tracking` (sistema de fatiga/
+    variedad) — CERO call sites en `shopping_calculator.py` (verificado por grep), así que NO es
+    el resolver que `classify_food`/el harness usan. Pin de que esta task no lo tocó: los 10
+    sinónimos de fila-vs-sinónimo (I6 abajo) viven en `aliases` de `master_ingredients`, no aquí.
+    Si este test se pone rojo, algo escribió en GLOBAL_REVERSE_MAP — hay que decidir a propósito
+    si eso es correcto (rompería el criterio de esta task: el resolver real es normalize_name)."""
+    src = _SHOPPING_CALCULATOR_PY.read_text(encoding="utf-8")
+    assert "GLOBAL_REVERSE_MAP" not in src, (
+        "shopping_calculator.py referencia GLOBAL_REVERSE_MAP — el resolver real de "
+        "normalize_name debe seguir siendo independiente de ese vocabulario"
+    )
+    # Pins puntuales (invariantes desde ANTES de esta task, verificados en vivo): si CAMBIAN,
+    # algo tocó PROTEIN/CARB/VEGGIE_FAT/FRUIT_SYNONYMS de forma que afecta resoluciones RD
+    # existentes. 'papaya' YA era variante de 'lechosa' en FRUIT_SYNONYMS ANTES de esta task
+    # (T6 no tocó ese dict) — el homógrafo MX 'Papaya' (RESUELVE-BIEN vía normalize_name, no vía
+    # esta tabla) coexiste sin conflicto porque son DOS sistemas independientes con el mismo
+    # resultado por coincidencia, no por compartir mecanismo.
+    assert constants.GLOBAL_REVERSE_MAP.get("banana") == "guineo"
+    assert constants.GLOBAL_REVERSE_MAP.get("pechuga") == "pollo"
+    assert constants.GLOBAL_REVERSE_MAP.get("papaya") == "lechosa"
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("query,esperado", [
+    # Los 6 sinónimos vía script (aliases sobre fila YA EXISTENTE):
+    ("Jitomate", "Tomate"), ("Jitomates", "Tomate"),
+    ("Mazorca", "Maíz dulce en granos"), ("Choclo", "Maíz dulce en granos"),
+    ("Malanga", "Yautía"), ("Cuchuco de trigo", "Bulgur"),
+    # Los 3 sinónimos embebidos en aliases de una fila NUEVA del mismo lote:
+    ("Chile cuaresmeño", "Chile jalapeño"), ("Piloncillo", "Panela"), ("Color (bijol)", "Achiote"),
+    ("Chile morrón", "Ají morrón"),
+])
+def test_sinonimos_t6_resuelven_via_normalize_name_real(sc, query, esperado):
+    """[el guard central del contrato] Verifica el CAMINO REAL (`sc.normalize_name`, lo que
+    `classify_food`/producción llaman) — no una tabla muerta. Marcado e2e porque
+    `normalize_name` lee `get_master_ingredients()` (catálogo vivo)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name(query) == esperado, (
+        f"normalize_name({query!r}) debe resolver a {esperado!r} (sinónimo fila-vs-sinónimo T6)"
+    )
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("query,esperado", [
+    ("Jamón serrano", "Jamón serrano"), ("mora azul", "Arándanos"), ("Guayaba", "Guayaba"),
+    ("Piña", "Piña"), ("Higo", "Higo"), ("Leche", "Leche"), ("Carne de res", "Carne de res"),
+    ("Cerdo", "Cerdo"), ("Apio", "Apio"), ("Zanahoria", "Zanahoria"),
+    ("Elote", "Maíz dulce en granos"), ("Chinola", "Chinola"), ("Atún en agua", "Atún en agua"),
+    ("Yautía", "Yautía"), ("Bulgur", "Bulgur"), ("Ají morrón", "Ají morrón"), ("Tomate", "Tomate"),
+])
+def test_pin_resoluciones_rd_es_no_cambiaron_tras_las_altas_t6(sc, query, esperado):
+    """[el pin explícito que pide el contrato: "los aciertos RD actuales no cambian"] Cada una de
+    estas resoluciones PRE-EXISTE a T6 (RD nativo o alta T5/ES) y comparte un token/substring con
+    alguna alta o alias nuevo de T6 (Jamón serrano↔Chile serrano, mora azul↔Mora, Guayaba/Piña↔
+    'guayaba piña' descartado de Feijoa, Higo↔'higo chumbo' descartado de Tuna de nopal, Leche↔
+    'dulce de leche' de Arequipe, Carne de res/Cerdo↔aliases de Cecina/Chicharrón, Apio/Zanahoria↔
+    aliases de Arracacha, Elote↔Mazorca/Choclo recién añadidos a la MISMA fila, Chinola↔Curuba/
+    Granadilla compartiendo fdc, Atún en agua↔homógrafo 'tuna' de Tuna de nopal, Yautía↔alias
+    Malanga, Bulgur↔alias Cuchuco de trigo, Ají morrón/Tomate↔alias Chile morrón/Jitomate). RED si
+    CUALQUIERA de estas 17 cambia de resultado."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name(query) == esperado, (
+        f"REGRESIÓN: normalize_name({query!r}) debía seguir resolviendo a {esperado!r} — una "
+        f"alta/alias de T6 rompió un acierto RD/ES pre-existente"
+    )
+
+
+@pytest.mark.e2e
+def test_homografo_tortilla_de_maiz_resuelve_a_su_propia_fila(sc):
+    """[homógrafo con más riesgo del task, citado explícito en el brief] 'tortilla' nombra TRES
+    alimentos distintos en el sistema: Tortilla de trigo/integral (RD, harina de trigo), Tortilla
+    española (ES/T5, huevo+patata) y Tortilla de maíz (MX/T6, maíz sin gluten) — ninguna alias
+    comparte token con otra."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("Tortillas de maíz") == "Tortilla de maíz"
+    assert sc.normalize_name("tortilla de maiz picada") == "Tortilla de maíz"
+    assert sc.normalize_name("Tortilla de trigo") == "Tortilla de trigo"
+    assert sc.normalize_name("Tortilla integral") == "Tortilla integral"
+
+
+def test_resolve_preparation_distinct_tortilla_maiz_canoniza_a_fila_real(sc):
+    """[la MUTACIÓN de esta task, ver reporte] Pre-T6, `resolve_preparation_distinct` forzaba
+    `(True, None)` (pass-through, DROP) para 'tortilla de maíz' porque el catálogo solo tenía
+    tortillas de TRIGO — comentario original: "el catálogo solo tiene tortillas de TRIGO". Con
+    la alta real T6 debe CANONIZAR a la fila, no pasar de largo. RED-first: revertir la línea a
+    `return (True, None)` reproduce el DROP (ver reporte §Mutaciones)."""
+    handled, canonical = sc.resolve_preparation_distinct("Tortillas de maíz")
+    assert handled is True
+    assert canonical == "Tortilla de maíz", (
+        f"resolve_preparation_distinct debe canonizar a 'Tortilla de maíz', devolvió {canonical!r} "
+        f"— si es None, la mutación pre-T6 (pass-through) revivió"
+    )
+
+
+@pytest.mark.e2e
+def test_homografo_tuna_de_nopal_no_contamina_atun_en_agua(sc):
+    """['tuna' en México/RD = fruta del nopal; 'atún' = el pescado — palabras DISTINTAS que un
+    hispanohablante no confundiría, pero el alias bare 'tuna' (necesario porque normalize_name
+    stripea paréntesis ANTES de comparar: "Tuna (fruta de nopal)" -> "tuna") podría en teoría
+    colisionar si 'Atún en agua' alguna vez ganara un alias en inglés. Pin de que NO lo tiene."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("Tuna (fruta de nopal)") == "Tuna de nopal"
+    assert sc.normalize_name("Tuna") == "Tuna de nopal"
+    assert sc.normalize_name("Atún en agua") == "Atún en agua"
+    assert sc.normalize_name("atún") == "Atún en agua"
+
+
+@pytest.mark.e2e
+def test_homografo_mora_no_contamina_mora_azul_de_arandanos(sc):
+    """['mora' sola en es-LatAm = mora/zarzamora (blackberry); 'mora azul' (alias PRE-EXISTENTE
+    de 'Arándanos', blueberry) es un término DISTINTO con calificativo — jamás confundidos porque
+    los aliases de 'Mora' nunca incluyen 'azul'. Fibra 5.3g (Mora) vs 2.4g (Arándanos) confirma
+    que además son alimentos macro-distintos, no solo nombres distintos (regla >15% del contrato)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("Mora") == "Mora"
+    assert sc.normalize_name("mora azul") == "Arándanos"
+    assert sc.normalize_name("Arándanos") == "Arándanos"
+
+
+@pytest.mark.parametrize("item,fila_o_alias_esperado,tipo", [
+    ("Jitomate", "Tomate", "sinónimo"), ("Chile morrón", "Ají morrón", "sinónimo"),
+    ("Mazorca", "Maíz dulce en granos", "sinónimo"), ("Choclo", "Maíz dulce en granos", "sinónimo"),
+    ("Malanga", "Yautía", "sinónimo"), ("Cuchuco de trigo", "Bulgur", "sinónimo"),
+    ("Chile cuaresmeño", "Chile jalapeño", "sinónimo"), ("Piloncillo", "Panela", "sinónimo"),
+    ("Color (bijol)", "Achiote", "sinónimo"),
+    ("Frijol cargamanto", "Frijol cargamanto", "fila nueva"), ("Chicharrón", "Chicharrón", "fila nueva"),
+    ("Trucha", "Trucha", "fila nueva"), ("Tortilla de maíz", "Tortilla de maíz", "fila nueva"),
+])
+def test_tabla_fila_vs_sinonimo_estructural(item, fila_o_alias_esperado, tipo):
+    """[tabla estructural, sin DB] Documenta en código la decisión fila-vs-sinónimo por item —
+    complementa (no reemplaza) el test funcional `test_sinonimos_t6_resuelven_via_normalize_name_real`
+    de arriba: aquí se ancla la DECISIÓN (qué se decidió), allá el RESULTADO (que funciona)."""
+    if tipo == "sinónimo":
+        assert item != fila_o_alias_esperado, f"{item!r} está marcado sinónimo pero apunta a sí mismo"
+        assert fila_o_alias_esperado in _T6_NUEVAS_FILAS_O_PREEXISTENTES(), (
+            f"el destino {fila_o_alias_esperado!r} de {item!r} debe ser una fila real conocida"
+        )
+    else:
+        assert item == fila_o_alias_esperado, f"{item!r} está marcado fila nueva pero mapea a otro nombre"
+        assert item in _DISH_TEMPLATES_MX_CO_NAMES, f"{item!r} marcado fila nueva debe estar en las 46 altas"
+
+
+def _T6_NUEVAS_FILAS_O_PREEXISTENTES() -> frozenset:
+    return _DISH_TEMPLATES_MX_CO_NAMES | frozenset({
+        "Tomate", "Ají morrón", "Maíz dulce en granos", "Yautía", "Bulgur",
+    })
+
+
+# ── I7. e2e — las 46 altas T6 existen en el catálogo vivo, SIN precio, con fdc_id o 'manual' ─────
+
+@pytest.mark.e2e
+def test_46_altas_t6_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+
+    rows = execute_sql_query(
+        "SELECT name, price_per_lb, price_per_unit, fdc_id, nutrition_source "
+        "FROM master_ingredients WHERE name = ANY(%s)",
+        (list(_DISH_TEMPLATES_MX_CO_NAMES),),
+        fetch_all=True,
+    ) or []
+    por_nombre = {r["name"]: r for r in rows}
+
+    faltantes = sorted(_DISH_TEMPLATES_MX_CO_NAMES - set(por_nombre))
+    assert not faltantes, f"altas T6 ausentes del catálogo vivo: {faltantes}"
+
+    con_precio = [n for n, r in por_nombre.items()
+                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
+    assert not con_precio, f"altas T6 con precio RD (deberían estar en 0): {con_precio}"
+
+    # [T6 · a diferencia de T5] 3 filas SIN fdc_id real (nutrition_source='manual' en su lugar) —
+    # ver docstring de add_foods_mx_co_2026_08_17.py. Las otras 43 SÍ exigen fdc_id + 'usda'.
+    _MANUAL = {"Achiote", "Flor de Jamaica", "Hoja santa"}
+    con_usda = {n: r for n, r in por_nombre.items() if n not in _MANUAL}
+    sin_fdc = [n for n, r in con_usda.items() if not r.get("fdc_id")]
+    assert not sin_fdc, f"altas T6 (no-manual) sin fdc_id: {sin_fdc}"
+    no_usda = [n for n, r in con_usda.items() if r.get("nutrition_source") != "usda"]
+    assert not no_usda, f"altas T6 (no-manual) con nutrition_source != 'usda': {no_usda}"
+
+    manuales = {n: r for n, r in por_nombre.items() if n in _MANUAL}
+    assert set(manuales) == _MANUAL, f"esperaba exactamente {_MANUAL} como manual, hay {set(manuales)}"
+    no_manual = [n for n, r in manuales.items() if r.get("nutrition_source") != "manual"]
+    assert not no_manual, f"{no_manual} deberían tener nutrition_source='manual'"
+
+
+# ── I8. Golden fixture: un día MX y un día CO pasan slots suaves (mismo patrón que H14 para ES) ──
+
+def _dia_mx_con_mole_en_desayuno() -> list:
+    return [{
+        "day": 1,
+        "meals": [
+            {"meal": "Desayuno", "name": "Mole ligero de pollo con arroz",
+             "ingredients": ["Pechuga de pollo", "Chocolate de mesa", "Arroz blanco"]},
+            {"meal": "Almuerzo", "name": "Tacos de pollo al pastor ligero",
+             "ingredients": ["Pechuga de pollo", "Tortilla de maíz", "Piña"]},
+            {"meal": "Cena", "name": "Enchiladas de queso al horno",
+             "ingredients": ["Tortilla de maíz", "Queso blanco", "Chile guajillo"]},
+            {"meal": "Merienda", "name": "Jícama con chile y limón",
+             "ingredients": ["Jícama", "Chile de árbol", "Limón"]},
+        ],
+    }]
+
+
+def _dia_co_con_arroz_en_desayuno() -> list:
+    return [{
+        "day": 1,
+        "meals": [
+            {"meal": "Desayuno", "name": "Arroz con pollo colombiano",
+             "ingredients": ["Pechuga de pollo", "Arroz blanco", "Ají cubanela"]},
+            {"meal": "Almuerzo", "name": "Ajiaco santafereño con pollo",
+             "ingredients": ["Pechuga de pollo", "Papa", "Guascas"]},
+            {"meal": "Cena", "name": "Trucha al horno con limón",
+             "ingredients": ["Trucha", "Limón", "Ajo"]},
+            {"meal": "Merienda", "name": "Jugo natural de lulo",
+             "ingredients": ["Lulo"]},
+        ],
+    }]
+
+
+@pytest.mark.parametrize("cc,builder", [("MX", _dia_mx_con_mole_en_desayuno), ("CO", _dia_co_con_arroz_en_desayuno)])
+def test_dia_arroz_fuera_de_horario_pasa_como_soft_sin_forzar_retry(go, monkeypatch, cc, builder):
+    """[Golden fixture] Un día con un plato base-arroz en Desayuno — violación real de la regla
+    dura — DEBE detectarse SOFT (hard=False) para país MX/CO: `slot_rules_for_country` softea
+    toda regla en Fase 1 (T4), igual que ES en H14."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dias = builder()
+    violaciones = go._detect_slot_appropriateness(dias, {"country": cc})
+    assert violaciones, f"[{cc}] el día de prueba debe producir AL MENOS una violación (control positivo)"
+    duras = [v for v in violaciones if v["hard"]]
+    assert not duras, f"[{cc}] no debe producir violaciones HARD: {duras}"
+
+
+@pytest.mark.parametrize("cc,builder", [("MX", _dia_mx_con_mole_en_desayuno), ("CO", _dia_co_con_arroz_en_desayuno)])
+def test_el_mismo_dia_mx_co_hard_para_do_control_de_que_el_mecanismo_discrimina(go, monkeypatch, cc, builder):
+    """Control negativo (mismo patrón que H14): el MISMO día, con country='DO', debe seguir
+    produciendo HARD — confirma que el mecanismo distingue países en vez de estar simplemente roto."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dias = builder()
+    violaciones = go._detect_slot_appropriateness(dias, {"country": "DO"})
+    assert violaciones, f"[{cc}→DO] control: el día debe violar también en DO"
+    duras = [v for v in violaciones if v["hard"]]
+    assert duras, f"[{cc}→DO] debe seguir produciendo violaciones HARD (byte-identidad del mecanismo)"
+
+
+# ── I9. Cierre medible — mx.json/co.json committed: cero DROP, cero SUSTITUCION-SILENCIOSA ───────
+
+@pytest.mark.parametrize("cc,fname", [("MX", "mx.json"), ("CO", "co.json")])
+def test_harness_mx_co_cierra_en_cero_drops_cero_silenciosas(cc, fname):
+    """[el criterio de cierre del contrato] `mx.json`/`co.json` (sobrescritos por la re-corrida
+    final del harness post-altas, committed en el repo) deben reportar counts.DROP == 0 y
+    counts.SUSTITUCION-SILENCIOSA == 0 — el mismo criterio de salida que T5 cerró para ES."""
+    path = _BACKEND / "data" / "country_gaps" / fname
+    assert path.exists(), f"[{cc}] {fname} debe existir committed en el repo"
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    assert data.get("country") == cc
+    counts = data.get("counts") or {}
+    assert counts.get("DROP") == 0, f"[{cc}] DROP debe ser 0 en el cierre, es {counts.get('DROP')}"
+    assert counts.get("SUSTITUCION-SILENCIOSA") == 0, (
+        f"[{cc}] SUSTITUCION-SILENCIOSA debe ser 0 en el cierre, es {counts.get('SUSTITUCION-SILENCIOSA')}"
+    )
+    assert counts.get("RESUELVE-BIEN") == data.get("total_items"), (
+        f"[{cc}] RESUELVE-BIEN debe cubrir el 100% de total_items en el cierre"
+    )

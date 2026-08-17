@@ -1,16 +1,16 @@
 {
   "mode": "country",
   "country": "CO",
-  "generated_at": "2026-08-17T13:19:10.908934+00:00",
+  "generated_at": "2026-08-17T14:41:13.859192+00:00",
   "semantic_tier_active": true,
   "cohere_api_key_present": true,
   "fuzzy_threshold": 0.87,
   "semantic_threshold": 0.7,
   "total_items": 74,
   "counts": {
-    "RESUELVE-BIEN": 48,
+    "RESUELVE-BIEN": 74,
     "SUSTITUCION-SILENCIOSA": 0,
-    "DROP": 26
+    "DROP": 0
   },
   "items": [
     {
@@ -79,17 +79,17 @@
     },
     {
       "food": "Chicharrón",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chicharrón",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chorizo santarrosano",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chorizo santarrosano",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -127,25 +127,25 @@
     },
     {
       "food": "Trucha",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Trucha",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chontaduro",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chontaduro",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Frijol cargamanto",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Frijol cargamanto",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -183,9 +183,9 @@
     },
     {
       "food": "Suero costeño",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Suero costeño",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -199,9 +199,9 @@
     },
     {
       "food": "Guascas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Guascas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -223,17 +223,17 @@
     },
     {
       "food": "Mazorca",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Maíz dulce en granos",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Choclo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Maíz dulce en granos",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -247,9 +247,9 @@
     },
     {
       "food": "Arracacha",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Arracacha",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -263,9 +263,9 @@
     },
     {
       "food": "Lulo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Lulo",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -295,17 +295,17 @@
     },
     {
       "food": "Curuba",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Curuba",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Uchuva",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Uchuva",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -319,25 +319,25 @@
     },
     {
       "food": "Panela",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Panela",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Achiote",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Achiote",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Color (bijol)",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Achiote",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -399,9 +399,9 @@
     },
     {
       "food": "Arequipe",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Arequipe",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -415,17 +415,17 @@
     },
     {
       "food": "Natilla",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Natilla",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Champús",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Champús",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -471,17 +471,17 @@
     },
     {
       "food": "Cuchuco de trigo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Bulgur",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Gallina criolla",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Gallina criolla",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -511,25 +511,25 @@
     },
     {
       "food": "Borojó",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Borojó",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Feijoa",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Feijoa",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Granadilla",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Granadilla",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -543,9 +543,9 @@
     },
     {
       "food": "Mora",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Mora",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -599,9 +599,9 @@
     },
     {
       "food": "Malanga",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Yautía",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     }

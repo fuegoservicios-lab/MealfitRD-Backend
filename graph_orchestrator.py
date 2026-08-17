@@ -6467,12 +6467,21 @@ def _dish_templates_path_for_country(canon: str) -> str:
     país YA canonicalizado. DO (o cualquier país sin archivo dedicado) ⇒ la ruta RD — fallback
     explícito, NO excepción: un país beta sin catálogo propio conserva los ejemplos dominicanos
     en vez de perder la sección entera (mismo espíritu fail-open de `_dish_examples_block_from_file`).
-    Hoy solo ES tiene archivo propio (T5); MX/CO/PR/US caen al fallback RD hasta que una task
-    futura les dé el suyo — comportamiento IDÉNTICO al que tenían antes de esta task."""
+    [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] MX y CO ganan archivo propio en esta task; PR/US
+    siguen cayendo al fallback RD hasta que una task futura les dé el suyo — comportamiento
+    IDÉNTICO al que tenían antes de esta task para esos dos."""
     if canon == "ES":
         _es_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_es.json")
         if os.path.exists(_es_path):
             return _es_path
+    if canon == "MX":
+        _mx_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_mx.json")
+        if os.path.exists(_mx_path):
+            return _mx_path
+    if canon == "CO":
+        _co_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_co.json")
+        if os.path.exists(_co_path):
+            return _co_path
     return _DO_DISH_TEMPLATES_PATH
 
 
@@ -14288,12 +14297,23 @@ _ALLERGEN_SYNONYMS = {
                 # T1): anchoa fresca/marinada — 'anchoa'/'anchoas' arriba NO matchea 'boqueron'
                 # (raíz de palabra distinta), así que sin esto un alérgico a pescado no quedaba
                 # cubierto para este nombre concreto.
-                "boqueron", "boquerones"],
+                "boqueron", "boquerones",
+                # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] alta de catálogo CO (Trucha, DROP en
+                # T1 country_catalog_gap.py --country CO): pez de río/truchicultura andina —
+                # ningún término de arriba lo matchea por substring.
+                "trucha", "truchas"],
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
                 "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
                 "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
                 "dulce de leche", "queso crema", "requeson", "kefir", "natilla", "flan",
                 "leche condensada", "leche evaporada", "nata", "ghee",
+                # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] altas de catálogo MX/CO (Arequipe,
+                # Suero costeño — DROP en T1): 'dulce de leche' arriba YA cubre Arequipe por
+                # SINÓNIMO conceptual pero NO por substring literal (el nombre de fila es
+                # "Arequipe", no contiene "dulce de leche"); 'suero de leche' (genérico, arriba)
+                # NO matchea 'suero costeño' (segunda palabra distinta) — ambos productos lácteos
+                # reales sin ningún término existente que los reconozca por su propio nombre.
+                "arequipe", "suero costeno",
                 # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'yogur' (sin 't', grafía estándar
                 # es-ES/es-DO) ya vivía en `_DIET_DAIRY_TERMS` y en el catch-all de
                 # `constants._get_fast_filtered_catalogs` — solo 'yogurt' (con 't') estaba aquí.
@@ -14319,7 +14339,10 @@ _ALLERGEN_SYNONYMS = {
                 # alta-hook (`test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo`) lo
                 # encontró en vivo tras la alta de la fila 'Nata' del catálogo ES (T5): antes de
                 # esa fila el término flotaba sin ningún alimento real que lo disparara.
-                "nata"],
+                "nata",
+                # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con 'lacteos' arriba (Arequipe/
+                # Suero costeño SÍ llevan lactosa — leche real, sin proceso que la remueva).
+                "arequipe", "suero costeno"],
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
                "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
                "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
@@ -14515,6 +14538,11 @@ _DIET_FLESH_TERMS = (  # carne de tierra + aves
     # etc. pasaba el scan de dieta vegana/vegetariana limpio (no es alérgeno IgE en este sistema
     # — carne es EXCLUSIVAMENTE vocabulario #2, sin contraparte en `_ALLERGEN_SYNONYMS`, ver G2).
     "morcilla", "panceta", "embuchado", "sobrasada", "butifarra", "chistorra", "cordero",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] alta de catálogo MX (Cecina, DROP en T1): res
+    # curada/salada en láminas — 'chicharron'/'gallina'/'chorizo' arriba YA cubrían Chicharrón(CO)/
+    # Gallina criolla(CO)/Chorizo mexicano-verde-santarrosano(MX/CO) por substring; 'cecina' es el
+    # único de este lote SIN ningún término existente que lo matchee.
+    "cecina",
 )
 _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
@@ -14530,6 +14558,9 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     # `_ALLERGEN_SYNONYMS['mariscos'/'pescado']` (percebe/percebes, boqueron/boquerones) — mismo
     # guard `test_paridad_dieta_alergeno_bidireccional`.
     "percebe", "percebes", "boqueron", "boquerones",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con la alta de T6 en
+    # `_ALLERGEN_SYNONYMS['pescado']` (Trucha, CO) — mismo guard `test_paridad_dieta_alergeno_bidireccional`.
+    "trucha", "truchas",
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",
@@ -14555,6 +14586,9 @@ _DIET_DAIRY_TERMS = (
     # `_ALLERGEN_SYNONYMS['lacteos'/'lactosa']` ('cuajada') — mismo guard
     # `test_paridad_dieta_alergeno_bidireccional`.
     "cuajada",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con las altas de T6 en
+    # `_ALLERGEN_SYNONYMS['lacteos'/'lactosa']` (Arequipe, Suero costeño) — mismo guard.
+    "arequipe", "suero costeno",
 )
 
 

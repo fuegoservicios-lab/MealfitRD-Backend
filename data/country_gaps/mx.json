@@ -1,16 +1,16 @@
 {
   "mode": "country",
   "country": "MX",
-  "generated_at": "2026-08-17T13:14:39.590937+00:00",
+  "generated_at": "2026-08-17T14:41:11.230780+00:00",
   "semantic_tier_active": true,
   "cohere_api_key_present": true,
   "fuzzy_threshold": 0.87,
   "semantic_threshold": 0.7,
   "total_items": 76,
   "counts": {
-    "RESUELVE-BIEN": 46,
+    "RESUELVE-BIEN": 76,
     "SUSTITUCION-SILENCIOSA": 0,
-    "DROP": 30
+    "DROP": 0
   },
   "items": [
     {
@@ -23,9 +23,9 @@
     },
     {
       "food": "Tortillas de maíz",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Tortilla de maíz",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -63,97 +63,97 @@
     },
     {
       "food": "Chile jalapeño",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile jalapeño",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile serrano",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile serrano",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile poblano",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile poblano",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile chipotle",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile chipotle",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile guajillo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile guajillo",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile ancho",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile ancho",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile habanero",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile habanero",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile de árbol",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile de árbol",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile pasilla",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile pasilla",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile mulato",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile mulato",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile cuaresmeño",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chile jalapeño",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chile morrón",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Ají morrón",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -167,9 +167,9 @@
     },
     {
       "food": "Nopal",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Nopal",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -183,17 +183,17 @@
     },
     {
       "food": "Jícama",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Jícama",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Epazote",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Epazote",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -247,17 +247,17 @@
     },
     {
       "food": "Chorizo mexicano",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chorizo mexicano",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chorizo verde",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chorizo verde",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -271,16 +271,16 @@
     },
     {
       "food": "Cecina",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Cecina",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chicharrón de cerdo",
       "verdict": "RESUELVE-BIEN",
-      "matched": "Cerdo",
+      "matched": "Chicharrón",
       "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
@@ -327,9 +327,9 @@
     },
     {
       "food": "Frijoles refritos",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Frijoles refritos",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -360,7 +360,7 @@
     {
       "food": "Queso panela",
       "verdict": "RESUELVE-BIEN",
-      "matched": "Queso blanco",
+      "matched": "Panela",
       "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
@@ -375,9 +375,9 @@
     },
     {
       "food": "Crema mexicana",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Crema mexicana",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -431,25 +431,25 @@
     },
     {
       "food": "Tuna (fruta de nopal)",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Tuna de nopal",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Jamaica (flor de)",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Flor de Jamaica",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Xoconostle",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Xoconostle",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -471,9 +471,9 @@
     },
     {
       "food": "Achiote",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Achiote",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -495,17 +495,17 @@
     },
     {
       "food": "Hoja santa",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Hoja santa",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chocolate de mesa",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chocolate de mesa",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -527,17 +527,17 @@
     },
     {
       "food": "Piloncillo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Panela",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Huitlacoche",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Huitlacoche",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -615,9 +615,9 @@
     },
     {
       "food": "Jitomate",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Tomate",
+      "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
     }

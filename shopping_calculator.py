@@ -803,6 +803,23 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "fideos", "membrillo",
     "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
     "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
+    # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismas 46 altas de catálogo MX/CO de este task —
+    # también SIN precio RD a propósito (mismo motivo que ES: países beta,
+    # `pricing_mode='beta_no_prices'`). Tokens elegidos por 2 palabras cuando la palabra sola es
+    # demasiado genérica o colisiona con una fila PRICED existente ('serrano' solo ⊂ 'Jamón
+    # serrano'; 'ancho'/'crema'/'frijoles'/'gallina' solos son términos comunes) — verificado con
+    # el MISMO sweep e2e de fix-round 1 de T5
+    # (`test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_catalogo_vivo_ni_pools`,
+    # extendido para cubrir estas 46 también) contra el catálogo vivo (284 filas) + los 6 pools
+    # (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO']`): cero falsos positivos.
+    "tortilla de maiz", "jalapeno", "chile serrano", "poblano", "chipotle", "guajillo",
+    "chile ancho", "habanero", "chile de arbol", "pasilla", "mulato", "nopal", "jicama",
+    "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
+    "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
+    "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "chicharron",
+    "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
+    "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
+    "gallina criolla", "borojo", "feijoa", "granadilla", "mora",
 )
 _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 
@@ -7204,7 +7221,12 @@ def resolve_preparation_distinct(name) -> tuple:
             return (True, None)
         return (False, None)  # "harina de negrito" etc. → resuelven por su propia fila en los tiers
     if _PREP_TORTILLA_MAIZ_RE.search(low):
-        return (True, None)  # el catálogo solo tiene tortillas de TRIGO — no colapsar a Maíz dulce
+        # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Antes de esta task el catálogo solo tenía
+        # tortillas de TRIGO — el guard forzaba pass-through (True, None) para NO colapsar
+        # "tortilla de maíz" a "Maíz dulce en granos" (kernel de maíz, macro ~4x distinto de una
+        # tortilla horneada). Con la alta real "Tortilla de maíz" (USDA, T6) el guard canoniza
+        # a SU fila propia en vez de pass-through — sigue sin colapsar al maíz crudo.
+        return (True, "Tortilla de maíz")
     if _PREP_CREMA_COCO_RE.search(low):
         return (True, None)  # crema de coco ≠ coco fresco (SKU distinto)
     # [P1-BROTH-NOT-MEAT · 2026-07-28] "caldo de pollo" resolvía a PECHUGA DE POLLO y "caldo de
