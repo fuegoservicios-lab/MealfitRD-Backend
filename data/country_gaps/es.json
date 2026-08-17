@@ -1,63 +1,63 @@
 {
   "mode": "country",
   "country": "ES",
-  "generated_at": "2026-08-17T07:12:25.556006+00:00",
+  "generated_at": "2026-08-17T12:44:03.974215+00:00",
   "semantic_tier_active": true,
   "cohere_api_key_present": true,
   "fuzzy_threshold": 0.87,
   "semantic_threshold": 0.7,
   "total_items": 80,
   "counts": {
-    "RESUELVE-BIEN": 48,
+    "RESUELVE-BIEN": 80,
     "SUSTITUCION-SILENCIOSA": 0,
-    "DROP": 32
+    "DROP": 0
   },
   "items": [
     {
       "food": "Jamón serrano",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Jamón serrano",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Jamón ibérico",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Jamón ibérico",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Chorizo español",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chorizo español",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Morcilla",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Morcilla",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Lomo embuchado",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Lomo embuchado",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Panceta ibérica",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Panceta ibérica",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -79,9 +79,9 @@
     },
     {
       "food": "Gambas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Gambas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -103,25 +103,25 @@
     },
     {
       "food": "Almejas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Almejas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Boquerones",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Boquerones",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Anchoas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Anchoas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -135,9 +135,9 @@
     },
     {
       "food": "Cordero",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Cordero",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -191,25 +191,25 @@
     },
     {
       "food": "Requesón",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Requesón",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Cuajada",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Cuajada",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Nata",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Nata",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -239,17 +239,17 @@
     },
     {
       "food": "Judías blancas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Judías blancas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Judías pintas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Judías pintas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -311,9 +311,9 @@
     },
     {
       "food": "Acelgas",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Acelgas",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -423,9 +423,9 @@
     },
     {
       "food": "Fideos",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Fideos",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -455,17 +455,17 @@
     },
     {
       "food": "Membrillo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Membrillo",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Higo",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Higo",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -519,9 +519,9 @@
     },
     {
       "food": "Azafrán",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Azafrán",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -551,9 +551,9 @@
     },
     {
       "food": "Alioli",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Alioli",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -567,49 +567,49 @@
     },
     {
       "food": "Turrón",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Turrón",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Mazapán",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Mazapán",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Sobrasada",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Sobrasada",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Butifarra",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Butifarra",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Percebes",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Percebes",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Vieira",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Vieira",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
@@ -623,33 +623,33 @@
     },
     {
       "food": "Chistorra",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Chistorra",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Piñones",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Piñones",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Almendra marcona",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Almendra marcona",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     },
     {
       "food": "Membrillo dulce",
-      "verdict": "DROP",
-      "matched": null,
-      "tier": null,
+      "verdict": "RESUELVE-BIEN",
+      "matched": "Membrillo dulce",
+      "tier": "exact",
       "score": null,
       "semantic_tier_status": "checked"
     }

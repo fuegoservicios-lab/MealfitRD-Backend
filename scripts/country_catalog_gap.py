@@ -329,7 +329,20 @@ def _resolve_with_tier(food_name: str) -> dict:
     return {"canon": canon, "tier": tier, "score": score}
 
 
-def classify_food(food_name: str, *, semantic_tier_active: bool = True) -> dict:
+def _catalog_name_set_including_unpriced() -> set:
+    """[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Set de nombres canónicos (accent-stripped, lower)
+    de TODO `master_ingredients` — a diferencia de `sc._get_verified_shopping_name_set()` (que
+    exige `price_per_lb>0 OR price_per_unit>0`), esto incluye filas SIN precio a propósito
+    (altas de catálogo-país como las de Task 5: España es país beta con
+    `pricing_mode='beta_no_prices'` — el precio RD nunca aplica, así que exigirlo aquí mediría
+    "¿tiene precio RD?" en vez de "¿tiene nutrición REAL verificada?", que es la pregunta que
+    esta task-1 audita. NO reemplaza `_get_verified_shopping_name_set` en ningún call site de
+    producción — vive solo en este script de medición offline."""
+    rows = sc.get_master_ingredients() or []
+    return {strip_accents(str(r.get("name") or "").lower().strip()) for r in rows if r.get("name")}
+
+
+def classify_food(food_name: str, *, semantic_tier_active: bool = True, catalog_name_set: set | None = None) -> dict:
     """Clasifica UN alimento contra el catálogo vivo (o mockeado, en tests) en uno de los 3
     veredictos del contrato de Task 1:
 
@@ -340,7 +353,16 @@ def classify_food(food_name: str, *, semantic_tier_active: bool = True) -> dict:
 
     `semantic_tier_active=False` (sin COHERE_API_KEY o falló el init) no cambia el veredicto —
     solo anota `semantic_tier_status="unknown"` en los DROP, porque esos son los únicos que
-    PODRÍAN haber sido en realidad una sustitución silenciosa nunca evaluada."""
+    PODRÍAN haber sido en realidad una sustitución silenciosa nunca evaluada.
+
+    [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] `catalog_name_set` (default `None` — preserva
+    BYTE-IDÉNTICO el comportamiento pre-T5 y las 8 unit tests de la sección A que mockean
+    `sc._get_verified_shopping_name_set` directamente) permite inyectar un set de "verificado"
+    distinto al de precio-RD. `run_country_mode` lo puebla con
+    `_catalog_name_set_including_unpriced()` para que un alta de catálogo-país SIN precio (T5)
+    cuente como RESUELVE-BIEN si resuelve por tier léxico/fuzzy — la pregunta de Task 1 es "¿el
+    catálogo tiene este alimento?", no "¿tiene precio RD?" (esa es una pregunta DISTINTA, la de
+    `MEALFIT_VERIFIED_INGREDIENTS_ONLY`, con su propio mecanismo — nunca tocado aquí)."""
     resolved = _resolve_with_tier(food_name)
     canon = resolved["canon"]
     tier = resolved["tier"]
@@ -354,7 +376,8 @@ def classify_food(food_name: str, *, semantic_tier_active: bool = True) -> dict:
             "score": None, "semantic_tier_status": status,
         }
 
-    verified = strip_accents(str(canon).lower().strip()) in sc._get_verified_shopping_name_set()
+    _verified_set = catalog_name_set if catalog_name_set is not None else sc._get_verified_shopping_name_set()
+    verified = strip_accents(str(canon).lower().strip()) in _verified_set
 
     if not verified:
         return {
@@ -451,8 +474,16 @@ def run_country_mode(cc: str) -> dict:
             file=sys.stderr,
         )
 
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Set de "verificado" propio de este modo — TODO
+    # master_ingredients, sin exigir precio RD (ver docstring de `_catalog_name_set_including_unpriced`
+    # y de `classify_food`). Altas de catálogo-país (Task 5, sin precio RD a propósito) cuentan
+    # como catálogo REAL para esta medición.
+    _catalog_names = _catalog_name_set_including_unpriced()
     items = CURATED_FOODS_BY_COUNTRY[cc]
-    results = [classify_food(food, semantic_tier_active=semantic_tier_active) for food in items]
+    results = [
+        classify_food(food, semantic_tier_active=semantic_tier_active, catalog_name_set=_catalog_names)
+        for food in items
+    ]
 
     counts = {"RESUELVE-BIEN": 0, "SUSTITUCION-SILENCIOSA": 0, "DROP": 0}
     for r in results:

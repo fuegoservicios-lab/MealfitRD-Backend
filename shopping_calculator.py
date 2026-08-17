@@ -778,6 +778,51 @@ def is_baking_pantry_staple(name) -> bool:
         return False
 
 
+# [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Generalización de P1-BAKING-STAPLES: MISMO problema,
+# ámbito distinto. Los 32 alimentos que Task 5 dio de alta en `master_ingredients` para España
+# (`country_gaps/es.json`, T1 — Jamón serrano, Gambas, Cordero, etc.) llevan SIN precio RD a
+# propósito: España es país beta (`COUNTRY_PROFILES['ES']['is_beta']`, P1-COUNTRY-SYSTEM-F1) y su
+# lista de compras corre en `pricing_mode='beta_no_prices'` (T7, `_strip_prices_for_beta_pricing_mode`
+# borra el precio de TODO el aggregate igual) — no hay mercado RD que cotizar. Sin este keep,
+# `_is_verified_for_shopping` (que exige precio>0) trataría estos nombres como si el LLM se los
+# hubiera inventado y los dropearía en SILENCIO de la lista — el MISMO modo de fallo que motivó
+# P1-BAKING-STAPLES (receta los usa, compra no los trae), ahora para un país entero en vez de 4
+# staples de horneado. Mismo mecanismo (keep unpriced, ~1 paquete estimado, categoría propia),
+# SEGUNDO registro de tokens con SU PROPIO knob de rollback — nunca toca
+# `_BAKING_PANTRY_STAPLE_TOKENS`/`is_baking_pantry_staple` (byte-identidad DO/knob-off intacta:
+# estos nombres NUNCA aparecen en un plan DO — `dish_templates.json` no los referencia). Si el
+# owner sube alguno con precio real, `_is_verified_for_shopping` gana primero y este keep queda
+# no-op (mismo contrato que P1-BAKING-STAPLES). El coherence guard NO necesita tocarse: el mismo
+# carve-out genérico `delta_pct != inf` (`run_shopping_coherence_guard`, "pueden ser staples no
+# marcados") ya excusa cualquier fantasma de delta infinito, sin importar SU origen. Rollback:
+# MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP=false → drop histórico (mismo comportamiento pre-T5).
+# tooltip-anchor: P1-COUNTRY-CATALOG-UNPRICED
+_COUNTRY_CATALOG_UNPRICED_TOKENS = (
+    "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
+    "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
+    "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "fideos", "membrillo",
+    "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
+    "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
+)
+_COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
+
+
+def _country_catalog_unpriced_keep_enabled() -> bool:
+    return _knob_env_bool("MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP", True)
+
+
+def is_country_catalog_unpriced_item(name) -> bool:
+    """True si `name` es uno de los alimentos de catálogo-país sin precio RD (match substring
+    accent-insensitive, mismo patrón que `is_baking_pantry_staple`). Usado por el keep del
+    aggregator (generalización de P1-BAKING-STAPLES, T5)."""
+    try:
+        from constants import strip_accents as _sa
+        low = _sa(str(name or "").lower())
+        return any(tok in low for tok in _COUNTRY_CATALOG_UNPRICED_TOKENS)
+    except Exception:
+        return False
+
+
 DEFAULT_G_PER_TAZA = 150
 
 # ============================================================
@@ -11713,6 +11758,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"🧁 [P1-BAKING-STAPLES] '{name}' fuera del catálogo con precio pero es staple de "
                     f"horneado → listado como ~1 empaque (~{_BAKING_STAPLE_DEFAULT_G:.0f}g, sin precio) "
                     f"en DESPENSA BÁSICA en vez de dropearlo."
+                )
+            elif _country_catalog_unpriced_keep_enabled() and is_country_catalog_unpriced_item(name):
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] generalización de P1-BAKING-STAPLES —
+                # ver docstring de `is_country_catalog_unpriced_item`.
+                weight_in_lbs = _COUNTRY_CATALOG_UNPRICED_DEFAULT_G / 453.592
+                has_weight = True
+                units = {}
+                display_cat = "CATÁLOGO SIN PRECIO"
+                logging.info(
+                    f"🌍 [P1-COUNTRY-CATALOG-UNPRICED] '{name}' fuera del catálogo con precio pero es "
+                    f"alimento de catálogo-país (sin precio RD a propósito, país beta) → listado como "
+                    f"~1 paquete (~{_COUNTRY_CATALOG_UNPRICED_DEFAULT_G:.0f}g, sin precio) en vez de "
+                    f"dropearlo."
                 )
             else:
                 # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el

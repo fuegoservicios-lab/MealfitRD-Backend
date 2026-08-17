@@ -6311,6 +6311,47 @@ _CULINARY_JUDGE_SLOT_LABELS = {"desayuno": "Desayuno", "almuerzo": "Almuerzo",
                                "cena": "Cena", "merienda": "Merienda"}
 
 
+_DO_DISH_TEMPLATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
+
+
+def _dish_examples_block_from_file(path: str) -> str:
+    """[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Construye el bloque "EJEMPLOS DE PLATOS..." a
+    partir de CUALQUIER archivo `dish_templates*.json` con el mismo schema (name/slots) —
+    extraído de `_build_culinary_judge_rubric` (antes inline, solo leía la ruta RD) para poder
+    reusar EXACTAMENTE la misma lógica con `data/dish_templates_es.json` sin duplicarla.
+    Byte-idéntica para la ruta RD (ningún cambio de lógica, solo de forma). Fail-open: JSON
+    ausente/corrupto ⇒ frase genérica (el juez sigue siendo usable, solo pierde los ejemplos)."""
+    try:
+        with open(path, encoding="utf-8") as _f:
+            _data = json.load(_f)
+        _templates = _data.get("templates") or []
+        _by_slot: dict = {k: [] for k in _CULINARY_JUDGE_SLOT_LABELS}
+        for _t in _templates:
+            if not isinstance(_t, dict):
+                continue
+            _name = _t.get("name")
+            if not _name:
+                continue
+            for _s in (_t.get("slots") or []):
+                _sk = str(_s).strip().lower()
+                if _sk in _by_slot and len(_by_slot[_sk]) < 10:
+                    _by_slot[_sk].append(_name)
+        _ex_lines = [f"- {_label}: " + "; ".join(_by_slot[_sk])
+                     for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items() if _by_slot.get(_sk)]
+        return (
+            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO (biblioteca curada, no "
+            "exhaustiva — la creatividad puede ir MÁS ALLÁ de esta lista):\n" + "\n".join(_ex_lines)
+        ) if _ex_lines else (
+            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
+            "juzga con criterio culinario dominicano general."
+        )
+    except Exception:
+        return (
+            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
+            "juzga con criterio culinario dominicano general."
+        )
+
+
 def _build_culinary_judge_rubric() -> str:
     """[P1-CULINARY-JUDGE] Construye la rúbrica ESTABLE del juez culinario — llamada UNA sola
     vez a import-time, asignada abajo a `_CULINARY_JUDGE_RUBRIC`. El prefix del prompt (este
@@ -6328,36 +6369,7 @@ def _build_culinary_judge_rubric() -> str:
     Fail-open: JSON ausente/corrupto ⇒ rúbrica mínima hardcoded (el juez sigue siendo usable,
     solo pierde los ejemplos curados). tooltip-anchor: P1-CULINARY-JUDGE-RUBRIC
     """
-    try:
-        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates.json")
-        with open(_path, encoding="utf-8") as _f:
-            _data = json.load(_f)
-        _templates = _data.get("templates") or []
-        _by_slot: dict = {k: [] for k in _CULINARY_JUDGE_SLOT_LABELS}
-        for _t in _templates:
-            if not isinstance(_t, dict):
-                continue
-            _name = _t.get("name")
-            if not _name:
-                continue
-            for _s in (_t.get("slots") or []):
-                _sk = str(_s).strip().lower()
-                if _sk in _by_slot and len(_by_slot[_sk]) < 10:
-                    _by_slot[_sk].append(_name)
-        _ex_lines = [f"- {_label}: " + "; ".join(_by_slot[_sk])
-                     for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items() if _by_slot.get(_sk)]
-        _examples_block = (
-            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO (biblioteca curada, no "
-            "exhaustiva — la creatividad puede ir MÁS ALLÁ de esta lista):\n" + "\n".join(_ex_lines)
-        ) if _ex_lines else (
-            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
-            "juzga con criterio culinario dominicano general."
-        )
-    except Exception:
-        _examples_block = (
-            "EJEMPLOS DE PLATOS DOMINICANOS COHERENTES POR HORARIO: catálogo no disponible — "
-            "juzga con criterio culinario dominicano general."
-        )
+    _examples_block = _dish_examples_block_from_file(_DO_DISH_TEMPLATES_PATH)
     _hint_lines = []
     try:
         for _sk, _label in _CULINARY_JUDGE_SLOT_LABELS.items():
@@ -6450,6 +6462,20 @@ _CULINARY_JUDGE_RUBRIC = _build_culinary_judge_rubric()
 _CULINARY_JUDGE_RUBRIC_CACHE: dict = {"DO": _CULINARY_JUDGE_RUBRIC}
 
 
+def _dish_templates_path_for_country(canon: str) -> str:
+    """[P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Ruta del `dish_templates*.json` a usar para un
+    país YA canonicalizado. DO (o cualquier país sin archivo dedicado) ⇒ la ruta RD — fallback
+    explícito, NO excepción: un país beta sin catálogo propio conserva los ejemplos dominicanos
+    en vez de perder la sección entera (mismo espíritu fail-open de `_dish_examples_block_from_file`).
+    Hoy solo ES tiene archivo propio (T5); MX/CO/PR/US caen al fallback RD hasta que una task
+    futura les dé el suyo — comportamiento IDÉNTICO al que tenían antes de esta task."""
+    if canon == "ES":
+        _es_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_es.json")
+        if os.path.exists(_es_path):
+            return _es_path
+    return _DO_DISH_TEMPLATES_PATH
+
+
 def _culinary_judge_rubric_for_country(country: str) -> str:
     """tooltip-anchor: _culinary_judge_rubric_for_country (test_p1_country_system_f1.py)"""
     from constants import canonicalize_country, COUNTRY_PROFILES
@@ -6462,6 +6488,22 @@ def _culinary_judge_rubric_for_country(country: str) -> str:
         "Eres un juez culinario dominicano experto",
         f"Eres un juez culinario experto en la cocina de {name_es} y cocina internacional",
     )
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Fase 1 (T3) solo re-anclaba QUIÉN es el juez; el
+    # catálogo de ejemplos ("EJEMPLOS DE PLATOS DOMINICANOS...") seguía siendo dominicano SIEMPRE
+    # (comentario de `_CULINARY_JUDGE_RUBRIC_CACHE`: "el catálogo por país es Fase 2"). Esta es
+    # esa Fase 2: si el país tiene su propio `dish_templates_<cc>.json`, sustituye TAMBIÉN el
+    # bloque de ejemplos — nunca en DO (ese branch ni siquiera llega aquí, corta arriba en el
+    # cache hit de 'DO') y nunca si el país no tiene archivo dedicado (mismo bloque RD, no-op).
+    _do_block = _dish_examples_block_from_file(_DO_DISH_TEMPLATES_PATH)
+    _country_path = _dish_templates_path_for_country(canon)
+    if _country_path != _DO_DISH_TEMPLATES_PATH:
+        _country_block = _dish_examples_block_from_file(_country_path)
+        if _country_block and _country_block != _do_block:
+            # El encabezado literal dice "PLATOS DOMINICANOS" (`_dish_examples_block_from_file`
+            # es compartida con la ruta RD, byte-idéntica a propósito) — se re-ancla SOLO en el
+            # bloque ya sustituido, nunca en el helper compartido, para no tocar la salida DO.
+            _country_block = _country_block.replace("PLATOS DOMINICANOS", f"PLATOS DE {name_es.upper()}")
+            rendered = rendered.replace(_do_block, _country_block)
     _CULINARY_JUDGE_RUBRIC_CACHE[canon] = rendered
     return rendered
 
@@ -14216,7 +14258,12 @@ _ALLERGEN_SYNONYMS = {
              "salsa de mani"],
     "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
                      "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
-                     "nutella", "praline", "turron", "pesto", "crema de avellana"],
+                     "nutella", "praline", "turron", "pesto", "crema de avellana",
+                     # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (piñones,
+                     # DROP en T1): ningún término de arriba matchea 'pinon'/'pinones' por
+                     # substring (distinto de 'almendra'/'nuez'/etc). 'almendra marcona' (otra
+                     # alta del mismo lote) SÍ ya matchea vía 'almendra', sin cambios ahí.
+                     "pinon", "pinones"],
     "mariscos": ["camaron", "camarones", "langosta", "cangrejo", "langostino", "gambas",
                  "gamba", "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
                  "surimi",
@@ -14225,14 +14272,23 @@ _ALLERGEN_SYNONYMS = {
                  # POOLS) y 'Mejillones' es fila real de `master_ingredients` — el backstop
                  # determinista no lo reconocía. 'gamba' (singular): `condition_rules.
                  # _ALLERGEN_SHELLFISH_SUBS` ya lo trata como objetivo de sustitución.
-                 "mejillon", "mejillones", "vieira"],
+                 "mejillon", "mejillones", "vieira",
+                 # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (percebes, DROP en
+                 # T1 country_catalog_gap.py --country ES): goose barnacle, crustáceo — sin esto un
+                 # plan ES con 'Percebes' pasaba el backstop limpio para una alergia a mariscos.
+                 "percebe", "percebes"],
     "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
                 "dorado", "sardina", "merluza", "carite", "anchoa", "anchoas",
                 "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire",
                 # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'arenque' ya vivía en
                 # `_DIET_SEAFOOD_TERMS` y en `condition_rules._ALLERGEN_FISH_SUBS`; es fila real
                 # de `master_ingredients` (confirmado en vivo) — el backstop no lo reconocía.
-                "arenque"],
+                "arenque",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (boquerones, DROP en
+                # T1): anchoa fresca/marinada — 'anchoa'/'anchoas' arriba NO matchea 'boqueron'
+                # (raíz de palabra distinta), así que sin esto un alérgico a pescado no quedaba
+                # cubierto para este nombre concreto.
+                "boqueron", "boquerones"],
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
                 "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
                 "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
@@ -14241,7 +14297,11 @@ _ALLERGEN_SYNONYMS = {
                 # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'yogur' (sin 't', grafía estándar
                 # es-ES/es-DO) ya vivía en `_DIET_DAIRY_TERMS` y en el catch-all de
                 # `constants._get_fast_filtered_catalogs` — solo 'yogurt' (con 't') estaba aquí.
-                "yogur"],
+                "yogur",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] alta de catálogo ES (cuajada, DROP en
+                # T1): cuajo de leche fresco — lácteo real, sin esto un alérgico quedaba
+                # desprotegido para este nombre concreto (ningún término de arriba lo matchea).
+                "cuajada"],
     "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella",
                 "whey", "suero de leche", "helado", "mantecado", "dulce de leche", "queso crema",
                 "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada",
@@ -14249,7 +14309,17 @@ _ALLERGEN_SYNONYMS = {
                 # arriba — NO se amplía el resto de la categoría (lactosa es intencionalmente más
                 # estrecha que lacteos: 'ghee'/'caseina'/'caseinato' quedan fuera a propósito,
                 # ver test_lactosa_es_mas_estrecha_que_lacteos_a_proposito).
-                "yogur"],
+                "yogur",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] 'cuajada' SÍ lleva lactosa (leche
+                # cuajada entera, sin proceso que la remueva — a diferencia de 'ghee') — entra en
+                # AMBAS categorías, paridad con 'lacteos' arriba.
+                "cuajada",
+                # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17 · e2e G5, alta-hook] 'nata' (crema
+                # espesa) SÍ lleva lactosa — ya vivía en 'lacteos' (arriba) pero faltaba aquí; el
+                # alta-hook (`test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo`) lo
+                # encontró en vivo tras la alta de la fila 'Nata' del catálogo ES (T5): antes de
+                # esa fila el término flotaba sin ningún alimento real que lo disparara.
+                "nata"],
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
                "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
                "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
@@ -14438,6 +14508,13 @@ _DIET_FLESH_TERMS = (  # carne de tierra + aves
     "bistec", "churrasco", "cerdo", "puerco", "chuleta", "chicharron", "tocino", "tocineta", "jamon",
     "salami", "longaniza", "chorizo", "salchicha", "salchichon", "embutido", "costilla", "mondongo",
     "chivo", "cabro", "conejo", "higado", "pernil",
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] altas de catálogo ES (charcutería/carnes, DROP en
+    # T1 country_catalog_gap.py --country ES). 'jamon'/'chorizo' arriba ya cubren "Jamón
+    # serrano/ibérico" y "Chorizo español" por substring — estos 7 son productos animales SIN
+    # ningún término existente que los matchee: sin esto, un plan ES con "Morcilla"/"Sobrasada"/
+    # etc. pasaba el scan de dieta vegana/vegetariana limpio (no es alérgeno IgE en este sistema
+    # — carne es EXCLUSIVAMENTE vocabulario #2, sin contraparte en `_ALLERGEN_SYNONYMS`, ver G2).
+    "morcilla", "panceta", "embuchado", "sobrasada", "butifarra", "chistorra", "cordero",
 )
 _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
@@ -14449,6 +14526,10 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     # 'worcestershire' (derivado de pescado, Worcestershire lleva anchoas) ya vivían del lado
     # alérgeno, ausentes aquí.
     "gambas", "gamba", "salsa inglesa", "worcestershire",
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] paridad con las altas de T5 en
+    # `_ALLERGEN_SYNONYMS['mariscos'/'pescado']` (percebe/percebes, boqueron/boquerones) — mismo
+    # guard `test_paridad_dieta_alergeno_bidireccional`.
+    "percebe", "percebes", "boqueron", "boquerones",
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",
@@ -14470,6 +14551,10 @@ _DIET_DAIRY_TERMS = (
     # y 'proteina de suero' ya vivían del lado alérgeno (proteínas lácteas, no cubiertas por la raíz
     # 'caseina'/'suero de leche' vía substring — orden de palabras distinto), ausentes aquí.
     "caseinato", "proteina de suero",
+    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] paridad con la alta de T5 en
+    # `_ALLERGEN_SYNONYMS['lacteos'/'lactosa']` ('cuajada') — mismo guard
+    # `test_paridad_dieta_alergeno_bidireccional`.
+    "cuajada",
 )
 
 

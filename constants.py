@@ -1852,6 +1852,41 @@ DOMINICAN_FRUITS = [
     "Granada",
 ]
 
+# [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] Pools de catálogo por país beta para el camino
+# DEGRADADO (Smart Shuffle/Edge Recipes, `cron_tasks._build_filtered_edge_recipe_day` →
+# `_get_fast_filtered_catalogs`) — el ÚNICO lugar de ese camino que hoy arma un día desde un
+# catálogo estático en vez de reciclar días previos del usuario. Mismo shape que
+# DOMINICAN_PROTEINS/CARBS/VEGGIES_FATS/FRUITS (listas planas de nombres). Solo ES tiene pool
+# propio hoy (T5) — un país beta SIN entrada aquí cae al pool RD (`_get_fast_filtered_catalogs`
+# con `country=None` o sin match: fallback explícito, no excepción, mismo comportamiento byte-
+# idéntico que tenía antes de esta task). Nombres tomados de las 32 altas de catálogo T5
+# (`country_gaps/es.json`, USDA-sourced) + los RESUELVE-BIEN de T1 más representativos de la
+# cocina española — mismo criterio "ingrediente clave de plato típico" que curó la lista del
+# harness (country_catalog_gap.py), no una traducción del pool RD.
+COUNTRY_POOLS: dict[str, dict[str, list]] = {
+    "ES": {
+        "proteins": [
+            "Jamón serrano", "Jamón ibérico", "Chorizo español", "Morcilla", "Lomo embuchado",
+            "Panceta ibérica", "Gambas", "Almejas", "Boquerones", "Anchoas", "Cordero",
+            "Bacalao", "Pulpo", "Mejillones", "Calamar", "Vieira", "Percebes", "Chistorra",
+            "Sobrasada", "Butifarra", "Conejo", "Cerdo", "Pechuga de pollo",
+        ],
+        "carbs": [
+            "Arroz blanco", "Papa", "Pan blanco familiar", "Fideos", "Harina de trigo",
+            "Garbanzos", "Lentejas", "Judías blancas", "Judías pintas", "Habas",
+        ],
+        "veggies_fats": [
+            "Cebolla", "Ajo", "Tomate", "Ají morrón", "Alcachofa", "Espárragos", "Calabacín",
+            "Berenjena", "Acelgas", "Espinacas", "Puerro", "Coliflor", "Vainitas",
+            "Champiñones", "Aceitunas", "Aceite de oliva",
+        ],
+        "fruits": [
+            "Naranja", "Mandarina", "Membrillo", "Higo", "Uva", "Melón", "Limón",
+        ],
+    },
+}
+
+
 FRUIT_SYNONYMS = {
     "guineo": ["guineo", "guineo maduro", "banana", "banano", "cambur"],
     "mango": ["mango", "mangos", "mango maduro"],
@@ -3323,12 +3358,27 @@ def slot_positive_hint(slot_key: str, diet=None) -> str:
     return SLOT_POSITIVE_HINT.get(slot_key, "")
 
 
-def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
-    """Filtra el catálogo dominicano basado en restricciones del usuario O(N) sin Cache Thrashing volátil."""
-    filtered_proteins = DOMINICAN_PROTEINS.copy()
-    filtered_carbs = DOMINICAN_CARBS.copy()
-    filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
-    filtered_fruits = DOMINICAN_FRUITS.copy()
+def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, country: str = None):
+    """Filtra el catálogo [dominicano|del país beta] basado en restricciones del usuario O(N)
+    sin Cache Thrashing volátil.
+
+    [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] `country` (default `None`, kwarg — TODOS los call
+    sites preexistentes de `ai_helpers.py`/`agent.py`/`cron_tasks.py`/tests siguen llamando con
+    solo 3 posicionales, así que caen aquí sin tocarse) selecciona el pool BASE antes de aplicar
+    el MISMO filtrado de alergias/dislikes/dieta de abajo: un país beta con entrada en
+    `COUNTRY_POOLS` usa su propio pool; `None`/`'DO'`/un país sin pool dedicado cae a
+    DOMINICAN_* — fallback explícito, no excepción (byte-idéntico al comportamiento pre-T5)."""
+    _country_pool = COUNTRY_POOLS.get(str(country or "").strip().upper()) if country else None
+    if _country_pool:
+        filtered_proteins = list(_country_pool["proteins"])
+        filtered_carbs = list(_country_pool["carbs"])
+        filtered_veggies = list(_country_pool["veggies_fats"])
+        filtered_fruits = list(_country_pool["fruits"])
+    else:
+        filtered_proteins = DOMINICAN_PROTEINS.copy()
+        filtered_carbs = DOMINICAN_CARBS.copy()
+        filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
+        filtered_fruits = DOMINICAN_FRUITS.copy()
 
     restrictions = list(allergies) + list(dislikes)
 

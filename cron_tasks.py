@@ -25026,6 +25026,7 @@ def _build_filtered_edge_recipe_day(
     dislikes: list | tuple | None,
     diet: str = "",
     pantry_items: list | None = None,
+    country: str = "DO",
 ) -> dict | None:
     """Construye un Edge Recipe usando solo ingredientes permitidos para el usuario.
 
@@ -25038,6 +25039,11 @@ def _build_filtered_edge_recipe_day(
     con el backstop determinista y el día ensamblado se re-verifica antes de devolverlo. Devolver
     `None` es seguro — los dos callsites lo tratan como "no se pudo construir" (omiten la expansión
     del pool o caen al siguiente recurso), que es exactamente el fail-secure que queremos.
+
+    [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] `country` (default 'DO', preserva callers que no lo
+    pasan) selecciona el pool de catálogo BASE vía `_get_fast_filtered_catalogs(..., country=)` —
+    país beta con `COUNTRY_POOLS` propio (hoy: ES) usa ESE pool; DO o un país sin pool dedicado
+    cae al pool RD, byte-idéntico a antes de esta task.
     """
     from constants import _get_fast_filtered_catalogs, normalize_ingredient_for_tracking
 
@@ -25047,6 +25053,7 @@ def _build_filtered_edge_recipe_day(
         allergies,
         dislikes,
         (diet or "").strip().lower(),
+        country=country,
     )
 
     # [P0-DEGRADED-SAFETY-SCAN · 2026-07-31] Segunda malla sobre el pool de candidatos. Va ANTES del
@@ -28599,6 +28606,13 @@ __PLAN_MODE_GATE__
 
                     blocklist = current_allergies + current_dislikes
 
+                    # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] País del pool de catálogo del camino
+                    # degradado — derivado UNA vez (mismo patrón que T2, `_day_system_instruction_for_diet`)
+                    # y reusado en los 4 call sites de `_build_filtered_edge_recipe_day` de este bloque.
+                    # Knob apagado ⇒ `country_for_form_data` siempre 'DO' (byte-idéntico).
+                    from constants import country_for_form_data as _country_for_form_data
+                    _edge_recipe_country = _country_for_form_data(form_data)
+
                     # [P1-6 FIX] Construir edge recipes con catálogos ya filtrados por alergias/dislikes/dieta.
                     # [P0-C FIX] Pasar pantry para que solo elija ingredientes disponibles en la nevera.
                     from constants import PLAN_CHUNK_SIZE as _PCS
@@ -28610,6 +28624,7 @@ __PLAN_MODE_GATE__
                                 current_dislikes,
                                 current_diet,
                                 pantry_items=_fresh_pantry_for_edge,
+                                country=_edge_recipe_country,
                             )
                             if not edge_day:
                                 logger.warning(
@@ -28876,6 +28891,7 @@ __PLAN_MODE_GATE__
                                     current_dislikes,
                                     current_diet,
                                     pantry_items=_fresh_pantry_for_edge,  # [P0-C FIX]
+                                    country=_edge_recipe_country,  # [P1-COUNTRY-SYSTEM-F2 · T5]
                                 )
                                 # Validar que no estemos repitiendo el hash por accidente
                                 if edge_day and str([m.get('name') for m in edge_day.get('meals', [])]) != last_chosen_hash:
@@ -28978,6 +28994,7 @@ __PLAN_MODE_GATE__
                                     current_dislikes,
                                     current_diet,
                                     pantry_items=_pantry_snap,
+                                    country=_edge_recipe_country,  # [P1-COUNTRY-SYSTEM-F2 · T5]
                                 )
                                 if edge_day:
                                     _edge_ing = [
@@ -29113,6 +29130,7 @@ __PLAN_MODE_GATE__
                                     current_dislikes,
                                     current_diet,
                                     pantry_items=None,  # sin restricción → catálogo completo
+                                    country=_edge_recipe_country,  # [P1-COUNTRY-SYSTEM-F2 · T5]
                                 )
                             except Exception as _p15_edge_err:
                                 logger.error(

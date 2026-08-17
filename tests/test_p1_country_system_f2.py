@@ -44,6 +44,7 @@ disponible, nunca falla por infraestructura ausente.
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import re
 from pathlib import Path
@@ -60,6 +61,9 @@ _AGENT_PY = _BACKEND / "agent.py"
 _PROACTIVE_AGENT_PY = _BACKEND / "proactive_agent.py"
 _CHAT_AGENT_PY = _BACKEND / "prompts" / "chat_agent.py"
 _HELP_BOT_PY = _BACKEND / "prompts" / "help_bot.py"
+_DISH_TEMPLATES_ES_JSON = _BACKEND / "data" / "dish_templates_es.json"
+_CRON_TASKS_PY = _BACKEND / "cron_tasks.py"
+_SHOPPING_CALCULATOR_PY = _BACKEND / "shopping_calculator.py"
 
 
 def _load():
@@ -1307,3 +1311,594 @@ def test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo():
         f"pasar en silencio): {faltantes}. Añade el sinónimo faltante a "
         f"_ALLERGEN_SYNONYMS[<clase>] (graph_orchestrator.py) antes de mergear esta alta."
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# H. Task 5 — Catálogo España (dirigido por el JSON de T1, sin cuota: 32 DROP = 32 altas)
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+# T1 clasificó 80 alimentos/platos curados de ES contra el catálogo vivo: 48 RESUELVE-BIEN, 0
+# SUSTITUCION-SILENCIOSA, 32 DROP (`backend/data/country_gaps/es.json`). Esta sección ancla el
+# cierre exacto de esos 32 DROP:
+#   H1-H3  `dish_templates_es.json` (55 plantillas, constituents en nombres EXACTOS del catálogo
+#          + gramos crudos) — espejo de `dish_templates.json` (RD), consumido por
+#          `_culinary_judge_rubric_for_country`.
+#   H4-H5  Golden fixture: tortilla española conserva su huevo en `ingredients`/constituents Y
+#          sobrevive al agregador de compras; Jamón serrano (SIN precio RD) sobrevive vía la
+#          generalización de P1-BAKING-STAPLES en vez de dropearse en silencio.
+#   H6     `is_country_catalog_unpriced_item` reconoce las 32 altas.
+#   H7-H9  `COUNTRY_POOLS['ES']` + `_get_fast_filtered_catalogs(..., country=)` — byte-identidad
+#          sin `country`/con 'DO', pool propio con ES.
+#   H10-H11 `_build_filtered_edge_recipe_day` gana `country` (default 'DO') y los 4 call sites de
+#          `cron_tasks.py` lo derivan UNA vez y lo reusan (parser, mismo patrón T2).
+#   H12-H13 `_culinary_judge_rubric_for_country`/`_dish_templates_path_for_country`: DO `is`-
+#          idéntico a `_CULINARY_JUDGE_RUBRIC`; ES sustituye el bloque de ejemplos; país sin
+#          archivo propio (MX) cae al fallback RD.
+#   H14    Golden fixture: un día ES con arroz fuera de horario pasa como SOFT (hard=False) — la
+#          MISMA combinación dish/slot es HARD para DO (control de que el mecanismo T4 realmente
+#          discrimina, no solo que ES no truene).
+#   H15    `pantry_names_match` reconoce 5 de las altas con prefijos de cantidad/plural/case.
+#   H16    Anchor NARROW de las altas T5 en los 4 vocabularios (más preciso que el G2 genérico:
+#          si alguien revierte SOLO mis términos, este test falla con el nombre exacto).
+#   H17    e2e: las 32 filas existen en `master_ingredients` vivo, SIN precio, con `fdc_id` real.
+
+# ── H0. El fix del harness: "verificado" en modo --country NO debe exigir precio RD ────────────
+#
+# [hallazgo real, medido re-corriendo el harness contra el catálogo YA con las 32 altas] La
+# primera re-corrida de `country_catalog_gap.py --country ES` tras insertar las 32 filas seguía
+# reportando 32 DROP — IDÉNTICO al pre-alta. Causa raíz: `classify_food` marcaba "verificado" con
+# `sc._get_verified_shopping_name_set()`, que exige `price_per_lb>0 OR price_per_unit>0` — el
+# MISMO gate que `MEALFIT_VERIFIED_INGREDIENTS_ONLY` usa en producción para decidir qué entra a
+# una lista de COMPRAS. Las 32 altas de T5 son SIN precio RD A PROPÓSITO (España es país beta,
+# `pricing_mode='beta_no_prices'`) — nunca iban a "tener precio", así que ese gate las clasificaría
+# DROP para siempre, sin importar cuán bien resuelva `normalize_name`. La pregunta de Task 1
+# ("¿el catálogo tiene este alimento con nutrición real?") es DISTINTA de la pregunta de
+# `MEALFIT_VERIFIED_INGREDIENTS_ONLY` ("¿esto se puede costear en una lista RD?") — nunca se tocó
+# ese mecanismo (Global Constraint del plan); se le dio a `classify_food` un segundo criterio de
+# "verificado" OPCIONAL (`catalog_name_set`, default `None` ⇒ comportamiento IDÉNTICO al pre-fix,
+# las 8 unit tests de la sección A que mockean `_get_verified_shopping_name_set` directamente
+# siguen verdes sin tocarlas) que `run_country_mode` puebla con TODO `master_ingredients`, precio
+# incluido o no.
+
+def test_classify_food_sin_catalog_name_set_preserva_comportamiento_pre_fix(monkeypatch):
+    """Default `catalog_name_set=None` ⇒ sigue consultando `sc._get_verified_shopping_name_set()`
+    — byte-identidad con las 8 unit tests de la sección A (ninguna se tocó)."""
+    mod = _load()
+    monkeypatch.setattr(mod.sc, "normalize_name", lambda name: "Tomate")
+    monkeypatch.setattr(mod.sc, "_get_verified_shopping_name_set", lambda: {"tomate"})
+    r_sin_precio = mod.classify_food("tomate")
+    monkeypatch.setattr(mod.sc, "_get_verified_shopping_name_set", lambda: set())
+    r_no_verificado = mod.classify_food("tomate")
+    assert r_sin_precio["verdict"] == "RESUELVE-BIEN"
+    assert r_no_verificado["verdict"] == "DROP"
+
+
+def test_classify_food_con_catalog_name_set_ignora_get_verified_shopping_name_set(monkeypatch):
+    """Cuando se pasa `catalog_name_set` explícito, ESE set decide — `_get_verified_shopping_name_set`
+    (precio-RD) queda IGNORADO. Simula la alta ES: 'jamon serrano' resuelve exacto pero NO tiene
+    precio (el mock de _get_verified_shopping_name_set está VACÍO a propósito)."""
+    mod = _load()
+    monkeypatch.setattr(mod.sc, "normalize_name", lambda name: "Jamón serrano")
+    monkeypatch.setattr(mod.sc, "_get_verified_shopping_name_set", lambda: set())  # sin precio
+
+    r = mod.classify_food("Jamón serrano", catalog_name_set={"jamon serrano"})
+
+    assert r["verdict"] == "RESUELVE-BIEN", (
+        "con catalog_name_set explícito, un alimento SIN precio pero EN el catálogo debe "
+        "resolver bien — la pregunta de Task 1 no es sobre precio"
+    )
+    assert r["tier"] == "exact"
+
+
+def test_classify_food_con_catalog_name_set_sigue_dropeando_lo_genuinamente_ausente(monkeypatch):
+    mod = _load()
+    monkeypatch.setattr(mod.sc, "normalize_name", lambda name: "Cosa Sin Catalogar")
+    r = mod.classify_food("laurel", catalog_name_set={"jamon serrano", "gambas"})
+    assert r["verdict"] == "DROP"
+
+
+@pytest.mark.e2e
+def test_catalog_name_set_including_unpriced_incluye_las_32_altas_y_mas_que_el_priced():
+    """[e2e] Contra el catálogo VIVO: el set 'incluye-sin-precio' debe ser un SUPERSET estricto
+    del set 'verificado-con-precio' — las 32 altas T5 aparecen en uno pero no en el otro."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    mod = _load()
+
+    con_precio = mod.sc._get_verified_shopping_name_set()
+    sin_precio_incluido = mod._catalog_name_set_including_unpriced()
+
+    assert con_precio < sin_precio_incluido, "debe ser superset ESTRICTO (las 32 altas T5 sin precio)"
+    assert "jamon serrano" in sin_precio_incluido
+    assert "jamon serrano" not in con_precio
+
+
+_DISH_TEMPLATES_ES_NAMES = frozenset({
+    "Jamón serrano", "Jamón ibérico", "Chorizo español", "Morcilla", "Lomo embuchado",
+    "Panceta ibérica", "Gambas", "Almejas", "Boquerones", "Anchoas", "Cordero", "Requesón",
+    "Cuajada", "Nata", "Judías blancas", "Judías pintas", "Acelgas", "Fideos", "Membrillo",
+    "Higo", "Azafrán", "Alioli", "Turrón", "Mazapán", "Sobrasada", "Butifarra", "Percebes",
+    "Vieira", "Chistorra", "Piñones", "Almendra marcona", "Membrillo dulce",
+})
+
+
+@pytest.fixture(scope="module")
+def sc():
+    """`shopping_calculator` — mismo motivo que `country_catalog_gap.py` lo importa por módulo
+    (no toca Neon a nivel de import, solo dentro de funciones que abren el pool explícitamente)."""
+    import shopping_calculator as _sc
+    return _sc
+
+
+def _load_dish_templates_es() -> dict:
+    with open(_DISH_TEMPLATES_ES_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── H1-H3. dish_templates_es.json — forma, constituents, golden de la tortilla ─────────────────
+
+def test_dish_templates_es_json_existe_con_forma_esperada():
+    assert _DISH_TEMPLATES_ES_JSON.exists(), "backend/data/dish_templates_es.json debe existir"
+    data = _load_dish_templates_es()
+    templates = data.get("templates")
+    assert isinstance(templates, list)
+    assert 40 <= len(templates) <= 60, f"{len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    nombres = [t.get("name") for t in templates]
+    assert all(isinstance(n, str) and n.strip() for n in nombres), "una plantilla sin name"
+    assert len(nombres) == len(set(nombres)), "nombres de plantilla duplicados"
+    for t in templates:
+        assert isinstance(t.get("slots"), list) and t["slots"], f"{t.get('name')!r} sin slots"
+        assert set(t["slots"]) <= {"desayuno", "almuerzo", "cena", "merienda"}, (
+            f"{t.get('name')!r} tiene un slot fuera del canon de 4"
+        )
+        constituents = t.get("constituents")
+        assert isinstance(constituents, list) and constituents, f"{t.get('name')!r} sin constituents"
+        for c in constituents:
+            assert isinstance(c.get("name"), str) and c["name"].strip(), f"{t['name']!r}: constituent sin name"
+            assert isinstance(c.get("grams"), (int, float)) and c["grams"] > 0, (
+                f"{t['name']!r}: constituent {c.get('name')!r} sin gramos > 0"
+            )
+
+
+def test_dish_templates_es_arroz_pasta_como_base_nunca_en_desayuno_ni_cena():
+    """Mismo SSOT que la regla dura del juez (`_build_culinary_judge_rubric`): arroz/pasta como
+    BASE nunca van en desayuno ni cena. Ancla que las plantillas curadas de T5 (paella, sopa de
+    fideos) respetan la regla que su propio `_note` dice heredar — si alguien añade una plantilla
+    nueva con `base` arroz/pasta mal slotteada, este test la atrapa antes que el juez LLM."""
+    data = _load_dish_templates_es()
+    ofensoras = [
+        t["name"] for t in data["templates"]
+        if t.get("base") in ("arroz", "pasta") and set(t.get("slots", [])) & {"desayuno", "cena"}
+    ]
+    assert not ofensoras, f"plantillas con base arroz/pasta en desayuno/cena: {ofensoras}"
+
+
+def test_tortilla_espanola_conserva_su_huevo_en_constituents():
+    """[Golden fixture · contrato de la task] Las variantes de tortilla española del archivo
+    ('Tortilla española...' y 'Tortilla de patatas...') DEBEN listar 'Huevo' entre sus
+    constituents con gramos > 0 — es el ingrediente que le da nombre al plato (regla
+    `nombre_no_corresponde` del propio juez culinario)."""
+    data = _load_dish_templates_es()
+    tortillas = [t for t in data["templates"] if t["name"].startswith(("Tortilla española", "Tortilla de patatas"))]
+    assert len(tortillas) >= 2, "esperaba al menos 2 variantes de tortilla en el archivo"
+    for t in tortillas:
+        huevos = [c for c in t["constituents"] if c["name"] == "Huevo"]
+        assert huevos and huevos[0]["grams"] > 0, (
+            f"{t['name']!r} debe conservar 'Huevo' en constituents con gramos > 0"
+        )
+
+
+@pytest.mark.e2e
+def test_dish_templates_es_constituents_resuelven_al_catalogo_vivo():
+    """[H2 · e2e] Contrato "nombres EXACTOS del catálogo" — cada `constituents[].name` de las 55
+    plantillas debe ser un `name` LITERAL de `master_ingredients` (no un alias que resuelva vía
+    `normalize_name`: EXACTO, para que un futuro consumidor pueda indexar por igualdad directa).
+    Mismo patrón e2e que G5 (pool abierto explícito, skip si no hay conectividad)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — faltan NEON_DATABASE_URL/.env (e2e, no bloquea el gate)")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+
+    data = _load_dish_templates_es()
+    nombres_usados = {c["name"] for t in data["templates"] for c in t["constituents"]}
+    rows = execute_sql_query("SELECT name FROM master_ingredients", fetch_all=True)
+    assert rows, "master_ingredients vino vacío con el pool abierto"
+    catalogo = {r["name"] for r in rows if r.get("name")}
+
+    faltantes = sorted(nombres_usados - catalogo)
+    assert not faltantes, (
+        f"{len(faltantes)} nombre(s) de constituents en dish_templates_es.json NO son un `name` "
+        f"exacto de master_ingredients: {faltantes}"
+    )
+
+
+# ── H4-H5. Golden fixture funcional: tortilla sobrevive, Jamón serrano no se dropea en silencio ─
+
+@pytest.mark.e2e
+def test_huevo_de_la_tortilla_sobrevive_al_agregador_de_compras(sc):
+    """[Golden fixture · funcional] El ingrediente 'Huevo' de 'Tortilla española con patata y
+    cebolla' (constituents reales del archivo) llega intacto al agregador — nunca fue el riesgo
+    (Huevo ya tenía precio antes de T5), pero ancla el camino completo plantilla→lista."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    data = _load_dish_templates_es()
+    tortilla = next(t for t in data["templates"] if t["name"] == "Tortilla española con patata y cebolla")
+    plan_ingredients = [f"{c['grams']} g de {c['name']}" for c in tortilla["constituents"]]
+
+    result = sc.aggregate_and_deduct_shopping_list(plan_ingredients, structured=True)
+    items = result if isinstance(result, list) else (result.get("items") or [])
+    nombres = [it.get("name") for it in items]
+    assert "Huevo" in nombres, f"'Huevo' no sobrevivió al agregador: {nombres}"
+
+
+@pytest.mark.e2e
+def test_jamon_serrano_no_se_dropea_en_silencio_via_unpriced_keep(sc, monkeypatch):
+    """[Golden fixture · el gap real que T5 cierra] 'Jamón serrano' (alta T5, SIN precio RD a
+    propósito) llega al agregador exactamente como cualquier ingrediente off-catálogo — sin el
+    keep generalizado de P1-BAKING-STAPLES, `_is_verified_for_shopping` lo trataría como
+    inventado por el LLM y lo dropearía en silencio (el modo de fallo original de
+    P1-BAKING-STAPLES, ahora a escala de país). Verifica el nombre Y que quede SIN precio
+    (`estimated_cost_rd` None) bajo su categoría propia — nunca con un precio RD inventado.
+
+    `MEALFIT_VERIFIED_INGREDIENTS_ONLY` monkeypatcheado a 'true': el baseline de la suite lo
+    fija 'false' (`conftest.py`, P1-VERIFIED-ONLY-DEFAULT-ON) precisamente para que tests de
+    coherencia con ingredientes sintéticos no disparen el drop — este test SÍ quiere ejercer esa
+    puerta, mismo patrón que `test_p3_verified_ingredients_only` (citado en el propio conftest)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+
+    result = sc.aggregate_and_deduct_shopping_list(["40 g de Jamón serrano"], structured=True)
+    items = result if isinstance(result, list) else (result.get("items") or [])
+    jamon = next((it for it in items if it.get("name") == "Jamón serrano"), None)
+    assert jamon is not None, "'Jamón serrano' fue dropeado del agregador — el keep no-op"
+    assert jamon.get("estimated_cost_rd") is None, (
+        "'Jamón serrano' no debe llevar un costo RD inventado"
+    )
+    assert jamon.get("display_category") == "CATÁLOGO SIN PRECIO"
+
+
+@pytest.mark.e2e
+def test_jamon_serrano_se_dropea_si_el_knob_de_keep_esta_apagado(sc, monkeypatch):
+    """[Mutación viva vía knob · rollback documentado] Control negativo: con
+    MEALFIT_VERIFIED_INGREDIENTS_ONLY=true (la puerta que activa el drop/keep, ver test de
+    arriba) Y MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP=false el comportamiento REVIERTE al pre-T5
+    (drop + WARNING) — confirma que el keep de arriba depende REALMENTE del mecanismo nuevo y no
+    de otra vía (p.ej. que 'Jamón serrano' ya tuviera precio por accidente)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+    monkeypatch.setenv("MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP", "false")
+
+    result = sc.aggregate_and_deduct_shopping_list(["40 g de Jamón serrano"], structured=True)
+    items = result if isinstance(result, list) else (result.get("items") or [])
+    nombres = [it.get("name") for it in items]
+    assert "Jamón serrano" not in nombres, (
+        "con el knob apagado 'Jamón serrano' debe dropearse (comportamiento pre-T5) — si sigue "
+        "presente, el keep no respeta MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP"
+    )
+
+
+# ── H6. is_country_catalog_unpriced_item reconoce las 32 altas ─────────────────────────────────
+
+@pytest.mark.parametrize("nombre", sorted(_DISH_TEMPLATES_ES_NAMES))
+def test_is_country_catalog_unpriced_item_reconoce_cada_alta(sc, nombre):
+    assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
+
+
+def test_is_country_catalog_unpriced_item_no_reconoce_alimento_do_generico(sc):
+    """Control negativo: un alimento RD normal (con precio real) no debe entrar por accidente al
+    keep — sería inofensivo (el gate previo, `_is_verified_for_shopping`, ya lo captura primero)
+    pero confirmaría que el matcher es demasiado laxo."""
+    assert not sc.is_country_catalog_unpriced_item("Pollo")
+    assert not sc.is_country_catalog_unpriced_item("Arroz blanco")
+
+
+def test_country_catalog_unpriced_keep_knob_default_true(sc):
+    assert sc._country_catalog_unpriced_keep_enabled() is True
+
+
+# ── H7-H9. COUNTRY_POOLS['ES'] + _get_fast_filtered_catalogs(..., country=) ────────────────────
+
+def test_country_pools_es_estructura():
+    pool = constants.COUNTRY_POOLS.get("ES")
+    assert isinstance(pool, dict)
+    for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+        assert isinstance(pool.get(key), list) and pool[key], f"COUNTRY_POOLS['ES'][{key!r}] vacío"
+        assert all(isinstance(x, str) and x.strip() for x in pool[key])
+
+
+def test_get_fast_filtered_catalogs_sin_country_es_byte_identico_a_country_none_y_do():
+    """[Byte-identidad, contrato global del plan] `country` es kwarg NUEVO — todo call site
+    preexistente (ai_helpers.py/agent.py, y los tests de este mismo repo que llaman con 3
+    posicionales) sigue devolviendo EXACTAMENTE el pool DOMINICAN_*."""
+    casos = [((), (), ""), (("mariscos",), (), ""), ((), ("pescado",), ""), ((), (), "vegano")]
+    for allergies, dislikes, diet in casos:
+        base = constants._get_fast_filtered_catalogs(allergies, dislikes, diet)
+        con_none = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country=None)
+        con_do = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country="DO")
+        assert base == con_none == con_do, f"diverge para {(allergies, dislikes, diet)!r}"
+
+
+def test_get_fast_filtered_catalogs_es_usa_su_propio_pool():
+    proteins_do, _, _, _ = constants._get_fast_filtered_catalogs((), (), "")
+    proteins_es, carbs_es, veg_es, fruits_es = constants._get_fast_filtered_catalogs((), (), "", country="ES")
+    assert proteins_es != proteins_do
+    assert "Jamón serrano" in proteins_es
+    assert "Gambas" in proteins_es
+    assert set(proteins_es) == set(constants.COUNTRY_POOLS["ES"]["proteins"])
+    assert set(carbs_es) == set(constants.COUNTRY_POOLS["ES"]["carbs"])
+    assert set(veg_es) == set(constants.COUNTRY_POOLS["ES"]["veggies_fats"])
+    assert set(fruits_es) == set(constants.COUNTRY_POOLS["ES"]["fruits"])
+
+
+def test_get_fast_filtered_catalogs_es_sigue_aplicando_el_filtro_de_alergias():
+    """El filtrado de alergias/dislikes/dieta corre ENCIMA del pool seleccionado — no es
+    exclusivo de DOMINICAN_*. 'pescado' como dislike debe seguir excluyendo peces del pool ES
+    (Bacalao, Pulpo — mariscos NO, ver P1-PESCADO-CATCHALL: 'pescado' a secas solo excluye peces)
+    y conservar las carnes/embutidos que no son pescado."""
+    proteins, _, _, _ = constants._get_fast_filtered_catalogs((), ("pescado",), "", country="ES")
+    assert "Bacalao" not in proteins
+    assert "Jamón serrano" in proteins
+    assert "Gambas" in proteins, "'pescado' (a secas) no debe excluir mariscos — solo peces"
+
+
+def test_get_fast_filtered_catalogs_es_vegano_deja_pasar_algunas_carnes_es_al_primer_filtro():
+    """[hallazgo real, documentado — NO un gap de seguridad] Los catch-alls de dieta de
+    `_get_fast_filtered_catalogs` ('carne'/'mariscos' expanden a tokens RD-específicos:
+    'jamon'/'pollo'/'camaron'/etc, P1-VARIETY-CATALOG-POOLS 2026-06-27) NO conocen los nombres
+    españoles nuevos (Chorizo español, Gambas, Morcilla...) — se les escapan al primer filtro,
+    igual que 'al filtro aún se le escapan plurales' que P0-DEGRADED-SAFETY-SCAN ya documenta
+    para el pool RD. Este test ANCLA el hallazgo (no lo esconde); el siguiente test prueba que
+    la RED que sí los atrapa (`_sieve_catalog_for_safety`, segunda malla) los limpia todos."""
+    proteins, _, _, _ = constants._get_fast_filtered_catalogs((), (), "vegano", country="ES")
+    escapan = set(proteins) & set(constants.COUNTRY_POOLS["ES"]["proteins"])
+    assert escapan, (
+        "si esto se vacía, el primer filtro aprendió los nombres ES — actualiza este test para "
+        "reflejar la mejora en vez de dejarlo como documentación de un hallazgo que ya no existe"
+    )
+
+
+def test_p0_degraded_safety_scan_limpia_lo_que_el_primer_filtro_de_vegano_deja_pasar_en_es():
+    """[el mecanismo real de seguridad] `_sieve_catalog_for_safety` (P0-DEGRADED-SAFETY-SCAN, la
+    'segunda malla' que YA existía antes de T5) usa `clinical_backstop_for_meal` →
+    `_scan_diet_violations` → `_DIET_FLESH_TERMS`/`_DIET_SEAFOOD_TERMS` — vocabularios que T5 SÍ
+    actualizó (H16). El pool ES para un vegano debe quedar VACÍO después de esta segunda malla,
+    aunque el primer filtro (test de arriba) deje pasar charcutería/mariscos españoles."""
+    import cron_tasks as ct
+    proteins, _, _, _ = constants._get_fast_filtered_catalogs((), (), "vegano", country="ES")
+    sieved = ct._sieve_catalog_for_safety(proteins, (), "vegano")
+    assert sieved == [], f"la segunda malla debe vaciar el pool ES para un vegano: {sieved}"
+
+
+# ── H10-H11. cron_tasks.py — _build_filtered_edge_recipe_day gana country (parser) ─────────────
+
+def _cron_tasks_source() -> str:
+    return _CRON_TASKS_PY.read_text(encoding="utf-8")
+
+
+def _sin_comentarios(src: str) -> str:
+    return "\n".join(line for line in src.splitlines() if not line.strip().startswith("#"))
+
+
+def test_build_filtered_edge_recipe_day_gana_country_default_do():
+    src = _sin_comentarios(_cron_tasks_source())
+    assert 'country: str = "DO",' in src, (
+        "_build_filtered_edge_recipe_day debe ganar country default 'DO' (preserva callers)"
+    )
+    ini = src.index("def _build_filtered_edge_recipe_day(")
+    fin = src.index("\ndef ", ini + 10)
+    cuerpo = src[ini:fin]
+    assert "_get_fast_filtered_catalogs(" in cuerpo
+    assert "country=country," in cuerpo, (
+        "_build_filtered_edge_recipe_day debe threadear su propio country a _get_fast_filtered_catalogs"
+    )
+
+
+def test_edge_recipe_country_derivado_una_vez_y_reusado_en_los_4_callsites():
+    """[T5 · patrón T2] `_edge_recipe_country` se deriva UNA vez (`country_for_form_data(form_data)`)
+    y se reusa en los 4 call sites de `_build_filtered_edge_recipe_day` de este bloque del chunk
+    worker — no 4 derivaciones independientes que podrían driftar."""
+    src = _sin_comentarios(_cron_tasks_source())
+    n_derivaciones = src.count("_edge_recipe_country = _country_for_form_data(form_data)")
+    assert n_derivaciones == 1, f"esperaba 1 derivación de _edge_recipe_country, hay {n_derivaciones}"
+    n_callsites = src.count("country=_edge_recipe_country,")
+    assert n_callsites == 4, f"esperaba 4 call sites usando _edge_recipe_country, hay {n_callsites}"
+    pos_derivacion = src.index("_edge_recipe_country = _country_for_form_data(form_data)")
+    for m in re.finditer(r"country=_edge_recipe_country,", src):
+        assert m.start() > pos_derivacion, "un call site usa _edge_recipe_country antes de derivarlo"
+
+
+def test_edge_recipe_country_usa_country_for_form_data_ssot():
+    """La derivación debe pasar por la ÚNICA puerta de lectura de país (`country_for_form_data`),
+    no leer `form_data['country']` crudo — knob apagado ⇒ siempre 'DO' (byte-identidad)."""
+    src = _sin_comentarios(_cron_tasks_source())
+    assert "from constants import country_for_form_data as _country_for_form_data" in src
+
+
+# ── H12-H13. _culinary_judge_rubric_for_country / _dish_templates_path_for_country ─────────────
+
+def test_culinary_judge_rubric_do_es_is_identico_al_cacheado(go):
+    assert go._culinary_judge_rubric_for_country("DO") is go._CULINARY_JUDGE_RUBRIC
+
+
+def test_culinary_judge_rubric_es_sustituye_ejemplos_y_encabezado(go):
+    rubric_es = go._culinary_judge_rubric_for_country("ES")
+    rubric_do = go._culinary_judge_rubric_for_country("DO")
+    assert rubric_es != rubric_do
+    assert "Tortilla española" in rubric_es
+    assert "Mangú" not in rubric_es, "los ejemplos dominicanos no deben sobrevivir en la variante ES"
+    assert "PLATOS DE ESPAÑA" in rubric_es
+    assert "cocina de España" in rubric_es
+
+
+def test_dish_templates_path_for_country_es_usa_su_archivo_mx_cae_a_rd(go):
+    assert go._dish_templates_path_for_country("ES") == str(_DISH_TEMPLATES_ES_JSON)
+    assert go._dish_templates_path_for_country("MX") == go._DO_DISH_TEMPLATES_PATH
+    assert go._dish_templates_path_for_country("DO") == go._DO_DISH_TEMPLATES_PATH
+
+
+def test_culinary_judge_rubric_mx_sin_archivo_propio_cae_a_ejemplos_rd(go):
+    """País beta SIN `dish_templates_<cc>.json` dedicado (MX, hoy) conserva los ejemplos
+    dominicanos — fallback explícito, NO una excepción que rompa la rúbrica."""
+    rubric_mx = go._culinary_judge_rubric_for_country("MX")
+    assert "Mangú" in rubric_mx
+    assert "Tortilla española" not in rubric_mx
+
+
+# ── H14. Golden fixture: slot soft (ES) vs hard (DO) para el MISMO día ─────────────────────────
+
+def _dia_es_con_paella_en_desayuno() -> list:
+    return [{
+        "day": 1,
+        "meals": [
+            {"meal": "Desayuno", "name": "Paella de mariscos con gambas y almejas",
+             "ingredients": ["Gambas", "Almejas", "Arroz blanco"]},
+            {"meal": "Almuerzo", "name": "Cocido madrileño con garbanzos y chorizo",
+             "ingredients": ["Garbanzos", "Chorizo español"]},
+            {"meal": "Cena", "name": "Tortilla española con patata y cebolla",
+             "ingredients": ["Huevo", "Papa", "Cebolla"]},
+            {"meal": "Merienda", "name": "Higos con jamón serrano",
+             "ingredients": ["Higo", "Jamón serrano"]},
+        ],
+    }]
+
+
+def test_dia_es_arroz_fuera_de_horario_pasa_como_soft_sin_forzar_retry(go, monkeypatch):
+    """[Golden fixture · el contrato de la task] Un día ES con 'Paella...' (arroz) en Desayuno —
+    violación real de la regla dura de horario — DEBE detectarse como SOFT (hard=False) para
+    país ES: `slot_rules_for_country('ES')` softea TODA regla (T4). Soft no fuerza retry en el
+    intento final del gate (`should_retry`) — 'pasa' significa exactamente esto: el mecanismo
+    NO trata el día como un bloqueo duro, aunque la violación se siga reportando (telemetría).
+    Requiere el knob ENCENDIDO (`country_for_form_data` solo lee `form_data['country']` con
+    `MEALFIT_COUNTRY_SYSTEM=true` — knob apagado ⇒ 'DO' siempre, byte-identidad)."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dias = _dia_es_con_paella_en_desayuno()
+    violaciones = go._detect_slot_appropriateness(dias, {"country": "ES"})
+    assert violaciones, "el día de prueba debe producir AL MENOS una violación (control positivo)"
+    duras = [v for v in violaciones if v["hard"]]
+    assert not duras, f"país ES no debe producir violaciones HARD: {duras}"
+
+
+def test_el_mismo_dia_es_hard_para_do_control_de_que_el_mecanismo_discrimina(go, monkeypatch):
+    """Control negativo del golden fixture de arriba: el MISMO día/dish/slot, con country='DO',
+    debe producir violaciones HARD — si este test también diera soft, H14 no probaría nada (el
+    detector podría estar simplemente roto para TODOS los países, no funcionando para ES)."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dias = _dia_es_con_paella_en_desayuno()
+    violaciones = go._detect_slot_appropriateness(dias, {"country": "DO"})
+    assert violaciones, "control: el día debe violar también en DO"
+    duras = [v for v in violaciones if v["hard"]]
+    assert duras, "país DO debe seguir produciendo violaciones HARD (byte-identidad del mecanismo T4)"
+
+
+def test_dia_es_con_knob_apagado_es_byte_identico_a_do_ignora_country_form_data(go):
+    """Control de byte-identidad: SIN monkeypatch del knob (default apagado en este proceso de
+    test), el mismo día con `form_data={'country': 'ES'}` debe comportarse EXACTAMENTE como DO
+    — `country_for_form_data` no lee el campo `country` en absoluto con el knob apagado."""
+    dias = _dia_es_con_paella_en_desayuno()
+    violaciones_es_knob_off = go._detect_slot_appropriateness(dias, {"country": "ES"})
+    violaciones_do = go._detect_slot_appropriateness(dias, {"country": "DO"})
+    duras_es = [v["hard"] for v in violaciones_es_knob_off]
+    duras_do = [v["hard"] for v in violaciones_do]
+    assert duras_es == duras_do == [True, True], (
+        "con el knob apagado, form_data['country']='ES' NO debe cambiar nada — mismo resultado que DO"
+    )
+
+
+# ── H15. pantry_names_match reconoce las altas T5 ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("texto_libre,fila_catalogo", [
+    ("1 lata de anchoas", "Anchoas"),
+    ("gambas", "Gambas"),
+    ("200g de cuajada", "Cuajada"),
+    ("2 higos", "Higo"),
+    ("almendras marconas", "Almendra marcona"),
+])
+def test_pantry_names_match_reconoce_las_altas_es(texto_libre, fila_catalogo):
+    assert constants.pantry_names_match(texto_libre, fila_catalogo), (
+        f"pantry_names_match({texto_libre!r}, {fila_catalogo!r}) debe ser True"
+    )
+
+
+# ── H16. Anchor NARROW de las altas T5 en los 4 vocabularios ────────────────────────────────────
+
+@pytest.mark.parametrize("clase,termino", [
+    ("mariscos", "percebe"), ("mariscos", "percebes"),
+    ("pescado", "boqueron"), ("pescado", "boquerones"),
+    ("lacteos", "cuajada"), ("lactosa", "cuajada"), ("lactosa", "nata"),
+    ("frutos secos", "pinon"), ("frutos secos", "pinones"),
+])
+def test_altas_t5_presentes_en_allergen_synonyms(go, clase, termino):
+    assert termino in go._ALLERGEN_SYNONYMS[clase], f"{termino!r} ausente de _ALLERGEN_SYNONYMS[{clase!r}]"
+
+
+@pytest.mark.parametrize("termino", ["percebe", "percebes", "boqueron", "boquerones"])
+def test_altas_t5_presentes_en_diet_seafood_terms(go, termino):
+    assert termino in go._DIET_SEAFOOD_TERMS
+
+
+def test_cuajada_presente_en_diet_dairy_terms(go):
+    assert "cuajada" in go._DIET_DAIRY_TERMS
+
+
+@pytest.mark.parametrize("termino", [
+    "morcilla", "panceta", "embuchado", "sobrasada", "butifarra", "chistorra", "cordero",
+])
+def test_altas_t5_charcuteria_presentes_en_diet_flesh_terms(go, termino):
+    """Carne/embutidos NO son alérgeno IgE en este sistema (solo vocabulario #2 dieta) — sin
+    esto, un plan ES con 'Morcilla'/'Sobrasada'/etc. pasaría el scan vegano/vegetariano limpio."""
+    assert termino in go._DIET_FLESH_TERMS
+
+
+@pytest.mark.parametrize("ingrediente", [
+    "Sobrasada a la plancha", "Butifarra con alubias", "200 g de morcilla",
+    "Chistorra frita", "Panceta ibérica curada", "Pierna de cordero asada",
+])
+def test_scan_diet_violations_detecta_las_altas_t5_charcuteria(go, ingrediente):
+    """Funcional (no solo estructural): un vegano NO debe recibir estos alimentos — prueba el
+    camino real, no solo que el token viva en la tupla."""
+    plan = {"days": [{"meals": [{"name": "Almuerzo", "ingredients": [ingrediente]}]}]}
+    assert go._scan_diet_violations(plan, "vegano"), f"'{ingrediente}' no fue detectado para vegano"
+
+
+# ── H17. e2e — las 32 altas existen en el catálogo vivo, SIN precio, con fdc_id real ────────────
+
+@pytest.mark.e2e
+def test_32_altas_es_existen_en_catalogo_vivo_sin_precio_con_fdc_id():
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+
+    rows = execute_sql_query(
+        "SELECT name, price_per_lb, price_per_unit, fdc_id, nutrition_source "
+        "FROM master_ingredients WHERE name = ANY(%s)",
+        (list(_DISH_TEMPLATES_ES_NAMES),),
+        fetch_all=True,
+    ) or []
+    por_nombre = {r["name"]: r for r in rows}
+
+    faltantes = sorted(_DISH_TEMPLATES_ES_NAMES - set(por_nombre))
+    assert not faltantes, f"altas T5 ausentes del catálogo vivo: {faltantes}"
+
+    con_precio = [n for n, r in por_nombre.items()
+                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
+    assert not con_precio, f"altas T5 con precio RD (deberían estar en 0): {con_precio}"
+
+    sin_fdc = [n for n, r in por_nombre.items() if not r.get("fdc_id")]
+    assert not sin_fdc, f"altas T5 sin fdc_id (fuente no auditable): {sin_fdc}"
+
+    no_usda = [n for n, r in por_nombre.items() if r.get("nutrition_source") != "usda"]
+    assert not no_usda, f"altas T5 con nutrition_source != 'usda': {no_usda}"
