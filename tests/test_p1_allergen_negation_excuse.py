@@ -7,8 +7,17 @@
 # superficies. La excusa es de PREFIJO (la plant-adj existente mira el sufijo): un token cuyo
 # prefijo inmediato es negación («sin X», «libre de X», «cero X», «no contiene X») está declarando
 # AUSENCIA. Solo se absuelve el token negado — «leche sin lactosa» sigue violando 'lácteos' (la
-# proteína láctea está presente; solo 'lactosa' quedaría negada), «pan sin gluten» sigue flagged
-# vía 'pan' (sesgo a sobre-detectar intacto: el fix cubre EXACTAMENTE la clase medida).
+# proteína láctea está presente; solo 'lactosa' quedaría negada).
+#
+# [fix-round 1 · P1-COUNTRY-SYSTEM-F2 T4 review · 2026-08-17] `graph_orchestrator.py` ganó una
+# excusa FORWARD hermana (`_GLUTEN_FORWARD_EXCUSE_RX`, scoped a gluten únicamente) para poder sumar
+# 'avena' bare a `_ALLERGEN_SYNONYMS['gluten']` sin reintroducir este mismo FP («avena certificada
+# sin gluten»: la negación SIGUE al término, esta excusa de PREFIJO no la alcanza). Delta medido y
+# aceptado a propósito: «pan sin gluten» (pan real GF, mismo claim que avena/quinoa certificadas)
+# pasa de violar-vía-'pan' a excusado — ver `test_pan_sin_gluten_ya_no_viola_fix_round_1` abajo
+# (reemplaza a `test_pan_sin_gluten_sigue_flagged_por_pan`, que anclaba el comportamiento VIEJO).
+# El sesgo a sobre-detectar sigue intacto para pan SIN el claim GF — ver
+# `test_pan_integral_sin_claim_gf_sigue_violando`.
 import os
 import sys
 
@@ -61,12 +70,25 @@ def test_leche_sin_lactosa_sigue_violando_lacteos():
     assert v and v[0][2] == "leche"
 
 
-def test_pan_sin_gluten_sigue_flagged_por_pan():
-    # sobre-detección intencional intacta: 'pan' (sinónimo de gluten) no está negado — solo
-    # 'gluten' lo está. Un falso positivo residual manda al fallback (seguro); el fix cubre
-    # la clase medida (avena/quinoa certificadas) sin ensanchar la absolución.
+def test_pan_sin_gluten_ya_no_viola_fix_round_1():
+    # [fix-round 1 · reemplaza a test_pan_sin_gluten_sigue_flagged_por_pan] Delta VERIFICADO
+    # antes (violaba vía 'pan') y después (excusado) de sumar `_GLUTEN_FORWARD_EXCUSE_RX`: 'pan'
+    # es un término de la categoría gluten como cualquier otro, y «pan sin gluten» es el MISMO
+    # claim de cumplimiento que «avena certificada sin gluten» — mismo mecanismo, misma confianza
+    # en el texto. No es un ensanchamiento ad-hoc: es la consecuencia natural de aplicar la excusa
+    # forward de manera uniforme a TODA la categoría (la alternativa — excusar solo 'avena' con
+    # una lista de excepciones por-término — arrastra complejidad sin beneficio de seguridad real,
+    # ver reporte T4 §Fix round 1).
     v = _viols(["1 rebanada de pan sin gluten"], ["Gluten"])
-    assert v and v[0][2] == "pan"
+    assert v == [], "pan sin gluten' es CUMPLIMIENTO (pan real GF) — no debe violar tras fix-round 1"
+
+
+def test_pan_integral_sin_claim_gf_sigue_violando():
+    # sobre-detección intencional SIGUE intacta para pan SIN claim de ausencia: 'pan integral' no
+    # tiene ninguna negación cerca (ni prefijo ni forward) — la excusa forward exige la palabra
+    # literal 'gluten' tras una negación dentro de la ventana corta, y aquí no hay ninguna.
+    v = _viols(["1 rebanada de pan integral"], ["Gluten"])
+    assert v, "pan integral (sin claim GF) debe seguir violando — sobre-detección intacta"
 
 
 def test_pool_scrub_ya_no_roba_la_avena_sin_gluten():

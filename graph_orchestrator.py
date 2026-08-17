@@ -14258,19 +14258,26 @@ _ALLERGEN_SYNONYMS = {
                # ya trata estos 9 términos (pastas/panes) como objetivo de sustitución proactiva
                # (P0-ALLERGEN-SUBS) — el backstop determinista no los reconocía si la sustitución
                # fallaba. Ninguno está en el catálogo HOY, pero SÍ son objetivo de sustitución
-               # vivo en producción (T5-T8 los dará de alta). 'avena' DELIBERADAMENTE EXCLUIDA de
-               # esta lista — ver test_p1_allergen_negation_excuse.py: 'avena' NO puede ser un
-               # término estrecho aquí porque `_ALLERGEN_NEGATION_PREFIX_RX` excusa por PREFIJO
-               # (mira hacia atrás desde el match), y en "avena certificada sin gluten" la
-               # negación sigue a 'avena', no la precede — un token bare 'avena' volvería a
-               # castigar el CUMPLIMIENTO exacto que P1-ALLERGEN-NEGATION-EXCUSE cerró
-               # (corr=abb71a1d). Medido en este task: añadirlo rompe
-               # test_avena_certificada_sin_gluten_no_viola +
-               # test_pool_scrub_ya_no_roba_la_avena_sin_gluten. Documentado como excepción viva
-               # en test_p1_country_system_f2.py (G4/G5) — NO reintroducir sin resolver antes ese
-               # conflicto.
+               # vivo en producción (T5-T8 los dará de alta).
+               # [fix-round 1 · fuera-de-stone accepted over-detection] 'tostada' bare también
+               # matchea 'almendras tostadas' (frutos secos, sin gluten) — mismo token que ya usa
+               # `condition_rules._ALLERGEN_GLUTEN_SUBS` (swap 'pan tostado'→Casabe); costo
+               # documentado en test_tostada_sobre_detecta_almendras_tostadas_aceptado, NO se quita.
                "tostada", "macarron", "coditos", "fideo", "tallarin", "penne",
-               "ravioli", "noqui", "tortilla de harina"],
+               "ravioli", "noqui", "tortilla de harina",
+               # [fix-round 1 · P1-COUNTRY-SYSTEM-F2 T4 review · 2026-08-17] 'avena' REINCORPORADA
+               # (T4 la había excluido — ver historial en test_p1_country_system_f2.py G1). Medido
+               # por ejecución directa contra 4 superficies vivas (swap individual, regenerate-day,
+               # chat-modify, tamiz degradado sin LLM) que dependen EXCLUSIVAMENTE de
+               # `clinical_backstop_for_meal` (ninguna pasa por `_apply_deterministic_clinical_layer`,
+               # solo generación inicial): 'avena' bare no tenía NINGÚN backstop determinista ahí.
+               # La colisión que causó el revert de T4 (`_ALLERGEN_NEGATION_PREFIX_RX` es solo-
+               # PREFIJO, y en "avena certificada sin gluten" la negación SIGUE a 'avena') se cierra
+               # con `_GLUTEN_FORWARD_EXCUSE_RX` (abajo) — mira ADELANTE del match, scoped a esta
+               # categoría únicamente vía `_ALLERGEN_GLUTEN_TERM_SET`. Ver
+               # test_avena_bare_flageada_como_gluten_fix_round_1 (RED→GREEN) +
+               # test_avena_certificada_sin_gluten_sigue_excusada_tras_incluir_avena (sigue verde).
+               "avena"],
     "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
               "aioli", "alioli", "holandesa", "ponche", "mousse"],
     "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
@@ -14297,11 +14304,35 @@ _PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
 # certificada sin gluten» para el alérgico, 7+ FPs en las corridas N=20, vivo corr=abb71a1d) y el
 # scanner castigaba el cumplimiento; el mismo matcher alimenta el SKELETON ALLERGEN SCRUB, que le
 # quitaba al day-gen la avena sin gluten que el planner asignó bien. Solo se absuelve el token
-# NEGADO: «leche sin lactosa» sigue violando 'lácteos' (proteína láctea presente), «pan sin
-# gluten» sigue flagged vía 'pan' — el sesgo a sobre-detectar queda intacto. Máx 1 palabra de
-# relleno («sin trazas gluten»); más relleno NO absuelve (fail-secure).
+# NEGADO: «leche sin lactosa» sigue violando 'lácteos' (proteína láctea presente) — el sesgo a
+# sobre-detectar queda intacto fuera de gluten. Máx 1 palabra de relleno («sin trazas gluten»);
+# más relleno NO absuelve (fail-secure). [fix-round 1 · 2026-08-17] «pan sin gluten» YA NO se
+# queda flagged vía 'pan': `_GLUTEN_FORWARD_EXCUSE_RX` (abajo) excusa por delante dentro de la
+# categoría gluten — ver ese bloque para el porqué del delta.
 _ALLERGEN_NEGATION_PREFIX_RX = _re_mod.compile(
     r"(?:\bsin|\blibres?\s+de|\bcero|\bno\s+contienen?)\s+(?:\w+\s+)?$"
+)
+# [P1-COUNTRY-SYSTEM-F2 · T4 fix-round 1 · 2026-08-17] Excusa FORWARD (la negation-prefix de
+# arriba es solo hacia-atrás): cierra el hueco medido en el review de T4 — 'avena' bare no tenía
+# NINGÚN backstop determinista en 4 superficies vivas (swap/regenerate-day/chat-modify/tamiz
+# degradado, todas dependen SOLO de `clinical_backstop_for_meal`) porque sumarla desnuda al
+# vocabulario reintroducía el FP que P1-ALLERGEN-NEGATION-EXCUSE cerró: en «avena certificada sin
+# gluten» la negación SIGUE al término, nunca lo precede. Un término de GLUTEN queda excusado
+# cuando lo sigue (hasta 2 palabras de relleno — cubre «avena CERTIFICADA sin gluten») una
+# negación («sin»/«libre de»/«cero»/«no contiene») + la palabra literal 'gluten'. Mismo mecanismo
+# estructural que `_PLANT_ADJ_EXCUSE_RX` (suffix-scan), aplicado a negación en vez de adyacencia
+# vegetal. SCOPED a gluten ÚNICAMENTE vía `_ALLERGEN_GLUTEN_TERM_SET` en el callsite — NUNCA
+# generalizar entre categorías: 'leche sin lactosa' debe seguir violando lácteos (alergia a la
+# PROTEÍNA, no al azúcar; ver test_leche_sin_lactosa_sigue_violando_lacteos +
+# test_leche_sin_lactosa_no_se_excusa_por_la_excusa_forward_de_gluten). Delta medido en este
+# fix-round: 'pan sin gluten' (pan real GF) pasa de violar a excusado — mejora de precisión
+# consciente, misma confianza en el claim "sin gluten" que 'avena'/'quinoa' certificadas ya
+# tenían (ver test_p1_allergen_negation_excuse.py y reporte T4 §Fix round 1).
+_GLUTEN_FORWARD_EXCUSE_RX = _re_mod.compile(
+    r"^(?:\s+\S+){0,2}\s+(?:sin|libres?\s+de|cero|no\s+contienen?)\s+(?:\S+\s+)?gluten\b"
+)
+_ALLERGEN_GLUTEN_TERM_SET = frozenset(
+    strip_accents(_s).lower() for _s in _ALLERGEN_SYNONYMS["gluten"]
 )
 
 
@@ -14357,6 +14388,13 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         # contiene <token>» = ausencia declarada del token — no violación.
                         if _ALLERGEN_NEGATION_PREFIX_RX.search(
                                 ing_low[max(0, _m_al.start() - 24): _m_al.start()]):
+                            continue
+                        # [P1-COUNTRY-SYSTEM-F2 · T4 fix-round 1 · 2026-08-17] excusa FORWARD,
+                        # SCOPED a gluten únicamente (`f` debe ser un término de esa categoría) —
+                        # «avena certificada sin gluten» / «pan sin gluten»: la negación SIGUE al
+                        # término, la prefix-excuse de arriba no la alcanza.
+                        if f in _ALLERGEN_GLUTEN_TERM_SET and _GLUTEN_FORWARD_EXCUSE_RX.match(
+                                ing_low[_m_al.end(): _m_al.end() + 40]):
                             continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break

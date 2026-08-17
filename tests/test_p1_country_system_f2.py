@@ -25,8 +25,9 @@ Secciones:
   E. Task 2 — preselección IANA: paridad TZ→país con COUNTRY_PROFILES.
   F. Task 3 — coach en tu idioma, comida en español.
   G. Task 4 — los 4 vocabularios de alérgenos/dieta ×país + drift RD (mejillón/vieira/arenque)
-     + el guard de paridad + el alta-hook contra el catálogo vivo. Incluye un hallazgo
-     CONSIDERADO Y RECHAZADO (avena/gluten, colisiona con P1-ALLERGEN-NEGATION-EXCUSE) — ver G1.
+     + el guard de paridad + el alta-hook contra el catálogo vivo. T4 consideró y RECHAZÓ sumar
+     'avena' a gluten (colisión con P1-ALLERGEN-NEGATION-EXCUSE, solo-prefijo); fix-round 1
+     (post-review) REVIRTIÓ esa decisión con una excusa FORWARD scoped-a-gluten — ver G1.
 
 Task 1-F (secciones A-F): ningún test toca Neon — todo lo que necesita catálogo/DB va mockeado
 vía `monkeypatch`. La corrida REAL contra el catálogo vivo (`--country ES`, `--rd-drops`) es un
@@ -860,28 +861,88 @@ def test_arenque_flageado_como_pescado(go):
     assert go._scan_allergen_violations(plan, ["pescado"])
 
 
-def test_avena_bare_deliberadamente_no_es_termino_de_gluten(go):
-    """[hallazgo CONSIDERADO Y RECHAZADO — no un gap, documentado para que nadie lo reintente]
+# [fix-round 1 · 2026-08-17 · REVIERTE la decisión de T4 de arriba] El review de T4 confirmó por
+# EJECUCIÓN DIRECTA (el harness abajo, reproducido tal cual antes de tocar código) que 'avena'
+# bare NO tenía NINGÚN backstop determinista en 4 superficies vivas que dependen EXCLUSIVAMENTE
+# de `clinical_backstop_for_meal`: swap individual (agent.py), regenerate-day (agent.py), chat
+# modify (tools.py::execute_modify_single_meal) y el tamiz degradado sin LLM
+# (`cron_tasks._sieve_catalog_for_safety`/`_degraded_safety_violations`) — NINGUNA de las cuatro
+# pasa por `_apply_deterministic_clinical_layer` (solo generación inicial), así que la sustitución
+# proactiva de `condition_rules.py` (que SÍ conoce 'sin gluten' vía `_ALLERGEN_GLUTEN_NEGATIVES`)
+# nunca corre ahí. Razón por la que T4 rechazó 'avena': `_ALLERGEN_NEGATION_PREFIX_RX` excusa SOLO
+# por PREFIJO (mira hacia atrás) y en "avena certificada sin gluten" la negación SIGUE a 'avena'.
+# El cierre no reintenta lo mismo: añade una excusa FORWARD nueva (`_GLUTEN_FORWARD_EXCUSE_RX`,
+# graph_orchestrator.py), scoped a la categoría gluten ÚNICAMENTE, que mira ADELANTE del match —
+# mismo mecanismo estructural que `_PLANT_ADJ_EXCUSE_RX` ya usa para plant-adjacency, aplicado a
+# negación en vez de a adyacencia vegetal.
+#
+#     Bare Avena, allergies=[gluten] via clinical_backstop_for_meal: []          ← el hueco (RED)
+#     Avena cocida (no GF claim): []                                             ← también el hueco
+#     Pan integral (control): ["alérgeno 'pan integral' ..."]                    ← el matcher funciona
 
-    Diffeando `condition_rules._ALLERGEN_GLUTEN_SUBS` (vocabulario #4) contra `_ALLERGEN_SYNONYMS`
-    se encuentra que la sustitución quirúrgica trata la avena como riesgo de contaminación cruzada
-    de gluten — el primer instinto es añadir 'avena' bare al backstop #1 también. Se probó en este
-    task y se REVIRTIÓ: rompe `test_p1_allergen_negation_excuse.py::test_avena_certificada_sin_gluten_no_viola`
-    + `test_pool_scrub_ya_no_roba_la_avena_sin_gluten`. Razón estructural, no solo dos tests
-    rojos: `_ALLERGEN_NEGATION_PREFIX_RX` excusa por PREFIJO (mira hacia atrás desde el match) —
-    en "avena certificada sin gluten" la negación SIGUE a 'avena', nunca la precede, así que un
-    token bare 'avena' NUNCA podría beneficiarse de esa excusa y volvería a castigar el
-    CUMPLIMIENTO que P1-ALLERGEN-NEGATION-EXCUSE cerró (corr=abb71a1d). `condition_rules.py` ya
-    resuelve esto con su PROPIA lista `_ALLERGEN_GLUTEN_NEGATIVES` (incluye "sin gluten") antes de
-    sustituir — el backstop #1 no tiene ese mecanismo por-término, solo el genérico de negación.
 
-    Este test ancla el estado DECIDIDO: 'avena' NO está en `_ALLERGEN_SYNONYMS['gluten']` (control
-    negativo — si alguien la reintenta sin leer este comentario, este test sigue verde pero
-    `test_p1_allergen_negation_excuse.py` cae, la misma señal que detuvo este task)."""
-    assert "avena" not in [t.lower() for t in go._ALLERGEN_SYNONYMS["gluten"]]
-    # Verificación cruzada en vivo: el caso medido sigue sin violar HOY.
-    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["20 g de avena certificada sin gluten"]}]}]}
-    assert go._scan_allergen_violations(plan, ["gluten"]) == []
+def test_avena_bare_flageada_como_gluten_fix_round_1(go):
+    """[fix-round 1 · el RED de este fix-round] Bare 'avena' (sin claim 'sin gluten') DEBE violar
+    gluten — la excusa forward nunca excusa un término desnudo, solo uno seguido de una negación
+    explícita dentro de la ventana corta. Ancla el estado GREEN post-fix del hallazgo del harness
+    de arriba, incluida la superficie real (`clinical_backstop_for_meal`, no solo el scanner
+    interno) que expuso el hueco en las 4 superficies vivas."""
+    plan_bare = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["Avena"]}]}]}
+    plan_cocida = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["Avena cocida"]}]}]}
+    assert go._scan_allergen_violations(plan_bare, ["gluten"]), (
+        "'Avena' bare (sin claim GF) debe violar gluten — sin esto, swap/regenerate-day/"
+        "chat-modify/tamiz-degradado sirven avena sin backstop a un alérgico"
+    )
+    assert go._scan_allergen_violations(plan_cocida, ["gluten"]), (
+        "'Avena cocida' (sin claim GF) debe violar gluten — mismo hueco, otra grafía"
+    )
+    meal_bare = {"name": "Desayuno", "ingredients": ["Avena"]}
+    assert go.clinical_backstop_for_meal(meal_bare, allergies=["gluten"]), (
+        "clinical_backstop_for_meal (swap/regenerate-day/chat-modify) debe bloquear avena bare"
+    )
+
+
+def test_avena_certificada_sin_gluten_sigue_excusada_tras_incluir_avena(go):
+    """[fix-round 1 · ancla (b) del contrato: debe seguir verde ANTES y DESPUÉS] La razón por la
+    que T4 rechazó 'avena' (colisión con P1-ALLERGEN-NEGATION-EXCUSE, solo-prefijo) queda cerrada
+    por la excusa FORWARD nueva. Ancla en ESTE archivo (no solo en
+    `test_p1_allergen_negation_excuse.py`) que el caso medido original — y la grafía sin
+    'certificada' — siguen sin violar."""
+    for ingrediente in ("20 g de avena certificada sin gluten", "Avena sin gluten (panqueques)"):
+        plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": [ingrediente]}]}]}
+        assert go._scan_allergen_violations(plan, ["gluten"]) == [], (
+            f"'{ingrediente}' es CUMPLIMIENTO (avena GF certificada) — no debe violar"
+        )
+
+
+def test_leche_sin_lactosa_no_se_excusa_por_la_excusa_forward_de_gluten(go):
+    """[fix-round 1 · ancla (c): sin cambio de conducta, control negativo del scoping] La excusa
+    forward nueva está SCOPED a la categoría gluten ÚNICAMENTE (gateada por
+    `_ALLERGEN_GLUTEN_TERM_SET` en el callsite) — NUNCA generalizar entre categorías. 'leche sin
+    lactosa' DEBE seguir violando lácteos: la alergia es a la PROTEÍNA (caseína/whey), no al
+    azúcar — 'lactosa' quedaría negada pero 'leche' no (mismo criterio que
+    `test_leche_sin_lactosa_sigue_violando_lacteos` en test_p1_allergen_negation_excuse.py; este
+    test ancla específicamente que la excusa NUEVA no se filtró fuera de su scope)."""
+    plan = {"days": [{"meals": [{"name": "Cena", "ingredients": ["200 ml de leche sin lactosa"]}]}]}
+    v = go._scan_allergen_violations(plan, ["Lácteos"])
+    assert v and v[0][2] == "leche", "leche sin lactosa debe seguir violando lácteos (no gluten-scoped)"
+
+
+def test_tostada_sobre_detecta_almendras_tostadas_aceptado(go):
+    """[finding 4 del fix-round 1 · documented-accept, NO remover el término] 'tostada' bare
+    (gluten) también matchea 'almendras tostadas' (frutos secos tostados, sin relación con
+    gluten) — mismo token pre-existe en `condition_rules._ALLERGEN_GLUTEN_SUBS` (swap 'pan
+    tostado'/'tostada'→Casabe). Sesgo a SOBRE-detectar es la dirección de seguridad declarada de
+    este vocabulario (docstring de `_ALLERGEN_SYNONYMS`, C2-ALLERGEN-GUARD) — el costo (un plan
+    con almendras tostadas cae a fallback para un alérgico a gluten, aunque las almendras no
+    tengan gluten) se documenta aquí para que sea VISIBLE, no silencioso. Comportamiento
+    PRE-EXISTENTE (no introducido por este fix-round) — verificado idéntico antes y después."""
+    plan = {"days": [{"meals": [{"name": "Snack", "ingredients": ["Almendras tostadas"]}]}]}
+    v = go._scan_allergen_violations(plan, ["gluten"])
+    assert v and v[0][2] == "tostada", (
+        "'Almendras tostadas' debe seguir disparando 'tostada' — sobre-detección aceptada, "
+        "NO remover el término"
+    )
 
 
 # ── G2. EL GUARD DE PARIDAD — dieta ↔ alérgeno bidireccional (el producto real de este task) ──
@@ -995,22 +1056,26 @@ def test_altas_de_este_task_ya_estaban_cubiertas_por_constants_catchall():
 # excepción documentada para #4; DENTRO de sus 4 categorías, todo lo que #4 trata como objetivo
 # de sustitución (evidencia de que el LLM SÍ puede generar ese texto) debe tener backstop en #1.
 _V4_EXTRACTORS = {
-    "mariscos": lambda cr: list(cr._ALLERGEN_SHELLFISH_SUBS[0][0]),
-    "pescado": lambda cr: list(cr._ALLERGEN_FISH_SUBS[0][0]),
+    # [fix-round 1 · finding 3] 'mariscos'/'pescado' indexaban SOLO la fila [0] (hardcode) mientras
+    # soya/gluten ya iteraban TODAS las filas — exactamente la clase de hueco silencioso-si-la-
+    # tabla-crece que este archivo existe para prevenir. Hoy ambas tienen 1 fila (`[0][0]` y
+    # `[t for sub in ... for t in sub[0]]` son equivalentes ahora), pero si `_ALLERGEN_SHELLFISH_SUBS`/
+    # `_ALLERGEN_FISH_SUBS` ganan una 2ª fila (p.ej. T5-T8 añadiendo un swap nuevo) el hardcode
+    # anterior habría dejado de verla en silencio — las 4 clases usan la misma forma ahora.
+    "mariscos": lambda cr: [t for sub in cr._ALLERGEN_SHELLFISH_SUBS for t in sub[0]],
+    "pescado": lambda cr: [t for sub in cr._ALLERGEN_FISH_SUBS for t in sub[0]],
     "soya": lambda cr: [t for sub in cr._ALLERGEN_SOY_SUBS for t in sub[0]],
     "gluten": lambda cr: [t for sub in cr._ALLERGEN_GLUTEN_SUBS for t in sub[0]],
 }
 
-# Excepción documentada POR TÉRMINO (mismo mecanismo que `_PARITY_TERM_EXCEPTIONS` en G2): la
-# avena (bare + sus 3 compuestos, que #4 lista aparte) es la ÚNICA familia que #4 sustituye pero
-# #1 NO puede seguir a ciegas — ver `test_avena_bare_deliberadamente_no_es_termino_de_gluten` (G1)
-# para la razón completa (`_ALLERGEN_NEGATION_PREFIX_RX` es solo-prefijo; un token bare 'avena'
-# reintroduce el falso-positivo que P1-ALLERGEN-NEGATION-EXCUSE cerró). `condition_rules.py`
-# resuelve esto con su propia `_ALLERGEN_GLUTEN_NEGATIVES` antes de sustituir — mecanismo que #1
-# no tiene por-término, solo el genérico. Único hueco conocido y ACEPTADO de todo este archivo.
+# Excepción documentada POR TÉRMINO (mismo mecanismo que `_PARITY_TERM_EXCEPTIONS` en G2) — mecanismo
+# vivo para el día en que una asimetría legítima aparezca, JAMÁS para silenciar un gap real.
+# [fix-round 1 · 2026-08-17] 'avena' (bare + sus 3 compuestos) YA NO es excepción: fix-round 1
+# sumó 'avena' a `_ALLERGEN_SYNONYMS['gluten']` con una excusa forward scoped-a-gluten (ver
+# graph_orchestrator.py `_GLUTEN_FORWARD_EXCUSE_RX`) — los 4 compuestos matchean por substring
+# 'avena' y quedan CUBIERTOS, no excepcionados. Vacío en las 4 clases: cero gaps conocidos hoy.
 _V4_TERM_EXCEPTIONS = {
-    "mariscos": set(), "pescado": set(), "soya": set(),
-    "gluten": {"avena", "harina de avena", "hojuelas de avena", "salvado de avena"},
+    "mariscos": set(), "pescado": set(), "soya": set(), "gluten": set(),
 }
 
 
@@ -1018,9 +1083,9 @@ _V4_TERM_EXCEPTIONS = {
 def test_backstop_cubre_los_objetivos_de_sustitucion_de_condition_rules(go, condrules, clase_allergen):
     """[G4 · vocabulario #4] Si `collect_allergen_substitutions` falla en sustituir (bug, texto
     del LLM que no matchea sus tokens estrechos a propósito), `_scan_allergen_violations` es la
-    ÚNICA red que queda. Pre-fix esta clase estaba rota para 'gluten' (tostada/macarrón/coditos/
-    fideo/tallarín/penne/ravioli/ñoqui/tortilla de harina — sin contar la avena, excepción
-    documentada) y 'mariscos'/'pescado' (gamba/arenque)."""
+    ÚNICA red que queda. Pre-fix (T4) esta clase estaba rota para 'gluten' (tostada/macarrón/
+    coditos/fideo/tallarín/penne/ravioli/ñoqui/tortilla de harina, y avena — cerrada en
+    fix-round 1) y 'mariscos'/'pescado' (gamba/arenque)."""
     v4_terms = _V4_EXTRACTORS[clase_allergen](condrules)
     v1_terms = go._ALLERGEN_SYNONYMS[clase_allergen]
     faltan = set(_uncovered(v4_terms, v1_terms)) - _V4_TERM_EXCEPTIONS[clase_allergen]
@@ -1071,13 +1136,16 @@ _G5_EXCUSADOS_PLANT_ADJ = {
     # base plant-adjacent que excusa OTRO alérgeno, es el alérgeno mismo).
 }
 
-# 'Avena'/'Leche de avena' bajo la clase 'gluten': razón DISTINTA de la plant-adjacency de
-# arriba — no es que la avena sea segura por ser vegetal, es que `_ALLERGEN_SYNONYMS['gluten']`
-# DELIBERADAMENTE no lleva 'avena' bare (ver G1/G4: reintroduciría el falso-positivo que
-# P1-ALLERGEN-NEGATION-EXCUSE cerró contra "avena certificada sin gluten"). `condition_rules.py`
-# SÍ la trata como riesgo de contaminación cruzada, así que el probe de 'gluten' la sigue
-# marcando 'covered' — este set le dice al test que la NO-detección aquí es la decisión, no un gap.
-_G5_EXCUSADOS_AVENA_GLUTEN_DECISION = {("gluten", "avena"), ("gluten", "leche de avena")}
+# [fix-round 1 · 2026-08-17 · el hueco de arriba SE CERRÓ, no se excusó] T4 tenía aquí
+# `_G5_EXCUSADOS_AVENA_GLUTEN_DECISION = {("gluten", "avena"), ("gluten", "leche de avena")}`:
+# 'Avena'/'Leche de avena' matcheaban el probe pero `_ALLERGEN_SYNONYMS['gluten']` no las conocía
+# a propósito (T4 había rechazado sumar 'avena' bare — colisión con P1-ALLERGEN-NEGATION-EXCUSE).
+# El review de fix-round 1 sumó 'avena' con una excusa FORWARD scoped-a-gluten
+# (`_GLUTEN_FORWARD_EXCUSE_RX`, graph_orchestrator.py) — verificado EN VIVO contra el catálogo
+# real (script de prueba, no fixture): ambas filas SÍ disparan `clinical_backstop_for_meal` hoy.
+# El set de exclusión queda ELIMINADO (no vaciado): dejarlo vacío invitaría a repoblarlo con
+# "excepciones" que en realidad son gaps — la dirección de este guard es sumar cobertura, nunca
+# exceptions. Si esto revive como gap real, `faltantes` lo nombrará explícitamente.
 
 
 @pytest.mark.e2e
@@ -1088,13 +1156,14 @@ def test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo():
     #1, y verifica que todo nombre de catálogo que matchee alguno de esos tokens SÍ dispare
     `clinical_backstop_for_meal` para la alergia correspondiente.
 
-    Hallazgo EN VIVO de este task (pre-fix, 206 filas en `master_ingredients`): 'Mejillones'
+    Hallazgo EN VIVO de este task (T4 pre-fix, 206 filas en `master_ingredients`): 'Mejillones'
     (mariscos) y 'Arenque' (pescado) son alimentos catalogados HOY cuyo nombre ya vivía en un
     vocabulario hermano (#2 dieta) pero `_ALLERGEN_SYNONYMS` no los reconocía —
-    `clinical_backstop_for_meal` los dejaba pasar en silencio; ambos cerrados. 'Yogur de coco'/
-    'Mantequilla de maní' matchean el probe pero son EXCUSA correcta (plant-adjacency), no gap —
-    ver `_G5_EXCUSADOS_PLANT_ADJ`. 'Avena'/'Leche de avena' (gluten) SÍ quedan sin backstop, mismo
-    criterio que G1/G4 — ver `_G5_EXCUSADOS_AVENA_GLUTEN_DECISION`."""
+    `clinical_backstop_for_meal` los dejaba pasar en silencio; ambos cerrados en T4. 'Yogur de
+    coco'/'Mantequilla de maní' matchean el probe pero son EXCUSA correcta (plant-adjacency), no
+    gap — ver `_G5_EXCUSADOS_PLANT_ADJ`. 'Avena'/'Leche de avena' (gluten) SÍ tenían el mismo hueco
+    (T4 las dejó sin backstop a propósito) — fix-round 1 lo CERRÓ (ver comentario arriba); ya no
+    hay exclusión que las cubra, así que este test las verifica como cualquier otro alimento."""
     import db_core
     if db_core.connection_pool is None:
         pytest.skip("connection_pool es None — faltan NEON_DATABASE_URL/.env (e2e, no bloquea el gate)")
@@ -1139,7 +1208,7 @@ def test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo():
                 continue
             # accent-stripped: 'Mantequilla de maní' vs la entrada escrita a mano sin tilde.
             clave = (clase, constants.strip_accents(nombre).strip().lower())
-            if clave in _G5_EXCUSADOS_PLANT_ADJ or clave in _G5_EXCUSADOS_AVENA_GLUTEN_DECISION:
+            if clave in _G5_EXCUSADOS_PLANT_ADJ:
                 continue
             meal = {"name": "probe", "ingredients": [nombre]}
             if not go.clinical_backstop_for_meal(meal, allergies=[clase], diet_type=None):
