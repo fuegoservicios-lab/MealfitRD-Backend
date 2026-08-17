@@ -22,10 +22,23 @@ Secciones:
      resolvers de producción (no reimplementa difflib/cosine_similarity); CLI vía argparse.
   C. Smoke — las 5 listas curadas (≥60 items, sin duplicados).
   D. Unit — `_aggregate_rd_drops` (función pura, sin DB).
+  E. Task 2 — preselección IANA: paridad TZ→país con COUNTRY_PROFILES.
+  F. Task 3 — coach en tu idioma, comida en español.
+  G. Task 4 — los 4 vocabularios de alérgenos/dieta ×país + drift RD (mejillón/vieira/arenque)
+     + el guard de paridad + el alta-hook contra el catálogo vivo. Incluye un hallazgo
+     CONSIDERADO Y RECHAZADO (avena/gluten, colisiona con P1-ALLERGEN-NEGATION-EXCUSE) — ver G1.
 
-Ningún test de este archivo toca Neon: todo lo que necesita catálogo/DB va mockeado vía
-`monkeypatch`. La corrida REAL contra el catálogo vivo (`--country ES`, `--rd-drops`) es un paso
-manual documentado en el reporte de la task, no parte de la suite.
+Task 1-F (secciones A-F): ningún test toca Neon — todo lo que necesita catálogo/DB va mockeado
+vía `monkeypatch`. La corrida REAL contra el catálogo vivo (`--country ES`, `--rd-drops`) es un
+paso manual documentado en el reporte de la task, no parte de la suite.
+
+Task 4 (sección G) introduce la ÚNICA excepción: `test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo`
+(el alta-hook, contrato T4 ítem 3) SÍ toca Neon de verdad —`master_ingredients` real, read-only,
+pool abierto explícitamente— porque su propósito específico es verificar que el backstop conoce
+CADA alimento del catálogo que existe HOY, no una fixture. Marcado `@pytest.mark.e2e` (igual que
+el resto de la suite, `tests/conftest.py::_guard_test_writes_to_prod`) para que el gate rápido
+(`-m "not e2e"`) no dependa de conectividad DB; se salta con `pytest.skip` si el pool no está
+disponible, nunca falla por infraestructura ausente.
 """
 from __future__ import annotations
 
@@ -713,3 +726,428 @@ def test_classify_nudge_sentiment_no_toca_la_directiva():
     src = _read(_PROACTIVE_AGENT_PY)
     body = _fn_body(src, "def classify_nudge_sentiment(user_reply: str) -> dict:", end_marker="def handle_nudge_response(")
     assert "build_language_directive" not in body
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# G. Task 4 — Los 4 vocabularios de alérgenos/dieta ×país + drift RD (INNEGOCIABLE)
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+# CUATRO vocabularios paralelos de alérgenos/dieta viven en el repo, con propósitos distintos y
+# SIN un mecanismo que los mantenga sincronizados:
+#
+#   #1 `graph_orchestrator._ALLERGEN_SYNONYMS` (~:14214) — DETECCIÓN determinista post-generación
+#      (C2-ALLERGEN-GUARD). `_scan_allergen_violations` lo usa para escanear el plan YA generado
+#      contra las alergias IgE declaradas; es la red de seguridad final (`clinical_backstop_for_meal`
+#      lo reusa para swap/regenerate-day/chat-modify). Sesgo a SOBRE-detectar.
+#   #2 `graph_orchestrator._DIET_*_TERMS` (~:14335-14360, cuatro tuplas: FLESH/SEAFOOD/EGG/DAIRY)
+#      — DETECCIÓN determinista de producto ANIMAL para dietType (vegano/vegetariano/pescetariano),
+#      vía `_scan_diet_violations`. Eje ortogonal a #1 (una dieta no es una alergia IgE), pero
+#      SEAFOOD/EGG/DAIRY nombran ingredientes concretos que #1 TAMBIÉN nombra bajo sus categorías
+#      mariscos+pescado/huevo/lácteos — esas tres son las que deben coincidir.
+#   #3 Los catch-alls de categoría inline en `constants._get_fast_filtered_catalogs` (~:3369-3430)
+#      — PRE-FILTRADO: cuando un chip de alergia/dislike es una CATEGORÍA ("Mariscos", "Gluten"),
+#      expande a los nombres concretos del catálogo curado (`DOMINICAN_PROTEINS`/`CARBS`/
+#      `VEGGIES_FATS`/`FRUITS`) para no ofrecerlos en los pools de variedad. Su paridad contra #1
+#      YA la enforza `test_p2_catalog_filter_ssot.py::test_paridad_filtro_vs_escaner_canonico`
+#      (usa `_scan_allergen_violations` — o sea #1 — como oráculo contra los sobrevivientes del
+#      filtro). Este archivo NO duplica ese test; lo cita, lo mantiene verde (barrido de
+#      vecinos), y ancla con un caso puntual que las altas de #1 de este task ya estaban
+#      cubiertas ahí (ver `test_altas_de_este_task_ya_estaban_cubiertas_por_constants_catchall`).
+#      `constants.py` NO se tocó en este task — un intento con 'avena' SÍ lo tocó y se revirtió
+#      junto con la entrada gemela en #1 (ver G1/G4: colisiona con P1-ALLERGEN-NEGATION-EXCUSE).
+#   #4 `condition_rules._ALLERGEN_DETECT` / `_ALLERGEN_*_SUBS` (fish/shellfish/soy/gluten,
+#      condition_rules.py ~:697-760) — SUSTITUCIÓN QUIRÚRGICA proactiva (P0-ALLERGEN-SUBS): ANTES
+#      de que el plan se persista, reemplaza el ingrediente ofensor por uno seguro que resuelve al
+#      catálogo (p.ej. camarón→pollo), conservando el plan rico del LLM. Documentado como
+#      INTENCIONALMENTE más ESTRECHO que #1 en dos ejes: (a) por DISEÑO cubre solo 4 categorías
+#      (fish/shellfish/soy/gluten) — lácteos/huevo/maní/frutos secos quedan FUERA a propósito
+#      ("DECISIÓN HONESTA", condition_rules.py ~L685: el catálogo es-DO no tiene un target libre
+#      del alérgeno que resuelva); (b) sus tokens son deliberadamente ESTRECHOS ("lección del bug
+#      'soya'/'pana'") — lo que un token estrecho no atrape lo recoge el backstop #1. Que #4 sea
+#      MÁS ESTRECHO que #1 es la relación esperada; que #4 conozca un alimento como riesgo y #1 NO
+#      (el sentido que sí importa) es un agujero real — ver sección G4.
+#
+# DRIFT VIVO medido en este task (T4, pre-fix): 'mejillón'/'vieira' viven en #2
+# (`_DIET_SEAFOOD_TERMS`, comentario `P1-VARIETY-CATALOG-POOLS`) pero NO en #1 — un plan con
+# "Mejillones" para un alérgico a mariscos pasaba el backstop determinista limpio. Confirmado
+# EN VIVO contra `master_ingredients` (206 filas): 'Mejillones' y 'Arenque' SON alimentos
+# catalogados hoy; `clinical_backstop_for_meal(..., allergies=["mariscos"|"pescado"])` no los
+# marcaba — ver G5. El diff completo (algoritmo `_uncovered`, abajo) contra las clases
+# mariscos+pescado/lácteos/huevo aparece documentado en cada assert de G2.
+#
+# Checklist-anchor para T5-T8 (el alta-hook, contrato del task): cuando un país nuevo dé de alta
+# un alimento que sea alérgeno o clase-dieta, este archivo tiene DOS guards que deben seguir en
+# verde:
+#   1. `test_paridad_dieta_alergeno_bidireccional` (G2) — si el alimento nuevo entra a
+#      `_DIET_*_TERMS` (o a `_ALLERGEN_SYNONYMS`) sin su espejo en el otro, este test se pone rojo.
+#   2. `test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo` (G5, `@pytest.mark.e2e`)
+#      — si el alimento nuevo entra a `master_ingredients` y CUALQUIER vocabulario hermano ya lo
+#      reconoce como peligroso pero `_ALLERGEN_SYNONYMS` no, este test se pone rojo con el nombre
+#      exacto del alimento y la clase que falta.
+# La corrección en ambos casos es la MISMA: añadir el término faltante a
+# `_ALLERGEN_SYNONYMS[<clase>]` (graph_orchestrator.py) y/o `_DIET_*_TERMS` según corresponda —
+# NUNCA borrar un término existente (dirección de seguridad: solo se añade, ver docstring de cada
+# vocabulario para la categoría correcta).
+
+
+@pytest.fixture(scope="module")
+def go():
+    """`graph_orchestrator` es un módulo de ~38k líneas que importa LangGraph/DB a nivel de
+    import — el mismo motivo por el que `test_p1_allergen_derivatives.py` lo carga vía fixture
+    en vez de `import graph_orchestrator` a nivel de módulo del archivo de test."""
+    import graph_orchestrator as _go
+    return _go
+
+
+@pytest.fixture(scope="module")
+def condrules():
+    import condition_rules as _cr
+    return _cr
+
+
+def _term_matches(term: str, text: str) -> bool:
+    """El MISMO matcher que producción usa en `_scan_allergen_violations`/`_scan_diet_violations`:
+    `\\b<term>(?:s|es)?\\b` sobre texto accent-stripped + lower. Reusar este matcher (no un `in`
+    plano, no un `set()` de strings crudos) es lo que evita DOS clases de falso-positivo al
+    diffear vocabularios en este archivo:
+      (a) singular/plural — 'camaron' en un vocabulario y 'camarones' en el otro NO son un gap
+          real, porque el sufijo `(?:s|es)?` ya los hace equivalentes en producción;
+      (b) frase compuesta redundante — 'salsa de pescado' ausente de un vocabulario NO es un gap
+          si ese vocabulario ya tiene la raíz 'pescado' (la frase completa la cubre por substring
+          igual que un ingrediente real la cubriría).
+    Término vacío nunca matchea (evita el bug F31 de `constants.py`: una alternativa vacía en el
+    regex matchearía cualquier posición)."""
+    t = constants.strip_accents(str(term)).lower().strip()
+    if not t:
+        return False
+    return re.search(r"\b" + re.escape(t) + r"(?:s|es)?\b",
+                      constants.strip_accents(str(text)).lower()) is not None
+
+
+def _covered(terms, probe: str) -> bool:
+    """True si ALGÚN término de `terms` reconocería `probe` (nombre/frase completa) como
+    ingrediente ofensor — el mismo criterio que corre en producción contra un ingrediente real."""
+    return any(_term_matches(t, probe) for t in terms)
+
+
+def _uncovered(source_terms, target_terms) -> list:
+    """Términos de `source_terms` que `target_terms` NO reconocería si escaneara ese término como
+    si fuera el texto completo de un ingrediente. Es la unidad de comparación de TODA esta
+    sección — deliberadamente NO es `set(source) - set(target)` (eso cuenta 'camaron'≠'camarones'
+    y 'salsa de pescado'≠'pescado' como gaps falsos, ver `_term_matches`)."""
+    return sorted({t for t in source_terms if not _covered(target_terms, t)})
+
+
+# ── G1. El drift vivo: mejillón/vieira (el TDD RED de este task) ──────────────────────────────
+
+@pytest.mark.parametrize("ingrediente", ["Mejillones", "1 libra de mejillón", "Vieiras a la plancha"])
+def test_mejillon_vieira_flageados_como_mariscos(go, ingrediente):
+    """[G1 · el drift nombrado por el task] Pre-fix, `_ALLERGEN_SYNONYMS['mariscos']` no conocía
+    'mejillon'/'mejillones'/'vieira' — este assert es la RED que el fix cierra. Funcional, no
+    estructural: prueba el camino real (`_scan_allergen_violations`), igual que
+    `test_p1_allergen_derivatives.py`."""
+    plan = {"days": [{"meals": [{"name": "Cena", "ingredients": [ingrediente, "Arroz blanco"]}]}]}
+    violaciones = go._scan_allergen_violations(plan, ["mariscos"])
+    assert violaciones, f"'{ingrediente}' no fue detectado como marisco por _ALLERGEN_SYNONYMS"
+
+
+def test_arenque_flageado_como_pescado(go):
+    """Segundo hallazgo del diff (no nombrado por el task, encontrado diffeando la clase
+    pescado): 'arenque' vive en `_DIET_SEAFOOD_TERMS` desde P1-VARIETY-CATALOG-POOLS pero
+    faltaba en `_ALLERGEN_SYNONYMS['pescado']`. 'Arenque' es fila real de `master_ingredients`
+    (confirmado en vivo, ver G5) — no es un caso hipotético."""
+    plan = {"days": [{"meals": [{"name": "Almuerzo", "ingredients": ["Arenque ahumado"]}]}]}
+    assert go._scan_allergen_violations(plan, ["pescado"])
+
+
+def test_avena_bare_deliberadamente_no_es_termino_de_gluten(go):
+    """[hallazgo CONSIDERADO Y RECHAZADO — no un gap, documentado para que nadie lo reintente]
+
+    Diffeando `condition_rules._ALLERGEN_GLUTEN_SUBS` (vocabulario #4) contra `_ALLERGEN_SYNONYMS`
+    se encuentra que la sustitución quirúrgica trata la avena como riesgo de contaminación cruzada
+    de gluten — el primer instinto es añadir 'avena' bare al backstop #1 también. Se probó en este
+    task y se REVIRTIÓ: rompe `test_p1_allergen_negation_excuse.py::test_avena_certificada_sin_gluten_no_viola`
+    + `test_pool_scrub_ya_no_roba_la_avena_sin_gluten`. Razón estructural, no solo dos tests
+    rojos: `_ALLERGEN_NEGATION_PREFIX_RX` excusa por PREFIJO (mira hacia atrás desde el match) —
+    en "avena certificada sin gluten" la negación SIGUE a 'avena', nunca la precede, así que un
+    token bare 'avena' NUNCA podría beneficiarse de esa excusa y volvería a castigar el
+    CUMPLIMIENTO que P1-ALLERGEN-NEGATION-EXCUSE cerró (corr=abb71a1d). `condition_rules.py` ya
+    resuelve esto con su PROPIA lista `_ALLERGEN_GLUTEN_NEGATIVES` (incluye "sin gluten") antes de
+    sustituir — el backstop #1 no tiene ese mecanismo por-término, solo el genérico de negación.
+
+    Este test ancla el estado DECIDIDO: 'avena' NO está en `_ALLERGEN_SYNONYMS['gluten']` (control
+    negativo — si alguien la reintenta sin leer este comentario, este test sigue verde pero
+    `test_p1_allergen_negation_excuse.py` cae, la misma señal que detuvo este task)."""
+    assert "avena" not in [t.lower() for t in go._ALLERGEN_SYNONYMS["gluten"]]
+    # Verificación cruzada en vivo: el caso medido sigue sin violar HOY.
+    plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": ["20 g de avena certificada sin gluten"]}]}]}
+    assert go._scan_allergen_violations(plan, ["gluten"]) == []
+
+
+# ── G2. EL GUARD DE PARIDAD — dieta ↔ alérgeno bidireccional (el producto real de este task) ──
+#
+# Clases con contraparte en AMBOS vocabularios (nombran alimentos de origen animal Y son alergia
+# IgE declarable): mariscos+pescado ↔ SEAFOOD, lácteos ↔ DAIRY, huevo ↔ EGG. Frutos secos/maní/
+# gluten/soya son EXCLUSIVAMENTE de #1 (no son producto animal — una dieta vegana no los prohíbe);
+# carne es EXCLUSIVAMENTE de #2 (este sistema no modela alergia IgE a carne/alfa-gal). Esa
+# asimetría de CATEGORÍA es la "lista de excepciones documentadas" a nivel estructural que pide
+# el contrato — no participan del cross-check porque no tienen con qué cruzarse.
+_SEAFOOD, _DAIRY, _EGG = "mariscos+pescado (seafood)", "lacteos (dairy)", "huevo (egg)"
+_CORRESPONDING_CLASSES = (_SEAFOOD, _DAIRY, _EGG)
+
+# Excepciones documentadas POR TÉRMINO (no por categoría) — vacío hoy porque este task cerró
+# cada asimetría real que encontró (ver reporte de la task para el diff completo antes/después).
+# El mecanismo queda vivo para el día en que una asimetría legítima aparezca: añadir aquí con su
+# razón, JAMÁS borrar el término del vocabulario que sí lo tiene.
+_PARITY_TERM_EXCEPTIONS = {
+    _SEAFOOD: {"solo_allergen": set(), "solo_diet": set()},
+    _DAIRY: {"solo_allergen": set(), "solo_diet": set()},
+    _EGG: {"solo_allergen": set(), "solo_diet": set()},
+}
+
+
+def _vocab_pair(clase, go):
+    if clase == _SEAFOOD:
+        return (list(go._ALLERGEN_SYNONYMS["mariscos"]) + list(go._ALLERGEN_SYNONYMS["pescado"]),
+                list(go._DIET_SEAFOOD_TERMS))
+    if clase == _DAIRY:
+        return (list(go._ALLERGEN_SYNONYMS["lacteos"]), list(go._DIET_DAIRY_TERMS))
+    if clase == _EGG:
+        return (list(go._ALLERGEN_SYNONYMS["huevo"]), list(go._DIET_EGG_TERMS))
+    raise ValueError(f"clase sin mapeo: {clase!r}")
+
+
+@pytest.mark.parametrize("clase", _CORRESPONDING_CLASSES)
+def test_paridad_dieta_alergeno_bidireccional(go, clase):
+    """EL GUARD (contrato T4, ítem 2). Para cada clase con contraparte en ambos vocabularios:
+    todo término de `_ALLERGEN_SYNONYMS` debe ser reconocido por `_DIET_*_TERMS` y viceversa,
+    salvo excepción documentada en `_PARITY_TERM_EXCEPTIONS`.
+
+    RED pre-fix (mejillón/vieira, T4): `_uncovered(diet_terms, allergen_terms)` para
+    `_SEAFOOD` incluía 'mejillon'/'mejillones'/'vieira'/'arenque'. RED futuro (T5-T8): si una
+    alta añade un alimento nuevo a un solo vocabulario de un par correspondiente, ese término
+    aparece en uno de los dos `_uncovered(...)` de abajo y el assert falla con el nombre exacto."""
+    allergen_terms, diet_terms = _vocab_pair(clase, go)
+    excepciones = _PARITY_TERM_EXCEPTIONS[clase]
+
+    solo_allergen = set(_uncovered(allergen_terms, diet_terms)) - excepciones["solo_allergen"]
+    solo_diet = set(_uncovered(diet_terms, allergen_terms)) - excepciones["solo_diet"]
+
+    assert not solo_allergen, (
+        f"[{clase}] estos términos de _ALLERGEN_SYNONYMS no los reconoce _DIET_*_TERMS ni una "
+        f"excepción documentada en _PARITY_TERM_EXCEPTIONS: {sorted(solo_allergen)}"
+    )
+    assert not solo_diet, (
+        f"[{clase}] estos términos de _DIET_*_TERMS no los reconoce _ALLERGEN_SYNONYMS ni una "
+        f"excepción documentada en _PARITY_TERM_EXCEPTIONS: {sorted(solo_diet)}"
+    )
+
+
+def test_lactosa_es_mas_estrecha_que_lacteos_a_proposito(go):
+    """`_ALLERGEN_SYNONYMS['lactosa']` (intolerancia — solo importa el AZÚCAR) es
+    deliberadamente más estrecho que `['lacteos']` (alergia a la PROTEÍNA — importa todo
+    derivado): 'ghee' (mantequilla clarificada, lactosa removida en el proceso) y 'caseina'/
+    'caseinato'/'proteina de suero'/'proteina de leche' (proteínas, no azúcar) están en
+    `lacteos` pero NO en `lactosa` a propósito. Control negativo: NO es la misma asimetría que
+    el drift de mejillón — aquí las DOS categorías viven dentro del vocabulario #1, no hay
+    contraparte de dieta que deba igualarlas, y encogerla haría que un intolerante a lactosa
+    evitara innecesariamente proteína de suero aislada (que SÍ suele ser baja/libre de lactosa).
+    Este test ancla que la asimetría es intencional, no que deba cerrarse."""
+    lactosa = set(t.lower() for t in go._ALLERGEN_SYNONYMS["lactosa"])
+    lacteos = set(t.lower() for t in go._ALLERGEN_SYNONYMS["lacteos"])
+    assert lactosa < lacteos, "lactosa debe seguir siendo subconjunto ESTRICTO de lacteos"
+    assert "ghee" in lacteos and "ghee" not in lactosa
+    assert "caseinato" in lacteos and "caseinato" not in lactosa
+
+
+# ── G3. Vocabulario #3 (constants.py catch-alls) — cita al guard existente + confirma neighbors ─
+#
+# constants.py NO se tocó en este task (el intento con 'avena' se revirtió, ver G1/G4) — su
+# paridad contra #1 ya la enforza
+# `test_p2_catalog_filter_ssot.py::test_paridad_filtro_vs_escaner_canonico` (oráculo
+# `_scan_allergen_violations`, barrido en "neighbors green"). Este test confirma PUNTUALMENTE que
+# las altas que SÍ se quedaron (mejillón/vieira en mariscos, arenque en pescado) no generan un
+# sobreviviente-violación nuevo: 'Mejillones' y 'Arenque' YA vivían en el catch-all de
+# constants.py (P1-VARIETY-CATALOG-POOLS, anterior a este task) — el oráculo reforzado no
+# encuentra nada nuevo que excluir, así que el test de OTRO archivo no se ve afectado.
+
+def test_altas_de_este_task_ya_estaban_cubiertas_por_constants_catchall():
+    """[vocabulario #3] Control negativo: si esto fallara, algo más (no este task) movió el
+    catch-all de `constants._get_fast_filtered_catalogs`."""
+    from constants import _get_fast_filtered_catalogs
+
+    con_mariscos = [x for pool in _get_fast_filtered_catalogs(("Mariscos",), (), "") for x in pool]
+    assert not any("mejillon" in str(x).lower() for x in con_mariscos), (
+        "'Mejillones' sobrevive al chip 'Mariscos' en constants.py"
+    )
+    con_pescado = [x for pool in _get_fast_filtered_catalogs(("Pescado",), (), "") for x in pool]
+    assert not any(str(x).lower() == "arenque" for x in con_pescado), (
+        "'Arenque' sobrevive al chip 'Pescado' en constants.py"
+    )
+
+
+# ── G4. Vocabulario #4 (condition_rules.py) — el backstop conoce cada objetivo de sustitución ──
+#
+# `_ALLERGEN_SHELLFISH_SUBS`/`_ALLERGEN_FISH_SUBS`/`_ALLERGEN_SOY_SUBS`/`_ALLERGEN_GLUTEN_SUBS`
+# son las ÚNICAS 4 categorías que el motor de sustitución quirúrgica modela (por diseño,
+# "DECISIÓN HONESTA" ~condition_rules.py:685 — lácteos/huevo/maní/frutos secos quedan fuera:
+# sin target GF/libre-de-alérgeno en el catálogo es-DO). Esa exclusión de CATEGORÍA es la
+# excepción documentada para #4; DENTRO de sus 4 categorías, todo lo que #4 trata como objetivo
+# de sustitución (evidencia de que el LLM SÍ puede generar ese texto) debe tener backstop en #1.
+_V4_EXTRACTORS = {
+    "mariscos": lambda cr: list(cr._ALLERGEN_SHELLFISH_SUBS[0][0]),
+    "pescado": lambda cr: list(cr._ALLERGEN_FISH_SUBS[0][0]),
+    "soya": lambda cr: [t for sub in cr._ALLERGEN_SOY_SUBS for t in sub[0]],
+    "gluten": lambda cr: [t for sub in cr._ALLERGEN_GLUTEN_SUBS for t in sub[0]],
+}
+
+# Excepción documentada POR TÉRMINO (mismo mecanismo que `_PARITY_TERM_EXCEPTIONS` en G2): la
+# avena (bare + sus 3 compuestos, que #4 lista aparte) es la ÚNICA familia que #4 sustituye pero
+# #1 NO puede seguir a ciegas — ver `test_avena_bare_deliberadamente_no_es_termino_de_gluten` (G1)
+# para la razón completa (`_ALLERGEN_NEGATION_PREFIX_RX` es solo-prefijo; un token bare 'avena'
+# reintroduce el falso-positivo que P1-ALLERGEN-NEGATION-EXCUSE cerró). `condition_rules.py`
+# resuelve esto con su propia `_ALLERGEN_GLUTEN_NEGATIVES` antes de sustituir — mecanismo que #1
+# no tiene por-término, solo el genérico. Único hueco conocido y ACEPTADO de todo este archivo.
+_V4_TERM_EXCEPTIONS = {
+    "mariscos": set(), "pescado": set(), "soya": set(),
+    "gluten": {"avena", "harina de avena", "hojuelas de avena", "salvado de avena"},
+}
+
+
+@pytest.mark.parametrize("clase_allergen", list(_V4_EXTRACTORS.keys()))
+def test_backstop_cubre_los_objetivos_de_sustitucion_de_condition_rules(go, condrules, clase_allergen):
+    """[G4 · vocabulario #4] Si `collect_allergen_substitutions` falla en sustituir (bug, texto
+    del LLM que no matchea sus tokens estrechos a propósito), `_scan_allergen_violations` es la
+    ÚNICA red que queda. Pre-fix esta clase estaba rota para 'gluten' (tostada/macarrón/coditos/
+    fideo/tallarín/penne/ravioli/ñoqui/tortilla de harina — sin contar la avena, excepción
+    documentada) y 'mariscos'/'pescado' (gamba/arenque)."""
+    v4_terms = _V4_EXTRACTORS[clase_allergen](condrules)
+    v1_terms = go._ALLERGEN_SYNONYMS[clase_allergen]
+    faltan = set(_uncovered(v4_terms, v1_terms)) - _V4_TERM_EXCEPTIONS[clase_allergen]
+    assert not faltan, (
+        f"condition_rules sustituye estos términos como riesgo de {clase_allergen!r} pero "
+        f"_ALLERGEN_SYNONYMS[{clase_allergen!r}] no los reconoce ni hay excepción documentada en "
+        f"_V4_TERM_EXCEPTIONS: {sorted(faltan)}"
+    )
+
+
+def test_v4_no_modela_lacteos_huevo_mani_frutos_secos_a_proposito(condrules):
+    """Control negativo de la excepción de CATEGORÍA: confirma que la ausencia es la
+    'DECISIÓN HONESTA' documentada (sin target GF/libre-de-alérgeno en el catálogo es-DO), no un
+    olvido — si algún día alguien añade `_ALLERGEN_DAIRY_SUBS` sin querer decidirlo a propósito,
+    este test deja de fallar EN SILENCIO (no hay assert que lo prohíba estructuralmente porque
+    prohibir código futuro no es el trabajo de un test; lo que ancla es la RAZÓN documentada)."""
+    src = condrules.__file__
+    texto = Path(src).read_text(encoding="utf-8")
+    assert "DECISIÓN HONESTA" in texto
+    assert "lácteos, huevo, maní y frutos secos NO se sustituyen aquí" in texto
+
+
+# ── G5. EL ALTA-HOOK — el backstop conoce cada alimento peligroso del catálogo VIVO ────────────
+#
+# [P1-COUNTRY-SYSTEM-F2 · T4 · e2e] Único test de TODO este archivo que toca Neon (el resto es
+# mockeado/parser, ver docstring del módulo) — lección del repo: pool abierto explícitamente
+# (`db_core.connection_pool.open()`), `SELECT` read-only, marcado `@pytest.mark.e2e` para que el
+# gate rápido (`-m "not e2e"`) no dependa de conectividad DB, consistente con el resto de la
+# suite (`tests/conftest.py::_guard_test_writes_to_prod`). Este es el CHECKLIST-ANCHOR que T5-T8
+# deben mantener verde: si el nombre de un alimento nuevo (cualquier país) matchea una clase de
+# seguridad en OTRO vocabulario (dieta, sustitución de condition_rules) pero `_ALLERGEN_SYNONYMS`
+# no lo reconoce, este test lo nombra explícitamente — la corrección es añadir el sinónimo
+# faltante a `_ALLERGEN_SYNONYMS[<clase>]` ANTES de mergear esa alta.
+
+# Alternativas PLANT-BASED de un producto animal — la MISMA excusa de adyacencia que
+# `_PLANT_ADJ_EXCUSE_RX` aplica en producción (`_scan_allergen_violations`): 'Leche de coco' no
+# viola una alergia a LÁCTEOS (el alérgico a coco matchea por su propio término). No son gaps del
+# backstop, es la excusa funcionando — documentadas aquí para que el test no las reporte como
+# falsas alarmas.
+_G5_EXCUSADOS_PLANT_ADJ = {
+    ("lacteos", "leche de almendras"), ("lacteos", "leche de avena"), ("lacteos", "leche de coco"),
+    ("lacteos", "leche de soya"), ("lacteos", "mantequilla de almendras"),
+    ("lacteos", "yogur de coco"), ("lacteos", "mantequilla de mani"),
+    ("lactosa", "leche de almendras"), ("lactosa", "leche de avena"), ("lactosa", "leche de coco"),
+    ("lactosa", "leche de soya"), ("lactosa", "mantequilla de almendras"),
+    ("lactosa", "yogur de coco"), ("lactosa", "mantequilla de mani"),
+    # 'Mantequilla de maní' NO se excusa para la clase 'mani': ES el alérgeno (maní no es la
+    # base plant-adjacent que excusa OTRO alérgeno, es el alérgeno mismo).
+}
+
+# 'Avena'/'Leche de avena' bajo la clase 'gluten': razón DISTINTA de la plant-adjacency de
+# arriba — no es que la avena sea segura por ser vegetal, es que `_ALLERGEN_SYNONYMS['gluten']`
+# DELIBERADAMENTE no lleva 'avena' bare (ver G1/G4: reintroduciría el falso-positivo que
+# P1-ALLERGEN-NEGATION-EXCUSE cerró contra "avena certificada sin gluten"). `condition_rules.py`
+# SÍ la trata como riesgo de contaminación cruzada, así que el probe de 'gluten' la sigue
+# marcando 'covered' — este set le dice al test que la NO-detección aquí es la decisión, no un gap.
+_G5_EXCUSADOS_AVENA_GLUTEN_DECISION = {("gluten", "avena"), ("gluten", "leche de avena")}
+
+
+@pytest.mark.e2e
+def test_backstop_conoce_cada_alimento_peligroso_del_catalogo_vivo():
+    """[G5 · el alta-hook, contrato T4 ítem 3] Query read-only a `master_ingredients` (pool
+    abierto explícitamente). Para cada clase de seguridad, une los tokens que CUALQUIER
+    vocabulario hermano (#2 dieta, #4 sustitución) ya reconoce como peligrosos + los propios de
+    #1, y verifica que todo nombre de catálogo que matchee alguno de esos tokens SÍ dispare
+    `clinical_backstop_for_meal` para la alergia correspondiente.
+
+    Hallazgo EN VIVO de este task (pre-fix, 206 filas en `master_ingredients`): 'Mejillones'
+    (mariscos) y 'Arenque' (pescado) son alimentos catalogados HOY cuyo nombre ya vivía en un
+    vocabulario hermano (#2 dieta) pero `_ALLERGEN_SYNONYMS` no los reconocía —
+    `clinical_backstop_for_meal` los dejaba pasar en silencio; ambos cerrados. 'Yogur de coco'/
+    'Mantequilla de maní' matchean el probe pero son EXCUSA correcta (plant-adjacency), no gap —
+    ver `_G5_EXCUSADOS_PLANT_ADJ`. 'Avena'/'Leche de avena' (gluten) SÍ quedan sin backstop, mismo
+    criterio que G1/G4 — ver `_G5_EXCUSADOS_AVENA_GLUTEN_DECISION`."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — faltan NEON_DATABASE_URL/.env (e2e, no bloquea el gate)")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+    import graph_orchestrator as go
+    import condition_rules as cr
+
+    rows = execute_sql_query("SELECT name FROM master_ingredients", fetch_all=True)
+    assert rows, (
+        "master_ingredients vino vacío con el pool abierto — si esto falla, el catálogo real "
+        "tiene 0 filas o el pool no abrió de verdad (lección del repo: mides el vacío, no el "
+        "sistema)"
+    )
+    nombres = [r["name"] for r in rows if r.get("name")]
+
+    # [fix-round 1 · auto-detectado corriendo el test en vivo] 'mariscos' y 'pescado' NO pueden
+    # unir `_DIET_SEAFOOD_TERMS` completo: esa tupla mezcla pescado+marisco A PROPÓSITO (una
+    # dieta vegana prohíbe ambos por igual, P1-VARIETY-CATALOG-POOLS), pero `_ALLERGEN_SYNONYMS`
+    # SÍ distingue las dos alergias IgE. Unirla aquí habría hecho que el probe de 'mariscos'
+    # incluyera "bacalao"/"salmón" (peces, no mariscos) y viceversa — falsos positivos, no gaps
+    # reales (el G2 de arriba YA garantiza `mariscos ∪ pescado` ⊇ `_DIET_SEAFOOD_TERMS`, así que
+    # re-unirla aquí es además redundante). Cada clase usa SOLO su propio vocabulario #1 + el
+    # sub-conjunto de #4 que le corresponde (shellfish/fish ya vienen separados en condition_rules).
+    clases_tokens = {
+        "mariscos": set(cr._ALLERGEN_SHELLFISH_SUBS[0][0]) | set(go._ALLERGEN_SYNONYMS["mariscos"]),
+        "pescado": set(cr._ALLERGEN_FISH_SUBS[0][0]) | set(go._ALLERGEN_SYNONYMS["pescado"]),
+        "gluten": {t for sub in cr._ALLERGEN_GLUTEN_SUBS for t in sub[0]}
+                  | set(go._ALLERGEN_SYNONYMS["gluten"]),
+        "lacteos": set(go._DIET_DAIRY_TERMS) | set(go._ALLERGEN_SYNONYMS["lacteos"]),
+        "lactosa": set(go._DIET_DAIRY_TERMS) | set(go._ALLERGEN_SYNONYMS["lactosa"]),
+        "huevo": set(go._DIET_EGG_TERMS) | set(go._ALLERGEN_SYNONYMS["huevo"]),
+        "soya": {t for sub in cr._ALLERGEN_SOY_SUBS for t in sub[0]} | set(go._ALLERGEN_SYNONYMS["soya"]),
+        "frutos secos": set(go._ALLERGEN_SYNONYMS["frutos secos"]),
+        "mani": set(go._ALLERGEN_SYNONYMS["mani"]),
+    }
+
+    faltantes = []
+    for clase, tokens in clases_tokens.items():
+        for nombre in nombres:
+            if not _covered(tokens, nombre):
+                continue
+            # accent-stripped: 'Mantequilla de maní' vs la entrada escrita a mano sin tilde.
+            clave = (clase, constants.strip_accents(nombre).strip().lower())
+            if clave in _G5_EXCUSADOS_PLANT_ADJ or clave in _G5_EXCUSADOS_AVENA_GLUTEN_DECISION:
+                continue
+            meal = {"name": "probe", "ingredients": [nombre]}
+            if not go.clinical_backstop_for_meal(meal, allergies=[clase], diet_type=None):
+                faltantes.append((clase, nombre))
+
+    assert not faltantes, (
+        f"{len(faltantes)} alimento(s) del catálogo VIVO matchean una clase de seguridad en un "
+        f"vocabulario hermano pero _ALLERGEN_SYNONYMS no los reconoce (el backstop los dejaría "
+        f"pasar en silencio): {faltantes}. Añade el sinónimo faltante a "
+        f"_ALLERGEN_SYNONYMS[<clase>] (graph_orchestrator.py) antes de mergear esta alta."
+    )

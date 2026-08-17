@@ -14218,23 +14218,59 @@ _ALLERGEN_SYNONYMS = {
                      "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
                      "nutella", "praline", "turron", "pesto", "crema de avellana"],
     "mariscos": ["camaron", "camarones", "langosta", "cangrejo", "langostino", "gambas",
-                 "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
-                 "surimi"],
+                 "gamba", "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
+                 "surimi",
+                 # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] drift RD cerrado: 'mejillon'/
+                 # 'mejillones'/'vieira' ya vivían en `_DIET_SEAFOOD_TERMS` (P1-VARIETY-CATALOG-
+                 # POOLS) y 'Mejillones' es fila real de `master_ingredients` — el backstop
+                 # determinista no lo reconocía. 'gamba' (singular): `condition_rules.
+                 # _ALLERGEN_SHELLFISH_SUBS` ya lo trata como objetivo de sustitución.
+                 "mejillon", "mejillones", "vieira"],
     "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
                 "dorado", "sardina", "merluza", "carite", "anchoa", "anchoas",
-                "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire"],
+                "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire",
+                # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'arenque' ya vivía en
+                # `_DIET_SEAFOOD_TERMS` y en `condition_rules._ALLERGEN_FISH_SUBS`; es fila real
+                # de `master_ingredients` (confirmado en vivo) — el backstop no lo reconocía.
+                "arenque"],
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
                 "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
                 "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
                 "dulce de leche", "queso crema", "requeson", "kefir", "natilla", "flan",
-                "leche condensada", "leche evaporada", "nata", "ghee"],
+                "leche condensada", "leche evaporada", "nata", "ghee",
+                # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] 'yogur' (sin 't', grafía estándar
+                # es-ES/es-DO) ya vivía en `_DIET_DAIRY_TERMS` y en el catch-all de
+                # `constants._get_fast_filtered_catalogs` — solo 'yogurt' (con 't') estaba aquí.
+                "yogur"],
     "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella",
                 "whey", "suero de leche", "helado", "mantecado", "dulce de leche", "queso crema",
-                "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada"],
+                "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada",
+                # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] mismo top-up de grafía que 'lacteos'
+                # arriba — NO se amplía el resto de la categoría (lactosa es intencionalmente más
+                # estrecha que lacteos: 'ghee'/'caseina'/'caseinato' quedan fuera a propósito,
+                # ver test_lactosa_es_mas_estrecha_que_lacteos_a_proposito).
+                "yogur"],
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
                "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
                "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
-               "lasana", "lasagna", "empanada", "bizcocho", "wheat"],
+               "lasana", "lasagna", "empanada", "bizcocho", "wheat",
+               # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] `condition_rules._ALLERGEN_GLUTEN_SUBS`
+               # ya trata estos 9 términos (pastas/panes) como objetivo de sustitución proactiva
+               # (P0-ALLERGEN-SUBS) — el backstop determinista no los reconocía si la sustitución
+               # fallaba. Ninguno está en el catálogo HOY, pero SÍ son objetivo de sustitución
+               # vivo en producción (T5-T8 los dará de alta). 'avena' DELIBERADAMENTE EXCLUIDA de
+               # esta lista — ver test_p1_allergen_negation_excuse.py: 'avena' NO puede ser un
+               # término estrecho aquí porque `_ALLERGEN_NEGATION_PREFIX_RX` excusa por PREFIJO
+               # (mira hacia atrás desde el match), y en "avena certificada sin gluten" la
+               # negación sigue a 'avena', no la precede — un token bare 'avena' volvería a
+               # castigar el CUMPLIMIENTO exacto que P1-ALLERGEN-NEGATION-EXCUSE cerró
+               # (corr=abb71a1d). Medido en este task: añadirlo rompe
+               # test_avena_certificada_sin_gluten_no_viola +
+               # test_pool_scrub_ya_no_roba_la_avena_sin_gluten. Documentado como excepción viva
+               # en test_p1_country_system_f2.py (G4/G5) — NO reintroducir sin resolver antes ese
+               # conflicto.
+               "tostada", "macarron", "coditos", "fideo", "tallarin", "penne",
+               "ravioli", "noqui", "tortilla de harina"],
     "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
               "aioli", "alioli", "holandesa", "ponche", "mousse"],
     "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
@@ -14343,6 +14379,11 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "carite", "arenque", "merluza", "camaron", "langosta", "cangrejo", "langostino", "marisco",
     "calamar", "pulpo", "lambi", "surimi", "anchoa", "caviar",
     "mejillones", "mejillon", "almeja", "ostra", "vieira",  # [P1-VARIETY-CATALOG-POOLS] mariscos del catálogo
+    # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['mariscos'/'pescado']`
+    # (guard `test_paridad_dieta_alergeno_bidireccional`): 'gambas'/'gamba' y 'salsa inglesa'/
+    # 'worcestershire' (derivado de pescado, Worcestershire lleva anchoas) ya vivían del lado
+    # alérgeno, ausentes aquí.
+    "gambas", "gamba", "salsa inglesa", "worcestershire",
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",
@@ -14350,6 +14391,9 @@ _DIET_EGG_TERMS = (
     # cubría. Over-detect bias consistente: una versión vegana ("mayonesa vegana", "merengue de aquafaba")
     # la excusa `_plant_adj` por adyacencia o cae al fallback (vegano-seguro). Nunca se sirve huevo a un vegano.
     "mayonesa", "merengue", "mousse", "alioli", "aioli",
+    # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['huevo']`: 'holandesa'
+    # (salsa holandesa) y 'ponche' (ponche crema) ya vivían del lado alérgeno, ausentes aquí.
+    "holandesa", "ponche",
 )
 _DIET_DAIRY_TERMS = (
     "leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "lacteo", "ricotta", "mozzarella",
@@ -14357,6 +14401,10 @@ _DIET_DAIRY_TERMS = (
     "dulce de leche", "leche condensada", "leche evaporada", "nata", "ghee",
     # [post-review 2026-06-15] productos animales procesados que el sibling allergen guard ya cubría
     "helado", "mantecado", "flan",
+    # [P1-COUNTRY-SYSTEM-F2 · T4 · 2026-08-17] paridad con `_ALLERGEN_SYNONYMS['lacteos']`: 'caseinato'
+    # y 'proteina de suero' ya vivían del lado alérgeno (proteínas lácteas, no cubiertas por la raíz
+    # 'caseina'/'suero de leche' vía substring — orden de palabras distinto), ausentes aquí.
+    "caseinato", "proteina de suero",
 )
 
 
