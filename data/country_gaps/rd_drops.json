@@ -1,0 +1,39 @@
+{
+  "mode": "rd-drops",
+  "generated_at": "2026-08-17T07:12:55.467361+00:00",
+  "lookback_days": 30,
+  "source_node": "_creativity_kpi_job",
+  "cron_runs_examined": 338,
+  "distinct_foods": 7,
+  "top_drops": [
+    {
+      "food": "mereyes",
+      "count": 62
+    },
+    {
+      "food": "2–3 ciruelas",
+      "count": 16
+    },
+    {
+      "food": "tortilla",
+      "count": 8
+    },
+    {
+      "food": "hummus",
+      "count": 6
+    },
+    {
+      "food": "requesón",
+      "count": 6
+    },
+    {
+      "food": "azúcar",
+      "count": 4
+    },
+    {
+      "food": "rábanos en láminas",
+      "count": 4
+    }
+  ],
+  "note": null
+}
