@@ -1608,6 +1608,61 @@ def test_country_catalog_unpriced_keep_knob_default_true(sc):
     assert sc._country_catalog_unpriced_keep_enabled() is True
 
 
+# ── H6-bis. fix-round 1 (review IMPORTANT): la colisión de substring 'pinones' ⊂ 'champinones' ──
+#
+# [fix-round 1 · 2026-08-17] El reviewer barrió los 32 tokens contra el catálogo pre-T5 completo
+# (206 filas) + los 4 pools DOMINICAN_* (145 nombres) y encontró: `strip_accents('Champiñones')`
+# = 'champinones' CONTIENE 'pinones' (Piñones ⊂ Champiñones) como substring bare — el matcher
+# original (`tok in low`) marcaba 'Champiñones' (fila RD PRICED real, `DOMINICAN_VEGGIES_FATS`)
+# como si fuera una alta sin precio de T5. 17ª colisión de substring documentada en el proyecto
+# (sal⊂salsa, pollo⊂repollo, res⊂fresco...). Blast radius bajo hoy (el gate externo
+# `not _is_verified_for_shopping` ya protege nombres bien formados — Champiñones SÍ tiene precio,
+# así que nunca llega a esta rama en producción), pero el bug es real y el fix debe ser de raíz.
+
+def test_champinones_no_colisiona_con_pinones_regresion(sc):
+    """[el RED de este fix-round] 'Champiñones' (fila RD PRICED, `DOMINICAN_VEGGIES_FATS`) NUNCA
+    debe reconocerse como alimento de catálogo-país sin precio — 'pinones' (Piñones, alta T5) es
+    un substring bare de 'champinones' (accent-stripped) pero NO un token completo dentro de él."""
+    assert not sc.is_country_catalog_unpriced_item("Champiñones"), (
+        "'Champiñones' colisiona con el token 'pinones' (Piñones) por substring bare — "
+        "is_country_catalog_unpriced_item debe matchear por TOKEN completo (word-boundary), no `in`"
+    )
+
+
+@pytest.mark.e2e
+def test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_catalogo_vivo_ni_pools(sc):
+    """[el guard durable · review IMPORTANT] Sweep COMPLETO (no solo el caso puntual reportado):
+    para cada nombre REAL del catálogo vivo (`master_ingredients`, sin importar precio) Y cada
+    nombre de los 4 pools `DOMINICAN_*` + `COUNTRY_POOLS['ES']`, si ese nombre NO es una de las 32
+    altas T5, `is_country_catalog_unpriced_item` debe ser False. Esto es lo que atrapa la
+    colisión #18 antes de producción — el caso puntual de Champiñones (arriba) solo prueba que
+    ESE caso está cerrado, este test prueba que la CLASE de bug está cerrada."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    rows = sc.get_master_ingredients() or []
+    nombres_catalogo = {r.get("name") for r in rows if r.get("name")}
+
+    nombres_pools = set()
+    for pool in (constants.DOMINICAN_PROTEINS, constants.DOMINICAN_CARBS,
+                 constants.DOMINICAN_VEGGIES_FATS, constants.DOMINICAN_FRUITS):
+        nombres_pools.update(pool)
+    for pool in constants.COUNTRY_POOLS.values():
+        for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+            nombres_pools.update(pool.get(key) or [])
+
+    candidatos = (nombres_catalogo | nombres_pools) - _DISH_TEMPLATES_ES_NAMES
+
+    falsos_positivos = sorted(n for n in candidatos if sc.is_country_catalog_unpriced_item(n))
+    assert not falsos_positivos, (
+        f"{len(falsos_positivos)} nombre(s) NO son una alta T5 pero "
+        f"is_country_catalog_unpriced_item los reconoce igual (colisión de substring/token): "
+        f"{falsos_positivos}"
+    )
+
+
 # ── H7-H9. COUNTRY_POOLS['ES'] + _get_fast_filtered_catalogs(..., country=) ────────────────────
 
 def test_country_pools_es_estructura():

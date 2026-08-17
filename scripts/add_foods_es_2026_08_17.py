@@ -30,9 +30,18 @@ un número inventado con cara de fuente.
 
 SUSTITUCIONES DOCUMENTADAS (USDA no distingue el producto español específico — mismo patrón que
 "Queso de oveja"→feta del lote de variedad 2026-07-26, NO inventado, categoría más cercana real):
-    Jamón serrano/ibérico → "Pork, cured, ham..." (USDA no tiene "prosciutto"/jamón curado
-        dominicano en SR Legacy/Foundation; el corte "unheated"/"raw" es el estado en que se
-        CONSUME el jamón curado — sin cocción adicional).
+    Jamón serrano/ibérico → fdc=168282 "Pork, cured, ham, center slice, country-style,
+        separable lean only, raw" (AMBAS filas, mismo fdc — [fix-round 1 · 2026-08-17] Jamón
+        serrano usaba originalmente fdc=168295, sodium_mg=1280, un corte húmedo-curado/listo-
+        para-calentar; el review señaló que el jamón serrano real es SECO-curado
+        (~2000-2500 mg sodio/100g estimado). Ninguna entrada "dry-cured"/"prosciutto"/"parma"/
+        "serrano"/"iberico" existe en SR Legacy NI Foundation Foods — confirmado contra el bulk
+        dump completo. fdc=168282 (Na=2700 mg) es la entrada de MAYOR sodio de TODO el dataset
+        para cualquier "ham" — "country-style" es el término USDA más cercano a un jamón
+        seco-curado real, y YA era el fdc de Jamón ibérico. Ambas filas quedan con macros
+        IDÉNTICAS — tradeoff disclosed, no un valor inventado con cara de fuente. El sodio real
+        de jamón serrano probablemente sigue MÁS ALTO que 2700 en la práctica — sigue siendo
+        una subestimación conservadora, documentada en `_fix_round_1_provenance` del JSON).
     Lomo embuchado        → "Canadian bacon" (lomo de cerdo curado, mismo corte/preparación).
     Cuajada                → "Cheese, cottage, creamed" (cuajo de leche fresco, análogo más
         cercano; requesón usa ricotta, que SÍ es un match directo).
@@ -64,13 +73,17 @@ mismo mecanismo/knob propio `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP`) — NO el g
 `_is_verified_for_shopping` (ese sigue exigiendo precio>0, intacto, `MEALFIT_VERIFIED_INGREDIENTS_ONLY`
 sin tocar).
 
-IDEMPOTENTE: salta por `name` ya existente (mismo patrón que los 3 lotes previos) — re-correr no
-duplica.
+IDEMPOTENTE: salta por `name` ya existente CON el mismo `fdc_id` (mismo patrón que los 3 lotes
+previos) — re-correr no duplica. [fix-round 1 · 2026-08-17] Gana un segundo modo: si `name`
+existe pero el `fdc_id` de la DB difiere del `fdc_id` del JSON (alguien re-sourceó la fila —
+p.ej. Jamón serrano, ver §2 del reporte de la task: sodio 1280→2700mg, substrato húmedo→seco-
+curado), UPDATE en vez de skip. Nunca toca una fila cuyo `fdc_id` YA coincide (evita
+sobre-escribir sin motivo cada re-corrida).
 
 USO:
     cd backend
     python scripts/add_foods_es_2026_08_17.py              # DRY-RUN
-    python scripts/add_foods_es_2026_08_17.py --commit      # inserta de verdad
+    python scripts/add_foods_es_2026_08_17.py --commit      # inserta/actualiza de verdad
 
 [P2-LOGGER-EXEMPT: script CLI one-shot, la salida a stdout ES el producto]
 """
@@ -129,15 +142,14 @@ def main():
         return 1
 
     hoy = datetime.date.today()
-    puestos = ya = 0
+    puestos = ya = actualizados = 0
     with psycopg.connect(_NEON) as conn:
-        existen = {r[0] for r in conn.execute("SELECT name FROM public.master_ingredients").fetchall()}
+        existen = {
+            row[0]: row[1]
+            for row in conn.execute("SELECT name, fdc_id FROM public.master_ingredients").fetchall()
+        }
         for r in recs:
             nm = r["name"]
-            if nm in existen:
-                print(f"  ~ EXISTE, salto: {nm}")
-                ya += 1
-                continue
             cols = {
                 "slug": r["slug"], "name": nm, "category": r["category"],
                 "aliases": r.get("aliases") or [], "default_unit": r["default_unit"],
@@ -151,6 +163,27 @@ def main():
             }
             for k, dbcol in _COLMAP.items():
                 cols[dbcol] = r.get(k)
+
+            if nm in existen:
+                db_fdc = existen[nm]
+                if db_fdc == cols["fdc_id"]:
+                    print(f"  ~ EXISTE (fdc_id igual), salto: {nm}")
+                    ya += 1
+                    continue
+                # [fix-round 1 · 2026-08-17] fdc_id difiere del que ya vive en la fila — el JSON
+                # fue re-sourceado (ver docstring): UPDATE en vez de skip.
+                nombres_upd = [c for c in cols if c not in ("slug", "name")]
+                set_clause = ", ".join(f"{c} = %s" for c in nombres_upd)
+                if COMMIT:
+                    conn.execute(
+                        f"UPDATE public.master_ingredients SET {set_clause} WHERE name = %s",
+                        [cols[c] for c in nombres_upd] + [nm])
+                print(f"  {'~ ACTUALIZADO' if COMMIT else '~ (dry) actualizaria'}: {nm} [{r['category']}] "
+                      f"fdc_id {db_fdc} -> {cols['fdc_id']} sodium_mg -> {r.get('sodium_mg','?')} "
+                      f"fuente={r.get('_usda_description', '?')!r}")
+                actualizados += 1
+                continue
+
             nombres = list(cols.keys())
             if COMMIT:
                 conn.execute(
@@ -163,9 +196,10 @@ def main():
             puestos += 1
         if COMMIT:
             conn.commit()
-            print(f"\nCOMMITTED. insertados={puestos}, ya-existen={ya}")
+            print(f"\nCOMMITTED. insertados={puestos}, actualizados={actualizados}, ya-existen={ya}")
         else:
-            print(f"\nDRY-RUN. insertaría={puestos}, ya-existen={ya}. Re-corre con --commit.")
+            print(f"\nDRY-RUN. insertaría={puestos}, actualizaría={actualizados}, ya-existen={ya}. "
+                  f"Re-corre con --commit.")
     return 0
 
 

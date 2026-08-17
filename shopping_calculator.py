@@ -812,13 +812,23 @@ def _country_catalog_unpriced_keep_enabled() -> bool:
 
 
 def is_country_catalog_unpriced_item(name) -> bool:
-    """True si `name` es uno de los alimentos de catálogo-país sin precio RD (match substring
-    accent-insensitive, mismo patrón que `is_baking_pantry_staple`). Usado por el keep del
-    aggregator (generalización de P1-BAKING-STAPLES, T5)."""
+    """True si `name` es uno de los alimentos de catálogo-país sin precio RD.
+
+    [fix-round 1 · review IMPORTANT · 2026-08-17] Match por TOKEN completo (word-boundary,
+    accent-insensitive, tolerante a plural — mismo patrón que `_scan_allergen_violations`/
+    `pantry_names_match`: `\\b<token>(?:s|es)?\\b`), NUNCA `tok in low` (substring bare). El bare
+    `in` original dejaba pasar `'pinones' in 'champinones'` (Piñones ⊂ Champiñones,
+    accent-stripped) — `Champiñones` es una fila RD PRICED real de `DOMINICAN_VEGGIES_FATS`, así
+    que el bug marcaba un alimento de precio real como si fuera una alta sin precio de T5. 17ª
+    colisión de substring documentada en el proyecto (sal⊂salsa, pollo⊂repollo, res⊂fresco...).
+    Usado por el keep del aggregator (generalización de P1-BAKING-STAPLES, T5)."""
     try:
         from constants import strip_accents as _sa
         low = _sa(str(name or "").lower())
-        return any(tok in low for tok in _COUNTRY_CATALOG_UNPRICED_TOKENS)
+        return any(
+            re.search(r"\b" + re.escape(tok) + r"(?:s|es)?\b", low)
+            for tok in _COUNTRY_CATALOG_UNPRICED_TOKENS
+        )
     except Exception:
         return False
 
