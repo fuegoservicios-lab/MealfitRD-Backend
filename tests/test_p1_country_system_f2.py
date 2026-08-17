@@ -374,7 +374,24 @@ def _tz_country_codes_from_js() -> set:
 
     ini_exact = src.index("const TZ_COUNTRY_EXACT")
     fin_exact = src.index("};", ini_exact)
-    codigos = set(re.findall(r":\s*'([A-Z]{2})'", src[ini_exact:fin_exact]))
+    bloque_exact = src[ini_exact:fin_exact]
+    matches_exact = re.findall(r":\s*'([A-Z]{2})'", bloque_exact)
+    # [fix-round 1 · review] Contar FILAS crudas ANTES de deduplicar a `set`: un
+    # set es CIEGO a una truncación PARCIAL que deja ≥1 fila por código — el test
+    # de igualdad de abajo (`test_paridad_tz_country_map_con_country_profiles`)
+    # seguiría en verde aunque el bloque perdiera 15 de sus 25 filas, mientras
+    # sobreviva al menos una por código. Es EXACTAMENTE el modo de fallo que el
+    # propio accidente del comment-stripper de esta misma task habría dejado
+    # pasar en silencio si hubiera devorado solo un tramo intermedio en vez del
+    # bloque completo (ver reporte de Task 2, fix-round 1). 25 = las filas de
+    # `TZ_COUNTRY_EXACT` hoy (DO + PR + ES×2 + CO + 11 MX + 9 US) — el piso es
+    # `>=`, no `==`, porque el número solo puede CRECER con más zonas.
+    assert len(matches_exact) >= 25, (
+        f"esperaba ≥25 filas en TZ_COUNTRY_EXACT, parseé {len(matches_exact)} — posible "
+        "truncación parcial del bloque (mismo modo de fallo que el accidente del "
+        "comment-stripper de esta task)."
+    )
+    codigos = set(matches_exact)
 
     ini_prefix = src.index("const TZ_COUNTRY_PREFIXES")
     fin_prefix = src.index("];", ini_prefix)
