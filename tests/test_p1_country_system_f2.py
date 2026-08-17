@@ -36,7 +36,10 @@ from pathlib import Path
 
 import pytest
 
+import constants
+
 _BACKEND = Path(__file__).resolve().parent.parent
+_FRONTEND = _BACKEND.parent / "frontend"
 _SCRIPT = _BACKEND / "scripts" / "country_catalog_gap.py"
 
 
@@ -333,3 +336,78 @@ def test_aggregate_rd_drops_filas_vacias_o_malformadas_no_crashea():
     assert mod._aggregate_rd_drops([{"metadata": None}, {"metadata": {}}]) == []
     assert mod._aggregate_rd_drops([{"metadata": "no es json{{{"}]) == []
     assert mod._aggregate_rd_drops([{"metadata": {"top_verified_only_drops": [["solo_nombre"]]}}]) == []
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# E. Task 2 — preselección IANA (Addendum §4): paridad TZ→país con COUNTRY_PROFILES
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+# `frontend/src/config/countries.js` gana `countryFromTimeZone(tzName)` — traduce el NOMBRE
+# de la zona horaria IANA del navegador a un código de país, JAMÁS el offset (RD y Puerto
+# Rico comparten -240 los 365 días: serían indistinguibles — la razón que el propio Addendum
+# cita para prohibirlo). Este backend no ejecuta JS: igual que
+# `test_paridad_countries_js_con_country_profiles` (F0), parsea el FUENTE con regex
+# (comentarios fuera, CRLF-safe) y verifica la propiedad — nunca la grafía de cada línea.
+
+def _js_sin_comentarios(path: Path) -> str:
+    """Mismo stripping que test_p1_country_system_f0.py: bloque `/* */` fuera primero
+    (re.S), luego `// ...` línea a línea — `splitlines()`-equivalente vía split CRLF-safe
+    (no asume qué separador usa el archivo)."""
+    src = path.read_text(encoding="utf-8")
+    return "\n".join(
+        re.sub(r"(^|\s)//.*$", r"\1", l)
+        for l in re.split(r"\r?\n", re.sub(r"/\*.*?\*/", "", src, flags=re.S))
+    )
+
+
+def _countries_js_sin_comentarios() -> str:
+    return _js_sin_comentarios(_FRONTEND / "src" / "config" / "countries.js")
+
+
+def _tz_country_codes_from_js() -> set:
+    """Códigos que `countryFromTimeZone` puede emitir por zona DEDICADA: los valores de
+    `TZ_COUNTRY_EXACT` + el 2º elemento de cada par `[prefijo, código]` de
+    `TZ_COUNTRY_PREFIXES`. (El fallback `DEFAULT_COUNTRY`='DO' para lo desconocido/ausente
+    vive en la firma de la función, no en estas tablas — pero DO igual aparece aquí porque
+    `America/Santo_Domingo` tiene su propia fila explícita, contrato Task 2 punto 1.)"""
+    src = _countries_js_sin_comentarios()
+
+    ini_exact = src.index("const TZ_COUNTRY_EXACT")
+    fin_exact = src.index("};", ini_exact)
+    codigos = set(re.findall(r":\s*'([A-Z]{2})'", src[ini_exact:fin_exact]))
+
+    ini_prefix = src.index("const TZ_COUNTRY_PREFIXES")
+    fin_prefix = src.index("];", ini_prefix)
+    codigos |= set(re.findall(r"'([A-Z]{2})'\s*\]", src[ini_prefix:fin_prefix]))
+
+    assert codigos, "No pude parsear ningún código de TZ_COUNTRY_EXACT/TZ_COUNTRY_PREFIXES"
+    return codigos
+
+
+def test_countryfromtimezone_existe_y_toma_un_nombre_de_zona():
+    src = _countries_js_sin_comentarios()
+    assert "export function countryFromTimeZone(tzName)" in src, (
+        "countryFromTimeZone debe existir y tomar un NOMBRE de zona (string) — Addendum §4 "
+        "prohíbe inferir el país desde el offset."
+    )
+
+
+def test_paridad_tz_country_map_con_country_profiles():
+    """Task 2, contrato del brief: 'every code the TZ map emits exists in
+    constants.COUNTRY_PROFILES'. Un código que la tabla TZ→país pudiera devolver sin perfil
+    backend es exactamente el drift que P1-DIET-CANON-SSOT pagó (tres tablas de dieta a mano,
+    driftaron, una sirvió Pollo a vegetarianas) — aquí el motor recibiría un país sin
+    moneda/piso/tz default.
+
+    Igualdad, no solo subconjunto: ancla ADEMÁS que Task 2 mapeó los 6 países con al menos
+    una zona propia (los 5 beta + DO vía `America/Santo_Domingo`) — no solo que lo que hay es
+    válido. Es el guard backend que complementa la mutación pedida en el brief (quitar la fila
+    de Puerto Rico ⇒ vitest RED): si esa misma fila desapareciera, el set deja de cubrir 'PR'
+    y este test también cae."""
+    codigos_tz = _tz_country_codes_from_js()
+    perfiles = set(constants.COUNTRY_PROFILES.keys())
+    assert codigos_tz == perfiles, (
+        f"TZ_COUNTRY_EXACT/PREFIXES vs COUNTRY_PROFILES divergen. "
+        f"Sin perfil backend: {codigos_tz - perfiles}. "
+        f"Perfilados sin zona dedicada: {perfiles - codigos_tz}."
+    )
