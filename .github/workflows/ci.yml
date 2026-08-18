@@ -195,6 +195,9 @@ jobs:
             echo "los 33 pasan en el workspace de desarrollo. Necesitan, o el repo privado"
             echo "\`MealfitRD-Workspace\` (un PAT), o una DB Neon de verdad."
           } >> "$GITHUB_STEP_SUMMARY"
+          # `-W error` NO: la suite emite 31 warnings conocidos. Lo que si importa
+          # es que un ERROR de setup cuenta como fallo del job aunque el resumen diga
+          # «17.906 passed» — asi entraron los 11 del grupo C, invisibles en local.
           pytest tests/ -q --tb=short -rf -m "not e2e" --timeout=120 $IGNORES
 
   backend-e2e:

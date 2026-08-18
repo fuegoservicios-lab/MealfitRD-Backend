@@ -63,3 +63,21 @@ tests/test_p2_solver_seeder_v4_batch.py
 tests/test_p3_condition_rules.py
 tests/test_p3_embed_rpm_mitigation.py
 tests/test_p4_constraint_abc.py
+
+# ── GRUPO C · exigen la carpeta de memoria PERSONAL del desarrollador ────────
+# Estos dos afirman que existen ficheros bajo
+# `~/.claude/projects/.../memory/runbook_*.md`. Esa carpeta no es de ningun
+# repo: es la memoria local de la maquina de quien programa. En un runner de
+# CI no puede existir, y no hay forma de que exista.
+#
+# No dieron «failed» sino 11 ERRORS de setup, que es por lo que se colaron: la
+# corrida local (Windows, con esa carpeta poblada) los daba en verde, y solo el
+# runner de Linux los saco. Es la razon por la que un gate se prueba corriendolo
+# de verdad y no razonandolo.
+#
+# COMO QUITARLAS: no es cuestion de credenciales ni de checkouts — es que estos
+# tests vigilan HIGIENE LOCAL, no el producto. O se convierten en un skip cuando
+# la carpeta no existe (lo correcto, y son 2 ficheros), o se aceptan como
+# comprobacion de escritorio y se quedan fuera del gate para siempre.
+tests/test_p3_cleanup_deploy_drift_sop_and_oneoff_ttl.py   # 4 errores: runbook_system_alerts_sops_2026_05_11.md
+tests/test_p3_live_13_cron_priority_runbook_drift.py       # 7 errores: runbook_cron_priority_and_synthetic_cleanup_2026_05_11.md
