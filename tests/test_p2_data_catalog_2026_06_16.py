@@ -26,11 +26,39 @@ try:
 except Exception:
     _NEON = None
 
-_skip = pytest.mark.skipif(not _NEON, reason="sin NEON_DATABASE_URL → datos del catálogo se validan en VPS/CI")
+# [P1-CI-BACKEND-LAYOUT · 2026-08-18] El guard de arriba NO basta, y la suite entera
+# se colgaba por ello: al correr los ~19.000 tests, este fichero dejaba de saltarse
+# sobre el 68% y se quedaba bloqueado en `psycopg.connect` — proceso a 0,02 s de CPU
+# por cada 10 s de reloj, sin timeout que lo rescatara.
+#
+# La causa es que pytest IMPORTA TODOS los modulos en la coleccion, antes de correr
+# nada. Y hay cinco que a nivel de MODULO hacen
+#
+#     os.environ.setdefault("NEON_DATABASE_URL", "postgresql://stub:stub@localhost:5432/stub")
+#
+# (test_p1_allergen_negation_excuse, test_p1_condition_safety_notes,
+#  test_p1_pregnancy_safety_notes, test_p1_reviewer_sees_safety_notes,
+#  test_p1_swap_macro_repair). Asi que para cuando este fichero evalua `_NEON`, la
+# variable EXISTE — con un valor de mentira. `not _NEON` es falso, el skip no salta,
+# y nos vamos a conectar a una URL que no lleva a ninguna parte.
+#
+# Reproducible en dos ficheros:
+#   pytest tests/test_p2_data_catalog_2026_06_16.py                       -> 5 passed, 4 skipped
+#   pytest tests/test_p1_swap_macro_repair.py tests/test_p2_data_...py    -> CUELGA
+#
+# La condicion honesta no es «existe la variable» sino «hay una DB de verdad». El
+# stub es literal e identico en los cinco sitios, asi que reconocerlo es exacto, no
+# heuristico. Y `connect_timeout` es el cinturon: si algun dia aparece OTRA URL
+# inalcanzable, esto falla en 5 s con su nombre en vez de colgar la suite.
+_STUB_DSN_MARK = "stub:stub@"
+if _NEON and _STUB_DSN_MARK in _NEON:
+    _NEON = None
+
+_skip = pytest.mark.skipif(not _NEON, reason="sin NEON_DATABASE_URL real → datos del catálogo se validan en VPS/CI")
 
 
 def _q(sql, params=None):
-    with psycopg.connect(_NEON) as conn:
+    with psycopg.connect(_NEON, connect_timeout=5) as conn:
         return conn.execute(sql, params or ()).fetchall()
 
 
