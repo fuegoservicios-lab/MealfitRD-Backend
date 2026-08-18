@@ -1,0 +1,65 @@
+# [P1-CI-BACKEND-LAYOUT · 2026-08-18] Lo que el gate NO puede verificar todavia.
+#
+# El job `Backend pytest` lee este fichero y IGNORA lo que aparezca aqui. Cada
+# linea lleva su razon, y el job IMPRIME la lista entera en cada corrida: una
+# exclusion silenciosa se lee como cobertura, que es peor que no tenerla.
+#
+# Como se llego a esta lista: al arreglar el layout y correr la suite entera por
+# primera vez salieron 105 fallos. Los 33 ficheros implicados se corrieron UNO A
+# UNO en el workspace real, donde los 33 pasan — o sea que NINGUNO es un bug de
+# producto: todos son del entorno. Y luego se separo la causa copiando un `.env`
+# al layout reconstruido: los fallos cayeron de 105 a 33. Ahi quedaron los dos
+# grupos de abajo, medidos y no supuestos.
+#
+# NINGUNA de estas exclusiones tapa un fallo real. Todas se pueden quitar, y como:
+
+# ── GRUPO A · necesitan el repo `MealfitRD-Workspace` (PRIVADO) ──────────────
+# La raiz reconstruida trae `CLAUDE.md` y `migrations/` (copias que el repo ya se
+# obliga a mantener sincronizadas), pero no `deploy-mealfit.ps1`, `scripts/`,
+# `scratch/` ni el `.github/` de la raiz — y estos tests auditan justo eso. Ojo:
+# el `ci.yml` que auditan NO es este; es el del repo workspace, otro fichero.
+# COMO QUITARLAS: configurar un PAT con acceso al workspace y anadir un tercer
+# checkout en `ci.yml`. Entonces se borran estas lineas y ya.
+tests/test_p1_live_2_ci_gate.py   # audita ${WORKSPACE}/.github/workflows/ci.yml + los wrappers de scripts/ (repo workspace)
+tests/test_p2_live_1_ci_includes_lint_job.py   # audita ${WORKSPACE}/.github/workflows/ci.yml (repo workspace)
+tests/test_p3_live_1_ci_docs.py   # exige ${WORKSPACE}/scripts/README.md y ${WORKSPACE}/.github/README.md
+tests/test_p2_prod_hygiene.py   # lee ${WORKSPACE}/deploy-mealfit.ps1
+tests/test_p2_deploy_deletes.py   # lee ${WORKSPACE}/deploy-mealfit.ps1
+tests/test_p2_audit_1_repo_root_cleanup.py   # exige ${WORKSPACE}/scratch/README.md y el .gitignore de la raiz
+tests/test_p3_claudemd_margin_restore.py   # mide el margen contra ficheros de la raiz del workspace
+tests/test_p1_prod_final_1.py   # idem: suelo de margen sobre la raiz del workspace
+tests/test_p1_i18n_dashboard.py   # cruza ficheros que solo estan completos en el workspace
+
+# ── GRUPO B · necesitan una base de datos Neon de verdad ─────────────────────
+# Estos NO degradan cuando no hay DB: fallan en vez de saltarse. Verificado
+# copiando un `.env` al layout reconstruido — con credenciales pasan los 24.
+#
+# COMO QUITARLAS: la via NO es darle a CI las credenciales de PRODUCCION (esta
+# suite ya escribio en prod una vez: el 92,8% de la telemetria de un dia resulto
+# ser la propia suite). Es ensenarles a SALTARSE sin DB, como ya hace
+# `test_p2_data_catalog_2026_06_16` — cuyo guard, por cierto, estaba roto y se
+# arreglo en este mismo PR.
+tests/test_p0_db_pool_pgbouncer_saturation.py
+tests/test_p0_pool_freetier_retune.py
+tests/test_p0_test_db_isolation.py
+tests/test_p1_4_humanize_preserves_raw.py
+tests/test_p1_bigfruit_gram_hint.py
+tests/test_p1_coherence_canon_density.py
+tests/test_p1_cost_instrumentation_fix.py
+tests/test_p1_country_system_f2.py
+tests/test_p1_critique_timeout_raise.py
+tests/test_p1_critique_timeout_raise_v2.py
+tests/test_p1_dm_raw_by_food.py
+tests/test_p1_embed_warm_deadline.py
+tests/test_p1_ingredient_spread.py
+tests/test_p1_menu_coherence_2.py
+tests/test_p1_modifier_only_alias.py
+tests/test_p1_next_level_batch.py
+tests/test_p1_protein_band_post_finalize.py
+tests/test_p1_qualifier_strip_fuzzy.py
+tests/test_p1_solver_seeder_v4_batch.py
+tests/test_p2_pipeline_timeout_raise.py
+tests/test_p2_solver_seeder_v4_batch.py
+tests/test_p3_condition_rules.py
+tests/test_p3_embed_rpm_mitigation.py
+tests/test_p4_constraint_abc.py

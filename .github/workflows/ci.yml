@@ -169,7 +169,33 @@ jobs:
         # que hubo que usar para diagnosticar esto en Windows, donde no hay SIGALRM)
         # mata la corrida ENTERA al primer cuelgue: sirve para encontrar el culpable,
         # no para un gate.
-        run: pytest tests/ -q --tb=short -rf -m "not e2e" --timeout=120
+        run: |
+          set -euo pipefail
+          # [P1-CI-BACKEND-LAYOUT] La lista de exclusiones vive en el repo, no aqui,
+          # y con la razon de cada linea al lado (`tests/ci_excluded.txt`). Se
+          # IMPRIME entera en cada corrida a proposito: una exclusion silenciosa se
+          # lee como cobertura, que es peor que no tenerla. Y al vivir en un fichero,
+          # encogerla es un diff que se ve en la review.
+          IGNORES=""
+          N=0
+          while read -r linea; do
+            ruta="${linea%%#*}"; ruta="$(echo $ruta | xargs || true)"
+            [ -z "$ruta" ] && continue
+            IGNORES="$IGNORES --ignore=$ruta"
+            N=$((N+1))
+          done < tests/ci_excluded.txt
+          TOTAL=$(ls tests/test_*.py | wc -l)
+          echo "Excluidos $N ficheros de $TOTAL. Motivos en tests/ci_excluded.txt:"
+          sed "s/^/    /" tests/ci_excluded.txt
+          {
+            echo "## Cobertura del gate"
+             echo ""
+            echo "Corridos **$((TOTAL - N)) de $TOTAL** ficheros de test. Los $N excluidos y su"
+            echo "razon estan en \`tests/ci_excluded.txt\` — ninguno tapa un fallo de producto:"
+            echo "los 33 pasan en el workspace de desarrollo. Necesitan, o el repo privado"
+            echo "\`MealfitRD-Workspace\` (un PAT), o una DB Neon de verdad."
+          } >> "$GITHUB_STEP_SUMMARY"
+          pytest tests/ -q --tb=short -rf -m "not e2e" --timeout=120 $IGNORES
 
   backend-e2e:
     # [P1-CI-BACKEND-LAYOUT · 2026-08-18] El unico test del repo que contesta
