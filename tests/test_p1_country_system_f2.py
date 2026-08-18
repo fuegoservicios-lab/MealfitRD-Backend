@@ -4934,9 +4934,16 @@ def test_c3_chicharron_de_cerdo_sigue_resolviendo_a_chicharron(sc):
     a 'Chicharrón' (fila CO) tras remover el alias bare 'chicharron' -- documentado en
     new_foods_mx_co_2026_08_17.json._provenance: chicharrón real (kcal 544/fat 31.3g) diverge
     >200% de 'Cerdo' genérico (kcal 169.6/fat 9.47g), la fila nueva es MÁS precisa. A diferencia
-    de 'de pollo' (test siguiente), esto NO revierte a pre-fase a propósito."""
+    de 'de pollo' (test siguiente), esto NO revierte a pre-fase a propósito.
+
+    [micro-fix ola final · 2026-08-18] El plural también se verifica: 'Chicharrones de cerdo'
+    debe seguir resolviendo a 'Chicharrón' (la mejora aceptada aplica igual al plural — verificado
+    en vivo ANTES de ensanchar el regex del guard, ya pasaba porque el guard exige 'pollo'
+    co-presente y este string no lo tiene)."""
     assert sc.normalize_name("Chicharrón de cerdo") == "Chicharrón"
     assert sc.normalize_name("chicharron de cerdo") == "Chicharrón"
+    assert sc.normalize_name("Chicharrones de cerdo") == "Chicharrón"
+    assert sc.normalize_name("chicharrones de cerdo") == "Chicharrón"
 
 
 def test_c3_chicharron_de_pollo_vuelve_a_pechuga_de_pollo(sc):
@@ -4945,9 +4952,18 @@ def test_c3_chicharron_de_pollo_vuelve_a_pechuga_de_pollo(sc):
     NO alcanza (verificado en vivo antes de escribir el guard: el NOMBRE CANÓNICO de la fila
     sigue matcheando vía CONTAINS incluso sin el alias explícito) -- el guard temprano `C3.1` en
     `shopping_calculator.normalize_name` restaura la resolución pre-fase ('Pechuga de pollo',
-    vía substring 'pollo')."""
+    vía substring 'pollo').
+
+    [micro-fix ola final · 2026-08-18, RED-first reproducido contra a0fdc11] El PLURAL
+    'chicharrones de pollo' se escapaba del guard original (`\\bchicharr[oó]n\\b` sin sufijo no
+    matchea 'chicharrones') y caía al CONTAINS de abajo, que SÍ matchea 'chicharrones' (el alias
+    plural sobrevive en la fila -- solo el bare singular se removió) -> 'Chicharrón' (cerdo),
+    mismo bug de fondo que el singular. Regex ensanchado a `\\bchicharr[oó]n(?:es)?\\b` -- mismo
+    patrón `(?:s|es)?` que `_scan_allergen_violations` ya usa para plurales españoles."""
     assert sc.normalize_name("Chicharrón de pollo") == "Pechuga de pollo"
     assert sc.normalize_name("chicharron de pollo") == "Pechuga de pollo"
+    assert sc.normalize_name("Chicharrones de pollo") == "Pechuga de pollo"
+    assert sc.normalize_name("chicharrones de pollo") == "Pechuga de pollo"
 
 
 def test_c3_bare_chicharron_sigue_resolviendo_a_chicharron(sc):

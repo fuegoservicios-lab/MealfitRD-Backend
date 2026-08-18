@@ -1987,7 +1987,13 @@ def normalize_name(orig_name: str) -> str:
     # silencio con la nutrición del CERDO (chicharrón de pollo real es ~muslo/pechuga frita, macro
     # totalmente distinto). Este guard restaura el pre-fase SOLO para 'de pollo', preservando intacta la
     # mejora aceptada de 'de cerdo'/bare (que sigue cayendo a los tiers de abajo → 'Chicharrón').
-    if re.search(r'\bchicharr[oó]n\b', _opl) and re.search(r'\bpollo\b', _opl):
+    # [micro-fix ola final · 2026-08-18] `(?:es)?` — el plural "Chicharrones de pollo" se escapaba: el
+    # alias 'chicharrones' (plural) SOBREVIVE en la fila tras remover el bare 'chicharron' (solo el
+    # singular se quitó), así que el CONTAINS de abajo lo seguía matcheando y el guard, con `\b...n\b`
+    # sin sufijo, nunca disparaba para la forma plural. Mismo patrón `(?:s|es)?` que
+    # `_scan_allergen_violations` ya usa para el plural español (fresa→fresas, pan→panes) y que
+    # `_COUNTRY_CATALOG_UNPRICED_TOKENS`/fix-round 1 de esta misma ola asumía en otros tokens.
+    if re.search(r'\bchicharr[oó]n(?:es)?\b', _opl) and re.search(r'\bpollo\b', _opl):
         return 'Pechuga de pollo'
 
     # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] Preparaciones "harina de X"/"tortilla de maíz"/"crema de coco"
