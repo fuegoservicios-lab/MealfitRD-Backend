@@ -1,26 +1,81 @@
-# [P1-LIVE-2 · 2026-05-12] CI gate para MealfitRD.IA.
+# [P1-LIVE-2 · 2026-05-12] CI gate para MealfitRD.
 #
-# Hasta que este workflow exista, el repo no tenía ejecución automática de
-# tests pre-merge. Toda la red de seguridad (~120+ tests parser-based +
-# Vitest frontend) dependía de que el desarrollador invoque pytest/vitest
-# manualmente — modo de fallo: refactor lateral (e.g. P1-SCHEDULER-1 quebró
-# 5 tests SOP por una línea reformateada) no se detectaba hasta el siguiente
-# audit manual.
+# ─────────────────────────────────────────────────────────────────────────────
+# [P1-CI-BACKEND-LAYOUT · 2026-08-18] POR QUE ESTE ARCHIVO SE REESCRIBIO ENTERO
+# ─────────────────────────────────────────────────────────────────────────────
+# Este workflow llevaba ROJO EN MAIN el 100% de las corridas — las 10 ultimas
+# revisadas, hasta el mismo dia de la reescritura. Y ni una sola por un defecto
+# del codigo: fallaba en `Set up Python`, a los 5 SEGUNDOS, con
 #
-# Este workflow corre 3 jobs en paralelo cuando el repo se conecte a GitHub:
-#   1. backend-tests : pytest del bundle parser-based + funcionales.
-#   2. frontend-tests: vitest unit + integration.
-#   3. frontend-build: vite build production (catch errores de bundle).
+#     No file in .../MealfitRD-Backend matched to [backend/requirements.txt]
+#
+# La causa es de layout, no de producto. El workflow se escribio pensando en el
+# workspace de desarrollo, donde `backend/` y `frontend/` son hermanos bajo una
+# raiz comun. Pero en `fuegoservicios-lab/MealfitRD-Backend` la RAIZ DEL
+# CHECKOUT *ES* el backend: `app.py`, `tests/`, `requirements.txt` y
+# `migrations/` cuelgan de la raiz, y de `frontend/` no hay ni rastro — es otro
+# repo. Asi que `working-directory: backend` apuntaba a un directorio que no
+# existe, y los 3 jobs de frontend a uno que nunca podria existir.
+#
+# Los otros workflows del repo YA lo sabian y lo dejaron escrito
+# (`landing-benchmark-openai.yml`: «un prefijo `backend/` rompe el job — es
+# exactamente el bug estructural que mantiene rojo a ci.yml»). O sea que el
+# diagnostico llevaba meses en el repo; lo que faltaba era el arreglo.
+#
+# El coste real no es el rojo: es que un gate que nunca puede pasar entrena a
+# leer el rojo como ruido, y entonces el rojo de verdad tampoco se lee. Es la
+# misma leccion que el techo de lint del repo frontend (P1-CI-GATE-PASSABLE).
+#
+# COMO SE ARREGLA (y por que asi)
+#
+# ~130 tests parser-based resuelven su raiz con `Path(__file__).parents[2]` y
+# leen de ahi `frontend/` (259 referencias), `backend/` (201), `migrations/`
+# (35) y `CLAUDE.md` (24). O sea que el gate necesita RECONSTRUIR el workspace.
+# Se hace con lo que es alcanzable sin secrets:
+#
+#   ${WORKSPACE}/backend/     <- este repo (checkout en subdir)
+#   ${WORKSPACE}/frontend/    <- fuegoservicios-lab/MealfitRD (PUBLICO, sin token)
+#   ${WORKSPACE}/CLAUDE.md    <- copia de backend/CLAUDE.md
+#   ${WORKSPACE}/migrations/  <- copia de backend/migrations/
+#
+# Las dos copias NO son un apaño: el repo ya se obliga a mantenerlas
+# sincronizadas. `migrations/` vive a proposito en los dos sitios
+# (P3-MIGRATIONS-SSOT: «TODA migration vive en DOS directorios mantenidos
+# sincronizados») y `CLAUDE.md` igual («copia byte-identica del backend»,
+# faf10f7). Copiar la del backend a la raiz hace que `test_p3_claudemd_cap`
+# mida la copia que las ramas EDITAN — que es mas estricto que medir la raiz,
+# no menos: el propio test se queja de que «si solo tocas una, no lo ve hasta
+# que alguien sincroniza».
+#
+# NO se checkoutea `MealfitRD-Workspace` (la raiz de verdad) porque es PRIVADO
+# y este repo no tiene ningun secret configurado; `GITHUB_TOKEN` solo alcanza al
+# repo actual. Consecuencia medida y aceptada: ~6 ficheros de test que miran
+# `deploy-mealfit.ps1` o `supabase/` se SALTAN, y varios ya lo dicen ellos
+# mismos («no existe en este checkout (repos hermanos)»). Si algun dia se
+# configura un PAT con acceso al workspace, sustituir las dos copias por un
+# tercer checkout y esos tests se encienden solos.
+#
+# QUE PASO CON LOS 3 JOBS DE FRONTEND (se fueron, a proposito)
+#
+# `frontend-tests`, `frontend-build` y `frontend-lint` corrian vitest, `vite
+# build` y eslint del OTRO repo desde aqui. Se eliminan por dos razones:
+#   1. `fuegoservicios-lab/MealfitRD` tiene su propio workflow `ci` que ya cubre
+#      lint + typecheck + test + build. Esto era una copia peor (sin typecheck).
+#   2. Fijaba el frontend a `main`, asi que una regresion del frontend ponia
+#      ROJO cualquier PR de backend sin relacion — otra vez el gate que no puede
+#      pasar, ahora por causas ajenas.
+# El checkout del frontend se queda, pero como FIXTURE: los tests parser-based
+# del backend leen su fuente, no lo ejecutan. Por eso tampoco hay `npm ci`.
 #
 # Trigger:
-#   - push a cualquier branch (gate de regresión continua).
+#   - push a cualquier branch (gate de regresion continua).
 #   - pull_request a main (gate pre-merge).
 #
-# Política:
-#   - main protegido: PR requiere los 3 jobs verde antes de mergear
-#     (configurar branch protection rule en GitHub UI tras primer push).
-#   - cualquier job rojo bloquea el merge — NO usar "merge anyway" salvo
-#     hotfix P0 documentado en PR description con plan de fix-forward.
+# Politica:
+#   - main protegido: PR requiere los jobs en verde antes de mergear
+#     (branch protection rule en la UI de GitHub).
+#   - cualquier job rojo bloquea el merge — NO usar "merge anyway" salvo hotfix
+#     P0 documentado en la descripcion del PR con plan de fix-forward.
 
 name: CI
 
@@ -39,10 +94,40 @@ jobs:
   backend-tests:
     name: Backend pytest
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # [P1-CI-BACKEND-LAYOUT] 120 y no 15. La suite son ~19.000 tests y va a ~5%
+    # por cada 200 s en un solo hilo — o sea ~55-60 min, medidos en el layout
+    # reconstruido antes de escribir esto (y medidos TAMBIEN contra el workspace
+    # real, para descartar que la reconstruccion fuera la lenta: 5% vs 4%, misma
+    # velocidad). 120 deja margen para un runner mas lento que este portatil.
+    # El 15 anterior nunca se probo porque el job moria a los 5 s.
+    # `pytest-xdist` (-n auto) lo bajaria a ~20, pero esta suite muta
+    # `sys.modules` a nivel de modulo y ya se sabe que es sensible al orden
+    # (conftest raiz, stubs de langgraph) — paralelizarla es un cambio con su
+    # propia verificacion, no un flag que se cuela en el arreglo del layout.
+    timeout-minutes: 120
     steps:
-      - name: Checkout
+      - name: Checkout backend (en subdir `backend/`)
         uses: actions/checkout@v4
+        with:
+          path: backend
+
+      - name: Checkout frontend como FIXTURE (repo publico, sin token)
+        # No se ejecuta: ~259 asserts parser-based leen su FUENTE desde
+        # `${WORKSPACE}/frontend/...`. Por eso no hay `npm ci` en este job.
+        uses: actions/checkout@v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD
+          path: frontend
+
+      - name: Reconstruir la raiz del workspace (CLAUDE.md + migrations)
+        # Ver la cabecera: las dos son copias que el repo YA se obliga a
+        # mantener sincronizadas (P3-MIGRATIONS-SSOT / CLAUDE.md byte-identica).
+        run: |
+          set -euo pipefail
+          cp backend/CLAUDE.md ./CLAUDE.md
+          cp -r backend/migrations ./migrations
+          echo "Raiz del workspace reconstruida:"
+          ls -la . | sed 's/^/  /'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,104 +141,140 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio pytest-timeout
 
-      - name: Run pytest (parser-based + functional)
+      - name: Run pytest (parser-based + funcionales)
         working-directory: backend
         env:
-          # Las suites parser-based no requieren DB real. Las E2E sí, pero
-          # se marcan con @pytest.mark.e2e y se pueden filtrar en CI sin DB.
+          # Las suites parser-based no requieren DB real. Las E2E si, y por eso
+          # se filtran con `-m "not e2e"` (marker declarado en pytest.ini).
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
+          MEALFIT_DB_BACKEND: neon
+        # Sin `-x`: con un gate que llevaba meses sin correr, parar en el primer
+        # fallo obliga a una corrida de ~1 h por cada fallo. `-rf` deja la lista
+        # completa al final; `--tb=short` la mantiene legible.
+        #
+        # `--timeout=120` NO es decoracion. Al reconstruir el layout y correr la
+        # suite entera por primera vez, se CUELGA sobre el 68% — el proceso se
+        # queda a 0,02 s de CPU por cada 10 s de reloj, con un socket en
+        # CLOSE_WAIT contra un :443 de AWS. O sea que algun test alcanza la red de
+        # verdad y se queda esperando sin timeout propio. Aislado no reproduce
+        # (los 6 ficheros de esa zona pasan en 3-4 s cada uno), asi que depende
+        # del ORDEN: algo que se importo antes deja viva una conexion.
+        #
+        # Sin esto, ese cuelgue consume los 120 min del job y vuelve a dar un rojo
+        # que no dice nada — exactamente el gate inservible que este commit arregla.
+        # Con esto, el cuelgue sale como UN test fallado CON SU NOMBRE y su stack.
+        # `--timeout-method=thread` porque el de senales no interrumpe una syscall
+        # de socket bloqueada.
+        run: pytest tests/ -q --tb=short -rf -m "not e2e" --timeout=120 --timeout-method=thread
+
+  backend-e2e:
+    # [P1-CI-BACKEND-LAYOUT · 2026-08-18] El unico test del repo que contesta
+    # «¿la comida vuelve?» corriendo SQL de verdad en vez de leer el fuente.
+    #
+    # Existe porque la ceguera de los parser-based ya costo caro:
+    # `test_p1_consumption_ledger` estuvo VERDE mientras exigia
+    # `CREATE POLICY ... auth.uid()` — sintaxis de Supabase que hacia la
+    # migracion imposible de aplicar contra Neon. Un test que solo lee texto no
+    # puede detectarlo; uno que corre SQL lo detecta a la primera.
+    #
+    # El job DESCUBRE su propio alcance (los ficheros que declaran
+    # `MEALFIT_E2E_DATABASE_URL`) en vez de llevar una lista a mano: asi no rota
+    # y se enciende solo cuando aterrice el test que lo espera
+    # (MealfitRD-Backend#8, hoy sin mergear). Si no encuentra ninguno avisa
+    # RUIDOSO al step summary en vez de fingir verde — la leccion del skip
+    # silencioso de `macro-benchmark-nightly`.
+    name: Backend E2E (Postgres desechable)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mealfit
+          POSTGRES_PASSWORD: mealfit
+          POSTGRES_DB: mealfit_e2e
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout backend (en subdir `backend/`)
+        uses: actions/checkout@v4
+        with:
+          path: backend
+
+      - name: Checkout frontend como FIXTURE (repo publico, sin token)
+        uses: actions/checkout@v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD
+          path: frontend
+
+      - name: Reconstruir la raiz del workspace (CLAUDE.md + migrations)
         run: |
-          pytest tests/ -v --tb=short -m "not e2e" -x
+          set -euo pipefail
+          cp backend/CLAUDE.md ./CLAUDE.md
+          cp -r backend/migrations ./migrations
 
-  frontend-tests:
-    name: Frontend Vitest
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
 
-      - name: Install frontend deps
-        working-directory: frontend
-        run: npm ci
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-timeout
 
-      - name: Run Vitest
-        working-directory: frontend
-        run: npm test
+      - name: Descubrir los tests E2E que saben usar un Postgres desechable
+        id: scope
+        working-directory: backend
+        run: |
+          set -uo pipefail
+          FILES=$(grep -rl "MEALFIT_E2E_DATABASE_URL" tests/ --include="*.py" | sort | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Ningun test declara MEALFIT_E2E_DATABASE_URL — el job E2E no verifico NADA."
+            {
+              echo "## ⚠️ E2E sin alcance — no corrio nada"
+              echo ""
+              echo 'Ningun fichero de `tests/` declara `MEALFIT_E2E_DATABASE_URL`, asi que el'
+              echo "job levanto un Postgres y no lo uso. No es un fallo: es que el test que"
+              echo "este job espera (MealfitRD-Backend#8, \`test_p1_pantry_roundtrip_e2e.py\`)"
+              echo "aun no esta en \`main\`. Al mergearlo, este job se enciende solo."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "files=$FILES" >> "$GITHUB_OUTPUT"
+            echo "Alcance E2E: $FILES"
+          fi
 
-  frontend-build:
-    name: Frontend build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Run E2E contra el Postgres del servicio
+        if: steps.scope.outputs.found == 'true'
+        working-directory: backend
+        env:
+          MEALFIT_E2E_DATABASE_URL: postgresql://mealfit:mealfit@127.0.0.1:5432/mealfit_e2e
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONUNBUFFERED: "1"
+        # El `if` del final es la mitad que importa: si TODO se salta, pytest
+        # sale 0 y «12 skipped» se lee como verde — que es como el gate de
+        # macro-benchmark llevaba semanas sin correr sin que nadie lo notara.
+        # Teniendo Postgres levantado, un skip total significa que la variable
+        # no llego o que el guard del test cambio; en los dos casos es un fallo.
+        run: |
+          set -uo pipefail
+          pytest ${{ steps.scope.outputs.files }} -v --tb=short | tee e2e_out.txt
+          RC=${PIPESTATUS[0]}
+          if ! grep -qE '[0-9]+ passed' e2e_out.txt && ! grep -qE '[0-9]+ failed' e2e_out.txt; then
+            echo '::error::El E2E se salto ENTERO teniendo Postgres levantado — MEALFIT_E2E_DATABASE_URL no llego al test, o su guard cambio.'
+            exit 1
+          fi
+          exit $RC
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: npm ci
-
-      - name: Vite production build
-        working-directory: frontend
-        # Vite build valida tree-shaking + import resolution + bundle size.
-        # Falla si hay imports rotos, dependencias missing, o errores de
-        # transformación que pasan vitest pero rompen prod.
-        run: npm run build
-
-  # [P2-LIVE-1 · 2026-05-12] Lint job no-bloqueante.
-  #
-  # Estado al introducir el gate: 245 errores eslint + 13 warnings pre-existentes
-  # (deuda técnica acumulada — no-useless-escape regex, no-unused-vars, no-undef
-  # `process` en utils/analytics.js). Bloquear merges sobre esa baseline
-  # paralizaría todo. Por eso `continue-on-error: true`: el job EJECUTA y reporta
-  # status visible en GitHub UI, pero NO bloquea el merge.
-  #
-  # [P2-LINT-GATE · 2026-08-14] ROADMAP CUMPLIDO. El count llegó a 5 errores y se
-  # cerraron los cinco: cuatro `no-unused-vars` triviales y uno real —
-  # `useModalAccessibility` escribía un ref DURANTE el render, que no se arregla
-  # con un `disable` porque el hook gobierna el focus-trap y el ESC de los modales
-  # anidados. `continue-on-error` fuera: el job bloquea.
-  #
-  # ⚠️ Bloquea por ERRORES, no por warnings: quedan ~180 (localStorage crudo,
-  # directivas huérfanas) y son deuda conocida y tolerada. Si esto empezara a
-  # fallar por warnings, alguien lo revertiría al primer PR rojo y volveríamos a
-  # tener telemetría en vez de un gate.
-  frontend-lint:
-    name: Frontend lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: npm ci
-
-      - name: Run eslint
-        working-directory: frontend
-        run: npm run lint
