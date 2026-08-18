@@ -155,20 +155,21 @@ jobs:
         # fallo obliga a una corrida de ~1 h por cada fallo. `-rf` deja la lista
         # completa al final; `--tb=short` la mantiene legible.
         #
-        # `--timeout=120` NO es decoracion. Al reconstruir el layout y correr la
-        # suite entera por primera vez, se CUELGA sobre el 68% — el proceso se
-        # queda a 0,02 s de CPU por cada 10 s de reloj, con un socket en
-        # CLOSE_WAIT contra un :443 de AWS. O sea que algun test alcanza la red de
-        # verdad y se queda esperando sin timeout propio. Aislado no reproduce
-        # (los 6 ficheros de esa zona pasan en 3-4 s cada uno), asi que depende
-        # del ORDEN: algo que se importo antes deja viva una conexion.
+        # `--timeout=120` es la red, no un adorno. Correr la suite entera por
+        # primera vez la descubrio COLGADA sobre el 68% (proceso a 0,02 s de CPU por
+        # cada 10 s de reloj). Ese cuelgue concreto ya esta arreglado en el commit
+        # siguiente — `test_p2_data_catalog_2026_06_16` se conectaba a una URL de
+        # mentira que le habia dejado puesta otro modulo al importarse — pero el
+        # timeout se queda: sin el, CUALQUIER futuro bloqueo de red se come los 120
+        # min del job y devuelve un rojo mudo, que es el gate inservible que este
+        # commit arregla. Con el, sale como UN test fallado, con nombre y stack.
         #
-        # Sin esto, ese cuelgue consume los 120 min del job y vuelve a dar un rojo
-        # que no dice nada — exactamente el gate inservible que este commit arregla.
-        # Con esto, el cuelgue sale como UN test fallado CON SU NOMBRE y su stack.
-        # `--timeout-method=thread` porque el de senales no interrumpe una syscall
-        # de socket bloqueada.
-        run: pytest tests/ -q --tb=short -rf -m "not e2e" --timeout=120 --timeout-method=thread
+        # Sin `--timeout-method`: el default es por SEÑAL, que en Linux SI interrumpe
+        # un `select()` bloqueado y deja seguir al resto de la suite. `thread` (el
+        # que hubo que usar para diagnosticar esto en Windows, donde no hay SIGALRM)
+        # mata la corrida ENTERA al primer cuelgue: sirve para encontrar el culpable,
+        # no para un gate.
+        run: pytest tests/ -q --tb=short -rf -m "not e2e" --timeout=120
 
   backend-e2e:
     # [P1-CI-BACKEND-LAYOUT · 2026-08-18] El unico test del repo que contesta
@@ -238,7 +239,13 @@ jobs:
         working-directory: backend
         run: |
           set -uo pipefail
-          FILES=$(grep -rl "MEALFIT_E2E_DATABASE_URL" tests/ --include="*.py" | sort | tr '\n' ' ')
+          # El `|| true` no sobra: `grep -rl` sale 1 cuando no encuentra nada, que
+          # es justo el caso normal HOY (el test que este job espera sigue en un PR
+          # sin mergear). GitHub corre los `run:` con `bash -e`, asi que sin el, el
+          # paso muere antes de poder emitir su aviso: el job se cae por su propio
+          # guard en vez de avisar. Lo tumbo su primera corrida real.
+          FILES=$(grep -rl "MEALFIT_E2E_DATABASE_URL" tests/ --include="*.py" || true)
+          FILES=$(echo $FILES | xargs || true)
           if [ -z "$FILES" ]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Ningun test declara MEALFIT_E2E_DATABASE_URL — el job E2E no verifico NADA."
