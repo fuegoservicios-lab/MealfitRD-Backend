@@ -507,7 +507,15 @@ def test_g2_los_memo_de_copy_dependen_del_locale():
     """
     plan = _read(_FRONTEND / "src" / "pages" / "Plan.jsx")
     for fn in ("getLoadingSteps", "getLoadingTips"):
-        m = re.search(rf"useMemo\(\(\) => {fn}\(\), \[([^\]]*)\]\)", plan)
+        # [re-anclado 2026-08-18] La sesión paralela (7c416c7, P1-CI-GATE-PASSABLE) cambió la
+        # forma del callback de `() => fn()` a `() => { void locale; return fn(); }` para
+        # satisfacer el linter — la PROPIEDAD que este guard protege (locale en las deps del
+        # useMemo) quedó intacta. El regex acepta ambas formas: arrow-expresión y cuerpo con
+        # llaves de un nivel, y sigue capturando el array de deps.
+        m = re.search(
+            rf"useMemo\(\(\) =>\s*(?:\{{[^{{}}]*\b{fn}\(\)[^{{}}]*\}}|{fn}\(\))\s*,\s*\[([^\]]*)\]\)",
+            plan,
+        )
         assert m, (
             f"P1-I18N-SWAP-SMOOTH: no encuentro el `useMemo` de `{fn}` en "
             "Plan.jsx. Si cambió de forma, actualiza este guard."
