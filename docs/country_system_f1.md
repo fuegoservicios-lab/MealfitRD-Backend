@@ -247,6 +247,36 @@ muere en la misma jugada. Complemento frontend: `Settings.handleSelectCountry` s
 `formData.country` (updateData) — mantiene coherente el dispositivo y la preselección de QCountry.
 Test: [`test_p1_country_renewal_profile_wins.py`](../tests/test_p1_country_renewal_profile_wins.py).
 
+### 7. Segunda renovación ES real: el sustituidor económico corría país-ciego
+
+[P1-BUDGET-CHEAPEN-COUNTRY-GATE · 2026-08-18] Con el fix §6 ya vivo, la primera renovación
+genuinamente ESPAÑOLA (plan 6a4321f5: pools Boquerones/Almejas/Garbanzos/Membrillo, review
+aprobado, `_pricing_mode=beta_no_prices`) destapó una **3ª superficie de mutación país-ciega**
+de la clase MUTATOR-PURITY que F2 cerró para swap/recalc: `_apply_budget_cheapen_pass`
+(P1-BUDGET-TIER-LEVERS) sustituyó `habas → Habichuelas rojas` y `almendras → Maní` comparando
+**RD$/lb** — y reescribió hasta el nombre del plato («Bowl Fresco de Habichuelas rojas»). Sus
+dos piernas son DO-céntricas (price map solo-RD + `_BUDGET_CHEAP_EQUIVALENTS` apunta a filas
+criollas). Gate en la CABECERA (cubre `force=True` de la convergencia T2 y los 3 call sites)
+vía el literal SSOT `pricing_mode_for_country` — con el knob maestro apagado el gate es
+inerte (byte-identidad DO). Test:
+[`test_p1_budget_cheapen_country_gate.py`](../tests/test_p1_budget_cheapen_country_gate.py).
+
+**Fast-follows con evidencia del mismo plan 6a4321f5** (warn-only, el plan se entrega):
+
+- **Léxico del coherence guard ciego a filas ES**: la lista trae «Acelgas/Almejas/Judías
+  pintas/Membrillo» y las recetas también («3 tazas de acelgas picadas», «280 g de almejas»),
+  pero `expected_sum_from_recipes` no los matchea → 4 fantasmas `presence/aggregated_only` y
+  coherencia 35/100 en el quality index. El vocabulario del lado esperado del guard es
+  DO-tuned; las filas beta de F2 no entraron. (Es el «espejo del coherence-guard» ya anotado
+  como costura en la memoria de F2, ahora con costo medido.)
+- **Un mutator inserta ingredientes por su nombre de catálogo DO**: receta «Tortilla
+  Mediterránea» (ES) con la línea literal «Orégano dominicano» mientras la lista dice
+  «Orégano» — sospechoso primario: micro-closer/fat-swap añadiendo el carrier por nombre de
+  fila DO. Misma clase MUTATOR-PURITY; auditar los closers que INSERTAN (no solo los que
+  sustituyen).
+- Menor: el boost del seeder por tercio-más-barato loguea en beta (precios NULL) — cosmético,
+  el pool salió correcto.
+
 ## Tests
 
 - [`backend/tests/test_p1_country_system_f0.py`](../tests/test_p1_country_system_f0.py) — Fase 0 (el dato, sin lectores).

@@ -33207,6 +33207,27 @@ def _apply_budget_cheapen_pass(days, form_data, force: bool = False, *,
     fecha: recibe ya la lista que puede reescribir)."""
     if not BUDGET_CHEAPEN_PASS_ENABLED or BUDGET_CHEAPEN_MAX_SUBS <= 0 or not days:
         return 0
+    # [P1-BUDGET-CHEAPEN-COUNTRY-GATE · 2026-08-18] País beta ⇒ skip TOTAL (force incluido).
+    # Detectado en la primera renovación ES real post-flip: esta pasada corría país-ciega y
+    # sustituyó 'habas → Habichuelas rojas' y 'almendras → Maní' comparando RD$/lb — precios
+    # del catálogo DO que para un plan beta no significan nada — y re-criollizando nombres que
+    # el motor acababa de elegir en español. Las DOS piernas son DO-céntricas: el price map
+    # (`_budget_build_master_price_map`) solo tiene precios RD y `_BUDGET_CHEAP_EQUIVALENTS`
+    # apunta a filas criollas. Cubre los 3 call sites (assemble + convergencia T2 + ventana
+    # rolling) por vivir en la cabecera. `pricing_mode_for_country` es el literal SSOT de T7
+    # (no un 2º chequeo `has_native_prices` a mano). Fail-open a conducta previa si algo falla.
+    # tooltip-anchor: P1-BUDGET-CHEAPEN-COUNTRY-GATE
+    try:
+        from constants import country_for_form_data as _bcg_cffd, pricing_mode_for_country as _bcg_pmfc
+        _bcg_country = _bcg_cffd(form_data or {})
+        if _bcg_pmfc(_bcg_country) == "beta_no_prices":
+            logger.info(
+                f"💰 [P1-BUDGET-CHEAPEN-COUNTRY-GATE] skip cheapen-pass: país '{_bcg_country}' sin "
+                f"precios nativos — la tabla de equivalencias y los RD$/lb son del catálogo DO."
+            )
+            return 0
+    except Exception:
+        pass
     if not force:
         try:
             from nutrition_calculator import budget_prefers_economy
