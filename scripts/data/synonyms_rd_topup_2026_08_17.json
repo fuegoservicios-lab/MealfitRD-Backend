@@ -1,0 +1,14 @@
+[
+  {
+    "item": "mereyes",
+    "target": "Merey",
+    "new_aliases": ["mereyes"],
+    "_provenance": "Task 8 (RD top-up) -- drop mas dropeado de rd_drops.json (62/30d, el mas alto de los 7). 'Merey'/'Cajuil' ya existe con precio (fdc 170162); el plural 'mereyes' no matcheaba ningun tier (CONTAINS sobre 'merey' rompe boundary por la 's', fuzzy ratio 0.833 < 0.87 threshold). Alergeno: 'merey' YA vive en _ALLERGEN_SYNONYMS['frutos secos'] (graph_orchestrator.py) y el scanner tolera plural via (?:s|es)? -- verificado en vivo, CERO cambio de vocabulario necesario."
+  },
+  {
+    "item": "rabanos",
+    "target": "Rábano",
+    "new_aliases": ["rabanos"],
+    "_provenance": "Task 8 (RD top-up) -- refuerzo determinista del fix de '_NORMALIZE_STOPS' (en laminas/en lamina): 'rabanos en laminas' ya resuelve via FUZZY (INTENTO 5, ratio 0.923) tras el stop, pero el plural bare 'rabanos' sin este alias tambien dependia de esa misma fuzzy -- este alias lo hace determinista (EXACT/CONTAINS, no probabilistico) para 'rabanos' solo y cualquier otra frase que lo contenga como palabra completa."
+  }
+]

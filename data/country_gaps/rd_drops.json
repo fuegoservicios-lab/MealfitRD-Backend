@@ -1,9 +1,9 @@
 {
   "mode": "rd-drops",
-  "generated_at": "2026-08-17T07:12:55.467361+00:00",
+  "generated_at": "2026-08-18T02:36:38.265540+00:00",
   "lookback_days": 30,
   "source_node": "_creativity_kpi_job",
-  "cron_runs_examined": 338,
+  "cron_runs_examined": 339,
   "distinct_foods": 7,
   "top_drops": [
     {

@@ -814,6 +814,14 @@ def condrules():
     return _cr
 
 
+@pytest.fixture(scope="module")
+def hz():
+    """`humanize_ingredients` -- módulo liviano (sin DB a nivel de import), pero por fixture de
+    módulo para paridad de estilo con `sc`/`go`/`condrules` de arriba."""
+    import humanize_ingredients as _hz
+    return _hz
+
+
 def _term_matches(term: str, text: str) -> bool:
     """El MISMO matcher que producción usa en `_scan_allergen_violations`/`_scan_diet_violations`:
     `\\b<term>(?:s|es)?\\b` sobre texto accent-stripped + lower. Reusar este matcher (no un `in`
@@ -1475,6 +1483,14 @@ _DISH_TEMPLATES_PR_US_NAMES = frozenset({
     "Papas ralladas", "Chili con carne",
 })
 
+# [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] La ÚNICA alta de fila nueva del top-up RD (Hummus
+# — ver Sección K). Espejo de los 3 frozensets de arriba, mismo propósito: excluir del sweep de
+# "no debe reconocerla" (SÍ debe reconocerla — es el propósito de su token en
+# `_COUNTRY_CATALOG_UNPRICED_TOKENS`). "Merey"/"Rábano" NO entran aquí: son filas PRICED
+# pre-existentes que solo ganaron un alias (mereyes/rabanos) — nunca deben aparecer en
+# `is_country_catalog_unpriced_item`, ni antes ni después de esta task.
+_DISH_TEMPLATES_RD_TOPUP_NAMES = frozenset({"Hummus"})
+
 
 @pytest.fixture(scope="module")
 def sc():
@@ -1710,9 +1726,12 @@ def test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_cat
     # `_COUNTRY_CATALOG_UNPRICED_TOKENS`), así que no son "falsos positivos" si aparecen True.
     # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] extendido de nuevo: también excluye las 62 altas
     # PR/US — mismo motivo, ESAS sí deben reconocerse (es el propósito de esta task).
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] extendido una 4ª vez: excluye "Hummus" (el
+    # top-up RD) — mismo motivo, es el propósito de su token.
     candidatos = (
         (nombres_catalogo | nombres_pools)
         - _DISH_TEMPLATES_ES_NAMES - _DISH_TEMPLATES_MX_CO_NAMES - _DISH_TEMPLATES_PR_US_NAMES
+        - _DISH_TEMPLATES_RD_TOPUP_NAMES
     )
 
     falsos_positivos = sorted(n for n in candidatos if sc.is_country_catalog_unpriced_item(n))
@@ -3540,3 +3559,521 @@ def test_ningun_template_o_pool_pr_us_usa_melocoton_debe_usar_duraznos_canonico(
         nombres_pool.update(pool_us.get(key) or [])
     ofensores_pool = sorted(n for n in nombres_pool if "melocoton" in n.lower())
     assert not ofensores_pool, f"COUNTRY_POOLS['US'] referencia 'melocoton': {ofensores_pool}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SECCIÓN K (Task 8) — Top-up RD (`rd_drops.json`, `--rd-drops`, T1) + medidas caseras por país
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# `rd_drops.json` (338 corridas de `_creativity_kpi_job`/30d, T1 `--rd-drops`) midió 7 alimentos
+# distintos dropeados por VERIFIED-ONLY en planes RD reales: mereyes(62), «2–3 ciruelas»(16),
+# tortilla(8), hummus(6), requesón(6), azúcar(4), rábanos en láminas(4). A diferencia de T5-T7
+# (catálogo por país nuevo), esta task topea el catálogo RD MISMO — así que el análisis por-item
+# discrimina entre 3 clases de fix bien distintas:
+#   (a) SINÓNIMO sobre fila YA PRICED (mereyes→Merey, rabanos→Rábano) — el alimento existe, solo
+#       falta el alias plural/preparación.
+#   (b) ALTA genuina SIN precio a propósito (hummus) — mismo mecanismo P1-BAKING-STAPLES/
+#       P1-COUNTRY-CATALOG-UNPRICED que T5-T7, reusado para RD por falta de precio verificado HOY.
+#   (c) FIX de parsing/normalización, CERO cambio de catálogo («2–3 ciruelas» — contaminación de
+#       un rango numérico líder; «rábanos en láminas» — preparación sin stop-word).
+# Y 3 decisiones de NO ACTUAR, cada una con evidencia (no simple omisión):
+#   tortilla (bare) — AMBIGUO clínicamente (omelette vs pan, huevo vs gluten) — se deja dropeando.
+#   requesón — YA RESUELTO como efecto colateral de T5 (fila «Requesón» exacta) — perseguir el
+#       «Queso ricotta» que el brief original citaba crearía un alias muerto.
+#   azúcar — INTENCIONAL (motor clínico DM2 lo trata como token OFENSOR a sustituir).
+#
+# Medidas caseras por país: auditoría de `humanize_ingredients.DOMINICAN_HOUSEHOLD_MEASURES`
+# (consumida SOLO por `humanize_ingredient`/`humanize_plan_ingredients`, sin country-awareness,
+# corre UNCONDICIONALMENTE para TODO plan en `assemble_plan_node` — graph_orchestrator.py:38453)
+# contra las 140 altas T5-T7: 26/140 colisionaban por substring-sin-boundary (misma clase que
+# Piñones⊂Champiñones, T5 fix-round 1) o por "preparación distinta" (harina de X, bolitas de X,
+# X rallado — mismo patrón que `resolve_preparation_distinct` cierra del lado de compras). 15
+# quedan cerradas por el fix de esta task (word-boundary + reuso de `resolve_preparation_distinct`
+# + una whitelist estrecha de 3 frases); 11 quedan A PROPÓSITO (mismo alimento-categoría, solo
+# pierden especificidad regional — no son bugs); 1 queda documentada sin fix (single-case, baja
+# severidad). DO byte-idéntico: verificado que las 44 claves RD propias siguen resolviendo, y que
+# el guard de "form mismatch" NUNCA dispara para un 'rallado' bare (solo 3 frases whitelisted).
+
+_RD_TOPUP_NEW_FOODS_JSON = _BACKEND / "scripts" / "data" / "new_foods_rd_topup_2026_08_17.json"
+_RD_TOPUP_SYNONYMS_JSON = _BACKEND / "scripts" / "data" / "synonyms_rd_topup_2026_08_17.json"
+
+
+def _load_rd_topup_new_foods() -> list:
+    with open(_RD_TOPUP_NEW_FOODS_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_rd_topup_synonyms() -> list:
+    with open(_RD_TOPUP_SYNONYMS_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── K0. Los data files del top-up existen con la forma esperada ─────────────────────────────────
+
+def test_rd_topup_new_foods_json_forma_esperada():
+    recs = _load_rd_topup_new_foods()
+    assert len(recs) == 1, "Task 8 contrato: 1 sola alta genuina (Hummus)"
+    assert recs[0]["name"] == "Hummus"
+    assert recs[0]["fdc_id"] == 174289
+    assert recs[0]["category"] == "Despensa"
+    assert isinstance(recs[0]["aliases"], list) and "humus" in recs[0]["aliases"]
+
+
+def test_rd_topup_synonyms_json_forma_esperada():
+    syns = _load_rd_topup_synonyms()
+    items = {s["item"]: s["target"] for s in syns}
+    assert items == {"mereyes": "Merey", "rabanos": "Rábano"}
+
+
+# ── K1. mereyes (62 drops, el más alto de los 7) — alias sobre "Merey" ("Cajuil" es alias, no el
+#        nombre canónico -- corrección al brief original) ──────────────────────────────────────
+
+def test_mereyes_resuelve_a_merey(sc):
+    for q in ("mereyes", "Mereyes", "30 g de mereyes", "cajuil", "merey", "Cajuil"):
+        assert sc.normalize_name(q) == "Merey", f"{q!r} debe resolver a 'Merey'"
+
+
+def test_mereyes_fuzzy_ratio_confirma_que_el_alias_explicito_era_necesario():
+    """Evidencia de por qué NO bastaba con la tolerancia fuzzy existente (a diferencia de
+    'rábanos'/'ciruelas', que sí resuelven vía FUZZY sin alias nuevo): el ratio 'mereyes' vs
+    'merey' es 0.833, por debajo del umbral 0.87 de `normalize_name` INTENTO 5."""
+    import difflib
+    ratio = difflib.SequenceMatcher(None, "mereyes", "merey").ratio()
+    assert ratio < 0.87
+    assert abs(ratio - 0.833) < 0.01
+
+
+def test_mereyes_es_verificado_para_compras_tras_el_alias(sc):
+    """Merey YA tiene precio real (fdc 170162) -- a diferencia de Hummus, mereyes NO necesita el
+    mecanismo unpriced-keep; debe sobrevivir el aggregator con costo real, no CATÁLOGO SIN PRECIO."""
+    assert sc._is_verified_for_shopping("mereyes") is True
+    assert sc.is_country_catalog_unpriced_item("Merey") is False
+
+
+def test_mereyes_dispara_backstop_frutos_secos_sin_cambio_de_vocabulario(go):
+    """'merey' YA vivía en `_ALLERGEN_SYNONYMS['frutos secos']` ANTES de esta task, y el scanner
+    tolera plural vía `(?:s|es)?` (`_scan_allergen_violations`) -- verificado en vivo que el
+    plural 'mereyes' SÍ dispara el backstop. Contraste explícito con T5-T7: mereyes NO necesitó
+    una 4ª entrada de vocabulario (a diferencia de percebe/boqueron/trucha/bacalaitos, que sí)."""
+    plan = {"days": [{"meals": [{"name": "Merienda", "ingredients": ["30 g de mereyes"]}]}]}
+    violations = go._scan_allergen_violations(plan, ["Frutos Secos"])
+    assert violations, "mereyes debe violar la alergia a frutos secos"
+    assert violations[0][2] == "merey"
+
+
+# ── K2. "2–3 ciruelas" (16 drops) — contaminación de PARSING, NO alta de catálogo ────────────────
+
+@pytest.mark.parametrize("raw", ["2–3 ciruelas", "2-3 ciruelas", "2 – 3 ciruelas", "2 - 3 ciruelas"])
+def test_rango_numerico_lider_colapsa_al_mayor_y_resuelve_via_parse_quantity(sc, raw):
+    """El consumidor REAL del aggregator (`_parse_quantity`, no solo `normalize_name` directo):
+    el rango CONTAMINADO debe colapsar al valor MAYOR (mismo criterio que
+    `humanize_ingredients._grammar_lead_value` ya usa para display, y la filosofía "pecarse de
+    comprar de más" de P1-CITRUS-JUICE-YIELD) y resolver a 'Ciruela'."""
+    qty, unit, name = sc._parse_quantity(raw, apply_yield_multiplier=False)
+    assert name == "Ciruela", f"{raw!r} -> name={name!r}"
+    assert qty == 3.0, f"{raw!r} -> qty={qty!r}, esperaba 3.0 (el valor MAYOR del rango)"
+    assert unit == "unidad"
+
+
+def test_rango_numerico_lider_normalize_name_directo_no_recibe_el_fix_a_proposito(sc):
+    """El colapso de rango vive en `_preprocess_nlp_quantities`, que SOLO se invoca dentro de
+    `_parse_quantity` -- `normalize_name` llamada directa (sin pasar por el parser de cantidad)
+    NUNCA ve el string preprocesado. Esto es correcto: `normalize_name` resuelve NOMBRES, no
+    strings-con-cantidad; el consumidor real (aggregator/`record_verified_only_drop`) siempre
+    pasa por `_parse_quantity` primero (ver el test parametrizado de arriba, que sí es el
+    contrato real) -- este test ancla que NO hay una ilusión de doble cobertura."""
+    assert sc.normalize_name("2–3 ciruelas") != "Ciruela"
+
+
+def test_ciruela_ya_existe_en_catalogo_con_precio_cero_cambio_de_catalogo(sc):
+    """Ancla la decisión del brief: 'Ciruela' YA existe con precio -- el fix es 100% parsing."""
+    assert sc.normalize_name("Ciruela") == "Ciruela"
+    assert sc._is_verified_for_shopping("Ciruela") is True
+
+
+def test_rango_no_afecta_una_cantidad_simple_sin_guion(sc):
+    """Byte-identidad del parser para el caso común (sin rango): '3 ciruelas' nunca pasó por la
+    rama nueva -- confirma que el fix no introduce ningún efecto para cantidades normales."""
+    assert sc._parse_quantity("3 ciruelas", apply_yield_multiplier=False) == (3.0, "unidad", "Ciruela")
+
+
+# ── K3. "rábanos en láminas" (4 drops) — stop de preparación + alias plural determinista ────────
+
+@pytest.mark.parametrize("raw", ["rábanos en láminas", "rabanos en laminas", "4 rábanos en láminas",
+                                  "un rábano en láminas", "Rábano en lámina"])
+def test_rabanos_en_laminas_resuelve_a_rabano(sc, raw):
+    assert sc.normalize_name(raw) == "Rábano", f"{raw!r} debe resolver a 'Rábano'"
+
+
+def test_rabanos_en_laminas_via_parse_quantity(sc):
+    assert sc._parse_quantity("4 rábanos en láminas", apply_yield_multiplier=False) == (4.0, "unidad", "Rábano")
+
+
+def test_rabanos_bare_plural_ahora_es_determinista_no_solo_fuzzy(sc):
+    """El alias explícito 'rabanos' (Task 8) hace el plural bare determinista (tier EXACT/CONTAINS)
+    -- antes de este alias, 'rábanos' SOLO resolvía vía FUZZY (ratio 0.923, probabilístico)."""
+    assert sc.normalize_name("rábanos") == "Rábano"
+    row = next(r for r in sc.get_master_ingredients() if r["name"] == "Rábano")
+    assert "rabanos" in [a.lower() for a in (row.get("aliases") or [])]
+
+
+def test_en_laminas_es_stop_generico_no_especifico_de_rabano(sc):
+    """El stop 'en láminas'/'en lámina' vive en `_NORMALIZE_STOPS` (genérico, mismo nivel que 'en
+    rodajas'/'en trozos'/'en lonjas') -- no un guard puntual de Rábano. Ancla que beneficia a
+    OTRO alimento sin alias plural dedicado, no solo el caso medido (mereyes/rábano sí tienen
+    alias explícito ahora -- ver K1/K3 -- así que por sí solos no aíslan esta contribución).
+    'Remolacha' es un ejemplo REAL donde el stop es la única vía: sin él, 'remolachas en láminas'
+    NO resuelve por ningún tier (CONTAINS rompe boundary en el plural 'remolachaS', igual que
+    'rabano'/'merey'; fuzzy contra el string completo cae bajo 0.87) -- verificado en vivo
+    revirtiendo el stop temporalmente (mutación, ver task-8-report.md)."""
+    assert sc.normalize_name("Remolachas en láminas") == "Remolacha"
+    assert sc.normalize_name("remolachas en laminas") == "Remolacha"
+
+
+# ── K4. hummus (6 drops) — alta genuina, SIN precio a propósito (mismo mecanismo P1-COUNTRY-
+#        CATALOG-UNPRICED que T5-T7, reusado para RD por falta de precio, no por país beta) ─────
+
+def test_hummus_resuelve_y_tiene_fdc_real(sc):
+    for q in ("hummus", "Hummus", "humus", "hummus de garbanzo"):
+        assert sc.normalize_name(q) == "Hummus", f"{q!r} debe resolver a 'Hummus'"
+    row = next(r for r in sc.get_master_ingredients() if r["name"] == "Hummus")
+    assert row["fdc_id"] == 174289
+    assert row["price_per_lb"] == 0 and row["price_per_unit"] == 0
+    assert row["nutrition_source"] == "usda"
+
+
+def test_hummus_atwater_consistente(sc):
+    row = next(r for r in sc.get_master_ingredients() if r["name"] == "Hummus")
+    atwater = (4 * float(row["protein_g_per_100g"]) + 4 * float(row["carbs_g_per_100g"])
+               + 9 * float(row["fats_g_per_100g"]))
+    ratio = float(row["kcal_per_100g"]) / atwater
+    assert 0.40 <= ratio <= 1.40, f"Atwater ratio {ratio} fuera de banda de sanidad"
+
+
+def test_hummus_es_country_catalog_unpriced_item(sc):
+    assert sc.is_country_catalog_unpriced_item("Hummus") is True
+    assert sc._is_verified_for_shopping("Hummus") is False
+
+
+def test_hummus_no_depende_del_knob_country_system(sc, monkeypatch):
+    """A diferencia de 'tortilla de maiz' (T6 Critical #2, el ÚNICO de los 140+1 tokens
+    knob-dependiente), 'hummus' NO depende de MEALFIT_COUNTRY_SYSTEM -- es RD top-up, no país
+    beta. Debe reconocerse CON el knob apagado (default) y encendido, idéntico."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    assert sc.is_country_catalog_unpriced_item("Hummus") is True
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    assert sc.is_country_catalog_unpriced_item("Hummus") is True
+
+
+def test_hummus_sobrevive_en_el_agregador_real_como_catalogo_sin_precio(sc, monkeypatch):
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+    result = sc.aggregate_and_deduct_shopping_list(["1 pote de hummus"], structured=True)
+    items = result.get("items") if isinstance(result, dict) else result
+    hummus_item = next((i for i in items if i.get("name") == "Hummus"), None)
+    assert hummus_item is not None, "hummus no debe dropearse del agregador real"
+    assert hummus_item.get("display_category") == "CATÁLOGO SIN PRECIO"
+    assert hummus_item.get("estimated_cost_rd") is None
+
+
+def test_hummus_no_vocabulario_alergeno_sesamo_no_existe_como_clase(go):
+    """[hallazgo documentado, no un gap que esta task deba cerrar] El wizard tiene 6 chips de
+    alergia (Lácteos/Gluten/Huevo/Mariscos/Frutos Secos/Soya, `QAllergies.jsx`) -- NINGUNO es
+    'Sésamo'/'Ajonjolí', y `_ALLERGEN_SYNONYMS` no tiene esa clase. El tahini de hummus (y
+    'Ajonjolí' mismo, fila del catálogo YA existente pre-Task-8) no tiene ninguna clase de alergia
+    a la que enganchar -- verificado que un alérgico a 'Frutos Secos' NO ve a hummus como
+    violación (correcto: garbanzo/sésamo no son frutos secos), pero tampoco existe ninguna clase
+    'sésamo' contra la que probar. Crear esa clase (chip nuevo + wiring de 4 vocabularios) es una
+    task de scope mayor, fuera de este top-up."""
+    plan = {"days": [{"meals": [{"name": "Merienda", "ingredients": ["1 pote de hummus"]}]}]}
+    assert go._scan_allergen_violations(plan, ["Frutos Secos"]) == []
+    assert "sesamo" not in go._ALLERGEN_SYNONYMS and "sésamo" not in go._ALLERGEN_SYNONYMS
+
+
+# ── K5. tortilla bare (8 drops) — AMBIGUO, DECISIÓN: dejar dropeando (documentado con evidencia) ─
+
+def test_tortilla_bare_sigue_sin_alias_por_diseno(sc):
+    """DECISIÓN (Task 8, con evidencia): bare 'tortilla' es AMBIGUO en es-DO entre DOS alimentos
+    clínicamente opuestos -- 'tortilla de huevos' (omelette, `dish_templates.json` línea 11:
+    "Tortilla de huevos con espinaca y queso fresco") y 'tortilla de trigo/integral/maíz' (pan
+    plano con gluten para trigo/integral). Un alias por defecto acertaría solo la mitad de las
+    veces y podría alimentar gluten a quien pidió huevo (o viceversa) -- riesgo clínico real, no
+    solo cosmético. Se deja DROPEANDO a propósito."""
+    assert sc.normalize_name("tortilla") == "Tortilla", "pass-through sin resolver, a propósito"
+
+
+def test_tortilla_de_huevos_omelette_es_el_otro_lado_de_la_ambiguedad():
+    """Confirma la mitad 'omelette' de la ambigüedad citada arriba, con evidencia del catálogo RD
+    real (no solo afirmación)."""
+    with open(_BACKEND / "data" / "dish_templates.json", encoding="utf-8") as f:
+        rd = json.load(f)
+    omelette = [t["name"] for t in rd["templates"] if "tortilla de huevo" in t["name"].lower()]
+    assert omelette, "dish_templates.json (RD) debe conservar el plato de tortilla-omelette citado como evidencia"
+
+
+def test_tortilla_de_maiz_knob_gateado_de_t6_sigue_intacto(sc, monkeypatch):
+    """No-regresión explícita: la decisión de NO aliasear bare 'tortilla' NO interactúa con la
+    máquina knob-gateada de T6 para 'tortilla de maíz' (Critical #2 fix-round 1) -- sigue
+    pass-through con el knob apagado y canonizando con el knob encendido, byte-idéntico a antes
+    de esta task."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    assert sc.resolve_preparation_distinct("tortillas de maíz") == (True, None)
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    assert sc.resolve_preparation_distinct("tortillas de maíz") == (True, "Tortilla de maíz")
+
+
+# ── K6. requesón (6 drops) — YA RESUELTO por T5 (fila "Requesón"); decisión: NO tocar
+#        "Queso ricotta" (evita un alias muerto / shadowed) ─────────────────────────────────────
+
+def test_requeson_ya_resuelve_a_su_propia_fila_efecto_colateral_de_t5(sc):
+    for q in ("requesón", "requeson", "Requesón"):
+        assert sc.normalize_name(q) == "Requesón", f"{q!r} debe resolver a 'Requesón' (T5)"
+    assert sc.is_country_catalog_unpriced_item("Requesón") is True
+
+
+def test_queso_ricotta_no_gana_alias_requeson_evita_alias_muerto(sc):
+    """DECISIÓN (con evidencia): 'Queso ricotta' (fila PRICED distinta, pre-existente) NO debe
+    ganar un alias 'requesón' -- 'Requesón' (T5) ya reclama esa cadena exacta en el tier EXACT de
+    `normalize_name` (INTENTO 1, corre sobre TODOS los nombres/aliases sin distinguir self-name
+    de alias). Cualquier alias 'requesón' añadido a Queso ricotta quedaría shadowed (dead code),
+    la misma clase de trampa que 'Duraznos'/'melocoton' (T7 Important #3)."""
+    row = next(r for r in sc.get_master_ingredients() if r["name"] == "Queso ricotta")
+    aliases_lower = [a.lower() for a in (row.get("aliases") or [])]
+    assert "requeson" not in aliases_lower and "requesón" not in aliases_lower
+
+
+def test_requeson_y_queso_ricotta_coexisten_sin_colision_cada_uno_por_su_propio_nombre(sc):
+    """'Requesón' (T5, unpriced) y 'Queso ricotta' (pre-existente, priced) comparten fdc_id 170851
+    (misma identidad nutricional -- ricotta) pero NO colisionan: cada una resuelve por su PROPIO
+    nombre exacto, nunca se pisan."""
+    assert sc.normalize_name("Requesón") == "Requesón"
+    assert sc.normalize_name("Queso ricotta") == "Queso ricotta"
+
+
+# ── K7. azúcar (4 drops) — INTENCIONAL, verificado contra el motor clínico determinista ─────────
+
+def test_azucar_no_existe_en_el_catalogo_a_proposito(sc):
+    rows = sc.get_master_ingredients()
+    nombres = {constants.strip_accents(r["name"]).lower() for r in rows}
+    assert "azucar" not in nombres, "catálogo NO debe tener una fila 'azúcar' bare"
+    # 'azúcar' como palabra CABEZA (no negada por 'sin', ej. 'Yogurt griego sin azúcar' -- ESE
+    # SÍ es un alimento real, lácteo, no una fila de azúcar) solo debe darse en 'Azúcar morena'
+    # (T7, tablilla/producto comercial específico, no el bare que esta decisión deja fuera).
+    cabeza_azucar = sorted(
+        r["name"] for r in rows
+        if re.match(r'^azucar\b', constants.strip_accents(r["name"]).lower())
+    )
+    assert cabeza_azucar == ["Azúcar morena"], f"filas con 'azúcar' como palabra cabeza: {cabeza_azucar}"
+    assert sc.normalize_name("azúcar") == "Azúcar", "pass-through sin resolver, a propósito"
+
+
+def test_azucar_es_token_ofensor_del_motor_clinico_dm2(condrules):
+    """Evidencia de la intención: `_DM2_SUGAR_SUBS` trata azucar/azúcar/sugar como OFENSOR a
+    sustituir DETERMINÍSTICAMENTE por Stevia -- una fila de catálogo competiría con esa
+    sustitución en vez de reforzarla."""
+    offender_tokens = {t for group in condrules._DM2_SUGAR_SUBS for t in group[0]}
+    assert {"azucar", "azúcar", "sugar"} <= offender_tokens
+    target = next(g[1] for g in condrules._DM2_SUGAR_SUBS if "azucar" in g[0])
+    assert target == "Stevia al gusto"
+
+
+def test_azucar_documentada_como_sin_fila_de_catalogo_en_ignored_tracking_terms():
+    """`constants.IGNORED_TRACKING_TERMS` documenta explícitamente (comentario in-line, pre-Task-8)
+    que 'azucar' es un condimento "sin fila de catálogo ni la merece" -- la decisión de esta task
+    (no dar de alta) es continuista con una decisión YA tomada, no una nueva."""
+    assert "azucar" in constants.IGNORED_TRACKING_TERMS
+
+
+def test_azucar_morena_si_existe_variante_especifica_de_t7_intacta(sc):
+    """Contraste: T7 SÍ dio de alta 'Azúcar morena' (brown sugar, producto comercial específico
+    US) sin que eso contradiga la decisión de NO dar de alta el 'azúcar' bare -- son alimentos
+    culinariamente distintos (crudo/refinado vs bare) y la decisión de Task 8 no la toca."""
+    assert sc.normalize_name("azúcar morena") == "Azúcar morena"
+
+
+# ── K8. Medidas caseras por país — auditoría de `humanize_ingredients` contra las 140 altas
+#        T5-T7 + fix de la clase de bug + byte-identidad DO ─────────────────────────────────────
+
+_HOUSEHOLD_COLLISION_FIXED = frozenset({
+    # Word-boundary (11): la clave era substring SIN boundary ("pan"⊂"espaÑOL"/"maZAPÁN"/etc,
+    # "aji"⊂"guAJIllo", "queso"⊂"reQUESOn") o el plural rompía boundary contra la forma singular
+    # de la clave ("huevo" no boundary-matchea "huevoS").
+    "Chorizo español", "Panceta ibérica", "Mazapán", "Panela", "Panapén",
+    "Panecillos ingleses", "Mezcla para panqueques", "Panecillos de mantequilla",
+    "Chile guajillo", "Requesón", "Huevos rellenos",
+    # Reuso de `resolve_preparation_distinct` (2): "harina de X" es un producto DISTINTO de la
+    # raíz/grano fresco -- SSOT compartido con P1-PREP-COLLAPSE-GUARD.
+    "Harina de yuca",
+    # [nota] "Tortilla de maíz" también cierra vía este MISMO reuso -- `_PREP_TORTILLA_MAIZ_RE`
+    # (T6) marca `resolve_preparation_distinct` como handled=True SIEMPRE (pass-through con el
+    # knob apagado, canoniza con el knob encendido), así que el household-measure genérico de
+    # "tortilla" (45 g, calibrado para trigo/RD) nunca se aplica a la de maíz -- MEJORA
+    # deliberada, no accidente: una tortilla de maíz pesa ~25-30g, no 45g: la conversión vieja
+    # ya asumía el país equivocado.
+    "Tortilla de maíz",
+    # Whitelist local de "form mismatch" (2): producto PROCESADO (tots/hash-browns) expresado
+    # como si fuera el vegetal entero.
+    "Bolitas de papa", "Papas ralladas", "Pan rallado",
+})
+
+_HOUSEHOLD_COLLISION_ACCEPTED = (
+    "Jamón serrano", "Jamón ibérico", "Jamón de cocinar", "Jamón de sándwich",
+    "Longaniza puertorriqueña", "Chuleta ahumada", "Queso de papa",
+    "Queso en hebras", "Queso provolone", "Pan de maíz",
+)
+
+
+def test_household_measure_collisions_140_altas_t5_t7_auditadas():
+    """La auditoría requerida por el contrato: de las 140 altas T5-T7, exactamente 26 colisionaban
+    con `DOMINICAN_HOUSEHOLD_MEASURES` -- 16 cerradas por el fix de esta task
+    (`_HOUSEHOLD_COLLISION_FIXED`) + 10 aceptadas (`_HOUSEHOLD_COLLISION_ACCEPTED`) = 26. La 27ª
+    colisión de la auditoría original ("Especias para arroz con dulce") NO es una colisión de
+    `DOMINICAN_HOUSEHOLD_MEASURES` -- es del fallback GENÉRICO de granos (mecanismo separado, ver
+    `test_household_measure_residual_documentado_especias_arroz`), por eso no cuenta aquí."""
+    assert len(_HOUSEHOLD_COLLISION_FIXED) == 16
+    assert len(_HOUSEHOLD_COLLISION_ACCEPTED) == 10
+    assert len(_HOUSEHOLD_COLLISION_FIXED) + len(_HOUSEHOLD_COLLISION_ACCEPTED) == 26
+    assert not (_HOUSEHOLD_COLLISION_FIXED & set(_HOUSEHOLD_COLLISION_ACCEPTED)), "sin solape"
+
+
+def test_household_measure_collisions_cerradas(hz):
+    for nm in _HOUSEHOLD_COLLISION_FIXED:
+        out = hz.humanize_ingredient(f"120 g de {nm}")
+        assert out == f"120 g de {nm}", (
+            f"{nm!r} sigue colisionando con una clave de DOMINICAN_HOUSEHOLD_MEASURES tras el "
+            f"fix de word-boundary/form-mismatch: {out!r}"
+        )
+
+
+def test_household_measure_collisions_aceptadas_mismo_categoria(hz):
+    """Estas 10 SÍ son un match legítimo -- misma categoría de alimento (jamón/longaniza/chuleta/
+    queso/pan), solo pierden especificidad regional (mismo tipo de imprecisión, ya aceptada, que
+    P2-DISPLAY-NAME-SPECIFICITY documenta para el catálogo RD pre-existente). Ancla que estas NO
+    deben "arreglarse" sin una decisión de diseño explícita -- no son bugs."""
+    for nm in _HOUSEHOLD_COLLISION_ACCEPTED:
+        out = hz.humanize_ingredient(f"120 g de {nm}")
+        assert out != f"120 g de {nm}", f"{nm!r}: se esperaba un match aceptado, cayó a gramos: {out!r}"
+
+
+def test_household_measure_residual_documentado_especias_arroz(hz):
+    """El ÚNICO residual del fallback GENÉRICO (no de la tabla RD): 'Especias para arroz con
+    dulce' (PR) sigue mostrando '½ taza' -- 'arroz' es palabra COMPLETA ahí (no un substring roto),
+    así que el word-boundary no lo cierra; queda documentado como baja severidad (mezcla de
+    especias en gramos de un dígito, cosmético) en vez de sumar un 3er guard por un solo caso."""
+    out = hz.humanize_ingredient("120 g de Especias para arroz con dulce")
+    assert out == "½ taza de Especias para arroz con dulce"
+
+
+def test_household_measures_do_byte_identico_44_claves_propias_siguen_resolviendo(hz):
+    for key, entry in hz.DOMINICAN_HOUSEHOLD_MEASURES.items():
+        qty_g = entry["weight"] * 2
+        out = hz.humanize_ingredient(f"{qty_g:g} g de {key}")
+        assert entry["plural"] in out, f"clave RD {key!r} dejó de resolver por sí misma: {out!r}"
+
+
+def test_household_measures_do_form_mismatch_guard_no_es_generico_verificado_con_queso_rallado(hz):
+    """El guard de "form mismatch" está ESCOPADO a 3 frases (bolitas de papa(s)/papas
+    ralladas/pan rallado) -- NUNCA a un 'rallado' bare, para no arriesgar un nombre RD real como
+    'queso rallado'/'zanahoria rallada' (ninguno vive hoy en `dish_templates.json`, verificado por
+    grep, pero la whitelist estrecha es la defensa contra que aparezca uno mañana)."""
+    assert hz.humanize_ingredient("60 g de queso rallado") != "60 g de queso rallado"
+    assert hz.humanize_ingredient("60 g de zanahoria rallada") != "60 g de zanahoria rallada"
+    assert hz._household_measure_form_mismatch("queso rallado") is False
+    assert hz._household_measure_form_mismatch("zanahoria rallada") is False
+
+
+def test_harina_de_x_nunca_colapsa_a_su_base_fresca_reuso_de_resolve_preparation_distinct(hz):
+    """Reuso (no reimplementación) de `shopping_calculator.resolve_preparation_distinct` -- el
+    MISMO SSOT "puro y determinista" que P1-PREP-COLLAPSE-GUARD ya usa del lado de compras."""
+    for x in ("yuca", "trigo", "avena", "maiz", "platano"):
+        out = hz.humanize_ingredient(f"120 g de harina de {x}")
+        assert out == f"120 g de harina de {x}", f"harina de {x!r} no debe convertirse a medida casera del vegetal base: {out!r}"
+
+
+def test_form_mismatch_guard_fail_safe_si_shopping_calculator_no_importa(monkeypatch, hz):
+    """Fail-safe: si el import lazy de `resolve_preparation_distinct` falla, degrada al regex
+    LOCAL (nunca lanza) -- 'harina de X' deja de detectarse (esperado, esa mitad depende del
+    import) pero 'papas ralladas' SIGUE detectándose (la whitelist local no depende del import)."""
+    import builtins
+    orig_import = builtins.__import__
+
+    def _boom(name, *a, **k):
+        if name == "shopping_calculator":
+            raise ImportError("simulado")
+        return orig_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _boom)
+    assert hz._household_measure_form_mismatch("harina de yuca") is False
+    assert hz._household_measure_form_mismatch("papas ralladas") is True
+
+
+def test_household_measures_consumidor_confirmado_humanize_plan_ingredients_sin_country_awareness():
+    """Traza el CONSUMIDOR real (contrato de la task): `humanize_plan_ingredients` corre
+    INCONDICIONALMENTE para TODO plan dentro de `assemble_plan_node` (sin gate de country/knob) --
+    confirma por qué el fix de esta sección debe ser byte-idéntico para DO en vez de gateado."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    assert "from humanize_ingredients import humanize_plan_ingredients" in src
+    # el call site real (no el de update-finalizer, que opera sobre un solo meal editado)
+    idx = src.index("Humanizar ingredientes a medidas caseras dominicanas")
+    ventana = src[idx: idx + 500]
+    assert "_adb(humanize_plan_ingredients, result)" in ventana
+
+
+# ── K9. Cadencia del cron `_creativity_kpi_job` — 338 corridas/30d reconciliadas (T1 minor
+#        deferido a esta task) ───────────────────────────────────────────────────────────────
+
+def test_creativity_kpi_job_un_solo_insert_de_pipeline_metrics_bajo_ese_node():
+    """Confirma que NO hay una 2ª fuente escribiendo bajo `node='_creativity_kpi_job'` dentro de
+    `cron_tasks.py` -- si hubiera un 2º cron compartiendo el tag, ESA sería la explicación de la
+    cadencia inflada, no P1-SCHEDULER-STAGGER. Cuenta los `INSERT INTO pipeline_metrics` cuyo
+    tuple de VALUES incluye el literal del node (no solo un grep de substring, que contaría
+    también el docstring y el registro del cron)."""
+    src = _CRON_TASKS_PY.read_text(encoding="utf-8")
+    inserts_con_ese_node = re.findall(
+        r'INSERT INTO pipeline_metrics[\s\S]{0,400}?"_creativity_kpi_job"', src
+    )
+    assert len(inserts_con_ese_node) == 1, (
+        f"esperaba exactamente 1 INSERT bajo node='_creativity_kpi_job', encontró "
+        f"{len(inserts_con_ese_node)} -- si es >1, ESE es un productor duplicado real"
+    )
+    assert 'MEALFIT_CREATIVITY_KPI_INTERVAL_MIN", 1440' in src, "el default de 1440min (24h) sigue vigente"
+
+
+def test_scheduler_stagger_documentado_como_causa_de_la_cadencia_inflada():
+    """[hallazgo del Task 8] `_add_job_jittered` (P1-SCHEDULER-STAGGER · 2026-05-28) da a CADA
+    cron `interval` sin `next_run_time`/`start_date` explícito un `next_run_time` inicial =
+    `ahora + offset(job_id) ∈ [0, MEALFIT_SCHEDULER_STAGGER_MAX_S]` EN CADA REGISTRO -- sin
+    jobstore persistente, cada arranque/redeploy re-registra el job, disparando un run "bonus"
+    dentro del primer minuto de cada restart. NO es un 2º cron ni drift de cadencia: en un entorno
+    con muchos redeploys/día esto produce muchas más filas de las que `lookback_days × 1`
+    predeciría, y el propio comentario de P1-SCHEDULER-STAGGER llama a esto "benigno por diseño"."""
+    src = (_BACKEND / "cron_tasks.py").read_text(encoding="utf-8")
+    assert "_SCHEDULER_STAGGER_ENABLED" in src
+    assert "next_run_time" in src
+    assert "P1-SCHEDULER-STAGGER" in src
+
+
+def test_country_catalog_gap_docstring_reconciliado_menciona_scheduler_stagger():
+    """[fix de doc, CERO cambio de conducta] El comentario original solo citaba el intervalo
+    nominal (1440min=24h) -- suficiente para explicar "por qué está vacío" pero engañoso para
+    "por qué hay 338 en vez de ~30" sin este contexto. Ancla que el script documenta la causa
+    real."""
+    src = _SCRIPT.read_text(encoding="utf-8")
+    assert "P1-SCHEDULER-STAGGER" in src
+    assert "cron_runs_examined" in src
+
+
+# ── K10. rd_drops.json — el criterio de salida es la RESOLUCIÓN, no el contador histórico ───────
+
+def test_rd_drops_json_note_explicita_que_el_criterio_no_es_el_contador():
+    """El brief es explícito: "el exit criterion aquí es: every one of the 7 RESOLVES correctly
+    NOW... not the metric itself". `rd_drops.json` es telemetría HISTÓRICA (pipeline_metrics ya
+    escrito antes del fix) -- una re-corrida de `--rd-drops` HOY sigue reportando los mismos 7
+    conteos hasta que prod corra con el fix desplegado. Este archivo NO se testea por su
+    CONTENIDO numérico (cambia con el tiempo, mismo principio que el resto de la Sección A-D de
+    este archivo: "ningún test toca Neon para contenido transitorio") -- se testea su FORMA."""
+    path = _BACKEND / "data" / "country_gaps" / "rd_drops.json"
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+    assert payload["mode"] == "rd-drops"
+    assert payload["source_node"] == "_creativity_kpi_job"
+    assert isinstance(payload["top_drops"], list)

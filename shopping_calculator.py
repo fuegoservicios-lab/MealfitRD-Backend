@@ -847,6 +847,15 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     "pan rallado", "panecillos de mantequilla", "huevos rellenos", "nuez de castilla",
     "nueces pecanas", "queso en hebras", "queso provolone", "carne molida mixta",
     "bolitas de papa", "papas ralladas", "chili con carne",
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 (RD top-up) · 2026-08-17] "Hummus" — drop real RD medido
+    # (6/30d en rd_drops.json), genuinamente ausente del catálogo (USDA SÍ lo tiene: "Hummus,
+    # commercial", fdc 174289). A diferencia de las altas T5-T7 (países BETA sin mercado RD que
+    # cotizar), esta es una alta para RD MISMO — el mecanismo se reusa a propósito (mismo motivo
+    # de fondo: SIN precio La Sirena verificado hoy) más que porque el país sea beta. Ruling
+    # explícito del contrato de la task: listar como CATÁLOGO SIN PRECIO en vez de dropear, para
+    # que el supermercado artificial (`supermarket_products`) pueda precificarlo después en vez
+    # de perder el alimento en silencio de la lista.
+    "hummus",
 )
 _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 
@@ -1753,7 +1762,24 @@ def parse_fraction(val: str) -> float:
 # ordenada por longitud DESC para que las frases multi-palabra ('bajo en grasa', 'hecha puré')
 # matcheen antes que sus sub-tokens. Semántica equivalente al loop secuencial (sub global de cada
 # stop; validado por las suites de coherencia/shopping). tooltip-anchor: P2-GUARD-PERF-REGEXCACHE
-_NORMALIZE_STOPS = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
+# [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] 'en láminas'/'en lámina' faltaban del hermano
+# de corte ('en rodajas'/'en trozos'/'en lonjas' ya cubrían la misma familia de preparación).
+# Drop real medido: "rábanos en láminas" (4/30d en rd_drops.json) — "rábano" YA existe en el
+# catálogo con precio, pero "rabanos en laminas" no matchea NINGÚN tier léxico/CONTAINS (el
+# sufijo de plural rompe el boundary de la palabra "rabano") y la FUZZY del INTENTO 5 mide
+# contra el string COMPLETO (ratio 0.50 << 0.87). Con este stop, `clean_n` colapsa a "rabanos"
+# (bare, plural) — que SÍ resuelve vía FUZZY (ratio 0.923) contra "rabano", cerrando el drop sin
+# tocar el catálogo. AMBAS formas (con tilde 'en láminas' Y sin tilde 'en laminas'): `n` en este
+# punto de `normalize_name` está lowercased pero NO accent-stripped (mismo motivo por el que
+# 'pequeño'/'puré' arriba llevan sus tildes) — con SOLO la forma acentuada, un input SIN tilde
+# ("rabanos en laminas", plausible si el LLM/usuario omite diacríticos) no la habría matcheado y
+# el drop seguiría vivo para esa variante (medido en vivo durante la verificación de esta task:
+# con solo 'en láminas', "rabanos en laminas" quedaba sin resolver mientras "rábanos en láminas"
+# sí). El alias explícito 'rabanos' (síncrono, ver synonyms_rd_topup_2026_08_17.json) YA cierra
+# esta variante de forma robusta independientemente de este stop — este stop de todos modos gana
+# la forma sin tilde para CUALQUIER OTRO alimento sin alias dedicado (ver
+# test_en_laminas_es_stop_generico_no_especifico_de_rabano, "Remolacha en láminas").
+_NORMALIZE_STOPS = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'en láminas', 'en lámina', 'en laminas', 'en lamina', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
 _NORMALIZE_STOPS_RE = re.compile(
     r'\b(?:' + '|'.join(re.escape(s) for s in sorted(_NORMALIZE_STOPS, key=len, reverse=True)) + r')\b',
     re.IGNORECASE,
@@ -2134,6 +2160,25 @@ def _preprocess_nlp_quantities(s: str) -> str:
     if _mx:
         _out = f"{_mx.group(1)} {fraction_map[_mx.group(2)]}{s_lower[_mx.end():]}"
         return re.sub(r'\s{2,}', ' ', _out).strip()
+
+    # [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] Rango numérico LÍDER ("2–3 ciruelas",
+    # "2-3 ciruelas"): la regex principal de `_parse_quantity` (línea ~2589) solo captura un
+    # `\d+` simple al inicio — sin este colapso, el match falla POR COMPLETO (no hay forma de
+    # consumir "–3 ciruelas" tras el primer dígito) y el fallback `if not match: return 0.0,
+    # 'cantidad necesaria', normalize_name(s).strip()` pasa el string CONTAMINADO entero
+    # ("2–3 ciruelas") a `normalize_name`, que no lo resuelve (ni exacto/CONTAINS ni fuzzy:
+    # ratio 0.737 << 0.87 contra "ciruela") — drop real medido: 16/30d en rd_drops.json, el 2º
+    # alimento más dropeado tras mereyes. Colapsa al valor MAYOR del rango (mismo criterio que
+    # `humanize_ingredients._grammar_lead_value` ya usa para el DISPLAY: "el valor que concuerda
+    # es el MAYOR" — y la misma filosofía "pecarse de comprar de más" de P1-CITRUS-JUICE-YIELD),
+    # dejando "3 ciruelas" para que el resto del pipeline (regex principal + FUZZY plural de
+    # `normalize_name`, ratio 0.933) resuelva -> Ciruela. `[-–]` (guion ASCII + en-dash, mismo
+    # char-class que `_GRAMMAR_LEAD_RE` de humanize_ingredients.py) — nunca em-dash, sin
+    # evidencia de ese caso en el corpus real.
+    _rng = re.match(r'^(\d+)\s*[-–]\s*(\d+)\b', s_lower)
+    if _rng:
+        s_lower = re.sub(r'^(\d+)\s*[-–]\s*(\d+)\b', r'\2', s_lower, count=1)
+        return re.sub(r'\s{2,}', ' ', s_lower).strip()
 
     replacements = [
         # [JUICE-PREFIX-FIX 2026-05-06] Strip de prefijos descriptivos que no

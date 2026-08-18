@@ -569,6 +569,24 @@ _RD_DROPS_LOOKBACK_DAYS = 30
 # mirror de su read shape, no reimplementación del agregador.
 _RD_DROPS_NODE = "_creativity_kpi_job"
 
+# [P1-COUNTRY-SYSTEM-F2 · Task 8 · 2026-08-17] `cron_runs_examined` NO es ≈ lookback_days. El
+# cron está registrado a `MEALFIT_CREATIVITY_KPI_INTERVAL_MIN` (default 1440min = 24h, SIN
+# override en `.env` de este entorno) — pero investigado en vivo (rd_drops.json del 2026-08-17:
+# 338 filas / 30 días ≈ 11.3/día) el conteo real es ~11x el nominal. Causa RAÍZ (no un 2º cron ni
+# drift de cadencia): `_add_job_jittered` (`cron_tasks.py`, P1-SCHEDULER-STAGGER · 2026-05-28) da
+# a TODO cron `interval` sin `next_run_time`/`start_date` explícito un `next_run_time` inicial =
+# `ahora + offset(job_id) ∈ [0, MEALFIT_SCHEDULER_STAGGER_MAX_S]` **en cada registro** — y sin
+# jobstore persistente (default de APScheduler), cada arranque/redeploy del proceso RE-REGISTRA
+# el job desde cero, así que dispara un run "bonus" dentro del primer minuto de CADA restart,
+# independiente de cuándo corrió la última vez de verdad. Confirmado con los timestamps reales:
+# 5 fechas tempranas (jul-19 a jul-23, baja actividad de deploy) muestran exactamente 1
+# corrida/día ~24h00m aparte (el intervalo nominal puro); a partir de jul-24 (ritmo de desarrollo
+# más intenso — múltiples "commit + deploy" por día, ver MEMORY.md del proyecto) el conteo diario
+# salta a 6-47 corridas/día, correlacionando con la cadencia de redeploys, no con un cron más
+# rápido. Es benigno por diseño (el propio comentario de P1-SCHEDULER-STAGGER: "todos los crons
+# son idempotentes... un run extra al startup es benigno") — el agregado `top_verified_only_drops`
+# solo se acumula MÁS densamente, no incorrectamente.
+
 
 def _aggregate_rd_drops(rows: list[dict]) -> list[dict]:
     """Suma los pares `[nombre, count]` de `metadata->>'top_verified_only_drops'` a través de
