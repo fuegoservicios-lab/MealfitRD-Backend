@@ -88,15 +88,137 @@ pytest backend/tests/test_p1_country_system_f1.py -k "scs_ or country_for_form_d
 | `routers/plans.py` — par MUTATOR-PURITY | **CERRADO** en Fase 2 Task 9 (item g) — dos superficies puntuales, no las de mayor tráfico (esas SÍ están wired: `agent.py::swap_meal`, `tools.py::execute_modify_single_meal`). **[FINAL-FIX F2 · 2026-08-16]** (histórico) ya había hecho ese wiring comportamentalmente vivo: `agent.py::swap_meal` lo recibe porque `_enrich_clinical_from_profile` (`routers/plans.py:6096`, F2a) hidrata `data['country']` desde `health_profile` y el `meal_form` de `/regenerate-day` lo propaga (F2b); `tools.py::execute_modify_single_meal` lo recibe porque `services.merge_form_data_with_profile` ya mergea el `health_profile` completo al `form_data` del chat (F2c). **[Task 9 · item g · 2026-08-17]** cierra los 2 call sites restantes con el MISMO patrón (pre-fetch de país ANTES del lock, `_micro_form`): `_swap_mutator` (`api_swap_meal_persist`) resuelve `_swap_country` una vez y lo threadea a `finalize_single_meal_recipe_coherence` Y `slot_coherence_backstop_for_meal`; `api_recalculate_shopping_list` resuelve `_recalc_country` y lo threadea a `finalize_single_meal_recipe_coherence` | — |
 | `slot_coherence_backstop_for_meal`'s pase ingredient-level | **CERRADO** en Fase 2 Task 9 (item g). Mismo filtro `v.get("hard") and _is_do` que el pase name-level (con el ajuste correcto: AND, no OR — `slot_ingredient_violations` devuelve `hard=True` incondicional, así que un OR habría sido un no-op, verificado en vivo durante el desarrollo). Beta ya no fuerza retry vía este pase específico; DO byte-idéntico | — |
 
+## Fase 2 (2026-08-18) — catálogo completo + cierre del "100%"
+
+[P1-COUNTRY-SYSTEM-F2 · 2026-08-18] 9 tasks SDD (T1-T9) + Task 10 de cierre. Fase 1 dejó el
+MOTOR sin imposición criolla estructural; Fase 2 responde la otra mitad de la pregunta — "¿el
+país beta tiene SU comida en la base de datos?" — y cierra las dos advertencias parqueadas de
+Fase 1 (tabla arriba: retry-gate nuance, par MUTATOR-PURITY, ambas **CERRADO** en Task 9).
+Plan: [`docs/superpowers/plans/2026-08-17-paises-fase-2.md`](../../docs/superpowers/plans/2026-08-17-paises-fase-2.md).
+Addendum del dueño §1: "catálogo por completitud MEDIDA, no por cuota" — cada alta de Fase 2
+está respaldada por el harness `country_catalog_gap.py` (T1), no por una cuota arbitraria.
+
+### Catálogo: 6 países, 347 filas en `master_ingredients`
+
+| Tramo | Filas nuevas | Acumulado | Harness (`--country`, 0 silenciosas/0 drops) | Task |
+|---|---|---|---|---|
+| ES | 32 | 206→238 | 80/80 | T5 |
+| MX + CO | 46 (43 USDA + 3 manual: Achiote/Flor de Jamaica/Hoja santa) | 238→284 | MX 76/76, CO 74/74 | T6 |
+| PR + US | 62 (54 USDA directo + 8 manual, incl. 6 blends ponderados) | 284→346 | PR 67/67, US 78/78 | T7 |
+| RD (top-up) | 1 (Hummus, unpriced a propósito) | 346→347 | — (catálogo nativo, sin harness `--country`) | T8 |
+
+347 filas verificado en vivo (`SELECT COUNT(*) FROM master_ingredients`) al cierre de Task 10;
+141 sin precio RD a propósito (`is_country_catalog_unpriced_item`/`is_baking_pantry_staple`,
+mismo mecanismo). Barrido final Task 10 (pool abierto, tier semántico Cohere activo): los 5
+países beta en 0 silenciosas / 0 drops — sin cambios de contenido desde el harness de su task de
+catálogo (T5-T7). `--rd-drops` (telemetría de producción, 30 días) repite los mismos 7 items del
+top-up de T8 — esperado, esos fixes aún no están desplegados; evidencia completa en el reporte de
+Task 10 del ledger SDD.
+
+### QA final con LLM vivo (Task 10, item a — única excepción a la directiva de gasto)
+
+1 generación real por país beta (ES/MX/CO/PR/US) + 1 gemelo DO por cada uno, LOCAL contra Neon
+prod con `MEALFIT_COUNTRY_SYSTEM=true` **solo para el proceso** (nunca escrito a `.env`), vía
+`graph_orchestrator.arun_plan_pipeline` directo (mismo patrón que `scripts/plan_gym.py`, sin
+pasar por el router HTTP/SSE — evita a propósito encolar `plan_chunk_queue`: verificado 0 filas
+tras cada corrida). Usuarios sintéticos `qa-f2-<cc>-<uuid8>@test.local` /
+`qa-f2-do-<cc>-<uuid8>@test.local`, plan persistido de verdad (`meal_plans` real, vía
+`services._save_plan_and_track_background`), teardown completo al cerrar (barrido
+`_tablas_con_user_id` de `tests/conftest.py` — el mismo mecanismo que P1-TEARDOWN-SWEEP).
+
+Por país, 5 verificaciones contra código de producción real (no simulado): (1) prompt beta sin
+criollo forzado — render real de `build_day_generator_system_prompt` re-escaneado con el guard
+`_DOMINICAN_TOKEN_RX` de `test_p1_country_system_f1.py`; (2) `plan_data['_pricing_mode'] ==
+'beta_no_prices'` + cero `estimated_cost_rd` no-nulos en `aggregated_shopping_list`; (3)
+presupuesto en moneda local — `min_budget_for_goals` + `budget_floor_in_currency` reales
+devuelven la moneda del país (EUR/MXN/COP/USD), nunca DOP; (4) gates soft — el helper real
+`_slot_appropriateness_advisory_decision` entrega `advisory=True` desde el intento 1/N para
+issues todo-soft, mientras el gemelo DO en la MISMA situación sigue forzando retry
+(`beta_soft_only=False`); (5) gemelo DO — prompt intacto, `_pricing_mode is None`, precios reales
+presentes. Evidencia completa (ids, costos, veredictos) en el reporte de Task 10 del ledger SDD
+(`.superpowers/sdd/2026-08-17-paises-fase-2/task-10-report.md`).
+
+### Aclaración: la prohibición "ARROZ DE NOCHE" no es criolla — su ENFORCEMENT sí
+
+[T9 · nota de claridad del reviewer] El §15d del prompt del day-generator lista `paella, risotto`
+(junto a `chofán, congrí, mamposteao`) como EJEMPLOS de platos con base de arroz prohibidos en la
+cena — texto **byte-idéntico en TODOS los países** (fila 1 de la tabla "Surfaces wired", T2), a
+propósito: es una regla nutricional universal (nada de arroz en la cena), no una imposición
+dominicana, y paella/risotto son justamente los ejemplos NO-dominicanos que la ilustran para un
+lector español o italiano. Lo que SÍ es DO-scoped es el **ENFORCEMENT determinista** — fila 8 de
+esa misma tabla: `_night_rice_autofix`/`_breakfast_rice_autofix` son no-op completo para país
+beta (el autofix reescribe recetas hacia platos criollos por diseño). Un país beta cuyo LLM
+ignore la instrucción del prompt no tiene autofix que lo corrija — la detección degrada a
+soft/telemetría (fila 5-6), consistente con el resto del gate cultural de Fase 1.
+
 ## Runbook del flip
 
-- **Frontend**: `VITE_COUNTRY_SYSTEM=1|true` habilita `COUNTRY_SYSTEM_UI` ([`frontend/src/config/countries.js:36`](../../frontend/src/config/countries.js#L36)) — exige **REBUILD** (env inline-ada a build-time por Vite, no runtime).
-- **Backend**: `MEALFIT_COUNTRY_SYSTEM=true` habilita `country_for_form_data`/`COUNTRY_SYSTEM_ENABLED` ([`constants.py:3175`](../constants.py#L3175)) — el helper lee el knob POR LLAMADA (`_env_bool` inline, no cacheado a import-time), así que exige **RESTART** del proceso, no redeploy de código.
-- El corrimiento de índices del wizard (paso `QCountry`, Fase 0) ocurre en ese mismo deploy.
-- Verificación viva post-flip: marker `_LAST_KNOWN_PFIX` (`/health/version`) + byte-identidad conductual de un plan DO real (los tests `..._do_control_...`/`..._byte_identico_...` de `test_p1_country_system_f1.py` son la evidencia offline; la verificación en vivo la corre el controller).
+El flip enciende DOS banderas independientes (backend + frontend) que deben moverse JUNTAS —
+una sin la otra dispara el bug de UI-sin-motor o motor-sin-UI documentado en la spec §Fase 1. El
+flip **NO se ejecutó** en Fase 2 — este runbook es la guía completa para cuando el dueño decida
+encenderlo.
+
+### 1. Backend — `MEALFIT_COUNTRY_SYSTEM=true`
+
+- Habilita `country_for_form_data`/`COUNTRY_SYSTEM_ENABLED`
+  ([`constants.py:3327`](../constants.py#L3327), función en
+  [`constants.py:3361`](../constants.py#L3361)) — el helper lee el knob **POR LLAMADA**
+  (`_env_bool` inline, no cacheado a import-time), así que basta **RESTART** del proceso, no
+  redeploy de código.
+- SSH al VPS Oracle (`ssh -i C:\Users\angel\.ssh\mealfit-vps.key ubuntu@132.145.160.173`), editar
+  `/opt/mealfit/backend/.env` → añadir/actualizar `MEALFIT_COUNTRY_SYSTEM=true`.
+- `sudo systemctl restart mealfit-backend`.
+- Verificar: `curl https://mealfitrd.com/ready` → `{status:ready,plan_graph:compiled,db:true}`;
+  `curl https://mealfitrd.com/health/version` → `last_known_pfix` coincide con HEAD, `drift:false`.
+
+### 2. Frontend — `VITE_COUNTRY_SYSTEM=true`
+
+- Habilita `COUNTRY_SYSTEM_UI`
+  ([`frontend/src/config/countries.js:35`](../../frontend/src/config/countries.js#L35)) — env
+  inline-ada a **build-time** por Vite (no runtime): exige **REBUILD**, no basta un restart.
+- Añadir `VITE_COUNTRY_SYSTEM=true` a `frontend/.env.production` (repo local).
+- Desde la raíz del workspace, con **pwsh 7** (no `powershell` 5.1 — el .ps1 es UTF-8 sin BOM y
+  5.1 rompe el parser en los em-dash): `& .\deploy-mealfit.ps1 frontend` — `npm install` +
+  `npm run build` + sube `dist/` al VPS vía nginx.
+- El corrimiento de índices del wizard (paso `QCountry`, Fase 0) vive en el MISMO bundle — no
+  requiere un segundo deploy.
+
+### 3. Post-flip — smoke QA en vivo (checklist, ~10 min)
+
+Repetir en miniatura el QA offline de Task 10 pero contra `mealfitrd.com` real:
+
+1. Cuenta de prueba, país España (o cualquier beta) en el wizard → generar plan.
+2. Wizard: aparece el paso de país (`QCountry`) y la lista incluye los 5 beta + DO.
+3. Plan entregado: SIN "RD$" en la lista de compras, badge/aviso de "modo beta sin precios
+   nativos" visible, presupuesto mostrado en la moneda del país elegido.
+4. Cuenta de prueba DO (o sin país): plan CON "RD$", sin aviso beta — comportamiento idéntico a
+   ayer.
+5. `/health/version` sigue con `drift:false` 10-15 min después (el cron de deploy-lag no debe
+   disparar `deploy_lag_drift_vs_expected`).
+
+### 4. Lo que el flip NO enciende
+
+- `MEALFIT_COUNTRY_COLDSTART_SEGMENT` **se queda OFF** — knob independiente (Fase 0) que
+  segmenta el cold-start de `get_similar_user_patterns` por país; el flip de Fase 2 es sobre el
+  MOTOR de generación, no sobre esa segmentación. Encenderlo es una decisión aparte, con su
+  propia medición.
+
+### 5. Rollback
+
+- **Emergencia (motor)**: unset `MEALFIT_COUNTRY_SYSTEM` (o `=false`) en el `.env` del VPS +
+  `systemctl restart mealfit-backend` — vuelve el motor a byte-identidad DO en segundos, AUNQUE
+  el frontend siga mostrando el selector de país (UX degradada pero segura: cualquier país
+  declarado se ignora, `country_for_form_data` cae a `'DO'` incondicional).
+- **Completo**: además, revertir `VITE_COUNTRY_SYSTEM` + `& .\deploy-mealfit.ps1 frontend` para
+  ocultar el selector.
+- Verificación viva post-flip u post-rollback: marker `_LAST_KNOWN_PFIX` (`/health/version`) +
+  byte-identidad conductual de un plan DO real (los tests `..._do_control_...`/
+  `..._byte_identico_...` de `test_p1_country_system_f1.py`/`test_p1_country_system_f2.py` son la
+  evidencia offline; la verificación en vivo la corre el controller).
 
 ## Tests
 
 - [`backend/tests/test_p1_country_system_f0.py`](../tests/test_p1_country_system_f0.py) — Fase 0 (el dato, sin lectores).
-- [`backend/tests/test_p1_country_system_f1.py`](../tests/test_p1_country_system_f1.py) — Fase 1 completa, T1-T8 (232 tests a Task 8). Sección T8 al final del archivo.
+- [`backend/tests/test_p1_country_system_f1.py`](../tests/test_p1_country_system_f1.py) — Fase 1 completa, T1-T8 (294 tests al cierre de Fase 2).
+- [`backend/tests/test_p1_country_system_f2.py`](../tests/test_p1_country_system_f2.py) — Fase 2 completa, T1-T9 (504 tests `-m "not e2e"` + 61 e2e).
 - [`backend/tests/test_p3_claudemd_cap.py`](../tests/test_p3_claudemd_cap.py) / [`test_p3_1_last_known_pfix_freshness.py`](../tests/test_p3_1_last_known_pfix_freshness.py) / [`test_p2_hist_audit_14_marker_test_link.py`](../tests/test_p2_hist_audit_14_marker_test_link.py) — marker + CLAUDE.md, contrato genérico.

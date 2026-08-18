@@ -41,7 +41,12 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 16)  # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Fase 1 del sistema
+_PFIX_DATE_FLOOR = date(2026, 8, 18)  # [P1-COUNTRY-SYSTEM-F2 · 2026-08-18] Fase 2 del sistema
+# de países: catálogo por país (347 filas, 6 países) + los cierres de "100%" (retry-gate
+# advisory, MUTATOR-PURITY, backstops de excusa alérgena). QA final con LLM vivo (5 países beta
+# + gemelo DO) verde; harness `country_catalog_gap.py` 0 silenciosas/0 drops en los 5. Doc
+# canónica: backend/docs/country_system_f1.md §F2. Test ancla: test_p1_country_system_f2.py.
+# Histórico — floor previo [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] Fase 1 del sistema
 # de países: con el knob encendido, un usuario de país beta deja de recibir imposición criolla
 # (prompts por variante, gates culturales suaves, fecha local, presupuesto en su moneda, lista
 # de compras sin precios con aviso honesto). 8 tasks SDD; con el knob apagado (default) el motor

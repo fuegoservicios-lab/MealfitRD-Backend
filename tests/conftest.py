@@ -236,10 +236,24 @@ def _restaurar_identidad_de_modulos():
 # Punto ÚNICO a propósito: hay ~25 ficheros que parchean `db_core.connection_pool`, y cualquiera
 # puede volver a envenenar el catálogo. Se mantiene la disciplina de la fixture de arriba (limitar
 # a lo medido): estos 4 caches son los que el bisect atravesó, no una lista preventiva.
+#
+# [P1-COUNTRY-SYSTEM-F2 · Task 10 · 2026-08-18] 5º cache, MISMA enfermedad, cadena causal
+# DISTINTA (no requiere `db_core.connection_pool` mockeado): `_VERIFIED_SHOPPING_NAMES`
+# (`shopping_calculator.py`) deriva de `get_master_ingredients()` con su propio TTL de 300s.
+# ~65 ficheros monkeypatchean `get_master_ingredients` directamente; si alguno dispara una
+# derivación real (`_is_verified_for_shopping`/`_get_verified_shopping_name_set`) mientras el
+# mock está activo, `monkeypatch` restaura la FUNCIÓN al salir pero NO el set derivado — sobrevive
+# envenenado hasta 300s para el siguiente test que lo lea, sea cual sea su fichero. Encontrado por
+# el reviewer de Task 9 corriendo la suite completa (orden-dependiente: verde en aislamiento,
+# rojo en suite — `test_mereyes_es_verificado_para_compras_tras_el_alias` /
+# `test_ciruela_ya_existe_en_catalogo_con_precio_cero_cambio_de_catalogo`,
+# `test_p1_country_system_f2.py`); reproducido con el mismo mecanismo antes de curarlo (evidencia
+# RED/GREEN completa en `.superpowers/sdd/2026-08-17-paises-fase-2/task-10-report.md`).
 _CACHES_CONTAMINABLES = (
     ("shopping_calculator", "_master_cache", None),
     ("graph_orchestrator", "_PHANTOM_CATALOG_INDEX_CACHE", None),
     ("graph_orchestrator", "_CATALOG_DENSITY_INDEX_CACHE", None),
+    ("shopping_calculator", "_VERIFIED_SHOPPING_NAMES", None),
 )
 
 
