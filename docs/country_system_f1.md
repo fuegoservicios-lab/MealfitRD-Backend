@@ -263,12 +263,15 @@ inerte (byte-identidad DO). Test:
 
 **Fast-follows con evidencia del mismo plan 6a4321f5** (warn-only, el plan se entrega):
 
-- **Léxico del coherence guard ciego a filas ES**: la lista trae «Acelgas/Almejas/Judías
-  pintas/Membrillo» y las recetas también («3 tazas de acelgas picadas», «280 g de almejas»),
-  pero `expected_sum_from_recipes` no los matchea → 4 fantasmas `presence/aggregated_only` y
-  coherencia 35/100 en el quality index. El vocabulario del lado esperado del guard es
-  DO-tuned; las filas beta de F2 no entraron. (Es el «espejo del coherence-guard» ya anotado
-  como costura en la memoria de F2, ahora con costo medido.)
+- **Léxico del coherence guard ciego a filas beta (SISTÉMICO — confirmado en ES y US)**: la
+  lista trae «Acelgas/Almejas/Judías pintas/Membrillo» (ES, plan 6a4321f5) o «Aderezo ranch/
+  Provolone/Salsa inglesa/Tocineta» (US, plan 2245eb45) y las recetas también los traen, pero
+  `expected_sum_from_recipes` no los matchea → 4 fantasmas `presence/aggregated_only` por plan
+  y coherencia 35/100 (ES) y 25/100 (US) en el quality index — la nota castiga filas nuevas,
+  no incoherencia real. El vocabulario del lado esperado del guard es DO-tuned; las filas beta
+  de F2 no entraron. (Es el «espejo del coherence-guard» ya anotado como costura en la memoria
+  de F2, ahora con costo medido en DOS países.) Mientras no se cierre, leer las notas de
+  coherencia de planes beta con esta corrección mental.
 - **Un mutator inserta ingredientes por su nombre de catálogo DO**: receta «Tortilla
   Mediterránea» (ES) con la línea literal «Orégano dominicano» mientras la lista dice
   «Orégano» — sospechoso primario: micro-closer/fat-swap añadiendo el carrier por nombre de
