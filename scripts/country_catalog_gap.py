@@ -59,6 +59,20 @@ paga el build completo del cache (~200+ filas) contra el deadline de 30s de una 
 no alcanza, activa un cooldown de 600s (`_SEMANTIC_INIT_FAIL_COOLDOWN_S`) que apagaría el tier
 semántico para el RESTO de la corrida, falseando la medición hacia más DROPs de los reales.
 
+⚠️ COBERTURA — SOLO EL TIER RESOLVER: este harness llama `sc.normalize_name` directo — el tier
+léxico/fuzzy/semántico (INTENTO 1-6) que resuelve un nombre de alimento contra `master_ingredients`.
+NO pasa por `sc.canonicalize_shopping_food_name` (la segunda cadena de canonicalización que
+`aggregate_and_deduct_shopping_list` aplica DESPUÉS de esa resolución, para colapsar variantes de
+preparación RD a un nombre de lista simplificado — ej. 'Plátano verde'→'Plátano'). Un RESUELVE-BIEN
+aquí certifica que el resolver encuentra la fila correcta; NO certifica que esa fila sobreviva
+intacta al agregador de compras — ese fue exactamente el CRITICAL #2 del fix-round 1 de T7
+(2026-08-17): 6 altas T7 + 2 T5 resolvían bien en este harness y aun así llegaban renombradas (o,
+en el caso de 'Nueces pecanas', DROPEADAS en silencio) a la lista de compras real. La cobertura de
+esa capa vive en `tests/test_p1_country_system_f2.py` (sweep completo de
+`canonicalize_shopping_food_name` + parametrize por fila sobre `aggregate_and_deduct_shopping_list`),
+no en este script — añadir esa segunda llamada aquí duplicaría el gate para OPTIMIZAR una medición
+que ya corre gratis en pytest, sin ganar nada (el harness es offline/manual, pytest es CI).
+
 USO:
     cd backend
     python scripts/country_catalog_gap.py --country ES

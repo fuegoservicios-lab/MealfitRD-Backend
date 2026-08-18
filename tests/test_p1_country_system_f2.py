@@ -3245,3 +3245,298 @@ def test_harness_pr_us_cierra_en_cero_drops_cero_silenciosas(cc, fname):
 # "las 6 blend SÍ tienen fdc_id" no aplica: son 'manual' por ser DERIVADAS de 2 fdc reales cada
 # una, no por carecer de fdc — `fdc_id` en la columna persistida es NULL para las 8 'manual' por
 # igual (el detalle de qué fdc's alimentaron el blend vive en `_provenance`, no en la columna).
+
+
+# ── J10. fix-round 1 (review): 2 CRITICAL + 1 IMPORTANT sobre resolución de las altas T7 ─────────
+#
+# [fix-round 1 · 2026-08-17] El reviewer confirmó por EJECUCIÓN DIRECTA (no solo lectura) 3
+# hallazgos sobre T7 original (6ec25df):
+#
+#   CRITICAL #1 -- el alias bare 'culantro' en Recao interceptaba al tier EXACTO lo que pre-T7
+#   fuzzy-resolvía (ratio≈0.875) a 'Cilantro' (fila RD PRICED real, RD$435.45/lb) -- 'culantro' es
+#   uso dominicano ESTABLECIDO para cilantro (constants.VEGGIE_FAT_SYNONYMS['cilantro'] ya lo
+#   lista). Prueba en vivo pre-fix del reviewer:
+#   aggregate_and_deduct_shopping_list(['30 g de culantro']) -> [('Recao', '3 Mazos Recao')] SIN
+#   precio, con el knob apagado (rompe byte-identidad DO). Fix: bare 'culantro' removido de
+#   Recao.aliases (JSON SSOT + DB); 'culantro cimarron'/'recao de monte' preservados (frases de 2
+#   palabras, PR-específicas, sin colisión fuzzy). El item curado del harness PR 'Recao (culantro)'
+#   NUNCA dependió del alias (normalize_name le strippea el paréntesis antes de tocar el índice ->
+#   'Recao' bare -> match EXACTO contra el nombre de la fila) -- cubierto sin cambios por el
+#   retarget-diff guard (I10) que re-resuelve TODO country_gaps/*.json committed contra el resolver
+#   vivo.
+#
+#   CRITICAL #2 -- `canonicalize_shopping_food_name` (segunda cadena de canonicalización que corre
+#   DESPUÉS de la resolución exacta del master_map, dentro de `aggregate_and_deduct_shopping_list`
+#   -- una capa que el harness de Task 1 NUNCA ejercita, ver nota nueva en el docstring de
+#   `country_catalog_gap.py`) sobreescribía la identidad YA EXACTA de 8 filas de catálogo-país: 6
+#   T7 reportadas por el reviewer (Queso de papa/Bolitas de papa/Papas ralladas -> 'Papa', Nuez de
+#   Castilla -> 'Nueces', Huevos rellenos -> 'Huevo', Nueces pecanas -> 'Pecanas' [nombre SIN fila
+#   propia -> DROP SILENCIOSO, el caso más grave]) + 2 T5 bonus descubiertas por el sweep propio
+#   (Acelgas, Almendra marcona, mismo mecanismo). Sweep completo de los 346 nombres del catálogo
+#   vivo (salida real, post-fix, capturada abajo) encontró 13 filas PRE-EXISTENTES (pre-T5) que SÍ
+#   dependen INTENCIONALMENTE de esta cadena (Plátano verde/maduro -> Plátano vía
+#   canonicalize_musaceae, Queso cheddar/mozzarella/parmesano -> nombre corto, Clara/Yema de huevo
+#   -> Huevo vía _consolidate_inline_canon, etc.) -- un skip GENERAL (branch (i) de la ruling)
+#   habría cambiado conducta DO para esas 13. Se implementó branch (ii): skip ESCOPED a
+#   `is_country_catalog_unpriced_item(canonical_name)`, True solo para los 140 tokens de
+#   catálogo-país (T5+T6+T7) y False para las 13 filas pre-existentes -- byte-identidad DO
+#   preservada. Ver el sweep re-corrido como test permanente más abajo.
+#
+#   IMPORTANT #3 -- el alias 'melocoton' añadido a Duraznos (T7) era código MUERTO desde el día 1:
+#   'Durazno en almíbar' (fila pre-existente) YA reclamaba 'melocoton' como alias, mismo string
+#   (misma longitud) -- el stable-sort de `_construir_indice_alias` (orden descendente por
+#   longitud; empates preservan orden de LISTA) hace que la fila pre-existente (procesada antes)
+#   gane siempre. Fix: removido el duplicado muerto de Duraznos.aliases; preservado el mapeo
+#   pre-existente melocoton -> 'Durazno en almíbar' (byte-identidad DO). Ningún template/pool
+#   PR/US usa 'melocoton' (deben usar el canónico 'Duraznos') -- confirmado por grep y anclado
+#   abajo.
+#
+# Sweep de colisión (346 filas del catálogo vivo, `canonicalize_shopping_food_name`, POST-fix,
+# corrida real 2026-08-17):
+#
+#     Total catalog rows: 346
+#     Overridden COUNTRY-alta rows (0): []
+#     Overridden PRE-EXISTING rows (13):
+#       'Cebolla en polvo' -> 'Cebolla'        'Clara de huevo' -> 'Huevo'
+#       'Guineo verde' -> 'Guineo'              'Lechuga romana' -> 'Lechuga'
+#       'Nueces mixtas' -> 'Nueces'             'Orégano dominicano' -> 'Orégano'
+#       'Plátano maduro' -> 'Plátano'           'Plátano verde' -> 'Plátano'
+#       'Queso cheddar' -> 'Cheddar'            'Queso mozzarella' -> 'Mozzarella'
+#       'Queso parmesano' -> 'Parmesano'        'Tofu firme' -> 'Tofu'
+#       'Yema de huevo' -> 'Huevo'
+#
+# El script idempotente `scripts/add_foods_pr_us_2026_08_17.py` tenía TAMBIÉN un bug de
+# fix-round, descubierto al intentar aplicar los 2 fixes de arriba a Neon: `_apply_new_rows`
+# comparaba solo `fdc_id` + columnas nutricionales (`_cmp_cols`), nunca `aliases` -- un `--commit`
+# con el JSON ya editado reportaba "~ EXISTE (sin diffs), salto" para Recao/Duraznos y habría
+# dejado los alias VIEJOS vivos en Neon en silencio (el bug de shopping_calculator.py estaría
+# "arreglado en el código" pero NO en los datos que ese código lee). `_cmp_cols` ahora incluye
+# 'aliases'; `_val_eq` compara listas por SET (orden no es semántico en un bag de sinónimos, evita
+# false-diff por reordering). Ambas filas re-sincronizadas a Neon vía `--commit` (verificado
+# idempotente: dry-run posterior reporta "sin diffs" para las dos).
+
+_NEW_FOODS_PR_US_JSON = _BACKEND / "scripts" / "data" / "new_foods_pr_us_2026_08_17.json"
+
+
+def _load_new_foods_pr_us() -> list:
+    with open(_NEW_FOODS_PR_US_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── J10a. CRITICAL #1 — 'culantro' bare removido de Recao, byte-identidad DO restaurada ──────────
+
+def test_recao_aliases_no_contienen_culantro_bare_estructural():
+    """[CRITICAL #1 · estructural, sin DB] El JSON SSOT ya no debe declarar 'culantro' bare como
+    alias de Recao -- solo frases PR-específicas de 2+ palabras, sin riesgo de colisión fuzzy."""
+    recao = next(r for r in _load_new_foods_pr_us() if r["name"] == "Recao")
+    aliases_lower = [a.lower() for a in recao.get("aliases", [])]
+    assert "culantro" not in aliases_lower, (
+        "'culantro' bare NUNCA debe ser alias de Recao -- intercepta al tier EXACTO lo que "
+        "pre-T7 fuzzy-resolvía a 'Cilantro' (RD PRICED, RD$435.45/lb), rompiendo byte-identidad DO"
+    )
+    assert "culantro cimarron" in aliases_lower, "el alias PR-específico no debe perderse en el fix"
+    assert "recao de monte" in aliases_lower
+
+
+@pytest.mark.e2e
+def test_culantro_bare_resuelve_a_cilantro_fuzzy_fix_round_1(sc):
+    """[CRITICAL #1 · el RED de este fix-round] RED en HEAD (6ec25df):
+    normalize_name('culantro') == 'Recao' (el alias bare interceptaba al tier exacto, antes de
+    llegar al tier fuzzy que resolvía 'Cilantro'). GREEN tras remover el alias: 'culantro' bare
+    vuelve a fuzzy-resolver a 'Cilantro' (RD priced), como pre-T7. Control: la frase
+    PR-específica 'culantro cimarron' SÍ debe seguir resolviendo a Recao -- confirma que el fix
+    no sobre-corrigió (no borró la fila, solo el alias colisionante)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("culantro") == "Cilantro", (
+        "'culantro' bare debe fuzzy-resolver a 'Cilantro' (RD priced) -- si resuelve a 'Recao', "
+        "el alias bare volvió a interceptar el tier exacto (regresión de CRITICAL #1)"
+    )
+    assert sc.normalize_name("culantro cimarron") == "Recao", (
+        "'culantro cimarron' (frase PR-específica de 2 palabras) debe seguir resolviendo a Recao"
+    )
+
+
+# ── J10b. CRITICAL #2 — canonicalize_shopping_food_name ya no sobreescribe filas de catálogo-país ─
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("nombre", [
+    "Queso de papa", "Bolitas de papa", "Papas ralladas", "Nuez de Castilla", "Huevos rellenos",
+    "Nueces pecanas", "Acelgas", "Almendra marcona",
+])
+def test_filas_pais_sobreviven_como_si_mismas_bajo_catalogo_sin_precio_fix_round_1(sc, nombre, monkeypatch):
+    """[CRITICAL #2 · el RED de este fix-round, 8 casos vivos] RED en HEAD (6ec25df):
+    `canonicalize_shopping_food_name` (llamada DESPUÉS de la resolución exacta, dentro de
+    `aggregate_and_deduct_shopping_list`) sobreescribía estas 8 filas -- 6 T7 reportadas por el
+    reviewer más 2 T5 bonus descubiertas por el sweep propio (Acelgas, Almendra marcona), mismo
+    mecanismo (colisión de regex genérico: papa/nuez-nueces/huevo). El caso más grave: 'Nueces
+    pecanas' -> 'Pecanas' (nombre SIN fila propia en el catálogo) -> DROP SILENCIOSO del
+    agregador, confirmado en vivo por el reviewer. GREEN tras el skip escopado a
+    `is_country_catalog_unpriced_item` en shopping_calculator.py.
+
+    `MEALFIT_VERIFIED_INGREDIENTS_ONLY` monkeypatcheado a 'true' -- mismo patrón que
+    `test_jamon_serrano_no_se_dropea_en_silencio_via_unpriced_keep`: es la puerta que activa la
+    rama CATÁLOGO SIN PRECIO / drop-si-no-verificado; el baseline de la suite la fija 'false' así
+    que sin esto los 8 items pasarían por el camino normal (con precio=0 pero SIN pasar por el
+    canonicalizer post-drop-gate) y el test no ejercería el código que de verdad falló en vivo."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    monkeypatch.setenv("MEALFIT_VERIFIED_INGREDIENTS_ONLY", "true")
+
+    result = sc.aggregate_and_deduct_shopping_list([f"30 g de {nombre}"], structured=True)
+    items = result if isinstance(result, list) else (result.get("items") or [])
+    item = next((it for it in items if it.get("name") == nombre), None)
+    assert item is not None, (
+        f"{nombre!r} no sobrevivió al agregador con su propio nombre -- probablemente renombrado "
+        f"o dropeado por canonicalize_shopping_food_name. nombres presentes: "
+        f"{[it.get('name') for it in items]}"
+    )
+    assert item.get("display_category") == "CATÁLOGO SIN PRECIO", (
+        f"{nombre!r} sobrevivió pero con categoría inesperada: {item.get('display_category')!r}"
+    )
+
+
+@pytest.mark.e2e
+def test_canonicalize_shopping_food_name_sweep_346_filas_cero_altas_pais_trece_preexistentes(sc):
+    """[CRITICAL #2 · el guard durable, sweep completo -- mismo espíritu que H6-bis/I10] Para CADA
+    nombre real del catálogo vivo (346 filas al momento de escribir este test), si
+    `canonicalize_shopping_food_name` lo sobreescribe (resultado != nombre propio): (a) NINGUNA
+    fila de catálogo-país (`is_country_catalog_unpriced_item`==True) puede estar en ese conjunto
+    -- el bug que este fix-round cierra -- y (b) el conjunto de filas PRE-EXISTENTES sobreescritas
+    debe ser EXACTAMENTE el observado post-fix (13, todas dependientes A PROPÓSITO de
+    canonicalize_musaceae/frutos_secos/_consolidate_inline_canon) -- si crece o encoge, alguien
+    tocó el chain o el scope del skip y este test lo atrapa antes que un futuro T8 lo redescubra
+    en producción."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    rows = sc.get_master_ingredients() or []
+    names = sorted({r["name"] for r in rows if r.get("name")})
+    master_map = sc._build_shopping_master_map()
+
+    overridden_country = []
+    overridden_preexisting = set()
+    for name in names:
+        result = sc.canonicalize_shopping_food_name(name, master_map)
+        if result != name:
+            if sc.is_country_catalog_unpriced_item(name):
+                overridden_country.append((name, result))
+            else:
+                overridden_preexisting.add(name)
+
+    assert not overridden_country, (
+        f"{len(overridden_country)} fila(s) de catálogo-país sobreescritas por el chain genérico "
+        f"(CRITICAL #2 regresó): {overridden_country}"
+    )
+
+    esperadas_preexistentes = {
+        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana", "Nueces mixtas",
+        "Orégano dominicano", "Plátano maduro", "Plátano verde", "Queso cheddar",
+        "Queso mozzarella", "Queso parmesano", "Tofu firme", "Yema de huevo",
+    }
+    assert overridden_preexisting == esperadas_preexistentes, (
+        f"el set de filas PRE-EXISTENTES sobreescritas por el chain cambió -- nuevas: "
+        f"{overridden_preexisting - esperadas_preexistentes or '{}'}, ya no presentes: "
+        f"{esperadas_preexistentes - overridden_preexisting or '{}'}. Si es intencional (nueva "
+        f"fila DO que empieza a depender del chain), actualiza esta lista explícitamente; si no, "
+        f"el scope del skip de CRITICAL #2 se ensanchó o encogió sin review."
+    )
+
+
+# ── J10c. IMPORTANT #3 — 'melocoton' ya no es alias muerto de Duraznos ───────────────────────────
+
+def test_duraznos_aliases_no_contienen_melocoton_estructural():
+    """[IMPORTANT #3 · estructural, sin DB] El JSON SSOT ya no debe declarar 'melocoton' como
+    alias de Duraznos -- era código muerto (length-tie perdido contra 'Durazno en almíbar', ver
+    test del mecanismo abajo) que el report original reclamaba funcional sin haberlo verificado."""
+    duraznos = next(r for r in _load_new_foods_pr_us() if r["name"] == "Duraznos")
+    aliases_lower = [a.lower() for a in duraznos.get("aliases", [])]
+    assert "melocoton" not in aliases_lower, (
+        "'melocoton' NUNCA debe ser alias de Duraznos -- empata en longitud con el alias "
+        "PRE-EXISTENTE de 'Durazno en almíbar' y el stable-sort SIEMPRE deja ganar a la fila "
+        "pre-existente (código muerto garantizado, ver test del mecanismo)"
+    )
+    assert "peaches" in aliases_lower and "durazno fresco" in aliases_lower, (
+        "los alias funcionales de Duraznos no deben perderse en el fix"
+    )
+
+
+@pytest.mark.e2e
+def test_melocoton_sigue_resolviendo_a_durazno_en_almibar_fix_round_1(sc):
+    """[IMPORTANT #3 · byte-identidad DO preservada] 'melocoton' sigue resolviendo al mapeo
+    PRE-EXISTENTE 'Durazno en almíbar' tras remover el alias muerto de Duraznos -- prueba que el
+    fix es un no-op para DO: el alias que T7 añadió NUNCA tuvo efecto (ver mecanismo abajo), así
+    que removerlo no puede cambiar ninguna resolución real."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("melocoton") == "Durazno en almíbar"
+
+
+@pytest.mark.e2e
+def test_melocoton_length_tie_mechanism_por_que_es_codigo_muerto(sc):
+    """[IMPORTANT #3 · demuestra POR QUÉ el alias de Duraznos siempre fue código muerto] Ambos
+    alias son el string IDÉNTICO 'melocoton' (misma longitud tras strip_accents) -- el stable-sort
+    de `_construir_indice_alias` (orden descendente por longitud; empates preservan orden de
+    LISTA de origen) hace que quien esté PRIMERO en `master_list` gane siempre. Reconstruye la
+    regresión hipotética (Duraznos recupera 'melocoton') sobre datos REALES de 'Durazno en
+    almíbar' -- si 'Duraznos' llegara a ganar el empate algún día (ej. alguien reordena
+    `get_master_ingredients` o cambia el sort a no-estable), este test lo atraparía antes que un
+    reviewer tuviera que descubrirlo por ejecución directa otra vez."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    master_list = sc.get_master_ingredients() or []
+    durazno_almibar = next(r for r in master_list if r["name"] == "Durazno en almíbar")
+    assert "melocoton" in [a.lower() for a in (durazno_almibar.get("aliases") or [])], (
+        "precondición: 'Durazno en almíbar' debe seguir reclamando 'melocoton' -- si esto falla, "
+        "el mapeo pre-existente que este fix preserva ya no existe en la DB"
+    )
+
+    simulado = [
+        dict(durazno_almibar),
+        # Regresión hipotética: como si el alias muerto de Duraznos NUNCA se hubiera removido.
+        {"name": "Duraznos", "aliases": ["peaches", "durazno fresco", "melocoton"]},
+    ]
+    all_aliases, _contains = sc._construir_indice_alias(simulado)
+    primero = next(name for (alias, name) in all_aliases if alias == "melocoton")
+    assert primero == "Durazno en almíbar", (
+        f"el primer alias 'melocoton' en el índice resolvió a {primero!r} -- si fuera 'Duraznos', "
+        f"confirmaría que reañadir el alias muerto SÍ tendría efecto (dejaría de ser código "
+        f"muerto y volvería a romper byte-identidad DO)"
+    )
+
+
+def test_ningun_template_o_pool_pr_us_usa_melocoton_debe_usar_duraznos_canonico():
+    """[IMPORTANT #3 · ancla la premisa de la ruling] Ningún constituent de dish_templates_us.json
+    ni COUNTRY_POOLS['US'] debe referenciar 'melocoton' -- el nombre CANÓNICO de la fila T7 es
+    'Duraznos'; 'melocoton' solo vive como alias PRE-EXISTENTE de OTRA fila ('Durazno en
+    almíbar'), así que un template que escribiera 'melocoton' apuntaría, por accidente, a la fila
+    equivocada."""
+    with open(_BACKEND / "data" / "dish_templates_us.json", encoding="utf-8") as f:
+        data = json.load(f)
+    ofensores = [
+        (t.get("name"), c.get("name"))
+        for t in data.get("templates", [])
+        for c in t.get("constituents", [])
+        if "melocoton" in (c.get("name") or "").lower()
+    ]
+    assert not ofensores, (
+        f"template(s) PR/US referencian 'melocoton' en vez del canónico 'Duraznos': {ofensores}"
+    )
+
+    pool_us = constants.COUNTRY_POOLS.get("US") or {}
+    nombres_pool = set()
+    for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+        nombres_pool.update(pool_us.get(key) or [])
+    ofensores_pool = sorted(n for n in nombres_pool if "melocoton" in n.lower())
+    assert not ofensores_pool, f"COUNTRY_POOLS['US'] referencia 'melocoton': {ofensores_pool}"

@@ -143,8 +143,13 @@ def _apply_new_rows(conn, recs):
     puestos = ya = actualizados = 0
     # Mismo mecanismo any-column-diff que T5/T6 post fix-wave deploy-gate (ver docstring del
     # módulo): compara fdc_id + TODAS las columnas nutricionales, no solo fdc_id/kcal.
+    # [P1-COUNTRY-SYSTEM-F2 · T7 fix-round 1 · 2026-08-17] `aliases` se sumó al set de comparación
+    # tras un bug real: el script reportaba "sin diffs" para Recao/Duraznos aun con el JSON editado
+    # (quitando "culantro"/"melocoton") porque _cmp_cols nunca miraba esa columna -- un --commit
+    # habría dejado los alias viejos vivos en Neon en silencio. Ver _val_eq: las listas comparan
+    # por SET (orden no es semántico en un bag de alias; evita false-diff por reordering).
     _nutri_cols = list(_COLMAP.values())
-    _cmp_cols = ["fdc_id"] + _nutri_cols
+    _cmp_cols = ["fdc_id", "aliases"] + _nutri_cols
     existen = {
         row[0]: dict(zip(_cmp_cols, row[1:]))
         for row in conn.execute(
@@ -156,6 +161,9 @@ def _apply_new_rows(conn, recs):
             return True
         if a is None or b is None:
             return False
+        if isinstance(a, list) or isinstance(b, list):
+            # aliases: bag de sinónimos, no secuencia -- orden no es semántico.
+            return set(a or []) == set(b or [])
         try:
             return abs(float(a) - float(b)) <= 0.05
         except (TypeError, ValueError):

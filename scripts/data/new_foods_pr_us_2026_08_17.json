@@ -169,7 +169,6 @@
     "slug": "recao",
     "category": "Vegetales",
     "aliases": [
-      "culantro",
       "recao de monte",
       "shadow beni",
       "spiny coriander",
@@ -181,7 +180,7 @@
     "fdc_id": null,
     "_usda_description": null,
     "_country": "PR",
-    "_provenance": "[SIN fdc -- ESTIMADO, no USDA] Eryngium foetidum (culantro/recao), hierba aromática AUSENTE de SR Legacy y Foundation Foods (confirmado: 0 resultados para 'culantro'/'eryngium'/'coriander spiny'/'sawtooth'). Planta DISTINTA de Coriandrum sativum (cilantro, sí en catálogo) -- NO se colapsa con Cilantro (aroma similar pero mucho más intenso, uso culinario y botánica distintos). Estimación conservadora modelada sobre el perfil de la fila 'Cilantro' ya real del catálogo (misma categoría: hierba fresca de hoja, uso en gramos pequeños por receta) -- kcal/macros iguales a Cilantro, vit_c/vit_a algo mayores (el recao es más concentrado en aroma/compuestos activos que el cilantro según literatura etnobotánica, sin cifra USDA que citar). Impacto dietético trivial (gramos de hierba por receta).",
+    "_provenance": "[SIN fdc -- ESTIMADO, no USDA] Eryngium foetidum (culantro/recao), hierba aromática AUSENTE de SR Legacy y Foundation Foods (confirmado: 0 resultados para 'culantro'/'eryngium'/'coriander spiny'/'sawtooth'). Planta DISTINTA de Coriandrum sativum (cilantro, sí en catálogo) -- NO se colapsa con Cilantro (aroma similar pero mucho más intenso, uso culinario y botánica distintos). Estimación conservadora modelada sobre el perfil de la fila 'Cilantro' ya real del catálogo (misma categoría: hierba fresca de hoja, uso en gramos pequeños por receta) -- kcal/macros iguales a Cilantro, vit_c/vit_a algo mayores (el recao es más concentrado en aroma/compuestos activos que el cilantro según literatura etnobotánica, sin cifra USDA que citar). Impacto dietético trivial (gramos de hierba por receta). [fix-round 1 · review CRITICAL] Bare 'culantro' REMOVIDO de aliases: es uso dominicano ESTABLECIDO para 'cilantro' (constants.VEGGIE_FAT_SYNONYMS['cilantro'] ya lo lista; _SOLVER_COV_BENIGN_RE en graph_orchestrator.py/portion_solver.py también lo trata como cilantro) -- pre-T7, 'culantro' fuzzy-resolvía (ratio 0.875) a 'Cilantro' (fila PRICED real, RD$435.45/lb). El bare alias interceptaba eso al tier EXACTO, rompiendo byte-identidad DO con el knob apagado (confirmado en vivo: `aggregate_and_deduct_shopping_list(['30 g de culantro'])` devolvía Recao sin precio en vez de Cilantro con precio). 'culantro cimarron'/'recao de monte' se preservan -- frases de 2 palabras, sin riesgo de colisión (ratio fuzzy bajo contra 'culantro' bare). El item del harness 'Recao (culantro)' resuelve igual vía stripping de paréntesis -> 'Recao' bare -> match EXACTO contra el nombre de esta fila, sin necesitar el alias.",
     "kcal": 23,
     "protein_g": 2.1,
     "carbs_g": 3.7,
@@ -2065,8 +2064,7 @@
     "category": "Frutas",
     "aliases": [
       "peaches",
-      "durazno fresco",
-      "melocoton"
+      "durazno fresco"
     ],
     "default_unit": "libra",
     "is_dominican_cultivar": false,
@@ -2074,7 +2072,7 @@
     "fdc_id": 169928,
     "_usda_description": "Peaches, yellow, raw",
     "_country": "US",
-    "_provenance": "'Peaches, yellow, raw' -- fruta FRESCA, producto distinto de 'Durazno en almíbar' (fila existente, enlatado en jarabe con azúcar añadida) -- antes de esta alta, 'Duraznos' resolvía por FUZZY (ratio 0.933) a la versión enlatada (kcal/azúcar sustancialmente mayores por el jarabe), midiendo un producto que el usuario no pidió.",
+    "_provenance": "'Peaches, yellow, raw' -- fruta FRESCA, producto distinto de 'Durazno en almíbar' (fila existente, enlatado en jarabe con azúcar añadida) -- antes de esta alta, 'Duraznos' resolvía por FUZZY (ratio 0.933) a la versión enlatada (kcal/azúcar sustancialmente mayores por el jarabe), midiendo un producto que el usuario no pidió. [fix-round 1 · review IMPORTANT] Esta fila NUNCA debe llevar 'melocoton' como alias: 'Durazno en almíbar' YA tiene 'melocoton' bare (9 chars) en su propia lista de aliases desde antes de esta task -- un alias 'melocoton' aquí crearía un EMPATE de longitud en `_construir_indice_alias` (sort estable por longitud descendente), y la fila PRE-EXISTENTE (procesada primero en `get_master_ingredients()`) siempre gana el empate. El alias sería código muerto que nunca puede resolver a esta fila -- confirmado en vivo: `normalize_name('melocoton')` resuelve 'Durazno en almíbar' con o sin este alias. Byte-identidad DO preservada a propósito (melocoton→Durazno en almíbar es el mapeo pre-existente, no se toca). El nombre canónico 'Duraznos' (sin necesidad de alias 'melocoton') es lo que templates/pools de esta task usan siempre.",
     "kcal": 39.0,
     "protein_g": 0.91,
     "carbs_g": 9.54,

@@ -7964,6 +7964,30 @@ def canonicalize_shopping_food_name(name: str, master_map: dict) -> str:
     m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
     canonical_name = m_item["name"] if m_item else name
 
+    # [P1-COUNTRY-SYSTEM-F2 · T7 fix-round 1 · 2026-08-17] La identidad EXACTA de una fila de
+    # catálogo-país (altas T5/T6/T7, `is_country_catalog_unpriced_item`) es AUTORITATIVA — salta
+    # la cadena de canonicalizers genéricos de abajo, que fue diseñada para PREPARACIONES/variantes
+    # de un mismo alimento RD (viveres, musáceas, quesos blancos...), no para decidir la identidad
+    # de un alimento de otro país que ya resolvió exacto. Sin este salto, 8 filas país (6 T7 + 2 T5
+    # encontradas por el mismo sweep) quedaban sobreescritas DESPUÉS de resolver correctamente —
+    # 'Nueces pecanas' incluso se perdía por completo (→ 'Pecanas', string sin fila real,
+    # DROPEADO en silencio por el gate verified-only aguas abajo).
+    #
+    # Sweep de las 346 filas vivas (`task-7-report.md` §Fix round 1) confirmó que la alternativa
+    # — saltar la cadena para CUALQUIER match exacto — NO es segura: 13 filas PRE-EXISTENTES (no
+    # de catálogo-país) dependen de esta cadena a propósito para colapsar variantes/preparación a
+    # un display de compra más simple (ej. 'Plátano verde'/'Plátano maduro' → 'Plátano' vía
+    # `canonicalize_musaceae`, 'Queso cheddar' → 'Cheddar', 'Clara de huevo'/'Yema de huevo' →
+    # 'Huevo' vía `_consolidate_inline_canon`) — saltar la cadena para esas 13 rompería ese
+    # comportamiento DO ya establecido. El scope a `is_country_catalog_unpriced_item` dejа esas 13
+    # intactas (ninguna es un token de catálogo-país) y solo activa el atajo para los 140 tokens
+    # de ES/MX/CO/PR/US, indiferente al estado del knob salvo 'tortilla de maiz' (mismo criterio
+    # que la propia función ya aplica) — un ingrediente DO nunca matchea ninguno de esos 140
+    # tokens (ya verificado por el sweep de colisión T7: 140/140 exactos, 0 falsos positivos
+    # contra el catálogo+pools completo), así que esta rama es un no-op byte-idéntico para DO.
+    if m_item and is_country_catalog_unpriced_item(canonical_name):
+        return canonical_name
+
     _inline_canon = _consolidate_inline_canon(canonical_name)
     if _inline_canon is not None:
         canonical_name = _inline_canon
