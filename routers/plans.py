@@ -3188,6 +3188,49 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
         logger.error(f"❌ [API SHIFT ERROR] {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
+
+def _hydrate_country_from_profile_for_submit(data: dict, user_id: Optional[str]) -> None:
+    """[P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] El país del PERFIL manda en las
+    renovaciones. Muta `data` IN-PLACE en los DOS entry points de generación
+    (/analyze y /analyze/stream), ANTES del pipeline y del merge a health_profile.
+
+    Incidente (2026-08-18, primer día del flip): el dueño eligió España en
+    Configuración (PATCH → health_profile.country='ES'), pulsó «Renovar», y el plan
+    salió dominicano (RD$, crítica criolla) Y Configuración volvió a mostrar DO.
+    Cadena: la renovación reenvía el formData del DISPOSITIVO, cuyo `country` es el
+    'DO' sembrado por `initialFormData` (el usuario jamás lo eligió) → la generación
+    leyó ese país stale → y el merge post-pipeline (`hp_data.update`) lo escribió de
+    vuelta al perfil, pisando el 'ES' de Configuración. Dos setters del mismo dato
+    sin jerarquía = last-writer-wins silencioso.
+
+    Regla (jerarquía explícita):
+      - `update_reason` presente ⇒ regen explícita (Renovar/Actualizar): el payload
+        NO trae una elección nueva de país, trae una copia vieja ⇒ el perfil GANA.
+      - Sin `update_reason` (wizard completo): el payload puede traer una elección
+        RECIÉN hecha en QCountry ⇒ el payload gana (y el merge la persistirá).
+      - En ambos casos, si el payload no trae país y el perfil sí ⇒ rellenar
+        (espejo del fill-si-falta de `_enrich_clinical_from_profile`, F2a).
+
+    Como la mutación ocurre antes del persist compartido, `hp_data` re-escribe el
+    MISMO valor del perfil (no-op) y el clobber muere en la misma jugada. Se copia
+    CRUDO, sin canonicalizar: la única puerta sigue siendo `country_for_form_data`
+    (P1-DIET-CANON-SSOT). Guests / sin perfil / error ⇒ no-op fail-open.
+    tooltip-anchor: P1-COUNTRY-RENEWAL-PROFILE-WINS
+    """
+    if not user_id or user_id == "guest" or not isinstance(data, dict):
+        return
+    try:
+        from db import get_user_profile
+        hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
+        prof_country = hp.get("country")
+        if not prof_country:
+            return
+        if data.get("update_reason") or not data.get("country"):
+            data["country"] = prof_country
+    except Exception as _cty_err:
+        logger.warning(f"⚠️ [P1-COUNTRY-RENEWAL-PROFILE-WINS] hidratación de país falló (fail-open): {_cty_err}")
+
+
 @router.post("/analyze")
 def api_analyze(
     background_tasks: BackgroundTasks,
@@ -3214,6 +3257,11 @@ def api_analyze(
         # canal de texto libre clínico ANTES de cualquier validación/merge —
         # ver docstring de `_close_medical_freetext_scope`.
         _close_medical_freetext_scope(data)
+
+        # [P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] El país del perfil manda
+        # en renovaciones (update_reason set) y rellena si falta — ANTES del
+        # pipeline y del merge a health_profile. Ver docstring del helper.
+        _hydrate_country_from_profile_for_submit(data, verified_user_id)
 
         # [P1-5] Validación temprana de campos mínimos. Antes payloads incompletos
         # llegaban al pipeline y producían un plan basado en defaults genéricos
@@ -3647,6 +3695,11 @@ async def api_analyze_stream(
         # [P1-MEDICAL-CONDITIONS-CAP · 2026-08-01 · CRITICAL-1-FIX] Mismo cierre
         # que el endpoint sync — ver docstring de `_close_medical_freetext_scope`.
         _close_medical_freetext_scope(data)
+
+        # [P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] Mismo hidratado que el
+        # endpoint sync: el país del perfil manda en renovaciones y rellena si
+        # falta — ver docstring del helper.
+        _hydrate_country_from_profile_for_submit(data, verified_user_id)
 
         # [P1-5] Misma validación temprana que el endpoint sync. Lanzar 422 ANTES
         # de abrir el StreamingResponse: si el payload es inválido, el cliente

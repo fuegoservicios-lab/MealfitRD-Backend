@@ -224,6 +224,29 @@ Repetir en miniatura el QA offline de Task 10 pero contra `mealfitrd.com` real:
   `..._byte_identico_...` de `test_p1_country_system_f1.py`/`test_p1_country_system_f2.py` son la
   evidencia offline; la verificación en vivo la corre el controller).
 
+### 6. Incidente del día del flip: la renovación pisaba el país de Configuración
+
+[P1-COUNTRY-RENEWAL-PROFILE-WINS · 2026-08-18] Primer uso real post-flip: el dueño eligió
+**España** en Configuración (PATCH → `health_profile.country='ES'`), pulsó «Renovar», y el plan
+salió **dominicano** (RD$, crítica criolla) — y Configuración volvió sola a DO. Cadena: la
+renovación reenvía el `formData` del dispositivo, cuyo `country` es el `'DO'` **sembrado por
+`initialFormData`** (jamás elegido); la generación leyó ese valor stale, y el merge post-pipeline
+(`hp_data.update(data)` en el persist compartido de /analyze y /analyze/stream) lo escribió de
+vuelta al perfil, matando el 'ES'. **Dos setters del mismo dato sin jerarquía = last-writer-wins
+silencioso.** La hidratación F2a no aplicaba: vive en las superficies de UPDATE
+(`_enrich_clinical_from_profile`) y su `if not data.get("country")` asume que payload-con-país =
+elección — **el default sembrado es indistinguible de una elección**, salvo por `update_reason`,
+que solo las regens explícitas mandan.
+
+Fix: `_hydrate_country_from_profile_for_submit` (routers/plans.py, llamado en LOS DOS entry
+points tras `_close_medical_freetext_scope`, ANTES del pipeline y del merge): con
+`update_reason` presente el **perfil GANA** (pisa la copia stale del payload); sin él (wizard
+completo con QCountry recién elegido) el payload gana como siempre; fill-si-falta en ambos. Al
+mutar `data` antes del persist compartido, `hp_data` re-escribe el valor correcto y el clobber
+muere en la misma jugada. Complemento frontend: `Settings.handleSelectCountry` sincroniza también
+`formData.country` (updateData) — mantiene coherente el dispositivo y la preselección de QCountry.
+Test: [`test_p1_country_renewal_profile_wins.py`](../tests/test_p1_country_renewal_profile_wins.py).
+
 ## Tests
 
 - [`backend/tests/test_p1_country_system_f0.py`](../tests/test_p1_country_system_f0.py) — Fase 0 (el dato, sin lectores).
