@@ -176,7 +176,12 @@ def test_gap07_chatmodify_budget_wired():
 # ── GAP-08: cheapen-pass reescribe pasos ─────────────────────────────────────
 def test_gap08_cheapen_rewrites_recipe_steps_anchor():
     cp = _GO.index("def _apply_budget_cheapen_pass")
-    body = _GO[cp:cp + 9000]
+    # [P1-BUDGET-CHEAPEN-COUNTRY-GATE · 2026-08-18] la ventana fija de 9000 chars
+    # se quedó corta cuando el country-gate (comentario incluido) creció la cabecera
+    # de la función — cortar en el próximo `def` top-level es function-scoped y no
+    # vuelve a romperse con el siguiente insert.
+    _nxt = _GO.find("\ndef ", cp + 1)
+    body = _GO[cp:_nxt if _nxt != -1 else cp + 20000]
     assert "_rewrite_recipe_steps_after_subs" in body, \
         "el cheapen-pass debe reescribir los pasos tras sustituir (GAP-08)"
     assert "SUBST_RECIPE_REWRITE_ENABLED" in body
