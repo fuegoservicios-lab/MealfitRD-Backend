@@ -14286,6 +14286,16 @@ def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
 # antes solo dependía del revisor LLM (falible). Es DETECCIÓN (backstop _scan_allergen_violations
 # + filtro de candidatos del closer), no sustitución → no requiere filas de catálogo nuevas y
 # preserva el sesgo de sobre-detección intencional. Anchor: P1-ALLERGEN-DERIVATIVES.
+# [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M5] Las 9 categorías de abajo (mani/frutos
+# secos/mariscos/pescado/lacteos/lactosa/gluten/huevo(s)/soya) son TODAS las que existen — NO hay
+# clase "ajonjolí/sésamo" ni "legumbres" (garbanzo/lenteja como alergia declarada, distinto del
+# swap dietético de `_DIET_*_TERMS`). Verificado: 'hummus'/'tahini'/'sesamo'/'ajonjoli'/
+# 'garbanzo' no aparecen en NINGUNA lista de abajo — un usuario alérgico al sésamo que declare
+# "hummus" o "tahini" cae al fallback de match literal (`forbidden.add(a_low)` en
+# `_scan_allergen_violations`), que solo atrapa la palabra EXACTA que el usuario tecleó, no sus
+# derivados. Candidato de clase futura si aparece evidencia real (medido, no especulativo — mismo
+# criterio que `_GLUTEN_FORWARD_FILLER_WHITELIST`); NO añadida aquí porque esta ola no la
+# evidenció, solo la encontró ausente.
 _ALLERGEN_SYNONYMS = {
     "mani": ["mani", "cacahuate", "peanut", "mantequilla de mani", "crema de mani",
              "salsa de mani"],
@@ -14522,6 +14532,22 @@ _GLUTEN_FORWARD_EXCUSE_RX = _re_mod.compile(
 _ALLERGEN_GLUTEN_TERM_SET = frozenset(
     strip_accents(_s).lower() for _s in _ALLERGEN_SYNONYMS["gluten"]
 )
+# [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C2] La excusa FORWARD de
+# arriba absolvía CUALQUIER término de `_ALLERGEN_GLUTEN_TERM_SET` seguido de «sin gluten» — sin
+# distinguir «avena sin gluten» (cumplimiento real: existe avena certificada libre de gluten) de
+# «harina de trigo sin gluten» (claim IMPOSIBLE: harina de trigo ES gluten por definición). El
+# review de fase lo midió en vivo: `_scan_allergen_violations` sobre "Harina de trigo sin gluten"
+# para un alérgico a Gluten ⇒ `[]` (pre-fase bloqueaba). Estos 12 términos de
+# `_ALLERGEN_SYNONYMS['gluten']` NO tienen ninguna versión sin gluten posible — a diferencia de
+# avena/pan/pasta/tostada/galleta/etc (que SÍ la tienen y permanecen excusables), decorarlos con
+# «sin gluten»/«libre de gluten» no es cumplimiento, es una contradicción. Verificado contra la
+# lista completa de `_ALLERGEN_SYNONYMS['gluten']` — criterio: «no existe versión sin gluten de
+# este alimento». Si aparece evidencia real de un 13er término imposible, añadirlo aquí CON un
+# test que lo ancle primero (mismo principio que `_GLUTEN_FORWARD_FILLER_WHITELIST`).
+_GLUTEN_NO_GF_VARIANT_TERMS = frozenset({
+    "trigo", "harina de trigo", "cebada", "centeno", "seitan", "wheat",
+    "semola", "bulgur", "malta", "gluten", "cuscus", "couscous",
+})
 
 
 def _scan_allergen_violations(plan: dict, allergies) -> list:
@@ -14574,6 +14600,17 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                             continue
                         # [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] «sin/libre de/cero/no
                         # contiene <token>» = ausencia declarada del token — no violación.
+                        # [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · C2] Esta excusa BACKWARD
+                        # NO comparte el gate `f in _ALLERGEN_GLUTEN_TERM_SET` de la FORWARD de
+                        # abajo — es universal a TODAS las categorías (`leche sin lactosa` la
+                        # prueba: 'leche' nunca la alcanza porque la negación no la PRECEDE). Por
+                        # eso `_GLUTEN_NO_GF_VARIANT_TERMS` NO se aplica aquí: 'gluten' es uno de
+                        # los 12 términos imposibles, pero es precisamente ESTE mecanismo el que
+                        # excusa la palabra literal 'gluten' en el caso base «avena certificada SIN
+                        # GLUTEN» (la negación PRECEDE inmediatamente a 'gluten' mismo) — excluirlo
+                        # aquí re-rompería los 8 tests de negation-excuse. La contradicción real
+                        # («harina de trigo sin gluten») vive en la FORWARD (trigo→...→gluten, no
+                        # gluten→…→gluten) — scope correcto, verificado con la suite completa.
                         if _ALLERGEN_NEGATION_PREFIX_RX.search(
                                 ing_low[max(0, _m_al.start() - 24): _m_al.start()]):
                             continue
@@ -14581,8 +14618,17 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         # SCOPED a gluten únicamente (`f` debe ser un término de esa categoría) —
                         # «avena certificada sin gluten» / «pan sin gluten»: la negación SIGUE al
                         # término, la prefix-excuse de arriba no la alcanza.
-                        if f in _ALLERGEN_GLUTEN_TERM_SET and _GLUTEN_FORWARD_EXCUSE_RX.match(
-                                ing_low[_m_al.end(): _m_al.end() + 40]):
+                        # [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C2]
+                        # `f not in _GLUTEN_NO_GF_VARIANT_TERMS` cierra el fail-open medido en el
+                        # review: sin este guard, «Harina de trigo sin gluten» pasaba para un
+                        # CELÍACO (pre-fase bloqueaba) — el forward excusaba 'trigo'/'harina de
+                        # trigo' igual que excusa 'avena'/'pan', pero para estos 12 términos NO
+                        # existe versión sin gluten posible (ver el frozenset arriba): la claim es
+                        # imposible/contradictoria, no cumplimiento.
+                        if (f in _ALLERGEN_GLUTEN_TERM_SET
+                                and f not in _GLUTEN_NO_GF_VARIANT_TERMS
+                                and _GLUTEN_FORWARD_EXCUSE_RX.match(
+                                    ing_low[_m_al.end(): _m_al.end() + 40])):
                             continue
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break

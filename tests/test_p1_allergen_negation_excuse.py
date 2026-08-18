@@ -21,6 +21,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 os.environ.setdefault("MEALFIT_DB_BACKEND", "neon")
@@ -192,3 +194,62 @@ def test_i_trazas_nunca_fue_evidenciado():
         "la whitelist forward sigue siendo SOLO 'certificada' — si 'trazas' se añadió, "
         "debe venir con su propio test de evidencia"
     )
+
+
+# [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C2] La excusa FORWARD
+# (`_GLUTEN_FORWARD_EXCUSE_RX`) absolvía CUALQUIER término de `_ALLERGEN_GLUTEN_TERM_SET` seguido
+# de «sin gluten» — sin distinguir «avena sin gluten» (cumplimiento real: existe avena certificada
+# libre de gluten) de «harina de trigo sin gluten» (claim IMPOSIBLE: harina de trigo ES gluten por
+# definición). El review de fase lo midió en vivo contra HEAD pre-fix: los 12 términos de
+# `_GLUTEN_NO_GF_VARIANT_TERMS` (graph_orchestrator.py) decorados con «sin gluten» devolvían `[]`
+# para un alérgico a Gluten («Harina de trigo sin gluten» PASABA — pre-fase bloqueaba). El fix
+# añade `f not in _GLUTEN_NO_GF_VARIANT_TERMS` al gate forward — SOLO ahí: la excusa BACKWARD
+# (`_ALLERGEN_NEGATION_PREFIX_RX`, arriba) es universal a TODAS las categorías y es precisamente
+# la que excusa la palabra literal 'gluten' en el caso base «avena certificada SIN GLUTEN» —
+# scopearla ahí re-rompería los 8 tests de negation-excuse de este archivo.
+_C2_NO_GF_VARIANT_TERMS = (
+    "trigo", "harina de trigo", "cebada", "centeno", "seitan", "wheat",
+    "semola", "bulgur", "malta", "gluten", "cuscus", "couscous",
+)
+
+
+@pytest.mark.parametrize("term", _C2_NO_GF_VARIANT_TERMS)
+def test_c2_termino_incondicionalmente_glutenoso_decorado_sigue_violando(term):
+    """RED-first (reproducido contra graph_orchestrator.py PRE-fix C2, los 12 devolvían `[]`):
+    '<term> sin gluten' debe violar — no existe versión sin gluten posible de estos 12 términos,
+    a diferencia de avena/pan/pasta/tostada/galleta (que SÍ la tienen y permanecen excusables,
+    ver test_c2_legitimate_excused_forms_siguen_excusadas abajo)."""
+    v = _viols([f"{term} sin gluten"], ["Gluten"])
+    assert v, f"'{term} sin gluten' debe violar — no existe versión sin gluten de {term!r}"
+
+
+def test_c2_legitimate_excused_forms_siguen_excusadas():
+    """Control: los 3 claims GF legítimos (avena/pan/pasta SÍ tienen versión sin gluten real)
+    permanecen excusados tras el fix C2 — el guard es scoped a los 12 términos imposibles, NO un
+    revert general de la excusa forward."""
+    assert _viols(["avena certificada sin gluten"], ["Gluten"]) == []
+    assert _viols(["pan sin gluten"], ["Gluten"]) == []
+    assert _viols(["pasta sin gluten"], ["Gluten"]) == []
+
+
+def test_c2_leche_sin_lactosa_sigue_violando_lacteos():
+    """Control cross-categoría: el fix C2 es scoped a la categoría gluten (`_GLUTEN_NO_GF_VARIANT_TERMS`
+    solo se consulta cuando `f in _ALLERGEN_GLUTEN_TERM_SET`) — 'leche sin lactosa' para lácteos
+    no debe verse afectado."""
+    v = _viols(["leche sin lactosa"], ["Lácteos"])
+    assert v and v[0][2] == "leche"
+
+
+def test_c2_mutacion_frozenset_vacio_reproduce_el_fail_open():
+    """MUTACIÓN: si `_GLUTEN_NO_GF_VARIANT_TERMS` se vacía, los 12 términos vuelven a excusarse —
+    evidencia de que el fix real (no solo el comentario) cierra el hueco, no una coincidencia de
+    otro cambio."""
+    original = go._GLUTEN_NO_GF_VARIANT_TERMS
+    try:
+        go._GLUTEN_NO_GF_VARIANT_TERMS = frozenset()
+        v = _viols(["harina de trigo sin gluten"], ["Gluten"])
+        assert v == [], "con el frozenset vacío, el fail-open PRE-fix debe reproducirse EN VIVO"
+    finally:
+        go._GLUTEN_NO_GF_VARIANT_TERMS = original
+    v2 = _viols(["harina de trigo sin gluten"], ["Gluten"])
+    assert v2, "restaurado el frozenset, 'harina de trigo sin gluten' debe volver a violar"

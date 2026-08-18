@@ -207,7 +207,7 @@ Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catá
 
 ### Sentry sampling driven from env (NO hardcodear `1.0`)
 
-[P1-SENTRY-SAMPLE-COST · 2026-05-12] Backend y frontend leen sample rate desde env var con default seguro 0.1 (10%). Hardcodear `1.0` satura cuota Sentry a escala (≥10k req/día) y throttling dropea errores genuinos. Detalle narrativa + "cuándo subir a 1.0" en [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_sentry_sample_cost.py`](backend/tests/test_p1_sentry_sample_cost.py).
+[P1-SENTRY-SAMPLE-COST · 2026-05-12] Backend y frontend leen sample rate desde env var, default 0.1 (10%): hardcodear `1.0` satura cuota Sentry a escala (≥10k req/día) y dropea errores genuinos por throttling. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_sentry_sample_cost.py`](backend/tests/test_p1_sentry_sample_cost.py).
 
 | Capa | Env var | Default | Clamp |
 |---|---|---|---|
@@ -217,11 +217,11 @@ Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catá
 
 ### Security headers en nginx (defensa-en-profundidad en mealfitrd.com)
 
-[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers (HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, CSP-Report-Only) viven en el snippet `/etc/nginx/snippets/mealfit-security.conf` del VPS Oracle, incluido en el server block HTTPS **y** en cada `location` con `add_header` propio (nginx no hereda `add_header` a un location que define los suyos). Antes vivían en `frontend/vercel.json`, eliminado al migrar de Vercel al VPS (despliegue 2026-06-12). CSP arranca **Report-Only**. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md).
+[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers (HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, CSP-Report-Only) viven en `/etc/nginx/snippets/mealfit-security.conf` del VPS Oracle, en el server block HTTPS **y** en cada `location` con `add_header` propio (nginx no hereda entre locations). Antes en `frontend/vercel.json` (migrado a VPS 2026-06-12). CSP arranca **Report-Only**. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md).
 
 ### Admin gate en `/api/system/health` (no es público)
 
-[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] [`backend/routers/system.py:get_system_health`](backend/routers/system.py) gateado por `_verify_admin_token` (mismo `CRON_SECRET` que admin endpoints). Pre-fix era público y exponía business-intel agregada (nudge rate, abandono, distribución emocional, quality score). Probe público de liveness: `GET /health` y `GET /ready` (solo `{status: ok}`). Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
+[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] [`backend/routers/system.py:get_system_health`](backend/routers/system.py) gateado por `_verify_admin_token` (mismo `CRON_SECRET` de los admin endpoints). Pre-fix: público, exponía business-intel agregada (nudge rate/abandono/emoción/quality score). Liveness público: `GET /health` / `GET /ready` (solo `{status: ok}`). Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
 
 ### Pattern: `SET search_path = ''` en functions Postgres
 
@@ -229,7 +229,7 @@ Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catá
 
 ### Ciclo de vida del KV `llm_circuit_breaker:*`
 
-[P3-NEW-E · 2026-05-11] Estado persistente del `LLMCircuitBreaker` ([`graph_orchestrator.py`](backend/graph_orchestrator.py)). Patterns de key en `app_kv_store`: `llm_circuit_breaker` (legacy global) + `llm_circuit_breaker:<model>` (P1-Q3 per-modelo, sufijo `f":{model_name}"` construido en `LLMCircuitBreaker.__init__`). Payload `{failures, last_failure, is_open}`; canonical zero post-reset. Tres vías de reset: `_atomic_reset_db()` (post-success UPSERT), `can_proceed()` runtime auto-expira sin tocar la fila DB → gap "stale", cron `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) reescribe filas stale. Diagrama de transiciones + storage layers + SOPs detallados: [`runbook_llm_circuit_breaker_kv_lifecycle_2026_05_12.md`](~/.claude/projects/.../memory/runbook_llm_circuit_breaker_kv_lifecycle_2026_05_12.md). Test ancla: [`test_p3_new_e_cb_kv_lifecycle_doc.py`](backend/tests/test_p3_new_e_cb_kv_lifecycle_doc.py).
+[P3-NEW-E · 2026-05-11] Estado persistente del `LLMCircuitBreaker` ([`graph_orchestrator.py`](backend/graph_orchestrator.py)). Key en `app_kv_store`: `llm_circuit_breaker` (legacy global) + `llm_circuit_breaker:<model>` (P1-Q3 per-modelo). Payload `{failures, last_failure, is_open}`; canonical zero post-reset. Tres vías de reset: `_atomic_reset_db()` (post-success UPSERT), `can_proceed()` auto-expira runtime sin tocar la fila DB → gap "stale", cron `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) reescribe filas stale. Diagrama + SOPs: [`runbook_llm_circuit_breaker_kv_lifecycle_2026_05_12.md`](~/.claude/projects/.../memory/runbook_llm_circuit_breaker_kv_lifecycle_2026_05_12.md). Test ancla: [`test_p3_new_e_cb_kv_lifecycle_doc.py`](backend/tests/test_p3_new_e_cb_kv_lifecycle_doc.py).
 
 | Knob | Default | Efecto |
 |---|---|---|
@@ -381,11 +381,11 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 ### Endpoint público para blackbox monitor externo
 
-[P2-HEALTHZ-DEEP · 2026-05-12] `GET /health/version` ([`backend/app.py`](backend/app.py)) público sin auth, expone 5 keys (`expected_marker`, `drift`, `last_pipeline_metrics_tick_at`, `has_p0_prod_1_gate`, `has_p1_perf_1_cache`) para poller externo. Cierra paradoja "binary roto se vigila a sí mismo". Tabla detallada + SOP UptimeRobot (URL + assertions): [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "Endpoint público `/health/version`". Test: [`test_p2_healthz_deep_extended.py`](backend/tests/test_p2_healthz_deep_extended.py).
+[P2-HEALTHZ-DEEP · 2026-05-12] `GET /health/version` ([`backend/app.py`](backend/app.py)) público sin auth, expone 5 keys (`expected_marker`, `drift`, `last_pipeline_metrics_tick_at`, `has_p0_prod_1_gate`, `has_p1_perf_1_cache`) para poller externo. Cierra paradoja "binary roto se vigila a sí mismo". SOP UptimeRobot: [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "Endpoint público `/health/version`". Test: [`test_p2_healthz_deep_extended.py`](backend/tests/test_p2_healthz_deep_extended.py).
 
 ### SOP: resolver `deploy_lag_drift_vs_expected`
 
-[P3-CLEANUP · 2026-05-11 · restaurado P1-SCHEDULER-1 2026-05-12] Cuando el cron `_alert_deploy_lag_marker_stale` inserta esta alert: usar el endpoint admin `POST /api/system/admin/deploy-lag/check` (auth `Bearer $CRON_SECRET`) para identificar el delta `{live_marker, expected_marker, drift}`. Pasos detallados (6 fases: identificar → decidir lado → bumpear KV via script SSOT o SQL fallback → cerrar alert → verificar → post-mortem si recurrente) en [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "SOP: resolver `deploy_lag_drift_vs_expected`".
+[P3-CLEANUP · 2026-05-11 · restaurado P1-SCHEDULER-1 2026-05-12] Cuando el cron `_alert_deploy_lag_marker_stale` inserta esta alert: usar `POST /api/system/admin/deploy-lag/check` (auth `Bearer $CRON_SECRET`) para el delta `{live_marker, expected_marker, drift}`. 6 fases (identificar → decidir lado → bumpear KV → cerrar alert → verificar → post-mortem) en [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "SOP: resolver `deploy_lag_drift_vs_expected`".
 
 ---
 
@@ -393,5 +393,5 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 [P2-NEW-3 · 2026-05-10 · reconciliada P2-AUDIT-4 · 2026-05-10] Modelo: **upsert por `alert_key` + `resolved_at` mutable** (alert "vive" mientras `resolved_at IS NULL`). 4 modelos canónicos: **Auto (explicit)** UPDATE explícito, **Auto (implicit)** productor re-emite mientras condición existe, **Handler-driven** endpoint cierra, **Manual** SRE.
 
-**Tabla canónica completa de ~32 `alert_key`** (productor / resolver / modelo) y SOP "Cómo añadir un nuevo alert_key": [`backend/docs/system_alerts_resolution_table.md`](backend/docs/system_alerts_resolution_table.md). SOPs detallados para alerts Manual (`plan_data_corrupted:*`, `deploy_lag_drift_vs_expected` + limpieza one-shot huérfanas) en [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md). Drift detection bidireccional via [`test_p2_audit_4_alert_keys_documented.py`](backend/tests/test_p2_audit_4_alert_keys_documented.py) (parsea `backend/docs/system_alerts_resolution_table.md` + call sites en `cron_tasks.py`/`db_inventory.py`/`memory_manager.py`/`app.py`/`graph_orchestrator.py`/`routers/billing.py`).
+**Tabla canónica de ~32 `alert_key`** (productor / resolver / modelo) y SOP "Cómo añadir un nuevo alert_key": [`backend/docs/system_alerts_resolution_table.md`](backend/docs/system_alerts_resolution_table.md). SOPs para alerts Manual (`plan_data_corrupted:*`, `deploy_lag_drift_vs_expected` + limpieza one-shot huérfanas) en [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md). Drift bidireccional via [`test_p2_audit_4_alert_keys_documented.py`](backend/tests/test_p2_audit_4_alert_keys_documented.py) (parsea `backend/docs/system_alerts_resolution_table.md` + call sites en `cron_tasks.py`/`db_inventory.py`/`memory_manager.py`/`app.py`/`graph_orchestrator.py`/`routers/billing.py`).
 

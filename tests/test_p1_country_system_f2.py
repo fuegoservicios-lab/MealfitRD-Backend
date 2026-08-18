@@ -4895,3 +4895,546 @@ def test_f_mutacion_quitar_la_advisory_beta_test_se_pone_rojo():
     real_adv, _, _, beta_only = _go_f._slot_appropriateness_advisory_decision([{"hard": False}], 1, 3, "ES")
     assert real_adv is True, "el fix real SÍ da advisory desde attempt 1 para beta soft-only"
     assert real_adv != pre_fix_adv, "la mutación (quitar el `or beta_soft_only`) debía cambiar el resultado"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# OLA FINAL (review de fase, opus) — 2026-08-18 — C3, I1, I2
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# El review de fase (whole-phase, tras el cierre de Task 10) encontró 6 strings DO-reachable
+# retargeteados en silencio por altas de Fase 2 (Chicharrón/CO T6, Cordero+Requesón+Judías
+# pintas/ES T5): 4 alias BARE genuinamente redundantes o colisionantes con vocabulario/filas
+# pre-fase ('chicharron' en Chicharrón — redundante con su propio nombre canónico; 'lamb' en
+# Cordero — fuzzy-matcheaba 'lambí'/'lambi', un molusco real, no un cordero; 'ricotta' en
+# Requesón — colisionaba con 'Queso ricotta', fila DO priced que lo tenía primero; 'pinto beans'
+# en Judías pintas — colisionaba con 'Frijoles pintos', fila DO priced que lo tenía primero) más
+# un 5º hallazgo separado ('Chicharrón de pollo' retargeteado a la fila de CERDO, nunca revisado
+# por T6 — que solo evaluó 'de cerdo'/bare) que la remoción del alias NO alcanza a cerrar (el
+# NOMBRE CANÓNICO de la fila ya provee el mismo match vía CONTAINS) y requirió un guard temprano
+# (`C3.1`) en `shopping_calculator.normalize_name`, mismo patrón que el guard de 'pavo' ya
+# existente en esa función.
+#
+# Los 4 alias se removieron con `scripts/retarget_alias_fix_2026_08_18.py` (idempotente,
+# dry-run→--commit, sincroniza DB + los JSON SSOT de origen). El guard C3.1 vive en
+# `shopping_calculator.py`. Esta sección ancla ambos + dos invariantes estructurales que el
+# review pidió específicamente:
+#   - I1: ningún alias (ni el nombre canónico de una fila, tratado como su propio self-alias por
+#     `_construir_indice_alias`) puede vivir en 2+ filas distintas — la CLASE de bug que produjo
+#     ricotta/pinto beans.
+#   - I2: el sweep de colisión de `is_country_catalog_unpriced_item` (T5, arriba) se extiende de
+#     nombres/pools a ALIASES de filas PRICED — con verificación de que las 4 colisiones
+#     conocidas (mora azul/azafrán de la india/queso panela/quesito panela) son benignas
+#     ESPECÍFICAMENTE para `canonicalize_shopping_food_name` (que resuelve por `master_map` ANTES
+#     de siquiera consultar `is_country_catalog_unpriced_item`).
+
+# ── C3. Los 4 alias bare retargeteados + el guard de "Chicharrón de pollo" ──────────────────────
+
+def test_c3_chicharron_de_cerdo_sigue_resolviendo_a_chicharron(sc):
+    """['Chicharrón de cerdo' — mejora ACEPTADA de T6, no tocada por esta ola] Sigue resolviendo
+    a 'Chicharrón' (fila CO) tras remover el alias bare 'chicharron' -- documentado en
+    new_foods_mx_co_2026_08_17.json._provenance: chicharrón real (kcal 544/fat 31.3g) diverge
+    >200% de 'Cerdo' genérico (kcal 169.6/fat 9.47g), la fila nueva es MÁS precisa. A diferencia
+    de 'de pollo' (test siguiente), esto NO revierte a pre-fase a propósito."""
+    assert sc.normalize_name("Chicharrón de cerdo") == "Chicharrón"
+    assert sc.normalize_name("chicharron de cerdo") == "Chicharrón"
+
+
+def test_c3_chicharron_de_pollo_vuelve_a_pechuga_de_pollo(sc):
+    """[RED-first, reproducido contra HEAD faf10f7] 'Chicharrón de pollo' resolvía a 'Chicharrón'
+    (fila CO de CERDO) -- retargeteo NUNCA revisado por T6. Remover el alias bare 'chicharron'
+    NO alcanza (verificado en vivo antes de escribir el guard: el NOMBRE CANÓNICO de la fila
+    sigue matcheando vía CONTAINS incluso sin el alias explícito) -- el guard temprano `C3.1` en
+    `shopping_calculator.normalize_name` restaura la resolución pre-fase ('Pechuga de pollo',
+    vía substring 'pollo')."""
+    assert sc.normalize_name("Chicharrón de pollo") == "Pechuga de pollo"
+    assert sc.normalize_name("chicharron de pollo") == "Pechuga de pollo"
+
+
+def test_c3_bare_chicharron_sigue_resolviendo_a_chicharron(sc):
+    """Control: el guard C3.1 exige la palabra 'pollo' co-presente en el mismo string -- bare
+    'chicharrón' (el caso CO que T6 quiso resolver, "antes no resolvía nada") no se ve afectado
+    por el guard ni por la remoción del alias (su propio nombre canónico basta)."""
+    assert sc.normalize_name("chicharron") == "Chicharrón"
+    assert sc.normalize_name("Chicharrón") == "Chicharrón"
+
+
+def test_c3_lambi_ya_no_resuelve_a_cordero(sc):
+    """[RED-first] 'lambí'/'lambi' (molusco caribeño real -- vive en `PROTEIN_SYNONYMS['pescado']`
+    junto a merluza/róbalo/carite) fuzzy-matcheaba el alias 'lamb' de Cordero (ratio 0.889 >=
+    umbral 0.87 de `_FUZZY_MATCH_THRESHOLD`) -> 'Cordero'. Removido el alias, vuelven a caer sin
+    resolver -- pre-fase ninguna fila de cordero existía, así que esto restaura exactamente ese
+    estado (no una mejora nueva, un revert)."""
+    assert sc.normalize_name("lambí") != "Cordero"
+    assert sc.normalize_name("lambi") != "Cordero"
+    assert sc.normalize_name("lamb") != "Cordero"
+
+
+def test_c3_cordero_sigue_resolviendo_para_sus_items_curados(sc):
+    """Control: Cordero conserva sus alias propios (sin 'lamb') -- los items curados de la lista
+    ES (T1) siguen resolviendo, la remoción fue quirúrgica sobre UN SOLO alias."""
+    assert sc.normalize_name("Cordero") == "Cordero"
+    assert sc.normalize_name("carne de cordero") == "Cordero"
+    assert sc.normalize_name("pierna de cordero") == "Cordero"
+
+
+def test_c3_ricotta_resuelve_a_queso_ricotta(sc):
+    """[RED-first] 'ricotta' resolvía a 'Requesón' (alta ES T5, alias bare duplicado) en vez de
+    'Queso ricotta' (fila DO priced pre-fase que lo tenía primero, price_per_unit=245) --
+    removido el alias duplicado de Requesón."""
+    assert sc.normalize_name("ricotta") == "Queso ricotta"
+    assert sc.normalize_name("Ricotta") == "Queso ricotta"
+
+
+def test_c3_requeson_conserva_sus_alias_propios(sc):
+    assert sc.normalize_name("requeson") == "Requesón"
+    assert sc.normalize_name("requesón") == "Requesón"
+
+
+def test_c3_pinto_beans_resuelve_a_frijoles_pintos(sc):
+    """[RED-first] 'pinto beans' resolvía a 'Judías pintas' (alta ES T5, alias bare duplicado) en
+    vez de 'Frijoles pintos' (fila DO priced pre-fase que lo tenía primero, price_per_lb=72.01)
+    -- removido el alias duplicado de Judías pintas."""
+    assert sc.normalize_name("pinto beans") == "Frijoles pintos"
+    assert sc.normalize_name("Pinto beans") == "Frijoles pintos"
+
+
+def test_c3_judias_pintas_conserva_sus_alias_propios(sc):
+    assert sc.normalize_name("judias pintas") == "Judías pintas"
+    assert sc.normalize_name("judías pintas") == "Judías pintas"
+
+
+# ── C3 Durable Guard. El corpus DO completo (dish_templates + pools + reverse-map + filas
+# pre-fase) contra un baseline COMMITTED — la mitad "asimétrica" del guard: I10/Durable-Guard-#6
+# protege el catálogo de PAÍS BETA (country_gaps/*.json); este protege el vocabulario DO desde el
+# LADO CONTRARIO — que dar de alta un alimento de país beta no le cambie la resolución a un
+# string que el sistema DO ya reconocía. ──────────────────────────────────────────────────────
+
+_DO_CORPUS_BASELINE_JSON = _BACKEND / "scripts" / "data" / "do_corpus_retarget_baseline_2026_08_18.json"
+_NEW_FOOD_FILES_C3 = [
+    _BACKEND / "scripts" / "data" / "new_foods_es_2026_08_17.json",
+    _BACKEND / "scripts" / "data" / "new_foods_mx_co_2026_08_17.json",
+    _BACKEND / "scripts" / "data" / "new_foods_pr_us_2026_08_17.json",
+    _BACKEND / "scripts" / "data" / "new_foods_rd_topup_2026_08_17.json",
+]
+
+
+def _build_c3_do_corpus(sc):
+    """[C3 Durable Guard] Reconstruye el MISMO corpus que
+    `scripts/gen_do_corpus_retarget_baseline_2026_08_18.py` -- DEBE permanecer byte-idéntico a
+    ese generador (misma receta, mismo orden de fuentes) o el baseline committed deja de ser la
+    verdad contra la que este test compara:
+
+      1. `data/dish_templates.json` (DO): cada `name`/`protein`/`base` de cada template.
+      2. Los 4 pools `DOMINICAN_*` (constants.py): cada string.
+      3. `GLOBAL_REVERSE_MAP` (constants.py): cada KEY (variante) y cada VALUE (base).
+      4. Cada fila PRE-FASE de `master_ingredients` (name NO en ninguno de los 4
+         `new_foods_*_2026_08_17.json`, la lista frozen committed que sustituye a `created_at`
+         -- la tabla no tiene esa columna, verificado contra `information_schema.columns`) con
+         su nombre canónico + cada uno de sus alias.
+
+    Retorna (corpus: set[str], new_row_names: set[str])."""
+    strings = set()
+    with open(_BACKEND / "data" / "dish_templates.json", encoding="utf-8") as f:
+        dt = json.load(f)
+    for t in dt["templates"]:
+        for field in ("name", "protein", "base"):
+            if t.get(field):
+                strings.add(t[field])
+
+    for pool_name in ("DOMINICAN_PROTEINS", "DOMINICAN_CARBS", "DOMINICAN_VEGGIES_FATS", "DOMINICAN_FRUITS"):
+        strings.update(getattr(constants, pool_name))
+
+    for k, v in constants.GLOBAL_REVERSE_MAP.items():
+        strings.add(k)
+        strings.add(v)
+
+    new_row_names = set()
+    for fn in _NEW_FOOD_FILES_C3:
+        with open(fn, encoding="utf-8") as f:
+            for r in json.load(f):
+                new_row_names.add(r["name"])
+
+    master_list = sc.get_master_ingredients()
+    for r in master_list:
+        if r["name"] in new_row_names:
+            continue
+        strings.add(r["name"])
+        strings.update(r.get("aliases") or [])
+
+    strings = {s for s in strings if isinstance(s, str) and s.strip()}
+    return strings, new_row_names
+
+
+@pytest.mark.e2e
+def test_c3_durable_guard_do_corpus_retarget_baseline(sc):
+    """[C3 Durable Guard · el guard asimétrico] Re-resuelve TODO el corpus DO contra el catálogo
+    VIVO y exige coincidencia EXACTA con `do_corpus_retarget_baseline_2026_08_18.json` committed.
+    Un retargeteo INTENCIONAL futuro se cierra regenerando el baseline
+    (`scripts/gen_do_corpus_retarget_baseline_2026_08_18.py`), documentando el delta en
+    `accepted_deltas` del JSON y commiteando el archivo actualizado explícitamente -- así el diff
+    SIEMPRE pasa por review, nunca en silencio (mismo patrón que I10/
+    `test_retarget_diff_committed_country_gaps_matched_field_vs_resolver_vivo`, aplicado al lado
+    DO en vez de al lado país-beta).
+
+    RED-first: contra HEAD faf10f7 (pre-ola-final) este test hubiera flageado EXACTAMENTE 6
+    strings del corpus -- 'ricotta', 'pinto beans', 'lambi', 'lambí', 'chicharrón de pollo',
+    'chicharron de pollo' -- ver `test_c3_durable_guard_red_first_reproduce_exactamente_los_6`
+    (reproduce el estado pre-fix en memoria/mecanismo, no re-corre este test contra HEAD)."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    assert _DO_CORPUS_BASELINE_JSON.exists(), f"{_DO_CORPUS_BASELINE_JSON} debe existir committed"
+    with open(_DO_CORPUS_BASELINE_JSON, encoding="utf-8") as f:
+        baseline = json.load(f)
+    committed_mapping = baseline["mapping"]
+
+    corpus, new_row_names = _build_c3_do_corpus(sc)
+    assert len(corpus) >= 1000, f"corpus sospechosamente chico ({len(corpus)}) -- ¿alguna fuente se leyó vacía?"
+    assert len(new_row_names) >= 100, (
+        f"esperaba >=100 filas nuevas de Fase 2 excluidas del corpus pre-fase, encontré {len(new_row_names)}"
+    )
+
+    # el corpus committed y el reconstruido en vivo deben tener EXACTAMENTE los mismos strings —
+    # si divergen, el corpus mismo cambió (nuevo template/pool/fila) y hace falta regenerar el
+    # baseline, no solo comparar la intersección en silencio (eso dejaría huecos ciegos).
+    corpus_missing_from_baseline = corpus - set(committed_mapping)
+    baseline_missing_from_corpus = set(committed_mapping) - corpus
+    assert not corpus_missing_from_baseline, (
+        f"{len(corpus_missing_from_baseline)} string(s) nuevos en el corpus vivo, ausentes del "
+        f"baseline committed -- regenerar con scripts/gen_do_corpus_retarget_baseline_2026_08_18.py "
+        f"y revisar el diff: {sorted(corpus_missing_from_baseline)[:10]}"
+    )
+    assert not baseline_missing_from_corpus, (
+        f"{len(baseline_missing_from_corpus)} string(s) del baseline committed ya no existen en "
+        f"el corpus vivo (fuente removida) -- regenerar el baseline: "
+        f"{sorted(baseline_missing_from_corpus)[:10]}"
+    )
+
+    retargets = []
+    for s in sorted(corpus):
+        live = sc.normalize_name(s)
+        expected = committed_mapping[s]
+        if live != expected:
+            retargets.append((s, expected, live))
+
+    assert not retargets, (
+        "RETARGET DETECTADO en el corpus DO -- el resolver vivo apunta distinto de lo que el "
+        "baseline committed declara. Si es intencional, regenera "
+        "scripts/data/do_corpus_retarget_baseline_2026_08_18.json vía "
+        "scripts/gen_do_corpus_retarget_baseline_2026_08_18.py, documenta el delta en "
+        "accepted_deltas y commitea el JSON actualizado explícitamente:\n" +
+        "\n".join(f"  {s!r}: baseline={exp!r} vs live={live!r}" for s, exp, live in retargets)
+    )
+
+
+@pytest.mark.e2e
+def test_c3_durable_guard_red_first_reproduce_exactamente_los_6(sc):
+    """[RED-first, el contrato completo] Reconstruye el estado PRE-ola-final: los 3 alias bare
+    de vuelta EN MEMORIA (Cordero+lamb, Requesón+ricotta, Judías pintas+pinto beans) -- el guard
+    C3.1 es CÓDIGO, no dato, así que su necesidad se verifica por el mecanismo CONTAINS directo
+    en vez de mutar la función -- y confirma que EXACTAMENTE estos 6 strings del corpus
+    committed hubieran flageado distinto: 'ricotta', 'pinto beans', 'lambi', 'lambí', 'chicharrón
+    de pollo', 'chicharron de pollo'. El resto del corpus (1462 de 1468 strings) permanece
+    IDÉNTICO -- prueba que el fix fue QUIRÚRGICO, no un revert amplio que hubiera cambiado más de
+    lo debido."""
+    import copy
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    with open(_DO_CORPUS_BASELINE_JSON, encoding="utf-8") as f:
+        committed_mapping = json.load(f)["mapping"]
+
+    master_list = sc.get_master_ingredients()
+    mutated = [copy.deepcopy(r) for r in master_list]
+    touched = set()
+    for r in mutated:
+        if r["name"] == "Cordero" and "lamb" not in (r.get("aliases") or []):
+            r.setdefault("aliases", []).append("lamb")
+            touched.add("Cordero")
+        if r["name"] == "Requesón" and "ricotta" not in (r.get("aliases") or []):
+            r.setdefault("aliases", []).append("ricotta")
+            touched.add("Requesón")
+        if r["name"] == "Judías pintas" and "pinto beans" not in (r.get("aliases") or []):
+            r.setdefault("aliases", []).append("pinto beans")
+            touched.add("Judías pintas")
+    assert touched == {"Cordero", "Requesón", "Judías pintas"}, (
+        f"esperaba mutar exactamente 3 filas, mutó {touched} -- ¿el fixture del catálogo cambió?"
+    )
+
+    sc._NORMALIZE_ALIAS_INDEX = None
+    orig_get_master = sc.get_master_ingredients
+    sc.get_master_ingredients = lambda: mutated
+    try:
+        pre_fix_alias_driven = {
+            s: sc.normalize_name(s) for s in ("ricotta", "pinto beans", "lambi", "lambí")
+        }
+    finally:
+        sc.get_master_ingredients = orig_get_master
+        sc._NORMALIZE_ALIAS_INDEX = None
+
+    flagged_alias_driven = {
+        s for s, v in pre_fix_alias_driven.items() if v != committed_mapping[s]
+    }
+    assert flagged_alias_driven == {"ricotta", "pinto beans", "lambi", "lambí"}, (
+        f"esperaba exactamente estos 4 (de los 6) flageados al re-agregar los 3 alias, "
+        f"obtuve {flagged_alias_driven}"
+    )
+
+    # Los otros 2 ('chicharrón de pollo' + variante sin tilde) dependen del guard C3.1 (código,
+    # no un alias mutable) -- se prueba que el MECANISMO subyacente (CONTAINS, INTENTO 2) sigue
+    # apuntando a 'Chicharrón' vía el nombre canónico de la fila (nunca dependió del alias bare
+    # explícito, por eso remover solo el alias no hubiera bastado) confirmando que sin el guard,
+    # el bug se reproduciría también para estos 2.
+    from constants import strip_accents
+    _, contains = sc._construir_indice_alias(sc.get_master_ingredients())
+    for s in ("chicharrón de pollo", "chicharron de pollo"):
+        target = strip_accents(s.lower())
+        contains_match = next((name for pat, name in contains if pat.search(target)), None)
+        assert contains_match == "Chicharrón", (
+            f"{s!r}: el mecanismo CONTAINS ya no apunta a 'Chicharrón' ({contains_match!r}) -- "
+            f"si la fila se renombró, revisar si el guard C3.1 (shopping_calculator.py) sigue "
+            f"siendo necesario, no asumir que ya no lo es"
+        )
+        assert committed_mapping[s] == "Pechuga de pollo", (
+            f"baseline committed para {s!r} debe seguir siendo 'Pechuga de pollo'"
+        )
+
+
+def test_c3_durable_guard_mutacion_re_agregar_alias_en_memoria_reproduce_red(sc):
+    """[Mutación, contrato C3 explícito: 're-add one removed alias in memory ⇒ RED'] Re-agregar
+    'ricotta' a Requesón EN MEMORIA (sin tocar la DB real) debe hacer que 'ricotta' resuelva
+    distinto de lo que el baseline committed fija -- evidencia de que el fix real (la fila de la
+    DB, no solo el comentario del script) es lo que sostiene el contrato del guard de arriba."""
+    import copy
+    master_list = sc.get_master_ingredients()
+    mutated = [copy.deepcopy(r) for r in master_list]
+    found = False
+    for r in mutated:
+        if r["name"] == "Requesón":
+            r.setdefault("aliases", [])
+            if "ricotta" not in r["aliases"]:
+                r["aliases"].append("ricotta")
+            found = True
+    assert found, "fila 'Requesón' no encontrada -- el fixture del catálogo cambió"
+
+    with open(_DO_CORPUS_BASELINE_JSON, encoding="utf-8") as f:
+        expected = json.load(f)["mapping"]["ricotta"]
+    assert expected == "Queso ricotta"
+
+    sc._NORMALIZE_ALIAS_INDEX = None
+    orig_get_master = sc.get_master_ingredients
+    sc.get_master_ingredients = lambda: mutated
+    try:
+        mutated_live = sc.normalize_name("ricotta")
+    finally:
+        sc.get_master_ingredients = orig_get_master
+        sc._NORMALIZE_ALIAS_INDEX = None
+
+    assert mutated_live != expected, (
+        f"la mutación (re-agregar 'ricotta' a Requesón) debía romper el contrato del baseline "
+        f"({expected!r}) -- si sigue coincidiendo, el guard de arriba no prueba nada"
+    )
+    assert mutated_live == "Requesón", f"esperaba reproducir el bug pre-fix exacto, obtuve {mutated_live!r}"
+    # el estado REAL (no mutado) sigue coincidiendo con el baseline:
+    assert sc.normalize_name("ricotta") == expected
+
+
+# ── I1. Invariante de unicidad de alias — ningún alias/nombre vive en 2+ filas ──────────────────
+#
+# Mismo modelo de datos que `shopping_calculator._construir_indice_alias`: el NOMBRE canónico de
+# una fila se trata como su propio self-alias (así es como `all_aliases` se construye en
+# producción) -- así que "un alias == el nombre de otra fila" es, estructuralmente, el MISMO tipo
+# de colisión que "el mismo alias en 2 filas", solo que uno de los dos lados es el nombre en vez
+# de un alias explícito. Unificar ambos checks en una sola tabla clave->dueños es lo que hace el
+# resolver de verdad, y es lo que este test replica.
+
+# Las 5 colisiones pre-existentes (TODAS anteriores a Fase 2, verificadas: ninguna de las 5 filas
+# involucradas está en los 4 `new_foods_*_2026_08_17.json`) que se toleran explícitamente, con su
+# razón. CUALQUIER colisión nueva (introducida por una alta de Fase 2 — la clase de bug que
+# produjo ricotta/pinto beans) debe ser CERO.
+_I1_ALLOWLIST = {
+    "mariscos": (
+        frozenset({"Calamar", "Mejillones", "Pulpo"}),
+        "Término GENÉRICO español para 'shellfish', compartido a propósito entre 3 filas "
+        "específicas de marisco -- no hay un dueño único correcto. Preexistente a Fase 2.",
+    ),
+    "mero": (
+        frozenset({"Filete de pescado blanco", "Mero"}),
+        "'Mero' (pez específico) también vive como alias de 'Filete de pescado blanco' "
+        "(genérico) -- categorización razonable, peor caso: bare 'mero' resuelve al genérico en "
+        "vez del específico, ambos son pescado blanco real, sin divergencia nutricional "
+        "peligrosa (a diferencia de chicharrón cerdo/pollo). Preexistente a Fase 2.",
+    ),
+    "nueces": (
+        frozenset({"Almendras fileteadas", "Nueces mixtas"}),
+        "Término GENÉRICO para frutos secos -- mismo patrón que 'mariscos'. Preexistente a Fase 2.",
+    ),
+    "tilapia": (
+        frozenset({"Filete de pescado blanco", "Tilapia"}),
+        "Mismo patrón que 'mero' (pez específico + alias del genérico). Preexistente a Fase 2.",
+    ),
+    "repollo morado": (
+        frozenset({"Repollo", "Repollo morado"}),
+        "'repollo morado' vive como alias de 'Repollo' (verde) Y es el NOMBRE literal de la fila "
+        "dedicada 'Repollo morado' -- alias legacy que antecede a la fila dedicada, nunca "
+        "limpiado. Preexistente a Fase 2 (ninguna alta la introdujo); candidato a cleanup "
+        "futuro, fuera de scope de esta ola.",
+    ),
+}
+
+
+@pytest.mark.e2e
+def test_i1_alias_uniqueness_invariant(sc):
+    """[I1 · ola final] Ningún alias (ni el nombre canónico de una fila, contado como su propio
+    self-alias) puede resolver a 2+ filas distintas — si lo hace, `normalize_name` decide
+    arbitrariamente por orden de iteración (bug silencioso, la CLASE que C3 cerró para
+    ricotta/pinto beans). Las 5 colisiones pre-existentes de `_I1_ALLOWLIST` se toleran con su
+    razón documentada; cualquier OTRA es cero."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    from constants import strip_accents
+    from collections import defaultdict
+
+    master_list = sc.get_master_ingredients()
+    owners = defaultdict(set)
+    for r in master_list:
+        owners[strip_accents(r["name"].strip().lower())].add(r["name"])
+        for a in (r.get("aliases") or []):
+            key = strip_accents(str(a).strip().lower())
+            if key:
+                owners[key].add(r["name"])
+
+    unexpected = []
+    for key, who in owners.items():
+        if len(who) <= 1:
+            continue
+        allow = _I1_ALLOWLIST.get(key)
+        if allow and who == allow[0]:
+            continue
+        unexpected.append((key, sorted(who)))
+
+    assert not unexpected, (
+        f"{len(unexpected)} clave(s) NUEVAS con 2+ dueños (no en `_I1_ALLOWLIST`): {unexpected}. "
+        f"Si es intencional, documenta la razón en `_I1_ALLOWLIST` con la lista EXACTA de "
+        f"dueños; si no, es el mismo bug que C3 cerró -- remueve el alias duplicado de una de "
+        f"las filas (`scripts/retarget_alias_fix_2026_08_18.py` es el patrón a seguir/extender)."
+    )
+
+
+def test_i1_allowlist_no_esta_vacio_ni_creciendo_en_silencio(sc):
+    """Control de forma: el allowlist tiene exactamente 5 entradas (el número que el sweep en
+    vivo produce hoy). Si sube, alguien añadió una colisión nueva y la documentó sin que el
+    review la haya visto -- este test no bloquea, pero fuerza a mirar el número dos veces."""
+    assert len(_I1_ALLOWLIST) == 5, (
+        f"_I1_ALLOWLIST tiene {len(_I1_ALLOWLIST)} entradas, esperaba 5 -- si crece, revisa "
+        f"que la nueva entrada tenga razón documentada y no sea, en realidad, un bug nuevo"
+    )
+
+
+# ── I2. El sweep de colisión de `is_country_catalog_unpriced_item` (T5), extendido a ALIASES ────
+#
+# El sweep original (`test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_
+# catalogo_vivo_ni_pools`, arriba) barre NOMBRES de filas + nombres de pools. Este barre ALIASES
+# de filas PRICED -- el review encontró 4 colisiones conocidas (mora azul/azafrán de la
+# india/queso panela/quesito panela) y pidió verificar que son benignas para
+# `canonicalize_shopping_food_name` ESPECÍFICAMENTE: esa función resuelve por `master_map`
+# (nombre/alias exacto) PRIMERO y solo consulta `is_country_catalog_unpriced_item` sobre el
+# NOMBRE CANÓNICO ya resuelto (`m_item["name"]`, línea `if m_item and
+# is_country_catalog_unpriced_item(canonical_name): return canonical_name`) -- así que una
+# colisión en el ALIAS crudo nunca llega a esa rama si el nombre canónico de la fila dueña no
+# colisiona también.
+
+_I2_ALLOWLIST_PRICED_ALIAS_COLLISIONS = {
+    ("mora azul", "Arándanos"): (
+        "'mora azul' colisiona con el token 'mora' (fruta de catálogo CO, T6) pero 'Arándanos' "
+        "(su fila dueña, DO priced) NO colisiona por su propio nombre."
+    ),
+    ("azafran de la india", "Cúrcuma"): (
+        "'azafran de la india' colisiona con el token 'azafran' (España, T5) pero 'Cúrcuma' "
+        "(su fila dueña, DO priced) NO colisiona por su propio nombre."
+    ),
+    ("queso panela", "Queso blanco"): (
+        "'queso panela' es un alias de sinónimo cross-country (T6, synonyms_mx_co_2026_08_17.json) "
+        "que colisiona con el token 'panela' (México, T6) pero 'Queso blanco' (su fila dueña, DO "
+        "priced) NO colisiona por su propio nombre."
+    ),
+    ("quesito panela", "Queso blanco"): (
+        "Mismo caso que 'queso panela' (micro-fix T6, variante 'quesito')."
+    ),
+}
+
+
+@pytest.mark.e2e
+def test_i2_registry_collision_sweep_extendido_a_aliases(sc):
+    """[I2 · ola final] Para cada ALIAS de cada fila PRICED (price_per_lb>0 o price_per_unit>0)
+    del catálogo vivo, `is_country_catalog_unpriced_item` no debe reconocerlo -- salvo las 4
+    colisiones conocidas de `_I2_ALLOWLIST_PRICED_ALIAS_COLLISIONS`. Filas SIN precio (las
+    propias altas T5-T8) quedan fuera a propósito: que sus PROPIOS alias matcheen el token que
+    las reconoce es el comportamiento DISEÑADO, no una colisión."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    def _is_priced(row):
+        try:
+            return float(row.get("price_per_lb") or 0) > 0 or float(row.get("price_per_unit") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    master_list = sc.get_master_ingredients()
+    priced_alias_entries = [
+        (a, r["name"]) for r in master_list if _is_priced(r) for a in (r.get("aliases") or [])
+    ]
+    assert len(priced_alias_entries) >= 500, (
+        f"esperaba >=500 entradas alias×fila-priced, encontré {len(priced_alias_entries)} -- "
+        f"¿el catálogo se leyó parcial?"
+    )
+
+    unexpected = []
+    for alias, owner in priced_alias_entries:
+        if not sc.is_country_catalog_unpriced_item(alias):
+            continue
+        if (alias, owner) in _I2_ALLOWLIST_PRICED_ALIAS_COLLISIONS:
+            continue
+        unexpected.append((alias, owner))
+
+    assert not unexpected, (
+        f"{len(unexpected)} alias(es) NUEVOS de filas PRICED colisionan con "
+        f"`is_country_catalog_unpriced_item` (no en `_I2_ALLOWLIST_PRICED_ALIAS_COLLISIONS`): "
+        f"{unexpected}. Verifica primero si la fila dueña también colisiona por su propio "
+        f"nombre (`sc.is_country_catalog_unpriced_item(owner)`) -- si SÍ, es un bug real (afecta "
+        f"`canonicalize_shopping_food_name`); si NO, documenta la razón en el allowlist."
+    )
+
+
+def test_i2_las_4_colisiones_conocidas_son_benignas_para_el_canonicalizer(sc):
+    """[I2 · la verificación que el review pidió específicamente] Para cada una de las 4
+    colisiones del allowlist: (a) la fila DUEÑA del alias NO colisiona por su propio nombre
+    canónico (así que el atajo `if m_item and is_country_catalog_unpriced_item(canonical_name)`
+    de `canonicalize_shopping_food_name` nunca se activa para ellas), y (b) el canonicalizer
+    real, en vivo, resuelve el alias a la fila dueña correcta -- no al token de catálogo-país con
+    el que colisiona."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+
+    master_map = sc._build_shopping_master_map()
+    for (alias, owner), _reason in _I2_ALLOWLIST_PRICED_ALIAS_COLLISIONS.items():
+        assert not sc.is_country_catalog_unpriced_item(owner), (
+            f"la fila dueña {owner!r} de {alias!r} AHORA colisiona por su propio nombre -- el "
+            f"atajo de `canonicalize_shopping_food_name` SÍ se activaría, esto ya no es benigno, "
+            f"revisar como bug real (no solo actualizar el allowlist)"
+        )
+        resolved = sc.canonicalize_shopping_food_name(alias, master_map)
+        assert resolved == owner, (
+            f"canonicalize_shopping_food_name({alias!r}, ...) = {resolved!r}, esperaba {owner!r} "
+            f"-- la colisión dejó de ser benigna para el canonicalizer"
+        )

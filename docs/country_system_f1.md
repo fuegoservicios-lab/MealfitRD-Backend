@@ -202,6 +202,14 @@ Repetir en miniatura el QA offline de Task 10 pero contra `mealfitrd.com` real:
   segmenta el cold-start de `get_similar_user_patterns` por país; el flip de Fase 2 es sobre el
   MOTOR de generación, no sobre esa segmentación. Encenderlo es una decisión aparte, con su
   propia medición.
+- `MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP` **se queda en su default `true`** — knob independiente
+  (T5, `shopping_calculator._country_catalog_unpriced_keep_enabled`) que decide si un ingrediente
+  de catálogo-país SIN precio RD (las 140 altas T5-T8: Jamón serrano, Chicharrón, Bacalaítos...)
+  se CONSERVA en la lista de compras marcado "sin precio" o se DROPEA (comportamiento pre-T5). El
+  flip de Fase 2 no lo toca; es un lever de rollback PARCIAL propio — si el "sin precio" en la
+  lista confunde en producción sin querer apagar el motor entero, `=false` revierte SOLO ese
+  comportamiento (drop + WARNING, ver `test_jamon_serrano_se_dropea_si_el_knob_de_keep_esta_apagado`
+  en `test_p1_country_system_f2.py`), sin necesidad de tocar `MEALFIT_COUNTRY_SYSTEM`.
 
 ### 5. Rollback
 

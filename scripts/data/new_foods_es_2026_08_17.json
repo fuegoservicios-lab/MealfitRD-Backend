@@ -404,7 +404,6 @@
     "aliases": [
       "cordero",
       "carne de cordero",
-      "lamb",
       "pierna de cordero"
     ],
     "default_unit": "lb",
@@ -443,8 +442,7 @@
     "category": "Lácteos",
     "aliases": [
       "requeson",
-      "requesón",
-      "ricotta"
+      "requesón"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,
@@ -601,8 +599,7 @@
     "aliases": [
       "judias pintas",
       "judías pintas",
-      "alubias pintas",
-      "pinto beans"
+      "alubias pintas"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,

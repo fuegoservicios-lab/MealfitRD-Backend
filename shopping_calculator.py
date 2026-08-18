@@ -792,10 +792,20 @@ def is_baking_pantry_staple(name) -> bool:
 # `_BAKING_PANTRY_STAPLE_TOKENS`/`is_baking_pantry_staple` (byte-identidad DO/knob-off intacta:
 # estos nombres NUNCA aparecen en un plan DO — `dish_templates.json` no los referencia). Si el
 # owner sube alguno con precio real, `_is_verified_for_shopping` gana primero y este keep queda
-# no-op (mismo contrato que P1-BAKING-STAPLES). El coherence guard NO necesita tocarse: el mismo
-# carve-out genérico `delta_pct != inf` (`run_shopping_coherence_guard`, "pueden ser staples no
-# marcados") ya excusa cualquier fantasma de delta infinito, sin importar SU origen. Rollback:
-# MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP=false → drop histórico (mismo comportamiento pre-T5).
+# no-op (mismo contrato que P1-BAKING-STAPLES).
+# [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M3] CORRECCIÓN de una claim previa de este
+# comentario ("el coherence guard NO necesita tocarse"): eso es CIERTO solo para el BLOQUEO (el
+# carve-out `delta_pct != inf` en `run_shopping_coherence_guard` sí excusa el fantasma de delta
+# infinito y nunca fuerza retry por esto) pero FALSO para el WARN — el MIRROR de ese guard (el
+# filtro `expected_raw` que replica el drop del aggregator) solo llama `_is_verified_for_shopping`,
+# NUNCA `is_country_catalog_unpriced_item` (ni su hermano `is_baking_pantry_staple`, el mismo
+# blind spot desde P1-BAKING-STAPLES · 2026-07-01, 6 semanas antes de que Fase 2 existiera).
+# Confirmado en vivo dos veces (Task 10 §5, QA con LLM real): "Tortilla de maíz"/MX y "Recao"/PR
+# producen `[VERIFIED-ONLY-GUARD-BLIND]` + `[COH-GUARD/warn] ... [aggregated_only]` — WARN
+# espurio ("ausente de la lista de compras sin aviso" cuando SÍ está, solo sin precio), no un
+# block. Pre-existente, de severidad baja, NO cerrado por esta ola (comparte función con 89+24+18
+# tests en 3 archivos — cerrarlo bien necesita su propia ronda TDD, ver reporte de Task 10 §5).
+# Rollback: MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP=false → drop histórico (mismo comportamiento pre-T5).
 # tooltip-anchor: P1-COUNTRY-CATALOG-UNPRICED
 _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
@@ -1963,6 +1973,22 @@ def normalize_name(orig_name: str) -> str:
     # (Tier-3). Tooltip-anchor: P3-YOGURT-CONSOLIDATE.
     if re.search(r'\byogur(t)?\b', _opl):
         return 'Yogurt'
+
+    # [P1-COUNTRY-SYSTEM-F2 · ola final (review de fase) · 2026-08-18 · C3.1] "Chicharrón" (fila CO,
+    # Task 6) hace que CUALQUIER frase con la palabra "chicharrón" resuelva a esa fila vía CONTAINS
+    # (INTENTO 2/4) — no por el alias explícito 'chicharron' (removido en esta ola), sino porque el
+    # NOMBRE CANÓNICO de toda fila se añade a `all_aliases` incondicionalmente (`_construir_indice_alias`
+    # arriba). Verificado en vivo: quitar el alias NO cambia nada para "Chicharrón de pollo" — sigue
+    # resolviendo a 'Chicharrón' (cerdo) mientras la fila exista con ese nombre. Pre-fase (fila
+    # inexistente) 'chicharrón de cerdo' resolvía 'Cerdo' genérico y 'chicharrón de pollo' resolvía
+    # 'Pechuga de pollo' (ambos por substring). El review de T6 mejoró 'de cerdo' A PROPÓSITO (chicharrón
+    # real: kcal 544/fat 31,3g vs Cerdo genérico kcal 169,6/fat 9,47g, >200% de diferencia — ver
+    # `_provenance` en new_foods_mx_co_2026_08_17.json) pero NUNCA evaluó 'de pollo' — que colisionaba en
+    # silencio con la nutrición del CERDO (chicharrón de pollo real es ~muslo/pechuga frita, macro
+    # totalmente distinto). Este guard restaura el pre-fase SOLO para 'de pollo', preservando intacta la
+    # mejora aceptada de 'de cerdo'/bare (que sigue cayendo a los tiers de abajo → 'Chicharrón').
+    if re.search(r'\bchicharr[oó]n\b', _opl) and re.search(r'\bpollo\b', _opl):
+        return 'Pechuga de pollo'
 
     # [P1-PREP-COLLAPSE-GUARD · 2026-07-01] Preparaciones "harina de X"/"tortilla de maíz"/"crema de coco"
     # son PRODUCTOS DISTINTOS del alimento base (lección P1-NUT-BUTTER-DISTINCT generalizada). Sin este guard

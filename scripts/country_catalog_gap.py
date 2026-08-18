@@ -73,10 +73,25 @@ esa capa vive en `tests/test_p1_country_system_f2.py` (sweep completo de
 no en este script — añadir esa segunda llamada aquí duplicaría el gate para OPTIMIZAR una medición
 que ya corre gratis en pytest, sin ganar nada (el harness es offline/manual, pytest es CI).
 
+⚠️ `MEALFIT_COUNTRY_SYSTEM=true` PARA MEDICIÓN DE FIDELIDAD COMPLETA (país beta): este script mide
+`master_ingredients` directo, pero `sc.normalize_name` delega a `resolve_preparation_distinct`
+ANTES de tocar el catálogo, y esa función lee el knob ella misma para algunas ramas (ej.
+'tortilla de maiz' solo resuelve `canon != None` con el knob ON — sin él, pass-through histórico,
+byte-idéntico a DO pre-Fase-2). Sin el knob, este harness mide una versión DEGRADADA del
+resolver, no la que corre en producción una vez el flip está encendido (ver
+`docs/country_system_f1.md` "Runbook del flip"). Medido en vivo (Task 10 §2): `--country MX` SIN
+el knob reportó `75/76` con 1 DROP falso ("Tortillas de maíz") que desaparecía a `76/76, 0/0` con
+`MEALFIT_COUNTRY_SYSTEM=true` seteado ANTES de invocar el script — mismo catálogo, mismo día,
+único delta el knob. `grep` confirma que solo 2 sitios de `shopping_calculator.py` leen este
+knob: `_resolve_with_tier`/`resolve_preparation_distinct` (participa en `normalize_name`, lo que
+este script mide) y `is_country_catalog_unpriced_item` (filtro POSTERIOR de agregación, fuera del
+alcance de este harness) — encenderlo aquí no puede desviar ningún item hacia OTRA resolución,
+solo revela la que ya corre en producción.
+
 USO:
     cd backend
-    python scripts/country_catalog_gap.py --country ES
-    python scripts/country_catalog_gap.py --rd-drops
+    MEALFIT_COUNTRY_SYSTEM=true python scripts/country_catalog_gap.py --country ES
+    MEALFIT_COUNTRY_SYSTEM=true python scripts/country_catalog_gap.py --rd-drops
 
 Read-only. No escribe nada en Neon. No hace ninguna llamada a un LLM de generación.
 
