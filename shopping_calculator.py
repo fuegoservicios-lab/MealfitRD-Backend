@@ -820,6 +820,33 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
     "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
     "gallina criolla", "borojo", "feijoa", "granadilla", "mora",
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] 62 altas de catálogo PR/US de este task — también
+    # SIN precio RD a propósito (países beta, `pricing_mode='beta_no_prices'`). A diferencia de
+    # T5/T6, aquí se usa el NOMBRE CANÓNICO COMPLETO de cada fila como token (nunca una palabra
+    # suelta) — la superficie de riesgo de esta task es más alta que T5/T6: 'queso'/'pan'/'carne'/
+    # 'papa'/'mantequilla'/'chile'/'salsa'/'galletas'/'frijoles'/'aceitunas' son todas palabras
+    # que YA aparecen bare o casi-bare en aliases de filas PRICED existentes (Queso blanco lleva
+    # 'queso' bare; 'Mantequilla'/'Pan blanco familiar'/'Carne de res'/'Papa' son sus propios
+    # nombres bare; 'Chile X' son 9 filas de T6; 'Galletas de soda' ya existe). El nombre COMPLETO
+    # es, por construcción, único (dos filas no pueden compartir `name`) — mismo principio que
+    # 'jamon serrano'/'chile serrano' de T5/T6, aplicado sin excepción a las 62. Verificado con el
+    # MISMO sweep e2e extendido (`test_is_country_catalog_unpriced_item_no_colisiona_...`) contra
+    # el catálogo vivo (346 filas) + los 7 pools (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO'/
+    # 'PR'/'US']`): cero falsos positivos.
+    "panapen", "pernil", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
+    "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
+    "longaniza puertorriquena", "chuleta ahumada", "sazon con culantro y achiote",
+    "aceite de achiote", "queso de papa", "especias para arroz con dulce",
+    "aceitunas rellenas", "tocineta", "jamon de sandwich", "salchichas", "crema agria",
+    "crema mitad y mitad", "bagels", "panecillos ingleses", "pretzels", "frijoles horneados",
+    "jarabe de arce", "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa",
+    "malvaviscos", "coditos", "masa para pie", "galletas graham", "salsa de salchicha",
+    "ensalada de macarrones", "chile en polvo", "sazonador para tacos", "pepperoni",
+    "salchicha italiana", "mezcla para panqueques", "wafles", "azucar morena",
+    "suero de mantequilla", "pan de maiz", "semola de maiz", "arandanos rojos", "duraznos",
+    "pan rallado", "panecillos de mantequilla", "huevos rellenos", "nuez de castilla",
+    "nueces pecanas", "queso en hebras", "queso provolone", "carne molida mixta",
+    "bolitas de papa", "papas ralladas", "chili con carne",
 )
 _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 

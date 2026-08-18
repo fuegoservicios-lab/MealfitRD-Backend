@@ -1927,6 +1927,53 @@ COUNTRY_POOLS: dict[str, dict[str, list]] = {
             "Lulo", "Curuba", "Uchuva", "Feijoa", "Granadilla", "Mora", "Guanábana", "Borojó",
         ],
     },
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] Mismo criterio que ES/MX/CO: altas de catálogo de
+    # este task (`country_gaps/pr.json`/`us.json`) + los RESUELVE-BIEN de T1 más representativos
+    # de cada cocina, NO una traducción de DOMINICAN_*. PR comparte mucho con RD (viveres/arroz/
+    # habichuelas/sofrito) -- el pool refleja eso reusando filas RD reales donde el alimento es
+    # genuinamente el mismo, y solo las 19 altas propias donde PR tiene un producto distinto.
+    "PR": {
+        "proteins": [
+            "Pernil", "Jamón de cocinar", "Longaniza puertorriqueña", "Chuleta ahumada",
+            "Pavochón", "Bacalaítos", "Bacalao", "Pechuga de pollo", "Muslo de pollo", "Cerdo",
+            "Carne de res", "Camarones", "Morcilla", "Chicharrón", "Huevo", "Salami", "Tilapia",
+            "Salmón", "Atún en agua", "Pavo molido",
+        ],
+        "carbs": [
+            "Arroz blanco", "Habichuelas rojas", "Habichuelas blancas", "Habichuelas negras",
+            "Gandules", "Yuca", "Batata", "Ñame", "Yautía", "Harina de yuca",
+        ],
+        "veggies_fats": [
+            "Auyama", "Repollo", "Apio", "Zanahoria", "Tomate", "Cebolla", "Ajo", "Recao",
+            "Sofrito", "Achiote", "Aceite de achiote", "Aguacate", "Adobo",
+            "Sazón con culantro y achiote", "Pique", "Alcaparrado",
+        ],
+        "fruits": [
+            "Guineo", "Plátano maduro", "Guayaba", "Piña", "Mango", "Chinola", "Tamarindo",
+        ],
+    },
+    # US = básicos internacionales del harness (T1) -- catálogo de supermercado americano.
+    "US": {
+        "proteins": [
+            "Tocineta", "Jamón de sándwich", "Salchichas", "Pepperoni", "Salchicha italiana",
+            "Carne molida mixta", "Huevos rellenos", "Pechuga de pollo", "Pechuga de pavo",
+            "Cerdo", "Carne de res", "Carne de res molida", "Salmón", "Camarones", "Almejas",
+            "Queso en hebras", "Queso provolone", "Queso cheddar", "Queso cottage", "Huevo",
+        ],
+        "carbs": [
+            "Pan blanco familiar", "Pan integral familiar", "Bagels", "Coditos", "Papa",
+            "Maíz dulce en granos", "Habichuelas negras", "Frijoles pintos", "Habichuelas rojas",
+            "Frijoles horneados",
+        ],
+        "veggies_fats": [
+            "Ají morrón", "Lechuga", "Apio", "Auyama", "Cebolla", "Ajo", "Tomate", "Zanahoria",
+            "Chile en polvo", "Sazonador para tacos", "Aderezo ranch", "Salsa barbacoa",
+            "Kétchup", "Mostaza", "Salsa inglesa",
+        ],
+        "fruits": [
+            "Manzana", "Arándanos", "Arándanos rojos", "Duraznos", "Toronja", "Pera", "Uva",
+        ],
+    },
 }
 
 
@@ -3528,7 +3575,14 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str, co
                                         # de un celíaco. Sincronizado 1:1 con el canónico — los 11
                                         # términos que faltaban, ninguno reinterpretado.
                                         "wheat", "tostada", "macarron", "coditos", "fideo", "tallarin",
-                                        "penne", "ravioli", "noqui", "tortilla de harina", "avena"])
+                                        "penne", "ravioli", "noqui", "tortilla de harina", "avena",
+                                        # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] sincronizado 1:1 con
+                                        # `_ALLERGEN_SYNONYMS['gluten']` en el MISMO commit que los añadió
+                                        # (no reabrir el drift que el fix-wave anterior cerró) — 13
+                                        # términos nuevos de las altas PR/US de esta task.
+                                        "bagel", "bagels", "pretzel", "pretzels", "panecillo",
+                                        "panecillos", "panqueque", "panqueques", "wafle", "wafles",
+                                        "salsa de salchicha", "masa para pie", "bacalaitos"])
     if any(r in ["soya", "soja", "soy"] for r in normalized_restrictions):
         normalized_restrictions.extend(["soya", "soja", "tofu", "salsa de soya", "edamame", "miso",
                                         "tempeh", "salsa teriyaki", "teriyaki", "natto",

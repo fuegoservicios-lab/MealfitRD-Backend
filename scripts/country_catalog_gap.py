@@ -197,28 +197,40 @@ PR_FOODS = [
     "Especias para arroz con dulce", "Habichuelas pintas", "Yautía lila",
 ]
 
-# US — Estados Unidos. Sin nombre español natural para la mayoría (frontera del Addendum §2: el
-# contenido/alimentos NUNCA se traducen, así que estos quedan en inglés — es su nombre nativo, no
-# una traducción de conveniencia). Categorías: carnes de supermercado americano, lácteos/quesos
-# estilo US, panadería (bagels, cornbread, grits), enlatados/despensa (baked beans, peanut
-# butter). Platos de referencia (solo ingrediente clave): mac and cheese (elbow macaroni,
-# cheddar), meatloaf (ground beef, breadcrumbs), clam chowder (clams, potatoes), apple pie
-# (apples, pie crust), biscuits and gravy, s'mores (marshmallows, graham crackers).
+# US — Estados Unidos. [Task 1: Ruling (fold → T7) · 2026-08-17] Esta lista NO se dejó en inglés
+# ("es su nombre nativo") como decía este comentario antes de T7 — el ruling lo corrigió: producción
+# emite los ingredientes en ESPAÑOL incluso para planes de EE.UU. (el catálogo canónico en español es
+# el SSOT; el LLM está instruido a usar esos nombres exactos) — medir contra nombres en inglés medía
+# una distribución que producción NUNCA emite (drops inflados, artificiales). Cada ítem es el nombre
+# español natural que diría un hispanohablante en EE.UU. comprando esto en un supermercado
+# americano, Y el nombre que llevaría la fila del catálogo (ej. "Ground beef"→"Carne molida",
+# "Bacon"→"Tocineta", "Turkey breast"→"Pechuga de pavo", "Maple syrup"→"Jarabe de arce", "Peanut
+# butter"→"Mantequilla de maní", "Marshmallows"→"Malvaviscos"). Préstamos YA establecidos se
+# conservan tal cual (Bagels, Pretzels, Granola, Pepperoni) — no tienen traducción de uso real,
+# mismo criterio que loanwords aceptados en el resto del catálogo. Categorías: carnes de
+# supermercado americano, lácteos/quesos estilo US, panadería (bagels, pan de maíz, sémola de
+# maíz), enlatados/despensa (frijoles horneados, mantequilla de maní). Platos de referencia (solo
+# ingrediente clave, en sus nombres de catálogo): mac and cheese (coditos, queso cheddar), meatloaf
+# (carne molida, pan rallado), clam chowder (almejas, papa), apple pie (manzana, masa para pie),
+# biscuits and gravy (panecillos de mantequilla, salsa de salchicha), s'mores (malvaviscos,
+# galletas Graham).
 US_FOODS = [
-    "Ground beef", "Bacon", "Turkey breast", "Chicken breast", "Pork chops", "Salmon fillet",
-    "Shrimp", "Deli ham", "Hot dogs", "Cheddar cheese", "Cream cheese", "Cottage cheese",
-    "Sour cream", "Buttermilk", "Half and half", "White bread", "Whole wheat bread", "Bagels",
-    "English muffins", "Cornbread", "Grits", "Oatmeal", "Pretzels", "Saltine crackers",
-    "Sweet corn", "Green beans", "Russet potatoes", "Bell peppers", "Iceberg lettuce", "Celery",
-    "Butternut squash", "Black beans", "Pinto beans", "Kidney beans", "Baked beans",
-    "Blueberries", "Cranberries", "Peaches", "Apples", "Pumpkin", "Peanut butter",
-    "Maple syrup", "Ranch dressing", "Barbecue sauce", "Ketchup", "Mustard",
-    "Worcestershire sauce", "Marshmallows", "Elbow macaroni", "Breadcrumbs", "Clams",
-    "Pie crust", "Graham crackers", "Buttermilk biscuits", "Sausage gravy", "Deviled eggs",
-    "Coleslaw mix", "Macaroni salad", "Chili powder", "Taco seasoning", "Pecans", "Walnuts",
-    "Almond butter", "Granola", "Greek yogurt", "String cheese", "Pepperoni",
-    "Provolone cheese", "Italian sausage", "Meatloaf mix", "Tater tots", "Hash browns",
-    "Pancake mix", "Waffles", "Honey", "Brown sugar", "Vanilla extract", "Canned chili",
+    "Carne molida", "Tocineta", "Pechuga de pavo", "Pechuga de pollo", "Chuletas de cerdo",
+    "Filete de salmón", "Camarones", "Jamón de sándwich", "Salchichas", "Queso cheddar",
+    "Queso crema", "Queso cottage", "Crema agria", "Suero de mantequilla", "Crema mitad y mitad",
+    "Pan blanco", "Pan integral", "Bagels", "Panecillos ingleses", "Pan de maíz", "Sémola de maíz",
+    "Avena", "Pretzels", "Galletas de soda", "Maíz dulce en granos", "Vainitas", "Papa",
+    "Ají morrón", "Lechuga iceberg", "Apio", "Calabaza butternut", "Habichuelas negras",
+    "Frijoles pintos", "Habichuelas rojas", "Frijoles horneados", "Arándanos", "Arándanos rojos",
+    "Duraznos", "Manzana", "Calabaza", "Mantequilla de maní", "Jarabe de arce", "Aderezo ranch",
+    "Salsa barbacoa", "Kétchup", "Mostaza", "Salsa inglesa", "Malvaviscos", "Coditos",
+    "Pan rallado", "Almejas", "Masa para pie", "Galletas Graham", "Panecillos de mantequilla",
+    "Salsa de salchicha", "Huevos rellenos", "Ensalada de repollo", "Ensalada de macarrones",
+    "Chile en polvo", "Sazonador para tacos", "Nueces pecanas", "Nuez de Castilla", "Mantequilla de almendras",
+    "Granola", "Yogur griego", "Queso en hebras", "Pepperoni", "Queso provolone",
+    "Salchicha italiana", "Carne molida mixta", "Bolitas de papa", "Papas ralladas",
+    "Mezcla para panqueques", "Wafles", "Miel", "Azúcar morena", "Extracto de vainilla",
+    "Chili con carne",
 ]
 
 CURATED_FOODS_BY_COUNTRY: dict[str, list[str]] = {

@@ -6469,7 +6469,10 @@ def _dish_templates_path_for_country(canon: str) -> str:
     en vez de perder la sección entera (mismo espíritu fail-open de `_dish_examples_block_from_file`).
     [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] MX y CO ganan archivo propio en esta task; PR/US
     siguen cayendo al fallback RD hasta que una task futura les dé el suyo — comportamiento
-    IDÉNTICO al que tenían antes de esta task para esos dos."""
+    IDÉNTICO al que tenían antes de esta task para esos dos.
+    [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] PR y US ganan archivo propio en esta task —
+    ningún país queda ya en el fallback RD (los 6 países del sistema tienen su propio
+    `dish_templates_<cc>.json`)."""
     if canon == "ES":
         _es_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_es.json")
         if os.path.exists(_es_path):
@@ -6482,6 +6485,14 @@ def _dish_templates_path_for_country(canon: str) -> str:
         _co_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_co.json")
         if os.path.exists(_co_path):
             return _co_path
+    if canon == "PR":
+        _pr_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_pr.json")
+        if os.path.exists(_pr_path):
+            return _pr_path
+    if canon == "US":
+        _us_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "dish_templates_us.json")
+        if os.path.exists(_us_path):
+            return _us_path
     return _DO_DISH_TEMPLATES_PATH
 
 
@@ -14301,7 +14312,13 @@ _ALLERGEN_SYNONYMS = {
                 # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] alta de catálogo CO (Trucha, DROP en
                 # T1 country_catalog_gap.py --country CO): pez de río/truchicultura andina —
                 # ningún término de arriba lo matchea por substring.
-                "trucha", "truchas"],
+                "trucha", "truchas",
+                # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] alta de catálogo PR (Bacalaítos, DROP
+                # en T1): frituras de bacalao en masa — 'bacalao' arriba NO matchea 'bacalaitos'
+                # (palabra DISTINTA, diverge tras 'bacala-': bacalaítos vs bacalao, ni siquiera
+                # comparten sufijo plural) — sin esto, un alérgico a pescado no quedaba cubierto
+                # para este nombre concreto.
+                "bacalaitos"],
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
                 "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
                 "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
@@ -14370,7 +14387,22 @@ _ALLERGEN_SYNONYMS = {
                # categoría únicamente vía `_ALLERGEN_GLUTEN_TERM_SET`. Ver
                # test_avena_bare_flageada_como_gluten_fix_round_1 (RED→GREEN) +
                # test_avena_certificada_sin_gluten_sigue_excusada_tras_incluir_avena (sigue verde).
-               "avena"],
+               "avena",
+               # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] altas de catálogo US (DROP en T1):
+               # productos de trigo cuyo nombre en español NO contiene ningún token de arriba
+               # ('pan'/'galleta'/etc no matchean por word-boundary dentro de una palabra
+               # compuesta como "Panecillos"/"Panqueques" — 'pan' NO es substring con boundary
+               # de 'panecillos', diverge tras la 'n'). 'bagel'/'pretzel'/'wafle' son préstamos
+               # sin ningún término existente. 'salsa de salchicha'/'masa para pie' son frases
+               # completas -- ningún token suelto de la lista los cubre (la gravy lleva harina en
+               # el roux; la masa de pie es harina de trigo) y un token suelto sería demasiado
+               # amplio (ej. 'salsa' solo mancharía cualquier salsa).
+               "bagel", "bagels", "pretzel", "pretzels", "panecillo", "panecillos",
+               "panqueque", "panqueques", "wafle", "wafles", "salsa de salchicha",
+               "masa para pie",
+               # alta de catálogo PR (Bacalaítos, DROP en T1): fritura en masa de HARINA DE
+               # TRIGO -- mismo motivo que 'empanada'/'bizcocho' arriba (masa horneada/frita).
+               "bacalaitos"],
     "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
               "aioli", "alioli", "holandesa", "ponche", "mousse"],
     "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
@@ -14543,6 +14575,15 @@ _DIET_FLESH_TERMS = (  # carne de tierra + aves
     # Gallina criolla(CO)/Chorizo mexicano-verde-santarrosano(MX/CO) por substring; 'cecina' es el
     # único de este lote SIN ningún término existente que lo matchee.
     "cecina",
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] altas de catálogo PR/US (DROP en T1). 'pavo'
+    # arriba NO matchea 'Pavochón' (palabra compuesta sin espacio: \bpavo\b no cruza el límite
+    # word-boundary dentro de "pavochon" -- mismo tipo de gap que "pan" no matchea "panecillos").
+    # 'pepperoni' es un embutido de cerdo/res sin ningún término existente que lo cubra (no
+    # comparte raíz con 'salami'/'chorizo'/'longaniza'). 'frijoles horneados' lleva cerdo en su
+    # receta comercial real (fdc USDA citado: "Beans, baked, canned, WITH PORK and tomato
+    # sauce") sin que el nombre del catálogo lo revele -- mismo patrón que 'salsa inglesa'/
+    # 'worcestershire' en `_DIET_SEAFOOD_TERMS` (lleva anchoas, no evidente por el nombre).
+    "pavochon", "pepperoni", "frijoles horneados",
 )
 _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
@@ -14561,6 +14602,10 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] paridad con la alta de T6 en
     # `_ALLERGEN_SYNONYMS['pescado']` (Trucha, CO) — mismo guard `test_paridad_dieta_alergeno_bidireccional`.
     "trucha", "truchas",
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] paridad con la alta de T7 en
+    # `_ALLERGEN_SYNONYMS['pescado']` (Bacalaítos, PR) — mismo guard
+    # `test_paridad_dieta_alergeno_bidireccional`.
+    "bacalaitos",
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",

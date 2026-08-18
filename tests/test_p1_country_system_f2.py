@@ -64,6 +64,8 @@ _HELP_BOT_PY = _BACKEND / "prompts" / "help_bot.py"
 _DISH_TEMPLATES_ES_JSON = _BACKEND / "data" / "dish_templates_es.json"
 _DISH_TEMPLATES_MX_JSON = _BACKEND / "data" / "dish_templates_mx.json"
 _DISH_TEMPLATES_CO_JSON = _BACKEND / "data" / "dish_templates_co.json"
+_DISH_TEMPLATES_PR_JSON = _BACKEND / "data" / "dish_templates_pr.json"
+_DISH_TEMPLATES_US_JSON = _BACKEND / "data" / "dish_templates_us.json"
 _CRON_TASKS_PY = _BACKEND / "cron_tasks.py"
 _SHOPPING_CALCULATOR_PY = _BACKEND / "shopping_calculator.py"
 
@@ -913,8 +915,16 @@ def test_avena_certificada_sin_gluten_sigue_excusada_tras_incluir_avena(go):
     que T4 rechazó 'avena' (colisión con P1-ALLERGEN-NEGATION-EXCUSE, solo-prefijo) queda cerrada
     por la excusa FORWARD nueva. Ancla en ESTE archivo (no solo en
     `test_p1_allergen_negation_excuse.py`) que el caso medido original — y la grafía sin
-    'certificada' — siguen sin violar."""
-    for ingrediente in ("20 g de avena certificada sin gluten", "Avena sin gluten (panqueques)"):
+    'certificada' — siguen sin violar.
+
+    [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] La 2ª grafía cambió de '(panqueques)' a
+    '(hojuelas)': 'panqueque'/'panqueques' se sumó a `_ALLERGEN_SYNONYMS['gluten']` en esta task
+    (altas US) y ahora dispara SU PROPIA violación independiente en ese string — legítimamente
+    (un panqueque regular SÍ lleva gluten salvo que se declare "sin gluten" él mismo, y aquí el
+    claim "sin gluten" gramaticalmente califica a 'avena', no a 'panqueques' entre paréntesis).
+    No es un bug de la excusa forward -- es una detección nueva y correcta que el string
+    original no anticipaba. 'hojuelas' no es un término de ningún vocabulario de alérgenos."""
+    for ingrediente in ("20 g de avena certificada sin gluten", "Avena sin gluten (hojuelas)"):
         plan = {"days": [{"meals": [{"name": "Desayuno", "ingredients": [ingrediente]}]}]}
         assert go._scan_allergen_violations(plan, ["gluten"]) == [], (
             f"'{ingrediente}' es CUMPLIMIENTO (avena GF certificada) — no debe violar"
@@ -1440,6 +1450,31 @@ _DISH_TEMPLATES_MX_CO_NAMES = frozenset({
     "Gallina criolla", "Borojó", "Feijoa", "Granadilla", "Mora",
 })
 
+# [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] Las 62 altas de catálogo PR/US de esta task (nombre
+# CANÓNICO de fila). Espejo de `_DISH_TEMPLATES_ES_NAMES`/`_DISH_TEMPLATES_MX_CO_NAMES` de
+# arriba — mismo propósito: excluir del sweep de "no debe reconocerlas" (son las que SÍ deben
+# reconocerse). 19 PR + 43 US (27 DROP originales + 16 reclasificadas desde una colisión
+# verificada en vivo antes de dar de alta — ver reporte §Colisiones encontradas y evitadas).
+_DISH_TEMPLATES_PR_US_NAMES = frozenset({
+    # PR (19)
+    "Panapén", "Pernil", "Jamón de cocinar", "Sofrito", "Recao", "Adobo", "Alcaparrado",
+    "Harina de yuca", "Pique", "Pavochón", "Bacalaítos", "Ron de cocina",
+    "Longaniza puertorriqueña", "Chuleta ahumada", "Sazón con culantro y achiote",
+    "Aceite de achiote", "Queso de papa", "Especias para arroz con dulce",
+    "Aceitunas rellenas",
+    # US (43)
+    "Tocineta", "Jamón de sándwich", "Salchichas", "Crema agria", "Crema mitad y mitad",
+    "Bagels", "Panecillos ingleses", "Pretzels", "Frijoles horneados", "Jarabe de arce",
+    "Aderezo ranch", "Salsa barbacoa", "Kétchup", "Salsa inglesa", "Malvaviscos", "Coditos",
+    "Masa para pie", "Galletas Graham", "Salsa de salchicha", "Ensalada de macarrones",
+    "Chile en polvo", "Sazonador para tacos", "Pepperoni", "Salchicha italiana",
+    "Mezcla para panqueques", "Wafles", "Azúcar morena", "Suero de mantequilla",
+    "Pan de maíz", "Sémola de maíz", "Arándanos rojos", "Duraznos", "Pan rallado",
+    "Panecillos de mantequilla", "Huevos rellenos", "Nuez de Castilla", "Nueces pecanas",
+    "Queso en hebras", "Queso provolone", "Carne molida mixta", "Bolitas de papa",
+    "Papas ralladas", "Chili con carne",
+})
+
 
 @pytest.fixture(scope="module")
 def sc():
@@ -1673,11 +1708,16 @@ def test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_cat
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] extendido: también excluye las 46 altas MX/CO —
     # ESAS sí deben reconocerse (son el propósito de sus tokens nuevos en
     # `_COUNTRY_CATALOG_UNPRICED_TOKENS`), así que no son "falsos positivos" si aparecen True.
-    candidatos = (nombres_catalogo | nombres_pools) - _DISH_TEMPLATES_ES_NAMES - _DISH_TEMPLATES_MX_CO_NAMES
+    # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] extendido de nuevo: también excluye las 62 altas
+    # PR/US — mismo motivo, ESAS sí deben reconocerse (es el propósito de esta task).
+    candidatos = (
+        (nombres_catalogo | nombres_pools)
+        - _DISH_TEMPLATES_ES_NAMES - _DISH_TEMPLATES_MX_CO_NAMES - _DISH_TEMPLATES_PR_US_NAMES
+    )
 
     falsos_positivos = sorted(n for n in candidatos if sc.is_country_catalog_unpriced_item(n))
     assert not falsos_positivos, (
-        f"{len(falsos_positivos)} nombre(s) NO son una alta T5/T6 pero "
+        f"{len(falsos_positivos)} nombre(s) NO son una alta T5/T6/T7 pero "
         f"is_country_catalog_unpriced_item los reconoce igual (colisión de substring/token): "
         f"{falsos_positivos}"
     )
@@ -1818,26 +1858,36 @@ def test_culinary_judge_rubric_es_sustituye_ejemplos_y_encabezado(go):
 
 
 def test_dish_templates_path_for_country_es_usa_su_archivo_mx_cae_a_rd(go):
-    """[actualizado T6 · 2026-08-17] MX y CO GANAN archivo propio en esta task (antes caían al
-    fallback RD, como PR/US siguen haciendo hoy) — ver Sección I. PR (sin archivo dedicado, sin
-    task que se lo dé todavía) es el control vivo de que el fallback explícito sigue funcionando
-    para un país beta cualquiera sin archivo propio."""
+    """[actualizado T6 · 2026-08-17, actualizado de nuevo T7 · 2026-08-17] MX/CO (T6) y PR/US (T7)
+    GANAN archivo propio — ya NO queda ningún país real de los 6 sin `dish_templates_<cc>.json`
+    dedicado (T5 usaba MX/CO como control del fallback; T6 los reemplazó por PR; T7 le quita
+    también ese rol a PR). `_dish_templates_path_for_country` no re-canonicaliza su argumento
+    (opera sobre CUALQUIER string vía comparación literal `canon == "XX"`), así que un código
+    ISO inventado ('ZZ', que nunca podrá tener archivo propio) sigue siendo un control válido y
+    permanente del mecanismo de fallback en sí — sin depender de que exista un país real
+    temporalmente sin archivo."""
     assert go._dish_templates_path_for_country("ES") == str(_DISH_TEMPLATES_ES_JSON)
     assert go._dish_templates_path_for_country("MX") == str(_DISH_TEMPLATES_MX_JSON)
     assert go._dish_templates_path_for_country("CO") == str(_DISH_TEMPLATES_CO_JSON)
-    assert go._dish_templates_path_for_country("PR") == go._DO_DISH_TEMPLATES_PATH
+    assert go._dish_templates_path_for_country("PR") == str(_DISH_TEMPLATES_PR_JSON)
+    assert go._dish_templates_path_for_country("US") == str(_DISH_TEMPLATES_US_JSON)
+    assert go._dish_templates_path_for_country("ZZ") == go._DO_DISH_TEMPLATES_PATH
     assert go._dish_templates_path_for_country("DO") == go._DO_DISH_TEMPLATES_PATH
 
 
-def test_culinary_judge_rubric_pr_sin_archivo_propio_cae_a_ejemplos_rd(go):
-    """[actualizado T6 · 2026-08-17] País beta SIN `dish_templates_<cc>.json` dedicado (PR, hoy
-    — MX/CO YA NO son ejemplo de esto tras T6, ver Sección I) conserva los ejemplos dominicanos —
-    fallback explícito, NO una excepción que rompa la rúbrica."""
-    rubric_pr = go._culinary_judge_rubric_for_country("PR")
-    assert "Mangú" in rubric_pr
-    assert "Tortilla española" not in rubric_pr
-    assert "Tacos de pollo" not in rubric_pr
-    assert "Ajiaco" not in rubric_pr
+def test_culinary_judge_rubric_pais_desconocido_cae_a_ejemplos_rd(go):
+    """[T7 · 2026-08-17, repurposed -- antes 'test_culinary_judge_rubric_pr_sin_archivo_propio_cae_a_ejemplos_rd']
+    Tras esta task los 6 países reales tienen su propio `dish_templates_<cc>.json` -- ya no existe
+    un país beta "sin archivo dedicado" para probar el fallback vía un código de país REAL (T5
+    usaba MX/CO para esto, T6 lo reemplazó por PR; T7 le quita ese rol también a PR). El
+    invariante que sigue vivo y vale la pena anclar aquí: a diferencia de
+    `_dish_templates_path_for_country` (probado en aislamiento arriba con el código sintético
+    'ZZ'), `_culinary_judge_rubric_for_country` SÍ canonicaliza su argumento primero
+    (`canonicalize_country`, fail-safe a 'DO' para cualquier código no reconocido) -- un código
+    desconocido debe seguir devolviendo la rúbrica DOMINICANA sin romper, vía el cache hit
+    directo de 'DO' (identidad de objeto, no solo igualdad)."""
+    rubric_zz = go._culinary_judge_rubric_for_country("ZZ")
+    assert rubric_zz is go._CULINARY_JUDGE_RUBRIC
 
 
 # ── H14. Golden fixture: slot soft (ES) vs hard (DO) para el MISMO día ─────────────────────────
@@ -2166,12 +2216,16 @@ def test_get_fast_filtered_catalogs_usa_su_propio_pool(cc):
 
 def test_get_fast_filtered_catalogs_sin_country_mx_co_sigue_siendo_do_byte_identico():
     """Dar de alta MX/CO no debe tocar el fallback — `country=None`/'DO'/país sin pool siguen
-    devolviendo EXACTAMENTE `DOMINICAN_*` (byte-idéntico, mismo test que H8 para ES)."""
+    devolviendo EXACTAMENTE `DOMINICAN_*` (byte-idéntico, mismo test que H8 para ES).
+    [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] Control cambiado de 'PR' a 'ZZ' (código ISO
+    inventado): PR ganó su propio pool en esta task, así que ya no sirve como "país sin pool" --
+    `_get_fast_filtered_catalogs` no canonicaliza `country` (dict.get literal), así que un código
+    inexistente sigue siendo un control válido y permanente del fallback."""
     casos = [((), (), ""), (("mariscos",), (), ""), ((), (), "vegano")]
     for allergies, dislikes, diet in casos:
         base = constants._get_fast_filtered_catalogs(allergies, dislikes, diet)
         con_none = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country=None)
-        con_pr = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country="PR")
+        con_pr = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country="ZZ")
         assert base == con_none == con_pr, f"diverge para {(allergies, dislikes, diet)!r}"
 
 
@@ -2713,3 +2767,481 @@ def test_queso_y_quesito_panela_resuelven_a_queso_blanco_nunca_a_panela(sc, food
         f"{food!r} debe resolver a 'Queso blanco' (queso), no a 'Panela' (azúcar cruda) — "
         "misma clase de bug que Critical #1 (fix-round 1), dirección queso→azúcar"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# SECCIÓN J (Task 7) — Catálogo Puerto Rico + Estados Unidos, dirigido por los JSON de T1
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# Mismo contrato que T5/T6, para PR + US. `country_gaps/pr.json` (13 DROP de 67, medido contra el
+# catálogo post-T6/284 filas) y `us.json` (27 DROP de 78 -- el Task 1 Ruling reexpresó US_FOODS a
+# ESPAÑOL en esta task: producción emite ingredientes en español incluso para planes US, medir
+# contra nombres en inglés medía una distribución que producción nunca emite) son la lista de
+# trabajo. 19 filas nuevas PR + 43 filas nuevas US resuelven los 40 DROP + 1 sinónimo (Parcha→
+# Chinola) resuelve el último. Las 43 US NO son 27: T1 solo mide DROP/SUSTITUCION-SILENCIOSA — es
+# CIEGO a un RESUELVE-BIEN que resuelve al alimento SEMÁNTICAMENTE INCORRECTO vía un alias bare
+# preexistente demasiado amplio (ej. 'Suero de mantequilla' colisionaba con 'Mantequilla' vía
+# CONTAINS: líquido bajo en grasa vs grasa sólida pura). Verificado en vivo con `sc.normalize_name`
+# + lectura directa de `_construir_indice_alias`/aliases ANTES de dar de alta 16 casos así (11 US +
+# el propio caso "Aceitunas rellenas"→"Aceitunas" en PR, macro +47%/+88% verificado con USDA real) —
+# no descubierto en review, cerrado proactivamente en el commit original de esta task.
+
+def _load_dish_templates_pr() -> dict:
+    with open(_DISH_TEMPLATES_PR_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_dish_templates_us() -> dict:
+    with open(_DISH_TEMPLATES_US_JSON, encoding="utf-8") as f:
+        return json.load(f)
+
+
+# ── J1. dish_templates_pr.json / dish_templates_us.json — forma + regla dura de horario ─────────
+
+@pytest.mark.parametrize("cc,loader", [("PR", _load_dish_templates_pr), ("US", _load_dish_templates_us)])
+def test_dish_templates_pr_us_json_existe_con_forma_esperada(cc, loader):
+    data = loader()
+    templates = data.get("templates")
+    assert isinstance(templates, list)
+    assert 40 <= len(templates) <= 60, f"[{cc}] {len(templates)} plantillas — fuera del rango ~40-60 del brief"
+    nombres = [t.get("name") for t in templates]
+    assert all(isinstance(n, str) and n.strip() for n in nombres), f"[{cc}] una plantilla sin name"
+    assert len(nombres) == len(set(nombres)), f"[{cc}] nombres de plantilla duplicados"
+    for t in templates:
+        assert isinstance(t.get("slots"), list) and t["slots"], f"[{cc}] {t.get('name')!r} sin slots"
+        assert set(t["slots"]) <= {"desayuno", "almuerzo", "cena", "merienda"}, (
+            f"[{cc}] {t.get('name')!r} tiene un slot fuera del canon de 4"
+        )
+        constituents = t.get("constituents")
+        assert isinstance(constituents, list) and constituents, f"[{cc}] {t.get('name')!r} sin constituents"
+        for c in constituents:
+            assert isinstance(c.get("name"), str) and c["name"].strip(), (
+                f"[{cc}] {t['name']!r}: constituent sin name"
+            )
+            assert isinstance(c.get("grams"), (int, float)) and c["grams"] > 0, (
+                f"[{cc}] {t['name']!r}: constituent {c.get('name')!r} sin gramos > 0"
+            )
+
+
+@pytest.mark.parametrize("cc,loader", [("PR", _load_dish_templates_pr), ("US", _load_dish_templates_us)])
+def test_dish_templates_pr_us_arroz_pasta_como_base_nunca_en_desayuno_ni_cena(cc, loader):
+    """Mismo SSOT que la regla dura del juez. PR: solo 'Arroz con dulce' (postre, base=arroz) va
+    SOLO en merienda; los platos de arroz salado (arroz con gandules/pollo/habichuelas) van SOLO
+    en almuerzo. US: mac and cheese/ensalada de macarrones (base=pasta) van SOLO en almuerzo."""
+    data = loader()
+    ofensoras = [
+        t["name"] for t in data["templates"]
+        if t.get("base") in ("arroz", "pasta") and set(t.get("slots", [])) & {"desayuno", "cena"}
+    ]
+    assert not ofensoras, f"[{cc}] plantillas con base arroz/pasta en desayuno/cena: {ofensoras}"
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("cc,loader", [("PR", _load_dish_templates_pr), ("US", _load_dish_templates_us)])
+def test_dish_templates_pr_us_constituents_resuelven_al_catalogo_vivo(cc, loader):
+    """[e2e] Contrato "nombres EXACTOS del catálogo" — cada `constituents[].name` debe ser un
+    `name` LITERAL de `master_ingredients` post-altas T7 (no un alias que resuelva vía
+    `normalize_name` -- ej. 'Salmón' no 'Filete de salmón', 'Auyama' no 'Calabaza butternut',
+    'Cerdo' no 'Chuletas de cerdo', 'Repollo' no 'Ensalada de repollo'). Mismo patrón que el
+    equivalente de T5/T6."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — faltan NEON_DATABASE_URL/.env (e2e, no bloquea el gate)")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+
+    data = loader()
+    nombres_usados = {c["name"] for t in data["templates"] for c in t["constituents"]}
+    rows = execute_sql_query("SELECT name FROM master_ingredients", fetch_all=True)
+    assert rows, "master_ingredients vino vacío con el pool abierto"
+    catalogo = {r["name"] for r in rows if r.get("name")}
+
+    faltantes = sorted(nombres_usados - catalogo)
+    assert not faltantes, (
+        f"[{cc}] {len(faltantes)} nombre(s) de constituents NO son un `name` exacto de "
+        f"master_ingredients: {faltantes}"
+    )
+
+
+# ── J2. _dish_templates_path_for_country + _culinary_judge_rubric_for_country PR/US ──────────────
+
+def test_dish_templates_path_for_country_pr_us_usan_su_archivo_propio(go):
+    assert go._dish_templates_path_for_country("PR") == str(_DISH_TEMPLATES_PR_JSON)
+    assert go._dish_templates_path_for_country("US") == str(_DISH_TEMPLATES_US_JSON)
+
+
+def test_culinary_judge_rubric_pr_sustituye_ejemplos_y_encabezado(go):
+    rubric_pr = go._culinary_judge_rubric_for_country("PR")
+    rubric_do = go._culinary_judge_rubric_for_country("DO")
+    assert rubric_pr != rubric_do
+    assert "Mofongo con chicharrón" in rubric_pr
+    assert "Mangú" not in rubric_pr, (
+        "los ejemplos dominicanos no deben sobrevivir en la variante PR -- el desayuno de "
+        "plátano+huevo de este país se nombró a propósito sin la palabra 'Mangú' para no "
+        "confundir este canario de contaminación con una inclusión cultural deliberada"
+    )
+    assert "PLATOS DE P" in rubric_pr.upper()
+    assert "cocina de Puerto Rico" in rubric_pr
+
+
+def test_culinary_judge_rubric_us_sustituye_ejemplos_y_encabezado(go):
+    rubric_us = go._culinary_judge_rubric_for_country("US")
+    rubric_do = go._culinary_judge_rubric_for_country("DO")
+    assert rubric_us != rubric_do
+    assert "Chili con carne con pan de maíz" in rubric_us
+    assert "Mangú" not in rubric_us, "los ejemplos dominicanos no deben sobrevivir en la variante US"
+    assert "PLATOS DE E" in rubric_us.upper()
+    assert "cocina de Estados Unidos" in rubric_us
+
+
+def test_culinary_judge_rubric_pr_us_no_se_contaminan_con_ningun_otro_pais(go):
+    """Cada variante de país usa SOLO sus propios ejemplos -- un plato PR nunca debe aparecer en
+    la rúbrica US (ni viceversa), y ninguno de los dos debe traer platos DO/ES/MX/CO. Prueba
+    puntual de que la sustitución de bloque no deja restos cruzados entre las 6 variantes ya
+    cacheadas en el mismo proceso (DO/ES/MX/CO/PR/US)."""
+    rubric_pr = go._culinary_judge_rubric_for_country("PR")
+    rubric_us = go._culinary_judge_rubric_for_country("US")
+    rubric_mx = go._culinary_judge_rubric_for_country("MX")
+    rubric_co = go._culinary_judge_rubric_for_country("CO")
+    rubric_es = go._culinary_judge_rubric_for_country("ES")
+    assert "Chili con carne" not in rubric_pr and "Wafles" not in rubric_pr
+    assert "Mofongo" not in rubric_us and "Bacalaítos" not in rubric_us
+    assert "Mofongo" not in rubric_mx and "Chili con carne" not in rubric_mx
+    assert "Mofongo" not in rubric_co and "Chili con carne" not in rubric_co
+    assert "Mofongo" not in rubric_es and "Chili con carne" not in rubric_es
+    assert "Tacos de pollo" not in rubric_pr and "Ajiaco" not in rubric_pr
+    assert "Tortilla española" not in rubric_pr and "Tortilla española" not in rubric_us
+
+
+def test_culinary_judge_rubric_do_sigue_byte_identico_tras_pr_us(go):
+    """Control de no-regresión: dar de alta PR/US no debe tocar la ruta DO — mismo objeto
+    cacheado (identidad, no solo igualdad), verificado DESPUÉS de resolver PR/US/ES/MX/CO en
+    este mismo proceso (el cache es un dict módulo-level; esto confirma que no hay mutación
+    cruzada)."""
+    go._culinary_judge_rubric_for_country("PR")
+    go._culinary_judge_rubric_for_country("US")
+    assert go._culinary_judge_rubric_for_country("DO") is go._CULINARY_JUDGE_RUBRIC
+
+
+# ── J3. COUNTRY_POOLS['PR']/['US'] + _get_fast_filtered_catalogs(country=) ────────────────────────
+
+@pytest.mark.parametrize("cc", ["PR", "US"])
+def test_country_pools_pr_us_estructura(cc):
+    pool = constants.COUNTRY_POOLS.get(cc)
+    assert isinstance(pool, dict)
+    for key in ("proteins", "carbs", "veggies_fats", "fruits"):
+        assert isinstance(pool.get(key), list) and pool[key], f"COUNTRY_POOLS[{cc!r}][{key!r}] vacío"
+        assert all(isinstance(x, str) and x.strip() for x in pool[key])
+
+
+@pytest.mark.parametrize("cc", ["PR", "US"])
+def test_get_fast_filtered_catalogs_pr_us_usa_su_propio_pool(cc):
+    proteins_do, _, _, _ = constants._get_fast_filtered_catalogs((), (), "")
+    proteins, carbs, veg, fruits = constants._get_fast_filtered_catalogs((), (), "", country=cc)
+    assert proteins != proteins_do
+    assert set(proteins) == set(constants.COUNTRY_POOLS[cc]["proteins"])
+    assert set(carbs) == set(constants.COUNTRY_POOLS[cc]["carbs"])
+    assert set(veg) == set(constants.COUNTRY_POOLS[cc]["veggies_fats"])
+    assert set(fruits) == set(constants.COUNTRY_POOLS[cc]["fruits"])
+
+
+def test_get_fast_filtered_catalogs_sin_country_pr_us_sigue_siendo_do_byte_identico():
+    """Dar de alta PR/US no debe tocar el fallback -- `country=None`/'DO'/país sin pool siguen
+    devolviendo EXACTAMENTE `DOMINICAN_*` (byte-idéntico). País SIN pool dedicado (ya no queda
+    ninguno tras esta task -- los 6 tienen pool propio) usa un código ISO inventado como control
+    del fallback genérico."""
+    casos = [((), (), ""), (("mariscos",), (), ""), ((), (), "vegano")]
+    for allergies, dislikes, diet in casos:
+        base = constants._get_fast_filtered_catalogs(allergies, dislikes, diet)
+        con_none = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country=None)
+        con_zz = constants._get_fast_filtered_catalogs(allergies, dislikes, diet, country="ZZ")
+        assert base == con_none == con_zz, f"diverge para {(allergies, dislikes, diet)!r}"
+
+
+# ── J4. unpriced-keep: las 62 altas T7 reconocidas por su propio token ───────────────────────────
+# (el sweep e2e que prueba "nada MÁS se reconoce por accidente" ya se extendió arriba, en la
+# sección I4 original -- test_is_country_catalog_unpriced_item_no_colisiona_..., ahora resta
+# también `_DISH_TEMPLATES_PR_US_NAMES`)
+
+@pytest.mark.parametrize("nombre", sorted(_DISH_TEMPLATES_PR_US_NAMES))
+def test_is_country_catalog_unpriced_item_reconoce_cada_alta_t7(sc, nombre, monkeypatch):
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    assert sc.is_country_catalog_unpriced_item(nombre), f"{nombre!r} no reconocido como unpriced keep"
+
+
+def test_unpriced_tokens_t7_usan_nombre_completo_no_palabras_sueltas_riesgosas():
+    """[decisión de diseño de esta task, ancla en código] A diferencia de T5/T6 (que usaban
+    palabras sueltas cuando eran seguras), T7 usa el NOMBRE CANÓNICO COMPLETO para las 62 altas
+    porque la superficie de riesgo es mayor: 'queso'/'pan'/'carne'/'papa'/'mantequilla'/'chile'/
+    'salsa'/'galletas'/'frijoles' ya son bare o casi-bare en aliases de filas PRICED existentes.
+    Pin de que ninguno de esos 9 tokens de alto riesgo aparece SOLO (sin calificador) en el
+    registro para las altas T7 -- si este test se pone rojo, alguien angostó un token de forma
+    insegura sin repetir el sweep e2e."""
+    riesgosos = {"queso", "pan", "carne", "papa", "mantequilla", "chile", "salsa", "galletas", "frijoles"}
+    # Los últimos 62 tokens del registro son los de T7 (el orden de literal tuple se preserva).
+    import shopping_calculator as _sc
+    t7_tokens = _sc._COUNTRY_CATALOG_UNPRICED_TOKENS[-62:]
+    assert len(t7_tokens) == 62
+    bare_riesgosos = sorted(tok for tok in t7_tokens if tok in riesgosos)
+    assert not bare_riesgosos, f"tokens T7 de alto riesgo usados SUELTOS (sin calificador): {bare_riesgosos}"
+
+
+# ── J5. Los 4 vocabularios — anchors narrow de las altas T7 ───────────────────────────────────────
+
+@pytest.mark.parametrize("clase,termino", [
+    ("pescado", "bacalaitos"),
+])
+def test_altas_t7_presentes_en_allergen_synonyms(go, clase, termino):
+    assert termino in go._ALLERGEN_SYNONYMS[clase], f"{termino!r} ausente de _ALLERGEN_SYNONYMS[{clase!r}]"
+
+
+def test_altas_t7_presentes_en_diet_seafood_terms(go):
+    assert "bacalaitos" in go._DIET_SEAFOOD_TERMS
+
+
+@pytest.mark.parametrize("termino", ["pavochon", "pepperoni", "frijoles horneados"])
+def test_altas_t7_presentes_en_diet_flesh_terms(go, termino):
+    assert termino in go._DIET_FLESH_TERMS
+
+
+@pytest.mark.parametrize("termino", [
+    "bagel", "bagels", "pretzel", "pretzels", "panecillo", "panecillos", "panqueque",
+    "panqueques", "wafle", "wafles", "salsa de salchicha", "masa para pie", "bacalaitos",
+])
+def test_altas_t7_presentes_en_allergen_synonyms_gluten(go, termino):
+    assert termino in go._ALLERGEN_SYNONYMS["gluten"], f"{termino!r} ausente de _ALLERGEN_SYNONYMS['gluten']"
+
+
+def test_constants_catchall_gluten_sincronizado_con_los_13_terminos_t7(go):
+    """[lockstep obligatorio, CLAUDE.md] `constants._get_fast_filtered_catalogs` gluten catch-all
+    DEBE llevar los MISMOS 13 términos que `_ALLERGEN_SYNONYMS['gluten']` añadió en esta task --
+    es la MISMA clase de drift que el fix-wave de T6 cerró (11 términos de T4 sin sincronizar)."""
+    nuevos = ("bagel", "bagels", "pretzel", "pretzels", "panecillo", "panecillos", "panqueque",
+              "panqueques", "wafle", "wafles", "salsa de salchicha", "masa para pie", "bacalaitos")
+    src = constants.__file__
+    with open(src, encoding="utf-8") as f:
+        constants_src = f.read()
+    ini = constants_src.index('if any(r in ["gluten", "trigo", "wheat"]')
+    fin = constants_src.index("if any(r in [\"soya\"", ini)
+    bloque_gluten = constants_src[ini:fin]
+    faltantes = [t for t in nuevos if f'"{t}"' not in bloque_gluten]
+    assert not faltantes, f"catch-all de constants.py NO sincronizado con estos términos T7: {faltantes}"
+
+
+def test_scan_allergen_violations_detecta_bacalaitos_como_pescado(go):
+    plan = {"days": [{"meals": [{"name": "Merienda", "ingredients": ["120 g de Bacalaítos"]}]}]}
+    v = go._scan_allergen_violations(plan, ["pescado"])
+    assert v, "'Bacalaítos' debe violar la alergia a pescado"
+
+
+def test_scan_diet_violations_detecta_pavochon_y_pepperoni_para_vegano(go):
+    plan = {"days": [{"meals": [{"name": "Almuerzo", "ingredients": ["Pavochón con puré"]}]}]}
+    assert go._scan_diet_violations(plan, "vegano"), "'Pavochón' no fue detectado para vegano"
+    plan2 = {"days": [{"meals": [{"name": "Almuerzo", "ingredients": ["Pizza de Pepperoni"]}]}]}
+    assert go._scan_diet_violations(plan2, "vegano"), "'Pepperoni' no fue detectado para vegano"
+
+
+def test_paridad_dieta_alergeno_bidireccional_cubre_bacalaitos(go):
+    """El guard genérico heredado de T4 (`test_paridad_dieta_alergeno_bidireccional`,
+    parametrizado por clase) ya corre sobre TODO el vocabulario -- este test puntual documenta
+    que 'bacalaitos' específicamente está en AMBOS lados (mariscos+pescado <-> seafood), sin
+    depender de leer el test genérico para confirmarlo."""
+    assert "bacalaitos" in go._ALLERGEN_SYNONYMS["pescado"]
+    assert "bacalaitos" in go._DIET_SEAFOOD_TERMS
+
+
+# ── J6. Regla FILA-vs-SINÓNIMO — el único sinónimo de esta task ──────────────────────────────────
+
+@pytest.mark.e2e
+def test_parcha_resuelve_a_chinola_via_normalize_name_real(sc):
+    """[el guard central del contrato] Verifica el CAMINO REAL (`sc.normalize_name`) -- Parcha
+    (P. edulis, PR) es la MISMA especie que Chinola (P. edulis, RD), a diferencia de Curuba (P.
+    tripartita, T6) o Granadilla (P. ligularis, T6), que son especies DISTINTAS con fila propia."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("Parcha") == "Chinola"
+    assert sc.normalize_name("Parchas") == "Chinola"
+
+
+@pytest.mark.parametrize("item,fila_o_alias_esperado,tipo", [
+    ("Parcha", "Chinola", "sinónimo"),
+    ("Aceitunas rellenas", "Aceitunas rellenas", "fila nueva"),
+    ("Chuleta ahumada", "Chuleta ahumada", "fila nueva"),
+    ("Suero de mantequilla", "Suero de mantequilla", "fila nueva"),
+    ("Arándanos rojos", "Arándanos rojos", "fila nueva"),
+    ("Chili con carne", "Chili con carne", "fila nueva"),
+])
+def test_tabla_fila_vs_sinonimo_t7_estructural(item, fila_o_alias_esperado, tipo):
+    """[tabla estructural, sin DB] Documenta en código la decisión fila-vs-sinónimo por item --
+    complementa el test funcional de arriba: aquí se ancla la DECISIÓN, allá el RESULTADO."""
+    if tipo == "sinónimo":
+        assert item != fila_o_alias_esperado, f"{item!r} está marcado sinónimo pero apunta a sí mismo"
+        assert fila_o_alias_esperado in (_DISH_TEMPLATES_PR_US_NAMES | {"Chinola"}), (
+            f"el destino {fila_o_alias_esperado!r} de {item!r} debe ser una fila real conocida"
+        )
+    else:
+        assert item == fila_o_alias_esperado, f"{item!r} está marcado fila nueva pero mapea a otro nombre"
+        assert item in _DISH_TEMPLATES_PR_US_NAMES, f"{item!r} marcado fila nueva debe estar en las 62 altas"
+
+
+def test_carne_de_cerdo_para_pernil_retargeteo_documentado_y_aceptado(sc):
+    """[hallazgo del sweep de colisión propio -- retarget CONOCIDO y ACEPTADO, no un bug] El item
+    curado 'Carne de cerdo para pernil' (PR) resolvía a 'Cerdo' (genérico) antes de esta task --
+    tras dar de alta 'Pernil' (corte específico, pierna con piel/grasa), la ANATOMY-PREFIX guard
+    de `normalize_name` (que strippea 'carne de ' al inicio) deja 'cerdo para pernil', que ahora
+    CONTAINS-matchea 'pernil' (6 chars) antes que 'cerdo' (5 chars, más corto) en el índice
+    ordenado por longitud. Aceptado a propósito (no revertido con un rescate): 'Pernil' es MÁS
+    preciso para una frase que literalmente dice "para pernil" que el genérico 'Cerdo' -- mismo
+    espíritu que el retarget 'Chicharrón de cerdo'→'Chicharrón' que T6 documentó como mejora
+    intencional. El `country_gaps/pr.json` commiteado en esta task YA refleja este target."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    assert sc.normalize_name("Carne de cerdo para pernil") == "Pernil"
+
+
+# ── J7. e2e — las 62 altas T7 existen en el catálogo vivo, SIN precio, con fdc_id o 'manual' ─────
+
+@pytest.mark.e2e
+def test_62_altas_t7_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — e2e, no bloquea el gate")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+
+    rows = execute_sql_query(
+        "SELECT name, price_per_lb, price_per_unit, fdc_id, nutrition_source "
+        "FROM master_ingredients WHERE name = ANY(%s)",
+        (list(_DISH_TEMPLATES_PR_US_NAMES),),
+        fetch_all=True,
+    ) or []
+    por_nombre = {r["name"]: r for r in rows}
+
+    faltantes = sorted(_DISH_TEMPLATES_PR_US_NAMES - set(por_nombre))
+    assert not faltantes, f"altas T7 ausentes del catálogo vivo: {faltantes}"
+
+    con_precio = [n for n, r in por_nombre.items()
+                  if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
+    assert not con_precio, f"altas T7 con precio RD (deberían estar en 0): {con_precio}"
+
+    # [T7] 8 filas 'manual': 2 SIN fdc_id real (Recao, Adobo) + 6 DERIVADAS como blend de 2 fdc_id
+    # reales (nutrition_source='manual' porque el valor persistido es una TRANSFORMACIÓN -- mismo
+    # criterio que Flor de Jamaica/T6). Las otras 54 exigen fdc_id + 'usda'.
+    _MANUAL = {"Recao", "Adobo", "Alcaparrado", "Pique", "Salsa de salchicha",
+               "Ensalada de macarrones", "Huevos rellenos", "Carne molida mixta"}
+    con_usda = {n: r for n, r in por_nombre.items() if n not in _MANUAL}
+    sin_fdc = [n for n, r in con_usda.items() if not r.get("fdc_id")]
+    assert not sin_fdc, f"altas T7 (no-manual) sin fdc_id: {sin_fdc}"
+    no_usda = [n for n, r in con_usda.items() if r.get("nutrition_source") != "usda"]
+    assert not no_usda, f"altas T7 (no-manual) con nutrition_source != 'usda': {no_usda}"
+
+    manuales = {n: r for n, r in por_nombre.items() if n in _MANUAL}
+    assert set(manuales) == _MANUAL, f"esperaba exactamente {_MANUAL} como manual, hay {set(manuales)}"
+    no_manual = [n for n, r in manuales.items() if r.get("nutrition_source") != "manual"]
+    assert not no_manual, f"{no_manual} deberían tener nutrition_source='manual'"
+
+    # Las 8 'manual' tienen fdc_id NULL en la COLUMNA por igual -- tanto las 2 sin fuente real
+    # (Recao/Adobo) como las 6 derivadas de un blend de 2 fdc reales (el detalle de qué fdc's
+    # alimentaron cada blend + los pesos exactos vive en `_provenance`, nunca en la columna
+    # `fdc_id`, que solo admite un único entero o NULL).
+    con_fdc = [n for n, r in manuales.items() if r.get("fdc_id")]
+    assert not con_fdc, f"filas 'manual' con fdc_id NO-nulo (debería ser siempre NULL): {con_fdc}"
+
+
+# ── J8. Golden fixture: un día PR y un día US pasan slots suaves (mismo patrón que H14/I8) ───────
+
+def _dia_pr_con_arroz_en_desayuno() -> list:
+    return [{
+        "day": 1,
+        "meals": [
+            {"meal": "Desayuno", "name": "Arroz con gandules y pernil",
+             "ingredients": ["Pernil", "Arroz blanco", "Gandules"]},
+            {"meal": "Almuerzo", "name": "Pollo guisado con arroz blanco",
+             "ingredients": ["Muslo de pollo", "Arroz blanco", "Sofrito"]},
+            {"meal": "Cena", "name": "Chuletas ahumadas a la plancha con vegetales",
+             "ingredients": ["Chuleta ahumada", "Repollo", "Zanahoria"]},
+            {"meal": "Merienda", "name": "Tostones con pique",
+             "ingredients": ["Plátano verde", "Pique"]},
+        ],
+    }]
+
+
+def _dia_us_con_pasta_en_desayuno() -> list:
+    """[hallazgo de verificación en vivo] `SLOT_INAPPROPRIATE_FOODS['cena']` NO tiene ninguna
+    regla de tokens de pasta (solo arroz-soft/cereal-soft/frito-soft/sancocho-soft/desayuno-soft)
+    -- la regla HARD de pasta vive SOLO en `SLOT_INAPPROPRIATE_FOODS['desayuno']` (tokens
+    'macarron'/'macarrones'/'coditos'/'fideos'/etc). El fixture original (pasta en CENA) medía
+    una combinación que el detector NUNCA marca como violación, en NINGÚN país -- confirmado con
+    'assert violaciones' fallando incluso para country='DO' (control). Movido a desayuno, donde
+    la regla hard real vive."""
+    return [{
+        "day": 1,
+        "meals": [
+            {"meal": "Desayuno", "name": "Macarrones con queso cheddar",
+             "ingredients": ["Coditos", "Queso cheddar"]},
+            {"meal": "Almuerzo", "name": "Chili con carne con pan de maíz",
+             "ingredients": ["Chili con carne", "Pan de maíz"]},
+            {"meal": "Cena", "name": "Salmón con espárragos",
+             "ingredients": ["Salmón", "Espárragos"]},
+            {"meal": "Merienda", "name": "Pretzels con mostaza",
+             "ingredients": ["Pretzels", "Mostaza"]},
+        ],
+    }]
+
+
+@pytest.mark.parametrize("cc,builder", [("PR", _dia_pr_con_arroz_en_desayuno), ("US", _dia_us_con_pasta_en_desayuno)])
+def test_dia_pr_us_regla_dura_pasa_como_soft_sin_forzar_retry(go, monkeypatch, cc, builder):
+    """[Golden fixture] Un día con una violación real de la regla dura (arroz en desayuno para PR,
+    pasta en cena para US) DEBE detectarse SOFT (hard=False) para país PR/US:
+    `slot_rules_for_country` softea toda regla en Fase 1 (T4), igual que ES/MX/CO en H14/I8."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dias = builder()
+    violaciones = go._detect_slot_appropriateness(dias, {"country": cc})
+    assert violaciones, f"[{cc}] el día de prueba debe producir AL MENOS una violación (control positivo)"
+    duras = [v for v in violaciones if v["hard"]]
+    assert not duras, f"[{cc}] no debe producir violaciones HARD: {duras}"
+
+
+@pytest.mark.parametrize("cc,builder", [("PR", _dia_pr_con_arroz_en_desayuno), ("US", _dia_us_con_pasta_en_desayuno)])
+def test_el_mismo_dia_pr_us_hard_para_do_control_de_que_el_mecanismo_discrimina(go, monkeypatch, cc, builder):
+    """Control negativo: el MISMO día, con country='DO', debe seguir produciendo HARD -- confirma
+    que el mecanismo distingue países en vez de estar simplemente roto."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    dias = builder()
+    violaciones = go._detect_slot_appropriateness(dias, {"country": "DO"})
+    assert violaciones, f"[{cc}→DO] control: el día debe violar también en DO"
+    duras = [v for v in violaciones if v["hard"]]
+    assert duras, f"[{cc}→DO] debe seguir produciendo violaciones HARD (byte-identidad del mecanismo)"
+
+
+# ── J9. Cierre medible — pr.json/us.json committed: cero DROP, cero SUSTITUCION-SILENCIOSA ───────
+
+@pytest.mark.parametrize("cc,fname", [("PR", "pr.json"), ("US", "us.json")])
+def test_harness_pr_us_cierra_en_cero_drops_cero_silenciosas(cc, fname):
+    """[el criterio de cierre del contrato] `pr.json`/`us.json` (sobrescritos por la re-corrida
+    final del harness post-altas, committed en el repo) deben reportar counts.DROP == 0 y
+    counts.SUSTITUCION-SILENCIOSA == 0 -- el mismo criterio de salida que T5/T6 cerraron."""
+    path = _BACKEND / "data" / "country_gaps" / fname
+    assert path.exists(), f"[{cc}] {fname} debe existir committed en el repo"
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    assert data.get("country") == cc
+    counts = data.get("counts") or {}
+    assert counts.get("DROP") == 0, f"[{cc}] DROP debe ser 0 en el cierre, es {counts.get('DROP')}"
+    assert counts.get("SUSTITUCION-SILENCIOSA") == 0, (
+        f"[{cc}] SUSTITUCION-SILENCIOSA debe ser 0 en el cierre, es {counts.get('SUSTITUCION-SILENCIOSA')}"
+    )
+    assert counts.get("RESUELVE-BIEN") == data.get("total_items"), (
+        f"[{cc}] RESUELVE-BIEN debe cubrir el 100% de total_items en el cierre"
+    )
+
+
+# Nota J7: la última aserción de test_62_altas_t7_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual
+# es una tautología defensiva dejada a propósito legible (`is False or True`) — el chequeo real de
+# "las 6 blend SÍ tienen fdc_id" no aplica: son 'manual' por ser DERIVADAS de 2 fdc reales cada
+# una, no por carecer de fdc — `fdc_id` en la columna persistida es NULL para las 8 'manual' por
+# igual (el detalle de qué fdc's alimentaron el blend vive en `_provenance`, no en la columna).
