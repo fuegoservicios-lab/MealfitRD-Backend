@@ -144,11 +144,19 @@ def test_p2d_autofix_runs_before_hard_split():
     """[P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] El callsite ganó un kwarg (`country=`) — el
     ancla se ensancha a la coma tras `compound=True` (sin paréntesis de cierre) para tolerar
     CUALQUIER argumento extra sin perder la aserción de ORDEN real. Mismo patrón que
-    test_p1_night_rice_autofix.py::test_callsite_runs_before_macro_engine."""
+    test_p1_night_rice_autofix.py::test_callsite_runs_before_macro_engine.
+
+    [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, f)] `_sa_has_hard = any(...)` inline se
+    reemplazó por una llamada al helper puro `_slot_appropriateness_advisory_decision(...)`
+    (extraído para ser unit-testable — ver test_p1_country_system_f2.py sección "f"), que
+    ahora COMPUTA `_sa_has_hard` como parte de su tupla de retorno en vez de una asignación
+    `any(...)` inline. La PROPIEDAD que este test verifica (el autofix corre ANTES de que se
+    decida hard/soft) sigue intacta — solo cambió el texto literal que la delata. Re-anclado
+    a la llamada del helper en vez de a la asignación `any(...)` que ya no existe."""
     gate = _GO.index("_sa_is_final = _sa_attempt >= MAX_ATTEMPTS")
     blk = _GO[gate:gate + 4000]
     idx_autofix = blk.index("_night_rice_autofix(plan.get(\"days\", []), compound=True,")
-    idx_hard = blk.index("_sa_has_hard = any(")
+    idx_hard = blk.index("_slot_appropriateness_advisory_decision(")
     assert idx_autofix < idx_hard, \
         "el autofix debe correr ANTES del split hard/soft — la mezcla hard+soft en intento final " \
         "entregaba el plan degradado CON el arroz nocturno limpiable"
