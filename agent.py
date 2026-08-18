@@ -6000,6 +6000,20 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             user_id, current_plan, plan_id=(plan_record or {}).get("id"),
         )
 
+    # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] REFUERZO de la directiva de idioma como
+    # ÚLTIMO bloque del system prompt. La directiva de T3 (arriba, junto a la identidad)
+    # quedaba enterrada bajo ~40 bloques españoles (plan JSON, culinary KB, tools, RAG...)
+    # y el modelo la desobedecía: primer usuario real con locale='en-US' (2026-08-18
+    # 23:14 UTC, session b9f147ca) recibió la respuesta en español con la directiva YA
+    # en el prompt — la señal dominante (todo el prompt + «hola» del usuario en español)
+    # ganó a una instrucción a mitad de contexto. Recency manda en adherencia: la misma
+    # directiva, repetida al FINAL, es lo último que el modelo lee antes de responder.
+    # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
+    try:
+        system_prompt += build_language_directive(_coach_locale)
+    except Exception:
+        pass
+
     config = {"configurable": {"thread_id": session_id}}
 
     # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Pool separado para PostgresSaver
@@ -6455,6 +6469,16 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             user_id, current_plan, local_date_str=local_date, tz_offset=tz_offset,
             plan_id=(plan_record or {}).get("id"),
         )
+
+    # [P1-COACH-LANGUAGE-RECENCY · 2026-08-18] Mismo refuerzo final que el path
+    # no-stream (la divergencia entre ambos ya costó bugs — P1-CHAT-PAST-DAYS,
+    # P1-CHAT-PAUSED-PROMPT-BLOCKS): la directiva de idioma repetida como ÚLTIMO
+    # bloque, porque a mitad de prompt el modelo la desobedeció con el primer
+    # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
+    try:
+        system_prompt += build_language_directive(_coach_locale)
+    except Exception:
+        pass
 
     config = {"configurable": {"thread_id": session_id}}
 
