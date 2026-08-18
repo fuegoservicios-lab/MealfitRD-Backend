@@ -2177,7 +2177,19 @@ def _preprocess_nlp_quantities(s: str) -> str:
     # evidencia de ese caso en el corpus real.
     _rng = re.match(r'^(\d+)\s*[-–]\s*(\d+)\b', s_lower)
     if _rng:
-        s_lower = re.sub(r'^(\d+)\s*[-–]\s*(\d+)\b', r'\2', s_lower, count=1)
+        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, l · fix-round T8-review)] El `\2` fijo de
+        # abajo sustituía SIEMPRE por el segundo número — "colapsa al MAYOR" solo por COINCIDENCIA
+        # cuando el rango viene ASCENDENTE ("2-3" → 3, sí es el mayor). Un rango DESCENDENTE
+        # ("3-2 ciruelas", typo/orden invertido del LLM) tomaba el 2 — el MENOR, contradiciendo el
+        # propio comentario de diseño de arriba. `re.sub` con función-repl computa max() real,
+        # sin importar el orden de los 2 números. Byte-idéntico para el caso ascendente (el único
+        # medido en producción — rd_drops.json).
+        s_lower = re.sub(
+            r'^(\d+)\s*[-–]\s*(\d+)\b',
+            lambda _m: str(max(int(_m.group(1)), int(_m.group(2)))),
+            s_lower,
+            count=1,
+        )
         return re.sub(r'\s{2,}', ' ', s_lower).strip()
 
     replacements = [

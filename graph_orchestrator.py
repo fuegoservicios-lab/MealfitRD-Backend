@@ -3998,7 +3998,13 @@ from prompts.plan_generator import (
     clinical_profile_active_flags,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
-from prompts.planner import PLANNER_SYSTEM_PROMPT, build_planner_system_prompt
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, h)] `PLANNER_SYSTEM_PROMPT` (el símbolo crudo)
+# quedó IMPORTADO-PERO-MUERTO tras F1-T3/FINAL-FIX-F1a: los ~3 call sites que antes lo usaban
+# directo migraron a `build_planner_system_prompt(ctx['country'])`, que para DO/None devuelve el
+# MISMO objeto por identidad (`is PLANNER_SYSTEM_PROMPT`, anclado en
+# test_f1a_planner_do_o_none_es_byte_identico_is) — el import crudo ya no tiene consumidor en
+# este módulo. `prompts.planner` sigue exportando la constante para su propio uso interno.
+from prompts.planner import build_planner_system_prompt
 from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context
 
 
@@ -5815,6 +5821,13 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 
     No muta el original. El código backend que consume `form_data["_xxx"]`
     debe seguir leyendo del state, NO del retorno de este helper.
+
+    [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, h)] tooltip-anchor: P1-PROMPT-TRIM-FORM-DATA —
+    4 tests en 3 archivos (test_p1_country_system_f0.py, test_p1_country_system_f1.py,
+    test_p1_prompt_trim_form_data.py) localizan este cuerpo por NOMBRE/firma con
+    regex/`.index()`; un rename silencioso rompía esos tests con un error de "substring no
+    encontrado" en vez de señalar el marker correcto — con el anchor, el mensaje de fallo apunta
+    directo al P-fix que hay que releer antes de tocar esta función.
     """
     if not isinstance(form_data, dict):
         return form_data
@@ -14430,12 +14443,35 @@ _PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
 # scanner castigaba el cumplimiento; el mismo matcher alimenta el SKELETON ALLERGEN SCRUB, que le
 # quitaba al day-gen la avena sin gluten que el planner asignó bien. Solo se absuelve el token
 # NEGADO: «leche sin lactosa» sigue violando 'lácteos' (proteína láctea presente) — el sesgo a
-# sobre-detectar queda intacto fuera de gluten. Máx 1 palabra de relleno («sin trazas gluten»);
-# más relleno NO absuelve (fail-secure). [fix-round 1 · 2026-08-17] «pan sin gluten» YA NO se
-# queda flagged vía 'pan': `_GLUTEN_FORWARD_EXCUSE_RX` (abajo) excusa por delante dentro de la
+# sobre-detectar queda intacto fuera de gluten. [fix-round 1 · 2026-08-17] «pan sin gluten» YA NO
+# se queda flagged vía 'pan': `_GLUTEN_FORWARD_EXCUSE_RX` (abajo) excusa por delante dentro de la
 # categoría gluten — ver ese bloque para el porqué del delta.
+#
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, i · T4-parked, fix-round 2 backward mirror)] El
+# relleno original («Máx 1 palabra de relleno («sin trazas gluten»)», ver historial git) usaba
+# `(?:\w+\s+)?` — CUALQUIER palabra, sin restricción — el MISMO leak de clase que fix-round 1 del
+# forward tuvo (`_GLUTEN_FORWARD_EXCUSE_RX`, arriba) antes de su propio fix-round 2: en «Sin
+# gluten trigo» (dos términos de gluten distintos, sin conjunción siquiera), al escanear 'trigo'
+# el filler tragaba 'gluten' como relleno genérico y excusaba 'trigo' — que NO tiene claim propio
+# (fail-open, la dirección prohibida). Reproducido en vivo antes de este fix:
+# `_scan_allergen_violations` sobre "Sin gluten trigo"/"No contiene gluten trigo" ⇒ `[]` (debía
+# violar por 'trigo').
+#
+# A diferencia del forward (donde 'certificada' SÍ tenía evidencia real — 8 tests + catálogo), la
+# búsqueda de evidencia para relleno BACKWARD fue NEGATIVA: los 8 tests de
+# test_p1_allergen_negation_excuse.py son todos 0-relleno («sin gluten» directo) o usan la excusa
+# FORWARD («certificada» sigue al término, no lo precede); barrido en vivo de
+# `master_ingredients`/`supermarket_products` (`name/food_name ILIKE '%sin %'` etc.) no encontró
+# NINGUNA fila con un alérgeno de gluten tras un relleno de 1 palabra — el único hit relevante fue
+# «Leche sin lactosa» (0-relleno, categoría láctea, ya cubierto por
+# test_leche_sin_lactosa_sigue_violando_lacteos). 'trazas' (el ejemplo del comentario original)
+# NUNCA apareció en ningún test ni fila real — era una ilustración especulativa, no evidencia.
+# Dirección fail-safe (mismo ruling que cerró el hueco simétrico del forward): ELIMINADO en vez
+# de blanqueado — sin evidencia de un relleno real, no hay nada que whitelist-ear. Si aparece
+# evidencia real de un relleno backward legítimo, añadirlo a una whitelist explícita CON un test
+# que la ancle primero (nunca al revés, mismo principio que `_GLUTEN_FORWARD_FILLER_WHITELIST`).
 _ALLERGEN_NEGATION_PREFIX_RX = _re_mod.compile(
-    r"(?:\bsin|\blibres?\s+de|\bcero|\bno\s+contienen?)\s+(?:\w+\s+)?$"
+    r"(?:\bsin|\blibres?\s+de|\bcero|\bno\s+contienen?)\s+$"
 )
 # [P1-COUNTRY-SYSTEM-F2 · T4 fix-round 1 · 2026-08-17] Excusa FORWARD (la negation-prefix de
 # arriba es solo hacia-atrás): cierra el hueco medido en el review de T4 — 'avena' bare no tenía
@@ -15034,10 +15070,16 @@ def slot_coherence_backstop_for_meal(meal: dict, meal_type: str, country: str = 
     correcta si Fase 2 introduce una tabla beta con alguna regla nativamente hard. Sin esto, el
     backstop llamaba `slot_violations_for_meal_name` sin tabla → SIEMPRE la tabla dura → `swap_meal`
     (agent.py) levantaba `SLOT_INCOHERENCE` y forzaba hasta 3 retries LLM por una regla que
-    `_detect_slot_appropriateness`/T4 ya trata como soft/telemetría para países beta. El pase
-    INGREDIENT-LEVEL (`slot_ingredient_violations`, abajo) NO se filtra — sigue siempre hard,
-    residual documentado (mismo alcance que el de `_detect_slot_appropriateness`, no cubierto por
-    el review de este fix-round). tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    `_detect_slot_appropriateness`/T4 ya trata como soft/telemetría para países beta.
+
+    [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] El pase INGREDIENT-LEVEL
+    (`slot_ingredient_violations`, abajo) CIERRA el residual disclosed en T4 fix-round 1 (docs/
+    country_system_f1.md, fila "slot_coherence_backstop_for_meal's pase ingredient-level"): ahora
+    se filtra con el MISMO criterio `_is_do or v.get("hard")` que el pase name-level un poco más
+    arriba — DO conserva TODA violación (byte-idéntico), beta pierde SOLO lo que no es `hard` (hoy:
+    todo, porque `slot_ingredient_violations` en sí sigue devolviendo `hard=True` incondicional —
+    la SSOT compartida no se toca, igual que en `_detect_slot_appropriateness`, que filtra en el
+    sitio de consumo, no en la función). tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
     if not SLOT_APPROPRIATENESS_GATE_ENABLED or not isinstance(meal, dict):
         return []
     try:
@@ -15053,13 +15095,24 @@ def slot_coherence_backstop_for_meal(meal: dict, meal_type: str, country: str = 
                 out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
         # [P2-SLOT-INGREDIENT-RICE · 2026-07-01] (audit v2 slots GAP-1) paridad updates: el mismo pase
         # ingredient-level del productor S1 (arroz oculto en ingredients de un DESAYUNO con nombre inocuo).
-        # [P1-COUNTRY-SYSTEM-F1 EXENTO: T4 fix-round 1 disclosure (docstring arriba) — el pase
-        # ingredient-level sigue siempre hard, sin override por país. Behavioral gap conocido y
-        # explícitamente dejado fuera del alcance de esa review; T8 lo confirma vivo, no lo cierra.]
+        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] CERRADO el gap de país (antes: T4
+        # fix-round 1 dejaba este pase siempre-hard sin importar país). OJO — a diferencia del pase
+        # name-level de arriba (cuyo `_rules_table` YA es país-derivado, así que `_is_do or
+        # v.get("hard")` es el filtro correcto ahí), `slot_ingredient_violations` es ESTRUCTURAL:
+        # no consulta ninguna tabla país-aware y devuelve `hard=True` INCONDICIONAL para TODO lo
+        # que encuentra — `_is_do or v.get("hard")` aquí sería un NO-OP (v.get("hard") siempre
+        # True ⇒ el OR siempre True ⇒ beta seguiría viendo el 100%, verificado en vivo durante el
+        # desarrollo de este fix). El override correcto mirror-ea `_detect_slot_appropriateness`
+        # (línea `"hard": v["hard"] and _country == "DO"`): efectivo-hard = v["hard"] AND país==DO.
+        # [P1-COUNTRY-SYSTEM-F1 EXENTO: slot_ingredient_violations(ingredients, slot_key) no lleva
+        # parámetro de país en su firma (función STRUCTURAL, ver _SCS_SPECS del test) — el
+        # override de "hard" ocurre en el `if` de consumo justo abajo, país-aware, no en este
+        # call. Exento de wiring por ARGUMENTO, no de país-consciencia (que sí está cerrada).]
         try:
             from constants import slot_ingredient_violations as _siv_b
             for v in _siv_b(meal.get("ingredients") or [], slot_key):
-                out.append(f"{v['label']} (coherencia de horario es-DO)")
+                if v.get("hard") and _is_do:
+                    out.append(f"{v['label']} (coherencia de horario es-DO)")
         except Exception:
             pass
         return out
@@ -40367,6 +40420,52 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
         )
 
 
+def _slot_appropriateness_advisory_decision(issues: list, attempt: int, max_attempts: int, country: str) -> tuple:
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, f · LA MÁS RIESGOSA)] Decide si el gate de
+    slot-appropriateness (dentro de `review_plan_node`) entrega el plan como ADVISORY o fuerza
+    rechazo/retry. Extraída como función PURA (sin state, sin I/O, sin LLM/DB) para poder
+    unit-testear la decisión SIN montar `review_plan_node` completo — verificado que NINGÚN
+    test del repo invoca `review_plan_node` directamente (es demasiado pesado: jueces LLM,
+    self-critique, DB); `should_retry` sí se testea así, directo (mismo patrón que
+    `_classify_high_severity`, que este helper imita a propósito).
+
+    Cierra el ruling PARKED de T4 fix-round 1 (docs/country_system_f1.md, "Nuance del
+    retry-gate"): "Soft solo degrada a advisory en el intento FINAL — en attempts 1..N-1
+    CUALQUIER issue (hard o soft) fuerza retry igual. Para la regla del arroz, beta puede pagar
+    MÁS retries que DO." Para país BETA cuyos issues son TODOS soft (hoy: SIEMPRE, porque
+    `_detect_slot_appropriateness` ya overridea `hard→False` vía `slot_rules_for_country` para
+    cualquier país != 'DO' — ver su propio docstring), el plan se entrega ADVISORY desde el
+    intento 1: no tiene sentido quemar N-1 regeneraciones COMPLETAS (~90-210s c/u: reflexión +
+    planner + N días paralelos + review) para terminar en la MISMA advisory que el intento
+    final habría dado de todos modos.
+
+    DO es BYTE-IDÉNTICO: `country` es 'DO' para un usuario DO sin importar el knob (país
+    propio — `country_for_form_data` ya resuelve así) y 'DO' SIEMPRE con el knob
+    `MEALFIT_COUNTRY_SYSTEM` apagado (fail-safe de esa única puerta, T1) — en AMBOS casos
+    `beta_soft_only` es False y `advisory` colapsa EXACTAMENTE a `is_final` (el comportamiento
+    pre-Task-9, sin excepciones). Mezcla hard+soft SIGUE forzando retry en CUALQUIER attempt,
+    DO o beta — el override de país solo neutraliza `hard`, nunca lo inventa.
+
+    Args:
+        issues: lista de dicts `{label, slot, day, hard, text, ...}` — el output de
+            `_detect_slot_appropriateness`.
+        attempt: nº de intento actual del pipeline (1-indexed).
+        max_attempts: `MAX_ATTEMPTS` del pipeline.
+        country: código ISO-3166 alpha-2 YA RESUELTO vía `country_for_form_data` (la ÚNICA
+            puerta, T1) — este helper NO deriva país por su cuenta, solo lo consume.
+
+    Returns:
+        (advisory, has_hard, is_final, beta_soft_only) — 4-tupla de bools. `advisory=True` ⇒
+        el caller debe ENTREGAR el plan (marcar telemetría, NO rechazar); `advisory=False` ⇒
+        el caller debe RECHAZAR (`approved=False`, fuerza retry vía `should_retry`).
+    """
+    has_hard = any(i.get("hard") for i in issues)
+    is_final = int(attempt) >= int(max_attempts)
+    beta_soft_only = country != "DO" and bool(issues) and not has_hard
+    advisory = (is_final or beta_soft_only) and not has_hard
+    return advisory, has_hard, is_final, beta_soft_only
+
+
 @_node_label("reviewer")
 async def review_plan_node(state: PlanState) -> dict:
     """Revisa el plan generado para verificar seguridad médica."""
@@ -41046,6 +41145,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
             if _slot_app_issues:
                 _sa_attempt = int(state.get("attempt", 1))
                 _sa_is_final = _sa_attempt >= MAX_ATTEMPTS
+                # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) — knob
+                # apagado ⇒ 'DO' siempre ⇒ `_rpn_country` es 'DO' y el bloque de abajo (F2 · Task
+                # 9 · f) nunca activa la rama beta-soft-only. Derivado UNA vez aquí y reusado por
+                # closure en el autofix compuesto (abajo) y en el gate de retry (más abajo) —
+                # antes el autofix lo re-derivaba localmente.
+                from constants import country_for_form_data
+                _rpn_country = country_for_form_data(form_data)
                 # [P1-NIGHT-RICE-COMPOUND-FINAL · 2026-07-01] (audit slots GAP-2) Antes de degradar a
                 # advisory Y ENTREGAR un moro/locrio/chofán en la cena, intento de autofix compuesto de
                 # último recurso (nombre→guiso + arroz→tubérculo + pasos, determinista y coherente).
@@ -41058,10 +41164,6 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # limpiable se limpia antes de entregar, pase lo que pase con el veredicto.
                 if _sa_is_final and NIGHT_RICE_COMPOUND_FINAL and isinstance(plan, dict):
                     try:
-                        # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T4)] país vía la ÚNICA puerta (T1) —
-                        # knob apagado ⇒ 'DO' siempre ⇒ conducta idéntica a pre-T4.
-                        from constants import country_for_form_data
-                        _rpn_country = country_for_form_data(form_data)
                         _nrc_fixed = _night_rice_autofix(plan.get("days", []), compound=True, country=_rpn_country)
                         if _nrc_fixed:
                             _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []), form_data)
@@ -41073,21 +41175,39 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     except Exception as _nrc_e:
                         logger.warning(f"[P1-NIGHT-RICE-COMPOUND-FINAL] autofix compuesto falló (no bloquea): "
                                        f"{type(_nrc_e).__name__}: {_nrc_e}")
-                _sa_has_hard = any(i.get("hard") for i in _slot_app_issues)
-                # Degrada a advisory en el intento FINAL solo si NO hay violación dura (desayuno con
-                # arroz/locrio = siempre duro por decisión de producto). Mezcla hard+soft en intento
-                # final → rechaza igual (el plan se entrega como best-attempt con banner degraded,
-                # pero YA sin el arroz nocturno limpiable — P2-D arriba).
-                if _sa_is_final and not _sa_has_hard:
+                # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, f · LA MÁS RIESGOSA)] Decisión
+                # delegada al helper PURO `_slot_appropriateness_advisory_decision` (arriba de
+                # `review_plan_node`, unit-testado directo) — cierra el ruling PARKED de T4
+                # fix-round 1 ("Nuance del retry-gate"): país BETA con issues TODOS soft entrega
+                # ADVISORY desde el intento 1, no solo en el final. DO/knob-off: `_rpn_country`
+                # es 'DO' ⇒ `beta_soft_only` SIEMPRE False ⇒ `advisory` colapsa EXACTAMENTE a
+                # `is_final` (byte-idéntico al comportamiento pre-Task-9).
+                _sa_advisory, _sa_has_hard, _sa_is_final, _sa_beta_soft_only = (
+                    _slot_appropriateness_advisory_decision(
+                        _slot_app_issues, _sa_attempt, MAX_ATTEMPTS, _rpn_country
+                    )
+                )
+                if _sa_advisory:
                     if _slot_app_issues:
-                        logger.warning(
-                            f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
-                            f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
-                            f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
-                            f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
-                        )
+                        if _sa_is_final:
+                            logger.warning(
+                                f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
+                                f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
+                                f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
+                                f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
+                            )
+                        else:
+                            logger.info(
+                                f"🌎 [P1-COUNTRY-SYSTEM-F2] {len(_slot_app_issues)} incoherencia(s) de horario "
+                                f"SOLO-soft para país beta ({_rpn_country}) en intento {_sa_attempt}/{MAX_ATTEMPTS} "
+                                f"→ ADVISORY desde el intento 1 (no fuerza retry). Primera: "
+                                f"{_slot_app_issues[0]['label']} en {_slot_app_issues[0]['slot']} "
+                                f"(Día {_slot_app_issues[0]['day']})."
+                            )
                         if isinstance(plan, dict):
                             plan["_slot_appropriateness_advisory_final"] = True
+                            if _sa_beta_soft_only and not _sa_is_final:
+                                plan["_slot_appropriateness_advisory_beta_early"] = True
                 else:
                     for _sa in _slot_app_issues:
                         logger.warning(

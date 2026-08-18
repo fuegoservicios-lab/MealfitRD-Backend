@@ -253,7 +253,106 @@ def test_cache_pais_dimensionado_maximo_15():
 
 # ── T2: call sites (_day_system_instruction_for_diet + path sin cache) ──────
 
-_RAW_COUNTRY_RX = re.compile(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]")
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F6)] Re-anclaje del guard anti-lector — antes
+# GRAPHEME-BOUND en 2 sentidos, ambos verificados EN VIVO durante el desarrollo de este fix
+# (no especulado): (1) el nombre de variable estaba hardcoded a "form_data" — un lector crudo
+# usando OTRO alias del mismo shape (`data`, el nombre de parámetro real de
+# `_enrich_clinical_from_profile` en routers/plans.py; `meal_form`, el nombre real que usa
+# `/regenerate-day`) pasaba INVISIBLE; (2) el regex viejo (`['\"]country['\"]` sin `\[` en el
+# patrón) JAMÁS matcheaba la forma `form_data["country"]` — SOLO `.get("country")` — confirmado
+# reproduciendo `_RAW_COUNTRY_RX_LEGACY` contra ambas formas: `.search('form_data["country"]')`
+# ⇒ None. El docstring del guard T8 (abajo) documentaba su propia mutación como
+# "`form_data.get('country')` crudo" — nunca probó la forma de corchetes, así que el gap
+# sobrevivió sin que ningún test lo notara.
+#
+# `_FORM_SHAPE_ALIASES` es la lista EXPANDABLE (F6 lo pide explícitamente) — cualquier variable
+# nueva que cargue una copia "form_data-shaped" de los datos del usuario (alergias, dietType,
+# country, ...) se añade aquí, no se hardcodea en un regex nuevo.
+_FORM_SHAPE_ALIASES = ("form_data", "data", "meal_form")
+
+# ALLOWANCE (F6 lo pide explícitamente): `\bcountry\b` como CLAVE dentro de un dict-shape (p.ej.
+# `_micro_form = {"country": _hp_micro.get("country"), "dietType": ...}`, el patrón de
+# hidratación real en routers/plans.py, Task 9 · g) NO es una lectura cruda — es la construcción
+# LEGÍTIMA del form-shape dict desde el perfil (la fuente autorizada). El patrón exige un alias
+# reconocido INMEDIATAMENTE antes del accessor (`.get(`/`[`), así que una clave de dict-literal
+# ("country": ...) o una lectura de OTRA fuente (`_hp_micro.get("country")`, `hp.get("country")`,
+# `ctx["country"]`) nunca matchea — ninguna de esas tiene el alias pegado al accessor. Y una
+# ASIGNACIÓN (`data["country"] = ...`, el lado ESCRITURA de la misma hidratación) tampoco
+# matchea: el lookahead negativo `(?!\s*=(?!=))` excluye el target de un `=` (no confundir con
+# `==`, sí debe seguir cazando lecturas en comparaciones como `meal_form["country"] == "DO"`).
+# Las 11 combinaciones (3 formas de lectura real × alias reconocido/no-reconocido × dict-literal
+# × asignación × comparación) se verificaron una a una antes de fijar este patrón.
+_FORM_SHAPE_COUNTRY_READ_RX = re.compile(
+    r"(?:" + "|".join(_FORM_SHAPE_ALIASES) + r")"
+    r"(?:\.get\(\s*['\"]country['\"]"
+    r"|\[\s*['\"]country['\"]\s*\](?!\s*=(?!=)))"
+)
+_RAW_COUNTRY_RX = _FORM_SHAPE_COUNTRY_READ_RX
+
+# Regex LEGACY (pre-Task-9) preservado SOLO para la mutación de abajo — reproduce el bug real
+# (nunca vivió en producción con esta forma después del fix; existe únicamente como fixture de
+# la mutación bidireccional F6).
+_RAW_COUNTRY_RX_LEGACY = re.compile(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]")
+
+
+def test_f6_legacy_regex_no_veia_la_forma_de_corchetes():
+    """MUTACIÓN #1 (bidireccional, dirección 'bug reproducido'): confirma que el regex PRE-Task-9
+    tenía el gap real — nunca matcheaba `form_data['country']`/`form_data[\"country\"]`, solo
+    `.get('country')`. Si este test empieza a fallar, alguien "arregló" el legacy sin darse
+    cuenta (harmless, pero la mutación deja de ser honesta)."""
+    assert _RAW_COUNTRY_RX_LEGACY.search('x = form_data.get("country")')
+    assert not _RAW_COUNTRY_RX_LEGACY.search('x = form_data["country"]')
+    assert not _RAW_COUNTRY_RX_LEGACY.search("x = form_data['country']")
+
+
+def test_f6_nuevo_regex_si_ve_la_forma_de_corchetes():
+    """MUTACIÓN #1 (dirección 'fix cierra el gap'): el regex re-anclado SÍ atrapa ambas formas
+    (.get Y corchetes) — la forma que el guard T8 llevaba meses sin poder ver."""
+    assert _FORM_SHAPE_COUNTRY_READ_RX.search('x = form_data["country"]')
+    assert _FORM_SHAPE_COUNTRY_READ_RX.search("x = form_data['country']")
+    assert _FORM_SHAPE_COUNTRY_READ_RX.search('x = form_data.get("country")')
+
+
+def test_f6_alias_expandido_data_y_meal_form():
+    """MUTACIÓN #2: antes de F6, un lector crudo vía OTRO alias del mismo shape (`data`, el
+    parámetro real de `_enrich_clinical_from_profile`; `meal_form`, el de `/regenerate-day`) era
+    INVISIBLE porque el regex viejo solo reconocía literalmente 'form_data'."""
+    assert not _RAW_COUNTRY_RX_LEGACY.search('data.get("country")'), (
+        "el legacy no reconocía el alias 'data' — confirma el blind spot pre-F6"
+    )
+    assert _FORM_SHAPE_COUNTRY_READ_RX.search('data.get("country")')
+    assert _FORM_SHAPE_COUNTRY_READ_RX.search('meal_form["country"]')
+
+
+def test_f6_country_key_allowance_en_form_shape_dicts():
+    """ALLOWANCE explícita (F6): construir un form-shape dict con 'country' como CLAVE (el
+    patrón de hidratación real de _micro_form/data en routers/plans.py, Task 9 · g) NO debe
+    dispararse — ni como dict-literal ni como asignación (solo la LECTURA es sospechosa)."""
+    # dict-literal: 'country' es una CLAVE, no una lectura de form_data/data/meal_form:
+    assert not _FORM_SHAPE_COUNTRY_READ_RX.search(
+        '_micro_form = {"country": _hp_micro.get("country"), "dietType": x}'
+    )
+    # asignación (el lado ESCRITURA de la hidratación F2a real en _enrich_clinical_from_profile):
+    assert not _FORM_SHAPE_COUNTRY_READ_RX.search('data["country"] = hp.get("country")')
+    # lectura de OTRA fuente (perfil), nunca de un alias form-shape:
+    assert not _FORM_SHAPE_COUNTRY_READ_RX.search('_hp_micro.get("country")')
+    assert not _FORM_SHAPE_COUNTRY_READ_RX.search('hp.get("country")')
+    # alias no reconocido (ninguno de los 3 de _FORM_SHAPE_ALIASES):
+    assert not _FORM_SHAPE_COUNTRY_READ_RX.search('ctx["country"]')
+    assert not _FORM_SHAPE_COUNTRY_READ_RX.search('_micro_form["country"]')
+    # pero una LECTURA en comparación SÍ debe seguir cazándose (no es una asignación):
+    assert _FORM_SHAPE_COUNTRY_READ_RX.search('meal_form["country"] == "DO"')
+
+
+def test_f6_guard_t8_real_detecta_alias_data_si_se_reintrodujera():
+    """Prueba de extremo a extremo (no solo el regex aislado): si UN día alguno de los 6 módulos
+    blanket regresara a leer `data.get('country')` crudo (alias distinto de 'form_data'), el
+    guard T8 real (`_FORM_DATA_COUNTRY_RE`, la MISMA instancia que `_FORM_SHAPE_COUNTRY_READ_RX`
+    tras el re-anclaje) lo detectaría — antes de F6 este caso habría pasado desapercibido."""
+    fake_offender = 'def f(data):\n    country = data.get("country")\n    return country\n'
+    assert _FORM_DATA_COUNTRY_RE.search(fake_offender), (
+        "el guard blanket re-anclado debe detectar el alias 'data', no solo 'form_data'"
+    )
 
 
 def _assert_deriva_pais_via_ssot(cuerpo: str, label: str):
@@ -393,7 +492,11 @@ def test_finding4_frases_sin_marco_nacional():
 # rationale en task-2-report.md, sección "Explícitamente NO tocado"):
 #   (b) PROHIBICIÓN legítima — universal independientemente del país (una merienda no debe ser
 #       un guiso pesado, una cena no debe llevar arroz, en CUALQUIER país; el nombre del plato
-#       prohibido es incidental a la regla).
+#       prohibido es incidental a la regla). El «paella/risotto prohibido» de cena (2ª entrada)
+#       [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F5)] queda EXPLÍCITAMENTE DO-only — la spec
+#       Fase 1 la nombra como el gate determinista `_detect_slot_appropriateness` (S1, "paella/
+#       risotto listados como arroz prohibido de cena"); esta mención en el PROMPT es la misma
+#       regla, no un bug a re-anclar.
 #   (c) referencia al ENUM de categorías del Planificador (Mangú/Avena/Pan/Batido/Revoltillo),
 #       compartido con ~40 archivos de catálogo/planner (dish_templates.json,
 #       dominican_dishes.json, planner.py, plan_generator.py...). Cambiar la ETIQUETA aquí sin
@@ -413,7 +516,48 @@ _C_CLASS_CATALOG_ENUM = [
     "Avena/cereales, Pan/tostadas, Batido/bowl, Revoltillo/tortilla). NO elijas mangú si el "
     "planificador asignó otra categoría.",
 ]
-_DOMINICAN_TOKEN_RX = re.compile(r"locrio|mofongo|mangú|bandera:", re.IGNORECASE)
+
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F5)] `_DOMINICAN_TOKEN_RX` gana 4 tokens
+# (casabe/moro/arepitas/mangu-sin-tilde — F5 del brief) que el guard NUNCA había escaneado. El
+# barrido con el token-set ampliado midió 7 ubicaciones nuevas; 2 eran BUGS reales (recomendaban
+# casabe como opción VÁLIDA para el usuario beta) y se corrigieron con nuevas filas de
+# `_BETA_FRAGMENT_TABLE` (F5a/F5b, ver day_generator.py) — ya no sobreviven, no se documentan
+# aquí. Las otras 5 son el mismo patrón (b)/(c) de arriba aplicado a casabe/arepitas/moro:
+#   (d) NOTA DE TÉCNICA DE COCCIÓN universal — el alimento nombrado es el ejemplo histórico del
+#       bug que motivó la regla (P1-CASABE-NO-BOIL), pero la regla se generaliza explícitamente
+#       ("Lo mismo aplica a pan, tostadas, galletas y tortillas ya horneadas") — no es una
+#       instrucción de SERVIR casabe, es cómo cocinarlo SI aparece.
+#   (e) ENUMERACIÓN/EJEMPLO ilustrativo donde el alimento es UNO de varios ítems listados para
+#       ilustrar un principio universal (no duplicar el carbohidrato que el plato YA tiene;
+#       evitar el choque fruta-dulce+salado; variar FORMATO entre comidas) — quitar el alimento
+#       de la lista no cambiaría la regla, así que no es "forzar" identidad dominicana.
+_D_CLASS_TECHNIQUE_UNIVERSAL = [
+    'TÉCNICA CORRECTA POR ALIMENTO [P1-CASABE-NO-BOIL · 2026-07-30]: el CASABE es una torta seca de yuca YA COCIDA — se sirve tal cual, se tuesta o se calienta en sartén/horno 1-2 min; JAMÁS se hierve, se cocina en agua ni "se deja reposar tapado" como si fuera arroz (un plan real instruyó "Cocina Casabe en 1½ tazas de agua con sal, tapa y hierve 15 minutos" — eso arruina el plato). Lo mismo aplica a pan, tostadas, galletas y tortillas ya horneadas: NUNCA les apliques la plantilla de cocción de granos (proporción agua:grano, hervir, reposar). Esa plantilla es SOLO para arroz, bulgur, quinoa, avena y granos crudos.',
+]
+_E_CLASS_ILLUSTRATIVE_EXAMPLES = [
+    'si el plato YA tiene su\n       base de carbohidrato (tortilla/wrap, pan, casabe, ñame, yuca, batata, plátano, avena, papa, pasta,\n       o la fruta de una merienda), NO le añadas además una porción de arroz para cuadrar los carbos.',
+    'Pareo válido: "Revoltillo con\n         vegetales + casabe" y la fruta aparte si hace falta.',
+    'Cambia el FORMATO: cremosa/bowl ↔ horneada (arepitas, panqueques, tortitas) ↔ batida\n       (smoothie) ↔ en grano suelto (moro, ensalada de granos).',
+    '"Arepitas de Avena saladas con queso" (misma base, formato y perfil DISTINTOS — sí cuenta\n       como variedad).',
+]
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F6)] Re-anclaje del guard de residuo criollo: antes
+# GRAPHEME-BOUND a un regex-string escrito a mano (`r"locrio|mofongo|mangú|bandera:"`) — cada
+# token nuevo (F5 añadió 4) exigía editar sintaxis de regex (escapar, decidir `\b`, no romper la
+# alternación). Ahora es una lista EXPANDABLE en dos tuplas por RIESGO DE COLISIÓN — la única
+# decisión que un futuro añadido debe tomar es "¿esta palabra es substring de una palabra
+# española común no-dominicana?" (sí ⇒ `_WORD_BOUNDARY`, no ⇒ `_PLAIN`), no sintaxis de regex.
+# `_DOMINICAN_TOKENS_WORD_BOUNDARY` existe porque 'mangu' ⊂ 'manguera' (manguera de jardín) y
+# 'moro' ⊂ 'moroso'/'enamorado'... no, 'moroso' sí contiene 'moro' como prefijo — verificado con
+# el propio scanner F5 (0 falsos positivos en el render real de los 3 dietas × 5 países beta).
+_DOMINICAN_TOKENS_PLAIN = ("locrio", "mofongo", "mangú", "casabe", "arepitas", "bandera:")
+_DOMINICAN_TOKENS_WORD_BOUNDARY = ("mangu", "moro")
+_DOMINICAN_TOKEN_RX = re.compile(
+    "|".join(
+        [re.escape(t) for t in _DOMINICAN_TOKENS_PLAIN]
+        + [r"\b" + re.escape(t) + r"\b" for t in _DOMINICAN_TOKENS_WORD_BOUNDARY]
+    ),
+    re.IGNORECASE,
+)
 
 
 def _scoped_out_sin_s16(out: str) -> str:
@@ -426,15 +570,26 @@ def _scoped_out_sin_s16(out: str) -> str:
     return out[:i16] + out[i17:]
 
 
+# Unión de las 4 clases documentadas — SSOT que ambos tests (balanced/vegan) consumen, para que
+# no puedan drifear entre sí (F5, Task 9).
+_ALL_DOCUMENTED_SURVIVORS = (
+    _B_CLASS_PROHIBICIONES
+    + _C_CLASS_CATALOG_ENUM
+    + _D_CLASS_TECHNIQUE_UNIVERSAL
+    + _E_CLASS_ILLUSTRATIVE_EXAMPLES
+)
+
+
 def test_finding5_guard_case_insensitive_sin_sobrevivientes_no_documentados():
-    """Guard HONESTO (no solo verde): escanea el render beta case-insensitive por los 4 tokens
-    duros, excluye §16 (T4) y los sobrevivientes DOCUMENTADOS arriba (clase b/c), y falla si
-    queda CUALQUIER OTRO hit — el mecanismo que impide que un futuro edit reintroduzca una orden
+    """Guard HONESTO (no solo verde): escanea el render beta case-insensitive por los 8 tokens
+    duros (F5, Task 9: +casabe/moro/arepitas/mangu-sin-tilde sobre los 4 originales), excluye
+    §16 (T4) y los sobrevivientes DOCUMENTADOS arriba (clase b/c/d/e), y falla si queda
+    CUALQUIER OTRO hit — el mecanismo que impide que un futuro edit reintroduzca una orden
     dominicana sin que nadie se entere."""
     from prompts.day_generator import build_day_generator_system_prompt as build
     scoped = _scoped_out_sin_s16(build("balanced", "ES"))
 
-    for survivor in _B_CLASS_PROHIBICIONES + _C_CLASS_CATALOG_ENUM:
+    for survivor in _ALL_DOCUMENTED_SURVIVORS:
         assert survivor in scoped, (
             f"sobreviviente documentado ya no existe verbatim en el render — o cambió el texto "
             f"fuente (actualiza esta lista) o ya se arregló (muévelo a los tests de arriba): "
@@ -452,12 +607,115 @@ def test_finding5_guard_vale_tambien_para_vegan():
     from prompts.day_generator import build_day_generator_system_prompt as build
     scoped = _scoped_out_sin_s16(build("vegan", "ES"))
 
-    for survivor in _B_CLASS_PROHIBICIONES + _C_CLASS_CATALOG_ENUM:
+    for survivor in _ALL_DOCUMENTED_SURVIVORS:
         assert survivor in scoped, f"sobreviviente ausente en vegan: {survivor[:70]!r}"
         scoped = scoped.replace(survivor, "", 1)
 
     hits = _DOMINICAN_TOKEN_RX.findall(scoped)
     assert not hits, f"sobrevivientes NO documentados (vegan): {hits}"
+
+
+def test_finding5_guard_vale_tambien_para_vegetarian():
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9)] Tercera columna de dieta — balanced y vegan
+    ya estaban cubiertas; vegetarian quedaba sin su propio guard (mismo target/repl, pero un
+    futuro edit que sólo tocara la columna vegetarian de _DIET_FRAGMENT_TABLE podía introducir
+    residuo sin que NINGÚN test existente lo viera)."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    scoped = _scoped_out_sin_s16(build("vegetarian", "ES"))
+
+    for survivor in _ALL_DOCUMENTED_SURVIVORS:
+        assert survivor in scoped, f"sobreviviente ausente en vegetarian: {survivor[:70]!r}"
+        scoped = scoped.replace(survivor, "", 1)
+
+    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    assert not hits, f"sobrevivientes NO documentados (vegetarian): {hits}"
+
+
+def test_finding5_f5a_merienda_casabe_bullet_reemplazado():
+    """F5a (Task 9): el bullet 'Casabe / galletas integrales...' de la lista de categorías
+    VÁLIDAS de merienda ya no sobrevive al render beta — recomendaba casabe como opción al
+    usuario beta (a diferencia de las menciones incidentales documentadas en clase d/e)."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    assert "Casabe / galletas integrales" not in out
+    assert "Tostada integral / galletas integrales + queso bajo en sodio O aguacate" in out
+
+
+def test_finding5_f5b_carb_rotation_sin_casabe():
+    """F5b (Task 9): la frase de rotación de carbo de cena ya no ofrece casabe — el párrafo
+    ARROZ DE NOCHE que la precede (moro/paella/risotto prohibidos) se conserva INTACTO y
+    DO-only (clase b, documentado arriba; la spec Fase 1 lo nombra vía
+    `_detect_slot_appropriateness`)."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    assert "Rota a otro carbo de cena: batata, yuca, ñame o pan integral (NUNCA arroz)." in out
+    assert "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral" not in out
+    # el párrafo ARROZ DE NOCHE (clase b) sigue verbatim — no se tocó:
+    assert (
+        'PROHIBIDO el "ARROZ DE NOCHE": NADA de arroz blanco/integral, locrio, moro, asopao NI '
+        'platos cuya BASE sea arroz aunque el nombre no diga "arroz" (chofán/arroz frito, paella, '
+        'risotto, congrí, mamposteao) en la cena (no se acostumbra en la cena dominicana y el gate '
+        'lo rechaza).'
+    ) in out
+
+
+def test_finding5_do_byte_identico_tras_las_2_filas_nuevas():
+    """DO (o país desconocido) sigue tomando el camino EXACTO pre-F1-T2 — las 2 filas nuevas de
+    F5a/F5b viven en `_BETA_FRAGMENT_TABLE`, que el camino DO nunca recorre. Ancla con `is`."""
+    from prompts.day_generator import (
+        build_day_generator_system_prompt as build,
+        DAY_GENERATOR_SYSTEM_PROMPT,
+    )
+    assert build("balanced", "DO") is DAY_GENERATOR_SYSTEM_PROMPT
+    assert build("balanced", None) is DAY_GENERATOR_SYSTEM_PROMPT
+    assert "Casabe / galletas integrales" in DAY_GENERATOR_SYSTEM_PROMPT
+    assert (
+        "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz)."
+        in DAY_GENERATOR_SYSTEM_PROMPT
+    )
+
+
+def test_finding5_mutacion_regex_sin_casabe_deja_pasar_el_bug():
+    """MUTACIÓN #1: si `_DOMINICAN_TOKEN_RX` no tuviera 'casabe' (el estado real pre-Task-9), el
+    guard NO habría detectado que la fila F5a todavía no existía — reproduce el falso-verde
+    histórico para probar que el token nuevo es lo que cierra el hueco."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    pre_task9_rx = re.compile(r"locrio|mofongo|mangú|bandera:", re.IGNORECASE)
+    # Simula el bug: un render beta que TODAVÍA recomienda casabe en la merienda (pre-fix).
+    out_con_bug = build("balanced", "ES").replace(
+        "Tostada integral / galletas integrales + queso bajo en sodio O aguacate",
+        "Casabe / galletas integrales + queso bajo en sodio O aguacate",
+    )
+    scoped = _scoped_out_sin_s16(out_con_bug)
+    for survivor in _ALL_DOCUMENTED_SURVIVORS:
+        scoped = scoped.replace(survivor, "", 1)
+    # El regex VIEJO no ve el bug reintroducido (falso verde):
+    assert not pre_task9_rx.findall(scoped)
+    # El regex NUEVO sí lo detecta:
+    assert _DOMINICAN_TOKEN_RX.findall(scoped)
+
+
+def test_finding5_mutacion_sin_las_2_filas_nuevas_el_guard_falla():
+    """MUTACIÓN #2 (bidireccional): si F5a/F5b nunca se hubieran añadido a
+    `_BETA_FRAGMENT_TABLE`, el guard ampliado (con los 4 tokens nuevos) SÍ debe fallar contra el
+    render real de HOY — reproduce el estado pre-fix quitando las 2 filas del pipeline (no vía
+    monkeypatch de la tabla, vía el .replace() inverso sobre el string ya renderizado, que es
+    equivalente porque las filas son idempotentes) y confirma que el guard las habría cazado."""
+    from prompts.day_generator import build_day_generator_system_prompt as build
+    out = build("balanced", "ES")
+    # revierte F5a y F5b manualmente (simula "nunca se aplicaron"):
+    out_sin_fix = out.replace(
+        "Tostada integral / galletas integrales + queso bajo en sodio O aguacate",
+        "Casabe / galletas integrales + queso bajo en sodio O aguacate",
+    ).replace(
+        "Rota a otro carbo de cena: batata, yuca, ñame o pan integral (NUNCA arroz).",
+        "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz).",
+    )
+    scoped = _scoped_out_sin_s16(out_sin_fix)
+    for survivor in _ALL_DOCUMENTED_SURVIVORS:
+        scoped = scoped.replace(survivor, "", 1)
+    hits = _DOMINICAN_TOKEN_RX.findall(scoped)
+    assert hits, "el guard debía detectar casabe reintroducido en merienda+cena, y no lo hizo"
 
 
 # ── T3: bloque de país en el contexto compartido + jueces ───────────────────
@@ -1378,6 +1636,116 @@ def test_detect_slot_appropriateness_ingredient_override_no_toca_slot_ingredient
     consumo dentro de _detect_slot_appropriateness."""
     v = constants.slot_ingredient_violations(["150g arroz blanco"], "desayuno")
     assert v and v[0]["hard"] is True
+
+
+# ── Task 9 (g) MUTATOR-PURITY: cierre del pase ingredient-level de slot_coherence_backstop ───
+#
+# Parqueado por T4 fix-round 1 (docs/country_system_f1.md, fila "slot_coherence_backstop_for_
+# meal's pase ingredient-level"): a diferencia de _detect_slot_appropriateness (arriba), este
+# pase INSIDE slot_coherence_backstop_for_meal seguía siempre-hard sin importar país. Cerrado
+# con el MISMO override formula (v["hard"] and país==DO) — pero AQUÍ como filtro de inclusión,
+# no como campo re-escrito (esta función retorna list[str], no list[dict]).
+
+def test_g_slot_coherence_backstop_ingredient_pass_do_detecta_arroz_oculto():
+    """DO conserva EXACTAMENTE el comportamiento pre-Task-9: arroz oculto en ingredients de un
+    desayuno con nombre inocuo SÍ dispara el backstop (byte-idéntico)."""
+    import graph_orchestrator as go
+    meal = {"name": "Bowl energético criollo", "ingredients": ["150g arroz blanco", "1 huevo"]}
+    out_do = go.slot_coherence_backstop_for_meal(meal, "Desayuno", "DO")
+    out_default = go.slot_coherence_backstop_for_meal(meal, "Desayuno")
+    assert out_do and "INGREDIENTES del desayuno" in out_do[0]
+    assert out_do == out_default
+
+
+def test_g_slot_coherence_backstop_ingredient_pass_beta_no_dispara():
+    """Beta ya NO ve la violación ingredient-level — cierre del gap disclosed en T4 fix-round 1."""
+    import graph_orchestrator as go
+    meal = {"name": "Bowl energético criollo", "ingredients": ["150g arroz blanco", "1 huevo"]}
+    assert _BETA_CCS, "fixture vacío"
+    for cc in _BETA_CCS:
+        out = go.slot_coherence_backstop_for_meal(meal, "Desayuno", cc)
+        assert out == [], f"{cc}: el pase ingredient-level ya no debe disparar para beta, hallado {out}"
+
+
+def test_g_slot_coherence_backstop_pais_desconocido_ingredient_cae_a_do():
+    import graph_orchestrator as go
+    meal = {"name": "Bowl energético criollo", "ingredients": ["150g arroz blanco"]}
+    out_xx = go.slot_coherence_backstop_for_meal(meal, "Desayuno", "xx")
+    out_do = go.slot_coherence_backstop_for_meal(meal, "Desayuno", "DO")
+    assert out_xx == out_do and out_xx != []
+
+
+def test_g_slot_ingredient_violations_no_se_toco():
+    """Contrato compartido con T4: slot_ingredient_violations en SÍ sigue devolviendo hard=True
+    incondicional — el override vive SOLO en el sitio de consumo (mismo principio que T4)."""
+    v = constants.slot_ingredient_violations(["150g arroz blanco"], "desayuno")
+    assert v and v[0]["hard"] is True
+
+
+def test_g_mutacion_filtro_or_es_un_no_op():
+    """MUTACIÓN: reproduce el bug real que este fix corrigió durante el desarrollo — filtrar con
+    `_is_do or v.get("hard")` (el patrón del pase NAME-level, copiado ingenuamente) es un NO-OP
+    aquí porque `slot_ingredient_violations` devuelve hard=True INCONDICIONAL: el OR con un
+    valor siempre-True es siempre-True, así que beta seguiría viendo el 100% de las violaciones.
+    El filtro correcto es AND, no OR."""
+    v_list = constants.slot_ingredient_violations(["150g arroz blanco"], "desayuno")
+    assert v_list, "fixture: debe haber al menos 1 violación para que la mutación sea significativa"
+    for _is_do_sim in (True, False):
+        # filtro roto (OR, lo que se escribió primero y se descartó):
+        broken = [v for v in v_list if _is_do_sim or v.get("hard")]
+        # filtro correcto (AND, lo que quedó en producción):
+        fixed = [v for v in v_list if v.get("hard") and _is_do_sim]
+        if not _is_do_sim:
+            assert broken == v_list, "el OR debía ser un no-op (beta seguiría viendo TODO)"
+            assert fixed == [], "el AND correctamente excluye para beta"
+
+
+def test_g_swap_persist_wire_finalize_y_backstop_con_pais():
+    """routers/plans.py::_swap_mutator (api_swap_meal_persist) — ambos call sites que T4
+    fix-round 1 dejó EXENTO (finalize_single_meal_recipe_coherence + slot_coherence_backstop_
+    for_meal) ahora reciben `country=_swap_country`, resuelto ANTES del lock."""
+    src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
+    assert "day_kcal_target=_dkt_sp(plan_data.get(\"macros\")), country=_swap_country)" in src
+    assert '_slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_country)' in src
+    # el EXENTO viejo (T4 fix-round 1) ya no debe seguir citado como abierto en este call site:
+    assert "P1-COUNTRY-SYSTEM-F1 EXENTO: T4 fix-round 1 finding, no cerrado" not in src
+
+
+def test_g_swap_persist_country_prefetch_antes_del_lock():
+    """`_swap_country` se resuelve (closure) ANTES de que `update_plan_data_atomic` adquiera el
+    lock — orden textual = orden de ejecución (mismo módulo, mismo hilo de request). Busca la
+    invocación REAL (`result = update_plan_data_atomic(`), no la mención en el docstring de la
+    función (que cita el mismo texto en prosa, ANTES del pre-fetch)."""
+    src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
+    i_persist_def = src.index("def api_swap_meal_persist(")
+    i_prefetch = src.index("_swap_country = _cffd_swap(_micro_form)", i_persist_def)
+    i_lock = src.index("result = update_plan_data_atomic(", i_persist_def)
+    assert i_persist_def < i_prefetch < i_lock, (
+        "el pre-fetch de country debe vivir ANTES de update_plan_data_atomic (patrón _micro_form)"
+    )
+
+
+def test_g_recalculate_shopping_list_wire_finalize_con_pais():
+    """routers/plans.py::api_recalculate_shopping_list — 2º call site país-blind identificado en
+    docs/country_system_f1.md ('Parqueado para Fase 2')."""
+    src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
+    i_fn = src.index("def api_recalculate_shopping_list(")
+    i_fetch = src.index("_recalc_country = _cffd_rc(", i_fn)
+    i_call = src.index("_rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False,\n"
+                        "                                                 country=_recalc_country)", i_fn)
+    i_lock = src.index("update_plan_data_atomic(", i_fn)
+    assert i_fn < i_fetch < i_call < i_lock
+
+
+def test_g_swap_country_deriva_via_ssot_no_lector_crudo():
+    """El pre-fetch de _swap_country pasa por country_for_form_data (T1, la ÚNICA puerta) — NO
+    lee 'country' crudo de ningún dict ajeno a ese helper."""
+    src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
+    cuerpo_ini = src.index("def api_swap_meal_persist(")
+    cuerpo_fin = src.index("\ndef ", cuerpo_ini + 10)
+    cuerpo = src[cuerpo_ini:cuerpo_fin]
+    assert "country_for_form_data as _cffd_swap" in cuerpo
+    assert "_cffd_swap(_micro_form)" in cuerpo
 
 
 # ── T4 fix-round 1: finalizer país-aware (review IMPORTANT #3) ───────────────────────────────
@@ -3157,7 +3525,10 @@ _COUNTRY_BLANKET_FILES = (
     "graph_orchestrator.py", "cron_tasks.py", "shopping_calculator.py",
     "nutrition_calculator.py", "agent.py", "tools.py",
 )
-_FORM_DATA_COUNTRY_RE = re.compile(r"form_data(?:\.get\()?\s*\(?['\"]country['\"]")
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F6)] SSOT compartida con el guard T2 (arriba,
+# `_FORM_SHAPE_COUNTRY_READ_RX`) — antes eran DOS objetos regex con el MISMO patrón (y el MISMO
+# bug de corchetes) definidos por separado; ahora un solo re-anclaje beneficia a ambos guards.
+_FORM_DATA_COUNTRY_RE = _FORM_SHAPE_COUNTRY_READ_RX
 
 
 def test_country_for_form_data_es_el_unico_lector_en_los_6_modulos():
@@ -3620,8 +3991,18 @@ def test_f1b_get_deterministic_variety_prompt_deriva_pais_via_ssot():
 
 
 def test_f1b_get_deterministic_variety_prompt_wire_country_en_el_builder():
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j)] Re-anclado: el call site ya NO re-deriva
+    `country_for_form_data(form_data)` inline — reusa `_variety_country`, derivado UNA sola vez
+    arriba en la misma función (closure) y compartido con el 2º call site de esta task
+    (`_get_fast_filtered_catalogs`, antes country-blind). El INTENTO original de este test
+    (el builder recibe país derivado vía la ÚNICA puerta T1, no un literal/'DO' hardcoded) sigue
+    verificado — solo cambió DÓNDE se deriva, no que se derive."""
     cuerpo = _cuerpo_get_deterministic_variety_prompt()
-    assert "build_deterministic_variety_prompt(_dc, country_for_form_data(form_data))" in cuerpo
+    assert "build_deterministic_variety_prompt(_dc, _variety_country)" in cuerpo
+    assert cuerpo.count("country_for_form_data(form_data)") == 1, (
+        "country_for_form_data(form_data) debe aparecer UNA sola vez (derivación única, closure)"
+    )
+    assert "_variety_country = country_for_form_data(form_data)" in cuerpo
 
 
 # ── F1c: meal_operations.py — templates de swap/modify ──────────────────────

@@ -139,7 +139,11 @@ def test_wired_in_chat_modify():
 
 
 def test_wired_in_recalculate_and_expand():
-    assert "_fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False)" in _PLANS, \
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] Sin paréntesis de cierre: el call ganó
+    # `country=_recalc_country` después de `portion_floors=False` (mismo motivo que
+    # test_wired_in_swap re-ancló arriba — el match exacto con `)` queda stale en cuanto el call
+    # gana un kwarg más).
+    assert "_fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False," in _PLANS, \
         "/recalculate no pasa allergies al finalizer"
     assert "_veg_exp(_wrap_exp, allergies=_expand_allergies)" in _PLANS, \
         "/recipe/expand no pasa allergies al veg-guard"

@@ -1786,6 +1786,21 @@ VEGGIE_FAT_SYNONYMS = {
     "espinaca": ["espinaca", "espinacas", "baby spinach"],
     "pepino": ["pepino", "pepinos"],
     "lechuga": ["lechuga", "lechugas", "lechuga romana", "lechuga iceberg"],
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, k · T7-parked, decidido con evidencia)] 'recao'
+    # (Eryngium foetidum, "culantro puertorriqueño") clasifica a la MISMA familia que 'cilantro' —
+    # tensión real desde T7 (F2): el catálogo ganó una fila "Recao" PROPIA, con precio/macros
+    # independientes. Trazado el/los consumidor(es) de este dict (vía GLOBAL_REVERSE_MAP):
+    # SOLO alimenta `normalize_ingredient_for_tracking` (fatiga/variedad, services.py) y
+    # `track_meal_friction` (memoria de rechazo, db_plans.py) — heurísticas de PREFERENCIA, no
+    # de precio/seguridad. `shopping_calculator.normalize_name`/pricing NUNCA importa
+    # GLOBAL_REVERSE_MAP (verificado: 0 hits) — "Recao" resuelve a SU PROPIA fila de catálogo,
+    # con SU PROPIO precio, intacto (verificado en vivo contra Neon: normalize_name('Recao') ==
+    # 'Recao', != 'Cilantro'). Efecto real de este alias: comer Recao cuenta como "cilantro" para
+    # variedad/fatiga y como rechazo de "cilantro" en la memoria conductual — culinariamente
+    # correcto (recao ES el sustituto local del cilantro en cocina boricua, mismo perfil de
+    # sabor), no un bug. Si algún día un consumidor de GLOBAL_REVERSE_MAP toca precio/pantry/
+    # alérgenos, esta nota deja de aplicar — re-evaluar entonces (los alérgenos ya usan un
+    # vocabulario SEPARADO, `_ALLERGEN_SYNONYMS`, no éste).
     "cilantro": ["cilantro", "culantro", "verdura", "recao"],
     "repollo": ["repollo"],
     "zanahoria": ["zanahoria", "zanahorias"],
@@ -3295,6 +3310,18 @@ def canonicalize_diet_type(diet) -> str:
 # oeste de UTC): DO/PR 240, US 300 (Eastern como default del país), MX 360,
 # CO 300, ES -60 (invierno). Es el default POR PAÍS para superficies sin
 # tzOffset del usuario; el del usuario siempre gana.
+#
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F9)] SIN LECTOR, POR DISEÑO — verificado
+# (`grep -rn default_tz_offset_min backend/` fuera de constants.py/tests: 0 hits). T5-F1
+# (docs/country_system_f1.md, surface #11) hizo la fecha local del usuario COUNTRY-INDEPENDIENTE:
+# `user_tz_offset_min(user_id)` resuelve el offset desde `user_profiles`/`health_profile` del
+# usuario mismo (con fallback 240 hardcoded, NO desde este dict), porque un dominicano en Madrid
+# y un español en Santo Domingo necesitan SU offset real, no el de su país declarado — el país
+# es identidad/preferencia culinaria, no proxy de dónde vive. Esta key es un valor SEMBRADO para
+# un futuro consumidor (p.ej. un fallback de onboarding sin tzOffset capturado aún) — no la
+# cablees a `user_tz_offset_min` ni a ninguna superficie de fecha/hora: eso reintroduciría la
+# distinción país≠ubicación que T5-F1 cerró a propósito. Si algún día hace falta un default por
+# país, la pregunta de diseño previa es "¿por qué el offset real del usuario no bastó aquí?".
 # ─────────────────────────────────────────────────────────────────────────────
 
 COUNTRY_SYSTEM_ENABLED = _env_bool("MEALFIT_COUNTRY_SYSTEM", False)

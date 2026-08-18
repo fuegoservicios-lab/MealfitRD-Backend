@@ -724,6 +724,35 @@ _S15F_APETECIBLE_BETA = "El plato debe sonar APETECIBLE: piensa si tu usuario se
 _RULE12_HUEVOS_DESPERDICIO_DO = "desperdicio real en cocina dominicana"
 _RULE12_HUEVOS_DESPERDICIO_BETA = "desperdicio real en la cocina"
 
+# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F5)] Los 2 sobrevivientes que el barrido con el
+# token-set AMPLIADO (casabe/moro/arepitas añadidos a `_DOMINICAN_TOKEN_RX` en el test) midió
+# como BUGS reales (no residuo incidental documentado): ambos PRESENTAN casabe como opción
+# VÁLIDA/RECOMENDADA para el usuario beta, a diferencia de las menciones incidentales que quedan
+# documentadas en el test (nota de técnica de cocción P1-CASABE-NO-BOIL, enumeraciones de
+# carbohidrato ya presente, ejemplos ilustrativos de formato) — esas SÍ generalizan a cualquier
+# país (el nombre del alimento es incidental a la regla), estas dos ORDENAN casabe como el
+# carbo/merienda a elegir.
+
+# Finding F5a: c) MERIENDA — bullet de "Categorías VÁLIDAS de merienda dominicana" que ofrece
+# casabe como opción. El header de esta lista ya lo cubre `_S15C_MERIENDA_HEADER_*` (finding 4c)
+# pero NO el cuerpo de bullets — este es el bullet específico, diet-invariante.
+_S15C_MERIENDA_CASABE_BULLET_DO = "         • Casabe / galletas integrales + queso bajo en sodio O aguacate"
+_S15C_MERIENDA_CASABE_BULLET_BETA = "         • Tostada integral / galletas integrales + queso bajo en sodio O aguacate"
+
+# Finding F5b: d) CENA — la frase de ROTACIÓN de carbohidrato de cena recomienda casabe como
+# alternativa al arroz. El párrafo "ARROZ DE NOCHE" (locrio/moro/asopao/paella/risotto
+# PROHIBIDOS en cena) que la PRECEDE queda intacto y SOLO para DO — es la prohibición ya
+# documentada como sobreviviente clase B en el test (universal, el nombre del plato prohibido es
+# incidental; la spec la nombra explícitamente en Fase 1 vía `_detect_slot_appropriateness`).
+# Solo se retira "casabe" de la lista de alternativas — batata/yuca/ñame se preservan
+# (ya tratados como neutros por el resto de _BETA_FRAGMENT_TABLE, ver comentario de fila CENA).
+_S15D_CARB_ROTATION_DO = (
+    "Rota a otro carbo de cena: batata, yuca, ñame, casabe o pan integral (NUNCA arroz)."
+)
+_S15D_CARB_ROTATION_BETA = (
+    "Rota a otro carbo de cena: batata, yuca, ñame o pan integral (NUNCA arroz)."
+)
+
 # (target_por_dieta, beta_repl_por_dieta) — mismo shape de fila que _DIET_FRAGMENT_TABLE, pero
 # cada valor es un dict {"balanced"|"vegetarian"|"vegan": fragmento}. `build_day_generator_
 # system_prompt` aplica CADA fila con la columna de dieta activa (`beta_key`, colapsa
@@ -753,6 +782,9 @@ _BETA_FRAGMENT_TABLE = [
     (_diet_invariant(_S15C_CRUDITES_DO), _diet_invariant(_S15C_CRUDITES_BETA)),                   # finding 4d
     (_diet_invariant(_S15F_APETECIBLE_DO), _diet_invariant(_S15F_APETECIBLE_BETA)),               # finding 4e
     (_diet_invariant(_RULE12_HUEVOS_DESPERDICIO_DO), _diet_invariant(_RULE12_HUEVOS_DESPERDICIO_BETA)),  # finding 4f
+    # ── Fase 2, Task 9 (F5): sobrevivientes casabe medidos con el token-set ampliado ─────────
+    (_diet_invariant(_S15C_MERIENDA_CASABE_BULLET_DO), _diet_invariant(_S15C_MERIENDA_CASABE_BULLET_BETA)),  # F5a
+    (_diet_invariant(_S15D_CARB_ROTATION_DO), _diet_invariant(_S15D_CARB_ROTATION_BETA)),                    # F5b
     # ── Task 4 (F1-T4): §16 CONTRATO EXACTO DEL VALIDADOR DE HORARIO ────────
     # Target = _SLOT_SSOT_RULES_BLOCK, el MISMO bloque que el splice de import-time (arriba)
     # appendea a DAY_GENERATOR_SYSTEM_PROMPT — diet-invariante (SLOT_INAPPROPRIATE_FOODS/

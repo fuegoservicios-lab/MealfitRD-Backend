@@ -37,6 +37,11 @@ from constants import (
     # [P2-SEEDER-DAYS-COUNT · 2026-08-03] techo del reparto = el mismo cap que el orquestador
     # aplica a `_days_to_generate` (2×PLAN_CHUNK_SIZE).
     PLAN_CHUNK_SIZE,
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j · T5-parked)] la ÚNICA puerta (T1) — antes
+    # solo se importaba LOCAL dentro de get_deterministic_variety_prompt para el texto del
+    # prompt (FINAL-FIX F1b); ahora también deriva el país del pool de catálogo (ver el call
+    # site de _get_fast_filtered_catalogs más abajo, que hasta este fix corría SIEMPRE DO-blind).
+    country_for_form_data,
 )
 from db import (get_user_profile, update_user_health_profile, update_user_health_profile_atomic,
                 get_user_ingredient_frequencies,
@@ -1087,7 +1092,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     history_lower = history_text.lower() if history_text else ""
     history_normalized = strip_accents(history_lower)
     force_variety = bool(form_data.get("_force_variety")) if form_data else False
-    
+    # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j · T5-parked)] Derivado UNA sola vez (SSOT T1,
+    # fail-safe a 'DO' si form_data es None/no-dict — mismo contrato que el resto del motor) y
+    # reusado por CLOSURE en los 2 call sites de esta función que lo necesitan: el pool de
+    # catálogo (`_get_fast_filtered_catalogs`, abajo) y el texto del prompt
+    # (`build_deterministic_variety_prompt`, más abajo — antes re-derivaba con su propio import
+    # local; ahora reusa esta misma variable, sin doble llamada).
+    _variety_country = country_for_form_data(form_data)
+
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     if form_data:
         allergies = tuple([a.lower() for a in form_data.get("allergies", [])])
@@ -1130,7 +1142,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # tooltip-anchor: P2-SEEDER-DIET-NONE
         diet = str(form_data.get("diet") or form_data.get("dietType") or "").lower()
         
-        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet)
+        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)
     else:
         # Guest sin form_data: usar catálogos completos sin filtrar
         filtered_proteins = DOMINICAN_PROTEINS
@@ -2628,9 +2640,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # devuelve byte a byte el prompt histórico.
     # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (FINAL-FIX F1b)] país vía la ÚNICA puerta (T1) —
     # `form_data` es el parámetro homónimo de esta función. Knob apagado ⇒ 'DO' siempre ⇒ camino
-    # byte-idéntico.
-    from constants import country_for_form_data
-    prompt = build_deterministic_variety_prompt(_dc, country_for_form_data(form_data)).format(
+    # byte-idéntico. [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j)] reusa `_variety_country`
+    # (derivado UNA vez arriba, closure) — ya no re-deriva con un 2º import+call local.
+    prompt = build_deterministic_variety_prompt(_dc, _variety_country).format(
         light_protein_block=_light_block,
         blocked_text=blocked_text,
         **{f"protein_{_i}": chosen_proteins[_i % len(chosen_proteins)] for _i in range(_dc)},

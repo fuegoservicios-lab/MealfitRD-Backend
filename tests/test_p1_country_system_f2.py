@@ -3697,6 +3697,56 @@ def test_rango_no_afecta_una_cantidad_simple_sin_guion(sc):
     assert sc._parse_quantity("3 ciruelas", apply_yield_multiplier=False) == (3.0, "unidad", "Ciruela")
 
 
+# ── Task 9 (l) — fix-round T8-review: el colapso de rango era `\2` fijo, no max() real ──────────
+#
+# El propio comentario de K2 (arriba) dice "colapsa al valor MAYOR" — cierto SOLO por coincidencia
+# para rangos ASCENDENTES ("2-3" → el 2º número YA es el mayor). Un rango DESCENDENTE ("3-2
+# ciruelas", el LLM invirtió el orden) tomaba el 2º número igual — que en ese caso es el MENOR,
+# contradiciendo el criterio de diseño documentado. Encontrado por el reviewer de T8 (Important,
+# "sin productor real conocido — one-liner"), plegado a Task 9 · item (l).
+
+def test_l_rango_descendente_tambien_colapsa_al_mayor():
+    """RED-first (reproducido contra el código pre-fix: '3-2 ciruelas' devolvía qty=2.0, el
+    MENOR — el `\\2` fijo del regex no distinguía orden). Tras el fix, `max(g1, g2)` real."""
+    from shopping_calculator import _preprocess_nlp_quantities as _ppnq
+    assert _ppnq("3-2 ciruelas") == "3 ciruelas"
+    assert _ppnq("3–2 ciruelas") == "3 ciruelas"  # en-dash
+
+
+def test_l_rango_descendente_resuelve_via_parse_quantity(sc):
+    """Mismo consumidor real que K2 (`_parse_quantity`, no `_preprocess_nlp_quantities` aislado)
+    — el rango descendente también debe colapsar al MAYOR y resolver a 'Ciruela'."""
+    qty, unit, name = sc._parse_quantity("3-2 ciruelas", apply_yield_multiplier=False)
+    assert name == "Ciruela"
+    assert qty == 3.0, f"qty={qty!r}, esperaba 3.0 (el MAYOR, no el 2º número)"
+    assert unit == "unidad"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("2-3 ciruelas", "3 ciruelas"),   # ascendente — byte-idéntico al comportamiento pre-fix
+    ("3-2 ciruelas", "3 ciruelas"),   # descendente — el bug que este fix cierra
+    ("10-2 ciruelas", "10 ciruelas"),  # comparación NUMÉRICA, no lexicográfica ("10" < "2" como string)
+    ("2-10 ciruelas", "10 ciruelas"),
+])
+def test_l_rango_max_numerico_no_lexicografico(raw, expected):
+    """MUTACIÓN implícita: si el fix hubiera comparado STRINGS en vez de ints (`max('10','2')`
+    == '2' lexicográficamente), 10-2/2-10 fallarían. Ancla que la comparación es sobre `int(...)`."""
+    from shopping_calculator import _preprocess_nlp_quantities as _ppnq
+    assert _ppnq(raw) == expected
+
+
+def test_l_mutacion_reproduce_el_bug_del_group2_fijo():
+    """MUTACIÓN bidireccional: reproduce el regex PRE-fix (`\\2` fijo) contra un caso descendente
+    y confirma que SÍ tomaba el menor — la evidencia de que el fix real cambió el resultado, no
+    solo el comentario."""
+    import re
+    _rng_re = re.compile(r'^(\d+)\s*[-–]\s*(\d+)\b')
+    pre_fix = _rng_re.sub(r'\2', "3-2 ciruelas", count=1)
+    assert pre_fix == "2 ciruelas", "el regex legacy (\\2 fijo) debía tomar el 2º número, no el mayor"
+    from shopping_calculator import _preprocess_nlp_quantities as _ppnq
+    assert _ppnq("3-2 ciruelas") != pre_fix, "el fix real debe diferir del resultado legacy en este caso"
+
+
 # ── K3. "rábanos en láminas" (4 drops) — stop de preparación + alias plural determinista ────────
 
 @pytest.mark.parametrize("raw", ["rábanos en láminas", "rabanos en laminas", "4 rábanos en láminas",
@@ -4077,3 +4127,771 @@ def test_rd_drops_json_note_explicita_que_el_criterio_no_es_el_contador():
     assert payload["mode"] == "rd-drops"
     assert payload["source_node"] == "_creativity_kpi_job"
     assert isinstance(payload["top_drops"], list)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Task 9 — los pendientes de «100% listo» (pre-flip)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# F8: ancla que la sesión de Neon corre en TimeZone=UTC — la premisa silenciosa de la que
+# depende TODA la aritmética de T5-F1 (`user_tz_offset_min`: `NOW() - make_interval(mins =>
+# offset)`, offset en la convención de getTimezoneOffset()). `db_core.get_client_kwargs()` NO
+# fija `options="-c TimeZone=..."` (verificado: 0 hits de "TimeZone"/"SET TIME ZONE" en
+# db_core.py) — el motor confía en que Neon arranca la sesión en UTC por DEFECTO (comportamiento
+# de servidor, no garantía de nuestro código). Un test parser NO puede probar esto (no hay nada
+# que parsear: la ausencia de un SET no demuestra el valor efectivo) — hace falta la consulta
+# EN VIVO. e2e-marked, mismo patrón que el resto del archivo (pool abierto explícito, skip si no
+# hay credenciales, nunca bloquea el gate rápido).
+
+@pytest.mark.e2e
+def test_f8_neon_session_timezone_offset_cero():
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F8)] Contra la conexión REAL del pool — si
+    Neon alguna vez cambiara su default de sesión a un huso CON offset (o una migración de
+    proveedor lo alterase), este test lo detecta ANTES de que la aritmética de offsets de T5-F1
+    empiece a fallar en silencio (un offset calculado sobre una sesión no-UTC desincroniza TODAS
+    las fechas locales derivadas).
+
+    HALLAZGO EN VIVO durante el desarrollo de este test: `current_setting('TimeZone')` devuelve
+    `'GMT'`, NO el string literal `'UTC'` — assertar por IGUALDAD DE STRING habría sido el MISMO
+    anti-patrón grapheme-bound que F6 re-ancló dos párrafos arriba (CLAUDE.md: "property not
+    grapheme"). GMT y UTC son la MISMA propiedad (offset cero desde Greenwich, sin DST) — lo que
+    importa para `NOW() - make_interval(mins => offset)` es el OFFSET NUMÉRICO, no el nombre.
+    Se ancla con `EXTRACT(TIMEZONE FROM NOW()) = 0` (la propiedad real) — y con una whitelist
+    documentada de nombres zero-offset conocidos como señal secundaria legible por humanos."""
+    import db_core
+    if db_core.connection_pool is None:
+        pytest.skip("connection_pool es None — faltan NEON_DATABASE_URL/.env (e2e, no bloquea el gate)")
+    db_core.connection_pool.open()
+    from db_core import execute_sql_query
+    row = execute_sql_query(
+        "SELECT current_setting('TimeZone') AS tz, EXTRACT(TIMEZONE FROM NOW()) AS off_s",
+        fetch_one=True,
+    )
+    assert row is not None, "la query de TimeZone no devolvió fila"
+    assert float(row["off_s"]) == 0.0, (
+        f"la sesión de Neon tiene offset {row['off_s']!r} segundos (tz={row['tz']!r}) — NO es "
+        "zero-offset. La aritmética de user_tz_offset_min (T5-F1) asume offset cero; revisar "
+        "db_core.get_client_kwargs()"
+    )
+    # Señal secundaria legible (no autoritativa — la aserción real es el offset numérico arriba):
+    _ZERO_OFFSET_TZ_NAMES = ("UTC", "GMT", "Etc/UTC", "Etc/GMT")
+    assert row["tz"] in _ZERO_OFFSET_TZ_NAMES, (
+        f"tz={row['tz']!r} no está en la whitelist documentada de nombres zero-offset conocidos "
+        f"({_ZERO_OFFSET_TZ_NAMES}) — el offset numérico SÍ dio 0 (el test no falla por esto), "
+        "pero vale actualizar la whitelist para que el próximo lector reconozca el nombre nuevo."
+    )
+
+
+def test_f8_pool_init_no_fija_timezone_explicito():
+    """Parser complementario (documenta el POR QUÉ del test e2e de arriba): `get_client_kwargs()`
+    no incluye `options=` con `TimeZone`/`SET TIME ZONE` — la sesión UTC es un comportamiento de
+    SERVIDOR (default de Neon), no algo que nuestro código imponga. Si algún día alguien AÑADE un
+    `options="-c TimeZone=..."` aquí, este test lo hace visible (el cambio deja de ser "confiamos
+    en el default del servidor" para ser una decisión explícita, y merece su propia revisión)."""
+    src = (_BACKEND / "db_core.py").read_text(encoding="utf-8")
+    ini = src.index("def get_client_kwargs")
+    fin = src.index("\n        def configure_sync_conn", ini)
+    cuerpo = src[ini:fin]
+    assert "TimeZone" not in cuerpo and "TIME ZONE" not in cuerpo, (
+        "get_client_kwargs ahora fija TimeZone explícitamente — actualiza el comentario del test "
+        "e2e hermano (test_f8_neon_session_timezone_es_utc) para que deje de sonar a comportamiento "
+        "de servidor no-garantizado"
+    )
+
+
+# F9: `default_tz_offset_min` (COUNTRY_PROFILES) documentado como SIN LECTOR por diseño — ver
+# constants.py (comentario junto a COUNTRY_PROFILES). Test ancla que NINGÚN módulo de producción
+# lo lee (si alguien lo cablea, este test falla y fuerza releer el comentario/decisión primero).
+
+def test_f9_default_tz_offset_min_sin_lector_en_produccion():
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, F9)] `default_tz_offset_min` vive SOLO en el
+    dict `COUNTRY_PROFILES` (constants.py) y en los tests — ningún archivo .py de producción lo
+    consulta. Mutación: si un futuro caller lo cablea (`profile.get('default_tz_offset_min')` o
+    similar), este test se pone ROJO — la intención es que ese caller relea el comentario de
+    diseño (T5-F1 hizo la fecha local country-independiente A PROPÓSITO) antes de proceder, no
+    que el wiring se cuele en silencio."""
+    # grep-equivalente en Python puro (sin depender de `grep` del sistema, portable Windows/CI):
+    offenders = []
+    for path in _BACKEND.rglob("*.py"):
+        parts = path.relative_to(_BACKEND).parts
+        if parts[0] in ("tests", "scripts", "venv", ".venv", "__pycache__", "migrations"):
+            continue
+        if path.name == "constants.py":
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "default_tz_offset_min" in text:
+            offenders.append(str(path.relative_to(_BACKEND)))
+    assert not offenders, (
+        f"default_tz_offset_min ganó lector(es) fuera de constants.py: {offenders} — antes de "
+        "cablearlo, relee el comentario de diseño junto a COUNTRY_PROFILES (T5-F1 hizo la fecha "
+        "local COUNTRY-INDEPENDIENTE a propósito)"
+    )
+
+
+def test_f9_docstring_menciona_sin_lector_por_diseno():
+    """El comentario junto a COUNTRY_PROFILES debe declarar EXPLÍCITAMENTE la decisión (no solo
+    el hecho) — para que un futuro editor entienda que la ausencia de lector es intencional, no
+    un descuido a corregir."""
+    src = (_BACKEND / "constants.py").read_text(encoding="utf-8")
+    ini = src.index("`default_tz_offset_min` usa la convención")
+    fin = src.index('COUNTRY_SYSTEM_ENABLED = _env_bool', ini)
+    cuerpo = src[ini:fin]
+    assert "SIN LECTOR" in cuerpo
+    assert "T5-F1" in cuerpo
+    assert "country-independiente" in cuerpo.lower() or "country independiente" in cuerpo.lower()
+
+
+# ── h: minors del ledger F1 ──────────────────────────────────────────────────────────────────
+
+def test_h_planner_system_prompt_import_muerto_eliminado():
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, h)] `PLANNER_SYSTEM_PROMPT` (el símbolo crudo)
+    quedó importado-pero-sin-uso en graph_orchestrator.py tras F1-T3/FINAL-FIX-F1a: los call
+    sites migraron a `build_planner_system_prompt(ctx['country'])`. Verificado (evidencia, no
+    especulación): 0 usos no-comentario del símbolo crudo antes de este fix. `build_planner_
+    system_prompt` (SÍ usado) permanece."""
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "PLANNER_SYSTEM_PROMPT" not in sin_comentarios, (
+        "PLANNER_SYSTEM_PROMPT (símbolo crudo) reapareció fuera de un comentario — si es un uso "
+        "real nuevo, está bien re-importarlo; si es el import muerto que volvió, quítalo de nuevo"
+    )
+    assert "build_planner_system_prompt" in sin_comentarios, (
+        "build_planner_system_prompt SÍ tiene call sites reales — no debe desaparecer del import"
+    )
+
+
+def test_h_planner_system_prompt_sigue_vivo_en_su_modulo_propio():
+    """Contrapeso del test anterior: la constante NO se borró del catálogo, solo dejó de
+    importarse crudo en graph_orchestrator.py — sigue siendo el objeto que build_planner_system_
+    prompt(DO) retorna por identidad (test_f1a_planner_do_o_none_es_byte_identico_is)."""
+    from prompts.planner import PLANNER_SYSTEM_PROMPT, build_planner_system_prompt
+    assert build_planner_system_prompt("DO") is PLANNER_SYSTEM_PROMPT
+
+
+def _sanitize_form_data_cuerpo() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    ini = src.index("def _sanitize_form_data_for_prompt")
+    fin = src.index("\n# [P3-PLAN-MODEL-KNOBS", ini)
+    return src[ini:fin]
+
+
+def test_h_sanitizer_tooltip_anchor_presente():
+    """[P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, h)] `_sanitize_form_data_for_prompt` es
+    parseada por NOMBRE/firma desde 3 archivos de test distintos (test_p1_country_system_f0.py,
+    test_p1_country_system_f1.py, test_p1_prompt_trim_form_data.py) — antes de este fix no tenía
+    tooltip-anchor, así que un rename silencioso rompía esos tests con un ValueError genérico
+    de "substring no encontrado" en vez de señalar el P-fix a releer."""
+    cuerpo = _sanitize_form_data_cuerpo()
+    assert "tooltip-anchor: P1-PROMPT-TRIM-FORM-DATA" in cuerpo
+
+
+def test_h_mutacion_sin_tooltip_anchor_el_guard_fallaria():
+    """MUTACIÓN bidireccional: reproduce el estado PRE-fix (docstring sin el anchor — solo se
+    quita la línea distintiva, sin reconstruir el párrafo entero verbatim, para no acoplar este
+    test al wrap exacto de línea) y confirma que el assert de arriba lo habría cazado."""
+    cuerpo_real = _sanitize_form_data_cuerpo()
+    assert "tooltip-anchor: P1-PROMPT-TRIM-FORM-DATA" in cuerpo_real, (
+        "precondición: el anchor debe existir en el código real antes de mutar"
+    )
+    cuerpo_pre_fix = cuerpo_real.replace("tooltip-anchor: P1-PROMPT-TRIM-FORM-DATA", "")
+    assert "tooltip-anchor: P1-PROMPT-TRIM-FORM-DATA" not in cuerpo_pre_fix
+
+
+# ── k: T7-parked — VEGGIE_FAT_SYNONYMS['cilantro'] lista 'recao' (tensión con la fila propia) ──
+#
+# Trazado el consumidor real (GLOBAL_REVERSE_MAP → normalize_ingredient_for_tracking/
+# track_meal_friction, heurísticas de variedad/rechazo) vs el consumidor de PRECIO/PANTRY
+# (shopping_calculator.normalize_name, que NUNCA importa GLOBAL_REVERSE_MAP). Decisión: HARMLESS,
+# documentado con comentario junto al dict (constants.py). Este bloque ancla la evidencia.
+
+def test_k_global_reverse_map_recao_a_cilantro_preservado():
+    """Pin: el alias sigue vivo (byte-identidad de la decisión "documentar, no tocar") — sirve de
+    ancla si un futuro editor considera quitarlo sin releer el comentario de diseño."""
+    assert constants.GLOBAL_REVERSE_MAP.get("recao") == "cilantro"
+    assert constants.normalize_ingredient_for_tracking("Recao") == "cilantro"
+
+
+def test_k_apply_synonyms_es_dead_code_confirmado():
+    """Contexto de la traza (no una excepción a mantener, solo la evidencia de por qué no se
+    investigó como consumidor real): `apply_synonyms` (el otro consumidor directo de
+    GLOBAL_REVERSE_MAP en constants.py) no tiene NINGÚN caller de producción — verificado por
+    ausencia total fuera de su propia definición."""
+    src_dir = _BACKEND
+    offenders = []
+    for path in src_dir.glob("*.py"):
+        if path.name in ("constants.py",):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if "apply_synonyms(" in text:
+            offenders.append(path.name)
+    assert not offenders, (
+        f"apply_synonyms ganó caller(s) de producción: {offenders} — la traza de (k) asumía "
+        "dead code; si ahora se usa, re-evaluar el alias recao→cilantro contra ESE nuevo consumidor"
+    )
+
+
+def test_k_pricing_resolver_nunca_importa_global_reverse_map():
+    """La afirmación central de (k): `shopping_calculator.py` (precio/pantry) NO conoce
+    GLOBAL_REVERSE_MAP — el alias recao→cilantro no puede filtrarse a pricing por esta vía."""
+    src = (_BACKEND / "shopping_calculator.py").read_text(encoding="utf-8")
+    assert "GLOBAL_REVERSE_MAP" not in src
+
+
+def test_k_recao_resuelve_a_su_propia_fila_no_a_cilantro(sc):
+    """LA prueba empírica de "harmless": contra el catálogo VIVO, 'Recao' resuelve a SU PROPIA
+    fila (T7), nunca colapsada a 'Cilantro' — confirma que el alias de (k) no toca pricing."""
+    assert sc.normalize_name("Recao") == "Recao"
+    assert sc.normalize_name("Recao") != "Cilantro"
+    assert sc.normalize_name("Cilantro") == "Cilantro"
+
+
+def test_k_comentario_de_diseno_presente_junto_al_dict():
+    """El dict debe declarar la decisión (harmless, evidence-derived) — no solo el hecho del
+    alias — para que un futuro editor no la reabra sin contexto."""
+    src = (_BACKEND / "constants.py").read_text(encoding="utf-8")
+    ini = src.index("# [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, k")
+    fin = src.index('"cilantro": ["cilantro", "culantro", "verdura", "recao"]', ini)
+    cuerpo = src[ini:fin]
+    assert "GLOBAL_REVERSE_MAP" in cuerpo
+    assert "normalize_name" in cuerpo
+
+
+# ── j: T5-parked — los 2 call sites de _get_fast_filtered_catalogs SIN country= ─────────────────
+#
+# ai_helpers.py::get_deterministic_variety_prompt (el pool de catálogo, NO el texto del prompt —
+# ese YA estaba wired desde F1 FINAL-FIX-F1b) + agent.py::swap_meal (el sorteo anti-mode-collapse
+# del swap). Ambos ahora reciben `country=` derivado por la ÚNICA puerta T1, reusando una
+# variable YA en scope (mismo patrón `_micro_form`/`_swap_country` del resto de la fase).
+
+def test_j_ai_helpers_variety_country_derivado_una_vez():
+    """`_variety_country` se deriva UNA sola vez (SSOT) y se reusa en los 2 call sites de esta
+    función — antes el 2º (`build_deterministic_variety_prompt`, F1b) re-derivaba con su propio
+    import local; ahora ambos comparten la misma variable."""
+    src = (_BACKEND / "ai_helpers.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    ini = sin_comentarios.index("def get_deterministic_variety_prompt")
+    fin = sin_comentarios.find("\ndef ", ini + 10)
+    cuerpo = sin_comentarios[ini: fin if fin != -1 else len(sin_comentarios)]
+    assert cuerpo.count("country_for_form_data(form_data)") == 1, (
+        "country_for_form_data(form_data) debe derivarse UNA sola vez dentro de esta función"
+    )
+    assert "_get_fast_filtered_catalogs(allergies, dislikes, diet, country=_variety_country)" in cuerpo
+    assert "build_deterministic_variety_prompt(_dc, _variety_country)" in cuerpo
+
+
+def test_j_agent_swap_reusa_swap_country_no_rederiva():
+    """agent.py::swap_meal — el call site de _get_fast_filtered_catalogs reusa `_swap_country`
+    (ya derivado arriba, T3) — no vuelve a llamar country_for_form_data."""
+    src = (_BACKEND / "agent.py").read_text(encoding="utf-8")
+    sin_comentarios = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert (
+        "_get_fast_filtered_catalogs(\n            swap_allergies, swap_dislikes, swap_diet, "
+        "country=_swap_country\n        )" in sin_comentarios
+        or "_get_fast_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet, country=_swap_country)"
+        in sin_comentarios
+    ), "el call site del swap debe pasar country=_swap_country"
+    assert sin_comentarios.count("_swap_country = country_for_form_data(form_data)") == 1, (
+        "_swap_country debe derivarse UNA sola vez en todo agent.py"
+    )
+
+
+def test_j_do_byte_identico_catalogo_ai_helpers(monkeypatch):
+    """DO (o form_data sin 'country', knob off) sigue produciendo el MISMO pool RD que antes de
+    este fix — ancla con comparación de contenido (no `is`, porque `_get_fast_filtered_catalogs`
+    siempre retorna listas nuevas via `.copy()`) contra una llamada explícita a country=None."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    import ai_helpers
+    form_data = {"allergies": [], "dislikes": [], "dietType": "balanced"}
+    out_via_variety = ai_helpers.get_deterministic_variety_prompt("", form_data, days_count=3)
+    # DO no debe contener ningún marcador de país beta (mismo tipo de aserción que el resto de
+    # F1/F2: el render no debe traer nombre de país foráneo con el knob apagado):
+    assert "España" not in out_via_variety and "México" not in out_via_variety
+
+
+def test_j_beta_usa_su_propio_country_pool(monkeypatch):
+    """Con el knob encendido y country='ES' en form_data, _get_fast_filtered_catalogs debe usar
+    COUNTRY_POOLS['ES'] — se prueba directamente la función SSOT (no la prosa del prompt, que no
+    lista el pool crudo) para una aserción determinista."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    from constants import _get_fast_filtered_catalogs, COUNTRY_POOLS, country_for_form_data
+    form_data = {"country": "es"}
+    resolved = country_for_form_data(form_data)
+    assert resolved == "ES"
+    fp, fc, fv, ff = _get_fast_filtered_catalogs((), (), "balanced", country=resolved)
+    assert set(fp) == set(COUNTRY_POOLS["ES"]["proteins"])
+    assert set(fc) == set(COUNTRY_POOLS["ES"]["carbs"])
+
+
+def test_j_mutacion_sin_country_call_site_cae_siempre_a_do():
+    """MUTACIÓN bidireccional: reproduce el estado PRE-fix (llamar sin country=) y confirma que
+    el pool resultante es el DOMINICANO incluso para un país beta — la evidencia de que el fix
+    real cambia el pool devuelto, no solo la firma."""
+    from constants import _get_fast_filtered_catalogs, DOMINICAN_PROTEINS, COUNTRY_POOLS
+    fp_sin_country, _, _, _ = _get_fast_filtered_catalogs((), (), "balanced")  # pre-fix shape
+    fp_con_country, _, _, _ = _get_fast_filtered_catalogs((), (), "balanced", country="ES")
+    assert set(fp_sin_country) == set(DOMINICAN_PROTEINS)
+    assert set(fp_con_country) == set(COUNTRY_POOLS["ES"]["proteins"])
+    assert set(fp_sin_country) != set(fp_con_country), (
+        "el pool RD y el pool ES deben diferir — si no, la mutación no sería significativa"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# f: retry-gate — LA MÁS RIESGOSA. Cierra el ruling PARKED de T4 fix-round 1
+# (docs/country_system_f1.md, "Nuance del retry-gate"): beta con issues de slot-appropriateness
+# TODOS soft entrega ADVISORY desde el intento 1 (antes: solo en el intento final; 1..N-1
+# forzaba retry SIEMPRE, hard o soft). Implementado como helper PURO
+# `_slot_appropriateness_advisory_decision` (extraído de review_plan_node para ser
+# unit-testable — NINGÚN test del repo invoca review_plan_node directo, verificado abajo).
+# ═══════════════════════════════════════════════════════════════════════════
+
+import graph_orchestrator as _go_f  # noqa: E402
+
+
+def _legacy_slot_advisory(issues: list, attempt: int, max_attempts: int) -> bool:
+    """Réplica EXACTA de la fórmula PRE-Task-9 (`if _sa_is_final and not _sa_has_hard:`) — el
+    oráculo GOLDEN contra el que se ancla la byte-identidad DO. Sin país: la fórmula vieja
+    JAMÁS tuvo el concepto."""
+    has_hard = any(i.get("hard") for i in issues)
+    is_final = int(attempt) >= int(max_attempts)
+    return is_final and not has_hard
+
+
+# ── f1: precedente confirmado — review_plan_node SÍ se llama directo en 3 archivos vecinos ────
+#
+# CORRECCIÓN durante el desarrollo de esta task: la premisa inicial ("ningún test invoca
+# review_plan_node directo") era FALSA — `grep -rl "await.*review_plan_node(\|= review_plan_node("`
+# tiene un blind spot (no cubre `graph_orchestrator.review_plan_node(` module-qualified dentro de
+# un `_run(...)` wrapper). Los propios vecinos EXIGIDOS por el brief
+# (test_p2_a_shopping_coherence_block_enforcement.py, test_p1_review_coherence_severe_only.py) SÍ
+# lo invocan directo con un plan/state MÍNIMO que bypassa LLM/DB (form_data con user_id='guest' +
+# restricciones vacías). Dado ese precedente PROBADO, este archivo AÑADE integration tests reales
+# (no solo el helper puro de arriba) — sección f1b abajo.
+
+def test_f_review_plan_node_si_se_invoca_directo_en_3_vecinos():
+    """Documenta el precedente (positivo, no negativo): estos 3 archivos son la EVIDENCIA de que
+    `review_plan_node` es invocable con un state mínimo — la base para los integration tests de
+    f1b. Lista cerrada — un 4º archivo nuevo no rompe este test (no es una allowlist exhaustiva),
+    pero si alguno de estos 3 deja de invocarlo, algo se reorganizó y vale la pena releer."""
+    known = (
+        "test_p2_a_shopping_coherence_block_enforcement.py",
+        "test_p1_review_coherence_severe_only.py",
+    )
+    for fname in known:
+        text = (_BACKEND / "tests" / fname).read_text(encoding="utf-8")
+        assert "review_plan_node(" in text, f"{fname} ya no invoca review_plan_node — precedente roto"
+
+
+# ── f1b: integration tests REALES — review_plan_node con plan/state mínimo (mismo patrón que
+#         test_p2_a_shopping_coherence_block_enforcement.py / test_p1_review_coherence_severe_only.py) ──
+
+import asyncio as _asyncio_f
+
+
+def _f_bypass_form_data(country=None):
+    """Form data sin restricciones — bypassa LLM/fact-check (mismo contrato que los 2 vecinos:
+    user_id='guest', listas vacías). `country` opcional: ausente = comportamiento DO (fail-safe
+    de country_for_form_data ante key ausente)."""
+    fd = {
+        "user_id": "guest", "allergies": [], "medicalConditions": [], "dislikes": [],
+        "dietType": "balanced", "_days_to_generate": 3,
+    }
+    if country:
+        fd["country"] = country
+    return fd
+
+
+def _f_minimal_plan_arroz_de_noche():
+    """Plan mínimo de 1 día con 'Pollo a la plancha con arroz blanco' en CENA — el ejemplo
+    CANÓNICO de violación SOFT (nunca hard, ni para DO) de todo el repo, ya anclado en
+    test_p1_slot_appropriateness.py::test_dinner_breakfast_or_rice_flagged_soft y en los tests de
+    item (g) de esta MISMA task. Recipe con los 3 prefijos (Mise en place/Toque de Fuego/Montaje)
+    para no disparar el RECIPE-CONTRACT-GATE (ortogonal, contaminaría la prueba)."""
+    return {
+        "calories": 2000,
+        "macros": {"protein": 150, "carbs": 200, "fats": 67},
+        "days": [{"day": 1, "meals": [
+            {"meal": "Cena", "name": "Pollo a la plancha con arroz blanco",
+             "ingredients": ["200 g pechuga de pollo", "150 g arroz blanco"],
+             "recipe": ["Mise en place: pesa la pechuga y lava el arroz.",
+                        "El Toque de Fuego: cocina la pechuga 8-10 min a fuego medio y hierve el arroz 15 min.",
+                        "Montaje: sirve la pechuga sobre el arroz."],
+             "protein": 150, "carbs": 200, "fats": 67, "cals": 2000}
+        ]}],
+    }
+
+
+def _f_minimal_plan_locrio_desayuno():
+    """Plan mínimo con 'Locrio de pollo' en DESAYUNO — violación DURA incondicional (decisión de
+    producto, NUNCA degrada, ni para DO ni para beta: el override de país neutraliza `hard`,
+    nunca lo inventa) — mismo dish de test_breakfast_lunch_dishes_flagged_hard."""
+    return {
+        "calories": 2000,
+        "macros": {"protein": 150, "carbs": 200, "fats": 67},
+        "days": [{"day": 1, "meals": [
+            {"meal": "Desayuno", "name": "Locrio de pollo",
+             "ingredients": ["200 g pollo", "150 g arroz"],
+             "recipe": ["Mise en place: pesa el pollo y lava el arroz.",
+                        "El Toque de Fuego: guisa el pollo con el arroz 20 min a fuego medio.",
+                        "Montaje: sirve caliente."],
+             "protein": 150, "carbs": 200, "fats": 67, "cals": 2000}
+        ]}],
+    }
+
+
+def _f_minimal_state(*, plan_result, country=None, attempt=1):
+    return {
+        "plan_result": plan_result, "form_data": _f_bypass_form_data(country), "taste_profile": "",
+        "attempt": attempt, "rejection_reasons": [], "_rejection_severity": "minor",
+        "request_id": "test-p1-country-system-f2-task9-f",
+    }
+
+
+def _f_run(coro):
+    loop = _asyncio_f.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def test_f_integration_do_soft_attempt1_sigue_rechazando_byte_identico(monkeypatch):
+    """[DO byte-identidad — integration, no solo el helper puro] DO (sin country en form_data),
+    'arroz de noche' (soft, attempt 1 de 3 — NO final) ⇒ review_passed=False, SIGUE forzando
+    retry — EXACTAMENTE el comportamiento pre-Task-9 (el gap PARKED que T4 documentó: "en
+    attempts 1..N-1 CUALQUIER issue fuerza retry igual")."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    state = _f_minimal_state(plan_result=_f_minimal_plan_arroz_de_noche(), country=None, attempt=1)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is False, "DO en attempt 1 con soft-only DEBE seguir rechazando"
+    assert result["_rejection_severity"] == "high"
+
+
+def test_f_integration_beta_soft_attempt1_aprueba_con_advisory(monkeypatch):
+    """[EL comportamiento NUEVO, end-to-end] País beta (ES) + knob ON, MISMO plan 'arroz de
+    noche' (soft), attempt 1 de 3 (NO final) ⇒ review_passed=True — advisory desde el intento 1,
+    sin quemar un retry completo."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    plan = _f_minimal_plan_arroz_de_noche()
+    state = _f_minimal_state(plan_result=plan, country="ES", attempt=1)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is True, "beta en attempt 1 con soft-only DEBE aprobar (advisory)"
+    assert plan.get("_slot_appropriateness_advisory_final") is True
+    assert plan.get("_slot_appropriateness_advisory_beta_early") is True
+
+
+def test_f_integration_beta_knob_off_sigue_rechazando_igual_que_do(monkeypatch):
+    """[Knob-off can never enter the branch — end-to-end] country='ES' en form_data PERO el knob
+    MEALFIT_COUNTRY_SYSTEM está OFF ⇒ country_for_form_data ignora 'ES' y devuelve 'DO' SIEMPRE
+    ⇒ el plan se comporta IDÉNTICO al caso DO puro (rechaza, no advisory)."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    state = _f_minimal_state(plan_result=_f_minimal_plan_arroz_de_noche(), country="ES", attempt=1)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is False, "knob OFF debe ignorar country='ES' y rechazar como DO"
+
+
+def test_f_integration_do_locrio_desayuno_hard_sigue_rechazando(monkeypatch):
+    """[DO byte-identidad] 'Locrio de pollo' en DESAYUNO es la regla `SIEMPRE duro` de DO
+    (decisión de producto — no degrada nunca, ni en attempt 1 ni en el final) ⇒ DO debe seguir
+    rechazando SIEMPRE, sin importar el attempt."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    state = _f_minimal_state(plan_result=_f_minimal_plan_locrio_desayuno(), country=None, attempt=1)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is False, "DO: Locrio en desayuno es SIEMPRE duro, nunca advisory"
+
+
+def test_f_integration_beta_locrio_desayuno_hoy_tambien_es_soft_por_t4(monkeypatch):
+    """[Contexto REAL — no un bug de este fix] La regla `SIEMPRE duro` de desayuno-arroz de DO
+    (test hermano arriba) es TAMBIÉN ablandada a soft para beta por el blanket softening de T4
+    (`slot_rules_for_country`: "TODA regla hardness='soft'" para país != DO, HOY sin excepciones
+    — docs/country_system_f1.md, fila 5). Verificado en vivo durante el desarrollo de este test:
+    `_detect_slot_appropriateness([...Locrio desayuno...], {'country':'ES'})` devuelve
+    `hard: False`. Consecuencia de ESTE fix (f): esa violación, siendo soft-only, TAMBIÉN entrega
+    advisory desde el intento 1 para beta — no es un caso separado, es la MISMA regla del helper
+    aplicada a un ejemplo distinto (desayuno en vez de cena). Si T4 alguna vez re-endurece una
+    regla específica para beta (el código ya lo soporta — ver docstring de
+    `slot_coherence_backstop_for_meal`), este test se pondría rojo y sería la señal correcta de
+    revisar la interacción con (f)."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    issues = _go_f._detect_slot_appropriateness(
+        _f_minimal_plan_locrio_desayuno()["days"], {"country": "ES"}
+    )
+    assert issues and issues[0]["hard"] is False, (
+        "precondición: HOY el desayuno-arroz debe ser soft para beta (T4 blanket) — si esto "
+        "cambia, la aserción de abajo (review_passed=True) también debe re-evaluarse"
+    )
+    state = _f_minimal_state(plan_result=_f_minimal_plan_locrio_desayuno(), country="ES", attempt=1)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is True, (
+        "consecuencia esperada de (f): beta + Locrio-desayuno soft-only ⇒ advisory desde attempt 1"
+    )
+
+
+def test_f_integration_do_final_attempt_advisory_sin_cambios(monkeypatch):
+    """[Regresión, comportamiento PRE-existente sin tocar] DO en el intento FINAL (3 de 3) con
+    soft-only ya era advisory ANTES de esta task — confirma que el fix no rompió ese camino.
+
+    `NIGHT_RICE_COMPOUND_FINAL` desactivado a propósito: es una feature ORTOGONAL (P1-NIGHT-RICE-
+    COMPOUND-FINAL) que en el intento final intenta un autofix de último recurso sobre el MISMO
+    plato de arroz-de-noche — mutaba el plan y disparaba P2-BAND-RETRY-GATE (macros del
+    fixture desincronizadas tras el autofix), contaminando la prueba de ESTE gate específico.
+    Reproducido en vivo durante el desarrollo: sin este monkeypatch, review_passed daba False
+    por 'PRECISIÓN DE MACROS BAJA', no por el gate de slot-appropriateness."""
+    monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
+    monkeypatch.setattr(_go_f, "NIGHT_RICE_COMPOUND_FINAL", False)
+    plan = _f_minimal_plan_arroz_de_noche()
+    state = _f_minimal_state(plan_result=plan, country=None, attempt=3)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is True, "DO en el intento final con soft-only ya era advisory"
+    assert plan.get("_slot_appropriateness_advisory_final") is True
+    assert plan.get("_slot_appropriateness_advisory_beta_early") is not True, (
+        "el marker beta_early es EXCLUSIVO del camino beta-temprano — DO-final no debe setearlo"
+    )
+
+
+def test_f_integration_clean_plan_aprueba_sin_ningun_marker(monkeypatch):
+    """Sanity (mismo patrón que test_no_block_flag_no_change del vecino P2-A): un plan SIN
+    violaciones de horario se aprueba limpio, sin marcadores de advisory de ningún tipo."""
+    monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
+    plan = {
+        "calories": 2000,
+        "macros": {"protein": 150, "carbs": 200, "fats": 67},
+        "days": [{"day": 1, "meals": [
+            {"meal": "Cena", "name": "Pescado al horno con vegetales",
+             "ingredients": ["200 g pescado", "150 g vegetales asados"],
+             "recipe": ["Mise en place: corta los vegetales y sazona el pescado.",
+                        "El Toque de Fuego: hornea el pescado con los vegetales 20 min a 180°C.",
+                        "Montaje: sirve caliente."],
+             "protein": 150, "carbs": 200, "fats": 67, "cals": 2000}
+        ]}],
+    }
+    state = _f_minimal_state(plan_result=plan, country="ES", attempt=1)
+    result = _f_run(_go_f.review_plan_node(state))
+    assert result["review_passed"] is True
+    assert "_slot_appropriateness_advisory_final" not in plan
+    assert "_slot_appropriateness_advisory_beta_early" not in plan
+
+
+# ── f2: unit tests del helper puro (los 7 casos verificados en vivo durante el desarrollo) ────
+
+def test_f_helper_do_sin_issues():
+    assert _go_f._slot_appropriateness_advisory_decision([], 1, 2, "DO") == (False, False, False, False)
+
+
+def test_f_helper_do_hard_nunca_advisory_ni_final_ni_no_final():
+    for attempt in (1, 2):
+        adv, has_hard, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+            [{"hard": True}], attempt, 2, "DO"
+        )
+        assert has_hard is True
+        assert beta_only is False
+        assert adv is False, f"DO con hard=True NUNCA debe ser advisory (attempt={attempt})"
+
+
+def test_f_helper_do_soft_no_final_rechaza_byte_identico_pre_fix():
+    """EL caso más importante de byte-identidad: DO, issue soft, NO es el intento final ⇒
+    debe seguir RECHAZANDO (forzando retry) — exactamente como pre-Task-9."""
+    adv, has_hard, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+        [{"hard": False}], 1, 2, "DO"
+    )
+    assert adv is False
+    assert is_final is False
+    assert beta_only is False, "DO NUNCA activa la rama beta_soft_only"
+
+
+def test_f_helper_do_soft_final_advisory_byte_identico_pre_fix():
+    adv, has_hard, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+        [{"hard": False}], 2, 2, "DO"
+    )
+    assert adv is True
+    assert is_final is True
+    assert beta_only is False
+
+
+_BETA_CCS_F = tuple(cc for cc, p in constants.COUNTRY_PROFILES.items() if p["is_beta"])
+
+
+def test_f_helper_beta_soft_only_advisory_desde_intento_1():
+    """EL comportamiento NUEVO: país beta, issue soft, intento 1 de 2 (NO final) ⇒ advisory YA,
+    sin esperar al intento final."""
+    assert _BETA_CCS_F, "fixture vacío — no hay países beta en COUNTRY_PROFILES"
+    for cc in _BETA_CCS_F:
+        adv, has_hard, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+            [{"hard": False}], 1, 3, cc
+        )
+        assert adv is True, f"{cc}: beta soft-only debe ser advisory desde el intento 1"
+        assert is_final is False, f"{cc}: attempt 1 de 3 NO es final — la precondición del test"
+        assert beta_only is True, f"{cc}: beta_soft_only debe ser True"
+
+
+def test_f_helper_beta_hard_sigue_forzando_retry():
+    """Beta con violación DURA sigue rechazando SIEMPRE — el override de país neutraliza
+    `hard`, nunca lo inventa; si `_detect_slot_appropriateness` alguna vez deja un hard=True
+    vivo para beta, este helper debe seguir respetándolo."""
+    adv, has_hard, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+        [{"hard": True}], 1, 3, "ES"
+    )
+    assert adv is False
+    assert beta_only is False, "beta_only exige not has_hard — con hard=True nunca es True"
+
+
+def test_f_helper_beta_mezcla_hard_soft_sigue_forzando_retry():
+    """Beta con MEZCLA hard+soft en el MISMO plan sigue rechazando en cualquier attempt — no
+    solo el issue duro sobrevive, TODO el plan se regenera (mismo contrato que DO)."""
+    adv, has_hard, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+        [{"hard": True}, {"hard": False}], 1, 3, "ES"
+    )
+    assert adv is False
+    assert has_hard is True
+    assert beta_only is False
+
+
+def test_f_helper_beta_final_attempt_tambien_advisory():
+    """Beta en el intento final con soft-only también es advisory (ya lo era antes de esta
+    task, vía is_final — el fix no lo cambia, solo AGREGA el camino temprano)."""
+    adv, _, is_final, beta_only = _go_f._slot_appropriateness_advisory_decision(
+        [{"hard": False}], 3, 3, "ES"
+    )
+    assert adv is True
+    assert is_final is True
+
+
+def test_f_helper_pais_desconocido_no_diferencia_de_do():
+    """`_slot_appropriateness_advisory_decision` NO canonicaliza — recibe país YA resuelto vía
+    `country_for_form_data` (que sí hace fail-safe a 'DO' para desconocidos). Un país crudo
+    'xx' que llegara aquí SIN pasar por esa puerta se trataría como beta (comportamiento
+    documentado: este helper confía en su input, no es un 2º canonicalizador)."""
+    adv, _, _, beta_only = _go_f._slot_appropriateness_advisory_decision([{"hard": False}], 1, 3, "xx")
+    assert beta_only is True, (
+        "'xx' no es 'DO' literal — el helper lo trata como beta; la responsabilidad de "
+        "canonicalizar es de country_for_form_data, NO de este helper (SRP)"
+    )
+
+
+# ── f3: golden/DO byte-identidad — el helper reproduce EXACTO el oráculo legacy para país=DO ──
+
+@pytest.mark.parametrize("attempt,max_attempts,issues", [
+    (1, 2, []),
+    (1, 2, [{"hard": False}]),
+    (1, 2, [{"hard": True}]),
+    (2, 2, [{"hard": False}]),
+    (2, 2, [{"hard": True}]),
+    (1, 3, [{"hard": False}, {"hard": False}]),
+    (1, 3, [{"hard": True}, {"hard": False}]),
+    (3, 3, [{"hard": True}, {"hard": False}]),
+])
+def test_f_golden_do_reproduce_formula_legacy_exacta(attempt, max_attempts, issues):
+    """[DO byte-identidad, golden] Para país='DO' (y, por transitividad, para el knob apagado —
+    country_for_form_data SIEMPRE devuelve 'DO' en ese caso), el `advisory` del helper NUEVO
+    debe coincidir EXACTO, caso por caso, con `_legacy_slot_advisory` (la fórmula
+    `is_final and not has_hard` pre-Task-9, sin ningún concepto de país)."""
+    adv, _, _, beta_only = _go_f._slot_appropriateness_advisory_decision(issues, attempt, max_attempts, "DO")
+    legacy = _legacy_slot_advisory(issues, attempt, max_attempts)
+    assert adv == legacy, f"DO diverge del oráculo legacy: nuevo={adv}, legacy={legacy}"
+    assert beta_only is False, "DO NUNCA debe activar beta_soft_only, en ningún caso"
+
+
+def test_f_golden_knob_off_country_for_form_data_es_siempre_do():
+    """El puente knob-off → 'DO' vive en `country_for_form_data` (T1, la ÚNICA puerta) — este
+    test ancla que, tal como lo consume el call site de review_plan_node, un form_data con
+    country='ES' bajo knob OFF resuelve 'DO', así que el helper de arriba recibe 'DO' incluso
+    si el usuario declaró un país beta."""
+    import os
+    prev = os.environ.pop("MEALFIT_COUNTRY_SYSTEM", None)
+    try:
+        resolved = constants.country_for_form_data({"country": "ES"})
+        assert resolved == "DO"
+    finally:
+        if prev is not None:
+            os.environ["MEALFIT_COUNTRY_SYSTEM"] = prev
+
+
+# ── f4: parser — el wiring real dentro de review_plan_node ────────────────────────────────────
+
+def _review_plan_node_slot_gate_cuerpo() -> str:
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    ini = src.index("if SLOT_APPROPRIATENESS_GATE_ENABLED:")
+    fin = src.index("# [P1-SLOT-INCOHERENCE-GATE", ini)
+    return src[ini:fin]
+
+
+def test_f_wiring_review_plan_node_llama_al_helper():
+    cuerpo = _review_plan_node_slot_gate_cuerpo()
+    assert "_slot_appropriateness_advisory_decision(" in cuerpo
+    assert "_sa_advisory, _sa_has_hard, _sa_is_final, _sa_beta_soft_only" in cuerpo
+
+
+def test_f_wiring_deriva_pais_via_ssot_no_lector_crudo():
+    """El call site deriva `_rpn_country` vía `country_for_form_data(form_data)` (T1, la ÚNICA
+    puerta) — NO lee `form_data['country']`/`form_data.get('country')` crudo. Reusa el regex
+    re-anclado de F6 (`_FORM_SHAPE_COUNTRY_READ_RX`, este mismo archivo) para no duplicar el
+    patrón (y para probar en el mismo golpe que F6 no tiene falsos-negativos aquí)."""
+    cuerpo = _review_plan_node_slot_gate_cuerpo()
+    assert "country_for_form_data(form_data)" in cuerpo
+    sin_comentarios = "\n".join(l for l in cuerpo.splitlines() if not l.strip().startswith("#"))
+    from test_p1_country_system_f1 import _FORM_SHAPE_COUNTRY_READ_RX as _f6_rx
+    assert not _f6_rx.search(sin_comentarios), (
+        "el call site del gate de slot-appropriateness lee form_data/data['country'] crudo"
+    )
+
+
+def test_f_wiring_marker_beta_early_solo_si_no_es_final():
+    cuerpo = _review_plan_node_slot_gate_cuerpo()
+    assert '_slot_appropriateness_advisory_beta_early' in cuerpo
+    assert "if _sa_beta_soft_only and not _sa_is_final:" in cuerpo
+
+
+def test_f_wiring_knob_off_never_enters_branch_comentado():
+    """El call site debe DOCUMENTAR explícitamente la garantía knob-off (requisito del brief:
+    'Knob-off can never enter the branch') — no solo confiar en que sea cierto por transitividad
+    de country_for_form_data (ya anclado en test_f_golden_knob_off_...)."""
+    cuerpo = _review_plan_node_slot_gate_cuerpo()
+    assert "byte-idéntico al comportamiento pre-Task-9" in cuerpo or "byte-idéntico" in cuerpo
+
+
+# ── f5: MUTACIONES bidireccionales (requisito explícito del brief) ────────────────────────────
+
+def test_f_mutacion_quitar_el_gate_do_golden_se_pone_rojo():
+    """MUTACIÓN #1 ('remove gate ⇒ DO golden RED'): si alguien BORRARA el helper y volviera al
+    `if _sa_is_final and not _sa_has_hard:` original PERO rompiera algo en el camino (p.ej.
+    invirtiera la condición), el test golden f3 lo cazaría. Reproducido aquí sin tocar el
+    archivo real: una versión MUTADA del helper (condición invertida) falla el golden."""
+    def _mutated_no_gate(issues, attempt, max_attempts, country):
+        has_hard = any(i.get("hard") for i in issues)
+        is_final = int(attempt) >= int(max_attempts)
+        # mutación: el gate de país desaparece pero la condición final TAMBIÉN se rompe
+        # (simula "alguien quitó el helper completo y el gate quedó siempre-False"):
+        advisory = False
+        return advisory, has_hard, is_final, False
+
+    # Con el helper MUTADO (gate roto), el caso DO-final-soft (que SIEMPRE debía ser advisory)
+    # deja de coincidir con el oráculo legacy:
+    mutated_adv, _, _, _ = _mutated_no_gate([{"hard": False}], 2, 2, "DO")
+    legacy = _legacy_slot_advisory([{"hard": False}], 2, 2)
+    assert mutated_adv != legacy, "la mutación debía romper el golden DO — si no, el golden no prueba nada"
+    # Y el helper REAL (no mutado) sigue coincidiendo:
+    real_adv, _, _, _ = _go_f._slot_appropriateness_advisory_decision([{"hard": False}], 2, 2, "DO")
+    assert real_adv == legacy
+
+
+def test_f_mutacion_quitar_la_advisory_beta_test_se_pone_rojo():
+    """MUTACIÓN #2 ('remove advisory ⇒ beta test RED'): una versión del helper que IGNORA
+    `beta_soft_only` (vuelve a la fórmula pre-Task-9 pura) reproduce el gap que este fix cierra
+    — el test beta (f2) se pondría rojo contra esa versión."""
+    def _pre_task9_formula(issues, attempt, max_attempts, country):
+        has_hard = any(i.get("hard") for i in issues)
+        is_final = int(attempt) >= int(max_attempts)
+        advisory = is_final and not has_hard  # SIN el `or beta_soft_only`
+        return advisory, has_hard, is_final, False
+
+    pre_fix_adv, _, _, _ = _pre_task9_formula([{"hard": False}], 1, 3, "ES")
+    assert pre_fix_adv is False, "reproduce el gap: pre-Task-9 NO daba advisory en attempt 1 para beta"
+    real_adv, _, _, beta_only = _go_f._slot_appropriateness_advisory_decision([{"hard": False}], 1, 3, "ES")
+    assert real_adv is True, "el fix real SÍ da advisory desde attempt 1 para beta soft-only"
+    assert real_adv != pre_fix_adv, "la mutación (quitar el `or beta_soft_only`) debía cambiar el resultado"

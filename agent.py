@@ -1623,7 +1623,13 @@ def swap_meal(form_data: dict, surface: str = "individual"):
         swap_dislikes = tuple([d.lower() for d in dislikes]) if dislikes else ()
         swap_diet = diet_type.lower() if diet_type else ""
         
-        filtered_p, filtered_c, filtered_v, _ = _get_fast_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet)
+        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, j · T5-parked)] `_swap_country` ya derivado
+        # arriba (T3, línea ~1071) por closure — reusado, no re-derivado. Antes este call site
+        # SIEMPRE usaba el pool RD (default None de _get_fast_filtered_catalogs) sin importar el
+        # país real del usuario beta.
+        filtered_p, filtered_c, filtered_v, _ = _get_fast_filtered_catalogs(
+            swap_allergies, swap_dislikes, swap_diet, country=_swap_country
+        )
         
         # Excluir ingredientes del plato rechazado
         rejected_lower = rejected_meal.lower()

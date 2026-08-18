@@ -6966,6 +6966,7 @@ def api_swap_meal_persist(
         _micro_form = {}
         _persist_allergies: list = []
         _persist_diet = None
+        _swap_country = "DO"
         try:
             from db import get_user_profile as _gup_micro
             _hp_micro = (_gup_micro(verified_user_id) or {}).get("health_profile") or {}
@@ -6994,11 +6995,26 @@ def api_swap_meal_persist(
                 "allergies": [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()],
                 "dietType": _hp_micro.get("dietType") or _hp_micro.get("diet_type"),
                 "dislikes": _hp_micro.get("dislikes") or [],
+                # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g · MUTATOR-PURITY)] Mismo campo
+                # crudo que `_enrich_clinical_from_profile` (F2a) hidrata para swap_meal —
+                # `hp.get('country')` viaja SIN canonicalizar (`country_for_form_data` es la
+                # ÚNICA puerta de canonicalización, T1). Se lee AQUÍ, antes del lock, porque
+                # `_swap_mutator` corre DENTRO del `SELECT...FOR UPDATE` de
+                # `update_plan_data_atomic` y P2-MUTATOR-PURITY prohíbe reentrar al pool ahí.
+                "country": _hp_micro.get("country"),
             }
             # [P0-SWAP-PERSIST-CLINICAL · 2026-07-01] Alergias + dieta del PERFIL (server-side) para el
             # backstop clínico de abajo — nunca del body del cliente (espejo de I2 / P0-UPDATE-CLINICAL-GUARD).
             _persist_allergies = [str(a).strip() for a in (_hp_micro.get("allergies") or []) if str(a).strip()]
             _persist_diet = _hp_micro.get("dietType") or _hp_micro.get("diet_type")
+            # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] Resuelto UNA vez aquí (fuera del
+            # lock, patrón `_micro_form`) y capturado por closure en `_swap_mutator` — cierra el
+            # gap disclosed en T4 fix-round 1 (docs/country_system_f1.md, "MUTATOR-PURITY").
+            # `country_for_form_data` es pure-compute (no toca DB), pero el VALOR que consume
+            # (`_micro_form['country']`) solo existe tras el SELECT de arriba — de ahí que se
+            # derive aquí y no como default de parámetro.
+            from constants import country_for_form_data as _cffd_swap
+            _swap_country = _cffd_swap(_micro_form)
         except Exception as _micro_form_e:
             logger.debug(f"[P2-SWAP-MICROS-STALE] no se pudo hidratar _micro_form: {_micro_form_e}")
 
@@ -7136,15 +7152,17 @@ def api_swap_meal_persist(
                     # protagonista deja de declinar aquí. Sin él llevaba inerte desde
                     # P1-PROTAGONIST-CONTEXT-GATE en el ÚNICO round-trip que persiste el swap.
                     _fin_sp(new_meal, db=_fdb_sp, pantry_strict=_ps_sp, allergies=_persist_allergies,
-                            day_kcal_target=_dkt_sp(plan_data.get("macros")))
+                            day_kcal_target=_dkt_sp(plan_data.get("macros")), country=_swap_country)
                     _tu_sp(new_meal, _fdb_sp)
                     try:
-                        # [P1-COUNTRY-SYSTEM-F1 EXENTO: T4 fix-round 1 finding, no cerrado — este
-                        # call site corre DENTRO de update_plan_data_atomic's SELECT...FOR UPDATE
-                        # (P2-MUTATOR-PURITY prohíbe reentrar al pool aquí para resolver el país del
-                        # perfil); requiere pre-fetch antes del lock + threading por el closure de
-                        # _swap_mutator — real, acotado, no hecho en esta fase. country default 'DO'.]
-                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""))
+                        # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g)] CERRADO — `_swap_country`
+                        # se resolvió ANTES del lock (closure, ver hidratación de `_micro_form`
+                        # arriba) y viaja aquí aunque este call site corra DENTRO del
+                        # SELECT...FOR UPDATE de `update_plan_data_atomic`. Antes: T4 fix-round 1
+                        # dejaba este site EXENTO (país default 'DO' incondicional) porque
+                        # P2-MUTATOR-PURITY prohíbe reentrar al pool DENTRO del lock — la lectura
+                        # de perfil sigue prohibida ahí, pero el VALOR ya resuelto no lo está.
+                        _slot_viols_sp = _slot_sp(new_meal, str(new_meal.get("meal") or ""), country=_swap_country)
                         if _slot_viols_sp:
                             new_meal["_slot_advisory"] = True
                     except Exception:
@@ -11018,10 +11036,17 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # veg-guard del finalizer NO inyecte un alérgeno (el /recalculate corre sin backstop posterior).
             # Best-effort fail-open a [] (sin alergias conocidas el filtro es no-op, como pre-fix).
             _rc_allergies = []
+            _recalc_country = "DO"
             try:
                 from db import get_user_profile as _gup_rc
                 _hp_rc = (_gup_rc(user_id) or {}).get("health_profile") or {}
                 _rc_allergies = [str(a).strip() for a in (_hp_rc.get("allergies") or []) if str(a).strip()]
+                # [P1-COUNTRY-SYSTEM-F2 · 2026-08-17 (Task 9, g · MUTATOR-PURITY)] Mismo pre-fetch
+                # ANTES de cualquier lock (patrón `_micro_form` de /swap-meal/persist, ya aplicado
+                # arriba en este mismo pre-fetch de perfil) — cierra el 2º call site país-blind
+                # que docs/country_system_f1.md ("Parqueado para Fase 2") dejó disclosed.
+                from constants import country_for_form_data as _cffd_rc
+                _recalc_country = _cffd_rc({"country": _hp_rc.get("country")})
             except Exception as _rc_al_e:
                 logger.debug(f"[P0-VEG-GUARD-ALLERGEN] no se pudo hidratar alergias en /recalculate: {_rc_al_e}")
             _rc_fixed = 0
@@ -11032,7 +11057,8 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             for _d in (plan_data.get("days") or []):
                 for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
                     if isinstance(_m, dict):
-                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False)
+                        _rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False,
+                                                 country=_recalc_country)
             if _rc_fixed:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_rc_fixed} fix(es) de coherencia de receta en /recalculate (lista canónica)")
         except Exception as _rc_fin_e:
