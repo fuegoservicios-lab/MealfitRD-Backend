@@ -801,7 +801,9 @@ def is_baking_pantry_staple(name) -> bool:
 # NUNCA `is_country_catalog_unpriced_item` (ni su hermano `is_baking_pantry_staple`, el mismo
 # blind spot desde P1-BAKING-STAPLES · 2026-07-01, 6 semanas antes de que Fase 2 existiera).
 # Confirmado en vivo dos veces (Task 10 §5, QA con LLM real): "Tortilla de maíz"/MX y "Recao"/PR
-# producen `[VERIFIED-ONLY-GUARD-BLIND]` + `[COH-GUARD/warn] ... [aggregated_only]` — WARN
+# producen el WARN GUARD-BLIND de verified-only + `[COH-GUARD/warn] ... [aggregated_only]` — WARN
+# (marker citado SIN corchetes a propósito: test_guard_blind_whitelists_water ancla con .index()
+# al PRIMER literal del marker y debe seguir cayendo en el código real, no en este comentario.)
 # espurio ("ausente de la lista de compras sin aviso" cuando SÍ está, solo sin precio), no un
 # block. Pre-existente, de severidad baja, NO cerrado por esta ola (comparte función con 89+24+18
 # tests en 3 archivos — cerrarlo bien necesita su propia ronda TDD, ver reporte de Task 10 §5).
