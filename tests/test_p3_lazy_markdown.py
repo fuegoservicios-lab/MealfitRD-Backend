@@ -116,12 +116,6 @@ def test_message_bubble_uses_lazy_wrapper():
     )
 
 
-def test_chat_widget_uses_lazy_wrapper():
-    p = _FRONTEND_SRC / "components" / "dashboard" / "ChatWidget.jsx"
-    src = p.read_text(encoding="utf-8")
-    assert "LazyMarkdown" in src and "<LazyMarkdown>" in src
-    assert "<ReactMarkdown>" not in src
-
 
 def test_agent_page_dead_import_removed():
     p = _FRONTEND_SRC / "pages" / "AgentPage.jsx"
@@ -137,3 +131,10 @@ def test_agent_page_dead_import_removed():
 def test_anchor_present_in_test_file():
     src = Path(__file__).read_text(encoding="utf-8")
     assert "P3-LAZY-MARKDOWN" in src
+
+# [P2-CODIGO-MUERTO · 2026-08-18] Las comprobaciones sobre `ChatWidget.jsx` se
+# retiraron con el componente. Estaba INALCANZABLE desde produccion: cero
+# imports fuera de tests, y su cadena exclusiva no aparecia en `dist/` (lo unico
+# que casaba en el bundle era `HelpChatWidget`, que es otro componente vivo).
+# Los tests que quedan siguen cubriendo el RESTO de ficheros de su lista: se
+# quito un sujeto muerto, no una garantia.
