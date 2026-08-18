@@ -1,3 +1,12 @@
+# [P2-SUPPLY-CHAIN 2026-08-18] Acciones fijadas por SHA, no por tag.
+#
+# Un tag como `@v4` es un puntero MUTABLE: quien controle el repo de la accion
+# puede moverlo, y tu workflow —que corre con acceso al repo y a los secrets—
+# ejecutaria codigo distinto sin que cambie una linea aqui. Ha pasado de verdad
+# en el ecosistema (tj-actions/changed-files, marzo 2025). Un SHA no se mueve.
+#
+# El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
+# fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [P1-LIVE-2 · 2026-05-12] CI gate para MealfitRD.IA.
 #
 # Hasta que este workflow exista, el repo no tenía ejecución automática de
@@ -24,6 +33,12 @@
 
 name: CI
 
+# Permisos MINIMOS. Sin este bloque, el `GITHUB_TOKEN` hereda los del repo, que
+# suelen incluir escritura: un workflow que solo necesita leer codigo podria
+# empujar commits o publicar releases si algo que ejecuta se tuerce.
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["**"]
@@ -42,10 +57,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -74,10 +89,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
           cache: npm
@@ -97,10 +112,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
           cache: npm
@@ -141,10 +156,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: "20"
           cache: npm

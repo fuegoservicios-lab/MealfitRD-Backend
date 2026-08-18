@@ -1,3 +1,12 @@
+# [P2-SUPPLY-CHAIN 2026-08-18] Acciones fijadas por SHA, no por tag.
+#
+# Un tag como `@v4` es un puntero MUTABLE: quien controle el repo de la accion
+# puede moverlo, y tu workflow —que corre con acceso al repo y a los secrets—
+# ejecutaria codigo distinto sin que cambie una linea aqui. Ha pasado de verdad
+# en el ecosistema (tj-actions/changed-files, marzo 2025). Un SHA no se mueve.
+#
+# El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
+# fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [gap-audit G13 · 2026-06-15 · relocado P2-NIGHTLY-WORKFLOW-RELOCATE 2026-06-18] Job NIGHTLY de
 # no-regresión de precisión de macros.
 #
@@ -17,6 +26,12 @@
 # G4/G6, refrescar macro_baseline.json con una corrida N=20 y bajar las tolerancias.
 name: macro-benchmark-nightly
 
+# Permisos MINIMOS. Sin este bloque, el `GITHUB_TOKEN` hereda los del repo, que
+# suelen incluir escritura: un workflow que solo necesita leer codigo podria
+# empujar commits o publicar releases si algo que ejecuta se tuerce.
+permissions:
+  contents: read
+
 on:
   schedule:
     - cron: "0 7 * * *"   # 03:00 America/Santo_Domingo (UTC-4) aprox.
@@ -35,7 +50,7 @@ jobs:
       MEALFIT_MACRO_AWARE_RECONCILE: "true"
       MEALFIT_MACRO_POSTQUANT_RECONCILE: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Guard — skip si no hay secrets configurados
         id: guard
         # [P2-NIGHTLY-BENCH-ACTIVATE · 2026-07-02] Skip RUIDOSO: antes el auto-skip era un ::notice
@@ -59,7 +74,7 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         if: steps.guard.outputs.skip == 'false'
         with:
           python-version: "3.12"

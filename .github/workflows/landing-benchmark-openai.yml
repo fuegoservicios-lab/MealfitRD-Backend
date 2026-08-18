@@ -1,3 +1,12 @@
+# [P2-SUPPLY-CHAIN 2026-08-18] Acciones fijadas por SHA, no por tag.
+#
+# Un tag como `@v4` es un puntero MUTABLE: quien controle el repo de la accion
+# puede moverlo, y tu workflow —que corre con acceso al repo y a los secrets—
+# ejecutaria codigo distinto sin que cambie una linea aqui. Ha pasado de verdad
+# en el ecosistema (tj-actions/changed-files, marzo 2025). Un SHA no se mueve.
+#
+# El comentario `# vN` de cada linea es a que tag apuntaba ese SHA el dia que se
+# fijo. Para actualizarlas: Dependabot abre el PR con el SHA nuevo.
 # [P1-LANDING-BENCH-1 · 2026-08-07] Corrida on-demand del benchmark del landing con la
 # corrida FORZADA a OpenAI (gpt-5.6, cero DeepSeek) — `scripts/landing_benchmark.py live
 # --provider openai`. Los perfiles de la matriz corren como user_id=guest (cuenta de
@@ -17,6 +26,12 @@
 # Trigger doble: workflow_dispatch (corrida manual con inputs) + push del PROPIO archivo en la
 # rama del P-fix (primera corrida automática al aterrizar el workflow, con el mismo guard).
 name: landing-benchmark-openai
+
+# Permisos MINIMOS. Sin este bloque, el `GITHUB_TOKEN` hereda los del repo, que
+# suelen incluir escritura: un workflow que solo necesita leer codigo podria
+# empujar commits o publicar releases si algo que ejecuta se tuerce.
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
@@ -47,7 +62,7 @@ jobs:
       NEON_DATABASE_URL_POOLED: ${{ secrets.NEON_DATABASE_URL_POOLED }}
       MEALFIT_DB_BACKEND: neon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Guard — skip RUIDOSO si faltan secrets
         id: guard
         run: |
@@ -71,7 +86,7 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         if: steps.guard.outputs.skip == 'false'
         with:
           python-version: "3.12"
@@ -98,7 +113,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Publicar reporte como artifact
         if: always() && steps.guard.outputs.skip == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: landing-benchmark-openai
           path: |
