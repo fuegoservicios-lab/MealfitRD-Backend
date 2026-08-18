@@ -1631,7 +1631,10 @@ def test_jamon_serrano_no_se_dropea_en_silencio_via_unpriced_keep(sc, monkeypatc
     assert jamon.get("estimated_cost_rd") is None, (
         "'Jamón serrano' no debe llevar un costo RD inventado"
     )
-    assert jamon.get("display_category") == "CATÁLOGO SIN PRECIO"
+    # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo REAL del súper, no el label interno
+    # 'CATÁLOGO SIN PRECIO' que se filtraba al PDF (el estado beta lo cuenta el banner).
+    # 'Proteínas' es la categoría de la fila viva en master_ingredients.
+    assert jamon.get("display_category") == "Proteínas"
 
 
 @pytest.mark.e2e
@@ -2503,7 +2506,8 @@ def test_tortilla_de_maiz_knob_encendido_sobrevive_como_catalogo_sin_precio(sc, 
     tortilla = next((it for it in items if it.get("name") == "Tortilla de maíz"), None)
     assert tortilla is not None, "con el knob encendido, 'Tortilla de maíz' debe sobrevivir"
     assert tortilla.get("estimated_cost_rd") is None
-    assert tortilla.get("display_category") == "CATÁLOGO SIN PRECIO"
+    # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo real del master (era el label interno).
+    assert tortilla.get("display_category") == "Despensa"
 
 
 @pytest.mark.e2e
@@ -3414,7 +3418,16 @@ def test_filas_pais_sobreviven_como_si_mismas_bajo_catalogo_sin_precio_fix_round
         f"o dropeado por canonicalize_shopping_food_name. nombres presentes: "
         f"{[it.get('name') for it in items]}"
     )
-    assert item.get("display_category") == "CATÁLOGO SIN PRECIO", (
+    # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] La prueba de que pasó por la rama unpriced-keep es
+    # SOBREVIVIR bajo VERIFIED_ONLY=true SIN costo inventado; la categoría ahora es el pasillo
+    # real del master (con fallback al label histórico si el lookup no resuelve).
+    assert item.get("estimated_cost_rd") is None, (
+        f"{nombre!r} no debe llevar costo RD inventado (rama unpriced-keep)"
+    )
+    assert item.get("display_category") in (
+        "Despensa", "Frutas", "Lácteos", "Proteínas", "Vegetales", "Víveres",
+        "CATÁLOGO SIN PRECIO",
+    ), (
         f"{nombre!r} sobrevivió pero con categoría inesperada: {item.get('display_category')!r}"
     )
 
@@ -3821,7 +3834,9 @@ def test_hummus_sobrevive_en_el_agregador_real_como_catalogo_sin_precio(sc, monk
     items = result.get("items") if isinstance(result, dict) else result
     hummus_item = next((i for i in items if i.get("name") == "Hummus"), None)
     assert hummus_item is not None, "hummus no debe dropearse del agregador real"
-    assert hummus_item.get("display_category") == "CATÁLOGO SIN PRECIO"
+    # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] el ruling de Task 8 era «listar en vez de
+    # dropear» — el pasillo ahora es el REAL del master ('Despensa'), no el label interno.
+    assert hummus_item.get("display_category") == "Despensa"
     assert hummus_item.get("estimated_cost_rd") is None
 
 

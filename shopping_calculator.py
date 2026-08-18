@@ -876,6 +876,39 @@ def _country_catalog_unpriced_keep_enabled() -> bool:
     return _knob_env_bool("MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP", True)
 
 
+def _master_category_for_unpriced_item(name) -> "str | None":
+    """[P2-SHOPLIST-BETA-POLISH · 2026-08-18] Categoría REAL del master para un ítem
+    unpriced-keep, para que 'Acelgas' caiga en VEGETALES y 'Membrillo' en FRUTAS en vez
+    del pseudo-pasillo 'CATÁLOGO SIN PRECIO' (label interno que se filtraba al PDF del
+    usuario — un comprador agrupa por pasillo del súper, no por estado de precios del
+    catálogo; el estado beta lo cuenta el banner de la lista, una sola vez). Equality
+    accent/case-insensitive contra `get_master_ingredients()` (cacheado, TTL) con puente
+    de plural s/es — NO usa el mapa global de alias del chat (colapsa identidades a
+    propósito, P1-PANTRY-NAME-RESOLUTION; y dos guards de F2 prohíben que su nombre
+    aparezca siquiera en este archivo) ni re-implementa `normalize_name`. Solo corre
+    para los pocos ítems del branch unpriced-keep, nunca en el camino con precio.
+    `None` si no resuelve ⇒ el caller conserva el label histórico (fail-open display).
+    tooltip-anchor: P2-SHOPLIST-BETA-POLISH"""
+    try:
+        from constants import strip_accents
+        target = strip_accents(str(name or "").strip().lower())
+        if not target:
+            return None
+        variants = {target, target + "s", target + "es"}
+        if target.endswith("es"):
+            variants.add(target[:-2])
+        if target.endswith("s"):
+            variants.add(target[:-1])
+        for row in (get_master_ingredients() or []):
+            rn = strip_accents(str(row.get("name") or "").strip().lower())
+            if rn and rn in variants:
+                cat = str(row.get("category") or "").strip()
+                return cat or None
+    except Exception:
+        return None
+    return None
+
+
 def is_country_catalog_unpriced_item(name) -> bool:
     """True si `name` es uno de los alimentos de catálogo-país sin precio RD.
 
@@ -11967,12 +12000,16 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 weight_in_lbs = _COUNTRY_CATALOG_UNPRICED_DEFAULT_G / 453.592
                 has_weight = True
                 units = {}
-                display_cat = "CATÁLOGO SIN PRECIO"
+                # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo REAL del súper (Vegetales/
+                # Frutas/...) en vez del label interno 'CATÁLOGO SIN PRECIO' que se filtraba
+                # al PDF — ver docstring de `_master_category_for_unpriced_item`. Fallback al
+                # label histórico si el master no resuelve.
+                display_cat = _master_category_for_unpriced_item(name) or "CATÁLOGO SIN PRECIO"
                 logging.info(
                     f"🌍 [P1-COUNTRY-CATALOG-UNPRICED] '{name}' fuera del catálogo con precio pero es "
                     f"alimento de catálogo-país (sin precio RD a propósito, país beta) → listado como "
-                    f"~1 paquete (~{_COUNTRY_CATALOG_UNPRICED_DEFAULT_G:.0f}g, sin precio) en vez de "
-                    f"dropearlo."
+                    f"~1 paquete (~{_COUNTRY_CATALOG_UNPRICED_DEFAULT_G:.0f}g, sin precio) en "
+                    f"'{display_cat}' en vez de dropearlo."
                 )
             else:
                 # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
