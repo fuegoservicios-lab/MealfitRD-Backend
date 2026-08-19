@@ -135,7 +135,7 @@ def test_return_pattern_before_navigate():
 
     # Patrón: dentro del bloque hay un `if (...mealfit_plan_in_progress...)) return;`
     guard = re.search(
-        r"if\s*\(\s*localStorage\.getItem\(['\"]mealfit_plan_in_progress['\"]\)\s*\)\s*return",
+        r"if\s*\(\s*(?:localStorage\.getItem|safeLocalStorageGet)\(['\"]mealfit_plan_in_progress['\"][^)]*\)\s*\)\s*return",  # [re-anclado 2026-08-18: wrapper seguro]
         block,
     )
     assert guard, (

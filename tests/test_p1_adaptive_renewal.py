@@ -100,8 +100,17 @@ def test_frontend_checkin_gates_sse():
     i_process = src.find("processPlan();")
     assert 0 < i_gate < i_process, "el gate corre ANTES de disparar el SSE"
     assert "[loadingSensitive, checkinPending]" in src, "deps re-disparan al cerrar el check-in"
-    assert "mealfit_plan_in_progress" in src.split("checkinPending")[1][:1200] or \
-        "localStorage.getItem('mealfit_plan_in_progress')" in src, "recovery bypassa el modal"
+    # [re-anclado 2026-08-18] La PROPIEDAD: el INITIALIZER de checkinPending consulta el
+    # flag de pipeline pendiente (recovery ⇒ no modal). La forma vieja anclaba una ventana
+    # de 1200 chars tras la 1ª mención de checkinPending + el literal localStorage.getItem;
+    # el refactor a safeLocalStorageGet + comentarios nuevos en el mismo archivo rompieron
+    # AMBAS mitades con la conducta intacta (Plan.jsx:833). Anchor al initializer real.
+    _i_init = src.find("const [checkinPending, setCheckinPending] = useState(")
+    assert _i_init > 0, "no se encontró el initializer de checkinPending"
+    assert "mealfit_plan_in_progress" in src[_i_init:_i_init + 1500], (
+        "el initializer de checkinPending ya no consulta mealfit_plan_in_progress — "
+        "recovery bypassa el modal"
+    )
     assert "!isGuest" in src, "guests no ven el check-in (endpoint requiere auth)"
 
 
