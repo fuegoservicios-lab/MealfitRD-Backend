@@ -8,10 +8,18 @@
 -- proteina, no 10.3: la fila sobreestimaba proteina ~3x, en tráfico dominicano real
 -- y en la columna que MAS pesa en el portion_solver.
 --
--- Y la procedencia estaba muerta: `GET /fdc/v1/food/330137` devuelve **HTTP 404** —
--- el id ya no existe en USDA, asi que nadie podia re-verificar la fila contra la
--- fuente ni aunque quisiera. Un fdc_id compartido por dos alimentos distintos es la
--- senal; que ademas este muerto es la prueba de que nada re-valida la procedencia.
+-- [CORRECCION · 2026-08-19, mismo dia] La version original de este comentario decia
+-- que la procedencia estaba MUERTA porque `GET /fdc/v1/food/330137` devuelve HTTP 404.
+-- El 404 es real, la conclusion era FALSA: 330137 es un registro de tipo `Foundation`,
+-- y el endpoint de DETALLE no sirve ese tipo — el BUSCADOR si lo conoce, y devuelve
+-- «Yogurt, Greek, plain, nonfat» con los macros exactos de la fila. El id esta vivo;
+-- lo que estaba mal era mi sonda. Un barrido posterior de los 288 fdc_id del catalogo
+-- confirmo CERO ids muertos: los 8 sospechosos eran los 7 `Foundation` + uno que fallo
+-- transitoriamente.
+--
+-- Lo que SI era cierto, y es lo que esta migracion arregla, no cambia: `Yogurt` (alias
+-- literal «yogurt regular») y `Yogurt griego sin azucar` compartian fdc_id y tenian
+-- valores BYTE-IDENTICOS, y los de la fila generica eran los del griego.
 -- (Auditoria completa de los 20 grupos con fdc_id compartido: ver
 -- docs/superpowers/plans/2026-08-19-catalogo-metadata-beta.md §3.)
 --
@@ -22,9 +30,9 @@
 --   Atwater: 4(3.47) + 4(4.66) + 9(3.25) = 61.77 vs 61.0 declaradas = 1.3% de
 --   divergencia, muy por debajo del 12% que los scripts de alta marcan.
 --
--- La fila del GRIEGO no se toca aqui: sus valores son un perfil griego 0% plausible
--- y correcto. Lo unico malo que le queda es el fdc_id muerto, y eso pertenece a la
--- auditoria de procedencia, no a este arreglo.
+-- La fila del GRIEGO no se toca aqui: sus valores son un perfil griego 0% plausible y
+-- correcto, y conserva legitimamente el fdc 330137 — que, corregida la sonda, resulta
+-- ser justo «Yogurt, Greek, plain, nonfat».
 --
 -- RESIDUAL DECLARADO: omega3_ala_g_per_100g se deja en 0.007 (heredado del proxy
 -- griego) porque SR Legacy no reporta el nutriente 851 para fdc 171284. Un yogur

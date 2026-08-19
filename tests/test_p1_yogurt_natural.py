@@ -6,9 +6,11 @@ Diagnóstico en Neon prod (2026-08-19): `Yogurt` (alias literal `yogurt regular`
 natural entero ronda 3.5 g de proteína: la fila sobreestimaba proteína ~3x, en tráfico
 dominicano real y en la columna que más pesa en el `portion_solver`.
 
-Y `GET /fdc/v1/food/330137` devuelve **HTTP 404**: el id ya no existe en USDA. Nadie
-podía re-verificar la fila contra su fuente aunque quisiera. Es la prueba de que la
-procedencia se pudre en silencio mientras nada la re-valida.
+CORRECCIÓN del mismo día: la primera versión de este test afirmaba que el `fdc_id`
+viejo (330137) estaba MUERTO porque `/fdc/v1/food/330137` devuelve 404. El 404 es real,
+la conclusión era falsa — 330137 es de tipo `Foundation` y el endpoint de detalle no
+sirve ese tipo; el buscador sí lo conoce. Un barrido de los 288 ids del catálogo dio
+**cero muertos**. *Un 404 dice que tu petición falló, no que la cosa no exista.*
 
 Parser-based a propósito (no toca DB): el gate deselecciona los tests `e2e`, así que un
 test contra Neon no correría y sería un guard incapaz de fallar.
@@ -51,13 +53,20 @@ def test_apunta_al_fdc_vivo_y_no_al_muerto():
     assert re.search(r"fdc_id\s*=\s*171284", sql)
     # 330137 puede citarse en la prosa (es el diagnóstico), pero NO asignarse.
     assert not re.search(r"fdc_id\s*=\s*330137", sql), (
-        "no se puede volver a asignar el fdc_id muerto (HTTP 404)")
+        "el fdc_id viejo apuntaba al GRIEGO: no puede volver a asignarse a la fila natural")
 
 
-def test_documenta_que_el_fdc_viejo_devuelve_404():
-    """Si alguien borra esa nota, el siguiente lector no entiende por qué se cambió
-    de id y puede 'restaurarlo' creyendo que corrige una regresión."""
-    assert "404" in _sql(), "la migración debe dejar constancia de que 330137 está muerto"
+def test_documenta_la_correccion_sobre_el_404():
+    """La migración debe conservar la CORRECCIÓN, no la afirmación original.
+
+    Si alguien borra esta nota, el siguiente lector puede volver a concluir que un 404
+    del endpoint de detalle significa «el id no existe» — y ese razonamiento ya produjo
+    una afirmación falsa en esta misma migración."""
+    sql = _sql()
+    assert "CORRECCION" in sql or "CORRECCIÓN" in sql, (
+        "la migración debe conservar la corrección sobre el 404")
+    assert "Foundation" in sql, (
+        "debe quedar escrito POR QUÉ el detalle devolvía 404: es un registro Foundation")
 
 
 def test_corrige_los_azucares_imposibles():
@@ -67,8 +76,8 @@ def test_corrige_los_azucares_imposibles():
 
 
 def test_no_toca_la_fila_del_griego():
-    """Los valores del griego son un perfil 0% plausible y correcto. Lo único malo
-    que le queda es el fdc_id muerto, y eso pertenece a la auditoría de procedencia."""
+    """Los valores del griego son un perfil 0% correcto y conserva legítimamente su
+    fdc 330137, que —corregida la sonda— es «Yogurt, Greek, plain, nonfat»."""
     sql = _sql()
     updates = re.findall(r"UPDATE public\.master_ingredients SET(.*?);", sql, re.S)
     for u in updates:

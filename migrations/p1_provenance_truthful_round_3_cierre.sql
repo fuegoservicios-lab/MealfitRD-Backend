@@ -74,17 +74,19 @@ BEGIN
 END $$;
 
 -- == Sanity 3: ninguna referencia usa un sentinel ni sale de formato ==============
--- AGNOSTICO DE FUENTE a proposito: la lista cerrada de `usda|bedca` habria rechazado la
--- primera referencia `tcac:` (P1-LATINFOODS-TCAC) y convertido re-ejecutar esta
--- migracion en un fallo espurio. Lo que este sanity debe garantizar es que la referencia
--- tenga FORMA de procedencia (`<fuente>:<id>[ (detalle)]`), no que la fuente este en una
--- lista que caduca cada vez que se anade una tabla nacional.
+-- AGNOSTICO DE FUENTE **Y DE FORMATO DEL ID**, tras estorbar TRES veces: primero la
+-- lista cerrada `usda|bedca` rechazaba `tcac:` (P1-LATINFOODS-TCAC), y luego exigir
+-- `[0-9]+` rechazaba `sinonimo:Queso ricotta` (P1-CATALOGO-SINONIMOS), cuyo «id» es un
+-- nombre. La leccion: este sanity estaba SOBRE-ESPECIFICADO. Lo que de verdad hay que
+-- impedir — que un mensaje de error acabe en la columna de procedencia — ya lo cubre el
+-- sanity de sentinels de la ronda 2, que mira el CONTENIDO. Aqui basta con exigir que
+-- haya una fuente y algo detras.
 DO $$
 DECLARE _raras int;
 BEGIN
     SELECT COUNT(*) INTO _raras FROM public.master_ingredients
     WHERE nutrition_source_ref IS NOT NULL
-      AND nutrition_source_ref !~ '^[a-z]+:[0-9]+( \(.+\))?$';
+      AND nutrition_source_ref !~ '^[a-z]+:\S.*$';
     IF _raras > 0 THEN
         RAISE EXCEPTION '[P1-PROVENANCE-TRUTHFUL r3] % referencias fuera de formato', _raras;
     END IF;

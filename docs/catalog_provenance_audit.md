@@ -11,8 +11,13 @@ Dos hallazgos estructurales antes del detalle:
 
 1. **47 de 347 filas comparten `fdc_id` con otra fila** (20 grupos). Una fila de USDA
    haciendo de sustituto de varios alimentos.
-2. **`fdc 330137` devuelve HTTP 404.** El id ya no existe en USDA. Nada re-valida los
-   `fdc_id`, así que la procedencia se pudre en silencio y nadie se entera.
+2. ~~**`fdc 330137` devuelve HTTP 404.** El id ya no existe en USDA.~~ **CORREGIDO el
+   mismo día:** el 404 es real pero la conclusión era falsa. `330137` es de tipo
+   `Foundation`, y el endpoint de *detalle* de USDA no sirve ese tipo — el *buscador* sí
+   lo conoce, con la descripción y los macros correctos. Un barrido posterior de los
+   **288 `fdc_id` del catálogo dio CERO ids muertos**. La lección que queda no es sobre
+   los datos sino sobre la sonda: *un 404 dice que tu petición falló, no que la cosa no
+   exista* — y los 7 falsos positivos eran exactamente los 7 registros `Foundation`.
 
 ## Las dos clases (no confundirlas: el arreglo es distinto)
 
@@ -41,7 +46,7 @@ Dos hallazgos estructurales antes del detalle:
 | 171714 | 103 kcal | Chontaduro, Panapén | beta |
 | 173443 | 136 kcal | Crema mexicana, Suero costeño | beta |
 | 173944 | *Bananas, raw* · 89 kcal | Guineo, Guineo verde | **DO** |
-| 330137 | **HTTP 404** | Yogurt, Yogurt griego sin azúcar | **DO** |
+| 330137 | *Yogurt, Greek, plain, nonfat* (`Foundation`) | Yogurt, Yogurt griego sin azúcar | **DO** |
 
 No todos son igual de graves. **`Queso ricotta` / `Requesón` son de hecho el mismo
 alimento con dos nombres** — ahí el problema no es el dato sino que existan dos filas en
