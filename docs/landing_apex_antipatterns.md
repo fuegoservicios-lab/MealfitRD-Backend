@@ -41,5 +41,23 @@ en sus propios ficheros y siguen intactos.
 [P1-APEX-PRECACHE-BLIND · 2026-08-14] El precache excluía 237 KiB gz que el apex tiene PROHIBIDO ejecutar (replay, SDK de auth, markdown): el filtro miraba NOMBRES DE PÁGINA y esos son chunks `index-<hash>` anónimos — no se equivocaba, no podía verlos. Ahora se clasifica por **marcador de paquete** (`precacheAudience.mjs`), no por dominancia: `@sentry/core` diluye el chunk de replay y una regla de volumen NO lo atrapa. **No quites `manifestTransforms` de vite.config.js** — `globIgnores` no puede casar nombres hasheados. Guard de peso en `postbuild`. 721,7→485,4 KiB gz. Tests test_p1_apex_precache_blind.py, test_p1_ci_gate_passable.py.
 
 
+[P1-ARTEFACTO-INDEPENDIENTE-DEL-SISTEMA · 2026-08-19] Las escrituras de texto del build del apex fijan el salto de línea EXPLÍCITAMENTE, y `.gitattributes` impone `eol=lf` a todo el texto (no sólo a los `.sh`). Sin las dos mitades, `write_text` en Windows mete CRLF y **el mismo commit produce un artefacto distinto según la máquina** —`404.html`: 9.071 bytes vs 8.932—: el manifiesto calculado en Windows no puede coincidir NUNCA con un checkout de CI, y como el despliegue empaqueta el árbol de trabajo, producción sirve los bytes de un portátil. La promesa «dos builds del mismo commit dan el mismo artefacto» sólo era cierta DENTRO de una máquina.
+
+
+[P1-SITEMAP-CLON-SUPERFICIAL · 2026-08-19] El checkout del CI del apex necesita `fetch-depth: 0`. **En un clon superficial `git log -1 -- <fichero>` NO falla**: responde la fecha de HEAD para TODOS, así que los `lastmod` salen idénticos y falsos —exactamente el defecto que `sitemap.py` dice haber venido a cerrar— sin disparar ningún `except`. `_historia_completa()` aborta el build antes de escribir: un sitemap con fechas falsas se publica y se indexa sin ninguna señal, porque el fichero es válido. Comprueba la CAUSA (el clon) y no el síntoma (fechas iguales): un sitio recién creado las tendría legítimamente iguales.
+
+
+[P3-BROTLI-PREGENERADO · 2026-08-19] `brotli_static on` sirve el `.br` de al lado **sin comprobar que corresponda**, así que la pre-compresión va como ÚLTIMO paso del build (después de los tres sellados de la portada) y `scripts/brotli-fiel.mjs` exige que cada `.br` descomprima EXACTO a su original —más que HAYA alguno, o borrar la compresión dejaría el guard verde sobre cero ficheros—. Comprimir antes de la última mutación falla para quien habla brotli (casi todos) y funciona para quien lo comprueba con `curl`. Ganancia medida sobre el cable: **10,4%**, no el 12,2% que el README proyectaba.
+
+
+[P3-HUELLA-TAMBIEN-LA-PRIMERA · 2026-08-19] `SELLO_RE` casa la referencia LLEVE O NO `?v=`. Pedía la huella en el patrón, así que **un resellador que sólo reconoce lo ya sellado no puede poner el primero**: once ficheros del hero (~1 MB) llevaban meses revalidándose cada 5 minutos porque nunca la tuvieron. NO sella la `og:image` (URL absoluta para rastreadores sociales: cero caché que ganar) ni las fuentes (ruta relativa desde el CSS minificado).
+
+
+[P1-NGINX-RECONSTRUIBLE · 2026-08-19] La autoridad sobre qué configuración vive es **`nginx -T`, no un listado de directorio**: `/etc/nginx` guarda señuelos —`sites-available/mealfit` es la era mealfitrd.com, 195 líneas contra las 694 vivas— y comparar contra el disco produce alarmas falsas. `infra/verificar-nginx.sh` lo comprueba en las dos direcciones y lleva un CONTADOR DE COBERTURA, porque sin él un bucle que muere a la primera iteración es indistinguible de uno que no tenía más trabajo (pasó: revisó 1 de 6 y dijo «TODO OK»; el `ssh` de dentro del bucle heredó stdin).
+
+
+[P1-VERDAD-PUBLICA · 2026-08-19] Las afirmaciones ya medidas como FALSAS no vuelven al sitio: tabla en `verdad-publica.json` con la medición que refuta cada fila, aplicada por `scripts/verdad-publica.mjs`. Va en DOS direcciones —prohibe lo refutado y EXIGE lo omitido— porque sin la segunda mitad borrar la frase entera es la forma más fácil de ponerlo en verde. Los textos legales existen DOS veces (landing + `LegalPages.jsx`, ambos públicos) y nada los sincroniza: el guard gemelo del repo de React es `legal_verdad_publica.test.js`.
+
+
 Plan de producción del landing (25 gaps, 0 P0, 3 P1): [`docs/superpowers/specs/2026-08-14-landing-produccion-design.md`](docs/superpowers/specs/2026-08-14-landing-produccion-design.md).
 
