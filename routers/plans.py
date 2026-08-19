@@ -7041,9 +7041,16 @@ def api_swap_meal_persist(
         _persist_allergies: list = []
         _persist_diet = None
         _swap_country = "DO"
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] locale del usuario para el despacho de
+        # re-enriquecimiento post-persist (abajo, fuera del lock). Se hidrata del MISMO
+        # round-trip que `_micro_form` (`_gup_micro(verified_user_id)` ya trae `locale`
+        # como columna top-level de `user_profiles` — cero I/O extra).
+        _swap_locale = None
         try:
             from db import get_user_profile as _gup_micro
-            _hp_micro = (_gup_micro(verified_user_id) or {}).get("health_profile") or {}
+            _full_profile_micro = _gup_micro(verified_user_id) or {}
+            _hp_micro = _full_profile_micro.get("health_profile") or {}
+            _swap_locale = _full_profile_micro.get("locale")
             # [P1-MICRO-CLINICAL-FREETEXT · 2026-07-01] merge estilo P1-FORM-6: el free-text clínico
             # (otherConditions) se pliega en medicalConditions → el renal-skip del closer y el techo
             # K≤3000 del panel ven un "ERC" declarado a mano; otherMedications alimenta el detector
@@ -7495,6 +7502,17 @@ def api_swap_meal_persist(
                 plan_data, verified_user_id, surface="swap_persist", plan_id_hint=plan_id
             )
 
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] DELETE-on-write (spec "Invalidación"): el
+            # meal persistido pierde CUALQUIER `_display` heredado — stale display imposible
+            # por construcción. Pop AL FINAL del mutator (no justo tras `meals[meal_index] =
+            # new_meal` arriba): si algún paso intermedio (finalize/closer/reconcile, todos
+            # entre esa asignación y aquí) reescribiera `meals[meal_index]` o copiara
+            # `_display` de vuelta, un pop temprano no lo protegería. `new_meal` normalmente
+            # NO trae `_display` (el cliente/LLM no lo genera hoy) — este pop es el contrato
+            # LEGIBLE explícito de la spec, no una defensa contra un vector conocido hoy.
+            if isinstance(meals[meal_index], dict):
+                meals[meal_index].pop("_display", None)
+
             return plan_data
 
         # [P2-VEG-VOLUME-TOKENS-2 · 2026-08-01] warm-up fuera del FOR UPDATE (P2-MUTATOR-PURITY):
@@ -7523,6 +7541,20 @@ def api_swap_meal_persist(
             raise HTTPException(
                 status_code=404, detail="Plan no encontrado"
             )
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist (FUERA del
+        # lock): el DELETE-on-write de arriba dejó el meal swapeado sin `_display` — si el
+        # usuario lee el dashboard en otro idioma, re-enriquecer SOLO el día tocado
+        # (`day_indices=[day_index]`). `schedule_plan_display_enrichment` ya no-opea sola
+        # para es-DO/locale inválido/knob off — el guard `_swap_locale != "es-DO"` de aquí
+        # es solo para evitar el import+thread cuando es obviamente innecesario.
+        try:
+            if _swap_locale and _swap_locale != "es-DO":
+                from plan_display_i18n import schedule_plan_display_enrichment
+                schedule_plan_display_enrichment(
+                    plan_id, verified_user_id, _swap_locale, day_indices=[day_index]
+                )
+        except Exception as _p1i18n_sw_e:
+            logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-swap] dispatch no-op: {_p1i18n_sw_e}")
         # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido: el usuario
         # CONFIRMÓ el reemplazo (persistió). Solo registra si cambió la proteína principal
         # (anti-ruido — si la mantuvo, el swap no era sobre ella). Fail-open, best-effort.
@@ -8457,6 +8489,12 @@ def api_regenerate_day(
         new_meals: list = []
         regenerated = 0
         slots_kept: list = []
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Paralelo posicional a `new_meals`: True en
+        # el índice de cada slot efectivamente REGENERADO (meal nuevo del LLM) — los slots
+        # CONSERVADOS quedan False (no fueron mutados; su `_display` heredado sigue siendo
+        # válido y NO se toca — delete-on-write aplica a "meal mutado", no al día entero).
+        # Consumido al FINAL de `_day_mutator` (spec "Invalidación").
+        _p1_i18n_regenerated_flags: list = []
         # [P2-REGEN-DAY-HONEST-CODE · 2026-07-10] Razones reales de cada slot conservado —
         # el "todos fallaron" se clasificaba SIEMPRE como pantry_insufficient_for_goal y el
         # frontend mandaba al usuario a "agregar ítems a la Nevera" aunque la causa fuera
@@ -8666,6 +8704,7 @@ def api_regenerate_day(
                     nm["isExpanded"] = False
                     nm.pop("pantry_constrained", None)  # [P5-RESTOCK-PRESERVE] metadata transitoria, no persistir
                     new_meals.append(nm)
+                    _p1_i18n_regenerated_flags.append(True)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                     regenerated += 1
                     # [P5-DAY-REGEN-VARIETY] el siguiente swap evita el NOMBRE y la PROTEÍNA principal
                     # del plato aceptado (→ 4 proteínas distintas, no 2 de res).
@@ -8676,6 +8715,7 @@ def api_regenerate_day(
                     _decrement_ledger_by_meal(ledger, nm, _db)
                 else:
                     new_meals.append(meal)
+                    _p1_i18n_regenerated_flags.append(False)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                     slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                     # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Reservar en el ledger los
                     # ingredientes del plato CONSERVADO (espejo del decrement del regenerado, ~4975). Sin
@@ -8693,6 +8733,7 @@ def api_regenerate_day(
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
                 _kept_reasons.append(str(_ve))  # [P2-REGEN-DAY-HONEST-CODE] causa real del slot
                 new_meals.append(meal)
+                _p1_i18n_regenerated_flags.append(False)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Mismo decrement que la rama else:
                 # el plato conservado consume su inventario aunque no se haya podido regenerar.
@@ -8715,6 +8756,7 @@ def api_regenerate_day(
                 )
                 _ai_unavailable = True
                 new_meals.append(meal)
+                _p1_i18n_regenerated_flags.append(False)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 break
 
@@ -8723,7 +8765,11 @@ def api_regenerate_day(
         # para que el full-replace `_day["meals"]=new_meals` NO trunque el día (perdería platos). Idempotente
         # si el loop completó (len iguales) o si nada se interrumpió.
         if _ai_unavailable and len(new_meals) < len(meals):
-            new_meals.extend(meals[len(new_meals):])
+            _pad_start = len(new_meals)
+            new_meals.extend(meals[_pad_start:])
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] paridad de longitud con new_meals: los
+            # slots padeados son ORIGINALES sin tocar (no regenerados).
+            _p1_i18n_regenerated_flags.extend([False] * (len(new_meals) - len(_p1_i18n_regenerated_flags)))
 
         if regenerated == 0:
             # [P1-DAY-REGEN-SERVER-FLAG] nada se persiste en los soft-fail → retirar el flag
@@ -9260,11 +9306,44 @@ def api_regenerate_day(
             _rebuild_plan_shopping_lists_inline(
                 pd, verified_user_id, surface="regen_day", plan_id_hint=plan_id
             )
+
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] DELETE-on-write (spec "Invalidación"):
+            # SOLO los slots efectivamente regenerados pierden su `_display` heredado. Pop AL
+            # FINAL del mutator (tras rebalance/refine/reconcile/rebuild de listas, que pueden
+            # reordenar contenido dentro de `new_meals`) — un pop justo tras `swap_meal()` no
+            # protegería si alguno de esos pasos posteriores reintrodujera `_display`. Los
+            # slots CONSERVADOS (`_p1_i18n_regenerated_flags[i] is False`) no se tocan: no
+            # fueron mutados, su traducción sigue siendo válida.
+            for _idx_disp, _was_regen_disp in enumerate(_p1_i18n_regenerated_flags):
+                if (_was_regen_disp and _idx_disp < len(new_meals)
+                        and isinstance(new_meals[_idx_disp], dict)):
+                    new_meals[_idx_disp].pop("_display", None)
+
             return pd
 
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
         if not result:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist (FUERA del
+        # lock): re-enriquecer `_display` del día regenerado si el locale del usuario aplica.
+        # SELECT dirigido (una columna) — mismo patrón barato que TRIGGER-2 (cron_tasks.py).
+        # Import vía la fachada `from db import ...` (P3-DB-IMPORTS-FACADE) — call site NUEVO.
+        try:
+            from db import execute_sql_query as _p1i18n_esq_rd
+            _p1i18n_row_rd = _p1i18n_esq_rd(
+                "SELECT locale FROM user_profiles WHERE id = %s",
+                (verified_user_id,),
+                fetch_one=True,
+            )
+            _p1i18n_locale_rd = (_p1i18n_row_rd or {}).get("locale")
+            if _p1i18n_locale_rd and _p1i18n_locale_rd != "es-DO":
+                from plan_display_i18n import schedule_plan_display_enrichment
+                schedule_plan_display_enrichment(
+                    plan_id, verified_user_id, _p1i18n_locale_rd, day_indices=[day_index]
+                )
+        except Exception as _p1i18n_rd_e:
+            logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] dispatch no-op: {_p1i18n_rd_e}")
 
         # Cuota: 1 crédito por día completo (post-éxito, D3).
         # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] NO cobramos si la IA cayó a mitad del loop:

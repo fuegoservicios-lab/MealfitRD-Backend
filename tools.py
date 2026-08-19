@@ -1018,10 +1018,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     target_day = None
     target_meal = None
     target_meal_index = None
-    
-    for day in days:
+    # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] índice del día dentro del ARRAY `days` (NO
+    # `day_number`, que es el número lógico del plato — pueden divergir). Consumido por el
+    # despacho de re-enriquecimiento post-persist (day_indices espera índices de array).
+    target_day_index = None
+
+    for _di_p1i18n, day in enumerate(days):
         if day.get("day") == day_number:
             target_day = day
+            target_day_index = _di_p1i18n
             break
     
     if not target_day:
@@ -2652,6 +2657,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 except Exception as _dqc_e:
                     logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (chat-modify) falló: {_dqc_e}")
 
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] DELETE-on-write (spec "Invalidación"): el
+            # meal persistido pierde CUALQUIER `_display` heredado — stale display imposible por
+            # construcción. Pop AL FINAL del callback (no justo tras `meals_fresh[target_idx_fresh]
+            # = new_meal_data` arriba): si algún paso intermedio (closer/motor/reconcile, todos
+            # entre esa asignación y aquí) reescribiera el meal o copiara `_display` de vuelta, un
+            # pop temprano no lo protegería. `new_meal_data` normalmente NO trae `_display` (el LLM
+            # no lo genera hoy) — este pop es el contrato LEGIBLE explícito de la spec.
+            if isinstance(meals_fresh[target_idx_fresh], dict):
+                meals_fresh[target_idx_fresh].pop("_display", None)
+
             return plan_data_fresh
 
         # [P0-AGENT-1] user_id ya force-overrideado upstream por
@@ -2665,6 +2680,26 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         )
         if merged_plan_data:
             logger.info(f"[TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist (FUERA
+            # del lock): el DELETE-on-write del callback dejó el meal modificado sin `_display`
+            # — re-enriquecer SOLO el día tocado si el locale del usuario aplica. SELECT
+            # dirigido (una columna) — mismo patrón barato que TRIGGER-2 (cron_tasks.py).
+            try:
+                if target_day_index is not None:
+                    from db import execute_sql_query as _p1i18n_esq_cm
+                    _p1i18n_row_cm = _p1i18n_esq_cm(
+                        "SELECT locale FROM user_profiles WHERE id = %s",
+                        (user_id,),
+                        fetch_one=True,
+                    )
+                    _p1i18n_locale_cm = (_p1i18n_row_cm or {}).get("locale")
+                    if _p1i18n_locale_cm and _p1i18n_locale_cm != "es-DO":
+                        from plan_display_i18n import schedule_plan_display_enrichment
+                        schedule_plan_display_enrichment(
+                            plan_id, user_id, _p1i18n_locale_cm, day_indices=[target_day_index]
+                        )
+            except Exception as _p1i18n_cm_e:
+                logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] dispatch no-op: {_p1i18n_cm_e}")
             # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido del reemplazo
             # confirmado vía chat: fuerte si `changes` contiene negación explícita del token
             # ("no me gusta el pollo"), débil si solo cambió la proteína. Fail-open.
