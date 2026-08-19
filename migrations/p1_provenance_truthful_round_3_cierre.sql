@@ -73,14 +73,18 @@ BEGIN
     END IF;
 END $$;
 
--- == Sanity 3: ninguna referencia usa un sentinel ni sale de las 3 etiquetas ======
+-- == Sanity 3: ninguna referencia usa un sentinel ni sale de formato ==============
+-- AGNOSTICO DE FUENTE a proposito: la lista cerrada de `usda|bedca` habria rechazado la
+-- primera referencia `tcac:` (P1-LATINFOODS-TCAC) y convertido re-ejecutar esta
+-- migracion en un fallo espurio. Lo que este sanity debe garantizar es que la referencia
+-- tenga FORMA de procedencia (`<fuente>:<id>[ (detalle)]`), no que la fuente este en una
+-- lista que caduca cada vez que se anade una tabla nacional.
 DO $$
 DECLARE _raras int;
 BEGIN
     SELECT COUNT(*) INTO _raras FROM public.master_ingredients
     WHERE nutrition_source_ref IS NOT NULL
-      AND nutrition_source_ref !~ '^usda:[0-9]+ \((proxy: .+|id previo; valores propios)\)$'
-      AND nutrition_source_ref !~ '^bedca:[0-9]+$';
+      AND nutrition_source_ref !~ '^[a-z]+:[0-9]+( \(.+\))?$';
     IF _raras > 0 THEN
         RAISE EXCEPTION '[P1-PROVENANCE-TRUTHFUL r3] % referencias fuera de formato', _raras;
     END IF;

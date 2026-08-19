@@ -128,13 +128,19 @@ propios`), 3 dueños recuperados, **cero ids compartidos**, cero sentinels.
 
 ### Lo que sigue abierto — y ya no es de procedencia
 
-- **LATINFOODS / SMAE** para los alimentos que siguen sobre un proxy (Curuba, Chontaduro,
-  Borojó, Xoconostle, Champús, Suero costeño, los chiles secos). Ahora **están
-  etiquetados como proxy**, que era la mitad del problema; la otra mitad es conseguirles
-  fuente propia. FAO no publica API — son PDF/Excel, así que es curación manual con su
-  propio presupuesto. Fuentes candidatas: FAO/INFOODS América Latina y la Tabla de
-  Composición de Alimentos Colombianos del ICBF (la más prometedora para chontaduro,
-  borojó y curuba).
+- **LATINFOODS — hecho a medias, con cifras.** [P1-LATINFOODS-TCAC · 2026-08-19] Cinco
+  alimentos andinos pasaron a la **Tabla de Composición de Alimentos Colombianos**
+  (TCAC 2015, ICBF): Chontaduro **103 → 332 kcal** (vivía sobre *Breadfruit*: el
+  chontaduro tiene 25,7 g de grasa, el panapén 0,23), Curuba 97 → 35, Borojó 66 → 134,
+  Chinola 108,6 → 59, Suero costeño 136 → 83 kcal **y proteína 3,5 → 11,0** (vivía sobre
+  *Sour cream*: es suero fermentado, no crema — el error era de categoría, no de
+  magnitud). Extraído del PDF (no hay API ni Excel) con **Atwater como guard de
+  parseo**: cada fila se acepta solo si 4P+4C+9G cuadra con las kcal dentro del 5%; las
+  cinco cruzan bajo 1,5%. Solo macros — la tabla proximal no trae fibra ni minerales.
+  **Quedan 9 filas sobre un proxy**: los chiles secos mexicanos (chipotle, guajillo,
+  mulato), Xoconostle, los embutidos latinos (chorizo santarrosano y verde, longaniza
+  puertorriqueña), Guineo verde y Requesón. Los mexicanos necesitan SMAE/INSP; los
+  embutidos, una tabla que los tenga.
 - **Sinónimos que son dos filas**: `Requesón`/`Queso ricotta`, `Judías blancas`/
   `Habichuelas blancas`. **Decisión tomada: NO fusionar.** El catálogo se resuelve por
   cadena, no por id: borrar una fila rompería cualquier plan, `user_inventory` o
