@@ -5228,7 +5228,7 @@ def test_c3_durable_guard_red_first_reproduce_exactamente_los_6(sc):
     _, contains = sc._construir_indice_alias(sc.get_master_ingredients())
     for s in ("chicharrón de pollo", "chicharron de pollo"):
         target = strip_accents(s.lower())
-        contains_match = next((name for pat, name in contains if pat.search(target)), None)
+        contains_match = next((name for pat, name, *_ in contains if pat.search(target)), None)
         assert contains_match == "Chicharrón", (
             f"{s!r}: el mecanismo CONTAINS ya no apunta a 'Chicharrón' ({contains_match!r}) -- "
             f"si la fila se renombró, revisar si el guard C3.1 (shopping_calculator.py) sigue "

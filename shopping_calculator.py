@@ -608,7 +608,18 @@ def get_master_ingredients():
     if _master_cache is None or (now - _master_cache_ts) > _MASTER_CACHE_TTL:
         if connection_pool:
             try:
-                res = execute_sql_query("SELECT * FROM master_ingredients", fetch_all=True)
+                # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] ORDER BY name: sin él, el
+                # ganador de CADA colisión del índice de resolución (alias/contains/keys
+                # normalizadas duplicadas) era el orden FÍSICO del heap — comportamiento
+                # indefinido que un UPDATE masivo re-baraja. Medido: el fill del gloss del
+                # catálogo (347 UPDATEs, 2026-08-19) flipeó 4 resoluciones REALES del corpus DO («Pollo horneado
+                # al limón...» pasó de Pechuga de pollo a Arroz blanco). El orden alfabético
+                # DESC no es capricho: el índice es first-wins y DESC restaura los 7
+                # ganadores del baseline C3 committeado (verificado delta a delta:
+                # Filete>Batata, Pechuga>Arroz, Repollo morado>Repollo, Pulpo>Calamar,
+                # Tofu firme>Salsa de soya, Yuca>Atún) — el contrato revisado en F2 se
+                # conserva Y queda estable para siempre.
+                res = execute_sql_query("SELECT * FROM master_ingredients ORDER BY name DESC", fetch_all=True)
                 # [P1-CATALOG-INDEX-NO-STICKY · 2026-07-29] `res or []` aceptaba como catálogo
                 # CUALQUIER objeto truthy y le sellaba `_master_cache_ts` → 5 minutos sirviendo
                 # basura como si fuera la tabla verificada. Cómo se destapó: un test parchea
@@ -1951,10 +1962,15 @@ def _construir_indice_alias(master_list: list) -> tuple[list, list]:
         all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
         for alias in (master.get("aliases") or []):
             all_aliases.append((strip_accents(alias.strip().lower()), master_name))
-    all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
+    # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] Desempate ALFABÉTICO tras la longitud:
+    # el sort estable heredaba el orden de FILAS en los empates de longitud ('arroz'=5 vs
+    # 'pollo'=5) — comportamiento indefinido que el fill masivo del gloss del catálogo re-barajó,
+    # flipeando resoluciones reales del corpus DO. Con (len desc, alias asc) el índice es
+    # idéntico sea cual sea el orden físico del SELECT.
+    all_aliases.sort(key=lambda x: (-len(x[0]), x[0]))
 
     contains = [
-        (re.compile(r'\b' + re.escape(alias_stripped) + r'\b', re.IGNORECASE), master_name)
+        (re.compile(r'\b' + re.escape(alias_stripped) + r'\b', re.IGNORECASE), master_name, alias_stripped)
         for (alias_stripped, master_name) in all_aliases
         if alias_stripped and alias_stripped not in _MODIFIER_ONLY_ALIASES
     ]
@@ -1982,6 +1998,29 @@ def _get_normalize_alias_index(master_list: list) -> tuple[list, list]:
         "contains": contains,
     }
     return all_aliases, contains
+
+
+def _best_contains_match(text: str, patterns) -> "str | None":
+    """[P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] Mejor match CONTAINS por
+    (posición del match en el string, longitud del alias desc, alias asc). Ver el
+    comentario del INTENTO 2 en normalize_name para el porqué semántico.
+    tooltip-anchor: P1-CATALOG-ORDER-DETERMINISTIC"""
+    # Orden del desempate: LONGITUD primero (la semántica histórica del índice — 'pernil'
+    # le gana a 'cerdo' en «cerdo para pernil», retarget F2 documentado), POSICIÓN en el
+    # string después (en empates de longitud la identidad del plato encabeza: 'pollo' a
+    # posición 0 le gana a 'arroz' en «Pollo horneado ... con arroz»), alfabético al final
+    # (determinismo total: el heap ya no decide nada).
+    best_key = None
+    best_name = None
+    for _pat, master_name, alias_stripped in patterns:
+        m = _pat.search(text)
+        if not m:
+            continue
+        key = (-len(alias_stripped), m.start(), alias_stripped, master_name)
+        if best_key is None or key < best_key:
+            best_key = key
+            best_name = master_name
+    return best_name
 
 
 def normalize_name(orig_name: str) -> str:
@@ -2141,9 +2180,15 @@ def normalize_name(orig_name: str) -> str:
     # ── INTENTO 2: Regex sobre el texto RAW (sin mutilar) ──
     # Buscar "queso mozzarella bajo en grasa" dentro de "queso mozzarella bajo en grasa rallado"
     # [P1-MODIFIER-ONLY-ALIAS] lista filtrada: un modificador suelto no secuestra el texto.
-    for _pat, master_name in _aliases_for_contains:
-        if _pat.search(n_stripped):
-            return master_name
+    # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] Best-match por POSICIÓN en el string
+    # (luego longitud desc, luego alfabético) en vez de first-hit por orden del índice: en
+    # un plato multi-alimento la identidad ENCABEZA («Pollo horneado al limón con arroz» es
+    # pollo, no arroz; «Chillo al horno con... batata» es el pescado). El first-hit hacía
+    # ganar al alias más largo y, en empates de longitud, al azar del heap. Los ~1400
+    # patrones están precompilados (P1-COHERENCE-ALIAS-INDEX): el full-scan es sub-ms.
+    _best = _best_contains_match(n_stripped, _aliases_for_contains)
+    if _best is not None:
+        return _best
 
     # ── INTENTO 3: Match Exacto sobre clean_n (texto limpio, fallback) ──
     for alias_stripped, master_name in all_aliases:
@@ -2152,9 +2197,9 @@ def normalize_name(orig_name: str) -> str:
 
     # ── INTENTO 4: Regex sobre clean_n (último recurso antes de fuzzy/semántica) ──
     # [P1-MODIFIER-ONLY-ALIAS] misma lista filtrada que el INTENTO 2.
-    for _pat, master_name in _aliases_for_contains:
-        if _pat.search(clean_n_stripped):
-            return master_name
+    _best = _best_contains_match(clean_n_stripped, _aliases_for_contains)
+    if _best is not None:
+        return _best
 
     # ── INTENTO 5 [P4-UNIFIED-RESOLVER · 2026-06-14]: Fuzzy (difflib) ANTES de gastar un embedding.
     # Atrapa typos y variantes menores ("platanno"→"plátano", "yogur griego"→"yogurt griego") que los

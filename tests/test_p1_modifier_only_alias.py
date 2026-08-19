@@ -132,7 +132,7 @@ def test_los_tiers_de_contains_usan_la_lista_filtrada():
     ]
     todos, contains = sc._get_normalize_alias_index(catalogo)
     alias_todos = {a for a, _ in todos}
-    alias_contains = {p.pattern.replace(r"\b", "").replace("\\", "") for p, _ in contains}
+    alias_contains = {p.pattern.replace(r"\b", "").replace("\\", "") for p, *_ in contains}
     assert "maduro" in alias_todos, \
         "los tiers de match EXACTO deben seguir viendo el alias modificador"
     assert "maduro" not in alias_contains, \
@@ -144,7 +144,12 @@ def test_los_tiers_de_contains_usan_la_lista_filtrada():
     src = Path(sc.__file__).resolve().read_text(encoding="utf-8")
     i = src.index("def normalize_name(")
     bloque = src[i:src.index("# ── INTENTO 5", i)]
-    assert bloque.count("in _aliases_for_contains:") == 2, \
+    # [re-anclado 2026-08-19 · P1-CATALOG-ORDER-DETERMINISTIC] los tiers pasaron de
+    # loops inline a `_best_contains_match(texto, _aliases_for_contains)` (best-match
+    # determinista por longitud/posición). La PROPIEDAD es la misma: dos tiers de
+    # búsqueda-dentro-del-texto consumiendo la colección FILTRADA.
+    assert bloque.count("_best_contains_match(") == 2 and \
+        bloque.count("_aliases_for_contains)") >= 2, \
         "los dos tiers de búsqueda-dentro-del-texto deben usar la lista filtrada"
     assert "for alias_stripped, master_name in all_aliases:" in bloque, \
         "los tiers de match EXACTO deben seguir viendo la lista completa"

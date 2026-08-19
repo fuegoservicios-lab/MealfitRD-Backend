@@ -143,7 +143,7 @@ def test_un_alias_vacio_no_entra_al_indice_de_contains():
         {"name": "Mango", "aliases": ["mangos"]},
     ]
     _, contains = sc._get_normalize_alias_index(catalogo)
-    patrones = [p.pattern for p, _ in contains]
+    patrones = [p.pattern for p, *_ in contains]
     assert all(p != r"\b\b" for p in patrones), (
         f"un alias vacío entró al índice y casaría con cualquier texto: {patrones}"
     )
@@ -214,8 +214,8 @@ def test_el_orden_por_longitud_sobrevive_al_cacheo(catalogo):
     lista de compras (plan vivo 01d63a5b)."""
     assert sc.normalize_name("mango maduro") == "Mango"
     _, contains = sc._get_normalize_alias_index(_CATALOGO)
-    largos = [len(p.pattern) for p, _ in contains]
+    largos = [len(p.pattern) for p, *_ in contains]
     assert largos == sorted(largos, reverse=True), "el índice perdió el orden por longitud"
-    assert all("maduro" != p.pattern.strip("\\b") for p, _ in contains), (
+    assert all("maduro" != p.pattern.strip("\\b") for p, *_ in contains), (
         "un alias modificador-solo entró al índice de contains"
     )
