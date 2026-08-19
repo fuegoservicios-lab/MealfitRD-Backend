@@ -152,8 +152,31 @@ echo "-- Meta por ruta (P2-LANDING-PRERENDER-META) --"
 # Se comprueba SIN seguir redirects a propósito: el primer intento sirvió el
 # contenido correcto detrás de un 301 a la ruta con barra final, y un `curl -L`
 # lo habría dado por bueno.
+# [P1-LEGAL-UNA-SOLA-COPIA . 2026-08-19] La expectativa depende del HOST.
+#
+# Estas paginas viven en el apex y SOLO ahi. En app.bioboros.com redirigen con
+# un 301, asi que exigirles un 200 con canonical propio es exigir justo lo que
+# la decision prohibe --y este bloque se puso rojo en cuanto la redireccion
+# entro en produccion, por algo que no hay que arreglar--.
+#
+# Se comprueban las DOS direcciones porque una sola deja pasar el defecto que la
+# otra vigila: en el apex, que la pagina exista y se declare canonica de si
+# misma; en la app, que NO la sirva y mande al apex.
 for ruta in precios motor supermercado; do
   cod="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$ORIGEN/$ruta" || true)"
+  case "$ORIGEN" in
+    *app.*)
+      if [ "$cod" = "301" ]; then
+        destino="$(curl -sS -o /dev/null -w '%{redirect_url}' --max-time 20 "$ORIGEN/$ruta" || true)"
+        case "$destino" in
+          */"$ruta") ok "/$ruta redirige al apex (una sola copia)" ;;
+          *) mal "/$ruta redirige a '$destino', que no es su gemela del apex" ;;
+        esac
+      else
+        mal "/$ruta responde $cod en la app: deberia redirigir al apex"
+      fi
+      continue ;;
+  esac
   if [ "$cod" != "200" ]; then
     mal "/$ruta responde $cod (¿301 de barra final? mira try_files)"
     continue
