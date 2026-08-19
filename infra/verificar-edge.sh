@@ -87,7 +87,24 @@ enc="$(codificacion "$ORIGEN/" || true)"
 [ "$enc" = "gzip" ] && ok "index.html gzip" || mal "index.html sin gzip (fue: '$enc')"
 
 # El primer .js que referencie el HTML: es lo que de verdad pesa.
-js="$(curl -sS --max-time 20 "$ORIGEN/" | grep -oE '/assets/[A-Za-z0-9._-]+\.js' | head -1 || true)"
+#
+# [P2-DESCUBRIMIENTO-FALLA-FUERTE · 2026-08-19] DOS prefijos, y si no encuentra
+# ninguno FALLA en vez de callarse.
+#
+# Buscaba sólo `/assets/`, que es la ruta de la app React. El landing sirve su
+# JavaScript desde `/static/`, así que contra bioboros.com esta variable salía
+# VACÍA y los cuatro bloques que cuelgan de ella —gzip del bundle, sourcemaps,
+# brotli y Vary— se saltaban sin decir nada. El verificador terminaba en verde
+# después de no comprobar cuatro cosas: la sección «Sourcemaps NO servibles»
+# imprimía su título con NADA debajo, y el resumen seguía diciendo «TODO OK».
+#
+# Ése es el peor modo de fallo de un verificador: no equivocarse, sino APROBAR
+# por no haber mirado. Un recurso obligatorio que no aparece es un fallo, no una
+# excusa para omitir lo que dependía de él.
+# Con su `?v=` si lo lleva: esa es la URL que el navegador pide de verdad, y
+# medir la version sin huella daba un veredicto sobre algo que nadie solicita.
+js="$(curl -sS --max-time 20 "$ORIGEN/" | grep -oE '/(assets|static)/[A-Za-z0-9._/-]+\.js(\?v=[a-f0-9]+)?' | head -1 || true)"
+[ -z "$js" ] && mal "no encuentro ningun .js referenciado desde / — 4 comprobaciones se quedarian sin hacer"
 if [ -n "$js" ]; then
   enc="$(codificacion "$ORIGEN$js" || true)"
   [ "$enc" = "gzip" ] && ok "$js gzip" || mal "$js SIN gzip"
@@ -99,8 +116,36 @@ grep -qi 'no-cache' <<<"$cc" && ok "index.html no-cache" \
   || mal "index.html CACHEABLE ('$cc') -- servirá bundles viejos tras cada deploy"
 
 if [ -n "${js:-}" ]; then
+  # [P1-CACHE-SOLO-CON-HUELLA] La expectativa depende de si la URL LLEVA huella.
+  #
+  # Exigia `immutable` siempre, y eso codificaba la premisa de que todo lo de
+  # /static/ va versionado —falsa para 14 ficheros del landing: las fuentes y los
+  # once del hero—. Desde que nginx da un ano solo a las URLs con `?v=`, pedirlo
+  # sin huella y esperar `immutable` es exigir justo lo que la regla prohibe. Se
+  # comprueba la REGLA, no un valor fijo.
   cc="$(curl -sS -I --max-time 20 "$ORIGEN$js" | grep -i '^cache-control:' || true)"
-  grep -qi 'immutable' <<<"$cc" && ok "assets immutable" || mal "assets sin immutable ('$cc')"
+  # DOS formas de huella, no una. La primera version solo reconocia `?v=<sha>`,
+  # que es como versiona el landing, y por eso acusaba a la app de servir
+  # `immutable` sin huella: los assets de React la llevan EN EL NOMBRE
+  # (`index-a1b2c3.js`, que Vite regenera en cada build). Son el mismo mecanismo
+  # —un nombre que cambia cuando cambia el contenido— expresado distinto, y
+  # ambos justifican el ano de cache.
+  # La huella se reconoce en sus DOS formas. La primera version solo miraba
+  # `?v=<sha>`, que es como versiona el landing, y por eso acusaba a la app de
+  # servir `immutable` sin huella: los assets de React la llevan EN EL NOMBRE
+  # (`index-LiNGVpCM.js` —base64url, no hexadecimal: mi segundo intento tampoco
+  # casaba—). Son el mismo mecanismo, un nombre que cambia con el contenido.
+  #
+  # ⚠ Es una heuristica: un fichero escrito a mano cuyo ultimo segmento midiera
+  # justo 8 caracteres pasaria por huellado. Se acepta porque el error cae del
+  # lado de no denunciar un caso raro, nunca de aprobar el patron peligroso que
+  # esto vigila —un nombre ESTABLE con un ano de cache—, que es el que dejaria a
+  # los visitantes servidos con codigo viejo tras cada despliegue.
+  if printf '%s' "$js" | grep -qE '([?]v=|-[A-Za-z0-9_-]{8}[.]js$)'; then
+    if grep -qi 'immutable' <<<"$cc"; then ok "asset con huella -> immutable"; else mal "asset CON huella pero sin immutable ('$cc')"; fi
+  else
+    if grep -qi 'immutable' <<<"$cc"; then mal "asset SIN huella servido como immutable ('$cc') - quedaria atrapado un ano"; else ok "asset sin huella -> caducidad corta"; fi
+  fi
 fi
 
 echo "-- Meta por ruta (P2-LANDING-PRERENDER-META) --"
@@ -123,7 +168,11 @@ done
 
 echo "-- Sourcemaps NO servibles (segunda barrera) --"
 if [ -n "${js:-}" ]; then
-  cod="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$ORIGEN$js.map" || true)"
+  # Sin la query: `home.js?v=abc` + `.map` da `home.js?v=abc.map`, que nginx
+  # resuelve al JS de siempre y devuelve 200. Habria denunciado un sourcemap
+  # publico que no existe, midiendo una URL que yo mismo malforme.
+  limpio="${js%%[?]*}"
+  cod="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$ORIGEN$limpio.map" || true)"
   [ "$cod" = "404" ] && ok ".map devuelve 404" || mal ".map devuelve $cod -- ¡fuente público!"
 fi
 
