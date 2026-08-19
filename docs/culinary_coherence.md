@@ -99,13 +99,26 @@ CHECK `master_ingredients_prep_methods_not_null` impide que el próximo lote de 
 la invariante vive ahora donde vive el dato, no en un test parser-based. Corpus:
 `tests/fixtures/culinary_beta/`. Test: `test_p1_culinary_metadata_beta.py`.
 
-⚠️ **Falso positivo conocido, NO cerrado: «hasta dorar».** El patrón `dora(?!d[oa]s?\b)\w*`
-excluye «dorado/dorada/dorados/doradas» pero **no el infinitivo «dorar»**, así que un paso tan
-común como «Hornea las papas hasta dorar» dispara `saltear` sobre un alimento que quizá no lo
-tenga. «Hasta dorar» describe el PUNTO de cocción, no ordena saltear. Afecta a filas dominicanas
-también — la categoría `Víveres` no lleva `saltear` en su default, así que «fríe la yuca hasta
-dorar» es un FP vivo hoy. Detectado el 2026-08-19 midiendo el corpus beta; no se tocó el regex
-porque cambia conducta de producción para los 6 países y merece su propio P-fix.
+**[P1-CULINARY-HASTA-DORAR · 2026-08-19] «hasta dorar» ya no es una orden de saltear.**
+`dora(?!d[oa]s?)\w*` excluía los participios («dorado/dorada») pero **no el
+infinitivo**, así que «Hornea las papas hasta dorar» acusaba de salteado a todo alimento
+del paso sin `saltear` en `prep_methods`. Medido sobre 33 planes REALES de producción:
+**12 de 63 violaciones V1 eran esto — 19% de ruido**, y contra quien menos toca el fuego
+(Aceite de oliva, Miel, Vainilla, Mango, Linaza, Plátano maduro), porque V1 acusa a
+cualquier alimento nombrado en un paso largo multi-cláusula.
+
+Importaba más de lo que parecía: en `warn` era ruido de telemetría, pero la escalada a
+`block` que persigue `P1-CULINARY-CONTRACT-BLOCK` convertiría ese 19% en rechazos de
+planes buenos.
+
+El fix es `(?<!hasta )dora…`, el mismo mecanismo que el `(?<!para )horno` de la ronda
+anterior y por la misma razón: una palabra que describe el envase o el PUNTO de cocción
+no es una instrucción. Dos alternativas se descartaron **por medición, no por intuición**:
+excluir solo el infinitivo desnudo (`|r`) caza 6 de 12 y deja pasar «hasta dorarlas»;
+añadir `(?<!a )` encima no cambia ni una violación sobre datos reales. El imperativo
+sigue intacto («Dora la cebolla», «Dóralo por ambos lados»): romperlo reviviría la
+regresión que la Task-5 del P-fix original ya pagó. Test:
+[`test_p1_culinary_hasta_dorar.py`](../tests/test_p1_culinary_hasta_dorar.py).
 
 **Cobertura actual** (migración base, antes del backfill `leche%hervir`): `prep_methods` 148/204 filas de `master_ingredients` (~72.5%), `ready_to_eat` 99/204 (~48.5%, menor porque Vegetales/Víveres solo setean `prep_methods` por diseño del backfill de categoría). El backfill `leche%hervir` solo AÑADE un método a filas ya no-NULL (no cambia el conteo de cobertura). El resto queda `NULL` — fail-open, no un gap de esta task; un audit de huecos fuera del golden set queda pendiente para una task futura.
 

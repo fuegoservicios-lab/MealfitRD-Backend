@@ -81,7 +81,22 @@ VERB_TO_METHOD = {
     # (Pechuga de pollo / Carne de res sin 'tostar' en prep_methods) —
     # detectado por `test_capa1_cero_fp_sobre_los_buenos`, NO por un test
     # unitario con catálogo sintético.
-    r"saltea(?!d[oa]s?\b)\w*|sofr[ií](?!t[oa]s?\b)\w*|dora(?!d[oa]s?\b)\w*": "saltear",
+    # [P1-CULINARY-HASTA-DORAR · 2026-08-19] `(?<!hasta )` delante de "dora": «hasta
+    # dorar» / «hasta dorarlas» describen el PUNTO de cocción, no ordenan saltear. El
+    # patrón previo excluía "dorado/dorada/dorados/doradas" pero NO el infinitivo, así
+    # que «Hornea las papas hasta dorar» acusaba de salteado a todo alimento del paso
+    # que no tuviera 'saltear'. Medido sobre 33 planes REALES de prod (2026-08-19):
+    # 12 de 63 violaciones V1 eran esto — 19% de ruido, y contra quien menos toca el
+    # fuego (Aceite de oliva, Miel, Vainilla, Mango, Linaza, Plátano maduro), porque
+    # el acusado es cualquier alimento nombrado en un paso largo multi-cláusula.
+    # Mismo mecanismo que el `(?<!para )horno` de aquí arriba, por la misma razón:
+    # una palabra que describe el envase o el punto no es una instrucción de cocción.
+    # Se descartaron dos alternativas MEDIDAS, no intuidas: excluir solo el infinitivo
+    # desnudo (`|r\b`) caza la mitad (6 de 12) y deja pasar «hasta dorarlas»; añadir
+    # `(?<!\ba )` encima no cambia NI UNA violación sobre datos reales.
+    # El imperativo sigue disparando intacto: «Dora la cebolla», «Dóralo por ambos
+    # lados» y «Sofríe el ajo» — el sellado que abre cada guiso dominicano (Task-5).
+    r"saltea(?!d[oa]s?\b)\w*|sofr[ií](?!t[oa]s?\b)\w*|(?<!hasta )dora(?!d[oa]s?\b)\w*": "saltear",
     r"lic[uú]a(?!d[oa]s?\b)\w*": "licuar",
     r"tuesta\w*|tosta(?!d[oa]s?\b)\w*": "tostar",
 }
