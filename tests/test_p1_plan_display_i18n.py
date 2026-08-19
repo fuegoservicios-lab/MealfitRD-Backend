@@ -3681,3 +3681,486 @@ def test_ff10_only_missing_with_zero_rows_exits_clean(_fill_script_module, monke
     out = capsys.readouterr().out
     assert "0 filas sin name_en" in out
     assert not calls
+
+
+# ================================================================================
+# SECCIÓN: FASE 1c — 3 superficies que quedaban en español con el dashboard en
+# otro idioma: etiqueta de SLOT (frontend, cubierto en displayMeal.test.js), el
+# nombre del PLAN (misma llamada LLM que los meals) y `/history-list` exponiendo
+# `display_names`/`plan_display_names` (claves LIGERAS, solo nombres, JAMÁS
+# recipe/ingredients — el endpoint es polling del Historial).
+# ================================================================================
+
+# ------------------------------------------------------------------
+# fase 1c (a) — motor: nombre del PLAN, MISMA llamada LLM que los meals
+# ------------------------------------------------------------------
+
+
+def _valid_response_with_plan_name(plan_name_en="Strong Seasoning, Balanced Life"):
+    return _FakeResponse(
+        content=(
+            '{"meals":[{"i":0,'
+            '"name":"Stewed red beans",'
+            '"description":"Traditional Dominican stew with red beans.",'
+            '"recipe":["Saute the seasoning in hot oil.","Add the beans and cook 20 minutes."],'
+            '"ingredients":["30 g red beans (Habichuelas rojas)","1 unit onion (Cebolla)"]}],'
+            f'"plan_name":"{plan_name_en}"}}'
+        ),
+        usage_metadata={"input_tokens": 130, "output_tokens": 90},
+    )
+
+
+def test_fase1c_plan_name_translated_in_same_llm_call(engine):
+    """El nombre del plan se traduce en la MISMA llamada LLM que los meals — un
+    plan de 1 día debe disparar exactamente 1 invoke, con AMBOS resultados
+    (meal + plan_name) persistidos desde ese único response."""
+    engine["plan_data"] = {"name": "Sazón Fuerte, Vida en Equilibrio", "days": [{"meals": [_base_meal()]}]}
+    _FakeLLM.NEXT_RESPONSE = _valid_response_with_plan_name()
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+    assert _FakeLLM.invoke_count == 1, "el nombre del plan NO debe costar una llamada aparte"
+    assert engine["plan_data"]["_display"]["en-US"]["name"] == "Strong Seasoning, Balanced Life"
+    # El _display por-meal (hermano, distinto scope) también se escribió.
+    meal_display = engine["plan_data"]["days"][0]["meals"][0]["_display"]["en-US"]
+    assert meal_display["name"] == "Stewed red beans"
+
+
+def test_fase1c_plan_name_prompt_carries_plan_name_line(engine):
+    engine["plan_data"] = {"name": "Sazón Fuerte, Vida en Equilibrio", "days": [{"meals": [_base_meal()]}]}
+    _FakeLLM.NEXT_RESPONSE = _valid_response_with_plan_name()
+
+    pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert _FakeLLM.captured_prompts, "debió invocar el LLM"
+    prompt = _FakeLLM.captured_prompts[0]
+    assert "PLAN NAME: Sazón Fuerte, Vida en Equilibrio" in prompt
+    assert '"plan_name"' in prompt
+
+
+def test_fase1c_plan_without_name_omits_plan_name_line_and_key(engine):
+    """Plan sin `name` (o vacío/blank) -> se omite sin error: ni la línea "PLAN
+    NAME:" en el prompt, ni una key `_display` de nivel plan tras persistir."""
+    for _missing_name in (None, "", "   "):
+        engine["plan_data"] = {"days": [{"meals": [_base_meal()]}]}
+        if _missing_name is not None:
+            engine["plan_data"]["name"] = _missing_name
+        _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+        _FakeLLM.captured_prompts = []
+
+        result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+        assert result == {"enriched_meals": 1, "skipped": None}
+        assert "PLAN NAME:" not in _FakeLLM.captured_prompts[0]
+        assert "_display" not in engine["plan_data"], (
+            f"con name={_missing_name!r} no debe nacer `_display` de nivel plan"
+        )
+
+
+def test_fase1c_llm_response_without_plan_name_key_degrades_gracefully(engine):
+    """El LLM puede ignorar la instrucción y no devolver `plan_name` — el motor
+    no debe romperse; el meal SÍ se persiste, el plan simplemente se queda sin
+    `_display` de nivel plan (fail-open, no error)."""
+    engine["plan_data"] = {"name": "Sazón Fuerte", "days": [{"meals": [_base_meal()]}]}
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()  # sin "plan_name"
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+    assert "_display" not in engine["plan_data"]
+    assert "_display" in engine["plan_data"]["days"][0]["meals"][0]
+
+
+def test_fase1c_plan_name_already_translated_skips_reattempt(engine):
+    """`_plan_name_already_translated` evita retraducir en CADA disparador — si
+    `plan_data["_display"][locale]["name"]` ya existe, el intento se salta por
+    completo (ni la línea "PLAN NAME:" en el prompt)."""
+    engine["plan_data"] = {
+        "name": "Sazón Fuerte, Vida en Equilibrio",
+        "_display": {"en-US": {"name": "Already Translated Title"}},
+        "days": [{"meals": [_base_meal()]}],
+    }
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()  # sin "plan_name"
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+    assert "PLAN NAME:" not in _FakeLLM.captured_prompts[0]
+    # La traducción vigente no se toca (ni se sobreescribe ni se borra).
+    assert engine["plan_data"]["_display"]["en-US"]["name"] == "Already Translated Title"
+
+
+def test_fase1c_plan_name_toctou_mismatch_discarded(engine, monkeypatch):
+    """Espejo del TOCTOU por-meal (`test_toctou_mismatch_skips_meal_and_reports_reason`):
+    si `plan_data["name"]` cambió (rename manual concurrente) entre la lectura
+    pre-LLM y el persist, la traducción del nombre VIEJO se descarta — nunca se
+    pega sobre un nombre ya distinto. El meal, en cambio, no tiene conflicto y
+    SÍ se escribe (el TOCTOU del plan_name es independiente del de los meals)."""
+    engine["plan_data"] = {"name": "Nombre Original", "days": [{"meals": [_base_meal()]}]}
+    _FakeLLM.NEXT_RESPONSE = _valid_response_with_plan_name()
+
+    def _fake_update_with_concurrent_rename(plan_id, mutator, user_id=None, **kwargs):
+        engine["persist_calls"].append({"plan_id": plan_id, "user_id": user_id})
+        # Simula `api_rename_plan` corriendo ANTES de este persist.
+        engine["plan_data"]["name"] = "Nombre Renombrado A Mano"
+        result = mutator(engine["plan_data"])
+        if isinstance(result, dict):
+            engine["plan_data"] = result
+        return engine["plan_data"]
+
+    monkeypatch.setattr(pdi, "update_plan_data_atomic", _fake_update_with_concurrent_rename)
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+    assert "_display" not in engine["plan_data"], "el plan_name viejo no debe pegarse sobre el nuevo"
+    assert engine["plan_data"]["name"] == "Nombre Renombrado A Mano"
+    # El meal, sin conflicto, SÍ se escribió.
+    assert engine["plan_data"]["days"][0]["meals"][0]["_display"]["en-US"]["name"] == "Stewed red beans"
+
+
+@pytest.mark.parametrize("locale", ["en-US", "pt-BR", "fr-FR", "it-IT"])
+def test_fase1c_build_prompt_plan_name_native_addendum_per_locale(locale):
+    """`_build_prompt(..., plan_name=...)` apendea el addendum NATIVO (misma
+    lección P1-COACH-LANGUAGE-NATIVE que la directiva base) — nunca instrucción
+    en español pidiendo otro idioma. La línea de datos "PLAN NAME: <texto>" es
+    literal en todos los locales (es el separador que el LLM debe reconocer)."""
+    prompt = pdi._build_prompt(
+        [{"name": "X", "description": "Y", "recipe": ["a"], "ingredients": ["b"]}],
+        locale,
+        plan_name="Mi Plan De Prueba",
+    )
+    assert "PLAN NAME: Mi Plan De Prueba" in prompt
+    assert '"plan_name"' in prompt
+    # Sin plan_name, el addendum no debe aparecer.
+    prompt_sin_nombre = pdi._build_prompt(
+        [{"name": "X", "description": "Y", "recipe": ["a"], "ingredients": ["b"]}],
+        locale,
+    )
+    assert "PLAN NAME:" not in prompt_sin_nombre
+    assert '"plan_name"' not in prompt_sin_nombre
+
+
+def test_fase1c_validate_plan_name_helper():
+    assert pdi._validate_plan_name("  Translated Title  ") == "Translated Title"
+    assert pdi._validate_plan_name("") is None
+    assert pdi._validate_plan_name("   ") is None
+    assert pdi._validate_plan_name(None) is None
+    assert pdi._validate_plan_name(123) is None
+    assert pdi._validate_plan_name(["x"]) is None
+
+
+def test_fase1c_plan_name_already_translated_helper():
+    assert pdi._plan_name_already_translated({"_display": {"en-US": {"name": "X"}}}, "en-US") is True
+    assert pdi._plan_name_already_translated({"_display": {"en-US": {"name": "  "}}}, "en-US") is False
+    assert pdi._plan_name_already_translated({"_display": {"fr-FR": {"name": "X"}}}, "en-US") is False
+    assert pdi._plan_name_already_translated({}, "en-US") is False
+    assert pdi._plan_name_already_translated({"_display": "not-a-dict"}, "en-US") is False
+    assert pdi._plan_name_already_translated("not-a-dict", "en-US") is False
+
+
+# ------------------------------------------------------------------
+# fase 1c (b) — `/history-list`: `display_names` por-meal + `plan_display_names`
+# a nivel plan. Clave LIGERA: solo nombres, jamás recipe/ingredients.
+# ------------------------------------------------------------------
+
+
+def _fase1c_history_row(preview_meals_raw=None, plan_display_raw=None, name="Plan Test"):
+    """Row del SELECT de `api_plans_history_list` con defaults safe — mismo
+    shape que `_row_with_preview` de test_p2_hist_audit_12_preview_meals_skip_filter.py,
+    + la nueva columna `plan_display_raw` (fase 1c)."""
+    return {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "user_id": "11111111-1111-1111-1111-111111111111",
+        "name": name,
+        "created_at": None,
+        "calories": 2000,
+        "macros": {},
+        "plan_modified_at": None,
+        "generation_status": "complete",
+        "total_days_requested": 4,
+        "days_generated": 4,
+        "user_action_required": None,
+        "recovery_exhausted_count": 0,
+        "user_forced_simplified_weeks": None,
+        "coherence_history": [],
+        "preview_meals_raw": preview_meals_raw or [],
+        "plan_display_raw": plan_display_raw,
+        "goal_root": None,
+        "goal_assessment": None,
+        "diet_root": None,
+        "diet_assessment_snake": None,
+        "diet_assessment_camel": None,
+        "diet_assessment_type": None,
+        "allergies": [],
+        "chunk_pending_user_action_count": 0,
+        "chunk_failed_count": 0,
+        "chunk_failed_unreplaced_count": 0,
+        "chunk_in_flight_count": 0,
+        "chunk_scheduled_count": 0,
+        "chunk_running_now_count": 0,
+        "chunk_completed_count": 4,
+        "chunk_tier_breakdown": None,
+        "chunk_pantry_degraded_count": 0,
+        "chunk_pantry_degraded_reasons": None,
+        "primary_action_reason_code": None,
+    }
+
+
+def _fase1c_history_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.plans import router
+    from auth import verify_api_quota, get_verified_user_id
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    client.app.dependency_overrides[verify_api_quota] = lambda: "11111111-1111-1111-1111-111111111111"
+    client.app.dependency_overrides[get_verified_user_id] = lambda: "11111111-1111-1111-1111-111111111111"
+    return client
+
+
+def test_fase1c_preview_meals_includes_display_names_when_meal_has_display():
+    from unittest.mock import patch as _patch
+
+    meals = [{
+        "name": "Habichuelas guisadas",
+        "meal": "Almuerzo",
+        "_display": {
+            "en-US": {"name": "Stewed red beans", "description": "x", "recipe": [], "ingredients": []},
+            "fr-FR": {"name": "Haricots rouges mijotés", "description": "x", "recipe": [], "ingredients": []},
+        },
+    }]
+    rows = [_fase1c_history_row(preview_meals_raw=meals)]
+    with _patch("db_core.execute_sql_query", return_value=rows):
+        r = _fase1c_history_client().get("/api/plans/history-list")
+    assert r.status_code == 200
+    m = r.json()["plans"][0]["preview_meals"][0]
+    assert m["display_names"] == {
+        "en-US": "Stewed red beans",
+        "fr-FR": "Haricots rouges mijotés",
+    }
+
+
+def test_fase1c_preview_meals_omits_display_names_key_when_meal_lacks_display():
+    from unittest.mock import patch as _patch
+
+    meals = [{"name": "Habichuelas guisadas", "meal": "Almuerzo"}]  # sin `_display`
+    rows = [_fase1c_history_row(preview_meals_raw=meals)]
+    with _patch("db_core.execute_sql_query", return_value=rows):
+        r = _fase1c_history_client().get("/api/plans/history-list")
+    assert r.status_code == 200
+    m = r.json()["plans"][0]["preview_meals"][0]
+    assert "display_names" not in m, "es-DO / sin enriquecer -> key OMITIDA, no null/vacía"
+
+
+def test_fase1c_preview_meals_display_names_omitted_when_display_map_empty_or_invalid():
+    from unittest.mock import patch as _patch
+
+    for _bad_display in ({}, {"en-US": {}}, {"en-US": {"name": "  "}}, {"en-US": "not-a-dict"}, "not-a-dict"):
+        meals = [{"name": "Habichuelas guisadas", "meal": "Almuerzo", "_display": _bad_display}]
+        rows = [_fase1c_history_row(preview_meals_raw=meals)]
+        with _patch("db_core.execute_sql_query", return_value=rows):
+            r = _fase1c_history_client().get("/api/plans/history-list")
+        m = r.json()["plans"][0]["preview_meals"][0]
+        assert "display_names" not in m, f"con _display={_bad_display!r} debe omitirse"
+
+
+def test_fase1c_preview_meals_display_names_never_leaks_recipe_or_ingredients():
+    """El peso importa: este endpoint es polling del Historial. `display_names`
+    debe llevar SOLO nombres — jamás `recipe`/`ingredients`, aunque el meal
+    persistido los traiga en `_display`."""
+    from unittest.mock import patch as _patch
+
+    meals = [{
+        "name": "Habichuelas guisadas",
+        "meal": "Almuerzo",
+        "_display": {
+            "en-US": {
+                "name": "Stewed red beans",
+                "description": "A hearty stew.",
+                "recipe": ["Step 1.", "Step 2."],
+                "ingredients": ["30 g red beans (Habichuelas rojas)"],
+            },
+        },
+    }]
+    rows = [_fase1c_history_row(preview_meals_raw=meals)]
+    with _patch("db_core.execute_sql_query", return_value=rows):
+        r = _fase1c_history_client().get("/api/plans/history-list")
+    m = r.json()["plans"][0]["preview_meals"][0]
+    assert m["display_names"] == {"en-US": "Stewed red beans"}
+    # Ninguna de las 3 keys pesadas viaja en NINGÚN nivel del payload de este meal.
+    _dump = json.dumps(m)
+    assert "description" not in _dump
+    assert "Step 1." not in _dump
+    assert "Step 2." not in _dump
+    assert "A hearty stew." not in _dump
+    assert "Habichuelas rojas" not in _dump
+
+
+def test_fase1c_plan_display_names_included_at_row_level_when_present():
+    from unittest.mock import patch as _patch
+
+    plan_display = {
+        "en-US": {"name": "Strong Seasoning, Balanced Life"},
+        "fr-FR": {"name": "Assaisonnement Fort, Vie Équilibrée"},
+    }
+    rows = [_fase1c_history_row(plan_display_raw=plan_display)]
+    with _patch("db_core.execute_sql_query", return_value=rows):
+        r = _fase1c_history_client().get("/api/plans/history-list")
+    assert r.status_code == 200
+    plan = r.json()["plans"][0]
+    assert plan["plan_display_names"] == {
+        "en-US": "Strong Seasoning, Balanced Life",
+        "fr-FR": "Assaisonnement Fort, Vie Équilibrée",
+    }
+    # `name` canónico español sigue presente e intacto (identidad, nunca reemplazada).
+    assert plan["name"] == "Plan Test"
+
+
+def test_fase1c_plan_display_names_none_when_absent():
+    from unittest.mock import patch as _patch
+
+    rows = [_fase1c_history_row(plan_display_raw=None)]
+    with _patch("db_core.execute_sql_query", return_value=rows):
+        r = _fase1c_history_client().get("/api/plans/history-list")
+    assert r.status_code == 200
+    assert r.json()["plans"][0]["plan_display_names"] is None
+
+
+def test_fase1c_plan_display_names_none_when_map_has_no_valid_names():
+    from unittest.mock import patch as _patch
+
+    for _bad in ({}, {"en-US": {}}, {"en-US": {"name": "   "}}, {"en-US": "x"}, "not-a-dict"):
+        rows = [_fase1c_history_row(plan_display_raw=_bad)]
+        with _patch("db_core.execute_sql_query", return_value=rows):
+            r = _fase1c_history_client().get("/api/plans/history-list")
+        assert r.json()["plans"][0]["plan_display_names"] is None, f"con plan_display_raw={_bad!r}"
+
+
+# ------------------------------------------------------------------
+# fase 1c (c) — rename manual (`PATCH /{plan_id}/name`) popea el `_display`
+# de NIVEL PLAN en el mismo UPDATE atómico. Mismo patrón de mocking que
+# test_p1_hist_5_rename_atomic.py (cursor/connection recorders).
+# ------------------------------------------------------------------
+
+
+class _Fase1cCursorRecorder:
+    def __init__(self, fetchall_returns=None):
+        self.calls = []
+        self._fetchall_returns = list(fetchall_returns or [])
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    def fetchall(self):
+        if self._fetchall_returns:
+            return self._fetchall_returns.pop(0)
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _Fase1cConnRecorder:
+    def __init__(self, cursor):
+        self.cursor_obj = cursor
+
+    def cursor(self, *a, **kw):
+        return self.cursor_obj
+
+    def transaction(self):
+        class _Tx:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, exc_type, *a):
+                return False
+        return _Tx()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fase1c_rename_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.plans import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_fase1c_rename_pops_plan_level_display_active_branch():
+    """Rama `_renaming_active=True` (plan renombrado es el latest/activo): el
+    UPDATE debe restar `_display` del `plan_data` en el MISMO statement que
+    actualiza `name`."""
+    from unittest.mock import patch as _patch
+
+    _user = "11111111-1111-1111-1111-111111111111"
+    _plan = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    client = _fase1c_rename_client()
+    from auth import verify_api_quota, get_verified_user_id
+    client.app.dependency_overrides[verify_api_quota] = lambda: _user
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _user
+
+    cursor = _Fase1cCursorRecorder(fetchall_returns=[[{"id": _plan}]])
+    pool = type("P", (), {"connection": lambda self: _Fase1cConnRecorder(cursor)})()
+    with _patch("db_core.connection_pool", pool):
+        r = client.patch(f"/api/plans/{_plan}/name", json={"name": "Nombre Renombrado A Mano"})
+
+    assert r.status_code == 200, r.text
+    upd = [c for c in cursor.calls if "UPDATE meal_plans" in c[0]]
+    assert upd, f"sin UPDATE en calls: {[c[0][:40] for c in cursor.calls]}"
+    sql, params = upd[0]
+    assert "- '_display'" in sql, "el rename debe popear `_display` de nivel plan en el mismo UPDATE"
+    assert "jsonb_set(" in sql
+    assert "RETURNING id" in sql
+
+
+def test_fase1c_rename_pops_plan_level_display_archived_branch():
+    """Rama `_renaming_active=False` (plan archivado, no-latest): mismo pop en
+    el UPDATE más simple (sin el jsonb_set anidado de `_plan_modified_at`)."""
+    from unittest.mock import patch as _patch
+
+    _user = "11111111-1111-1111-1111-111111111111"
+    _plan = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    client = _fase1c_rename_client()
+    from auth import verify_api_quota, get_verified_user_id
+    client.app.dependency_overrides[verify_api_quota] = lambda: _user
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _user
+
+    class _CursorArchived(_Fase1cCursorRecorder):
+        def fetchone(self):
+            # SELECT de latest devuelve OTRO id -> `_renaming_active = False`.
+            return {"id": "other-plan-id"}
+
+    # Único `.fetchall()` real del handler: el RETURNING del UPDATE.
+    cursor = _CursorArchived(fetchall_returns=[[{"id": _plan}]])
+    pool = type("P", (), {"connection": lambda self: _Fase1cConnRecorder(cursor)})()
+    with _patch("db_core.connection_pool", pool):
+        r = client.patch(f"/api/plans/{_plan}/name", json={"name": "Nombre Archivado"})
+
+    assert r.status_code == 200, r.text
+    upd = [c for c in cursor.calls if "UPDATE meal_plans" in c[0]]
+    assert upd, f"sin UPDATE en calls: {[c[0][:40] for c in cursor.calls]}"
+    sql, params = upd[0]
+    assert "- '_display'" in sql
+    assert "_plan_modified_at" not in sql, "rama archivada no sella _plan_modified_at (P2-HIST-RENAME-NO-PROMOTE)"
+
+
+def test_fase1c_rename_anchor_present_for_tooltip():
+    import inspect
+    from routers.plans import api_rename_plan
+    src = inspect.getsource(api_rename_plan)
+    assert "P1-PLAN-DISPLAY-I18N-MUTATOR-planrename" in src
+    assert "- '_display'" in src

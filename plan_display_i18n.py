@@ -473,7 +473,60 @@ _DISPLAY_DATA_HEADER = {
 _JSON_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
-def _build_prompt(targets: list, locale: str) -> str:
+# ============================================================
+# [P1-PLAN-DISPLAY-I18N · fase 1c] Nombre del PLAN — MISMA llamada LLM que los
+# meals, un campo más en el prompt/contrato JSON. Addendum NATIVO por locale
+# (misma lección P1-COACH-LANGUAGE-NATIVE que `_DISPLAY_LANGUAGE_DIRECTIVES`:
+# una instrucción en español pidiendo otro idioma es la señal más débil
+# posible), apendeado a la directiva SOLO cuando hay un plan_name que
+# traducir — un plan sin nombre nunca ve este bloque.
+# ============================================================
+
+_PLAN_NAME_ADDENDUM = {
+    "en-US": (
+        "\n4. The data below may include an extra line \"PLAN NAME: <text>\". If present, "
+        "ALSO translate it into English and add it as a top-level \"plan_name\" key in the "
+        "SAME JSON reply (sibling of \"meals\"): "
+        '{"meals":[...],"plan_name":"..."}. '
+        "Any food name that appears inside the plan title stays in Spanish canonical form "
+        "(same rule as the ingredients gloss) — translate only the surrounding descriptive/"
+        "creative text. If there is no \"PLAN NAME\" line, omit the \"plan_name\" key entirely."
+    ),
+    "pt-BR": (
+        "\n4. Os dados abaixo podem incluir uma linha extra \"PLAN NAME: <texto>\". Se "
+        "presente, TAMBÉM traduza para o Português e adicione como uma chave de nível "
+        "superior \"plan_name\" na MESMA resposta JSON (irmã de \"meals\"): "
+        '{"meals":[...],"plan_name":"..."}. '
+        "Qualquer nome de alimento que apareça dentro do título do plano permanece na forma "
+        "canônica em espanhol (mesma regra do gloss de ingredients) — traduza apenas o texto "
+        "descritivo/criativo ao redor. Se não houver linha \"PLAN NAME\", omita a chave "
+        "\"plan_name\" completamente."
+    ),
+    "fr-FR": (
+        "\n4. Les données ci-dessous peuvent inclure une ligne supplémentaire "
+        "« PLAN NAME : <texte> ». Si présente, traduis-la AUSSI en Français et ajoute-la "
+        "comme clé de premier niveau « plan_name » dans la MÊME réponse JSON (sœur de "
+        "« meals ») : "
+        '{"meals":[...],"plan_name":"..."}. '
+        "Tout nom d'aliment apparaissant dans le titre du plan reste en forme canonique "
+        "espagnole (même règle que le gloss d'ingredients) — traduis seulement le texte "
+        "descriptif/créatif environnant. S'il n'y a pas de ligne « PLAN NAME », omets "
+        "complètement la clé « plan_name »."
+    ),
+    "it-IT": (
+        "\n4. I dati sottostanti possono includere una riga extra \"PLAN NAME: <testo>\". "
+        "Se presente, traducila ANCHE in Italiano e aggiungila come chiave di primo livello "
+        "\"plan_name\" nella STESSA risposta JSON (sorella di \"meals\"): "
+        '{"meals":[...],"plan_name":"..."}. '
+        "Qualsiasi nome di alimento che appare nel titolo del piano resta nella forma "
+        "canonica spagnola (stessa regola del gloss di ingredients) — traduci solo il testo "
+        "descrittivo/creativo circostante. Se non c'è una riga \"PLAN NAME\", ometti "
+        "completamente la chiave \"plan_name\"."
+    ),
+}
+
+
+def _build_prompt(targets: list, locale: str, plan_name: Optional[str] = None) -> str:
     directive = _DISPLAY_LANGUAGE_DIRECTIVES.get(locale)
     header = _DISPLAY_DATA_HEADER.get(locale)
     if directive is None or header is None:
@@ -489,7 +542,12 @@ def _build_prompt(targets: list, locale: str) -> str:
         )
         header = "ORIGINAL DISHES (Spanish):"
 
+    if plan_name:
+        directive = f"{directive}{_PLAN_NAME_ADDENDUM.get(locale, '')}"
+
     lines = []
+    if plan_name:
+        lines.append(f"PLAN NAME: {plan_name}")
     for i, t in enumerate(targets):
         lines.append(f"{i}. NAME: {t['name']}")
         lines.append(f"   DESCRIPTION: {t['description']}")
@@ -502,6 +560,36 @@ def _build_prompt(targets: list, locale: str) -> str:
     meals_block = "\n".join(lines)
 
     return f"{directive}\n\n{header}\n{meals_block}"
+
+
+def _plan_name_already_translated(plan_data: dict, locale: str) -> bool:
+    """[fase 1c] True si `plan_data["_display"][locale]["name"]` ya existe y es un
+    string no-vacío. Evita retraducir el nombre del plan en CADA disparador
+    (swap/regenday/chatmod pueden llamar a `enrich_plan_display` decenas de veces
+    sobre el mismo plan) — el rename manual (`api_rename_plan`) popea esta key
+    (`- '_display'` a nivel plan), así que un rename real SÍ dispara una
+    retraducción en el próximo enriquecimiento."""
+    disp = plan_data.get("_display") if isinstance(plan_data, dict) else None
+    if not isinstance(disp, dict):
+        return False
+    entry = disp.get(locale)
+    return (
+        isinstance(entry, dict)
+        and isinstance(entry.get("name"), str)
+        and bool(entry.get("name").strip())
+    )
+
+
+def _validate_plan_name(value) -> Optional[str]:
+    """Sin check de canónico (a diferencia de `_validate_and_build_display` para
+    ingredients): el nombre del plan es texto creativo del LLM sin un alimento
+    identificable de forma determinista — se confía en la instrucción del
+    addendum nativo. `None`/no-string/vacío-tras-strip -> None (omitido, jamás
+    error, fail-open total del motor)."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    return v or None
 
 
 def _parse_json_response(raw: str) -> Optional[dict]:
@@ -651,8 +739,19 @@ def _persist_batch(
     locale: str,
     targets: list,
     valid_by_index: dict,
+    plan_name_snapshot: Optional[str] = None,
+    plan_name_display: Optional[str] = None,
 ) -> tuple:
     """Persiste un lote ya validado. Retorna `(written_count, mismatch_count)`.
+
+    [fase 1c] `plan_name_snapshot`/`plan_name_display`: cuando no son `None`, este
+    MISMO mutator también escribe `pd["_display"][locale]["name"]` (nivel PLAN,
+    hermano del `_display` por-meal) — incluido solo en el lote donde se intentó
+    la traducción del nombre (ver `enrich_plan_display`, `plan_name_pending`).
+    Mismo guard TOCTOU que los meals: si `pd["name"]` ya no coincide con el
+    snapshot leído antes de la llamada LLM (un rename concurrente corrió primero),
+    el plan_name traducido se descarta (no se escribe) — nunca se pega una
+    traducción sobre un nombre que ya cambió.
 
     El `mutator` corre DENTRO del `SELECT … FOR UPDATE` de `update_plan_data_atomic`
     (contrato P2-MUTATOR-PURITY, `db_plans.py:563`): pura, CPU-only, sin IO, sin
@@ -670,7 +769,7 @@ def _persist_batch(
     del meal, en español canónico) y se SALTA si difiere — el meal se queda sin
     `_display` para este locale hasta el próximo disparador legítimo.
     """
-    counters = {"written": 0, "mismatch": 0}
+    counters = {"written": 0, "mismatch": 0, "plan_name_written": False, "plan_name_mismatch": False}
 
     def _mutator(pd: dict):
         pd_days = pd.get("days") if isinstance(pd, dict) else None
@@ -705,6 +804,28 @@ def _persist_batch(
             disp_map[locale] = display
             meal["_display"] = disp_map
             counters["written"] += 1
+
+        # [fase 1c] Escritura del nombre de PLAN — nivel `pd["_display"]`, hermano
+        # del `_display` por-meal de arriba (misma key top-level, distinto scope).
+        # Mismo guard TOCTOU (comparación por nombre) que los meals: si `pd["name"]`
+        # ya no matchea el snapshot leído antes de la llamada LLM (rename manual
+        # concurrente), la traducción se descarta silenciosamente — el próximo
+        # enriquecimiento (disparado por el propio rename, que ya popeó `_display`)
+        # la retraduce contra el nombre nuevo.
+        if plan_name_display is not None:
+            if pd.get("name") == plan_name_snapshot:
+                plan_disp = pd.get("_display")
+                if not isinstance(plan_disp, dict):
+                    plan_disp = {}
+                locale_entry = plan_disp.get(locale)
+                if not isinstance(locale_entry, dict):
+                    locale_entry = {}
+                locale_entry["name"] = plan_name_display
+                plan_disp[locale] = locale_entry
+                pd["_display"] = plan_disp
+                counters["plan_name_written"] = True
+            else:
+                counters["plan_name_mismatch"] = True
         return pd
 
     try:
@@ -713,14 +834,19 @@ def _persist_batch(
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] persist falló plan={plan_id} locale={locale}: {e!r}"
         )
-        return 0, 0
+        return 0, 0, False
     if not persisted:
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] persist retornó vacío (plan desapareció o ownership "
             f"no matcheó) plan={plan_id} locale={locale}"
         )
-        return 0, 0
-    return counters["written"], counters["mismatch"]
+        return 0, 0, False
+    if counters["plan_name_mismatch"]:
+        logger.warning(
+            f"[P1-PLAN-DISPLAY-I18N] nombre del plan omitido por TOCTOU (cambió entre "
+            f"lectura y persist) plan={plan_id} locale={locale}"
+        )
+    return counters["written"], counters["mismatch"], counters["plan_name_written"]
 
 
 # ============================================================
@@ -802,12 +928,29 @@ def enrich_plan_display(
             mismatch_total = 0
             last_skip_reason = "no_meals"
 
+            # [fase 1c] Nombre del PLAN — MISMA llamada LLM que los meals, intentado
+            # UNA sola vez (el primer lote que efectivamente llega al LLM), no una vez
+            # por lote: `plan_name_pending` se limpia tras el primer intento (éxito o
+            # fallo de parseo/validación), así un plan de 28 días en 7 lotes no gasta
+            # 7 traducciones del mismo título. `_plan_name_already_translated` evita
+            # el intento por completo cuando ya hay una traducción vigente para este
+            # locale (el rename manual la popea — ver `api_rename_plan` — así que un
+            # rename real SÍ vuelve a disparar la traducción en el próximo enriquecimiento).
+            _plan_name_raw = plan_data.get("name")
+            plan_name_pending = (
+                _plan_name_raw
+                if isinstance(_plan_name_raw, str)
+                and _plan_name_raw.strip()
+                and not _plan_name_already_translated(plan_data, locale)
+                else None
+            )
+
             for batch_day_indices in day_batches:
                 targets = _collect_targets(days, batch_day_indices)
-                if not targets:
+                if not targets and plan_name_pending is None:
                     continue
 
-                prompt = _build_prompt(targets, locale)
+                prompt = _build_prompt(targets, locale, plan_name=plan_name_pending)
                 try:
                     llm = build_chat_llm(
                         model_name,
@@ -846,16 +989,30 @@ def enrich_plan_display(
                     if display is not None:
                         valid_by_index[i] = display
 
-                if not valid_by_index:
+                # [fase 1c] El intento de traducir el nombre del plan se consume aquí —
+                # UNA vez, éxito o fallo — sin importar cómo termine este lote. Si el
+                # LLM no devolvió `plan_name` (plan sin nombre) o vino inválido,
+                # `_validate_plan_name` retorna `None` y `_persist_batch` simplemente
+                # no escribe nada a nivel plan (los args quedan `None`).
+                _batch_plan_name_snapshot = None
+                _batch_plan_name_display = None
+                if plan_name_pending is not None:
+                    _batch_plan_name_snapshot = plan_name_pending
+                    _batch_plan_name_display = _validate_plan_name(parsed.get("plan_name"))
+                    plan_name_pending = None
+
+                if not valid_by_index and _batch_plan_name_display is None:
                     last_skip_reason = "no_valid_meals"
                     continue
 
-                written, mismatches = _persist_batch(
-                    plan_id, user_id, locale, targets, valid_by_index
+                written, mismatches, _plan_name_written = _persist_batch(
+                    plan_id, user_id, locale, targets, valid_by_index,
+                    plan_name_snapshot=_batch_plan_name_snapshot,
+                    plan_name_display=_batch_plan_name_display,
                 )
                 total_written += written
                 mismatch_total += mismatches
-                if written:
+                if written or _plan_name_written:
                     last_skip_reason = None
 
             if mismatch_total:

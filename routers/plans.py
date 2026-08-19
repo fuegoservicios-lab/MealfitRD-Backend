@@ -14912,6 +14912,17 @@ def api_rename_plan(
                         logger.warning(
                             f"⚠️ [P2-HIST-RENAME-NO-PROMOTE] check de latest falló — "
                             f"fail-open al sellado legacy: {_np_e}")
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-planrename · tooltip-anchor:
+                    # P1-PLAN-DISPLAY-I18N-MUTATOR-planrename] DELETE-on-write a nivel
+                    # PLAN (hermano del pop por-meal de swap/regenday/recipeexpand/
+                    # chatmod): `plan_data["_display"]` lleva `{locale: {"name": ...}}`
+                    # con el nombre traducido del PLAN (backend/plan_display_i18n.py).
+                    # Si el usuario renombra a mano, esa traducción queda apuntando al
+                    # nombre VIEJO — mentira permanente hasta el próximo disparador. El
+                    # operador jsonb `- '_display'` remueve la key top-level en el mismo
+                    # UPDATE atómico (no-op si la key no existe). Los `_display` POR MEAL
+                    # (dentro de `plan_data.days[i].meals[j]`) NO se tocan aquí — el rename
+                    # no cambia ningún plato, solo el nombre del plan.
                     if _renaming_active:
                         cur.execute(
                             """
@@ -14922,7 +14933,7 @@ def api_rename_plan(
                                         plan_data, '{name}', to_jsonb(%s::text), true
                                     ),
                                     '{_plan_modified_at}', to_jsonb(%s::text), true
-                                )
+                                ) - '_display'
                             WHERE id = %s AND user_id = %s
                             RETURNING id
                             """,
@@ -14935,7 +14946,7 @@ def api_rename_plan(
                             SET name = %s,
                                 plan_data = jsonb_set(
                                     plan_data, '{name}', to_jsonb(%s::text), true
-                                )
+                                ) - '_display'
                             WHERE id = %s AND user_id = %s
                             RETURNING id
                             """,
@@ -15022,7 +15033,11 @@ def api_plans_history_list(
               "cycle_start_date": "<iso|null>",
               "coherence_adjusts_count": <int>,
               "coherence_last_hypotheses": [<str>, ...] (max 5),
-              "preview_meals": [{"name", "meal"}, ...] (max _HISTORY_PREVIEW_MEALS_CAP = 6),
+              "preview_meals": [{"name", "meal", "display_names"?: {<locale>: <str>}}, ...]
+                  (max _HISTORY_PREVIEW_MEALS_CAP = 6; "display_names" OMITIDO si el
+                  meal no tiene `_display` — P1-PLAN-DISPLAY-I18N fase 1c),
+              "plan_display_names": {<locale>: <str>} | null (nombre del PLAN
+                  traducido, nivel plan — P1-PLAN-DISPLAY-I18N fase 1c),
               "goal": "<str|null>",
               "diet_preference": "<str|null>",
               "allergies": [<str>, ...],
@@ -15161,6 +15176,13 @@ def api_plans_history_list(
                 mp.plan_data->>'grocery_start_date' AS grocery_start_date,
                 mp.plan_data->>'cycle_start_date' AS cycle_start_date,
                 mp.plan_data->'days'->0->'meals' AS preview_meals_raw,
+                -- [P1-PLAN-DISPLAY-I18N · fase 1c] `_display` de NIVEL PLAN (hermano
+                -- del `_display` por-meal): `{locale: {"name": "<traducido>"}}`,
+                -- escrito por `plan_display_i18n.py` en la MISMA llamada que enriquece
+                -- los meals (ver docstring de `enrich_plan_display`). Clave LIGERA —
+                -- solo el nombre, nunca `recipe`/`ingredients` (esos viven per-meal,
+                -- no a nivel plan). NULL en planes es-DO o sin enriquecer aún.
+                mp.plan_data->'_display' AS plan_display_raw,
                 mp.plan_data->>'goal' AS goal_root,
                 mp.plan_data->'assessment'->>'mainGoal' AS goal_assessment,
                 mp.plan_data->>'diet_preference' AS diet_root,
@@ -15442,10 +15464,27 @@ def api_plans_history_list(
                 # legacy o response cacheado pueden traer skipped).
                 if m.get("isSkipped"):
                     continue
-                preview_meals.append({
+                _preview_item = {
                     "name": m.get("name"),
                     "meal": m.get("meal") or "",
-                })
+                }
+                # [P1-PLAN-DISPLAY-I18N · fase 1c] `display_names`: SOLO los nombres
+                # traducidos extraídos de `meal["_display"]` (`{locale: name}`) — jamás
+                # `recipe`/`ingredients` (el peso importa: este endpoint es polling del
+                # Historial, cap 6 meals/plan, no el bandwidth de una tarjeta de receta).
+                # Key OMITIDA por completo si el meal no trae `_display` (es-DO, meal
+                # sin enriquecer aún) — el frontend cae a `name` con `?? name`.
+                _m_display = m.get("_display")
+                if isinstance(_m_display, dict):
+                    _names_by_locale = {
+                        _loc: _entry.get("name")
+                        for _loc, _entry in _m_display.items()
+                        if isinstance(_entry, dict) and isinstance(_entry.get("name"), str)
+                        and _entry.get("name").strip()
+                    }
+                    if _names_by_locale:
+                        _preview_item["display_names"] = _names_by_locale
+                preview_meals.append(_preview_item)
                 # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Cap a 6 (no 4) — la razón vive en la
                 # constante `_HISTORY_PREVIEW_MEALS_CAP`. El frontend igual solo pinta 3-4 chips + "+N".
                 if len(preview_meals) >= _HISTORY_PREVIEW_MEALS_CAP:
@@ -15465,6 +15504,22 @@ def api_plans_history_list(
         # objeto u otra cosa, tratamos como vacío.
         allergies_raw = row.get("allergies")
         allergies = allergies_raw if isinstance(allergies_raw, list) else []
+
+        # [P1-PLAN-DISPLAY-I18N · fase 1c] Nombre del PLAN traducido, nivel plan
+        # (hermano de `display_names` por-meal arriba). `plan_display_raw` es
+        # `{locale: {"name": ...}}` o None (es-DO / no enriquecido). Clave ligera:
+        # solo names, omitida cuando no hay ninguna traducción válida.
+        plan_display_raw = row.get("plan_display_raw")
+        plan_display_names = None
+        if isinstance(plan_display_raw, dict):
+            _plan_names_by_locale = {
+                _loc: _entry.get("name")
+                for _loc, _entry in plan_display_raw.items()
+                if isinstance(_entry, dict) and isinstance(_entry.get("name"), str)
+                and _entry.get("name").strip()
+            }
+            if _plan_names_by_locale:
+                plan_display_names = _plan_names_by_locale
 
         # `created_at` es datetime → isoformat. `plan_modified_at`
         # ya es text (extraído via ->>).
@@ -15527,6 +15582,12 @@ def api_plans_history_list(
             # / unit_mismatch / yield_uncovered / pantry_overdeduct / unknown).
             "coherence_last_hypotheses": coherence_last_hypotheses,
             "preview_meals": preview_meals,
+            # [P1-PLAN-DISPLAY-I18N · fase 1c] Nombre del plan traducido por locale
+            # (`{locale: name}`) o `None` si el plan no tiene `_display` de nivel plan
+            # (es-DO, no enriquecido aún, o el usuario lo renombró a mano — el rename
+            # popea esta key, ver `api_rename_plan`). Card Y modal del Historial caen a
+            # `name` cuando falta.
+            "plan_display_names": plan_display_names,
             "goal": goal,
             "diet_preference": diet,
             "allergies": allergies,
