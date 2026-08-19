@@ -876,6 +876,45 @@ def _country_catalog_unpriced_keep_enabled() -> bool:
     return _knob_env_bool("MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP", True)
 
 
+# ============================================================
+# [P1-PLAN-DISPLAY-I18N · Task 5 · 2026-08-19] Gloss bilingüe display-only
+# de un ingrediente ("Black beans (Habichuelas negras)") — fase 1b de
+# docs/superpowers/specs/2026-08-19-plan-display-i18n-design.md, regla de
+# oro: la lista de compras es SIEMPRE bilingüe, jamás inglés puro. El
+# docstring de la función siguiente trae la RESTRICCIÓN DURA completa.
+# ============================================================
+
+
+def _display_name_en_for_item(master_item: dict) -> "str | None":
+    """Gloss en inglés de la fila del master, si existe y no está vacío.
+
+    RESTRICCIÓN DURA: esta función es el ÚNICO lugar de este archivo donde
+    `name_en` puede aparecer. NUNCA lo uses en `normalize_name`, ningún
+    alias, ningún matcher ni en `_is_verified_for_shopping` — la identidad
+    de un ingrediente sigue resolviendo EXCLUSIVAMENTE por `name` (español
+    canónico). Un campo de display que se cuela a un matcher es exactamente
+    la clase de bug que P1-PANTRY-NAME-RESOLUTION cerró con escopeta; el
+    test grep-proof en test_p1_plan_display_i18n.py (sección "catálogo")
+    vigila que esta zona sea la única.
+
+    Display-only: el caller lo adjunta a `market_obj["display_name_en"]`,
+    nunca a `name`/`display_category`/ninguna clave que participe en
+    matching. `None` cuando el master no trae el campo (catálogo aún sin
+    poblar por `scripts/fill_catalog_name_en.py`) — el frontend cae en
+    silencio al nombre español (mismo contrato que `_display[locale]`).
+
+    tooltip-anchor: P1-PLAN-DISPLAY-I18N
+    """
+    try:
+        gloss = master_item.get("name_en") if isinstance(master_item, dict) else None
+    except Exception:
+        return None
+    if not isinstance(gloss, str):
+        return None
+    gloss = gloss.strip()
+    return gloss or None
+
+
 def _master_category_for_unpriced_item(name) -> "str | None":
     """[P2-SHOPLIST-BETA-POLISH · 2026-08-18] Categoría REAL del master para un ítem
     unpriced-keep, para que 'Acelgas' caiga en VEGETALES y 'Membrillo' en FRUTAS en vez
@@ -12207,6 +12246,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 total_estimated_cost += item_cost
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
+                # [P1-PLAN-DISPLAY-I18N · Task 5] Gloss bilingüe display-only para
+                # la lista de compras — ver _display_name_en_for_item arriba.
+                _name_en = _display_name_en_for_item(master_item)
+                if _name_en:
+                    market_obj["display_name_en"] = _name_en
                 market_obj["is_staple"] = False
                 # [P1-PDF-2] Cierra el drift de la heurística substring que vivía
                 # SOLO en frontend. Backend es ahora SSOT para perishable
@@ -12249,6 +12293,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 total_estimated_cost += item_cost
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
+                # [P1-PLAN-DISPLAY-I18N · Task 5] Mismo gloss bilingüe que el path
+                # por peso arriba — ver _display_name_en_for_item.
+                _name_en = _display_name_en_for_item(master_item)
+                if _name_en:
+                    market_obj["display_name_en"] = _name_en
                 market_obj["is_staple"] = False
                 # [P1-PDF-2] Mismo flag que arriba — todo item entrando a
                 # `aggregated_shopping_list` debe tener `is_perishable` para que

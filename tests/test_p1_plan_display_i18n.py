@@ -2524,3 +2524,488 @@ def test_swap_functional_dispatch_includes_macroengine_touched_days(_swap_engine
         "popeó su `_display`."
     )
     assert 0 in day_indices, "el día REALMENTE swapeado (0) debe seguir incluido."
+
+
+# ================================================================================
+# SECCIÓN: CATÁLOGO (Task 5) — master_ingredients.name_en + lista de compras bilingüe
+# ================================================================================
+#
+# Fase 1b de la spec: "el usuario cocina en su idioma pero COMPRA en español, la
+# lista de compras es BILINGÜE, jamás inglés puro". A diferencia del resto de este
+# archivo (motor `_display[locale]` por-meal, locale-keyed), esta sección cubre un
+# campo ESTÁTICO del catálogo (`master_ingredients.name_en`) consumido por el
+# aggregator de `shopping_calculator.py` — un solo gloss en inglés por fila,
+# reusado para CUALQUIER locale distinto de es-DO (no hay glosses en
+# portugués/francés/italiano; la fase 1b solo cubre inglés).
+#
+# Cuatro contratos del brief:
+#   (a) migración parseada: ambas copias SSOT idénticas + idempotente.
+#   (b) parser + unit: el aggregator adjunta `display_name_en` SIN tocar `name`.
+#   (c) EL GUARD ESCOPETA: cero `name_en` fuera de la zona display-only del
+#       aggregator — nunca en normalize_name/aliases/matchers/_is_verified_for_shopping.
+#   (d) script `fill_catalog_name_en.py`: fail-loud + dry-run default, sin tocar DB real.
+# ================================================================================
+
+import importlib.util as _importlib_util
+import io as _io_catalog
+
+_MIGRATION_NAME = "p1_plan_display_i18n_name_en.sql"
+_ROOT_DIR = _BACKEND_ROOT.parent
+_FILL_SCRIPT_PATH = _BACKEND_ROOT / "scripts" / "fill_catalog_name_en.py"
+_SHOPPING_CALC_SRC_PATH = _BACKEND_ROOT / "shopping_calculator.py"
+
+
+def _read_catalog_migration(root: bool = False) -> str:
+    base = _ROOT_DIR if root else _BACKEND_ROOT
+    return _io_catalog.open(base / "migrations" / _MIGRATION_NAME, encoding="utf-8").read()
+
+
+@pytest.fixture(scope="module")
+def _shopping_calc_src() -> str:
+    return _SHOPPING_CALC_SRC_PATH.read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------
+# (a) Migración parseada
+# ------------------------------------------------------------------
+
+
+def test_catalog_migration_exists_in_both_ssot_dirs():
+    """P3-MIGRATIONS-SSOT: toda migration vive en `migrations/` Y `backend/migrations/`."""
+    for base in (_BACKEND_ROOT, _ROOT_DIR):
+        p = base / "migrations" / _MIGRATION_NAME
+        assert p.exists(), f"falta {p}"
+
+
+def test_catalog_migration_byte_identical_in_both_dirs():
+    a = (_BACKEND_ROOT / "migrations" / _MIGRATION_NAME).read_bytes()
+    b = (_ROOT_DIR / "migrations" / _MIGRATION_NAME).read_bytes()
+    assert a == b, f"{_MIGRATION_NAME} difiere entre los dos dirs SSOT ({len(a)} vs {len(b)} bytes)"
+
+
+def test_catalog_migration_is_idempotent_add_column_if_not_exists():
+    sql = _read_catalog_migration()
+    assert "ADD COLUMN IF NOT EXISTS name_en" in sql, (
+        "la migración debe usar ADD COLUMN IF NOT EXISTS -- re-aplicar debe ser no-op "
+        "(convención P3-MIGRATION-IDEMPOTENCE-DOC)"
+    )
+
+
+def test_catalog_migration_has_sanity_check():
+    sql = _read_catalog_migration()
+    assert "DO $$" in sql and "RAISE EXCEPTION" in sql, (
+        "falta el sanity DO $$ ... RAISE EXCEPTION -- convención del repo para migraciones "
+        "de columna nueva (ver p2_next_4_meal_plans_complete_requires_days.sql)"
+    )
+
+
+def test_catalog_migration_targets_master_ingredients_table():
+    sql = _read_catalog_migration()
+    assert "public.master_ingredients" in sql
+    assert re.search(r"ADD COLUMN IF NOT EXISTS name_en\s+TEXT", sql), (
+        "la columna nueva debe ser name_en TEXT"
+    )
+
+
+def test_catalog_migration_does_not_touch_name_column():
+    """Restricción dura del brief: esta migración SOLO añade `name_en`, nunca toca
+    la columna `name` (identidad del catálogo) — ni la altera ni la borra."""
+    sql = _read_catalog_migration()
+    assert "DROP COLUMN" not in sql.upper()
+    assert not re.search(r"ALTER\s+TABLE.*\bname\b(?!_en)", sql, re.IGNORECASE), (
+        "la migración no debe tocar la columna `name` -- solo `name_en`"
+    )
+
+
+# ------------------------------------------------------------------
+# (b) Parser + unit: el aggregator adjunta `display_name_en` sin tocar `name`
+# ------------------------------------------------------------------
+
+
+def test_aggregator_has_display_name_en_helper(_shopping_calc_src):
+    assert "def _display_name_en_for_item(" in _shopping_calc_src
+    assert "tooltip-anchor: P1-PLAN-DISPLAY-I18N" in _shopping_calc_src
+
+
+def test_aggregator_attaches_display_name_en_at_exactly_two_call_sites(_shopping_calc_src):
+    """Los dos paths de `aggregate_and_deduct_shopping_list` (por peso, por
+    unidades) deben adjuntar `display_name_en` — el mismo par de sitios donde
+    `display_category` ya se asigna (P2-SHOPLIST-BETA-POLISH)."""
+    calls = [
+        m.start()
+        for m in re.finditer(r'market_obj\["display_name_en"\] = _name_en', _shopping_calc_src)
+    ]
+    assert len(calls) == 2, (
+        f"esperados exactamente 2 usos (path por peso + path por unidades), hay {len(calls)}"
+    )
+
+
+def test_aggregator_display_name_en_never_overwrites_name_key(_shopping_calc_src):
+    """El gloss es un campo NUEVO (`display_name_en`) -- nunca debe reasignar
+    `market_obj['name']`/`display_category` desde `name_en`."""
+    assert 'market_obj["name"] = _name_en' not in _shopping_calc_src
+    assert 'market_obj["display_category"] = _name_en' not in _shopping_calc_src
+    assert 'market_obj["name"] = _display_name_en_for_item' not in _shopping_calc_src
+
+
+def test_master_category_for_unpriced_item_call_count_unchanged(_shopping_calc_src):
+    """Guard vecino de P2-SHOPLIST-BETA-POLISH (test_p2_shoplist_beta_polish.py): esa
+    función cuenta EXACTAMENTE 2 usos de `_master_category_for_unpriced_item`. Esta
+    task no debe añadir un 3º call site -- se re-ancla aquí para que un futuro
+    cambio a ESTA sección no rompa esa garantía en silencio."""
+    calls = [m.start() for m in re.finditer(r"_master_category_for_unpriced_item\(", _shopping_calc_src)]
+    assert len(calls) == 2
+
+
+@pytest.fixture(scope="module")
+def _sc_module():
+    import shopping_calculator
+    return shopping_calculator
+
+
+def test_display_name_en_for_item_returns_stripped_value(_sc_module):
+    assert _sc_module._display_name_en_for_item({"name_en": "  Black beans  "}) == "Black beans"
+
+
+def test_display_name_en_for_item_missing_key_returns_none(_sc_module):
+    assert _sc_module._display_name_en_for_item({"name": "Habichuelas negras"}) is None
+
+
+def test_display_name_en_for_item_blank_string_returns_none(_sc_module):
+    assert _sc_module._display_name_en_for_item({"name_en": "   "}) is None
+    assert _sc_module._display_name_en_for_item({"name_en": ""}) is None
+
+
+def test_display_name_en_for_item_non_string_returns_none(_sc_module):
+    assert _sc_module._display_name_en_for_item({"name_en": 42}) is None
+    assert _sc_module._display_name_en_for_item({"name_en": None}) is None
+
+
+def test_display_name_en_for_item_non_dict_returns_none(_sc_module):
+    assert _sc_module._display_name_en_for_item(None) is None
+    assert _sc_module._display_name_en_for_item("not-a-dict") is None
+    assert _sc_module._display_name_en_for_item([]) is None
+
+
+def test_display_name_en_for_item_never_touches_name_key(_sc_module):
+    """Contrato display-only: pasarle un dict con `name` NO lo modifica -- el
+    helper solo LEE `name_en`, nunca escribe/muta el master_item recibido."""
+    master_item = {"name": "Habichuelas negras", "name_en": "Black beans", "category": "Víveres"}
+    frozen_copy = dict(master_item)
+    _sc_module._display_name_en_for_item(master_item)
+    assert master_item == frozen_copy, "el helper no debe mutar el master_item recibido"
+
+
+# ------------------------------------------------------------------
+# (c) EL GUARD ESCOPETA — cero `name_en` fuera de la zona display-only
+# ------------------------------------------------------------------
+
+_ALLOWED_NAME_EN_FUNCTIONS = frozenset({
+    "_display_name_en_for_item",
+    "aggregate_and_deduct_shopping_list",
+})
+
+
+def _top_level_def_blocks(src: str) -> dict:
+    """Trocea `src` por funciones top-level (`^def nombre(`, columna 0) -- mismo
+    patrón que usan otros guards parser-based de este repo (p.ej.
+    test_p1_country_system_f2.py) para no depender de indentación anidada."""
+    positions = [(m.start(), m.group(1)) for m in re.finditer(r"^def (\w+)\(", src, re.MULTILINE)]
+    blocks: dict = {}
+    for i, (start, name) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(src)
+        blocks.setdefault(name, []).append(src[start:end])
+    return blocks
+
+
+def test_guard_name_en_confined_to_display_only_functions(_shopping_calc_src):
+    """RESTRICCIÓN DURA del brief: `name_en` es DISPLAY-ONLY. Escanea TODAS las
+    funciones top-level de shopping_calculator.py (no una whitelist a mano de
+    'sitios sospechosos') y falla si el literal `name_en` aparece en cualquiera
+    que no sea la zona display-only conocida -- así un futuro call site nuevo en
+    normalize_name/un matcher/un alias no puede colarse en silencio."""
+    blocks = _top_level_def_blocks(_shopping_calc_src)
+    offending = sorted(
+        name for name, chunks in blocks.items()
+        if any("name_en" in chunk for chunk in chunks)
+        and name not in _ALLOWED_NAME_EN_FUNCTIONS
+    )
+    assert not offending, (
+        f"'name_en' referenciado fuera de la zona display-only en: {offending} -- "
+        "restricción dura: name_en NUNCA entra a normalize_name/aliases/matchers/"
+        "pantry_names_match (P1-PANTRY-NAME-RESOLUTION es la misma clase de bug)."
+    )
+
+
+def test_guard_normalize_name_never_references_name_en(_shopping_calc_src):
+    blocks = _top_level_def_blocks(_shopping_calc_src)
+    chunks = blocks.get("normalize_name")
+    assert chunks, "normalize_name debe existir en shopping_calculator.py -- el test mide otra cosa si no"
+    for chunk in chunks:
+        assert "name_en" not in chunk
+
+
+def test_guard_is_verified_for_shopping_never_references_name_en(_shopping_calc_src):
+    blocks = _top_level_def_blocks(_shopping_calc_src)
+    chunks = blocks.get("_is_verified_for_shopping")
+    assert chunks, "_is_verified_for_shopping debe existir -- el test mide otra cosa si no"
+    for chunk in chunks:
+        assert "name_en" not in chunk
+
+
+def test_guard_constants_module_untouched_by_name_en():
+    """Defensa extra: esta task no debía tocar constants.py (SSOT de
+    `pantry_names_match`/`GLOBAL_REVERSE_MAP`/`canonicalize_*`) en absoluto."""
+    constants_src = (_BACKEND_ROOT / "constants.py").read_text(encoding="utf-8")
+    assert "name_en" not in constants_src
+
+
+# ------------------------------------------------------------------
+# (d) Script `fill_catalog_name_en.py` — fail-loud + dry-run default
+# ------------------------------------------------------------------
+
+
+def test_fill_script_exists():
+    assert _FILL_SCRIPT_PATH.exists()
+
+
+@pytest.fixture(scope="module")
+def _fill_script_module():
+    """Importa el script como módulo AISLADO (no side-effects de import: NEON solo
+    se LEE del entorno, ninguna conexión/LLM se dispara hasta llamar a `main()`)."""
+    spec = _importlib_util.spec_from_file_location(
+        "fill_catalog_name_en_test_import", _FILL_SCRIPT_PATH
+    )
+    mod = _importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_fill_script_imports_cleanly(_fill_script_module):
+    mod = _fill_script_module
+    assert callable(mod.main)
+    assert callable(mod.translate_batch)
+    assert callable(mod.fetch_catalog_names)
+    assert mod.DEEPSEEK_FLASH  # reusa el mismo builder de cliente que plan_display_i18n
+
+
+def test_fill_script_has_dry_run_default_and_commit_flag_docs():
+    src = _FILL_SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "--commit" in src
+    assert "dry-run" in src.lower()
+
+
+class _FakeLLMResponse:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeLLMClient:
+    def __init__(self, content):
+        self._content = content
+
+    def invoke(self, messages):
+        return _FakeLLMResponse(self._content)
+
+
+def test_translate_batch_happy_path(_fill_script_module, monkeypatch):
+    mod = _fill_script_module
+    payload = json.dumps({"items": [
+        {"name": "Pollo", "name_en": "Chicken"},
+        {"name": "Habichuelas rojas", "name_en": "Red beans"},
+    ]})
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient(payload))
+    out = mod.translate_batch(["Pollo", "Habichuelas rojas"], "fake-model")
+    assert out == {"Pollo": "Chicken", "Habichuelas rojas": "Red beans"}
+
+
+def test_translate_batch_strips_markdown_code_fence(_fill_script_module, monkeypatch):
+    mod = _fill_script_module
+    payload = "```json\n" + json.dumps({"items": [{"name": "Pollo", "name_en": "Chicken"}]}) + "\n```"
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient(payload))
+    out = mod.translate_batch(["Pollo"], "fake-model")
+    assert out == {"Pollo": "Chicken"}
+
+
+def test_translate_batch_accent_insensitive_match(_fill_script_module, monkeypatch):
+    mod = _fill_script_module
+    payload = json.dumps({"items": [{"name": "Platano", "name_en": "Plantain"}]})
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient(payload))
+    out = mod.translate_batch(["Plátano"], "fake-model")
+    assert out == {"Plátano": "Plantain"}
+
+
+def test_translate_batch_fail_loud_on_missing_rows(_fill_script_module, monkeypatch):
+    """Fail-loud contrato del brief: MENOS filas de las pedidas -> RuntimeError."""
+    mod = _fill_script_module
+    payload = json.dumps({"items": [{"name": "Pollo", "name_en": "Chicken"}]})
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient(payload))
+    with pytest.raises(RuntimeError, match=r"\[FAIL-LOUD\]"):
+        mod.translate_batch(["Pollo", "Habichuelas rojas"], "fake-model")
+
+
+def test_translate_batch_fail_loud_on_unmatched_name(_fill_script_module, monkeypatch):
+    """Fail-loud contrato del brief: nombres que NO matchean ninguna fila pedida
+    -> RuntimeError (incluso si además trajo una fila válida)."""
+    mod = _fill_script_module
+    payload = json.dumps({"items": [
+        {"name": "Pollo", "name_en": "Chicken"},
+        {"name": "Nombre inventado xyz", "name_en": "Made up"},
+    ]})
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient(payload))
+    with pytest.raises(RuntimeError, match=r"\[FAIL-LOUD\]"):
+        mod.translate_batch(["Pollo"], "fake-model")
+
+
+def test_translate_batch_fail_loud_on_invalid_json(_fill_script_module, monkeypatch):
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient("not json at all"))
+    with pytest.raises(RuntimeError, match=r"\[FAIL-LOUD\]"):
+        mod.translate_batch(["Pollo"], "fake-model")
+
+
+def test_translate_batch_skips_items_with_empty_gloss(_fill_script_module, monkeypatch):
+    """Un item con `name_en` vacío/blank no cuenta como traducción válida --
+    contribuye a que la fila quede "faltante" y dispare fail-loud."""
+    mod = _fill_script_module
+    payload = json.dumps({"items": [{"name": "Pollo", "name_en": "   "}]})
+    monkeypatch.setattr(mod, "build_chat_llm", lambda model, **kw: _FakeLLMClient(payload))
+    with pytest.raises(RuntimeError, match=r"\[FAIL-LOUD\]"):
+        mod.translate_batch(["Pollo"], "fake-model")
+
+
+class _FakeCursor:
+    def __init__(self, calls):
+        self._calls = calls
+        self.rowcount = 1
+
+    def execute(self, sql, params=None):
+        self._calls.append((sql, params))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class _FakeSelectResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    def __init__(self, names, calls):
+        self._names = names
+        self._calls = calls
+        self.committed = False
+
+    def execute(self, sql):
+        return _FakeSelectResult([(n,) for n in self._names])
+
+    def cursor(self):
+        return _FakeCursor(self._calls)
+
+    def commit(self):
+        self.committed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_fill_script_dry_run_default_does_not_write_to_db(_fill_script_module, monkeypatch, capsys):
+    """Contrato del brief: `--dry-run` es el default (sin flags) -- NO debe emitir
+    ningún UPDATE ni `commit()`, solo imprime la tabla de auditoría."""
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn(["Pollo", "Habichuelas rojas"], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(
+        mod, "translate_batch",
+        lambda names, model, **kw: {n: f"EN-{n}" for n in names},
+    )
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py"])
+
+    mod.main()
+
+    out = capsys.readouterr().out
+    assert "DRY-RUN" in out
+    assert "EN-Pollo" in out, "la tabla de auditoría debe imprimir las traducciones"
+    assert not calls, "dry-run NO debe emitir ningún UPDATE"
+    assert fake_conn.committed is False
+
+
+def test_fill_script_commit_flag_writes_to_db(_fill_script_module, monkeypatch, capsys):
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn(["Pollo"], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(
+        mod, "translate_batch",
+        lambda names, model, **kw: {n: f"EN-{n}" for n in names},
+    )
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py", "--commit"])
+
+    mod.main()
+
+    out = capsys.readouterr().out
+    assert "COMMIT" in out
+    assert len(calls) == 1, "commit debe emitir exactamente 1 UPDATE (1 fila pedida)"
+    sql, params = calls[0]
+    assert "UPDATE master_ingredients SET name_en" in sql
+    assert "WHERE name" in sql
+    assert params == ("EN-Pollo", "Pollo")
+    assert fake_conn.committed is True
+
+
+def test_fill_script_fail_loud_aborts_before_any_write(_fill_script_module, monkeypatch, capsys):
+    """Contrato del brief: fail-loud aborta ANTES de escribir nada, ni siquiera
+    parcial -- ninguna UPDATE debe correr si `translate_batch` revienta."""
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn(["Pollo", "Habichuelas rojas"], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+
+    def _boom(names, model, **kw):
+        raise RuntimeError("[FAIL-LOUD] el LLM devolvió 1/2 traducciones")
+
+    monkeypatch.setattr(mod, "translate_batch", _boom)
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py", "--commit"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        mod.main()
+
+    assert exc_info.value.code == 1
+    assert not calls, "fail-loud debe abortar ANTES de cualquier UPDATE"
+    assert fake_conn.committed is False
+
+
+def test_fill_script_no_rows_from_catalog_exits_loud(_fill_script_module, monkeypatch):
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn([], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        mod.main()
+    assert exc_info.value.code == 1
+
+
+def test_fill_script_missing_neon_env_exits_loud(_fill_script_module, monkeypatch):
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", None)
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py"])
+    with pytest.raises(SystemExit) as exc_info:
+        mod.main()
+    assert exc_info.value.code == 1
