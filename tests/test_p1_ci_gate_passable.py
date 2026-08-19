@@ -137,6 +137,78 @@ def test_coverage_fuera_del_lint() -> None:
     )
 
 
+def _cuerpo_de_excepciones(gate: str) -> str:
+    """El bloque de excepciones de `audit-gate.mjs`, sea cual sea su envoltorio.
+
+    [P0-AUDIT-EXCEPCIONES · 2026-08-18] Ese bloque dejó de ser
+    `const ALLOWLIST = new Set([...])` —una lista de GHSA sueltos— y pasó a ser
+    `const EXCEPCIONES = { ... }`, donde cada entrada lleva dueño, caducidad y
+    mitigación, y una excepción VENCIDA pone el gate en rojo. La `ALLOWLIST`
+    sigue existiendo, pero derivada: `new Set(Object.keys(EXCEPCIONES))`.
+
+    Estos dos tests seguían buscando la forma vieja con una expresión regular y
+    por eso reventaron: no porque la protección hubiera desaparecido, sino porque
+    se había REFORZADO. Es el precio conocido de anclar un guard a la sintaxis de
+    producción —y el precio que el repo acepta a cambio de que un renombre falle
+    aquí antes de cambiar la conducta en silencio—.
+
+    Se acepta cualquiera de las dos formas para que el fallo, si vuelve a
+    cambiar, diga QUÉ falta en vez de «no encuentro nada».
+    """
+    m = re.search(r"const\s+EXCEPCIONES\s*=\s*\{(.*?)\n\};", gate, re.S)
+    if m:
+        return m.group(1)
+    m = re.search(r"const\s+ALLOWLIST\s*=\s*new\s+Set\(\[(.*?)\]\)", gate, re.S)
+    assert m, (
+        "No encuentro ni `const EXCEPCIONES = {...}` ni `const ALLOWLIST = new Set([...])` "
+        "en audit-gate.mjs. Si el bloque cambió de forma otra vez, enseñale la nueva "
+        "a este helper: es el único sitio que hay que tocar."
+    )
+    return m.group(1)
+
+
+def test_cada_excepcion_declara_dueno_caducidad_y_mitigacion() -> None:
+    """La forma nueva permite exigir más que «que haya un comentario».
+
+    Una excepción de seguridad sin fecha de caducidad se vuelve permanente por
+    omisión: nadie decide dejarla para siempre, simplemente nadie vuelve. Con
+    `caduca` el propio gate la reabre sola el día marcado.
+    """
+    gate = _leer(_AUDIT_GATE)
+
+    # Se buscan los OBJETOS que declaran una excepcion, no las palabras sueltas.
+    #
+    # [P2-GUARD-LITERAL] La primera version de este test hacia `re.search("dueno",
+    # gate)` sobre el fichero entero, y por eso NO detecto la mutacion que renombra
+    # el campo: la palabra `dueno` tambien aparece en el mensaje de error que el
+    # propio script imprime («... con dueno, caduca y mitigacion verificable»). Un
+    # texto que CITA el literal satisfacia al guard que lo EXIGE. Es la tercera vez
+    # que este repo se come esa trampa; la salida es mirar la estructura, no el texto.
+    bloques = []
+    for m in re.finditer(r"caduca\s*:", gate):
+        abre = gate.rfind("{", 0, m.start())
+        cierra = gate.find("}", m.end())
+        assert abre != -1 and cierra != -1, "objeto de excepcion mal formado alrededor de `caduca`"
+        bloques.append(gate[abre:cierra + 1])
+
+    assert bloques, (
+        "Ninguna excepcion declara `caduca`. Los tres campos (dueno / caduca / "
+        "mitigacion) son el motivo de que esta estructura sustituyera a una lista "
+        "de GHSA sueltos."
+    )
+
+    for bloque in bloques:
+        for campo in ("dueno", "caduca", "mitigacion"):
+            assert re.search(rf"\b{campo}\s*:", bloque), (
+                f"Una excepcion no declara `{campo}`:\n{bloque[:200]}"
+            )
+        fecha = re.search(r"caduca\s*:\s*'([^']*)'", bloque)
+        assert fecha and re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha.group(1)), (
+            f"`caduca` no es una fecha YYYY-MM-DD en:\n{bloque[:200]}\n"
+            "El gate la compara contra hoy; un texto libre no caduca nunca."
+        )
+
+
 def test_el_advisory_de_react_router_no_vuelve_a_la_allowlist() -> None:
     """`GHSA-qwww-vcr4-c8h2` se retiró porque 7.18.2 lo cierra hacia delante.
 
@@ -144,9 +216,7 @@ def test_el_advisory_de_react_router_no_vuelve_a_la_allowlist() -> None:
     reaparece, el arreglo es el bump, no la excepción.
     """
     gate = _leer(_AUDIT_GATE)
-    m = re.search(r"const\s+ALLOWLIST\s*=\s*new\s+Set\(\[(.*?)\]\)", gate, re.S)
-    assert m, "No encuentro `const ALLOWLIST = new Set([...])` en audit-gate.mjs."
-    cuerpo = m.group(1)
+    cuerpo = _cuerpo_de_excepciones(gate)
 
     entradas_activas = [
         ln for ln in cuerpo.splitlines()
@@ -167,12 +237,10 @@ def test_la_allowlist_no_crece_sin_justificacion_inline() -> None:
     silenciamiento por prisa.
     """
     gate = _leer(_AUDIT_GATE)
-    m = re.search(r"const\s+ALLOWLIST\s*=\s*new\s+Set\(\[(.*?)\]\)", gate, re.S)
-    assert m, "No encuentro la ALLOWLIST en audit-gate.mjs."
-    cuerpo = m.group(1)
+    cuerpo = _cuerpo_de_excepciones(gate)
 
     ids = set(re.findall(r"'(GHSA-[a-z0-9-]+)'", cuerpo))
-    assert ids, "La ALLOWLIST quedó vacía o cambió de formato — revisá este test."
+    assert ids, "Las EXCEPCIONES quedaron vacías o cambiaron de formato — revisá este test."
 
     # El bloque entero tiene que llevar prosa: el criterio del repo es que la
     # razón viva junto a la excepción, no sólo en el doc de triage.
