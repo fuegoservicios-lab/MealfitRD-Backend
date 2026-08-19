@@ -28,12 +28,16 @@ def _fn_body(src: str, header_startswith: str) -> str:
     return src[i:nxt if nxt != -1 else len(src)]
 
 
-def test_titulo_lee_locale_y_apendea_la_directiva_ssot():
+def test_titulo_lee_locale_y_apendea_la_directiva_de_titulo():
+    # [round 2] La directiva del título es la ESPECÍFICA (build_title_language_directive),
+    # no la conversacional: los ejemplos españoles del template vencían a la genérica —
+    # «Estado del día» se generó a las 07:10 POST-restart 07:09 con la genérica apendeada.
     src = _read("agent.py")
     body = _fn_body(src, "def generate_chat_title_background(")
-    assert "build_language_directive(" in body, (
-        "el generador de títulos debe apendear la directiva SSOT de idioma — sin esto el "
-        "título del sidebar sale en español para usuarios en-US/pt/fr/it (P1-CHAT-TITLE-LOCALE)"
+    assert "build_title_language_directive" in body, (
+        "el generador de títulos debe apendear la directiva ESPECÍFICA del título — la "
+        "conversacional no vence a los ejemplos españoles del template (round 2 de "
+        "P1-CHAT-TITLE-LOCALE)"
     )
     assert re.search(r"get_user_profile", body), (
         "el locale del título sale del perfil (una lectura por sesión, costo nulo)"
@@ -42,6 +46,27 @@ def test_titulo_lee_locale_y_apendea_la_directiva_ssot():
     assert re.search(
         r"TITLE_GENERATION_PROMPT\.format\([^)]*\)\s*\+\s*_title_lang_directive", body
     ), "la directiva debe apendearse al prompt formateado del título"
+
+
+def test_directiva_de_titulo_es_nativa_con_ejemplos_propios():
+    """La lección del round 2, un nivel más profundo que NATIVE: *los ejemplos son
+    instrucciones*. Cada variante trae ejemplos de título EN el idioma destino y declara
+    que los españoles del template son solo de FORMATO."""
+    from prompts.chat_agent import build_title_language_directive
+    casos = {
+        "en-US": ("Write the title in English", "Morning check-in"),
+        "pt-BR": ("Escreva o título em Português", "Primeiro contato"),
+        "fr-FR": ("Rédige le titre en Français", "Premier contact"),
+        "it-IT": ("Scrivi il titolo in Italiano", "Primo contatto"),
+    }
+    for locale, (imperativo, ejemplo) in casos.items():
+        r = build_title_language_directive(locale)
+        assert imperativo in r, f"{locale}: la directiva del título debe ser nativa"
+        assert ejemplo in r, f"{locale}: sin ejemplos nativos, los españoles del template ganan"
+        assert "FORMAT" in r.upper(), f"{locale}: debe declarar que los ejemplos del template son solo formato"
+    assert build_title_language_directive("es-DO") == ""
+    assert build_title_language_directive(None) == ""
+    assert build_title_language_directive("xx-XX") == ""
 
 
 def test_guest_y_fallo_caen_a_directiva_vacia():

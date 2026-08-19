@@ -4779,15 +4779,17 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             return
 
         title_llm = ChatDeepSeek(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
-        # [P1-CHAT-TITLE-LOCALE · 2026-08-19] Directiva de idioma del título — misma SSOT
-        # nativa del coach (ver comentario en la cabecera de esta función). Best-effort:
-        # cualquier fallo ⇒ directiva vacía ⇒ conducta previa (título en español).
+        # [P1-CHAT-TITLE-LOCALE · 2026-08-19 · round 2] Directiva de idioma ESPECÍFICA del
+        # título (`build_title_language_directive`): la conversacional del round 1 no vencía
+        # a los ejemplos españoles del template — ver el bloque en prompts/chat_agent.py.
+        # Best-effort: cualquier fallo ⇒ directiva vacía ⇒ conducta previa (título español).
         _title_lang_directive = ""
         try:
             if user_id and user_id != "guest" and user_id != session_id:
                 from db import get_user_profile as _gup_title
+                from prompts.chat_agent import build_title_language_directive as _btld
                 _title_prof = _gup_title(user_id) or {}
-                _title_lang_directive = build_language_directive(_title_prof.get("locale"))
+                _title_lang_directive = _btld(_title_prof.get("locale"))
         except Exception:
             _title_lang_directive = ""
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str) + _title_lang_directive

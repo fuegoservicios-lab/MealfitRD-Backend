@@ -500,9 +500,56 @@ REGLAS CRÍTICAS:
 3. TÍTULOS PROHIBIDOS: Tienes estrictamente prohibido usar o parecerte a estos títulos que ya existen en su historial: [{used_titles}]. ¡Inventa una combinación de palabras completamente nueva!
 4. CERO RELLENO: No uses comillas, puntos finales ni frases como "El título es". DEVUELVE ÚNICAMENTE EL TEXTO DEL TÍTULO.
 
-Mensaje del usuario: 
+Mensaje del usuario:
 "{first_message}"
 """
+
+
+# [P1-CHAT-TITLE-LOCALE · 2026-08-19 · round 2] Directiva de idioma ESPECÍFICA del título.
+# Round 1 apendeaba `build_language_directive` (la conversacional) y el título salió español
+# igual («Estado del día», generado a las 07:10, POST-restart 07:09 — no fue carrera): en una
+# micro-tarea de 2-4 palabras los EJEMPLOS del template («Duda sobre el puré», «Primer
+# contacto», «Bienvenida») son la señal dominante, y una directiva redactada para prosa
+# conversacional no los vence. Misma lección que P1-COACH-LANGUAGE-NATIVE, un nivel más
+# profundo: *los ejemplos son instrucciones* — la directiva del título trae SUS PROPIOS
+# ejemplos en el idioma destino y declara que los españoles del template son solo de FORMATO.
+# es-DO/None/garbage ⇒ "" (byte-idéntico). Cache por variante, como su hermana.
+_TITLE_LANGUAGE_DIRECTIVES = {
+    "en-US": (
+        "\n\n🌐 TITLE LANGUAGE — NON-NEGOTIABLE: Write the title in English. The Spanish "
+        "examples above show FORMAT only (2-4 words), NOT language. Valid examples: "
+        "\"Morning check-in\", \"Quick nutrition question\", \"First hello\". Food and dish "
+        "names stay in Spanish exactly as written (e.g. \"Mangú question\")."
+    ),
+    "pt-BR": (
+        "\n\n🌐 IDIOMA DO TÍTULO — INEGOCIÁVEL: Escreva o título em Português. Os exemplos em "
+        "espanhol acima mostram apenas o FORMATO (2-4 palavras), não o idioma. Exemplos "
+        "válidos: \"Primeiro contato\", \"Dúvida de nutrição\", \"Check-in da manhã\". Nomes "
+        "de pratos ficam em espanhol exatamente como estão (ex.: \"Dúvida sobre Mangú\")."
+    ),
+    "fr-FR": (
+        "\n\n🌐 LANGUE DU TITRE — NON NÉGOCIABLE : Rédige le titre en Français. Les exemples "
+        "en espagnol ci-dessus montrent uniquement le FORMAT (2-4 mots), pas la langue. "
+        "Exemples valides : « Premier contact », « Question nutrition », « Bilan du matin ». "
+        "Les noms de plats restent en espagnol tels quels (ex. « Question sur Mangú »)."
+    ),
+    "it-IT": (
+        "\n\n🌐 LINGUA DEL TITOLO — NON NEGOZIABILE: Scrivi il titolo in Italiano. Gli esempi "
+        "in spagnolo sopra mostrano solo il FORMATO (2-4 parole), non la lingua. Esempi "
+        "validi: \"Primo contatto\", \"Domanda di nutrizione\", \"Check-in mattutino\". I nomi "
+        "dei piatti restano in spagnolo così come sono (es. \"Domanda su Mangú\")."
+    ),
+}
+
+
+def build_title_language_directive(locale) -> str:
+    """Directiva de idioma para el GENERADOR DE TÍTULOS del chat (no confundir con
+    `build_language_directive`, que es para la prosa conversacional del coach). Ver el
+    bloque de comentarios de `_TITLE_LANGUAGE_DIRECTIVES` para el porqué de que sean dos.
+    tooltip-anchor: build_title_language_directive (test_p1_chat_title_locale.py)"""
+    if not isinstance(locale, str):
+        return ""
+    return _TITLE_LANGUAGE_DIRECTIVES.get(locale, "")
 
 
 def build_clinical_guard_context(form_data: dict) -> str:
