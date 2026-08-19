@@ -1,3 +1,18 @@
+"""[P1-DEMO-NO-ES-TEST . 2026-08-19] Demostracion manual, NO una prueba.
+
+Se llamaba `test_semantic_cache.py` con una funcion `test_caching`, asi que
+pytest la recogia como test corriente. Sobrevivio hasta hoy solo porque el gate
+del despliegue la DESELECCIONABA: no estaba protegida, estaba escondida.
+
+Y lo que hace es invocar `run_plan_pipeline`, la generacion completa de un plan:
+la operacion mas cara del sistema. Un `pytest scripts/` sin filtro la habria
+ejecutado y facturado, justo lo que la directiva de gasto del dueno prohibe
+—corridas dirigidas, con identificadores explicitos—.
+
+El nombre `test_*` no es una etiqueta: es una instruccion para pytest.
+
+Uso:  python scripts/demo_semantic_cache.py
+"""
 import sys
 import os
 import time

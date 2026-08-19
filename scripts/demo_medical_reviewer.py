@@ -1,3 +1,20 @@
+"""[P1-DEMO-NO-ES-TEST . 2026-08-19] Demostracion manual, NO una prueba.
+
+Se llamaba `test_medical_reviewer.py`, asi que pytest lo recogia como test y el
+gate del despliegue moria con «async def functions are not natively supported» —
+un mensaje que habla del plugin que falta y no de la causa, que es que esto
+nunca fue un test.
+
+Su propia ficha en `scripts/README.md` ya lo decia: «Smoke test manual del review
+LLM (NO automated)». El nombre contradecia a la documentacion, y el nombre es lo
+que lee pytest.
+
+Y no era solo ruido: esto invoca `review_plan_node`, o sea una llamada REAL al
+proveedor. Un fichero que se llama `test_*` y gasta dinero es una factura
+esperando a que alguien ejecute la suite entera sin mirar.
+
+Uso:  python scripts/demo_medical_reviewer.py
+"""
 import asyncio
 import os
 import sys
