@@ -995,6 +995,59 @@ async def api_patch_profile(
     updated = await asyncio.to_thread(_patch)
     if not updated:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+    # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+    # P1-PLAN-DISPLAY-I18N-TRIGGER-3. El UPDATE de arriba (locale != es-DO)
+    # completó — despachar enrich del plan ACTIVO (el más reciente, mismo SELECT
+    # que `/plans-data/latest`) SOLO si le falta `_display[locale]` en su primer
+    # meal (check barato pre-despacho: evita levantar un thread cuando el plan
+    # ya está enriquecido para este idioma). Best-effort: el PATCH de perfil
+    # JAMÁS puede fallar por esto.
+    _p1_i18n_new_locale = fields.get("locale")
+    if _p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO":
+        try:
+            def _p1_i18n_latest_plan():
+                from db import execute_sql_query as _p1_i18n_query
+                return _p1_i18n_query(
+                    "SELECT id::text AS id, plan_data FROM meal_plans WHERE user_id = %s "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (uid,),
+                    fetch_one=True,
+                )
+
+            _p1_i18n_row = await asyncio.to_thread(_p1_i18n_latest_plan)
+            if _p1_i18n_row and _p1_i18n_row.get("id"):
+                _p1_i18n_pd = _p1_i18n_row.get("plan_data")
+                if isinstance(_p1_i18n_pd, str):
+                    import json as _p1_i18n_json
+                    try:
+                        _p1_i18n_pd = _p1_i18n_json.loads(_p1_i18n_pd)
+                    except Exception:
+                        _p1_i18n_pd = None
+                _p1_i18n_already = False
+                if isinstance(_p1_i18n_pd, dict):
+                    _p1_i18n_days = _p1_i18n_pd.get("days")
+                    if isinstance(_p1_i18n_days, list) and _p1_i18n_days:
+                        _p1_i18n_first_day = _p1_i18n_days[0]
+                        _p1_i18n_first_meal = (
+                            (_p1_i18n_first_day.get("meals") or [{}])[0]
+                            if isinstance(_p1_i18n_first_day, dict) else {}
+                        )
+                        if isinstance(_p1_i18n_first_meal, dict):
+                            _p1_i18n_disp = _p1_i18n_first_meal.get("_display")
+                            _p1_i18n_already = (
+                                isinstance(_p1_i18n_disp, dict)
+                                and _p1_i18n_new_locale in _p1_i18n_disp
+                            )
+                if not _p1_i18n_already:
+                    from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                    _p1_i18n_schedule(_p1_i18n_row["id"], uid, _p1_i18n_new_locale)
+        except Exception as _p1_i18n_e:
+            logger.warning(
+                f"[P1-PLAN-DISPLAY-I18N] dispatch PATCH /profile locale falló "
+                f"user={uid} locale={_p1_i18n_new_locale!r}: {_p1_i18n_e!r}"
+            )
+
     return {"success": True}
 
 

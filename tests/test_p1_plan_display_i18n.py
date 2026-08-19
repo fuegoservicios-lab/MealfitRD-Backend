@@ -49,6 +49,7 @@ Fix round 1 (review `task-1-review.md`, CHANGES_REQUESTED — 3 CRITICAL, 6 IMPO
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import re
 from pathlib import Path
@@ -1018,3 +1019,199 @@ def test_no_print_statements(_module_src):
     productivo. Sanity barato, redundante con test_p2_logger_migration.py
     pero ancla la intención EN este archivo."""
     assert "print(" not in _module_src
+
+
+# ================================================================================
+# SECCIÓN: DISPARADORES 1, 2 y 4 (Task 2) — parser-based + funcional
+#
+# Task 2 añade 3 de los 5 call sites de la spec: persist inicial (services.py,
+# semana 1), chunk worker (cron_tasks.py, `_chunk_worker` T1) y cambio de
+# locale (routers/user_data.py, PATCH /profile). Task 3 cubre los 3 mutadores
+# (disparador 3). El disparador 5 (backfill) es "no hay job masivo" — no
+# produce call site.
+#
+# Estos tests parsean el SOURCE de los tres archivos (no runtime mockeado):
+# cada tooltip-anchor debe existir Y el import/dispatch de
+# `schedule_plan_display_enrichment` debe aparecer DESPUÉS (por posición de
+# string) del punto de persist correspondiente — así un futuro refactor que
+# mueva el dispatch ANTES del persist (dispatch sobre datos que aún no existen
+# en DB) rompe el test antes de romper producción.
+# ================================================================================
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+_SERVICES_SRC_PATH = _BACKEND_ROOT / "services.py"
+_CRON_TASKS_SRC_PATH = _BACKEND_ROOT / "cron_tasks.py"
+_USER_DATA_SRC_PATH = _BACKEND_ROOT / "routers" / "user_data.py"
+
+_SCHEDULE_IMPORT_MARKER = "from plan_display_i18n import schedule_plan_display_enrichment"
+
+
+@pytest.fixture(scope="module")
+def _services_src() -> str:
+    return _SERVICES_SRC_PATH.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def _cron_tasks_src() -> str:
+    return _CRON_TASKS_SRC_PATH.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def _user_data_src() -> str:
+    return _USER_DATA_SRC_PATH.read_text(encoding="utf-8")
+
+
+def test_trigger_1_anchor_exists_after_semana_1_persist(_services_src):
+    """Disparador 1: services.py, `save_partial_plan_get_id`. El anchor y el
+    dispatch deben aparecer DESPUÉS del log `💾 [CHUNK] Plan parcial (semana 1)
+    guardado` — ese log es la señal de que el INSERT de la semana 1 ya
+    commiteó (`save_new_meal_plan_atomic` ya retornó el `plan_id`)."""
+    assert "P1-PLAN-DISPLAY-I18N-TRIGGER-1" in _services_src
+    persist_idx = _services_src.index("Plan parcial (semana 1) guardado")
+    dispatch_idx = _services_src.index(_SCHEDULE_IMPORT_MARKER)
+    assert dispatch_idx > persist_idx, (
+        "el dispatch de trigger 1 aparece ANTES del persist de semana 1 en el "
+        "archivo — el plan_id podría no existir aún en DB cuando el thread "
+        "background intente leerlo."
+    )
+
+
+def test_trigger_2_anchor_exists_after_chunk_worker_t1_persist(_cron_tasks_src):
+    """Disparador 2: cron_tasks.py, `_chunk_worker` T1. `_t1_persist_view` es el
+    nombre único de la variable que T1 escribe en el UPDATE que mergea `days`
+    (ver CLAUDE.md I7, 'Patrón preferido FOR UPDATE + callback' / T1 commit) —
+    el dispatch debe ir DESPUÉS de esa línea, no antes."""
+    assert "P1-PLAN-DISPLAY-I18N-TRIGGER-2" in _cron_tasks_src
+    persist_idx = _cron_tasks_src.index("_t1_persist_view")
+    dispatch_idx = _cron_tasks_src.index(_SCHEDULE_IMPORT_MARKER)
+    assert dispatch_idx > persist_idx, (
+        "el dispatch de trigger 2 aparece ANTES del persist T1 (merge de days) "
+        "en el archivo."
+    )
+
+
+def test_trigger_2_only_dispatches_on_new_merge_not_idempotent_replay(_cron_tasks_src):
+    """El día indices solo se puebla en la rama 'Merge normal' (días NUEVOS
+    persistidos); la rama `chunk_already_merged` (replay idempotente, sin días
+    nuevos) debe dejarlo en `None` — cubre el matiz del brief 'cubre las que
+    persisten días nuevos'."""
+    default_idx = _cron_tasks_src.index("_p1_i18n_new_day_indices = None")
+    already_merged_idx = _cron_tasks_src.index("if chunk_already_merged:")
+    populate_idx = _cron_tasks_src.index(
+        "_p1_i18n_new_day_indices = list(range(prior_count, len(merged_days)))"
+    )
+    assert default_idx < already_merged_idx < populate_idx, (
+        "el default None debe preceder al if/else, y la asignación real de "
+        "day_indices debe vivir en la rama 'Merge normal' (después del if)."
+    )
+
+
+def test_trigger_3_anchor_exists_after_locale_update_commits(_user_data_src):
+    """Disparador 4 (PATCH de locale en Configuración): routers/user_data.py,
+    `api_patch_profile`. El dispatch debe ir DESPUÉS de que el UPDATE de
+    `user_profiles` haya sido confirmado (`updated = await
+    asyncio.to_thread(_patch)` + el guard 404 si no afectó filas)."""
+    assert "P1-PLAN-DISPLAY-I18N-TRIGGER-3" in _user_data_src
+    persist_idx = _user_data_src.index("updated = await asyncio.to_thread(_patch)")
+    dispatch_idx = _user_data_src.index(_SCHEDULE_IMPORT_MARKER)
+    assert dispatch_idx > persist_idx, (
+        "el dispatch de trigger 3 aparece ANTES de confirmar el UPDATE de "
+        "locale — podría despachar sobre un PATCH que en realidad falló."
+    )
+
+
+def test_trigger_3_es_do_never_reaches_dispatch_code(_user_data_src):
+    """es-DO es el locale base (0 bytes de `_display`, P1-I18N-DASHBOARD) — el
+    gate `!= "es-DO"` debe preceder cualquier lectura del plan activo."""
+    gate_idx = _user_data_src.index('_p1_i18n_new_locale != "es-DO"')
+    query_idx = _user_data_src.index("_p1_i18n_latest_plan")
+    assert gate_idx < query_idx
+
+
+# ------------------------------------------------------------------
+# Funcional: el gate del PATCH (disparador 3) — mock de
+# `schedule_plan_display_enrichment` + mock del SELECT del plan activo.
+# ------------------------------------------------------------------
+
+import db as _db_module
+import plan_display_i18n as _pdi_module
+from routers.user_data import api_patch_profile, ProfilePatchBody
+
+
+def _patch_profile_locale(monkeypatch, locale, plan_row, uid="user-trig3"):
+    """Ejecuta el PATCH /profile real (función del router, sin TestClient —
+    mismo patrón que test_p1_tracking_finish_sensitive_guard.py) con el UPDATE
+    de `user_profiles` mockeado a éxito y el SELECT del plan activo devolviendo
+    `plan_row` (o None si no hay plan)."""
+    monkeypatch.setattr(_db_module, "execute_sql_write", lambda *a, **kw: [{"id": uid}])
+    monkeypatch.setattr(_db_module, "execute_sql_query", lambda *a, **kw: plan_row)
+    calls = []
+    monkeypatch.setattr(
+        _pdi_module, "schedule_plan_display_enrichment",
+        lambda *a, **kw: calls.append((a, kw)),
+    )
+    body = ProfilePatchBody(fields={"locale": locale})
+    result = asyncio.run(api_patch_profile(body=body, verified_user_id=uid))
+    return result, calls
+
+
+def test_patch_profile_locale_en_us_dispatches_when_plan_not_enriched(monkeypatch):
+    plan_row = {
+        "id": "plan-trig3-a",
+        "plan_data": {"days": [{"meals": [{"name": "Habichuelas"}]}]},
+    }
+    result, calls = _patch_profile_locale(monkeypatch, "en-US", plan_row)
+
+    assert result == {"success": True}
+    assert calls == [(("plan-trig3-a", "user-trig3", "en-US"), {})]
+
+
+def test_patch_profile_locale_es_do_never_dispatches(monkeypatch):
+    plan_row = {
+        "id": "plan-trig3-b",
+        "plan_data": {"days": [{"meals": [{"name": "Habichuelas"}]}]},
+    }
+    result, calls = _patch_profile_locale(monkeypatch, "es-DO", plan_row)
+
+    assert result == {"success": True}
+    assert calls == []
+
+
+def test_patch_profile_locale_already_has_display_does_not_redispatch(monkeypatch):
+    """Check barato: el primer meal del primer día YA tiene `_display['en-US']`
+    -> no re-despachar (el brief pide evitar redundancia)."""
+    plan_row = {
+        "id": "plan-trig3-c",
+        "plan_data": {
+            "days": [{"meals": [{"name": "Habichuelas", "_display": {"en-US": {"name": "Beans"}}}]}]
+        },
+    }
+    result, calls = _patch_profile_locale(monkeypatch, "en-US", plan_row)
+
+    assert result == {"success": True}
+    assert calls == []
+
+
+def test_patch_profile_locale_no_active_plan_is_noop(monkeypatch):
+    """Sin plan activo (usuario recién registrado, aún no generó nada): el
+    dispatch se salta limpio, sin excepción."""
+    result, calls = _patch_profile_locale(monkeypatch, "en-US", None)
+
+    assert result == {"success": True}
+    assert calls == []
+
+
+def test_patch_profile_locale_dispatch_failure_is_best_effort(monkeypatch):
+    """Si `schedule_plan_display_enrichment` (o el SELECT) lanza, el PATCH
+    igual debe devolver success:true — el cambio de idioma NUNCA puede
+    fallar por esto."""
+    def _boom(*a, **kw):
+        raise RuntimeError("dispatch roto")
+
+    monkeypatch.setattr(_db_module, "execute_sql_write", lambda *a, **kw: [{"id": "user-trig3"}])
+    monkeypatch.setattr(_db_module, "execute_sql_query", _boom)
+
+    body = ProfilePatchBody(fields={"locale": "en-US"})
+    result = asyncio.run(api_patch_profile(body=body, verified_user_id="user-trig3"))
+
+    assert result == {"success": True}

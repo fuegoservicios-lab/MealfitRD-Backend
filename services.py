@@ -324,6 +324,29 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
             _defer_creative_plan_title(plan_id, user_id, plan_data, plan_name)
 
         logger.info(f"💾 [CHUNK] Plan parcial (semana 1) guardado para {user_id}, plan_id={plan_id}")
+
+        # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+        # P1-PLAN-DISPLAY-I18N-TRIGGER-1. Semana 1 ya quedó persistida arriba —
+        # despachar el enriquecimiento de display para esos días si el idioma del
+        # usuario lo amerita (es-DO / sin locale es no-op dentro del motor, pero el
+        # `!= "es-DO"` de abajo evita levantar un thread por nada). Best-effort: el
+        # guardado del plan JAMÁS puede fallar por esto.
+        if plan_id:
+            try:
+                _p1_i18n_locale = (get_user_profile(user_id) or {}).get("locale")
+                if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+                    from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                    _p1_i18n_days = plan_data.get("days") or []
+                    _p1_i18n_schedule(
+                        str(plan_id), user_id, _p1_i18n_locale,
+                        day_indices=list(range(len(_p1_i18n_days))),
+                    )
+            except Exception as _p1_i18n_e:
+                logger.warning(
+                    f"[P1-PLAN-DISPLAY-I18N] dispatch persist inicial falló "
+                    f"plan={plan_id} user={user_id}: {_p1_i18n_e!r}"
+                )
+
         return plan_id
     except Exception as e:
         logger.error(f"❌ [CHUNK] Error guardando plan parcial para {user_id}: {e}")

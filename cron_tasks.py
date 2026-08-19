@@ -31253,6 +31253,12 @@ __PLAN_MODE_GATE__
                         merged_chunk_ids = plan_data.get('_merged_chunk_ids', [])
                         chunk_already_merged = str(task_id) in [str(x) for x in merged_chunk_ids]
 
+                        # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+                        # P1-PLAN-DISPLAY-I18N-TRIGGER-2. Default None: solo la rama
+                        # "Merge normal" (días NUEVOS realmente persistidos, no el replay
+                        # idempotente de `chunk_already_merged`) la puebla, abajo.
+                        _p1_i18n_new_day_indices = None
+
                         if chunk_already_merged:
                             # Los días ya están en el plan — solo necesitamos reintentar la shopping list
                             logger.info(
@@ -31514,6 +31520,13 @@ __PLAN_MODE_GATE__
                             plan_data['days'] = merged_days
                             new_total = len(merged_days)
                             plan_data['total_days_generated'] = new_total
+
+                            # [P1-PLAN-DISPLAY-I18N · 2026-08-19] Índices (0-based) de los
+                            # días NUEVOS de este chunk dentro de `merged_days` (ya recortado
+                            # por el guard [GAP 3] de arriba, así que el rango queda acotado
+                            # incluso si el chunk fue trimeado). El dispatch real ocurre más
+                            # abajo, fuera del FOR UPDATE, con T1 ya commiteado.
+                            _p1_i18n_new_day_indices = list(range(prior_count, len(merged_days)))
 
                             # [P1-COHERENCE-FINALIZE · 2026-06-28] Escudo defensivo del chunk worker: el T1 persiste los
                             # days de semanas 2+ vía UPDATE crudo (~30433), bypaseando ambos chokepoints de db_plans.
@@ -32315,6 +32328,28 @@ __PLAN_MODE_GATE__
             new_total = update_result[0].get("new_total", 0)
             new_status = update_result[0].get("new_status", "partial")
             full_plan_data = update_result[0].get("full_plan_data", {})
+
+            # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+            # P1-PLAN-DISPLAY-I18N-TRIGGER-2. T1 (el UPDATE que mergeó `days` en
+            # meal_plans) ya commiteó — estamos fuera del `FOR UPDATE` a esta altura
+            # (ver comentario G3-SHOPPING-CAS más abajo: "corre POST-commit"). Despachar
+            # el enriquecimiento de los días NUEVOS de este bloque. Best-effort: el
+            # worker de chunks jamás puede fallar por esto.
+            if _p1_i18n_new_day_indices:
+                try:
+                    from db import get_user_profile as _p1_i18n_get_profile
+                    from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                    _p1_i18n_locale = (_p1_i18n_get_profile(user_id) or {}).get("locale")
+                    if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+                        _p1_i18n_schedule(
+                            meal_plan_id, user_id, _p1_i18n_locale,
+                            day_indices=_p1_i18n_new_day_indices,
+                        )
+                except Exception as _p1_i18n_e:
+                    logger.warning(
+                        f"[P1-PLAN-DISPLAY-I18N] dispatch chunk worker falló "
+                        f"plan={meal_plan_id} chunk={week_number}: {_p1_i18n_e!r}"
+                    )
 
             # [GAP 2 FIX]: Recalcular lista de compras CON RETRY + ROLLBACK del merge si falla
             # Antes: solo logger.warning si fallaba -> plan quedaba con dias nuevos + shopping list vieja.
