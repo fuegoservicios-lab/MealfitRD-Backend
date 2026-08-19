@@ -20,6 +20,9 @@ puede reproducir, y ningún cambio en él pasa por revisión.
 |---|---|
 | `nginx/mealfit.conf` | `/etc/nginx/sites-enabled/mealfit` |
 | `nginx/snippets/mealfit-security.conf` | `/etc/nginx/snippets/mealfit-security.conf` |
+| `nginx/bioboros-v2.conf` | `/etc/nginx/sites-enabled/bioboros-v2` |
+| `nginx/snippets/bioboros-apex-canonical.conf` | `/etc/nginx/snippets/bioboros-apex-canonical.conf` |
+| `nginx/snippets/bioboros-v2-security.conf` | `/etc/nginx/snippets/bioboros-v2-security.conf` |
 | `systemd/mealfit-backend.service` | `/etc/systemd/system/mealfit-backend.service` |
 | `scripts/publish-marker.sh` | `/opt/mealfit/publish-marker.sh` |
 
@@ -58,3 +61,27 @@ bash infra/verificar-edge.sh
 
 Si `nginx -t` falla, la recarga no ocurre y el `.bak` de la línea anterior es el
 rollback: `sudo cp <el .bak más reciente> /etc/nginx/sites-enabled/mealfit`.
+
+## La deriva que este directorio existe para evitar, ocurrio
+
+[P3-INFRA-RESYNC · 2026-08-19] Auditando el edge para brotli, `mealfit.conf` tenia
+**339 lineas de diferencia** con lo que corria: 391 en el repo, 688 en el VPS. Y el
+snippet de seguridad, 59. La copia versionada llevaba semanas describiendo un
+servidor que ya no existia — exactamente el riesgo de reconstruccion que
+`P2-INFRA-EDGE-SSOT` abrio este directorio para cerrar. Faltaban ademas tres
+ficheros que el vhost incluye y que nunca se habian versionado.
+
+**Sincronizar tiene una direccion y no es obvia.** El servidor es la verdad de QUE
+se sirve; el repo, la del POR QUE. Al copiar del VPS al repo se perdieron de golpe
+los comentarios de `P0-CAMERA-POLICY` y `P2-CSP-ENFORCE-ESPERA` —quien aplico esos
+cambios subio una version pelada—, y lo canto un test que exigia que el snippet
+recordara la forma del `map $host`. Comparando SOLO las directivas efectivas
+(`sed "s/#.*$//"`) resulto que las dos copias eran funcionalmente identicas: la
+unica diferencia real era el arreglo del `form-action` de esta misma tanda.
+
+Asi que lo correcto no era elegir una copia: era conservar el contenido del
+servidor con la documentacion del repo, y subir ESA al VPS. Hoy `diff` devuelve 0.
+
+Y `/etc/nginx/backups/.ultimo` —el fichero que el rollback documentado lee— apuntaba
+a un respaldo dos horas anterior al ultimo: el rollback habria restaurado una
+configuracion vieja creyendo restaurar la buena.

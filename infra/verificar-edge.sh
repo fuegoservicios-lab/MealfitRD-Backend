@@ -21,9 +21,29 @@ cab="$(curl -sS -I --max-time 20 "$ORIGEN/" || true)"
 
 echo "-- Headers de seguridad (los 6) --"
 for h in "strict-transport-security" "x-content-type-options" "x-frame-options" \
-         "referrer-policy" "permissions-policy" "content-security-policy-report-only"; do
+         "referrer-policy" "permissions-policy"; do
   grep -qi "^$h:" <<<"$cab" && ok "$h" || mal "$h ausente"
 done
+
+# [P3-CSP-ENSAYO . 2026-08-19] La Report-Only es un ENSAYO, y sobra cuando ya se
+# estrena. Este bucle la exigia siempre, y por eso daba rojo contra el apex:
+# desde P1-01 ese host sirve IMPUESTA la politica estricta completa —medido:
+# `default-src self`, `script-src self` sin `unsafe-inline`, `object-src none`,
+# `frame-ancestors none`—. Pedirle ademas un ensayo de lo que ya hace es pedir
+# una cabecera sin funcion, y un rojo permanente por algo que no hay que
+# arreglar entrena a ignorar todo lo demas.
+#
+# Asi que la regla es condicional: si la impuesta AUN no es estricta, la
+# Report-Only es obligatoria (es el unico modo de endurecer sin romper). Si ya
+# lo es, es opcional y se dice.
+csp_enf="$(grep -i "^content-security-policy:" <<<"$cab" || true)"
+if grep -qi "default-src" <<<"$csp_enf" && ! grep -qi "script-src[^;]*unsafe-inline" <<<"$csp_enf"; then
+  ok "CSP impuesta ya estricta (la Report-Only es opcional aqui)"
+else
+  grep -qi "^content-security-policy-report-only:" <<<"$cab" \
+    && ok "content-security-policy-report-only (ensayo de la politica estricta)" \
+    || mal "la CSP impuesta no es estricta y NO hay Report-Only con la que endurecerla"
+fi
 
 echo "-- CSP enforced (P2-CSP-ENFORCE movimiento 1) --"
 # `-x` para no confundirla con la Report-Only, que también empieza por ese nombre.
@@ -33,8 +53,25 @@ if [ -n "$csp" ]; then
   for d in "base-uri" "form-action" "object-src" "frame-ancestors"; do
     grep -qi "$d" <<<"$csp" && ok "  $d" || mal "  $d ausente de la CSP enforced"
   done
-  grep -qi "paypal" <<<"$csp" && ok "  form-action deja pasar PayPal" \
-    || mal "  form-action SIN PayPal: puede romper el checkout"
+  # [P3-CSP-HOST . 2026-08-19] PayPal se exige donde VIVE el checkout, no aqui.
+  #
+  # Esta comprobacion daba rojo contra el apex, y el rojo era falso: desde que la
+  # portada se mudo al sitio estatico, en bioboros.com no hay ningun formulario
+  # —medido: cero `<form action=>` en /precios—. El pago vive en
+  # app.bioboros.com/dashboard/upgrade, cuya CSP si lo permite.
+  #
+  # Exigir PayPal en la CSP del apex es pedir un permiso que ese host no necesita,
+  # y ampliar una politica sin motivo la debilita. Un verificador que falla siempre
+  # por algo que no hay que arreglar entrena a ignorar su salida entera.
+  case "$ORIGEN" in
+    *app.*)
+      grep -qi "paypal" <<<"$csp" && ok "  form-action deja pasar PayPal" \
+        || mal "  form-action SIN PayPal: rompe el checkout" ;;
+    *)
+      grep -qi "paypal" <<<"$csp" \
+        && mal "  el apex permite PayPal en form-action y aqui no hay checkout" \
+        || ok "  form-action sin PayPal (correcto: el checkout no vive en este host)" ;;
+  esac
 else
   mal "no hay CSP enforced (sólo Report-Only)"
 fi
@@ -90,6 +127,35 @@ if [ -n "${js:-}" ]; then
   [ "$cod" = "404" ] && ok ".map devuelve 404" || mal ".map devuelve $cod -- ¡fuente público!"
 fi
 
+# [P3-BROTLI . 2026-08-19] La compresion, contra produccion y no contra el .conf.
+#
+# Se comprueban las DOS ramas a proposito. Un cliente que anuncia `br` debe
+# recibir brotli; uno que solo anuncia gzip debe seguir recibiendo gzip. La forma
+# facil de romper esto es dejar solo brotli: los clientes viejos se quedarian sin
+# comprimir y nadie lo notaria, porque el navegador del que mira SI habla brotli.
+#
+# Y `Vary: Accept-Encoding` es lo que impide que una cache intermedia le sirva
+# brotli a quien no lo entiende. Sin esa cabecera, esto no es una optimizacion:
+# es una pagina rota para una parte del publico, de forma intermitente.
+if [ -n "${js:-}" ]; then
+  enc_br="$(curl -sS -o /dev/null -H 'Accept-Encoding: br' -w '%{content_type}' --max-time 20 "$ORIGEN$js" >/dev/null 2>&1; curl -sSI -H 'Accept-Encoding: br' --max-time 20 "$ORIGEN$js" | grep -i "^content-encoding:" | tr -d "" | awk '{print $2}')"
+  case "$enc_br" in
+    br) ok "brotli servido a quien lo anuncia" ;;
+    *)  mal "con Accept-Encoding: br llego content-encoding='${enc_br:-ninguno}'" ;;
+  esac
+
+  enc_gz="$(curl -sSI -H 'Accept-Encoding: gzip' --max-time 20 "$ORIGEN$js" | grep -i "^content-encoding:" | tr -d "" | awk '{print $2}')"
+  case "$enc_gz" in
+    gzip) ok "gzip intacto para quien no habla brotli" ;;
+    *)    mal "con Accept-Encoding: gzip llego content-encoding='${enc_gz:-ninguno}'" ;;
+  esac
+
+  vary="$(curl -sSI -H 'Accept-Encoding: br' --max-time 20 "$ORIGEN$js" | grep -i "^vary:" | tr -d "")"
+  case "$vary" in
+    *Accept-Encoding*|*accept-encoding*) ok "Vary: Accept-Encoding presente" ;;
+    *) mal "falta Vary: Accept-Encoding -- una cache puede servir brotli a quien no lo entiende" ;;
+  esac
+fi
 echo
 if [ "$fallos" -eq 0 ]; then
   echo "TODO OK contra $ORIGEN"
