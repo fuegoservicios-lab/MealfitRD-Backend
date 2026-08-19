@@ -95,11 +95,22 @@ def test_adaptive_copy_four_phases():
 
     Verificamos los 4 strings literales esperados."""
     src = _PLAN_JSX.read_text(encoding="utf-8")
-    # [reapuntado 2026-07-28] Rango vivo = 9-10 min (el owner lo subió 07-09; los
-    # umbrales y la continuidad completa se anclan en test_p2_loading_eta_57).
+    # [reapuntado 2026-08-18] EL RANGO SE IMPORTA, NO SE COPIA. Este fichero traia
+    # "9 y 10 minutos" escrito a mano, y era el QUINTO sitio con el mismo dato: las
+    # dos frases de Plan.jsx, los dos umbrales de `timeMessage`, y las copias de
+    # este test y de test_p2_loading_eta_57. Cuando el owner bajo el rango a 3-6
+    # (commit ded7c6f) se movio una copia y las otras cuatro se quedaron mintiendo;
+    # dos de ellas eran tests, asi que el rojo tardo en verse porque el `-x` de
+    # pytest paraba antes de llegar aqui.
+    #
+    # El valor vivo tiene UN dueno: `_ETA_MIN`/`_ETA_MAX` en test_p2_loading_eta_57,
+    # que es el fichero que ya documenta el historial de decisiones del owner sobre
+    # este rango. Aqui se importa. La proxima vez que cambie, se edita una linea.
+    from test_p2_loading_eta_57 import _ETA_MIN, _ETA_MAX
+
     expected_phrases = [
-        "Esto suele tomar entre 9 y 10 minutos",                  # <30s
-        "estimado 9-10 minutos",                                  # 30s-10min
+        f"Esto suele tomar entre {_ETA_MIN} y {_ETA_MAX} minutos",   # <30s
+        f"estimado {_ETA_MIN}-{_ETA_MAX} minutos",                   # fase de conteo
         "ya casi terminamos, espera un poco más",                # 10-13min
         "gracias por tu paciencia",                              # >13min
     ]
