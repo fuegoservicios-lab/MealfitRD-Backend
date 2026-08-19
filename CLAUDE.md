@@ -207,21 +207,15 @@ Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catá
 
 ### Sentry sampling driven from env (NO hardcodear `1.0`)
 
-[P1-SENTRY-SAMPLE-COST · 2026-05-12] Backend y frontend leen sample rate desde env var, default 0.1 (10%): hardcodear `1.0` satura cuota Sentry a escala (≥10k req/día) y dropea errores genuinos por throttling. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_sentry_sample_cost.py`](backend/tests/test_p1_sentry_sample_cost.py).
-
-| Capa | Env var | Default | Clamp |
-|---|---|---|---|
-| Backend traces | `MEALFIT_SENTRY_TRACES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
-| Backend profiling | `MEALFIT_SENTRY_PROFILES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
-| Frontend traces | `VITE_SENTRY_TRACES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
+[P1-SENTRY-SAMPLE-COST · 2026-05-12] Backend y frontend leen el sample rate desde env var (default 0.1): hardcodear `1.0` satura la cuota de Sentry a escala y dropea errores genuinos por throttling. Las 3 env vars con sus defaults y clamps: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md). Test: [`test_p1_sentry_sample_cost.py`](backend/tests/test_p1_sentry_sample_cost.py).
 
 ### Security headers en nginx (defensa-en-profundidad en mealfitrd.com)
 
-[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers (HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, CSP-Report-Only) viven en `/etc/nginx/snippets/mealfit-security.conf` del VPS Oracle, en el server block HTTPS **y** en cada `location` con `add_header` propio (nginx no hereda entre locations). Antes en `frontend/vercel.json` (migrado a VPS 2026-06-12). CSP arranca **Report-Only**. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md).
+[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers viven en `/etc/nginx/snippets/mealfit-security.conf` del VPS, en el server block HTTPS **y en cada `location` con `add_header` propio** (nginx no hereda entre locations). CSP arranca Report-Only. Detalle: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md).
 
 ### Admin gate en `/api/system/health` (no es público)
 
-[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] [`backend/routers/system.py:get_system_health`](backend/routers/system.py) gateado por `_verify_admin_token` (mismo `CRON_SECRET` de los admin endpoints). Pre-fix: público, exponía business-intel agregada (nudge rate/abandono/emoción/quality score). Liveness público: `GET /health` / `GET /ready` (solo `{status: ok}`). Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
+[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] `get_system_health` ([`routers/system.py`](backend/routers/system.py)) está gateado por `_verify_admin_token`: era público y exponía business-intel agregada. Liveness público: `GET /health` / `GET /ready`. Detalle: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
 
 ### Pattern: `SET search_path = ''` en functions Postgres
 
@@ -338,6 +332,10 @@ Override emite `WARN [P0-AGENT-1]` con `tool=/llm_user_id=/trusted=` para identi
 [P1-DASH-GENERATING-HONESTY · 2026-08-16] «Se llenará en unos minutos» salía con `in_flight_count > 0`, que INCLUYE chunks dormidos con `execute_after` a días vista: la pantalla prometía minutos para el martes y el usuario lo leía como congelado. Es la misma mentira que el Historial cerró en mayo (`P3-HIST-CHUNK-SCHEDULED`) y que este Dashboard nunca heredó — el desglose existía SOLO en `/history-list`. Ahora `/chunk-status` expone `scheduled_count`/`running_now_count` (sin prefijo `chunk_`, para que los asserts del guard de History sigan hablando de SU endpoint). Cuatro trampas: **no** copiar el `WHERE user_id` (rompe el binding de `(plan_id,)` en cada tick), **no** son partición de `in_flight_count` (un `processing` con `execute_after` futuro cae fuera de ambos — por eso sigue en el payload como respaldo), van en el dict INCONDICIONAL (dentro de `_upcoming_payload` los gatearía un knob que no los gobierna), y el icono solo gira con trabajo real. Test test_p1_dash_generating_honesty.py.
 
 Reglas anti-refactor del **landing y el apex** (8: service worker diferido, observabilidad por HOST, preload gateado, SSOT de precios/sitemap, dieta de `lucide`, `@sentry` fuera del entry, precache por marcador de paquete) — movidas a [`backend/docs/landing_apex_antipatterns.md`](backend/docs/landing_apex_antipatterns.md) porque vivían bajo un título sobre el motor de planes. Plan de producción del landing (25 gaps): [`docs/superpowers/specs/2026-08-14-landing-produccion-design.md`](docs/superpowers/specs/2026-08-14-landing-produccion-design.md).
+
+[P1-CULINARY-METADATA-BETA · 2026-08-19] Las 141 filas beta del 2026-08-17 nacieron sin `prep_methods`: cobertura 100%→59%, capa 1 en fail-open **con los tests en verde** (parser-based: ninguno mira el DATO) ⇒ el ancla es un **CHECK en DB** (patrón I8). **El orden es load-bearing**: overrides ANTES de los defaults, o el `IS NULL` no casa y los curados quedan crudos. Test test_p1_culinary_metadata_beta.py.
+
+[P1-BEDCA-DEPROXY-ES + P1-YOGURT-NATURAL · 2026-08-19] 47 de 347 filas comparten `fdc_id`: uno sustituía a SIETE embutidos (Sobrasada: 595 kcal, no 296) y otro da **HTTP 404**: nada re-valida la procedencia. BEDCA: `<type level="3f"/>` autocerrado, **energía en kJ**. Auditar ids DUPLICADOS no ve el ÚNICO mal apuntado (Lomo embuchado 110→321). Doc: backend/docs/catalog_provenance_audit.md.
 
 [P1-PANTRY-NAME-RESOLUTION] La identidad de una fila de la Nevera se decide SOLO en `constants.pantry_names_match` (case/acentos/cantidad/plural, por token completo). **No la reimplementes sobre `GLOBAL_REVERSE_MAP`**: ese mapa colapsa `pechuga`→`pollo` a propósito, así que comerte una pechuga descontaría del muslo. Los 4 call sites resolvían por igualdad exacta y `"2 huevos"` contra la fila `Huevo` devolvía **éxito sin descontar, sin fila en `failed_inventory_deductions` y sin alerta**. Doc: backend/docs/pantry_name_resolution.md. Test test_p1_pantry_name_resolution.py.
 

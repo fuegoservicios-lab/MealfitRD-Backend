@@ -1,0 +1,396 @@
+{
+ "days": [
+  {
+   "day": 1,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Berenjena al horno con provolone",
+     "ingredients": [
+      "150 g Berenjena",
+      "40 g Queso provolone"
+     ],
+     "recipe": [
+      "Hornea la berenjena 20 minutos.",
+      "Hornea el queso provolone encima hasta gratinar."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 2,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Arepa con queso en hebras",
+     "ingredients": [
+      "80 g Harina de maiz precocida",
+      "30 g Queso en hebras"
+     ],
+     "recipe": [
+      "Hierve el agua y mezcla la harina de maiz precocida hasta formar la masa.",
+      "Hornea el queso en hebras sobre la arepa hasta fundir."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 3,
+   "meals": [
+    {
+     "meal": "Desayuno",
+     "name": "Cuajada a la plancha",
+     "ingredients": [
+      "100 g Cuajada",
+      "50 g Tomate"
+     ],
+     "recipe": [
+      "Dora la cuajada en la plancha por ambos lados.",
+      "Sirve con el tomate."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 4,
+   "meals": [
+    {
+     "meal": "Desayuno",
+     "name": "Tostada con jamon serrano",
+     "ingredients": [
+      "40 g Pan de maiz",
+      "25 g Jamon serrano"
+     ],
+     "recipe": [
+      "Tuesta el pan de maiz.",
+      "Plancha el jamon serrano 20 segundos y sirve."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 5,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Huevos con chorizo espanol",
+     "ingredients": [
+      "100 g Huevo",
+      "40 g Chorizo espanol"
+     ],
+     "recipe": [
+      "Saltea el chorizo espanol en la sarten.",
+      "Agrega el huevo y cuaja a fuego bajo."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 6,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Sobrasada sobre pan",
+     "ingredients": [
+      "50 g Pan de maiz",
+      "20 g Sobrasada"
+     ],
+     "recipe": [
+      "Tuesta el pan.",
+      "Unta la sobrasada y hornea 2 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 7,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Morcilla a la plancha",
+     "ingredients": [
+      "80 g Morcilla",
+      "100 g Pimiento"
+     ],
+     "recipe": [
+      "Dora la morcilla a la plancha.",
+      "Saltea el pimiento y sirve junto."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 8,
+   "meals": [
+    {
+     "meal": "Merienda",
+     "name": "Pepperoni horneado",
+     "ingredients": [
+      "30 g Pepperoni",
+      "40 g Queso provolone"
+     ],
+     "recipe": [
+      "Hornea el pepperoni 6 minutos.",
+      "Hornea el queso provolone encima 2 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 9,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Salsa de chile guajillo",
+     "ingredients": [
+      "15 g Chile guajillo",
+      "80 g Tomate"
+     ],
+     "recipe": [
+      "Tuesta el chile guajillo en comal.",
+      "Hierve con el tomate.",
+      "Licua la salsa."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 10,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Adobo de chile ancho",
+     "ingredients": [
+      "12 g Chile ancho",
+      "150 g Cerdo"
+     ],
+     "recipe": [
+      "Tuesta el chile ancho.",
+      "Licua el chile ancho con especias.",
+      "Guisa el cerdo en el adobo."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 11,
+   "meals": [
+    {
+     "meal": "Merienda",
+     "name": "Dulce de membrillo",
+     "ingredients": [
+      "120 g Membrillo",
+      "30 g Azucar morena"
+     ],
+     "recipe": [
+      "Hierve el membrillo hasta ablandar.",
+      "Guisa con el azucar morena hasta espesar."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 12,
+   "meals": [
+    {
+     "meal": "Desayuno",
+     "name": "Bagel con requeson",
+     "ingredients": [
+      "70 g Bagels",
+      "40 g Requeson"
+     ],
+     "recipe": [
+      "Tuesta el bagels.",
+      "Licua el requeson hasta suavizarlo.",
+      "Untalo sobre el bagels."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 13,
+   "meals": [
+    {
+     "meal": "Desayuno",
+     "name": "Wafles con jarabe",
+     "ingredients": [
+      "80 g Wafles",
+      "15 g Jarabe de arce"
+     ],
+     "recipe": [
+      "Tuesta los wafles.",
+      "Hornea el jarabe de arce sobre los wafles 2 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 14,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Tacos de tortilla de maiz",
+     "ingredients": [
+      "60 g Tortilla de maiz",
+      "100 g Carne molida mixta"
+     ],
+     "recipe": [
+      "Dora la tortilla de maiz en el comal.",
+      "Saltea la carne molida mixta.",
+      "Arma los tacos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 15,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Bolitas de papa al horno",
+     "ingredients": [
+      "120 g Bolitas de papa"
+     ],
+     "recipe": [
+      "Hornea las bolitas de papa 18 minutos hasta dorar."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 16,
+   "meals": [
+    {
+     "meal": "Desayuno",
+     "name": "Papas ralladas a la plancha",
+     "ingredients": [
+      "120 g Papas ralladas",
+      "50 g Huevo"
+     ],
+     "recipe": [
+      "Dora las papas ralladas en la plancha.",
+      "Sirve con el huevo."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 17,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Judias blancas guisadas",
+     "ingredients": [
+      "80 g Judias blancas",
+      "40 g Zanahoria"
+     ],
+     "recipe": [
+      "Hierve las judias blancas hasta ablandar.",
+      "Guisa con la zanahoria."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 18,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Fideos en caldo",
+     "ingredients": [
+      "70 g Fideos",
+      "200 g Caldo de pollo"
+     ],
+     "recipe": [
+      "Hierve los fideos en el caldo 8 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 19,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Frijoles refritos",
+     "ingredients": [
+      "120 g Frijoles refritos",
+      "20 g Cebolla"
+     ],
+     "recipe": [
+      "Saltea la cebolla.",
+      "Agrega los frijoles refritos y saltea 3 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 20,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Arracacha hervida",
+     "ingredients": [
+      "150 g Arracacha",
+      "80 g Pechuga de pollo"
+     ],
+     "recipe": [
+      "Hierve la arracacha 20 minutos.",
+      "Guisa la pechuga de pollo aparte y sirve."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 21,
+   "meals": [
+    {
+     "meal": "Cena",
+     "name": "Nopales salteados con epazote",
+     "ingredients": [
+      "120 g Nopal",
+      "3 g Epazote"
+     ],
+     "recipe": [
+      "Saltea el nopal.",
+      "Hierve con el epazote 5 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 22,
+   "meals": [
+    {
+     "meal": "Almuerzo",
+     "name": "Cerdo adobado",
+     "ingredients": [
+      "150 g Cerdo",
+      "8 g Adobo"
+     ],
+     "recipe": [
+      "Saltea el adobo en el aceite caliente.",
+      "Guisa el cerdo en ese adobo 25 minutos."
+     ]
+    }
+   ]
+  },
+  {
+   "day": 23,
+   "meals": [
+    {
+     "meal": "Merienda",
+     "name": "Chocolate de mesa caliente",
+     "ingredients": [
+      "25 g Chocolate de mesa",
+      "200 g Leche"
+     ],
+     "recipe": [
+      "Hierve la leche.",
+      "Hierve el chocolate de mesa hasta disolver."
+     ]
+    }
+   ]
+  }
+ ]
+}

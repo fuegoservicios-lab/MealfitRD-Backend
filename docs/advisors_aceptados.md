@@ -69,3 +69,39 @@ Si añades function nueva: aplicar el pattern, justificar excepción en COMMENT 
 Cada item está respaldado por `COMMENT ON INDEX` (índices) o `COMMENT ON FUNCTION` (definers) en migración SSOT — el linter ve el COMMENT pero sigue reportando el advisor (es informational, no auto-suprimido). El operador debe leer el comment vía `\d+ <objeto>` o `obj_description(<oid>, 'pg_class')` antes de actuar.
 
 Si Supabase agrega supresión nativa de advisors aceptados en el dashboard, mover esta sección a la UI de Supabase y dejar este bloque como referencia.
+
+
+---
+
+## Sentry: sample rate por env var (movido de CLAUDE.md 2026-08-19)
+
+[P1-SENTRY-SAMPLE-COST · 2026-05-12] Hardcodear `1.0` satura la cuota de Sentry a escala
+(≥10k req/día) y dropea errores genuinos por throttling. Backend y frontend leen el sample
+rate desde env var, default 0.1 (10%).
+
+| Capa | Env var | Default | Clamp |
+|---|---|---|---|
+| Backend traces | `MEALFIT_SENTRY_TRACES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
+| Backend profiling | `MEALFIT_SENTRY_PROFILES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
+| Frontend traces | `VITE_SENTRY_TRACES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
+
+Detalle: `runbook_advisors_operational_subsections.md` (memoria).
+Test: [`test_p1_sentry_sample_cost.py`](../tests/test_p1_sentry_sample_cost.py).
+
+
+---
+
+## Admin gate en `/api/system/health` (movido de CLAUDE.md 2026-08-19)
+
+[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] [`backend/routers/system.py:get_system_health`](backend/routers/system.py) gateado por `_verify_admin_token` (mismo `CRON_SECRET` de los admin endpoints). Pre-fix: público, exponía business-intel agregada (nudge rate/abandono/emoción/quality score). Liveness público: `GET /health` / `GET /ready` (solo `{status: ok}`). Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
+
+
+
+
+---
+
+## Security headers en nginx (movido de CLAUDE.md 2026-08-19)
+
+[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers (HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, CSP-Report-Only) viven en `/etc/nginx/snippets/mealfit-security.conf` del VPS Oracle, en el server block HTTPS **y** en cada `location` con `add_header` propio (nginx no hereda entre locations). Antes en `frontend/vercel.json` (migrado a VPS 2026-06-12). CSP arranca **Report-Only**. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md).
+
+

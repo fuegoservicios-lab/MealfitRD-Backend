@@ -41,7 +41,10 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 8, 18)  # [P1-COUNTRY-SYSTEM-F2 · 2026-08-18] Fase 2 del sistema
+_PFIX_DATE_FLOOR = date(2026, 8, 19)  # [P1-CULINARY-METADATA-BETA · 2026-08-19] backfill
+# ronda 3 de metadata culinaria (141 filas beta en NULL desde el 2026-08-17, cobertura del
+# catálogo de vuelta a 59%) + CHECK que lo ancla en DB + de-proxyficación BEDCA del cluster
+# español + la fila Yogurt que cargaba el perfil del griego. Histórico — floor previo  # [P1-COUNTRY-SYSTEM-F2 · 2026-08-18] Fase 2 del sistema
 # de países: catálogo por país (347 filas, 6 países) + los cierres de "100%" (retry-gate
 # advisory, MUTATOR-PURITY, backstops de excusa alérgena). QA final con LLM vivo (5 países beta
 # + gemelo DO) verde; harness `country_catalog_gap.py` 0 silenciosas/0 drops en los 5. Doc

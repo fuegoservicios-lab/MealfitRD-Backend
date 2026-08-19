@@ -89,6 +89,24 @@ Mapeo verbo-de-receta → método (`VERB_TO_METHOD` en [`culinary_coherence.py`]
 
 **Política NULL = fail-open, por check**: si un alimento no tiene `prep_methods`/`ready_to_eat` (columna `NULL`, DEFAULT de la migración), el scan se salta ESE check para ESE alimento — nunca inventa, nunca asume `false`. `scan_coverage()` mide la fracción de alimentos del plan con metadata (telemetría del rollout warn→block).
 
+**[P1-CULINARY-METADATA-BETA · 2026-08-19] Ronda 3 — el hueco que reabrió el catálogo beta.**
+Las 141 filas de países beta que `P1-COUNTRY-SYSTEM-F2` insertó el 2026-08-17 nacieron con
+`prep_methods`/`ready_to_eat` en NULL al 100%, devolviendo la cobertura del catálogo de 100% a
+**206/347 = 59%**. Sobre un corpus de recetas beta la cobertura medida era **24%**: un plan
+dominicano no notaba nada (usa filas DO), un plan español se quedaba sin capa 1 entera. El
+backfill (76 filas por default de categoría + 65 de Despensa una a una) la devuelve a 100%, y el
+CHECK `master_ingredients_prep_methods_not_null` impide que el próximo lote de altas lo repita —
+la invariante vive ahora donde vive el dato, no en un test parser-based. Corpus:
+`tests/fixtures/culinary_beta/`. Test: `test_p1_culinary_metadata_beta.py`.
+
+⚠️ **Falso positivo conocido, NO cerrado: «hasta dorar».** El patrón `dora(?!d[oa]s?\b)\w*`
+excluye «dorado/dorada/dorados/doradas» pero **no el infinitivo «dorar»**, así que un paso tan
+común como «Hornea las papas hasta dorar» dispara `saltear` sobre un alimento que quizá no lo
+tenga. «Hasta dorar» describe el PUNTO de cocción, no ordena saltear. Afecta a filas dominicanas
+también — la categoría `Víveres` no lleva `saltear` en su default, así que «fríe la yuca hasta
+dorar» es un FP vivo hoy. Detectado el 2026-08-19 midiendo el corpus beta; no se tocó el regex
+porque cambia conducta de producción para los 6 países y merece su propio P-fix.
+
 **Cobertura actual** (migración base, antes del backfill `leche%hervir`): `prep_methods` 148/204 filas de `master_ingredients` (~72.5%), `ready_to_eat` 99/204 (~48.5%, menor porque Vegetales/Víveres solo setean `prep_methods` por diseño del backfill de categoría). El backfill `leche%hervir` solo AÑADE un método a filas ya no-NULL (no cambia el conteo de cobertura). El resto queda `NULL` — fail-open, no un gap de esta task; un audit de huecos fuera del golden set queda pendiente para una task futura.
 
 ---
