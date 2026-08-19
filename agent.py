@@ -6011,8 +6011,14 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # es-DO/guest ⇒ "" (byte-idéntico). Best-effort: jamás rompe el chat.
     try:
         system_prompt += build_language_directive(_coach_locale)
-    except Exception:
-        pass
+    except Exception as _exc:
+        # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
+        # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
+        # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
+        # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
+            type(_exc).__name__, str(_exc)[:160])
 
     config = {"configurable": {"thread_id": session_id}}
 
@@ -6477,8 +6483,14 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # usuario real en-US. Ver el comentario gemelo en chat_with_agent.
     try:
         system_prompt += build_language_directive(_coach_locale)
-    except Exception:
-        pass
+    except Exception as _exc:
+        # [P2-SILENT-DEGRADATION] El `pass` a secas dejaba al coach respondiendo en
+        # el idioma equivocado SIN rastro: es justo el sintoma que este refuerzo
+        # existe para corregir, asi que tragarse su fallo lo vuelve indepurable.
+        # Sigue siendo best-effort —jamas rompe el chat—, pero ahora se entera.
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] refuerzo de idioma del coach: %s: %s",
+            type(_exc).__name__, str(_exc)[:160])
 
     config = {"configurable": {"thread_id": session_id}}
 
