@@ -46468,7 +46468,8 @@ def _engine_day_view(plan_data: dict, day: dict) -> dict:
 
 
 def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
-                              pantry_strict: bool = False, form_data: dict = None) -> int:
+                              pantry_strict: bool = False, form_data: dict = None,
+                              touched_day_indices: list = None) -> int:
     """[P1-UPDATE-MACRO-PARITY · 2026-07-03] (audit v6 · P1-1) Paridad del MOTOR de macros de S1 en las
     superficies de update. `_apply_macro_engine` + el refinador global entero corrían SOLO en form-gen:
     un swap/chat-modify que dejaba el día fuera de banda se entregaba con banner (band-parity) pero sin
@@ -46497,7 +46498,24 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
     pantry never-worse (deepcopy+revert) que este helper no tiene. Banda/step/knobs son SSOT
     compartido — si cambias la secuencia aquí, actualiza el inline de regen-day (y viceversa);
     test de sincronía en test_p2_audit_v7_batch.py.
-    Rollback: MEALFIT_UPDATE_MACRO_ENGINE=false. tooltip-anchor: P1-UPDATE-MACRO-PARITY"""
+    Rollback: MEALFIT_UPDATE_MACRO_ENGINE=false. tooltip-anchor: P1-UPDATE-MACRO-PARITY
+
+    [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] Este helper es PLAN-WIDE — itera
+    TODOS los días de `plan_data`, no solo el día que el caller acaba de tocar (swap-persist,
+    recipe-expand y chat-modify le pasan el plan ENTERO, `routers/plans.py`/`tools.py`). Un día
+    que YA venía fuera de banda de la generación entra igual, y `_hit` re-cuantiza los strings de
+    `ingredients` (rebalance/refine/relevel) Y `recipe` (`_sync_recipe_step_quantities`) de TODOS
+    los meals de ese día — exactamente los dos arrays que `meal["_display"][locale]` espeja por
+    índice (spec `docs/superpowers/specs/2026-08-19-plan-display-i18n-design.md`, §Invalidación).
+    Sin el pop de abajo, un día colateral (no el que el mutador llamante tocó) quedaría con
+    `_display` mintiendo gramos de forma PERMANENTE — ni se popea en el caller (que solo toca su
+    propio meal/día) ni se despacha (el caller solo re-enriquece SU día). El pop vive AQUÍ, no en
+    cada caller, porque es el único punto que sabe qué días re-cuantizó de verdad — cubre los 5
+    call sites actuales (swap, expand, chat-modify ×2, form-gen/budget-convergence) y los
+    futuros sin wiring por-caller (la lección de `P1-COUNTRY-SYSTEM-F1`: gatear call sites uno a
+    uno es el agujero, no el cierre). `touched_day_indices` (opcional, `None` = comportamiento
+    legacy intacto) permite al caller AMPLIAR su despacho de re-enriquecimiento a los días que
+    este motor re-cuantizó, sin retraducir el plan entero."""
     if not (UPDATE_MACRO_ENGINE_ENABLED and isinstance(plan_data, dict)) or pantry_strict:
         return 0
     try:
@@ -46531,7 +46549,7 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
         # el motor re-dimensionó SIN poder re-aplicar los caps clínicos por falta de `form_data`.
         # Se reporta AGREGADO al final (un warning por llamada, no por día).
         _recap_skipped_days = 0
-        for _day in plan_data.get("days") or []:
+        for _day_idx_ume, _day in enumerate(plan_data.get("days") or []):
             if not isinstance(_day, dict):
                 continue
             _meals = [m for m in (_day.get("meals") or []) if isinstance(m, dict)]
@@ -46594,7 +46612,16 @@ def apply_update_macro_engine(plan_data: dict, *, surface: str, db=None,
                 _recap_skipped_days += 1
             if _hit:
                 touched += 1
+                if touched_day_indices is not None:
+                    touched_day_indices.append(_day_idx_ume)
                 for _m in _meals:
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine] DELETE-on-write (spec
+                    # "Invalidación"): este día acaba de ser re-cuantizado (rebalance/refine/
+                    # relevel de arriba + el qty-sync de abajo) — CUALQUIER `_display` heredado
+                    # miente los gramos de `ingredients`/`recipe`. Pop puro (cero I/O, respeta
+                    # P2-MUTATOR-PURITY) en el ÚNICO punto que sabe qué meals se tocaron de
+                    # verdad, para los 5 call sites actuales y los futuros sin wiring por-caller.
+                    _m.pop("_display", None)
                     try:
                         _sync_recipe_step_quantities(_m)
                     except Exception:

@@ -1525,11 +1525,15 @@ def test_mutator_swap_dispatch_after_atomic_result_confirmed(_plans_src):
 
 
 def test_mutator_swap_dispatch_uses_day_index_scoped_batch(_plans_src):
-    """El despacho acota `day_indices=[day_index]` — solo el día tocado, no el plan
-    entero (recuperación parcial/costo acotado, espejo de los otros mutadores)."""
+    """El despacho acota `day_indices` a los días REALMENTE tocados — el swapeado
+    (`day_index`) [Fix round 2] UNIDO a los días colaterales que
+    `apply_update_macro_engine` (plan-wide) reportó vía `_swap_macroengine_touched_days`
+    — nunca el plan entero (recuperación parcial/costo acotado)."""
     dispatch_block = _bounded_block(_plans_src, _SWAP_DISPATCH_START, _SWAP_DISPATCH_END)
     assert "schedule_plan_display_enrichment(" in dispatch_block
-    assert "day_indices=[day_index]" in dispatch_block
+    assert "day_indices=sorted(_p1i18n_days_sw)" in dispatch_block
+    assert "_p1i18n_days_sw.add(day_index)" in dispatch_block
+    assert "_p1i18n_days_sw = set(_swap_macroengine_touched_days)" in dispatch_block
 
 
 def test_mutator_swap_dispatch_uses_should_enrich_locale_helper(_plans_src):
@@ -1793,10 +1797,14 @@ def test_mutator_chatmod_dispatch_after_persist_confirmed(_tools_src):
 def test_mutator_chatmod_dispatch_uses_day_index_holder_not_prelock_var(_tools_src):
     """[Fix round 1 · F7] El despacho debe usar `_dispatch_day_index[0]` (holder
     rellenado DENTRO del callback, bajo el lock) — NO un índice capturado en un
-    loop PRE-lock potencialmente stale."""
+    loop PRE-lock potencialmente stale. [Fix round 2] UNIDO a
+    `_macroengine_touched_days` (días colaterales que `apply_update_macro_engine`,
+    plan-wide, reportó)."""
     dispatch_block = _bounded_block(_tools_src, _CHATMOD_DISPATCH_START, _CHATMOD_DISPATCH_END)
     assert "schedule_plan_display_enrichment(" in dispatch_block
-    assert "day_indices=[_dispatch_day_index[0]]" in dispatch_block
+    assert "day_indices=sorted(_p1i18n_days_cm)" in dispatch_block
+    assert "_p1i18n_days_cm.add(_dispatch_day_index[0])" in dispatch_block
+    assert "_p1i18n_days_cm = set(_macroengine_touched_days)" in dispatch_block
     assert "target_day_index" not in dispatch_block
 
 
@@ -2131,3 +2139,271 @@ def test_chatmod_functional_old_display_does_not_survive_modify(_chatmod_engine)
         "o corre sobre el objeto equivocado."
     )
     assert persisted_meal["name"] == "Avena con banana"
+
+
+# ================================================================================
+# SECCIÓN: MOTOR PLAN-WIDE `apply_update_macro_engine` (Fix round 2)
+#
+# tooltip-anchor: `P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine` (graph_orchestrator.py).
+#
+# Re-review (task-3-rereview.md, Parte 2 — PREMISA CONFIRMADA, más grave que F1 del round 1):
+# `apply_update_macro_engine` es PLAN-WIDE (itera TODOS los días de `plan_data`, no solo el
+# día que el caller tocó) y swap-persist/recipe-expand/chat-modify le pasan el PLAN ENTERO —
+# un día colateral fuera de banda [0.90,1.12] que la generación ya traía se re-cuantiza
+# (ingredients + recipe, vía `_sync_recipe_step_quantities`) sin que ningún caller lo sepa.
+# Ruling del controller, recomendación (ii'): el pop baja al MOTOR (cubre los 5 call sites
+# actuales y los futuros sin wiring por-caller) + el motor reporta los días tocados vía el
+# parámetro opcional `touched_day_indices` para que los 3 mutadores del feature amplíen su
+# despacho de re-enriquecimiento.
+#
+# Elección de (c) — "el despacho del swap incluye los días tocados": FUNCIONAL, no parser.
+# El `_swap_engine` fixture (sección swap arriba) ya invoca `api_swap_meal_persist` de punta a
+# punta con `update_plan_data_atomic` capturado — mockear `apply_update_macro_engine` para que
+# reporte un día colateral y verificar que ese día aparece en `day_indices` del despacho
+# ejercita la UNIÓN real (`_swap_macroengine_touched_days ∪ {day_index}`), no solo que el
+# texto "touched_day_indices" aparezca cerca del despacho (un parser no distinguiría una unión
+# correcta de una que solo referencia la variable sin usarla).
+# ================================================================================
+
+_GO_SRC_PATH = _BACKEND_ROOT / "graph_orchestrator.py"
+
+
+@pytest.fixture(scope="module")
+def _go_src() -> str:
+    return _GO_SRC_PATH.read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------
+# (a) Unit del motor: pop + reporte de días tocados.
+# ------------------------------------------------------------------
+
+_MACROENGINE_DENS = {
+    "pollo": {"kcal": 1.65, "protein": 0.31, "carbs": 0.0, "fats": 0.036},
+    "arroz": {"kcal": 1.30, "protein": 0.027, "carbs": 0.28, "fats": 0.003},
+    "aguacate": {"kcal": 1.60, "protein": 0.02, "carbs": 0.085, "fats": 0.147},
+}
+
+
+class _MacroEngineRefDB:
+    """Mismo patrón que `test_p1_update_macro_parity.py::_RefDB` — fake determinista de
+    `macros_from_ingredient_string`, sin tocar la DB real."""
+
+    def macros_from_ingredient_string(self, s):
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*g de (\w+)", str(s).lower())
+        if not m:
+            return None
+        g, food = float(m.group(1)), m.group(2)
+        d = _MACROENGINE_DENS.get(food)
+        return {k: v * g for k, v in d.items()} if d else None
+
+
+def _macroengine_plan_two_days() -> dict:
+    """Día 1 (índice 0) FUERA de banda — P≈75/C≈69/F≈16 vs target 90/70/22 (proteína .83, grasa
+    .73, ambos fuera de [0.90,1.12]) — con `_display` heredado en su primer meal. Día 2 (índice
+    1) EN banda: sus campos `protein`/`carbs`/`fats` (que `_out_of_band` suma DIRECTO del meal,
+    no desde `ingredients` — desacopla este día de la regex de `_MacroEngineRefDB`) igualan el
+    target exacto → ratio 1.0 en las 3 → nunca entra al `if _hit:` → su `_display` debe
+    sobrevivir intacto y su índice NUNCA aparecer en `touched_day_indices`."""
+    return {
+        "macros": {"protein": 90, "carbs": 70, "fats": 22},
+        "calories": 850,
+        "days": [
+            {
+                "day": 1,
+                "meals": [
+                    {
+                        "meal": "Almuerzo", "name": "Pollo con arroz",
+                        "protein": 40, "carbs": 27, "fats": 12,
+                        "ingredients": ["120g de pollo", "80g de arroz", "50g de aguacate"],
+                        "ingredients_raw": ["120g de pollo", "80g de arroz", "50g de aguacate"],
+                        "recipe": ["Cocinar el pollo.", "Servir con arroz."],
+                        "_display": {
+                            "en-US": {"name": "STALE — out of band day", "description": "x",
+                                      "recipe": ["x"], "ingredients": ["x"]}
+                        },
+                    },
+                    {
+                        "meal": "Cena", "name": "Pollo con arroz II",
+                        "protein": 35, "carbs": 42, "fats": 4,
+                        "ingredients": ["100g de pollo", "150g de arroz"],
+                        "ingredients_raw": ["100g de pollo", "150g de arroz"],
+                        "recipe": ["Cocinar el pollo.", "Servir con arroz."],
+                    },
+                ],
+            },
+            {
+                "day": 2,
+                "meals": [
+                    {
+                        "meal": "Almuerzo", "name": "Plato en banda",
+                        "protein": 90, "carbs": 70, "fats": 22,
+                        "ingredients": ["1 plato balanceado"],
+                        "ingredients_raw": ["1 plato balanceado"],
+                        "recipe": ["Servir."],
+                        "_display": {
+                            "en-US": {"name": "In-band day, must survive", "description": "x",
+                                      "recipe": ["x"], "ingredients": ["x"]}
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def test_macroengine_pops_display_on_out_of_band_day_and_reports_it(monkeypatch):
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "UPDATE_MACRO_ENGINE_ENABLED", True)
+    plan = _macroengine_plan_two_days()
+    touched: list = []
+
+    n = go.apply_update_macro_engine(
+        plan, surface="test", db=_MacroEngineRefDB(), touched_day_indices=touched
+    )
+
+    assert n == 1, "solo el día de índice 0 está fuera de banda"
+    assert touched == [0], "el motor debe reportar el ÍNDICE del día fuera de banda tocado"
+    day0_meal0 = plan["days"][0]["meals"][0]
+    assert "_display" not in day0_meal0, (
+        "el `_display` heredado del meal del día FUERA de banda debe desaparecer — el motor "
+        "lo re-cuantizó (rebalance/refine/qty-sync toca ingredients Y recipe)."
+    )
+
+
+def test_macroengine_leaves_in_band_day_display_intact_and_unreported(monkeypatch):
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "UPDATE_MACRO_ENGINE_ENABLED", True)
+    plan = _macroengine_plan_two_days()
+    touched: list = []
+
+    go.apply_update_macro_engine(
+        plan, surface="test", db=_MacroEngineRefDB(), touched_day_indices=touched
+    )
+
+    assert 1 not in touched, "el día EN banda (índice 1) no debe reportarse como tocado"
+    day1_meal = plan["days"][1]["meals"][0]
+    assert day1_meal.get("_display") == {
+        "en-US": {"name": "In-band day, must survive", "description": "x",
+                  "recipe": ["x"], "ingredients": ["x"]}
+    }, "el `_display` de un día EN banda (nunca mutado) debe sobrevivir intacto."
+
+
+def test_macroengine_touched_day_indices_none_is_backward_compatible(monkeypatch):
+    """Callers legacy (los que NO pasan `touched_day_indices`, default `None`) no deben
+    romperse — ni `AttributeError` por `.append()` sobre `None`, ni cambio en el retorno `int`."""
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "UPDATE_MACRO_ENGINE_ENABLED", True)
+    plan = _macroengine_plan_two_days()
+    n = go.apply_update_macro_engine(plan, surface="test", db=_MacroEngineRefDB())
+    assert n == 1
+
+
+# ------------------------------------------------------------------
+# (b) Parser: anchor + firma del parámetro opcional + posición del pop.
+# ------------------------------------------------------------------
+
+
+def test_macroengine_anchor_present(_go_src):
+    assert "P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine" in _go_src
+
+
+def test_macroengine_touched_day_indices_is_keyword_only_with_none_default(_go_src):
+    """`touched_day_indices` debe vivir DESPUÉS del `*,` que hace keyword-only al resto de
+    parámetros (firma preexistente) — un caller posicional legacy no debe poder pisarlo."""
+    assert "touched_day_indices: list = None" in _go_src
+    sig_idx = _go_src.index("def apply_update_macro_engine(")
+    star_idx = _go_src.index("*,", sig_idx)
+    param_idx = _go_src.index("touched_day_indices: list = None", sig_idx)
+    assert sig_idx < star_idx < param_idx
+
+
+def test_macroengine_pop_is_inside_hit_block(_go_src):
+    """El pop debe vivir DENTRO del `if _hit:` que ya itera `for _m in _meals` — fuera de esa
+    rama el motor no re-cuantizó nada de ese día, y popear ahí sería incorrecto (borraría
+    `_display` de días que nunca se tocaron)."""
+    hit_idx = _go_src.index("if _hit:\n                touched += 1")
+    pop_idx = _go_src.index('_m.pop("_display", None)')
+    append_idx = _go_src.index("touched_day_indices.append(_day_idx_ume)")
+    assert hit_idx < append_idx < pop_idx, (
+        "orden esperado dentro de `if _hit:`: touched += 1 → reporte del día → pop por meal."
+    )
+
+
+def test_macroengine_return_type_still_int(_go_src):
+    """La firma pública sigue devolviendo `int` — los callers legacy que solo miran el conteo
+    (sin usar `touched_day_indices`) no deben romperse."""
+    sig_idx = _go_src.index("def apply_update_macro_engine(")
+    sig_end = _go_src.index(":\n", sig_idx)
+    signature = _go_src[sig_idx:sig_end]
+    assert "-> int" in signature
+
+
+# ------------------------------------------------------------------
+# (c) Funcional — el despacho de swap-persist incluye los días colaterales que el motor
+# reporta (ver nota de "Elección de (c)" arriba de esta sección).
+# ------------------------------------------------------------------
+
+
+def test_swap_functional_dispatch_includes_macroengine_touched_days(_swap_engine, monkeypatch):
+    import graph_orchestrator as go_module
+
+    state, plans_module = _swap_engine
+    # Locale que SÍ dispara el despacho (el fixture base deja `get_user_profile` sin locale).
+    monkeypatch.setattr(
+        db_module, "get_user_profile", lambda uid: {"health_profile": {}, "locale": "en-US"}
+    )
+    # El wiring bajo prueba vive DENTRO del bloque `MEALFIT_UPDATE_RECOMPUTE_MICROS` — el
+    # fixture base lo deja en "false" (para aislar el test de F12); aquí necesitamos que corra.
+    monkeypatch.setenv("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true")
+
+    def _fake_engine(plan_data, *, surface, db=None, pantry_strict=False, form_data=None,
+                      touched_day_indices=None):
+        # Simula que el motor re-cuantizó un día COLATERAL (índice 4) fuera del swapeado (0).
+        if touched_day_indices is not None:
+            touched_day_indices.append(4)
+        return 1
+
+    monkeypatch.setattr(go_module, "apply_update_macro_engine", _fake_engine)
+
+    calls: list = []
+    monkeypatch.setattr(
+        pdi, "schedule_plan_display_enrichment",
+        lambda *a, **kw: calls.append((a, kw)),
+    )
+
+    old_meal = {
+        "meal": "Almuerzo", "name": "Pollo guisado", "desc": "Pollo con arroz.",
+        "cals": 500, "protein": 30, "carbs": 50, "fats": 15,
+        "ingredients": ["150 g de pechuga de pollo", "1 taza de arroz"],
+        "recipe": ["Sofreir el pollo.", "Servir con arroz."],
+    }
+    state["plan_data"] = {"days": [{"day": 1, "meals": [old_meal]}]}
+    body = {
+        "day_index": 0,
+        "meal_index": 0,
+        "new_meal": {
+            "name": "Pescado al horno", "desc": "Pescado con vegetales.",
+            "cals": 480, "protein": 32, "carbs": 40, "fats": 14,
+            "ingredients": ["200 g de pescado", "1 taza de vegetales"],
+            "recipe": ["Hornear el pescado.", "Servir con vegetales."],
+        },
+    }
+
+    result = plans_module.api_swap_meal_persist(
+        plan_id="plan-swap-1", data=body, verified_user_id="user-swap-1",
+    )
+
+    assert result == {"success": True}
+    assert len(calls) == 1, "el despacho de re-enriquecimiento debe dispararse exactamente una vez"
+    _args, kwargs = calls[0]
+    day_indices = kwargs.get("day_indices")
+    assert day_indices is not None, "schedule_plan_display_enrichment debe recibir day_indices"
+    assert 4 in day_indices, (
+        "el día COLATERAL que el motor plan-wide reportó (4) debe estar en day_indices del "
+        "despacho — sin la unión, ese día quedaría sin re-enriquecer aunque el motor ya "
+        "popeó su `_display`."
+    )
+    assert 0 in day_indices, "el día REALMENTE swapeado (0) debe seguir incluido."

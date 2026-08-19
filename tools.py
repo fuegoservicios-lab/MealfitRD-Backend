@@ -2441,6 +2441,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # re-enriquecimiento post-persist (day_indices espera índices de array, NO
         # `day_number`, que es el número lógico del plato — pueden divergir).
         _dispatch_day_index: list = [None]
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `apply_update_macro_engine`
+        # es PLAN-WIDE — puede re-cuantizar ingredients/recipe de días DISTINTOS al que este
+        # modify tocó (rereview task-3-rereview.md, Parte 2). El motor ya popea `_display` de
+        # esos días colaterales (defensa-en-profundidad, cero I/O), pero sin reportarlos aquí
+        # el despacho post-persist solo re-enriquecería el día del modify — el colateral se
+        # queda en español hasta el próximo enrich no relacionado. `touched_day_indices=` (lista
+        # mutable compartida por referencia) recoge esos índices desde DENTRO del callback (la
+        # pasada FRESH bajo el lock — la única que persiste; la pasada pre-lock opera sobre una
+        # copia que se descarta).
+        _macroengine_touched_days: list = []
 
         def _apply_meal_modification(plan_data_fresh: dict):
             """Aplica la mutación del meal y las aggregated_shopping_list*
@@ -2562,7 +2572,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     try:
                         from graph_orchestrator import apply_update_macro_engine as _ume_cm
                         # [P1-UPDATE-CLINICAL-RECAP · 2026-07-29] espejo del re-cap de la pasada pre-listas.
+                        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `touched_day_indices=`
+                        # recoge los días colaterales que este motor re-cuantizó (fuera del meal/día que
+                        # el modify tocó) para que el despacho post-persist los incluya.
                         _ume_cm(plan_data_fresh, surface="chat_modify", pantry_strict=_ps_cm,
+                                touched_day_indices=_macroengine_touched_days,
                                 form_data=_micro_form_cm)
                     except Exception as _ume_cm_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (chat fresh) no-op: {_ume_cm_e}")
@@ -2702,16 +2716,22 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             logger.info(f"[TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
             # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist (FUERA
             # del lock): el DELETE-on-write del callback dejó el meal modificado sin `_display`
-            # — re-enriquecer SOLO el día tocado si el locale del usuario aplica. `_p1i18n_locale_cm`
+            # — re-enriquecer el día tocado si el locale del usuario aplica. `_p1i18n_locale_cm`
             # ya se hidrató arriba junto con `_hp` (Fix round 1 · F6 — mismo round-trip, cero SELECT
             # extra) y `_dispatch_day_index[0]` es el índice de array capturado DENTRO del callback
             # bajo el lock (Fix round 1 · F7 — no el de un loop pre-lock potencialmente stale).
+            # [Fix round 2] `_macroengine_touched_days` UNE los días colaterales que
+            # `apply_update_macro_engine` (PLAN-WIDE) re-cuantizó — sin esto se quedarían sin
+            # despacho aunque el motor ya los popeó.
             try:
                 from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_cm
-                if _dispatch_day_index[0] is not None and _p1i18n_should_enrich_cm(_p1i18n_locale_cm):
+                _p1i18n_days_cm = set(_macroengine_touched_days)
+                if _dispatch_day_index[0] is not None:
+                    _p1i18n_days_cm.add(_dispatch_day_index[0])
+                if _p1i18n_days_cm and _p1i18n_should_enrich_cm(_p1i18n_locale_cm):
                     from plan_display_i18n import schedule_plan_display_enrichment
                     schedule_plan_display_enrichment(
-                        plan_id, user_id, _p1i18n_locale_cm, day_indices=[_dispatch_day_index[0]]
+                        plan_id, user_id, _p1i18n_locale_cm, day_indices=sorted(_p1i18n_days_cm)
                     )
             except Exception as _p1i18n_cm_e:
                 logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] dispatch no-op: {_p1i18n_cm_e}")

@@ -6006,7 +6006,14 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             # (`_enrich_clinical_from_profile`) y ya viaja al recompute de micros 11
                             # líneas más abajo — sin pasarlo aquí, el motor re-dimensionaba sin poder
                             # re-aplicar los caps clínicos de porción.
-                            _ume_exp(plan_data_fresh, surface="recipe_expand", form_data=_expand_clin)
+                            # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] el motor es
+                            # PLAN-WIDE — puede re-cuantizar días DISTINTOS a los que expand tocó.
+                            # `touched_day_indices` es una `list` (contrato del motor); se une al
+                            # `set` `_expand_touched_days` que ya alimenta el pop/despacho.
+                            _expand_macroengine_touched_days: list = []
+                            _ume_exp(plan_data_fresh, surface="recipe_expand", form_data=_expand_clin,
+                                     touched_day_indices=_expand_macroengine_touched_days)
+                            _expand_touched_days.update(_expand_macroengine_touched_days)
                         except Exception as _ume_exp_e:
                             logger.debug(f"[P2-AUDIT-V7-BATCH] (P2-4) motor en expand no-op: {_ume_exp_e}")
                     # [P2-EXPAND-MICRO-RECOMPUTE · 2026-07-02] (audit v3 micros GAP-2) el veg añadido ya entró
@@ -7214,6 +7221,13 @@ def api_swap_meal_persist(
         # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) buffer del nombre del plato reemplazado
         # (lo llena el mutator bajo el lock) → señal de gusto aprendido post-persist.
         _taste_old_name = [""]
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `apply_update_macro_engine`
+        # (invocado abajo dentro de `_swap_mutator`) es PLAN-WIDE — puede re-cuantizar días
+        # DISTINTOS al swapeado (rereview task-3-rereview.md, Parte 2). El motor ya popea
+        # `_display` de esos días colaterales; esta lista (rellenada bajo el lock vía
+        # `touched_day_indices=`) permite al despacho post-persist (fuera del lock) ampliar
+        # `day_indices` a esos días también.
+        _swap_macroengine_touched_days: list = []
 
         def _swap_mutator(plan_data: dict) -> dict:
             # Sanity: el plan real DEBE tener `days[day_index].meals[meal_index]`.
@@ -7474,7 +7488,10 @@ def api_swap_meal_persist(
                         # (`_micro_form`, con el free-text clínico ya plegado) para que el motor
                         # re-aplique los caps DM2/bariátrico sobre lo que acaba de re-dimensionar.
                         # Sin esto el rebalance re-inflaba la batata capada de un diabético.
+                        # [P1-PLAN-DISPLAY-I18N-MUTATOR-macroengine · Fix round 2] `touched_day_indices=`
+                        # recoge los días colaterales re-cuantizados fuera del día swapeado.
                         _ume_sw(plan_data, surface="swap_persist", pantry_strict=_ps_swap,
+                                touched_day_indices=_swap_macroengine_touched_days,
                                 form_data=_micro_form)
                     except Exception as _ume_sw_e:
                         logger.debug(f"[P1-UPDATE-MACRO-PARITY] (swap) no-op: {_ume_sw_e}")
@@ -7598,18 +7615,22 @@ def api_swap_meal_persist(
             )
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist (FUERA del
         # lock): el DELETE-on-write de arriba dejó el meal swapeado sin `_display` — si el
-        # usuario lee el dashboard en otro idioma, re-enriquecer SOLO el día tocado
-        # (`day_indices=[day_index]`). `schedule_plan_display_enrichment` ya no-opea sola
+        # usuario lee el dashboard en otro idioma, re-enriquecer el día tocado
+        # (`day_index`). `schedule_plan_display_enrichment` ya no-opea sola
         # para es-DO/locale inválido/knob off — el guard `should_enrich_locale` de aquí
         # es solo para evitar el import+thread cuando es obviamente innecesario. [Fix round
         # 1 · F10] gate importado del motor SSOT (no un literal a mano comparando contra el
-        # locale base, como hacía la versión previa).
+        # locale base, como hacía la versión previa). [Fix round 2] `_swap_macroengine_touched_days`
+        # UNE los días colaterales que `apply_update_macro_engine` (PLAN-WIDE) re-cuantizó —
+        # sin esto se quedarían sin despacho aunque el motor ya los popeó.
         try:
             from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_sw
+            _p1i18n_days_sw = set(_swap_macroengine_touched_days)
+            _p1i18n_days_sw.add(day_index)
             if _p1i18n_should_enrich_sw(_swap_locale):
                 from plan_display_i18n import schedule_plan_display_enrichment
                 schedule_plan_display_enrichment(
-                    plan_id, verified_user_id, _swap_locale, day_indices=[day_index]
+                    plan_id, verified_user_id, _swap_locale, day_indices=sorted(_p1i18n_days_sw)
                 )
         except Exception as _p1i18n_sw_e:
             logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-swap] dispatch no-op: {_p1i18n_sw_e}")
