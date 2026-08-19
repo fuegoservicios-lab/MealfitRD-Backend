@@ -5244,6 +5244,14 @@ def test_c3_durable_guard_mutacion_re_agregar_alias_en_memoria_reproduce_red(sc)
     'ricotta' a Requesón EN MEMORIA (sin tocar la DB real) debe hacer que 'ricotta' resuelva
     distinto de lo que el baseline committed fija -- evidencia de que el fix real (la fila de la
     DB, no solo el comentario del script) es lo que sostiene el contrato del guard de arriba."""
+    # [robustecido 2026-08-19 · P1-PLAN-DISPLAY-I18N cierre] La forma original solo AÑADÍA
+    # 'ricotta' a Requesón y asumía que esa fila GANABA la colisión en el índice de alias —
+    # pero el ganador depende del ORDEN de filas del SELECT (sin ORDER BY), y un UPDATE
+    # masivo del catálogo (el fill de name_en reescribió las 347 filas) cambió el orden
+    # físico y flipeó al ganador: la mutación se volvía invisible y este test fallaba sin
+    # bug real. Determinista: la mutación además QUITA el alias legítimo de 'Queso ricotta'
+    # (y su name como alias implícito no aplica: 'ricotta' ≠ 'Queso ricotta' exacto), así
+    # 'ricotta' solo puede resolver vía la fila mutada, gane quien gane el orden.
     import copy
     master_list = sc.get_master_ingredients()
     mutated = [copy.deepcopy(r) for r in master_list]
@@ -5254,6 +5262,8 @@ def test_c3_durable_guard_mutacion_re_agregar_alias_en_memoria_reproduce_red(sc)
             if "ricotta" not in r["aliases"]:
                 r["aliases"].append("ricotta")
             found = True
+        elif r["name"] == "Queso ricotta":
+            r["aliases"] = [a for a in (r.get("aliases") or []) if "ricotta" not in str(a).lower()]
     assert found, "fila 'Requesón' no encontrada -- el fixture del catálogo cambió"
 
     with open(_DO_CORPUS_BASELINE_JSON, encoding="utf-8") as f:
