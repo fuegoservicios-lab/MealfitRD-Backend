@@ -173,6 +173,31 @@ _INFLIGHT_LOCK = threading.Lock()
 _ENRICH_LOCK_TTL_S = 300  # Red de seguridad si el proceso muere ANTES del finally.
 
 
+def _inflight_key(plan_id: str, locale: str, day_indices) -> tuple:
+    """[Ola final · FF-3] Clave del set in-process, CON los días — paridad con la clave
+    del KV cross-worker.
+
+    Por qué: el comentario de arriba clasifica `_INFLIGHT` como "solo una optimización"
+    cuya autoridad real es el marker cross-worker. Eso vale en un despliegue
+    multi-worker; aquí NO: FastAPI + APScheduler + `_chunk_worker` + los handlers de
+    swap/expand/chat-modify viven en el MISMO proceso, así que el set in-process era el
+    gate DOMINANTE y su clave gruesa `(plan_id, locale)` reimponía exactamente el bloqueo
+    que la clave del KV se diseñó para evitar. El perdedor no se encolaba ni se
+    reintentaba: devolvía `dedupe_inprocess` y moría ahí, dejando ESOS días en español
+    (p.ej. un swap durante el enriquecimiento plan-wide del cambio de idioma — el flujo
+    que motivó la feature).
+
+    `day_indices=None` (el pre-filtro del scheduler cuando el caller no declara días)
+    produce una clave que JAMÁS matchea una clave del motor: el pre-filtro simplemente
+    deja de filtrar ese caso y el gate real de `enrich_plan_display` (que ya normalizó
+    contra `len(days)`) decide. Es la asimetría segura: filtrar de menos duplica una
+    llamada flash barata; filtrar de más pierde días.
+    """
+    if day_indices is None:
+        return (plan_id, locale, None)
+    return (plan_id, locale, tuple(day_indices))
+
+
 def _enrich_lock_kv_key(plan_id: str, locale: str, day_indices: list) -> str:
     """Determinista: el mismo lote de días (en cualquier orden de entrada,
     `enrich_plan_display` ya normaliza a sorted+dedup antes de llamar aquí)
@@ -495,6 +520,22 @@ def _parse_json_response(raw: str) -> Optional[dict]:
 # ============================================================
 
 
+def _fingerprint_lines(value) -> list:
+    """[Ola final · FF-2] Normalización SSOT de los dos arrays que `_display[locale]`
+    espeja por índice (`ingredients`, `recipe`). La usan LAS DOS puntas: el snapshot
+    (`_collect_targets`) y la verificación de identidad del mutator (`_persist_batch`),
+    así que la comparación es simétrica por construcción — si divergieran, un `recipe`
+    legacy de tipo string (que aquí colapsa a `[]`, igual que antes) contaría como
+    "cambió" en cada persist y nada se escribiría nunca.
+
+    La COPIA (`list(value)`) es load-bearing, no cosmética: los re-cuantizadores
+    mutan `ingredients` IN-PLACE (`ings[i] = new_ing`). Si el snapshot guardara la
+    MISMA lista del meal, la mutación viajaría también al snapshot y la comparación
+    de FF-2 pasaría siempre — el guard nacería muerto.
+    """
+    return list(value) if isinstance(value, list) else []
+
+
 def _collect_targets(days: list, day_indices_batch: list) -> list:
     idx_set = set(day_indices_batch)
     targets = []
@@ -520,8 +561,12 @@ def _collect_targets(days: list, day_indices_batch: list) -> list:
                     # persistido es `desc`, no `description` — leer solo `description` deja
                     # esto muerto (mismo bug histórico, ver test_p1_desc_key_dead.py).
                     "description": meal.get("desc") or meal.get("description") or "",
-                    "recipe": recipe if isinstance(recipe, list) else [],
-                    "ingredients": ingredients if isinstance(ingredients, list) else [],
+                    # [Ola final · FF-2] Snapshot de los arrays espejados: es a la vez el
+                    # material del prompt Y la huella con la que `_persist_batch` verifica
+                    # que el meal no cambió bajo los pies (misma normalización en ambas
+                    # puntas, vía `_fingerprint_lines`).
+                    "recipe": _fingerprint_lines(recipe),
+                    "ingredients": _fingerprint_lines(ingredients),
                 }
             )
     return targets
@@ -640,7 +685,18 @@ def _persist_batch(
                 continue
             if not isinstance(meal, dict):
                 continue
-            if meal.get("name") != t["name"]:
+            # [Ola final · FF-2] La verificación TOCTOU comparaba SOLO el nombre del plato,
+            # pero `_display[locale]` espeja `ingredients` y `recipe` POR ÍNDICE — y TODO
+            # re-cuantizador del motor (macro engine, caps clínicos DM2/bariátrico, carb-floor,
+            # qty-sync) cambia gramos CONSERVANDO el nombre por construcción. Con la comparación
+            # solo-name, un enriquecimiento en vuelo resucitaba el `_display` construido con el
+            # snapshot PRE-mutación encima del pop del mutador: mentira permanente sobre gramos,
+            # en el idioma del usuario. La ventana no son los segundos de una llamada LLM: `days`
+            # se lee UNA vez y se reutiliza para TODOS los lotes. Igualdad simple de listas de
+            # strings, CPU-only ⇒ P2-MUTATOR-PURITY intacta.
+            if (meal.get("name") != t["name"]
+                    or _fingerprint_lines(meal.get("ingredients")) != t["ingredients"]
+                    or _fingerprint_lines(meal.get("recipe")) != t["recipe"]):
                 counters["mismatch"] += 1
                 continue
             disp_map = meal.get("_display")
@@ -688,7 +744,9 @@ def enrich_plan_display(
     Returns:
         {"enriched_meals": int, "skipped": str | None}
     """
-    key = (plan_id, locale)
+    # [Ola final · FF-3] La clave real se arma tras normalizar los días (abajo); este
+    # placeholder solo existe para que el `finally` tenga siempre algo que descartar.
+    key = _inflight_key(plan_id, locale, None)
     try:
         if not _plan_display_i18n_enabled():
             return {"enriched_meals": 0, "skipped": "knob_off"}
@@ -707,6 +765,11 @@ def enrich_plan_display(
         requested_day_indices = _normalize_day_indices(day_indices, len(days))
         if not requested_day_indices:
             return {"enriched_meals": 0, "skipped": "no_meals"}
+
+        # [Ola final · FF-3] MISMA granularidad que el marker cross-worker: dos
+        # disparadores sobre DÍAS DISTINTOS del mismo plan+locale ya no se descartan
+        # entre sí (`requested_day_indices` ya viene sorted+dedup de la normalización).
+        key = _inflight_key(plan_id, locale, requested_day_indices)
 
         with _INFLIGHT_LOCK:
             if key in _INFLIGHT:
@@ -841,14 +904,22 @@ def schedule_plan_display_enrichment(
         if not isinstance(locale, str) or locale not in _COACH_LANGUAGE_NAMES:
             return
 
-        # Pre-check barato in-process: evita levantar un thread si ya hay uno
-        # en vuelo para el mismo (plan_id, locale). No sustituye el dedupe
-        # real (cross-worker + re-check) que vive dentro de `enrich_plan_display`.
+        # Pre-check barato in-process: evita levantar un thread si ya hay uno en vuelo
+        # para el mismo (plan_id, locale, MISMOS días). No sustituye el dedupe real
+        # (cross-worker + re-check) que vive dentro de `enrich_plan_display`.
+        # [Ola final · FF-3] La clave incluye los días — un disparador sobre OTROS días
+        # ya no se descarta aquí. Con `day_indices=None` la clave no matchea ninguna del
+        # motor (que normaliza contra `len(days)`) ⇒ este pre-filtro no filtra ese caso
+        # a propósito: el gate interno + el KV siguen decidiendo.
+        _prefilter_key = _inflight_key(
+            plan_id, locale,
+            None if day_indices is None else _normalize_day_indices(day_indices, 0),
+        )
         with _INFLIGHT_LOCK:
-            if (plan_id, locale) in _INFLIGHT:
+            if _prefilter_key in _INFLIGHT:
                 logger.debug(
                     f"[P1-PLAN-DISPLAY-I18N] schedule skip — ya en vuelo "
-                    f"plan={plan_id} locale={locale}"
+                    f"plan={plan_id} locale={locale} days={day_indices}"
                 )
                 return
 

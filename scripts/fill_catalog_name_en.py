@@ -97,8 +97,17 @@ def _parse_json_response(raw: str):
     return parsed if isinstance(parsed, dict) else None
 
 
-def fetch_catalog_names(conn) -> list:
-    rows = conn.execute("SELECT name FROM master_ingredients ORDER BY name").fetchall()
+def fetch_catalog_names(conn, only_missing: bool = False) -> list:
+    """[Ola final · FF-10] `only_missing=True` acota el SELECT a las filas SIN gloss
+    (`name_en IS NULL`). Re-ejecutar el script completo re-paga la llamada LLM sobre las
+    347 filas del catálogo — con esta flag un re-run tras una fila nueva (o tras un
+    fallo parcial) cuesta lo que cuestan esas pocas filas, no el catálogo entero.
+    """
+    sql = "SELECT name FROM master_ingredients"
+    if only_missing:
+        sql += " WHERE name_en IS NULL"
+    sql += " ORDER BY name"
+    rows = conn.execute(sql).fetchall()
     return [r[0] for r in rows if r and r[0]]
 
 
@@ -165,13 +174,25 @@ def main():
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Explícito, sin efecto adicional -- dry-run YA es el default sin --commit.",
+        help="Explícito: NO persiste (dry-run YA es el default sin --commit). "
+             "Mutuamente excluyente con --commit.",
+    )
+    parser.add_argument(
+        "--only-missing", action="store_true",
+        help="Solo las filas SIN gloss (name_en IS NULL) -- re-runs baratos: no re-paga "
+             "la llamada LLM sobre el catálogo entero.",
     )
     parser.add_argument(
         "--model", default=DEEPSEEK_FLASH,
         help=f"Modelo LLM (default: {DEEPSEEK_FLASH}).",
     )
     args = parser.parse_args()
+    # [Ola final · FF-10] `--dry-run` era un flag INERTE: `commit = bool(args.commit)`
+    # lo ignoraba, así que `--commit --dry-run` ESCRIBÍA. Un flag de seguridad que no
+    # protege es peor que ninguno (invita a confiar en él). Ahora la combinación es un
+    # error de uso -- `parser.error` sale con código 2, sin tocar la DB.
+    if args.commit and args.dry_run:
+        parser.error("--commit y --dry-run son mutuamente excluyentes: elige uno.")
     commit = bool(args.commit)
 
     if not NEON:
@@ -179,8 +200,14 @@ def main():
         sys.exit(1)
 
     with psycopg.connect(NEON) as conn:
-        names = fetch_catalog_names(conn)
+        names = fetch_catalog_names(conn, only_missing=bool(args.only_missing))
         if not names:
+            if args.only_missing:
+                # [Ola final · FF-10] Con --only-missing, "cero filas" es el estado
+                # DESEADO (catálogo completo), no un fallo -- salir 0 para que un
+                # re-run idempotente en un pipeline no rompa.
+                print("OK: 0 filas sin name_en -- el catálogo ya está completo.")
+                return
             print("FATAL: master_ingredients no devolvió ninguna fila.")
             sys.exit(1)
 

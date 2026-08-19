@@ -364,10 +364,39 @@ def _prune_plan_for_chat(plan):
     los input-tokens del system prompt del chat sin perder contenido semántico
     que el agente razone. Defensivo: si `plan` no es dict, lo devuelve intacto.
     Proyección shallow (no deep-copy): solo excluimos claves top-level; los
-    `days[]` y demás estructuras se referencian sin clonar (no se mutan)."""
+    `days[]` y demás estructuras se referencian sin clonar (no se mutan).
+
+    [P1-PLAN-DISPLAY-I18N · Ola final FF-5] `_display` vive en `days[*].meals[*]`, así
+    que una denylist TOP-LEVEL es incapaz de podarlo: para un usuario no-es-DO el JSON
+    del plan en el system prompt llevaba el plan español MÁS su traducción íntegra
+    (name+description+recipe+ingredients de cada meal) EN CADA TURNO — grosso modo el
+    doble de input-tokens, la misma clase de coste que ya motivó dos entradas de
+    `_CHAT_PLAN_PRUNE_KEYS` (`_culinary_contract_*`, `_review_issues_raw`). El agente
+    razona SIEMPRE sobre el español canónico (las tools resuelven por `day_number` +
+    `meal_type`, nunca por el nombre del plato), así que la traducción no le aporta nada.
+    Se poda con proyecciones shallow nuevas por día/meal — el plan original JAMÁS se
+    muta (side-effect-free: este helper recibe el plan VIVO del state del chat)."""
     if not isinstance(plan, dict):
         return plan
-    return {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS}
+    out = {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS}
+    _days = out.get("days")
+    if isinstance(_days, list):
+        out["days"] = [
+            (
+                {
+                    **_d,
+                    "meals": [
+                        ({k: v for k, v in _m.items() if k != "_display"}
+                         if isinstance(_m, dict) and "_display" in _m else _m)
+                        for _m in _d["meals"]
+                    ],
+                }
+                if isinstance(_d, dict) and isinstance(_d.get("meals"), list)
+                else _d
+            )
+            for _d in _days
+        ]
+    return out
 
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel

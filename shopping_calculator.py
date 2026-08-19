@@ -903,8 +903,20 @@ def _display_name_en_for_item(master_item: dict) -> "str | None":
     poblar por `scripts/fill_catalog_name_en.py`) — el frontend cae en
     silencio al nombre español (mismo contrato que `_display[locale]`).
 
+    [Ola final · FF-6] Gateado por el MISMO knob que el motor de enriquecimiento
+    (`MEALFIT_PLAN_DISPLAY_I18N`, default True): la feature se documenta con UN kill
+    switch y antes ese switch cubría media feature — con el knob en `false` un usuario
+    en-US volvía a ver Plan y Recetas en español PERO su PDF de la lista seguía saliendo
+    «Black beans (Habichuelas negras)». Estado mixto que nadie diseñó ni probó, y que
+    aparece justo cuando alguien revierte por un incidente. Se lee el env aquí (helper
+    local `_knob_env_bool`, mismo registro `_KNOBS_REGISTRY`) en vez de importar
+    `plan_display_i18n`: acoplar el aggregator al motor no compra nada y sí arrastra
+    un import pesado a un camino caliente.
+
     tooltip-anchor: P1-PLAN-DISPLAY-I18N
     """
+    if not _knob_env_bool("MEALFIT_PLAN_DISPLAY_I18N", True):
+        return None
     try:
         gloss = master_item.get("name_en") if isinstance(master_item, dict) else None
     except Exception:

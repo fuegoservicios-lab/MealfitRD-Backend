@@ -2902,8 +2902,12 @@ class _FakeConn:
         self._names = names
         self._calls = calls
         self.committed = False
+        # [Ola final · FF-10] Los SELECT ejecutados, para poder assertar el `WHERE
+        # name_en IS NULL` de `--only-missing` (y su ausencia en el modo completo).
+        self.selects: list = []
 
     def execute(self, sql):
+        self.selects.append(sql)
         return _FakeSelectResult([(n,) for n in self._names])
 
     def cursor(self):
@@ -3009,3 +3013,632 @@ def test_fill_script_missing_neon_env_exits_loud(_fill_script_module, monkeypatc
     with pytest.raises(SystemExit) as exc_info:
         mod.main()
     assert exc_info.value.code == 1
+
+
+# ================================================================================
+# SECCIÓN: OLA FINAL (review de fase — FF-1..FF-6, FF-10)
+# ================================================================================
+#
+# Los 7 hallazgos que ninguna review por-task podía ver: viven en la COSTURA entre el
+# motor (Task 1), los disparadores (Task 2), los mutadores (Task 3), el helper de lectura
+# (Task 4) y el catálogo (Task 5). Fuente: `.superpowers/sdd/2026-08-19-plan-display-i18n/
+# phase-final-review.md`.
+#
+#   FF-1 (HIGH)   Los 4 re-escritores PLAN-WIDE de gramos no popeaban `_display`
+#                 (`reapply_clinical_portion_caps` → los 2 caps clínicos,
+#                 `_apply_portion_quantization`, `_trim_day_carbs_to_target`,
+#                 `_sync_recipe_step_quantities`). Anchors
+#                 `P1-PLAN-DISPLAY-I18N-MUTATOR-{capdm2,capbariatric,quantize,carbtrim,qtysync}`.
+#   FF-2 (HIGH)   La verificación de identidad del mutator comparaba SOLO `name`, y TODO
+#                 re-cuantizador conserva el nombre → un enriquecimiento en vuelo RESUCITABA
+#                 el `_display` pre-mutación encima del pop. Ahora compara también la huella
+#                 de `ingredients`/`recipe`.
+#   FF-3 (MED-HI) `_INFLIGHT` sin `day_indices` DESCARTABA (no aplazaba) disparadores sobre
+#                 días distintos — y en este despliegue mono-proceso era el gate dominante.
+#   FF-5 (MED)    `_prune_plan_for_chat` es una denylist TOP-LEVEL: `_display` vive en
+#                 `days[*].meals[*]` y se serializaba al system prompt EN CADA TURNO.
+#   FF-6 (MED)    El kill switch cubría media feature: con `MEALFIT_PLAN_DISPLAY_I18N=false`
+#                 el PDF de la lista seguía saliendo bilingüe.
+#   FF-10 (LOW)   `--dry-run` era un flag INERTE (`--commit --dry-run` ESCRIBÍA) y no había
+#                 `--only-missing` para re-runs baratos.
+#
+# (FF-4 vive en el frontend: `src/__tests__/displayMeal.test.js`. FF-7/FF-8/FF-9 son
+# documentación — Task 6 —, no código.)
+# ================================================================================
+
+
+# ------------------------------------------------------------------
+# FF-1 · fakes deterministas compartidos por los tests funcionales
+# ------------------------------------------------------------------
+
+_OLA_DENS = {
+    "pollo": {"kcal": 1.65, "protein": 0.31, "carbs": 0.0, "fats": 0.036},
+    "arroz": {"kcal": 1.30, "protein": 0.027, "carbs": 0.28, "fats": 0.003},
+    "batata": {"kcal": 0.86, "protein": 0.016, "carbs": 0.20, "fats": 0.001},
+    "queso": {"kcal": 3.50, "protein": 0.25, "carbs": 0.013, "fats": 0.28},
+}
+
+
+class _OlaFinalRefDB:
+    """Fake determinista de `IngredientNutritionDB` para los re-escritores de gramos:
+    además de los macros expone `grams` (lo que los caps clínicos consultan primero) y
+    `grams_from_ingredient_string` (su fallback). Sin DB real, sin catálogo."""
+
+    @staticmethod
+    def _parse(s):
+        m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*g de (\w+)", str(s).lower())
+        if not m:
+            return None, None
+        return float(m.group(1)), m.group(2)
+
+    def macros_from_ingredient_string(self, s):
+        g, food = self._parse(s)
+        d = _OLA_DENS.get(food) if food else None
+        if not d:
+            return None
+        out = {k: v * g for k, v in d.items()}
+        out["grams"] = g
+        return out
+
+    def grams_from_ingredient_string(self, s):
+        g, _food = self._parse(s)
+        return g
+
+
+def _ola_display(tag: str) -> dict:
+    return {"en-US": {"name": tag, "description": "x", "recipe": ["x"], "ingredients": ["x"]}}
+
+
+_FF1_ANCHORS = (
+    "P1-PLAN-DISPLAY-I18N-MUTATOR-capdm2",
+    "P1-PLAN-DISPLAY-I18N-MUTATOR-capbariatric",
+    "P1-PLAN-DISPLAY-I18N-MUTATOR-quantize",
+    "P1-PLAN-DISPLAY-I18N-MUTATOR-carbtrim",
+    "P1-PLAN-DISPLAY-I18N-MUTATOR-qtysync",
+)
+
+
+def test_ff1_anchors_present_for_the_four_plan_wide_rewriters(_go_src):
+    """tooltip-anchors: un renombre de cualquiera de los 5 sitios de mutación debe romper
+    ESTE test antes de dejar el pop huérfano en producción."""
+    for anchor in _FF1_ANCHORS:
+        assert anchor in _go_src, f"falta el anchor {anchor} en graph_orchestrator.py"
+
+
+def test_ff1_pop_display_follows_every_anchor(_go_src):
+    """El pop debe vivir EN el sitio de la mutación (dentro de la ventana del comentario),
+    no en los callers: estos helpers son plan-wide y el caller solo conoce SU día."""
+    lines = _go_src.splitlines()
+    for anchor in _FF1_ANCHORS:
+        idx = next(i for i, ln in enumerate(lines) if anchor in ln)
+        window = "\n".join(lines[idx: idx + 16])
+        assert 'pop("_display", None)' in window, (
+            f"{anchor}: no hay `pop(\"_display\", None)` en las 16 líneas siguientes al anchor"
+        )
+
+
+def test_ff1_qtysync_pops_display_when_it_rewrites_steps():
+    """Funcional (el más barato y el de mayor radio: 5+ call sites cuelgan de él).
+    `_sync_recipe_step_quantities` reescribe los PASOS ('60 g de avena' → '85 g de avena')
+    y `_display[locale].recipe` los espeja por índice."""
+    import graph_orchestrator as go
+
+    meal = {
+        "name": "Avena con guineo",
+        "ingredients": ["85 g de avena"],
+        "recipe": ["Cocinar 60 g de avena en agua.", "Servir."],
+        "_display": _ola_display("STALE — dice 60 g"),
+    }
+    fixed = go._sync_recipe_step_quantities(meal)
+
+    assert fixed >= 1, "precondición: el sync debe haber reescrito el paso"
+    assert "60 g" not in meal["recipe"][0]
+    assert "_display" not in meal, (
+        "los pasos cambiaron de cantidad — el `_display` heredado miente y debe desaparecer"
+    )
+
+
+def test_ff1_qtysync_no_op_leaves_display_intact():
+    """Mutation-guard del anterior: si el sync NO reescribe nada (paso ya correcto), el pop
+    NO debe correr — un pop incondicional tiraría traducciones válidas en cada pasada."""
+    import graph_orchestrator as go
+
+    meal = {
+        "name": "Avena con guineo",
+        "ingredients": ["85 g de avena"],
+        "recipe": ["Cocinar 85 g de avena en agua.", "Servir."],
+        "_display": _ola_display("válido"),
+    }
+    go._sync_recipe_step_quantities(meal)
+    assert meal.get("_display") == _ola_display("válido")
+
+
+def test_ff1_quantize_pops_display_on_the_meal_it_rewrites():
+    import graph_orchestrator as go
+
+    plan = {
+        "days": [
+            {
+                "meals": [
+                    {
+                        "name": "Arroz", "protein": 5, "carbs": 40, "fats": 1, "cals": 190,
+                        "ingredients": ["137 g de arroz"],
+                        "recipe": ["Servir."],
+                        "_display": _ola_display("STALE — dice 137 g"),
+                    },
+                    {
+                        "name": "Pollo", "protein": 30, "carbs": 0, "fats": 4, "cals": 160,
+                        "ingredients": ["100 g de pollo"],  # ya cuantizado → intacto
+                        "recipe": ["Servir."],
+                        "_display": _ola_display("válido"),
+                    },
+                ]
+            }
+        ]
+    }
+    changed = go._apply_portion_quantization(plan, _OlaFinalRefDB())
+
+    assert changed == 1, "solo el primer meal se re-cuantiza (137 g → 135 g)"
+    assert "_display" not in plan["days"][0]["meals"][0]
+    assert plan["days"][0]["meals"][1].get("_display") == _ola_display("válido"), (
+        "el meal que la cuantización NO tocó conserva su traducción"
+    )
+
+
+def test_ff1_carbtrim_pops_display_on_the_meal_it_trims():
+    import graph_orchestrator as go
+
+    meal = {
+        "name": "Arroz", "protein": 5, "carbs": 100, "fats": 1, "cals": 430,
+        "ingredients": ["300 g de arroz"],
+        "recipe": ["Servir."],
+        "_display": _ola_display("STALE — dice 300 g"),
+    }
+    trimmed = go._trim_day_carbs_to_target([meal], 40.0, _OlaFinalRefDB())
+
+    assert trimmed is True, "precondición: el día entrega 100 g de carbos contra un target de 40"
+    assert "_display" not in meal
+
+
+def test_ff1_cap_dm2_pops_display_on_the_meal_it_caps(monkeypatch):
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "DM2_GLYCEMIC_PORTION_CAP_ENABLED", True)
+    days = [
+        {
+            "meals": [
+                {
+                    "name": "Batata al horno", "protein": 5, "carbs": 60, "fats": 1, "cals": 260,
+                    "ingredients": ["300 g de batata"],
+                    "recipe": ["Hornear."],
+                    "_display": _ola_display("STALE — dice 300 g"),
+                }
+            ]
+        }
+    ]
+    capped = go.cap_dm2_high_gi_portions(
+        days, {"medicalConditions": ["Diabetes tipo 2"]}, db=_OlaFinalRefDB()
+    )
+
+    assert capped >= 1, "precondición: 300 g de batata superan el cap DM2 (150 g)"
+    assert "_display" not in days[0]["meals"][0]
+
+
+def test_ff1_cap_dm2_without_the_condition_leaves_display_intact(monkeypatch):
+    """Mutation-guard: sin condición DM2 el cap es no-op ⇒ nada que invalidar."""
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "DM2_GLYCEMIC_PORTION_CAP_ENABLED", True)
+    days = [
+        {
+            "meals": [
+                {
+                    "name": "Batata al horno", "protein": 5, "carbs": 60, "fats": 1, "cals": 260,
+                    "ingredients": ["300 g de batata"],
+                    "recipe": ["Hornear."],
+                    "_display": _ola_display("válido"),
+                }
+            ]
+        }
+    ]
+    go.cap_dm2_high_gi_portions(days, {"medicalConditions": ["Hipertensión"]}, db=_OlaFinalRefDB())
+    assert days[0]["meals"][0].get("_display") == _ola_display("válido")
+
+
+def test_ff1_cap_bariatric_pops_display_on_the_meal_it_caps(monkeypatch):
+    import graph_orchestrator as go
+
+    monkeypatch.setattr(go, "BARIATRIC_PORTION_CAP_ENABLED", True)
+    days = [
+        {
+            "meals": [
+                {
+                    "name": "Merienda de queso", "protein": 30, "carbs": 2, "fats": 33, "cals": 420,
+                    "ingredients": ["120 g de queso"],
+                    "recipe": ["Servir."],
+                    "_display": _ola_display("STALE — dice 120 g"),
+                }
+            ]
+        }
+    ]
+    capped = go.cap_bariatric_portions(
+        days, {"medicalConditions": ["Cirugía bariátrica"]}, db=_OlaFinalRefDB()
+    )
+
+    assert capped >= 1, "precondición: 120 g de queso superan el cap bariátrico (30 g)"
+    assert "_display" not in days[0]["meals"][0]
+
+
+# ------------------------------------------------------------------
+# FF-2 · la verificación de identidad del mutator mira los arrays espejados
+# ------------------------------------------------------------------
+
+
+def test_ff2_snapshot_of_arrays_is_a_copy_not_the_live_list():
+    """La copia de `_fingerprint_lines` es load-bearing: los re-cuantizadores mutan
+    `ingredients` IN-PLACE, así que un snapshot por referencia viajaría con la mutación y
+    la comparación de FF-2 pasaría SIEMPRE (guard nacido muerto)."""
+    meal = _base_meal()
+    targets = pdi._collect_targets([{"meals": [meal]}], [0])
+    assert targets[0]["ingredients"] == meal["ingredients"]
+    assert targets[0]["ingredients"] is not meal["ingredients"]
+    assert targets[0]["recipe"] is not meal["recipe"]
+
+    meal["ingredients"][0] = "35 g Habichuelas rojas"
+    assert targets[0]["ingredients"][0] == "30 g Habichuelas rojas", (
+        "el snapshot debe congelar el estado leído, no seguir al meal vivo"
+    )
+
+
+def _ff2_mutate_between_read_and_persist(engine_state, monkeypatch, mutate):
+    """Simula la carrera real: el meal cambia (re-cuantización de otro flujo) DESPUÉS de que
+    el motor leyó `days` y ANTES de que el mutator escriba."""
+    _orig = pdi.update_plan_data_atomic
+
+    def _racing(plan_id, mutator, user_id=None, **kwargs):
+        mutate(engine_state["plan_data"]["days"][0]["meals"][0])
+        return _orig(plan_id, mutator, user_id=user_id, **kwargs)
+
+    monkeypatch.setattr(pdi, "update_plan_data_atomic", _racing)
+
+
+def test_ff2_requantized_ingredients_same_name_are_skipped(engine, monkeypatch):
+    """El caso que los 2 tests TOCTOU previos NO cubrían: MISMO nombre del plato,
+    `ingredients` re-cuantizados. Es el 100% de los re-cuantizadores (cambiar gramos no
+    cambia el plato), así que sin este check el `_display` viejo se persiste encima."""
+    _set_plan(engine, [_base_meal()])
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+    _ff2_mutate_between_read_and_persist(
+        engine, monkeypatch,
+        lambda meal: meal.__setitem__("ingredients", ["45 g Habichuelas rojas", "1 unidad Cebolla"]),
+    )
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 0, "skipped": "persist_stale_mismatch"}
+    meal_after = engine["plan_data"]["days"][0]["meals"][0]
+    assert "_display" not in meal_after, (
+        "un `_display` construido con los gramos PRE-mutación jamás debe persistirse"
+    )
+
+
+def test_ff2_in_place_requantization_is_detected(engine, monkeypatch):
+    """La forma REAL de la mutación: los re-cuantizadores no reasignan la lista, escriben
+    `ings[i] = new_ing` IN-PLACE. Este test es el que muere si el snapshot deja de copiar
+    (sería la MISMA lista y el guard no vería diferencia alguna)."""
+    _set_plan(engine, [_base_meal()])
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+
+    def _in_place(meal):
+        meal["ingredients"][0] = "45 g Habichuelas rojas"
+
+    _ff2_mutate_between_read_and_persist(engine, monkeypatch, _in_place)
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 0, "skipped": "persist_stale_mismatch"}
+    assert "_display" not in engine["plan_data"]["days"][0]["meals"][0]
+
+
+def test_ff2_rewritten_recipe_steps_same_name_are_skipped(engine, monkeypatch):
+    _set_plan(engine, [_base_meal()])
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+    _ff2_mutate_between_read_and_persist(
+        engine, monkeypatch,
+        lambda meal: meal.__setitem__(
+            "recipe",
+            ["Sofreir el sazon en aceite caliente.", "Agregar 45 g de habichuelas y cocinar."],
+        ),
+    )
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 0, "skipped": "persist_stale_mismatch"}
+    assert "_display" not in engine["plan_data"]["days"][0]["meals"][0]
+
+
+def test_ff2_untouched_meal_still_persists(engine, monkeypatch):
+    """Mutation-guard del par de arriba: si NADA cambió, el enriquecimiento sigue
+    escribiendo — un fingerprint mal normalizado (p.ej. sin copiar, o comparando tipos
+    distintos) dejaría la feature muerta en silencio."""
+    _set_plan(engine, [_base_meal()])
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+    _ff2_mutate_between_read_and_persist(engine, monkeypatch, lambda meal: None)
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+    assert engine["plan_data"]["days"][0]["meals"][0]["_display"]["en-US"]["name"] == (
+        "Stewed red beans"
+    )
+
+
+def test_ff2_legacy_string_recipe_does_not_block_persist_forever(engine, monkeypatch):
+    """Simetría de la normalización: un `recipe` legacy de tipo string colapsa a `[]` en las
+    DOS puntas (snapshot y verificación). Si solo una lo normalizara, el meal contaría como
+    'cambiado' en CADA persist y nunca se enriquecería."""
+    meal = _base_meal()
+    meal["recipe"] = "Sofreir el sazon y agregar las habichuelas."
+    _set_plan(engine, [meal])
+    _FakeLLM.NEXT_RESPONSE = _FakeResponse(
+        content=(
+            '{"meals":[{"i":0,'
+            '"name":"Stewed red beans",'
+            '"description":"Traditional Dominican stew with red beans.",'
+            '"recipe":[],'
+            '"ingredients":["30 g red beans (Habichuelas rojas)","1 unit onion (Cebolla)"]}]}'
+        ),
+        usage_metadata={"input_tokens": 10, "output_tokens": 10},
+    )
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+
+
+# ------------------------------------------------------------------
+# FF-3 · `_INFLIGHT` con la granularidad del KV
+# ------------------------------------------------------------------
+
+
+def test_ff3_inflight_key_includes_day_indices():
+    k0 = pdi._inflight_key("plan-1", "en-US", [0])
+    k1 = pdi._inflight_key("plan-1", "en-US", [1])
+    assert k0 != k1, "días distintos ⇒ claves distintas (paridad con el marker cross-worker)"
+    assert k0 == pdi._inflight_key("plan-1", "en-US", [0])
+    assert pdi._inflight_key("plan-1", "en-US", None) == ("plan-1", "en-US", None)
+
+
+def _ff3_two_day_plan() -> dict:
+    return {"days": [{"meals": [_base_meal()]}, {"meals": [_base_meal()]}]}
+
+
+def test_ff3_other_days_are_not_discarded_while_one_batch_is_inflight(engine):
+    """El escenario real: un swap sobre el día 1 aterriza mientras corre el enriquecimiento
+    plan-wide del día 0. Antes devolvía `dedupe_inprocess` y MORÍA ahí (sin cola, sin
+    reintento, sin alerta) — el día se quedaba en español para siempre."""
+    engine["plan_data"] = _ff3_two_day_plan()
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+    busy = pdi._inflight_key("plan-1", "en-US", [0])
+    pdi._INFLIGHT.add(busy)
+    try:
+        result = pdi.enrich_plan_display("plan-1", "user-1", "en-US", day_indices=[1])
+    finally:
+        pdi._INFLIGHT.discard(busy)
+
+    assert result["skipped"] != "dedupe_inprocess"
+    assert result == {"enriched_meals": 1, "skipped": None}
+    assert "_display" in engine["plan_data"]["days"][1]["meals"][0]
+
+
+def test_ff3_same_days_still_deduped(engine):
+    """Mutation-guard: la clave fina no debe DESARMAR el dedupe — el mismo lote sigue
+    descartándose (el punto era la granularidad, no quitar el gate)."""
+    engine["plan_data"] = _ff3_two_day_plan()
+    _FakeLLM.NEXT_RESPONSE = _valid_response_for_base_meal()
+    busy = pdi._inflight_key("plan-1", "en-US", [1])
+    pdi._INFLIGHT.add(busy)
+    try:
+        result = pdi.enrich_plan_display("plan-1", "user-1", "en-US", day_indices=[1])
+    finally:
+        pdi._INFLIGHT.discard(busy)
+
+    assert result == {"enriched_meals": 0, "skipped": "dedupe_inprocess"}
+
+
+def test_ff3_scheduler_prefilter_uses_the_same_granularity(monkeypatch):
+    """El pre-filtro del scheduler (el que decide si levantar el thread) tenía la MISMA
+    clave gruesa. Con días distintos debe dejar pasar; con los mismos, filtrar."""
+    calls: list = []
+
+    class _SyncThread:
+        def __init__(self, target=None, daemon=None):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(pdi.threading, "Thread", _SyncThread)
+    monkeypatch.setattr(
+        pdi, "enrich_plan_display",
+        lambda plan_id, user_id, locale, day_indices=None: calls.append(day_indices) or {},
+    )
+
+    busy = pdi._inflight_key("plan-1", "en-US", [0])
+    pdi._INFLIGHT.add(busy)
+    try:
+        pdi.schedule_plan_display_enrichment("plan-1", "user-1", "en-US", day_indices=[1])
+        pdi.schedule_plan_display_enrichment("plan-1", "user-1", "en-US", day_indices=[0])
+    finally:
+        pdi._INFLIGHT.discard(busy)
+
+    assert calls == [[1]], (
+        "el disparador sobre OTROS días debe levantar su thread; el del MISMO día, no"
+    )
+
+
+# ------------------------------------------------------------------
+# FF-5 · `_display` fuera del system prompt del chat
+# ------------------------------------------------------------------
+
+
+def _ff5_plan_with_display() -> dict:
+    return {
+        "days": [
+            {
+                "day": 1,
+                "meals": [
+                    {"name": "Habichuelas guisadas", "ingredients": ["30 g Habichuelas rojas"],
+                     "recipe": ["Sofreir."], "_display": _ola_display("Stewed red beans")},
+                    {"name": "Pollo al horno", "ingredients": ["120 g de pollo"],
+                     "recipe": ["Hornear."]},
+                ],
+            }
+        ],
+        "aggregated_shopping_list": ["se poda por la denylist top-level"],
+    }
+
+
+def test_ff5_prune_strips_display_from_every_meal():
+    import agent as agent_module
+
+    pruned = agent_module._prune_plan_for_chat(_ff5_plan_with_display())
+
+    assert "aggregated_shopping_list" not in pruned, "la denylist top-level sigue viva"
+    for meal in pruned["days"][0]["meals"]:
+        assert "_display" not in meal
+    assert pruned["days"][0]["meals"][0]["name"] == "Habichuelas guisadas", (
+        "el meal conserva TODO lo demás: el agente razona sobre el español canónico"
+    )
+
+
+def test_ff5_prune_is_side_effect_free_on_the_live_plan():
+    """El helper recibe el plan VIVO del state del chat — una poda in-place borraría el
+    `_display` que el frontend necesita para pintar en el idioma del usuario."""
+    import agent as agent_module
+
+    plan = _ff5_plan_with_display()
+    snapshot = copy.deepcopy(plan)
+    agent_module._prune_plan_for_chat(plan)
+    assert plan == snapshot
+
+
+def test_ff5_prune_survives_shapes_that_are_not_dicts():
+    import agent as agent_module
+
+    assert agent_module._prune_plan_for_chat(None) is None
+    weird = {"days": [None, {"meals": None}, {"meals": ["no soy un dict"]}]}
+    out = agent_module._prune_plan_for_chat(weird)
+    assert out["days"][0] is None
+    assert out["days"][2]["meals"] == ["no soy un dict"]
+
+
+# ------------------------------------------------------------------
+# FF-6 · el kill switch cubre la feature ENTERA (también el PDF bilingüe)
+# ------------------------------------------------------------------
+
+
+def test_ff6_gloss_del_catalogo_respeta_el_knob(_sc_module, monkeypatch):
+    sc = _sc_module
+    master = {"name": "Habichuelas negras", "name_en": "Black beans"}
+
+    monkeypatch.delenv("MEALFIT_PLAN_DISPLAY_I18N", raising=False)
+    assert sc._display_name_en_for_item(master) == "Black beans", "default ON"
+
+    monkeypatch.setenv("MEALFIT_PLAN_DISPLAY_I18N", "true")
+    assert sc._display_name_en_for_item(master) == "Black beans"
+
+    monkeypatch.setenv("MEALFIT_PLAN_DISPLAY_I18N", "false")
+    assert sc._display_name_en_for_item(master) is None, (
+        "con el kill switch abajo el PDF de la lista debe volver a español puro — un "
+        "rollback por incidente no puede dejar un estado mixto que nadie diseñó"
+    )
+
+
+def test_ff6_gate_lives_in_the_single_choke_point(_shopping_calc_src):
+    """El gate vive DENTRO de `_display_name_en_for_item` (los 2 call sites del aggregator
+    cuelgan de él) — no duplicado en cada call site, que es como nacen los drifts."""
+    fn_idx = _shopping_calc_src.index("def _display_name_en_for_item(")
+    next_def = _shopping_calc_src.index("\ndef ", fn_idx + 10)
+    body = _shopping_calc_src[fn_idx:next_def]
+    assert '_knob_env_bool("MEALFIT_PLAN_DISPLAY_I18N", True)' in body
+    # Se cuenta la LECTURA del knob, no el literal: el docstring de la función también lo
+    # nombra (la lección de P2-SHOPLIST-BETA-POLISH — un comentario que cita el nombre de
+    # un ancla rompe el guard que cuenta el literal).
+    assert _shopping_calc_src.count('_knob_env_bool("MEALFIT_PLAN_DISPLAY_I18N"') == 1
+
+
+# ------------------------------------------------------------------
+# FF-10 · flags del script de relleno del catálogo
+# ------------------------------------------------------------------
+
+
+def test_ff10_commit_and_dry_run_are_mutually_exclusive(_fill_script_module, monkeypatch):
+    """`--dry-run` era INERTE: `--commit --dry-run` ESCRIBÍA. Un flag de seguridad que no
+    protege es peor que ninguno."""
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn(["Pollo"], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py", "--commit", "--dry-run"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        mod.main()
+
+    assert exc_info.value.code == 2, "argparse.error sale con 2 (error de uso)"
+    assert not calls, "ni una UPDATE: la combinación aborta ANTES de tocar la DB"
+    assert fake_conn.committed is False
+
+
+def test_ff10_only_missing_narrows_the_select(_fill_script_module, monkeypatch, capsys):
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn(["Pollo"], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(
+        mod, "translate_batch", lambda names, model, **kw: {n: f"EN-{n}" for n in names}
+    )
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py", "--only-missing"])
+
+    mod.main()
+    capsys.readouterr()
+
+    assert any("name_en IS NULL" in s for s in fake_conn.selects), (
+        f"--only-missing debe acotar el SELECT; ejecutados: {fake_conn.selects}"
+    )
+
+
+def test_ff10_default_select_has_no_where(_fill_script_module, monkeypatch, capsys):
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn(["Pollo"], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(
+        mod, "translate_batch", lambda names, model, **kw: {n: f"EN-{n}" for n in names}
+    )
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py"])
+
+    mod.main()
+    capsys.readouterr()
+
+    assert fake_conn.selects and all("WHERE" not in s for s in fake_conn.selects)
+
+
+def test_ff10_only_missing_with_zero_rows_exits_clean(_fill_script_module, monkeypatch, capsys):
+    """Con `--only-missing`, "cero filas" es el estado DESEADO (catálogo completo): salir 1
+    rompería un re-run idempotente en un pipeline."""
+    mod = _fill_script_module
+    monkeypatch.setattr(mod, "NEON", "postgresql://fake-dsn-not-used")
+    calls: list = []
+    fake_conn = _FakeConn([], calls)
+    monkeypatch.setattr(mod.psycopg, "connect", lambda *a, **kw: fake_conn)
+    monkeypatch.setattr(mod.sys, "argv", ["fill_catalog_name_en.py", "--only-missing"])
+
+    mod.main()  # no debe lanzar SystemExit
+
+    out = capsys.readouterr().out
+    assert "0 filas sin name_en" in out
+    assert not calls

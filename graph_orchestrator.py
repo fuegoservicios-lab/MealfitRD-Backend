@@ -20631,6 +20631,13 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
             m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
             m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
             ings[idx] = quant
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-carbtrim · Ola final FF-1] DELETE-on-write: el trim
+            # acaba de bajar los gramos de esta línea de `ingredients` — el array que
+            # `_display[locale]` espeja por índice. El trim corre por DÍA sobre los meals que el
+            # caller le pasa (incluidos días colaterales en los barridos plan-wide de
+            # swap-persist / chat-modify), así que el pop vive aquí, en la mutación real.
+            # Pop puro, cero I/O (P2-MUTATOR-PURITY).
+            m.pop("_display", None)
             # [P2-CARB-TRIM-RAW-LOCKSTEP · 2026-06-18] (audit fresco P2) El factor TOTAL de `ings[idx]`
             # (orig→quant) es `factor × _f` (el escalado al target + el re-snap a cocinable). `raw` debe
             # escalarse por el MISMO factor efectivo, no solo por `factor` — si no, la lista de compras
@@ -23812,6 +23819,12 @@ def _apply_portion_quantization(plan: dict, db) -> int:
                 continue
             _orig_ings = [str(x) for x in ings]
             meal["ingredients"] = new_ings
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-quantize · Ola final FF-1] DELETE-on-write: la
+            # cuantización acaba de reescribir TODOS los strings de `ingredients` de este meal
+            # ("0.66 huevos" → "1 huevo"), el array que `_display[locale]` espeja por índice. El
+            # helper es plan-wide (todos los días) y corre en swap-persist / chat-modify / regen,
+            # donde el caller solo popea SU día. Pop puro, cero I/O (P2-MUTATOR-PURITY).
+            meal.pop("_display", None)
             raw = meal.get("ingredients_raw")
             if isinstance(raw, list) and len(raw) == len(factors):
                 # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) el zip por índice
@@ -25583,6 +25596,15 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                     logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (DM2)")
                 if not capped_idx:
                     continue
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-capdm2 · Ola final FF-1] DELETE-on-write: este meal
+                # acaba de ver reescritos sus strings de `ingredients` (el cap de arriba + el
+                # re-escalado band-safe de abajo) — el `_display[locale]` heredado espeja ESE array
+                # por índice y quedaría mintiendo gramos en el idioma del usuario. Es PLAN-WIDE
+                # (`reapply_clinical_portion_caps` corre sobre TODOS los días en CADA swap-persist),
+                # así que el caller no puede popearlo: solo toca su propio día. Pop puro, cero I/O
+                # (respeta P2-MUTATOR-PURITY). El día cae a español hasta el próximo enriquecimiento
+                # — degradación aceptada por la spec (§69); la mentira, no.
+                m.pop("_display", None)
                 # Recuperar las kcal removidas escalando los OTROS ingredientes (band-safe). En renal,
                 # excluir los de grupo proteína (no subir proteína por encima del cap KDIGO).
                 if removed_kcal > 1.0:
@@ -25735,6 +25757,12 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                     logger.info(f"🔻 [P1-BARIATRIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (bariátrica)")
                 if not capped_idx:
                     continue
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-capbariatric · Ola final FF-1] DELETE-on-write:
+                # mismo contrato que el cap DM2 de arriba — los strings de `ingredients` de este
+                # meal acaban de cambiar de gramaje, así que cualquier `_display` heredado miente.
+                # Pop puro (cero I/O, P2-MUTATOR-PURITY) en el punto de la mutación, no en los
+                # callers (este helper es plan-wide y ellos solo conocen SU día).
+                m.pop("_display", None)
                 # Recuperar las kcal removidas escalando los OTROS ingredientes (band-safe). NO se excluye
                 # proteína: para bariátrica conviene recuperar vía otra proteína del plato si existe (preserva
                 # el piso proteico mientras baja el volumen del lácteo ofensor).
@@ -26535,6 +26563,13 @@ def _sync_recipe_step_quantities(meal: dict) -> int:
             pass
         if fixed:
             meal["recipe"] = new_steps
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-qtysync · Ola final FF-1] DELETE-on-write: los PASOS
+            # de la receta acaban de cambiar de cantidad ("60 g de avena" → "85 g de avena") y
+            # `_display[locale].recipe` los espeja por índice. Este es el punto SSOT: cubre los
+            # 5+ call sites del qty-sync (swap-persist, chat-modify ×2, recipe-expand, el barrido
+            # interno del motor de macros) sin wiring por-caller. Pop puro, cero I/O
+            # (P2-MUTATOR-PURITY).
+            meal.pop("_display", None)
         return fixed
     except Exception as _sq_e:
         logger.warning(f"[P1-RECIPE-QTY-SYNC] sync de cantidades en pasos no-op: {type(_sq_e).__name__}: {_sq_e}")
