@@ -104,23 +104,45 @@ USDA — descripción consultada a la API, grupo por grupo. Las 19 restantes pas
 `fdc_id = NULL` + `nutrition_source = 'manual'` + `nutrition_source_ref = 'usda:<id>
 (proxy: <descripción>)'`. La traza se conserva; lo que desaparece es la afirmación falsa.
 
-### Lo que sigue abierto, y por qué
+### Cerrado del todo: **0 `fdc_id` compartidos**
 
-- **2 grupos sin verificar**: `174220` (Mejillones/Vieira) y `175202` (Habichuelas
-  blancas/Judías blancas). La API no devolvió su descripción por el límite de `DEMO_KEY`
-  (30 req/hora) y decidir sin ella sería adivinar. Se cierran con una `USDA_API_KEY`
-  propia en el entorno. El test ancla el número: si aparece un tercer grupo compartido,
-  falla.
+Con una `USDA_API_KEY` propia (1.000 req/hora frente a las 30 de `DEMO_KEY`) se
+consultaron los 3 grupos que habían quedado sin verificar — y **DOS de las tres
+conjeturas razonadas estaban INVERTIDAS**:
+
+| `fdc_id` | USDA dice | Se suponía | Es realmente |
+|---|---|---|---|
+| 174220 | *Mollusks, **scallop**, raw* | Mejillones | **Vieira** — cuadra exacto (69 / 12,1 / 0,49 / 3,18); Mejillones diverge 25% porque tiene los suyos |
+| 175202 | *Beans, **white**, mature seeds, raw* | Habichuelas blancas | **Judías blancas** — clava 333 = 333,0; Habichuelas está en 342,4 |
+| 173443 | *Sour cream, light* | (ninguna) | **Crema mexicana** — recupera el reclamo; Suero costeño lo copiaba |
+
+**Esa tabla es la justificación de haberlos dejado abiertos.** Si la ronda 1 los hubiera
+cerrado «con criterio» habría escrito dos afirmaciones falsas — exactamente lo que este
+P-fix corrige. Declarar la ignorancia salió más barato que razonarla.
+
+El desempate es **coincidencia exacta**, no parecido: Habichuelas blancas queda a 2,8% del
+valor de USDA y aun así pierde el reclamo frente a la que coincide al decimal.
+
+Estado final: 20 filas con procedencia declarada (15 `proxy:` + 5 `id previo; valores
+propios`), 3 dueños recuperados, **cero ids compartidos**, cero sentinels.
+
+### Lo que sigue abierto — y ya no es de procedencia
+
+- **LATINFOODS / SMAE** para los alimentos que siguen sobre un proxy (Curuba, Chontaduro,
+  Borojó, Xoconostle, Champús, Suero costeño, los chiles secos). Ahora **están
+  etiquetados como proxy**, que era la mitad del problema; la otra mitad es conseguirles
+  fuente propia. FAO no publica API — son PDF/Excel, así que es curación manual con su
+  propio presupuesto. Fuentes candidatas: FAO/INFOODS América Latina y la Tabla de
+  Composición de Alimentos Colombianos del ICBF (la más prometedora para chontaduro,
+  borojó y curuba).
 - **Sinónimos que son dos filas**: `Requesón`/`Queso ricotta`, `Judías blancas`/
   `Habichuelas blancas`. **Decisión tomada: NO fusionar.** El catálogo se resuelve por
-  cadena, no por id, así que borrar una fila rompería cualquier plan, `user_inventory` o
-  `supermarket_products.master_food_name` que la referencie por nombre. Fusionarlas es
-  una migración de datos con su propio alcance, no el efecto colateral de una limpieza
-  de procedencia.
-- **LATINFOODS / SMAE** para los andinos y mexicanos que siguen sobre un proxy (Curuba,
-  Chontaduro, Borojó, Xoconostle, Champús, Suero costeño, Crema mexicana, chiles secos).
-  Ahora al menos **están etiquetados como proxy**, que era la mitad del problema. FAO no
-  publica API: son PDF/Excel, así que es curación manual con su propio presupuesto.
+  cadena, no por id: borrar una fila rompería cualquier plan, `user_inventory` o
+  `supermarket_products.master_food_name` que la referencie por nombre.
+- **Un `fdc_id` ÚNICO mal apuntado sigue siendo invisible** para esta auditoría. Existió
+  (`Lomo embuchado`: apuntaba a lomo crudo, 110 vs 321 kcal) y lo destapó comparar contra
+  BEDCA, no el barrido de duplicados. Un barrido que lo cazara compararía la descripción
+  de la fila USDA contra el nombre del alimento — ahora es barato con clave propia.
 
 ## Cómo re-ejecutarla
 

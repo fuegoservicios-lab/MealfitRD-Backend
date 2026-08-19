@@ -179,3 +179,71 @@ def test_fix2_solo_admite_tres_etiquetas_canonicas():
     assert "3 etiquetas canonicas" in sql or "etiquetas canonicas" in sql
     assert r"^usda:[0-9]+ \((proxy: .+|id previo; (valores propios|desc sin verificar))\)$" in sql, (
         "el sanity debe anclar el formato exacto de las tres etiquetas")
+
+
+# ═══════════ ronda 3: cierre — y por qué NO cerrarlos antes fue lo correcto ═════════
+
+_R3 = "p1_provenance_truthful_round_3_cierre.sql"
+
+
+def _sql3(root: bool = False) -> str:
+    base = _ROOT if root else _BACKEND
+    return io.open(base / "migrations" / _R3, encoding="utf-8").read()
+
+
+def test_r3_en_los_dos_dirs_ssot_y_byte_identica():
+    a = (_BACKEND / "migrations" / _R3).read_bytes()
+    b = (_ROOT / "migrations" / _R3).read_bytes()
+    assert a and a == b
+
+
+def test_r3_documenta_que_dos_conjeturas_estaban_invertidas():
+    """EL punto de todo el P-fix, y la razón de existir de este test.
+
+    La ronda 1 dejó 3 grupos abiertos porque no pudo verificar su descripción. Al
+    consultarlos con una clave propia, **DOS de las tres conjeturas razonadas estaban
+    INVERTIDAS**: `fdc 174220` es *scallop* (Vieira, no Mejillones) y `fdc 175202` es
+    *white beans* con 333 exactos (Judías blancas, no Habichuelas blancas).
+
+    Si la ronda 1 hubiera cerrado esos grupos «con criterio» en vez de declararlos
+    pendientes, habría escrito dos afirmaciones falsas — justo lo que el P-fix corrige.
+    Este test existe para que nadie borre esa nota pensando que sobra: es la evidencia
+    de que declarar la ignorancia salió más barato que razonarla.
+    """
+    sql = _sql3()
+    assert "INVERTIDAS" in sql, "la migración debe dejar constancia de las conjeturas fallidas"
+    for pista in ("Vieira", "Mejillones", "Judías blancas", "Habichuelas blancas", "scallop"):
+        assert pista in sql, f"falta la evidencia sobre {pista}"
+
+
+def test_r3_el_criterio_sigue_siendo_coincidencia_exacta():
+    """Habichuelas blancas queda a 2.8% del valor de USDA y AUN ASÍ pierde el reclamo
+    frente a Judías blancas, que coincide al decimal. «Parecido» no es «es»."""
+    sql = _sql3()
+    assert "EXACTA" in sql and "342.4" in sql and "333" in sql, (
+        "debe quedar escrito que el desempate es coincidencia exacta, no parecido")
+
+
+def test_r3_cierra_a_cero_fdc_compartidos():
+    sql = _sql3()
+    assert re.search(r"IF _dup > 0 THEN", sql), (
+        "el sanity de la ronda 3 debe exigir CERO compartidos, sin tolerancia")
+    assert "CERO fdc_id compartidos" in sql
+
+
+def test_r3_verifica_que_los_duenos_conservan_su_id():
+    """Un sanity que solo cuente duplicados pasaría también si los tres id
+    desaparecieran. Hay que comprobar que el dueño correcto SE LO QUEDA."""
+    sql = _sql3()
+    assert "duenos perdieron su id" in sql
+    for n, fid in (("Crema mexicana", "173443"), ("Vieira", "174220"), ("Judías blancas", "175202")):
+        assert n in sql and fid in sql, f"el sanity no comprueba {n}/{fid}"
+
+
+def test_la_ronda_2_no_fija_un_conteo_exacto_que_la_3_rompa():
+    """Orden entre migraciones: la ronda 2 fijaba «exactamente 19 referencias» y la
+    ronda 3 las deja en 20. Re-ejecutar la 2 después de la 3 habría fallado por un
+    motivo espurio — el riesgo real es PERDER referencias, no ganarlas."""
+    sql2 = _sql2()
+    assert "_n < 19" in sql2, "la ronda 2 debe usar cota inferior, no igualdad"
+    assert "_n <> 19" not in sql2

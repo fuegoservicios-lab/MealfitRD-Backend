@@ -103,13 +103,16 @@ BEGIN
     END IF;
 END $$;
 
--- == Sanity 3: las 19 filas etiquetadas siguen siendo 19 ==========================
+-- == Sanity 3: no se PIERDE ninguna referencia ====================================
+-- Cota INFERIOR, no igualdad: la ronda 3 cierra los grupos que esta dejaba pendientes y
+-- sube el total a 20. Un `<> 19` convertiria re-ejecutar esta migracion DESPUES de la
+-- ronda 3 en un fallo espurio — el riesgo real es perder referencias, no ganarlas.
 DO $$
 DECLARE _n int;
 BEGIN
     SELECT COUNT(*) INTO _n FROM public.master_ingredients
     WHERE nutrition_source_ref LIKE 'usda:%';
-    IF _n <> 19 THEN
-        RAISE EXCEPTION '[P1-PROVENANCE-TRUTHFUL fix2] % filas con referencia usda, se esperaban 19', _n;
+    IF _n < 19 THEN
+        RAISE EXCEPTION '[P1-PROVENANCE-TRUTHFUL fix2] solo % filas con referencia usda, se esperaban >= 19', _n;
     END IF;
 END $$;
