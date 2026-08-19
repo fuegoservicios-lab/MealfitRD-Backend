@@ -113,3 +113,69 @@ def test_explica_por_que_los_sinonimos_no_se_fusionan():
     sql = _sql()
     for pista in ("Requeson", "Judias blancas", "master_food_name"):
         assert pista in sql, f"falta la justificación que menciona {pista}"
+
+
+# ══════════════ fix round 2: la corrección tenía su propia procedencia mal ══════════
+
+_FIX2 = "p1_provenance_truthful_fix_round_2.sql"
+
+
+def _sql2(root: bool = False) -> str:
+    base = _ROOT if root else _BACKEND
+    return io.open(base / "migrations" / _FIX2, encoding="utf-8").read()
+
+
+def test_fix2_en_los_dos_dirs_ssot_y_byte_identica():
+    a = (_BACKEND / "migrations" / _FIX2).read_bytes()
+    b = (_ROOT / "migrations" / _FIX2).read_bytes()
+    assert a and a == b
+
+
+def test_fix2_purga_los_sentinels_de_error():
+    """DEFECTO 1 de la ronda 1: el generador descartaba descripciones VACÍAS
+    (`if not desc`), pero cuando la API devolvía 429 el caché guardaba la cadena
+    `'SIN RESPUESTA (429)'` — perfectamente no-vacía. Cinco filas quedaron en
+    producción con un mensaje de error donde va la fuente.
+
+    Un guard que filtra por «vacío» no filtra sentinels: hay que filtrar por «es una
+    descripción válida»."""
+    sql = _sql2()
+    assert "SIN RESPUESTA" in sql, "el sanity debe cazar el sentinel exacto que se coló"
+    assert re.search(r"RAISE EXCEPTION '\[P1-PROVENANCE-TRUTHFUL fix2\][^']*sentinel", sql), (
+        "falta el sanity que aborta si un sentinel vuelve a colarse")
+    for basura in ("HTTP 4", "HTTP 5"):
+        assert basura in sql, f"el sanity no cubre {basura}"
+
+
+def test_fix2_distingue_proxy_de_valores_propios():
+    """DEFECTO 2: la ronda 1 llamó «proxy» a filas cuyos valores son PROPIOS.
+
+    `Tilapia` (96 kcal, colesterol 50) no es un proxy de camarón (85 y 161): sus
+    números son suyos y lo único falso era el id. Degradar un dato bueno es el mismo
+    error que ascender uno malo, al revés."""
+    sql = _sql2()
+    assert "id previo; valores propios" in sql
+    assert "Tilapia" in sql and "Nueces mixtas" in sql, (
+        "las filas DIFERENCIADO deben re-etiquetarse una a una")
+    # Y ninguna de ellas puede seguir marcada como proxy en este archivo.
+    for bloque in re.findall(r"UPDATE public\.master_ingredients SET(.*?);", sql, re.S):
+        if "Tilapia" in bloque or "Nueces mixtas" in bloque or "Chinola" in bloque:
+            assert "proxy:" not in bloque, f"una fila de valores propios sigue como proxy: {bloque[:110]}"
+
+
+def test_fix2_no_afirma_lo_que_no_pudo_verificar():
+    """173443 nunca respondió. Ambas filas comparten valores, así que una es proxy de
+    la otra — pero sin la descripción no se sabe cuál, y afirmarlo sería volver a
+    inventar."""
+    sql = _sql2()
+    assert "desc sin verificar" in sql
+    assert "Crema mexicana" in sql and "Suero costeño" in sql
+
+
+def test_fix2_solo_admite_tres_etiquetas_canonicas():
+    """Sin este sanity, la próxima ronda inventa una cuarta forma de decir lo mismo y
+    la columna deja de ser consultable."""
+    sql = _sql2()
+    assert "3 etiquetas canonicas" in sql or "etiquetas canonicas" in sql
+    assert r"^usda:[0-9]+ \((proxy: .+|id previo; (valores propios|desc sin verificar))\)$" in sql, (
+        "el sanity debe anclar el formato exacto de las tres etiquetas")
