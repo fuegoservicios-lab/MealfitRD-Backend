@@ -4677,11 +4677,14 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
     Se ejecuta en un thread separado. Llama a Gemini para generar el título
     y luego lo guarda en agent_messages con role='SYSTEM_TITLE'.
     """
-    # [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] Decisión de alcance: este título NO gana
-    # `build_language_directive` — es una etiqueta de navegación de 2-4 palabras (más cerca
-    # del chrome del dashboard que de "prosa del coach"), no nombrada en el contrato de T3, y
-    # requeriría un `get_user_profile` nuevo (esta función no lee perfil hoy). Sigue en
-    # español para todo `locale`; follow-up propio si el dueño lo pide.
+    # [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] Decisión de alcance original: este título NO
+    # ganaba `build_language_directive` («follow-up propio si el dueño lo pide»).
+    # [P1-CHAT-TITLE-LOCALE · 2026-08-19] El dueño lo pidió — con el chat ya en inglés, el
+    # título era lo único del sidebar que seguía saliendo español. Se lee el perfil UNA vez
+    # (el título se genera una vez por sesión — costo nulo) y se apendea la MISMA directiva
+    # SSOT nativa del coach: prosa del título en el idioma del usuario, nombres de platos en
+    # español (un título «Guiso de Habichuelas» debe seguir matcheando el plan). Guests/es-DO
+    # ⇒ directiva vacía, byte-idéntico.
     # [P2-CHAT-CLEANUP · 2026-05-20] Migrado `dlog()` (escribía a
     # `title_debug.log` en disco append-mode sin rotación) a `logger.debug`.
     # Pre-fix: cada thread background abría el file en cada log line — disk
@@ -4776,7 +4779,18 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             return
 
         title_llm = ChatDeepSeek(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
-        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
+        # [P1-CHAT-TITLE-LOCALE · 2026-08-19] Directiva de idioma del título — misma SSOT
+        # nativa del coach (ver comentario en la cabecera de esta función). Best-effort:
+        # cualquier fallo ⇒ directiva vacía ⇒ conducta previa (título en español).
+        _title_lang_directive = ""
+        try:
+            if user_id and user_id != "guest" and user_id != session_id:
+                from db import get_user_profile as _gup_title
+                _title_prof = _gup_title(user_id) or {}
+                _title_lang_directive = build_language_directive(_title_prof.get("locale"))
+        except Exception:
+            _title_lang_directive = ""
+        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str) + _title_lang_directive
         logger.debug(f"[chat_title bg] session={session_id} - Calling LLM API")
         try:
             response = title_llm.invoke(prompt)
