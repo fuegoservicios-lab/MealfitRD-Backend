@@ -124,7 +124,77 @@ if (-not $SkipBackend) {
         Push-Location "$repoRoot/backend"
         try {
             $py = Resolve-BackendPython -BackendDir "$repoRoot/backend"
-            & $py -m pytest tests/ -v --tb=short -m "not e2e" -x
+
+            # [P2-CI-PYTEST-PARALLEL · 2026-08-19] El gate corria 18.9k tests EN SERIE
+            # (~19-20 min por deploy; el dueno lo llamo, con razon, exagerado). Con
+            # pytest-xdist a 3 workers + --dist loadfile la MISMA suite corre en ~9 min
+            # (medido: 18.855 tests en 8:51). Lo aprendido midiendo, para que nadie lo
+            # re-descubra a golpes:
+            #   - PYTHONHASHSEED=0 es OBLIGATORIO: sin el, cada worker colecciona tests
+            #     en orden distinto (parametrize sobre set/dict) y xdist aborta con
+            #     "Different tests were collected".
+            #   - -n 8 revienta la RAM (16 GB, cada worker importa el backend entero:
+            #     MemoryError en la coleccion). 3 workers es el techo seguro medido.
+            #   - --dist loadfile: los tests de este repo asumen ejecucion por-archivo.
+            #   - CUARENTENA (fase serial de abajo): 2 archivos de la familia
+            #     renewal/chunk matan el worker con salida LIMPIA a mitad de test
+            #     (victimas, no culpables: cada archivo pasa solo bajo xdist; el veneno
+            #     es estado acumulado de archivos previos en el worker — sospecha
+            #     principal: presion de memoria tardia) + 3 tests paralelo-hostiles de
+            #     clase conocida (identidad de objeto cross-modulo, timing de hilo de
+            #     fondo bajo contencion, assert de exactamente-un-warning con logger
+            #     compartido). Si un run futuro aborta con INTERNALERROR crashitem,
+            #     anade ESE archivo aqui — no vuelvas a serie completa.
+            #   - Sin -v: 18.9k lineas verbose a consola cuestan minutos reales.
+            # Escotilla: MEALFIT_CI_PYTEST_WORKERS=1 (o 0/serial) vuelve al modo serie
+            # historico completo sin tocar codigo.
+            $workers = $env:MEALFIT_CI_PYTEST_WORKERS
+            if (-not $workers) { $workers = "3" }
+            $env:PYTHONHASHSEED = "0"
+
+            $quarantineFiles = @(
+                "tests/test_chunked_generation.py",
+                "tests/test_renewal_15d.py",
+                "tests/test_p1_17_purge_graph_cache.py"
+            )
+            $quarantineTests = @(
+                "tests/test_p1_audit_hist_7_lesson_whitelist_ssot.py",
+                "tests/test_p1_bg_thread_timeout.py",
+                "tests/test_p2_cap_log_level.py"
+            )
+
+            if ($workers -eq "1" -or $workers -eq "0" -or $workers -eq "serial") {
+                & $py -m pytest tests/ --tb=short -m "not e2e" -x
+            } else {
+                # FASE A - bulk paralelo SIN -x: 47 archivos de la suite stubbean
+                # sys.modules (patron estructural), asi que bajo xdist CUALQUIER test
+                # puede caer como victima aleatoria del veneno de un vecino de worker.
+                # Cazar victimas no converge (3 corridas = 3 victimas distintas). El
+                # diseno honesto: el bulk enumera, y un fallo solo tumba el gate si
+                # falla TAMBIEN en el re-juicio SERIAL de la fase C (mismo estandar de
+                # verdad que el gate serie historico; un fallo real falla en ambos).
+                $ignoreArgs = @()
+                foreach ($f in $quarantineFiles + $quarantineTests) { $ignoreArgs += "--ignore"; $ignoreArgs += $f }
+                & $py -m pytest tests/ --tb=short -m "not e2e" -q `
+                    -n $workers --dist loadfile --max-worker-restart=4 @ignoreArgs
+                $bulkExit = $LASTEXITCODE
+
+                # FASE B - cuarentena en serie (los 3 archivos que matan workers +
+                # los paralelo-hostiles conocidos). -x: aqui un fallo es real.
+                & $py -m pytest @($quarantineFiles + $quarantineTests) --tb=short -m "not e2e" -x -p no:cacheprovider
+                if ($LASTEXITCODE -ne 0) { throw "pytest (cuarentena serial) fallo (exit $LASTEXITCODE)" }
+
+                # FASE C - re-juicio serial de los fallos del bulk (si los hubo).
+                # OJO: va DESPUES de la fase B en codigo pero usa el cache --lf de la
+                # fase A... y la fase B ya lo piso. Por eso el orden real es: correr
+                # B con -p no:cacheprovider para NO tocar el cache de A.
+                if ($bulkExit -ne 0) {
+                    & $py -m pytest --lf --last-failed-no-failures none --tb=short -m "not e2e" -x
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "pytest: fallos del bulk CONFIRMADOS en serie (exit $LASTEXITCODE) - regresion real"
+                    }
+                }
+            }
         } finally {
             Pop-Location
         }
