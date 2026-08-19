@@ -3056,6 +3056,8 @@ _OLA_DENS = {
     "arroz": {"kcal": 1.30, "protein": 0.027, "carbs": 0.28, "fats": 0.003},
     "batata": {"kcal": 0.86, "protein": 0.016, "carbs": 0.20, "fats": 0.001},
     "queso": {"kcal": 3.50, "protein": 0.25, "carbs": 0.013, "fats": 0.28},
+    # Grasa pura (no es portador de micros ⇒ fuera de `_SEED_NUT_TOKENS`, trimable).
+    "aceite": {"kcal": 9.00, "protein": 0.0, "carbs": 0.0, "fats": 1.0},
 }
 
 
@@ -3094,6 +3096,10 @@ _FF1_ANCHORS = (
     "P1-PLAN-DISPLAY-I18N-MUTATOR-capbariatric",
     "P1-PLAN-DISPLAY-I18N-MUTATOR-quantize",
     "P1-PLAN-DISPLAY-I18N-MUTATOR-carbtrim",
+    # [Addendum del controller] El gemelo de GRASAS entra por la misma puerta: es la misma
+    # clase FF-1 (reescribe strings de `ingredients` por día, barrido plan-wide vía
+    # `_relevel_fats_universal`) y dejarlo vivo contradecía el fix de sus 5 hermanos.
+    "P1-PLAN-DISPLAY-I18N-MUTATOR-fatstrim",
     "P1-PLAN-DISPLAY-I18N-MUTATOR-qtysync",
 )
 
@@ -3198,6 +3204,39 @@ def test_ff1_carbtrim_pops_display_on_the_meal_it_trims():
 
     assert trimmed is True, "precondición: el día entrega 100 g de carbos contra un target de 40"
     assert "_display" not in meal
+
+
+def test_ff1_fatstrim_pops_display_on_the_meal_it_trims():
+    """[Addendum] El gemelo de GRASAS de `_trim_day_carbs_to_target`: mismo re-escritor de
+    strings de `ingredients`, mismo tratamiento. `_relevel_fats_universal` lo corre sobre
+    TODOS los días con grasas sobre banda, así que también alcanza días colaterales."""
+    import graph_orchestrator as go
+
+    meal = {
+        "name": "Ensalada con aceite", "protein": 5, "carbs": 10, "fats": 60, "cals": 600,
+        "ingredients": ["60 g de aceite"],
+        "recipe": ["Aliñar."],
+        "_display": _ola_display("STALE — dice 60 g"),
+    }
+    trimmed = go._trim_day_fats_to_target([meal], 20.0, _OlaFinalRefDB())
+
+    assert trimmed is True, "precondición: el día entrega 60 g de grasa contra un target de 20"
+    assert "_display" not in meal
+
+
+def test_ff1_fatstrim_no_op_leaves_display_intact():
+    """Mutation-guard: día ya EN banda de grasas ⇒ el trim no reescribe nada y la traducción
+    válida NO debe tirarse."""
+    import graph_orchestrator as go
+
+    meal = {
+        "name": "Ensalada con aceite", "protein": 5, "carbs": 10, "fats": 18, "cals": 240,
+        "ingredients": ["18 g de aceite"],
+        "recipe": ["Aliñar."],
+        "_display": _ola_display("válido"),
+    }
+    assert go._trim_day_fats_to_target([meal], 20.0, _OlaFinalRefDB()) is False
+    assert meal.get("_display") == _ola_display("válido")
 
 
 def test_ff1_cap_dm2_pops_display_on_the_meal_it_caps(monkeypatch):

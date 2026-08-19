@@ -20735,6 +20735,14 @@ def _trim_day_fats_to_target(meals: list, target_fats: float, db, *, tol: float 
             m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
             m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
             ings[idx] = quant
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-fatstrim · Ola final FF-1 · addendum] DELETE-on-write:
+            # gemelo EXACTO del carb-trim de arriba — acaba de bajar los gramos de esta línea de
+            # `ingredients`, el array que `_display[locale]` espeja por índice. Corre por DÍA sobre
+            # los meals que el caller le pasa (incluidos días colaterales vía
+            # `_relevel_fats_universal`, que barre TODOS los días con grasas sobre banda), así que
+            # el pop vive aquí, en la mutación real, no en los callers. Pop puro, cero I/O
+            # (P2-MUTATOR-PURITY). Dejarlo fuera contradecía el fix de sus 5 hermanos.
+            m.pop("_display", None)
             # mismo lockstep raw del carb-trim: factor efectivo = escala × re-snap.
             # [P1-UPDATE-RAW-BY-FOOD · 2026-07-30] (audit solver+seeder v5) by-food, no por índice
             # ciego (ver el gemelo en `_trim_day_carbs_to_target`).
