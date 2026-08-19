@@ -516,7 +516,10 @@ def _collect_targets(days: list, day_indices_batch: list) -> list:
                     "day_idx": day_idx,
                     "meal_idx": meal_idx,
                     "name": meal.get("name") or "",
-                    "description": meal.get("description") or "",
+                    # [P1-DESC-KEY-DEAD · 2026-07-24 · fix round 2] La clave real del meal
+                    # persistido es `desc`, no `description` — leer solo `description` deja
+                    # esto muerto (mismo bug histórico, ver test_p1_desc_key_dead.py).
+                    "description": meal.get("desc") or meal.get("description") or "",
                     "recipe": recipe if isinstance(recipe, list) else [],
                     "ingredients": ingredients if isinstance(ingredients, list) else [],
                 }

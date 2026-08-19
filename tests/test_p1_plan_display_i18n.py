@@ -97,9 +97,15 @@ class _FakeLLM:
 
 
 def _base_meal() -> dict:
+    # [P1-DESC-KEY-DEAD · 2026-07-24 · fix round 2] La clave real en un meal
+    # PERSISTIDO es `desc`, no `description` — este fixture existía con la
+    # clave equivocada (el mismo "test-lápida" que congeló el bug original:
+    # ver test_p1_desc_key_dead.py). `desc` aquí es lo que ejerce de verdad
+    # el fallback `meal.get("desc") or meal.get("description")` de
+    # `_collect_targets`.
     return {
         "name": "Habichuelas guisadas",
-        "description": "Guiso tradicional dominicano con habichuelas rojas.",
+        "desc": "Guiso tradicional dominicano con habichuelas rojas.",
         "recipe": [
             "Sofreir el sazon en aceite caliente.",
             "Agregar las habichuelas y cocinar 20 minutos.",
@@ -233,6 +239,117 @@ def test_mutator_writes_only_display_key(engine):
         "en español canónico SIEMPRE (línea roja de la spec)."
     )
     assert "_display" in meal_after and "en-US" in meal_after["_display"]
+
+
+# ------------------------------------------------------------------
+# Finding cross-task (Task 4, fix round 2): `_collect_targets` leía
+# `meal.get("description")`, pero la clave real de un meal PERSISTIDO es
+# `desc` — REPEAT exacto de P1-DESC-KEY-DEAD (2026-07-24, ver
+# test_p1_desc_key_dead.py). `_base_meal()` usaba `description` en su
+# fixture (el mismo "test-lápida" que congeló el bug original), así que
+# ni los 26 tests de Task 1 ni los 34 del fix round 1 lo detectaron: las
+# descripciones viajaban SIEMPRE vacías al LLM y jamás se traducían
+# (fallback silencioso a español, sin error visible).
+# ------------------------------------------------------------------
+
+
+def test_collect_targets_lee_desc_del_meal_persistido():
+    """Un meal con SOLO `desc` (el formato REAL de producción) debe producir
+    un target con descripción NO vacía."""
+    days = [
+        {
+            "meals": [
+                {
+                    "name": "Mangu con salami",
+                    "desc": "Pure de platano verde con salami frito.",
+                    "recipe": ["Paso 1.", "Paso 2."],
+                    "ingredients": ["2 platanos verdes", "100 g Salami"],
+                }
+            ]
+        }
+    ]
+
+    targets = pdi._collect_targets(days, [0])
+
+    assert len(targets) == 1
+    assert targets[0]["description"] == "Pure de platano verde con salami frito."
+
+
+def test_collect_targets_description_legacy_sigue_funcionando_como_fallback():
+    """`description` (sin `desc`) sobrevive como fallback — cortesía a
+    fixtures/datos legacy que no representan el formato real de producción."""
+    days = [
+        {
+            "meals": [
+                {
+                    "name": "Solo con description legacy",
+                    "description": "Fallback legacy.",
+                    "recipe": ["Paso 1."],
+                    "ingredients": ["100 g Arroz"],
+                }
+            ]
+        }
+    ]
+
+    targets = pdi._collect_targets(days, [0])
+
+    assert targets[0]["description"] == "Fallback legacy."
+
+
+def test_collect_targets_desc_gana_sobre_description_si_ambas_existen():
+    """`desc` es la clave REAL — si por algún motivo el meal trae ambas,
+    `desc` gana siempre (nunca la vieja/legacy)."""
+    days = [
+        {
+            "meals": [
+                {
+                    "name": "Ambas claves",
+                    "desc": "La real.",
+                    "description": "La vieja, no debe usarse.",
+                    "recipe": ["Paso 1."],
+                    "ingredients": ["100 g Arroz"],
+                }
+            ]
+        }
+    ]
+
+    targets = pdi._collect_targets(days, [0])
+
+    assert targets[0]["description"] == "La real."
+
+
+def test_desc_key_viaja_al_llm_y_al_display_final(engine):
+    """End-to-end: un meal con `desc` (formato real de producción) llega con
+    descripción NO vacía al prompt del LLM y termina persistido en
+    `_display[locale]['description']` — antes de este fix viajaba SIEMPRE
+    vacía (fallback silencioso a español, sin error visible, indistinguible
+    de un meal legítimamente sin descripción)."""
+    meal = {
+        "name": "Mangu con salami",
+        "desc": "Pure de platano verde con salami frito.",
+        "recipe": ["Paso 1.", "Paso 2."],
+        "ingredients": ["2 platanos verdes", "100 g Salami"],
+    }
+    _set_plan(engine, [meal])
+    _FakeLLM.NEXT_RESPONSE = _FakeResponse(
+        content=(
+            '{"meals":[{"i":0,"name":"Mangu with salami",'
+            '"description":"Mashed green plantain with fried salami.",'
+            '"recipe":["Step 1.","Step 2."],'
+            '"ingredients":["2 green plantains","100 g Salami"]}]}'
+        )
+    )
+
+    prompt_targets = pdi._collect_targets(engine["plan_data"]["days"], [0])
+    assert "Pure de platano" in pdi._build_prompt(prompt_targets, "en-US"), (
+        "la descripción del meal (leída via `desc`) debe llegar al prompt del LLM"
+    )
+
+    result = pdi.enrich_plan_display("plan-1", "user-1", "en-US")
+
+    assert result == {"enriched_meals": 1, "skipped": None}
+    display = engine["plan_data"]["days"][0]["meals"][0]["_display"]["en-US"]
+    assert display["description"] == "Mashed green plantain with fried salami."
 
 
 # ------------------------------------------------------------------
