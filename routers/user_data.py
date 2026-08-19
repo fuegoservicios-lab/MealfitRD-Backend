@@ -996,49 +996,48 @@ async def api_patch_profile(
     if not updated:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
 
-    # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
-    # P1-PLAN-DISPLAY-I18N-TRIGGER-3. El UPDATE de arriba (locale != es-DO)
-    # completó — despachar enrich del plan ACTIVO (el más reciente, mismo SELECT
-    # que `/plans-data/latest`) SOLO si le falta `_display[locale]` en su primer
-    # meal (check barato pre-despacho: evita levantar un thread cuando el plan
-    # ya está enriquecido para este idioma). Best-effort: el PATCH de perfil
-    # JAMÁS puede fallar por esto.
+    # [P1-PLAN-DISPLAY-I18N · 2026-08-19 · fix-round 1 F3/F4/F5] tooltip-anchor:
+    # P1-PLAN-DISPLAY-I18N-TRIGGER-4 (spec: 3 = mutadores/Task 3, 4 = cambio de
+    # idioma — este PATCH). El UPDATE de arriba (locale != es-DO) completó —
+    # despachar enrich del plan ACTIVO (el más reciente) SOLO si le falta
+    # `_display[locale]` en el PRIMER o el ÚLTIMO día. Mirar ambos extremos
+    # (no solo el primero) cierra el freeze de un enriquecimiento parcial: el
+    # motor trocea por lotes y permite recuperación parcial (un lote que falla
+    # no tumba a los demás) — si solo mirásemos el primer día, un plan cuyo
+    # último lote nunca corrió quedaría "ya enriquecido" para siempre, sin
+    # ningún disparador que lo complete (el 5º disparador de la spec es "no
+    # hay backfill masivo"). Proyección jsonb O(1): NO se baja `plan_data`
+    # completo (puede ser cientos de KB-MB con 30 días de recetas expandidas)
+    # solo para mirar dos claves. `->-1` en el índice de array jsonb cuenta
+    # desde el final (soportado por Postgres/Neon) — con 1 solo día, primer y
+    # último son el mismo elemento (redundante pero inofensivo). Best-effort:
+    # el PATCH de perfil JAMÁS puede fallar por esto.
     _p1_i18n_new_locale = fields.get("locale")
     if _p1_i18n_new_locale and _p1_i18n_new_locale != "es-DO":
         try:
-            def _p1_i18n_latest_plan():
+            def _p1_i18n_active_plan_display_edges():
                 from db import execute_sql_query as _p1_i18n_query
                 return _p1_i18n_query(
-                    "SELECT id::text AS id, plan_data FROM meal_plans WHERE user_id = %s "
-                    "ORDER BY created_at DESC LIMIT 1",
+                    """
+                    SELECT id::text AS id,
+                           plan_data->'days'->0->'meals'->0->'_display' AS disp_first,
+                           plan_data->'days'->-1->'meals'->0->'_display' AS disp_last
+                    FROM meal_plans WHERE user_id = %s
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
                     (uid,),
                     fetch_one=True,
                 )
 
-            _p1_i18n_row = await asyncio.to_thread(_p1_i18n_latest_plan)
+            _p1_i18n_row = await asyncio.to_thread(_p1_i18n_active_plan_display_edges)
             if _p1_i18n_row and _p1_i18n_row.get("id"):
-                _p1_i18n_pd = _p1_i18n_row.get("plan_data")
-                if isinstance(_p1_i18n_pd, str):
-                    import json as _p1_i18n_json
-                    try:
-                        _p1_i18n_pd = _p1_i18n_json.loads(_p1_i18n_pd)
-                    except Exception:
-                        _p1_i18n_pd = None
-                _p1_i18n_already = False
-                if isinstance(_p1_i18n_pd, dict):
-                    _p1_i18n_days = _p1_i18n_pd.get("days")
-                    if isinstance(_p1_i18n_days, list) and _p1_i18n_days:
-                        _p1_i18n_first_day = _p1_i18n_days[0]
-                        _p1_i18n_first_meal = (
-                            (_p1_i18n_first_day.get("meals") or [{}])[0]
-                            if isinstance(_p1_i18n_first_day, dict) else {}
-                        )
-                        if isinstance(_p1_i18n_first_meal, dict):
-                            _p1_i18n_disp = _p1_i18n_first_meal.get("_display")
-                            _p1_i18n_already = (
-                                isinstance(_p1_i18n_disp, dict)
-                                and _p1_i18n_new_locale in _p1_i18n_disp
-                            )
+                def _p1_i18n_has_locale(disp) -> bool:
+                    return isinstance(disp, dict) and _p1_i18n_new_locale in disp
+
+                _p1_i18n_already = (
+                    _p1_i18n_has_locale(_p1_i18n_row.get("disp_first"))
+                    and _p1_i18n_has_locale(_p1_i18n_row.get("disp_last"))
+                )
                 if not _p1_i18n_already:
                     from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
                     _p1_i18n_schedule(_p1_i18n_row["id"], uid, _p1_i18n_new_locale)

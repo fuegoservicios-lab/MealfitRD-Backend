@@ -32329,17 +32329,35 @@ __PLAN_MODE_GATE__
             new_status = update_result[0].get("new_status", "partial")
             full_plan_data = update_result[0].get("full_plan_data", {})
 
-            # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+            # [P1-PLAN-DISPLAY-I18N · 2026-08-19 · fix-round 1 F2/F7] tooltip-anchor:
             # P1-PLAN-DISPLAY-I18N-TRIGGER-2. T1 (el UPDATE que mergeó `days` en
-            # meal_plans) ya commiteó — estamos fuera del `FOR UPDATE` a esta altura
-            # (ver comentario G3-SHOPPING-CAS más abajo: "corre POST-commit"). Despachar
-            # el enriquecimiento de los días NUEVOS de este bloque. Best-effort: el
-            # worker de chunks jamás puede fallar por esto.
+            # meal_plans) ya commiteó: esta línea vive a indent 12, el MISMO nivel
+            # que el `with connection_pool.connection() as conn:` que abre T1 más
+            # arriba — fuera de los tres `with` anidados de esa transacción (review
+            # V1: "el dispatch está en indent 12 → fuera de los tres `with` →
+            # transacción commiteada"). NO anclar este razonamiento a
+            # `_t1_persist_view` ni a ningún nombre DENTRO del `FOR UPDATE`: esos
+            # existen mientras la transacción sigue abierta, y un dispatch ahí
+            # correría contra la misma fila que el worker tiene bloqueada
+            # (`update_plan_data_atomic` colisionaría hasta el statement_timeout).
+            # Despachar el enriquecimiento de los días NUEVOS de este bloque.
+            # Best-effort: el worker de chunks jamás puede fallar por esto.
             if _p1_i18n_new_day_indices:
                 try:
-                    from db import get_user_profile as _p1_i18n_get_profile
+                    from db import execute_sql_query as _p1_i18n_query
                     from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
-                    _p1_i18n_locale = (_p1_i18n_get_profile(user_id) or {}).get("locale")
+                    # [F7 fix-round 1] SELECT dirigido de UNA columna por PK en vez de
+                    # `get_user_profile` (SELECT * + posible UPDATE lateral de downgrade
+                    # de tier, ver `db_profiles.py::get_user_profile` middleware de
+                    # graceful degradation) — este es el primer call site de perfil
+                    # dentro de `_chunk_worker`; I2 aquí es el `WHERE id = %s` (lectura
+                    # por PK, sin necesidad de un filtro user_id adicional).
+                    _p1_i18n_row = _p1_i18n_query(
+                        "SELECT locale FROM user_profiles WHERE id = %s",
+                        (user_id,),
+                        fetch_one=True,
+                    )
+                    _p1_i18n_locale = (_p1_i18n_row or {}).get("locale")
                     if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
                         _p1_i18n_schedule(
                             meal_plan_id, user_id, _p1_i18n_locale,

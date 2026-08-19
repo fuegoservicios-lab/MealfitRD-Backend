@@ -18,7 +18,11 @@ from auth import get_verified_user_id, verify_api_quota
 from db import (
     get_user_likes, get_active_rejections, get_or_create_session,
     save_message, update_user_health_profile, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan,
-    get_latest_meal_plan_with_id, update_meal_plan_data, insert_like
+    get_latest_meal_plan_with_id, update_meal_plan_data, insert_like,
+    # [P1-PLAN-DISPLAY-I18N · 2026-08-19] TRIGGER-1B lee el locale del usuario
+    # tras la persistencia no-chunked (mismo patrón ya usado en otros ~6 call
+    # sites de este archivo, ver L3223/6164/etc).
+    get_user_profile,
 )
 from memory_manager import build_memory_context, summarize_and_prune
 from agent import analyze_preferences_agent, swap_meal, swap_meal_with_consent, LLMRateLimitedError, LLMCircuitBreakerOpen
@@ -2248,6 +2252,23 @@ def _postprocess_pipeline_result(
             )
             if _pid:
                 result["id"] = _pid
+
+                # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
+                # P1-PLAN-DISPLAY-I18N-TRIGGER-1B. Camino NO-chunked (tier gratis): el
+                # plan nace COMPLETO en este INSERT (a diferencia del chunked, que solo
+                # persiste la semana 1 aquí) — `day_indices=None` enriquece todos los
+                # días de una sola vez. Best-effort: la persistencia YA ocurrió, esto
+                # nunca puede tumbar la entrega del plan al usuario.
+                try:
+                    _p1_i18n_locale = (get_user_profile(actual_user_id) or {}).get("locale")
+                    if _p1_i18n_locale and _p1_i18n_locale != "es-DO":
+                        from plan_display_i18n import schedule_plan_display_enrichment as _p1_i18n_schedule
+                        _p1_i18n_schedule(str(_pid), actual_user_id, _p1_i18n_locale)
+                except Exception as _p1_i18n_e:
+                    logger.warning(
+                        f"[P1-PLAN-DISPLAY-I18N] dispatch persist inicial (no-chunked) "
+                        f"falló plan={_pid} user={actual_user_id}: {_p1_i18n_e!r}"
+                    )
         except Exception as _persist_e:
             result["_persist_failed"] = True
             logger.error(

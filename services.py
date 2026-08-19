@@ -326,11 +326,13 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         logger.info(f"💾 [CHUNK] Plan parcial (semana 1) guardado para {user_id}, plan_id={plan_id}")
 
         # [P1-PLAN-DISPLAY-I18N · 2026-08-19] tooltip-anchor:
-        # P1-PLAN-DISPLAY-I18N-TRIGGER-1. Semana 1 ya quedó persistida arriba —
-        # despachar el enriquecimiento de display para esos días si el idioma del
-        # usuario lo amerita (es-DO / sin locale es no-op dentro del motor, pero el
-        # `!= "es-DO"` de abajo evita levantar un thread por nada). Best-effort: el
-        # guardado del plan JAMÁS puede fallar por esto.
+        # P1-PLAN-DISPLAY-I18N-TRIGGER-1A. Camino CHUNKED (planes largos): semana 1
+        # ya quedó persistida arriba — despachar el enriquecimiento de display para
+        # esos días si el idioma del usuario lo amerita (es-DO / sin locale es no-op
+        # dentro del motor, pero el `!= "es-DO"` de abajo evita levantar un thread por
+        # nada). Best-effort: el guardado del plan JAMÁS puede fallar por esto.
+        # Hermano: TRIGGER-1B en routers/plans.py cubre el camino NO-chunked (tier
+        # gratis), donde la persistencia vive en `_save_plan_and_track_background`.
         if plan_id:
             try:
                 _p1_i18n_locale = (get_user_profile(user_id) or {}).get("locale")
