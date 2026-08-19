@@ -199,36 +199,43 @@ def main():
         print("FATAL: falta NEON_DATABASE_URL(_POOLED) en el entorno.")
         sys.exit(1)
 
+    # [cierre Task 6 · 2026-08-19] La conexión de LECTURA se abre y CIERRA antes de la
+    # llamada LLM: sostenerla durante la traducción (~1-3 min) hacía que Neon la matara
+    # por idle y el exit del context manager reventara con ProtocolViolation («server
+    # conn crashed?») — medido en el primer dry-run real. En --commit habría sido fatal:
+    # los UPDATEs habrían corrido sobre conexión muerta. Lectura → cerrar → LLM →
+    # conexión NUEVA solo para escribir.
     with psycopg.connect(NEON) as conn:
         names = fetch_catalog_names(conn, only_missing=bool(args.only_missing))
-        if not names:
-            if args.only_missing:
-                # [Ola final · FF-10] Con --only-missing, "cero filas" es el estado
-                # DESEADO (catálogo completo), no un fallo -- salir 0 para que un
-                # re-run idempotente en un pipeline no rompa.
-                print("OK: 0 filas sin name_en -- el catálogo ya está completo.")
-                return
-            print("FATAL: master_ingredients no devolvió ninguna fila.")
-            sys.exit(1)
+    if not names:
+        if args.only_missing:
+            # [Ola final · FF-10] Con --only-missing, "cero filas" es el estado
+            # DESEADO (catálogo completo), no un fallo -- salir 0 para que un
+            # re-run idempotente en un pipeline no rompa.
+            print("OK: 0 filas sin name_en -- el catálogo ya está completo.")
+            return
+        print("FATAL: master_ingredients no devolvió ninguna fila.")
+        sys.exit(1)
 
-        # [P2-LOGGER-EXEMPT: CLI subcommand a stdout] -- este script es un CLI
-        # one-shot, no un módulo de producción importado por app.py; su output
-        # ES el producto (tabla de auditoría para el dueño antes de --commit).
-        print(f"Catálogo: {len(names)} filas. model={args.model!r} commit={commit}")
+    # [P2-LOGGER-EXEMPT: CLI subcommand a stdout] -- este script es un CLI
+    # one-shot, no un módulo de producción importado por app.py; su output
+    # ES el producto (tabla de auditoría para el dueño antes de --commit).
+    print(f"Catálogo: {len(names)} filas. model={args.model!r} commit={commit}")
 
-        try:
-            translations = translate_batch(names, args.model)
-        except Exception as e:
-            print(f"FATAL: traducción falló -- {e}")
-            sys.exit(1)
+    try:
+        translations = translate_batch(names, args.model)
+    except Exception as e:
+        print(f"FATAL: traducción falló -- {e}")
+        sys.exit(1)
 
-        print(f"\n{'name (es)':<42} name_en")
-        print("-" * 90)
-        for n in names:
-            print(f"{n:<42} {translations.get(n, '')}")
+    print(f"\n{'name (es)':<42} name_en")
+    print("-" * 90)
+    for n in names:
+        print(f"{n:<42} {translations.get(n, '')}")
 
-        if commit:
-            written = 0
+    if commit:
+        written = 0
+        with psycopg.connect(NEON) as conn:
             with conn.cursor() as cur:
                 for n, gloss in translations.items():
                     cur.execute(
@@ -237,12 +244,12 @@ def main():
                     )
                     written += cur.rowcount
             conn.commit()
-            print(f"\nCOMMIT: {written} fila(s) de master_ingredients actualizadas con name_en.")
-        else:
-            print(
-                f"\nDRY-RUN: {len(translations)} traducciones listas, NADA persistido. "
-                f"Corre con --commit para escribir en master_ingredients.name_en."
-            )
+        print(f"\nCOMMIT: {written} fila(s) de master_ingredients actualizadas con name_en.")
+    else:
+        print(
+            f"\nDRY-RUN: {len(translations)} traducciones listas, NADA persistido. "
+            f"Corre con --commit para escribir en master_ingredients.name_en."
+        )
 
 
 if __name__ == "__main__":
