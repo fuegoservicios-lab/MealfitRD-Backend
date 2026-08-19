@@ -86,14 +86,41 @@ BEDCA, no el barrido de duplicados.
 Un barrido que sí lo cazaría tendría que comparar la descripción de la fila USDA contra
 el nombre del alimento. Queda pendiente.
 
-## Estado
+## Estado — CERRADO el 2026-08-19
 
-- **Cerrado**: `Yogurt` (→ `P1-YOGURT-NATURAL`, fdc 171284) y los 11 españoles
-  (→ `P1-BEDCA-DEPROXY-ES`, fuente BEDCA + `nutrition_source_ref`).
-- **Abierto, decisión del dueño**: los grupos DIFERENCIADO (¿corregir el `fdc_id` o
-  vaciarlo y marcar `manual`?), los sinónimos que deberían ser una fila con alias
-  (ricotta/requesón, habichuelas/judías blancas), y los andinos/mexicanos del grupo
-  COPIADO, que necesitan LATINFOODS o SMAE porque USDA no los tiene.
+Las cuatro migraciones del catálogo y la de procedencia están **aplicadas en producción**.
+
+| Qué | Antes | Ahora |
+|---|---|---|
+| Filas sin `prep_methods` | 141 | **0** (+ CHECK que lo impide) |
+| `fdc_id` compartidos | 20 grupos / 47 filas | **2 grupos / 4 filas** |
+| Filas con procedencia declarada como proxy | 0 | **19** (`nutrition_source_ref`) |
+| Proteína de `Yogurt` | 10,3 g (perfil griego) | **3,47 g** |
+| Valores distintos de kcal en el cluster de embutidos | 1 | **4** |
+
+**La regla que se aplicó** (`P1-PROVENANCE-TRUTHFUL`): un `fdc_id` es una afirmación,
+así que solo lo conserva la fila cuya identidad Y valores coinciden con la fila real de
+USDA — descripción consultada a la API, grupo por grupo. Las 19 restantes pasan a
+`fdc_id = NULL` + `nutrition_source = 'manual'` + `nutrition_source_ref = 'usda:<id>
+(proxy: <descripción>)'`. La traza se conserva; lo que desaparece es la afirmación falsa.
+
+### Lo que sigue abierto, y por qué
+
+- **2 grupos sin verificar**: `174220` (Mejillones/Vieira) y `175202` (Habichuelas
+  blancas/Judías blancas). La API no devolvió su descripción por el límite de `DEMO_KEY`
+  (30 req/hora) y decidir sin ella sería adivinar. Se cierran con una `USDA_API_KEY`
+  propia en el entorno. El test ancla el número: si aparece un tercer grupo compartido,
+  falla.
+- **Sinónimos que son dos filas**: `Requesón`/`Queso ricotta`, `Judías blancas`/
+  `Habichuelas blancas`. **Decisión tomada: NO fusionar.** El catálogo se resuelve por
+  cadena, no por id, así que borrar una fila rompería cualquier plan, `user_inventory` o
+  `supermarket_products.master_food_name` que la referencie por nombre. Fusionarlas es
+  una migración de datos con su propio alcance, no el efecto colateral de una limpieza
+  de procedencia.
+- **LATINFOODS / SMAE** para los andinos y mexicanos que siguen sobre un proxy (Curuba,
+  Chontaduro, Borojó, Xoconostle, Champús, Suero costeño, Crema mexicana, chiles secos).
+  Ahora al menos **están etiquetados como proxy**, que era la mitad del problema. FAO no
+  publica API: son PDF/Excel, así que es curación manual con su propio presupuesto.
 
 ## Cómo re-ejecutarla
 
