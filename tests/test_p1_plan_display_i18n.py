@@ -1114,17 +1114,19 @@ def test_trigger_1b_anchor_exists_after_nonchunked_persist(_plans_src):
     retornó un id truthy (P1-NONCHUNKED-PERSIST-SYNC: persist inline, no
     fire-and-forget) — es la señal de persist confirmado."""
     assert "P1-PLAN-DISPLAY-I18N-TRIGGER-1B" in _plans_src
-    # [Task 3 · P1-PLAN-DISPLAY-I18N-MUTATOR-swap/-regenday] `routers/plans.py` ganó DOS
-    # call sites legítimos más (swap-persist + regenerate-day) tras Task 2 — el count()==1
+    # [Task 3 · P1-PLAN-DISPLAY-I18N-MUTATOR-swap/-regenday + Fix round 1 ·
+    # -recipeexpand (F5)] `routers/plans.py` ganó TRES call sites legítimos más
+    # (swap-persist + regenerate-day + recipe/expand) tras Task 2 — el count()==1
     # original ya no aplica. La invariante que SÍ importa (la que F2 protegía) es que
     # `.index()` siga midiendo el de TRIGGER-1B: su import es el ÚNICO con el alias
     # `as _p1_i18n_schedule` (los mutadores de Task 3 importan SIN alias) Y vive ANTES
-    # (por posición de línea) que ambos — así que la PRIMERA ocurrencia sigue siendo la
-    # correcta. Si un futuro 4º call site se cuela ANTES de TRIGGER-1B en el archivo, este
-    # assert de count() lo atrapa (deja de ser 3) sin que nadie tenga que recordar mirar.
-    assert _plans_src.count(_SCHEDULE_IMPORT_MARKER) == 3, (
+    # (por posición de línea) que los tres — así que la PRIMERA ocurrencia sigue siendo
+    # la correcta. Si un futuro 5º call site se cuela ANTES de TRIGGER-1B en el archivo,
+    # este assert de count() lo atrapa (deja de ser 4) sin que nadie tenga que recordar
+    # mirar.
+    assert _plans_src.count(_SCHEDULE_IMPORT_MARKER) == 4, (
         "el nº de call sites de `schedule_plan_display_enrichment` en routers/plans.py "
-        "cambió — si es un 4º disparador legítimo, actualizar este count Y verificar que "
+        "cambió — si es un 5º disparador legítimo, actualizar este count Y verificar que "
         "`.index()` abajo siga midiendo TRIGGER-1B (no el nuevo)."
     )
     first_import_idx = _plans_src.index(_SCHEDULE_IMPORT_MARKER)
@@ -1408,22 +1410,32 @@ def test_patch_profile_locale_schedule_failure_is_best_effort(monkeypatch):
 
 
 # ================================================================================
-# SECCIÓN: MUTADORES (Task 3) — DELETE-on-write + re-enrich en los 3 mutadores
+# SECCIÓN: MUTADORES (Task 3 + Fix round 1) — DELETE-on-write + re-enrich en los
+# 4 mutadores de meal_plans.plan_data.
 #
 # tooltip-anchors: `P1-PLAN-DISPLAY-I18N-MUTATOR-swap` (routers/plans.py,
 # `/swap-meal/persist`), `P1-PLAN-DISPLAY-I18N-MUTATOR-regenday` (routers/plans.py,
 # `/regenerate-day`), `P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod` (tools.py,
-# `execute_modify_single_meal`).
+# `execute_modify_single_meal`), `P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand`
+# (routers/plans.py, `/recipe/expand` — F5 del review de fix round 1).
 #
 # Spec (sección "Invalidación: DELETE-on-write"): toda mutación de un meal BORRA su
-# `_display` completo en el MISMO write — el mutador simplemente no lo copia al
-# reescribir el meal. Los tests parser-based anclan POSICIÓN, no solo existencia (la
-# lección del F2 de Task 2: un `.index()` de la primera ocurrencia de un nombre de
-# variable reusado en dos sitios mide el call site equivocado sin que el test se
-# entere). El funcional (chat-modify) invoca `execute_modify_single_meal` de VERDAD
-# con toda su cadena LLM/backstops mockeada — el patrón de mock-de-callback puro de
-# Task 1 no aplica aquí porque `_apply_meal_modification` es una función anidada, no
-# importable de forma aislada.
+# `_display` completo en el MISMO write. Los tests parser-based anclan POSICIÓN, no
+# solo existencia (la lección del F2 de Task 2: un `.index()` de la primera
+# ocurrencia de un nombre de variable reusado en dos sitios mide el call site
+# equivocado sin que el test se entere).
+#
+# [Fix round 1] F1 (CRITICAL): regen-day popeaba SOLO los slots regenerados — falso
+# en este endpoint, porque el rebalance/refine/relevel de DÍA COMPLETO re-cuantiza
+# los gramos de TODOS los meals del día, conservados incluidos (ver el comment del
+# pop en producción, que cita las funciones exactas). El pop volvió a ser TOTAL
+# (todos los meals de `new_meals`, sin condición) — la lista paralela
+# `_p1_i18n_regenerated_flags` desapareció por completo (con F4, que dependía de
+# ella). F9 (MINOR): las ventanas de tamaño mágico (`+900`, `+1100`, `+1200`, `+400`)
+# eran exactamente la fragilidad que produjo F3 (una inserción de producción movió un
+# offset y rompió un guard ajeno) — reemplazadas por ventanas acotadas entre DOS
+# anclas de texto reales (el marker del despacho y el siguiente comment/línea única
+# que le sigue en producción), nunca un número de caracteres a mano.
 # ================================================================================
 
 _TOOLS_SRC_PATH = _BACKEND_ROOT / "tools.py"
@@ -1434,9 +1446,23 @@ def _tools_src() -> str:
     return _TOOLS_SRC_PATH.read_text(encoding="utf-8")
 
 
+def _bounded_block(src: str, start_marker: str, end_marker: str) -> str:
+    """[Fix round 1 · F9] Extrae `src[start:end]` entre DOS anclas de texto reales
+    (nunca un número de caracteres a mano) — `end_marker` es la línea que sigue al
+    bloque en el source de producción, así que el slice crece/encoge con el bloque
+    en vez de truncarlo si un futuro comment se alarga."""
+    start = src.index(start_marker)
+    end = src.index(end_marker, start)
+    assert end > start, f"{end_marker!r} aparece ANTES que {start_marker!r} — anclas invertidas."
+    return src[start:end]
+
+
 # ------------------------------------------------------------------
-# 1. /swap-meal/persist (routers/plans.py) — parser-based.
+# 1. /swap-meal/persist (routers/plans.py) — parser-based + funcional (F12).
 # ------------------------------------------------------------------
+
+_SWAP_DISPATCH_START = "P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist"
+_SWAP_DISPATCH_END = "Señal de gusto aprendido: el usuario"  # [P1-NEXT-LEVEL-BATCH] siguiente bloque
 
 
 def test_mutator_swap_anchor_present(_plans_src):
@@ -1467,6 +1493,26 @@ def test_mutator_swap_pop_is_after_meal_assignment_not_before(_plans_src):
     assert assign_idx < pop_idx
 
 
+def test_mutator_swap_pop_comment_documents_client_spoofing_vector(_plans_src):
+    """[Fix round 1 · F12] El comment del pop de swap debe decir la VERDAD: en
+    swap-persist `new_meal` sale del BODY de la request y se persiste
+    verbatim — un cliente PUEDE colar un `_display` arbitrario, y el pop es lo
+    ÚNICO que lo impide. La redacción vieja decía lo contrario ("no una defensa
+    contra un vector conocido hoy") — un futuro lector podía borrar el pop
+    creyéndolo decorativo."""
+    comment_start = _plans_src.index("P1-PLAN-DISPLAY-I18N-MUTATOR-swap] DELETE-on-write")
+    pop_idx = _plans_src.index('meals[meal_index].pop("_display", None)')
+    comment_block = _plans_src[comment_start:pop_idx]
+    assert "body" in comment_block.lower(), (
+        "el comment del pop de swap ya no menciona que `new_meal` viene del BODY "
+        "de la request (el vector de spoofing que F12 pidió documentar)."
+    )
+    assert "no lo borres" in comment_block.lower() or "no es decorativo" in comment_block.lower(), (
+        "el comment del pop de swap debe advertir explícitamente contra borrarlo "
+        "por 'decorativo' — esa fue la redacción incorrecta que F12 corrigió."
+    )
+
+
 def test_mutator_swap_dispatch_after_atomic_result_confirmed(_plans_src):
     """El despacho de `schedule_plan_display_enrichment` debe vivir DESPUÉS de
     confirmar `result` (post-persist, FUERA del lock) — nunca antes del 404 guard,
@@ -1474,26 +1520,124 @@ def test_mutator_swap_dispatch_after_atomic_result_confirmed(_plans_src):
     result_guard_idx = _plans_src.index(
         'if not result:\n            # Row desapareció entre el SELECT inicial y el FOR UPDATE'
     )
-    dispatch_idx = _plans_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist"
-    )
+    dispatch_idx = _plans_src.index(_SWAP_DISPATCH_START)
     assert dispatch_idx > result_guard_idx
 
 
 def test_mutator_swap_dispatch_uses_day_index_scoped_batch(_plans_src):
     """El despacho acota `day_indices=[day_index]` — solo el día tocado, no el plan
-    entero (recuperación parcial/costo acotado, espejo de los 3 disparadores previos)."""
-    dispatch_block_start = _plans_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-swap] Despacho best-effort post-persist"
-    )
-    dispatch_block = _plans_src[dispatch_block_start:dispatch_block_start + 1100]
+    entero (recuperación parcial/costo acotado, espejo de los otros mutadores)."""
+    dispatch_block = _bounded_block(_plans_src, _SWAP_DISPATCH_START, _SWAP_DISPATCH_END)
     assert "schedule_plan_display_enrichment(" in dispatch_block
     assert "day_indices=[day_index]" in dispatch_block
+
+
+def test_mutator_swap_dispatch_uses_should_enrich_locale_helper(_plans_src):
+    """[Fix round 1 · F10] El gate de locale usa el helper SSOT exportado por el
+    motor (`plan_display_i18n.should_enrich_locale`), no un literal `!= "es-DO"` a
+    mano en el call site."""
+    dispatch_block = _bounded_block(_plans_src, _SWAP_DISPATCH_START, _SWAP_DISPATCH_END)
+    assert "should_enrich_locale" in dispatch_block
+    assert '!= "es-DO"' not in dispatch_block
+
+
+# ------------------------------------------------------------------
+# Funcional (F12): un `new_meal` del BODY con `_display` inyectado por el cliente
+# NO sobrevive al persist. Invoca `api_swap_meal_persist` de VERDAD (mismo criterio
+# que el funcional de chat-modify: no hay forma de aislar `_swap_mutator` sin
+# ejecutar el handler completo), mockeando DB (`db_core.execute_sql_query` para el
+# SELECT de ownership, `db.get_user_profile`, `db_plans.update_plan_data_atomic`
+# capturado igual que el `engine` de la sección MOTOR). Los ~40 bloques
+# finalize/closer/motor/micros del mutator son best-effort (try/except con
+# fallback), así que corren en modo no-op sin DB real — mismo comportamiento ya
+# verificado para chat-modify.
+# ------------------------------------------------------------------
+
+
+@pytest.fixture
+def _swap_engine(monkeypatch):
+    import routers.plans as plans_module
+    import db_core as db_core_module
+    import db as db_module_local
+    import db_plans as db_plans_module
+
+    state = {"plan_data": None, "atomic_calls": []}
+
+    def _fake_execute_sql_query_sw(sql, params=None, **kwargs):
+        if "SELECT id FROM meal_plans" in sql:
+            return {"id": (params[0] if params else "plan-swap-1")}
+        return None
+
+    monkeypatch.setattr(db_core_module, "execute_sql_query", _fake_execute_sql_query_sw)
+    monkeypatch.setattr(db_module_local, "get_user_profile", lambda uid: {"health_profile": {}})
+
+    def _fake_atomic_sw(plan_id, mutator, user_id=None, **kwargs):
+        state["atomic_calls"].append({"plan_id": plan_id, "user_id": user_id})
+        result = mutator(state["plan_data"])
+        if isinstance(result, dict):
+            state["plan_data"] = result
+        return state["plan_data"]
+
+    monkeypatch.setattr(db_plans_module, "update_plan_data_atomic", _fake_atomic_sw)
+    monkeypatch.setenv("MEALFIT_SWAP_PERSIST_CLINICAL_GUARD", "false")
+    monkeypatch.setenv("MEALFIT_UPDATE_RECOMPUTE_MICROS", "false")
+    monkeypatch.setenv("MEALFIT_SWAP_PERSIST_DAY_BAND", "false")
+
+    return state, plans_module
+
+
+def test_swap_functional_client_injected_display_does_not_survive_persist(_swap_engine):
+    state, plans_module = _swap_engine
+    old_meal = {
+        "meal": "Almuerzo", "name": "Pollo guisado", "desc": "Pollo con arroz.",
+        "cals": 500, "protein": 30, "carbs": 50, "fats": 15,
+        "ingredients": ["150 g de pechuga de pollo", "1 taza de arroz"],
+        "recipe": ["Sofreir el pollo.", "Servir con arroz."],
+    }
+    state["plan_data"] = {"days": [{"day": 1, "meals": [old_meal]}]}
+
+    body = {
+        "day_index": 0,
+        "meal_index": 0,
+        "new_meal": {
+            "name": "Pescado al horno",
+            "desc": "Pescado con vegetales.",
+            "cals": 480, "protein": 32, "carbs": 40, "fats": 14,
+            "ingredients": ["200 g de pescado", "1 taza de vegetales"],
+            "recipe": ["Hornear el pescado.", "Servir con vegetales."],
+            # [Fix round 1 · F12] inyectado por un cliente adversario/buggy —
+            # NUNCA debe sobrevivir al persist.
+            "_display": {
+                "en-US": {
+                    "name": "SPOOFED — should never persist",
+                    "description": "attacker-controlled",
+                    "recipe": ["fake step"],
+                    "ingredients": ["fake ingredient"],
+                }
+            },
+        },
+    }
+
+    result = plans_module.api_swap_meal_persist(
+        plan_id="plan-swap-1", data=body, verified_user_id="user-swap-1",
+    )
+
+    assert result == {"success": True}
+    persisted_meal = state["plan_data"]["days"][0]["meals"][0]
+    assert persisted_meal["name"] == "Pescado al horno"
+    assert "_display" not in persisted_meal, (
+        "el meal PERSISTIDO conservó el `_display` inyectado por el cliente en el "
+        "body de la request — el vector de spoofing display-only (F12) sigue "
+        "abierto en swap-persist."
+    )
 
 
 # ------------------------------------------------------------------
 # 2. /regenerate-day (routers/plans.py) — parser-based.
 # ------------------------------------------------------------------
+
+_REGENDAY_DISPATCH_START = "P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist"
+_REGENDAY_DISPATCH_END = "Cuota: 1 crédito por día completo"
 
 
 def test_mutator_regenday_anchor_present(_plans_src):
@@ -1504,7 +1648,7 @@ def test_mutator_regenday_pop_is_inside_day_mutator_callback(_plans_src):
     """El pop debe vivir DENTRO de `_day_mutator` — ANTES de la llamada a
     `update_plan_data_atomic(plan_id, _day_mutator, ...)` que cierra el callback."""
     cb_start = _plans_src.index("def _day_mutator(")
-    pop_idx = _plans_src.index('new_meals[_idx_disp].pop("_display", None)')
+    pop_idx = _plans_src.index('_nm_disp.pop("_display", None)')
     call_idx = _plans_src.index(
         "result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)"
     )
@@ -1517,54 +1661,81 @@ def test_mutator_regenday_pop_is_after_meals_assignment_not_before(_plans_src):
     """El pop debe ir DESPUÉS de `_day['meals'] = new_meals` (donde el día
     reemplazado se coloca) — nunca antes."""
     assign_idx = _plans_src.index('_day["meals"] = new_meals')
-    pop_idx = _plans_src.index('new_meals[_idx_disp].pop("_display", None)')
+    pop_idx = _plans_src.index('_nm_disp.pop("_display", None)')
     assert assign_idx < pop_idx
 
 
-def test_mutator_regenday_pop_only_touches_regenerated_slots(_plans_src):
-    """El pop es CONDICIONAL a `_p1_i18n_regenerated_flags[i]` — los slots
-    CONSERVADOS (no mutados) no deben perder su `_display` heredado."""
-    pop_block_start = _plans_src.index('for _idx_disp, _was_regen_disp in enumerate(_p1_i18n_regenerated_flags):')
-    pop_block = _plans_src[pop_block_start:pop_block_start + 400]
-    assert "_was_regen_disp and" in pop_block, (
-        "el pop debe gatearse por el flag de 'fue regenerado' — un pop incondicional "
-        "sobre TODO `new_meals` borraría `_display` de slots CONSERVADOS que nunca "
-        "fueron mutados."
+def test_mutator_regenday_pop_is_unconditional_over_all_new_meals(_plans_src):
+    """[Fix round 1 · F1] El pop debe ser TOTAL — TODOS los meals de `new_meals`,
+    sin condicionar por "fue regenerado" — porque el rebalance/refine/relevel de
+    DÍA COMPLETO (que corre ARRIBA de este pop) re-cuantiza los gramos de
+    ingredientes de TODOS los meals del día, conservados incluidos. Popear solo
+    los regenerados (v1, revertida) dejaba a un slot CONSERVADO pero re-cuantizado
+    con su `_display` mintiendo la cantidad vieja."""
+    loop_idx = _plans_src.index("for _nm_disp in new_meals:")
+    pop_idx = _plans_src.index('_nm_disp.pop("_display", None)')
+    loop_block = _plans_src[loop_idx:pop_idx + len('_nm_disp.pop("_display", None)')]
+    assert loop_idx < pop_idx
+    # [F1/F4] La lista paralela debe desaparecer como CÓDIGO ACTIVO — la prosa del
+    # comment (que cita el nombre viejo a propósito, para que un futuro
+    # "optimizador" entienda qué NO reintroducir) queda exenta: se despoja cada
+    # línea de su comentario `#...` antes de buscar el identificador.
+    _src_no_comments = re.sub(r"#[^\n]*", "", _plans_src)
+    assert "_p1_i18n_regenerated_flags" not in _src_no_comments, (
+        "F1/F4: la lista paralela `_p1_i18n_regenerated_flags` volvió a aparecer "
+        "como CÓDIGO ACTIVO (fuera de un comentario) — el pop condicional volvió."
     )
+    # El único `if` permitido en el loop es el guard de tipo (`isinstance`) — NO un
+    # gate sobre "fue regenerado".
+    assert "isinstance(_nm_disp, dict)" in loop_block
+    assert "regenerado" not in loop_block.lower() and "was_regen" not in loop_block.lower()
 
 
 def test_mutator_regenday_dispatch_after_atomic_result_confirmed(_plans_src):
     result_guard_idx = _plans_src.index(
         'result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)'
     )
-    dispatch_idx = _plans_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist"
-    )
+    dispatch_idx = _plans_src.index(_REGENDAY_DISPATCH_START)
     assert dispatch_idx > result_guard_idx
 
 
 def test_mutator_regenday_dispatch_uses_day_index_scoped_batch(_plans_src):
-    dispatch_block_start = _plans_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist"
-    )
-    dispatch_block = _plans_src[dispatch_block_start:dispatch_block_start + 1100]
+    dispatch_block = _bounded_block(_plans_src, _REGENDAY_DISPATCH_START, _REGENDAY_DISPATCH_END)
     assert "schedule_plan_display_enrichment(" in dispatch_block
     assert "day_indices=[day_index]" in dispatch_block
 
 
+def test_mutator_regenday_dispatch_uses_should_enrich_locale_helper(_plans_src):
+    """[Fix round 1 · F10]"""
+    dispatch_block = _bounded_block(_plans_src, _REGENDAY_DISPATCH_START, _REGENDAY_DISPATCH_END)
+    assert "should_enrich_locale" in dispatch_block
+    assert '!= "es-DO"' not in dispatch_block
+
+
 def test_mutator_regenday_locale_lookup_is_targeted_select(_plans_src):
     """Mismo patrón barato que TRIGGER-2 (cron_tasks.py): SELECT dirigido de UNA
-    columna, no `get_user_profile` completo."""
-    dispatch_block_start = _plans_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist"
-    )
-    dispatch_block = _plans_src[dispatch_block_start:dispatch_block_start + 900]
+    columna como FALLBACK — [Fix round 1 · F6] el holder `_p1i18n_locale_rd_holder`
+    reusa el `get_user_profile` que el handler YA hace (retarget/clinical-parity) si
+    alguno corrió; el SELECT solo corre si ninguno rellenó el holder."""
+    dispatch_block = _bounded_block(_plans_src, _REGENDAY_DISPATCH_START, _REGENDAY_DISPATCH_END)
     assert "SELECT locale FROM user_profiles WHERE id = %s" in dispatch_block
+    assert "_p1i18n_locale_rd_holder[0]" in dispatch_block
+
+
+def test_mutator_regenday_locale_holder_reused_by_retarget_and_clinical_blocks(_plans_src):
+    """[Fix round 1 · F6] El holder debe rellenarse desde AMBOS `get_user_profile`
+    condicionales existentes (retarget + clinical-parity), no solo uno — si solo
+    uno lo rellena, el otro sigue corriendo un SELECT redundante en su ventana."""
+    assert _plans_src.count("_p1i18n_locale_rd_holder[0] = _full_profile_rd.get(\"locale\")") == 1
+    assert _plans_src.count("_p1i18n_locale_rd_holder[0] = _full_profile_clin_rd.get(\"locale\")") == 1
 
 
 # ------------------------------------------------------------------
 # 3. tools.execute_modify_single_meal — parser-based.
 # ------------------------------------------------------------------
+
+_CHATMOD_DISPATCH_START = "P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist"
+_CHATMOD_DISPATCH_END = "Señal de gusto aprendido del reemplazo"  # [P1-NEXT-LEVEL-BATCH] siguiente bloque
 
 
 def test_mutator_chatmod_anchor_present(_tools_src):
@@ -1615,40 +1786,166 @@ def test_mutator_chatmod_dispatch_after_persist_confirmed(_tools_src):
     """El despacho vive DENTRO del `if merged_plan_data:` (post-persist confirmado),
     no antes — nunca despachar sobre un persist que en realidad falló."""
     persist_check_idx = _tools_src.index("if merged_plan_data:")
-    dispatch_idx = _tools_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist"
-    )
+    dispatch_idx = _tools_src.index(_CHATMOD_DISPATCH_START)
     assert dispatch_idx > persist_check_idx
 
 
-def test_mutator_chatmod_dispatch_uses_target_day_index_not_day_number(_tools_src):
-    """`day_number` es el número LÓGICO del día del plato (puede no coincidir con
-    su índice de array); el despacho debe usar `target_day_index` (el índice real
-    del array, capturado en el loop de localización)."""
-    dispatch_block_start = _tools_src.index(
-        "P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist"
-    )
-    dispatch_block = _tools_src[dispatch_block_start:dispatch_block_start + 1200]
+def test_mutator_chatmod_dispatch_uses_day_index_holder_not_prelock_var(_tools_src):
+    """[Fix round 1 · F7] El despacho debe usar `_dispatch_day_index[0]` (holder
+    rellenado DENTRO del callback, bajo el lock) — NO un índice capturado en un
+    loop PRE-lock potencialmente stale."""
+    dispatch_block = _bounded_block(_tools_src, _CHATMOD_DISPATCH_START, _CHATMOD_DISPATCH_END)
     assert "schedule_plan_display_enrichment(" in dispatch_block
-    assert "day_indices=[target_day_index]" in dispatch_block
+    assert "day_indices=[_dispatch_day_index[0]]" in dispatch_block
+    assert "target_day_index" not in dispatch_block
 
 
-def test_mutator_chatmod_target_day_index_captured_in_localization_loop(_tools_src):
-    """`target_day_index` debe capturarse en el MISMO loop que localiza `target_day`
-    por `day_number` (índice de array, no `day_number` en sí — pueden divergir)."""
-    loop_idx = _tools_src.index("for _di_p1i18n, day in enumerate(days):")
-    capture_idx = _tools_src.index("target_day_index = _di_p1i18n")
-    usage_idx = _tools_src.index("if target_day_index is not None:")
-    assert loop_idx < capture_idx < usage_idx
+def test_mutator_chatmod_dispatch_uses_should_enrich_locale_helper(_tools_src):
+    """[Fix round 1 · F10]"""
+    dispatch_block = _bounded_block(_tools_src, _CHATMOD_DISPATCH_START, _CHATMOD_DISPATCH_END)
+    assert "should_enrich_locale" in dispatch_block
+    assert '!= "es-DO"' not in dispatch_block
+
+
+def test_mutator_chatmod_dispatch_day_index_captured_inside_callback_under_lock(_tools_src):
+    """[Fix round 1 · F7] `_dispatch_day_index[0]` debe capturarse DENTRO de
+    `_apply_meal_modification` (bajo el lock), en el MISMO loop que re-localiza
+    `target_day_fresh` — NO en un loop pre-lock (el propio callback ya re-localiza
+    todo por esa razón: las posiciones pueden quedar stale entre la lectura y el
+    lock)."""
+    cb_start = _tools_src.index("def _apply_meal_modification(")
+    loop_idx = _tools_src.index("for _di_p1i18n, d in enumerate(days_fresh):")
+    capture_idx = _tools_src.index("_dispatch_day_index[0] = _di_p1i18n")
+    call_idx = _tools_src.index(
+        "merged_plan_data = update_plan_data_atomic(\n            plan_id, _apply_meal_modification, user_id=user_id\n        )"
+    )
+    assert cb_start < loop_idx < capture_idx < call_idx, (
+        "la captura de `_dispatch_day_index[0]` debe vivir DENTRO del callback, "
+        "en su loop de re-localización de `target_day_fresh`."
+    )
+
+
+def test_mutator_chatmod_locale_reuses_existing_profile_load(_tools_src):
+    """[Fix round 1 · F6] `_p1i18n_locale_cm` se hidrata del MISMO round-trip que
+    `_hp` (`_get_profile(user_id)`, ya usado por el backstop clínico) — no debe
+    existir un SELECT dedicado nuevo para esta superficie."""
+    assert '_p1i18n_locale_cm = _full_profile_cm.get("locale")' in _tools_src
+    dispatch_block = _bounded_block(_tools_src, _CHATMOD_DISPATCH_START, _CHATMOD_DISPATCH_END)
+    assert "SELECT locale" not in dispatch_block
 
 
 def test_no_print_statements_tools_p1i18n_block(_tools_src):
     """Convención del repo (P2-LOGGER-MIGRATION): sanity barato sobre el bloque de
     dispatch específico de este P-fix (no sobre tools.py entero — fuera de alcance
     de Task 3 y ya cubierto por test_p2_logger_migration.py)."""
-    dispatch_block_start = _tools_src.index("P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod")
-    dispatch_block = _tools_src[dispatch_block_start:dispatch_block_start + 900]
+    dispatch_block = _bounded_block(_tools_src, _CHATMOD_DISPATCH_START, _CHATMOD_DISPATCH_END)
     assert "print(" not in dispatch_block
+
+
+# ------------------------------------------------------------------
+# 4. /recipe/expand (routers/plans.py) — [Fix round 1 · F5] 4º mutador, parser-based.
+#
+# `_meal["recipe"] = list(expanded_steps) + _kept` reemplaza el array de receta
+# ENTERO (`_set_expanded_recipe_preserving_notes`) — `_display[locale].recipe` es un
+# array alineado por índice con el original (spec §Contrato de datos), así que sin
+# el pop queda desalineado/mintiendo pasos VIEJOS sobre la receta ya expandida.
+# Camino 2 del endpoint propaga la expansión a TODAS las ocurrencias de
+# nombre+receta idéntica SIN `break` (puede tocar varios días) — el pop y el
+# despacho cubren la lista completa de meals/días REALMENTE tocados, no un único
+# índice fijo como los otros 3 mutadores.
+# ------------------------------------------------------------------
+
+_RECIPEEXPAND_DISPATCH_START = "P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] Despacho best-effort post-persist"
+_RECIPEEXPAND_DISPATCH_END = "P2-EXPAND-QUOTA-ABORT · 2026-07-02] callback abortó"
+
+
+def test_mutator_recipeexpand_anchor_present(_plans_src):
+    assert "P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand" in _plans_src
+
+
+def test_mutator_recipeexpand_pop_is_inside_apply_recipe_expansion_callback(_plans_src):
+    """El pop debe vivir DENTRO de `_apply_recipe_expansion` — ANTES de la llamada
+    a `update_plan_data_atomic(target_plan_id, _apply_recipe_expansion, ...)`."""
+    cb_start = _plans_src.index("def _apply_recipe_expansion(")
+    pop_idx = _plans_src.index("for _em_disp in _expand_touched_meals:")
+    call_idx = _plans_src.index(
+        "update_plan_data_atomic(\n                    target_plan_id, _apply_recipe_expansion, user_id=user_id\n                )"
+    )
+    assert cb_start < pop_idx < call_idx, (
+        "el pop de `_display` en recipe/expand debe estar DENTRO de "
+        "`_apply_recipe_expansion` (entre su `def` y la llamada a "
+        "`update_plan_data_atomic(target_plan_id, _apply_recipe_expansion, ...)`)."
+    )
+
+
+def test_mutator_recipeexpand_pop_is_after_recipe_reassignment_not_before(_plans_src):
+    """El pop debe ir DESPUÉS de `_meal["recipe"] = list(expanded_steps) + _kept`
+    (donde `_set_expanded_recipe_preserving_notes` reemplaza la receta) — nunca
+    antes."""
+    assign_idx = _plans_src.index('_meal["recipe"] = list(expanded_steps) + _kept')
+    pop_idx = _plans_src.index("for _em_disp in _expand_touched_meals:")
+    assert assign_idx < pop_idx
+
+
+def test_mutator_recipeexpand_pop_is_after_ok_flag_before_return(_plans_src):
+    """El pop es el ÚLTIMO write del callback antes de `_expand_persisted["ok"] =
+    True` + `return plan_data_fresh` (tras finalize/motor/micros/band-parity/rebuild
+    de listas, mismo criterio que los otros 3 mutadores)."""
+    pop_idx = _plans_src.index("for _em_disp in _expand_touched_meals:")
+    ok_flag_idx = _plans_src.index('_expand_persisted["ok"] = True')
+    return_idx = _plans_src.index("return plan_data_fresh")
+    assert pop_idx < ok_flag_idx < return_idx
+
+
+def test_mutator_recipeexpand_touched_meals_tracked_in_both_caminos(_plans_src):
+    """Camino 1 (targeting por índices) Y Camino 2 (propagación por nombre+receta,
+    sin `break`) deben AMBOS alimentar `_expand_touched_meals`/`_expand_touched_days`
+    — si solo uno lo hiciera, el pop/despacho dejarían meals tocados sin cubrir en
+    el camino que propaga a múltiples ocurrencias."""
+    assert _plans_src.count("_expand_touched_meals.append(target_meal_fresh)") == 1  # Camino 1
+    assert _plans_src.count("_expand_touched_meals.append(m)") == 1  # Camino 2
+    assert _plans_src.count("_expand_touched_days.add(req_day_index)") == 1  # Camino 1
+    assert _plans_src.count("_expand_touched_days.add(_day_idx_exp)") == 1  # Camino 2
+
+
+def test_mutator_recipeexpand_dispatch_after_atomic_call(_plans_src):
+    """El despacho vive DESPUÉS de la llamada a `update_plan_data_atomic` (post-
+    persist, FUERA del lock) — nunca antes."""
+    call_idx = _plans_src.index(
+        "update_plan_data_atomic(\n                    target_plan_id, _apply_recipe_expansion, user_id=user_id\n                )"
+    )
+    dispatch_idx = _plans_src.index(_RECIPEEXPAND_DISPATCH_START)
+    assert dispatch_idx > call_idx
+
+
+def test_mutator_recipeexpand_dispatch_uses_touched_days_scoped_batch(_plans_src):
+    """El despacho acota `day_indices=sorted(_expand_touched_days)` — los días
+    REALMENTE tocados (puede ser >1, Camino 2 propaga), no el plan entero ni un
+    índice fijo."""
+    dispatch_block = _bounded_block(
+        _plans_src, _RECIPEEXPAND_DISPATCH_START, _RECIPEEXPAND_DISPATCH_END
+    )
+    assert "schedule_plan_display_enrichment(" in dispatch_block
+    assert "day_indices=sorted(_expand_touched_days)" in dispatch_block
+
+
+def test_mutator_recipeexpand_dispatch_uses_should_enrich_locale_helper(_plans_src):
+    """[Fix round 1 · F10]"""
+    dispatch_block = _bounded_block(
+        _plans_src, _RECIPEEXPAND_DISPATCH_START, _RECIPEEXPAND_DISPATCH_END
+    )
+    assert "should_enrich_locale" in dispatch_block
+    assert '!= "es-DO"' not in dispatch_block
+
+
+def test_mutator_recipeexpand_dispatch_gated_by_persisted_ok(_plans_src):
+    """El despacho solo corre si el callback realmente persistió
+    (`_expand_persisted["ok"]`) Y hay días tocados — un callback abortado (target
+    raced) no debe disparar una retraducción sobre nada."""
+    dispatch_block = _bounded_block(
+        _plans_src, _RECIPEEXPAND_DISPATCH_START, _RECIPEEXPAND_DISPATCH_END
+    )
+    assert 'if _expand_persisted["ok"] and _expand_touched_days:' in dispatch_block
 
 
 # ------------------------------------------------------------------

@@ -93,6 +93,24 @@ def _plan_display_i18n_timeout_s() -> float:
     return _env_float("MEALFIT_PLAN_DISPLAY_I18N_TIMEOUT_S", 60.0)
 
 
+def should_enrich_locale(locale) -> bool:
+    """[Fix round 1 · F10] SSOT exportado del gate de locale — reemplaza el literal
+    `locale != "es-DO"` duplicado en los 3 call sites de mutador (swap-persist,
+    regenerate-day, chat-modify) que pre-filtran ANTES de despachar el thread
+    background (evitar el import+thread cuando es obviamente innecesario; el gate
+    real y autoritativo sigue viviendo DENTRO de `enrich_plan_display` /
+    `schedule_plan_display_enrichment`, este helper solo espeja esa misma condición
+    para que el call site no reimplemente el conocimiento del motor).
+
+    `locale not in _COACH_LANGUAGE_NAMES` YA excluye es-DO (nunca está en ese dict,
+    P1-I18N-DASHBOARD) — por eso un simple `!= "es-DO"` en el call site bastaba en la
+    práctica, pero duplicaba el conocimiento de "qué es un locale válido" fuera del
+    motor. `constants.strip_accents`/`canonicalize_diet_type` ya pagaron esta lección
+    (P1-DIET-CANON-SSOT): un 2º/3º/4º lugar que reimplementa la misma regla driftea.
+    """
+    return isinstance(locale, str) and locale in _COACH_LANGUAGE_NAMES
+
+
 def _plan_display_i18n_batch_days() -> int:
     """[Finding 6 · fix round 1] Días por llamada LLM. `day_indices=None` (todo
     el plan, disparador 4 de la spec — cambio de idioma con plan ya creado) es

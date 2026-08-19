@@ -116,8 +116,14 @@ def test_handler_propagates_to_all_matching_occurrences(expand_body: str):
     # Buscar el bloque legacy (loop sobre days/meals con match por name).
     # Aceptamos varias formas pero el indicador clave es la AUSENCIA de
     # `break` dentro del loop tras `updated = True`.
+    # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand · Fix round 1 · F3-style] `for day in ...:`
+    # se volvió `for _day_idx_exp, day in enumerate(...):` (Task 3, día-índice necesario para
+    # el despacho scoped del re-enriquecimiento) — el `(?:\w+,\s*)?` opcional re-ancla el
+    # patrón a la PROPIEDAD real (existe un loop que produce la variable `day`, sin importar
+    # si viene de `for day in X` o `for i, day in enumerate(X)`), no al literal exacto de la
+    # firma del loop.
     legacy_block_match = re.search(
-        r"for\s+day\s+in\s+\w+(?:\.get\([^)]+\)|\.days|\[[^\]]+\])?\s*:\s*"
+        r"for\s+(?:\w+,\s*)?day\s+in\s+(?:enumerate\()?\w+(?:\.get\([^)]+\)|\.days|\[[^\]]+\])?\)?\s*:\s*"
         r".*?for\s+m\s+in\s+\w+(?:\.get\([^)]+\)|\.meals)?\s*:\s*"
         r".*?m\.get\(\s*[\"']name[\"']\s*\)\s*==.*?req_name",
         expand_body,

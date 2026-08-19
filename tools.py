@@ -1018,17 +1018,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     target_day = None
     target_meal = None
     target_meal_index = None
-    # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] índice del día dentro del ARRAY `days` (NO
-    # `day_number`, que es el número lógico del plato — pueden divergir). Consumido por el
-    # despacho de re-enriquecimiento post-persist (day_indices espera índices de array).
-    target_day_index = None
 
-    for _di_p1i18n, day in enumerate(days):
+    for day in days:
         if day.get("day") == day_number:
             target_day = day
-            target_day_index = _di_p1i18n
             break
-    
+
     if not target_day:
         return f"ERROR: No se encontró el día {day_number} en el plan."
     
@@ -1133,9 +1128,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     _clin_allergies = []
     _clin_diet = None
     _hp = {}
+    # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] [Fix round 1 · F6] `locale` hidratado del MISMO
+    # round-trip que `_hp` (`_get_profile(user_id)` ya trae `locale` como columna top-level de
+    # `user_profiles`, espejo de `_swap_locale` en `/swap-meal/persist`) — evita un SELECT
+    # dedicado en el despacho de abajo, que antes corría en CADA request (incl. es-DO mayoritario).
+    _p1i18n_locale_cm = None
     try:
         from db import get_user_profile as _get_profile
-        _hp = (_get_profile(user_id) or {}).get("health_profile") or {}
+        _full_profile_cm = _get_profile(user_id) or {}
+        _hp = _full_profile_cm.get("health_profile") or {}
+        _p1i18n_locale_cm = _full_profile_cm.get("locale")
     except Exception as _hp_load_e:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se cargó perfil (no bloquea): {_hp_load_e}")
 
@@ -2430,6 +2432,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # — el agente ya entregó respuesta al usuario; bloquear+retry es caro
         # en tokens.
         _agent_divergences: list = []
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] [Fix round 1 · F7] Holder de 1 elemento
+        # (mismo patrón que `_taste_old_name[0]`) para el índice de `target_day_fresh`
+        # dentro del ARRAY `days` — capturado DENTRO del callback, sobre la copia
+        # re-SELECTada bajo el lock (no en un loop pre-lock): las posiciones pueden
+        # quedar stale entre la lectura y el lock (el propio callback ya re-localiza
+        # `target_day`/`target_idx_fresh` por esa razón). Consumido por el despacho de
+        # re-enriquecimiento post-persist (day_indices espera índices de array, NO
+        # `day_number`, que es el número lógico del plato — pueden divergir).
+        _dispatch_day_index: list = [None]
 
         def _apply_meal_modification(plan_data_fresh: dict):
             """Aplica la mutación del meal y las aggregated_shopping_list*
@@ -2445,9 +2456,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 return False
 
             target_day_fresh = None
-            for d in days_fresh:
+            for _di_p1i18n, d in enumerate(days_fresh):
                 if isinstance(d, dict) and d.get("day") == day_number:
                     target_day_fresh = d
+                    _dispatch_day_index[0] = _di_p1i18n
                     break
             if not target_day_fresh:
                 logger.warning(
@@ -2678,26 +2690,29 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         merged_plan_data = update_plan_data_atomic(
             plan_id, _apply_meal_modification, user_id=user_id
         )
+        # [Fix round 1 · F8] `if merged_plan_data:` NO distingue "el callback aplicó la
+        # mutación" de "el callback abortó" (`_apply_meal_modification` retorna `False` si
+        # `target_day_fresh`/`target_idx_fresh` no se re-localizan bajo el lock): cuando el
+        # callback retorna `False`, `update_plan_data_atomic` persiste el `plan_data` SIN tocar
+        # (`current`, dict truthy — `db_plans.py`) y esta rama corre igual. Preexistente y
+        # benigno para el log/despacho de abajo (peor caso: una retraducción de más sobre un
+        # día que en realidad no cambió) — documentado para que un futuro lector no asuma que
+        # esta rama es "post-persist confirmado" sin más.
         if merged_plan_data:
             logger.info(f"[TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
             # [P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] Despacho best-effort post-persist (FUERA
             # del lock): el DELETE-on-write del callback dejó el meal modificado sin `_display`
-            # — re-enriquecer SOLO el día tocado si el locale del usuario aplica. SELECT
-            # dirigido (una columna) — mismo patrón barato que TRIGGER-2 (cron_tasks.py).
+            # — re-enriquecer SOLO el día tocado si el locale del usuario aplica. `_p1i18n_locale_cm`
+            # ya se hidrató arriba junto con `_hp` (Fix round 1 · F6 — mismo round-trip, cero SELECT
+            # extra) y `_dispatch_day_index[0]` es el índice de array capturado DENTRO del callback
+            # bajo el lock (Fix round 1 · F7 — no el de un loop pre-lock potencialmente stale).
             try:
-                if target_day_index is not None:
-                    from db import execute_sql_query as _p1i18n_esq_cm
-                    _p1i18n_row_cm = _p1i18n_esq_cm(
-                        "SELECT locale FROM user_profiles WHERE id = %s",
-                        (user_id,),
-                        fetch_one=True,
+                from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_cm
+                if _dispatch_day_index[0] is not None and _p1i18n_should_enrich_cm(_p1i18n_locale_cm):
+                    from plan_display_i18n import schedule_plan_display_enrichment
+                    schedule_plan_display_enrichment(
+                        plan_id, user_id, _p1i18n_locale_cm, day_indices=[_dispatch_day_index[0]]
                     )
-                    _p1i18n_locale_cm = (_p1i18n_row_cm or {}).get("locale")
-                    if _p1i18n_locale_cm and _p1i18n_locale_cm != "es-DO":
-                        from plan_display_i18n import schedule_plan_display_enrichment
-                        schedule_plan_display_enrichment(
-                            plan_id, user_id, _p1i18n_locale_cm, day_indices=[target_day_index]
-                        )
             except Exception as _p1i18n_cm_e:
                 logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-chatmod] dispatch no-op: {_p1i18n_cm_e}")
             # [P1-NEXT-LEVEL-BATCH · 2026-07-02] (TASTE) Señal de gusto aprendido del reemplazo

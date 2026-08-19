@@ -5779,6 +5779,12 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         # plan. Ahora el cobro se difiere a DESPUÉS del persist (flag del callback); abort → sin cobro +
         # soft-fail `stale_target` (el cliente refetch-ea). tooltip-anchor: P2-EXPAND-QUOTA-ABORT
         _expand_persisted = {"ok": False}
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] Meals/días efectivamente reescritos por
+        # `_set_expanded_recipe_preserving_notes` (Camino 1: uno; Camino 2: puede propagar a
+        # VARIAS ocurrencias del mismo nombre+receta en días distintos, sin `break`). Consumidos
+        # al final del callback (pop de `_display`) y por el despacho post-persist (día_indices).
+        _expand_touched_days: set = set()
+        _expand_touched_meals: list = []
 
         if user_id and user_id != "guest":
             # [P1-HIST-RECIPE-1] Resolver el plan target. Si el cliente
@@ -5954,6 +5960,9 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                 _set_expanded_recipe_preserving_notes(target_meal_fresh)
                                 _append_expand_veg(target_meal_fresh)
                                 updated_in_callback = True
+                                # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand]
+                                _expand_touched_days.add(req_day_index)
+                                _expand_touched_meals.append(target_meal_fresh)
 
                     # Camino 2: si no targeteamos por índices, propagar a TODAS
                     # las ocurrencias de `name` cuya receta original sea bit-
@@ -5963,7 +5972,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     # corrector swapea ingredientes). Sin esta propagación,
                     # cada ocurrencia repetida vuelve a quemar cuota LLM.
                     if not updated_in_callback:
-                        for day in days_fresh:
+                        for _day_idx_exp, day in enumerate(days_fresh):
                             if not isinstance(day, dict):
                                 continue
                             for m in day.get("meals", []):
@@ -5974,6 +5983,9 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                     _append_expand_veg(m)
                                     updated_in_callback = True
                                     # NO break: propagamos a todas las ocurrencias.
+                                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand]
+                                    _expand_touched_days.add(_day_idx_exp)
+                                    _expand_touched_meals.append(m)
 
                     if not updated_in_callback:
                         # Nada que persistir — abortar UPDATE (P0-2 contract:
@@ -6047,6 +6059,20 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             )
                         except Exception as _rbl_exp_e:
                             logger.debug(f"[P2-AUDIT-V5-BATCH] (GAP-C3) rebuild inline no-op: {_rbl_exp_e}")
+
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] DELETE-on-write (spec
+                    # "Invalidación"): `_meal["recipe"] = list(expanded_steps) + _kept` reemplaza
+                    # el array de receta ENTERO — `_display[locale].recipe`/`.ingredients` son
+                    # arrays alineados por ÍNDICE con los originales (spec §Contrato de datos), así
+                    # que tras la expansión quedan desalineados/mintiendo pasos VIEJOS traducidos
+                    # sobre la receta española YA expandida. Pop AL FINAL del callback (tras
+                    # finalize/motor/micros/band-parity/rebuild de listas, mismo criterio que
+                    # swap/regen-day/chat-modify) sobre los meals REALMENTE tocados (`_expand_touched_meals`
+                    # — Camino 1: uno; Camino 2: puede ser varios en días distintos).
+                    for _em_disp in _expand_touched_meals:
+                        if isinstance(_em_disp, dict):
+                            _em_disp.pop("_display", None)
+
                     # [P2-EXPAND-QUOTA-ABORT] señal para el caller: hubo escritura real → cobrar.
                     _expand_persisted["ok"] = True
                     return plan_data_fresh
@@ -6060,6 +6086,30 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 update_plan_data_atomic(
                     target_plan_id, _apply_recipe_expansion, user_id=user_id
                 )
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] Despacho best-effort post-persist
+                # (FUERA del lock): el DELETE-on-write de arriba dejó los meals tocados sin
+                # `_display` — re-enriquecer los días tocados (puede ser >1, Camino 2 propaga)
+                # si el locale del usuario aplica. SELECT dirigido de 1 columna (facade
+                # `from db import ...`) — call site NUEVO, sin perfil ya hidratado que reusar
+                # (`_enrich_clinical_from_profile` no expone `locale` al caller).
+                if _expand_persisted["ok"] and _expand_touched_days:
+                    try:
+                        from db import execute_sql_query as _p1i18n_esq_ex
+                        _p1i18n_row_ex = _p1i18n_esq_ex(
+                            "SELECT locale FROM user_profiles WHERE id = %s",
+                            (user_id,),
+                            fetch_one=True,
+                        )
+                        _p1i18n_locale_ex = (_p1i18n_row_ex or {}).get("locale")
+                        from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_ex
+                        if _p1i18n_should_enrich_ex(_p1i18n_locale_ex):
+                            from plan_display_i18n import schedule_plan_display_enrichment
+                            schedule_plan_display_enrichment(
+                                target_plan_id, user_id, _p1i18n_locale_ex,
+                                day_indices=sorted(_expand_touched_days),
+                            )
+                    except Exception as _p1i18n_ex_e:
+                        logger.debug(f"[P1-PLAN-DISPLAY-I18N-MUTATOR-recipeexpand] dispatch no-op: {_p1i18n_ex_e}")
                 # [P2-EXPAND-QUOTA-ABORT · 2026-07-02] callback abortó (target raced por swap/modify
                 # concurrente) → SIN cobro + soft-fail para que el cliente refetch-ee el plan fresco.
                 if not _expand_persisted["ok"]:
@@ -7506,10 +7556,15 @@ def api_swap_meal_persist(
             # meal persistido pierde CUALQUIER `_display` heredado — stale display imposible
             # por construcción. Pop AL FINAL del mutator (no justo tras `meals[meal_index] =
             # new_meal` arriba): si algún paso intermedio (finalize/closer/reconcile, todos
-            # entre esa asignación y aquí) reescribiera `meals[meal_index]` o copiara
-            # `_display` de vuelta, un pop temprano no lo protegería. `new_meal` normalmente
-            # NO trae `_display` (el cliente/LLM no lo genera hoy) — este pop es el contrato
-            # LEGIBLE explícito de la spec, no una defensa contra un vector conocido hoy.
+            # entre esa asignación y aquí) reescribiera `meals[meal_index]` o copiara `_display`
+            # de vuelta, un pop temprano no lo protegería. [Fix round 1 · F12] `new_meal` sale
+            # directo del BODY de la request (`new_meal = body.get("new_meal")`, arriba) y se
+            # persiste verbatim salvo los campos que este mutator toca explícitamente — un
+            # cliente PUEDE colar un `_display` arbitrario en el JSON del body (spoofing
+            # display-only: no es clínico, pero permitiría al frontend mostrar texto que el
+            # motor de enriquecimiento nunca validó/generó). Este pop es lo ÚNICO que lo
+            # impide — NO es decorativo/solo-contrato-legible, no lo borres pensando que
+            # "el cliente nunca manda esa key hoy".
             if isinstance(meals[meal_index], dict):
                 meals[meal_index].pop("_display", None)
 
@@ -7545,10 +7600,13 @@ def api_swap_meal_persist(
         # lock): el DELETE-on-write de arriba dejó el meal swapeado sin `_display` — si el
         # usuario lee el dashboard en otro idioma, re-enriquecer SOLO el día tocado
         # (`day_indices=[day_index]`). `schedule_plan_display_enrichment` ya no-opea sola
-        # para es-DO/locale inválido/knob off — el guard `_swap_locale != "es-DO"` de aquí
-        # es solo para evitar el import+thread cuando es obviamente innecesario.
+        # para es-DO/locale inválido/knob off — el guard `should_enrich_locale` de aquí
+        # es solo para evitar el import+thread cuando es obviamente innecesario. [Fix round
+        # 1 · F10] gate importado del motor SSOT (no un literal a mano comparando contra el
+        # locale base, como hacía la versión previa).
         try:
-            if _swap_locale and _swap_locale != "es-DO":
+            from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_sw
+            if _p1i18n_should_enrich_sw(_swap_locale):
                 from plan_display_i18n import schedule_plan_display_enrichment
                 schedule_plan_display_enrichment(
                     plan_id, verified_user_id, _swap_locale, day_indices=[day_index]
@@ -8294,6 +8352,14 @@ def api_regenerate_day(
         # (a) NO empujar la proteína hacia la meta en el retarget (sería iatrogénico) y (b) trimar el día
         # regenerado al techo de proteína en el persist.
         _renal_capped = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
+        # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] [Fix round 1 · F6] Holder de 1 elemento para
+        # el `locale` del usuario, consumido por el despacho de re-enriquecimiento post-persist
+        # (abajo). El handler YA hace ≥1 `get_user_profile(user_id)` condicional más abajo
+        # (retarget ~8380, clinical-parity ~9080) — ambos lo rellenan si corren (holan la MISMA
+        # respuesta, cero I/O extra), evitando el SELECT dedicado en el caso común (los 2 knobs
+        # default ON). El dispatch cae a un SELECT dirigido de 1 columna SOLO si ninguno de los
+        # dos corrió (ambos knobs OFF, o `_ai_unavailable` saltó el bloque clínico).
+        _p1i18n_locale_rd_holder: list = [None]
         days = plan_data.get("days") or []
         if day_index >= len(days):
             raise HTTPException(status_code=400, detail=f"day_index fuera de rango (plan tiene {len(days)} días)")
@@ -8360,7 +8426,12 @@ def api_regenerate_day(
             try:
                 from db import get_user_profile as _gup
                 from nutrition_calculator import get_nutrition_targets as _gnt
-                _hp_bio = (_gup(user_id) or {}).get("health_profile") or {}
+                _full_profile_rd = _gup(user_id) or {}
+                _hp_bio = _full_profile_rd.get("health_profile") or {}
+                # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] [Fix round 1 · F6] reusa este MISMO
+                # round-trip para el holder de locale del despacho post-persist.
+                if _p1i18n_locale_rd_holder[0] is None:
+                    _p1i18n_locale_rd_holder[0] = _full_profile_rd.get("locale")
                 _bio = {}
                 for _k in ("weight", "height", "age", "gender", "weightUnit", "bodyFat"):
                     _v = data.get(_k)
@@ -8489,12 +8560,6 @@ def api_regenerate_day(
         new_meals: list = []
         regenerated = 0
         slots_kept: list = []
-        # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Paralelo posicional a `new_meals`: True en
-        # el índice de cada slot efectivamente REGENERADO (meal nuevo del LLM) — los slots
-        # CONSERVADOS quedan False (no fueron mutados; su `_display` heredado sigue siendo
-        # válido y NO se toca — delete-on-write aplica a "meal mutado", no al día entero).
-        # Consumido al FINAL de `_day_mutator` (spec "Invalidación").
-        _p1_i18n_regenerated_flags: list = []
         # [P2-REGEN-DAY-HONEST-CODE · 2026-07-10] Razones reales de cada slot conservado —
         # el "todos fallaron" se clasificaba SIEMPRE como pantry_insufficient_for_goal y el
         # frontend mandaba al usuario a "agregar ítems a la Nevera" aunque la causa fuera
@@ -8704,7 +8769,6 @@ def api_regenerate_day(
                     nm["isExpanded"] = False
                     nm.pop("pantry_constrained", None)  # [P5-RESTOCK-PRESERVE] metadata transitoria, no persistir
                     new_meals.append(nm)
-                    _p1_i18n_regenerated_flags.append(True)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                     regenerated += 1
                     # [P5-DAY-REGEN-VARIETY] el siguiente swap evita el NOMBRE y la PROTEÍNA principal
                     # del plato aceptado (→ 4 proteínas distintas, no 2 de res).
@@ -8715,7 +8779,6 @@ def api_regenerate_day(
                     _decrement_ledger_by_meal(ledger, nm, _db)
                 else:
                     new_meals.append(meal)
-                    _p1_i18n_regenerated_flags.append(False)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                     slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                     # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Reservar en el ledger los
                     # ingredientes del plato CONSERVADO (espejo del decrement del regenerado, ~4975). Sin
@@ -8733,7 +8796,6 @@ def api_regenerate_day(
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
                 _kept_reasons.append(str(_ve))  # [P2-REGEN-DAY-HONEST-CODE] causa real del slot
                 new_meals.append(meal)
-                _p1_i18n_regenerated_flags.append(False)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Mismo decrement que la rama else:
                 # el plato conservado consume su inventario aunque no se haya podido regenerar.
@@ -8756,7 +8818,6 @@ def api_regenerate_day(
                 )
                 _ai_unavailable = True
                 new_meals.append(meal)
-                _p1_i18n_regenerated_flags.append(False)  # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday]
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 break
 
@@ -8765,11 +8826,7 @@ def api_regenerate_day(
         # para que el full-replace `_day["meals"]=new_meals` NO trunque el día (perdería platos). Idempotente
         # si el loop completó (len iguales) o si nada se interrumpió.
         if _ai_unavailable and len(new_meals) < len(meals):
-            _pad_start = len(new_meals)
-            new_meals.extend(meals[_pad_start:])
-            # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] paridad de longitud con new_meals: los
-            # slots padeados son ORIGINALES sin tocar (no regenerados).
-            _p1_i18n_regenerated_flags.extend([False] * (len(new_meals) - len(_p1_i18n_regenerated_flags)))
+            new_meals.extend(meals[len(new_meals):])
 
         if regenerated == 0:
             # [P1-DAY-REGEN-SERVER-FLAG] nada se persiste en los soft-fail → retirar el flag
@@ -9071,7 +9128,12 @@ def api_regenerate_day(
                 import copy as _copy_cp
                 try:
                     from db import get_user_profile as _gup_clin
-                    _hp_clin = (_gup_clin(user_id) or {}).get("health_profile") or {}
+                    _full_profile_clin_rd = _gup_clin(user_id) or {}
+                    _hp_clin = _full_profile_clin_rd.get("health_profile") or {}
+                    # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] [Fix round 1 · F6] reusa este
+                    # MISMO round-trip para el holder de locale del despacho post-persist.
+                    if _p1i18n_locale_rd_holder[0] is None:
+                        _p1i18n_locale_rd_holder[0] = _full_profile_clin_rd.get("locale")
                 except Exception:
                     _hp_clin = {}
                 _clin_form = {
@@ -9307,17 +9369,28 @@ def api_regenerate_day(
                 pd, verified_user_id, surface="regen_day", plan_id_hint=plan_id
             )
 
-            # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] DELETE-on-write (spec "Invalidación"):
-            # SOLO los slots efectivamente regenerados pierden su `_display` heredado. Pop AL
-            # FINAL del mutator (tras rebalance/refine/reconcile/rebuild de listas, que pueden
-            # reordenar contenido dentro de `new_meals`) — un pop justo tras `swap_meal()` no
-            # protegería si alguno de esos pasos posteriores reintrodujera `_display`. Los
-            # slots CONSERVADOS (`_p1_i18n_regenerated_flags[i] is False`) no se tocan: no
-            # fueron mutados, su traducción sigue siendo válida.
-            for _idx_disp, _was_regen_disp in enumerate(_p1_i18n_regenerated_flags):
-                if (_was_regen_disp and _idx_disp < len(new_meals)
-                        and isinstance(new_meals[_idx_disp], dict)):
-                    new_meals[_idx_disp].pop("_display", None)
+            # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] DELETE-on-write (spec "Invalidación"): pop
+            # de TODOS los meals de `new_meals`, no solo los regenerados. [Fix round 1 · F1] Una
+            # primera versión popeaba SOLO los slots regenerados (`_p1_i18n_regenerated_flags`),
+            # razonando que un slot CONSERVADO no fue "mutado" y su `_display` seguía siendo
+            # válido — falso en este endpoint: los pasos de DÍA COMPLETO que corren arriba
+            # (`_rebalance_day_macros_to_target` — docstring "Mutates meals", opera sobre TODOS
+            # los `new_meals` — su line-clamp/partial-rebalance, el relevel/trim de grasas, el
+            # truth-up renal `_rtu(new_meals, ...)`, el autofix de sodio) re-cuantizan los GRAMOS
+            # de ingredientes de un slot conservado igual que de uno regenerado. Un slot
+            # "conservado" que pasa de "60 g de avena" a "85 g de avena" dejaba su
+            # `_display["en-US"].ingredients[i]` diciendo "60 g" — la cantidad equivocada en el
+            # idioma del usuario mientras el español está bien, exactamente el modo de fallo que
+            # la regla de invalidación existe para hacer IMPOSIBLE. No hay optimización real que
+            # perder: `enrich_plan_display` retraduce el día ENTERO vía `day_indices=[day_index]`
+            # sin importar si algún meal ya tenía `_display[locale]` (`_collect_targets` no filtra
+            # por eso), así que preservar `_display` de los conservados no evitaba trabajo, solo
+            # dejaba una ventana de datos incorrectos. Pop AL FINAL del mutator (tras
+            # rebalance/refine/reconcile/rebuild de listas) — un pop justo tras `swap_meal()`/el
+            # loop no cubriría las re-cuantizaciones de DÍA COMPLETO que corren después.
+            for _nm_disp in new_meals:
+                if isinstance(_nm_disp, dict):
+                    _nm_disp.pop("_display", None)
 
             return pd
 
@@ -9327,17 +9400,22 @@ def api_regenerate_day(
 
         # [P1-PLAN-DISPLAY-I18N-MUTATOR-regenday] Despacho best-effort post-persist (FUERA del
         # lock): re-enriquecer `_display` del día regenerado si el locale del usuario aplica.
-        # SELECT dirigido (una columna) — mismo patrón barato que TRIGGER-2 (cron_tasks.py).
-        # Import vía la fachada `from db import ...` (P3-DB-IMPORTS-FACADE) — call site NUEVO.
+        # [Fix round 1 · F6] `_p1i18n_locale_rd_holder[0]` reusa el round-trip del retarget o
+        # del clinical-parity si alguno corrió (caso común, ambos knobs default ON) — SELECT
+        # dirigido de 1 columna (facade `from db import ...`, P3-DB-IMPORTS-FACADE) SOLO como
+        # fallback si ninguno de los dos corrió.
         try:
-            from db import execute_sql_query as _p1i18n_esq_rd
-            _p1i18n_row_rd = _p1i18n_esq_rd(
-                "SELECT locale FROM user_profiles WHERE id = %s",
-                (verified_user_id,),
-                fetch_one=True,
-            )
-            _p1i18n_locale_rd = (_p1i18n_row_rd or {}).get("locale")
-            if _p1i18n_locale_rd and _p1i18n_locale_rd != "es-DO":
+            _p1i18n_locale_rd = _p1i18n_locale_rd_holder[0]
+            if _p1i18n_locale_rd is None:
+                from db import execute_sql_query as _p1i18n_esq_rd
+                _p1i18n_row_rd = _p1i18n_esq_rd(
+                    "SELECT locale FROM user_profiles WHERE id = %s",
+                    (verified_user_id,),
+                    fetch_one=True,
+                )
+                _p1i18n_locale_rd = (_p1i18n_row_rd or {}).get("locale")
+            from plan_display_i18n import should_enrich_locale as _p1i18n_should_enrich_rd
+            if _p1i18n_should_enrich_rd(_p1i18n_locale_rd):
                 from plan_display_i18n import schedule_plan_display_enrichment
                 schedule_plan_display_enrichment(
                     plan_id, verified_user_id, _p1i18n_locale_rd, day_indices=[day_index]
