@@ -539,22 +539,26 @@ def test_locale_none_vacio_o_basura_retorna_cadena_vacia_fail_safe(basura):
 # ── F3. en-US ⇒ directiva + excepción de nombres + regla de tool calls ─────────────────────
 
 def test_en_us_contiene_directiva_excepcion_de_nombres_y_regla_tool_calls():
+    # [P1-COACH-LANGUAGE-NATIVE · 2026-08-18] La directiva ahora se escribe EN el idioma
+    # destino (round 2 del incidente en-US: la versión en español era la señal más débil
+    # posible y el modelo la desobedecía). Los anchors pasan a la redacción nativa; la
+    # frontera dura (nombres en español + tool calls canónicas) sigue anclada.
     r = chat_agent_prompts.build_language_directive("en-US")
-    assert "SIEMPRE en English" in r
-    assert "nombres de alimentos y platos" in r and "español" in r
-    assert "en las tool calls usa EXCLUSIVAMENTE los nombres canónicos en español" in r
+    assert "ENTIRE reply in English" in r
+    assert "Guiso de Habichuelas Negras" in r and "Spanish" in r
+    assert "canonical Spanish food names" in r
 
 
-@pytest.mark.parametrize("locale,idioma", [
-    ("pt-BR", "Português"),
-    ("fr-FR", "Français"),
-    ("it-IT", "Italiano"),
+@pytest.mark.parametrize("locale,frase_nativa,palabra_espanol", [
+    ("pt-BR", "TODA a sua resposta em Português", "espanhol"),
+    ("fr-FR", "TOUTE ta réponse en Français", "espagnol"),
+    ("it-IT", "TUTTA la tua risposta in Italiano", "spagnolo"),
 ])
-def test_los_otros_3_idiomas_contienen_su_propia_directiva(locale, idioma):
+def test_los_otros_3_idiomas_contienen_su_propia_directiva(locale, frase_nativa, palabra_espanol):
     r = chat_agent_prompts.build_language_directive(locale)
-    assert f"SIEMPRE en {idioma}" in r
-    assert "nombres de alimentos y platos" in r and "español" in r
-    assert "en las tool calls usa EXCLUSIVAMENTE los nombres canónicos en español" in r
+    assert frase_nativa in r, "la directiva debe estar escrita EN el idioma destino (nativa)"
+    assert palabra_espanol in r, "la excepción de nombres en español debe declararse en el idioma destino"
+    assert "Guiso de Habichuelas Negras" in r, "el ejemplo canónico ancla la frontera dura"
 
 
 # ── F4. Variante-cacheada (patrón T2-F1, _COUNTRY_PROMPT_RENDER_CACHE) ─────────────────────

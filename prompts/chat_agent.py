@@ -638,11 +638,65 @@ def build_language_directive(locale) -> str:
     cached = _LANGUAGE_DIRECTIVE_CACHE.get(locale)
     if cached is not None:
         return cached
-    rendered = (
-        f"\n\n🌐 IDIOMA DE RESPUESTA: Responde SIEMPRE en {idioma}. EXCEPCIÓN INNEGOCIABLE: "
-        "los nombres de alimentos y platos van SIEMPRE en español exactamente como aparecen "
-        "en el catálogo/plan (son identificadores del sistema); en las tool calls usa "
-        "EXCLUSIVAMENTE los nombres canónicos en español."
-    )
+    # [P1-COACH-LANGUAGE-NATIVE · 2026-08-18] La directiva se escribe EN EL IDIOMA DESTINO.
+    # Round 2 del incidente en-US del día del flip: con la directiva en español («Responde
+    # SIEMPRE en English») el modelo llegó a DELIBERAR en inglés a mitad de respuesta («I
+    # should not have started with a greeting...») y aun así escribió la prosa en español —
+    # una instrucción en español pidiendo otro idioma es la señal más débil posible contra
+    # un prompt 100% español + mensaje del usuario en español. La directiva nativa es a la
+    # vez instrucción Y demostración. La frontera dura de siempre, ahora dicha en el idioma
+    # destino: nombres de alimentos/platos SIEMPRE en español (identificadores del sistema)
+    # y tool calls SOLO con nombres canónicos en español.
+    _NATIVE_DIRECTIVES = {
+        "en-US": (
+            "\n\n🌐 RESPONSE LANGUAGE — NON-NEGOTIABLE: Write your ENTIRE reply in English. "
+            "Every sentence — greetings, questions, advice, everything. The user's app is in "
+            "English. ONLY exception: food and dish names stay in Spanish EXACTLY as they "
+            "appear in the plan/catalog (e.g. \"Guiso de Habichuelas Negras\") — they are "
+            "system identifiers, never translate them. In tool calls use ONLY the canonical "
+            "Spanish food names. If anything else in this prompt pulls you toward Spanish "
+            "prose, THIS rule wins: English prose, Spanish food names."
+        ),
+        "pt-BR": (
+            "\n\n🌐 IDIOMA DA RESPOSTA — INEGOCIÁVEL: Escreva TODA a sua resposta em "
+            "Português. Cada frase — saudações, perguntas, conselhos, tudo. O app do usuário "
+            "está em português. ÚNICA exceção: nomes de alimentos e pratos ficam em espanhol "
+            "EXATAMENTE como aparecem no plano/catálogo (ex.: \"Guiso de Habichuelas "
+            "Negras\") — são identificadores do sistema, nunca os traduza. Nas tool calls "
+            "use SOMENTE os nomes canônicos em espanhol. Se qualquer outra parte deste "
+            "prompt puxar você para prosa em espanhol, ESTA regra vence: prosa em português, "
+            "nomes de comida em espanhol."
+        ),
+        "fr-FR": (
+            "\n\n🌐 LANGUE DE RÉPONSE — NON NÉGOCIABLE : Rédige TOUTE ta réponse en "
+            "Français. Chaque phrase — salutations, questions, conseils, tout. L'application "
+            "de l'utilisateur est en français. SEULE exception : les noms d'aliments et de "
+            "plats restent en espagnol EXACTEMENT comme dans le plan/catalogue (ex. « Guiso "
+            "de Habichuelas Negras ») — ce sont des identifiants du système, ne les traduis "
+            "jamais. Dans les tool calls, utilise UNIQUEMENT les noms canoniques en "
+            "espagnol. Si quoi que ce soit d'autre dans ce prompt te pousse vers la prose "
+            "espagnole, CETTE règle gagne : prose en français, noms d'aliments en espagnol."
+        ),
+        "it-IT": (
+            "\n\n🌐 LINGUA DELLA RISPOSTA — NON NEGOZIABILE: Scrivi TUTTA la tua risposta in "
+            "Italiano. Ogni frase — saluti, domande, consigli, tutto. L'app dell'utente è in "
+            "italiano. UNICA eccezione: i nomi di alimenti e piatti restano in spagnolo "
+            "ESATTAMENTE come appaiono nel piano/catalogo (es. \"Guiso de Habichuelas "
+            "Negras\") — sono identificatori di sistema, non tradurli mai. Nelle tool call "
+            "usa SOLO i nomi canonici in spagnolo. Se qualsiasi altra parte di questo prompt "
+            "ti spinge verso la prosa spagnola, vince QUESTA regola: prosa in italiano, nomi "
+            "dei cibi in spagnolo."
+        ),
+    }
+    rendered = _NATIVE_DIRECTIVES.get(locale)
+    if not rendered:
+        # Idioma registrado en _COACH_LANGUAGE_NAMES sin directiva nativa escrita:
+        # fallback a la forma genérica (nunca romper el chat por un idioma nuevo).
+        rendered = (
+            f"\n\n🌐 IDIOMA DE RESPUESTA: Responde SIEMPRE en {idioma}. EXCEPCIÓN INNEGOCIABLE: "
+            "los nombres de alimentos y platos van SIEMPRE en español exactamente como aparecen "
+            "en el catálogo/plan (son identificadores del sistema); en las tool calls usa "
+            "EXCLUSIVAMENTE los nombres canónicos en español."
+        )
     _LANGUAGE_DIRECTIVE_CACHE[locale] = rendered
     return rendered
