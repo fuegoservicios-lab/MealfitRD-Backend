@@ -125,7 +125,21 @@ def test_db_coverage_and_atwater_consistency():
         # los genéricos 4/4/9—. Exigirle ±2 sería obligar a falsear la kcal real para
         # que cuadre con una fórmula aproximada. Cae a la banda de sanidad como el
         # resto de la data real (270/262 = 1,03, muy dentro de [0,40, 1,40]).
-        script_names -= {"Semillas de chía", "Tortilla integral", "Pan de agua"}
+        # [2026-08-19] `Habichuelas blancas` entra por la MISMA razón, y llegó por una
+        # vía nueva: P1-CATALOGO-SINONIMOS sincronizó los pares de sinónimos del
+        # catálogo, y esta fila adoptó la kcal REAL de `Judías blancas` (333, la que
+        # USDA publica para *Beans, white, mature seeds, raw* y que su fdc 175202
+        # verifica al decimal) en lugar de los 342,4 que el script había COMPUTADO por
+        # Atwater. La divergencia es la normal de una legumbre: ~15 g de fibra que los
+        # factores 4/4/9 genéricos no descuentan.
+        #
+        # Exigirle ±2 aquí obligaría a elegir entre dos males: falsear la kcal real, o
+        # dejar que el mismo alimento tenga números distintos según se llame
+        # «habichuelas» (RD) o «judías» (ES) — que es justo el defecto que la
+        # sincronización vino a cerrar. 333/342,4 = 0,97, cómodamente dentro de la
+        # banda de sanidad.
+        script_names -= {"Semillas de chía", "Tortilla integral", "Pan de agua",
+                         "Habichuelas blancas"}
         bad_strict, bad_sanity = [], []
         for name, k, p, c, f in cur.fetchall():
             atwater = 4 * float(p) + 4 * float(c) + 9 * float(f)
