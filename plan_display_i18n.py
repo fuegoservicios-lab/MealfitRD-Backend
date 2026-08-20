@@ -285,6 +285,44 @@ def _fetch_plan_data(plan_id: str, user_id: str) -> Optional[dict]:
     return pd
 
 
+def _fetch_plan_name_column(plan_id: str, user_id: str) -> Optional[str]:
+    """[P1-PLAN-TITLE-I18N · 2026-08-20] El nombre del plan vive en la COLUMNA
+    `meal_plans.name`, NO dentro de `plan_data`.
+
+    Fase 1c leia el titulo de `plan_data["name"]` y ese campo solo existe si el plan
+    fue RENOMBRADO alguna vez (`PATCH /api/plans/{id}/name` escribe la columna Y el
+    jsonb). Medido en produccion: `plan_data->>'name'` es NULL en los 8 planes vivos,
+    asi que `plan_name_pending` salia siempre None, al LLM nunca se le pedia
+    `plan_name` y el bloque que escribe `pd["_display"]` jamas se ejecutaba. La
+    funcionalidad estaba INERTE: el Historial en ingles seguia mostrando el titulo en
+    espanol mientras los meals SI se traducian (esos si tienen su `_display`).
+
+    Los tests no lo vieron porque sus fixtures traen `plan_data={"name": ...}` — una
+    forma que la base de datos no produce. Un fixture que no se parece a produccion
+    prueba el codigo contra un mundo que no existe.
+
+    SELECT propio (no ampliar `_fetch_plan_data`) para no cambiarle la firma: los
+    tests la monkeypatchean como seam y devolveria una tupla donde esperan un dict.
+    Es una query trivial por enriquecimiento, en hilo de fondo.
+
+    tooltip-anchor: I2 user_id filter (test_p1_plan_title_i18n.py).
+    """
+    try:
+        row = execute_sql_query(
+            "SELECT name FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, user_id),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[P1-PLAN-DISPLAY-I18N] SELECT name fallo plan={plan_id}: {e!r}")
+        return None
+    if not row:
+        return None
+    nombre = row.get("name")
+    return nombre if isinstance(nombre, str) and nombre.strip() else None
+
+
 def _normalize_day_indices(day_indices, days_len: int) -> list:
     """`None` -> todos los días del plan. Lista arbitraria -> dedup + sorted +
     solo enteros reales (nunca bool, que es subclase de int en Python)."""
@@ -936,11 +974,26 @@ def enrich_plan_display(
             # el intento por completo cuando ya hay una traducción vigente para este
             # locale (el rename manual la popea — ver `api_rename_plan` — así que un
             # rename real SÍ vuelve a disparar la traducción en el próximo enriquecimiento).
-            _plan_name_raw = plan_data.get("name")
+            # [P1-PLAN-TITLE-I18N · 2026-08-20] DOS valores distintos, y confundirlos
+            # era el bug: el TEXTO a traducir y el SNAPSHOT del guard TOCTOU.
+            #   - texto:    `plan_data["name"]` si existe (plan renombrado), y si no la
+            #               COLUMNA `meal_plans.name`, que es donde vive de verdad.
+            #   - snapshot: SIEMPRE el valor del jsonb, aunque sea None. El mutator
+            #               compara `pd.get("name")` contra el, y un rename concurrente
+            #               CREA ese campo -> None != "Nuevo" -> mismatch detectado. Pasar
+            #               ahi el texto de la columna romperia el guard al reves: None
+            #               nunca igualaria al titulo y no se escribiria jamas.
+            _plan_name_pd = plan_data.get("name")
+            _plan_name_snapshot_pd = _plan_name_pd if isinstance(_plan_name_pd, str) else None
+            _plan_name_texto = (
+                _plan_name_snapshot_pd
+                if _plan_name_snapshot_pd and _plan_name_snapshot_pd.strip()
+                else _fetch_plan_name_column(plan_id, user_id)
+            )
             plan_name_pending = (
-                _plan_name_raw
-                if isinstance(_plan_name_raw, str)
-                and _plan_name_raw.strip()
+                _plan_name_texto
+                if isinstance(_plan_name_texto, str)
+                and _plan_name_texto.strip()
                 and not _plan_name_already_translated(plan_data, locale)
                 else None
             )
@@ -997,7 +1050,9 @@ def enrich_plan_display(
                 _batch_plan_name_snapshot = None
                 _batch_plan_name_display = None
                 if plan_name_pending is not None:
-                    _batch_plan_name_snapshot = plan_name_pending
+                    # El snapshot es el valor del JSONB (puede ser None a proposito):
+                    # es lo que el mutator compara contra `pd.get("name")`.
+                    _batch_plan_name_snapshot = _plan_name_snapshot_pd
                     _batch_plan_name_display = _validate_plan_name(parsed.get("plan_name"))
                     plan_name_pending = None
 
