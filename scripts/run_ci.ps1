@@ -164,7 +164,42 @@ if (-not $SkipBackend) {
             )
 
             if ($workers -eq "1" -or $workers -eq "0" -or $workers -eq "serial") {
-                & $py -m pytest tests/ --tb=short -m "not e2e" -x
+                # [P1-CI-SERIE-INCONCLUSIVE - 2026-08-20] La misma distincion que la
+                # rama paralela, que hasta hoy solo vivia alli.
+                #
+                # Esto era un `pytest -x` pelado, asi que TODO exit != 0 se reportaba
+                # como "los tests FALLARON". El 2026-08-20 la suite murio por falta de
+                # memoria (3,7 GB libres de 15,7) y el gate dijo justo eso: mande a
+                # buscar un test roto que no existia y perdi una corrida de 20 minutos.
+                # Un veredicto que confunde "abortó" con "hay una regresion" no es solo
+                # ruido: dirige mal la investigacion.
+                #
+                # Solo el exit 1 significa "fallaron tests" (medido). 2 (interrumpido),
+                # 3 (error interno), 4 (uso) y 5 (nada coleccionado) son NO
+                # CONCLUYENTES. Aqui no hay a que caer -- la serie YA es el modo mas
+                # conservador -- asi que se reintenta una vez y, si insiste, se falla
+                # DICIENDO QUE ABORTO. Fallar sigue siendo lo correcto: nunca desplegar
+                # sin veredicto. Lo que cambia es que el operador sepa que buscar.
+                $serieExit = -1
+                $serieConcluyente = $false
+                foreach ($intento in 1, 2) {
+                    & $py -m pytest tests/ --tb=short -m "not e2e" -x | Tee-Object -Variable serieCap
+                    $serieExit = $LASTEXITCODE
+                    $serieTexto = ($serieCap | Out-String)
+                    $serieConcluyente = (($serieExit -eq 0) -or ($serieExit -eq 1)) -and ($serieTexto -notmatch "INTERNALERROR")
+                    if ($serieConcluyente) { break }
+                    Write-Host "    [gate] SERIE NO CONCLUYENTE (exit $serieExit) - intento $intento de 2" -ForegroundColor Yellow
+                }
+                if (-not $serieConcluyente) {
+                    throw ("pytest (serie) NO CONCLUYENTE tras 2 intentos (exit $serieExit): " +
+                           "la suite ABORTO, no fallaron tests. No busques una regresion todavia. " +
+                           "Causa tipica en esta maquina: memoria (la serie necesita ~2,5 GB; " +
+                           "con el editor y el navegador abiertos quedan ~3,7 GB de 15,7). " +
+                           "Cierra aplicaciones y reintenta.")
+                }
+                if ($serieExit -ne 0) {
+                    throw "pytest (serie) fallo (exit $serieExit) - regresion real"
+                }
             } else {
                 # FASE A - bulk paralelo SIN -x: 47 archivos de la suite stubbean
                 # sys.modules (patron estructural), asi que bajo xdist CUALQUIER test

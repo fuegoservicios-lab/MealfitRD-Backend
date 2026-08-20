@@ -147,3 +147,57 @@ def test_documenta_la_medicion_que_lo_destapo():
     s = _sql()
     assert "DESELECCIONA TODO y sale 0" in s
     assert "3 para \"error interno\"" in s or "3 (interno)" in s
+
+
+# ─────────── la rama SERIE: la misma distincion, que solo vivia en la paralela ───────────
+#
+# [P1-CI-SERIE-INCONCLUSIVE · 2026-08-20] `MEALFIT_CI_PYTEST_WORKERS=1` era un
+# `pytest -x` pelado: TODO exit != 0 se reportaba como «los tests FALLARON».
+#
+# El 2026-08-20 la suite murio por falta de memoria (3,7 GB libres de 15,7) y el gate
+# dijo exactamente eso. Sali a buscar un test roto que no existia y perdi una corrida
+# de 20 minutos. Un veredicto que confunde «aborto» con «hay una regresion» no es solo
+# ruido: DIRIGE MAL la investigacion, que es peor que no decir nada.
+#
+# Aqui no hay a que caer —la serie ya es el modo mas conservador—, asi que se reintenta
+# una vez y, si insiste, se falla DICIENDO QUE ABORTO. Fallar sigue siendo lo correcto:
+# nunca desplegar sin veredicto. Lo que cambia es que el operador sepa que buscar.
+#
+# Ejercitado con un python de pega contra el `run_ci.ps1` REAL. El codigo anterior, en
+# los mismos 4 escenarios, no distinguia ninguno (motivo vacio) y ademas tumbaba el
+# deploy ante un aborto TRANSITORIO, sin reintentar.
+
+def test_la_serie_tambien_discrimina_por_codigo_de_salida():
+    s = _sql()
+    assert re.search(r"\$serieConcluyente\s*=\s*\(\(\$serieExit -eq 0\)\s*-or\s*\(\$serieExit -eq 1\)\)", s), (
+        "la rama serie volvio a tratar cualquier exit != 0 como «fallaron tests»")
+    assert re.search(r"foreach \(\$intento in 1, 2\)[\s\S]{0,600}\$serieExit", s), (
+        "falta el reintento en la rama serie: un aborto transitorio tumba el deploy")
+
+
+def test_el_mensaje_de_aborto_no_dice_que_fallaron_tests():
+    """Lo que se arregla NO es el veredicto (abortar debe fallar el gate igual), es el
+    DIAGNOSTICO. Si el texto vuelve a hablar de tests fallando, el operador vuelve a
+    buscar una regresion que no existe."""
+    s = _sql()
+    m = re.search(r'throw \("pytest \(serie\) NO CONCLUYENTE[\s\S]{0,600}?\)\n', s)
+    assert m, "falta el throw especifico del aborto en la rama serie"
+    mensaje = m.group(0)
+    assert "ABORTO, no fallaron tests" in mensaje
+    assert "No busques una regresion todavia" in mensaje
+    assert "memoria" in mensaje, "sin la pista de la causa tipica el mensaje no orienta"
+
+
+def test_una_regresion_real_en_serie_se_llama_por_su_nombre():
+    s = _sql()
+    assert 'throw "pytest (serie) fallo (exit $serieExit) - regresion real"' in s
+
+
+def test_las_dos_ramas_usan_el_mismo_criterio():
+    """Si una rama discrimina y la otra no, el gate miente segun el modo en que corras
+    —que es justo lo que paso entre el 19 y el 20 de agosto—."""
+    s = _sql()
+    assert s.count("-eq 0) -or (") >= 2, (
+        "solo una de las dos ramas discrimina por codigo de salida")
+    assert s.count("INTERNALERROR") >= 2, (
+        "el cinturon por texto falta en una de las dos ramas")
