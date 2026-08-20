@@ -1,7 +1,7 @@
 {
   "mode": "country",
   "country": "ES",
-  "generated_at": "2026-08-17T12:44:03.974215+00:00",
+  "generated_at": "2026-08-19T23:33:46.060066+00:00",
   "semantic_tier_active": true,
   "cohere_api_key_present": true,
   "fuzzy_threshold": 0.87,
@@ -168,7 +168,7 @@
     {
       "food": "Queso de cabra",
       "verdict": "RESUELVE-BIEN",
-      "matched": "Chivo",
+      "matched": "Queso blanco",
       "tier": "synonym",
       "score": null,
       "semantic_tier_status": "checked"
