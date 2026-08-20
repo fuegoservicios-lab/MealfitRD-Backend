@@ -90,68 +90,63 @@ _PROMPT_BASE = """Eres el asistente de ayuda oficial de Bioboros (bioboros.com),
 
 # [P1-HELP-BOT-I18N · 2026-08-20] El bot respondia SIEMPRE en espanol.
 #
-# Reportado con captura: la interfaz del widget ya en ingles --titulo, saludo,
-# marcador del campo-- y el bot contestando "¡Hola! ¿Que tal?" a un "hello". El
-# modelo no se equivocaba: la regla 5 de este prompt le ORDENABA responder en
-# espanol dominicano, y nadie le decia en que idioma esta el usuario.
+# Reportado con captura: el widget ya en ingles --titulo, saludo, marcador del campo--
+# y el bot contestando "¡Hola! ¿Que tal?" a un "hello". El modelo no se equivocaba: la
+# regla 5 le ORDENABA responder en espanol dominicano y nadie le decia en que idioma
+# esta el usuario.
 #
-# ESTO NO CONTRADICE «el contenido no se traduce». Esa regla (P1-I18N-DASHBOARD)
-# cubre el plan, las recetas y el coach, que el LLM escribe en espanol porque los
-# nombres de alimento son IDENTIFICADORES del motor. Este bot es SOPORTE sobre la
-# app: no genera contenido nutricional, no toca la DB y no resuelve nada por
-# cadena. Contestar en un idioma que el usuario no eligio es, sin mas, no
-# atenderle.
+# LA DIRECTIVA NO SE ESCRIBE AQUI: se reusa `build_language_directive`, el SSOT que ya
+# usan las dos copias del coach y el agente proactivo. La primera version de este P-fix
+# se escribio una tabla de idiomas propia --el antipatron que este repo lleva repitiendo
+# (P1-DIET-CANON-SSOT, canonicalize_country)-- y lo destapo el test F9 de
+# P1-COUNTRY-SYSTEM-F2 al ponerse rojo.
 #
-# SOLO SE TRADUCE LA REGLA 5. El resto del prompt --precios, cuotas, correo de
-# soporte, reglas anti-injection-- se queda en espanol a proposito: son datos
-# verificables contra el repo y traducirlos cuatro veces es abrir cuatro sitios
-# donde el precio puede divergir. Un modelo lee instrucciones en un idioma y
-# responde en otro sin problema; lo que no perdona es una cifra desincronizada.
-_REGLA_IDIOMA = {
-    "es-DO": (
-        "Responde en español dominicano cercano y profesional, breve (2 a 6 oraciones); "
-        "usa viñetas solo si de verdad ayudan."
-    ),
-    "en-US": (
-        "Reply in English — warm, professional and brief (2 to 6 sentences); use bullets "
-        "only when they genuinely help. These instructions are written in Spanish, but "
-        "your answer must be in English."
-    ),
-    "pt-BR": (
-        "Responda em português do Brasil — acolhedor, profissional e breve (2 a 6 frases); "
-        "use marcadores só quando ajudarem de verdade. Estas instruções estão em espanhol, "
-        "mas sua resposta deve ser em português."
-    ),
-    "fr-FR": (
-        "Réponds en français — chaleureux, professionnel et bref (2 à 6 phrases) ; "
-        "n'utilise des puces que si elles aident vraiment. Ces instructions sont en "
-        "espagnol, mais ta réponse doit être en français."
-    ),
-    "it-IT": (
-        "Rispondi in italiano — cordiale, professionale e breve (2-6 frasi); usa gli "
-        "elenchi puntati solo se aiutano davvero. Queste istruzioni sono in spagnolo, ma "
-        "la tua risposta deve essere in italiano."
-    ),
-}
+# Y esa tabla propia habria sido peor que redundante. `P1-COACH-LANGUAGE-NATIVE`
+# (2026-08-18) compro caro que la directiva debe ir EN EL IDIOMA DESTINO: con una
+# instruccion en espanol pidiendo ingles, el modelo llego a DELIBERAR en ingles a mitad
+# de respuesta y aun asi escribio la prosa en espanol. Una instruccion en espanol
+# pidiendo otro idioma es la senal mas debil posible contra un prompt 100% espanol. El
+# SSOT ya lo resuelve, ya esta cacheado por variante y ya sobrevivio a ese incidente.
+#
+# POR QUE ESTO NO CRUZA LA FRONTERA DE F2. Lo que aquel P-fix prohibe es threadear
+# `locale` hasta `build_tools_instructions`: las TOOL CALLS deben quedarse en espanol
+# canonico siempre, porque sus cadenas son identificadores. Este bot no tiene tools --ni
+# DB, ni user_id-- y su salida es prosa de soporte que no resuelve nada. Es el mismo
+# criterio que separa traducir la dificultad de una receta de NO traducir el nombre de
+# un alimento: no es "lo que escribe el LLM", es "lo que el motor usa como
+# IDENTIFICADOR".
+#
+# El test F9 declaraba el bot fuera de alcance porque "no hay `locale` que leer". Era
+# cierto: el widget no lo enviaba. Dejo de serlo el dia que empezo a enviarlo.
 
-#: Idioma por defecto y fallback de TODO valor desconocido.
-HELP_BOT_DEFAULT_LOCALE = "es-DO"
+from prompts.chat_agent import build_language_directive  # noqa: E402  (modulo liviano: solo datetime/typing)
 
-#: Los locales que el bot sabe hablar. Misma lista que `src/i18n/locales.js`.
-HELP_BOT_SUPPORTED_LOCALES = tuple(_REGLA_IDIOMA)
+#: Tono y extension, SIN idioma. Se usa cuando hay directiva: si la regla 5 siguiera
+#: diciendo "responde en espanol dominicano", el prompt se contradiria a si mismo.
+_REGLA_TONO = (
+    "Responde cercano y profesional, breve (2 a 6 oraciones); usa viñetas solo si de "
+    "verdad ayudan."
+)
+
+#: La regla original, con el idioma dentro. Es la que ve es-DO -- y por eso su prompt
+#: queda BYTE-IDENTICO al de antes del P-fix.
+_REGLA_TONO_ES = (
+    "Responde en español dominicano cercano y profesional, breve (2 a 6 oraciones); "
+    "usa viñetas solo si de verdad ayudan."
+)
 
 
 def help_bot_system_prompt(locale=None) -> str:
-    """Prompt del bot con la regla de idioma del `locale` pedido.
+    """Prompt del bot con la directiva de idioma del `locale` pedido.
 
-    El `locale` llega del CLIENTE, asi que no se interpola: solo SELECCIONA de un
-    mapa fijo. Un valor desconocido (o basura, o `None`) cae a es-DO -- no hay
-    superficie de inyeccion porque el texto nunca sale del cliente.
+    `locale` llega del CLIENTE y NO se interpola en el prompt: solo se le pasa al SSOT,
+    que devuelve "" ante cualquier valor no reconocido (fail-safe silencioso). Sin
+    directiva, el prompt es exactamente el de es-DO de siempre.
     """
-    clave = locale if isinstance(locale, str) else ""
-    regla = _REGLA_IDIOMA.get(clave) or _REGLA_IDIOMA[HELP_BOT_DEFAULT_LOCALE]
-    return _PROMPT_BASE.replace("{regla_idioma}", regla)
+    directiva = build_language_directive(locale)
+    regla = _REGLA_TONO if directiva else _REGLA_TONO_ES
+    return _PROMPT_BASE.replace("{regla_idioma}", regla) + directiva
 
 
 #: Compatibilidad: el prompt en es-DO, byte-identico al de antes del P-fix.
-HELP_BOT_SYSTEM_PROMPT = help_bot_system_prompt(HELP_BOT_DEFAULT_LOCALE)
+HELP_BOT_SYSTEM_PROMPT = help_bot_system_prompt("es-DO")

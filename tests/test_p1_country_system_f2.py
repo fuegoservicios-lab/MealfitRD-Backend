@@ -687,12 +687,46 @@ def test_build_tools_instructions_no_gana_parametro_locale():
 # ── F9. help_bot (marketing/producto) — FUERA de alcance, documentado ──────────────────────
 
 def test_help_bot_no_gana_la_directiva_de_idioma():
-    """`prompts/help_bot.py` es el Q&A de producto público de "Obtener ayuda": cero tools,
-    cero DB, cero user_id en el prompt (su propio docstring lo declara). No hay `locale` que
-    leer — la directiva NO debe importarse ni mencionarse ahí."""
+    """[P1-HELP-BOT-I18N · 2026-08-20] LA PREMISA DE ESTE TEST CAMBIÓ, y conviene leer por
+    qué antes de tocarlo otra vez.
+
+    Decía: «cero tools, cero DB, cero user_id en el prompt. No hay `locale` que leer — la
+    directiva NO debe importarse ni mencionarse ahí». Era cierto: el widget no enviaba
+    `locale`. Dejó de serlo el día que empezó a enviarlo, porque el bot respondía en
+    español a un usuario con la app en inglés.
+
+    LO QUE NO CAMBIA, que es la frontera dura de F2: `build_tools_instructions` sigue sin
+    `locale`. Las TOOL CALLS se quedan en español canónico SIEMPRE porque sus cadenas son
+    IDENTIFICADORES del motor. Este bot no tiene tools, ni DB, ni user_id — su salida es
+    prosa de soporte y no resuelve nada por cadena. Mismo criterio que separa traducir la
+    dificultad de una receta de NO traducir el nombre de un alimento.
+
+    LO QUE ESTE TEST PROTEGE AHORA: que el bot REUSE el SSOT en vez de escribirse su propia
+    tabla de idiomas. La primera versión del P-fix hizo exactamente eso --el antipatrón que
+    el repo lleva repitiendo-- y fue este test, al ponerse rojo, quien lo destapó. Además
+    del SSOT: `P1-COACH-LANGUAGE-NATIVE` compró caro que la directiva va EN EL IDIOMA
+    DESTINO; una tabla propia se lo habría saltado.
+    """
     src = _read(_HELP_BOT_PY)
-    assert "build_language_directive" not in src
-    assert "locale" not in src
+    # Reusa el SSOT, no una tabla propia.
+    assert "from prompts.chat_agent import build_language_directive" in src
+    assert "_COACH_LANGUAGE_NAMES" not in src, "el bot se copió el mapa de idiomas"
+    assert not re.search(r"^_REGLA_IDIOMA\s*=", src, re.M), "volvió la tabla de idiomas propia"
+    # El locale se PASA al SSOT, nunca se interpola en el prompt.
+    assert "build_language_directive(locale)" in src
+    # Y el bot sigue sin lo que lo mantendria dentro de la frontera dura. Se comprueba
+    # sobre los IMPORTS --codigo-- y no por subcadena: la primera version prohibia la
+    # cadena "user_id" y fallaba contra el DOCSTRING del propio modulo, que dice
+    # literalmente «NO recibe user_id». Un guard que la prosa puede disparar acaba
+    # obligando a no documentar, que es peor que el guard.
+    imports = [l for l in src.splitlines() if re.match(r"^\s*(import|from)\s", l)]
+    # El unico import de `prompts.*` permitido es el SSOT de la directiva; se descuenta
+    # antes de buscar lo prohibido para que su propio nombre no dispare el guard.
+    unidos = "\n".join(imports).replace(
+        "from prompts.chat_agent import build_language_directive", "")
+    for prohibido in ("db", "tools", "agent", "sqlalchemy", "psycopg", "fastapi"):
+        assert not re.search(rf"\b{prohibido}\b", unidos), (
+            f"el bot de ayuda importa `{prohibido}`: dejaria de ser Q&A puro sin DB ni tools")
 
 
 # ── F10. proactive_agent — notificaciones LLM user-facing (Addendum §2, "las notificaciones") ─
@@ -2057,11 +2091,49 @@ def test_32_altas_es_existen_en_catalogo_vivo_sin_precio_con_fdc_id():
                   if float(r["price_per_lb"] or 0) > 0 or float(r["price_per_unit"] or 0) > 0]
     assert not con_precio, f"altas T5 con precio RD (deberían estar en 0): {con_precio}"
 
-    sin_fdc = [n for n, r in por_nombre.items() if not r.get("fdc_id")]
-    assert not sin_fdc, f"altas T5 sin fdc_id (fuente no auditable): {sin_fdc}"
+    # [P1-BEDCA-DEPROXY-ES + P1-PROVENANCE-TRUTHFUL · 2026-08-19] Once altas espanolas
+    # DEJARON de tener `fdc_id`, y fue a proposito: el que tenian era PRESTADO de otro
+    # alimento de USDA. Un `fdc_id` es una AFIRMACION sobre la procedencia, no una nota
+    # al pie -- Sobrasada declaraba 296 kcal con el id de un embutido que no era, y son
+    # 595. Se sustituyo por la fuente real (BEDCA) con `nutrition_source_ref`.
+    #
+    # Este test exigia `fdc_id` a TODAS, asi que la correccion lo puso rojo. Se re-expresa
+    # con el MISMO patron que T6 ya usaba --enumerar las excepciones y fijar el conjunto
+    # con igualdad exacta-- en vez de relajar la regla: una fila nueva no puede perder su
+    # `fdc_id` en silencio, tendria que anadirse aqui.
+    #
+    # Y es MAS estricto que antes para esas once: se les exige procedencia auditable de
+    # verdad (fuente reconocida + `nutrition_source_ref`), no un id que era mentira.
+    _ES_SIN_USDA = {
+        "Jamón ibérico", "Chistorra", "Chorizo español", "Jamón serrano", "Morcilla",
+        "Panceta ibérica", "Sobrasada", "Lomo embuchado", "Requesón", "Butifarra",
+        "Boquerones",
+    }
+    excepciones = {n for n in por_nombre if n in _ES_SIN_USDA}
+    assert excepciones == _ES_SIN_USDA, (
+        f"el conjunto de altas ES sin fdc_id cambio: esperaba {sorted(_ES_SIN_USDA)}, "
+        f"hay {sorted(excepciones)}")
 
-    no_usda = [n for n, r in por_nombre.items() if r.get("nutrition_source") != "usda"]
-    assert not no_usda, f"altas T5 con nutrition_source != 'usda': {no_usda}"
+    con_usda = {n: r for n, r in por_nombre.items() if n not in _ES_SIN_USDA}
+    sin_fdc = [n for n, r in con_usda.items() if not r.get("fdc_id")]
+    assert not sin_fdc, f"altas T5 (no-excepcion) sin fdc_id (fuente no auditable): {sin_fdc}"
+
+    no_usda = [n for n, r in con_usda.items() if r.get("nutrition_source") != "usda"]
+    assert not no_usda, f"altas T5 (no-excepcion) con nutrition_source != 'usda': {no_usda}"
+
+    # Las once no quedan sin auditar: fuente reconocida y referencia explicita.
+    refs = execute_sql_query(
+        "SELECT name, nutrition_source, nutrition_source_ref FROM master_ingredients "
+        "WHERE name = ANY(%s)",
+        (sorted(_ES_SIN_USDA),),
+        fetch_all=True,
+    ) or []
+    for r in refs:
+        assert r["nutrition_source"] in ("bedca", "manual"), (
+            f"{r['name']}: fuente {r['nutrition_source']!r} no reconocida")
+        assert (r["nutrition_source_ref"] or "").strip(), (
+            f"{r['name']}: sin `nutrition_source_ref` -- se quito el fdc_id sin poner "
+            f"nada en su lugar, que es peor que el id prestado")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -2603,8 +2675,28 @@ def test_46_altas_t6_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
     # ver docstring de add_foods_mx_co_2026_08_17.py. Las otras 43 SÍ exigen fdc_id + 'usda'.
     _MANUAL = {"Achiote", "Flor de Jamaica", "Hoja santa"}
     con_usda = {n: r for n, r in por_nombre.items() if n not in _MANUAL}
+    # [P1-LATINFOODS-TCAC + P1-PROVENANCE-TRUTHFUL · 2026-08-19] Estas filas DEJARON de
+    # tener `fdc_id`, y fue a proposito: el que tenian era PRESTADO de otro alimento de
+    # USDA. Chontaduro vivia sobre *Breadfruit* --103 kcal declaradas frente a 332
+    # reales, con 25,7 g de grasa contra 0,23-- y Suero costeno sobre *Sour cream*: el
+    # error era de CATEGORIA, no de magnitud. Un `fdc_id` es una AFIRMACION sobre la
+    # procedencia; se sustituyo por la fuente real o por un proxy DECLARADO como tal.
+    #
+    # Se enumeran en vez de relajar la regla: una fila nueva no puede perder su fdc_id
+    # en silencio, tendria que anadirse a esta lista.
+    _SIN_USDA_T6 = {
+        "Champús", "Chorizo santarrosano", "Chontaduro", "Chorizo verde", "Xoconostle",
+        "Curuba", "Suero costeño", "Chile guajillo", "Chile mulato", "Chile chipotle",
+        "Borojó", "Cecina",
+    }
+    presentes = {n for n in con_usda if n in _SIN_USDA_T6}
+    assert presentes == _SIN_USDA_T6, (
+        f"el conjunto T6 sin fdc_id cambio: esperaba {sorted(_SIN_USDA_T6)}, "
+        f"hay {sorted(presentes)}")
+    con_usda = {n: r for n, r in con_usda.items() if n not in _SIN_USDA_T6}
+
     sin_fdc = [n for n, r in con_usda.items() if not r.get("fdc_id")]
-    assert not sin_fdc, f"altas T6 (no-manual) sin fdc_id: {sin_fdc}"
+    assert not sin_fdc, f"altas T6 (no-manual, no-excepcion) sin fdc_id: {sin_fdc}"
     no_usda = [n for n, r in con_usda.items() if r.get("nutrition_source") != "usda"]
     assert not no_usda, f"altas T6 (no-manual) con nutrition_source != 'usda': {no_usda}"
 
@@ -3161,8 +3253,24 @@ def test_62_altas_t7_existen_en_catalogo_vivo_sin_precio_con_fdc_id_o_manual():
     _MANUAL = {"Recao", "Adobo", "Alcaparrado", "Pique", "Salsa de salchicha",
                "Ensalada de macarrones", "Huevos rellenos", "Carne molida mixta"}
     con_usda = {n: r for n, r in por_nombre.items() if n not in _MANUAL}
+    # [P1-LATINFOODS-TCAC + P1-PROVENANCE-TRUTHFUL · 2026-08-19] Estas filas DEJARON de
+    # tener `fdc_id`, y fue a proposito: el que tenian era PRESTADO de otro alimento de
+    # USDA. Chontaduro vivia sobre *Breadfruit* --103 kcal declaradas frente a 332
+    # reales, con 25,7 g de grasa contra 0,23-- y Suero costeno sobre *Sour cream*: el
+    # error era de CATEGORIA, no de magnitud. Un `fdc_id` es una AFIRMACION sobre la
+    # procedencia; se sustituyo por la fuente real o por un proxy DECLARADO como tal.
+    #
+    # Se enumeran en vez de relajar la regla: una fila nueva no puede perder su fdc_id
+    # en silencio, tendria que anadirse a esta lista.
+    _SIN_USDA_T7 = {"Especias para arroz con dulce", "Longaniza puertorriqueña"}
+    presentes = {n for n in con_usda if n in _SIN_USDA_T7}
+    assert presentes == _SIN_USDA_T7, (
+        f"el conjunto T7 sin fdc_id cambio: esperaba {sorted(_SIN_USDA_T7)}, "
+        f"hay {sorted(presentes)}")
+    con_usda = {n: r for n, r in con_usda.items() if n not in _SIN_USDA_T7}
+
     sin_fdc = [n for n, r in con_usda.items() if not r.get("fdc_id")]
-    assert not sin_fdc, f"altas T7 (no-manual) sin fdc_id: {sin_fdc}"
+    assert not sin_fdc, f"altas T7 (no-manual, no-excepcion) sin fdc_id: {sin_fdc}"
     no_usda = [n for n, r in con_usda.items() if r.get("nutrition_source") != "usda"]
     assert not no_usda, f"altas T7 (no-manual) con nutrition_source != 'usda': {no_usda}"
 
@@ -3471,10 +3579,18 @@ def test_canonicalize_shopping_food_name_sweep_346_filas_cero_altas_pais_trece_p
         f"(CRITICAL #2 regresó): {overridden_country}"
     )
 
+    # [P1-CATALOG-ORDER-DETERMINISTIC · 2026-08-19] +Mero y +Tilapia. La resolucion del
+    # catalogo dependia del ORDEN FISICO de las filas (SELECT sin ORDER BY + sort estable
+    # + first-hit: los empates de longitud los decidia el heap), y el fill de 347 UPDATEs
+    # de la auditoria de procedencia reescribio ese heap. El fix --ORDER BY name + sort
+    # por (-longitud, alias) + best-match-- hizo que estos dos resolvieran a SI MISMOS en
+    # vez de a "Filete de pescado blanco", que es la mejora que se acepto al regenerar el
+    # baseline C3. Se anaden EXPLICITAMENTE, como pide el mensaje de este assert.
     esperadas_preexistentes = {
-        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana", "Nueces mixtas",
-        "Orégano dominicano", "Plátano maduro", "Plátano verde", "Queso cheddar",
-        "Queso mozzarella", "Queso parmesano", "Tofu firme", "Yema de huevo",
+        "Cebolla en polvo", "Clara de huevo", "Guineo verde", "Lechuga romana", "Mero",
+        "Nueces mixtas", "Orégano dominicano", "Plátano maduro", "Plátano verde",
+        "Queso cheddar", "Queso mozzarella", "Queso parmesano", "Tilapia", "Tofu firme",
+        "Yema de huevo",
     }
     assert overridden_preexisting == esperadas_preexistentes, (
         f"el set de filas PRE-EXISTENTES sobreescritas por el chain cambió -- nuevas: "
