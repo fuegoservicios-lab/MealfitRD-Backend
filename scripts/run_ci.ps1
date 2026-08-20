@@ -175,9 +175,47 @@ if (-not $SkipBackend) {
                 # verdad que el gate serie historico; un fallo real falla en ambos).
                 $ignoreArgs = @()
                 foreach ($f in $quarantineFiles + $quarantineTests) { $ignoreArgs += "--ignore"; $ignoreArgs += $f }
-                & $py -m pytest tests/ --tb=short -m "not e2e" -q `
-                    -n $workers --dist loadfile --max-worker-restart=4 @ignoreArgs
-                $bulkExit = $LASTEXITCODE
+
+                # [P1-CI-GATE-INCONCLUSIVE - 2026-08-19] El diseno de 3 fases trataba
+                # "exit != 0" como "el bulk enumero fallos". No siempre: xdist aborta
+                # con INTERNALERROR (KeyError: <WorkerController gw0>, visto 3 veces el
+                # 2026-08-19) y ahi la sesion NO termina, asi que cacheprovider no
+                # escribe el cache y `--lf` se queda VACIO o RANCIO.
+                #
+                # Medido, no supuesto: con el cache vacio,
+                #   pytest --lf --last-failed-no-failures none
+                # DESELECCIONA TODO y sale 0. O sea que la fase C daba verde sin
+                # ejecutar un solo test, y el gate del deploy reportaba PASS habiendo
+                # abortado la suite. Un falso verde en la puerta de produccion es peor
+                # que el ruido que este bloque venia a evitar.
+                #
+                # La senal limpia es el CODIGO DE SALIDA, y tampoco hacia falta
+                # adivinarlo: pytest usa 1 para "hubo fallos" y 3 para "error interno"
+                # (medido). Solo el 1 deja una lista de fallos en la que confiar; 2
+                # (interrumpido), 3 (interno), 4 (uso) y 5 (nada coleccionado) son
+                # veredictos NO CONCLUYENTES. El texto INTERNALERROR se comprueba
+                # ademas por si una version futura saliera con 1 tras abortar.
+                #
+                # No concluyente => un reintento (el aborto suele ser transitorio) y,
+                # si vuelve a abortar, SERIE COMPLETA. Nunca un pase. El caso
+                # patologico cuesta tiempo; un deploy verde sin suite cuesta produccion.
+                # Se captura a VARIABLE y no a fichero: `Tee-Object -FilePath` sobre una
+                # ruta fija de %TEMP% se choco consigo mismo ("el proceso no puede acceder
+                # al archivo"), y una ruta compartida entre corridas es una clase de bug
+                # gratuita en un gate. `-Variable` sigue mostrando la salida en vivo -- que
+                # es el motivo de usar Tee y no una redireccion -- y preserva $LASTEXITCODE.
+                $bulkExit = -1
+                $bulkConcluyente = $false
+                foreach ($intento in 1, 2) {
+                    & $py -m pytest tests/ --tb=short -m "not e2e" -q `
+                        -n $workers --dist loadfile --max-worker-restart=4 @ignoreArgs |
+                        Tee-Object -Variable bulkCap
+                    $bulkExit = $LASTEXITCODE
+                    $bulkTexto = ($bulkCap | Out-String)
+                    $bulkConcluyente = (($bulkExit -eq 0) -or ($bulkExit -eq 1)) -and ($bulkTexto -notmatch "INTERNALERROR")
+                    if ($bulkConcluyente) { break }
+                    Write-Host "    [gate] FASE A NO CONCLUYENTE (exit $bulkExit) - intento $intento de 2" -ForegroundColor Yellow
+                }
 
                 # FASE B - cuarentena en serie (los 3 archivos que matan workers +
                 # los paralelo-hostiles conocidos). -x: aqui un fallo es real.
@@ -188,11 +226,28 @@ if (-not $SkipBackend) {
                 # OJO: va DESPUES de la fase B en codigo pero usa el cache --lf de la
                 # fase A... y la fase B ya lo piso. Por eso el orden real es: correr
                 # B con -p no:cacheprovider para NO tocar el cache de A.
-                if ($bulkExit -ne 0) {
-                    & $py -m pytest --lf --last-failed-no-failures none --tb=short -m "not e2e" -x
+                $serieCompleta = -not $bulkConcluyente
+                if ($bulkConcluyente -and ($bulkExit -eq 1)) {
+                    & $py -m pytest --lf --last-failed-no-failures none --tb=short -m "not e2e" -x |
+                        Tee-Object -Variable lfCap
                     if ($LASTEXITCODE -ne 0) {
                         throw "pytest: fallos del bulk CONFIRMADOS en serie (exit $LASTEXITCODE) - regresion real"
                     }
+                    # Segundo cinturon: el bulk dijo "hubo fallos" pero el re-juicio no
+                    # ejecuto NADA => el cache estaba vacio o rancio. Salir verde de aqui
+                    # seria el mismo falso verde descrito arriba, sin INTERNALERROR de
+                    # por medio.
+                    $lfTexto = ($lfCap | Out-String)
+                    if ($lfTexto -notmatch "\d+\s+(passed|failed|error)") {
+                        Write-Host "    [gate] FASE C no re-juzgo NADA (cache --lf vacio o rancio)" -ForegroundColor Yellow
+                        $serieCompleta = $true
+                    }
+                }
+
+                if ($serieCompleta) {
+                    Write-Host "    [gate] cayendo a la SERIE COMPLETA: el bulk no dejo un veredicto fiable." -ForegroundColor Yellow
+                    & $py -m pytest tests/ --tb=short -m "not e2e" -x
+                    if ($LASTEXITCODE -ne 0) { throw "pytest (serie completa tras bulk no concluyente) fallo (exit $LASTEXITCODE)" }
                 }
             }
         } finally {
