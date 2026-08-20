@@ -564,7 +564,92 @@ _PLAN_NAME_ADDENDUM = {
 }
 
 
-def _build_prompt(targets: list, locale: str, plan_name: Optional[str] = None) -> str:
+# [P1-INSIGHTS-I18N · 2026-08-20] El RAZONAMIENTO del plan (`plan_data.insights`) —
+# el panel «Diagnóstico / Plan de Acción / Tip del Chef». Los TITULOS ya pasaban por
+# `t()`; el CUERPO lo escribe el LLM y se quedaba en español con la app en inglés.
+#
+# Va en la MISMA llamada que los meals y el nombre, como un campo más del contrato JSON:
+# una llamada extra por plan seria pagar dos veces por el mismo lote.
+#
+# `insights` es un ARRAY ALINEADO POR INDICE, así que su contrato es el de `recipe`, no
+# el de `plan_name`: misma longitud y mismo orden, o se descarta ENTERO. El panel rotula
+# cada entrada por posicion (0=Diagnóstico, 1=Plan de Acción, 2=Tip del Chef), de modo
+# que una traduccion con un elemento de menos no seria «peor texto»: pondria el consejo
+# del chef bajo el titulo de diagnostico.
+_INSIGHTS_ADDENDUM = {
+    "en-US": (
+        "\n5. The data below may include an \"INSIGHTS\" block with numbered lines. If "
+        "present, ALSO translate every line into English and add them as a top-level "
+        "\"insights\" array in the SAME JSON reply, in the SAME ORDER and with the SAME "
+        "NUMBER of items: {\"meals\":[...],\"insights\":[\"...\",\"...\"]}. "
+        "Food names inside stay in Spanish canonical form. If there is no \"INSIGHTS\" "
+        "block, omit the \"insights\" key entirely."
+    ),
+    "pt-BR": (
+        "\n5. Os dados abaixo podem incluir um bloco \"INSIGHTS\" com linhas numeradas. Se "
+        "presente, TAMBÉM traduza cada linha para o Português e adicione-as como um array "
+        "de nível superior \"insights\" na MESMA resposta JSON, na MESMA ORDEM e com a "
+        "MESMA QUANTIDADE de itens. Nomes de alimentos permanecem em espanhol canônico. "
+        "Se não houver bloco \"INSIGHTS\", omita a chave \"insights\"."
+    ),
+    "fr-FR": (
+        "\n5. Les données ci-dessous peuvent inclure un bloc « INSIGHTS » avec des lignes "
+        "numérotées. Si présent, traduis AUSSI chaque ligne en français et ajoute-les "
+        "comme un tableau de premier niveau « insights » dans la MÊME réponse JSON, dans "
+        "le MÊME ORDRE et avec le MÊME NOMBRE d'éléments. Les noms d'aliments restent en "
+        "espagnol canonique. S'il n'y a pas de bloc « INSIGHTS », omets la clé « insights »."
+    ),
+    "it-IT": (
+        "\n5. I dati qui sotto possono includere un blocco \"INSIGHTS\" con righe numerate. "
+        "Se presente, traduci ANCHE ogni riga in italiano e aggiungile come array di primo "
+        "livello \"insights\" nella STESSA risposta JSON, nello STESSO ORDINE e con lo "
+        "STESSO NUMERO di elementi. I nomi degli alimenti restano in spagnolo canonico. "
+        "Se non c'è il blocco \"INSIGHTS\", ometti del tutto la chiave \"insights\"."
+    ),
+}
+
+
+def _insights_already_translated(plan_data, locale) -> bool:
+    """True si `plan_data["_display"][locale]["insights"]` ya existe y esta bien formado.
+
+    Evita pagar la traduccion del mismo razonamiento en cada enriquecimiento. No mira la
+    LONGITUD contra el original a proposito: si el plan se regenera con otro numero de
+    insights, el guard TOCTOU de `_persist_batch` lo detecta y descarta -- duplicar aqui
+    esa comprobacion seria una segunda regla que puede drifear de la primera.
+    """
+    disp = plan_data.get("_display") if isinstance(plan_data, dict) else None
+    if not isinstance(disp, dict):
+        return False
+    entrada = disp.get(locale)
+    if not isinstance(entrada, dict):
+        return False
+    ya = entrada.get("insights")
+    return isinstance(ya, list) and bool(ya) and all(
+        isinstance(x, str) and x.strip() for x in ya)
+
+
+def _validate_insights(value, original) -> Optional[list]:
+    """Contrato de ARRAY ALINEADO (el de `recipe`), no el de `plan_name`.
+
+    Misma longitud y mismo orden o se descarta ENTERO: el panel rotula por POSICION, asi
+    que un elemento de menos no degrada el texto -- mueve el «Tip del Chef» bajo el
+    titulo «Diagnostico». Fail-open: cualquier forma inesperada devuelve None y el panel
+    se queda en espanol, que es correcto aunque no sea lo pedido.
+    """
+    if not isinstance(original, list) or not original:
+        return None
+    if not isinstance(value, list) or len(value) != len(original):
+        return None
+    fuera = []
+    for linea in value:
+        if not isinstance(linea, str) or not linea.strip():
+            return None
+        fuera.append(linea.strip())
+    return fuera
+
+
+def _build_prompt(targets: list, locale: str, plan_name: Optional[str] = None,
+                  insights: Optional[list] = None) -> str:
     directive = _DISPLAY_LANGUAGE_DIRECTIVES.get(locale)
     header = _DISPLAY_DATA_HEADER.get(locale)
     if directive is None or header is None:
@@ -582,10 +667,16 @@ def _build_prompt(targets: list, locale: str, plan_name: Optional[str] = None) -
 
     if plan_name:
         directive = f"{directive}{_PLAN_NAME_ADDENDUM.get(locale, '')}"
+    if insights:
+        directive = f"{directive}{_INSIGHTS_ADDENDUM.get(locale, '')}"
 
     lines = []
     if plan_name:
         lines.append(f"PLAN NAME: {plan_name}")
+    if insights:
+        lines.append("INSIGHTS:")
+        for ins_idx, ins in enumerate(insights):
+            lines.append(f"  [{ins_idx}] {ins}")
     for i, t in enumerate(targets):
         lines.append(f"{i}. NAME: {t['name']}")
         lines.append(f"   DESCRIPTION: {t['description']}")
@@ -779,6 +870,8 @@ def _persist_batch(
     valid_by_index: dict,
     plan_name_snapshot: Optional[str] = None,
     plan_name_display: Optional[str] = None,
+    insights_snapshot: Optional[list] = None,
+    insights_display: Optional[list] = None,
 ) -> tuple:
     """Persiste un lote ya validado. Retorna `(written_count, mismatch_count)`.
 
@@ -807,7 +900,9 @@ def _persist_batch(
     del meal, en español canónico) y se SALTA si difiere — el meal se queda sin
     `_display` para este locale hasta el próximo disparador legítimo.
     """
-    counters = {"written": 0, "mismatch": 0, "plan_name_written": False, "plan_name_mismatch": False}
+    counters = {"written": 0, "mismatch": 0, "plan_name_written": False,
+                "plan_name_mismatch": False, "insights_written": False,
+                "insights_mismatch": False}
 
     def _mutator(pd: dict):
         pd_days = pd.get("days") if isinstance(pd, dict) else None
@@ -864,6 +959,26 @@ def _persist_batch(
                 counters["plan_name_written"] = True
             else:
                 counters["plan_name_mismatch"] = True
+
+        # [P1-INSIGHTS-I18N · 2026-08-20] El RAZONAMIENTO, hermano del nombre y con el
+        # MISMO guard TOCTOU: si `pd["insights"]` ya no coincide con el snapshot leido
+        # antes de la llamada LLM (una regeneracion escribio otro razonamiento mientras
+        # traduciamos), la traduccion se descarta. Pegar la vieja seria peor que no
+        # traducir: el panel diria una cosa y el plan otra.
+        if insights_display is not None:
+            if pd.get("insights") == insights_snapshot:
+                plan_disp = pd.get("_display")
+                if not isinstance(plan_disp, dict):
+                    plan_disp = {}
+                locale_entry = plan_disp.get(locale)
+                if not isinstance(locale_entry, dict):
+                    locale_entry = {}
+                locale_entry["insights"] = insights_display
+                plan_disp[locale] = locale_entry
+                pd["_display"] = plan_disp
+                counters["insights_written"] = True
+            else:
+                counters["insights_mismatch"] = True
         return pd
 
     try:
@@ -872,19 +987,20 @@ def _persist_batch(
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] persist falló plan={plan_id} locale={locale}: {e!r}"
         )
-        return 0, 0, False
+        return 0, 0, False, False
     if not persisted:
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] persist retornó vacío (plan desapareció o ownership "
             f"no matcheó) plan={plan_id} locale={locale}"
         )
-        return 0, 0, False
+        return 0, 0, False, False
     if counters["plan_name_mismatch"]:
         logger.warning(
             f"[P1-PLAN-DISPLAY-I18N] nombre del plan omitido por TOCTOU (cambió entre "
             f"lectura y persist) plan={plan_id} locale={locale}"
         )
-    return counters["written"], counters["mismatch"], counters["plan_name_written"]
+    return (counters["written"], counters["mismatch"], counters["plan_name_written"],
+            counters["insights_written"])
 
 
 # ============================================================
@@ -998,12 +1114,29 @@ def enrich_plan_display(
                 else None
             )
 
+            # [P1-INSIGHTS-I18N · 2026-08-20] A diferencia del nombre, `insights` SI vive
+            # dentro de `plan_data` -- no hace falta un SELECT extra. El snapshot es el
+            # valor tal cual, que es lo que el mutator comparara.
+            _insights_pd = plan_data.get("insights")
+            _insights_snapshot = _insights_pd if isinstance(_insights_pd, list) else None
+            insights_pending = (
+                _insights_snapshot
+                if _insights_snapshot
+                and all(isinstance(x, str) and x.strip() for x in _insights_snapshot)
+                and not _insights_already_translated(plan_data, locale)
+                else None
+            )
+
             for batch_day_indices in day_batches:
                 targets = _collect_targets(days, batch_day_indices)
-                if not targets and plan_name_pending is None:
+                if not targets and plan_name_pending is None and insights_pending is None:
                     continue
 
-                prompt = _build_prompt(targets, locale, plan_name=plan_name_pending)
+                prompt = _build_prompt(
+                    targets, locale,
+                    plan_name=plan_name_pending,
+                    insights=insights_pending,
+                )
                 try:
                     llm = build_chat_llm(
                         model_name,
@@ -1056,18 +1189,33 @@ def enrich_plan_display(
                     _batch_plan_name_display = _validate_plan_name(parsed.get("plan_name"))
                     plan_name_pending = None
 
-                if not valid_by_index and _batch_plan_name_display is None:
+                # [P1-INSIGHTS-I18N] Mismo ciclo de vida que el nombre: se intenta UNA vez
+                # (el primer lote que llega al LLM) y se limpia el pendiente pase lo que
+                # pase, para que un plan de 28 dias en 7 lotes no pague 7 traducciones del
+                # mismo razonamiento.
+                _batch_insights_snapshot = None
+                _batch_insights_display = None
+                if insights_pending is not None:
+                    _batch_insights_snapshot = _insights_snapshot
+                    _batch_insights_display = _validate_insights(
+                        parsed.get("insights"), _insights_snapshot)
+                    insights_pending = None
+
+                if (not valid_by_index and _batch_plan_name_display is None
+                        and _batch_insights_display is None):
                     last_skip_reason = "no_valid_meals"
                     continue
 
-                written, mismatches, _plan_name_written = _persist_batch(
+                written, mismatches, _plan_name_written, _insights_written = _persist_batch(
                     plan_id, user_id, locale, targets, valid_by_index,
                     plan_name_snapshot=_batch_plan_name_snapshot,
                     plan_name_display=_batch_plan_name_display,
+                    insights_snapshot=_batch_insights_snapshot,
+                    insights_display=_batch_insights_display,
                 )
                 total_written += written
                 mismatch_total += mismatches
-                if written or _plan_name_written:
+                if written or _plan_name_written or _insights_written:
                     last_skip_reason = None
 
             if mismatch_total:
