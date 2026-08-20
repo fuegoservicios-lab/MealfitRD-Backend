@@ -292,6 +292,47 @@ if (-not $SkipBackend) {
 }
 
 if (-not $SkipFrontend) {
+    # [P1-CI-I18N-GATE - 2026-08-20] El chequeo de catalogos NO estaba en el gate.
+    #
+    # El 2026-08-20 el dueno reporto OCHO superficies distintas en espanol con la app
+    # en ingles: dias de la semana, fecha del modal, titulo del plan, pestanas, fecha
+    # de la tarjeta, slots de Recetas, submenu "Mas informacion", nombres de plan y el
+    # splash. Todas llegaron por CAPTURA, ninguna por CI -- porque `i18n:check` solo
+    # corria cuando alguien se acordaba de escribirlo.
+    #
+    # Va ANTES de vitest a proposito: tarda ~2 s y su fallo es de una linea, mientras
+    # que la suite tarda ~2 min. Fallar rapido y con la causa a la vista.
+    #
+    # EN MODO ESTRICTO, y esa es la decision que importa. MEDIDO quitando una traduccion
+    # de `en-US.json`:
+    #
+    #     npm run i18n:check          -> exit 0     <- no habria cazado NADA de hoy
+    #     npm run i18n:check:strict   -> exit 1
+    #
+    # Sin `--strict` una clave sin traduccion NO tumba nada: el texto cae al espanol y
+    # la pantalla queda a medias en silencio -- literalmente la forma de todos los
+    # reportes de hoy. Anadir el paso en permisivo habria sido teatro: un guard que da
+    # verde justo en el caso que motivo ponerlo. El repo esta hoy
+    # al 100% en los 4 idiomas (0 huerfanas, 0 faltantes), asi que encenderlo no cuesta
+    # deuda: solo obliga a que una cadena nueva nazca traducida.
+    #
+    # Escotilla sin editar codigo (convencion del repo): MEALFIT_CI_I18N_STRICT=0 baja
+    # a modo permisivo. Sirve para una tanda larga a medio traducir; no para desplegar.
+    Run-Step "Frontend i18n" {
+        Push-Location "$repoRoot/frontend"
+        try {
+            $strict = $env:MEALFIT_CI_I18N_STRICT
+            if ($strict -eq "0" -or $strict -eq "false") {
+                Write-Host "    [gate] i18n en modo PERMISIVO (MEALFIT_CI_I18N_STRICT=$strict)" -ForegroundColor Yellow
+                npm run i18n:check
+            } else {
+                npm run i18n:check:strict
+            }
+        } finally {
+            Pop-Location
+        }
+    }
+
     Run-Step "Frontend vitest" {
         Push-Location "$repoRoot/frontend"
         try {
