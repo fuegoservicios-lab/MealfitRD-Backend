@@ -21,12 +21,19 @@
 -- catalogo, porque este repo ya se quemo con subcadenas (`sal` dentro de `salsa`,
 -- `pollo` dentro de `repollo`).
 --
--- Cuatro salieron marcados y se ACEPTAN igualmente, porque el indice resuelve por alias
--- MAS LARGO y el token que colisiona es el largo: «ajo molido» vs «ajo», «pure de
--- tomate» vs «tomate», «mandioca» vs «harina de mandioca», «cassava» vs «cassava
--- flour». En los cuatro casos el mas largo gana y cada cadena cae donde debe.
+-- Tres salieron marcados y se ACEPTAN igualmente, porque el indice resuelve por alias
+-- MAS LARGO y el token que colisiona es el largo: «ajo molido» vs «ajo», «mandioca» vs
+-- «harina de mandioca», «cassava» vs «cassava flour». En los tres el mas largo gana y
+-- cada cadena cae donde debe.
 --
--- Uno se RECHAZA: «china» para Naranja. Es el nombre dominicano de la naranja y seria
+-- LO QUE EL COMPROBADOR NO PODIA VER. El chequeo de colisiones compara contra los
+-- nombres y alias del catalogo VIVO, y eso no incluye las decisiones ya tomadas y
+-- registradas en TESTS. «pure de tomate» paso el chequeo (ningun choque de cadenas) y
+-- lo tumbo el gate: `test_fix_round_2026_07_29_bad_aliases.py` lo prohibe explicitamente
+-- porque el pure tiene macros ~3x mas concentrados que la salsa. Un alias nuevo hay que
+-- pasarlo por los dos filtros: colisiones de cadena Y prohibiciones ya escritas.
+--
+-- Dos se RECHAZAN. El primero, «china» para Naranja. Es el nombre dominicano de la naranja y seria
 -- util, pero son cinco letras y colisiona con «col china» (Bok choy). Un token tan corto
 -- y ambiguo es justo la clase que ya costo dos incidentes aqui. No compensa.
 --
@@ -50,7 +57,10 @@ UPDATE public.master_ingredients SET aliases = ARRAY['cauliflower']
     WHERE name = 'Coliflor';
 UPDATE public.master_ingredients SET aliases = ARRAY['naranja dulce', 'orange']
     WHERE name = 'Naranja';
-UPDATE public.master_ingredients SET aliases = ARRAY['pure de tomate', 'puré de tomate', 'tomato sauce']
+-- «pure de tomate» NO entra: lo prohibe test_fix_round_2026_07_29_bad_aliases.py, y con
+-- razon medida — el pure/pasta de tomate tiene macros ~3x mas concentrados que la salsa
+-- (finding 4 de aquella auditoria). Anadirlo reintroducia el error que esa ronda cerro.
+UPDATE public.master_ingredients SET aliases = ARRAY['tomato sauce']
     WHERE name = 'Salsa de tomate';
 UPDATE public.master_ingredients SET aliases = ARRAY['mandioca', 'cassava']
     WHERE name = 'Yuca';
@@ -78,7 +88,21 @@ BEGIN
     END IF;
 END $$;
 
--- == Sanity 3: «china» NO entro como alias =======================================
+-- == Sanity 3: «pure de tomate» NO puede volver a entrar =========================
+-- Lo cazo el gate, no el comprobador de colisiones. Aqui queda anclado en la DB para
+-- que no dependa de que alguien vuelva a correr aquel test.
+DO $$
+DECLARE _pure int;
+BEGIN
+    SELECT COUNT(*) INTO _pure FROM public.master_ingredients
+    WHERE name = 'Salsa de tomate'
+      AND (aliases && ARRAY['pure de tomate', 'puré de tomate', 'pasta de tomate']);
+    IF _pure > 0 THEN
+        RAISE EXCEPTION '[P1-CATALOGO-DENSIDAD-ALIAS] pure/pasta de tomate NO puede resolver a Salsa de tomate: macros ~3x mas concentrados';
+    END IF;
+END $$;
+
+-- == Sanity 4: «china» NO entro como alias =======================================
 -- Guard explicito de la decision: si alguien lo anade luego «porque es el nombre
 -- dominicano», que se encuentre esto primero.
 DO $$
