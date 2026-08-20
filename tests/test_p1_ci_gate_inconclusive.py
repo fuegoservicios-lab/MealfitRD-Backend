@@ -190,7 +190,11 @@ def test_el_mensaje_de_aborto_no_dice_que_fallaron_tests():
 
 def test_una_regresion_real_en_serie_se_llama_por_su_nombre():
     s = _sql()
-    assert 'throw "pytest (serie) fallo (exit $serieExit) - regresion real"' in s
+    # [P1-CI-SERIE-ENUMERA · 2026-08-20] El mensaje crecio: ahora dice CUANTOS fallos
+    # hay, porque con `--maxfail` puede haber varios. Se ancla el nucleo, no la frase
+    # entera -- un guard atado al texto exacto se rompe cada vez que se mejora el copy,
+    # y eso ensena a relajarlo en vez de leerlo.
+    assert 'pytest (serie) fallo (exit $serieExit) - regresion real' in s
 
 
 def test_las_dos_ramas_usan_el_mismo_criterio():
@@ -201,3 +205,52 @@ def test_las_dos_ramas_usan_el_mismo_criterio():
         "solo una de las dos ramas discrimina por codigo de salida")
     assert s.count("INTERNALERROR") >= 2, (
         "el cinturon por texto falta en una de las dos ramas")
+
+
+# ─────────── la serie ENUMERA en vez de parar en el primer fallo ───────────
+#
+# [P1-CI-SERIE-ENUMERA · 2026-08-20] `-x` es `--maxfail=1`. El 2026-08-20 eso costo TRES
+# ciclos de deploy seguidos, de 10-17 min cada uno, para descubrir de uno en uno seis
+# fallos que estaban ahi desde el principio. Dos de ellos llevaban rotos desde el dia
+# ANTERIOR sin que nadie lo supiera, porque el gate paraba antes de llegar a su archivo.
+#
+# O sea que un gate que enumera de uno en uno no solo es lento: ESCONDE deuda detras del
+# primer rojo, y la esconde justo mientras el arbol se sigue tocando.
+#
+# Tampoco se quita el tope. Sin limite, un fallo en el primer test --un import roto, un
+# conftest malo-- obliga a esperar los ~20 min completos para enterarte de algo que se
+# sabia en 10 segundos. `--maxfail` es la posicion intermedia, y 10 cubre de sobra una
+# tanda normal (aquel dia eran 6).
+
+def test_la_serie_enumera_hasta_un_tope():
+    s = _sql()
+    assert "--maxfail=$maxfail" in s, (
+        "la serie volvio a `-x`: un fallo temprano vuelve a esconder a los demas")
+    # Acotado a la rama SERIE: la fase C de la rama paralela conserva `-x` a proposito
+    # --re-juzga una lista corta ya conocida, no la suite-- y prohibirlo ahi seria un
+    # falso positivo. La primera version de este guard cayo justo en eso.
+    ini = s.index('if ($workers -eq "1"')
+    fin = s.index('} else {', ini)
+    # Y sin comentarios: el `-x` que hay dentro esta en la PROSA que explica por que ya
+    # no se usa. Enesima vez del dia que un comentario dispara su propio guard.
+    rama_serie = _solo_codigo(s[ini:fin])
+    assert "-x" not in rama_serie, "quedo un `-x` en la rama serie: esconde los demas fallos"
+    assert "--maxfail=$maxfail" in rama_serie
+
+
+def test_el_tope_es_configurable_y_razonable():
+    s = _sql()
+    assert "MEALFIT_CI_PYTEST_MAXFAIL" in _solo_codigo(s), "falta el knob del tope"
+    m = re.search(r'if \(-not \$maxfail\) \{ \$maxfail = "(\d+)" \}', s)
+    assert m, "el default debe ser un literal legible"
+    assert 3 <= int(m.group(1)) <= 50, (
+        f"tope {m.group(1)}: uno demasiado bajo vuelve a esconder fallos; uno "
+        "demasiado alto paga la suite entera cuando algo esta roto de raiz")
+
+
+def test_el_mensaje_dice_CUANTOS_fallos_hay():
+    """Sin la cuenta, el operador no sabe si relanzar para descubrir el siguiente. Con
+    ella --y con la lista completa arriba-- una sola corrida basta."""
+    s = _sql()
+    assert "regexp" in s.lower() or "[regex]::Matches" in s, "no se cuentan los FAILED"
+    assert "no hace falta relanzar" in s

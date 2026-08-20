@@ -180,10 +180,30 @@ if (-not $SkipBackend) {
                 # conservador -- asi que se reintenta una vez y, si insiste, se falla
                 # DICIENDO QUE ABORTO. Fallar sigue siendo lo correcto: nunca desplegar
                 # sin veredicto. Lo que cambia es que el operador sepa que buscar.
+                # [P1-CI-SERIE-ENUMERA - 2026-08-20] `--maxfail` en vez de `-x`.
+                #
+                # `-x` es `--maxfail=1`: para en el PRIMER fallo. El 2026-08-20 eso me
+                # costo TRES ciclos de deploy seguidos, cada uno de 10-17 min, para
+                # descubrir de uno en uno seis fallos que estaban ahi desde el principio
+                # -- y dos de ellos llevaban rotos desde el dia anterior sin que nadie lo
+                # supiera, porque el gate paraba antes de llegar. Un gate que enumera de
+                # uno en uno no solo es lento: ESCONDE deuda detras del primer rojo.
+                #
+                # Tampoco se quita el tope. Sin limite, un fallo en el primer test
+                # --import roto, conftest malo-- obliga a esperar los ~20 min completos
+                # para enterarte de algo que se sabia en 10 segundos. `--maxfail` es la
+                # posicion intermedia: enumera hasta N y corta.
+                #
+                # 10 por defecto: cubre de sobra una tanda normal (hoy eran 6) sin pagar
+                # la suite entera cuando algo esta roto de raiz. Knob para subirlo en una
+                # auditoria grande: MEALFIT_CI_PYTEST_MAXFAIL.
+                $maxfail = $env:MEALFIT_CI_PYTEST_MAXFAIL
+                if (-not $maxfail) { $maxfail = "10" }
+
                 $serieExit = -1
                 $serieConcluyente = $false
                 foreach ($intento in 1, 2) {
-                    & $py -m pytest tests/ --tb=short -m "not e2e" -x | Tee-Object -Variable serieCap
+                    & $py -m pytest tests/ --tb=short -m "not e2e" --maxfail=$maxfail | Tee-Object -Variable serieCap
                     $serieExit = $LASTEXITCODE
                     $serieTexto = ($serieCap | Out-String)
                     $serieConcluyente = (($serieExit -eq 0) -or ($serieExit -eq 1)) -and ($serieTexto -notmatch "INTERNALERROR")
@@ -198,7 +218,11 @@ if (-not $SkipBackend) {
                            "Cierra aplicaciones y reintenta.")
                 }
                 if ($serieExit -ne 0) {
-                    throw "pytest (serie) fallo (exit $serieExit) - regresion real"
+                    $cuantos = ([regex]::Matches($serieTexto, "(?m)^FAILED ")).Count
+                    throw ("pytest (serie) fallo (exit $serieExit) - regresion real: " +
+                           "$cuantos test(s). Estan TODOS listados arriba como FAILED, " +
+                           "hasta el tope de $maxfail -- no hace falta relanzar para " +
+                           "descubrir el siguiente.")
                 }
             } else {
                 # FASE A - bulk paralelo SIN -x: 47 archivos de la suite stubbean
