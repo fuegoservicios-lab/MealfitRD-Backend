@@ -5329,7 +5329,19 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
     except Exception:
         return ""
     excluded = _verified_catalog_excluded_tokens(form_data)
-    _cached = _VERIFIED_CATALOG_INSTRUCTION_CACHE.get(excluded)
+    # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] El país entra en la CLAVE de la caché, no sólo en
+    # el predicado. Sin esto el fix nace inerte: la caché es de módulo y está keyed por los tokens
+    # excluidos por alergia/dieta, así que el primer país que llegue al proceso fija el bloque
+    # para todos los demás — en producción, el primer usuario decidiría lo que ven los otros.
+    # Derivación por la ÚNICA puerta (`country_for_form_data`, espina T1): un segundo
+    # canonicalizador aquí sería la tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+    try:
+        from constants import country_for_form_data as _cffd_vc
+        _vc_country = _cffd_vc(form_data)
+    except Exception:
+        _vc_country = "DO"
+    _cache_key = (excluded, _vc_country)
+    _cached = _VERIFIED_CATALOG_INSTRUCTION_CACHE.get(_cache_key)
     if _cached is not None:
         return _cached
     try:
@@ -5341,11 +5353,38 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
     import re as _re_vc
     try:
         rows = get_master_ingredients() or []
-        names = sorted({
-            str(r.get("name") or "").strip()
-            for r in rows
-            if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0
-        })
+        # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] «Verificado» y «tiene precio RD» eran la
+        # MISMA condición, y esa ecuación es falsa desde Fase 2: las 141 filas de los 5 países
+        # beta nacieron sin precio A PROPÓSITO (su país no tiene precios nativos, `beta_no_prices`)
+        # — así que el bloque que le dice al modelo «USA EXCLUSIVAMENTE ESTOS ALIMENTOS» le
+        # ESCONDÍA la comida de su país y le ORDENABA la dominicana. Medido: el render para ES era
+        # byte-idéntico al de DO, y 44 de 48 ítems de la lista del plan español vivo eran filas RD.
+        #
+        # El predicado beta reusa `is_country_catalog_unpriced_item`, que es EXACTAMENTE el que el
+        # agregador de la lista de compras ya usa para decidir qué es comprable-sin-precio. Usar
+        # aquí un predicado distinto (p.ej. `COUNTRY_POOLS[cc]`) crearía un segundo espejo que
+        # driftaría — la forma precisa del defecto que la costura (a) del coherence guard costó.
+        # Medido antes de elegir: el pool de ES cubre sólo 22 de sus filas sin precio y 55 filas
+        # (Azafrán, Alioli, Nata…) no las reclama NINGÚN pool. El precio aceptado es sobre-incluir
+        # (a un español se le ofrece chipotle), que es un problema de VARIEDAD que el fragmento de
+        # país del prompt ya combate; lo que se cierra es la sub-inclusión, que le PROHIBÍA el
+        # jamón serrano. Acotar por país es tarea de DATOS: no existe membresía por país en
+        # `master_ingredients`. DO conserva el predicado de siempre (byte-identidad).
+        _vc_beta = _vc_country != "DO"
+        if _vc_beta:
+            try:
+                from shopping_calculator import is_country_catalog_unpriced_item as _iccui
+            except Exception:
+                _iccui = None
+        else:
+            _iccui = None
+
+        def _vc_comprable(r) -> bool:
+            if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0:
+                return True
+            return bool(_iccui and _iccui(str(r.get("name") or "")))
+
+        names = sorted({str(r.get("name") or "").strip() for r in rows if _vc_comprable(r)})
         if excluded:
             # Filtra los alimentos prohibidos por alergia/dieta (word-boundary + plural ES, igual que los
             # guards) — no tiene sentido listarlos como "USA EXCLUSIVAMENTE" si el mismo prompt los prohíbe.
@@ -5368,7 +5407,15 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             "Si una receta tradicional pide algo que no está aquí (ej. achiote, sazón en polvo, clavo "
             "dulce, pimienta de olor, salsa de soya), OMÍTELO por completo — usa solo los sazonadores "
             "verificados de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, y si aparecen abajo: "
-            "comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor criollo real). "
+            # [P1-VERIFIED-CATALOG-COUNTRY · 2026-08-21] «para dar sabor criollo real» viajaba al
+            # ÚLTIMO bloque del prompt de un usuario de Madrid, mientras el resto del stack beta le
+            # pedía cocina española. La posición importa: es la instrucción más cercana a la
+            # generación (misma lección que P1-COACH-LANGUAGE-RECENCY). DO conserva su frase.
+            + ("comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor "
+               "criollo real). " if not _vc_beta else
+               "comino, cúrcuma, laurel, tomillo, curry, cebolla en polvo — úsalos para dar sabor "
+               "real a los platos de tu cocina local). ")
+            +
             # [P1-BAKING-STAPLES · 2026-07-01] (audit v3 creatividad GAP-3) EXCEPCIÓN de despensa básica:
             # sin esto el "OMÍTELO" aplanaba los transforms insignia (panqueques sin leudante = crepa
             # triste) o el LLM los emitía igual y VERIFIED-ONLY los amputaba de la lista en silencio.
@@ -5382,7 +5429,7 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
             "uno de estos):\n"
             + ", ".join(names)
         )
-        _VERIFIED_CATALOG_INSTRUCTION_CACHE[excluded] = block
+        _VERIFIED_CATALOG_INSTRUCTION_CACHE[_cache_key] = block
         return block
     except Exception as e:
         logger.warning(f"[VERIFIED-ONLY] No se pudo construir el catálogo verificado del prompt: {e}")
