@@ -74,7 +74,24 @@ def _correr(tmp: Path, fuente: str, catalogo: dict | None = None):
         pytest.skip(f"{_CHECKER} no existe en este checkout (repos hermanos)")
 
     (tmp / "scripts").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(_CHECKER, tmp / "scripts" / "i18n-check.mjs")
+    # [P1-I18N-GATE-CIEGO-SIN-T · 2026-08-21] Copiar SÓLO `i18n-check.mjs` dejó de
+    # bastar: desde ese P-fix importa `i18n-sin-envolver.mjs` (el detector de literales
+    # nunca envueltos), `i18n-alcance.mjs` (qué ficheros están dentro del alcance) y
+    # `lib/grafo-modulos.mjs` (el grafo de imports, compartido con `huerfanos.mjs`).
+    # Con un solo fichero el `node` del tmpdir muere en ERR_MODULE_NOT_FOUND y los
+    # asertos fallan por una razón que no tiene nada que ver con lo que miden.
+    #
+    # Se copia el SET completo, no se relaja el aserto: el arnés dice «ejecuta el
+    # checker REAL», y el checker real tiene dependencias.
+    for _rel in ("i18n-check.mjs", "i18n-sin-envolver.mjs", "i18n-alcance.mjs"):
+        _origen = _CHECKER.parent / _rel
+        if _origen.exists():
+            shutil.copy2(_origen, tmp / "scripts" / _rel)
+    _lib = _CHECKER.parent / "lib"
+    if _lib.exists():
+        (tmp / "scripts" / "lib").mkdir(parents=True, exist_ok=True)
+        for _f in _lib.glob("*.mjs"):
+            shutil.copy2(_f, tmp / "scripts" / "lib" / _f.name)
 
     src = tmp / "src"
     (src / "i18n" / "locales").mkdir(parents=True, exist_ok=True)

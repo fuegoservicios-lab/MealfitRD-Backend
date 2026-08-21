@@ -81,7 +81,24 @@ def _montar(tmp: Path, catalogo: dict) -> Path:
         pytest.skip(f"{_CHECKER} no existe en este checkout (repos hermanos)")
 
     (tmp / "scripts").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(_CHECKER, tmp / "scripts" / "i18n-check.mjs")
+    # [P1-I18N-GATE-CIEGO-SIN-T · 2026-08-21] Copiar SÓLO `i18n-check.mjs` dejó de
+    # bastar: desde ese P-fix importa `i18n-sin-envolver.mjs` (el detector de literales
+    # nunca envueltos), `i18n-alcance.mjs` (qué ficheros están dentro del alcance) y
+    # `lib/grafo-modulos.mjs` (el grafo de imports, compartido con `huerfanos.mjs`).
+    # Con un solo fichero el `node` del tmpdir muere en ERR_MODULE_NOT_FOUND y los
+    # asertos fallan por una razón que no tiene nada que ver con lo que miden.
+    #
+    # Se copia el SET completo, no se relaja el aserto: el arnés dice «ejecuta el
+    # checker REAL», y el checker real tiene dependencias.
+    for _rel in ("i18n-check.mjs", "i18n-sin-envolver.mjs", "i18n-alcance.mjs"):
+        _origen = _CHECKER.parent / _rel
+        if _origen.exists():
+            shutil.copy2(_origen, tmp / "scripts" / _rel)
+    _lib = _CHECKER.parent / "lib"
+    if _lib.exists():
+        (tmp / "scripts" / "lib").mkdir(parents=True, exist_ok=True)
+        for _f in _lib.glob("*.mjs"):
+            shutil.copy2(_f, tmp / "scripts" / "lib" / _f.name)
 
     src = tmp / "src"
     (src / "i18n" / "locales").mkdir(parents=True, exist_ok=True)
@@ -92,6 +109,25 @@ def _montar(tmp: Path, catalogo: dict) -> Path:
     (src / "i18n" / "locales" / "en-US.json").write_text(
         json.dumps(catalogo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+    # [P1-I18N-EXTRACTOR-AST · 2026-08-21] El `node_modules` del frontend real, para que
+    # el checker resuelva `@babel/parser` sin instalar nada en el tmpdir.
+    #
+    # Sin este enlace el script muere con ERR_MODULE_NOT_FOUND y sale != 0 — y como
+    # doce de los catorce tests de este fichero afirman precisamente `returncode != 0`,
+    # PASABAN TODOS por la razón equivocada: no porque el checker detectara el valor
+    # inservible, sino porque no llegaba a arrancar. Lo destapó
+    # `test_control_un_catalogo_completo_pasa`, que es la única aserción del fichero
+    # que exige un CERO. Un fichero de tests sin su mutación de control no sabe
+    # distinguir «detecta» de «está roto».
+    enlace = tmp / "node_modules"
+    real = _FRONTEND / "node_modules"
+    if real.exists() and not enlace.exists():
+        try:
+            enlace.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("no puedo enlazar node_modules en esta plataforma")
+
     return tmp / "scripts" / "i18n-check.mjs"
 
 

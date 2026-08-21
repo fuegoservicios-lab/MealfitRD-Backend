@@ -44,6 +44,9 @@ from __future__ import annotations
 import io
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -124,13 +127,80 @@ def test_los_cuatro_catalogos_traen_los_siete_dias(locale):
 def test_el_checker_ignora_los_comentarios_pero_no_las_cadenas():
     """Punto 4 del docstring. Las dos mitades importan: sin la primera, documentar la
     trampa dispara el guard; con la segunda de mas, un `${t('Foo')}` en un template
-    literal a nivel de modulo dejaria de reportarse."""
-    src = _leer(_CHECKER)
-    m = re.search(r"function isModuleScopeCode\(src, index\)\s*\{(.*?)\n\}", src, re.S)
-    assert m, "falta isModuleScopeCode: el filtro de comentarios se perdio"
-    cuerpo = m.group(1)
-    assert "!inComment" in cuerpo, "el checker volvio a reportar la prosa"
-    assert "inStr" not in cuerpo, (
-        "excluir las cadenas convierte el falso positivo en un falso negativo: se "
-        "tragaria los ${t('Foo')} de un template literal")
-    assert "isModuleScope(src, m.index)" not in src, "quedo un call site del filtro viejo"
+    literal a nivel de modulo dejaria de reportarse.
+
+    [P1-I18N-EXTRACTOR-AST · 2026-08-21] Reescrito para medir CONDUCTA.
+
+    Antes buscaba el cuerpo de `function isModuleScopeCode(src, index)` y comprobaba
+    que dentro pusiera `!inComment` y no `inStr`. Eso anclaba una IMPLEMENTACION, y
+    cuando el guard paso de contar llaves a usar un AST —porque el contador era ciego
+    al ejemplo canonico de la doc, `const TABS = [{ label: t('X') }]`— el test se puso
+    rojo sin que la propiedad que dice defender se hubiera roto: con AST el filtro de
+    comentarios es NATIVO (una llamada citada en prosa no es un CallExpression) y la
+    firma gano un tercer parametro.
+
+    Un test que se rompe al mejorar el codigo que vigila estaba midiendo la forma, no
+    la propiedad. Ahora ejecuta el checker real contra las dos mitades.
+    """
+    if not shutil.which("node"):
+        pytest.skip("node no esta en PATH")
+
+    def _reporta_ambito(fuente: str, tmp: Path) -> bool:
+        (tmp / "scripts").mkdir(parents=True, exist_ok=True)
+        for rel in ("i18n-check.mjs", "i18n-sin-envolver.mjs", "i18n-alcance.mjs"):
+            origen = _CHECKER.parent / rel
+            if origen.exists():
+                shutil.copy2(origen, tmp / "scripts" / rel)
+        lib = _CHECKER.parent / "lib"
+        if lib.exists():
+            (tmp / "scripts" / "lib").mkdir(parents=True, exist_ok=True)
+            for f in lib.glob("*.mjs"):
+                shutil.copy2(f, tmp / "scripts" / "lib" / f.name)
+        src_dir = tmp / "src"
+        (src_dir / "i18n" / "locales").mkdir(parents=True, exist_ok=True)
+        (src_dir / "i18n" / "locales.js").write_text(
+            "export const DEFAULT_LOCALE = 'es-DO';\n"
+            "export const LOCALES = [{ code: 'es-DO' }, { code: 'en-US' }];\n",
+            encoding="utf-8",
+        )
+        (src_dir / "i18n" / "locales" / "en-US.json").write_text("{}\n", encoding="utf-8")
+        (src_dir / "c").mkdir(parents=True, exist_ok=True)
+        (src_dir / "c" / "D.jsx").write_text(fuente, encoding="utf-8")
+        enlace = tmp / "node_modules"
+        real = _CHECKER.parent.parent / "node_modules"
+        if real.exists() and not enlace.exists():
+            try:
+                enlace.symlink_to(real, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                pytest.skip("no puedo enlazar node_modules en esta plataforma")
+        r = subprocess.run(
+            ["node", str(tmp / "scripts" / "i18n-check.mjs")],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        return "ÁMBITO DE MÓDULO" in (r.stdout + r.stderr)
+
+    with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+        # Mitad 1: la prosa que DOCUMENTA la trampa no puede dispararla.
+        prosa = (
+            "import { t } from '../i18n';\n"
+            "// Ojo: `const DIAS = [t('Lunes')]` en ambito de modulo se congela.\n"
+            "export function f() { return t('Lunes'); }\n"
+        )
+        assert not _reporta_ambito(prosa, Path(d1)), (
+            "el checker volvio a reportar la prosa: documentar la trampa dispara el "
+            "guard, y un guard que obliga a censurar su propia documentacion acaba "
+            "desactivado"
+        )
+
+        # Mitad 2: y una llamada REAL dentro de un template literal a nivel de modulo
+        # sigue reportandose. Es la mutacion de control de la mitad 1: sin ella,
+        # apagar el guard entero pasaria este test.
+        template = (
+            "import { t } from '../i18n';\n"
+            "const AVISO = `${t('Lunes')} es el primer dia`;\n"
+            "export default AVISO;\n"
+        )
+        assert _reporta_ambito(template, Path(d2)), (
+            "un ${t('...')} en un template literal a nivel de modulo dejo de "
+            "reportarse: el falso positivo se cambio por un falso negativo"
+        )
