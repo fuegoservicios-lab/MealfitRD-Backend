@@ -95,6 +95,42 @@ def test_la_hora_promedio_es_la_hora_local_real(monkeypatch, offset_min, hora_ut
     )
 
 
+def test_el_codigo_declara_que_rompe_la_byte_identidad_dominicana():
+    """[portado de P1-COUNTRY-CLOCKS · otra sesión] Casi todo el sistema de países se construyó
+    bajo «RD no puede notar nada»; este P-fix la rompe A PROPÓSITO, porque la conducta dominicana
+    previa ERA el bug (18.0 para una comida de las 10:00 locales). Una ruptura deliberada de la
+    doctrina del repo tiene que estar DECLARADA en el código, no sólo entendida por quien la hizo
+    — si no, el próximo lector la trata como un descuido y la «arregla».
+
+    Nació como assert de otra sesión que cerraba este mismo gap en paralelo. Su versión fallaba
+    contra mi código sólo por mayúsculas y acento; la propiedad que pedía era correcta y faltaba,
+    así que primero escribí la declaración y ahora la anclo aquí."""
+    src = _DB_FACTS.read_text(encoding="utf-8", errors="replace")
+    i = src.find("def get_avg_meal_hour")
+    assert i > 0
+    _fin = src.find("\ndef ", i + 1)
+    cuerpo = src[i:_fin if _fin > 0 else len(src)]
+    _plano = cuerpo.lower().replace("é", "e").replace("Ó", "o").replace("ó", "o")
+    assert "byte-identico" in _plano, (
+        "el código dejó de declarar que este cambio mueve la conducta dominicana"
+    )
+
+
+def test_la_promesa_de_byte_identidad_de_t5_no_vuelve():
+    """[portado de P1-COUNTRY-CLOCKS · otra sesión] El comentario de F1-T5 decía «Replicar el
+    signo '+' preserva el comportamiento BYTE-IDÉNTICO a offset=240». Era cierto entonces y es
+    falso ahora. Si alguien lo restaura junto al signo, el código vuelve a contradecirse a sí
+    mismo — y un comentario que promete lo contrario de lo que hace el código es peor que ninguno.
+    """
+    src = _DB_FACTS.read_text(encoding="utf-8", errors="replace")
+    i = src.find("def get_avg_meal_hour")
+    _fin = src.find("\ndef ", i + 1)
+    cuerpo = src[i:_fin if _fin > 0 else len(src)]
+    assert "Replicar el signo" not in cuerpo, (
+        "volvió la promesa de byte-identidad de T5, que el signo '-' ya no cumple"
+    )
+
+
 def test_el_intervalo_se_resta_no_se_suma():
     """El defecto era literalmente un `+` donde sus tres hermanas de F1-T5 usan `-`. Anclarlo por
     texto evita que vuelva por un refactor que 'simplifique' la expresión."""
