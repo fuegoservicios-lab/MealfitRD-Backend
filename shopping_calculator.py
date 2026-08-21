@@ -882,6 +882,22 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
 )
 _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 
+# [P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] Unidades que el agregador sabe convertir a peso más
+# abajo (`if 'g' in units: ...`). Si la receta emitió CUALQUIERA de ellas, hay demanda real y el
+# default de arriba no debe pisarla. Es la MISMA lista que consume el bloque de conversión — si
+# alguien añade una unidad allí y la olvida aquí, ese alimento vuelve a salir a 150 g fijos.
+_CONVERTIBLE_QTY_UNITS = ("g", "kg", "oz", "lb", "ml", "l")
+
+
+def _country_keep_respect_recipe_qty_enabled() -> bool:
+    """[P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] Kill switch del respeto a la cantidad de la
+    receta en la rama de catálogo-país. `false` ⇒ vuelve el 150 g fijo (conducta T5). Toca el
+    camino caliente del agregador (categoría/peso/SKU/costo), así que lleva knob propio en vez de
+    hardcode, según la convención del repo.
+
+    tooltip-anchor: MEALFIT_COUNTRY_KEEP_RESPECT_RECIPE_QTY (test_p1_country_keep_respect_qty.py)"""
+    return _knob_env_bool("MEALFIT_COUNTRY_KEEP_RESPECT_RECIPE_QTY", True)
+
 
 def _country_catalog_unpriced_keep_enabled() -> bool:
     return _knob_env_bool("MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP", True)
@@ -12093,19 +12109,34 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             elif _country_catalog_unpriced_keep_enabled() and is_country_catalog_unpriced_item(name):
                 # [P1-COUNTRY-SYSTEM-F2 · T5 · 2026-08-17] generalización de P1-BAKING-STAPLES —
                 # ver docstring de `is_country_catalog_unpriced_item`.
-                weight_in_lbs = _COUNTRY_CATALOG_UNPRICED_DEFAULT_G / 453.592
-                has_weight = True
-                units = {}
+                # [P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] El `units = {}` de esta rama tiraba al
+                # suelo la demanda REAL de las recetas: los 7 ítems de catálogo-país de los 2
+                # planes beta vivos salían a 150,0 g exactos («¼ lb») para recetas que pedían 653 g
+                # de almejas, 504 g de acelgas o 443 g de membrillo — y en 4 de los 7 sin siquiera
+                # la nota de cobertura, porque el déficit en tazas/cucharadas no se puede calcular
+                # en gramos: sub-compra MUDA. El default se diseñó para el caso «al gusto / sin
+                # cantidad» y acabó ganando siempre; aquí se invierte la precedencia y queda como
+                # último recurso. La rama de horneado de arriba NO cambia: 100 g de polvo de
+                # hornear ES la respuesta correcta a «1 cdta» porque ahí se compra el ENVASE.
+                _ccu_has_qty = (_country_keep_respect_recipe_qty_enabled()
+                                and any(_u in units for _u in _CONVERTIBLE_QTY_UNITS))
+                if not _ccu_has_qty:
+                    weight_in_lbs = _COUNTRY_CATALOG_UNPRICED_DEFAULT_G / 453.592
+                    has_weight = True
+                    units = {}
                 # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] pasillo REAL del súper (Vegetales/
                 # Frutas/...) en vez del label interno 'CATÁLOGO SIN PRECIO' que se filtraba
                 # al PDF — ver docstring de `_master_category_for_unpriced_item`. Fallback al
                 # label histórico si el master no resuelve.
                 display_cat = _master_category_for_unpriced_item(name) or "CATÁLOGO SIN PRECIO"
-                logging.info(
-                    f"🌍 [P1-COUNTRY-CATALOG-UNPRICED] '{name}' fuera del catálogo con precio pero es "
-                    f"alimento de catálogo-país (sin precio RD a propósito, país beta) → listado como "
-                    f"~1 paquete (~{_COUNTRY_CATALOG_UNPRICED_DEFAULT_G:.0f}g, sin precio) en "
-                    f"'{display_cat}' en vez de dropearlo."
+                # [P3-COUNTRY-KEEP-LOG-VOLUME · 2026-08-21] a DEBUG: eran 3 líneas por ítem por
+                # cada recálculo de lista, en bucle sobre las 141 filas.
+                logging.debug(
+                    "🌍 [P1-COUNTRY-CATALOG-UNPRICED] '%s' fuera del catálogo con precio pero es "
+                    "alimento de catálogo-país (sin precio RD a propósito, país beta) → listado en "
+                    "'%s' en vez de dropearlo (cantidad: %s).",
+                    name, display_cat,
+                    "de la receta" if _ccu_has_qty else f"~{_COUNTRY_CATALOG_UNPRICED_DEFAULT_G:.0f}g por defecto",
                 )
             else:
                 # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
