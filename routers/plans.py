@@ -12798,6 +12798,56 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
 
 
 @router.post("/adopt-guest-plan")
+def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
+    """[P1-GUEST-COUNTRY-ADOPT · 2026-08-21] Rellena en `health_profile` los huecos que el
+    formulario del INVITADO ya contestó. Devuelve True si escribió algo.
+
+    EL DEFECTO QUE CIERRA. `api_adopt_guest_plan` guardaba el PLAN y descartaba el FORMULARIO
+    entero: un español que elegía España como invitado, recibía su plan beta correcto y se
+    registraba, acababa con `health_profile.country` AUSENTE ⇒ 'DO'. Desde ese segundo el primer
+    swap le devuelve comida dominicana, la renovación sale dominicana, y el plan que conserva
+    sigue marcado `beta_no_prices` — sin precios para siempre mientras el motor lo cree
+    dominicano. Es el estado que P1-COUNTRY-RENEWAL-PROFILE-WINS reparó a mano en agosto, pero
+    producido SOLO por el flujo que el landing más promociona.
+
+    ALLOWLIST, NO VOLCADO. La tentación es persistir el `formData` completo. Sería el CUARTO
+    setter del perfil sin jerarquía —tras el PATCH de Configuración, el merge del submit y la
+    tool del chat— y esa acumulación es la que produjo el incidente que esto imita. Sólo viajan
+    las claves del formulario, y sólo a huecos: si la cuenta YA declaró país, el invitado no lo
+    pisa (un `country` de invitado puede ser el 'DO' sembrado por `initialFormData`, que es
+    indistinguible de una elección — la lección exacta de aquel P-fix).
+
+    El país se CANONIZA antes de escribir y lo que no canoniza se descarta: el body de un
+    invitado no está autenticado por definición.
+
+    tooltip-anchor: _adopt_guest_form_into_profile (test_p1_guest_country_adopt.py)"""
+    if not isinstance(health_profile, dict) or not isinstance(form_data, dict) or not form_data:
+        return False
+    # Misma allowlist que la rama corta del wizard (`QTrackingFinish.jsx`): un solo sitio donde
+    # decidir qué del formulario merece vivir en el perfil.
+    _ALLOW = ("country", "allergies", "dietType", "medicalConditions", "medications",
+              "otherAllergies", "otherConditions", "otherMedications",
+              "budgetCurrency", "tzOffset", "householdSize")
+    escribio = False
+    for k in _ALLOW:
+        v = form_data.get(k)
+        if v is None or v == "" or (isinstance(v, (list, dict)) and not v):
+            continue
+        if health_profile.get(k) not in (None, "", [], {}):
+            continue  # la cuenta ya lo declaró: el invitado rellena huecos, no sobrescribe
+        if k == "country":
+            try:
+                from constants import COUNTRY_PROFILES
+                if not (isinstance(v, str) and v.strip().upper() in COUNTRY_PROFILES):
+                    continue  # no canoniza → se descarta en vez de caer a 'DO' en silencio
+                v = v.strip().upper()
+            except Exception:
+                continue
+        health_profile[k] = v
+        escribio = True
+    return escribio
+
+
 def api_adopt_guest_plan(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
@@ -12844,6 +12894,32 @@ def api_adopt_guest_plan(
         return {"success": True, "adopted": False, "reason": "dedup"}
 
     logger.info(f"✅ [P1-GUEST-ADOPT-1] Plan de invitado adoptado → user={verified_user_id} plan_id={plan_id}")
+
+    # [P1-GUEST-COUNTRY-ADOPT · 2026-08-21] Y el FORMULARIO, que hasta hoy se descartaba entero.
+    # Aislado en su propio try: el plan es lo que el usuario vino a salvar, así que un fallo
+    # escribiendo una preferencia no puede tumbar la adopción. `form_data` es OPCIONAL — el
+    # frontend desplegado hoy manda sólo `plan_data`, y exigirlo dejaría a esos usuarios sin
+    # poder adoptar su plan.
+    try:
+        _guest_form = (data or {}).get("form_data")
+        if isinstance(_guest_form, dict) and _guest_form:
+            from db import update_user_health_profile_atomic as _uhpa_guest
+
+            def _mut_guest(_hp):
+                _hp = _hp if isinstance(_hp, dict) else {}
+                _adopt_guest_form_into_profile(_hp, _guest_form)
+                return _hp
+
+            _uhpa_guest(verified_user_id, _mut_guest)
+            logger.info(
+                "🌍 [P1-GUEST-COUNTRY-ADOPT] formulario de invitado adoptado al perfil "
+                f"(user={verified_user_id}, país={_guest_form.get('country')})"
+            )
+    except Exception as _gf_e:
+        logger.warning(
+            f"⚠️ [P1-GUEST-COUNTRY-ADOPT] no se pudo adoptar el formulario del invitado "
+            f"(el plan SÍ se guardó): {type(_gf_e).__name__}: {_gf_e}"
+        )
     return {"success": True, "adopted": True, "plan_id": plan_id}
 
 
