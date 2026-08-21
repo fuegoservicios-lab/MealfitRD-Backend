@@ -922,7 +922,13 @@ def _survives_shopping_list(name) -> bool:
 def _filter_expected_to_shopping_survivors(expected_raw, emit_blind_warning: bool = False) -> dict:
     """[P1-COHERENCE-MIRROR-KEEP · 2026-08-21] Filtra el lado ESPERADO del guard con el mismo
     criterio que decide qué sobrevive a la lista, y —opcionalmente— emite el WARN
-    `[VERIFIED-ONLY-GUARD-BLIND]` sobre lo que de verdad desapareció.
+    VERIFIED-ONLY-GUARD-BLIND sobre lo que de verdad desapareció.
+
+    (El tag va SIN corchetes en esta prosa a propósito: `test_guard_blind_whitelists_water`
+    localiza la PRIMERA aparición de la forma con corchetes y exige la whitelist de agua en las
+    1500 posiciones anteriores. Citarlo entre corchetes aquí secuestraba el ancla y ponía el guard
+    rojo contra código correcto — la 8ª vez que un comentario derrota a un guard en este repo, y
+    el mismo remedio que aplicó el commit 7b2a2ec.)
 
     Ese WARN es la ÚNICA señal que existe para «la lista de compras salió incompleta sin aviso»
     (el miedo explícito del dueño, P1-VERIFIED-ONLY-OBSERVABILITY). En país beta era 100% falsos
@@ -935,9 +941,18 @@ def _filter_expected_to_shopping_survivors(expected_raw, emit_blind_warning: boo
     _filtrado = {k: v for k, v in expected_raw.items() if _survives_shopping_list(k)}
     if emit_blind_warning:
         _caidos = _antes - set(_filtrado.keys())
-        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05/06] "Agua"/"hielo"/"caldo..." NO son
-        # comprables (agua de grifo): su drop es correcto, no desobediencia del LLM. Match EXACTO
-        # para agua/hielo ('aguacate' no matchea); prefijo con espacio para las variantes.
+        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05] "Agua"/"hielo"/"caldo..." NO son comprables
+        # (agua de grifo): su drop del catálogo verificado es comportamiento correcto, no
+        # desobediencia del LLM. Ruido medido en vivo (plan e49d44c3: WARN ×2 solo por 'Agua').
+        # Match EXACTO para agua/hielo ('aguacate' no matchea); prefijo para caldos.
+        # [P3-GUARD-BLIND-WATER-WHITELIST v2 · 2026-07-06] variantes de agua ("Agua fría/tibia/
+        # para hervir" — vivas en el WARN) también son no-comprables; startswith("agua ") no
+        # matchea 'aguacate' (exige el espacio).
+        # [P1-COHERENCE-MIRROR-KEEP · 2026-08-21] Los DOS markers de arriba se conservan literales
+        # al mover el bloque a este helper: `test_water_variants_whitelisted` localiza el v2 por
+        # texto y `test_guard_blind_whitelists_water` exige el v1 en las 1500 posiciones ANTERIORES
+        # al tag del WARN. Condensarlos en una sola línea rompió los dos — la suite completa lo
+        # cazó, no el despliegue.
         _caidos = {
             x for x in _caidos
             if str(x).strip().lower() not in ("agua", "hielo")
