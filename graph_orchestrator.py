@@ -5375,11 +5375,17 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
         # aquí un predicado distinto (p.ej. `COUNTRY_POOLS[cc]`) crearía un segundo espejo que
         # driftaría — la forma precisa del defecto que la costura (a) del coherence guard costó.
         # Medido antes de elegir: el pool de ES cubre sólo 22 de sus filas sin precio y 55 filas
-        # (Azafrán, Alioli, Nata…) no las reclama NINGÚN pool. El precio aceptado es sobre-incluir
-        # (a un español se le ofrece chipotle), que es un problema de VARIEDAD que el fragmento de
-        # país del prompt ya combate; lo que se cierra es la sub-inclusión, que le PROHIBÍA el
-        # jamón serrano. Acotar por país es tarea de DATOS: no existe membresía por país en
-        # `master_ingredients`. DO conserva el predicado de siempre (byte-identidad).
+        # (Azafrán, Alioli, Nata…) no las reclama NINGÚN pool.
+        #
+        # [P1-COUNTRY-CATALOG-BY-COUNTRY · 2026-08-21] Aquí decía que sobre-incluir era el precio
+        # aceptado porque «acotar por país es tarea de DATOS: no existe membresía por país en
+        # `master_ingredients`». La tabla no la tiene, cierto — pero la membresía SÍ existía, en
+        # los comentarios de bloque de la propia tupla de tokens (T5=ES, T6=MX/CO, T7=PR/US), o
+        # sea inerte. Promovida a `_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY`, este call site ya puede
+        # preguntar POR PAÍS. Sin ello los renders de ES, MX y US eran el MISMO string de 5777
+        # chars: el catálogo había pasado de «sólo dominicano» a «no-dominicano», que es la queja
+        # de P1-BETA-FRAGMENT-DEPTH trasladada a los datos.
+        # DO conserva el predicado de siempre (byte-identidad).
         _vc_beta = _vc_country != "DO"
         if _vc_beta:
             try:
@@ -5392,7 +5398,7 @@ def _get_verified_catalog_instruction(form_data=None) -> str:
         def _vc_comprable(r) -> bool:
             if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0:
                 return True
-            return bool(_iccui and _iccui(str(r.get("name") or "")))
+            return bool(_iccui and _iccui(str(r.get("name") or ""), country=_vc_country))
 
         names = sorted({str(r.get("name") or "").strip() for r in rows if _vc_comprable(r)})
         if excluded:

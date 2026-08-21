@@ -939,12 +939,23 @@ def is_baking_pantry_staple(name) -> bool:
 # tests en 3 archivos — cerrarlo bien necesita su propia ronda TDD, ver reporte de Task 10 §5).
 # Rollback: MEALFIT_COUNTRY_CATALOG_UNPRICED_KEEP=false → drop histórico (mismo comportamiento pre-T5).
 # tooltip-anchor: P1-COUNTRY-CATALOG-UNPRICED
-_COUNTRY_CATALOG_UNPRICED_TOKENS = (
-    "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
-    "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
-    "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "fideos", "membrillo",
-    "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
-    "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
+_COUNTRY_CATALOG_UNPRICED_BY_COUNTRY: "dict[str, tuple[str, ...]]" = {
+    # [P1-COUNTRY-CATALOG-BY-COUNTRY · 2026-08-21] La agrupación por país YA ESTABA escrita
+    # aquí — en los comentarios de bloque de abajo (T5=ES, T6=MX/CO, T7=PR/US, Task 8=RD).
+    # Estructura real, hecha a mano, que ningún programa podía leer: el `_vc_comprable` del
+    # catálogo verificado preguntaba a la tupla PLANA, así que le ofrecía huitlacoche a un
+    # español y percebes a un mexicano (medido: los renders de ES, MX y US eran el MISMO
+    # string de 5777 chars — el catálogo había pasado de «sólo dominicano» a «no-dominicano»).
+    # Esto NO reasigna ningún token: promueve a dato la partición que los bloques ya
+    # declaraban. La tupla plana se DERIVA de aquí, así que las dos vistas no pueden
+    # driftear. tooltip-anchor: P1-COUNTRY-CATALOG-BY-COUNTRY
+    "ES": (
+        "jamon serrano", "jamon iberico", "chorizo espanol", "morcilla", "lomo embuchado",
+        "panceta iberica", "gambas", "almejas", "boquerones", "anchoas", "cordero", "requeson",
+        "cuajada", "nata", "judias blancas", "judias pintas", "acelgas", "fideos", "membrillo",
+        "higo", "azafran", "alioli", "turron", "mazapan", "sobrasada", "butifarra", "percebes",
+        "vieira", "chistorra", "pinones", "almendra marcona", "membrillo dulce",
+    ),
     # [P1-COUNTRY-SYSTEM-F2 · T6 · 2026-08-17] Mismas 46 altas de catálogo MX/CO de este task —
     # también SIN precio RD a propósito (mismo motivo que ES: países beta,
     # `pricing_mode='beta_no_prices'`). Tokens elegidos por 2 palabras cuando la palabra sola es
@@ -954,14 +965,18 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     # (`test_is_country_catalog_unpriced_item_no_colisiona_con_ningun_nombre_del_catalogo_vivo_ni_pools`,
     # extendido para cubrir estas 46 también) contra el catálogo vivo (284 filas) + los 6 pools
     # (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO']`): cero falsos positivos.
-    "tortilla de maiz", "jalapeno", "chile serrano", "poblano", "chipotle", "guajillo",
-    "chile ancho", "habanero", "chile de arbol", "pasilla", "mulato", "nopal", "jicama",
-    "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
-    "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
-    "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "chicharron",
-    "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
-    "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
-    "gallina criolla", "borojo", "feijoa", "granadilla", "mora",
+    "MX": (
+        "tortilla de maiz", "jalapeno", "chile serrano", "poblano", "chipotle", "guajillo",
+        "chile ancho", "habanero", "chile de arbol", "pasilla", "mulato", "nopal", "jicama",
+        "epazote", "chorizo mexicano", "chorizo verde", "cecina", "frijoles refritos",
+        "crema mexicana", "tuna de nopal", "flor de jamaica", "xoconostle", "achiote",
+        "hoja santa", "chocolate de mesa", "panela", "huitlacoche", "chicharron",
+    ),
+    "CO": (
+        "chorizo santarrosano", "trucha", "chontaduro", "frijol cargamanto", "suero costeno",
+        "guascas", "arracacha", "lulo", "curuba", "uchuva", "arequipe", "natilla", "champus",
+        "gallina criolla", "borojo", "feijoa", "granadilla", "mora",
+    ),
     # [P1-COUNTRY-SYSTEM-F2 · T7 · 2026-08-17] 62 altas de catálogo PR/US de este task — también
     # SIN precio RD a propósito (países beta, `pricing_mode='beta_no_prices'`). A diferencia de
     # T5/T6, aquí se usa el NOMBRE CANÓNICO COMPLETO de cada fila como token (nunca una palabra
@@ -975,20 +990,25 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     # MISMO sweep e2e extendido (`test_is_country_catalog_unpriced_item_no_colisiona_...`) contra
     # el catálogo vivo (346 filas) + los 7 pools (`DOMINICAN_*` + `COUNTRY_POOLS['ES'/'MX'/'CO'/
     # 'PR'/'US']`): cero falsos positivos.
-    "panapen", "pernil", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
-    "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
-    "longaniza puertorriquena", "chuleta ahumada", "sazon con culantro y achiote",
-    "aceite de achiote", "queso de papa", "especias para arroz con dulce",
-    "aceitunas rellenas", "tocineta", "jamon de sandwich", "salchichas", "crema agria",
-    "crema mitad y mitad", "bagels", "panecillos ingleses", "pretzels", "frijoles horneados",
-    "jarabe de arce", "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa",
-    "malvaviscos", "coditos", "masa para pie", "galletas graham", "salsa de salchicha",
-    "ensalada de macarrones", "chile en polvo", "sazonador para tacos", "pepperoni",
-    "salchicha italiana", "mezcla para panqueques", "wafles", "azucar morena",
-    "suero de mantequilla", "pan de maiz", "semola de maiz", "arandanos rojos", "duraznos",
-    "pan rallado", "panecillos de mantequilla", "huevos rellenos", "nuez de castilla",
-    "nueces pecanas", "queso en hebras", "queso provolone", "carne molida mixta",
-    "bolitas de papa", "papas ralladas", "chili con carne",
+    "PR": (
+        "panapen", "pernil", "jamon de cocinar", "sofrito", "recao", "adobo", "alcaparrado",
+        "harina de yuca", "pique", "pavochon", "bacalaitos", "ron de cocina",
+        "longaniza puertorriquena", "chuleta ahumada", "sazon con culantro y achiote",
+        "aceite de achiote", "queso de papa", "especias para arroz con dulce",
+        "aceitunas rellenas",
+    ),
+    "US": (
+        "tocineta", "jamon de sandwich", "salchichas", "crema agria", "crema mitad y mitad",
+        "bagels", "panecillos ingleses", "pretzels", "frijoles horneados", "jarabe de arce",
+        "aderezo ranch", "salsa barbacoa", "ketchup", "salsa inglesa", "malvaviscos", "coditos",
+        "masa para pie", "galletas graham", "salsa de salchicha", "ensalada de macarrones",
+        "chile en polvo", "sazonador para tacos", "pepperoni", "salchicha italiana",
+        "mezcla para panqueques", "wafles", "azucar morena", "suero de mantequilla",
+        "pan de maiz", "semola de maiz", "arandanos rojos", "duraznos", "pan rallado",
+        "panecillos de mantequilla", "huevos rellenos", "nuez de castilla", "nueces pecanas",
+        "queso en hebras", "queso provolone", "carne molida mixta", "bolitas de papa",
+        "papas ralladas", "chili con carne",
+    ),
     # [P1-COUNTRY-SYSTEM-F2 · Task 8 (RD top-up) · 2026-08-17] "Hummus" — drop real RD medido
     # (6/30d en rd_drops.json), genuinamente ausente del catálogo (USDA SÍ lo tiene: "Hummus,
     # commercial", fdc 174289). A diferencia de las altas T5-T7 (países BETA sin mercado RD que
@@ -997,8 +1017,17 @@ _COUNTRY_CATALOG_UNPRICED_TOKENS = (
     # explícito del contrato de la task: listar como CATÁLOGO SIN PRECIO en vez de dropear, para
     # que el supermercado artificial (`supermarket_products`) pueda precificarlo después en vez
     # de perder el alimento en silencio de la lista.
-    "hummus",
-)
+    "DO": (
+        "hummus",
+    ),
+}
+
+# Vista plana derivada (orden estable, dedupe conservando el primero). La usan los 4 call
+# sites del agregador, que NO preguntan por país a propósito: si un alimento español acaba en
+# la lista de la compra hay que conservarlo venga de donde venga — ahí el fallo caro es perder
+# comida en silencio, no ofrecer de más.
+_COUNTRY_CATALOG_UNPRICED_TOKENS = tuple(dict.fromkeys(
+    _t for _ts in _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY.values() for _t in _ts))
 _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 
 # [P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] Unidades que el agregador sabe convertir a peso más
@@ -1192,8 +1221,17 @@ def _master_category_for_unpriced_item(name) -> "str | None":
     return None
 
 
-def is_country_catalog_unpriced_item(name) -> bool:
+def is_country_catalog_unpriced_item(name, country=None) -> bool:
     """True si `name` es uno de los alimentos de catálogo-país sin precio RD.
+
+    [P1-COUNTRY-CATALOG-BY-COUNTRY · 2026-08-21] `country` es OPCIONAL y aditivo. Sin él la
+    conducta es la histórica: se pregunta a la unión de los 6 países. Con él, sólo a los tokens de
+    ese país. La asimetría es deliberada — los 4 call sites del agregador NO pasan país porque ahí
+    conservar de más es correcto (si un alimento español acaba en la lista, hay que conservarlo:
+    el fallo caro es perder comida en silencio); el único que pregunta por país es el catálogo
+    verificado del generador, que es una decisión de QUÉ OFRECER. Un país no canónico cae a la
+    unión: este predicado corre en el camino caliente del agregador y un país que no reconozco no
+    puede estrechar el filtro.
 
     [fix-round 1 · review IMPORTANT · 2026-08-17] Match por TOKEN completo (word-boundary,
     accent-insensitive, tolerante a plural — mismo patrón que `_scan_allergen_violations`/
@@ -1223,6 +1261,24 @@ def is_country_catalog_unpriced_item(name) -> bool:
         from constants import strip_accents as _sa
         low = _sa(str(name or "").lower())
         tokens = _COUNTRY_CATALOG_UNPRICED_TOKENS
+        if country is not None:
+            # `canonicalize_country` es el ÚNICO SSOT de países (lección P1-DIET-CANON-SSOT): aquí
+            # no nace una segunda tabla. Si no reconoce el valor, se queda la unión (fail-open).
+            try:
+                from constants import canonicalize_country as _cc_iccui
+                _cc = _cc_iccui(country)
+                # `canonicalize_country` cae a 'DO' ante CUALQUIER basura, así que su resultado no
+                # distingue «el usuario es dominicano» de «no entendí el valor». Sin este
+                # round-trip, un país mal tecleado estrecharía el filtro al único token de DO y
+                # borraría comida de la lista en silencio — el fallo caro exacto que este
+                # predicado existe para evitar. Con él, lo no reconocido se queda en la unión.
+                if str(country).strip().upper() != _cc:
+                    _cc = None
+            except Exception:
+                _cc = None
+            _propios = _COUNTRY_CATALOG_UNPRICED_BY_COUNTRY.get(_cc) if _cc else None
+            if _propios:
+                tokens = _propios
         if not _knob_env_bool("MEALFIT_COUNTRY_SYSTEM", False):
             tokens = tuple(t for t in tokens if t != "tortilla de maiz")
         return any(
