@@ -3466,6 +3466,98 @@ def pricing_mode_for_country(country: str) -> "str | None":
     return None if profile.get("has_native_prices", True) else "beta_no_prices"
 
 
+# [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] SSOT del léxico dominicano que aparece como EJEMPLO en
+# los prompts, con su equivalente neutro. Vive aquí y no en cada módulo de prompt porque ya son
+# TRES los consumidores (planner, prompt de variedad y los ejemplos clínicos de
+# `condition_rules`): tres tablas a mano es exactamente lo que P1-DIET-CANON-SSOT costó una vez.
+#
+# Es sustitución de PRESENTACIÓN sobre texto ya renderizado, no un cambio de reglas: lo
+# nutricional (techo de embutidos, piso de proteína, no repetir base) no depende del alimento.
+# Orden largo→corto para que las frases ganen a las palabras sueltas.
+#
+# NO convierte un prompt dominicano en uno español: quita la contradicción, no añade cultura.
+# Eso es P1-BETA-FRAGMENT-DEPTH, una tarea de contenido.
+_DO_LEXICON_NEUTRAL = (
+    ("salami dominicano", "embutido curado"),
+    ("Salami Dominicano", "Embutido curado"),
+    ("longaniza dominicana", "embutido fresco"),
+    ("orégano dominicano", "orégano"),
+    ("Orégano dominicano", "Orégano"),
+    ("queso de hoja", "queso fresco curado"),
+    ("queso de freír", "queso para freír"),
+    ("casabe", "pan tostado integral"),
+    ("Casabe", "Pan tostado integral"),
+    ("arepitas", "tortitas"),
+    ("Arepitas", "Tortitas"),
+    # 'guisado dominicano' va ANTES que 'sancocho' y que el resto: es una FRASE, y el orden
+    # largo→corto es lo que impide que quede a medias. La encontró el guard de gentilicios, no
+    # la lista de tokens que yo había medido — por eso el guard busca el patrón «dominican\w*»
+    # entero y no los cinco nombres concretos.
+    ("guisado dominicano", "guiso de la casa"),
+    ("Guisado dominicano", "Guiso de la casa"),
+    ("revoltillo dominicano", "huevos revueltos"),
+    ("sancocho", "guiso de olla"),
+    ("Sancocho", "Guiso de olla"),
+    # 'Mangú' NO entra: F1 lo conserva a propósito dentro de «Ejemplo INCORRECTO: Día 1=Mangú de
+    # plátano (A)», donde lo que se enseña es el patrón de REPETICIÓN de base, no el plato — y su
+    # lado positivo ya lo neutraliza `_CATEGORIA_A_BETA`. Meterlo aquí pisaba una decisión
+    # deliberada de otro P-fix (con su test anclándola) y además producía peor español: «puré de
+    # tubérculo de plátano» es redundante. Lo cazó ese test, no el mío.
+    ("yaniqueques", "tortas fritas"),
+    ("bollitos", "bolitas al horno"),
+    ("auyama", "calabaza"),
+    ("Auyama", "Calabaza"),
+    ("tayota", "calabacín"),
+    ("Tayota", "Calabacín"),
+    ("yautía", "raíz feculenta"),
+    ("molondrones", "okra"),
+    ("vainitas", "judías verdes"),
+    ("chinola", "maracuyá"),
+    ("Chinola", "Maracuyá"),
+    ("lechosa", "papaya"),
+    ("Lechosa", "Papaya"),
+    ("víveres", "tubérculos"),
+    ("cubito", "caldo concentrado"),
+)
+
+
+def neutralize_do_lexicon(text) -> str:
+    """[P1-PROMPTS-RESIDUAL-DO · 2026-08-21] Sustituye el léxico es-DO de un prompt ya renderizado
+    por equivalentes neutros. Para país beta ÚNICAMENTE — el caller decide.
+
+    tooltip-anchor: neutralize_do_lexicon (test_p1_prompts_residual_do.py)"""
+    if not isinstance(text, str) or not text:
+        return text
+    for _do, _neutro in _DO_LEXICON_NEUTRAL:
+        text = text.replace(_do, _neutro)
+    return text
+
+
+def beta_prompt_country_header(country) -> str:
+    """[P1-PROMPTS-RESIDUAL-DO · 2026-08-21] Cabecera que le dice al modelo PARA QUIÉN cocina.
+
+    Antes, los prompts beta sólo tenían instrucciones en NEGATIVO («los platos dominicanos no son
+    requisito») y jamás nombraban el país: los renders de ES y MX salían byte-idénticos. Nombrarlo
+    es el mínimo — y explícitamente NO es suficiente: P1-DIET-BLIND-DIRECTIVES midió que «una
+    directiva de cabecera SOLA pierde contra órdenes específicas», y por eso este P-fix trae
+    además la neutralización de los ejemplos concretos que la contradecían.
+
+    El nombre sale de `COUNTRY_PROFILES[cc]['name_es']` — el mismo SSOT que el juez culinario y la
+    biblioteca de platos. `''` para DO (byte-identidad)."""
+    canon = canonicalize_country(country)
+    if canon == "DO":
+        return ""
+    _nm = (COUNTRY_PROFILES.get(canon) or {}).get("name_es")
+    if not _nm:
+        return ""
+    return (
+        f"\n🌍 CONTEXTO DE PAÍS: el usuario compra y cocina en {_nm}. Usa ingredientes, cortes y "
+        f"preparaciones que se consigan ALLÍ y que su gente reconozca por su nombre local. Los "
+        f"ejemplos de este prompt son ilustrativos del FORMATO, no del país: adáptalos a la "
+        f"cocina de {_nm}.\n"
+    )
+
+
 def stamp_plan_country(plan_data, form_data) -> str:
     """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] Sella el país DEL PLAN en `plan_data['_country']`.
 

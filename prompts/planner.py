@@ -112,5 +112,13 @@ def build_planner_system_prompt(country=None) -> str:
         return cached
     rendered = PLANNER_SYSTEM_PROMPT.replace(_CATEGORIA_A_DO, _CATEGORIA_A_BETA)
     rendered = rendered.replace(_EJEMPLO_CORRECTO_DO, _EJEMPLO_CORRECTO_BETA)
+    # [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] F1 neutralizó la Categoría A y su ejemplo; el resto
+    # del prompt seguía en criollo. Medido: el render ES traía «casabe», «arepitas», «salami
+    # dominicano» y «queso de hoja», y proponía «Día 2 merienda = Casabe+queso» como EJEMPLO
+    # CORRECTO. Y ES == MX byte a byte, o sea que no había adaptación por país: sólo supresión
+    # parcial de lo dominicano. Cabecera (para quién cocina) + neutralización de los ejemplos que
+    # la contradecían — las dos, porque P1-DIET-BLIND-DIRECTIVES midió que la cabecera sola pierde.
+    from constants import beta_prompt_country_header, neutralize_do_lexicon
+    rendered = beta_prompt_country_header(canon_country) + neutralize_do_lexicon(rendered)
     _PLANNER_PROMPT_COUNTRY_CACHE[canon_country] = rendered
     return rendered

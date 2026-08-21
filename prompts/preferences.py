@@ -119,8 +119,19 @@ def build_deterministic_variety_prompt(days_count: int = 3, country=None) -> str
                 .replace("@@PROTEINA_POR_OPCION@@", proteina_por_opcion)
                 .replace("@@PROTEINAS_LISTA@@", proteinas_lista))
     from constants import canonicalize_country
-    if canonicalize_country(country) != "DO":
+    _canon_vp = canonicalize_country(country)
+    if _canon_vp != "DO":
         rendered = rendered.replace(_FIDELIDAD_CULTURAL_DO, _FIDELIDAD_CONTEXTO_BETA)
+        # [P1-PROMPTS-RESIDUAL-DO · 2026-08-21] F1 neutralizó el BULLET de fidelidad cultural; el
+        # ENCABEZADO que lo enmarca («🍽️ REGLA DE VARIEDAD Y FIDELIDAD CULTURAL DOMINICANA») y el
+        # resto del cuerpo seguían en criollo. Medido en el render ES: «casabe», «arepitas»,
+        # «sancocho», «queso de hoja» y dos «dominicano/a» — y ES == MX byte a byte.
+        from constants import beta_prompt_country_header, neutralize_do_lexicon
+        rendered = rendered.replace(
+            "REGLA DE VARIEDAD Y FIDELIDAD CULTURAL DOMINICANA",
+            "REGLA DE VARIEDAD Y FIDELIDAD CULTURAL LOCAL",
+        )
+        rendered = beta_prompt_country_header(_canon_vp) + neutralize_do_lexicon(rendered)
     return rendered
 
 

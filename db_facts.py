@@ -281,6 +281,15 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
         #     offset  360 (MX)   14:00Z → buggy 20.0 · correcta  8.0   (+12 h)
         # Consumidor único (verificado por grep): el agente proactivo, que decide a qué hora te
         # llega el nudge. Un dominicano que desayuna a las 8:00 lo recibía a las 17:30.
+        #
+        # ⚠️ ESTE CAMBIO **NO ES BYTE-IDÉNTICO** PARA DO, y es deliberado. Casi todo el sistema de
+        # países se construyó bajo la regla «RD no puede notar nada»; aquí se rompe a propósito
+        # porque la conducta dominicana previa era el BUG: con offset 240 la función devolvía 18.0
+        # para una comida de las 10:00 locales. Preservarla habría sido preservar un nudge
+        # desplazado +8 h para todos los dominicanos. Lo que cambia es la hora a la que llega un
+        # nudge, no un dato del plan — reversible y sin efecto retroactivo sobre nada persistido.
+        # (Anotado en respuesta al guard de otra sesión, que pedía declararlo en el código: tenía
+        # razón, el mecanismo estaba explicado y la ruptura de byte-identidad no.)
         _tz_off = user_tz_offset_min(user_id)
         query = """
             SELECT EXTRACT(HOUR FROM (consumed_at - make_interval(mins => %s))) as hr,
