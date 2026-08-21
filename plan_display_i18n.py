@@ -65,6 +65,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from typing import Optional
 
 from knobs import _env_bool, _env_str, _env_float, _env_int
@@ -709,16 +710,49 @@ def _plan_name_already_translated(plan_data: dict, locale: str) -> bool:
     )
 
 
-def _validate_plan_name(value) -> Optional[str]:
+def _eco_del_original(a: str, b: str) -> bool:
+    """¿`a` es el mismo texto que `b`, ignorando caja, acentos y espacio sobrante?
+
+    [P2-DISPLAY-ECO-NOMBRE · 2026-08-21] Tolerante a propósito: «HABICHUELAS
+    guisadas» tampoco es una traducción. Se normaliza con NFKD + descarte de
+    combinantes, que es la forma barata de comparar sin acentos sin arrastrar
+    dependencias.
+    """
+    def _norm(s: str) -> str:
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(c for c in s if not unicodedata.combining(c))
+        return " ".join(s.lower().split())
+    return _norm(a) == _norm(b)
+
+
+def _validate_plan_name(value, original: Optional[str] = None) -> Optional[str]:
     """Sin check de canónico (a diferencia de `_validate_and_build_display` para
     ingredients): el nombre del plan es texto creativo del LLM sin un alimento
     identificable de forma determinista — se confía en la instrucción del
     addendum nativo. `None`/no-string/vacío-tras-strip -> None (omitido, jamás
-    error, fail-open total del motor)."""
+    error, fail-open total del motor).
+
+    [P2-DISPLAY-ECO-NOMBRE · 2026-08-21] Y un ECO tampoco vale. Un LLM que devuelve
+    el nombre SIN traducir —lo más común cuando es un plato criollo que no sabe
+    traducir— pasaba esta validación, se persistía como `_display[locale].name`, y a
+    partir de ahí el gate de «¿ya está traducido?» respondía SÍ: el nombre se quedaba
+    en español para siempre y nadie lo reintentaba.
+
+    Devolver `None` para un nombre que legítimamente no cambia entre idiomas (una
+    marca, un nombre propio) es CORRECTO y no una pérdida: significa «no hay
+    traducción que aportar», el motor cae al español, y el usuario ve exactamente lo
+    mismo que vería con el eco. Lo que se gana es que el gate deja de mentir.
+
+    `original` es opcional para no romper a los llamadores que no lo pasen.
+    """
     if not isinstance(value, str):
         return None
     v = value.strip()
-    return v or None
+    if not v:
+        return None
+    if isinstance(original, str) and original.strip() and _eco_del_original(v, original):
+        return None
+    return v
 
 
 def _parse_json_response(raw: str) -> Optional[dict]:
@@ -753,7 +787,47 @@ def _fingerprint_lines(value) -> list:
     return list(value) if isinstance(value, list) else []
 
 
-def _collect_targets(days: list, day_indices_batch: list) -> list:
+def _display_ya_usable(meal: dict, locale: Optional[str]) -> bool:
+    """¿Este meal YA tiene un `_display[locale]` que sirve?
+
+    [P2-DISPLAY-REDESPACHO-SIN-FILTRO · 2026-08-21] Se exige USABLE, no presente. Es
+    la misma lección que P1-I18N-GATE-VALOR dejó en el validador de catálogos: medir
+    que la clave existe no es medir que sirve. Un display a medias dado por bueno deja
+    esa comida en español para siempre, porque nadie la reintenta.
+
+    Los arrays se comparan por LONGITUD porque el espejo es por índice: un `_display`
+    con menos líneas que el meal pinta el gramaje de un ingrediente junto al nombre de
+    otro.
+    """
+    if not locale:
+        return False
+    disp = meal.get("_display")
+    if not isinstance(disp, dict):
+        return False
+    entrada = disp.get(locale)
+    if not isinstance(entrada, dict):
+        return False
+    if not isinstance(entrada.get("name"), str) or not entrada["name"].strip():
+        return False
+    for campo in ("recipe", "ingredients"):
+        original = meal.get(campo)
+        traducido = entrada.get(campo)
+        if isinstance(original, list) and original:
+            if not isinstance(traducido, list) or len(traducido) != len(original):
+                return False
+    return True
+
+
+def _collect_targets(days: list, day_indices_batch: list, locale: Optional[str] = None) -> list:
+    """[P2-DISPLAY-REDESPACHO-SIN-FILTRO · 2026-08-21] `locale` es opcional a
+    propósito: sin él la conducta es la de antes (reunir todo). Con él, se saltan las
+    comidas ya traducidas a ESE idioma.
+
+    Antes esta función no tenía ni una referencia a `_display`, así que cada
+    re-disparo del enriquecimiento —cambio de idioma, chunk nuevo, recovery— volvía a
+    mandar al LLM lo que ya estaba hecho. Filtrar aquí convierte además la reanudación
+    en barata: un enriquecimiento cortado a la mitad retoma sólo lo que falta.
+    """
     idx_set = set(day_indices_batch)
     targets = []
     for day_idx, day in enumerate(days):
@@ -766,6 +840,8 @@ def _collect_targets(days: list, day_indices_batch: list) -> list:
             continue
         for meal_idx, meal in enumerate(meals):
             if not isinstance(meal, dict):
+                continue
+            if _display_ya_usable(meal, locale):
                 continue
             recipe = meal.get("recipe")
             ingredients = meal.get("ingredients")
@@ -1128,7 +1204,10 @@ def enrich_plan_display(
             )
 
             for batch_day_indices in day_batches:
-                targets = _collect_targets(days, batch_day_indices)
+                # [P2-DISPLAY-REDESPACHO-SIN-FILTRO · 2026-08-21] Con el locale, las
+                # comidas ya traducidas a ESE idioma se saltan: cada re-disparo del
+                # enriquecimiento pagaba otra vez por lo mismo.
+                targets = _collect_targets(days, batch_day_indices, locale=locale)
                 if not targets and plan_name_pending is None and insights_pending is None:
                     continue
 
@@ -1186,7 +1265,13 @@ def enrich_plan_display(
                     # El snapshot es el valor del JSONB (puede ser None a proposito):
                     # es lo que el mutator compara contra `pd.get("name")`.
                     _batch_plan_name_snapshot = _plan_name_snapshot_pd
-                    _batch_plan_name_display = _validate_plan_name(parsed.get("plan_name"))
+                    # [P2-DISPLAY-ECO-NOMBRE · 2026-08-21] Con el original delante, un
+                    # nombre devuelto SIN traducir se descarta en vez de persistirse:
+                    # si se persiste, el gate de «ya traducido» dice SI y nadie lo
+                    # reintenta nunca.
+                    _batch_plan_name_display = _validate_plan_name(
+                        parsed.get("plan_name"), original=plan_name_pending
+                    )
                     plan_name_pending = None
 
                 # [P1-INSIGHTS-I18N] Mismo ciclo de vida que el nombre: se intenta UNA vez
