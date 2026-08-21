@@ -650,6 +650,18 @@ _CATALOG_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
 _PLAN_MODE_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
 _TARGETS_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 
+# [P2-I18N-LOCALE-DISPARA-LLM · 2026-08-21] `PATCH /profile` dejó de ser un UPDATE
+# escalar el 2026-08-19: desde P1-PLAN-DISPLAY-I18N, un `locale` distinto de 'es-DO'
+# despacha `schedule_plan_display_enrichment` — la traducción LLM del plan entero, por
+# lotes. Era el write más caro del router y el único sin limitador.
+#
+# 10/60s y no menos: el uso legítimo es tocar un ajuste, no diez por minuto, pero el
+# wizard guarda el perfil por pasos y una ráfaga corta es normal. El paywall NO es la
+# herramienta aquí (doctrina de /restock: al llegar al cap el usuario quedaría atrapado
+# en su idioma y cada cambio le quemaría crédito de PLANES, porque
+# `get_monthly_api_usage` cuenta toda fila de `api_usage` sin filtrar endpoint).
+_PROFILE_PATCH_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
 
 @router.get("/catalog")
 async def api_get_catalog(
@@ -934,6 +946,7 @@ async def api_get_profile(
 async def api_patch_profile(
     body: ProfilePatchBody = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
+    _rl: None = Depends(_PROFILE_PATCH_LIMITER),
 ):
     """Reemplaza la RPC `update_health_profile_merge` (merge jsonb ||) y el
     UPDATE escalar de updateUserProfile. El merge ocurre server-side en un
