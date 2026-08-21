@@ -3420,6 +3420,55 @@ def pricing_mode_for_country(country: str) -> "str | None":
     return None if profile.get("has_native_prices", True) else "beta_no_prices"
 
 
+def stamp_plan_country(plan_data, form_data) -> str:
+    """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] Sella el país DEL PLAN en `plan_data['_country']`.
+
+    EL DEFECTO QUE CIERRA. `plan_data` guardaba `_pricing_mode` y NO el país, así que toda
+    superficie post-generación —recalcular la lista, el swap, el backstop— lo re-derivaba del
+    PERFIL ACTUAL. Medido: los 2 planes beta vivos (ES y US) no tienen país en `plan_data` y el
+    perfil de su dueño dice 'DO', así que recalcular la lista del plan español aplica reglas
+    dominicanas a platos españoles. El sistema YA está en ese estado.
+
+    EL SELLO ES INCONDICIONAL, TAMBIÉN PARA 'DO'. Si sólo se escribiera en beta, la AUSENCIA de
+    la clave significaría dos cosas distintas —«plan dominicano» y «plan anterior a este P-fix»—
+    y esa ambigüedad es justo la que hace irreparables los planes que ya existen. Con el sello
+    siempre presente, ausente = pre-sistema, que es una respuesta útil.
+
+    Aditivo: no toca ninguna otra clave de `plan_data` (invariante I7 — este helper NO persiste,
+    sólo prepara el dict que el caller ya va a escribir).
+
+    tooltip-anchor: stamp_plan_country (test_p1_plan_stamps_country.py)"""
+    _cc = country_for_form_data(form_data)
+    if isinstance(plan_data, dict):
+        plan_data["_country"] = _cc
+    return _cc
+
+
+def country_for_plan(plan_data, health_profile) -> str:
+    """[P1-PLAN-STAMPS-COUNTRY · 2026-08-21] País de un plan YA GENERADO, para las superficies
+    post-generación (recalc, swap, backstop, telemetría).
+
+    LA POLÍTICA, EXPLÍCITA porque no había respuesta obvia: **el plan manda para lo que YA se
+    generó; el perfil manda para lo que se genera de nuevo**. Un plan es un artefacto con fecha:
+    sus platos, sus recetas y su lista se construyeron bajo un país concreto, y re-interpretarlos
+    bajo otro produce el híbrido que hoy existe (plan español recalculado con reglas dominicanas).
+
+    Fallback al perfil cuando el plan no trae sello: es el caso de TODO plan anterior a este
+    P-fix, que debe seguir comportándose exactamente como hasta hoy. Sin ese fallback el fix
+    rompería el histórico entero.
+
+    Fail-safe: un sello que no canoniza (jsonb tocado a mano) se ignora y manda el perfil — un
+    dato corrupto no puede secuestrar el motor.
+
+    tooltip-anchor: country_for_plan (test_p1_plan_stamps_country.py)"""
+    if isinstance(plan_data, dict):
+        _raw = plan_data.get("_country")
+        if isinstance(_raw, str) and _raw.strip().upper() in COUNTRY_PROFILES:
+            return country_for_form_data({"country": _raw})
+    _hp = health_profile if isinstance(health_profile, dict) else {}
+    return country_for_form_data({"country": _hp.get("country")})
+
+
 def pricing_mode_for_form_data(form_data) -> "str | None":
     """Composición de `country_for_form_data` (T1, la ÚNICA puerta de lectura de país de
     `form_data`) + `pricing_mode_for_country` — el helper que TODO call site de generación o

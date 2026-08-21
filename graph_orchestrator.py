@@ -38447,6 +38447,15 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _pricing_mode = pricing_mode_for_form_data(form_data)
     if _pricing_mode:
         result["_pricing_mode"] = _pricing_mode
+    # [P1-PLAN-STAMPS-COUNTRY · 2026-08-21] El país DEL PLAN, junto al régimen de precios y por
+    # la misma razón: los dos describen el mismo artefacto. Hasta aquí sólo se sellaba el
+    # régimen, así que toda superficie post-generación re-derivaba el país del PERFIL ACTUAL —
+    # y el perfil del dueño de los 2 planes beta vivos dice 'DO'. A diferencia de `_pricing_mode`
+    # este sello es INCONDICIONAL (también 'DO'): si sólo se escribiera en beta, la ausencia de
+    # la clave significaría a la vez «dominicano» y «plan pre-P-fix», que es la ambigüedad que
+    # deja irreparables los planes que ya existen.
+    from constants import stamp_plan_country
+    stamp_plan_country(result, form_data)
 
     from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan, cycle_qty_multiplier, cycle_days_for_duration, active_trip_window_days
     from constants import compute_household_multiplier

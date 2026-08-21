@@ -11289,6 +11289,11 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # Best-effort fail-open a [] (sin alergias conocidas el filtro es no-op, como pre-fix).
             _rc_allergies = []
             _recalc_country = "DO"
+            # [P1-PRICING-MODE-REDERIVE · 2026-08-21] Sentinel: `False` = «no se pudo resolver el
+            # perfil» y el costeo conserva el régimen persistido (fail-open, conducta previa).
+            # `None` es un valor LEGÍTIMO (país con precios nativos), así que no puede servir de
+            # sentinel — la clase de confusión que ya costó `action_taken` en el coherence guard.
+            _recalc_pricing_mode = False
             try:
                 from db import get_user_profile as _gup_rc
                 _hp_rc = (_gup_rc(user_id) or {}).get("health_profile") or {}
@@ -11297,8 +11302,21 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 # ANTES de cualquier lock (patrón `_micro_form` de /swap-meal/persist, ya aplicado
                 # arriba en este mismo pre-fetch de perfil) — cierra el 2º call site país-blind
                 # que docs/country_system_f1.md ("Parqueado para Fase 2") dejó disclosed.
-                from constants import country_for_form_data as _cffd_rc
-                _recalc_country = _cffd_rc({"country": _hp_rc.get("country")})
+                # [P1-PLAN-STAMPS-COUNTRY · 2026-08-21] El país DEL PLAN gana al del perfil: un
+                # plan es un artefacto con fecha, y re-interpretar platos españoles bajo reglas
+                # dominicanas produce el híbrido que hoy existe (perfil 'DO', planes ES/US).
+                # Sin sello (todo plan pre-P-fix) cae al perfil, que es la conducta de hasta hoy.
+                from constants import country_for_plan as _cfp_rc
+                _recalc_country = _cfp_rc(plan_data, _hp_rc)
+                # [P1-PRICING-MODE-REDERIVE · 2026-08-21] Y con el país ya resuelto, el RÉGIMEN
+                # DE PRECIOS se re-deriva aquí en vez de leerse congelado del jsonb 300 líneas
+                # más abajo. Recalcular es el gesto con el que el usuario pide que su lista
+                # refleje su realidad actual; sin esto, un dominicano que se muda a España sigue
+                # viendo importes de colmado dominicano PARA SIEMPRE y un español que vuelve a RD
+                # nunca recupera precios. El toast de Configuración promete lo contrario en las
+                # dos direcciones.
+                from constants import pricing_mode_for_country as _pmc_rc
+                _recalc_pricing_mode = _pmc_rc(_recalc_country)
             except Exception as _rc_al_e:
                 logger.debug(f"[P0-VEG-GUARD-ALLERGEN] no se pudo hidratar alergias en /recalculate: {_rc_al_e}")
             _rc_fixed = 0
@@ -11630,8 +11648,20 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 from nutrition_calculator import refresh_budget_reconciliation as _p1b_rbr
                 # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16 (T7)] plan_data_fresh trae la clave desde
                 # el INSERT del plan — beta ⇒ None, cero recalculo de costo/reconciliación.
+                # [P1-PRICING-MODE-REDERIVE · 2026-08-21] …pero leerla congelada era el defecto:
+                # el régimen re-derivado arriba (desde el país vigente del plan/perfil) MANDA, y
+                # se persiste para que el PDF y el banner de presupuesto dejen de discrepar con
+                # la lista. `False` = no se pudo resolver ⇒ conserva lo persistido.
+                _p1b_mode = (plan_data_fresh.get("_pricing_mode")
+                             if _recalc_pricing_mode is False else _recalc_pricing_mode)
+                if _recalc_pricing_mode is not False:
+                    if _p1b_mode:
+                        plan_data_fresh["_pricing_mode"] = _p1b_mode
+                    else:
+                        plan_data_fresh.pop("_pricing_mode", None)
+                    plan_data_fresh["_country"] = _recalc_country
                 _p1b_summary = _p1b_ccs(scaled_7, scaled_15_hybrid, scaled_30_hybrid, grocery_duration,
-                                         pricing_mode=plan_data_fresh.get("_pricing_mode"))
+                                         pricing_mode=_p1b_mode)
                 if _p1b_summary:
                     plan_data_fresh["shopping_cost_summary"] = _p1b_summary
                     # [P1-BUDGET-REF-RESCALE · 2026-07-02] hogar nuevo → re-escala tier-basis.

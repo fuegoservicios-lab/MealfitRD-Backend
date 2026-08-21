@@ -1727,10 +1727,18 @@ def test_g_swap_persist_country_prefetch_antes_del_lock():
 
 def test_g_recalculate_shopping_list_wire_finalize_con_pais():
     """routers/plans.py::api_recalculate_shopping_list — 2º call site país-blind identificado en
-    docs/country_system_f1.md ('Parqueado para Fase 2')."""
+    docs/country_system_f1.md ('Parqueado para Fase 2').
+
+    [RE-ANCLADO por P1-PLAN-STAMPS-COUNTRY · 2026-08-21] Anclaba la grafía `_cffd_rc(`
+    (`country_for_form_data` sobre el perfil). El resolvedor pasó a `country_for_plan`, que
+    prefiere el SELLO DEL PLAN y cae al perfil sólo si el plan no lo trae — porque un plan es un
+    artefacto con fecha y re-interpretar platos españoles bajo reglas dominicanas producía el
+    híbrido que hoy existe en producción. Lo que este test protege de VERDAD no cambió: que el
+    país se resuelva ANTES del finalize y ANTES del lock (pre-fetch, patrón MUTATOR-PURITY: nada
+    de reentrar al pool dentro del `SELECT … FOR UPDATE`). Se re-ancla a ese ORDEN."""
     src = (_BACKEND / "routers" / "plans.py").read_text(encoding="utf-8")
     i_fn = src.index("def api_recalculate_shopping_list(")
-    i_fetch = src.index("_recalc_country = _cffd_rc(", i_fn)
+    i_fetch = src.index("_recalc_country = _cfp_rc(", i_fn)
     i_call = src.index("_rc_fixed += _fin_rc_rc(_m, allergies=_rc_allergies, portion_floors=False,\n"
                         "                                                 country=_recalc_country)", i_fn)
     i_lock = src.index("update_plan_data_atomic(", i_fn)
