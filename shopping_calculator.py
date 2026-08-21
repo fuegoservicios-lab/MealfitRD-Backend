@@ -1061,7 +1061,13 @@ def _master_category_for_unpriced_item(name) -> "str | None":
             rn = strip_accents(str(row.get("name") or "").strip().lower())
             if rn and rn in variants:
                 cat = str(row.get("category") or "").strip()
-                return cat or None
+                # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] El label de DISPLAY, no la categoría
+                # cruda del master. La rama con precio devuelve 'VEGETALES' (del mapa) y ésta
+                # devolvía 'Vegetales' (de la DB); el Dashboard agrupa por la cadena literal, así
+                # que el usuario veía DOS secciones para el mismo pasillo del súper — una con doce
+                # ítems y otra con Acelgas sola. Igual con PROTEÍNAS/Proteínas (Almejas) y
+                # FRUTAS/Frutas (Membrillo).
+                return _get_display_category(cat, str(name or "")) if cat else None
     except Exception:
         return None
     return None

@@ -105,25 +105,31 @@ def _cuerpo_similar_patterns() -> str:
 
 
 def test_segmentacion_coldstart_gateada_apagada():
-    """Poblar `country` (Fase 0 escribe 'DO' por default) NO debe revivir la
-    segmentación cultural del cold-start: con 1 usuario español el pool queda
-    vacío, y el dominicano que rellena el campo se segmenta contra un pool que
-    excluye a los legacy sin clave (el `=` no casa con clave ausente). Se
-    enciende con datos, no de rebote."""
+    """[RECONVERTIDO por P2-COUNTRY-HOUSEKEEPING · 2026-08-21] Este test anclaba que el knob
+    `MEALFIT_COUNTRY_COLDSTART_SEGMENT` gobernara la rama, con default False. Su razón escrita era
+    doble y las DOS siguen siendo ciertas: (a) con un usuario de un país nuevo su pool queda
+    vacío; (b) el `=` no casa con clave ausente, así que segmentar a un dominicano CON campo lo
+    enfrenta a un pool que excluye a todos los legacy SIN campo.
+
+    Lo que NO se seguía de (a) —y era el hueco— es que la conducta correcta fuera servirle lo
+    dominicano. Se sigue que es **no sugerir nada**, que es exactamente lo que un pool vacío
+    produce solo. Y (b) sólo existe en la rama DOMINICANA, que es la que este fix deja intacta.
+
+    Así que la propiedad que hay que anclar cambia de «el knob apaga la rama» a «la rama
+    dominicana no se movió»: eso es lo que aquel default protegía de verdad. La decisión de
+    segmentar a los dominicanos sigue siendo del knob, para el día que haya datos."""
+    import cron_tasks
+    # Lo que el default protegía: el dominicano y el usuario sin país NO se segmentan.
+    assert cron_tasks._coldstart_country_filter({"country": "DO"}) is None
+    assert cron_tasks._coldstart_country_filter({}) is None, (
+        "un perfil legacy SIN campo de país volvería a enfrentarse a un pool que lo excluye"
+    )
+    # Y el knob sigue existiendo, para la decisión que sí sigue pendiente de datos.
     cuerpo = _cuerpo_similar_patterns()
-    assert "MEALFIT_COUNTRY_COLDSTART_SEGMENT" in cuerpo, (
-        "La rama de país del cold-start perdió su knob: escribir country la "
-        "reactiva sin que nadie lo haya decidido."
+    assert "_coldstart_country_filter" in cuerpo, (
+        "el cold-start volvió a decidir el filtro de país en línea, sin el helper que documenta "
+        "la política"
     )
-    pos_knob = cuerpo.index("MEALFIT_COUNTRY_COLDSTART_SEGMENT")
-    pos_filtro = cuerpo.find("health_profile->>'country'", pos_knob)
-    assert pos_filtro != -1, (
-        "El filtro por país ya no está DESPUÉS del knob: o se movió fuera del "
-        "gate o se eliminó — ambos cambian conducta sin decisión."
-    )
-    assert re.search(
-        r"_env_bool\(\s*\"MEALFIT_COUNTRY_COLDSTART_SEGMENT\"\s*,\s*False\s*\)", cuerpo
-    ), "El knob debe nacer con default False."
 
 
 # ── paridad frontend↔backend ─────────────────────────────────────────────────

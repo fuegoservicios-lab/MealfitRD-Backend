@@ -3324,6 +3324,8 @@ def canonicalize_diet_type(diet) -> str:
 # país, la pregunta de diseño previa es "¿por qué el offset real del usuario no bastó aquí?".
 # ─────────────────────────────────────────────────────────────────────────────
 
+import logging as _logging
+
 COUNTRY_SYSTEM_ENABLED = _env_bool("MEALFIT_COUNTRY_SYSTEM", False)
 
 COUNTRY_PROFILES = {
@@ -3345,12 +3347,27 @@ COUNTRY_PROFILES = {
 def canonicalize_country(raw) -> str:
     """País canónico ISO-3166 alpha-2. Desconocido/ausente ⇒ 'DO' (fail-safe).
 
+    [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] El fail-safe era MUDO para los dos casos, y no son el
+    mismo: «ausente» es legítimo y silencioso (7 de los 8 perfiles vivos no tienen país, y gritar
+    por ellos convertiría el log en ruido hasta apagar el guard), pero un string NO VACÍO que no
+    canoniza es una CORRUPCIÓN — alguien escribió «España» o «Marte» donde iba un código ISO, y
+    sin rastro ese usuario puede pasar semanas recibiendo planes dominicanos sin que el operador
+    tenga forma de enterarse. El log distingue los dos casos y no entra en ningún bucle caliente:
+    esta función se llama una vez por derivación, no por ítem.
+
     tooltip-anchor: canonicalize_country (test_p1_country_system_f0.py)
     """
     if isinstance(raw, str):
         code = raw.strip().upper()
         if code in COUNTRY_PROFILES:
             return code
+        if code:
+            _logger_cc = _logging.getLogger(__name__)
+            _logger_cc.warning(
+                "[P2-COUNTRY-HOUSEKEEPING] valor de país no canónico descartado: %r → DO. "
+                "Un código ISO-3166 alpha-2 de %s se esperaba aquí.",
+                raw, "/".join(sorted(COUNTRY_PROFILES)),
+            )
     return "DO"
 
 

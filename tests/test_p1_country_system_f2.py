@@ -3955,8 +3955,14 @@ def test_hummus_sobrevive_en_el_agregador_real_como_catalogo_sin_precio(sc, monk
     hummus_item = next((i for i in items if i.get("name") == "Hummus"), None)
     assert hummus_item is not None, "hummus no debe dropearse del agregador real"
     # [P2-SHOPLIST-BETA-POLISH · 2026-08-18] el ruling de Task 8 era «listar en vez de
-    # dropear» — el pasillo ahora es el REAL del master ('Despensa'), no el label interno.
-    assert hummus_item.get("display_category") == "Despensa"
+    # dropear» — el pasillo ahora es el REAL del master, no el label interno.
+    # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] ...y en el FORMATO de display, no en el crudo de la
+    # DB. Este assert fijaba 'Despensa' (tal cual la columna `category`) mientras la rama CON
+    # precio emite 'DESPENSA' (del `DISPLAY_CATEGORY_MAP`), y el Dashboard agrupa por la cadena
+    # literal: el usuario veía DOS secciones para el mismo pasillo, una con doce ítems y otra con
+    # el alimento sin precio solo. El ruling de Task 8 no cambia — lo que cambia es que el pasillo
+    # real se escribe como todos los demás.
+    assert hummus_item.get("display_category") == "DESPENSA"
     assert hummus_item.get("estimated_cost_rd") is None
 
 

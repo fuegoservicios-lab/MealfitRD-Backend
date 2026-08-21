@@ -219,6 +219,60 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
 # TOOL: Actualizar Health Profile del usuario
 # ============================================================
 
+# [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] Campos que el CHAT puede escribir en `health_profile`.
+#
+# EL DEFECTO QUE CIERRA: `update_form_field` hacía `_hp[field] = valor` sin whitelist alguna, y el
+# system prompt del coach le ordena llamarla «OBLIGATORIO y SIN EXCEPCIÓN cada vez que el usuario
+# mencione un nuevo dato sobre sí mismo». O sea: la LLM elegía el NOMBRE de la clave del perfil.
+# Un «me mudé a España» escribía `country='España'`, que no es un código ISO-3166 y que
+# `canonicalize_country` convierte en 'DO' — el usuario cree que lo cambió y el sistema lo devuelve
+# a dominicano en silencio. Es el TERCER setter del país sin jerarquía, después de los dos que
+# P1-COUNTRY-RENEWAL-PROFILE-WINS tuvo que ordenar; nadie lo había contado.
+#
+# La lista es exactamente la de la docstring de la tool, que es el contrato que la LLM lee. Si
+# añades un campo ahí, añádelo aquí — y si no está aquí, la tool lo rechaza con un mensaje que la
+# LLM puede repetirle al usuario, en vez de escribir algo que se descarta después.
+_CAMPOS_EDITABLES_POR_CHAT = frozenset({
+    "weight", "height", "age", "gender", "dietType", "mainGoal", "activityLevel",
+    "budget", "cookingTime", "allergies", "medicalConditions", "dislikes", "struggles",
+    "country",
+})
+
+
+def _valor_de_campo_para_perfil(field: str, new_value):
+    """[P2-COUNTRY-HOUSEKEEPING · 2026-08-21] `(ok, valor_a_escribir)` para un campo que el chat
+    quiere actualizar. `ok=False` ⇒ la tool NO escribe y le dice a la LLM por qué.
+
+    El país es el único campo con canonicalización propia aquí, y a propósito: es el que la LLM
+    tiende a emitir en prosa («España», «Republica Dominicana») porque así se lo dice el usuario.
+    Se acepta el nombre y se traduce al código ISO usando el ÚNICO SSOT
+    (`constants.canonicalize_country` sobre `COUNTRY_PROFILES`); lo que NO canoniza se RECHAZA en
+    vez de caer a 'DO', porque un fallback silencioso aquí es indistinguible de haber obedecido.
+
+    tooltip-anchor: _valor_de_campo_para_perfil (test_p2_country_housekeeping.py)"""
+    if field not in _CAMPOS_EDITABLES_POR_CHAT:
+        return False, None
+    if field != "country":
+        return True, new_value
+    try:
+        from constants import COUNTRY_PROFILES, canonicalize_country, strip_accents
+    except Exception:
+        return False, None
+    _raw = str(new_value or "").strip()
+    if not _raw:
+        return False, None
+    _canon = canonicalize_country(_raw)
+    if _canon != "DO" or _raw.upper() == "DO":
+        return True, _canon
+    # No era un código: ¿es el NOMBRE de alguno de los países del SSOT?
+    _obj = strip_accents(_raw.lower())
+    for _cc, _perfil in COUNTRY_PROFILES.items():
+        if strip_accents(str(_perfil.get("name_es") or "").lower()) == _obj:
+            return True, _cc
+    return False, None
+
+
+
 @tool
 def update_form_field(user_id: str, field: str, new_value: str) -> str:
     """
@@ -286,10 +340,23 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
         # otro y se perdía silenciosamente la edición de un field. El
         # mutator solo escribe el field que estamos cambiando; los demás
         # quedan intactos bajo FOR UPDATE.
+        # [P2-COUNTRY-HOUSEKEEPING · 2026-08-21] La puerta: sin whitelist, la LLM elegía el
+        # NOMBRE de la clave del perfil que se escribía. Rechazar aquí —y decir por qué— es mejor
+        # que escribir algo que un canonicalizador descarta después en silencio.
+        _ok_campo, _valor_validado = _valor_de_campo_para_perfil(field, new_value)
+        if not _ok_campo:
+            logger.warning(
+                "[P2-COUNTRY-HOUSEKEEPING] update_form_field rechazado: field=%r value=%r "
+                "(fuera de la whitelist o valor no canonicalizable)", field, new_value,
+            )
+            return (f"No pude actualizar '{field}': no es un campo que yo pueda editar, o el "
+                    f"valor '{new_value}' no es válido para ese campo. Dile al usuario que lo "
+                    f"cambie desde Configuración.")
+
         if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
             _new_field_value = [item.strip() for item in str(new_value).split(",") if item.strip()]
         else:
-            _new_field_value = new_value
+            _new_field_value = _valor_validado
 
         # [P0-CHAT-ALLERGY-MERGE · 2026-08-11] Las alergias y las condiciones médicas se
         # FUNDEN; no se reemplazan.

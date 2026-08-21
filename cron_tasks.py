@@ -16825,20 +16825,42 @@ def calculate_plan_quality_score(user_id: str, plan_data: dict, consumed_records
     return max(0.0, min(1.0, quality))
 
 
+def _coldstart_country_filter(health_profile) -> "str | None":
+    """[P2-COUNTRY-HOUSEKEEPING · 2026-08-21] País por el que segmentar el pool del cold-start, o
+    `None` para no segmentar.
+
+    QUÉ CAMBIA Y POR QUÉ NO ES «ENCENDER EL KNOB». `get_similar_user_patterns` mete los platos más
+    registrados por OTROS usuarios en el prompt del generador con etiqueta «PRIORIDAD 4», y su
+    condición de disparo (menos de 3 registros de comida) es EXACTAMENTE la de todo usuario beta
+    nuevo. El pool real hoy es 100 % dominicano: el primer plan de un español —el que decide si se
+    queda— recibía sugerencias explícitas de generar los platos de los dominicanos.
+
+    El gate de Fase 0 existía apagado con dos razones escritas, y las dos siguen siendo CIERTAS:
+    (a) con un usuario de un país nuevo su pool queda vacío; (b) el `=` no casa con clave ausente,
+    así que segmentar a un dominicano CON campo lo enfrentaría a un pool que excluye a los legacy
+    SIN campo. Lo que no se seguía de (a) es que la conducta correcta fuera servirle lo dominicano
+    — se seguía que es **no sugerir nada**, que es lo que un pool vacío produce de forma natural.
+
+    Por eso cambia la SEMÁNTICA y no el default: país beta ⇒ segmenta SIEMPRE (y si sale vacío,
+    vacío); DO y país ausente ⇒ `None`, conducta byte a byte anterior, que es donde vivía el
+    problema (b). El knob `MEALFIT_COUNTRY_COLDSTART_SEGMENT` deja de gobernar esto y queda para
+    quien quiera segmentar TAMBIÉN a los dominicanos el día que haya datos.
+
+    tooltip-anchor: _coldstart_country_filter (test_p2_country_housekeeping.py)"""
+    try:
+        from constants import country_for_form_data
+        canon = country_for_form_data(health_profile if isinstance(health_profile, dict) else {})
+    except Exception:
+        return None
+    return canon if canon != "DO" else None
+
+
 def get_similar_user_patterns(user_id: str, health_profile: dict):
     """Para usuarios sin historial, busca que funciono para perfiles similares (Mejora 4)."""
     goal = health_profile.get('mainGoal')
     activity = health_profile.get('activityLevel')
     diet_types = health_profile.get('dietTypes', [])
-    # [P1-COUNTRY-SYSTEM-F0 · 2026-08-16] Gate explícito: la Fase 0 empieza a
-    # escribir `country` (default 'DO') y esta rama era dead code que revivía
-    # sola. Dos problemas medidos en el mapa: (a) con 1 usuario de un país
-    # nuevo, su pool de patrones queda VACÍO; (b) el `=` no casa con clave
-    # ausente, así que un dominicano CON campo se segmenta contra un pool que
-    # excluye a todos los legacy SIN campo. Se enciende con datos, no de rebote.
-    country = health_profile.get('country') if _env_bool(
-        "MEALFIT_COUNTRY_COLDSTART_SEGMENT", False
-    ) else None
+    country = _coldstart_country_filter(health_profile)
     
     if not goal or not activity:
         return []
