@@ -64,11 +64,38 @@ def _proactive_llm_timeout_s() -> float:
 # que `get_consumed_meals_today` suma a la fecha local para ir a UTC).
 # Tooltip-anchor: P1-PROACTIVE-TZ.
 def _proactive_tz_offset_min() -> int:
+    # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El clamp era `0 <= v <= 720`, que RECHAZA
+    # estructuralmente cualquier offset negativo: Europa era inexpresable incluso como override
+    # manual. Un knob que no puede representar el caso que debería mitigar no es una mitigación.
+    # Ahora ±840 min (±14 h), el rango real de husos IANA. Sigue siendo sólo el FALLBACK: el
+    # disparo por usuario lo decide `user_tz_offset_min`.
     return _env_int(
         "MEALFIT_PROACTIVE_TZ_OFFSET_MIN",
         240,
-        validator=lambda v: 0 <= v <= 720,
+        validator=lambda v: -840 <= v <= 840,
     )
+
+
+def _local_hour_float_for_offset(now_utc, tz_offset_min) -> float:
+    """[P1-NUDGE-TZ-PER-USER · 2026-08-21] Hora local del usuario como float (13.5 = 13:30).
+
+    `tz_offset_min` sigue la convención de `getTimezoneOffset()` de JS que usa todo el sistema:
+    minutos que hay que SUMAR a la hora local para llegar a UTC (RD = +240, España verano = −120).
+    Por eso se RESTA aquí.
+
+    Existe para que el reloj del cron viva DENTRO del bucle por usuario. Antes
+    `run_proactive_checks` calculaba `now_ast = datetime.now(timezone(timedelta(hours=-4)))` una
+    sola vez, fuera del bucle, y con eso decidía el disparo de TODAS las sesiones activas: a un
+    español el «Resumen del día» —que manda una notificación push real— le llegaba a las 05:00.
+
+    tooltip-anchor: _local_hour_float_for_offset (test_p1_nudge_tz_per_user.py)"""
+    from datetime import timedelta
+    try:
+        _off = int(tz_offset_min)
+    except Exception:
+        _off = 240
+    local = now_utc - timedelta(minutes=_off)
+    return local.hour + local.minute / 60.0
 
 def _usuario_en_modo_contador(user_id) -> bool:
     """[P2-CHAT-PLAN-TOOLS-PAUSE · 2026-08-15] ¿Este usuario apagó la generación?
@@ -287,10 +314,15 @@ def run_proactive_checks():
     # check_and_trigger_jit_rolling_windows() # Desactivado: El paso a Micro-Batching usa triggers interactivos vía UI ("Actualizar Platos")
 
     
-    # 1. Obtenemos la hora actual (AST / -04:00)
-    now_ast = datetime.now(timezone(timedelta(hours=-4)))
-    current_hour_float = now_ast.hour + now_ast.minute / 60.0
-    
+    # 1. El instante UTC del tick. La hora LOCAL se calcula por usuario dentro del bucle.
+    # [P1-NUDGE-TZ-PER-USER · 2026-08-21] Aquí vivía `now_ast = datetime.now(timezone(
+    # timedelta(hours=-4)))`: un reloj dominicano literal con el que se decidía el disparo de
+    # TODAS las sesiones activas. Fase 1 T5 parametrizó `get_daily_nudge_count` por usuario y
+    # dejó el reloj. Traducido a hora local con los horarios por defecto, un español recibía
+    # «¿desayunaste?» a las 15:00, «¿cenaste?» a la 01:30 y el Resumen del día —que dispara una
+    # notificación push REAL— a las 05:00.
+    _now_utc = datetime.now(timezone.utc)
+
     sessions = get_active_users_for_proactive()
     logger.info(f"🔍 [CRON] Encontradas {len(sessions)} sesiones activas para verificar (Proactividad Inteligente).")
 
@@ -332,6 +364,15 @@ def run_proactive_checks():
             break
         session_id = str(s.get("id"))
         user_id = str(s.get("user_id"))
+        # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El reloj, DENTRO del bucle. `user_tz_offset_min` ya
+        # estaba importado en este mismo archivo y se usaba 100 líneas más arriba: la maquinaria
+        # existía y este call site no la llamaba. El knob global queda sólo de fallback.
+        try:
+            _user_tz_off = user_tz_offset_min(user_id)
+        except Exception:
+            _user_tz_off = _proactive_tz_offset_min()
+        now_ast = _now_utc - timedelta(minutes=_user_tz_off)
+        current_hour_float = _local_hour_float_for_offset(_now_utc, _user_tz_off)
         # GAP 3: Nudge Budget (max 2 nudges per day to avoid fatigue)
         daily_nudges = get_daily_nudge_count(user_id)
         if daily_nudges >= 2:
@@ -467,10 +508,14 @@ def run_proactive_checks():
             # ¿descuento todo de tu nevera?" — falso-positivo NOCTURNO para cada
             # usuario standard. Con el offset, la rama AST-aware usa el día AST
             # correcto. Tooltip-anchor: P1-PROACTIVE-TZ.
+            # [P1-NUDGE-TZ-PER-USER · 2026-08-21] El filtro de consumo usa el huso DEL USUARIO,
+            # no el knob global. Sin esto el Resumen del día de un español evaluaba una ventana
+            # que era mayoritariamente su día ANTERIOR — el mismo falso-positivo nocturno que
+            # P1-PROACTIVE-TZ cerró para RD, reabierto para todo el que no viva en RD.
             consumed = get_consumed_meals_today(
                 user_id,
                 date_str=now_ast.strftime("%Y-%m-%d"),
-                tz_offset_mins=_proactive_tz_offset_min(),
+                tz_offset_mins=_user_tz_off,
             )
             
             if meal_to_check == "Resumen del día":

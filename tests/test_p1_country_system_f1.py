@@ -2028,11 +2028,20 @@ def test_los_4_sitios_derivan_offset_via_user_tz_offset_min():
 
 # ── db_facts.get_avg_meal_hour: preserva-bug con signo '+' ───────────────────
 
-def test_get_avg_meal_hour_usa_offset_resuelto_con_signo_mas(monkeypatch):
-    """[T5] `consumed_at` es timestamptz (no NAIVE) — el doble AT TIME ZONE previo neteaba
-    +offset, no -offset (forense Neon 2026-08-16). La sustitución usa `+` para ser BYTE-IDÉNTICA
-    a offset=240; un '-' aquí sería una regresión silenciosa de conducta (aunque 'arreglaría' un
-    bug no pedido por T5). Ver task-5-report.md para el argumento completo."""
+def test_get_avg_meal_hour_usa_offset_resuelto_con_signo_menos(monkeypatch):
+    """[RECONVERTIDO por P1-AVG-MEAL-HOUR-SIGN · 2026-08-21] Este test anclaba el signo '+' como
+    PRESERVA-BUG deliberado de T5: `consumed_at` es timestamptz, el doble AT TIME ZONE previo
+    neteaba +offset, y T5 replicó ese '+' para ser byte-idéntica a offset=240 mientras sólo
+    parametrizaba el huso. Su propio docstring decía que «un P-fix dedicado con su propio test
+    debe decidir si corregir el signo».
+
+    Este es ese P-fix. Lo que cambió la decisión no fue el gusto: con el knob de países ENCENDIDO
+    el sesgo dejó de ser la constante «+8 h» que el comentario prometía y pasó a ser `2 × offset`
+    — una función del país, que para España CAMBIA DE SIGNO (−4 h). La byte-identidad que el '+'
+    protegía sólo existía mientras todos los usuarios compartían offset 240.
+
+    El test se RECONVIERTE y conserva su mitad todavía cierta: que el huso salga resuelto por
+    usuario y que el hardcode 'America/Santo_Domingo' no vuelva."""
     import db_facts
 
     calls = []
@@ -2049,8 +2058,11 @@ def test_get_avg_meal_hour_usa_offset_resuelto_con_signo_mas(monkeypatch):
 
     assert calls, "execute_sql_query no se invocó"
     query, params = calls[-1]["query"], calls[-1]["params"]
-    assert query.count("consumed_at + make_interval(mins => %s)") == 2, (
-        "esperaba el signo '+' (preserva-bug) en HOUR y MINUTE"
+    assert query.count("consumed_at - make_interval(mins => %s)") == 2, (
+        "esperaba el signo '-' (P1-AVG-MEAL-HOUR-SIGN) en HOUR y MINUTE"
+    )
+    assert "consumed_at + make_interval" not in query, (
+        "volvió el preserva-bug: sobre timestamptz el '+' desvía 2×offset, no una constante"
     )
     assert "America/Santo_Domingo" not in query
     assert params[0] == -60 and params[1] == -60, f"offset resuelto ausente: {params!r}"

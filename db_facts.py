@@ -267,23 +267,24 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
         # `tzOffset` persistido. América/Santo_Domingo no tiene DST (fijo UTC-4), así que 240
         # es válido los 365 días del año (no hace falta lógica de calendario).
         #
-        # ⚠️ Preserva-bug A PROPÓSITO — signo '+', NO '-' como los otros 3 sitios de este mismo
-        # P-fix: el expr original hacía DOBLE `AT TIME ZONE` (`consumed_at AT TIME ZONE 'UTC' AT
-        # TIME ZONE 'America/Santo_Domingo'`), el idiom correcto para columnas TIMESTAMP NAIVE
-        # que guardan dígitos UTC. Pero `consumed_at` es `timestamptz` (verificado contra Neon,
-        # forense 2026-08-16: `SELECT pg_typeof(consumed_at) FROM consumed_meals`) — sobre
-        # timestamptz ese doble-hop NETEA +offset en vez de -offset (la 2ª conversión reinterpreta
-        # los dígitos ya-UTC del 1er hop como si fueran hora LOCAL AST, sumando el offset otra
-        # vez en vez de cancelarlo). Medido: un evento a las 14:00 UTC devolvía hora=18 (hora
-        # local AST real: 10:00) — +8h de más. Es un bug preexistente (nudge timing sesgado,
-        # NO fecha — esta función no hace ::date) fuera de alcance de T5, que solo parametriza
-        # el huso, no audita aritmética. Replicar el signo '+' preserva el comportamiento
-        # BYTE-IDÉNTICO a offset=240 que exige el contrato de este fix; un P-fix dedicado con su
-        # propio test debe decidir si corregir el signo. Detalle completo en task-5-report.md.
+        # [P1-AVG-MEAL-HOUR-SIGN · 2026-08-21] EL P-FIX DEDICADO QUE T5 PEDÍA. Aquí vivía un
+        # preserva-bug deliberado: el signo era '+' y no '-' como en los otros 3 sitios de T5,
+        # para garantizar byte-identidad con offset=240 mientras T5 sólo parametrizaba el huso.
+        #
+        # El comentario original lo llamaba «+8h», y esa etiqueta escondía lo importante: NO es
+        # una constante, es `2 × offset`. El doble `AT TIME ZONE` sobre una columna `timestamptz`
+        # SUMA el offset en vez de restarlo, así que mientras el fallback era 240 para todo el
+        # mundo parecía un sesgo fijo — y en cuanto `MEALFIT_COUNTRY_SYSTEM` dio offsets reales
+        # por usuario pasó a ser una función del país, que para España CAMBIA DE SIGNO:
+        #     offset  240 (RD)   14:00Z → buggy 18.0 · correcta 10.0   (+8 h)
+        #     offset -120 (ES)   14:00Z → buggy 12.0 · correcta 16.0   (−4 h)
+        #     offset  360 (MX)   14:00Z → buggy 20.0 · correcta  8.0   (+12 h)
+        # Consumidor único (verificado por grep): el agente proactivo, que decide a qué hora te
+        # llega el nudge. Un dominicano que desayuna a las 8:00 lo recibía a las 17:30.
         _tz_off = user_tz_offset_min(user_id)
         query = """
-            SELECT EXTRACT(HOUR FROM (consumed_at + make_interval(mins => %s))) as hr,
-                   EXTRACT(MINUTE FROM (consumed_at + make_interval(mins => %s))) as mn
+            SELECT EXTRACT(HOUR FROM (consumed_at - make_interval(mins => %s))) as hr,
+                   EXTRACT(MINUTE FROM (consumed_at - make_interval(mins => %s))) as mn
             FROM consumed_meals
             WHERE user_id = %s AND meal_type ILIKE %s AND consumed_at >= %s
         """

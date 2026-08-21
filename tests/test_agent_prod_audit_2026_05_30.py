@@ -39,14 +39,20 @@ def _code_only(src: str) -> str:
 # P1-PROACTIVE-TZ + P2-PROACTIVE-NUDGE-BUDGET-TZ
 # ---------------------------------------------------------------------------
 def test_proactive_passes_tz_offset_to_consumed():
+    """[RE-ANCLADO por P1-NUDGE-TZ-PER-USER · 2026-08-21] La invariante que este test protege —
+    que `get_consumed_meals_today` reciba un offset y no caiga a su rama UTC, que era el
+    falso-positivo nocturno de P1-PROACTIVE-TZ— sigue viva. Lo que cambió es de DÓNDE sale el
+    offset: era el knob GLOBAL (`_proactive_tz_offset_min()`, hora dominicana para todo el
+    mundo) y ahora es el del usuario. Para un español, el knob global evaluaba una ventana que
+    era mayoritariamente su día ANTERIOR: el mismo defecto que P1-PROACTIVE-TZ cerró para RD,
+    reabierto para todo el que no viva en RD. Se re-ancla a la PROPIEDAD, no a la grafía."""
     src = _read("proactive_agent.py")
     assert "P1-PROACTIVE-TZ" in src
-    assert "_proactive_tz_offset_min" in src, "Falta el helper del knob de offset"
-    # La llamada a get_consumed_meals_today debe pasar tz_offset_mins.
+    assert "_proactive_tz_offset_min" in src, "Falta el helper del knob de offset (fallback)"
     assert re.search(
-        r'get_consumed_meals_today\(\s*\n?\s*user_id\s*,\s*\n?\s*date_str=now_ast\.strftime\("%Y-%m-%d"\)\s*,\s*\n?\s*tz_offset_mins=_proactive_tz_offset_min\(\)\s*,?\s*\n?\s*\)',
+        r'get_consumed_meals_today\(\s*\n?\s*user_id\s*,\s*\n?\s*date_str=now_ast\.strftime\("%Y-%m-%d"\)\s*,\s*\n?\s*tz_offset_mins=_user_tz_off\s*,?\s*\n?\s*\)',
         src,
-    ), "get_consumed_meals_today debe recibir tz_offset_mins=_proactive_tz_offset_min()"
+    ), "get_consumed_meals_today debe recibir el offset DEL USUARIO (tz_offset_mins=_user_tz_off)"
 
 
 def test_nudge_budget_counts_ast_day_not_utc():
