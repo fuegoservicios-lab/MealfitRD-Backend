@@ -1691,6 +1691,12 @@ print = custom_print
 # (app → agent → tools → graph_orchestrator → agent). Se usa lazy import donde se necesite.
 from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
 from constants import (
+    # [P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] `country_for_form_data` sube al import de
+    # MÓDULO: vivía sólo como import local dentro de `_build_shared_context`, así que los
+    # call sites del closer del piso de proteína (dentro de `self_critique_node`) habrían
+    # lanzado NameError en runtime. Los tests unitarios no lo vieron porque no ejercitan esa
+    # rama — lo cazó una comprobación explícita del ámbito, no la suite.
+    country_for_form_data,
     normalize_ingredient_for_tracking, strip_accents,
     TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES,
     # P1-10: subidos para evitar reimport en hot paths
@@ -19569,7 +19575,44 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
-def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=None) -> list:
+def _country_protein_pool(country=None) -> list:
+    """[P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] Pool de candidatos del closer del piso de proteína.
+
+    DO (o knob apagado) ⇒ `DOMINICAN_PROTEINS` tal cual, byte-idéntico. País beta ⇒ las proteínas
+    de SU pool primero (`COUNTRY_POOLS[cc]['proteins']`, curado en Fase 2 y hasta hoy leído sólo
+    por el camino degradado) seguidas de las dominicanas.
+
+    Es UNIÓN, no sustitución, y la razón es medible: de los 49 nombres de `DOMINICAN_PROTEINS` la
+    inmensa mayoría son universales —Pollo, Cerdo, Res, Pescado, Atún, Huevos, lentejas, garbanzos,
+    quesos—, así que reemplazar el pool dejaría a un español sin pollo, que es peor que el problema
+    que arregla. Lo único que NO viaja son los nombres con gentilicio dominicano ('Salami
+    Dominicano', 'Longaniza'): son los que un español no puede comprar bajo ese nombre. El filtro
+    mira el NOMBRE, no una tabla de exclusiones — la 4ª tabla que P1-DIET-CANON-SSOT prohibió.
+
+    tooltip-anchor: _country_protein_pool (test_p1_protein_closer_country.py)"""
+    from constants import DOMINICAN_PROTEINS
+    try:
+        from constants import country_for_form_data, COUNTRY_POOLS, strip_accents
+        canon = country_for_form_data({"country": country}) if country else "DO"
+    except Exception:
+        return list(DOMINICAN_PROTEINS)
+    if canon == "DO":
+        return list(DOMINICAN_PROTEINS)
+    _propias = list((COUNTRY_POOLS.get(canon) or {}).get("proteins") or [])
+    _do_neutras = [p for p in DOMINICAN_PROTEINS
+                   if "dominican" not in strip_accents(str(p)).lower()]
+    _vistos, _out = set(), []
+    for _n in _propias + _do_neutras:
+        _k = strip_accents(str(_n)).lower()
+        if _k in _vistos:
+            continue
+        _vistos.add(_k)
+        _out.append(_n)
+    return _out
+
+
+def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=None,
+                                country=None) -> list:
     """[P3-PROTEIN-FLOOR] Proteínas de ALTA densidad (≥min_protein g/100g) del catálogo
     dominicano que son allergen-SAFE para el usuario y resuelven en el catálogo nutricional.
     Ordenadas por magrez (proteína/kcal) desc → el closer prefiere la de menor costo calórico.
@@ -19585,7 +19628,9 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=N
     min_protein — correcto: mejor un déficit honesto (retry informado con fuentes aptas) que
     una violación fabricada."""
     try:
-        from constants import DOMINICAN_PROTEINS, strip_accents
+        from constants import strip_accents
+        # [P1-PROTEIN-CLOSER-COUNTRY · 2026-08-21] el pool sale del helper, que ya aplica el knob
+        _pool_prot = _country_protein_pool(country)
     except Exception:
         return []
     import re as _re
@@ -19605,7 +19650,7 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=N
     forbidden = (_expand_allergy_declarations(allergies)
                  if _has_real_medical_flags(allergies) else set())
     out = []
-    for name in DOMINICAN_PROTEINS:
+    for name in _pool_prot:
         nlow = strip_accents(str(name).lower())
         if forbidden and any(f and (f in nlow or nlow in f) for f in forbidden):
             continue  # alérgeno → excluir (fail-secure)
@@ -20067,7 +20112,7 @@ def _is_savory_cheese_name(nlow: str) -> bool:
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, allergies=None, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0, enforce_min_threshold: bool = True,
-                                day_used_proteins=None, diet=None) -> int:
+                                day_used_proteins=None, diet=None, country=None) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -20132,7 +20177,8 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 _seen_sd = set()
                 # [P1-DIET-BLIND-DIRECTIVES · 2026-08-08] diet= filtra lácteos para vegan.
                 for (_ln_sd, _nm_sd, _info_sd) in _safe_high_density_proteins(
-                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN, diet=diet):
+                        allergies, db, min_protein=CLOSER_SWEET_DAIRY_MIN_PROTEIN, diet=diet,
+                        country=country):
                     _ndlow = _sa(str(_info_sd.name).lower())
                     if _ndlow in _seen_sd or not any(t in _ndlow for t in _SWEET_DAIRY_TOKENS):
                         continue
@@ -36217,7 +36263,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         # (cap 30g → 90g los excedería; los caps NO re-corren tras FASE A). En platos SALADOS el closer prefiere la
         # carne densa por categoría; el yogur queda para los dulces vía el no_cook/dairy-egg + sweet-guard.
         _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0,
-                                             diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
+                                             diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
+                                             country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
         _DAIRY_EXCLUDE = ("queso", "ricotta", "cottage", "requeson", "leche")  # quesos (cap 30g) + leche; yogur SÍ entra
         _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY_EXCLUDE)]
         if not _cands:
@@ -36273,7 +36320,8 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
                                                  slot_cal_target=_slot_cal, enforce_min_threshold=False,
                                                  day_used_proteins=_used_others,
-                                                 diet=form_data.get("dietType"))
+                                                 diet=form_data.get("dietType"),
+                                                 country=country_for_form_data(form_data))
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
@@ -36327,7 +36375,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
             # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
             # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
             _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0,
-                                                          diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
+                                                          diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
+                                                          country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
                               if PROTEIN_FLOOR_ENABLED else [])
             # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
             # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
@@ -36394,7 +36443,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                             allergies=form_data.get("allergies"),
                             fill_pct=PROTEIN_FLOOR_FILL_PCT,
                             day_used_proteins=_used_mi,
-                            diet=form_data.get("dietType"))
+                            diet=form_data.get("dietType"),
+                            country=country_for_form_data(form_data))
                         if _g_mi > 0:
                             # el add recién hecho debe ser visible para las siguientes comidas del día
                             _day_meal_labels[_mi] = _protein_gate_labels_in_meal(_m)
@@ -36500,7 +36550,8 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                 from nutrition_db import IngredientNutritionDB as _SwapNDB
                 _swap_db = _SwapNDB()
                 _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0,
-                                                          diet=form_data.get("dietType"))  # [P1-DIET-BLIND-DIRECTIVES]
+                                                          diet=form_data.get("dietType"),  # [P1-DIET-BLIND-DIRECTIVES]
+                                                          country=country_for_form_data(form_data))  # [P1-PROTEIN-CLOSER-COUNTRY]
                 _swapped_days = 0
                 for _d in (days or []):
                     if _swap_excess_carbs_to_protein_for_day(
