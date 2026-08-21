@@ -2239,8 +2239,22 @@ def test_dst_america_santo_domingo_no_aplica_240_vale_todo_el_ano():
 
 # ── pisos backend: _budget_cycle_floor_for_currency ──────────────────────────
 
-def test_gate_currencies_son_exactamente_eur_mxn_cop():
-    assert set(nc._BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY.keys()) == {"EUR", "MXN", "COP"}
+def test_gate_currencies_son_exactamente_las_monedas_beta():
+    """[reconvertido · P1-BUDGET-FLOOR-USD · 2026-08-21] Antes fijaba la lista a mano
+    (`{"EUR","MXN","COP"}`) y por eso no acusó que USD —moneda de DOS países beta, US y PR— no
+    tuviera piso propio: se juzgaba con la cesta dominicana al tipo de cambio.
+
+    Ahora la lista se DERIVA de `COUNTRY_PROFILES`, que es el SSOT de países. Así el test deja de
+    describir el estado y pasa a exigir la regla: toda moneda de un país beta tiene piso propio. Si
+    mañana entra un séptimo país con moneda nueva y nadie le pone piso, esto falla — que es lo que
+    debió pasar con USD y no pasó."""
+    from constants import COUNTRY_PROFILES
+    esperadas = {
+        p["currency"] for cc, p in COUNTRY_PROFILES.items() if p.get("is_beta")
+    }
+    assert set(nc._BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY.keys()) == esperadas, (
+        "hay una moneda de país beta sin piso propio (o un piso de una moneda que ya no se usa)"
+    )
 
 
 def test_piso_eur_defaults():
@@ -2262,12 +2276,19 @@ def test_piso_cop_defaults():
 
 
 def test_piso_moneda_no_reconocida_delega_en_dop_sin_tocarlo():
-    """DOP/USD/basura: delega en `_budget_cycle_floor_dop` — el piso histórico
-    NO se toca ni se reimplementa por segunda vez."""
+    """DOP/basura: delega en `_budget_cycle_floor_dop` — el piso histórico NO se toca ni se
+    reimplementa por segunda vez.
+
+    [reconvertido · P1-BUDGET-FLOOR-USD · 2026-08-21] Este test también afirmaba
+    `USD == _budget_cycle_floor_dop(days)`, o sea que anclaba el defecto: USD es la moneda de DOS
+    países beta (US y PR) y era la única sin piso propio, así que se juzgaba con la cesta
+    dominicana al tipo de cambio — 17% por debajo de los US$80/140/260 que el producto ya declara.
+    La propiedad que este test protege de verdad es «una moneda NO RECONOCIDA delega»; USD dejó de
+    serlo. Se conserva el caso genuino (XYZ, DOP) y el nuevo contrato de USD vive en
+    `test_p1_budget_floor_usd.py`."""
     for days in (7, 15, 30):
         assert nc._budget_cycle_floor_for_currency(days, "XYZ") == nc._budget_cycle_floor_dop(days)
         assert nc._budget_cycle_floor_for_currency(days, "DOP") == nc._budget_cycle_floor_dop(days)
-        assert nc._budget_cycle_floor_for_currency(days, "USD") == nc._budget_cycle_floor_dop(days)
 
 
 def test_piso_ciclo_no_estandar_interpola_desde_7d_igual_que_dop():
@@ -2443,16 +2464,24 @@ def test_mensaje_nuevo_nunca_hardcodea_rd_simbolo(monkeypatch, currency, country
     assert currency in detail["message"]
 
 
-def test_usd_sigue_intacto_con_knob_on(monkeypatch):
-    """El país-system ON no debe tocar el mecanismo USD histórico (conversión
-    por _budget_usd_to_dop)."""
+def test_usd_bloquea_igual_con_el_knob_encendido_o_apagado(monkeypatch):
+    """[reconvertido · P1-BUDGET-FLOOR-USD · 2026-08-21] Antes exigía `detail_off == detail_on`, o
+    sea que el knob NO cambiara el mecanismo de USD. Esa igualdad era justo el defecto: significaba
+    que encender el sistema de países dejaba a US y PR con la cesta dominicana convertida por
+    `_budget_usd_to_dop`, mientras a ES/MX/CO se les daba piso propio. Una devaluación del peso
+    movía el mínimo de un usuario de Florida.
+
+    Lo que este test protege de verdad —y sigue protegiendo— es que **el veredicto no dependa del
+    knob**: un presupuesto absurdo se rechaza con el sistema encendido y apagado. Lo que ya no se
+    exige es que el CAMINO sea el mismo, porque el nuevo camino es el correcto. El contrato de
+    rollback (knob apagado ⇒ FX histórico exacto) vive en `test_p1_budget_floor_usd.py`."""
     monkeypatch.delenv("MEALFIT_COUNTRY_SYSTEM", raising=False)
     ok_off, detail_off = nc.validate_budget_sufficient(_budget_form("USD", 5))
     monkeypatch.setenv("MEALFIT_COUNTRY_SYSTEM", "true")
     ok_on, detail_on = nc.validate_budget_sufficient(_budget_form("USD", 5))
     assert ok_off is False
     assert ok_on is False
-    assert detail_off == detail_on
+    assert detail_off and detail_on, "bloquea sin explicar por qué en alguno de los dos caminos"
 
 
 def test_dop_sigue_intacto_con_knob_on(monkeypatch):

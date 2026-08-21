@@ -1861,10 +1861,38 @@ _BUDGET_CYCLE_FLOOR_DEFAULTS_EUR = {7: "75", 15: "135", 30: "245"}
 _BUDGET_CYCLE_FLOOR_DEFAULTS_MXN = {7: "1400", 15: "2500", 30: "4700"}
 _BUDGET_CYCLE_FLOOR_DEFAULTS_COP = {7: "350000", 15: "600000", 30: "1100000"}
 
+# [P1-BUDGET-FLOOR-USD · 2026-08-21] USD es la moneda de DOS de los cinco países beta (US y PR) y
+# era la única sin piso propio: caía al `else` histórico, que multiplica lo declarado por
+# `_budget_usd_to_dop()` y lo compara contra la cesta DOMINICANA. Medido, el desacuerdo con lo que
+# el producto ya declara era del 17%:
+#
+#     ciclo 7d:  4000 DOP ÷ 60 = US$ 66,67   vs   US$ 80 declarados
+#     ciclo 15d: 7000 DOP ÷ 60 = US$ 116,67  vs   US$ 140
+#     ciclo 30d: 13000 DOP ÷ 60 = US$ 216,67 vs   US$ 260
+#
+# NO es un número nuevo: es 80/140/260, el `BUDGET_MIN_TOTAL.USD` del frontend — el MISMO del que
+# Fase 1 derivó EUR (×0,95), MXN (×18) y COP (×4200). La paridad cross-file ya estaba exigida por
+# escrito («DEBE quedar consistente con BUDGET_MIN_TOTAL del frontend») y ya tenía test… para esas
+# tres monedas, porque aquí no había entrada USD que comparar: la única moneda que incumplía la
+# regla era justo la que nadie miraba.
+#
+# Desaparece además un acoplamiento invisible: mientras el piso de USD salía de dividir pesos
+# dominicanos, una devaluación movía el mínimo de un usuario de Florida sin que nadie tocara nada.
+#
+# El umbral SUBE (66,67 → 80), o sea que se vuelve más estricto: nadie que hoy pase el formulario
+# queda fuera (el frontend ya bloquea en 80); se cierra la ventana de quien entra por la API.
+# Lo que esto NO cierra es la otra mitad de P1-19: los pisos de EUR/MXN/COP siguen siendo
+# conversiones de tipo de cambio y no cestas medidas en cada país. Eso es curación de datos y
+# decisión del dueño — inventar aquí la compra semanal de España sería la clase de afirmación sin
+# respaldo que la auditoría de procedencia del catálogo ya costó.
+# tooltip-anchor: P1-BUDGET-FLOOR-USD
+_BUDGET_CYCLE_FLOOR_DEFAULTS_USD = {7: "80", 15: "140", 30: "260"}
+
 _BUDGET_CYCLE_FLOOR_DEFAULTS_BY_CURRENCY = {
     "EUR": _BUDGET_CYCLE_FLOOR_DEFAULTS_EUR,
     "MXN": _BUDGET_CYCLE_FLOOR_DEFAULTS_MXN,
     "COP": _BUDGET_CYCLE_FLOOR_DEFAULTS_COP,
+    "USD": _BUDGET_CYCLE_FLOOR_DEFAULTS_USD,
 }
 
 
