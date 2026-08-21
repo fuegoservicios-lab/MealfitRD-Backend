@@ -3960,18 +3960,23 @@ def test_hummus_sobrevive_en_el_agregador_real_como_catalogo_sin_precio(sc, monk
     assert hummus_item.get("estimated_cost_rd") is None
 
 
-def test_hummus_no_vocabulario_alergeno_sesamo_no_existe_como_clase(go):
-    """[hallazgo documentado, no un gap que esta task deba cerrar] El wizard tiene 6 chips de
-    alergia (Lácteos/Gluten/Huevo/Mariscos/Frutos Secos/Soya, `QAllergies.jsx`) -- NINGUNO es
-    'Sésamo'/'Ajonjolí', y `_ALLERGEN_SYNONYMS` no tiene esa clase. El tahini de hummus (y
-    'Ajonjolí' mismo, fila del catálogo YA existente pre-Task-8) no tiene ninguna clase de alergia
-    a la que enganchar -- verificado que un alérgico a 'Frutos Secos' NO ve a hummus como
-    violación (correcto: garbanzo/sésamo no son frutos secos), pero tampoco existe ninguna clase
-    'sésamo' contra la que probar. Crear esa clase (chip nuevo + wiring de 4 vocabularios) es una
-    task de scope mayor, fuera de este top-up."""
+def test_hummus_engancha_ahora_a_la_clase_sesamo(go):
+    """[RECONVERTIDO por P0-ALLERGEN-VOCAB-I18N · 2026-08-21] Este test anclaba la AUSENCIA de la
+    clase 'sésamo': el hallazgo que Task 8 documentó y declaró fuera de su scope («crear esa clase
+    es una task de scope mayor»). La auditoría de producción del 2026-08-20 aportó la evidencia
+    que faltaba —4 filas del catálogo vivo con sésamo y el nº 11 de los 14 alérgenos del
+    Reglamento UE 1169/2011, con España viva desde el flip— y la clase existe. El test se
+    RECONVIERTE en vez de borrarse (misma disciplina que `test_p3_i18n_deferred.py`): ahora ancla
+    el estado nuevo, y su mitad todavía cierta —que 'Frutos Secos' NO cubre el sésamo— sigue
+    siendo el control negativo que impide cerrar el hueco por sobre-detección perezosa."""
     plan = {"days": [{"meals": [{"name": "Merienda", "ingredients": ["1 pote de hummus"]}]}]}
+    # Sigue cierto y sigue importando: garbanzo y sésamo no son frutos secos.
     assert go._scan_allergen_violations(plan, ["Frutos Secos"]) == []
-    assert "sesamo" not in go._ALLERGEN_SYNONYMS and "sésamo" not in go._ALLERGEN_SYNONYMS
+    # Lo que cambió: ya hay una clase a la que enganchar el tahini del hummus.
+    assert "sesamo" in go._ALLERGEN_SYNONYMS
+    assert go._scan_allergen_violations(plan, ["sésamo"]), (
+        "hummus lleva tahini: un alérgico al sésamo debe verlo como violación"
+    )
 
 
 # ── K5. tortilla bare (8 drops) — AMBIGUO, DECISIÓN: dejar dropeando (documentado con evidencia) ─

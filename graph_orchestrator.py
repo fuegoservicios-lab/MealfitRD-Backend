@@ -5302,24 +5302,10 @@ def _verified_catalog_excluded_tokens(form_data) -> frozenset:
         def strip_accents(s):
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
-    excluded = set()
-    # Alérgenos (+ sinónimos) — misma lógica que `_scan_allergen_violations`.
-    allergies = form_data.get("allergies")
-    if isinstance(allergies, str):
-        allergies = [allergies]
-    for a in (allergies or []):
-        a_low = strip_accents(str(a).strip().lower())
-        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
-            continue
-        matched = False
-        for cat, syns in _ALLERGEN_SYNONYMS.items():
-            cat_n = strip_accents(cat)
-            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
-                excluded.update(strip_accents(s) for s in syns)
-                matched = True
-        if not matched:
-            excluded.add(a_low)  # alergia free-text → match literal
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] «MISMA expansión que `_scan_allergen_violations`» era
+    # una promesa sostenida por una COPIA del bucle. Ahora es una llamada: las dos superficies
+    # comparten `_expand_allergy_declarations`, así que arreglar una arregla la otra.
+    excluded = set(_expand_allergy_declarations(form_data.get("allergies")))
     # Dieta (productos animales prohibidos) — misma partición que `_scan_diet_violations`.
     canon = _canonicalize_diet_type(form_data.get("dietType"))
     if canon == "vegan":
@@ -14286,19 +14272,28 @@ def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
 # antes solo dependía del revisor LLM (falible). Es DETECCIÓN (backstop _scan_allergen_violations
 # + filtro de candidatos del closer), no sustitución → no requiere filas de catálogo nuevas y
 # preserva el sesgo de sobre-detección intencional. Anchor: P1-ALLERGEN-DERIVATIVES.
-# [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M5] Las 9 categorías de abajo (mani/frutos
-# secos/mariscos/pescado/lacteos/lactosa/gluten/huevo(s)/soya) son TODAS las que existen — NO hay
-# clase "ajonjolí/sésamo" ni "legumbres" (garbanzo/lenteja como alergia declarada, distinto del
-# swap dietético de `_DIET_*_TERMS`). Verificado: 'hummus'/'tahini'/'sesamo'/'ajonjoli'/
-# 'garbanzo' no aparecen en NINGUNA lista de abajo — un usuario alérgico al sésamo que declare
-# "hummus" o "tahini" cae al fallback de match literal (`forbidden.add(a_low)` en
-# `_scan_allergen_violations`), que solo atrapa la palabra EXACTA que el usuario tecleó, no sus
-# derivados. Candidato de clase futura si aparece evidencia real (medido, no especulativo — mismo
-# criterio que `_GLUTEN_FORWARD_FILLER_WHITELIST`); NO añadida aquí porque esta ola no la
-# evidenció, solo la encontró ausente.
+# [P1-COUNTRY-SYSTEM-F2 · ola final · 2026-08-18 · M5] Las categorías de abajo son TODAS las que
+# existen — no hay clase "legumbres" (garbanzo/lenteja como alergia declarada, distinto del swap
+# dietético de `_DIET_*_TERMS`): 'garbanzo' no aparece en NINGUNA lista, así que quien lo declare
+# cae al fallback de match literal (`_expand_allergy_declarations`), que solo atrapa la palabra
+# EXACTA tecleada, no sus derivados. Candidato de clase futura si aparece evidencia real (medido,
+# no especulativo — mismo criterio que `_GLUTEN_FORWARD_FILLER_WHITELIST`).
+# [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La otra mitad de aquella nota —«tampoco hay clase
+# ajonjolí/sésamo»— YA NO APLICA: la clase `sesamo` existe (al final del dict) porque la
+# evidencia que M5 pedía llegó, medida contra el catálogo vivo. La forma de aquel razonamiento
+# se conserva arriba para 'legumbres', que sigue sin evidencia.
+# [P0-ALLERGEN-VOCAB-I18N] El dict de abajo es la mitad «cómo se LLAMA el alimento». La mitad
+# «cómo lo DECLARA el usuario» vive en `_ALLERGEN_DECLARATION_ALIASES`, justo después.
 _ALLERGEN_SYNONYMS = {
     "mani": ["mani", "cacahuate", "peanut", "mantequilla de mani", "crema de mani",
-             "salsa de mani"],
+             "salsa de mani",
+             # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] 'cacahuete' es LA palabra peninsular
+             # ('cacahuate' es mexicanismo) y no es subcadena de ninguna de arriba — divergen en
+             # la 6ª letra, así que el match bidireccional por substring no las une. Medido: un
+             # español que declaraba «cacahuete» obtenía 0 violaciones sobre un plato con
+             # 'Mantequilla de maní'. Es el caso más grave del P-fix: el wizard no tiene chip de
+             # maní, así que el texto libre es la ÚNICA vía y el desenlace es anafilaxia.
+             "cacahuete", "cacahuetes", "crema de cacahuete", "mantequilla de cacahuete"],
     "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
                      "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
                      "nutella", "praline", "turron", "pesto", "crema de avellana",
@@ -14433,7 +14428,109 @@ _ALLERGEN_SYNONYMS = {
     "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame", "miso", "tempeh",
              "salsa teriyaki", "teriyaki", "natto", "lecitina de soya", "proteina de soya",
              "proteina vegetal texturizada", "tvp"],
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] Clase NUEVA. El comentario M5 de la ola final de F2
+    # (arriba) la declaró «candidato de clase futura si aparece evidencia real (medido, no
+    # especulativo)». Esta es la evidencia: el catálogo vivo tiene CUATRO filas con sésamo
+    # (Ajonjolí, Tahini, Hummus, Aceite de sésamo — las tres últimas altas de F2) y el sésamo es
+    # el nº 11 de los 14 alérgenos de declaración obligatoria del Reglamento UE 1169/2011, que
+    # aplica a España desde el flip. Antes de esta clase la única protección era teclear
+    # exactamente «ajonjolí» y caer al fallback de match literal, que atrapa la palabra EXACTA y
+    # ningún derivado: «sésamo» no alcanzaba «Ajonjolí» y «ajonjolí» no alcanzaba «Aceite de
+    # sésamo». NO participa de `test_paridad_dieta_alergeno_bidireccional` (sus
+    # `_CORRESPONDING_CLASSES` son sólo seafood/dairy/egg): el sésamo no es producto animal, así
+    # que no tiene contraparte en `_DIET_*_TERMS` con la que cruzarse — misma asimetría de
+    # CATEGORÍA ya documentada para maní/frutos secos/gluten/soya.
+    "sesamo": ["sesamo", "ajonjoli", "tahini", "tahina", "hummus", "aceite de sesamo",
+               "semillas de sesamo", "gomasio", "halva"],
 }
+
+
+# [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La MITAD DECLARATIVA del vocabulario de alergias.
+#
+# `_ALLERGEN_SYNONYMS` (arriba) responde «¿cómo se LLAMA el alimento?» — sus términos viajan al
+# set `forbidden` y se escanean contra los ingredientes del plato. Este dict responde la otra
+# pregunta, que estaba mezclada con la primera: «¿cómo lo DECLARA el usuario?». Sus términos SÓLO
+# se consultan para resolver a qué clase pertenece una declaración; JAMÁS entran en `forbidden`.
+#
+# Por qué separarlos y no engordar `_ALLERGEN_SYNONYMS`: meter 'dairy' en la clase 'lacteos'
+# obligaría a espejarlo en `_DIET_DAIRY_TERMS` para no romper
+# `test_paridad_dieta_alergeno_bidireccional` — y `_DIET_DAIRY_TERMS` es una lista de NOMBRES DE
+# ALIMENTO que se escanea sobre recetas escritas en español canónico (frontera dura declarada en
+# P1-I18N-DASHBOARD: los nombres de comida no se traducen JAMÁS). Ninguna receta dirá «dairy». El
+# guard seguiría verde y significaría menos.
+#
+# Las dos poblaciones que esto cubre existen HOY en producción: el dashboard está en 5 idiomas
+# desde P1-I18N-DASHBOARD (hay un usuario real con `locale='en-US'`) y el selector de 6 países
+# está vivo desde el flip de F2 — un formulario en inglés que sólo entiende alergias en español
+# es una trampa silenciosa, y las palabras de CATEGORÍA del Reglamento UE ('moluscos',
+# 'crustáceos') son estándar de etiquetado en España, donde mucha gente es alérgica a uno y no al
+# otro. tooltip-anchor: _ALLERGEN_DECLARATION_ALIASES (test_p0_allergen_vocab_i18n.py)
+_ALLERGEN_DECLARATION_ALIASES = {
+    "mani": ["peanuts", "peanut allergy", "groundnut", "groundnuts"],
+    "frutos secos": ["nuts", "tree nuts", "tree-nuts", "treenuts", "nut allergy"],
+    "mariscos": ["shellfish", "shellfish allergy", "crustacean", "crustaceans", "mollusc",
+                 "molluscs", "mollusk", "mollusks",
+                 # Categorías del Reglamento UE 1169/2011 (nº 2 crustáceos, nº 14 moluscos):
+                 # ningún ingrediente se llama así, pero es como se declara en España.
+                 "moluscos", "molusco", "crustaceos", "crustaceo"],
+    "pescado": ["fish", "fish allergy", "seafood"],
+    "lacteos": ["dairy", "milk", "cows milk", "cow milk", "dairy allergy", "casein"],
+    "lactosa": ["lactose", "lactose intolerance", "lactose intolerant",
+                "intolerancia a la lactosa", "intolerante a la lactosa"],
+    "huevo": ["egg", "eggs", "egg allergy"],
+    "gluten": ["celiac", "coeliac", "celiaco", "celiaca", "celiaquia", "gluten allergy",
+               "gluten intolerance", "enfermedad celiaca"],
+    "soya": ["soy", "soybean", "soybeans", "soya bean"],
+    "sesamo": ["sesame", "sesame seeds", "sesame allergy", "ajonjoli"],
+}
+
+
+def _expand_allergy_declarations(allergies) -> set:
+    """[P0-ALLERGEN-VOCAB-I18N · 2026-08-21] SSOT de la expansión declaración → términos a buscar
+    en el plato.
+
+    Estaba DUPLICADA palabra por palabra en `_scan_allergen_violations` y en
+    `_verified_catalog_excluded_tokens` — el docstring del segundo decía «MISMA expansión que
+    `_scan_allergen_violations`», que es exactamente la promesa que dos copias no pueden sostener
+    (la lección que P1-DIET-CANON-SSOT pagó con tres tablas de dieta driftadas, una de las cuales
+    servía Pollo a vegetarianas). Ahora hay una y las dos la llaman.
+
+    Resuelve la clase mirando AMBAS mitades del vocabulario (`_ALLERGEN_SYNONYMS`, nombres de
+    alimento, y `_ALLERGEN_DECLARATION_ALIASES`, formas de declararlo) pero devuelve SÓLO los
+    términos de la primera: los alias declarativos no son nombres de comida y buscarlos dentro de
+    un ingrediente en español no encontraría nada. Sin clase que case, la declaración se devuelve
+    literal — contrato preservado para quien declara algo que el sistema no modela (fresa, kiwi).
+
+    Sesgo intencional a SOBRE-detectar (seguridad > comodidad), heredado de C2-ALLERGEN-GUARD:
+    quien declara «peanuts» recibe también los frutos secos ('nuts' ⊂ 'peanuts'), que además es
+    consejo clínico habitual. La dirección peligrosa —servir el alérgeno— nunca se abre.
+
+    tooltip-anchor: _expand_allergy_declarations (test_p0_allergen_vocab_i18n.py)"""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    if isinstance(allergies, str):
+        allergies = [allergies]
+    out = set()
+    for a in (allergies or []):
+        a_low = strip_accents(str(a).strip().lower())
+        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
+            continue
+        matched = False
+        for cat, syns in _ALLERGEN_SYNONYMS.items():
+            cat_n = strip_accents(cat)
+            _decl = _ALLERGEN_DECLARATION_ALIASES.get(cat, ())
+            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
+               any(a_low in strip_accents(s) or strip_accents(s) in a_low
+                   for s in list(syns) + list(_decl)):
+                out.update(strip_accents(s) for s in syns)
+                matched = True
+        if not matched:
+            out.add(a_low)  # alergia free-text → match literal
+    return out
 
 
 # [P1-REVIEWER-VERIFICATION-ADVISORY · 2026-08-08] Excusa plant-adjacent COMPARTIDA por los dos
@@ -14443,8 +14540,12 @@ _ALLERGEN_SYNONYMS = {
 import re as _re_mod
 _PLANT_ADJ_EXCUSE_RX = _re_mod.compile(
     r"^\s*(?:de\s+|estilo\s+|tipo\s+|a\s+la\s+)?"
-    r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|maranon|"
-    r"anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] 'cacahuete' faltaba junto a 'cacahuate': en un plan
+    # ESPAÑOL la línea «mantequilla de cacahuete» marcaba una violación de LÁCTEOS por la palabra
+    # «mantequilla». El mismo defecto de grafía, esta vez en el guard que existe justo para
+    # evitar ese falso positivo.
+    r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|cacahuete|"
+    r"maranon|anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
 )
 # [P1-ALLERGEN-NEGATION-EXCUSE · 2026-08-09] Excusa de PREFIJO (la plant-adj mira el sufijo): un
 # token de alérgeno inmediatamente precedido por negación («sin gluten», «libre de gluten», «cero
@@ -14564,22 +14665,9 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
     import re as _re
-    if isinstance(allergies, str):
-        allergies = [allergies]
-    forbidden = set()
-    for a in (allergies or []):
-        a_low = strip_accents(str(a).strip().lower())
-        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
-            continue
-        matched = False
-        for cat, syns in _ALLERGEN_SYNONYMS.items():
-            cat_n = strip_accents(cat)
-            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
-                forbidden.update(strip_accents(s) for s in syns)
-                matched = True
-        if not matched:
-            forbidden.add(a_low)  # alergia free-text → match literal
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] La expansión vive en `_expand_allergy_declarations`
+    # (SSOT) — antes estaba copiada aquí y en `_verified_catalog_excluded_tokens`.
+    forbidden = _expand_allergy_declarations(allergies)
     if not forbidden:
         return []
     violations = []
@@ -19458,22 +19546,13 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0, diet=N
             _diet_canon_hd = _c_hd if _c_hd != "balanced" else None
         except Exception:
             _diet_canon_hd = None
-    forbidden = set()
-    if _has_real_medical_flags(allergies):
-        al = allergies if isinstance(allergies, list) else [allergies]
-        for a in al:
-            a_low = strip_accents(str(a).strip().lower())
-            if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
-                continue
-            matched = False
-            for cat, syns in _ALLERGEN_SYNONYMS.items():
-                cat_n = strip_accents(cat)
-                if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
-                   any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
-                    forbidden.update(strip_accents(s) for s in syns)
-                    matched = True
-            if not matched:
-                forbidden.add(a_low)
+    # [P0-ALLERGEN-VOCAB-I18N · 2026-08-21] TERCERA copia de la misma expansión, que la auditoría
+    # no había nombrado y que el guard `test_la_expansion_esta_en_un_solo_sitio` destapó. Importa
+    # más que las otras dos: este filtro decide qué proteínas puede SEMBRAR el closer en un plato
+    # — con la copia vieja, a un español que declaraba «cacahuete» se le ofrecían candidatos con
+    # maní. Ahora comparte `_expand_allergy_declarations` con el escáner y el catálogo verificado.
+    forbidden = (_expand_allergy_declarations(allergies)
+                 if _has_real_medical_flags(allergies) else set())
     out = []
     for name in DOMINICAN_PROTEINS:
         nlow = strip_accents(str(name).lower())
