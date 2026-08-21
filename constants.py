@@ -1392,6 +1392,48 @@ def chunk_refill_arrives_in_time(live_days_count, next_offset):
 # empezado el primer día que cubre**.
 # ─────────────────────────────────────────────────────────────────────────────
 
+def chunk_anchor_local_midnight_utc(ancla, tz_min):
+    """[P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Instante UTC de la medianoche LOCAL del día del
+    ancla. SSOT de la aritmética que estaba copiada en tres sitios.
+
+    EL DEFECTO QUE CIERRA. `/analyze` persiste `_plan_start_date` como el INSTANTE UTC de la
+    medianoche local del usuario. Para alguien al ESTE de UTC ese instante cae en el día UTC
+    ANTERIOR:
+
+        España (verano, tzOffset=-120)   medianoche local del 21-ago = 2026-08-20T22:00Z
+        RD     (tzOffset=+240)           medianoche local del 21-ago = 2026-08-21T04:00Z
+
+    Los tres sitios que programan `execute_after` hacían `datetime.combine(ancla.date(), ...)`,
+    que toma la fecha **UTC**, y luego sumaban `tz_min` (negativo para España) — restando el día
+    otra vez. Medido: −23,5 h para España, +0,5 h para los otros cinco países beta. España es el
+    único al este de UTC, y por eso el defecto sobrevivió a dos P-fixes de esta familia.
+
+    Peor aún, el techo de P1-CHUNK-EXECUTE-CEILING calculaba el MISMO valor equivocado, así que
+    el `LEAST` lo fijaba y el rebase lo conservaba para siempre: el modo de fallo exacto que ese
+    P-fix documenta —nadie compara el par contra el ancla.
+
+    Convención de `tz_min`: la de `getTimezoneOffset()` de JS, minutos a SUMAR a la hora local
+    para llegar a UTC (RD = +240, España verano = −120). Por eso la fecha local se obtiene
+    RESTÁNDOLO y la medianoche se reconstruye SUMÁNDOLO.
+
+    Fail-safe: `None` ante entrada inválida — este helper corre dentro de la transacción que
+    sostiene el advisory lock del shift, así que una excepción aquí retiene el lock. `None`
+    significa «no opino» y el caller conserva su conducta previa.
+
+    tooltip-anchor: chunk_anchor_local_midnight_utc (test_p1_chunk_anchor_local_date.py)"""
+    if not isinstance(ancla, datetime):
+        return None
+    try:
+        _tz = int(tz_min)
+    except (TypeError, ValueError):
+        _tz = 0
+    if ancla.tzinfo is None:
+        ancla = ancla.replace(tzinfo=timezone.utc)
+    fecha_local = (ancla - timedelta(minutes=_tz)).date()
+    return datetime.combine(fecha_local, datetime.min.time()).replace(
+        tzinfo=timezone.utc) + timedelta(minutes=_tz)
+
+
 def chunk_execute_after_ceiling(snapshot, nuevo_offset):
     """Instante límite para ejecutar un chunk: medianoche local de su primer día.
 
@@ -1439,11 +1481,15 @@ def chunk_execute_after_ceiling(snapshot, nuevo_offset):
         )
     except (TypeError, ValueError):
         tz_min = 0
-    medianoche = datetime.combine(
-        ancla.date(), datetime.min.time()
-    ).replace(tzinfo=timezone.utc)
+    # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] La medianoche sale del SSOT, que usa la fecha
+    # LOCAL del ancla. Antes se tomaba `ancla.date()` (fecha UTC) y se sumaba `tz_min` encima:
+    # para España el día se descontaba dos veces y el techo quedaba 23,5 h adelantado — y como el
+    # `LEAST` lo fija y el rebase lo conserva, para siempre.
+    medianoche = chunk_anchor_local_midnight_utc(ancla, tz_min)
+    if medianoche is None:
+        return None
     return medianoche + timedelta(
-        days=_entero_no_negativo(nuevo_offset), minutes=tz_min + 30
+        days=_entero_no_negativo(nuevo_offset), minutes=30
     )
 # --- VECTOR SEARCH CACHE ---
 

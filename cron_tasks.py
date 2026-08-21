@@ -14274,11 +14274,15 @@ def _recover_pantry_paused_chunks() -> None:
                     # [G-B2 · P2-CRON-OPT-4] days_offset ya viene del batch SELECT (inmutable
                     # para esta fila) — antes era un re-query por fila al MISMO row.
                     _do = int(row.get("days_offset") or 0)
-                    start_midnight = datetime.combine(
-                        anchor_start_dt.date(), datetime.min.time()
-                    ).replace(tzinfo=timezone.utc)
+                    # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Mismo SSOT que el encolado: sin
+                    # él, el recovery RE-INTRODUCÍA el adelanto de 23,5 h de España en cada chunk
+                    # que resucitaba, deshaciendo el arreglo del otro sitio.
+                    from constants import chunk_anchor_local_midnight_utc as _calmu_rec
+                    start_midnight = (_calmu_rec(anchor_start_dt, anchor_tz_min)
+                                      or datetime.combine(anchor_start_dt.date(), datetime.min.time())
+                                      .replace(tzinfo=timezone.utc) + timedelta(minutes=anchor_tz_min))
                     fresh_target = start_midnight + timedelta(
-                        days=_do, minutes=anchor_tz_min + 30
+                        days=_do, minutes=30
                     )
                     fresh_target = max(
                         fresh_target,
@@ -18747,11 +18751,16 @@ def _enqueue_plan_chunk(
     retry_execute_dt: datetime | None = None
 
     if anchor_start_dt is not None:
-        start_dt_midnight_utc = datetime.combine(
-            anchor_start_dt.date(), datetime.min.time()
-        ).replace(tzinfo=timezone.utc)
+        # [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] `anchor_start_dt.date()` es la fecha UTC, no
+        # la local: para un usuario al ESTE de UTC la medianoche local cae en el día UTC anterior
+        # y el `+ anchor_tz_min` (negativo) volvía a restarlo. Medido: −23,5 h para España, el
+        # único país beta al este de UTC. La aritmética vive ahora en el SSOT.
+        from constants import chunk_anchor_local_midnight_utc as _calmu_enq
+        start_dt_midnight_utc = (_calmu_enq(anchor_start_dt, anchor_tz_min)
+                                 or datetime.combine(anchor_start_dt.date(), datetime.min.time())
+                                 .replace(tzinfo=timezone.utc) + timedelta(minutes=anchor_tz_min))
         fresh_target = start_dt_midnight_utc + timedelta(
-            days=fresh_delay_days, minutes=anchor_tz_min + 30
+            days=fresh_delay_days, minutes=30
         )
         retry_target = anchor_start_dt + timedelta(days=retry_delay_days, hours=-3)
 

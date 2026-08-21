@@ -54,12 +54,36 @@ def test_la_hora_del_dia_no_depende_de_cuando_se_creo_el_plan():
     Si el techo heredara la hora de creación, un plan creado a las 23:50 tendría
     techo a las 23:50 del día que cubre — casi 24 h tarde, el mismo bug con otra
     cara.
+
+    [RE-ANCLADO por P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Las dos anclas de la versión previa
+    eran 23:50Z y 00:04Z del MISMO día UTC — y con tz=240 pertenecen a días LOCALES distintos
+    (19:50 del 16 y 20:04 del 15). El test exigía que dieran el mismo techo, que es exactamente
+    la suposición «fecha UTC = fecha del usuario» que este P-fix corrige. Se re-ancla dentro de
+    un mismo día local, que es donde la invariante —descartar la HORA— realmente vive."""
+    from constants import chunk_execute_after_ceiling
+
+    # Ambas dentro del 16-ago LOCAL para tz=240 (04:00Z del 16 .. 03:59Z del 17).
+    tarde = {"form_data": {"_plan_start_date": "2026-08-17T03:50:00+00:00", "tzOffset": 240}}
+    temprano = {"form_data": {"_plan_start_date": "2026-08-16T04:04:00+00:00", "tzOffset": 240}}
+    assert chunk_execute_after_ceiling(tarde, 4) == chunk_execute_after_ceiling(temprano, 4)
+
+
+def test_el_dia_cero_es_el_dia_LOCAL_del_usuario_no_el_utc():
+    """[P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] El caso REAL encontrado en la cola viva, y la
+    prueba de que el defecto no era sólo de España: chunk con ancla `2026-08-11T03:05Z` y
+    tz=240 — el usuario creó su plan a las **23:05 del día 10** hora local. Su día 11 es el 21,
+    no el 22.
+
+    Producción lo tenía en `2026-08-22T04:30Z`: un día TARDE, que es literalmente la queja que
+    P1-CHUNK-EXECUTE-CEILING documentó («el bloque corría el día DESPUÉS de empezar el tramo que
+    cubre»). El techo lo heredaba porque compartía la aritmética equivocada.
     """
     from constants import chunk_execute_after_ceiling
 
-    tarde = {"form_data": {"_plan_start_date": "2026-08-16T23:50:00", "tzOffset": 240}}
-    temprano = {"form_data": {"_plan_start_date": "2026-08-16T00:04:00", "tzOffset": 240}}
-    assert chunk_execute_after_ceiling(tarde, 4) == chunk_execute_after_ceiling(temprano, 4)
+    snap = {"form_data": {"_plan_start_date": "2026-08-11T03:05:07.872334+00:00", "tzOffset": 240}}
+    assert chunk_execute_after_ceiling(snap, 11) == datetime(
+        2026, 8, 21, 4, 30, tzinfo=timezone.utc
+    ), "el día 11 del usuario es el 21 local, no el 22"
 
 
 def test_el_techo_escala_un_dia_por_offset():
@@ -78,6 +102,24 @@ def test_la_tz_desplaza_el_techo():
     rd = {"form_data": {"_plan_start_date": "2026-08-16T10:00:00", "tzOffset": 240}}
     assert chunk_execute_after_ceiling(utc, 0) == datetime(2026, 8, 16, 0, 30, tzinfo=timezone.utc)
     assert chunk_execute_after_ceiling(rd, 0) == datetime(2026, 8, 16, 4, 30, tzinfo=timezone.utc)
+
+
+# [P1-CHUNK-ANCHOR-LOCAL-DATE · 2026-08-21] Los casos que faltaban, y por cuya ausencia este
+# fichero dio verde durante todo el defecto: hasta hoy sólo instanciaba `tzOffset ∈ {0, 240}`,
+# es decir el hemisferio en el que el bug NO EXISTE. España es el único país beta al este de UTC,
+# y ahí la medianoche local cae en el día UTC ANTERIOR — el techo salía 23,5 h adelantado.
+# Un guard que sólo prueba el lado que funciona no es un guard, es una coincidencia.
+@pytest.mark.parametrize("tz_min,etiqueta", [(-120, "ES verano"), (-60, "ES invierno")])
+def test_el_techo_es_correcto_al_este_de_utc(tz_min, etiqueta):
+    from constants import chunk_execute_after_ceiling
+
+    # El ancla es el INSTANTE UTC de la medianoche local del 21-ago para ese offset.
+    ancla = datetime(2026, 8, 21, tzinfo=timezone.utc) + timedelta(minutes=tz_min)
+    snap = {"form_data": {"_plan_start_date": ancla.isoformat(), "tzOffset": tz_min}}
+    esperado = datetime(2026, 8, 25, tzinfo=timezone.utc) + timedelta(minutes=tz_min + 30)
+    assert chunk_execute_after_ceiling(snap, 4) == esperado, (
+        f"{etiqueta}: el techo se adelanta al día que cubre"
+    )
 
 
 @pytest.mark.parametrize(
