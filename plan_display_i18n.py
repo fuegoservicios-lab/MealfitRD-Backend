@@ -870,6 +870,33 @@ def _collect_targets(days: list, day_indices_batch: list, locale: Optional[str] 
 # ============================================================
 
 
+# [P2-DISPLAY-RETENCION-LOCALES · 2026-08-21] Cuántos idiomas conserva `_display`.
+#
+# El mapa sólo AÑADÍA: nada evacuaba nunca un idioma abandonado, así que un plan de 30
+# días visitado en los cinco guardaba cinco copias completas del texto dentro de
+# `plan_data` —el mismo jsonb que el comentario de `user_data.py` ya describe como «de
+# cientos de KB a MB con 30 días de recetas expandidas»—. Medido a ojo de servilleta:
+# ~500 B por comida y locale, ×4 comidas ×30 días ≈ 60 KB por idioma.
+#
+# Se pone un TOPE en vez de desalojar el anterior, y la diferencia importa: desalojar
+# haría re-pagar la traducción entera cada vez que alguien alterna entre dos idiomas,
+# que es justo lo que P2-DISPLAY-REDESPACHO-SIN-FILTRO acaba de evitar. Los dos arreglos
+# tiran en direcciones opuestas y 2 es donde se cruzan — cubre el ir y venir real
+# (idioma nuevo + el de antes) y acota el crecimiento a 2× en vez de 5×.
+#
+# El activo NUNCA se poda; se descarta el resto por orden de inserción, que en un dict
+# de Python es el orden en que se visitaron.
+_MAX_LOCALES_DISPLAY = 2
+
+
+def _podar_locales(disp_map: dict, activo: str) -> dict:
+    if not isinstance(disp_map, dict) or len(disp_map) <= _MAX_LOCALES_DISPLAY:
+        return disp_map
+    conservar = [k for k in disp_map if k != activo][-(_MAX_LOCALES_DISPLAY - 1):]
+    conservar.append(activo)
+    return {k: disp_map[k] for k in disp_map if k in conservar}
+
+
 _NUMEROS = re.compile(r"\d+(?:[.,]\d+)?")
 
 
@@ -1048,7 +1075,7 @@ def _persist_batch(
             if not isinstance(disp_map, dict):
                 disp_map = {}
             disp_map[locale] = display
-            meal["_display"] = disp_map
+            meal["_display"] = _podar_locales(disp_map, locale)
             counters["written"] += 1
 
         # [fase 1c] Escritura del nombre de PLAN — nivel `pd["_display"]`, hermano
