@@ -756,6 +756,125 @@ def _seasoning_catalog_keep_enabled() -> bool:
 _SEASONING_DEFAULT_G = 40.0
 
 
+# [P1-SHOPLIST-SANITY-CAP · 2026-08-21] Umbral de envase por debajo del cual una fila de Despensa
+# es una PRESENTACIÓN DE CONDIMENTO. No existe categoría «especias» en `master_ingredients` —
+# orégano, arroz y maíz en lata comparten 'Despensa'—, pero el envase las separa limpiamente:
+# especias 14-100 g, comida de despensa 425 g (lata de maíz) y 907 g (paquete de arroz). 120 g
+# deja margen sobre el frasco más grande medido (Laurel, 100 g) sin acercarse a la lata.
+_CONDIMENT_MAX_CONTAINER_G = 120.0
+
+
+def _shoplist_sanity_cap_enabled() -> bool:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Kill switch del tope de envases de condimento.
+
+    tooltip-anchor: MEALFIT_SHOPLIST_SANITY_CAP (test_p1_shoplist_sanity_cap.py)"""
+    return _knob_env_bool("MEALFIT_SHOPLIST_SANITY_CAP", True)
+
+
+def _is_condiment_presentation(display_category, container_weight_g) -> bool:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] ¿Esta fila se vende como condimento?
+
+    Estrecho por DOS lados a propósito: categoría de despensa Y envase pequeño. Capar comida de
+    verdad sería el error opuesto y peor —el usuario compraría de menos y se quedaría sin cenar—,
+    así que la alcachofa (Vegetales) y el maíz en lata (Despensa, 425 g) quedan fuera.
+
+    Sin `container_weight_g` no sabemos qué es: fail-open, no capar. La asimetría es clara — el
+    coste de no capar es un ítem feo; el de capar a ciegas, una compra corta.
+
+    Predicado sobre el DATO, no lista de nombres: una lista habría que mantenerla cada vez que el
+    catálogo crece y su fallo sería silencioso.
+
+    tooltip-anchor: _is_condiment_presentation (test_p1_shoplist_sanity_cap.py)"""
+    try:
+        _g = float(container_weight_g or 0)
+    except (TypeError, ValueError):
+        return False
+    if _g <= 0 or _g > _CONDIMENT_MAX_CONTAINER_G:
+        return False
+    try:
+        from constants import strip_accents as _sa_c
+        _cat = _sa_c(str(display_category or "").strip().lower())
+    except Exception:
+        _cat = str(display_category or "").strip().lower()
+    return _cat.startswith("despensa")
+
+
+def _apply_condiment_sanity_cap(market_obj, master_item, display_category, cycle_days) -> bool:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Acota los envases de un CONDIMENTO y arrastra el
+    costo. Muta `market_obj` in-place; devuelve True si recortó.
+
+    POR QUÉ CAPAR AQUÍ SÍ ES HONESTO, y en P1-COUNTRY-KEEP-RESPECT-QTY no lo era: allí el default
+    fijo IGNORABA una demanda real (653 g de almejas) y el usuario compraba de menos. Aquí la
+    demanda ESTIMADA es la que está mal — un frasco de orégano de 90 g dura meses, y «1 orégano»
+    repetido 30 días no son 30 frascos. El consumo real de un condimento no escala con el número
+    de recetas que lo mencionan.
+
+    EL COSTO SE RECORTA CON LA CANTIDAD. Si sólo se capara la cantidad, `shopping_cost_summary`
+    seguiría contando los RD$810 de orégano y el banner de presupuesto marcaría «excedido» por un
+    especiero — o sea que el defecto que más duele sobreviviría al arreglo.
+
+    NO emite la nota de cobertura de P1-CAPPED-STAPLE-HONESTY, y es deliberado: esa nota existe
+    para los caps que SÍ dejan corto (4 latas de atún que cubren 5,5 días de 30). Aquí el frasco
+    cubre el ciclo de sobra, así que avisar sería crying wolf — y una nota que grita siempre se
+    deja de leer, que es justo lo que hace inservible a un detector.
+
+    tooltip-anchor: _apply_condiment_sanity_cap (test_p1_shoplist_sanity_cap.py)"""
+    if not _shoplist_sanity_cap_enabled() or not isinstance(market_obj, dict):
+        return False
+    _envase = (master_item or {}).get("container_weight_g") if isinstance(master_item, dict) else None
+    if not _is_condiment_presentation(display_category, _envase):
+        return False
+    try:
+        _qty = float(market_obj.get("market_qty_numeric") or 0)
+    except (TypeError, ValueError):
+        return False
+    _tope = _condiment_package_cap(cycle_days)
+    if _qty <= _tope:
+        return False
+    _factor = _tope / _qty if _qty else 1.0
+    market_obj["market_qty_numeric"] = float(_tope)
+    market_obj["market_qty"] = str(_tope)
+    _unidad = str(market_obj.get("market_unit") or "").strip()
+    if _unidad:
+        market_obj["display_qty"] = f"{_tope} {_unidad}{'s' if _tope > 1 and not _unidad.endswith('s') else ''}"
+    for _k in ("estimated_cost_rd", "estimated_cost"):
+        try:
+            _c = market_obj.get(_k)
+            if _c:
+                market_obj[_k] = round(float(_c) * _factor, 2)
+        except (TypeError, ValueError):
+            pass
+    logging.info(
+        "🧂 [P1-SHOPLIST-SANITY-CAP] '%s': %.0f → %d %s (envase %.0f g, ciclo %s d). "
+        "El consumo de un condimento no escala con el nº de recetas que lo mencionan.",
+        market_obj.get("name"), _qty, _tope, _unidad or "envases",
+        float(_envase or 0), cycle_days,
+    )
+    return True
+
+
+def _condiment_package_cap(cycle_days) -> int:
+    """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Máximo de envases de condimento para un ciclo.
+
+    Una pizca son ~0,3 g y un sobre 14 g: tres comidas al día durante un mes son ~27 g, o sea DOS
+    sobres. El tope da tres — generoso frente al consumo real y a años luz de los quince que la
+    lista viva pedía.
+
+    Nunca 0: eso borraría el condimento de la lista, que es el defecto CONTRARIO (lista incompleta
+    sin aviso, el miedo explícito del dueño). Nunca revienta: corre en el camino caliente del
+    agregador y una excepción aquí rompe la lista entera.
+
+    tooltip-anchor: _condiment_package_cap (test_p1_shoplist_sanity_cap.py)"""
+    import math as _math_cap
+    try:
+        _d = int(cycle_days or 0)
+    except (TypeError, ValueError):
+        _d = 0
+    if _d <= 0:
+        return 1
+    return max(1, min(4, int(_math_cap.ceil(_d / 10.0))))
+
+
 # [P1-BAKING-STAPLES · 2026-07-01] (audit v3 creatividad GAP-3) "Despensa básica" de horneado: agentes
 # leudantes/aroma que los transforms insignia del owner (panqueques de avena/harina, bollos de yuca,
 # arepitas) NECESITAN y que no están en el catálogo verificado con precio. VERIFIED-ONLY los amputaba en
@@ -12427,6 +12546,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
                 # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
+                # [P1-SHOPLIST-SANITY-CAP · 2026-08-21] La lista viva pedía 15 sobres de pimienta
+                # y 10 frascos de orégano (RD$810, que contaminaban el banner de presupuesto).
+                _apply_condiment_sanity_cap(market_obj, master_item, display_cat, cycle_days)
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
                 categorized_results[display_cat].append(item_val)
@@ -12474,6 +12596,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
                 # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
+                # [P1-SHOPLIST-SANITY-CAP · 2026-08-21] La lista viva pedía 15 sobres de pimienta
+                # y 10 frascos de orégano (RD$810, que contaminaban el banner de presupuesto).
+                _apply_condiment_sanity_cap(market_obj, master_item, display_cat, cycle_days)
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
                 categorized_results[display_cat].append(item_val)
