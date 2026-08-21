@@ -508,8 +508,31 @@ def detect_active_rules(form_data) -> list:
     return sorted(active, key=lambda r: r.precedence)
 
 
+# [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Nombres es-DO que aparecen en los EJEMPLOS clínicos
+# del prompt, con su equivalente neutro. Es una sustitución de PRESENTACIÓN sobre el texto ya
+# renderizado, no un cambio de las reglas: lo clínico (proteína primero, porción pequeña, sin
+# azúcar) no depende del alimento, y el fragmento de país ya se encarga de elegir los locales.
+# Orden largo→corto para que «pan de casabe» no quede a medias si algún día existe.
+_BETA_CLINICAL_FOOD_SWAPS = (
+    ("Revoltillo de Huevo con Casabe", "Revoltillo de Huevo con Tostada integral"),
+    ("Atún con Casabe", "Atún con Tostada integral"),
+    ("Pescado al Horno con Auyama", "Pescado al Horno con Calabaza"),
+    ("casabe", "pan tostado integral"),
+    ("Casabe", "Pan tostado integral"),
+    ("auyama", "calabaza"),
+    ("Auyama", "Calabaza"),
+    ("vainitas", "judías verdes"),
+    ("Tayota", "Calabacín"),
+    ("tayota", "calabacín"),
+)
+
+
 def build_condition_prompt(form_data) -> str:
-    """Bloque de reglas nutricionales por condición (registry-driven) + nota de comorbilidad."""
+    """Bloque de reglas nutricionales por condición (registry-driven) + nota de comorbilidad.
+
+    [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Para país beta, los NOMBRES es-DO de los ejemplos
+    clínicos se neutralizan al final (ver `_BETA_CLINICAL_FOOD_SWAPS`). DO y knob apagado salen
+    byte-idénticos."""
     active = detect_active_rules(form_data)
     if not active:
         return ""
@@ -566,9 +589,22 @@ def build_condition_prompt(form_data) -> str:
                 "su condición — sin sermonear, una sola mención.\n"
                 "   • Considera las calorías líquidas del hábito declarado al ajustar los snacks (no las "
                 "'compenses' recortando comida real).")
-    return ("\n--- REGLAS NUTRICIONALES POR CONDICIÓN MÉDICA (DETERMINISTAS, CITABLES) ---\n"
-            + "\n\n".join(blocks)
-            + "\n----------------------------------------\n")
+    _rendered = ("\n--- REGLAS NUTRICIONALES POR CONDICIÓN MÉDICA (DETERMINISTAS, CITABLES) ---\n"
+                 + "\n\n".join(blocks)
+                 + "\n----------------------------------------\n")
+    # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Los `prompt_block` son literales de la tabla de
+    # reglas (datos a nivel de módulo), así que el país no puede entrar AHÍ dentro: se aplica a
+    # la salida, que es el único punto donde `form_data` existe. El caso que lo justifica es el
+    # bloque bariátrico, que no SUGIERE sino que DIRIGE —«📋 EJEMPLO DE UN DÍA BARIÁTRICO
+    # CORRECTO … GENERA ASÍ»— escrito entero en Casabe y Auyama: a un bariátrico español le
+    # dictaba un día dominicano, y es el bloque de mayor autoridad del prompt clínico.
+    # Se cambian los NOMBRES de los alimentos, no la FORMA (proteína primero, un solo almidón
+    # pequeño, gramos enteros, sin azúcar, sin bebida junto al sólido), que es clínica y
+    # universal — vaciarlo habría sido el otro error.
+    if _country_is_beta(form_data):
+        for _do_name, _neutro in _BETA_CLINICAL_FOOD_SWAPS:
+            _rendered = _rendered.replace(_do_name, _neutro)
+    return _rendered
 
 
 # [P2-13 · 2026-06-16] (gap-audit P2-13) Las subs por condición/alérgeno reemplazaban a proteína ANIMAL
@@ -760,6 +796,44 @@ _ALLERGEN_NEGATIVES_BY_CAT = {
 }
 
 
+# [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Los targets de sustitución que sólo existen en el
+# mercado dominicano. Es una lista corta y CERRADA a propósito: se enumera lo que hay que omitir,
+# no lo que hay que permitir — una whitelist obligaría a revisarla cada vez que el catálogo crece
+# y su fallo sería silencioso (un target criollo nuevo colándose a beta). El fallo de ESTA lista
+# es ruidoso: si alguien añade un target es-DO y lo olvida aquí, el guard por país lo caza.
+_DO_ONLY_SUB_TARGETS = frozenset({
+    "casabe", "auyama", "tayota", "yautia", "guineo", "lechosa", "chinola",
+    "queso de freir", "queso de hoja", "salami dominicano", "longaniza dominicana",
+    "molondrones", "name", "ajies cubanela", "aji cubanela",
+})
+
+
+def _is_do_only_target(replacement) -> bool:
+    """[P1-CONDITION-RULES-COUNTRY · 2026-08-21] ¿Este target de sustitución sólo se compra en RD?
+
+    tooltip-anchor: _DO_ONLY_SUB_TARGETS (test_p1_condition_rules_country.py)"""
+    try:
+        from constants import strip_accents as _sa_t
+    except Exception:
+        return False
+    try:
+        return _sa_t(str(replacement or "").strip().lower()) in _DO_ONLY_SUB_TARGETS
+    except Exception:
+        return False
+
+
+def _country_is_beta(form_data) -> bool:
+    """[P1-CONDITION-RULES-COUNTRY · 2026-08-21] País por la ÚNICA puerta (`country_for_form_data`,
+    que además aplica el knob maestro). Las dos puertas de este módulo ya reciben `form_data`, así
+    que el país sale de dentro: cero cambios de firma y cero cambios en sus tres call sites.
+    Fail-safe a False (conducta dominicana) ante cualquier problema."""
+    try:
+        from constants import country_for_form_data as _cffd_cr
+        return _cffd_cr(form_data) != "DO"
+    except Exception:
+        return False
+
+
 def collect_allergen_substitutions(form_data, diet_type=None) -> list:
     """[P0-ALLERGEN-SUBS · 2026-06-14] Sustituciones deterministas para los alérgenos IgE DECLARADOS
     (`form_data['allergies']`) que tienen un reemplazo seguro que RESUELVE al catálogo es-DO
@@ -771,6 +845,11 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
     if not isinstance(form_data, dict):
         return []
     _dc = _canon_diet(diet_type) if diet_type else "balanced"  # [P2-13] diet-aware redirect
+    # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Este módulo no contenía la palabra `country`
+    # (grep -c = 0) y sus targets son es-DO: a un celíaco español le reescribía «pan integral»
+    # y «galletas de soda» a **Casabe**, un cracker de yuca dominicano que no se vende en
+    # España. La sustitución existe justamente para que su desayuno SEA comprable.
+    _cr_beta = _country_is_beta(form_data)
     try:
         from constants import strip_accents as _sa
     except Exception:
@@ -799,6 +878,17 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
             repl = _redirect_replacement_for_diet(repl, _dc, allergen_cat=cat)  # [P2-13] diet+allergen-aware
+            # [P1-CONDITION-RULES-COUNTRY · 2026-08-21] Corte por ALIMENTO, no por regla: los
+            # targets panhispánicos (Arroz blanco, Harina de maíz precocida, Pechuga de pollo,
+            # Quinoa) siguen sustituyendo en beta — quitarlos dejaría al celíaco español SIN
+            # ninguna sustitución, peor que el problema. Los es-DO se OMITEN en vez de mapearse
+            # a un supuesto equivalente local: no existe un «casabe español» que el catálogo
+            # garantice, y inventarlo sería afirmar una disponibilidad que nadie midió. El plan
+            # cae entonces al path crítico→fallback, que ya existe y es la conducta correcta —
+            # el mismo criterio de «hueco honesto» que este módulo ya aplica a lácteos, huevo y
+            # maní por no tener target que resuelva.
+            if _cr_beta and _is_do_only_target(repl):
+                continue
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": negs, "condition": f"allergen:{cat}",
                         "preserve_qty": preserve_qty})
