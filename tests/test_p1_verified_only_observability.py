@@ -34,14 +34,23 @@ def test_marker_presente():
 
 
 def test_guard_captura_lo_filtrado_antes_de_descartar():
+    """[RE-ANCLADO por P1-COHERENCE-MIRROR-KEEP · 2026-08-21] El filtro y su WARN se movieron a
+    `_filter_expected_to_shopping_survivors`, así que los nombres locales `_expected_before_filter`
+    y `_dropped_recipe_ingredients` ya no existen. La INVARIANTE es la misma y sigue anclada: hay
+    que fotografiar el esperado ANTES de filtrar, o no hay nada que reportar. Se re-ancla a la
+    propiedad (el snapshot + el WARN), no a la grafía de dos variables locales — que es lo que
+    este repo pide de un test parser-based."""
     src = _src()
-    # El guard DEBE capturar el set esperado ANTES de filtrar, para poder reportar
-    # qué ingredientes de receta cayeron fuera del catálogo.
-    assert "_expected_before_filter" in src, (
-        "El guard debe snapshot del expected ANTES del filtro verified-only."
+    i = src.find("def _filter_expected_to_shopping_survivors")
+    assert i > 0, "el filtro del lado esperado desapareció"
+    _fin = src.find("\ndef ", i + 1)
+    cuerpo = src[i:_fin if _fin > 0 else len(src)]
+    assert "_antes = set(expected_raw.keys())" in cuerpo, (
+        "El guard debe fotografiar el expected ANTES de filtrar: sin snapshot no hay nada que "
+        "reportar en el WARN."
     )
-    assert "_dropped_recipe_ingredients" in src
-    assert "[VERIFIED-ONLY-GUARD-BLIND]" in src, (
+    assert "_caidos = _antes - set(" in cuerpo, "el WARN dejó de derivarse del snapshot"
+    assert "[VERIFIED-ONLY-GUARD-BLIND]" in cuerpo, (
         "El guard debe emitir el WARNING grep-able cuando filtra ingredientes de receta."
     )
 
@@ -60,11 +69,20 @@ def test_aggregator_drop_es_warning_no_info():
 
 
 def test_filtro_verified_sigue_activo_para_no_retry_storm():
-    # El fix es observabilidad-only: el filtro del espejo DEBE seguir existiendo
-    # (no bloquea por condimentos raros). Si alguien lo quita sin un closer/retry
-    # gateado, este test obliga a reconsiderar el retry-storm.
+    """[RE-ANCLADO por P1-COHERENCE-MIRROR-KEEP · 2026-08-21] Este test anclaba la grafía exacta
+    `_is_verified_for_shopping(k)` — y esa llamada es justamente el defecto que P1-COHERENCE-
+    MIRROR-KEEP quitó: el lado esperado replicaba UNA de las tres ramas del agregador, así que
+    toda fila conservada-sin-precio (staples de horneado desde 2026-07-01, catálogo-país desde
+    F2-T5) quedaba como fantasma `unknown` en el guard, 1:1 con los ítems sin precio del plan.
+
+    Lo que este test protege de verdad —que el filtro del espejo SIGA EXISTIENDO, para no abrir
+    un retry-storm por condimentos raros— no cambió: sigue filtrando, sólo que ahora pregunta por
+    `_survives_shopping_list`, que responde por las tres ramas. Se re-ancla a la PROPIEDAD."""
     src = _src()
-    assert "_is_verified_for_shopping(k)" in src, (
-        "El espejo verified-only del guard debe seguir filtrando expected_raw "
-        "(la observabilidad NO cambia el comportamiento de retry)."
+    assert "expected_raw = _filter_expected_to_shopping_survivors(" in src, (
+        "El espejo del guard debe seguir filtrando expected_raw (quitarlo abriría el retry-storm "
+        "por condimentos que el agregador dropea)."
+    )
+    assert "_survives_shopping_list" in src, (
+        "El filtro debe preguntar por el SSOT de las tres ramas, no por el predicado de precio."
     )

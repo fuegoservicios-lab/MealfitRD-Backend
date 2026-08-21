@@ -889,6 +889,71 @@ _COUNTRY_CATALOG_UNPRICED_DEFAULT_G = 150.0
 _CONVERTIBLE_QTY_UNITS = ("g", "kg", "oz", "lb", "ml", "l")
 
 
+def _survives_shopping_list(name) -> bool:
+    """[P1-COHERENCE-MIRROR-KEEP · 2026-08-21] «¿Este nombre sobrevive a la lista de compras?» —
+    UNA pregunta, UNA respuesta, las dos orillas del coherence guard la hacen.
+
+    EL DEFECTO QUE CIERRA. El lado AGREGADO (el agregador) tiene tres ramas: fila con precio,
+    staple de horneado (P1-BAKING-STAPLES) y catálogo-país sin precio (P1-COUNTRY-SYSTEM-F2 T5).
+    El lado ESPERADO (el filtro de `expected_raw` en `run_shopping_coherence_guard`) sólo replicaba
+    la PRIMERA: llamaba a `_is_verified_for_shopping`, que exige precio > 0. Resultado: toda fila
+    conservada-sin-precio quedaba, por construcción, «en la lista y ausente de las recetas» —
+    `unknown` / `aggregated_only`, para siempre y en cada recálculo.
+
+    Los conteos casan 1:1 en producción: el plan ES tiene 4 ítems sin precio y 4 fantasmas; el
+    plan US tiene 3 y `_shopping_coherence_block_history` registra `{'unknown': 3}` en 13 entradas
+    consecutivas del 2026-08-20. La doc lo atribuía a «vocabulario DO-tuned» y mandaba a ampliar
+    un léxico: el mecanismo no tiene nada que ver con vocabulario.
+
+    Orden de las ramas idéntico al `if/elif/else` del agregador a propósito — es lo que hace que
+    esto sea un espejo y no una segunda opinión. `test_el_ssot_replica_las_mismas_tres_ramas_del_agregador`
+    lo ancla: una cuarta rama de keep allí que se olvide aquí vuelve a romper el espejo.
+
+    tooltip-anchor: _survives_shopping_list (test_p1_coherence_mirror_keep.py)"""
+    if _is_verified_for_shopping(name):
+        return True
+    if _baking_staples_keep_enabled() and is_baking_pantry_staple(name):
+        return True
+    if _country_catalog_unpriced_keep_enabled() and is_country_catalog_unpriced_item(name):
+        return True
+    return False
+
+
+def _filter_expected_to_shopping_survivors(expected_raw, emit_blind_warning: bool = False) -> dict:
+    """[P1-COHERENCE-MIRROR-KEEP · 2026-08-21] Filtra el lado ESPERADO del guard con el mismo
+    criterio que decide qué sobrevive a la lista, y —opcionalmente— emite el WARN
+    `[VERIFIED-ONLY-GUARD-BLIND]` sobre lo que de verdad desapareció.
+
+    Ese WARN es la ÚNICA señal que existe para «la lista de compras salió incompleta sin aviso»
+    (el miedo explícito del dueño, P1-VERIFIED-ONLY-OBSERVABILITY). En país beta era 100% falsos
+    positivos: acusaba al LLM de desobedecer con alimentos que estaban perfectamente en la lista.
+    Un detector que grita siempre se apaga en una semana, y entonces la amputación real pasa
+    desapercibida — así que arreglar el espejo le devuelve el significado sin trabajo extra."""
+    if not isinstance(expected_raw, dict):
+        return expected_raw
+    _antes = set(expected_raw.keys())
+    _filtrado = {k: v for k, v in expected_raw.items() if _survives_shopping_list(k)}
+    if emit_blind_warning:
+        _caidos = _antes - set(_filtrado.keys())
+        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05/06] "Agua"/"hielo"/"caldo..." NO son
+        # comprables (agua de grifo): su drop es correcto, no desobediencia del LLM. Match EXACTO
+        # para agua/hielo ('aguacate' no matchea); prefijo con espacio para las variantes.
+        _caidos = {
+            x for x in _caidos
+            if str(x).strip().lower() not in ("agua", "hielo")
+            and not str(x).strip().lower().startswith("agua ")
+            and not str(x).strip().lower().startswith("caldo")
+        }
+        if _caidos:
+            logging.warning(
+                "[VERIFIED-ONLY-GUARD-BLIND] %d ingrediente(s) de RECETAS fuera del catálogo "
+                "verificado → ausentes de la lista de compras sin aviso (LLM desobedeció el "
+                "prompt upstream): %s",
+                len(_caidos), sorted(_caidos)[:25],
+            )
+    return _filtrado
+
+
 def _country_keep_respect_recipe_qty_enabled() -> bool:
     """[P1-COUNTRY-KEEP-RESPECT-QTY · 2026-08-21] Kill switch del respeto a la cantidad de la
     receta en la rama de catálogo-país. `false` ⇒ vuelve el 150 g fijo (conducta T5). Toca el
@@ -9216,29 +9281,12 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         # capturamos lo filtrado ANTES de descartarlo y emitimos un WARNING grep-able para
         # medir la tasa real de desobediencia (si es alta, hay que ampliar catálogo o
         # forzar retry; si es ~0, el sistema cumple). Tooltip-anchor: P1-VERIFIED-ONLY-OBSERVABILITY.
-        _expected_before_filter = set(expected_raw.keys())
-        expected_raw = {k: v for k, v in expected_raw.items() if _is_verified_for_shopping(k)}
-        _dropped_recipe_ingredients = _expected_before_filter - set(expected_raw.keys())
-        # [P3-GUARD-BLIND-WATER-WHITELIST · 2026-07-05] "Agua"/"hielo"/"caldo..." NO son comprables
-        # (agua de grifo): su drop del catálogo verificado es comportamiento correcto, no
-        # desobediencia del LLM. Ruido medido en vivo (plan e49d44c3: WARN ×2 solo por 'Agua').
-        # Match EXACTO para agua/hielo ('aguacate' no matchea); prefijo para caldos.
-        # [P3-GUARD-BLIND-WATER-WHITELIST v2 · 2026-07-06] variantes de agua ("Agua fría/tibia/
-        # para hervir" — vivas en el WARN) también son no-comprables; startswith("agua ") no
-        # matchea 'aguacate' (exige el espacio).
-        _dropped_recipe_ingredients = {
-            x for x in _dropped_recipe_ingredients
-            if str(x).strip().lower() not in ("agua", "hielo")
-            and not str(x).strip().lower().startswith("agua ")
-            and not str(x).strip().lower().startswith("caldo")
-        }
-        if _dropped_recipe_ingredients:
-            logging.warning(
-                "[VERIFIED-ONLY-GUARD-BLIND] %d ingrediente(s) de RECETAS fuera del catálogo "
-                "verificado → ausentes de la lista de compras sin aviso (LLM desobedeció el "
-                "prompt upstream): %s",
-                len(_dropped_recipe_ingredients), sorted(_dropped_recipe_ingredients)[:25],
-            )
+        # [P1-COHERENCE-MIRROR-KEEP · 2026-08-21] El filtro y su WARN viven ahora en
+        # `_filter_expected_to_shopping_survivors`, que pregunta por `_survives_shopping_list` —
+        # las TRES ramas del agregador, no sólo la del precio. Aquí estaba el mecanismo real de
+        # la costura (a): las filas conservadas-sin-precio salían del lado esperado y quedaban
+        # como fantasmas `unknown` en el lado agregado, 1:1 con los ítems sin precio del plan.
+        expected_raw = _filter_expected_to_shopping_survivors(expected_raw, emit_blind_warning=True)
 
     # [P2-COH-WEEKLY-BASIS · 2026-07-04] Base CANÓNICA del guard = lista SEMANAL.
     # `expected_sum_from_recipes` suma los días del plan (~1 semana de recetas) ×

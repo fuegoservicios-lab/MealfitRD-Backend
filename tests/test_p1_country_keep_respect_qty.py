@@ -213,8 +213,11 @@ def test_el_fuente_declara_el_marker_y_no_toca_la_rama_de_horneado():
     assert "P1-COUNTRY-KEEP-RESPECT-QTY" in src
     assert "MEALFIT_COUNTRY_KEEP_RESPECT_RECIPE_QTY" in src
     # La rama de horneado conserva su forma: preset del peso + units vaciado.
-    i = src.find("if _baking_staples_keep_enabled() and is_baking_pantry_staple(name):")
-    assert i > 0
+    # OJO al buscarla: desde P1-COHERENCE-MIRROR-KEEP hay DOS sitios con esa condición — el SSOT
+    # `_survives_shopping_list` (que sólo responde True/False) y la rama real del agregador. La
+    # primera versión de este assert cogía la primera ocurrencia y medía el helper equivocado.
+    i = src.find("if _baking_staples_keep_enabled() and is_baking_pantry_staple(name):\n                weight_in_lbs")
+    assert i > 0, "la rama de horneado del agregador desapareció o cambió de forma"
     rama = src[i:i + 400]
     assert "_BAKING_STAPLE_DEFAULT_G / 453.592" in rama and "units = {}" in rama, (
         "la rama de horneado cambió: su default es correcto y no entraba en este P-fix"
