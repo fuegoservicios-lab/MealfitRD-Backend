@@ -173,6 +173,17 @@ _CHAT_PLAN_PRUNE_KEYS = (
     "data_provenance",
     "resolution_coverage",
     "_transform_gate_advisory_final",
+    # [P2-DISPLAY-CHAT-PRUNE · 2026-08-21] La copia de NIVEL PLAN de la traducción
+    # (`plan_data._display`: nombre del plan + insights, una entrada por cada idioma
+    # que el usuario haya visitado). La poda por comida de más abajo cubre
+    # `days[*].meals[*]._display` y esta se le escapaba, así que se serializaba al
+    # system prompt en CADA turno.
+    #
+    # Es el mismo motivo por el que están aquí `_culinary_contract_*` y los reportes de
+    # QA. Y no le quita nada al agente: el coach razona sobre el plan en español
+    # canónico —el idioma en el que resuelve los nombres de alimento— y su PROSA la
+    # gobierna `build_language_directive`, no este campo.
+    "_display",
 )
 
 # [P2-SWAP-NUM-MEALS · 2026-07-29] (audit solver+seeder v4) El slot-target del swap se derivaba
