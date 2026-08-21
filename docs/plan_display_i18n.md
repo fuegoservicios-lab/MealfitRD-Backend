@@ -6,7 +6,7 @@
 
 | Pieza | SSOT | Nota |
 |---|---|---|
-| Motor de enriquecimiento | [`backend/plan_display_i18n.py`](../plan_display_i18n.py) | flash por lotes (knob `..._BATCH_DAYS`=4), validación determinista (línea sin canónico se descarta; arrays desalineados descartan el meal), TOCTOU por name+huella de ingredients/recipe (la COPIA del snapshot es load-bearing), lock in-process+KV con day-hash, fail-open TOTAL |
+| Motor de enriquecimiento | [`backend/plan_display_i18n.py`](../plan_display_i18n.py) | flash por lotes dimensionados por el TAMAÑO PROYECTADO de la salida (`_particionar_targets`; `..._BATCH_DAYS`=4 pasa a ser tope duro en días — P1-DISPLAY-LOTE-POR-COMIDAS), split-and-retry del lote que no parsea, validación determinista (línea sin canónico se descarta; arrays desalineados descartan el meal), TOCTOU por name+huella de ingredients/recipe (la COPIA del snapshot es load-bearing), lock in-process+KV con day-hash, fail-open TOTAL |
 | Disparadores (5) | TRIGGER-1A (persist chunked, services.py), 1B (no-chunked/tier gratis, routers/plans.py), 2 (chunk worker post-commit), 4 (cambio de locale, user_data.py) | best-effort try/except; es-DO/guest ⇒ no-op |
 | DELETE-on-write | anchors `...-MUTATOR-*`: swap, regenday, chatmod, recipeexpand + **6 re-escritores de gramos** (macroengine, capdm2, capbariatric, quantize, carbtrim, qtysync, fatstrim) | el pop vive EN el punto de mutación (pop-at-mutation): cualquier re-cuantización mata la traducción de ese meal — mejor español temporal que gramos mintiendo |
 | Frontend | `frontend/src/utils/displayMeal.js` (+`shoppingHelpers.js`) | fallback CAMPO A CAMPO devolviendo el original TAL CUAL (legacy string recipe incluido); identidad (swap/likes/keys) SIEMPRE por el name canónico |

@@ -56,8 +56,24 @@ Knobs (auto-registrados en `_KNOBS_REGISTRY` vía `knobs._env_bool/_env_str/_env
     MEALFIT_PLAN_DISPLAY_I18N                default True  — kill switch total.
     MEALFIT_PLAN_DISPLAY_I18N_MODEL          default flash — convención P3-PREVIEW-MODEL-KNOB.
     MEALFIT_PLAN_DISPLAY_I18N_TIMEOUT_S      default 60.0  — timeout del cliente LLM.
-    MEALFIT_PLAN_DISPLAY_I18N_BATCH_DAYS     default 4     — días por llamada LLM (clamp 1-30).
+    MEALFIT_PLAN_DISPLAY_I18N_BATCH_DAYS     default 4     — TOPE DURO en días por lote
+                                                            (clamp 1-30). Ya no es la unidad
+                                                            del troceo, ver abajo.
     MEALFIT_PLAN_DISPLAY_I18N_MAX_OUTPUT_TOKENS default 8000 — cota de salida por lote.
+
+[P1-DISPLAY-LOTE-POR-COMIDAS · 2026-08-21] El lote se dimensiona por el TAMAÑO PROYECTADO
+de la salida, no por días. Medido sobre las 271 comidas de los 6 planes vivos: el lote
+ordinario (4 días × 4-5 platos = 16-20 comidas) proyecta 6.600-8.300 tokens contra el tope
+de 8.000, y pasarse no degradaba — la salida se truncaba, el JSON no parseaba y el tramo
+entero se descartaba con la llamada ya cobrada. Ahora:
+
+    - `_particionar_targets` reparte por tokens estimados, con `BATCH_DAYS × las comidas
+      del día más cargado DE ESTE PLAN` como tope duro. El knob conserva su significado:
+      «BATCH_DAYS=1» sigue queriendo decir un día, traiga ese día una comida o seis.
+    - `_dividir_lote` + la pila de pendientes: un lote que no parsea se parte en dos y se
+      reintenta. Sólo una comida sola que sigue fallando es pérdida definitiva, y entonces
+      se cuenta en `targets_perdidos` y se registra a nivel `error`.
+    - `_max_invocaciones_por_ciclo` acota el split recursivo.
 """
 
 import json
@@ -122,6 +138,32 @@ def _plan_display_i18n_batch_days() -> int:
         4,
         validator=lambda v: 1 <= v <= 30,
     )
+
+
+# [P1-DISPLAY-LOTE-POR-COMIDAS · 2026-08-21] Comidas por dia con las que `BATCH_DAYS`
+# se traduce a un tope duro de comidas. Es un FALLBACK: cuando el plan esta delante se
+# mide sobre el (ver `_comidas_por_dia_del_plan`), porque un tope constante le cambiaria
+# el significado al knob —«BATCH_DAYS=1» tiene que seguir queriendo decir «un dia»,
+# aunque ese dia traiga una sola comida—. Medido en los planes vivos: 4,00 comidas/dia
+# en cinco de los seis y 5,00 en el mas cargado (76a6836d).
+_COMIDAS_POR_DIA_TOPE = 5
+
+
+def _comidas_por_dia_del_plan(days: list, day_indices: list) -> int:
+    """El dia mas cargado de los que se van a traducir, con suelo 1.
+
+    Se toma el MAXIMO y no la media a proposito: el tope tiene que acotar el peor lote
+    posible, y con la media un plan irregular (2 comidas un dia, 6 el siguiente) daria
+    un tope que el dia cargado se salta.
+    """
+    idx = set(day_indices or [])
+    mayor = 0
+    for i, d in enumerate(days or []):
+        if idx and i not in idx:
+            continue
+        if isinstance(d, dict) and isinstance(d.get("meals"), list):
+            mayor = max(mayor, len(d["meals"]))
+    return mayor or _COMIDAS_POR_DIA_TOPE
 
 
 def _plan_display_i18n_max_output_tokens() -> int:
@@ -866,6 +908,106 @@ def _collect_targets(days: list, day_indices_batch: list, locale: Optional[str] 
 
 
 # ============================================================
+# Troceo del trabajo (P1-DISPLAY-LOTE-POR-COMIDAS · 2026-08-21)
+# ============================================================
+
+# El lote se medía en DÍAS y el coste lo fijan las COMIDAS. Con el default de 4 días y
+# los 4-5 platos diarios de un plan normal, el lote ordinario son 16-20 comidas.
+#
+# MEDIDO sobre las 271 comidas de los 6 planes vivos con días (2026-08-21),
+# reconstruyendo la forma exacta del JSON de respuesta sobre el texto fuente:
+#
+#     16 comidas  ~6.642 tok de media · ~10.544 en el peor caso   -> se pasa
+#     20 comidas  ~8.302 tok de media · ~12.963 en el peor caso   -> se pasa DE MEDIA
+#
+# Contra un tope de salida de 8.000. Un plan con 5 comidas al día (existe: 76a6836d,
+# 55 comidas en 11 días) se pasaba de media, y pasarse no degradaba: la salida se
+# truncaba, el JSON no parseaba y el lote entero se descartaba con el gasto ya pagado
+# —`_emit_usage_telemetry` corre justo tras el invoke—.
+#
+# Los dos números de abajo son cotas CONSERVADORAS a propósito. Equivocarse por lo bajo
+# cuesta una llamada de más; equivocarse por lo alto cuesta el lote entero.
+_CHARS_POR_TOKEN = 3.0        # es/fr/pt con acentos tokenizan peor que el inglés
+_INFLACION_TRADUCCION = 1.20  # el francés y el portugués se alargan sobre el español
+_FRACCION_UTIL_DEL_TOPE = 0.75
+
+
+def _tokens_estimados(targets: list) -> float:
+    """Tokens de salida que el LLM tendrá que emitir para estos targets.
+
+    Se mide sobre el JSON serializado —no sobre la suma de los campos— porque las
+    comillas, las comas y los nombres de clave también se emiten, y en un array de
+    ingredientes con líneas cortas esa estructura no es ruido: es un tercio del texto.
+    """
+    if not targets:
+        return 0.0
+    chars = sum(len(json.dumps(t, ensure_ascii=False)) for t in targets)
+    return chars * _INFLACION_TRADUCCION / _CHARS_POR_TOKEN
+
+
+def _particionar_targets(targets: list, max_output_tokens: int,
+                         tope_comidas: Optional[int] = None) -> list:
+    """Trocea la lista de comidas en lotes que quepan en la salida.
+
+    DOS límites, y los dos hacen falta:
+
+      - el proyectado, que es el que responde al contenido real;
+      - un tope duro de comidas (`BATCH_DAYS` × las comidas del día más cargado), porque
+        una estimación que se equivoca por lo alto no tiene suelo. El knob de días no se
+        sustituye: se reinterpreta como cota superior.
+
+    Una comida que por sí sola ya se pasa sale igualmente, en su propio lote. Que el LLM
+    la trunque es otro problema; hacerla desaparecer del reparto sería este mismo bug
+    otra vez, y más callado.
+    """
+    if not targets:
+        return []
+    presupuesto = max(1.0, float(max_output_tokens) * _FRACCION_UTIL_DEL_TOPE)
+    if tope_comidas is None:
+        tope_comidas = _plan_display_i18n_batch_days() * _COMIDAS_POR_DIA_TOPE
+    tope_comidas = max(1, int(tope_comidas))
+
+    lotes: list = []
+    actual: list = []
+    acumulado = 0.0
+    for t in targets:
+        coste = _tokens_estimados([t])
+        if actual and (acumulado + coste > presupuesto or len(actual) >= tope_comidas):
+            lotes.append(actual)
+            actual, acumulado = [], 0.0
+        actual.append(t)
+        acumulado += coste
+    if actual:
+        lotes.append(actual)
+    return lotes
+
+
+def _dividir_lote(lote: list) -> tuple:
+    """Parte un lote en dos para reintentarlo. `([], [])` significa INDIVISIBLE.
+
+    El caso base es load-bearing: sin él, partir un lote de una sola comida devuelve
+    `([], [x])` y el reintento vuelve a encolar exactamente el mismo trabajo para
+    siempre. Una comida sola que no parsea es pérdida definitiva, y así hay que
+    declararla — no reintentarla en bucle.
+    """
+    if len(lote) < 2:
+        return [], []
+    mitad = (len(lote) + 1) // 2   # la primera mitad nunca es la pequeña
+    return lote[:mitad], lote[mitad:]
+
+
+def _max_invocaciones_por_ciclo(n_lotes_iniciales: int) -> int:
+    """Techo de llamadas al LLM en un ciclo, con split-and-retry activo.
+
+    El split es recursivo: un modelo que devuelve basura para TODO convertiría 4 lotes
+    en una bajada comida a comida. Partir en dos añade como mucho una llamada por nivel
+    y lote, y con lotes de ~7 comidas tres niveles agotan la división — de ahí el ×3
+    más un colchón fijo para los lotes de un solo elemento.
+    """
+    return max(1, int(n_lotes_iniciales)) * 3 + 2
+
+
+# ============================================================
 # Validación por meal + construcción del `_display` final
 # ============================================================
 
@@ -1247,10 +1389,27 @@ def enrich_plan_display(
             batch_size = _plan_display_i18n_batch_days()
             max_tokens = _plan_display_i18n_max_output_tokens()
             timeout_s = _plan_display_i18n_timeout_s()
-            day_batches = [
-                requested_day_indices[i : i + batch_size]
-                for i in range(0, len(requested_day_indices), batch_size)
-            ]
+            # [P1-DISPLAY-LOTE-POR-COMIDAS · 2026-08-21] Se recogen TODOS los targets
+            # de una vez y se trocean por el tamano proyectado de la salida. Antes el
+            # troceo era `requested_day_indices[i:i+batch_days]` — dias, cuando el coste
+            # lo fijan las comidas: el lote ordinario (16-20 platos) proyecta 6.600-8.300
+            # tokens contra un tope de 8.000, se truncaba y se descartaba entero.
+            #
+            # `_collect_targets` ya filtra por `locale` lo que esta traducido, asi que
+            # recogerlo todo junto no trae trabajo de mas; lo que si trae es la unica
+            # forma de repartir por tamano, que necesita ver el conjunto.
+            _todos_los_targets = _collect_targets(days, requested_day_indices, locale=locale)
+            lotes_iniciales = _particionar_targets(
+                _todos_los_targets,
+                max_output_tokens=max_tokens,
+                tope_comidas=batch_size * _comidas_por_dia_del_plan(
+                    days, requested_day_indices),
+            )
+            # Pila: el split-and-retry devuelve las mitades aqui, y las mitades de una
+            # mitad tambien. Se invierte para que el orden de consumo sea el natural.
+            _pendientes = list(reversed(lotes_iniciales))
+            _presupuesto_invocaciones = _max_invocaciones_por_ciclo(len(lotes_iniciales))
+            targets_perdidos = 0
 
             total_written = 0
             mismatch_total = 0
@@ -1301,13 +1460,26 @@ def enrich_plan_display(
                 else None
             )
 
-            for batch_day_indices in day_batches:
-                # [P2-DISPLAY-REDESPACHO-SIN-FILTRO · 2026-08-21] Con el locale, las
-                # comidas ya traducidas a ESE idioma se saltan: cada re-disparo del
-                # enriquecimiento pagaba otra vez por lo mismo.
-                targets = _collect_targets(days, batch_day_indices, locale=locale)
+            while _pendientes:
+                if _presupuesto_invocaciones <= 0:
+                    # El split es recursivo; sin techo, un modelo que devuelve basura
+                    # para todo baja hasta una llamada por comida. Lo que queda en la
+                    # pila se contabiliza como perdido en vez de desaparecer.
+                    perdidas = sum(len(x) for x in _pendientes)
+                    targets_perdidos += perdidas
+                    logger.error(
+                        f"[P1-PLAN-DISPLAY-I18N] techo de invocaciones agotado "
+                        f"plan={plan_id} locale={locale}: {perdidas} comida(s) sin "
+                        f"traducir en {len(_pendientes)} lote(s) pendiente(s)."
+                    )
+                    _pendientes = []
+                    last_skip_reason = "invocation_budget_exhausted"
+                    break
+
+                targets = _pendientes.pop()
                 if not targets and plan_name_pending is None and insights_pending is None:
                     continue
+                _presupuesto_invocaciones -= 1
 
                 prompt = _build_prompt(
                     targets, locale,
@@ -1325,7 +1497,7 @@ def enrich_plan_display(
                 except Exception as e:
                     logger.warning(
                         f"[P1-PLAN-DISPLAY-I18N] LLM invoke falló plan={plan_id} "
-                        f"locale={locale} days={batch_day_indices}: {e!r}"
+                        f"locale={locale} comidas={len(targets)}: {e!r}"
                     )
                     last_skip_reason = "llm_exception"
                     continue
@@ -1338,6 +1510,30 @@ def enrich_plan_display(
                 raw_content = getattr(response, "content", "") or ""
                 parsed = _parse_json_response(raw_content)
                 if parsed is None or not isinstance(parsed.get("meals"), list):
+                    # [P1-DISPLAY-LOTE-POR-COMIDAS · 2026-08-21] Antes esto era un
+                    # `continue` y el tramo se perdia entero con el gasto ya pagado. La
+                    # causa dominante de un JSON que no parsea es la salida TRUNCADA, y
+                    # media salida si cabe: se parte y se reintenta cada mitad.
+                    izq, der = _dividir_lote(targets)
+                    if izq:
+                        _pendientes.append(der)
+                        _pendientes.append(izq)
+                        logger.info(
+                            f"[P1-PLAN-DISPLAY-I18N] JSON no parseable con "
+                            f"{len(targets)} comida(s) plan={plan_id} locale={locale} "
+                            f"— partido en {len(izq)}+{len(der)} y reintentado."
+                        )
+                    else:
+                        # Una sola comida que sigue sin parsear: perdida definitiva.
+                        # Es el evento que antes no dejaba rastro ninguno.
+                        targets_perdidos += len(targets)
+                        logger.error(
+                            f"[P1-PLAN-DISPLAY-I18N] comida indivisible sin traducir "
+                            f"plan={plan_id} locale={locale} "
+                            f"day={targets[0].get('day_idx') if targets else '?'} "
+                            f"meal={targets[0].get('meal_idx') if targets else '?'} "
+                            f"— JSON no parseable tras el split."
+                        )
                     last_skip_reason = "json_parse_error"
                     continue
 
@@ -1413,7 +1609,9 @@ def enrich_plan_display(
             # disparó, y el único síntoma era un usuario viendo su plan en español.
             _resumen = {
                 "meals_written": total_written,
-                "batches": len(day_batches),
+                "batches": len(lotes_iniciales),
+                "targets": len(_todos_los_targets),
+                "targets_perdidos": targets_perdidos,
                 "mismatch": mismatch_total,
                 "reason": None if total_written > 0 else (
                     "persist_stale_mismatch" if mismatch_total else last_skip_reason
@@ -1424,7 +1622,7 @@ def enrich_plan_display(
             if total_written > 0:
                 logger.info(
                     f"[P1-PLAN-DISPLAY-I18N] enriquecidos {total_written} meal(s) en "
-                    f"{len(day_batches)} lote(s) plan={plan_id} locale={locale}"
+                    f"{len(lotes_iniciales)} lote(s) plan={plan_id} locale={locale} perdidas={targets_perdidos}"
                 )
                 return {"enriched_meals": total_written, "skipped": None}
 
@@ -1434,10 +1632,10 @@ def enrich_plan_display(
             # levanta a `error` para que Sentry lo recoja. Con `DEFAULT_EVENT_LEVEL=ERROR`
             # un `warning` no sube, y la elección de nivel es la que decide si alguien
             # se entera. Se excluye el caso «no había nada que hacer» (0 lotes).
-            if day_batches:
+            if lotes_iniciales:
                 logger.error(
                     f"[P1-PLAN-DISPLAY-I18N] enriquecimiento SIN escrituras "
-                    f"plan={plan_id} locale={locale} lotes={len(day_batches)} "
+                    f"plan={plan_id} locale={locale} lotes={len(lotes_iniciales)} "
                     f"mismatch={mismatch_total} motivo={last_skip_reason!r}"
                 )
             return {"enriched_meals": 0, "skipped": last_skip_reason}
