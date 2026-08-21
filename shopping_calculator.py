@@ -764,6 +764,124 @@ _SEASONING_DEFAULT_G = 40.0
 _CONDIMENT_MAX_CONTAINER_G = 120.0
 
 
+# ============================================================
+# [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] La lista del español venía en libras.
+#
+# Medido sobre los 2 planes beta vivos: 14/25 y 26/48 ítems en unidades imperiales. En ES/MX/CO la
+# carne se vende por kilos y la báscula da gramos; ¼ lb = 113 g no es un número que nadie pida. La
+# misma decisión ACIERTA para DO/US/PR, donde la libra es la unidad real de compra.
+#
+# DOS MEDICIONES ACOTARON EL ARREGLO, y las dos lo hicieron más pequeño:
+#   1. Las recetas YA son métricas (0 de 96 líneas del plan español usan libras): el problema no
+#      está en la generación, vive entero en este agregador determinista.
+#   2. La mitad de los «lb» visibles NO son una instrucción de pesar sino el RÓTULO de un envase
+#      real ("1 funda (Selecto 1 Lb · Wala)"). Convertir eso sería falsificar una etiqueta y el
+#      usuario no encontraría el producto. Sólo se convierte cuando la unidad de mercado ES el peso.
+#
+# DISPLAY-ONLY, SIN EXCEPCIÓN. Se reescriben `display_qty` y `display_string`; jamás `market_unit`,
+# `market_qty_numeric`, `base_qty` ni `base_unit`. Razón concreta: `/restock` («ya compré la lista»)
+# construye las filas de `user_inventory` con `market_qty_numeric` + `market_unit`, así que
+# convertir el DATO metería gramos donde la deducción espera libras — la Nevera descontaría mal y
+# en silencio. Es la misma trampa por la que se descartó el arreglo propuesto para P1-5.
+#
+# Y hay UN camino por el que el display sí toca el dato: `Dashboard.jsx:4398` cae a
+# `parseMarketQty(display_qty)` cuando `resolveShopQty(ing)` devuelve 0. Por eso la conversión se
+# niega a actuar sobre un ítem sin cantidad numérica — es exactamente el caso donde ese fallback
+# dispara. La guarda no es genérica: cubre el único hueco medido.
+# tooltip-anchor: P1-UNIT-SYSTEM-BY-COUNTRY
+# ============================================================
+_G_POR_LB = 453.592
+_G_POR_OZ = 28.3495
+# Unidades de mercado que son una ORDEN DE PESAR (no el rótulo de un envase).
+_UNIDADES_DE_PESO_IMPERIAL = ("lb", "lbs", "libra", "libras", "oz", "onza", "onzas")
+# La cantidad va SIEMPRE al principio de la línea; anclarlo protege los rótulos entre paréntesis.
+_RX_QTY_IMPERIAL = re.compile(
+    r"^\s*[\d.,/¼½¾\s]+(lbs?|libras?|oz|onzas?)\b", re.I)
+
+
+def _unit_system_by_country_enabled() -> bool:
+    """Camino caliente de la lista ⇒ knob propio, según la convención del repo."""
+    return _knob_env_bool("MEALFIT_UNIT_SYSTEM_BY_COUNTRY", True)
+
+
+def _etiqueta_metrica(gramos: float) -> str:
+    """454 g · 1,4 kg. Coma decimal: la lista se lee en español."""
+    if gramos >= 1000:
+        kg = round(gramos / 1000.0, 1)
+        txt = f"{kg:.1f}".replace(".", ",")
+        if txt.endswith(",0"):
+            txt = txt[:-2]
+        return f"{txt} kg"
+    return f"{int(round(gramos))} g"
+
+
+def unit_system_for_country_safe(country) -> str:
+    """Espejo local del SSOT (`constants.unit_system_for_country`) con import tolerante.
+
+    NO es una segunda tabla: delega. Existe sólo para que el camino caliente de la lista no
+    reviente si el import falla, y para que el fallback ('imperial' = la conducta de hoy) esté
+    escrito una vez.
+    """
+    try:
+        from constants import unit_system_for_country as _usfc
+        return _usfc(country)
+    except Exception:
+        return "imperial"
+
+
+def _project_units_over_result(res, country) -> int:
+    """Recorre el resultado del agregador (lista plana o dict por categoría) y proyecta el display
+    de cada ítem. Devuelve cuántos convirtió. Espejo estructural de
+    `_strip_prices_for_beta_pricing_mode`, que ya hace este mismo recorrido en el mismo sitio."""
+    n = 0
+    try:
+        grupos = res.values() if isinstance(res, dict) else [res]
+        for grupo in grupos:
+            if not isinstance(grupo, list):
+                continue
+            for item in grupo:
+                if _project_display_units_for_country(item, country):
+                    n += 1
+    except Exception:
+        return n
+    return n
+
+
+def _project_display_units_for_country(market_obj, country) -> bool:
+    """Reescribe SÓLO el display de un ítem a unidades métricas. True si convirtió."""
+    try:
+        if not isinstance(market_obj, dict) or not _unit_system_by_country_enabled():
+            return False
+        from constants import unit_system_for_country
+        if unit_system_for_country(country) != "metric":
+            return False
+        unidad = str(market_obj.get("market_unit") or "").strip().lower().rstrip(".")
+        if unidad not in _UNIDADES_DE_PESO_IMPERIAL:
+            return False
+        try:
+            qty = float(market_obj.get("market_qty_numeric") or 0)
+        except (TypeError, ValueError):
+            return False
+        if qty <= 0:
+            # Ver el bloque de arriba: sin numérico, la Nevera parsea el display.
+            return False
+        gramos = qty * (_G_POR_OZ if unidad.startswith(("oz", "onza")) else _G_POR_LB)
+        etiqueta = _etiqueta_metrica(gramos)
+        tocado = False
+        for campo in ("display_qty", "display_string"):
+            actual = market_obj.get(campo)
+            if not isinstance(actual, str) or not actual:
+                continue
+            nuevo, n = _RX_QTY_IMPERIAL.subn(etiqueta, actual, count=1)
+            if n:
+                market_obj[campo] = nuevo
+                tocado = True
+        return tocado
+    except Exception:
+        # Corre por cada ítem: una excepción aquí rompe la lista entera.
+        return False
+
+
 def _shoplist_sanity_cap_enabled() -> bool:
     """[P1-SHOPLIST-SANITY-CAP · 2026-08-21] Kill switch del tope de envases de condimento.
 
@@ -13290,6 +13408,28 @@ def get_shopping_list_delta(
     # ANTES de llamar aquí) — ver el comentario de `_strip_prices_for_beta_pricing_mode`.
     if isinstance(plan_result, dict) and plan_result.get("_pricing_mode") == "beta_no_prices":
         _strip_prices_for_beta_pricing_mode(res)
+
+    # [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] Proyección métrica del DISPLAY, en el último paso.
+    #
+    # Aquí y no dentro del agregador por una razón medida: `_cost_from_market` calcula el costo
+    # PARSEANDO el display redondeado («costo desde el DISPLAY, no desde weight_in_lbs crudo» —
+    # P3-PRICE-MARKET-COVERAGE). Convertir antes le daría gramos a un parser que espera libras y
+    # el costo saldría mal. Este es el único punto de salida de la función, así que también es el
+    # único sitio donde está garantizado que todo el cálculo ya terminó.
+    #
+    # El país sale del SELLO del plan (`country_for_plan`, P1-PLAN-STAMPS-COUNTRY), que ya viaja
+    # en `plan_result`: así los 26 call sites de esta función no cambian — 26 sitios donde
+    # olvidarse de pasar un `country=` nuevo. Un plan sin sello (todos los anteriores al sello)
+    # cae a 'DO' y conserva exactamente la conducta de hoy.
+    try:
+        from constants import country_for_plan as _cfp_units
+        _pais_lista = _cfp_units(plan_result if isinstance(plan_result, dict) else {}, None)
+        if unit_system_for_country_safe(_pais_lista) == "metric":
+            _project_units_over_result(res, _pais_lista)
+    except Exception as _us_exc:
+        logging.warning(
+            f"[P1-UNIT-SYSTEM-BY-COUNTRY] proyección métrica no-op (fail-open): "
+            f"{type(_us_exc).__name__}: {_us_exc}")
 
     return res
 

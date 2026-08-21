@@ -3375,19 +3375,45 @@ import logging as _logging
 COUNTRY_SYSTEM_ENABLED = _env_bool("MEALFIT_COUNTRY_SYSTEM", False)
 
 COUNTRY_PROFILES = {
+    # [P1-UNIT-SYSTEM-BY-COUNTRY · 2026-08-21] `unit_system` gobierna cómo se LEE la lista de la
+    # compra, no cómo se calcula. DO/US/PR en 'imperial' no es un olvido: en los tres la libra es
+    # la unidad real con la que se compra carne, así que convertirla sería el mismo defecto al
+    # revés. ES/MX/CO compran por kilos y su báscula da gramos.
     "DO": {"name_es": "República Dominicana", "currency": "DOP", "is_beta": False,
-           "has_native_prices": True,  "default_tz_offset_min": 240},
+           "has_native_prices": True,  "default_tz_offset_min": 240,
+           "unit_system": "imperial"},
     "ES": {"name_es": "España",               "currency": "EUR", "is_beta": True,
-           "has_native_prices": False, "default_tz_offset_min": -60},
+           "has_native_prices": False, "default_tz_offset_min": -60,
+           "unit_system": "metric"},
     "US": {"name_es": "Estados Unidos",       "currency": "USD", "is_beta": True,
-           "has_native_prices": False, "default_tz_offset_min": 300},
+           "has_native_prices": False, "default_tz_offset_min": 300,
+           "unit_system": "imperial"},
     "MX": {"name_es": "México",               "currency": "MXN", "is_beta": True,
-           "has_native_prices": False, "default_tz_offset_min": 360},
+           "has_native_prices": False, "default_tz_offset_min": 360,
+           "unit_system": "metric"},
     "PR": {"name_es": "Puerto Rico",          "currency": "USD", "is_beta": True,
-           "has_native_prices": False, "default_tz_offset_min": 240},
+           "has_native_prices": False, "default_tz_offset_min": 240,
+           "unit_system": "imperial"},
     "CO": {"name_es": "Colombia",             "currency": "COP", "is_beta": True,
-           "has_native_prices": False, "default_tz_offset_min": 300},
+           "has_native_prices": False, "default_tz_offset_min": 300,
+           "unit_system": "metric"},
 }
+
+
+def unit_system_for_country(raw) -> str:
+    """'imperial' | 'metric'. Lo desconocido cae a 'imperial' — la conducta de hoy.
+
+    Accesor SSOT: el campo vive DENTRO de `COUNTRY_PROFILES`, nunca en un dict aparte. Un
+    `{'ES': 'metric', ...}` suelto sería la cuarta tabla de países a mano, que es la lección que
+    `P1-DIET-CANON-SSOT` ya pagó (tres tablas de dieta drifteadas, una servía Pollo a
+    vegetarianas).
+
+    tooltip-anchor: unit_system_for_country (test_p1_unit_system_by_country.py)
+    """
+    try:
+        return COUNTRY_PROFILES[canonicalize_country(raw)].get("unit_system", "imperial")
+    except Exception:
+        return "imperial"
 
 
 def canonicalize_country(raw) -> str:
