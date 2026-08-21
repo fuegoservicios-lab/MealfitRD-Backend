@@ -68,7 +68,11 @@ def test_frontend_brand_select_batch_and_hidden_when_empty():
     assert "'/api/supermarket/match'" in _QPB_SRC, (
         "las marcas salen del Supermercado RD (mismo contrato que la página Nevera)"
     )
-    assert "JSON.stringify({ names })" in _QPB_SRC, "prefetch en LOTE (no N fetches)"
+    # [RE-ANCLADO por P1-BETA-PRICE-LEAKS · 2026-08-21] Anclaba el literal exacto del body,
+    # que ahora lleva también `country` para que el SERVIDOR decida si los precios en RD$ salen
+    # (esta pantalla los pintaba sin condición a un usuario de país beta). La propiedad que este
+    # guard protege —UN solo POST con el ARRAY de nombres, no N fetches— no cambió: se ancla ella.
+    assert re.search(r"JSON\.stringify\(\{\s*names\s*[,}]", _QPB_SRC), "prefetch en LOTE (no N fetches)"
     assert ".length > 0 || item.brand) && (" in _QPB_SRC, (
         "sin marcas disponibles y sin marca puesta → NO se renderiza el select"
     )
