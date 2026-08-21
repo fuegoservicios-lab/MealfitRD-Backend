@@ -5510,7 +5510,7 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
         # bug UTC-vs-AST que P1-PROACTIVE-TZ.
         if not local_date_str:
             from tools import _local_date_str_for_user
-            local_date_str = _local_date_str_for_user()
+            local_date_str = _local_date_str_for_user(user_id)
 
         glasses = get_water_intake_glasses_today(user_id, local_date_str)
 

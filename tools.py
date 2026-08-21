@@ -3398,17 +3398,42 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
 # IDOR cross-user (mismo vector que las otras 9 tools).
 # ============================================================
 
-def _local_date_str_for_user() -> str:
-    """Fecha LOCAL del servidor en formato YYYY-MM-DD. NOTA: el chat agent
-    corre server-side; idealmente el cliente pasaria su fecha local, pero
-    para v1 usamos la fecha del servidor (el VPS Oracle, UTC-4 o
-    similar). Si en el futuro el agente necesita la fecha exacta del
-    cliente, parametrizar via state."""
+_LOCAL_DATE_FALLBACK_OFFSET_MIN = 240  # RD (UTC-4): la conducta historica de este helper.
+
+
+def _local_date_str_for_user(user_id: str | None = None) -> str:
+    """Fecha LOCAL del usuario en formato YYYY-MM-DD.
+
+    [P2-LOCAL-DATE-STR-UTC4 . 2026-08-21] El nombre prometia «del usuario» y el cuerpo hacia
+    `now(utc) - 4h`: la fecha dominicana, para todo el mundo. Fase 1 (T5) conecto
+    `user_tz_offset_min` en tres sitios de este mismo modulo y dejo este, que es el que deciden
+    las tools de hidratacion y el contexto temporal del `/api/chat` no-stream.
+
+    Se rompia en los DOS sentidos:
+      · Espana (offset -60/-120): a las 00:30 del dia 22 en Madrid son las 18:30 del 21 en UTC-4.
+        El vaso recien registrado caia en el cubo de AYER.
+      · Mexico (offset 360): a las 22:30 del 21 en CDMX son las 00:30 del 22 en UTC-4. El registro
+        se iba al cubo de MANANA y el contador de hoy leia 0 — el agente podia reganar a alguien
+        que si bebio.
+
+    EL SIGNO: convencion `Date.getTimezoneOffset()`, POSITIVO = OESTE de UTC (RD=240, Espana en
+    invierno=-60). La hora local es `utc - offset`. Invertirlo duplica el error y ademas parece
+    correcto en RD, que es donde se prueba — el modo de fallo exacto de P1-AVG-MEAL-HOUR-SIGN.
+
+    Fail-safe hacia la conducta de hoy: sin `user_id`, sin perfil o con un huso ilegible se usa
+    240. Un usuario sin huso registrado no puede quedarse sin fecha.
+    tooltip-anchor: P2-LOCAL-DATE-STR-UTC4"""
     from datetime import datetime, timezone, timedelta
-    # DO es UTC-4. Para no depender del TZ del servidor, calculamos
-    # explicitamente la fecha en UTC-4 (Atlantic Standard Time).
-    do_now = datetime.now(timezone.utc) - timedelta(hours=4)
-    return do_now.date().isoformat()
+    _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
+    if user_id and str(user_id) != "guest":
+        try:
+            _o = user_tz_offset_min(user_id)
+            if isinstance(_o, bool) or not isinstance(_o, (int, float)) or _o != _o:
+                raise TypeError("huso no numerico")
+            _off = int(_o)
+        except Exception:
+            _off = _LOCAL_DATE_FALLBACK_OFFSET_MIN
+    return (datetime.now(timezone.utc) - timedelta(minutes=_off)).date().isoformat()
 
 
 @tool
@@ -3430,7 +3455,7 @@ def check_hydration_today(user_id: str) -> str:
         if not connection_pool:
             return "No puedo consultar la hidratacion ahora mismo, la base de datos no esta disponible."
 
-        log_date = _local_date_str_for_user()
+        log_date = _local_date_str_for_user(user_id)
 
         # Lee el conteo del dia.
         _row = execute_sql_query(
@@ -3506,7 +3531,7 @@ def log_water_glass(user_id: str, count_delta: float = 1) -> str:
         if not connection_pool:
             return "No puedo modificar la hidratacion ahora mismo, la base de datos no esta disponible."
 
-        log_date = _local_date_str_for_user()
+        log_date = _local_date_str_for_user(user_id)
 
         # [P3-WATER-ATOMIC-DELTA · 2026-05-30] Incremento ATÓMICO en UNA sola
         # sentencia. Pre-fix era read-modify-write (SELECT glasses → upsert
