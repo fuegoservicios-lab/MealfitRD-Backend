@@ -6556,6 +6556,16 @@ def _culinary_judge_rubric_for_country(country: str) -> str:
     """tooltip-anchor: _culinary_judge_rubric_for_country (test_p1_country_system_f1.py)"""
     from constants import canonicalize_country, COUNTRY_PROFILES
     canon = canonicalize_country(country)
+    # [P1-JUDGE-SEVERITY-COUNTRY · 2026-08-21] Return TEMPRANO para DO, explícito.
+    #
+    # Hasta aquí la byte-identidad dominicana dependía ENTERAMENTE de que el dict naciera
+    # pre-sembrado (`_CULINARY_JUDGE_RUBRIC_CACHE = {"DO": _CULINARY_JUDGE_RUBRIC}`): si algo
+    # vaciaba la caché —un test, un reload, un refactor futuro— 'DO' caía por la rama beta y
+    # recibía la rúbrica re-anclada, en silencio. Lo destapó un test de este P-fix que limpia la
+    # caché entre casos, y es la clase de fragilidad que este repo ya ha pagado varias veces: una
+    # garantía que descansa en un estado mutable en vez de en una condición.
+    if canon == "DO":
+        return _CULINARY_JUDGE_RUBRIC
     cached = _CULINARY_JUDGE_RUBRIC_CACHE.get(canon)
     if cached is not None:
         return cached
@@ -6580,6 +6590,39 @@ def _culinary_judge_rubric_for_country(country: str) -> str:
             # bloque ya sustituido, nunca en el helper compartido, para no tocar la salida DO.
             _country_block = _country_block.replace("PLATOS DOMINICANOS", f"PLATOS DE {name_es.upper()}")
             rendered = rendered.replace(_do_block, _country_block)
+    # [P1-JUDGE-SEVERITY-COUNTRY · 2026-08-21] Faltaba la tercera capa. F1-T3 re-ancló QUIÉN es el
+    # juez y F2-T5 QUÉ platos cita; lo que quedaba era la prosa que decide CUÁNDO algo está mal:
+    #
+    #   «'high' si un DOMINICANO lo vería como un error claro»
+    #
+    # Esa frase no describe, CALIBRA — y `high` es lo que escala a retry, que se paga en tokens.
+    # Una paella o unos boquerones en vinagre pueden parecerle raros a ojos dominicanos y normales
+    # a ojos españoles: el plan correcto se rechaza, se regenera con dinero y vuelve a rechazarse.
+    # Además los `issues` se le muestran al usuario VERBATIM, así que un español leía que su cena
+    # «no es una cena dominicana legítima».
+    #
+    # Sin tabla de gentilicios: decir «un español / un mexicano» exigiría una 2ª tabla (la que
+    # P1-DIET-CANON-SSOT prohíbe). Se reformula con `name_es`, que ya está aquí — menos elegante
+    # y sin nada que mantener.
+    for _frase_do, _frase_beta in (
+        ("si un dominicano lo vería", f"si alguien de {name_es} lo vería"),
+        ("cenas dominicanas legítimas", "cenas locales legítimas"),
+        ("la creatividad dominicana legítima", "la creatividad culinaria local legítima"),
+        ("(dominicano o internacional)", "(local o internacional)"),
+        ("paladar dominicano", f"paladar de {name_es}"),
+        ("cocina dominicana", f"cocina de {name_es}"),
+        # La guía positiva por slot, que es la mitad que el audit señaló como no cambiada («el
+        # espejo negativo se cambió, el positivo no»). 'mangú' SÍ se sustituye AQUÍ —a diferencia
+        # del planner, donde F1 lo conserva dentro de un ejemplo INCORRECTO— porque aquí es guía
+        # POSITIVA: le está diciendo al juez qué debería ver en un desayuno.
+        ("El desayuno dominicano va: mangú/tubérculos", f"El desayuno de {name_es} va: tubérculos"),
+        ("desayuno dominicano", f"desayuno de {name_es}"),
+    ):
+        rendered = rendered.replace(_frase_do, _frase_beta)
+    # Los ejemplos de comida sueltos ('casabe', 'sancocho') salen del SSOT compartido con el
+    # planner, el prompt de variedad y los ejemplos clínicos — no de una 4ª tabla local.
+    from constants import neutralize_do_lexicon as _ndl_judge
+    rendered = _ndl_judge(rendered)
     _CULINARY_JUDGE_RUBRIC_CACHE[canon] = rendered
     return rendered
 
