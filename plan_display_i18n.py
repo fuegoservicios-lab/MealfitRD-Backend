@@ -870,6 +870,25 @@ def _collect_targets(days: list, day_indices_batch: list, locale: Optional[str] 
 # ============================================================
 
 
+_NUMEROS = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _cifras_de(linea: str) -> list:
+    """El multiconjunto de números de una línea, con el decimal normalizado.
+
+    [P2-DISPLAY-VALIDADOR-SIN-CIFRAS · 2026-08-21] El separador se normaliza porque
+    «1.5» → «1,5» es lo que un francés espera leer: tratarlo como cifra perdida
+    convertiría el guard en un generador de falsos positivos justo en el idioma que
+    más lo necesita. Se ordena porque el orden de las cifras dentro de la frase SÍ
+    puede cambiar legítimamente al reordenar la sintaxis.
+    """
+    return sorted(m.group(0).replace(",", ".") for m in _NUMEROS.finditer(linea or ""))
+
+
+def _conserva_las_cifras(original_line: str, translated_line: str) -> bool:
+    return _cifras_de(original_line) == _cifras_de(translated_line)
+
+
 def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     name = item.get("name")
     description = item.get("description")
@@ -890,6 +909,14 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
         translated_line = translated_line if isinstance(translated_line, str) else ""
         original_line = original["ingredients"][idx]
         original_line = original_line if isinstance(original_line, str) else str(original_line)
+        # [P2-DISPLAY-VALIDADOR-SIN-CIFRAS · 2026-08-21] La cantidad va PRIMERO,
+        # antes del canonico. Un «180 g» convertido a «1 cup» pasaba entero: el
+        # usuario cocina con la cantidad equivocada y el motor sigue calculando los
+        # macros sobre el original en espanol, asi que la pantalla y el calculo
+        # dejan de contar lo mismo sin que nada avise.
+        if not _conserva_las_cifras(original_line, translated_line):
+            final_ingredients.append(original_line)
+            continue
         canonical = _extract_canonical_name(original_line)
         if not canonical:
             # Sin canónico identificable en el original: la línea pasa sin check
@@ -904,7 +931,17 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
             # se descarta ESA línea (no el meal) -> fallback al original español.
             final_ingredients.append(original_line)
 
-    final_recipe = [step if isinstance(step, str) else str(step) for step in recipe]
+    # [P2-DISPLAY-VALIDADOR-SIN-CIFRAS · 2026-08-21] `recipe` no tenia NINGUN check
+    # per-linea: el array entraba tal cual con solo mirar su longitud. Y los tiempos y
+    # las temperaturas viven ahi («Hornear 45 minutos a 180 grados»), que es dato que
+    # el usuario ejecuta con las manos. Mismo fallback per-linea que ingredients:
+    # se descarta la LINEA, no el meal, para no perder la traduccion de todo lo demas.
+    final_recipe = []
+    for idx, step in enumerate(recipe):
+        step = step if isinstance(step, str) else str(step)
+        original_step = original["recipe"][idx]
+        original_step = original_step if isinstance(original_step, str) else str(original_step)
+        final_recipe.append(step if _conserva_las_cifras(original_step, step) else original_step)
 
     return {
         "name": name.strip(),
