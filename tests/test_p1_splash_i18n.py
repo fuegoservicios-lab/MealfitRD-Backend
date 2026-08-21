@@ -118,9 +118,14 @@ def test_no_espera_a_DOMContentLoaded():
 
 def test_reutiliza_la_lectura_del_boot_de_idioma():
     """Una segunda lectura de localStorage seria una segunda fuente de verdad: dos
-    sitios que pueden discrepar sobre que idioma es. El boot de `lang` ya lo leyo."""
+    sitios que pueden discrepar sobre que idioma es. El boot de `lang` ya lo leyo.
+
+    [P1-AUTO-LOCALE · 2026-08-20] El boot ya no publica `stored` a secas: publica
+    `elegido` (lo guardado O el idioma del dispositivo). El contrato de este test
+    no cambia -- una sola lectura de localStorage, el splash consume el valor
+    publicado -- solo el nombre de la variable que se publica."""
     html = _html()
-    assert "window.__mfLocale = stored" in html, "el boot de idioma ya no publica el locale"
+    assert "window.__mfLocale = elegido" in html, "el boot de idioma ya no publica el locale"
     bloque = html[html.index("var TAGLINE = {"):]
     bloque = bloque[:bloque.index("</script>")]
     assert "window.__mfLocale" in bloque
