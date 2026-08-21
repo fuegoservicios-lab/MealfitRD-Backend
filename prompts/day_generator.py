@@ -1180,7 +1180,11 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     dish_library_block = ""
     try:
         from dish_library import build_dish_library_context
-        dish_library_block = build_dish_library_context(skeleton_day, day_num) or ""
+        # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] `country` YA llegaba a esta función desde
+        # `graph_orchestrator`; el bloque de inspiración era el único de su cuerpo que no lo
+        # pasaba, así que un mexicano recibía ocho platos dominicanos por día en el tramo más
+        # concreto del prompt mientras sus 49 plantillas dormían en disco.
+        dish_library_block = build_dish_library_context(skeleton_day, day_num, country=country) or ""
     except Exception:
         dish_library_block = ""
 

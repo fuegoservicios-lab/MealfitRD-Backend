@@ -1275,6 +1275,11 @@ def swap_meal(form_data: dict, surface: str = "individual"):
             # rechazaba y el swap quemaba reintentos. Los datos ya estaban en scope.
             diet_type=form_data.get("dietType") or form_data.get("diet"),
             allergies=form_data.get("allergies") or [],
+            # [P1-DISH-LIBRARY-COUNTRY · 2026-08-21] Sin esto, el swap de un plato español
+            # devolvía inspiración dominicana: arreglar sólo el day-gen habría dejado la mitad
+            # post-generación con el defecto — la misma asimetría de callers que Fase 1 tuvo que
+            # barrer dos veces. `_swap_country` ya está resuelto arriba, por la única puerta.
+            country=_swap_country,
         )
         if _insp_swap:
             context_extras += _insp_swap
