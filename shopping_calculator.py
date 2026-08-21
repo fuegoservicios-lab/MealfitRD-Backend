@@ -12649,12 +12649,40 @@ def _strip_prices_for_beta_pricing_mode(res):
 
     tooltip-anchor: _strip_prices_for_beta_pricing_mode (test_p1_country_system_f1.py)
     """
+    # [P1-BETA-PRICE-LEAKS · 2026-08-21] Un precio no viaja sólo como número: viaja también como
+    # el SKU del que salió. `display_qty` lleva «1 cartón (1 Lt · Wala)» — Wala, Zerca, Sosua,
+    # Jazma y Rica son marcas de casa de supermercados DOMINICANOS que no existen en España, y
+    # «funda» es el dominicanismo de bolsa. Medido en producción: 30 de 48 ítems del plan ES y 15
+    # de 25 del US llevaban marca, y el usuario se lleva ese PDF al súper. No las eligió (son los
+    # defaults más baratos del catálogo RD) y no puede quitarlas, porque el panel que las
+    # gestionaría está oculto justamente por ser beta.
+    #
+    # Se quita la MARCA, no la presentación: «1 cartón (1 Lt)» sigue diciéndole qué comprar. El
+    # separador ' · ' es el que `_pkg_from_product_row` usa para pegar tamaño y marca.
+    _BRAND_SEP = " · "
+
+    def _strip_brand(qty):
+        if not isinstance(qty, str) or _BRAND_SEP not in qty:
+            return qty
+        _abierto = qty.rfind("(")
+        if _abierto < 0:
+            return qty.split(_BRAND_SEP)[0].strip()
+        _cabeza, _cola = qty[:_abierto], qty[_abierto:]
+        if _BRAND_SEP not in _cola:
+            return qty
+        _sin_marca = _cola.split(_BRAND_SEP)[0].strip()
+        if not _sin_marca.endswith(")"):
+            _sin_marca += ")"
+        return (_cabeza + _sin_marca).strip()
+
     def _strip_item(it):
         if isinstance(it, dict):
             if "estimated_cost_rd" in it:
                 it["estimated_cost_rd"] = None
             if "estimated_cost" in it:
                 it["estimated_cost"] = None
+            if "display_qty" in it:
+                it["display_qty"] = _strip_brand(it.get("display_qty"))
 
     if isinstance(res, dict):
         for items in res.values():

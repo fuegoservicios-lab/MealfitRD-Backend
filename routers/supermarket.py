@@ -535,6 +535,56 @@ _MATCH_MAX_FOODS_PER_NAME = 4
 
 class SupermarketMatchIn(BaseModel):
     names: List[str] = Field(min_length=1, max_length=_MATCH_MAX_NAMES)
+    # [P1-BETA-PRICE-LEAKS · 2026-08-21] País del usuario, para decidir si los precios en RD$
+    # deben viajar. Este endpoint NO tiene auth (lo consumen la Nevera, el paso «Prepara tu
+    # Nevera» y el selector de marca, también para invitados), así que el país llega en el body.
+    #
+    # POR QUÉ AQUÍ SÍ ES ACEPTABLE UN DATO DEL CLIENTE, cuando el repo insiste en derivar
+    # server-side: esto NO es una frontera de seguridad ni de dinero. Es una decisión de
+    # PRESENTACIÓN — enseñar o no un importe que el usuario no puede usar. Un cliente que mienta
+    # sólo consigue ver u ocultarse precios a sí mismo; no accede a nada ajeno ni cambia su tier
+    # (que es donde P0-BILLING-1 y P0-AGENT-1 exigen server-side). Añadir auth + round-trip de
+    # perfil a un endpoint de 30 llamadas/min sería pagar latencia por una garantía que este dato
+    # no necesita.
+    country: Optional[str] = None
+
+
+def _strip_prices_for_beta_match(payload: Dict[str, Any], country: Optional[str]) -> Dict[str, Any]:
+    """[P1-BETA-PRICE-LEAKS · 2026-08-21] Anula IN-PLACE el precio en RD$ de cada variante cuando
+    el país del usuario no tiene precios nativos. Devuelve `payload` para encadenar.
+
+    EL DEFECTO QUE CIERRA: tres pantallas pintan lo que devuelve este endpoint con «RD$» sin
+    condición alguna —`BrandSelect`, `Pantry` y el paso «Prepara tu Nevera»— y `grep _pricing_mode
+    frontend/src` da exactamente 3 consumidores, los 3 en Dashboard: ninguna de esas tres lo lee.
+    Un usuario español añadía «Pollo» a su Nevera y leía «Pollo Rey · RD$185» en la MISMA sesión
+    en que su PDF le decía «España está en beta — pronto añadiremos los precios nativos de tu
+    súper». Y no es teórico: 21 de 25 y 42 de 48 ítems de los dos planes beta vivos hacen match
+    con SKUs dominicanos.
+
+    Se arregla aquí y no en las tres pantallas por el mismo argumento de CHOKE POINT que justificó
+    `_strip_prices_for_beta_pricing_mode` en el agregador: cubre las tres y las que vengan.
+
+    Se suprime el PRECIO, no la MARCA: elegir marca sigue teniendo sentido si el alimento existe.
+    Decide con el literal SSOT (`pricing_mode_for_country`) — un 2º chequeo `has_native_prices` a
+    mano aquí sería la segunda tabla que P1-DIET-CANON-SSOT ya pagó una vez.
+
+    tooltip-anchor: _strip_prices_for_beta_match (test_p1_beta_price_leaks.py)"""
+    try:
+        from constants import canonicalize_country, pricing_mode_for_country
+        if pricing_mode_for_country(canonicalize_country(country)) is None:
+            return payload
+    except Exception:
+        return payload
+    _matches = (payload or {}).get("matches")
+    if not isinstance(_matches, dict):
+        return payload
+    for _variantes in _matches.values():
+        for _v in (_variantes or []):
+            if isinstance(_v, dict):
+                for _k in ("price", "price_rd"):
+                    if _k in _v:
+                        _v[_k] = None
+    return payload
 
 
 def _norm_food(value: Optional[str]) -> str:
@@ -703,7 +753,12 @@ async def api_supermarket_match(body: SupermarketMatchIn, _rl: Any = Depends(_MA
             found = _resolve(raw)
             if found:
                 matches[raw] = found
-        return {"matches": matches, "catalog_size": len(rows)}
+        # [P1-BETA-PRICE-LEAKS · 2026-08-21] Último paso antes de devolver: los importes en RD$
+        # no salen hacia un país sin precios nativos. El país se canonicaliza dentro del helper
+        # (`canonicalize_country`), así que un valor basura del cliente cae a 'DO' — el mismo
+        # fail-safe que el resto del sistema.
+        return _strip_prices_for_beta_match(
+            {"matches": matches, "catalog_size": len(rows)}, body.country)
 
     try:
         return await asyncio.to_thread(_match)
