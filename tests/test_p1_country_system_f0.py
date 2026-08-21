@@ -182,6 +182,19 @@ def test_paso_pais_antes_del_submit_y_gated():
         "QCountry quedó DESPUÉS del paso que lleva el submit: el país se "
         "preguntaría después de generar el plan — o sea, nunca."
     )
+    # [P1-QCOUNTRY-BEFORE-BUDGET · 2026-08-21] «Antes del submit» era condición NECESARIA y no
+    # suficiente: se cumplía con el país en el PENÚLTIMO paso, diez posiciones después de
+    # QBudget — y ahí `formData.country` todavía es el 'DO' sembrado, así que el toggle de moneda
+    # ofrecía [RD$, US$] y la maquinaria multi-moneda de T6 quedaba inalcanzable en el alta.
+    # Medido en la DB viva: cero usuarios con moneda beta, incluida la cuenta con dos planes beta.
+    # El orden que de verdad importa es contra el DINERO, no contra el submit.
+    pos_budget = src.find("component: <QBudget")
+    assert pos_budget != -1, "El paso QBudget no está en el flow."
+    assert pos_country < pos_budget, (
+        "QCountry quedó DESPUÉS de QBudget: el usuario declara su presupuesto antes de decir en "
+        "qué país compra, así que se le pide en pesos dominicanos y su moneda no existe en el "
+        "toggle. La opción EUR/MXN/COP de F1-T6 vuelve a ser inalcanzable."
+    )
     ini = src.rfind("COUNTRY_SYSTEM_UI", 0, pos_country)
     # [CONTROLLER-RULING · 2026-08-16] Ventana ampliada a 600 (era 400): el
     # bloque del step (comentario + title/subtitle/fields/component) no cabía
