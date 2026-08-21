@@ -985,10 +985,28 @@ def test_prompt_directive_is_native_per_locale():
 def test_prompt_directive_demonstrates_gloss_example_in_native_language():
     """Cada directiva debe DEMOSTRAR el formato del gloss con un ejemplo real,
     no solo describirlo (lección P1-COACH-LANGUAGE-NATIVE: 'instrucción Y
-    demostración a la vez')."""
+    demostración a la vez').
+
+    [P2-DISPLAY-TEST-GLOSS-VACUO · 2026-08-21] Se mira la DIRECTIVA, no el prompt
+    ensamblado. Antes era `"Habichuelas rojas" in prompt`, y `_PROMPT_TEST_TARGETS`
+    trae `"30 g Habichuelas rojas"` como ingrediente: la aguja la ponía el propio
+    pajar. El test pasaba con el ejemplo BORRADO de la directiva — o sea, medía el
+    fixture y no el contrato.
+
+    Es el mismo patrón que el test hermano de abajo ya hacía bien, mirando
+    `_DISPLAY_LANGUAGE_DIRECTIVES[locale]` directamente.
+    """
     for locale in pdi._COACH_LANGUAGE_NAMES:
-        prompt = pdi._build_prompt(_PROMPT_TEST_TARGETS, locale)
-        assert "Habichuelas rojas" in prompt, f"{locale}: falta el ejemplo de gloss demostrado"
+        directive = pdi._DISPLAY_LANGUAGE_DIRECTIVES[locale]
+        assert "Habichuelas rojas" in directive, (
+            f"{locale}: la directiva ya no DEMUESTRA el formato del gloss con un "
+            "ejemplo. Describirlo no basta: la lección de P1-COACH-LANGUAGE-NATIVE es "
+            "que el modelo obedece la demostración mucho mejor que la descripción."
+        )
+        # Y que el prompt ensamblado la lleve dentro, que es lo que llega al LLM.
+        assert directive in pdi._build_prompt(_PROMPT_TEST_TARGETS, locale), (
+            f"{locale}: la directiva existe pero no viaja en el prompt"
+        )
 
 
 def test_prompt_no_spanish_instruction_for_non_spanish_locales():
