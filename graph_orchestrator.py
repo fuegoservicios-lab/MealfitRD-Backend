@@ -4956,7 +4956,11 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # `_compute_pantry_diff_warning` lo computa en cron_tasks y lo deja en form_data;
         # pre-fix ningún builder lo consumía (dead-write → feature P1-D muerta).
         "pantry_drift_context": build_pantry_drift_context(form_data.get("_pantry_drift_warning")),
-        "time_context": build_time_context(),
+        # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] `_shared_ctx_country` ya está derivado 60 líneas
+        # más arriba por la única puerta: el bloque temporal era el único de este dict que no lo
+        # usaba, y le contaba el clima del Caribe a los 5 países beta en el ÚNICO bloque del
+        # prompt marcado «(OBLIGATORIO)».
+        "time_context": build_time_context(country=_shared_ctx_country),
         "variety_prompt": variety_prompt,
         # [P2-VEGGIE-CHANNEL-DAYGEN · 2026-07-30] reparto del seeder como DATO (veggie_pairs).
         "seeder_assignment": _seeder_assignment,

@@ -794,8 +794,29 @@ def build_medication_context(form_data: dict) -> str:
         return ""
 
 
-def build_time_context() -> str:
-    """Genera el bloque de contexto temporal dinámico (fecha, día, clima caribeño y cultura)."""
+def build_time_context(country=None) -> str:
+    """Genera el bloque de contexto temporal dinámico (fecha, día, clima y cultura).
+
+    [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] Era el ÚNICO bloque del prompt marcado «(OBLIGATORIO)»
+    y le contaba el clima del Caribe a un usuario de Madrid: «Contexto en República Dominicana /
+    Temporada Caribeña / Hace MUCHO calor en el Caribe». Se inyecta en el contexto COMPARTIDO, así
+    que lo leían el planner y el day-generator a la vez — explica el «Bowl Caribeño de Avena,
+    Melón y Huevo» que el plan español 6a4321f5 sirvió de desayuno en producción.
+
+    El corte no es «dominicano sí / no», es **RD-específico vs universal**: se va la temporada
+    caribeña, el hint de calor del Caribe y el del sancocho de la época de lluvias antillana; se
+    quedan la fecha, el día laboral vs fin de semana y los hints de Navidad y enero, que valen
+    igual en los 6 países. La Cuaresma se queda pero pierde los peces antillanos — en España está
+    MÁS marcada que en RD y el bacalao es su plato de vigilia, así que borrarla habría tirado una
+    señal cultural real. País por la única puerta (`country_for_form_data`), que además aplica el
+    knob maestro: DO y knob-off son byte-idénticos al bloque de siempre.
+
+    tooltip-anchor: build_time_context (test_p1_time_context_country.py)"""
+    try:
+        from constants import country_for_form_data as _cffd_tc
+        _tc_beta = _cffd_tc({"country": country}) != "DO"
+    except Exception:
+        _tc_beta = False
     now_local = datetime.now()
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
@@ -808,7 +829,12 @@ def build_time_context() -> str:
         temporada = "De Lluvia/Huracanes"
         
     clima_hint = ""
-    if now_local.month in [6, 7, 8, 9]:
+    # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] Los dos hints describen el clima ANTILLANO (calor
+    # caribeño, época de lluvias y huracanes) y el segundo receta el plato nacional dominicano.
+    # Para un país beta no son «sutilmente adaptados al entorno del usuario» — son falsos.
+    if _tc_beta:
+        clima_hint = ""
+    elif now_local.month in [6, 7, 8, 9]:
         clima_hint = "- Clima: Hace MUCHO calor en el Caribe. Prioriza comidas más frescas, bowls, ensaladas y opciones hidratantes."
     elif temporada == "De Lluvia/Huracanes" and now_local.month in [10, 11]:
         clima_hint = "- Clima: Época de lluvias frecuentes. Integrar algún caldo o sopa (ej. sancocho ligero) puede ser muy reconfortante."
@@ -820,7 +846,15 @@ def build_time_context() -> str:
     elif now_local.month == 1:
         cultura_hint = "- Cultura: Inicio de año post-Navidad. Incluye opciones limpias, altas en fibra y ligeras para ayudar al 'reset' metabólico."
     elif now_local.month in [3, 4]:
-        cultura_hint = "- Cultura: Cuaresma/Semana Santa. Sugiere inteligentemente proteínas como bacalao, tilapia, chillo, atún o berenjenas, limitando un poco la carne roja."
+        # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] La Cuaresma SE QUEDA en beta (en España es más
+        # marcada que en RD y el bacalao es su plato de vigilia); lo que se va es la lista de
+        # peces antillanos — 'chillo' es pargo del Caribe.
+        cultura_hint = (
+            "- Cultura: Cuaresma/Semana Santa. Sugiere inteligentemente pescados y proteínas de "
+            "vigilia (bacalao, atún, berenjenas), limitando un poco la carne roja."
+            if _tc_beta else
+            "- Cultura: Cuaresma/Semana Santa. Sugiere inteligentemente proteínas como bacalao, tilapia, chillo, atún o berenjenas, limitando un poco la carne roja."
+        )
 
     hints = ""
     if clima_hint: hints += f"{clima_hint}\n"
@@ -833,10 +867,17 @@ def build_time_context() -> str:
     else:
         hints += "- 🗓️ Es DÍA LABORAL. Prioriza comidas rápidas (<15 min) o batch-cooking de la noche anterior.\n"
 
+    # [P1-TIME-CONTEXT-COUNTRY · 2026-08-21] La línea de país y la temporada caribeña son las dos
+    # afirmaciones geográficas del bloque. En beta se omiten y la fecha queda sola — que es lo
+    # único que el sistema sabe de verdad sobre el entorno de ese usuario.
+    _ctx_geo = (
+        ""
+        if _tc_beta else
+        f" Contexto en República Dominicana:\n- Temporada Caribeña: {temporada}."
+    )
     return (
         f"\n--- 📅 CONTEXTO ESTACIONAL Y CULTURAL (OBLIGATORIO) ---\n"
-        f"Hoy es {dia_str}, {now_local.day} de {mes_str} de {now_local.year}. Contexto en República Dominicana:\n"
-        f"- Temporada Caribeña: {temporada}.\n"
+        f"Hoy es {dia_str}, {now_local.day} de {mes_str} de {now_local.year}.{_ctx_geo}\n"
         f"{hints}"
         f"INSTRUCCIÓN: Adapta sutilmente la propuesta a este contexto para que se sienta hiper-personalizado al entorno del usuario.\n"
         f"----------------------------------------------------------\n"
