@@ -2341,6 +2341,15 @@ _NORMALIZE_ALIAS_INDEX: dict | None = None
 # nadie lo note. Un umbral duplicado es un umbral que ya drifteó.
 _FUZZY_MATCH_THRESHOLD = 0.87
 
+# [P2-CHICHARO-CHICHARRON · 2026-08-21] Pares (consulta, destino) que el fuzzy JAMÁS puede unir
+# porque son alimentos distintos, no variantes del mismo. Una entrada, y la brevedad está MEDIDA:
+# de 57 términos regionales barridos, 43 resolvieron, 9 cayeron en Proteínas y sólo éste era falso.
+# Añadir aquí exige la misma evidencia — un par que el barrido de `test_p2_chicharo_chicharron.py`
+# demuestre; si no, el arreglo correcto casi siempre es dar de alta la fila que falta.
+_FUZZY_COLISIONES_PROHIBIDAS = (
+    (r"\bchicharos?\b", r"chicharr"),   # guisante (MX) ≠ corteza de cerdo
+)
+
 
 def _construir_indice_alias(master_list: list) -> tuple[list, list]:
     """`(all_aliases, contains_compilados)` para un catálogo dado.
@@ -2650,8 +2659,41 @@ def normalize_name(orig_name: str) -> str:
             if _r > _fuzz_best:
                 _fuzz_best, _fuzz_name = _r, master_name
         if _fuzz_best >= _FUZZY_MATCH_THRESHOLD and _fuzz_name:
-            logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
-            return _fuzz_name
+            # [P2-CHICHARO-CHICHARRON · 2026-08-21] Un fuzzy alto puede cruzar de alimento.
+            #
+            # `chicharo` vs el alias `chicharron` da ratio 0,889 sobre un umbral de 0,87: pasa. Y
+            # como el destino ES una fila real del catálogo, SOBREVIVE al filtro de verified-only —
+            # no se cae de la lista, se COMPRA. Un mexicano que pide chícharos recibe corteza de
+            # cerdo, y si además es vegetariano, musulmán o judío el plato es inaceptable por
+            # razones que la nutrición no cubre. 18ª colisión de subcadena/fuzzy del proyecto.
+            #
+            # POR QUÉ UNA LISTA DE PARES Y NO UNA REGLA GENERAL: se barrieron 57 términos
+            # regionales de ES/MX/CO/PR. 43 resolvieron, 9 cayeron en Proteínas y OCHO eran
+            # correctos (gamba→Gambas, atún→Atún en agua, res→Carne de res…). El único falso
+            # positivo era éste. Una regla de «cruce de categoría» habría exigido un clasificador
+            # de «esto es carne» que no existe como SSOT — sería la cuarta tabla a mano, la lección
+            # de P1-DIET-CANON-SSOT, para atrapar un caso. La defensa de CLASE es el barrido de
+            # `test_p2_chicharo_chicharron.py`, que corre sobre el catálogo vivo y falla si un alta
+            # futura crea otra colisión de esta forma.
+            #
+            # No cierra que el catálogo NO tenga fila de guisante fresco (la única de la familia es
+            # `Guisantes secos`, 341 kcal, otro alimento). Tras el guard «chícharo» no resuelve a
+            # nada: peor que lo ideal, mejor que cerdo. El alta con procedencia verificable es
+            # curación de datos. tooltip-anchor: P2-CHICHARO-CHICHARRON
+            _fz_q = strip_accents(str(orig_name).lower())
+            _fz_r = strip_accents(str(_fuzz_name).lower())
+            _colision = any(
+                re.search(_q_rx, _fz_q) and re.search(_r_rx, _fz_r)
+                for _q_rx, _r_rx in _FUZZY_COLISIONES_PROHIBIDAS
+            )
+            if _colision:
+                logging.warning(
+                    f"🛡 [P2-CHICHARO-CHICHARRON] fuzzy rechazado: '{orig_name}' -> "
+                    f"'{_fuzz_name}' (ratio {_fuzz_best:.3f}) son alimentos DISTINTOS"
+                )
+            else:
+                logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
+                return _fuzz_name
 
     # Intento 6: Búsqueda de Similitud Semántica Vectorial (Cohere v4, Fallback Local)
     # Solo vale la pena gastar un request si la palabra no fue encontrada en absoluto y tiene suficiente longitud
