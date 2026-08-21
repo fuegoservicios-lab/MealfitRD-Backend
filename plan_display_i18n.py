@@ -978,6 +978,40 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     }
 
 
+def _emit_result_telemetry(plan_id: str, user_id: str, locale: str, resumen: dict) -> None:
+    """[P2-DISPLAY-SIN-TELEMETRIA-RESULTADO · 2026-08-21] El RESULTADO, no el coste.
+
+    El módulo ya instrumentaba lo que se GASTA (`_emit_usage_telemetry` →
+    `llm_usage_events`) y nada de lo que PASA: cero referencias a `pipeline_metrics`,
+    cero a `system_alerts` y cero `logger.error` en todo el fichero. Así que un
+    enriquecimiento que se descarta entero —JSON malformado, lote pasado del tope,
+    todos los meals con mismatch TOCTOU— era indistinguible de uno que nunca se
+    disparó: el usuario ve su plan en español y en el servidor no queda rastro.
+
+    Y con Sentry en `DEFAULT_EVENT_LEVEL=ERROR`, un `logger.warning` tampoco llega:
+    la elección de nivel decide si alguien se entera.
+
+    Best-effort de verdad: esto NUNCA puede tumbar el enriquecimiento. Un fallo aquí
+    se traga, igual que su hermano de coste.
+    """
+    try:
+        execute_sql_write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+            "duration_ms, retries, tokens_estimated, confidence, metadata) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+            (
+                user_id, plan_id, "plan_display_i18n",
+                int(resumen.get("duration_ms") or 0),
+                int(resumen.get("batches_failed") or 0),
+                0,
+                None,
+                json.dumps({"locale": locale, **resumen}, ensure_ascii=False),
+            ),
+        )
+    except Exception as e:
+        logger.debug(f"[P1-PLAN-DISPLAY-I18N] pipeline_metrics falló (best-effort): {e!r}")
+
+
 def _emit_usage_telemetry(plan_id: str, user_id: str, model_name: str, response) -> None:
     """Best-effort. NUNCA toca `api_usage` — solo `llm_usage_events` (libro de
     costo, node="plan_display_i18n"). Cualquier fallo se traga en silencio."""
@@ -1373,6 +1407,20 @@ def enrich_plan_display(
                     f"(cambiaron entre lectura y persist) plan={plan_id} locale={locale}"
                 )
 
+            # [P2-DISPLAY-SIN-TELEMETRIA-RESULTADO · 2026-08-21] Una fila por
+            # enriquecimiento, salga bien o mal. Antes sólo se instrumentaba el COSTE:
+            # un ciclo que se descartaba entero era indistinguible de uno que nunca se
+            # disparó, y el único síntoma era un usuario viendo su plan en español.
+            _resumen = {
+                "meals_written": total_written,
+                "batches": len(day_batches),
+                "mismatch": mismatch_total,
+                "reason": None if total_written > 0 else (
+                    "persist_stale_mismatch" if mismatch_total else last_skip_reason
+                ),
+            }
+            _emit_result_telemetry(plan_id, user_id, locale, _resumen)
+
             if total_written > 0:
                 logger.info(
                     f"[P1-PLAN-DISPLAY-I18N] enriquecidos {total_written} meal(s) en "
@@ -1382,6 +1430,16 @@ def enrich_plan_display(
 
             if mismatch_total:
                 last_skip_reason = "persist_stale_mismatch"
+            # Cero escrituras con lotes despachados es DEGRADACIÓN, no rutina: se
+            # levanta a `error` para que Sentry lo recoja. Con `DEFAULT_EVENT_LEVEL=ERROR`
+            # un `warning` no sube, y la elección de nivel es la que decide si alguien
+            # se entera. Se excluye el caso «no había nada que hacer» (0 lotes).
+            if day_batches:
+                logger.error(
+                    f"[P1-PLAN-DISPLAY-I18N] enriquecimiento SIN escrituras "
+                    f"plan={plan_id} locale={locale} lotes={len(day_batches)} "
+                    f"mismatch={mismatch_total} motivo={last_skip_reason!r}"
+                )
             return {"enriched_meals": 0, "skipped": last_skip_reason}
         finally:
             with _INFLIGHT_LOCK:
