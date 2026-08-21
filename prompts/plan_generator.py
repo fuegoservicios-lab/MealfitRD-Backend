@@ -925,12 +925,22 @@ def build_budget_context(form_data: dict) -> str:
     if not budget:
         return ""
 
+    # [P1-BUDGET-PROMPT-CURRENCY · 2026-08-21] País por la única puerta: gobierna DOS cosas de
+    # este bloque — si la cifra en RD$ puede afirmarse, y si la guía cualitativa puede nombrar
+    # productos criollos. `prompts/*.py` quedó fuera del barrido de país de Fase 1.
+    from constants import country_for_form_data as _cffd_bc
+    _bc_beta = _cffd_bc(form_data) != "DO"
+
     _LEVEL_GUIDANCE = {
         "low": (
             "El usuario tiene un presupuesto AJUSTADO. Prioriza ingredientes "
             "económicos y de alto rendimiento: pollo de muslo/contramuslo (antes "
             "que pechuga premium), huevos, lentejas, habichuelas, arroz, avena, "
-            "guineo, batata, y vegetales/frutas de temporada locales. Evita cortes "
+            # [P1-BUDGET-PROMPT-CURRENCY] 'guineo'/'batata' son dos palabras que un español no
+            # usa. Lo que la guía quiere decir —fruta barata y tubérculo barato— se dice sin
+            # nombrar el producto local, que es justo lo que el fragmento de país ya elige.
+            + ("frutas y tubérculos económicos de temporada, " if _bc_beta else "guineo, batata, ")
+            + "y vegetales/frutas de temporada locales. Evita cortes "
             "premium, mariscos caros, frutas importadas y quesos finos."
         ),
         "medium": (
@@ -979,6 +989,19 @@ def build_budget_context(form_data: dict) -> str:
         )
         if not _budget_new_currency and currency not in ("DOP", "USD"):
             currency = "DOP"
+        # [P1-BUDGET-PROMPT-CURRENCY · 2026-08-21] El caso que de HECHO ocurre y que F3 no cubre:
+        # país beta con `budgetCurrency='DOP'`. Medido en Neon, las 8 filas de `user_profiles`
+        # tienen DOP o NULL — CERO usuarios con moneda beta, incluida la cuenta de los 2 planes
+        # beta. El número lo tecleó en un campo rotulado «RD$» (así estaba el wizard antes de
+        # P1-QCOUNTRY-BEFORE-BUDGET) viviendo en España, así que NO SABEMOS qué moneda quiso
+        # decir — y ninguna de las dos lecturas es defendible: reetiquetarlo como euros inventa
+        # un dato, y dejarlo como pesos le pide al modelo que planifique una compra española con
+        # un presupuesto dominicano. Lo honesto es no afirmar ninguna moneda: se omite la CIFRA
+        # y se conserva la guía cualitativa, que es señal real y no depende de la unidad.
+        # USD queda fuera: es la moneda beta legítima de US y PR.
+        _bc_moneda_no_fiable = _bc_beta and currency == "DOP"
+        if _bc_moneda_no_fiable:
+            amount = None
         if amount and amount > 0:
             duration = (str(form_data.get("groceryDuration") or "weekly")).strip().lower()
             _dur_es = {
