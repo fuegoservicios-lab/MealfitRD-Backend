@@ -41846,7 +41846,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
             # [P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] `slot_drift` se calculaba y se
             # TIRABA: nadie leía esa clave. El porqué y la medición que lo destapó,
             # en el docstring de `_emit_slot_drift_metric_best_effort`.
-            _emit_slot_drift_metric_best_effort(_bsr.get("slot_drift"), plan)
+            _emit_slot_drift_metric_best_effort(_bsr.get("slot_drift"), plan,
+                                                state.get("form_data"))
             # [P1-BAND-GATE-ALL4 · 2026-07-01] el umbral acompaña al score elegido: macros-only usa el umbral
             # RE-TUNEADO (0.45; combined 0.5 ≈ macros-only 0.33 por la celda kcal≈1.0 — reusar 0.5 a ciegas
             # sería mass-retry). Rollback MEALFIT_BAND_GATE_USE_MACROS_ONLY=false → score+umbral combinados.
@@ -46464,7 +46465,7 @@ def _plan_goal_is_gainmuscle(plan: dict, explicit_goal=None) -> bool:
         return False
 
 
-def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
+def _emit_slot_drift_metric_best_effort(slot_drift, plan, form_data=None) -> None:
     """[P1-SLOT-DRIFT-OBSERVABLE · 2026-08-05] Persiste `slot_drift` a `pipeline_metrics`.
 
     El cómputo existía desde `P2-SLOT-DRIFT-TELEMETRY` (2026-07-29) pero su resultado no
@@ -46475,6 +46476,17 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
 
     Best-effort y sin efectos: cualquier fallo se traga: es telemetría, no puede tumbar una
     generación. `node='slot_drift'` para poder agrupar sin parsear texto.
+
+    [P2-COUNTRY-TELEMETRY · 2026-08-21] `country` en la metadata. Sin él, «¿los planes de España
+    salen peor que los dominicanos?» sólo se contesta abriendo plan por plan — que es literalmente
+    como se ha medido cada gap de esta ola. Sale de `country_for_form_data`, la ÚNICA puerta; con
+    el knob apagado devuelve 'DO' para todos, así que la fila no cambia de forma para nadie hasta
+    el flip.
+
+    El `user_id` SIGUE EN `None`, y no es un olvido: `PlanState` no lleva la identidad — este nodo
+    recibe `form_data`, no el usuario. Meterlo exige cambiar el estado del grafo, que es bastante
+    más que la «S» de este gap, y correlacionar por usuario es una pregunta distinta de la que aquí
+    se contesta.
     """
     if not isinstance(slot_drift, dict) or not slot_drift:
         return
@@ -46482,6 +46494,11 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
         from db_core import execute_sql_write
         import json as _json_sd
         _days = len((plan.get("days") or [])) if isinstance(plan, dict) else 0
+        try:
+            from constants import country_for_form_data as _cffd_sd
+            _country_sd = _cffd_sd(form_data if isinstance(form_data, dict) else {})
+        except Exception:
+            _country_sd = "DO"
         execute_sql_write(
             """
             INSERT INTO pipeline_metrics
@@ -46493,7 +46510,8 @@ def _emit_slot_drift_metric_best_effort(slot_drift, plan) -> None:
                 None,
                 None,
                 "slot_drift",
-                _json_sd.dumps({"slot_drift": slot_drift, "days": _days}, ensure_ascii=False),
+                _json_sd.dumps({"slot_drift": slot_drift, "days": _days,
+                                "country": _country_sd}, ensure_ascii=False),
             ),
         )
     except Exception as _e_sd:
