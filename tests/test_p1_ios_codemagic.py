@@ -170,4 +170,53 @@ def test_yaml_bundle_id_y_plataforma():
     assert "com.bioboros.app" in y, "El bundle id del YAML debe ser el de capacitor.config.ts."
     assert re.search(r"instance_type:\s*mac_mini_m\d", y), "Instancia Mac Apple Silicon."
     assert re.search(r"node:\s*22", y), "Node 22 (el que usa el repo)."
-    assert "ios/App/App.xcworkspace" in y or "ios/App/App.xcodeproj" in y
+
+
+def test_yaml_compila_el_xcodeproj_no_un_workspace_que_no_existe():
+    """[Build #2 en la Mac, 2026-08-22] `Path "ios/App/App.xcworkspace" does not exist`.
+
+    Capacitor 8 con Swift Package Manager NO genera .xcworkspace (eso es CocoaPods):
+    solo existe `ios/App/App.xcodeproj`. Estaba delante en el repo y asumí el layout
+    de Pods. `build-ipa` y `use-profiles` van con `--project`, nunca `--workspace`."""
+    y = _yaml()
+    # Fuera de comentarios: el YAML explica que el workspace NO existe, y esa prosa
+    # no puede contar como uso. Se miran solo las líneas de código.
+    codigo = "\n".join(l for l in y.splitlines() if not l.lstrip().startswith("#"))
+    assert "App.xcworkspace" not in codigo, (
+        "No hay workspace: el proyecto usa SPM. `ios/App/App.xcworkspace` no existe."
+    )
+    assert "--workspace" not in codigo, "`build-ipa`/`use-profiles` no pueden usar `--workspace`."
+    # El path va por variable: `XCODE_PROJECT` definida Y usada en build-ipa.
+    assert re.search(r'^\s+XCODE_PROJECT:\s*"?ios/App/App\.xcodeproj"?\s*$', codigo, flags=re.M), (
+        "Falta `XCODE_PROJECT: ios/App/App.xcodeproj` en environment.vars."
+    )
+    assert re.search(r'build-ipa[\s\S]{0,120}--project\s+"?\$XCODE_PROJECT', codigo), (
+        "`build-ipa` debe ir con `--project \"$XCODE_PROJECT\"`."
+    )
+    from pathlib import Path as _P
+    assert (_FRONT / "ios" / "App" / "App.xcodeproj").is_dir()
+    assert not (_FRONT / "ios" / "App" / "App.xcworkspace").exists()
+
+
+def test_scheme_app_esta_compartido_para_xcodebuild():
+    """[Antes del build #3, 2026-08-22] `xcodebuild` desde CLI solo ve schemes
+    COMPARTIDOS (`xcshareddata/xcschemes/App.xcscheme`). El proyecto de Capacitor
+    no lo tra\u00eda y `cap sync` NO lo genera (mi comentario en el YAML dec\u00eda que s\u00ed:
+    era falso, medido en node_modules/@capacitor/cli). Sin \u00e9l, `build-ipa --scheme App`
+    falla con \u00abscheme not found\u00bb aunque el proyecto compile en Xcode."""
+    scheme = _FRONT / "ios" / "App" / "App.xcodeproj" / "xcshareddata" / "xcschemes" / "App.xcscheme"
+    assert scheme.is_file(), f"Falta el scheme compartido: {scheme}"
+    xml = scheme.read_text(encoding="utf-8")
+    assert 'BuildableName = "App.app"' in xml
+    assert 'BlueprintName = "App"' in xml
+    # El id del target tiene que ser el del pbxproj, o Xcode lo descarta en silencio.
+    pbx = (_FRONT / "ios" / "App" / "App.xcodeproj" / "project.pbxproj").read_text(encoding="utf-8")
+    m = re.search(r"^\s+([0-9A-F]{24}) /\* App \*/ = \{\s*\n\s+isa = PBXNativeTarget;", pbx, flags=re.M)
+    assert m, "No se encontr\u00f3 el PBXNativeTarget App en el pbxproj."
+    assert f'BlueprintIdentifier = "{m.group(1)}"' in xml, (
+        f"El scheme apunta a otro target: esperaba BlueprintIdentifier {m.group(1)}."
+    )
+    # Y no puede estar ignorado por git: viaja en el repo o la Mac no lo tiene.
+    import subprocess
+    r = subprocess.run(["git", "check-ignore", "-q", str(scheme)], cwd=str(_FRONT), capture_output=True)
+    assert r.returncode != 0, "El scheme est\u00e1 ignorado por git: no llegar\u00eda a la Mac."
