@@ -21,8 +21,8 @@ casillas: artefacto «Bioboros a TestFlight» (22-ago-2026).
 1. **App ID** — developer.apple.com → Identifiers → `+` → App → Explicit `com.bioboros.app` → capabilities Push + SIWA.
 2. **App en App Store Connect** — Apps → `+` → iOS, «Bioboros», idioma Spanish (Mexico), SKU `bioboros-ios-2026`, Full Access. Apuntar el **Apple ID** numérico.
 3. **API key** — Users and Access → Integrations → App Store Connect API → `+`, nombre «Codemagic», App Manager. Guardar Issuer ID, Key ID y el `.p8`.
-4. **Codemagic** — registro con GitHub, Add application → `fuegoservicios-lab/MealfitRD` (repo del frontend, donde vive el YAML).
-5. **Subir la key** — Teams → Integrations → App Store Connect → Add key → nombre `bioboros_asc`.
+4. **Codemagic** — registro con GitHub, **cuenta Individual** (Team es pago por uso y pide tarjeta; los 500 min/mes gratis van con Individual). Instalar la app de GitHub en la org `fuegoservicios-lab` con acceso sólo a `MealfitRD` (repo del frontend, donde vive el YAML).
+5. **Subir la key** — avatar → Settings → Integrations → App Store Connect → Add key → nombre `bioboros_asc`.
 6. **Variable + grupo + build** — env var `APP_STORE_APP_ID`; grupo TestFlight `Equipo Bioboros` con el dueño dentro; instalar TestFlight en el iPhone; Start new build → `iOS → TestFlight` → `main`.
 
 ## Lo que esperar del primer build
