@@ -6070,6 +6070,73 @@ def _should_skip_meal_for_aggregation(meal: dict) -> bool:
     return False
 
 
+def shopping_source_days(plan_data) -> list:
+    """[P0-SHOPPING-CYCLE-DAYS · 2026-08-22] SSOT de "desde qué días se agrega la lista".
+
+    Une `_archived_days` (lo que el shift rodante ya podó) con `days` (la ventana viva).
+    ANTES, builder y guard leían `plan_data["days"]` a pelo, y esa ventana ENCOGE con
+    cada shift: en el plan real 2245eb45 los 3 días generados dan 48 alimentos y el
+    último día superviviente da 25 — y esos 25 son EXACTAMENTE lo que quedó publicado
+    tras el siguiente recálculo. El usuario marcó "ya compré la lista", su nevera nació
+    como espejo de esa lista mutilada (una sola proteína: Huevo; sin cebolla; sin
+    almidón básico) y el chunk siguiente murió contra el gate de despensa.
+
+    Lo usan LOS DOS lados a propósito (`get_shopping_list_delta` y
+    `expected_sum_from_recipes`): mientras el lado ESPERADO del coherence guard leyera
+    el mismo `days` encogido que el lado COMPRADO, ambos se recortaban a la vez y la
+    divergencia se cancelaba — medido: la telemetría del plan bajó de 31 divergencias a
+    6 justo DESPUÉS de la amputación, o sea que mutilar la lista MEJORABA la métrica.
+
+    Agregar más días NO infla la compra: el total es
+    `Σ(ingredientes) × (7/num_days) × cycle_qty_multiplier` = `promedio_por_día ×
+    días_del_ciclo`, invariante en `num_days`. Con más días el promedio es mejor
+    estimador, no mayor.
+
+    Acota la unión al ciclo VIVO porque `_archived_days` no se vacía ni al renovar
+    (ver `chat_history_context.py:204`): sin el filtro, un plan renovado arrastraría a
+    la lista los alimentos de la temporada anterior. Los días sin `date` se conservan
+    (fail-open: perder menú es peor que arrastrarlo).
+
+    Rollback sin redeploy: `MEALFIT_SHOPPING_SOURCE_INCLUDES_ARCHIVED=false` restaura
+    la conducta previa (sólo `days`). Tooltip-anchor: P0-SHOPPING-CYCLE-DAYS.
+    """
+    if not isinstance(plan_data, dict):
+        return []
+    vivos = plan_data.get("days")
+    vivos = [d for d in vivos if isinstance(d, dict)] if isinstance(vivos, list) else []
+
+    if not _knob_env_bool("MEALFIT_SHOPPING_SOURCE_INCLUDES_ARCHIVED", True):
+        return vivos
+
+    archivados = plan_data.get("_archived_days")
+    archivados = [d for d in archivados if isinstance(d, dict)] if isinstance(archivados, list) else []
+    if not archivados:
+        return vivos
+
+    # Filtro de ciclo: fuera los días anteriores al arranque del plan vivo.
+    _cycle = plan_data.get("cycle_start_date") or plan_data.get("grocery_start_date")
+    if isinstance(_cycle, str) and len(_cycle) >= 10:
+        _corte = _cycle[:10]
+        archivados = [
+            d for d in archivados
+            if not (isinstance(d.get("date"), str) and len(d["date"]) >= 10 and d["date"][:10] < _corte)
+        ]
+
+    union = archivados + vivos
+
+    # Techo por si el plan lleva meses acumulando archivados: nos quedamos con los MÁS
+    # RECIENTES, que son los que describen el ciclo de compra actual.
+    try:
+        _tope = int(plan_data.get("total_days_requested") or 0)
+    except (TypeError, ValueError):
+        _tope = 0
+    if _tope <= 0:
+        _tope = 30
+    if len(union) > _tope:
+        union = union[-_tope:]
+    return union
+
+
 def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0,
                                apply_protein_yield: bool = False) -> dict:
     """[P1-shop-coh-1 · 2026-05-07] Suma esperada de ingredientes desde el plan.
@@ -6111,8 +6178,12 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
     """
     if not isinstance(plan_data, dict):
         return {}
-    days = plan_data.get("days")
-    if not days or not isinstance(days, list):
+    # [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] Mismo SSOT que el lado COMPRADO. Leer
+    # `plan_data["days"]` a pelo dejaba este lado en `{}` tras el shift, y con el
+    # esperado vacío NINGUNA ausencia podía producir divergencia `expected_only`:
+    # el guard no podía ver que faltaba el pollo ni aunque faltara.
+    days = shopping_source_days(plan_data)
+    if not days:
         return {}
 
     try:
@@ -13108,7 +13179,12 @@ def get_shopping_list_delta(
             brand_defaults = None
 
     all_ingredients = []
-    days = plan_result.get("days", [])
+    # [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] SSOT de la fuente de días (incluye los que el
+    # shift archivó). Con `plan_result["days"]` a pelo, cada recálculo posterior a un
+    # shift reconstruía la lista desde una ventana más corta y la SOBRESCRIBÍA: 48
+    # alimentos → 25 en el plan real 2245eb45, dejando al usuario sin proteína que
+    # cocinar y matando el chunk siguiente contra el gate de despensa.
+    days = shopping_source_days(plan_result)
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
     if not days and plan_result.get("perfectDay"):
