@@ -26,6 +26,7 @@ Este test bloquea regresión documental:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 P3_LIVE_1_ANCHOR = "P3-LIVE-1"
@@ -64,14 +65,31 @@ def test_b_scripts_readme_documents_both_wrappers():
 
 
 def test_c_scripts_readme_documents_skip_flags():
-    """Las flags skip son no-obvias y deben estar documentadas."""
+    """Las flags skip son no-obvias y deben estar documentadas.
+
+    [P3-CI-SKIP-FLAGS-FOSIL · 2026-08-22] Este caso exigía además las grafías `SKIP_BACKEND`,
+    `SKIP_FRONTEND` y `SKIP_BUILD`: variables de entorno del wrapper **bash**, que
+    `P3-I18N-RUN-CI-SH-FOSIL` deprecó. Documentar una flag que ya no existe no es inocuo — manda
+    al usuario a exportar una variable que nadie lee, y el wrapper corre los tres jobs igual
+    mientras él cree haber saltado uno. Un guard que EXIGE documentar lo inexistente es peor que
+    no tener guard.
+
+    Lo que se conserva es la propiedad de verdad: **las flags que el wrapper VIVO soporta tienen
+    que estar documentadas**, y se leen de su propio `param(...)` en vez de enumerarlas a mano —
+    así una flag nueva sin documentar falla aquí, que es justo lo que este fichero existe para
+    conseguir."""
     text = SCRIPTS_README.read_text(encoding="utf-8")
-    for flag in ("-SkipBackend", "-SkipFrontend", "-SkipBuild",
-                 "SKIP_BACKEND", "SKIP_FRONTEND", "SKIP_BUILD"):
-        assert flag in text, (
-            f"[P3-LIVE-1] scripts/README.md no documenta la flag `{flag}`. "
-            f"Los wrappers la soportan; si no está en docs, los usuarios "
-            f"corren los 3 jobs siempre (perdiendo tiempo)."
+    ps1 = (SCRIPTS_README.parent / "run_ci.ps1").read_text(encoding="utf-8", errors="replace")
+
+    declaradas = re.findall(r"\[switch\]\$(\w+)", ps1)
+    assert declaradas, (
+        "[P3-LIVE-1] no encuentro switches en run_ci.ps1: sin ellos este test pasaría por "
+        "vacuidad y una flag nueva sin documentar se colaría"
+    )
+    for flag in declaradas:
+        assert f"-{flag}" in text, (
+            f"[P3-LIVE-1] scripts/README.md no documenta la flag `-{flag}`. El wrapper la "
+            f"soporta; si no está en docs, los usuarios corren los 3 jobs siempre."
         )
 
 
