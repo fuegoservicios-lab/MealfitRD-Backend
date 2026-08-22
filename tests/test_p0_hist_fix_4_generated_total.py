@@ -33,6 +33,35 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+# [P1-I18N-HISTORY-FORENSE · 2026-08-21] El chip pasó por `t()`, así que la grafía
+# `{_generatedTotal} de {_displayTotal} listos` ya no existe literalmente: ahora es
+# `t('{hechos} de {total} listos', { hechos: _generatedTotal, total: _displayTotal })`.
+#
+# La conducta NO cambió —mismos números, mismo orden, mismo encuadre de progreso— así que
+# estos guards se reanclan a la PROPIEDAD en vez de a la grafía. Es la misma lección que
+# el chip de caducidad de la Nevera, el mismo día y reportada por otra sesión: si el
+# guard se puede expresar por la propiedad, que no dependa de cómo se escriba.
+#
+# `_EXPR_CHIP` acota la ventana a la expresión del chip, para que «las dos variables
+# aparecen en el fichero» no cuente como «aparecen juntas en el chip».
+import re as _re
+
+_EXPR_CHIP = _re.compile(
+    r"t\(\s*'\{\w+\} de \{\w+\} listos'[^)]*\)", _re.S
+)
+
+
+def _expresion_del_chip(texto: str) -> str:
+    m = _EXPR_CHIP.search(texto)
+    assert m is not None, (
+        "No encontré la expresión del chip de progreso. Tiene que seguir siendo UNA "
+        "sola llamada `t('{…} de {…} listos', {…})`: partirla en «etiqueta» + valor "
+        "fijaría el orden español, y hay idiomas donde el número va delante. "
+        "[P1-I18N-HISTORY-FORENSE]"
+    )
+    return m.group(0)
+
+
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _HISTORY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "History.jsx"
@@ -65,10 +94,18 @@ def test_chip_uses_generated_total():
     `_planDaysLen`. La diferencia es lo que el user vio en su
     screenshot: '2 de 7' vs '3 de 7'."""
     text = _HISTORY_JSX.read_text(encoding="utf-8")
-    m = re.search(
-        r"\{(\w+)\}\s*de\s*\{_displayTotal\}\s*listos",
-        text,
-    )
+    _expr = _expresion_del_chip(text)
+    assert "_displayTotal" in _expr, "El denominador del chip ya no es `_displayTotal`."
+
+    class _M:
+        """El resto del test consulta `m.group(1)` esperando el NUMERADOR."""
+
+        @staticmethod
+        def group(_n):
+            mm = re.search(r"hechos:\s*(\w+)", _expr)
+            return mm.group(1) if mm else ""
+
+    m = _M
     assert m is not None, (
         "Chip render `{X} de {_displayTotal} listos` no encontrado."
     )
