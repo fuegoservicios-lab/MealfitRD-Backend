@@ -16,10 +16,14 @@ Se traduce **la interfaz**. No se traduce **el contenido**.
 |---|---|---|
 | Chrome del dashboard (nav, botones, títulos, Configuración, toasts, validaciones, `aria-label`) | **Sí** | Es lo que hace la app usable por alguien que no lee español. |
 | Plan, recetas y nombre del plan | **Sí**, desde [P1-PLAN-DISPLAY-I18N · 2026-08-19] | Capa `_display[locale]` paralela: el LLM traduce para LEER y el motor sigue operando sobre el español canónico. Detalle en [`plan_display_i18n.md`](plan_display_i18n.md). El fallback al español es conducta ESPERADA, no fallo: si la traducción falta, no cuadra por longitud o pierde una cifra o una etiqueta de sección, esa línea se pinta en español (P2-DISPLAY-VALIDADOR-SIN-CIFRAS, P1-DISPLAY-VOCAB-CERRADO). Knob `MEALFIT_PLAN_DISPLAY_I18N`, default `True`. |
-| Lista de compras | **Bilingüe** | Cada línea lleva el gloss en el idioma del usuario Y el nombre canónico español entre paréntesis — «30 g dried red beans (Habichuelas rojas)». El paréntesis no es cortesía: es el identificador con el que resuelve el motor, y el validador descarta la línea que lo pierda. |
+| Lista de compras | **Bilingüe, y el gloss es SIEMPRE INGLÉS** | [P2-I18N-DOC-LISTA-BILINGUE-FALSA · 2026-08-22] Esta fila decía «el gloss en el idioma del usuario». No lo es: `glossShoppingItemName` compone `name_en` + el nombre español para CUALQUIER locale distinto de `es-DO`, así que un francés lee «Black beans (Habichuelas rojas)» — inglés, no francés. `name_en` es un campo ESTÁTICO del catálogo, no una traducción por idioma, y sólo existe en el PDF. Cada línea lleva el gloss Y el nombre canónico español entre paréntesis — «30 g dried red beans (Habichuelas rojas)». El paréntesis no es cortesía: es el identificador con el que resuelve el motor, y el validador descarta la línea que lo pierda. |
 | Respuestas del coach (chat + notificaciones proactivas) | **Sí** | [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] La PROSA del coach sigue `locale` — es el pedido en vivo del dueño (Addendum §2), no parte del sistema de países en oscuro. Frontera dura: los nombres de alimentos/platos que el coach cita, y toda tool call, SIGUEN en español canónico SIEMPRE (mismo motivo que la fila de abajo). Ver `prompts.chat_agent.build_language_directive`. |
 | Nombres de alimentos y platos (`master_ingredients`, 206 alimentos + 60 platos criollos) | **No, jamás** | Son el **SSOT del motor**. `pantry_names_match` (P1-PANTRY-NAME-RESOLUTION), el guard de coherencia recetas↔lista y el backstop clínico de alergias resuelven por esos nombres exactos. Traducir «Pollo» rompe las tres cosas a la vez, y dos de ellas en silencio. |
 | Correo del código de acceso (OTP) | **No, y no depende de este repo** | [P3-I18N-OTP-PLANTILLA · 2026-08-21] Lo redacta y envía **Neon Auth** (Better Auth) desde una plantilla de su panel. El frontend solo hace `POST <neonAuthUrl>/email-otp/send-verification-otp` con `{email, type:'sign-in'}` — ese es el cuerpo completo: **no hay campo de idioma que mandar**, así que no es que esté sin cablear, es que la API que llamamos no ofrece el canal. Cambiarlo es editar la plantilla en el panel de Neon, y ahí sería una sola versión para todos salvo que ellos soporten variantes por idioma. Se declara porque llega en CADA login —junto con Google, es la única puerta de entrada— y una superficie que nadie declara es una superficie que nadie revisa. |
+| PDF de la lista de compras y de la receta | **Sí** | [P2-I18N-PDF-* · 2026-08-22] Rótulos de sección, cantidades, leyenda, advertencia clínica, marca y nombre del fichero. Los rótulos y la nota clínica se glosan **al imprimir, nunca en el dato**: `display_category` es además clave de agrupación y la nota vive en `plan_data`. Los nombres de alimento siguen la regla de la fila de abajo. |
+| Notificaciones push (43 mensajes de 6 crons) | **Sí** | [P1-I18N-PUSH-CRON-ESPANOL · 2026-08-22] Traducidas en el CUELLO DE BOTELLA (`utils_push.send_push_notification`), no en los 35 call sites: un cron nuevo queda cubierto sin wiring. Catálogo SSOT [`push_i18n.py`](../push_i18n.py), fail-open. |
+| Help bot e insights | **Sí** | [P1-HELP-BOT-I18N + P1-INSIGHTS-I18N · 2026-08-20] El razonamiento del panel de insights lo genera el LLM bajo `_INSIGHTS_ADDENDUM` (espejo #12); el help bot resuelve por catálogo. |
+| Autodetección del idioma en el primer arranque | **Sí** | [P1-AUTO-LOCALE] Se lee del navegador cuando el perfil no trae `locale`. Depende de que la columna admita `NULL`: mientras tuvo `NOT NULL DEFAULT 'es-DO'`, el primer login sembraba un valor y apagaba la autodetección PARA SIEMPRE (P1-I18N-PROFILE-DEFAULT-PISA-INERTE, migración aplicada 2026-08-22). |
 | Páginas legales (Privacidad, Términos — 601 cadenas) | **No** | Traducir un contrato genera obligaciones en cada jurisdicción. Es una decisión legal, no de producto. |
 | Landing (`bioboros.com`) | **No** | Son 14 páginas estáticas fuera del build de React (`project_landing_cinematico_v2`). Fuera del alcance pedido («dentro del dashboard»). |
 
@@ -233,18 +237,34 @@ Esa superficie sale en español y ya. Por eso el drift aquí es más callado que
 | 11 | `backend/plan_display_i18n.py` → `_PLAN_NAME_ADDENDUM` | Los platos salen traducidos y el nombre del plan se queda en español: media pantalla en cada idioma. |
 | 12 | `backend/plan_display_i18n.py` → `_INSIGHTS_ADDENDUM` | Igual que la 11, con el razonamiento del panel de insights. |
 
-Cada fila tiene **su propio test** en
-[`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py), y eso es
-deliberado: un único test que compare los doce conjuntos dice «algo divergió» y te deja
-buscando; uno por espejo dice cuál y qué se ve. Verificado por mutación — añadir `'de-DE'`
-al SSOT pone rojos los nueve por separado.
+Los espejos tienen tests **por separado** y no uno que compare los doce conjuntos, y eso es
+deliberado: un único test diría «algo divergió» y te dejaría buscando; uno por espejo dice
+cuál y qué se ve. Verificado por mutación — añadir `'de-DE'` al SSOT los pone rojos.
+
+**Dónde vive el ancla de cada fila** [P2-I18N-DOC-ESPEJOS-INCOMPLETOS · 2026-08-22]: esta
+sección decía «cada fila tiene su propio test» y no es exacto —
+[`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) cubre 10
+espejos con 9 funciones (una parametrizada sobre los dos addenda del display), y las filas
+**5 y 6** —las dos copias del `CHECK`— las ancla
+[`test_p1_i18n_dashboard.py`](../tests/test_p1_i18n_dashboard.py), que es donde vive la
+paridad de migraciones. La cifra la vigila ahora `test_p2_i18n_doc_espejos_incompletos.py`: si alguien
+añade un espejo sin su test, o un test sin su fila, sale rojo.
+
+⚠️ **La migración de la fila 5 tiene una parte SUPERSEDED.** `ADD COLUMN … NOT NULL DEFAULT
+'es-DO'` fue revertido por
+[`p1_i18n_profile_locale_nullable_2026_08_21.sql`](../migrations/p1_i18n_profile_locale_nullable_2026_08_21.sql)
+(aplicada a Neon el 2026-08-22): la columna admite `NULL`, y ese `NULL` es lo que distingue
+«no ha elegido» de «eligió español» — sin él, el primer login apagaba la autodetección para
+siempre. El `CHECK`, que es lo que esta fila cuenta como espejo, sigue en la migración de
+agosto-15.
 
 ## 7. Tests
 
 | Test | Qué ancla |
 |---|---|
 | [`test_p1_i18n_dashboard.py`](../tests/test_p1_i18n_dashboard.py) | Paridad de los espejos históricos (boot, CHECK, backend), idempotencia de la migración, whitelist + validación de valor, `es-DO` sin catálogo, existencia del validador. |
-| [`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) | Los DOCE espejos de la lista de idiomas, uno por test, con la consecuencia de cada divergencia en el mensaje. |
+| [`test_p2_i18n_espejos_sin_ancla.py`](../tests/test_p2_i18n_espejos_sin_ancla.py) | 10 de los 12 espejos de la lista de idiomas (9 funciones, una parametrizada), con la consecuencia de cada divergencia en el mensaje. Los dos `CHECK` los ancla `test_p1_i18n_dashboard.py`. |
+| [`test_p2_i18n_doc_espejos_incompletos.py`](../tests/test_p2_i18n_doc_espejos_incompletos.py) | Que la CIFRA de esta doc siga siendo la de la realidad: filas de la tabla ↔ espejos con ancla. |
 | `frontend/src/__tests__/I18n.p1_i18n_dashboard.test.js` | Contrato del motor: fallback al español, fail-closed del locale, interpolación (placeholder sin valor se queda **literal**), plural, `<html lang>`, formato por locale. |
 | `test_p3_i18n_deferred.py` | **Reconvertido**: ya no guarda «es-DO permanente» sino «no añadas una librería de i18n encima del motor propio». |
 

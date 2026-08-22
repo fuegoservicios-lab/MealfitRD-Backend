@@ -45,3 +45,53 @@ Nombre del plan: se enriquece EXACTAMENTE igual que los meals — mismo `_displa
 `/history-list` gana dos claves ligeras — SOLO nombres, nunca `recipe`/`ingredients` (el endpoint es polling): `preview_meals[].display_names` (por meal) y `plan_display_names` (nivel plan, top-level de cada row). Ambas se omiten por completo (no `null`) cuando falta la traducción — el frontend cae con `?? name`.
 
 Tests: [`backend/tests/test_p1_plan_display_i18n.py`](../tests/test_p1_plan_display_i18n.py) (sección "FASE 1c"), [`frontend/src/__tests__/displayMeal.test.js`](../../frontend/src/__tests__/displayMeal.test.js).
+
+---
+
+## Lo que cambió después de la fase 1c (2026-08-20 → 2026-08-22)
+
+[P2-I18N-DOC-DISPLAY-CONGELADA · 2026-08-22] Esta doc se quedó fija en el 19-ago: citaba
+cinco marcadores cuando el módulo ya llevaba veintidós, y la palabra «insights» no aparecía
+ni una vez pese a existir `_INSIGHTS_ADDENDUM` y un disparador propio. Una doc SSOT
+congelada es peor que ninguna — la de al lado (`i18n_dashboard.md`) ya provocó que una
+auditoría dejara fuera la superficie i18n más cara del producto por creerle.
+
+### Superficies que se añadieron
+
+| Marcador | Qué entró |
+|---|---|
+| `P1-INSIGHTS-I18N` · 08-20 | El **razonamiento** del plan (`plan_data.insights`): el panel «Diagnóstico / Plan de Acción / Tip del Chef». Los títulos ya pasaban por `t()`; el cuerpo lo escribe el LLM y se quedaba en español con la app en inglés. Entra por `_INSIGHTS_ADDENDUM`, en la MISMA llamada que los meals. |
+| `P1-PLAN-TITLE-I18N` · 08-20 | El título del plan no estaba a medias: estaba **INERTE**. `plan_data->>'name'` es `NULL` en todos los planes vivos —el nombre vive en la COLUMNA— así que al LLM nunca se le pedía `plan_name`. Sólo habría funcionado en planes RENOMBRADOS, que no había. |
+| `P1-I18N-DISPLAY-NIVEL-PLAN-SIN-VIA` · 08-22 | Una línea: encolar un lote vacío cuando no hay días pendientes pero sí traducción de nivel plan. La rama estaba prevista y era inalcanzable. |
+
+### Robustez del enriquecimiento
+
+| Marcador | Qué cambió |
+|---|---|
+| `P2-DISPLAY-REDESPACHO-SIN-FILTRO` | Se exige **USABLE, no presente**. Misma lección que `P1-I18N-GATE-VALOR` dejó en el validador de catálogos: medir que la clave existe no es medir que sirve. Un display a medias dado por bueno deja esa comida en español **para siempre**, porque nadie la reintenta. |
+| `P1-I18N-DISPLAY-LOTE-PERDIDO-SIN-SENAL` · 08-22 | Un lote que revienta al invocar se reintenta mientras quede presupuesto; si no, cuenta como perdido con `logger.error`. Y el resultado distingue `partial_loss` de éxito: antes, escribir 3 de 4 lotes se reportaba igual que escribir 4. |
+| `P2-DISPLAY-VALIDADOR-SIN-CIFRAS` | Las cifras de la línea tienen que sobrevivir a la traducción. El separador decimal se normaliza (`1.5` → `1,5` es lo que un francés espera), y se comparan ORDENADAS porque el orden dentro de la frase sí puede cambiar. |
+| `P3-DISPLAY-SUBSTRING-SIN-FRONTERA` | El validador comparaba con un `in` pelado y aprobaba por accidente. Es la clase de defecto que este repo ya pagó tres veces: «sal» dentro de Salami, «pollo» dentro de repollo, «res» dentro de fResco. |
+| `P2-DISPLAY-ECO-NOMBRE` | Un nombre «traducido» que sólo cambia la caja o los acentos («HABICHUELAS guisadas») no es una traducción. Normaliza con NFKD y descarta combinantes. |
+| `P1-DISPLAY-VOCAB-CERRADO` · `P2-RECIPE-NOTES-NOT-STEPS` | Un paso de receta no es prosa lisa: empieza por una etiqueta de sección, o es una nota. Una nota NUMERADA como acción de cocina convierte «Nota del nutricionista» en «Step 2». |
+| `P1-I18N-DISPLAY-CANONICO-PARTITIVO` · 08-22 | Partitivos (`diente`, `ramita`, `puñado`, `lata`…) y fracciones vulgares (`⅓`, `⅔`, `⅛`…) entran en el prefijo de cantidad, que es lo que el validador exige conservar. |
+
+### Coste y observabilidad
+
+| Marcador | Qué cambió |
+|---|---|
+| `P2-DISPLAY-RETENCION-LOCALES` | `_display` sólo AÑADÍA idiomas: un plan de 30 días visitado en los cinco guardaba cinco copias completas del texto dentro de la misma fila. Ahora se evacúa el idioma abandonado. |
+| `P2-MUTATOR-PURITY` | El `mutator` corre DENTRO del `SELECT … FOR UPDATE` de `update_plan_data_atomic`: **puro, CPU-only, sin IO ni LLM ni re-entrada al pool** — sostener el lock durante los segundos que dura la llamada LLM no es viable, así que `targets` se construye FUERA y el TOCTOU se cierra por huella. Acumular en los dicts `counters` (closures en memoria) no viola esa pureza. |
+| `P2-DISPLAY-SIN-TELEMETRIA-RESULTADO` | El módulo instrumentaba lo que se GASTA (`llm_usage_events`) y nada de lo que PASA: cero referencias a `pipeline_metrics`. |
+
+### ⚠️ Lo que ninguna de esas líneas dice, y es lo que más importa
+
+[P1-I18N-SIN-EVIDENCIA-PRODUCCION] **Esta capa no ha traducido un plato en producción.**
+Medido el 2026-08-22 sobre la base real: **5 ejecuciones en toda su historia** (contra 3.789
+del generador de días), **1 plan de 44** con `_display`, **0 comidas** traducidas, **0 filas**
+de telemetría, y **0 de 19 usuarios** con un locale distinto de `es-DO`.
+
+Todo lo de arriba está verificado por tests y **ninguna cantidad de tests verdes puede
+cerrar esa pregunta**: los tests miden el archivo, no el mundo. La condición de salida es
+una ejecución real por idioma contra un plan real. Hasta entonces, cada afirmación de esta
+doc sobre el comportamiento en vivo es una afirmación sobre el código, no sobre producción.
