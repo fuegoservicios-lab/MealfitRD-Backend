@@ -3824,6 +3824,45 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
         from shopping_calculator import get_master_ingredients
         rows = get_master_ingredients() or []
 
+        # [P2-SUGGEST-FOODS-COUNTRY · 2026-08-21] Esta tool rankeaba sobre el catálogo ENTERO —
+        # las 347 filas, con las de los seis países mezcladas— filtrando por alergias, rechazos y
+        # dieta, nunca por país. Medido para un usuario español: para el potasio le salían Chile
+        # mulato, Chile guajillo, Chile ancho, Chile pasilla y Achiote; para el calcio, Queso de
+        # papa y Flor de Jamaica. Consejo correcto en lo nutricional e INCOMPRABLE en lo práctico,
+        # que para una tool cuyo único trabajo es decir «cómete esto» equivale a no funcionar.
+        #
+        # Se reusa el MISMO predicado que el catálogo verificado del generador (precio RD — que
+        # incluye los básicos universales: arroz, pollo, huevo— más el keep sin precio DE SU PAÍS).
+        # Un segundo criterio aquí sería el espejo que driftea, la forma exacta del defecto que
+        # costó la costura (a) del guard de coherencia y las tres tablas de dieta de
+        # P1-DIET-CANON-SSOT.
+        #
+        # Fail-open en todo: sin país, sin knob o ante cualquier error, el catálogo entero — que es
+        # la conducta de siempre. Un usuario no puede quedarse sin consejo por esto.
+        # tooltip-anchor: P2-SUGGEST-FOODS-COUNTRY
+        try:
+            from constants import country_for_form_data as _cffd_sug
+            _sug_country = _cffd_sug(hp or {})
+            if _sug_country != "DO":
+                from shopping_calculator import is_country_catalog_unpriced_item as _iccui_sug
+
+                def _sug_comprable(_r) -> bool:
+                    if (_r.get("price_per_lb") or 0) > 0 or (_r.get("price_per_unit") or 0) > 0:
+                        return True
+                    return _iccui_sug(str(_r.get("name") or ""), country=_sug_country)
+
+                _filtradas = [_r for _r in rows if _sug_comprable(_r)]
+                # Nunca dejar la tool sin nada que decir: si el filtro vacía el catálogo, se
+                # conserva el completo. Un consejo con comida de otro país es peor que ninguno,
+                # pero "ningún alimento existe para tu déficit de hierro" es peor que los dos.
+                if _filtradas:
+                    rows = _filtradas
+        except Exception as _sug_exc:
+            logger.warning(
+                "[P2-SUGGEST-FOODS-COUNTRY] filtro por país no-op (fail-open): %s: %s",
+                type(_sug_exc).__name__, _sug_exc,
+            )
+
         candidates = []
         for r in rows:
             name = r.get("name")
