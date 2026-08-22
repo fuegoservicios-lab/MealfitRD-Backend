@@ -25,7 +25,17 @@ casillas: artefacto «Bioboros a TestFlight» (22-ago-2026).
 5. **Subir la key** — avatar → Settings → Integrations → App Store Connect → Add key → nombre `bioboros_asc`.
 6. **Variable + grupo + build** — env var `APP_STORE_APP_ID`; grupo TestFlight `Equipo Bioboros` con el dueño dentro; instalar TestFlight en el iPhone; Start new build → `iOS → TestFlight` → `main`.
 
-## Lo que esperar del primer build
+## Estado: build #6 VERDE (2026-08-22 04:47) — `App.ipa` 3,95 MB en App Store Connect
+
+Los 6 pasos del dueño se ejecutaron en vivo esa noche. Hicieron falta **seis builds**; los
+cinco fallos eran todos del pipeline o del proyecto, ninguno del dueño. Cronología y lección de
+cada uno en la memoria `project_p1_ios_codemagic_2026_08_22.md`. Dos variables de entorno en
+Codemagic (grupo `default`, ambas secretas): `APP_STORE_APP_ID` y `CERTIFICATE_PRIVATE_KEY_B64`
+(clave RSA en base64 — la semilla con la que Codemagic crea los certificados; la API key de
+Apple autoriza, no firma. Entregar por FICHERO, nunca pegada desde un chat: la primera llegó
+corrupta). Tiempo por build: ~3 min.
+
+## Lo que esperar del primer build (histórico — ya ocurrió)
 
 **Probablemente falle.** No hay Mac en el equipo: el proyecto Xcode nunca ha compilado en
 macOS y lo típico es provisioning o `cap sync`. Se corrige leyendo el log de Codemagic;
