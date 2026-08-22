@@ -48,16 +48,35 @@ def test_a_define_config_uses_mode_function(vite_src: str):
 
 
 def test_b_esbuild_block_gated_on_production_mode(vite_src: str):
-    """`esbuild: mode === 'production' ? { ... } : {}` o spread conditional."""
-    pattern = re.compile(
-        r"esbuild\s*:\s*mode\s*===\s*['\"]production['\"]"
-        r"|mode\s*===\s*['\"]production['\"][\s\S]{0,200}esbuild"
+    """El bloque esbuild va gated por un predicado que es TRUE en production (y en
+    `native`, P1-IOS-CODEMAGIC) y FALSE en dev/test.
+
+    [P1-IOS-CODEMAGIC · 2026-08-22] Antes el test exigía el literal
+    `mode === 'production'` pegado a `esbuild:`. Al nacer el modo `native` (el build
+    del binario iOS, que se DISTRIBUYE igual que production y debe heredar el strip)
+    la condición pasó a un predicado nombrado, `esDistribuible`. Lo que este test
+    protege no es la forma del literal sino el contrato: dev/test NO se stripean
+    (Vitest inspecciona console output). Se mide por el predicado y su definición."""
+    m = re.search(r"esbuild\s*:\s*(\w+)\s*\?", vite_src)
+    assert m, "P3-FRONTEND-1: bloque esbuild sin ternario gated."
+    pred = m.group(1)
+    if pred == "mode":
+        pytest.fail("`esbuild: mode ? ...` no es un gate: mode es siempre truthy.")
+    defn = re.search(rf"const {pred}\s*=\s*(.+)", vite_src)
+    assert defn, f"P3-FRONTEND-1: el predicado `{pred}` no está definido en vite.config."
+    expr = defn.group(1)
+    assert "mode === 'production'" in expr, (
+        f"P3-FRONTEND-1: `{pred}` debe incluir production (expr: {expr!r})."
     )
-    assert pattern.search(vite_src), (
-        "P3-FRONTEND-1: bloque esbuild no gated por production. "
-        "El strip aplicaría a dev/test rompiendo Vitest specs que "
-        "verifican console output."
+    assert "mode === 'native'" in expr, (
+        f"P1-IOS-CODEMAGIC: `{pred}` debe incluir native — el binario iOS se distribuye "
+        f"y no puede llevar console.* (expr: {expr!r})."
     )
+    for prohibido in ("development", "'test'", "!== "):
+        assert prohibido not in expr, (
+            f"P3-FRONTEND-1: `{pred}` no puede incluir dev/test ni negaciones (expr: {expr!r}): "
+            f"el strip aplicaría a Vitest."
+        )
 
 
 def test_c_pure_contains_log_warn_debug_info(vite_src: str):
