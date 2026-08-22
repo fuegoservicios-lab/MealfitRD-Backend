@@ -660,6 +660,36 @@ _COACH_LANGUAGE_NAMES = {
     "it-IT": "Italiano",
 }
 
+# [P2-I18N-PUSH-SIN-LOCALE · 2026-08-21] El TITULO de la notificacion proactiva.
+#
+# El cuerpo del nudge lo escribe el LLM bajo `build_language_directive`, asi que sigue el
+# idioma del usuario. El titulo era un literal espanol en el call site, tres lineas mas
+# abajo: la notificacion llegaba BILINGUE — titulo en espanol, cuerpo en frances.
+#
+# Y en una notificacion eso duele mas que en una pantalla: en el bloqueo del movil el
+# titulo es lo unico que se lee de un vistazo, y es justo la mitad que no se traducia.
+#
+# Vive AQUI, junto a `_COACH_LANGUAGE_NAMES`, porque es el mismo hecho —«en que idioma le
+# hablamos a este usuario»— y separarlos es como acaban divergiendo dos tablas (la
+# leccion de P1-DIET-CANON-SSOT). El espanol es la clave y el fallback: un locale que no
+# este aqui recibe el titulo espanol, que es la conducta de hoy.
+_PUSH_NUDGE_TITLE_ES = "Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615"
+
+_PUSH_NUDGE_TITLES = {
+    "en-US": "A note from your AI Nutritionist \U0001f9d1\u200d\u2615",
+    "pt-BR": "Recado do seu Nutricionista IA \U0001f9d1\u200d\u2615",
+    "fr-FR": "Un mot de ton nutritionniste IA \U0001f9d1\u200d\u2615",
+    "it-IT": "Un messaggio dal tuo Nutrizionista IA \U0001f9d1\u200d\u2615",
+}
+
+
+def push_nudge_title(locale) -> str:
+    """El titulo del nudge en el idioma del usuario, o el espanol si no lo conocemos."""
+    if not isinstance(locale, str):
+        return _PUSH_NUDGE_TITLE_ES
+    return _PUSH_NUDGE_TITLES.get(locale, _PUSH_NUDGE_TITLE_ES)
+
+
 _LANGUAGE_DIRECTIVE_CACHE: dict = {}
 
 

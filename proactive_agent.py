@@ -643,9 +643,16 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     # NUEVO: Enviar Web Push Notification a todos los dispositivos del paciente
                     # ---------------------------------------------
                     from utils_push import send_push_notification
+                    from prompts.chat_agent import push_nudge_title
+                    # [P2-I18N-PUSH-SIN-LOCALE · 2026-08-21] El cuerpo YA seguia el idioma
+                    # del usuario (`build_language_directive(_nudge_locale)`, arriba); el
+                    # titulo era un literal espanol pegado aqui. La notificacion llegaba
+                    # BILINGUE, y en la pantalla de bloqueo el titulo es lo unico que se
+                    # lee de un vistazo — o sea, la mitad que no se traducia era la que
+                    # decide si el usuario abre.
                     send_push_notification(
                         user_id=user_id,
-                        title="Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615",
+                        title=push_nudge_title(_nudge_locale),
                         body=content,
                         url=f"/dashboard/agent?session_id={session_id}"
                     )
