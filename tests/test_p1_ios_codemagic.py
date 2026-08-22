@@ -108,8 +108,18 @@ def test_yaml_firma_con_api_key_no_con_certificados_a_mano():
     assert "xcode-project use-profiles" in y, "Falta `xcode-project use-profiles` (aplica los perfiles que bajó la API key)."
     assert "app-store-connect fetch-signing-files" in y, "Falta `fetch-signing-files` con `--create`."
     assert "--create" in y, "`fetch-signing-files --create` para que Codemagic genere cert+perfil sin Mac."
-    for prohibido in ("certificate_private_key", ".p12", "CM_CERTIFICATE"):
+    # [Build #3, 2026-08-22] «Cannot save Signing Certificates without certificate
+    # private key». Para CREAR un certificado, Codemagic necesita una clave RSA con la
+    # que generar la solicitud (CSR): la API key de Apple autoriza, no firma. Esa clave
+    # va en la env var CERTIFICATE_PRIVATE_KEY (secreta, grupo `default`). Yo la había
+    # PROHIBIDO aquí confundiéndola con un .p12 subido a mano: no lo es, es la semilla
+    # con la que Codemagic genera los certificados. Lo que sigue prohibido es el .p12.
+    for prohibido in (".p12", "CM_CERTIFICATE"):
         assert prohibido not in y, f"No subir certificados a mano ({prohibido}): la API key los gestiona."
+    assert "CERTIFICATE_PRIVATE_KEY" in y, (
+        "`fetch-signing-files --create` necesita CERTIFICATE_PRIVATE_KEY (clave RSA) para "
+        "generar el CSR; sin ella falla con «Cannot save Signing Certificates»."
+    )
 
 
 def test_yaml_no_mezcla_firma_declarativa_con_fetch_create():
@@ -127,6 +137,16 @@ def test_yaml_no_mezcla_firma_declarativa_con_fetch_create():
         "primera subida; la firma va SOLO por `fetch-signing-files --create`."
     )
     assert "app-store-connect fetch-signing-files" in y
+
+
+def test_script_de_firma_aborta_al_primer_fallo():
+    """[Build #3] `fetch-signing-files` falló en la línea 0 y, sin `set -e`, los tres
+    comandos siguientes corrieron con las manos vacías y el paso salió en VERDE. El
+    fallo real apareció dos pasos después, en Xcode, disfrazado de otra cosa."""
+    y = _yaml()
+    i = y.index("fetch-signing-files")
+    bloque = y[y.rfind("script: |", 0, i):i]
+    assert "set -e" in bloque, "El script de firma debe llevar `set -e`: un fetch fallido no puede salir en verde."
 
 
 def test_yaml_sube_a_testflight():
