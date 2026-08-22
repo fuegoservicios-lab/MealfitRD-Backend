@@ -111,12 +111,24 @@ def test_pantry_imports_helper():
     )
 
 
+# [P1-I18N-TIEMPO-RELATIVO · 2026-08-21] La llamada dejo de ser `getShelfLifeBadge(item)`
+# a secas: ahora recibe `t` y `tn` para que «Caduca manana» y «hace 2h 15m» no sigan
+# escritos a mano en espanol. El simbolo no se toco.
+#
+# Es la SEGUNDA vez que este fichero se rompe por un cambio de forma que no toca su
+# contrato (la primera, el reapuntado de julio: «el guard cambio de forma»). Asi que se
+# ancla la PROPIEDAD y no la grafia: que el render invoque el helper —con la aridad que
+# sea— y que exista el condicional que evita pintar un chip nulo. El proximo argumento
+# que se le anada ya no lo rompe.
+_INVOCA_BADGE = re.compile(r"getShelfLifeBadge\(\s*item\b[^)]*\)")
+
+
 def test_pantry_renders_chip_with_helper():
     src = _read(_PANTRY_JSX)
-    # Debe haber una llamada a getShelfLifeBadge(item) y un return de span/chip.
-    assert "getShelfLifeBadge(item)" in src, (
-        "Pantry.jsx debe invocar `getShelfLifeBadge(item)` en el render "
-        "del item card."
+    assert _INVOCA_BADGE.search(src), (
+        "Pantry.jsx debe invocar `getShelfLifeBadge(item, …)` en el render del item "
+        "card. Lo que se protege es que el chip se COMPUTE desde el helper, no la "
+        "aridad de la llamada."
     )
 
 
@@ -145,7 +157,7 @@ def test_pantry_renders_only_when_urgent():
     # early-return, sino el condicional JSX `{badge && (...)}` inline en el render (mismo
     # contrato: badge null => no se pinta nada; ademas `badgeStyle` se deriva null-safe).
     pattern = re.search(
-        r"getShelfLifeBadge\(item\)[\s\S]{0,2600}\{badge && \(",
+        r"getShelfLifeBadge\(\s*item\b[^)]*\)[\s\S]{0,2600}\{badge && \(",
         src,
     )
     assert pattern is not None, (

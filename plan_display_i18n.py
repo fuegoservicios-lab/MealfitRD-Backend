@@ -1133,6 +1133,38 @@ def _conserva_las_cifras(original_line: str, translated_line: str) -> bool:
     return _cifras_de(original_line) == _cifras_de(translated_line)
 
 
+def _canonico_presente(canonical: str, linea: str) -> bool:
+    """¿El nombre canónico aparece en la línea COMO PALABRA?
+
+    [P3-DISPLAY-SUBSTRING-SIN-FRONTERA · 2026-08-21] Antes esto era un `in` pelado sobre
+    las dos cadenas normalizadas, y validaba por accidente. Es la clase de defecto que
+    este repo ya pagó tres veces: «sal» dentro de Salami, «pollo» dentro de repollo,
+    «res» dentro de fResco.
+
+    MEDIDO sobre los 347 nombres del catálogo: 17 son subcadena de otro sin ser palabra
+    —«Ajo» en «Ajonjolí», «Piña» en «Espinacas», «Uva» en «Uchuva», y «Sal» en NUEVE— y
+    4 caen dentro de palabras inglesas corrientes: «Sal» en *salad*, *salmon* y *salt*;
+    «Piña» en *spinach*.
+
+    En concreto: el LLM devolvía «1 tsp salt» —sin el paréntesis con el canónico, que es
+    justo lo que este check existe para exigir— y pasaba, porque «sal» está dentro de
+    «salt». La línea se persistía sin identificador y la Nevera dejaba de descontar esa
+    fila, en silencio.
+
+    EL PRECIO, aceptado: un gloss que PLURALICE el canónico («(Huevos)» por «(Huevo)»)
+    deja de validar y esa línea cae al español. Es lo correcto —la directiva pide el
+    canónico «literalmente, exactamente como en el original»— y caer al español es
+    degradación, no corrupción. Tolerar variaciones sería inventar una regla de
+    morfología por idioma que nadie puede validar.
+    """
+    if not canonical:
+        return False
+    c = strip_accents(canonical).lower().strip()
+    if not c:
+        return False
+    return re.search(rf"(?<!\w){re.escape(c)}(?!\w)", strip_accents(linea).lower()) is not None
+
+
 def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
     name = item.get("name")
     description = item.get("description")
@@ -1168,7 +1200,7 @@ def _validate_and_build_display(original: dict, item: dict) -> Optional[dict]:
             # pasa sin check").
             final_ingredients.append(translated_line.strip() or original_line)
             continue
-        if strip_accents(canonical).lower() in strip_accents(translated_line).lower():
+        if _canonico_presente(canonical, translated_line):
             final_ingredients.append(translated_line)
         else:
             # Un gloss que pierde el identificador es peor que no tener gloss:
