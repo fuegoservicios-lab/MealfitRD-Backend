@@ -1241,6 +1241,27 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
         except Exception as e:
             result["errors"].append(f"user_profiles: {e}")
 
+        # 6. [P1-ACCOUNT-DELETE-IDENTITY · 2026-08-22] La IDENTIDAD, y solo cuando se
+        #    borra el perfil. Hasta aquí «Eliminar cuenta» borraba los datos y dejaba
+        #    viva la cuenta de Neon Auth: el mismo correo volvía a entrar sin
+        #    registrarse y las sesiones de OTROS dispositivos seguían valiendo
+        #    (`neon_auth.session` cuelga del user, no del perfil). Para Apple
+        #    (5.1.1(v)) eso no es borrar la cuenta. `session`, `account`, `member` e
+        #    `invitation` tienen ON DELETE CASCADE hacia `user` (medido en el esquema),
+        #    así que con este DELETE cae todo lo de identidad. Va DESPUÉS del perfil:
+        #    si fallara entre medias, mejor un perfil sin identidad (inaccesible) que
+        #    una identidad sin perfil (entra y `ensure_user_profile_exists` lo
+        #    resucita). `include_profile=False` (purge admin) NO pasa por aquí: es
+        #    «vaciar», no «cerrar».
+        try:
+            r = execute_sql_write(
+                'DELETE FROM neon_auth."user" WHERE id = %s RETURNING id',
+                (user_id,), returning=True,
+            )
+            result["deleted"]["neon_auth_user"] = len(r) if isinstance(r, list) else 0
+        except Exception as e:
+            result["errors"].append(f"neon_auth.user: {e}")
+
     logger.info(
         f"[P1-PROD-AUDIT-2] delete_account_data({user_id}): "
         f"tablas_con_filas={sum(1 for v in result['deleted'].values() if v)}, "
