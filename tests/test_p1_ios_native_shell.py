@@ -127,26 +127,33 @@ def test_la_clave_del_boton_de_apple_vive_en_los_cuatro_catalogos():
         assert cat.get("Continuar con Apple"), loc
 
 
-def test_webview_ios_sin_rubber_band_ni_inset_automatico():
-    """[P1-IOS-WEBVIEW-SCROLL \u00b7 2026-08-22] Primer build en el iPhone: \u00abel scroll del login
-    sobrepasa lo normal, como si se saliera de la pantalla\u00bb.
+def test_webview_ios_scroll_vivo_sin_rebote_ni_inset_automatico():
+    """[P1-IOS-WEBVIEW-SCROLL · 2026-08-22 · corregido el mismo día] Primer build en el
+    iPhone: «el scroll del login sobrepasa lo normal». Mi primer arreglo puso
+    `scrollEnabled: false` creyendo que dejaba el scroll al contenido web: NO — apaga
+    el scroll ENTERO del WebView. El login «se arregló» porque cabe en una pantalla;
+    el dashboard quedó clavado (build 8, medido por el dueño). Este test pinaba mi
+    teoría, no la conducta.
 
-    Dos causas que se suman, medidas en el c\u00f3digo:
-      - El WebView de Capacitor vive dentro de un UIScrollView NATIVO que rebota
-        (rubber-band). `overscroll-behavior-y: none` en `body` no lo frena: eso es CSS
-        del documento, y el que rebota es el contenedor nativo. `scrollEnabled: false`
-        deja el scroll al contenido web, que s\u00ed obedece al CSS.
-      - `contentInset: 'automatic'` suma el alto de la barra de estado al \u00e1rea
-        desplazable; el login mide `min-height: 100dvh` y la p\u00e1gina acaba midiendo
-        100dvh + inset: al llegar abajo \u00absobra\u00bb justo esa franja. `'never'` deja que el
-        CSS gestione el notch con `env(safe-area-inset-*)`, que el login YA hace."""
+    Contrato real, tres piezas:
+      - `scrollEnabled` NO está en false (default true): el WebView scrollea.
+      - `contentInset: 'never'`: 'automatic' suma la barra de estado a un login de
+        100dvh y esa franja es la que «sobraba» abajo. El CSS ya gestiona el notch
+        con env(safe-area-inset-*).
+      - El rebote (rubber-band) se quita en NATIVO, donde vive: `scrollView.bounces =
+        false` en AppDelegate. Ningún CSS del documento frena el UIScrollView."""
     src = _read("capacitor.config.ts")
-    assert re.search(r"scrollEnabled:\s*false", src), (
-        "ios.scrollEnabled debe ser false: el UIScrollView nativo rebota y ning\u00fan CSS lo frena."
+    assert not re.search(r"scrollEnabled:\s*false", src), (
+        "ios.scrollEnabled: false apaga el scroll ENTERO del WebView (dashboard clavado, build 8)."
     )
     assert re.search(r"contentInset:\s*'never'", src), (
         "ios.contentInset debe ser 'never': 'automatic' suma la barra de estado a un login de 100dvh."
     )
+    swift = _read("ios/App/App/AppDelegate.swift")
+    assert re.search(r"scrollView\.bounces\s*=\s*false", swift), (
+        "AppDelegate debe poner webView.scrollView.bounces = false: el rebote es del contenedor nativo."
+    )
+
 
 
 def test_google_oauth_no_se_pinta_en_nativo_hasta_que_exista_deep_link():
