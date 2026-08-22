@@ -209,17 +209,9 @@ Motor propio, cero deps. **La clave ES el texto español**: es-DO no lleva catá
 
 [P3-CLAUDEMD-CAP · movido a docs 2026-07-26] Advisors auditados y declarados **intencionales** (7: 3 de security, 9 de performance) — si reaparecen en un linter, **no actuar**, la razón está fija por fila. Los emitía el linter de **Supabase** (ya no corre, migración a Neon 2026-06-12); el razonamiento sigue vigente (un índice "sin uso" cubre una FK que el advisor no ve, o una función es `SECURITY DEFINER` a propósito). Tabla canónica + pattern `SET search_path = ''` + lockdown de DEFINERs: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md). Anclajes: [`test_p2_whitelist_advisors_anchors_alive.py`](backend/tests/test_p2_whitelist_advisors_anchors_alive.py).
 
-### Sentry sampling driven from env (NO hardcodear `1.0`)
+### Tres decisiones cuyo detalle vive SOLO en el doc
 
-[P1-SENTRY-SAMPLE-COST · 2026-05-12] Backend y frontend leen el sample rate desde env var (default 0.1): hardcodear `1.0` satura la cuota de Sentry a escala y dropea errores genuinos por throttling. Las 3 env vars con sus defaults y clamps: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md). Test: [`test_p1_sentry_sample_cost.py`](backend/tests/test_p1_sentry_sample_cost.py).
-
-### Security headers en nginx (defensa-en-profundidad en mealfitrd.com)
-
-[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers viven en `/etc/nginx/snippets/mealfit-security.conf` del VPS, en el server block HTTPS **y en cada `location` con `add_header` propio** (nginx no hereda entre locations). CSP arranca Report-Only. Detalle: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md).
-
-### Admin gate en `/api/system/health` (no es público)
-
-[P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] `get_system_health` ([`routers/system.py`](backend/routers/system.py)) está gateado por `_verify_admin_token`: era público y exponía business-intel agregada. Liveness público: `GET /health` / `GET /ready`. Detalle: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md). Test: [`test_p1_system_health_admin_gate.py`](backend/tests/test_p1_system_health_admin_gate.py).
+[P1-CHECKOUT-CREDITS-TRUTH · 2026-08-22, pasada doc-first] `P1-SENTRY-SAMPLE-COST` (sample rate por env var, nunca `1.0` hardcodeado), `P1-VERCEL-SECURITY-HEADERS` (los 6 headers en nginx, repetidos en CADA `location` porque nginx no hereda) y `P1-SYSTEM-HEALTH-ADMIN-GATE` (`/api/system/health` gateado por `_verify_admin_token`; el liveness público es `/health` y `/ready`). Las tres estaban aquí como muñones que ya duplicaban el doc desde el 19-ago. Contenido íntegro + tests: [`backend/docs/advisors_aceptados.md`](backend/docs/advisors_aceptados.md).
 
 ### Pattern: `SET search_path = ''` en functions Postgres
 
@@ -340,6 +332,8 @@ Reglas anti-refactor del **landing y el apex** (8: service worker diferido, obse
 [P1-BEDCA-DEPROXY-ES + P1-YOGURT-NATURAL · 2026-08-19] 47 de 347 filas comparten `fdc_id`: uno sustituía a SIETE embutidos (Sobrasada: 595 kcal, no 296) y otro da **HTTP 404**: nada re-valida la procedencia. BEDCA: `<type level="3f"/>` autocerrado, **energía en kJ**. Auditar ids DUPLICADOS no ve el ÚNICO mal apuntado (Lomo embuchado 110→321). Doc: backend/docs/catalog_provenance_audit.md.
 
 [P1-PANTRY-NAME-RESOLUTION] La identidad de una fila de la Nevera se decide SOLO en `constants.pantry_names_match` (case/acentos/cantidad/plural, por token completo). **No la reimplementes sobre `GLOBAL_REVERSE_MAP`**: ese mapa colapsa `pechuga`→`pollo` a propósito, así que comerte una pechuga descontaría del muslo. Los 4 call sites resolvían por igualdad exacta y `"2 huevos"` contra la fila `Huevo` devolvía **éxito sin descontar, sin fila en `failed_inventory_deductions` y sin alerta**. Doc: backend/docs/pantry_name_resolution.md. Test test_p1_pantry_name_resolution.py.
+
+[P1-BILLING-ORPHAN-RECOVERY + P1-CHECKOUT-CREDITS-TRUTH · 2026-08-22] Auditoría de PayPal: la infra está bien y **jamás se ha completado un pago** (13 subs `APPROVAL_PENDING` purgadas). `/verify` era el ÚNICO camino a `user_profiles` y lo dispara el NAVEGADOR: pestaña cerrada = PayPal cobra y nadie se entera (los webhooks filtran por `paypal_subscription_id`, que sigue NULL). El checkout estampa `custom_id` y `ACTIVATED` adopta al huérfano, **pero el TIER sale del `plan_id`** (I-Billing-1: el `custom_id` dice A QUIÉN, jamás QUÉ) y **SOLO en `ACTIVATED`** — en `PAYMENT.SALE.COMPLETED` 0 filas es lo NORMAL y alertaría en cada renovación. Doc: backend/docs/paypal_audit_2026_08_22.md (verificado / 2 falsos positivos / lo abierto). Test test_p1_billing_orphan_recovery.py.
 
 ---
 

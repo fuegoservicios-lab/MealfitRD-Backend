@@ -2,6 +2,7 @@ import asyncio
 import os
 import json
 import logging
+import uuid
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from error_utils import safe_error_detail
@@ -178,6 +179,145 @@ def _persist_billing_alert(
             f"[P1-BILLING-FAIL-LOUD] No se pudo persistir alert "
             f"{alert_key}: {type(e).__name__}: {e}"
         )
+
+
+# ---------------------------------------------------------------------------
+# [P1-BILLING-ORPHAN-RECOVERY · 2026-08-22] Adopción de un cobro cuyo `/verify`
+# nunca llegó.
+#
+# EL AGUJERO QUE CIERRA
+# `POST /api/subscription/verify` era el ÚNICO camino por el que una suscripción
+# de PayPal se escribía en `user_profiles`, y lo dispara el NAVEGADOR desde
+# `onApprove`. Si entre la aprobación y esa llamada se caía la red, el usuario
+# cerraba la pestaña, o `/verify` devolvía 500/409, PayPal cobraba y el sistema no
+# se enteraba: `paypal_subscription_id` quedaba NULL y los webhooks `ACTIVATED` /
+# `PAYMENT.SALE.COMPLETED` filtran justo por esa columna → 0 filas, no-op
+# silencioso. Cobro recurrente sin acceso, sin alerta y sin cron de
+# reconciliación (auditoría 2026-08-22): la pérdida era permanente.
+#
+# LA OTRA MITAD vive en el frontend: `PaymentModal` estampa `custom_id: <user_id>`
+# al crear la suscripción, y PayPal nos lo devuelve FIRMADO dentro del webhook.
+# Sin esa mitad este helper no tiene a quién atribuir nada (y lo dice en la alerta).
+#
+# LO QUE NO CONCEDE
+#   - El TIER sigue derivando del `plan_id` vía `_build_paypal_plan_tier_map`
+#     (I-Billing-1). El `custom_id` dice A QUIÉN, jamás QUÉ.
+#   - Si la sub YA está en algún perfil, no es huérfana: el UPDATE no matchó por
+#     el guard (P1-BILLING-REACTIVATE-NOT-CANCELLED), y resucitar una CANCELLED
+#     por esta vía sería la puerta trasera que ese fix cerró.
+#   - Si el perfil destino ya tiene OTRA suscripción viva, NO la pisa: cambiar el
+#     handle sin cancelar la vieja en PayPal es el doble cobro de
+#     P1-BILLING-UPGRADE-FAIL-LOUD. Alerta y deja el caso al operador.
+#
+# Knob `MEALFIT_BILLING_ORPHAN_RECOVERY` (default True) = kill-switch.
+# Tooltip-anchor: P1-BILLING-ORPHAN-RECOVERY.
+# ---------------------------------------------------------------------------
+
+def _looks_like_user_id(value) -> bool:
+    """True solo si `value` parsea como UUID.
+
+    Necesario ANTES de meterlo en `WHERE id = %s`: `user_profiles.id` es `uuid`,
+    así que un `custom_id` basura propagaría `invalid input syntax for type uuid`
+    → 503 → PayPal reintentando 25 veces contra un error determinista.
+    """
+    try:
+        uuid.UUID(str(value).strip())
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def _recover_orphan_subscription(*, subscription_id, custom_id, tier, plan_id) -> None:
+    """Atribuye una suscripción ACTIVE que no pertenece a ningún perfil. Sync
+    (el caller la despacha con `_run_sync_db_in_thread`)."""
+
+    def _unrecoverable(motivo: str) -> None:
+        _persist_billing_alert(
+            alert_key=f"billing_orphan_subscription_unrecoverable:{subscription_id}",
+            severity="critical",
+            title="Webhook: suscripción activa que no pertenece a nadie",
+            message=(
+                f"PayPal activó la sub {subscription_id} (plan {plan_id}) pero no se "
+                f"pudo atribuir a un usuario: {motivo}. El cliente está pagando sin "
+                f"recibir el plan — reconciliar a mano (el email del comprador está "
+                f"en el evento de PayPal)."
+            ),
+            metadata={
+                "sub_id": subscription_id, "plan_id": plan_id, "tier": tier,
+                "custom_id": str(custom_id) if custom_id else None, "motivo": motivo,
+            },
+        )
+        logger.error(
+            f"❌ [P1-BILLING-ORPHAN-RECOVERY] sub {subscription_id} sin dueño: {motivo}"
+        )
+
+    if not tier:
+        # Mismo criterio que `/verify`: un plan_id que no mapea no otorga nada.
+        _unrecoverable(f"el plan_id {plan_id!r} no mapea a un tier interno")
+        return
+
+    # ¿La tiene ya alguien? Entonces el UPDATE falló por el guard, no por orfandad.
+    if execute_sql_query(
+        "SELECT id FROM public.user_profiles WHERE paypal_subscription_id = %s",
+        (subscription_id,),
+        fetch_all=True,
+    ):
+        return
+
+    if not _looks_like_user_id(custom_id):
+        _unrecoverable("el evento no trae un `custom_id` utilizable")
+        return
+
+    uid = str(custom_id).strip()
+    profile = execute_sql_query(
+        "SELECT id, paypal_subscription_id FROM public.user_profiles WHERE id = %s",
+        (uid,),
+        fetch_one=True,
+    )
+    if not profile:
+        _unrecoverable(f"el custom_id {uid} no corresponde a ningún perfil")
+        return
+    if profile.get("paypal_subscription_id"):
+        _unrecoverable(
+            f"el perfil {uid} ya tiene la sub {profile['paypal_subscription_id']}; "
+            f"pisarla dejaría la vieja cobrando en PayPal sin handle"
+        )
+        return
+
+    # El `AND (... IS NULL OR = %s)` cierra la carrera entre el SELECT de arriba y
+    # este UPDATE: si otro camino (un `/verify` que llegó tarde) escribió entremedio,
+    # matchea 0 filas en vez de pisarlo.
+    updated = execute_sql_write(
+        "UPDATE public.user_profiles "
+        "   SET subscription_status = %s, plan_tier = %s, paypal_subscription_id = %s "
+        " WHERE id = %s AND (paypal_subscription_id IS NULL OR paypal_subscription_id = %s) "
+        "RETURNING id",
+        ("ACTIVE", tier, subscription_id, uid, subscription_id),
+        returning=True,
+    )
+    if not updated:
+        _unrecoverable(f"carrera: el perfil {uid} cambió entre la lectura y el UPDATE")
+        return
+
+    _persist_billing_alert(
+        alert_key=f"billing_orphan_subscription_recovered:{uid}:{subscription_id}",
+        severity="warning",
+        title="Webhook: suscripción huérfana recuperada por custom_id",
+        message=(
+            f"La sub {subscription_id} (plan {plan_id} → tier {tier}) se activó en "
+            f"PayPal sin que `/verify` llegara nunca. Se atribuyó al usuario {uid} "
+            f"por el `custom_id` del evento. El tier ya está aplicado; revisar por "
+            f"qué falló el `/verify` del cliente."
+        ),
+        metadata={
+            "user_id": uid, "sub_id": subscription_id, "plan_id": plan_id, "tier": tier,
+        },
+    )
+    logger.warning(
+        f"⚙️ [P1-BILLING-ORPHAN-RECOVERY] sub {subscription_id} adoptada por "
+        f"{uid} (tier {tier}) — el /verify de ese pago nunca llegó."
+    )
+
 
 router = APIRouter(
     prefix="/api/subscription",
@@ -1390,13 +1530,44 @@ async def api_webhook_paypal(
                             # filas con status NULL — mismo comportamiento que el
                             # `.neq()` de PostgREST que reemplaza.
                             where_clauses.append("subscription_status <> 'CANCELLED'")
+                    # [P1-BILLING-ORPHAN-RECOVERY · 2026-08-22] `RETURNING id` para
+                    # distinguir "aplicado" de "no matchó ninguna fila". Sin esta
+                    # señal el no-op era indistinguible del éxito, que es
+                    # exactamente cómo se perdían los cobros huérfanos.
                     return execute_sql_write(
                         f"UPDATE public.user_profiles SET {', '.join(set_clauses)} "
-                        f"WHERE {' AND '.join(where_clauses)}",
+                        f"WHERE {' AND '.join(where_clauses)} RETURNING id",
                         tuple(params),
+                        returning=True,
                     )
 
-                await _run_sync_db_in_thread(_do_reactivate)
+                _reactivated_rows = await _run_sync_db_in_thread(_do_reactivate)
+
+                # [P1-BILLING-ORPHAN-RECOVERY · 2026-08-22] 0 filas en un ACTIVATED
+                # puede significar que NADIE tiene esta sub: el `/verify` del
+                # navegador no llegó y PayPal ya está cobrando. Se intenta atribuir
+                # por el `custom_id` que el propio checkout estampó.
+                #
+                # SOLO `ACTIVATED`: `PAYMENT.SALE.COMPLETED` no trae `plan_id` (no hay
+                # tier que derivar) y su guard es `PAYMENT_RETRYING`-only, así que 0
+                # filas es su caso NORMAL — llamar aquí convertiría cada pago de
+                # renovación en una alerta falsa.
+                if (
+                    not _reactivated_rows
+                    and event_type == "BILLING.SUBSCRIPTION.ACTIVATED"
+                    and _env_bool("MEALFIT_BILLING_ORPHAN_RECOVERY", True)
+                ):
+                    _orphan_sub_id, _orphan_plan_id = subscription_id, plan_id
+                    _orphan_custom_id = resource.get("custom_id")
+                    _orphan_tier = restored_tier
+                    await _run_sync_db_in_thread(
+                        lambda: _recover_orphan_subscription(
+                            subscription_id=_orphan_sub_id,
+                            custom_id=_orphan_custom_id,
+                            tier=_orphan_tier,
+                            plan_id=_orphan_plan_id,
+                        )
+                    )
         elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
             subscription_id = resource.get("id")
             end_date = resource.get("billing_info", {}).get("next_billing_time")

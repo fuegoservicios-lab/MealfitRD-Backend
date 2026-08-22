@@ -57,11 +57,25 @@ def test_a_knob_and_helpers_present(billing_src: str):
 
 
 def test_b_verify_calls_amount_check_before_update(billing_src: str):
-    # La llamada debe existir y aparecer ANTES del UPDATE de plan_tier.
-    call_idx = billing_src.find("await _verify_subscription_amount(")
-    update_idx = billing_src.find("UPDATE public.user_profiles")
+    """Dentro de `/verify`, la verificación de monto va ANTES del UPDATE del tier.
+
+    [P1-BILLING-ORPHAN-RECOVERY · 2026-08-22] Este test comparaba posiciones en el
+    ARCHIVO ENTERO (`billing_src.find(...)`), no dentro del handler. Funcionaba por
+    accidente: `/verify` contenía el primer `UPDATE public.user_profiles` del módulo.
+    En cuanto nació otro UPDATE más arriba (`_recover_orphan_subscription`), el test
+    rompió sin que `/verify` hubiera cambiado una línea — medía el archivo, no el
+    contrato. Ahora se acota al cuerpo del handler, que es lo que su nombre promete.
+    """
+    ini = billing_src.find("async def api_verify_subscription(")
+    assert ini != -1, "No se encontró el handler `/verify`."
+    fin = billing_src.find("async def cancel_paypal_subscription_for_user", ini)
+    assert fin != -1, "No se encontró el final del handler `/verify`."
+    cuerpo = billing_src[ini:fin]
+
+    call_idx = cuerpo.find("await _verify_subscription_amount(")
+    update_idx = cuerpo.find("UPDATE public.user_profiles")
     assert call_idx != -1, "P1-BILLING-AMOUNT: /verify no invoca _verify_subscription_amount."
-    assert update_idx != -1
+    assert update_idx != -1, "P1-BILLING-AMOUNT: /verify ya no hace el UPDATE del tier."
     assert call_idx < update_idx, (
         "P1-BILLING-AMOUNT: la verificación de monto debe ir ANTES del UPDATE del tier."
     )
