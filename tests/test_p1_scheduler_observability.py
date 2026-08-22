@@ -49,7 +49,7 @@ _CRON_TASKS = _BACKEND_ROOT / "cron_tasks.py"
 
 
 # Stub apscheduler if not installed (CI standalone).
-def _ensure_apscheduler_stub():
+def _ensure_apscheduler_stub(monkeypatch):
     # Preferir el paquete REAL si está instalado: un stub parcial sombrea
     # submódulos que app.py/cron_tasks importan (`apscheduler.triggers`)
     # y rompe el import de app → skip silencioso de los tests funcionales.
@@ -61,19 +61,22 @@ def _ensure_apscheduler_stub():
         return
     except Exception:
         pass
-    if "apscheduler" not in sys.modules:
-        for mod_name in (
-            "apscheduler",
-            "apscheduler.schedulers",
-            "apscheduler.schedulers.background",
-            "apscheduler.executors",
-            "apscheduler.executors.pool",
-            "apscheduler.events",
-        ):
-            sys.modules.setdefault(mod_name, types.ModuleType(mod_name))
-        sys.modules["apscheduler.events"].EVENT_JOB_MISSED = 1
-        sys.modules["apscheduler.events"].EVENT_JOB_ERROR = 2
-        sys.modules["apscheduler.events"].EVENT_JOB_EXECUTED = 4
+    # [P2-SYSMODULES-STUB-LEAK] REVERSIBLE: sin el paquete real, un setdefault
+    # directo dejaba el stub parcial en el worker y el siguiente `import app`
+    # moria en `apscheduler.triggers`.
+    for mod_name in (
+        "apscheduler",
+        "apscheduler.schedulers",
+        "apscheduler.schedulers.background",
+        "apscheduler.executors",
+        "apscheduler.executors.pool",
+        "apscheduler.events",
+    ):
+        if mod_name not in sys.modules:
+            monkeypatch.setitem(sys.modules, mod_name, types.ModuleType(mod_name))
+    ev = sys.modules["apscheduler.events"]
+    for attr, val in (("EVENT_JOB_MISSED", 1), ("EVENT_JOB_ERROR", 2), ("EVENT_JOB_EXECUTED", 4)):
+        monkeypatch.setattr(ev, attr, val, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +164,7 @@ def test_p1_cascade_inline_threshold_triggers_upsert(monkeypatch):
     `app.execute_sql_write` capturado + `app.connection_pool` truthy
     (el helper short-circuitea con `if connection_pool is None`).
     """
-    _ensure_apscheduler_stub()
+    _ensure_apscheduler_stub(monkeypatch)
     # Preferir el sentry_sdk REAL si está instalado (app.py llama
     # `sentry_sdk.init(...)`; un stub vacío rompe el import de app y
     # forzaba skip silencioso). Stub solo si genuinamente no importable
@@ -169,7 +172,11 @@ def test_p1_cascade_inline_threshold_triggers_upsert(monkeypatch):
     try:
         import sentry_sdk  # noqa: F401
     except Exception:
-        sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
+        # [P2-SYSMODULES-STUB-LEAK] Reversible: pytest lo deshace al salir del
+        # test. Un setdefault directo fugaba el stub al resto del worker.
+        _stub = types.ModuleType("sentry_sdk")
+        _stub.init = lambda *a, **k: None
+        monkeypatch.setitem(sys.modules, "sentry_sdk", _stub)
     write_mock = MagicMock()
     monkeypatch.setattr(
         "os.environ",
@@ -232,12 +239,15 @@ def test_p1_cascade_inline_dedup_skips_within_cooldown(monkeypatch):
     debe disparar otro UPSERT. Patrón anti-spam. [P1-NEON-DB-MIGRATION ·
     2026-06-12] Re-mockeado PostgREST → `app.execute_sql_write` +
     `app.connection_pool` truthy (mismo re-anclaje que el test anterior)."""
-    _ensure_apscheduler_stub()
-    # Ver nota del test anterior: stub de sentry_sdk solo si no importable.
+    _ensure_apscheduler_stub(monkeypatch)
+    # Ver nota del test anterior: stub de sentry_sdk solo si no importable,
+    # y REVERSIBLE (P2-SYSMODULES-STUB-LEAK).
     try:
         import sentry_sdk  # noqa: F401
     except Exception:
-        sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
+        _stub = types.ModuleType("sentry_sdk")
+        _stub.init = lambda *a, **k: None
+        monkeypatch.setitem(sys.modules, "sentry_sdk", _stub)
     write_mock = MagicMock()
 
     monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_INLINE_THRESHOLD", "3")
