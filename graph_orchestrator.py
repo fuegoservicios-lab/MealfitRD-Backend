@@ -4914,7 +4914,7 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     # country_for_form_data es la ÚNICA puerta (T1). T7 reusa `_shared_ctx_country` para
     # gatear `prices_context` (país beta sin precios nativos ⇒ el LLM no recibe la tabla
     # RD$) en vez de derivar el país una 2ª vez.
-    from constants import country_for_form_data, COUNTRY_PROFILES
+    from constants import country_for_form_data, COUNTRY_PROFILES, pricing_mode_for_country
     _shared_ctx_country = country_for_form_data(form_data)
 
     return {
@@ -5015,7 +5015,7 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # solo, byte-idéntico a antes de T7.
         "prices_context": (
             build_prices_context() if (str(form_data.get("budget") or "").strip()) else ""
-        ) if COUNTRY_PROFILES.get(_shared_ctx_country, {}).get("has_native_prices", True) else "",
+        ) if pricing_mode_for_country(_shared_ctx_country) != "beta_no_prices" else "",
         "taste_profile": taste_profile,
         "history_context": history_context,
         # [P1-RECENT-DISHES-FEEDFORWARD · 2026-07-10] Blocklist LITERAL de platos recientes en bloque

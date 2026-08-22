@@ -3286,8 +3286,17 @@ def test_build_shared_context_prices_context_gatea_por_pais():
     i_var = cuerpo.index("_shared_ctx_country = country_for_form_data(form_data)")
     i_prices = cuerpo.index('"prices_context":', i_var)
     window = cuerpo[i_prices:i_prices + 400]
-    assert "COUNTRY_PROFILES.get(_shared_ctx_country" in window
-    assert 'has_native_prices"' in window
+    # [P3-PRICING-MODE-SSOT-BLANKET · 2026-08-22] Antes se anclaba la expresión a mano
+    # (`COUNTRY_PROFILES.get(_shared_ctx_country, {}).get("has_native_prices", True)`). Eso era
+    # exactamente el «2º chequeo» que el comentario de `pricing_mode_for_country` prohíbe por
+    # escrito — o sea que este guard EXIGÍA la segunda tabla. La propiedad que defiende (el
+    # `prices_context` va gateado por país) no cambia; el mecanismo pasa por la puerta del SSOT.
+    assert "pricing_mode_for_country(_shared_ctx_country)" in window, (
+        "el gate de `prices_context` dejó de pasar por `pricing_mode_for_country`"
+    )
+    assert '"beta_no_prices"' in window, (
+        "el gate no compara contra el literal SSOT del modo beta"
+    )
     # el predicado de budget histórico (P3-GENCHUNK-SPEED) sigue verbatim adentro —
     # anclado también por test_j_prices_context_gated_on_budget (test_p2_genchunk_speed.py).
     assert 'build_prices_context() if (str(form_data.get("budget") or "").strip())' in window

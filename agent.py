@@ -3648,9 +3648,14 @@ def swap_meal_with_consent(form_data: dict) -> dict:
         # lección del review final de F0: la prosa compuesta no es el único sitio donde
         # esconde un monto). `form_data` es el mismo SSOT que ya deriva `_swap_country`
         # arriba en `swap_meal` — country_for_form_data es la ÚNICA puerta (T1).
-        from constants import country_for_form_data, COUNTRY_PROFILES
+        # [P3-PRICING-MODE-SSOT-BLANKET . 2026-08-22] Por la PUERTA, no por el flag. Esto
+        # miraba `has_native_prices` a mano -- literalmente el "2o chequeo" que el
+        # comentario de `pricing_mode_for_country` prohibe por escrito, citando las tres
+        # tablas de dieta de P1-DIET-CANON-SSOT. Era equivalente HOY; las segundas tablas
+        # no nacen divergiendo, divergen despues y en silencio.
+        from constants import country_for_form_data, pricing_mode_for_country
         _consent_cc = country_for_form_data(form_data)
-        if not COUNTRY_PROFILES.get(_consent_cc, {}).get("has_native_prices", True):
+        if pricing_mode_for_country(_consent_cc) == "beta_no_prices":
             for _m in missing:
                 _m["est_price_rd"] = None
         logger.info(
