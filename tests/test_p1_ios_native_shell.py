@@ -147,3 +147,20 @@ def test_webview_ios_sin_rubber_band_ni_inset_automatico():
     assert re.search(r"contentInset:\s*'never'", src), (
         "ios.contentInset debe ser 'never': 'automatic' suma la barra de estado a un login de 100dvh."
     )
+
+
+def test_google_oauth_no_se_pinta_en_nativo_hasta_que_exista_deep_link():
+    """[P1-IOS-OAUTH-GATE · 2026-08-22] Primer build en el iPhone: «Continuar con
+    Google» salía a Safari y moría en «la dirección no es válida» — Neon Auth
+    redirige a `capacitor://localhost/dashboard`. Hasta que exista el deep link
+    (esquema propio + intercambio de código en backend), el botón NO se pinta en
+    nativo. Gate PROPIO en platform.js: cuando llegue el deep link se apaga sólo
+    éste, el comercio sigue escondido. Con solo correo en nativo, Apple 4.8
+    (Sign in with Apple obligatorio si hay Google) no aplica.
+    Espejo backend de NativeShell.contract.test.jsx (el gate de vitest)."""
+    platform = _read("src/config/platform.js")
+    assert "export function nativeHidesOAuthRedirect()" in platform
+    login = _read("src/pages/Login.jsx")
+    assert "nativeHidesOAuthRedirect" in login.split("\n", 5)[1], "Login debe importar el gate"
+    i = login.index("t('Continuar con Google')")
+    assert "!nativeHidesOAuthRedirect() && (" in login[i - 400:i]
