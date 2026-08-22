@@ -35,6 +35,14 @@ Codemagic (grupo `default`, ambas secretas): `APP_STORE_APP_ID` y `CERTIFICATE_P
 Apple autoriza, no firma. Entregar por FICHERO, nunca pegada desde un chat: la primera llegó
 corrupta). Tiempo por build: ~3 min.
 
+**Build #7 (2026-08-22, segundo binario): compiló y firmó, Apple rechazó la SUBIDA** con
+`ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE` («bundle version must be higher than the
+previously uploaded version: '1'»). La consulta `get-latest-testflight-build-number`
+devolvió VACÍO sin error y el script subió el build 1 por segunda vez. Desde entonces el
+número es `max(TestFlight + 1, BUILD_NUMBER)` — el contador propio de Codemagic, monotónico,
+no depende de que Apple conteste — y el log imprime la respuesta cruda de App Store Connect.
+Lección: *un fallback que sólo cubre el ERROR no cubre el VACÍO*; `|| echo 0` nunca saltó.
+
 ## Lo que esperar del primer build (histórico — ya ocurrió)
 
 **Probablemente falle.** No hay Mac en el equipo: el proyecto Xcode nunca ha compilado en
