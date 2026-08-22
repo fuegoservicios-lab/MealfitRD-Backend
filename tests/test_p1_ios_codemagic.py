@@ -112,6 +112,23 @@ def test_yaml_firma_con_api_key_no_con_certificados_a_mano():
         assert prohibido not in y, f"No subir certificados a mano ({prohibido}): la API key los gestiona."
 
 
+def test_yaml_no_mezcla_firma_declarativa_con_fetch_create():
+    """[Build #1 en la Mac, 2026-08-22] «No matching profiles found for bundle
+    identifier com.bioboros.app and distribution type app_store».
+
+    `environment.ios_signing` es la firma AUTOMÁTICA de Codemagic: corre ANTES de
+    cualquier script y solo BUSCA perfiles existentes. `fetch-signing-files --create`
+    (el paso que los CREA) viene después y nunca llegó a ejecutarse. Son dos
+    mecanismos para lo mismo y se pisan: en la primera subida no hay perfil que
+    buscar. Se conserva el que crea; el declarativo no puede volver."""
+    y = _yaml()
+    assert not re.search(r"^\s+ios_signing:", y, flags=re.M), (
+        "`environment.ios_signing` busca perfiles antes de los scripts y falla en la "
+        "primera subida; la firma va SOLO por `fetch-signing-files --create`."
+    )
+    assert "app-store-connect fetch-signing-files" in y
+
+
 def test_yaml_sube_a_testflight():
     y = _yaml()
     assert re.search(r"publishing:\s*\n(?:.*\n)*?\s+app_store_connect:", y), "Falta `publishing.app_store_connect`."
