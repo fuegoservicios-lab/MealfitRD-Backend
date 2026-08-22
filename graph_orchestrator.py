@@ -12509,6 +12509,11 @@ SHOPPING_EMPTY_LIST_REJECT = _env_bool("MEALFIT_SHOPPING_EMPTY_LIST_REJECT", Tru
 SHOPPING_MIN_DISTINCT_BASE = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_BASE", 6)
 SHOPPING_MIN_DISTINCT_PER_WEEK = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_PER_WEEK", 2)
 SHOPPING_MIN_DISTINCT_CAP = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_CAP", 16)
+# [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Piso de COMPOSICIÓN, no de conteo. La lista del
+# plan 2245eb45 tenía 25 nombres (≥ el mínimo de 12) y UNA sola fila de categoría
+# «Proteínas»: pasaba limpia y dejaba al usuario sin nada que cocinar. Mide y avisa; NO
+# bloquea la generación (un rechazo rompería dietas legítimamente poco variadas).
+SHOPPING_MIN_PROTEINS = _env_int("MEALFIT_SHOPPING_MIN_PROTEINS", 2)
 # [P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Palanca de precisión MEDIDA con el harness offline determinista
 # (scripts/macro_sizing_replay.py): en días con déficit de proteína (<floor_pct×target) Y exceso de carbos
 # (>(1+tol)×target), convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Cierra el déficit que
@@ -13676,7 +13681,10 @@ def _shopping_list_completeness(plan, form_data):
     _days_map = {"weekly": 7, "biweekly": 15, "monthly": 30}
     days = _days_map.get(str((form_data or {}).get("groceryDuration") or "weekly").lower(), 7)
     agg = (plan.get("aggregated_shopping_list") if isinstance(plan, dict) else None) or []
+    if not isinstance(agg, list):
+        agg = []
     names = set()
+    proteins = set()
     for _it in agg:
         if not isinstance(_it, dict):
             continue
@@ -13686,6 +13694,11 @@ def _shopping_list_completeness(plan, form_data):
         _nm = str(_it.get("name") or _it.get("display_name") or "").strip().lower()
         if _nm:
             names.add(_nm)
+            # [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Los LÁCTEOS quedan fuera a
+            # propósito: la lista del incidente tenía 4 (queso ×2, yogurt, leche) y si
+            # contaran, el caso que este piso existe para cazar habría pasado igual.
+            if strip_accents(_cat).startswith("proteina"):
+                proteins.add(_nm)
     distinct = len(names)
     _has_ingredients = False
     if isinstance(plan, dict):
@@ -13707,6 +13720,13 @@ def _shopping_list_completeness(plan, form_data):
         "expected_min": expected_min,
         "is_empty": bool(_has_ingredients and distinct == 0),
         "is_sparse": bool(_has_ingredients and 0 < distinct < expected_min),
+        # [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Composición, no conteo. `distinct > 0`
+        # en el predicado: con la lista vacía manda `is_empty` — marcar las dos cosas
+        # confunde el diagnóstico ("¿no hay lista, o hay lista mala?").
+        "distinct_proteins": len(proteins),
+        "is_protein_starved": bool(
+            _has_ingredients and distinct > 0 and len(proteins) < SHOPPING_MIN_PROTEINS
+        ),
     }
 
 

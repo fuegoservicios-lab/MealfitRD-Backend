@@ -51,7 +51,15 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 72200  # [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] 72000→72200 (+0,28%, muy bajo el
+_DEFAULT_CAP = 73400  # [P0-SHOPPING-CYCLE-DAYS · 2026-08-22] 72200→73400 (+1,66%, bajo el
+# threshold 10%): entran TRES P-fixes de un mismo incidente (la lista de compras nacía de una
+# ventana de días que encoge; la cuarta guarda de nevera decidía sola; el piso de la lista
+# contaba nombres y no comida) como DOS filas puntero-a-doc en "El path degradado necesita su
+# propio backstop". El detalle real vive en backend/docs/shopping_list_cycle_days.md y
+# backend/docs/pantry_gate_fourth_guard.md, no aquí. El margen previo era de 45 bytes: el
+# fichero llevaba desde el 16-ago pegado al techo, así que este bump paga esa deuda además de
+# los tres cierres. Histórico — cap previo:
+# [P1-COUNTRY-SYSTEM-F1 · 2026-08-16] 72000→72200 (+0,28%, muy bajo el
 # threshold 10%): la Fase 1 (8 tasks SDD, el motor deja de forzar lo criollo en beta bajo
 # knob) entra con UNA fila puntero-a-la-doc en "El path degradado necesita su propio backstop",
 # antes de la fila F0 — el detalle real (19 surfaces wired, barrido de 6 funciones de slots,

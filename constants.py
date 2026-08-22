@@ -1917,8 +1917,16 @@ DOMINICAN_FRUITS = [
 # DEGRADADO (Smart Shuffle/Edge Recipes, `cron_tasks._build_filtered_edge_recipe_day` →
 # `_get_fast_filtered_catalogs`) — el ÚNICO lugar de ese camino que hoy arma un día desde un
 # catálogo estático en vez de reciclar días previos del usuario. Mismo shape que
-# DOMINICAN_PROTEINS/CARBS/VEGGIES_FATS/FRUITS (listas planas de nombres). Solo ES tiene pool
-# propio hoy (T5) — un país beta SIN entrada aquí cae al pool RD (`_get_fast_filtered_catalogs`
+# DOMINICAN_PROTEINS/CARBS/VEGGIES_FATS/FRUITS (listas planas de nombres).
+#
+# COBERTURA HOY: los CINCO países beta tienen pool propio — ES, MX, CO, PR y US.
+# [P3-COUNTRY-DOC-TRUTH · 2026-08-22] Esta línea declaraba a España como el único país con pool
+# propio (cierto en T5, falso desde que entraron los otros cuatro). El código estaba mejor
+# que su comentario, que es la dirección menos peligrosa pero no inocua: quien leyera esto creería
+# que MX/CO/PR/US caen al pool dominicano en el camino degradado, y se pondría a «arreglar» algo
+# que ya funciona. `test_p3_country_doc_truth.py` ancla la PARIDAD (cada clave del dict tiene que
+# aparecer aquí por token completo), no el literal — así un sexto pool sin documentar falla igual.
+# Un país beta SIN entrada aquí cae al pool RD (`_get_fast_filtered_catalogs`
 # con `country=None` o sin match: fallback explícito, no excepción, mismo comportamiento byte-
 # idéntico que tenía antes de esta task). Nombres tomados de las 32 altas de catálogo T5
 # (`country_gaps/es.json`, USDA-sourced) + los RESUELVE-BIEN de T1 más representativos de la
@@ -4330,9 +4338,27 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
 # continua (sal|ami no tiene borde entre 'l' y 'a'), así que exige la palabra COMPLETA;
 # `(?:e?s)?` opcional para plural ("sales", "ajos"). Construido a import-time (tupla
 # estable). Tooltip-anchor: P1-PANTRY-STRICT-CONSENT.
+# [P1-PANTRY-CONDIMENT-PARITY · 2026-08-22] La tupla debe cubrir lo que los prompts
+# AUTORIZAN POR SU NOMBRE, o el sistema castiga al modelo por obedecerle:
+#   - `build_pantry_correction_context` (prompts/plan_generator.py): «Condimentos básicos
+#     (sal, pimienta, aceite, ajo, CEBOLLA, cilantro) están siempre permitidos».
+#   - `graph_orchestrator` P1-SPICES-CATALOG-SYNC: «comino, cúrcuma, laurel, tomillo,
+#     curry, cebolla en polvo — úsalos activamente».
+#   - `graph_orchestrator` P1-BAKING-STAPLES: «SÍ puedes usar polvo de hornear, levadura,
+#     bicarbonato y vainilla … aunque no estén en la lista».
+# Medido en el plan 2245eb45: un bloque de 4 días ya pagado al LLM murió con
+# «INEXISTENTES: ¼ cdta de polvo de hornear, ½ cdta de comino, 1 cebolla, ½ hoja de
+# laurel» — las cuatro autorizadas por escrito arriba. La paridad la ancla
+# `test_p1_pantry_condiment_parity.py`: si añades un condimento a un prompt y no aquí,
+# falla. Sin acentos (el validador normaliza) y en singular (`(?:e?s)?` cubre el plural).
+# ⚠️ NO la fusiones con `culinary_coherence.CONDIMENT_EXEMPT`: se parecen pero responden
+# preguntas distintas — ésta «¿debe existir en la nevera?», aquélla «¿necesita cocción?».
 _ALLOWED_CONDIMENTS = (
     "sal", "pimienta", "agua", "ajo", "oregano", "cilantro",
     "limon", "aceite", "soya", "canela", "vinagre",
+    # autorizados por los prompts (P1-PANTRY-CONDIMENT-PARITY)
+    "cebolla", "perejil", "comino", "curcuma", "laurel", "tomillo", "curry",
+    "polvo de hornear", "levadura", "bicarbonato", "vainilla",
 )
 _ALLOWED_CONDIMENTS_RES = [
     re.compile(r"\b" + re.escape(c) + r"(?:e?s)?\b")

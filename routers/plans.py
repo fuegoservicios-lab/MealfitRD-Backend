@@ -11516,6 +11516,26 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             plan_data_fresh["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
             plan_data_fresh["aggregated_shopping_list_monthly"] = scaled_30_hybrid
 
+            # [P2-SHOPPING-PROTEIN-FLOOR · 2026-08-22] Re-medir la completitud con la lista
+            # que ACABAMOS de escribir. Antes se calculaba SOLO en `assemble_plan_node` y
+            # nadie la refrescaba (`grep _shopping_completeness routers/plans.py` → 0
+            # matches), así que el plan 2245eb45 quedó persistido afirmando `distinct: 49`
+            # mientras publicaba 25. Un veredicto que describe una lista que ya no existe es
+            # peor que ninguno: un operador lo cree. Fail-open — nunca bloquea el recalc.
+            try:
+                from graph_orchestrator import _shopping_list_completeness as _slc_recalc
+                _sc_recalc = _slc_recalc(plan_data_fresh, (plan_data_fresh.get("form_data") or {}))
+                plan_data_fresh["_shopping_completeness"] = _sc_recalc
+                if _sc_recalc.get("is_protein_starved"):
+                    logger.warning(
+                        f"🥩 [P2-SHOPPING-PROTEIN-FLOOR] Plan {plan_id}: lista "
+                        f"publicada con {_sc_recalc.get('distinct_proteins')} proteína(s) "
+                        f"distinta(s) sobre {_sc_recalc.get('distinct')} alimentos — el "
+                        f"usuario no tiene con qué cocinar los próximos bloques."
+                    )
+            except Exception as _slc_e:
+                logger.debug(f"[P2-SHOPPING-PROTEIN-FLOOR] re-medición no-op: {type(_slc_e).__name__}: {_slc_e}")
+
             # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
             # escalada. Antes, /recalculate-shopping-list persistía
             # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —

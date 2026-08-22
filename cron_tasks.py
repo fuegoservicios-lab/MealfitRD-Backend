@@ -9817,6 +9817,26 @@ def _resolve_pantry_pause_markers(snapshot: dict, resolution: str) -> dict:
     """
     snapshot["_pantry_pause_resolution"] = resolution
     snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+
+    # [P1-POSTMERGE-WAIVER-SSOT · 2026-08-22] `_p0_4_violations` era una escritura MUERTA:
+    # un grep sobre todo backend/ devolvía UNA aparición — la escritura. El detalle de por
+    # qué murió el chunk se guardaba y se tiraba, así que al reanudar el modelo recibía el
+    # MISMO prompt que ya había fallado. Aquí, que es el único punto por el que pasan las 7
+    # rutas de reanudación, lo promovemos al canal que el pipeline sí lee
+    # (`build_pantry_correction_context`). NO pisa una corrección ya presente: la del
+    # worker es más fresca que la del snapshot.
+    try:
+        _viol = snapshot.get("_p0_4_violations")
+        _fd = snapshot.get("form_data")
+        if isinstance(_viol, list) and _viol and isinstance(_fd, dict) and not _fd.get("_pantry_correction"):
+            _txt = " | ".join(
+                str(v.get("error", "")) for v in _viol if isinstance(v, dict) and v.get("error")
+            )[:1000]
+            if _txt:
+                _fd["_pantry_correction"] = _txt
+    except Exception as _pc_e:  # fail-safe: reanudar sin feedback es peor, pero no fatal
+        logger.debug(f"[P1-POSTMERGE-WAIVER-SSOT] promoción de violaciones no-op: {_pc_e}")
+
     for _k in _PANTRY_PAUSE_LIVE_KEYS:
         snapshot.pop(_k, None)
     return snapshot
@@ -31195,13 +31215,38 @@ __PLAN_MODE_GATE__
                         # otra cabeza (medido en f380821a tras el fix post-gen: la lista creció
                         # 85→191 appendeando Compra Urgente en cada vuelta). Tres guardas sobre
                         # la misma condición OSCILAN. En flexible la entrega marcada es el contrato.
-                        _p04_flex_skip = bool(form_data.get("_pantry_flexible_mode"))
-                        if _p04_flex_skip and _p04_pantry:
+                        # [P1-POSTMERGE-WAIVER-SSOT · 2026-08-22] CUARTA guarda de la misma
+                        # condición. Leía `_pantry_flexible_mode` a pelo, o sea que honraba 1 de
+                        # los 4 waivers: un chunk `initial_plan` al que las guardas 1 (pre-pipeline)
+                        # y 3 (existencial, P1-PANTRY-EXIST-WAIVER) ya habían perdonado por
+                        # `initial_plan_autonomy` moría AQUÍ. Medido en el plan 2245eb45 chunk 2:
+                        # `attempts=0` (el waiver hizo `break` en la iteración 0, así que al LLM
+                        # nunca se le dijo nada), y el `raise` dentro de `conn.transaction()` tiró
+                        # el merge entero → `pending_user_action` → Dashboard vacío. Se pagó el
+                        # LLM completo, no se le dio una sola oportunidad de corregir, y el
+                        # resultado se descartó por una condición ya perdonada tres veces.
+                        # Mismos args que `_exist_waiver` (guarda 3) y que `_res_waiver`.
+                        # tooltip-anchor: P1-POSTMERGE-WAIVER-SSOT
+                        _p04_waiver = _pantry_gate_waiver_reason(
+                            chunk_kind=chunk_kind,
+                            snapshot=snap,
+                            form_data=form_data,
+                            fresh_inventory_source=form_data.get("_fresh_pantry_source"),
+                        )
+                        if _p04_waiver and _p04_pantry:
+                            # Entregar marcando es el contrato (P0-5 en el camino síncrono,
+                            # P1-FLEX-DELIVER en el flexible): un menú con lo que falta señalado
+                            # es estrictamente mejor que ningún menú. `_mark_meals_violating_pantry`
+                            # estampa `_pantry_violated` per-comida para que el Dashboard pinte
+                            # el aviso en ESE plato.
+                            _p04_marked = _mark_meals_violating_pantry(
+                                {"days": merged_days}, _p04_pantry
+                            )
                             logger.warning(
-                                f"🛒 [P1-FLEX-DELIVER/POST-MERGE] Plan {meal_plan_id} chunk {week_number}: "
-                                f"guard duro post-merge OMITIDO en modo flexible TTL-escalado — la "
-                                f"entrega con 🚨 Compra Urgente es el contrato del flexible.")
-                        if _p04_pantry and not _p04_advisory_skip and not _p04_flex_skip:
+                                f"🛒 [P1-POSTMERGE-WAIVER-SSOT] Plan {meal_plan_id} chunk {week_number}: "
+                                f"guard duro post-merge OMITIDO (waiver={_p04_waiver!r}) — entrega "
+                                f"marcada con 🚨 Compra Urgente. {_p04_marked} comida(s) señalada(s).")
+                        if _p04_pantry and not _p04_advisory_skip and not _p04_waiver:
                             # [P2-CHUNK-5] El rango de días NUEVOS se deriva de prior_count
                             # (días pre-existentes post-dedup), NO de days_offset. El merge
                             # re-renumera todo a 1..N desde prior_count+1 (líneas ~26803),
