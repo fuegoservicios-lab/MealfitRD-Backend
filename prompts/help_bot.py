@@ -138,7 +138,18 @@ _REGLA_TONO_ES = (
 )
 
 
-def help_bot_system_prompt(locale=None) -> str:
+# [P1-HELP-BOT-NATIVE-NO-COMMERCE · 2026-08-22] Dentro de la app nativa de iPhone no
+# puede haber comercio ni enlaces a él (Apple 3.1.1 / 3.1.3(b)); un bot que recita
+# precios es comercio. El cliente manda `hide_commerce: true` cuando corre en nativo.
+_DIRECTIVA_SIN_COMERCIO = (
+    "\n\nREGLA ADICIONAL (app nativa): NO menciones precios, planes de pago, suscripciones, "
+    "cómo mejorar el plan ni nada relacionado con comprar. Si el usuario pregunta por eso, "
+    "responde solo que la suscripción se gestiona desde la web en bioboros.com, sin dar cifras "
+    "ni nombres de planes, y sigue ayudando con el resto de la app."
+)
+
+
+def help_bot_system_prompt(locale=None, hide_commerce: bool = False) -> str:
     """Prompt del bot con la directiva de idioma del `locale` pedido.
 
     `locale` llega del CLIENTE y NO se interpola en el prompt: solo se le pasa al SSOT,
@@ -147,7 +158,10 @@ def help_bot_system_prompt(locale=None) -> str:
     """
     directiva = build_language_directive(locale)
     regla = _REGLA_TONO if directiva else _REGLA_TONO_ES
-    return _PROMPT_BASE.replace("{regla_idioma}", regla) + directiva
+    prompt = _PROMPT_BASE.replace("{regla_idioma}", regla) + directiva
+    if hide_commerce:
+        prompt += _DIRECTIVA_SIN_COMERCIO
+    return prompt
 
 
 #: Compatibilidad: el prompt en es-DO, byte-identico al de antes del P-fix.

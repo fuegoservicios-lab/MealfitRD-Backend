@@ -112,7 +112,9 @@ async def api_help_chat(
     # un mapa fijo en `prompts.help_bot`: un valor desconocido cae a es-DO, asi que no
     # hay interpolacion ni superficie de inyeccion. Sin este dato el bot contestaba
     # siempre en espanol -- la regla 5 del prompt se lo ordenaba.
-    lc_messages = [SystemMessage(content=help_bot_system_prompt((data or {}).get('locale')))]
+    # [P1-HELP-BOT-NATIVE-NO-COMMERCE] flag del cliente nativo: sin precios ni planes.
+    hide_commerce = bool((data or {}).get("hide_commerce"))
+    lc_messages = [SystemMessage(content=help_bot_system_prompt((data or {}).get('locale'), hide_commerce=hide_commerce))]
     for msg in messages:
         if msg["role"] == "user":
             lc_messages.append(HumanMessage(content=msg["content"]))

@@ -109,7 +109,11 @@ def test_el_resto_del_prompt_no_se_duplica_por_idioma():
 def test_el_router_pasa_el_locale_al_constructor():
     src = io.open(_BACKEND / "routers" / "help_chat.py", encoding="utf-8").read()
     assert "help_bot_system_prompt(" in src, "el router volvio a la constante fija"
-    assert re.search(r"help_bot_system_prompt\(\(data or \{\}\)\.get\('locale'\)\)", src)
+    # [P1-HELP-BOT-NATIVE-NO-COMMERCE] Reanclado a la PROPIEDAD (el locale del body llega
+    # como primer argumento), no a la forma exacta de la llamada: ahora lleva también
+    # `hide_commerce=` y el literal anterior dejaba el guard rojo sin que el locale
+    # hubiera dejado de pasarse.
+    assert re.search(r"help_bot_system_prompt\(\(data or \{\}\)\.get\('locale'\)", src)
 
 
 def test_el_widget_envia_su_locale():
