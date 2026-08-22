@@ -154,9 +154,22 @@ soft/telemetría (fila 5-6), consistente con el resto del gate cultural de Fase 
 ## Runbook del flip
 
 El flip enciende DOS banderas independientes (backend + frontend) que deben moverse JUNTAS —
-una sin la otra dispara el bug de UI-sin-motor o motor-sin-UI documentado en la spec §Fase 1. El
-flip **NO se ejecutó** en Fase 2 — este runbook es la guía completa para cuando el dueño decida
-encenderlo.
+una sin la otra dispara el bug de UI-sin-motor o motor-sin-UI documentado en la spec §Fase 1.
+
+> ⚠️ **El flip YA SE EJECUTÓ: el 2026-08-18.** `MEALFIT_COUNTRY_SYSTEM=true` vive en el `.env`
+> del VPS y `VITE_COUNTRY_SYSTEM=true` en el build servido; el selector de 6 países está visible
+> para cualquiera y hay planes beta reales persistidos. **Todo gap del sistema de países es de
+> producción viva, no de código en oscuro.** Este runbook se conserva porque documenta el
+> procedimiento exacto —y porque §5 lo necesita para el camino de vuelta—, pero léelo como
+> historia de lo hecho, no como plan de lo pendiente. Los dos incidentes de §6 son POSTERIORES a
+> esta fecha.
+>
+> *[P3-COUNTRY-DOC-TRUTH · 2026-08-22]* Hasta hoy esta cabecera declaraba el flip como pendiente
+> de encender, ciento diez líneas por encima de una sección titulada «Incidente del día del flip».
+> Una contradicción interna en el primer documento que lee quien va a operar el sistema.
+> *La frase original no se reproduce aquí a propósito*: el guard la busca como literal, y citarla
+> en la nota que la corrige pondría en rojo al propio arreglo — comentario-vence-guard, que este
+> repo ya ha pagado ocho veces.
 
 ### 1. Backend — `MEALFIT_COUNTRY_SYSTEM=true`
 

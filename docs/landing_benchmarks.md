@@ -6,6 +6,28 @@ regeneración de día). Motor SSOT: [`landing_benchmarks.py`](../landing_benchma
 [`scripts/landing_benchmark.py`](../scripts/landing_benchmark.py) · test ancla
 [`tests/test_p1_landing_bench_1_anchors.py`](../tests/test_p1_landing_bench_1_anchors.py).
 
+## Alcance de país — **el benchmark clínico queda scoped a RD**
+
+[P3-COUNTRY-DOC-TRUTH · 2026-08-22] La spec del sistema de países declaró esta limitación como
+aceptada de v1 **con la condición explícita de anotarla aquí**, y nadie la anotó: hasta hoy este
+documento no mencionaba la palabra «país» ni una vez. Una limitación que nadie defendió por escrito
+vuelve sin que nadie lo note — este repo ya lo pagó con `P2-VISION-COUNTRY`, aceptado bajo la misma
+clase de condición incumplida.
+
+Qué significa en concreto:
+
+- **Los 20 perfiles clínicos se evalúan TODOS como dominicanos.** `safety`, `gym`, `latency` y
+  `changes` no tienen eje de país: sus cifras describen el motor sirviendo a un usuario de RD. Una
+  regresión que sólo afecte a España o a México **no movería una sola de estas cifras**.
+- **Las cifras públicas del landing heredan ese alcance.** Lo que el landing afirma con estos
+  números es cierto para RD y no está medido para los cinco países beta.
+- **El modo `structural` SÍ tiene eje de país** desde `P2-LANDING-BENCH-COUNTRY`: el bloque
+  `structural_facts_por_pais` cuenta el catálogo comprable y las reglas por cada país del selector,
+  y es gratis (no consume LLM). Es lo primero que hay que mirar antes de afirmar nada por país.
+- **Salir de este alcance es un proyecto, no un flag**: exige perfiles clínicos por país y una
+  decisión sobre qué significa «plan correcto» en cada cocina. Mientras no exista, cualquier claim
+  del landing sobre países beta necesita otra fuente.
+
 ## Por qué existe (y qué hueco cierra)
 
 Los benchmarks previos miden el motor con perfiles que el formulario actual **no puede producir**:
