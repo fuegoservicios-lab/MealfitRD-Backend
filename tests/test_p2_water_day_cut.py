@@ -65,10 +65,12 @@ def test_el_backend_no_vuelve_a_cablear_un_huso_fijo(tools):
     import unittest.mock as _m
     with _m.patch.object(tools, "user_tz_offset_min", lambda uid: 720):
         oeste = tools._local_date_str_for_user("oeste")
-    with _m.patch.object(tools, "user_tz_offset_min", lambda uid: -600):
+    # ±720, no -600: 22 horas dejan una ventana diaria (12:00-14:00 UTC) en la que los dos
+    # comparten fecha con el código correcto — tumbó un deploy el 2026-08-22 a las 13:36 UTC.
+    with _m.patch.object(tools, "user_tz_offset_min", lambda uid: -720):
         este = tools._local_date_str_for_user("este")
     assert oeste != este, (
-        "el helper devuelve el mismo día para husos separados 22 horas: volvió a haber un offset "
+        "el helper devuelve el mismo día para husos separados 24 horas: volvió a haber un offset "
         "fijo cableado"
     )
 

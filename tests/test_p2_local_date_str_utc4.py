@@ -60,9 +60,15 @@ def test_la_fecha_usa_el_huso_del_usuario(tools, monkeypatch, offset):
 
 def test_dos_usuarios_en_husos_distintos_no_comparten_fecha(tools, monkeypatch):
     """El síntoma medible: con el bug, los dos recibían la fecha dominicana. Se elige un par de
-    husos separados por 20 horas para que el día difiera SIEMPRE, no según a qué hora corra el
-    test — un caso que sólo falla a ciertas horas es un test intermitente, no una defensa."""
-    monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 720 if uid == "oeste" else -600)
+    husos separados por EXACTAMENTE 24 horas (±720) para que el día difiera SIEMPRE, no según a
+    qué hora corra el test — un caso que sólo falla a ciertas horas es un test intermitente, no
+    una defensa.
+
+    [2026-08-22, tumbó un deploy a las 13:36 UTC] Decía «20 horas» y usaba 720/-600: 22 horas,
+    que dejan una ventana DIARIA de 12:00 a 14:00 UTC en la que los dos comparten fecha contra
+    el código correcto. La docstring enunciaba el principio y los números lo incumplían — el
+    mismo patrón que el test del signo, dos funciones más abajo, ya confesaba."""
+    monkeypatch.setattr(tools, "user_tz_offset_min", lambda uid: 720 if uid == "oeste" else -720)
     assert tools._local_date_str_for_user("oeste") != tools._local_date_str_for_user("este")
 
 
