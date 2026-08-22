@@ -12797,7 +12797,6 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
-@router.post("/adopt-guest-plan")
 def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
     """[P1-GUEST-COUNTRY-ADOPT · 2026-08-21] Rellena en `health_profile` los huecos que el
     formulario del INVITADO ya contestó. Devuelve True si escribió algo.
@@ -12848,6 +12847,7 @@ def _adopt_guest_form_into_profile(health_profile: dict, form_data) -> bool:
     return escribio
 
 
+@router.post("/adopt-guest-plan")
 def api_adopt_guest_plan(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
