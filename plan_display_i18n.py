@@ -1575,6 +1575,34 @@ def enrich_plan_display(
                 else None
             )
 
+            # [P1-I18N-DISPLAY-NIVEL-PLAN-SIN-VIA · 2026-08-22] El nombre del plan y los
+            # insights viajaban de POLIZÓN en un lote de comidas, y no tenían vía propia.
+            #
+            # El troceo se construye SÓLO desde los targets de comida. En el estado normal
+            # —todas las comidas ya traducidas para este locale— `_collect_targets` devuelve
+            # [], `_particionar_targets` devuelve [] y el `while` de abajo no llega a correr
+            # ni una vez. MEDIDO con los dobles del repo (plan con 1 comida ya traducida a
+            # en-US + nombre e insights pendientes):
+            #
+            #     enrich_plan_display(...) -> {'enriched_meals': 0, 'skipped': 'no_meals'}
+            #     invocaciones LLM: 0   ·   _display de nivel plan: None
+            #
+            # Lo que eso significa para el usuario: renombra su plan en el Historial —el
+            # rename popea `_display`, y popea el de TODOS los locales— y a partir de ahí el
+            # título vuelve al español PARA SIEMPRE, y con él se va el panel «Diagnóstico /
+            # Plan de Acción / Tip del Chef». No hay disparador que lo recupere, porque el
+            # único que existe cuelga de que aparezca trabajo de comidas.
+            #
+            # El arreglo es una línea: si no hay lotes pero SÍ hay algo de nivel plan
+            # pendiente, encolar un lote VACÍO. Todo lo demás ya lo soportaba —el `continue`
+            # de abajo distingue explícitamente «lote vacío sin nada pendiente» de «lote
+            # vacío con nombre/insights», `_build_prompt(targets=[])` lo admite y
+            # `_persist_batch` también—; lo que faltaba era que alguien lo encolara.
+            #
+            # El presupuesto no se resiente: `_max_invocaciones_por_ciclo(0)` da 5.
+            if not _pendientes and (plan_name_pending is not None or insights_pending is not None):
+                _pendientes.append([])
+
             while _pendientes:
                 if _presupuesto_invocaciones <= 0:
                     # El split es recursivo; sin techo, un modelo que devuelve basura
