@@ -147,7 +147,17 @@ def test_el_checker_ignora_los_comentarios_pero_no_las_cadenas():
 
     def _reporta_ambito(fuente: str, tmp: Path) -> bool:
         (tmp / "scripts").mkdir(parents=True, exist_ok=True)
-        for rel in ("i18n-check.mjs", "i18n-sin-envolver.mjs", "i18n-alcance.mjs"):
+        # [P3-I18N-ENTRADAS-DUPLICADAS · 2026-08-22] Se copia TODO `scripts/*.mjs`, no una
+        # tupla enumerada.
+        #
+        # La lista a mano ya se quedó corta una vez y volvió a quedarse corta hoy, cuando
+        # `ENTRADAS` pasó a vivir en `scripts/entradas.mjs`: los seis tests que ejecutan el
+        # checker REAL murieron en ERR_MODULE_NOT_FOUND y fallaron por una razón que no
+        # tenía nada que ver con lo que miden.
+        #
+        # Enumerar las dependencias de un programa que se ejecuta de verdad es mantener una
+        # segunda copia de su grafo de imports. El glob no puede quedarse corto.
+        for rel in sorted(p.name for p in _CHECKER.parent.glob("*.mjs")):
             origen = _CHECKER.parent / rel
             if origen.exists():
                 shutil.copy2(origen, tmp / "scripts" / rel)
