@@ -146,7 +146,11 @@ def test_pdf_category_header_escaped():
     text = _DASHBOARD_FP.read_text(encoding="utf-8")
     # Buscar `<h3 ...>${escapeHtml(cat)}</h3>` en el PDF section.
     assert re.search(
-        r"<h3[^>]*>\$\{escapeHtml\(cat\)\}</h3>",
+        # [P2-I18N-PDF-CATEGORIAS · 2026-08-22] Reanclado a la PROPIEDAD --que `cat` llegue
+        # a `escapeHtml`-- y no a su forma exacta: el rótulo ahora se traduce al imprimir
+        # (`escapeHtml(glossShoppingCategory(cat, t))`) y el escape sigue siendo el de fuera,
+        # que es lo ÚNICO que este test protege. El patrón crudo `${cat}` sigue prohibido.
+        r"<h3[^>]*>\$\{escapeHtml\([^}]*\bcat\b[^}]*\)\}</h3>",
         text,
     ), (
         "P2-NEW-2 regresión: el header de categoría del PDF ya no "
