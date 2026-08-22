@@ -110,6 +110,20 @@ def _montar(tmp: Path, catalogo: dict) -> Path:
         json.dumps(catalogo, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
+    # [P2-I18N-TRINQUETE-DESAPARECE-EN-SILENCIO · 2026-08-22] El fixture nace CON su
+    # trinquete. Desde ese P-fix, un proyecto sin `i18n-sin-envolver.baseline.json` es un
+    # fallo duro: sin él el gate no puede detectar un retroceso y saldría verde por
+    # omisión, así que borrar el fichero era la forma más fácil de desactivar la defensa.
+    #
+    # El fixture no tiene español sin envolver, así que el trinquete correcto es cero. Se
+    # escribe explícitamente en vez de relajar el checker: lo que este fichero mide es el
+    # VALOR de las traducciones, y para eso su proyecto de mentira tiene que ser un
+    # proyecto válido — no uno al que el gate le perdona una pieza.
+    (tmp / "scripts" / "i18n-sin-envolver.baseline.json").write_text(
+        json.dumps({"_comentario": "fixture", "total": 0, "porArchivo": {}}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     # [P1-I18N-EXTRACTOR-AST · 2026-08-21] El `node_modules` del frontend real, para que
     # el checker resuelva `@babel/parser` sin instalar nada en el tmpdir.
     #
