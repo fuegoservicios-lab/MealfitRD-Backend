@@ -207,7 +207,15 @@ def test_frontend_legacy_inflight_fallback_does_not_lie():
     assert idx > 0
     block = _HISTORY_JSX[idx:idx + 800]
     # Extraer solo la línea del `_reason = '...';` (no comentarios).
-    reason_match = re.search(r"_reason\s*=\s*['\"`]([^'\"`]+)['\"`]\s*;", block)
+    #
+    # [P1-I18N-HIST-DIAS-FALTANTES · 2026-08-22] El `t(` es OPCIONAL en el patrón. Lo que
+    # este guard protege es el CONTENIDO del copy —que el fallback legacy no afirme
+    # «generando ahora»—, y eso no cambia porque la cadena pase por el motor de idiomas.
+    # Exigir la asignación desnuda ataba el guard a que esa frase NO se pudiera traducir,
+    # que es justo lo contrario de lo que hace falta: la frase la lee el usuario.
+    reason_match = re.search(
+        r"_reason\s*=\s*(?:t\(\s*)?['\"`]([^'\"`]+)['\"`]", block
+    )
     assert reason_match, (
         "No encontré la asignación `_reason = '...'` en el fallback. "
         "Si reformateaste, anclalo aquí."
