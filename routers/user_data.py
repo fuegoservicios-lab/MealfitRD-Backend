@@ -976,6 +976,31 @@ async def api_patch_profile(
             ),
         )
 
+    # [P3-COUNTRY-DB-CHECK · 2026-08-22] La simétrica de arriba para la ÚNICA clave enum que vive
+    # dentro del JSONB. `health_profile` es texto libre por diseño (super_personalization, perfil
+    # clínico, alergias) y sigue siéndolo: esto valida UNA clave, no convierte el merge en un
+    # whitelist — ensancharlo rompería tres superficies que no tienen que ver con el país.
+    #
+    # Rechaza, NO canoniza. `canonicalize_country` cae a 'DO' ante cualquier valor no canónico, así
+    # que coercer aquí dejaría al usuario recibiendo planes dominicanos sin nada en pantalla que se
+    # lo dijera — el «default sembrado» que este repo ya pagó. Un 400 le dice qué pasó.
+    #
+    # SSOT de la lista: `constants.COUNTRY_PROFILES`. El CHECK de
+    # `p3_country_db_check_2026_08_22.sql` es la red de abajo, no el sustituto: sin este 400, el
+    # CHECK haría el trabajo devolviendo un 500 crudo de psycopg.
+    # Tooltip-anchor: P3-COUNTRY-DB-CHECK-VALUE.
+    if body.health_profile and body.health_profile.get("country") is not None:
+        from constants import COUNTRY_PROFILES
+        _pais = body.health_profile["country"]
+        if not isinstance(_pais, str) or _pais.strip() not in COUNTRY_PROFILES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"country no soportado: {_pais!r}. "
+                    f"Permitidos: {sorted(COUNTRY_PROFILES)}."
+                ),
+            )
+
     if not body.health_profile and not fields:
         raise HTTPException(status_code=400, detail="Nada que actualizar.")
 
