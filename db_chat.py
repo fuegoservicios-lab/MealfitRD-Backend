@@ -265,8 +265,23 @@ def _process_and_sort_sessions(sessions: list):
                 title_msgs = [m for m in s_msgs if str(m.get("content", "")).startswith("[SYSTEM_TITLE] ")]
                 user_msgs = [m for m in s_msgs if m.get("role") == "user"]
                 
+                # [P1-I18N-CHAT-TITULOS-SERVIDOR · 2026-08-22] El backend deja de decidir el
+                # TEXTO de los rótulos genéricos y devuelve un DISCRIMINADOR (`title_key`).
+                #
+                # Antes componía «Nuevo Chat» / «Interacción con imagen o sistema» en español
+                # y el cliente los pintaba crudos: con la app en inglés, la barra lateral del
+                # Agente listaba «Nuevo Chat», «Nuevo Chat»… bajo un encabezado de grupo que
+                # SÍ decía «Today». Medido en producción: 171 de 186 sesiones vivas.
+                #
+                # `title` se conserva SÓLO cuando es contenido real —el `[SYSTEM_TITLE]`, que
+                # ya nace en el idioma del usuario vía `build_title_language_directive`, o el
+                # texto que el usuario escribió—. Un rótulo genérico no es contenido: es
+                # interfaz, y la interfaz la traduce el cliente, que es quien sabe el idioma
+                # activo en ese instante (el perfil puede haber cambiado desde el último
+                # mensaje). `title: None` + `title_key` deja esa decisión donde corresponde.
                 if title_msgs:
                     s["title"] = str(title_msgs[0].get("content", "")).replace("[SYSTEM_TITLE] ", "")
+                    s["title_key"] = None
                     s["is_fallback"] = False
                 elif user_msgs:
                     content_str = str(user_msgs[0].get("content", ""))
@@ -283,22 +298,28 @@ def _process_and_sort_sessions(sessions: list):
                         clean_str = re.sub(r'\[El usuario subió una imagen\..+?\]', '', clean_str, flags=re.DOTALL)
                             
                     clean_str = clean_str.strip()
-                    if not clean_str:
-                        clean_str = "Interacción con imagen o sistema"
                         
                     if clean_str:
+                        # Contenido REAL del usuario: viaja tal cual — lo que el usuario
+                        # escribió no se traduce.
                         s["title"] = clean_str[:45] + ("..." if len(clean_str) > 45 else "")
+                        s["title_key"] = None
                     else:
-                        s["title"] = "Nuevo chat"
+                        # Lo que queda tras limpiar los prefijos de sistema no es texto del
+                        # usuario: es «aquí no hubo nada legible», o sea interfaz.
+                        s["title"] = None
+                        s["title_key"] = "image_or_system"
                     # Como no hay SYSTEM_TITLE, es fallback
                     s["is_fallback"] = True
                 else:
-                    s["title"] = "Nuevo Chat"
+                    s["title"] = None
+                    s["title_key"] = "empty"
                     
                 s["last_activity"] = s_msgs[-1].get("created_at", s.get("created_at", ""))
                 valid_sessions.append(s)
             else:
-                s["title"] = "Nuevo Chat"
+                s["title"] = None
+                s["title_key"] = "empty"
                 s["last_activity"] = s.get("created_at", "")
                 valid_sessions.append(s)
                 
