@@ -389,3 +389,63 @@ def test_el_snapshot_se_selecciona_para_poder_anclar():
         "El SELECT de la cadena ya no trae el snapshot: "
         "`chunk_execute_after_ceiling` no puede anclar y el techo es inerte."
     )
+
+
+# ── [P2-CHUNK-TZ-GUARD-BLIND · 2026-08-21] Husos al ESTE de Greenwich ──────────────────────────
+#
+# Este fichero instanciaba únicamente offsets 0 y 240 — UTC y República Dominicana, los dos al
+# OESTE. Con esa muestra el guard no puede ver el modo de fallo europeo: para un offset NEGATIVO la
+# hora local va POR DELANTE de UTC, así que un ancla de última hora de la tarde en UTC ya pertenece
+# al día SIGUIENTE en Madrid. Redondear por la fecha UTC adelanta el bloque un día en vez de
+# atrasarlo — el error espejo del que se midió en la cola dominicana (día 11 programado para el 22).
+#
+# Lo destapó `test_tz_offset_chunk_timing::test_timezone_alignment_asia`, que llevaba escrito en su
+# propio comentario que su ancla era «midnight local time Manila (day before)» y aun así esperaba
+# la fecha UTC. Una muestra que sólo cubre un lado del meridiano no puede acusar al otro.
+
+_TZ_BETA = (
+    ("ES invierno", -60),
+    ("ES verano", -120),
+    ("MX", 360),
+    ("CO", 300),
+    ("US este", 300),
+    ("Manila", -480),
+)
+
+
+@pytest.mark.parametrize("etiqueta,tz", _TZ_BETA)
+def test_el_techo_es_la_medianoche_LOCAL_tambien_al_este_de_greenwich(etiqueta, tz):
+    """La medianoche local del primer día cubierto, sea cual sea el signo del offset."""
+    from constants import chunk_execute_after_ceiling
+    from datetime import datetime, timedelta, timezone
+    ancla = "2026-08-16T22:30:00+00:00"
+    snap = {"form_data": {"_plan_start_date": ancla, "tzOffset": tz}}
+    techo = chunk_execute_after_ceiling(snap, 3)
+    assert techo is not None, f"{etiqueta}: sin techo (el fix nace inerte para este huso)"
+    # Reconstrucción independiente: fecha LOCAL del ancla + 3 días, a medianoche local, en UTC.
+    inst = datetime.fromisoformat(ancla)
+    fecha_local = (inst - timedelta(minutes=tz)).date() + timedelta(days=3)
+    # El «+30 min» es deliberado y está documentado en el SSOT: replica la fórmula del encolado
+    # (medianoche local + 30m). Mi primera versión de este test lo omitía y falló contra código
+    # CORRECTO en los seis husos a la vez — un desfase constante en todos los signos no es un bug
+    # de zona horaria, es un modelo incompleto. Vale la pena dejarlo escrito: la señal de «me
+    # equivoco yo» es que el error no depende de la variable que estoy probando.
+    esperado = datetime.combine(fecha_local, datetime.min.time(),
+                                tzinfo=timezone.utc) + timedelta(minutes=tz + 30)
+    assert techo == esperado, (
+        f"{etiqueta} (tz={tz}): techo {techo} != medianoche local {esperado}. Con offset negativo "
+        f"la hora local va POR DELANTE de UTC y redondear por la fecha UTC adelanta el bloque"
+    )
+
+
+def test_un_ancla_de_noche_en_utc_ya_es_el_dia_siguiente_en_madrid():
+    """El caso concreto que la muestra vieja no podía instanciar. 22:30Z del 16 son las 00:30 del
+    **17** en Madrid en verano: el día 0 del plan es el 17, no el 16."""
+    from constants import chunk_execute_after_ceiling
+    from datetime import datetime, timedelta, timezone
+    snap = {"form_data": {"_plan_start_date": "2026-08-16T22:30:00+00:00", "tzOffset": -120}}
+    techo = chunk_execute_after_ceiling(snap, 0)
+    esperado = datetime(2026, 8, 17, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=-120 + 30)
+    assert techo == esperado, (
+        f"techo {techo}: el ancla se leyó en fecha UTC (16) en vez de en la local de Madrid (17)"
+    )
