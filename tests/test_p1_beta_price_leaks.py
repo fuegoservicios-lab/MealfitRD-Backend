@@ -161,7 +161,12 @@ def test_el_bloque_de_precios_en_rd_sigue_gateado_por_pais():
     src = (_BACKEND_ROOT / "graph_orchestrator.py").read_text(encoding="utf-8", errors="replace")
     i = src.index('"prices_context":')
     ventana = src[i:i + 400]
-    assert "has_native_prices" in ventana, (
+    # [P3-PRICING-MODE-SSOT-BLANKET · 2026-08-22] Este caso anclaba el literal `has_native_prices`,
+    # o sea la consulta A MANO del flag. El comentario de `pricing_mode_for_country` prohíbe por
+    # escrito ese «2º chequeo» —es la 2ª tabla de `P1-DIET-CANON-SSOT`— así que el guard exigía
+    # justo lo que había que quitar. La propiedad que defiende no cambia: el bloque de precios en
+    # RD$ sigue gateado por país; lo que cambia es que ahora pasa por la ÚNICA puerta.
+    assert "pricing_mode_for_country" in ventana and "beta_no_prices" in ventana, (
         "el bloque de precios en RD$ dejó de gatearse por país: un usuario beta recibiría el "
         "catálogo dominicano entero con importes"
     )
