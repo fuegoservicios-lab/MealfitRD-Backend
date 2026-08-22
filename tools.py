@@ -4181,7 +4181,14 @@ def consultar_dia_del_plan(user_id: str, fecha: str) -> str:
         if not isinstance(plan, dict) or not plan:
             return "El usuario no tiene ningún plan activo del que pueda sacar ese día."
 
-        row = find_plan_day_for_date(plan, target, rd_today())
+        # [P3-CONSULTAR-DIA-USER-TODAY · 2026-08-22] «Hoy» es el del USUARIO, no el de RD. Esto
+        # pasaba `rd_today()` —`now(utc) − 4h`— teniendo `user_id` delante, que el override de
+        # P0-AGENT-1 garantiza en el tope de `execute_tools`. A las 22:30 en Ciudad de México ya
+        # son las 00:30 del día siguiente en RD, así que el coach describía el menú de MAÑANA a
+        # quien preguntaba a la hora de cenar; en Madrid, el de AYER. Mismo mecanismo que
+        # P2-LOCAL-DATE-STR-UTC4 cerró para el diario, en la superficie que aquella pasada dejó.
+        _hoy_usuario = _dt.strptime(_local_date_str_for_user(user_id), "%Y-%m-%d").date()
+        row = find_plan_day_for_date(plan, target, _hoy_usuario)
         if not row:
             return (f"No tengo el día {target.isoformat()} en el plan de este usuario. "
                     f"Puede que sea anterior al plan actual, o que ese día ya se haya "

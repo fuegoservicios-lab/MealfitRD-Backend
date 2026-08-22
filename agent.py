@@ -8,6 +8,9 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
+# [P3-CONSULTAR-DIA-USER-TODAY . 2026-08-22] Cuarta copia del 240 a mano: el fallback
+# de huso lee el SSOT que P3-TZ-FALLBACK-SSOT unifico.
+from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN
 from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, culinary_knowledge_base_for_country, validate_ingredients_against_pantry, _to_base_unit
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
 from llm_provider import (ChatDeepSeek, DEEPSEEK_FLASH, GPT56_LUNA,
@@ -5246,7 +5249,8 @@ def _build_past_days_context(user_id: str, current_plan, local_date_str: Optiona
         # `tz_offset is not None` (jamás truthiness: `0` es UTC, legítimo y falsy).
         # El clamp al rango de husos vive en `_clamp_tz_offset_mins` — SSOT
         # compartida con el callsite de `get_consumed_meals_today` del stream.
-        tz_offset_mins = _clamp_tz_offset_mins(tz_offset) if tz_offset is not None else 240
+        tz_offset_mins = (_clamp_tz_offset_mins(tz_offset) if tz_offset is not None
+                          else _DEFAULT_TZ_OFFSET_MIN)
 
         out = build_past_plan_days_block(current_plan, today, days_back=days_back)
         # [P2-CHUNK-OVERDUE-SIGNAL · 2026-08-04] MISMO bloque, MISMA llamada (no

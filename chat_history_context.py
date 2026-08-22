@@ -19,7 +19,18 @@ _MONTHS_ES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oc
 
 
 def rd_today() -> date:
-    """Fecha local RD (UTC-4) — convención del repo."""
+    """Fecha de República Dominicana (UTC-4). **FALLBACK, no «hoy».**
+
+    [P3-CONSULTAR-DIA-USER-TODAY · 2026-08-22] Esta docstring presentaba UTC-4 como si
+    fuera la norma del proyecto, y eso invitaba a usarla donde hay un usuario:
+    `consultar_dia_del_plan` la llamaba teniendo `user_id` delante y le daba la fecha
+    dominicana a un mexicano. (La frase original no se reproduce: el guard la busca como
+    literal y citarla aquí pondría en rojo al propio arreglo.)
+
+    La convención del repo es que la fecha sigue AL USUARIO (`_local_date_str_for_user`,
+    sobre `constants.DEFAULT_TZ_OFFSET_MIN`). Esta función es correcta sólo donde de verdad
+    se quiere la fecha de RD, o como último recurso cuando no se sabe quién pregunta.
+    """
     return (datetime.now(timezone.utc) - timedelta(hours=4)).date()
 
 
