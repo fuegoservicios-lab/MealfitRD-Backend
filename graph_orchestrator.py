@@ -10553,7 +10553,11 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
                 from constants import slot_ingredient_violations as _siv
                 _name_flagged = any(True for _ in slot_violations_for_meal_name(name, slot_key, _rules_table))
                 for v in _siv(m.get("ingredients") or [], slot_key):
-                    _fix = _sph(slot_key, _diet_for_hint)
+                    # La pista positiva también: `_sph` es la dominicana («mangú y fruta»), y
+                    # dejarla dejaba «dominican» dentro del texto aunque el resto se neutralizara.
+                    # Mismo par que usa la rama por NOMBRE doce líneas más arriba.
+                    _fix = (_sph(slot_key, _diet_for_hint) if _country == "DO"
+                            else _dsa_hint_neutral.get(slot_key, ""))
                     # [P2-SLOT-EVASION-TELEMETRY · 2026-07-02] (audit v4 slots) Evasión por nombre novel:
                     # el pase ingredient-level cazó lo que el name-level NO vio. Serie greppable para
                     # calibrar la cobertura semántica de tokens (¿faltan tokens de nombre? ¿qué evade?).
@@ -10572,10 +10576,27 @@ def _detect_slot_appropriateness(days: list, form_data: dict = None) -> list:
                         # mismo archivo, tools.py) hereda este override.
                         "hard": v["hard"] and _country == "DO",
                         "name_evaded": not _name_flagged,  # [P2-SLOT-EVASION-TELEMETRY]
+                        # [P2-SLOT-INGREDIENT-COUNTRY · 2026-08-21] El flag `hard` ya era
+                        # país-aware (línea de arriba, T4 fix-round 1) pero el TEXTO no, y el texto
+                        # es lo que VIAJA: entra en los `issues` del reviewer, que se le muestran al
+                        # usuario verbatim. Un español leía que su desayuno se rechaza «por
+                        # coherencia cultural es-DO» y que «no corresponde al desayuno dominicano»,
+                        # con una cita a «locrio» de propina. Es el mismo camino que obligó a
+                        # re-anclar la prosa del juez en P1-JUDGE-SEVERITY-COUNTRY.
+                        #
+                        # La REGLA no se toca: arroz para desayunar tampoco es español ni mexicano,
+                        # así que el detector sigue midiendo lo mismo en los seis países. Cambia
+                        # cómo se cuenta, no qué se cuenta. La rama por NOMBRE ya tenía su texto
+                        # neutro desde FINAL-FIX F4; ésta se le empareja.
                         "text": (
                             f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
                             f"{slot_key}: «{name}» lleva {v.get('ingredient', 'arroz')} en los ingredientes — "
                             f"arroz/locrio no corresponde al desayuno dominicano aunque el nombre no lo diga. "
+                            f"Cámbialo por un plato propio del horario. {_fix}"
+                        ) if _country == "DO" else (
+                            f"COMIDA FUERA DE HORARIO: Día {day_num}, "
+                            f"{slot_key}: «{name}» lleva {v.get('ingredient', 'arroz')} en los ingredientes — "
+                            f"el arroz no corresponde al desayuno aunque el nombre no lo diga. "
                             f"Cámbialo por un plato propio del horario. {_fix}"
                         ),
                     })
