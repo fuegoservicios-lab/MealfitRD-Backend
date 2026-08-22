@@ -544,6 +544,90 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
         )
 
 
+# ============================================================
+# `_display` invalidado por el ACTO de reescribir (P2-DISPLAY-POP-VECINO · 2026-08-21)
+# ============================================================
+#
+# La invariante es simple: si los gramos de un meal cambian, su `_display[locale]` —que
+# espeja `ingredients` y `recipe` POR ÍNDICE— pasa a mentir, y hay que tirarlo.
+#
+# Once `pop("_display")` repartidos por `graph_orchestrator.py`, `routers/plans.py` y
+# `tools.py` la implementaban a mano, cada uno colgando de una función con nombre. MEDIDO:
+# SEIS re-escritores plan-wide reescriben en sitio sin pop. Y el séptimo que alguien
+# escriba mañana nace mintiendo por omisión, porque la invariante no vive en ningún sitio
+# que él vaya a tocar — vive en los nombres de sus vecinos.
+#
+# Esto la ata al ACTO. `update_plan_data_atomic` es el cuello de botella por el que pasa
+# toda escritura de `plan_data` bajo lock (invariante I7 de CLAUDE.md), así que un
+# re-escritor nuevo queda cubierto sin wiring. Es la lección de `P1-COUNTRY-SYSTEM-F1`:
+# gatear call sites uno a uno es el agujero, no el cierre.
+#
+# NO SUSTITUYE a los once pops: siguen siendo correctos, más baratos —popean sin recorrer
+# el plan— y algunos corren fuera de este persist. Esto es la red de debajo.
+#
+# Un pop de más es gratis (se re-traduce ese meal); un pop de menos deja la pantalla
+# mintiendo gramos de forma permanente, porque nadie lo reintenta.
+#
+# `P2-MUTATOR-PURITY`: CPU puro sobre el dict. Corre dentro del `SELECT … FOR UPDATE`
+# reteniendo el row-lock y una conexión del pool, así que aquí no entra ni una llamada a
+# DB ni nada que espere.
+
+
+def _huellas_de_meals(plan_data) -> dict:
+    """`(dia, comida) -> huella` de los tres campos que `_display` espeja.
+
+    Los arrays se guardan como TUPLA y no por longitud: un re-cuantizador que cambia
+    «180 g» por «90 g» conserva el número de líneas, que es justo el caso que motiva
+    esto.
+    """
+    fuera = {}
+    if not isinstance(plan_data, dict):
+        return fuera
+    dias = plan_data.get("days")
+    if not isinstance(dias, list):
+        return fuera
+    for i, dia in enumerate(dias):
+        if not isinstance(dia, dict):
+            continue
+        meals = dia.get("meals")
+        if not isinstance(meals, list):
+            continue
+        for j, m in enumerate(meals):
+            if not isinstance(m, dict):
+                continue
+            fuera[(i, j)] = (
+                m.get("name"),
+                tuple(m.get("ingredients")) if isinstance(m.get("ingredients"), list) else None,
+                tuple(m.get("recipe")) if isinstance(m.get("recipe"), list) else None,
+            )
+    return fuera
+
+
+def _popear_display_de_lo_que_cambio(antes: dict, plan_data) -> int:
+    """Tira el `_display` de los meals cuya huella cambió. Devuelve cuántos.
+
+    Un meal que aparece DESPUÉS y no antes (un día nuevo, un swap que reordena) también
+    se popea: su `_display` heredado, si lo trae, no se corresponde con nada verificado.
+    """
+    despues = _huellas_de_meals(plan_data)
+    popeados = 0
+    if not despues:
+        return 0
+    dias = plan_data.get("days") if isinstance(plan_data, dict) else None
+    if not isinstance(dias, list):
+        return 0
+    for (i, j), huella in despues.items():
+        if antes.get((i, j)) == huella:
+            continue
+        try:
+            meal = dias[i]["meals"][j]
+        except (IndexError, KeyError, TypeError):
+            continue
+        if isinstance(meal, dict) and meal.pop("_display", None) is not None:
+            popeados += 1
+    return popeados
+
+
 def update_plan_data_atomic(
     plan_id: str,
     mutator,
@@ -687,11 +771,28 @@ def update_plan_data_atomic(
                 if not isinstance(current, dict):
                     current = {}
 
+                # [P2-DISPLAY-POP-VECINO · 2026-08-21] La huella ANTES del mutator: es
+                # el único momento en que se tiene el estado previo con el lock puesto.
+                _huellas_previas = _huellas_de_meals(current)
+
                 result = mutator(current)
                 if result is False:
                     return current
 
                 new_data = result if isinstance(result, dict) else current
+
+                # …y el barrido DESPUÉS. Cubre a cualquier re-escritor, tenga o no su
+                # propio pop, y por eso el séptimo que alguien escriba no nace mintiendo.
+                # Nunca puede tumbar el persist: corre dentro del FOR UPDATE.
+                try:
+                    _n_pop = _popear_display_de_lo_que_cambio(_huellas_previas, new_data)
+                    if _n_pop:
+                        logger.debug(
+                            f"[P2-DISPLAY-POP-VECINO] plan={plan_id}: {_n_pop} meal(s) "
+                            f"perdieron su `_display` porque cambiaron sus gramos."
+                        )
+                except Exception as _e_pop:
+                    logger.warning(f"[P2-DISPLAY-POP-VECINO] barrido falló: {_e_pop!r}")
                 # [P2-OPEN-1] UPDATE con `AND user_id = %s` defense-in-depth.
                 # Aunque ya verificamos ownership en el SELECT bajo FOR UPDATE
                 # (mismo lock que cubre el UPDATE), el filtro repetido ancla
