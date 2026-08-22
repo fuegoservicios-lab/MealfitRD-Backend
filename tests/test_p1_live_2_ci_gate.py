@@ -145,18 +145,48 @@ def test_g_local_wrappers_exist():
         )
 
 
-def test_h_local_wrappers_run_three_steps():
-    """Wrappers locales deben cubrir los 3 mismos pasos del CI: backend
-    pytest, frontend vitest, frontend build."""
-    for f in (SCRIPT_PS1, SCRIPT_SH):
-        text = f.read_text(encoding="utf-8")
-        assert "pytest" in text, (
-            f"[P1-LIVE-2] {f.name} no invoca pytest — paridad con CI rota."
-        )
-        # `npm test` y `npm run build` deben aparecer ambos.
-        assert "npm test" in text, (
-            f"[P1-LIVE-2] {f.name} no invoca `npm test`."
-        )
-        assert "npm run build" in text, (
-            f"[P1-LIVE-2] {f.name} no invoca `npm run build`."
-        )
+def test_h_local_wrapper_vivo_corre_los_tres_pasos():
+    """El wrapper VIVO debe cubrir los 3 mismos pasos del CI: backend pytest,
+    frontend vitest, frontend build.
+
+    [P3-CI-WRAPPER-FOSIL-GUARD · 2026-08-22] Este caso exigía los tres pasos a
+    los DOS wrappers. `P3-I18N-RUN-CI-SH-FOSIL` (2026-08-21) convirtió
+    `run_ci.sh` en un muñón de deprecación que ya no corre nada y no reconvirtió
+    este guard, así que llevaba rojo desde entonces: el guard seguía exigiéndole
+    trabajo a un fichero cuyo trabajo es no hacer nada.
+
+    La paridad que este fichero defiende sigue viva — sólo que ahora la sostiene
+    un único wrapper. El muñón tiene su propio caso abajo, que es el que impide
+    que «deprecado» degenere en «silenciosamente inútil».
+    """
+    text = SCRIPT_PS1.read_text(encoding="utf-8")
+    assert "pytest" in text, (
+        f"[P1-LIVE-2] {SCRIPT_PS1.name} no invoca pytest — paridad con CI rota."
+    )
+    assert "npm test" in text, (
+        f"[P1-LIVE-2] {SCRIPT_PS1.name} no invoca `npm test`."
+    )
+    assert "npm run build" in text, (
+        f"[P1-LIVE-2] {SCRIPT_PS1.name} no invoca `npm run build`."
+    )
+
+
+def test_h2_el_wrapper_fosil_falla_ruidosamente():
+    """El muñón no puede salir con 0.
+
+    Un wrapper deprecado que no corre nada y devuelve éxito es la peor de las
+    dos opciones: quien lo invoque —una costumbre, un alias, un runbook viejo—
+    verá verde sin haber ejecutado ni un test. Es el mismo falso verde que este
+    repo ha pagado con un marcador deseleccionado y con un filtro que no casa
+    con nada. Deprecar obliga a fallar RUIDOSAMENTE y a decir cuál es el
+    reemplazo.
+    """
+    text = SCRIPT_SH.read_text(encoding="utf-8")
+    assert re.search(r"exit\s+[1-9]", text), (
+        f"[P3-CI-WRAPPER-FOSIL-GUARD] {SCRIPT_SH.name} está deprecado y sale "
+        f"con 0: quien lo invoque verá verde sin haber corrido nada."
+    )
+    assert "run_ci.ps1" in text, (
+        f"[P3-CI-WRAPPER-FOSIL-GUARD] {SCRIPT_SH.name} no dice cuál es su "
+        f"reemplazo. Un muñón que sólo dice «no» manda a leer el git log."
+    )

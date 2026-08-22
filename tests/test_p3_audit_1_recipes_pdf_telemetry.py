@@ -44,14 +44,19 @@ def recipes_src() -> str:
 
 
 def _extract_handler_body(src: str) -> str:
-    """Aísla `const handleDownloadPDF = async (meal) => { ... }` hasta el
+    """Aísla `const handleDownloadPDF = async (...) => { ... }` hasta el
     siguiente `const <name>` top-level del componente."""
+    # [P3-CI-ANCHOR-PARAM-NAME · 2026-08-22] El parámetro va como `\w+`, no como `meal`. La ola de
+    # i18n lo renombró a `mealRaw` y estos 15 guards se pusieron rojos en bloque contra código
+    # CORRECTO: anclaban en el NOMBRE DEL PARÁMETRO, que no es lo que vigilan. Un ancla tiene que
+    # clavar la identidad de lo que protege —aquí, el handler— y dejar libre lo que no. Si el
+    # handler cambia de nombre, esto sigue fallando: para eso existe.
     anchor = re.search(
-        r"const\s+handleDownloadPDF\s*=\s*async\s*\(\s*meal\s*\)\s*=>\s*\{",
+        r"const\s+handleDownloadPDF\s*=\s*async\s*\(\s*\w+\s*\)\s*=>\s*\{",
         src,
     )
     assert anchor is not None, (
-        "P3-AUDIT-1 regresión: `const handleDownloadPDF = async (meal) => {` "
+        "P3-AUDIT-1 regresión: `const handleDownloadPDF = async (...) => {` "
         "no encontrado en Recipes.jsx."
     )
     start = anchor.end()

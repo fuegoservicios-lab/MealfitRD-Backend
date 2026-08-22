@@ -79,12 +79,36 @@ def _pasos_del_job(ci: str, job: str) -> list[str]:
             if ln.strip().startswith("- run:")]
 
 
+def _sin_comentarios_js(src: str) -> str:
+    """Quita comentarios de bloque y de línea de un fuente JS.
+
+    El `(?<!:)` del comentario de línea evita cortar en `https://`, que es lo que rompe a un
+    stripper ingenuo.
+    """
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
+    return re.sub(r"(?<!:)//[^\n]*", " ", src)
+
+
 def _script_lee_dist(nombre: str) -> bool:
     """¿El script `nombre` de package.json lee `dist/`?
 
     Se resuelve por el FUENTE del fichero que invoca, no por su nombre: quien
     decide si un paso necesita el build es lo que el script abre, y eso solo se
     sabe leyéndolo.
+
+    ⚠️ [P3-CI-DIST-SUBSTRING · 2026-08-22] Esto era `"dist" in fuente.read_text()`, sobre el
+    fichero ENTERO y comentarios incluidos. `dist` ⊂ «distinguir», «distinta», «indistinguible» —
+    palabras normalísimas en prosa castellana. El guard acusaba a `npm run i18n:check:strict` de
+    leer `dist/` cuando `i18n-check.mjs` no lo toca: sus cuatro coincidencias eran cuatro
+    comentarios. Un FALSO POSITIVO que manda a mover un paso que está bien, o que hace creer que
+    CI está roto cuando no lo está.
+
+    Dos arreglos, porque los dos modos de fallo son distintos:
+      · `\\bdist\\b` en vez de `in` — «distinguir» no tiene frontera de palabra tras `dist`, así
+        que deja de casar; `dist/` y `'dist'` sí. Vigésima colisión por subcadena de este repo,
+        la serie que empezó con `"sal"⊂"salsa"`.
+      · sin comentarios — o un comentario que MENCIONE `dist/` volvería a acusar al fichero que lo
+        explica, que es comentario-vence-guard otra vez.
     """
     import json as _json
 
@@ -98,7 +122,30 @@ def _script_lee_dist(nombre: str) -> bool:
     fuente = _FRONTEND / m.group(1)
     if not fuente.exists():
         return False
-    return "dist" in fuente.read_text(encoding="utf-8")
+    return bool(re.search(r"\bdist\b", _sin_comentarios_js(
+        fuente.read_text(encoding="utf-8", errors="replace"))))
+
+
+def test_el_detector_de_dist_no_confunde_distinguir_con_el_directorio() -> None:
+    """El caso que destapó el falso positivo, anclado.
+
+    `i18n-check.mjs` no abre `dist/` en ninguna línea: sus coincidencias con la cadena `dist` son
+    las palabras «distinguir» y «distinta» dentro de comentarios. Un detector por subcadena lo
+    acusaba, y con él a todo el job."""
+    assert not _script_lee_dist("i18n:check:strict"), (
+        "el detector vuelve a confundir la palabra «distinguir» con el directorio `dist/`. "
+        "`i18n-check.mjs` no lee el build"
+    )
+
+
+def test_el_detector_si_ve_un_dist_de_verdad(tmp_path) -> None:
+    """El guard del guard: si `\\bdist\\b` fuera demasiado estricto y ya no viera ninguna lectura
+    real, el test principal pasaría por vacuidad y `check:bundle-size` podría volver a colarse
+    antes del build sin que nadie se entere."""
+    assert re.search(r"\bdist\b", _sin_comentarios_js("readdirSync('dist/assets')"))
+    assert re.search(r"\bdist\b", _sin_comentarios_js('const D = "dist";'))
+    assert not re.search(r"\bdist\b", _sin_comentarios_js("// no sabría distinguirlo"))
+    assert not re.search(r"\bdist\b", _sin_comentarios_js("/* una salida distinta */"))
 
 
 def test_ningun_paso_que_lee_dist_precede_al_build() -> None:
