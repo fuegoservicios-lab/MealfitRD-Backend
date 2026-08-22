@@ -1,6 +1,16 @@
 """[P1-I18N-PROFILE-DEFAULT-PISA · 2026-08-21] La autodetección de idioma era inerte
 para todo usuario con sesión, y el primer login la desactivaba PARA SIEMPRE.
 
+⚠️ LO QUE ESTE FICHERO **NO** PRUEBA, y costó un día entero descubrirlo:
+este guard lee el ARCHIVO `.sql`, no la BASE DE DATOS. Sus tests en verde dicen «la
+migración está escrita y dice lo que tiene que decir» — NO dicen si alguien la ha
+ejecutado contra Neon. Medido el 2026-08-22: los 19 tests pasaban mientras el esquema
+vivo seguía siendo `NOT NULL DEFAULT 'es-DO'`, así que el arreglo llevaba 24 h inerte y
+la rama `if (!data.locale)` del frontend era código inalcanzable. Un guard parser-based
+no puede distinguir «escrita» de «aplicada»; el que sí puede vive en
+`test_p1_i18n_profile_default_pisa_inerte.py` y está marcado `e2e` porque necesita DB.
+
+
 LA TRAZA, verificada paso a paso:
 
   1. Visitante nuevo anglófono → `P1-AUTO-LOCALE` lo detecta a `en-US`. Correcto.

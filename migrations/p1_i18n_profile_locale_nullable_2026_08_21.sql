@@ -98,14 +98,27 @@ ALTER TABLE public.user_profiles
   ADD CONSTRAINT user_profiles_locale_supported
   CHECK (locale IS NULL OR locale IN ('es-DO', 'en-US', 'pt-BR', 'fr-FR', 'it-IT'));
 
+-- [P3-I18N-COMMENT-DB-ALCANCE-STALE · 2026-08-22] El texto de este COMMENT se corrige
+-- ANTES de aplicarlo por primera vez. La versión anterior decía «NO afecta al contenido
+-- generado», y eso lleva siendo falso desde el 2026-08-17 (prosa del coach) y el
+-- 2026-08-19 (capa `_display` del plan). Aplicar la migración tal y como estaba escrita
+-- habría metido en producción un comentario que ya sabíamos falso — que es exactamente
+-- el daño que `P2-I18N-DOC-ALCANCE-MIENTE` documentó: una doc canónica equivocada no
+-- confunde sólo a las personas, y ésta la lee quien abre el esquema.
 COMMENT ON COLUMN public.user_profiles.locale IS
-'[P1-I18N-DASHBOARD · 2026-08-15 · NULL desde P1-I18N-PROFILE-DEFAULT-PISA 2026-08-21] '
-'Idioma de la INTERFAZ del dashboard. NULL = el usuario NO ha elegido todavía, y '
-'entonces manda la autodetección del navegador (P1-AUTO-LOCALE). Antes la columna era '
-'NOT NULL DEFAULT ''es-DO'' y eso hacía indistinguible «español» de «todavía nada»: el '
-'primer login escribía es-DO en localStorage y apagaba la autodetección para siempre. '
-'NO afecta al contenido generado ni a los nombres del catálogo de alimentos. SSOT de la '
-'lista: frontend/src/i18n/locales.js.';
+'[P1-I18N-DASHBOARD · 2026-08-15 · NULL desde P1-I18N-PROFILE-DEFAULT-PISA 2026-08-21 · '
+'alcance corregido P3-I18N-COMMENT-DB-ALCANCE-STALE 2026-08-22] Idioma del usuario. '
+'NULL = NO ha elegido todavía, y entonces manda la autodetección del navegador '
+'(P1-AUTO-LOCALE). Antes la columna era NOT NULL DEFAULT ''es-DO'' y eso hacía '
+'indistinguible «español» de «todavía nada»: el primer login escribía es-DO en '
+'localStorage y apagaba la autodetección para siempre. GOBIERNA: la interfaz del '
+'dashboard, la PROSA del coach (chat + notificaciones proactivas, '
+'prompts.chat_agent.build_language_directive) y la capa `_display` que traduce plan, '
+'recetas e insights (backend/plan_display_i18n.py, knob MEALFIT_PLAN_DISPLAY_I18N). '
+'NO GOBIERNA, JAMÁS: los nombres de alimentos y platos del catálogo, que siguen en '
+'español canónico porque son el SSOT de pantry_names_match, del guard de coherencia '
+'recetas↔lista y del backstop clínico de alergias. SSOT de la lista de idiomas: '
+'frontend/src/i18n/locales.js.';
 
 COMMENT ON CONSTRAINT user_profiles_locale_supported ON public.user_profiles IS
 '[P1-I18N-DASHBOARD · 2026-08-15 · NULL desde 2026-08-21] Sólo los 5 idiomas '
