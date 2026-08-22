@@ -116,7 +116,7 @@ def test_yaml_firma_con_api_key_no_con_certificados_a_mano():
     # con la que Codemagic genera los certificados. Lo que sigue prohibido es el .p12.
     for prohibido in (".p12", "CM_CERTIFICATE"):
         assert prohibido not in y, f"No subir certificados a mano ({prohibido}): la API key los gestiona."
-    assert "CERTIFICATE_PRIVATE_KEY" in y, (
+    assert "CERTIFICATE_PRIVATE_KEY_B64" in y, (
         "`fetch-signing-files --create` necesita CERTIFICATE_PRIVATE_KEY (clave RSA) para "
         "generar el CSR; sin ella falla con «Cannot save Signing Certificates»."
     )
