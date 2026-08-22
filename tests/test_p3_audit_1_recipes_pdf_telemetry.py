@@ -109,13 +109,21 @@ def test_filename_pattern_includes_both_discriminators(handler_body: str):
     # Patrón canónico: `filename: \`Receta_${slug}_${planIdPrefix}_${today}.pdf\``
     # Tolerar variaciones de orden, prefijos, etc. siempre que aparezcan
     # ambas variables en la línea `filename:`.
+    # [P3-I18N-PDF-NOMBRE-ARCHIVO · 2026-08-22] El nombre ya no se compone con un template
+    # literal: lo arma `pdfFileName(...)`, que une las partes, quita diacríticos y sanea lo
+    # que un nombre de fichero no admite —un copy traducido puede traer `:`—. Lo que este
+    # test protege son los DISCRIMINADORES, no la sintaxis con la que se juntan, así que se
+    # acepta cualquiera de las dos formas y se siguen exigiendo los dos.
     filename_match = re.search(
-        r"filename\s*:\s*`[^`]+`",
+        # `[^)]*` no vale: se para en el `)` de `t('Receta')`, el primer argumento. Se toma
+        # la línea entera (sin DOTALL, `.` no cruza el salto), que es donde viven los
+        # discriminadores que este test cuenta.
+        r"filename\s*:\s*(?:`[^`]+`|pdfFileName\(.*)",
         handler_body,
     )
     assert filename_match, (
-        "P3-AUDIT-1 regresión: línea `filename: \\`...\\`` no encontrada en "
-        "el opt de html2pdf."
+        "P3-AUDIT-1 regresión: no encontré el `filename` en el opt de html2pdf "
+        "(ni template literal ni `pdfFileName(...)`)."
     )
     fname = filename_match.group(0)
     assert "_planIdPrefix" in fname or "planData" in fname, (

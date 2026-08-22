@@ -85,7 +85,16 @@ def test_wordmark_es_monocromo():
         "P2-WORDMARK-BIOBOROS regresión: `Wordmark.jsx` fija un color hex. Debe heredar "
         "la tinta del contexto (`--text-main`) para funcionar igual en claro y oscuro."
     )
-    assert "Bioboros" in cuerpo, "el wordmark dejó de renderizar la marca"
+    # [P2-PDF-WORDMARK-EN-CADENA · 2026-08-22] El componente ya no teclea la marca:
+    # la lee de `WORDMARK_TEXT`, el SSOT que este mismo fichero exporta también para
+    # los documentos que se construyen como CADENA (un PDF no puede instanciar JSX).
+    # La propiedad sigue siendo la misma —el wordmark renderiza la marca— y ahora hay
+    # que comprobarla en dos pasos: que la use, y que la constante sea la correcta.
+    assert "WORDMARK_TEXT" in cuerpo, "el wordmark dejó de renderizar la marca"
+    assert re.search(r"WORDMARK_TEXT = 'Bioboros'", src), (
+        "el SSOT de la marca dejó de ser «Bioboros». Si el rebrand es intencional, este "
+        "test es el sitio donde consta la marca vigente."
+    )
 
 
 def test_la_pantalla_de_carga_del_plan_usa_el_componente():

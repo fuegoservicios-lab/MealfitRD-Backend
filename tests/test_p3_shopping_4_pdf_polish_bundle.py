@@ -109,12 +109,31 @@ def test_p3_shopping_1_filename_template_uses_discriminators(dash_src: str):
     filename_idx = body.find("filename:")
     line_end = body.find("\n", filename_idx)
     filename_line = body[filename_idx:line_end if line_end > 0 else filename_idx + 200]
-    # Pattern: backtick template con al menos 2 ${...} (durationText + date/id).
-    # Contamos ${ apariciones en la línea del filename.
-    interpolations = filename_line.count("${")
+    # [P3-I18N-PDF-NOMBRE-ARCHIVO · 2026-08-22] El nombre dejó de ser un template literal:
+    # lo arma `pdfFileName(parte, parte, …)`, que sanea lo que un nombre de fichero no
+    # admite (un copy traducido puede traer `:`). Lo que este test protege es que haya
+    # VARIOS discriminadores —sin ellos, dos descargas del mismo ciclo colisionan—, no la
+    # sintaxis con la que se juntan. Se cuentan las partes de cualquiera de las dos formas.
+    if "pdfFileName(" in filename_line:
+        dentro = filename_line.split("pdfFileName(", 1)[1]
+        # Argumentos de primer nivel: las comas que no están dentro de un paréntesis anidado
+        # (`t('Lista de Compras')` es UN argumento, no dos).
+        profundidad, partes = 0, 1
+        for ch in dentro:
+            if ch == "(":
+                profundidad += 1
+            elif ch == ")":
+                if profundidad == 0:
+                    break
+                profundidad -= 1
+            elif ch == "," and profundidad == 0:
+                partes += 1
+        interpolations = partes
+    else:
+        interpolations = filename_line.count("${")
     assert interpolations >= 3, (
-        f"P3-SHOPPING-1 regresión: el template del filename tiene solo "
-        f"{interpolations} interpolación(es) `${{...}}`. Esperaba ≥3 "
+        f"P3-SHOPPING-1 regresión: el nombre del PDF tiene solo "
+        f"{interpolations} discriminador(es). Esperaba ≥3 "
         f"(durationText + fecha + plan_id_prefix). Si reducir a 1 fue "
         f"intencional, restaurar — re-descargas colisionan sin "
         f"discriminadores múltiples."
