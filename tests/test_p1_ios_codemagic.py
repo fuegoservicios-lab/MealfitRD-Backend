@@ -144,7 +144,10 @@ def test_script_de_firma_aborta_al_primer_fallo():
     comandos siguientes corrieron con las manos vacías y el paso salió en VERDE. El
     fallo real apareció dos pasos después, en Xcode, disfrazado de otra cosa."""
     y = _yaml()
-    i = y.index("fetch-signing-files")
+    # Anclado al COMANDO (`app-store-connect fetch-signing-files`), no a la palabra:
+    # el comentario del paso también la menciona, antes del `script: |`, y buscando
+    # hacia atrás desde ahí el bloque salía vacío.
+    i = y.index("app-store-connect fetch-signing-files")
     bloque = y[y.rfind("script: |", 0, i):i]
     assert "set -e" in bloque, "El script de firma debe llevar `set -e`: un fetch fallido no puede salir en verde."
 
