@@ -359,7 +359,18 @@ def _resolve_request_tz_offset(payload_value, user_id: Optional[str]) -> int:
       2. Si es None y hay `user_id`: leer `health_profile.tz_offset_minutes`
          vivo vía `cron_tasks._get_user_tz_live` (helper que ya usan los
          flujos sensibles a TZ del worker).
-      3. Si tampoco hay perfil o falla la lectura: 0 (UTC).
+      3. Si tampoco hay perfil o falla la lectura: `constants.DEFAULT_TZ_OFFSET_MIN`.
+
+    [P3-TZ-FALLBACK-SSOT · 2026-08-22] Ese paso 3 devolvía **0 (UTC)**, y le pasaba 0 a
+    `_get_user_tz_live` como fallback. Eran dos de las TRES respuestas que el backend tenía a la
+    misma pregunta —el helper de fechas del chat contestaba 240— así que el mismo usuario sin huso
+    registrado era dominicano para una superficie y estaba en UTC para la otra: cuatro horas
+    decidiendo a qué DÍA pertenece lo que acaba de registrar.
+
+    Medido antes de elegir: de los cinco perfiles reales de producción, **los cinco** tienen
+    `tz_offset_minutes = 240`. Cero usuarios en UTC. Un fallback a 0 no era «el neutral» — era una
+    elección, y la equivocada para el 100% de la población medida. Ahora las tres leen el SSOT,
+    que es un knob (`MEALFIT_DEFAULT_TZ_OFFSET_MIN`) por si la población deja de ser dominicana.
 
     Args:
         payload_value: valor crudo de `data.get("tzOffset")` — puede ser int,
@@ -375,13 +386,14 @@ def _resolve_request_tz_offset(payload_value, user_id: Optional[str]) -> int:
             return int(payload_value)
         except (TypeError, ValueError):
             pass  # cae a fallback de perfil
+    from constants import DEFAULT_TZ_OFFSET_MIN
     if user_id and user_id != "guest":
         try:
             from cron_tasks import _get_user_tz_live
-            return _get_user_tz_live(user_id, fallback_minutes=0)
+            return _get_user_tz_live(user_id, fallback_minutes=DEFAULT_TZ_OFFSET_MIN)
         except Exception as _tz_err:
             logger.debug(f"[P1-1] Fallback de TZ desde perfil falló para {user_id}: {_tz_err}")
-    return 0
+    return DEFAULT_TZ_OFFSET_MIN
 
 
 def _resolve_live_pantry(actual_user_id: Optional[str], data: dict) -> list:

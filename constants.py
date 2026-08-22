@@ -925,6 +925,29 @@ CHUNK_GC_DEAD_LETTER_BATCH = max(10, min(10000, int(os.environ.get("CHUNK_GC_DEA
 # Knob ajustable sin redeploy. Si quieres desactivar el guard entero para flujos
 # iniciales, sube a 100. Si quieres preservar comportamiento legacy estricto,
 # bájalo a 1.
+# [P3-TZ-FALLBACK-SSOT . 2026-08-22] SSOT de "que huso asumimos cuando NO lo sabemos".
+#
+# Habia TRES respuestas distintas a la misma pregunta y ninguna sabia de las otras:
+# `_resolve_request_tz_offset` devolvia 0 (UTC), `tools._LOCAL_DATE_FALLBACK_OFFSET_MIN`
+# devolvia 240 (RD) y `schemas.HealthProfileSchema.tzOffset` declaraba 0. El mismo usuario
+# sin huso registrado era dominicano para el helper de fechas del chat y estaba en UTC para
+# el resolutor de /analyze -- cuatro horas decidiendo a que DIA pertenece lo que registro.
+# Es la forma exacta de P1-DIET-CANON-SSOT: N tablas a mano para una pregunta, drift, y la
+# que decide en el sitio equivocado hace dano.
+#
+# POR QUE 240 Y NO 0. Medido en produccion (2026-08-22): de los cinco perfiles reales, LOS
+# CINCO tienen tz_offset_minutes=240. Cero usuarios en UTC. Un fallback a 0 no es "el
+# neutral": es una eleccion, y es la equivocada para el 100% de la poblacion medida. 240
+# gana porque describe a los usuarios que hay.
+#
+# SIGNO: convencion `Date.getTimezoneOffset()`, POSITIVO = OESTE de UTC (RD=240, Espana en
+# verano=-120). La hora local es `utc - offset`. Invertirlo parece correcto en RD, que es
+# donde se prueba -- el modo de fallo de P1-AVG-MEAL-HOUR-SIGN.
+#
+# Knob porque cambia conducta en un camino de peticion: si la poblacion deja de ser
+# dominicana, se mueve sin redeploy. Clamp a un huso real: [-840, 720].
+DEFAULT_TZ_OFFSET_MIN = max(-840, min(720, _env_int("MEALFIT_DEFAULT_TZ_OFFSET_MIN", 240)))
+
 PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEMS", 10)))  # [P2-1-KNOBS-HYGIENE · 2026-06-15] vía helper, no os.environ raw
 
 # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26] Variety-first en la generación de plan COMPLETO

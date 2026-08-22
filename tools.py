@@ -3398,7 +3398,12 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
 # IDOR cross-user (mismo vector que las otras 9 tools).
 # ============================================================
 
-_LOCAL_DATE_FALLBACK_OFFSET_MIN = 240  # RD (UTC-4): la conducta historica de este helper.
+# [P3-TZ-FALLBACK-SSOT . 2026-08-22] Era un 240 propio. El valor no cambia -- lo que cambia es
+# que deja de ser la segunda de tres respuestas a "que huso asumimos cuando no lo sabemos" y pasa
+# a leerlo del SSOT, junto con `_resolve_request_tz_offset` (que respondia 0).
+from constants import DEFAULT_TZ_OFFSET_MIN as _DEFAULT_TZ_OFFSET_MIN  # noqa: E402
+
+_LOCAL_DATE_FALLBACK_OFFSET_MIN = _DEFAULT_TZ_OFFSET_MIN  # RD (UTC-4) por defecto.
 
 
 def _local_date_str_for_user(user_id: str | None = None) -> str:
