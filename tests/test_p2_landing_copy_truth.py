@@ -137,13 +137,46 @@ def test_la_oferta_se_evalua_contra_la_fecha():
     )
 
 
-def test_la_caducidad_usa_la_hora_de_rd_no_utc():
-    """`new Date('2026-09-15')` es medianoche UTC = 20:00 del día 14 en RD."""
+def test_la_caducidad_no_usa_utc_crudo():
+    """`new Date('2026-09-15')` es medianoche UTC = 20:00 del día 14 en RD.
+
+    [P3-LAUNCH-OFFER-LOCAL-DAY · 2026-08-22] Este caso exigía el literal `-04:00`, o sea el ancla
+    dominicana. La propiedad que defiende —«el día es de alguien, no de UTC»— sigue siendo la
+    misma; lo que cambió es la respuesta a *de quién*: del USUARIO. Anclar RD rompía al oeste, que
+    es la dirección del dark pattern: en California la urgencia moría a las 19:59 del 15 mientras
+    las tarjetas decían «sube el 15 de septiembre».
+
+    Así que el guard se reformula: prohíbe la comparación cruda contra el instante UTC, y exige
+    que el huso entre en la cuenta."""
     plans = _read(_PLANS)
-    assert "-04:00" in plans or "America/Santo_Domingo" in plans, (
-        "[P2-LANDING-COPY-TRUTH] La caducidad no fija la zona horaria de RD.\n"
-        "Con UTC la oferta muere a las 20:00 del día ANTERIOR, a media tarde. Es "
-        "el mismo «¿día de quién?» que ya se pagó en P1-AGENT-SESSION-DAY."
+    codigo = "\n".join(
+        l for l in plans.splitlines() if not l.strip().startswith("//"))
+    i = codigo.index("export function isLaunchOfferActive")
+    cuerpo = codigo[i:codigo.index("\n}", i)]
+
+    # ⚠️ El huso tiene que PARTICIPAR, no sólo figurar en la firma. La primera versión aceptaba
+    # `"tzOffsetMin" in cuerpo`, y la mutación la atravesó limpiamente: dejando el parámetro
+    # declarado y haciendo `const off = 0;` dentro, el guard seguía verde sobre una función que
+    # ignora el huso. Un guard que mide la FIRMA no mide el cálculo.
+    assert "getTimezoneOffset" in cuerpo, (
+        "[P2-LANDING-COPY-TRUTH] La caducidad no consulta el huso del navegador. Con UTC crudo la "
+        "oferta muere a las 20:00 del día ANTERIOR en RD; con el ancla de RD fija, muere antes de "
+        "tiempo para todo el oeste de EE. UU. Es el mismo «¿día de quién?» de P1-AGENT-SESSION-DAY."
+    )
+    assert cuerpo.count("tzOffsetMin") >= 2, (
+        "[P2-LANDING-COPY-TRUTH] `tzOffsetMin` aparece sólo en la firma: está declarado y no se "
+        "usa, así que el huso inyectado no llega al cálculo y los tests que lo inyectan medirían "
+        "el reloj de la máquina en vez del caso que dicen cubrir."
+    )
+    # La COMPARACIÓN, no la mención. `"deadlineISO" in cuerpo` pasaba con un `return true` dentro,
+    # porque el token sigue apareciendo en la validación de formato de más arriba — o sea que el
+    # guard daba por buena una oferta que no caduca nunca. Segunda vez en este mismo test que la
+    # mutación destapa un ancla que mide presencia en vez de uso.
+    import re as _re
+    assert _re.search(r"[<>]=?\s*LAUNCH_OFFER\.deadlineISO", cuerpo), (
+        "[P2-LANDING-COPY-TRUTH] La caducidad no COMPARA contra `deadlineISO`. Mencionar el plazo "
+        "no es respetarlo: sin la comparación, la urgencia no vence nunca — que es exactamente el "
+        "dark pattern contra el que advierte el comentario del knob."
     )
 
 
