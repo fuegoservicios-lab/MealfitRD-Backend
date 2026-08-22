@@ -18,14 +18,14 @@ Se traduce **la interfaz**. No se traduce **el contenido**.
 | Plan, recetas y nombre del plan | **Sí**, desde [P1-PLAN-DISPLAY-I18N · 2026-08-19] | Capa `_display[locale]` paralela: el LLM traduce para LEER y el motor sigue operando sobre el español canónico. Detalle en [`plan_display_i18n.md`](plan_display_i18n.md). El fallback al español es conducta ESPERADA, no fallo: si la traducción falta, no cuadra por longitud o pierde una cifra o una etiqueta de sección, esa línea se pinta en español (P2-DISPLAY-VALIDADOR-SIN-CIFRAS, P1-DISPLAY-VOCAB-CERRADO). Knob `MEALFIT_PLAN_DISPLAY_I18N`, default `True`. |
 | Lista de compras | **Bilingüe, y el gloss es SIEMPRE INGLÉS** | [P2-I18N-DOC-LISTA-BILINGUE-FALSA · 2026-08-22] Esta fila decía «el gloss en el idioma del usuario». No lo es: `glossShoppingItemName` compone `name_en` + el nombre español para CUALQUIER locale distinto de `es-DO`, así que un francés lee «Black beans (Habichuelas rojas)» — inglés, no francés. `name_en` es un campo ESTÁTICO del catálogo, no una traducción por idioma, y sólo existe en el PDF. Cada línea lleva el gloss Y el nombre canónico español entre paréntesis — «30 g dried red beans (Habichuelas rojas)». El paréntesis no es cortesía: es el identificador con el que resuelve el motor, y el validador descarta la línea que lo pierda. |
 | Respuestas del coach (chat + notificaciones proactivas) | **Sí** | [P1-COUNTRY-SYSTEM-F2 · T3 · 2026-08-17] La PROSA del coach sigue `locale` — es el pedido en vivo del dueño (Addendum §2), no parte del sistema de países en oscuro. Frontera dura: los nombres de alimentos/platos que el coach cita, y toda tool call, SIGUEN en español canónico SIEMPRE (mismo motivo que la fila de abajo). Ver `prompts.chat_agent.build_language_directive`. |
-| Nombres de alimentos y platos (`master_ingredients`, 206 alimentos + 60 platos criollos) | **No, jamás** | Son el **SSOT del motor**. `pantry_names_match` (P1-PANTRY-NAME-RESOLUTION), el guard de coherencia recetas↔lista y el backstop clínico de alergias resuelven por esos nombres exactos. Traducir «Pollo» rompe las tres cosas a la vez, y dos de ellas en silencio. |
+| Nombres de alimentos y platos (`master_ingredients`, **347 filas**, todas con `name_en`) | **No, jamás** | Son el **SSOT del motor**. `pantry_names_match` (P1-PANTRY-NAME-RESOLUTION), el guard de coherencia recetas↔lista y el backstop clínico de alergias resuelven por esos nombres exactos. Traducir «Pollo» rompe las tres cosas a la vez, y dos de ellas en silencio. |
 | Correo del código de acceso (OTP) | **No, y no depende de este repo** | [P3-I18N-OTP-PLANTILLA · 2026-08-21] Lo redacta y envía **Neon Auth** (Better Auth) desde una plantilla de su panel. El frontend solo hace `POST <neonAuthUrl>/email-otp/send-verification-otp` con `{email, type:'sign-in'}` — ese es el cuerpo completo: **no hay campo de idioma que mandar**, así que no es que esté sin cablear, es que la API que llamamos no ofrece el canal. Cambiarlo es editar la plantilla en el panel de Neon, y ahí sería una sola versión para todos salvo que ellos soporten variantes por idioma. Se declara porque llega en CADA login —junto con Google, es la única puerta de entrada— y una superficie que nadie declara es una superficie que nadie revisa. |
 | PDF de la lista de compras y de la receta | **Sí** | [P2-I18N-PDF-* · 2026-08-22] Rótulos de sección, cantidades, leyenda, advertencia clínica, marca y nombre del fichero. Los rótulos y la nota clínica se glosan **al imprimir, nunca en el dato**: `display_category` es además clave de agrupación y la nota vive en `plan_data`. Los nombres de alimento siguen la regla de la fila de abajo. |
 | Notificaciones push (43 mensajes de 6 crons) | **Sí** | [P1-I18N-PUSH-CRON-ESPANOL · 2026-08-22] Traducidas en el CUELLO DE BOTELLA (`utils_push.send_push_notification`), no en los 35 call sites: un cron nuevo queda cubierto sin wiring. Catálogo SSOT [`push_i18n.py`](../push_i18n.py), fail-open. |
 | Help bot e insights | **Sí** | [P1-HELP-BOT-I18N + P1-INSIGHTS-I18N · 2026-08-20] El razonamiento del panel de insights lo genera el LLM bajo `_INSIGHTS_ADDENDUM` (espejo #12); el help bot resuelve por catálogo. |
 | Autodetección del idioma en el primer arranque | **Sí** | [P1-AUTO-LOCALE] Se lee del navegador cuando el perfil no trae `locale`. Depende de que la columna admita `NULL`: mientras tuvo `NOT NULL DEFAULT 'es-DO'`, el primer login sembraba un valor y apagaba la autodetección PARA SIEMPRE (P1-I18N-PROFILE-DEFAULT-PISA-INERTE, migración aplicada 2026-08-22). |
 | Páginas legales (Privacidad, Términos — 601 cadenas) | **No** | Traducir un contrato genera obligaciones en cada jurisdicción. Es una decisión legal, no de producto. |
-| Landing (`bioboros.com`) | **No** | Son 14 páginas estáticas fuera del build de React (`project_landing_cinematico_v2`). Fuera del alcance pedido («dentro del dashboard»). |
+| Landing (`bioboros.com`) | **No** | [P3-I18N-DOC-LANDING-NO-ES-ESTATICO · 2026-08-22] Esta fila decía «14 páginas estáticas fuera del build de React». **Es falso**: son 19 rutas en `PAPER_SURFACE_ROUTES` (`utils/paperSurface.js`, el SSOT), componentes React cargados con `lazy()` DENTRO del mismo build de Vite. La exclusión sigue siendo correcta y la razón real es otra: traducirlas exige URLs por idioma y `hreflang`, que es un cambio de arquitectura de rutas y de SEO, no de copy. Importa arreglarlo porque una razón falsa invita a «corregirla» metiendo el landing donde ya está. |
 
 **La frontera, que es lo único que no se mueve**: se traduce lo que el usuario LEE; no
 se traduce lo que el motor USA COMO IDENTIFICADOR. Por eso el plato entero puede salir en
@@ -206,9 +206,21 @@ orden obvio:
 | `npm run i18n:check` | Falla con **huérfanas**, plurales mal declarados y `t()` en ámbito de módulo. |
 | `npm run i18n:check:strict` | Además exige **100% de cobertura** en los 4 idiomas. |
 | `npm run i18n:template` | Rellena los catálogos con las claves faltantes en blanco, listas para traducir. |
+| `npm run i18n:baseline` | **Reescribe los trinquetes.** [P3-I18N-DOC-GATE-SIN-ESCOTILLA · 2026-08-22] Esta fila faltaba, en la sección que llama al gate «la única defensa»: es la palanca que puede desactivarla, y no estaba escrita. Bajar el trinquete es lo normal —una pantalla traducida— pero SUBIRLO exige además `--allow-ratchet-up`, que no tiene alias en `package.json` a propósito: quien lo suba tiene que teclearlo entero. Desde `P2-I18N-ESCANER-RECALL` el trinquete de español sin envolver está en **0**, así que cualquier subida es una regresión, no una deuda heredada. |
 
 Una entrada de plural declarada como cadena simple traduce **en singular siempre**, sin
 avisar — por eso es un fallo duro y no un aviso.
+
+**La escotilla `MEALFIT_CI_I18N_STRICT` existe SÓLO en el gate local, y es deliberado**
+[P3-I18N-CI-ESCOTILLA-SOLO-LOCAL · 2026-08-22]. Tres superficies, tres tratos distintos, y
+la asimetría es el diseño:
+
+| Dónde | Trato | Por qué |
+|---|---|---|
+| `backend/scripts/run_ci.ps1` (gate local) | La respeta: `=0` baja a permisivo | El caso legítimo existe — una tanda larga a medio traducir. |
+| `deploy-mealfit.ps1` | **`throw` si está puesta** | En PowerShell una variable de entorno vive TODA la sesión: quien la puso por la mañana para traducir la sigue teniendo puesta al desplegar por la tarde. `-SkipTests` es la válvula equivalente que deja rastro POR INVOCACIÓN en vez de por sesión — una la escribes cada vez, la otra se te olvida puesta. |
+| GitHub Actions | **No existe** | Es el juez que no puede ser negociable. Añadirla ahí convertiría el gate en una sugerencia. |
+
 
 ## 6. Añadir un sexto idioma
 
