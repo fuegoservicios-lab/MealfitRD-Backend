@@ -39,11 +39,52 @@ _SRC = _ROOT / "frontend" / "src"
 
 # `toast.error(…)` y `description:` son posición de COPY sin ambigüedad: lo que va ahí lo
 # lee el usuario. `throw new Error(…)` no lo es — ver el docstring.
+#
+# [P1-I18N-SERVER-COPY-GANA · 2026-08-22] EL CANAL YA NO ES `detail`, ES LA PROPIEDAD.
+#
+# La versión anterior anclaba la grafía `detail`, y por eso medía un canal de cuatro.
+# MEDIDO sobre `frontend/src` el 2026-08-22, la clase completa era:
+#
+#     detail ||                  7 sitios      <- los únicos que el guard veía
+#     message ||                28 sitios
+#     error_message ||           5 sitios
+#     ai_interrupted_message ||  1 sitio
+#
+# 41 en total, 26 de ellos en posición de copy visible. Y `mensajeDeError` —la
+# herramienta correcta, escrita el día antes— se usaba en 6.
+#
+# El caso que lo prueba: `AssessmentContext.jsx` hacía
+#
+#     if (data.error_code === 'pantry_insufficient_for_goal') {
+#         toast.error(t('Faltan ingredientes en tu Nevera'), {
+#             description: data.error_message || t('Tu Nevera no alcanza…'),
+#
+# El call site YA SABÍA el código, `COPY_POR_CODIGO` YA tenía ese código, y aun así
+# pintaba el español del servidor debajo de un título traducido. La traducción existía,
+# estaba revisada, y era exactamente la rama que no llegaba nunca.
+#
+# Es la regla que este repo sacó de tres fallos en un día: si el guard puede expresarse
+# por la propiedad, que no dependa de cómo se escriba. La propiedad aquí es «una
+# expresión que viene del servidor gana sobre un fallback traducido», y el nombre del
+# campo es un detalle de implementación del endpoint que la emite.
+_CANALES_DEL_SERVIDOR = r"(?:detail|message|error_message|ai_interrupted_message|error)"
+
+# El RECEPTOR importa tanto como el canal. `e.message` / `err.message` dentro de un `catch`
+# NO es «el español del servidor»: es lo que puso el `throw`, y si ese throw ya tradujo,
+# reemplazarlo por `mensajeDeError` PIERDE información (devolvería el fallback genérico
+# porque un `Error` no lleva `error_code`). El defecto vive en el THROW, no en el catch.
+#
+# Por eso el guard mira los receptores que son PAYLOAD del servidor (`data`, `result`,
+# `body`, `status`, `newMealData`…) y deja fuera los nombres canónicos de variable de
+# excepción. Es una distinción de significado, no una excepción por conveniencia: los
+# throws tienen su propio test más abajo.
+_RECEPTOR_DE_EXCEPCION = re.compile(r"\b(?:e|err|error|ex|_e|_err)$")
 _POSICION_DE_COPY = re.compile(
     # `(?:\?\.|\.)` y no `\?\.?`: lo segundo exige el signo de interrogacion, asi que
     # `err.detail ||` —que existe en el arbol— era invisible. Lo cazo la mutacion de
     # control; el test principal estaba pasando sin ver una de las dos formas.
-    r"(?:toast\.(?:error|warning|success)\s*\(|description:\s*)[^;\n]*?(?:\?\.|\.)detail\s*\|\|"
+    r"(?:toast\.(?:error|warning|success)?\s*\(|description:\s*)[^;\n]*?"
+    r"(?P<receptor>[A-Za-z_$][\w$]*)(?:\?\.|\.)" + _CANALES_DEL_SERVIDOR + r"\s*\|\|"
 )
 
 
@@ -59,9 +100,21 @@ def _sin_comentarios(js: str) -> str:
 
     Este repo lleva siete guards derrotados por prosa en dos días, varios con el
     comentario escrito por quien escribía el guard.
+
+    [P1-I18N-SERVER-COPY-GANA · 2026-08-22] LA SUSTITUCIÓN PRESERVA LA LONGITUD. Antes
+    cada comentario colapsaba a UN espacio, así que el texto que se analiza tiene menos
+    saltos de línea que el original y **los números de línea reportados no eran los del
+    fichero**: al ensanchar el guard salieron tres «violaciones» en `SupermarketPage.jsx`
+    apuntando a líneas que no contienen el patrón (una era `} catch (err) {`). Un guard
+    que acusa a la línea equivocada hace perder más tiempo del que ahorra, y es la misma
+    familia de `ast.col_offset` cuenta BYTES que este repo ya tiene registrada.
     """
-    js = re.sub(r"/\*.*?\*/", " ", js, flags=re.S)
-    return re.sub(r"//[^\n]*", " ", js)
+    def _blanquear(m: re.Match) -> str:
+        # Se conservan los saltos de línea; todo lo demás pasa a espacios.
+        return "".join("\n" if c == "\n" else " " for c in m.group(0))
+
+    js = re.sub(r"/\*.*?\*/", _blanquear, js, flags=re.S)
+    return re.sub(r"//[^\n]*", _blanquear, js)
 
 
 # ============================================================
@@ -73,6 +126,8 @@ def test_ninguna_posicion_de_copy_pinta_el_detail_del_servidor() -> None:
     for p in _ficheros():
         s = _sin_comentarios(p.read_text(encoding="utf-8"))
         for m in _POSICION_DE_COPY.finditer(s):
+            if _RECEPTOR_DE_EXCEPCION.search(m.group("receptor")):
+                continue  # `e.message` en un catch: el defecto vive en el throw
             linea = s[:m.start()].count("\n") + 1
             culpables.append(f"{p.relative_to(_SRC).as_posix()}:{linea}")
 
