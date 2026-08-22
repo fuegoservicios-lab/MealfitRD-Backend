@@ -213,6 +213,47 @@ Repetir en miniatura el QA offline de Task 10 pero contra `mealfitrd.com` real:
 
 ### 5. Rollback
 
+> **⚠️ PASO PREVIO OBLIGATORIO — la cola de chunks NO vuelve sola.**
+> [P2-ROLLBACK-RUNBOOK · 2026-08-21]
+>
+> La promesa de abajo —«byte-identidad DO en segundos»— es cierta para los planes **nuevos** y
+> **falsa para los que ya existen**. Medido en la cola viva el 2026-08-21: **7 chunks
+> `pending`/`pending_user_action` llevan `country='US'` en su `pipeline_snapshot`** y despiertan
+> por su `execute_after`.
+>
+> Con el knob apagado el worker **sigue leyendo ese snapshot**, pero `country_for_form_data`
+> devuelve `'DO'` incondicional. Resultado: las semanas 2-8 se generarían **criollas dentro de un
+> plan estadounidense** que además sigue marcado `beta_no_prices` — un híbrido que ningún usuario
+> pidió y que no es ni el estado nuevo ni el viejo.
+>
+> Antes de apagar el knob, decide qué hacer con esos chunks y hazlo:
+>
+> ```sql
+> -- 1. ¿Cuántos hay? (si sale 0, el rollback es limpio y puedes seguir)
+> SELECT status, pipeline_snapshot->'form_data'->>'country' AS pais, count(*)
+> FROM plan_chunk_queue
+> WHERE status NOT IN ('completed','cancelled','failed')
+>   AND pipeline_snapshot->'form_data'->>'country' NOT IN ('DO')
+> GROUP BY 1,2;
+>
+> -- 2a. OPCIÓN A — congelar: el plan se queda como está, sin días nuevos híbridos.
+> --     Es la conservadora: el usuario conserva lo generado y no recibe nada incoherente.
+> UPDATE plan_chunk_queue SET status = 'cancelled'
+> WHERE status NOT IN ('completed','cancelled','failed')
+>   AND pipeline_snapshot->'form_data'->>'country' NOT IN ('DO');
+>
+> -- 2b. OPCIÓN B — convertir a dominicano: el plan sigue rellenándose, en criollo y coherente
+> --     con el motor apagado. Elige ésta sólo si el usuario ACEPTA que su plan pase a ser DO.
+> UPDATE plan_chunk_queue
+> SET pipeline_snapshot = jsonb_set(pipeline_snapshot, '{form_data,country}', '"DO"')
+> WHERE status NOT IN ('completed','cancelled','failed')
+>   AND pipeline_snapshot->'form_data'->>'country' NOT IN ('DO');
+> ```
+>
+> Ninguna de las dos es obviamente correcta —una deja el plan incompleto, la otra le cambia la
+> cocina a alguien que eligió otra— y por eso el paso es *decidir*, no *ejecutar un comando*. Lo
+> que no es defendible es apagar el knob y dejar que el worker resuelva la ambigüedad solo.
+
 - **Emergencia (motor)**: unset `MEALFIT_COUNTRY_SYSTEM` (o `=false`) en el `.env` del VPS +
   `systemctl restart mealfit-backend` — vuelve el motor a byte-identidad DO en segundos, AUNQUE
   el frontend siga mostrando el selector de país (UX degradada pero segura: cualquier país
