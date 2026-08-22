@@ -60,7 +60,13 @@ FORM_MEDICATION_CHIPS = (
     "Antidepresivo IMAO",
 )
 
-FORM_ALLERGY_CHIPS = ("Lacteos", "Gluten", "Huevo", "Mariscos", "Frutos Secos", "Soya")
+# [P2-ALLERGEN-CHIPS-REACH-ENGINE · 2026-08-21] +«Pescado» y +«Mani». El motor ya sabía bloquear
+# las dos clases y el formulario no tenía cómo pedírselas: el marisco tenía chip y el pescado no
+# —en un beta cuyo primer país es España— y «Frutos Secos» NO cubre el maní, que es una legumbre.
+# El guard `test_allergy_chips_match_wizard` cazó este espejo en cuanto los chips entraron: es
+# exactamente para lo que existe, y sin él la cifra pública de «6 alergias» habría quedado stale.
+FORM_ALLERGY_CHIPS = ("Lacteos", "Gluten", "Huevo", "Mariscos", "Frutos Secos", "Soya",
+                      "Pescado", "Mani")
 
 FORM_DIET_TYPES = ("balanced", "vegetarian", "vegan")
 
@@ -136,7 +142,9 @@ def build_landing_profiles(country: str = "DO") -> list:
       - 1 chip de condición por perfil dedicado, con el medicamento típico de esa condición.
       - Combos de riesgo real: cap-3 (DM2+HTA+Colesterol), warfarina (vit K), doble
         potasio-elevador (espironolactona+IECA), insulina+sulfonilurea (≥5 tomas).
-      - Las 6 alergias repartidas en 2 perfiles multi-alergia.
+      - Las 8 alergias repartidas en 2 perfiles multi-alergia (el segundo mezcla a propósito
+        pescado con marisco y maní con fruto seco: son las dos parejas que el usuario
+        confunde, así que ahí es donde se prueba que el motor las separa).
       - vegetariana pura y vegana×DM2 (cruce dieta×condición).
       - 2 baselines sanos como referencia de precisión.
     [P2-LANDING-BENCH-COUNTRY · 2026-08-21] `country` (default 'DO' ⇒ la matriz de siempre)
@@ -226,10 +234,16 @@ def build_landing_profiles(country: str = "DO") -> list:
                 goal="lose_fat", activity="moderate",
                 allergies=["Lacteos", "Gluten", "Huevo"],
                 expect=e(allergens=["Lacteos", "Gluten", "Huevo"])),
+        # [P2-ALLERGEN-CHIPS-REACH-ENGINE · 2026-08-21] +«Pescado» y +«Mani» en este perfil.
+        # El guard `test_matrix_covers_every_chip_and_diet` exige que la matriz ejercite CADA chip
+        # al menos una vez, y al añadir los dos chips nuevos al wizard la matriz se quedó corta —
+        # el guard lo cazó en el mismo commit. Van juntos aquí a propósito: son las dos clases que
+        # el usuario CONFUNDE con las que ya había (pescado con marisco, maní con fruto seco), así
+        # que el perfil que las mezcla es el que de verdad prueba que el motor las separa.
         _perfil(18, "alergias_mar_nuez_soya", gender="male", age=24, weight=72, height=178,
                 goal="performance", activity="athlete",
-                allergies=["Mariscos", "Frutos Secos", "Soya"],
-                expect=e(allergens=["Mariscos", "Frutos Secos", "Soya"])),
+                allergies=["Mariscos", "Frutos Secos", "Soya", "Pescado", "Mani"],
+                expect=e(allergens=["Mariscos", "Frutos Secos", "Soya", "Pescado", "Mani"])),
         _perfil(19, "vegetariana", gender="female", age=36, weight=62, height=167,
                 goal="maintenance", activity="moderate", diet="vegetarian",
                 expect=e(diet="vegetarian")),
